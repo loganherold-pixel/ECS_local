@@ -3514,6 +3514,7 @@ function DashboardScreenInner() {
 
   const handleWidgetPress = useCallback((slot: WidgetSlot) => {
     if (layoutMode || !slot.widgetType) return;
+    if (slot.widgetType === 'attitude-command') return;
     closeDashboardTransientOverlays();
     setDetailSlot(slot);
     setDetailVisible(true);

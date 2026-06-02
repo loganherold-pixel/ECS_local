@@ -21,6 +21,11 @@ function lacks(content, needle, label) {
   assert(!content.includes(needle), `${label} must not include ${needle}`);
 }
 
+function readStyleBlock(content, styleName) {
+  const match = content.match(new RegExp(`${styleName}: \\{[\\s\\S]*?\\n  \\},`));
+  return match ? match[0] : '';
+}
+
 const hook = read('lib/useUnifiedDeviceConnections.ts');
 const screen = read('app/power/blu.tsx');
 const fleetScreen = read('app/(tabs)/fleet.tsx');
@@ -95,18 +100,47 @@ lacks(screen, 'Pipeline Diagnostics', 'Device Connections production UI');
 has(fleetScreen, '<TopoBackground>', 'Fleet visual shell reference');
 for (const fragment of [
   "import TopoBackground from '../../components/TopoBackground'",
+  "import TopBannerBackground from '../../components/TopBannerBackground'",
+  "import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens'",
   "import { GOLD_RAIL, SPACING, TACTICAL } from '../../lib/theme'",
   '<TopoBackground>',
   'styles.safeContainer',
   "backgroundColor: 'transparent'",
   'styles.surfaceTint',
   'styles.fleetLikePanel',
+  'styles.readinessCommandSurface',
+  'styles.vehicleCardSurface',
+  '<TopBannerBackground',
+  'variant="dashboard"',
   'TACTICAL.goldWash',
   'TACTICAL.borderMuted',
 ]) {
   has(screen, fragment, 'Bluestack scanner Fleet visual continuity');
 }
 lacks(screen, "style={[styles.container, { backgroundColor: colors.bg }]}", 'Bluestack scanner Fleet visual continuity');
+const surfaceTintStyle = readStyleBlock(screen, 'surfaceTint');
+assert(
+  surfaceTintStyle.includes("backgroundColor: 'transparent'") &&
+    !surfaceTintStyle.includes('TACTICAL.panelInactive'),
+  'Bluestack scanner body tint must not obscure the Fleet topo background.',
+);
+const readinessSurfaceStyle = readStyleBlock(screen, 'readinessCommandSurface');
+assert(
+  readinessSurfaceStyle.includes('backgroundColor: `${TACTICAL.amber}12`') &&
+    readinessSurfaceStyle.includes('borderColor: `${TACTICAL.amber}2E`'),
+  'Bluestack unified scanner card must match the Fleet readiness command gold translucent surface.',
+);
+const vehicleCardSurfaceStyle = readStyleBlock(screen, 'vehicleCardSurface');
+assert(
+  vehicleCardSurfaceStyle.includes('backgroundColor: ECS_SURFACE.background.selected') &&
+    vehicleCardSurfaceStyle.includes('borderColor: ECS_SURFACE.border.selected'),
+  'Bluestack Available Devices and Connection Truth cards must match the active Fleet vehicle card surface.',
+);
+assert(
+  screen.includes('surfaceStyle={styles.vehicleCardSurface}') &&
+    screen.includes('styles.infoCard,\n              styles.fleetLikePanel,\n              styles.vehicleCardSurface'),
+  'Bluestack Available Devices and Connection Truth must opt into the Fleet vehicle card surface.',
+);
 assert(
   screen.includes('title="Connected devices"') &&
     screen.includes('title="Remembered devices"') &&

@@ -23,8 +23,8 @@ import {
   TripIntentSelector,
   ReadinessEducationCard,
 } from '../readiness';
-import { readinessInnerSurfaceStyle, readinessSurfaceStyle } from '../readiness/readinessUi';
 import { ECS, GOLD_RAIL } from '../../lib/theme';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import {
   EXPEDITION_READINESS_CATEGORY_IDS,
   type ExpeditionReadinessAssessment,
@@ -128,6 +128,13 @@ const SECTION_DEFINITION: {
   },
 ];
 
+const commandBriefFleetSurfaceStyle: ViewStyle = {
+  backgroundColor: ECS_SURFACE.background.selected,
+  borderColor: ECS_SURFACE.border.selected,
+  borderWidth: 1,
+  borderRadius: 8,
+};
+
 function useRouteSessionSnapshot() {
   return useSyncExternalStore(
     navigateRouteSessionStore.subscribe,
@@ -215,7 +222,7 @@ function getBriefFreshnessCopy(assessment: ExpeditionReadinessAssessment | null)
 
 function CommandBriefEmptyState({ onNavigate, onExplore }: { onNavigate: () => void; onExplore: () => void }) {
   return (
-    <View style={[styles.emptyState, readinessSurfaceStyle]}>
+    <View style={[styles.emptyState, commandBriefFleetSurfaceStyle]}>
       <View style={styles.emptyIconFrame}>
         <ECSIcon name="document-text-outline" tier="navigation" tone="warning" />
       </View>
@@ -225,7 +232,7 @@ function CommandBriefEmptyState({ onNavigate, onExplore }: { onNavigate: () => v
       <ECSText variant="body" style={styles.emptyCopy}>
         Generate a Command Brief from Explore, Navigate, or CampOps. Readiness stays limited until route, vehicle, offline package, Camp Legality Confidence, weather, recovery, and communications inputs are available.
       </ECSText>
-      <ReadinessEducationCard surface="commandBriefEmpty" compact />
+      <ReadinessEducationCard surface="commandBriefEmpty" compact style={commandBriefFleetSurfaceStyle} />
       <View style={styles.emptyCtas}>
         <CommandBriefActionButton label="Open Navigate" icon="navigate-outline" onPress={onNavigate} />
         <CommandBriefActionButton label="Open Explore" icon="map-outline" onPress={onExplore} />
@@ -270,7 +277,7 @@ function CollapsibleBriefSection({
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   return (
-    <View style={[styles.section, readinessSurfaceStyle, !expanded && styles.collapsedSection]}>
+    <View style={[styles.section, commandBriefFleetSurfaceStyle, !expanded && styles.collapsedSection]}>
       <Pressable
         onPress={() => setExpanded((value) => !value)}
         accessibilityRole="button"
@@ -333,7 +340,7 @@ function DepartureAuditSection({
 }) {
   const incomplete = items.filter((item) => item.status !== 'complete').length;
   return (
-    <View style={[styles.section, readinessSurfaceStyle]}>
+    <View style={[styles.section, commandBriefFleetSurfaceStyle]}>
       <View style={styles.sectionHeader}>
         <ECSText variant="cardTitle" style={styles.sectionTitle} numberOfLines={2}>
           Departure Audit
@@ -347,7 +354,7 @@ function DepartureAuditSection({
       <ECSText variant="helper" style={styles.sectionEmpty} numberOfLines={2}>
         Offline-first checklist for the route package, vehicle, power, communications, and recovery plan before service drops.
       </ECSText>
-      <DepartureAuditChecklist items={items} onActionPress={onActionPress} />
+      <DepartureAuditChecklist items={items} onActionPress={onActionPress} rowStyle={commandBriefFleetSurfaceStyle} />
     </View>
   );
 }
@@ -880,6 +887,8 @@ export default function CommandBriefScreen({
           source={assessment?.tripIntentSource ?? readinessState.tripIntentSource}
           onChange={handleTripIntentChange}
           compact
+          style={commandBriefFleetSurfaceStyle}
+          intentChipStyle={commandBriefFleetSurfaceStyle}
         />
 
         {!hasRoute ? (
@@ -890,7 +899,7 @@ export default function CommandBriefScreen({
         ) : null}
 
         {assessment?.status === 'hold' ? (
-          <View style={[styles.holdBlockers, readinessSurfaceStyle]}>
+          <View style={[styles.holdBlockers, commandBriefFleetSurfaceStyle]}>
             <View style={styles.sectionHeader}>
               <ECSText variant="cardTitle" style={styles.sectionTitle}>
                 Hold Blockers
@@ -902,7 +911,7 @@ export default function CommandBriefScreen({
         ) : null}
 
         <View style={styles.sectionStack}>
-          <View style={[styles.decisionCard, readinessSurfaceStyle]}>
+          <View style={[styles.decisionCard, commandBriefFleetSurfaceStyle]}>
             <View style={styles.decisionHeader}>
               <View style={styles.decisionCopyBlock}>
                 <ECSText variant="cardTitle" style={styles.sectionTitle}>
@@ -933,7 +942,7 @@ export default function CommandBriefScreen({
           ) : null}
 
           {assessment?.preferenceEffects.length ? (
-            <View style={[styles.preferenceCard, readinessInnerSurfaceStyle]}>
+            <View style={[styles.preferenceCard, commandBriefFleetSurfaceStyle]}>
               <View style={styles.sectionHeader}>
                 <ECSText variant="cardTitle" style={styles.sectionTitle}>
                   Preference Influence
@@ -1000,7 +1009,7 @@ export default function CommandBriefScreen({
           ))}
 
           {missingCategories.length > 0 ? (
-            <View style={[styles.dataNotice, readinessInnerSurfaceStyle]}>
+            <View style={[styles.dataNotice, commandBriefFleetSurfaceStyle]}>
               <ECSIcon name="alert-circle-outline" tier="compact" tone="warning" />
               <ECSText variant="helper" style={styles.dataNoticeText} numberOfLines={3}>
                 ECS Intelligence expected all readiness categories. Missing category outputs: {missingCategories.join(', ')}.
@@ -1008,7 +1017,7 @@ export default function CommandBriefScreen({
             </View>
           ) : null}
 
-          <View style={[styles.exportCard, readinessSurfaceStyle]}>
+          <View style={[styles.exportCard, commandBriefFleetSurfaceStyle]}>
             <View style={styles.sectionHeader}>
               <ECSText variant="cardTitle" style={styles.sectionTitle}>
                 Share Packet
@@ -1130,8 +1139,8 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.section,
-    backgroundColor: ECS.bgElev,
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
@@ -1245,8 +1254,8 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: ECS.bgElev,
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   campCandidateTopRow: {
     flexDirection: 'row',
@@ -1308,8 +1317,8 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: ECS.bgElev,
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   vehicleHeroCopy: {
     flex: 1,
@@ -1334,8 +1343,8 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: ECS.bgPanel,
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   vehicleBriefListTitle: {
     color: ECS.accent,
@@ -1356,8 +1365,8 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: ECS.bgElev,
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   recoveryMetricLabel: {
     color: ECS.accent,
@@ -1378,8 +1387,8 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: ECS.bgElev,
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   recoveryInferredText: {
     flex: 1,
@@ -1391,8 +1400,8 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: ECS.bgPanel,
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   powerBriefGrid: {
     gap: 8,
@@ -1429,8 +1438,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: ECS.bgElev,
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,

@@ -25,13 +25,13 @@ import {
   useWindowDimensions,
   Image,
   Alert,
-  TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { TACTICAL, GOLD_RAIL, ECS, TYPO } from '../../lib/theme';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import TopoBackground from '../../components/TopoBackground';
 import Header from '../../components/Header';
 import { ECSSegmentedControl } from '../../components/ECSChip';
@@ -92,10 +92,7 @@ import {
   clearOfflinePrepPackHandoff,
   saveOfflinePrepPackHandoff,
 } from '../../lib/offlinePrepPack';
-import {
-  explorationProgressStore,
-  type ExplorationStats,
-} from '../../lib/explorationProgressStore';
+import { explorationProgressStore } from '../../lib/explorationProgressStore';
 import { aiRouteStore } from '../../lib/aiRouteStore';
 import type { AIGeneratedRoute } from '../../lib/aiRouteTypes';
 import {
@@ -150,15 +147,9 @@ import {
   refreshLiveTrailPackCatalog,
 } from '../../lib/explore/liveTrailPackCatalog';
 import {
-  buildManualRouteCatalogSearchArea,
-  getRouteCatalogCoverageSummary,
-  getRouteCatalogCoverageNotice,
   ROUTE_CATALOG_COVERAGE_AREAS,
-  ROUTE_CATALOG_CURATION_COVERAGE_LABELS,
   ROUTE_CATALOG_PRESET_SEARCH_AREAS,
-  ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS,
   type RouteCatalogPresetSearchAreaKey,
-  type RouteCatalogSearchArea,
 } from '../../lib/explore/routeCatalogSearchArea';
 import {
   buildTrailPackConfidenceInputsFromFeedback,
@@ -244,7 +235,6 @@ export const FALLBACK_DISCOVERY_TABS: { id: DiscoveryTabId; label: string; icon:
 const FAVORITES_VISIBLE_LIMIT = 5;
 const EXPLORE_CATEGORY_PAGE_SIZE = 10;
 const HIDDEN_GEM_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
-const POPULAR_TRAIL_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
 const TRAIL_PACK_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
 const AI_ROUTE_IDEA_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
 const EXPLORE_MAP_HANDOFF_MAX_ROUTES = 60;
@@ -665,13 +655,7 @@ function DiscoverScreenInner() {
   const [userLat, setUserLat] = useState<number>(DEFAULT_USER_LOCATION.latitude);
   const [userLng, setUserLng] = useState<number>(DEFAULT_USER_LOCATION.longitude);
   const [hasGPSFix, setHasGPSFix] = useState(false);
-  const [routeCatalogSearchAreaKey, setRouteCatalogSearchAreaKey] =
-    useState<RouteCatalogPresetSearchAreaKey | 'manual_search_center' | null>(null);
-  const [routeCatalogManualSearchArea, setRouteCatalogManualSearchArea] = useState<RouteCatalogSearchArea | null>(null);
-  const [routeCatalogSearchAreaModalVisible, setRouteCatalogSearchAreaModalVisible] = useState(false);
-  const [routeCatalogManualSearchLabel, setRouteCatalogManualSearchLabel] = useState('');
-  const [routeCatalogManualSearchCoordinates, setRouteCatalogManualSearchCoordinates] = useState('');
-  const [routeCatalogManualSearchError, setRouteCatalogManualSearchError] = useState<string | null>(null);
+  const routeCatalogSearchAreaKey: RouteCatalogPresetSearchAreaKey | null = null;
   const [discoverRouteSourceMode, setDiscoverRouteSourceMode] = useState('seed_catalog_default_location');
   const [discoverSourceHydrated, setDiscoverSourceHydrated] = useState(false);
   const [discoverRouteSourceFailureReason, setDiscoverRouteSourceFailureReason] = useState<string | null>(null);
@@ -690,7 +674,6 @@ function DiscoverScreenInner() {
   );
 
   const [hiddenGemPageIndex, setHiddenGemPageIndex] = useState(0);
-  const [popularTrailPageIndex, setPopularTrailPageIndex] = useState(0);
   const [trailPackPageIndex, setTrailPackPageIndex] = useState(0);
   const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);
   const [favoritesPageIndex, setFavoritesPageIndex] = useState(0);
@@ -700,7 +683,6 @@ function DiscoverScreenInner() {
   const [hasLoadedExplorer, setHasLoadedExplorer] = useState(false);
   const [exploreFilterHydrated, setExploreFilterHydrated] = useState(false);
   const [hiddenGemCycleNotice, setHiddenGemCycleNotice] = useState<string | null>(null);
-  const [popularTrailCycleNotice, setPopularTrailCycleNotice] = useState<string | null>(null);
   const [exploreMapHandoffNotice, setExploreMapHandoffNotice] = useState<string | null>(null);
 
   // ── Phase 17: AI Route state ──────────────────────────────
@@ -796,12 +778,10 @@ function DiscoverScreenInner() {
   const refreshRigContext = useCallback(() => {
     if (!mountedRef.current) return;
     setHiddenGemPageIndex(0);
-    setPopularTrailPageIndex(0);
     setTrailPackPageIndex(0);
     setAiRouteIdeaPageIndex(0);
     setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
-    setPopularTrailCycleNotice(null);
     aiRouteStore.clearAll();
     setRigContextRevision((current) => current + 1);
   }, []);
@@ -861,11 +841,6 @@ function DiscoverScreenInner() {
 
     return () => clearTimeout(timeoutId);
   }, [aiEnabled, aiLoading]);
-
-  // ── Phase 13: Exploration stats (memoized) ─────────────────
-  const explorationStats = useMemo<ExplorationStats>(() => {
-    return explorationProgressStore.computeStats(opportunities.length || 12);
-  }, [opportunities.length]);
 
   // ── Phase 13: Continue Exploring recommendations ───────────
   const applyExplorerLocationFix = useCallback((latitude: number, longitude: number) => {
@@ -1000,11 +975,8 @@ function DiscoverScreenInner() {
     }
   }, [exploreRefinement]);
   const routeCatalogSelectedSearchArea = useMemo(
-    () => {
-      if (routeCatalogSearchAreaKey === 'manual_search_center') return routeCatalogManualSearchArea;
-      return ROUTE_CATALOG_PRESET_SEARCH_AREAS.find((area) => area.key === routeCatalogSearchAreaKey) ?? null;
-    },
-    [routeCatalogManualSearchArea, routeCatalogSearchAreaKey],
+    () => ROUTE_CATALOG_PRESET_SEARCH_AREAS.find((area) => area.key === routeCatalogSearchAreaKey) ?? null,
+    [routeCatalogSearchAreaKey],
   );
   const routeCatalogEffectiveSearchArea = useMemo(
     () => {
@@ -1022,14 +994,6 @@ function DiscoverScreenInner() {
     [hasGPSFix, routeCatalogSelectedSearchArea, userLat, userLng],
   );
   const routeCatalogHasSearchArea = !!routeCatalogEffectiveSearchArea;
-  const routeCatalogCoverageNotice = useMemo(
-    () => getRouteCatalogCoverageNotice(routeCatalogEffectiveSearchArea),
-    [routeCatalogEffectiveSearchArea],
-  );
-  const routeCatalogCoverageSummary = useMemo(
-    () => getRouteCatalogCoverageSummary(),
-    [],
-  );
   const routeCatalogCurationCoverageNotice = useMemo(() => {
     const curationCount = liveTrailPackCatalogSnapshot.searchMeta?.curationCandidateCount ?? 0;
     if (liveTrailPackCatalogSnapshot.coverageState.state !== 'lower_confidence_nearby' || curationCount <= 0) {
@@ -1412,12 +1376,10 @@ function DiscoverScreenInner() {
     hapticMicro();
     setDistanceRadius(radius);
     setHiddenGemPageIndex(0);
-    setPopularTrailPageIndex(0);
     setTrailPackPageIndex(0);
     setAiRouteIdeaPageIndex(0);
     setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
-    setPopularTrailCycleNotice(null);
     // Clear AI cache when radius changes
     aiRouteStore.clearAll();
   }, []);
@@ -1426,57 +1388,10 @@ function DiscoverScreenInner() {
     hapticMicro();
     setExploreRefinement(refinement);
     setHiddenGemPageIndex(0);
-    setPopularTrailPageIndex(0);
     setTrailPackPageIndex(0);
     setAiRouteIdeaPageIndex(0);
     setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
-    setPopularTrailCycleNotice(null);
-  }, []);
-
-  const handleSelectRouteCatalogSearchArea = useCallback((areaKey: RouteCatalogPresetSearchAreaKey | null) => {
-    hapticMicro();
-    setRouteCatalogSearchAreaKey((current) => current === areaKey ? null : areaKey);
-    setTrailPackPageIndex(0);
-    setActiveExplorerCategoryPanel(null);
-  }, []);
-
-  const handleOpenRouteCatalogManualSearch = useCallback(() => {
-    hapticMicro();
-    if (routeCatalogManualSearchArea) {
-      setRouteCatalogManualSearchLabel(routeCatalogManualSearchArea.label);
-      setRouteCatalogManualSearchCoordinates(
-        `${routeCatalogManualSearchArea.latitude.toFixed(6)}, ${routeCatalogManualSearchArea.longitude.toFixed(6)}`,
-      );
-    }
-    setRouteCatalogManualSearchError(null);
-    setRouteCatalogSearchAreaModalVisible(true);
-  }, [routeCatalogManualSearchArea]);
-
-  const handleApplyRouteCatalogManualSearch = useCallback(() => {
-    const result = buildManualRouteCatalogSearchArea({
-      label: routeCatalogManualSearchLabel,
-      coordinateText: routeCatalogManualSearchCoordinates,
-    });
-    if (!result.ok) {
-      setRouteCatalogManualSearchError(result.error);
-      return;
-    }
-
-    hapticMicro();
-    setRouteCatalogManualSearchArea(result.area);
-    setRouteCatalogSearchAreaKey('manual_search_center');
-    setRouteCatalogManualSearchLabel(result.area.label);
-    setRouteCatalogManualSearchCoordinates(`${result.area.latitude.toFixed(6)}, ${result.area.longitude.toFixed(6)}`);
-    setRouteCatalogManualSearchError(null);
-    setRouteCatalogSearchAreaModalVisible(false);
-    setTrailPackPageIndex(0);
-    setActiveExplorerCategoryPanel(null);
-  }, [routeCatalogManualSearchCoordinates, routeCatalogManualSearchLabel]);
-
-  const handleCloseRouteCatalogManualSearch = useCallback(() => {
-    setRouteCatalogSearchAreaModalVisible(false);
-    setRouteCatalogManualSearchError(null);
   }, []);
 
   const handleResetDiscoveryFilters = useCallback(() => {
@@ -1484,12 +1399,10 @@ function DiscoverScreenInner() {
     setDistanceRadius(DEFAULT_DISTANCE_RADIUS);
     setExploreRefinement(null);
     setHiddenGemPageIndex(0);
-    setPopularTrailPageIndex(0);
     setTrailPackPageIndex(0);
     setAiRouteIdeaPageIndex(0);
     setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
-    setPopularTrailCycleNotice(null);
     aiRouteStore.clearAll();
   }, []);
 
@@ -2321,57 +2234,6 @@ function DiscoverScreenInner() {
       });
     }
   }, [aiError, hiddenGemDiagnostics]);
-  const popularTrailRoutes = popularTrailsState.routes;
-  const popularTrailExploreOrchestration = useMemo(() => {
-    const result = orchestrateExploreSectionRoutes({
-      section: 'popular_trail',
-      routes: popularTrailRoutes,
-      expeditionPhase: aiState?.expeditionPhase ?? null,
-      operationalState: aiState?.operationalState ?? null,
-      recommendationStatus: liveStatus?.recommendations ?? null,
-      primaryCandidate: exploreView.primary,
-      hasGPSFix,
-    });
-    const filteredMetadataById = popularTrailsState.routeMetadataById;
-    const displayRoutes = [...result.surfaced, ...result.softened, ...result.suppressed]
-      .filter(isPublicSuggestedTrailheadRoute);
-    const routeMap = new Map<string, PopularTrailEnrichedRoute>(
-      displayRoutes.map((route) => {
-        const baseline = filteredMetadataById.get(route.id);
-        const rationaleText = baseline?.sourceMetadata?.rationaleText ?? null;
-
-        return [
-          route.id,
-          rationaleText
-            ? {
-                ...route,
-                explanation: {
-                  ...(route.explanation ?? {}),
-                  text: rationaleText,
-                  shortText: rationaleText,
-                },
-              }
-            : route,
-        ] as const;
-      }),
-    );
-
-    return {
-      ...result,
-      summaryNote: null,
-      routes: displayRoutes,
-      routeMap,
-    };
-  }, [
-    popularTrailRoutes,
-    popularTrailsState.routeMetadataById,
-    aiState?.expeditionPhase,
-    aiState?.operationalState,
-    exploreView.primary,
-    hasGPSFix,
-    liveStatus?.recommendations,
-  ]);
-
   const enrichedHiddenGemRoutes = useMemo<EnrichedDiscoveryRoute[]>(() => {
     if (hiddenGemPage.items.length === 0) return [];
     return hiddenGemPage.items
@@ -2405,7 +2267,6 @@ function DiscoverScreenInner() {
     const hiddenGemRoutes = hiddenGemExploreOrchestration.items
       .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
       .filter(routePassesExploreMapLength);
-    const popularTrailRoutes = popularTrailExploreOrchestration.routes.filter(routePassesExploreMapLength);
     const trailPackRoutes = discoverableTrailPacks
       .filter(isPublicSuggestedTrailheadTrailPack)
       .map((pack) => trailPackToExpeditionOpportunity(pack))
@@ -2413,7 +2274,7 @@ function DiscoverScreenInner() {
       .filter(isPublicSuggestedTrailheadRoute);
     const ecsRouteIdeaRoutes = publicRefinedAIRoutes.filter(routePassesExploreMapLength);
     const currentSuggestedRouteIds = new Set(
-      [...hiddenGemRoutes, ...popularTrailRoutes, ...trailPackRoutes, ...ecsRouteIdeaRoutes].map((route) =>
+      [...hiddenGemRoutes, ...trailPackRoutes, ...ecsRouteIdeaRoutes].map((route) =>
         String(route.id ?? '').trim(),
       ),
     );
@@ -2423,20 +2284,17 @@ function DiscoverScreenInner() {
       .filter(routePassesExploreMapLength);
     const total =
       hiddenGemRoutes.length +
-      popularTrailRoutes.length +
       trailPackRoutes.length +
       favoriteRoutes.length +
       ecsRouteIdeaRoutes.length;
 
     return {
       hiddenGemRoutes,
-      popularTrailRoutes,
       trailPackRoutes,
       favoriteRoutes,
       ecsRouteIdeaRoutes,
       counts: {
         hiddenGems: hiddenGemRoutes.length,
-        popularTrails: popularTrailRoutes.length,
         trailPacks: trailPackRoutes.length,
         favorites: favoriteRoutes.length,
         ecsIdeas: ecsRouteIdeaRoutes.length,
@@ -2448,7 +2306,6 @@ function DiscoverScreenInner() {
     favoritesSnapshot.favorites,
     hiddenGemExploreOrchestration.items,
     hiddenGemExploreOrchestration.routeMap,
-    popularTrailExploreOrchestration.routes,
     publicRefinedAIRoutes,
   ]);
 
@@ -2456,11 +2313,10 @@ function DiscoverScreenInner() {
   const exploreMapPreviewCategoryBadges = useMemo(
     () => [
       { key: 'hidden-gems', label: 'Hidden Gems', count: exploreMapPreviewRouteCounts.hiddenGems, color: TACTICAL.amber },
-      { key: 'popular-trails', label: 'Popular Trails', count: exploreMapPreviewRouteCounts.popularTrails, color: '#66BB6A' },
-      { key: 'trail-packs', label: 'Trail Packs', count: exploreMapPreviewRouteCounts.trailPacks, color: '#A48CFF' },
-      { key: 'ecs-ideas', label: 'ECS Ideas', count: exploreMapPreviewRouteCounts.ecsIdeas, color: '#65D4FF' },
+      { key: 'trail-packs', label: 'Trail Packs', count: exploreMapPreviewRouteCounts.trailPacks, color: TACTICAL.amber },
+      { key: 'ecs-ideas', label: 'ECS Ideas', count: exploreMapPreviewRouteCounts.ecsIdeas, color: TACTICAL.amber },
       ...(exploreMapPreviewRouteCounts.favorites > 0
-        ? [{ key: 'favorites', label: 'Favorites', count: exploreMapPreviewRouteCounts.favorites, color: '#F6A35D' }]
+        ? [{ key: 'favorites', label: 'Favorites', count: exploreMapPreviewRouteCounts.favorites, color: TACTICAL.amber }]
         : []),
     ],
     [exploreMapPreviewRouteCounts],
@@ -2482,7 +2338,6 @@ function DiscoverScreenInner() {
   const exploreMapHandoffBuild = useMemo(() => {
     return buildExploreRouteOverlaySegmentsFromRoutes({
       hiddenGemRoutes: exploreMapPreviewRouteSets.hiddenGemRoutes,
-      popularTrailRoutes: exploreMapPreviewRouteSets.popularTrailRoutes,
       trailPackRoutes: exploreMapPreviewRouteSets.trailPackRoutes,
       favoriteRoutes: exploreMapPreviewRouteSets.favoriteRoutes,
       ecsRouteIdeaRoutes: exploreMapPreviewRouteSets.ecsRouteIdeaRoutes,
@@ -2658,33 +2513,6 @@ function DiscoverScreenInner() {
     };
   }, [aiRouteIdeaPageIndex, publicRefinedAIRoutes]);
   const visibleAIRoutes = aiRouteIdeaPage.items;
-  const popularTrailPage = useMemo(() => {
-    const pageSize = POPULAR_TRAIL_PAGE_SIZE;
-    const eligibleCount = popularTrailExploreOrchestration.routes.length;
-    const totalPages = Math.max(1, Math.ceil(eligibleCount / pageSize));
-    const normalizedPageIndex = eligibleCount === 0
-      ? 0
-      : ((popularTrailPageIndex % totalPages) + totalPages) % totalPages;
-    const offset = normalizedPageIndex * pageSize;
-    const items = popularTrailExploreOrchestration.routes
-      .slice(offset, offset + pageSize)
-      .map((route) => popularTrailExploreOrchestration.routeMap.get(route.id) ?? route);
-
-    return {
-      items,
-      eligibleCount,
-      pageIndex: normalizedPageIndex,
-      pageSize,
-      totalPages,
-      offset,
-      nextPageIndex: items.length === 0 ? 0 : (normalizedPageIndex + 1) % totalPages,
-    };
-  }, [
-    popularTrailExploreOrchestration.routeMap,
-    popularTrailExploreOrchestration.routes,
-    popularTrailPageIndex,
-  ]);
-  const visiblePopularTrails = popularTrailPage.items;
   const trailPackPage = useMemo(() => {
     const pageSize = TRAIL_PACK_PAGE_SIZE;
     const eligibleCount = publicDiscoverableTrailPacks.length;
@@ -2705,24 +2533,13 @@ function DiscoverScreenInner() {
     };
   }, [publicDiscoverableTrailPacks, trailPackPageIndex]);
   const visibleTrailPacks = trailPackPage.items;
-  const popularTrailSummary = useMemo(() => {
-    const base = `${popularTrailPage.eligibleCount} named drivable trail${popularTrailPage.eligibleCount === 1 ? '' : 's'} qualified inside ${exploreFilterNarrative}.`;
-    return popularTrailExploreOrchestration.summaryNote
-      ? `${base} ${popularTrailExploreOrchestration.summaryNote}`
-      : base;
-  }, [exploreFilterNarrative, popularTrailExploreOrchestration.summaryNote, popularTrailPage.eligibleCount]);
   const hiddenGemPageCount = hiddenGemPage.totalPages;
-  const popularTrailPageCount = popularTrailPage.totalPages;
   const trailPackPageCount = trailPackPage.totalPages;
   const aiRouteIdeaPageCount = aiRouteIdeaPage.totalPages;
   const visibleHiddenGemRoutes = enrichedHiddenGemRoutes;
   const hiddenGemThumbnailAssignments = useMemo(
     () => getExploreRouteThumbnailAssignments(visibleHiddenGemRoutes, 'hiddenGems'),
     [visibleHiddenGemRoutes],
-  );
-  const popularTrailThumbnailAssignments = useMemo(
-    () => getExploreRouteThumbnailAssignments(visiblePopularTrails, 'popularTrails'),
-    [visiblePopularTrails],
   );
   const knownRouteThumbnailAssignments = useMemo(
     () => getExploreRouteThumbnailAssignments(enrichedKnown, 'knownRoutes'),
@@ -2741,11 +2558,6 @@ function DiscoverScreenInner() {
   );
   const hiddenGemWindowStart = hiddenGemPage.eligibleCount === 0 ? 0 : hiddenGemPage.offset + 1;
   const hiddenGemWindowEnd = Math.min(hiddenGemPage.offset + hiddenGemPage.items.length, hiddenGemPage.eligibleCount);
-  const popularTrailWindowStart = popularTrailPage.eligibleCount === 0 ? 0 : popularTrailPage.offset + 1;
-  const popularTrailWindowEnd = Math.min(
-    popularTrailPage.offset + popularTrailPage.items.length,
-    popularTrailPage.eligibleCount,
-  );
   const trailPackWindowStart = trailPackPage.eligibleCount === 0 ? 0 : trailPackPage.offset + 1;
   const trailPackWindowEnd = Math.min(
     trailPackPage.offset + trailPackPage.items.length,
@@ -2776,12 +2588,10 @@ function DiscoverScreenInner() {
 
   useEffect(() => {
     setHiddenGemPageIndex(0);
-    setPopularTrailPageIndex(0);
     setTrailPackPageIndex(0);
     setAiRouteIdeaPageIndex(0);
     setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
-    setPopularTrailCycleNotice(null);
     setExploreMapHandoffNotice(null);
   }, [distanceRadius, exploreRefinement, vehicleProfileSignature, activeTabRouteSignature]);
 
@@ -2820,20 +2630,6 @@ function DiscoverScreenInner() {
     }
     setHiddenGemPageIndex(hiddenGemPage.nextPageIndex);
   }, [hiddenGemPage.nextPageIndex, hiddenGemPage.pageIndex, hiddenGemPage.totalPages]);
-
-  const handleAdvancePopularTrails = useCallback(() => {
-    hapticMicro();
-    if (popularTrailPage.totalPages <= 1) {
-      setPopularTrailCycleNotice('All qualifying popular trails in this radius are already on screen.');
-      return;
-    }
-    if (popularTrailPage.pageIndex + 1 >= popularTrailPage.totalPages) {
-      setPopularTrailCycleNotice('All qualifying popular trails in this radius have been viewed. Cycling back through the ranked set.');
-    } else {
-      setPopularTrailCycleNotice(null);
-    }
-    setPopularTrailPageIndex(popularTrailPage.nextPageIndex);
-  }, [popularTrailPage.nextPageIndex, popularTrailPage.pageIndex, popularTrailPage.totalPages]);
 
   const handleAdvanceAIRouteIdeas = useCallback(() => {
     hapticMicro();
@@ -2890,7 +2686,7 @@ function DiscoverScreenInner() {
     ? latestFavoriteTrail.subtitle ?? 'Most recently saved trail'
     : latestFavoritePlan
       ? `${latestFavoritePlan.items.length} stop${latestFavoritePlan.items.length !== 1 ? 's' : ''} saved for review`
-      : 'Save trails from Hidden Gems or Popular Trails to reopen them later.';
+      : 'Save trails from Hidden Gems, Trail Packs, or ECS Route Ideas to reopen them later.';
   const favoriteTrailViewportHeight = useMemo(() => {
     if (favoriteTrails.length <= FAVORITES_VISIBLE_LIMIT) return undefined;
     return 412;
@@ -3311,14 +3107,6 @@ function DiscoverScreenInner() {
         description: 'Lower-profile routes matched to the active filters.',
       },
       {
-        key: 'popularTrails' as const,
-        label: 'Popular Trails',
-        icon: 'trail-sign-outline',
-        count: popularTrailPage.eligibleCount,
-        accentColor: '#66BB6A',
-        description: 'Known trail routes inside the current range.',
-      },
-      {
         key: 'trailPacks' as const,
         label: 'Trail Packs',
         icon: 'albums-outline',
@@ -3331,7 +3119,7 @@ function DiscoverScreenInner() {
         label: 'ECS Route Ideas',
         icon: 'navigate-outline',
         count: aiRouteIdeaPage.eligibleCount,
-        accentColor: '#5AC8FA',
+        accentColor: TACTICAL.amber,
         description: 'Generated route ideas filtered to this context.',
       },
       {
@@ -3339,7 +3127,7 @@ function DiscoverScreenInner() {
         label: 'Favorites',
         icon: 'star-outline',
         count: favoritesTotal,
-        accentColor: '#E6B84C',
+        accentColor: TACTICAL.amber,
         description: 'Saved routes that still match the active Explore context.',
       },
     ],
@@ -3347,7 +3135,6 @@ function DiscoverScreenInner() {
       aiRouteIdeaPage.eligibleCount,
       favoritesTotal,
       hiddenGemPage.eligibleCount,
-      popularTrailPage.eligibleCount,
       trailPackPage.eligibleCount,
     ],
   );
@@ -3496,14 +3283,6 @@ function DiscoverScreenInner() {
           windowStart: hiddenGemWindowStart,
           windowEnd: hiddenGemWindowEnd,
         };
-      case 'popularTrails':
-        return {
-          pageIndex: popularTrailPage.pageIndex,
-          totalPages: popularTrailPage.totalPages,
-          totalItems: popularTrailPage.eligibleCount,
-          windowStart: popularTrailWindowStart,
-          windowEnd: popularTrailWindowEnd,
-        };
       case 'trailPacks':
         return {
           pageIndex: trailPackPage.pageIndex,
@@ -3556,11 +3335,6 @@ function DiscoverScreenInner() {
     hiddenGemWindowEnd,
     hiddenGemWindowStart,
     normalizedFavoritesPageIndex,
-    popularTrailPage.eligibleCount,
-    popularTrailPage.pageIndex,
-    popularTrailPage.totalPages,
-    popularTrailWindowEnd,
-    popularTrailWindowStart,
     trailPackPage.eligibleCount,
     trailPackPage.pageIndex,
     trailPackPage.totalPages,
@@ -3590,10 +3364,6 @@ function DiscoverScreenInner() {
           setHiddenGemPageIndex((current) => clampPage(current + direction, hiddenGemPage.totalPages));
           setHiddenGemCycleNotice(null);
           break;
-        case 'popularTrails':
-          setPopularTrailPageIndex((current) => clampPage(current + direction, popularTrailPage.totalPages));
-          setPopularTrailCycleNotice(null);
-          break;
         case 'trailPacks':
           setTrailPackPageIndex((current) => clampPage(current + direction, trailPackPage.totalPages));
           break;
@@ -3610,7 +3380,6 @@ function DiscoverScreenInner() {
       aiRouteIdeaPage.totalPages,
       favoritePanelTotalPages,
       hiddenGemPage.totalPages,
-      popularTrailPage.totalPages,
       trailPackPage.totalPages,
     ],
   );
@@ -3664,56 +3433,13 @@ function DiscoverScreenInner() {
             ))}
           </View>
         );
-      case 'popularTrails':
-        if (showSectionLoading) return <SectionCardSkeletonList />;
-        if (popularTrailsState.error) {
-          return (
-            <ExplorerStateCard
-              icon="cloud-offline-outline"
-              title={ECS_READINESS_COPY.explore.popularTrailsLimitedTitle}
-              message={ECS_READINESS_COPY.explore.popularTrailsLimitedMessage}
-            />
-          );
-        }
-        if (visiblePopularTrails.length === 0) {
-          return (
-            <ExplorerStateCard
-              icon="trail-sign-outline"
-              title="No Popular Trails in Range"
-              message={`No marquee routes were found inside ${exploreFilterNarrative} after the active trail filters were applied.`}
-            />
-          );
-        }
-        return (
-          <View style={[s.routeCardGrid, showExploreRouteGrid && s.routeCardGridExpanded]}>
-            {visiblePopularTrails.map((route) => (
-              <View key={route.id} style={[s.hiddenGemCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}>
-                <EnrichedRouteCard
-                  route={route}
-                  hasVehicle={!!activeVehicleId}
-                  isFavorited={favoriteTrailIds.has(String(route.id))}
-                  presentationVariant="popular-trail"
-                  collectionLabel="Popular Trails"
-                  thumbnailOverride={popularTrailThumbnailAssignments.get(String(route.id)) ?? null}
-                  onSelect={() => handleSelectOpportunity(route)}
-                  onNavigate={() => {
-                    void handleNavigateToRoute(route);
-                  }}
-                  onToggleFavorite={() => handleToggleFavorite(route)}
-                  isCompleted={completedIds?.has(route.id) ?? false}
-                  compactPreview
-                />
-              </View>
-            ))}
-          </View>
-        );
       case 'trailPacks':
         if (!routeCatalogHasSearchArea) {
           return (
             <ExplorerStateCard
               icon="location-outline"
               title="Search Area Needed"
-              message="Trail Packs need GPS or a selected search area to filter verified routes by radius."
+              message="Trail Packs need GPS or an internal search area to filter verified routes by radius."
             />
           );
         }
@@ -3732,7 +3458,7 @@ function DiscoverScreenInner() {
               <ExplorerStateCard
                 icon="cloud-offline-outline"
                 title="Live Trail Packs Unavailable"
-                message="Live Trail Packs are not available from the reviewed catalog yet. No seed or mock Trail Packs are shown here."
+                message="Live Trail Packs are not available from reviewed sources yet. No seed or mock Trail Packs are shown here."
               />
             );
           }
@@ -3768,7 +3494,7 @@ function DiscoverScreenInner() {
               <View style={s.inlineSectionNotice}>
                 <Ionicons name="map-outline" size={12} color={TACTICAL.info} />
                 <Text style={s.inlineSectionNoticeText}>
-                  Showing verified catalog routes within {activeDistanceRadius} mi of {routeCatalogEffectiveSearchArea.shortLabel}.
+                  Showing verified routes within {activeDistanceRadius} mi of {routeCatalogEffectiveSearchArea.shortLabel}.
                 </Text>
               </View>
             ) : null}
@@ -3996,106 +3722,6 @@ function DiscoverScreenInner() {
                 isLoading={isLoading}
               />
 
-              <View style={s.routeCatalogSearchAreaCard} testID="route-catalog-search-area-control">
-                <View style={s.routeCatalogSearchAreaHeader}>
-                  <View style={s.routeCatalogSearchAreaTitleRow}>
-                    <Ionicons name="locate-outline" size={12} color={TACTICAL.amber} />
-                    <Text style={s.routeCatalogSearchAreaTitle}>ROUTE CATALOG AREA</Text>
-                  </View>
-                  <Text style={s.routeCatalogSearchAreaActive} numberOfLines={1}>
-                    {routeCatalogEffectiveSearchArea?.shortLabel ?? 'Select Area'}
-                  </Text>
-                </View>
-                <Text style={s.routeCatalogSearchAreaHelper}>
-                  Suggested Trailheads only show verified catalog routes within the selected radius.
-                </Text>
-                <Text style={s.routeCatalogSearchAreaCoverageNotice}>
-                  {routeCatalogCoverageNotice}
-                </Text>
-                <View style={s.routeCatalogSearchAreaChipRow}>
-                  {hasGPSFix ? (
-                    <TouchableOpacity
-                      style={[
-                        s.routeCatalogSearchAreaChip,
-                        routeCatalogSearchAreaKey == null && s.routeCatalogSearchAreaChipActive,
-                      ]}
-                      activeOpacity={0.78}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: routeCatalogSearchAreaKey == null }}
-                      onPress={() => handleSelectRouteCatalogSearchArea(null)}
-                    >
-                      <Ionicons
-                        name="navigate-outline"
-                        size={10}
-                        color={routeCatalogSearchAreaKey == null ? TACTICAL.amber : TACTICAL.textMuted}
-                      />
-                      <Text
-                        style={[
-                          s.routeCatalogSearchAreaChipText,
-                          routeCatalogSearchAreaKey == null && s.routeCatalogSearchAreaChipTextActive,
-                        ]}
-                      >
-                        Current GPS
-                      </Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  {ROUTE_CATALOG_PRESET_SEARCH_AREAS.map((area) => {
-                    const active = routeCatalogSearchAreaKey === area.key;
-                    return (
-                      <TouchableOpacity
-                        key={area.key}
-                        style={[
-                          s.routeCatalogSearchAreaChip,
-                          active && s.routeCatalogSearchAreaChipActive,
-                        ]}
-                        activeOpacity={0.78}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: active }}
-                        onPress={() => handleSelectRouteCatalogSearchArea(area.key)}
-                      >
-                        <Ionicons
-                          name="trail-sign-outline"
-                          size={10}
-                          color={active ? TACTICAL.amber : TACTICAL.textMuted}
-                        />
-                        <Text
-                          style={[
-                            s.routeCatalogSearchAreaChipText,
-                            active && s.routeCatalogSearchAreaChipTextActive,
-                          ]}
-                        >
-                          {area.shortLabel}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                  <TouchableOpacity
-                    style={[
-                      s.routeCatalogSearchAreaChip,
-                      routeCatalogSearchAreaKey === 'manual_search_center' && s.routeCatalogSearchAreaChipActive,
-                    ]}
-                    activeOpacity={0.78}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: routeCatalogSearchAreaKey === 'manual_search_center' }}
-                    onPress={handleOpenRouteCatalogManualSearch}
-                  >
-                    <Ionicons
-                      name="locate-outline"
-                      size={10}
-                      color={routeCatalogSearchAreaKey === 'manual_search_center' ? TACTICAL.amber : TACTICAL.textMuted}
-                    />
-                    <Text
-                      style={[
-                        s.routeCatalogSearchAreaChipText,
-                        routeCatalogSearchAreaKey === 'manual_search_center' && s.routeCatalogSearchAreaChipTextActive,
-                      ]}
-                    >
-                      {routeCatalogManualSearchArea ? routeCatalogManualSearchArea.shortLabel : 'Manual Center'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
               <View style={s.exploreMapHandoffCard}>
                 <View style={s.exploreMapHandoffCopy}>
                   <Text style={s.exploreMapHandoffTitle}>Filtered Route Map Preview</Text>
@@ -4156,13 +3782,6 @@ function DiscoverScreenInner() {
                 badge="RANKING"
                 description="Filtering lower-profile drivable trails for the current radius."
               />
-              <DiscoverySectionSkeleton
-                title="POPULAR TRAILS"
-                icon="flag-outline"
-                badge="SCANNING"
-                description="Checking iconic destination routes inside the current radius."
-                accentColor="#66BB6A"
-              />
             </>
           )}
 
@@ -4196,7 +3815,7 @@ function DiscoverScreenInner() {
               style={s.emptyRadius}
               title="No Trails Match This Filter"
               message={`${selectedExploreRefinementLabel ?? 'This refinement'} has no matches inside ${distanceRadiusNarrative}.`}
-              helper="Clear the refinement or choose a different range to keep exploring the current trail catalog."
+              helper="Clear the refinement or choose a different range to keep exploring the current trail list."
               actionLabel="Clear Refinement"
               onAction={() => handleExploreRefinementChange(null)}
               icon="options-outline"
@@ -4348,10 +3967,8 @@ function DiscoverScreenInner() {
                     key={category.key}
                     style={[
                       s.explorerCategoryTile,
-                      {
-                        borderColor: `${category.accentColor}${isEmpty ? '22' : '42'}`,
-                        backgroundColor: isEmpty ? 'rgba(10,14,18,0.72)' : ECS.bgPanel,
-                      },
+                      s.explorerCategoryTileGold,
+                      isEmpty && s.explorerCategoryTileEmpty,
                     ]}
                     activeOpacity={0.82}
                     onPress={() => handleOpenExplorerCategoryPanel(category.key)}
@@ -4450,17 +4067,17 @@ function DiscoverScreenInner() {
                 ) : !exploreSourceDiagnostics.routeSourceHydrated ? (
                   <ExplorerStateCard
                     icon="hourglass-outline"
-                    title="Loading Route Catalog"
-                    message="Explore is still hydrating its route source for this session. Hidden Gems will populate once the catalog load completes."
+                    title="Loading Trail Source"
+                    message="Explore is still hydrating its route source for this session. Hidden Gems will populate once the trail-source load completes."
                   />
                 ) : exploreSourceDiagnostics.routeCatalogCount === 0 ? (
                   <ExplorerStateCard
                     icon="map-outline"
-                    title="Route Catalog Unavailable"
+                    title="Trail Source Unavailable"
                     message={
                       exploreSourceDiagnostics.offlineModeActive
-                        ? 'Explore is offline and no local trail catalog is available yet.'
-                        : 'Explore did not load a route catalog for this session. Refresh Explore once shell state settles.'
+                        ? 'Explore is offline and no local trail source is available yet.'
+                        : 'Explore did not load reviewed trail sources for this session. Refresh Explore once shell state settles.'
                     }
                   />
                 ) : visibleHiddenGemRoutes.length === 0 ? (
@@ -4469,7 +4086,7 @@ function DiscoverScreenInner() {
                     title="No Hidden Gems in Range"
                     message={
                       hiddenGemDiagnostics.rawCandidateCount === 0
-                        ? `The route catalog is loaded, but no drivable routes fell inside ${exploreFilterNarrative} for Hidden Gems review.`
+                        ? `The trail source is loaded, but no drivable routes fell inside ${exploreFilterNarrative} for Hidden Gems review.`
                         : hasGPSFix
                         ? `Routes were evaluated inside ${exploreFilterNarrative}, but none qualified as exploratory off-road candidates for your current rig after the active trail filters were applied.`
                         : `Explore is still using the default search location until live GPS becomes available. Routes were evaluated inside ${exploreFilterNarrative}, but none qualified as exploratory off-road candidates after the active trail filters were applied.`
@@ -4521,116 +4138,6 @@ function DiscoverScreenInner() {
                         />
                         <Text style={s.hiddenGemPagerText}>
                           {`${hiddenGemPage.pageIndex + 1 >= hiddenGemPageCount ? 'RESTART' : 'NEXT'} ${hiddenGemPage.pageSize}`}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  </>
-                )}
-              </ECSSection>
-
-              <ECSSection style={[s.discoverySection, s.popularTrailsSection]}>
-                <ECSSectionHeader
-                  title="POPULAR TRAILS"
-                  icon="flag-outline"
-                  accentColor="#66BB6A"
-                  badge={
-                    <ECSSectionBadge
-                      label={
-                        showSectionLoading
-                          ? 'UPDATING'
-                          : popularTrailsState.error
-                          ? ECS_READINESS_COPY.labels.limited
-                          : popularTrailPage.eligibleCount === 0
-                          ? 'NO PICKS'
-                          : `${popularTrailWindowStart}-${popularTrailWindowEnd} OF ${popularTrailPage.eligibleCount}`
-                      }
-                      color="#66BB6A"
-                    />
-                  }
-                />
-                <Text style={s.discoverySectionDescription}>
-                  {popularTrailsState.error
-                    ? ECS_READINESS_COPY.explore.popularTrailsLimitedDetail
-                    : popularTrailSummary}
-                </Text>
-
-                {popularTrailCycleNotice ? (
-                  <View style={s.inlineSectionNotice}>
-                    <Ionicons name="information-circle-outline" size={12} color="#66BB6A" />
-                    <Text style={s.inlineSectionNoticeText}>{popularTrailCycleNotice}</Text>
-                  </View>
-                ) : null}
-
-                {showSectionLoading ? (
-                  <SectionCardSkeletonList />
-                ) : popularTrailsState.error ? (
-                  <ExplorerStateCard
-                    icon="cloud-offline-outline"
-                    title={ECS_READINESS_COPY.explore.popularTrailsLimitedTitle}
-                    message={ECS_READINESS_COPY.explore.popularTrailsLimitedMessage}
-                    action={(
-                      <TouchableOpacity
-                        style={[s.sectionStateAction, s.sectionStateActionGreen]}
-                        activeOpacity={0.78}
-                        onPress={refreshRigContext}
-                      >
-                        <Ionicons name="refresh-outline" size={11} color="#66BB6A" />
-                        <Text style={[s.sectionStateActionText, s.sectionStateActionTextGreen]}>REFRESH EXPLORE</Text>
-                      </TouchableOpacity>
-                    )}
-                  />
-                ) : visiblePopularTrails.length === 0 ? (
-                  <ExplorerStateCard
-                    icon="flag-outline"
-                    title="No Popular Trails in Range"
-                    message={`No marquee routes were found inside ${exploreFilterNarrative} after the active trail filters were applied.`}
-                  />
-                ) : (
-                  <>
-                    <ScrollView
-                      style={s.sectionCardViewport}
-                      contentContainerStyle={[
-                        s.routeCardGrid,
-                        s.sectionCardViewportContent,
-                        showExploreRouteGrid && s.routeCardGridExpanded,
-                      ]}
-                      nestedScrollEnabled
-                      showsVerticalScrollIndicator={visiblePopularTrails.length > 3}
-                    >
-                      {visiblePopularTrails.map((route) => (
-                          <View key={route.id} style={[s.hiddenGemCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}>
-                            <EnrichedRouteCard
-                              route={route}
-                              hasVehicle={!!activeVehicleId}
-                              isFavorited={favoriteTrailIds.has(String(route.id))}
-                              presentationVariant="popular-trail"
-                              collectionLabel="Popular Trails"
-                              thumbnailOverride={popularTrailThumbnailAssignments.get(String(route.id)) ?? null}
-                              onSelect={() => handleSelectOpportunity(route)}
-                              onNavigate={() => {
-                                void handleNavigateToRoute(route);
-                              }}
-                              onToggleFavorite={() => handleToggleFavorite(route)}
-                              isCompleted={completedIds?.has(route.id) ?? false}
-                              compactPreview
-                            />
-                          </View>
-                        ))}
-                    </ScrollView>
-
-                    {popularTrailPage.eligibleCount > popularTrailPage.pageSize && (
-                      <TouchableOpacity
-                        style={[s.hiddenGemPagerBtn, s.popularTrailPagerBtn]}
-                        activeOpacity={0.82}
-                        onPress={handleAdvancePopularTrails}
-                      >
-                        <Ionicons
-                          name="chevron-forward-outline"
-                          size={14}
-                          color="#66BB6A"
-                        />
-                        <Text style={[s.hiddenGemPagerText, s.popularTrailPagerText]}>
-                          {`${popularTrailPage.pageIndex + 1 >= popularTrailPageCount ? 'RESTART' : 'NEXT'} ${popularTrailPage.pageSize}`}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -4751,7 +4258,7 @@ function DiscoverScreenInner() {
                 <ECSSectionHeader
                   title="FAVORITES"
                   icon="star-outline"
-                  accentColor="#E6B84C"
+                  accentColor={TACTICAL.amber}
                   badge={<ECSSectionBadge label={favoritesTotal > 0 ? `${favoritesTotal} SAVED` : 'EMPTY'} />}
                 />
 
@@ -4759,7 +4266,7 @@ function DiscoverScreenInner() {
                   <View style={s.favoriteEmptyCompact}>
                     <Ionicons name="star-outline" size={14} color={TACTICAL.amber} />
                     <Text style={s.favoriteEmptyCompactText}>
-                      Save trails from Hidden Gems or Popular Trails to reopen them later.
+                      Save trails from Hidden Gems, Trail Packs, or ECS Route Ideas to reopen them later.
                     </Text>
                   </View>
                 ) : (
@@ -4872,7 +4379,7 @@ function DiscoverScreenInner() {
                               <ECSResultsEmptyState
                                 style={s.favoriteEmptyState}
                                 title={ECS_STATE_COPY.explore.noFavoritesSaved.title}
-                                message="Save a trail in Popular Trails, Hidden Gems, or ECS route ideas to keep it here."
+                                message="Save a trail in Hidden Gems, Trail Packs, or ECS Route Ideas to keep it here."
                                 icon="star-outline"
                                 variant="compact"
                               />
@@ -5073,20 +4580,6 @@ function DiscoverScreenInner() {
               )}
             </View>
           ) : null}
-
-          <View style={s.footerNote}>
-            <Ionicons name="information-circle-outline" size={11} color={TACTICAL.textMuted} />
-            <View style={s.footerNoteCopy}>
-              <Text style={s.footerNoteText}>
-                {vehicleProfile
-                  ? `Showing ${hiddenGemPage.eligibleCount} Explore picks and ${refinedCanonicalRoutes.length} drivable trail${refinedCanonicalRoutes.length !== 1 ? 's' : ''}${refinedAIRoutes.length > 0 ? ` + ${refinedAIRoutes.length} ECS route idea${refinedAIRoutes.length !== 1 ? 's' : ''}` : ''} inside ${distanceRadiusFooterLabel.toLowerCase()}${selectedExploreRefinementLabel ? ` / ${selectedExploreRefinementLabel.toLowerCase()}` : ''}. ${explorationStats.totalRoutesCompleted} route${explorationStats.totalRoutesCompleted !== 1 ? 's' : ''} explored (${explorationStats.totalMilesExplored} mi). ${hasGPSFix ? 'GPS active.' : 'Enable location for accuracy.'}`
-                  : `Add a vehicle to see personalized match scores and richer hidden-gem recommendations.${refinedAIRoutes.length > 0 ? ` ${refinedAIRoutes.length} ECS route ideas available.` : ''}`}
-              </Text>
-              <Text style={s.footerNoteSubtext}>
-                {`ECS filters out trails under ${MIN_DISCOVERY_ROUTE_MILES} miles to reduce trail noise and surface routes worth your time.`}
-              </Text>
-            </View>
-          </View>
 
           <View style={{ height: 20 }} />
         </ScrollView>
@@ -5294,82 +4787,6 @@ function DiscoverScreenInner() {
           onClose={() => setTrailPackSubmissionRoute(null)}
           onSubmitted={handleTrailPackSubmitted}
         />
-
-        <TacticalPopupShell
-          visible={routeCatalogSearchAreaModalVisible}
-          onClose={handleCloseRouteCatalogManualSearch}
-          title="SEARCH CENTER"
-          icon="locate-outline"
-          eyebrow="ROUTE CATALOG AREA"
-          subtitle="Manual CONUS radius center"
-          overlayClass="editor"
-          keyboardAware
-          maxWidth={520}
-          footer={(
-            <View style={s.planModalFooter}>
-              <TouchableOpacity
-                style={s.planModalSecondaryBtn}
-                activeOpacity={0.8}
-                onPress={handleCloseRouteCatalogManualSearch}
-              >
-                <Text style={s.planModalSecondaryText}>CANCEL</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={s.planModalPrimaryBtn}
-                activeOpacity={0.85}
-                onPress={handleApplyRouteCatalogManualSearch}
-              >
-                <Text style={s.planModalPrimaryText}>Apply Center</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        >
-          <View style={s.routeCatalogManualSearchSection}>
-            <Text style={s.routeCatalogManualSearchLabel}>LABEL</Text>
-            <TextInput
-              value={routeCatalogManualSearchLabel}
-              onChangeText={setRouteCatalogManualSearchLabel}
-              placeholder="Manual Search Center"
-              placeholderTextColor={TACTICAL.textMuted}
-              style={s.routeCatalogManualSearchInput}
-              autoCapitalize="words"
-              returnKeyType="next"
-            />
-          </View>
-          <View style={s.routeCatalogManualSearchSection}>
-            <Text style={s.routeCatalogManualSearchLabel}>LATITUDE, LONGITUDE</Text>
-            <TextInput
-              value={routeCatalogManualSearchCoordinates}
-              onChangeText={setRouteCatalogManualSearchCoordinates}
-              placeholder="39.305, -120.490"
-              placeholderTextColor={TACTICAL.textMuted}
-              style={s.routeCatalogManualSearchInput}
-              autoCapitalize="none"
-              keyboardType="numbers-and-punctuation"
-              returnKeyType="done"
-              onSubmitEditing={handleApplyRouteCatalogManualSearch}
-            />
-          </View>
-          {routeCatalogManualSearchError ? (
-            <Text style={s.routeCatalogManualSearchError}>{routeCatalogManualSearchError}</Text>
-          ) : null}
-          <View style={s.routeCatalogManualCoverageBlock}>
-            <Text style={s.routeCatalogManualSearchLabel}>VERIFIED COVERAGE</Text>
-            <Text style={s.routeCatalogManualCoverageText}>
-              {ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS.join(' / ')}
-            </Text>
-            <Text style={s.routeCatalogManualCoverageHint}>
-              {routeCatalogCoverageSummary}
-            </Text>
-            <Text style={s.routeCatalogManualCoverageHint}>
-              No demo routes are used.
-            </Text>
-            <Text style={s.routeCatalogManualSearchLabel}>IN CURATION</Text>
-            <Text style={s.routeCatalogManualCoverageHint} numberOfLines={3}>
-              {ROUTE_CATALOG_CURATION_COVERAGE_LABELS.join(' / ')}
-            </Text>
-          </View>
-        </TacticalPopupShell>
 
         {/* ── Phase 18: AI Route Preview Modal with enrichment ── */}
         <TacticalPopupShell
@@ -5810,134 +5227,6 @@ const s = StyleSheet.create({
   discoveryRefreshNotice: {
     marginTop: 2,
   },
-  routeCatalogSearchAreaCard: {
-    borderRadius: ECS.radius,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgPanel,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    gap: 7,
-  },
-  routeCatalogSearchAreaHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  routeCatalogSearchAreaTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    minWidth: 0,
-  },
-  routeCatalogSearchAreaTitle: {
-    color: TACTICAL.text,
-    fontSize: 9,
-    lineHeight: 11,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  routeCatalogSearchAreaActive: {
-    color: TACTICAL.amber,
-    fontSize: 9,
-    lineHeight: 11,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  routeCatalogSearchAreaHelper: {
-    color: TACTICAL.textMuted,
-    fontSize: 8,
-    lineHeight: 12,
-    fontWeight: '700',
-  },
-  routeCatalogSearchAreaCoverageNotice: {
-    color: TACTICAL.amber,
-    fontSize: 8,
-    lineHeight: 12,
-    fontWeight: '800',
-  },
-  routeCatalogSearchAreaChipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  routeCatalogSearchAreaChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-  },
-  routeCatalogSearchAreaChipActive: {
-    borderColor: TACTICAL.amber + '55',
-    backgroundColor: TACTICAL.amber + '14',
-  },
-  routeCatalogSearchAreaChipText: {
-    color: TACTICAL.textMuted,
-    fontSize: 8,
-    lineHeight: 10,
-    fontWeight: '900',
-    letterSpacing: 0.35,
-  },
-  routeCatalogSearchAreaChipTextActive: {
-    color: TACTICAL.amber,
-  },
-  routeCatalogManualSearchSection: {
-    gap: 6,
-    marginBottom: 12,
-  },
-  routeCatalogManualSearchLabel: {
-    color: TACTICAL.textMuted,
-    fontSize: 9,
-    lineHeight: 11,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-  },
-  routeCatalogManualSearchInput: {
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    borderRadius: ECS.radius,
-    backgroundColor: ECS.bgElev,
-    color: TACTICAL.text,
-    fontSize: 13,
-    lineHeight: 17,
-    fontWeight: '800',
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-  },
-  routeCatalogManualSearchError: {
-    color: TACTICAL.danger,
-    fontSize: 10,
-    lineHeight: 14,
-    fontWeight: '800',
-  },
-  routeCatalogManualCoverageBlock: {
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '35',
-    borderRadius: ECS.radius,
-    backgroundColor: TACTICAL.amber + '10',
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    gap: 5,
-  },
-  routeCatalogManualCoverageText: {
-    color: TACTICAL.text,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: '900',
-  },
-  routeCatalogManualCoverageHint: {
-    color: TACTICAL.textMuted,
-    fontSize: 9,
-    lineHeight: 13,
-    fontWeight: '700',
-  },
   exploreMapHandoffCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -6051,6 +5340,13 @@ const s = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 14,
     elevation: 6,
+  },
+  explorerCategoryTileGold: {
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
+  },
+  explorerCategoryTileEmpty: {
+    opacity: 0.72,
   },
   explorerCategoryIconWrap: {
     width: 34,
@@ -6259,10 +5555,6 @@ const s = StyleSheet.create({
     borderColor: ECS.strokeMuted,
     backgroundColor: 'rgba(20,16,11,0.96)',
   },
-  popularTrailsSection: {
-    borderColor: 'rgba(102,187,106,0.18)',
-    backgroundColor: 'rgba(11,18,13,0.96)',
-  },
   discoverySectionBadge: {
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -6308,18 +5600,11 @@ const s = StyleSheet.create({
     borderColor: TACTICAL.amber + '35',
     backgroundColor: TACTICAL.amber + '0C',
   },
-  sectionStateActionGreen: {
-    borderColor: 'rgba(102,187,106,0.30)',
-    backgroundColor: 'rgba(102,187,106,0.10)',
-  },
   sectionStateActionText: {
     fontSize: 8,
     fontWeight: '900',
     letterSpacing: 1.4,
     color: TACTICAL.amber,
-  },
-  sectionStateActionTextGreen: {
-    color: '#66BB6A',
   },
   routeCardGrid: {
     gap: 4,
@@ -6372,13 +5657,6 @@ const s = StyleSheet.create({
     fontWeight: '800',
     color: TACTICAL.amber,
     letterSpacing: 1.3,
-  },
-  popularTrailPagerBtn: {
-    borderColor: '#66BB6A30',
-    backgroundColor: '#66BB6A0D',
-  },
-  popularTrailPagerText: {
-    color: '#66BB6A',
   },
   aiRouteIdeaPagerBtn: {
     borderColor: '#5AC8FA30',
@@ -7604,32 +6882,6 @@ const s = StyleSheet.create({
     fontWeight: '800',
     color: TACTICAL.amber,
     letterSpacing: 2,
-  },
-
-  // ── Footer Note ───────────────────────────────────────
-  footerNote: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-    paddingHorizontal: 4,
-    paddingVertical: 10,
-    marginTop: 4,
-  },
-  footerNoteCopy: {
-    flex: 1,
-    gap: 3,
-  },
-  footerNoteText: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: TACTICAL.textMuted,
-    lineHeight: 15,
-  },
-  footerNoteSubtext: {
-    fontSize: 9,
-    fontWeight: '500',
-    color: TACTICAL.textMuted + 'B8',
-    lineHeight: 13,
   },
 
   // ── Footer ────────────────────────────────────────────

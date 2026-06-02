@@ -558,8 +558,33 @@ assertIncludes(
   'Each Available Actions tile should share equal column height.',
 );
 assertIncludes(
+  quickActionsSource,
+  'fieldUtilityContainerSurface(item.color)',
+  'Weather, Team Ping, Quick Note, Permits & Access, Comms, and Trip Summaries should use the same low-opacity container treatment as the protocol tiles.',
+);
+assertIncludes(
+  quickActionsSource,
+  'fieldUtilityContainerSurface(documentationTile.color)',
+  'Documentation should use the same low-opacity container treatment as the protocol tiles without changing its color.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'quickActionTile'),
+  'paddingVertical: 4',
+  'Available Actions tiles should be shorter so Incident & Recovery has enough vertical room.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'quickActionTile'),
+  'gap: 5',
+  'Available Actions tiles should tighten their internal spacing to prevent clipping pressure.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'documentationTile'),
+  'minHeight: 46',
+  'Documentation should be compact enough to leave the Incident & Recovery panel visible.',
+);
+assertIncludes(
   styleBlock(quickActionsSource, 'incidentRecoveryUtilitySlot'),
-  'height: 184',
+  'height: 220',
   'Incident & Recovery should reserve enough height for its compact live controls.',
 );
 assertIncludes(

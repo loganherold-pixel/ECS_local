@@ -98,7 +98,7 @@ assert.ok(
 assert.ok(
   exploreFilterStateSource.includes('export type ExplorerCategoryPanelKey =') &&
     exploreFilterStateSource.includes("'hiddenGems'") &&
-    exploreFilterStateSource.includes("'popularTrails'") &&
+    !exploreFilterStateSource.includes("'popularTrails'") &&
     exploreFilterStateSource.includes("'trailPacks'") &&
     exploreFilterStateSource.includes("'ecsRouteIdeas'") &&
     exploreFilterStateSource.includes("'favorites'") &&
@@ -106,21 +106,40 @@ assert.ok(
     discoverSource.includes('explorerCategoryGrid') &&
     discoverSource.includes('activeExplorerCategoryPanel') &&
     discoverSource.includes('explorerPanelShell'),
-  'Explorer should expose category tiles that open a full-body panel.',
+  'Explorer should expose only the active category tiles that open a full-body panel.',
 );
 
 assert.ok(
   discoverSource.includes("label: 'Hidden Gems'") &&
-    discoverSource.includes("label: 'Popular Trails'") &&
+    !discoverSource.includes("label: 'Popular Trails'") &&
+    !discoverSource.includes("case 'popularTrails'") &&
+    !discoverSource.includes('collectionLabel="Popular Trails"') &&
     discoverSource.includes("label: 'Trail Packs'") &&
     discoverSource.includes("label: 'ECS Route Ideas'") &&
     discoverSource.includes("label: 'Favorites'") &&
     discoverSource.includes("icon: 'diamond-outline'") &&
-    discoverSource.includes("icon: 'trail-sign-outline'") &&
     discoverSource.includes("icon: 'albums-outline'") &&
     discoverSource.includes("icon: 'navigate-outline'") &&
     discoverSource.includes("icon: 'star-outline'"),
-  'Explorer category tiles should include the required labels and icons.',
+  'Explorer category tiles should include Hidden Gems, Trail Packs, ECS Route Ideas, and Favorites without Popular Trails.',
+);
+
+assert.ok(
+  discoverSource.includes("import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens'") &&
+    discoverSource.includes('explorerCategoryTileGold') &&
+    discoverSource.includes('borderColor: ECS_SURFACE.border.selected') &&
+    discoverSource.includes('backgroundColor: ECS_SURFACE.background.selected') &&
+    countOccurrences(discoverSource, 'accentColor: TACTICAL.amber') >= 4 &&
+    !discoverSource.includes("accentColor: '#5AC8FA'") &&
+    !discoverSource.includes("accentColor: '#E6B84C'"),
+  'Explorer category tiles should use the Fleet vehicle-card selected gold surface and a shared amber accent.',
+);
+
+assert.ok(
+  !discoverSource.includes('style={s.footerNote}') &&
+    !discoverSource.includes('Showing ${hiddenGemPage.eligibleCount} Explore picks') &&
+    !discoverSource.includes('ECS filters out trails under ${MIN_DISCOVERY_ROUTE_MILES} miles'),
+  'Explorer should remove the small route-count and minimum-length disclaimer text below the category containers.',
 );
 
 assert.ok(

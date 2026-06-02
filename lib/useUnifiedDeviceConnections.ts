@@ -25,6 +25,7 @@ import {
   routeBluetoothDevice,
 } from './bluetoothDeviceRouting';
 import { genericBluetoothAccessoryManager } from './genericBluetoothAccessoryManager';
+import { decodeUtilitySensorLiveTelemetry } from './utilitySensorBleTelemetry';
 import {
   discoverClassicBluetoothDevicesForUnifiedScanner,
   mergeDiscoveredDevices,
@@ -115,6 +116,8 @@ import {
 } from './bluStreamLifecycle';
 import { bluStateStore } from './BluStateStore';
 import { useEcsProviders } from './useEcsProviders';
+import { ecsTelemetryStore } from '../src/telemetry/ECSTelemetryStore';
+import { bluetoothUtilitySensorAdvertisementToEcsTelemetryEvents } from '../src/telemetry/telemetryAdapters';
 import {
   createUnifiedScannerSnapshot,
   type UnifiedScannerDevice,
@@ -263,6 +266,7 @@ interface DeviceModelBase {
   connectionType: string | null;
   serviceUuids?: string[];
   manufacturerData?: string | null;
+  serviceData?: Record<string, string>;
   localName?: string | null;
   sourceIds?: Partial<Record<UnifiedDiscoverySource, string>>;
   requiresNativeBluetooth: boolean;
@@ -2372,6 +2376,53 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     [routedBluetoothDiscoveries],
   );
 
+  useEffect(() => {
+    for (const entry of routedAccessoryDiscoveries) {
+      const utilitySensorTelemetry = decodeUtilitySensorLiveTelemetry({
+        providerId: entry.routing.providerId,
+        providerLabel: entry.routing.providerLabel,
+        categoryHint: entry.routing.deviceCategory ?? entry.routing.categoryLabel,
+        displayName: entry.routing.displayName,
+        serviceUuids: entry.device.serviceUUIDs,
+        manufacturerData: entry.device.manufacturerData ?? null,
+        serviceData: entry.device.serviceData,
+        localName: entry.device.name,
+        signalStrength: entry.device.rssi,
+      });
+      const events = bluetoothUtilitySensorAdvertisementToEcsTelemetryEvents({
+        deviceId: entry.device.id,
+        displayName: entry.routing.displayName,
+        providerLabel: entry.routing.providerLabel,
+        providerId: entry.routing.providerId,
+        categoryHint: entry.routing.deviceCategory ?? entry.routing.categoryLabel,
+        signalStrength: entry.device.rssi,
+        lastSeenAt: entry.device.lastSeenAt,
+        utilitySensorTelemetry,
+      });
+      if (events.length === 0) continue;
+      ecsTelemetryStore.ingestEvents(events);
+      bluLogThrottled(
+        '[BLU_TELEMETRY]',
+        `utility-advert:${entry.device.id}`,
+        'utility_sensor_advertisement_telemetry',
+        buildBluTelemetryLogDetails({
+          deviceId: entry.device.id,
+          vendor: entry.routing.providerId,
+          deviceType: entry.routing.deviceCategory ?? 'utility_sensor',
+          connectionMode: 'ble',
+          phase: 'advertisement_decode',
+          streamMode: 'ble_scan_advertisement',
+          lastPacketAt: utilitySensorTelemetry.decodedAt ?? entry.device.lastSeenAt,
+          telemetryFreshnessMs:
+            utilitySensorTelemetry.decodedAt != null
+              ? Math.max(0, Date.now() - utilitySensorTelemetry.decodedAt)
+              : null,
+        }),
+        10_000,
+      );
+    }
+  }, [routedAccessoryDiscoveries]);
+
   const bleRawDevicesSeenCount = Math.max(
     obdScanDiagnostics.rawDevicesSeenCount,
     discoveredTelemetryDevices.length,
@@ -3936,6 +3987,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         connectionType: routed?.connectionType ?? null,
         serviceUuids: discoveredEntry?.device.serviceUUIDs ?? rememberedDevice?.serviceUuids ?? [],
         manufacturerData: discoveredEntry?.device.manufacturerData ?? rememberedDevice?.manufacturerData ?? null,
+        serviceData: discoveredEntry?.device.serviceData ?? rememberedDevice?.serviceData,
         localName: discoveredEntry?.device.name ?? rememberedDevice?.localName ?? null,
         requiresNativeBluetooth: true,
         connectableViaCloud: false,
@@ -4713,6 +4765,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             signalStrength: device.signalStrength,
             serviceUuids: device.serviceUuids,
             manufacturerData: device.manufacturerData,
+            serviceData: device.serviceData,
             localName: device.localName ?? device.name,
           });
           if (result.success) {

@@ -45,7 +45,7 @@ export interface BluetoothBrandMatchResult {
 export type BluetoothBrandMatchInput = Pick<
   OBD2DiscoveredDevice,
   'id' | 'isLikelyOBD' | 'name'
-> & Partial<Pick<OBD2DiscoveredDevice, 'serviceUUIDs' | 'manufacturerData'>>;
+> & Partial<Pick<OBD2DiscoveredDevice, 'serviceUUIDs' | 'manufacturerData' | 'serviceData'>>;
 
 const MOPEKA_PRO_SERVICE_UUID = 'fee5';
 const MOPEKA_STD_SERVICE_UUID = 'ada0';
@@ -141,6 +141,33 @@ function decodeManufacturerDataBytes(value: string | null | undefined): number[]
   return parseHexBytes(value) ?? decodeBase64Bytes(value) ?? [];
 }
 
+function getServiceDataPayloadCandidates(
+  device: BluetoothBrandMatchInput,
+  serviceUuid: string,
+  manufacturerId: number,
+  payloadLength: number,
+): Array<{ payload: number[]; hasManufacturerPrefix: boolean }> {
+  const serviceData = device.serviceData;
+  if (!serviceData || typeof serviceData !== 'object') return [];
+
+  const candidates: Array<{ payload: number[]; hasManufacturerPrefix: boolean }> = [];
+  for (const [uuid, value] of Object.entries(serviceData)) {
+    if (typeof value !== 'string' || value.trim().length === 0) continue;
+    if (!hasMatchingServiceUuid([uuid], [serviceUuid])) continue;
+
+    const bytes = decodeManufacturerDataBytes(value);
+    const payload = extractManufacturerPayload(bytes, manufacturerId, payloadLength);
+    if (!payload) continue;
+
+    candidates.push({
+      payload,
+      hasManufacturerPrefix: hasManufacturerIdPrefix(bytes, manufacturerId, payloadLength),
+    });
+  }
+
+  return candidates;
+}
+
 function extractManufacturerPayload(
   bytes: number[],
   manufacturerId: number,
@@ -169,7 +196,6 @@ function hasManufacturerIdPrefix(
 
 function getMopekaSignatureBrandMatch(device: BluetoothBrandMatchInput): BluetoothBrandMatch | null {
   const manufacturerBytes = decodeManufacturerDataBytes(device.manufacturerData);
-  if (manufacturerBytes.length === 0) return null;
 
   const hasProServiceUuid = hasMatchingServiceUuid(device.serviceUUIDs, [MOPEKA_PRO_SERVICE_UUID]);
   const hasProManufacturerPrefix = hasManufacturerIdPrefix(
@@ -177,26 +203,51 @@ function getMopekaSignatureBrandMatch(device: BluetoothBrandMatchInput): Bluetoo
     MOPEKA_PRO_MANUFACTURER_ID,
     MOPEKA_PRO_MANUFACTURER_DATA_LENGTH,
   );
-  const proPayload = extractManufacturerPayload(
-    manufacturerBytes,
+  const proCandidates: Array<{ payload: number[]; reasons: string[]; hasTrustAnchor: boolean }> = [];
+  if (manufacturerBytes.length > 0) {
+    const manufacturerPayload = extractManufacturerPayload(
+      manufacturerBytes,
+      MOPEKA_PRO_MANUFACTURER_ID,
+      MOPEKA_PRO_MANUFACTURER_DATA_LENGTH,
+    );
+    if (manufacturerPayload) {
+      proCandidates.push({
+        payload: manufacturerPayload,
+        reasons: hasProServiceUuid
+          ? ['service_uuid', 'manufacturer_signature']
+          : ['manufacturer_signature'],
+        hasTrustAnchor: hasProServiceUuid || hasProManufacturerPrefix,
+      });
+    }
+  }
+  for (const candidate of getServiceDataPayloadCandidates(
+    device,
+    MOPEKA_PRO_SERVICE_UUID,
     MOPEKA_PRO_MANUFACTURER_ID,
     MOPEKA_PRO_MANUFACTURER_DATA_LENGTH,
-  );
-  const proSensorType = proPayload?.[0] ?? null;
-  if (
-    proPayload &&
-    proSensorType != null &&
-    MOPEKA_PRO_KNOWN_SENSOR_TYPES.has(proSensorType) &&
-    (hasProServiceUuid || hasProManufacturerPrefix)
-  ) {
-    return {
-      brand: MOPEKA_PRO_LIQUID_SENSOR_TYPES.has(proSensorType)
-        ? MOPEKA_LIQUID_SIGNATURE_BRAND
-        : MOPEKA_PROPANE_SIGNATURE_BRAND,
-      reasons: hasProServiceUuid
+  )) {
+    proCandidates.push({
+      payload: candidate.payload,
+      reasons: candidate.hasManufacturerPrefix
         ? ['service_uuid', 'manufacturer_signature']
-        : ['manufacturer_signature'],
-    };
+        : ['service_uuid', 'service_data_signature'],
+      hasTrustAnchor: true,
+    });
+  }
+  for (const candidate of proCandidates) {
+    const proSensorType = candidate.payload[0] ?? null;
+    if (
+      proSensorType != null &&
+      MOPEKA_PRO_KNOWN_SENSOR_TYPES.has(proSensorType) &&
+      candidate.hasTrustAnchor
+    ) {
+      return {
+        brand: MOPEKA_PRO_LIQUID_SENSOR_TYPES.has(proSensorType)
+          ? MOPEKA_LIQUID_SIGNATURE_BRAND
+          : MOPEKA_PROPANE_SIGNATURE_BRAND,
+        reasons: candidate.reasons,
+      };
+    }
   }
 
   const hasStdServiceUuid = hasMatchingServiceUuid(device.serviceUUIDs, [MOPEKA_STD_SERVICE_UUID]);
@@ -205,24 +256,49 @@ function getMopekaSignatureBrandMatch(device: BluetoothBrandMatchInput): Bluetoo
     MOPEKA_STD_MANUFACTURER_ID,
     MOPEKA_STD_MANUFACTURER_DATA_LENGTH,
   );
-  const stdPayload = extractManufacturerPayload(
-    manufacturerBytes,
+  const stdCandidates: Array<{ payload: number[]; reasons: string[]; hasTrustAnchor: boolean }> = [];
+  if (manufacturerBytes.length > 0) {
+    const manufacturerPayload = extractManufacturerPayload(
+      manufacturerBytes,
+      MOPEKA_STD_MANUFACTURER_ID,
+      MOPEKA_STD_MANUFACTURER_DATA_LENGTH,
+    );
+    if (manufacturerPayload) {
+      stdCandidates.push({
+        payload: manufacturerPayload,
+        reasons: hasStdServiceUuid
+          ? ['service_uuid', 'manufacturer_signature']
+          : ['manufacturer_signature'],
+        hasTrustAnchor: hasStdServiceUuid || hasStdManufacturerPrefix,
+      });
+    }
+  }
+  for (const candidate of getServiceDataPayloadCandidates(
+    device,
+    MOPEKA_STD_SERVICE_UUID,
     MOPEKA_STD_MANUFACTURER_ID,
     MOPEKA_STD_MANUFACTURER_DATA_LENGTH,
-  );
-  const stdHardwareId = stdPayload?.[0] != null ? stdPayload[0] & 0xcf : null;
-  if (
-    stdPayload &&
-    stdHardwareId != null &&
-    MOPEKA_STD_KNOWN_SENSOR_TYPES.has(stdHardwareId) &&
-    (hasStdServiceUuid || hasStdManufacturerPrefix)
-  ) {
-    return {
-      brand: MOPEKA_PROPANE_SIGNATURE_BRAND,
-      reasons: hasStdServiceUuid
+  )) {
+    stdCandidates.push({
+      payload: candidate.payload,
+      reasons: candidate.hasManufacturerPrefix
         ? ['service_uuid', 'manufacturer_signature']
-        : ['manufacturer_signature'],
-    };
+        : ['service_uuid', 'service_data_signature'],
+      hasTrustAnchor: true,
+    });
+  }
+  for (const candidate of stdCandidates) {
+    const stdHardwareId = candidate.payload[0] != null ? candidate.payload[0] & 0xcf : null;
+    if (
+      stdHardwareId != null &&
+      MOPEKA_STD_KNOWN_SENSOR_TYPES.has(stdHardwareId) &&
+      candidate.hasTrustAnchor
+    ) {
+      return {
+        brand: MOPEKA_PROPANE_SIGNATURE_BRAND,
+        reasons: candidate.reasons,
+      };
+    }
   }
 
   return null;

@@ -53,7 +53,7 @@ assert(
     discover.includes('useThrottledGPS') &&
     discover.includes('routeCatalogHasSearchArea') &&
     discover.includes("'search_area_required'"),
-  'Explore should retain the default-location fallback for legacy discovery while requiring GPS or selected search area for route catalog recommendations',
+  'Explore should retain the default-location fallback for legacy discovery while requiring GPS or an internal search area for source-backed recommendations',
 );
 assert(
   discover.includes('setTrailPackPageIndex(0);') &&
@@ -93,10 +93,10 @@ assert(
 );
 assert(
   discover.includes('Scanning approved ECS Trail Packs within selected radius…') &&
-    discover.includes('Trail Packs need GPS or a selected search area to filter verified routes by radius.') &&
+    discover.includes('Trail Packs need GPS or an internal search area to filter verified routes by radius.') &&
     discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.') &&
     discover.includes('No live reviewed Trail Packs found within this radius.') &&
-    discover.includes('Live Trail Packs are not available from the reviewed catalog yet.'),
+    discover.includes('Live Trail Packs are not available from reviewed sources yet.'),
   'Trail Packs should render loading, no-location, low-confidence, and empty states',
 );
 assert(
@@ -105,7 +105,7 @@ assert(
     discover.includes('includeOwnDrafts: ownerTrailPackIds.length > 0'),
   'Owner-visible pending Trail Packs should use explicit review warning language',
 );
-const hiddenGemPanelCase = discover.split("case 'hiddenGems':")[1]?.split("case 'popularTrails':")[0] ?? '';
+const hiddenGemPanelCase = discover.split("case 'hiddenGems':")[1]?.split("case 'trailPacks':")[0] ?? '';
 assert(
   !/trailPack/i.test(hiddenGemPanelCase),
   'Trail Packs should not be mixed into Hidden Gems logic',

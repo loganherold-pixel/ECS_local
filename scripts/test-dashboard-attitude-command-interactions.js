@@ -10,6 +10,7 @@ function read(relativePath) {
 const widgetGrid = read('components/dashboard/WidgetGrid.tsx');
 const widgetRenderers = read('components/dashboard/WidgetRenderers.tsx');
 const widgetDetailModal = read('components/dashboard/WidgetDetailModal.tsx');
+const dashboardScreen = read('app/(tabs)/dashboard.tsx');
 const terrainSideProfile = read('components/dashboard/TerrainRiskSideProfile.tsx');
 const routeCorridorWeather = read('components/navigate/RouteCorridorWeather.tsx');
 
@@ -22,10 +23,18 @@ function assert(condition, message) {
 
 assert(
   widgetGrid.includes('onWidgetPress: (slot: WidgetSlot) => void;') &&
-    widgetGrid.includes('onWidgetPress(slot);') &&
+    widgetGrid.includes("slot.widgetType !== 'attitude-command'") &&
+    widgetGrid.includes('if (shouldOpenWidgetDetail) onWidgetPress(slot);') &&
     !widgetGrid.includes('onWidgetLongPress') &&
     !widgetGrid.includes('delayLongPress={500}'),
-  'Dashboard widgets must use the shared tap-to-detail path instead of the parent long-press manager.',
+  'Dashboard widgets must use the shared tap-to-detail path while excluding Attitude Command from the obsolete parent detail modal.',
+);
+
+assert(
+  dashboardScreen.includes("if (slot.widgetType === 'attitude-command') return;") &&
+    widgetDetailModal.includes("widgetType === 'attitude-command'") &&
+    widgetRenderers.includes("case 'attitude-command': return null;"),
+  'Attitude Command must not open the legacy widget detail modal from parent dashboard taps, stale modal state, or stale detail routing.',
 );
 
 assert(
@@ -98,15 +107,22 @@ for (const sunlightField of [
 }
 
 {
+  const commandPanelBlock = widgetRenderers.match(/function AttitudeCommandPanel\([\s\S]*?\n}\n\nfunction AttitudeCommandDetailRow/)?.[0] ?? '';
   const sunlightDetailBlock = widgetRenderers.match(/function AttitudeCommandSunlightDetail\([\s\S]*?\n}\n\nfunction normalizeAttitudeRouteForecastDay/)?.[0] ?? '';
   assert(
-    sunlightDetailBlock.includes('sunlightFixedDetailSurface') &&
+    commandPanelBlock.includes('const suppressCompactPanelChrome = expanded && detailMode;') &&
+      commandPanelBlock.includes('header={suppressCompactPanelChrome ? null : (') &&
+      commandPanelBlock.includes('isSunlightPanel && !suppressCompactPanelChrome ?') &&
+      commandPanelBlock.includes('expanded && detailMode && isSunlightPanel && attitudeCommandS.sunPanelContentDetailOnly') &&
+      sunlightDetailBlock.includes('sunlightFixedDetailSurface') &&
       sunlightDetailBlock.includes('sunlightPrimaryMetric') &&
       sunlightDetailBlock.includes('sunlightMetricGrid') &&
+      widgetRenderers.includes('sunPanelContentDetailOnly') &&
+      widgetRenderers.includes("return { aspectRatio: 1.55, insetHorizontal: 10, insetVertical: 14 };") &&
       sunlightDetailBlock.includes('formatAttitudeSunGlareDirection(daylight.sunAzimuth)') &&
       !sunlightDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
       !sunlightDetailBlock.includes('</AttitudeCommandDetailScroll>'),
-    'Sunlight expanded detail must be a fixed non-scrolling surface with polished metric containers.',
+    'Sunlight expanded detail must suppress compact widget chrome and fit a fixed non-scrolling metric layout.',
   );
 }
 
@@ -128,19 +144,25 @@ for (const weatherField of [
 }
 
 {
+  const commandPanelBlock = widgetRenderers.match(/function AttitudeCommandPanel\([\s\S]*?\n}\n\nfunction AttitudeCommandDetailRow/)?.[0] ?? '';
   const weatherDetailBlock = widgetRenderers.match(/function AttitudeCommandWeatherDetail\([\s\S]*?\n}\n\nfunction vehicleCommandDetailTone/)?.[0] ?? '';
+  const weatherRenderBlock = widgetRenderers.match(/case 'weather':[\s\S]*?case 'vehicle':/)?.[0] ?? '';
   assert(
+      weatherRenderBlock.includes('!(expanded && detailMode) ? (') &&
+      weatherRenderBlock.includes('attitudeCommandS.weatherMetricStrip') &&
+      commandPanelBlock.includes('expanded && detailMode && isWeatherPanel && attitudeCommandS.weatherPanelContentDetailOnly') &&
       weatherDetailBlock.includes('weatherFixedDetailSurface') &&
       weatherDetailBlock.includes('weatherCurrentMetricsGrid') &&
       weatherDetailBlock.includes('weatherForecastDeck') &&
       weatherDetailBlock.includes('AttitudeCommandWeatherForecastCard') &&
+      widgetRenderers.includes('weatherPanelContentDetailOnly') &&
       widgetRenderers.includes('weatherForecastCard') &&
       weatherDetailBlock.includes('getAttitudeRouteWeatherForecastRows(routeWeather)') &&
       weatherDetailBlock.includes('routeForecastRows.length > 0 ? (') &&
       !weatherDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
       !weatherDetailBlock.includes('</AttitudeCommandDetailScroll>') &&
       !weatherDetailBlock.includes('No active route geometry. ECS is showing current-position weather only.'),
-    'Weather expanded detail must be a fixed non-scrolling surface with route forecast omitted when unavailable.',
+    'Weather expanded detail must suppress compact metric chrome and fit a fixed non-scrolling forecast layout.',
   );
 }
 
@@ -161,6 +183,7 @@ for (const vehicleField of [
 }
 
 {
+  const commandPanelBlock = widgetRenderers.match(/function AttitudeCommandPanel\([\s\S]*?\n}\n\nfunction AttitudeCommandDetailRow/)?.[0] ?? '';
   const vehicleDetailBlock = widgetRenderers.match(/function VehicleCommandExpandedView\([\s\S]*?\n}\n\nfunction ECSCommandModulePlaceholder/)?.[0] ?? '';
   const vehicleRenderBlock = widgetRenderers.match(/case 'vehicle':[\s\S]*?case 'route':/)?.[0] ?? '';
   assert(
@@ -178,6 +201,8 @@ for (const vehicleField of [
       vehicleDetailBlock.includes("utilitySensorResources.water?.status === 'live'") &&
       vehicleDetailBlock.includes("utilitySensorResources.propane?.status === 'live'") &&
       vehicleDetailBlock.includes('hasLiveVehicleCommandData') &&
+      commandPanelBlock.includes('expanded && detailMode && isVehiclePanel && attitudeCommandS.vehiclePanelContentDetailOnly') &&
+      vehicleDetailBlock.includes('vehicleLiveTelemetryBody') &&
       vehicleDetailBlock.includes('vehicleLiveRollDock') &&
       vehicleDetailBlock.includes('<VehicleProfileRollAttitudeStrip') &&
       vehicleDetailBlock.includes('rollDeg={rollDeg}') &&
@@ -187,8 +212,11 @@ for (const vehicleField of [
       !vehicleDetailBlock.includes('Manual/Fleet fallback') &&
       !vehicleDetailBlock.includes('Manual water entry') &&
       !vehicleDetailBlock.includes('Fleet selected vehicle/build fallback') &&
-      !vehicleDetailBlock.includes('ECS is showing profile safe fallbacks'),
-    'Vehicle expanded detail must be fixed, live-telemetry-only, and dock the roll monitor at the base.',
+      !vehicleDetailBlock.includes('ECS is showing profile safe fallbacks') &&
+      widgetRenderers.includes('vehiclePanelContentDetailOnly') &&
+      widgetRenderers.includes('vehicleLiveTelemetryBody') &&
+      widgetRenderers.includes('height: 54'),
+    'Vehicle expanded detail must keep live telemetry and the roll monitor in a reserved, non-overlapping fixed layout.',
   );
 }
 
@@ -204,6 +232,8 @@ assert(
 );
 
 const powerDetailBlock = widgetRenderers.match(/function AttitudeCommandPowerDeviceDetail\([\s\S]*?\n}\n\nfunction PowerCommandModule/)?.[0] ?? '';
+const powerRenderBlock = widgetRenderers.match(/case 'power':[\s\S]*?default:/)?.[0] ?? '';
+const powerCommandPanelBlock = widgetRenderers.match(/function AttitudeCommandPanel\([\s\S]*?\n}\n\nfunction AttitudeCommandDetailRow/)?.[0] ?? '';
 
 for (const powerField of [
   'Solar source',
@@ -235,16 +265,30 @@ assert(
 );
 
 assert(
-  powerDetailBlock.includes('powerMonitorFixedDetailSurface') &&
+  powerCommandPanelBlock.includes('expanded && detailMode && isPowerPanel && attitudeCommandS.powerPanelContentDetailOnly') &&
+    widgetRenderers.includes('powerPanelContentDetailOnly') &&
+    powerRenderBlock.includes('expanded && detailMode ? (') &&
+    powerRenderBlock.includes('<AttitudeCommandPowerDeviceDetail') &&
+    powerRenderBlock.includes('<AttitudeCommandPowerRiveForeground') &&
+    powerDetailBlock.includes('powerMonitorFixedDetailSurface') &&
     powerDetailBlock.includes('powerMonitorTopCompartments') &&
-  powerDetailBlock.includes('powerMonitorSourceTable') &&
-  powerDetailBlock.includes('getActivePowerMonitorDevices(power.devices)') &&
-  widgetRenderers.includes('resolvePowerMonitorDeviceNetWatts(device)') &&
+    powerDetailBlock.includes('detail={solarSourceLabel}') &&
+    !powerDetailBlock.includes('detail={sources}') &&
+    !powerDetailBlock.includes('detail={loads}') &&
+    powerDetailBlock.includes('powerMonitorSourceTable') &&
+    powerDetailBlock.includes('getActivePowerMonitorDevices(power.devices)') &&
+    powerDetailBlock.includes('POWER_MONITOR_SOURCE_SCROLL_THRESHOLD') &&
+    powerDetailBlock.includes('scrollEnabled={activeDevices.length > POWER_MONITOR_SOURCE_SCROLL_THRESHOLD}') &&
+    powerDetailBlock.includes('nestedScrollEnabled') &&
+    powerDetailBlock.includes('contentContainerStyle={attitudeCommandS.powerMonitorSourceRowsContent}') &&
+    widgetRenderers.includes('resolvePowerMonitorDeviceNetWatts(device)') &&
     widgetRenderers.includes('powerMonitorNetPositive') &&
     widgetRenderers.includes('powerMonitorNetNegative') &&
+    widgetRenderers.includes('powerMonitorSourceRowsScroll') &&
+    widgetRenderers.includes('powerMonitorSourceRowsContent') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailRow'),
-  'Expanded Power Monitor must use a fixed non-scrolling source table with per-device red/green net watt indicators.',
+  'Expanded Power Monitor must hide compact widget details and keep current power sources in a bounded nested scroll table after four active sources.',
 );
 
 console.log('[dashboard-attitude-command-interactions] tap-to-expand interaction contract passed');

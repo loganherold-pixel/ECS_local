@@ -27,6 +27,8 @@ import {
   type ConvoyMemberRecord,
   type ConvoyRole,
 } from '../lib/convoy/convoyMembershipService';
+import { dispatchProfileStore } from '../lib/dispatchProfileStore';
+import { getCurrentExpeditionBadgeTitle } from '../lib/expedition/expeditionBadgeStore';
 import { TACTICAL, TYPO } from '../lib/theme';
 import type { Vehicle } from '../lib/types';
 import { vehicleStore } from '../lib/vehicleStore';
@@ -117,6 +119,7 @@ export default function ConvoyCommandCredentialsScreen() {
   const [maxUses, setMaxUses] = useState('1');
   const [lastInviteCode, setLastInviteCode] = useState<string | null>(null);
   const [lastInvitePayload, setLastInvitePayload] = useState<string | null>(null);
+  const [expeditionBadgeTitle, setExpeditionBadgeTitle] = useState<string | null>(null);
 
   const [joinCode, setJoinCode] = useState('');
   const [joinCallsign, setJoinCallsign] = useState('V2');
@@ -170,6 +173,31 @@ export default function ConvoyCommandCredentialsScreen() {
     }
   }, [isLeader]);
 
+  useEffect(() => dispatchProfileStore.subscribe((profile) => {
+    const profileCallsign = profile.callsign?.trim();
+    if (!profileCallsign) return;
+    setLeaderCallsign((current) => (
+      !current.trim() || current === 'LEAD' ? profileCallsign : current
+    ));
+    setJoinCallsign((current) => (
+      !current.trim() || current === 'V2' ? profileCallsign : current
+    ));
+  }), []);
+
+  useEffect(() => {
+    let mounted = true;
+    void getCurrentExpeditionBadgeTitle()
+      .then((title) => {
+        if (mounted) setExpeditionBadgeTitle(title);
+      })
+      .catch(() => {
+        if (mounted) setExpeditionBadgeTitle(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   useEffect(() => {
     let mounted = true;
     void vehicleStore.waitForHydration().then(async () => {
@@ -198,6 +226,7 @@ export default function ConvoyCommandCredentialsScreen() {
       name: convoyName,
       leaderCallsign,
       leaderVehicleId,
+      leaderExpeditionBadgeTitle: expeditionBadgeTitle,
       startsAt: new Date(),
     });
     if (result.ok) {
@@ -247,6 +276,7 @@ export default function ConvoyCommandCredentialsScreen() {
       rawCode: normalizeConvoyInviteCodeForSubmit(joinCode),
       callsign: joinCallsign,
       vehicleId: joinVehicleId,
+      expeditionBadgeTitle,
     });
     if (result.ok) {
       setNotice('Joined convoy. Location sharing is still off until you start it from Convoy Command.');

@@ -104,6 +104,14 @@ assert.ok(
     hookSource.includes('pendingAnglesRef.current = null'),
   'useAccelerometer should coalesce native sensor samples before setting React state.',
 );
+assert.ok(
+  hookSource.includes('const pendingOrientationRecalibrationRef = useRef(false)') &&
+    hookSource.includes('pendingOrientationRecalibrationRef.current = true') &&
+    hookSource.includes('pendingOrientationRecalibrationRef.current = false') &&
+    hookSource.includes('recenterToLatestRawAngles(false)') &&
+    hookSource.includes('if (pendingOrientationRecalibrationRef.current)'),
+  'useAccelerometer should recenter on the first accelerometer sample computed in the new orientation frame, not only on a fixed timer.',
+);
 
 const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'app/(tabs)/dashboard.tsx'), 'utf8');
 const widgetGridSource = fs.readFileSync(path.join(process.cwd(), 'components/dashboard/WidgetGrid.tsx'), 'utf8');

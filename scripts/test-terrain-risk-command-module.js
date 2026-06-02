@@ -159,7 +159,12 @@ assert(
 );
 assert(sideProfileSource.includes('isTerrainProfileReferencePoint'), 'Terrain Risk chart should derive tappable reference points from existing terrain risk signals.');
 assert(sideProfileSource.includes('formatTerrainReferenceReason'), 'Terrain Risk chart should explain why expanded reference dots were selected.');
-assert(sideProfileSource.includes('onPress={interactive ?'), 'Terrain Risk reference dots should only become tappable in expanded mode.');
+assert(
+  sideProfileSource.includes('{interactive ? chart.referencePoints.map') &&
+    sideProfileSource.includes('testID="terrainRiskReferenceMarkerButton"') &&
+    sideProfileSource.includes('onPress={() => handleReferenceMarkerPress(point)}'),
+  'Terrain Risk reference dots should only become tappable in expanded mode.',
+);
 assert(sideProfileSource.includes('Why this point was referenced'), 'Terrain Risk expanded dot callout should explain the selected point.');
 assert(sideProfileSource.includes('completedDistanceMiles?: number | null'), 'Terrain Risk side profile should accept route progress for the live GPS marker.');
 assert(sideProfileSource.includes('buildCurrentRouteMarkerPoint'), 'Terrain Risk side profile should interpolate the current GPS marker on the elevation line.');

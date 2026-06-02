@@ -70,6 +70,7 @@ const {
 } = loadTypeScriptModule('lib/bluetoothApprovedDeviceCatalog.ts');
 const {
   bluetoothAccessoryToEcsTelemetryEvents,
+  bluetoothUtilitySensorAdvertisementToEcsTelemetryEvents,
 } = loadTypeScriptModule('src/telemetry/telemetryAdapters.ts');
 const {
   getBluetoothDiagnosticsSnapshot,
@@ -429,6 +430,32 @@ assert(liveAccessoryEvents.some((event) => event.metricKey === 'level_percent' &
 assert(liveAccessoryEvents.some((event) => event.metricKey === 'parser_status' && event.value === 'live'));
 assert(liveAccessoryEvents.every((event) => event.quality === 'live'));
 
+const refreshedLiveAccessoryEvents = bluetoothAccessoryToEcsTelemetryEvents({
+  deviceId: 'mopeka-live-refresh',
+  displayName: 'Mopeka Propane',
+  providerLabel: 'Propane Monitor',
+  providerId: 'propane_monitor',
+  categoryHint: 'propane_monitor',
+  owner: 'sensor',
+  connectionState: 'connected',
+  supportLabel: 'Live Sensor',
+  supportNote: null,
+  signalStrength: -61,
+  utilitySensorTelemetry: {
+    levelPercent: 55,
+    parserStatus: 'live',
+    decodedAt: 1_700_000_050_000,
+    source: 'mopeka_advertisement',
+  },
+  lastSeenAt: new Date(1_700_000_000_000).toISOString(),
+  connectedAt: new Date(1_700_000_000_000).toISOString(),
+  lastError: null,
+});
+assert(
+  refreshedLiveAccessoryEvents.every((event) => event.timestamp === 1_700_000_050_000),
+  'utility sensor live events must use decodedAt so refreshed Mopeka data does not age out from the original connection time',
+);
+
 const mopekaWaterProfile = identifyBluestackUtilitySensorProfile({
   providerId: 'water_monitor',
   providerLabel: 'Mopeka / Liquid Level',
@@ -570,6 +597,66 @@ const decodedUtilitySensor = decodeUtilitySensorLiveTelemetry({
 });
 assert.strictEqual(decodedUtilitySensor.parserStatus, 'live');
 assert.strictEqual(decodedUtilitySensor.levelPercent, 41.2);
+
+const mopekaAdvertPayload = Buffer.from([
+  0x0c, 0x50, 0x46, 0xe8, 0xc3, 0x01, 0x00, 0x00, 0x00, 0x00,
+]).toString('base64');
+const decodedMopekaAdvert = decodeUtilitySensorLiveTelemetry({
+  providerId: 'water_monitor',
+  providerLabel: 'Mopeka / Liquid Level',
+  displayName: 'Mopeka Water Tank',
+  serviceUuids: ['fee5'],
+  serviceData: {
+    fee5: mopekaAdvertPayload,
+  },
+});
+assert.strictEqual(decodedMopekaAdvert.parserStatus, 'live');
+assert.strictEqual(decodedMopekaAdvert.levelPercent, null);
+assert.strictEqual(decodedMopekaAdvert.levelDistanceMm, 349);
+assert.strictEqual(decodedMopekaAdvert.temperatureCelsius, 30);
+assert.strictEqual(decodedMopekaAdvert.readQuality, 3);
+assert.strictEqual(decodedMopekaAdvert.batteryPercent, 46.2);
+assert.strictEqual(decodedMopekaAdvert.source, 'mopeka_advertisement');
+
+const mopekaAdvertEvents = bluetoothUtilitySensorAdvertisementToEcsTelemetryEvents({
+  deviceId: '1B4C7E',
+  displayName: 'Mopeka Water Tank',
+  providerLabel: 'Mopeka / Liquid Level',
+  providerId: 'water_monitor',
+  categoryHint: 'water_tank_monitor',
+  signalStrength: -56,
+  lastSeenAt: 1_700_000_060_000,
+  utilitySensorTelemetry: {
+    ...decodedMopekaAdvert,
+    decodedAt: 1_700_000_060_000,
+  },
+});
+assert(mopekaAdvertEvents.some((event) => event.metricKey === 'level_distance_mm' && event.value === 349));
+assert(mopekaAdvertEvents.some((event) => event.metricKey === 'parser_status' && event.value === 'live'));
+assert(mopekaAdvertEvents.every((event) => event.quality === 'live'));
+
+const distanceOnlyResourceStates = selectUtilitySensorResourceStates([
+  {
+    deviceId: 'water-distance-1',
+    deviceName: 'Mopeka Water Tank',
+    provider: 'water_monitor',
+    providerLabel: 'Mopeka / Liquid Level',
+    transport: 'ble',
+    quality: 'live',
+    lastUpdated: 1_700_000_060_000,
+    category: 'water_tank_monitor',
+    profileId: 'mopeka_water_monitor',
+    linkState: 'advertising',
+    levelPercent: null,
+    levelDistanceMm: 349,
+    signalStrength: -56,
+    parserStatus: 'live',
+    isLive: true,
+    isStale: false,
+  },
+]);
+assert.strictEqual(distanceOnlyResourceStates.water?.status, 'live');
+assert.strictEqual(distanceOnlyResourceStates.water?.levelDistanceMm, 349);
 
 const advertisementEvidence = getBluestackAdvertisementEvidence({
   serviceUUIDs: [' 180F ', '180f', 'FEAA'],

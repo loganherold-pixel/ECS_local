@@ -32,6 +32,7 @@ type TripIntentSelectorProps = {
   compact?: boolean;
   readonly?: boolean;
   style?: StyleProp<ViewStyle>;
+  intentChipStyle?: StyleProp<ViewStyle>;
 };
 
 const SELECTABLE_INTENTS = EXPEDITION_TRIP_INTENTS.filter((intent) => intent !== 'unknown');
@@ -44,6 +45,7 @@ export function TripIntentSelector({
   compact = false,
   readonly = false,
   style,
+  intentChipStyle,
 }: TripIntentSelectorProps) {
   const storeIntent = useTripIntent();
   const activeIntent = value ?? storeIntent.intent;
@@ -93,6 +95,7 @@ export function TripIntentSelector({
                 style={({ pressed }) => [
                   styles.intentChip,
                   selected && styles.intentChipSelected,
+                  intentChipStyle,
                   pressed && styles.intentChipPressed,
                 ]}
               >

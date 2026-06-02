@@ -133,6 +133,15 @@ assert.ok(
   'The distance radius container should present as a general Filters panel.',
 );
 assert.ok(
+  filterSource.includes('contentStyle={s.filterContentSurface}') &&
+    filterSource.includes('backgroundColor: `${TACTICAL.amber}12`') &&
+    filterSource.includes('borderColor: `${TACTICAL.amber}2E`') &&
+    filterSource.includes('color: TACTICAL.goldMedium') &&
+    filterSource.includes('segmentActive') &&
+    filterSource.includes("TACTICAL.amber + '14'"),
+  'The Explorer Filters panel should match the Fleet readiness command gold translucent surface while preserving active amber chips.',
+);
+assert.ok(
   helperSource.includes('Remoteness') &&
     helperSource.includes('Day Trip') &&
     helperSource.includes('Weekend Trip') &&

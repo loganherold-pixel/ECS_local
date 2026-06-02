@@ -18,6 +18,7 @@ type ActionBody = {
   rawCode?: string;
   callsign?: string;
   vehicleId?: string | null;
+  expeditionBadgeTitle?: string | null;
 };
 
 type ConvoyInviteRow = {
@@ -82,6 +83,7 @@ function backendReadinessFailure(error: unknown): Response | null {
       [
         'Apply supabase/migrations/022_convoy_team_tracking.sql.',
         'Apply supabase/migrations/023_convoy_location_retention_cleanup.sql.',
+        'Apply supabase/migrations/030_convoy_member_identity_titles.sql.',
         "Reload the PostgREST schema cache with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
       ],
     );
@@ -100,6 +102,23 @@ function backendReadinessFailure(error: unknown): Response | null {
       [
         'Apply supabase/migrations/022_convoy_team_tracking.sql.',
         'Apply supabase/migrations/023_convoy_location_retention_cleanup.sql.',
+        'Apply supabase/migrations/030_convoy_member_identity_titles.sql.',
+        "Reload the PostgREST schema cache with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
+      ],
+    );
+  }
+
+  if (
+    text.includes('column') &&
+    text.includes('does not exist') &&
+    (text.includes('expedition_badge_title') || text.includes('display_name'))
+  ) {
+    return fail(
+      'backend_unavailable',
+      'Convoy member identity columns are not deployed on this Supabase database yet.',
+      503,
+      [
+        'Apply supabase/migrations/030_convoy_member_identity_titles.sql.',
         "Reload the PostgREST schema cache with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
       ],
     );
@@ -273,6 +292,7 @@ async function redeemInvite(admin: ReturnType<typeof createAdminClient>, body: A
   const rawCode = sanitizeText(body.rawCode, 80);
   const callsign = sanitizeText(body.callsign, 40);
   const vehicleId = sanitizeText(body.vehicleId, 120) || null;
+  const expeditionBadgeTitle = sanitizeText(body.expeditionBadgeTitle, 48) || null;
   if (!rawCode) return fail('validation_error', 'Invite code is required.');
   if (!callsign) return fail('validation_error', 'Callsign is required.');
 
@@ -324,6 +344,7 @@ async function redeemInvite(admin: ReturnType<typeof createAdminClient>, body: A
       .update({
         callsign,
         vehicle_id: vehicleId,
+        expedition_badge_title: expeditionBadgeTitle,
         role: invite.role,
         revoked_at: null,
         joined_at: new Date().toISOString(),
@@ -342,6 +363,7 @@ async function redeemInvite(admin: ReturnType<typeof createAdminClient>, body: A
       user_id: user.id,
       callsign,
       vehicle_id: vehicleId,
+      expedition_badge_title: expeditionBadgeTitle,
       role: invite.role,
     })
     .select('*')

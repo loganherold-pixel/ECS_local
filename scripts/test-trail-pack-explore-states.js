@@ -133,8 +133,8 @@ assert.strictEqual(
 const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 assert(discover.includes('Scanning approved ECS Trail Packs within selected radius…'));
 assert(discover.includes('No live reviewed Trail Packs found within this radius.'));
-assert(discover.includes('Live Trail Packs are not available from the reviewed catalog yet.'));
-assert(discover.includes('Trail Packs need your location or a selected search area to filter nearby routes.'));
+assert(discover.includes('Live Trail Packs are not available from reviewed sources yet.'));
+assert(discover.includes('Trail Packs need GPS or an internal search area to filter verified routes by radius.'));
 assert(discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.'));
 assert(discover.includes('This Trail Pack is under ECS review and is not visible to other users.'));
 

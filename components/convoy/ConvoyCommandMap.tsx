@@ -71,8 +71,8 @@ function badgeTitleForRole(role: ConvoyMarkerIdentity['role'], isCurrentUser?: b
 
 function teamDisplayNameFor(member: ConvoyMapVehicle, identity: ConvoyMarkerIdentity): string {
   return (
-    cleanIdentityText(member.displayName, 24) ??
     cleanIdentityText(member.callsign, 24) ??
+    cleanIdentityText(member.displayName, 24) ??
     identity.label
   );
 }

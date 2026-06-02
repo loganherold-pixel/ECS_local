@@ -255,7 +255,8 @@ function localVehicleFromRouteSession(
     memberId: activeContext?.memberId ?? 'local-user',
     callsign: activeContext?.callsign ?? 'YOU',
     displayName: activeContext?.callsign ?? 'YOU',
-    expeditionBadgeTitle: activeContext?.role ? expeditionBadgeTitleFromRole(activeContext.role) : 'Your position',
+    expeditionBadgeTitle: activeContext?.expeditionBadgeTitle ??
+      (activeContext?.role ? expeditionBadgeTitleFromRole(activeContext.role) : 'Your position'),
     role: activeContext?.role ?? 'member',
     latitude: location.latitude,
     longitude: location.longitude,
@@ -286,7 +287,8 @@ function localVehicleFromUserLocation(
     memberId: activeContext?.memberId ?? 'local-user',
     callsign: activeContext?.callsign ?? 'YOU',
     displayName: activeContext?.callsign ?? 'YOU',
-    expeditionBadgeTitle: activeContext?.role ? expeditionBadgeTitleFromRole(activeContext.role) : 'Your position',
+    expeditionBadgeTitle: activeContext?.expeditionBadgeTitle ??
+      (activeContext?.role ? expeditionBadgeTitleFromRole(activeContext.role) : 'Your position'),
     role: activeContext?.role ?? 'member',
     latitude: location.latitude,
     longitude: location.longitude,

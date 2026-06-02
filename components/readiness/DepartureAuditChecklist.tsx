@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, StyleSheet, TextStyle, View } from 'react-native';
+import { Pressable, StyleProp, StyleSheet, TextStyle, View, ViewStyle } from 'react-native';
 
 import { ECSText } from '../ECSText';
 import { ECSBadge, ECSIcon } from '../ECSStatus';
@@ -13,6 +13,7 @@ type DepartureAuditChecklistProps = {
   items: ExpeditionDepartureAuditItem[];
   limit?: number;
   onActionPress?: (item: ExpeditionDepartureAuditItem) => void;
+  rowStyle?: StyleProp<ViewStyle>;
 };
 
 function statusLabel(status: ExpeditionDepartureAuditItemStatus): string {
@@ -40,6 +41,7 @@ export function DepartureAuditChecklist({
   items,
   limit,
   onActionPress,
+  rowStyle,
 }: DepartureAuditChecklistProps) {
   const visibleItems = typeof limit === 'number' ? items.slice(0, Math.max(0, limit)) : items;
   return (
@@ -47,7 +49,7 @@ export function DepartureAuditChecklist({
       {visibleItems.map((item) => {
         const hasAction = Boolean(item.actionLabel && item.actionTarget && onActionPress);
         return (
-          <View key={item.itemId} style={styles.row}>
+          <View key={item.itemId} style={[styles.row, rowStyle]}>
             <ECSIcon name={statusIcon(item.status)} tier="compact" tone={statusTone(item.status)} />
             <View style={styles.copyBlock}>
               <View style={styles.titleRow}>

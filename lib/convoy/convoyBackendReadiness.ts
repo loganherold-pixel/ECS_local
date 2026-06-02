@@ -18,6 +18,7 @@ export interface ConvoyBackendReadinessGuidance {
 const MIGRATION_STEPS = [
   'Apply supabase/migrations/022_convoy_team_tracking.sql to the target Supabase database.',
   'Apply supabase/migrations/023_convoy_location_retention_cleanup.sql for cleanup and retention support.',
+  'Apply supabase/migrations/030_convoy_member_identity_titles.sql for convoy map callsign and badge-title labels.',
   "Reload the PostgREST schema cache with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
 ];
 
@@ -106,6 +107,9 @@ export function classifyConvoyBackendReadinessIssue(error: unknown): ConvoyBacke
     (text.includes('relation') && text.includes('does not exist') && text.includes('convoy')) ||
     (text.includes('undefined_table') && text.includes('convoy')) ||
     (text.includes('42p01') && text.includes('convoy')) ||
+    (text.includes('column') &&
+      text.includes('does not exist') &&
+      (text.includes('expedition_badge_title') || text.includes('display_name'))) ||
     (text.includes('convoy tracking schema') && text.includes('not deployed'))
   ) {
     return 'missing_migration';

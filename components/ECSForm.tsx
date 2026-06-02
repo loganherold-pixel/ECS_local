@@ -455,12 +455,14 @@ export function ECSSliderField({
   valueLabel,
   children,
   style,
+  contentStyle,
 }: {
   label: string;
   helper?: string | null;
   valueLabel?: string | null;
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
+  contentStyle?: StyleProp<ViewStyle>;
 }) {
   return (
     <FieldShell
@@ -469,7 +471,7 @@ export function ECSSliderField({
       badge={valueLabel ? <ECSBadge label={valueLabel} tone="selected" compact /> : undefined}
       style={style}
     >
-      <View style={styles.sliderFieldShell}>{children}</View>
+      <View style={[styles.sliderFieldShell, contentStyle]}>{children}</View>
     </FieldShell>
   );
 }

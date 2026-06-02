@@ -167,6 +167,37 @@ assert.strictEqual(
   'release scans must keep unknown-label Mopeka water sensors visible when their BLE signature is present',
 );
 
+const mopekaUniversalServiceData = Buffer.from([
+  0x0c, 0x91, 0x45, 0x44, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00,
+]).toString('base64');
+const anonymousMopekaWaterServiceData = {
+  id: '1B4C7E',
+  source: 'ble',
+  displayName: 'Unknown device 4C7E',
+  rssi: -56,
+  lastSeenAt: NOW + 875,
+  raw: {
+    serviceData: {
+      fee5: mopekaUniversalServiceData,
+    },
+  },
+};
+assert.strictEqual(
+  isLikelyPowerScannerDevice(anonymousMopekaWaterServiceData),
+  true,
+  'release allowlist filtering must recognize Mopeka Universal water sensors from serviceData payloads',
+);
+const mopekaWaterServiceDataAllowlistResult = upsertScannerDeviceList([], [anonymousMopekaWaterServiceData], {
+  reason: 'release_scan_mopeka_water_service_data',
+  now: NOW + 875,
+  requireBrandAllowlistMatch: true,
+});
+assert.strictEqual(
+  mopekaWaterServiceDataAllowlistResult.devices.length,
+  1,
+  'release scans must keep unknown-label Mopeka water sensors visible when their BLE signature is exposed as serviceData',
+);
+
 const anonymousWithHints = {
   source: 'ble',
   displayName: 'Unknown device A1B2',

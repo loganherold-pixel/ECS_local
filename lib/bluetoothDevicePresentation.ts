@@ -45,7 +45,7 @@ export type BluetoothDevicePresentation = {
 export type BluetoothDeviceClassificationInput = Pick<
   OBD2DiscoveredDevice,
   'id' | 'isLikelyOBD' | 'name' | 'rssi'
-> & Partial<Pick<OBD2DiscoveredDevice, 'serviceUUIDs' | 'manufacturerData'>>;
+> & Partial<Pick<OBD2DiscoveredDevice, 'serviceUUIDs' | 'manufacturerData' | 'serviceData'>>;
 
 export function formatBluetoothDisplayName(device: Pick<OBD2DiscoveredDevice, 'name' | 'id'>): string {
   const trimmed = typeof device.name === 'string' ? device.name.trim() : '';

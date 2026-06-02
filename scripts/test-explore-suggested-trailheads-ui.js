@@ -36,19 +36,15 @@ assertIncludes(
 
 assertIncludes(
   discover,
-  'const EXPLORE_CATEGORY_PAGE_SIZE = 18;',
-  'Explorer category panels should show more trailhead options per filtered criteria.',
+  'const EXPLORE_CATEGORY_PAGE_SIZE = 10;',
+  'Explorer category panels should keep compact 10-item trailhead pages per filtered criteria.',
 );
 assertIncludes(
   discover,
   '`${hiddenGemPage.pageIndex + 1 >= hiddenGemPageCount ? \'RESTART\' : \'NEXT\'} ${hiddenGemPage.pageSize}`',
   'Hidden Gems pager should reflect the configured page size.',
 );
-assertIncludes(
-  discover,
-  '`${popularTrailPage.pageIndex + 1 >= popularTrailPageCount ? \'RESTART\' : \'NEXT\'} ${popularTrailPage.pageSize}`',
-  'Popular Trails pager should reflect the configured page size.',
-);
+assertNotIncludes(discover, "case 'popularTrails'", 'Explorer should not expose a Popular Trails category panel.');
 assertIncludes(
   discover,
   '`${aiRouteIdeaPage.pageIndex + 1 >= aiRouteIdeaPageCount ? \'RESTART\' : \'NEXT\'} ${aiRouteIdeaPage.pageSize}`',
@@ -71,7 +67,7 @@ assertIncludes(
 );
 assertIncludes(
   discover,
-  'Adjust Suggested Trailheads range or refinements',
+  'No Suggested Trailheads match the active filters yet.',
   'Planning empty state should direct users back to Suggested Trailheads.',
 );
 assertNotIncludes(discover, 'ready from Suggested Routes', 'Explorer copy should no longer say Suggested Routes in the map helper.');
@@ -83,7 +79,7 @@ assertIncludes(
 );
 assertIncludes(
   offlinePrep,
-  'Open Suggested Trailheads',
+  'Suggested Trailheads',
   'Offline Prep empty state should send users back to Suggested Trailheads.',
 );
 

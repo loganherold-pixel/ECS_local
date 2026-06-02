@@ -33,6 +33,7 @@ interface ConnectGenericAccessoryOptions {
   signalStrength: number | null;
   serviceUuids?: string[];
   manufacturerData?: string | null;
+  serviceData?: Record<string, string>;
   localName?: string | null;
   levelPercent?: unknown;
 }
@@ -44,6 +45,7 @@ interface ConnectGenericAccessoryResult {
 }
 
 let bleManagerInstance: any | null = null;
+const UTILITY_SENSOR_TELEMETRY_POLL_MS = 15_000;
 
 function getBleManager(): any {
   if (bleManagerInstance) return bleManagerInstance;
@@ -76,6 +78,7 @@ function getErrorMessage(error: unknown): string {
 class GenericBluetoothAccessoryManager {
   private connections = new Map<string, BleManagerDevice>();
   private disconnectSubscriptions = new Map<string, BleManagerSubscription>();
+  private utilitySensorTelemetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   async connect(
     options: ConnectGenericAccessoryOptions,
@@ -175,6 +178,7 @@ class GenericBluetoothAccessoryManager {
             displayName: options.displayName,
             serviceUuids,
             manufacturerData: options.manufacturerData ?? null,
+            serviceData: options.serviceData,
             localName: options.localName ?? options.displayName,
             signalStrength,
             levelPercent: options.levelPercent,
@@ -190,6 +194,9 @@ class GenericBluetoothAccessoryManager {
         lastError: null,
       });
       this.publishAccessoryTelemetryState(connectedRecord);
+      if (options.owner === 'sensor') {
+        this.startUtilitySensorTelemetryPolling(options, device, serviceUuids, signalStrength);
+      }
       ecsLog.debug('TELEMETRY', '[BT_CONNECT] success', {
         deviceId: options.deviceId,
         providerId: options.providerId,
@@ -241,6 +248,7 @@ class GenericBluetoothAccessoryManager {
       this.disconnectSubscriptions.get(deviceId)?.remove?.();
     } catch {}
     this.disconnectSubscriptions.delete(deviceId);
+    this.stopUtilitySensorTelemetryPolling(deviceId);
 
     const connection = this.connections.get(deviceId);
     try {
@@ -307,6 +315,7 @@ class GenericBluetoothAccessoryManager {
           this.disconnectSubscriptions.get(options.deviceId)?.remove?.();
           this.disconnectSubscriptions.delete(options.deviceId);
           this.connections.delete(options.deviceId);
+          this.stopUtilitySensorTelemetryPolling(options.deviceId);
           const disconnectedRecord = await bluetoothAccessoryRegistry.upsert({
             ...options,
             connectionState: 'disconnected',
@@ -430,6 +439,80 @@ class GenericBluetoothAccessoryManager {
       });
     }
     return snapshots;
+  }
+
+  private startUtilitySensorTelemetryPolling(
+    options: ConnectGenericAccessoryOptions,
+    device: BleManagerDevice,
+    serviceUuids: string[],
+    fallbackSignalStrength: number | null,
+  ): void {
+    this.stopUtilitySensorTelemetryPolling(options.deviceId);
+
+    const poll = async () => {
+      if (!this.connections.has(options.deviceId)) return;
+      try {
+        const characteristicSnapshots = await this.readReadableCharacteristicSnapshots(
+          device,
+          options.deviceId,
+          options.providerId,
+        );
+        const signalStrength = await this.readRssi(device, fallbackSignalStrength);
+        const utilitySensorTelemetry = decodeUtilitySensorLiveTelemetry({
+          providerId: options.providerId,
+          providerLabel: options.providerLabel,
+          categoryHint: options.categoryHint,
+          displayName: options.displayName,
+          serviceUuids,
+          manufacturerData: options.manufacturerData ?? null,
+          serviceData: options.serviceData,
+          localName: options.localName ?? options.displayName,
+          signalStrength,
+          levelPercent: options.levelPercent,
+          characteristics: characteristicSnapshots,
+        });
+        const refreshedRecord = await bluetoothAccessoryRegistry.upsert({
+          ...options,
+          connectionState: 'connected',
+          signalStrength,
+          serviceUuids,
+          utilitySensorTelemetry,
+          lastError: null,
+        });
+        this.publishAccessoryTelemetryState(refreshedRecord);
+        ecsLog.debug('TELEMETRY', '[BT_LIVE] utility_sensor_poll', {
+          deviceId: options.deviceId,
+          providerId: options.providerId,
+          parserStatus: utilitySensorTelemetry.parserStatus,
+          hasLevelPercent: utilitySensorTelemetry.levelPercent != null,
+          hasDistance: utilitySensorTelemetry.levelDistanceMm != null,
+        });
+      } catch (error) {
+        ecsLog.warn('TELEMETRY', '[BT_LIVE] utility_sensor_poll', {
+          deviceId: options.deviceId,
+          providerId: options.providerId,
+          error: getErrorMessage(error),
+        });
+      }
+
+      if (!this.connections.has(options.deviceId)) return;
+      this.utilitySensorTelemetryTimers.set(
+        options.deviceId,
+        setTimeout(poll, UTILITY_SENSOR_TELEMETRY_POLL_MS),
+      );
+    };
+
+    this.utilitySensorTelemetryTimers.set(
+      options.deviceId,
+      setTimeout(poll, UTILITY_SENSOR_TELEMETRY_POLL_MS),
+    );
+  }
+
+  private stopUtilitySensorTelemetryPolling(deviceId: string): void {
+    const timer = this.utilitySensorTelemetryTimers.get(deviceId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.utilitySensorTelemetryTimers.delete(deviceId);
   }
 }
 

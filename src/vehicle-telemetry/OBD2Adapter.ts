@@ -282,6 +282,7 @@ export interface OBD2DiscoveredDevice {
   lastSeenAt: number;
   serviceUUIDs?: string[];
   manufacturerData?: string | null;
+  serviceData?: Record<string, string>;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1048,6 +1049,7 @@ class OBD2Adapter {
           const incomingManufacturerData = typeof device?.manufacturerData === 'string' && device.manufacturerData.length > 0
             ? device.manufacturerData
             : null;
+          const incomingServiceData = this.extractAdvertisedServiceData(device);
           const deviceId = rawDeviceId ?? this.buildTemporaryDiscoveryId({
             advertisedName,
             localName,
@@ -1081,6 +1083,7 @@ class OBD2Adapter {
             this.extractAdvertisedServiceUUIDs(device),
           );
           const manufacturerData = incomingManufacturerData ?? existing?.manufacturerData ?? null;
+          const serviceData = this.mergeServiceData(existing?.serviceData, incomingServiceData);
           const isLikelyOBD = this.isLikelyOBDDevice(
             advertisedName ??
               localName ??
@@ -1103,6 +1106,7 @@ class OBD2Adapter {
               rssi: typeof device.rssi === 'number' ? device.rssi : null,
               serviceUuidCount: serviceUUIDs?.length ?? 0,
               manufacturerDataPresent: !!manufacturerData,
+              serviceDataCount: serviceData ? Object.keys(serviceData).length : 0,
               transport: 'ble',
             });
           }
@@ -1146,6 +1150,7 @@ class OBD2Adapter {
                 rssi: typeof device.rssi === 'number' ? device.rssi : null,
                 serviceUUIDs,
                 manufacturerDataPresent: !!manufacturerData,
+                serviceDataCount: serviceData ? Object.keys(serviceData).length : 0,
               },
             });
             recordBluetoothDiagnosticEvent({
@@ -1177,6 +1182,7 @@ class OBD2Adapter {
               rssi: typeof device.rssi === 'number' ? device.rssi : null,
               serviceUuidCount: serviceUUIDs?.length ?? 0,
               manufacturerDataPresent: typeof device.manufacturerData === 'string' && device.manufacturerData.length > 0,
+              serviceDataCount: incomingServiceData ? Object.keys(incomingServiceData).length : 0,
             });
             logBtBlockerDebug('raw_device', {
               deviceId,
@@ -1185,6 +1191,7 @@ class OBD2Adapter {
               rssi: typeof device.rssi === 'number' ? device.rssi : null,
               serviceUuidCount: serviceUUIDs?.length ?? 0,
               manufacturerDataPresent: typeof device.manufacturerData === 'string' && device.manufacturerData.length > 0,
+              serviceDataCount: incomingServiceData ? Object.keys(incomingServiceData).length : 0,
             });
           }
           if (this.shouldLogRawScanSighting(deviceId)) {
@@ -1195,6 +1202,7 @@ class OBD2Adapter {
               rssi: typeof device.rssi === 'number' ? device.rssi : null,
               serviceUuidCount: serviceUUIDs?.length ?? 0,
               manufacturerDataPresent: typeof device.manufacturerData === 'string' && device.manufacturerData.length > 0,
+              serviceDataCount: incomingServiceData ? Object.keys(incomingServiceData).length : 0,
             });
           }
 
@@ -1206,6 +1214,7 @@ class OBD2Adapter {
             lastSeenAt: now,
             serviceUUIDs,
             manufacturerData,
+            serviceData,
           };
 
           const isNew = !existing;
@@ -1232,6 +1241,7 @@ class OBD2Adapter {
               isLikelyOBD: entry.isLikelyOBD,
               rssi: entry.rssi,
               serviceUuidCount: entry.serviceUUIDs?.length ?? 0,
+              serviceDataCount: entry.serviceData ? Object.keys(entry.serviceData).length : 0,
               isNew,
             });
             logBtScanDebug('device_normalized', {
@@ -1242,6 +1252,7 @@ class OBD2Adapter {
               rssi: entry.rssi,
               serviceUuidCount: entry.serviceUUIDs?.length ?? 0,
               manufacturerDataPresent: !!entry.manufacturerData,
+              serviceDataCount: entry.serviceData ? Object.keys(entry.serviceData).length : 0,
             });
             if (isNew) {
               logBtScanDebug('device_added', {
@@ -1541,12 +1552,52 @@ class OBD2Adapter {
     return Array.from(new Set(next));
   }
 
+  private mergeServiceData(
+    existing: Record<string, string> | undefined,
+    incoming: Record<string, string> | undefined,
+  ): Record<string, string> | undefined {
+    const entries = new Map<string, string>();
+    for (const source of [existing, incoming]) {
+      if (!source) continue;
+      for (const [uuid, value] of Object.entries(source)) {
+        const cleanUuid = typeof uuid === 'string' ? uuid.trim() : '';
+        const cleanValue = typeof value === 'string' ? value.trim() : '';
+        if (!cleanUuid || !cleanValue) continue;
+        entries.set(cleanUuid, cleanValue);
+      }
+    }
+
+    return entries.size > 0 ? Object.fromEntries(entries) : undefined;
+  }
+
+  private extractAdvertisedServiceData(device: any): Record<string, string> | undefined {
+    if (!device?.serviceData || typeof device.serviceData !== 'object') return undefined;
+
+    const entries = new Map<string, string>();
+    for (const [uuid, value] of Object.entries(device.serviceData)) {
+      const cleanUuid = typeof uuid === 'string' ? uuid.trim() : '';
+      const cleanValue = typeof value === 'string' ? value.trim() : '';
+      if (!cleanUuid || !cleanValue) continue;
+      entries.set(cleanUuid, cleanValue);
+    }
+
+    return entries.size > 0 ? Object.fromEntries(entries) : undefined;
+  }
+
   private extractAdvertisedServiceUUIDs(device: any): string[] | undefined {
     const serviceData = device?.serviceData && typeof device.serviceData === 'object'
       ? Object.keys(device.serviceData)
       : [];
     const solicited = Array.isArray(device?.solicitedServiceUUIDs) ? device.solicitedServiceUUIDs : [];
     return this.mergeServiceUUIDs(device?.serviceUUIDs, [...serviceData, ...solicited]);
+  }
+
+  private serviceDataSignature(serviceData: Record<string, string> | undefined): string {
+    if (!serviceData) return '';
+    return Object.entries(serviceData)
+      .map(([uuid, value]) => `${uuid}:${value}`)
+      .sort()
+      .join('|');
   }
 
   private getSignalBucket(rssi: number): number {
@@ -1574,6 +1625,7 @@ class OBD2Adapter {
     if (previous.isLikelyOBD !== next.isLikelyOBD) return true;
     if ((previous.serviceUUIDs?.length ?? 0) !== (next.serviceUUIDs?.length ?? 0)) return true;
     if ((previous.manufacturerData ?? null) !== (next.manufacturerData ?? null)) return true;
+    if (this.serviceDataSignature(previous.serviceData) !== this.serviceDataSignature(next.serviceData)) return true;
     if (this.getSignalBucket(previous.rssi) !== this.getSignalBucket(next.rssi)) return true;
     return false;
   }

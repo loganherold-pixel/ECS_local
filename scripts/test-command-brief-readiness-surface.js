@@ -65,6 +65,36 @@ function assertNotIncludes(source, fragment, message) {
   assertIncludes(commandBrief, fragment, `Command Brief detail sections should use collapsed title-first disclosure: ${fragment}`);
 });
 
+[
+  "import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';",
+  'const commandBriefFleetSurfaceStyle: ViewStyle = {',
+  'backgroundColor: ECS_SURFACE.background.selected',
+  'borderColor: ECS_SURFACE.border.selected',
+  'style={commandBriefFleetSurfaceStyle}',
+  'intentChipStyle={commandBriefFleetSurfaceStyle}',
+  'rowStyle={commandBriefFleetSurfaceStyle}',
+].forEach((fragment) => {
+  assertIncludes(commandBrief, fragment, `Command Brief boxes should match the active Fleet vehicle card surface: ${fragment}`);
+});
+
+[
+  'campCandidateRow',
+  'ctaButton',
+  'vehicleHeroRow',
+  'vehicleBriefList',
+  'recoveryMetric',
+  'recoveryInferredNotice',
+  'recoveryPrepList',
+  'actionRow',
+].forEach((styleName) => {
+  const start = commandBrief.indexOf(`${styleName}: {`);
+  assert.notStrictEqual(start, -1, `Command Brief should define ${styleName}.`);
+  const end = commandBrief.indexOf('},', start);
+  const block = commandBrief.slice(start, end);
+  assertIncludes(block, 'backgroundColor: ECS_SURFACE.background.selected', `${styleName} should use the Fleet vehicle card background.`);
+  assertIncludes(block, 'borderColor: ECS_SURFACE.border.selected', `${styleName} should use the Fleet vehicle card border.`);
+});
+
 assertNotIncludes(commandBrief, 'Expedition Readiness Summary', 'Command Brief should not duplicate the removed readiness summary card.');
 assertNotIncludes(commandBrief, 'Recommended Actions', 'Command Brief should not render the removed recommended actions container.');
 assertNotIncludes(commandBrief, 'Watch Items', 'Command Brief should not render the removed watch items container.');

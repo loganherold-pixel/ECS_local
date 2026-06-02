@@ -394,6 +394,29 @@ assert.strictEqual(mopekaUniversalManufacturerOnlyRoute.deviceCategory, 'water_t
 assert.strictEqual(mopekaUniversalManufacturerOnlyRoute.displayName, 'Mopeka Water Tank');
 assert.strictEqual(isReleaseScannerBluetoothRoute(mopekaUniversalManufacturerOnlyRoute), true);
 
+const mopekaUniversalServiceData = Buffer.from([
+  0x0c, 0x91, 0x45, 0x44, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00,
+]).toString('base64');
+const mopekaUniversalServiceDataRoute = routeBluetoothDevice({
+  id: 'mopeka-universal-service-data-route-1B4C7E',
+  name: 'Unknown device 4C7E',
+  isLikelyOBD: false,
+  rssi: -56,
+  serviceUUIDs: ['fee5'],
+  serviceData: {
+    fee5: mopekaUniversalServiceData,
+  },
+});
+assert.strictEqual(
+  mopekaUniversalServiceDataRoute.owner,
+  'sensor',
+  'Mopeka Universal water sensors must stay visible when their Mopeka payload is exposed as serviceData',
+);
+assert.strictEqual(mopekaUniversalServiceDataRoute.providerId, 'water_monitor');
+assert.strictEqual(mopekaUniversalServiceDataRoute.deviceCategory, 'water_tank_monitor');
+assert.strictEqual(mopekaUniversalServiceDataRoute.displayName, 'Mopeka Water Tank');
+assert.strictEqual(isReleaseScannerBluetoothRoute(mopekaUniversalServiceDataRoute), true);
+
 const namedMopekaWaterRoute = routeBluetoothDevice({
   id: 'mopeka-named-water-route',
   name: 'Water Tank',

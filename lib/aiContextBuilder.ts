@@ -82,9 +82,14 @@ import { setupStore } from './setupStore';
 import { vehicleSetupStore } from './vehicleSetupStore';
 import { vehicleStore } from './vehicleStore';
 import { vehicleSpecStore } from './vehicleSpecStore';
-import { consumablesStore } from './consumablesStore';
+import { consumablesStore, WATER_DENSITY_LB_PER_GAL } from './consumablesStore';
 import { tiresLiftStore } from './tiresLiftStore';
 import { getVehicleResourceProfile } from './vehicleResourceProfile';
+import { ecsTelemetryStore } from '../src/telemetry/ECSTelemetryStore';
+import {
+  getUtilitySensorCurrentFromCapacity,
+  selectUtilitySensorResourceStates,
+} from '../src/telemetry/utilitySensorTelemetrySelectors';
 import {
   getActiveVehicleState,
   type ECSVehicularState,
@@ -1077,6 +1082,10 @@ function buildVehicleProfileSnapshot(
   const consumables = activeVehicleId ? consumablesStore.get(activeVehicleId) : null;
   const tiresLift = activeVehicleId ? tiresLiftStore.get(activeVehicleId) : null;
   const resourceProfile = getVehicleResourceProfile(vehicle as any, { spec, consumables, tiresLift });
+  const utilitySensorResources = selectUtilitySensorResourceStates(ecsTelemetryStore.getUtilitySensorReadings());
+  const liveWaterGallons = activeVehicleId
+    ? getUtilitySensorCurrentFromCapacity(utilitySensorResources.water, resourceProfile.waterCapacityGal)
+    : null;
   const activeVehicleState = useStoreFallbacks && activeVehicleId ? getActiveVehicleState(activeVehicleId) : null;
   const liveFuelCapacity = (telemetryConfig as any)?.fuelCapacityGal ?? null;
   const liveFuelRemaining = (telemetryConfig as any)?.fuelRemainingGal ?? null;
@@ -1087,7 +1096,10 @@ function buildVehicleProfileSnapshot(
       : activeVehicleId
         ? resourceProfile.currentFuelGallons
         : null;
-  const currentWaterGallons = activeVehicleId ? resourceProfile.currentWaterGallons : null;
+  const currentWaterGallons = activeVehicleId ? liveWaterGallons ?? resourceProfile.currentWaterGallons : null;
+  const currentWaterWeightLbs = currentWaterGallons != null
+    ? currentWaterGallons * WATER_DENSITY_LB_PER_GAL
+    : null;
 
   return {
     fuelCapacityGallons,
@@ -1096,12 +1108,12 @@ function buildVehicleProfileSnapshot(
     fuelWeightLbs: activeVehicleId ? resourceProfile.currentFuelWeightLb : null,
     waterCapacityGallons: resourceProfile.waterCapacityGal,
     currentWaterGallons,
-    waterWeightLbs: activeVehicleId ? resourceProfile.currentWaterWeightLb : null,
+    waterWeightLbs: activeVehicleId ? currentWaterWeightLbs : null,
     batteryCapacityWh: resourceProfile.batteryUsableWh,
     avgMpg: (telemetryConfig as any)?.fuelMpg ?? (vehicle as any)?.avg_mpg ?? null,
     totalWeightLbs:
       activeVehicleState?.weight.estimatedOperatingWeightLbs
-      ?? (totalWeightLbs + resourceProfile.currentFuelWeightLb + resourceProfile.currentWaterWeightLb),
+      ?? (totalWeightLbs + resourceProfile.currentFuelWeightLb + (currentWaterWeightLbs ?? resourceProfile.currentWaterWeightLb)),
     curbWeightLbs: activeVehicleState?.weight.baseWeightLbs ?? spec?.base_weight_lb ?? null,
     vehicleClass: activeVehicleState?.intelligence.classification.classId ?? null,
     vehicleClassLabel: activeVehicleState?.intelligence.classification.label ?? null,

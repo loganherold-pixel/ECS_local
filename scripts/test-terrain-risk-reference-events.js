@@ -143,12 +143,14 @@ assert(
   'TerrainRiskSideProfile route stroke should stay bold but thinner than the previous heavy line treatment.',
 );
 assert(
-  sideProfileSource.includes('accessible={interactive}') &&
+  sideProfileSource.includes('TouchableOpacity') &&
+    sideProfileSource.includes('testID="terrainRiskReferenceMarkerButton"') &&
+    sideProfileSource.includes('accessibilityRole="button"') &&
     sideProfileSource.includes('accessibilityLabel={referenceEvent'),
-  'Expanded Terrain Risk pressure points should expose touch targets and labels.',
+  'Expanded Terrain Risk pressure points should expose button touch targets and labels.',
 );
 assert(
-  widgetRenderersSource.includes('Why ECS flagged this point') &&
+  widgetRenderersSource.includes('ECS INTELLIGENCE BRIEF') &&
     widgetRenderersSource.includes('onTerrainRiskReferenceEvent'),
   'Expanded Terrain Risk widget should show a polished explanation and report events through render options.',
 );
@@ -158,8 +160,12 @@ assert(
     widgetRenderersSource.includes('interactive={markersInteractive}') &&
     widgetRenderersSource.includes('completedDistanceMiles={terrainRisk.completedDistanceMiles}') &&
     widgetRenderersSource.includes('expanded && detailMode && selectedReferenceEvent') &&
-    sideProfileSource.includes('r={interactive ? 12 : 0}'),
-  'Terrain Risk expanded mode should make reference markers tappable while showing the detailed readout in detail mode.',
+    widgetRenderersSource.includes('terrainRiskReferenceBriefButton') &&
+    widgetRenderersSource.includes('ECS INTELLIGENCE BRIEF') &&
+    widgetRenderersSource.includes('selectedReferenceEvent.banner.title') &&
+    widgetRenderersSource.includes('onPress={() => setSelectedReferenceEvent(null)}') &&
+    sideProfileSource.includes('terrainRiskReferenceButton'),
+  'Terrain Risk expanded mode should make reference markers tappable and open a tap-to-dismiss ECS Intelligence brief in detail mode.',
 );
 assert(
   dashboardSource.includes('selectUpcomingTerrainRiskBannerEvent') &&

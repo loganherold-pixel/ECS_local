@@ -61,7 +61,7 @@ assert.ok(
 
 assert.ok(
   quickActions.includes('incidentRecoveryUtilitySlot: {') &&
-    quickActions.includes('height: 184,') &&
+    quickActions.includes('height: 220,') &&
     quickActions.includes('flexGrow: 0,') &&
     quickActions.includes('flexShrink: 0,') &&
     quickActions.includes('incidentRecoveryUtilityPanel: {') &&

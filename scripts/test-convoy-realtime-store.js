@@ -61,6 +61,8 @@ function makeMembers() {
       id: 'lead-member',
       convoy_id: 'convoy-1',
       callsign: 'Lead Tacoma',
+      display_name: 'Logan Trail',
+      expedition_badge_title: 'Master Navigator',
       role: 'lead',
       revoked_at: null,
     },
@@ -148,6 +150,8 @@ async function main() {
   assert.strictEqual(initial.ok, true, 'initial fetch should succeed.');
   assert.strictEqual(initial.data.snapshot.members.length, 2, 'initial fetch should map active members with locations.');
   assert.strictEqual(initial.data.snapshot.lead.callsign, 'Lead Tacoma');
+  assert.strictEqual(initial.data.snapshot.lead.displayName, 'Logan Trail');
+  assert.strictEqual(initial.data.snapshot.lead.expeditionBadgeTitle, 'Master Navigator');
   assert.strictEqual(initial.data.snapshot.sweep.callsign, 'Sweep Jeep');
   assert.strictEqual(initial.data.snapshot.assistanceCount, 1);
   assert.strictEqual(initial.data.snapshot.staleCount, 1);
@@ -233,6 +237,10 @@ async function main() {
   unsubscribeStore();
 
   const source = fs.readFileSync(servicePath, 'utf8');
+  assert.ok(
+    source.includes(".select('id, convoy_id, user_id, vehicle_id, callsign, display_name, expedition_badge_title, role, revoked_at')"),
+    'Supabase convoy member fetch should include display name and expedition badge title identity fields.',
+  );
   assert.ok(source.includes("'postgres_changes'"), 'service should subscribe with Supabase Postgres Changes.');
   assert.ok(source.includes("table: 'convoy_member_locations'"), 'service should target convoy_member_locations.');
   assert.ok(source.includes('filter: `convoy_id=eq.${convoyId}`'), 'service should filter by convoy_id.');

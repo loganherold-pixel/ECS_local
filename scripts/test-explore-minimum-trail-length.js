@@ -115,7 +115,7 @@ assert.deepStrictEqual(
     pageSize: 10,
   }).map((item) => item.id),
   ['exact-minimum-trail', 'longer-trail'],
-  'Popular Trails should use the same discoverable-route minimum.',
+  'The background popularity classifier should use the same discoverable-route minimum.',
 );
 
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
@@ -125,8 +125,9 @@ assert.ok(
 );
 assert.ok(
   discoverSource.includes('MIN_DISCOVERY_ROUTE_MILES') &&
-    discoverSource.includes('ECS filters out trails under ${MIN_DISCOVERY_ROUTE_MILES} miles'),
-  'Explorer footer notice should stay tied to the actual minimum-length constant.',
+    discoverSource.includes('routePassesExploreMapLength') &&
+    !discoverSource.includes('ECS filters out trails under ${MIN_DISCOVERY_ROUTE_MILES} miles'),
+  'Explorer should preserve the actual minimum-length filter without showing the removed footer disclaimer.',
 );
 
 console.log('Explore minimum trail length checks passed.');

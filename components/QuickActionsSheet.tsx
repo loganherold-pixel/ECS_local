@@ -80,6 +80,25 @@ type QuickActionTile = {
   availabilityLabel?: string;
 };
 
+const FIELD_UTILITY_CONTAINER_BORDER_ALPHA = '3D';
+const FIELD_UTILITY_CONTAINER_BACKGROUND_ALPHA = '0F';
+const FIELD_UTILITY_ICON_BORDER_ALPHA = '35';
+const FIELD_UTILITY_ICON_BACKGROUND_ALPHA = '12';
+
+function fieldUtilityContainerSurface(color: string) {
+  return {
+    borderColor: `${color}${FIELD_UTILITY_CONTAINER_BORDER_ALPHA}`,
+    backgroundColor: `${color}${FIELD_UTILITY_CONTAINER_BACKGROUND_ALPHA}`,
+  };
+}
+
+function fieldUtilityIconSurface(color: string) {
+  return {
+    borderColor: `${color}${FIELD_UTILITY_ICON_BORDER_ALPHA}`,
+    backgroundColor: `${color}${FIELD_UTILITY_ICON_BACKGROUND_ALPHA}`,
+  };
+}
+
 const DEFAULT_FREQUENCIES = [
   { label: 'CB Ch 9', detail: 'Emergency' },
   { label: 'CB Ch 19', detail: 'Highway' },
@@ -764,6 +783,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       style={[
         styles.tile,
         styles.quickActionTile,
+        fieldUtilityContainerSurface(item.color),
         item.key === 'protocols' && styles.emergencyProtocolTile,
         item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
         item.disabled && styles.tileDisabled,
@@ -772,8 +792,8 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       activeOpacity={0.78}
       disabled={item.disabled || busy}
     >
-      <View style={[styles.tileIconWrap, { borderColor: `${item.color}35`, backgroundColor: `${item.color}12` }]}>
-        <Ionicons name={item.icon as any} size={18} color={item.disabled ? ECS.muted : item.color} />
+      <View style={[styles.tileIconWrap, fieldUtilityIconSurface(item.color)]}>
+        <Ionicons name={item.icon as any} size={16} color={item.disabled ? ECS.muted : item.color} />
       </View>
       <View style={styles.quickActionTileCopy}>
         <Text
@@ -833,13 +853,13 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       </View>
       <TouchableOpacity
         key={documentationTile.key}
-        style={[styles.tile, styles.documentationTile]}
+        style={[styles.tile, styles.documentationTile, fieldUtilityContainerSurface(documentationTile.color)]}
         onPress={documentationTile.onPress}
         activeOpacity={0.78}
         disabled={busy}
       >
-        <View style={[styles.tileIconWrap, { borderColor: `${documentationTile.color}35`, backgroundColor: `${documentationTile.color}12` }]}>
-          <Ionicons name={documentationTile.icon as any} size={20} color={documentationTile.color} />
+        <View style={[styles.tileIconWrap, fieldUtilityIconSurface(documentationTile.color)]}>
+          <Ionicons name={documentationTile.icon as any} size={18} color={documentationTile.color} />
         </View>
         <View style={styles.documentationTileCopy}>
           <Text style={styles.tileLabel} numberOfLines={1}>{documentationTile.label}</Text>
@@ -1466,12 +1486,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     justifyContent: 'space-between',
-    gap: 7,
+    gap: 5,
   },
   tileColumn: {
     flex: 1,
     minHeight: 0,
-    gap: 6,
+    gap: 4,
   },
   tile: {
     width: '23.5%',
@@ -1496,9 +1516,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    gap: 7,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    gap: 5,
   },
   quickActionTileCopy: {
     flex: 1,
@@ -1509,24 +1529,24 @@ const styles = StyleSheet.create({
   },
   quickActionTileLabel: {
     textAlign: 'left',
-    fontSize: 8.4,
-    lineHeight: 10,
+    fontSize: 8,
+    lineHeight: 9,
     letterSpacing: 0.2,
   },
   quickActionTileSubLabel: {
     minHeight: 0,
     textAlign: 'left',
-    fontSize: 7,
+    fontSize: 6.6,
     lineHeight: 8,
     letterSpacing: 0.15,
   },
   quickActionTileBadge: {
     marginTop: 0,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
   },
   quickActionTileStateText: {
-    fontSize: 6.3,
+    fontSize: 5.8,
     letterSpacing: 0.7,
   },
   tileDisabled: {
@@ -1542,21 +1562,23 @@ const styles = StyleSheet.create({
   },
   documentationTile: {
     width: '100%',
-    minHeight: 54,
+    minHeight: 46,
     flexDirection: 'row',
-    gap: 10,
+    gap: 7,
     marginTop: 0,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
   },
   documentationTileCopy: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
+    gap: 3,
   },
   tileIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 9,
+    width: 24,
+    height: 24,
+    borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1605,7 +1627,7 @@ const styles = StyleSheet.create({
   },
   incidentRecoveryUtilitySlot: {
     width: '100%',
-    height: 184,
+    height: 220,
     flexGrow: 0,
     flexShrink: 0,
     minWidth: 0,

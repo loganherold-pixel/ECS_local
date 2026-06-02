@@ -16,6 +16,7 @@ const CONVOY_MEMBERSHIP_FUNCTION = 'convoy-membership';
 const ACTIVE_CONVOY_CACHE_KEY = 'active';
 const MAX_CONVOY_NAME_LENGTH = 80;
 const MAX_CALLSIGN_LENGTH = 40;
+const MAX_EXPEDITION_BADGE_TITLE_LENGTH = 48;
 
 export type ConvoyRole = 'lead' | 'sweep' | 'member' | 'support';
 export type ConvoyStatus = 'planned' | 'active' | 'paused' | 'completed' | 'cancelled';
@@ -57,6 +58,8 @@ export interface ConvoyMemberRecord {
   user_id: string;
   vehicle_id: string | null;
   callsign: string;
+  display_name?: string | null;
+  expedition_badge_title?: string | null;
   role: ConvoyRole;
   joined_at?: string;
   revoked_at: string | null;
@@ -79,6 +82,7 @@ export interface ActiveConvoyContext {
   memberId: string;
   role: ConvoyRole;
   callsign: string;
+  expeditionBadgeTitle?: string | null;
   storedAt: string;
 }
 
@@ -105,6 +109,7 @@ export interface CreateConvoyInput {
   expiresAt?: string | Date | null;
   leaderCallsign?: string | null;
   leaderVehicleId?: string | null;
+  leaderExpeditionBadgeTitle?: string | null;
 }
 
 export interface CreateConvoyInviteInput {
@@ -123,6 +128,7 @@ export interface JoinConvoyWithInviteInput {
   rawCode: string;
   callsign: string;
   vehicleId?: string | null;
+  expeditionBadgeTitle?: string | null;
 }
 
 export interface JoinConvoyWithInviteResult {
@@ -170,6 +176,7 @@ export interface ConvoyMembershipBackend {
     user_id: string;
     vehicle_id: string | null;
     callsign: string;
+    expedition_badge_title?: string | null;
     role: ConvoyRole;
   }): Promise<ConvoyMembershipServiceResult<ConvoyMemberRecord>>;
   listActiveMemberships(userId: string): Promise<ConvoyMembershipServiceResult<ConvoyListItem[]>>;
@@ -301,6 +308,10 @@ export class ConvoyMembershipService {
     const expiresAt = normalizeOptionalDate(input.expiresAt);
     const callsign = normalizeText(input.leaderCallsign || 'Lead', MAX_CALLSIGN_LENGTH) || 'Lead';
     const vehicleId = normalizeText(input.leaderVehicleId, 120) || null;
+    const expeditionBadgeTitle = normalizeText(
+      input.leaderExpeditionBadgeTitle,
+      MAX_EXPEDITION_BADGE_TITLE_LENGTH,
+    ) || null;
 
     const convoy = await this.backend.insertConvoy({
       name,
@@ -316,6 +327,7 @@ export class ConvoyMembershipService {
       user_id: user.data.id,
       vehicle_id: vehicleId,
       callsign,
+      expedition_badge_title: expeditionBadgeTitle,
       role: 'lead',
     });
     if (!membership.ok) return membership;
@@ -325,6 +337,7 @@ export class ConvoyMembershipService {
       memberId: membership.data.id,
       role: membership.data.role,
       callsign: membership.data.callsign,
+      expeditionBadgeTitle: membership.data.expedition_badge_title ?? expeditionBadgeTitle,
       storedAt: new Date().toISOString(),
     });
 
@@ -361,6 +374,10 @@ export class ConvoyMembershipService {
     const rawCode = normalizeText(input.rawCode, 80);
     const callsign = normalizeText(input.callsign, MAX_CALLSIGN_LENGTH);
     const vehicleId = normalizeText(input.vehicleId, 120) || null;
+    const expeditionBadgeTitle = normalizeText(
+      input.expeditionBadgeTitle,
+      MAX_EXPEDITION_BADGE_TITLE_LENGTH,
+    ) || null;
     if (!rawCode) return toError('validation_error', 'Invite code is required.');
     if (!callsign) return toError('validation_error', 'Callsign is required.');
 
@@ -368,6 +385,7 @@ export class ConvoyMembershipService {
       rawCode,
       callsign,
       vehicleId,
+      expeditionBadgeTitle,
     });
     if (!joined.ok) return joined;
 
@@ -376,6 +394,7 @@ export class ConvoyMembershipService {
       memberId: joined.data.member.id,
       role: joined.data.member.role,
       callsign: joined.data.member.callsign,
+      expeditionBadgeTitle: joined.data.member.expedition_badge_title ?? expeditionBadgeTitle,
       storedAt: new Date().toISOString(),
     });
 
@@ -504,7 +523,7 @@ function createSupabaseConvoyMembershipBackend(client: SupabaseClient = supabase
     async listActiveMemberships(userId) {
       const { data: memberships, error: membershipError } = await client
         .from(CONVOY_MEMBERS_TABLE)
-        .select('id, convoy_id, user_id, vehicle_id, callsign, role, joined_at, revoked_at')
+        .select('id, convoy_id, user_id, vehicle_id, callsign, display_name, expedition_badge_title, role, joined_at, revoked_at')
         .eq('user_id', userId)
         .is('revoked_at', null)
         .order('joined_at', { ascending: false });
@@ -534,7 +553,7 @@ function createSupabaseConvoyMembershipBackend(client: SupabaseClient = supabase
     async listConvoyMembers(convoyId) {
       const { data, error } = await client
         .from(CONVOY_MEMBERS_TABLE)
-        .select('id, convoy_id, user_id, vehicle_id, callsign, role, joined_at, revoked_at')
+        .select('id, convoy_id, user_id, vehicle_id, callsign, display_name, expedition_badge_title, role, joined_at, revoked_at')
         .eq('convoy_id', convoyId)
         .is('revoked_at', null)
         .order('joined_at', { ascending: true });

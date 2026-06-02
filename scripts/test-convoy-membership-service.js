@@ -8,6 +8,7 @@ const root = path.join(__dirname, '..');
 const servicePath = path.join(root, 'lib', 'convoy', 'convoyMembershipService.ts');
 const supabaseClientPath = path.join(root, 'lib', 'supabase.ts');
 const edgeFunctionPath = path.join(root, 'supabase', 'functions', 'convoy-membership', 'index.ts');
+const badgeTitleMigrationPath = path.join(root, 'supabase', 'migrations', '030_convoy_member_identity_titles.sql');
 const packagePath = path.join(root, 'package.json');
 
 const originalLoad = Module._load;
@@ -72,6 +73,7 @@ function makeMember(overrides = {}) {
     user_id: overrides.user_id || 'user-1',
     vehicle_id: overrides.vehicle_id || null,
     callsign: overrides.callsign || 'Lead',
+    expedition_badge_title: overrides.expedition_badge_title ?? null,
     role: overrides.role || 'lead',
     revoked_at: overrides.revoked_at || null,
   };
@@ -128,6 +130,7 @@ async function main() {
     name: '  Sierra   Test Convoy  ',
     leaderCallsign: 'Lead Tacoma',
     leaderVehicleId: 'vehicle-1',
+    leaderExpeditionBadgeTitle: 'Master Navigator',
   });
   assert.strictEqual(created.ok, true, 'createConvoy should succeed with a mocked backend.');
   assert.strictEqual(created.data.convoy.name, 'Sierra Test Convoy');
@@ -135,6 +138,14 @@ async function main() {
   assert.ok(
     createBackend.calls.some((call) => call[0] === 'saveActiveContext' && call[1].memberId === 'member-created'),
     'createConvoy should persist active convoy/member identifiers locally.',
+  );
+  assert.ok(
+    createBackend.calls.some((call) => (
+      call[0] === 'insertLeaderMember' &&
+      call[1].callsign === 'Lead Tacoma' &&
+      call[1].expedition_badge_title === 'Master Navigator'
+    )),
+    'createConvoy should snapshot the current Expedition badge title onto the leader membership.',
   );
 
   const missingSchemaBackend = createMockBackend({
@@ -182,6 +193,46 @@ async function main() {
   assert.ok(
     validJoinBackend.calls.some((call) => call[0] === 'saveActiveContext' && call[1].convoyId === 'convoy-joined'),
     'valid invite flow should persist active convoy context.',
+  );
+  const badgeJoinBackend = createMockBackend({
+    functionResponses: {
+      join_with_invite: {
+        ok: true,
+        data: {
+          convoy: makeConvoy({ id: 'convoy-badge-joined' }),
+          member: makeMember({
+            id: 'member-badge-joined',
+            convoy_id: 'convoy-badge-joined',
+            callsign: 'Logan',
+            expedition_badge_title: 'Master Navigator',
+          }),
+        },
+      },
+    },
+  });
+  const badgeJoinService = new ConvoyMembershipService(badgeJoinBackend);
+  const badgeJoined = await badgeJoinService.joinConvoyWithInvite({
+    rawCode: 'ECS-BADG-0001',
+    callsign: 'Logan',
+    expeditionBadgeTitle: 'Master Navigator',
+  });
+  assert.strictEqual(badgeJoined.ok, true, 'badge title invite flow should return joined convoy data.');
+  assert.ok(
+    badgeJoinBackend.calls.some((call) => (
+      call[0] === 'invokeMembershipFunction' &&
+      call[1] === 'join_with_invite' &&
+      call[2].callsign === 'Logan' &&
+      call[2].expeditionBadgeTitle === 'Master Navigator'
+    )),
+    'joinConvoyWithInvite should send the current Expedition badge title to the membership Edge Function.',
+  );
+  assert.ok(
+    badgeJoinBackend.calls.some((call) => (
+      call[0] === 'saveActiveContext' &&
+      call[1].callsign === 'Logan' &&
+      call[1].expeditionBadgeTitle === 'Master Navigator'
+    )),
+    'valid invite flow should persist callsign and badge title in the active convoy context.',
   );
 
   for (const [label, code] of [
@@ -255,6 +306,12 @@ async function main() {
   );
 
   const source = fs.readFileSync(edgeFunctionPath, 'utf8');
+  const badgeTitleMigration = fs.readFileSync(badgeTitleMigrationPath, 'utf8');
+  assert.ok(
+    badgeTitleMigration.includes('alter table public.convoy_members') &&
+      badgeTitleMigration.includes('expedition_badge_title'),
+    'Convoy schema should add an expedition_badge_title column for map subtitle identity.',
+  );
   assert.ok(source.includes("getEnv('CONVOY_INVITE_HASH_PEPPER')"), 'Edge Function should use a server-side invite hash pepper.');
   assert.ok(source.includes("{ name: 'HMAC', hash: 'SHA-256' }"), 'Edge Function should HMAC invite codes.');
   assert.ok(source.includes(".eq('code_hash', codeHash)"), 'Invite redemption should query by server-computed hash.');
@@ -288,6 +345,12 @@ async function main() {
       source.includes("NOTIFY pgrst, 'reload schema'"),
     'Edge Function should return backend_unavailable guidance for missing migrations/helpers or stale schema cache.',
   );
+  assert.ok(
+    source.includes('expeditionBadgeTitle') &&
+      source.includes('expedition_badge_title') &&
+      source.includes('sanitizeText(body.expeditionBadgeTitle'),
+    'Convoy membership Edge Function should snapshot the submitted Expedition badge title on joined members.',
+  );
 
   const serviceSource = fs.readFileSync(servicePath, 'utf8');
   assert.ok(!serviceSource.includes('convois'), 'Convoy service must never query the misspelled public.convois table.');
@@ -316,6 +379,12 @@ async function main() {
       serviceSource.includes('response } = await client.functions.invoke') &&
       serviceSource.includes('data ?? await readFunctionErrorBody(error, response)'),
     'Convoy membership service should recover structured Edge Function error bodies from non-2xx Supabase responses.',
+  );
+  assert.ok(
+    serviceSource.includes('leaderExpeditionBadgeTitle') &&
+      serviceSource.includes('expeditionBadgeTitle') &&
+      serviceSource.includes('expedition_badge_title'),
+    'Convoy membership service should carry Expedition badge title snapshots for leader and join flows.',
   );
 
   const supabaseSource = fs.readFileSync(supabaseClientPath, 'utf8');

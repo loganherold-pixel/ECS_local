@@ -57,6 +57,11 @@ assert(
   'Navigate must provide a friendly empty state when Explorer routes lack geometry.',
 );
 assert(
+  navigate.includes('loaded from Hidden Gems, Trail Packs, Favorites, and ECS Route Ideas.') &&
+    !navigate.includes('loaded from Hidden Gems, Popular Trails, and ECS Route Ideas.'),
+  'Navigate Explore Routes status copy should match the active Explorer route buckets.',
+);
+assert(
   navigate.includes('fitMapToExploreRouteSegments'),
   'Enabling Explore Routes should fit the map to route lines when geometry exists.',
 );
@@ -133,12 +138,13 @@ assert(
     discover.includes('Show Routes on Map') &&
     discover.includes('exploreMapPreviewRouteCounts') &&
     discover.includes('Hidden Gems') &&
-    discover.includes('Popular Trails') &&
     discover.includes('Trail Packs') &&
     discover.includes('ECS Ideas') &&
     discover.includes('Suggested Trailheads') &&
+    !discover.includes("label: 'Popular Trails'") &&
+    !discover.includes('popularTrailRoutes: exploreMapPreviewRouteSets.popularTrailRoutes') &&
     discover.includes('Tap a route line on the Navigate map to review details, then start guidance from that one route.'),
-  'Explorer route map preview should summarize the filtered trailhead universe and explain the tap-to-select flow.',
+  'Explorer route map preview should summarize Hidden Gems, Trail Packs, Favorites, and ECS Ideas without the Popular Trails container.',
 );
 assert(
   discover.includes('exploreSuggestedRouteOptions') &&

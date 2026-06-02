@@ -80,6 +80,22 @@ for (const serviceCall of [
   assert.ok(screen.includes(serviceCall), `Convoy credentials UI should call ${serviceCall}.`);
 }
 
+assert.ok(
+  screen.includes('dispatchProfileStore.subscribe') &&
+    screen.includes('profile.callsign') &&
+    screen.includes('setLeaderCallsign') &&
+    screen.includes('setJoinCallsign'),
+  'Convoy credentials UI should prefill convoy callsign fields from the saved Dispatch profile callsign.',
+);
+
+assert.ok(
+  screen.includes('getCurrentExpeditionBadgeTitle') &&
+    screen.includes('setExpeditionBadgeTitle') &&
+    screen.includes('leaderExpeditionBadgeTitle: expeditionBadgeTitle') &&
+    screen.includes('expeditionBadgeTitle,'),
+  'Convoy credentials UI should snapshot the current Expedition badge title into leader and join membership requests.',
+);
+
 for (const validationCopy of [
   'Invite code is invalid. Check the code and ask the convoy leader for a fresh invite if needed.',
   'Invite expired. Ask the convoy leader for a new code.',
@@ -110,7 +126,7 @@ assert.ok(
 assert.ok(
   screen.includes('accessibilityLabel="Back to dispatch"') &&
     screen.includes('<Text style={styles.backButtonText}>Back</Text>') &&
-    screen.indexOf('<View style={styles.headerCopy}>') < screen.indexOf('<TouchableOpacity\n            style={styles.backButton}'),
+    screen.indexOf('<View style={styles.headerCopy}>') < screen.search(/<TouchableOpacity\s+style=\{styles\.backButton\}/),
   'Convoy credentials UI should place a labeled Back button on the top right of the header.',
 );
 

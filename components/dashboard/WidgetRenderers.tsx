@@ -731,12 +731,18 @@ function formatAlternateFluidValue(consumables: ConsumablesState): string | null
   return `${label} ${current.toFixed(1)} ${unit}`;
 }
 
+function formatUtilitySensorDepth(state: ECSUtilitySensorResourceState | null, label: string): string | null {
+  if (!state || typeof state.levelDistanceMm !== 'number' || !Number.isFinite(state.levelDistanceMm)) return null;
+  return `${label} depth ${(state.levelDistanceMm / 10).toFixed(1)} cm`;
+}
+
 function formatAlternateFluidSensorValue(
   consumables: ConsumablesState,
   state: ECSUtilitySensorResourceState | null,
 ): string | null {
-  if (!state || state.levelPercent == null) return null;
   const label = consumables.alternate_fluid_label?.trim() || 'Propane';
+  if (!state) return null;
+  if (state.levelPercent == null) return formatUtilitySensorDepth(state, label);
   const unit = consumables.alternate_fluid_unit?.trim() || '%';
   const capacity = consumables.alternate_fluid_capacity;
   if (unit === '%' || capacity == null || !Number.isFinite(capacity) || capacity <= 0) {
@@ -3909,13 +3915,14 @@ function AttitudeCommandPanel({
         ? { label: 'READY', tone }
         : tone === 'attention' || tone === 'warning' || tone === 'degraded' || tone === 'stale'
           ? { label: 'WATCH', tone }
-          : tone === 'critical'
-            ? { label: 'ALERT', tone }
-            : null;
+        : tone === 'critical'
+          ? { label: 'ALERT', tone }
+          : null;
+  const suppressCompactPanelChrome = expanded && detailMode;
   const content = (
     <ECSInstrumentPanel
       title={undefined}
-      header={(
+      header={suppressCompactPanelChrome ? null : (
         <View
           style={[
             attitudeCommandS.commandPanelHeader,
@@ -4000,19 +4007,23 @@ function AttitudeCommandPanel({
         expanded && attitudeCommandS.expandedPanelContent,
         isSunlightPanel && attitudeCommandS.sunPanelContent,
         expanded && isSunlightPanel && attitudeCommandS.sunPanelContentExpanded,
+        expanded && detailMode && isSunlightPanel && attitudeCommandS.sunPanelContentDetailOnly,
         isWeatherPanel && attitudeCommandS.weatherPanelContent,
         expanded && isWeatherPanel && attitudeCommandS.weatherPanelContentExpanded,
+        expanded && detailMode && isWeatherPanel && attitudeCommandS.weatherPanelContentDetailOnly,
         isVehiclePanel && attitudeCommandS.vehiclePanelContent,
         expanded && isVehiclePanel && attitudeCommandS.vehiclePanelContentExpanded,
+        expanded && detailMode && isVehiclePanel && attitudeCommandS.vehiclePanelContentDetailOnly,
         isRoutePanel && attitudeCommandS.routePanelContent,
         expanded && isRoutePanel && attitudeCommandS.routePanelContentExpanded,
         isPowerPanel && attitudeCommandS.powerPanelContent,
         expanded && isPowerPanel && attitudeCommandS.powerPanelContentExpanded,
+        expanded && detailMode && isPowerPanel && attitudeCommandS.powerPanelContentDetailOnly,
         align === 'center' && attitudeCommandS.panelContentCenter,
         align === 'right' && attitudeCommandS.panelContentRight,
         detailMode && attitudeCommandS.panelContentDetailMode,
       ]}>
-        {isSunlightPanel ? (
+        {isSunlightPanel && !suppressCompactPanelChrome ? (
           <View pointerEvents="none" style={attitudeCommandS.sunlightBottomReadout}>
             <View style={attitudeCommandS.sunlightRemainingBlock}>
               <Text style={attitudeCommandS.sunlightBottomLabel} numberOfLines={1}>
@@ -4040,7 +4051,7 @@ function AttitudeCommandPanel({
               </Text>
             </View>
           </View>
-        ) : !isVehiclePanel && !isPowerPanel && !isRoutePanel ? (
+        ) : !suppressCompactPanelChrome && !isVehiclePanel && !isPowerPanel && !isRoutePanel ? (
           <Text
             style={[
               attitudeCommandS.panelTitle,
@@ -4056,7 +4067,7 @@ function AttitudeCommandPanel({
             {title}
           </Text>
         ) : null}
-        {detail && !isSunlightPanel && !isVehiclePanel && !isPowerPanel && !isRoutePanel ? (
+        {detail && !suppressCompactPanelChrome && !isSunlightPanel && !isVehiclePanel && !isPowerPanel && !isRoutePanel ? (
           <Text
             style={[
               attitudeCommandS.panelDetail,
@@ -4627,6 +4638,12 @@ function VehicleCommandExpandedView({
   const livePropanePercent = utilitySensorResources.propane?.status === 'live'
     ? utilitySensorResources.propane.levelPercent
     : null;
+  const liveWaterDepth = utilitySensorResources.water?.status === 'live'
+    ? formatUtilitySensorDepth(utilitySensorResources.water, 'Water')
+    : null;
+  const livePropaneDepth = utilitySensorResources.propane?.status === 'live'
+    ? formatUtilitySensorDepth(utilitySensorResources.propane, 'Propane / butane')
+    : null;
   const liveFuelGallons = resolveVehicleCommandLiveFuelGallons(activeVehicleContext, vehicleTelemetry);
   const liveEngineLoad = snapshot.engineLoadPct ?? snapshot.engineLoadPercent ?? null;
   const liveEngineMetrics = liveObd
@@ -4667,14 +4684,26 @@ function VehicleCommandExpandedView({
           value: `${liveWaterGallons.toFixed(1)} gal`,
           tone: 'live' as WidgetTone,
         }
-      : null,
+      : liveWaterDepth != null
+        ? {
+            label: 'Water sensor',
+            value: liveWaterDepth.replace(/^Water\s+/, ''),
+            tone: 'live' as WidgetTone,
+          }
+        : null,
     livePropanePercent != null
       ? {
           label: 'Propane / butane',
           value: `${Math.round(livePropanePercent)}%`,
           tone: 'live' as WidgetTone,
         }
-      : null,
+      : livePropaneDepth != null
+        ? {
+            label: 'Propane / butane',
+            value: livePropaneDepth.replace(/^Propane \/ butane\s+/, ''),
+            tone: 'live' as WidgetTone,
+          }
+        : null,
     liveFuelGallons != null
       ? {
           label: 'Fuel gallons',
@@ -4707,35 +4736,39 @@ function VehicleCommandExpandedView({
         </View>
       </View>
 
-      {liveEngineMetrics.length > 0 ? (
-        <View style={attitudeCommandS.vehicleLiveEngineGrid}>
-          {liveEngineMetrics.map((metric) => (
-            <VehicleCommandLiveMetric
-              key={metric.label}
-              label={metric.label}
-              value={metric.value}
-              tone={metric.tone}
-              featured={metric.featured}
-            />
-          ))}
-        </View>
-      ) : null}
+      {liveEngineMetrics.length > 0 || liveLiquidMetrics.length > 0 ? (
+        <View style={attitudeCommandS.vehicleLiveTelemetryBody}>
+          {liveEngineMetrics.length > 0 ? (
+            <View style={attitudeCommandS.vehicleLiveEngineGrid}>
+              {liveEngineMetrics.map((metric) => (
+                <VehicleCommandLiveMetric
+                  key={metric.label}
+                  label={metric.label}
+                  value={metric.value}
+                  tone={metric.tone}
+                  featured={metric.featured}
+                />
+              ))}
+            </View>
+          ) : null}
 
-      {liveLiquidMetrics.length > 0 ? (
-        <View style={attitudeCommandS.vehicleLiveLiquidSection}>
-          <Text style={attitudeCommandS.vehicleLiveSectionTitle} numberOfLines={1}>
-            Liquid reads
-          </Text>
-          <View style={attitudeCommandS.vehicleLiveLiquidGrid}>
-            {liveLiquidMetrics.map((metric) => (
-              <VehicleCommandLiveMetric
-                key={metric.label}
-                label={metric.label}
-                value={metric.value}
-                tone={metric.tone}
-              />
-            ))}
-          </View>
+          {liveLiquidMetrics.length > 0 ? (
+            <View style={attitudeCommandS.vehicleLiveLiquidSection}>
+              <Text style={attitudeCommandS.vehicleLiveSectionTitle} numberOfLines={1}>
+                Liquid reads
+              </Text>
+              <View style={attitudeCommandS.vehicleLiveLiquidGrid}>
+                {liveLiquidMetrics.map((metric) => (
+                  <VehicleCommandLiveMetric
+                    key={metric.label}
+                    label={metric.label}
+                    value={metric.value}
+                    tone={metric.tone}
+                  />
+                ))}
+              </View>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -5250,38 +5283,6 @@ function resolveAttitudePowerUnavailableMessage(
   return 'Power monitor unavailable. ECS cannot read live power telemetry from the configured source.';
 }
 
-function formatAttitudePowerDeviceLine(device: AttitudePowerDevice): string {
-  const parts = [
-    device.deviceName || device.providerDisplayName || 'Power source',
-    device.role,
-    device.connectionState !== 'connected' ? device.connectionState : null,
-    device.isStale ? 'stale' : null,
-  ].filter(Boolean);
-  return parts.join(' | ');
-}
-
-function resolveAttitudePowerSources(
-  power: ReturnType<typeof useUnifiedPowerDevices>,
-  summary: AttitudePowerSummary,
-): string {
-  const liveSources = power.devices.filter((device) => device.connectionState === 'connected' && !device.isStale);
-  if (liveSources.length > 0) {
-    return liveSources.map(formatAttitudePowerDeviceLine).join('; ');
-  }
-  if (power.isAnyReconnecting) return 'Waiting for telemetry';
-  if (summary.primaryDevice) return formatAttitudePowerDeviceLine(summary.primaryDevice);
-  return 'No live power source connected';
-}
-
-function resolveAttitudePowerLoads(power: ReturnType<typeof useUnifiedPowerDevices>, summary: AttitudePowerSummary): string {
-  if (!summary.isLive) return 'Power monitor unavailable';
-  const drawingDevices = power.devices.filter((device) => (device.outputWatts ?? 0) > 0 && !device.isStale);
-  if (drawingDevices.length === 0) return (summary.outputWatts ?? 0) > 0 ? `${Math.round(summary.outputWatts ?? 0)}W load` : 'No connected loads reporting draw';
-  return drawingDevices
-    .map((device) => `${device.deviceName || device.providerDisplayName || 'Power load'} ${formatAttitudePowerWatts(device.outputWatts, 'output')}`)
-    .join('; ');
-}
-
 function addCommandPowerFlowRow(rows: CommandPowerFlowRow[], label: string, value: number | null, direction: 'input' | 'output'): void {
   if (value == null || !Number.isFinite(value) || value <= 0) return;
   rows.push({
@@ -5540,6 +5541,8 @@ function getPowerMonitorDensity(deviceCount: number): 'normal' | 'compact' | 'de
   return 'normal';
 }
 
+const POWER_MONITOR_SOURCE_SCROLL_THRESHOLD = 4;
+
 function PowerMonitorTopCompartment({
   label,
   value,
@@ -5674,14 +5677,10 @@ function AttitudeCommandPowerDeviceDetail({
   power,
   summary,
   activeVehicleContext,
-  sources,
-  loads,
 }: {
   power: ReturnType<typeof useUnifiedPowerDevices>;
   summary: AttitudePowerSummary;
   activeVehicleContext: ReturnType<typeof getActiveVehicleContext>;
-  sources: string;
-  loads: string;
 }) {
   const configuredBatteryWh = activeVehicleContext.resourceProfile.batteryUsableWh ?? null;
   const fallbackRuntimeMin = configuredBatteryWh != null && configuredBatteryWh > 0 ? Math.round((configuredBatteryWh / 50) * 60) : null;
@@ -5704,6 +5703,7 @@ function AttitudeCommandPowerDeviceDetail({
   const solarSourceLabel = solarDevices.length > 0
     ? solarDevices.map(getPowerMonitorDeviceName).slice(0, 2).join(', ')
     : 'No solar source';
+  const shouldScrollSources = activeDevices.length > POWER_MONITOR_SOURCE_SCROLL_THRESHOLD;
 
   return (
     <View style={attitudeCommandS.powerMonitorFixedDetailSurface}>
@@ -5725,13 +5725,11 @@ function AttitudeCommandPowerDeviceDetail({
         <PowerMonitorTopCompartment
           label="Input"
           value={formatAttitudePowerWatts(summary.canDisplayTelemetryValues ? summary.inputWatts : null, 'input')}
-          detail={sources}
           tone={summary.inputWatts != null && summary.inputWatts > 0 ? 'good' : 'neutral'}
         />
         <PowerMonitorTopCompartment
           label="Output"
           value={formatAttitudePowerWatts(summary.canDisplayTelemetryValues ? summary.outputWatts : null, 'output')}
-          detail={loads}
           tone={summary.outputWatts != null && summary.outputWatts > 0 ? 'critical' : 'neutral'}
           runtime={runtimeText}
         />
@@ -5746,14 +5744,28 @@ function AttitudeCommandPowerDeviceDetail({
             {activeDevices.length} active | {sourceState}
           </Text>
         </View>
-        <View style={attitudeCommandS.powerMonitorSourceRows}>
-          {activeDevices.length > 0 ? activeDevices.map((device) => (
-            <PowerMonitorSourceTableRow
-              key={device.deviceId}
-              device={device}
-              density={density}
-            />
-          )) : (
+        {activeDevices.length > 0 ? (
+          <ScrollView
+            style={[
+              attitudeCommandS.powerMonitorSourceRowsScroll,
+              shouldScrollSources && attitudeCommandS.powerMonitorSourceRowsScrollActive,
+            ]}
+            contentContainerStyle={attitudeCommandS.powerMonitorSourceRowsContent}
+            scrollEnabled={activeDevices.length > POWER_MONITOR_SOURCE_SCROLL_THRESHOLD}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={shouldScrollSources}
+            overScrollMode="never"
+          >
+            {activeDevices.map((device) => (
+              <PowerMonitorSourceTableRow
+                key={device.deviceId}
+                device={device}
+                density={density}
+              />
+            ))}
+          </ScrollView>
+        ) : (
+          <View style={attitudeCommandS.powerMonitorSourceRows}>
             <View style={attitudeCommandS.powerMonitorEmptySources}>
               <Text style={attitudeCommandS.powerMonitorEmptyTitle} numberOfLines={1}>
                 No active power sources
@@ -5762,8 +5774,8 @@ function AttitudeCommandPowerDeviceDetail({
                 Connected, live sources will appear here with net watt direction.
               </Text>
             </View>
-          )}
-        </View>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -6525,8 +6537,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
   const powerVisibleInputWatts = powerSummary.canDisplayTelemetryValues ? powerSummary.inputWatts : null;
   const powerVisibleOutputWatts = powerSummary.canDisplayTelemetryValues ? powerSummary.outputWatts : null;
   const powerVisibleSolarWatts = powerSummary.canDisplayTelemetryValues ? powerSummary.solarWatts : null;
-  const powerSources = resolveAttitudePowerSources(power, powerSummary);
-  const powerLoads = resolveAttitudePowerLoads(power, powerSummary);
   const powerNetWatts =
     powerVisibleInputWatts != null || powerVisibleOutputWatts != null
       ? (powerVisibleInputWatts ?? 0) - (powerVisibleOutputWatts ?? 0)
@@ -6689,17 +6699,19 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             detailMode={mode === 'detail'}
             weatherVisual={weatherVisual}
           >
-            <View pointerEvents="none" style={[attitudeCommandS.weatherMetricStrip, expanded && attitudeCommandS.weatherMetricStripExpanded]}>
-              <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
-                {weatherVisual.feelsLike}
-              </Text>
-              <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
-                {weatherVisual.wind}
-              </Text>
-              <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
-                {weatherVisual.humidity}
-              </Text>
-            </View>
+            {!(expanded && detailMode) ? (
+              <View pointerEvents="none" style={[attitudeCommandS.weatherMetricStrip, expanded && attitudeCommandS.weatherMetricStripExpanded]}>
+                <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
+                  {weatherVisual.feelsLike}
+                </Text>
+                <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
+                  {weatherVisual.wind}
+                </Text>
+                <Text style={[attitudeCommandS.weatherMetricText, expanded && attitudeCommandS.weatherMetricTextExpanded]} numberOfLines={1}>
+                  {weatherVisual.humidity}
+                </Text>
+              </View>
+            ) : null}
             {expanded && detailMode ? (
               <AttitudeCommandWeatherDetail
                 snapshot={snapshot}
@@ -6869,8 +6881,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                 power={power}
                 summary={powerSummary}
                 activeVehicleContext={activeVehicleContext}
-                sources={powerSources}
-                loads={powerLoads}
               />
             ) : (
               <>
@@ -8018,6 +8028,11 @@ const attitudeCommandS = StyleSheet.create({
   sunPanelContentExpanded: {
     paddingBottom: 2,
   },
+  sunPanelContentDetailOnly: {
+    justifyContent: 'flex-start',
+    paddingBottom: 0,
+    gap: 0,
+  },
   vehiclePanelContent: {
     flex: 1,
     minHeight: 0,
@@ -8029,6 +8044,12 @@ const attitudeCommandS = StyleSheet.create({
   vehiclePanelContentExpanded: {
     paddingTop: 4,
   },
+  vehiclePanelContentDetailOnly: {
+    justifyContent: 'flex-start',
+    paddingTop: 0,
+    paddingBottom: 0,
+    gap: 0,
+  },
   weatherPanelContent: {
     flex: 1,
     minHeight: 0,
@@ -8037,6 +8058,11 @@ const attitudeCommandS = StyleSheet.create({
   },
   weatherPanelContentExpanded: {
     paddingBottom: 28,
+  },
+  weatherPanelContentDetailOnly: {
+    justifyContent: 'flex-start',
+    paddingBottom: 0,
+    gap: 0,
   },
   routePanelContent: {
     flex: 1,
@@ -8055,6 +8081,12 @@ const attitudeCommandS = StyleSheet.create({
   },
   powerPanelContentExpanded: {
     paddingBottom: 28,
+  },
+  powerPanelContentDetailOnly: {
+    justifyContent: 'flex-start',
+    alignItems: 'stretch',
+    paddingBottom: 0,
+    gap: 0,
   },
   sunlightTimeReadout: {
     maxWidth: '100%',
@@ -8290,14 +8322,14 @@ const attitudeCommandS = StyleSheet.create({
     alignSelf: 'stretch',
     flex: 1,
     minHeight: 0,
-    gap: 6,
+    gap: 4,
   },
   vehicleLiveHeader: {
-    minHeight: 28,
+    minHeight: 23,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: 8,
   },
   vehicleLiveHeaderCopy: {
     flex: 1,
@@ -8305,101 +8337,111 @@ const attitudeCommandS = StyleSheet.create({
   },
   vehicleLiveEyebrow: {
     color: 'rgba(230, 237, 243, 0.48)',
-    fontSize: 7.4,
-    lineHeight: 9,
+    fontSize: 6.8,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 1,
+    letterSpacing: 0.75,
   },
   vehicleLiveTitle: {
     color: TACTICAL.text,
-    fontSize: 14,
-    lineHeight: 16,
+    fontSize: 12.8,
+    lineHeight: 15,
     fontWeight: '900',
   },
   vehicleLiveSourcePill: {
     flexShrink: 0,
-    maxWidth: 78,
-    minHeight: 22,
-    borderRadius: 11,
+    maxWidth: 68,
+    minHeight: 19,
+    borderRadius: 10,
     borderWidth: 1,
     justifyContent: 'center',
     backgroundColor: 'rgba(3, 7, 10, 0.72)',
-    paddingHorizontal: 8,
+    paddingHorizontal: 7,
   },
   vehicleLiveSourcePillText: {
     color: 'rgba(230, 237, 243, 0.78)',
-    fontSize: 7.4,
-    lineHeight: 9,
+    fontSize: 6.7,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.8,
+    letterSpacing: 0.45,
     textAlign: 'center',
     textTransform: 'uppercase',
   },
+  vehicleLiveTelemetryBody: {
+    flex: 1,
+    minHeight: 0,
+    justifyContent: 'space-between',
+    gap: 4,
+  },
   vehicleLiveEngineGrid: {
+    flexShrink: 1,
+    minHeight: 0,
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'stretch',
-    gap: 6,
+    alignContent: 'stretch',
+    gap: 4,
   },
   vehicleLiveMetricCard: {
     width: '31%',
     minWidth: 0,
-    minHeight: 31,
+    minHeight: 25,
     flexGrow: 1,
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 8,
+    borderRadius: 7,
     backgroundColor: 'rgba(8,12,16,0.62)',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    gap: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    gap: 1,
   },
   vehicleLiveMetricCardFeatured: {
-    minHeight: 36,
+    minHeight: 28,
     borderColor: 'rgba(247, 201, 104, 0.24)',
     backgroundColor: 'rgba(3, 7, 10, 0.68)',
   },
   vehicleLiveMetricLabel: {
     color: TACTICAL.textMuted,
-    fontSize: 7.1,
-    lineHeight: 9,
+    fontSize: 6.1,
+    lineHeight: 7,
     fontWeight: '900',
-    letterSpacing: 0.7,
+    letterSpacing: 0.35,
     textTransform: 'uppercase',
   },
   vehicleLiveMetricValue: {
     color: TACTICAL.text,
-    fontSize: 10.6,
-    lineHeight: 12,
+    fontSize: 9.4,
+    lineHeight: 11,
     fontWeight: '900',
   },
   vehicleLiveMetricValueFeatured: {
-    fontSize: 13.5,
-    lineHeight: 16,
+    fontSize: 11.8,
+    lineHeight: 14,
   },
   vehicleLiveLiquidSection: {
     flexShrink: 0,
-    gap: 4,
+    gap: 3,
   },
   vehicleLiveSectionTitle: {
     color: 'rgba(230, 237, 243, 0.68)',
-    fontSize: 7.5,
-    lineHeight: 9,
+    fontSize: 6.5,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.8,
+    letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
   vehicleLiveLiquidGrid: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    gap: 6,
+    gap: 4,
   },
   vehicleLiveRollDock: {
     position: 'relative',
     alignSelf: 'stretch',
-    height: 64,
-    marginTop: 'auto',
+    height: 54,
+    flexShrink: 0,
+    marginTop: 1,
     overflow: 'hidden',
   },
   vehicleCommandSection: {
@@ -8542,12 +8584,14 @@ const attitudeCommandS = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: 'transparent',
   },
-  terrainRiskReferenceReadout: {
+  terrainRiskReferenceBriefButton: {
     position: 'absolute',
     left: 8,
     right: 8,
     bottom: 7,
     zIndex: 6,
+  },
+  terrainRiskReferenceReadout: {
     borderRadius: 9,
     borderWidth: 1,
     borderColor: 'rgba(242, 194, 77, 0.28)',
@@ -8889,14 +8933,14 @@ const attitudeCommandS = StyleSheet.create({
     alignSelf: 'stretch',
     flex: 1,
     minHeight: 0,
-    gap: 8,
+    gap: 5,
   },
   sunlightDetailHeader: {
-    minHeight: 34,
+    minHeight: 26,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: 8,
   },
   sunlightDetailHeaderCopy: {
     flex: 1,
@@ -8904,61 +8948,61 @@ const attitudeCommandS = StyleSheet.create({
   },
   sunlightDetailEyebrow: {
     color: 'rgba(230, 237, 243, 0.48)',
-    fontSize: 7.5,
-    lineHeight: 9,
+    fontSize: 7,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 1,
+    letterSpacing: 0.8,
   },
   sunlightDetailTitle: {
     color: TACTICAL.text,
-    fontSize: 15,
-    lineHeight: 18,
+    fontSize: 13.5,
+    lineHeight: 16,
     fontWeight: '900',
   },
   sunlightSourcePill: {
     flexShrink: 0,
-    maxWidth: 98,
-    minHeight: 24,
-    borderRadius: 12,
+    maxWidth: 86,
+    minHeight: 20,
+    borderRadius: 10,
     borderWidth: 1,
     justifyContent: 'center',
     backgroundColor: 'rgba(3, 7, 10, 0.72)',
-    paddingHorizontal: 8,
+    paddingHorizontal: 7,
   },
   sunlightSourcePillText: {
     color: 'rgba(230, 237, 243, 0.76)',
-    fontSize: 7.5,
-    lineHeight: 9,
+    fontSize: 7,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.7,
+    letterSpacing: 0.5,
     textAlign: 'center',
     textTransform: 'uppercase',
   },
   sunlightPrimaryMetric: {
-    minHeight: 64,
+    minHeight: 46,
     borderWidth: 1,
     borderColor: 'rgba(247, 201, 104, 0.26)',
-    borderRadius: 10,
+    borderRadius: 8,
     justifyContent: 'center',
     backgroundColor: 'rgba(3, 7, 10, 0.66)',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   sunlightPrimaryValue: {
     marginTop: 1,
-    fontSize: 24,
-    lineHeight: 27,
+    fontSize: 20,
+    lineHeight: 22,
     fontWeight: '900',
-    letterSpacing: 0.2,
+    letterSpacing: 0,
     includeFontPadding: false,
   },
   sunlightPrimarySubtext: {
-    marginTop: 2,
+    marginTop: 1,
     color: 'rgba(230, 237, 243, 0.58)',
-    fontSize: 8,
-    lineHeight: 10,
+    fontSize: 7,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.6,
+    letterSpacing: 0.45,
     textTransform: 'uppercase',
   },
   sunlightMetricGrid: {
@@ -8966,53 +9010,54 @@ const attitudeCommandS = StyleSheet.create({
     minHeight: 0,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 7,
+    alignContent: 'stretch',
+    gap: 5,
   },
   sunlightMetricCard: {
-    width: '48%',
+    width: '31.2%',
     minWidth: 0,
-    minHeight: 40,
+    minHeight: 32,
     flexGrow: 1,
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 8,
+    borderRadius: 7,
     backgroundColor: 'rgba(8,12,16,0.62)',
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+    gap: 2,
   },
   sunlightMetricLabel: {
     color: TACTICAL.textMuted,
-    fontSize: 7.3,
-    lineHeight: 9,
+    fontSize: 6.3,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.8,
+    letterSpacing: 0.45,
     textTransform: 'uppercase',
   },
   sunlightMetricValue: {
     color: TACTICAL.text,
-    fontSize: 12,
-    lineHeight: 14,
+    fontSize: 10,
+    lineHeight: 12,
     fontWeight: '900',
   },
   sunlightDetailFooter: {
-    minHeight: 24,
+    minHeight: 18,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     borderTopWidth: 1,
     borderColor: 'rgba(245, 199, 73, 0.16)',
-    paddingTop: 5,
+    paddingTop: 4,
   },
   sunlightDetailFooterText: {
     flex: 1,
     minWidth: 0,
     color: 'rgba(230, 237, 243, 0.56)',
-    fontSize: 7.5,
-    lineHeight: 9,
+    fontSize: 6.6,
+    lineHeight: 8,
     fontWeight: '800',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
   sunlightDetailFooterRight: {
     textAlign: 'right',
@@ -9021,14 +9066,14 @@ const attitudeCommandS = StyleSheet.create({
     alignSelf: 'stretch',
     flex: 1,
     minHeight: 0,
-    gap: 6,
+    gap: 4,
   },
   weatherDetailHeader: {
-    minHeight: 30,
+    minHeight: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: 8,
   },
   weatherDetailHeaderCopy: {
     flex: 1,
@@ -9036,194 +9081,195 @@ const attitudeCommandS = StyleSheet.create({
   },
   weatherDetailEyebrow: {
     color: 'rgba(230, 237, 243, 0.48)',
-    fontSize: 7.4,
-    lineHeight: 9,
+    fontSize: 7,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 1,
+    letterSpacing: 0.8,
   },
   weatherDetailTitle: {
     color: TACTICAL.text,
-    fontSize: 14.5,
-    lineHeight: 17,
+    fontSize: 13.2,
+    lineHeight: 15,
     fontWeight: '900',
   },
   weatherSourcePill: {
     flexShrink: 0,
-    maxWidth: 92,
-    minHeight: 23,
-    borderRadius: 12,
+    maxWidth: 82,
+    minHeight: 20,
+    borderRadius: 10,
     borderWidth: 1,
     justifyContent: 'center',
     backgroundColor: 'rgba(3, 7, 10, 0.72)',
-    paddingHorizontal: 8,
+    paddingHorizontal: 7,
   },
   weatherSourcePillText: {
     color: 'rgba(230, 237, 243, 0.76)',
-    fontSize: 7.4,
-    lineHeight: 9,
+    fontSize: 6.8,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.7,
+    letterSpacing: 0.45,
     textAlign: 'center',
     textTransform: 'uppercase',
   },
   weatherCurrentMetricsBand: {
-    minHeight: 66,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'stretch',
-    gap: 7,
+    gap: 5,
   },
   weatherCurrentMetricsGrid: {
     flex: 1.5,
     minWidth: 0,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 6,
+    alignContent: 'stretch',
+    gap: 4,
   },
   weatherMetricCard: {
     width: '47%',
     minWidth: 0,
-    minHeight: 30,
+    minHeight: 24,
     flexGrow: 1,
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 8,
+    borderRadius: 7,
     backgroundColor: 'rgba(8,12,16,0.62)',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    gap: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    gap: 1,
   },
   weatherMetricCardFeatured: {
     width: undefined,
     flex: 0.86,
-    minHeight: 66,
+    minHeight: 52,
     borderColor: 'rgba(247, 201, 104, 0.26)',
     backgroundColor: 'rgba(3, 7, 10, 0.68)',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
   },
   weatherMetricCardLabel: {
     color: TACTICAL.textMuted,
-    fontSize: 7.1,
-    lineHeight: 9,
+    fontSize: 6.3,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.72,
+    letterSpacing: 0.45,
     textTransform: 'uppercase',
   },
   weatherMetricCardValue: {
     color: TACTICAL.text,
-    fontSize: 10.8,
-    lineHeight: 13,
+    fontSize: 9.2,
+    lineHeight: 11,
     fontWeight: '900',
   },
   weatherMetricCardValueFeatured: {
-    fontSize: 24,
-    lineHeight: 27,
+    fontSize: 19,
+    lineHeight: 21,
   },
   weatherForecastSection: {
     flexShrink: 1,
     minHeight: 0,
-    gap: 4,
+    gap: 3,
   },
   weatherForecastHeader: {
-    minHeight: 12,
+    minHeight: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: 6,
   },
   weatherForecastSectionTitle: {
     flex: 1,
     minWidth: 0,
     color: 'rgba(230, 237, 243, 0.72)',
-    fontSize: 7.6,
-    lineHeight: 9,
+    fontSize: 6.9,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.8,
+    letterSpacing: 0.55,
     textTransform: 'uppercase',
   },
   weatherForecastSectionMeta: {
     flexShrink: 0,
-    maxWidth: 72,
+    maxWidth: 64,
     color: 'rgba(230, 237, 243, 0.46)',
-    fontSize: 7.2,
-    lineHeight: 9,
+    fontSize: 6.6,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.55,
+    letterSpacing: 0.35,
     textTransform: 'uppercase',
     textAlign: 'right',
   },
   weatherForecastDeck: {
-    minHeight: 40,
+    minHeight: 32,
     flexDirection: 'row',
     alignItems: 'stretch',
-    gap: 6,
+    gap: 4,
   },
   weatherForecastCard: {
     flex: 1,
     minWidth: 0,
-    minHeight: 40,
+    minHeight: 32,
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 8,
+    borderRadius: 7,
     backgroundColor: 'rgba(3, 7, 10, 0.6)',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    gap: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    gap: 1,
   },
   weatherForecastUnavailableCard: {
     flex: 1,
-    minHeight: 40,
+    minHeight: 32,
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 8,
+    borderRadius: 7,
     backgroundColor: 'rgba(3, 7, 10, 0.52)',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 5,
   },
   weatherForecastDay: {
     color: TACTICAL.textMuted,
-    fontSize: 7.2,
-    lineHeight: 9,
+    fontSize: 6.4,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.7,
+    letterSpacing: 0.4,
     textTransform: 'uppercase',
   },
   weatherForecastValue: {
     color: TACTICAL.text,
-    fontSize: 9.3,
-    lineHeight: 11,
+    fontSize: 8.4,
+    lineHeight: 10,
     fontWeight: '900',
   },
   weatherDetailFooter: {
-    minHeight: 20,
+    minHeight: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     borderTopWidth: 1,
     borderColor: 'rgba(245, 199, 73, 0.16)',
-    paddingTop: 4,
+    paddingTop: 3,
   },
   weatherDetailFooterText: {
     flex: 1,
     minWidth: 0,
     color: 'rgba(230, 237, 243, 0.56)',
-    fontSize: 7.3,
-    lineHeight: 9,
+    fontSize: 6.4,
+    lineHeight: 8,
     fontWeight: '800',
-    letterSpacing: 0.3,
+    letterSpacing: 0.15,
   },
   weatherDetailFooterRight: {
     textAlign: 'right',
   },
   weatherAlertLine: {
     color: TACTICAL.amber,
-    fontSize: 7.5,
-    lineHeight: 9,
+    fontSize: 6.6,
+    lineHeight: 8,
     fontWeight: '900',
-    letterSpacing: 0.35,
+    letterSpacing: 0.2,
   },
   detailRow: {
     borderWidth: 1,
@@ -9379,9 +9425,20 @@ const attitudeCommandS = StyleSheet.create({
     flex: 1,
     minHeight: 0,
   },
-  powerMonitorSourceRow: {
+  powerMonitorSourceRowsScroll: {
     flex: 1,
     minHeight: 0,
+    alignSelf: 'stretch',
+  },
+  powerMonitorSourceRowsScrollActive: {
+    maxHeight: 128,
+  },
+  powerMonitorSourceRowsContent: {
+    paddingBottom: 0,
+  },
+  powerMonitorSourceRow: {
+    flexShrink: 0,
+    minHeight: 34,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
@@ -9392,10 +9449,12 @@ const attitudeCommandS = StyleSheet.create({
   },
   powerMonitorSourceRowCompact: {
     gap: 5,
+    minHeight: 30,
     paddingVertical: 3,
   },
   powerMonitorSourceRowDense: {
     gap: 4,
+    minHeight: 26,
     paddingVertical: 2,
   },
   powerMonitorSourceIdentity: {
@@ -13097,7 +13156,7 @@ function resolveAttitudeCommandExpansionGeometry(
       return { aspectRatio: 2.15, insetHorizontal: 11, insetVertical: 16 };
     case 'phone_portrait':
     default:
-      return { aspectRatio: 1.85, insetHorizontal: 10, insetVertical: 14 };
+      return { aspectRatio: 1.55, insetHorizontal: 10, insetVertical: 14 };
   }
 }
 
@@ -13172,24 +13231,36 @@ function AttitudeCommandTerrainRiskPreview({
             />
           </View>
           {expanded && detailMode && selectedReferenceEvent ? (
-            <View style={attitudeCommandS.terrainRiskReferenceReadout}>
-              <Text style={attitudeCommandS.terrainRiskReferenceEyebrow} numberOfLines={1}>
-                Why ECS flagged this point
-              </Text>
-              <Text style={attitudeCommandS.terrainRiskReferenceTitle} numberOfLines={1}>
-                {selectedReferenceEvent.title} | {selectedReferenceEvent.distanceAheadMiles.toFixed(1)} mi ahead
-              </Text>
-              <Text style={attitudeCommandS.terrainRiskReferenceMeta} numberOfLines={1}>
-                {[
-                  selectedReferenceEvent.gradePercent != null ? `${selectedReferenceEvent.gradePercent}% grade` : null,
-                  `${selectedReferenceEvent.elevationFeet.toLocaleString()} ft`,
-                  selectedReferenceEvent.weatherInfluence.summary,
-                ].filter(Boolean).join(' | ')}
-              </Text>
-              <Text style={attitudeCommandS.terrainRiskReferenceGuidance} numberOfLines={2}>
-                {selectedReferenceEvent.fieldGuidance[0]}
-              </Text>
-            </View>
+            <TouchableOpacity
+              activeOpacity={0.96}
+              accessibilityRole="button"
+              accessibilityLabel={`Close terrain intelligence brief. ${selectedReferenceEvent.banner.title}.`}
+              onPress={() => setSelectedReferenceEvent(null)}
+              style={attitudeCommandS.terrainRiskReferenceBriefButton}
+            >
+              <View style={attitudeCommandS.terrainRiskReferenceReadout}>
+                <Text style={attitudeCommandS.terrainRiskReferenceEyebrow} numberOfLines={1}>
+                  ECS INTELLIGENCE BRIEF
+                </Text>
+                <Text style={attitudeCommandS.terrainRiskReferenceTitle} numberOfLines={1}>
+                  {selectedReferenceEvent.banner.title}
+                </Text>
+                <Text style={attitudeCommandS.terrainRiskReferenceMeta} numberOfLines={1}>
+                  {selectedReferenceEvent.banner.detail || selectedReferenceEvent.detail}
+                </Text>
+                <Text style={attitudeCommandS.terrainRiskReferenceMeta} numberOfLines={1}>
+                  {[
+                    `Risk ${selectedReferenceEvent.riskScore}`,
+                    selectedReferenceEvent.gradePercent != null ? `${selectedReferenceEvent.gradePercent}% grade` : null,
+                    `${selectedReferenceEvent.elevationFeet.toLocaleString()} ft`,
+                    selectedReferenceEvent.weatherInfluence.summary,
+                  ].filter(Boolean).join(' | ')}
+                </Text>
+                <Text style={attitudeCommandS.terrainRiskReferenceGuidance} numberOfLines={3}>
+                  {selectedReferenceEvent.fieldGuidance.slice(0, 2).join(' ')}
+                </Text>
+              </View>
+            </TouchableOpacity>
           ) : null}
         </>
       ) : (
@@ -14313,7 +14384,7 @@ export function renderWidgetDetail(
     case 'vehicle-systems': return <VehicleTelemetryDetailView onClose={options?.onCloseDetail} />;
     case 'stability-index': return <StabilityIndexDetail data={data} options={options} />;
     case 'attitude-monitor': return <AttitudeMonitorDetail data={data} options={options} />;
-    case 'attitude-command': return <AttitudeCommandWidget data={data} options={options} />;
+    case 'attitude-command': return null;
     case 'mission-sustainment': return <MissionSustainmentDetail data={data} options={options} />;
     case 'operational-readiness': return <OperationalReadinessDetail data={data} options={options} />;
     case 'sustainability': return <ResourceStatusDetail data={data} />;

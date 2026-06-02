@@ -13,18 +13,16 @@ const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 assert(
   discover.includes('ROUTE_CATALOG_PRESET_SEARCH_AREAS') &&
     discover.includes('ROUTE_CATALOG_COVERAGE_AREAS') &&
-    discover.includes('ROUTE_CATALOG_CURATION_COVERAGE_LABELS') &&
-    discover.includes('buildManualRouteCatalogSearchArea') &&
-    discover.includes('getRouteCatalogCoverageSummary') &&
-    discover.includes('getRouteCatalogCoverageNotice') &&
-    discover.includes('ROUTE_CATALOG_VERIFIED_COVERAGE_LABELS') &&
-    discover.includes('routeCatalogManualSearchArea') &&
-    discover.includes('routeCatalogCoverageSummary') &&
-    discover.includes('routeCatalogCoverageNotice') &&
-    discover.includes('routeCatalogSearchAreaModalVisible') &&
-    discover.includes('routeCatalogSearchAreaKey') &&
-    discover.includes('setRouteCatalogSearchAreaKey'),
-  'Explore should expose preset and manual route catalog search areas.',
+    discover.includes('const routeCatalogSearchAreaKey: RouteCatalogPresetSearchAreaKey | null = null') &&
+    !discover.includes('buildManualRouteCatalogSearchArea') &&
+    !discover.includes('getRouteCatalogCoverageSummary') &&
+    !discover.includes('getRouteCatalogCoverageNotice') &&
+    !discover.includes('routeCatalogManualSearchArea') &&
+    !discover.includes('routeCatalogCoverageSummary') &&
+    !discover.includes('routeCatalogCoverageNotice') &&
+    !discover.includes('routeCatalogSearchAreaModalVisible') &&
+    !discover.includes('setRouteCatalogSearchAreaKey'),
+  'Explore should keep route source search area logic internal without exposing preset or manual catalog selectors.',
 );
 
 assert(
@@ -42,22 +40,25 @@ assert(
     discover.includes('if (!routeCatalogHasSearchArea) return;') &&
     discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
     discover.includes('routeCatalogHasSearchArea ? discoverableTrailPacks.filter(isPublicSuggestedTrailheadTrailPack) : []') &&
-    discover.includes('Trail Packs need GPS or a selected search area to filter verified routes by radius.'),
-  'Suggested Trailheads should require GPS or an explicit search area before showing radius-filtered catalog results.',
+    discover.includes('Trail Packs need GPS or an internal search area to filter verified routes by radius.'),
+  'Suggested Trailheads should require GPS or an internal search area before showing radius-filtered source results.',
 );
 
 assert(
-  discover.includes('testID="route-catalog-search-area-control"') &&
-    discover.includes('ROUTE CATALOG AREA') &&
-    discover.includes('TextInput') &&
-    discover.includes('Manual Center') &&
-    discover.includes('Apply Center') &&
-    discover.includes('VERIFIED COVERAGE') &&
-    discover.includes('IN CURATION') &&
-    discover.includes('No demo routes are used') &&
-    discover.includes('manual_search_center') &&
-    discover.includes('Suggested Trailheads only show verified catalog routes within the selected radius.'),
-  'Explore should show a compact search-area control with a manual CONUS center path.',
+  !discover.includes('testID="route-catalog-search-area-control"') &&
+    !discover.includes('<View style={s.routeCatalogSearchAreaCard}') &&
+    !discover.includes('ROUTE CATALOG AREA') &&
+    !discover.includes('Suggested Trailheads only show verified catalog routes within the selected radius.') &&
+    !discover.includes('Loading Route Catalog') &&
+    !discover.includes('Route Catalog Unavailable') &&
+    !discover.includes('verified catalog routes') &&
+    !discover.includes('current trail catalog') &&
+    discover.includes('Showing verified routes within') &&
+    discover.includes('Loading Trail Source') &&
+    discover.includes('Trail Source Unavailable') &&
+    discover.includes('routeCatalogEffectiveSearchArea') &&
+    discover.includes('routeCatalogHasSearchArea'),
+  'Explore should keep route-source search logic available while hiding route catalog controls and copy from the user-visible Explorer surface.',
 );
 
 console.log('Explore route catalog search-area checks passed');

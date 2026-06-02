@@ -18,6 +18,10 @@ export interface ECSUtilitySensorResourceState {
   source: 'sensor';
   status: ECSUtilitySensorResourceStatus;
   levelPercent: number | null;
+  levelDistanceMm: number | null;
+  temperatureCelsius: number | null;
+  batteryPercent: number | null;
+  readQuality: number | null;
   signalStrength: number | null;
   parserStatus: string | null;
   lastUpdated: number;
@@ -32,6 +36,10 @@ export interface ECSUtilitySensorResourceSnapshot {
 
 function hasFinitePercent(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+function hasFiniteMeasurement(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }
 
 function normalizedText(reading: ECSUtilitySensorTelemetryReading): string {
@@ -59,7 +67,7 @@ export function inferUtilitySensorResourceKind(
 
 function resolveSensorStatus(reading: ECSUtilitySensorTelemetryReading): ECSUtilitySensorResourceStatus {
   if (reading.quality === 'error') return 'error';
-  if (hasFinitePercent(reading.levelPercent)) return 'live';
+  if (hasFinitePercent(reading.levelPercent) || hasFiniteMeasurement(reading.levelDistanceMm)) return 'live';
   if (reading.linkState === 'connected' && reading.parserStatus === 'parser_pending') return 'parser_pending';
   if (
     reading.linkState === 'connected' &&
@@ -79,6 +87,7 @@ export function toUtilitySensorResourceState(
   const kind = inferUtilitySensorResourceKind(reading);
   if (!kind) return null;
   const levelPercent = hasFinitePercent(reading.levelPercent) ? reading.levelPercent : null;
+  const levelDistanceMm = hasFiniteMeasurement(reading.levelDistanceMm) ? reading.levelDistanceMm : null;
   return {
     kind,
     deviceId: reading.deviceId,
@@ -87,10 +96,14 @@ export function toUtilitySensorResourceState(
     source: 'sensor',
     status: resolveSensorStatus(reading),
     levelPercent,
+    levelDistanceMm,
+    temperatureCelsius: hasFiniteMeasurement(reading.temperatureCelsius) ? reading.temperatureCelsius : null,
+    batteryPercent: hasFinitePercent(reading.batteryPercent) ? reading.batteryPercent : null,
+    readQuality: hasFiniteMeasurement(reading.readQuality) ? reading.readQuality : null,
     signalStrength: reading.signalStrength,
     parserStatus: reading.parserStatus,
     lastUpdated: reading.lastUpdated,
-    canProvideLiveLevel: levelPercent != null,
+    canProvideLiveLevel: levelPercent != null || levelDistanceMm != null,
   };
 }
 

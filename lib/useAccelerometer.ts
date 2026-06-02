@@ -144,6 +144,7 @@ export function useAccelerometer(
   const calibrationOffset = useRef<AttitudeCalibrationOffsets>(resetAttitudeCalibrationOffsets());
   const latestRawAnglesRef = useRef<{ roll: number; pitch: number } | null>(null);
   const lastRecalibrationKeyRef = useRef<string | number | null>(recalibrationKey);
+  const pendingOrientationRecalibrationRef = useRef(false);
   const recalibrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const subscriptionRef = useRef<any>(null);
   const AccelerometerRef = useRef<any>(null);
@@ -254,6 +255,7 @@ export function useAccelerometer(
         clearTimeout(recalibrationTimerRef.current);
         recalibrationTimerRef.current = null;
       }
+      pendingOrientationRecalibrationRef.current = false;
       if (emitTimerRef.current) {
         clearTimeout(emitTimerRef.current);
         emitTimerRef.current = null;
@@ -291,11 +293,13 @@ export function useAccelerometer(
   useEffect(() => {
     if (!enabled) {
       lastRecalibrationKeyRef.current = recalibrationKey;
+      pendingOrientationRecalibrationRef.current = false;
       return;
     }
 
     if (lastRecalibrationKeyRef.current === recalibrationKey) return;
     lastRecalibrationKeyRef.current = recalibrationKey;
+    pendingOrientationRecalibrationRef.current = true;
 
     if (recalibrationTimerRef.current) {
       clearTimeout(recalibrationTimerRef.current);
@@ -303,6 +307,8 @@ export function useAccelerometer(
 
     recalibrationTimerRef.current = setTimeout(() => {
       recalibrationTimerRef.current = null;
+      if (!pendingOrientationRecalibrationRef.current) return;
+      pendingOrientationRecalibrationRef.current = false;
       recenterToLatestRawAngles(false);
     }, ORIENTATION_RECALIBRATION_DELAY_MS);
 
@@ -371,6 +377,16 @@ export function useAccelerometer(
             const rawAngles = computeVerticalMountAccelerometerAngles(data, mountOrientation);
             if (!rawAngles) return;
             latestRawAnglesRef.current = rawAngles;
+
+            if (pendingOrientationRecalibrationRef.current) {
+              pendingOrientationRecalibrationRef.current = false;
+              if (recalibrationTimerRef.current) {
+                clearTimeout(recalibrationTimerRef.current);
+                recalibrationTimerRef.current = null;
+              }
+              recenterToLatestRawAngles(false);
+              return;
+            }
 
             // Apply calibration offset
             const calibratedAngles = applyAttitudeCalibration(rawAngles.roll, rawAngles.pitch, calibrationOffset.current);
@@ -463,7 +479,7 @@ export function useAccelerometer(
         subscriptionRef.current = null;
       }
     };
-  }, [appState, emitAngles, enabled, mountOrientation, setActiveState, setAvailableState]);
+  }, [appState, emitAngles, enabled, mountOrientation, recenterToLatestRawAngles, setActiveState, setAvailableState]);
 
   // ── Sensor status label ──────────────────────────────────
   const sensorStatus: AccelerometerOutput['sensorStatus'] = !enabled

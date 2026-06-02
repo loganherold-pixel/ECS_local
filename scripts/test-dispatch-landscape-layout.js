@@ -12,6 +12,30 @@ const landscapeTopRowStyle = commandCenterSource.slice(
   commandCenterSource.indexOf('landscapeTopRow:'),
   commandCenterSource.indexOf('landscapeSetupRail:'),
 );
+const landscapeSummaryDockStyle = commandCenterSource.slice(
+  commandCenterSource.indexOf('landscapeSummaryDock:'),
+  commandCenterSource.indexOf('landscapeDockRevealButton:'),
+);
+const convoyTeamCardStyle = commandCenterSource.slice(
+  commandCenterSource.indexOf('convoyTeamCard:'),
+  commandCenterSource.indexOf('convoyTeamCardCompact:'),
+);
+const liveChipPrimaryStyle = commandCenterSource.slice(
+  commandCenterSource.indexOf('liveChipPrimary:'),
+  commandCenterSource.indexOf('liveChipSourceLive:'),
+);
+const liveChipSourceLiveStyle = commandCenterSource.slice(
+  commandCenterSource.indexOf('liveChipSourceLive:'),
+  commandCenterSource.indexOf('liveChipSourceCached:'),
+);
+const feedPanelStyle = commandCenterSource.slice(
+  commandCenterSource.indexOf('feedPanel:'),
+  commandCenterSource.indexOf('feedPanelLandscapeMap:'),
+);
+const feedHeaderStyle = commandCenterSource.slice(
+  commandCenterSource.indexOf('feedHeader:'),
+  commandCenterSource.indexOf('feedHeaderLandscape:'),
+);
 
 assert.ok(
   dispatchTabSource.includes('const isLandscape = width > height') &&
@@ -92,11 +116,14 @@ assert.ok(
     commandCenterSource.includes('<View style={styles.landscapeSummaryDock}>') &&
     landscapeTopRowStyle.includes('minHeight: 0') &&
     !landscapeTopRowStyle.includes('maxHeight: 148') &&
+    landscapeSummaryDockStyle.includes("alignSelf: 'stretch'") &&
+    !landscapeSummaryDockStyle.includes('maxHeight: 148') &&
+    !landscapeSummaryDockStyle.includes("overflow: 'hidden'") &&
     commandCenterSource.includes('feedPanelLandscapeMap') &&
     commandCenterSource.includes('marginTop: 3') &&
     commandCenterSource.includes("alignSelf: 'stretch'") &&
     commandCenterSource.includes('marginBottom: 0'),
-  'Dispatch landscape map panel should start immediately below Resources, Vehicle, and Sync while the summary rail is docked inside the top band.',
+  'Dispatch landscape summary rail should stretch down to the map surface without clipping its convoy command rows.',
 );
 
 assert.ok(
@@ -147,6 +174,33 @@ assert.ok(
     commandCenterSource.includes(": 'standby'") &&
     !commandCenterSource.includes("getSourceStateLabel(sourceState).toLowerCase()}</Text>"),
   'Dispatch command surface header should replace generic unavailable copy with convoy-aware status labels.',
+);
+
+assert.ok(
+  convoyTeamCardStyle.includes('borderColor: `${TACTICAL.amber}2E`') &&
+    convoyTeamCardStyle.includes('backgroundColor: `${TACTICAL.amber}12`') &&
+    !convoyTeamCardStyle.includes('shadowColor: TACTICAL.amber') &&
+    !convoyTeamCardStyle.includes('elevation: 1'),
+  'Dispatch convoy setup/team should match the Fleet readiness command translucent gold surface.',
+);
+
+assert.ok(
+  liveChipPrimaryStyle.includes('borderColor: `${TACTICAL.amber}2E`') &&
+    liveChipPrimaryStyle.includes('backgroundColor: `${TACTICAL.amber}12`') &&
+    liveChipSourceLiveStyle.includes('borderColor: `${TACTICAL.amber}2E`') &&
+    liveChipSourceLiveStyle.includes('backgroundColor: `${TACTICAL.amber}12`') &&
+    !liveChipSourceLiveStyle.includes('shadowColor: TACTICAL.amber') &&
+    !liveChipSourceLiveStyle.includes('shadowOpacity') &&
+    !liveChipSourceLiveStyle.includes('elevation:'),
+  'Dispatch active channel tiles should keep a thin gold border and wash without the thick gold glow overlay.',
+);
+
+assert.ok(
+  feedPanelStyle.includes('borderColor: ECS_SURFACE.border.selected') &&
+    feedPanelStyle.includes('backgroundColor: ECS_SURFACE.background.selected') &&
+    feedHeaderStyle.includes('borderBottomColor: ECS_SURFACE.border.selected') &&
+    feedHeaderStyle.includes('backgroundColor: ECS_SURFACE.background.selected'),
+  'Dispatch bottom Convoy Command container should use the Fleet vehicle-card selected gold surface.',
 );
 
 assert.ok(

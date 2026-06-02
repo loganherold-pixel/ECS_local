@@ -2234,6 +2234,34 @@ export default function WidgetGrid({
           width: p.width,
           height: p.height,
         };
+        const shouldOpenCommandBrief = !layoutMode && slot.widgetType === 'expedition-readiness';
+        const shouldOpenWidgetDetail =
+          !layoutMode &&
+          slot.widgetType !== 'attitude-command' &&
+          slot.widgetType !== 'expedition-readiness';
+        const widgetPlate = (
+          <WidgetPlateContent
+            slot={slot}
+            layoutMode={layoutMode}
+            isDropTarget={isDropTargetSlot}
+            isDragging={isDragging}
+            widgetData={widgetData}
+            compact={compact}
+            expanded={expanded}
+            isCompact={widgetIsCompact}
+            renderOptions={slotRenderOptions}
+            gridLayout={gridLayout}
+            onResizeWidget={onResizeWidget}
+            slotIndex={p.slotIndex}
+            placement={p}
+            isHighway={isHighway}
+            viewerOverrides={viewerOverrides}
+            isVeryShortHeight={isVeryShortHeight}
+            highwayWidgetPad={highwayWidgetPad}
+            screenWidth={windowWidth}
+            screenHeight={windowHeight}
+          />
+        );
 
 
         return (
@@ -2262,41 +2290,24 @@ export default function WidgetGrid({
             ) : (
               <>
                 <View style={{ flex: 1 }} {...(pr ? pr.panHandlers : {})}>
-                  <TouchableOpacity
-                    style={{ flex: 1 }}
-                    onPress={() => {
-                      if (!layoutMode && slot.widgetType === 'expedition-readiness') {
-                        onOpenCommandBrief?.();
-                        return;
-                      }
-                      if (!layoutMode) onWidgetPress(slot);
-                    }}
-                    activeOpacity={1}
-                    disabled={isDragging}
-                  >
-                    <WidgetPlateContent
-                      slot={slot}
-                      layoutMode={layoutMode}
-                      isDropTarget={isDropTargetSlot}
-                      isDragging={isDragging}
-                      widgetData={widgetData}
-                      compact={compact}
-                      expanded={expanded}
-                      isCompact={widgetIsCompact}
-                      renderOptions={slotRenderOptions}
-                      gridLayout={gridLayout}
-                      onResizeWidget={onResizeWidget}
-                      slotIndex={p.slotIndex}
-                      placement={p}
-                      isHighway={isHighway}
-                      viewerOverrides={viewerOverrides}
-                      isVeryShortHeight={isVeryShortHeight}
-                      highwayWidgetPad={highwayWidgetPad}
-                      screenWidth={windowWidth}
-                      screenHeight={windowHeight}
-                    />
-
-                  </TouchableOpacity>
+                  {shouldOpenWidgetDetail || shouldOpenCommandBrief ? (
+                    <TouchableOpacity
+                      style={{ flex: 1 }}
+                      onPress={() => {
+                        if (shouldOpenCommandBrief) {
+                          onOpenCommandBrief?.();
+                          return;
+                        }
+                        if (shouldOpenWidgetDetail) onWidgetPress(slot);
+                      }}
+                      activeOpacity={1}
+                      disabled={isDragging}
+                    >
+                      {widgetPlate}
+                    </TouchableOpacity>
+                  ) : (
+                    widgetPlate
+                  )}
                 </View>
 
                 {/* Remove button — rendered AFTER widget content so it's on top */}

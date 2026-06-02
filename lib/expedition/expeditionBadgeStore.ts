@@ -758,6 +758,12 @@ export async function getRecentBadgeUnlocks(limit = 5): Promise<ExpeditionBadge[
   return unlocked.slice(0, Math.max(0, limit));
 }
 
+export async function getCurrentExpeditionBadgeTitle(): Promise<string | null> {
+  const [badge] = await getRecentBadgeUnlocks(1);
+  const title = typeof badge?.title === 'string' ? badge.title.trim() : '';
+  return title || null;
+}
+
 function isNextProgressMilestone(
   definition: ExpeditionBadgeDefinition,
   context: BadgeEvaluationContext,

@@ -275,7 +275,7 @@ export function createSupabaseConvoyRealtimeBackend(client: any = supabase): Con
     async fetchMembers(convoyId) {
       const { data, error } = await client
         .from('convoy_members')
-        .select('id, convoy_id, user_id, vehicle_id, callsign, role, revoked_at')
+        .select('id, convoy_id, user_id, vehicle_id, callsign, display_name, expedition_badge_title, role, revoked_at')
         .eq('convoy_id', convoyId)
         .is('revoked_at', null);
 

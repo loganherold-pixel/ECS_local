@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import Svg, {
   Circle,
   Defs,
@@ -358,6 +358,10 @@ function buildCurrentPositionMarkerPath(point: ChartPoint): string {
   ].join(' ');
 }
 
+function toViewBoxPercent(value: number, total: number): `${number}%` {
+  return `${(value / total) * 100}%`;
+}
+
 export default function TerrainRiskSideProfile({
   profile,
   totalDistanceMiles,
@@ -413,10 +417,19 @@ export default function TerrainRiskSideProfile({
   const selectedReferenceLayout = selectedReferencePoint
     ? getReferenceCalloutLayout(selectedReferencePoint)
     : null;
+  const getReferenceEventForPoint = (point: ChartPoint): TerrainRiskReferenceEvent | null =>
+    referenceEvents.find((event) => Math.abs(event.distanceMiles - point.distanceMiles) <= 0.05) ?? null;
+  const handleReferenceMarkerPress = (point: ChartPoint) => {
+    const referenceEvent = getReferenceEventForPoint(point);
+    setSelectedReferencePointId((current) => current === point.id ? null : point.id);
+    if (referenceEvent) {
+      onReferencePointPress?.(referenceEvent);
+    }
+  };
 
   return (
     <View
-      accessible
+      accessible={!interactive}
       accessibilityLabel={`Terrain side profile chart. Distance labels use ${unit === 'mi' ? 'miles' : 'kilometers'}. Elevation is shown in feet. High risk route sections are highlighted.`}
       accessibilityRole="image"
       style={[styles.shell, transparentBackground ? styles.shellTransparent : null]}
@@ -616,13 +629,6 @@ export default function TerrainRiskSideProfile({
                 cy={point.y}
                 r={interactive ? 12 : 0}
                 fill="transparent"
-                onPress={interactive ? (event: { stopPropagation?: () => void }) => {
-                  event.stopPropagation?.();
-                  setSelectedReferencePointId((current) => current === point.id ? null : point.id);
-                  if (referenceEvent) {
-                    onReferencePointPress?.(referenceEvent);
-                  }
-                } : undefined}
               />
             </G>
           );
@@ -752,6 +758,28 @@ export default function TerrainRiskSideProfile({
           </G>
         ) : null}
       </Svg>
+      {interactive ? chart.referencePoints.map((point) => {
+        const referenceEvent = getReferenceEventForPoint(point);
+        return (
+          <TouchableOpacity
+            key={`terrain-risk-reference-button-${point.id}`}
+            testID="terrainRiskReferenceMarkerButton"
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel={referenceEvent
+              ? `${referenceEvent.title} ${referenceEvent.distanceAheadMiles.toFixed(1)} miles ahead`
+              : formatTerrainReferenceReason(point)}
+            onPress={() => handleReferenceMarkerPress(point)}
+            style={[
+              styles.terrainRiskReferenceButton,
+              {
+                left: toViewBoxPercent(point.x, VIEWBOX_WIDTH),
+                top: toViewBoxPercent(point.y, VIEWBOX_HEIGHT),
+              },
+            ]}
+          />
+        );
+      }) : null}
     </View>
   );
 }
@@ -761,6 +789,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 92,
     alignSelf: 'stretch',
+    position: 'relative',
     borderRadius: 9,
     overflow: 'hidden',
     borderWidth: 1,
@@ -777,6 +806,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     shadowOpacity: 0,
     elevation: 0,
+  },
+  terrainRiskReferenceButton: {
+    position: 'absolute',
+    zIndex: 8,
+    width: 32,
+    height: 32,
+    marginLeft: -16,
+    marginTop: -16,
+    borderRadius: 16,
+    backgroundColor: 'transparent',
   },
   emptyChart: {
     flex: 1,

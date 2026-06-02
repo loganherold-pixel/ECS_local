@@ -284,6 +284,12 @@ assert.ok(
     mapSource.includes('badgeTitleForRole(identity.role, identity.isCurrentUser)'),
   'Current user and convoy members should resolve temporary identity text from the same revealed marker identity path.',
 );
+const teamDisplayNameBlock = mapSource.match(/function teamDisplayNameFor[\s\S]*?\n}\n/)?.[0] ?? '';
+assert.ok(
+  teamDisplayNameBlock.indexOf('member.callsign') >= 0 &&
+    teamDisplayNameBlock.indexOf('member.callsign') < teamDisplayNameBlock.indexOf('member.displayName'),
+  'Revealed convoy map identity title should prefer the Dispatch profile callsign over any display name.',
+);
 assert.strictEqual(identities[1].shouldShowHeading, false, 'Heading arrow should hide near zero speed.');
 assert.strictEqual(identities[2].status, 'needs_assistance', 'Needs assistance should receive emergency status.');
 assert.strictEqual(identities[2].iconKey, 'convoy-assist', 'Needs assistance should receive emergency marker styling.');

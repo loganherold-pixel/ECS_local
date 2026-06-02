@@ -2,6 +2,7 @@ import type { BluTelemetry } from '../../lib/BluTypes';
 import type { BluetoothAccessoryRecord } from '../../lib/bluetoothAccessoryRegistry';
 import type { BluetoothTelemetrySource } from '../../lib/bluetoothLiveTelemetry';
 import { identifyBluestackAccessorySensorProfile } from '../../lib/bluestack';
+import type { UtilitySensorLiveTelemetry } from '../../lib/utilitySensorBleTelemetry';
 import type { PowerTelemetry } from '../power/types/PowerTelemetry';
 import type { NormalizedVehicleTelemetry } from '../vehicle-telemetry/VehicleTelemetryTypes';
 import type { ECSTelemetryEvent, ECSTelemetryQuality, ECSTelemetryTransport } from './ECSTelemetryTypes';
@@ -227,16 +228,34 @@ function isUtilitySensorAccessory(record: BluetoothAccessoryRecord): boolean {
 function accessoryQuality(record: BluetoothAccessoryRecord): ECSTelemetryQuality {
   if (record.connectionState === 'error') return 'error';
   if (record.connectionState === 'connected') {
-    return finiteNumber(record.utilitySensorTelemetry?.levelPercent) != null ? 'live' : 'stale';
+    return hasLiveUtilitySensorTelemetry(record.utilitySensorTelemetry) ? 'live' : 'stale';
   }
   return 'unavailable';
+}
+
+function hasLiveUtilitySensorTelemetry(telemetry: UtilitySensorLiveTelemetry | null | undefined): boolean {
+  return finiteNumber(telemetry?.levelPercent) != null ||
+    finiteNumber(telemetry?.levelDistanceMm) != null;
+}
+
+function pushUtilitySensorTelemetryMetrics(
+  events: ECSTelemetryEvent[],
+  base: Omit<ECSTelemetryEvent, 'metricKey' | 'label' | 'value' | 'unit'>,
+  telemetry: UtilitySensorLiveTelemetry | null | undefined,
+): void {
+  pushNumberMetric(events, base, 'level_percent', 'Tank Level', telemetry?.levelPercent, '%');
+  pushNumberMetric(events, base, 'level_distance_mm', 'Liquid Depth', telemetry?.levelDistanceMm, 'mm');
+  pushNumberMetric(events, base, 'temperature_celsius', 'Sensor Temperature', telemetry?.temperatureCelsius, 'C');
+  pushNumberMetric(events, base, 'battery_percent', 'Sensor Battery', telemetry?.batteryPercent, '%');
+  pushNumberMetric(events, base, 'read_quality', 'Read Quality', telemetry?.readQuality, null);
 }
 
 export function bluetoothAccessoryToEcsTelemetryEvents(record: BluetoothAccessoryRecord): ECSTelemetryEvent[] {
   if (!record.deviceId || !isUtilitySensorAccessory(record)) return [];
 
   const profile = identifyBluestackAccessorySensorProfile(record);
-  const timestamp = Date.parse(record.connectedAt ?? record.lastSeenAt) || Date.now();
+  const timestamp = record.utilitySensorTelemetry?.decodedAt ??
+    (Date.parse(record.connectedAt ?? record.lastSeenAt) || Date.now());
   const quality = accessoryQuality(record);
   const isLiveLevel = quality === 'live';
   const parserStatus = record.connectionState === 'connected'
@@ -294,7 +313,84 @@ export function bluetoothAccessoryToEcsTelemetryEvents(record: BluetoothAccessor
     },
   ];
 
-  pushNumberMetric(events, base, 'level_percent', 'Tank Level', record.utilitySensorTelemetry?.levelPercent, '%');
+  pushUtilitySensorTelemetryMetrics(events, base, record.utilitySensorTelemetry);
   pushNumberMetric(events, base, 'signal_strength', 'Signal', record.signalStrength, 'dBm');
+  return events;
+}
+
+export function bluetoothUtilitySensorAdvertisementToEcsTelemetryEvents(input: {
+  deviceId: string;
+  displayName: string;
+  providerLabel: string;
+  providerId: string;
+  categoryHint: string;
+  signalStrength: number | null;
+  lastSeenAt: number | null;
+  utilitySensorTelemetry: UtilitySensorLiveTelemetry;
+}): ECSTelemetryEvent[] {
+  if (!input.deviceId || !hasLiveUtilitySensorTelemetry(input.utilitySensorTelemetry)) return [];
+
+  const profile = identifyBluestackAccessorySensorProfile({
+    deviceId: input.deviceId,
+    displayName: input.displayName,
+    providerLabel: input.providerLabel,
+    providerId: input.providerId,
+    categoryHint: input.categoryHint,
+    owner: 'sensor',
+    connectionState: 'connected',
+    supportLabel: 'Live Sensor',
+    supportNote: null,
+    signalStrength: input.signalStrength,
+    utilitySensorTelemetry: input.utilitySensorTelemetry,
+    lastSeenAt: new Date(input.lastSeenAt ?? Date.now()).toISOString(),
+    connectedAt: null,
+    lastError: null,
+  });
+  const timestamp = input.utilitySensorTelemetry.decodedAt ?? input.lastSeenAt ?? Date.now();
+  const base = {
+    sourceDeviceId: input.deviceId,
+    sourceDeviceName: input.displayName,
+    sourceType: 'utility_sensor' as const,
+    provider: input.providerId,
+    providerLabel: input.providerLabel,
+    timestamp,
+    quality: 'live' as const,
+    transport: 'ble' as const,
+    errorSource: null,
+    errorMessage: null,
+  };
+  const events: ECSTelemetryEvent[] = [
+    {
+      ...base,
+      metricKey: 'link_state',
+      label: 'Sensor Link',
+      value: 'advertising',
+      unit: null,
+    },
+    {
+      ...base,
+      metricKey: 'sensor_category',
+      label: 'Sensor Category',
+      value: profile?.category ?? input.categoryHint,
+      unit: null,
+    },
+    {
+      ...base,
+      metricKey: 'profile_id',
+      label: 'Sensor Profile',
+      value: profile?.id ?? 'generic_utility_sensor',
+      unit: null,
+    },
+    {
+      ...base,
+      metricKey: 'parser_status',
+      label: 'Parser Status',
+      value: input.utilitySensorTelemetry.parserStatus,
+      unit: null,
+    },
+  ];
+
+  pushUtilitySensorTelemetryMetrics(events, base, input.utilitySensorTelemetry);
+  pushNumberMetric(events, base, 'signal_strength', 'Signal', input.signalStrength, 'dBm');
   return events;
 }

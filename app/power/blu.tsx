@@ -6,6 +6,8 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  type StyleProp,
+  type ViewStyle,
   View,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -14,8 +16,10 @@ import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { useTheme } from '../../context/ThemeContext';
 import { hapticCommand, hapticMicro } from '../../lib/haptics';
 import { GOLD_RAIL, SPACING, TACTICAL } from '../../lib/theme';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { ecsLog } from '../../lib/ecsLogger';
 import TopoBackground from '../../components/TopoBackground';
+import TopBannerBackground from '../../components/TopBannerBackground';
 import {
   ECS_BLUETOOTH_DEVICE_CATALOG_SECTIONS,
   type ECSApprovedBluetoothDeviceGroup,
@@ -668,12 +672,14 @@ function SectionBlock({
   count,
   children,
   palette,
+  surfaceStyle,
 }: {
   title: string;
   subtitle: string;
   count: number;
   children: React.ReactNode;
   palette: any;
+  surfaceStyle?: StyleProp<ViewStyle>;
 }) {
   return (
     <View
@@ -683,6 +689,7 @@ function SectionBlock({
         {
           borderColor: palette.border,
         },
+        surfaceStyle,
       ]}
     >
       <View style={styles.sectionHeaderRow}>
@@ -987,7 +994,13 @@ export default function BluPowerSourcesScreen() {
     <TopoBackground>
       <View style={styles.safeContainer}>
         <View style={styles.surfaceTint} pointerEvents="none" />
-        <View style={[styles.header, styles.fleetLikePanel, { borderColor: palette.border }]}>
+        <View style={[styles.header, { borderColor: palette.border }]}>
+          <TopBannerBackground
+            variant="dashboard"
+            resizeMode="cover"
+            overscan={16}
+          />
+          <View style={styles.headerBannerOverlay} pointerEvents="none" />
           <TouchableOpacity
             style={styles.backBtn}
             onPress={handleBackPress}
@@ -1009,9 +1022,7 @@ export default function BluPowerSourcesScreen() {
             style={[
               styles.heroCard,
               styles.fleetLikePanel,
-              {
-                borderColor: palette.border,
-              },
+              styles.readinessCommandSurface,
             ]}
           >
             <View style={styles.heroTop}>
@@ -1309,6 +1320,7 @@ export default function BluPowerSourcesScreen() {
             subtitle={getVisibleDeviceListLabel(visibleReleaseDevices)}
             count={visibleReleaseDevices.length}
             palette={palette}
+            surfaceStyle={styles.vehicleCardSurface}
           >
             {visibleReleaseDevices.length === 0 ? (
               <EmptySection
@@ -1335,9 +1347,7 @@ export default function BluPowerSourcesScreen() {
             style={[
               styles.infoCard,
               styles.fleetLikePanel,
-              {
-                borderColor: palette.border,
-              },
+              styles.vehicleCardSurface,
             ]}
           >
             <Ionicons name="shield-checkmark-outline" size={18} color={palette.amber} />
@@ -1366,13 +1376,23 @@ const styles = StyleSheet.create({
   },
   surfaceTint: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: TACTICAL.panelInactive,
+    backgroundColor: 'transparent',
   },
   fleetLikePanel: {
     backgroundColor: 'rgba(17,20,24,0.88)',
     borderColor: TACTICAL.borderMuted,
   },
+  readinessCommandSurface: {
+    backgroundColor: `${TACTICAL.amber}12`,
+    borderColor: `${TACTICAL.amber}2E`,
+  },
+  vehicleCardSurface: {
+    backgroundColor: ECS_SURFACE.background.selected,
+    borderColor: ECS_SURFACE.border.selected,
+  },
   header: {
+    position: 'relative',
+    overflow: 'hidden',
     flexDirection: 'row',
     alignItems: 'center',
     paddingTop: Platform.OS === 'web' ? 16 : 54,
@@ -1380,6 +1400,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.lg,
     borderBottomWidth: GOLD_RAIL.sectionWidth,
     borderBottomColor: GOLD_RAIL.section,
+  },
+  headerBannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: ECS_SURFACE.background.secondary,
   },
   backBtn: {
     width: 44,

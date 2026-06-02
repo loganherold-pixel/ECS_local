@@ -11,7 +11,6 @@ const exploreFilterStateCache = createPersistedKeyValueCache('ecs_explore_filter
 
 export type ExplorerCategoryPanelKey =
   | 'hiddenGems'
-  | 'popularTrails'
   | 'trailPacks'
   | 'ecsRouteIdeas'
   | 'favorites';
@@ -48,7 +47,6 @@ const VALID_REFINEMENTS = new Set<ExploreRefinementFilter>([
 
 const VALID_CATEGORY_PANELS = new Set<ExplorerCategoryPanelKey>([
   'hiddenGems',
-  'popularTrails',
   'trailPacks',
   'ecsRouteIdeas',
   'favorites',

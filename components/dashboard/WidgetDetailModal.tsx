@@ -84,6 +84,7 @@ export default function WidgetDetailModal({
   onRemotenessNavigateToTarget,
 }: WidgetDetailModalProps) {
   const widgetType = slot?.widgetType ?? null;
+  const widgetDetailDisabled = widgetType === 'attitude-command';
   const catalog = getFullWidgetCatalog();
   const widgetDef = widgetType ? catalog.find(widget => widget.type === widgetType) ?? null : null;
   const registryEntry = widgetType ? getWidgetEntry(widgetType) ?? null : null;
@@ -122,7 +123,7 @@ export default function WidgetDetailModal({
     }
   }, [boundsLogKey, visible]);
 
-  if (!visible || !slot || !widgetType || !widgetDef) return null;
+  if (!visible || !slot || !widgetType || !widgetDef || widgetDetailDisabled) return null;
 
   const isAdvanced = registryEntry?.requires_advanced_mode;
   const category = registryEntry?.category;

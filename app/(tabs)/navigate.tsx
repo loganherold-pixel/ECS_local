@@ -18582,7 +18582,7 @@ const stableMapSurface = useMemo(() => {
               {exploreRoutesHandoff
                 ? `${exploreRoutesHandoff.label}: ${exploreRouteOverlayBuild.segments.length} route line${exploreRouteOverlayBuild.segments.length === 1 ? '' : 's'} from Explorer filters${exploreRoutesHandoff.cappedCount > 0 ? `; ${exploreRoutesHandoff.cappedCount} held back for map performance` : ''}.`
                 : exploreRouteOverlayBuild.segments.length > 0
-                  ? `${exploreRouteOverlayBuild.segments.length} Explore route line${exploreRouteOverlayBuild.segments.length === 1 ? '' : 's'} loaded from Hidden Gems, Popular Trails, and ECS Route Ideas.`
+                  ? `${exploreRouteOverlayBuild.segments.length} Explore route line${exploreRouteOverlayBuild.segments.length === 1 ? '' : 's'} loaded from Hidden Gems, Trail Packs, Favorites, and ECS Route Ideas.`
                 : exploreRouteOverlayBuild.candidateCount > 0
                   ? 'Explore Routes is on, but the available Explorer results do not include map geometry yet.'
                   : 'No Explore Routes are available for this area yet.'}

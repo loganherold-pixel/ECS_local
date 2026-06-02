@@ -96,6 +96,10 @@ export interface ECSUtilitySensorTelemetryReading {
   profileId: string | null;
   linkState: string | null;
   levelPercent: number | null;
+  levelDistanceMm: number | null;
+  temperatureCelsius: number | null;
+  batteryPercent: number | null;
+  readQuality: number | null;
   signalStrength: number | null;
   parserStatus: string | null;
   isLive: boolean;

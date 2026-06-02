@@ -163,6 +163,21 @@ function getManufacturerHint(item: ScannerDeviceListItem): string | null {
   );
 }
 
+function getServiceDataHint(item: ScannerDeviceListItem): Record<string, string> | undefined {
+  if (!item.raw || typeof item.raw !== 'object') return undefined;
+  const serviceData = (item.raw as Record<string, unknown>).serviceData;
+  if (!serviceData || typeof serviceData !== 'object' || Array.isArray(serviceData)) return undefined;
+
+  const entries = Object.entries(serviceData)
+    .map(([uuid, value]) => [
+      typeof uuid === 'string' ? uuid.trim() : '',
+      typeof value === 'string' ? value.trim() : '',
+    ] as const)
+    .filter(([uuid, value]) => uuid.length > 0 && value.length > 0);
+
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 function getScannerDeviceSearchText(item: ScannerDeviceListItem): string {
   return [
     item.displayName,
@@ -207,6 +222,7 @@ function hasReleaseScannerBrandSignature(item: ScannerDeviceListItem): boolean {
     isLikelyOBD: false,
     serviceUUIDs,
     manufacturerData: getManufacturerHint(item),
+    serviceData: getServiceDataHint(item),
   });
   return brandMatch.matches.some((match) => RELEASE_SCANNER_PROVIDER_BADGES.has(match.brand.providerBadge));
 }

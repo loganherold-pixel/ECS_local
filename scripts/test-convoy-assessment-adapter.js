@@ -217,10 +217,16 @@ async function main() {
   assert.strictEqual(enriched.convoy.recommendedRegroupPoint.value, 'Wide turnout at mile 19');
 
   expeditionAssessmentStore.reset();
+  const storeNowMs = Date.now();
+  const storeFreshLocations = [
+    location('lead-member', storeNowMs, { latitude: 38.78, longitude: -121.2 }),
+    location('v2-member', storeNowMs, { latitude: 38.779, longitude: -121.201 }),
+    location('sweep-member', storeNowMs, { latitude: 38.778, longitude: -121.202 }),
+  ];
   setConvoyTrackingDataForTest({
     convoyId: 'convoy-live',
     members: members(),
-    locations: freshLocations,
+    locations: storeFreshLocations,
     connectionStatus: 'connected',
   });
   expeditionAssessmentStore.setContextProvider(() => fixtures.allSystemsNormalFixture);

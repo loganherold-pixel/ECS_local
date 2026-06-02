@@ -76,6 +76,7 @@ export default function DistanceRadiusFilter({
       }
       valueLabel={selectedRefinement ? `${refinedCount} MATCHES` : selectedRadius == null ? 'ALL RANGE' : `${selectedRadius} MI`}
       style={s.container}
+      contentStyle={s.filterContentSurface}
     >
       {/* Header row */}
       <View style={[s.headerRow, compact && s.headerRowCompact]}>
@@ -196,14 +197,18 @@ export default function DistanceRadiusFilter({
 // ============================================================
 const s = StyleSheet.create({
   container: {
-    backgroundColor: ECS.bgPanel,
+    backgroundColor: `${TACTICAL.amber}12`,
     borderRadius: ECS.radius,
     borderWidth: 1,
-    borderColor: ECS.stroke,
+    borderColor: `${TACTICAL.amber}2E`,
     paddingHorizontal: 8,
     paddingVertical: 7,
     marginBottom: 6,
     gap: 5,
+  },
+  filterContentSurface: {
+    borderColor: `${TACTICAL.amber}2E`,
+    backgroundColor: `${TACTICAL.amber}12`,
   },
 
   // ── Header ────────────────────────────────────────────
@@ -300,7 +305,7 @@ const s = StyleSheet.create({
   filterGroupLabel: {
     fontSize: 7,
     fontWeight: '900',
-    color: TACTICAL.textMuted,
+    color: TACTICAL.goldMedium,
     letterSpacing: 1.6,
     marginTop: 0,
   },
@@ -314,8 +319,8 @@ const s = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 7,
     borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
+    borderColor: `${TACTICAL.amber}24`,
+    backgroundColor: `${TACTICAL.amber}08`,
   },
   segmentCompact: {
     paddingVertical: 5,
@@ -363,8 +368,8 @@ const s = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 7,
     borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
+    borderColor: `${TACTICAL.amber}24`,
+    backgroundColor: `${TACTICAL.amber}08`,
   },
   refinementChipCompact: {
     minWidth: '48%',

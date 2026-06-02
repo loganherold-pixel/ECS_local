@@ -36,15 +36,18 @@ assert(
   discover.includes('routeCatalogHasSearchArea') &&
     discover.includes('routeCatalogSearchAreaKey') &&
     discover.includes('ROUTE_CATALOG_PRESET_SEARCH_AREAS') &&
-    discover.includes('routeCatalogManualSearchArea') &&
+    !discover.includes('routeCatalogManualSearchArea') &&
     discover.includes('if (!routeCatalogHasSearchArea)') &&
     discover.includes('Search Area Needed'),
-  'Suggested Trailheads should require GPS or an explicit search area instead of showing an unlabeled no-GPS browse mode.',
+  'Suggested Trailheads should require GPS or an internal search area without exposing the old manual route catalog selector.',
 );
 
 assert(
-  discover.includes('Suggested Trailheads only show verified catalog routes within the selected radius.'),
-  'Selected search areas should be visibly labeled so Tahoe/Mendocino pilots are radius-filtered catalog searches, not nearby GPS recommendations.',
+  !discover.includes('testID="route-catalog-search-area-control"') &&
+    !discover.includes('Suggested Trailheads only show verified catalog routes within the selected radius.') &&
+    !discover.includes('ROUTE CATALOG AREA') &&
+    discover.includes('Showing verified routes within'),
+  'Selected search areas should remain internally radius-filtered without exposing route catalog controls on the Explorer surface.',
 );
 
 assert(
