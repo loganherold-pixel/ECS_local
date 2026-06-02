@@ -89,6 +89,18 @@ assert(
   'Workflow should preserve bounded Edge Function failure response bodies for source sync debugging',
 );
 assert(
+  workflow.includes('route-catalog-usfs-mvum-sync-failures.json') &&
+    workflow.includes('retryLimits = [500, 150]') &&
+    workflow.includes('retryPayload.deepPagination = false') &&
+    workflow.includes('retryPayload.limitPerForestLayer = retryLimit'),
+  'Workflow should retry dense/problem MVUM forests with smaller bounded per-layer limits before giving up',
+);
+assert(
+  workflow.includes('failedForests.length > 0') &&
+    workflow.includes('USFS MVUM route catalog sync had failed forests'),
+  'Workflow should finish the remaining forests and then report any unresolved MVUM forest failures',
+);
+assert(
   workflow.includes('currentConditionBlockedRouteCount'),
   'Workflow summary should report routes blocked by reviewed official current-condition overlays',
 );

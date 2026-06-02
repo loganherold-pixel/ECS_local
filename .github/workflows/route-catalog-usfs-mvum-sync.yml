@@ -153,6 +153,7 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const payloads = JSON.parse(fs.readFileSync('route-catalog-usfs-mvum-sync-payloads.json', 'utf8'));
+          fs.writeFileSync('route-catalog-usfs-mvum-sync-failures.json', '[]');
           payloads.forEach((payload, index) => {
             fs.writeFileSync(
               `route-catalog-usfs-mvum-sync-payloads/payload-${index}.json`,
@@ -167,20 +168,54 @@ jobs:
             response_file="route-catalog-usfs-mvum-sync-responses/response-${index}.json"
             status_file="route-catalog-usfs-mvum-sync-responses/status-${index}.txt"
 
-            http_code="$(
-              curl --show-error --silent \
-                --request POST \
-                --header "Content-Type: application/json" \
-                --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
-                --data @"route-catalog-usfs-mvum-sync-payloads/payload-${index}.json" \
-                "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-usfs-mvum" \
-                --output "${response_file}" \
-                --write-out "%{http_code}" || true
-            )"
-            echo "${http_code}" > "${status_file}"
+            invoke_sync_payload() {
+              local payload_file="$1"
+              http_code="$(
+                curl --show-error --silent \
+                  --request POST \
+                  --header "Content-Type: application/json" \
+                  --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
+                  --data @"${payload_file}" \
+                  "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-usfs-mvum" \
+                  --output "${response_file}" \
+                  --write-out "%{http_code}" || true
+              )"
+              echo "${http_code}" > "${status_file}"
+            }
 
-            if [[ "${http_code}" -lt 200 || "${http_code}" -ge 300 ]]; then
-              echo "::error::USFS MVUM sync failed for ${forest} with HTTP ${http_code}"
+            is_success_code() {
+              [[ "$1" =~ ^[0-9]+$ && "$1" -ge 200 && "$1" -lt 300 ]]
+            }
+
+            invoke_sync_payload "route-catalog-usfs-mvum-sync-payloads/payload-${index}.json"
+
+            if ! is_success_code "${http_code}"; then
+              # retryLimits = [500, 150]
+              retry_limits=(500 150)
+              for retry_limit in "${retry_limits[@]}"; do
+                echo "::warning::USFS MVUM sync failed for ${forest} with HTTP ${http_code}; retrying with limit ${retry_limit}"
+                FOREST_INDEX="${index}" RETRY_LIMIT="${retry_limit}" node <<'NODE'
+          const fs = require('fs');
+          const payloads = JSON.parse(fs.readFileSync('route-catalog-usfs-mvum-sync-payloads.json', 'utf8'));
+          const index = Number(process.env.FOREST_INDEX);
+          const retryLimit = Number(process.env.RETRY_LIMIT);
+          const retryPayload = { ...payloads[index] };
+          retryPayload.deepPagination = false;
+          retryPayload.limitPerForestLayer = retryLimit;
+          fs.writeFileSync(
+            `route-catalog-usfs-mvum-sync-payloads/payload-${index}-retry-${retryLimit}.json`,
+            JSON.stringify(retryPayload),
+          );
+          NODE
+                invoke_sync_payload "route-catalog-usfs-mvum-sync-payloads/payload-${index}-retry-${retry_limit}.json"
+                if is_success_code "${http_code}"; then
+                  break
+                fi
+              done
+            fi
+
+            if ! is_success_code "${http_code}"; then
+              echo "::warning::USFS MVUM sync failed for ${forest} with HTTP ${http_code} after bounded retries"
               if [[ -s "${response_file}" ]]; then
                 echo "Response body:"
                 head -c 4000 "${response_file}"
@@ -188,30 +223,59 @@ jobs:
               else
                 echo "No response body was returned."
               fi
-              exit 1
+              FOREST="${forest}" FOREST_INDEX="${index}" HTTP_CODE="${http_code}" RESPONSE_FILE="${response_file}" node <<'NODE'
+          const fs = require('fs');
+          const failurePath = 'route-catalog-usfs-mvum-sync-failures.json';
+          const failures = fs.existsSync(failurePath)
+            ? JSON.parse(fs.readFileSync(failurePath, 'utf8'))
+            : [];
+          const responsePreview = fs.existsSync(process.env.RESPONSE_FILE)
+            ? fs.readFileSync(process.env.RESPONSE_FILE, 'utf8').slice(0, 1200)
+            : '';
+          failures.push({
+            forest: process.env.FOREST,
+            index: Number(process.env.FOREST_INDEX),
+            httpCode: process.env.HTTP_CODE,
+            responsePreview,
+          });
+          fs.writeFileSync(failurePath, JSON.stringify(failures, null, 2));
+          NODE
             fi
           done
 
           node <<'NODE'
           const fs = require('fs');
           const payloads = JSON.parse(fs.readFileSync('route-catalog-usfs-mvum-sync-payloads.json', 'utf8'));
+          const failedForests = fs.existsSync('route-catalog-usfs-mvum-sync-failures.json')
+            ? JSON.parse(fs.readFileSync('route-catalog-usfs-mvum-sync-failures.json', 'utf8'))
+            : [];
           const responses = payloads.map((_, index) => {
+            const statusPath = `route-catalog-usfs-mvum-sync-responses/status-${index}.txt`;
+            const status = fs.existsSync(statusPath) ? fs.readFileSync(statusPath, 'utf8').trim() : '';
+            if (!/^\d+$/.test(status) || Number(status) < 200 || Number(status) >= 300) return null;
             const raw = fs.readFileSync(`route-catalog-usfs-mvum-sync-responses/response-${index}.json`, 'utf8');
             try {
               return JSON.parse(raw);
             } catch (error) {
               throw new Error(`USFS MVUM sync response ${index} was not valid JSON: ${raw.slice(0, 300)}`);
             }
-          });
+          }).filter(Boolean);
           const failed = responses.find((response) => !response.ok);
-          if (failed) throw new Error(failed.error || 'USFS MVUM route catalog sync failed.');
+          if (failed) {
+            failedForests.push({
+              forest: failed.forests?.[0]?.forest || 'unknown',
+              httpCode: '200',
+              responsePreview: failed.error || 'USFS MVUM route catalog sync failed.',
+            });
+          }
 
           fs.writeFileSync(
             'route-catalog-usfs-mvum-sync-response.json',
             JSON.stringify({
-              ok: true,
+              ok: failedForests.length === 0,
               source: 'usfs_mvum',
               forests: responses.flatMap((response) => Array.isArray(response.forests) ? response.forests : []),
+              failedForests,
               caveat: responses.find((response) => response.caveat)?.caveat || '',
             }, null, 2),
           );
@@ -225,11 +289,8 @@ jobs:
           const fs = require('fs');
           const response = JSON.parse(fs.readFileSync('route-catalog-usfs-mvum-sync-response.json', 'utf8'));
 
-          if (!response.ok) {
-            throw new Error(response.error || 'USFS MVUM route catalog sync failed.');
-          }
-
           const forests = Array.isArray(response.forests) ? response.forests : [];
+          const failedForests = Array.isArray(response.failedForests) ? response.failedForests : [];
           const summaryRows = forests.map((forest) => ({
             forest: forest.forest,
             rawFeatureCount: forest.rawFeatureCount,
@@ -253,8 +314,15 @@ jobs:
               `| ${forest.forest} | ${forest.syncDepth} | ${forest.limitPerForestLayer} | ${forest.rawFeatureCount} | ${forest.normalizedFeatureCount} | ${forest.aggregateRouteCount} | ${forest.publicRecommendationCount} | ${forest.currentConditionClosureCount} | ${forest.currentConditionBlockedRouteCount} |`
             ),
             '',
+            failedForests.length > 0 ? '### Failed Forests' : '',
+            failedForests.length > 0 ? '' : '',
+            ...failedForests.map((forest) => `- ${forest.forest}: HTTP ${forest.httpCode}`),
+            failedForests.length > 0 ? '' : '',
             response.caveat ? `_${response.caveat}_` : '',
           ].join('\n');
 
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+          if (failedForests.length > 0) {
+            throw new Error(`USFS MVUM route catalog sync had failed forests: ${failedForests.map((forest) => forest.forest).join(', ')}`);
+          }
           NODE
