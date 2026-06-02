@@ -101,6 +101,18 @@ const expectedUsfsMvumForestSlugs = [
     'nez-perce-clearwater-national-forest',
     'payette-national-forest',
     'superior-national-forest',
+    'chippewa-national-forest',
+    'sequoia-national-forest',
+    'ashley-national-forest',
+    'bridger-teton-national-forest',
+    'siuslaw-national-forest',
+    'lincoln-national-forest',
+    'white-river-national-forest',
+    'mt-baker-snoqualmie-national-forest',
+    'flathead-national-forest',
+    'olympic-national-forest',
+    'custer-national-forest',
+    'bighorn-national-forest',
 ];
 
 const expectedUsfsMvumForestNames = [
@@ -172,6 +184,18 @@ const expectedUsfsMvumForestNames = [
   'Nez Perce-Clearwater National Forest',
   'Payette National Forest',
   'Superior National Forest',
+  'Chippewa National Forest',
+  'Sequoia National Forest',
+  'Ashley National Forest',
+  'Bridger-Teton National Forest',
+  'Siuslaw National Forest',
+  'Lincoln National Forest',
+  'White River National Forest',
+  'Mt. Baker-Snoqualmie National Forest',
+  'Flathead National Forest',
+  'Olympic National Forest',
+  'Custer National Forest',
+  'Bighorn National Forest',
 ];
 
 assert.deepStrictEqual(

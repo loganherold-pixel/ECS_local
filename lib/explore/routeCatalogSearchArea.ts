@@ -67,6 +67,18 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'nez_perce_clearwater_nf'
   | 'payette_nf'
   | 'superior_nf'
+  | 'chippewa_nf'
+  | 'sequoia_nf'
+  | 'ashley_nf'
+  | 'bridger_teton_nf'
+  | 'siuslaw_nf'
+  | 'lincoln_nf'
+  | 'white_river_nf'
+  | 'mt_baker_snoqualmie_nf'
+  | 'flathead_nf'
+  | 'olympic_nf'
+  | 'custer_nf'
+  | 'bighorn_nf'
   | 'michigan_orv'
   | 'minnesota_ohv'
   | 'oregon_odf_ohv'
@@ -806,6 +818,126 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'Superior NF',
     latitude: 47.791,
     longitude: -91.567,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'chippewa_nf',
+    label: 'Chippewa National Forest',
+    shortLabel: 'Chippewa NF',
+    latitude: 47.412,
+    longitude: -94.061,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'sequoia_nf',
+    label: 'Sequoia National Forest',
+    shortLabel: 'Sequoia NF',
+    latitude: 36.126,
+    longitude: -118.684,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'ashley_nf',
+    label: 'Ashley National Forest',
+    shortLabel: 'Ashley NF',
+    latitude: 40.68,
+    longitude: -110.151,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'bridger_teton_nf',
+    label: 'Bridger-Teton National Forest',
+    shortLabel: 'Bridger-Teton NF',
+    latitude: 43.043,
+    longitude: -109.993,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'siuslaw_nf',
+    label: 'Siuslaw National Forest',
+    shortLabel: 'Siuslaw NF',
+    latitude: 44.389,
+    longitude: -123.885,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'lincoln_nf',
+    label: 'Lincoln National Forest',
+    shortLabel: 'Lincoln NF',
+    latitude: 32.984,
+    longitude: -105.272,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'white_river_nf',
+    label: 'White River National Forest',
+    shortLabel: 'White River NF',
+    latitude: 39.583,
+    longitude: -106.881,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'mt_baker_snoqualmie_nf',
+    label: 'Mt. Baker-Snoqualmie National Forest',
+    shortLabel: 'Mt. Baker-Snoqualmie NF',
+    latitude: 47.963,
+    longitude: -121.601,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'flathead_nf',
+    label: 'Flathead National Forest',
+    shortLabel: 'Flathead NF',
+    latitude: 48.166,
+    longitude: -114.098,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'olympic_nf',
+    label: 'Olympic National Forest',
+    shortLabel: 'Olympic NF',
+    latitude: 47.698,
+    longitude: -123.65,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'custer_nf',
+    label: 'Custer National Forest',
+    shortLabel: 'Custer NF',
+    latitude: 45.448,
+    longitude: -106.613,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'bighorn_nf',
+    label: 'Bighorn National Forest',
+    shortLabel: 'Bighorn NF',
+    latitude: 44.526,
+    longitude: -107.413,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['usfs_mvum'],
