@@ -12,6 +12,7 @@ const workflow = fs.readFileSync(workflowPath, 'utf8');
 assert(workflow.includes('name: Route Catalog USFS MVUM Sync'), 'Workflow should have a clear route catalog sync name');
 assert(workflow.includes('schedule:') && workflow.includes('cron:'), 'Workflow should run on a durable schedule');
 assert(workflow.includes('workflow_dispatch:'), 'Workflow should support manual dispatch without a local shell token');
+assert(workflow.includes('sync_depth:'), 'Workflow should let operators select cautious or deep MVUM sync depth');
 assert(workflow.includes('route-catalog-sync-usfs-mvum'), 'Workflow should invoke the protected USFS MVUM sync function');
 assert(
   workflow.includes('Build bounded sync payloads') &&
@@ -32,6 +33,14 @@ assert(
   'Workflow defaults should sync the current MVUM public recommendation coverage forests',
 );
 assert(workflow.includes('limitPerForestLayer'), 'Workflow should pass bounded sync limits');
+assert(
+  workflow.includes('SYNC_DEPTH') &&
+    workflow.includes('deepPagination') &&
+    workflow.includes('2500') &&
+    workflow.includes('cautious') &&
+    workflow.includes('deep'),
+  'Workflow should support opt-in deep MVUM pagination without changing the cautious scheduled default',
+);
 assert(workflow.includes('rawFeatureCount') && workflow.includes('aggregateRouteCount'), 'Workflow summary should report ingest counts');
 assert(
   workflow.includes('publicRecommendationCount'),

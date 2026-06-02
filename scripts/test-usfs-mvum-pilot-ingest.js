@@ -677,6 +677,19 @@ assert(
     syncFunction.includes('MAX_USFS_MVUM_ARCGIS_OFFSET_DEGREES'),
   'Sync function should request bounded ArcGIS geometry simplification so dense MVUM trail geometries do not time out Edge syncs',
 );
+assert(
+  syncFunction.includes('deepPagination') &&
+    syncFunction.includes('deep_pagination') &&
+    syncFunction.includes('MAX_DEEP_USFS_MVUM_LIMIT_PER_FOREST_LAYER') &&
+    syncFunction.includes('readLimitPerForestLayer'),
+  'Sync function should support explicit deep MVUM pagination while keeping cautious sync limits bounded by default',
+);
+assert(
+  syncFunction.includes('resultOffset: String(offset)') &&
+    syncFunction.includes('payload.exceededTransferLimit') &&
+    syncFunction.includes('records.slice(0, limit)'),
+  'Sync function should page ArcGIS MVUM records deterministically up to the selected bounded limit',
+);
 assert(syncFunction.includes('segmentRouteRows'), 'Sync function should batch source segment route upserts to stay within Edge compute limits');
 assert(syncFunction.includes('aggregateRouteRows'), 'Sync function should batch aggregate route upserts to stay within Edge compute limits');
 assert(syncFunction.includes('buildRouteIdByPublicId'), 'Sync function should map bulk-upserted public IDs back to database IDs');

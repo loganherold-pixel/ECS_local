@@ -25,6 +25,9 @@ const corsHeaders = {
 
 const DEFAULT_USFS_MVUM_ARCGIS_OFFSET_DEGREES = 0.000025;
 const MAX_USFS_MVUM_ARCGIS_OFFSET_DEGREES = 0.001;
+const DEFAULT_USFS_MVUM_LIMIT_PER_FOREST_LAYER = 150;
+const MAX_USFS_MVUM_LIMIT_PER_FOREST_LAYER = 500;
+const MAX_DEEP_USFS_MVUM_LIMIT_PER_FOREST_LAYER = 2500;
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
@@ -69,6 +72,27 @@ function selectForests(value: unknown): UsfsMvumForest[] {
 function readNumber(value: unknown, fallback: number): number {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function readBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'deep'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', 'cautious'].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
+function readLimitPerForestLayer(value: unknown, deepPagination: boolean): number {
+  const fallback = deepPagination
+    ? MAX_DEEP_USFS_MVUM_LIMIT_PER_FOREST_LAYER
+    : DEFAULT_USFS_MVUM_LIMIT_PER_FOREST_LAYER;
+  const max = deepPagination
+    ? MAX_DEEP_USFS_MVUM_LIMIT_PER_FOREST_LAYER
+    : MAX_USFS_MVUM_LIMIT_PER_FOREST_LAYER;
+  if (typeof value === 'string' && value.trim() === '') return fallback;
+  return Math.max(1, Math.min(max, Math.round(readNumber(value, fallback))));
 }
 
 function readMaxAllowableOffset(value: unknown): number {
@@ -226,7 +250,11 @@ serve(async (req) => {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const forests = selectForests(body.forests);
     const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 1));
-    const limitPerForestLayer = Math.max(1, Math.min(500, Math.round(readNumber(body.limitPerForestLayer ?? body.limit_per_forest_layer, 150))));
+    const deepPagination = readBoolean(body.deepPagination ?? body.deep_pagination);
+    const limitPerForestLayer = readLimitPerForestLayer(
+      body.limitPerForestLayer ?? body.limit_per_forest_layer,
+      deepPagination,
+    );
     const maxAllowableOffset = readMaxAllowableOffset(body.maxAllowableOffset ?? body.max_allowable_offset);
     const now = new Date().toISOString();
     const currentConditionSources = normalizeUsfsMvumCurrentConditionSources(
@@ -262,7 +290,14 @@ serve(async (req) => {
           status: 'running',
           source_uri: forest.sourceUri,
           started_at: now,
-          metadata: { forest: forest.forestName, providerId: forest.sourceProviderId, minMiles, maxAllowableOffset },
+          metadata: {
+            forest: forest.forestName,
+            providerId: forest.sourceProviderId,
+            minMiles,
+            limitPerForestLayer,
+            deepPagination,
+            maxAllowableOffset,
+          },
         })
         .select('id')
         .single();
@@ -349,6 +384,8 @@ serve(async (req) => {
             forest: forest.forestName,
             providerId: forest.sourceProviderId,
             minMiles,
+            limitPerForestLayer,
+            deepPagination,
             maxAllowableOffset,
             aggregateRouteCount,
             publicRecommendationCount,
@@ -365,6 +402,8 @@ serve(async (req) => {
         normalizedFeatureCount,
         aggregateRouteCount,
         publicRecommendationCount,
+        limitPerForestLayer,
+        deepPagination,
         maxAllowableOffset,
         currentConditionSourceCount: forestCurrentConditionSources.length,
         currentConditionClosureCount,
@@ -376,6 +415,8 @@ serve(async (req) => {
       ok: true,
       source: 'usfs_mvum',
       forests: summary,
+      limitPerForestLayer,
+      deepPagination,
       maxAllowableOffset,
       caveat: 'USFS MVUM routes verify designated motorized access only. Current closures, weather, fire restrictions, gates, and passability still require current checks.',
     });

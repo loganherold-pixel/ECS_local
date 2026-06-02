@@ -125,6 +125,7 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
       ],
       minMiles: 1,
       limitPerForestLayer: 150,
+      deepPagination: false,
       maxAllowableOffset: 0.000025,
     },
     expectedMaxPublicRecommendationCount: 10000,
@@ -260,6 +261,15 @@ function cloneJson(value) {
   return value === null || value === undefined ? value : JSON.parse(JSON.stringify(value));
 }
 
+function deepBackfillPayloadForEntry(entry) {
+  if (entry.key !== 'usfs_mvum') return entry.deepBackfillPayload;
+  return {
+    ...cloneJson(entry.defaultPayload),
+    limitPerForestLayer: 2500,
+    deepPagination: true,
+  };
+}
+
 function buildRouteCatalogSyncInvocationPlan() {
   return ROUTE_CATALOG_SYNC_INVENTORY.map((entry) => ({
     key: entry.key,
@@ -271,6 +281,7 @@ function buildRouteCatalogSyncInvocationPlan() {
     publicRecommendationPolicy: entry.publicRecommendationPolicy,
     invocationMode: entry.invocationMode,
     defaultPayload: cloneJson(entry.defaultPayload),
+    deepBackfillPayload: cloneJson(deepBackfillPayloadForEntry(entry)),
     expectedMaxPublicRecommendationCount: entry.expectedMaxPublicRecommendationCount,
     preprocessReason: entry.preprocessReason || '',
     safetyNotes: [
@@ -282,7 +293,10 @@ function buildRouteCatalogSyncInvocationPlan() {
         : entry.publicRecommendationPolicy === 'aggregate_recommendable_with_closure_gate'
           ? 'Official aggregate records may create public recommendations only behind deterministic access, limitation, and closure gates.'
           : 'Official source records may create public recommendations when the adapter applies deterministic public-use filters and keeps current-condition warnings visible.',
-    ],
+      entry.key === 'usfs_mvum'
+        ? 'USFS MVUM deep backfill is opt-in and raises the bounded per-forest/layer cap without splitting aggregate route identity across pages.'
+        : '',
+    ].filter(Boolean),
   }));
 }
 

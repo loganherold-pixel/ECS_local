@@ -105,6 +105,7 @@ function summarizeDryRun(selected, env) {
       publicRecommendationPolicy: entry.publicRecommendationPolicy,
       expectedMaxPublicRecommendationCount: entry.expectedMaxPublicRecommendationCount,
       defaultPayload: entry.defaultPayload,
+      deepBackfillPayload: entry.deepBackfillPayload,
       workflowPath: entry.workflowPath,
       preprocessReason: entry.preprocessReason || undefined,
       safetyNotes: entry.safetyNotes,

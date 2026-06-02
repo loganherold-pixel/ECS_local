@@ -9,14 +9,22 @@ on:
         description: Comma-separated USFS MVUM forest slugs to sync.
         required: false
         default: tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests,inyo-national-forest,plumas-national-forest,lassen-national-forest,shasta-trinity-national-forest,umpqua-national-forest,fremont-winema-national-forest,idaho-panhandle-national-forests,helena-lewis-and-clark-national-forest,fishlake-national-forest,black-hills-national-forest,uinta-wasatch-cache-national-forest,caribou-targhee-national-forest,klamath-national-forest,willamette-national-forest,boise-national-forest,lolo-national-forest,salmon-challis-national-forest,stanislaus-national-forest,dixie-national-forest,bitterroot-national-forest,mt-hood-national-forest,coronado-national-forest,sierra-national-forest,huron-manistee-national-forest,ozark-st-francis-national-forest,ottawa-national-forest,hiawatha-national-forest,chequamegon-nicolet-national-forest,national-forests-in-florida,ouachita-national-forest,mark-twain-national-forest,national-forests-in-mississippi,kisatchie-national-forest,george-washington-jefferson-national-forest,francis-marion-sumter-national-forests,national-forests-in-texas,national-forests-in-north-carolina,allegheny-national-forest,cherokee-national-forest,daniel-boone-national-forest,rogue-river-siskiyou-national-forests,medicine-bow-routt-national-forest,kootenai-national-forest,gifford-pinchot-national-forest,arapaho-roosevelt-national-forests,umatilla-national-forest,ochoco-national-forest,cibola-national-forest,eldorado-national-forest,nez-perce-clearwater-national-forest,payette-national-forest,superior-national-forest,chippewa-national-forest,sequoia-national-forest,ashley-national-forest,bridger-teton-national-forest,siuslaw-national-forest,lincoln-national-forest,white-river-national-forest,mt-baker-snoqualmie-national-forest,flathead-national-forest,olympic-national-forest,custer-national-forest,bighorn-national-forest,colville-national-forest,chattahoochee-oconee-national-forests,nebraska-national-forest,shoshone-national-forest,san-bernardino-national-forest,los-padres-national-forest,dakota-prairie-grasslands,monongahela-national-forest,land-between-the-lakes-national-recreation-area,shawnee-national-forest,cleveland-national-forest,green-mountain-finger-lakes-national-forests,lake-tahoe-basin-management-unit,wayne-national-forest,white-mountain-national-forest,wallowa-whitman-national-forest,hoosier-national-forest,columbia-river-gorge-national-scenic-area,okanogan-wenatchee-national-forest,six-rivers-national-forest,tonto-national-forest
+      sync_depth:
+        description: Cautious keeps the scheduled 150-feature slice; deep raises the bounded per-forest/layer cap for official-source backfill.
+        required: false
+        default: cautious
+        type: choice
+        options:
+          - cautious
+          - deep
       min_miles:
         description: Minimum MVUM segment miles to ingest.
         required: false
         default: '1'
       limit_per_forest_layer:
-        description: Maximum features to request per forest/layer.
+        description: Optional maximum features to request per forest/layer. Leave blank for sync depth default: 150 cautious, 2500 deep.
         required: false
-        default: '150'
+        default: ''
       max_allowable_offset:
         description: ArcGIS geometry simplification offset in degrees to keep dense MVUM sources within Edge limits.
         required: false
@@ -37,14 +45,15 @@ jobs:
   sync:
     name: Sync USFS MVUM catalog
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 90
 
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
       FORESTS: ${{ inputs.forests || 'tahoe-national-forest,mendocino-national-forest,san-juan-national-forest,coconino-national-forest,manti-la-sal-national-forest,sawtooth-national-forest,deschutes-national-forest,kaibab-national-forest,prescott-national-forest,gila-national-forest,santa-fe-national-forest,carson-national-forest,rio-grande-national-forest,grand-mesa-uncompahgre-gunnison-national-forests,humboldt-toiyabe-national-forest,pike-san-isabel-national-forests,inyo-national-forest,plumas-national-forest,lassen-national-forest,shasta-trinity-national-forest,umpqua-national-forest,fremont-winema-national-forest,idaho-panhandle-national-forests,helena-lewis-and-clark-national-forest,fishlake-national-forest,black-hills-national-forest,uinta-wasatch-cache-national-forest,caribou-targhee-national-forest,klamath-national-forest,willamette-national-forest,boise-national-forest,lolo-national-forest,salmon-challis-national-forest,stanislaus-national-forest,dixie-national-forest,bitterroot-national-forest,mt-hood-national-forest,coronado-national-forest,sierra-national-forest,huron-manistee-national-forest,ozark-st-francis-national-forest,ottawa-national-forest,hiawatha-national-forest,chequamegon-nicolet-national-forest,national-forests-in-florida,ouachita-national-forest,mark-twain-national-forest,national-forests-in-mississippi,kisatchie-national-forest,george-washington-jefferson-national-forest,francis-marion-sumter-national-forests,national-forests-in-texas,national-forests-in-north-carolina,allegheny-national-forest,cherokee-national-forest,daniel-boone-national-forest,rogue-river-siskiyou-national-forests,medicine-bow-routt-national-forest,kootenai-national-forest,gifford-pinchot-national-forest,arapaho-roosevelt-national-forests,umatilla-national-forest,ochoco-national-forest,cibola-national-forest,eldorado-national-forest,nez-perce-clearwater-national-forest,payette-national-forest,superior-national-forest,chippewa-national-forest,sequoia-national-forest,ashley-national-forest,bridger-teton-national-forest,siuslaw-national-forest,lincoln-national-forest,white-river-national-forest,mt-baker-snoqualmie-national-forest,flathead-national-forest,olympic-national-forest,custer-national-forest,bighorn-national-forest,colville-national-forest,chattahoochee-oconee-national-forests,nebraska-national-forest,shoshone-national-forest,san-bernardino-national-forest,los-padres-national-forest,dakota-prairie-grasslands,monongahela-national-forest,land-between-the-lakes-national-recreation-area,shawnee-national-forest,cleveland-national-forest,green-mountain-finger-lakes-national-forests,lake-tahoe-basin-management-unit,wayne-national-forest,white-mountain-national-forest,wallowa-whitman-national-forest,hoosier-national-forest,columbia-river-gorge-national-scenic-area,okanogan-wenatchee-national-forest,six-rivers-national-forest,tonto-national-forest' }}
+      SYNC_DEPTH: ${{ inputs.sync_depth || 'cautious' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
-      LIMIT_PER_FOREST_LAYER: ${{ inputs.limit_per_forest_layer || '150' }}
+      LIMIT_PER_FOREST_LAYER: ${{ inputs.limit_per_forest_layer || '' }}
       MAX_ALLOWABLE_OFFSET: ${{ inputs.max_allowable_offset || '0.000025' }}
       CURRENT_CONDITIONS_JSON: ${{ inputs.current_conditions_json || '' }}
 
@@ -73,12 +82,22 @@ jobs:
             .split(',')
             .map((forest) => forest.trim())
             .filter(Boolean);
+          const syncDepth = String(process.env.SYNC_DEPTH || 'cautious').trim().toLowerCase();
           const minMiles = Number(process.env.MIN_MILES || 1);
-          const limitPerForestLayer = Number(process.env.LIMIT_PER_FOREST_LAYER || 150);
+          const limitOverride = String(process.env.LIMIT_PER_FOREST_LAYER || '').trim();
+          const deepPagination = syncDepth === 'deep';
+          const limitPerForestLayer = limitOverride
+            ? Number(limitOverride)
+            : deepPagination
+              ? 2500
+              : 150;
           const maxAllowableOffset = Number(process.env.MAX_ALLOWABLE_OFFSET || 0.000025);
           const currentConditionsJson = String(process.env.CURRENT_CONDITIONS_JSON || '').trim();
 
           if (forests.length === 0) throw new Error('At least one forest slug is required.');
+          if (!['cautious', 'deep'].includes(syncDepth)) {
+            throw new Error('sync_depth must be cautious or deep.');
+          }
           if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');
           if (!Number.isFinite(limitPerForestLayer) || limitPerForestLayer <= 0) {
             throw new Error('limit_per_forest_layer must be positive.');
@@ -87,7 +106,7 @@ jobs:
             throw new Error('max_allowable_offset must be positive.');
           }
 
-          const boundedLimitPerForestLayer = Math.min(500, Math.round(limitPerForestLayer));
+          const boundedLimitPerForestLayer = Math.min(deepPagination ? 2500 : 500, Math.round(limitPerForestLayer));
           const boundedMaxAllowableOffset = Math.min(0.001, maxAllowableOffset);
           let currentConditions = null;
 
@@ -104,6 +123,7 @@ jobs:
               forests: [forest],
               minMiles,
               limitPerForestLayer: boundedLimitPerForestLayer,
+              deepPagination,
               maxAllowableOffset: boundedMaxAllowableOffset,
             };
             if (currentConditions) payload.currentConditions = currentConditions;
@@ -208,6 +228,8 @@ jobs:
             normalizedFeatureCount: forest.normalizedFeatureCount,
             aggregateRouteCount: forest.aggregateRouteCount,
             publicRecommendationCount: forest.publicRecommendationCount || 0,
+            limitPerForestLayer: forest.limitPerForestLayer || '',
+            syncDepth: forest.deepPagination ? 'deep' : 'cautious',
             currentConditionClosureCount: forest.currentConditionClosureCount || 0,
             currentConditionBlockedRouteCount: forest.currentConditionBlockedRouteCount || 0,
           }));
@@ -217,10 +239,10 @@ jobs:
           const markdown = [
             '## Route Catalog USFS MVUM Sync',
             '',
-            '| Forest | Raw Features | Normalized Features | Aggregate Routes | Public Recommendations | Current Closures | Blocked Routes |',
-            '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+            '| Forest | Sync Depth | Limit/Layer | Raw Features | Normalized Features | Aggregate Routes | Public Recommendations | Current Closures | Blocked Routes |',
+            '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
             ...summaryRows.map((forest) =>
-              `| ${forest.forest} | ${forest.rawFeatureCount} | ${forest.normalizedFeatureCount} | ${forest.aggregateRouteCount} | ${forest.publicRecommendationCount} | ${forest.currentConditionClosureCount} | ${forest.currentConditionBlockedRouteCount} |`
+              `| ${forest.forest} | ${forest.syncDepth} | ${forest.limitPerForestLayer} | ${forest.rawFeatureCount} | ${forest.normalizedFeatureCount} | ${forest.aggregateRouteCount} | ${forest.publicRecommendationCount} | ${forest.currentConditionClosureCount} | ${forest.currentConditionBlockedRouteCount} |`
             ),
             '',
             response.caveat ? `_${response.caveat}_` : '',

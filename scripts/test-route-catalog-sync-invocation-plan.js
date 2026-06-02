@@ -199,6 +199,21 @@ assert.strictEqual(
   0.000025,
   'USFS MVUM sync should default to bounded ArcGIS geometry simplification for dense trail sources',
 );
+assert.strictEqual(
+  byKey.get('usfs_mvum').defaultPayload.deepPagination,
+  false,
+  'USFS MVUM sync should keep cautious pagination as the default operator payload',
+);
+assert.strictEqual(
+  byKey.get('usfs_mvum').deepBackfillPayload.deepPagination,
+  true,
+  'USFS MVUM sync should expose an explicit deep-pagination backfill payload',
+);
+assert.strictEqual(
+  byKey.get('usfs_mvum').deepBackfillPayload.limitPerForestLayer,
+  2500,
+  'USFS MVUM deep backfill payload should raise the bounded per-forest/layer cap enough to cover current official source tails',
+);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY']);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);
 assert.strictEqual(
