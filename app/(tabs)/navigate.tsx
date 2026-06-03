@@ -36,6 +36,7 @@ import {
   Easing,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
+import LandscapeDockRevealButton from '../../components/LandscapeDockRevealButton';
 import { hapticMicro, hapticCommand } from '../../lib/haptics';
 import { runtimeSmokeStore } from '../../lib/ai/runtimeSmokeStore';
 
@@ -17994,18 +17995,14 @@ const stableMapSurface = useMemo(() => {
                   {/* MAP CONTAINER (fills remaining space) */}
       <View style={effectiveMapExpanded ? styles.mapFullscreen : styles.mapContainer}>
         {navigateLandscapeExpanded ? (
-          <TouchableOpacity
+          <LandscapeDockRevealButton
             style={[
               styles.navigateLandscapeDockRevealButton,
               { top: roadNavigationSurfaceTopOffset },
             ]}
-            accessibilityRole="button"
             accessibilityLabel="Show Navigate navigation dock"
-            activeOpacity={0.82}
             onPress={handleRevealNavigateDock}
-          >
-            <Ionicons name="apps-outline" size={15} color={TACTICAL.amber} />
-          </TouchableOpacity>
+          />
         ) : null}
         {/* Loading overlay */}
         {!mapOverlayStartupReady && (
@@ -18596,81 +18593,6 @@ const stableMapSurface = useMemo(() => {
             })}
           </View>
         </View>
-
-        {communityCampsitesEnabled ? (
-          <View style={styles.toolsResultsBlock}>
-            <Text style={styles.quickActionsSectionTitle}>CAMPSITE LAYERS</Text>
-            <View style={styles.quickActionsStyleRow}>
-              {CAMPSITE_VISIBILITY_LAYER_TOGGLES.map((layer) => {
-                const isActive = campsiteLayerVisibility[layer.key];
-                return (
-                  <TouchableOpacity
-                    key={layer.key}
-                    style={[
-                      styles.quickActionsStyleButton,
-                      isActive && styles.quickActionsStyleButtonActive,
-                    ]}
-                    onPress={() => handleCampsiteLayerToggle(layer.key)}
-                    activeOpacity={0.85}
-                  >
-                    <Text
-                      style={[
-                        styles.quickActionsStyleText,
-                        isActive && styles.quickActionsStyleTextActive,
-                      ]}
-                    >
-                      {layer.key === 'community'
-                        ? 'COMMUNITY'
-                        : layer.key === 'private'
-                          ? 'PRIVATE'
-                          : layer.key === 'group'
-                            ? 'GROUP'
-                            : layer.key === 'pending'
-                              ? 'PENDING'
-                              : 'REVIEW'}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <Text style={styles.toolsSuggestionSubtitle}>
-              ECS Community Campsites are approved public records. Pending review markers are not public.
-            </Text>
-            {campsiteLayerVisibility.group && groupCampsiteGroups.length > 1 ? (
-              <View style={styles.quickActionsStyleRow}>
-                {groupCampsiteGroups.map((item) => {
-                  const isSelected = selectedGroupCampsiteGroupId === item.group.id;
-                  return (
-                    <TouchableOpacity
-                      key={item.group.id}
-                      style={[
-                        styles.quickActionsStyleButton,
-                        isSelected && styles.quickActionsStyleButtonActive,
-                      ]}
-                      onPress={() => {
-                        hapticMicro();
-                        groupCampsiteBoundsSignatureRef.current = null;
-                        setSelectedGroupCampsiteGroupId(item.group.id);
-                        setRequestBoundsTrigger((prev) => prev + 1);
-                      }}
-                      activeOpacity={0.85}
-                    >
-                      <Text
-                        style={[
-                          styles.quickActionsStyleText,
-                          isSelected && styles.quickActionsStyleTextActive,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {item.group.name}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ) : null}
-          </View>
-        ) : null}
 
         <View style={styles.toolsResultsBlock}>
           <Text style={styles.quickActionsSectionTitle}>

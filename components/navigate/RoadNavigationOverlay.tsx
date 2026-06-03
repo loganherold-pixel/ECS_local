@@ -801,7 +801,7 @@ function ActiveNavigationCard({
                   activeOpacity={0.82}
                   hitSlop={8}
                   accessibilityRole="button"
-                  accessibilityLabel="Minimize active guidance"
+                  accessibilityLabel="MINIMIZE active guidance"
                 >
                   <Ionicons name="remove" size={13} color={TACTICAL.amber} />
                   <Text
@@ -810,7 +810,7 @@ function ActiveNavigationCard({
                     adjustsFontSizeToFit
                     minimumFontScale={0.72}
                   >
-                    Minimize
+                    MINIMIZE
                   </Text>
                 </TouchableOpacity>
               ) : null}
@@ -830,7 +830,7 @@ function ActiveNavigationCard({
                     adjustsFontSizeToFit
                     minimumFontScale={0.72}
                   >
-                    Offline
+                    OFFLINE
                   </Text>
                 </TouchableOpacity>
               ) : null}
@@ -849,7 +849,7 @@ function ActiveNavigationCard({
                   adjustsFontSizeToFit
                   minimumFontScale={0.72}
                 >
-                  End
+                  END
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1459,7 +1459,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   activeGuidanceMinimizeButton: {
-    minWidth: 96,
+    minWidth: 108,
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(196,138,44,0.08)',
   },
@@ -1474,7 +1474,7 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
   },
   activeGuidanceOfflineButton: {
-    minWidth: 84,
+    minWidth: 92,
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(196,138,44,0.08)',
   },

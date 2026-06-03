@@ -79,8 +79,10 @@ includes('const commandVehiclePitchDeg = commandStagePitchDeg;', 'Vehicle Profil
 includes('handleZeroVehicleRoll', 'Vehicle Profile must expose a zero-roll handler.');
 includes('setVehicleRollZeroOffsetDeg(commandStageRollDeg);', 'Vehicle Profile zero control must capture the current roll as the new zero.');
 includes('VehicleCommandRollZeroButton', 'Vehicle Profile must render a reusable zero-roll button.');
-includes('vehicleRollZeroButtonCompact', 'Regular Vehicle Profile widget must position the zero button in the top-left corner.');
+includes('vehicleRollZeroButtonCompact', 'Regular Vehicle Profile widget must position the zero button away from live OBD2 corner readouts.');
+includes('right: 42', 'Regular Vehicle Profile zero button should sit on the upper rail outside the top-right voltage corner.');
 includes('vehicleRollZeroButtonExpanded', 'Expanded Vehicle Profile widget must place the zero button beside the close control.');
+includes('height: 112', 'Expanded Vehicle Profile roll meter dock should be large enough to read at a glance.');
 includes("accessibilityLabel=\"Zero vehicle roll indicator\"", 'Vehicle Profile zero button must be accessible.');
 includes('event.stopPropagation();', 'Vehicle Profile zero button must stop the compact card press from opening expanded detail.');
 includes('activePanel?.panel === \'vehicle\'', 'Expanded zero button must only show for the Vehicle Profile panel.');
@@ -147,6 +149,7 @@ assert.ok(!vehicleDetailBlock.includes('vehicleLiveSourcePillText'), 'Vehicle ex
 });
 
 [
+  "const VIEWBOX_HEIGHT = 58",
   "const DEFAULT_MAX_ROLL_DEG = 45",
   "const CAMPSITE_LEVEL_TOLERANCE_DEG = 2",
   "const TICK_STEP_DEG = 5",
@@ -161,7 +164,7 @@ assert.ok(!vehicleDetailBlock.includes('vehicleLiveSourcePillText'), 'Vehicle ex
   "campsiteStatusLine",
   "x1={markerX}",
   "y1={4}",
-  "y1={33}",
+  "y1={45}",
   "left: 13",
   "right: 13",
   "top: '50%'",

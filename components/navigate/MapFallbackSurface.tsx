@@ -28,7 +28,8 @@ export type MapFallbackSurfaceProps = {
   markers?: FallbackMarker[];
   bootIssue?: string | null;
   compact?: boolean;
-  statusLabel?: string;
+  showStatusLabel?: boolean;
+  statusLabel?: string | null;
   transparentBackground?: boolean;
 };
 
@@ -103,7 +104,8 @@ export default function MapFallbackSurface({
   progressRouteCoords,
   routeCoords,
   segments,
-  statusLabel = 'Fallback map',
+  showStatusLabel = false,
+  statusLabel = null,
   transparentBackground = false,
   userLocation,
 }: MapFallbackSurfaceProps) {
@@ -268,16 +270,18 @@ export default function MapFallbackSurface({
           </>
         ) : null}
       </Svg>
-      <View style={[styles.statusPill, compact && styles.compactStatusPill]}>
-        <Text style={styles.statusText} numberOfLines={1}>
-          {statusLabel}
-        </Text>
-        {!!bootIssue && !compact ? (
-          <Text style={styles.issueText} numberOfLines={1}>
-            {bootIssue}
+      {showStatusLabel && statusLabel ? (
+        <View style={[styles.statusPill, compact && styles.compactStatusPill]}>
+          <Text style={styles.statusText} numberOfLines={1}>
+            {statusLabel}
           </Text>
-        ) : null}
-      </View>
+          {!!bootIssue && !compact ? (
+            <Text style={styles.issueText} numberOfLines={1}>
+              {bootIssue}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }

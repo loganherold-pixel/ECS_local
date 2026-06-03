@@ -249,6 +249,29 @@ assert(
     deviceConnectionsScreen.includes("policy.telemetryTruthLabel || 'Parser Pending'"),
   'Device Connections rows must show Bluestack parser-pending labels instead of generic unavailable/unsupported copy',
 );
+
+const deviceRowStart = deviceConnectionsScreen.indexOf('function DeviceRow({');
+const deviceRowEnd = deviceConnectionsScreen.indexOf('function SectionBlock', deviceRowStart);
+assert(deviceRowStart >= 0 && deviceRowEnd > deviceRowStart, 'Device Connections screen must keep a DeviceRow component.');
+const deviceRowBlock = deviceConnectionsScreen.slice(deviceRowStart, deviceRowEnd);
+assert(
+  deviceRowBlock.includes('compactDeviceMetaRow') &&
+    deviceRowBlock.includes('compactDeviceReason') &&
+    deviceRowBlock.includes('compactReasonText'),
+  'Bluetooth scanner device rows should render one compact metadata row plus a concise reason line.',
+);
+for (const forbiddenRowFragment of [
+  'styles.devicePillsRow',
+  'styles.telemetryGrid',
+  'styles.diagnosticReasonBox',
+  'styles.deviceFooter',
+  'getFooterLabel(device)',
+]) {
+  assert(
+    !deviceRowBlock.includes(forbiddenRowFragment),
+    `Bluetooth scanner compact rows must not render bulky inline detail: ${forbiddenRowFragment}`,
+  );
+}
 assert(
     hook.indexOf('if (visibleScanResultCount > 0)') > -1 &&
     hook.indexOf('if (visibleScanResultCount > 0)') <

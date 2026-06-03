@@ -252,6 +252,29 @@ function getDeviceModelLabel(device: ECSDeviceConnectionModel): string | null {
   return device.subtype;
 }
 
+function getCompactDeviceTypeLabel(device: ECSDeviceConnectionModel): string {
+  if (device.deviceCategory === 'propane_monitor' || device.providerId === 'propane_monitor') return 'Propane monitor';
+  if (device.deviceCategory === 'water_tank_monitor' || device.providerId === 'water_monitor') return 'Water / fluid monitor';
+  if (device.kind === 'telemetry') return 'Vehicle telemetry';
+  if (device.kind === 'power') return 'Power system';
+  if (device.kind === 'sensor') return 'Utility sensor';
+  if (device.kind === 'generic') return 'Bluetooth accessory';
+  return device.category || 'Bluetooth device';
+}
+
+function getCompactDeviceReason(
+  device: ECSDeviceConnectionModel,
+  connectionPolicy: ReturnType<typeof getBluestackConnectionPolicy>,
+): string | null {
+  if (device.diagnosticReason && shouldShowDiagnosticReason(device)) return device.diagnosticReason;
+  if (device.isConnected) return device.detailLabel || connectionPolicy.statusDetail;
+  if (device.isSelected) return 'Selected for connection.';
+  if (device.status === 'failed' || device.status === 'unsupported' || device.status === 'partial' || device.telemetryUnsupported) {
+    return device.detailLabel || connectionPolicy.statusDetail;
+  }
+  return null;
+}
+
 function getTruthChip(device: ECSDeviceConnectionModel): { label: string; tone: StatusTone } | null {
   const policy = getBluestackConnectionPolicy(device);
   if (device.kind === 'sensor' || device.kind === 'generic') {
@@ -440,7 +463,6 @@ function DeviceRow({
   const tone = getStatusTone(device.status);
   const toneColors = getToneColors(tone);
   const connectionPolicy = getBluestackConnectionPolicy(device);
-  const truthChip = getTruthChip(device);
   const selectionEnabled =
     !device.isConnected &&
     !device.isConnecting &&
@@ -449,7 +471,9 @@ function DeviceRow({
   const showSelectionToggle = selectionEnabled || device.isSelected;
   const showPrimaryAction = actionBusy || device.actionKind !== 'none';
   const modelLabel = getDeviceModelLabel(device);
-  const showDiagnosticReason = shouldShowDiagnosticReason(device);
+  const compactReason = getCompactDeviceReason(device, connectionPolicy);
+  const compactTypeLabel = getCompactDeviceTypeLabel(device);
+  const compactSubtitle = [device.provider, modelLabel].filter(Boolean).join(' • ');
 
   const actionDisabled =
     globalBusy ||
@@ -518,11 +542,11 @@ function DeviceRow({
           ]}
         >
           <Ionicons name={getDeviceIcon(device)} size={18} color={toneColors.text} />
-        </View>
+          </View>
 
         <View style={styles.deviceMain}>
           <Text style={[styles.deviceEyebrow, { color: palette.textMuted }]} numberOfLines={1}>
-            {getDeviceEyebrow(device)}
+            {compactSubtitle || device.provider || getDeviceEyebrow(device)}
           </Text>
 
           <View style={styles.deviceTitleRow}>
@@ -531,10 +555,30 @@ function DeviceRow({
             </Text>
           </View>
 
-          {modelLabel ? (
-            <Text style={[styles.deviceModel, { color: palette.textMuted }]} numberOfLines={1}>
-              {modelLabel}
+          <View style={styles.compactDeviceMetaRow}>
+            <Text style={[styles.compactDeviceMeta, { color: palette.textMuted }]} numberOfLines={1}>
+              {compactTypeLabel}
             </Text>
+            <View style={[styles.compactDeviceStatusDot, { backgroundColor: toneColors.text }]} />
+            <Text style={[styles.compactDeviceMeta, { color: toneColors.text }]} numberOfLines={1}>
+              {device.statusPillLabel}
+            </Text>
+          </View>
+
+          {compactReason ? (
+            <View
+              style={[
+                styles.compactDeviceReason,
+                {
+                  backgroundColor: getToneColors(getStatusPillTone(device.statusPillLabel, tone)).background,
+                  borderColor: getToneColors(getStatusPillTone(device.statusPillLabel, tone)).border,
+                },
+              ]}
+            >
+              <Text style={[styles.compactReasonText, { color: palette.text }]} numberOfLines={2}>
+                {compactReason}
+              </Text>
+            </View>
           ) : null}
         </View>
 
@@ -569,98 +613,6 @@ function DeviceRow({
               </Text>
             )}
           </TouchableOpacity>
-        ) : null}
-      </View>
-
-      <View style={styles.devicePillsRow}>
-        <DeviceStatePill
-          label={device.statusPillLabel}
-          tone={getStatusPillTone(device.statusPillLabel, tone)}
-        />
-        <DeviceStatePill label={device.connectionSourceLabel} tone={getSourceTone(device.connectionSourceLabel)} />
-        <DeviceStatePill
-          label={connectionPolicy.statusLabel}
-          tone={
-            connectionPolicy.lane === 'live_telemetry'
-              ? 'active'
-              : connectionPolicy.lane === 'unsupported' || connectionPolicy.lane === 'cloud_authorization_needed'
-                ? 'danger'
-                : connectionPolicy.lane === 'cloud_authorized'
-                  ? 'sync'
-                  : 'warning'
-          }
-        />
-        {truthChip ? <DeviceStatePill label={truthChip.label} tone={truthChip.tone} /> : null}
-        {device.isSelected ? <DeviceStatePill label="Selected" tone="sync" /> : null}
-        {device.supportLevel !== 'verified' && device.supportLevel !== 'telemetry' && device.status !== 'partial' && device.status !== 'unsupported' ? (
-          <DeviceStatePill
-            label={device.supportLabel}
-            tone={device.supportLevel === 'ui_only' ? 'danger' : 'warning'}
-          />
-        ) : null}
-      </View>
-
-      <Text style={[styles.deviceDetail, { color: palette.textMuted }]}>
-        {device.detailLabel || connectionPolicy.statusDetail}
-      </Text>
-
-      {device.telemetryFields.length > 0 ? (
-        <View style={styles.telemetryGrid}>
-          {device.telemetryFields.map((field) => (
-            <View
-              key={field.key}
-              style={[
-                styles.telemetryCell,
-                {
-                  backgroundColor: TACTICAL.panelInactive,
-                  borderColor: palette.border,
-                },
-              ]}
-            >
-              <Text style={[styles.telemetryCellLabel, { color: palette.textMuted }]} numberOfLines={1}>
-                {field.label}
-              </Text>
-              <Text style={[styles.telemetryCellValue, { color: palette.text }]} numberOfLines={1}>
-                {field.value}
-              </Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-
-      {showDiagnosticReason ? (
-        <View
-          style={[
-            styles.diagnosticReasonBox,
-            {
-              backgroundColor: getToneColors(getStatusPillTone(device.statusPillLabel, tone)).background,
-              borderColor: getToneColors(getStatusPillTone(device.statusPillLabel, tone)).border,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.diagnosticReasonLabel,
-              { color: getToneColors(getStatusPillTone(device.statusPillLabel, tone)).text },
-            ]}
-          >
-            Reason
-          </Text>
-          <Text style={[styles.diagnosticReasonText, { color: palette.text }]} numberOfLines={3}>
-            {device.diagnosticReason}
-          </Text>
-        </View>
-      ) : null}
-
-      <View style={[styles.deviceFooter, { borderTopColor: GOLD_RAIL.subsection }]}>
-        <Text style={[styles.deviceFooterText, { color: palette.textMuted }]}>
-          {getFooterLabel(device)}
-        </Text>
-
-        {device.affectsMultipleDevices ? (
-          <Text style={[styles.deviceImpactText, { color: palette.textMuted }]}>
-            Disconnecting this provider may end more than one active power session.
-          </Text>
         ) : null}
       </View>
     </View>
@@ -1812,12 +1764,13 @@ const styles = StyleSheet.create({
   deviceRow: {
     borderRadius: 8,
     borderWidth: 1,
-    padding: 14,
-    gap: 12,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    gap: 8,
   },
   deviceRowTop: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 10,
   },
   selectionToggle: {
@@ -1842,8 +1795,8 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
   },
   deviceIconWrap: {
-    width: 40,
-    height: 40,
+    width: 34,
+    height: 34,
     borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
@@ -1852,7 +1805,7 @@ const styles = StyleSheet.create({
   deviceMain: {
     flex: 1,
     minWidth: 0,
-    gap: 4,
+    gap: 3,
   },
   deviceEyebrow: {
     fontSize: 10,
@@ -1868,18 +1821,18 @@ const styles = StyleSheet.create({
   },
   deviceName: {
     flexShrink: 1,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '800',
-    lineHeight: 19,
+    lineHeight: 18,
   },
   deviceModel: {
     fontSize: 12,
     lineHeight: 17,
   },
   primaryActionBtn: {
-    minWidth: 104,
-    minHeight: 36,
-    paddingHorizontal: 12,
+    minWidth: 88,
+    minHeight: 32,
+    paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
@@ -1896,6 +1849,38 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1.15,
     textTransform: 'uppercase',
+  },
+  compactDeviceMetaRow: {
+    minHeight: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  compactDeviceMeta: {
+    flexShrink: 1,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '800',
+  },
+  compactDeviceStatusDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 999,
+    opacity: 0.82,
+  },
+  compactDeviceReason: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    borderRadius: 7,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    marginTop: 2,
+  },
+  compactReasonText: {
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
   },
   devicePillsRow: {
     flexDirection: 'row',

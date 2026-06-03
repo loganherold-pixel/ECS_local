@@ -36,12 +36,12 @@ type ChartFrame = {
 };
 
 const CHART_FRAME: ChartFrame = {
-  left: 24,
-  right: 16,
-  top: 8,
+  left: 34,
+  right: 12,
+  top: 18,
   bottom: 24,
-  width: VIEWBOX_WIDTH - 24 - 16,
-  height: VIEWBOX_HEIGHT - 8 - 24,
+  width: VIEWBOX_WIDTH - 34 - 12,
+  height: VIEWBOX_HEIGHT - 18 - 24,
   baselineY: VIEWBOX_HEIGHT - 24,
 };
 

@@ -75,14 +75,13 @@ assert(widgetRenderersSource.includes('resizeMode="cover"') && widgetRenderersSo
 assert(!widgetRenderersSource.includes('ROUTE GUIDANCE TERRAIN RISK'), 'Terrain Risk widget must not duplicate the Route Terrain Risk label inside the chart.');
 assert(widgetRenderersSource.includes('terrainRiskPreviewActive'), 'Active Terrain Risk preview must let the graph use the full route panel surface.');
 assert(widgetRenderersSource.includes('transparentBackground'), 'Compact Terrain Risk chart must render with a transparent chart background.');
-assert(widgetRenderersSource.includes("headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}"), 'Compact Terrain Risk data-source label must sit in the top-right widget header.');
-assert(widgetRenderersSource.includes("headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}"), 'Compact Terrain Risk score must sit in the top-right widget header.');
+assert(widgetRenderersSource.includes('headerStatusLabel={null}'), 'Compact Terrain Risk should suppress the top-right widget header label so the chart can breathe.');
+assert(widgetRenderersSource.includes('headerStatusValue={null}'), 'Compact Terrain Risk should suppress the top-right widget header score so the chart can breathe.');
+assert(!widgetRenderersSource.includes("headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}"), 'Compact Terrain Risk data-source label must not overlap the chart.');
+assert(!widgetRenderersSource.includes("headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}"), 'Compact Terrain Risk score must not overlap the chart.');
 assert(!widgetRenderersSource.includes('terrainRiskCornerReadoutOverlay'), 'Compact Terrain Risk status readout must not overlay the chart.');
 assert(!widgetRenderersSource.includes('terrainRiskBottomReadoutOverlay'), 'Compact Terrain Risk status readout must not sit over the bottom axis lane.');
-assert(
-  /commandPanelHeaderStatus[\s\S]*commandPanelHeaderStatusLabel[\s\S]*commandPanelHeaderStatusValue/.test(widgetRenderersSource),
-  'Compact Terrain Risk header readout must show the data-source label above the risk score.',
-);
+assert(!/commandPanelHeaderStatus[\s\S]{0,160}ROUTE TERRAIN RISK/.test(widgetRenderersSource), 'Compact Terrain Risk header readout should not cover the route profile chart.');
 assert(widgetRenderersSource.includes('sampleRouteElevationFromMapboxTerrainContours'), 'Active guidance terrain risk must sample elevation before falling back to GPS altitude.');
 assert(widgetRenderersSource.includes('Mapbox terrain contour estimate'), 'Sampled route terrain must disclose the Mapbox contour estimate source.');
 assert(!widgetRenderersSource.includes('NO ACTIVE ROUTE'), 'Terrain Risk widget must not repeat no-active-route copy in the top-right header.');
@@ -146,9 +145,9 @@ assert(sideProfileSource.includes('High risk route sections are highlighted'), '
 assert(sideProfileSource.includes('transparentBackground = false'), 'Terrain Risk chart should keep opaque detail rendering by default.');
 assert(sideProfileSource.includes('!transparentBackground ?'), 'Terrain Risk chart should be able to suppress the opaque SVG background.');
 assert(sideProfileSource.includes('shellTransparent'), 'Terrain Risk chart needs a transparent shell style for compact route panels.');
-assert(sideProfileSource.includes('left: 24'), 'Terrain Risk chart should preserve a readable left elevation-label lane.');
-assert(sideProfileSource.includes('right: 16'), 'Terrain Risk chart should reserve a right-side lane so the final distance/unit labels are not clipped.');
-assert(sideProfileSource.includes('top: 8') && sideProfileSource.includes('bottom: 24'), 'Terrain Risk chart should keep top markers and bottom axis labels inside the viewBox.');
+assert(sideProfileSource.includes('left: 34'), 'Terrain Risk chart should preserve a wider readable left elevation-label lane.');
+assert(sideProfileSource.includes('right: 12'), 'Terrain Risk chart should reserve a right-side lane so the final distance/unit labels are not clipped.');
+assert(sideProfileSource.includes('top: 18') && sideProfileSource.includes('bottom: 24'), 'Terrain Risk chart should keep top markers and bottom axis labels inside the viewBox.');
 assert(sideProfileSource.includes('labelX: ratio === 1 ? x - 10 : ratio === 0 ? x + 2 : x'), 'Terrain Risk chart should keep first/final distance labels clear of the chart edges and unit label.');
 assert(sideProfileSource.includes('y={CHART_FRAME.baselineY + 13}'), 'Terrain Risk chart distance ticks and unit label should share a single aligned bottom axis row.');
 assert(sideProfileSource.includes('x={CHART_FRAME.left + 2}') && sideProfileSource.includes('y={CHART_FRAME.top + 8}'), 'Terrain Risk FT label should stay inside the slimmer elevation tick label lane.');
@@ -165,7 +164,11 @@ assert(
     sideProfileSource.includes('onPress={() => handleReferenceMarkerPress(point)}'),
   'Terrain Risk reference dots should only become tappable in expanded mode.',
 );
-assert(sideProfileSource.includes('Why this point was referenced'), 'Terrain Risk expanded dot callout should explain the selected point.');
+assert(
+  widgetRenderersSource.includes('ECS INTELLIGENCE BRIEF') &&
+    widgetRenderersSource.includes('selectedReferenceEvent.fieldGuidance.slice(0, 2).join'),
+  'Terrain Risk expanded dot callout should explain the selected point.',
+);
 assert(sideProfileSource.includes('completedDistanceMiles?: number | null'), 'Terrain Risk side profile should accept route progress for the live GPS marker.');
 assert(sideProfileSource.includes('buildCurrentRouteMarkerPoint'), 'Terrain Risk side profile should interpolate the current GPS marker on the elevation line.');
 assert(sideProfileSource.includes('Current GPS position'), 'Terrain Risk side profile should label the moving GPS marker for assistive tech.');

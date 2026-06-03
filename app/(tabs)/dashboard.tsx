@@ -48,6 +48,7 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { DiscoverIcon } from '../../components/DockIcons';
+import LandscapeDockRevealButton from '../../components/LandscapeDockRevealButton';
 import TabErrorBoundary from '../../components/TabErrorBoundary';
 
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
@@ -541,6 +542,7 @@ function DashboardTabBar({
   void autoModeInCooldown;
   void autoModeManualOverride;
   void autoModeSustaining;
+  void isDashboardExpanded;
   void onToggleAutoMode;
   const adaptive = useAdaptiveLayout();
   const tabRowPadding = Math.max(10, adaptive.dashboard.gridPadding - 2);
@@ -621,7 +623,8 @@ function DashboardTabBar({
 
       {showDockRevealControl ? (
         <View style={styles.tabControlsSection}>
-          <TouchableOpacity
+          <LandscapeDockRevealButton
+            inline
             style={[
               styles.dashboardExpandBtn,
               {
@@ -630,18 +633,9 @@ function DashboardTabBar({
               },
             ]}
             onPress={onToggleDashboardExpanded}
-            activeOpacity={0.7}
-            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-            accessibilityRole="button"
             accessibilityLabel="Reveal ECS navigation dock"
             accessibilityHint="Temporarily shows the lower ECS tab bar for five seconds."
-          >
-            <Ionicons
-              name={isDashboardExpanded ? 'chevron-up-outline' : 'menu-outline'}
-              size={14}
-              color={palette.amber}
-            />
-          </TouchableOpacity>
+          />
         </View>
       ) : null}
     </View>

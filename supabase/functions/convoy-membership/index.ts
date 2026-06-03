@@ -10,11 +10,16 @@ type AuthenticatedUser = {
 
 type ActionBody = {
   action?: string;
+  name?: string;
   convoyId?: string;
   memberId?: string;
   role?: ConvoyRole;
   maxUses?: number;
+  startsAt?: string | null;
   expiresAt?: string;
+  leaderCallsign?: string | null;
+  leaderVehicleId?: string | null;
+  leaderExpeditionBadgeTitle?: string | null;
   rawCode?: string;
   callsign?: string;
   vehicleId?: string | null;
@@ -48,6 +53,9 @@ const corsHeaders = {
 const INVITE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const VALID_ROLES = new Set<ConvoyRole>(['lead', 'sweep', 'member', 'support']);
 const CONVOY_MEMBER_SELECT_BASE = 'id, convoy_id, user_id, vehicle_id, callsign, role, joined_at, revoked_at';
+const MAX_CONVOY_NAME_LENGTH = 80;
+const MAX_CALLSIGN_LENGTH = 40;
+const MAX_EXPEDITION_BADGE_TITLE_LENGTH = 48;
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
@@ -202,6 +210,12 @@ function dateIsFuture(value: unknown): value is string {
   return Number.isFinite(date.getTime()) && date.getTime() > Date.now();
 }
 
+function normalizeOptionalIsoDate(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  const date = new Date(String(value));
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
 function publicInvite(invite: ConvoyInviteRow) {
   return {
     id: invite.id,
@@ -306,6 +320,59 @@ async function updateConvoyMemberWithoutIdentityColumns(
 
   if (error || !data) return { ok: false as const, response: failBackend(error, 'Unable to reactivate convoy membership.') };
   return { ok: true as const, member: withConvoyMemberIdentityFallback(data) };
+}
+
+async function createConvoy(admin: ReturnType<typeof createAdminClient>, body: ActionBody, user: AuthenticatedUser) {
+  const name = sanitizeText(body.name, MAX_CONVOY_NAME_LENGTH);
+  const startsAt = normalizeOptionalIsoDate(body.startsAt);
+  const expiresAt = normalizeOptionalIsoDate(body.expiresAt);
+  const callsign = sanitizeText(body.leaderCallsign || 'Lead', MAX_CALLSIGN_LENGTH) || 'Lead';
+  const vehicleId = sanitizeText(body.leaderVehicleId, 120) || null;
+  const expeditionBadgeTitle = sanitizeText(
+    body.leaderExpeditionBadgeTitle,
+    MAX_EXPEDITION_BADGE_TITLE_LENGTH,
+  ) || null;
+
+  if (!name) return fail('validation_error', 'Convoy name is required.');
+
+  const { data: convoy, error: convoyError } = await admin
+    .from('convoys')
+    .insert({
+      name,
+      leader_user_id: user.id,
+      status: 'active',
+      starts_at: startsAt,
+      expires_at: expiresAt,
+    })
+    .select('*')
+    .single();
+
+  if (convoyError || !convoy) return failBackend(convoyError, 'Unable to create convoy.');
+
+  const insertPayload = {
+    convoy_id: convoy.id,
+    user_id: user.id,
+    vehicle_id: vehicleId,
+    callsign,
+    expedition_badge_title: expeditionBadgeTitle,
+    role: 'lead',
+  };
+  const { data: membership, error: membershipError } = await admin
+    .from('convoy_members')
+    .insert(insertPayload)
+    .select('*')
+    .single();
+
+  if (isOptionalConvoyMemberIdentityColumnError(membershipError)) {
+    const fallback = await insertConvoyMemberWithoutIdentityColumns(admin, insertPayload);
+    if (!fallback.ok) return fallback.response;
+    return ok({ convoy, membership: fallback.member, syncState: 'cloud' });
+  }
+  if (membershipError || !membership) {
+    return failBackend(membershipError, 'Unable to create convoy leader membership.');
+  }
+
+  return ok({ convoy, membership, syncState: 'cloud' });
 }
 
 async function createInvite(admin: ReturnType<typeof createAdminClient>, body: ActionBody, user: AuthenticatedUser) {
@@ -562,6 +629,8 @@ serve(async (req) => {
     }
 
     switch (body.action) {
+      case 'create_convoy':
+        return await createConvoy(admin, body, auth.user);
       case 'create_invite':
         return await createInvite(admin, body, auth.user);
       case 'join_with_invite':

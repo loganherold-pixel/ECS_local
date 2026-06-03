@@ -25,6 +25,7 @@ const MAX_EXPEDITION_BADGE_TITLE_LENGTH = 48;
 
 export type ConvoyRole = 'lead' | 'sweep' | 'member' | 'support';
 export type ConvoyStatus = 'planned' | 'active' | 'paused' | 'completed' | 'cancelled';
+export type ConvoySyncState = 'cloud' | 'local_pending';
 
 export type ConvoyMembershipServiceErrorCode =
   | 'auth_required'
@@ -94,6 +95,7 @@ export interface ActiveConvoyContext {
 export interface ConvoyListItem {
   convoy: ConvoyRecord;
   membership: ConvoyMemberRecord;
+  syncState?: ConvoySyncState;
 }
 
 export interface ConvoyLocationSummaryRecord {
@@ -160,6 +162,7 @@ export interface EndConvoyInput {
 }
 
 type ConvoyMembershipFunctionAction =
+  | 'create_convoy'
   | 'create_invite'
   | 'join_with_invite'
   | 'revoke_member'
@@ -259,6 +262,79 @@ function withConvoyMemberIdentityFallbacks(members: ConvoyMemberRecord[]): Convo
   return members.map(withConvoyMemberIdentityFallback);
 }
 
+type CreateConvoyFunctionResult = {
+  convoy?: ConvoyRecord;
+  membership?: ConvoyMemberRecord;
+  member?: ConvoyMemberRecord;
+  syncState?: ConvoySyncState;
+};
+
+function isBackendUnavailableResult<T>(
+  result: ConvoyMembershipServiceResult<T>,
+): result is Extract<ConvoyMembershipServiceResult<T>, { ok: false }> {
+  return !result.ok && result.code === 'backend_unavailable';
+}
+
+function normalizeCreateConvoyFunctionResult(data: CreateConvoyFunctionResult): ConvoyListItem | null {
+  const convoy = data.convoy ?? null;
+  const membership = data.membership ?? data.member ?? null;
+  if (!convoy || !membership) return null;
+  return {
+    convoy,
+    membership,
+    syncState: data.syncState ?? 'cloud',
+  };
+}
+
+function createLocalPendingConvoyItem({
+  callsign,
+  expeditionBadgeTitle,
+  expiresAt,
+  name,
+  startsAt,
+  userId,
+  vehicleId,
+}: {
+  callsign: string;
+  expeditionBadgeTitle: string | null;
+  expiresAt: string | null;
+  name: string;
+  startsAt: string | null;
+  userId: string;
+  vehicleId: string | null;
+}): ConvoyListItem {
+  const nowIso = new Date().toISOString();
+  const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const convoyId = `local-convoy-${suffix}`;
+  const memberId = `local-member-${suffix}`;
+
+  return {
+    syncState: 'local_pending',
+    convoy: {
+      id: convoyId,
+      name,
+      leader_user_id: userId,
+      status: 'active',
+      starts_at: startsAt,
+      expires_at: expiresAt,
+      created_at: nowIso,
+      updated_at: nowIso,
+    },
+    membership: {
+      id: memberId,
+      convoy_id: convoyId,
+      user_id: userId,
+      vehicle_id: vehicleId,
+      callsign,
+      display_name: null,
+      expedition_badge_title: expeditionBadgeTitle,
+      role: 'lead',
+      joined_at: nowIso,
+      revoked_at: null,
+    },
+  };
+}
+
 async function requireUser(
   backend: ConvoyMembershipBackend,
 ): Promise<ConvoyMembershipServiceResult<AuthenticatedConvoyUser>> {
@@ -339,6 +415,54 @@ export class ConvoyMembershipService {
       MAX_EXPEDITION_BADGE_TITLE_LENGTH,
     ) || null;
 
+    const createViaFunction = await this.backend.invokeMembershipFunction<CreateConvoyFunctionResult>('create_convoy', {
+      name,
+      leaderCallsign: callsign,
+      leaderVehicleId: vehicleId,
+      leaderExpeditionBadgeTitle: expeditionBadgeTitle,
+      startsAt,
+      expiresAt,
+    });
+
+    if (createViaFunction.ok) {
+      const created = normalizeCreateConvoyFunctionResult(createViaFunction.data);
+      if (!created) {
+        return toError('backend_error', 'Convoy membership backend returned an incomplete create response.');
+      }
+
+      await this.backend.saveActiveContext({
+        convoyId: created.convoy.id,
+        memberId: created.membership.id,
+        role: created.membership.role,
+        callsign: created.membership.callsign,
+        expeditionBadgeTitle: created.membership.expedition_badge_title ?? expeditionBadgeTitle,
+        storedAt: new Date().toISOString(),
+      });
+
+      return { ok: true, data: { ...created, syncState: created.syncState ?? 'cloud' } };
+    }
+
+    if (isBackendUnavailableResult(createViaFunction)) {
+      const localPending = createLocalPendingConvoyItem({
+        name,
+        userId: user.data.id,
+        startsAt,
+        expiresAt,
+        callsign,
+        vehicleId,
+        expeditionBadgeTitle,
+      });
+      await this.backend.saveActiveContext({
+        convoyId: localPending.convoy.id,
+        memberId: localPending.membership.id,
+        role: localPending.membership.role,
+        callsign: localPending.membership.callsign,
+        expeditionBadgeTitle: localPending.membership.expedition_badge_title ?? expeditionBadgeTitle,
+        storedAt: new Date().toISOString(),
+      });
+      return { ok: true, data: localPending };
+    }
+
     const convoy = await this.backend.insertConvoy({
       name,
       leader_user_id: user.data.id,
@@ -346,6 +470,26 @@ export class ConvoyMembershipService {
       starts_at: startsAt,
       expires_at: expiresAt,
     });
+    if (!convoy.ok && isBackendUnavailableResult(convoy)) {
+      const localPending = createLocalPendingConvoyItem({
+        name,
+        userId: user.data.id,
+        startsAt,
+        expiresAt,
+        callsign,
+        vehicleId,
+        expeditionBadgeTitle,
+      });
+      await this.backend.saveActiveContext({
+        convoyId: localPending.convoy.id,
+        memberId: localPending.membership.id,
+        role: localPending.membership.role,
+        callsign: localPending.membership.callsign,
+        expeditionBadgeTitle: localPending.membership.expedition_badge_title ?? expeditionBadgeTitle,
+        storedAt: new Date().toISOString(),
+      });
+      return { ok: true, data: localPending };
+    }
     if (!convoy.ok) return convoy;
 
     const membership = await this.backend.insertLeaderMember({
@@ -356,6 +500,26 @@ export class ConvoyMembershipService {
       expedition_badge_title: expeditionBadgeTitle,
       role: 'lead',
     });
+    if (!membership.ok && isBackendUnavailableResult(membership)) {
+      const localPending = createLocalPendingConvoyItem({
+        name,
+        userId: user.data.id,
+        startsAt,
+        expiresAt,
+        callsign,
+        vehicleId,
+        expeditionBadgeTitle,
+      });
+      await this.backend.saveActiveContext({
+        convoyId: localPending.convoy.id,
+        memberId: localPending.membership.id,
+        role: localPending.membership.role,
+        callsign: localPending.membership.callsign,
+        expeditionBadgeTitle: localPending.membership.expedition_badge_title ?? expeditionBadgeTitle,
+        storedAt: new Date().toISOString(),
+      });
+      return { ok: true, data: localPending };
+    }
     if (!membership.ok) return membership;
 
     await this.backend.saveActiveContext({
@@ -367,7 +531,7 @@ export class ConvoyMembershipService {
       storedAt: new Date().toISOString(),
     });
 
-    return { ok: true, data: { convoy: convoy.data, membership: membership.data } };
+    return { ok: true, data: { convoy: convoy.data, membership: membership.data, syncState: 'cloud' } };
   }
 
   async createConvoyInvite(

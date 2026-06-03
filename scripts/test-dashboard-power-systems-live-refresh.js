@@ -4,6 +4,7 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const widgetSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemWidget.tsx'), 'utf8');
+const widgetRenderersSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'), 'utf8');
 const riveAdapterSource = fs.readFileSync(path.join(root, 'lib', 'powerModuleRiveTelemetry.ts'), 'utf8');
 const detailSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemDetail.tsx'), 'utf8');
 
@@ -152,5 +153,16 @@ notIncludes(
 ].forEach((fragment) => {
   includes(detailSource, fragment, `Power detail flow bars should use shared semantic color ${fragment}`);
 });
+
+notIncludes(
+  widgetRenderersSource,
+  'suppressPowerDetailBackground',
+  'Expanded Power module should keep the same background visual as the compact power monitor.',
+);
+includes(
+  widgetRenderersSource,
+  'isPowerPanel && powerVisual',
+  'Power module panel background should remain active for compact and expanded power surfaces.',
+);
 
 console.log('Dashboard power systems live/refresh checks passed.');

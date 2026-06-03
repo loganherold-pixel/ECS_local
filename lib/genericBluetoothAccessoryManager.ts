@@ -42,6 +42,7 @@ interface ConnectGenericAccessoryResult {
   success: boolean;
   error: string | null;
   signalStrength: number | null;
+  connectionMode?: 'advertisement' | 'live_gatt';
 }
 
 let bleManagerInstance: any | null = null;
@@ -105,6 +106,11 @@ class GenericBluetoothAccessoryManager {
       lastError: null,
     });
 
+    const advertisementLink = await this.tryAdvertisementLink(options);
+    if (advertisementLink) {
+      return advertisementLink;
+    }
+
     if (Platform.OS === 'web') {
       const error = 'Bluetooth is unavailable on web.';
       ecsLog.warn('TELEMETRY', '[BT_CONNECT] failure', {
@@ -118,7 +124,7 @@ class GenericBluetoothAccessoryManager {
         lastError: error,
       });
       this.publishAccessoryTelemetryState(failedRecord);
-      return { success: false, error, signalStrength: null };
+      return { success: false, error, signalStrength: null, connectionMode: 'live_gatt' };
     }
 
     try {
@@ -202,7 +208,7 @@ class GenericBluetoothAccessoryManager {
         providerId: options.providerId,
         signalStrength,
       });
-      return { success: true, error: null, signalStrength };
+      return { success: true, error: null, signalStrength, connectionMode: 'live_gatt' };
     } catch (error) {
       const message = getErrorMessage(error);
       if (captureEcoFlowBle) {
@@ -225,7 +231,7 @@ class GenericBluetoothAccessoryManager {
         lastError: message,
       });
       this.publishAccessoryTelemetryState(failedRecord);
-      return { success: false, error: message, signalStrength: options.signalStrength };
+      return { success: false, error: message, signalStrength: options.signalStrength, connectionMode: 'live_gatt' };
     }
   }
 
@@ -297,9 +303,66 @@ class GenericBluetoothAccessoryManager {
       return;
     }
 
+    if (
+      record.connectionState === 'connected' &&
+      record.utilitySensorTelemetry?.parserStatus === 'live' &&
+      record.utilitySensorTelemetry.source === 'mopeka_advertisement'
+    ) {
+      return;
+    }
+
     if (record.owner === 'sensor') {
       ecsTelemetryStore.markDeviceUnavailable(record.deviceId, 'utility_sensor', 'Utility sensor disconnected.');
     }
+  }
+
+  private async tryAdvertisementLink(
+    options: ConnectGenericAccessoryOptions,
+  ): Promise<ConnectGenericAccessoryResult | null> {
+    if (options.owner !== 'sensor') return null;
+
+    const utilitySensorTelemetry = decodeUtilitySensorLiveTelemetry({
+      providerId: options.providerId,
+      providerLabel: options.providerLabel,
+      categoryHint: options.categoryHint,
+      displayName: options.displayName,
+      serviceUuids: options.serviceUuids,
+      manufacturerData: options.manufacturerData ?? null,
+      serviceData: options.serviceData,
+      localName: options.localName ?? options.displayName,
+      signalStrength: options.signalStrength,
+      levelPercent: options.levelPercent,
+    });
+
+    if (
+      utilitySensorTelemetry.parserStatus !== 'live' ||
+      utilitySensorTelemetry.source !== 'mopeka_advertisement'
+    ) {
+      return null;
+    }
+
+    const linkedRecord = await bluetoothAccessoryRegistry.upsert({
+      ...options,
+      connectionState: 'connected',
+      serviceUuids: options.serviceUuids ?? [],
+      utilitySensorTelemetry,
+      lastError: null,
+    });
+    this.publishAccessoryTelemetryState(linkedRecord);
+    ecsLog.debug('TELEMETRY', '[BT_CONNECT] advertisement_linked', {
+      deviceId: options.deviceId,
+      providerId: options.providerId,
+      connectionMode: 'advertisement',
+      source: 'mopeka_advertisement',
+      hasLevelPercent: utilitySensorTelemetry.levelPercent != null,
+      hasDistance: utilitySensorTelemetry.levelDistanceMm != null,
+    });
+    return {
+      success: true,
+      error: null,
+      signalStrength: options.signalStrength,
+      connectionMode: 'advertisement',
+    };
   }
 
   private attachDisconnectMonitor(

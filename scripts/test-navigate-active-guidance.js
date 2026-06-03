@@ -138,7 +138,7 @@ assert(
     navigate.includes('const effectiveMapExpanded = mapExpanded || navigateLandscapeExpanded;') &&
     navigate.includes('setDashboardExpanded(navigateLandscapeExpanded);') &&
     navigate.includes('revealDashboardDock(5000);') &&
-    navigate.includes('styles.navigateLandscapeDockRevealButton') &&
+    navigate.includes('<LandscapeDockRevealButton') &&
     navigate.includes('{ top: roadNavigationSurfaceTopOffset }') &&
     navigate.includes('activeGuidanceWidth={activeGuidanceLandscapeWidth}') &&
     navigate.includes('activeAccessoryMinimized={navigateLandscapeExpanded ? true : activeReadinessMinimized}'),
@@ -164,6 +164,25 @@ const commandDock = read('components/CommandDock.tsx');
 assert(
   commandDock.includes("pathname.includes('/navigate')"),
   'CommandDock should honor Navigate landscape expanded chrome hide/reveal state.',
+);
+
+const landscapeDockReveal = read('components/LandscapeDockRevealButton.tsx');
+const dashboardSource = read('app/(tabs)/dashboard.tsx');
+assert(
+  landscapeDockReveal.includes("name=\"apps-outline\"") &&
+    landscapeDockReveal.includes('accessibilityLabel') &&
+    navigate.includes("import LandscapeDockRevealButton from '../../components/LandscapeDockRevealButton';") &&
+    dashboardSource.includes("import LandscapeDockRevealButton from '../../components/LandscapeDockRevealButton';") &&
+    dashboardSource.includes('<LandscapeDockRevealButton'),
+  'Landscape dock reveal affordance should use the shared apps-outline component across expanded map/dashboard tabs.',
+);
+
+const roadNavigationHook = read('lib/useRoadNavigation.ts');
+assert(
+  roadNavigationHook.includes('getDistanceToGuidanceStep') &&
+    roadNavigationHook.includes('guidanceStepSelection.step') &&
+    !roadNavigationHook.includes('currentStep != null\n      ? Math.max(currentStep.endDistanceM - progress.traveledDistanceM, 0)'),
+  'Road navigation should calculate next-action distance from the selected upcoming guidance step, not the whole current/cached segment.',
 );
 
 const toast = read('components/Toast.tsx');
@@ -230,9 +249,10 @@ assert(
     mapRenderer.includes('const hasFallbackGeometry = useMemo(') &&
     mapRenderer.includes('const fallbackVisible =') &&
     mapRenderer.includes('<MapFallbackSurface') &&
-    mapRenderer.includes("statusLabel={shouldLoadMap ? 'ECS fallback map' : 'Offline map fallback'}") &&
+    !mapRenderer.includes("'ECS fallback map'") &&
+    !mapRenderer.includes("'Offline map fallback'") &&
     mapRenderer.includes('{showBootOverlay && !fallbackVisible && ('),
-  'MapRenderer should provide a native route fallback surface when Mapbox/WebView cannot initialize.',
+  'MapRenderer should provide a native route fallback surface when Mapbox/WebView cannot initialize without exposing fallback status copy.',
 );
 assert(
   mapRenderer.includes('const MAX_ROUTE_RENDER_POINTS = 2400;') &&
@@ -255,9 +275,10 @@ assert(
     fallbackSurface.includes('function makeProjector(') &&
     fallbackSurface.includes('routeCoords?: LngLat[];') &&
     fallbackSurface.includes('progressRouteCoords?: LngLat[];') &&
-    fallbackSurface.includes('statusLabel = \'Fallback map\'') &&
+    fallbackSurface.includes('showStatusLabel = false') &&
+    fallbackSurface.includes('statusLabel = null') &&
     fallbackSurface.includes('zIndex: 4'),
-  'MapFallbackSurface should draw route/progress/user geometry without depending on Mapbox GL or WebView.',
+  'MapFallbackSurface should draw route/progress/user geometry without depending on Mapbox GL or WebView, while suppressing user-facing fallback labels by default.',
 );
 
 const topStatusStart = navigate.indexOf('const topStatusOverlaysVisible =');

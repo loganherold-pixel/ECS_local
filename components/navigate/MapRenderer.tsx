@@ -7124,7 +7124,6 @@ const MapRenderer = React.memo(function MapRenderer({
           userLocation={dynamicPayload.userLocation}
           bootIssue={webBootIssue}
           compact={isCompactSurface}
-          statusLabel={shouldLoadMap ? 'ECS fallback map' : 'Offline map fallback'}
         />
       ) : null}
 

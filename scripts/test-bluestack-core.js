@@ -88,6 +88,21 @@ function readSource(relativePath) {
   return fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
+const genericAccessoryManagerSource = readSource('lib/genericBluetoothAccessoryManager.ts');
+const unifiedConnectionHookSource = readSource('lib/useUnifiedDeviceConnections.ts');
+
+assert(
+  genericAccessoryManagerSource.includes('tryAdvertisementLink') &&
+    genericAccessoryManagerSource.includes('connectionMode: \'advertisement\'') &&
+    genericAccessoryManagerSource.includes("source: 'mopeka_advertisement'"),
+  'Generic Bluetooth accessory manager should link valid Mopeka advertisements without requiring native GATT.',
+);
+assert(
+  unifiedConnectionHookSource.includes('connectionMode: result.connectionMode ?? \'live_gatt\'') &&
+    unifiedConnectionHookSource.includes('advertisement_linked'),
+  'Unified device connections should report advertisement-linked Mopeka sensors distinctly from live GATT links.',
+);
+
 const ecoflow = classifyBluestackDevice({
   providerId: 'ecoflow',
   providerLabel: 'EcoFlow',

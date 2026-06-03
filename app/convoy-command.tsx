@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ECSShellTexture from '../components/ECSShellTexture';
 import { ECSCopyButton } from '../components/ECSCopyButton';
@@ -100,6 +101,7 @@ function qrReadyPayload(rawCode: string, role: ConvoyRole, expiresAt: string): s
 
 export default function ConvoyCommandCredentialsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user } = useApp();
   const [mode, setMode] = useState<Mode>('leader');
   const [loading, setLoading] = useState(false);
@@ -216,8 +218,14 @@ export default function ConvoyCommandCredentialsScreen() {
   }, [refreshConvoys, user?.id]);
 
   useEffect(() => {
+    if (selectedConvoy?.syncState === 'local_pending') {
+      setMembers([selectedConvoy.membership]);
+      setInvites([]);
+      setLocationSummaries([]);
+      return;
+    }
     void refreshRoster(selectedConvoy?.convoy.id ?? null);
-  }, [refreshRoster, selectedConvoy?.convoy.id]);
+  }, [refreshRoster, selectedConvoy]);
 
   async function handleCreateConvoy() {
     setLoading(true);
@@ -231,9 +239,20 @@ export default function ConvoyCommandCredentialsScreen() {
       startsAt: new Date(),
     });
     if (result.ok) {
-      setNotice('Convoy created. Generate an invite when you are ready to add members.');
+      setNotice(
+        result.data.syncState === 'local_pending'
+          ? 'Convoy started locally. Cloud roster sync will resume when convoy backend readiness returns.'
+          : 'Convoy created. Generate an invite when you are ready to add members.',
+      );
       setSelectedConvoyId(result.data.convoy.id);
-      await refreshConvoys();
+      if (result.data.syncState === 'local_pending') {
+        setConvoys((current) => [
+          result.data,
+          ...current.filter((item) => item.convoy.id !== result.data.convoy.id),
+        ]);
+      } else {
+        await refreshConvoys();
+      }
     } else {
       setError(normalizeError(result.error));
     }
@@ -332,9 +351,9 @@ export default function ConvoyCommandCredentialsScreen() {
   }
 
   return (
-    <View style={styles.root}>
+      <View style={styles.root}>
       <ECSShellTexture />
-      <View style={styles.header}>
+      <View style={[styles.header, styles.headerSafeArea, { paddingTop: Math.max(14, insets.top + 8) }]}>
         <View style={styles.headerCopy}>
           <Text style={styles.eyebrow}>CONVOY COMMAND</Text>
           <Text style={styles.title}>Credentials & Roster</Text>
@@ -709,6 +728,9 @@ const styles = StyleSheet.create({
     backgroundColor: ECS_SURFACE.background.primary,
     paddingHorizontal: 10,
     paddingVertical: 8,
+  },
+  headerSafeArea: {
+    paddingBottom: 8,
   },
   backButton: {
     minWidth: 70,

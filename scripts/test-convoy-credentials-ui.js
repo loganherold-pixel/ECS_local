@@ -131,6 +131,14 @@ assert.ok(
 );
 
 assert.ok(
+  screen.includes("import { useSafeAreaInsets } from 'react-native-safe-area-context'") &&
+    screen.includes('const insets = useSafeAreaInsets();') &&
+    screen.includes('styles.headerSafeArea') &&
+    screen.includes('paddingTop: Math.max(14, insets.top + 8)'),
+  'Convoy credentials header should sit below device status chrome using safe-area-aware padding.',
+);
+
+assert.ok(
   !screen.includes('code_hash') &&
     !screen.includes('phone') &&
     !screen.includes('email'),

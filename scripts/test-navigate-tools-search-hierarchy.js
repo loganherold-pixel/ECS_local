@@ -76,10 +76,12 @@ assert(
 
 assert(
   !toolsPopupSource.includes('CAMPING') &&
+    !toolsPopupSource.includes('CAMPSITE LAYERS') &&
     !toolsPopupSource.includes('Community</Text>') &&
     !toolsPopupSource.includes('Private</Text>') &&
-    !toolsPopupSource.includes('Pending</Text>'),
-  'Campsite layer buttons should not be followed by redundant legend pills.',
+    !toolsPopupSource.includes('Pending</Text>') &&
+    !toolsPopupSource.includes('PENDING'),
+  'Campsite layer buttons and redundant legend pills should stay out of the generic Tools popup.',
 );
 
 assert(

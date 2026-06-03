@@ -4864,12 +4864,13 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
 
         setSelectedIds((current) => current.filter((entry) => entry !== device.id));
         setDeviceUiState(device.id, 'connected', null);
-        bluLog('[BLU_HANDSHAKE]', 'accessory_connect_succeeded', {
+        const accessoryConnectionMode = result.connectionMode ?? 'live_gatt';
+        bluLog('[BLU_HANDSHAKE]', accessoryConnectionMode === 'advertisement' ? 'advertisement_linked' : 'accessory_connect_succeeded', {
           deviceId: device.rawId,
           vendor: device.providerId,
           deviceType: getBluDeviceLogType(device),
-          connectionMode: 'ble',
-          phase: 'native_transport_connected',
+          connectionMode: result.connectionMode ?? 'live_gatt',
+          phase: accessoryConnectionMode === 'advertisement' ? 'ble_scan_advertisement' : 'native_transport_connected',
           driverMode: 'generic_ble_accessory',
         });
         ecsLog.debug('TELEMETRY', '[BT_CONNECT] success', {
@@ -4877,13 +4878,16 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           modelId: device.id,
           kind: device.kind,
           providerId: device.providerId,
+          connectionMode: result.connectionMode ?? 'live_gatt',
         });
         const sensorResourceLabel = device.kind === 'sensor'
           ? getAccessorySensorResourceLabel(device)
           : null;
         setInfoMessage(
           device.kind === 'sensor'
-            ? `${device.name} linked as ${sensorResourceLabel ?? 'an ECS sensor'}.`
+            ? accessoryConnectionMode === 'advertisement'
+              ? `${device.name} detected from Mopeka advertisement data as ${sensorResourceLabel ?? 'an ECS sensor'}.`
+              : `${device.name} linked as ${sensorResourceLabel ?? 'an ECS sensor'}.`
             : `${device.name} connected as a generic ECS-managed Bluetooth device.`,
         );
         enqueueRouteIntent({

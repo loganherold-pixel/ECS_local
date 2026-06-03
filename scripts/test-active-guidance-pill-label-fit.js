@@ -37,13 +37,20 @@ assert.ok(
   'Active Guidance header actions should live in a protected action group.',
 );
 assert.ok(
-  activeCardBlock.includes('Minimize') && !activeCardBlock.includes('>Min</Text>'),
-  'Active Guidance minimize pill should show the full Minimize label.',
+  activeCardBlock.includes('MINIMIZE') &&
+    !activeCardBlock.includes('>Minimize</Text>') &&
+    !activeCardBlock.includes('>Min</Text>'),
+  'Active Guidance minimize pill should show the full uppercase MINIMIZE label.',
 );
 assert.ok(
-  activeCardBlock.includes('Offline') &&
+  activeCardBlock.includes('OFFLINE') &&
+    !activeCardBlock.includes('>Offline</Text>') &&
     activeCardBlock.includes('accessibilityLabel="Prepare active route for offline use"'),
-  'Active Guidance should expose a clear Offline pill and accessibility label.',
+  'Active Guidance should expose a clear uppercase OFFLINE pill and accessibility label.',
+);
+assert.ok(
+  activeCardBlock.includes('END') && !activeCardBlock.includes('>End</Text>'),
+  'Active Guidance end pill should show the uppercase END label.',
 );
 assert.ok(
   (activeCardBlock.match(/numberOfLines=\{1\}/g) ?? []).length >= 3 &&
@@ -72,8 +79,8 @@ assert.ok(
 
 const minimize = extractStyleBlock('activeGuidanceMinimizeButton');
 const offline = extractStyleBlock('activeGuidanceOfflineButton');
-assert.ok(/minWidth:\s*96/.test(minimize), 'Minimize pill should reserve enough width for the full label.');
-assert.ok(/minWidth:\s*84/.test(offline), 'Offline pill should reserve enough width for the full label.');
+assert.ok(/minWidth:\s*108/.test(minimize), 'Minimize pill should reserve enough width for the full label.');
+assert.ok(/minWidth:\s*92/.test(offline), 'Offline pill should reserve enough width for the full label.');
 
 assert.ok(
   navigateSource.includes('Math.min(260, Math.max(228, Math.round(adaptive.windowWidth * 0.26)))'),

@@ -125,7 +125,23 @@ async function main() {
     ConvoyMembershipService,
   } = require(servicePath);
 
-  const createBackend = createMockBackend();
+  const createBackend = createMockBackend({
+    functionResponses: {
+      create_convoy: {
+        ok: true,
+        data: {
+          convoy: makeConvoy({ id: 'convoy-created', name: 'Sierra Test Convoy' }),
+          membership: makeMember({
+            id: 'member-created',
+            convoy_id: 'convoy-created',
+            callsign: 'Lead Tacoma',
+            expedition_badge_title: 'Master Navigator',
+          }),
+          syncState: 'cloud',
+        },
+      },
+    },
+  });
   const createService = new ConvoyMembershipService(createBackend);
   const created = await createService.createConvoy({
     name: '  Sierra   Test Convoy  ',
@@ -142,22 +158,30 @@ async function main() {
   );
   assert.ok(
     createBackend.calls.some((call) => (
-      call[0] === 'insertLeaderMember' &&
-      call[1].callsign === 'Lead Tacoma' &&
-      call[1].expedition_badge_title === 'Master Navigator'
+      call[0] === 'invokeMembershipFunction' &&
+      call[1] === 'create_convoy' &&
+      call[2].name === 'Sierra Test Convoy' &&
+      call[2].leaderCallsign === 'Lead Tacoma' &&
+      call[2].leaderExpeditionBadgeTitle === 'Master Navigator'
     )),
-    'createConvoy should snapshot the current Expedition badge title onto the leader membership.',
+    'createConvoy should prefer the convoy-membership Edge Function and snapshot the current Expedition badge title.',
+  );
+  assert.ok(
+    !createBackend.calls.some((call) => call[0] === 'insertConvoy' || call[0] === 'insertLeaderMember'),
+    'createConvoy should not use direct PostgREST inserts when the Edge Function succeeds.',
   );
 
   const missingSchemaBackend = createMockBackend({
-    insertConvoyResponse: {
-      ok: false,
-      code: 'backend_unavailable',
-      error: 'Convoy tracking tables are not available on the connected Supabase backend yet.',
-      details: [
-        'Apply supabase/migrations/022_convoy_team_tracking.sql to the target Supabase project.',
-        "Refresh the PostgREST schema cache after migration with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
-      ],
+    functionResponses: {
+      create_convoy: {
+        ok: false,
+        code: 'backend_unavailable',
+        error: 'Convoy tracking tables or helpers are not visible through the Supabase API yet.',
+        details: [
+          'Apply supabase/migrations/022_convoy_team_tracking.sql to the target Supabase project.',
+          "Refresh the PostgREST schema cache after migration with NOTIFY pgrst, 'reload schema'; or restart the Supabase API.",
+        ],
+      },
     },
   });
   const missingSchemaService = new ConvoyMembershipService(missingSchemaBackend);
@@ -165,16 +189,20 @@ async function main() {
     name: 'Schema Check',
     leaderCallsign: 'Lead',
   });
-  assert.strictEqual(missingSchemaResult.ok, false, 'missing convoy schema should block createConvoy.');
-  assert.strictEqual(missingSchemaResult.code, 'backend_unavailable');
+  assert.strictEqual(missingSchemaResult.ok, true, 'missing convoy schema should create a local pending convoy instead of blocking createConvoy.');
+  assert.strictEqual(missingSchemaResult.data.syncState, 'local_pending');
   assert.ok(
-    missingSchemaResult.error.includes('Convoy tracking') &&
-      missingSchemaResult.error.includes('backend'),
-    'missing convoy schema should be translated into a deployable backend readiness message.',
+    missingSchemaResult.data.convoy.id.startsWith('local-convoy-') &&
+      missingSchemaResult.data.membership.id.startsWith('local-member-'),
+    'local pending convoy should use clearly local identifiers.',
   );
   assert.ok(
-    !missingSchemaBackend.calls.some((call) => call[0] === 'insertLeaderMember'),
-    'createConvoy should not create a leader member when the convoys table is missing.',
+    missingSchemaBackend.calls.some((call) => call[0] === 'saveActiveContext' && call[1].convoyId.startsWith('local-convoy-')),
+    'local pending convoy should still become the active convoy context.',
+  );
+  assert.ok(
+    !missingSchemaBackend.calls.some((call) => call[0] === 'insertConvoy' || call[0] === 'insertLeaderMember'),
+    'local pending fallback should avoid direct PostgREST inserts while schema cache is unavailable.',
   );
 
   const serviceSourceBeforeBackendChecks = fs.readFileSync(servicePath, 'utf8');
@@ -352,8 +380,10 @@ async function main() {
   assert.ok(
     source.includes('backendReadinessFailure') &&
       source.includes('claim_convoy_invite') &&
+      source.includes('createConvoy') &&
+      source.includes("case 'create_convoy'") &&
       source.includes("NOTIFY pgrst, 'reload schema'"),
-    'Edge Function should return backend_unavailable guidance for missing migrations/helpers or stale schema cache.',
+    'Edge Function should create convoys and return backend_unavailable guidance for missing migrations/helpers or stale schema cache.',
   );
   assert.ok(
     source.includes('expeditionBadgeTitle') &&

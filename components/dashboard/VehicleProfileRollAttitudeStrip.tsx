@@ -22,10 +22,10 @@ type Props = {
 const DEFAULT_MAX_ROLL_DEG = 45;
 const CAMPSITE_LEVEL_TOLERANCE_DEG = 2;
 const VIEWBOX_WIDTH = 260;
-const VIEWBOX_HEIGHT = 42;
+const VIEWBOX_HEIGHT = 58;
 const TRACK_LEFT = 18;
 const TRACK_RIGHT = VIEWBOX_WIDTH - 18;
-const TRACK_Y = 24;
+const TRACK_Y = 32;
 const TICK_STEP_DEG = 5;
 const MAJOR_TICK_STEP_DEG = 15;
 
@@ -190,25 +190,25 @@ export default function VehicleProfileRollAttitudeStrip({
             x1={markerX}
             y1={4}
             x2={markerX}
-            y2={15}
+            y2={20}
             stroke={activeColor}
             strokeWidth={2.4}
             strokeLinecap="round"
           />
           <Line
             x1={markerX}
-            y1={33}
+            y1={45}
             x2={markerX}
-            y2={40}
+            y2={54}
             stroke={activeColor}
             strokeWidth={2.4}
             strokeLinecap="round"
           />
           <Line
             x1={markerX}
-            y1={7}
+            y1={9}
             x2={markerX}
-            y2={38}
+            y2={50}
             stroke={activeColor}
             strokeWidth={7.5}
             strokeLinecap="round"

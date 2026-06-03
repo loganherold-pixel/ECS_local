@@ -416,6 +416,17 @@ function selectGuidanceStep(
   };
 }
 
+function getDistanceToGuidanceStep(
+  step: RoadNavRoute['steps'][number] | null | undefined,
+  traveledDistanceM: number,
+): number | null {
+  if (!step) {
+    return null;
+  }
+
+  return Math.max(step.endDistanceM - traveledDistanceM, 0);
+}
+
 function projectProgressOnRoute(
   location: RoadNavCoordinate,
   points: RoadNavCoordinate[],
@@ -563,15 +574,10 @@ function computeSessionFromRoute(
     currentStepIndex >= 0 ? currentStepIndex : Math.max(route.steps.length - 1, 0);
   const currentStep = route.steps[resolvedStepIndex] ?? null;
   const guidanceStepSelection = selectGuidanceStep(route.steps, resolvedStepIndex);
-  const distanceToNextM =
-    currentStep != null
-      ? Math.max(currentStep.endDistanceM - progress.traveledDistanceM, 0)
-      : guidanceStepSelection.step != null
-        ? Math.max(
-            guidanceStepSelection.step.endDistanceM - progress.traveledDistanceM,
-            0,
-          )
-        : null;
+  const distanceToNextM = getDistanceToGuidanceStep(
+    guidanceStepSelection.step,
+    progress.traveledDistanceM,
+  );
   const remainingDistanceM = progress.remainingDistanceM;
   const remainingDurationS =
     route.distanceM > 0

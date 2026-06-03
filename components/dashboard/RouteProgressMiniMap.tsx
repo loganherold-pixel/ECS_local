@@ -561,7 +561,6 @@ export default function RouteProgressMiniMap({
             progressRouteCoords={miniMapPayload.progressCoords}
             userLocation={miniMapPayload.marker}
             bootIssue={mapBootIssue}
-            statusLabel="Fallback map"
           />
         </>
       ) : !hasRenderableMap || !mapReady ? (

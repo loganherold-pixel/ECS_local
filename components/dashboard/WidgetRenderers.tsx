@@ -3917,7 +3917,6 @@ function AttitudeCommandPanel({
           ? { label: 'ALERT', tone }
           : null;
   const suppressCompactPanelChrome = expanded && detailMode;
-  const suppressPowerDetailBackground = suppressCompactPanelChrome && isPowerPanel;
   const content = (
     <ECSInstrumentPanel
       title={undefined}
@@ -3988,7 +3987,7 @@ function AttitudeCommandPanel({
       innerTexture={false}
       style={[attitudeCommandS.panelFrame, expanded && attitudeCommandS.expandedPanelFrame]}
       contentStyle={[attitudeCommandS.panelFrameContent, expanded && attitudeCommandS.expandedPanelFrameContent]}
-      background={suppressPowerDetailBackground ? null : (
+      background={suppressCompactPanelChrome && !(isPowerPanel && powerVisual) ? null : (
         <AttitudeCommandPanelVisual
           icon={icon}
           color={color}
@@ -6860,8 +6859,8 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             accessibilityLabel={expanded ? 'Route terrain risk expanded' : 'Expand route terrain risk'}
             expanded={expanded}
             detailMode={mode === 'detail'}
-            headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}
-            headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}
+            headerStatusLabel={null}
+            headerStatusValue={null}
             headerStatusColor={terrainRiskRoute ? getTerrainCommandRiskColor(terrainRiskRoute.overallRiskLabel) : undefined}
           >
             <AttitudeCommandTerrainRiskPreview
@@ -7226,7 +7225,7 @@ const attitudeCommandS = StyleSheet.create({
   },
   vehicleRollZeroButtonCompact: {
     top: 0,
-    left: 0,
+    right: 42,
     width: 22,
     height: 22,
     borderRadius: 11,
@@ -8477,7 +8476,7 @@ const attitudeCommandS = StyleSheet.create({
   vehicleLiveRollDock: {
     position: 'relative',
     alignSelf: 'stretch',
-    height: 54,
+    height: 112,
     flexShrink: 0,
     marginTop: 1,
     overflow: 'hidden',
