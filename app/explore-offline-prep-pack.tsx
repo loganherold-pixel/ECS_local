@@ -84,6 +84,7 @@ import type {
   TripBuilderRouteInput,
   TripBuilderVehicleProfile,
 } from '../lib/tripBuilder';
+import { exportExploreTripManifestPdf } from '../lib/explore/exploreTripManifestExport';
 
 function routeId(route: TripBuilderRouteInput): string {
   return String(route.id ?? route.name ?? route.title ?? 'selected-route');
@@ -819,6 +820,7 @@ export default function ExploreOfflinePrepPackScreen() {
   const [prepareAttempted, setPrepareAttempted] = useState(false);
   const [prepareConfirmVisible, setPrepareConfirmVisible] = useState(false);
   const [prepareSaving, setPrepareSaving] = useState(false);
+  const [manifestExporting, setManifestExporting] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [geometryResolving, setGeometryResolving] = useState(false);
@@ -1371,6 +1373,34 @@ export default function ExploreOfflinePrepPackScreen() {
     void prepareOfflinePack();
   };
 
+  const handleExportPrintableManifest = useCallback(async () => {
+    if (!manifest || !selectedInput) {
+      setError('Select a route before exporting an Offline Prep manifest.');
+      return;
+    }
+    hapticMicro();
+    setManifestExporting(true);
+    setError(null);
+    const inputRecord = readRecord(selectedInput) ?? {};
+    const tripPlanRecord = readRecord(inputRecord.tripPlan);
+    const result = await exportExploreTripManifestPdf({
+      title: `${routeName(selectedInput.route)} Offline Manifest`,
+      manifest,
+      route: selectedInput.route,
+      itinerary:
+        inputRecord.itinerary ??
+        inputRecord.tripItinerary ??
+        tripPlanRecord?.itinerary ??
+        null,
+    });
+    setManifestExporting(false);
+    if (result.success) {
+      setActionMessage('Printable Offline Prep manifest generated.');
+    } else {
+      setError(result.error ?? 'Offline Prep manifest export failed.');
+    }
+  }, [manifest, selectedInput]);
+
   const handleRetry = () => {
     if (!selectedInput) return;
     hapticMicro();
@@ -1708,6 +1738,21 @@ export default function ExploreOfflinePrepPackScreen() {
                   >
                     {prepareSaving ? <ActivityIndicator size="small" color="#081014" /> : <Ionicons name="download-outline" size={14} color="#081014" />}
                     <Text style={styles.primaryButtonText}>{prepareSaving ? 'Preparing...' : 'Prepare Offline Pack'}</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.secondaryButton, (!manifest || manifestExporting) && styles.secondaryButtonDisabled]}
+                    activeOpacity={manifest && !manifestExporting ? 0.84 : 1}
+                    disabled={!manifest || manifestExporting}
+                    onPress={() => {
+                      void handleExportPrintableManifest();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Print or share Offline Prep manifest"
+                    testID="offline-prep-printable-manifest"
+                  >
+                    {manifestExporting ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : <Ionicons name="print-outline" size={14} color={TACTICAL.amber} />}
+                    <Text style={styles.secondaryButtonText}>{manifestExporting ? 'Generating...' : 'Print / Share Manifest'}</Text>
                   </TouchableOpacity>
 
                   {prepareConfirmVisible ? (
@@ -2048,8 +2093,11 @@ const styles = StyleSheet.create({
     backgroundColor: TACTICAL.amber + '0D',
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 7,
     paddingHorizontal: 10,
   },
+  secondaryButtonDisabled: { opacity: 0.45 },
   secondaryButtonText: { color: TACTICAL.amber, fontSize: 9, fontWeight: '900', letterSpacing: 0.8, textTransform: 'uppercase' },
   noticeCard: {
     flexDirection: 'row',

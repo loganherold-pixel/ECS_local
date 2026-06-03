@@ -176,6 +176,20 @@ import {
   type RoadNavSearchSuggestion,
 } from '../../lib/mapboxRoadNavigation';
 import {
+  canSaveRouteBuilderSegments,
+  fetchMapboxMapMatchingCandidate,
+  finalizeRouteBuilderSegmentSnap,
+  isVerifiedRouteBuilderSegment,
+  normalizeRouteBuilderLine,
+  routeBuilderSegmentMetadataSourceLabel,
+  type FinalizableRouteBuilderSegment,
+} from '../../lib/routeBuilderSnapFinalization';
+import {
+  composeStitchedRoute,
+  fetchMapboxDirectionsBridge,
+  type StitchBuildResult,
+} from '../../lib/stitchRouteComposer';
+import {
   DEFAULT_DISTANCE_RADIUS,
   loadOpportunitiesWithCompatibility,
   type ExpeditionOpportunity,
@@ -199,6 +213,7 @@ import {
 import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
 import { logRouteGeometryLifecycle, validateRouteGeometry } from '../../lib/routeGeometryLifecycle';
 import { normalizeRouteLifecycle } from '../../lib/routeLifecycleState';
+import { buildFullRouteGuidanceModel } from '../../lib/fullRouteGuidance';
 import { createMigratingNonSecureStorage } from '../../lib/nonSecureStorage';
 import {
   hideDashboardDockReveal,
@@ -518,6 +533,9 @@ import {
 } from '../../lib/offlineTileSyncCoordinator';
 
 import { useThrottledGPS, type ThrottledGPSOutput } from '../../lib/useThrottledGPS';
+import { resolveMapSurfaceMotionState } from '../../lib/mapSurfaceCoordinator';
+import { resolveRouteAheadBearingDeg } from '../../lib/dashboardNavigationChaseCamera';
+import { resolveVehicleGuidanceHeading } from '../../lib/mapMotion';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
 import { buildUnifiedWeatherCorridor } from '../../lib/weatherSurfaceSelectors';
 import type { WeatherCoordinate } from '../../lib/weatherTypes';
@@ -2352,6 +2370,8 @@ function sameRouteBuilderSegments(
       left.snapConfidence !== right.snapConfidence ||
       left.snapSource !== right.snapSource ||
       left.snapStatus !== right.snapStatus ||
+      left.snapProvider !== right.snapProvider ||
+      left.snapProfile !== right.snapProfile ||
       left.snapMessage !== right.snapMessage
     ) {
       return false;
@@ -2362,17 +2382,44 @@ function sameRouteBuilderSegments(
 
 function sourceMetadataForRouteBuilderSegment(segment: RouteBuilderSegmentData): RouteSegmentSourceMetadata {
   if (segment.buildSource) return segment.buildSource;
-  const snapSource = String(segment.snapSource ?? '').trim();
-  const isSnappedTrace =
-    snapSource.length > 0 &&
-    snapSource !== 'free' &&
-    snapSource !== 'raw-smoothed' &&
-    snapSource !== 'ambiguous-local-routeable';
   return {
-    kind: isSnappedTrace ? 'snapped_trace' : 'freehand_trace',
-    sourceLabel: isSnappedTrace ? snapSource : 'ECS Build Route trace',
+    kind: 'snapped_trace',
+    sourceLabel: routeBuilderSegmentMetadataSourceLabel(segment),
     confidence: 'unknown',
   };
+}
+
+function routeBuilderFinalSnapSignature(segment: RouteBuilderSegmentData): string {
+  const line = normalizeRouteBuilderLine(
+    Array.isArray(segment.rawSegment) && segment.rawSegment.length > 1
+      ? segment.rawSegment
+      : segment.coordinates,
+  );
+  return line.map((coordinate) => `${coordinate[0].toFixed(6)},${coordinate[1].toFixed(6)}`).join(';');
+}
+
+function shouldPreserveRouteBuilderFinalSnapState(
+  existing: RouteBuilderSegmentData | undefined,
+  incoming: RouteBuilderSegmentData,
+): existing is RouteBuilderSegmentData {
+  if (!existing) return false;
+  if (routeBuilderFinalSnapSignature(existing) !== routeBuilderFinalSnapSignature(incoming)) return false;
+  return (
+    existing.snapStatus === 'network_pending' ||
+    existing.snapStatus === 'blocked' ||
+    existing.snapProvider === 'mapbox_map_matching' ||
+    (existing.snapProvider === 'rendered_features' && incoming.snapProvider == null)
+  );
+}
+
+function mergeRouteBuilderFinalSnapState(
+  incomingSegments: RouteBuilderSegmentData[],
+  existingSegments: RouteBuilderSegmentData[],
+): RouteBuilderSegmentData[] {
+  return incomingSegments.map((incoming) => {
+    const existing = existingSegments.find((segment) => segment.id === incoming.id);
+    return shouldPreserveRouteBuilderFinalSnapState(existing, incoming) ? existing : incoming;
+  });
 }
 
 function toTrailSegmentData(
@@ -2537,25 +2584,6 @@ const SAVED_ROUTE_FILTER_OPTIONS: { key: SavedRouteAssetFilter; label: string }[
   { key: 'bookmarked', label: 'Saved' },
 ];
 
-type StitchBuildResult = {
-  parsed: {
-    name: string;
-    routePoints: { lat: number; lng: number; ele_m: number | null; time: string | null }[];
-    trackPoints: [];
-    primaryCoords: { lat: number; lng: number; ele_m: number | null; time: string | null }[];
-    waypoints: {
-      lat: number;
-      lon: number;
-      ele: number | null;
-      name: string | null;
-      time: string | null;
-      waypointType?: string | null;
-    }[];
-  };
-  transitionLegCount: number;
-  segmentCount: number;
-};
-
 function NavigateScreenInner() {
   const [cameraMode, setCameraMode] = useState<'north' | 'heading' | 'free'>('north');
   const { showToast, user } = useApp();
@@ -2585,6 +2613,7 @@ const [activeVehicleId, setActiveVehicleId] = useState<string | null>(() => vehi
 const [activeVehicleRevision, setActiveVehicleRevision] = useState(0);
 const [stitchSegmentIds, setStitchSegmentIds] = useState<string[]>([]);
 const [stitchName, setStitchName] = useState('Stitched Expedition');
+const [stitchSaving, setStitchSaving] = useState(false);
 const [savedRoutesRefreshKey, setSavedRoutesRefreshKey] = useState(0);
 const [savedRoutesQuery, setSavedRoutesQuery] = useState('');
 const [savedRoutesFilter, setSavedRoutesFilter] = useState<SavedRouteAssetFilter>('all');
@@ -2818,12 +2847,12 @@ function buildNavigationPayloadFromRun(
   return {
     id: run.id,
     source: isCustomRoute ? 'saved' : 'import',
-    type: isCustomRoute ? 'hybrid_route' : 'trail',
+    type: 'hybrid_route',
     title: run.title,
     subtitle: subtitleParts.join(' | ') || null,
     coordinate: destinationCoordinate,
     trailheadCoordinate,
-    roadDestinationCoordinate: isCustomRoute ? trailheadCoordinate : null,
+    roadDestinationCoordinate: trailheadCoordinate,
     trailGeometry,
     trailLengthMiles:
       Number.isFinite(run.stats.distance_miles) && run.stats.distance_miles > 0
@@ -2834,9 +2863,9 @@ function buildNavigationPayloadFromRun(
       : segmentCount > 1
         ? 'Stitched Expedition'
         : 'Imported Trail',
-    tripMode: isCustomRoute ? 'hybrid' : 'trail',
+    tripMode: 'hybrid',
     routeSource,
-    requiresOnlineRouting: usesStoredRouteGeometry ? false : isCustomRoute,
+    requiresOnlineRouting: true,
     trailWaypoints: safeArray(run.waypoints)
       .map((waypoint: any, index: number) => {
         const lat = Number(waypoint?.lat ?? waypoint?.latitude);
@@ -2873,7 +2902,7 @@ function buildNavigationPayloadFromRun(
       source: run.source,
       routeOrigin: isCustomRoute ? 'custom_built' : 'run_store',
       routeSource,
-      requiresOnlineRouting: usesStoredRouteGeometry ? false : isCustomRoute,
+      requiresOnlineRouting: true,
       geometrySource: usesStoredRouteGeometry ? 'stored_gpx_geometry' : 'stored_run_geometry',
       offlineCacheStatus: run.offline_cache?.cache_status ?? null,
       offlineTileCacheStatus: run.offline_cache?.tile_cache_status ?? null,
@@ -3118,105 +3147,6 @@ function buildRouteConfidenceInputFromPreview(args: {
   };
 }
 
-
-function buildStitchedRunImport(selectedRuns: ECSRun[], title: string): StitchBuildResult {
-  const routePoints: StitchBuildResult['parsed']['routePoints'] = [];
-  const waypoints: StitchBuildResult['parsed']['waypoints'] = [];
-  let transitionLegCount = 0;
-
-  selectedRuns.forEach((run, index) => {
-    const validPoints = safeArray(run.points)
-      .filter((point) => Number.isFinite(point?.lat) && Number.isFinite(point?.lng))
-      .map((point) => ({
-        lat: Number(point.lat),
-        lng: Number(point.lng),
-        ele_m: Number.isFinite(Number(point.ele_m)) ? Number(point.ele_m) : null,
-        time: typeof point.time === 'string' ? point.time : null,
-      }));
-
-    if (validPoints.length === 0) return;
-
-    if (routePoints.length > 0) {
-      const previousPoint = routePoints[routePoints.length - 1];
-      const nextStartPoint = validPoints[0];
-      const hasGap =
-        previousPoint.lat !== nextStartPoint.lat || previousPoint.lng !== nextStartPoint.lng;
-
-      if (hasGap) {
-        transitionLegCount += 1;
-        routePoints.push({
-          lat: previousPoint.lat,
-          lng: previousPoint.lng,
-          ele_m: previousPoint.ele_m,
-          time: previousPoint.time,
-        });
-        routePoints.push({
-          lat: nextStartPoint.lat,
-          lng: nextStartPoint.lng,
-          ele_m: nextStartPoint.ele_m,
-          time: nextStartPoint.time,
-        });
-        waypoints.push({
-          lat: nextStartPoint.lat,
-          lon: nextStartPoint.lng,
-          ele: nextStartPoint.ele_m,
-          name: `Transition to ${run.title}`,
-          time: null,
-          waypointType: 'transition',
-        });
-      }
-    }
-
-    routePoints.push(...validPoints);
-
-    safeArray(run.waypoints).forEach((waypoint: any) => {
-      const lat = Number(waypoint?.lat ?? waypoint?.latitude);
-      const lon = Number(waypoint?.lon ?? waypoint?.lng ?? waypoint?.longitude);
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-      waypoints.push({
-        lat,
-        lon,
-        ele: Number.isFinite(Number(waypoint?.ele)) ? Number(waypoint.ele) : null,
-        name:
-          typeof waypoint?.name === 'string'
-            ? waypoint.name
-            : typeof waypoint?.title === 'string'
-              ? waypoint.title
-              : null,
-        time: typeof waypoint?.time === 'string' ? waypoint.time : null,
-        waypointType:
-          typeof waypoint?.waypointType === 'string' ? waypoint.waypointType : null,
-      });
-    });
-
-    if (index < selectedRuns.length - 1) {
-      const nextRun = selectedRuns[index + 1];
-      if (nextRun) {
-        const finalPoint = validPoints[validPoints.length - 1];
-        waypoints.push({
-          lat: finalPoint.lat,
-          lon: finalPoint.lng,
-          ele: finalPoint.ele_m,
-          name: `Segment ${index + 1} complete | ${run.title}`,
-          time: null,
-          waypointType: 'checkpoint',
-        });
-      }
-    }
-  });
-
-  return {
-    parsed: {
-      name: title,
-      routePoints,
-      trackPoints: [],
-      primaryCoords: routePoints,
-      waypoints,
-    },
-    transitionLegCount,
-    segmentCount: selectedRuns.length,
-  };
-}
 
   // -- Mounted ref for memory leak prevention ----------------
   const mountedRef = useRef(true);
@@ -3576,6 +3506,8 @@ const queueMapCameraCommand = useCallback((
   const [routeBuilderSnapSource, setRouteBuilderSnapSource] = useState<string | null>(null);
   const [routeBuilderSnapStatus, setRouteBuilderSnapStatus] = useState<RouteBuilderSegmentData['snapStatus']>(null);
   const [routeBuilderSnapMessage, setRouteBuilderSnapMessage] = useState<string | null>(null);
+  const routeBuilderSegmentsRef = useRef<RouteBuilderSegmentData[]>([]);
+  const routeBuilderFinalSnapInFlightRef = useRef<Set<string>>(new Set());
   const [dispersedRouteBuildActive, setDispersedRouteBuildActive] = useState(false);
   const [selectedDispersedRouteLegIds, setSelectedDispersedRouteLegIds] = useState<string[]>([]);
   const [dispersedRouteBuildStatus, setDispersedRouteBuildStatus] = useState<string | null>(null);
@@ -4010,20 +3942,6 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     initialMode: 'upright',
     speedMph: gps.position?.speedMph ?? null,
   });
-  useEffect(() => {
-    if (vehicleHeadingHook.heading != null) {
-      lastKnownHeadingRef.current = vehicleHeadingHook.heading;
-      return;
-    }
-    if (currentGpsHeadingDeg != null && currentGpsHeadingDeg >= 0) {
-      lastKnownHeadingRef.current = currentGpsHeadingDeg;
-    }
-  }, [currentGpsHeadingDeg, vehicleHeadingHook.heading]);
-  const compassDisplayHeading = useMemo(() => {
-    if (vehicleHeadingHook.heading != null) return vehicleHeadingHook.heading;
-    if (currentGpsHeadingDeg != null && currentGpsHeadingDeg >= 0) return currentGpsHeadingDeg;
-    return lastKnownHeadingRef.current;
-  }, [currentGpsHeadingDeg, vehicleHeadingHook.heading]);
 
   const campsiteDrawingId = useMemo(
     () => (campsiteDrawingPoints.length >= 3 ? createCampsiteDrawingId(campsiteDrawingPoints) : null),
@@ -6468,6 +6386,15 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         .filter((run): run is ECSRun => !!run),
     [stitchSegmentIds, stitchSourceRuns],
   );
+
+  const safeUserLocation = useMemo(() => {
+    const freshestLocation = latestGpsMapLocation ?? userLocation;
+    if (!freshestLocation) return null;
+    const coordinate = toSafeCoordinate(freshestLocation);
+    return coordinate
+      ? { lat: coordinate.latitude, lng: coordinate.longitude }
+      : null;
+  }, [latestGpsMapLocation, userLocation]);
 
   const clearRoadDestination = roadNavigation.clearDestination;
   const previewRoadDestination = roadNavigation.previewDestination;
@@ -9292,47 +9219,81 @@ const handleCreateRun = useCallback(() => {
       showToast('ADD AT LEAST ONE ROUTE TO STITCH');
       return;
     }
+    if (stitchSaving) return;
 
-    const nextTitle = stitchName.trim() || 'Stitched Expedition';
-    const stitched = buildStitchedRunImport(stitchedRuns, nextTitle);
-    const stitchedRun = runStore.createFromParsedImport(
-      stitched.parsed,
-      stitchedRuns[0]?.build_snapshot,
-      'stitch',
-      nextTitle,
-    );
-    runStore.setActive(stitchedRun.id);
-    loadRuns();
+    void (async () => {
+      setStitchSaving(true);
+      const nextTitle = stitchName.trim() || 'Stitched Expedition';
+      try {
+        const stitched = await composeStitchedRoute({
+          title: nextTitle,
+          selectedRuns: stitchedRuns,
+          currentLocation: safeUserLocation,
+          fetchBridge:
+            mapToken && liveNavigateServicesEnabled
+              ? (request) =>
+                  fetchMapboxDirectionsBridge({
+                    accessToken: mapToken,
+                    from: request.from,
+                    to: request.to,
+                  })
+              : undefined,
+        });
 
-    const previewPayload = buildNavigationPayloadFromRun(stitchedRun, {
-      segmentCount: stitched.segmentCount,
-      transitionLegCount: stitched.transitionLegCount,
-    });
+        if (stitched.blocked) {
+          showToast(`STITCH NEEDS REVIEW: ${stitched.gapsNeedingReview.length} GAP${stitched.gapsNeedingReview.length === 1 ? '' : 'S'}`);
+          return;
+        }
 
-    void endTrailNavigation();
-    void clearRoadDestination();
+        const stitchedRun = runStore.createFromParsedImport(
+          stitched.parsed,
+          stitchedRuns[0]?.build_snapshot,
+          'stitch',
+          nextTitle,
+        );
+        runStore.setActive(stitchedRun.id);
+        loadRuns();
+        setSavedRoutesRefreshKey((key) => key + 1);
 
-    if (previewPayload) {
-      appliedNavigationPayloadRef.current = `${previewPayload.id}:${previewPayload.createdAt}`;
-      setExploreNavigationPayload(previewPayload);
-      void saveNavigationHandoffPayload(previewPayload);
-    }
+        const previewPayload = buildNavigationPayloadFromRun(stitchedRun, {
+          segmentCount: stitched.segmentCount,
+          transitionLegCount: stitched.transitionLegCount,
+        });
 
-    closeTopPopup('stitch');
-    setStitchSegmentIds([]);
-    setStitchName('Stitched Expedition');
-    showToast(
-      stitched.transitionLegCount > 0
-        ? `STITCHED EXPEDITION READY: ${nextTitle} | ${stitched.transitionLegCount} TRANSITION LEGS`
-        : `STITCHED EXPEDITION READY: ${nextTitle}`,
-    );
+        await endTrailNavigation();
+        await clearRoadDestination();
+
+        if (previewPayload) {
+          appliedNavigationPayloadRef.current = `${previewPayload.id}:${previewPayload.createdAt}`;
+          setExploreNavigationPayload(previewPayload);
+          await saveNavigationHandoffPayload(previewPayload);
+        }
+
+        closeTopPopup('stitch');
+        setStitchSegmentIds([]);
+        setStitchName('Stitched Expedition');
+        showToast(
+          stitched.transitionLegCount > 0
+            ? `STITCHED EXPEDITION READY: ${nextTitle} | ${stitched.transitionLegCount} VERIFIED BRIDGES`
+            : `STITCHED EXPEDITION READY: ${nextTitle}`,
+        );
+      } catch (error) {
+        showToast(error instanceof Error ? error.message.toUpperCase() : 'STITCH SAVE FAILED');
+      } finally {
+        setStitchSaving(false);
+      }
+    })();
   }, [
     clearRoadDestination,
     closeTopPopup,
     endTrailNavigation,
     loadRuns,
+    liveNavigateServicesEnabled,
+    mapToken,
+    safeUserLocation,
     showToast,
     stitchName,
+    stitchSaving,
     stitchedRuns,
   ]);
 
@@ -9354,15 +9315,6 @@ const handleCreateRun = useCallback(() => {
       })),
     [activeRun?.waypoints]
   );
-
-  const safeUserLocation = useMemo(() => {
-    const freshestLocation = latestGpsMapLocation ?? userLocation;
-    if (!freshestLocation) return null;
-    const coordinate = toSafeCoordinate(freshestLocation);
-    return coordinate
-      ? { lat: coordinate.latitude, lng: coordinate.longitude }
-      : null;
-  }, [latestGpsMapLocation, userLocation]);
 
   const roadRoutePoints = useMemo(
     () =>
@@ -9555,6 +9507,100 @@ const handleCreateRun = useCallback(() => {
     loadTrailPayload,
   ]);
 
+  const pendingHybridTrailTransition =
+    explorePreviewMode === 'hybrid' &&
+    roadNavigation.session.status === 'arrived' &&
+    trailNavigation.session.status === 'route_preview_hybrid';
+
+  const trailTripMode: 'trail' | 'hybrid' =
+    trailNavigation.session.payload?.tripMode === 'hybrid' ||
+    explorePreviewMode === 'hybrid' ||
+    pendingHybridTrailTransition
+      ? 'hybrid'
+      : 'trail';
+  const trailRejoinPoint = trailNavigation.session.rejoinPoint;
+
+  const trailNavigationActive =
+    trailNavigation.uiMode === 'active' || trailNavigation.uiMode === 'arrived';
+
+  const navigationOverlayMode = useMemo(() => {
+    if (pendingHybridTrailTransition) return 'active';
+    if (trailNavigation.uiMode === 'active' || trailNavigation.uiMode === 'arrived') {
+      return trailNavigation.uiMode;
+    }
+    if (roadNavigation.uiMode === 'active') return 'active';
+    if (roadNavigation.uiMode === 'arrived' && explorePreviewMode !== 'hybrid') return 'arrived';
+    if (trailNavigation.uiMode === 'preview' || trailNavigation.uiMode === 'error') {
+      return trailNavigation.uiMode;
+    }
+    return trailOnlyPreviewActive ? 'preview' : roadNavigation.uiMode;
+  }, [
+    explorePreviewMode,
+    pendingHybridTrailTransition,
+    roadNavigation.uiMode,
+    trailNavigation.uiMode,
+    trailOnlyPreviewActive,
+  ]);
+  const fullRouteGuidanceModel = useMemo(() => {
+    const payload = trailNavigation.session.payload ?? exploreNavigationPayload;
+    const shouldBuildFullRoute =
+      payload?.tripMode === 'hybrid' ||
+      explorePreviewMode === 'hybrid' ||
+      pendingHybridTrailTransition;
+    const phase =
+      navigationOverlayMode === 'arrived' || trailNavigation.uiMode === 'arrived'
+        ? 'arrived'
+        : pendingHybridTrailTransition
+          ? 'transition'
+          : trailNavigationActive
+            ? 'trail'
+            : 'approach';
+    const trailLengthMeters =
+      typeof explorePreviewTrailLengthMiles === 'number' && Number.isFinite(explorePreviewTrailLengthMiles)
+        ? explorePreviewTrailLengthMiles * 1609.344
+        : null;
+    const trailRemainingDistanceM =
+      trailNavigation.session.remainingDistanceM ??
+      (phase === 'approach' ? trailLengthMeters : null);
+
+    return buildFullRouteGuidanceModel({
+      phase,
+      currentLocation: safeUserLocation,
+      roadRoutePoints: shouldBuildFullRoute ? roadRoutePoints : [],
+      roadProgressPoints: shouldBuildFullRoute ? roadRouteProgressPoints : [],
+      roadDistanceM: roadNavigation.session.route?.distanceM ?? null,
+      roadRemainingDistanceM:
+        roadNavigation.session.remainingDistanceM ??
+        roadNavigation.session.route?.distanceM ??
+        null,
+      trailGeometry: shouldBuildFullRoute ? payload?.trailGeometry ?? [] : [],
+      trailProgressPoints: shouldBuildFullRoute ? trailNavigation.session.progressGeometry : [],
+      trailDistanceM: trailLengthMeters,
+      trailRemainingDistanceM,
+      trailProgressPercent: trailNavigation.session.progressPercent,
+    });
+  }, [
+    exploreNavigationPayload,
+    explorePreviewMode,
+    explorePreviewTrailLengthMiles,
+    navigationOverlayMode,
+    pendingHybridTrailTransition,
+    roadNavigation.session.remainingDistanceM,
+    roadNavigation.session.route?.distanceM,
+    roadRoutePoints,
+    roadRouteProgressPoints,
+    safeUserLocation,
+    trailNavigation.session.payload,
+    trailNavigation.session.progressGeometry,
+    trailNavigation.session.progressPercent,
+    trailNavigation.session.remainingDistanceM,
+    trailNavigation.uiMode,
+    trailNavigationActive,
+  ]);
+  const hybridStartCanUseTrail =
+    fullRouteGuidanceModel.status === 'ready' &&
+    fullRouteGuidanceModel.startSource === 'gps_on_trail';
+
   const handleOpenCommandBriefFromNavigate = useCallback(() => {
     hapticMicro();
     const existingState = dashboardStore.getUIState('expedition');
@@ -9653,6 +9699,13 @@ const handleCreateRun = useCallback(() => {
     ) {
       return;
     }
+    if (
+      trailSession.status === 'route_preview_hybrid' &&
+      explorePreviewMode === 'hybrid' &&
+      !hybridStartCanUseTrail
+    ) {
+      return;
+    }
 
     pendingAutoStartRouteIdRef.current = null;
     if (activeGuidanceUnavailableReason) {
@@ -9663,6 +9716,8 @@ const handleCreateRun = useCallback(() => {
     requestStartExpedition('trail');
   }, [
     activeGuidanceUnavailableReason,
+    explorePreviewMode,
+    hybridStartCanUseTrail,
     requestStartExpedition,
     showToast,
     trailSession.payload?.id,
@@ -9672,7 +9727,10 @@ const handleCreateRun = useCallback(() => {
   useEffect(() => {
     const pendingRouteId = pendingAutoStartRouteIdRef.current;
     if (!pendingRouteId) return;
-    if (explorePreviewMode !== 'road') return;
+    const shouldAutoStartRoad =
+      explorePreviewMode === 'road' ||
+      (explorePreviewMode === 'hybrid' && !hybridStartCanUseTrail);
+    if (!shouldAutoStartRoad) return;
     if (exploreNavigationPayload?.id !== pendingRouteId) return;
     if (roadNavigation.session.destination?.id !== pendingRouteId) return;
     if (roadNavigation.session.status === 'error') {
@@ -9687,6 +9745,14 @@ const handleCreateRun = useCallback(() => {
     if (roadNavigation.session.status !== 'route_preview' || !roadNavigation.session.route) {
       return;
     }
+    if (explorePreviewMode === 'hybrid' && fullRouteGuidanceModel.status === 'blocked_gap') {
+      pendingAutoStartRouteIdRef.current = null;
+      showToast('HYBRID ROUTE NEEDS A VERIFIED TRAILHEAD JOIN BEFORE START');
+      return;
+    }
+    if (explorePreviewMode === 'hybrid' && fullRouteGuidanceModel.status !== 'ready') {
+      return;
+    }
 
     pendingAutoStartRouteIdRef.current = null;
     setFollowUser(true);
@@ -9695,6 +9761,8 @@ const handleCreateRun = useCallback(() => {
     exploreNavigationPayload,
     exploreNavigationPayload?.id,
     explorePreviewMode,
+    fullRouteGuidanceModel.status,
+    hybridStartCanUseTrail,
     roadNavigation.session.destination?.id,
     roadNavigation.session.route,
     roadNavigation.session.status,
@@ -9721,40 +9789,6 @@ const handleCreateRun = useCallback(() => {
     transitionTrailFromRoad,
   ]);
 
-  const pendingHybridTrailTransition =
-    explorePreviewMode === 'hybrid' &&
-    roadNavigation.session.status === 'arrived' &&
-    trailNavigation.session.status === 'route_preview_hybrid';
-
-  const trailTripMode: 'trail' | 'hybrid' =
-    trailNavigation.session.payload?.tripMode === 'hybrid' ||
-    explorePreviewMode === 'hybrid' ||
-    pendingHybridTrailTransition
-      ? 'hybrid'
-      : 'trail';
-  const trailRejoinPoint = trailNavigation.session.rejoinPoint;
-
-  const trailNavigationActive =
-    trailNavigation.uiMode === 'active' || trailNavigation.uiMode === 'arrived';
-
-  const navigationOverlayMode = useMemo(() => {
-    if (pendingHybridTrailTransition) return 'active';
-    if (trailNavigation.uiMode === 'active' || trailNavigation.uiMode === 'arrived') {
-      return trailNavigation.uiMode;
-    }
-    if (roadNavigation.uiMode === 'active') return 'active';
-    if (roadNavigation.uiMode === 'arrived' && explorePreviewMode !== 'hybrid') return 'arrived';
-    if (trailNavigation.uiMode === 'preview' || trailNavigation.uiMode === 'error') {
-      return trailNavigation.uiMode;
-    }
-    return trailOnlyPreviewActive ? 'preview' : roadNavigation.uiMode;
-  }, [
-    explorePreviewMode,
-    pendingHybridTrailTransition,
-    roadNavigation.uiMode,
-    trailNavigation.uiMode,
-    trailOnlyPreviewActive,
-  ]);
   const navigateTrailAssessmentActive = navigationOverlayMode === 'active';
   const roadRouteGeometryValidation = useMemo(
     () => validateRouteGeometry(roadSession.route),
@@ -10064,6 +10098,17 @@ const handleCreateRun = useCallback(() => {
 
   const displayedRoutePoints = useMemo(() => {
     if (
+      fullRouteGuidanceModel.status !== 'unavailable' &&
+      (
+        explorePreviewMode === 'hybrid' ||
+        pendingHybridTrailTransition ||
+        trailNavigation.session.payload?.tripMode === 'hybrid'
+      ) &&
+      fullRouteGuidanceModel.routePoints.length > 1
+    ) {
+      return fullRouteGuidanceModel.routePoints;
+    }
+    if (
       (trailNavigationActive || pendingHybridTrailTransition) &&
       trailNavigation.session.payload?.trailGeometry &&
       trailNavigation.session.payload.trailGeometry.length > 1
@@ -10077,12 +10122,54 @@ const handleCreateRun = useCallback(() => {
         : validatedRunPoints;
   }, [
     explorePreviewMode,
+    fullRouteGuidanceModel.routePoints,
+    fullRouteGuidanceModel.status,
     pendingHybridTrailTransition,
     roadRoutePoints,
     trailNavigation.session.payload,
     trailNavigationActive,
     validatedRunPoints,
   ]);
+
+  const routeAheadDisplayHeading = useMemo(() => {
+    if (!safeUserLocation || routeLifecycleState.phase !== 'navigating') return null;
+    return resolveRouteAheadBearingDeg(
+      {
+        latitude: safeUserLocation.lat,
+        longitude: safeUserLocation.lng,
+      },
+      displayedRoutePoints,
+    );
+  }, [displayedRoutePoints, routeLifecycleState.phase, safeUserLocation]);
+
+  const compassDisplayHeading = useMemo(() => {
+    const resolved = resolveVehicleGuidanceHeading({
+      hasActiveGuidance: routeLifecycleState.phase === 'navigating',
+      routeAheadHeadingDeg: routeAheadDisplayHeading,
+      courseOverGroundDeg: currentGpsHeadingDeg,
+      gpsHeadingDeg: currentGpsHeadingDeg,
+      compassHeadingDeg: vehicleHeadingHook.heading,
+      fallbackHeadingDeg: lastKnownHeadingRef.current,
+      speedMph: gps.position?.speedMph ?? null,
+    });
+    return resolved.headingDeg ?? lastKnownHeadingRef.current;
+  }, [
+    currentGpsHeadingDeg,
+    gps.position?.speedMph,
+    routeAheadDisplayHeading,
+    routeLifecycleState.phase,
+    vehicleHeadingHook.heading,
+  ]);
+
+  useEffect(() => {
+    if (compassDisplayHeading != null) {
+      lastKnownHeadingRef.current = compassDisplayHeading;
+      return;
+    }
+    if (currentGpsHeadingDeg != null && currentGpsHeadingDeg >= 0) {
+      lastKnownHeadingRef.current = currentGpsHeadingDeg;
+    }
+  }, [compassDisplayHeading, currentGpsHeadingDeg]);
 
   const displayedRouteWaypoints = useMemo(() => {
     if (trailNavigationMarkers.length > 0) {
@@ -10176,15 +10263,29 @@ const handleCreateRun = useCallback(() => {
   );
 
   const displayedRouteProgressPoints = useMemo(() => {
+    if (
+      fullRouteGuidanceModel.status !== 'unavailable' &&
+      (
+        explorePreviewMode === 'hybrid' ||
+        pendingHybridTrailTransition ||
+        trailNavigation.session.payload?.tripMode === 'hybrid'
+      )
+    ) {
+      return fullRouteGuidanceModel.progressPoints;
+    }
     if (pendingHybridTrailTransition) return [];
     if (trailNavigation.session.progressGeometry.length > 1) {
       return trailNavigation.session.progressGeometry;
     }
     return roadRouteProgressPoints.length > 1 ? roadRouteProgressPoints : [];
   }, [
+    explorePreviewMode,
+    fullRouteGuidanceModel.progressPoints,
+    fullRouteGuidanceModel.status,
     pendingHybridTrailTransition,
     roadRouteProgressPoints,
     trailNavigation.session.progressGeometry,
+    trailNavigation.session.payload?.tripMode,
   ]);
 
   const displayedRouteColor = useMemo(() => {
@@ -10986,14 +11087,24 @@ const handleCreateRun = useCallback(() => {
 
   const displayedTrailSegments = useMemo<TrailSegmentData[]>(
     () =>
-      trailNavigationActive || pendingHybridTrailTransition
+      fullRouteGuidanceModel.status === 'ready' &&
+      (
+        explorePreviewMode === 'hybrid' ||
+        pendingHybridTrailTransition ||
+        trailNavigation.session.payload?.tripMode === 'hybrid'
+      )
+        ? trailSegments
+        : trailNavigationActive || pendingHybridTrailTransition
         ? trailSegments
         : explorePreviewTrailSegments.length > 0
           ? [...trailSegments, ...explorePreviewTrailSegments]
           : trailSegments,
     [
+      explorePreviewMode,
       explorePreviewTrailSegments,
+      fullRouteGuidanceModel.status,
       pendingHybridTrailTransition,
+      trailNavigation.session.payload?.tripMode,
       trailNavigationActive,
       trailSegments,
     ],
@@ -12041,7 +12152,8 @@ const handleTopToolboxLayout = useCallback(
         primaryActionLabel: activeGuidanceReady ? 'Start Hybrid' : 'Preview Only',
         primaryActionDisabled:
           !activeGuidanceReady ||
-          !route ||
+          fullRouteGuidanceModel.status === 'blocked_gap' ||
+          (!hybridStartCanUseTrail && !route) ||
           (!navigateOperationalState.liveRoutingAvailable && !navigateOperationalState.hasRouteSupport),
         showSteps: false,
         showOverview: true,
@@ -12092,6 +12204,8 @@ const handleTopToolboxLayout = useCallback(
     explorePreviewMode,
     explorePreviewTrailLengthMiles,
     explorePreviewTrailSegments.length,
+    fullRouteGuidanceModel.status,
+    hybridStartCanUseTrail,
     importedPreviewSourceLabel,
     roadNavigation.previewLoading,
     roadNavigation.session.destination,
@@ -12125,6 +12239,10 @@ const handleTopToolboxLayout = useCallback(
     const roadRouteActive = roadNavigation.uiMode === 'active';
     const trailRouteActive =
       trailNavigation.uiMode === 'active' || trailNavigation.uiMode === 'arrived';
+    const activeHybridPayload =
+      explorePreviewMode === 'hybrid'
+        ? trailNavigation.session.payload ?? exploreNavigationPayload
+        : null;
     const activeOperationalStatus =
       navigateOperationalState.activeStatusLabel;
     const activeOperationalNote =
@@ -12138,6 +12256,7 @@ const handleTopToolboxLayout = useCallback(
       const routeDistance = roadNavigation.session.route?.distanceM ?? null;
       const remainingDistance = roadNavigation.session.remainingDistanceM;
       const roadConfidence = roadNavigation.session.routeConfidenceState;
+      const hybridApproachActive = !!activeHybridPayload;
       const routeUpdating = roadConfidence === 'rerouting';
       const routeDeviation =
         roadConfidence === 'temporary_deviation' || roadConfidence === 'off_route';
@@ -12152,25 +12271,26 @@ const handleTopToolboxLayout = useCallback(
           : null;
 
       return {
-        tripMode: 'road' as const,
+        tripMode: hybridApproachActive ? 'hybrid' as const : 'road' as const,
         eyebrow: routeUpdating
           ? 'REROUTING'
           : routeApproaching
-            ? 'FINAL APPROACH'
+            ? hybridApproachActive ? 'TRAILHEAD APPROACH' : 'FINAL APPROACH'
             : routeRejoined
               ? 'ROUTE REJOINED'
               : routeDeviation
                 ? 'ROUTE UPDATE'
-                : routeLowConfidence
+              : routeLowConfidence
                   ? 'TRACKING'
-                  : 'ACTIVE GUIDANCE',
-        title: roadNavigation.session.destination?.title ?? 'Route Active',
+                  : hybridApproachActive ? 'HYBRID GUIDANCE' : 'ACTIVE GUIDANCE',
+        title: activeHybridPayload?.title ?? roadNavigation.session.destination?.title ?? 'Route Active',
         subtitle:
+          activeHybridPayload?.subtitle ??
           roadNavigation.session.destination?.subtitle ??
           (routeUpdating
             ? 'Refreshing route guidance'
             : routeApproaching
-              ? 'Destination close ahead'
+              ? hybridApproachActive ? 'Trailhead close ahead' : 'Destination close ahead'
               : routeRejoined
                 ? 'Confidence restored'
                 : routeDeviation
@@ -12201,7 +12321,11 @@ const handleTopToolboxLayout = useCallback(
             label: 'REMAIN',
             value: routeUpdating
               ? 'UPDATING'
-              : formatNavMeters(roadNavigation.session.remainingDistanceM),
+              : formatNavMeters(
+                  hybridApproachActive
+                    ? fullRouteGuidanceModel.remainingDistanceM
+                    : roadNavigation.session.remainingDistanceM,
+                ),
           },
           {
             label: 'ETA',
@@ -12216,10 +12340,12 @@ const handleTopToolboxLayout = useCallback(
         ],
         progressLabel:
           routeApproaching
-            ? 'FINAL APPROACH'
+            ? hybridApproachActive ? 'TRAILHEAD APPROACH' : 'FINAL APPROACH'
             : routeRejoined
               ? 'REJOINED'
-              : progressRatio != null
+              : hybridApproachActive && fullRouteGuidanceModel.progressPercent != null
+                ? `${Math.round(fullRouteGuidanceModel.progressPercent)}% COMPLETE`
+                : progressRatio != null
                 ? `${Math.round(progressRatio * 100)}% COMPLETE`
                 : null,
         noteText:
@@ -12235,8 +12361,12 @@ const handleTopToolboxLayout = useCallback(
                   : routeRejoined
                     ? 'Route confidence restored. Normal guidance is back on track.'
                     : routeApproaching
-                      ? 'Final approach underway. Follow the highlighted route to completion.'
-                      : 'Active road guidance is running. Follow the highlighted route and use overview if you need wider context.'),
+                      ? hybridApproachActive
+                        ? 'Approaching the trailhead. ECS will transition into trail guidance when the road leg is complete.'
+                        : 'Final approach underway. Follow the highlighted route to completion.'
+                      : hybridApproachActive
+                        ? 'Hybrid guidance is active. Follow road maneuvers to the trailhead, then continue on the highlighted trail to the final endpoint.'
+                        : 'Active road guidance is running. Follow the highlighted route and use overview if you need wider context.'),
         showSteps: true,
         showOverview: true,
         showReroute:
@@ -12340,7 +12470,10 @@ const handleTopToolboxLayout = useCallback(
     };
   }, [
     exploreNavigationPayload,
+    explorePreviewMode,
     explorePreviewTrailLengthMiles,
+    fullRouteGuidanceModel.progressPercent,
+    fullRouteGuidanceModel.remainingDistanceM,
     pendingHybridTrailTransition,
     roadNavigation.session.destination?.subtitle,
     roadNavigation.session.destination?.title,
@@ -12404,6 +12537,10 @@ const handleTopToolboxLayout = useCallback(
       trailNavigation.uiMode === 'active' ||
       trailNavigation.uiMode === 'arrived' ||
       trailNavigation.uiMode === 'preview';
+    const usingTrailMetrics =
+      pendingHybridTrailTransition ||
+      trailNavigation.uiMode === 'active' ||
+      trailNavigation.uiMode === 'arrived';
     const source =
       context.tripMode === 'hybrid'
         ? 'hybrid'
@@ -12419,11 +12556,21 @@ const handleTopToolboxLayout = useCallback(
       roadNavigation.session.remainingDistanceM != null
         ? Math.max(0, Math.min(100, (1 - roadNavigation.session.remainingDistanceM / routeDistance) * 100))
         : null;
+    const guidanceGpsSample = gps.rawGPS.position ?? gps.position;
     const currentLocation =
-      userLocation != null
-        ? { latitude: userLocation.lat, longitude: userLocation.lng }
-        : gps.position
-          ? { latitude: gps.position.latitude, longitude: gps.position.longitude }
+      guidanceGpsSample != null
+        ? {
+            latitude: guidanceGpsSample.latitude,
+            longitude: guidanceGpsSample.longitude,
+            altitudeFt: guidanceGpsSample.altitudeFt ?? null,
+            elevationFt: guidanceGpsSample.altitudeFt ?? null,
+            speedMph: guidanceGpsSample.speedMph ?? null,
+            headingDeg: guidanceGpsSample.headingDeg ?? null,
+            accuracyM: guidanceGpsSample.accuracyM ?? null,
+            timestamp: guidanceGpsSample.timestamp,
+          }
+        : userLocation != null
+          ? { latitude: userLocation.lat, longitude: userLocation.lng }
           : null;
     const routeId =
       trailNavigation.session.payload?.id ??
@@ -12435,9 +12582,9 @@ const handleTopToolboxLayout = useCallback(
       roadNavigation.session.sessionId ??
       activeRun?.id ??
       null;
-    const roadRerouting = !usingTrailSession && roadNavigation.session.status === 'rerouting';
-    const roadOffRoute = !usingTrailSession && roadNavigation.session.isOffRoute;
-    const trailOffRoute = usingTrailSession && trailNavigation.session.status === 'off_trail';
+    const roadRerouting = !usingTrailMetrics && roadNavigation.session.status === 'rerouting';
+    const roadOffRoute = !usingTrailMetrics && roadNavigation.session.isOffRoute;
+    const trailOffRoute = usingTrailMetrics && trailNavigation.session.status === 'off_trail';
     const routeStatusKind =
       lifecycle === 'arrived'
         ? 'arrived'
@@ -12462,16 +12609,17 @@ const handleTopToolboxLayout = useCallback(
       routePoints: displayedRoutePoints,
       progressPoints: displayedRouteProgressPoints,
       currentLocation,
-      headingDeg: gps.position?.headingDeg ?? null,
-      remainingDistanceM: usingTrailSession
+      gpsSample: currentLocation,
+      headingDeg: guidanceGpsSample?.headingDeg ?? gps.position?.headingDeg ?? null,
+      remainingDistanceM: fullRouteGuidanceModel.remainingDistanceM ?? (usingTrailMetrics
         ? trailNavigation.session.remainingDistanceM
-        : roadNavigation.session.remainingDistanceM,
-      remainingDurationS: usingTrailSession ? null : roadNavigation.session.remainingDurationS,
-      etaIso: usingTrailSession ? null : roadNavigation.session.etaIso,
-      progressPercent: usingTrailSession
+        : roadNavigation.session.remainingDistanceM),
+      remainingDurationS: usingTrailMetrics ? null : roadNavigation.session.remainingDurationS,
+      etaIso: usingTrailMetrics ? null : roadNavigation.session.etaIso,
+      progressPercent: fullRouteGuidanceModel.progressPercent ?? (usingTrailMetrics
         ? trailNavigation.session.progressPercent
-        : roadProgressPercent,
-      nextInstructionDistanceM: usingTrailSession
+        : roadProgressPercent),
+      nextInstructionDistanceM: usingTrailMetrics
         ? trailNavigation.session.nextInstructionDistanceM
         : roadNavigation.session.nextInstructionDistanceM,
       isRerouting: roadRerouting,
@@ -12491,7 +12639,10 @@ const handleTopToolboxLayout = useCallback(
     activeRun,
     displayedRoutePoints,
     displayedRouteProgressPoints,
+    fullRouteGuidanceModel.progressPercent,
+    fullRouteGuidanceModel.remainingDistanceM,
     gps.position,
+    gps.rawGPS.position,
     navigationActiveContext,
     navigationPreviewContext,
     pendingHybridTrailTransition,
@@ -13937,6 +14088,10 @@ const routeBuilderPointCount = useMemo(
   [routeBuilderSegments],
 );
 
+useEffect(() => {
+  routeBuilderSegmentsRef.current = routeBuilderSegments;
+}, [routeBuilderSegments]);
+
 const routeBuilderSavableSegments = useMemo(
   () =>
     routeBuilderSegments.filter(
@@ -13945,7 +14100,19 @@ const routeBuilderSavableSegments = useMemo(
   [routeBuilderSegments],
 );
 
-const routeBuilderCanSave = routeBuilderSavableSegments.length > 0 && routeBuilderPointCount > 1;
+const routeBuilderHasPendingSnap = routeBuilderSavableSegments.some(
+  (segment) => segment.snapStatus === 'network_pending',
+);
+const routeBuilderHasBlockedSnap = routeBuilderSavableSegments.some((segment) =>
+  ['blocked', 'failed', 'ambiguous', 'raw_smoothed', 'too_short'].includes(String(segment.snapStatus ?? '')),
+);
+const routeBuilderCanSave =
+  !routeBuilderDrawing &&
+  routeBuilderSavableSegments.length > 0 &&
+  routeBuilderPointCount > 1 &&
+  !routeBuilderHasPendingSnap &&
+  !routeBuilderHasBlockedSnap &&
+  canSaveRouteBuilderSegments(routeBuilderSavableSegments as FinalizableRouteBuilderSegment[]);
 const routeBuilderCanUndo = routeBuilderSegments.some(
   (segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1,
 );
@@ -14017,9 +14184,10 @@ const dispersedRouteBuildState = useMemo(
   ]);
 
 const handleRouteBuilderUpdate = useCallback((payload: RouteBuilderUpdatePayload) => {
-  setRouteBuilderSegments((prev) =>
-    sameRouteBuilderSegments(prev, payload.segments) ? prev : payload.segments,
-  );
+  setRouteBuilderSegments((prev) => {
+    const merged = mergeRouteBuilderFinalSnapState(payload.segments, prev);
+    return sameRouteBuilderSegments(prev, merged) ? prev : merged;
+  });
   setRouteBuilderDrawing((prev) => (prev === payload.isDrawing ? prev : payload.isDrawing));
   setRouteBuilderSnapSource((prev) =>
     prev === (payload.snapSource ?? null) ? prev : payload.snapSource ?? null,
@@ -14045,6 +14213,89 @@ const handleRouteBuilderGestureStateChange = useCallback((payload: {
     setRouteBuilderSnapMessage('Snapping segment...');
   }
 }, []);
+
+const queueRouteBuilderFinalSnap = useCallback((segment: RouteBuilderSegmentData) => {
+  const rawLine = normalizeRouteBuilderLine(
+    Array.isArray(segment.rawSegment) && segment.rawSegment.length > 1
+      ? segment.rawSegment
+      : segment.coordinates,
+  );
+  if (rawLine.length < 2) return;
+  if (segment.buildSource?.kind === 'dispersed_route_leg') return;
+  if (segment.snapStatus === 'network_pending' || segment.snapStatus === 'blocked') return;
+  if (segment.snapProvider === 'mapbox_map_matching') return;
+
+  const mapboxAvailable = !!mapToken && liveNavigateServicesEnabled;
+  if (!mapboxAvailable && segment.snapProvider === 'rendered_features' && isVerifiedRouteBuilderSegment(segment as FinalizableRouteBuilderSegment)) {
+    return;
+  }
+
+  const signature = `${segment.id}:${routeBuilderFinalSnapSignature(segment)}:${mapboxAvailable ? 'mapbox' : 'local'}`;
+  if (routeBuilderFinalSnapInFlightRef.current.has(signature)) return;
+  routeBuilderFinalSnapInFlightRef.current.add(signature);
+
+  if (mapboxAvailable) {
+    setRouteBuilderSegments((current) =>
+      current.map((candidate) =>
+        candidate.id === segment.id && routeBuilderFinalSnapSignature(candidate) === routeBuilderFinalSnapSignature(segment)
+          ? {
+              ...candidate,
+              snapStatus: 'network_pending',
+              snapProvider: null,
+              snapProfile: 'driving',
+              snapMessage: 'Verifying with Mapbox driving map matching...',
+            }
+          : candidate,
+      ),
+    );
+    setRouteBuilderSnapStatus('network_pending');
+    setRouteBuilderSnapMessage('Verifying with Mapbox driving map matching...');
+  }
+
+  void (async () => {
+    try {
+      const latestSegment =
+        routeBuilderSegmentsRef.current.find(
+          (candidate) =>
+            candidate.id === segment.id &&
+            routeBuilderFinalSnapSignature(candidate) === routeBuilderFinalSnapSignature(segment),
+        ) ?? segment;
+      const mapboxMatch = mapboxAvailable
+        ? await fetchMapboxMapMatchingCandidate({
+            accessToken: mapToken,
+            coordinates: rawLine,
+          })
+        : null;
+      const finalized = finalizeRouteBuilderSegmentSnap({
+        segment: latestSegment as FinalizableRouteBuilderSegment,
+        mapboxMatch,
+        mapboxAvailable,
+      }).segment as RouteBuilderSegmentData;
+
+      setRouteBuilderSegments((current) => {
+        const next = current.map((candidate) =>
+          candidate.id === segment.id &&
+          routeBuilderFinalSnapSignature(candidate) === routeBuilderFinalSnapSignature(segment)
+            ? finalized
+            : candidate,
+        );
+        return sameRouteBuilderSegments(current, next) ? current : next;
+      });
+      setRouteBuilderSnapSource(finalized.snapSource ?? null);
+      setRouteBuilderSnapStatus(finalized.snapStatus ?? null);
+      setRouteBuilderSnapMessage(finalized.snapMessage ?? null);
+    } finally {
+      routeBuilderFinalSnapInFlightRef.current.delete(signature);
+    }
+  })();
+}, [liveNavigateServicesEnabled, mapToken]);
+
+useEffect(() => {
+  if (!routeBuilderActive || routeBuilderDrawing) return;
+  for (const segment of routeBuilderSegments) {
+    queueRouteBuilderFinalSnap(segment);
+  }
+}, [queueRouteBuilderFinalSnap, routeBuilderActive, routeBuilderDrawing, routeBuilderSegments]);
 
 const clearCampsiteDrawing = useCallback(() => {
   hapticCommand();
@@ -14152,6 +14403,7 @@ const startCampScoutDrawing = useCallback(() => {
     setRouteBuilderDrawing(false);
     setRouteBuilderSnapSource(null);
     setRouteBuilderSegments([]);
+    routeBuilderFinalSnapInFlightRef.current.clear();
     setRouteBuilderSnapStatus(null);
     setRouteBuilderSnapMessage(null);
     setDispersedRouteBuildActive(false);
@@ -14404,6 +14656,7 @@ const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boole
   setRouteBuilderSnapStatus(null);
   setRouteBuilderSnapMessage(null);
   setRouteBuilderSegments([]);
+  routeBuilderFinalSnapInFlightRef.current.clear();
   setSelectedDispersedRouteLegIds([]);
   setDispersedRouteBuildRenderKey((key) => key + 1);
   if (options?.clearDesignContext) {
@@ -14569,11 +14822,21 @@ const clearStagedBuildRoutePreview = useCallback(() => {
   return cleared;
 }, [clearExploreNavigationPayload, loadRuns]);
 
-const finishRouteBuilder = useCallback(async () => {
-  hapticCommand();
+const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
+  stage?: boolean;
+  autoStart?: boolean;
+}) => {
   if (routeBuilderSavableSegments.length === 0 || routeBuilderPointCount < 2) {
     showToast('TRACE AT LEAST TWO POINTS TO SAVE');
-    return;
+    return null;
+  }
+  if (!routeBuilderCanSave) {
+    showToast(
+      routeBuilderHasPendingSnap
+        ? 'WAIT FOR ROUTE SNAP VERIFICATION'
+        : 'UNVERIFIED ROUTE SEGMENT NEEDS REVIEW',
+    );
+    return null;
   }
 
   try {
@@ -14593,24 +14856,41 @@ const finishRouteBuilder = useCallback(async () => {
     routeBuilderStagedRouteIdRef.current = savedRoute.id;
     routeBuilderStagedRunIdRef.current = savedRun.id;
     routeStore.attachRun(savedRoute.id, savedRun.id);
-    routeStore.setActive(savedRoute.id);
-    runStore.setActive(savedRun.id);
     loadRuns();
     setCustomRouteRefreshKey((key) => key + 1);
-    await endTrailNavigation();
-    await clearRoadDestination();
-    const previewPayload = buildNavigationPayloadFromRun(savedRun);
-    if (previewPayload) {
-      await applyExploreNavigationPayload(previewPayload);
+    setSavedRoutesRefreshKey((key) => key + 1);
+
+    if (options?.stage) {
+      routeStore.setActive(savedRoute.id);
+      runStore.setActive(savedRun.id);
+      await endTrailNavigation();
+      await clearRoadDestination();
+      const previewPayload = buildNavigationPayloadFromRun(savedRun);
+      if (previewPayload) {
+        if (options.autoStart) {
+          pendingAutoStartRouteIdRef.current = previewPayload.id;
+          setFollowUser(true);
+        }
+        await applyExploreNavigationPayload(previewPayload);
+      }
+    } else {
+      routeBuilderStagedRouteIdRef.current = null;
+      routeBuilderStagedRunIdRef.current = null;
     }
-    showToast(`CUSTOM ROUTE SAVED: ${savedRoute.name}`);
+    showToast(
+      options?.autoStart
+        ? `ROUTE TO READY: ${savedRoute.name}`
+        : options?.stage
+          ? `CUSTOM ROUTE STAGED: ${savedRoute.name}`
+          : `CUSTOM ROUTE SAVED: ${savedRoute.name}`,
+    );
+    resetBuildRouteDraft({ clearDesignContext: true });
+    return { savedRoute, savedRun };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to save custom route.';
     showToast(message.toUpperCase());
-    return;
+    return null;
   }
-
-  resetBuildRouteDraft({ clearDesignContext: true });
 }, [
   activeRun?.build_snapshot,
   applyExploreNavigationPayload,
@@ -14618,10 +14898,22 @@ const finishRouteBuilder = useCallback(async () => {
   endTrailNavigation,
   loadRuns,
   resetBuildRouteDraft,
+  routeBuilderCanSave,
+  routeBuilderHasPendingSnap,
   routeBuilderPointCount,
   routeBuilderSavableSegments,
   showToast,
 ]);
+
+const finishRouteBuilder = useCallback(async () => {
+  hapticCommand();
+  await saveVerifiedRouteBuilderDraft();
+}, [saveVerifiedRouteBuilderDraft]);
+
+const routeToRouteBuilder = useCallback(async () => {
+  hapticCommand();
+  await saveVerifiedRouteBuilderDraft({ stage: true, autoStart: true });
+}, [saveVerifiedRouteBuilderDraft]);
 
 const undoLastRouteBuilderSegment = useCallback(() => {
   hapticCommand();
@@ -15841,7 +16133,11 @@ const handleRoadOverlayStartNavigation = useCallback(() => {
     showToast('ROUTE PREVIEW ONLY - ACTIVE GUIDANCE NEEDS CONTINUOUS GEOMETRY');
     return;
   }
-  if (explorePreviewMode === 'trail') {
+  if (explorePreviewMode === 'hybrid' && fullRouteGuidanceModel.status === 'blocked_gap') {
+    showToast('HYBRID ROUTE NEEDS A VERIFIED TRAILHEAD JOIN BEFORE START');
+    return;
+  }
+  if (explorePreviewMode === 'trail' || (explorePreviewMode === 'hybrid' && hybridStartCanUseTrail)) {
     requestStartExpedition('trail');
     return;
   }
@@ -15849,6 +16145,8 @@ const handleRoadOverlayStartNavigation = useCallback(() => {
 }, [
   activeGuidanceUnavailableReason,
   explorePreviewMode,
+  fullRouteGuidanceModel.status,
+  hybridStartCanUseTrail,
   requestStartExpedition,
   showToast,
 ]);
@@ -15948,6 +16246,12 @@ const mapCameraMode = useMemo<React.ComponentProps<typeof MapRenderer>['cameraMo
   return followUser ? 'follow_user' : 'free_pan';
 }, [followUser, isReplayActive, replayPlaying]);
 
+const navigateMapMotion = useMemo(() => resolveMapSurfaceMotionState({
+  surface: 'navigate',
+  isFocused,
+  hasActiveGuidance: routeLifecycleState.phase === 'navigating',
+}), [isFocused, routeLifecycleState.phase]);
+
 
 
 const stableMapSurface = useMemo(() => {
@@ -15979,6 +16283,7 @@ const stableMapSurface = useMemo(() => {
         showUserLocation={!!safeUserLocation}
         followUser={followUser}
         userLocation={safeUserLocation}
+        motionPriority={navigateMapMotion.motionPriority}
         interactive
         segments={mapSegmentFeatures}
         bailoutMarkers={bailoutMarkers}
@@ -16798,6 +17103,10 @@ const stableMapSurface = useMemo(() => {
                 <Text style={styles.routeBuilderStatusHint} numberOfLines={1}>
                   {routeBuilderSnapSource === 'snapping'
                     ? 'Snapping segment...'
+                    : routeBuilderHasPendingSnap || routeBuilderSnapStatus === 'network_pending'
+                      ? routeBuilderSnapMessage ?? 'Verifying route snap...'
+                    : routeBuilderHasBlockedSnap || routeBuilderSnapStatus === 'blocked'
+                      ? routeBuilderSnapMessage ?? 'Unverified segment - undo and redraw'
                     : dispersedRouteBuildActive && dispersedRouteBuildStatus
                       ? dispersedRouteBuildStatus
                     : routeBuilderSnapStatus === 'raw_smoothed' || routeBuilderSnapStatus === 'ambiguous'
@@ -16857,7 +17166,7 @@ const stableMapSurface = useMemo(() => {
                 disabled={!routeBuilderCanSave}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel="Save and stage Build Route"
+                accessibilityLabel="Save Build Route"
               >
                 <Text
                   style={[
@@ -16865,7 +17174,29 @@ const stableMapSurface = useMemo(() => {
                     !routeBuilderCanSave && styles.routeBuilderStatusActionTextDisabled,
                   ]}
                 >
-                  SAVE + STAGE
+                  SAVE
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.routeBuilderStatusAction,
+                  !routeBuilderCanSave && styles.routeBuilderStatusActionDisabled,
+                ]}
+                onPress={() => {
+                  void routeToRouteBuilder();
+                }}
+                disabled={!routeBuilderCanSave}
+                activeOpacity={0.82}
+                accessibilityRole="button"
+                accessibilityLabel="Route to Build Route"
+              >
+                <Text
+                  style={[
+                    styles.routeBuilderStatusActionText,
+                    !routeBuilderCanSave && styles.routeBuilderStatusActionTextDisabled,
+                  ]}
+                >
+                  ROUTE TO
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -16910,6 +17241,7 @@ const stableMapSurface = useMemo(() => {
   mapToken,
   safeUserLocation,
   followUser,
+  navigateMapMotion.motionPriority,
   mapCameraMode,
   mapSegmentFeatures,
   bailoutMarkers,
@@ -17099,10 +17431,13 @@ const stableMapSurface = useMemo(() => {
   dispersedRouteBuildActive,
   dispersedRouteBuildStatus,
   routeBuilderSavableSegments.length,
+  routeBuilderHasPendingSnap,
+  routeBuilderHasBlockedSnap,
   routeDesignContext,
   routeBuilderCanSave,
   routeBuilderCanUndo,
   finishRouteBuilder,
+  routeToRouteBuilder,
   undoLastRouteBuilderSegment,
   clearRouteBuilderDraft,
   cancelRouteBuilder,
@@ -19582,13 +19917,18 @@ const stableMapSurface = useMemo(() => {
 
         <View style={styles.stitchFooter}>
           <TouchableOpacity
-            style={[styles.stitchSaveButton, stitchedRuns.length === 0 && styles.stitchSaveButtonDisabled]}
+            style={[
+              styles.stitchSaveButton,
+              (stitchedRuns.length === 0 || stitchSaving) && styles.stitchSaveButtonDisabled,
+            ]}
             onPress={handleSaveStitch}
             activeOpacity={0.88}
-            disabled={stitchedRuns.length === 0}
+            disabled={stitchedRuns.length === 0 || stitchSaving}
           >
             <Ionicons name="navigate-outline" size={16} color="#091014" />
-            <Text style={styles.stitchSaveButtonText}>SAVE STITCHED EXPEDITION</Text>
+            <Text style={styles.stitchSaveButtonText}>
+              {stitchSaving ? 'VERIFYING BRIDGES...' : 'SAVE STITCHED EXPEDITION'}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>

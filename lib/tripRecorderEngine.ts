@@ -134,7 +134,7 @@ let _maxAltitudeFt: number | null = null;
 let _minAltitudeFt: number | null = null;
 let _elevationGainFt = 0;
 let _elevationLossFt = 0;
-let _lastAltitudeM: number | null = null;
+let _lastAltitudeFt: number | null = null;
 let _pointsRecorded = 0;
 let _lastDistanceMilestone = 0;
 let _lastElevationMilestone = 0;
@@ -272,7 +272,7 @@ function collectResourceSnapshot(distanceMi: number): ResourceSnapshot {
 function readGPSPosition(): {
   lat: number;
   lng: number;
-  altitudeM: number | null;
+  altitudeFt: number | null;
   speedMph: number | null;
   headingDeg: number | null;
   accuracyM: number | null;
@@ -284,7 +284,7 @@ function readGPSPosition(): {
     return {
       lat: gps.position.latitude,
       lng: gps.position.longitude,
-      altitudeM: gps.position.altitudeM ?? null,
+      altitudeFt: gps.position.altitudeFt ?? null,
       speedMph: gps.position.speedMph ?? null,
       headingDeg: gps.position.headingDeg ?? null,
       accuracyM: gps.position.accuracyM ?? null,
@@ -338,19 +338,19 @@ function _pollGPS(): void {
   }
 
   // Track altitude
-  const altFt = pos.altitudeM != null ? Math.round(pos.altitudeM * M_TO_FT) : null;
+  const altFt = pos.altitudeFt != null ? Math.round(pos.altitudeFt) : null;
   if (altFt != null) {
     if (_maxAltitudeFt === null || altFt > _maxAltitudeFt) _maxAltitudeFt = altFt;
     if (_minAltitudeFt === null || altFt < _minAltitudeFt) _minAltitudeFt = altFt;
   }
 
   // Track elevation changes
-  if (pos.altitudeM != null && _lastAltitudeM != null) {
-    const dElev = pos.altitudeM - _lastAltitudeM;
-    if (dElev > 1) _elevationGainFt += dElev * M_TO_FT;
-    else if (dElev < -1) _elevationLossFt += Math.abs(dElev) * M_TO_FT;
+  if (pos.altitudeFt != null && _lastAltitudeFt != null) {
+    const dElevFt = pos.altitudeFt - _lastAltitudeFt;
+    if (dElevFt > 3.28084) _elevationGainFt += dElevFt;
+    else if (dElevFt < -3.28084) _elevationLossFt += Math.abs(dElevFt);
   }
-  if (pos.altitudeM != null) _lastAltitudeM = pos.altitudeM;
+  if (pos.altitudeFt != null) _lastAltitudeFt = pos.altitudeFt;
 
   // Record point
   const routePoint: TripRoutePoint = {
@@ -478,7 +478,7 @@ function _addEvent(type: TripEventType, description: string, meta: Record<string
     timestamp: now(),
     lat: pos?.lat ?? null,
     lng: pos?.lng ?? null,
-    altitudeFt: pos?.altitudeM != null ? Math.round(pos.altitudeM * M_TO_FT) : null,
+    altitudeFt: pos?.altitudeFt != null ? Math.round(pos.altitudeFt) : null,
     distanceAtEventMi: Math.round(_totalDistanceMi * 100) / 100,
     description,
     meta,
@@ -544,7 +544,7 @@ function _resetTrackingState(): void {
   _minAltitudeFt = null;
   _elevationGainFt = 0;
   _elevationLossFt = 0;
-  _lastAltitudeM = null;
+  _lastAltitudeFt = null;
   _pointsRecorded = 0;
   _lastRecordTime = 0;
   _lastResourceTime = 0;
@@ -693,8 +693,8 @@ export const tripRecorderEngine = {
       distanceMi: 0,
       avgSpeedMph: 0,
       maxSpeedMph: 0,
-      maxAltitudeFt: pos?.altitudeM != null ? Math.round(pos.altitudeM * M_TO_FT) : null,
-      minAltitudeFt: pos?.altitudeM != null ? Math.round(pos.altitudeM * M_TO_FT) : null,
+      maxAltitudeFt: pos?.altitudeFt != null ? Math.round(pos.altitudeFt) : null,
+      minAltitudeFt: pos?.altitudeFt != null ? Math.round(pos.altitudeFt) : null,
       elevationGainFt: 0,
       elevationLossFt: 0,
       peakRemoteness: null,
@@ -947,7 +947,7 @@ export const tripRecorderEngine = {
       currentSpeedMph: pos?.speedMph != null ? Math.round(pos.speedMph * 10) / 10 : null,
       avgSpeedMph: _activeTrip.avgSpeedMph,
       maxSpeedMph: _activeTrip.maxSpeedMph,
-      currentAltitudeFt: pos?.altitudeM != null ? Math.round(pos.altitudeM * M_TO_FT) : null,
+      currentAltitudeFt: pos?.altitudeFt != null ? Math.round(pos.altitudeFt) : null,
       maxAltitudeFt: _maxAltitudeFt,
       elevationGainFt: Math.round(_elevationGainFt),
       eventCount: _activeTrip.events.length,

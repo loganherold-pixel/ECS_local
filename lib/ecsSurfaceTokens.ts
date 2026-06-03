@@ -1,4 +1,5 @@
 import { ECS, TACTICAL } from './theme';
+import { ECS_STATUS } from './ecsStatusTokens';
 
 export const ECS_SURFACE = {
   radius: {
@@ -34,4 +35,35 @@ export const ECS_SURFACE = {
   },
   headerAccent: TACTICAL.goldMedium,
   textMuted: ECS.muted,
+} as const;
+
+export const ECS_VISUAL_SURFACE = {
+  appShell: {
+    background: 'transparent',
+    scrimOwner: 'ShellBodyBackground',
+  },
+  panel: {
+    primary: ECS_SURFACE.background.primary,
+    secondary: ECS_SURFACE.background.secondary,
+    compact: ECS_SURFACE.background.compact,
+    quiet: ECS_SURFACE.background.quiet,
+    muted: ECS_SURFACE.background.compact,
+    border: ECS_SURFACE.border.default,
+    strongBorder: ECS_SURFACE.border.strong,
+  },
+  overlay: {
+    backdrop: 'rgba(0,0,0,0.85)',
+    sheet: ECS_SURFACE.background.primary,
+    border: ECS_SURFACE.border.selected,
+  },
+  pill: {
+    active: ECS_STATUS.tone.active.background,
+    selected: ECS_STATUS.tone.selected.background,
+    muted: ECS_STATUS.tone.info.background,
+    border: ECS_STATUS.tone.info.border,
+  },
+  divider: {
+    section: ECS.goldSoft,
+    quiet: ECS.strokeMuted,
+  },
 } as const;

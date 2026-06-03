@@ -59,7 +59,9 @@ export type DispersedRouteBuilderSegmentData = {
   snappedSegment?: [number, number][];
   snapConfidence?: 'high' | 'medium' | 'low' | null;
   snapSource?: string | null;
-  snapStatus?: 'snapped' | 'raw_smoothed' | 'too_short' | 'ambiguous' | 'failed' | null;
+  snapStatus?: 'snapped' | 'raw_smoothed' | 'too_short' | 'ambiguous' | 'failed' | 'network_pending' | 'blocked' | null;
+  snapProvider?: 'rendered_features' | 'mapbox_map_matching' | null;
+  snapProfile?: 'driving' | null;
   snapMessage?: string | null;
   sourceSegmentId?: string | null;
   buildSource?: RouteSegmentSourceMetadata | null;
@@ -348,6 +350,8 @@ export function dispersedRouteLegToRouteBuilderSegment(
     snapConfidence: 'medium',
     snapSource: 'dispersed-route-leg',
     snapStatus: 'snapped',
+    snapProvider: 'rendered_features',
+    snapProfile: null,
     snapMessage: DISPERSED_ROUTE_LEG_PLANNING_WARNING,
     sourceSegmentId: segment.id,
     buildSource: {

@@ -39,6 +39,7 @@ import TabErrorBoundary from '../../components/TabErrorBoundary';
 
 import { useFocusEffect } from '@react-navigation/native';
 import { TACTICAL, TYPO, DENSITY, ICON_GRID } from '../../lib/theme';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { useApp } from '../../context/AppContext';
 import { waypointStore, generateUUID } from '../../lib/storage';
 import { calculateRouteStats, calculateSegmentDistance, formatCoord, formatDuration } from '../../lib/calculations';
@@ -1275,7 +1276,7 @@ const styles = StyleSheet.create({
   titleText: { ...TYPO.T1, color: TACTICAL.amber },
 
   // Active Route
-  activeRouteCard: { backgroundColor: TACTICAL.panel, borderRadius: 12, borderWidth: DENSITY.borderDefault, borderColor: TACTICAL.amber + '40', padding: DENSITY.cardPad, marginBottom: DENSITY.sectionGap },
+  activeRouteCard: { backgroundColor: ECS_SURFACE.background.primary, borderRadius: 12, borderWidth: DENSITY.borderDefault, borderColor: ECS_SURFACE.border.selected, padding: DENSITY.cardPad, marginBottom: DENSITY.sectionGap },
   activeRouteHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: DENSITY.titleBodyGap },
   activeRouteBadge: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   activeDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#66BB6A' },
@@ -1300,8 +1301,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: TACTICAL.amber + '40',
-    backgroundColor: 'rgba(196,138,44,0.08)',
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   exportGpxBtnText: {
     ...TYPO.U2,
@@ -1309,7 +1310,7 @@ const styles = StyleSheet.create({
     letterSpacing: 4,
   },
   exportTypeBadge: {
-    backgroundColor: 'rgba(196,138,44,0.2)',
+    backgroundColor: ECS_SURFACE.background.selected,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
@@ -1323,8 +1324,8 @@ const styles = StyleSheet.create({
   },
 
   // No Route
-  noRouteCard: { alignItems: 'center', padding: 32, backgroundColor: TACTICAL.panel, borderRadius: 12, borderWidth: DENSITY.borderDefault, borderColor: TACTICAL.border, gap: DENSITY.cardGap, marginBottom: DENSITY.sectionGap },
-  noRouteIcon: { width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(62,79,60,0.2)', alignItems: 'center', justifyContent: 'center' },
+  noRouteCard: { alignItems: 'center', padding: 32, backgroundColor: ECS_SURFACE.background.primary, borderRadius: 12, borderWidth: DENSITY.borderDefault, borderColor: ECS_SURFACE.border.default, gap: DENSITY.cardGap, marginBottom: DENSITY.sectionGap },
+  noRouteIcon: { width: 72, height: 72, borderRadius: 36, backgroundColor: ECS_SURFACE.background.compact, alignItems: 'center', justifyContent: 'center' },
   noRouteTitle: { ...TYPO.T1, color: TACTICAL.text },
   noRouteBody: { ...TYPO.B2, textAlign: 'center', lineHeight: 18 },
   uploadBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: TACTICAL.amber, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 10 },
@@ -1333,7 +1334,7 @@ const styles = StyleSheet.create({
   browseBtnText: { ...TYPO.U2, color: TACTICAL.textMuted },
 
   // Tip
-  tipCard: { backgroundColor: TACTICAL.panel, borderRadius: 10, borderWidth: DENSITY.borderDefault, borderColor: 'rgba(196,138,44,0.2)', padding: DENSITY.cardPad, marginBottom: DENSITY.sectionGap },
+  tipCard: { backgroundColor: ECS_SURFACE.background.primary, borderRadius: 10, borderWidth: DENSITY.borderDefault, borderColor: ECS_SURFACE.border.selected, padding: DENSITY.cardPad, marginBottom: DENSITY.sectionGap },
   tipHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
   tipTitle: { ...TYPO.T4, color: TACTICAL.amber, flex: 1 },
   tipDismiss: { padding: 4 },
@@ -1345,7 +1346,7 @@ const styles = StyleSheet.create({
   uploadSmallBtn: { width: 28, height: 28, borderRadius: 6, borderWidth: DENSITY.borderDefault, borderColor: TACTICAL.border, alignItems: 'center', justifyContent: 'center' },
 
   // Controls
-  controlsCard: { backgroundColor: TACTICAL.panel, borderRadius: 12, borderWidth: DENSITY.borderDefault, borderColor: TACTICAL.border, padding: DENSITY.cardPad, marginBottom: DENSITY.sectionGap },
+  controlsCard: { backgroundColor: ECS_SURFACE.background.primary, borderRadius: 12, borderWidth: DENSITY.borderDefault, borderColor: ECS_SURFACE.border.default, padding: DENSITY.cardPad, marginBottom: DENSITY.sectionGap },
   controlRow: { flexDirection: 'row', gap: 8 },
   startBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: TACTICAL.amber, borderRadius: 10, paddingVertical: 12 },
   startBtnText: { ...TYPO.U1, color: '#0B0F12' },
@@ -1360,7 +1361,7 @@ const styles = StyleSheet.create({
   geoErrorText: { ...TYPO.B2, color: TACTICAL.danger, flex: 1 },
 
   // Progress
-  progressCard: { backgroundColor: TACTICAL.panel, borderRadius: 12, borderWidth: DENSITY.borderDefault, borderColor: TACTICAL.border, padding: DENSITY.cardPad, marginBottom: DENSITY.sectionGap },
+  progressCard: { backgroundColor: ECS_SURFACE.background.primary, borderRadius: 12, borderWidth: DENSITY.borderDefault, borderColor: ECS_SURFACE.border.default, padding: DENSITY.cardPad, marginBottom: DENSITY.sectionGap },
   progressHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   progressLabel: { ...TYPO.T4 },
   progressPct: { ...TYPO.K1, fontSize: 20 },
@@ -1370,8 +1371,8 @@ const styles = StyleSheet.create({
   progressStatText: { ...TYPO.B2, fontSize: 10 },
 
   // Route Cards
-  routeCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: TACTICAL.panel, borderRadius: 10, borderWidth: DENSITY.borderDefault, borderColor: TACTICAL.border, padding: DENSITY.cardPad, marginBottom: 8 },
-  routeCardActive: { borderColor: TACTICAL.amber + '40' },
+  routeCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: ECS_SURFACE.background.primary, borderRadius: 10, borderWidth: DENSITY.borderDefault, borderColor: ECS_SURFACE.border.default, padding: DENSITY.cardPad, marginBottom: 8 },
+  routeCardActive: { borderColor: ECS_SURFACE.border.selected },
   routeCardLeft: { flexDirection: 'row', alignItems: 'center', gap: DENSITY.iconTextGap, flex: 1 },
   routeCardInfo: { flex: 1 },
   routeCardName: { ...TYPO.T3, color: TACTICAL.text },
@@ -1387,7 +1388,7 @@ const styles = StyleSheet.create({
 
   // Modal (shared)
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
-  modalContainer: { backgroundColor: TACTICAL.panel, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '80%', borderTopWidth: 2, borderColor: TACTICAL.border },
+  modalContainer: { backgroundColor: ECS_SURFACE.background.primary, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '80%', borderTopWidth: 2, borderColor: ECS_SURFACE.border.default },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: DENSITY.modalPad, borderBottomWidth: DENSITY.borderDefault, borderBottomColor: TACTICAL.border },
   modalTitle: { ...TYPO.T2, color: TACTICAL.amber },
   modalScroll: { padding: DENSITY.modalPad, maxHeight: 400 },
@@ -1402,12 +1403,12 @@ const styles = StyleSheet.create({
 
   // ── Export Modal ──────────────────────────────────────
   exportModalContainer: {
-    backgroundColor: TACTICAL.panel,
+    backgroundColor: ECS_SURFACE.background.primary,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '85%',
     borderTopWidth: 2,
-    borderColor: TACTICAL.amber + '40',
+    borderColor: ECS_SURFACE.border.selected,
   },
   exportModalHeader: {
     flexDirection: 'row',
@@ -1445,7 +1446,7 @@ const styles = StyleSheet.create({
     margin: DENSITY.modalPad,
     marginTop: 8,
     padding: DENSITY.cardPad,
-    backgroundColor: 'rgba(62,79,60,0.08)',
+    backgroundColor: ECS_SURFACE.background.compact,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: TACTICAL.border,

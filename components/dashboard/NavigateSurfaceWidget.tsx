@@ -14,6 +14,7 @@ import {
   resolveDashboardNavigationChaseCamera,
   type DashboardNavigationPoint,
 } from '../../lib/dashboardNavigationChaseCamera';
+import { resolveMapSurfaceMotionState, type MapMotionPriority } from '../../lib/mapSurfaceCoordinator';
 import type { WidgetData, WidgetRenderOptions } from './WidgetRenderers';
 
 type Props = {
@@ -430,7 +431,13 @@ export function useNavigateSurfaceState(options?: WidgetRenderOptions, enabled =
   const routePoints = routeSession.routePoints;
   const progressPoints = routeSession.progressPoints;
   const showUserLocation = !!gpsLocation;
-  const shouldFollowUser = !!gpsLocation && (hasActiveGuidance || !hasAnyRoute);
+  const motionState = resolveMapSurfaceMotionState({
+    surface: 'dashboard',
+    isFocused: enabled,
+    selected: enabled,
+    hasActiveGuidance,
+  });
+  const shouldFollowUser = motionState.allowCameraFollow && !!gpsLocation && (hasActiveGuidance || !hasAnyRoute);
   const cameraMode: CameraMode | undefined = shouldFollowUser
     ? 'follow_user'
     : routePoints.length > 1
@@ -456,6 +463,7 @@ export function useNavigateSurfaceState(options?: WidgetRenderOptions, enabled =
     shouldFollowUser,
     cameraMode,
     activeGuidanceCameraCommand,
+    motionPriority: motionState.motionPriority,
     routePoints,
     progressPoints,
     hasAnyRoute,
@@ -472,6 +480,7 @@ export default function NavigateSurfaceWidget({ data: _data, options }: Props) {
     shouldFollowUser,
     cameraMode,
     activeGuidanceCameraCommand,
+    motionPriority,
     routePoints,
     progressPoints,
   } = useNavigateSurfaceState(options);
@@ -488,6 +497,7 @@ export default function NavigateSurfaceWidget({ data: _data, options }: Props) {
         headingDeg={routeSession.headingDeg}
         cameraMode={cameraMode}
         cameraCommand={activeGuidanceCameraCommand}
+        motionPriority={motionPriority}
         routeSession={routeSession}
         routeRenderMode={routeSession.lifecycle === 'active' ? 'active' : routeSession.lifecycle === 'preview' ? 'preview' : 'idle'}
         frameStyle={styles.widgetMapFrame}
@@ -506,6 +516,7 @@ export function NavigateSurfaceDetailView({ data: _data, options }: Props) {
     shouldFollowUser,
     cameraMode,
     activeGuidanceCameraCommand,
+    motionPriority,
     routePoints,
     progressPoints,
   } = useNavigateSurfaceState(options);
@@ -522,6 +533,7 @@ export function NavigateSurfaceDetailView({ data: _data, options }: Props) {
         headingDeg={routeSession.headingDeg}
         cameraMode={cameraMode}
         cameraCommand={activeGuidanceCameraCommand}
+        motionPriority={motionPriority}
         routeSession={routeSession}
         routeRenderMode={routeSession.lifecycle === 'active' ? 'active' : routeSession.lifecycle === 'preview' ? 'preview' : 'idle'}
         frameStyle={styles.detailMapFrame}
@@ -662,6 +674,12 @@ export function Mini3DFollowMap({
         cameraMode={cameraMode}
         cameraCommand={cameraCommand}
         cameraCommandTrigger={recenterRequestId}
+        motionPriority={resolveMapSurfaceMotionState({
+          surface: 'dashboard',
+          isFocused: selected,
+          selected,
+          hasActiveGuidance,
+        }).motionPriority}
         routeSession={routeSession}
         routeRenderMode={routeRenderMode}
         mapStyleKey={activeMapView.mapStyle}
@@ -697,6 +715,7 @@ function NavigateMiniMap({
   cameraMode,
   cameraCommand,
   cameraCommandTrigger,
+  motionPriority = 'warm',
   routeSession,
   routeRenderMode = 'idle',
   mapStyleKey = 'ecs',
@@ -716,6 +735,7 @@ function NavigateMiniMap({
   cameraMode?: CameraMode;
   cameraCommand?: CameraCommand | null;
   cameraCommandTrigger?: number;
+  motionPriority?: MapMotionPriority;
   routeSession: NavigateRouteSessionSnapshot;
   routeRenderMode?: RouteRenderMode;
   mapStyleKey?: MapStyleKey;
@@ -738,6 +758,7 @@ function NavigateMiniMap({
         followUser={shouldFollowUser && !cameraCommand}
         userLocation={gpsLocation}
         vehicleHeading={headingDeg}
+        motionPriority={motionPriority}
         interactive={guidanceVariant === 'command3d'}
         isLoading={!mapToken}
         hasToken={!!mapToken}

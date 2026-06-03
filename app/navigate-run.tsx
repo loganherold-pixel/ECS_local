@@ -945,6 +945,7 @@ export default function NavigateRunDetail() {
                     followUser={cameraMode !== 'free'}
                     userLocation={userLocation}
                     vehicleHeading={cameraMode === 'follow-heading' ? vehicleHeading : null}
+                    motionPriority="warm"
                     interactive
                     segments={segmentFeatures}
                     bailoutMarkers={bailoutMarkers}

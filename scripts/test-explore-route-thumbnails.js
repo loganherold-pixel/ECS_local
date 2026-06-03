@@ -35,6 +35,10 @@ const trailPackCardSource = fs.readFileSync(
   path.join(root, 'components', 'discover', 'TrailPackCard.tsx'),
   'utf8',
 );
+const wizardRouteCardSource = fs.readFileSync(
+  path.join(root, 'components', 'discover', 'ExploreTripBuilderWizardRouteCard.tsx'),
+  'utf8',
+);
 
 function getLiteralValue(node) {
   if (!node) return undefined;
@@ -321,19 +325,20 @@ assert.ok(
 assert.ok(
   discoverSource.includes('getExploreRouteThumbnailAssignments') &&
     discoverSource.includes('hiddenGemThumbnailAssignments') &&
-    discoverSource.includes('popularTrailThumbnailAssignments') &&
     discoverSource.includes('knownRouteThumbnailAssignments') &&
     discoverSource.includes('trailPackThumbnailAssignments') &&
     discoverSource.includes('aiRouteThumbnailAssignments') &&
     discoverSource.includes('favoriteTrailThumbnailAssignments') &&
+    discoverSource.includes('ExploreTripBuilderWizardRouteCard') &&
     discoverSource.includes('thumbnailOverride={hiddenGemThumbnailAssignments.get(String(route.id)) ?? null}') &&
-    discoverSource.includes('thumbnailOverride={popularTrailThumbnailAssignments.get(String(route.id)) ?? null}') &&
     discoverSource.includes('thumbnailOverride={knownRouteThumbnailAssignments.get(String(route.id)) ?? null}') &&
     discoverSource.includes('thumbnailOverride={trailPackThumbnailAssignments.get(String(trailPackRoute.id)) ?? null}') &&
     discoverSource.includes('thumbnailOverride={aiRouteThumbnailAssignments.get(String(route.id)) ?? null}') &&
     discoverSource.includes('favoriteThumbnail?.uri') &&
-    discoverSource.includes('accessibilityLabel={`${favorite.title} saved trail thumbnail`}'),
-  'Explore visible route, Trail Pack, ECS route idea, and saved-trail favorites lists should use deterministic per-list thumbnails.',
+    discoverSource.includes('accessibilityLabel={`${favorite.title} saved trail thumbnail`}') &&
+    wizardRouteCardSource.includes('candidate.thumbnail?.uri') &&
+    wizardRouteCardSource.includes('accessibilityLabel={`Preview ${candidate.title}`}'),
+  'Explore route lists and the route-first wizard should use deterministic environment thumbnails with per-card fallbacks.',
 );
 assert.ok(
   aiRouteCardSource.includes('thumbnailOverride?: ExploreTrailThumbnailAssignment | null') &&

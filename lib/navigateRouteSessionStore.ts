@@ -23,6 +23,12 @@ export interface NavigateRouteMapPoint {
 export interface NavigateRouteCurrentLocation {
   latitude: number;
   longitude: number;
+  altitudeFt?: number | null;
+  elevationFt?: number | null;
+  speedMph?: number | null;
+  headingDeg?: number | null;
+  accuracyM?: number | null;
+  timestamp?: number | null;
 }
 
 export interface NavigateRouteSessionSnapshot {
@@ -37,6 +43,7 @@ export interface NavigateRouteSessionSnapshot {
   routePoints: NavigateRouteMapPoint[];
   progressPoints: NavigateRouteMapPoint[];
   currentLocation: NavigateRouteCurrentLocation | null;
+  gpsSample?: NavigateRouteCurrentLocation | null;
   headingDeg: number | null;
   remainingDistanceM: number | null;
   remainingDurationS: number | null;
@@ -209,6 +216,9 @@ function snapshotSignature(snapshot: NavigateRouteSessionSnapshot): string {
     snapshot.routeStatusKind ?? 'none',
     location,
     snapshot.headingDeg == null ? 'none' : Math.round(snapshot.headingDeg),
+    snapshot.currentLocation?.altitudeFt == null ? 'none' : Math.round(snapshot.currentLocation.altitudeFt),
+    snapshot.currentLocation?.accuracyM == null ? 'none' : Math.round(snapshot.currentLocation.accuracyM),
+    snapshot.currentLocation?.timestamp == null ? 'none' : Math.round(snapshot.currentLocation.timestamp),
     pointSignature(snapshot.routePoints),
     pointSignature(snapshot.progressPoints),
   ].join('|');

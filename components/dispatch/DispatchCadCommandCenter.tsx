@@ -2076,7 +2076,7 @@ export default function DispatchCadCommandCenter() {
     showToast,
   } = useApp();
   const dispatchGps = useThrottledGPS({
-    enabled: true,
+    enabled: isDispatchFocused,
     highAccuracy: false,
     maxRetries: 2,
     retryIntervalMs: 10_000,

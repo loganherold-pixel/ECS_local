@@ -1036,9 +1036,15 @@ function AuthGate() {
       normalizedPathname === '/alert' ||
       normalizedPathname === '/vehicle-config' ||
       normalizedPathname === '/route' ||
+      normalizedPathname === '/trips' ||
+      normalizedPathname === '/expeditions' ||
+      normalizedPathname === '/intelligence' ||
       normalizedPathname === '/safety' ||
       normalizedPathname === '/intel' ||
-      normalizedPathname === '/more'
+      normalizedPathname === '/more' ||
+      normalizedPathname === '/loadmap' ||
+      normalizedPathname === '/loaditems' ||
+      normalizedPathname === '/convoy-command'
     );
   const shellBodyTopInset = 0;
   const shellBodyBottomInset = useMemo(

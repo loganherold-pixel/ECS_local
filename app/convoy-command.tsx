@@ -30,6 +30,7 @@ import {
 import { dispatchProfileStore } from '../lib/dispatchProfileStore';
 import { getCurrentExpeditionBadgeTitle } from '../lib/expedition/expeditionBadgeStore';
 import { TACTICAL, TYPO } from '../lib/theme';
+import { ECS_SURFACE } from '../lib/ecsSurfaceTokens';
 import type { Vehicle } from '../lib/types';
 import { vehicleStore } from '../lib/vehicleStore';
 
@@ -696,7 +697,7 @@ function RosterList({
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: TACTICAL.bg,
+    backgroundColor: 'transparent',
   },
   header: {
     minHeight: 58,
@@ -705,7 +706,7 @@ const styles = StyleSheet.create({
     gap: 9,
     borderBottomWidth: 1,
     borderBottomColor: TACTICAL.border,
-    backgroundColor: 'rgba(8,12,15,0.96)',
+    backgroundColor: ECS_SURFACE.background.primary,
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
@@ -720,7 +721,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 4,
     paddingHorizontal: 10,
-    backgroundColor: 'rgba(0,0,0,0.22)',
+    backgroundColor: ECS_SURFACE.background.compact,
   },
   backButtonText: {
     color: TACTICAL.amber,
@@ -756,7 +757,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingTop: 7,
     paddingBottom: 6,
-    backgroundColor: 'rgba(8,12,15,0.86)',
+    backgroundColor: ECS_SURFACE.background.secondary,
   },
   tab: {
     flex: 1,
@@ -766,11 +767,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: TACTICAL.border,
     borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: ECS_SURFACE.background.compact,
   },
   tabActive: {
     borderColor: TACTICAL.amber,
-    backgroundColor: 'rgba(212,160,23,0.12)',
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   tabText: {
     color: TACTICAL.textMuted,
@@ -793,9 +794,9 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 8,
     borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.24)',
+    borderColor: ECS_SURFACE.border.selected,
     borderRadius: 10,
-    backgroundColor: 'rgba(212,160,23,0.07)',
+    backgroundColor: ECS_SURFACE.background.selected,
     paddingHorizontal: 9,
     paddingVertical: 8,
   },
@@ -832,7 +833,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: TACTICAL.border,
     borderRadius: 10,
-    backgroundColor: 'rgba(5,8,10,0.72)',
+    backgroundColor: ECS_SURFACE.background.primary,
     padding: 9,
   },
   sectionTitle: {
@@ -865,7 +866,7 @@ const styles = StyleSheet.create({
     borderColor: TACTICAL.border,
     borderRadius: 8,
     color: TACTICAL.text,
-    backgroundColor: 'rgba(0,0,0,0.2)',
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 10,
     paddingVertical: 6,
     fontSize: 12,
@@ -882,12 +883,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: TACTICAL.border,
     borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 8,
   },
   optionChipSelected: {
     borderColor: TACTICAL.amber,
-    backgroundColor: 'rgba(212,160,23,0.14)',
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   optionText: {
     color: TACTICAL.textMuted,
@@ -906,9 +907,9 @@ const styles = StyleSheet.create({
   inviteCard: {
     gap: 6,
     borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.34)',
+    borderColor: ECS_SURFACE.border.selected,
     borderRadius: 9,
-    backgroundColor: 'rgba(212,160,23,0.08)',
+    backgroundColor: ECS_SURFACE.background.selected,
     padding: 9,
   },
   cardLabel: {
@@ -956,7 +957,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: TACTICAL.border,
     borderRadius: 9,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: ECS_SURFACE.background.compact,
     paddingHorizontal: 8,
     paddingVertical: 6,
   },

@@ -102,8 +102,8 @@ import {
   searchRoadDestinations,
   type RoadNavSearchSuggestion,
 } from '../lib/mapboxRoadNavigation';
-import { useGPSLocation } from '../lib/useGPSLocation';
 import type { GPSPosition } from '../lib/useGPSLocation';
+import { useThrottledGPS } from '../lib/useThrottledGPS';
 import {
   routeContextOrchestrator,
   type RouteContext,
@@ -147,7 +147,7 @@ const TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS = {
   'ecs.routeContextEngine.enabled': true,
   'ecs.routeContextEngine.prefetchOnTrailSelect': true,
   'ecs.routeContextEngine.trailheadAnchoredSupplyChain': true,
-  'ecs.routeContextEngine.enableCampCandidates': false,
+  'ecs.routeContextEngine.enableCampCandidates': true,
   'ecs.routeContextEngine.enableBailoutCandidates': true,
   'ecs.routeContextEngine.debugLogging': false,
 } as const;
@@ -2912,6 +2912,7 @@ function TripPlanMapOverlay({
               mapStyle={DEFAULT_MAP_STYLE}
               mapboxToken={mapboxToken}
               hasToken={!!mapboxToken}
+              motionPriority="warm"
               interactive
               cameraMode="route_overview"
               cameraCommand={model.cameraCommand}
@@ -3077,6 +3078,7 @@ function BailoutPlanPickerOverlay({
               mapStyle={DEFAULT_MAP_STYLE}
               mapboxToken={mapboxToken}
               hasToken={!!mapboxToken}
+              motionPriority="warm"
               interactive
               cameraMode="route_overview"
               cameraCommand={bailoutCameraCommand}
@@ -3180,10 +3182,10 @@ export default function ExploreTripBuilderScreen() {
   const smartResupplySupplyRequestRef = useRef(0);
   const smartResupplyFuelSearchSignatureRef = useRef<string | null>(null);
   const smartResupplySupplySearchSignatureRef = useRef<string | null>(null);
-  const tripBuilderGps = useGPSLocation({ enabled: true, highAccuracy: true });
+  const tripBuilderGps = useThrottledGPS({ enabled: true, highAccuracy: true });
   const liveTripBuilderUserLocation = useMemo(
-    () => tripBuilderCoordinateFromGpsPosition(tripBuilderGps.position),
-    [tripBuilderGps.position],
+    () => tripBuilderCoordinateFromGpsPosition(tripBuilderGps.rawGPS.position ?? tripBuilderGps.position),
+    [tripBuilderGps.position, tripBuilderGps.rawGPS.position],
   );
   const liveRouteContextOrigin = useMemo(
     () => routeContextOriginFromTripCoordinate(liveTripBuilderUserLocation),

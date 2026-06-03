@@ -76,17 +76,20 @@ assertIncludes(
   'Cancel action should have an accessible label.',
 );
 assertIncludes(
-  'accessibilityLabel="Save and stage Build Route"',
-  'Save + Stage action should have an accessible label.',
+  'accessibilityLabel="Save Build Route"',
+  'Save action should have an accessible label.',
+);
+assertIncludes(
+  'accessibilityLabel="Route to Build Route"',
+  'Route To action should have an accessible label.',
 );
 assertIncludes(
   '<Text style={styles.routeBuilderStatusActionText}>CLEAR ALL</Text>',
   'Build Route control strip should label full draft deletion as Clear All.',
 );
-assertIncludes(
-  'SAVE + STAGE',
-  'Build Route control strip should expose a Save + Stage action for saved route handoff.',
-);
+assertIncludes('SAVE', 'Build Route control strip should expose a Save action for saved route handoff.');
+assertIncludes('ROUTE TO', 'Build Route control strip should expose a Route To action for immediate guidance.');
+assertNotIncludes('SAVE + STAGE', 'Build Route should no longer combine save and stage into one action.');
 assertIncludes(
   "routeBuilderSnapSource === 'snapping'",
   'Build Route control strip should show snap progress/status.',

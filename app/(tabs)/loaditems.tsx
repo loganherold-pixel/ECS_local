@@ -6,6 +6,7 @@ import TabErrorBoundary from '../../components/TabErrorBoundary';
 
 import { useFocusEffect } from '@react-navigation/native';
 import { COLORS, SPACING, RADIUS, ZONES, MODES, ZONE_COLORS } from '../../lib/theme';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { useApp } from '../../context/AppContext';
 import { loadItemStore } from '../../lib/storage';
 import { LoadItem } from '../../lib/types';
@@ -425,7 +426,7 @@ export default function LoadItemsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.bg },
+  container: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
   scrollContent: { padding: SPACING.lg, paddingBottom: 100 },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
@@ -486,10 +487,10 @@ const styles = StyleSheet.create({
   checklistBtn: {
     marginLeft: 'auto',
     padding: 8,
-    backgroundColor: COLORS.bgCard,
+    backgroundColor: ECS_SURFACE.background.compact,
     borderRadius: RADIUS.sm,
     borderWidth: 1,
-    borderColor: COLORS.goldBorder,
+    borderColor: ECS_SURFACE.border.selected,
   },
   progressBar: {
     height: 4,
@@ -516,7 +517,7 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.sm,
     borderWidth: 1,
     borderColor: COLORS.border,
-    backgroundColor: COLORS.bgCard,
+    backgroundColor: ECS_SURFACE.background.primary,
     alignSelf: 'flex-start',
   },
   activeToggleOn: {
@@ -542,11 +543,11 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: RADIUS.sm,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: ECS_SURFACE.border.quiet,
     marginRight: 6,
-    backgroundColor: COLORS.bgInput,
+    backgroundColor: ECS_SURFACE.background.compact,
   },
-  filterChipActive: { borderColor: COLORS.gold, backgroundColor: COLORS.goldMuted },
+  filterChipActive: { borderColor: ECS_SURFACE.border.selected, backgroundColor: ECS_SURFACE.background.selected },
   filterChipText: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '600' },
   filterChipTextActive: { color: COLORS.gold },
   zoneDot: { width: 8, height: 8, borderRadius: 4 },
@@ -574,9 +575,9 @@ const styles = StyleSheet.create({
   },
   quickInput: {
     flex: 1,
-    backgroundColor: COLORS.bgInput,
+    backgroundColor: ECS_SURFACE.background.compact,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: RADIUS.sm,
     padding: SPACING.sm,
     color: COLORS.textPrimary,
@@ -602,8 +603,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: RADIUS.sm,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.bgCard,
+    borderColor: ECS_SURFACE.border.quiet,
+    backgroundColor: ECS_SURFACE.background.compact,
   },
   bulkText: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '600' },
 
@@ -628,12 +629,12 @@ const styles = StyleSheet.create({
   itemCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.bgCard,
+    backgroundColor: ECS_SURFACE.background.primary,
     borderRadius: RADIUS.sm,
     padding: SPACING.md,
     marginBottom: SPACING.sm,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: ECS_SURFACE.border.default,
   },
   itemInactive: { opacity: 0.4 },
   packToggle: { padding: 4, marginRight: SPACING.sm },
@@ -641,7 +642,7 @@ const styles = StyleSheet.create({
   itemHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   itemName: { fontSize: 15, fontWeight: '600', color: COLORS.textPrimary },
   itemNamePacked: { textDecorationLine: 'line-through', color: COLORS.textSecondary },
-  inactiveBadge: { fontSize: 8, color: COLORS.textMuted, fontWeight: '800', letterSpacing: 1, backgroundColor: COLORS.bgInput, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 2 },
+  inactiveBadge: { fontSize: 8, color: COLORS.textMuted, fontWeight: '800', letterSpacing: 1, backgroundColor: ECS_SURFACE.background.compact, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 2 },
   itemMeta: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
   zoneBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 3 },
   zoneBadgeText: { fontSize: 10, fontWeight: '700' },
@@ -701,12 +702,12 @@ const styles = StyleSheet.create({
   // Modal
   modalOverlay: { flex: 1, backgroundColor: COLORS.bgModal, justifyContent: 'flex-end' },
   modalContent: {
-    backgroundColor: COLORS.bgCard,
+    backgroundColor: ECS_SURFACE.background.primary,
     borderTopLeftRadius: RADIUS.xl,
     borderTopRightRadius: RADIUS.xl,
     maxHeight: '85%',
     borderTopWidth: 1,
-    borderColor: COLORS.goldBorder,
+    borderColor: ECS_SURFACE.border.selected,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -721,9 +722,9 @@ const styles = StyleSheet.create({
   fieldGroup: { marginBottom: SPACING.md },
   fieldLabel: { fontSize: 11, color: COLORS.textSecondary, fontWeight: '600', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
   input: {
-    backgroundColor: COLORS.bgInput,
+    backgroundColor: ECS_SURFACE.background.compact,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: RADIUS.sm,
     padding: SPACING.sm,
     color: COLORS.textPrimary,
@@ -735,11 +736,11 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: RADIUS.sm,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: ECS_SURFACE.border.quiet,
     marginRight: 6,
-    backgroundColor: COLORS.bgInput,
+    backgroundColor: ECS_SURFACE.background.compact,
   },
-  chipActive: { borderColor: COLORS.gold, backgroundColor: COLORS.goldMuted },
+  chipActive: { borderColor: ECS_SURFACE.border.selected, backgroundColor: ECS_SURFACE.background.selected },
   chipText: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '600' },
   chipTextActive: { color: COLORS.gold },
   switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

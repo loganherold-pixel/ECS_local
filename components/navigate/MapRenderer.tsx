@@ -48,6 +48,10 @@ import {
   SET_DISPERSED_ROUTE_BUILD_ENABLED,
 } from '../../lib/map/mapboxLayerMessages';
 import type { RemoteMapOverlayPayload } from '../../lib/remote/mapOverlay';
+import {
+  resolveViewportMarkerHeadingDeg,
+} from '../../lib/mapMotion';
+import type { MapMotionPriority } from '../../lib/mapSurfaceCoordinator';
 
 const WEBVIEW_ORIGIN_WHITELIST = ['*'];
 const WEBVIEW_FAILSAFE_TIMEOUT_MS = 30000;
@@ -229,7 +233,9 @@ export type RouteBuilderSegmentData = {
   snappedSegment?: [number, number][] | { latitude: number; longitude: number }[];
   snapConfidence?: 'high' | 'medium' | 'low' | null;
   snapSource?: string | null;
-  snapStatus?: 'snapped' | 'raw_smoothed' | 'too_short' | 'ambiguous' | 'failed' | null;
+  snapStatus?: 'snapped' | 'raw_smoothed' | 'too_short' | 'ambiguous' | 'failed' | 'network_pending' | 'blocked' | null;
+  snapProvider?: 'rendered_features' | 'mapbox_map_matching' | null;
+  snapProfile?: 'driving' | null;
   snapMessage?: string | null;
   sourceSegmentId?: string | null;
   buildSource?: RouteSegmentSourceMetadata | null;
@@ -326,6 +332,7 @@ export type MapRendererProps = {
   onUserDrag?: () => void;
   onRoadClassification?: (payload: RoadClassificationReply) => void;
   vehicleHeading?: number | null;
+  motionPriority?: MapMotionPriority;
   isLoading?: boolean;
   hasToken?: boolean;
   onRetry?: () => void | Promise<void>;
@@ -452,6 +459,7 @@ type WebMapPayload = {
   userLocation: { latitude: number; longitude: number } | null;
   showUserLocation: boolean;
   vehicleHeading: number | null;
+  motionPriority: MapMotionPriority;
   showCrosshair: boolean;
   interactive: boolean;
   styleUrl: string;
@@ -495,7 +503,9 @@ type WebMapPayload = {
     snappedSegment?: [number, number][];
     snapConfidence?: 'high' | 'medium' | 'low' | null;
     snapSource?: string | null;
-    snapStatus?: 'snapped' | 'raw_smoothed' | 'too_short' | 'ambiguous' | 'failed' | null;
+    snapStatus?: 'snapped' | 'raw_smoothed' | 'too_short' | 'ambiguous' | 'failed' | 'network_pending' | 'blocked' | null;
+    snapProvider?: 'rendered_features' | 'mapbox_map_matching' | null;
+    snapProfile?: 'driving' | null;
     snapMessage?: string | null;
     sourceSegmentId?: string | null;
     buildSource?: RouteSegmentSourceMetadata | null;
@@ -512,6 +522,7 @@ type WebMapDynamicPayload = {
   userLocation: { latitude: number; longitude: number } | null;
   showUserLocation: boolean;
   vehicleHeading: number | null;
+  motionPriority: MapMotionPriority;
   cameraMode: CameraMode | null;
   interactive: boolean;
   routeBuilderActive: boolean;
@@ -1062,6 +1073,7 @@ export function buildMapOverlayPayloadHash(payload: WebMapPayload) {
     userLocation: _userLocation,
     showUserLocation: _showUserLocation,
     vehicleHeading: _vehicleHeading,
+    motionPriority: _motionPriority,
     cameraMode: _cameraMode,
     interactive: _interactive,
     routeBuilderActive: _routeBuilderActive,
@@ -1359,6 +1371,7 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
       typeof props.vehicleHeading === 'number' && Number.isFinite(props.vehicleHeading)
         ? props.vehicleHeading
         : null,
+    motionPriority: props.motionPriority ?? 'hot',
     showCrosshair: !!props.showCrosshair,
     interactive: props.interactive !== false,
     styleUrl: getMapStyleUrl(props.mapStyle || DEFAULT_MAP_STYLE),
@@ -1415,6 +1428,8 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
       snapConfidence: segment.snapConfidence ?? null,
       snapSource: segment.snapSource ?? null,
       snapStatus: segment.snapStatus ?? null,
+      snapProvider: segment.snapProvider ?? null,
+      snapProfile: segment.snapProfile ?? null,
       snapMessage: segment.snapMessage ?? null,
       sourceSegmentId: segment.sourceSegmentId ?? null,
       buildSource: segment.buildSource ?? null,
@@ -1429,28 +1444,36 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
   };
 }
 
-function buildDynamicPayload(props: Pick<
+export function buildDynamicPayload(props: Pick<
   MapRendererProps,
   | 'replayMarker'
   | 'userLocation'
   | 'showUserLocation'
   | 'vehicleHeading'
+  | 'motionPriority'
   | 'cameraMode'
   | 'interactive'
   | 'routeBuilderActive'
 >): WebMapDynamicPayload {
   const replay = normalizeLatLng(props.replayMarker as LatLng | null);
   const user = normalizeLatLng(props.userLocation ?? null);
+  const motionPriority: MapMotionPriority = props.motionPriority ?? 'hot';
+  const liveMotionEnabled = motionPriority !== 'cold';
+  const vehicleHeading = resolveViewportMarkerHeadingDeg({
+    headingDeg: props.vehicleHeading,
+    mapBearingDeg: 0,
+  });
 
   return {
     replayMarker: replay,
     userLocation: user,
-    showUserLocation: !!props.showUserLocation && !!user,
+    showUserLocation: liveMotionEnabled && !!props.showUserLocation && !!user,
     vehicleHeading:
-      typeof props.vehicleHeading === 'number' && Number.isFinite(props.vehicleHeading)
-        ? props.vehicleHeading
+      liveMotionEnabled && typeof vehicleHeading === 'number' && Number.isFinite(vehicleHeading)
+        ? vehicleHeading
         : null,
-    cameraMode: props.cameraMode ?? null,
+    motionPriority,
+    cameraMode: liveMotionEnabled ? props.cameraMode ?? null : null,
     interactive: props.interactive !== false,
     routeBuilderActive: !!props.routeBuilderActive,
   };
@@ -2416,6 +2439,9 @@ function makeMapHtml(
       var campScoutMarkers = [];
       var tiltMarkers = [];
       var userMarker = null;
+      var userMarkerAnimationFrame = null;
+      var userMarkerLocation = null;
+      var userMarkerHeading = null;
       var replayMarker = null;
       var roadClassTimer = null;
       var dragTimeout = null;
@@ -3918,6 +3944,8 @@ function makeMapHtml(
               snapConfidence: segment.snapConfidence || null,
               snapSource: segment.snapSource || null,
               snapStatus: segment.snapStatus || null,
+              snapProvider: segment.snapProvider || null,
+              snapProfile: segment.snapProfile || null,
               snapMessage: segment.snapMessage || null,
               sourceSegmentId: segment.sourceSegmentId || null,
               buildSource: segment.buildSource || null,
@@ -4481,6 +4509,78 @@ function makeMapHtml(
         });
       }
 
+      function normalizeWebBearing(value) {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+        var wrapped = value % 360;
+        return wrapped < 0 ? wrapped + 360 : wrapped;
+      }
+
+      function resolveViewportMarkerHeadingDeg(heading, mapBearing) {
+        var normalizedHeading = normalizeWebBearing(heading);
+        if (normalizedHeading == null) return null;
+        var normalizedMapBearing = normalizeWebBearing(mapBearing) || 0;
+        return normalizeWebBearing(normalizedHeading - normalizedMapBearing);
+      }
+
+      function applyUserMarkerHeading(heading) {
+        if (!userMarker) return;
+        try {
+          var el = userMarker.getElement();
+          var rotor = el ? el.querySelector('.marker-user-rotor') : null;
+          var viewportHeading = resolveViewportMarkerHeadingDeg(
+            heading,
+            map && typeof map.getBearing === 'function' ? map.getBearing() : 0
+          );
+          if (rotor && typeof viewportHeading === 'number') {
+            rotor.style.transform = 'rotate(' + viewportHeading + 'deg)';
+            rotor.style.transformOrigin = 'center center';
+          }
+        } catch (e) {}
+      }
+
+      function cancelUserMarkerAnimation() {
+        if (userMarkerAnimationFrame != null) {
+          try { cancelAnimationFrame(userMarkerAnimationFrame); } catch (e) {}
+          userMarkerAnimationFrame = null;
+        }
+      }
+
+      function animateUserMarkerTo(loc, heading) {
+        if (!userMarker) return;
+        if (!userMarkerLocation) {
+          userMarkerLocation = { latitude: loc.latitude, longitude: loc.longitude };
+          userMarker.setLngLat([loc.longitude, loc.latitude]);
+          applyUserMarkerHeading(heading);
+          return;
+        }
+
+        var start = userMarkerLocation;
+        var end = { latitude: loc.latitude, longitude: loc.longitude };
+        var duration = 650;
+        var startedAt = Date.now();
+        cancelUserMarkerAnimation();
+
+        function step() {
+          var elapsed = Date.now() - startedAt;
+          var t = Math.max(0, Math.min(1, elapsed / duration));
+          var eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+          var lat = start.latitude + (end.latitude - start.latitude) * eased;
+          var lng = start.longitude + (end.longitude - start.longitude) * eased;
+          try {
+            userMarker.setLngLat([lng, lat]);
+            applyUserMarkerHeading(heading);
+          } catch (e) {}
+          if (t < 1) {
+            userMarkerAnimationFrame = requestAnimationFrame(step);
+          } else {
+            userMarkerAnimationFrame = null;
+            userMarkerLocation = end;
+          }
+        }
+
+        userMarkerAnimationFrame = requestAnimationFrame(step);
+      }
+
       function setUserLocation(loc, show, heading) {
         if (
           !show ||
@@ -4491,25 +4591,23 @@ function makeMapHtml(
           !Number.isFinite(loc.longitude)
         ) {
           if (userMarker) {
+            cancelUserMarkerAnimation();
             try { userMarker.remove(); } catch (e) {}
             userMarker = null;
+            userMarkerLocation = null;
+            userMarkerHeading = null;
           }
           return;
         }
 
+        userMarkerHeading = typeof heading === 'number' ? heading : userMarkerHeading;
         if (!userMarker) {
           userMarker = mkMarker('marker-user', loc.longitude, loc.latitude, null, heading || 0);
           userMarker.addTo(map);
+          userMarkerLocation = { latitude: loc.latitude, longitude: loc.longitude };
+          applyUserMarkerHeading(userMarkerHeading);
         } else {
-          userMarker.setLngLat([loc.longitude, loc.latitude]);
-          try {
-            var el = userMarker.getElement();
-            var rotor = el ? el.querySelector('.marker-user-rotor') : null;
-            if (rotor && typeof heading === 'number') {
-              rotor.style.transform = 'rotate(' + heading + 'deg)';
-              rotor.style.transformOrigin = 'center center';
-            }
-          } catch (e) {}
+          animateUserMarkerTo(loc, userMarkerHeading);
         }
       }
 
@@ -5185,6 +5283,8 @@ function makeMapHtml(
           segment.snapConfidence = 'low';
           segment.snapSource = 'raw';
           segment.snapStatus = 'too_short';
+          segment.snapProvider = null;
+          segment.snapProfile = null;
           segment.snapMessage = 'Segment too short. Draw a longer stroke or keep tracing.';
           return segment;
         }
@@ -5230,6 +5330,8 @@ function makeMapHtml(
           segment.snapConfidence = 'high';
           segment.snapSource = Object.keys(sourceCounts).sort(function(a, b) { return sourceCounts[b] - sourceCounts[a]; })[0] || 'local-routeable';
           segment.snapStatus = 'snapped';
+          segment.snapProvider = 'rendered_features';
+          segment.snapProfile = null;
           segment.snapMessage = 'Snapped to nearby routeable geometry.';
           routeBuilderLastSnapSource = segment.snapSource;
           return segment;
@@ -5248,6 +5350,8 @@ function makeMapHtml(
           segment.snapConfidence = 'medium';
           segment.snapSource = Object.keys(sourceCounts).sort(function(a, b) { return sourceCounts[b] - sourceCounts[a]; })[0] || 'local-routeable';
           segment.snapStatus = 'snapped';
+          segment.snapProvider = 'rendered_features';
+          segment.snapProfile = null;
           segment.snapMessage = 'Snapped with medium confidence.';
           routeBuilderLastSnapSource = segment.snapSource;
           return segment;
@@ -5259,6 +5363,8 @@ function makeMapHtml(
         segment.snapConfidence = 'low';
         segment.snapSource = ambiguous ? 'ambiguous-local-routeable' : 'raw-smoothed';
         segment.snapStatus = ambiguous ? 'ambiguous' : 'raw_smoothed';
+        segment.snapProvider = null;
+        segment.snapProfile = null;
         segment.snapMessage = ambiguous
           ? 'Ambiguous route match. Kept raw line; undo and retry if needed.'
           : 'No reliable road or trail match. Kept smoothed raw line; undo and retry if needed.';
@@ -5798,6 +5904,10 @@ function makeMapHtml(
           notifyManualMapInteraction('zoomstart', event);
         });
 
+        map.on('rotate', function() {
+          applyUserMarkerHeading(userMarkerHeading);
+        });
+
         map.on('moveend', function() {
           try {
             sendLog('[CAMP_MARKER] camera_update zoom=' + map.getZoom().toFixed(2));
@@ -6023,6 +6133,7 @@ const MapRenderer = React.memo(function MapRenderer({
   onUserDrag,
   onRoadClassification,
   vehicleHeading = null,
+  motionPriority = 'hot',
   isLoading = false,
   hasToken = true,
   onRetry,
@@ -6202,6 +6313,7 @@ const MapRenderer = React.memo(function MapRenderer({
         mapboxToken,
         showUserLocation,
         userLocation,
+        motionPriority,
         interactive,
         segments,
         bailoutMarkers,
@@ -6236,6 +6348,7 @@ const MapRenderer = React.memo(function MapRenderer({
       mapboxToken,
       showUserLocation,
       userLocation,
+      motionPriority,
       interactive,
       segments,
       bailoutMarkers,
@@ -6267,11 +6380,12 @@ const MapRenderer = React.memo(function MapRenderer({
         userLocation,
         showUserLocation,
         vehicleHeading,
+        motionPriority,
         cameraMode,
         interactive,
         routeBuilderActive,
       }),
-    [replayMarker, userLocation, showUserLocation, vehicleHeading, cameraMode, interactive, routeBuilderActive],
+    [replayMarker, userLocation, showUserLocation, vehicleHeading, motionPriority, cameraMode, interactive, routeBuilderActive],
   );
 
   const payloadHash = useMemo(() => buildMapOverlayPayloadHash(payload), [payload]);
@@ -6627,6 +6741,7 @@ const MapRenderer = React.memo(function MapRenderer({
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
+    if (motionPriority === 'cold') return;
     if (!cameraCommand) return;
 
     const commandHash = buildCameraCommandHash(cameraCommand, cameraCommandTrigger);
@@ -6634,10 +6749,11 @@ const MapRenderer = React.memo(function MapRenderer({
 
     postToMap({ type: 'cameraCommand', payload: cameraCommand });
     lastCameraCommandHashRef.current = commandHash;
-  }, [shouldLoadMap, webReady, cameraCommand, cameraCommandTrigger, postToMap]);
+  }, [shouldLoadMap, webReady, motionPriority, cameraCommand, cameraCommandTrigger, postToMap]);
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
+    if (motionPriority === 'cold') return;
 
     const user = normalizeLatLng(userLocation);
     const replay = normalizeLatLng(replayMarker as any);
@@ -6669,7 +6785,7 @@ const MapRenderer = React.memo(function MapRenderer({
 
     postToMap({ type: 'cameraCommand', payload: fallbackCommand });
     lastLegacyFollowHashRef.current = fallbackHash;
-  }, [shouldLoadMap, webReady, cameraCommand, followReplay, replayMarker, followUser, userLocation, postToMap]);
+  }, [shouldLoadMap, webReady, motionPriority, cameraCommand, followReplay, replayMarker, followUser, userLocation, postToMap]);
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;

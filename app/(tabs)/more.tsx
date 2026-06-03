@@ -435,7 +435,7 @@ Expedition Command System
   const noTrip = !activeTrip;
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+    <View style={[styles.container, { backgroundColor: 'transparent' }]}>
       <Header onAuthPress={() => setAuthVisible(true)} />
 
       {/* Sub-tab navigation */}

@@ -1,4 +1,8 @@
 import { createMigratingNonSecureStorage } from '../nonSecureStorage';
+import {
+  classifyGpsSampleForMotion,
+  type MapMotionGpsSample,
+} from '../mapMotion';
 import { generateExpeditionRecap } from './expeditionRecapEngine';
 import type {
   ExpeditionRecap,
@@ -86,15 +90,19 @@ function normalizeCoordinate(input: unknown, recordedAt?: string | null): Expedi
   const value = input as Partial<ExpeditionTripCoordinate> & {
     latitude?: number;
     longitude?: number;
+    altitudeFt?: number | null;
     ele?: number | null;
     ele_m?: number | null;
     elevationFeet?: number | null;
+    accuracyM?: number | null;
+    speedMph?: number | null;
+    headingDeg?: number | null;
   } | null | undefined;
   const lat = Number(value?.lat ?? value?.latitude);
   const lng = Number(value?.lng ?? value?.longitude);
   if (!isFiniteCoordinate(lat, lng)) return null;
 
-  const elevationFeet = Number(value?.elevationFt ?? value?.elevationFeet);
+  const elevationFeet = Number(value?.elevationFt ?? value?.elevationFeet ?? value?.altitudeFt);
   const elevationMeters = Number(value?.ele ?? value?.ele_m);
   const elevationFt = Number.isFinite(elevationFeet)
     ? elevationFeet
@@ -106,7 +114,10 @@ function normalizeCoordinate(input: unknown, recordedAt?: string | null): Expedi
     lat,
     lng,
     elevationFt: elevationFt == null ? null : Math.round(elevationFt),
-    recordedAt: recordedAt ?? value?.recordedAt ?? null,
+    accuracyM: finiteNumberOrNull(value?.accuracyM),
+    speedMph: finiteNumberOrNull(value?.speedMph),
+    headingDeg: finiteNumberOrNull(value?.headingDeg),
+    recordedAt: value?.recordedAt ?? recordedAt ?? null,
   };
 }
 
@@ -465,6 +476,7 @@ export function normalizeExpeditionTripRecord(raw: unknown): ExpeditionTripRecor
     startCoordinate,
     endCoordinate,
     routeGeometry,
+    plannedRouteGeometry: normalizeGeometry(input?.plannedRouteGeometry ?? [], updatedAt),
     routeBounds: normalizeBounds(input?.routeBounds, routeGeometry),
     weatherSnapshots: normalizeArray(input?.weatherSnapshots),
     terrainRiskSnapshots: normalizeArray(input?.terrainRiskSnapshots),
@@ -689,6 +701,7 @@ function findActiveRecord(
 export function createNewActiveTripRecord(input: ExpeditionTripCreateInput = {}): ExpeditionTripRecord {
   const timestamp = input.startedAt ?? nowISO();
   const routeGeometry = normalizeGeometry(input.routeGeometry ?? [], timestamp);
+  const plannedRouteGeometry = normalizeGeometry(input.plannedRouteGeometry ?? [], timestamp);
   const startCoordinate =
     input.startCoordinate ?? routeGeometry[0] ?? null;
   const elevation = computeElevationStats(routeGeometry);
@@ -711,6 +724,7 @@ export function createNewActiveTripRecord(input: ExpeditionTripCreateInput = {})
     startCoordinate,
     endCoordinate: startCoordinate,
     routeGeometry,
+    plannedRouteGeometry,
     routeBounds: computeBounds(routeGeometry),
     weatherSnapshots: [],
     terrainRiskSnapshots: [],
@@ -797,6 +811,9 @@ export function updateTripStatsDuringGuidance(
   const timestamp = input.updatedAt ?? nowISO();
   const incomingGeometry = normalizeGeometry(input.routeGeometry ?? [], timestamp);
   const routeGeometry = incomingGeometry.length > 1 ? incomingGeometry : record.routeGeometry;
+  const plannedRouteGeometry = input.plannedRouteGeometry
+    ? normalizeGeometry(input.plannedRouteGeometry, timestamp)
+    : record.plannedRouteGeometry ?? [];
   const currentCoordinate = input.currentCoordinate ?? routeGeometry[routeGeometry.length - 1] ?? record.endCoordinate;
   const elevation = computeElevationStats(routeGeometry);
   let nextRecord: ExpeditionTripRecord = {
@@ -808,6 +825,7 @@ export function updateTripStatsDuringGuidance(
     totalElevationGainFt: elevation.totalElevationGainFt ?? record.totalElevationGainFt,
     endCoordinate: currentCoordinate,
     routeGeometry,
+    plannedRouteGeometry,
     routeBounds: computeBounds(routeGeometry) ?? record.routeBounds,
     dataUsed: mergeDataUsed(record.dataUsed, input.dataSource),
     updatedAt: timestamp,
@@ -909,16 +927,77 @@ function sourceFromGuidance(snapshot: ExpeditionTripGuidanceSnapshot): Expeditio
   return defaultSource(`navigate_${snapshot.source === 'none' ? 'unknown' : snapshot.source}_guidance`);
 }
 
-function coordinateFromGuidance(snapshot: ExpeditionTripGuidanceSnapshot): ExpeditionTripCoordinate | null {
-  if (snapshot.currentLocation) {
-    return normalizeCoordinate({
-      lat: snapshot.currentLocation.latitude,
-      lng: snapshot.currentLocation.longitude,
-    }, snapshot.updatedAt);
+function recordedAtFromGpsTimestamp(timestamp: number | null | undefined, fallback: string | null | undefined): string | null {
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+    const iso = new Date(timestamp).toISOString();
+    if (new Date(iso).getTime() === timestamp) return iso;
   }
+  return fallback ?? null;
+}
+
+function gpsCoordinateFromGuidance(snapshot: ExpeditionTripGuidanceSnapshot): ExpeditionTripCoordinate | null {
+  const sample = snapshot.gpsSample ?? snapshot.currentLocation;
+  if (!sample) return null;
+  return normalizeCoordinate(
+    {
+      lat: sample.latitude,
+      lng: sample.longitude,
+      altitudeFt: sample.altitudeFt ?? sample.elevationFt ?? null,
+      accuracyM: sample.accuracyM ?? null,
+      speedMph: sample.speedMph ?? null,
+      headingDeg: sample.headingDeg ?? snapshot.headingDeg ?? null,
+    },
+    recordedAtFromGpsTimestamp(sample.timestamp, snapshot.updatedAt),
+  );
+}
+
+function coordinateFromGuidance(snapshot: ExpeditionTripGuidanceSnapshot): ExpeditionTripCoordinate | null {
+  const gpsCoordinate = gpsCoordinateFromGuidance(snapshot);
+  if (gpsCoordinate) return gpsCoordinate;
   const progress = normalizeGeometry(snapshot.progressPoints, snapshot.updatedAt);
-  const route = normalizeGeometry(snapshot.routePoints, snapshot.updatedAt);
-  return progress[progress.length - 1] ?? route[0] ?? null;
+  return progress[progress.length - 1] ?? null;
+}
+
+function coordinateToMotionSample(coordinate: ExpeditionTripCoordinate | null | undefined): MapMotionGpsSample | null {
+  if (!coordinate) return null;
+  const timestamp = coordinate.recordedAt ? new Date(coordinate.recordedAt).getTime() : Date.now();
+  if (!Number.isFinite(timestamp)) return null;
+  return {
+    latitude: coordinate.lat,
+    longitude: coordinate.lng,
+    altitudeFt: coordinate.elevationFt ?? null,
+    speedMph: coordinate.speedMph ?? null,
+    headingDeg: coordinate.headingDeg ?? null,
+    accuracyM: coordinate.accuracyM ?? null,
+    timestamp,
+  };
+}
+
+function appendGuidanceTraceCoordinate(
+  routeGeometry: ExpeditionTripCoordinate[],
+  coordinate: ExpeditionTripCoordinate | null,
+): ExpeditionTripCoordinate[] {
+  if (!coordinate) return routeGeometry;
+  const existing = normalizeGeometry(routeGeometry, null);
+  const previous = existing[existing.length - 1] ?? null;
+  if (
+    previous &&
+    previous.lat.toFixed(6) === coordinate.lat.toFixed(6) &&
+    previous.lng.toFixed(6) === coordinate.lng.toFixed(6)
+  ) {
+    return existing;
+  }
+
+  const previousSample = coordinateToMotionSample(previous);
+  const nextSample = coordinateToMotionSample(coordinate);
+  const decision = classifyGpsSampleForMotion(previousSample, nextSample, {
+    maxAccuracyM: 75,
+    maxTeleportSpeedMph: 180,
+    jitterDistanceM: 2.5,
+  });
+  if (!decision.accepted) return existing;
+
+  return downsampleGeometry([...existing, coordinate]);
 }
 
 function guidanceSource(snapshot: ExpeditionTripGuidanceSnapshot): ExpeditionTripGuidanceSource {
@@ -956,16 +1035,18 @@ export async function ensureActiveTripRecordForGuidance(
   const active = findActiveRecord(persisted, snapshot.sessionId);
   const timestamp = snapshot.updatedAt ?? nowISO();
   const source = sourceFromGuidance(snapshot);
-  const routeGeometry = normalizeGeometry(snapshot.routePoints, timestamp);
+  const plannedRouteGeometry = normalizeGeometry(snapshot.routePoints, timestamp);
   const currentCoordinate = coordinateFromGuidance(snapshot);
-  const totalDistanceMiles = deriveDistanceFromGuidance(snapshot, routeGeometry);
 
   if (!active) {
+    const routeGeometry = appendGuidanceTraceCoordinate([], currentCoordinate);
+    const totalDistanceMiles = deriveDistanceFromGuidance(snapshot, routeGeometry);
     const created = createNewActiveTripRecord({
       title: snapshot.routeTitle,
       startedAt: timestamp,
-      startCoordinate: currentCoordinate ?? routeGeometry[0] ?? null,
+      startCoordinate: currentCoordinate ?? null,
       routeGeometry,
+      plannedRouteGeometry,
       guidanceSessionId: snapshot.sessionId,
       guidanceSource: guidanceSource(snapshot),
       routeId: snapshot.routeId,
@@ -978,6 +1059,7 @@ export async function ensureActiveTripRecordForGuidance(
       totalDistanceMiles,
       currentCoordinate,
       routeGeometry,
+      plannedRouteGeometry,
       statusLabel: snapshot.statusLabel,
       isOffRoute: snapshot.isOffRoute,
       offRouteDistanceM: snapshot.offRouteDistanceM,
@@ -986,8 +1068,9 @@ export async function ensureActiveTripRecordForGuidance(
     const finalRecord = snapshot.lifecycle === 'arrived'
       ? finalizeCompletedTrip(updated, {
           completedAt: timestamp,
-          endCoordinate: currentCoordinate,
+          endCoordinate: currentCoordinate ?? updated.endCoordinate,
           routeGeometry,
+          plannedRouteGeometry,
           statusLabel: snapshot.statusLabel,
           dataSource: source,
           generatedSummary: buildSummaryText(updated),
@@ -998,11 +1081,14 @@ export async function ensureActiveTripRecordForGuidance(
     return finalRecord;
   }
 
+  const routeGeometry = appendGuidanceTraceCoordinate(active.routeGeometry, currentCoordinate);
+  const totalDistanceMiles = deriveDistanceFromGuidance(snapshot, routeGeometry);
   const updated = updateTripStatsDuringGuidance(active, {
     updatedAt: timestamp,
     totalDistanceMiles,
     currentCoordinate,
     routeGeometry,
+    plannedRouteGeometry,
     statusLabel: snapshot.statusLabel,
     isOffRoute: snapshot.isOffRoute,
     offRouteDistanceM: snapshot.offRouteDistanceM,
@@ -1011,8 +1097,9 @@ export async function ensureActiveTripRecordForGuidance(
   const finalRecord = snapshot.lifecycle === 'arrived'
     ? finalizeCompletedTrip(updated, {
         completedAt: timestamp,
-        endCoordinate: currentCoordinate,
+        endCoordinate: currentCoordinate ?? updated.endCoordinate,
         routeGeometry,
+        plannedRouteGeometry,
         statusLabel: snapshot.statusLabel,
         dataSource: source,
         generatedSummary: buildSummaryText(updated),

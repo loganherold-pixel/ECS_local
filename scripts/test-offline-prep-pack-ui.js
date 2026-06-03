@@ -49,6 +49,9 @@ assertIncludes(screen, 'Not set', 'Offline Prep optional unset state');
 assertIncludes(screen, 'testID="offline-prep-unavailable-state"', 'Offline Prep unavailable recovery');
 assertIncludes(screen, 'testID="offline-prep-failed-state"', 'Offline Prep failed state');
 assertIncludes(screen, 'testID="offline-prep-prepare"', 'Offline Prep prepare action');
+assertIncludes(screen, 'exportExploreTripManifestPdf', 'Offline Prep should export printable/shareable manifests from the reviewed manifest.');
+assertIncludes(screen, 'testID="offline-prep-printable-manifest"', 'Offline Prep should expose a printable/shareable manifest action.');
+assertIncludes(screen, 'Print / Share Manifest', 'Offline Prep manifest export action should use field-facing copy.');
 assertIncludes(screen, 'testID="offline-prep-prepare-result"', 'Offline Prep prepare result');
 assertIncludes(screen, 'testID="offline-prep-partial-confirm"', 'Offline Prep partial packs should show a continue confirmation.');
 assertIncludes(screen, 'testID="offline-prep-continue-partial"', 'Offline Prep partial confirmation should allow continuing.');
@@ -111,7 +114,8 @@ assertIncludes(tripBuilder, "offlinePrepGeometrySource: routePoints.length >= 2"
 assertIncludes(tripBuilder, 'selectedPreparedRoutePoints.length >= 2', 'Trip Builder Offline Prep handoff should use prepared route preview points.');
 
 assertIncludes(discover, 'handlePrepareOfflineFromRoute', 'Selected route Offline Prep handler');
-assertIncludes(discover, 'testID="explore-primary-tab-control"', 'Offline Prep should be reachable through the Explorer primary tab control.');
+assertIncludes(discover, 'testID="explore-tripbuilder-wizard-surface"', 'Explore should use the route-first TripBuilder wizard as the default surface.');
+assert(!discover.includes('testID="explore-primary-tab-control"'), 'Explore should not render the legacy primary tab control.');
 assertIncludes(discover, 'exploreSuggestedRouteOptions', 'Offline Prep tab should use current Suggested Routes filter context.');
 assertIncludes(discover, "}, 'route_details')", 'Selected route Offline Prep handoff source');
 assertIncludes(discover, "pathname: '/explore-offline-prep-pack'", 'Selected route Offline Prep navigation');

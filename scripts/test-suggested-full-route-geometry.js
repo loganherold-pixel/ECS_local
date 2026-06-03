@@ -72,8 +72,13 @@ assertIncludes(
 
 assertIncludes(
   handoffSource,
-  'extractTrailGeometry(route)',
-  'Navigation handoff should continue to use route geometry as the trail line source.',
+  'extractTrailGeometryResult(route, {',
+  'Navigation handoff should continue to use route geometry as the trail line source with a preferred trailhead start.',
+);
+assertIncludes(
+  handoffSource,
+  'trailGeometry.length > 1 ? trailheadCoordinate : null',
+  'Navigation handoff should expose the trailhead as the road approach destination when full trail geometry exists.',
 );
 assertIncludes(
   handoffSource,

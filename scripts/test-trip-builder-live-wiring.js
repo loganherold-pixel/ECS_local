@@ -12,13 +12,18 @@ function assertIncludes(source, needle, message) {
 
 assertIncludes(
   screen,
-  "import { useGPSLocation } from '../lib/useGPSLocation';",
-  'Trip Builder should subscribe to live GPS instead of relying only on the Explore handoff',
+  "import { useThrottledGPS } from '../lib/useThrottledGPS';",
+  'Trip Builder should subscribe to the shared live GPS pipeline instead of relying only on the Explore handoff',
 );
 assertIncludes(
   screen,
-  'const tripBuilderGps = useGPSLocation({ enabled: true, highAccuracy: true });',
-  'Trip Builder should acquire a live high-accuracy GPS fix while planning',
+  'const tripBuilderGps = useThrottledGPS({ enabled: true, highAccuracy: true });',
+  'Trip Builder should acquire a shared high-accuracy GPS fix while planning',
+);
+assertIncludes(
+  screen,
+  'tripBuilderGps.rawGPS.position ?? tripBuilderGps.position',
+  'Trip Builder should prefer raw shared GPS samples for route-context origin precision',
 );
 assertIncludes(
   screen,

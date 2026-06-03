@@ -172,6 +172,9 @@ export interface ExpeditionTripCoordinate {
   lat: number;
   lng: number;
   elevationFt?: number | null;
+  accuracyM?: number | null;
+  speedMph?: number | null;
+  headingDeg?: number | null;
   recordedAt?: string | null;
 }
 
@@ -402,6 +405,7 @@ export interface ExpeditionTripRecord {
   startCoordinate: ExpeditionTripCoordinate | null;
   endCoordinate: ExpeditionTripCoordinate | null;
   routeGeometry: ExpeditionTripCoordinate[];
+  plannedRouteGeometry?: ExpeditionTripCoordinate[];
   routeBounds: ExpeditionTripBounds | null;
   weatherSnapshots: ExpeditionTripWeatherSnapshot[];
   terrainRiskSnapshots: ExpeditionTripTerrainRiskSnapshot[];
@@ -447,6 +451,7 @@ export interface ExpeditionTripCreateInput {
   startedAt?: string | null;
   startCoordinate?: ExpeditionTripCoordinate | null;
   routeGeometry?: ExpeditionTripCoordinate[];
+  plannedRouteGeometry?: ExpeditionTripCoordinate[];
   guidanceSessionId?: string | null;
   guidanceSource?: ExpeditionTripGuidanceSource;
   routeId?: string | null;
@@ -461,6 +466,7 @@ export interface ExpeditionTripStatsUpdateInput {
   totalDurationSeconds?: number | null;
   currentCoordinate?: ExpeditionTripCoordinate | null;
   routeGeometry?: ExpeditionTripCoordinate[];
+  plannedRouteGeometry?: ExpeditionTripCoordinate[];
   statusLabel?: string | null;
   isOffRoute?: boolean;
   offRouteDistanceM?: number | null;
@@ -495,7 +501,27 @@ export interface ExpeditionTripGuidanceSnapshot {
     ele_m?: number | null;
     elevationFeet?: number | null;
   }>;
-  currentLocation: { latitude: number; longitude: number } | null;
+  currentLocation: {
+    latitude: number;
+    longitude: number;
+    altitudeFt?: number | null;
+    elevationFt?: number | null;
+    speedMph?: number | null;
+    headingDeg?: number | null;
+    accuracyM?: number | null;
+    timestamp?: number | null;
+  } | null;
+  gpsSample?: {
+    latitude: number;
+    longitude: number;
+    altitudeFt?: number | null;
+    elevationFt?: number | null;
+    speedMph?: number | null;
+    headingDeg?: number | null;
+    accuracyM?: number | null;
+    timestamp?: number | null;
+  } | null;
+  headingDeg?: number | null;
   remainingDistanceM: number | null;
   progressPercent: number | null;
   isOffRoute: boolean;

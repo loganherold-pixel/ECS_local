@@ -16,6 +16,29 @@ const offlinePrepPack = read(path.join('app', 'explore-offline-prep-pack.tsx'));
 const domain = read(path.join('lib', 'explore', 'trailPacks.ts'));
 
 assert(
+  discover.includes('ExploreTripBuilderWizardRouteCard') &&
+    discover.includes('testID="explore-tripbuilder-wizard-surface"') &&
+    discover.includes('normalizeExploreWizardRouteCandidates') &&
+    discover.includes('exploreWizardCandidateSet.hiddenTotal'),
+  'Explore should render the route-first TripBuilder wizard using normalized guidance-ready candidates and hidden unavailable route counts',
+);
+assert(
+  discover.includes('EXPLORE_WIZARD_SOURCE_FILTERS') &&
+    discover.includes("label: 'Trail Packs'") &&
+    discover.includes("label: 'Hidden Gems'") &&
+    discover.includes("label: 'ECS Ideas'") &&
+    discover.includes("label: 'Saved/Built'") &&
+    discover.includes("label: 'Imported/Stitched'"),
+  'Explore TripBuilder wizard should expose source chips for Trail Packs, Hidden Gems, ECS Ideas, Saved/Built, and Imported/Stitched routes',
+);
+assert(
+  discover.includes('saveExploreRouteForPlanning(candidate)') &&
+    discover.includes('handleStartExploreWizardCandidate') &&
+    discover.includes('autoStartNavigation: true') &&
+    discover.includes('handleBuildTripFromExploreWizardCandidate'),
+  'Explore TripBuilder route cards should wire Save, Start, and Build Trip through the existing planning/navigation flows',
+);
+assert(
   discover.includes("import TrailPackCard from '../../components/discover/TrailPackCard'"),
   'Explore should render Trail Packs through the dedicated card component',
 );

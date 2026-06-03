@@ -48,6 +48,7 @@ import AIRouteCard from '../../components/discover/AIRouteCard';
 import AIRoutePreviewModal from '../../components/discover/AIRoutePreviewModal';
 import TrailPackCard from '../../components/discover/TrailPackCard';
 import TrailPackPreviewModal from '../../components/trailPacks/TrailPackPreviewModal';
+import ExploreTripBuilderWizardRouteCard from '../../components/discover/ExploreTripBuilderWizardRouteCard';
 import { getExploreRouteThumbnailAssignments } from '../../lib/exploreTrailThumbnails';
 import {
   loadOpportunitiesWithCompatibility,
@@ -199,6 +200,17 @@ import {
   buildExploreRouteReadinessStorePatch,
   expeditionReadinessStore,
 } from '../../lib/readiness';
+import {
+  getExploreWizardSourceLabel,
+  importedRouteToExploreWizardRoute,
+  normalizeExploreWizardRouteCandidates,
+  runToExploreWizardRoute,
+  type ExploreWizardRouteCandidate,
+  type ExploreWizardRouteSourceKind,
+} from '../../lib/explore/exploreTripBuilderWizard';
+import { saveExploreRouteForPlanning } from '../../lib/explore/exploreRoutePlanningSave';
+import { routeStore } from '../../lib/routeStore';
+import { runStore } from '../../lib/runStore';
 
 const TAG = '[EXPLORE]';
 void ROUTE_CATALOG_COVERAGE_AREAS;
@@ -212,6 +224,15 @@ const UNIFIED_TRAIL_FILTER_META = {
   accentColor: TACTICAL.amber,
   description: 'Radius-first drivable trail discovery for off-road routes within your current search range.',
 } as const;
+
+const EXPLORE_WIZARD_SOURCE_FILTERS: { key: ExploreWizardRouteSourceKind | 'all'; label: string }[] = [
+  { key: 'all', label: 'All Ready' },
+  { key: 'trail_pack', label: 'Trail Packs' },
+  { key: 'hidden_gem', label: 'Hidden Gems' },
+  { key: 'ecs_idea', label: 'ECS Ideas' },
+  { key: 'saved_built', label: 'Saved/Built' },
+  { key: 'imported_stitched', label: 'Imported/Stitched' },
+];
 
 type PopularTrailRouteWithMetadata = CategorizedRoute & {
   sourceMetadata?: ExploreRouteSourceMetadata;
@@ -650,6 +671,9 @@ function DiscoverScreenInner() {
   );
   const [activeExplorePrimaryTab, setActiveExplorePrimaryTab] = useState<ExplorePrimaryTab>('suggested_routes');
   const [explorePlanningSelectedRouteId, setExplorePlanningSelectedRouteId] = useState<string | null>(null);
+  const [exploreWizardSourceFilter, setExploreWizardSourceFilter] = useState<ExploreWizardRouteSourceKind | 'all'>('all');
+  const [exploreWizardSaveNotice, setExploreWizardSaveNotice] = useState<string | null>(null);
+  const [localRouteAssetRevision, setLocalRouteAssetRevision] = useState(0);
 
   // ── User location state ───────────────────────────────────
   const [userLat, setUserLat] = useState<number>(DEFAULT_USER_LOCATION.latitude);
@@ -677,9 +701,7 @@ function DiscoverScreenInner() {
   const [trailPackPageIndex, setTrailPackPageIndex] = useState(0);
   const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);
   const [favoritesPageIndex, setFavoritesPageIndex] = useState(0);
-  const [activeExplorerCategoryPanel, setActiveExplorerCategoryPanel] = useState<ExplorerCategoryPanelKey | null>(
-    initialExploreFilterStateRef.current.activeCategoryPanel,
-  );
+  const [activeExplorerCategoryPanel, setActiveExplorerCategoryPanel] = useState<ExplorerCategoryPanelKey | null>(null);
   const [hasLoadedExplorer, setHasLoadedExplorer] = useState(false);
   const [exploreFilterHydrated, setExploreFilterHydrated] = useState(false);
   const [hiddenGemCycleNotice, setHiddenGemCycleNotice] = useState<string | null>(null);
@@ -731,7 +753,7 @@ function DiscoverScreenInner() {
       if (cancelled) return;
       setDistanceRadius(snapshot.radiusMiles);
       setExploreRefinement(snapshot.refinement);
-      setActiveExplorerCategoryPanel(snapshot.activeCategoryPanel);
+      setActiveExplorerCategoryPanel(null);
       setExploreFilterHydrated(true);
     });
 
@@ -817,6 +839,14 @@ function DiscoverScreenInner() {
       }
     });
     return unsub;
+  }, []);
+
+  useEffect(() => {
+    return routeStore.subscribe(() => {
+      if (mountedRef.current) {
+        setLocalRouteAssetRevision((current) => current + 1);
+      }
+    });
   }, []);
 
   // ── Phase 17: Sync AI routes for the unified trail feed ───
@@ -1796,6 +1826,101 @@ function DiscoverScreenInner() {
     [handleNavigateToRoute, userLat, userLng],
   );
 
+  const handlePreviewExploreWizardCandidate = useCallback(
+    (candidate: ExploreWizardRouteCandidate) => {
+      const trailPackId = String(
+        candidate.route.routeMetadata?.trailPackId ??
+          candidate.route.id ??
+          '',
+      );
+      const trailPack = publicDiscoverableTrailPacks.find((item) => item.id === trailPackId) ?? null;
+      if (trailPack) {
+        handlePreviewTrailPack(trailPack);
+        return;
+      }
+      if (candidate.sourceKind === 'ecs_idea') {
+        handleAIPreview(candidate.route as AIGeneratedRoute);
+        return;
+      }
+      handleSelectOpportunity(candidate.route);
+    },
+    [handleAIPreview, handlePreviewTrailPack, handleSelectOpportunity, publicDiscoverableTrailPacks],
+  );
+
+  const handleSaveExploreWizardCandidate = useCallback(
+    async (candidate: ExploreWizardRouteCandidate) => {
+      hapticMicro();
+      setExploreWizardSaveNotice(null);
+      try {
+        const result = await saveExploreRouteForPlanning(candidate);
+        setFavoritesSnapshot(getExploreFavoritesSnapshot());
+        setLocalRouteAssetRevision((current) => current + 1);
+        setExploreWizardSaveNotice(
+          result.createdRoute
+            ? `${candidate.title} saved as a favorite and stitch-ready route asset.`
+            : `${candidate.title} is already saved and stitch-ready.`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Explore route could not be saved.';
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Explore TripBuilder save unavailable',
+          ecsArea: 'explore',
+          message,
+          signature: `explore_tripbuilder_save_unavailable:${candidate.id}`,
+          metadata: {
+            routeId: candidate.route.id,
+            routeName: candidate.route.name,
+            sourceKind: candidate.sourceKind,
+          },
+        });
+        Alert.alert('Save unavailable', message);
+      }
+    },
+    [],
+  );
+
+  const handleBuildTripFromExploreWizardCandidate = useCallback(
+    async (candidate: ExploreWizardRouteCandidate) => {
+      try {
+        await saveExploreRouteForPlanning(candidate);
+        setFavoritesSnapshot(getExploreFavoritesSnapshot());
+        setLocalRouteAssetRevision((current) => current + 1);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Explore route could not be saved before TripBuilder.';
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Explore TripBuilder route save before build unavailable',
+          ecsArea: 'explore',
+          message,
+          signature: `explore_tripbuilder_build_save_unavailable:${candidate.id}`,
+          metadata: {
+            routeId: candidate.route.id,
+            routeName: candidate.route.name,
+            sourceKind: candidate.sourceKind,
+          },
+        });
+      }
+      handleBuildTripFromRoute(candidate.route);
+    },
+    [handleBuildTripFromRoute],
+  );
+
+  const handleStartExploreWizardCandidate = useCallback(
+    async (candidate: ExploreWizardRouteCandidate) => {
+      await handleNavigateToRoute(candidate.route, {
+        autoStartNavigation: true,
+        flowLabel: 'Starting Guidance',
+        flowMessage: 'Explore route accepted. ECS is opening Navigate and starting the active-guidance confirmation flow.',
+        flowContext: {
+          exploreAction: 'tripbuilder_start',
+          sourceKind: candidate.sourceKind,
+        },
+      });
+    },
+    [handleNavigateToRoute],
+  );
+
   const handleCloseAIPreview = useCallback(() => {
     setAiPreviewVisible(false);
     setTimeout(() => setAiPreviewRoute(null), 300);
@@ -2698,6 +2823,100 @@ function DiscoverScreenInner() {
   const favoriteTrailIds = useMemo(
     () => new Set(favoriteTrails.map((favorite) => favorite.sourceTrailId)),
     [favoriteTrails],
+  );
+  const exploreWizardLocalRouteAssets = useMemo(() => {
+    void localRouteAssetRevision;
+    const routes = routeStore.getAll();
+    const linkedRunIds = new Set(
+      routes
+        .map((route) => route.linked_run_id)
+        .filter((runId): runId is string => typeof runId === 'string' && runId.length > 0),
+    );
+    const savedBuiltRoutes: ExpeditionOpportunity[] = [];
+    const importedStitchedRoutes: ExpeditionOpportunity[] = [];
+
+    routes.forEach((route) => {
+      const opportunity = importedRouteToExploreWizardRoute(route);
+      if (!opportunity) return;
+      if (route.source_app === 'ecs_explore_save' || route.source_format === 'custom') {
+        savedBuiltRoutes.push(opportunity);
+      } else {
+        importedStitchedRoutes.push(opportunity);
+      }
+    });
+
+    runStore.getAll().forEach((run) => {
+      if (linkedRunIds.has(run.id)) return;
+      const opportunity = runToExploreWizardRoute(run);
+      if (opportunity) importedStitchedRoutes.push(opportunity);
+    });
+
+    return {
+      savedBuiltRoutes,
+      importedStitchedRoutes,
+    };
+  }, [localRouteAssetRevision]);
+  const exploreWizardTrailPackRoutes = useMemo(
+    () =>
+      publicDiscoverableTrailPacks
+        .filter(isPublicSuggestedTrailheadTrailPack)
+        .map((trailPack) => trailPackToExpeditionOpportunity(trailPack))
+        .filter(isPublicSuggestedTrailheadRoute),
+    [publicDiscoverableTrailPacks],
+  );
+  const exploreWizardHiddenGemRoutes = useMemo(
+    () =>
+      hiddenGemExploreOrchestration.items
+        .map((item) => (hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route ?? null) as ExpeditionOpportunity | null)
+        .filter((route): route is ExpeditionOpportunity => !!route)
+        .filter(isPublicSuggestedTrailheadRoute),
+    [hiddenGemExploreOrchestration.items, hiddenGemExploreOrchestration.routeMap],
+  );
+  const exploreWizardFavoriteRoutes = useMemo(
+    () => filteredFavoriteTrails.map((favorite) => favoriteTrailToExpeditionRoute(favorite)),
+    [filteredFavoriteTrails],
+  );
+  const exploreWizardCandidateSet = useMemo(
+    () =>
+      normalizeExploreWizardRouteCandidates({
+        trailPacks: exploreWizardTrailPackRoutes,
+        hiddenGemRoutes: exploreWizardHiddenGemRoutes,
+        ecsRouteIdeas: publicRefinedAIRoutes,
+        favoriteRoutes: [
+          ...exploreWizardFavoriteRoutes,
+          ...exploreWizardLocalRouteAssets.savedBuiltRoutes,
+        ],
+        savedRouteAssets: exploreWizardLocalRouteAssets.importedStitchedRoutes,
+      }),
+    [
+      exploreWizardFavoriteRoutes,
+      exploreWizardHiddenGemRoutes,
+      exploreWizardLocalRouteAssets.importedStitchedRoutes,
+      exploreWizardLocalRouteAssets.savedBuiltRoutes,
+      exploreWizardTrailPackRoutes,
+      publicRefinedAIRoutes,
+    ],
+  );
+  const exploreWizardSourceCounts = useMemo(() => {
+    const counts: Record<ExploreWizardRouteSourceKind | 'all', number> = {
+      all: exploreWizardCandidateSet.candidates.length,
+      trail_pack: 0,
+      hidden_gem: 0,
+      ecs_idea: 0,
+      saved_built: 0,
+      imported_stitched: 0,
+    };
+    exploreWizardCandidateSet.candidates.forEach((candidate) => {
+      counts[candidate.sourceKind] += 1;
+    });
+    return counts;
+  }, [exploreWizardCandidateSet.candidates]);
+  const visibleExploreWizardCandidates = useMemo(
+    () =>
+      exploreWizardSourceFilter === 'all'
+        ? exploreWizardCandidateSet.candidates
+        : exploreWizardCandidateSet.candidates.filter((candidate) => candidate.sourceKind === exploreWizardSourceFilter),
+    [exploreWizardCandidateSet.candidates, exploreWizardSourceFilter],
   );
   const favoriteTrailMap = useMemo(() => {
     const map = new Map<string, FavoriteTrailRecord>();
@@ -3697,12 +3916,17 @@ function DiscoverScreenInner() {
         <View style={s.explorerBody}>
         <ScrollView style={s.scrollArea} contentContainerStyle={[s.scrollContent, contentFrameStyle]} showsVerticalScrollIndicator={false}>
 
-          <View style={s.explorePrimaryTabs} testID="explore-primary-tab-control">
-            <ECSSegmentedControl
-              options={explorePrimaryTabOptions}
-              value={activeExplorePrimaryTab}
-              onChange={(key) => handleOpenExploreFeature(key as ExplorePrimaryTab)}
-            />
+          <View style={s.exploreWizardHero} testID="explore-tripbuilder-wizard-surface">
+            <View style={s.exploreWizardHeroIcon}>
+              <Ionicons name="trail-sign-outline" size={18} color={TACTICAL.amber} />
+            </View>
+            <View style={s.exploreWizardHeroCopy}>
+              <Text style={s.exploreWizardEyebrow}>EXPLORE TRIPBUILDER</Text>
+              <Text style={s.exploreWizardTitle}>Pick a guidance-ready route</Text>
+              <Text style={s.exploreWizardText}>
+                Preview, save, build a trip, or start navigation from verified route geometry only.
+              </Text>
+            </View>
           </View>
 
           {activeExplorePrimaryTab === 'suggested_routes' ? (
@@ -3722,43 +3946,20 @@ function DiscoverScreenInner() {
                 isLoading={isLoading}
               />
 
-              <View style={s.exploreMapHandoffCard}>
-                <View style={s.exploreMapHandoffCopy}>
-                  <Text style={s.exploreMapHandoffTitle}>Filtered Route Map Preview</Text>
-                  <Text style={s.exploreMapHandoffSubtitle} numberOfLines={2}>
-                    {exploreMapHandoffBuild.segments.length > 0
-                      ? `${exploreMapHandoffBuild.segments.length} of ${exploreMapPreviewRouteCounts.total} filtered Suggested Trailheads have map-ready route lines${selectedExploreRefinementLabel ? ` / ${selectedExploreRefinementLabel}` : ''}.`
-                      : exploreMapPreviewRouteCounts.total > 0
-                        ? `${exploreMapPreviewRouteCounts.total} filtered Suggested Trailheads matched, but map geometry is still unavailable.`
-                        : 'No Suggested Trailheads match the active filters yet.'}
+              <View style={s.exploreWizardStatusCard}>
+                <View style={s.exploreWizardStatusCopy}>
+                  <Text style={s.exploreWizardStatusTitle}>Guidance-Ready Routes</Text>
+                  <Text style={s.exploreWizardStatusText}>
+                    {`${exploreWizardCandidateSet.candidates.length} routes are available to preview, save, build, or start. ${exploreWizardCandidateSet.hiddenTotal} routes are hidden because active-guidance geometry is unavailable.`}
                   </Text>
-                  <View style={s.exploreMapHandoffStatsRow}>
-                    {exploreMapPreviewCategoryBadges.map((badge) => (
-                      <View key={badge.key} style={[s.exploreMapHandoffStatPill, { borderColor: `${badge.color}35` }]}>
-                        <Text style={[s.exploreMapHandoffStatValue, { color: badge.color }]}>{badge.count}</Text>
-                        <Text style={s.exploreMapHandoffStatLabel}>{badge.label}</Text>
-                      </View>
-                    ))}
-                  </View>
-                  <Text style={s.exploreMapHandoffFlowText} numberOfLines={3}>
-                    Tap a route line on the Navigate map to review details, then start guidance from that one route.
-                  </Text>
-                  {exploreMapHandoffNotice ? (
-                    <Text style={s.exploreMapHandoffNotice} numberOfLines={2}>
-                      {exploreMapHandoffNotice}
-                    </Text>
+                  {exploreWizardSaveNotice ? (
+                    <Text style={s.exploreWizardNotice} numberOfLines={2}>{exploreWizardSaveNotice}</Text>
                   ) : null}
                 </View>
-                <TouchableOpacity
-                  style={s.exploreMapHandoffButton}
-                  onPress={handleShowFilteredRoutesOnMap}
-                  activeOpacity={0.86}
-                  accessibilityRole="button"
-                  accessibilityLabel="Show filtered Suggested Trailhead routes on the Navigate map"
-                >
-                  <Ionicons name="map-outline" size={14} color="#091014" />
-                  <Text style={s.exploreMapHandoffButtonText}>Show Routes on Map</Text>
-                </TouchableOpacity>
+                <View style={s.exploreWizardCountPlate}>
+                  <Text style={s.exploreWizardCountValue}>{exploreWizardCandidateSet.candidates.length}</Text>
+                  <Text style={s.exploreWizardCountLabel}>READY</Text>
+                </View>
               </View>
 
             </View>
@@ -3959,57 +4160,83 @@ function DiscoverScreenInner() {
           )}
 
           {(!showInitialLoading && !showRefinementEmptyState && (radiusFilteredOpportunities.length > 0 || showSectionLoading)) && (
-            <View style={s.explorerCategoryGrid}>
-              {explorerCategoryTiles.map((category) => {
-                const isEmpty = category.count === 0;
-                return (
-                  <TouchableOpacity
-                    key={category.key}
-                    style={[
-                      s.explorerCategoryTile,
-                      s.explorerCategoryTileGold,
-                      isEmpty && s.explorerCategoryTileEmpty,
-                    ]}
-                    activeOpacity={0.82}
-                    onPress={() => handleOpenExplorerCategoryPanel(category.key)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open ${category.label}`}
-                  >
-                    <View
-                      style={[
-                        s.explorerCategoryIconWrap,
-                        {
-                          borderColor: `${category.accentColor}35`,
-                          backgroundColor: `${category.accentColor}10`,
-                        },
-                      ]}
+            <View style={s.exploreWizardRouteSurface}>
+              <View style={s.exploreWizardFilterRow}>
+                {EXPLORE_WIZARD_SOURCE_FILTERS.map((filter) => {
+                  const selected = exploreWizardSourceFilter === filter.key;
+                  const count = exploreWizardSourceCounts[filter.key] ?? 0;
+                  return (
+                    <TouchableOpacity
+                      key={filter.key}
+                      style={[s.exploreWizardFilterChip, selected && s.exploreWizardFilterChipActive]}
+                      activeOpacity={0.82}
+                      onPress={() => {
+                        hapticMicro();
+                        setExploreWizardSourceFilter(filter.key);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Filter Explore routes by ${filter.label}`}
+                      accessibilityState={{ selected }}
                     >
-                      <Ionicons
-                        name={category.icon as any}
-                        size={17}
-                        color={isEmpty ? TACTICAL.textMuted : category.accentColor}
+                      <Text style={[s.exploreWizardFilterText, selected && s.exploreWizardFilterTextActive]}>
+                        {filter.label}
+                      </Text>
+                      <Text style={[s.exploreWizardFilterCount, selected && s.exploreWizardFilterCountActive]}>
+                        {count}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {visibleExploreWizardCandidates.length === 0 ? (
+                <ECSResultsEmptyState
+                  style={s.exploreWizardEmpty}
+                  title="No Guidance-Ready Routes"
+                  message={
+                    exploreWizardCandidateSet.hiddenTotal > 0
+                      ? `${exploreWizardCandidateSet.hiddenTotal} routes matched the current Explore context but were hidden because active-guidance geometry was unavailable.`
+                      : 'No routes from the current Explore sources are ready for active guidance inside these filters.'
+                  }
+                  helper="Adjust the radius or source chip, import a verified route file, or try again when route catalog geometry is available."
+                  icon="navigate-outline"
+                  variant="compact"
+                />
+              ) : (
+                <View style={[s.exploreWizardCardGrid, showExploreRouteGrid && s.exploreWizardCardGridExpanded]}>
+                  {visibleExploreWizardCandidates.map((candidate) => (
+                    <View
+                      key={`${candidate.sourceKind}:${candidate.id}`}
+                      style={[s.exploreWizardCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}
+                    >
+                      <ExploreTripBuilderWizardRouteCard
+                        candidate={candidate}
+                        sourceLabel={getExploreWizardSourceLabel(candidate.sourceKind)}
+                        isSaved={favoriteTrailIds.has(String(candidate.route.id)) || favoriteTrailIds.has(candidate.id)}
+                        onPreview={() => handlePreviewExploreWizardCandidate(candidate)}
+                        onStart={() => {
+                          void handleStartExploreWizardCandidate(candidate);
+                        }}
+                        onSave={() => {
+                          void handleSaveExploreWizardCandidate(candidate);
+                        }}
+                        onBuildTrip={() => {
+                          void handleBuildTripFromExploreWizardCandidate(candidate);
+                        }}
                       />
                     </View>
-                    <View style={s.explorerCategoryCopy}>
-                      <Text
-                        style={[
-                          s.explorerCategoryTitle,
-                          { color: isEmpty ? TACTICAL.textMuted : TACTICAL.text },
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {category.label}
-                      </Text>
-                      <Text style={[s.explorerCategoryCount, { color: category.accentColor }]}>
-                        {category.count}
-                      </Text>
-                    </View>
-                    <Text style={s.explorerCategoryHint} numberOfLines={2}>
-                      {isEmpty ? 'No matches for active filters' : category.description}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+                  ))}
+                </View>
+              )}
+
+              {exploreWizardCandidateSet.hiddenTotal > 0 ? (
+                <View style={s.exploreWizardHiddenNotice}>
+                  <Ionicons name="information-circle-outline" size={12} color={TACTICAL.textMuted} />
+                  <Text style={s.exploreWizardHiddenText}>
+                    {`${exploreWizardCandidateSet.hiddenTotal} route${exploreWizardCandidateSet.hiddenTotal === 1 ? '' : 's'} hidden: geometry was not ready for active guidance, so ECS will not save, stitch, or navigate those routes from Explore.`}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           )}
 
@@ -5046,6 +5273,110 @@ const s = StyleSheet.create({
   explorePrimaryTabs: {
     marginBottom: 8,
   },
+  exploreWizardHero: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderRadius: ECS.radius,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '28',
+    backgroundColor: 'rgba(10,14,17,0.78)',
+    padding: 11,
+    marginBottom: 8,
+  },
+  exploreWizardHeroIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '35',
+    backgroundColor: TACTICAL.amber + '0D',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  exploreWizardHeroCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  exploreWizardEyebrow: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1.4,
+  },
+  exploreWizardTitle: {
+    color: TACTICAL.text,
+    fontSize: 16,
+    lineHeight: 19,
+    fontWeight: '900',
+  },
+  exploreWizardText: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
+  exploreWizardStatusCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: ECS.radius,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '22',
+    backgroundColor: 'rgba(10,14,17,0.74)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  exploreWizardStatusCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  exploreWizardStatusTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  exploreWizardStatusText: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
+  },
+  exploreWizardNotice: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+    marginTop: 2,
+  },
+  exploreWizardCountPlate: {
+    minWidth: 54,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '35',
+    backgroundColor: TACTICAL.amber + '0D',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  exploreWizardCountValue: {
+    color: TACTICAL.amber,
+    fontSize: 18,
+    lineHeight: 20,
+    fontWeight: '900',
+  },
+  exploreWizardCountLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
   explorePlanningPanel: {
     borderRadius: 16,
     borderWidth: 1,
@@ -5340,6 +5671,84 @@ const s = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 14,
     elevation: 6,
+  },
+  exploreWizardRouteSurface: {
+    gap: 10,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  exploreWizardFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  exploreWizardFilterChip: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  exploreWizardFilterChipActive: {
+    borderColor: TACTICAL.amber + '45',
+    backgroundColor: TACTICAL.amber + '10',
+  },
+  exploreWizardFilterText: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+  },
+  exploreWizardFilterTextActive: {
+    color: TACTICAL.amber,
+  },
+  exploreWizardFilterCount: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '900',
+  },
+  exploreWizardFilterCountActive: {
+    color: TACTICAL.amber,
+  },
+  exploreWizardCardGrid: {
+    gap: 10,
+  },
+  exploreWizardCardGridExpanded: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'stretch',
+  },
+  exploreWizardCardWrap: {
+    width: '100%',
+  },
+  exploreWizardEmpty: {
+    marginTop: 2,
+  },
+  exploreWizardHiddenNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    borderRadius: ECS.radius,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
+  exploreWizardHiddenText: {
+    flex: 1,
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
   },
   explorerCategoryTileGold: {
     borderColor: ECS_SURFACE.border.selected,

@@ -7,6 +7,7 @@ import TabErrorBoundary from '../../components/TabErrorBoundary';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { COLORS, SPACING, RADIUS, SHADOWS, TERRAIN_TYPES, SEASONS, MODES } from '../../lib/theme';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { useApp } from '../../context/AppContext';
 import { tripStore, loadItemStore, riskScoreStore, fuelWaterLogStore, loadMapSlotStore, generateUUID, nowISO } from '../../lib/storage';
 import { Trip } from '../../lib/types';
@@ -398,7 +399,7 @@ export default function TripsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.bg },
+  container: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
   scrollContent: { padding: SPACING.lg, paddingBottom: 100 },
   sectionHeader: {
@@ -430,17 +431,17 @@ const styles = StyleSheet.create({
   emptyText: { color: COLORS.textSecondary, fontSize: 18, fontWeight: '600' },
   emptySubtext: { color: COLORS.textMuted, fontSize: 13 },
   tripCard: {
-    backgroundColor: COLORS.bgCard,
+    backgroundColor: ECS_SURFACE.background.primary,
     borderRadius: RADIUS.md,
     padding: SPACING.lg,
     marginBottom: SPACING.md,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: ECS_SURFACE.border.default,
     ...SHADOWS.card,
   },
   tripCardActive: {
-    borderColor: COLORS.goldBorder,
-    backgroundColor: 'rgba(212,175,55,0.05)',
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   tripCardHeader: {
     flexDirection: 'row',
@@ -473,7 +474,7 @@ const styles = StyleSheet.create({
   iconBtn: {
     padding: 6,
     borderRadius: 6,
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: ECS_SURFACE.background.compact,
   },
   // Modal styles
   modalOverlay: {
@@ -482,12 +483,12 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: COLORS.bgCard,
+    backgroundColor: ECS_SURFACE.background.primary,
     borderTopLeftRadius: RADIUS.xl,
     borderTopRightRadius: RADIUS.xl,
     maxHeight: '92%',
     borderTopWidth: 1,
-    borderColor: COLORS.goldBorder,
+    borderColor: ECS_SURFACE.border.selected,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -520,9 +521,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   input: {
-    backgroundColor: COLORS.bgInput,
+    backgroundColor: ECS_SURFACE.background.compact,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: ECS_SURFACE.border.quiet,
     borderRadius: RADIUS.sm,
     padding: SPACING.sm,
     color: COLORS.textPrimary,
@@ -535,13 +536,13 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: RADIUS.sm,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: ECS_SURFACE.border.quiet,
     marginRight: 6,
-    backgroundColor: COLORS.bgInput,
+    backgroundColor: ECS_SURFACE.background.compact,
   },
   chipActive: {
-    borderColor: COLORS.gold,
-    backgroundColor: COLORS.goldMuted,
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
   },
   chipText: { color: COLORS.textSecondary, fontSize: 13, fontWeight: '600' },
   chipTextActive: { color: COLORS.gold },

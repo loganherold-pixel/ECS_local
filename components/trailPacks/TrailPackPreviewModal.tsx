@@ -194,6 +194,7 @@ function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
             mapboxToken={mapboxToken}
             hasToken={!!mapboxToken}
             isLoading={tokenLoading}
+            motionPriority="warm"
             interactive={false}
             cameraMode="route_overview"
             cameraCommand={cameraCommand as CameraCommand | null}

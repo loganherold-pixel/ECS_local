@@ -574,7 +574,9 @@ export function buildExploreNavigationPayload(
     extractFinalCoordinate(route) ??
     (trailGeometry.length > 0 ? trailGeometry[trailGeometry.length - 1] : null) ??
     trailheadCoordinate;
-  const roadDestinationCoordinate = extractRoadCoordinate(route);
+  const roadDestinationCoordinate = extractRoadCoordinate(route) ?? (
+    trailGeometry.length > 1 ? trailheadCoordinate : null
+  );
   const trailWaypoints = normalizeTrailWaypoints(route, trailGeometry);
   const trailDecisionPoints = normalizeTrailDecisionPoints(route, trailGeometry);
   const campMarkers = extractExploreRouteCampMarkers(route);

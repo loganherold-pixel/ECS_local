@@ -90,6 +90,7 @@ assertIncludes(screen, "id: 'bailout-route-start'", 'Bailout picker should mark 
 assertIncludes(screen, "id: 'bailout-route-end'", 'Bailout picker should mark the selected route end.');
 assertIncludes(screen, 'pinMarkers={[...routeEndpointMarkers, ...optionMarkers, ...selectedMarker]}', 'Bailout picker should render route endpoints plus suggested/operator bailout pins.');
 assertIncludes(screen, 'loadBailoutPlanOptions', 'Trip Builder should load bailout and rendezvous suggestions.');
+assertIncludes(screen, "'ecs.routeContextEngine.enableCampCandidates': true", 'Trip Builder should keep route-context CampOps camp candidates enabled for the Explore wizard.');
 assertIncludes(screen, 'BAILOUT_SEARCH_QUERY', 'Trip Builder should search for road-access bailout options.');
 assertIncludes(screen, 'onMapTap={(coordinate) => onDropPoint(coordinate)}', 'Bailout picker should support operator dropped map points.');
 assertIncludes(screen, 'appendBailoutStopToPlan', 'Selected bailout should be appended to the suggested itinerary.');
@@ -263,7 +264,10 @@ assertIncludes(discover, "case 'trip_builder':", 'Explore Trip Builder tab optio
 assertIncludes(discover, 'clearTripBuilderRouteHandoff();', 'Explore top-level Trip Builder reset');
 assertIncludes(discover, "router.push('/explore-trip-builder')", 'Explore Trip Builder tab should open the real Trip Builder route picker directly.');
 assert(!discover.includes('testID="explore-open-trip-builder"'), 'Explore should not render a redundant Open Trip Builder staging page.');
-assertIncludes(discover, 'testID="explore-primary-tab-control"', 'Explore should render Trip Builder inside the primary tab control.');
+assertIncludes(discover, 'testID="explore-tripbuilder-wizard-surface"', 'Explore should render the direct route-first TripBuilder wizard surface.');
+assert(!discover.includes('testID="explore-primary-tab-control"'), 'Explore should not render the legacy primary tab control.');
+assertIncludes(discover, 'ExploreTripBuilderWizardRouteCard', 'Explore should expose Build Trip directly on guidance-ready route cards.');
+assertIncludes(discover, 'handleBuildTripFromExploreWizardCandidate', 'Explore wizard cards should save and route into Trip Builder.');
 assertIncludes(discover, 'exploreSuggestedRouteOptions', 'Trip Builder tab should use current Suggested Routes filter context.');
 assertIncludes(discover, 'saveExplorePlanningRouteContext({', 'Explore should save filtered routes for Trip Builder.');
 assertIncludes(discover, 'handleBuildTripFromRoute(selectedOpportunity)', 'Selected route details entry');

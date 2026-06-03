@@ -31,12 +31,12 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import {
-  useGPSLocation,
   type GPSLocationOptions,
   type GPSLocationOutput,
   type GPSPosition,
 } from './useGPSLocation';
 import { gpsUIState, type GPSUIState } from './gpsUIState';
+import { useSharedGPSLocation } from './sharedGPSLocation';
 
 // ── Output type (extends GPSLocationOutput with rawGPS) ────
 export interface ThrottledGPSOutput {
@@ -73,7 +73,7 @@ export function useThrottledGPS(
   options: GPSLocationOptions = {}
 ): ThrottledGPSOutput {
   // ── Raw GPS from the underlying hook ─────────────────
-  const rawGPS = useGPSLocation(options);
+  const rawGPS = useSharedGPSLocation(options);
 
   // ── Throttled state from gpsUIState store ────────────
   const [throttledState, setThrottledState] = useState<GPSUIState>(

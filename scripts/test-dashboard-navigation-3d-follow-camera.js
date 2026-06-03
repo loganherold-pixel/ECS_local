@@ -52,9 +52,12 @@ const gpsHeadingCamera = chase.resolveDashboardNavigationChaseCamera({
   hasActiveGuidance: true,
   speedMph: 20,
 });
-assert.strictEqual(gpsHeadingCamera.bearingSource, 'gps-heading');
-assert.strictEqual(Math.round(gpsHeadingCamera.bearingDeg), 90);
-assert(gpsHeadingCamera.cameraTarget.longitude > origin.longitude, 'Active chase camera should look ahead along live GPS heading.');
+assert.strictEqual(gpsHeadingCamera.bearingSource, 'route-ahead');
+assert(
+  gpsHeadingCamera.bearingDeg < 10 || gpsHeadingCamera.bearingDeg > 350,
+  'Active chase camera should prefer route-ahead bearing over conflicting GPS heading.',
+);
+assert(gpsHeadingCamera.cameraTarget.latitude > origin.latitude, 'Active chase camera should look ahead along route/course travel.');
 
 const routeAheadCamera = chase.resolveDashboardNavigationChaseCamera({
   currentLocation: origin,

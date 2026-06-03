@@ -88,6 +88,8 @@ export interface ImportedRoute {
   source_app: string | null;
   route_category?: RouteCategory;
   linked_run_id?: string | null;
+  external_source_id?: string | null;
+  external_source_type?: string | null;
   total_distance_miles: number;
   elevation_gain_ft: number | null;
   waypoint_count: number;
@@ -104,6 +106,14 @@ export type CustomRouteSegmentInput = {
   coordinates: [number, number][] | { latitude: number; longitude: number }[];
   sourceMetadata?: RouteSegmentSourceMetadata | null;
   source_metadata?: RouteSegmentSourceMetadata | null;
+};
+
+export type CustomRouteCreateOptions = {
+  name?: string;
+  description?: string | null;
+  sourceApp?: string | null;
+  externalSourceId?: string | null;
+  externalSourceType?: string | null;
 };
 
 // ── Storage keys ────────────────────────────────────────
@@ -390,7 +400,7 @@ export const routeStore = {
 
   createCustomRoute: (
     segmentsInput: CustomRouteSegmentInput[],
-    options?: { name?: string; description?: string | null },
+    options?: CustomRouteCreateOptions,
   ): ImportedRoute => {
     const segments = segmentsInput
       .map(normalizeCustomRouteSegment)
@@ -409,9 +419,11 @@ export const routeStore = {
       name: options?.name?.trim() || nextCustomRouteName(),
       description: options?.description ?? 'User-built route traced in ECS Build Route.',
       source_format: 'custom',
-      source_app: 'ecs_route_builder',
+      source_app: options?.sourceApp ?? 'ecs_route_builder',
       route_category: 'custom',
       linked_run_id: null,
+      external_source_id: options?.externalSourceId ?? null,
+      external_source_type: options?.externalSourceType ?? null,
       total_distance_miles: computeRouteDistanceMiles(segments),
       elevation_gain_ft: null,
       waypoint_count: 0,

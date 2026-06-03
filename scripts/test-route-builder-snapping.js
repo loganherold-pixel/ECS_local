@@ -9,6 +9,9 @@ const mapRenderer = fs
 const navigate = fs
   .readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8')
   .replace(/\r\n/g, '\n');
+const finalSnap = fs
+  .readFileSync(path.join(root, 'lib', 'routeBuilderSnapFinalization.ts'), 'utf8')
+  .replace(/\r\n/g, '\n');
 
 function assertIncludes(source, fragment, message) {
   assert.ok(source.includes(fragment), message);
@@ -227,6 +230,61 @@ assertIncludes(
   navigate,
   "routeBuilderSnapStatus === 'raw_smoothed' || routeBuilderSnapStatus === 'ambiguous'",
   'Navigate should show a clear retry/undo hint when final segment snapping keeps raw geometry.',
+);
+assertIncludes(
+  finalSnap,
+  'MAPBOX_MAX_MATCHING_COORDINATES = 100',
+  'Route builder final snap should never send more than 100 coordinates to Mapbox Map Matching.',
+);
+assertIncludes(
+  finalSnap,
+  'MAPBOX_MAX_RADIUS_M = 50',
+  'Route builder final snap should keep radiuses inside Mapbox Map Matching limits.',
+);
+assertIncludes(
+  finalSnap,
+  "https://api.mapbox.com/matching/v5/mapbox/driving/",
+  'Route builder final snap should use Mapbox Map Matching with the driving profile.',
+);
+assertIncludes(
+  finalSnap,
+  "url.searchParams.set('geometries', 'geojson');",
+  'Route builder final snap should request GeoJSON matched geometry.',
+);
+assertIncludes(
+  finalSnap,
+  "url.searchParams.set('overview', 'full');",
+  'Route builder final snap should request full matched geometry.',
+);
+assertIncludes(
+  finalSnap,
+  'confidence >= FINAL_MIN_CONFIDENCE',
+  'Route builder final snap should reject low-confidence Mapbox matches.',
+);
+assertIncludes(
+  finalSnap,
+  'endpointStartM <= FINAL_ENDPOINT_TOLERANCE_M',
+  'Route builder final snap should verify the matched start endpoint stays near the raw stroke start.',
+);
+assertIncludes(
+  finalSnap,
+  'distanceRatio >= FINAL_MIN_DISTANCE_RATIO',
+  'Route builder final snap should reject implausible matched distance ratios.',
+);
+assertIncludes(
+  navigate,
+  "routeBuilderHasPendingSnap",
+  'Build Route Save and Route To actions should be gated while final snap verification is pending.',
+);
+assertIncludes(
+  navigate,
+  "routeBuilderHasBlockedSnap",
+  'Build Route Save and Route To actions should be gated when a stroke is blocked.',
+);
+assertIncludes(
+  mapRenderer,
+  'routeBuilderPointerCount > 1',
+  'Two-finger pointer guard should remain in place so pinch zoom cancels drawing.',
 );
 
 console.log('Route builder snapping regression checks passed.');

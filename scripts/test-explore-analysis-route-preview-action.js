@@ -123,12 +123,12 @@ assert.ok(
 );
 
 assert.ok(
-  discoverSource.includes('activeExplorerCategoryPanel') &&
-    discoverSource.includes('visibleHiddenGemRoutes.map') &&
-    discoverSource.includes('visiblePopularTrails.map') &&
-    discoverSource.includes('enrichedKnown.map') &&
-    discoverSource.includes('onSelect={() => handleSelectOpportunity(route)}'),
-  'All Explore route categories should continue opening the shared expedition analysis modal from route cards.',
+  discoverSource.includes('handlePreviewExploreWizardCandidate') &&
+    discoverSource.includes('handlePreviewTrailPack(trailPack)') &&
+    discoverSource.includes("candidate.sourceKind === 'ecs_idea'") &&
+    discoverSource.includes('handleAIPreview(candidate.route as AIGeneratedRoute)') &&
+    discoverSource.includes('handleSelectOpportunity(candidate.route)'),
+  'Explore wizard previews should route Trail Packs, ECS Ideas, and generic route candidates into their source-aware preview surfaces.',
 );
 
 assert.ok(

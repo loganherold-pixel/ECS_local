@@ -190,16 +190,27 @@ export function resolveDashboardNavigationChaseCamera(input: {
     ? resolveRouteAheadBearingDeg(userLocation, input.routePoints)
     : null;
   const fallbackHeading = normalizeNavigationBearingDeg(input.fallbackBearingDeg);
+  const speedMph = typeof input.speedMph === 'number' && Number.isFinite(input.speedMph)
+    ? Math.max(0, input.speedMph)
+    : null;
+  const isMovingInActiveGuidance =
+    !!input.hasActiveGuidance && (speedMph == null || speedMph >= 3);
 
   const bearingDeg =
+    (isMovingInActiveGuidance ? routeAheadHeading : null) ??
+    (isMovingInActiveGuidance ? routeSessionHeading : null) ??
     gpsHeading ??
     routeAheadHeading ??
     routeSessionHeading ??
     fallbackHeading;
   const bearingSource: DashboardNavigationChaseBearingSource =
-    gpsHeading != null
-      ? 'gps-heading'
-      : routeAheadHeading != null
+    isMovingInActiveGuidance && routeAheadHeading != null
+      ? 'route-ahead'
+      : isMovingInActiveGuidance && routeSessionHeading != null
+        ? 'route-session-heading'
+        : gpsHeading != null
+          ? 'gps-heading'
+          : routeAheadHeading != null
         ? 'route-ahead'
         : routeSessionHeading != null
           ? 'route-session-heading'
@@ -207,9 +218,6 @@ export function resolveDashboardNavigationChaseCamera(input: {
             ? 'fallback'
             : 'none';
 
-  const speedMph = typeof input.speedMph === 'number' && Number.isFinite(input.speedMph)
-    ? Math.max(0, input.speedMph)
-    : null;
   const activeLookAheadMeters =
     input.activeLookAheadMeters ??
     (speedMph != null && speedMph > 35

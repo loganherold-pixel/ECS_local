@@ -304,6 +304,7 @@ export default function ExploreRoutePreviewModal({
                 isLoading={tokenLoading}
                 showUserLocation={!!previewModel.origin}
                 userLocation={previewModel.origin}
+                motionPriority="warm"
                 interactive={false}
                 cameraMode="route_overview"
                 cameraCommand={previewModel.cameraCommand as CameraCommand | null}
