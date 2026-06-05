@@ -421,6 +421,7 @@
     "test:offline-sync-coordinator": "node ./scripts/test-offline-sync-coordinator.js",
     "test:navigate-import-dedupe": "node ./scripts/test-navigate-import-dedupe.js",
     "test:route-builder-snapping": "node ./scripts/test-route-builder-snapping.js && node ./scripts/test-route-builder-final-snap.js",
+    "test:route-builder-final-snap": "node ./scripts/test-route-builder-final-snap.js",
     "test:route-builder-ux": "node ./scripts/test-route-builder-ux-polish.js",
     "test:route-builder-undo": "node ./scripts/test-route-builder-undo-behavior.js",
     "test:route-builder-undo-behavior": "node ./scripts/test-route-builder-undo-behavior.js",

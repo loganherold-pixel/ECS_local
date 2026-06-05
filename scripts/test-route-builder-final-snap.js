@@ -119,6 +119,28 @@ assert.strictEqual(localFallback.segment.snapProvider, 'rendered_features');
 assert.strictEqual(localFallback.segment.snapStatus, 'snapped');
 assert.strictEqual(canSaveRouteBuilderSegments([localFallback.segment]), true);
 
+const ecsRouteGeometry = finalizeRouteBuilderSegmentSnap({
+  segment: {
+    id: 'ecs-route-geometry-1',
+    coordinates: matched,
+    rawSegment: matched,
+    snappedSegment: matched,
+    snapStatus: 'snapped',
+    snapConfidence: 'medium',
+    snapSource: 'route_catalog',
+    snapProvider: 'ecs_route_geometry',
+    buildSource: {
+      kind: 'ecs_route_geometry',
+      sourceLabel: 'Route Catalog',
+      confidence: 'planning_geometry',
+    },
+  },
+  mapboxAvailable: false,
+});
+assert.strictEqual(ecsRouteGeometry.accepted, true);
+assert.strictEqual(ecsRouteGeometry.segment.snapProvider, 'ecs_route_geometry');
+assert.strictEqual(canSaveRouteBuilderSegments([ecsRouteGeometry.segment]), true);
+
 const longTrace = Array.from({ length: 175 }, (_, index) =>
   coord(-120 + index * 0.0001, 39 + index * 0.0001),
 );

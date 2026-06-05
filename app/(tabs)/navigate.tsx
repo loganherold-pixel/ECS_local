@@ -210,6 +210,12 @@ import {
   type ExploreRouteOverlaySegment,
 } from '../../lib/navigateExploreRoutesOverlay';
 import {
+  buildRouteGeometryOverlaySegments,
+  routeGeometrySegmentToRouteBuilderSegment,
+  ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
+  type RouteGeometryOverlaySegment,
+} from '../../lib/navigateRouteGeometryOverlay';
+import {
   clearExploreRoutesMapHandoff,
   consumeExploreRoutesMapHandoff,
   type ExploreRoutesMapHandoff,
@@ -594,6 +600,7 @@ import {
 } from '../../lib/exploreRouteCampHandoff';
 import { consumeNavigationFlow, type ECSNavigationFlow } from '../../lib/ecsNavigationFlow';
 import { saveTripBuilderRouteHandoff } from '../../lib/tripBuilder/tripBuilderRouteHandoffStore';
+import type { TripBuilderRouteInput } from '../../lib/tripBuilder/tripBuilderTypes';
 import { saveOfflinePrepPackHandoff } from '../../lib/offlinePrepPack';
 import type {
   CompatibilityResult,
@@ -3668,8 +3675,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const remotenessLegendDisclosureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [exploreRoutesEnabled, setExploreRoutesEnabled] = useState(false);
   const [exploreRoutesHandoff, setExploreRoutesHandoff] = useState<ExploreRoutesMapHandoff | null>(null);
+  const [routeGeometryOverlayEnabled, setRouteGeometryOverlayEnabled] = useState(false);
+  const [selectedRouteGeometrySegmentIds, setSelectedRouteGeometrySegmentIds] = useState<string[]>([]);
   const [aiRouteSnapshotVersion, setAiRouteSnapshotVersion] = useState(0);
   const lastExploreRoutesFitSignatureRef = useRef<string | null>(null);
+  const lastRouteGeometryFitSignatureRef = useRef<string | null>(null);
   const {
     markers: tiltAlertMarkers,
     clusters: tiltAlertClusters,
@@ -3926,6 +3936,12 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       return true;
     },
     [queueMapCameraCommand],
+  );
+
+  const fitMapToRouteGeometrySegments = useCallback(
+    (segments: RouteGeometryOverlaySegment[]) =>
+      fitMapToExploreRouteSegments(segments as unknown as ExploreRouteOverlaySegment[]),
+    [fitMapToExploreRouteSegments],
   );
 
   const rawTrailPositionLat = gps.rawGPS.position?.latitude ?? null;
@@ -11066,6 +11082,16 @@ const handleCreateRun = useCallback(() => {
     );
   }, [aiRouteSnapshotVersion, userLocation?.lat, userLocation?.lng]);
 
+  const savedRouteAssets = useMemo(
+    () => {
+      void customRouteRefreshKey;
+      void runs.length;
+      void savedRoutesRefreshKey;
+      return getSavedRouteAssets();
+    },
+    [customRouteRefreshKey, runs, savedRoutesRefreshKey],
+  );
+
   const localExploreRouteOverlayBuild = useMemo(() => {
     const { opportunities, results } = exploreCompatibilityContext;
     return buildExploreRouteOverlaySegments({
@@ -11093,6 +11119,45 @@ const handleCreateRun = useCallback(() => {
     () => (exploreRoutesEnabled ? exploreRouteOverlayBuild.segments : []),
     [exploreRouteOverlayBuild.segments, exploreRoutesEnabled],
   );
+  const routeGeometryOverlayBuild = useMemo(
+    () => {
+      void customRouteRefreshKey;
+      void savedRoutesRefreshKey;
+      return buildRouteGeometryOverlaySegments({
+        routes: routeStore.getAll(),
+        runs,
+        savedRouteAssets,
+        exploreSegments: exploreRouteOverlayBuild.segments,
+        selectedSegmentIds: selectedRouteGeometrySegmentIds,
+        maxSegments: 240,
+      });
+    },
+    [
+      customRouteRefreshKey,
+      exploreRouteOverlayBuild.segments,
+      runs,
+      savedRouteAssets,
+      savedRoutesRefreshKey,
+      selectedRouteGeometrySegmentIds,
+    ],
+  );
+  const routeGeometryOverlaySegments = useMemo(
+    () => (routeGeometryOverlayEnabled ? routeGeometryOverlayBuild.segments : []),
+    [routeGeometryOverlayBuild.segments, routeGeometryOverlayEnabled],
+  );
+  const routeGeometryOverlaySignature = useMemo(
+    () =>
+      routeGeometryOverlaySegments
+        .map((segment) => `${segment.id}:${segment.routeGeometrySelected ? '1' : '0'}`)
+        .join('|'),
+    [routeGeometryOverlaySegments],
+  );
+  const routeGeometryOverlaySourceSummary = useMemo(() => {
+    const loadedSources = Object.entries(routeGeometryOverlayBuild.sourceCounts)
+      .filter(([, count]) => count > 0)
+      .map(([source, count]) => `${source.replace(/_/g, ' ')} ${count}`);
+    return loadedSources.length > 0 ? loadedSources.join(' / ') : 'no ECS-owned sources';
+  }, [routeGeometryOverlayBuild.sourceCounts]);
   const selectedExploreRouteSegment = useMemo(
     () =>
       selectedExploreRouteSegmentId
@@ -11135,12 +11200,12 @@ const handleCreateRun = useCallback(() => {
   );
   const mapSegmentFeatures = useMemo(
     () => {
-      const base = exploreRouteOverlaySegments.length > 0
-        ? [...(displayedSegmentFeatures ?? []), ...exploreRouteOverlaySegments]
+      const base = routeGeometryOverlaySegments.length > 0 || exploreRouteOverlaySegments.length > 0
+        ? [...(displayedSegmentFeatures ?? []), ...exploreRouteOverlaySegments, ...routeGeometryOverlaySegments]
         : [...(displayedSegmentFeatures ?? [])];
       return campsiteFinalAccessSegment ? [...base, campsiteFinalAccessSegment] : base;
     },
-    [campsiteFinalAccessSegment, displayedSegmentFeatures, exploreRouteOverlaySegments],
+    [campsiteFinalAccessSegment, displayedSegmentFeatures, exploreRouteOverlaySegments, routeGeometryOverlaySegments],
   );
 
   useEffect(() => {
@@ -11166,6 +11231,28 @@ const handleCreateRun = useCallback(() => {
   ]);
 
   useEffect(() => {
+    if (!routeGeometryOverlayEnabled) {
+      lastRouteGeometryFitSignatureRef.current = null;
+      return;
+    }
+
+    if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) return;
+    if (routeGeometryOverlaySegments.length === 0) return;
+    if (lastRouteGeometryFitSignatureRef.current === routeGeometryOverlaySignature) return;
+
+    lastRouteGeometryFitSignatureRef.current = routeGeometryOverlaySignature;
+    fitMapToRouteGeometrySegments(routeGeometryOverlaySegments);
+  }, [
+    fitMapToRouteGeometrySegments,
+    pendingHybridTrailTransition,
+    roadNavigationActive,
+    routeGeometryOverlayEnabled,
+    routeGeometryOverlaySegments,
+    routeGeometryOverlaySignature,
+    trailNavigationActive,
+  ]);
+
+  useEffect(() => {
     if (!selectedExploreRouteSegmentId) return;
     if (
       !exploreRoutesEnabled ||
@@ -11174,6 +11261,17 @@ const handleCreateRun = useCallback(() => {
       setSelectedExploreRouteSegmentId(null);
     }
   }, [exploreRouteOverlaySegments, exploreRoutesEnabled, selectedExploreRouteSegmentId]);
+
+  useEffect(() => {
+    if (selectedRouteGeometrySegmentIds.length === 0) return;
+    const availableIds = new Set(routeGeometryOverlayBuild.segments.map((segment) => segment.id));
+    setSelectedRouteGeometrySegmentIds((current) => {
+      const next = current.filter((id) => availableIds.has(id));
+      return next.length === current.length && next.every((id, index) => id === current[index])
+        ? current
+        : next;
+    });
+  }, [routeGeometryOverlayBuild.segments, selectedRouteGeometrySegmentIds.length]);
 
   const cachedRemoteRemotenessScore = getRemoteCacheFallbackScore(activeRun?.offline_cache?.remote_cache);
   const remotenessOverlayRouteAvailable = displayedRoutePoints.length > 1;
@@ -11639,6 +11737,7 @@ const handleCreateRun = useCallback(() => {
       ? dispersedCampingLegendBottom + DISPERSED_CAMPING_LEGEND_STACK_HEIGHT + OVERLAY_GAP
       : 0,
     exploreRoutesEnabled ? bottomLeftMapOverlayStackBottom + 42 + OVERLAY_GAP : 0,
+    routeGeometryOverlayEnabled ? bottomLeftMapOverlayStackBottom + 112 + OVERLAY_GAP : 0,
   );
   const campOpsRouteLifecycleNotice =
     CAMPOPS_ROUTE_PINS_ENABLED &&
@@ -13496,15 +13595,6 @@ useEffect(() => {
   };
 }, []);
 
-const savedRouteAssets = useMemo(
-  () => {
-    void customRouteRefreshKey;
-    void runs.length;
-    void savedRoutesRefreshKey;
-    return getSavedRouteAssets();
-  },
-  [customRouteRefreshKey, runs, savedRoutesRefreshKey],
-);
 const savedRouteAssetCounts = useMemo(
   () => calculateSavedRouteAssetCounts(savedRouteAssets),
   [savedRouteAssets],
@@ -14256,6 +14346,11 @@ const routeBuilderCanSave =
 const routeBuilderCanUndo = routeBuilderSegments.some(
   (segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1,
 );
+const routeBuilderHasRouteGeometrySegments = routeBuilderSavableSegments.some(
+  (segment) => segment.buildSource?.kind === 'ecs_route_geometry',
+);
+const routeBuilderCanPlanGeometry =
+  routeBuilderCanSave && routeBuilderHasRouteGeometrySegments && selectedRouteGeometrySegmentIds.length > 0;
 
 const syncSelectedDispersedRouteLegIds = useCallback((segments: RouteBuilderSegmentData[]) => {
   const remainingIds = new Set(
@@ -14270,6 +14365,21 @@ const syncSelectedDispersedRouteLegIds = useCallback((segments: RouteBuilderSegm
       : next;
   });
   setDispersedRouteBuildRenderKey((key) => key + 1);
+}, []);
+
+const syncSelectedRouteGeometrySegmentIds = useCallback((segments: RouteBuilderSegmentData[]) => {
+  const remainingIds = new Set(
+    segments
+      .filter((segment) => segment.buildSource?.kind === 'ecs_route_geometry')
+      .map((segment) => segment.sourceSegmentId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  );
+  setSelectedRouteGeometrySegmentIds((current) => {
+    const next = current.filter((id) => remainingIds.has(id));
+    return next.length === current.length && next.every((id, index) => id === current[index])
+      ? current
+      : next;
+  });
 }, []);
 
 const dispersedRouteBuildState = useMemo(
@@ -14362,6 +14472,7 @@ const queueRouteBuilderFinalSnap = useCallback((segment: RouteBuilderSegmentData
   );
   if (rawLine.length < 2) return;
   if (segment.buildSource?.kind === 'dispersed_route_leg') return;
+  if (segment.snapProvider === 'ecs_route_geometry' && isVerifiedRouteBuilderSegment(segment as FinalizableRouteBuilderSegment)) return;
   if (segment.snapStatus === 'network_pending' || segment.snapStatus === 'blocked') return;
   if (segment.snapProvider === 'mapbox_map_matching') return;
 
@@ -14548,6 +14659,7 @@ const startCampScoutDrawing = useCallback(() => {
     setRouteBuilderSnapMessage(null);
     setDispersedRouteBuildActive(false);
     setSelectedDispersedRouteLegIds([]);
+    setSelectedRouteGeometrySegmentIds([]);
     setDispersedRouteBuildStatus(null);
     setDispersedRouteBuildRenderKey((key) => key + 1);
     setCustomRouteRefreshKey((key) => key + 1);
@@ -14765,6 +14877,7 @@ const toggleRouteBuilder = useCallback(() => {
   if (!nextRouteBuilderActive) {
     setDispersedRouteBuildActive(false);
     setSelectedDispersedRouteLegIds([]);
+    setSelectedRouteGeometrySegmentIds([]);
     setDispersedRouteBuildStatus(null);
     setDispersedRouteBuildRenderKey((key) => key + 1);
   }
@@ -14798,6 +14911,7 @@ const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boole
   setRouteBuilderSegments([]);
   routeBuilderFinalSnapInFlightRef.current.clear();
   setSelectedDispersedRouteLegIds([]);
+  setSelectedRouteGeometrySegmentIds([]);
   setDispersedRouteBuildRenderKey((key) => key + 1);
   if (options?.clearDesignContext) {
     setRouteDesignContext(null);
@@ -14965,6 +15079,9 @@ const clearStagedBuildRoutePreview = useCallback(() => {
 const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
   stage?: boolean;
   autoStart?: boolean;
+  sourceApp?: string | null;
+  externalSourceType?: string | null;
+  description?: string | null;
 }) => {
   if (routeBuilderSavableSegments.length === 0 || routeBuilderPointCount < 2) {
     showToast('TRACE AT LEAST TWO POINTS TO SAVE');
@@ -14983,14 +15100,25 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
     const hasDispersedSegmentBuild = routeBuilderSavableSegments.some(
       (segment) => segment.buildSource?.kind === 'dispersed_route_leg',
     );
+    const hasRouteGeometrySegmentBuild = routeBuilderSavableSegments.some(
+      (segment) => segment.buildSource?.kind === 'ecs_route_geometry',
+    );
     const customRouteSegments = routeBuilderSavableSegments.map((segment) => ({
       coordinates: segment.coordinates,
       source_metadata: sourceMetadataForRouteBuilderSegment(segment),
     }));
-    const savedRoute = routeStore.createCustomRoute(customRouteSegments, {
-      description: hasDispersedSegmentBuild
+    const savedRouteDescription =
+      options?.description ??
+      (hasDispersedSegmentBuild
         ? `kind: 'dispersed_segment_build'. ${DISPERSED_ROUTE_LEG_PLANNING_WARNING} Source confidence: planning_geometry for tapped yellow legs.`
-        : undefined,
+        : hasRouteGeometrySegmentBuild
+          ? `kind: 'route_geometry_overlay'. ${ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING}`
+          : undefined);
+    const savedRoute = routeStore.createCustomRoute(customRouteSegments, {
+      description: savedRouteDescription,
+      sourceApp: options?.sourceApp ?? (hasRouteGeometrySegmentBuild ? 'ecs_route_geometry_overlay' : undefined),
+      externalSourceType:
+        options?.externalSourceType ?? (hasRouteGeometrySegmentBuild ? 'route_geometry_overlay' : undefined),
     });
     const savedRun = runStore.createFromRoute(savedRoute, activeRun?.build_snapshot);
     routeBuilderStagedRouteIdRef.current = savedRoute.id;
@@ -15055,6 +15183,76 @@ const routeToRouteBuilder = useCallback(async () => {
   await saveVerifiedRouteBuilderDraft({ stage: true, autoStart: true });
 }, [saveVerifiedRouteBuilderDraft]);
 
+const handlePlanRouteBuilderDraft = useCallback(async () => {
+  hapticCommand();
+  if (!routeBuilderCanPlanGeometry) {
+    showToast('SELECT SAVEABLE ECS GEOMETRY FIRST');
+    return;
+  }
+
+  const result = await saveVerifiedRouteBuilderDraft({
+    sourceApp: 'ecs_route_geometry_overlay',
+    externalSourceType: 'route_geometry_overlay',
+    description: `kind: 'route_geometry_overlay'. ${ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING}`,
+  });
+  if (!result) return;
+
+  const { savedRoute } = result;
+  const routeGeometryCoordinates = savedRoute.segments
+    .map((segment) =>
+      segment.points
+        .map((point) => [point.lon, point.lat])
+        .filter(([longitude, latitude]) => Number.isFinite(longitude) && Number.isFinite(latitude)),
+    )
+    .filter((line) => line.length > 1);
+  const trailGeometry = savedRoute.segments.flatMap((segment) =>
+    segment.points
+      .map((point) => ({
+        latitude: point.lat,
+        longitude: point.lon,
+      }))
+      .filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude)),
+  );
+  const startCoordinate = trailGeometry[0] ?? null;
+  const endCoordinate = trailGeometry[trailGeometry.length - 1] ?? null;
+  const tripBuilderRoute: TripBuilderRouteInput = {
+    id: savedRoute.id,
+    name: savedRoute.name,
+    title: savedRoute.name,
+    source: 'ecs_route_geometry_overlay',
+    distanceMiles: savedRoute.total_distance_miles,
+    total_distance_miles: savedRoute.total_distance_miles,
+    coordinate: startCoordinate,
+    destinationCoordinate: endCoordinate,
+    endCoordinate,
+    routeGeometry:
+      routeGeometryCoordinates.length > 0
+        ? {
+            type: 'MultiLineString',
+            coordinates: routeGeometryCoordinates,
+          }
+        : null,
+    routeGeometryStatus: 'trail_available',
+    trailGeometry,
+    segments: savedRoute.segments,
+    routeMetadata: {
+      sourceApp: 'ecs_route_geometry_overlay',
+      sourceLabel: 'ECS Route Geometry Overlay',
+      sourceState: savedRoute.sync_status,
+      routeGeometryWarning: ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
+      routeGeometryConfidence:
+        'planning/reference geometry - not legal access, closure, or safety approval',
+    },
+  };
+
+  saveTripBuilderRouteHandoff(tripBuilderRoute);
+  router.push({
+      pathname: '/explore-trip-builder',
+    params: { routeId: savedRoute.id },
+  } as any);
+  showToast(`TRIP BUILDER READY: ${savedRoute.name}`);
+}, [routeBuilderCanPlanGeometry, router, saveVerifiedRouteBuilderDraft, showToast]);
+
 const undoLastRouteBuilderSegment = useCallback(() => {
   hapticCommand();
   if (routeBuilderDrawing) {
@@ -15081,11 +15279,19 @@ const undoLastRouteBuilderSegment = useCallback(() => {
 
   setRouteBuilderSegments(nextSegments);
   syncSelectedDispersedRouteLegIds(nextSegments);
+  syncSelectedRouteGeometrySegmentIds(nextSegments);
   setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);
   setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
   setRouteBuilderSnapMessage(previousEndpointSegment?.snapMessage ?? null);
   showToast('LAST BUILD SEGMENT UNDONE');
-}, [routeBuilderCanUndo, routeBuilderDrawing, routeBuilderSegments, showToast, syncSelectedDispersedRouteLegIds]);
+}, [
+  routeBuilderCanUndo,
+  routeBuilderDrawing,
+  routeBuilderSegments,
+  showToast,
+  syncSelectedDispersedRouteLegIds,
+  syncSelectedRouteGeometrySegmentIds,
+]);
 
 const clearRouteBuilderDraft = useCallback(() => {
   hapticCommand();
@@ -15560,6 +15766,7 @@ useEffect(() => {
   setRouteBuilderSegments([]);
   setDispersedRouteBuildActive(false);
   setSelectedDispersedRouteLegIds([]);
+  setSelectedRouteGeometrySegmentIds([]);
   setDispersedRouteBuildStatus(null);
   setDispersedRouteBuildRenderKey((key) => key + 1);
 }, [pendingHybridTrailTransition, roadNavigationActive, routeBuilderActive, trailNavigationActive]);
@@ -15575,6 +15782,7 @@ useFocusEffect(
       setRouteBuilderSegments([]);
       setDispersedRouteBuildActive(false);
       setSelectedDispersedRouteLegIds([]);
+      setSelectedRouteGeometrySegmentIds([]);
       setDispersedRouteBuildStatus(null);
       setDispersedRouteBuildRenderKey((key) => key + 1);
     };
@@ -15652,6 +15860,19 @@ const toggleRemotenessOverlay = useCallback(() => {
   presentRemotenessLegendDisclosure(next ? 'on' : 'off');
 }, [presentRemotenessLegendDisclosure, remotenessOverlayAvailable, showRemotenessOverlay, showToast]);
 
+  const toggleRouteGeometryOverlay = useCallback(() => {
+    hapticMicro();
+    const next = !routeGeometryOverlayEnabled;
+    setRouteGeometryOverlayEnabled(next);
+    if (!next) return;
+
+    if (routeGeometryOverlayBuild.segments.length > 0) {
+      return;
+    }
+
+    showToast('NO ECS ROUTE GEOMETRY AVAILABLE');
+  }, [routeGeometryOverlayBuild.segments.length, routeGeometryOverlayEnabled, showToast]);
+
   const toggleExploreRoutesOverlay = useCallback(() => {
     hapticMicro();
     const next = !exploreRoutesEnabled;
@@ -15687,6 +15908,86 @@ const toggleRemotenessOverlay = useCallback(() => {
     hapticMicro();
     setSelectedExploreRouteSegmentId(String(match.id));
   }, [exploreRouteOverlaySegments, showToast]);
+
+  const handleRouteGeometrySegmentTap = useCallback((segment: SegmentSelectionPayload) => {
+    if (segment?.kind !== 'route_geometry_segment' || segment.id == null) return;
+
+    const segmentId = String(segment.id);
+    const match = routeGeometryOverlaySegments.find((item) => String(item.id) === segmentId);
+    if (!match) {
+      showToast('ROUTE GEOMETRY DETAILS UNAVAILABLE');
+      return;
+    }
+
+    hapticMicro();
+    if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) {
+      showToast('END ACTIVE NAVIGATION TO BUILD FROM ROUTE GEOMETRY');
+      return;
+    }
+
+    const alreadySelected = selectedRouteGeometrySegmentIds.includes(match.id);
+    const nextSegments = alreadySelected
+      ? routeBuilderSegments.filter((item) => item.sourceSegmentId !== match.id)
+      : [
+          ...routeBuilderSegments,
+          routeGeometrySegmentToRouteBuilderSegment(match) as RouteBuilderSegmentData,
+        ];
+    const previousEndpointSegment = [...nextSegments]
+      .reverse()
+      .find((item) => Array.isArray(item.coordinates) && item.coordinates.length > 1);
+
+    closeNavigateDetailSurfaces();
+    setToolsMenuOpen(false);
+    setActiveTopPopup(null);
+    setPinDropMode(false);
+    setCampsiteDrawMode(false);
+    setShowCrosshair(false);
+    setFollowUser(false);
+    setUserHasManuallyMovedMap(true);
+    setRouteBuilderActive(true);
+    setRouteBuilderDrawing(false);
+    setDispersedRouteBuildActive(false);
+    setDispersedRouteBuildStatus(null);
+    setRouteBuilderSegments(nextSegments);
+    setSelectedRouteGeometrySegmentIds((current) =>
+      alreadySelected
+        ? current.filter((id) => id !== match.id)
+        : current.includes(match.id)
+          ? current
+          : [...current, match.id],
+    );
+    setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);
+    setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
+    setRouteBuilderSnapMessage(
+      alreadySelected
+        ? 'ECS route geometry segment removed.'
+        : ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
+    );
+    showToast(
+      alreadySelected
+        ? 'ECS ROUTE GEOMETRY SEGMENT REMOVED'
+        : `ECS ROUTE GEOMETRY ADDED: ${match.sourceLabel}`.toUpperCase(),
+    );
+  }, [
+    closeNavigateDetailSurfaces,
+    pendingHybridTrailTransition,
+    roadNavigationActive,
+    routeBuilderSegments,
+    routeGeometryOverlaySegments,
+    selectedRouteGeometrySegmentIds,
+    showToast,
+    trailNavigationActive,
+  ]);
+
+  const handleMapSegmentTap = useCallback((segment: SegmentSelectionPayload) => {
+    if (segment?.kind === 'route_geometry_segment') {
+      handleRouteGeometrySegmentTap(segment);
+      return;
+    }
+    if (segment?.kind === 'explore_route') {
+      handleExploreRouteSegmentTap(segment);
+    }
+  }, [handleExploreRouteSegmentTap, handleRouteGeometrySegmentTap]);
 
   const handleBuildRouteFromExploreOverlay = useCallback(async () => {
     if (!selectedExploreRouteNavigationPayload) return;
@@ -16433,7 +16734,7 @@ const stableMapSurface = useMemo(() => {
         showCrosshair={showCrosshair}
         onLongPress={handleLongPress}
         onPinTap={handlePinTap}
-        onSegmentTap={handleExploreRouteSegmentTap}
+        onSegmentTap={handleMapSegmentTap}
         onCampIntelTap={handleCampIntelTap}
         onCampScoutTap={handleCampScoutTap}
         onCampEndpointTap={handleCampScoutTap}
@@ -16473,6 +16774,7 @@ const stableMapSurface = useMemo(() => {
         routeBuilderActive={routeBuilderActive}
         routeBuilderSegments={routeBuilderSegments}
         routeBuilderColor="#65F0D4"
+        selectedRouteGeometrySegmentIds={selectedRouteGeometrySegmentIds}
         onRouteBuilderUpdate={handleRouteBuilderUpdate}
         onRouteBuilderGestureStateChange={handleRouteBuilderGestureStateChange}
         remoteOverlay={remotenessMapOverlay}
@@ -17273,6 +17575,31 @@ const stableMapSurface = useMemo(() => {
                 style={[
                   styles.quickActionsTrigger,
                   { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
+                  routeGeometryOverlayEnabled && styles.quickActionsTriggerActive,
+                ]}
+                onPress={toggleRouteGeometryOverlay}
+                activeOpacity={0.85}
+                hitSlop={EDGE_CONTROL_HIT_SLOP}
+                accessibilityRole="switch"
+                accessibilityState={{
+                  checked: routeGeometryOverlayEnabled,
+                }}
+                accessibilityLabel="Route geometry overlay"
+                accessibilityHint="Toggles ECS-owned route, trail, leg, and segment geometry for Build Route selection."
+              >
+                <Ionicons
+                  name="git-branch-outline"
+                  size={17}
+                  color={routeGeometryOverlayEnabled ? '#091014' : '#65D4FF'}
+                />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
+              <TouchableOpacity
+                style={[
+                  styles.quickActionsTrigger,
+                  { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
                   showRemotenessOverlay && styles.quickActionsTriggerActive,
                   !showRemotenessOverlay &&
                     !remotenessOverlayAvailable &&
@@ -17471,7 +17798,11 @@ const stableMapSurface = useMemo(() => {
             <View style={styles.routeBuilderStatusHeader}>
               <View style={styles.routeBuilderStatusTextWrap}>
                 <Text style={styles.routeBuilderStatusTitle}>
-                  {routeBuilderDrawing ? 'DRAWING ROUTE' : 'DRAW ROUTE'}
+                  {selectedRouteGeometrySegmentIds.length > 0
+                    ? 'ROUTE GEOMETRY'
+                    : routeBuilderDrawing
+                      ? 'DRAWING ROUTE'
+                      : 'DRAW ROUTE'}
                 </Text>
                 <Text style={styles.routeBuilderStatusHint} numberOfLines={1}>
                   {routeBuilderSnapSource === 'snapping'
@@ -17482,6 +17813,8 @@ const stableMapSurface = useMemo(() => {
                       ? routeBuilderSnapMessage ?? 'Unverified segment - undo and redraw'
                     : dispersedRouteBuildActive && dispersedRouteBuildStatus
                       ? dispersedRouteBuildStatus
+                    : selectedRouteGeometrySegmentIds.length > 0
+                      ? `${selectedRouteGeometrySegmentIds.length} ECS geometry segments selected - planning/reference geometry`
                     : routeBuilderSnapStatus === 'raw_smoothed' || routeBuilderSnapStatus === 'ambiguous'
                       ? routeBuilderSnapMessage ?? 'Raw kept - undo and retry if needed'
                       : routeBuilderSnapStatus === 'too_short'
@@ -17572,6 +17905,23 @@ const stableMapSurface = useMemo(() => {
                   ROUTE TO
                 </Text>
               </TouchableOpacity>
+              {selectedRouteGeometrySegmentIds.length > 0 ? (
+                <TouchableOpacity
+                  style={[
+                    styles.routeBuilderStatusAction,
+                    !routeBuilderCanPlanGeometry && styles.routeBuilderStatusActionDisabled,
+                  ]}
+                  onPress={() => {
+                    void handlePlanRouteBuilderDraft();
+                  }}
+                  disabled={!routeBuilderCanPlanGeometry}
+                  activeOpacity={0.82}
+                  accessibilityRole="button"
+                  accessibilityLabel="Plan Build Route in Trip Builder"
+                >
+                  <Text style={[styles.routeBuilderStatusActionText, !routeBuilderCanPlanGeometry && styles.routeBuilderStatusActionTextDisabled]}>PLAN</Text>
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity
                 style={[styles.routeBuilderStatusAction, styles.routeBuilderStatusCancel]}
                 onPress={cancelRouteBuilder}
@@ -17622,7 +17972,7 @@ const stableMapSurface = useMemo(() => {
   showCrosshair,
   handleLongPress,
   handlePinTap,
-  handleExploreRouteSegmentTap,
+  handleMapSegmentTap,
   handleCampIntelTap,
   handleCampScoutTap,
   handleDirectMapTapForPin,
@@ -17789,6 +18139,7 @@ const stableMapSurface = useMemo(() => {
   trailNavigationActive,
   routeBuilderActive,
   routeBuilderDrawing,
+  selectedRouteGeometrySegmentIds,
   routeBuilderPointCount,
   routeBuilderSegments,
   routeBuilderSnapSource,
@@ -17801,13 +18152,17 @@ const stableMapSurface = useMemo(() => {
   routeBuilderHasBlockedSnap,
   routeDesignContext,
   routeBuilderCanSave,
+  routeBuilderCanPlanGeometry,
   routeBuilderCanUndo,
   finishRouteBuilder,
   routeToRouteBuilder,
+  handlePlanRouteBuilderDraft,
   undoLastRouteBuilderSegment,
   clearRouteBuilderDraft,
   cancelRouteBuilder,
   toolsMenuOpen,
+  routeGeometryOverlayEnabled,
+  toggleRouteGeometryOverlay,
   showRemotenessOverlay,
   remotenessOverlayAvailable,
   toggleRemotenessOverlay,
@@ -18626,6 +18981,36 @@ const stableMapSurface = useMemo(() => {
         </Animated.View>
       ) : null}
     </Animated.View>
+  ) : null}
+
+  {routeGeometryOverlayEnabled && isMapUIReady ? (
+    <View
+      pointerEvents="none"
+      style={[
+        styles.routeGeometryOverlayLegend,
+        {
+          left: OVERLAY_EDGE,
+          bottom: bottomLeftMapOverlayStackBottom + (exploreRoutesEnabled ? 42 + OVERLAY_GAP : 0),
+        },
+      ]}
+    >
+      <View style={styles.routeGeometryOverlayLegendHeader}>
+        <Ionicons name="git-branch-outline" size={12} color="#65D4FF" />
+        <Text style={styles.routeGeometryOverlayLegendTitle}>ECS ROUTE GEOMETRY</Text>
+      </View>
+      <Text style={styles.routeGeometryOverlayLegendText} numberOfLines={2}>
+        {routeGeometryOverlayBuild.segments.length} loaded from {routeGeometryOverlaySourceSummary}.
+        {routeGeometryOverlayBuild.skippedMissingGeometryCount > 0
+          ? ` ${routeGeometryOverlayBuild.skippedMissingGeometryCount} skipped.`
+          : ''}
+        {routeGeometryOverlayBuild.cappedCount > 0
+          ? ` ${routeGeometryOverlayBuild.cappedCount} capped.`
+          : ''}
+      </Text>
+      <Text style={styles.routeGeometryOverlayLegendWarning} numberOfLines={2}>
+        ECS geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.
+      </Text>
+    </View>
   ) : null}
 
   {exploreRoutesEnabled && isMapUIReady ? (
@@ -21200,6 +21585,52 @@ exploreRoutesClearText: {
   fontSize: 8,
   fontWeight: '900',
   letterSpacing: 0.75,
+},
+
+routeGeometryOverlayLegend: {
+  position: 'absolute',
+  width: 258,
+  maxWidth: SCREEN_W - 28,
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: 'rgba(101,212,255,0.34)',
+  backgroundColor: 'rgba(7,12,16,0.90)',
+  paddingHorizontal: 10,
+  paddingVertical: 8,
+  gap: 4,
+  zIndex: NAV_OVERLAY_Z.contextual,
+  elevation: NAV_OVERLAY_Z.contextual,
+  shadowColor: '#65D4FF',
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.16,
+  shadowRadius: 10,
+},
+
+routeGeometryOverlayLegendHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+},
+
+routeGeometryOverlayLegendTitle: {
+  ...TYPO.U2,
+  color: '#65D4FF',
+  fontSize: 8,
+  letterSpacing: 1,
+},
+
+routeGeometryOverlayLegendText: {
+  ...TYPO.B2,
+  color: TACTICAL.text,
+  fontSize: 8.5,
+  lineHeight: 11.5,
+},
+
+routeGeometryOverlayLegendWarning: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 7.8,
+  lineHeight: 10.5,
 },
 
 exploreRouteModalFooterBtn: {

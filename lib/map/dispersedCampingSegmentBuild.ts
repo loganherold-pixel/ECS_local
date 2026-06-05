@@ -4,11 +4,14 @@ export const DISPERSED_ROUTE_LEG_PLANNING_WARNING =
 export type DispersedRouteLegConfidence = 'planning_geometry' | 'official_shadow' | 'unknown';
 
 export type RouteSegmentSourceMetadata = {
-  kind: 'dispersed_route_leg' | 'freehand_trace' | 'snapped_trace';
+  kind: 'dispersed_route_leg' | 'freehand_trace' | 'snapped_trace' | 'ecs_route_geometry';
   sourceLabel: string;
   confidence: DispersedRouteLegConfidence;
   regionIds?: string[];
   landManager?: string | null;
+  routeGeometrySourceKind?: string | null;
+  dataState?: string | null;
+  warnings?: string[];
 };
 
 export type DispersedRouteLegSegment = {
@@ -60,7 +63,7 @@ export type DispersedRouteBuilderSegmentData = {
   snapConfidence?: 'high' | 'medium' | 'low' | null;
   snapSource?: string | null;
   snapStatus?: 'snapped' | 'raw_smoothed' | 'too_short' | 'ambiguous' | 'failed' | 'network_pending' | 'blocked' | null;
-  snapProvider?: 'rendered_features' | 'mapbox_map_matching' | null;
+  snapProvider?: 'rendered_features' | 'mapbox_map_matching' | 'ecs_route_geometry' | null;
   snapProfile?: 'driving' | null;
   snapMessage?: string | null;
   sourceSegmentId?: string | null;

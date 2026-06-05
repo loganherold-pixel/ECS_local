@@ -11,6 +11,7 @@ export type RouteBuilderSnapStatus =
 export type RouteBuilderSnapProvider =
   | 'rendered_features'
   | 'mapbox_map_matching'
+  | 'ecs_route_geometry'
   | null;
 
 export type RouteBuilderSnapProfile = 'driving' | null;
@@ -31,7 +32,7 @@ export type FinalizableRouteBuilderSegment = {
   snapProfile?: RouteBuilderSnapProfile;
   snapMessage?: string | null;
   sourceSegmentId?: string | null;
-  buildSource?: { kind?: string | null; sourceLabel?: string | null } | null;
+  buildSource?: { kind?: string | null; sourceLabel?: string | null; confidence?: string | null } | null;
 };
 
 export type MapboxMapMatchingCandidate = {
@@ -169,6 +170,7 @@ function cloneSegmentWith(
 }
 
 function localSnapIsAcceptable(segment: FinalizableRouteBuilderSegment): boolean {
+  if (segment.snapProvider === 'ecs_route_geometry') return true;
   const confidence = segment.snapConfidence ?? null;
   const source = String(segment.snapSource ?? '').toLowerCase();
   const snappedLine = normalizeRouteBuilderLine(segment.snappedSegment?.length ? segment.snappedSegment : segment.coordinates);
@@ -193,6 +195,7 @@ export function routeBuilderSegmentMetadataSourceLabel(
   segment: Pick<FinalizableRouteBuilderSegment, 'snapProvider' | 'snapSource' | 'snapProfile' | 'buildSource'>,
 ): string {
   if (segment.buildSource?.sourceLabel) return segment.buildSource.sourceLabel;
+  if (segment.snapProvider === 'ecs_route_geometry') return 'ecs_route_geometry';
   if (segment.snapProvider === 'mapbox_map_matching') return 'mapbox_map_matching_driving';
   return localRenderedSourceLabel(segment.snapSource);
 }
@@ -202,6 +205,9 @@ export function isVerifiedRouteBuilderSegment(segment: FinalizableRouteBuilderSe
   if (line.length < 2) return false;
   if (segment.buildSource?.kind === 'dispersed_route_leg' && segment.snapStatus === 'snapped') {
     return true;
+  }
+  if (segment.buildSource?.kind === 'ecs_route_geometry' && segment.snapStatus === 'snapped') {
+    return segment.snapProvider === 'ecs_route_geometry' && localSnapIsAcceptable(segment);
   }
   if (segment.snapStatus !== 'snapped') return false;
   if (segment.snapProvider === 'mapbox_map_matching' && segment.snapProfile === 'driving') return true;
@@ -305,6 +311,7 @@ export function finalizeRouteBuilderSegmentSnap(input: FinalSnapInput): FinalSna
     const localLine = normalizeRouteBuilderLine(
       input.segment.snappedSegment?.length ? input.segment.snappedSegment : input.segment.coordinates,
     );
+    const provider = input.segment.snapProvider === 'ecs_route_geometry' ? 'ecs_route_geometry' : 'rendered_features';
     return {
       accepted: true,
       reason: 'snapped',
@@ -312,10 +319,14 @@ export function finalizeRouteBuilderSegmentSnap(input: FinalSnapInput): FinalSna
         coordinates: localLine,
         rawSegment: rawLine,
         snappedSegment: localLine,
-        snapProvider: 'rendered_features',
+        snapProvider: provider,
         snapProfile: null,
         snapStatus: 'snapped',
-        snapMessage: input.segment.snapMessage ?? 'Verified against rendered routeable map geometry.',
+        snapMessage:
+          input.segment.snapMessage ??
+          (provider === 'ecs_route_geometry'
+            ? 'Verified against ECS-owned route geometry.'
+            : 'Verified against rendered routeable map geometry.'),
       }),
     };
   }

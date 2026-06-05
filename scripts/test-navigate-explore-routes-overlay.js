@@ -40,7 +40,8 @@ assert(
   'MapRenderer must receive merged map segments so Explore Routes can render as line overlays.',
 );
 assert(
-  navigate.includes('onSegmentTap={handleExploreRouteSegmentTap}') &&
+  navigate.includes('onSegmentTap={handleMapSegmentTap}') &&
+    /const handleMapSegmentTap[\s\S]*?segment\?\.kind === 'explore_route'[\s\S]*?handleExploreRouteSegmentTap\(segment\)/.test(navigate) &&
     navigate.includes('<ExpeditionAnalysisModal') &&
     navigate.includes('selectedExploreRouteOpportunity') &&
     navigate.includes('handleBuildRouteFromExploreOverlay') &&
@@ -49,7 +50,8 @@ assert(
   'Navigate must open the shared Expedition Analysis modal when an Explore route line is tapped.',
 );
 assert(
-  navigate.includes('[...(displayedSegmentFeatures ?? []), ...exploreRouteOverlaySegments]'),
+  navigate.includes('[...(displayedSegmentFeatures ?? []), ...exploreRouteOverlaySegments, ...routeGeometryOverlaySegments]') ||
+    navigate.includes('[...(displayedSegmentFeatures ?? []), ...exploreRouteOverlaySegments]'),
   'Explore Routes must merge with existing segment overlays without replacing them.',
 );
 assert(
