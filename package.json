@@ -415,6 +415,7 @@
     "test:navigate-road-preview-layout": "node ./scripts/test-navigate-road-preview-layout.js",
     "test:map-route-rendering-overlays": "node ./scripts/test-map-route-rendering-overlays.js",
     "test:navigate-weather-integration": "node ./scripts/test-navigate-weather-integration.js",
+    "test:pin-drawer-gpx-import": "node ./scripts/test-pin-drawer-gpx-import.js",
     "test:active-guidance-pill-label-fit": "node ./scripts/test-active-guidance-pill-label-fit.js",
     "test:route-lifecycle-model": "node ./scripts/test-route-lifecycle-model.js",
     "test:route-state-stabilization": "node ./scripts/test-route-state-stabilization.js",

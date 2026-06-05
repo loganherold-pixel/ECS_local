@@ -252,6 +252,7 @@ import {
 } from '../../lib/bailoutStore';
 
 import { pinStore } from '../../lib/pinStore';
+import { parseGpxPinWaypoints } from '../../lib/pinGpxImport';
 import { missionExpeditionStore } from '../../lib/missionStore';
 import {
   trailStore,
@@ -3483,6 +3484,7 @@ const queueMapCameraCommand = useCallback((
 
   // -- Phase 3.0: Pin category filter state ------------------
   const [activePinTypeFilters, setActivePinTypeFilters] = useState<PinType[]>([]);
+  const [pinGpxImporting, setPinGpxImporting] = useState(false);
 
   const handlePinTypeFilterToggle = useCallback((type: PinType) => {
     setActivePinTypeFilters(prev =>
@@ -8337,6 +8339,141 @@ const handleQuickPinDrop = useCallback(() => {
     setExportPins(pins);
     setExportModalVisible(true);
   }, [closeTopPopup]);
+
+  const handleImportPinGpx = useCallback(async () => {
+    if (pinGpxImporting) return;
+
+    hapticCommand();
+    setPinGpxImporting(true);
+
+    const finishImport = () => {
+      setPinGpxImporting(false);
+    };
+
+    const validatePinGpxFileName = (fileName: string): boolean => {
+      const ext = fileName.split('.').pop()?.toLowerCase() || '';
+      return ext === 'gpx' || ext === 'xml';
+    };
+
+    const importPinContent = async (content: string, fileName: string) => {
+      if (!validatePinGpxFileName(fileName)) {
+        showToast('PIN IMPORT FAILED - USE GPX WAYPOINT FILE');
+        return;
+      }
+
+      if (!content || content.trim().length === 0) {
+        showToast('PIN IMPORT FAILED - FILE EMPTY');
+        return;
+      }
+
+      try {
+        const parsed = parseGpxPinWaypoints(fileName, content);
+        if (parsed.pins.length === 0) {
+          showToast(
+            parsed.routeCount > 0 || parsed.trackCount > 0
+              ? 'NO GPX WAYPOINT PINS FOUND - ROUTES/TRACKS IGNORED'
+              : 'NO GPX WAYPOINT PINS FOUND',
+          );
+          return;
+        }
+
+        for (const importedPin of parsed.pins) {
+          pinStore.create({
+            type: importedPin.type,
+            lat: importedPin.lat,
+            lng: importedPin.lng,
+            title: importedPin.title,
+            notes: importedPin.notes,
+            expedition_id: activeExpeditionId,
+            severity: importedPin.severity,
+            created_by: user?.email || 'local',
+          });
+        }
+
+        handlePinTypeFilterReset();
+        loadPins();
+
+        const ignoredGeometry =
+          parsed.ignoredRoutePointCount > 0 || parsed.ignoredTrackPointCount > 0;
+        showToast(
+          ignoredGeometry
+            ? `IMPORTED ${parsed.pins.length} GPX PIN${parsed.pins.length === 1 ? '' : 'S'} - ROUTES/TRACKS IGNORED`
+            : `IMPORTED ${parsed.pins.length} GPX PIN${parsed.pins.length === 1 ? '' : 'S'}`,
+        );
+      } catch (error: any) {
+        console.warn('[Navigate] Pin GPX import failed:', error);
+        showToast(error?.message || 'PIN GPX IMPORT FAILED');
+      }
+    };
+
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.gpx,.xml,application/gpx+xml,text/xml,application/xml';
+
+      input.onchange = async (event: any) => {
+        const file = event.target?.files?.[0];
+        if (!file) {
+          finishImport();
+          return;
+        }
+
+        try {
+          const text = await file.text();
+          await importPinContent(text, file.name || 'imported-pins.gpx');
+        } catch (error: any) {
+          console.warn('[Navigate] Pin GPX file read failed:', error);
+          showToast(error?.message || 'PIN GPX IMPORT FAILED');
+        } finally {
+          finishImport();
+        }
+      };
+
+      (input as any).oncancel = finishImport;
+      input.click();
+      return;
+    }
+
+    try {
+      const DocumentPicker = await import('expo-document-picker');
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/gpx+xml', 'text/xml', 'application/xml', 'text/plain', '*/*'],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const fileName = asset.name || 'imported-pins.gpx';
+      const fileUri = asset.uri;
+      if (!fileUri) {
+        showToast('PIN IMPORT FAILED - FILE UNAVAILABLE');
+        return;
+      }
+
+      const content = await fsReadFileFromPickerUri(fileUri);
+      if (!content) {
+        showToast('PIN IMPORT FAILED - FILE EMPTY');
+        return;
+      }
+      await importPinContent(content, fileName);
+    } catch (error: any) {
+      console.warn('[Navigate] Pin GPX picker failed:', error);
+      showToast(error?.message || 'PIN GPX IMPORT FAILED');
+    } finally {
+      finishImport();
+    }
+  }, [
+    activeExpeditionId,
+    handlePinTypeFilterReset,
+    loadPins,
+    pinGpxImporting,
+    showToast,
+    user?.email,
+  ]);
 
   const handleExportAction = useCallback((format: 'gpx' | 'json' | 'coords') => {
     let content = '';
@@ -20500,6 +20637,8 @@ const stableMapSurface = useMemo(() => {
       onEditPin={handleEditPin}
       onResolvePin={handleResolvePin}
       onExport={handleExportPins}
+      onImportPins={handleImportPinGpx}
+      importingPins={pinGpxImporting}
       onRefresh={loadPins}
       onClearAllPins={handleClearAllPins}
       activePinTypeFilters={activePinTypeFilters}

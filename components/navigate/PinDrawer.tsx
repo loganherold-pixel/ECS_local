@@ -1,9 +1,7 @@
 /**
  * PinDrawer — Collapsible pin list panel with filters
  *
- * Provides search, category/type filters, sort modes, and pin cards.
- * Phase 3.0: Includes PinCategoryFilterBar for horizontal scrollable
- * category filter chips that filter both the pin list AND map markers.
+ * Provides search, popup-scoped filters, sort modes, import/export, and pin cards.
  * Does NOT block bottom menu. Renders inline in ScrollView.
  */
 import React, { useState, useMemo, useCallback } from 'react';
@@ -25,7 +23,6 @@ import {
   PIN_TYPE_REGISTRY, getPinTypeMeta,
   SEVERITY_COLORS, SEVERITY_LABELS,
 } from './PinTypes';
-import PinCategoryFilterBar from './PinCategoryFilterBar';
 
 interface Props {
   /** Pins already filtered by the parent's category filter (for the list) */
@@ -38,6 +35,8 @@ interface Props {
   onEditPin: (pin: ECSPin) => void;
   onResolvePin: (pin: ECSPin) => void;
   onExport: (pins: ECSPin[]) => void;
+  onImportPins?: () => void;
+  importingPins?: boolean;
   onRefresh: () => void;
   onClearAllPins?: () => void;
   /** Category filter state from parent (controls both drawer + map) */
@@ -49,25 +48,23 @@ interface Props {
 export default function PinDrawer({
   pins, allPins, userLocation, activeExpeditionId,
   onSelectPin, onEditPin, onResolvePin, onExport, onRefresh,
-  onClearAllPins,
+  onImportPins, importingPins = false, onClearAllPins,
   activePinTypeFilters, onPinTypeFilterToggle, onPinTypeFilterReset,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [search, setSearch] = useState('');
   const [showWaypoints, setShowWaypoints] = useState(true);
   const [showIncidents, setShowIncidents] = useState(true);
-  const [activeTypeFilters, setActiveTypeFilters] = useState<PinType[]>([]);
   const [expeditionOnly, setExpeditionOnly] = useState(false);
   const [unresolvedOnly, setUnresolvedOnly] = useState(false);
   const [sortMode, setSortMode] = useState<PinSortMode>('recent');
   const [showFilters, setShowFilters] = useState(false);
 
-  // Filter + sort pins (applies internal filters on top of parent's category filter)
+  // Filter + sort pins on top of the shared map/list type filter supplied by the parent.
   const filteredPins = useMemo(() => {
     let result = pinStore.filter({
       showWaypoints,
       showIncidents,
-      types: activeTypeFilters.length > 0 ? activeTypeFilters : undefined,
       expeditionOnly: expeditionOnly && activeExpeditionId ? activeExpeditionId : undefined,
       unresolvedOnly,
       search,
@@ -76,13 +73,7 @@ export default function PinDrawer({
     const parentPinIds = new Set(pins.map(p => p.id));
     result = result.filter(p => parentPinIds.has(p.id));
     return pinStore.sort(result, sortMode, userLocation?.lat, userLocation?.lng);
-  }, [pins, search, showWaypoints, showIncidents, activeTypeFilters, expeditionOnly, unresolvedOnly, sortMode, activeExpeditionId, userLocation]);
-
-  const toggleTypeFilter = useCallback((type: PinType) => {
-    setActiveTypeFilters(prev =>
-      prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
-    );
-  }, []);
+  }, [pins, search, showWaypoints, showIncidents, expeditionOnly, unresolvedOnly, sortMode, activeExpeditionId, userLocation]);
 
   const waypointCount = pins.filter(p => p.category === 'waypoint').length;
   const incidentCount = pins.filter(p => p.category === 'incident').length;
@@ -92,7 +83,6 @@ export default function PinDrawer({
   const filterCount = activePinTypeFilters.length;
   const hasSearchQuery = search.trim().length > 0;
   const hasLocalFilters =
-    activeTypeFilters.length > 0 ||
     expeditionOnly ||
     unresolvedOnly ||
     !showWaypoints ||
@@ -101,7 +91,6 @@ export default function PinDrawer({
 
   const handleResetListState = useCallback(() => {
     setSearch('');
-    setActiveTypeFilters([]);
     setShowWaypoints(true);
     setShowIncidents(true);
     setExpeditionOnly(false);
@@ -138,12 +127,10 @@ export default function PinDrawer({
     ];
     if (hasSearchQuery) summary.push({ label: `Search "${search.trim()}"`, selected: true });
     if (filterCount > 0) summary.push({ label: `${filterCount} Categor${filterCount === 1 ? 'y' : 'ies'}`, selected: true });
-    if (activeTypeFilters.length > 0) summary.push({ label: `${activeTypeFilters.length} Type${activeTypeFilters.length === 1 ? '' : 's'}`, selected: true });
     if (unresolvedOnly) summary.push({ label: 'Unresolved Only', selected: true });
     if (expeditionOnly) summary.push({ label: 'Active Expedition', selected: true });
     return summary;
   }, [
-    activeTypeFilters.length,
     expeditionOnly,
     filterCount,
     filteredPins.length,
@@ -184,14 +171,6 @@ export default function PinDrawer({
 
       {expanded && (
         <View style={styles.drawerBody}>
-          {/* ═══════════ CATEGORY FILTER BAR ═══════════ */}
-          <PinCategoryFilterBar
-            allPins={allPins}
-            activeFilters={activePinTypeFilters}
-            onToggleFilter={onPinTypeFilterToggle}
-            onResetFilters={onPinTypeFilterReset}
-          />
-
           {/* Search */}
           <View style={styles.searchRow}>
             <ECSSearchField
@@ -205,13 +184,33 @@ export default function PinDrawer({
               style={[styles.filterToggle, showFilters && styles.filterToggleActive]}
               onPress={() => setShowFilters(!showFilters)}
               activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Open pin filters"
             >
               <Ionicons name="options-outline" size={14} color={showFilters ? TACTICAL.amber : TACTICAL.textMuted} />
             </TouchableOpacity>
+            {onImportPins ? (
+              <TouchableOpacity
+                style={[styles.filterToggle, importingPins && styles.filterToggleDisabled]}
+                onPress={onImportPins}
+                disabled={importingPins}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Import GPX pin waypoints"
+              >
+                <Ionicons
+                  name={importingPins ? 'sync-outline' : 'cloud-upload-outline'}
+                  size={14}
+                  color={importingPins ? TACTICAL.amber : TACTICAL.textMuted}
+                />
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity
               style={styles.filterToggle}
               onPress={() => onExport(filteredPins)}
               activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Export visible pins"
             >
               <Ionicons name="share-outline" size={14} color={TACTICAL.textMuted} />
             </TouchableOpacity>
@@ -251,14 +250,33 @@ export default function PinDrawer({
 
               {/* Type chips */}
               <View style={styles.typeChipRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.typeChip,
+                    activePinTypeFilters.length === 0 && styles.typeChipAllActive,
+                  ]}
+                  onPress={onPinTypeFilterReset}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Show all pins"
+                >
+                  <Text
+                    style={[
+                      styles.typeChipText,
+                      activePinTypeFilters.length === 0 && { color: TACTICAL.amber },
+                    ]}
+                  >ALL</Text>
+                </TouchableOpacity>
                 {PIN_TYPE_REGISTRY.map(meta => {
-                  const active = activeTypeFilters.includes(meta.type);
+                  const active = activePinTypeFilters.includes(meta.type);
                   return (
                     <TouchableOpacity
                       key={meta.type}
                       style={[styles.typeChip, active && { borderColor: meta.color, backgroundColor: meta.bgColor }]}
-                      onPress={() => toggleTypeFilter(meta.type)}
+                      onPress={() => onPinTypeFilterToggle(meta.type)}
                       activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Filter pins by ${meta.label}`}
                     >
                       <Text style={[styles.typeChipText, active && { color: meta.color }]}>
                         {meta.shortLabel}
@@ -489,6 +507,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: TACTICAL.border,
   },
   filterToggleActive: { borderColor: TACTICAL.amber + '50', backgroundColor: 'rgba(196,138,44,0.08)' },
+  filterToggleDisabled: { opacity: 0.6 },
 
   filtersSection: { paddingHorizontal: 10, gap: 8, paddingBottom: 8, borderBottomWidth: 0.5, borderBottomColor: TACTICAL.border },
   filterRow: { flexDirection: 'row', gap: 6 },
@@ -505,6 +524,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8, paddingVertical: 5, borderRadius: 6,
     borderWidth: 1, borderColor: TACTICAL.border,
   },
+  typeChipAllActive: { borderColor: TACTICAL.amber + '50', backgroundColor: 'rgba(196,138,44,0.08)' },
   typeChipText: { ...TYPO.U2, fontSize: 7, color: TACTICAL.textMuted, letterSpacing: 2 },
 
   sortRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
