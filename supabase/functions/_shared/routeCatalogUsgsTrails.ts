@@ -264,6 +264,12 @@ export type UsgsTrailsBbox = {
   ymax: number;
 };
 
+export type UsgsTrailsBboxPreset = {
+  key: string;
+  label: string;
+  bbox: UsgsTrailsBbox;
+};
+
 export function normalizeUsgsTrailsBbox(value: unknown): UsgsTrailsBbox | null {
   const source = Array.isArray(value)
     ? { xmin: value[0], ymin: value[1], xmax: value[2], ymax: value[3] }
@@ -290,6 +296,23 @@ export function normalizeUsgsTrailsBbox(value: unknown): UsgsTrailsBbox | null {
     return null;
   }
   return { xmin, ymin, xmax, ymax };
+}
+
+export function normalizeUsgsTrailsBboxes(value: unknown): UsgsTrailsBboxPreset[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = value
+    .map((entry, index) => {
+      const record = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
+      const bbox = normalizeUsgsTrailsBbox(record.bbox ?? record);
+      if (!bbox) return null;
+      return {
+        key: cleanString(record.key) || `bbox_${index + 1}`,
+        label: cleanString(record.label) || cleanString(record.key) || `USGS Trails bbox ${index + 1}`,
+        bbox,
+      };
+    })
+    .filter((entry): entry is UsgsTrailsBboxPreset => !!entry);
+  return normalized.length > 0 ? normalized : null;
 }
 
 export function normalizeUsgsTrailsFeatureCollection(payload: unknown): UsgsTrailsArcGisFeature[] {

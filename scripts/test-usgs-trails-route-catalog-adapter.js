@@ -25,6 +25,7 @@ const {
   USGS_TRAILS_SOURCE,
   arcGisFeatureToUsgsTrailsRouteUpsert,
   buildUsgsTrailsWhereClause,
+  normalizeUsgsTrailsBboxes,
   normalizeUsgsTrailsFeatureCollection,
   usgsTrailsSourceUpsert,
 } = require(path.join(root, 'supabase', 'functions', '_shared', 'routeCatalogUsgsTrails.ts'));
@@ -39,6 +40,15 @@ assert(where.includes("motorcycle = 'Y'"));
 assert(where.includes("ohvover50inches = 'Y'"));
 assert(where.includes("ohvisorunder50inches = 'Y'"));
 assert(where.includes('lengthmiles >= 1'));
+
+const normalizedBboxes = normalizeUsgsTrailsBboxes([
+  { key: 'sierra_nevada', label: 'Sierra Nevada mountain context', xmin: -123.2, ymin: 38.2, xmax: -118.6, ymax: 41.8 },
+  { key: 'mojave_death_valley_desert', label: 'Mojave and Death Valley desert context', west: -118.4, south: 34.5, east: -114.6, north: 37.6 },
+]);
+assert.strictEqual(normalizedBboxes.length, 2);
+assert.strictEqual(normalizedBboxes[0].key, 'sierra_nevada');
+assert.strictEqual(normalizedBboxes[1].bbox.xmin, -118.4);
+assert.strictEqual(normalizeUsgsTrailsBboxes(null), null);
 
 const sourceUpsert = usgsTrailsSourceUpsert('2026-06-01T00:00:00.000Z');
 assert.strictEqual(sourceUpsert.provider_id, 'usgs_digital_trails');
@@ -160,6 +170,122 @@ const syncFunction = fs.readFileSync(syncFunctionPath, 'utf8');
 assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'USGS Trails sync should require the server-side route catalog sync token');
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('bbox'), 'USGS Trails sync should require bounded spatial sync input');
+assert(syncFunction.includes('normalizeUsgsTrailsBboxes'), 'USGS Trails sync should support bounded multi-bbox batches');
+assert(syncFunction.includes('limitPerBbox'), 'USGS Trails sync should bound each desert/mountain/wilderness-context bbox independently');
 assert(syncFunction.includes('publicRecommendationCount: 0'), 'USGS Trails sync should report zero public recommendations for supplemental geometry');
+
+const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-usgs-trails-sync.yml');
+assert(fs.existsSync(workflowPath), 'USGS Trails sync workflow should exist');
+const workflow = fs.readFileSync(workflowPath, 'utf8');
+assert(workflow.includes('bbox_batch'), 'USGS Trails workflow should expose a bounded bbox batch selector');
+assert(workflow.includes('desert_mountain_wilderness_context'), 'USGS Trails workflow should default to the broad terrain-context bbox batch');
+for (const key of [
+  'sierra_nevada',
+  'mojave_death_valley_desert',
+  'moab_canyonlands_desert',
+  'grand_canyon_arizona_strip',
+  'great_basin_mountains',
+  'san_juan_mountains',
+  'black_rock_high_rock_desert',
+  'pacific_northwest_cascades',
+  'oregon_high_desert',
+  'idaho_sawtooth_boise',
+  'montana_northern_rockies',
+  'wyoming_wind_river_absaroka',
+  'colorado_front_range_high_country',
+  'arizona_sky_islands_sonoran',
+  'new_mexico_gila_sacramento',
+  'ozark_ouachita_highlands',
+  'southern_appalachians',
+  'upper_great_lakes_northwoods',
+  'northern_new_england_appalachians',
+  'california_north_coast_klamath',
+  'southern_california_mountains_desert',
+  'nevada_central_basin_ranges',
+  'uinta_wasatch_mountains',
+  'yellowstone_teton_absaroka',
+  'dakota_badlands_missouri_breaks',
+  'southeast_piney_woods',
+  'florida_sandhills_swamps',
+  'adirondack_northern_new_york',
+  'pennsylvania_alleghenies',
+  'alaska_southcentral_mountains',
+  'hawaii_volcanic_highlands',
+  'appalachian_plateau_coalfields',
+  'olympic_peninsula_coast_ranges',
+  'washington_columbia_plateau',
+  'oregon_coast_range',
+  'arizona_mogollon_rim',
+  'wyoming_bighorn_powder',
+  'nebraska_sandhills_pine_ridge',
+  'missouri_ozark_highlands',
+  'central_appalachians_monongahela',
+  'new_jersey_pine_barrens',
+  'lower_michigan_state_forests',
+  'utah_dixie_bryce_plateaus',
+  'alaska_southeast_tongass',
+  'idaho_panhandle_selkirks',
+  'south_dakota_black_hills',
+  'georgia_alabama_piedmont',
+  'alabama_talladega_bankhead',
+  'mississippi_delta_hills',
+  'kentucky_cumberland_plateau',
+  'ohio_wayne_appalachian_foothills',
+  'alaska_kenai_chugach',
+  'arkansas_boston_ouachita',
+  'wisconsin_northwoods',
+  'minnesota_iron_range_arrowhead',
+  'north_carolina_pisgah_nantahala',
+  'oregon_blue_mountains',
+  'washington_okanogan_highlands',
+  'montana_prairie_breaks',
+  'wyoming_red_desert_south_pass',
+  'utah_west_desert_san_rafael',
+  'colorado_san_luis_sangre_de_cristo',
+  'tennessee_cumberland_highlands',
+  'virginia_blue_ridge',
+  'west_virginia_allegheny_plateau',
+  'new_hampshire_white_mountains',
+  'louisiana_kisatchie_piney_woods',
+  'north_dakota_badlands',
+  'oregon_klamath_siskiyou',
+  'california_central_sierra_inyo',
+  'idaho_eastern_targhee',
+  'wyoming_snowy_range_laramie',
+  'colorado_yampa_white_river',
+  'utah_la_sal_abajo_mountains',
+  'new_mexico_zuni_cibola',
+  'pennsylvania_poconos_endless_mountains',
+  'new_york_tug_hill_adirondack_west',
+  'new_mexico_sacramento_capitan',
+  'colorado_grand_mesa_uncompahgre',
+  'massachusetts_berkshires',
+  'california_mendocino_trinity',
+  'nevada_spring_sheep_ranges',
+  'arizona_prescott_bradshaw',
+  'montana_beartooth_crazies',
+  'montana_bitterroot_sapphire',
+  'wyoming_bighorn_mountains',
+  'south_carolina_upstate_blue_ridge',
+  'new_york_finger_lakes_southern_tier',
+  'delaware_maryland_coastal_plain',
+  'michigan_upper_peninsula_keweenaw',
+  'vermont_green_mountains',
+  'maine_northern_woods',
+  'oregon_umpqua_rogue_cascades',
+  'california_modoc_lassen_plateau',
+  'nevada_humboldt_ruby_ranges',
+  'arizona_kaibab_coconino_plateaus',
+  'new_mexico_jemez_chama',
+  'colorado_sawatch_gunnison',
+  'colorado_pikes_peak_south_park',
+  'utah_book_cliffs_bears_ears',
+  'idaho_clearwater_bitterroot',
+  'idaho_magic_valley_south_hills',
+  'montana_kootenai_cabinet',
+  'maryland_pennsylvania_ridge_valley',
+]) {
+  assert(workflow.includes(key), `USGS Trails workflow should include ${key} bbox preset`);
+}
 
 console.log('USGS Trails route catalog adapter checks passed');

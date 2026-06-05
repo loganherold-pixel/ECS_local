@@ -19,6 +19,8 @@ const expectedFunctionNames = [
   'route-catalog-sync-minnesota-ohv',
   'route-catalog-sync-oregon-odf-ohv',
   'route-catalog-sync-colorado-cpw-trails',
+  'route-catalog-sync-utah-trails',
+  'route-catalog-sync-arizona-trails',
   'route-catalog-sync-stitch-groups',
 ];
 

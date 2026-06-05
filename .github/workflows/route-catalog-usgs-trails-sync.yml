@@ -3,10 +3,122 @@ name: Route Catalog USGS Trails Sync
 on:
   workflow_dispatch:
     inputs:
-      bbox:
-        description: Bounded sync bbox as west,south,east,north.
+      bbox_batch:
+        description: Bounded USGS trail bbox batch to sync.
         required: false
-        default: '-123.2,38.2,-118.6,41.8'
+        default: desert_mountain_wilderness_context
+        type: choice
+        options:
+          - desert_mountain_wilderness_context
+          - sierra_nevada
+          - mojave_death_valley_desert
+          - moab_canyonlands_desert
+          - grand_canyon_arizona_strip
+          - great_basin_mountains
+          - san_juan_mountains
+          - black_rock_high_rock_desert
+          - pacific_northwest_cascades
+          - oregon_high_desert
+          - idaho_sawtooth_boise
+          - montana_northern_rockies
+          - wyoming_wind_river_absaroka
+          - colorado_front_range_high_country
+          - arizona_sky_islands_sonoran
+          - new_mexico_gila_sacramento
+          - ozark_ouachita_highlands
+          - southern_appalachians
+          - upper_great_lakes_northwoods
+          - northern_new_england_appalachians
+          - california_north_coast_klamath
+          - southern_california_mountains_desert
+          - nevada_central_basin_ranges
+          - uinta_wasatch_mountains
+          - yellowstone_teton_absaroka
+          - dakota_badlands_missouri_breaks
+          - southeast_piney_woods
+          - florida_sandhills_swamps
+          - adirondack_northern_new_york
+          - pennsylvania_alleghenies
+          - alaska_southcentral_mountains
+          - hawaii_volcanic_highlands
+          - appalachian_plateau_coalfields
+          - olympic_peninsula_coast_ranges
+          - washington_columbia_plateau
+          - oregon_coast_range
+          - arizona_mogollon_rim
+          - wyoming_bighorn_powder
+          - nebraska_sandhills_pine_ridge
+          - missouri_ozark_highlands
+          - central_appalachians_monongahela
+          - new_jersey_pine_barrens
+          - lower_michigan_state_forests
+          - utah_dixie_bryce_plateaus
+          - alaska_southeast_tongass
+          - idaho_panhandle_selkirks
+          - south_dakota_black_hills
+          - georgia_alabama_piedmont
+          - alabama_talladega_bankhead
+          - mississippi_delta_hills
+          - kentucky_cumberland_plateau
+          - ohio_wayne_appalachian_foothills
+          - alaska_kenai_chugach
+          - arkansas_boston_ouachita
+          - wisconsin_northwoods
+          - minnesota_iron_range_arrowhead
+          - north_carolina_pisgah_nantahala
+          - oregon_blue_mountains
+          - washington_okanogan_highlands
+          - montana_prairie_breaks
+          - wyoming_red_desert_south_pass
+          - utah_west_desert_san_rafael
+          - colorado_san_luis_sangre_de_cristo
+          - tennessee_cumberland_highlands
+          - virginia_blue_ridge
+          - west_virginia_allegheny_plateau
+          - new_hampshire_white_mountains
+          - louisiana_kisatchie_piney_woods
+          - north_dakota_badlands
+          - oregon_klamath_siskiyou
+          - california_central_sierra_inyo
+          - idaho_eastern_targhee
+          - wyoming_snowy_range_laramie
+          - colorado_yampa_white_river
+          - utah_la_sal_abajo_mountains
+          - new_mexico_zuni_cibola
+          - pennsylvania_poconos_endless_mountains
+          - new_york_tug_hill_adirondack_west
+          - new_mexico_sacramento_capitan
+          - colorado_grand_mesa_uncompahgre
+          - massachusetts_berkshires
+          - california_mendocino_trinity
+          - nevada_spring_sheep_ranges
+          - arizona_prescott_bradshaw
+          - montana_beartooth_crazies
+          - montana_bitterroot_sapphire
+          - wyoming_bighorn_mountains
+          - south_carolina_upstate_blue_ridge
+          - new_york_finger_lakes_southern_tier
+          - delaware_maryland_coastal_plain
+          - michigan_upper_peninsula_keweenaw
+          - vermont_green_mountains
+          - maine_northern_woods
+          - oregon_umpqua_rogue_cascades
+          - california_modoc_lassen_plateau
+          - nevada_humboldt_ruby_ranges
+          - arizona_kaibab_coconino_plateaus
+          - new_mexico_jemez_chama
+          - colorado_sawatch_gunnison
+          - colorado_pikes_peak_south_park
+          - utah_book_cliffs_bears_ears
+          - idaho_clearwater_bitterroot
+          - idaho_magic_valley_south_hills
+          - montana_kootenai_cabinet
+          - maryland_pennsylvania_ridge_valley
+          - custom_bbox
+      bbox:
+        description: Optional custom bounded sync bbox as west,south,east,north. Used when set.
+        required: false
+        default: ''
       min_miles:
         description: Minimum USGS trail segment miles to ingest.
         required: false
@@ -32,7 +144,8 @@ jobs:
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
-      BBOX: ${{ inputs.bbox || '-123.2,38.2,-118.6,41.8' }}
+      BBOX_BATCH: ${{ inputs.bbox_batch || 'desert_mountain_wilderness_context' }}
+      BBOX: ${{ inputs.bbox || '' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
       LIMIT: ${{ inputs.limit || '150' }}
 
@@ -57,29 +170,679 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
 
-          const bboxValues = String(process.env.BBOX || '')
-            .split(',')
-            .map((value) => Number(value.trim()));
+          const bboxBatch = String(process.env.BBOX_BATCH || 'desert_mountain_wilderness_context');
+          const customBbox = String(process.env.BBOX || '').trim();
           const minMiles = Number(process.env.MIN_MILES || 1);
           const limit = Number(process.env.LIMIT || 150);
 
-          if (bboxValues.length !== 4 || bboxValues.some((value) => !Number.isFinite(value))) {
-            throw new Error('bbox must be west,south,east,north.');
+          const bboxPresets = {
+            sierra_nevada: {
+              key: 'sierra_nevada',
+              label: 'Sierra Nevada mountain context',
+              bbox: { xmin: -123.2, ymin: 38.2, xmax: -118.6, ymax: 41.8 },
+            },
+            mojave_death_valley_desert: {
+              key: 'mojave_death_valley_desert',
+              label: 'Mojave and Death Valley desert context',
+              bbox: { xmin: -118.4, ymin: 34.5, xmax: -114.6, ymax: 37.6 },
+            },
+            moab_canyonlands_desert: {
+              key: 'moab_canyonlands_desert',
+              label: 'Moab and Canyonlands desert context',
+              bbox: { xmin: -110.7, ymin: 37.6, xmax: -108.9, ymax: 39.3 },
+            },
+            grand_canyon_arizona_strip: {
+              key: 'grand_canyon_arizona_strip',
+              label: 'Grand Canyon and Arizona Strip context',
+              bbox: { xmin: -114.7, ymin: 35.7, xmax: -111.7, ymax: 37.3 },
+            },
+            great_basin_mountains: {
+              key: 'great_basin_mountains',
+              label: 'Great Basin mountain context',
+              bbox: { xmin: -115.4, ymin: 38.4, xmax: -113.6, ymax: 39.8 },
+            },
+            san_juan_mountains: {
+              key: 'san_juan_mountains',
+              label: 'San Juan Mountains context',
+              bbox: { xmin: -108.5, ymin: 37.0, xmax: -106.4, ymax: 38.4 },
+            },
+            black_rock_high_rock_desert: {
+              key: 'black_rock_high_rock_desert',
+              label: 'Black Rock and High Rock desert context',
+              bbox: { xmin: -120.4, ymin: 40.3, xmax: -118.0, ymax: 42.2 },
+            },
+            pacific_northwest_cascades: {
+              key: 'pacific_northwest_cascades',
+              label: 'Pacific Northwest Cascades context',
+              bbox: { xmin: -122.8, ymin: 44.0, xmax: -121.0, ymax: 48.9 },
+            },
+            oregon_high_desert: {
+              key: 'oregon_high_desert',
+              label: 'Oregon high desert context',
+              bbox: { xmin: -121.7, ymin: 42.0, xmax: -117.0, ymax: 44.9 },
+            },
+            idaho_sawtooth_boise: {
+              key: 'idaho_sawtooth_boise',
+              label: 'Idaho Sawtooth and Boise Mountains context',
+              bbox: { xmin: -116.8, ymin: 43.3, xmax: -113.4, ymax: 45.7 },
+            },
+            montana_northern_rockies: {
+              key: 'montana_northern_rockies',
+              label: 'Montana northern Rockies context',
+              bbox: { xmin: -115.8, ymin: 45.3, xmax: -111.0, ymax: 49.0 },
+            },
+            wyoming_wind_river_absaroka: {
+              key: 'wyoming_wind_river_absaroka',
+              label: 'Wyoming Wind River and Absaroka context',
+              bbox: { xmin: -111.3, ymin: 42.5, xmax: -107.9, ymax: 44.9 },
+            },
+            colorado_front_range_high_country: {
+              key: 'colorado_front_range_high_country',
+              label: 'Colorado Front Range high country context',
+              bbox: { xmin: -106.7, ymin: 38.4, xmax: -104.5, ymax: 40.9 },
+            },
+            arizona_sky_islands_sonoran: {
+              key: 'arizona_sky_islands_sonoran',
+              label: 'Arizona Sky Islands and Sonoran desert context',
+              bbox: { xmin: -112.5, ymin: 31.3, xmax: -109.0, ymax: 34.2 },
+            },
+            new_mexico_gila_sacramento: {
+              key: 'new_mexico_gila_sacramento',
+              label: 'New Mexico Gila and Sacramento Mountains context',
+              bbox: { xmin: -109.2, ymin: 32.0, xmax: -105.0, ymax: 34.8 },
+            },
+            ozark_ouachita_highlands: {
+              key: 'ozark_ouachita_highlands',
+              label: 'Ozark and Ouachita Highlands context',
+              bbox: { xmin: -95.0, ymin: 34.0, xmax: -91.0, ymax: 37.5 },
+            },
+            southern_appalachians: {
+              key: 'southern_appalachians',
+              label: 'Southern Appalachians context',
+              bbox: { xmin: -84.9, ymin: 34.2, xmax: -80.7, ymax: 37.0 },
+            },
+            upper_great_lakes_northwoods: {
+              key: 'upper_great_lakes_northwoods',
+              label: 'Upper Great Lakes northwoods context',
+              bbox: { xmin: -92.8, ymin: 44.7, xmax: -84.0, ymax: 47.8 },
+            },
+            northern_new_england_appalachians: {
+              key: 'northern_new_england_appalachians',
+              label: 'Northern New England Appalachians context',
+              bbox: { xmin: -72.2, ymin: 43.8, xmax: -68.0, ymax: 46.8 },
+            },
+            california_north_coast_klamath: {
+              key: 'california_north_coast_klamath',
+              label: 'California North Coast and Klamath context',
+              bbox: { xmin: -124.5, ymin: 39.0, xmax: -121.5, ymax: 42.0 },
+            },
+            southern_california_mountains_desert: {
+              key: 'southern_california_mountains_desert',
+              label: 'Southern California mountains and desert context',
+              bbox: { xmin: -117.8, ymin: 32.5, xmax: -114.0, ymax: 35.5 },
+            },
+            nevada_central_basin_ranges: {
+              key: 'nevada_central_basin_ranges',
+              label: 'Nevada central basin and range context',
+              bbox: { xmin: -117.5, ymin: 37.5, xmax: -114.5, ymax: 40.0 },
+            },
+            uinta_wasatch_mountains: {
+              key: 'uinta_wasatch_mountains',
+              label: 'Uinta and Wasatch Mountains context',
+              bbox: { xmin: -112.4, ymin: 39.4, xmax: -109.0, ymax: 41.8 },
+            },
+            yellowstone_teton_absaroka: {
+              key: 'yellowstone_teton_absaroka',
+              label: 'Yellowstone, Teton, and Absaroka context',
+              bbox: { xmin: -111.0, ymin: 43.2, xmax: -108.8, ymax: 45.6 },
+            },
+            dakota_badlands_missouri_breaks: {
+              key: 'dakota_badlands_missouri_breaks',
+              label: 'Dakota badlands and Missouri breaks context',
+              bbox: { xmin: -104.5, ymin: 44.0, xmax: -101.0, ymax: 48.5 },
+            },
+            southeast_piney_woods: {
+              key: 'southeast_piney_woods',
+              label: 'Southeast piney woods context',
+              bbox: { xmin: -91.5, ymin: 30.0, xmax: -84.0, ymax: 33.8 },
+            },
+            florida_sandhills_swamps: {
+              key: 'florida_sandhills_swamps',
+              label: 'Florida sandhills and swamps context',
+              bbox: { xmin: -87.8, ymin: 24.5, xmax: -80.0, ymax: 31.2 },
+            },
+            adirondack_northern_new_york: {
+              key: 'adirondack_northern_new_york',
+              label: 'Adirondack and northern New York context',
+              bbox: { xmin: -75.8, ymin: 43.0, xmax: -73.0, ymax: 45.3 },
+            },
+            pennsylvania_alleghenies: {
+              key: 'pennsylvania_alleghenies',
+              label: 'Pennsylvania Alleghenies context',
+              bbox: { xmin: -80.8, ymin: 40.0, xmax: -77.0, ymax: 42.5 },
+            },
+            alaska_southcentral_mountains: {
+              key: 'alaska_southcentral_mountains',
+              label: 'Alaska southcentral mountains context',
+              bbox: { xmin: -152.5, ymin: 60.0, xmax: -145.0, ymax: 63.0 },
+            },
+            hawaii_volcanic_highlands: {
+              key: 'hawaii_volcanic_highlands',
+              label: 'Hawaii volcanic highlands context',
+              bbox: { xmin: -156.5, ymin: 18.8, xmax: -154.6, ymax: 20.3 },
+            },
+            appalachian_plateau_coalfields: {
+              key: 'appalachian_plateau_coalfields',
+              label: 'Appalachian Plateau and coalfields context',
+              bbox: { xmin: -83.5, ymin: 37.2, xmax: -80.0, ymax: 39.5 },
+            },
+            olympic_peninsula_coast_ranges: {
+              key: 'olympic_peninsula_coast_ranges',
+              label: 'Olympic Peninsula and coast ranges context',
+              bbox: { xmin: -124.9, ymin: 46.8, xmax: -122.0, ymax: 48.6 },
+            },
+            washington_columbia_plateau: {
+              key: 'washington_columbia_plateau',
+              label: 'Washington Columbia Plateau context',
+              bbox: { xmin: -121.0, ymin: 45.5, xmax: -117.0, ymax: 48.8 },
+            },
+            oregon_coast_range: {
+              key: 'oregon_coast_range',
+              label: 'Oregon Coast Range context',
+              bbox: { xmin: -124.6, ymin: 42.0, xmax: -122.0, ymax: 46.3 },
+            },
+            arizona_mogollon_rim: {
+              key: 'arizona_mogollon_rim',
+              label: 'Arizona Mogollon Rim context',
+              bbox: { xmin: -112.8, ymin: 33.7, xmax: -109.0, ymax: 35.5 },
+            },
+            wyoming_bighorn_powder: {
+              key: 'wyoming_bighorn_powder',
+              label: 'Wyoming Bighorn and Powder River context',
+              bbox: { xmin: -108.5, ymin: 43.0, xmax: -104.0, ymax: 45.5 },
+            },
+            nebraska_sandhills_pine_ridge: {
+              key: 'nebraska_sandhills_pine_ridge',
+              label: 'Nebraska Sandhills and Pine Ridge context',
+              bbox: { xmin: -104.2, ymin: 41.0, xmax: -99.0, ymax: 43.5 },
+            },
+            missouri_ozark_highlands: {
+              key: 'missouri_ozark_highlands',
+              label: 'Missouri Ozark Highlands context',
+              bbox: { xmin: -93.8, ymin: 36.0, xmax: -90.2, ymax: 38.5 },
+            },
+            central_appalachians_monongahela: {
+              key: 'central_appalachians_monongahela',
+              label: 'Central Appalachians and Monongahela context',
+              bbox: { xmin: -81.5, ymin: 37.5, xmax: -78.0, ymax: 40.0 },
+            },
+            new_jersey_pine_barrens: {
+              key: 'new_jersey_pine_barrens',
+              label: 'New Jersey Pine Barrens context',
+              bbox: { xmin: -75.5, ymin: 39.0, xmax: -73.8, ymax: 40.3 },
+            },
+            lower_michigan_state_forests: {
+              key: 'lower_michigan_state_forests',
+              label: 'Lower Michigan state forests context',
+              bbox: { xmin: -86.5, ymin: 43.0, xmax: -82.5, ymax: 45.5 },
+            },
+            utah_dixie_bryce_plateaus: {
+              key: 'utah_dixie_bryce_plateaus',
+              label: 'Utah Dixie and Bryce plateaus context',
+              bbox: { xmin: -113.6, ymin: 36.8, xmax: -111.0, ymax: 38.6 },
+            },
+            alaska_southeast_tongass: {
+              key: 'alaska_southeast_tongass',
+              label: 'Alaska Southeast and Tongass context',
+              bbox: { xmin: -136.8, ymin: 55.0, xmax: -130.0, ymax: 59.8 },
+            },
+            idaho_panhandle_selkirks: {
+              key: 'idaho_panhandle_selkirks',
+              label: 'Idaho Panhandle and Selkirk Mountains context',
+              bbox: { xmin: -117.3, ymin: 46.8, xmax: -114.5, ymax: 49.0 },
+            },
+            south_dakota_black_hills: {
+              key: 'south_dakota_black_hills',
+              label: 'South Dakota Black Hills context',
+              bbox: { xmin: -104.2, ymin: 43.5, xmax: -102.8, ymax: 44.8 },
+            },
+            georgia_alabama_piedmont: {
+              key: 'georgia_alabama_piedmont',
+              label: 'Georgia and Alabama Piedmont context',
+              bbox: { xmin: -86.0, ymin: 32.0, xmax: -82.0, ymax: 34.7 },
+            },
+            alabama_talladega_bankhead: {
+              key: 'alabama_talladega_bankhead',
+              label: 'Alabama Talladega and Bankhead context',
+              bbox: { xmin: -88.0, ymin: 32.5, xmax: -85.0, ymax: 35.0 },
+            },
+            mississippi_delta_hills: {
+              key: 'mississippi_delta_hills',
+              label: 'Mississippi Delta and hill country context',
+              bbox: { xmin: -91.5, ymin: 31.0, xmax: -88.0, ymax: 34.8 },
+            },
+            kentucky_cumberland_plateau: {
+              key: 'kentucky_cumberland_plateau',
+              label: 'Kentucky Cumberland Plateau context',
+              bbox: { xmin: -86.0, ymin: 36.3, xmax: -82.5, ymax: 38.6 },
+            },
+            ohio_wayne_appalachian_foothills: {
+              key: 'ohio_wayne_appalachian_foothills',
+              label: 'Ohio Wayne and Appalachian foothills context',
+              bbox: { xmin: -83.5, ymin: 38.8, xmax: -80.5, ymax: 40.7 },
+            },
+            alaska_kenai_chugach: {
+              key: 'alaska_kenai_chugach',
+              label: 'Alaska Kenai and Chugach context',
+              bbox: { xmin: -152.0, ymin: 58.8, xmax: -147.0, ymax: 61.5 },
+            },
+            arkansas_boston_ouachita: {
+              key: 'arkansas_boston_ouachita',
+              label: 'Arkansas Boston and Ouachita Mountains context',
+              bbox: { xmin: -94.8, ymin: 34.0, xmax: -91.5, ymax: 36.5 },
+            },
+            wisconsin_northwoods: {
+              key: 'wisconsin_northwoods',
+              label: 'Wisconsin northwoods context',
+              bbox: { xmin: -91.0, ymin: 44.5, xmax: -87.0, ymax: 46.8 },
+            },
+            minnesota_iron_range_arrowhead: {
+              key: 'minnesota_iron_range_arrowhead',
+              label: 'Minnesota Iron Range and Arrowhead context',
+              bbox: { xmin: -94.5, ymin: 46.0, xmax: -90.0, ymax: 48.5 },
+            },
+            north_carolina_pisgah_nantahala: {
+              key: 'north_carolina_pisgah_nantahala',
+              label: 'North Carolina Pisgah and Nantahala context',
+              bbox: { xmin: -84.5, ymin: 34.7, xmax: -81.0, ymax: 36.5 },
+            },
+            oregon_blue_mountains: {
+              key: 'oregon_blue_mountains',
+              label: 'Oregon Blue Mountains context',
+              bbox: { xmin: -120.0, ymin: 43.5, xmax: -116.5, ymax: 46.3 },
+            },
+            washington_okanogan_highlands: {
+              key: 'washington_okanogan_highlands',
+              label: 'Washington Okanogan Highlands context',
+              bbox: { xmin: -120.8, ymin: 47.3, xmax: -117.0, ymax: 49.0 },
+            },
+            montana_prairie_breaks: {
+              key: 'montana_prairie_breaks',
+              label: 'Montana prairie breaks context',
+              bbox: { xmin: -111.5, ymin: 46.0, xmax: -106.0, ymax: 48.8 },
+            },
+            wyoming_red_desert_south_pass: {
+              key: 'wyoming_red_desert_south_pass',
+              label: 'Wyoming Red Desert and South Pass context',
+              bbox: { xmin: -110.5, ymin: 41.0, xmax: -107.0, ymax: 42.9 },
+            },
+            utah_west_desert_san_rafael: {
+              key: 'utah_west_desert_san_rafael',
+              label: 'Utah West Desert and San Rafael context',
+              bbox: { xmin: -113.8, ymin: 38.0, xmax: -110.5, ymax: 40.2 },
+            },
+            colorado_san_luis_sangre_de_cristo: {
+              key: 'colorado_san_luis_sangre_de_cristo',
+              label: 'Colorado San Luis Valley and Sangre de Cristo context',
+              bbox: { xmin: -106.3, ymin: 36.9, xmax: -104.8, ymax: 38.5 },
+            },
+            tennessee_cumberland_highlands: {
+              key: 'tennessee_cumberland_highlands',
+              label: 'Tennessee Cumberland Highlands context',
+              bbox: { xmin: -86.5, ymin: 35.0, xmax: -83.5, ymax: 36.8 },
+            },
+            virginia_blue_ridge: {
+              key: 'virginia_blue_ridge',
+              label: 'Virginia Blue Ridge context',
+              bbox: { xmin: -80.5, ymin: 36.5, xmax: -77.5, ymax: 39.0 },
+            },
+            west_virginia_allegheny_plateau: {
+              key: 'west_virginia_allegheny_plateau',
+              label: 'West Virginia Allegheny Plateau context',
+              bbox: { xmin: -82.5, ymin: 37.5, xmax: -79.0, ymax: 40.5 },
+            },
+            new_hampshire_white_mountains: {
+              key: 'new_hampshire_white_mountains',
+              label: 'New Hampshire White Mountains context',
+              bbox: { xmin: -72.5, ymin: 43.5, xmax: -70.5, ymax: 45.3 },
+            },
+            louisiana_kisatchie_piney_woods: {
+              key: 'louisiana_kisatchie_piney_woods',
+              label: 'Louisiana Kisatchie piney woods context',
+              bbox: { xmin: -94.0, ymin: 30.0, xmax: -91.0, ymax: 32.5 },
+            },
+            north_dakota_badlands: {
+              key: 'north_dakota_badlands',
+              label: 'North Dakota badlands context',
+              bbox: { xmin: -104.2, ymin: 46.0, xmax: -102.0, ymax: 48.5 },
+            },
+            oregon_klamath_siskiyou: {
+              key: 'oregon_klamath_siskiyou',
+              label: 'Oregon Klamath and Siskiyou context',
+              bbox: { xmin: -124.0, ymin: 41.8, xmax: -121.0, ymax: 43.8 },
+            },
+            california_central_sierra_inyo: {
+              key: 'california_central_sierra_inyo',
+              label: 'California Central Sierra and Inyo context',
+              bbox: { xmin: -120.5, ymin: 35.5, xmax: -117.5, ymax: 38.8 },
+            },
+            idaho_eastern_targhee: {
+              key: 'idaho_eastern_targhee',
+              label: 'Idaho Eastern Targhee context',
+              bbox: { xmin: -113.5, ymin: 42.0, xmax: -110.8, ymax: 44.8 },
+            },
+            wyoming_snowy_range_laramie: {
+              key: 'wyoming_snowy_range_laramie',
+              label: 'Wyoming Snowy Range and Laramie context',
+              bbox: { xmin: -107.5, ymin: 40.8, xmax: -104.8, ymax: 42.8 },
+            },
+            colorado_yampa_white_river: {
+              key: 'colorado_yampa_white_river',
+              label: 'Colorado Yampa and White River context',
+              bbox: { xmin: -108.8, ymin: 39.6, xmax: -106.0, ymax: 41.1 },
+            },
+            utah_la_sal_abajo_mountains: {
+              key: 'utah_la_sal_abajo_mountains',
+              label: 'Utah La Sal and Abajo Mountains context',
+              bbox: { xmin: -110.5, ymin: 37.5, xmax: -108.8, ymax: 39.0 },
+            },
+            new_mexico_zuni_cibola: {
+              key: 'new_mexico_zuni_cibola',
+              label: 'New Mexico Zuni and Cibola context',
+              bbox: { xmin: -109.2, ymin: 34.5, xmax: -106.5, ymax: 36.0 },
+            },
+            pennsylvania_poconos_endless_mountains: {
+              key: 'pennsylvania_poconos_endless_mountains',
+              label: 'Pennsylvania Poconos and Endless Mountains context',
+              bbox: { xmin: -77.5, ymin: 40.5, xmax: -74.2, ymax: 42.5 },
+            },
+            new_york_tug_hill_adirondack_west: {
+              key: 'new_york_tug_hill_adirondack_west',
+              label: 'New York Tug Hill and western Adirondacks context',
+              bbox: { xmin: -76.5, ymin: 43.0, xmax: -74.0, ymax: 44.8 },
+            },
+            new_mexico_sacramento_capitan: {
+              key: 'new_mexico_sacramento_capitan',
+              label: 'New Mexico Sacramento and Capitan context',
+              bbox: { xmin: -106.5, ymin: 32.2, xmax: -104.5, ymax: 34.0 },
+            },
+            colorado_grand_mesa_uncompahgre: {
+              key: 'colorado_grand_mesa_uncompahgre',
+              label: 'Colorado Grand Mesa and Uncompahgre context',
+              bbox: { xmin: -108.8, ymin: 37.8, xmax: -107.0, ymax: 39.3 },
+            },
+            massachusetts_berkshires: {
+              key: 'massachusetts_berkshires',
+              label: 'Massachusetts Berkshires context',
+              bbox: { xmin: -73.5, ymin: 42.0, xmax: -72.0, ymax: 43.0 },
+            },
+            california_mendocino_trinity: {
+              key: 'california_mendocino_trinity',
+              label: 'California Mendocino and Trinity context',
+              bbox: { xmin: -123.8, ymin: 39.7, xmax: -121.8, ymax: 41.4 },
+            },
+            nevada_spring_sheep_ranges: {
+              key: 'nevada_spring_sheep_ranges',
+              label: 'Nevada Spring and Sheep Ranges context',
+              bbox: { xmin: -116.2, ymin: 35.5, xmax: -114.5, ymax: 37.0 },
+            },
+            arizona_prescott_bradshaw: {
+              key: 'arizona_prescott_bradshaw',
+              label: 'Arizona Prescott and Bradshaw context',
+              bbox: { xmin: -113.2, ymin: 34.0, xmax: -111.6, ymax: 35.3 },
+            },
+            montana_beartooth_crazies: {
+              key: 'montana_beartooth_crazies',
+              label: 'Montana Beartooth and Crazies context',
+              bbox: { xmin: -111.5, ymin: 45.0, xmax: -109.0, ymax: 47.0 },
+            },
+            montana_bitterroot_sapphire: {
+              key: 'montana_bitterroot_sapphire',
+              label: 'Montana Bitterroot and Sapphire context',
+              bbox: { xmin: -114.8, ymin: 45.0, xmax: -112.8, ymax: 47.5 },
+            },
+            wyoming_bighorn_mountains: {
+              key: 'wyoming_bighorn_mountains',
+              label: 'Wyoming Bighorn Mountains context',
+              bbox: { xmin: -108.2, ymin: 43.3, xmax: -106.0, ymax: 45.2 },
+            },
+            south_carolina_upstate_blue_ridge: {
+              key: 'south_carolina_upstate_blue_ridge',
+              label: 'South Carolina Upstate Blue Ridge context',
+              bbox: { xmin: -83.4, ymin: 34.0, xmax: -81.0, ymax: 35.4 },
+            },
+            new_york_finger_lakes_southern_tier: {
+              key: 'new_york_finger_lakes_southern_tier',
+              label: 'New York Finger Lakes and Southern Tier context',
+              bbox: { xmin: -78.6, ymin: 41.5, xmax: -75.0, ymax: 43.2 },
+            },
+            delaware_maryland_coastal_plain: {
+              key: 'delaware_maryland_coastal_plain',
+              label: 'Delaware and Maryland Coastal Plain context',
+              bbox: { xmin: -76.5, ymin: 38.0, xmax: -74.8, ymax: 39.8 },
+            },
+            michigan_upper_peninsula_keweenaw: {
+              key: 'michigan_upper_peninsula_keweenaw',
+              label: 'Michigan Upper Peninsula and Keweenaw context',
+              bbox: { xmin: -90.8, ymin: 45.6, xmax: -84.8, ymax: 47.8 },
+            },
+            vermont_green_mountains: {
+              key: 'vermont_green_mountains',
+              label: 'Vermont Green Mountains context',
+              bbox: { xmin: -73.5, ymin: 42.5, xmax: -71.5, ymax: 45.1 },
+            },
+            maine_northern_woods: {
+              key: 'maine_northern_woods',
+              label: 'Maine Northern Woods context',
+              bbox: { xmin: -71.5, ymin: 44.0, xmax: -67.0, ymax: 47.5 },
+            },
+            oregon_umpqua_rogue_cascades: {
+              key: 'oregon_umpqua_rogue_cascades',
+              label: 'Oregon Umpqua and Rogue Cascades context',
+              bbox: { xmin: -123.5, ymin: 42.0, xmax: -121.0, ymax: 44.0 },
+            },
+            california_modoc_lassen_plateau: {
+              key: 'california_modoc_lassen_plateau',
+              label: 'California Modoc and Lassen Plateau context',
+              bbox: { xmin: -122.5, ymin: 40.5, xmax: -120.0, ymax: 42.5 },
+            },
+            nevada_humboldt_ruby_ranges: {
+              key: 'nevada_humboldt_ruby_ranges',
+              label: 'Nevada Humboldt and Ruby ranges context',
+              bbox: { xmin: -117.5, ymin: 39.5, xmax: -114.5, ymax: 41.8 },
+            },
+            arizona_kaibab_coconino_plateaus: {
+              key: 'arizona_kaibab_coconino_plateaus',
+              label: 'Arizona Kaibab and Coconino plateaus context',
+              bbox: { xmin: -113.5, ymin: 34.5, xmax: -111.0, ymax: 36.7 },
+            },
+            new_mexico_jemez_chama: {
+              key: 'new_mexico_jemez_chama',
+              label: 'New Mexico Jemez and Chama context',
+              bbox: { xmin: -107.5, ymin: 35.4, xmax: -105.5, ymax: 37.2 },
+            },
+            colorado_sawatch_gunnison: {
+              key: 'colorado_sawatch_gunnison',
+              label: 'Colorado Sawatch and Gunnison context',
+              bbox: { xmin: -107.5, ymin: 38.0, xmax: -105.5, ymax: 39.5 },
+            },
+            colorado_pikes_peak_south_park: {
+              key: 'colorado_pikes_peak_south_park',
+              label: 'Colorado Pikes Peak and South Park context',
+              bbox: { xmin: -106.0, ymin: 38.4, xmax: -104.5, ymax: 39.5 },
+            },
+            utah_book_cliffs_bears_ears: {
+              key: 'utah_book_cliffs_bears_ears',
+              label: 'Utah Book Cliffs and Bears Ears context',
+              bbox: { xmin: -111.0, ymin: 37.0, xmax: -108.5, ymax: 40.0 },
+            },
+            idaho_clearwater_bitterroot: {
+              key: 'idaho_clearwater_bitterroot',
+              label: 'Idaho Clearwater and Bitterroot context',
+              bbox: { xmin: -116.5, ymin: 45.5, xmax: -114.0, ymax: 47.5 },
+            },
+            idaho_magic_valley_south_hills: {
+              key: 'idaho_magic_valley_south_hills',
+              label: 'Idaho Magic Valley and South Hills context',
+              bbox: { xmin: -115.5, ymin: 41.8, xmax: -113.0, ymax: 43.5 },
+            },
+            montana_kootenai_cabinet: {
+              key: 'montana_kootenai_cabinet',
+              label: 'Montana Kootenai and Cabinet context',
+              bbox: { xmin: -116.0, ymin: 47.0, xmax: -114.0, ymax: 49.0 },
+            },
+            maryland_pennsylvania_ridge_valley: {
+              key: 'maryland_pennsylvania_ridge_valley',
+              label: 'Maryland and Pennsylvania Ridge and Valley context',
+              bbox: { xmin: -79.0, ymin: 39.0, xmax: -76.0, ymax: 41.0 },
+            },
+          };
+
+          function parseBbox(value) {
+            const bboxValues = String(value || '')
+              .split(',')
+              .map((part) => Number(part.trim()));
+            if (bboxValues.length !== 4 || bboxValues.some((number) => !Number.isFinite(number))) {
+              throw new Error('bbox must be west,south,east,north.');
+            }
+            const [xmin, ymin, xmax, ymax] = bboxValues;
+            if (xmin >= xmax || ymin >= ymax || Math.abs(xmin) > 180 || Math.abs(xmax) > 180 || Math.abs(ymin) > 90 || Math.abs(ymax) > 90) {
+              throw new Error('bbox values are out of range or inverted.');
+            }
+            return { xmin, ymin, xmax, ymax };
           }
-          const [xmin, ymin, xmax, ymax] = bboxValues;
-          if (xmin >= xmax || ymin >= ymax || Math.abs(xmin) > 180 || Math.abs(xmax) > 180 || Math.abs(ymin) > 90 || Math.abs(ymax) > 90) {
-            throw new Error('bbox values are out of range or inverted.');
-          }
+
           if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');
           if (!Number.isFinite(limit) || limit <= 0) throw new Error('limit must be positive.');
 
+          const batchKeys = bboxBatch === 'desert_mountain_wilderness_context'
+            ? [
+                'sierra_nevada',
+                'mojave_death_valley_desert',
+                'moab_canyonlands_desert',
+                'grand_canyon_arizona_strip',
+                'great_basin_mountains',
+                'san_juan_mountains',
+                'black_rock_high_rock_desert',
+                'pacific_northwest_cascades',
+                'oregon_high_desert',
+                'idaho_sawtooth_boise',
+                'montana_northern_rockies',
+                'wyoming_wind_river_absaroka',
+                'colorado_front_range_high_country',
+                'arizona_sky_islands_sonoran',
+                'new_mexico_gila_sacramento',
+                'ozark_ouachita_highlands',
+                'southern_appalachians',
+                'upper_great_lakes_northwoods',
+                'northern_new_england_appalachians',
+                'california_north_coast_klamath',
+                'southern_california_mountains_desert',
+                'nevada_central_basin_ranges',
+                'uinta_wasatch_mountains',
+                'yellowstone_teton_absaroka',
+                'dakota_badlands_missouri_breaks',
+                'southeast_piney_woods',
+                'florida_sandhills_swamps',
+                'adirondack_northern_new_york',
+                'pennsylvania_alleghenies',
+                'alaska_southcentral_mountains',
+                'hawaii_volcanic_highlands',
+                'appalachian_plateau_coalfields',
+                'olympic_peninsula_coast_ranges',
+                'washington_columbia_plateau',
+                'oregon_coast_range',
+                'arizona_mogollon_rim',
+                'wyoming_bighorn_powder',
+                'nebraska_sandhills_pine_ridge',
+                'missouri_ozark_highlands',
+                'central_appalachians_monongahela',
+                'new_jersey_pine_barrens',
+                'lower_michigan_state_forests',
+                'utah_dixie_bryce_plateaus',
+                'alaska_southeast_tongass',
+                'idaho_panhandle_selkirks',
+                'south_dakota_black_hills',
+                'georgia_alabama_piedmont',
+                'alabama_talladega_bankhead',
+                'mississippi_delta_hills',
+                'kentucky_cumberland_plateau',
+                'ohio_wayne_appalachian_foothills',
+                'alaska_kenai_chugach',
+                'arkansas_boston_ouachita',
+                'wisconsin_northwoods',
+                'minnesota_iron_range_arrowhead',
+                'north_carolina_pisgah_nantahala',
+                'oregon_blue_mountains',
+                'washington_okanogan_highlands',
+                'montana_prairie_breaks',
+                'wyoming_red_desert_south_pass',
+                'utah_west_desert_san_rafael',
+                'colorado_san_luis_sangre_de_cristo',
+                'tennessee_cumberland_highlands',
+                'virginia_blue_ridge',
+                'west_virginia_allegheny_plateau',
+                'new_hampshire_white_mountains',
+                'louisiana_kisatchie_piney_woods',
+                'north_dakota_badlands',
+                'oregon_klamath_siskiyou',
+                'california_central_sierra_inyo',
+                'idaho_eastern_targhee',
+                'wyoming_snowy_range_laramie',
+                'colorado_yampa_white_river',
+                'utah_la_sal_abajo_mountains',
+                'new_mexico_zuni_cibola',
+                'pennsylvania_poconos_endless_mountains',
+                'new_york_tug_hill_adirondack_west',
+                'new_mexico_sacramento_capitan',
+                'colorado_grand_mesa_uncompahgre',
+                'massachusetts_berkshires',
+                'california_mendocino_trinity',
+                'nevada_spring_sheep_ranges',
+                'arizona_prescott_bradshaw',
+                'montana_beartooth_crazies',
+                'montana_bitterroot_sapphire',
+                'wyoming_bighorn_mountains',
+                'south_carolina_upstate_blue_ridge',
+                'new_york_finger_lakes_southern_tier',
+                'delaware_maryland_coastal_plain',
+                'michigan_upper_peninsula_keweenaw',
+                'vermont_green_mountains',
+                'maine_northern_woods',
+                'oregon_umpqua_rogue_cascades',
+                'california_modoc_lassen_plateau',
+                'nevada_humboldt_ruby_ranges',
+                'arizona_kaibab_coconino_plateaus',
+                'new_mexico_jemez_chama',
+                'colorado_sawatch_gunnison',
+                'colorado_pikes_peak_south_park',
+                'utah_book_cliffs_bears_ears',
+                'idaho_clearwater_bitterroot',
+                'idaho_magic_valley_south_hills',
+                'montana_kootenai_cabinet',
+                'maryland_pennsylvania_ridge_valley',
+              ]
+            : [bboxBatch];
+
+          const payload = customBbox
+            ? {
+                bboxes: [{ key: 'custom_bbox', label: 'Custom bbox', bbox: parseBbox(customBbox) }],
+                minMiles,
+                limitPerBbox: Math.min(500, Math.round(limit)),
+              }
+            : {
+                bboxes: batchKeys.map((key) => {
+                  const preset = bboxPresets[key];
+                  if (!preset) throw new Error(`Unknown bbox_batch: ${bboxBatch}`);
+                  return preset;
+                }),
+                minMiles,
+                limitPerBbox: Math.min(500, Math.round(limit)),
+              };
+
           fs.writeFileSync(
             'route-catalog-usgs-trails-sync-payload.json',
-            JSON.stringify({
-              bbox: { xmin, ymin, xmax, ymax },
-              minMiles,
-              limit: Math.min(500, Math.round(limit)),
-            }),
+            JSON.stringify(payload),
           );
           NODE
 
@@ -110,6 +873,7 @@ jobs:
           console.log(JSON.stringify({
             source: response.source,
             bbox: response.bbox,
+            bboxes: response.bboxes,
             rawFeatureCount: response.rawFeatureCount,
             normalizedFeatureCount: response.normalizedFeatureCount,
             publicRecommendationCount: response.publicRecommendationCount,
@@ -118,7 +882,7 @@ jobs:
           const markdown = [
             '## Route Catalog USGS Trails Sync',
             '',
-            `BBox: ${JSON.stringify(response.bbox)}`,
+            `BBoxes: ${JSON.stringify(response.bboxes || (response.bbox ? [{ key: 'custom_bbox', bbox: response.bbox }] : []))}`,
             '',
             `Raw features: ${response.rawFeatureCount}`,
             '',

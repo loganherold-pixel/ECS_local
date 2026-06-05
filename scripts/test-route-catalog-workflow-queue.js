@@ -12,11 +12,15 @@ const DATA_PLANE_WORKFLOWS = [
   'route-catalog-michigan-orv-sync.yml',
   'route-catalog-minnesota-ohv-sync.yml',
   'route-catalog-oregon-odf-ohv-sync.yml',
+  'route-catalog-colorado-cpw-trails-sync.yml',
+  'route-catalog-utah-trails-sync.yml',
+  'route-catalog-arizona-trails-sync.yml',
   'route-catalog-usgs-trails-sync.yml',
   'route-catalog-nps-trails-sync.yml',
   'route-catalog-summary-report.yml',
   'route-catalog-coverage-audit.yml',
   'route-catalog-stitchability-review-queue.yml',
+  'route-catalog-stitch-groups-sync.yml',
 ];
 
 const SHARED_GROUP = 'group: route-catalog-data-plane-${{ github.repository }}';

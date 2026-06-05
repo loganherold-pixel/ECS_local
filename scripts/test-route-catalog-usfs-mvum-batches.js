@@ -29,6 +29,30 @@ const inyoBatch = resolveUsfsMvumForestSelection({ forestBatch: 'california_neva
 assert(inyoBatch.forests.includes('inyo-national-forest'), 'California/Nevada batch should include Inyo for targeted reruns');
 assert(inyoBatch.forests.length <= 20, 'California/Nevada batch should remain bounded');
 
+const centralRockiesBatch = resolveUsfsMvumForestSelection({ forestBatch: 'central_rockies' });
+for (const grassland of [
+  'pawnee-national-grassland',
+  'cimarron-national-grassland',
+  'comanche-national-grassland',
+  'thunder-basin-national-grassland',
+]) {
+  assert(centralRockiesBatch.forests.includes(grassland), `Central Rockies batch should include ${grassland}`);
+}
+
+const southwestBatch = resolveUsfsMvumForestSelection({ forestBatch: 'southwest' });
+assert(
+  southwestBatch.forests.includes('kiowa-rita-blanca-national-grasslands'),
+  'Southwest batch should include the combined Kiowa and Rita Blanca National Grasslands source',
+);
+assert(
+  !southwestBatch.forests.includes('kiowa-national-grassland') &&
+    !southwestBatch.forests.includes('rita-blanca-national-grassland'),
+  'Southwest batch should not duplicate the combined Kiowa/Rita Blanca district as two separate source runs',
+);
+
+const pacificNorthwestBatch = resolveUsfsMvumForestSelection({ forestBatch: 'pacific_northwest' });
+assert(pacificNorthwestBatch.forests.includes('crooked-river-national-grassland'), 'Pacific Northwest batch should include Crooked River National Grassland');
+
 const alaskaBatch = resolveUsfsMvumForestSelection({ forestBatch: 'alaska' });
 assert.deepStrictEqual(
   alaskaBatch.forests,

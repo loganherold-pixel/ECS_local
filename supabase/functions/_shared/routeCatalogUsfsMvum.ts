@@ -8,6 +8,10 @@ export type UsfsMvumForest = {
   currentConditionSourceName: string;
   currentConditionSourceUri: string;
   currentConditionReferenceUri: string;
+  queryForestNames?: string[];
+  queryDistrictNames?: string[];
+  queryAdminOrgCodes?: string[];
+  excludeAdminOrgCodes?: string[];
 };
 
 export type UsfsMvumLayer = {
@@ -147,6 +151,17 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     currentConditionReferenceUri: 'https://www.fs.usda.gov/r03/coconino/conditions',
   },
   {
+    slug: 'apache-sitgreaves-national-forests',
+    forestName: 'Apache-Sitgreaves National Forests',
+    sourceProviderId: 'usfs_mvum_apache_sitgreaves_nfs',
+    sourceName: 'USFS MVUM - Apache-Sitgreaves National Forests',
+    sourceUri: 'https://www.fs.usda.gov/r03/apache-sitgreaves/maps-guides',
+    currentConditionProviderId: 'usfs_current_conditions_apache_sitgreaves_nfs',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Apache-Sitgreaves National Forests',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r03/apache-sitgreaves/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r03/apache-sitgreaves/conditions',
+  },
+  {
     slug: 'manti-la-sal-national-forest',
     forestName: 'Manti-La Sal National Forest',
     sourceProviderId: 'usfs_mvum_manti_la_sal_nf',
@@ -277,6 +292,63 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     currentConditionSourceName: 'USFS Alerts and Current Conditions - Pike and San Isabel National Forests',
     currentConditionSourceUri: 'https://www.fs.usda.gov/r02/psicc/alerts',
     currentConditionReferenceUri: 'https://www.fs.usda.gov/r02/psicc/conditions',
+    excludeAdminOrgCodes: ['021207', '021206'],
+  },
+  {
+    slug: 'pawnee-national-grassland',
+    forestName: 'Pawnee National Grassland',
+    sourceProviderId: 'usfs_mvum_pawnee_ng',
+    sourceName: 'USFS MVUM - Pawnee National Grassland',
+    sourceUri: 'https://www.fs.usda.gov/r02/arp/maps-guides/motor-vehicle-use-maps-mvum',
+    currentConditionProviderId: 'usfs_current_conditions_pawnee_ng',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Pawnee National Grassland',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r02/arp/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r02/arp/conditions',
+    queryForestNames: ['Arapaho and Roosevelt National Forests'],
+    queryDistrictNames: ['Pawnee Ranger District'],
+    queryAdminOrgCodes: ['021006'],
+  },
+  {
+    slug: 'cimarron-national-grassland',
+    forestName: 'Cimarron National Grassland',
+    sourceProviderId: 'usfs_mvum_cimarron_ng',
+    sourceName: 'USFS MVUM - Cimarron National Grassland',
+    sourceUri: 'https://www.fs.usda.gov/r02/psicc/maps-guides/motor-vehicle-use-maps',
+    currentConditionProviderId: 'usfs_current_conditions_cimarron_ng',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Cimarron National Grassland',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r02/psicc/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r02/psicc/conditions',
+    queryForestNames: ['Pike and San Isabel National Forests'],
+    queryDistrictNames: ['Cimarron Ranger District'],
+    queryAdminOrgCodes: ['021207'],
+  },
+  {
+    slug: 'comanche-national-grassland',
+    forestName: 'Comanche National Grassland',
+    sourceProviderId: 'usfs_mvum_comanche_ng',
+    sourceName: 'USFS MVUM - Comanche National Grassland',
+    sourceUri: 'https://www.fs.usda.gov/r02/psicc/maps-guides/motor-vehicle-use-maps',
+    currentConditionProviderId: 'usfs_current_conditions_comanche_ng',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Comanche National Grassland',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r02/psicc/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r02/psicc/conditions',
+    queryForestNames: ['Pike and San Isabel National Forests'],
+    queryDistrictNames: ['Comanche Ranger District'],
+    queryAdminOrgCodes: ['021206'],
+  },
+  {
+    slug: 'thunder-basin-national-grassland',
+    forestName: 'Thunder Basin National Grassland',
+    sourceProviderId: 'usfs_mvum_thunder_basin_ng',
+    sourceName: 'USFS MVUM - Thunder Basin National Grassland',
+    sourceUri: 'https://www.fs.usda.gov/r02/mbrtb/maps-guides/motor-vehicle-use-maps',
+    currentConditionProviderId: 'usfs_current_conditions_thunder_basin_ng',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Thunder Basin National Grassland',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r02/mbrtb/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r02/mbrtb/conditions',
+    queryForestNames: ['Medicine Bow-Routt National Forest'],
+    queryDistrictNames: ['Douglas Ranger District/Thunder Basin National Grassland'],
+    queryAdminOrgCodes: ['020609'],
   },
   {
     slug: 'inyo-national-forest',
@@ -521,6 +593,17 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     currentConditionReferenceUri: 'https://www.fs.usda.gov/r03/coronado/alerts',
   },
   {
+    slug: 'angeles-national-forest',
+    forestName: 'Angeles National Forest',
+    sourceProviderId: 'usfs_mvum_angeles_nf',
+    sourceName: 'USFS MVUM - Angeles National Forest',
+    sourceUri: 'https://www.fs.usda.gov/r05/angeles/maps-guides',
+    currentConditionProviderId: 'usfs_current_conditions_angeles_nf',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Angeles National Forest',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r05/angeles/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r05/angeles/conditions',
+  },
+  {
     slug: 'sierra-national-forest',
     forestName: 'Sierra National Forest',
     sourceProviderId: 'usfs_mvum_sierra_nf',
@@ -596,6 +679,17 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     currentConditionSourceName: 'USFS Alerts and Current Conditions - National Forests in Florida',
     currentConditionSourceUri: 'https://www.fs.usda.gov/r08/florida/alerts',
     currentConditionReferenceUri: 'https://www.fs.usda.gov/r08/florida/conditions',
+  },
+  {
+    slug: 'national-forests-in-alabama',
+    forestName: 'National Forests in Alabama',
+    sourceProviderId: 'usfs_mvum_alabama_nfs',
+    sourceName: 'USFS MVUM - National Forests in Alabama',
+    sourceUri: 'https://www.fs.usda.gov/r08/alabama/maps-guides',
+    currentConditionProviderId: 'usfs_current_conditions_alabama_nfs',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - National Forests in Alabama',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r08/alabama/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r08/alabama/conditions',
   },
   {
     slug: 'ouachita-national-forest',
@@ -739,6 +833,7 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     currentConditionSourceName: 'USFS Alerts and Current Conditions - Medicine Bow-Routt National Forest',
     currentConditionSourceUri: 'https://www.fs.usda.gov/r02/mbrtb/alerts',
     currentConditionReferenceUri: 'https://www.fs.usda.gov/r02/mbrtb/conditions',
+    excludeAdminOrgCodes: ['020609'],
   },
   {
     slug: 'kootenai-national-forest',
@@ -772,6 +867,7 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     currentConditionSourceName: 'USFS Alerts and Current Conditions - Arapaho and Roosevelt National Forests',
     currentConditionSourceUri: 'https://www.fs.usda.gov/r02/arp/alerts',
     currentConditionReferenceUri: 'https://www.fs.usda.gov/r02/arp/conditions',
+    excludeAdminOrgCodes: ['021006'],
   },
   {
     slug: 'umatilla-national-forest',
@@ -794,6 +890,32 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     currentConditionSourceName: 'USFS Alerts and Current Conditions - Ochoco National Forest',
     currentConditionSourceUri: 'https://www.fs.usda.gov/r06/ochoco/alerts',
     currentConditionReferenceUri: 'https://www.fs.usda.gov/r06/ochoco/alerts',
+    excludeAdminOrgCodes: ['060705'],
+  },
+  {
+    slug: 'malheur-national-forest',
+    forestName: 'Malheur National Forest',
+    sourceProviderId: 'usfs_mvum_malheur_nf',
+    sourceName: 'USFS MVUM - Malheur National Forest',
+    sourceUri: 'https://www.fs.usda.gov/r06/malheur/maps-guides',
+    currentConditionProviderId: 'usfs_current_conditions_malheur_nf',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Malheur National Forest',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r06/malheur/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r06/malheur/conditions',
+  },
+  {
+    slug: 'crooked-river-national-grassland',
+    forestName: 'Crooked River National Grassland',
+    sourceProviderId: 'usfs_mvum_crooked_river_ng',
+    sourceName: 'USFS MVUM - Crooked River National Grassland',
+    sourceUri: 'https://www.fs.usda.gov/r06/deschutes/maps-guides/motor-vehicle-use-maps-mvum',
+    currentConditionProviderId: 'usfs_current_conditions_crooked_river_ng',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Crooked River National Grassland',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r06/ochoco/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r06/ochoco/conditions',
+    queryForestNames: ['Ochoco National Forest'],
+    queryDistrictNames: ['Crooked River National Grassland'],
+    queryAdminOrgCodes: ['060705'],
   },
   {
     slug: 'cibola-national-forest',
@@ -805,6 +927,7 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     currentConditionSourceName: 'USFS Alerts and Current Conditions - Cibola National Forest',
     currentConditionSourceUri: 'https://www.fs.usda.gov/r03/cibola/alerts',
     currentConditionReferenceUri: 'https://www.fs.usda.gov/r03/cibola/alerts',
+    excludeAdminOrgCodes: ['030307'],
   },
   {
     slug: 'eldorado-national-forest',
@@ -1126,6 +1249,20 @@ export const USFS_MVUM_PILOT_FORESTS: UsfsMvumForest[] = [
     currentConditionReferenceUri: 'https://www.fs.usda.gov/r05/laketahoebasin/conditions',
   },
   {
+    slug: 'kiowa-rita-blanca-national-grasslands',
+    forestName: 'Kiowa and Rita Blanca National Grasslands',
+    sourceProviderId: 'usfs_mvum_kiowa_rita_blanca_ng',
+    sourceName: 'USFS MVUM - Kiowa and Rita Blanca National Grasslands',
+    sourceUri: 'https://www.fs.usda.gov/r03/cibola/maps-guides/motor-vehicle-use-maps',
+    currentConditionProviderId: 'usfs_current_conditions_kiowa_rita_blanca_ng',
+    currentConditionSourceName: 'USFS Alerts and Current Conditions - Kiowa and Rita Blanca National Grasslands',
+    currentConditionSourceUri: 'https://www.fs.usda.gov/r03/cibola/alerts',
+    currentConditionReferenceUri: 'https://www.fs.usda.gov/r03/cibola/conditions',
+    queryForestNames: ['Cibola National Forest'],
+    queryDistrictNames: ['Kiowa/Rita Blanca National Grasslands'],
+    queryAdminOrgCodes: ['030307'],
+  },
+  {
     slug: 'wayne-national-forest',
     forestName: 'Wayne National Forest',
     sourceProviderId: 'usfs_mvum_wayne_nf',
@@ -1315,6 +1452,10 @@ function cleanNumber(value: unknown): number | null {
 
 function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
+}
+
+function sqlStringList(values: string[]): string {
+  return values.map(sqlString).join(',');
 }
 
 function slugify(value: string): string {
@@ -1716,9 +1857,34 @@ export function buildUsfsMvumWhereClause(
   options: { minMiles?: number } = {},
 ): string {
   const minMiles = Math.max(0, Number(options.minMiles ?? 1));
-  const forestNames = forests.map((forest) => sqlString(forest.forestName)).join(',');
+  const forestClauses = forests
+    .filter((forest): forest is UsfsMvumForest => !!forest)
+    .map((forest) => {
+      const forestNames = uniqueStrings(
+        forest.queryForestNames && forest.queryForestNames.length > 0
+          ? forest.queryForestNames
+          : [forest.forestName],
+      );
+      const queryClauses = [
+        forestNames.length === 1
+          ? `FORESTNAME = ${sqlString(forestNames[0])}`
+          : `FORESTNAME IN (${sqlStringList(forestNames)})`,
+      ];
+
+      if (forest.queryDistrictNames && forest.queryDistrictNames.length > 0) {
+        queryClauses.push(`DISTRICTNA IN (${sqlStringList(uniqueStrings(forest.queryDistrictNames))})`);
+      }
+      if (forest.queryAdminOrgCodes && forest.queryAdminOrgCodes.length > 0) {
+        queryClauses.push(`ADMINORG IN (${sqlStringList(uniqueStrings(forest.queryAdminOrgCodes))})`);
+      }
+      if (forest.excludeAdminOrgCodes && forest.excludeAdminOrgCodes.length > 0) {
+        queryClauses.push(`ADMINORG NOT IN (${sqlStringList(uniqueStrings(forest.excludeAdminOrgCodes))})`);
+      }
+
+      return `(${queryClauses.join(' AND ')})`;
+    });
   return [
-    `FORESTNAME in (${forestNames})`,
+    forestClauses.length > 0 ? `(${forestClauses.join(' OR ')})` : '1=0',
     `GIS_MILES >= ${Number(minMiles.toFixed(3))}`,
     "(HIGHCLEARA = 'open' OR FOURWD_GT5 = 'open' OR PASSENGERV = 'open' OR ATV = 'open' OR MOTORCYCLE = 'open')",
   ].join(' AND ');

@@ -2,17 +2,12 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import {
-  USGS_TRAILS_LAYER,
-  arcGisFeatureToUsgsTrailsRouteUpsert,
-  buildUsgsTrailsWhereClause,
-  normalizeUsgsTrailsBbox,
-  normalizeUsgsTrailsBboxes,
-  normalizeUsgsTrailsFeatureCollection,
-  usgsTrailsSourceUpsert,
-  type UsgsTrailsArcGisFeature,
-  type UsgsTrailsBbox,
-  type UsgsTrailsBboxPreset,
-} from '../_shared/routeCatalogUsgsTrails.ts';
+  ARIZONA_STATE_PARKS_TRAILS_QUERY,
+  ARIZONA_STATE_PARKS_TRAILS_SOURCE,
+  arizonaStateParksTrailsSourceUpsert,
+  featureToArizonaStateParksTrailRouteUpsert,
+  normalizeArizonaStateParksTrailFeatureCollection,
+} from '../_shared/routeCatalogArizonaStateParksTrails.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -20,6 +15,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Content-Type': 'application/json',
 };
+const GEOMETRY_BATCH_SIZE = 25;
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
@@ -55,7 +51,7 @@ function readNumber(value: unknown, fallback: number): number {
   return Number.isFinite(number) ? number : fallback;
 }
 
-function chunkRows<T>(rows: T[], size = 100): T[][] {
+function chunkRows<T>(rows: T[], size = GEOMETRY_BATCH_SIZE): T[][] {
   const chunks = [];
   for (let index = 0; index < rows.length; index += size) {
     chunks.push(rows.slice(index, index + size));
@@ -65,21 +61,6 @@ function chunkRows<T>(rows: T[], size = 100): T[][] {
 
 function routePublicId(row: Record<string, unknown>): string {
   return String(row.public_id ?? '').trim();
-}
-
-function sourceFeatureKey(feature: UsgsTrailsArcGisFeature, fallback: string): string {
-  const attributes = feature.attributes ?? {};
-  return String(attributes.objectid || attributes.globalid || attributes.permanentidentifier || fallback);
-}
-
-function normalizeSyncBboxes(body: Record<string, unknown>): UsgsTrailsBboxPreset[] | null {
-  const bboxBatch = normalizeUsgsTrailsBboxes(body.bboxes);
-  if (bboxBatch) return bboxBatch;
-
-  const bbox = normalizeUsgsTrailsBbox(body.bbox);
-  return bbox
-    ? [{ key: 'manual_bbox', label: 'Manual bbox', bbox }]
-    : null;
 }
 
 function buildRouteIdByPublicId(rows: Array<Record<string, unknown>>): Map<string, string> {
@@ -92,6 +73,10 @@ function buildRouteIdByPublicId(rows: Array<Record<string, unknown>>): Map<strin
   return routeIdByPublicId;
 }
 
+function countPublicRecommendations(routeRows: Array<Record<string, unknown>>): number {
+  return routeRows.filter((row) => row.recommendation_status === 'recommendable').length;
+}
+
 async function upsertRawFeatureRows(
   admin: ReturnType<typeof createAdminClient>,
   rawFeatureRows: Array<Record<string, unknown>>,
@@ -100,7 +85,7 @@ async function upsertRawFeatureRows(
     const { error } = await admin
       .from('route_raw_source_features')
       .upsert(chunk, { onConflict: 'route_source_id,provider_feature_id,source_layer' });
-    if (error) throw new Error('Unable to batch upsert USGS Trails raw source features.');
+    if (error) throw new Error(`Unable to batch upsert Arizona trail raw source features: ${error.message}`);
   }
 }
 
@@ -114,7 +99,8 @@ async function upsertRouteRows(
       .from('verified_routes')
       .upsert(chunk, { onConflict: 'public_id' })
       .select('id, public_id');
-    if (error || !Array.isArray(data)) throw new Error('Unable to batch upsert USGS Trails route rows.');
+    if (error) throw new Error(`Unable to batch upsert Arizona trail route rows: ${error.message}`);
+    if (!Array.isArray(data)) throw new Error('Unable to batch upsert Arizona trail route rows: no rows returned.');
     allRows.push(...data);
   }
   return buildRouteIdByPublicId(allRows as Array<Record<string, unknown>>);
@@ -135,69 +121,37 @@ async function upsertRouteSourceRows(
     .filter((row): row is Record<string, unknown> => !!row);
 
   if (sourceRows.length !== sourceRefs.length) {
-    throw new Error('Unable to map all USGS Trails route source rows to route IDs.');
+    throw new Error('Unable to map all Arizona trail route source rows to route IDs.');
   }
 
   for (const chunk of chunkRows(sourceRows)) {
     const { error } = await admin
       .from('verified_route_sources')
       .upsert(chunk, { onConflict: 'verified_route_id,route_source_id,source_role' });
-    if (error) throw new Error('Unable to batch upsert USGS Trails route source rows.');
+    if (error) throw new Error(`Unable to batch upsert Arizona trail route source rows: ${error.message}`);
   }
 }
 
-async function fetchTrailFeatures(bbox: UsgsTrailsBbox, minMiles: number, limit: number) {
-  const records = [];
-  const pageSize = Math.min(1000, Math.max(1, limit));
-  let offset = 0;
+async function fetchArizonaTrailFeatures(maxFeatures: number): Promise<unknown> {
+  const queryUrl = new URL(`${ARIZONA_STATE_PARKS_TRAILS_SOURCE.sourceUri}/query`);
+  queryUrl.searchParams.set('f', 'json');
+  queryUrl.searchParams.set('where', ARIZONA_STATE_PARKS_TRAILS_QUERY.where);
+  queryUrl.searchParams.set('outFields', ARIZONA_STATE_PARKS_TRAILS_QUERY.outFields);
+  queryUrl.searchParams.set('returnGeometry', 'true');
+  queryUrl.searchParams.set('outSR', String(ARIZONA_STATE_PARKS_TRAILS_QUERY.outSR));
+  queryUrl.searchParams.set('geometryPrecision', '6');
+  queryUrl.searchParams.set('orderByFields', 'FID');
+  queryUrl.searchParams.set('resultRecordCount', String(maxFeatures));
 
-  while (records.length < limit) {
-    const params = new URLSearchParams({
-      f: 'json',
-      where: buildUsgsTrailsWhereClause({ minMiles }),
-      outFields: [
-        'objectid',
-        'name',
-        'trailnumber',
-        'permanentidentifier',
-        'sourcefeatureid',
-        'sourcedatasetid',
-        'sourceoriginator',
-        'trailtype',
-        'motorcycle',
-        'ohvover50inches',
-        'ohvisorunder50inches',
-        'osvm',
-        'primarytrailmaintainer',
-        'nationaltraildesignation',
-        'lengthmiles',
-        'networklength',
-        'globalid',
-      ].join(','),
-      returnGeometry: 'true',
-      outSR: '4326',
-      geometryPrecision: '6',
-      geometry: JSON.stringify(bbox),
-      geometryType: 'esriGeometryEnvelope',
-      inSR: '4326',
-      spatialRel: 'esriSpatialRelIntersects',
-      resultOffset: String(offset),
-      resultRecordCount: String(Math.min(pageSize, limit - records.length)),
-    });
-
-    const response = await fetch(`${USGS_TRAILS_LAYER.url}/query?${params.toString()}`);
-    if (!response.ok) throw new Error('USGS Trails query failed');
-    const payload = await response.json();
-    if (payload?.error) {
-      throw new Error(`USGS Trails query error: ${payload.error.message ?? 'ArcGIS query failed'}`);
-    }
-    const page = normalizeUsgsTrailsFeatureCollection(payload);
-    records.push(...page);
-    if (page.length < pageSize || payload.exceededTransferLimit !== true) break;
-    offset += page.length;
+  const response = await fetch(queryUrl.toString());
+  if (!response.ok) {
+    throw new Error(`Arizona State Parks trails query failed: HTTP ${response.status}`);
   }
-
-  return records.slice(0, limit);
+  const payload = await response.json();
+  if (payload?.error?.message) {
+    throw new Error(`Arizona State Parks trails query failed: ${payload.error.message}`);
+  }
+  return payload;
 }
 
 serve(async (req) => {
@@ -209,53 +163,46 @@ serve(async (req) => {
 
   try {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const bboxes = normalizeSyncBboxes(body);
-    if (!bboxes) return jsonResponse({ ok: false, error: 'At least one valid bbox is required for bounded USGS Trails sync' }, 400);
-    const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 1));
-    const limitPerBbox = Math.max(1, Math.min(500, Math.round(readNumber(body.limitPerBbox ?? body.limit_per_bbox ?? body.limit, 150))));
+    const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 0.25));
+    const maxFeatures = Math.max(1, Math.min(1000, Math.round(readNumber(body.maxFeatures ?? body.max_features, 250))));
     const now = new Date().toISOString();
     const admin = createAdminClient();
 
     const { data: source, error: sourceError } = await admin
       .from('route_sources')
-      .upsert(usgsTrailsSourceUpsert(now), { onConflict: 'provider_id' })
+      .upsert(arizonaStateParksTrailsSourceUpsert(now), { onConflict: 'provider_id' })
       .select('id')
       .single();
-    if (sourceError || !source) throw new Error('Unable to upsert USGS Trails route source');
+    if (sourceError) throw new Error(`Unable to upsert Arizona trail route source: ${sourceError.message}`);
+    if (!source) throw new Error('Unable to upsert Arizona trail route source: no source returned');
 
     const { data: ingestRun, error: ingestError } = await admin
       .from('route_source_ingest_runs')
       .insert({
         route_source_id: source.id,
         status: 'running',
-        source_uri: USGS_TRAILS_LAYER.url,
+        source_uri: ARIZONA_STATE_PARKS_TRAILS_SOURCE.sourceUri,
         started_at: now,
         metadata: {
-          providerId: 'usgs_digital_trails',
-          bbox: bboxes.length === 1 ? bboxes[0].bbox : null,
-          bboxes,
+          providerId: 'arizona_state_parks_trails',
+          query: ARIZONA_STATE_PARKS_TRAILS_QUERY,
           minMiles,
-          limitPerBbox,
+          maxFeatures,
         },
       })
       .select('id')
       .single();
-    if (ingestError || !ingestRun) throw new Error('Unable to start USGS Trails ingest run');
+    if (ingestError) throw new Error(`Unable to start Arizona trail ingest run: ${ingestError.message}`);
+    if (!ingestRun) throw new Error('Unable to start Arizona trail ingest run: no ingest run returned');
 
-    const featureByKey = new Map<string, UsgsTrailsArcGisFeature>();
-    for (const bboxPreset of bboxes) {
-      const features = await fetchTrailFeatures(bboxPreset.bbox, minMiles, limitPerBbox);
-      features.forEach((feature, index) => {
-        featureByKey.set(sourceFeatureKey(feature, `${bboxPreset.key}:${index}`), feature);
-      });
-    }
-    const features = Array.from(featureByKey.values());
+    const payload = await fetchArizonaTrailFeatures(maxFeatures);
+    const features = normalizeArizonaStateParksTrailFeatureCollection(payload);
     const rawFeatureRows: Array<Record<string, unknown>> = [];
     const routeRows: Array<Record<string, unknown>> = [];
     const sourceRefs: Array<{ publicId: string; source: Record<string, unknown> }> = [];
 
     for (const feature of features) {
-      const upsert = arcGisFeatureToUsgsTrailsRouteUpsert(feature, {
+      const upsert = featureToArizonaStateParksTrailRouteUpsert(feature, {
         sourceId: source.id,
         sourceLastVerifiedAt: now,
         ingestRunId: ingestRun.id,
@@ -274,6 +221,7 @@ serve(async (req) => {
     await upsertRawFeatureRows(admin, rawFeatureRows);
     const routeIdByPublicId = await upsertRouteRows(admin, routeRows);
     await upsertRouteSourceRows(admin, sourceRefs, routeIdByPublicId);
+    const publicRecommendationCount = countPublicRecommendations(routeRows);
 
     await admin
       .from('route_source_ingest_runs')
@@ -283,33 +231,34 @@ serve(async (req) => {
         raw_feature_count: features.length,
         normalized_feature_count: routeRows.length,
         metadata: {
-          providerId: 'usgs_digital_trails',
-          bbox: bboxes.length === 1 ? bboxes[0].bbox : null,
-          bboxes,
+          providerId: 'arizona_state_parks_trails',
+          query: ARIZONA_STATE_PARKS_TRAILS_QUERY,
           minMiles,
-          limitPerBbox,
-          publicRecommendationCount: 0,
+          maxFeatures,
+          sourceFeatures: features.length,
+          publicRecommendationCount,
         },
       })
       .eq('id', ingestRun.id);
 
     return jsonResponse({
       ok: true,
-      source: 'usgs_digital_trails',
-      bbox: bboxes.length === 1 ? bboxes[0].bbox : null,
-      bboxes,
+      source: 'arizona_state_parks_trails',
       rawFeatureCount: features.length,
       normalizedFeatureCount: routeRows.length,
-      publicRecommendationCount: 0,
-      caveat: 'USGS Trails records are supplemental geometry only. They do not become public Suggested Routes unless authoritative legal-access sources, current-condition checks, and ECS review pass.',
+      publicRecommendationCount,
+      maxFeatures,
+      minMiles,
+      officialFeatureServerUrl: ARIZONA_STATE_PARKS_TRAILS_SOURCE.sourceUri,
+      caveat: 'Arizona State Parks and Trails records are official statewide motorized-use source recommendations with visible warnings. Current closures, permits, local signage, land ownership, weather, fire restrictions, and vehicle-class suitability still require trip-date checks.',
     });
   } catch (error) {
-    console.error('[route-catalog-sync-usgs-trails]', {
-      message: error instanceof Error ? error.message : 'Unknown USGS Trails sync failure.',
+    console.error('[route-catalog-sync-arizona-trails]', {
+      message: error instanceof Error ? error.message : 'Unknown Arizona trail sync failure.',
     });
     return jsonResponse({
       ok: false,
-      error: error instanceof Error ? error.message : 'USGS Trails sync failed.',
+      error: error instanceof Error ? error.message : 'Arizona trail sync failed.',
     }, 500);
   }
 });

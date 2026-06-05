@@ -37,6 +37,7 @@ const expectedUsfsMvumForestSlugs = [
     'mendocino-national-forest',
     'san-juan-national-forest',
     'coconino-national-forest',
+    'apache-sitgreaves-national-forests',
     'manti-la-sal-national-forest',
     'sawtooth-national-forest',
     'deschutes-national-forest',
@@ -49,6 +50,10 @@ const expectedUsfsMvumForestSlugs = [
     'grand-mesa-uncompahgre-gunnison-national-forests',
     'humboldt-toiyabe-national-forest',
     'pike-san-isabel-national-forests',
+    'pawnee-national-grassland',
+    'cimarron-national-grassland',
+    'comanche-national-grassland',
+    'thunder-basin-national-grassland',
     'inyo-national-forest',
     'plumas-national-forest',
     'lassen-national-forest',
@@ -71,6 +76,7 @@ const expectedUsfsMvumForestSlugs = [
     'bitterroot-national-forest',
     'mt-hood-national-forest',
     'coronado-national-forest',
+    'angeles-national-forest',
     'sierra-national-forest',
     'huron-manistee-national-forest',
     'ozark-st-francis-national-forest',
@@ -78,6 +84,7 @@ const expectedUsfsMvumForestSlugs = [
     'hiawatha-national-forest',
     'chequamegon-nicolet-national-forest',
     'national-forests-in-florida',
+    'national-forests-in-alabama',
     'ouachita-national-forest',
     'mark-twain-national-forest',
     'national-forests-in-mississippi',
@@ -96,6 +103,8 @@ const expectedUsfsMvumForestSlugs = [
     'arapaho-roosevelt-national-forests',
     'umatilla-national-forest',
     'ochoco-national-forest',
+    'malheur-national-forest',
+    'crooked-river-national-grassland',
     'cibola-national-forest',
     'eldorado-national-forest',
     'nez-perce-clearwater-national-forest',
@@ -126,6 +135,7 @@ const expectedUsfsMvumForestSlugs = [
     'cleveland-national-forest',
     'green-mountain-finger-lakes-national-forests',
     'lake-tahoe-basin-management-unit',
+    'kiowa-rita-blanca-national-grasslands',
     'wayne-national-forest',
     'white-mountain-national-forest',
     'wallowa-whitman-national-forest',
@@ -147,6 +157,7 @@ const expectedUsfsMvumForestNames = [
   'Mendocino National Forest',
   'San Juan National Forest',
   'Coconino National Forest',
+  'Apache-Sitgreaves National Forests',
   'Manti-La Sal National Forest',
   'Sawtooth National Forest',
   'Deschutes National Forest',
@@ -159,6 +170,10 @@ const expectedUsfsMvumForestNames = [
   'Grand Mesa, Uncompahgre and Gunnison National Forests',
   'Humboldt-Toiyabe National Forest',
   'Pike and San Isabel National Forests',
+  'Pawnee National Grassland',
+  'Cimarron National Grassland',
+  'Comanche National Grassland',
+  'Thunder Basin National Grassland',
   'Inyo National Forest',
   'Plumas National Forest',
   'Lassen National Forest',
@@ -181,6 +196,7 @@ const expectedUsfsMvumForestNames = [
   'Bitterroot National Forest',
   'Mt. Hood National Forest',
   'Coronado National Forest',
+  'Angeles National Forest',
   'Sierra National Forest',
   'Huron-Manistee National Forest',
   'Ozark-St. Francis National Forest',
@@ -188,6 +204,7 @@ const expectedUsfsMvumForestNames = [
   'Hiawatha National Forest',
   'Chequamegon-Nicolet National Forest',
   'National Forests in Florida',
+  'National Forests in Alabama',
   'Ouachita National Forest',
   'Mark Twain National Forest',
   'National Forests in Mississippi',
@@ -206,6 +223,8 @@ const expectedUsfsMvumForestNames = [
   'Arapaho and Roosevelt National Forests',
   'Umatilla National Forest',
   'Ochoco National Forest',
+  'Malheur National Forest',
+  'Crooked River National Grassland',
   'Cibola National Forest',
   'Eldorado National Forest',
   'Nez Perce-Clearwater National Forest',
@@ -236,6 +255,7 @@ const expectedUsfsMvumForestNames = [
   'Cleveland National Forest',
   'Green Mountain and Finger Lakes National Forests',
   'Lake Tahoe Basin Management Unit',
+  'Kiowa and Rita Blanca National Grasslands',
   'Wayne National Forest',
   'White Mountain National Forest',
   'Wallowa-Whitman National Forest',
@@ -264,9 +284,65 @@ assert(
 );
 
 const where = buildUsfsMvumWhereClause(USFS_MVUM_PILOT_FORESTS, { minMiles: 1 });
+const aliasedMvumForestNames = new Set([
+  'Pawnee National Grassland',
+  'Cimarron National Grassland',
+  'Comanche National Grassland',
+  'Thunder Basin National Grassland',
+  'Crooked River National Grassland',
+  'Kiowa and Rita Blanca National Grasslands',
+]);
 for (const forestName of expectedUsfsMvumForestNames) {
+  if (aliasedMvumForestNames.has(forestName)) continue;
   assert(where.includes(forestName), `MVUM where clause should include ${forestName}`);
 }
+assert(
+  where.includes("FORESTNAME = 'Arapaho and Roosevelt National Forests'") &&
+    where.includes("ADMINORG NOT IN ('021006')"),
+  'Arapaho/Roosevelt parent sync should exclude Pawnee records so the grassland source can own them',
+);
+assert(
+  where.includes("FORESTNAME = 'Pike and San Isabel National Forests'") &&
+    where.includes("ADMINORG NOT IN ('021207','021206')"),
+  'Pike/San Isabel parent sync should exclude Cimarron and Comanche records so grassland sources can own them',
+);
+assert(
+  where.includes("FORESTNAME = 'Medicine Bow-Routt National Forest'") &&
+    where.includes("ADMINORG NOT IN ('020609')"),
+  'Medicine Bow-Routt parent sync should exclude Thunder Basin records so the grassland source can own them',
+);
+assert(
+  where.includes("FORESTNAME = 'Ochoco National Forest'") &&
+    where.includes("ADMINORG NOT IN ('060705')"),
+  'Ochoco parent sync should exclude Crooked River records so the grassland source can own them',
+);
+assert(
+  where.includes("FORESTNAME = 'Cibola National Forest'") &&
+    where.includes("ADMINORG NOT IN ('030307')"),
+  'Cibola parent sync should exclude Kiowa/Rita Blanca records so the grassland source can own them',
+);
+
+const pawneeWhere = buildUsfsMvumWhereClause(
+  [USFS_MVUM_PILOT_FORESTS.find((forest) => forest.slug === 'pawnee-national-grassland')],
+  { minMiles: 1 },
+);
+assert(
+  pawneeWhere.includes("FORESTNAME = 'Arapaho and Roosevelt National Forests'") &&
+    pawneeWhere.includes("ADMINORG IN ('021006')") &&
+    pawneeWhere.includes("DISTRICTNA IN ('Pawnee Ranger District')"),
+  'Pawnee source sync should target the parent MVUM forest plus official Pawnee district/admin fields',
+);
+
+const kiowaRitaWhere = buildUsfsMvumWhereClause(
+  [USFS_MVUM_PILOT_FORESTS.find((forest) => forest.slug === 'kiowa-rita-blanca-national-grasslands')],
+  { minMiles: 1 },
+);
+assert(
+  kiowaRitaWhere.includes("FORESTNAME = 'Cibola National Forest'") &&
+    kiowaRitaWhere.includes("ADMINORG IN ('030307')") &&
+    kiowaRitaWhere.includes("DISTRICTNA IN ('Kiowa/Rita Blanca National Grasslands')"),
+  'Kiowa/Rita Blanca source sync should target the combined official district instead of duplicating separate sources',
+);
 assert(where.includes('GIS_MILES >= 1'));
 assert(where.includes("HIGHCLEARA = 'open'") && where.includes("FOURWD_GT5 = 'open'"));
 

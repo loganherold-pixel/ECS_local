@@ -136,6 +136,8 @@ for (const functionName of [
   'route-catalog-sync-minnesota-ohv',
   'route-catalog-sync-oregon-odf-ohv',
   'route-catalog-sync-colorado-cpw-trails',
+  'route-catalog-sync-utah-trails',
+  'route-catalog-sync-arizona-trails',
   'route-catalog-sync-stitch-groups',
 ]) {
   const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
@@ -288,6 +290,18 @@ assert(
     read(path.join('.github', 'workflows', 'route-catalog-colorado-cpw-trails-sync.yml')).includes('route-catalog-sync-colorado-cpw-trails') &&
     read(path.join('.github', 'workflows', 'route-catalog-colorado-cpw-trails-sync.yml')).includes('publicRecommendationCount'),
   'Colorado CPW Designated Trails route catalog sync should have a durable workflow that reports promoted public recommendation telemetry',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-utah-trails-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-utah-trails-sync.yml')).includes('route-catalog-sync-utah-trails') &&
+    read(path.join('.github', 'workflows', 'route-catalog-utah-trails-sync.yml')).includes('publicRecommendationCount'),
+  'Utah SGID Trails route catalog sync should have a durable workflow that reports promoted public recommendation telemetry',
+);
+assert(
+  fs.existsSync(path.join(root, '.github', 'workflows', 'route-catalog-arizona-trails-sync.yml')) &&
+    read(path.join('.github', 'workflows', 'route-catalog-arizona-trails-sync.yml')).includes('route-catalog-sync-arizona-trails') &&
+    read(path.join('.github', 'workflows', 'route-catalog-arizona-trails-sync.yml')).includes('publicRecommendationCount'),
+  'Arizona State Parks Trails route catalog sync should have a durable workflow that reports promoted public recommendation telemetry',
 );
 assert(
   discover.includes('No verified routes yet in this area') &&
