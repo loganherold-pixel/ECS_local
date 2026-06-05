@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform } from 'react-native';
 import { ecsLog } from './ecsLogger';
+import { ensureForegroundLocationPermission } from './locationPermissions';
 import type { GPSLocationOptions, GPSLocationOutput, GPSPosition } from './useGPSLocation';
 
 const M_TO_FT = 3.28084;
@@ -292,7 +293,7 @@ class SharedGPSLocationStore {
 
       this.setState({ isAvailable: true, error: null });
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const { status } = await ensureForegroundLocationPermission(Location);
       if (generation !== this.startGeneration) return;
       if (status !== 'granted') {
         this.applyError('Location permission denied', true);

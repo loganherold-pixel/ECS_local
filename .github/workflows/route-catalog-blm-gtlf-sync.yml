@@ -8,7 +8,7 @@ on:
       states:
         description: Comma-separated BLM administrative state codes to sync.
         required: false
-        default: AZ,CA,CO,ID,MT,NV,NM,UT,WY
+        default: AK,AZ,CA,CO,ID,MT,NV,NM,UT,WY
       layers:
         description: Comma-separated GTLF layer IDs. Defaults to 0,1,2,3 motorized road/trail layers.
         required: false
@@ -38,7 +38,7 @@ jobs:
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
-      STATES: ${{ inputs.states || 'AZ,CA,CO,ID,MT,NV,NM,UT,WY' }}
+      STATES: ${{ inputs.states || 'AK,AZ,CA,CO,ID,MT,NV,NM,UT,WY' }}
       LAYERS: ${{ inputs.layers || '0,1,2,3' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
       LIMIT_PER_STATE_LAYER: ${{ inputs.limit_per_state_layer || '100' }}

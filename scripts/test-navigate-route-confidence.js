@@ -3,11 +3,16 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const summarySource = fs.readFileSync(path.join(root, 'lib', 'remote', 'routeConfidenceSummary.ts'), 'utf8');
-const readinessSource = fs.readFileSync(path.join(root, 'lib', 'routeGuidanceReadinessPresentation.ts'), 'utf8');
-const overlaySource = fs.readFileSync(path.join(root, 'components', 'navigate', 'RoadNavigationOverlay.tsx'), 'utf8');
-const navigateSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8');
-const packageSource = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
+
+function readSource(...segments) {
+  return fs.readFileSync(path.join(root, ...segments), 'utf8').replace(/\r\n/g, '\n');
+}
+
+const summarySource = readSource('lib', 'remote', 'routeConfidenceSummary.ts');
+const readinessSource = readSource('lib', 'routeGuidanceReadinessPresentation.ts');
+const overlaySource = readSource('components', 'navigate', 'RoadNavigationOverlay.tsx');
+const navigateSource = readSource('app', '(tabs)', 'navigate.tsx');
+const packageSource = readSource('package.json');
 
 function assertIncludes(source, fragment, message) {
   assert.ok(source.includes(fragment), message);

@@ -133,10 +133,49 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'okanogan_wenatchee_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'six_rivers_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'tonto_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'beaverhead_deerlodge_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'chugach_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'custer_gallatin_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'gallatin_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'modoc_nf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'tongass_nf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'michigan_orv') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'michigan_orv_tomahawk_kalkaska') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'michigan_orv_missaukee_junction') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'michigan_orv_grand_traverse') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'minnesota_ohv') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'minnesota_ohv_prospectors') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'minnesota_ohv_fourtown_grygla') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'minnesota_ohv_voyageur_country') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'oregon_odf_ohv') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'oregon_odf_tillamook_class_i') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'oregon_odf_tillamook_class_ii_iv') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'oregon_odf_tillamook_class_iii') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_trails') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_bockman_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_mendenhall_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_diamond_peaks') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_gould_mountain_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_montgomery_pass_west') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_bull_mountain_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_government_creek_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_little_government_creek_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_kiwi_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_custer_draw_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_south_canadian_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_ruby_jewel_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_grass_creek') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_american_lakes_access') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_upper_crags_basin_access') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_dry_gulch_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_silver_creek_access') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_american_lakes_trail') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_sweitzer_trail') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_snowmobile_connector') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_horseshoe_trail') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_old_fulford_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'colorado_cpw_south_shore_ohv_track') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ak_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_az_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ca_nv_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_co_gtlf') &&
@@ -144,8 +183,28 @@ assert(
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_mt_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_nm_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ut_gtlf') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ut_smoky_mountain_alvey_wash') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ut_wolverine_loop_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ut_heads_of_the_creeks_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ut_horse_mountain_road') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ut_fourmile_bench') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_ut_paria_breaks') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'blm_wy_gtlf') &&
     ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_joshua_tree') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_big_south_fork') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_shenandoah') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_everglades') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_timucuan') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_channel_islands') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_denali') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_wrangell_st_elias') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_glacier_bay') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_klondike_gold_rush') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_lake_clark') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_yukon_charley') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_kaloko_honokohau') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_american_samoa') &&
+    ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'nps_public_trails_war_in_the_pacific') &&
     !ROUTE_CATALOG_PRESET_SEARCH_AREAS.some((area) => area.key === 'usgs_trails_context'),
   'Route catalog presets should expose all verified public recommendation coverage areas.',
 );
@@ -286,10 +345,49 @@ assert.deepStrictEqual(
     'Okanogan-Wenatchee National Forest',
     'Six Rivers National Forest',
     'Tonto National Forest',
+    'Beaverhead-Deerlodge National Forest',
+    'Chugach National Forest',
+    'Custer Gallatin National Forest',
+    'Gallatin National Forest',
+    'Modoc National Forest',
+    'Tongass National Forest',
     'Michigan DNR ORV',
+    'Michigan DNR Tomahawk-Kalkaska ORV',
+    'Michigan DNR Missaukee Junction ORV',
+    'Michigan DNR Grand Traverse ORV',
     'Minnesota DNR OHV',
+    'Minnesota DNR Prospectors OHV',
+    'Minnesota DNR Fourtown-Grygla OHV',
+    'Minnesota DNR Voyageur Country ATV',
     'Oregon ODF OHV',
+    'Oregon ODF Tillamook Class I OHV',
+    'Oregon ODF Tillamook Class II/IV OHV',
+    'Oregon ODF Tillamook Class III OHV',
     'Colorado CPW Designated Trails',
+    'Colorado CPW Bockman Road',
+    'Colorado CPW Mendenhall Road',
+    'Colorado CPW Diamond Peaks Trail',
+    'Colorado CPW Gould Mountain Road',
+    'Colorado CPW Montgomery Pass Road West',
+    'Colorado CPW Bull Mountain Road',
+    'Colorado CPW Government Creek Road',
+    'Colorado CPW Little Government Creek Road',
+    'Colorado CPW Kiwi Road',
+    'Colorado CPW Custer Draw Road',
+    'Colorado CPW South Canadian Road',
+    'Colorado CPW Ruby Jewel Road',
+    'Colorado CPW Grass Creek',
+    'Colorado CPW American Lakes Trail Access',
+    'Colorado CPW Upper Crags Basin Access',
+    'Colorado CPW Dry Gulch Road',
+    'Colorado CPW Silver Creek Access Trail',
+    'Colorado CPW American Lakes Trail',
+    'Colorado CPW Sweitzer Trail',
+    'Colorado CPW Snowmobile Connector Trail',
+    'Colorado CPW Horseshoe Trail',
+    'Colorado CPW Old Fulford Road',
+    'Colorado CPW OHV Track on South Shore Trail',
+    'BLM GTLF Alaska',
     'BLM GTLF Arizona',
     'BLM GTLF CA/NV',
     'BLM GTLF Colorado',
@@ -297,8 +395,28 @@ assert.deepStrictEqual(
     'BLM GTLF Montana',
     'BLM GTLF New Mexico',
     'BLM GTLF Utah',
+    'BLM GTLF Smoky Mountain/Alvey Wash',
+    'BLM GTLF Wolverine Loop Rd',
+    'BLM GTLF Heads Of The Creeks Rd',
+    'BLM GTLF Horse Mountain Rd',
+    'BLM GTLF Fourmile Bench',
+    'BLM GTLF Paria Breaks',
     'BLM GTLF Wyoming',
     'NPS Public Trails Joshua Tree',
+    'NPS Public Trails Big South Fork',
+    'NPS Public Trails Shenandoah',
+    'NPS Public Trails Everglades',
+    'NPS Public Trails Timucuan',
+    'NPS Public Trails Channel Islands',
+    'NPS Public Trails Denali',
+    'NPS Public Trails Wrangell-St Elias',
+    'NPS Public Trails Glacier Bay',
+    'NPS Public Trails Klondike Gold Rush',
+    'NPS Public Trails Lake Clark',
+    'NPS Public Trails Yukon-Charley',
+    'NPS Public Trails Kaloko-Honokohau',
+    'NPS Public Trails American Samoa',
+    'NPS Public Trails War in the Pacific',
   ],
   'Verified coverage labels should make the current public recommendation footprint explicit.',
 );
@@ -317,7 +435,7 @@ assert.deepStrictEqual(
 );
 assert.match(
   getRouteCatalogCoverageSummary(),
-  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, Caribou-Targhee National Forest, Klamath National Forest, Willamette National Forest, Boise National Forest, Lolo National Forest, Salmon-Challis National Forest, Stanislaus National Forest, Dixie National Forest, Bitterroot National Forest, Mt\. Hood National Forest, Coronado National Forest, Sierra National Forest, Huron-Manistee National Forest, Ozark-St\. Francis National Forest, Ottawa National Forest, Hiawatha National Forest, Chequamegon-Nicolet National Forest, National Forests in Florida, Ouachita National Forest, Mark Twain National Forest, National Forests in Mississippi, Kisatchie National Forest, George Washington and Jefferson National Forest, Francis Marion and Sumter National Forests, National Forests in Texas, National Forests in North Carolina, Allegheny National Forest, Cherokee National Forest, Daniel Boone National Forest, Rogue River-Siskiyou National Forests, Medicine Bow-Routt National Forest, Kootenai National Forest, Gifford Pinchot National Forest, Arapaho and Roosevelt National Forests, Umatilla National Forest, Ochoco National Forest, Cibola National Forest, Eldorado National Forest, Nez Perce-Clearwater National Forest, Payette National Forest, Superior National Forest, Chippewa National Forest, Sequoia National Forest, Ashley National Forest, Bridger-Teton National Forest, Siuslaw National Forest, Lincoln National Forest, White River National Forest, Mt\. Baker-Snoqualmie National Forest, Flathead National Forest, Olympic National Forest, Custer National Forest, Bighorn National Forest, Colville National Forest, Chattahoochee-Oconee National Forests, Nebraska National Forest, Shoshone National Forest, San Bernardino National Forest, Los Padres National Forest, Dakota Prairie Grasslands, Monongahela National Forest, Land Between the Lakes National Recreation Area, Shawnee National Forest, Cleveland National Forest, Green Mountain and Finger Lakes National Forests, Lake Tahoe Basin Management Unit, Wayne National Forest, White Mountain National Forest, Wallowa-Whitman National Forest, Hoosier National Forest, Columbia River Gorge National Scenic Area, Okanogan-Wenatchee National Forest, Six Rivers National Forest, Tonto National Forest, Michigan DNR ORV, Minnesota DNR OHV, Oregon ODF OHV, Colorado CPW Designated Trails, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, BLM GTLF Wyoming, NPS Public Trails Joshua Tree.*In curation: none yet.*No demo routes are used/i,
+  /Verified recommendation coverage: Tahoe National Forest, Mendocino National Forest, San Juan National Forest, Coconino National Forest, Manti-La Sal National Forest, Sawtooth National Forest, Deschutes National Forest, Kaibab National Forest, Prescott National Forest, Gila National Forest, Santa Fe National Forest, Carson National Forest, Rio Grande National Forest, Grand Mesa, Uncompahgre and Gunnison National Forests, Humboldt-Toiyabe National Forest, Pike and San Isabel National Forests, Inyo National Forest, Plumas National Forest, Lassen National Forest, Shasta-Trinity National Forest, Umpqua National Forest, Fremont-Winema National Forest, Idaho Panhandle National Forests, Helena-Lewis and Clark National Forest, Fishlake National Forest, Black Hills National Forest, Uinta-Wasatch-Cache National Forest, Caribou-Targhee National Forest, Klamath National Forest, Willamette National Forest, Boise National Forest, Lolo National Forest, Salmon-Challis National Forest, Stanislaus National Forest, Dixie National Forest, Bitterroot National Forest, Mt\. Hood National Forest, Coronado National Forest, Sierra National Forest, Huron-Manistee National Forest, Ozark-St\. Francis National Forest, Ottawa National Forest, Hiawatha National Forest, Chequamegon-Nicolet National Forest, National Forests in Florida, Ouachita National Forest, Mark Twain National Forest, National Forests in Mississippi, Kisatchie National Forest, George Washington and Jefferson National Forest, Francis Marion and Sumter National Forests, National Forests in Texas, National Forests in North Carolina, Allegheny National Forest, Cherokee National Forest, Daniel Boone National Forest, Rogue River-Siskiyou National Forests, Medicine Bow-Routt National Forest, Kootenai National Forest, Gifford Pinchot National Forest, Arapaho and Roosevelt National Forests, Umatilla National Forest, Ochoco National Forest, Cibola National Forest, Eldorado National Forest, Nez Perce-Clearwater National Forest, Payette National Forest, Superior National Forest, Chippewa National Forest, Sequoia National Forest, Ashley National Forest, Bridger-Teton National Forest, Siuslaw National Forest, Lincoln National Forest, White River National Forest, Mt\. Baker-Snoqualmie National Forest, Flathead National Forest, Olympic National Forest, Custer National Forest, Bighorn National Forest, Colville National Forest, Chattahoochee-Oconee National Forests, Nebraska National Forest, Shoshone National Forest, San Bernardino National Forest, Los Padres National Forest, Dakota Prairie Grasslands, Monongahela National Forest, Land Between the Lakes National Recreation Area, Shawnee National Forest, Cleveland National Forest, Green Mountain and Finger Lakes National Forests, Lake Tahoe Basin Management Unit, Wayne National Forest, White Mountain National Forest, Wallowa-Whitman National Forest, Hoosier National Forest, Columbia River Gorge National Scenic Area, Okanogan-Wenatchee National Forest, Six Rivers National Forest, Tonto National Forest, Beaverhead-Deerlodge National Forest, Chugach National Forest, Custer Gallatin National Forest, Gallatin National Forest, Modoc National Forest, Tongass National Forest, Michigan DNR ORV, Michigan DNR Tomahawk-Kalkaska ORV, Michigan DNR Missaukee Junction ORV, Michigan DNR Grand Traverse ORV, Minnesota DNR OHV, Minnesota DNR Prospectors OHV, Minnesota DNR Fourtown-Grygla OHV, Minnesota DNR Voyageur Country ATV, Oregon ODF OHV, Oregon ODF Tillamook Class I OHV, Oregon ODF Tillamook Class II\/IV OHV, Oregon ODF Tillamook Class III OHV, Colorado CPW Designated Trails, Colorado CPW Bockman Road, Colorado CPW Mendenhall Road, Colorado CPW Diamond Peaks Trail, Colorado CPW Gould Mountain Road, Colorado CPW Montgomery Pass Road West, Colorado CPW Bull Mountain Road, Colorado CPW Government Creek Road, Colorado CPW Little Government Creek Road, Colorado CPW Kiwi Road, Colorado CPW Custer Draw Road, Colorado CPW South Canadian Road, Colorado CPW Ruby Jewel Road, Colorado CPW Grass Creek, Colorado CPW American Lakes Trail Access, Colorado CPW Upper Crags Basin Access, Colorado CPW Dry Gulch Road, Colorado CPW Silver Creek Access Trail, Colorado CPW American Lakes Trail, Colorado CPW Sweitzer Trail, Colorado CPW Snowmobile Connector Trail, Colorado CPW Horseshoe Trail, Colorado CPW Old Fulford Road, Colorado CPW OHV Track on South Shore Trail, BLM GTLF Alaska, BLM GTLF Arizona, BLM GTLF CA\/NV, BLM GTLF Colorado, BLM GTLF Idaho, BLM GTLF Montana, BLM GTLF New Mexico, BLM GTLF Utah, BLM GTLF Smoky Mountain\/Alvey Wash, BLM GTLF Wolverine Loop Rd, BLM GTLF Heads Of The Creeks Rd, BLM GTLF Horse Mountain Rd, BLM GTLF Fourmile Bench, BLM GTLF Paria Breaks, BLM GTLF Wyoming, NPS Public Trails Joshua Tree, NPS Public Trails Big South Fork, NPS Public Trails Shenandoah, NPS Public Trails Everglades, NPS Public Trails Timucuan, NPS Public Trails Channel Islands, NPS Public Trails Denali, NPS Public Trails Wrangell-St Elias, NPS Public Trails Glacier Bay, NPS Public Trails Klondike Gold Rush, NPS Public Trails Lake Clark, NPS Public Trails Yukon-Charley, NPS Public Trails Kaloko-Honokohau, NPS Public Trails American Samoa, NPS Public Trails War in the Pacific.*In curation: none yet.*No demo routes are used/i,
   'Coverage summary should distinguish public recommendation coverage from curation coverage.',
 );
 

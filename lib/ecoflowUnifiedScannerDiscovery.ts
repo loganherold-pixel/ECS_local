@@ -3,7 +3,10 @@ import type { UnifiedDiscoverySource } from './unifiedDeviceDiscoveryAggregator'
 import { ecsLog } from './ecsLogger';
 import { EcoFlowCloudProvider } from '../src/power/cloud/providers/EcoFlowCloudProvider';
 import type { PowerDevice as CatalogPowerDevice } from '../src/power/types/PowerDevice';
-import { isEcoFlowUnauthorizedDeviceError } from './ecoflowUnauthorizedDevice';
+import {
+  isEcoFlowPublicApiAuthorizationBlockedError,
+  isEcoFlowUnauthorizedDeviceError,
+} from './ecoflowUnauthorizedDevice';
 import type { UnifiedScannerErrorSource } from './unifiedScannerContract';
 import { normalizeEcoFlowTelemetryProductType } from './ecoflowBluTelemetryEligibility';
 
@@ -40,7 +43,11 @@ export class EcoFlowCloudDiscoveryError extends Error {
 
 export function classifyEcoFlowCloudErrorSource(error: unknown): UnifiedScannerErrorSource {
   const message = error instanceof Error ? error.message : String(error ?? '');
-  if (isEcoFlowUnauthorizedDeviceError(error) || /unauthori[sz]ed|not authorized|forbidden|pending_approval|approval|missing_ecoflow_credentials|keys not configured|auth required|authorization required/i.test(message)) {
+  if (
+    isEcoFlowPublicApiAuthorizationBlockedError(error) ||
+    isEcoFlowUnauthorizedDeviceError(error) ||
+    /unauthori[sz]ed|not authorized|forbidden|pending_approval|approval|missing_ecoflow_credentials|keys not configured|auth required|authorization required/i.test(message)
+  ) {
     return 'cloud_auth';
   }
   if (/signature|access key|api key|secret|region|account binding|credential|configuration|config/i.test(message)) {

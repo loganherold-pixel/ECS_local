@@ -9,6 +9,7 @@ const nativeComponentSource = fs.readFileSync(path.join(root, 'components/dashbo
 const fallbackComponentSource = fs.readFileSync(path.join(root, 'components/dashboard/BluPowerModuleFallback.tsx'), 'utf8');
 const powerWidgetSource = fs.readFileSync(path.join(root, 'components/dashboard/PowerSystemWidget.tsx'), 'utf8');
 const widgetRenderers = fs.readFileSync(path.join(root, 'components/dashboard/WidgetRenderers.tsx'), 'utf8');
+const powerManagementVisualBlock = widgetRenderers.match(/function AttitudeCommandPowerManagementVisual\([\s\S]*?\r?\n}\r?\n\r?\nfunction AttitudeCommandTerrainRiskBackgroundVisual/)?.[0] ?? '';
 const metroConfig = fs.readFileSync(path.join(root, 'metro.config.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
@@ -34,6 +35,7 @@ for (const token of [
   "BLU_POWER_MODULE_VIEW_MODEL = 'PowerWidgetVM'",
   "BLU_POWER_MODULE_VIEW_MODEL_INSTANCE = 'Instance'",
   'BLU_POWER_MODULE_VIEW_MODEL_NUMERIC_PROPERTIES',
+  'shouldAnimateBluPowerModuleRuntime',
   'offlinestatusopacity',
   'batteryPercent',
   'leftflowopacity',
@@ -53,6 +55,10 @@ assert(
     webComponentSource.includes("const PUBLIC_RIVE_SRC = '/rive/blu_power_module.riv'") &&
     webComponentSource.includes('Image.resolveAssetSource(BLU_POWER_MODULE_ASSET)') &&
     webComponentSource.includes('src: riveSrc') &&
+    webComponentSource.includes('autoplay: shouldAnimate') &&
+    webComponentSource.includes('shouldAnimateBluPowerModuleRuntime({ hasEcsData, batteryPercent, inputWatts, outputWatts })') &&
+    webComponentSource.includes('rive.play()') &&
+    webComponentSource.includes('rive.pause()') &&
     webComponentSource.includes('onLoad: () => setLoaded(true)') &&
     webComponentSource.includes('onLoadError: () => setLoadFailed(true)') &&
     webComponentSource.includes('<BluPowerModuleFallback') &&
@@ -71,6 +77,9 @@ assert(
     nativeComponentSource.includes('artboardName={BLU_POWER_MODULE_ARTBOARD}') &&
     nativeComponentSource.includes('stateMachineName={BLU_POWER_MODULE_STATE_MACHINE}') &&
     nativeComponentSource.includes('dataBind={viewModelInstance ?? DataBindMode.Auto}') &&
+    nativeComponentSource.includes('shouldAnimateBluPowerModuleRuntime({ hasEcsData, batteryPercent, inputWatts, outputWatts })') &&
+    nativeComponentSource.includes('autoPlay={shouldAnimate}') &&
+    nativeComponentSource.includes('if (shouldAnimate)') &&
     nativeComponentSource.includes('fit={Fit.Contain}') &&
     nativeComponentSource.includes('alignment={Alignment.Center}') &&
     nativeComponentSource.includes("width: '100%'") &&
@@ -81,16 +90,18 @@ assert(
     nativeComponentSource.includes("instance.numberProperty(property)?.set(value)") &&
     !nativeComponentSource.includes('stringProperty') &&
     !nativeComponentSource.includes('useStateMachineInput') &&
-    nativeComponentSource.includes('riveViewRef?.playIfNeeded?.()'),
+    nativeComponentSource.includes('riveViewRef?.playIfNeeded?.()') &&
+    nativeComponentSource.includes('riveViewRef?.pause?.()'),
   'Native BLU power module must lazy-load Rive outside Expo Go, render with valid size before telemetry/view-model data arrives, use PowerWidgetVM numeric data binding, avoid state-machine inputs, contain fit, and centered alignment.',
 );
 
 assert(
-  mapperSource.includes('offlinestatusopacity: activeOpacity(!input.hasEcsData)') &&
+    mapperSource.includes('offlinestatusopacity: activeOpacity(!input.hasEcsData)') &&
     mapperSource.includes('leftflowopacity: activeOpacity(input.hasEcsData && inputWatts > 1)') &&
     mapperSource.includes('rightflowopacity: activeOpacity(input.hasEcsData && outputWatts > 1)') &&
+    mapperSource.includes('return input.hasEcsData && (activeWatts(input.inputWatts) || activeWatts(input.outputWatts))') &&
     mapperSource.includes("TODO: Flip left/right if visual QA shows this asset's flow direction is reversed."),
-  'Power module runtime must drive the inspected PowerWidgetVM numeric properties for offline status, battery percent, and live transfer flow.',
+  'Power module runtime must drive inspected PowerWidgetVM numeric properties and only animate live transfer flow.',
 );
 
 assert(
@@ -170,6 +181,23 @@ assert(
     !widgetRenderers.includes('powerFlowLineOutput') &&
     !widgetRenderers.includes('powerFlowPulseMini'),
   'Dashboard Power Monitor must not render redundant live pills or React Native center flow rails around the blue Rive module.',
+);
+
+assert(
+  powerManagementVisualBlock.includes('POWER_MANAGEMENT_BACKGROUND') &&
+    powerManagementVisualBlock.includes('powerManagementBackground') &&
+    powerManagementVisualBlock.includes('powerManagementBackgroundScrim'),
+  'Power Monitor decorative background must keep the Power Management background image and scrim.',
+);
+
+assert(
+  !powerManagementVisualBlock.includes('powerSolarSourceBlock') &&
+    !powerManagementVisualBlock.includes('powerColumnLeft') &&
+    !powerManagementVisualBlock.includes('powerColumnRight') &&
+    !powerManagementVisualBlock.includes('SOLAR SOURCE') &&
+    !powerManagementVisualBlock.includes('INPUT') &&
+    !powerManagementVisualBlock.includes('OUTPUT'),
+  'Power Monitor decorative background must not duplicate solar source, input, or output as corner overlay text.',
 );
 
 assert(

@@ -190,9 +190,10 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
       'Release scanner suppresses generic Bluetooth noise and only lists likely Bluestack-compatible nearby devices.',
       deviceConnections.includes('isVisibleReleaseDevice') &&
         deviceConnections.includes('visibleReleaseDevices') &&
-        bluestackAdapter.includes('TVs, headsets, and unrelated Bluetooth devices stay out of this action list') &&
+        bluestackAdapter.includes('Tank sensor rows can be linkable while level percentage parsing remains pending') &&
         deviceRouting.includes('isReleaseScannerBluetoothRoute') &&
         scannerListState.includes('requireBrandAllowlistMatch') &&
+        scannerListState.includes('releaseScannerBrandMatch') &&
         scannerListState.includes('unknown_ble_hidden') &&
         unifiedHook.includes('routedBluetoothDiscoveries.filter((entry) => isReleaseScannerBluetoothRoute(entry.routing)') &&
         unifiedHook.includes('unsupported_bluetooth_noise_hidden') &&
@@ -312,7 +313,8 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
         productionEvidenceDoc.includes('"reviewerSignoff"') &&
         productionEvidenceDoc.includes('"acceptedAt"') &&
         productionEvidenceDoc.includes('four non-placeholder evidence references') &&
-        productionEvidenceDoc.includes('Do not set `productionDecision` to `accepted` until real-hardware evidence is reviewed'),
+        productionEvidenceDoc.includes('Owner sign-off may be recorded before real-hardware evidence is complete') &&
+        productionEvidenceDoc.includes('Production readiness remains blocked until every real-hardware evidence flag is true'),
       [relPath(root, paths.productionEvidenceDoc)],
       ['Keep the Bluetooth production evidence contract aligned with the gate evidence file.'],
     ),
@@ -350,10 +352,9 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
       'production_owner_decision_accepted',
       'Production owner decision is accepted for Bluetooth, power devices, EcoFlow, and OBD2.',
       accepted(evidence?.productionDecision) &&
-        hasCompleteFieldEvidencePacket(evidence) &&
         hasReviewerSignoff(evidence),
       [relPath(root, paths.evidence)],
-      ['Record product, privacy, engineering, and field-ops acceptance plus acceptedAt after real-device evidence is complete.'],
+      ['Record product, privacy, engineering, and field-ops acceptance plus acceptedAt. Real-hardware evidence remains separately required.'],
     ),
   ];
 

@@ -80,12 +80,17 @@ includes('handleZeroVehicleRoll', 'Vehicle Profile must expose a zero-roll handl
 includes('setVehicleRollZeroOffsetDeg(commandStageRollDeg);', 'Vehicle Profile zero control must capture the current roll as the new zero.');
 includes('VehicleCommandRollZeroButton', 'Vehicle Profile must render a reusable zero-roll button.');
 includes('vehicleRollZeroButtonCompact', 'Regular Vehicle Profile widget must position the zero button away from live OBD2 corner readouts.');
-includes('right: 42', 'Regular Vehicle Profile zero button should sit on the upper rail outside the top-right voltage corner.');
 includes('vehicleRollZeroButtonExpanded', 'Expanded Vehicle Profile widget must place the zero button beside the close control.');
 includes('height: 112', 'Expanded Vehicle Profile roll meter dock should be large enough to read at a glance.');
 includes("accessibilityLabel=\"Zero vehicle roll indicator\"", 'Vehicle Profile zero button must be accessible.');
 includes('event.stopPropagation();', 'Vehicle Profile zero button must stop the compact card press from opening expanded detail.');
 includes('activePanel?.panel === \'vehicle\'', 'Expanded zero button must only show for the Vehicle Profile panel.');
+
+const compactZeroButtonBlock = widgetRenderers.match(/vehicleRollZeroButtonCompact:\s*\{[\s\S]*?\n\s*\},/)?.[0] ?? '';
+assert.ok(compactZeroButtonBlock, 'Compact vehicle roll-zero style block should be discoverable.');
+assert.ok(compactZeroButtonBlock.includes('top: 0'), 'Compact Vehicle Profile zero button should sit on the top edge.');
+assert.ok(compactZeroButtonBlock.includes('left: 0'), 'Compact Vehicle Profile zero button should sit in the top-left corner.');
+assert.ok(!compactZeroButtonBlock.includes('right:'), 'Compact Vehicle Profile zero button should not anchor to the right rail.');
 
 for (const rowLabel of [
   'RPM',
@@ -157,8 +162,6 @@ assert.ok(!vehicleDetailBlock.includes('vehicleLiveSourcePillText'), 'Vehicle ex
   "ROLL",
   "vehicle-profile-roll-attitude-strip",
   "accessibilityLabel={`Vehicle roll monitor.",
-  "LinearGradient",
-  "vehicle-roll-active-gradient",
   "const campsiteLevel = isRollLevel && isPitchLevel",
   "CAMPSITE",
   "campsiteStatusLine",
@@ -173,6 +176,18 @@ assert.ok(!vehicleDetailBlock.includes('vehicleLiveSourcePillText'), 'Vehicle ex
   "containerDockedExpanded",
 ].forEach((fragment) => {
   assert.ok(rollStripSource.includes(fragment), `Roll attitude strip must include ${fragment}.`);
+});
+
+[
+  "LinearGradient",
+  "vehicle-roll-active-gradient",
+  "activeStartX",
+  "activeWidth",
+  "opacity={0.14}",
+  "strokeWidth={7.5}",
+  "opacity={0.12}",
+].forEach((fragment) => {
+  assert.ok(!rollStripSource.includes(fragment), `Roll attitude strip must not render translucent active overlays: ${fragment}.`);
 });
 
 [

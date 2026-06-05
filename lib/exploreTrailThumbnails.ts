@@ -35,6 +35,10 @@ interface ThumbnailRecord {
   regionGroups?: RegionGroupId[];
 }
 
+export const EXPLORE_THUMBNAIL_IMAGE_WIDTH = 960;
+export const EXPLORE_THUMBNAIL_IMAGE_HEIGHT = 640;
+export const EXPLORE_THUMBNAIL_IMAGE_QUALITY = 88;
+
 export type ExploreRouteThumbnailRoute = {
   id?: string | number | null;
   name?: string;
@@ -415,10 +419,29 @@ function buildAssignment(
   return {
     state,
     trust,
-    uri: entry.uri,
+    uri: upgradeExploreThumbnailUri(entry.uri),
     sourceKey,
     reason,
   };
+}
+
+function setImageQueryParam(uri: string, key: string, value: string): string {
+  const pattern = new RegExp(`([?&])${key}=[^&]*`);
+  if (pattern.test(uri)) {
+    return uri.replace(pattern, `$1${key}=${value}`);
+  }
+  return `${uri}${uri.includes('?') ? '&' : '?'}${key}=${value}`;
+}
+
+function upgradeExploreThumbnailUri(uri: string): string {
+  if (!/images\.unsplash\.com/i.test(uri)) return uri;
+  let nextUri = uri;
+  nextUri = setImageQueryParam(nextUri, 'auto', 'format');
+  nextUri = setImageQueryParam(nextUri, 'fit', 'crop');
+  nextUri = setImageQueryParam(nextUri, 'w', String(EXPLORE_THUMBNAIL_IMAGE_WIDTH));
+  nextUri = setImageQueryParam(nextUri, 'h', String(EXPLORE_THUMBNAIL_IMAGE_HEIGHT));
+  nextUri = setImageQueryParam(nextUri, 'q', String(EXPLORE_THUMBNAIL_IMAGE_QUALITY));
+  return nextUri;
 }
 
 function isRegionCompatible(sourceKey: string, regionGroup?: RegionGroupId): boolean {

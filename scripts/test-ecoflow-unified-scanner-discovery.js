@@ -143,6 +143,15 @@ assert.strictEqual(missingId, null, 'devices without a stable cloud id should no
     'unauthorized EcoFlow device failures must be classified as cloud_auth, not native BLE',
   );
   assert.strictEqual(
+    classifyEcoFlowCloudErrorSource({
+      code: 'ECOFLOW_DEVICE_UNAUTHORIZED',
+      message: 'EcoFlow API code 1006: DELTA Mini unsupported by current app authorization',
+      details: { ecoflowCode: '1006', authorization: 'public_api_authorization_pending' },
+    }),
+    'cloud_auth',
+    'EcoFlow API code 1006 should remain visible as a cloud_auth scanner source instead of a generic API failure',
+  );
+  assert.strictEqual(
     classifyEcoFlowCloudErrorSource(new Error('invalid access key or signature for region')),
     'cloud_config',
     'EcoFlow key/signature/region failures must be classified as cloud_config',
@@ -168,6 +177,27 @@ assert.strictEqual(missingId, null, 'devices without a stable cloud id should no
     'EcoFlow edge function failure must be visible to the unified scanner source status while BLE discovery continues independently',
   );
   assert.strictEqual(failureSource, 'cloud_auth');
+
+  let code1006FailureVisible = false;
+  let code1006FailureSource = null;
+  try {
+    await discoverEcoFlowDevicesForUnifiedScanner({
+      async listDevices() {
+        throw new Error('EcoFlow API code 1006: Alternator Charger public API authorization pending');
+      },
+    });
+  } catch (error) {
+    code1006FailureVisible =
+      error instanceof EcoFlowCloudDiscoveryError &&
+      /1006/.test(error.message);
+    code1006FailureSource = error.errorSource;
+  }
+  assert.strictEqual(
+    code1006FailureVisible,
+    true,
+    'EcoFlow API code 1006 failures must surface in scanner diagnostics with the model-specific message intact',
+  );
+  assert.strictEqual(code1006FailureSource, 'cloud_auth');
 
   console.log('EcoFlow unified scanner discovery checks passed.');
 })().catch((err) => {

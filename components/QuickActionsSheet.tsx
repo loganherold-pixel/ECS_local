@@ -31,6 +31,7 @@ import { getBuilderState, getCachedExpeditions } from '../lib/expeditionCache';
 import { missionEventStore, missionNoteStore } from '../lib/missionStore';
 import { expeditionStateStore } from '../lib/expeditionStateStore';
 import { dispatchStore } from '../lib/dispatchStore';
+import { ensureForegroundLocationPermission } from '../lib/locationPermissions';
 import { commsStore, type CustomCommsData } from '../lib/commsStore';
 import { routeStore, type ImportedRoute } from '../lib/routeStore';
 import type { EcsExpedition } from '../lib/expeditionTypes';
@@ -141,7 +142,7 @@ async function getGPSPosition(): Promise<{ lat: number; lng: number } | null> {
   try {
     if (Platform.OS !== 'web') {
       const Location = await import('expo-location');
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const { status } = await ensureForegroundLocationPermission(Location);
       if (status !== 'granted') return null;
       const pos = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,

@@ -198,6 +198,58 @@ assert.strictEqual(
   'release scans must keep unknown-label Mopeka water sensors visible when their BLE signature is exposed as serviceData',
 );
 
+const exactUnknownMopekaWaterServiceData = {
+  id: '1B4C7F',
+  source: 'ble',
+  displayName: 'Unknown device',
+  rssi: -56,
+  lastSeenAt: NOW + 876,
+  raw: {
+    serviceData: {
+      fee5: mopekaUniversalServiceData,
+    },
+  },
+};
+const exactUnknownMopekaWaterServiceDataResult = upsertScannerDeviceList([], [exactUnknownMopekaWaterServiceData], {
+  reason: 'release_scan_exact_unknown_mopeka_water_service_data',
+  now: NOW + 876,
+  requireBrandAllowlistMatch: true,
+});
+assert.strictEqual(
+  exactUnknownMopekaWaterServiceDataResult.devices.length,
+  1,
+  'release scans must not hide exact Unknown device labels when Mopeka liquid serviceData proves an approved tank sensor',
+);
+assert.deepStrictEqual(
+  exactUnknownMopekaWaterServiceDataResult.dropReasons,
+  [],
+  'Mopeka liquid serviceData should bypass generic unknown-BLE suppression instead of being logged as unknown_ble_hidden',
+);
+
+const td40MopekaLiquidModel = {
+  id: 'td40-liquid',
+  source: 'ble',
+  displayName: 'TD40',
+  rssi: -57,
+  lastSeenAt: NOW + 900,
+};
+assert.strictEqual(
+  isLikelyPowerScannerDevice(td40MopekaLiquidModel),
+  true,
+  'release allowlist filtering must recognize Mopeka TD40 liquid model names as approved tank sensors',
+);
+const td40MopekaLiquidModelResult = upsertScannerDeviceList([], [td40MopekaLiquidModel], {
+  reason: 'release_scan_mopeka_td40_liquid_model',
+  now: NOW + 900,
+  requireBrandAllowlistMatch: true,
+});
+assert.strictEqual(
+  td40MopekaLiquidModelResult.devices.length,
+  1,
+  'release scans must keep Mopeka TD40 liquid model rows visible instead of dropping them as allowlist misses',
+);
+assert.deepStrictEqual(td40MopekaLiquidModelResult.dropReasons, []);
+
 const anonymousWithHints = {
   source: 'ble',
   displayName: 'Unknown device A1B2',

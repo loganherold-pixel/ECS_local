@@ -20,6 +20,7 @@ on:
           - southwest
           - central_rockies
           - northern_rockies
+          - alaska
           - pacific_northwest
           - midwest_northeast
           - south_southeast

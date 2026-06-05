@@ -37,6 +37,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
+import { ensureForegroundLocationPermission } from './locationPermissions';
 
 // ── Types ──────────────────────────────────────────────
 export type CompassMode = 'auto' | 'upright' | 'flat';
@@ -336,7 +337,7 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
         if (cancelled || !mountedRef.current) return;
 
         // Check if heading is available
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        const { status } = await ensureForegroundLocationPermission(Location);
         if (cancelled || !mountedRef.current) return;
         if (status !== 'granted') return;
 

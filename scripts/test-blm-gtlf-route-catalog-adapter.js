@@ -23,11 +23,14 @@ require.extensions['.ts'] = compileTypescript;
 const {
   BLM_GTLF_LAYERS,
   BLM_GTLF_SOURCE,
+  applyBlmGtlfCurrentConditionSources,
   aggregateBlmGtlfRouteFeatures,
   arcGisFeatureToBlmGtlfRouteUpsert,
   blmGtlfSourceUpsert,
   buildBlmGtlfWhereClause,
+  normalizeBlmGtlfCurrentConditionSources,
   normalizeBlmGtlfFeatureCollection,
+  routeCurrentConditionSourceUpsertForBlmGtlf,
 } = require(path.join(root, 'supabase', 'functions', '_shared', 'routeCatalogBlmGtlf.ts'));
 
 assert.strictEqual(BLM_GTLF_SOURCE.providerId, 'blm_gtlf');
@@ -165,6 +168,197 @@ assert(
   'BLM aggregate recommendations should retain the current-conditions caveat',
 );
 assert.strictEqual(publicBlmAggregates[0].verifiedRoute.blocker_reasons.length, 0);
+
+const normalizedBlmCurrentConditionSources = normalizeBlmGtlfCurrentConditionSources(
+  {
+    california: {
+      checkedAt: '2026-06-05T12:00:00.000Z',
+      sourceUrl: 'https://www.blm.gov/alerts/panoche-access-temporary-closure',
+      closures: [
+        {
+          title: 'Panoche Access temporary public safety closure',
+          summary: 'Official BLM closure notice closes route 403 while crews complete emergency repairs.',
+          status: 'active',
+          closureType: 'land_manager',
+          routePlanId: '403',
+          sourceUrl: 'https://www.blm.gov/alerts/panoche-access-temporary-closure',
+        },
+      ],
+    },
+  },
+  ['CA', 'UT'],
+  '2026-06-05T12:00:00.000Z',
+);
+assert.strictEqual(normalizedBlmCurrentConditionSources.length, 1, 'BLM closure overlays should normalize by state key');
+assert.strictEqual(
+  normalizedBlmCurrentConditionSources[0].providerId,
+  'blm_current_conditions_ca',
+  'BLM current-condition overlays should attach a state-scoped official source provider id',
+);
+assert.strictEqual(
+  normalizedBlmCurrentConditionSources[0].closures[0].closureType,
+  'land_manager',
+  'BLM closure type should normalize into the route_closures enum shape',
+);
+assert.strictEqual(
+  normalizeBlmGtlfCurrentConditionSources(
+    {
+      adminState: 'CA',
+      closures: [{ title: 'Route 403 closure', status: 'active', routePlanId: '403' }],
+    },
+    ['CA'],
+    '2026-06-05T12:00:00.000Z',
+  )[0].providerId,
+  'blm_current_conditions_ca',
+  'BLM current-condition input should accept a single source object as well as a state-keyed object',
+);
+
+const blmClosureSourceUpsert = routeCurrentConditionSourceUpsertForBlmGtlf(normalizedBlmCurrentConditionSources[0]);
+assert.strictEqual(blmClosureSourceUpsert.provider_id, 'blm_current_conditions_ca');
+assert.strictEqual(blmClosureSourceUpsert.authority, 'official_closure');
+assert.strictEqual(
+  blmClosureSourceUpsert.source_uri,
+  'https://www.blm.gov/alerts/panoche-access-temporary-closure',
+);
+
+const blockedPublicBlmAggregate = applyBlmGtlfCurrentConditionSources(
+  publicBlmAggregates[0],
+  normalizedBlmCurrentConditionSources,
+);
+assert.strictEqual(
+  blockedPublicBlmAggregate.verifiedRoute.recommendation_status,
+  'not_recommended',
+  'Active official BLM current-condition closures must remove matched routes from public recommendation',
+);
+assert.strictEqual(blockedPublicBlmAggregate.verifiedRoute.verification_status, 'not_recommended');
+assert.strictEqual(blockedPublicBlmAggregate.verifiedRoute.active_closure_count, 1);
+assert(
+  blockedPublicBlmAggregate.verifiedRoute.blocker_reasons.some((reason) => /active official closure/i.test(reason)),
+  'BLM closure overlays should add deterministic blocker reasons',
+);
+assert(
+  blockedPublicBlmAggregate.verifiedRoute.closure_summaries.some((summary) => /Panoche Access temporary public safety closure/i.test(summary)),
+  'BLM closure overlays should preserve human-readable official closure summaries',
+);
+assert.strictEqual(
+  blockedPublicBlmAggregate.verifiedRoute.community_signal.currentConditions.activeClosureCount,
+  1,
+  'BLM closure overlays should expose matched current-condition counts without inventing live passability',
+);
+assert.strictEqual(
+  blockedPublicBlmAggregate.verifiedRouteSource.metadata.currentConditions.activeClosureCount,
+  1,
+  'BLM source attribution metadata should carry the same current-condition closure counts',
+);
+
+const nmFireRestrictionRoad = {
+  attributes: {
+    ...publicRoad.attributes,
+    OBJECTID: 9102601,
+    ADMIN_ST: 'NM',
+    ROUTE_PLAN_ID: 'WR-1',
+    ROUTE_PRMRY_NM: 'RINCONADA LOOP TRAIL',
+    GIS_MILES: 2.25,
+  },
+  geometry: { paths: [[[-105.67, 36.68], [-105.66, 36.69]]] },
+};
+const publicNmBlmAggregates = aggregateBlmGtlfRouteFeatures(
+  [nmFireRestrictionRoad],
+  {
+    layer: BLM_GTLF_LAYERS.find((layer) => layer.id === 0),
+    sourceId: '00000000-0000-0000-0000-000000000011',
+    sourceLastVerifiedAt: '2026-06-05T12:00:00.000Z',
+    minMiles: 1,
+  },
+);
+assert.strictEqual(publicNmBlmAggregates[0].verifiedRoute.recommendation_status, 'recommendable');
+
+const normalizedBlmFireRestrictionSources = normalizeBlmGtlfCurrentConditionSources(
+  {
+    'new mexico': {
+      checkedAt: '2026-06-05T12:00:00.000Z',
+      sourceUrl: 'https://www.blm.gov/programs/fire/regional-info/new-mexico/fire-restrictions',
+      advisories: [
+        {
+          title: 'Fire Prevention Order #NM910-26-01',
+          summary: 'Statewide fire restrictions are in effect on BLM New Mexico lands.',
+          status: 'active',
+          advisoryType: 'fire_restriction',
+          orderNumber: 'NM910-26-01',
+          sourceUrl: 'https://www.blm.gov/sites/default/files/docs/2026-01/fire-prevention-order-blm-nm-910-2026-01.pdf',
+        },
+      ],
+    },
+  },
+  ['NM'],
+  '2026-06-05T12:00:00.000Z',
+);
+assert.strictEqual(
+  Array.isArray(normalizedBlmFireRestrictionSources[0].advisories),
+  true,
+  'BLM current-condition sources should preserve official advisory records separately from closure records',
+);
+assert.strictEqual(
+  normalizedBlmFireRestrictionSources[0].advisories[0]?.advisoryType,
+  'fire_restriction',
+  'BLM fire prevention orders should normalize as advisories instead of route closures',
+);
+const fireRestrictionAdvisoryAggregate = applyBlmGtlfCurrentConditionSources(
+  publicNmBlmAggregates[0],
+  normalizedBlmFireRestrictionSources,
+);
+assert.strictEqual(
+  fireRestrictionAdvisoryAggregate.verifiedRoute.recommendation_status,
+  'recommendable',
+  'BLM fire restriction advisories should not remove source-backed routes from recommendation unless an actual closure is present',
+);
+assert.strictEqual(fireRestrictionAdvisoryAggregate.verifiedRoute.verification_status, 'official_verified');
+assert.strictEqual(fireRestrictionAdvisoryAggregate.verifiedRoute.active_closure_count, 0);
+assert(
+  fireRestrictionAdvisoryAggregate.verifiedRoute.warning_reasons.some((warning) => /Fire Prevention Order #NM910-26-01/i.test(warning)),
+  'BLM fire restriction advisories should appear as deterministic current-condition warnings',
+);
+assert.strictEqual(
+  fireRestrictionAdvisoryAggregate.verifiedRoute.community_signal.currentConditions.activeAdvisoryCount,
+  1,
+  'BLM advisory overlays should expose active advisory counts separately from closure counts',
+);
+assert.strictEqual(
+  fireRestrictionAdvisoryAggregate.verifiedRouteSource.metadata.currentConditions.activeAdvisoryCount,
+  1,
+  'BLM source attribution metadata should carry advisory counts without converting them into closures',
+);
+
+const publicBlmNoSeasonAggregates = aggregateBlmGtlfRouteFeatures(
+  [
+    {
+      ...publicRoad,
+      attributes: {
+        ...publicRoad.attributes,
+        PLAN_SEASON_RSTRCT_CODE: 'NO',
+      },
+    },
+    {
+      ...publicRoadContinuation,
+      attributes: {
+        ...publicRoadContinuation.attributes,
+        PLAN_SEASON_RSTRCT_CODE: 'NO',
+      },
+    },
+  ],
+  {
+    layer: BLM_GTLF_LAYERS.find((layer) => layer.id === 0),
+    sourceId: '00000000-0000-0000-0000-000000000010',
+    sourceLastVerifiedAt: '2026-06-01T00:00:00.000Z',
+    minMiles: 1,
+  },
+);
+assert.strictEqual(
+  publicBlmNoSeasonAggregates.length,
+  1,
+  'BLM GTLF season code NO means no seasonal restriction and should still allow strict public aggregates',
+);
+assert.strictEqual(publicBlmNoSeasonAggregates[0].verifiedRoute.seasonal_restriction_count, 0);
 
 const anonymousWyPublicRoad = {
   attributes: {
@@ -310,10 +504,21 @@ assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'BLM sync should r
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('limitPerStateLayer'), 'BLM sync should bound live ArcGIS page sizes');
 assert(
+  syncFunction.includes('normalizeBlmGtlfCurrentConditionSources') &&
+    syncFunction.includes('applyBlmGtlfCurrentConditionSources') &&
+    syncFunction.includes('routeCurrentConditionSourceUpsertForBlmGtlf'),
+  'BLM sync should ingest reviewed official current-condition overlays through the deterministic closure gate',
+);
+assert(
+  syncFunction.includes('currentConditionBlockedRouteCount') &&
+    syncFunction.includes('currentConditionAdvisoryCount'),
+  'BLM sync summaries should report how many GTLF records were blocked by current-condition closures and how many advisories were checked',
+);
+assert(
   syncFunction.includes('aggregateBlmGtlfRouteFeatures') &&
     syncFunction.includes('aggregateRouteCount') &&
-    syncFunction.includes('publicRecommendationCount: aggregateRouteCount'),
-  'BLM sync should promote strict public-motorized aggregates and report public recommendation telemetry',
+    syncFunction.includes('publicRecommendationCount += layerPublicRecommendationCount'),
+  'BLM sync should promote strict public-motorized aggregates and report closure-gated public recommendation telemetry',
 );
 assert(!syncFunction.includes('RIDB_API_KEY') && !syncFunction.includes('NPS_API_KEY'), 'BLM sync must not expose campground provider secrets');
 
@@ -321,13 +526,13 @@ const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-blm-
 assert(fs.existsSync(workflowPath), 'BLM GTLF durable sync workflow should exist');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 assert(
-  syncFunction.includes("const DEFAULT_STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY'];"),
-  'BLM GTLF sync should default to the verified western-state public recommendation batch',
+  syncFunction.includes("const DEFAULT_STATES = ['AK', 'AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY'];"),
+  'BLM GTLF sync should default to the verified Alaska and western-state public recommendation batch',
 );
 assert(
-  workflow.includes('default: AZ,CA,CO,ID,MT,NV,NM,UT,WY') &&
-    workflow.includes("STATES: ${{ inputs.states || 'AZ,CA,CO,ID,MT,NV,NM,UT,WY' }}"),
-  'BLM GTLF workflow defaults should sync the verified western-state batch',
+  workflow.includes('default: AK,AZ,CA,CO,ID,MT,NV,NM,UT,WY') &&
+    workflow.includes("STATES: ${{ inputs.states || 'AK,AZ,CA,CO,ID,MT,NV,NM,UT,WY' }}"),
+  'BLM GTLF workflow defaults should sync the verified Alaska and western-state batch',
 );
 assert(
   workflow.includes('route-catalog-blm-gtlf-sync-payloads.json') &&

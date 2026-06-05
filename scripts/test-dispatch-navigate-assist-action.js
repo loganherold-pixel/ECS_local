@@ -89,10 +89,29 @@ assert.match(
   /pendingAutoStartRouteIdRef\.current = payload\.id;[\s\S]*RECOVERY ASSIST ROUTE STARTING/,
   'Navigate should mark recovery-assist payloads for active guidance startup.',
 );
+
+const roadAutoStartEffectMatch = navigateSource.match(
+  /useEffect\(\(\) => \{[\s\S]*?const shouldAutoStartRoad =[\s\S]*?requestStartExpedition\('road'\);[\s\S]*?\}, \[/,
+);
+assert.ok(
+  roadAutoStartEffectMatch,
+  'Navigate should keep road auto-start routing in an explicit effect.',
+);
+const roadAutoStartEffect = roadAutoStartEffectMatch[0];
 assert.match(
-  navigateSource,
-  /if \(explorePreviewMode !== 'road'\) return;[\s\S]*roadNavigation\.session\.status !== 'route_preview'[\s\S]*requestStartExpedition\('road'\);/,
+  roadAutoStartEffect,
+  /const shouldAutoStartRoad =[\s\S]*explorePreviewMode === 'road'[\s\S]*explorePreviewMode === 'hybrid' && !hybridStartCanUseTrail[\s\S]*if \(!shouldAutoStartRoad\) return;/,
+  'Navigate should auto-start road guidance only for road previews or hybrid previews that must use the road leg.',
+);
+assert.match(
+  roadAutoStartEffect,
+  /roadNavigation\.session\.status !== 'route_preview' \|\| !roadNavigation\.session\.route[\s\S]*requestStartExpedition\('road'\);/,
   'Navigate should request road guidance only after the recovery assist route preview exists.',
+);
+assert.match(
+  roadAutoStartEffect,
+  /fullRouteGuidanceModel\.status === 'blocked_gap'[\s\S]*fullRouteGuidanceModel\.status !== 'ready'[\s\S]*requestStartExpedition\('road'\);/,
+  'Hybrid road auto-start should stay blocked until full route guidance is ready.',
 );
 assert.match(
   navigateSource,

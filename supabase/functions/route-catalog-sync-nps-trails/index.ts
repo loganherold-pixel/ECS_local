@@ -3,12 +3,15 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import {
   NPS_PUBLIC_TRAILS_LAYER,
+  type NpsPublicTrailsArcGisFeature,
   arcGisFeatureToNpsPublicTrailsRouteUpsert,
   buildNpsPublicTrailsWhereClause,
   normalizeNpsPublicTrailsBbox,
+  normalizeNpsPublicTrailsBboxes,
   normalizeNpsPublicTrailsFeatureCollection,
   npsPublicTrailsSourceUpsert,
   type NpsPublicTrailsBbox,
+  type NpsPublicTrailsBboxPreset,
 } from '../_shared/routeCatalogNpsPublicTrails.ts';
 
 const corsHeaders = {
@@ -76,6 +79,21 @@ function buildRouteIdByPublicId(rows: Array<Record<string, unknown>>): Map<strin
 
 function countPublicRecommendations(routeRows: Array<Record<string, unknown>>): number {
   return routeRows.filter((row) => row.recommendation_status === 'recommendable').length;
+}
+
+function sourceFeatureKey(feature: NpsPublicTrailsArcGisFeature, fallback: string): string {
+  const attributes = feature.attributes ?? {};
+  return String(attributes.OBJECTID || attributes.FEATUREID || attributes.GEOMETRYID || fallback);
+}
+
+function normalizeSyncBboxes(body: Record<string, unknown>): NpsPublicTrailsBboxPreset[] | null {
+  const bboxBatch = normalizeNpsPublicTrailsBboxes(body.bboxes);
+  if (bboxBatch) return bboxBatch;
+
+  const bbox = normalizeNpsPublicTrailsBbox(body.bbox);
+  return bbox
+    ? [{ key: 'manual_bbox', label: 'Manual bbox', bbox }]
+    : null;
 }
 
 async function upsertRawFeatureRows(
@@ -205,10 +223,10 @@ serve(async (req) => {
 
   try {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const bbox = normalizeNpsPublicTrailsBbox(body.bbox);
-    if (!bbox) return jsonResponse({ ok: false, error: 'Valid bbox is required for bounded NPS public trails sync' }, 400);
+    const bboxes = normalizeSyncBboxes(body);
+    if (!bboxes) return jsonResponse({ ok: false, error: 'At least one valid bbox is required for bounded NPS public trails sync' }, 400);
     const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 0.1));
-    const limit = Math.max(1, Math.min(500, Math.round(readNumber(body.limit ?? body.limit_per_bbox, 150))));
+    const limitPerBbox = Math.max(1, Math.min(500, Math.round(readNumber(body.limitPerBbox ?? body.limit_per_bbox ?? body.limit, 150))));
     const now = new Date().toISOString();
     const admin = createAdminClient();
 
@@ -226,13 +244,26 @@ serve(async (req) => {
         status: 'running',
         source_uri: NPS_PUBLIC_TRAILS_LAYER.url,
         started_at: now,
-        metadata: { providerId: 'nps_public_trails', bbox, minMiles, limit },
+        metadata: {
+          providerId: 'nps_public_trails',
+          bbox: bboxes.length === 1 ? bboxes[0].bbox : null,
+          bboxes,
+          minMiles,
+          limitPerBbox,
+        },
       })
       .select('id')
       .single();
     if (ingestError || !ingestRun) throw new Error('Unable to start NPS public trails ingest run');
 
-    const features = await fetchTrailFeatures(bbox, limit);
+    const featureByKey = new Map<string, NpsPublicTrailsArcGisFeature>();
+    for (const bboxPreset of bboxes) {
+      const batchFeatures = await fetchTrailFeatures(bboxPreset.bbox, limitPerBbox);
+      batchFeatures.forEach((feature, index) => {
+        featureByKey.set(sourceFeatureKey(feature, `${bboxPreset.key}:${index}`), feature);
+      });
+    }
+    const features = Array.from(featureByKey.values());
     const rawFeatureRows: Array<Record<string, unknown>> = [];
     const routeRows: Array<Record<string, unknown>> = [];
     const sourceRefs: Array<{ publicId: string; source: Record<string, unknown> }> = [];
@@ -266,14 +297,22 @@ serve(async (req) => {
         finished_at: new Date().toISOString(),
         raw_feature_count: features.length,
         normalized_feature_count: routeRows.length,
-        metadata: { providerId: 'nps_public_trails', bbox, minMiles, limit, publicRecommendationCount },
+        metadata: {
+          providerId: 'nps_public_trails',
+          bbox: bboxes.length === 1 ? bboxes[0].bbox : null,
+          bboxes,
+          minMiles,
+          limitPerBbox,
+          publicRecommendationCount,
+        },
       })
       .eq('id', ingestRun.id);
 
     return jsonResponse({
       ok: true,
       source: 'nps_public_trails',
-      bbox,
+      bbox: bboxes.length === 1 ? bboxes[0].bbox : null,
+      bboxes,
       rawFeatureCount: features.length,
       normalizedFeatureCount: routeRows.length,
       publicRecommendationCount,

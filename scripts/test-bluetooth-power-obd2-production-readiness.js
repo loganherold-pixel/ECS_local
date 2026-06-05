@@ -32,11 +32,20 @@ async function main() {
     'power_station_connect_stream_disconnect_evidence_present',
     'ecoflow_cloud_ble_separation_real_device_evidence_present',
     'obd2_no_data_and_live_data_evidence_present',
-    'production_owner_decision_accepted',
   ].forEach((id) => {
     assert.equal(checks.get(id)?.passed, false, `${id} should remain blocked until real-hardware evidence exists`);
     assert.ok(result.blockers.includes(id), `${id} should be reported as an active blocker`);
   });
+  assert.equal(
+    checks.get('production_owner_decision_accepted')?.passed,
+    true,
+    'owner sign-off can be recorded while real-hardware evidence blockers remain',
+  );
+  assert.equal(
+    result.blockers.includes('production_owner_decision_accepted'),
+    false,
+    'owner sign-off should not remain an active blocker after accepted reviewer signoff is recorded',
+  );
 
   const placeholderEvidenceRoot = {
     androidNativeBleDiscoveryPassed: true,
@@ -125,6 +134,41 @@ async function main() {
     placeholderResult.checks.find((check) => check.id === 'production_owner_decision_accepted')?.passed,
     false,
     'accepted decision must remain blocked without reviewer signoff and non-placeholder references',
+  );
+
+  const ownerOnlyEvidence = {
+    ...placeholderEvidenceRoot,
+    androidNativeBleDiscoveryPassed: false,
+    powerStationConnectStreamDisconnectPassed: false,
+    ecoflowCloudBleSeparationRealDevicePassed: false,
+    obd2NoDataPassed: false,
+    obd2LiveDataPassed: false,
+    obd2DisconnectClearsTelemetryPassed: false,
+    deviceMatrix: [],
+    evidenceReferences: [],
+    reviewerSignoff: {
+      product: 'Owner-authorized via Codex thread / 2026-06-04',
+      engineering: 'Owner-authorized via Codex thread / 2026-06-04',
+      privacy: 'Owner-authorized via Codex thread / 2026-06-04',
+      fieldOps: 'Owner-authorized via Codex thread / 2026-06-04',
+      acceptedAt: '2026-06-04T08:12:31.6335670Z',
+    },
+    notes: 'Owner sign-off is recorded; real-hardware evidence remains pending.',
+  };
+  fs.writeFileSync(
+    path.join(tempRoot, '.smoke', 'bluetooth-power-obd2-production-evidence.json'),
+    `${JSON.stringify(ownerOnlyEvidence, null, 2)}\n`,
+  );
+  const ownerOnlyResult = buildBluetoothPowerObd2ProductionReadinessResult({ rootDir: tempRoot });
+  assert.equal(
+    ownerOnlyResult.checks.find((check) => check.id === 'production_owner_decision_accepted')?.passed,
+    true,
+    'owner signoff should pass independently from real-hardware evidence flags',
+  );
+  assert.equal(ownerOnlyResult.passed, false, 'owner signoff alone must not make production ready');
+  assert.ok(
+    ownerOnlyResult.blockers.includes('android_native_ble_discovery_evidence_present'),
+    'owner signoff alone must leave real-hardware evidence blocked',
   );
 
   console.log('bluetooth power obd2 production readiness checks passed');

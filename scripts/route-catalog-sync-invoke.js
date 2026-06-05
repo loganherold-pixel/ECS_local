@@ -18,6 +18,7 @@ function parseArgs(argv) {
   const options = {
     adapters: [],
     allDirect: false,
+    deepBackfill: false,
     dryRun: false,
     payloadPath: '',
   };
@@ -28,6 +29,8 @@ function parseArgs(argv) {
       options.dryRun = true;
     } else if (arg === '--all-direct') {
       options.allDirect = true;
+    } else if (arg === '--deep-backfill') {
+      options.deepBackfill = true;
     } else if (arg === '--adapter') {
       const value = argv[index + 1];
       if (!value) throw new Error('--adapter requires a route catalog sync inventory key');
@@ -53,6 +56,8 @@ function usage() {
     'Usage:',
     '  node scripts/route-catalog-sync-invoke.js --dry-run --all-direct',
     '  node scripts/route-catalog-sync-invoke.js --dry-run --adapter usfs_mvum',
+    '  node scripts/route-catalog-sync-invoke.js --dry-run --adapter blm_gtlf --deep-backfill',
+    '  node scripts/route-catalog-sync-invoke.js --adapter blm_gtlf --payload reviewed-blm-closures.json',
     '  node scripts/route-catalog-sync-invoke.js --adapter michigan_dnr_orv_gpx',
     '',
     'Required for real invocation:',
@@ -84,6 +89,17 @@ function readPayloadOverride(payloadPath) {
   return JSON.parse(raw);
 }
 
+function payloadForEntry(entry, options, payloadOverride) {
+  if (payloadOverride) return payloadOverride;
+  if (options.deepBackfill) {
+    if (!entry.deepBackfillPayload) {
+      throw new Error(`${entry.key} does not define a deep backfill payload`);
+    }
+    return entry.deepBackfillPayload;
+  }
+  return entry.defaultPayload;
+}
+
 function invocationUrl(baseUrl, functionName) {
   return `${String(baseUrl).replace(/\/+$/, '')}/functions/v1/${functionName}`;
 }
@@ -92,7 +108,7 @@ function resolveSyncSupabaseUrl(env) {
   return env.ECS_SUPABASE_URL || env.EXPO_PUBLIC_SUPABASE_URL || '';
 }
 
-function summarizeDryRun(selected, env) {
+function summarizeDryRun(selected, env, options, payloadOverride) {
   return {
     mode: 'dry-run',
     supabaseUrl: resolveSyncSupabaseUrl(env) ? '(present)' : '(missing)',
@@ -106,6 +122,7 @@ function summarizeDryRun(selected, env) {
       expectedMaxPublicRecommendationCount: entry.expectedMaxPublicRecommendationCount,
       defaultPayload: entry.defaultPayload,
       deepBackfillPayload: entry.deepBackfillPayload,
+      selectedPayload: payloadForEntry(entry, options, payloadOverride),
       workflowPath: entry.workflowPath,
       preprocessReason: entry.preprocessReason || undefined,
       safetyNotes: entry.safetyNotes,
@@ -113,7 +130,7 @@ function summarizeDryRun(selected, env) {
   };
 }
 
-async function invokeEntry(entry, env, payloadOverride) {
+async function invokeEntry(entry, env, selectedPayload) {
   if (entry.invocationMode !== 'direct_edge_function') {
     throw new Error(`${entry.key} cannot be invoked directly: ${entry.preprocessReason}`);
   }
@@ -123,14 +140,13 @@ async function invokeEntry(entry, env, payloadOverride) {
   if (!supabaseUrl) throw new Error('Missing ECS_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_URL');
   if (!syncToken) throw new Error('Missing ECS_ROUTE_CATALOG_SYNC_TOKEN');
 
-  const payload = payloadOverride || entry.defaultPayload;
   const response = await fetch(invocationUrl(supabaseUrl, entry.functionName), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-ecs-sync-token': syncToken,
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(selectedPayload),
   });
   const text = await response.text();
   let body = {};
@@ -157,6 +173,9 @@ async function invokeEntry(entry, env, payloadOverride) {
     rawFeatureCount: body.rawFeatureCount,
     normalizedFeatureCount: body.normalizedFeatureCount,
     publicRecommendationCount,
+    currentConditionSourceCount: body.currentConditionSourceCount,
+    currentConditionClosureCount: body.currentConditionClosureCount,
+    currentConditionBlockedRouteCount: body.currentConditionBlockedRouteCount,
     caveat: body.caveat,
   };
 }
@@ -177,13 +196,13 @@ async function main() {
   const payloadOverride = readPayloadOverride(options.payloadPath);
 
   if (options.dryRun) {
-    console.log(JSON.stringify(summarizeDryRun(selected, process.env), null, 2));
+    console.log(JSON.stringify(summarizeDryRun(selected, process.env, options, payloadOverride), null, 2));
     return;
   }
 
   const results = [];
   for (const entry of selected) {
-    results.push(await invokeEntry(entry, process.env, payloadOverride));
+    results.push(await invokeEntry(entry, process.env, payloadForEntry(entry, options, payloadOverride)));
   }
   console.log(JSON.stringify({ mode: 'invoke', results }, null, 2));
 }

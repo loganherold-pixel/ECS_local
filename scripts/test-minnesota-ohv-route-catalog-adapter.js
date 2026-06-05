@@ -179,7 +179,16 @@ assert(fs.existsSync(workflowPath), 'Minnesota DNR OHV sync workflow should exis
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 assert(workflow.includes('sync_scope:'), 'Minnesota OHV sync workflow should expose a pilot/statewide sync scope selector');
 assert(workflow.includes('pilot') && workflow.includes('statewide'), 'Minnesota OHV sync workflow should document pilot and statewide scopes');
-assert(workflow.includes('default_max_features = 1000 if sync_scope == "statewide" else 250'), 'Minnesota OHV workflow should keep pilot bounded while allowing explicit statewide backfill');
+assert(workflow.includes('default: statewide'), 'Minnesota OHV sync workflow should default to the bounded statewide conversion path');
+assert(
+  workflow.includes("SYNC_SCOPE: ${{ inputs.sync_scope || 'statewide' }}"),
+  'Minnesota OHV workflow environment should fall back to statewide sync scope',
+);
+assert(
+  workflow.includes('sync_scope = os.environ.get("SYNC_SCOPE", "statewide").strip().lower()'),
+  'Minnesota OHV GeoPackage converter should default to statewide sync scope',
+);
+assert(workflow.includes('default_max_features = 1000 if sync_scope == "statewide" else 250'), 'Minnesota OHV workflow should keep pilot bounded while allowing statewide backfill');
 assert(workflow.includes('"syncScope": sync_scope'), 'Minnesota OHV workflow payload should preserve selected sync scope');
 assert(workflow.includes('Sync scope:'), 'Minnesota OHV workflow summary should show selected sync scope');
 

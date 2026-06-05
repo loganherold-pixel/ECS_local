@@ -336,7 +336,7 @@ export function bluetoothUtilitySensorAdvertisementToEcsTelemetryEvents(input: {
     categoryHint: input.categoryHint,
     owner: 'sensor',
     connectionState: 'connected',
-    supportLabel: 'Live Sensor',
+    supportLabel: 'Linkable Sensor',
     supportNote: null,
     signalStrength: input.signalStrength,
     utilitySensorTelemetry: input.utilitySensorTelemetry,

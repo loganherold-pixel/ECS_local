@@ -30,6 +30,7 @@ export type AttitudeDialProps = {
   ecsGold: string;
   warningThresholdDeg?: number;
   criticalThresholdDeg?: number;
+  showValueArc?: boolean;
   testID?: string;
   style?: StyleProp<ViewStyle>;
 };
@@ -102,6 +103,7 @@ export default function AttitudeDial({
   label,
   maxDeg = DEFAULT_MAX_DEG,
   minDeg = DEFAULT_MIN_DEG,
+  showValueArc = true,
   size,
   style,
   testID,
@@ -228,7 +230,7 @@ export default function AttitudeDial({
           stroke="rgba(255, 255, 255, 0.035)"
           strokeWidth={1}
         />
-        {glowPath ? (
+        {showValueArc && glowPath ? (
           <Path
             d={glowPath}
             fill="none"
@@ -238,7 +240,7 @@ export default function AttitudeDial({
             strokeLinecap="round"
           />
         ) : null}
-        {counterGlowPath ? (
+        {showValueArc && counterGlowPath ? (
           <Path
             d={counterGlowPath}
             fill="none"
@@ -248,7 +250,7 @@ export default function AttitudeDial({
             strokeLinecap="round"
           />
         ) : null}
-        {glowPath ? (
+        {showValueArc && glowPath ? (
           <Path
             d={glowPath}
             fill="none"
@@ -258,7 +260,7 @@ export default function AttitudeDial({
             strokeLinecap="round"
           />
         ) : null}
-        {counterGlowPath ? (
+        {showValueArc && counterGlowPath ? (
           <Path
             d={counterGlowPath}
             fill="none"

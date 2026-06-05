@@ -5,6 +5,9 @@ const root = path.resolve(__dirname, '..');
 const widgetRenderers = fs.readFileSync(path.join(root, 'components/dashboard/WidgetRenderers.tsx'), 'utf8');
 const navigateSurfaceWidget = fs.readFileSync(path.join(root, 'components/dashboard/NavigateSurfaceWidget.tsx'), 'utf8');
 const commandModuleStore = fs.readFileSync(path.join(root, 'lib/ecsCommandModuleStore.ts'), 'utf8');
+const dashboardScreen = fs.readFileSync(path.join(root, 'app/(tabs)/dashboard.tsx'), 'utf8');
+const widgetGrid = fs.readFileSync(path.join(root, 'components/dashboard/WidgetGrid.tsx'), 'utf8');
+const mapRenderer = fs.readFileSync(path.join(root, 'components/navigate/MapRenderer.tsx'), 'utf8');
 
 function assert(condition, message) {
   if (!condition) {
@@ -94,6 +97,35 @@ assert(
     widgetRenderers.includes('Animated.timing(moduleTransitionOpacity') &&
     widgetRenderers.includes('attitudeCommandS.moduleTransitionShell'),
   'Command Module switching must use a short reduced-motion-aware fade without changing shell layout.',
+);
+
+assert(
+  widgetGrid.includes('removeClippedSubviews={dragIndex === null}') &&
+    widgetGrid.includes('scrollEnabled={dragIndex === null}'),
+  'Scrollable dashboard grids should clip offscreen widget subviews while idle and preserve unclipped drag interactions.',
+);
+
+assert(
+  mapRenderer.includes('const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 48') &&
+    mapRenderer.includes("surfaceMode === 'compact' ? COMPACT_MAP_MAX_TILE_CACHE_SIZE : null") &&
+    mapRenderer.includes('mapOptions.maxTileCacheSize = compactTileCacheSize') &&
+    mapRenderer.includes('performanceMetricsCollection: false') &&
+    mapRenderer.includes('scrollZoom: false'),
+  'Embedded dashboard map WebViews should bound Mapbox tile cache and disable nonessential browser-map overhead.',
+);
+
+assert(
+  navigateSurfaceWidget.includes('const resolvedMapStyle = useMemo(() => [styles.mapRenderer, mapStyle], [mapStyle]);') &&
+    navigateSurfaceWidget.includes('style={resolvedMapStyle}') &&
+    navigateSurfaceWidget.includes('surfaceMode="compact"'),
+  'Dashboard mini-map surfaces should pass stable style props and mark embedded WebViews as compact.',
+);
+
+assert(
+  dashboardScreen.includes('const normalizedAssignedWidgets = useMemo(') &&
+    dashboardScreen.includes('assignedWidgets={normalizedAssignedWidgets}') &&
+    dashboardScreen.includes('const assignedWidgets = useMemo(() => slots.map(s => s.widgetType), [slots]);'),
+  'Dashboard widget library assignments should be memoized instead of rebuilt on every render.',
 );
 
 assert(

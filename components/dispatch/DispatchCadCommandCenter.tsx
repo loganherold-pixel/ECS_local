@@ -56,6 +56,7 @@ import {
   type DispatchChannelSnapshot,
 } from '../../lib/dispatchChannelState';
 import { getTeamSyncState, teamStore, type TeamStoreSnapshot } from '../../lib/teamStore';
+import { ensureForegroundLocationPermission } from '../../lib/locationPermissions';
 import {
   dispatchProfileStore,
   isDispatchProfileComplete,
@@ -882,7 +883,7 @@ async function getCurrentPosition(): Promise<RecoveryAssistGpsFix> {
       throw new Error('Location services are disabled.');
     }
 
-    const { status } = await Location.requestForegroundPermissionsAsync();
+    const { status } = await ensureForegroundLocationPermission(Location);
     if (status !== 'granted') {
       throw new Error('Location permission is required for Recovery Assist.');
     }

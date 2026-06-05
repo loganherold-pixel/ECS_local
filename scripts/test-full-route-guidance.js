@@ -187,6 +187,52 @@ assertCoord(
 );
 assert.strictEqual(explorePayload.tripMode, 'hybrid');
 
+const nearestEndpointPayload = buildExploreNavigationPayload(
+  {
+    id: 'point-to-point-nearest-endpoint',
+    name: 'FR23 North 18 Coldwater',
+    region: 'Test Forest',
+    terrainType: 'Forest road',
+    distanceMiles: 3,
+    startLat: 46.01,
+    startLng: -122.01,
+    routeGeometry: {
+      type: 'LineString',
+      coordinates: [
+        [-122.0, 46.0],
+        [-122.01, 46.01],
+        [-122.02, 46.02],
+      ],
+    },
+    routeMetadata: { source: 'trail_pack' },
+  },
+  {
+    approachOriginCoordinate: coord(46.021, -122.021),
+  },
+);
+const nearestTrailhead = coord(46.02, -122.02);
+const oppositeEndpoint = coord(46.0, -122.0);
+assertCoord(
+  nearestEndpointPayload.trailheadCoordinate,
+  nearestTrailhead,
+  'Explore handoff should snap a stale mid-route start coordinate to the nearest real trail endpoint',
+);
+assertCoord(
+  nearestEndpointPayload.roadDestinationCoordinate,
+  nearestTrailhead,
+  'Road approach should stop at the selected trail endpoint instead of continuing through the trail',
+);
+assertCoord(
+  nearestEndpointPayload.trailGeometry[0],
+  nearestTrailhead,
+  'Trail guidance geometry should begin at the selected point-A endpoint',
+);
+assertCoord(
+  nearestEndpointPayload.coordinate,
+  oppositeEndpoint,
+  'Trail destination should become the opposite endpoint after orienting the point-to-point route',
+);
+
 assert(
   navigateSource.includes("type: 'hybrid_route'") &&
     !navigateSource.includes("type: isCustomRoute ? 'hybrid_route' : 'trail'"),
@@ -213,6 +259,12 @@ assert(
 assert(
   navigateSource.includes('remainingDistanceM: fullRouteGuidanceModel.remainingDistanceM'),
   'Navigate session snapshots should publish full hybrid remaining distance instead of approach-only remaining distance.',
+);
+assert(
+  navigateSource.includes("primaryActionLabel: activeGuidanceReady ? 'Start Hybrid' : 'Preview Only'") &&
+    navigateSource.includes("fullRouteGuidanceModel.status !== 'ready'") &&
+    !navigateSource.includes('(!hybridStartCanUseTrail && !route)'),
+  'Hybrid preview Start should be selectable for a ready road approach and should not require GPS to already be on the trail.',
 );
 
 console.log('Full route guidance checks passed');

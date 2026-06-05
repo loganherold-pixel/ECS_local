@@ -565,6 +565,10 @@ function DeviceRow({
             </Text>
           </View>
 
+          <Text style={[styles.deviceDetail, { color: palette.textMuted }]} numberOfLines={2}>
+            {device.detailLabel || connectionPolicy.statusDetail}
+          </Text>
+
           {compactReason ? (
             <View
               style={[

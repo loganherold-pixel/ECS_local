@@ -488,6 +488,16 @@ export interface WidgetRenderOptions {
   gpsAltitudeFt?: number | null;
   /** Timestamp for the current GPS fix */
   gpsTimestampMs?: number | null;
+  /** Expedition Hub / route lifecycle fields used to refresh arrived guidance surfaces */
+  expeditionHasActiveRoute?: boolean;
+  expeditionTeamMemberCount?: number;
+  expeditionCampCount?: number;
+  expeditionRouteCompleted?: boolean;
+  expeditionRouteLifecycleState?: string | null;
+  expeditionId?: string | null;
+  expeditionRouteLabel?: string | null;
+  completedExpeditionRecord?: unknown;
+  expeditionEcsOnline?: boolean;
   /** Whether this widget is in a featured (full-width) cell */
   isFeatured?: boolean;
   /**
@@ -6859,8 +6869,8 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             accessibilityLabel={expanded ? 'Route terrain risk expanded' : 'Expand route terrain risk'}
             expanded={expanded}
             detailMode={mode === 'detail'}
-            headerStatusLabel={null}
-            headerStatusValue={null}
+            headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}
+            headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}
             headerStatusColor={terrainRiskRoute ? getTerrainCommandRiskColor(terrainRiskRoute.overallRiskLabel) : undefined}
           >
             <AttitudeCommandTerrainRiskPreview
@@ -7225,7 +7235,7 @@ const attitudeCommandS = StyleSheet.create({
   },
   vehicleRollZeroButtonCompact: {
     top: 0,
-    right: 42,
+    left: 0,
     width: 22,
     height: 22,
     borderRadius: 11,
@@ -8735,62 +8745,6 @@ const attitudeCommandS = StyleSheet.create({
     bottom: 0,
     backgroundColor: 'rgba(2, 5, 7, 0.34)',
     borderRadius: 12,
-  },
-  powerSolarSourceBlock: {
-    position: 'absolute',
-    left: 7,
-    top: 7,
-    width: 76,
-    gap: 1,
-  },
-  powerSolarSourceLabel: {
-    color: 'rgba(245, 199, 73, 0.72)',
-    fontSize: 5.8,
-    lineHeight: 7,
-    fontWeight: '900',
-    letterSpacing: 0.75,
-  },
-  powerSolarSourceValue: {
-    fontSize: 9.2,
-    lineHeight: 11,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
-  powerColumnLeft: {
-    position: 'absolute',
-    left: 8,
-    top: 34,
-    width: 64,
-    gap: 1,
-  },
-  powerColumnRight: {
-    position: 'absolute',
-    right: 8,
-    top: 34,
-    width: 64,
-    alignItems: 'flex-end',
-    gap: 1,
-  },
-  powerColumnLabel: {
-    color: 'rgba(245, 199, 73, 0.72)',
-    fontSize: 6,
-    lineHeight: 8,
-    fontWeight: '900',
-    letterSpacing: 0.9,
-  },
-  powerColumnValue: {
-    fontSize: 11,
-    lineHeight: 13,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
-  powerColumnSub: {
-    maxWidth: 54,
-    color: 'rgba(230, 237, 243, 0.58)',
-    fontSize: 5.8,
-    lineHeight: 7,
-    fontWeight: '900',
-    letterSpacing: 0.45,
   },
   powerFlowRows: {
     alignSelf: 'stretch',
@@ -13423,15 +13377,9 @@ function AttitudeCommandPowerRiveForeground({
   );
 }
 
-function AttitudeCommandPowerManagementVisual({
-  power,
-}: {
+function AttitudeCommandPowerManagementVisual(_props: {
   power?: CommandPowerVisualData;
 }) {
-  const inputActive = Boolean(power?.inputWatts != null && power.inputWatts > 0 && power.canDisplayTelemetryValues);
-  const outputActive = Boolean(power?.outputWatts != null && power.outputWatts > 0 && power.canDisplayTelemetryValues);
-  const solarSourceValue = formatAttitudePowerWattsCompact(power?.solarWatts, 'input');
-
   return (
     <View pointerEvents="none" style={attitudeCommandS.powerGlyphLayer}>
       <Image
@@ -13440,24 +13388,6 @@ function AttitudeCommandPowerManagementVisual({
         style={attitudeCommandS.powerManagementBackground}
       />
       <View style={attitudeCommandS.powerManagementBackgroundScrim} />
-      <View style={attitudeCommandS.powerSolarSourceBlock}>
-        <Text style={attitudeCommandS.powerSolarSourceLabel} numberOfLines={1}>SOLAR SOURCE</Text>
-        <Text style={[attitudeCommandS.powerSolarSourceValue, { color: power?.solarWatts != null && power.solarWatts > 0 ? TACTICAL.success : TACTICAL.textMuted }]} numberOfLines={1}>
-          {solarSourceValue}
-        </Text>
-      </View>
-      <View style={attitudeCommandS.powerColumnLeft}>
-        <Text style={attitudeCommandS.powerColumnLabel} numberOfLines={1}>INPUT</Text>
-        <Text style={[attitudeCommandS.powerColumnValue, { color: inputActive ? TACTICAL.success : TACTICAL.textMuted }]} numberOfLines={1}>
-          {formatAttitudePowerWattsCompact(power?.inputWatts, 'input')}
-        </Text>
-      </View>
-      <View style={attitudeCommandS.powerColumnRight}>
-        <Text style={attitudeCommandS.powerColumnLabel} numberOfLines={1}>OUTPUT</Text>
-        <Text style={[attitudeCommandS.powerColumnValue, { color: outputActive ? TACTICAL.amber : TACTICAL.textMuted }]} numberOfLines={1}>
-          {formatAttitudePowerWattsCompact(power?.outputWatts, 'output')}
-        </Text>
-      </View>
     </View>
   );
 }

@@ -319,7 +319,7 @@ export function selectMichiganOrvGpxSources(value: unknown): MichiganOrvGpxSourc
       : [];
   const keys = new Set(requested.map((item) => cleanString(item).toLowerCase()).filter(Boolean));
   if (keys.size === 0) {
-    return MICHIGAN_ORV_GPX_SOURCES.filter((source) => source.key !== 'statewide_orv_trail_gpx').slice(0, 3);
+    return [...MICHIGAN_ORV_GPX_SOURCES];
   }
   return MICHIGAN_ORV_GPX_SOURCES.filter((source) => keys.has(source.key.toLowerCase()) || keys.has(source.url.toLowerCase()));
 }

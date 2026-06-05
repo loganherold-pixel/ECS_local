@@ -78,8 +78,10 @@ assert.ok(
   handoffSource.includes('function extractFinalCoordinate') &&
     handoffSource.includes('destinationCoordinate') &&
     handoffSource.includes('endpointCoordinate') &&
-    handoffSource.includes('trailGeometry.length > 0 ? trailGeometry[trailGeometry.length - 1] : null'),
-  'Navigation handoff should accept explicit endpoint/destination metadata and prefer geometry endpoints.',
+    /function orientTrailGeometryFromEndpoint\([\s\S]*preferredStart/.test(handoffSource) &&
+    /const finalTrailCoordinate = trailGeometry\.length > 1[\s\S]*trailGeometry\[trailGeometry\.length - 1\]/.test(handoffSource) &&
+    /const coordinate =[\s\S]*finalTrailCoordinate \?\?[\s\S]*extractFinalCoordinate\(route\) \?\?[\s\S]*normalizeCoordinate\(routeRecord\.coordinate\) \?\?[\s\S]*trailheadCoordinate/.test(handoffSource),
+  'Navigation handoff should orient route geometry from the approach origin, prefer multi-point geometry endpoints, then fall back to explicit endpoint/destination metadata.',
 );
 
 assert.ok(

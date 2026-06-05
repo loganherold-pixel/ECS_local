@@ -115,14 +115,12 @@ export function getBluestackConnectionPolicy(
       lane: isConnected ? 'sensor_linked' : 'native_ble_required',
       primaryActionLabel: isConnected ? 'Disconnect' : 'Link',
       statusLabel: isConnected
-        ? 'Sensor linked, awaiting level'
-        : profile?.status === 'identified_live_ready'
-          ? 'Live sensor ready'
-          : 'BLE sensor ready',
+        ? 'Sensor linked, level pending'
+        : 'Sensor linkable',
       statusDetail: isConnected
-        ? profile?.detail ?? 'The sensor is linked through Bluestack. ECS will promote live tank readings after a decoded percentage is received.'
-        : profile?.detail ?? 'Bluestack can link this field utility sensor over native BLE and promote decoded fluid-level readings.',
-      telemetryTruthLabel: isConnected ? 'Linked, awaiting level' : 'Native BLE telemetry',
+        ? profile?.detail ?? 'The sensor is linked through Bluestack. Live tank percentage remains parser-pending until a decoded level percentage is received.'
+        : profile?.detail ?? 'Bluestack can link this field utility sensor over native BLE. Live tank percentage remains parser-pending until a decoded level percentage is received.',
+      telemetryTruthLabel: 'Level parser pending',
       canAttemptConnection: hasNative || isConnected,
     };
   }

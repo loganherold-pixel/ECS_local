@@ -417,6 +417,22 @@ function VehicleAttitudeStage({
   });
   const levelReadoutWidth = metrics.readoutWidth * (mode === 'command' ? 2.1 : 1.16);
   const zeroControlEnabled = Boolean(onZero || onResetZero);
+  const compactZeroInset = Math.max(6, Math.min(10, Math.min(metrics.width, metrics.height) * 0.035));
+  const zeroControlFrame = metrics.compact
+    ? {
+        left: compactZeroInset,
+        top: compactZeroInset,
+        width: metrics.zeroButtonWidth,
+        height: metrics.zeroButtonHeight,
+        minHeight: metrics.zeroButtonHeight,
+      }
+    : {
+        left: zeroPoint.x - metrics.zeroButtonWidth / 2,
+        top: zeroPoint.y - metrics.zeroButtonHeight / 2,
+        width: metrics.zeroButtonWidth,
+        height: metrics.zeroButtonHeight,
+        minHeight: metrics.zeroButtonHeight,
+      };
 
   return (
     <View
@@ -539,12 +555,8 @@ function VehicleAttitudeStage({
             pointerEvents="box-none"
             style={[
               styles.zeroControl,
+              zeroControlFrame,
               {
-                left: zeroPoint.x - metrics.zeroButtonWidth / 2,
-                top: zeroPoint.y - metrics.zeroButtonHeight / 2,
-                width: metrics.zeroButtonWidth,
-                height: metrics.zeroButtonHeight,
-                minHeight: metrics.zeroButtonHeight,
                 transform: [{ translateY: buttonDrop }],
               },
             ]}
@@ -668,6 +680,7 @@ function VehicleAttitudeGauge({
       pitchMaxDeg={maxPitchDeg}
       size={gaugeSize}
       ecsGold={TACTICAL.amber}
+      showValueArc={!commandVehicleImageMode}
       style={[
         styles.gauge,
         {

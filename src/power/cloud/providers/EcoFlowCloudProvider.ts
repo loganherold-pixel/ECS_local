@@ -39,6 +39,8 @@ import type { PowerDevice as CatalogPowerDevice } from "../../types/PowerDevice"
 import { powerDeviceStore } from "../../devices/PowerDeviceStore";
 import {
   ECOFLOW_UNAUTHORIZED_DEVICE_REASON,
+  describeEcoFlowPublicApiAuthorizationBlock,
+  isEcoFlowPublicApiAuthorizationBlockedError,
   isEcoFlowUnauthorizedDeviceError,
 } from "../../../../lib/ecoflowUnauthorizedDevice";
 import {
@@ -144,6 +146,7 @@ export type EcoFlowCloudStatus =
 export type EcoFlowCloudClientState =
   | "authRequired"
   | "deviceUnauthorized"
+  | "publicApiAuthorizationPending"
   | "cloudUnavailable"
   | "deviceOffline"
   | "cloudPolling"
@@ -417,7 +420,11 @@ function classifyEcoFlowCloudFailureState(
   collect(value);
 
   const haystack = parts.join(" ").toLowerCase();
+  if (isEcoFlowPublicApiAuthorizationBlockedError(value)) {
+    return "publicApiAuthorizationPending";
+  }
   if (
+    isEcoFlowUnauthorizedDeviceError(value) ||
     haystack.includes("deviceunauthorized") ||
     haystack.includes("device_not_authorized") ||
     haystack.includes("current device is not allowed") ||
@@ -1360,15 +1367,26 @@ export class EcoFlowCloudProvider implements ICloudProvider {
     return candidates;
   }
 
-  private makeUnauthorizedPollResult(deviceId: string, polledAt: number): DevicePollResult {
+  private makeUnauthorizedPollResult(
+    deviceId: string,
+    polledAt: number,
+    evidence?: unknown,
+  ): DevicePollResult {
+    const catalogDevice = this.listedDeviceCatalog.get(deviceId) ?? null;
+    const diagnosticEvidence = [evidence, catalogDevice, deviceId];
+    const publicApiAuthorizationPending = isEcoFlowPublicApiAuthorizationBlockedError(diagnosticEvidence);
+    const error = publicApiAuthorizationPending
+      ? describeEcoFlowPublicApiAuthorizationBlock(diagnosticEvidence)
+      : ECOFLOW_UNAUTHORIZED_DEVICE_REASON;
+
     return {
       deviceId,
       ok: false,
       pendingApproval: false,
       unauthorized: true,
-      failureState: "deviceUnauthorized",
+      failureState: publicApiAuthorizationPending ? "publicApiAuthorizationPending" : "deviceUnauthorized",
       telemetry: null,
-      error: ECOFLOW_UNAUTHORIZED_DEVICE_REASON,
+      error,
       polledAt,
     };
   }
@@ -1444,6 +1462,8 @@ export class EcoFlowCloudProvider implements ICloudProvider {
       status: details.status ?? null,
       ecoflowCode: details.ecoflowCode ?? null,
       authorization: details.authorization ?? null,
+      authorizationState: details.authorizationState ?? null,
+      blockedModels: details.blockedModels ?? null,
       remediation: details.remediation ?? null,
       bodySnippet: details.bodySnippet ?? null,
     });
@@ -1675,7 +1695,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
           void this.logMqttCertificationProbeOnce(deviceId);
           const mqttFallback = await this.pollMqttTelemetryFallback(supabase, deviceId, now);
           if (mqttFallback) return mqttFallback;
-          return this.makeUnauthorizedPollResult(deviceId, now);
+          return this.makeUnauthorizedPollResult(deviceId, now, parsed ?? data ?? error);
         }
 
         return {
@@ -1733,7 +1753,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
           void this.logMqttCertificationProbeOnce(deviceId);
           const mqttFallback = await this.pollMqttTelemetryFallback(supabase, deviceId, now);
           if (mqttFallback) return mqttFallback;
-          return this.makeUnauthorizedPollResult(deviceId, now);
+          return this.makeUnauthorizedPollResult(deviceId, now, errResp);
         }
 
         return {
@@ -1765,7 +1785,7 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         void this.logMqttCertificationProbeOnce(deviceId);
         const mqttFallback = await this.pollMqttTelemetryFallback(supabase, deviceId, now);
         if (mqttFallback) return mqttFallback;
-        return this.makeUnauthorizedPollResult(deviceId, now);
+        return this.makeUnauthorizedPollResult(deviceId, now, err);
       }
 
       return {

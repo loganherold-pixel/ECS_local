@@ -240,6 +240,7 @@ assert(
 const powerDetailBlock = widgetRenderers.match(/function AttitudeCommandPowerDeviceDetail\([\s\S]*?\n}\n\nfunction PowerCommandModule/)?.[0] ?? '';
 const powerRenderBlock = widgetRenderers.match(/case 'power':[\s\S]*?default:/)?.[0] ?? '';
 const powerCommandPanelBlock = widgetRenderers.match(/function AttitudeCommandPanel\([\s\S]*?\n}\n\nfunction AttitudeCommandDetailRow/)?.[0] ?? '';
+const powerManagementVisualBlock = widgetRenderers.match(/function AttitudeCommandPowerManagementVisual\([\s\S]*?\r?\n}\r?\n\r?\nfunction AttitudeCommandTerrainRiskBackgroundVisual/)?.[0] ?? '';
 
 for (const powerField of [
   'Solar source',
@@ -272,8 +273,8 @@ assert(
 
 assert(
   powerCommandPanelBlock.includes('expanded && detailMode && isPowerPanel && attitudeCommandS.powerPanelContentDetailOnly') &&
-    powerCommandPanelBlock.includes('const suppressPowerDetailBackground = suppressCompactPanelChrome && isPowerPanel') &&
-    powerCommandPanelBlock.includes('background={suppressPowerDetailBackground ? null : (') &&
+    powerCommandPanelBlock.includes('background={suppressCompactPanelChrome && !(isPowerPanel && powerVisual) ? null : (') &&
+    !powerCommandPanelBlock.includes('suppressPowerDetailBackground') &&
     widgetRenderers.includes('powerPanelContentDetailOnly') &&
     powerRenderBlock.includes('expanded && detailMode ? (') &&
     powerRenderBlock.includes('<AttitudeCommandPowerDeviceDetail') &&
@@ -296,7 +297,20 @@ assert(
     widgetRenderers.includes('powerMonitorSourceRowsContent') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailRow'),
-  'Expanded Power Monitor must hide compact widget details and keep current power sources in a bounded nested scroll table after four active sources.',
+  'Expanded Power Monitor must hide compact widget details, preserve the power background, and keep current power sources in a bounded nested scroll table after four active sources.',
+);
+
+assert(
+  powerManagementVisualBlock.includes('POWER_MANAGEMENT_BACKGROUND') &&
+    powerManagementVisualBlock.includes('powerManagementBackground') &&
+    powerManagementVisualBlock.includes('powerManagementBackgroundScrim') &&
+    !powerManagementVisualBlock.includes('powerSolarSourceBlock') &&
+    !powerManagementVisualBlock.includes('powerColumnLeft') &&
+    !powerManagementVisualBlock.includes('powerColumnRight') &&
+    !powerManagementVisualBlock.includes('SOLAR SOURCE') &&
+    !powerManagementVisualBlock.includes('INPUT') &&
+    !powerManagementVisualBlock.includes('OUTPUT'),
+  'Expanded Power Monitor background must keep the power-management art without duplicate corner solar/input/output readouts.',
 );
 
 console.log('[dashboard-attitude-command-interactions] tap-to-expand interaction contract passed');

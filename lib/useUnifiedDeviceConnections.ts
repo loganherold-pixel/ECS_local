@@ -90,6 +90,7 @@ import {
 } from './bluDiagnosticsLog';
 import { setSelectedEcoFlowDevice } from './ecoFlowSelectionStore';
 import { normalizeEcoFlowBluCandidate } from './ecoflowBluTelemetryEligibility';
+import { ECOFLOW_PUBLIC_API_AUTHORIZATION_PENDING_REASON } from './ecoflowUnauthorizedDevice';
 import {
   connectEcoFlowCloudDevice,
   ECOFLOW_CLOUD_LIVE_POLL_INTERVAL_MS,
@@ -437,9 +438,13 @@ function getStatusPillLabel(input: {
   if (input.telemetrySource === 'mock_dev') return 'Mock';
   if (
     input.ecoflowDiagnostic?.diagnosticReason?.requiresCloudAuth ||
+    cloudState === 'publicApiAuthorizationPending' ||
     cloudState === 'authRequired' ||
     cloudState === 'deviceUnauthorized'
-  ) return 'Auth Required';
+  ) {
+    if (cloudState === 'publicApiAuthorizationPending') return 'Auth Pending';
+    return 'Auth Required';
+  }
   if (input.isDisconnecting) return 'Disconnected';
   if (input.isConnecting || input.status === 'connecting') return 'Connecting';
   if (input.isLive) return 'Live';
@@ -1544,6 +1549,9 @@ function getPowerDetailLabel(args: {
   if (args.ecoflowDiagnostic?.cloudState === 'deviceOffline') {
     return 'EcoFlow Cloud reports this device offline or unavailable.';
   }
+  if (args.ecoflowDiagnostic?.cloudState === 'publicApiAuthorizationPending') {
+    return ECOFLOW_PUBLIC_API_AUTHORIZATION_PENDING_REASON;
+  }
   if (args.ecoflowDiagnostic?.cloudState === 'cloudUnavailable') {
     return 'EcoFlow Cloud is unavailable. ECS will not treat this as a Bluetooth failure.';
   }
@@ -1731,6 +1739,9 @@ function getEcoFlowCloudNoTelemetryInfoMessage(
   deviceName: string,
   activation: EcoFlowCloudConnectionResult,
 ): string {
+  if (activation.cloudState === 'publicApiAuthorizationPending') {
+    return `${deviceName} is visible in EcoFlow Cloud, but ${activation.statusLabel}`;
+  }
   if (activation.cloudState === 'deviceUnauthorized') {
     return `${deviceName} is visible in EcoFlow Cloud, but cloud telemetry is not authorized for this device.`;
   }
@@ -1749,7 +1760,8 @@ function isEcoFlowCloudAuthBlockedResult(
   return (
     result.cloudState === 'authRequired' ||
     result.cloudState === 'deviceUnauthorized' ||
-    /authorization|required|not authorized|forbidden/i.test(result.statusError ?? result.statusLabel)
+    result.cloudState === 'publicApiAuthorizationPending' ||
+    /authorization|required|not authorized|forbidden|public api authorization|unsupported by current/i.test(result.statusError ?? result.statusLabel)
   );
 }
 
@@ -1766,7 +1778,7 @@ function isEcoFlowCloudAuthBlockedDevice(
 ): boolean {
   if (device.providerId !== 'ecoflow') return false;
   const cloudState = device.ecoflowCloudState ?? device.ecoflowDiagnosticReason?.cloudState ?? null;
-  if (cloudState === 'authRequired' || cloudState === 'deviceUnauthorized') return true;
+  if (cloudState === 'authRequired' || cloudState === 'deviceUnauthorized' || cloudState === 'publicApiAuthorizationPending') return true;
 
   const diagnosticText = [
     device.lastError,
@@ -1775,7 +1787,7 @@ function isEcoFlowCloudAuthBlockedDevice(
     device.statusPillLabel,
   ].filter(Boolean).join(' ');
 
-  return /cloud access is not authorized|cloud telemetry is not authorized|authorization required|auth required|not authorized|forbidden/i.test(diagnosticText);
+  return /cloud access is not authorized|cloud telemetry is not authorized|authorization required|auth required|not authorized|forbidden|public api authorization|unsupported by current/i.test(diagnosticText);
 }
 
 function ingestEcoFlowCloudTelemetryResult(
@@ -1941,7 +1953,8 @@ async function activateEcoFlowCloudDevice(device: ECSDeviceConnectionModel): Pro
     const requiresCloudAuth =
       result.cloudState === 'authRequired' ||
       result.cloudState === 'deviceUnauthorized' ||
-      /authorization|required|not authorized|forbidden/i.test(result.statusError ?? result.statusLabel);
+      result.cloudState === 'publicApiAuthorizationPending' ||
+      /authorization|required|not authorized|forbidden|public api authorization|unsupported by current/i.test(result.statusError ?? result.statusLabel);
     recordEcoFlowTimeout({
       deviceId: device.rawId,
       deviceName: device.name,
@@ -1960,7 +1973,8 @@ async function activateEcoFlowCloudDevice(device: ECSDeviceConnectionModel): Pro
     const requiresCloudAuth =
       result.cloudState === 'authRequired' ||
       result.cloudState === 'deviceUnauthorized' ||
-      /authorization|required|not authorized|forbidden/i.test(result.statusError ?? result.statusLabel);
+      result.cloudState === 'publicApiAuthorizationPending' ||
+      /authorization|required|not authorized|forbidden|public api authorization|unsupported by current/i.test(result.statusError ?? result.statusLabel);
     recordEcoFlowFailure({
       deviceId: device.rawId,
       deviceName: device.name,
@@ -3636,6 +3650,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       const rawId = parts.slice(2).join(':');
       const rememberedDevice = telemetryRememberedByKey.get(key) ?? null;
       const discoveredDevice = telemetryDiscoveredByKey.get(`telemetry:obd2:${rawId}`) ?? null;
+      const hasRememberedTelemetryAdapter = !!rememberedDevice || obdLastDevice?.id === rawId;
       const uiState = deviceUiStateById[key];
       const isSelected = selectedIds.includes(key);
       const isDisconnecting = uiState?.phase === 'disconnecting';
@@ -3672,7 +3687,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         !!isDisconnecting,
         !!isLive,
         hasError,
-        !!rememberedDevice,
+        hasRememberedTelemetryAdapter,
         !!discoveredDevice,
         isSelected,
         freshnessLabel,
@@ -3698,8 +3713,8 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
               : 'Connected — telemetry not yet decoded.'
             : hasError
               ? normalizeUiLabel(lastError) ?? 'Telemetry connection failed.'
-              : rememberedDevice && !discoveredDevice
-                ? 'Previously connected. Not currently live.'
+              : hasRememberedTelemetryAdapter && !discoveredDevice
+                ? 'Previously connected. Retry to reconnect this OBD2 telemetry adapter.'
                 : discoveredDevice
                   ? 'Nearby approved OBD2 adapter ready to connect.'
                   : 'Previously connected. Not currently live.';
@@ -3741,7 +3756,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       } else if (isConnecting) {
         actionKind = 'connecting';
         actionLabel = 'Connecting';
-      } else if (hasError || rememberedDevice) {
+      } else if (hasError || hasRememberedTelemetryAdapter) {
         actionKind = 'retry';
         actionLabel = 'Retry';
       } else if (discoveredDevice) {
@@ -3789,9 +3804,9 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         lastTelemetryAt: typeof lastTelemetryAt === 'number' ? lastTelemetryAt : null,
         diagnosticReason,
         telemetryFields: vehicleTelemetryFields,
-        isRemembered: !!rememberedDevice || obdLastDevice?.id === rawId,
+        isRemembered: hasRememberedTelemetryAdapter,
         isSupported: true,
-        sourceBadges: discoveredDevice ? ['BLE'] : rememberedDevice ? ['Cached'] : [],
+        sourceBadges: discoveredDevice ? ['BLE'] : hasRememberedTelemetryAdapter ? ['Cached'] : [],
         lastError: hasError ? lastError : null,
         lastSeenAt,
         supportsPowerData: false,
@@ -4286,6 +4301,10 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           if (!isCurrentDeviceOperation(device.id, operationId)) return;
 
           if (!activation.connected) {
+            const cloudAuthBlocked = isEcoFlowCloudAuthBlockedResult(activation);
+            const activationFailureMessage = cloudAuthBlocked
+              ? activation.statusLabel
+              : activation.statusError ?? 'EcoFlow Cloud connection failed.';
             bluLog('[BLU_ECOFLOW]', 'cloud_connect_failed', {
               deviceId: device.rawId,
               vendor: 'ecoflow',
@@ -4311,19 +4330,20 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             setDeviceUiState(
               device.id,
               'failed',
-              activation.statusError ?? 'EcoFlow Cloud connection failed.',
+              activationFailureMessage,
             );
             recordBluetoothDiagnosticEvent({
               type: 'ecoflow_cloud_auth_failure',
-              source: classifyBluetoothDiagnosticSource(activation.statusError, 'ecoflow_cloud_auth'),
+              source: classifyBluetoothDiagnosticSource(activation.statusError ?? activation.statusLabel, 'ecoflow_cloud_auth'),
               deviceId: device.rawId,
               deviceName: device.name,
               providerId: device.providerId,
               message: 'EcoFlow cloud activation failed.',
-              error: activation.statusError ?? 'EcoFlow Cloud connection failed.',
+              error: activationFailureMessage,
               details: {
                 productType: activation.productType,
                 providerStatus: activation.providerStatus,
+                cloudState: activation.cloudState,
               },
             });
             ecsLog.warn('TELEMETRY', '[DEVICE_CONNECTIONS] cloud_device_connect_failed', {
@@ -4332,10 +4352,15 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
               modelId: device.id,
               name: device.name,
               productType: activation.productType,
-              reason: activation.statusError,
+              reason: activation.statusError ?? activation.statusLabel,
               providerStatus: activation.providerStatus,
+              cloudState: activation.cloudState,
             });
-            setInfoMessage(`${device.name} remains listed, but EcoFlow Cloud connection failed.`);
+            setInfoMessage(
+              cloudAuthBlocked
+                ? getEcoFlowCloudNoTelemetryInfoMessage(device.name, activation)
+                : `${device.name} remains listed, but EcoFlow Cloud connection failed.`,
+            );
             return;
           }
 
@@ -4538,10 +4563,10 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             suggestedPath: null,
             shouldNavigate: false,
             supportLabel: device.supportLabel,
-            supportNote: activation.statusError
-              ? `EcoFlow Cloud is available, but latest status did not load: ${activation.statusError}`
-              : isEcoFlowCloudAuthBlockedResult(activation)
-                ? activation.statusLabel
+            supportNote: isEcoFlowCloudAuthBlockedResult(activation)
+              ? activation.statusLabel
+              : activation.statusError
+                ? `EcoFlow Cloud is available, but latest status did not load: ${activation.statusError}`
               : 'EcoFlow Cloud/API connection is active; native Bluetooth was skipped.',
             message: activation.telemetryActive
               ? `${device.provider} telemetry is now flowing through EcoFlow Cloud.`

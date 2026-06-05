@@ -6,10 +6,10 @@ VeePeak OBD2 is the known-good live reference path. Do not regress VeePeak disco
 
 ## Automated Harness
 
-The repo currently does not define `npm run typecheck` or a top-level `npm test` script. Use these actual ECS equivalents:
+The repo defines `npm run typecheck` and does not define a top-level `npm test` script. Use these ECS checks:
 
 ```powershell
-npx tsc --noEmit --pretty false
+npm run typecheck
 npm run lint
 npm run test:blu-live-device-test-plan
 npm run test:obd2-live-pipeline
@@ -102,10 +102,13 @@ Pass criteria: Glacier must not silently time out. If it does not stream, ECS re
 | Local BLE supported or unsupported | If local BLE is unsupported, UI says unsupported/parser pending instead of random failure. |
 | Telemetry available or unavailable | Cloud/local telemetry must normalize into the BLU telemetry contract when available. |
 | Unauthorized handling | Unauthorized or wrong account/region errors show auth required or device unauthorized. |
+| EcoFlow code 1006 handling | DELTA 3 1500, DELTA Mini, and Alternator Charger show public API authorization pending or unsupported by the current EcoFlow developer app. Record the model, device id, `phase`, `ecoflowCode: 1006`, `authorization: public_api_authorization_pending`, and sanitized `bodySnippet` from server-side Edge Function diagnostics. |
 | Stale handling | Offline or old cloud data appears stale/cloud stale, not live. |
 | Disconnect/reconnect | Cloud polling stops on disconnect and restarts only on explicit retry/connect. |
 
 Pass criteria: EcoFlow cloud and BLE failures are specific, readable, and do not affect VeePeak.
+
+EcoFlow follow-up note: ECS keeps EcoFlow API keys server-side in Supabase Edge Function environment variables. The mobile app should only show non-secret diagnostics for code 1006 and must not promote DELTA 3 1500, DELTA Mini, or Alternator Charger telemetry as live until EcoFlow authorizes the app/device path and decoded power fields arrive.
 
 ## Bluetti Checklist
 

@@ -134,6 +134,12 @@ const expectedUsfsMvumForestSlugs = [
     'okanogan-wenatchee-national-forest',
     'six-rivers-national-forest',
     'tonto-national-forest',
+    'beaverhead-deerlodge-national-forest',
+    'chugach-national-forest',
+    'custer-gallatin-national-forest',
+    'gallatin-national-forest',
+    'modoc-national-forest',
+    'tongass-national-forest',
 ];
 
 const expectedUsfsMvumForestNames = [
@@ -238,6 +244,12 @@ const expectedUsfsMvumForestNames = [
   'Okanogan-Wenatchee National Forest',
   'Six Rivers National Forest',
   'Tonto National Forest',
+  'Beaverhead-Deerlodge National Forest',
+  'Chugach National Forest',
+  'Custer Gallatin National Forest',
+  'Gallatin National Forest',
+  'Modoc National Forest',
+  'Tongass National Forest',
 ];
 
 assert.deepStrictEqual(

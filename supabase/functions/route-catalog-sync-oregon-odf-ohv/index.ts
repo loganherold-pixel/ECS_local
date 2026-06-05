@@ -155,7 +155,7 @@ serve(async (req) => {
     }
 
     const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 0.25));
-    const maxTracksPerSource = Math.max(1, Math.min(200, Math.round(readNumber(body.maxTracksPerSource ?? body.max_tracks_per_source, 50))));
+    const maxTracksPerSource = Math.max(1, Math.min(200, Math.round(readNumber(body.maxTracksPerSource ?? body.max_tracks_per_source, 200))));
     const now = new Date().toISOString();
     const admin = createAdminClient();
 

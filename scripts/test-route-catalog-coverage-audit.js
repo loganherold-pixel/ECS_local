@@ -135,10 +135,49 @@ const requiredProbeKeys = [
   'okanogan_wenatchee_national_forest',
   'six_rivers_national_forest',
   'tonto_national_forest',
+  'beaverhead_deerlodge_national_forest',
+  'chugach_national_forest',
+  'custer_gallatin_national_forest',
+  'gallatin_national_forest',
+  'modoc_national_forest',
+  'tongass_national_forest',
   'michigan_dnr_orv_pilot',
+  'michigan_dnr_orv_tomahawk_kalkaska',
+  'michigan_dnr_orv_missaukee_junction',
+  'michigan_dnr_orv_grand_traverse',
   'minnesota_dnr_ohv_pilot',
+  'minnesota_dnr_ohv_prospectors',
+  'minnesota_dnr_ohv_fourtown_grygla',
+  'minnesota_dnr_ohv_voyageur_country',
   'oregon_odf_ohv_pilot',
+  'oregon_odf_tillamook_class_i',
+  'oregon_odf_tillamook_class_ii_iv',
+  'oregon_odf_tillamook_class_iii',
   'colorado_cpw_designated_trails_pilot',
+  'colorado_cpw_bockman_road',
+  'colorado_cpw_mendenhall_road',
+  'colorado_cpw_diamond_peaks',
+  'colorado_cpw_gould_mountain_road',
+  'colorado_cpw_montgomery_pass_west',
+  'colorado_cpw_bull_mountain_road',
+  'colorado_cpw_government_creek_road',
+  'colorado_cpw_little_government_creek_road',
+  'colorado_cpw_kiwi_road',
+  'colorado_cpw_custer_draw_road',
+  'colorado_cpw_south_canadian_road',
+  'colorado_cpw_ruby_jewel_road',
+  'colorado_cpw_grass_creek',
+  'colorado_cpw_american_lakes_access',
+  'colorado_cpw_upper_crags_basin_access',
+  'colorado_cpw_dry_gulch_road',
+  'colorado_cpw_silver_creek_access',
+  'colorado_cpw_american_lakes_trail',
+  'colorado_cpw_sweitzer_trail',
+  'colorado_cpw_snowmobile_connector',
+  'colorado_cpw_horseshoe_trail',
+  'colorado_cpw_old_fulford_road',
+  'colorado_cpw_south_shore_ohv_track',
+  'blm_ak_gtlf',
   'blm_az_gtlf',
   'blm_ca_nv_pilot',
   'blm_co_gtlf',
@@ -146,8 +185,28 @@ const requiredProbeKeys = [
   'blm_mt_gtlf',
   'blm_nm_gtlf',
   'blm_ut_gtlf',
+  'blm_ut_smoky_mountain_alvey_wash',
+  'blm_ut_wolverine_loop_road',
+  'blm_ut_heads_of_the_creeks_road',
+  'blm_ut_horse_mountain_road',
+  'blm_ut_fourmile_bench',
+  'blm_ut_paria_breaks',
   'blm_wy_gtlf',
   'nps_public_trails_joshua_tree',
+  'nps_public_trails_big_south_fork',
+  'nps_public_trails_shenandoah',
+  'nps_public_trails_everglades',
+  'nps_public_trails_timucuan',
+  'nps_public_trails_channel_islands',
+  'nps_public_trails_denali',
+  'nps_public_trails_wrangell_st_elias',
+  'nps_public_trails_glacier_bay',
+  'nps_public_trails_klondike_gold_rush',
+  'nps_public_trails_lake_clark',
+  'nps_public_trails_yukon_charley',
+  'nps_public_trails_kaloko_honokohau',
+  'nps_public_trails_american_samoa',
+  'nps_public_trails_war_in_the_pacific',
   'usgs_nps_sierra_context',
   'conus_empty_control',
 ];
@@ -187,16 +246,158 @@ assert.strictEqual(verifiedSummary.observedPosture, 'verified_public_recommendat
 assert.strictEqual(verifiedSummary.matchesExpectedPosture, true);
 
 const michiganProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'michigan_dnr_orv_pilot');
+const michiganTomahawkKalkaskaProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'michigan_dnr_orv_tomahawk_kalkaska');
+const michiganMissaukeeJunctionProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'michigan_dnr_orv_missaukee_junction');
+const michiganGrandTraverseProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'michigan_dnr_orv_grand_traverse');
 const minnesotaProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'minnesota_dnr_ohv_pilot');
+const minnesotaProspectorsProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'minnesota_dnr_ohv_prospectors');
+const minnesotaFourtownGryglaProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'minnesota_dnr_ohv_fourtown_grygla');
+const minnesotaVoyageurCountryProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'minnesota_dnr_ohv_voyageur_country');
 const oregonProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'oregon_odf_ohv_pilot');
+const oregonClassIProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'oregon_odf_tillamook_class_i');
+const oregonClassIiIvProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'oregon_odf_tillamook_class_ii_iv');
+const oregonClassIiiProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'oregon_odf_tillamook_class_iii');
 const coloradoCpwProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_designated_trails_pilot');
+const coloradoBockmanProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_bockman_road');
+const coloradoMendenhallProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_mendenhall_road');
+const coloradoDiamondPeaksProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_diamond_peaks');
+const coloradoGouldMountainProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_gould_mountain_road');
+const coloradoMontgomeryPassProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_montgomery_pass_west');
+const coloradoBullMountainProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_bull_mountain_road');
+const coloradoGovernmentCreekProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_government_creek_road');
+const coloradoLittleGovernmentCreekProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_little_government_creek_road');
+const coloradoKiwiProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_kiwi_road');
+const coloradoCusterDrawProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_custer_draw_road');
+const coloradoSouthCanadianProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_south_canadian_road');
+const coloradoRubyJewelProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_ruby_jewel_road');
+const coloradoGrassCreekProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_grass_creek');
+const coloradoAmericanLakesAccessProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_american_lakes_access');
+const coloradoUpperCragsBasinProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_upper_crags_basin_access');
+const coloradoDryGulchProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_dry_gulch_road');
+const coloradoSilverCreekAccessProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_silver_creek_access');
+const coloradoAmericanLakesTrailProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_american_lakes_trail');
+const coloradoSweitzerProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_sweitzer_trail');
+const coloradoSnowmobileConnectorProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_snowmobile_connector');
+const coloradoHorseshoeProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_horseshoe_trail');
+const coloradoOldFulfordProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_old_fulford_road');
+const coloradoSouthShoreOhvProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'colorado_cpw_south_shore_ohv_track');
+const beaverheadDeerlodgeProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'beaverhead_deerlodge_national_forest');
+const chugachProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'chugach_national_forest');
+const modocProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'modoc_national_forest');
+const tongassProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'tongass_national_forest');
 const npsProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_joshua_tree');
+const npsBigSouthForkProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_big_south_fork');
+const npsShenandoahProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_shenandoah');
+const npsEvergladesProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_everglades');
+const npsTimucuanProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_timucuan');
+const npsChannelIslandsProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_channel_islands');
+const npsDenaliProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_denali');
+const npsWrangellProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_wrangell_st_elias');
+const npsGlacierBayProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_glacier_bay');
+const npsKlondikeProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_klondike_gold_rush');
+const npsLakeClarkProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_lake_clark');
+const npsYukonCharleyProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_yukon_charley');
+const npsKalokoProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_kaloko_honokohau');
+const npsAmericanSamoaProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_american_samoa');
+const npsWarInThePacificProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'nps_public_trails_war_in_the_pacific');
 assert.strictEqual(michiganProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(michiganTomahawkKalkaskaProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(michiganMissaukeeJunctionProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(michiganGrandTraverseProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(michiganTomahawkKalkaskaProbe.requiresSourceMatch, true, 'Michigan regional ORV audit should require Michigan DNR-sourced public routes');
+assert.strictEqual(michiganMissaukeeJunctionProbe.requiresSourceMatch, true, 'Michigan regional ORV audit should require Michigan DNR-sourced public routes');
+assert.strictEqual(michiganGrandTraverseProbe.requiresSourceMatch, true, 'Michigan regional ORV audit should require Michigan DNR-sourced public routes');
 assert.strictEqual(minnesotaProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(minnesotaProspectorsProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(minnesotaFourtownGryglaProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(minnesotaVoyageurCountryProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(minnesotaProspectorsProbe.requiresSourceMatch, true, 'Minnesota regional OHV audit should require Minnesota-sourced public routes');
+assert.strictEqual(minnesotaFourtownGryglaProbe.requiresSourceMatch, true, 'Minnesota regional OHV audit should require Minnesota-sourced public routes');
+assert.strictEqual(minnesotaVoyageurCountryProbe.requiresSourceMatch, true, 'Minnesota regional OHV audit should require Minnesota-sourced public routes');
 assert.strictEqual(oregonProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(oregonClassIProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(oregonClassIiIvProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(oregonClassIiiProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(oregonClassIProbe.requiresSourceMatch, true, 'Oregon class OHV audit should require Oregon ODF-sourced public routes');
+assert.strictEqual(oregonClassIiIvProbe.requiresSourceMatch, true, 'Oregon class OHV audit should require Oregon ODF-sourced public routes');
+assert.strictEqual(oregonClassIiiProbe.requiresSourceMatch, true, 'Oregon class OHV audit should require Oregon ODF-sourced public routes');
 assert.strictEqual(coloradoCpwProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoBockmanProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoMendenhallProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoDiamondPeaksProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoGouldMountainProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoMontgomeryPassProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoBullMountainProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoGovernmentCreekProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoLittleGovernmentCreekProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoKiwiProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoCusterDrawProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoSouthCanadianProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoRubyJewelProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoGrassCreekProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoAmericanLakesAccessProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoUpperCragsBasinProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoDryGulchProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoSilverCreekAccessProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoAmericanLakesTrailProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoSweitzerProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoSnowmobileConnectorProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoHorseshoeProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoOldFulfordProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(coloradoSouthShoreOhvProbe.expectedPosture, 'verified_public_recommendations');
 assert.strictEqual(coloradoCpwProbe.requiresSourceMatch, true, 'Colorado CPW audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoBockmanProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoMendenhallProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoDiamondPeaksProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoGouldMountainProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoMontgomeryPassProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoBullMountainProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoGovernmentCreekProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoLittleGovernmentCreekProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoKiwiProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoCusterDrawProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoSouthCanadianProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoRubyJewelProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoGrassCreekProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoAmericanLakesAccessProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoUpperCragsBasinProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoDryGulchProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoSilverCreekAccessProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoAmericanLakesTrailProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoSweitzerProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoSnowmobileConnectorProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoHorseshoeProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoOldFulfordProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(coloradoSouthShoreOhvProbe.requiresSourceMatch, true, 'Colorado CPW route audit should require CPW-sourced public routes');
+assert.strictEqual(beaverheadDeerlodgeProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(chugachProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(modocProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(tongassProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(chugachProbe.sourceAdapter, 'usfs_mvum');
+assert.strictEqual(tongassProbe.sourceAdapter, 'usfs_mvum');
 assert.strictEqual(npsProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsBigSouthForkProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsShenandoahProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsEvergladesProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsTimucuanProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsChannelIslandsProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsDenaliProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsWrangellProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsGlacierBayProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsKlondikeProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsLakeClarkProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsYukonCharleyProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsKalokoProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsAmericanSamoaProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsWarInThePacificProbe.expectedPosture, 'verified_public_recommendations');
+assert.strictEqual(npsBigSouthForkProbe.requiresSourceMatch, true, 'NPS expansion probes should require NPS-sourced public routes');
+assert.strictEqual(npsEvergladesProbe.requiresSourceMatch, true, 'NPS lower-48 expansion probes should require NPS-sourced public routes');
+assert.strictEqual(npsChannelIslandsProbe.requiresSourceMatch, true, 'NPS lower-48 expansion probes should require NPS-sourced public routes');
+assert.strictEqual(npsWrangellProbe.requiresSourceMatch, true, 'NPS Alaska expansion probes should require NPS-sourced public routes');
+assert.strictEqual(npsGlacierBayProbe.requiresSourceMatch, true, 'NPS Alaska expansion probes should require NPS-sourced public routes');
+assert.strictEqual(npsYukonCharleyProbe.requiresSourceMatch, true, 'NPS Alaska expansion probes should require NPS-sourced public routes');
+assert.strictEqual(npsKalokoProbe.requiresSourceMatch, true, 'NPS island and territory expansion probes should require NPS-sourced public routes');
+assert.strictEqual(npsWarInThePacificProbe.requiresSourceMatch, true, 'NPS island and territory expansion probes should require NPS-sourced public routes');
 
 const coloradoCpwPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_designated_trails_pilot'] })[0];
 assert.strictEqual(
@@ -205,6 +406,94 @@ assert.strictEqual(
   'Colorado CPW audit should ask search for CPW-sourced public routes',
 );
 assert.strictEqual(coloradoCpwPlanProbe.requestBody.limit, 25, 'Colorado CPW audit should use a bounded source-filtered result window');
+
+const coloradoBockmanPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_bockman_road'] })[0];
+assert.strictEqual(
+  coloradoBockmanPlanProbe.requestBody.sourceAdapter,
+  'colorado_cpw_designated_trails',
+  'Colorado CPW route audits should ask search for CPW-sourced public routes',
+);
+assert.strictEqual(coloradoBockmanPlanProbe.requestBody.limit, 25, 'Colorado CPW route audits should use a bounded source-filtered result window');
+
+const coloradoGouldMountainPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_gould_mountain_road'] })[0];
+assert.strictEqual(
+  coloradoGouldMountainPlanProbe.requestBody.sourceAdapter,
+  'colorado_cpw_designated_trails',
+  'Colorado CPW route audits should ask search for CPW-sourced public routes',
+);
+assert.strictEqual(coloradoGouldMountainPlanProbe.requestBody.limit, 25, 'Colorado CPW route audits should use a bounded source-filtered result window');
+
+const coloradoGovernmentCreekPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_government_creek_road'] })[0];
+assert.strictEqual(
+  coloradoGovernmentCreekPlanProbe.requestBody.sourceAdapter,
+  'colorado_cpw_designated_trails',
+  'Colorado CPW route audits should ask search for CPW-sourced public routes',
+);
+assert.strictEqual(coloradoGovernmentCreekPlanProbe.requestBody.limit, 25, 'Colorado CPW route audits should use a bounded source-filtered result window');
+
+const coloradoCusterDrawPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_custer_draw_road'] })[0];
+assert.strictEqual(
+  coloradoCusterDrawPlanProbe.requestBody.sourceAdapter,
+  'colorado_cpw_designated_trails',
+  'Colorado CPW route audits should ask search for CPW-sourced public routes',
+);
+assert.strictEqual(coloradoCusterDrawPlanProbe.requestBody.limit, 25, 'Colorado CPW route audits should use a bounded source-filtered result window');
+
+const coloradoGrassCreekPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_grass_creek'] })[0];
+assert.strictEqual(
+  coloradoGrassCreekPlanProbe.requestBody.sourceAdapter,
+  'colorado_cpw_designated_trails',
+  'Colorado CPW route audits should ask search for CPW-sourced public routes',
+);
+assert.strictEqual(coloradoGrassCreekPlanProbe.requestBody.limit, 25, 'Colorado CPW route audits should use a bounded source-filtered result window');
+
+const coloradoDryGulchPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_dry_gulch_road'] })[0];
+assert.strictEqual(
+  coloradoDryGulchPlanProbe.requestBody.sourceAdapter,
+  'colorado_cpw_designated_trails',
+  'Colorado CPW route audits should ask search for CPW-sourced public routes',
+);
+assert.strictEqual(coloradoDryGulchPlanProbe.requestBody.limit, 25, 'Colorado CPW route audits should use a bounded source-filtered result window');
+
+const coloradoSweitzerPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_sweitzer_trail'] })[0];
+assert.strictEqual(
+  coloradoSweitzerPlanProbe.requestBody.sourceAdapter,
+  'colorado_cpw_designated_trails',
+  'Colorado CPW route audits should ask search for CPW-sourced public routes',
+);
+assert.strictEqual(coloradoSweitzerPlanProbe.requestBody.limit, 25, 'Colorado CPW route audits should use a bounded source-filtered result window');
+
+const coloradoOldFulfordPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['colorado_cpw_old_fulford_road'] })[0];
+assert.strictEqual(
+  coloradoOldFulfordPlanProbe.requestBody.sourceAdapter,
+  'colorado_cpw_designated_trails',
+  'Colorado CPW route audits should ask search for CPW-sourced public routes',
+);
+assert.strictEqual(coloradoOldFulfordPlanProbe.requestBody.limit, 25, 'Colorado CPW route audits should use a bounded source-filtered result window');
+
+const michiganTomahawkKalkaskaPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['michigan_dnr_orv_tomahawk_kalkaska'] })[0];
+assert.strictEqual(
+  michiganTomahawkKalkaskaPlanProbe.requestBody.sourceAdapter,
+  'michigan_dnr_orv_gpx',
+  'Michigan regional ORV audits should ask search for Michigan DNR-sourced public routes',
+);
+assert.strictEqual(michiganTomahawkKalkaskaPlanProbe.requestBody.limit, 25, 'Michigan regional ORV audits should use a bounded source-filtered result window');
+
+const minnesotaProspectorsPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['minnesota_dnr_ohv_prospectors'] })[0];
+assert.strictEqual(
+  minnesotaProspectorsPlanProbe.requestBody.sourceAdapter,
+  'minnesota_dnr_ohv_trails',
+  'Minnesota regional OHV audits should ask search for Minnesota DNR-sourced public routes',
+);
+assert.strictEqual(minnesotaProspectorsPlanProbe.requestBody.limit, 25, 'Minnesota regional OHV audits should use a bounded source-filtered result window');
+
+const oregonClassIiIvPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['oregon_odf_tillamook_class_ii_iv'] })[0];
+assert.strictEqual(
+  oregonClassIiIvPlanProbe.requestBody.sourceAdapter,
+  'oregon_odf_ohv_gpx',
+  'Oregon class OHV audits should ask search for Oregon ODF-sourced public routes',
+);
+assert.strictEqual(oregonClassIiIvPlanProbe.requestBody.limit, 25, 'Oregon class OHV audits should use a bounded source-filtered result window');
 
 const coloradoCpwOverlappedBlmSummary = summarizeSearchResponse(coloradoCpwProbe, {
   count: 10,
@@ -245,7 +534,41 @@ assert.strictEqual(coloradoCpwSourceMatchedSummary.matchesExpectedPosture, true)
 assert.strictEqual(coloradoCpwSourceMatchedSummary.sourceMatchedPublicRecommendationCount, 1);
 
 const blmWyProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_wy_gtlf');
+const blmAkProbe = ROUTE_CATALOG_COVERAGE_PROBES.find((probe) => probe.key === 'blm_ak_gtlf');
+const blmAkPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['blm_ak_gtlf'] })[0];
+const blmAggregateProbeKeys = [
+  'blm_ak_gtlf',
+  'blm_az_gtlf',
+  'blm_ca_nv_pilot',
+  'blm_co_gtlf',
+  'blm_id_gtlf',
+  'blm_mt_gtlf',
+  'blm_nm_gtlf',
+  'blm_ut_gtlf',
+  'blm_wy_gtlf',
+];
+const blmUtRouteProbeKeys = [
+  'blm_ut_smoky_mountain_alvey_wash',
+  'blm_ut_wolverine_loop_road',
+  'blm_ut_heads_of_the_creeks_road',
+  'blm_ut_horse_mountain_road',
+  'blm_ut_fourmile_bench',
+  'blm_ut_paria_breaks',
+];
+const blmUtRoutePlan = buildRouteCatalogCoverageAuditPlan({ probeKeys: blmUtRouteProbeKeys });
 const blmWyPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['blm_wy_gtlf'] })[0];
+const blmAggregatePlan = buildRouteCatalogCoverageAuditPlan({ probeKeys: blmAggregateProbeKeys });
+assert.strictEqual(
+  blmAkProbe.expectedPosture,
+  'verified_public_recommendations',
+  'BLM Alaska should audit public aggregate recommendations after sync',
+);
+assert.strictEqual(blmAkProbe.requiresSourceMatch, true, 'BLM Alaska audit should require BLM-sourced public routes');
+assert.strictEqual(
+  blmAkPlanProbe.requestBody.sourceAdapter,
+  'blm_gtlf',
+  'BLM Alaska audit should source-filter to BLM GTLF records',
+);
 assert.strictEqual(
   blmWyProbe.expectedPosture,
   'verified_public_recommendations',
@@ -254,6 +577,34 @@ assert.strictEqual(
 assert.strictEqual(blmWyProbe.requiresSourceMatch, true, 'BLM Wyoming audit should require BLM-sourced public routes');
 assert.strictEqual(blmWyPlanProbe.requestBody.sourceAdapter, 'blm_gtlf', 'BLM Wyoming audit should ask search for BLM-sourced public routes');
 assert.strictEqual(blmWyPlanProbe.requestBody.limit, 50, 'BLM Wyoming audit should use a bounded source-filtered result window');
+
+for (const aggregateProbe of blmAggregatePlan) {
+  assert.strictEqual(
+    aggregateProbe.requiresSourceMatch,
+    true,
+    `${aggregateProbe.key} should not pass coverage audit on overlapping non-BLM route recommendations`,
+  );
+  assert.strictEqual(
+    aggregateProbe.requestBody.sourceAdapter,
+    'blm_gtlf',
+    `${aggregateProbe.key} audit should source-filter to BLM GTLF records`,
+  );
+}
+
+for (const routeProbe of blmUtRoutePlan) {
+  assert.strictEqual(
+    routeProbe.expectedPosture,
+    'verified_public_recommendations',
+    `${routeProbe.key} should audit BLM GTLF public aggregate recommendations after sync`,
+  );
+  assert.strictEqual(routeProbe.requiresSourceMatch, true, `${routeProbe.key} should require BLM-sourced public routes`);
+  assert.strictEqual(
+    routeProbe.requestBody.sourceAdapter,
+    'blm_gtlf',
+    `${routeProbe.key} audit should ask search for BLM-sourced public routes`,
+  );
+  assert.strictEqual(routeProbe.requestBody.limit, 25, `${routeProbe.key} should use a compact source-filtered result window`);
+}
 
 const blmWyOverlappedUsfsSummary = summarizeSearchResponse(blmWyProbe, {
   count: 10,

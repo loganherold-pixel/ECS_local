@@ -1,11 +1,8 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, {
-  Defs,
-  LinearGradient,
   Line,
   Rect,
-  Stop,
 } from 'react-native-svg';
 
 import { TACTICAL } from '../../lib/theme';
@@ -77,10 +74,7 @@ export default function VehicleProfileRollAttitudeStrip({
   const clampedRoll = clamp(safeRoll(rollDeg), -safeMaxRoll, safeMaxRoll);
   const displayRoll = safeRoll(rollDeg);
   const markerX = rollToX(clampedRoll, safeMaxRoll);
-  const centerX = rollToX(0, safeMaxRoll);
   const activeColor = getRollToneColor(clampedRoll);
-  const activeStartX = Math.min(centerX, markerX);
-  const activeWidth = Math.max(1, Math.abs(markerX - centerX));
   const displayPitch = safePitch(pitchDeg);
   const isRollLevel = Math.abs(displayRoll) <= CAMPSITE_LEVEL_TOLERANCE_DEG;
   const isPitchLevel = Math.abs(displayPitch) <= CAMPSITE_LEVEL_TOLERANCE_DEG;
@@ -138,13 +132,6 @@ export default function VehicleProfileRollAttitudeStrip({
 
       <View style={styles.trackFrame}>
         <Svg width="100%" height="100%" viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}>
-          <Defs>
-            <LinearGradient id="vehicle-roll-active-gradient" x1="0" y1="0" x2="1" y2="0">
-              <Stop offset="0" stopColor={TACTICAL.amber} stopOpacity="0.72" />
-              <Stop offset="1" stopColor={activeColor} stopOpacity="1" />
-            </LinearGradient>
-          </Defs>
-
           <Rect
             x={TRACK_LEFT}
             y={TRACK_Y - 1}
@@ -167,25 +154,6 @@ export default function VehicleProfileRollAttitudeStrip({
             />
           ))}
 
-          <Rect
-            x={activeStartX}
-            y={TRACK_Y - 2.3}
-            width={activeWidth}
-            height={4.6}
-            rx={2.3}
-            fill="url(#vehicle-roll-active-gradient)"
-            opacity={0.95}
-          />
-          <Rect
-            x={activeStartX - 2}
-            y={TRACK_Y - 5.6}
-            width={activeWidth + 4}
-            height={11.2}
-            rx={5.6}
-            fill={activeColor}
-            opacity={0.14}
-          />
-
           <Line
             x1={markerX}
             y1={4}
@@ -203,16 +171,6 @@ export default function VehicleProfileRollAttitudeStrip({
             stroke={activeColor}
             strokeWidth={2.4}
             strokeLinecap="round"
-          />
-          <Line
-            x1={markerX}
-            y1={9}
-            x2={markerX}
-            y2={50}
-            stroke={activeColor}
-            strokeWidth={7.5}
-            strokeLinecap="round"
-            opacity={0.12}
           />
         </Svg>
       </View>

@@ -129,21 +129,22 @@ assert.ok(
     widgetRenderers.includes('useDashboardActiveVehicleContext') &&
     widgetRenderers.includes('resolveAttitudeMonitorVehicleId(activeVehicleContext)') &&
     widgetRenderers.includes('vehicleId={attitudeVehicleId}') &&
+    widgetRenderers.includes('const commandSensorLive = attitudeTelemetry.isLive && displayState.liveMotion') &&
+    widgetRenderers.includes('const commandStageRollDeg = commandSensorLive ? commandDisplayRollDeg : 0') &&
+    widgetRenderers.includes('const commandStagePitchDeg = commandSensorLive ? commandDisplayPitchDeg : 0') &&
     widgetRenderers.includes('telemetryFrame="device"') &&
     !widgetRenderers.includes("telemetryFrame={landscapeInstrumentOnlyAttitude ? 'vehicle' : 'device'}") &&
     widgetRenderers.includes('showLiveHashIndicators={sensorLive}') &&
     widgetRenderers.includes('showReadouts={sensorLive}') &&
-    widgetRenderers.includes('showLiveHashIndicators={false}') &&
-    widgetRenderers.includes('showGaugeOverlay') &&
-    widgetRenderers.includes('showReadouts={false}') &&
-    widgetRenderers.includes('showDegreeReadouts={false}') &&
-    widgetRenderers.includes('showLevelReadout={false}') &&
+    widgetRenderers.includes('<CommandCenterHost') &&
+    widgetRenderers.includes('externalRenderers={{') &&
+    widgetRenderers.includes('attitude: ({ mode }) => (') &&
+    widgetRenderers.includes('presentationMode="instrumentOnly"') &&
+    widgetRenderers.includes("showReadouts={mode === 'attitude'}") &&
+    widgetRenderers.includes("showLiveHashIndicators={mode === 'attitude' && sensorLive}") &&
     widgetRenderers.includes('showZeroButton={false}') &&
-    widgetRenderers.includes('Vehicle Leveling Inclinometer') &&
-    widgetRenderers.includes('stageInclinometerTitleBlock') &&
-    widgetRenderers.includes('!landscapeInstrumentOnlyAttitude') &&
     !widgetRenderers.includes('heroVehicle={heroVisual}'),
-  'Dashboard Attitude Monitor and landscape Attitude Command should animate live semantic device pitch/roll while portrait Attitude Command keeps a centered inclinometer title.',
+  'Dashboard Attitude Monitor and Attitude Command host should route live semantic device pitch/roll into the shared attitude stage without legacy hero vehicle routing.',
 );
 assert.ok(
   deviceAttitudeTelemetry.includes("sourceType: 'device_attitude'") &&

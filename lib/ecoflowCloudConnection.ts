@@ -13,7 +13,12 @@ import {
   recordEcoFlowTimeout,
 } from './ecoflowConnectionDiagnostics';
 import type { EcoFlowCloudClientState } from './ecoflowConnectionDiagnostics';
-import { isEcoFlowUnauthorizedDeviceError } from './ecoflowUnauthorizedDevice';
+import {
+  ECOFLOW_PUBLIC_API_AUTHORIZATION_PENDING_REASON,
+  describeEcoFlowPublicApiAuthorizationBlock,
+  isEcoFlowPublicApiAuthorizationBlockedError,
+  isEcoFlowUnauthorizedDeviceError,
+} from './ecoflowUnauthorizedDevice';
 import { normalizeEcoFlowTelemetryProductType } from './ecoflowBluTelemetryEligibility';
 import {
   BluStreamLifecycle,
@@ -192,7 +197,11 @@ function classifyEcoFlowCloudClientState(value: unknown): EcoFlowCloudClientStat
   };
   collect(value);
   const haystack = parts.join(' ').toLowerCase();
+  if (isEcoFlowPublicApiAuthorizationBlockedError(value)) {
+    return 'publicApiAuthorizationPending';
+  }
   if (
+    isEcoFlowUnauthorizedDeviceError(value) ||
     haystack.includes('deviceunauthorized') ||
     haystack.includes('device_not_authorized') ||
     haystack.includes('current device is not allowed') ||
@@ -241,7 +250,7 @@ function classifyEcoFlowCloudClientState(value: unknown): EcoFlowCloudClientStat
 }
 
 function isEcoFlowCloudAuthState(state: EcoFlowCloudClientState | null): boolean {
-  return state === 'authRequired' || state === 'deviceUnauthorized';
+  return state === 'authRequired' || state === 'deviceUnauthorized' || state === 'publicApiAuthorizationPending';
 }
 
 function resolveEcoFlowNoTelemetryCloudState(
@@ -261,6 +270,7 @@ function isEcoFlowCloudNoTelemetryTerminalState(state: EcoFlowCloudClientState |
   return (
     state === 'authRequired' ||
     state === 'deviceUnauthorized' ||
+    state === 'publicApiAuthorizationPending' ||
     state === 'deviceOffline' ||
     state === 'cloudStale'
   );
@@ -271,6 +281,9 @@ function getEcoFlowCloudConnectionStatusLabel(input: {
   cloudState: EcoFlowCloudClientState | null;
 }): string {
   if (input.telemetryActive) return 'EcoFlow Cloud telemetry active.';
+  if (input.cloudState === 'publicApiAuthorizationPending') {
+    return ECOFLOW_PUBLIC_API_AUTHORIZATION_PENDING_REASON;
+  }
   if (input.cloudState === 'deviceUnauthorized') {
     return 'EcoFlow Cloud access is not authorized for this device.';
   }
@@ -736,8 +749,11 @@ export async function connectEcoFlowCloudDevice(
     });
   } catch (error) {
     const statusError = error instanceof Error ? error.message : String(error ?? 'EcoFlow Cloud connection failed.');
-    const cloudState = provider.lastCloudFailure ?? classifyEcoFlowCloudClientState(statusError);
-    const authFailure = isEcoFlowCloudAuthState(cloudState) || isEcoFlowUnauthorizedDeviceError(error);
+    const cloudState = provider.lastCloudFailure ?? classifyEcoFlowCloudClientState([statusError, error, device]);
+    const authFailure =
+      isEcoFlowCloudAuthState(cloudState) ||
+      isEcoFlowUnauthorizedDeviceError([error, device]) ||
+      isEcoFlowPublicApiAuthorizationBlockedError([statusError, error, device]);
     bluLog('[BLU_TIMEOUT]', 'ecoflow_cloud_provider_connect_failed', buildBluTimeoutLogDetails({
       deviceId,
       vendor: 'ecoflow',
@@ -762,7 +778,9 @@ export async function connectEcoFlowCloudDevice(
     });
     return {
       connected: false,
-      statusLabel: 'EcoFlow Cloud connection failed.',
+      statusLabel: authFailure
+        ? getEcoFlowCloudConnectionStatusLabel({ telemetryActive: false, cloudState })
+        : 'EcoFlow Cloud connection failed.',
       statusError,
       providerStatus: provider.lastStatus ?? null,
       cloudState,
@@ -874,8 +892,11 @@ export async function connectEcoFlowCloudDevice(
     };
   } catch (error) {
     const statusError = error instanceof Error ? error.message : String(error ?? 'EcoFlow status fetch failed.');
-    const cloudState = provider.lastCloudFailure ?? classifyEcoFlowCloudClientState(statusError);
-    const authFailure = isEcoFlowCloudAuthState(cloudState) || isEcoFlowUnauthorizedDeviceError(error);
+    const cloudState = provider.lastCloudFailure ?? classifyEcoFlowCloudClientState([statusError, error, device]);
+    const authFailure =
+      isEcoFlowCloudAuthState(cloudState) ||
+      isEcoFlowUnauthorizedDeviceError([error, device]) ||
+      isEcoFlowPublicApiAuthorizationBlockedError([statusError, error, device]);
     bluLog('[BLU_TIMEOUT]', 'ecoflow_cloud_first_poll_failed', buildBluTimeoutLogDetails({
       deviceId,
       vendor: 'ecoflow',
@@ -901,7 +922,9 @@ export async function connectEcoFlowCloudDevice(
       });
       return {
         connected: false,
-        statusLabel: 'EcoFlow Cloud authorization required.',
+        statusLabel: cloudState === 'publicApiAuthorizationPending'
+          ? describeEcoFlowPublicApiAuthorizationBlock([device, statusError])
+          : 'EcoFlow Cloud authorization required.',
         statusError,
         providerStatus: provider.lastStatus ?? null,
         cloudState,
@@ -1020,8 +1043,11 @@ async function pollConnectedEcoFlowCloudDevice(
     };
   } catch (error) {
     const statusError = error instanceof Error ? error.message : String(error ?? 'EcoFlow status fetch failed.');
-    const cloudState = provider.lastCloudFailure ?? classifyEcoFlowCloudClientState(statusError);
-    const authFailure = isEcoFlowCloudAuthState(cloudState) || isEcoFlowUnauthorizedDeviceError(error);
+    const cloudState = provider.lastCloudFailure ?? classifyEcoFlowCloudClientState([statusError, error, device]);
+    const authFailure =
+      isEcoFlowCloudAuthState(cloudState) ||
+      isEcoFlowUnauthorizedDeviceError([error, device]) ||
+      isEcoFlowPublicApiAuthorizationBlockedError([statusError, error, device]);
     bluLog('[BLU_TIMEOUT]', 'ecoflow_cloud_poll_failed', buildBluTimeoutLogDetails({
       deviceId,
       vendor: 'ecoflow',
@@ -1047,7 +1073,9 @@ async function pollConnectedEcoFlowCloudDevice(
       });
       return {
         connected: false,
-        statusLabel: 'EcoFlow Cloud authorization required.',
+        statusLabel: cloudState === 'publicApiAuthorizationPending'
+          ? describeEcoFlowPublicApiAuthorizationBlock([device, statusError])
+          : 'EcoFlow Cloud authorization required.',
         statusError,
         providerStatus: provider.lastStatus ?? null,
         cloudState,

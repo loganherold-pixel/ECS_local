@@ -26,12 +26,20 @@ export const COLORADO_CPW_DESIGNATED_TRAILS_QUERY = {
   where: [
     "motorcycle = 'Yes'",
     "motorcycle = 'yes'",
+    "motorcycle = 'seasonally'",
+    "motorcycle LIKE '%/%'",
     "atv = 'Yes'",
     "atv = 'yes'",
+    "atv = 'seasonally'",
+    "atv LIKE '%/%'",
     "ohv_gt_50 = 'Yes'",
     "ohv_gt_50 = 'yes'",
+    "ohv_gt_50 = 'seasonally'",
+    "ohv_gt_50 LIKE '%/%'",
     "highway_ve = 'Yes'",
     "highway_ve = 'yes'",
+    "highway_ve = 'seasonally'",
+    "highway_ve LIKE '%/%'",
   ].join(' OR '),
   outFields: '*',
   outSR: 4326,
@@ -91,7 +99,13 @@ function stablePayloadHash(value: unknown): string {
 }
 
 function isAllowed(value: unknown): boolean {
-  return /^(yes|y|true|1)$/i.test(cleanString(value));
+  const normalized = cleanString(value);
+  return /^(yes|y|true|1)$/i.test(normalized) || isConditionalAccessValue(normalized);
+}
+
+function isConditionalAccessValue(value: unknown): boolean {
+  const normalized = cleanString(value);
+  return /^seasonally$/i.test(normalized) || /\b\d{1,2}\/\d{1,2}\b/.test(normalized);
 }
 
 function normalizeLineString(value: unknown): number[][] {
@@ -258,6 +272,15 @@ function permittedUses(properties: Record<string, unknown>): string[] {
   ]);
 }
 
+function conditionalUseValues(properties: Record<string, unknown>): string[] {
+  return uniqueStrings([
+    isConditionalAccessValue(properties.highway_ve) ? `highway_vehicle:${cleanString(properties.highway_ve)}` : '',
+    isConditionalAccessValue(properties.ohv_gt_50) ? `ohv_gt_50:${cleanString(properties.ohv_gt_50)}` : '',
+    isConditionalAccessValue(properties.atv) ? `atv:${cleanString(properties.atv)}` : '',
+    isConditionalAccessValue(properties.motorcycle) ? `motorcycle:${cleanString(properties.motorcycle)}` : '',
+  ]);
+}
+
 function routeIntelligence(args: {
   distanceMiles: number;
   estimatedDurationMinutes: number;
@@ -268,6 +291,7 @@ function routeIntelligence(args: {
     sourceAdapter: 'colorado_cpw_designated_trails',
     sourceLayerName: 'Colorado CPW Designated Trails',
     permittedUses: permittedUses(args.properties),
+    conditionalUseValues: conditionalUseValues(args.properties),
     vehicleFit: args.vehicleFit,
     remotenessBasis: 'estimated_from_colorado_cpw_designated_trail_distance_and_state_park_context',
     remotenessDataState: 'estimated',
@@ -340,10 +364,14 @@ export function featureToColoradoCpwDesignatedTrailRouteUpsert(
   const coverage = coverageForVehicleFit(vehicleFit);
   const estimatedDurationMinutes = Math.max(20, Math.round(distanceMiles * 15));
   const routeSourceLayer = 'Colorado CPW Designated Trails: CPWDesignatedTrails02172021';
+  const conditionalValues = conditionalUseValues(properties);
   const warnings = [
     COLORADO_CPW_DESIGNATED_TRAILS_CAVEAT,
     'Check current Colorado CPW closures, permits, trail signage, property rules, fire restrictions, weather, and seasonal conditions before travel.',
-  ];
+    conditionalValues.length > 0
+      ? `Colorado CPW lists conditional seasonal/date-window access values (${conditionalValues.join(', ')}); confirm trip-date access before travel.`
+      : '',
+  ].filter((warning) => warning.trim().length > 0);
 
   const verifiedRoute = {
     public_id: publicId,
@@ -366,7 +394,7 @@ export function featureToColoradoCpwDesignatedTrailRouteUpsert(
     unknown_access_coverage_pct: 100 - coverage,
     restricted_access_coverage_pct: 0,
     active_closure_count: 0,
-    seasonal_restriction_count: 0,
+    seasonal_restriction_count: conditionalValues.length > 0 ? 1 : 0,
     vehicle_mismatch: false,
     geometry_quality: 'good',
     verification_status: 'official_verified',

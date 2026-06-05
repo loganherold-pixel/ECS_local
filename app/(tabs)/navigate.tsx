@@ -2701,6 +2701,10 @@ const communityCampsitesEnabled = isCommunityCampsitesFeatureEnabled(
   DEFAULT_COMMUNITY_CAMPSITES_ROLLOUT_CONFIG,
   'communityCampsitesEnabled',
 );
+const campsiteCommunityReviewEnabled = isCommunityCampsitesFeatureEnabled(
+  DEFAULT_COMMUNITY_CAMPSITES_ROLLOUT_CONFIG,
+  'campsiteCommunityReviewEnabled',
+);
 const gpxCampsiteImportEnabled = isCommunityCampsitesFeatureEnabled(
   DEFAULT_COMMUNITY_CAMPSITES_ROLLOUT_CONFIG,
   'gpxCampsiteImportEnabled',
@@ -11413,9 +11417,14 @@ const handleCreateRun = useCallback(() => {
     !roadStepListExpanded;
   const floatingToolsVisible = mapOverlayStartupReady;
   const campLayerControlsAvailable =
-    dispersedCampingEligibilityLayerAvailable || establishedCampsitesLayerAvailable;
+    communityCampsitesEnabled ||
+    dispersedCampingEligibilityLayerAvailable ||
+    establishedCampsitesLayerAvailable;
   const campLayerControlActive =
-    campLayerMenuOpen || dispersedCampingEligibilityEnabled || establishedCampsitesEnabled;
+    campLayerMenuOpen ||
+    dispersedCampingEligibilityEnabled ||
+    establishedCampsitesEnabled ||
+    Object.values(campsiteLayerVisibility).some(Boolean);
   const compassOverlayVisible =
     mapOverlayStartupReady &&
     !activeTopPopup &&
@@ -12153,8 +12162,7 @@ const handleTopToolboxLayout = useCallback(
         primaryActionLabel: activeGuidanceReady ? 'Start Hybrid' : 'Preview Only',
         primaryActionDisabled:
           !activeGuidanceReady ||
-          fullRouteGuidanceModel.status === 'blocked_gap' ||
-          (!hybridStartCanUseTrail && !route) ||
+          fullRouteGuidanceModel.status !== 'ready' ||
           (!navigateOperationalState.liveRoutingAvailable && !navigateOperationalState.hasRouteSupport),
         showSteps: false,
         showOverview: true,
@@ -12206,7 +12214,6 @@ const handleTopToolboxLayout = useCallback(
     explorePreviewTrailLengthMiles,
     explorePreviewTrailSegments.length,
     fullRouteGuidanceModel.status,
-    hybridStartCanUseTrail,
     importedPreviewSourceLabel,
     roadNavigation.previewLoading,
     roadNavigation.session.destination,
@@ -16747,6 +16754,49 @@ const stableMapSurface = useMemo(() => {
                   </TouchableOpacity>
                 </View>
 
+                {communityCampsitesEnabled ? (
+                  <>
+                    {CAMPSITE_VISIBILITY_LAYER_TOGGLES.map((layer) => {
+                      if (layer.privileged && !campsiteCommunityReviewEnabled) return null;
+                      const isActive = campsiteLayerVisibility[layer.key];
+                      return (
+                        <TouchableOpacity
+                          key={layer.key}
+                          style={[
+                            styles.dispersedCampingToggle,
+                            styles.campLayerMenuToggle,
+                            isActive && styles.dispersedCampingToggleActive,
+                          ]}
+                          onPress={() => handleCampsiteLayerToggle(layer.key)}
+                          activeOpacity={0.86}
+                          accessibilityRole="checkbox"
+                          accessibilityState={{ checked: isActive }}
+                          accessibilityLabel={layer.label}
+                        >
+                          <View
+                            style={[
+                              styles.dispersedCampingCheckbox,
+                              isActive && styles.dispersedCampingCheckboxActive,
+                            ]}
+                          >
+                            {isActive ? (
+                              <Ionicons name="checkmark" size={13} color="#091014" />
+                            ) : null}
+                          </View>
+                          <View style={styles.dispersedCampingToggleCopy}>
+                            <Text style={styles.dispersedCampingToggleTitle} numberOfLines={2}>
+                              {layer.label}
+                            </Text>
+                            <Text style={styles.dispersedCampingToggleSubtitle} numberOfLines={2}>
+                              {layer.detail}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </>
+                ) : null}
+
                 {establishedCampsitesLayerAvailable ? (
                   <TouchableOpacity
                     style={[
@@ -17449,10 +17499,14 @@ const stableMapSurface = useMemo(() => {
   campLayerMenuOpen,
   campLayerControlsAvailable,
   campLayerControlActive,
+  communityCampsitesEnabled,
+  campsiteCommunityReviewEnabled,
+  campsiteLayerVisibility,
   campLayerFetchOnline,
   mapOverlayStartupReady,
   toggleToolsPopup,
   toggleCampLayerMenu,
+  handleCampsiteLayerToggle,
   showInlineIntelPanel,
   surfacedMissionBrief,
   handleAssistActionPress,

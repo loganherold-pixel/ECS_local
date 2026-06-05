@@ -3,16 +3,25 @@ name: Route Catalog NPS Trails Sync
 on:
   workflow_dispatch:
     inputs:
-      bbox:
-        description: Bounded sync bbox as west,south,east,north.
+      bbox_batch:
+        description: Bounded NPS trail bbox batch to sync.
         required: false
-        default: '-124.8,32.5,-113.8,42.2'
+        default: expanded_motorized_pilots
+        type: choice
+        options:
+          - expanded_motorized_pilots
+          - joshua_tree
+          - custom_bbox
+      bbox:
+        description: Optional custom bounded sync bbox as west,south,east,north. Used when set.
+        required: false
+        default: ''
       min_miles:
         description: Minimum calculated NPS trail segment miles to ingest.
         required: false
         default: '0.1'
       limit:
-        description: Maximum features to request for the bbox.
+        description: Maximum features to request per bbox.
         required: false
         default: '150'
 
@@ -32,7 +41,8 @@ jobs:
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
-      BBOX: ${{ inputs.bbox || '-124.8,32.5,-113.8,42.2' }}
+      BBOX_BATCH: ${{ inputs.bbox_batch || 'expanded_motorized_pilots' }}
+      BBOX: ${{ inputs.bbox || '' }}
       MIN_MILES: ${{ inputs.min_miles || '0.1' }}
       LIMIT: ${{ inputs.limit || '150' }}
 
@@ -57,29 +67,145 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
 
-          const bboxValues = String(process.env.BBOX || '')
-            .split(',')
-            .map((value) => Number(value.trim()));
           const minMiles = Number(process.env.MIN_MILES || 0.1);
           const limit = Number(process.env.LIMIT || 150);
+          const bboxBatch = String(process.env.BBOX_BATCH || 'expanded_motorized_pilots');
+          const customBbox = String(process.env.BBOX || '').trim();
 
-          if (bboxValues.length !== 4 || bboxValues.some((value) => !Number.isFinite(value))) {
-            throw new Error('bbox must be west,south,east,north.');
+          const bboxPresets = {
+            joshua_tree: {
+              key: 'joshua_tree',
+              label: 'Joshua Tree National Park',
+              bbox: { xmin: -116.3066, ymin: 33.7377, xmax: -115.7726, ymax: 34.2586 },
+            },
+            big_south_fork: {
+              key: 'big_south_fork',
+              label: 'Big South Fork National River and Recreation Area',
+              bbox: { xmin: -85.044, ymin: 36.2043, xmax: -84.2655, ymax: 36.9675 },
+            },
+            shenandoah: {
+              key: 'shenandoah',
+              label: 'Shenandoah National Park',
+              bbox: { xmin: -78.5545, ymin: 38.5115, xmax: -78.0496, ymax: 39.0132 },
+            },
+            everglades: {
+              key: 'everglades',
+              label: 'Everglades National Park',
+              bbox: { xmin: -81.0171, ymin: 25.4077, xmax: -80.5086, ymax: 26.007 },
+            },
+            timucuan: {
+              key: 'timucuan',
+              label: 'Timucuan Ecological and Historic Preserve',
+              bbox: { xmin: -81.9059, ymin: 30.2815, xmax: -81.3716, ymax: 30.8132 },
+            },
+            channel_islands: {
+              key: 'channel_islands',
+              label: 'Channel Islands National Park',
+              bbox: { xmin: -120.6832, ymin: 33.7801, xmax: -120.1632, ymax: 34.2924 },
+            },
+            denali: {
+              key: 'denali',
+              label: 'Denali National Park and Preserve',
+              bbox: { xmin: -151.2385, ymin: 63.2606, xmax: -150.4213, ymax: 63.8374 },
+            },
+            wrangell_st_elias: {
+              key: 'wrangell_st_elias',
+              label: 'Wrangell-St Elias National Park and Preserve',
+              bbox: { xmin: -144.5504, ymin: 61.2366, xmax: -142.5884, ymax: 62.8671 },
+            },
+            glacier_bay: {
+              key: 'glacier_bay',
+              label: 'Glacier Bay National Park and Preserve',
+              bbox: { xmin: -138.831, ymin: 58.8263, xmax: -137.9997, ymax: 59.4408 },
+            },
+            klondike_gold_rush: {
+              key: 'klondike_gold_rush',
+              label: 'Klondike Gold Rush National Historical Park',
+              bbox: { xmin: -135.6085, ymin: 59.243, xmax: -135.0971, ymax: 59.7734 },
+            },
+            lake_clark: {
+              key: 'lake_clark',
+              label: 'Lake Clark National Park and Preserve',
+              bbox: { xmin: -154.5629, ymin: 59.9417, xmax: -154.0563, ymax: 60.4472 },
+            },
+            yukon_charley: {
+              key: 'yukon_charley',
+              label: 'Yukon-Charley Rivers National Preserve',
+              bbox: { xmin: -143.6243, ymin: 65.0307, xmax: -142.8633, ymax: 65.6006 },
+            },
+            kaloko_honokohau: {
+              key: 'kaloko_honokohau',
+              label: 'Kaloko-Honokohau National Historical Park',
+              bbox: { xmin: -156.0754, ymin: 19.6211, xmax: -155.9667, ymax: 19.7284 },
+            },
+            american_samoa: {
+              key: 'american_samoa',
+              label: 'National Park of American Samoa',
+              bbox: { xmin: -170.7226, ymin: -14.2951, xmax: -170.6212, ymax: -14.1921 },
+            },
+            war_in_the_pacific: {
+              key: 'war_in_the_pacific',
+              label: 'War in the Pacific National Historical Park',
+              bbox: { xmin: 144.6441, ymin: 13.4112, xmax: 144.7618, ymax: 13.5236 },
+            },
+          };
+
+          function parseBbox(value) {
+            const bboxValues = String(value || '')
+              .split(',')
+              .map((part) => Number(part.trim()));
+            if (bboxValues.length !== 4 || bboxValues.some((number) => !Number.isFinite(number))) {
+              throw new Error('bbox must be west,south,east,north.');
+            }
+            const [xmin, ymin, xmax, ymax] = bboxValues;
+            if (xmin >= xmax || ymin >= ymax || Math.abs(xmin) > 180 || Math.abs(xmax) > 180 || Math.abs(ymin) > 90 || Math.abs(ymax) > 90) {
+              throw new Error('bbox values are out of range or inverted.');
+            }
+            return { xmin, ymin, xmax, ymax };
           }
-          const [xmin, ymin, xmax, ymax] = bboxValues;
-          if (xmin >= xmax || ymin >= ymax || Math.abs(xmin) > 180 || Math.abs(xmax) > 180 || Math.abs(ymin) > 90 || Math.abs(ymax) > 90) {
-            throw new Error('bbox values are out of range or inverted.');
-          }
+
           if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');
           if (!Number.isFinite(limit) || limit <= 0) throw new Error('limit must be positive.');
 
+          const batchKeys = bboxBatch === 'expanded_motorized_pilots'
+            ? [
+                'joshua_tree',
+                'big_south_fork',
+                'shenandoah',
+                'everglades',
+                'timucuan',
+                'channel_islands',
+                'denali',
+                'wrangell_st_elias',
+                'glacier_bay',
+                'klondike_gold_rush',
+                'lake_clark',
+                'yukon_charley',
+                'kaloko_honokohau',
+                'american_samoa',
+                'war_in_the_pacific',
+              ]
+            : [bboxBatch];
+
+          const payload = customBbox
+            ? {
+                bboxes: [{ key: 'custom_bbox', label: 'Custom bbox', bbox: parseBbox(customBbox) }],
+                minMiles,
+                limitPerBbox: Math.min(500, Math.round(limit)),
+              }
+            : {
+                bboxes: batchKeys.map((key) => {
+                  const preset = bboxPresets[key];
+                  if (!preset) throw new Error(`Unknown bbox_batch: ${bboxBatch}`);
+                  return preset;
+                }),
+                minMiles,
+                limitPerBbox: Math.min(500, Math.round(limit)),
+              };
+
           fs.writeFileSync(
             'route-catalog-nps-trails-sync-payload.json',
-            JSON.stringify({
-              bbox: { xmin, ymin, xmax, ymax },
-              minMiles,
-              limit: Math.min(500, Math.round(limit)),
-            }),
+            JSON.stringify(payload),
           );
           NODE
 
@@ -110,6 +236,7 @@ jobs:
           console.log(JSON.stringify({
             source: response.source,
             bbox: response.bbox,
+            bboxes: response.bboxes,
             rawFeatureCount: response.rawFeatureCount,
             normalizedFeatureCount: response.normalizedFeatureCount,
             publicRecommendationCount: response.publicRecommendationCount,
@@ -118,7 +245,7 @@ jobs:
           const markdown = [
             '## Route Catalog NPS Public Trails Sync',
             '',
-            `BBox: ${JSON.stringify(response.bbox)}`,
+            `BBoxes: ${JSON.stringify(response.bboxes || (response.bbox ? [{ key: 'custom_bbox', bbox: response.bbox }] : []))}`,
             '',
             `Raw features: ${response.rawFeatureCount}`,
             '',

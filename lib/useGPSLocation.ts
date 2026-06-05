@@ -20,6 +20,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
 import { ecsLog } from './ecsLogger';
+import { ensureForegroundLocationPermission } from './locationPermissions';
 
 export interface GPSPosition {
   latitude: number;
@@ -215,7 +216,7 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
             return;
           }
 
-          const { status } = await Location.requestForegroundPermissionsAsync();
+          const { status } = await ensureForegroundLocationPermission(Location);
           if (!mountedRef.current) return;
 
           if (status !== 'granted') {
@@ -310,7 +311,7 @@ export function useGPSLocation(options: GPSLocationOptions = {}): GPSLocationOut
 
         setIsAvailable(true);
 
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        const { status } = await ensureForegroundLocationPermission(Location);
         if (cancelled || !mountedRef.current) return;
 
         if (status !== 'granted') {

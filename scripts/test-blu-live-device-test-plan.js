@@ -72,7 +72,7 @@ for (const prefix of [
 }
 
 for (const command of [
-  'npx tsc --noEmit --pretty false',
+  'npm run typecheck',
   'npm run lint',
   'npm run test:blu-live-device-test-plan',
   'npm run test:obd2-live-pipeline',
@@ -85,7 +85,7 @@ for (const command of [
   assert(doc.includes(command), `BLU live device test plan must include command: ${command}`);
 }
 
-assert(!Object.prototype.hasOwnProperty.call(scripts, 'typecheck'), 'Package unexpectedly has typecheck script; update the BLU test plan regression command notes.');
+assert(Object.prototype.hasOwnProperty.call(scripts, 'typecheck'), 'package.json must expose typecheck for the BLU test plan command notes.');
 assert(!Object.prototype.hasOwnProperty.call(scripts, 'test'), 'Package unexpectedly has top-level test script; update the BLU test plan regression command notes.');
 
 assert(

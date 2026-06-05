@@ -25,6 +25,7 @@ const {
   NPS_PUBLIC_TRAILS_SOURCE,
   arcGisFeatureToNpsPublicTrailsRouteUpsert,
   buildNpsPublicTrailsWhereClause,
+  normalizeNpsPublicTrailsBboxes,
   normalizeNpsPublicTrailsFeatureCollection,
   npsPublicTrailsSourceUpsert,
 } = require(path.join(root, 'supabase', 'functions', '_shared', 'routeCatalogNpsPublicTrails.ts'));
@@ -44,6 +45,16 @@ assert(where.includes("TRLUSE LIKE '%Four-Wheel Drive%'"));
 assert(where.includes("TRLUSE LIKE '%All-Terrain Vehicle%'"));
 assert(where.includes("TRLUSE LIKE '%Motorcycle%'"));
 assert(where.includes("TRLUSE LIKE '%Motorized%'"));
+assert(where.includes("TRLUSE NOT LIKE '%Non-Motorized%'"), 'NPS query should not treat literal Non-Motorized trail-use records as motorized');
+
+const normalizedBboxes = normalizeNpsPublicTrailsBboxes([
+  { key: 'joshua_tree', label: 'Joshua Tree National Park', xmin: -116.3066, ymin: 33.7377, xmax: -115.7726, ymax: 34.2586 },
+  { key: 'big_south_fork', label: 'Big South Fork NRRA', west: -85.044, south: 36.2043, east: -84.2655, north: 36.9675 },
+]);
+assert.strictEqual(normalizedBboxes.length, 2);
+assert.strictEqual(normalizedBboxes[0].key, 'joshua_tree');
+assert.strictEqual(normalizedBboxes[1].bbox.xmin, -85.044);
+assert.strictEqual(normalizeNpsPublicTrailsBboxes(null), null);
 
 const sourceUpsert = npsPublicTrailsSourceUpsert('2026-06-01T00:00:00.000Z');
 assert.strictEqual(sourceUpsert.provider_id, 'nps_public_trails');
@@ -157,6 +168,30 @@ assert.strictEqual(
   'Non-motorized NPS public trail records should not enter the overland route catalog adapter',
 );
 
+assert.strictEqual(
+  arcGisFeatureToNpsPublicTrailsRouteUpsert(
+    {
+      attributes: {
+        OBJECTID: 101,
+        TRLNAME: 'Literal Non Motorized',
+        TRLSTATUS: 'Existing',
+        TRLTYPE: 'Standard Terra Trail',
+        TRLUSE: 'Non-Motorized',
+        PUBLICDISPLAY: 'Public Map Display',
+        DATAACCESS: 'Unrestricted',
+      },
+      geometry: { paths: [[[-120, 39], [-120.01, 39.01]]] },
+    },
+    {
+      sourceId: 'source',
+      sourceLastVerifiedAt: '2026-06-01T00:00:00.000Z',
+      minMiles: 0.1,
+    },
+  ),
+  null,
+  'Literal Non-Motorized NPS public trail records should not be promoted through the motorized adapter',
+);
+
 const normalized = normalizeNpsPublicTrailsFeatureCollection({ features: [fourWheelDriveTrail] });
 assert.strictEqual(normalized.length, 1);
 assert.strictEqual(normalized[0].attributes.UNITCODE, 'SHEN');
@@ -167,6 +202,32 @@ const syncFunction = fs.readFileSync(syncFunctionPath, 'utf8');
 assert(syncFunction.includes('ECS_ROUTE_CATALOG_SYNC_TOKEN'), 'NPS Trails sync should require the server-side route catalog sync token');
 assert(syncFunction.includes('route_sources') && syncFunction.includes('verified_routes'));
 assert(syncFunction.includes('bbox'), 'NPS Trails sync should require bounded spatial sync input');
+assert(syncFunction.includes('normalizeNpsPublicTrailsBboxes'), 'NPS Trails sync should support bounded multi-bbox batches');
+assert(syncFunction.includes('limitPerBbox'), 'NPS Trails sync should bound each multi-bbox batch independently');
 assert(syncFunction.includes('countPublicRecommendations(routeRows)'), 'NPS Trails sync should report promoted public recommendation telemetry');
+
+const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-nps-trails-sync.yml');
+assert(fs.existsSync(workflowPath), 'NPS public trails sync workflow should exist');
+const workflow = fs.readFileSync(workflowPath, 'utf8');
+assert(workflow.includes('bbox_batch'), 'NPS public trails workflow should expose a bounded bbox batch selector');
+assert(workflow.includes('expanded_motorized_pilots'), 'NPS public trails workflow should default to the expanded motorized pilot batch');
+assert(workflow.includes('big_south_fork') && workflow.includes('wrangell_st_elias'), 'NPS public trails workflow should include the expanded NPS pilot bbox keys');
+assert(
+  workflow.includes('everglades') && workflow.includes('timucuan') && workflow.includes('channel_islands'),
+  'NPS public trails workflow should include the remaining lower-48 motorized pilot bbox keys',
+);
+assert(
+  workflow.includes('glacier_bay') &&
+    workflow.includes('klondike_gold_rush') &&
+    workflow.includes('lake_clark') &&
+    workflow.includes('yukon_charley'),
+  'NPS public trails workflow should include the remaining Alaska motorized pilot bbox keys',
+);
+assert(
+  workflow.includes('kaloko_honokohau') &&
+    workflow.includes('american_samoa') &&
+    workflow.includes('war_in_the_pacific'),
+  'NPS public trails workflow should include the remaining island and territory motorized pilot bbox keys',
+);
 
 console.log('NPS public trails route catalog adapter checks passed');

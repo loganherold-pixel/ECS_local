@@ -17,6 +17,7 @@ import {
   BLU_POWER_MODULE_STATE_MACHINE,
   BLU_POWER_MODULE_VIEW_MODEL,
   BLU_POWER_MODULE_VIEW_MODEL_INSTANCE,
+  shouldAnimateBluPowerModuleRuntime,
 } from '../../lib/bluPowerModuleRive';
 import BluPowerModuleFallback, { type PowerModuleRiveWidgetProps } from './BluPowerModuleFallback';
 
@@ -65,11 +66,15 @@ export default function PowerModuleRiveWidget({
   const riveSrc = useMemo(() => getBundledRiveSrc(), []);
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
+  const shouldAnimate = useMemo(
+    () => shouldAnimateBluPowerModuleRuntime({ hasEcsData, batteryPercent, inputWatts, outputWatts }),
+    [batteryPercent, hasEcsData, inputWatts, outputWatts],
+  );
   const { rive, RiveComponent } = useRive({
     src: riveSrc,
     artboard: BLU_POWER_MODULE_ARTBOARD,
     stateMachines: BLU_POWER_MODULE_STATE_MACHINE,
-    autoplay: true,
+    autoplay: shouldAnimate,
     autoBind: true,
     layout,
     onLoad: () => setLoaded(true),
@@ -104,6 +109,15 @@ export default function PowerModuleRiveWidget({
     rightFlowOpacity,
     viewModelInstance,
   ]);
+
+  useEffect(() => {
+    if (!rive) return;
+    if (shouldAnimate) {
+      rive.play();
+      return;
+    }
+    rive.pause();
+  }, [rive, shouldAnimate]);
 
   if (loadFailed) {
     return (

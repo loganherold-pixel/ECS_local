@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       sync_scope:
-        description: Use pilot for bounded named GPX sources or statewide to include the large official statewide GPX.
+        description: Use statewide for the bounded official GPX set, or pilot for the smaller named-source subset.
         required: false
-        default: pilot
+        default: statewide
         type: choice
         options:
-          - pilot
           - statewide
+          - pilot
       source_keys:
         description: Optional comma-separated Michigan DNR ORV GPX source keys. Overrides sync_scope defaults when provided.
         required: false
@@ -40,7 +40,7 @@ jobs:
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
-      SYNC_SCOPE: ${{ inputs.sync_scope || 'pilot' }}
+      SYNC_SCOPE: ${{ inputs.sync_scope || 'statewide' }}
       SOURCE_KEYS: ${{ inputs.source_keys || '' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
       MAX_TRACKS_PER_SOURCE: ${{ inputs.max_tracks_per_source || '20' }}
@@ -66,7 +66,7 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
 
-          const syncScope = String(process.env.SYNC_SCOPE || 'pilot').trim().toLowerCase();
+          const syncScope = String(process.env.SYNC_SCOPE || 'statewide').trim().toLowerCase();
           if (!['pilot', 'statewide'].includes(syncScope)) {
             throw new Error('sync_scope must be pilot or statewide.');
           }

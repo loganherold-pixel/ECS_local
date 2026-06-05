@@ -40,6 +40,11 @@ assert(
     COLORADO_CPW_DESIGNATED_TRAILS_QUERY.where.includes('highway_ve'),
   'Colorado CPW sync query should only request motorized-permitted candidate trails',
 );
+assert(
+  COLORADO_CPW_DESIGNATED_TRAILS_QUERY.where.includes('seasonally') &&
+    COLORADO_CPW_DESIGNATED_TRAILS_QUERY.where.includes("LIKE '%/%'"),
+  'Colorado CPW sync query should include official seasonal and date-window motorized candidates with visible caveats',
+);
 
 const sourceUpsert = coloradoCpwDesignatedTrailsSourceUpsert('2026-06-02T12:00:00.000Z');
 assert.strictEqual(sourceUpsert.source_type, 'state_agency');
@@ -109,6 +114,40 @@ assert.strictEqual(upsert.verifiedRouteSource.coverage_pct, 84);
 assert.strictEqual(upsert.verifiedRouteSource.metadata.providerFeatureId, 'colorado-cpw-designated-trails:83');
 assert.strictEqual(upsert.rawSourceFeature.provider_feature_id, 'colorado-cpw-designated-trails:83');
 assert(upsert.rawSourceFeature.properties.geometry, 'Raw source feature should preserve normalized geometry for auditability');
+
+const seasonalMotorized = featureToColoradoCpwDesignatedTrailRouteUpsert({
+  ...features[0],
+  id: 710,
+  properties: {
+    ...features[0].properties,
+    FID: 710,
+    name: 'Old Fulford Road',
+    motorcycle: '05/21-11/22',
+    atv: '05/21-11/22',
+    ohv_gt_50: '05/21-11/22',
+    highway_ve: 'seasonally',
+    length_mi_: 0.98,
+    manager: 'USFS Eagle-Holy Cross Ranger District',
+    PropName: 'USFS Eagle-Holy Cross Ranger District',
+    access: 'seasonally',
+  },
+}, {
+  sourceId: 'source-colorado-cpw',
+  sourceLastVerifiedAt: '2026-06-02T12:00:00.000Z',
+  ingestRunId: 'ingest-colorado-cpw',
+  minMiles: 0.25,
+});
+assert(seasonalMotorized, 'Colorado CPW seasonal/date-window motorized trail should produce a conditional public recommendation record');
+assert.deepStrictEqual(seasonalMotorized.verifiedRoute.vehicle_fit, ['full_size_4x4', 'atv', 'utv', 'motorcycle']);
+assert.strictEqual(seasonalMotorized.verifiedRoute.seasonal_restriction_count, 1);
+assert(
+  seasonalMotorized.verifiedRoute.warning_reasons.some((reason) => /seasonal|date-window|trip-date/i.test(reason)),
+  'Colorado CPW seasonal recommendations must carry explicit seasonal/date-window warnings',
+);
+assert(
+  seasonalMotorized.verifiedRoute.route_intelligence.conditionalUseValues.some((value) => value.includes('05/21-11/22')),
+  'Colorado CPW route intelligence should preserve official seasonal/date-window values',
+);
 
 const nonMotorized = featureToColoradoCpwDesignatedTrailRouteUpsert({
   ...features[0],

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPersistedKeyValueCache } from '../keyValuePersistence';
+import { ensureForegroundLocationPermission } from '../locationPermissions';
 import { isSupabaseConfigured, supabase } from '../supabase';
 import {
   formatConvoyBackendUserMessage,
@@ -468,7 +469,7 @@ function createSupabaseConvoyLocationPublisherBackend(
 
     async requestForegroundPermission() {
       const Location = await import('expo-location');
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const { status } = await ensureForegroundLocationPermission(Location);
       return status === 'granted' ? 'granted' : status === 'denied' ? 'denied' : 'undetermined';
     },
 

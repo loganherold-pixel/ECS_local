@@ -40,7 +40,8 @@
  * ──────────────────────────────────────────────────────────────
  */
 import { useEffect, useRef, useCallback } from 'react';
-import { useGPSLocation, haversineDistanceMiles } from './useGPSLocation';
+import { haversineDistanceMiles } from './useGPSLocation';
+import { useThrottledGPS } from './useThrottledGPS';
 import {
   expeditionStateStore,
   type ExpeditionState,
@@ -100,7 +101,9 @@ export function useGeofenceMonitor(
   const { enabled, vehicleName, callbacks } = options;
 
   // ── GPS tracking (only when enabled) ─────────────────────
-  const gps = useGPSLocation({ enabled });
+  // Use the shared GPS pipeline so Dashboard geofence monitoring does not
+  // create a second native watch beside the dashboard/map GPS subscriber.
+  const gps = useThrottledGPS({ enabled });
 
   // ── Refs for state tracking (avoid re-render loops) ──────
   const homePositionRef = useRef<{ lat: number; lng: number } | null>(null);

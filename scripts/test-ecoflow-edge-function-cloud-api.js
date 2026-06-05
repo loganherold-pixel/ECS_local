@@ -27,6 +27,8 @@ const cloudConnection = read('lib/ecoflowCloudConnection.ts');
 const diagnostics = read('lib/ecoflowConnectionDiagnostics.ts');
 const scannerDiscovery = read('lib/ecoflowUnifiedScannerDiscovery.ts');
 const unified = read('lib/useUnifiedDeviceConnections.ts');
+const unauthorizedHelper = read('lib/ecoflowUnauthorizedDevice.ts');
+const liveDeviceTestPlan = read('docs/blu-live-device-test-plan.md');
 
 for (const fragment of [
   '| "bleAuthPayload"',
@@ -79,6 +81,7 @@ for (const forbidden of [
 for (const state of [
   '"authRequired"',
   '"deviceUnauthorized"',
+  '"publicApiAuthorizationPending"',
   '"cloudUnavailable"',
   '"deviceOffline"',
   '"cloudPolling"',
@@ -88,6 +91,8 @@ for (const state of [
 }
 
 for (const fragment of [
+  'isEcoFlowPublicApiAuthorizationBlockedError',
+  'describeEcoFlowPublicApiAuthorizationBlock',
   'lastCloudFailure',
   'checkMqttCertification',
   'EcoFlowMqttCertificationStatus',
@@ -110,6 +115,7 @@ for (const fragment of [
 }
 
 for (const fragment of [
+  'publicApiAuthorizationPending',
   'cloudState: EcoFlowCloudClientState | null',
   'classifyEcoFlowCloudClientState',
   'isEcoFlowCloudAuthState',
@@ -127,7 +133,30 @@ for (const fragment of [
 }
 
 has(scannerDiscovery, 'keys not configured', 'EcoFlow scanner discovery should classify missing credentials as auth-required');
+has(scannerDiscovery, 'isEcoFlowPublicApiAuthorizationBlockedError', 'EcoFlow scanner discovery should classify EcoFlow code 1006 as cloud auth');
 has(unified, "cloudState === 'authRequired'", 'Device Connections model should surface auth-required cloud state');
+has(unified, "cloudState === 'publicApiAuthorizationPending'", 'Device Connections model should surface EcoFlow public API authorization pending state');
 has(unified, "cloudState === 'cloudStale'", 'Device Connections model should surface stale cloud state');
+
+for (const fragment of [
+  '1006',
+  'public_api_authorization_pending',
+  'DELTA 3 1500',
+  'DELTA Mini',
+  'Alternator Charger',
+  'current EcoFlow developer app',
+]) {
+  has(edge + provider + cloudConnection + diagnostics + scannerDiscovery + unified + unauthorizedHelper, fragment, 'EcoFlow 1006 diagnostics contract');
+}
+
+for (const fragment of [
+  'EcoFlow code 1006',
+  'DELTA 3 1500',
+  'DELTA Mini',
+  'Alternator Charger',
+  'server-side',
+]) {
+  has(liveDeviceTestPlan, fragment, 'EcoFlow public API authorization troubleshooting documentation');
+}
 
 console.log('EcoFlow edge function/cloud API checks passed.');

@@ -2,7 +2,7 @@
 
 Status: blocked by real-hardware evidence
 
-Production decision: pending
+Production decision: owner sign-off authorized; real-hardware evidence pending
 
 ## System
 
@@ -26,7 +26,7 @@ Bluestack is the canonical ECS device connection surface for power devices, OBD2
 | Power station connect/stream/disconnect | Pending | Real hardware evidence for scan, connect, telemetry stream, disconnect, stale/cleared widget state, and reconnect behavior. |
 | EcoFlow cloud/BLE separation | Pending | Real EcoFlow evidence showing cloud/API authorization success or unauthorized failure without mislabeling it as local Bluetooth state. |
 | OBD2 no-data and live-data paths | Pending | Real ELM327-compatible adapter evidence for no-data, live PID data with vehicle running, disconnect, and telemetry clearing/aging. |
-| Production owner decision | Pending | Product, privacy, field-ops, and engineering owner acceptance after evidence is complete. |
+| Production owner decision | Accepted | Product, privacy, field-ops, and engineering owner sign-off is authorized. Production readiness still remains blocked until real-hardware evidence is complete. |
 
 ## Evidence Contract
 
@@ -76,7 +76,7 @@ Expected fields:
 }
 ```
 
-Do not set `productionDecision` to `accepted` until real-hardware evidence is reviewed and owner sign-off is complete. The gate also requires at least four non-placeholder device-matrix entries, four non-placeholder evidence references, non-placeholder notes, and product/engineering/privacy/field-ops signoff.
+Owner sign-off may be recorded before real-hardware evidence is complete, but that sign-off does not satisfy the hardware evidence gates. Production readiness remains blocked until every real-hardware evidence flag is true and the evidence packet has at least four non-placeholder device-matrix entries, four non-placeholder evidence references, non-placeholder notes, and product/engineering/privacy/field-ops signoff.
 
 ## Capture Checklist
 

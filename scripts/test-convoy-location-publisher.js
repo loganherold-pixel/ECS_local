@@ -242,7 +242,7 @@ async function main() {
 
   const source = fs.readFileSync(publisherPath, 'utf8');
   assert.ok(source.includes("import('expo-location')"), 'publisher should use expo-location lazily.');
-  assert.ok(source.includes('requestForegroundPermissionsAsync'), 'publisher should request foreground permission.');
+  assert.ok(source.includes('ensureForegroundLocationPermission'), 'publisher should preflight foreground permission before requesting.');
   assert.ok(source.includes('watchPositionAsync'), 'publisher should use watchPositionAsync.');
   assert.ok(source.includes('tracking_disabled'), 'publisher should guard disabled tracking.');
   assert.ok(source.includes('movementStatusOverride'), 'publisher should expose future needs_assistance override path.');

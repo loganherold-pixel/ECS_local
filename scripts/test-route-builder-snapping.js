@@ -188,6 +188,21 @@ assertIncludes(
 );
 assertIncludes(
   mapRenderer,
+  'function resetRouteBuilderStrokeSnapState()',
+  'Build Route should reset stroke-local snap/free state before every new drawn segment.',
+);
+const startDrawBlockStart = mapRenderer.indexOf('function startRouteBuilderDraw(event)');
+assert.ok(startDrawBlockStart >= 0, 'Build Route should expose a pointer-down draw starter.');
+const startDrawBlockEnd = mapRenderer.indexOf('function continueRouteBuilderDraw(event)', startDrawBlockStart);
+assert.ok(startDrawBlockEnd > startDrawBlockStart, 'Build Route draw starter block should end before continuation.');
+const startDrawBlock = mapRenderer.slice(startDrawBlockStart, startDrawBlockEnd);
+assert.ok(
+  startDrawBlock.indexOf('resetRouteBuilderStrokeSnapState();') >= 0 &&
+    startDrawBlock.indexOf('resetRouteBuilderStrokeSnapState();') < startDrawBlock.indexOf('var tracePoint = snapTracePoint(point, { rawCoordinate: rawCoordinate });'),
+  'Each new Build Route stroke should clear prior free-mode state before snapping its first point.',
+);
+assertIncludes(
+  mapRenderer,
   "id: 'draft-' + Date.now() + '-' + routeBuilderDraftSegments.length,\n          coordinates: [segmentStart]",
   'Build Route should create a new draft segment for each stroke instead of reusing the prior segment.',
 );

@@ -19,6 +19,7 @@ export type AttitudeMonitorProps = {
   pitchMaxDeg?: number;
   warningThresholdDeg?: number;
   criticalThresholdDeg?: number;
+  showValueArc?: boolean;
   testID?: string;
   style?: StyleProp<ViewStyle>;
 };
@@ -32,6 +33,7 @@ export default function AttitudeMonitor({
   rollDeg,
   rollMaxDeg,
   rollMinDeg,
+  showValueArc = true,
   size,
   style,
   testID = 'vehicle-attitude-monitor',
@@ -52,6 +54,7 @@ export default function AttitudeMonitor({
         ecsGold={ecsGold}
         warningThresholdDeg={warningThresholdDeg}
         criticalThresholdDeg={criticalThresholdDeg}
+        showValueArc={showValueArc}
         testID="vehicle-attitude-pitch-dial-meter"
       />
       <AttitudeDial
@@ -63,6 +66,7 @@ export default function AttitudeMonitor({
         ecsGold={ecsGold}
         warningThresholdDeg={warningThresholdDeg}
         criticalThresholdDeg={criticalThresholdDeg}
+        showValueArc={showValueArc}
         testID="vehicle-attitude-roll-dial-meter"
       />
     </View>

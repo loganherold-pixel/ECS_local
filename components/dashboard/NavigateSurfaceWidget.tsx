@@ -500,6 +500,7 @@ export default function NavigateSurfaceWidget({ data: _data, options }: Props) {
         motionPriority={motionPriority}
         routeSession={routeSession}
         routeRenderMode={routeSession.lifecycle === 'active' ? 'active' : routeSession.lifecycle === 'preview' ? 'preview' : 'idle'}
+        surfaceMode="compact"
         frameStyle={styles.widgetMapFrame}
         mapStyle={styles.mapRenderer}
       />
@@ -688,6 +689,7 @@ export function Mini3DFollowMap({
         onUserDrag={handleUserDrag}
         frameStyle={styles.commandMapFrame}
         mapStyle={styles.commandMapRenderer}
+        surfaceMode="compact"
       />
       <CommandMapViewSelector
         activeView={activeMapView}
@@ -720,6 +722,7 @@ function NavigateMiniMap({
   routeRenderMode = 'idle',
   mapStyleKey = 'ecs',
   guidanceVariant = 'standard',
+  surfaceMode = 'full',
   onRecenter,
   onUserDrag,
   frameStyle,
@@ -740,12 +743,14 @@ function NavigateMiniMap({
   routeRenderMode?: RouteRenderMode;
   mapStyleKey?: MapStyleKey;
   guidanceVariant?: 'standard' | 'command3d';
+  surfaceMode?: 'full' | 'compact';
   onRecenter?: () => void;
   onUserDrag?: () => void;
   frameStyle?: any;
   mapStyle?: any;
 }) {
   const guidance = buildGuidanceLines(routeSession);
+  const resolvedMapStyle = useMemo(() => [styles.mapRenderer, mapStyle], [mapStyle]);
 
   return (
     <View style={[styles.mapFrame, frameStyle]}>
@@ -769,7 +774,8 @@ function NavigateMiniMap({
         routeRenderMode={routeRenderMode}
         routeColor="#C48A2C"
         progressColor="#F7D67A"
-        style={[styles.mapRenderer, mapStyle]}
+        surfaceMode={surfaceMode}
+        style={resolvedMapStyle}
       />
 
       {!mapToken ? (

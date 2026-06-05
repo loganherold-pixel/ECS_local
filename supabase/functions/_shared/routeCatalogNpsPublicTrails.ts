@@ -169,6 +169,7 @@ function normalizedUseText(attributes: Record<string, unknown>): string {
 
 function vehicleFitFromAttributes(attributes: Record<string, unknown>): string[] {
   const use = normalizedUseText(attributes);
+  if (/\bnon[-\s]?motorized\b/.test(use)) return [];
   const fit = new Set<string>();
   if (/four-wheel drive|four wheel drive|4wd|4x4|>\s*50/.test(use)) fit.add('full_size_4x4');
   if (/all-terrain vehicle|\batv\b/.test(use)) {
@@ -295,6 +296,7 @@ export function buildNpsPublicTrailsWhereClause(): string {
     "DATAACCESS = 'Unrestricted'",
     "TRLSTATUS in ('Existing','Open')",
     "TRLTYPE LIKE '%Terra%'",
+    "TRLUSE NOT LIKE '%Non-Motorized%'",
     [
       "TRLUSE LIKE '%Four-Wheel Drive%'",
       "TRLUSE LIKE '%All-Terrain Vehicle%'",
@@ -311,6 +313,12 @@ export type NpsPublicTrailsBbox = {
   ymin: number;
   xmax: number;
   ymax: number;
+};
+
+export type NpsPublicTrailsBboxPreset = {
+  key: string;
+  label: string;
+  bbox: NpsPublicTrailsBbox;
 };
 
 export function normalizeNpsPublicTrailsBbox(value: unknown): NpsPublicTrailsBbox | null {
@@ -339,6 +347,23 @@ export function normalizeNpsPublicTrailsBbox(value: unknown): NpsPublicTrailsBbo
     return null;
   }
   return { xmin, ymin, xmax, ymax };
+}
+
+export function normalizeNpsPublicTrailsBboxes(value: unknown): NpsPublicTrailsBboxPreset[] | null {
+  if (!Array.isArray(value)) return null;
+
+  const bboxes = value
+    .map((entry, index) => {
+      const record = entry && typeof entry === 'object' ? entry as Record<string, unknown> : null;
+      const bbox = normalizeNpsPublicTrailsBbox(record?.bbox ?? entry);
+      if (!record || !bbox) return null;
+      const key = cleanString(record.key) || `bbox_${index + 1}`;
+      const label = cleanString(record.label) || key;
+      return { key, label, bbox };
+    })
+    .filter((entry): entry is NpsPublicTrailsBboxPreset => !!entry);
+
+  return bboxes.length > 0 ? bboxes : null;
 }
 
 export function normalizeNpsPublicTrailsFeatureCollection(payload: unknown): NpsPublicTrailsArcGisFeature[] {

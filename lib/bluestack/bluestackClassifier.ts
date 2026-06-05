@@ -137,6 +137,10 @@ export function classifyBluestackDevice(input: BluestackClassifyInput): Bluestac
       /\bfresh\s*water\b/,
       /\bliquid\s*(level|monitor|sensor)\b/,
       /\bfluid\s*(level|monitor|sensor)\b/,
+      /\btd\s*(40|200)\b/,
+      /\bpro\s*200\b/,
+      /\bpro200\b/,
+      /\btop\s*down\s*(liquid|water|tank)\b/,
     ])
   ) {
     provider = provider === 'unknown' ? 'water_monitor' : provider;

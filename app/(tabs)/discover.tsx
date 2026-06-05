@@ -587,14 +587,19 @@ function SectionCardSkeletonList() {
   );
 }
 
-function buildValidatedExploreNavigationPayload(route: ExpeditionOpportunity | null | undefined): {
+function buildValidatedExploreNavigationPayload(
+  route: ExpeditionOpportunity | null | undefined,
+  options: { approachOriginCoordinate?: { lat: number; lng: number } | null } = {},
+): {
   payload: NavigationHandoffPayload | null;
   unavailableReason: string | null;
 } {
   if (!route) {
     return { payload: null, unavailableReason: 'Route path unavailable.' };
   }
-  const payload = buildExploreNavigationPayload(route);
+  const payload = buildExploreNavigationPayload(route, {
+    approachOriginCoordinate: options.approachOriginCoordinate ?? null,
+  });
   const unavailableReason = getNavigationHandoffRouteUnavailableReason(payload);
   return { payload, unavailableReason };
 }
@@ -1179,6 +1184,29 @@ function DiscoverScreenInner() {
     () => routeCatalogHasSearchArea ? discoverableTrailPacks.filter(isPublicSuggestedTrailheadTrailPack) : [],
     [discoverableTrailPacks, routeCatalogHasSearchArea],
   );
+  const publicDiscoverableTrailPackRoutes = useMemo(
+    () => publicDiscoverableTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack)),
+    [publicDiscoverableTrailPacks],
+  );
+  const publicRefinedTrailPackIds = useMemo(() => {
+    const refinedRoutes = applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement);
+    return new Set(
+      refinedRoutes.map((route) => {
+        const metadata = route.routeMetadata && typeof route.routeMetadata === 'object'
+          ? route.routeMetadata as Record<string, unknown>
+          : {};
+        const trailPackId = typeof metadata.trailPackId === 'string' ? metadata.trailPackId.trim() : '';
+        return trailPackId || String(route.id).replace(/^trail-pack:/, '');
+      }),
+    );
+  }, [exploreRefinement, publicDiscoverableTrailPackRoutes]);
+  const publicRefinedTrailPacks = useMemo(
+    () =>
+      exploreRefinement == null
+        ? publicDiscoverableTrailPacks
+        : publicDiscoverableTrailPacks.filter((trailPack) => publicRefinedTrailPackIds.has(trailPack.id)),
+    [exploreRefinement, publicDiscoverableTrailPacks, publicRefinedTrailPackIds],
+  );
 
   const activeTabMeta = UNIFIED_TRAIL_FILTER_META;
   const exploreSourceDiagnostics = useMemo(() => {
@@ -1524,7 +1552,10 @@ function DiscoverScreenInner() {
       if (!guardPublicSuggestedTrailheadHandoff(route, 'navigate')) return;
       const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
       stageExploreReadinessPreview(routeForHandoff);
-      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff);
+      const approachOriginCoordinate = hasGPSFix ? { lat: userLat, lng: userLng } : null;
+      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff, {
+        approachOriginCoordinate,
+      });
       if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
         reportRecoverableFailure({
           severity: 'low',
@@ -1567,7 +1598,7 @@ function DiscoverScreenInner() {
       });
       router.push('/navigate');
     },
-    [confirmRouteHandoffAgainstActiveGuidance, guardPublicSuggestedTrailheadHandoff, hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview],
+    [confirmRouteHandoffAgainstActiveGuidance, guardPublicSuggestedTrailheadHandoff, hasGPSFix, hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview, userLat, userLng],
   );
 
   const handleBuildTripFromRoute = useCallback(
@@ -2392,8 +2423,7 @@ function DiscoverScreenInner() {
     const hiddenGemRoutes = hiddenGemExploreOrchestration.items
       .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
       .filter(routePassesExploreMapLength);
-    const trailPackRoutes = discoverableTrailPacks
-      .filter(isPublicSuggestedTrailheadTrailPack)
+    const trailPackRoutes = publicRefinedTrailPacks
       .map((pack) => trailPackToExpeditionOpportunity(pack))
       .filter(routePassesExploreMapLength)
       .filter(isPublicSuggestedTrailheadRoute);
@@ -2427,10 +2457,10 @@ function DiscoverScreenInner() {
       },
     };
   }, [
-    discoverableTrailPacks,
     favoritesSnapshot.favorites,
     hiddenGemExploreOrchestration.items,
     hiddenGemExploreOrchestration.routeMap,
+    publicRefinedTrailPacks,
     publicRefinedAIRoutes,
   ]);
 
@@ -2640,13 +2670,13 @@ function DiscoverScreenInner() {
   const visibleAIRoutes = aiRouteIdeaPage.items;
   const trailPackPage = useMemo(() => {
     const pageSize = TRAIL_PACK_PAGE_SIZE;
-    const eligibleCount = publicDiscoverableTrailPacks.length;
+    const eligibleCount = publicRefinedTrailPacks.length;
     const totalPages = Math.max(1, Math.ceil(eligibleCount / pageSize));
     const normalizedPageIndex = eligibleCount === 0
       ? 0
       : ((trailPackPageIndex % totalPages) + totalPages) % totalPages;
     const offset = normalizedPageIndex * pageSize;
-    const items = publicDiscoverableTrailPacks.slice(offset, offset + pageSize);
+    const items = publicRefinedTrailPacks.slice(offset, offset + pageSize);
 
     return {
       items,
@@ -2656,7 +2686,7 @@ function DiscoverScreenInner() {
       totalPages,
       offset,
     };
-  }, [publicDiscoverableTrailPacks, trailPackPageIndex]);
+  }, [publicRefinedTrailPacks, trailPackPageIndex]);
   const visibleTrailPacks = trailPackPage.items;
   const hiddenGemPageCount = hiddenGemPage.totalPages;
   const trailPackPageCount = trailPackPage.totalPages;
@@ -2856,21 +2886,49 @@ function DiscoverScreenInner() {
       importedStitchedRoutes,
     };
   }, [localRouteAssetRevision]);
+  const filteredExploreWizardSavedBuiltRoutes = useMemo<ExpeditionOpportunity[]>(
+    () =>
+      applyExploreRefinementFilter(
+        filterByRadius(
+          computeDistancesFromUser(exploreWizardLocalRouteAssets.savedBuiltRoutes, userLat, userLng),
+          activeDistanceRadius,
+        ),
+        exploreRefinement,
+      ),
+    [
+      activeDistanceRadius,
+      exploreRefinement,
+      exploreWizardLocalRouteAssets.savedBuiltRoutes,
+      userLat,
+      userLng,
+    ],
+  );
+  const filteredExploreWizardImportedStitchedRoutes = useMemo<ExpeditionOpportunity[]>(
+    () =>
+      applyExploreRefinementFilter(
+        filterByRadius(
+          computeDistancesFromUser(exploreWizardLocalRouteAssets.importedStitchedRoutes, userLat, userLng),
+          activeDistanceRadius,
+        ),
+        exploreRefinement,
+      ),
+    [
+      activeDistanceRadius,
+      exploreRefinement,
+      exploreWizardLocalRouteAssets.importedStitchedRoutes,
+      userLat,
+      userLng,
+    ],
+  );
   const exploreWizardTrailPackRoutes = useMemo(
     () =>
-      publicDiscoverableTrailPacks
-        .filter(isPublicSuggestedTrailheadTrailPack)
-        .map((trailPack) => trailPackToExpeditionOpportunity(trailPack))
-        .filter(isPublicSuggestedTrailheadRoute),
-    [publicDiscoverableTrailPacks],
+      visibleTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack)).filter(isPublicSuggestedTrailheadRoute),
+    [visibleTrailPacks],
   );
   const exploreWizardHiddenGemRoutes = useMemo(
     () =>
-      hiddenGemExploreOrchestration.items
-        .map((item) => (hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route ?? null) as ExpeditionOpportunity | null)
-        .filter((route): route is ExpeditionOpportunity => !!route)
-        .filter(isPublicSuggestedTrailheadRoute),
-    [hiddenGemExploreOrchestration.items, hiddenGemExploreOrchestration.routeMap],
+      visibleHiddenGemRoutes.filter(isPublicSuggestedTrailheadRoute),
+    [visibleHiddenGemRoutes],
   );
   const exploreWizardFavoriteRoutes = useMemo(
     () => filteredFavoriteTrails.map((favorite) => favoriteTrailToExpeditionRoute(favorite)),
@@ -2881,20 +2939,20 @@ function DiscoverScreenInner() {
       normalizeExploreWizardRouteCandidates({
         trailPacks: exploreWizardTrailPackRoutes,
         hiddenGemRoutes: exploreWizardHiddenGemRoutes,
-        ecsRouteIdeas: publicRefinedAIRoutes,
+        ecsRouteIdeas: visibleAIRoutes,
         favoriteRoutes: [
           ...exploreWizardFavoriteRoutes,
-          ...exploreWizardLocalRouteAssets.savedBuiltRoutes,
+          ...filteredExploreWizardSavedBuiltRoutes,
         ],
-        savedRouteAssets: exploreWizardLocalRouteAssets.importedStitchedRoutes,
+        savedRouteAssets: filteredExploreWizardImportedStitchedRoutes,
       }),
     [
       exploreWizardFavoriteRoutes,
       exploreWizardHiddenGemRoutes,
-      exploreWizardLocalRouteAssets.importedStitchedRoutes,
-      exploreWizardLocalRouteAssets.savedBuiltRoutes,
+      filteredExploreWizardImportedStitchedRoutes,
+      filteredExploreWizardSavedBuiltRoutes,
       exploreWizardTrailPackRoutes,
-      publicRefinedAIRoutes,
+      visibleAIRoutes,
     ],
   );
   const exploreWizardSourceCounts = useMemo(() => {
@@ -3950,7 +4008,7 @@ function DiscoverScreenInner() {
                 <View style={s.exploreWizardStatusCopy}>
                   <Text style={s.exploreWizardStatusTitle}>Guidance-Ready Routes</Text>
                   <Text style={s.exploreWizardStatusText}>
-                    {`${exploreWizardCandidateSet.candidates.length} routes are available to preview, save, build, or start. ${exploreWizardCandidateSet.hiddenTotal} routes are hidden because active-guidance geometry is unavailable.`}
+                    {`Guidance-ready routes reflect the visible refined Explore results. ${exploreWizardCandidateSet.candidates.length} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start. ${exploreWizardCandidateSet.hiddenTotal} routes are hidden because active-guidance geometry is unavailable.`}
                   </Text>
                   {exploreWizardSaveNotice ? (
                     <Text style={s.exploreWizardNotice} numberOfLines={2}>{exploreWizardSaveNotice}</Text>

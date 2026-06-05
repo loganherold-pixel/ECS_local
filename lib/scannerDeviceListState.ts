@@ -407,7 +407,11 @@ export function upsertScannerDeviceList<T extends ScannerDeviceListItem>(
       return;
     }
 
-    if (phase === 'incoming' && hideUnknownBle && isLikelyUnknownBleAdvertisement(item)) {
+    const releaseScannerBrandMatch = phase === 'incoming'
+      ? isLikelyPowerScannerDevice(item, brandAllowlist)
+      : false;
+
+    if (phase === 'incoming' && hideUnknownBle && isLikelyUnknownBleAdvertisement(item) && !releaseScannerBrandMatch) {
       dropped += 1;
       dropReasons.push('unknown_ble_hidden');
       if (shouldDebug) {
@@ -423,7 +427,7 @@ export function upsertScannerDeviceList<T extends ScannerDeviceListItem>(
       phase === 'incoming' &&
       !options.advancedScan &&
       options.requireBrandAllowlistMatch &&
-      !isLikelyPowerScannerDevice(item, brandAllowlist)
+      !releaseScannerBrandMatch
     ) {
       dropped += 1;
       dropReasons.push('brand_allowlist_miss');

@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       sync_scope:
-        description: Use pilot for a bounded sample or statewide for the largest bounded official GeoPackage backfill.
+        description: Use statewide for the bounded official GeoPackage conversion, or pilot for a smaller sample.
         required: false
-        default: pilot
+        default: statewide
         type: choice
         options:
-          - pilot
           - statewide
+          - pilot
       min_miles:
         description: Minimum Minnesota OHV feature miles to ingest.
         required: false
@@ -36,7 +36,7 @@ jobs:
     env:
       ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
-      SYNC_SCOPE: ${{ inputs.sync_scope || 'pilot' }}
+      SYNC_SCOPE: ${{ inputs.sync_scope || 'statewide' }}
       MIN_MILES: ${{ inputs.min_miles || '1' }}
       MAX_FEATURES: ${{ inputs.max_features || '' }}
       MINNESOTA_OHV_GPKG_URL: https://resources.gisdata.mn.gov/pub/gdrs/data/pub/us_mn_state_dnr/trans_ohv_trails_mn/gpkg_trans_ohv_trails_mn.zip
@@ -75,7 +75,7 @@ jobs:
           import sqlite3
           import struct
 
-          sync_scope = os.environ.get("SYNC_SCOPE", "pilot").strip().lower()
+          sync_scope = os.environ.get("SYNC_SCOPE", "statewide").strip().lower()
           if sync_scope not in ("pilot", "statewide"):
               raise ValueError("sync_scope must be pilot or statewide.")
 

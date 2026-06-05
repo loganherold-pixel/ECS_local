@@ -19,6 +19,7 @@ import {
 } from './useTrailNavigation';
 import { vehicleDisplayStore } from './vehicleDisplayStore';
 import type { VehicleNavigationData } from './vehicleDisplayTypes';
+import { buildProceedRouteInstruction } from './routeGuidanceCopy';
 
 const DEFAULT_AVG_MPH = 20;
 
@@ -791,7 +792,7 @@ export function getImportedRouteProgressSnapshot(params: {
     remainingDurationText: isComplete ? 'Arrived' : formatRouteProgressDuration(remainingHours),
     etaLabel: arrivalText,
     currentLegLabel,
-    nextInstruction: isComplete ? null : destinationLabel ? `Proceed to ${destinationLabel}` : null,
+    nextInstruction: isComplete ? null : destinationLabel ? buildProceedRouteInstruction(destinationLabel) : null,
     nextInstructionDistanceM: null,
     nextInstructionDistanceText: '--',
     lastUpdated: activeRoute.updated_at ?? null,

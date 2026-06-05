@@ -156,12 +156,21 @@ assert(syncFunction.includes('route_sources') && syncFunction.includes('verified
 assert(syncFunction.includes('sourceKeys'), 'Oregon ODF OHV sync should support bounded named GPX source keys');
 assert(syncFunction.includes('countPublicRecommendations(routeRows)'), 'Oregon ODF OHV sync should report promoted public recommendation telemetry');
 assert(syncFunction.includes('GEOMETRY_BATCH_SIZE = 10'), 'Oregon ODF OHV sync should use small DB batches for geometry-heavy GPX records');
+assert(
+  syncFunction.includes('readNumber(body.maxTracksPerSource ?? body.max_tracks_per_source, 200)'),
+  'Oregon ODF OHV sync should default to the Edge-bounded 200 tracks per GPX source',
+);
 
 const workflowPath = path.join(root, '.github', 'workflows', 'route-catalog-oregon-odf-ohv-sync.yml');
 assert(fs.existsSync(workflowPath), 'Oregon ODF OHV sync workflow should exist');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 assert(workflow.includes('route-catalog-sync-oregon-odf-ohv'));
 assert(workflow.includes('publicRecommendationCount'));
+assert(workflow.includes("default: '200'"), 'Oregon ODF OHV sync workflow should default to 200 tracks per source');
+assert(
+  workflow.includes("MAX_TRACKS_PER_SOURCE: ${{ inputs.max_tracks_per_source || '200' }}"),
+  'Oregon ODF OHV sync workflow environment should fall back to 200 tracks per source',
+);
 assert(workflow.includes('--write-out "%{http_code}"'), 'Oregon ODF OHV sync workflow should preserve response bodies on HTTP errors');
 assert(workflow.includes('route-catalog-oregon-odf-ohv-sync-response.json'), 'Oregon ODF OHV sync workflow should print sanitized failed sync responses');
 

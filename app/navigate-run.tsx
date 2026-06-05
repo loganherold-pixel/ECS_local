@@ -46,6 +46,7 @@ import {
 import { navigateRouteSessionStore } from '../lib/navigateRouteSessionStore';
 import { getMapboxToken, type MapStyleKey } from '../lib/mapConfig';
 import { connectivity } from '../lib/connectivity';
+import { ensureForegroundLocationPermission } from '../lib/locationPermissions';
 import {
   getSegmentColor,
   type RunSegment,
@@ -120,7 +121,7 @@ async function requestImmediateGpsPosition(): Promise<GPSPosition | null> {
       throw new Error('Location services are disabled.');
     }
 
-    const { status } = await Location.requestForegroundPermissionsAsync();
+    const { status } = await ensureForegroundLocationPermission(Location);
     if (status !== 'granted') {
       throw new Error('Location permission is required to start navigation.');
     }

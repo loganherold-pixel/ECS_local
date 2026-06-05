@@ -3,11 +3,14 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import {
   BLM_GTLF_LAYERS,
+  applyBlmGtlfCurrentConditionSources,
   aggregateBlmGtlfRouteFeatures,
   arcGisFeatureToBlmGtlfRouteUpsert,
   blmGtlfSourceUpsert,
   buildBlmGtlfWhereClause,
+  normalizeBlmGtlfCurrentConditionSources,
   normalizeBlmGtlfFeatureCollection,
+  routeCurrentConditionSourceUpsertForBlmGtlf,
   type BlmGtlfLayer,
 } from '../_shared/routeCatalogBlmGtlf.ts';
 
@@ -18,7 +21,7 @@ const corsHeaders = {
   'Content-Type': 'application/json',
 };
 
-const DEFAULT_STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY'];
+const DEFAULT_STATES = ['AK', 'AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY'];
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
@@ -232,7 +235,21 @@ serve(async (req) => {
     const minMiles = Math.max(0.1, readNumber(body.minMiles ?? body.min_miles, 1));
     const limitPerStateLayer = Math.max(1, Math.min(500, Math.round(readNumber(body.limitPerStateLayer ?? body.limit_per_state_layer, 100))));
     const now = new Date().toISOString();
+    const currentConditionSources = normalizeBlmGtlfCurrentConditionSources(
+      body.currentConditions ?? body.current_conditions,
+      states,
+      now,
+    );
     const admin = createAdminClient();
+
+    for (const currentConditionSource of currentConditionSources) {
+      const { error: currentConditionSourceError } = await admin
+        .from('route_sources')
+        .upsert(routeCurrentConditionSourceUpsertForBlmGtlf(currentConditionSource), { onConflict: 'provider_id' });
+      if (currentConditionSourceError) {
+        throw new Error(`Unable to upsert current-condition source for BLM ${currentConditionSource.adminState}`);
+      }
+    }
 
     const { data: source, error: sourceError } = await admin
       .from('route_sources')
@@ -257,6 +274,12 @@ serve(async (req) => {
     let rawFeatureCount = 0;
     let normalizedFeatureCount = 0;
     let aggregateRouteCount = 0;
+    let publicRecommendationCount = 0;
+    const currentConditionClosureCount = currentConditionSources.reduce(
+      (count, sourceRecord) => count + sourceRecord.closures.length,
+      0,
+    );
+    let currentConditionBlockedRouteCount = 0;
     const layerSummaries = [];
     const rawFeatureRows: Array<Record<string, unknown>> = [];
     const routeRows: Array<Record<string, unknown>> = [];
@@ -269,6 +292,8 @@ serve(async (req) => {
       }
       rawFeatureCount += features.length;
       let layerNormalizedFeatureCount = 0;
+      let layerPublicRecommendationCount = 0;
+      let layerCurrentConditionBlockedRouteCount = 0;
 
       for (const feature of features) {
         const upsert = arcGisFeatureToBlmGtlfRouteUpsert(feature, {
@@ -280,11 +305,17 @@ serve(async (req) => {
         });
         if (!upsert) continue;
 
-        rawFeatureRows.push(upsert.rawSourceFeature);
-        routeRows.push(upsert.verifiedRoute);
+        const conditionCheckedUpsert = applyBlmGtlfCurrentConditionSources(upsert, currentConditionSources);
+        if (Number(conditionCheckedUpsert.verifiedRoute.active_closure_count ?? 0) > 0) {
+          currentConditionBlockedRouteCount += 1;
+          layerCurrentConditionBlockedRouteCount += 1;
+        }
+
+        rawFeatureRows.push(conditionCheckedUpsert.rawSourceFeature);
+        routeRows.push(conditionCheckedUpsert.verifiedRoute);
         sourceRefs.push({
-          publicId: routePublicId(upsert.verifiedRoute),
-          source: upsert.verifiedRouteSource,
+          publicId: routePublicId(conditionCheckedUpsert.verifiedRoute),
+          source: conditionCheckedUpsert.verifiedRouteSource,
         });
         normalizedFeatureCount += 1;
         layerNormalizedFeatureCount += 1;
@@ -296,7 +327,18 @@ serve(async (req) => {
         sourceLastVerifiedAt: now,
         ingestRunId: ingestRun.id,
         minMiles,
-      });
+      }).map((aggregate) => applyBlmGtlfCurrentConditionSources(aggregate, currentConditionSources));
+      layerCurrentConditionBlockedRouteCount += aggregates.filter((aggregate) =>
+        Number(aggregate.verifiedRoute.active_closure_count ?? 0) > 0
+      ).length;
+      currentConditionBlockedRouteCount += aggregates.filter((aggregate) =>
+        Number(aggregate.verifiedRoute.active_closure_count ?? 0) > 0
+      ).length;
+      layerPublicRecommendationCount += aggregates.filter((aggregate) =>
+        aggregate.verifiedRoute.recommendation_status === 'recommendable'
+      ).length;
+      publicRecommendationCount += layerPublicRecommendationCount;
+
       for (const aggregate of aggregates) {
         routeRows.push(aggregate.verifiedRoute);
         sourceRefs.push({
@@ -312,6 +354,8 @@ serve(async (req) => {
         rawFeatureCount: features.length,
         normalizedFeatureCount: layerNormalizedFeatureCount,
         aggregateRouteCount: aggregates.length,
+        publicRecommendationCount: layerPublicRecommendationCount,
+        currentConditionBlockedRouteCount: layerCurrentConditionBlockedRouteCount,
       });
     }
 
@@ -326,7 +370,18 @@ serve(async (req) => {
         finished_at: new Date().toISOString(),
         raw_feature_count: rawFeatureCount,
         normalized_feature_count: normalizedFeatureCount,
-        metadata: { providerId: 'blm_gtlf', states, minMiles, limitPerStateLayer, aggregateRouteCount, layers: layerSummaries },
+        metadata: {
+          providerId: 'blm_gtlf',
+          states,
+          minMiles,
+          limitPerStateLayer,
+          aggregateRouteCount,
+          publicRecommendationCount,
+          currentConditionSourceCount: currentConditionSources.length,
+          currentConditionClosureCount,
+          currentConditionBlockedRouteCount,
+          layers: layerSummaries,
+        },
       })
       .eq('id', ingestRun.id);
 
@@ -338,7 +393,10 @@ serve(async (req) => {
       rawFeatureCount,
       normalizedFeatureCount,
       aggregateRouteCount,
-      publicRecommendationCount: aggregateRouteCount,
+      publicRecommendationCount,
+      currentConditionSourceCount: currentConditionSources.length,
+      currentConditionClosureCount,
+      currentConditionBlockedRouteCount,
       caveat: 'BLM GTLF public recommendations are strict aggregates of open public motorized source segments only. Limited, seasonal, restricted, incomplete, or ungrouped records remain curation-only.',
     });
   } catch (error) {

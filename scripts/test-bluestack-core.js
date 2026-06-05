@@ -144,6 +144,18 @@ assert.strictEqual(water.domain, 'water');
 assert.strictEqual(water.isReleaseVisible, true);
 assert(water.capabilities.includes('fluid_level'));
 
+const mopekaTopDownLiquid = classifyBluestackDevice({
+  name: 'TD40',
+  kind: 'sensor',
+});
+assert.strictEqual(
+  mopekaTopDownLiquid.category,
+  'water_tank_monitor',
+  'Mopeka TD/Pro200 liquid monitor names should not normalize into hidden generic utility sensors',
+);
+assert.strictEqual(mopekaTopDownLiquid.domain, 'water');
+assert.strictEqual(mopekaTopDownLiquid.isReleaseVisible, true);
+
 const headset = classifyBluestackDevice({
   name: 'Logan Headphones',
   kind: 'generic',
@@ -222,6 +234,19 @@ assert.strictEqual(isBluestackReleaseDeviceModel(scannerDevices[0]), true);
 assert.strictEqual(isBluestackReleaseDeviceModel(scannerDevices[4]), false);
 assert.strictEqual(
   isBluestackReleaseDeviceModel({
+    id: 'mopeka-td40-liquid',
+    kind: 'sensor',
+    name: 'TD40',
+    section: 'nearby',
+    isDiscoverable: true,
+    sourceBadges: ['BLE'],
+    connectionType: 'ble',
+  }),
+  true,
+  'Mopeka TD liquid monitor rows must stay visible as approved scanner candidates',
+);
+assert.strictEqual(
+  isBluestackReleaseDeviceModel({
     id: 'remembered-power',
     kind: 'power',
     providerId: 'ecoflow',
@@ -245,9 +270,9 @@ assert.strictEqual(summary.powerCount, 1);
 assert.strictEqual(summary.obd2Count, 1);
 assert.strictEqual(summary.propaneCount, 1);
 assert.strictEqual(summary.waterCount, 1);
-assert.strictEqual(summary.liveReadyCount, 3);
+assert.strictEqual(summary.liveReadyCount, 1);
 assert.strictEqual(summary.cloudApiCount, 1);
-assert.strictEqual(summary.parserPendingCount, 0);
+assert.strictEqual(summary.parserPendingCount, 2);
 assert.strictEqual(summary.nativeBuildRequiredCount, 3);
 assert.strictEqual(summary.liveCount, 1);
 assert.strictEqual(summary.selectedCount, 1);
@@ -269,7 +294,7 @@ recordBluetoothDiagnosticEvent({
 });
 const diagnosticsSnapshot = getBluetoothDiagnosticsSnapshot();
 assert.strictEqual(diagnosticsSnapshot.bluestackReadinessSummary.cloudApiCount, 1);
-assert.strictEqual(diagnosticsSnapshot.bluestackReadinessSummary.parserPendingCount, 0);
+assert.strictEqual(diagnosticsSnapshot.bluestackReadinessSummary.parserPendingCount, 2);
 assert.strictEqual(diagnosticsSnapshot.bluestackReadinessSummary.nativeBuildRequiredCount, 3);
 
 const cloudPolicy = getBluestackConnectionPolicy({
@@ -342,11 +367,13 @@ const propaneLinkablePolicy = getBluestackConnectionPolicy({
 });
 assert.strictEqual(propaneLinkablePolicy.primaryActionLabel, 'Link');
 assert.strictEqual(propaneLinkablePolicy.canAttemptConnection, true);
+assert.strictEqual(propaneLinkablePolicy.statusLabel, 'Sensor linkable');
+assert.strictEqual(propaneLinkablePolicy.telemetryTruthLabel, 'Level parser pending');
 
 const propaneParserDecision = getBluestackParserDecision('mopeka');
 assert.strictEqual(propaneParserDecision.action, 'link_utility_profile');
-assert.strictEqual(propaneParserDecision.status, 'native_live');
-assert.strictEqual(propaneParserDecision.canDecodeLiveTelemetry, true);
+assert.strictEqual(propaneParserDecision.status, 'native_parser_pending');
+assert.strictEqual(propaneParserDecision.canDecodeLiveTelemetry, false);
 assert.strictEqual(propaneParserDecision.canAttemptLiveConnection, true);
 assert(propaneParserDecision.requiredEvidence.some((item) => /level units verified/i.test(item)));
 
@@ -373,7 +400,8 @@ const sensorPolicy = getBluestackConnectionPolicy({
 });
 assert.strictEqual(sensorPolicy.lane, 'native_ble_required');
 assert.strictEqual(sensorPolicy.primaryActionLabel, 'Link');
-assert.strictEqual(sensorPolicy.statusLabel, 'Live sensor ready');
+assert.strictEqual(sensorPolicy.statusLabel, 'Sensor linkable');
+assert.strictEqual(sensorPolicy.telemetryTruthLabel, 'Level parser pending');
 assert(sensorPolicy.statusDetail.includes('Mopeka propane profile identified'));
 
 const linkedSensorPolicy = getBluestackConnectionPolicy({
@@ -384,7 +412,7 @@ const linkedSensorPolicy = getBluestackConnectionPolicy({
   connectionType: 'ble',
 });
 assert.strictEqual(linkedSensorPolicy.lane, 'sensor_linked');
-assert.strictEqual(linkedSensorPolicy.telemetryTruthLabel, 'Linked, awaiting level');
+assert.strictEqual(linkedSensorPolicy.telemetryTruthLabel, 'Level parser pending');
 
 const livePolicy = getBluestackConnectionPolicy({
   kind: 'telemetry',
@@ -404,7 +432,7 @@ const accessoryEvents = bluetoothAccessoryToEcsTelemetryEvents({
   categoryHint: 'propane_monitor',
   owner: 'sensor',
   connectionState: 'connected',
-  supportLabel: 'Live Sensor',
+  supportLabel: 'Linkable Sensor',
   supportNote: null,
   signalStrength: -62,
   utilitySensorTelemetry: {
@@ -430,7 +458,7 @@ const liveAccessoryEvents = bluetoothAccessoryToEcsTelemetryEvents({
   categoryHint: 'propane_monitor',
   owner: 'sensor',
   connectionState: 'connected',
-  supportLabel: 'Live Sensor',
+  supportLabel: 'Linkable Sensor',
   supportNote: null,
   signalStrength: -62,
   utilitySensorTelemetry: {
@@ -455,7 +483,7 @@ const refreshedLiveAccessoryEvents = bluetoothAccessoryToEcsTelemetryEvents({
   categoryHint: 'propane_monitor',
   owner: 'sensor',
   connectionState: 'connected',
-  supportLabel: 'Live Sensor',
+  supportLabel: 'Linkable Sensor',
   supportNote: null,
   signalStrength: -61,
   utilitySensorTelemetry: {
@@ -487,6 +515,8 @@ assert.strictEqual(
   'Mopeka water/liquid sensors should not be classified as propane only because Mopeka appears in the name',
 );
 assert.strictEqual(mopekaWaterProfile.category, 'water_tank_monitor');
+assert.strictEqual(mopekaWaterProfile.status, 'identified_parser_pending');
+assert.strictEqual(mopekaWaterProfile.parserStatus, 'parser_pending');
 
 const mopekaWaterAccessoryEvents = bluetoothAccessoryToEcsTelemetryEvents({
   deviceId: 'mopeka-water-live',
@@ -496,7 +526,7 @@ const mopekaWaterAccessoryEvents = bluetoothAccessoryToEcsTelemetryEvents({
   categoryHint: 'water_tank_monitor',
   owner: 'sensor',
   connectionState: 'connected',
-  supportLabel: 'Live Sensor',
+  supportLabel: 'Linkable Sensor',
   supportNote: null,
   signalStrength: -58,
   utilitySensorTelemetry: {
@@ -605,7 +635,7 @@ const seeLevelProfile = identifyBluestackUtilitySensorProfile({
 });
 assert.strictEqual(seeLevelProfile.id, 'seelevel_water_monitor');
 assert.strictEqual(seeLevelProfile.category, 'water_tank_monitor');
-assert.strictEqual(seeLevelProfile.parserStatus, 'live_ready');
+assert.strictEqual(seeLevelProfile.parserStatus, 'parser_pending');
 
 const decodedUtilitySensor = decodeUtilitySensorLiveTelemetry({
   providerId: 'propane_monitor',
@@ -751,6 +781,7 @@ assert(
     approvedBluetoothCatalogSource.includes('Vgate iCar / vLinker') &&
     approvedBluetoothCatalogSource.includes('iOS V-Link / Android V-Link') &&
     approvedBluetoothCatalogSource.includes('KONNWEI KW902') &&
+    approvedBluetoothCatalogSource.includes('Mopeka TD40 / TD200 / Pro200 liquid') &&
     approvedBluetoothCatalogSource.includes("badge: 'Approved'"),
   'Bluestack scanner should publish a truthful compatibility set with utility tank sensors in the live-ready set.',
 );

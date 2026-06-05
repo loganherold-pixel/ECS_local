@@ -417,6 +417,11 @@ assert.strictEqual(
   'Command mode should not render the removed separate roll meter tick.',
 );
 findOne(commandTree, byTestID('vehicle-attitude-stage-hash-overlay'), 'Command mode should keep the baked-image-aligned live hash overlay.');
+assert.strictEqual(
+  findAll(commandTree, (node) => node.type === 'Path' && node.props && node.props.strokeOpacity != null).length,
+  0,
+  'Command vehicle-image mode should not render translucent dial value arcs over the baked roll/pitch tick lines.',
+);
 const commandLevelReadout = findOne(commandTree, byTestID('vehicle-attitude-stage-level-readout'), 'Command mode should render level state in the image bottom banner.');
 const commandLevelReadoutStyle = flattenStyle(commandLevelReadout.node.props.style);
 assertNear(
@@ -725,6 +730,26 @@ assert.ok(
 assert.ok(
   zeroStyle.top + zeroStyle.minHeight / 2 > stageHeight * 0.78,
   'Zero button should sit near the bottom between the inner brackets.',
+);
+
+const compactZeroTree = renderStage({ mode: 'command', onZero: () => undefined, onResetZero: () => undefined });
+const compactZeroControl = findOne(compactZeroTree, byTestID('vehicle-attitude-zero-control'), 'Compact command zero control should render.');
+const compactZeroStyle = flattenStyle(compactZeroControl.node.props.style);
+assert.ok(
+  compactZeroStyle.left <= 10,
+  `Compact zero control should sit in the top-left corner instead of over the baked controls; left=${compactZeroStyle.left}.`,
+);
+assert.ok(
+  compactZeroStyle.top <= 10,
+  `Compact zero control should sit in the top-left corner instead of over the baked controls; top=${compactZeroStyle.top}.`,
+);
+assert.ok(
+  compactZeroStyle.left + compactZeroStyle.width < stageWidth * 0.2,
+  'Compact zero control should stay clear of the center vehicle/profile controls horizontally.',
+);
+assert.ok(
+  compactZeroStyle.top + compactZeroStyle.height < stageHeight * 0.28,
+  'Compact zero control should stay clear of the lower vehicle/profile controls vertically.',
 );
 
 let zeroCalls = 0;

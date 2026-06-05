@@ -1,12 +1,12 @@
 # CampOps Live Readiness Gates
 
-Date: 2026-06-02
+Date: 2026-06-04
 
-Current CampOps status: **APK field-test ready for restricted closed-field validation**.
+Current CampOps status: **Internal beta ready; restricted closed field test risk-accepted**.
 
 Internal beta activation is controlled by `EXPO_PUBLIC_ENABLE_CAMPOPS_INTERNAL_BETA=true` for client builds, or `ENABLE_CAMPOPS_INTERNAL_BETA=true` for local Node harnesses. Leave the flag unset or `false` for normal production/public behavior. The flag does not approve public rollout, provider influence, AI assist, telemetry, or community publishing.
 
-Use `npm run gate:campops-live-readiness:json` before any claim about CampOps live readiness. The current gate reports `closed_field_test_ready` for the restricted APK field-test scope recorded in `docs/campops/closed_field_test_risk_acceptance.md`.
+Use `npm run gate:campops-live-readiness:json` before any claim about CampOps live readiness. The current gate reports `closed_field_test_ready` for the restricted APK field-test scope recorded in `docs/campops/closed_field_test_risk_acceptance.md`; the implementation baseline remains `internal_beta_ready`.
 
 Risk acceptance permits only a restricted closed field test. It does not approve provider influence. In the current packet, Android/device QA and guarded privacy/storage posture are complete for restricted validation, while provider/source output remains shadow-only or unknown unless exact category/region approval is separately recorded.
 

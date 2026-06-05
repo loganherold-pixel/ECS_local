@@ -30,6 +30,7 @@ const dashboard = read('app/(tabs)/dashboard.tsx');
 const widgetGrid = read('components/dashboard/WidgetGrid.tsx');
 const widgetRenderers = read('components/dashboard/WidgetRenderers.tsx');
 const navigateSurface = read('components/dashboard/NavigateSurfaceWidget.tsx');
+const mapRenderer = read('components/navigate/MapRenderer.tsx');
 
 assert.strictEqual(chase.normalizeNavigationBearingDeg(370), 10);
 assert.strictEqual(chase.normalizeNavigationBearingDeg(-10), 350);
@@ -96,6 +97,10 @@ assert(navigateSurface.includes("type Command3DMapViewKey = 'tactical' | 'day' |
 assert(navigateSurface.includes("mapStyle: 'tactical'"), '3D follow map view menu must retain the tactical dark style.');
 assert(navigateSurface.includes("mapStyle: 'ecs'"), '3D follow map view menu must offer the daytime map style.');
 assert(navigateSurface.includes("mapStyle: 'satellite'"), '3D follow map view menu must offer the satellite map style.');
+assert(mapRenderer.includes('styleUrl: getMapStyleUrl(props.mapStyle || DEFAULT_MAP_STYLE)'), 'MapRenderer payload should include the selected map style so TAC/DAY/SAT changes reach the WebView.');
+assert(mapRenderer.includes("ensureLineLayer('route-halo-layer', 'route-source'"), 'Active guidance route lines need a contrast halo so the path remains visible on DAY and SAT map views.');
+assert(mapRenderer.includes("'route-halo-layer',\n          'route-layer'"), 'Route halo must be promoted directly beneath the route layer after style or overlay changes.');
+assert(mapRenderer.includes("map.setPaintProperty('route-halo-layer', 'line-width'"), 'Route halo styling should update with active/preview render mode changes.');
 assert(navigateSurface.includes('const [followLocked, setFollowLocked] = useState(true);'), '3D follow map must start locked to live GPS follow.');
 assert(navigateSurface.includes('if (!selected || !cameraCenter || !followLocked) return null;'), 'Manual map interaction must suspend automatic follow camera commands.');
 assert(navigateSurface.includes('shouldFollowUser={followLocked && !!cameraCenter}'), 'Manual map interaction must also suppress legacy follow-user fallback camera movement.');

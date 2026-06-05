@@ -1,4 +1,5 @@
 const assert = require('assert');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -36,7 +37,10 @@ for (const required of [
   '--dry-run',
   '--adapter',
   '--all-direct',
+  '--deep-backfill',
+  '--payload',
   'redactSecret',
+  'currentConditionBlockedRouteCount',
 ]) {
   assert(runnerSource.includes(required), `Sync invocation runner should include ${required}`);
 }
@@ -193,6 +197,12 @@ assert.deepStrictEqual(byKey.get('usfs_mvum').defaultPayload.forests, [
   'okanogan-wenatchee-national-forest',
   'six-rivers-national-forest',
   'tonto-national-forest',
+  'beaverhead-deerlodge-national-forest',
+  'chugach-national-forest',
+  'custer-gallatin-national-forest',
+  'gallatin-national-forest',
+  'modoc-national-forest',
+  'tongass-national-forest',
 ]);
 assert.strictEqual(
   byKey.get('usfs_mvum').defaultPayload.maxAllowableOffset,
@@ -214,8 +224,18 @@ assert.strictEqual(
   2500,
   'USFS MVUM deep backfill payload should raise the bounded per-forest/layer cap enough to cover current official source tails',
 );
-assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY']);
+assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.states, ['AK', 'AZ', 'CA', 'CO', 'ID', 'MT', 'NV', 'NM', 'UT', 'WY']);
 assert.deepStrictEqual(byKey.get('blm_gtlf').defaultPayload.layers, [0, 1, 2, 3]);
+assert.deepStrictEqual(
+  byKey.get('blm_gtlf').deepBackfillPayload,
+  {
+    states: ['UT'],
+    layers: [0],
+    minMiles: 1,
+    limitPerStateLayer: 250,
+  },
+  'BLM GTLF should expose a bounded Utah layer-0 backfill payload that reaches the official route-anchor tail',
+);
 assert.strictEqual(
   byKey.get('blm_gtlf').publicRecommendationPolicy,
   'aggregate_recommendable_with_closure_gate',
@@ -225,11 +245,27 @@ assert(
   byKey.get('blm_gtlf').expectedMaxPublicRecommendationCount > 0,
   'BLM GTLF aggregate pilot should allow bounded public recommendation telemetry',
 );
+const blmDeepBackfillDryRun = JSON.parse(execFileSync(
+  process.execPath,
+  [runnerPath, '--dry-run', '--adapter', 'blm_gtlf', '--deep-backfill'],
+  { cwd: root, encoding: 'utf8' },
+));
+assert.deepStrictEqual(
+  blmDeepBackfillDryRun.adapters[0].selectedPayload,
+  byKey.get('blm_gtlf').deepBackfillPayload,
+  'BLM GTLF deep-backfill dry-run should show the exact payload that live invocation would send',
+);
 assert.deepStrictEqual(byKey.get('michigan_dnr_orv_gpx').defaultPayload.sourceKeys, [
   'alcona_orv_trail',
   'atlanta_route',
   'evart_motorcycle_trail',
+  'statewide_orv_trail_gpx',
 ]);
+assert.strictEqual(
+  byKey.get('michigan_dnr_orv_gpx').defaultPayload.syncScope,
+  'statewide',
+  'Michigan DNR ORV should include the bounded statewide GPX source set in the default direct sync payload',
+);
 const michiganStatewideBackfillPayload = byKey.get('michigan_dnr_orv_gpx').deepBackfillPayload;
 assert(
   michiganStatewideBackfillPayload,
@@ -244,7 +280,17 @@ assert.deepStrictEqual(michiganStatewideBackfillPayload.sourceKeys, [
 assert.strictEqual(
   michiganStatewideBackfillPayload.syncScope,
   'statewide',
-  'Michigan DNR ORV should expose an explicit statewide backfill payload instead of making the large GPX default',
+  'Michigan DNR ORV should preserve an explicit statewide backfill payload for larger operator-run syncs',
+);
+assert.strictEqual(
+  michiganStatewideBackfillPayload.maxTracksPerSource,
+  100,
+  'Michigan DNR ORV statewide backfill should raise the bounded per-source track cap',
+);
+assert.strictEqual(
+  byKey.get('michigan_dnr_orv_gpx').expectedMaxPublicRecommendationCount,
+  400,
+  'Michigan DNR ORV public recommendation telemetry should cover the largest bounded statewide backfill',
 );
 assert.strictEqual(
   byKey.get('michigan_dnr_orv_gpx').publicRecommendationPolicy,
@@ -271,10 +317,24 @@ assert.strictEqual(
   1000,
   'Minnesota DNR OHV statewide backfill should remain bounded by the Edge Function max feature cap',
 );
+assert(
+  byKey.get('minnesota_dnr_ohv_trails').preprocessReason.includes('defaults to the bounded statewide'),
+  'Minnesota DNR OHV preprocess note should tell operators the durable workflow now defaults to bounded statewide conversion',
+);
 assert.strictEqual(
   byKey.get('oregon_odf_ohv_gpx').publicRecommendationPolicy,
   'official_source_recommendable_with_condition_warnings',
   'Oregon ODF OHV should now allow bounded official-source public recommendations with current-condition warnings',
+);
+assert.strictEqual(
+  byKey.get('oregon_odf_ohv_gpx').defaultPayload.maxTracksPerSource,
+  200,
+  'Oregon ODF OHV default payload should use the largest Edge-bounded per-source GPX track cap',
+);
+assert.strictEqual(
+  byKey.get('oregon_odf_ohv_gpx').expectedMaxPublicRecommendationCount,
+  600,
+  'Oregon ODF OHV public recommendation telemetry should cover three GPX sources capped at 200 tracks each',
 );
 assert.strictEqual(
   byKey.get('colorado_cpw_designated_trails').publicRecommendationPolicy,
@@ -295,6 +355,42 @@ assert.strictEqual(
   byKey.get('nps_public_trails').publicRecommendationPolicy,
   'official_source_recommendable_with_condition_warnings',
   'NPS public trails should now allow bounded official-source public recommendations with park-unit/current-alert warnings',
+);
+const npsDefaultBboxes = byKey.get('nps_public_trails').defaultPayload.bboxes || [];
+assert(
+  Array.isArray(npsDefaultBboxes) && npsDefaultBboxes.length > 0,
+  'NPS public trails default payload should include bounded multi-bbox presets',
+);
+assert.deepStrictEqual(
+  npsDefaultBboxes.map((bbox) => bbox.key),
+  [
+    'joshua_tree',
+    'big_south_fork',
+    'shenandoah',
+    'everglades',
+    'timucuan',
+    'channel_islands',
+    'denali',
+    'wrangell_st_elias',
+    'glacier_bay',
+    'klondike_gold_rush',
+    'lake_clark',
+    'yukon_charley',
+    'kaloko_honokohau',
+    'american_samoa',
+    'war_in_the_pacific',
+  ],
+  'NPS public trails should default to bounded official motorized trail units instead of one broad western bbox',
+);
+assert.strictEqual(
+  byKey.get('nps_public_trails').defaultPayload.limitPerBbox,
+  150,
+  'NPS public trails default multi-bbox sync should stay bounded per unit',
+);
+assert.strictEqual(
+  byKey.get('nps_public_trails').expectedMaxPublicRecommendationCount,
+  900,
+  'NPS public trails max public recommendation guard should cover the bounded multi-bbox pilot',
 );
 assert.strictEqual(
   byKey.get('usgs_digital_trails').publicRecommendationPolicy,

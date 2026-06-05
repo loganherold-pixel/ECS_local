@@ -285,9 +285,16 @@ assert.ok(
   thumbnailSource.includes('ROUTE_THUMBNAIL_BY_ID') &&
     thumbnailSource.includes('usedImageUris') &&
     thumbnailSource.includes('finite_pool_cycled') &&
+    thumbnailSource.includes('EXPLORE_THUMBNAIL_IMAGE_WIDTH = 960') &&
+    thumbnailSource.includes('EXPLORE_THUMBNAIL_IMAGE_HEIGHT = 640') &&
+    thumbnailSource.includes('EXPLORE_THUMBNAIL_IMAGE_QUALITY = 88') &&
     thumbnailSource.includes('EXPLORE_ROUTE_THUMBNAIL_ASSET_PLACEHOLDERS') &&
     thumbnailSource.includes('LANDSCAPE_FALLBACK_POOL_BY_GROUP'),
-  'Explore thumbnail resolver should centralize route-specific mapping, per-list uniqueness, contextual fallback pools, and documented pool cycling.',
+  'Explore thumbnail resolver should centralize route-specific mapping, high-resolution photo URLs, per-list uniqueness, contextual fallback pools, and documented pool cycling.',
+);
+assert.ok(
+  hiddenGemUris.every((uri) => typeof uri === 'string' && /[?&]w=960\b/.test(uri) && /[?&]h=640\b/.test(uri) && /[?&]q=88\b/.test(uri)),
+  'Explore thumbnails should request high-resolution photo crops for card surfaces.',
 );
 
 const seedRoutes = extractSeedRoutes();

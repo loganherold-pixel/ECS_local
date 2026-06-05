@@ -7,6 +7,7 @@ import {
   type NavigationHandoffPayload,
 } from '../navigationHandoffStore';
 import {
+  getExploreRouteThumbnailAssignments,
   getExploreTrailThumbnail,
   type ExploreTrailThumbnailAssignment,
 } from '../exploreTrailThumbnails';
@@ -312,8 +313,17 @@ export function normalizeExploreWizardRouteCandidates(
     }
   }
 
+  const thumbnailAssignments = getExploreRouteThumbnailAssignments(
+    candidates.map((candidate) => candidate.route),
+    'tripBuilderWizard',
+  );
+  const candidatesWithThumbnails = candidates.map((candidate) => ({
+    ...candidate,
+    thumbnail: thumbnailAssignments.get(String(candidate.route.id)) ?? candidate.thumbnail,
+  }));
+
   return {
-    candidates,
+    candidates: candidatesWithThumbnails,
     hiddenRoutes,
     hiddenTotal: hiddenRoutes.length,
     hiddenBySource,

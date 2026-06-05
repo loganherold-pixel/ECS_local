@@ -422,19 +422,21 @@ function checkFeatureFlagGate(root, paths) {
 function checkRecoveryGate(root, paths) {
   const commandSource = readIfExists(paths.source.commandCenter);
   const categoryOptionsOk = RECOVERY_CATEGORIES.every((label) => commandSource.includes(`'${label}'`));
+  const emergencyPingRecoveryActionOk =
+    /const handleEmergencyPingButtonPress = useCallback[\s\S]*void handleRecoveryAssist\(\);/.test(commandSource) &&
+    /onEmergencyPing=\{handleEmergencyPingButtonPress\}/.test(commandSource);
   const checks = [
     boolCheck(
       'recovery_action_replaces_more',
       'Primary Dispatch action exposes the Convoy emergency coordinate ping and no primary More action remains.',
-      /onEmergencyPing=\{handleRecoveryAssist\}/.test(commandSource) && !/>\s*More\s*<\/Text>/.test(commandSource),
+      emergencyPingRecoveryActionOk && !/>\s*More\s*<\/Text>/.test(commandSource),
       [rel(root, paths.source.commandCenter)],
       ['Wire the Dispatch Convoy panel emergency ping to Recovery Assist and keep the old More action hidden.'],
     ),
     boolCheck(
       'recovery_action_opens_panel',
       'Emergency coordinate ping uses the Recovery Assist GPS flow.',
-      hasAll(commandSource, [
-        /onEmergencyPing=\{handleRecoveryAssist\}/,
+      emergencyPingRecoveryActionOk && hasAll(commandSource, [
         /createRecoveryAssistEvent/,
         /getCurrentPosition/,
         /getHazardRecoveryForm/,
@@ -612,7 +614,7 @@ function checkLocationGate(root, paths) {
       'gps_permission_attempted_on_submit',
       'Recovery flow attempts GPS capture on submit.',
       hasAll(commandSource, [
-        /requestForegroundPermissionsAsync/,
+        /ensureForegroundLocationPermission/,
         /getCurrentPositionAsync/,
         /Create CAD Event is tapped/,
       ]),

@@ -472,8 +472,8 @@ export function ConvoyCommandMap({
       <Mapbox.MapView
         style={[styles.map, compact ? styles.compactMap : null]}
         styleURL={mapStyleURL}
-        logoEnabled={false}
-        attributionEnabled={false}
+        logoEnabled
+        attributionEnabled
         compassEnabled
         onDidFinishLoadingMap={() => setMapReady(true)}
         onPress={revealConvoyIdentityLabels}

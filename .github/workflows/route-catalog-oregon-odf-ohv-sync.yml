@@ -14,7 +14,7 @@ on:
       max_tracks_per_source:
         description: Maximum tracks to normalize per named GPX source.
         required: false
-        default: '50'
+        default: '200'
 
 permissions:
   contents: read
@@ -34,7 +34,7 @@ jobs:
       ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
       SOURCE_KEYS: ${{ inputs.source_keys || 'tillamook_class_i,tillamook_class_ii_iv,tillamook_class_iii' }}
       MIN_MILES: ${{ inputs.min_miles || '0.25' }}
-      MAX_TRACKS_PER_SOURCE: ${{ inputs.max_tracks_per_source || '50' }}
+      MAX_TRACKS_PER_SOURCE: ${{ inputs.max_tracks_per_source || '200' }}
 
     steps:
       - name: Validate sync secrets
@@ -62,7 +62,7 @@ jobs:
             .map((value) => value.trim())
             .filter(Boolean);
           const minMiles = Number(process.env.MIN_MILES || 0.25);
-          const maxTracksPerSource = Number(process.env.MAX_TRACKS_PER_SOURCE || 50);
+          const maxTracksPerSource = Number(process.env.MAX_TRACKS_PER_SOURCE || 200);
 
           if (sourceKeys.length === 0) throw new Error('At least one Oregon ODF OHV GPX source key is required.');
           if (!Number.isFinite(minMiles) || minMiles <= 0) throw new Error('min_miles must be positive.');

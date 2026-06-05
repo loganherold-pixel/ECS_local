@@ -28,6 +28,7 @@ const USFS_MVUM_FOREST_BATCHES = [
       'cleveland-national-forest',
       'lake-tahoe-basin-management-unit',
       'six-rivers-national-forest',
+      'modoc-national-forest',
     ],
   },
   {
@@ -87,6 +88,17 @@ const USFS_MVUM_FOREST_BATCHES = [
       'bighorn-national-forest',
       'nebraska-national-forest',
       'dakota-prairie-grasslands',
+      'beaverhead-deerlodge-national-forest',
+      'custer-gallatin-national-forest',
+      'gallatin-national-forest',
+    ],
+  },
+  {
+    key: 'alaska',
+    label: 'Alaska',
+    forests: [
+      'chugach-national-forest',
+      'tongass-national-forest',
     ],
   },
   {

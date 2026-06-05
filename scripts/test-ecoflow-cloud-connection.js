@@ -60,6 +60,12 @@ const {
   normalizeEcoFlowCloudTelemetry,
 } = loadTypeScriptModule('lib/ecoflowCloudConnection.ts');
 const {
+  ECOFLOW_PUBLIC_API_AUTH_BLOCKED_MODELS,
+  describeEcoFlowPublicApiAuthorizationBlock,
+  isEcoFlowPublicApiAuthorizationBlockedError,
+  isEcoFlowUnauthorizedDeviceError,
+} = loadTypeScriptModule('lib/ecoflowUnauthorizedDevice.ts');
+const {
   EcoFlowCloudProvider,
 } = loadTypeScriptModule('src/power/cloud/providers/EcoFlowCloudProvider.ts');
 const ecoFlowEdgeFunctionSource = fs.readFileSync(
@@ -71,6 +77,33 @@ assert.strictEqual(normalizeEcoFlowCloudProductType('refrigerator', 'GLACIER'), 
 assert.strictEqual(normalizeEcoFlowCloudProductType('portable_ac', 'WAVE 2'), 'portable_ac');
 assert.strictEqual(normalizeEcoFlowCloudProductType('charger', 'Alternator Charger'), 'charger');
 assert.strictEqual(normalizeEcoFlowCloudProductType('power station', 'DELTA 3'), 'power_station');
+assert.deepStrictEqual(
+  ECOFLOW_PUBLIC_API_AUTH_BLOCKED_MODELS,
+  ['DELTA 3 1500', 'DELTA Mini', 'Alternator Charger'],
+  'EcoFlow support-confirmed public API authorization blocked models should be recorded in one shared helper.',
+);
+assert.strictEqual(
+  isEcoFlowPublicApiAuthorizationBlockedError({
+    code: 1006,
+    message: 'EcoFlow API code 1006',
+    model: 'DELTA 3 1500',
+  }),
+  true,
+  'EcoFlow API code 1006 on a support-confirmed model should classify as public API authorization pending.',
+);
+assert.strictEqual(
+  isEcoFlowUnauthorizedDeviceError({
+    details: { ecoflowCode: '1006' },
+    model: 'DELTA Mini',
+  }),
+  true,
+  'EcoFlow API code 1006 must route through the cloud authorization path instead of generic cloud failure.',
+);
+assert.match(
+  describeEcoFlowPublicApiAuthorizationBlock({ model: 'Alternator Charger', code: 1006 }),
+  /Alternator Charger.*public API authorization.*current EcoFlow developer app/i,
+  'EcoFlow 1006 diagnostics should name the affected model and authorization boundary.',
+);
 
 const glacierTelemetry = normalizeEcoFlowCloudTelemetry(
   {
@@ -874,6 +907,32 @@ assert.strictEqual(
   assert.strictEqual(unauthorizedFailure.cloudState, 'deviceUnauthorized');
   assert.match(unauthorizedFailure.statusLabel, /authorization required/i);
   assert.match(unauthorizedFailure.statusError, /not authorized/i);
+
+  const publicApiAuthorizationPending = await connectEcoFlowCloudDevice(
+    {
+      rawId: 'D361FAH4ZH9F5055',
+      name: 'EcoFlow DELTA 3 1500',
+      model: 'DELTA 3 1500',
+      category: 'power_station',
+    },
+    {
+      lastStatus: 'cloud_error',
+      async connect() {},
+      async pollOnce() {
+        throw new Error('EcoFlow API code 1006: DELTA 3 1500 unsupported by current app authorization');
+      },
+      getPerDeviceTelemetry() {
+        return [];
+      },
+    },
+  );
+
+  assert.strictEqual(publicApiAuthorizationPending.connected, false);
+  assert.strictEqual(publicApiAuthorizationPending.telemetryActive, false);
+  assert.strictEqual(publicApiAuthorizationPending.cloudState, 'publicApiAuthorizationPending');
+  assert.match(publicApiAuthorizationPending.statusLabel, /public API authorization.*current EcoFlow developer app/i);
+  assert.match(publicApiAuthorizationPending.statusError, /1006/);
+  assert.strictEqual(publicApiAuthorizationPending.telemetry, null);
 
   const authRequiredWithoutPackets = await connectEcoFlowCloudDevice(
     {

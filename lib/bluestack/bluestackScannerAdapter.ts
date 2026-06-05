@@ -100,8 +100,8 @@ export function getBluestackVisibleDeviceListLabel(devices: BluestackScannerDevi
   const hasCloudApiDevice = devices.some(hasBluestackCloudSource);
 
   return hasCloudApiDevice
-    ? 'Available cloud/API power devices plus nearby approved Bluetooth power, OBD2, propane, and water monitor advertisements. Select supported devices to connect them into ECS telemetry.'
-    : 'Approved nearby power, OBD2, propane, and water monitor advertisements only. TVs, headsets, and unrelated Bluetooth devices stay out of this action list.';
+    ? 'Available cloud/API power devices plus nearby approved Bluetooth power, OBD2, propane, and water monitor advertisements. Select supported devices to connect or link them; live readings appear only after ECS decodes telemetry.'
+    : 'Approved nearby power, OBD2, propane, and water monitor advertisements only. Tank sensor rows can be linkable while level percentage parsing remains pending.';
 }
 
 export function createBluestackScannerSummary(

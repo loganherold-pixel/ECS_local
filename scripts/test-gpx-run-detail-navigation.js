@@ -509,8 +509,8 @@ assertIncludes(
 // GPS watcher and user-dot rendering.
 assertIncludes(
   gpsSource,
-  'Location.requestForegroundPermissionsAsync()',
-  'GPS permission flow should request foreground permission.',
+  'ensureForegroundLocationPermission(Location)',
+  'GPS permission flow should preflight granted foreground permission before requesting.',
 );
 assertIncludes(
   gpsSource,

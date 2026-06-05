@@ -32,13 +32,13 @@ const routes = [
 
 assert.deepStrictEqual(
   refinement.applyExploreRefinementFilter(routes, 'remoteness').map((route) => route.id),
-  ['b', 'c', 'a'],
-  'Remoteness refinement should sort current results by remoteness descending.',
+  ['b'],
+  'Remoteness refinement should filter current results to remote routes and rank them by remoteness descending.',
 );
 assert.strictEqual(
   refinement.applyExploreRefinementFilter(routes, 'remoteness').length,
-  routes.length,
-  'Remoteness refinement should not aggressively zero out results.',
+  1,
+  'Remoteness refinement should count only remote matches in the current result set.',
 );
 
 assert.strictEqual(presentation.getExploreRemotenessRating({ remotenessScore: 8 }), 'A');

@@ -5,6 +5,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const expeditionTab = fs.readFileSync(path.join(root, 'components', 'dashboard', 'ExpeditionTab.tsx'), 'utf8');
 const dashboard = fs.readFileSync(path.join(root, 'app', '(tabs)', 'dashboard.tsx'), 'utf8');
+const widgetGrid = fs.readFileSync(path.join(root, 'components', 'dashboard', 'WidgetGrid.tsx'), 'utf8');
 
 function includes(fragment, message) {
   assert.ok(expeditionTab.includes(fragment), message);
@@ -65,10 +66,19 @@ includes('onPress={() => openTripDetail(trip.id)}', 'Trip cards should open the 
 includes('onLongPress={() => handleLongPressTrip(trip.id)}', 'Trip cards should keep the future long-press hook.');
 includes('getTripById(tripId)', 'Detail open should fetch by trip id.');
 includes('buildHubStats(completedTrips)', 'Quick stats should be derived from stored trip data.');
-includes('stats.totalExpeditions === 1', 'Total expedition label should handle singular/plural values.');
-includes('formatWholeMiles(stats.totalMiles)', 'Total miles should come from trip summaries.');
-includes('formatElevation(stats.highestElevationFt)', 'Highest elevation should come from trip summaries.');
-includes('formatHours(stats.totalHours)', 'Hours logged should come from trip durations.');
+includes('buildLiveHubStats', 'Expedition Hub should derive live/just-completed route stats from dashboard route props.');
+includes('liveHubStats', 'Expedition Hub should merge live/just-completed guidance stats into the top hub readouts.');
+includes('completedExpeditionRecord', 'Expedition Hub should consume the completed expedition record after active guidance ends.');
+includes('routeCompleted', 'Expedition Hub should keep arrival/completed route state visible after guidance ends.');
+includes('gpsLocation', 'Expedition Hub should use live GPS elevation for the feet readout when available.');
+includes("['totalDistanceMiles', 'distanceMiles', 'completedMiles', 'totalDistance']", 'Expedition Hub should accept route-progress mile totals when no archived trip exists yet.');
+includes("['totalDurationSeconds', 'durationSeconds', 'duration', 'durationSec', 'duration_seconds']", 'Expedition Hub should accept completed Expedition log duration fields for hours logged.');
+notIncludes('void _props', 'Expedition Hub must not discard live dashboard route/expedition props.');
+notIncludes('function ExpeditionTab(_props', 'Expedition Hub must destructure live dashboard route/expedition props.');
+includes('liveHubStats.totalExpeditions === 1', 'Total expedition label should handle singular/plural values.');
+includes('formatWholeMiles(liveHubStats.totalMiles)', 'Total miles should include live/just-completed guidance before falling back to trip summaries.');
+includes('formatElevation(liveHubStats.highestElevationFt)', 'Highest elevation should include live GPS elevation before falling back to trip summaries.');
+includes('formatHours(liveHubStats.totalHours)', 'Hours logged should include just-completed guidance before falling back to trip durations.');
 notIncludes('<IncidentRecoveryPanel', 'Incident & Recovery should move out of Expedition Hub and into Field Utilities.');
 
 for (const todo of [
@@ -121,5 +131,23 @@ includes('tripStartedAt={trip.startedAt}', 'Timeline should receive the trip sta
 
 assert.ok(dashboard.includes("label: 'EXPEDITION HUB'"), 'Dashboard tab label should be Expedition Hub.');
 assert.ok(!dashboard.includes("label: 'ECS OVERVIEW'"), 'Dashboard should no longer label the tab ECS Overview.');
+assert.ok(
+  dashboard.includes('dashboardRouteProgressCompleted') &&
+    dashboard.includes('dashboardRouteProgress?.isComplete') &&
+    dashboard.includes("dashboardRouteProgress?.status === 'completed'"),
+  'Dashboard should route active guidance arrival/completion into Expedition Hub completion state.',
+);
+assert.ok(
+  dashboard.includes('completedGuidanceRouteSummary') &&
+    dashboard.includes('latestCompletedExpeditionLog ??') &&
+    dashboard.includes('completedExpeditionRecord={completedExpeditionRecord}'),
+  'Dashboard should pass a scoped just-completed Expedition or guidance summary into the Hub and widget render options.',
+);
+assert.ok(
+  widgetGrid.includes('renderOptions?.expeditionRouteCompleted') &&
+    widgetGrid.includes('renderOptions?.completedExpeditionRecord') &&
+    widgetGrid.includes('renderOptions?.expeditionRouteLifecycleState'),
+  'WidgetGrid compact render keys should include Expedition Hub guidance completion fields so arrival updates re-render the hub.',
+);
 
 console.log('Expedition Hub UI checks passed.');

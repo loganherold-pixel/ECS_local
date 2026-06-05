@@ -27,6 +27,7 @@ export type EcoFlowTelemetrySource =
 export type EcoFlowCloudClientState =
   | 'authRequired'
   | 'deviceUnauthorized'
+  | 'publicApiAuthorizationPending'
   | 'cloudUnavailable'
   | 'deviceOffline'
   | 'cloudPolling'

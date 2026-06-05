@@ -50,6 +50,11 @@ import { reportLayoutFailure } from './ecsIssueReporter';
 import { createInitialAIOrchestratorMemory, runECSAI } from './ai/aiOrchestrator';
 import { selectAutomotiveCommandSurface } from './automotive/automotiveCommandSelectors';
 import { createDefaultAutomotiveSurfaceState } from './automotive/automotiveSurfaceTypes';
+import {
+  buildContinueRouteInstruction,
+  buildProceedRouteInstruction,
+  buildReadyRouteInstruction,
+} from './routeGuidanceCopy';
 
 const STORAGE_KEY = 'ecs_vehicle_display_state';
 const REFRESH_INTERVAL_MS = 5_000;
@@ -1024,13 +1029,13 @@ function buildNavigationData(params: {
     routePhase === 'completed'
       ? 'Route complete'
       : roadDestination && (roadSession?.status === 'navigation_active' || roadSession?.status === 'rerouting')
-        ? `Continue to ${roadDestination}`
+        ? buildContinueRouteInstruction(roadDestination)
         : nextWaypoint?.name
-          ? `Proceed to ${nextWaypoint.name}`
+          ? buildProceedRouteInstruction(nextWaypoint.name)
           : roadDestination && routePreview
-            ? `Ready to ${roadDestination}`
+            ? buildReadyRouteInstruction(roadDestination)
             : routeLoaded
-              ? 'Continue on route'
+              ? 'Continue on highlighted route'
               : null;
 
   const nearbyFuelDistance = remotenessIndex?.proximity?.nearestFuelStation?.distanceMi;

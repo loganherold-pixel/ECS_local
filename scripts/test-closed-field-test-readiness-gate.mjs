@@ -23,11 +23,11 @@ function writeFile(root, relativePath, content) {
 
 function writeCampOpsLiveReadinessFixtures(root) {
   writeFile(root, 'app/(tabs)/navigate.tsx', [
-    'import { buildCampOpsCampScoutMapPins, isCampOpsMapPinPayload } from "../../lib/campops/campOpsMapPins";',
+    'import { buildCampOpsCampEndpointMapPins, isCampOpsMapPinPayload } from "../../lib/campops/campOpsMapPins";',
     'import CampScoutIntelCard from "../../components/navigate/CampScoutIntelCard";',
-    'const sharedCampPinMapMarkers = buildCampOpsCampScoutMapPins(recommendationSet);',
+    'const sharedCampPinMapMarkers = buildCampOpsCampEndpointMapPins(recommendationSet);',
     'function handleCampScoutTap(payload) { if (isCampOpsMapPinPayload(payload)) setSelectedCampOpsIntel(payload); }',
-    '<MapRenderer campScoutMarkers={sharedCampPinMapMarkers} onCampScoutTap={handleCampScoutTap} />',
+    '<MapRenderer campEndpointMarkers={sharedCampPinMapMarkers} onCampScoutTap={handleCampScoutTap} onCampEndpointTap={handleCampScoutTap} />',
     '<CampScoutIntelCard visible={!!selectedCampOpsIntel} campOpsDetail={selectedCampOpsIntel} onDismiss={() => setSelectedCampOpsIntel(null)} />',
   ].join('\n'));
   writeFile(root, 'components/navigate/MapRenderer.tsx', [

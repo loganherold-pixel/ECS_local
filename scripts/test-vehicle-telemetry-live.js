@@ -165,5 +165,12 @@ assert(
 );
 assert(unified.includes('vehicleTelemetrySnapshot.isLive'), 'unified device connections must use the live telemetry snapshot');
 assert(unified.includes('Classic Bluetooth OBD2 discovery is not available in this runtime'), 'unified scanner must surface unsupported Classic Bluetooth OBD2 discovery clearly');
+assert(
+  unified.includes('const hasRememberedTelemetryAdapter = !!rememberedDevice || obdLastDevice?.id === rawId') &&
+    unified.includes('hasRememberedTelemetryAdapter,\n        !!discoveredDevice') &&
+    unified.includes('hasError || hasRememberedTelemetryAdapter') &&
+    unified.includes("sourceBadges: discoveredDevice ? ['BLE'] : hasRememberedTelemetryAdapter ? ['Cached'] : []"),
+  'cached OBD2 last-device rows must remain retryable and visibly remembered even when a fresh scan has not rediscovered the adapter',
+);
 
 console.log('Vehicle telemetry live wiring checks passed.');

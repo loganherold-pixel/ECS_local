@@ -100,10 +100,49 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'okanogan_wenatchee_nf'
   | 'six_rivers_nf'
   | 'tonto_nf'
+  | 'beaverhead_deerlodge_nf'
+  | 'chugach_nf'
+  | 'custer_gallatin_nf'
+  | 'gallatin_nf'
+  | 'modoc_nf'
+  | 'tongass_nf'
   | 'michigan_orv'
+  | 'michigan_orv_tomahawk_kalkaska'
+  | 'michigan_orv_missaukee_junction'
+  | 'michigan_orv_grand_traverse'
   | 'minnesota_ohv'
+  | 'minnesota_ohv_prospectors'
+  | 'minnesota_ohv_fourtown_grygla'
+  | 'minnesota_ohv_voyageur_country'
   | 'oregon_odf_ohv'
+  | 'oregon_odf_tillamook_class_i'
+  | 'oregon_odf_tillamook_class_ii_iv'
+  | 'oregon_odf_tillamook_class_iii'
   | 'colorado_cpw_trails'
+  | 'colorado_cpw_bockman_road'
+  | 'colorado_cpw_mendenhall_road'
+  | 'colorado_cpw_diamond_peaks'
+  | 'colorado_cpw_gould_mountain_road'
+  | 'colorado_cpw_montgomery_pass_west'
+  | 'colorado_cpw_bull_mountain_road'
+  | 'colorado_cpw_government_creek_road'
+  | 'colorado_cpw_little_government_creek_road'
+  | 'colorado_cpw_kiwi_road'
+  | 'colorado_cpw_custer_draw_road'
+  | 'colorado_cpw_south_canadian_road'
+  | 'colorado_cpw_ruby_jewel_road'
+  | 'colorado_cpw_grass_creek'
+  | 'colorado_cpw_american_lakes_access'
+  | 'colorado_cpw_upper_crags_basin_access'
+  | 'colorado_cpw_dry_gulch_road'
+  | 'colorado_cpw_silver_creek_access'
+  | 'colorado_cpw_american_lakes_trail'
+  | 'colorado_cpw_sweitzer_trail'
+  | 'colorado_cpw_snowmobile_connector'
+  | 'colorado_cpw_horseshoe_trail'
+  | 'colorado_cpw_old_fulford_road'
+  | 'colorado_cpw_south_shore_ohv_track'
+  | 'blm_ak_gtlf'
   | 'blm_az_gtlf'
   | 'blm_ca_nv_gtlf'
   | 'blm_co_gtlf'
@@ -111,7 +150,28 @@ export type RouteCatalogPresetSearchAreaKey =
   | 'blm_mt_gtlf'
   | 'blm_nm_gtlf'
   | 'blm_ut_gtlf'
-  | 'nps_public_trails_joshua_tree';
+  | 'blm_ut_smoky_mountain_alvey_wash'
+  | 'blm_ut_wolverine_loop_road'
+  | 'blm_ut_heads_of_the_creeks_road'
+  | 'blm_ut_horse_mountain_road'
+  | 'blm_ut_fourmile_bench'
+  | 'blm_ut_paria_breaks'
+  | 'blm_wy_gtlf'
+  | 'nps_public_trails_joshua_tree'
+  | 'nps_public_trails_big_south_fork'
+  | 'nps_public_trails_shenandoah'
+  | 'nps_public_trails_everglades'
+  | 'nps_public_trails_timucuan'
+  | 'nps_public_trails_channel_islands'
+  | 'nps_public_trails_denali'
+  | 'nps_public_trails_wrangell_st_elias'
+  | 'nps_public_trails_glacier_bay'
+  | 'nps_public_trails_klondike_gold_rush'
+  | 'nps_public_trails_lake_clark'
+  | 'nps_public_trails_yukon_charley'
+  | 'nps_public_trails_kaloko_honokohau'
+  | 'nps_public_trails_american_samoa'
+  | 'nps_public_trails_war_in_the_pacific';
 
 export type RouteCatalogSearchAreaSource = 'selected_search_area' | 'manual_search_center' | 'live_gps';
 export type RouteCatalogCoveragePosture =
@@ -1175,11 +1235,101 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     sourceAdapters: ['usfs_mvum'],
   },
   {
+    key: 'beaverhead_deerlodge_nf',
+    label: 'Beaverhead-Deerlodge National Forest',
+    shortLabel: 'Beaverhead-Deerlodge NF',
+    latitude: 45.902,
+    longitude: -113.107,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'chugach_nf',
+    label: 'Chugach National Forest',
+    shortLabel: 'Chugach NF',
+    latitude: 60.64,
+    longitude: -145.94,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'custer_gallatin_nf',
+    label: 'Custer Gallatin National Forest',
+    shortLabel: 'Custer Gallatin NF',
+    latitude: 45.1,
+    longitude: -110.65,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'gallatin_nf',
+    label: 'Gallatin National Forest',
+    shortLabel: 'Gallatin NF',
+    latitude: 45.35,
+    longitude: -111,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'modoc_nf',
+    label: 'Modoc National Forest',
+    shortLabel: 'Modoc NF',
+    latitude: 41.53,
+    longitude: -120.72,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
+    key: 'tongass_nf',
+    label: 'Tongass National Forest',
+    shortLabel: 'Tongass NF',
+    latitude: 57.75,
+    longitude: -135,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['usfs_mvum'],
+  },
+  {
     key: 'michigan_orv',
     label: 'Michigan DNR ORV',
     shortLabel: 'Michigan ORV',
     latitude: 44.98,
     longitude: -84.13,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['michigan_dnr_orv_gpx'],
+  },
+  {
+    key: 'michigan_orv_tomahawk_kalkaska',
+    label: 'Michigan DNR Tomahawk-Kalkaska ORV',
+    shortLabel: 'MI Tomahawk',
+    latitude: 45.347,
+    longitude: -84.677,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['michigan_dnr_orv_gpx'],
+  },
+  {
+    key: 'michigan_orv_missaukee_junction',
+    label: 'Michigan DNR Missaukee Junction ORV',
+    shortLabel: 'MI Missaukee',
+    latitude: 44.321,
+    longitude: -85.431,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['michigan_dnr_orv_gpx'],
+  },
+  {
+    key: 'michigan_orv_grand_traverse',
+    label: 'Michigan DNR Grand Traverse ORV',
+    shortLabel: 'MI Grand Traverse',
+    latitude: 44.624,
+    longitude: -85.428,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['michigan_dnr_orv_gpx'],
@@ -1195,11 +1345,71 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     sourceAdapters: ['minnesota_dnr_ohv_trails'],
   },
   {
+    key: 'minnesota_ohv_prospectors',
+    label: 'Minnesota DNR Prospectors OHV',
+    shortLabel: 'MN Prospectors',
+    latitude: 47.776,
+    longitude: -91.71,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['minnesota_dnr_ohv_trails'],
+  },
+  {
+    key: 'minnesota_ohv_fourtown_grygla',
+    label: 'Minnesota DNR Fourtown-Grygla OHV',
+    shortLabel: 'MN Fourtown-Grygla',
+    latitude: 48.376,
+    longitude: -95.501,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['minnesota_dnr_ohv_trails'],
+  },
+  {
+    key: 'minnesota_ohv_voyageur_country',
+    label: 'Minnesota DNR Voyageur Country ATV',
+    shortLabel: 'MN Voyageur ATV',
+    latitude: 48.172,
+    longitude: -92.674,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['minnesota_dnr_ohv_trails'],
+  },
+  {
     key: 'oregon_odf_ohv',
     label: 'Oregon ODF OHV',
     shortLabel: 'Oregon ODF',
     latitude: 45.55,
     longitude: -123.55,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['oregon_odf_ohv_gpx'],
+  },
+  {
+    key: 'oregon_odf_tillamook_class_i',
+    label: 'Oregon ODF Tillamook Class I OHV',
+    shortLabel: 'OR Class I',
+    latitude: 45.581,
+    longitude: -123.485,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['oregon_odf_ohv_gpx'],
+  },
+  {
+    key: 'oregon_odf_tillamook_class_ii_iv',
+    label: 'Oregon ODF Tillamook Class II/IV OHV',
+    shortLabel: 'OR Class II/IV',
+    latitude: 45.563,
+    longitude: -123.454,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['oregon_odf_ohv_gpx'],
+  },
+  {
+    key: 'oregon_odf_tillamook_class_iii',
+    label: 'Oregon ODF Tillamook Class III OHV',
+    shortLabel: 'OR Class III',
+    latitude: 45.573,
+    longitude: -123.532,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['oregon_odf_ohv_gpx'],
@@ -1213,6 +1423,246 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_bockman_road',
+    label: 'Colorado CPW Bockman Road',
+    shortLabel: 'CPW Bockman',
+    latitude: 40.537,
+    longitude: -105.954,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_mendenhall_road',
+    label: 'Colorado CPW Mendenhall Road',
+    shortLabel: 'CPW Mendenhall',
+    latitude: 40.862,
+    longitude: -106.159,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_diamond_peaks',
+    label: 'Colorado CPW Diamond Peaks Trail',
+    shortLabel: 'CPW Diamond Peaks',
+    latitude: 40.522,
+    longitude: -105.931,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_gould_mountain_road',
+    label: 'Colorado CPW Gould Mountain Road',
+    shortLabel: 'CPW Gould Mountain',
+    latitude: 40.535,
+    longitude: -105.994,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_montgomery_pass_west',
+    label: 'Colorado CPW Montgomery Pass Road West',
+    shortLabel: 'CPW Montgomery West',
+    latitude: 40.556,
+    longitude: -105.933,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_bull_mountain_road',
+    label: 'Colorado CPW Bull Mountain Road',
+    shortLabel: 'CPW Bull Mountain',
+    latitude: 40.563,
+    longitude: -106.016,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_government_creek_road',
+    label: 'Colorado CPW Government Creek Road',
+    shortLabel: 'CPW Government Creek',
+    latitude: 40.882,
+    longitude: -106.158,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_little_government_creek_road',
+    label: 'Colorado CPW Little Government Creek Road',
+    shortLabel: 'CPW Little Government',
+    latitude: 40.883,
+    longitude: -106.205,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_kiwi_road',
+    label: 'Colorado CPW Kiwi Road',
+    shortLabel: 'CPW Kiwi',
+    latitude: 40.561,
+    longitude: -106.012,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_custer_draw_road',
+    label: 'Colorado CPW Custer Draw Road',
+    shortLabel: 'CPW Custer Draw',
+    latitude: 40.59,
+    longitude: -106.019,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_south_canadian_road',
+    label: 'Colorado CPW South Canadian Road',
+    shortLabel: 'CPW South Canadian',
+    latitude: 40.577,
+    longitude: -106.003,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_ruby_jewel_road',
+    label: 'Colorado CPW Ruby Jewel Road',
+    shortLabel: 'CPW Ruby Jewel',
+    latitude: 40.578,
+    longitude: -105.976,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_grass_creek',
+    label: 'Colorado CPW Grass Creek',
+    shortLabel: 'CPW Grass Creek',
+    latitude: 40.538,
+    longitude: -105.977,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_american_lakes_access',
+    label: 'Colorado CPW American Lakes Trail Access',
+    shortLabel: 'CPW American Lakes',
+    latitude: 40.504,
+    longitude: -105.891,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_upper_crags_basin_access',
+    label: 'Colorado CPW Upper Crags Basin Access',
+    shortLabel: 'CPW Upper Crags',
+    latitude: 40.504,
+    longitude: -105.906,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_dry_gulch_road',
+    label: 'Colorado CPW Dry Gulch Road',
+    shortLabel: 'CPW Dry Gulch',
+    latitude: 38.902,
+    longitude: -105.515,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_silver_creek_access',
+    label: 'Colorado CPW Silver Creek Access Trail',
+    shortLabel: 'CPW Silver Creek',
+    latitude: 40.486,
+    longitude: -105.969,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_american_lakes_trail',
+    label: 'Colorado CPW American Lakes Trail',
+    shortLabel: 'CPW American Lakes Trail',
+    latitude: 40.503,
+    longitude: -105.904,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_sweitzer_trail',
+    label: 'Colorado CPW Sweitzer Trail',
+    shortLabel: 'CPW Sweitzer',
+    latitude: 38.712,
+    longitude: -108.026,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_snowmobile_connector',
+    label: 'Colorado CPW Snowmobile Connector Trail',
+    shortLabel: 'CPW Snowmobile Connector',
+    latitude: 40.558,
+    longitude: -105.989,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_horseshoe_trail',
+    label: 'Colorado CPW Horseshoe Trail',
+    shortLabel: 'CPW Horseshoe',
+    latitude: 37.4,
+    longitude: -108.271,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_old_fulford_road',
+    label: 'Colorado CPW Old Fulford Road',
+    shortLabel: 'CPW Old Fulford',
+    latitude: 39.527,
+    longitude: -106.692,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'colorado_cpw_south_shore_ohv_track',
+    label: 'Colorado CPW OHV Track on South Shore Trail',
+    shortLabel: 'CPW South Shore OHV',
+    latitude: 40.369,
+    longitude: -104.083,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['colorado_cpw_designated_trails'],
+  },
+  {
+    key: 'blm_ak_gtlf',
+    label: 'BLM GTLF Alaska',
+    shortLabel: 'BLM AK',
+    latitude: 61.609,
+    longitude: -145.268,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
   },
   {
     key: 'blm_az_gtlf',
@@ -1285,6 +1735,66 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     sourceAdapters: ['blm_gtlf'],
   },
   {
+    key: 'blm_ut_smoky_mountain_alvey_wash',
+    label: 'BLM GTLF Smoky Mountain/Alvey Wash',
+    shortLabel: 'BLM Smoky/Alvey',
+    latitude: 37.38084,
+    longitude: -111.53701,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_ut_wolverine_loop_road',
+    label: 'BLM GTLF Wolverine Loop Rd',
+    shortLabel: 'BLM Wolverine Loop',
+    latitude: 37.82471,
+    longitude: -111.15059,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_ut_heads_of_the_creeks_road',
+    label: 'BLM GTLF Heads Of The Creeks Rd',
+    shortLabel: 'BLM Heads Creeks',
+    latitude: 37.26244,
+    longitude: -111.60036,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_ut_horse_mountain_road',
+    label: 'BLM GTLF Horse Mountain Rd',
+    shortLabel: 'BLM Horse Mtn',
+    latitude: 37.49367,
+    longitude: -111.71628,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_ut_fourmile_bench',
+    label: 'BLM GTLF Fourmile Bench',
+    shortLabel: 'BLM Fourmile Bench',
+    latitude: 37.43566,
+    longitude: -111.77318,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
+    key: 'blm_ut_paria_breaks',
+    label: 'BLM GTLF Paria Breaks',
+    shortLabel: 'BLM Paria Breaks',
+    latitude: 37.19633,
+    longitude: -112.03444,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['blm_gtlf'],
+  },
+  {
     key: 'blm_wy_gtlf',
     label: 'BLM GTLF Wyoming',
     shortLabel: 'BLM WY',
@@ -1300,6 +1810,146 @@ export const ROUTE_CATALOG_COVERAGE_AREAS: RouteCatalogCoverageArea[] = [
     shortLabel: 'NPS Joshua Tree',
     latitude: 34,
     longitude: -116.03,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_big_south_fork',
+    label: 'NPS Public Trails Big South Fork',
+    shortLabel: 'NPS Big South Fork',
+    latitude: 36.586,
+    longitude: -84.655,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_shenandoah',
+    label: 'NPS Public Trails Shenandoah',
+    shortLabel: 'NPS Shenandoah',
+    latitude: 38.762,
+    longitude: -78.302,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_everglades',
+    label: 'NPS Public Trails Everglades',
+    shortLabel: 'NPS Everglades',
+    latitude: 25.707,
+    longitude: -80.763,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_timucuan',
+    label: 'NPS Public Trails Timucuan',
+    shortLabel: 'NPS Timucuan',
+    latitude: 30.547,
+    longitude: -81.639,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_channel_islands',
+    label: 'NPS Public Trails Channel Islands',
+    shortLabel: 'NPS Channel Islands',
+    latitude: 34.036,
+    longitude: -120.423,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_denali',
+    label: 'NPS Public Trails Denali',
+    shortLabel: 'NPS Denali',
+    latitude: 63.549,
+    longitude: -150.83,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_wrangell_st_elias',
+    label: 'NPS Public Trails Wrangell-St Elias',
+    shortLabel: 'NPS Wrangell-St Elias',
+    latitude: 62.052,
+    longitude: -143.569,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_glacier_bay',
+    label: 'NPS Public Trails Glacier Bay',
+    shortLabel: 'NPS Glacier Bay',
+    latitude: 59.134,
+    longitude: -138.415,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_klondike_gold_rush',
+    label: 'NPS Public Trails Klondike Gold Rush',
+    shortLabel: 'NPS Klondike Gold Rush',
+    latitude: 59.508,
+    longitude: -135.353,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_lake_clark',
+    label: 'NPS Public Trails Lake Clark',
+    shortLabel: 'NPS Lake Clark',
+    latitude: 60.194,
+    longitude: -154.31,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_yukon_charley',
+    label: 'NPS Public Trails Yukon-Charley',
+    shortLabel: 'NPS Yukon-Charley',
+    latitude: 65.316,
+    longitude: -143.244,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_kaloko_honokohau',
+    label: 'NPS Public Trails Kaloko-Honokohau',
+    shortLabel: 'NPS Kaloko-Honokohau',
+    latitude: 19.675,
+    longitude: -156.021,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_american_samoa',
+    label: 'NPS Public Trails American Samoa',
+    shortLabel: 'NPS American Samoa',
+    latitude: -14.244,
+    longitude: -170.672,
+    coveragePosture: 'verified_recommendation',
+    publicRecommendation: true,
+    sourceAdapters: ['nps_public_trails'],
+  },
+  {
+    key: 'nps_public_trails_war_in_the_pacific',
+    label: 'NPS Public Trails War in the Pacific',
+    shortLabel: 'NPS War in the Pacific',
+    latitude: 13.467,
+    longitude: 144.703,
     coveragePosture: 'verified_recommendation',
     publicRecommendation: true,
     sourceAdapters: ['nps_public_trails'],

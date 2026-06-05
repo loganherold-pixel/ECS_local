@@ -17,7 +17,7 @@ const validation = validateUsfsMvumForestBatches();
 assert.deepStrictEqual(validation.errors, [], 'USFS MVUM named batches should cover the configured forest list exactly once');
 assert(validation.defaultForestCount > 100, 'USFS MVUM default forest list should include the expanded national coverage set');
 assert(validation.maxBatchSize <= 20, 'USFS MVUM named batches should stay small enough for bounded manual reruns');
-assert.strictEqual(validation.nonAllBatchCount, 7, 'USFS MVUM should expose seven named regional batches');
+assert.strictEqual(validation.nonAllBatchCount, 8, 'USFS MVUM should expose eight named regional batches, including Alaska');
 
 const batchKeys = USFS_MVUM_FOREST_BATCHES.map((batch) => batch.key);
 assert(batchKeys.includes('all'), 'USFS MVUM batches should include an all option for scheduled/default behavior');
@@ -28,6 +28,13 @@ for (const key of batchKeys) {
 const inyoBatch = resolveUsfsMvumForestSelection({ forestBatch: 'california_nevada' });
 assert(inyoBatch.forests.includes('inyo-national-forest'), 'California/Nevada batch should include Inyo for targeted reruns');
 assert(inyoBatch.forests.length <= 20, 'California/Nevada batch should remain bounded');
+
+const alaskaBatch = resolveUsfsMvumForestSelection({ forestBatch: 'alaska' });
+assert.deepStrictEqual(
+  alaskaBatch.forests,
+  ['chugach-national-forest', 'tongass-national-forest'],
+  'Alaska batch should expose the official MVUM forest units without broadening other regional reruns',
+);
 
 const explicitSelection = resolveUsfsMvumForestSelection({
   requestedForests: 'inyo-national-forest,tahoe-national-forest',

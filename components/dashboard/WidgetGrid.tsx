@@ -169,6 +169,15 @@ interface WidgetGridProps {
   gpsAccuracyM?: number | null;
   gpsAltitudeFt?: number | null;
   gpsTimestampMs?: number | null;
+  expeditionHasActiveRoute?: boolean;
+  expeditionTeamMemberCount?: number;
+  expeditionCampCount?: number;
+  expeditionRouteCompleted?: boolean;
+  expeditionRouteLifecycleState?: string | null;
+  expeditionId?: string | null;
+  expeditionRouteLabel?: string | null;
+  completedExpeditionRecord?: unknown;
+  expeditionEcsOnline?: boolean;
   onOpenCommandBrief?: () => void;
   onTerrainRiskReferenceEvent?: WidgetRenderOptions['onTerrainRiskReferenceEvent'];
   /** Phase 6: Active expedition mode — locks layout, hides edit controls */
@@ -960,6 +969,18 @@ function getWaypointSignature(waypoints?: { latitude?: number; longitude?: numbe
   ].join(':');
 }
 
+function getCompletedExpeditionSignature(completedExpeditionRecord?: unknown) {
+  if (!completedExpeditionRecord || typeof completedExpeditionRecord !== 'object') return '';
+  const record = completedExpeditionRecord as Record<string, unknown>;
+  return [
+    record.id ?? '',
+    record.state ?? '',
+    record.endTime ?? '',
+    record.distance ?? record.totalDistanceMiles ?? record.completedMiles ?? '',
+    record.duration ?? record.totalDurationSeconds ?? record.durationSeconds ?? '',
+  ].join(':');
+}
+
 function getCompactWidgetRenderKey(
   widgetType: string | undefined,
   widgetData: WidgetGridProps['widgetData'],
@@ -975,6 +996,14 @@ function getCompactWidgetRenderKey(
     trip?.updated_at ?? '',
     trip?.active_mode ?? '',
     trip?.route_distance_miles ?? '',
+  ].join(':');
+  const expeditionRouteKey = [
+    renderOptions?.expeditionHasActiveRoute ?? '',
+    renderOptions?.expeditionRouteCompleted ?? '',
+    renderOptions?.expeditionRouteLifecycleState ?? '',
+    renderOptions?.expeditionId ?? '',
+    renderOptions?.expeditionRouteLabel ?? '',
+    getCompletedExpeditionSignature(renderOptions?.completedExpeditionRecord),
   ].join(':');
 
   switch (widgetType) {
@@ -1027,6 +1056,7 @@ function getCompactWidgetRenderKey(
     case 'emergency-controls':
       return [
         baseTripKey,
+        expeditionRouteKey,
         getLoadItemsSignature(data?.loadItems),
         getWaypointSignature(data?.waypoints),
         data?.riskScore?.terrain_complexity ?? '',
@@ -1036,6 +1066,7 @@ function getCompactWidgetRenderKey(
     case 'progress':
       return [
         baseTripKey,
+        expeditionRouteKey,
         getWaypointSignature(data?.waypoints),
         renderOptions?.gpsLatitude ?? '',
         renderOptions?.gpsLongitude ?? '',
@@ -1611,6 +1642,15 @@ export default function WidgetGrid({
   containerHeight,
   containerWidth: containerWidthProp,
   gpsLatitude, gpsLongitude, gpsHeadingDeg, gpsSpeedMph, gpsHasFix, gpsAccuracyM, gpsAltitudeFt, gpsTimestampMs,
+  expeditionHasActiveRoute,
+  expeditionTeamMemberCount,
+  expeditionCampCount,
+  expeditionRouteCompleted,
+  expeditionRouteLifecycleState,
+  expeditionId,
+  expeditionRouteLabel,
+  completedExpeditionRecord,
+  expeditionEcsOnline,
   onOpenCommandBrief,
   onTerrainRiskReferenceEvent,
 }: WidgetGridProps) {
@@ -1787,11 +1827,29 @@ export default function WidgetGrid({
     gpsAccuracyM,
     gpsAltitudeFt,
     gpsTimestampMs,
+    expeditionHasActiveRoute,
+    expeditionTeamMemberCount,
+    expeditionCampCount,
+    expeditionRouteCompleted,
+    expeditionRouteLifecycleState,
+    expeditionId,
+    expeditionRouteLabel,
+    completedExpeditionRecord,
+    expeditionEcsOnline,
     onOpenCommandBrief,
     onTerrainRiskReferenceEvent,
   }), [
     advancedModeEnabled,
+    completedExpeditionRecord,
     dashboardMode,
+    expeditionCampCount,
+    expeditionEcsOnline,
+    expeditionHasActiveRoute,
+    expeditionId,
+    expeditionRouteCompleted,
+    expeditionRouteLabel,
+    expeditionRouteLifecycleState,
+    expeditionTeamMemberCount,
     gpsAccuracyM,
     gpsAltitudeFt,
     gpsHasFix,
@@ -2364,7 +2422,7 @@ export default function WidgetGrid({
         style={styles.scrollContainer}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
-        removeClippedSubviews={false}
+        removeClippedSubviews={dragIndex === null}
         scrollEnabled={dragIndex === null}
       >
         {gridContent}

@@ -22,6 +22,81 @@ export type BlmGtlfRouteContext = {
   minMiles?: number;
 };
 
+export type BlmGtlfClosureStatus = 'active' | 'scheduled' | 'expired' | 'unknown';
+export type BlmGtlfClosureType =
+  | 'seasonal'
+  | 'emergency'
+  | 'fire'
+  | 'flood'
+  | 'maintenance'
+  | 'land_manager'
+  | 'permanent'
+  | 'unknown';
+
+export type BlmGtlfAdvisoryStatus = 'active' | 'scheduled' | 'expired' | 'unknown';
+export type BlmGtlfAdvisoryType =
+  | 'fire_restriction'
+  | 'road_delay'
+  | 'construction'
+  | 'water_unavailable'
+  | 'resource_restriction'
+  | 'land_manager_notice'
+  | 'unknown';
+
+export type BlmGtlfCurrentConditionClosure = {
+  id?: string;
+  title: string;
+  summary?: string;
+  sourceUrl?: string;
+  orderNumber?: string;
+  status: BlmGtlfClosureStatus;
+  closureType: BlmGtlfClosureType;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  lastVerifiedAt?: string;
+  confidenceScore?: number;
+  adminStates: string[];
+  routePublicIds: string[];
+  segmentPublicIds: string[];
+  providerFeatureIds: string[];
+  routePlanIds: string[];
+  routeNames: string[];
+  routeIdentityPatterns: string[];
+};
+
+export type BlmGtlfCurrentConditionAdvisory = {
+  id?: string;
+  title: string;
+  summary?: string;
+  sourceUrl?: string;
+  orderNumber?: string;
+  status: BlmGtlfAdvisoryStatus;
+  advisoryType: BlmGtlfAdvisoryType;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  lastVerifiedAt?: string;
+  confidenceScore?: number;
+  adminStates: string[];
+  routePublicIds: string[];
+  segmentPublicIds: string[];
+  providerFeatureIds: string[];
+  routePlanIds: string[];
+  routeNames: string[];
+  routeIdentityPatterns: string[];
+};
+
+export type BlmGtlfCurrentConditionSource = {
+  adminState: string;
+  providerId: string;
+  label: string;
+  sourceUrl: string;
+  referenceUrl: string;
+  checkedAt: string;
+  staleAt: string;
+  closures: BlmGtlfCurrentConditionClosure[];
+  advisories: BlmGtlfCurrentConditionAdvisory[];
+};
+
 export type BlmGtlfRouteUpsert = NonNullable<ReturnType<typeof arcGisFeatureToBlmGtlfRouteUpsert>>;
 export type BlmGtlfAggregateRouteUpsert = {
   verifiedRoute: Record<string, unknown>;
@@ -76,6 +151,7 @@ export const BLM_GTLF_LAYERS: BlmGtlfLayer[] = [
 
 const BLM_GTLF_CAVEAT =
   'BLM GTLF is official public transportation source data, but users must verify current use limitations and restrictions with the local BLM office before travel.';
+const BLM_GTLF_CURRENT_CONDITIONS_URI = 'https://www.blm.gov/alerts';
 
 function cleanString(value: unknown): string {
   return String(value ?? '').trim();
@@ -313,6 +389,12 @@ function limitationWarning(attributes: Record<string, unknown>): string | null {
   return `BLM GTLF limitation requires trip-date review: ${[limitation, explanation].filter(Boolean).join(' - ')}.`;
 }
 
+function hasSeasonalRestrictionCode(attributes: Record<string, unknown>): boolean {
+  const code = cleanString(attributes.PLAN_SEASON_RSTRCT_CODE).toUpperCase();
+  if (!code || code === 'NO' || code === 'NONE' || code === 'N/A') return false;
+  return true;
+}
+
 function blmGtlfRouteIntelligence(args: {
   layer: BlmGtlfLayer;
   distanceMiles: number;
@@ -357,7 +439,7 @@ function isRecommendableBlmAggregateSegment(layer: BlmGtlfLayer, segment: BlmGtl
   const attributes = sourceAttributes(segment);
   if (layer.motorizedUse !== 'public') return false;
   if (!/^open$/i.test(cleanString(attributes.PLAN_OHV_ROUTE_DSGNTN))) return false;
-  if (cleanString(attributes.PLAN_SEASON_RSTRCT_CODE)) return false;
+  if (hasSeasonalRestrictionCode(attributes)) return false;
   if (limitationWarning(attributes)) return false;
   if (Number(segment.verifiedRoute.active_closure_count ?? 0) > 0) return false;
   if (!Array.isArray(segment.verifiedRoute.vehicle_fit) || segment.verifiedRoute.vehicle_fit.length === 0) return false;
@@ -377,6 +459,587 @@ export function blmGtlfSourceUpsert(lastCheckedAt = new Date().toISOString()) {
     refresh_frequency: 'agency published schedule',
     status: 'active',
     last_checked_at: lastCheckedAt,
+  };
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function readStringList(record: Record<string, unknown>, keys: string[]): string[] {
+  return uniqueStrings(keys.flatMap((key) => {
+    const value = record[key];
+    if (Array.isArray(value)) return value.map((item) => cleanString(item));
+    return [cleanString(value)];
+  }));
+}
+
+function normalizeIsoString(value: unknown): string | null {
+  const text = cleanString(value);
+  if (!text) return null;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+const BLM_GTLF_STATE_ALIASES: Record<string, string> = {
+  ak: 'AK',
+  alaska: 'AK',
+  az: 'AZ',
+  arizona: 'AZ',
+  ca: 'CA',
+  california: 'CA',
+  co: 'CO',
+  colorado: 'CO',
+  id: 'ID',
+  idaho: 'ID',
+  mt: 'MT',
+  montana: 'MT',
+  nv: 'NV',
+  nevada: 'NV',
+  nm: 'NM',
+  'new mexico': 'NM',
+  newmexico: 'NM',
+  ut: 'UT',
+  utah: 'UT',
+  wy: 'WY',
+  wyoming: 'WY',
+};
+
+function normalizeBlmAdminState(value: unknown): string {
+  const raw = cleanString(value);
+  if (!raw) return '';
+  const compact = raw.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (/^[a-z]{2}$/i.test(raw) && BLM_GTLF_STATE_ALIASES[raw.toLowerCase()]) return raw.toUpperCase();
+  if (BLM_GTLF_STATE_ALIASES[compact]) return BLM_GTLF_STATE_ALIASES[compact];
+  if (BLM_GTLF_STATE_ALIASES[compact.replace(/\s+/g, '')]) return BLM_GTLF_STATE_ALIASES[compact.replace(/\s+/g, '')];
+  const providerIdState = raw.toLowerCase().match(/^blm_current_conditions_([a-z]{2})$/);
+  if (providerIdState && BLM_GTLF_STATE_ALIASES[providerIdState[1]]) {
+    return BLM_GTLF_STATE_ALIASES[providerIdState[1]];
+  }
+  return '';
+}
+
+function normalizeBlmAdminStates(values: unknown[]): string[] {
+  return uniqueStrings(values.map(normalizeBlmAdminState).filter(Boolean));
+}
+
+function normalizeClosureStatus(value: unknown): BlmGtlfClosureStatus {
+  const text = cleanString(value).toLowerCase();
+  if (text === 'active' || text === 'closed' || text === 'open_closure' || text === 'in_effect') return 'active';
+  if (text === 'scheduled' || text === 'planned' || text === 'pending') return 'scheduled';
+  if (text === 'expired' || text === 'ended' || text === 'inactive' || text === 'rescinded') return 'expired';
+  return 'unknown';
+}
+
+function normalizeClosureType(value: unknown): BlmGtlfClosureType {
+  const text = cleanString(value).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (
+    text === 'seasonal' ||
+    text === 'emergency' ||
+    text === 'fire' ||
+    text === 'flood' ||
+    text === 'maintenance' ||
+    text === 'land_manager' ||
+    text === 'permanent' ||
+    text === 'unknown'
+  ) {
+    return text as BlmGtlfClosureType;
+  }
+  if (text === 'closure_order' || text === 'official_order' || text === 'administrative' || text === 'travel_management') {
+    return 'land_manager';
+  }
+  return 'unknown';
+}
+
+function normalizeAdvisoryStatus(value: unknown): BlmGtlfAdvisoryStatus {
+  return normalizeClosureStatus(value);
+}
+
+function normalizeAdvisoryType(value: unknown): BlmGtlfAdvisoryType {
+  const text = cleanString(value).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (
+    text === 'fire_restriction' ||
+    text === 'road_delay' ||
+    text === 'construction' ||
+    text === 'water_unavailable' ||
+    text === 'resource_restriction' ||
+    text === 'land_manager_notice' ||
+    text === 'unknown'
+  ) {
+    return text as BlmGtlfAdvisoryType;
+  }
+  if (text === 'fire_prevention_order' || text === 'fire_order' || text === 'stage_1' || text === 'stage_2') {
+    return 'fire_restriction';
+  }
+  if (text === 'water' || text === 'no_water' || text === 'water_outage') return 'water_unavailable';
+  if (text === 'delay' || text === 'roadwork' || text === 'road_work') return 'road_delay';
+  if (text === 'paleontology' || text === 'resource_use' || text === 'resource_prohibition') return 'resource_restriction';
+  if (text === 'notice' || text === 'advisory') return 'land_manager_notice';
+  return 'unknown';
+}
+
+function currentConditionInputs(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.map(readRecord).filter((record): record is Record<string, unknown> => !!record);
+  }
+  const record = readRecord(value);
+  if (!record) return [];
+  if (
+    Array.isArray(record.closures) ||
+    Array.isArray(record.advisories) ||
+    cleanString(record.adminState) ||
+    cleanString(record.admin_state) ||
+    cleanString(record.state) ||
+    cleanString(record.providerId) ||
+    cleanString(record.provider_id)
+  ) {
+    return [record];
+  }
+  return Object.entries(record)
+    .map(([adminState, sourceValue]) => {
+      const sourceRecord = readRecord(sourceValue);
+      return sourceRecord ? { adminState, ...sourceRecord } : null;
+    })
+    .filter((sourceRecord): sourceRecord is Record<string, unknown> => !!sourceRecord);
+}
+
+function sourceAdminState(record: Record<string, unknown>, selectedStates: string[]): string {
+  const requested = [
+    record.adminState,
+    record.admin_state,
+    record.state,
+    record.providerId,
+    record.provider_id,
+  ].map(normalizeBlmAdminState).filter(Boolean);
+  if (requested.length > 0) {
+    const selectedSet = new Set(selectedStates);
+    return requested.find((state) => selectedSet.size === 0 || selectedSet.has(state)) ?? '';
+  }
+  return selectedStates.length === 1 ? selectedStates[0] : '';
+}
+
+function normalizeCurrentConditionClosure(
+  value: unknown,
+  source: Pick<BlmGtlfCurrentConditionSource, 'adminState' | 'sourceUrl' | 'checkedAt'>,
+): BlmGtlfCurrentConditionClosure | null {
+  const record = readRecord(value);
+  if (!record) return null;
+  const title = cleanString(record.title ?? record.name ?? record.orderNumber ?? record.order_number);
+  if (!title) return null;
+  const adminStates = normalizeBlmAdminStates([
+    ...readStringList(record, ['adminState', 'admin_state', 'adminStates', 'admin_states', 'state', 'states']),
+    source.adminState,
+  ]);
+
+  return {
+    id: cleanString(record.id ?? record.providerClosureId ?? record.provider_closure_id) || undefined,
+    title,
+    summary: cleanString(record.summary ?? record.description ?? record.notice) || undefined,
+    sourceUrl: cleanString(record.sourceUrl ?? record.source_url) || source.sourceUrl,
+    orderNumber: cleanString(record.orderNumber ?? record.order_number ?? record.closureOrder ?? record.closure_order) || undefined,
+    status: normalizeClosureStatus(record.status),
+    closureType: normalizeClosureType(record.closureType ?? record.closure_type ?? record.type),
+    startsAt: normalizeIsoString(record.startsAt ?? record.starts_at ?? record.startDate ?? record.start_date),
+    endsAt: normalizeIsoString(record.endsAt ?? record.ends_at ?? record.endDate ?? record.end_date),
+    lastVerifiedAt: normalizeIsoString(record.lastVerifiedAt ?? record.last_verified_at) ?? source.checkedAt,
+    confidenceScore: clampNumber(Number(record.confidenceScore ?? record.confidence_score ?? 90), 0, 100),
+    adminStates,
+    routePublicIds: readStringList(record, ['routePublicId', 'route_public_id', 'routePublicIds', 'route_public_ids']),
+    segmentPublicIds: readStringList(record, ['segmentPublicId', 'segment_public_id', 'segmentPublicIds', 'segment_public_ids']),
+    providerFeatureIds: readStringList(record, ['providerFeatureId', 'provider_feature_id', 'providerFeatureIds', 'provider_feature_ids']),
+    routePlanIds: readStringList(record, [
+      'routePlanId',
+      'route_plan_id',
+      'routePlanIds',
+      'route_plan_ids',
+      'routeId',
+      'route_id',
+      'routeIds',
+      'route_ids',
+      'routeNumber',
+      'route_number',
+    ]),
+    routeNames: readStringList(record, ['routeName', 'route_name', 'routeNames', 'route_names']),
+    routeIdentityPatterns: readStringList(record, [
+      'routeIdentity',
+      'route_identity',
+      'routeNamePattern',
+      'route_name_pattern',
+      'routeNameIncludes',
+      'route_name_includes',
+      'routeIdentityPatterns',
+      'route_identity_patterns',
+    ]),
+  };
+}
+
+function normalizeCurrentConditionAdvisory(
+  value: unknown,
+  source: Pick<BlmGtlfCurrentConditionSource, 'adminState' | 'sourceUrl' | 'checkedAt'>,
+): BlmGtlfCurrentConditionAdvisory | null {
+  const record = readRecord(value);
+  if (!record) return null;
+  const title = cleanString(record.title ?? record.name ?? record.orderNumber ?? record.order_number);
+  if (!title) return null;
+  const adminStates = normalizeBlmAdminStates([
+    ...readStringList(record, ['adminState', 'admin_state', 'adminStates', 'admin_states', 'state', 'states']),
+    source.adminState,
+  ]);
+
+  return {
+    id: cleanString(record.id ?? record.providerAdvisoryId ?? record.provider_advisory_id) || undefined,
+    title,
+    summary: cleanString(record.summary ?? record.description ?? record.notice) || undefined,
+    sourceUrl: cleanString(record.sourceUrl ?? record.source_url) || source.sourceUrl,
+    orderNumber: cleanString(record.orderNumber ?? record.order_number ?? record.fireOrder ?? record.fire_order) || undefined,
+    status: normalizeAdvisoryStatus(record.status),
+    advisoryType: normalizeAdvisoryType(record.advisoryType ?? record.advisory_type ?? record.type),
+    startsAt: normalizeIsoString(record.startsAt ?? record.starts_at ?? record.startDate ?? record.start_date),
+    endsAt: normalizeIsoString(record.endsAt ?? record.ends_at ?? record.endDate ?? record.end_date),
+    lastVerifiedAt: normalizeIsoString(record.lastVerifiedAt ?? record.last_verified_at) ?? source.checkedAt,
+    confidenceScore: clampNumber(Number(record.confidenceScore ?? record.confidence_score ?? 88), 0, 100),
+    adminStates,
+    routePublicIds: readStringList(record, ['routePublicId', 'route_public_id', 'routePublicIds', 'route_public_ids']),
+    segmentPublicIds: readStringList(record, ['segmentPublicId', 'segment_public_id', 'segmentPublicIds', 'segment_public_ids']),
+    providerFeatureIds: readStringList(record, ['providerFeatureId', 'provider_feature_id', 'providerFeatureIds', 'provider_feature_ids']),
+    routePlanIds: readStringList(record, [
+      'routePlanId',
+      'route_plan_id',
+      'routePlanIds',
+      'route_plan_ids',
+      'routeId',
+      'route_id',
+      'routeIds',
+      'route_ids',
+      'routeNumber',
+      'route_number',
+    ]),
+    routeNames: readStringList(record, ['routeName', 'route_name', 'routeNames', 'route_names']),
+    routeIdentityPatterns: readStringList(record, [
+      'routeIdentity',
+      'route_identity',
+      'routeName',
+      'route_name',
+      'routeNamePattern',
+      'route_name_pattern',
+      'routeNameIncludes',
+      'route_name_includes',
+      'routeIdentityPatterns',
+      'route_identity_patterns',
+    ]),
+  };
+}
+
+export function normalizeBlmGtlfCurrentConditionSources(
+  value: unknown,
+  states: string[] = [],
+  nowIso = new Date().toISOString(),
+): BlmGtlfCurrentConditionSource[] {
+  const selectedStates = normalizeBlmAdminStates(states);
+  return currentConditionInputs(value)
+    .map((record) => {
+      const adminState = sourceAdminState(record, selectedStates);
+      if (!adminState) return null;
+      const checkedAt = normalizeIsoString(record.checkedAt ?? record.checked_at ?? record.lastCheckedAt ?? record.last_checked_at) ?? nowIso;
+      const source: BlmGtlfCurrentConditionSource = {
+        adminState,
+        providerId: cleanString(record.providerId ?? record.provider_id) || `blm_current_conditions_${adminState.toLowerCase()}`,
+        label: cleanString(record.label ?? record.name) || `BLM ${adminState} alerts and current travel information`,
+        sourceUrl: cleanString(record.sourceUrl ?? record.source_url) || BLM_GTLF_CURRENT_CONDITIONS_URI,
+        referenceUrl: cleanString(record.referenceUrl ?? record.reference_url) ||
+          cleanString(record.sourceUrl ?? record.source_url) ||
+          BLM_GTLF_CURRENT_CONDITIONS_URI,
+        checkedAt,
+        staleAt: normalizeIsoString(record.staleAt ?? record.stale_at) ?? addDaysIso(checkedAt, 7),
+        closures: [],
+        advisories: [],
+      };
+      const closures = Array.isArray(record.closures) ? record.closures : [];
+      source.closures = closures
+        .map((closure) => normalizeCurrentConditionClosure(closure, source))
+        .filter((closure): closure is BlmGtlfCurrentConditionClosure => !!closure);
+      const advisories = Array.isArray(record.advisories) ? record.advisories : [];
+      source.advisories = advisories
+        .map((advisory) => normalizeCurrentConditionAdvisory(advisory, source))
+        .filter((advisory): advisory is BlmGtlfCurrentConditionAdvisory => !!advisory);
+      return source;
+    })
+    .filter((source): source is BlmGtlfCurrentConditionSource => !!source);
+}
+
+export function routeCurrentConditionSourceUpsertForBlmGtlf(source: BlmGtlfCurrentConditionSource) {
+  return {
+    provider_id: source.providerId,
+    name: source.label,
+    source_type: 'federal_agency',
+    authority: 'official_closure',
+    source_uri: source.sourceUrl,
+    attribution: 'Bureau of Land Management closure orders, alerts, and current travel information',
+    license: 'agency published terms',
+    refresh_frequency: 'current condition review before recommendation sync',
+    status: 'active',
+    last_checked_at: source.checkedAt,
+  };
+}
+
+function normalizedText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function metadataValues(value: unknown, keys: string[]): string[] {
+  const record = readRecord(value);
+  if (!record) return [];
+  return readStringList(record, keys);
+}
+
+function routePlanAliases(routePlanId: string): string[] {
+  const cleanRoutePlanId = cleanString(routePlanId);
+  return uniqueStrings([
+    cleanRoutePlanId,
+    cleanRoutePlanId ? `route ${cleanRoutePlanId}` : '',
+    cleanRoutePlanId ? `road ${cleanRoutePlanId}` : '',
+    cleanRoutePlanId ? `blm road ${cleanRoutePlanId}` : '',
+    cleanRoutePlanId ? `blm trail ${cleanRoutePlanId}` : '',
+  ]);
+}
+
+function routeAdminStates(target: BlmGtlfRouteUpsert | BlmGtlfAggregateRouteUpsert): string[] {
+  const route = target.verifiedRoute;
+  const sourceMetadata = readRecord(target.verifiedRouteSource.metadata);
+  const communitySignal = readRecord(route.community_signal);
+  return normalizeBlmAdminStates([
+    ...(Array.isArray(route.tags) ? route.tags.map((tag) => cleanString(tag)) : []),
+    ...metadataValues(sourceMetadata, ['adminState', 'admin_state', 'states']),
+    ...metadataValues(communitySignal, ['adminState', 'admin_state', 'states']),
+  ]);
+}
+
+function routeMatchValues(target: BlmGtlfRouteUpsert | BlmGtlfAggregateRouteUpsert): string[] {
+  const route = target.verifiedRoute;
+  const sourceMetadata = readRecord(target.verifiedRouteSource.metadata);
+  const communitySignal = readRecord(route.community_signal);
+  return uniqueStrings([
+    cleanString(route.public_id),
+    cleanString(route.name),
+    ...(Array.isArray(route.tags) ? route.tags.map((tag) => cleanString(tag)) : []),
+    ...(Array.isArray(target.segmentPublicIds) ? target.segmentPublicIds.map((id) => cleanString(id)) : []),
+    ...(Array.isArray(target.segmentProviderFeatureIds) ? target.segmentProviderFeatureIds.map((id) => cleanString(id)) : []),
+    ...metadataValues(sourceMetadata, [
+      'providerFeatureId',
+      'providerFeatureIds',
+      'segmentPublicId',
+      'segmentPublicIds',
+      'routePlanId',
+      'route_plan_id',
+      'sourceLayer',
+    ]),
+    ...metadataValues(communitySignal, [
+      'providerFeatureId',
+      'providerFeatureIds',
+      'segmentPublicId',
+      'segmentPublicIds',
+      'routePlanId',
+      'route_plan_id',
+    ]),
+  ]);
+}
+
+function anyExactMatch(candidates: string[], needles: string[]): boolean {
+  const candidateSet = new Set(candidates.map((candidate) => candidate.toLowerCase()));
+  return needles.some((needle) => candidateSet.has(needle.toLowerCase()));
+}
+
+function anyTextMatch(candidates: string[], needles: string[]): boolean {
+  const normalizedCandidates = candidates.map(normalizedText).filter(Boolean);
+  return needles.some((needle) => {
+    const normalizedNeedle = normalizedText(needle);
+    if (normalizedNeedle.length < 2) return false;
+    const slugNeedle = slugify(needle).replace(/-/g, ' ');
+    return normalizedCandidates.some((candidate) =>
+      candidate === normalizedNeedle ||
+      candidate.includes(normalizedNeedle) ||
+      (slugNeedle.length >= 2 && candidate.includes(slugNeedle)),
+    );
+  });
+}
+
+function closureMatchesRoute(
+  closure: BlmGtlfCurrentConditionClosure,
+  target: BlmGtlfRouteUpsert | BlmGtlfAggregateRouteUpsert,
+): boolean {
+  const closureStates = normalizeBlmAdminStates(closure.adminStates);
+  const targetStates = routeAdminStates(target);
+  if (closureStates.length > 0) {
+    if (targetStates.length === 0) return false;
+    if (!closureStates.some((state) => targetStates.includes(state))) return false;
+  }
+
+  const candidates = routeMatchValues(target);
+  if (anyExactMatch(candidates, closure.routePublicIds)) return true;
+  if (anyExactMatch(candidates, closure.segmentPublicIds)) return true;
+  if (anyExactMatch(candidates, closure.providerFeatureIds)) return true;
+  if (anyExactMatch(candidates, closure.routePlanIds)) return true;
+  if (anyTextMatch(candidates, closure.routeNames)) return true;
+  if (anyTextMatch(candidates, closure.routeIdentityPatterns)) return true;
+  return closure.routePlanIds.some((routePlanId) => anyTextMatch(candidates, routePlanAliases(routePlanId)));
+}
+
+function advisoryHasRouteScope(advisory: BlmGtlfCurrentConditionAdvisory): boolean {
+  return advisory.routePublicIds.length > 0 ||
+    advisory.segmentPublicIds.length > 0 ||
+    advisory.providerFeatureIds.length > 0 ||
+    advisory.routePlanIds.length > 0 ||
+    advisory.routeNames.length > 0 ||
+    advisory.routeIdentityPatterns.length > 0;
+}
+
+function advisoryMatchesRoute(
+  advisory: BlmGtlfCurrentConditionAdvisory,
+  target: BlmGtlfRouteUpsert | BlmGtlfAggregateRouteUpsert,
+): boolean {
+  const advisoryStates = normalizeBlmAdminStates(advisory.adminStates);
+  const targetStates = routeAdminStates(target);
+  if (advisoryStates.length > 0) {
+    if (targetStates.length === 0) return false;
+    if (!advisoryStates.some((state) => targetStates.includes(state))) return false;
+  }
+
+  if (!advisoryHasRouteScope(advisory)) return true;
+
+  const candidates = routeMatchValues(target);
+  if (anyExactMatch(candidates, advisory.routePublicIds)) return true;
+  if (anyExactMatch(candidates, advisory.segmentPublicIds)) return true;
+  if (anyExactMatch(candidates, advisory.providerFeatureIds)) return true;
+  if (anyExactMatch(candidates, advisory.routePlanIds)) return true;
+  if (anyTextMatch(candidates, advisory.routeNames)) return true;
+  if (anyTextMatch(candidates, advisory.routeIdentityPatterns)) return true;
+  return advisory.routePlanIds.some((routePlanId) => anyTextMatch(candidates, routePlanAliases(routePlanId)));
+}
+
+function closureIsActive(closure: BlmGtlfCurrentConditionClosure, checkedAt: string): boolean {
+  if (closure.status !== 'active') return false;
+  const checkedTime = Date.parse(checkedAt);
+  const endTime = closure.endsAt ? Date.parse(closure.endsAt) : Number.NaN;
+  return !(Number.isFinite(checkedTime) && Number.isFinite(endTime) && endTime < checkedTime);
+}
+
+function advisoryIsActive(advisory: BlmGtlfCurrentConditionAdvisory, checkedAt: string): boolean {
+  if (advisory.status !== 'active') return false;
+  const checkedTime = Date.parse(checkedAt);
+  const endTime = advisory.endsAt ? Date.parse(advisory.endsAt) : Number.NaN;
+  return !(Number.isFinite(checkedTime) && Number.isFinite(endTime) && endTime < checkedTime);
+}
+
+function closureSummary(source: BlmGtlfCurrentConditionSource, closure: BlmGtlfCurrentConditionClosure): string {
+  return [
+    closure.title,
+    closure.summary,
+    closure.orderNumber ? `BLM Order ${closure.orderNumber}` : '',
+    source.label,
+    closure.sourceUrl,
+  ].filter(Boolean).join(' | ');
+}
+
+function advisorySummary(source: BlmGtlfCurrentConditionSource, advisory: BlmGtlfCurrentConditionAdvisory): string {
+  return [
+    advisory.title,
+    advisory.summary,
+    advisory.orderNumber ? `BLM Order ${advisory.orderNumber}` : '',
+    source.label,
+    advisory.sourceUrl,
+  ].filter(Boolean).join(' | ');
+}
+
+export function applyBlmGtlfCurrentConditionSources<T extends BlmGtlfRouteUpsert | BlmGtlfAggregateRouteUpsert>(
+  target: T,
+  sources: BlmGtlfCurrentConditionSource[] = [],
+): T {
+  const targetStates = routeAdminStates(target);
+  const relevantSources = sources.filter((source) => targetStates.includes(source.adminState));
+  if (relevantSources.length === 0) return target;
+
+  const matched = relevantSources.flatMap((source) =>
+    source.closures
+      .filter((closure) => closureMatchesRoute(closure, target))
+      .map((closure) => ({ source, closure })),
+  );
+  const matchedAdvisories = relevantSources.flatMap((source) =>
+    source.advisories
+      .filter((advisory) => advisoryMatchesRoute(advisory, target))
+      .map((advisory) => ({ source, advisory })),
+  );
+  const activeMatches = matched.filter(({ source, closure }) => closureIsActive(closure, source.checkedAt));
+  const watchMatches = matched.filter(({ source, closure }) => !closureIsActive(closure, source.checkedAt));
+  const activeAdvisories = matchedAdvisories.filter(({ source, advisory }) => advisoryIsActive(advisory, source.checkedAt));
+  const watchAdvisories = matchedAdvisories.filter(({ source, advisory }) => !advisoryIsActive(advisory, source.checkedAt));
+  const existingActiveClosureCount = Number(target.verifiedRoute.active_closure_count ?? 0);
+  const conditionSummary = {
+    sourceCount: relevantSources.length,
+    matchedClosureCount: matched.length,
+    activeClosureCount: activeMatches.length,
+    watchClosureCount: watchMatches.length,
+    matchedAdvisoryCount: matchedAdvisories.length,
+    activeAdvisoryCount: activeAdvisories.length,
+    watchAdvisoryCount: watchAdvisories.length,
+    advisorySummaries: uniqueStrings(matchedAdvisories.map(({ source, advisory }) => advisorySummary(source, advisory))),
+    checkedAt: uniqueStrings(relevantSources.map((source) => source.checkedAt)),
+    staleAt: uniqueStrings(relevantSources.map((source) => source.staleAt)),
+    caveat: BLM_GTLF_CAVEAT,
+  };
+  const existingCommunitySignal = readRecord(target.verifiedRoute.community_signal) ?? {};
+  const existingMetadata = readRecord(target.verifiedRouteSource.metadata) ?? {};
+  const baseWarnings = Array.isArray(target.verifiedRoute.warning_reasons)
+    ? target.verifiedRoute.warning_reasons
+      .map((warning) => cleanString(warning))
+      .filter((warning) => !/has not ingested local closure orders/i.test(warning))
+    : [];
+  const baseBlockers = Array.isArray(target.verifiedRoute.blocker_reasons)
+    ? target.verifiedRoute.blocker_reasons.map((blocker) => cleanString(blocker))
+    : [];
+  const baseClosures = Array.isArray(target.verifiedRoute.closure_summaries)
+    ? target.verifiedRoute.closure_summaries.map((summary) => cleanString(summary))
+    : [];
+
+  const verifiedRoute = {
+    ...target.verifiedRoute,
+    active_closure_count: existingActiveClosureCount + activeMatches.length,
+    warning_reasons: uniqueStrings([
+      ...baseWarnings,
+      ...relevantSources.map((source) => `Official BLM current-condition source checked: ${source.label} at ${source.checkedAt}.`),
+      ...watchMatches.map(({ closure }) => `Official BLM current-condition notice requires review: ${closure.title}.`),
+      ...activeAdvisories.map(({ advisory }) => `Active official BLM advisory: ${advisory.title}.`),
+      ...watchAdvisories.map(({ advisory }) => `Official BLM current-condition advisory requires review: ${advisory.title}.`),
+    ]),
+    blocker_reasons: uniqueStrings([
+      ...baseBlockers,
+      ...activeMatches.map(({ closure }) => `Active official closure: ${closure.title}.`),
+    ]),
+    closure_summaries: uniqueStrings([
+      ...baseClosures,
+      ...matched.map(({ source, closure }) => closureSummary(source, closure)),
+    ]),
+    community_signal: {
+      ...existingCommunitySignal,
+      currentConditions: conditionSummary,
+    },
+  };
+
+  if (activeMatches.length > 0) {
+    verifiedRoute.recommendation_status = 'not_recommended';
+    verifiedRoute.verification_status = 'not_recommended';
+    verifiedRoute.confidence_score = Math.min(Number(verifiedRoute.confidence_score ?? 0), 74);
+  }
+
+  return {
+    ...target,
+    verifiedRoute,
+    verifiedRouteSource: {
+      ...target.verifiedRouteSource,
+      metadata: {
+        ...existingMetadata,
+        currentConditions: conditionSummary,
+      },
+    },
   };
 }
 

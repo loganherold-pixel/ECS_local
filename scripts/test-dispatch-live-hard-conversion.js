@@ -439,7 +439,14 @@ assert.ok(commandCenterSource.includes('No live dispatch events'), 'Empty Dispat
 assert.ok(commandCenterSource.includes('FlatList'), 'Dispatch feed should use an internal list.');
 assert.ok(!commandCenterSource.includes('<ScrollView'), 'Dispatch page should not use page-level scrolling.');
 assert.ok(commandCenterSource.includes('feedPanel:') && commandCenterSource.includes('flex: 1'), 'CAD feed panel should flex to available height.');
-assert.ok(commandCenterSource.includes("sourceState = getLiveSourceState"), 'Dispatch UI should expose live/cache/unavailable source state.');
+assert.ok(
+  commandCenterSource.includes('getDispatchChannelSnapshots') &&
+    commandCenterSource.includes('isLiveSource = channel.sourceState') &&
+    commandCenterSource.includes('isCachedSource = channel.sourceState') &&
+    commandCenterSource.includes('isUnavailableSource = channel.sourceState') &&
+    commandCenterSource.includes('getSourceStateLabel(channel.sourceState)'),
+  'Dispatch UI should expose live/cache/unavailable source state.',
+);
 assert.ok(!commandCenterSource.includes('MOCK_DISPATCH_CAD_EVENTS'), 'Dispatch tab must not import seeded CAD events.');
 assert.ok(!commandCenterSource.includes('dispatchMockData'), 'Dispatch tab must not import dispatch seed data.');
 assert.ok(commandCenterSource.includes('function isThreatDrilldownEvent(event: DispatchEvent)'), 'Dispatch should centralize threat drilldown trigger logic.');

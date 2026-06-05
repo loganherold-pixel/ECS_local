@@ -1,4 +1,5 @@
 import { computeBounds } from './mapConfig';
+import { buildHighlightedRouteInstruction } from './routeGuidanceCopy';
 
 export type RoadNavStatus =
   | 'idle'
@@ -459,7 +460,7 @@ export function buildRoadRouteFromCachedGeometry(params: {
     steps: [
       {
         id: 'cached-offline-route',
-        instruction: `Follow cached route toward ${params.destination.title}`,
+        instruction: buildHighlightedRouteInstruction(params.destination.title),
         distanceM,
         durationS,
         startDistanceM: 0,

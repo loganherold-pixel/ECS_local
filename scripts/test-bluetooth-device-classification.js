@@ -294,7 +294,7 @@ const propaneRoute = routeBluetoothDevice({
 assert.strictEqual(propaneRoute.owner, 'sensor');
 assert.strictEqual(propaneRoute.providerId, 'propane_monitor');
 assert.strictEqual(propaneRoute.deviceCategory, 'propane_monitor');
-assert.strictEqual(propaneRoute.supportLabel, 'Live Sensor');
+assert.strictEqual(propaneRoute.supportLabel, 'Linkable Sensor');
 assert.strictEqual(isReleaseScannerBluetoothRoute(propaneRoute), true);
 
 const mopekaProManufacturerData = Buffer.from([
@@ -417,6 +417,36 @@ assert.strictEqual(mopekaUniversalServiceDataRoute.deviceCategory, 'water_tank_m
 assert.strictEqual(mopekaUniversalServiceDataRoute.displayName, 'Mopeka Water Tank');
 assert.strictEqual(isReleaseScannerBluetoothRoute(mopekaUniversalServiceDataRoute), true);
 
+for (const [id, name] of [
+  ['mopeka-td40-liquid-route', 'Mopeka TD40'],
+  ['td200-liquid-route', 'TD200'],
+  ['pro200-liquid-route', 'Pro200'],
+]) {
+  const route = routeBluetoothDevice({
+    id,
+    name,
+    isLikelyOBD: false,
+    rssi: -57,
+  });
+  assert.strictEqual(
+    route.owner,
+    'sensor',
+    `${name} should route to the sensor domain as a Mopeka liquid monitor family`,
+  );
+  assert.strictEqual(route.providerId, 'water_monitor');
+  assert.strictEqual(route.deviceCategory, 'water_tank_monitor');
+  assert.strictEqual(route.supportLabel, 'Linkable Sensor');
+  assert(
+    /parser-pending until a decoded level percentage is received/i.test(route.supportNote || ''),
+    `${name} should stay parser-pending until decoded liquid percentage exists`,
+  );
+  assert.strictEqual(
+    isReleaseScannerBluetoothRoute(route),
+    true,
+    `${name} should remain visible in approved scanner results`,
+  );
+}
+
 const namedMopekaWaterRoute = routeBluetoothDevice({
   id: 'mopeka-named-water-route',
   name: 'Water Tank',
@@ -465,7 +495,7 @@ const waterRoute = routeBluetoothDevice({
 assert.strictEqual(waterRoute.owner, 'sensor');
 assert.strictEqual(waterRoute.providerId, 'water_monitor');
 assert.strictEqual(waterRoute.deviceCategory, 'water_tank_monitor');
-assert.strictEqual(waterRoute.supportLabel, 'Live Sensor');
+assert.strictEqual(waterRoute.supportLabel, 'Linkable Sensor');
 assert.strictEqual(isReleaseScannerBluetoothRoute(waterRoute), true);
 
 for (const [id, name] of [

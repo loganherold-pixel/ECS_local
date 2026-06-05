@@ -19,6 +19,7 @@
 // ============================================================
 
 import { Platform } from 'react-native';
+import { ensureForegroundLocationPermission } from './locationPermissions';
 import { telemetryConfigStore } from './telemetryStore';
 import { missionEventStore } from './missionStore';
 import type { ExpeditionEventType } from './missionTypes';
@@ -595,7 +596,7 @@ class GPSDistanceTracker {
       const Location = await import('expo-location' as any);
 
       // Request foreground permissions
-      const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
+      const { status: fgStatus } = await ensureForegroundLocationPermission(Location);
       if (fgStatus !== 'granted') {
         console.warn(TAG, 'Foreground location permission denied');
         return false;

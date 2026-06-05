@@ -46,8 +46,8 @@ assert.match(
 );
 assert.match(
   source,
-  /onEmergencyPing=\{handleRecoveryAssist\}/,
-  'Dispatch Convoy panel should retain the direct emergency coordinate ping action.',
+  /const handleEmergencyPingButtonPress = useCallback[\s\S]*void handleRecoveryAssist\(\);[\s\S]*onEmergencyPing=\{handleEmergencyPingButtonPress\}/,
+  'Dispatch Convoy panel should retain the emergency coordinate ping action through the cancel/clear-aware Recovery Assist wrapper.',
 );
 assert.ok(!/>\s*More\s*<\/Text>/.test(source), 'Dispatch primary action row should not render a More button.');
 
@@ -98,7 +98,7 @@ assert.match(
 );
 assert.match(
   source,
-  /getRecoveryCadEventContext\(teamSnapshot, currentExpedition\)/,
+  /getRecoveryCadEventContext\(teamSnapshot, currentExpedition, activeConvoyControl\)/,
   'Recovery CAD event creation should include available team/session context.',
 );
 assert.match(

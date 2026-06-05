@@ -32,8 +32,8 @@ assert.ok(
 
 assert.ok(
   expeditionStoreSource.includes('const DEFAULT_GEOFENCE_RADIUS = 200') &&
-    expeditionStoreSource.includes('getGeofenceRadius(): number {\n    return DEFAULT_GEOFENCE_RADIUS;\n  }') &&
-    expeditionStoreSource.includes('setGeofenceRadius(_meters: number): void {\n    sClear(KEYS.geofenceRadius);\n  }'),
+    /getGeofenceRadius\(\): number\s*\{\s*return DEFAULT_GEOFENCE_RADIUS;\s*\}/.test(expeditionStoreSource) &&
+    /setGeofenceRadius\(_meters: number\): void\s*\{\s*sClear\(KEYS\.geofenceRadius\);\s*\}/.test(expeditionStoreSource),
   'Expedition state store should pin the geofence radius to the ECS 200m default and clear legacy writes.',
 );
 

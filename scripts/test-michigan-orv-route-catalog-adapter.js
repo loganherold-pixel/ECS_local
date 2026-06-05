@@ -36,17 +36,17 @@ assert(
     MICHIGAN_ORV_GPX_SOURCES.some((source) => source.key === 'atlanta_route' && source.routeKind === 'route') &&
     MICHIGAN_ORV_GPX_SOURCES.some((source) => source.key === 'evart_motorcycle_trail' && source.routeKind === 'motorcycle') &&
     MICHIGAN_ORV_GPX_SOURCES.some((source) => source.key === 'statewide_orv_trail_gpx' && source.routeKind === 'mixed'),
-  'Michigan adapter should include named official DNR ORV GPX pilot sources plus the opt-in statewide GPX source',
+  'Michigan adapter should include named official DNR ORV GPX sources including the statewide GPX source',
 );
 assert.deepStrictEqual(
   selectMichiganOrvGpxSources(undefined).map((source) => source.key),
-  ['alcona_orv_trail', 'atlanta_route', 'evart_motorcycle_trail'],
-  'Michigan ORV default source selection should stay on the lightweight pilot sources',
+  ['alcona_orv_trail', 'atlanta_route', 'evart_motorcycle_trail', 'statewide_orv_trail_gpx'],
+  'Michigan ORV default source selection should include the bounded statewide source',
 );
 assert.deepStrictEqual(
   selectMichiganOrvGpxSources('statewide_orv_trail_gpx').map((source) => source.key),
   ['statewide_orv_trail_gpx'],
-  'Michigan ORV statewide GPX should be available only when explicitly requested',
+  'Michigan ORV statewide GPX should remain explicitly requestable on its own',
 );
 
 const sourceUpsert = michiganOrvSourceUpsert('2026-06-01T00:00:00.000Z');
@@ -185,7 +185,12 @@ assert(fs.existsSync(workflowPath), 'Michigan DNR ORV sync workflow should exist
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 assert(workflow.includes('sync_scope:'), 'Michigan ORV sync workflow should expose a pilot/statewide sync scope selector');
 assert(workflow.includes('pilot') && workflow.includes('statewide'), 'Michigan ORV sync workflow should document pilot and statewide scopes');
-assert(workflow.includes('statewide_orv_trail_gpx'), 'Michigan ORV sync workflow should expose the opt-in statewide GPX source key');
+assert(workflow.includes('default: statewide'), 'Michigan ORV sync workflow should default to the bounded statewide GPX source set');
+assert(
+  workflow.includes("SYNC_SCOPE: ${{ inputs.sync_scope || 'statewide' }}"),
+  'Michigan ORV sync workflow environment should fall back to statewide sync scope',
+);
+assert(workflow.includes('statewide_orv_trail_gpx'), 'Michigan ORV sync workflow should expose the statewide GPX source key');
 assert(workflow.includes('syncScope'), 'Michigan ORV sync workflow payload should preserve the selected sync scope for telemetry');
 assert(workflow.includes('--write-out "%{http_code}"'), 'Michigan ORV sync workflow should preserve response bodies on HTTP errors');
 assert(workflow.includes('route-catalog-michigan-orv-sync-response.json'), 'Michigan ORV sync workflow should print sanitized failed sync responses');

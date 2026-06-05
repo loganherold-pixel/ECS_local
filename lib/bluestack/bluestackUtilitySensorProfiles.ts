@@ -2,8 +2,6 @@ import type { BluetoothAccessoryRecord } from '../bluetoothAccessoryRegistry';
 import type { BluestackClassifyInput } from './bluestackTypes';
 
 export type BluestackUtilitySensorProfileStatus =
-  | 'identified_live_ready'
-  | 'generic_live_ready'
   | 'identified_parser_pending'
   | 'generic_parser_pending'
   | 'unsupported';
@@ -13,7 +11,7 @@ export interface BluestackUtilitySensorProfile {
   label: string;
   category: 'propane_monitor' | 'water_tank_monitor';
   status: BluestackUtilitySensorProfileStatus;
-  parserStatus: 'live_ready' | 'parser_pending' | 'generic_parser_pending' | 'unsupported';
+  parserStatus: 'parser_pending' | 'generic_parser_pending' | 'unsupported';
   detail: string;
 }
 
@@ -58,7 +56,8 @@ function hasWaterIntent(text: string): boolean {
   return (
     /\bwater\b|\bfresh\s*tank\b|\bfresh\s*water\b|\bfluid\b|\bliquid\b|\bsee\s*level\b|\bseelevel\b|\bgarnet\b/.test(text) ||
     /\bwater\s*(tank|level|monitor|sensor)\b/.test(text) ||
-    /\bwater_monitor\b|\bwater monitor\b|\bwater_tank_monitor\b|\bwater tank monitor\b/.test(text)
+    /\bwater_monitor\b|\bwater monitor\b|\bwater_tank_monitor\b|\bwater tank monitor\b/.test(text) ||
+    /\btd\s*(40|200)\b|\bpro\s*200\b|\bpro200\b|\btop\s*down\s*(liquid|water|tank)\b/.test(text)
   );
 }
 
@@ -83,14 +82,14 @@ export function identifyBluestackUtilitySensorProfile(
       id: isMopeka ? 'mopeka_water_monitor' : isSeeLevel ? 'seelevel_water_monitor' : 'generic_water_monitor',
       label: isMopeka ? 'Mopeka Water / Fluid Monitor' : isSeeLevel ? 'SeeLevel Water Monitor' : 'Water / Fluid Monitor',
       category: 'water_tank_monitor',
-      status: isMopeka || isSeeLevel ? 'identified_live_ready' : 'generic_live_ready',
-      parserStatus: 'live_ready',
+      status: isMopeka || isSeeLevel ? 'identified_parser_pending' : 'generic_parser_pending',
+      parserStatus: isMopeka || isSeeLevel ? 'parser_pending' : 'generic_parser_pending',
       detail:
         isMopeka
-          ? 'Mopeka water or liquid profile identified. ECS can link over native BLE and will promote live level only after a decoded percentage is received.'
+          ? 'Mopeka water or liquid profile identified. ECS can link over native BLE; tank percentage remains parser-pending until a decoded level percentage is received.'
           : isSeeLevel
-            ? 'SeeLevel water profile identified. ECS can link over native BLE and will promote live tank level only after a decoded percentage is received.'
-            : 'Water or fluid monitor profile identified. ECS can link over native BLE and will promote live level only after a decoded percentage is received.',
+            ? 'SeeLevel water profile identified. ECS can link over native BLE; tank percentage remains parser-pending until a decoded level percentage is received.'
+            : 'Water or fluid monitor profile identified. ECS can link over native BLE; live level remains pending until a decoded percentage is received.',
     };
   }
 
@@ -99,12 +98,12 @@ export function identifyBluestackUtilitySensorProfile(
       id: isMopeka ? 'mopeka_propane_monitor' : 'generic_propane_monitor',
       label: isMopeka ? 'Mopeka Propane Monitor' : 'Propane Monitor',
       category: 'propane_monitor',
-      status: isMopeka ? 'identified_live_ready' : 'generic_live_ready',
-      parserStatus: 'live_ready',
+      status: isMopeka ? 'identified_parser_pending' : 'generic_parser_pending',
+      parserStatus: isMopeka ? 'parser_pending' : 'generic_parser_pending',
       detail:
         isMopeka
-          ? 'Mopeka propane profile identified. ECS can link over native BLE and will promote live tank level only after a decoded percentage is received.'
-          : 'Propane or LPG monitor profile identified. ECS can link over native BLE and will promote live tank level only after a decoded percentage is received.',
+          ? 'Mopeka propane profile identified. ECS can link over native BLE; tank percentage remains parser-pending until a decoded level percentage is received.'
+          : 'Propane or LPG monitor profile identified. ECS can link over native BLE; live tank level remains pending until a decoded percentage is received.',
     };
   }
 

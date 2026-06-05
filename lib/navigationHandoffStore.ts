@@ -497,6 +497,30 @@ export function computeTrailLengthMiles(points: RoadNavCoordinate[]): number | n
   return Math.round(total * 10) / 10;
 }
 
+export type NavigationHandoffBuildOptions = {
+  approachOriginCoordinate?: RoadNavCoordinate | null;
+};
+
+function endpointDistanceMeters(
+  anchor: RoadNavCoordinate | null,
+  endpoint: RoadNavCoordinate,
+): number {
+  if (!anchor) return Number.POSITIVE_INFINITY;
+  return haversineMiles(anchor, endpoint) * 1609.344;
+}
+
+function orientTrailGeometryFromEndpoint(
+  points: RoadNavCoordinate[],
+  preferredStart: RoadNavCoordinate | null,
+): RoadNavCoordinate[] {
+  if (points.length < 2 || !preferredStart) return points;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const firstDistanceM = endpointDistanceMeters(preferredStart, first);
+  const lastDistanceM = endpointDistanceMeters(preferredStart, last);
+  return lastDistanceM < firstDistanceM ? [...points].reverse() : points;
+}
+
 export function classifyNavigationHandoff(
   payload: Pick<
     NavigationHandoffPayload,
@@ -552,6 +576,7 @@ export function toRoadDestinationFromHandoff(
 
 export function buildExploreNavigationPayload(
   route: ExpeditionOpportunity,
+  options: NavigationHandoffBuildOptions = {},
 ): NavigationHandoffPayload {
   const title = String(route.name || 'Trail destination').trim();
   const subtitle = [route.region, route.terrainType].filter(Boolean).join(' • ') || null;
@@ -560,23 +585,35 @@ export function buildExploreNavigationPayload(
     routeRecord.routeMetadata && typeof routeRecord.routeMetadata === 'object'
       ? (routeRecord.routeMetadata as Record<string, unknown>)
       : {};
-  const trailheadCoordinate =
+  const declaredTrailheadCoordinate =
     Number.isFinite(Number(route.startLat)) && Number.isFinite(Number(route.startLng))
       ? { lat: Number(route.startLat), lng: Number(route.startLng) }
       : null;
+  const approachOriginCoordinate = normalizeCoordinate(options.approachOriginCoordinate);
+  const preferredTrailStart = approachOriginCoordinate ?? declaredTrailheadCoordinate;
   const trailGeometryResult = extractTrailGeometryResult(route, {
-    preferredStart: trailheadCoordinate,
+    preferredStart: preferredTrailStart,
   });
-  const trailGeometry = trailGeometryResult.points;
-  const trailGeometrySegments = trailGeometryResult.segments;
-  const coordinate =
-    normalizeCoordinate(routeRecord.coordinate) ??
-    extractFinalCoordinate(route) ??
-    (trailGeometry.length > 0 ? trailGeometry[trailGeometry.length - 1] : null) ??
-    trailheadCoordinate;
-  const roadDestinationCoordinate = extractRoadCoordinate(route) ?? (
-    trailGeometry.length > 1 ? trailheadCoordinate : null
+  const trailGeometry = orientTrailGeometryFromEndpoint(
+    trailGeometryResult.points,
+    preferredTrailStart,
   );
+  const trailGeometrySegments = trailGeometryResult.segments;
+  const trailheadCoordinate =
+    trailGeometry.length > 1
+      ? trailGeometry[0]
+      : declaredTrailheadCoordinate;
+  const finalTrailCoordinate = trailGeometry.length > 1
+    ? trailGeometry[trailGeometry.length - 1]
+    : null;
+  const coordinate =
+    finalTrailCoordinate ??
+    extractFinalCoordinate(route) ??
+    normalizeCoordinate(routeRecord.coordinate) ??
+    trailheadCoordinate;
+  const roadDestinationCoordinate = trailGeometry.length > 1
+    ? trailheadCoordinate
+    : extractRoadCoordinate(route);
   const trailWaypoints = normalizeTrailWaypoints(route, trailGeometry);
   const trailDecisionPoints = normalizeTrailDecisionPoints(route, trailGeometry);
   const campMarkers = extractExploreRouteCampMarkers(route);

@@ -82,17 +82,15 @@ for (const field of [
 
 for (const fragment of [
   'getStatusPillTone',
-  'getSourceTone',
-  'formatLastTelemetryLabel',
+  'getCompactDeviceReason',
   'shouldShowDiagnosticReason',
   'device.statusPillLabel',
-  'device.connectionSourceLabel',
-  'device.telemetryFields.map',
   'device.diagnosticReason',
-  'Last telemetry --',
-  'Reason',
+  'compactReason',
+  'styles.compactDeviceReason',
+  'styles.compactReasonText',
 ]) {
-  has(screen, fragment, 'Device Connections diagnostic card UI');
+  has(screen, fragment, 'Device Connections compact status UI');
 }
 
 has(screen, '{device.detailLabel || connectionPolicy.statusDetail}', 'device-specific status detail');

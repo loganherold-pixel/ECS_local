@@ -26,6 +26,10 @@ export type BluPowerModuleRuntimeValues = {
   rightflowopacity: 0 | 100;
 };
 
+function activeWatts(value: number | null | undefined): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value > 1;
+}
+
 function clampPercent(value: number | null | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, Math.round(value)));
@@ -47,4 +51,8 @@ export function resolveBluPowerModuleRuntime(input: BluPowerModuleRuntimeInput):
     leftflowopacity: activeOpacity(input.hasEcsData && inputWatts > 1),
     rightflowopacity: activeOpacity(input.hasEcsData && outputWatts > 1),
   };
+}
+
+export function shouldAnimateBluPowerModuleRuntime(input: BluPowerModuleRuntimeInput): boolean {
+  return input.hasEcsData && (activeWatts(input.inputWatts) || activeWatts(input.outputWatts));
 }

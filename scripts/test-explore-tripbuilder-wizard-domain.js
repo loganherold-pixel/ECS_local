@@ -161,6 +161,27 @@ async function main() {
     'Visible candidates should all be guidance-ready.',
   );
 
+  const sameTerrainRoutes = Array.from({ length: 4 }, (_, index) =>
+    makeRoute(`wizard-desert-${index}`, `Wizard Desert ${index}`, {
+      imageTag: undefined,
+      terrainType: 'Desert canyon',
+      regionGroup: 'utah-canyonlands',
+    }),
+  );
+  const thumbnailCandidateSet = wizard.normalizeExploreWizardRouteCandidates({
+    trailPacks: sameTerrainRoutes,
+  });
+  const thumbnailUris = thumbnailCandidateSet.candidates.map((candidate) => candidate.thumbnail?.uri ?? null);
+  assert.strictEqual(
+    new Set(thumbnailUris).size,
+    thumbnailUris.length,
+    'TripBuilder wizard should assign unique thumbnails across visible guidance-ready routes while suitable fallbacks remain.',
+  );
+  assert.ok(
+    thumbnailUris.every((uri) => typeof uri === 'string' && /[?&]w=960\b/.test(uri) && /[?&]h=640\b/.test(uri) && /[?&]q=88\b/.test(uri)),
+    'TripBuilder thumbnails should use high-resolution photo URLs.',
+  );
+
   const draft = wizard.createExploreWizardDraft(normalized.candidates[0], {
     gps: null,
   });

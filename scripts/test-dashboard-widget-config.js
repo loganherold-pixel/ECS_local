@@ -1177,7 +1177,10 @@ assert.ok(
 );
 
 assert.ok(
-  navigateSurfaceSource.includes('style={[styles.mapRenderer, mapStyle]}'),
+  navigateSurfaceSource.includes('<MapRenderer') &&
+    navigateSurfaceSource.includes('points={routePoints}') &&
+    navigateSurfaceSource.includes('progressPoints={progressPoints}') &&
+    navigateSurfaceSource.includes('style={resolvedMapStyle}'),
   'Navigate Surface must render the live MapRenderer inside the widget.',
 );
 assert.ok(

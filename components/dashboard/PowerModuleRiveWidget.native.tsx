@@ -9,6 +9,7 @@ import {
   BLU_POWER_MODULE_VIEW_MODEL_INSTANCE,
   BLU_POWER_MODULE_VIEW_MODEL_NUMERIC_PROPERTIES,
   resolveBluPowerModuleRuntime,
+  shouldAnimateBluPowerModuleRuntime,
   type BluPowerModuleRuntimeValues,
 } from '../../lib/bluPowerModuleRive';
 import BluPowerModuleFallback, { type PowerModuleRiveWidgetProps } from './BluPowerModuleFallback';
@@ -131,6 +132,10 @@ function PowerModuleNativeRuntime({
     () => resolveBluPowerModuleRuntime({ hasEcsData, batteryPercent, inputWatts, outputWatts }),
     [batteryPercent, hasEcsData, inputWatts, outputWatts],
   );
+  const shouldAnimate = useMemo(
+    () => shouldAnimateBluPowerModuleRuntime({ hasEcsData, batteryPercent, inputWatts, outputWatts }),
+    [batteryPercent, hasEcsData, inputWatts, outputWatts],
+  );
   const initialRuntimeRef = useRef(runtime);
   const { riveFile, error: riveFileError } = useRiveFile(BLU_POWER_MODULE_ASSET);
   const { instance: viewModelInstance, error: viewModelError } = useViewModelInstance(riveFile, {
@@ -148,8 +153,12 @@ function PowerModuleNativeRuntime({
   useEffect(() => {
     if (!viewModelInstance || hasRuntimeError) return;
     applyRuntimeValues(viewModelInstance, runtime);
-    riveViewRef?.playIfNeeded?.();
-  }, [hasRuntimeError, riveViewRef, runtime, viewModelInstance]);
+    if (shouldAnimate) {
+      riveViewRef?.playIfNeeded?.();
+      return;
+    }
+    void riveViewRef?.pause?.();
+  }, [hasRuntimeError, riveViewRef, runtime, shouldAnimate, viewModelInstance]);
 
   useEffect(() => () => {
     void riveViewRef?.pause?.();
@@ -174,7 +183,7 @@ function PowerModuleNativeRuntime({
         file={riveFile}
         hybridRef={setHybridRef}
         artboardName={BLU_POWER_MODULE_ARTBOARD}
-        autoPlay
+        autoPlay={shouldAnimate}
         stateMachineName={BLU_POWER_MODULE_STATE_MACHINE}
         dataBind={viewModelInstance ?? DataBindMode.Auto}
         fit={Fit.Contain}

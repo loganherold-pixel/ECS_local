@@ -60,6 +60,7 @@ const WEBVIEW_HARD_FAILURE_TIMEOUT_MS = 90000;
 const MAP_CONSTRUCTOR_RETRY_LIMIT = 3;
 const MAP_CONSTRUCTOR_RETRY_BASE_MS = 650;
 const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
+const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 48;
 const MAX_KNOWN_CAMPSITE_SOURCE_MARKERS = 40;
 const MAX_ROUTE_RENDER_POINTS = 2400;
 const MAX_PROGRESS_ROUTE_RENDER_POINTS = 2400;
@@ -1484,11 +1485,16 @@ function makeMapHtml(
   initialStyleUrl: string,
   fallbackStyleUrls: string[],
   instanceKey: number,
+  surfaceMode: MapRendererProps['surfaceMode'],
+  initialInteractive: boolean,
 ) {
   const escapedToken = JSON.stringify(token);
   const escapedInitialStyleUrl = JSON.stringify(initialStyleUrl);
   const escapedFallbackStyleUrls = JSON.stringify(fallbackStyleUrls || []);
   const escapedInstanceKey = JSON.stringify(instanceKey);
+  const escapedInitialInteractive = JSON.stringify(initialInteractive);
+  const compactTileCacheSize = surfaceMode === 'compact' ? COMPACT_MAP_MAX_TILE_CACHE_SIZE : null;
+  const escapedCompactTileCacheSize = JSON.stringify(compactTileCacheSize);
 
   return `<!DOCTYPE html>
 <html>
@@ -2270,6 +2276,8 @@ function makeMapHtml(
       var bootstrapReadyTimer = null;
       var requestedStyleUrl = ${escapedInitialStyleUrl};
       var fallbackStyleUrls = ${escapedFallbackStyleUrls};
+      var initialInteractive = ${escapedInitialInteractive};
+      var compactTileCacheSize = ${escapedCompactTileCacheSize};
       var activeStyleUrl = ${escapedInitialStyleUrl};
       var attemptedStyles = Object.create(null);
       attemptedStyles[activeStyleUrl] = true;
@@ -2700,6 +2708,7 @@ function makeMapHtml(
 
       function promoteRouteGuidanceLayers() {
         [
+          'route-halo-layer',
           'route-layer',
           'segment-layer',
           'trail-layer',
@@ -2759,6 +2768,7 @@ function makeMapHtml(
         var beforeRouteLayer = getFirstExistingLayerId([
           'route-progress-glow-layer',
           'route-progress-layer',
+          'route-halo-layer',
           'route-layer',
           'route-builder-halo-layer',
           'route-builder-layer',
@@ -3350,6 +3360,7 @@ function makeMapHtml(
           ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID,
           ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID,
           CAMP_SCOUT_LAYER_ID,
+          'route-halo-layer',
           'route-layer',
           'route-progress-layer',
           'segment-layer',
@@ -3519,6 +3530,7 @@ function makeMapHtml(
         }
 
         var beforePinnedLayer = getFirstExistingLayerId([
+          'route-halo-layer',
           'route-layer',
           'route-progress-layer',
           'segment-layer',
@@ -3972,6 +3984,15 @@ function makeMapHtml(
         routeBuilderFreeModeNoticeSent = false;
       }
 
+      function resetRouteBuilderStrokeSnapState() {
+        routeBuilderFreeDrawMode = false;
+        routeBuilderPreferredFeatureKey = null;
+        routeBuilderGestureStartedAt = 0;
+        routeBuilderGesturePointCount = 0;
+        routeBuilderGestureStartPoint = null;
+        routeBuilderFreeModeNoticeSent = false;
+      }
+
       function getLastGoodTracePoint() {
         return routeBuilderLastGoodTracePoint;
       }
@@ -4110,6 +4131,7 @@ function makeMapHtml(
           ['match', ['get', 'label'], 'A', '#C66A4A', 'B', '#F2C24D', 'C', '#65C97A', 'D', '#5FD1FF', '#5FD1FF'],
           0.32
         );
+        ensureLineLayer('route-halo-layer', 'route-source', 'rgba(8,14,18,0.88)', 10.5, 0.72);
         ensureLineLayer('route-layer', 'route-source', ['get', 'color'], 5, 0.95);
         ensureLineLayer('route-progress-glow-layer', 'route-progress-source', ['get', 'color'], 14, 0.22);
         ensureLineLayer('route-progress-layer', 'route-progress-source', ['get', 'color'], 6, 0.98);
@@ -4139,6 +4161,15 @@ function makeMapHtml(
         if (!map || !map.getLayer('route-layer')) return;
         var normalizedMode = mode || 'selected';
         try {
+          if (map.getLayer('route-halo-layer')) {
+            map.setPaintProperty('route-halo-layer', 'line-width', normalizedMode === 'preview' ? 8.5 : 10.5);
+            map.setPaintProperty('route-halo-layer', 'line-opacity', normalizedMode === 'preview' ? 0.5 : 0.72);
+            map.setPaintProperty(
+              'route-halo-layer',
+              'line-dasharray',
+              normalizedMode === 'preview' ? [1.4, 1.2] : [1, 0]
+            );
+          }
           map.setPaintProperty('route-layer', 'line-width', normalizedMode === 'preview' ? 4.25 : 5);
           map.setPaintProperty('route-layer', 'line-opacity', normalizedMode === 'preview' ? 0.72 : 0.95);
           map.setPaintProperty(
@@ -5377,6 +5408,7 @@ function makeMapHtml(
         var point = getRouteBuilderEventPoint(event);
         if (dispersedRouteBuildState.enabled && findDispersedRouteBuildFeatureAtPoint(point)) return false;
         var rawCoordinate = routeBuilderRawCoordinateFromPoint(point);
+        resetRouteBuilderStrokeSnapState();
         var tracePoint = snapTracePoint(point, { rawCoordinate: rawCoordinate });
         if (!tracePoint) return false;
 
@@ -5820,21 +5852,30 @@ function makeMapHtml(
         initialized = true;
 
       try {
-        map = new mapboxgl.Map({
+        var mapOptions = {
           container: 'map',
           style: activeStyleUrl,
           center: [-121.0, 38.5],
           zoom: 7,
           attributionControl: false,
-          interactive: true,
+          interactive: initialInteractive,
+          scrollZoom: false,
+          boxZoom: initialInteractive,
           dragRotate: false,
-          touchZoomRotate: true,
-          doubleClickZoom: true,
+          touchPitch: false,
+          keyboard: false,
+          touchZoomRotate: initialInteractive,
+          doubleClickZoom: initialInteractive,
           antialias: false,
           preserveDrawingBuffer: false,
           failIfMajorPerformanceCaveat: false,
+          performanceMetricsCollection: false,
           fadeDuration: 0
-        });
+        };
+        if (compactTileCacheSize) {
+          mapOptions.maxTileCacheSize = compactTileCacheSize;
+        }
+        map = new mapboxgl.Map(mapOptions);
       } catch (err) {
         var constructorMessage = String(err && err.message ? err.message : err);
         sendLog('Map constructor failed: ' + constructorMessage);
@@ -6219,9 +6260,16 @@ const MapRenderer = React.memo(function MapRenderer({
   const html = useMemo(
     () =>
       shouldLoadMap
-        ? makeMapHtml(mapboxToken, bootStyleUrl, MAP_STYLE_FALLBACK_CHAIN, webViewInstanceKey)
+        ? makeMapHtml(
+            mapboxToken,
+            bootStyleUrl,
+            MAP_STYLE_FALLBACK_CHAIN,
+            webViewInstanceKey,
+            surfaceMode,
+            interactive !== false,
+          )
         : '',
-    [shouldLoadMap, mapboxToken, bootStyleUrl, webViewInstanceKey],
+    [shouldLoadMap, mapboxToken, bootStyleUrl, webViewInstanceKey, surfaceMode, interactive],
   );
   const htmlHash = useMemo(() => stableStringify({
     shouldLoadMap,

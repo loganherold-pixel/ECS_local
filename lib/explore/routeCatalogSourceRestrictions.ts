@@ -97,7 +97,7 @@ function sourceTypeFor(source: string | RouteCatalogSourcePublishabilityInput): 
     : sourceKey(source.sourceType ?? source.source_type);
 }
 
-function usePermissionFor(source: string | RouteCatalogSourcePublishabilityInput): string {
+function permissionForSource(source: string | RouteCatalogSourcePublishabilityInput): string {
   return typeof source === 'string'
     ? ''
     : sourceKey(source.usePermission ?? source.use_permission);
@@ -120,7 +120,7 @@ export function getRouteCatalogSourcePublishingBlocker(
 ): string | undefined {
   const restriction = getRouteCatalogSourceRestriction(source);
   if (restriction) return restriction.blocker;
-  if (sourceTypeFor(source) === 'partner_restricted' && usePermissionFor(source) !== 'granted') {
+  if (sourceTypeFor(source) === 'partner_restricted' && permissionForSource(source) !== 'granted') {
     return GENERIC_PARTNER_RESTRICTED_BLOCKER;
   }
   return undefined;

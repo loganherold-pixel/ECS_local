@@ -479,7 +479,6 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     displayName: 'Mopeka / Propane Level',
     providerBadge: 'Propane',
     nameFragments: [
-      /\bmopeka\b/i,
       /\bpropane\b/i,
       /\bbutane\b/i,
       /\blpg\b/i,
@@ -487,7 +486,6 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
       /\bpro\s*check\b/i,
     ],
     manufacturerHints: [
-      /\bmopeka\b/i,
       /\bpropane\b/i,
       /\bbutane\b/i,
       /\blpg\b/i,
@@ -509,6 +507,10 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
       /\bwater\s*(tank|level|monitor|sensor)\b/i,
       /\bfresh\s*water\b/i,
       /\bfluid\s*(level|monitor|sensor)\b/i,
+      /\btd\s*(40|200)\b/i,
+      /\bpro\s*200\b/i,
+      /\bpro200\b/i,
+      /\btop\s*down\s*(liquid|water|tank)\b/i,
     ],
     manufacturerHints: [
       /\bsee\s*level\b/i,
@@ -516,6 +518,10 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
       /\bgarnet\b/i,
       /\bwater\s*(tank|level|monitor|sensor)\b/i,
       /\bfluid\s*(level|monitor|sensor)\b/i,
+      /\btd\s*(40|200)\b/i,
+      /\bpro\s*200\b/i,
+      /\bpro200\b/i,
+      /\btop\s*down\s*(liquid|water|tank)\b/i,
     ],
     serviceUUIDs: [],
     connectionType: 'ble',

@@ -6,6 +6,7 @@ Bluestack is the ECS scanner and connection command layer for power, OBD2, propa
 
 - The mobile app must not contain provider API secrets.
 - EcoFlow cloud telemetry is server mediated through Supabase Edge Functions. DELTA/RIVER power stations, Glacier/refrigerators, WAVE/portable AC units, and alternator chargers use the same authorized cloud path when EcoFlow grants access for that serial.
+- EcoFlow support-confirmed public API authorization blocks are explicit: DELTA 3 1500, DELTA Mini, and Alternator Charger can return API code 1006. ECS should keep those devices visible as public API authorization pending or unsupported by the current EcoFlow developer app, with non-secret server-side diagnostics, and must not mark them live until decoded telemetry arrives.
 - EcoFlow local BLE now uses the native power-adapter path with `ecoflow_native_ble_v1`. ECS only promotes it as live when decoded numeric power fields arrive from readable BLE characteristics.
 - Native BLE discovery requires an installed development/native/EAS build. Expo Go cannot run the native scanner.
 - A device can be recognized by Bluestack without being connectable for live telemetry.

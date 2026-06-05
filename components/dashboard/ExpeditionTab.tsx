@@ -11,6 +11,7 @@ import { useFocusEffect } from '@react-navigation/native';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { fsGetInfo } from '../../lib/fsCompat';
 import ExpeditionRecapMap from './ExpeditionRecapMap';
 import ExpeditionNotableMomentsTimeline from './ExpeditionNotableMomentsTimeline';
@@ -55,6 +56,7 @@ type ExpeditionTabProps = {
   completedExpeditionRecord?: unknown;
   ecsOnline?: boolean;
   gpsLocation?: IncidentCoordinate | null;
+  gpsElevationFt?: number | null;
 };
 
 type ExpeditionHubStats = {
@@ -109,8 +111,19 @@ const EXPEDITION_OPERATIONAL_ACTIONS: ExpeditionOperationalAction[] = [
   { title: 'Vehicles', icon: 'car-sport-outline' },
 ];
 
-export default function ExpeditionTab(_props: ExpeditionTabProps) {
-  void _props;
+export default function ExpeditionTab({
+  hasActiveRoute,
+  teamMemberCount,
+  campCount,
+  routeCompleted,
+  routeLifecycleState,
+  expeditionId,
+  routeLabel,
+  completedExpeditionRecord,
+  ecsOnline = true,
+  gpsLocation,
+  gpsElevationFt,
+}: ExpeditionTabProps) {
   const [completedTrips, setCompletedTrips] = useState<ExpeditionTripSummary[]>([]);
   const [unlockedBadges, setUnlockedBadges] = useState<ExpeditionBadge[]>([]);
   const [badgeProgress, setBadgeProgress] = useState<ExpeditionBadge[]>([]);
@@ -156,6 +169,38 @@ export default function ExpeditionTab(_props: ExpeditionTabProps) {
   );
 
   const stats = useMemo(() => buildHubStats(completedTrips), [completedTrips]);
+  const liveHubStats = useMemo(
+    () => buildLiveHubStats({
+      archivedStats: stats,
+      campCount,
+      completedExpeditionRecord,
+      completedTrips,
+      ecsOnline,
+      expeditionId,
+      gpsElevationFt,
+      gpsLocation,
+      hasActiveRoute,
+      routeCompleted,
+      routeLabel,
+      routeLifecycleState,
+      teamMemberCount,
+    }),
+    [
+      campCount,
+      completedExpeditionRecord,
+      completedTrips,
+      ecsOnline,
+      expeditionId,
+      gpsElevationFt,
+      gpsLocation,
+      hasActiveRoute,
+      routeCompleted,
+      routeLabel,
+      routeLifecycleState,
+      stats,
+      teamMemberCount,
+    ],
+  );
   const recentTrips = useMemo(() => completedTrips.slice(0, 3), [completedTrips]);
   const hasCompletedTrips = completedTrips.length > 0;
   const hasUnlockedBadges = unlockedBadges.some((badge) => !!badge.unlockedAt);
@@ -249,7 +294,7 @@ export default function ExpeditionTab(_props: ExpeditionTabProps) {
           <View style={styles.headerCopy}>
             <Text style={styles.title}>Expedition Hub</Text>
             <Text style={styles.subtitle}>
-              Your completed expeditions, milestones, and field history.
+              {liveHubStats.subtitle}
             </Text>
           </View>
         </View>
@@ -283,10 +328,10 @@ export default function ExpeditionTab(_props: ExpeditionTabProps) {
         </View>
 
         <View style={styles.statsRow}>
-          <StatTile label="Total Expeditions" value={`${stats.totalExpeditions} ${stats.totalExpeditions === 1 ? 'Expedition' : 'Expeditions'}`} />
-          <StatTile label="Total Miles" value={formatWholeMiles(stats.totalMiles)} />
-          <StatTile label="Highest Elevation" value={formatElevation(stats.highestElevationFt)} />
-          <StatTile label="Hours Logged" value={formatHours(stats.totalHours)} />
+          <StatTile label="Total Expeditions" value={`${liveHubStats.totalExpeditions} ${liveHubStats.totalExpeditions === 1 ? 'Expedition' : 'Expeditions'}`} />
+          <StatTile label="Total Miles" value={formatWholeMiles(liveHubStats.totalMiles)} />
+          <StatTile label="Highest Elevation" value={formatElevation(liveHubStats.highestElevationFt)} />
+          <StatTile label="Hours Logged" value={formatHours(liveHubStats.totalHours)} />
         </View>
 
         {loading ? (
@@ -1234,6 +1279,97 @@ function iconForInsightType(type: ExpeditionInsight['type']): string {
   }
 }
 
+const METERS_PER_MILE = 1609.344;
+const DEFAULT_HUB_SUBTITLE = 'Your completed expeditions, milestones, and field history.';
+
+function readFiniteNumber(source: unknown, keys: string[]): number | null {
+  if (!source || typeof source !== 'object') return null;
+  const record = source as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function readStringValue(source: unknown, keys: string[]): string | null {
+  if (!source || typeof source !== 'object') return null;
+  const record = source as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function buildLiveHubStats({
+  archivedStats,
+  campCount,
+  completedExpeditionRecord,
+  completedTrips,
+  ecsOnline,
+  expeditionId,
+  gpsElevationFt,
+  gpsLocation,
+  hasActiveRoute,
+  routeCompleted,
+  routeLabel,
+  routeLifecycleState,
+  teamMemberCount,
+}: {
+  archivedStats: ExpeditionHubStats;
+  campCount: number;
+  completedExpeditionRecord?: unknown;
+  completedTrips: ExpeditionTripSummary[];
+  ecsOnline: boolean;
+  expeditionId?: string;
+  gpsElevationFt?: number | null;
+  gpsLocation?: IncidentCoordinate | null;
+  hasActiveRoute: boolean;
+  routeCompleted: boolean;
+  routeLabel?: string;
+  routeLifecycleState?: string;
+  teamMemberCount: number;
+}): ExpeditionHubStats & { subtitle: string } {
+  const completedRouteVisible =
+    routeCompleted ||
+    routeLifecycleState === 'ended' ||
+    routeLifecycleState === 'completed' ||
+    readStringValue(completedExpeditionRecord, ['state']) === 'complete';
+  const routeVisible = hasActiveRoute || completedRouteVisible || Boolean(completedExpeditionRecord);
+  const completedRecordId = readStringValue(completedExpeditionRecord, ['id']);
+  const activeExpeditionId = completedRecordId ?? expeditionId ?? null;
+  const archivedAlreadyHasRecord = Boolean(
+    activeExpeditionId && completedTrips.some((trip) => trip.id === activeExpeditionId),
+  );
+  const shouldAddCompletedRecord = Boolean(completedExpeditionRecord && !archivedAlreadyHasRecord);
+  const recordDistanceMeters = readFiniteNumber(completedExpeditionRecord, ['distance', 'distanceMeters', 'distance_meters']);
+  const recordDistanceMiles =
+    readFiniteNumber(completedExpeditionRecord, ['totalDistanceMiles', 'distanceMiles', 'completedMiles', 'totalDistance']) ??
+    (recordDistanceMeters != null ? recordDistanceMeters / METERS_PER_MILE : 0);
+  const recordDurationSeconds =
+    readFiniteNumber(completedExpeditionRecord, ['totalDurationSeconds', 'durationSeconds', 'duration', 'durationSec', 'duration_seconds']) ?? 0;
+  const liveElevationFt = readFiniteNumber(completedExpeditionRecord, ['maxElevationFt', 'highestElevationFt']) ??
+    (typeof gpsElevationFt === 'number' && Number.isFinite(gpsElevationFt) ? gpsElevationFt : null);
+  const nextExpeditionCount =
+    archivedStats.totalExpeditions +
+    (shouldAddCompletedRecord ? 1 : routeVisible && archivedStats.totalExpeditions === 0 ? 1 : 0);
+  const routeName = routeLabel || readStringValue(completedExpeditionRecord, ['expeditionName', 'destination']) || 'Active route';
+  const routeStateLabel = completedRouteVisible ? 'Arrived' : hasActiveRoute ? 'Active guidance' : null;
+  const gpsLabel = gpsLocation ? 'GPS live' : 'GPS pending';
+  const subtitle = routeStateLabel
+    ? `${routeStateLabel}: ${routeName} • ${teamMemberCount} ${teamMemberCount === 1 ? 'team member' : 'team members'} • ${campCount} ${campCount === 1 ? 'camp' : 'camps'} • ${ecsOnline ? gpsLabel : 'Offline cache'}`
+    : DEFAULT_HUB_SUBTITLE;
+
+  return {
+    totalExpeditions: nextExpeditionCount,
+    totalMiles: archivedStats.totalMiles + (shouldAddCompletedRecord ? Math.max(0, recordDistanceMiles) : 0),
+    highestElevationFt: Math.max(archivedStats.highestElevationFt, liveElevationFt ?? 0),
+    totalHours: archivedStats.totalHours + (shouldAddCompletedRecord ? Math.max(0, recordDurationSeconds / 3600) : 0),
+    subtitle,
+  };
+}
+
 function buildHubStats(trips: ExpeditionTripSummary[]): ExpeditionHubStats {
   return trips.reduce<ExpeditionHubStats>(
     (stats, trip) => ({
@@ -1504,10 +1640,10 @@ const styles = StyleSheet.create({
     minHeight: 0,
     gap: 12,
     overflow: 'hidden',
-    borderRadius: ECS.radius,
+    borderRadius: ECS_SURFACE.radius.primary,
     borderWidth: 1,
-    borderColor: GOLD_RAIL.section,
-    backgroundColor: 'rgba(11,14,18,0.96)',
+    borderColor: 'rgba(62, 79, 60, 0.24)',
+    backgroundColor: 'rgba(17, 22, 26, 0.88)',
     padding: 12,
   },
   header: {

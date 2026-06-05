@@ -151,7 +151,7 @@ export function applyExploreRefinementFilter<T extends RefinableTrail>(
   if (!refinement) return trails;
   if (refinement === 'remoteness') {
     return trails
-      .slice()
+      .filter(isRemoteTrail)
       .sort((left, right) => {
         const scoreDiff = getExploreRemotenessSortScore(right) - getExploreRemotenessSortScore(left);
         if (scoreDiff !== 0) return scoreDiff;

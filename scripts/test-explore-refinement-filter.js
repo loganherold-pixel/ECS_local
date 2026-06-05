@@ -49,8 +49,8 @@ assert.deepStrictEqual(
 );
 assert.deepStrictEqual(
   refinement.applyExploreRefinementFilter(routes, 'remoteness').map((item) => item.id),
-  ['expedition', 'remote-day', 'weekend', 'local-day', 'unknown-duration'],
-  'Remoteness should rank the current dataset by remoteness without eliminating usable results.',
+  ['expedition', 'remote-day'],
+  'Remoteness should narrow the current dataset to remote trails and rank them by remoteness.',
 );
 assert.deepStrictEqual(
   refinement.applyExploreRefinementFilter(routes, 'dayTrip').map((item) => item.id),
@@ -69,7 +69,7 @@ assert.deepStrictEqual(
 );
 
 const counts = refinement.getExploreRefinementCounts(routes);
-assert.strictEqual(counts.remoteness, routes.length, 'Remoteness count should preserve the current dataset size.');
+assert.strictEqual(counts.remoteness, 2, 'Remoteness count should reflect only remote matches in the current radius.');
 assert.strictEqual(counts.dayTrip, 2, 'Day Trip count should be computed from current results.');
 assert.strictEqual(counts.weekendTrip, 1, 'Weekend Trip count should be computed from current results.');
 assert.strictEqual(counts.expedition, 1, 'Expedition count should be computed from current results.');
@@ -114,6 +114,18 @@ assert.ok(
     discoverSource.includes('() => filterByRadius(aiRoutes, activeDistanceRadius) as AIGeneratedRoute[]') &&
     discoverSource.includes('applyExploreRefinementFilter(radiusFilteredAIRoutes, exploreRefinement)'),
   'ECS Route Ideas should respect the selected radius before applying refinement filters.',
+);
+assert.ok(
+  discoverSource.includes('const publicRefinedTrailPacks = useMemo') &&
+    discoverSource.includes('applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement)') &&
+    discoverSource.includes('const exploreWizardTrailPackRoutes = useMemo') &&
+    discoverSource.includes('visibleTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack))') &&
+    discoverSource.includes('const exploreWizardHiddenGemRoutes = useMemo') &&
+    discoverSource.includes('visibleHiddenGemRoutes') &&
+    discoverSource.includes('ecsRouteIdeas: visibleAIRoutes') &&
+    discoverSource.includes('filteredExploreWizardSavedBuiltRoutes') &&
+    discoverSource.includes('filteredExploreWizardImportedStitchedRoutes'),
+  'Explore TripBuilder guidance candidates should use the same refined visible route pools instead of broader unfiltered lists.',
 );
 assert.ok(
   discoverSource.includes('const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);') &&

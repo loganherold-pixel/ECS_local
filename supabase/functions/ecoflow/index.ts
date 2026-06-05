@@ -32,6 +32,13 @@ type EcoFlowErrorClassification = EcoFlowEdgeError & {
   details?: Record<string, unknown>;
 };
 
+const ECOFLOW_PUBLIC_API_AUTHORIZATION_CODE = "1006";
+const ECOFLOW_PUBLIC_API_AUTH_BLOCKED_MODELS = [
+  "DELTA 3 1500",
+  "DELTA Mini",
+  "Alternator Charger",
+];
+
 /* ------------------------- Utilities ------------------------- */
 
 function getEnvOrNull(key: string): string | null {
@@ -264,6 +271,13 @@ function classifyEcoFlowApiFailure(
   secrets: string[] = [],
 ): EcoFlowErrorClassification {
   const haystack = bodyText.toLowerCase();
+  const publicApiAuthorizationPending =
+    new RegExp(`(^|[^0-9])${ECOFLOW_PUBLIC_API_AUTHORIZATION_CODE}([^0-9]|$)`).test(bodyText) ||
+    haystack.includes("public api authorization") ||
+    haystack.includes("public_api_authorization_pending") ||
+    haystack.includes("unsupported by current app") ||
+    haystack.includes("unsupported by the current app") ||
+    haystack.includes("current ecoflow developer app");
   const retryable = status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
   const credentialsInvalid =
     status === 401 ||
@@ -280,6 +294,7 @@ function classifyEcoFlowApiFailure(
     haystack.includes("region") ||
     haystack.includes("account binding");
   const deviceUnauthorized =
+    publicApiAuthorizationPending ||
     status === 401 ||
     status === 403 ||
     haystack.includes("not allowed") ||
@@ -307,6 +322,27 @@ function classifyEcoFlowApiFailure(
         authorization: "credentials_invalid_or_wrong_region",
         remediation:
           "Verify the Supabase Edge Function environment has a valid EcoFlow access key, secret key, and the correct EcoFlow API base URL for the account region.",
+        bodySnippet: safeSnippet(bodyText, secrets),
+      },
+    };
+  }
+
+  if (publicApiAuthorizationPending) {
+    return {
+      code: "ECOFLOW_DEVICE_UNAUTHORIZED",
+      message:
+        "EcoFlow public API authorization is pending or unsupported by the current EcoFlow developer app for this model. EcoFlow support confirmed DELTA 3 1500, DELTA Mini, and Alternator Charger can return API code 1006 until app/device authorization is granted.",
+      authRequired: true,
+      deviceUnauthorized: true,
+      retryable: false,
+      details: {
+        status,
+        authorization: "public_api_authorization_pending",
+        authorizationState: "publicApiAuthorizationPending",
+        diagnosticCode: ECOFLOW_PUBLIC_API_AUTHORIZATION_CODE,
+        blockedModels: ECOFLOW_PUBLIC_API_AUTH_BLOCKED_MODELS,
+        remediation:
+          "Follow up with EcoFlow support using code 1006, the affected model, and the server-side Edge Function phase. Keep EcoFlow access keys and secret keys in Supabase Edge Function environment variables only.",
         bodySnippet: safeSnippet(bodyText, secrets),
       },
     };

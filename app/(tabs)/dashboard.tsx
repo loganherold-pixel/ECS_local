@@ -917,7 +917,7 @@ type DashboardGridZoneProps = {
   expeditionRouteCompleted: boolean;
   expeditionId?: string;
   expeditionRouteLabel?: string;
-  completedExpeditionRecord?: ExpeditionRecord | null;
+  completedExpeditionRecord?: unknown;
   expeditionEcsOnline?: boolean;
 };
 
@@ -1034,10 +1034,12 @@ function DashboardGridZone({
               teamMemberCount={expeditionTeamMemberCount}
               campCount={expeditionCampCount}
               routeCompleted={expeditionRouteCompleted}
+              routeLifecycleState={expeditionRouteCompleted ? 'completed' : expeditionHasActiveRoute ? 'active' : 'idle'}
               expeditionId={expeditionId}
               routeLabel={expeditionRouteLabel}
               completedExpeditionRecord={completedExpeditionRecord}
               ecsOnline={expeditionEcsOnline}
+              gpsElevationFt={gpsAltitudeFt ?? null}
               gpsLocation={
                 gpsHasFix && typeof gpsLatitude === 'number' && typeof gpsLongitude === 'number'
                   ? {
@@ -1128,6 +1130,15 @@ function DashboardGridZone({
                     gpsAccuracyM={gpsAccuracyM ?? undefined}
                     gpsAltitudeFt={gpsAltitudeFt ?? undefined}
                     gpsTimestampMs={gpsTimestampMs ?? undefined}
+                    expeditionHasActiveRoute={expeditionHasActiveRoute}
+                    expeditionTeamMemberCount={expeditionTeamMemberCount}
+                    expeditionCampCount={expeditionCampCount}
+                    expeditionRouteCompleted={expeditionRouteCompleted}
+                    expeditionRouteLifecycleState={expeditionRouteCompleted ? 'completed' : expeditionHasActiveRoute ? 'active' : 'idle'}
+                    expeditionId={expeditionId}
+                    expeditionRouteLabel={expeditionRouteLabel}
+                    completedExpeditionRecord={completedExpeditionRecord}
+                    expeditionEcsOnline={expeditionEcsOnline}
                   />
                   </View>
                 </View>
@@ -1251,11 +1262,16 @@ function DashboardModalLayer({
   onShrinkAndResize,
   onCancelResize,
 }: DashboardModalLayerProps) {
+  const normalizedAssignedWidgets = useMemo(
+    () => assignedWidgets.map((widget) => widget ?? null),
+    [assignedWidgets],
+  );
+
   return (
     <>
       <WidgetLibrary
         visible={libraryVisible}
-        assignedWidgets={assignedWidgets.map((widget) => widget ?? null)}
+        assignedWidgets={normalizedAssignedWidgets}
         onSelect={onSelectWidget}
         onClose={onCloseLibrary}
         onCreateCustom={onOpenCreateCustom}
@@ -2279,7 +2295,7 @@ function DashboardScreenInner() {
   const expeditionId =
     String((activeTrip as any)?.id ?? currentExpeditionRecord?.id ?? '').trim() || undefined;
   const expeditionRouteLabel =
-    String((activeTrip as any)?.name ?? dashboardActiveRoute?.name ?? '').trim() || undefined;
+    String((activeTrip as any)?.name ?? dashboardRouteProgress?.routeLabel ?? dashboardActiveRoute?.name ?? '').trim() || undefined;
   const expeditionTeamMemberCount = Math.max(
     1,
     Number((activeTrip as any)?.team_size) || 0,
@@ -2301,12 +2317,44 @@ function DashboardScreenInner() {
       return type.includes('camp') || name.includes('camp');
     }) ?? null;
   }, [waypoints]);
+  const dashboardRouteProgressCompleted =
+    Boolean(dashboardRouteProgress?.isComplete) ||
+    dashboardRouteProgress?.status === 'completed';
+  const completedGuidanceRouteSummary = dashboardRouteProgressCompleted
+    ? {
+        id: String(
+          dashboardRouteProgress?.activeRouteId ??
+            expeditionId ??
+            dashboardRouteProgress?.routeLabel ??
+            'completed-guidance-route',
+        ),
+        state: 'complete',
+        expeditionName: dashboardRouteProgress?.routeLabel ?? undefined,
+        destination: dashboardRouteProgress?.destinationLabel ?? undefined,
+        totalDistanceMiles: firstFiniteNumber(
+          dashboardRouteProgress?.totalDistance,
+          dashboardRouteProgress?.completedMiles,
+        ),
+        completedMiles: firstFiniteNumber(
+          dashboardRouteProgress?.completedMiles,
+          dashboardRouteProgress?.totalDistance,
+        ),
+        maxElevationFt: gps.position?.altitudeFt ?? null,
+        durationSeconds: null,
+        source: dashboardRouteProgress?.source ?? 'active-route-progress',
+        updatedAt: dashboardRouteProgress?.lastUpdated ?? dashboardRouteProgress?.updatedAt ?? null,
+      }
+    : null;
   const completedExpeditionSummaryRecord =
     completedExpeditionRecord ??
-    (currentExpeditionRecord?.state === 'complete' ? currentExpeditionRecord : null);
+    (currentExpeditionRecord?.state === 'complete' ? currentExpeditionRecord : null) ??
+    (currentExpeditionState === 'standby'
+      ? latestCompletedExpeditionLog ?? completedGuidanceRouteSummary
+      : completedGuidanceRouteSummary);
   const expeditionRouteCompleted =
     currentExpeditionState === 'complete' ||
     Boolean(completedExpeditionRecord) ||
+    dashboardRouteProgressCompleted ||
     (currentExpeditionState === 'standby' && Boolean(latestCompletedExpeditionLog));
   const dashboardAssessmentContext = useMemo(() => {
     const vehicleRecord: any = activeVehicleContext.vehicle ?? activeVehicleData ?? {};
@@ -3347,7 +3395,7 @@ function DashboardScreenInner() {
 
   // Check if current tab is empty
   const allEmpty = slots.every(s => !s.widgetType);
-  const assignedWidgets = slots.map(s => s.widgetType);
+  const assignedWidgets = useMemo(() => slots.map(s => s.widgetType), [slots]);
 
   // ── Mode Color Cue: Active tab accent color (non-animated) ──
   const expeditionAccent = palette.amber;
