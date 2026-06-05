@@ -39,6 +39,9 @@ for (const required of [
   '--all-direct',
   '--deep-backfill',
   '--payload',
+  '--states',
+  '--layers',
+  '--limit-per-state-layer',
   'redactSecret',
   'currentConditionBlockedRouteCount',
   'currentConditionAdvisoryCount',
@@ -255,6 +258,21 @@ assert.deepStrictEqual(
   blmDeepBackfillDryRun.adapters[0].selectedPayload,
   byKey.get('blm_gtlf').deepBackfillPayload,
   'BLM GTLF deep-backfill dry-run should show the exact payload that live invocation would send',
+);
+const blmNewMexicoBackfillDryRun = JSON.parse(execFileSync(
+  process.execPath,
+  [runnerPath, '--dry-run', '--adapter', 'blm_gtlf', '--states', 'NM', '--layers', '0,2', '--limit-per-state-layer', '500'],
+  { cwd: root, encoding: 'utf8' },
+));
+assert.deepStrictEqual(
+  blmNewMexicoBackfillDryRun.adapters[0].selectedPayload,
+  {
+    states: ['NM'],
+    layers: [0, 2],
+    minMiles: 1,
+    limitPerStateLayer: 500,
+  },
+  'BLM GTLF New Mexico backfill dry-run should build a bounded state/layer override without replacing the Utah deep-backfill preset',
 );
 assert.deepStrictEqual(byKey.get('michigan_dnr_orv_gpx').defaultPayload.sourceKeys, [
   'alcona_orv_trail',

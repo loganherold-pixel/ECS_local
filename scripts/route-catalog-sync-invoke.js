@@ -20,6 +20,7 @@ function parseArgs(argv) {
     allDirect: false,
     deepBackfill: false,
     dryRun: false,
+    payloadOverrides: {},
     payloadPath: '',
   };
 
@@ -31,6 +32,29 @@ function parseArgs(argv) {
       options.allDirect = true;
     } else if (arg === '--deep-backfill') {
       options.deepBackfill = true;
+    } else if (arg === '--states') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--states requires a comma-separated state list');
+      options.payloadOverrides.states = value.split(',').map((state) => state.trim().toUpperCase()).filter(Boolean);
+      index += 1;
+    } else if (arg === '--layers') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--layers requires a comma-separated layer id list');
+      options.payloadOverrides.layers = value
+        .split(',')
+        .map((layer) => Number(layer.trim()))
+        .filter((layer) => Number.isInteger(layer));
+      index += 1;
+    } else if (arg === '--min-miles') {
+      const value = Number(argv[index + 1]);
+      if (!Number.isFinite(value)) throw new Error('--min-miles requires a numeric value');
+      options.payloadOverrides.minMiles = value;
+      index += 1;
+    } else if (arg === '--limit-per-state-layer') {
+      const value = Number(argv[index + 1]);
+      if (!Number.isFinite(value)) throw new Error('--limit-per-state-layer requires a numeric value');
+      options.payloadOverrides.limitPerStateLayer = Math.round(value);
+      index += 1;
     } else if (arg === '--adapter') {
       const value = argv[index + 1];
       if (!value) throw new Error('--adapter requires a route catalog sync inventory key');
@@ -57,6 +81,7 @@ function usage() {
     '  node scripts/route-catalog-sync-invoke.js --dry-run --all-direct',
     '  node scripts/route-catalog-sync-invoke.js --dry-run --adapter usfs_mvum',
     '  node scripts/route-catalog-sync-invoke.js --dry-run --adapter blm_gtlf --deep-backfill',
+    '  node scripts/route-catalog-sync-invoke.js --dry-run --adapter blm_gtlf --states NM --layers 0,2 --limit-per-state-layer 500',
     '  node scripts/route-catalog-sync-invoke.js --adapter blm_gtlf --payload reviewed-blm-closures.json',
     '  node scripts/route-catalog-sync-invoke.js --adapter michigan_dnr_orv_gpx',
     '',
@@ -90,14 +115,18 @@ function readPayloadOverride(payloadPath) {
 }
 
 function payloadForEntry(entry, options, payloadOverride) {
-  if (payloadOverride) return payloadOverride;
+  let payload = payloadOverride;
+  if (!payload) {
+    payload = entry.defaultPayload;
+  }
   if (options.deepBackfill) {
     if (!entry.deepBackfillPayload) {
       throw new Error(`${entry.key} does not define a deep backfill payload`);
     }
-    return entry.deepBackfillPayload;
+    payload = entry.deepBackfillPayload;
   }
-  return entry.defaultPayload;
+  const overrides = options.payloadOverrides || {};
+  return Object.keys(overrides).length > 0 ? { ...payload, ...overrides } : payload;
 }
 
 function invocationUrl(baseUrl, functionName) {

@@ -184,6 +184,11 @@ const requiredProbeKeys = [
   'blm_id_gtlf',
   'blm_mt_gtlf',
   'blm_nm_gtlf',
+  'blm_nm_taos_punche_valley_road',
+  'blm_nm_taos_sure_shot',
+  'blm_nm_taos_pinabetoso_peaks_road',
+  'blm_nm_quebradas_road',
+  'blm_nm_angel_peak_loop_road',
   'blm_ut_gtlf',
   'blm_ut_smoky_mountain_alvey_wash',
   'blm_ut_wolverine_loop_road',
@@ -547,6 +552,13 @@ const blmAggregateProbeKeys = [
   'blm_ut_gtlf',
   'blm_wy_gtlf',
 ];
+const blmNmRouteProbeKeys = [
+  'blm_nm_taos_punche_valley_road',
+  'blm_nm_taos_sure_shot',
+  'blm_nm_taos_pinabetoso_peaks_road',
+  'blm_nm_quebradas_road',
+  'blm_nm_angel_peak_loop_road',
+];
 const blmUtRouteProbeKeys = [
   'blm_ut_smoky_mountain_alvey_wash',
   'blm_ut_wolverine_loop_road',
@@ -555,6 +567,7 @@ const blmUtRouteProbeKeys = [
   'blm_ut_fourmile_bench',
   'blm_ut_paria_breaks',
 ];
+const blmNmRoutePlan = buildRouteCatalogCoverageAuditPlan({ probeKeys: blmNmRouteProbeKeys });
 const blmUtRoutePlan = buildRouteCatalogCoverageAuditPlan({ probeKeys: blmUtRouteProbeKeys });
 const blmWyPlanProbe = buildRouteCatalogCoverageAuditPlan({ probeKeys: ['blm_wy_gtlf'] })[0];
 const blmAggregatePlan = buildRouteCatalogCoverageAuditPlan({ probeKeys: blmAggregateProbeKeys });
@@ -589,6 +602,21 @@ for (const aggregateProbe of blmAggregatePlan) {
     'blm_gtlf',
     `${aggregateProbe.key} audit should source-filter to BLM GTLF records`,
   );
+}
+
+for (const routeProbe of blmNmRoutePlan) {
+  assert.strictEqual(
+    routeProbe.expectedPosture,
+    'verified_public_recommendations',
+    `${routeProbe.key} should audit BLM GTLF New Mexico public aggregate recommendations after sync`,
+  );
+  assert.strictEqual(routeProbe.requiresSourceMatch, true, `${routeProbe.key} should require BLM-sourced public routes`);
+  assert.strictEqual(
+    routeProbe.requestBody.sourceAdapter,
+    'blm_gtlf',
+    `${routeProbe.key} audit should ask search for BLM-sourced public routes`,
+  );
+  assert.strictEqual(routeProbe.requestBody.limit, 25, `${routeProbe.key} should use a compact source-filtered result window`);
 }
 
 for (const routeProbe of blmUtRoutePlan) {
