@@ -175,6 +175,7 @@ async function invokeEntry(entry, env, selectedPayload) {
     publicRecommendationCount,
     currentConditionSourceCount: body.currentConditionSourceCount,
     currentConditionClosureCount: body.currentConditionClosureCount,
+    currentConditionAdvisoryCount: body.currentConditionAdvisoryCount,
     currentConditionBlockedRouteCount: body.currentConditionBlockedRouteCount,
     caveat: body.caveat,
   };

@@ -279,6 +279,10 @@ serve(async (req) => {
       (count, sourceRecord) => count + sourceRecord.closures.length,
       0,
     );
+    const currentConditionAdvisoryCount = currentConditionSources.reduce(
+      (count, sourceRecord) => count + sourceRecord.advisories.length,
+      0,
+    );
     let currentConditionBlockedRouteCount = 0;
     const layerSummaries = [];
     const rawFeatureRows: Array<Record<string, unknown>> = [];
@@ -379,6 +383,7 @@ serve(async (req) => {
           publicRecommendationCount,
           currentConditionSourceCount: currentConditionSources.length,
           currentConditionClosureCount,
+          currentConditionAdvisoryCount,
           currentConditionBlockedRouteCount,
           layers: layerSummaries,
         },
@@ -396,6 +401,7 @@ serve(async (req) => {
       publicRecommendationCount,
       currentConditionSourceCount: currentConditionSources.length,
       currentConditionClosureCount,
+      currentConditionAdvisoryCount,
       currentConditionBlockedRouteCount,
       caveat: 'BLM GTLF public recommendations are strict aggregates of open public motorized source segments only. Limited, seasonal, restricted, incomplete, or ungrouped records remain curation-only.',
     });

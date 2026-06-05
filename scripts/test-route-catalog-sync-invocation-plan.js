@@ -41,6 +41,7 @@ for (const required of [
   '--payload',
   'redactSecret',
   'currentConditionBlockedRouteCount',
+  'currentConditionAdvisoryCount',
 ]) {
   assert(runnerSource.includes(required), `Sync invocation runner should include ${required}`);
 }
