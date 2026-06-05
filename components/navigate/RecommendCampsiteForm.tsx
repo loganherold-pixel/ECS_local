@@ -399,7 +399,33 @@ export default function RecommendCampsiteForm({
         ) : null}
       </View>
 
-      <Section title="Verification">
+      <View style={styles.flowCard}>
+        <Text style={styles.eyebrow}>COMMUNITY CONTRIBUTION FLOW</Text>
+        <View style={styles.flowStepRow}>
+          <Text style={styles.flowStepBadge}>STEP 1</Text>
+          <Text style={styles.flowStepText}>Choose source from current location, dropped pin, or imported route.</Text>
+        </View>
+        <View style={styles.flowStepRow}>
+          <Text style={styles.flowStepBadge}>STEP 2</Text>
+          <Text style={styles.flowStepText}>Verify campsite details and vehicle suitability.</Text>
+        </View>
+        <View style={styles.flowStepRow}>
+          <Text style={styles.flowStepBadge}>STEP 3</Text>
+          <Text style={styles.flowStepText}>Choose private, group, or ECS Community Review visibility.</Text>
+        </View>
+        <View style={styles.flowStepRow}>
+          <Text style={styles.flowStepBadge}>STEP 4</Text>
+          <Text style={styles.flowStepText}>Submit or save with review status shown honestly.</Text>
+        </View>
+        <Text style={styles.helperText}>
+          Private and group saves stay scoped to you or your selected group.
+        </Text>
+        <Text style={styles.helperText}>
+          Community submissions remain pending until ECS review.
+        </Text>
+      </View>
+
+      <Section title="Step 2: Verify Campsite Details">
         {VERIFICATION_OPTIONS.map((option) => (
           <ChoiceRow
             key={option.key}
@@ -459,7 +485,7 @@ export default function RecommendCampsiteForm({
         </View>
       </Section>
 
-      <Section title="Visibility">
+      <Section title="Step 3: Choose Visibility">
         <View style={styles.chipGrid}>
           {VISIBILITY_OPTIONS.map((option) => {
             const selected = form.visibility_requested === option.key;
@@ -701,6 +727,12 @@ export default function RecommendCampsiteForm({
         </View>
       ) : null}
 
+      <Section title="Step 4: Submit Or Save">
+        <Text style={styles.helperText}>
+          ECS keeps community campsites pending for review and labels private or group saves by their actual visibility.
+        </Text>
+      </Section>
+
       <TouchableOpacity
         style={[styles.submitButton, (!validation.ok || submitting) && styles.submitButtonDisabled]}
         onPress={submit}
@@ -883,6 +915,38 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     fontSize: 10,
     lineHeight: 14,
+  },
+  flowCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.18)',
+    backgroundColor: 'rgba(196,138,44,0.065)',
+    padding: 12,
+    gap: 8,
+  },
+  flowStepRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  flowStepBadge: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 7.5,
+    letterSpacing: 0.8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    overflow: 'hidden',
+  },
+  flowStepText: {
+    ...TYPO.B2,
+    color: TACTICAL.text,
+    fontSize: 10.5,
+    lineHeight: 15,
+    flex: 1,
   },
   adjustButton: {
     alignSelf: 'flex-start',

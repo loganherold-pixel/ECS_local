@@ -5,12 +5,14 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const componentPath = path.join(root, 'components', 'campsites', 'MyCampsiteSubmissions.tsx');
 const moreTabPath = path.join(root, 'app', '(tabs)', 'more.tsx');
+const navigatePath = path.join(root, 'app', '(tabs)', 'navigate.tsx');
 const servicePath = path.join(root, 'lib', 'campsites', 'campsiteSubmissionService.ts');
 const typesPath = path.join(root, 'lib', 'campsites', 'campsiteRecommendationTypes.ts');
 const migrationPath = path.join(root, 'supabase', 'migrations', '014_campsite_submitter_review_loop.sql');
 
 const component = fs.readFileSync(componentPath, 'utf8');
 const moreTab = fs.readFileSync(moreTabPath, 'utf8');
+const navigate = fs.readFileSync(navigatePath, 'utf8');
 const service = fs.readFileSync(servicePath, 'utf8');
 const types = fs.readFileSync(typesPath, 'utf8');
 const migration = fs.readFileSync(migrationPath, 'utf8');
@@ -42,13 +44,35 @@ assert.ok(component.includes('Status timeline'), 'Detail should render a status 
 assert.ok(component.includes('submitPrivateSaveToCommunity'), 'Private saves should expose community submission action.');
 assert.ok(component.includes('respondToNeedsInfo'), 'Needs-info action should call the submitter service.');
 assert.ok(component.includes('withdrawMyCampsiteSubmission'), 'Withdraw action should call the submitter service.');
+assert.ok(component.includes('initialSubmissionId'), 'Submitter screen should accept a routed submission id.');
+assert.ok(component.includes('initialMode'), 'Submitter screen should accept a routed view/edit mode.');
+assert.ok(component.includes('editingSubmissionId'), 'Submitter screen should track the currently routed edit target.');
+assert.ok(component.includes('Submit updated revision'), 'Edit mode should expose updated revision copy.');
+assert.ok(component.includes('setSelectedBucket(bucketForSubmission'), 'Routed submissions should open the matching status bucket.');
 
 assert.ok(
   moreTab.includes("import MyCampsiteSubmissions from '../../components/campsites/MyCampsiteSubmissions'"),
   'More tab should import My Campsite Submissions.',
 );
+assert.ok(moreTab.includes('useLocalSearchParams'), 'More tab should read routed campsite submission params.');
 assert.ok(moreTab.includes("'my-campsites'"), 'More tab should include a my-campsites subtab.');
 assert.ok(moreTab.includes('<MyCampsiteSubmissions'), 'More tab should render the submitter screen.');
+assert.ok(moreTab.includes('initialSubmissionId={campsiteSubmissionIdParam}'), 'More tab should pass routed submission id to the submitter screen.');
+assert.ok(moreTab.includes("initialMode={campsiteSubmissionModeParam === 'edit' ? 'edit' : 'view'}"), 'More tab should pass routed edit mode to the submitter screen.');
+
+assert.ok(navigate.includes('openMyCampsiteSubmissions'), 'Navigate should expose a My Campsites handoff.');
+assert.ok(navigate.includes('MY CAMPSITES'), 'Navigate Tools should make the saved campsite list discoverable.');
+assert.ok(navigate.includes("pathname: '/more'"), 'Navigate campsite edit should route to the More tab.');
+assert.ok(navigate.includes("subTab: 'my-campsites'"), 'Navigate campsite edit should open the My Campsites subtab.');
+assert.ok(
+  navigate.includes('campsiteSubmissionId: options.submissionId') &&
+    navigate.includes('submissionId: selectedScopedCampsiteReport.id'),
+  'Pending campsite edit should target the selected submission.',
+);
+assert.ok(
+  navigate.includes('campsiteSubmissionMode: options.mode') && navigate.includes("mode: 'edit'"),
+  'Pending campsite edit should enter edit mode.',
+);
 
 assert.ok(service.includes('listMyCampsiteSubmissions'), 'Service should list current user submissions.');
 assert.ok(service.includes('getMyCampsiteSubmission'), 'Service should get current user submission detail.');

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   StyleSheet,
@@ -33,6 +33,8 @@ type Colors = {
 type Props = {
   colors: Colors;
   onToast?: (message: string) => void;
+  initialSubmissionId?: string | null;
+  initialMode?: 'view' | 'edit';
   service?: Pick<
     CampsiteSubmissionService,
     | 'listMyCampsiteSubmissions'
@@ -95,17 +97,23 @@ function bucketForSubmission(report: MyCampsiteSubmission): BucketKey {
 export default function MyCampsiteSubmissions({
   colors,
   onToast,
+  initialSubmissionId = null,
+  initialMode = 'view',
   service = campsiteSubmissionService,
 }: Props) {
   const [submissions, setSubmissions] = useState<MyCampsiteSubmission[]>([]);
   const [selectedBucket, setSelectedBucket] = useState<BucketKey>('pending');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingSubmissionId, setEditingSubmissionId] = useState<string | null>(
+    initialMode === 'edit' ? initialSubmissionId : null,
+  );
   const [detailsById, setDetailsById] = useState<Record<string, MyCampsiteSubmission>>({});
   const [notesById, setNotesById] = useState<Record<string, string>>({});
   const [ackById, setAckById] = useState<Record<string, { stewardship: boolean; sensitive: boolean }>>({});
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const routedSubmissionKeyRef = useRef<string | null>(null);
 
   const loadSubmissions = useCallback(async () => {
     setLoading(true);
@@ -150,6 +158,7 @@ export default function MyCampsiteSubmissions({
 
   const visibleSubmissions = buckets[selectedBucket];
   const selected = selectedId ? detailsById[selectedId] ?? submissions.find((item) => item.id === selectedId) ?? null : null;
+  const selectedInRevisionMode = selected ? editingSubmissionId === selected.id : false;
 
   const selectSubmission = useCallback(
     async (submissionId: string) => {
@@ -167,6 +176,34 @@ export default function MyCampsiteSubmissions({
     },
     [detailsById, onToast, service],
   );
+
+  useEffect(() => {
+    if (!initialSubmissionId || loading) return;
+    const routeKey = `${initialSubmissionId}:${initialMode}`;
+    if (routedSubmissionKeyRef.current === routeKey) return;
+
+    const target =
+      submissions.find((submission) => submission.id === initialSubmissionId) ??
+      detailsById[initialSubmissionId];
+    if (!target) return;
+
+    routedSubmissionKeyRef.current = routeKey;
+    setSelectedBucket(bucketForSubmission(target));
+    setSelectedId(initialSubmissionId);
+    if (initialMode === 'edit') {
+      setEditingSubmissionId(initialSubmissionId);
+    } else {
+      setEditingSubmissionId((current) => (current === initialSubmissionId ? null : current));
+    }
+    void selectSubmission(initialSubmissionId);
+  }, [
+    detailsById,
+    initialMode,
+    initialSubmissionId,
+    loading,
+    selectSubmission,
+    submissions,
+  ]);
 
   const refreshOne = useCallback(
     async (submissionId: string) => {
@@ -190,10 +227,12 @@ export default function MyCampsiteSubmissions({
         onToast?.(result.error);
         return;
       }
-      onToast?.('Campsite submission updated.');
+      const wasRevision = editingSubmissionId === submissionId;
+      setEditingSubmissionId((current) => (current === submissionId ? null : current));
+      onToast?.(wasRevision ? 'Updated campsite revision sent to review.' : 'Campsite submission updated.');
       await refreshOne(submissionId);
     },
-    [notesById, onToast, refreshOne, service],
+    [editingSubmissionId, notesById, onToast, refreshOne, service],
   );
 
   const respondNeedsInfo = useCallback(
@@ -299,7 +338,10 @@ export default function MyCampsiteSubmissions({
                   backgroundColor: active ? `${colors.gold}18` : colors.bgCard,
                 },
               ]}
-              onPress={() => setSelectedBucket(bucket.key)}
+              onPress={() => {
+                setSelectedBucket(bucket.key);
+                setEditingSubmissionId(null);
+              }}
               activeOpacity={0.7}
             >
               <Text style={[styles.bucketText, { color: active ? colors.gold : colors.textSecondary }]}>
@@ -339,7 +381,13 @@ export default function MyCampsiteSubmissions({
                         backgroundColor: colors.bgCard,
                       },
                     ]}
-                    onPress={() => selectSubmission(submission.id)}
+                    onPress={() => {
+                      setEditingSubmissionId(null);
+                      selectSubmission(submission.id);
+                    }}
+                    onLongPress={() => {
+                      if (submission.canEdit) setEditingSubmissionId(submission.id);
+                    }}
                     activeOpacity={0.75}
                   >
                     <View style={styles.cardTopRow}>
@@ -390,6 +438,15 @@ export default function MyCampsiteSubmissions({
                 </View>
               ) : null}
 
+              {selectedInRevisionMode ? (
+                <View style={[styles.revisionNotice, { borderColor: colors.goldBorder, backgroundColor: `${colors.gold}12` }]}>
+                  <Ionicons name="create-outline" size={16} color={colors.gold} />
+                  <Text style={[styles.noticeText, { color: colors.textPrimary }]}>
+                    Revision mode is open for this submission. Save sends updated notes back to ECS Community Review, and the campsite remains non-public until approved.
+                  </Text>
+                </View>
+              ) : null}
+
               {selected.canEdit ? (
                 <View style={styles.editGroup}>
                   <Text style={[styles.fieldLabel, { color: colors.textMuted }]}>Notes</Text>
@@ -410,7 +467,9 @@ export default function MyCampsiteSubmissions({
                     activeOpacity={0.7}
                   >
                     <Ionicons name="save-outline" size={15} color={colors.gold} />
-                    <Text style={[styles.secondaryActionText, { color: colors.gold }]}>Save allowed edits</Text>
+                    <Text style={[styles.secondaryActionText, { color: colors.gold }]}>
+                      {selectedInRevisionMode ? 'Submit updated revision' : 'Save allowed edits'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               ) : null}
@@ -556,6 +615,7 @@ const styles = StyleSheet.create({
   factLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' },
   factValue: { fontSize: 12, fontWeight: '700', lineHeight: 16 },
   notice: { borderWidth: 1, borderRadius: 8, padding: 10, flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  revisionNotice: { borderWidth: 1, borderRadius: 8, padding: 10, flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
   noticeText: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: '700' },
   editGroup: { gap: 8 },
   fieldLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' },

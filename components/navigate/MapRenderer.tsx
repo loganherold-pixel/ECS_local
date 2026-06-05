@@ -2612,9 +2612,31 @@ function makeMapHtml(
         }
       }
 
+      function ensureCampsiteFinalAccessLayer() {
+        if (!map.getLayer('campsite-final-access-layer')) {
+          map.addLayer({
+            id: 'campsite-final-access-layer',
+            type: 'line',
+            source: 'segment-source',
+            filter: ['==', ['get', 'kind'], 'campsite_final_access'],
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round'
+            },
+            paint: {
+              'line-color': ['get', 'color'],
+              'line-width': 4.25,
+              'line-opacity': 0.92,
+              'line-dasharray': [0.35, 1.25]
+            }
+          });
+        }
+      }
+
       function applySegmentLineStyle() {
         if (!map.getLayer('segment-layer')) return;
         try {
+          map.setFilter('segment-layer', ['!=', ['get', 'kind'], 'campsite_final_access']);
           map.setPaintProperty('segment-layer', 'line-color', ['get', 'color']);
           map.setPaintProperty('segment-layer', 'line-width', [
             'case',
@@ -4137,6 +4159,7 @@ function makeMapHtml(
         ensureLineLayer('route-progress-layer', 'route-progress-source', ['get', 'color'], 6, 0.98);
         ensureLineLayer('segment-layer', 'segment-source', ['get', 'color'], 4, 0.92);
         ensureExploreRouteHaloLayer();
+        ensureCampsiteFinalAccessLayer();
         applySegmentLineStyle();
         ensureLineLayer('trail-layer', 'trail-source', ['get', 'color'], 3.5, 0.9);
         ensureLineLayer('speed-layer', 'speed-source', ['get', 'color'], 2.25, 0.85, [1, 1]);

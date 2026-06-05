@@ -388,6 +388,13 @@ export function isPublicSuggestedTrailheadTrailPack(
   return true;
 }
 
+function shouldPromoteCatalogPublicRecommendation(
+  pack: Pick<ECSTrailPack, 'catalogVerification'>,
+  confidence: ECSTrailPackConfidence,
+): boolean {
+  return pack.catalogVerification?.publicRecommendation === true && confidence.blockers.length === 0;
+}
+
 function routeMetadataRecord(route: { routeMetadata?: Record<string, unknown> } | null | undefined): Record<string, unknown> {
   return route?.routeMetadata && typeof route.routeMetadata === 'object' ? route.routeMetadata : {};
 }
@@ -449,6 +456,7 @@ export function getDiscoverableTrailPacks(
     })
     .filter((pack) => {
       if (ownTrailPackIds.has(pack.id)) return true;
+      if (shouldPromoteCatalogPublicRecommendation(pack, pack.evaluatedConfidence)) return true;
       if (options.includeBroaderResults) {
         return pack.evaluatedConfidence.blockers.length === 0 && pack.evaluatedConfidence.band !== 'low';
       }

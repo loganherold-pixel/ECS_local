@@ -66,6 +66,8 @@ export type ECSTrailPackSubmission = {
   privacyWarnings: string[];
   sanitizedRoutePointCount: number;
   createdAt: string;
+  updatedAt?: string;
+  revisionCount?: number;
 };
 
 export type ECSTrailPackSubmissionResult = {
@@ -226,6 +228,18 @@ function inferDifficulty(value: string | null | undefined): ECSTrailPackDifficul
   return 'unknown';
 }
 
+function getTrailPackSubmissionGeometry(trailPack: ECSTrailPack): ECSTrailPackCoordinate[] {
+  const geometry = trailPack.routeGeometry;
+  if (!geometry) return [];
+  const coordinates =
+    geometry.type === 'MultiLineString'
+      ? (geometry.coordinates as number[][][]).flat()
+      : geometry.coordinates as number[][];
+  return coordinates
+    .map((coordinate) => normalizeCoordinate({ longitude: coordinate[0], latitude: coordinate[1] }))
+    .filter((point): point is ECSTrailPackCoordinate => !!point);
+}
+
 export function trailPackRouteInputFromNavigationPayload(
   payload: NavigationHandoffPayload | null | undefined,
   sourceEntryPoint: ECSTrailPackSubmissionEntryPoint,
@@ -268,6 +282,47 @@ export function trailPackRouteInputFromSavedTrail(
     difficulty: 'unknown',
     sourceFormat: 'saved',
     createdAt: trail.saved_at,
+  };
+}
+
+export function trailPackRouteInputFromSubmission(
+  submission: ECSTrailPackSubmission | null | undefined,
+): ECSTrailPackSubmissionRouteInput | null {
+  if (!submission) return null;
+  const routeGeometry = getTrailPackSubmissionGeometry(submission.trailPack);
+  return {
+    id: submission.sourceRouteId,
+    title: submission.trailPack.name || 'Pending Trail Pack',
+    subtitle: submission.trailPack.description ?? null,
+    sourceEntryPoint: submission.sourceEntryPoint,
+    routeGeometry,
+    distanceMiles: submission.trailPack.distanceMiles,
+    estimatedDurationMinutes: submission.trailPack.estimatedDurationMinutes,
+    routeType: submission.trailPack.routeType,
+    difficulty: submission.trailPack.difficulty ?? 'unknown',
+    sourceFormat: 'saved',
+    createdAt: submission.trailPack.createdAt,
+  };
+}
+
+export function trailPackFormValuesFromSubmission(
+  submission: ECSTrailPackSubmission | null | undefined,
+): ECSTrailPackSubmissionFormValues | null {
+  if (!submission) return null;
+  return {
+    name: submission.trailPack.name,
+    description: submission.trailPack.description ?? '',
+    difficulty: submission.trailPack.difficulty ?? 'unknown',
+    vehicleUsed: submission.vehicleUsed ?? '',
+    recommendedVehicleType: submission.recommendedVehicleType ?? submission.trailPack.vehicleFit?.[0] ?? '',
+    routeType: submission.trailPack.routeType,
+    seasonNotes: submission.seasonNotes ?? '',
+    hazardNotes: submission.hazardNotes ?? '',
+    acknowledgesPrivateLandOrClosures: true,
+    certifiesPermissionToShare: true,
+    tags: (submission.trailPack.tags ?? []).filter((tag): tag is ECSTrailPackSubmissionTag =>
+      TRAIL_PACK_SUBMISSION_TAG_OPTIONS.some((option) => option.key === tag),
+    ),
   };
 }
 
@@ -333,22 +388,25 @@ export function sanitizeTrailPackSubmissionGeometry(
   return points;
 }
 
-export function createPendingTrailPackSubmission(
+function buildPendingTrailPackSubmission(
   routeInput: ECSTrailPackSubmissionRouteInput,
   values: ECSTrailPackSubmissionFormValues,
   options: { currentLocation?: ECSTrailPackCoordinate | null; nowIso?: string } = {},
+  existing?: { submissionId: string; trailPackId: string; createdAt: string; revisionCount?: number },
 ): ECSTrailPackSubmissionResult {
   const errors = validateTrailPackSubmission(routeInput, values);
   if (errors.length > 0) {
     throw new Error(errors.join(' '));
   }
 
-  const createdAt = options.nowIso ?? new Date().toISOString();
+  const updatedAt = options.nowIso ?? new Date().toISOString();
+  const createdAt = existing?.createdAt ?? updatedAt;
   const privacyWarnings = detectTrailPackPrivacyWarnings(routeInput, options.currentLocation);
   const sanitizedGeometry = sanitizeTrailPackSubmissionGeometry(routeInput, options.currentLocation);
   const centerCoordinate = computeCenterCoordinate(sanitizedGeometry);
-  const submissionId = uuid();
-  const trailPackId = `pending-${routeInput.id}-${submissionId}`;
+  const submissionId = existing?.submissionId ?? uuid();
+  const trailPackId = existing?.trailPackId ?? `pending-${routeInput.id}-${submissionId}`;
+  const revisionCount = existing ? (existing.revisionCount ?? 0) + 1 : 0;
   const vehicleFit = compact(values.recommendedVehicleType)
     ? [compact(values.recommendedVehicleType) as string]
     : [];
@@ -374,14 +432,17 @@ export function createPendingTrailPackSubmission(
     difficulty: values.difficulty,
     vehicleFit,
     confidenceScore: 0,
-    confidenceReasons: ['Submitted by an ECS user for review.', ...notes],
+    confidenceReasons: [
+      existing ? 'Updated by the submitter for ECS review.' : 'Submitted by an ECS user for review.',
+      ...notes,
+    ],
     positiveFeedbackCount: 0,
     negativeFeedbackCount: 0,
     completionCount: 0,
     reviewStatus: 'pending_review',
     tags: values.tags,
     createdAt,
-    updatedAt: createdAt,
+    updatedAt,
   };
 
   return {
@@ -397,9 +458,19 @@ export function createPendingTrailPackSubmission(
       privacyWarnings,
       sanitizedRoutePointCount: sanitizedGeometry.length,
       createdAt,
+      updatedAt,
+      revisionCount,
     },
     warnings: privacyWarnings,
   };
+}
+
+export function createPendingTrailPackSubmission(
+  routeInput: ECSTrailPackSubmissionRouteInput,
+  values: ECSTrailPackSubmissionFormValues,
+  options: { currentLocation?: ECSTrailPackCoordinate | null; nowIso?: string } = {},
+): ECSTrailPackSubmissionResult {
+  return buildPendingTrailPackSubmission(routeInput, values, options);
 }
 
 export const trailPackSubmissionStore = {
@@ -426,6 +497,43 @@ export const trailPackSubmissionStore = {
     persist();
     emit();
     return result;
+  },
+
+  update(
+    submissionId: string,
+    routeInput: ECSTrailPackSubmissionRouteInput,
+    values: ECSTrailPackSubmissionFormValues,
+    options: { currentLocation?: ECSTrailPackCoordinate | null } = {},
+  ): ECSTrailPackSubmissionResult {
+    hydrate();
+    const existing = snapshot.submissions.find((submission) => submission.id === submissionId);
+    if (!existing) throw new Error('Trail Pack submission unavailable.');
+    const result = buildPendingTrailPackSubmission(routeInput, values, options, {
+      submissionId: existing.id,
+      trailPackId: existing.trailPack.id,
+      createdAt: existing.createdAt,
+      revisionCount: existing.revisionCount,
+    });
+    snapshot = {
+      submissions: snapshot.submissions.map((submission) =>
+        submission.id === submissionId ? result.submission : submission,
+      ),
+    };
+    persist();
+    emit();
+    return result;
+  },
+
+  withdraw(submissionId: string): ECSTrailPackSubmission | null {
+    hydrate();
+    const existing = snapshot.submissions.find((submission) => submission.id === submissionId) ?? null;
+    if (!existing) return null;
+    snapshot = {
+      submissions: snapshot.submissions.filter((submission) => submission.id !== submissionId),
+    };
+    persist();
+    emit();
+    return existing;
   },
 
   clearForTests(): void {

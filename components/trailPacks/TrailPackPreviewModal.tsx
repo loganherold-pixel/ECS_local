@@ -57,6 +57,9 @@ type TrailPackPreviewModalProps = {
   onFeedback: (type: ECSTrailPackFeedbackType, note?: string) => ECSTrailPackFeedbackResult;
   offlineCacheAvailable?: boolean;
   onCacheOffline?: () => void;
+  isOwnerPending?: boolean;
+  onEditSubmission?: () => void;
+  onWithdrawSubmission?: () => void;
   detailLoading?: boolean;
   detailError?: string | null;
 };
@@ -232,6 +235,9 @@ export default function TrailPackPreviewModal({
   onFeedback,
   offlineCacheAvailable = false,
   onCacheOffline,
+  isOwnerPending = false,
+  onEditSubmission,
+  onWithdrawSubmission,
   detailLoading = false,
   detailError = null,
 }: TrailPackPreviewModalProps) {
@@ -294,6 +300,36 @@ export default function TrailPackPreviewModal({
       contentContainerStyle={s.fullHeightContent}
       footer={(
         <ECSOverlayFooter style={s.footer}>
+          {isOwnerPending && onEditSubmission ? (
+            <TouchableOpacity
+              style={s.secondaryAction}
+              activeOpacity={0.78}
+              accessibilityRole="button"
+              accessibilityLabel="EDIT SUBMISSION"
+              onPress={() => {
+                hapticMicro();
+                onEditSubmission();
+              }}
+            >
+              <Ionicons name="create-outline" size={14} color={TACTICAL.amber} />
+              <Text style={s.secondaryActionText} numberOfLines={2}>EDIT SUBMISSION</Text>
+            </TouchableOpacity>
+          ) : null}
+          {isOwnerPending && onWithdrawSubmission ? (
+            <TouchableOpacity
+              style={[s.secondaryAction, s.withdrawAction]}
+              activeOpacity={0.78}
+              accessibilityRole="button"
+              accessibilityLabel="WITHDRAW"
+              onPress={() => {
+                hapticMicro();
+                onWithdrawSubmission();
+              }}
+            >
+              <Ionicons name="close-circle-outline" size={14} color="#E06755" />
+              <Text style={[s.secondaryActionText, s.withdrawActionText]}>WITHDRAW</Text>
+            </TouchableOpacity>
+          ) : null}
           {onRoutePreview ? (
             <TouchableOpacity
               style={[s.secondaryAction, s.routePreviewAction, routePreviewDisabled && s.disabledAction]}
@@ -377,6 +413,15 @@ export default function TrailPackPreviewModal({
           <Text style={s.metaText}>{guidanceReadiness.label} | {guidanceReadiness.description}</Text>
           <Text style={s.metaText}>{communitySummary}</Text>
         </View>
+
+        {isOwnerPending ? (
+          <View style={s.notice}>
+            <Ionicons name="shield-checkmark-outline" size={13} color={TACTICAL.amber} />
+            <Text style={s.noticeText}>
+              This is your pending route recommendation. It is not visible to other users until ECS review approves it.
+            </Text>
+          </View>
+        ) : null}
 
         {detailLoading ? (
           <View style={s.notice}>
@@ -824,6 +869,10 @@ const s = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 10,
   },
+  withdrawAction: {
+    borderColor: 'rgba(224,103,85,0.38)',
+    backgroundColor: 'rgba(224,103,85,0.08)',
+  },
   routePreviewAction: {
     borderColor: TACTICAL.amber + '38',
     backgroundColor: TACTICAL.amber + '10',
@@ -840,6 +889,9 @@ const s = StyleSheet.create({
   },
   routePreviewActionText: {
     color: TACTICAL.amber,
+  },
+  withdrawActionText: {
+    color: '#E06755',
   },
   secondaryActionTextDisabled: {
     color: TACTICAL.textMuted,

@@ -171,11 +171,18 @@ import {
 } from '../../lib/map/dispersedCampingSegmentBuild';
 import {
   buildRoadRouteFromCachedGeometry,
+  fetchRoadRoute,
   type RoadNavCoordinate,
   type RoadNavDestination,
   type RoadNavRoute,
   type RoadNavSearchSuggestion,
 } from '../../lib/mapboxRoadNavigation';
+import {
+  buildCampsiteApproachRouteIntent,
+  buildCampsiteFinalAccessSegment,
+  normalizeCampsiteApproachBlockers,
+  type CampsiteFinalAccess,
+} from '../../lib/campsites/campsiteApproachRouting';
 import {
   canSaveRouteBuilderSegments,
   fetchMapboxMapMatchingCandidate,
@@ -310,6 +317,13 @@ import PinDetailsModal from '../../components/navigate/PinDetailsModal';
 import PinDrawer from '../../components/navigate/PinDrawer';
 import RecommendCampsiteForm from '../../components/navigate/RecommendCampsiteForm';
 import RecommendCampsiteGpxImportReview from '../../components/navigate/RecommendCampsiteGpxImportReview';
+import {
+  NavigateToolActionCard,
+  NavigateToolBadgeRow,
+  NavigateToolFooter,
+  NavigateToolHero,
+  NavigateToolSection,
+} from '../../components/navigate/NavigateToolSurface';
 import ReplayBar, { type ReplaySpeed } from '../../components/navigate/ReplayBar';
 import TrailStatusModal from '../../components/navigate/TrailStatusModal';
 import TrailPackSubmissionModal from '../../components/trailPacks/TrailPackSubmissionModal';
@@ -2532,6 +2546,7 @@ type NavigateTopPopup =
   | 'pinEditor'
   | 'campScout'
   | 'recommendCampsite'
+  | 'recommendRoute'
   | null;
 
 type NavigateToolsChildPopup =
@@ -2543,7 +2558,8 @@ type NavigateToolsChildPopup =
   | 'stitch'
   | 'offlineCache'
   | 'campScout'
-  | 'recommendCampsite';
+  | 'recommendCampsite'
+  | 'recommendRoute';
 
 function isToolsChildPopup(popup: NavigateTopPopup): popup is NavigateToolsChildPopup {
   return (
@@ -2555,7 +2571,8 @@ function isToolsChildPopup(popup: NavigateTopPopup): popup is NavigateToolsChild
     popup === 'stitch' ||
     popup === 'offlineCache' ||
     popup === 'campScout' ||
-    popup === 'recommendCampsite'
+    popup === 'recommendCampsite' ||
+    popup === 'recommendRoute'
   );
 }
 
@@ -3574,6 +3591,8 @@ const queueMapCameraCommand = useCallback((
   const intelOpen = mapOverlayStartupReady && activeTopPopup === 'intel';
   const recommendCampsiteModalVisible =
     mapOverlayStartupReady && activeTopPopup === 'recommendCampsite';
+  const recommendRouteModalVisible =
+    mapOverlayStartupReady && activeTopPopup === 'recommendRoute';
 const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === 'online');
   const prevOnlineRef = useRef(isOnline);
   const prevConnectivityStatusRef = useRef<ConnectivityDetailedState['status']>(
@@ -3721,10 +3740,18 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     enabled: true,
     liveServicesEnabled: liveNavigateServicesEnabled,
   });
+  const [campsiteFinalAccess, setCampsiteFinalAccess] =
+    useState<CampsiteFinalAccess | null>(null);
   const roadSession = roadNavigation.session;
   const roadStepListExpanded = roadNavigation.stepListExpanded;
   const setRoadStepListExpanded = roadNavigation.setStepListExpanded;
   const selectRoadSuggestion = roadNavigation.selectSuggestion;
+
+  useEffect(() => {
+    const raw = roadSession.destination?.raw as Record<string, unknown> | null | undefined;
+    if (raw?.campsiteApproach) return;
+    setCampsiteFinalAccess(null);
+  }, [roadSession.destination?.id, roadSession.destination?.raw]);
 
   const [exploreNavigationPayload, setExploreNavigationPayload] =
     useState<NavigationHandoffPayload | null>(null);
@@ -7087,6 +7114,12 @@ const openRecommendCampsiteChooser = useCallback(() => {
   setToolsMenuOpen(true);
 }, [openTopPopup]);
 
+const openRecommendRouteChooser = useCallback(() => {
+  hapticCommand();
+  openTopPopup('recommendRoute');
+  setToolsMenuOpen(true);
+}, [openTopPopup]);
+
 const handleRecommendCampsiteUseCurrentLocation = useCallback(() => {
   hapticCommand();
   const currentLocation = latestGpsMapLocation ?? userLocation;
@@ -7542,18 +7575,71 @@ const handleQuickPinDrop = useCallback(() => {
         lat: input.latitude,
         lng: input.longitude,
       };
+      const approachBlockers = normalizeCampsiteApproachBlockers(
+        input.raw.campsiteApproachBlockers ??
+          input.raw.approachBlockers ??
+          input.raw.finalAccessBlockers,
+      );
 
       fitMapToCoordinatePreview(campCoordinate, 92, 'camp_intel_focus');
 
+      if (mapToken && roadNavigationCurrentLocation && liveNavigateServicesEnabled) {
+        try {
+          const unresolvedIntent = buildCampsiteApproachRouteIntent({
+            actionId: input.actionId,
+            title: input.title,
+            subtitle: input.subtitle,
+            campCoordinate,
+            approachCoordinate: campCoordinate,
+            blockers: approachBlockers,
+            raw: input.raw,
+          });
+          const route = await fetchRoadRoute({
+            accessToken: mapToken,
+            origin: roadNavigationCurrentLocation,
+            destination: unresolvedIntent.destination,
+          });
+          const approachCoordinate = route.geometry[route.geometry.length - 1] ?? campCoordinate;
+          const approachIntent = buildCampsiteApproachRouteIntent({
+            actionId: input.actionId,
+            title: input.title,
+            subtitle: input.subtitle,
+            campCoordinate,
+            approachCoordinate,
+            blockers: approachBlockers,
+            raw: input.raw,
+          });
+          setCampsiteFinalAccess(approachIntent.finalAccess);
+          await previewRoadRoute(
+            {
+              ...route,
+              destination: approachIntent.destination,
+            },
+            'manual_selection',
+          );
+          showToast(
+            approachIntent.finalAccess?.status === 'blocked'
+              ? `ROUTE PREVIEW STARTED: ${input.title.toUpperCase()} | FINAL ACCESS BLOCKED`
+              : approachIntent.finalAccess
+                ? `ROUTE PREVIEW STARTED: ${input.title.toUpperCase()} | FINAL ACCESS FIELD CHECK`
+                : `ROUTE PREVIEW STARTED: ${input.title.toUpperCase()}`,
+          );
+          return;
+        } catch {}
+      }
+
+      const fallbackIntent = buildCampsiteApproachRouteIntent({
+        actionId: input.actionId,
+        title: input.title,
+        subtitle: input.subtitle,
+        campCoordinate,
+        approachCoordinate: campCoordinate,
+        blockers: approachBlockers,
+        raw: input.raw,
+      });
+      setCampsiteFinalAccess(null);
       await previewRoadDestination(
-        {
-          id: input.actionId,
-          title: input.title,
-          subtitle: input.subtitle,
-          coordinate: campCoordinate,
-          sourceType: 'manual_selection',
-          raw: input.raw,
-        },
+        fallbackIntent.destination,
         'manual_selection',
       );
 
@@ -7570,7 +7656,11 @@ const handleQuickPinDrop = useCallback(() => {
     closeTopPopup,
     endTrailNavigation,
     fitMapToCoordinatePreview,
+    liveNavigateServicesEnabled,
+    mapToken,
     previewRoadDestination,
+    previewRoadRoute,
+    roadNavigationCurrentLocation,
     roadSession.status,
     showToast,
     trailNavigationUiMode,
@@ -7839,25 +7929,59 @@ const handleQuickPinDrop = useCallback(() => {
     setSelectedScopedCampsite(null);
   }, []);
 
+  const openMyCampsiteSubmissions = useCallback((options?: {
+    submissionId?: string | null;
+    mode?: 'view' | 'edit';
+  }) => {
+    hapticCommand();
+    closeNavigateDetailSurfaces();
+    setToolsMenuOpen(false);
+    setActiveTopPopup(null);
+    router.push({
+      pathname: '/more',
+      params: {
+        subTab: 'my-campsites',
+        ...(options?.submissionId ? { campsiteSubmissionId: options.submissionId } : {}),
+        ...(options?.mode ? { campsiteSubmissionMode: options.mode } : {}),
+      },
+    } as any);
+  }, [closeNavigateDetailSurfaces, router]);
+
   const handleScopedCampsiteEdit = useCallback(() => {
-    showToast('Campsite edit opens from your saved campsite list.');
-  }, [showToast]);
+    if (!selectedScopedCampsiteReport) return;
+    openMyCampsiteSubmissions({
+      submissionId: selectedScopedCampsiteReport.id,
+      mode: 'edit',
+    });
+  }, [openMyCampsiteSubmissions, selectedScopedCampsiteReport]);
 
   const handleScopedCampsiteDelete = useCallback(() => {
-    showToast('Delete is available from your private campsite list.');
-  }, [showToast]);
+    if (!selectedScopedCampsiteReport) return;
+    openMyCampsiteSubmissions({
+      submissionId: selectedScopedCampsiteReport.id,
+      mode: 'view',
+    });
+  }, [openMyCampsiteSubmissions, selectedScopedCampsiteReport]);
 
   const handleScopedCampsiteShare = useCallback(() => {
     showToast('Group sharing is available from the campsite detail workflow.');
   }, [showToast]);
 
   const handleScopedCampsiteSubmitToCommunity = useCallback(() => {
-    showToast('Community submission requires stewardship review from the campsite form.');
-  }, [showToast]);
+    if (!selectedScopedCampsiteReport) return;
+    openMyCampsiteSubmissions({
+      submissionId: selectedScopedCampsiteReport.id,
+      mode: 'view',
+    });
+  }, [openMyCampsiteSubmissions, selectedScopedCampsiteReport]);
 
   const handleScopedCampsiteWithdraw = useCallback(() => {
-    showToast('Withdraw is available from your pending campsite submission.');
-  }, [showToast]);
+    if (!selectedScopedCampsiteReport) return;
+    openMyCampsiteSubmissions({
+      submissionId: selectedScopedCampsiteReport.id,
+      mode: 'view',
+    });
+  }, [openMyCampsiteSubmissions, selectedScopedCampsiteReport]);
 
   const handleScopedCampsiteOpenReview = useCallback(() => {
     showToast('Opening Community Campsite Review from reviewer tools.');
@@ -11005,12 +11129,18 @@ const handleCreateRun = useCallback(() => {
     () => buildExploreRouteOverlaySignature(exploreRouteOverlaySegments),
     [exploreRouteOverlaySegments],
   );
+  const campsiteFinalAccessSegment = useMemo(
+    () => buildCampsiteFinalAccessSegment(campsiteFinalAccess),
+    [campsiteFinalAccess],
+  );
   const mapSegmentFeatures = useMemo(
-    () =>
-      exploreRouteOverlaySegments.length > 0
+    () => {
+      const base = exploreRouteOverlaySegments.length > 0
         ? [...(displayedSegmentFeatures ?? []), ...exploreRouteOverlaySegments]
-        : displayedSegmentFeatures,
-    [displayedSegmentFeatures, exploreRouteOverlaySegments],
+        : [...(displayedSegmentFeatures ?? [])];
+      return campsiteFinalAccessSegment ? [...base, campsiteFinalAccessSegment] : base;
+    },
+    [campsiteFinalAccessSegment, displayedSegmentFeatures, exploreRouteOverlaySegments],
   );
 
   useEffect(() => {
@@ -11415,6 +11545,19 @@ const handleCreateRun = useCallback(() => {
     !selectedCampScoutCandidateId &&
     !selectedCampOpsEndpointId &&
     !roadStepListExpanded;
+  const idleDestinationSearchVisible =
+    mapOverlayStartupReady &&
+    (navigationOverlayMode === 'idle' || navigationOverlayMode === 'search') &&
+    !toolsMenuOpen &&
+    !activeTopPopup &&
+    !pinDropMode &&
+    !selectedCampIntelId &&
+    !selectedCampScoutCandidateId &&
+    !selectedCampOpsEndpointId &&
+    !roadStepListExpanded &&
+    !routeBuilderActive &&
+    campScoutAreaMode === 'idle' &&
+    !roadNavigation.session.destination;
   const floatingToolsVisible = mapOverlayStartupReady;
   const campLayerControlsAvailable =
     communityCampsitesEnabled ||
@@ -11506,7 +11649,8 @@ const handleCreateRun = useCallback(() => {
       ? campOpsRouteLifecycle.message
       : null;
   const routeBottomRightInset = ACTIVE_GUIDANCE_RIGHT_INSET;
-  const routeIndicatorVisible = topStatusOverlaysVisible && navigationOverlayMode !== 'preview';
+  const routeIndicatorVisible =
+    topStatusOverlaysVisible && navigationOverlayMode !== 'preview' && !idleDestinationSearchVisible;
   const gpsStatusOverlayVisible = mapOverlayStartupReady && !mapLoading && topStatusOverlaysVisible;
   const campsiteDrawControlsVisible =
     !routeBuilderActive &&
@@ -11524,7 +11668,8 @@ const handleCreateRun = useCallback(() => {
     ? MAP_TOP_CONTROL_ROW + topToolboxStackHeight + OVERLAY_GAP
     : TOP_STATUS_STACK_START;
 
-  const hideWeatherTopOverlays = !topStatusOverlaysVisible || topRouteSurfaceVisible;
+  const hideWeatherTopOverlays =
+    !topStatusOverlaysVisible || topRouteSurfaceVisible || idleDestinationSearchVisible;
 
   useEffect(() => {
     const activeSessionKey =
@@ -12230,19 +12375,6 @@ const handleTopToolboxLayout = useCallback(
     navigationStartReadinessStack,
     navigateRouteConfidenceSummary,
   ]);
-  const toolsSelectedPreviewSummary = useMemo(() => {
-    if (navigationOverlayMode !== 'preview' || !navigationPreviewContext) return null;
-    return {
-      tripLabel:
-        navigationPreviewContext.sourceLabel ??
-        navigationPreviewContext.tripMode.toUpperCase(),
-      phaseLabel: navigationPreviewContext.phaseLabel ?? 'SELECTED',
-      title: navigationPreviewContext.title,
-      subtitle: navigationPreviewContext.subtitle ?? null,
-      actionLabel: navigationPreviewContext.primaryActionLabel ?? 'Begin Route',
-    };
-  }, [navigationOverlayMode, navigationPreviewContext]);
-
   const navigationActiveContext = useMemo(() => {
     const roadRouteActive = roadNavigation.uiMode === 'active';
     const trailRouteActive =
@@ -13340,10 +13472,10 @@ const showInlineIntelPanel = false;
 const toolsChildPanelVisible = toolsMenuOpen && isToolsChildPopup(activeTopPopup);
 const toolsPopupVisible = mapOverlayStartupReady && toolsMenuOpen && !toolsChildPanelVisible;
 useEffect(() => {
-  if (!toolsMenuOpen) {
+  if (roadNavigation.query.trim().length > 0 && recentSearchesVisible) {
     setRecentSearchesVisible(false);
   }
-}, [toolsMenuOpen]);
+}, [recentSearchesVisible, roadNavigation.query]);
 const showIntelPopup = intelOpen && isMapUIReady;
 const activeImportedRoute = routeStore.getActive();
 useEffect(() => {
@@ -15835,26 +15967,21 @@ const toggleRemotenessOverlay = useCallback(() => {
       hapticMicro();
       setSelectedEstablishedCampsite(null);
       setCampLayerMenuOpen(false);
-      await previewRoadDestination(
-        {
-          id: `established-campsite:${campsite.id}`,
-          title: campsite.name,
-          subtitle: campsite.managingAgency || campsite.operatorName || 'Established campground',
-          coordinate: {
-            lat: campsite.latitude,
-            lng: campsite.longitude,
-          },
-          sourceType: 'manual_selection',
-          raw: {
-            source: 'established_campground',
-            campgroundId: campsite.id,
-            provider: campsite.primaryProvider ?? campsite.source,
-          },
+      await previewCampsiteDestination({
+        actionId: `established-campsite:${campsite.id}`,
+        title: campsite.name,
+        subtitle: campsite.managingAgency || campsite.operatorName || 'Established campground',
+        latitude: campsite.latitude,
+        longitude: campsite.longitude,
+        raw: {
+          source: 'established_campground',
+          campgroundId: campsite.id,
+          provider: campsite.primaryProvider ?? campsite.source,
         },
-        'manual_selection',
-      );
+        restoreSelection: () => setSelectedEstablishedCampsite(campsite),
+      });
     },
-    [previewRoadDestination, showToast],
+    [previewCampsiteDestination, showToast],
   );
 
   const closeEstablishedCampsiteSheet = useCallback(() => {
@@ -16112,9 +16239,16 @@ const handleRecentSearchSelection = useCallback((suggestion: RoadNavSearchSugges
   handleRoadOverlaySelectSuggestion(suggestion);
 }, [handleRoadOverlaySelectSuggestion]);
 
+const idleDestinationSearchHasQuery = roadNavigation.query.trim().length > 0;
+const idleDestinationSearchNoMatchesVisible =
+  idleDestinationSearchHasQuery &&
+  !roadNavigation.searchLoading &&
+  !roadNavigation.searchError &&
+  roadNavigation.suggestions.length === 0 &&
+  !searchOperationalState.disabled;
 const recentSearchesSectionVisible =
   recentSearchesVisible &&
-  roadNavigation.query.trim().length === 0 &&
+  !idleDestinationSearchHasQuery &&
   !roadNavigation.searchLoading;
 
 const gpsStatusOverlayBottomOffset = LOWER_DOCK_EXCLUSION + PAGE_FRAME_BOTTOM_GAP + 12;
@@ -16349,6 +16483,194 @@ const stableMapSurface = useMemo(() => {
           closed: campsiteDrawingClosed,
         }}
       />
+
+      {idleDestinationSearchVisible ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.idleDestinationSearchWrap,
+            {
+              top: roadNavigationSurfaceTopOffset,
+              left: OVERLAY_EDGE,
+              right: OVERLAY_EDGE,
+            },
+          ]}
+        >
+          <View style={styles.idleDestinationSearchShell}>
+            <View style={styles.idleDestinationSearchHeader}>
+              <View style={styles.idleDestinationSearchTitleRow}>
+                <Ionicons name="search-outline" size={14} color={TACTICAL.amber} />
+                <Text style={styles.idleDestinationSearchTitle}>SEARCH ADDRESS OR PLACE</Text>
+              </View>
+              <ECSBadge
+                label={searchOperationalState.label ?? 'SEARCH READY'}
+                tone={
+                  searchOperationalState.tone === 'live'
+                    ? 'live'
+                    : searchOperationalState.tone === 'unavailable'
+                      ? 'unavailable'
+                      : 'warning'
+                }
+                compact
+              />
+            </View>
+
+            <View style={styles.idleDestinationSearchFieldRow}>
+              <View style={styles.idleDestinationSearchFieldShell}>
+                <ECSSearchField
+                  value={roadNavigation.query}
+                  onChangeText={roadNavigation.setQuery}
+                  placeholder={
+                    searchOperationalState.disabled
+                      ? navigateOperationalState.mode === 'offline_partial_map'
+                        ? 'Search unavailable with cached maps only'
+                        : 'Search unavailable offline'
+                      : 'Enter address, town, trailhead, or place'
+                  }
+                  disabled={searchOperationalState.disabled}
+                  loading={roadNavigation.searchLoading}
+                  onClear={
+                    idleDestinationSearchHasQuery
+                      ? () => roadNavigation.setQuery('')
+                      : undefined
+                  }
+                  style={styles.idleDestinationSearchField}
+                  inputProps={{
+                    autoCapitalize: 'words',
+                    autoCorrect: false,
+                    returnKeyType: 'search',
+                    accessibilityLabel: 'Search address or place',
+                    accessibilityHint: 'Search for a destination to build a road navigation route.',
+                  }}
+                />
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.idleDestinationSearchRecentButton,
+                  recentSearchesVisible && styles.idleDestinationSearchRecentButtonActive,
+                ]}
+                onPress={toggleRecentSearches}
+                activeOpacity={0.82}
+                accessibilityRole="button"
+                accessibilityLabel="Toggle recent destination searches"
+              >
+                <Ionicons
+                  name="time-outline"
+                  size={17}
+                  color={recentSearchesVisible ? '#091014' : TACTICAL.amber}
+                />
+              </TouchableOpacity>
+            </View>
+
+            {searchOperationalState.detail ? (
+              <Text style={styles.idleDestinationSearchOperationalText} numberOfLines={1}>
+                {searchOperationalState.detail}
+              </Text>
+            ) : null}
+
+            {roadNavigation.searchError && roadNavigation.suggestions.length === 0 ? (
+              <View style={styles.idleDestinationSearchResultsBlock}>
+                <ECSResultsEmptyState
+                  title={searchOperationalState.disabled ? 'Search Unavailable Offline' : 'Search Paused'}
+                  message={searchOperationalState.detail ?? roadNavigation.searchError}
+                  actionLabel="Clear Search"
+                  onAction={() => roadNavigation.setQuery('')}
+                  variant="compact"
+                />
+              </View>
+            ) : null}
+
+            {roadNavigation.suggestions.length > 0 ? (
+              <View style={styles.idleDestinationSearchResultsBlock}>
+                <Text style={styles.idleDestinationSearchSectionTitle}>
+                  RESULTS | {roadNavigation.suggestions.length}
+                </Text>
+                <ScrollView
+                  style={styles.idleDestinationSearchResultsScroll}
+                  nestedScrollEnabled
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {roadNavigation.suggestions.map((suggestion) => (
+                    <TouchableOpacity
+                      key={suggestion.id}
+                      style={styles.idleDestinationSearchSuggestionItem}
+                      onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}
+                      activeOpacity={0.82}
+                    >
+                      <Ionicons name="location-outline" size={15} color={TACTICAL.amber} />
+                      <View style={styles.idleDestinationSearchSuggestionTextWrap}>
+                        <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
+                          {suggestion.title}
+                        </Text>
+                        {suggestion.subtitle ? (
+                          <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
+                            {suggestion.subtitle}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <Ionicons name="chevron-forward" size={14} color={TACTICAL.textMuted} />
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
+
+            {recentSearchesSectionVisible ? (
+              <View style={styles.idleDestinationSearchResultsBlock}>
+                <Text style={styles.idleDestinationSearchSectionTitle}>{recentSearchesTitle}</Text>
+                {recentSearches.length > 0 ? (
+                  <ScrollView
+                    style={styles.idleDestinationSearchResultsScroll}
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    {recentSearches.map((suggestion) => (
+                      <TouchableOpacity
+                        key={`recent-${suggestion.id}`}
+                        style={styles.idleDestinationSearchSuggestionItem}
+                        onPress={() => handleRecentSearchSelection(suggestion)}
+                        activeOpacity={0.82}
+                      >
+                        <Ionicons name="time-outline" size={15} color={TACTICAL.amber} />
+                        <View style={styles.idleDestinationSearchSuggestionTextWrap}>
+                          <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
+                            {suggestion.title}
+                          </Text>
+                          <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
+                            {suggestion.subtitle ?? 'Saved destination'}
+                          </Text>
+                        </View>
+                        <Ionicons name="navigate-outline" size={14} color={TACTICAL.textMuted} />
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                ) : (
+                  <ECSResultsEmptyState
+                    title="No recent searches"
+                    message={recentSearchesEmptyMessage}
+                    actionLabel="Search Live"
+                    onAction={() => roadNavigation.setQuery('')}
+                    variant="compact"
+                  />
+                )}
+              </View>
+            ) : null}
+
+            {idleDestinationSearchNoMatchesVisible ? (
+              <View style={styles.idleDestinationSearchResultsBlock}>
+                <Text style={styles.idleDestinationSearchSectionTitle}>SEARCH</Text>
+                <ECSResultsEmptyState
+                  title="No Search Matches"
+                  message="Try a broader place name or a nearby town."
+                  actionLabel="Clear Search"
+                  onAction={() => roadNavigation.setQuery('')}
+                  variant="compact"
+                />
+              </View>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
 
       {!hideWeatherTopOverlays && (
         <WeatherAlertMapOverlay
@@ -17449,13 +17771,6 @@ const stableMapSurface = useMemo(() => {
   hideWeatherTopOverlays,
   openRouteWeatherDetail,
   openWeatherAlertDetail,
-  roadNavigation.query,
-  roadNavigation.suggestions,
-  roadNavigation.searchLoading,
-  roadNavigation.searchError,
-  roadNavigation.session,
-  roadNavigation.previewLoading,
-  roadNavigation.stepListExpanded,
   searchOperationalState.detail,
   searchOperationalState.disabled,
   searchOperationalState.label,
@@ -17545,7 +17860,17 @@ const stableMapSurface = useMemo(() => {
   operationalWeather.refresh,
   operationalWeather.snapshot,
   pendingHybridTrailTransition,
-  roadNavigation.setQuery,
+  handleRecentSearchSelection,
+  idleDestinationSearchHasQuery,
+  idleDestinationSearchNoMatchesVisible,
+  idleDestinationSearchVisible,
+  navigateOperationalState.mode,
+  recentSearches,
+  recentSearchesSectionVisible,
+  recentSearchesTitle,
+  recentSearchesVisible,
+  roadNavigation,
+  toggleRecentSearches,
   weatherLocation?.lat,
   weatherLocation?.lng,
   visibleMissionBrief,
@@ -18358,87 +18683,6 @@ const stableMapSurface = useMemo(() => {
     'options-outline',
     closeToolsPopup,
     <View style={styles.toolsPopupContent}>
-      <View style={styles.toolsSearchWrap}>
-        <View style={styles.toolsSearchHeader}>
-          <View style={styles.toolsSearchTitleRow}>
-            <Ionicons name="search-outline" size={14} color={TACTICAL.amber} />
-            <Text style={styles.toolsSearchTitle}>SEARCH ADDRESS OR PLACE</Text>
-          </View>
-          <Text style={styles.toolsSearchHint} numberOfLines={1}>
-            Build custom road navigation from a destination search.
-          </Text>
-        </View>
-        <View style={styles.toolsSearchFieldShell}>
-          <ECSSearchField
-            value={roadNavigation.query}
-            onChangeText={roadNavigation.setQuery}
-            placeholder={
-              searchOperationalState.disabled
-                ? navigateOperationalState.mode === 'offline_partial_map'
-                  ? 'Search unavailable with cached maps only'
-                  : 'Search unavailable offline'
-                : toolsSelectedPreviewSummary
-                  ? 'Search another destination or route'
-                  : 'Enter address, town, trailhead, or place'
-            }
-            disabled={searchOperationalState.disabled}
-            loading={roadNavigation.searchLoading}
-            onClear={
-              roadNavigation.query.trim().length > 0
-                ? () => roadNavigation.setQuery('')
-                : undefined
-            }
-            style={styles.toolsSearchField}
-            inputProps={{
-              autoCapitalize: 'words',
-              autoCorrect: false,
-              returnKeyType: 'search',
-              accessibilityLabel: 'Search address or place',
-              accessibilityHint: 'Search for a destination to build a road navigation route.',
-            }}
-          />
-        </View>
-        <View style={styles.toolsOperationalRow}>
-          <ECSBadge
-            label={searchOperationalState.label ?? 'SEARCH READY'}
-            tone={
-              searchOperationalState.tone === 'live'
-                ? 'live'
-                : searchOperationalState.tone === 'unavailable'
-                  ? 'unavailable'
-                  : 'warning'
-            }
-            compact
-          />
-          <Text style={styles.toolsOperationalText} numberOfLines={2}>
-            {searchOperationalState.detail ??
-              'Search, import, and map utilities stay here so the map remains clear.'}
-          </Text>
-        </View>
-        {toolsSelectedPreviewSummary &&
-        roadNavigation.query.trim().length === 0 &&
-        roadNavigation.suggestions.length === 0 &&
-        !roadNavigation.searchLoading ? (
-          <View style={styles.toolsSelectedPreviewCard}>
-            <View style={styles.toolsSelectedPreviewHeader}>
-              <ECSBadge label={toolsSelectedPreviewSummary.tripLabel} tone="category" compact />
-              <ECSBadge label={toolsSelectedPreviewSummary.phaseLabel} tone="selected" compact />
-            </View>
-            <Text style={styles.toolsSelectedPreviewTitle} numberOfLines={1}>
-              {toolsSelectedPreviewSummary.title}
-            </Text>
-            {toolsSelectedPreviewSummary.subtitle ? (
-              <Text style={styles.toolsSelectedPreviewSubtitle} numberOfLines={1}>
-                {toolsSelectedPreviewSummary.subtitle}
-              </Text>
-            ) : null}
-            <Text style={styles.toolsSelectedPreviewHint} numberOfLines={2}>
-              {toolsSelectedPreviewSummary.actionLabel} from the preview card, or search again to replace this selection.
-            </Text>
-          </View>
-        ) : null}
-      </View>
-
       <ScrollView
         style={styles.mapPopupScroll}
         contentContainerStyle={styles.toolsPopupScrollContent}
@@ -18523,389 +18767,219 @@ const stableMapSurface = useMemo(() => {
           </View>
         </View>
 
-        {roadNavigation.searchError && roadNavigation.suggestions.length === 0 ? (
-          <View style={styles.toolsResultsBlock}>
-            <Text style={styles.quickActionsSectionTitle}>SEARCH</Text>
-            <ECSResultsEmptyState
-              title={searchOperationalState.disabled ? 'Search Unavailable Offline' : 'Search Paused'}
-              message={searchOperationalState.detail ?? roadNavigation.searchError}
-              actionLabel="Clear Search"
-              onAction={() => roadNavigation.setQuery('')}
-            />
-          </View>
-        ) : null}
-
-        {roadNavigation.suggestions.length > 0 ? (
-          <View style={styles.toolsResultsBlock}>
-            <Text style={styles.quickActionsSectionTitle}>
-              RESULTS | {roadNavigation.suggestions.length}
-            </Text>
-            <View style={styles.toolsSuggestionList}>
-              {roadNavigation.suggestions.map((suggestion) => (
-                <TouchableOpacity
-                  key={suggestion.id}
-                  style={styles.toolsSuggestionItem}
-                  onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}
-                  activeOpacity={0.82}
-                >
-                  <View style={styles.toolsSuggestionTextWrap}>
-                    <Text style={styles.toolsSuggestionTitle} numberOfLines={1}>
-                      {suggestion.title}
-                    </Text>
-                    {suggestion.subtitle ? (
-                      <Text style={styles.toolsSuggestionSubtitle} numberOfLines={2}>
-                        {suggestion.subtitle}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <Ionicons name="chevron-forward" size={14} color={TACTICAL.textMuted} />
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        ) : null}
-
-        {recentSearchesSectionVisible ? (
-          <View style={styles.toolsResultsBlock}>
-            <Text style={styles.quickActionsSectionTitle}>{recentSearchesTitle}</Text>
-            {recentSearches.length > 0 ? (
-              <View style={styles.toolsSuggestionList}>
-                {recentSearches.map((suggestion) => (
-                  <TouchableOpacity
-                    key={`recent-${suggestion.id}`}
-                    style={styles.toolsSuggestionItem}
-                    onPress={() => handleRecentSearchSelection(suggestion)}
-                    activeOpacity={0.82}
-                  >
-                    <View style={styles.toolsSuggestionIconWrap}>
-                      <Ionicons name="time-outline" size={14} color={TACTICAL.amber} />
-                    </View>
-                    <View style={styles.toolsSuggestionTextWrap}>
-                      <Text style={styles.toolsSuggestionTitle} numberOfLines={1}>
-                        {suggestion.title}
-                      </Text>
-                      <Text style={styles.toolsSuggestionSubtitle} numberOfLines={2}>
-                        {suggestion.subtitle ?? 'Saved destination'}
-                      </Text>
-                    </View>
-                    <Ionicons name="navigate-outline" size={14} color={TACTICAL.textMuted} />
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : (
-              <ECSResultsEmptyState
-                title="No recent searches"
-                message={recentSearchesEmptyMessage}
-                actionLabel="Search Live"
-                onAction={() => roadNavigation.setQuery('')}
-              />
-            )}
-          </View>
-        ) : null}
-
-        {roadNavigation.query.trim().length > 0 &&
-        !roadNavigation.searchLoading &&
-        !roadNavigation.searchError &&
-        roadNavigation.suggestions.length === 0 &&
-        !searchOperationalState.disabled ? (
-          <View style={styles.toolsResultsBlock}>
-            <Text style={styles.quickActionsSectionTitle}>SEARCH</Text>
-            <ECSResultsEmptyState
-              title="No Search Matches"
-              message="Try a broader place name or a nearby town."
-              actionLabel="Clear Search"
-              onAction={() => roadNavigation.setQuery('')}
-            />
-          </View>
-        ) : null}
-
-        <View style={styles.toolsResultsBlock}>
-          <Text style={styles.quickActionsSectionTitle}>MAP STYLE</Text>
-          <View style={styles.quickActionsStyleRow}>
-            {MAP_STYLE_MODE_OPTIONS.map(({ key, label }) => {
-              const isActive = mapStyleMode === key;
-              return (
-                <TouchableOpacity
-                  key={key}
-                  style={[
-                    styles.quickActionsStyleButton,
-                    isActive && styles.quickActionsStyleButtonActive,
-                  ]}
-                  onPress={() => handleMapStyleModeChange(key)}
-                  activeOpacity={0.85}
-                >
-                  <Text
-                    style={[
-                      styles.quickActionsStyleText,
-                      isActive && styles.quickActionsStyleTextActive,
-                    ]}
-                  >
-                    {label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
-        <View style={styles.toolsResultsBlock}>
-          <Text style={styles.quickActionsSectionTitle}>
-            SAVED ROUTES - {savedRouteAssetCounts.all}
-          </Text>
-          <TouchableOpacity
-            style={styles.savedRoutesCommandCard}
+        <NavigateToolSection
+          title="SAVED ROUTE COMMAND CENTER"
+          subtitle="Imported, custom, stitched, and saved route assets stay in one review surface."
+          badge={<ECSBadge label={`${savedRouteAssetCounts.all} ROUTES`} tone="category" compact />}
+        >
+          <NavigateToolActionCard
+            title="Route Command Center"
+            subtitle={`${savedRouteAssetCounts.imported} imported - ${savedRouteAssetCounts.custom} custom - ${savedRouteAssetCounts.stitched} stitched - ${savedRouteAssetCounts.bookmarked} saved`}
+            icon="albums-outline"
+            badge="OPEN"
             onPress={() => {
               hapticCommand();
               openToolsChildPopup('savedRoutes');
             }}
-            activeOpacity={0.86}
+            accessibilityLabel="Open Route Command Center"
+          />
+        </NavigateToolSection>
+
+        <View style={styles.toolsUtilityStack}>
+          <NavigateToolSection
+            title="ROUTE PLANNING"
+            subtitle="Build, import, stitch, or review destinations without leaving the map context."
           >
-            <View style={styles.savedRoutesCommandIcon}>
-              <Ionicons name="albums-outline" size={17} color={TACTICAL.amber} />
-            </View>
-            <View style={styles.savedRoutesCommandTextWrap}>
-              <Text style={styles.toolsSuggestionTitle} numberOfLines={1}>
-                Route Command Center
-              </Text>
-              <Text style={styles.toolsSuggestionSubtitle} numberOfLines={2}>
-                {`${savedRouteAssetCounts.imported} imported - ${savedRouteAssetCounts.custom} custom - ${savedRouteAssetCounts.stitched} stitched - ${savedRouteAssetCounts.bookmarked} saved`}
-              </Text>
-            </View>
-            <View style={styles.customRouteBadge}>
-              <Text style={styles.customRouteBadgeText}>OPEN</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
+            <NavigateToolActionCard
+              title="BUILD ROUTE PLAN"
+              subtitle="Open the normal Explorer Trip Builder tab for full route setup."
+              icon="map-outline"
+              onPress={handleOpenBuildRoutePlan}
+              accessibilityLabel="Build route plan in Trip Builder"
+            />
 
-        <View style={styles.toolsResultsBlock}>
-          <Text style={styles.quickActionsSectionTitle}>UTILITIES</Text>
-          <View style={styles.toolsUtilityStack}>
-            <View style={styles.toolsUtilitySection}>
-              <Text style={styles.toolsUtilitySectionLabel}>ROUTE</Text>
-              <View style={styles.quickActionsGrid}>
-                <TouchableOpacity
-                  style={styles.quickActionButton}
-                  onPress={handleOpenBuildRoutePlan}
-                  activeOpacity={0.85}
-                  accessibilityRole="button"
-                  accessibilityLabel="Build route plan in Trip Builder"
-                >
-                  <Ionicons
-                    name="map-outline"
-                    size={15}
-                    color={TACTICAL.amber}
-                  />
-                  <Text style={styles.quickActionButtonText}>BUILD ROUTE PLAN</Text>
-                </TouchableOpacity>
+            <NavigateToolActionCard
+              title="STITCH ROUTES"
+              subtitle="Chain imported, recorded, or custom route assets into one expedition plan."
+              icon="git-merge-outline"
+              onPress={handleOpenStitch}
+              accessibilityLabel="Stitch routes"
+            />
 
-                <TouchableOpacity
-                  style={styles.quickActionButton}
-                  onPress={handleOpenStitch}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons
-                    name="git-merge-outline"
-                    size={15}
-                    color={TACTICAL.amber}
-                  />
-                  <Text style={styles.quickActionButtonText}>STITCH ROUTES</Text>
-                </TouchableOpacity>
+            <NavigateToolActionCard
+              title={routeBuilderActive ? 'EXIT BUILD' : 'BUILD ROUTE'}
+              subtitle={routeBuilderActive ? 'Leave active map drawing mode.' : 'Draw a route directly on the map.'}
+              icon={routeBuilderActive ? 'close' : 'map-outline'}
+              active={routeBuilderActive}
+              onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}
+              accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}
+            />
 
-                <TouchableOpacity
-                  style={[
-                    styles.quickActionButton,
-                    routeBuilderActive && styles.quickActionButtonActive,
-                  ]}
-                  onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}
-                  activeOpacity={0.85}
-                  accessibilityRole="button"
-                  accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}
-                >
-                  <Ionicons
-                    name={routeBuilderActive ? 'close' : 'map-outline'}
-                    size={15}
-                    color={routeBuilderActive ? '#091014' : TACTICAL.amber}
-                  />
-                  <Text
-                    style={[
-                      styles.quickActionButtonText,
-                      routeBuilderActive && styles.quickActionButtonTextActive,
-                    ]}
-                  >
-                    {routeBuilderActive ? 'EXIT BUILD' : 'BUILD ROUTE'}
-                  </Text>
-                </TouchableOpacity>
+            <NavigateToolActionCard
+              title={isImportPending ? 'IMPORTING' : 'IMPORT'}
+              subtitle="Load GPX, KML, GeoJSON, JSON, or XML route files into Navigate."
+              icon="cloud-upload-outline"
+              onPress={handleOpenImportRoute}
+              disabled={isImportPending}
+              accessibilityLabel="Import route file"
+            />
 
-                <TouchableOpacity
-                  style={[
-                    styles.quickActionButton,
-                    isImportPending && styles.quickActionButtonDisabled,
-                  ]}
-                  onPress={handleOpenImportRoute}
-                  disabled={isImportPending}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons
-                    name="cloud-upload-outline"
-                    size={15}
-                    color={isImportPending ? TACTICAL.textMuted : TACTICAL.amber}
-                  />
-                  <Text style={styles.quickActionButtonText}>
-                    {isImportPending ? 'IMPORTING' : 'IMPORT'}
-                  </Text>
-                </TouchableOpacity>
+            <NavigateToolActionCard
+              title="RECENT SEARCHES"
+              subtitle="Close Tools and reopen recent destinations in the map search banner."
+              icon="time-outline"
+              active={recentSearchesVisible}
+              onPress={() => {
+                hapticCommand();
+                setRecentSearchesVisible(true);
+                closeToolsPopup();
+              }}
+              accessibilityLabel="Toggle recent searches"
+            />
+          </NavigateToolSection>
 
-                <TouchableOpacity
-                  style={[
-                    styles.quickActionButton,
-                    recentSearchesVisible && styles.quickActionButtonActive,
-                  ]}
-                  onPress={toggleRecentSearches}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons
-                    name="time-outline"
-                    size={15}
-                    color={recentSearchesVisible ? '#091014' : TACTICAL.amber}
-                  />
-                  <Text
-                    style={[
-                      styles.quickActionButtonText,
-                      recentSearchesVisible && styles.quickActionButtonTextActive,
-                    ]}
-                  >
-                    RECENT SEARCHES
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+          <NavigateToolSection
+            title="COMMUNITY CONTRIBUTIONS"
+            subtitle="Help ECS grow with reviewed campsites and routes while keeping safety checks visible."
+          >
+            {communityCampsitesEnabled ? (
+              <NavigateToolActionCard
+                title="RECOMMEND CAMPSITE"
+                subtitle="Save privately, share with a group, or submit an established campsite for ECS review."
+                icon="pin-outline"
+                badge="COMMUNITY"
+                onPress={openRecommendCampsiteChooser}
+                accessibilityLabel="Recommend campsite"
+              />
+            ) : null}
 
-            <View style={styles.toolsUtilitySection}>
-              <Text style={styles.toolsUtilitySectionLabel}>EXPLORE</Text>
-              <View style={styles.quickActionsGrid}>
-                {communityCampsitesEnabled ? (
+            <NavigateToolActionCard
+              title="MY CAMPSITES"
+              subtitle="Open private saves, pending reviews, needs-info requests, and withdrawn campsite submissions."
+              icon="trail-sign-outline"
+              badge="SAVED"
+              onPress={() => openMyCampsiteSubmissions()}
+              accessibilityLabel="Open My Campsites"
+            />
+
+            <NavigateToolActionCard
+              title="RECOMMEND ROUTE"
+              subtitle="Use the current Trail Pack-backed flow to submit a staged, imported, built, or recorded route."
+              icon="trail-sign-outline"
+              badge="PHASE 1"
+              onPress={openRecommendRouteChooser}
+              accessibilityLabel="Recommend route"
+            />
+
+            {campopsManualAreaReviewEnabled ? (
+              <NavigateToolActionCard
+                title="MANUAL CAMP AREA REVIEW"
+                subtitle="Run the internal Camp Endpoints area fallback with visible source confidence."
+                icon="shapes-outline"
+                active={campScoutAreaMode !== 'idle'}
+                onPress={() => runToolsAction(handleOpenCampScoutIntro)}
+                accessibilityLabel="Manual CampOps area review"
+              />
+            ) : null}
+          </NavigateToolSection>
+
+          <NavigateToolSection
+            title="FIELD OPS"
+            subtitle="Fast map actions for recording, pins, and active route submission."
+          >
+            <NavigateToolActionCard
+              title="RECORD TRAIL"
+              subtitle="Open Trail Status to start, stop, export, replay, or recommend completed trail recordings."
+              icon="trail-sign-outline"
+              onPress={() => {
+                hapticCommand();
+                openToolsChildPopup('trail');
+              }}
+              accessibilityLabel="Record trail"
+            />
+
+            <NavigateToolActionCard
+              title="SUBMIT AS TRAIL PACK"
+              subtitle="Submit the staged route through the existing ECS Trail Pack review flow."
+              icon="trail-sign-outline"
+              onPress={() => runToolsAction(handleSubmitActiveRouteAsTrailPack)}
+              accessibilityLabel="Submit staged route as Trail Pack"
+            />
+
+            <NavigateToolActionCard
+              title={pinDropMode ? 'PINNING' : 'DROP PIN'}
+              subtitle={pinDropMode ? 'Pin placement mode is active.' : 'Drop a field pin at the current map target.'}
+              icon={pinDropMode ? 'radio-button-on' : 'pin-outline'}
+              active={pinDropMode}
+              onPress={() => runToolsAction(handleDropPinHere)}
+              accessibilityLabel={pinDropMode ? 'Cancel pin placement' : 'Drop pin'}
+            />
+
+            {allPins.length > 0 ? (
+              <NavigateToolActionCard
+                title="PINS"
+                subtitle="Open the pin drawer to review, edit, export, or resolve map pins."
+                icon="list-outline"
+                onPress={() => runToolsAction(() => toggleTopPopup('pinDrawer'))}
+                accessibilityLabel="Open pins"
+              />
+            ) : null}
+          </NavigateToolSection>
+
+          <NavigateToolSection
+            title="MAP AND OFFLINE"
+            subtitle="Switch map presentation and prepare cache coverage for field use."
+          >
+            <View style={styles.quickActionsStyleRow}>
+              {MAP_STYLE_MODE_OPTIONS.map(({ key, label }) => {
+                const isActive = mapStyleMode === key;
+                return (
                   <TouchableOpacity
-                    style={styles.quickActionButton}
-                    onPress={openRecommendCampsiteChooser}
+                    key={key}
+                    style={[
+                      styles.quickActionsStyleButton,
+                      isActive && styles.quickActionsStyleButtonActive,
+                    ]}
+                    onPress={() => handleMapStyleModeChange(key)}
                     activeOpacity={0.85}
                   >
-                    <Ionicons name="pin-outline" size={15} color={TACTICAL.amber} />
-                    <Text style={styles.quickActionButtonText}>Recommend Campsite</Text>
-                  </TouchableOpacity>
-                ) : null}
-
-                {campopsManualAreaReviewEnabled ? (
-                  <TouchableOpacity
-                    style={[
-                      styles.quickActionButton,
-                      campScoutAreaMode !== 'idle' && styles.quickActionButtonActive,
-                    ]}
-                    onPress={() => runToolsAction(handleOpenCampScoutIntro)}
-                    activeOpacity={0.85}
-                    accessibilityRole="button"
-                    accessibilityLabel="Manual CampOps area review"
-                  >
-                    <Ionicons
-                      name="shapes-outline"
-                      size={15}
-                      color={campScoutAreaMode !== 'idle' ? '#091014' : TACTICAL.amber}
-                    />
                     <Text
                       style={[
-                        styles.quickActionButtonText,
-                        campScoutAreaMode !== 'idle' && styles.quickActionButtonTextActive,
+                        styles.quickActionsStyleText,
+                        isActive && styles.quickActionsStyleTextActive,
                       ]}
                     >
-                      MANUAL CAMP AREA REVIEW
+                      {label}
                     </Text>
                   </TouchableOpacity>
-                ) : null}
-              </View>
+                );
+              })}
             </View>
 
-            <View style={styles.toolsUtilitySection}>
-              <Text style={styles.toolsUtilitySectionLabel}>FIELD OPS</Text>
-              <View style={styles.quickActionsGrid}>
-                <TouchableOpacity
-                  style={styles.quickActionButton}
-                  onPress={() => {
-                    hapticCommand();
-                    openToolsChildPopup('trail');
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons name="trail-sign-outline" size={15} color={TACTICAL.amber} />
-                  <Text style={styles.quickActionButtonText}>RECORD TRAIL</Text>
-                </TouchableOpacity>
+            <NavigateToolActionCard
+              title="OFFLINE MAPS"
+              subtitle="Open map cache controls for the current map bounds and style."
+              icon="cloud-offline-outline"
+              onPress={() => {
+                hapticCommand();
+                setRequestBoundsTrigger((prev) => prev + 1);
+                openToolsChildPopup('offlineCache');
+              }}
+              accessibilityLabel="Open offline map cache"
+            />
 
-                <TouchableOpacity
-                  style={styles.quickActionButton}
-                  onPress={() => runToolsAction(handleSubmitActiveRouteAsTrailPack)}
-                  activeOpacity={0.85}
-                  accessibilityRole="button"
-                  accessibilityLabel="Submit staged route as Trail Pack"
-                >
-                  <Ionicons name="trail-sign-outline" size={15} color={TACTICAL.amber} />
-                  <Text style={styles.quickActionButtonText}>SUBMIT AS TRAIL PACK</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.quickActionButton, pinDropMode && styles.quickActionButtonActive]}
-                  onPress={() => runToolsAction(handleDropPinHere)}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons
-                    name={pinDropMode ? 'radio-button-on' : 'pin-outline'}
-                    size={15}
-                    color={pinDropMode ? '#091014' : TACTICAL.amber}
-                  />
-                  <Text
-                    style={[
-                      styles.quickActionButtonText,
-                      pinDropMode && styles.quickActionButtonTextActive,
-                    ]}
-                  >
-                    {pinDropMode ? 'PINNING' : 'DROP PIN'}
-                  </Text>
-                </TouchableOpacity>
-
-                {allPins.length > 0 ? (
-                  <TouchableOpacity
-                    style={styles.quickActionButton}
-                    onPress={() => runToolsAction(() => toggleTopPopup('pinDrawer'))}
-                    activeOpacity={0.85}
-                  >
-                    <Ionicons name="list-outline" size={15} color={TACTICAL.amber} />
-                    <Text style={styles.quickActionButtonText}>PINS</Text>
-                  </TouchableOpacity>
-                ) : null}
-
-                <TouchableOpacity
-                  style={styles.quickActionButton}
-                  onPress={() => {
-                    hapticCommand();
-                    setRequestBoundsTrigger((prev) => prev + 1);
-                    openToolsChildPopup('offlineCache');
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons name="cloud-offline-outline" size={15} color={TACTICAL.amber} />
-                  <Text style={styles.quickActionButtonText}>OFFLINE</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-          {exploreRoutesEnabled ? (
-            <Text style={styles.toolsSuggestionSubtitle}>
-              {exploreRoutesHandoff
-                ? `${exploreRoutesHandoff.label}: ${exploreRouteOverlayBuild.segments.length} route line${exploreRouteOverlayBuild.segments.length === 1 ? '' : 's'} from Explorer filters${exploreRoutesHandoff.cappedCount > 0 ? `; ${exploreRoutesHandoff.cappedCount} held back for map performance` : ''}.`
-                : exploreRouteOverlayBuild.segments.length > 0
-                  ? `${exploreRouteOverlayBuild.segments.length} Explore route line${exploreRouteOverlayBuild.segments.length === 1 ? '' : 's'} loaded from Hidden Gems, Trail Packs, Favorites, and ECS Route Ideas.`
-                : exploreRouteOverlayBuild.candidateCount > 0
-                  ? 'Explore Routes is on, but the available Explorer results do not include map geometry yet.'
-                  : 'No Explore Routes are available for this area yet.'}
-            </Text>
-          ) : null}
+            {exploreRoutesEnabled ? (
+              <Text style={styles.toolsSuggestionSubtitle}>
+                {exploreRoutesHandoff
+                  ? `${exploreRoutesHandoff.label}: ${exploreRouteOverlayBuild.segments.length} route line${exploreRouteOverlayBuild.segments.length === 1 ? '' : 's'} from Explorer filters${exploreRoutesHandoff.cappedCount > 0 ? `; ${exploreRoutesHandoff.cappedCount} held back for map performance` : ''}.`
+                  : exploreRouteOverlayBuild.segments.length > 0
+                    ? `${exploreRouteOverlayBuild.segments.length} Explore route line${exploreRouteOverlayBuild.segments.length === 1 ? '' : 's'} loaded from Hidden Gems, Trail Packs, Favorites, and ECS Route Ideas.`
+                  : exploreRouteOverlayBuild.candidateCount > 0
+                    ? 'Explore Routes is on, but the available Explorer results do not include map geometry yet.'
+                    : 'No Explore Routes are available for this area yet.'}
+              </Text>
+            ) : null}
+          </NavigateToolSection>
         </View>
       </ScrollView>
     </View>,
@@ -18925,19 +18999,17 @@ const stableMapSurface = useMemo(() => {
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.mapPopupSimpleStack}>
-        <View style={styles.stitchHeroCard}>
-          <Text style={styles.stitchHeroEyebrow}>INTERNAL AREA REVIEW</Text>
-          <Text style={styles.stitchHeroTitle}>Review Camp Endpoints outside route planning</Text>
-          <Text style={styles.stitchHeroText}>
-            Route geometry is the primary Camp Endpoints flow. This manual review is an internal fallback for candidate endpoint checks.
-          </Text>
-          <Text style={styles.stitchHeroText}>
-            Results may include ECS-inferred, official mapped, and community-suggested locations with visible source confidence.
-          </Text>
-          <Text style={styles.stitchHeroText}>
-            Always verify local rules and posted restrictions.
-          </Text>
-        </View>
+        <NavigateToolHero
+          eyebrow="INTERNAL AREA REVIEW"
+          title="Review Camp Endpoints outside route planning"
+          icon="shapes-outline"
+          body="Route geometry is the primary Camp Endpoints flow. This manual review is an internal fallback for candidate endpoint checks."
+          bodyLines={[
+            'Results may include ECS-inferred, official mapped, and community-suggested locations with visible source confidence.',
+            'Always verify local rules and posted restrictions.',
+          ]}
+          badges={['SOURCE CONFIDENCE', 'VERIFY LOCALLY']}
+        />
 
         <View style={styles.preflightSectionCard}>
           <Text style={styles.quickActionsSectionTitle}>{campScoutIntroStatusTitle}</Text>
@@ -19028,7 +19100,7 @@ const stableMapSurface = useMemo(() => {
         >
           <Ionicons name="create-outline" size={17} color={TACTICAL.amber} />
           <View style={styles.savedRoutesCommandTextWrap}>
-            <Text style={styles.toolsSuggestionTitle}>Draw Area</Text>
+            <Text style={styles.toolsSuggestionTitle}>DRAW AREA</Text>
             <Text style={styles.toolsSuggestionSubtitle}>
               Tap points inside the map body, close the shape, then scan.
             </Text>
@@ -19089,13 +19161,17 @@ const stableMapSurface = useMemo(() => {
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.mapPopupSimpleStack}>
-        <View style={styles.stitchHeroCard}>
-          <Text style={styles.stitchHeroEyebrow}>COMMUNITY CAMPSITES</Text>
-          <Text style={styles.stitchHeroTitle}>Recommend Campsite</Text>
-          <Text style={styles.stitchHeroText}>
-            Add a campsite from your current location, a dropped pin, or an imported route.
-          </Text>
-        </View>
+        <NavigateToolHero
+          eyebrow="COMMUNITY CAMPSITES"
+          title="Recommend Campsite"
+          icon="pin-outline"
+          body="Add a campsite from your current location, a dropped pin, or an imported route."
+          bodyLines={[
+            'Private and group saves stay scoped to you or your selected group.',
+            'Community submissions remain pending until ECS review.',
+          ]}
+          badges={['PRIVATE', 'GROUP', 'COMMUNITY REVIEW']}
+        />
 
         {recommendCampsiteGpxImport ? (
           <RecommendCampsiteGpxImportReview
@@ -19281,13 +19357,13 @@ const stableMapSurface = useMemo(() => {
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.mapPopupSimpleStack}>
-        <View style={styles.stitchHeroCard}>
-          <Text style={styles.stitchHeroEyebrow}>ROUTE IMPORT</Text>
-          <Text style={styles.stitchHeroTitle}>Load a route file into Navigate</Text>
-          <Text style={styles.stitchHeroText}>
-            Import GPX, KML, GeoJSON, or JSON route files. ECS will parse the file, create a saved run, and stage it on the map when the route contains at least two valid coordinates.
-          </Text>
-        </View>
+        <NavigateToolHero
+          eyebrow="ROUTE IMPORT"
+          title="Load a route file into Navigate"
+          icon="cloud-upload-outline"
+          body="Import GPX, KML, GeoJSON, or JSON route files. ECS will parse the file, create a saved run, and stage it on the map when the route contains at least two valid coordinates."
+          badges={['GPX', 'KML', 'GEOJSON', 'JSON']}
+        />
 
         <View style={styles.preflightSectionCard}>
           <Text style={styles.quickActionsSectionTitle}>SUPPORTED FILES</Text>
@@ -19366,21 +19442,18 @@ const stableMapSurface = useMemo(() => {
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.mapPopupSimpleStack}>
-        <View style={styles.savedRoutesHeroCard}>
-          <View style={styles.savedRoutesHeroTitleRow}>
-            <View>
-              <Text style={styles.stitchHeroEyebrow}>ROUTE COMMAND CENTER</Text>
-              <Text style={styles.stitchHeroTitle}>All route assets in one place</Text>
-            </View>
-            <View style={styles.savedRoutesTotalBadge}>
-              <Text style={styles.savedRoutesTotalNumber}>{savedRouteAssetCounts.all}</Text>
-              <Text style={styles.savedRoutesTotalLabel}>ASSETS</Text>
-            </View>
-          </View>
-          <Text style={styles.stitchHeroText}>
-            Review imported, custom-built, stitched, and bookmarked routes without hunting through separate route silos.
-          </Text>
-        </View>
+        <NavigateToolHero
+          eyebrow="ROUTE COMMAND CENTER"
+          title="All route assets in one place"
+          icon="albums-outline"
+          body="Review imported, custom-built, stitched, and bookmarked routes without hunting through separate route silos."
+          badges={[
+            `${savedRouteAssetCounts.all} ASSETS`,
+            `${savedRouteAssetCounts.imported} IMPORTED`,
+            `${savedRouteAssetCounts.custom} CUSTOM`,
+            `${savedRouteAssetCounts.stitched} STITCHED`,
+          ]}
+        />
 
         <View style={styles.stitchSection}>
           <Text style={styles.quickActionsSectionTitle}>SEARCH</Text>
@@ -19597,16 +19670,17 @@ const stableMapSurface = useMemo(() => {
     >
       {preflightPacket ? (
         <View style={styles.mapPopupSimpleStack}>
-          <View style={styles.preflightHeroCard}>
-            <Text style={styles.stitchHeroEyebrow}>EXPEDITION PREFLIGHT</Text>
-            <Text style={styles.stitchHeroTitle}>{preflightPacket.route.title}</Text>
-            <Text style={styles.stitchHeroText}>{preflightPacket.statusLabel}</Text>
-            <View style={styles.savedRoutesCountRow}>
-              <Text style={styles.savedRoutesCountText}>{preflightPacket.route.sourceLabel}</Text>
-              <Text style={styles.savedRoutesCountText}>{preflightPacket.route.distanceLabel}</Text>
-              <Text style={styles.savedRoutesCountText}>{preflightPacket.route.sequenceLabel}</Text>
-            </View>
-          </View>
+          <NavigateToolHero
+            eyebrow="EXPEDITION PREFLIGHT"
+            title={preflightPacket.route.title}
+            icon="clipboard-outline"
+            body={preflightPacket.statusLabel}
+            badges={[
+              preflightPacket.route.sourceLabel,
+              preflightPacket.route.distanceLabel,
+              preflightPacket.route.sequenceLabel,
+            ]}
+          />
 
           <View style={styles.preflightSectionCard}>
             <Text style={styles.quickActionsSectionTitle}>ROUTE PLAN</Text>
@@ -19759,13 +19833,13 @@ const stableMapSurface = useMemo(() => {
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.mapPopupSimpleStack}>
-        <View style={styles.stitchHeroCard}>
-          <Text style={styles.stitchHeroEyebrow}>EXPEDITION CHAIN</Text>
-          <Text style={styles.stitchHeroTitle}>Build a stitched route plan</Text>
-          <Text style={styles.stitchHeroText}>
-            Add imported, recorded, or custom-built routes in order. ECS keeps non-touching gaps as transition legs so you can move trail to road to trail without blocking the chain.
-          </Text>
-        </View>
+        <NavigateToolHero
+          eyebrow="EXPEDITION CHAIN"
+          title="Build a stitched route plan"
+          icon="git-merge-outline"
+          body="Add imported, recorded, or custom-built routes in order. ECS keeps non-touching gaps as transition legs so you can move trail to road to trail without blocking the chain."
+          badges={['ORDERED CHAIN', 'BRIDGE REVIEW', 'SAVED ROUTES']}
+        />
 
         <View style={styles.stitchSection}>
           <Text style={styles.quickActionsSectionTitle}>STITCH NAME</Text>
@@ -19907,6 +19981,114 @@ const stableMapSurface = useMemo(() => {
             </Text>
           </TouchableOpacity>
         </View>
+      </View>
+    </ScrollView>,
+    MAP_POPUP_WIDTH,
+    { fullBody: true, showBackdrop: false }
+  )}
+
+  {renderMapPopup(
+    recommendRouteModalVisible,
+    'RECOMMEND ROUTE',
+    'trail-sign-outline',
+    () => closeTopPopup('recommendRoute'),
+    <ScrollView
+      style={styles.mapPopupScroll}
+      contentContainerStyle={styles.mapPopupScrollContent}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
+      <View style={styles.mapPopupSimpleStack}>
+        <NavigateToolHero
+          eyebrow="TRAIL PACK-BACKED CONTRIBUTION"
+          title="Recommend Route"
+          icon="trail-sign-outline"
+          body="Phase 1 routes enter ECS through the reviewed Trail Pack submission flow. ECS does not publish community routes until review is complete."
+          bodyLines={[
+            'Use a staged route, imported file, hand-built route, or recorded trail as the source.',
+            'Future route recommendation review can replace this copy without changing the Tools layout.',
+          ]}
+          badges={['PHASE 1', 'REVIEW REQUIRED', 'NO PUBLIC AUTO-PUBLISH']}
+        />
+
+        <NavigateToolSection
+          title="CHOOSE ROUTE SOURCE"
+          subtitle="Pick the route source that best matches what you want ECS to review."
+        >
+          <NavigateToolActionCard
+            title="Submit as Trail Pack"
+            subtitle="Use the currently staged route or active route preview as the contribution source."
+            icon="trail-sign-outline"
+            badge="STAGED"
+            onPress={() => runToolsAction(handleSubmitActiveRouteAsTrailPack)}
+            accessibilityLabel="Submit staged route as Trail Pack"
+          />
+
+          <NavigateToolActionCard
+            title="Submit Imported Route"
+            subtitle="Use an imported GPX, KML, GeoJSON, JSON, or XML route already staged in Navigate."
+            icon="cloud-upload-outline"
+            badge="IMPORT"
+            onPress={() => runToolsAction(handleSubmitImportedRouteAsTrailPack)}
+            accessibilityLabel="Submit imported route as Trail Pack"
+          />
+
+          <NavigateToolActionCard
+            title="Build Route Plan"
+            subtitle="Open the normal Explorer Trip Builder tab to create a complete route plan first."
+            icon="map-outline"
+            badge="EXPLORER"
+            onPress={handleOpenBuildRoutePlan}
+            accessibilityLabel="Build route plan in Trip Builder"
+          />
+
+          <NavigateToolActionCard
+            title="Record Trail"
+            subtitle="Open Trail Status to record a route, then recommend the completed trail from history."
+            icon="trail-sign-outline"
+            badge="FIELD"
+            onPress={() => {
+              hapticCommand();
+              openToolsChildPopup('trail');
+            }}
+            accessibilityLabel="Record trail for route recommendation"
+          />
+
+          <NavigateToolActionCard
+            title={routeBuilderActive ? 'Exit Build Route' : 'Build Route On Map'}
+            subtitle={routeBuilderActive ? 'Leave map drawing mode before choosing another route source.' : 'Draw a custom route directly on the Navigate map.'}
+            icon={routeBuilderActive ? 'close' : 'map-outline'}
+            active={routeBuilderActive}
+            onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}
+            accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}
+          />
+        </NavigateToolSection>
+
+        <NavigateToolSection
+          title="REVIEW BOUNDARY"
+          subtitle="ECS keeps the existing Trail Pack moderation behavior in place for this polish pass."
+        >
+          <NavigateToolBadgeRow
+            badges={[
+              'SUBMIT AS TRAIL PACK',
+              'PENDING REVIEW',
+              'NO INVENTED STATUS',
+            ]}
+          />
+          <Text style={styles.preflightMutedText}>
+            Route contributions should include source geometry and visible review state. They do not imply legal access, live conditions, or current route availability.
+          </Text>
+        </NavigateToolSection>
+
+        <NavigateToolFooter>
+          <TouchableOpacity
+            style={styles.preflightSecondaryAction}
+            onPress={() => closeTopPopup('recommendRoute')}
+            activeOpacity={0.86}
+          >
+            <Text style={styles.preflightSecondaryActionText}>BACK TO TOOLS</Text>
+          </TouchableOpacity>
+        </NavigateToolFooter>
       </View>
     </ScrollView>,
     MAP_POPUP_WIDTH,
@@ -20333,21 +20515,30 @@ const stableMapSurface = useMemo(() => {
       contentContainerStyle={styles.mapPopupScrollContent}
       showsVerticalScrollIndicator={false}
     >
-      <TrailStatusModal
-        visible={true}
-        onClose={() => closeTopPopup('trail')}
-        status={trailStatus}
-        stats={trailStats || DEFAULT_TRAIL_STATS}
-        activeExpeditionId={activeExpeditionId}
-        activeExpeditionName={activeExpeditionName}
-        onStatusChange={refreshTrailState}
-        onExport={handleTrailExport}
+      <View style={styles.mapPopupSimpleStack}>
+        <NavigateToolHero
+          eyebrow={trailStatus === 'idle' ? 'FIELD RECORDING' : 'TRAIL STATUS'}
+          title={trailStatus === 'idle' ? 'Record and recommend a route' : 'Recorded trail operations'}
+          icon="trail-sign-outline"
+          body="Record field routes, export trail data, replay completed tracks, or recommend completed trails through ECS review."
+          badges={['RECORD', 'EXPORT', 'RECOMMEND']}
+        />
+        <TrailStatusModal
+          visible={true}
+          onClose={() => closeTopPopup('trail')}
+          status={trailStatus}
+          stats={trailStats || DEFAULT_TRAIL_STATS}
+          activeExpeditionId={activeExpeditionId}
+          activeExpeditionName={activeExpeditionName}
+          onStatusChange={refreshTrailState}
+          onExport={handleTrailExport}
           onReplay={handleReplayStart}
           onReplayFromHistory={handleReplayFromHistory}
           onExportFromHistory={handleExportFromHistory}
           onRecommendTrailPack={handleRecommendCompletedTrailAsTrailPack}
           showToast={showToast}
         />
+      </View>
     </ScrollView>,
     MAP_POPUP_WIDTH,
     { fullBody: true, showBackdrop: false }
@@ -20393,16 +20584,25 @@ const stableMapSurface = useMemo(() => {
   'OFFLINE CACHE',
   'cloud-download-outline',
   () => closeTopPopup('offlineCache'),
-  <View style={styles.mapPopupStaticContent}>
-    <OfflineCacheModal
-      embedded
-      mapBounds={mapBounds}
-      mapZoom={mapZoom}
-      mapStyle={mapStyle}
-      showToast={showToast}
-      onRequestMapBounds={handleRequestMapBounds}
-      onOpenDownloadedSync={handleOpenDownloadedSync}
+  <View style={[styles.mapPopupStaticContent, styles.mapPopupSimpleStack]}>
+    <NavigateToolHero
+      eyebrow="MAP AND OFFLINE"
+      title="Prepare map cache coverage"
+      icon="cloud-download-outline"
+      body="Review current bounds, cache readiness, and downloaded map sync state before leaving live coverage."
+      badges={['MAP BOUNDS', 'CACHE', 'FIELD READY']}
     />
+    <View style={styles.mapPopupStaticContent}>
+      <OfflineCacheModal
+        embedded
+        mapBounds={mapBounds}
+        mapZoom={mapZoom}
+        mapStyle={mapStyle}
+        showToast={showToast}
+        onRequestMapBounds={handleRequestMapBounds}
+        onOpenDownloadedSync={handleOpenDownloadedSync}
+      />
+    </View>
   </View>,
   MAP_POPUP_WIDTH,
   { fullBody: true, showBackdrop: false }
@@ -21411,6 +21611,145 @@ quickActionButtonText: {
 
 quickActionButtonTextActive: {
   color: '#091014',
+},
+
+idleDestinationSearchWrap: {
+  position: 'absolute',
+  zIndex: 86,
+  elevation: 86,
+  alignItems: 'center',
+},
+
+idleDestinationSearchShell: {
+  width: '100%',
+  maxWidth: 560,
+  borderRadius: 12,
+  borderWidth: 1,
+  borderColor: 'rgba(196,138,44,0.34)',
+  backgroundColor: 'rgba(8,12,15,0.97)',
+  padding: 10,
+  gap: 8,
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 7 },
+  shadowOpacity: 0.28,
+  shadowRadius: 12,
+  elevation: 8,
+},
+
+idleDestinationSearchHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+},
+
+idleDestinationSearchTitleRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 7,
+  flexShrink: 1,
+},
+
+idleDestinationSearchTitle: {
+  ...TYPO.U2,
+  color: TACTICAL.text,
+  fontSize: 8.5,
+  letterSpacing: 1.25,
+},
+
+idleDestinationSearchFieldRow: {
+  flexDirection: 'row',
+  alignItems: 'stretch',
+  gap: 8,
+},
+
+idleDestinationSearchFieldShell: {
+  flex: 1,
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: 'rgba(196,138,44,0.36)',
+  backgroundColor: 'rgba(18,24,29,0.94)',
+  padding: 2,
+},
+
+idleDestinationSearchField: {
+  minHeight: 44,
+  borderRadius: 8,
+  borderColor: 'rgba(255,220,140,0.16)',
+  backgroundColor: 'rgba(9,12,14,0.88)',
+},
+
+idleDestinationSearchRecentButton: {
+  width: 48,
+  minHeight: 48,
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: 'rgba(196,138,44,0.32)',
+  backgroundColor: 'rgba(18,24,29,0.94)',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+idleDestinationSearchRecentButtonActive: {
+  borderColor: TACTICAL.amber,
+  backgroundColor: TACTICAL.amber,
+},
+
+idleDestinationSearchOperationalText: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 10,
+  lineHeight: 14,
+},
+
+idleDestinationSearchResultsBlock: {
+  borderTopWidth: 1,
+  borderTopColor: 'rgba(196,138,44,0.16)',
+  paddingTop: 8,
+  gap: 7,
+},
+
+idleDestinationSearchSectionTitle: {
+  ...TYPO.U2,
+  color: TACTICAL.textMuted,
+  fontSize: 8,
+  letterSpacing: 1.2,
+},
+
+idleDestinationSearchResultsScroll: {
+  maxHeight: 190,
+},
+
+idleDestinationSearchSuggestionItem: {
+  minHeight: 44,
+  borderRadius: 8,
+  borderWidth: 1,
+  borderColor: 'rgba(196,138,44,0.14)',
+  backgroundColor: 'rgba(12,16,20,0.88)',
+  paddingHorizontal: 10,
+  paddingVertical: 8,
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 9,
+  marginBottom: 6,
+},
+
+idleDestinationSearchSuggestionTextWrap: {
+  flex: 1,
+  minWidth: 0,
+},
+
+idleDestinationSearchSuggestionTitle: {
+  ...TYPO.T3,
+  color: TACTICAL.text,
+  fontSize: 12,
+},
+
+idleDestinationSearchSuggestionSubtitle: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 10,
+  lineHeight: 14,
 },
 
 toolsPopupContent: {

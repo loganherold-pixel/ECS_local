@@ -28,6 +28,7 @@ const {
   detectTrailPackPrivacyWarnings,
   sanitizeTrailPackSubmissionGeometry,
   trailPackRouteInputFromNavigationPayload,
+  trailPackRouteInputFromSubmission,
   trailPackRouteInputFromSavedTrail,
   trailPackSubmissionStore,
   validateTrailPackSubmission,
@@ -125,6 +126,30 @@ assert.strictEqual(
   'Submitted Trail Pack should be retained in the local pending submission store',
 );
 
+const revisionRouteInput = trailPackRouteInputFromSubmission(result.submission);
+assert(revisionRouteInput, 'Pending Trail Pack submissions should normalize back into an editable route input');
+const revisionResult = trailPackSubmissionStore.update(result.submission.id, revisionRouteInput, {
+  ...validValues,
+  name: 'Shelf Road Loop Revision',
+  description: 'Updated submitter notes for the pending review packet.',
+  hazardNotes: 'Loose shelf section updated after field review.',
+}, { currentLocation: null });
+assert.strictEqual(revisionResult.submission.id, result.submission.id, 'Trail Pack revisions should preserve the submission id');
+assert.strictEqual(revisionResult.submission.trailPack.id, result.submission.trailPack.id, 'Trail Pack revisions should preserve the pending route id');
+assert.strictEqual(revisionResult.submission.revisionCount, 1, 'Trail Pack revisions should record a revision count');
+assert.strictEqual(
+  trailPackSubmissionStore.getSnapshot().submissions[0].trailPack.name,
+  'Shelf Road Loop Revision',
+  'Updated Trail Pack revision should replace the pending local submission',
+);
+const withdrawn = trailPackSubmissionStore.withdraw(result.submission.id);
+assert(withdrawn, 'Pending Trail Pack submissions should be withdrawable by the owner');
+assert.strictEqual(
+  trailPackSubmissionStore.getSnapshot().submissions.length,
+  0,
+  'Withdrawn Trail Pack submissions should leave the pending owner list',
+);
+
 const payloadInput = trailPackRouteInputFromNavigationPayload(
   {
     id: 'nav-route-1',
@@ -212,12 +237,46 @@ assert(
 
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
 assert(
+  discoverSource.includes('handleEditTrailPackSubmission'),
+  'Discover should let owners edit pending Trail Pack route recommendations',
+);
+assert(
+  discoverSource.includes('handleWithdrawTrailPackSubmission'),
+  'Discover should let owners withdraw pending Trail Pack route recommendations',
+);
+assert(
   discoverSource.includes("'explore_saved_route'"),
   'Explore saved route detail should submit through the saved-route entry point',
 );
 assert(
   discoverSource.includes('Submit to ECS Trail Packs'),
   'Explore saved route detail should expose the requested submission action label',
+);
+
+const trailPackModalSource = fs.readFileSync(
+  path.join(root, 'components', 'trailPacks', 'TrailPackSubmissionModal.tsx'),
+  'utf8',
+);
+assert(
+  trailPackModalSource.includes('editingSubmission'),
+  'Trail Pack submission modal should support editing an existing pending submission',
+);
+assert(
+  trailPackModalSource.includes('SUBMIT UPDATED REVISION'),
+  'Trail Pack edit mode should expose updated revision copy',
+);
+
+const trailPackPreviewModalSource = fs.readFileSync(
+  path.join(root, 'components', 'trailPacks', 'TrailPackPreviewModal.tsx'),
+  'utf8',
+);
+assert(
+  trailPackPreviewModalSource.includes('EDIT SUBMISSION'),
+  'Pending owner Trail Pack preview should expose edit action',
+);
+assert(
+  trailPackPreviewModalSource.includes('WITHDRAW'),
+  'Pending owner Trail Pack preview should expose withdraw action',
 );
 
 console.log('Trail Pack submission checks passed');

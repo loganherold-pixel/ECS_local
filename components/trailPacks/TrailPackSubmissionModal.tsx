@@ -15,6 +15,7 @@ import {
   TRAIL_PACK_SUBMISSION_CERTIFICATION_COPY,
   TRAIL_PACK_SUBMISSION_TAG_OPTIONS,
   detectTrailPackPrivacyWarnings,
+  trailPackFormValuesFromSubmission,
   trailPackSubmissionStore,
   validateTrailPackSubmission,
   type ECSTrailPackSubmission,
@@ -32,6 +33,7 @@ type Props = {
   visible: boolean;
   routeInput: ECSTrailPackSubmissionRouteInput | null;
   currentLocation?: ECSTrailPackCoordinate | null;
+  editingSubmission?: ECSTrailPackSubmission | null;
   onClose: () => void;
   onSubmitted?: (submission: ECSTrailPackSubmission) => void;
 };
@@ -50,7 +52,12 @@ const ROUTE_TYPE_OPTIONS: { key: ECSTrailPackRouteType; label: string }[] = [
   { key: 'area_pack', label: 'Area pack' },
 ];
 
-function buildInitialValues(routeInput: ECSTrailPackSubmissionRouteInput | null): ECSTrailPackSubmissionFormValues {
+function buildInitialValues(
+  routeInput: ECSTrailPackSubmissionRouteInput | null,
+  editingSubmission?: ECSTrailPackSubmission | null,
+): ECSTrailPackSubmissionFormValues {
+  const existingValues = trailPackFormValuesFromSubmission(editingSubmission);
+  if (existingValues) return existingValues;
   return {
     name: routeInput?.title ?? '',
     description: routeInput?.subtitle ?? '',
@@ -84,22 +91,26 @@ export default function TrailPackSubmissionModal({
   visible,
   routeInput,
   currentLocation,
+  editingSubmission = null,
   onClose,
   onSubmitted,
 }: Props) {
-  const [values, setValues] = useState<ECSTrailPackSubmissionFormValues>(() => buildInitialValues(routeInput));
+  const [values, setValues] = useState<ECSTrailPackSubmissionFormValues>(() =>
+    buildInitialValues(routeInput, editingSubmission),
+  );
   const [errors, setErrors] = useState<string[]>([]);
+  const revisionMode = !!editingSubmission;
 
   useEffect(() => {
     if (visible) {
-      setValues(buildInitialValues(routeInput));
+      setValues(buildInitialValues(routeInput, editingSubmission));
       setErrors([]);
     }
-  }, [routeInput, visible]);
+  }, [editingSubmission, routeInput, visible]);
 
   const privacyWarnings = useMemo(
-    () => detectTrailPackPrivacyWarnings(routeInput, currentLocation),
-    [currentLocation, routeInput],
+    () => (revisionMode ? [] : detectTrailPackPrivacyWarnings(routeInput, currentLocation)),
+    [currentLocation, revisionMode, routeInput],
   );
   const routeHasGeometry = !!routeInput && routeInput.routeGeometry.length >= 2;
 
@@ -129,7 +140,10 @@ export default function TrailPackSubmissionModal({
     }
 
     try {
-      const result = trailPackSubmissionStore.submit(routeInput, values, { currentLocation });
+      const submissionLocation = revisionMode ? null : currentLocation;
+      const result = editingSubmission
+        ? trailPackSubmissionStore.update(editingSubmission.id, routeInput, values, { currentLocation: submissionLocation })
+        : trailPackSubmissionStore.submit(routeInput, values, { currentLocation: submissionLocation });
       onSubmitted?.(result.submission);
       onClose();
     } catch (error) {
@@ -141,10 +155,14 @@ export default function TrailPackSubmissionModal({
     <TacticalPopupShell
       visible={visible}
       onClose={onClose}
-      title="SUBMIT TRAIL PACK"
+      title={revisionMode ? 'EDIT TRAIL PACK' : 'SUBMIT TRAIL PACK'}
       icon="trail-sign-outline"
       eyebrow="ECS TRAIL PACKS"
-      subtitle="Submit a route for ECS review. Approved Trail Packs can become discoverable later."
+      subtitle={
+        revisionMode
+          ? 'Submit an updated revision for ECS review. Pending Trail Packs remain non-public until approved.'
+          : 'Submit a route for ECS review. Approved Trail Packs can become discoverable later.'
+      }
       maxWidth={720}
       maxHeightFraction={0.84}
       overlayClass="editor"
@@ -161,7 +179,7 @@ export default function TrailPackSubmissionModal({
             onPress={handleSubmit}
           >
             <Text style={[styles.primaryButtonText, !routeHasGeometry && styles.primaryButtonTextDisabled]}>
-              SUBMIT FOR REVIEW
+              {revisionMode ? 'SUBMIT UPDATED REVISION' : 'SUBMIT FOR REVIEW'}
             </Text>
           </TouchableOpacity>
         </View>
