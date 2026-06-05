@@ -1,0 +1,165 @@
+name: Route Catalog Stitch Groups Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_write:
+        description: Type true to write review-only stitch group rows.
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-data-plane-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync review-only stitch group rows
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+      ECS_ROUTE_CATALOG_SYNC_TOKEN: ${{ secrets.ECS_ROUTE_CATALOG_SYNC_TOKEN }}
+      CONFIRM_WRITE: ${{ inputs.confirm_write || 'false' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate stitch group sync configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+          if [[ -z "${EXPO_PUBLIC_SUPABASE_ANON_KEY}" ]]; then
+            echo "::warning::Missing GitHub secret EXPO_PUBLIC_SUPABASE_ANON_KEY; invoking public search without a publishable key"
+          fi
+          if [[ "${CONFIRM_WRITE}" == "true" && -z "${ECS_ROUTE_CATALOG_SYNC_TOKEN}" ]]; then
+            echo "::error::Missing GitHub secret ECS_ROUTE_CATALOG_SYNC_TOKEN"
+            exit 1
+          fi
+
+      - name: Build stitch group dry-run plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run route-catalog:stitchability:groups:dry-run | tee route-catalog-stitch-groups-plan-raw.txt
+          node <<'NODE'
+          const fs = require('fs');
+          const { extractJsonPayloadFromOutput } = require('./scripts/route-catalog-summary-report.js');
+
+          const raw = fs.readFileSync('route-catalog-stitch-groups-plan-raw.txt', 'utf8');
+          const plan = extractJsonPayloadFromOutput(raw, 'Route catalog stitch groups dry-run plan');
+          fs.writeFileSync('route-catalog-stitch-groups-plan.json', `${JSON.stringify(plan, null, 2)}\n`);
+          fs.writeFileSync(
+            'route-catalog-stitch-groups-sync-payload.json',
+            `${JSON.stringify({ confirmWriteReviewOnly: true, plan }, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Invoke route-catalog-sync-stitch-groups
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${CONFIRM_WRITE}" != "true" ]]; then
+            echo "confirm_write was not true; leaving review-only stitch group sync as a dry-run."
+            echo '{"ok":true,"skipped":true,"publicRecommendationCount":0}' > sync-response.json
+            exit 0
+          fi
+
+          curl_exit=0
+          http_code=$(curl --show-error --silent \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "x-ecs-sync-token: ${ECS_ROUTE_CATALOG_SYNC_TOKEN}" \
+            --data @route-catalog-stitch-groups-sync-payload.json \
+            "${ECS_SUPABASE_URL%/}/functions/v1/route-catalog-sync-stitch-groups" \
+            --output sync-response.json \
+            --write-out "%{http_code}") || curl_exit=$?
+
+          if [[ "${curl_exit}" -ne 0 || ! "${http_code}" =~ ^[0-9]+$ || "${http_code}" -lt 200 || "${http_code}" -ge 300 ]]; then
+            echo "::error::Route catalog stitch groups sync failed with HTTP ${http_code:-unknown}"
+            node <<'NODE'
+          const fs = require('fs');
+          const responsePath = 'sync-response.json';
+          if (!fs.existsSync(responsePath)) {
+            console.error('No response body was written by the sync request.');
+            process.exit(0);
+          }
+          const raw = fs.readFileSync(responsePath, 'utf8').trim();
+          if (!raw) {
+            console.error('Sync response body was empty.');
+            process.exit(0);
+          }
+          try {
+            const response = JSON.parse(raw);
+            console.error(JSON.stringify({
+              ok: response.ok,
+              source: response.source,
+              error: response.error,
+              publicRecommendationCount: response.publicRecommendationCount,
+            }, null, 2));
+          } catch {
+            console.error(raw.slice(0, 1200));
+          }
+          NODE
+            exit 1
+          fi
+
+      - name: Summarize stitch group sync
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+
+          const plan = fs.existsSync('route-catalog-stitch-groups-plan.json')
+            ? JSON.parse(fs.readFileSync('route-catalog-stitch-groups-plan.json', 'utf8'))
+            : null;
+          const response = fs.existsSync('sync-response.json')
+            ? JSON.parse(fs.readFileSync('sync-response.json', 'utf8'))
+            : { ok: false, error: 'No sync response was produced.', publicRecommendationCount: 0 };
+
+          const markdown = [
+            '## Route Catalog Stitch Groups Sync',
+            '',
+            `confirm_write: ${process.env.CONFIRM_WRITE === 'true' ? 'true' : 'false'}`,
+            '',
+            '| Groups | Routes | Edges | Public Recommendations | Wrote Rows |',
+            '| ---: | ---: | ---: | ---: | --- |',
+            `| ${response.groupCount ?? plan?.groups?.length ?? 0} | ${response.routeCount ?? plan?.routes?.length ?? 0} | ${response.edgeCount ?? plan?.edges?.length ?? 0} | ${response.publicRecommendationCount ?? 0} | ${process.env.CONFIRM_WRITE === 'true' && response.ok ? 'yes' : 'no'} |`,
+            '',
+            response.caveat ? `_${response.caveat}_` : '_Dry-run only unless confirm_write is true._',
+          ].join('\n');
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+          console.log(JSON.stringify({
+            ok: response.ok,
+            skipped: Boolean(response.skipped),
+            publicRecommendationCount: response.publicRecommendationCount ?? 0,
+            groupCount: response.groupCount ?? plan?.groups?.length ?? 0,
+            routeCount: response.routeCount ?? plan?.routes?.length ?? 0,
+            edgeCount: response.edgeCount ?? plan?.edges?.length ?? 0,
+          }, null, 2));
+          NODE
+
+      - name: Upload stitch group sync artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: route-catalog-stitch-groups-sync
+          path: |
+            route-catalog-stitch-groups-plan-raw.txt
+            route-catalog-stitch-groups-plan.json
+            route-catalog-stitch-groups-sync-payload.json
+            sync-response.json
+          if-no-files-found: ignore

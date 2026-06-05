@@ -19,6 +19,7 @@ const expectedFunctionNames = [
   'route-catalog-sync-minnesota-ohv',
   'route-catalog-sync-oregon-odf-ohv',
   'route-catalog-sync-colorado-cpw-trails',
+  'route-catalog-sync-stitch-groups',
 ];
 
 assert.deepStrictEqual(
@@ -44,7 +45,8 @@ for (const entry of ROUTE_CATALOG_SYNC_INVENTORY) {
   assert(
     entry.publicRecommendationPolicy === 'aggregate_recommendable_with_closure_gate' ||
       entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations' ||
-      entry.publicRecommendationPolicy === 'official_source_recommendable_with_condition_warnings',
+      entry.publicRecommendationPolicy === 'official_source_recommendable_with_condition_warnings' ||
+      entry.publicRecommendationPolicy === 'review_only_zero_public_recommendations',
     `${entry.functionName} should declare a public recommendation policy`,
   );
   assert(
@@ -54,6 +56,13 @@ for (const entry of ROUTE_CATALOG_SYNC_INVENTORY) {
       entry.requiredGuards.includes('public_recommendation_count'),
     `${entry.functionName} should declare required sync safety guards`,
   );
+  if (entry.functionName === 'route-catalog-sync-stitch-groups') {
+    assert(
+      entry.requiredGuards.includes('no_public_route_exposure') &&
+        entry.publicRecommendationPolicy === 'review_only_zero_public_recommendations',
+      'Stitch group sync should be explicitly review-only with no public route exposure',
+    );
+  }
 
   const functionPath = path.join(root, entry.functionPath);
   const workflowPath = path.join(root, entry.workflowPath);

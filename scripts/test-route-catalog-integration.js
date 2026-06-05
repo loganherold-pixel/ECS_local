@@ -76,6 +76,53 @@ assert(
     largeCatalogHardeningMigration.includes('verified_route_sources_route_lookup_idx'),
   'Route catalog should add large-catalog indexes for public bbox search, curation coverage, summary paging, and route-source attribution lookup',
 );
+const stitchGroupsMigration = read(path.join('supabase', 'migrations', '035_route_catalog_stitch_groups.sql'));
+assert(
+  stitchGroupsMigration.includes('create table if not exists public.route_catalog_stitch_groups') &&
+    stitchGroupsMigration.includes('create table if not exists public.route_catalog_stitch_group_routes') &&
+    stitchGroupsMigration.includes('create table if not exists public.route_catalog_stitch_group_edges'),
+  'Route catalog should have service-side tables for reviewed stitch group drafts, routes, and source-edge evidence',
+);
+assert(
+  stitchGroupsMigration.includes("review_status text not null default 'draft_review_required'") &&
+    stitchGroupsMigration.includes("publication_status text not null default 'review_only'") &&
+    stitchGroupsMigration.includes('can_auto_publish boolean not null default false') &&
+    stitchGroupsMigration.includes('requires_field_review boolean not null default true') &&
+    stitchGroupsMigration.includes('route_public_ids text[] not null') &&
+    stitchGroupsMigration.includes('constraint route_catalog_stitch_groups_no_auto_publish_check check (can_auto_publish = false)'),
+  'Stitch groups should persist review-only drafts without allowing auto-publication',
+);
+assert(
+  stitchGroupsMigration.includes('verified_route_id uuid not null references public.verified_routes(id) on delete restrict') &&
+    stitchGroupsMigration.includes("direction text not null default 'unknown'") &&
+    stitchGroupsMigration.includes("edge_status text not null default 'chain_ready'") &&
+    stitchGroupsMigration.includes('gap_meters numeric not null default 0') &&
+    stitchGroupsMigration.includes('from_endpoint jsonb not null') &&
+    stitchGroupsMigration.includes('to_endpoint jsonb not null') &&
+    stitchGroupsMigration.includes('requires_verified_bridge boolean not null default false'),
+  'Stitch group route and edge rows should preserve source route identity, direction, endpoint, and bridge-review evidence',
+);
+assert(
+  stitchGroupsMigration.includes('alter table public.route_catalog_stitch_groups enable row level security') &&
+    stitchGroupsMigration.includes('alter table public.route_catalog_stitch_group_routes enable row level security') &&
+    stitchGroupsMigration.includes('alter table public.route_catalog_stitch_group_edges enable row level security') &&
+    stitchGroupsMigration.includes('revoke all on public.route_catalog_stitch_groups from anon, authenticated') &&
+    stitchGroupsMigration.includes('revoke all on public.route_catalog_stitch_group_routes from anon, authenticated') &&
+    stitchGroupsMigration.includes('revoke all on public.route_catalog_stitch_group_edges from anon, authenticated') &&
+    stitchGroupsMigration.includes('grant select, insert, update, delete on public.route_catalog_stitch_groups to service_role') &&
+    stitchGroupsMigration.includes('grant select, insert, update, delete on public.route_catalog_stitch_group_routes to service_role') &&
+    stitchGroupsMigration.includes('grant select, insert, update, delete on public.route_catalog_stitch_group_edges to service_role') &&
+    !stitchGroupsMigration.includes('grant select on public.route_catalog_stitch_groups to anon') &&
+    !stitchGroupsMigration.includes('grant select on public.route_catalog_stitch_group_routes to anon') &&
+    !stitchGroupsMigration.includes('grant select on public.route_catalog_stitch_group_edges to anon'),
+  'Stitch group drafts should be service-side review data, not public catalog data',
+);
+assert(
+  !stitchGroupsMigration.includes('route_catalog_public') &&
+    !stitchGroupsMigration.includes("review_status = 'approved'") &&
+    !stitchGroupsMigration.includes("recommendation_status = 'recommendable'"),
+  'Stitch group migration should not alter the public route catalog view or public recommendation gates',
+);
 
 for (const functionName of [
   'route-catalog-search',
@@ -89,6 +136,7 @@ for (const functionName of [
   'route-catalog-sync-minnesota-ohv',
   'route-catalog-sync-oregon-odf-ohv',
   'route-catalog-sync-colorado-cpw-trails',
+  'route-catalog-sync-stitch-groups',
 ]) {
   const functionPath = path.join(root, 'supabase', 'functions', functionName, 'index.ts');
   assert(fs.existsSync(functionPath), `Edge Function ${functionName} should exist`);

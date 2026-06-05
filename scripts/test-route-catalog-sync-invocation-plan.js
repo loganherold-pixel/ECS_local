@@ -69,7 +69,8 @@ for (const entry of plan) {
   assert(
     entry.publicRecommendationPolicy === 'aggregate_recommendable_with_closure_gate' ||
       entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations' ||
-      entry.publicRecommendationPolicy === 'official_source_recommendable_with_condition_warnings',
+      entry.publicRecommendationPolicy === 'official_source_recommendable_with_condition_warnings' ||
+      entry.publicRecommendationPolicy === 'review_only_zero_public_recommendations',
     `${entry.key} should declare recommendation policy in the invocation plan`,
   );
   assert(
@@ -83,11 +84,14 @@ for (const entry of plan) {
     `${entry.key} should carry operator-facing safety notes`,
   );
 
-  if (entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations') {
+  if (
+    entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations' ||
+    entry.publicRecommendationPolicy === 'review_only_zero_public_recommendations'
+  ) {
     assert.strictEqual(
       entry.expectedMaxPublicRecommendationCount,
       0,
-      `${entry.key} curation-only sync must not produce public recommendations`,
+      `${entry.key} review-only/curation-only sync must not produce public recommendations`,
     );
   }
 
@@ -415,6 +419,20 @@ assert.strictEqual(
   byKey.get('usgs_digital_trails').publicRecommendationPolicy,
   'curation_only_zero_public_recommendations',
   'USGS Digital Trails should remain supplemental geometry and produce zero public recommendations without authoritative access corroboration',
+);
+assert.strictEqual(
+  byKey.get('stitch_groups').publicRecommendationPolicy,
+  'review_only_zero_public_recommendations',
+  'Stitch groups should persist review-only drafts without producing public recommendations',
+);
+assert.strictEqual(
+  byKey.get('stitch_groups').invocationMode,
+  'workflow_preprocess_required',
+  'Stitch groups should require the durable dry-run plan workflow before service-role writes',
+);
+assert(
+  byKey.get('stitch_groups').preprocessReason.includes('confirm_write'),
+  'Stitch group preprocess notes should call out explicit confirm_write approval',
 );
 assert.strictEqual(byKey.get('minnesota_dnr_ohv_trails').invocationMode, 'workflow_preprocess_required');
 assert(

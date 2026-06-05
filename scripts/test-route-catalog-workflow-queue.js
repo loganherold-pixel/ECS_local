@@ -16,6 +16,7 @@ const DATA_PLANE_WORKFLOWS = [
   'route-catalog-nps-trails-sync.yml',
   'route-catalog-summary-report.yml',
   'route-catalog-coverage-audit.yml',
+  'route-catalog-stitchability-review-queue.yml',
 ];
 
 const SHARED_GROUP = 'group: route-catalog-data-plane-${{ github.repository }}';

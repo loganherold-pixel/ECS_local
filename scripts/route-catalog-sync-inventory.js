@@ -367,6 +367,22 @@ const ROUTE_CATALOG_SYNC_INVENTORY = [
     expectedMaxPublicRecommendationCount: 500,
     requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count'],
   },
+  {
+    key: 'stitch_groups',
+    providerId: 'route_catalog_stitch_groups',
+    functionName: 'route-catalog-sync-stitch-groups',
+    functionPath: path.join('supabase', 'functions', 'route-catalog-sync-stitch-groups', 'index.ts'),
+    workflowPath: path.join('.github', 'workflows', 'route-catalog-stitch-groups-sync.yml'),
+    adapterTestScript: 'test:route-catalog-stitchability-audit',
+    sourceAuthority: 'internal_review',
+    publicRecommendationPolicy: 'review_only_zero_public_recommendations',
+    publicRuntimeCallable: false,
+    invocationMode: 'workflow_preprocess_required',
+    defaultPayload: null,
+    expectedMaxPublicRecommendationCount: 0,
+    preprocessReason: 'Stitch group sync requires the durable GitHub workflow to generate a fresh route-catalog stitchability dry-run plan, require explicit confirm_write approval, and then invoke the protected Edge Function with service-role writes.',
+    requiredGuards: ['sync_token', 'service_role_only', 'bounded_payload', 'public_recommendation_count', 'no_public_route_exposure'],
+  },
 ];
 
 function routeCatalogSyncFunctionNames() {
@@ -414,9 +430,11 @@ function buildRouteCatalogSyncInvocationPlan() {
       'Uses a bounded payload so source syncs cannot accidentally ingest an unbounded national feed.',
       entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations'
         ? 'Curation-only ingestion must produce zero public recommendations until deterministic review promotes records.'
-        : entry.publicRecommendationPolicy === 'aggregate_recommendable_with_closure_gate'
-          ? 'Official aggregate records may create public recommendations only behind deterministic access, limitation, and closure gates.'
-          : 'Official source records may create public recommendations when the adapter applies deterministic public-use filters and keeps current-condition warnings visible.',
+        : entry.publicRecommendationPolicy === 'review_only_zero_public_recommendations'
+          ? 'Review-only stitch group sync must produce zero public recommendations and must not expose draft groups through the public catalog.'
+          : entry.publicRecommendationPolicy === 'aggregate_recommendable_with_closure_gate'
+            ? 'Official aggregate records may create public recommendations only behind deterministic access, limitation, and closure gates.'
+            : 'Official source records may create public recommendations when the adapter applies deterministic public-use filters and keeps current-condition warnings visible.',
       entry.key === 'usfs_mvum'
         ? 'USFS MVUM deep backfill is opt-in and raises the bounded per-forest/layer cap without splitting aggregate route identity across pages.'
         : '',
@@ -463,10 +481,13 @@ function validateRouteCatalogSyncInventory(root = path.join(__dirname, '..')) {
       errors.push(`${entry.functionName} missing expected public recommendation upper bound`);
     }
     if (
-      entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations' &&
+      (
+        entry.publicRecommendationPolicy === 'curation_only_zero_public_recommendations' ||
+        entry.publicRecommendationPolicy === 'review_only_zero_public_recommendations'
+      ) &&
       entry.expectedMaxPublicRecommendationCount !== 0
     ) {
-      errors.push(`${entry.functionName} curation-only sync should expect zero public recommendations`);
+      errors.push(`${entry.functionName} review-only/curation-only sync should expect zero public recommendations`);
     }
 
     const functionSource = readIfExists(root, entry.functionPath);

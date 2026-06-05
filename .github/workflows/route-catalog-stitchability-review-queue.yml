@@ -1,0 +1,92 @@
+name: Route Catalog Stitchability Review Queue
+
+on:
+  schedule:
+    - cron: '12 15 * * 4'
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Route Catalog BLM GTLF Sync
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-catalog-data-plane-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  review-queue:
+    name: Build stitchability review queue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      ECS_SUPABASE_URL: ${{ secrets.ECS_SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate stitchability endpoint configuration
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ECS_SUPABASE_URL}" ]]; then
+            echo "::error::Missing GitHub secret ECS_SUPABASE_URL"
+            exit 1
+          fi
+          if [[ -z "${EXPO_PUBLIC_SUPABASE_ANON_KEY}" ]]; then
+            echo "::warning::Missing GitHub secret EXPO_PUBLIC_SUPABASE_ANON_KEY; invoking public function without a publishable key"
+          fi
+
+      - name: Run Route Catalog Stitchability Review Queue
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run route-catalog:stitchability:queue | tee route-catalog-stitchability-review-queue.json
+
+      - name: Summarize stitchability review queue
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -s route-catalog-stitchability-review-queue.json ]]; then
+            echo "No route catalog stitchability review queue output was produced." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const { extractJsonPayloadFromOutput } = require('./scripts/route-catalog-summary-report.js');
+          const {
+            formatRouteCatalogStitchReviewQueueMarkdown,
+          } = require('./scripts/route-catalog-stitchability-audit.js');
+
+          const raw = fs.readFileSync('route-catalog-stitchability-review-queue.json', 'utf8');
+          let response;
+          try {
+            response = extractJsonPayloadFromOutput(raw, 'Route catalog stitchability review queue output');
+          } catch (error) {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${error.message}\n`);
+            process.exit(0);
+          }
+
+          const markdown = formatRouteCatalogStitchReviewQueueMarkdown(response);
+          fs.writeFileSync('route-catalog-stitchability-review-queue.md', `${markdown}\n`);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
+          NODE
+
+      - name: Upload stitchability review queue artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: route-catalog-stitchability-review-queue
+          path: |
+            route-catalog-stitchability-review-queue.json
+            route-catalog-stitchability-review-queue.md
+          if-no-files-found: ignore

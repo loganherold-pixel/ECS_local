@@ -558,3 +558,10 @@ enabled = true
 # state recommendations with visible current-condition warnings.
 verify_jwt = false
 entrypoint = "./functions/route-catalog-sync-colorado-cpw-trails/index.ts"
+
+[functions.route-catalog-sync-stitch-groups]
+enabled = true
+# Protected by ECS_ROUTE_CATALOG_SYNC_TOKEN; this function uses service-role
+# writes to persist review-only stitch group drafts and does not publish routes.
+verify_jwt = false
+entrypoint = "./functions/route-catalog-sync-stitch-groups/index.ts"
