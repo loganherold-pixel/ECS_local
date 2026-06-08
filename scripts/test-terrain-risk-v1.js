@@ -164,6 +164,19 @@ assert.strictEqual(verifiedModerate.dataConfidence.state, 'verified');
 assert.ok(resultLabels(verifiedModerate).includes('Verified trail geometry available.'));
 assert.ok(resultLabels(verifiedModerate).includes('Known trail difficulty: moderate.'));
 
+for (const missingDifficulty of [null, undefined, '']) {
+  const missingDifficultyResult = evaluateTerrainRiskV1(baseInput({
+    route: {
+      trailDifficulty: missingDifficulty,
+    },
+  }));
+  const labels = resultLabels(missingDifficultyResult);
+  assert.notStrictEqual(missingDifficultyResult.category, 'low');
+  assert.ok(labels.includes('Trail difficulty unknown.'));
+  assert.ok(!labels.some((label) => /Known trail difficulty:\s*(null|undefined)?\./i.test(label)));
+  assert.ok(!labels.some((label) => /\b(null|undefined)\b/i.test(label)));
+}
+
 let missingVehicle = evaluateTerrainRiskV1(baseInput({
   vehicle: {
     status: 'missing',

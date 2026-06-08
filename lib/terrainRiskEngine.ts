@@ -1334,16 +1334,18 @@ function terrainRecommendedAction(
 }
 
 function terrainDifficultyRisk(value: string | number | null): { label: string | null; score: number } {
-  const numeric = terrainNumber(value);
+  const text = cleanTerrainText(value);
+  if (!text) return { label: null, score: 0 };
+
+  const numeric = terrainNumber(text);
   if (numeric != null) {
-    if (numeric >= 8) return { label: String(value), score: 34 };
-    if (numeric >= 5) return { label: String(value), score: 20 };
-    if (numeric >= 3) return { label: String(value), score: 12 };
-    return { label: String(value), score: 3 };
+    if (numeric >= 8) return { label: text, score: 34 };
+    if (numeric >= 5) return { label: text, score: 20 };
+    if (numeric >= 3) return { label: text, score: 12 };
+    return { label: text, score: 3 };
   }
 
-  const difficulty = terrainToken(value);
-  if (!difficulty) return { label: null, score: 0 };
+  const difficulty = terrainToken(text);
   if (['severe', 'extreme', 'black_diamond'].includes(difficulty)) return { label: difficulty.replace(/_/g, ' '), score: 36 };
   if (['hard', 'difficult', 'technical', 'high'].includes(difficulty)) return { label: difficulty.replace(/_/g, ' '), score: 26 };
   if (['moderate', 'medium'].includes(difficulty)) return { label: difficulty.replace(/_/g, ' '), score: 14 };
