@@ -4,11 +4,12 @@
  * Manages weather data fetching, caching, and offline support.
  * Uses the get-weather Supabase Edge Function to fetch data from OpenWeather API.
  */
-import { Platform } from 'react-native';
 import { supabase } from './supabase';
 import { connectivity } from './connectivity';
 import { reportDegradedState, reportRecoverableFailure } from './ecsIssueIntelligence';
 import { setIssueRuntimeWeatherStatus } from './ecsIssueRuntime';
+import { ECS_FALLBACK_LABELS } from './fallbackStateLabels';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 import {
   normalizeWeatherTemperatureC,
   normalizeWeatherTemperatureF,
@@ -34,6 +35,7 @@ import type {
 
 // Cache Configuration
 const CACHE_KEY_PREFIX = 'ecs_weather_';
+const WEATHER_CACHE_INDEX_KEY = '__weather_cache_index__';
 const CACHE_DURATION_MS = 10 * 60 * 1000;
 const STALE_WARNING_MS = 2 * 60 * 60 * 1000;
 const MAX_CACHE_AGE_MS = 24 * 60 * 60 * 1000;
@@ -43,6 +45,7 @@ const WEATHER_DEBUG = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
 const WEATHER_JOIN_LOG_THROTTLE_MS = 3000;
 
 const memoryCache = new Map<string, CachedWeather>();
+const weatherCachePersistence = createPersistedKeyValueCache('ecs_weather_cache');
 const lastJoinedExistingLogAt = new Map<string, number>();
 
 function coordKey(coords: WeatherCoordinate[]): string {
@@ -86,10 +89,38 @@ function weatherJoinedExistingLog(
   weatherDebugLog('[WEATHER] request_joined_existing', payload);
 }
 
-function readLocalStorage(key: string): CachedWeather | null {
+function readWeatherCacheIndex(): string[] {
   try {
-    if (Platform.OS !== 'web' || typeof localStorage === 'undefined') return null;
-    const raw = localStorage.getItem(CACHE_KEY_PREFIX + key);
+    const raw = weatherCachePersistence.get(WEATHER_CACHE_INDEX_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is string => {
+      return typeof entry === 'string' && entry.startsWith(CACHE_KEY_PREFIX);
+    });
+  } catch {
+    return [];
+  }
+}
+
+function writeWeatherCacheIndex(keys: string[]): void {
+  const uniqueKeys = Array.from(new Set(keys)).filter((key) => key.startsWith(CACHE_KEY_PREFIX));
+  if (uniqueKeys.length === 0) {
+    weatherCachePersistence.delete(WEATHER_CACHE_INDEX_KEY);
+    return;
+  }
+  weatherCachePersistence.set(WEATHER_CACHE_INDEX_KEY, JSON.stringify(uniqueKeys));
+}
+
+function rememberWeatherCacheKey(storageKey: string): void {
+  const current = readWeatherCacheIndex();
+  if (current.includes(storageKey)) return;
+  writeWeatherCacheIndex([...current, storageKey]);
+}
+
+function readPersistedWeatherCache(key: string): CachedWeather | null {
+  try {
+    const raw = weatherCachePersistence.get(CACHE_KEY_PREFIX + key);
     if (!raw) return null;
     return JSON.parse(raw) as CachedWeather;
   } catch {
@@ -97,18 +128,17 @@ function readLocalStorage(key: string): CachedWeather | null {
   }
 }
 
-function writeLocalStorage(key: string, cached: CachedWeather): void {
-  try {
-    if (Platform.OS !== 'web' || typeof localStorage === 'undefined') return;
-    localStorage.setItem(CACHE_KEY_PREFIX + key, JSON.stringify(cached));
-  } catch {}
+function writePersistedWeatherCache(key: string, cached: CachedWeather): void {
+  const storageKey = CACHE_KEY_PREFIX + key;
+  weatherCachePersistence.set(storageKey, JSON.stringify(cached));
+  rememberWeatherCacheKey(storageKey);
 }
 
 function getCached(key: string, ignoreExpiry = false): CachedWeather | null {
   let cached = memoryCache.get(key) || null;
 
   if (!cached) {
-    cached = readLocalStorage(key);
+    cached = readPersistedWeatherCache(key);
     if (cached) memoryCache.set(key, cached);
   }
 
@@ -132,7 +162,7 @@ function setCache(key: string, data: WeatherResponse): void {
     coordKey: key,
   };
   memoryCache.set(key, cached);
-  writeLocalStorage(key, cached);
+  writePersistedWeatherCache(key, cached);
 }
 
 function hasUsableCurrent(current: WaypointWeather['current'] | null | undefined): boolean {
@@ -803,12 +833,12 @@ function generateFallbackWeather(
     forecast: [],
     alerts: [],
     trail_conditions: {
-      overall: 'fair',
+      overall: 'unavailable',
       factors: [
         {
-          factor: 'Data Availability',
-          status: 'caution',
-          detail: 'Weather data unavailable. Unable to assess current trail conditions. Exercise caution and rely on visual assessment.',
+          factor: 'Data Unavailable',
+          status: 'unavailable',
+          detail: `${ECS_FALLBACK_LABELS.unavailable} weather data. ECS cannot assess current trail conditions from live or cached weather. Verify conditions manually before relying on this route assessment.`,
         },
       ],
     },
@@ -1307,50 +1337,42 @@ export function getAnyCachedWeather(
 export function clearWeatherCache(): void {
   memoryCache.clear();
   clearInFlightWeatherRequests();
+  const persistedKeys = readWeatherCacheIndex();
+  persistedKeys.forEach((key) => weatherCachePersistence.delete(key));
+  weatherCachePersistence.delete(WEATHER_CACHE_INDEX_KEY);
   weatherDebugLog('[WEATHER] weather_cleared_explicitly', {
     scope: 'weather_cache',
   });
-
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      const keys: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith(CACHE_KEY_PREFIX)) keys.push(k);
-      }
-      keys.forEach(k => localStorage.removeItem(k));
-    }
-  } catch {}
 }
 
 export const weatherRequestDedupeTestHooks = {
   buildWeatherRequestKey,
   clearInFlightWeatherRequests,
+  flushWeatherCache,
   getCachedWeatherResult,
   getInFlightWeatherRequestCount,
   runDedupedWeatherRequest,
+  waitForWeatherCacheHydration,
 };
 
 export function getWeatherCacheStats(): { count: number; sizeBytes: number; memoryEntries: number } {
-  let lsCount = 0;
-  let lsSizeBytes = 0;
-
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith(CACHE_KEY_PREFIX)) {
-          lsCount++;
-          const val = localStorage.getItem(k);
-          if (val) lsSizeBytes += val.length * 2;
-        }
-      }
-    }
-  } catch {}
+  const persistedKeys = readWeatherCacheIndex();
+  const sizeBytes = persistedKeys.reduce((total, key) => {
+    const value = weatherCachePersistence.get(key);
+    return total + (value ? value.length * 2 : 0);
+  }, 0);
 
   return {
-    count: Math.max(lsCount, memoryCache.size),
-    sizeBytes: lsSizeBytes,
+    count: Math.max(persistedKeys.length, memoryCache.size),
+    sizeBytes,
     memoryEntries: memoryCache.size,
   };
+}
+
+export function waitForWeatherCacheHydration(): Promise<void> {
+  return weatherCachePersistence.waitForHydration();
+}
+
+export function flushWeatherCache(): Promise<void> {
+  return weatherCachePersistence.flush();
 }

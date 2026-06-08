@@ -10,6 +10,7 @@ const tabsLayoutSource = fs.readFileSync(path.join(root, 'app', '(tabs)', '_layo
 const appContextSource = fs.readFileSync(path.join(root, 'context', 'AppContext.tsx'), 'utf8');
 const distributionEntrySource = fs.readFileSync(path.join(root, 'lib', 'auth', 'distributionEntryResolver.ts'), 'utf8');
 const authCopySource = fs.readFileSync(path.join(root, 'lib', 'auth', 'authCopy.ts'), 'utf8');
+const routeManifestSource = fs.readFileSync(path.join(root, 'lib', 'routeManifest.ts'), 'utf8');
 const videoSource = fs.readFileSync(path.join(root, 'components', 'LoadingTransitionVideo.tsx'), 'utf8');
 
 function normalize(source) {
@@ -412,9 +413,9 @@ assertIncludes(
   'AuthGate should use route replacement for the final dashboard transition.',
 );
 assertIncludes(
-  layoutSource,
+  routeManifestSource,
   "const withoutTrailingSlash = withoutQueryAndHash.length > 1\n    ? withoutQueryAndHash.replace(/\\/+$/, '')\n    : withoutQueryAndHash;",
-  'Auth route normalization should remove trailing slashes so /login/ is treated like /login during second-login handoff.',
+  'Canonical route normalization should remove trailing slashes so /login/ is treated like /login during second-login handoff.',
 );
 
 assertIncludes(

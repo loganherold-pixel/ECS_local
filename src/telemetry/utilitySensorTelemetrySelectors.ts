@@ -67,6 +67,7 @@ export function inferUtilitySensorResourceKind(
 
 function resolveSensorStatus(reading: ECSUtilitySensorTelemetryReading): ECSUtilitySensorResourceStatus {
   if (reading.quality === 'error') return 'error';
+  if (reading.quality === 'stale' || reading.isStale) return 'stale';
   if (hasFinitePercent(reading.levelPercent)) return 'live';
   if (
     reading.quality === 'live' &&
@@ -78,13 +79,16 @@ function resolveSensorStatus(reading: ECSUtilitySensorTelemetryReading): ECSUtil
   if (reading.linkState === 'connected' && reading.parserStatus === 'parser_pending') return 'parser_pending';
   if (
     reading.linkState === 'connected' &&
-    (reading.parserStatus === 'live_ready' || reading.parserStatus === 'awaiting_level')
+    (
+      reading.parserStatus === 'live_ready' ||
+      reading.parserStatus === 'awaiting_level' ||
+      reading.parserStatus === 'calibration_pending'
+    )
   ) {
     return 'linked';
   }
-  if (reading.quality === 'unavailable') return 'offline';
-  if (reading.quality === 'stale' || reading.isStale) return 'stale';
   if (reading.parserStatus === 'parser_pending') return 'parser_pending';
+  if (reading.quality === 'unavailable') return 'offline';
   return reading.linkState === 'connected' ? 'linked' : 'parser_pending';
 }
 

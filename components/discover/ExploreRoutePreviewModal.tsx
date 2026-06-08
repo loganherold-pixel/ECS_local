@@ -23,6 +23,7 @@ import {
   normalizeNavigationHandoffPreview,
   type ExplorePreviewCoordinate,
 } from '../../lib/exploreRoutePreview';
+import { getExploreRouteAuthorityCopy } from '../../lib/exploreRouteAuthority';
 import type { NavigationHandoffPayload } from '../../lib/navigationHandoffStore';
 import {
   DEFAULT_MAP_STYLE,
@@ -109,8 +110,16 @@ export default function ExploreRoutePreviewModal({
       previewModel?.payload.routeMetadata?.terrainType ??
       'route',
   ).toUpperCase();
+  const routeAuthority = getExploreRouteAuthorityCopy(
+    String(
+      previewModel?.payload.routeMetadata?.routeTypeStatus ??
+        opportunity?.routeMetadata?.routeTypeStatus ??
+        'unknown',
+    ),
+  );
   const confidenceLabel = String(
     sourceLabel ??
+      routeAuthority.sourceLabel ??
       previewModel?.payload.routeMetadata?.confidenceLabel ??
       previewModel?.payload.routeMetadata?.routeConfidence ??
       previewModel?.payload.routeSource ??
@@ -131,6 +140,11 @@ export default function ExploreRoutePreviewModal({
   };
   const hasEstimatedPreviewLine =
     !!previewModel?.hasRouteData && !previewModel.hasFullGeometry;
+  const startGuidanceActionLabel =
+    previewModel?.payload.type === 'trailhead' ||
+    previewModel?.payload.routeMetadata?.routeTypeStatus === 'trailhead_guidance'
+      ? 'NAVIGATE TO TRAILHEAD'
+      : 'START GUIDANCE';
   const previewSignature = previewModel
     ? [
         previewModel.payload.id,
@@ -203,7 +217,7 @@ export default function ExploreRoutePreviewModal({
           ) : null}
           {onStartGuidance ? (
             <TouchablePreviewAction
-              label="START GUIDANCE"
+              label={startGuidanceActionLabel}
               icon="play"
               tone="primary"
               onPress={onStartGuidance}
@@ -357,6 +371,13 @@ export default function ExploreRoutePreviewModal({
               </Text>
             </View>
           ) : null}
+
+          <View style={s.notice}>
+            <Ionicons name="shield-checkmark-outline" size={14} color={TACTICAL.textMuted} />
+            <Text style={s.noticeText}>
+              {routeAuthority.notice}
+            </Text>
+          </View>
 
           {!previewModel.hasRouteData ? (
             <View style={s.notice}>

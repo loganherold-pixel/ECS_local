@@ -69,6 +69,7 @@ import type { Vehicle } from '../../lib/types';
 import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { expeditionStateStore, type ExpeditionRecord } from '../../lib/expeditionStateStore';
+import { expeditionStore } from '../../lib/expeditionCommandStore';
 import { expeditionInviteLocalAdapter } from '../../lib/expeditionInviteLocalAdapter';
 import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
 import {
@@ -2137,6 +2138,7 @@ export default function DispatchCadCommandCenter() {
   const [profileVisible, setProfileVisible] = useState(false);
   const [inviteVisible, setInviteVisible] = useState(false);
   const [currentExpedition, setCurrentExpedition] = useState<ExpeditionRecord | null>(() => getActiveExpeditionRecord());
+  const [activeExpeditionDispatchId, setActiveExpeditionDispatchId] = useState<string | null>(null);
   const [vehicleRevision, setVehicleRevision] = useState(0);
   const [submittingThreatActionKey, setSubmittingThreatActionKey] = useState<string | null>(null);
   const [navigatingAssistEventId, setNavigatingAssistEventId] = useState<string | null>(null);
@@ -2308,6 +2310,30 @@ export default function DispatchCadCommandCenter() {
   useEffect(() => expeditionStateStore.subscribe((state, record) => {
     setCurrentExpedition(state === 'active' || state === 'paused' ? record : null);
   }), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.id || !isDispatchFocused) {
+      if (!user?.id) setActiveExpeditionDispatchId(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    expeditionStore.getActive(user.id).then((expedition) => {
+      if (!cancelled) {
+        setActiveExpeditionDispatchId(expedition?.id ?? null);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setActiveExpeditionDispatchId(null);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentExpedition?.id, isDispatchFocused, user?.id]);
 
   useEffect(() => {
     const bumpVehicleRevision = () => setVehicleRevision((revision) => revision + 1);
@@ -3555,6 +3581,18 @@ export default function DispatchCadCommandCenter() {
 
   const convoyLifecycleButtonLabel = activeConvoyControl?.isLeader ? 'End Convoy' : 'Leave Convoy';
 
+  const handleOpenActiveExpeditionDispatch = useCallback(() => {
+    if (!activeExpeditionDispatchId) {
+      showToast?.('No active expedition dispatch feed available.');
+      return;
+    }
+
+    router.push({
+      pathname: '/expedition-dispatch',
+      params: { id: activeExpeditionDispatchId },
+    } as any);
+  }, [activeExpeditionDispatchId, router, showToast]);
+
   const headerStrip = (
     <View style={[styles.headerStrip, isLandscapeDispatch ? styles.headerStripLandscape : null]}>
       {!isLandscapeDispatch ? (
@@ -3583,6 +3621,25 @@ export default function DispatchCadCommandCenter() {
             Convoy
           </Text>
         </TouchableOpacity>
+        {activeExpeditionDispatchId ? (
+          <TouchableOpacity
+            style={[styles.headerUtilityButton, isLandscapeDispatch ? styles.headerUtilityButtonLandscape : null]}
+            accessibilityRole="button"
+            accessibilityLabel="Open active expedition dispatch feed"
+            activeOpacity={0.82}
+            onPress={handleOpenActiveExpeditionDispatch}
+          >
+            <Ionicons name="radio-outline" size={isLandscapeDispatch ? 12 : 14} color={TACTICAL.amber} />
+            <Text
+              style={[styles.headerUtilityButtonText, isLandscapeDispatch ? styles.headerUtilityButtonTextLandscape : null]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+            >
+              Expedition
+            </Text>
+          </TouchableOpacity>
+        ) : null}
         {activeConvoyControl ? (
           <TouchableOpacity
             style={[

@@ -167,8 +167,8 @@ const READINESS_BY_PROVIDER: Partial<Record<BluestackProvider, BluestackProvider
   mopeka: {
     stage: 'native_parser_pending',
     statusLabel: 'Mopeka sensor linkable',
-    statusDetail: 'Mopeka tank monitor profiles can link over native BLE. Live tank percentage remains parser-pending until ECS receives a decoded level percentage.',
-    telemetryTruthLabel: 'Level parser pending',
+    statusDetail: 'Mopeka tank monitor profiles can decode supported BLE advertisements into tank distance. Live tank percentage is promoted only when ECS has a calibrated empty/full tank profile.',
+    telemetryTruthLabel: 'Calibration required',
     connectionPath: 'native_ble',
     requiresNativeBuild: true,
     requiredSecretNames: [],

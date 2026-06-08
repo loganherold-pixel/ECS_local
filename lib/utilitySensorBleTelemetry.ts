@@ -4,6 +4,20 @@ export interface UtilitySensorCharacteristicSnapshot {
   valueBase64: string | null;
 }
 
+export type UtilitySensorTankProfileSource =
+  | 'manual'
+  | 'vehicle_profile'
+  | 'manufacturer_spec'
+  | 'field_calibration';
+
+export interface UtilitySensorTankProfile {
+  id?: string | null;
+  label?: string | null;
+  source?: UtilitySensorTankProfileSource | string | null;
+  emptyDistanceMm?: unknown;
+  fullDistanceMm?: unknown;
+}
+
 export interface UtilitySensorTelemetryInput {
   providerId?: string | null;
   providerLabel?: string | null;
@@ -20,6 +34,7 @@ export interface UtilitySensorTelemetryInput {
   fluidLevelPercent?: unknown;
   propanePercent?: unknown;
   waterPercent?: unknown;
+  tankProfile?: UtilitySensorTankProfile | null;
   characteristics?: UtilitySensorCharacteristicSnapshot[] | null;
 }
 
@@ -29,7 +44,7 @@ export interface UtilitySensorLiveTelemetry {
   temperatureCelsius: number | null;
   batteryPercent: number | null;
   readQuality: number | null;
-  parserStatus: 'live' | 'awaiting_level' | 'unsupported';
+  parserStatus: 'live' | 'calibration_pending' | 'awaiting_level' | 'unsupported';
   decodedAt: number | null;
   source: string | null;
 }
@@ -149,7 +164,35 @@ function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value * 10) / 10));
 }
 
-function decodeMopekaProPayload(payload: number[]): UtilitySensorLiveTelemetry | null {
+function finiteDistanceMm(value: unknown): number | null {
+  if (typeof value === 'string' && value.trim()) {
+    const match = value.match(/-?\d+(?:\.\d+)?/);
+    if (!match) return null;
+    value = Number(match[0]);
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  if (value < 0) return null;
+  return value;
+}
+
+function percentFromTankProfileDistance(
+  distanceMm: number,
+  tankProfile: UtilitySensorTankProfile | null | undefined,
+): number | null {
+  const emptyDistanceMm = finiteDistanceMm(tankProfile?.emptyDistanceMm);
+  const fullDistanceMm = finiteDistanceMm(tankProfile?.fullDistanceMm);
+  if (emptyDistanceMm == null || fullDistanceMm == null) return null;
+
+  const usableRangeMm = fullDistanceMm - emptyDistanceMm;
+  if (Math.abs(usableRangeMm) < 1) return null;
+
+  return clampPercent(((distanceMm - emptyDistanceMm) / usableRangeMm) * 100);
+}
+
+function decodeMopekaProPayload(
+  payload: number[],
+  tankProfile?: UtilitySensorTankProfile | null,
+): UtilitySensorLiveTelemetry | null {
   if (payload.length !== MOPEKA_PRO_PAYLOAD_LENGTH) return null;
   if (!MOPEKA_PRO_SENSOR_TYPES.has(payload[0])) return null;
 
@@ -162,14 +205,15 @@ function decodeMopekaProPayload(payload: number[]): UtilitySensorLiveTelemetry |
   const distanceMm = Math.max(0, Math.round(rawDistance * distanceCoefficient));
   const voltage = (payload[1] & 0x7f) / 32;
   const batteryPercent = clampPercent(((voltage - 2.2) / 0.65) * 100);
+  const levelPercent = percentFromTankProfileDistance(distanceMm, tankProfile);
 
   return {
-    levelPercent: null,
+    levelPercent,
     levelDistanceMm: distanceMm,
     temperatureCelsius: (payload[2] & 0x7f) - 40,
     batteryPercent,
     readQuality: Math.max(0, Math.min(3, payload[4] >> 6)),
-    parserStatus: 'live',
+    parserStatus: levelPercent == null ? 'calibration_pending' : 'live',
     decodedAt: Date.now(),
     source: 'mopeka_advertisement',
   };
@@ -333,7 +377,7 @@ export function decodeUtilitySensorLiveTelemetry(
     input.serviceData != null
   ) {
     for (const payload of getMopekaPayloadCandidates(input)) {
-      const decoded = decodeMopekaProPayload(payload);
+      const decoded = decodeMopekaProPayload(payload, input.tankProfile);
       if (decoded) return decoded;
     }
   }

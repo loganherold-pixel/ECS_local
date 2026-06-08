@@ -86,7 +86,7 @@ export function identifyBluestackUtilitySensorProfile(
       parserStatus: isMopeka || isSeeLevel ? 'parser_pending' : 'generic_parser_pending',
       detail:
         isMopeka
-          ? 'Mopeka water or liquid profile identified. ECS can link over native BLE; tank percentage remains parser-pending until a decoded level percentage is received.'
+          ? 'Mopeka water or liquid profile identified. ECS can decode supported advertisements into tank distance; live tank percentage requires a calibrated empty/full tank profile.'
           : isSeeLevel
             ? 'SeeLevel water profile identified. ECS can link over native BLE; tank percentage remains parser-pending until a decoded level percentage is received.'
             : 'Water or fluid monitor profile identified. ECS can link over native BLE; live level remains pending until a decoded percentage is received.',
@@ -102,7 +102,7 @@ export function identifyBluestackUtilitySensorProfile(
       parserStatus: isMopeka ? 'parser_pending' : 'generic_parser_pending',
       detail:
         isMopeka
-          ? 'Mopeka propane profile identified. ECS can link over native BLE; tank percentage remains parser-pending until a decoded level percentage is received.'
+          ? 'Mopeka propane profile identified. ECS can decode supported advertisements into tank distance; live tank percentage requires a calibrated empty/full tank profile.'
           : 'Propane or LPG monitor profile identified. ECS can link over native BLE; live tank level remains pending until a decoded percentage is received.',
     };
   }

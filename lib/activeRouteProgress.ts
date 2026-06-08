@@ -928,6 +928,9 @@ export function useActiveRouteProgressSnapshot(
   const [trailSession, setTrailSession] = useState<TrailNavigationSessionState>(() =>
     getActiveTrailNavigationSession(),
   );
+  const [waypointProgressHydrated, setWaypointProgressHydrated] = useState(() =>
+    waypointProgressStore.isHydrated(),
+  );
 
   useEffect(() => {
     const syncRoute = () => {
@@ -974,6 +977,16 @@ export function useActiveRouteProgressSnapshot(
     });
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+    void waypointProgressStore.waitForHydration().then(() => {
+      if (mounted) setWaypointProgressHydrated(true);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const gpsLatitude = options?.gpsLatitude ?? null;
   const gpsLongitude = options?.gpsLongitude ?? null;
   const gpsSpeedMph = options?.gpsSpeedMph ?? null;
@@ -1004,6 +1017,7 @@ export function useActiveRouteProgressSnapshot(
       navigationData,
       roadSession,
       trailSession,
+      waypointProgressHydrated,
     ],
   );
 }

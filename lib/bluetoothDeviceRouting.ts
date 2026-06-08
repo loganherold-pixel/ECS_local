@@ -282,7 +282,7 @@ export function routeBluetoothDevice(
       categoryLabel: presentation.categoryHint,
       supportLevel: 'generic',
       supportLabel: 'Linkable Sensor',
-      supportNote: 'Bluestack can link this monitor over native BLE. Live tank percentage remains parser-pending until a decoded level percentage is received.',
+      supportNote: 'Bluestack can link this monitor over native BLE. Live tank percentage requires a calibrated empty/full tank profile and a decoded Mopeka distance reading.',
       needsUserConfirmation: false,
       matchedBrandLabels: presentation.matchedBrandLabels,
       connectionType: presentation.connectionType,

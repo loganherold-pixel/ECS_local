@@ -84,6 +84,13 @@ import {
   logStartupStall,
   markStartupPhase,
 } from '../lib/startupDiagnostics';
+import {
+  getRestorableShellRouteForPath,
+  isProtectedRoutePath,
+  isSharedShellBackgroundRoute,
+  normalizeECSRoutePath,
+  toExpoRouterShellTarget as toManifestExpoRouterShellTarget,
+} from '../lib/routeManifest';
 
 if (typeof globalThis.fetch === 'undefined') {
   // @ts-ignore
@@ -95,27 +102,8 @@ const AUTH_SCREENS = ['login', 'initialize', 'create-access-key', 'auth-info', '
 const AUTH_ROUTE_PREFIXES = ['/expedition-channel/join/'];
 
 // ── Screens that STRICTLY require authentication (cloud-only features) ──
-const PROTECTED_SCREENS = [
-  'expedition-detail',
-  'expedition-command',
-  'expedition-checklist',
-  'expedition-log',
-  'expedition-route-mgr',
-  'expedition-livelog',
-  'expedition-dispatch',
-];
-
 function normalizeRoutePath(path: string | null | undefined): string {
-  if (!path || path === '/') {
-    return '/';
-  }
-
-  const withoutQueryAndHash = path.split(/[?#]/, 1)[0].replace(/\/\([^/]+\)/g, '');
-  const withoutTrailingSlash = withoutQueryAndHash.length > 1
-    ? withoutQueryAndHash.replace(/\/+$/, '')
-    : withoutQueryAndHash;
-  const normalized = withoutTrailingSlash.replace(/\/index$/, '') || '/';
-  return normalized === '' ? '/' : normalized;
+  return normalizeECSRoutePath(path);
 }
 
 function firstRouteParam(value: string | string[] | undefined): string | null {
@@ -138,15 +126,6 @@ const OFFLINE_MODE_KEY = 'ecs_offline_mode';
 const offlineModeCache = createPersistedKeyValueCache('ecs_runtime_flags');
 const SETUP_COMPLETE_KEY = 'ecs_setup_complete';
 const setupStateCache = createPersistedKeyValueCache('ecs_setup_state');
-const RESTORABLE_SHELL_ROUTES = new Set([
-  '/fleet',
-  '/navigate',
-  '/dashboard',
-  '/discover',
-  '/explore',
-  '/alert',
-]);
-
 const STARTUP_VISUAL_PALETTE = {
   bg: ECS.bgPrimary,
   bgElevated: ECS.bgElev,
@@ -201,70 +180,11 @@ function waitForShellStartupRequirement(
 }
 
 function normalizeStoredShellRoute(path: string | null | undefined): string | null {
-  if (!path) return null;
-
-  switch (path) {
-    case '/(tabs)/fleet':
-      return '/fleet';
-    case '/(tabs)/navigate':
-      return '/navigate';
-    case '/(tabs)/dashboard':
-      return '/dashboard';
-    case '/(tabs)/discover':
-    case '/(tabs)/explore':
-    case '/explore':
-      return '/discover';
-    case '/(tabs)/alert':
-      return '/alert';
-    default:
-      return RESTORABLE_SHELL_ROUTES.has(path)
-        ? path === '/explore'
-          ? '/discover'
-          : path
-        : null;
-  }
+  return getRestorableShellRouteForPath(path);
 }
 
 function toRestorableShellRoute(path: string | null | undefined): string | null {
-  const normalized = normalizeRoutePath(path);
-
-  if (normalized === '/fleet' || normalized === '/vehicle-config') {
-    return '/fleet';
-  }
-
-  if (
-    normalized === '/navigate' ||
-    normalized === '/route' ||
-    normalized === '/navigate-run' ||
-    normalized === '/navigate-offline' ||
-    normalized === '/navigate-bailouts'
-  ) {
-    return '/navigate';
-  }
-
-  if (normalized === '/dashboard') {
-    return '/dashboard';
-  }
-
-  if (
-    normalized === '/discover' ||
-    normalized === '/explore' ||
-    normalized === '/explore-trip-builder' ||
-    normalized === '/explore-offline-prep-pack'
-  ) {
-    return '/discover';
-  }
-
-  if (
-    normalized === '/alert' ||
-    normalized === '/safety' ||
-    normalized === '/intel' ||
-    normalized === '/more'
-  ) {
-    return '/alert';
-  }
-
-  return null;
+  return getRestorableShellRouteForPath(path);
 }
 
 function getStoredShellRoute(): string | null {
@@ -288,21 +208,7 @@ function getPreferredShellRoute(): string {
 }
 
 function toExpoRouterShellTarget(path: string): string {
-  switch (normalizeRoutePath(path)) {
-    case '/fleet':
-      return '/fleet';
-    case '/navigate':
-      return '/navigate';
-    case '/dashboard':
-      return '/dashboard';
-    case '/discover':
-    case '/explore':
-      return '/discover';
-    case '/alert':
-      return '/alert';
-    default:
-      return path;
-  }
+  return toManifestExpoRouterShellTarget(path);
 }
 
 function getPersistedSetupComplete(): boolean {
@@ -797,7 +703,7 @@ function AuthGate() {
   );
   const inLogin = normalizedPathname === '/login';
   const inProtectedScreen = useMemo(
-    () => PROTECTED_SCREENS.some((screen) => normalizedPathname === `/${screen}`),
+    () => isProtectedRoutePath(normalizedPathname),
     [normalizedPathname],
   );
   const accessCheckPending = entitlementResolving && inAuthScreen;
@@ -1024,28 +930,7 @@ function AuthGate() {
   const showCommandDock = !inPreAuthTree && !shouldHideCommandDock;
   const showSharedShellBodyBackground =
     !inPreAuthTree &&
-    (
-      showCommandDock ||
-      normalizedPathname === '/fleet' ||
-      normalizedPathname === '/navigate' ||
-      normalizedPathname === '/dashboard' ||
-      normalizedPathname === '/discover' ||
-      normalizedPathname === '/explore' ||
-      normalizedPathname === '/explore-trip-builder' ||
-      normalizedPathname === '/explore-offline-prep-pack' ||
-      normalizedPathname === '/alert' ||
-      normalizedPathname === '/vehicle-config' ||
-      normalizedPathname === '/route' ||
-      normalizedPathname === '/trips' ||
-      normalizedPathname === '/expeditions' ||
-      normalizedPathname === '/intelligence' ||
-      normalizedPathname === '/safety' ||
-      normalizedPathname === '/intel' ||
-      normalizedPathname === '/more' ||
-      normalizedPathname === '/loadmap' ||
-      normalizedPathname === '/loaditems' ||
-      normalizedPathname === '/convoy-command'
-    );
+    isSharedShellBackgroundRoute(normalizedPathname);
   const shellBodyTopInset = 0;
   const shellBodyBottomInset = useMemo(
     () => (showCommandDock ? getCommandDockHeight(insets.bottom) : 0),

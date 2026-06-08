@@ -71,7 +71,8 @@ assertIncludes(screen, 'ECS uses the trailhead as ground zero for pre-trail fuel
 assertIncludes(screen, 'PICK 1 OF UP TO 5', 'Trip Builder should constrain route-start fuel choices to a compact list.');
 assertIncludes(screen, 'testID="trip-builder-smart-resupply-one-stop"', 'Trip Builder should acknowledge fuel and grocery one-stop selections.');
 assertIncludes(screen, 'testID="trip-builder-smart-resupply-supply-step"', 'Trip Builder should render the second grocery/supply step when needed.');
-assertIncludes(screen, 'Groceries / Supplies Near Trailhead', 'Trip Builder should label grocery/supply search as trailhead-anchored.');
+assertIncludes(screen, 'Groceries / Supplies Near Fuel', 'Trip Builder should label grocery/supply search as refuel-anchored.');
+assertIncludes(screen, 'ECS ranks this stop against your selected fuel anchor.', 'Trip Builder should explain the refuel-anchored supply sequencing.');
 assertIncludes(screen, 'selectedSmartFuel ? smartResupplyPointForPlan(selectedSmartFuel) : null', 'Trip Builder should pass selected fuel into the planner.');
 assertIncludes(screen, "smartResupplyPreference === 'fuel_supplies' && selectedSmartSupply", 'Trip Builder should pass selected groceries into the planner when required.');
 assertIncludes(screen, 'Bailout Plan', 'Trip Builder should ask about bailout planning before generating.');
@@ -138,12 +139,14 @@ assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_LIMIT', 'Trip Builder should reque
 assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [12, 25, 50] as const', 'Trip Builder should search tight route-start radius tiers before accepting resupply options.');
 assertIncludes(screen, 'SMART_RESUPPLY_MAX_DISTANCE_FROM_START_MILES = 60', 'Trip Builder should reject far-away pre-route fuel and grocery options.');
 assertIncludes(screen, "smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'fuel', selectedTrailheadResupplyAnchorCoordinate)", 'RouteContext fuel candidates should be measured from the trailhead resupply anchor.');
-assertIncludes(screen, "smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedTrailheadResupplyAnchorCoordinate)", 'RouteContext grocery candidates should be measured from the trailhead resupply anchor.');
+assertIncludes(screen, "smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedPreTrailSupplyAnchorCoordinate)", 'RouteContext grocery candidates should be measured from the selected refuel anchor.');
 assertIncludes(screen, 'for (const radiusMiles of SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES)', 'Trip Builder should use bounded route-start tiers instead of an unbounded smart resupply fallback.');
 assertIncludes(screen, 'option.distanceFromRouteStartMiles > SMART_RESUPPLY_MAX_DISTANCE_FROM_START_MILES', 'Trip Builder should filter resolved resupply candidates by actual distance from the route start.');
 assertIncludes(screen, 'filter(isSmartResupplyOptionNearRouteStart)', 'RouteContext resupply candidates should also be capped near the route start.');
 assertIncludes(screen, '(left.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY)', 'Fuel and supply options should be ranked by distance from the route start.');
-assertIncludes(screen, 'routeStart: selectedTrailheadResupplyAnchorCoordinate', 'Live fuel and grocery searches should use the trailhead endpoint as their search origin.');
+assertIncludes(screen, 'routeStart: selectedTrailheadResupplyAnchorCoordinate', 'Live fuel search should use the trailhead endpoint as its search origin.');
+assertIncludes(screen, 'routeStart: selectedPreTrailSupplyAnchorCoordinate', 'Live grocery search should use the selected refuel stop as its search origin.');
+assertIncludes(screen, 'const preTrailDraftResolution = useMemo(', 'Trip Builder should derive draft pre-trail POI status from the canonical resolver.');
 assertIncludes(screen, 'proximity: { lat: routeStart.latitude, lng: routeStart.longitude }', 'Bailout search should anchor to the selected route start instead of a generic or midpoint default.');
 assertIncludes(screen, "filter((point) => point.source === 'mapbox_search')", 'Bailout choices should prefer live nearest map results before route-derived fallback points.');
 assertIncludes(screen, 'tripSetupScroller', 'Trip Builder setup inputs should remain usable on smaller screens.');

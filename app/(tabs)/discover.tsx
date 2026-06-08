@@ -964,7 +964,12 @@ function DiscoverScreenInner() {
         }
       } catch (err) {
         console.warn(TAG, 'Failed to load with compatibility, falling back:', err);
-        const ops = computeDistancesFromUser(loadExpeditionOpportunities(), userLat, userLng);
+        const ops = computeDistancesFromUser(
+          loadExpeditionOpportunities(),
+          userLat,
+          userLng,
+          hasGPSFix ? 'live_gps' : 'default_location',
+        );
         if (mountedRef.current && !cancelled) {
           setOpportunities(ops);
           setCompatResults(new Map());

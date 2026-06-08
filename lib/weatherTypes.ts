@@ -93,8 +93,8 @@ export interface HourlyForecast {
   weather_icon: string;
 }
 
-export type TrailFactorStatus = 'good' | 'caution' | 'warning' | 'danger';
-export type TrailOverall = 'good' | 'fair' | 'poor' | 'hazardous';
+export type TrailFactorStatus = 'good' | 'caution' | 'warning' | 'danger' | 'unavailable';
+export type TrailOverall = 'good' | 'fair' | 'poor' | 'hazardous' | 'unavailable';
 
 export interface TrailFactor {
   factor: string;
@@ -201,6 +201,7 @@ export function getTrailStatusColor(status: TrailFactorStatus): string {
     case 'caution': return '#FFB300';
     case 'warning': return '#FF7043';
     case 'danger': return '#EF5350';
+    case 'unavailable': return '#8A8A85';
     default: return '#8A8A85';
   }
 }
@@ -211,6 +212,7 @@ export function getTrailOverallColor(overall: TrailOverall): string {
     case 'fair': return '#FFB300';
     case 'poor': return '#FF7043';
     case 'hazardous': return '#EF5350';
+    case 'unavailable': return '#8A8A85';
     default: return '#8A8A85';
   }
 }

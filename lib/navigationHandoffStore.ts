@@ -11,6 +11,7 @@ import {
   extractExploreRouteCampMarkers,
   type ExploreRouteCampMarker,
 } from './exploreRouteCampHandoff';
+import { classifyExploreRouteAuthority } from './exploreRouteAuthority';
 
 const STORAGE_KEY = 'ecs_hybrid_navigation_handoff_v1';
 const nativeNavigationHandoffCache = createPersistedKeyValueCache('ecs_navigation_handoff');
@@ -585,6 +586,7 @@ export function buildExploreNavigationPayload(
     routeRecord.routeMetadata && typeof routeRecord.routeMetadata === 'object'
       ? (routeRecord.routeMetadata as Record<string, unknown>)
       : {};
+  const routeAuthority = classifyExploreRouteAuthority(route);
   const declaredTrailheadCoordinate =
     Number.isFinite(Number(route.startLat)) && Number.isFinite(Number(route.startLng))
       ? { lat: Number(route.startLat), lng: Number(route.startLng) }
@@ -652,6 +654,17 @@ export function buildExploreNavigationPayload(
     campMarkers,
     routeMetadata: {
       ...sourceRouteMetadata,
+      routeTypeStatus: routeAuthority.status,
+      routeAuthorityLabel: routeAuthority.label,
+      routeAuthorityNotice: routeAuthority.notice,
+      routeAuthoritySource: routeAuthority.sourceLabel,
+      routeGeometryAuthority: routeAuthority.geometryAuthority,
+      routeGeometryPointCount: routeAuthority.pointCount,
+      hasTrueTrailGeometry: routeAuthority.hasTrueTrailGeometry,
+      hasRenderableGeometry: routeAuthority.hasRenderableGeometry,
+      isTrailheadOnly: routeAuthority.isTrailheadOnly,
+      isPreviewOrDemo: routeAuthority.isPreviewOrDemo,
+      canUseForTrailItinerary: routeAuthority.canUseForTrailItinerary,
       region: route.region,
       regionGroup: route.regionGroup,
       terrainType: route.terrainType,

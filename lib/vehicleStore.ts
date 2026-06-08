@@ -1,7 +1,8 @@
 /**
  * Local Vehicle Store
  * 
- * Offline-first vehicle storage using localStorage (web) / memory (native).
+ * Offline-first vehicle storage using localStorage on web and the shared
+ * persisted key-value cache on native/desktop fallback runtimes.
  * Vehicles are stored locally and synced to Supabase when:
  *   1. User is authenticated (with a real UUID, not the 'local' sentinel)
  *   2. Device is online
@@ -74,7 +75,7 @@ const EXP_ZONE_CACHE_PREFIX = 'ecs_exp_vehicle_zones_'; // expeditionCache.ts zo
 const PENDING_CONFIGS_KEY = 'ecs_pending_vehicle_configs';
 const BUILDER_STATE_KEY = 'ecs_exp_builder_state';
 
-// ── localStorage helpers ─────────────────────────────────
+// ── Local persisted cache helpers ─────────────────────────
 
 const localVehicleCache = createPersistedKeyValueCache('ecs_vehicle_store');
 

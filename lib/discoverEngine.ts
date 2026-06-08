@@ -54,6 +54,10 @@ import {
   auditDuplicates,
   stabilityLog,
 } from './ecsStabilityGuards';
+import {
+  classifyExploreRouteAuthority,
+  type ExploreRouteTypeStatus,
+} from './exploreRouteAuthority';
 
 const TAG = '[DiscoverEngine]';
 const DEBUG_DISCOVER_ENGINE =
@@ -179,6 +183,12 @@ export interface ExpeditionOpportunity {
   trailGeometry?: unknown;
   waypoints?: unknown[];
   routeMetadata?: Record<string, unknown>;
+  routeTypeStatus?: ExploreRouteTypeStatus;
+  routeAuthorityLabel?: string;
+  routeAuthorityNotice?: string;
+  routeAuthoritySource?: string;
+  hasTrueTrailGeometry?: boolean;
+  distanceFromUserSource?: 'live_gps' | 'default_location' | 'unknown';
 }
 
 type DemoFullRouteGeometry = {
@@ -372,7 +382,7 @@ export function normalizeExploreOpportunityRoute(
             ? 'trailhead_only'
             : 'unavailable';
 
-  return {
+  const normalizedOpportunity: ExpeditionOpportunity = {
     ...opportunity,
     id: baseId,
     name:
@@ -397,6 +407,29 @@ export function normalizeExploreOpportunityRoute(
           : previewMetadataStatus === 'unavailable'
             ? 'Route preview unavailable because route coordinates are missing.'
             : null,
+    },
+  };
+  const routeAuthority = classifyExploreRouteAuthority(normalizedOpportunity);
+  return {
+    ...normalizedOpportunity,
+    routeTypeStatus: routeAuthority.status,
+    routeAuthorityLabel: routeAuthority.label,
+    routeAuthorityNotice: routeAuthority.notice,
+    routeAuthoritySource: routeAuthority.sourceLabel,
+    hasTrueTrailGeometry: routeAuthority.hasTrueTrailGeometry,
+    routeMetadata: {
+      ...(normalizedOpportunity.routeMetadata ?? {}),
+      routeTypeStatus: routeAuthority.status,
+      routeAuthorityLabel: routeAuthority.label,
+      routeAuthorityNotice: routeAuthority.notice,
+      routeAuthoritySource: routeAuthority.sourceLabel,
+      routeGeometryAuthority: routeAuthority.geometryAuthority,
+      routeGeometryPointCount: routeAuthority.pointCount,
+      hasRenderableGeometry: routeAuthority.hasRenderableGeometry,
+      hasTrueTrailGeometry: routeAuthority.hasTrueTrailGeometry,
+      isTrailheadOnly: routeAuthority.isTrailheadOnly,
+      isPreviewOrDemo: routeAuthority.isPreviewOrDemo,
+      canUseForTrailItinerary: routeAuthority.canUseForTrailItinerary,
     },
   };
 }
@@ -935,13 +968,31 @@ export function computeDistancesFromUser(
   opportunities: ExpeditionOpportunity[],
   userLat: number,
   userLng: number,
+  source: 'live_gps' | 'default_location' | 'unknown' = 'live_gps',
 ): ExpeditionOpportunity[] {
-  return opportunities.map(op => ({
-    ...op,
-    distanceFromUserMiles: Math.round(
+  return opportunities.map(op => {
+    const routeMetadata = op.routeMetadata && typeof op.routeMetadata === 'object'
+      ? op.routeMetadata
+      : {};
+    const distanceFromUserMiles = Math.round(
       haversineDistanceMiles(userLat, userLng, op.startLat, op.startLng)
-    ),
-  }));
+    );
+    return {
+      ...op,
+      distanceFromUserMiles,
+      distanceFromUserSource: source,
+      routeMetadata: {
+        ...routeMetadata,
+        distanceFromUserSource: source,
+        distanceFromUserLabel:
+          source === 'live_gps'
+            ? 'Distance from current GPS'
+            : source === 'default_location'
+              ? 'Distance from default search location; GPS was not used.'
+              : 'Distance source unknown',
+      },
+    };
+  });
 }
 
 // ── Deduplicate Opportunities ────────────────────────────────
@@ -1167,9 +1218,10 @@ export function loadOpportunitiesWithCompatibility(
 
 
   // Compute distances from user
-  const lat = userLat ?? DEFAULT_USER_LOCATION.latitude;
-  const lng = userLng ?? DEFAULT_USER_LOCATION.longitude;
-  raw = computeDistancesFromUser(raw, lat, lng);
+  const hasExplicitUserLocation = Number.isFinite(userLat) && Number.isFinite(userLng);
+  const lat = hasExplicitUserLocation ? Number(userLat) : DEFAULT_USER_LOCATION.latitude;
+  const lng = hasExplicitUserLocation ? Number(userLng) : DEFAULT_USER_LOCATION.longitude;
+  raw = computeDistancesFromUser(raw, lat, lng, hasExplicitUserLocation ? 'live_gps' : 'default_location');
 
   // Apply hard cap — trails > 500mi never appear in default results
   raw = applyHardCap(raw);

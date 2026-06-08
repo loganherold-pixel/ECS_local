@@ -1423,8 +1423,23 @@ function buildExitPlanData(params: {
       : null;
 
   const advisories = Array.isArray(remotenessIndex?.advisories) ? remotenessIndex.advisories : [];
+  const hasExitPlanContext = Boolean(
+    remotenessIndex &&
+      (
+        nearest ||
+        exitToPavementMiles != null ||
+        advisories.length > 0 ||
+        remotenessIndex?.forecast?.advisory ||
+        remotenessIndex?.reason
+      ),
+  );
+  const remotenessUnavailableReason = hasExitPlanContext
+    ? null
+    : remotenessIndex
+      ? 'Not enough remoteness data to identify an exit target'
+      : 'No remoteness context available';
   return {
-    status: remotenessIndex ? 'live' : 'unavailable',
+    status: hasExitPlanContext ? 'live' : 'unavailable',
     remotenessScore: remotenessIndex?.score ?? null,
     remotenessTier: remotenessIndex?.tier ?? remotenessIndex?.level ?? null,
     nearestBailoutLabel: nearest ? `Nearest ${nearest.label}` : null,
@@ -1438,9 +1453,10 @@ function buildExitPlanData(params: {
       advisories[0]?.message ??
       remotenessIndex?.forecast?.advisory ??
       remotenessIndex?.reason ??
-      (remotenessIndex ? 'Exit plan available' : 'No remoteness context available'),
-    source: remotenessIndex ? 'ai_navigation' : 'none',
-    unavailableReason: remotenessIndex ? null : 'No remoteness context available',
+      remotenessUnavailableReason ??
+      'Not enough remoteness data',
+    source: hasExitPlanContext ? 'ai_navigation' : 'none',
+    unavailableReason: remotenessUnavailableReason,
   };
 }
 

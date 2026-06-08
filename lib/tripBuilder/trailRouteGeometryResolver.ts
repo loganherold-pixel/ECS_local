@@ -1,4 +1,5 @@
 import {
+  normalizeCanonicalRouteGeometry,
   normalizeRouteGeometryLineString,
   routeGeometryLineStringToLatitudeLongitude,
 } from '../routeGeometryLifecycle';
@@ -236,18 +237,8 @@ function normalizeConfidence(value: unknown, fallback: TripBuilderConfidence): T
 }
 
 function geometryFromValue(value: unknown): GeoPoint[] {
-  const encodedPolyline = typeof value === 'string' ? value : null;
-  const routeContextPoints = normalizeRouteGeometryWithEncodedPolyline(value, encodedPolyline);
-  if (routeContextPoints.length >= 2) {
-    return routeContextPoints.map((point) => ({
-      latitude: point.lat,
-      longitude: point.lng,
-    }));
-  }
-
-  const lineString = normalizeRouteGeometryLineString(value);
-  if (!lineString) return [];
-  return routeGeometryLineStringToLatitudeLongitude(lineString);
+  const normalized = normalizeCanonicalRouteGeometry(value);
+  return normalized.valid ? normalized.latitudeLongitude : [];
 }
 
 function geometryPointCount(value: unknown): number {

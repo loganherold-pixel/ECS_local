@@ -1,4 +1,8 @@
 import type { GeoJSON } from './dispersedCampingTypes';
+import {
+  normalizeCanonicalRouteGeometry,
+  routeGeometryPointToLatitudeLongitude,
+} from '../routeGeometryLifecycle';
 
 export type RouteCoordinate =
   | { lat?: number | null; lng?: number | null; latitude?: number | null; longitude?: number | null }
@@ -32,26 +36,16 @@ function isValidLongitude(value: number): boolean {
 export function normalizeRouteCoordinate(
   coordinate: RouteCoordinate,
 ): NormalizedRouteCoordinate | null {
-  if (!coordinate) return null;
-
-  const latitude = Array.isArray(coordinate)
-    ? coordinate[1]
-    : coordinate.latitude ?? coordinate.lat;
-  const longitude = Array.isArray(coordinate)
-    ? coordinate[0]
-    : coordinate.longitude ?? coordinate.lng;
-
-  if (!isFiniteCoordinate(latitude) || !isFiniteCoordinate(longitude)) return null;
-  if (!isValidLatitude(latitude) || !isValidLongitude(longitude)) return null;
-
-  return { latitude, longitude };
+  return routeGeometryPointToLatitudeLongitude(coordinate);
 }
 
 export function normalizeRouteCoordinates(
-  coordinates: readonly RouteCoordinate[] | null | undefined,
+  coordinates: readonly RouteCoordinate[] | null | undefined | unknown,
 ): NormalizedRouteCoordinate[] {
+  const normalized = normalizeCanonicalRouteGeometry(coordinates);
+  if (normalized.valid) return normalized.latitudeLongitude;
   if (!Array.isArray(coordinates)) return [];
-  return coordinates
+  return (coordinates as readonly RouteCoordinate[])
     .map(normalizeRouteCoordinate)
     .filter((coordinate): coordinate is NormalizedRouteCoordinate => coordinate != null);
 }

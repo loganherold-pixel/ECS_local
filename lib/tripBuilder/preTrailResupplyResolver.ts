@@ -104,6 +104,8 @@ export type RankedPreTrailCandidate = {
   score: number;
   rank: number;
   distanceFromTrailheadMiles: number | null;
+  distanceFromResupplyAnchorMiles?: number | null;
+  resupplyAnchorStopId?: string | null;
   routeDeviationMiles: number | null;
   detourDistanceMiles: number | null;
   beforeTrailEntry: boolean | null;
@@ -408,7 +410,16 @@ function candidateSource(record: Record<string, unknown>, bucket: PreTrailStopBu
   const provider = candidateProvider(record);
   const sourceValue = candidateSourceText(record, bucket);
   const manual = /operator|manual|selected/i.test(sourceValue);
-  return source('ranked_pre_trail_candidate', manual ? 'manual' : 'cached', {
+  const demo = /demo|fixture|mock/i.test(sourceValue);
+  const stale = /stale/i.test(sourceValue);
+  const live = /mapbox_search|google_places|live/i.test(sourceValue);
+  const state: ItineraryDataSource['state'] =
+    manual ? 'manual' :
+    demo ? 'mock' :
+    stale ? 'stale' :
+    live ? 'live' :
+    'cached';
+  return source('ranked_pre_trail_candidate', state, {
     provider,
     source: sourceValue,
     confidence: (confidenceNumber(record.confidence) ?? record.confidence) as ItineraryDataSource['confidence'],
@@ -763,6 +774,83 @@ function sortedUniqueRankedCandidates(candidates: RankedPreTrailCandidate[], max
   ));
 }
 
+function isResupplyBucket(bucket: PreTrailStopBucket): boolean {
+  return bucket === 'grocery' || bucket === 'generalSupply';
+}
+
+function isOperatorSelected(candidate: RankedPreTrailCandidate): boolean {
+  return candidate.source.state === 'manual' || candidate.stop.metadata?.operatorSelected === true;
+}
+
+function refuelAnchorCandidate(candidates: RankedPreTrailCandidate[]): RankedPreTrailCandidate | null {
+  return candidates
+    .filter((candidate) => candidate.bucket === 'fuel' && candidate.stop.coordinate)
+    .sort((left, right) => {
+      const selectedDelta = Number(!isOperatorSelected(left)) - Number(!isOperatorSelected(right));
+      if (selectedDelta !== 0) return selectedDelta;
+      return left.rank - right.rank || right.score - left.score;
+    })[0] ?? null;
+}
+
+function annotateResupplyAnchors(candidates: RankedPreTrailCandidate[]): RankedPreTrailCandidate[] {
+  const refuel = refuelAnchorCandidate(candidates);
+  const refuelCoordinate = refuel?.stop.coordinate ?? null;
+  if (!refuel || !refuelCoordinate) return candidates;
+
+  const anchoredCandidates = candidates.map((candidate) => {
+    if (!isResupplyBucket(candidate.bucket)) return candidate;
+    const distanceFromResupplyAnchorMiles = stopDistanceFromTrailheadMiles(refuelCoordinate, candidate.stop.coordinate);
+    const nextMetadata = {
+      ...(candidate.stop.metadata ?? {}),
+      resupplyAnchorStopId: refuel.stop.id,
+      resupplyAnchorTitle: refuel.stop.title,
+      resupplyAnchorBucket: 'fuel',
+      resupplyAnchorBasis: 'selected_refuel_stop',
+      distanceFromResupplyAnchorMiles,
+    };
+    return {
+      ...candidate,
+      distanceFromResupplyAnchorMiles,
+      resupplyAnchorStopId: refuel.stop.id,
+      stop: {
+        ...candidate.stop,
+        metadata: nextMetadata,
+      },
+    };
+  });
+
+  return ITINERARY_PRE_TRAIL_STOP_BUCKETS.flatMap((bucket) => {
+    const bucketCandidates = anchoredCandidates.filter((candidate) => candidate.bucket === bucket);
+    const sorted = isResupplyBucket(bucket)
+      ? bucketCandidates.sort((left, right) => {
+          const selectedDelta = Number(!isOperatorSelected(left)) - Number(!isOperatorSelected(right));
+          if (selectedDelta !== 0) return selectedDelta;
+          const anchorDistanceDelta =
+            (left.distanceFromResupplyAnchorMiles ?? Number.POSITIVE_INFINITY) -
+            (right.distanceFromResupplyAnchorMiles ?? Number.POSITIVE_INFINITY);
+          if (Math.abs(anchorDistanceDelta) > 0.001) return anchorDistanceDelta;
+          return right.score - left.score ||
+            (left.distanceFromTrailheadMiles ?? Number.POSITIVE_INFINITY) -
+              (right.distanceFromTrailheadMiles ?? Number.POSITIVE_INFINITY) ||
+            left.stop.title.localeCompare(right.stop.title);
+        })
+      : bucketCandidates.sort((left, right) => left.rank - right.rank);
+
+    return sorted.map((candidate, index) => ({
+      ...candidate,
+      rank: index + 1,
+      stop: {
+        ...candidate.stop,
+        sequence: index + 1,
+        metadata: {
+          ...(candidate.stop.metadata ?? {}),
+          rank: index + 1,
+        },
+      },
+    }));
+  });
+}
+
 function dedupeDataSources(sources: ItineraryDataSource[]): ItineraryDataSource[] {
   const seen = new Set<string>();
   return sources.filter((item) => {
@@ -914,7 +1002,7 @@ export function rankPreTrailStops({
   });
 
   const maxPerBucket = Math.max(1, Math.min(finiteNumber(maxStopsPerBucket) ?? 5, 20));
-  const rankedCandidates = sortedUniqueRankedCandidates(ranked, maxPerBucket);
+  const rankedCandidates = annotateResupplyAnchors(sortedUniqueRankedCandidates(ranked, maxPerBucket));
   rankedCandidates.forEach((candidate) => {
     preTrailStops[candidate.bucket].push(candidate.stop);
   });

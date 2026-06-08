@@ -31,7 +31,7 @@ export interface BluetoothAccessoryRecord {
     temperatureCelsius: number | null;
     batteryPercent: number | null;
     readQuality: number | null;
-    parserStatus: 'live' | 'awaiting_level' | 'unsupported';
+    parserStatus: 'live' | 'calibration_pending' | 'awaiting_level' | 'unsupported';
     decodedAt: number | null;
     source: string | null;
   } | null;

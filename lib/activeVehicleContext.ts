@@ -17,6 +17,7 @@ import {
   loadoutStore,
   type LocalLoadoutItem,
 } from './loadoutStore';
+import type { TripBuilderConfidence, TripBuilderVehicleProfile } from './tripBuilder/tripBuilderTypes';
 import { generateFleetFabricPayloadFromSource } from './fleet/fleetFabricService';
 import {
   buildActiveVehicleStateFromFleetState,
@@ -24,6 +25,7 @@ import {
 } from './fleet/activeVehicleState';
 import { selectFleetVehicleStateFromRecord } from './fleet/fleetVehicleStateSelectors';
 import type { ActiveVehicleContext, VehicleWithExtensions } from './vehicle/activeVehicleTypes';
+import type { VehicleSpec } from './vehicleSpecStore';
 
 export type { ActiveVehicleContext, VehicleWithExtensions } from './vehicle/activeVehicleTypes';
 
@@ -82,6 +84,28 @@ function sumLoadoutWeight(items: LocalLoadoutItem[]): number {
     const weight = Number.isFinite(item.weight_lbs as number) ? Math.max(0, item.weight_lbs as number) : 0;
     return total + (weight * quantity);
   }, 0);
+}
+
+function positiveNumber(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function roundToTenth(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function tripBuilderConfidenceFromVehicleContext(context: ActiveVehicleContext): TripBuilderConfidence {
+  switch (context.vehicleState.confidence.label) {
+    case 'verified':
+    case 'high':
+      return 'high';
+    case 'medium':
+      return 'medium';
+    case 'low':
+      return 'low';
+    default:
+      return context.hasVehicleContext ? 'low' : 'unknown';
+  }
 }
 
 export function getVehicleContext(vehicleId: string | null | undefined): ActiveVehicleContext {
@@ -222,6 +246,63 @@ export function getActiveVehicleContext(): ActiveVehicleContext {
 
 export function getActiveVehicle(): VehicleWithExtensions | null {
   return getActiveVehicleContext().vehicle;
+}
+
+export function getActiveVehicleSpec(): VehicleSpec | null {
+  return getActiveVehicleContext().spec;
+}
+
+export function getActiveVehicleTripBuilderProfile(): TripBuilderVehicleProfile | null {
+  const context = getActiveVehicleContext();
+  if (!context.hasVehicleContext) return null;
+
+  const vehicle = context.vehicle;
+  const resourceProfile = context.resourceProfile;
+  const fuelCapacity = positiveNumber(resourceProfile.fuelTankCapacityGal);
+  const avgMpg = positiveNumber(vehicle?.avg_mpg ?? null);
+  const rangeFuelGallons = positiveNumber(resourceProfile.currentFuelGallons) ?? fuelCapacity;
+  const rangeMiles = avgMpg && rangeFuelGallons ? roundToTenth(avgMpg * rangeFuelGallons) : null;
+  const hasManualFuelInput = Boolean(
+    fuelCapacity ||
+      avgMpg ||
+      resourceProfile.currentFuelPercent != null ||
+      positiveNumber(vehicle?.current_fuel_percent ?? null),
+  );
+  const waterCapacity = positiveNumber(resourceProfile.waterCapacityGal);
+  const accessoryLabels = context.accessorySummary
+    .map((item) => item.label)
+    .filter(Boolean);
+
+  return {
+    id: context.activeVehicleId,
+    label: vehicle?.name ?? context.vehicleState.identity.displayName,
+    vehicleType: vehicle?.type ?? context.vehicleState.identity.vehicleType,
+    rangeMiles,
+    rangeSource: rangeMiles == null ? 'unknown' : hasManualFuelInput ? 'manual' : 'estimated',
+    fuelTankCapacityGal: fuelCapacity,
+    avgMpg,
+    currentFuelGallons: resourceProfile.currentFuelGallons,
+    fuelLevelPct: resourceProfile.currentFuelPercent,
+    waterCapacityGal: waterCapacity,
+    currentWaterGallons: resourceProfile.currentWaterGallons,
+    waterSource: waterCapacity || resourceProfile.currentWaterGallons > 0 ? 'manual' : 'unknown',
+    payloadRemainingLbs: context.weightSnapshot.remainingPayloadLbs,
+    clearanceInches: positiveNumber(context.spec?.ground_clearance_inches ?? vehicle?.ground_clearance_inches ?? null),
+    tireSizeInches: positiveNumber(resourceProfile.tireSizeInches),
+    trailerAttached: null,
+    supportReadiness: {
+      water: waterCapacity != null || resourceProfile.currentWaterGallons > 0,
+      foodSupplies: null,
+      repair: null,
+      medical: null,
+      recovery: accessoryLabels.some((label) => /recovery|winch|traction|strap|shackle/i.test(label)) || null,
+      source: 'activeVehicleContext',
+      labels: accessoryLabels,
+    },
+    confidence: tripBuilderConfidenceFromVehicleContext(context),
+    source: 'activeVehicleContext',
+    updatedAt: context.vehicleState.updatedAt,
+  };
 }
 
 export {

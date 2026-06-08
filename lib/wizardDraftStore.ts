@@ -1,12 +1,13 @@
 /**
  * Wizard Draft Store — Persistent Vehicle Config Wizard State
  *
- * Saves wizard progress (step index, selections, vehicle ID) to localStorage
- * so users can exit and resume the vehicle configuration wizard.
+ * Saves wizard progress (step index, selections, vehicle ID) through ECS's
+ * persisted key-value adapter so users can exit and resume the vehicle
+ * configuration wizard on web and native.
  *
  * PERSISTENCE:
- *   - Web: localStorage
- *   - Native: in-memory fallback (no AsyncStorage dependency)
+ *   - Web: localStorage via keyValuePersistence
+ *   - Native: file-backed non-secure keyValuePersistence snapshot
  *
  * DEBOUNCE:
  *   - Auto-save is debounced by 500ms to avoid excessive writes
@@ -16,10 +17,11 @@
  *   - Load: on wizard mount
  *   - Clear: on wizard completion or explicit reset
  */
-import { Platform } from 'react-native';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 // ── Storage key ─────────────────────────────────────────────
 const STORAGE_KEY = 'ecs_wizard_draft';
+const wizardDraftPersistence = createPersistedKeyValueCache('ecs_wizard_draft_store');
 
 // ── Draft shape ─────────────────────────────────────────────
 export interface WizardDraft {
@@ -30,34 +32,16 @@ export interface WizardDraft {
   savedAt: string; // ISO timestamp
 }
 
-// ── Persistence helpers (same pattern as appearanceStore) ────
-const memoryStore: Record<string, string> = {};
-
 function getStored(key: string): string | null {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      return localStorage.getItem(key);
-    }
-  } catch {}
-  return memoryStore[key] || null;
+  return wizardDraftPersistence.get(key);
 }
 
 function setStored(key: string, value: string): void {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      localStorage.setItem(key, value);
-    }
-  } catch {}
-  memoryStore[key] = value;
+  wizardDraftPersistence.set(key, value);
 }
 
 function removeStored(key: string): void {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      localStorage.removeItem(key);
-    }
-  } catch {}
-  delete memoryStore[key];
+  wizardDraftPersistence.delete(key);
 }
 
 // ── Debounce timer ──────────────────────────────────────────
@@ -139,6 +123,24 @@ export const wizardDraftStore = {
    */
   hasDraft(): boolean {
     return getStored(STORAGE_KEY) !== null;
+  },
+
+  /**
+   * Wait for native file-backed hydration before reading during startup/tests.
+   */
+  waitForHydration(): Promise<void> {
+    return wizardDraftPersistence.waitForHydration();
+  },
+
+  /**
+   * Flush pending native file writes. Web writes are already synchronous.
+   */
+  flush(): Promise<void> {
+    return wizardDraftPersistence.flush();
+  },
+
+  isHydrated(): boolean {
+    return wizardDraftPersistence.isHydrated();
   },
 };
 

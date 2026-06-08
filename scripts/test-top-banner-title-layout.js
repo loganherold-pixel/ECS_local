@@ -24,6 +24,9 @@ const bottomNav = fs
 const commandDock = fs
   .readFileSync(path.join(root, 'components', 'CommandDock.tsx'), 'utf8')
   .replace(/\r\n/g, '\n');
+const routeManifest = fs
+  .readFileSync(path.join(root, 'lib', 'routeManifest.ts'), 'utf8')
+  .replace(/\r\n/g, '\n');
 const chromeAssets = fs
   .readFileSync(path.join(root, 'lib', 'chromeAssets.ts'), 'utf8')
   .replace(/\r\n/g, '\n');
@@ -567,23 +570,23 @@ assertIncludes(
   'Shell route layout should render the active child route directly.',
 );
 assertIncludes(
-  commandDock,
-  "label: 'FLEET'",
+  routeManifest,
+  "dockLabel: 'FLEET'",
   'Fleet command dock navigation label should remain Fleet.',
 );
 assertIncludes(
-  commandDock,
-  "label: 'NAVIGATE'",
+  routeManifest,
+  "dockLabel: 'NAVIGATE'",
   'Navigate command dock navigation label should remain Navigate.',
 );
 assertIncludes(
-  commandDock,
-  "label: 'EXPLORE'",
+  routeManifest,
+  "dockLabel: 'EXPLORE'",
   'Explore command dock navigation label should remain Explore.',
 );
 assertIncludes(
-  commandDock,
-  "label: 'DISPATCH'",
+  routeManifest,
+  "dockLabel: 'DISPATCH'",
   'Dispatch command dock navigation label should remain Dispatch for the legacy alert route.',
 );
 

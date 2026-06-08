@@ -13,6 +13,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
 
 import { parseGeoFile, getPrimaryRouteCoordinates } from '../lib/gpxParser';
+import { normalizeCanonicalRouteGeometry } from '../lib/routeGeometryLifecycle';
+import { classifyExploreRouteAuthority } from '../lib/exploreRouteAuthority';
 import Header from '../components/Header';
 import { ExplorePlanningTabs } from '../components/discover/ExplorePlanningTabs';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
@@ -49,6 +51,7 @@ import {
   isUsableRouteContext,
   loadTripBuilderRouteHandoff,
   reorderTripItineraryStop,
+  resolvePreTrailStops,
   routeContextRoutePoints,
   routeContextSupplyCandidatesToResupplyPoints,
   routeContextTrailheadCoordinate,
@@ -460,32 +463,10 @@ function simplifyImportedRouteCoords(coords: [number, number][], maxPoints = 120
 }
 
 function coordinatesFromImportedGeoJson(value: unknown): [number, number][] {
-  if (!value || typeof value !== 'object') return [];
-  const candidate = value as Record<string, unknown>;
-  if (candidate.type === 'Feature') return coordinatesFromImportedGeoJson(candidate.geometry);
-  if (candidate.type === 'LineString' && Array.isArray(candidate.coordinates)) {
-    return candidate.coordinates
-      .map((coordinate) => Array.isArray(coordinate) ? [Number(coordinate[0]), Number(coordinate[1])] as [number, number] : null)
-      .filter((coordinate): coordinate is [number, number] => (
-        !!coordinate &&
-        Number.isFinite(coordinate[0]) &&
-        Number.isFinite(coordinate[1]) &&
-        Math.abs(coordinate[1]) <= 90 &&
-        Math.abs(coordinate[0]) <= 180
-      ));
-  }
-  if (candidate.type === 'MultiLineString' && Array.isArray(candidate.coordinates)) {
-    return candidate.coordinates.flatMap((line) => (
-      Array.isArray(line) ? coordinatesFromImportedGeoJson({ type: 'LineString', coordinates: line }) : []
-    ));
-  }
-  if (candidate.type === 'FeatureCollection' && Array.isArray(candidate.features)) {
-    return candidate.features.flatMap(coordinatesFromImportedGeoJson);
-  }
-  if (Array.isArray(candidate.coordinates)) {
-    return coordinatesFromImportedGeoJson({ type: 'LineString', coordinates: candidate.coordinates });
-  }
-  return [];
+  const normalized = normalizeCanonicalRouteGeometry(value, {
+    authority: 'trail',
+  });
+  return normalized.valid ? normalized.coordinates : [];
 }
 
 function validateTripBuilderImportedRoute(fileName: string, content: string): {
@@ -822,6 +803,7 @@ function RouteSelectionCard({
   selected: boolean;
   onPress: () => void;
 }) {
+  const routeAuthority = classifyExploreRouteAuthority(route);
   return (
     <TouchableOpacity
       style={[styles.routeOption, selected && styles.routeOptionSelected]}
@@ -838,6 +820,9 @@ function RouteSelectionCard({
         <Text style={styles.routeOptionTitle} numberOfLines={1}>{route.name}</Text>
         <Text style={styles.routeOptionMeta} numberOfLines={1}>
           {route.region} | {formatMiles(route.distanceMiles)} | {route.estimatedDays} day{route.estimatedDays === 1 ? '' : 's'}
+        </Text>
+        <Text style={styles.routeOptionAuthority} numberOfLines={1}>
+          {routeAuthority.label} | {routeAuthority.sourceLabel}
         </Text>
       </View>
     </TouchableOpacity>
@@ -1738,10 +1723,8 @@ function routeContextOriginFromTripCoordinate(coordinate: TripBuilderCoordinate 
 }
 
 function lineStringFromTripCoordinates(points: TripMapCoordinate[]): { type: 'LineString'; coordinates: [number, number][] } | null {
-  const coordinates = points
-    .filter(isValidMapCoordinate)
-    .map((point): [number, number] => [point.longitude, point.latitude]);
-  return coordinates.length >= 2 ? { type: 'LineString', coordinates } : null;
+  const normalized = normalizeCanonicalRouteGeometry(points);
+  return normalized.valid && normalized.lineString ? normalized.lineString : null;
 }
 
 function routeHasExplicitTrailGeometry(route: TripBuilderRouteInput): boolean {
@@ -1751,28 +1734,16 @@ function routeHasExplicitTrailGeometry(route: TripBuilderRouteInput): boolean {
     record.trailGeometry ??
       record.trail_geometry ??
       metadata.trailGeometry ??
-      metadata.trail_geometry ??
-      record.isTrailGeometry ??
-      metadata.isTrailGeometry,
+      metadata.trail_geometry,
   );
 }
 
 function routePreviewCanStandInAsTrail(route: TripBuilderRouteInput): boolean {
   if (routeHasExplicitTrailGeometry(route)) return false;
-  const record = routeObjectRecord(route);
-  const metadata = routeMetadataRecord(route);
-  const source = String(metadata.source ?? record.source ?? '').toLowerCase();
-  const sourceFileType = String(metadata.sourceFileType ?? metadata.source_file_type ?? '').toLowerCase();
-  const previewStatus = String(metadata.previewMetadataStatus ?? metadata.preview_metadata_status ?? '').toLowerCase();
-  return (
-    source === 'trip_builder_import' ||
-    sourceFileType === 'gpx' ||
-    sourceFileType === 'kml' ||
-    sourceFileType === 'geojson' ||
-    previewStatus === 'geometry' ||
-    record.routeGeometry != null ||
-    metadata.routeGeometry != null
-  );
+  const routeAuthority = classifyExploreRouteAuthority(route);
+  if (!routeAuthority.canUseForTrailItinerary) return false;
+  const normalized = normalizeCanonicalRouteGeometry(route);
+  return normalized.valid && normalized.isTrailGeometry && !normalized.isPreviewOrDemo;
 }
 
 function buildLiveItinerarySuggestedRoute(args: {
@@ -1782,6 +1753,7 @@ function buildLiveItinerarySuggestedRoute(args: {
 }): SuggestedRoute {
   const route = args.route;
   const metadata = routeMetadataRecord(route);
+  const routeAuthority = classifyExploreRouteAuthority(route);
   const approachLine = lineStringFromTripCoordinates(args.liveApproachRoutePoints);
   const routePoints = routePointsForTripMap(route);
   const routePreviewTrailLine = routePreviewCanStandInAsTrail(route)
@@ -1799,6 +1771,12 @@ function buildLiveItinerarySuggestedRoute(args: {
     ...(routeEnd ? { trailEnd: routeEnd } : {}),
     routeMetadata: {
       ...metadata,
+      routeTypeStatus: routeAuthority.status,
+      routeAuthorityLabel: routeAuthority.label,
+      routeAuthorityNotice: routeAuthority.notice,
+      routeAuthoritySource: routeAuthority.sourceLabel,
+      hasTrueTrailGeometry: routeAuthority.hasTrueTrailGeometry,
+      canUseForTrailItinerary: routeAuthority.canUseForTrailItinerary,
       ...(approachLine
         ? {
             tripBuilderApproachGeometrySource: 'mapbox_live_gps',
@@ -1807,7 +1785,7 @@ function buildLiveItinerarySuggestedRoute(args: {
         : {}),
       ...(routePreviewTrailLine
         ? {
-            tripBuilderTrailGeometrySource: 'selected_route_preview',
+            tripBuilderTrailGeometrySource: 'operator_supplied_route_file',
             isTrailGeometry: true,
           }
         : {}),
@@ -3347,6 +3325,7 @@ export default function ExploreTripBuilderScreen() {
       null;
   }, [preparedTripRoutePreview, routeContextSnapshot, selectedRoute, tripSetupStarted]);
   const selectedTrailheadResupplyAnchorCoordinate = selectedRouteStartCoordinate;
+  const selectedPreTrailSupplyAnchorCoordinate = selectedSmartFuel?.coordinate ?? selectedTrailheadResupplyAnchorCoordinate;
 
   const selectedRouteEndCoordinate = useMemo(() => {
     if (!selectedRoute) return null;
@@ -3514,14 +3493,67 @@ export default function ExploreTripBuilderScreen() {
     tripSetupStarted &&
       smartResupplyPreference !== 'no' &&
       selectedTrailheadResupplyAnchorCoordinate &&
-      itinerarySearchToken &&
       smartResupplyLoading == null &&
       (
         preTrailStopCandidatesForDraft != null ||
-        smartResupplyError?.startsWith('No fuel options') ||
-        smartResupplyError?.startsWith('No grocery')
+        (
+          itinerarySearchToken &&
+          (
+            smartResupplyError?.startsWith('No fuel options') ||
+            smartResupplyError?.startsWith('No grocery')
+          )
+        )
       ),
   );
+
+  const preTrailDraftResolution = useMemo(
+    () => resolvePreTrailStops({
+      trailheadStart: selectedTrailheadResupplyAnchorCoordinate
+        ? {
+            id: `${selectedRouteId ?? 'selected-route'}-trip-builder-trailhead-anchor`,
+            type: 'trailhead_start' as const,
+            phase: 'trailhead' as const,
+            title: `${selectedRouteDisplayName ?? 'Selected route'} trailhead`,
+            coordinate: selectedTrailheadResupplyAnchorCoordinate,
+            source: { label: 'trip_builder_selected_route_start', state: 'cached' as const },
+            confidence: 'medium' as const,
+          }
+        : null,
+      approachRoute: liveApproachRoutePoints.length >= 2 ? liveApproachRoutePoints : selectedPreparedRoutePoints,
+      candidates: preTrailStopCandidatesForDraft,
+      providerAvailable: preTrailProviderAvailableForDraft,
+      selectedPreTrailOptions: selectedPreTrailOptionsForDraft,
+      userPreferences: {
+        smartResupplyPreference,
+      },
+      vehicleProfile,
+      routeId: selectedRouteId ?? 'selected-route',
+    }),
+    [
+      liveApproachRoutePoints,
+      preTrailProviderAvailableForDraft,
+      preTrailStopCandidatesForDraft,
+      selectedPreTrailOptionsForDraft,
+      selectedPreparedRoutePoints,
+      selectedRouteDisplayName,
+      selectedRouteId,
+      selectedTrailheadResupplyAnchorCoordinate,
+      smartResupplyPreference,
+      vehicleProfile,
+    ],
+  );
+  const preTrailDraftStatusMessage = useMemo(() => {
+    if (smartResupplyPreference === 'no') return null;
+    const missingAnchor = preTrailDraftResolution.bucketSummaries.some((summary) => summary.status === 'missing_anchor');
+    if (missingAnchor) return 'Trailhead start is unavailable, so ECS cannot rank pre-trail fuel or supply stops.';
+    const providerUnavailable = preTrailDraftResolution.bucketSummaries.some((summary) => summary.status === 'provider_unavailable');
+    if (providerUnavailable && !preTrailStopCandidatesForDraft) {
+      return 'Live pre-trail POI lookup is unavailable; itinerary continuity is preserved with manual verification.';
+    }
+    const noResults = preTrailDraftResolution.bucketSummaries.some((summary) => summary.status === 'no_results');
+    if (noResults) return 'No usable pre-trail POI candidates were returned. Verify fuel and supplies manually.';
+    return null;
+  }, [preTrailDraftResolution, preTrailStopCandidatesForDraft, smartResupplyPreference]);
 
   const selectedTripItinerary = useMemo<TripItinerary | null>(() => {
     if (!selectedRoute) return null;
@@ -3623,8 +3655,8 @@ export default function ExploreTripBuilderScreen() {
     [routeContextSnapshot, selectedTrailheadResupplyAnchorCoordinate],
   );
   const routeContextSupplyOptions = useMemo(
-    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedTrailheadResupplyAnchorCoordinate),
-    [routeContextSnapshot, selectedTrailheadResupplyAnchorCoordinate],
+    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedPreTrailSupplyAnchorCoordinate),
+    [routeContextSnapshot, selectedPreTrailSupplyAnchorCoordinate],
   );
   const bailoutPlanReady = bailoutPlanPreference === 'no' || !!selectedBailoutPoint;
 
@@ -3821,7 +3853,7 @@ export default function ExploreTripBuilderScreen() {
       setSmartResupplyLoading((current) => current === 'supplies' ? null : current);
       return;
     }
-    if (!selectedTrailheadResupplyAnchorCoordinate) {
+    if (!selectedPreTrailSupplyAnchorCoordinate) {
       smartResupplySupplyRequestRef.current += 1;
       smartResupplySupplySearchSignatureRef.current = null;
       setSmartResupplyLoading((current) => current === 'supplies' ? null : current);
@@ -3829,7 +3861,7 @@ export default function ExploreTripBuilderScreen() {
     }
 
     const searchSignature = smartResupplySearchSignature(
-      selectedTrailheadResupplyAnchorCoordinate,
+      selectedPreTrailSupplyAnchorCoordinate,
       'supplies',
       smartResupplyOptionStableKey(selectedSmartFuel),
     );
@@ -3861,7 +3893,7 @@ export default function ExploreTripBuilderScreen() {
           sessionToken: roadSearchSessionTokenRef.current,
           query: SMART_RESUPPLY_SUPPLY_QUERY,
           category: 'food_supplies',
-          routeStart: selectedTrailheadResupplyAnchorCoordinate,
+          routeStart: selectedPreTrailSupplyAnchorCoordinate,
         });
         if (cancelled || requestId !== smartResupplySupplyRequestRef.current) return;
         const mergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current);
@@ -3889,8 +3921,8 @@ export default function ExploreTripBuilderScreen() {
     commitSmartResupplySupplyOptions,
     itinerarySearchToken,
     routeContextSupplyOptions,
+    selectedPreTrailSupplyAnchorCoordinate,
     selectedSmartFuel,
-    selectedTrailheadResupplyAnchorCoordinate,
     smartResupplyPreference,
     tripSetupStarted,
   ]);
@@ -4792,9 +4824,12 @@ export default function ExploreTripBuilderScreen() {
                           {smartResupplyPreference === 'fuel_supplies' && selectedSmartFuel && !selectedSmartFuel.groceries ? (
                             <View style={styles.smartResupplySupplyBlock} testID="trip-builder-smart-resupply-supply-step">
                               <View style={styles.smartResupplyPickerHeader}>
-                                <Text style={styles.smartResupplyPickerTitle}>Groceries / Supplies Near Trailhead</Text>
+                                <Text style={styles.smartResupplyPickerTitle}>Groceries / Supplies Near Fuel</Text>
                                 <Text style={styles.smartResupplyPickerMeta}>NEXT STOP B</Text>
                               </View>
+                              <Text style={styles.smartResupplyPickerHint}>
+                                ECS ranks this stop against your selected fuel anchor.
+                              </Text>
                               {smartResupplyLoading === 'supplies' && smartResupplySupplyOptions.length === 0 ? (
                                 <View style={styles.smartResupplyLoadingRow}>
                                   <ActivityIndicator size="small" color={TACTICAL.amber} />
@@ -4823,6 +4858,9 @@ export default function ExploreTripBuilderScreen() {
 
                           {smartResupplyError ? (
                             <Text style={styles.smartResupplyErrorText}>{smartResupplyError}</Text>
+                          ) : null}
+                          {!smartResupplyError && preTrailDraftStatusMessage ? (
+                            <Text style={styles.smartResupplyErrorText}>{preTrailDraftStatusMessage}</Text>
                           ) : null}
                         </View>
                       ) : null}
@@ -5478,6 +5516,7 @@ const styles = StyleSheet.create({
   routeOptionCopy: { flex: 1, minWidth: 0 },
   routeOptionTitle: { color: TACTICAL.text, fontSize: 11, fontWeight: '900' },
   routeOptionMeta: { color: TACTICAL.textMuted, fontSize: 9, fontWeight: '700' },
+  routeOptionAuthority: { color: TACTICAL.amber, fontSize: 8, fontWeight: '800', marginTop: 2 },
   groupLabel: {
     color: TACTICAL.text,
     fontSize: 9,

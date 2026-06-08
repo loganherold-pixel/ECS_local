@@ -81,8 +81,12 @@ const {
 } = loadTypeScriptModule('lib/bluetoothDiagnostics.ts');
 const {
   getUtilitySensorCurrentFromCapacity,
+  formatUtilitySensorModeLabel,
   selectUtilitySensorResourceStates,
 } = loadTypeScriptModule('src/telemetry/utilitySensorTelemetrySelectors.ts');
+const {
+  ecsTelemetryStore,
+} = loadTypeScriptModule('src/telemetry/ECSTelemetryStore.ts');
 
 function readSource(relativePath) {
   return fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
@@ -368,7 +372,7 @@ const propaneLinkablePolicy = getBluestackConnectionPolicy({
 assert.strictEqual(propaneLinkablePolicy.primaryActionLabel, 'Link');
 assert.strictEqual(propaneLinkablePolicy.canAttemptConnection, true);
 assert.strictEqual(propaneLinkablePolicy.statusLabel, 'Sensor linkable');
-assert.strictEqual(propaneLinkablePolicy.telemetryTruthLabel, 'Level parser pending');
+assert.strictEqual(propaneLinkablePolicy.telemetryTruthLabel, 'Calibration required');
 
 const propaneParserDecision = getBluestackParserDecision('mopeka');
 assert.strictEqual(propaneParserDecision.action, 'link_utility_profile');
@@ -401,8 +405,9 @@ const sensorPolicy = getBluestackConnectionPolicy({
 assert.strictEqual(sensorPolicy.lane, 'native_ble_required');
 assert.strictEqual(sensorPolicy.primaryActionLabel, 'Link');
 assert.strictEqual(sensorPolicy.statusLabel, 'Sensor linkable');
-assert.strictEqual(sensorPolicy.telemetryTruthLabel, 'Level parser pending');
+assert.strictEqual(sensorPolicy.telemetryTruthLabel, 'Calibration required');
 assert(sensorPolicy.statusDetail.includes('Mopeka propane profile identified'));
+assert(sensorPolicy.statusDetail.includes('calibrated empty/full tank profile'));
 
 const linkedSensorPolicy = getBluestackConnectionPolicy({
   kind: 'sensor',
@@ -412,7 +417,7 @@ const linkedSensorPolicy = getBluestackConnectionPolicy({
   connectionType: 'ble',
 });
 assert.strictEqual(linkedSensorPolicy.lane, 'sensor_linked');
-assert.strictEqual(linkedSensorPolicy.telemetryTruthLabel, 'Level parser pending');
+assert.strictEqual(linkedSensorPolicy.telemetryTruthLabel, 'Calibration required');
 
 const livePolicy = getBluestackConnectionPolicy({
   kind: 'telemetry',
@@ -657,13 +662,52 @@ const decodedMopekaAdvert = decodeUtilitySensorLiveTelemetry({
     fee5: mopekaAdvertPayload,
   },
 });
-assert.strictEqual(decodedMopekaAdvert.parserStatus, 'live');
+assert.strictEqual(decodedMopekaAdvert.parserStatus, 'calibration_pending');
 assert.strictEqual(decodedMopekaAdvert.levelPercent, null);
 assert.strictEqual(decodedMopekaAdvert.levelDistanceMm, 349);
 assert.strictEqual(decodedMopekaAdvert.temperatureCelsius, 30);
 assert.strictEqual(decodedMopekaAdvert.readQuality, 3);
 assert.strictEqual(decodedMopekaAdvert.batteryPercent, 46.2);
 assert.strictEqual(decodedMopekaAdvert.source, 'mopeka_advertisement');
+
+const decodedCalibratedMopekaAdvert = decodeUtilitySensorLiveTelemetry({
+  providerId: 'water_monitor',
+  providerLabel: 'Mopeka / Liquid Level',
+  displayName: 'Mopeka Water Tank',
+  serviceUuids: ['fee5'],
+  serviceData: {
+    fee5: mopekaAdvertPayload,
+  },
+  tankProfile: {
+    id: 'manual-td40-water',
+    label: 'Manual TD40 water calibration',
+    source: 'manual',
+    emptyDistanceMm: 500,
+    fullDistanceMm: 40,
+  },
+});
+assert.strictEqual(decodedCalibratedMopekaAdvert.parserStatus, 'live');
+assert.strictEqual(decodedCalibratedMopekaAdvert.levelPercent, 32.8);
+assert.strictEqual(decodedCalibratedMopekaAdvert.levelDistanceMm, 349);
+assert.strictEqual(decodedCalibratedMopekaAdvert.source, 'mopeka_advertisement');
+
+const invalidMopekaCalibration = decodeUtilitySensorLiveTelemetry({
+  providerId: 'water_monitor',
+  providerLabel: 'Mopeka / Liquid Level',
+  displayName: 'Mopeka Water Tank',
+  serviceUuids: ['fee5'],
+  serviceData: {
+    fee5: mopekaAdvertPayload,
+  },
+  tankProfile: {
+    id: 'invalid-manual-profile',
+    source: 'manual',
+    emptyDistanceMm: 400,
+    fullDistanceMm: 400,
+  },
+});
+assert.strictEqual(invalidMopekaCalibration.parserStatus, 'calibration_pending');
+assert.strictEqual(invalidMopekaCalibration.levelPercent, null);
 
 const mopekaAdvertEvents = bluetoothUtilitySensorAdvertisementToEcsTelemetryEvents({
   deviceId: '1B4C7E',
@@ -682,6 +726,41 @@ assert.strictEqual(
   mopekaAdvertEvents.length,
   0,
   'Distance-only Mopeka advertisements must not publish live ECS resource telemetry without a calculated percent.',
+);
+
+const calibratedMopekaAdvertObservedAt = Date.now();
+const calibratedMopekaAdvertEvents = bluetoothUtilitySensorAdvertisementToEcsTelemetryEvents({
+  deviceId: '1B4C7E',
+  displayName: 'Mopeka Water Tank',
+  providerLabel: 'Mopeka / Liquid Level',
+  providerId: 'water_monitor',
+  categoryHint: 'water_tank_monitor',
+  signalStrength: -56,
+  lastSeenAt: calibratedMopekaAdvertObservedAt,
+  utilitySensorTelemetry: {
+    ...decodedCalibratedMopekaAdvert,
+    decodedAt: calibratedMopekaAdvertObservedAt,
+  },
+});
+assert(
+  calibratedMopekaAdvertEvents.some((event) => event.metricKey === 'level_percent' && event.value === 32.8),
+  'Calibrated Mopeka advertisements must publish a truthful live tank percentage.',
+);
+assert(
+  calibratedMopekaAdvertEvents.some((event) => event.metricKey === 'parser_status' && event.value === 'live'),
+  'Calibrated Mopeka advertisements must mark the parser live only after percent conversion.',
+);
+
+ecsTelemetryStore.reset();
+ecsTelemetryStore.ingestEvents(calibratedMopekaAdvertEvents);
+const calibratedStoreReadings = ecsTelemetryStore.getUtilitySensorReadings();
+const calibratedResourceStates = selectUtilitySensorResourceStates(calibratedStoreReadings);
+assert.strictEqual(calibratedResourceStates.water?.status, 'live');
+assert.strictEqual(calibratedResourceStates.water?.levelPercent, 32.8);
+assert.strictEqual(calibratedResourceStates.water?.canProvideLiveLevel, true);
+assert(
+  Math.abs(getUtilitySensorCurrentFromCapacity(calibratedResourceStates.water, 20) - 6.56) < 0.001,
+  'Dashboard capacity conversion should consume calibrated Mopeka percentages.',
 );
 
 const distanceOnlyResourceStates = selectUtilitySensorResourceStates([
@@ -709,6 +788,30 @@ assert.strictEqual(distanceOnlyResourceStates.water?.levelPercent, null);
 assert.strictEqual(distanceOnlyResourceStates.water?.levelDistanceMm, 349);
 assert.strictEqual(distanceOnlyResourceStates.water?.canProvideLiveLevel, false);
 assert.strictEqual(getUtilitySensorCurrentFromCapacity(distanceOnlyResourceStates.water, 20), null);
+assert.strictEqual(formatUtilitySensorModeLabel(null, 'Manual'), 'Manual');
+
+const staleCalibratedResourceStates = selectUtilitySensorResourceStates([
+  {
+    deviceId: 'water-stale-1',
+    deviceName: 'Mopeka Water Tank',
+    provider: 'water_monitor',
+    providerLabel: 'Mopeka / Liquid Level',
+    transport: 'ble',
+    quality: 'stale',
+    lastUpdated: 1_700_000_000_000,
+    category: 'water_tank_monitor',
+    profileId: 'mopeka_water_monitor',
+    linkState: 'advertising',
+    levelPercent: 32.8,
+    levelDistanceMm: null,
+    signalStrength: -70,
+    parserStatus: 'live',
+    isLive: false,
+    isStale: true,
+  },
+]);
+assert.strictEqual(staleCalibratedResourceStates.water?.status, 'stale');
+assert.strictEqual(formatUtilitySensorModeLabel(staleCalibratedResourceStates.water, 'Manual'), 'Sensor stale');
 
 const advertisementEvidence = getBluestackAdvertisementEvidence({
   serviceUUIDs: [' 180F ', '180f', 'FEAA'],

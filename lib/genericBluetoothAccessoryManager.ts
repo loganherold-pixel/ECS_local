@@ -16,6 +16,7 @@ import {
 import {
   decodeUtilitySensorLiveTelemetry,
   type UtilitySensorCharacteristicSnapshot,
+  type UtilitySensorTankProfile,
 } from './utilitySensorBleTelemetry';
 
 type BleManagerDevice = any;
@@ -36,6 +37,7 @@ interface ConnectGenericAccessoryOptions {
   serviceData?: Record<string, string>;
   localName?: string | null;
   levelPercent?: unknown;
+  tankProfile?: UtilitySensorTankProfile | null;
 }
 
 interface ConnectGenericAccessoryResult {
@@ -188,6 +190,7 @@ class GenericBluetoothAccessoryManager {
             localName: options.localName ?? options.displayName,
             signalStrength,
             levelPercent: options.levelPercent,
+            tankProfile: options.tankProfile,
             characteristics: characteristicSnapshots,
           })
         : null;
@@ -332,6 +335,7 @@ class GenericBluetoothAccessoryManager {
       localName: options.localName ?? options.displayName,
       signalStrength: options.signalStrength,
       levelPercent: options.levelPercent,
+      tankProfile: options.tankProfile,
     });
 
     if (
@@ -356,6 +360,7 @@ class GenericBluetoothAccessoryManager {
       source: 'mopeka_advertisement',
       hasLevelPercent: utilitySensorTelemetry.levelPercent != null,
       hasDistance: utilitySensorTelemetry.levelDistanceMm != null,
+      parserStatus: utilitySensorTelemetry.parserStatus,
     });
     return {
       success: true,

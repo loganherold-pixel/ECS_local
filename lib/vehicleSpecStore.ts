@@ -3,33 +3,12 @@
  *
  * Stores GVWR, base/curb weight, fuel tank capacity, and fuel type
  * per vehicle for payload margin computation and fuel-percent weight conversion.
- * Offline-first: localStorage (web) / memory (native).
+ * Offline-first: persisted key-value cache, backed by localStorage on web and
+ * durable native/desktop persistence when available.
  *
  * Includes presets by vehicle make/model for quick population.
  */
-import { Platform } from 'react-native';
 import { createPersistedKeyValueCache } from './keyValuePersistence';
-
-// ── Storage helpers ─────────────────────────────────────
-const memoryStore: Record<string, string> = {};
-
-function lsGet(key: string): string | null {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      return localStorage.getItem(key);
-    }
-  } catch {}
-  return memoryStore[key] || null;
-}
-
-function lsSet(key: string, value: string): void {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      localStorage.setItem(key, value);
-    }
-  } catch {}
-  memoryStore[key] = value;
-}
 
 // ── Fuel type constants ─────────────────────────────────
 export type FuelType = 'diesel' | 'gas';

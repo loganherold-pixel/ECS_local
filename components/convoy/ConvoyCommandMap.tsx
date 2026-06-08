@@ -15,6 +15,7 @@ import {
   buildConvoyMarkerIdentities,
   type ConvoyMarkerIdentity,
 } from '../../lib/convoy/convoyMarkerIdentity';
+import { normalizeCanonicalRouteGeometry } from '../../lib/routeGeometryLifecycle';
 import { ECSIconButton } from '../ECSButton';
 import { ConvoyMapFallback } from './ConvoyMapFallback';
 
@@ -118,12 +119,8 @@ function boundsForCoordinates(coordinates: [number, number][]) {
 }
 
 function normalizeRouteCoordinates(coordinates: [number, number][] | undefined): [number, number][] {
-  if (!Array.isArray(coordinates)) return [];
-  return coordinates.filter((coordinate): coordinate is [number, number] => {
-    const lng = Number(coordinate?.[0]);
-    const lat = Number(coordinate?.[1]);
-    return Number.isFinite(lng) && Number.isFinite(lat) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
-  });
+  const normalized = normalizeCanonicalRouteGeometry(coordinates, { authority: 'approach' });
+  return normalized.valid ? normalized.coordinates : [];
 }
 
 function roleRank(role: ConvoyMarkerIdentity['role']): number {

@@ -19,6 +19,7 @@ function getFactorIcon(factor?: string | null): string {
     case 'wind': return 'flag-outline';
     case 'temperature': return 'thermometer-outline';
     case 'water crossings': return 'water-outline';
+    case 'data unavailable': return 'cloud-offline-outline';
     default: return 'alert-circle-outline';
   }
 }
@@ -29,6 +30,7 @@ function getStatusLabel(status?: TrailFactorStatus | null): string {
     case 'caution': return 'CAUTION';
     case 'warning': return 'WARNING';
     case 'danger': return 'DANGER';
+    case 'unavailable': return 'UNAVAILABLE';
     default: return 'UNKNOWN';
   }
 }
@@ -39,6 +41,7 @@ function getOverallLabel(overall?: string | null): string {
     case 'fair': return 'FAIR — USE CAUTION';
     case 'poor': return 'POOR — ELEVATED RISK';
     case 'hazardous': return 'HAZARDOUS — HIGH RISK';
+    case 'unavailable': return 'CONDITIONS UNAVAILABLE';
     default: return 'UNKNOWN';
   }
 }
@@ -120,7 +123,7 @@ export default function TrailConditionsCard({ conditions, sourceLabel, assessmen
           const factorName = factor?.factor ?? 'Unknown Factor';
           const factorStatus = factor?.status;
           const factorDetail = factor?.detail ?? 'No detail available.';
-          const color = getTrailStatusColor((factorStatus ?? 'caution') as TrailFactorStatus);
+          const color = getTrailStatusColor((factorStatus ?? 'unavailable') as TrailFactorStatus);
           const icon = getFactorIcon(factorName);
 
           return (

@@ -17,6 +17,7 @@ const fleet = read('app', '(tabs)', 'fleet.tsx');
 const rootLayout = read('app', '_layout.tsx');
 const tabsLayout = read('app', '(tabs)', '_layout.tsx');
 const commandDock = read('components', 'CommandDock.tsx');
+const routeManifest = read('lib', 'routeManifest.ts');
 const buildLoadoutModal = read('components', 'fleet', 'FleetBuildLoadoutModal.tsx');
 const buildLoadoutHelper = read('lib', 'fleet', 'fleetBuildLoadout.ts');
 const weightSummaryHelper = read('lib', 'fleet', 'fleetWeightSummary.ts');
@@ -552,9 +553,10 @@ assertIncludes(
   "import CommandDock from '../components/CommandDock'",
   'Root layout should own the bottom command dock.',
 );
-assertIncludes(rootLayout, "normalizedPathname === '/fleet'", 'Fleet should be covered by shell background routing.');
+assertIncludes(rootLayout, 'isSharedShellBackgroundRoute(normalizedPathname)', 'Fleet should be covered by manifest-backed shell background routing.');
 assertIncludes(tabsLayout, '<Slot />', 'Shell route layout should render the active Fleet route through expo-router Slot.');
-assertIncludes(commandDock, "route: '/fleet'", 'Command dock should own the Fleet navigation target.');
-assertIncludes(commandDock, "label: 'FLEET'", 'Command dock should keep the visible Fleet navigation label.');
+assertIncludes(commandDock, 'ECS_PRIMARY_TAB_MANIFEST', 'Command dock should consume the canonical tab manifest.');
+assertIncludes(routeManifest, "route: '/fleet'", 'Canonical route manifest should own the Fleet navigation target.');
+assertIncludes(routeManifest, "dockLabel: 'FLEET'", 'Canonical route manifest should keep the visible Fleet navigation label.');
 
 console.log('Fleet tactical UI contract checks passed.');

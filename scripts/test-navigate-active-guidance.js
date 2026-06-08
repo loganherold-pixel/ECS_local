@@ -162,8 +162,11 @@ assert(
 
 const commandDock = read('components/CommandDock.tsx');
 assert(
-  commandDock.includes("pathname.includes('/navigate')"),
-  'CommandDock should honor Navigate landscape expanded chrome hide/reveal state.',
+  commandDock.includes('const expandedChromeTab = getPrimaryTabForPath(pathname)?.id;') &&
+    commandDock.includes("expandedChromeTab === 'navigate'") &&
+    commandDock.includes('dashboardChrome.expanded') &&
+    commandDock.includes('!dashboardChrome.dockRevealed'),
+  'CommandDock should honor Navigate landscape expanded chrome hide/reveal state through the canonical route manifest.',
 );
 
 const landscapeDockReveal = read('components/LandscapeDockRevealButton.tsx');

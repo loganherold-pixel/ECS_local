@@ -437,8 +437,8 @@ for (const [id, name] of [
   assert.strictEqual(route.deviceCategory, 'water_tank_monitor');
   assert.strictEqual(route.supportLabel, 'Linkable Sensor');
   assert(
-    /parser-pending until a decoded level percentage is received/i.test(route.supportNote || ''),
-    `${name} should stay parser-pending until decoded liquid percentage exists`,
+    /requires a calibrated empty\/full tank profile/i.test(route.supportNote || ''),
+    `${name} should stay calibration-pending until tank geometry exists`,
   );
   assert.strictEqual(
     isReleaseScannerBluetoothRoute(route),

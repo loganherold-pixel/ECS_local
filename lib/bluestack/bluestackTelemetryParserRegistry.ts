@@ -63,6 +63,7 @@ const UTILITY_EVIDENCE_REQUIREMENTS = [
   'native build/device model captured',
   'utility sensor profile identified',
   'level units verified against provider app or physical reading',
+  'tank empty/full calibration captured when provider reports distance instead of percent',
   'disconnect and stale behavior verified',
 ];
 
@@ -117,7 +118,7 @@ const PARSER_PROFILES: Partial<Record<BluestackProvider, Omit<BluestackTelemetry
     canAttemptLiveConnection: true,
     requiresFieldEvidence: true,
     requiredEvidence: UTILITY_EVIDENCE_REQUIREMENTS,
-    notes: 'Mopeka tank profiles are recognized and linkable over native BLE, but live tank percentage remains parser-pending until decoded level units are verified.',
+    notes: 'Mopeka tank profiles can decode supported BLE advertisements into tank distance. ECS promotes live tank percentage only when a calibrated empty/full tank profile is available.',
   },
   water_monitor: {
     parserId: 'water_utility_native_ble_pending',

@@ -989,6 +989,34 @@ export class EcoFlowCloudProvider implements ICloudProvider {
         listedDevices.map((device: CatalogPowerDevice) => [device.deviceId, device]),
       );
 
+      await powerDeviceStore.upsertKnownDevices(
+        listedDevices.map((device: CatalogPowerDevice) => ({
+          provider: device.provider,
+          deviceId: device.deviceId,
+          name: device.name,
+          model: device.model,
+          productType: device.productType,
+          lastKnownConnectionState:
+            typeof device.online === "boolean"
+              ? device.online
+                ? "online"
+                : "offline"
+              : undefined,
+          supportedMetrics: [
+            "batteryPercent",
+            "inputWatts",
+            "outputWatts",
+            "solarWatts",
+            "estimatedRuntimeMinutes",
+          ],
+          lastSeenAt: device.lastSeenAt,
+        })),
+      ).catch((error) => {
+        if (__DEV__) {
+          logEcoFlowDebug("listDevices: safe metadata persistence skipped", ecoFlowErrorDetails(error));
+        }
+      });
+
       if (__DEV__) {
         logEcoFlowDebug("listDevices: catalog received", {
           count: listedDevices.length,

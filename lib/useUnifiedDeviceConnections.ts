@@ -1464,7 +1464,7 @@ function getSectionForStatus(
 function getPowerStateLabel(status: ECSConnectionStatus, isLive: boolean): string {
   switch (status) {
     case 'live':
-      return isLive ? 'Telemetry Active' : 'Live Data';
+      return isLive ? 'Telemetry Active' : 'Telemetry Pending';
     case 'connected':
       return 'Connected';
     case 'disconnecting':
@@ -1606,7 +1606,7 @@ function getPowerDetailLabel(args: {
 function getTelemetryStateLabel(status: ECSConnectionStatus, isLive: boolean): string {
   switch (status) {
     case 'live':
-      return isLive ? 'Connected' : 'Live Telemetry';
+      return isLive ? 'Connected' : 'Telemetry Pending';
     case 'connected':
       return 'Connected';
     case 'disconnecting':

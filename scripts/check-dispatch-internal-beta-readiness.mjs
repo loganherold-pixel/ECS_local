@@ -306,14 +306,21 @@ function checkRouteGate(root, paths) {
   const layoutSource = readIfExists(paths.source.tabLayout);
   const commandDockSource = readIfExists(paths.source.commandDock);
   const commandCenterExists = fs.existsSync(paths.source.commandCenter);
+  let routeManifest = null;
+  try {
+    routeManifest = loadTypeScriptModule(root, path.join('lib', 'routeManifest.ts'));
+  } catch {}
+  const dispatchTab = routeManifest?.ECS_PRIMARY_TAB_MANIFEST?.find?.((tab) => tab.id === 'dispatch') ?? null;
   const nativeTabRegistration =
     /const alertOptions:\s*BottomTabNavigationOptions\s*=\s*\{\s*title:\s*'Dispatch'\s*\}/.test(layoutSource) &&
     /name="alert"/.test(layoutSource);
   const shellDockRegistration =
     /<Slot\s*\/>/.test(layoutSource) &&
-    /key:\s*'alert'/.test(commandDockSource) &&
-    /label:\s*'DISPATCH'/.test(commandDockSource) &&
-    /route:\s*'\/alert'/.test(commandDockSource);
+    /ECS_PRIMARY_TAB_MANIFEST/.test(commandDockSource) &&
+    dispatchTab?.dockKey === 'alert' &&
+    dispatchTab?.dockLabel === 'DISPATCH' &&
+    dispatchTab?.route === '/alert' &&
+    routeManifest?.getPrimaryTabForPath?.('/convoy-command')?.id === 'dispatch';
   const checks = [
     boolCheck(
       'dispatch_tab_route_exists',

@@ -176,7 +176,7 @@ export const ECS_APPROVED_BLUETOOTH_DEVICE_GROUPS: ECSApprovedBluetoothDeviceGro
       },
       {
         name: 'Mopeka TD40 / TD200 / Pro200 liquid',
-        detail: 'Mopeka TD and Pro200 liquid monitor model names route to the water/fluid monitor path as linkable parser-pending sensors.',
+        detail: 'Mopeka TD and Pro200 liquid monitor model names route to the water/fluid monitor path; live percentages require decoded distance plus a calibrated tank profile.',
         providerIds: ['mopeka', 'water_monitor'],
       },
       {

@@ -92,7 +92,12 @@ assertIncludes(
 assertIncludes(
   screen,
   'smartResupplySearchSignature(selectedTrailheadResupplyAnchorCoordinate,',
-  'Smart resupply effects should key refreshes to the prepared trailhead anchor and picker selection',
+  'Fuel resupply effects should key refreshes to the prepared trailhead anchor',
+);
+assertIncludes(
+  screen,
+  'selectedPreTrailSupplyAnchorCoordinate,',
+  'Supply resupply effects should key refreshes to the selected refuel anchor',
 );
 
 console.log('Trip Builder smart resupply stability checks passed.');

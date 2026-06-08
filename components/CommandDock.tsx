@@ -68,6 +68,13 @@ import {
   deferShellRouteNavigation,
   type ShellInteractionTask,
 } from '../lib/shellInteractionScheduler';
+import {
+  ECS_PRIMARY_TAB_MANIFEST,
+  getPrimaryTabForPath,
+  isPrimaryTabActiveForPath,
+  type ECSDockKey,
+  type ECSPrimaryTabId,
+} from '../lib/routeManifest';
 
 // ── ECS Dock Palette ─────────────────────────────────────────
 const DOCK = {
@@ -97,66 +104,35 @@ const FIRST_LAUNCH_HINT_FADE_MS = 520;
 const FIRST_LAUNCH_HINT_IDLE_MS = 180;
 const QUICK_ACTIONS_NAV_LOCK_MS = 650;
 
-const DOCK_BADGES = {
+const DOCK_BADGES: Record<ECSDockKey, number> = {
   fleet: require('../assets/ecs/nav/fleet-badge.png'),
   navigate: require('../assets/ecs/nav/navigate-badge.png'),
   dashboard: require('../assets/ecs/nav/ecs-center.png'),
   discover: require('../assets/ecs/nav/discover-badge.png'),
   alert: require('../assets/ecs/nav/alert-badge.png'),
-} as const;
+};
 
 // ── Local badge assets ───────────────────────────────────────
 // ── Dock item config ─────────────────────────────────────────
 interface DockItem {
-  key: 'fleet' | 'navigate' | 'dashboard' | 'discover' | 'alert';
+  key: ECSDockKey;
+  tabId: ECSPrimaryTabId;
   label: string;
   route: string;
-  pathMatch: string[];
   badge?: number;
   iconOffsetY?: number;
 }
 
 type DockItemKey = DockItem['key'];
 
-const DOCK_ITEMS: DockItem[] = [
-  {
-    key: 'fleet',
-    label: 'FLEET',
-    route: '/fleet',
-    pathMatch: ['/fleet', '/vehicle-config'],
-    badge: DOCK_BADGES.fleet,
-  },
-  {
-    key: 'navigate',
-    label: 'NAVIGATE',
-    route: '/navigate',
-    pathMatch: ['/navigate', '/route', '/navigate-run', '/navigate-offline', '/navigate-bailouts'],
-    badge: DOCK_BADGES.navigate,
-  },
-  {
-    key: 'dashboard',
-    label: '',
-    route: '/dashboard',
-    pathMatch: ['/dashboard'],
-    badge: DOCK_BADGES.dashboard,
-  },
-  {
-    key: 'discover',
-    label: 'EXPLORE',
-    route: '/discover',
-    pathMatch: ['/discover'],
-    badge: DOCK_BADGES.discover,
-    iconOffsetY: 3.25,
-  },
-  {
-    key: 'alert',
-    label: 'DISPATCH',
-    route: '/alert',
-    pathMatch: ['/alert', '/safety', '/intel', '/more'],
-    badge: DOCK_BADGES.alert,
-    iconOffsetY: 3.75,
-  },
-];
+const DOCK_ITEMS: DockItem[] = ECS_PRIMARY_TAB_MANIFEST.map((tab) => ({
+  key: tab.dockKey,
+  tabId: tab.id,
+  label: tab.dockLabel,
+  route: tab.route,
+  badge: DOCK_BADGES[tab.dockKey],
+  iconOffsetY: tab.id === 'explore' ? 3.25 : tab.id === 'dispatch' ? 3.75 : undefined,
+}));
 
 function getDockSlotFlex(key: DockItemKey): number {
   switch (key) {
@@ -497,10 +473,11 @@ export default function CommandDock() {
 
   const isHidden = hiddenPaths.has(pathname);
   const effectivePathname = pendingRoute ?? pathname;
+  const expandedChromeTab = getPrimaryTabForPath(pathname)?.id;
   const expandedChromePath =
-    pathname.includes('/dashboard') ||
-    pathname.includes('/alert') ||
-    pathname.includes('/navigate');
+    expandedChromeTab === 'dashboard' ||
+    expandedChromeTab === 'dispatch' ||
+    expandedChromeTab === 'navigate';
   const hideForDashboardExpanded =
     expandedChromePath &&
     dashboardChrome.expanded &&
@@ -508,7 +485,7 @@ export default function CommandDock() {
 
   const isItemActive = useCallback(
     (item: DockItem): boolean => {
-      return item.pathMatch.some((p) => effectivePathname.includes(p));
+      return isPrimaryTabActiveForPath(item.tabId, effectivePathname);
     },
     [effectivePathname]
   );
@@ -567,7 +544,7 @@ export default function CommandDock() {
   const centerSlotWidth = adaptive.isTablet ? 140 : adaptive.isLargePhone ? 132 : ECS_COMMAND_DOCK_CENTER_SLOT_WIDTH;
   const dispatchRollout = useMemo(() => resolveDispatchRolloutConfig(), []);
   const visibleDockItems = useMemo(
-    () => DOCK_ITEMS.filter((item) => item.key !== 'alert' || dispatchRollout.dispatchTabVisibility),
+    () => DOCK_ITEMS.filter((item) => item.tabId !== 'dispatch' || dispatchRollout.dispatchTabVisibility),
     [dispatchRollout.dispatchTabVisibility],
   );
   const dashboardDockItem = useMemo(

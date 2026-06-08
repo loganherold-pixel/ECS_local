@@ -111,16 +111,17 @@ export function getBluestackConnectionPolicy(
       model: device.subtype,
       kind: device.kind,
     });
+    const isMopekaProfile = profile?.id === 'mopeka_propane_monitor' || profile?.id === 'mopeka_water_monitor';
     return {
       lane: isConnected ? 'sensor_linked' : 'native_ble_required',
       primaryActionLabel: isConnected ? 'Disconnect' : 'Link',
       statusLabel: isConnected
-        ? 'Sensor linked, level pending'
+        ? isMopekaProfile ? 'Sensor linked, calibration pending' : 'Sensor linked, level pending'
         : 'Sensor linkable',
       statusDetail: isConnected
-        ? profile?.detail ?? 'The sensor is linked through Bluestack. Live tank percentage remains parser-pending until a decoded level percentage is received.'
-        : profile?.detail ?? 'Bluestack can link this field utility sensor over native BLE. Live tank percentage remains parser-pending until a decoded level percentage is received.',
-      telemetryTruthLabel: 'Level parser pending',
+        ? profile?.detail ?? 'The sensor is linked through Bluestack. Live tank percentage remains pending until ECS has decoded telemetry and tank calibration.'
+        : profile?.detail ?? 'Bluestack can link this field utility sensor over native BLE. Live tank percentage remains pending until ECS has decoded telemetry and tank calibration.',
+      telemetryTruthLabel: isMopekaProfile ? 'Calibration required' : 'Level parser pending',
       canAttemptConnection: hasNative || isConnected,
     };
   }

@@ -100,6 +100,7 @@ export function buildFleetProductionReadinessResult(options = {}) {
     evidence: path.join(root, EVIDENCE_RELATIVE_PATH),
     fleetScreen: path.join(root, 'app', '(tabs)', 'fleet.tsx'),
     commandDock: path.join(root, 'components', 'CommandDock.tsx'),
+    routeManifest: path.join(root, 'lib', 'routeManifest.ts'),
     premiumDomain: path.join(root, 'lib', 'fleet', 'fleetPremiumDomain.ts'),
     operatingWeight: path.join(root, 'lib', 'fleet', 'fleetOperatingWeight.ts'),
     weightSummary: path.join(root, 'lib', 'fleet', 'fleetWeightSummary.ts'),
@@ -122,6 +123,7 @@ export function buildFleetProductionReadinessResult(options = {}) {
   const evidence = readJsonIfExists(paths.evidence);
   const fleetScreen = normalize(readIfExists(paths.fleetScreen));
   const commandDock = normalize(readIfExists(paths.commandDock));
+  const routeManifest = normalize(readIfExists(paths.routeManifest));
   const premiumDomain = normalize(readIfExists(paths.premiumDomain));
   const operatingWeight = normalize(readIfExists(paths.operatingWeight));
   const weightSummary = normalize(readIfExists(paths.weightSummary));
@@ -256,8 +258,9 @@ export function buildFleetProductionReadinessResult(options = {}) {
     check(
       'fleet_screen_keeps_tab_label_and_tactical_shell_without_photo_surface',
       'Fleet keeps the tab label, shared tactical shell, compact metrics, payload wording, and no-photo visual contract.',
-      commandDock.includes("label: 'FLEET'") &&
-        commandDock.includes("route: '/fleet'") &&
+      commandDock.includes('ECS_PRIMARY_TAB_MANIFEST') &&
+        routeManifest.includes("dockLabel: 'FLEET'") &&
+        routeManifest.includes("route: '/fleet'") &&
         fleetScreen.includes('<Header title="Fleet Center"') &&
         fleetScreen.includes('VEHICLE COMMAND CENTER') &&
         fleetScreen.includes('Vehicle Profile') &&
@@ -269,7 +272,7 @@ export function buildFleetProductionReadinessResult(options = {}) {
         fleetScreen.includes('Measured accessory, loadout, or axle weights can refine front/rear estimates') &&
         fleetScreen.includes('generatePremiumFleetFabricPayload') &&
         excludesAll(fleetScreen, forbiddenMediaHooks),
-      [relPath(root, paths.commandDock), relPath(root, paths.fleetScreen)],
+      [relPath(root, paths.routeManifest), relPath(root, paths.commandDock), relPath(root, paths.fleetScreen)],
       ['Run Android Fleet small-screen and tablet visual QA to confirm card density, scrolling, modals, and no media placeholders.'],
     ),
     check(

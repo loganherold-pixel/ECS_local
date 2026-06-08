@@ -19,25 +19,21 @@
  *   - Used by narrativeEngine to emit WAYPOINT_REACHED /
  *     CAMP_ESTABLISHED events without independent proximity polling
  *
- * Storage: localStorage (web) / in-memory (native)
+ * Storage: ECS persisted key-value adapter
+ *   - Web: localStorage via keyValuePersistence
+ *   - Native: file-backed non-secure keyValuePersistence snapshot
  */
-import { Platform } from 'react-native';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 // ── Storage helpers ─────────────────────────────────────
-const memoryStore: Record<string, string> = {};
+const waypointProgressPersistence = createPersistedKeyValueCache('ecs_waypoint_progress_store');
 
 function lsGet(key: string): string | null {
-  if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-    return localStorage.getItem(key);
-  }
-  return memoryStore[key] || null;
+  return waypointProgressPersistence.get(key);
 }
 
 function lsSet(key: string, value: string): void {
-  if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-    localStorage.setItem(key, value);
-  }
-  memoryStore[key] = value;
+  waypointProgressPersistence.set(key, value);
 }
 
 // ── Types ───────────────────────────────────────────────
@@ -232,6 +228,24 @@ export const waypointProgressStore = {
   onArrival(listener: ArrivalListener): () => void {
     _arrivalListeners.add(listener);
     return () => { _arrivalListeners.delete(listener); };
+  },
+
+  /**
+   * Wait for native file-backed hydration before reading during startup/tests.
+   */
+  waitForHydration(): Promise<void> {
+    return waypointProgressPersistence.waitForHydration();
+  },
+
+  /**
+   * Flush pending native file writes. Web writes are already synchronous.
+   */
+  flush(): Promise<void> {
+    return waypointProgressPersistence.flush();
+  },
+
+  isHydrated(): boolean {
+    return waypointProgressPersistence.isHydrated();
   },
 };
 

@@ -160,6 +160,7 @@ import {
   useRouteCorridorWeather,
   type RouteCorridorResult,
 } from '../navigate/RouteCorridorWeather';
+import { ECS_FALLBACK_LABELS } from '../../lib/fallbackStateLabels';
 
 // Phase 9: OBD-II Vehicle Telemetry Widget
 import { VehicleTelemetryCompact, VehicleTelemetryCard, VehicleTelemetryDetailView } from './VehicleTelemetryWidget';
@@ -1238,7 +1239,8 @@ const VehicleSystemsWidget = React.memo(function VehicleSystemsWidget({ data, op
     };
   }, []);
   const remotenessOutput = remotenessStore.get();
-  const hasRemotenessContext = (options?.gpsHasFix ?? false) || remotenessOutput.score > 0;
+  const remotenessIndexOutput = remotenessStore.getIndex();
+  const hasRemotenessContext = Boolean(remotenessIndexOutput && remotenessIndexOutput.availableFactorCount > 0);
   const consumables = useVehicleConsumables(
     activeVehicleContext.activeVehicleId,
     activeVehicleContext.consumables ?? undefined,
@@ -1631,7 +1633,7 @@ const VehicleSystemsWidget = React.memo(function VehicleSystemsWidget({ data, op
     },
     {
       label: 'Remote',
-      value: hasRemotenessContext ? remotenessOutput.tier : 'Waiting',
+      value: hasRemotenessContext ? remotenessOutput.tier : ECS_FALLBACK_LABELS.unknown,
       tone: hasRemotenessContext ? 'neutral' : 'unavailable',
     },
   ];

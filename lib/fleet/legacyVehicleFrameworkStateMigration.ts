@@ -33,6 +33,7 @@ export async function sanitizeLegacyVehicleFrameworkState(): Promise<void> {
     setupStore.waitForHydration(),
     vehicleSetupStore.waitForHydration(),
     vehicleStore.waitForHydration(),
+    wizardDraftStore.waitForHydration(),
     shellRouteCache.waitForHydration(),
     setupStateCache.waitForHydration(),
   ]);

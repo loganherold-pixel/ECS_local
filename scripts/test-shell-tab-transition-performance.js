@@ -29,6 +29,7 @@ assert(
 
 assert(
   commandDock.includes("from '../lib/shellInteractionScheduler';") &&
+    commandDock.includes("from '../lib/routeManifest';") &&
     commandDock.includes('deferShellRouteNavigation') &&
     commandDock.includes('pendingRouteRef') &&
     commandDock.includes('setPendingRoute') &&
@@ -39,8 +40,8 @@ assert(
 
 assert(
   commandDock.includes('const effectivePathname = pendingRoute ?? pathname') &&
-    commandDock.includes('effectivePathname.includes(p)'),
-  'CommandDock active-state styling should use the pending route so the dock responds immediately.',
+    commandDock.includes('isPrimaryTabActiveForPath(item.tabId, effectivePathname)'),
+  'CommandDock active-state styling should use the canonical route manifest and pending route so the dock responds immediately.',
 );
 
 assert(

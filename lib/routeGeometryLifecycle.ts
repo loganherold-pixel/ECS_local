@@ -1,4 +1,5 @@
 import { ecsLog } from './ecsLogger';
+import { decodeEncodedPolyline } from './routeContext/routeContextGeometry';
 
 export type RouteGeometryLogReason =
   | 'no_route_selected'
@@ -12,6 +13,52 @@ export type RouteGeometryLngLat = [number, number];
 export interface RouteGeometryLineString {
   type: 'LineString';
   coordinates: RouteGeometryLngLat[];
+}
+
+export type CanonicalRouteGeometryStatus = 'valid' | 'missing' | 'malformed';
+
+export type CanonicalRouteGeometrySourceType =
+  | 'geojson_linestring'
+  | 'geojson_feature'
+  | 'geojson_feature_collection'
+  | 'raw_coordinate_array'
+  | 'encoded_polyline'
+  | 'route_object'
+  | 'unknown';
+
+export type CanonicalRouteGeometryAuthority =
+  | 'trail'
+  | 'approach'
+  | 'preview'
+  | 'demo'
+  | 'unknown';
+
+export interface CanonicalRouteGeometryOptions {
+  sourceType?: CanonicalRouteGeometrySourceType | null;
+  geometryType?: string | null;
+  authority?: CanonicalRouteGeometryAuthority | null;
+  encodedPolyline?: string | null;
+  encodedPolylinePrecision?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface CanonicalRouteGeometryResult {
+  valid: boolean;
+  status: CanonicalRouteGeometryStatus;
+  reason: RouteGeometryLogReason;
+  lineString: RouteGeometryLineString | null;
+  coordinates: RouteGeometryLngLat[];
+  latLng: Array<{ lat: number; lng: number }>;
+  latitudeLongitude: Array<{ latitude: number; longitude: number }>;
+  pointCount: number;
+  fingerprint: string | null;
+  sourceType: CanonicalRouteGeometrySourceType;
+  geometryType: string | null;
+  authority: CanonicalRouteGeometryAuthority;
+  isTrailGeometry: boolean;
+  isApproachOnly: boolean;
+  isPreviewOrDemo: boolean;
+  invalidReason: RouteGeometryLogReason | null;
 }
 
 export interface RouteGeometryValidationResult {
@@ -73,6 +120,18 @@ function normalizeLngLat(value: unknown): RouteGeometryLngLat | null {
   return [lng, lat];
 }
 
+export function normalizeRouteGeometryLngLat(value: unknown): RouteGeometryLngLat | null {
+  const point = normalizeLngLat(value);
+  return point ? [point[0], point[1]] : null;
+}
+
+export function routeGeometryPointToLatitudeLongitude(
+  value: unknown,
+): { latitude: number; longitude: number } | null {
+  const point = normalizeLngLat(value);
+  return point ? { latitude: point[1], longitude: point[0] } : null;
+}
+
 function dedupeConsecutive(points: RouteGeometryLngLat[]): RouteGeometryLngLat[] {
   const deduped: RouteGeometryLngLat[] = [];
   points.forEach((point) => {
@@ -84,22 +143,42 @@ function dedupeConsecutive(points: RouteGeometryLngLat[]): RouteGeometryLngLat[]
 }
 
 function hasGeometryCandidate(input: unknown): boolean {
+  if (typeof input === 'string') return input.trim().length > 0;
   if (Array.isArray(input)) return input.length > 0;
   if (!isRecord(input)) return false;
   return [
     'geometry',
     'coordinates',
     'routeGeometry',
+    'route_geometry',
     'trailGeometry',
+    'trail_geometry',
+    'approachGeometry',
+    'approach_geometry',
     'geojson',
     'polyline',
+    'encodedPolyline',
+    'encoded_polyline',
     'segments',
     'points',
+    'path',
   ].some((key) => input[key] != null);
+}
+
+function encodedPolylineToLngLat(
+  encodedPolyline: string | null | undefined,
+  precision?: number | null,
+): RouteGeometryLngLat[] {
+  const points = decodeEncodedPolyline(encodedPolyline, precision ?? 5);
+  return points.map((point) => [point.lng, point.lat]);
 }
 
 function extractLineCoordinates(input: unknown, depth = 0): RouteGeometryLngLat[] {
   if (depth > 8 || input == null) return [];
+
+  if (typeof input === 'string') {
+    return encodedPolylineToLngLat(input);
+  }
 
   const singlePoint = normalizeLngLat(input);
   if (singlePoint) return [singlePoint];
@@ -141,22 +220,261 @@ function extractLineCoordinates(input: unknown, depth = 0): RouteGeometryLngLat[
     input.geometry,
     input.coordinates,
     input.routeGeometry,
+    input.route_geometry,
     input.trailGeometry,
+    input.trail_geometry,
+    input.approachGeometry,
+    input.approach_geometry,
     input.geojson,
+    input.encodedPolyline,
+    input.encoded_polyline,
     input.polyline,
     input.points,
+    input.path,
   ];
 
   return candidates.flatMap((candidate) => extractLineCoordinates(candidate, depth + 1));
 }
 
-export function normalizeRouteGeometryLineString(input: unknown): RouteGeometryLineString | null {
-  const coordinates = dedupeConsecutive(extractLineCoordinates(input));
-  if (coordinates.length < 2) return null;
+function lineStringFromCoordinates(coordinates: RouteGeometryLngLat[]): RouteGeometryLineString | null {
+  const deduped = dedupeConsecutive(coordinates);
+  if (deduped.length < 2) return null;
   return {
     type: 'LineString',
-    coordinates,
+    coordinates: deduped,
   };
+}
+
+export function normalizeRouteGeometryLineString(input: unknown): RouteGeometryLineString | null {
+  return lineStringFromCoordinates(extractLineCoordinates(input));
+}
+
+function textToken(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function truthyBoolean(value: unknown): boolean {
+  const token = textToken(value);
+  return value === true || token === 'true' || token === 'yes' || token === '1';
+}
+
+function metadataRecords(input: unknown, options: CanonicalRouteGeometryOptions = {}): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  if (options.metadata) records.push(options.metadata);
+  if (!isRecord(input)) return records;
+  records.push(input);
+  [
+    input.properties,
+    input.routeMetadata,
+    input.route_metadata,
+    input.metadata,
+    input.providerMetadata,
+    input.provider_metadata,
+  ].forEach((candidate) => {
+    if (isRecord(candidate)) records.push(candidate);
+  });
+  return records;
+}
+
+function metadataValues(
+  input: unknown,
+  keys: readonly string[],
+  options: CanonicalRouteGeometryOptions = {},
+): unknown[] {
+  return metadataRecords(input, options).flatMap((record) => keys.map((key) => record[key]));
+}
+
+function hasMetadataValue(
+  input: unknown,
+  keys: readonly string[],
+  options: CanonicalRouteGeometryOptions = {},
+): boolean {
+  return metadataValues(input, keys, options).some((value) => value != null && String(value).trim().length > 0);
+}
+
+function hasTruthyMetadataValue(
+  input: unknown,
+  keys: readonly string[],
+  options: CanonicalRouteGeometryOptions = {},
+): boolean {
+  return metadataValues(input, keys, options).some(truthyBoolean);
+}
+
+function metadataTokens(
+  input: unknown,
+  keys: readonly string[],
+  options: CanonicalRouteGeometryOptions = {},
+): string[] {
+  return metadataValues(input, keys, options)
+    .map(textToken)
+    .filter(Boolean);
+}
+
+function hasRecordKey(input: unknown, keys: readonly string[]): boolean {
+  if (!isRecord(input)) return false;
+  return keys.some((key) => input[key] != null);
+}
+
+function hasEncodedPolylineCandidate(input: unknown, options: CanonicalRouteGeometryOptions = {}): boolean {
+  if (typeof options.encodedPolyline === 'string' && options.encodedPolyline.trim().length > 0) return true;
+  if (typeof input === 'string' && input.trim().length > 0) return true;
+  if (!isRecord(input)) return false;
+  return (
+    typeof input.encodedPolyline === 'string' ||
+    typeof input.encoded_polyline === 'string' ||
+    typeof input.polyline === 'string'
+  );
+}
+
+function inferCanonicalSourceType(
+  input: unknown,
+  options: CanonicalRouteGeometryOptions = {},
+): CanonicalRouteGeometrySourceType {
+  if (options.sourceType) return options.sourceType;
+  if (hasEncodedPolylineCandidate(input, options)) return 'encoded_polyline';
+  if (Array.isArray(input)) return 'raw_coordinate_array';
+  if (!isRecord(input)) return 'unknown';
+
+  const type = typeof input.type === 'string' ? input.type : null;
+  if (type === 'FeatureCollection') return 'geojson_feature_collection';
+  if (type === 'Feature') return 'geojson_feature';
+  if (type === 'LineString' || type === 'MultiLineString' || type === 'Point' || type === 'GeometryCollection') {
+    return 'geojson_linestring';
+  }
+  return hasGeometryCandidate(input) ? 'route_object' : 'unknown';
+}
+
+function inferCanonicalGeometryType(
+  input: unknown,
+  options: CanonicalRouteGeometryOptions = {},
+  depth = 0,
+): string | null {
+  if (options.geometryType) return options.geometryType;
+  if (depth > 6 || input == null) return null;
+  if (hasEncodedPolylineCandidate(input, options)) return 'EncodedPolyline';
+  if (Array.isArray(input)) return 'CoordinateArray';
+  if (!isRecord(input)) return null;
+
+  const type = typeof input.type === 'string' ? input.type : null;
+  if (type === 'Feature') return inferCanonicalGeometryType(input.geometry, options, depth + 1);
+  if (type) return type;
+
+  const candidates = [
+    input.trailGeometry,
+    input.trail_geometry,
+    input.approachGeometry,
+    input.approach_geometry,
+    input.routeGeometry,
+    input.route_geometry,
+    input.geometry,
+    input.geojson,
+    input.coordinates,
+    input.encodedPolyline,
+    input.encoded_polyline,
+    input.polyline,
+    input.points,
+    input.path,
+  ];
+  for (const candidate of candidates) {
+    const candidateType = inferCanonicalGeometryType(candidate, options, depth + 1);
+    if (candidateType) return candidateType;
+  }
+  return null;
+}
+
+function inferCanonicalAuthority(
+  input: unknown,
+  options: CanonicalRouteGeometryOptions = {},
+): CanonicalRouteGeometryAuthority {
+  if (options.authority) return options.authority;
+
+  const sourceTokens = metadataTokens(input, [
+    'geometrySource',
+    'geometry_source',
+    'source',
+    'routeSource',
+    'route_source',
+    'sourceKind',
+    'source_kind',
+    'sourceLabel',
+    'source_label',
+    'sourceFileType',
+    'source_file_type',
+    'routeScope',
+    'route_scope',
+    'geometryRole',
+    'geometry_role',
+    'routeGeometryRole',
+    'route_geometry_role',
+    'routeType',
+    'route_type',
+    'routeCategory',
+    'route_category',
+  ], options);
+  const hasToken = (predicate: (token: string) => boolean): boolean => sourceTokens.some(predicate);
+
+  if (
+    hasTruthyMetadataValue(input, ['isDemoGeometry', 'is_demo_geometry'], options) ||
+    hasToken((token) => token === 'ecs_demo_full_route_fixture' || token === 'demo' || token.includes('_demo') || token.includes('fixture'))
+  ) {
+    return 'demo';
+  }
+
+  if (
+    hasMetadataValue(input, ['previewMetadataStatus', 'preview_metadata_status'], options) ||
+    hasTruthyMetadataValue(input, ['isPreviewGeometry', 'is_preview_geometry'], options) ||
+    hasToken((token) => token.includes('preview') || token === 'trailhead_only')
+  ) {
+    return 'preview';
+  }
+
+  if (
+    hasTruthyMetadataValue(input, [
+      'isTrailGeometry',
+      'is_trail_geometry',
+      'hasTrailGeometry',
+      'has_trail_geometry',
+      'containsTrailGeometry',
+      'contains_trail_geometry',
+    ], options) ||
+    hasRecordKey(input, ['trailGeometry', 'trail_geometry']) ||
+    hasToken((token) => (
+      token === 'trail' ||
+      token === 'offroad' ||
+      token === 'off_road' ||
+      token === 'custom_route' ||
+      token === 'operator_supplied' ||
+      token === 'operator_verified' ||
+      token === 'trip_builder_import' ||
+      token === 'imported' ||
+      token === 'gpx' ||
+      token === 'kml' ||
+      token === 'geojson' ||
+      token === 'full_trail_route' ||
+      token.includes('gpx') ||
+      token.includes('kml') ||
+      token.includes('geojson')
+    ))
+  ) {
+    return 'trail';
+  }
+
+  if (
+    hasTruthyMetadataValue(input, ['isApproachGeometry', 'is_approach_geometry', 'isApproachRoute', 'is_approach_route'], options) ||
+    hasRecordKey(input, ['approachGeometry', 'approach_geometry', 'approachRoute', 'approach_route']) ||
+    hasToken((token) => (
+      token === 'approach' ||
+      token === 'approach_only' ||
+      token === 'road_approach' ||
+      token === 'mapbox' ||
+      token === 'mapbox_directions' ||
+      token.includes('approach')
+    ))
+  ) {
+    return 'approach';
+  }
+
+  return 'unknown';
 }
 
 function hashString(value: string): string {
@@ -181,6 +499,73 @@ export function createRouteGeometryFingerprint(
     .map(formatPoint)
     .join('|');
   return `line:${points.length}:${formatPoint(points[0])}:${formatPoint(points[points.length - 1])}:${hashString(sampled)}`;
+}
+
+function lineStringFromInputAndOptions(
+  input: unknown,
+  options: CanonicalRouteGeometryOptions = {},
+): RouteGeometryLineString | null {
+  const direct = normalizeRouteGeometryLineString(input);
+  if (direct) return direct;
+  if (typeof options.encodedPolyline !== 'string' || options.encodedPolyline.trim().length === 0) return null;
+  return lineStringFromCoordinates(encodedPolylineToLngLat(options.encodedPolyline, options.encodedPolylinePrecision));
+}
+
+export function normalizeCanonicalRouteGeometry(
+  input: unknown,
+  options: CanonicalRouteGeometryOptions = {},
+): CanonicalRouteGeometryResult {
+  const sourceType = inferCanonicalSourceType(input, options);
+  const geometryType = inferCanonicalGeometryType(input, options);
+  const authority = inferCanonicalAuthority(input, options);
+  const lineString = lineStringFromInputAndOptions(input, options);
+
+  if (!lineString) {
+    const reason: RouteGeometryLogReason = input == null && !hasEncodedPolylineCandidate(input, options)
+      ? 'no_route_selected'
+      : hasGeometryCandidate(input) || hasEncodedPolylineCandidate(input, options)
+        ? 'geometry_malformed'
+        : 'route_selected_geometry_missing';
+    const status: CanonicalRouteGeometryStatus = reason === 'geometry_malformed' ? 'malformed' : 'missing';
+    return {
+      valid: false,
+      status,
+      reason,
+      lineString: null,
+      coordinates: [],
+      latLng: [],
+      latitudeLongitude: [],
+      pointCount: 0,
+      fingerprint: null,
+      sourceType,
+      geometryType,
+      authority,
+      isTrailGeometry: false,
+      isApproachOnly: authority === 'approach',
+      isPreviewOrDemo: authority === 'preview' || authority === 'demo',
+      invalidReason: reason,
+    };
+  }
+
+  const fingerprint = createRouteGeometryFingerprint(lineString);
+  return {
+    valid: true,
+    status: 'valid',
+    reason: 'geometry_successfully_loaded',
+    lineString,
+    coordinates: lineString.coordinates.map((point) => [point[0], point[1]]),
+    latLng: routeGeometryLineStringToLatLng(lineString),
+    latitudeLongitude: routeGeometryLineStringToLatitudeLongitude(lineString),
+    pointCount: lineString.coordinates.length,
+    fingerprint,
+    sourceType,
+    geometryType,
+    authority,
+    isTrailGeometry: authority === 'trail',
+    isApproachOnly: authority === 'approach',
+    isPreviewOrDemo: authority === 'preview' || authority === 'demo',
+    invalidReason: null,
+  };
 }
 
 function getStableRouteId(input: unknown): string | null {
@@ -251,34 +636,13 @@ export function clearRouteGeometryCache(): void {
 }
 
 export function validateRouteGeometry(input: unknown): RouteGeometryValidationResult {
-  if (input == null) {
-    return {
-      valid: false,
-      reason: 'no_route_selected',
-      lineString: null,
-      pointCount: 0,
-      fingerprint: null,
-    };
-  }
-
-  const lineString = normalizeRouteGeometryLineString(input);
-  if (!lineString) {
-    return {
-      valid: false,
-      reason: hasGeometryCandidate(input) ? 'geometry_malformed' : 'route_selected_geometry_missing',
-      lineString: null,
-      pointCount: 0,
-      fingerprint: null,
-    };
-  }
-
-  const fingerprint = createRouteGeometryFingerprint(lineString);
+  const normalized = normalizeCanonicalRouteGeometry(input);
   return {
-    valid: true,
-    reason: 'geometry_successfully_loaded',
-    lineString,
-    pointCount: lineString.coordinates.length,
-    fingerprint,
+    valid: normalized.valid,
+    reason: normalized.reason,
+    lineString: normalized.lineString,
+    pointCount: normalized.pointCount,
+    fingerprint: normalized.fingerprint,
   };
 }
 

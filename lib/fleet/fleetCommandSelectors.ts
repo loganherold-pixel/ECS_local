@@ -48,7 +48,7 @@ export type FleetCommandState = {
   canConfirmVehicleReady: boolean;
 };
 
-type SelectFleetCommandStateArgs = {
+export type SelectFleetCommandStateArgs = {
   fleetView: ECSOrchestratorTargetView;
   expeditionPhase: ECSExpeditionPhase | null | undefined;
   expeditionPhaseLabel: string | null | undefined;
@@ -70,6 +70,19 @@ type SelectFleetCommandStateArgs = {
   hasLoadout: boolean;
   hasLiveTelemetry: boolean;
   hasAcknowledgedHighMountedLoadRisk?: boolean;
+};
+
+export type FleetCommandProfile = {
+  readiness: FleetReadinessStatus;
+  title: string;
+  summary: string;
+  detail: string | null;
+  badges: FleetCommandBadge[];
+  missingCritical: string[];
+  limitations: string[];
+  selectionRequired: boolean;
+  canConfirmVehicleReady: boolean;
+  confidence: ECSConfidenceResult;
 };
 
 function cleanText(value: string | null | undefined): string {
@@ -681,6 +694,22 @@ export function selectFleetCommandState(
     subhelperText,
     selectionRequired,
     canConfirmVehicleReady,
+  };
+}
+
+export function resolveFleetCommandProfile(args: SelectFleetCommandStateArgs): FleetCommandProfile {
+  const state = selectFleetCommandState(args);
+  return {
+    readiness: state.readiness,
+    title: state.title,
+    summary: state.summary,
+    detail: state.detail,
+    badges: state.badges,
+    missingCritical: state.missingCritical,
+    limitations: state.limitations,
+    selectionRequired: state.selectionRequired,
+    canConfirmVehicleReady: state.canConfirmVehicleReady,
+    confidence: state.confidence,
   };
 }
 
