@@ -12,6 +12,10 @@ import type {
   TripItinerary,
   TripPlan,
 } from './tripBuilder/tripBuilderTypes';
+import {
+  offlineIncidentPacketStore,
+  type OfflineIncidentPacketStore,
+} from './offlineIncidentPacket';
 
 declare const require: (id: string) => {
   createPersistedKeyValueCache: (fileKey: string) => ActiveTripModeStorage;
@@ -136,6 +140,7 @@ export type ActiveTripModeStore = {
 
 type CreateActiveTripModeStoreArgs = {
   storage: ActiveTripModeStorage;
+  incidentPacketStore?: Pick<OfflineIncidentPacketStore, 'createOrUpdateFromActiveTrip' | 'clear'>;
 };
 
 const RESUPPLY_BUCKETS: ItineraryPreTrailStopBucket[] = ['grocery', 'water', 'generalSupply'];
@@ -410,16 +415,21 @@ function parseSnapshot(raw: string | null): ActiveTripModeSnapshot | null {
   }
 }
 
-export function createActiveTripModeStore({ storage }: CreateActiveTripModeStoreArgs): ActiveTripModeStore {
+export function createActiveTripModeStore({
+  storage,
+  incidentPacketStore,
+}: CreateActiveTripModeStoreArgs): ActiveTripModeStore {
   return {
     activate(args) {
       const snapshot = buildActiveTripModeSnapshot(args);
       storage.set(ACTIVE_TRIP_MODE_STORAGE_KEY, JSON.stringify(snapshot));
+      incidentPacketStore?.createOrUpdateFromActiveTrip(snapshot, snapshot.updatedAt);
       return cloneSnapshot(snapshot);
     },
 
     save(snapshot) {
       storage.set(ACTIVE_TRIP_MODE_STORAGE_KEY, JSON.stringify(snapshot));
+      incidentPacketStore?.createOrUpdateFromActiveTrip(snapshot, snapshot.updatedAt);
       return cloneSnapshot(snapshot);
     },
 
@@ -429,7 +439,10 @@ export function createActiveTripModeStore({ storage }: CreateActiveTripModeStore
 
     getRecovered(now = nowIso()) {
       const snapshot = parseSnapshot(storage.get(ACTIVE_TRIP_MODE_STORAGE_KEY));
-      return snapshot ? markActiveTripModeSnapshotRecovered(snapshot, now) : null;
+      if (!snapshot) return null;
+      const recovered = markActiveTripModeSnapshotRecovered(snapshot, now);
+      incidentPacketStore?.createOrUpdateFromActiveTrip(recovered, now);
+      return recovered;
     },
 
     stop(now = nowIso(), status: Extract<ActiveTripModeStatus, 'stopped' | 'completed'> = 'stopped') {
@@ -499,11 +512,13 @@ export function createActiveTripModeStore({ storage }: CreateActiveTripModeStore
           knownLimitations: ['No active trip snapshot was stored.'],
       };
       storage.delete(ACTIVE_TRIP_MODE_STORAGE_KEY);
+      incidentPacketStore?.clear();
       return cloneSnapshot(stopped);
     },
 
     clear() {
       storage.delete(ACTIVE_TRIP_MODE_STORAGE_KEY);
+      incidentPacketStore?.clear();
     },
 
     flush() {
@@ -527,6 +542,7 @@ function getDefaultStore(): ActiveTripModeStore {
     const { createPersistedKeyValueCache } = require('./keyValuePersistence');
     defaultStore = createActiveTripModeStore({
       storage: createPersistedKeyValueCache(ACTIVE_TRIP_MODE_STORAGE_FILE),
+      incidentPacketStore: offlineIncidentPacketStore,
     });
   }
   return defaultStore;

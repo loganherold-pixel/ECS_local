@@ -14,10 +14,10 @@ import Header from '../components/Header';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import TopoBackground from '../components/TopoBackground';
 import {
-  activeTripModeStore,
-  type ActiveTripModeSnapshot,
-  type ActiveTripOperationalSummary,
-} from '../lib/activeTripMode';
+  offlineIncidentPacketStore,
+  type OfflineIncidentPacket,
+} from '../lib/offlineIncidentPacket';
+import type { ActiveTripOperationalSummary } from '../lib/activeTripMode';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { ECS, TACTICAL } from '../lib/theme';
 
@@ -33,12 +33,12 @@ function formatDateTime(value: string | null | undefined): string {
   });
 }
 
-function formatCoordinate(coordinate: ActiveTripModeSnapshot['route']['trailheadCoordinate']): string {
+function formatCoordinate(coordinate: OfflineIncidentPacket['route']['trailheadCoordinate']): string {
   if (!coordinate) return 'Unknown';
   return `${coordinate.latitude.toFixed(5)}, ${coordinate.longitude.toFixed(5)}`;
 }
 
-function confidenceColor(category: ActiveTripModeSnapshot['routeConfidence']['category']): string {
+function confidenceColor(category: OfflineIncidentPacket['confidence']['category']): string {
   switch (category) {
     case 'high_confidence':
       return '#66BB6A';
@@ -82,58 +82,56 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function StatusRow({ label, item }: { label: string; item: ActiveTripOperationalSummary }) {
-  const color = statusColor(item.status);
   return (
     <View style={styles.statusRow}>
       <View style={styles.statusCopy}>
         <Text style={styles.statusLabel}>{label}</Text>
         <Text style={styles.statusSource} numberOfLines={1}>{item.source}</Text>
       </View>
-      <Text style={[styles.statusValue, { color }]}>{item.label}</Text>
+      <Text style={[styles.statusValue, { color: statusColor(item.status) }]}>{item.label}</Text>
     </View>
   );
 }
 
-function EmptyState({ message, onOpenTripBuilder }: { message: string | null; onOpenTripBuilder: () => void }) {
+function EmptyState({ message, onOpenActiveTrip }: { message: string | null; onOpenActiveTrip: () => void }) {
   return (
-    <View style={styles.emptyCard} testID="active-trip-empty">
-      <Ionicons name="navigate-circle-outline" size={28} color={TACTICAL.textMuted} />
-      <Text style={styles.emptyTitle}>No Active Trip</Text>
+    <View style={styles.emptyCard}>
+      <Ionicons name="document-text-outline" size={28} color={TACTICAL.textMuted} />
+      <Text style={styles.emptyTitle}>No Offline Incident Packet</Text>
       <Text style={styles.emptyText}>
-        {message ?? 'Start from a Trip Builder itinerary to create a local Active Trip snapshot.'}
+        {message ?? 'Start Active Trip Mode from a Trip Builder itinerary to create a local-only packet.'}
       </Text>
       <TouchableOpacity
         style={styles.primaryButton}
         activeOpacity={0.84}
-        onPress={onOpenTripBuilder}
+        onPress={onOpenActiveTrip}
         accessibilityRole="button"
-        accessibilityLabel="Open Trip Builder"
+        accessibilityLabel="Open Active Trip"
       >
-        <Text style={styles.primaryButtonText}>Open Trip Builder</Text>
+        <Text style={styles.primaryButtonText}>Open Active Trip</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
-export default function ActiveTripScreen() {
+export default function OfflineIncidentPacketScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const bottomClearance = getShellBottomClearance(insets.bottom, 8);
-  const [snapshot, setSnapshot] = useState<ActiveTripModeSnapshot | null>(null);
+  const [packet, setPacket] = useState<OfflineIncidentPacket | null>(null);
   const [loading, setLoading] = useState(true);
-  const [stopping, setStopping] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
-    activeTripModeStore.waitForHydration()
+    offlineIncidentPacketStore.waitForHydration()
       .then(() => {
         if (!mounted) return;
-        setSnapshot(activeTripModeStore.getRecovered());
+        setPacket(offlineIncidentPacketStore.getRecovered());
       })
       .catch(() => {
         if (!mounted) return;
-        setMessage('Active Trip snapshot could not be loaded from local storage.');
+        setMessage('Offline Incident Packet could not be loaded from local storage.');
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -143,26 +141,17 @@ export default function ActiveTripScreen() {
     };
   }, []);
 
-  const warnings = useMemo(() => snapshot?.warnings.slice(0, 5) ?? [], [snapshot]);
+  const warnings = useMemo(() => packet?.keyWarnings.slice(0, 5) ?? [], [packet]);
 
-  const handleStopTrip = useCallback(async () => {
-    setStopping(true);
-    try {
-      activeTripModeStore.stop();
-      await activeTripModeStore.flush();
-      setSnapshot(null);
-      setMessage('Active Trip stopped. Saved itineraries, Fleet data, route catalog, and telemetry state were not changed.');
-    } finally {
-      setStopping(false);
-    }
+  const handleClearPacket = useCallback(async () => {
+    offlineIncidentPacketStore.clear();
+    await offlineIncidentPacketStore.flush();
+    setPacket(null);
+    setMessage('Offline Incident Packet cleared from this device. Active Trip, Fleet, route catalog, and telemetry metadata were not changed.');
   }, []);
 
-  const handleOpenTripBuilder = useCallback(() => {
-    router.push('/explore-trip-builder');
-  }, [router]);
-
-  const handleOpenIncidentPacket = useCallback(() => {
-    router.push('/offline-incident-packet');
+  const handleOpenActiveTrip = useCallback(() => {
+    router.push('/active-trip');
   }, [router]);
 
   if (loading) {
@@ -172,7 +161,7 @@ export default function ActiveTripScreen() {
           <Header title="Explore" />
           <View style={styles.loadingCard}>
             <ActivityIndicator size="small" color={TACTICAL.amber} />
-            <Text style={styles.loadingText}>Loading Active Trip snapshot...</Text>
+            <Text style={styles.loadingText}>Loading Offline Incident Packet...</Text>
           </View>
         </View>
       </TopoBackground>
@@ -181,26 +170,29 @@ export default function ActiveTripScreen() {
 
   return (
     <TopoBackground>
-      <View style={[styles.safeContainer, { paddingBottom: bottomClearance }]} testID="active-trip-screen">
+      <View
+        style={[styles.safeContainer, { paddingBottom: bottomClearance }]}
+        testID="offline-incident-packet-screen"
+      >
         <Header title="Explore" />
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          {!snapshot ? (
-            <EmptyState message={message} onOpenTripBuilder={handleOpenTripBuilder} />
+          {!packet ? (
+            <EmptyState message={message} onOpenActiveTrip={handleOpenActiveTrip} />
           ) : (
             <>
               <View style={styles.heroCard}>
                 <View style={styles.heroIcon}>
-                  <Ionicons name="navigate-circle-outline" size={18} color={TACTICAL.amber} />
+                  <Ionicons name="document-text-outline" size={18} color={TACTICAL.amber} />
                 </View>
                 <View style={styles.heroCopy}>
-                  <Text style={styles.eyebrow}>ACTIVE TRIP</Text>
-                  <Text style={styles.heroTitle} numberOfLines={2}>{snapshot.route.name ?? 'Unnamed trip'}</Text>
-                  <Text style={styles.heroText} numberOfLines={2}>
-                    {snapshot.freshness.label}
+                  <Text style={styles.eyebrow}>OFFLINE INCIDENT PACKET</Text>
+                  <Text style={styles.heroTitle} numberOfLines={2}>{packet.route.name ?? 'Unnamed trip'}</Text>
+                  <Text style={styles.heroText} numberOfLines={3}>
+                    LOCAL ONLY. Not sent by ECS. Use as stale-aware trip context for offline review.
                   </Text>
                 </View>
               </View>
@@ -208,20 +200,18 @@ export default function ActiveTripScreen() {
               <View style={styles.sectionCard}>
                 <View style={styles.sectionHeader}>
                   <View>
-                    <Text style={styles.sectionTitle}>Trip Confidence</Text>
-                    <Text style={styles.sectionMeta}>Route Confidence Engine v1</Text>
+                    <Text style={styles.sectionTitle}>Confidence</Text>
+                    <Text style={styles.sectionMeta}>LOCAL PACKET</Text>
                   </View>
-                  <View style={[styles.confidenceBadge, { borderColor: confidenceColor(snapshot.routeConfidence.category) + '55' }]}>
-                    <Text style={[styles.confidenceText, { color: confidenceColor(snapshot.routeConfidence.category) }]}>
-                      {snapshot.routeConfidence.label}
+                  <View style={[styles.confidenceBadge, { borderColor: confidenceColor(packet.confidence.category) + '55' }]}>
+                    <Text style={[styles.confidenceText, { color: confidenceColor(packet.confidence.category) }]}>
+                      {packet.confidence.label}
                     </Text>
-                    <Text style={styles.confidenceScore}>
-                      {snapshot.routeConfidence.score != null ? `${snapshot.routeConfidence.score}` : '--'}
-                    </Text>
+                    <Text style={styles.confidenceScore}>{packet.confidence.score ?? '--'}</Text>
                   </View>
                 </View>
                 <Text style={styles.recommendedAction}>
-                  Recommended Action: {snapshot.recommendedAction.label}
+                  Recommended Action: {packet.confidence.recommendedAction.label}
                 </Text>
                 {warnings.length > 0 ? (
                   <View style={styles.warningList}>
@@ -230,33 +220,47 @@ export default function ActiveTripScreen() {
                     ))}
                   </View>
                 ) : (
-                  <Text style={styles.mutedText}>No extra warnings in the stored snapshot.</Text>
+                  <Text style={styles.mutedText}>No extra warnings in the stored packet.</Text>
                 )}
               </View>
 
               <View style={styles.sectionCard}>
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Snapshot</Text>
-                  <Text style={styles.sectionMeta}>{snapshot.status.toUpperCase()}</Text>
+                  <Text style={styles.sectionTitle}>Packet</Text>
+                  <Text style={styles.sectionMeta}>{packet.status.toUpperCase()}</Text>
                 </View>
                 <View style={styles.metricGrid}>
-                  <Metric label="Started" value={formatDateTime(snapshot.startedAt)} />
-                  <Metric label="Freshness" value={snapshot.freshness.state.toUpperCase()} />
-                  <Metric label="Vehicle" value={snapshot.vehicle.label} />
-                  <Metric label="Last Location" value={snapshot.lastLocation.label} />
+                  <Metric label="Created" value={formatDateTime(packet.packetCreatedAt)} />
+                  <Metric label="Updated" value={formatDateTime(packet.packetUpdatedAt)} />
+                  <Metric label="Freshness" value={packet.dataFreshness.state.toUpperCase()} />
+                  <Metric label="Source" value={packet.externalSharing === 'disabled' ? 'Local only' : 'Unavailable'} />
                 </View>
+                <Text style={styles.packetCopy}>{packet.dataFreshness.label}</Text>
               </View>
 
               <View style={styles.sectionCard}>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>Route</Text>
-                  <Text style={styles.sectionMeta}>{snapshot.route.authorityStatus}</Text>
+                  <Text style={styles.sectionMeta}>{packet.route.authorityStatus}</Text>
                 </View>
                 <View style={styles.metricGrid}>
-                  <Metric label="Authority" value={snapshot.route.authorityLabel} />
-                  <Metric label="Geometry" value={snapshot.route.geometryStatus ?? 'unknown'} />
-                  <Metric label="Trailhead" value={formatCoordinate(snapshot.route.trailheadCoordinate)} />
-                  <Metric label="Distance" value={snapshot.route.distanceMiles != null ? `${snapshot.route.distanceMiles} mi` : 'Unknown'} />
+                  <Metric label="Authority" value={packet.route.authorityLabel} />
+                  <Metric label="Geometry" value={packet.route.geometryStatus ?? 'unknown'} />
+                  <Metric label="Trailhead" value={formatCoordinate(packet.route.trailheadCoordinate)} />
+                  <Metric label="Last Location" value={packet.lastKnownLocation.label} />
+                </View>
+              </View>
+
+              <View style={styles.sectionCard}>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>Vehicle</Text>
+                  <Text style={styles.sectionMeta}>READ ONLY</Text>
+                </View>
+                <View style={styles.metricGrid}>
+                  <Metric label="Vehicle" value={packet.vehicle.label} />
+                  <Metric label="Type" value={packet.vehicle.vehicleType ?? 'Unknown'} />
+                  <Metric label="Range" value={packet.vehicle.rangeMiles != null ? `${packet.vehicle.rangeMiles} mi` : 'Unknown'} />
+                  <Metric label="Source" value={packet.vehicle.source ?? packet.vehicle.rangeSource ?? 'Unknown'} />
                 </View>
               </View>
 
@@ -265,35 +269,22 @@ export default function ActiveTripScreen() {
                   <Text style={styles.sectionTitle}>Logistics</Text>
                   <Text style={styles.sectionMeta}>READ ONLY</Text>
                 </View>
-                <StatusRow label="Refuel" item={snapshot.logistics.refuel} />
-                <StatusRow label="Resupply" item={snapshot.logistics.resupply} />
-                <StatusRow label="Camp" item={snapshot.logistics.camp} />
-                <StatusRow label="Bailout" item={snapshot.logistics.bailout} />
+                <StatusRow label="Refuel" item={packet.logistics.refuel} />
+                <StatusRow label="Resupply" item={packet.logistics.resupply} />
+                <StatusRow label="Camp" item={packet.logistics.camp} />
+                <StatusRow label="Bailout" item={packet.logistics.bailout} />
               </View>
 
               <TouchableOpacity
-                style={styles.secondaryButton}
+                style={styles.clearButton}
                 activeOpacity={0.84}
-                onPress={handleOpenIncidentPacket}
+                onPress={handleClearPacket}
                 accessibilityRole="button"
-                accessibilityLabel="Open Offline Incident Packet"
-                testID="active-trip-open-incident-packet"
+                accessibilityLabel="Clear Offline Incident Packet"
+                testID="offline-incident-packet-clear"
               >
-                <Ionicons name="document-text-outline" size={15} color={TACTICAL.amber} />
-                <Text style={styles.secondaryButtonText}>Offline Incident Packet</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.stopButton, stopping && styles.disabledButton]}
-                activeOpacity={stopping ? 1 : 0.84}
-                disabled={stopping}
-                onPress={handleStopTrip}
-                accessibilityRole="button"
-                accessibilityLabel="Stop Active Trip"
-                testID="active-trip-stop"
-              >
-                {stopping ? <ActivityIndicator size="small" color="#081014" /> : <Ionicons name="stop-circle-outline" size={15} color="#081014" />}
-                <Text style={styles.stopButtonText}>{stopping ? 'Stopping' : 'Stop Active Trip'}</Text>
+                <Ionicons name="trash-outline" size={15} color="#081014" />
+                <Text style={styles.clearButtonText}>Clear Packet</Text>
               </TouchableOpacity>
             </>
           )}
@@ -331,7 +322,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   heroCard: {
-    minHeight: 82,
+    minHeight: 92,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: TACTICAL.amber + '28',
@@ -433,6 +424,12 @@ const styles = StyleSheet.create({
     lineHeight: 13,
     fontWeight: '700',
   },
+  packetCopy: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
+  },
   metricGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -491,7 +488,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textAlign: 'right',
   },
-  stopButton: {
+  clearButton: {
     minHeight: 42,
     borderRadius: 12,
     backgroundColor: TACTICAL.amber,
@@ -500,14 +497,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
-  stopButtonText: {
+  clearButtonText: {
     color: '#081014',
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
-  disabledButton: { opacity: 0.58 },
   emptyCard: {
     marginTop: 10,
     minHeight: 220,
@@ -543,24 +539,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   primaryButtonText: {
-    color: TACTICAL.amber,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  secondaryButton: {
-    minHeight: 40,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '45',
-    backgroundColor: TACTICAL.amber + '10',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
-  },
-  secondaryButtonText: {
     color: TACTICAL.amber,
     fontSize: 10,
     fontWeight: '900',

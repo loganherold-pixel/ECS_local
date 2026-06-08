@@ -118,7 +118,7 @@ export const ECS_PRIMARY_TAB_MANIFEST = [
     dockLabel: 'EXPLORE',
     dockKey: 'discover',
     route: '/discover',
-    activePathAliases: ['/discover', '/explore', '/explore-trip-builder', '/explore-offline-prep-pack', '/active-trip'],
+    activePathAliases: ['/discover', '/explore', '/explore-trip-builder', '/explore-offline-prep-pack', '/active-trip', '/offline-incident-packet'],
   },
   {
     id: 'dispatch',
@@ -181,6 +181,15 @@ export const ECS_ROUTE_OWNERSHIP_MANIFEST = [
     sharedShellBackground: true,
     forceSharedShellBackgroundWithoutDock: true,
     note: 'Explore-owned Active Trip snapshot surface; no new bottom tab.',
+  },
+  {
+    path: '/offline-incident-packet',
+    ownerTabId: 'explore',
+    kind: 'nested_tab_route',
+    restorableShellRoute: '/discover',
+    sharedShellBackground: true,
+    forceSharedShellBackgroundWithoutDock: true,
+    note: 'Explore-owned local-only incident packet surface derived from Active Trip snapshots; no SOS or sharing.',
   },
   {
     path: '/vehicle-config',

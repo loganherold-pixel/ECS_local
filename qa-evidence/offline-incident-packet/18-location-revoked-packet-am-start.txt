@@ -1,0 +1,7 @@
+Starting: Intent { act=android.intent.action.VIEW dat=planning-offline-sync:///... pkg=com.expeditioncommand.planningofflinesync }
+Status: ok
+LaunchState: COLD
+Activity: com.expeditioncommand.planningofflinesync/.MainActivity
+TotalTime: 9972
+WaitTime: 9978
+Complete
