@@ -145,6 +145,7 @@
     "test:explore-route-preview-regression": "node ./scripts/test-explore-route-preview-regression.js",
     "test:explore-tripbuilder-wizard": "node ./scripts/test-explore-tripbuilder-wizard-domain.js",
     "test:trip-builder-pretrail-resolver-enforcement": "node ./scripts/test-trip-builder-pretrail-resolver-enforcement.js",
+    "test:trip-confidence-summary": "node ./scripts/test-trip-confidence-summary.js",
     "test:explore-tripbuilder-manifest-export": "node ./scripts/test-explore-tripbuilder-manifest-export.js",
     "test:explore-suggested-trailheads-production-guard": "node ./scripts/test-explore-suggested-trailheads-production-guard.js",
     "test:canonical-route-geometry-normalizer": "node ./scripts/test-canonical-route-geometry-normalizer.js",

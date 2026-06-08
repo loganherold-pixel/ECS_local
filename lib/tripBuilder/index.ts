@@ -9,6 +9,7 @@ export * from './bailoutRouteConfidenceResolver';
 export * from './tripItineraryMapboxAdapter';
 export * from './tripItinerarySummary';
 export * from './tripItineraryReview';
+export * from './tripConfidenceSummary';
 export * from './tripItineraryEditSession';
 export * from './trailRouteGeometryResolver';
 export * from './trailheadStartValidation';

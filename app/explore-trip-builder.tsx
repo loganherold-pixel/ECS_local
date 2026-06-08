@@ -48,6 +48,7 @@ import {
   dismissTripItineraryEditItem,
   getTripItineraryReview,
   getTripItinerarySummary,
+  getTripConfidenceSummary,
   isUsableRouteContext,
   loadTripBuilderRouteHandoff,
   reorderTripItineraryStop,
@@ -87,6 +88,10 @@ import {
   type TripItineraryReviewModel,
   type TripItinerarySummaryPhaseStatus,
   type TripItinerarySummaryViewModel,
+  type TripConfidenceCategory,
+  type TripConfidenceReasonTone,
+  type TripConfidenceSectionStatus,
+  type TripConfidenceSummaryViewModel,
 } from '../lib/tripBuilder';
 import {
   getOfflinePrepRouteCoordinates,
@@ -1349,6 +1354,136 @@ function ConfidenceChip({ label, value }: { label: string; value: string }) {
     <View style={styles.itineraryReviewConfidenceChip}>
       <Text style={styles.itineraryReviewConfidenceLabel}>{label}</Text>
       <Text style={styles.itineraryReviewConfidenceValue} numberOfLines={1}>{value}</Text>
+    </View>
+  );
+}
+
+function tripConfidenceCategoryColor(category: TripConfidenceCategory): string {
+  switch (category) {
+    case 'high_confidence':
+      return '#66BB6A';
+    case 'moderate_confidence':
+      return TACTICAL.amber;
+    case 'low_confidence':
+      return '#FF8A65';
+    case 'insufficient_data':
+    default:
+      return '#EF5350';
+  }
+}
+
+function tripConfidenceToneColor(tone: TripConfidenceReasonTone): string {
+  switch (tone) {
+    case 'positive':
+      return '#66BB6A';
+    case 'critical':
+      return '#EF5350';
+    case 'caution':
+      return '#FF8A65';
+    case 'watch':
+      return TACTICAL.amber;
+    case 'neutral':
+    default:
+      return TACTICAL.textMuted;
+  }
+}
+
+function tripConfidenceSectionStatusLabel(status: TripConfidenceSectionStatus): string {
+  switch (status) {
+    case 'ready':
+      return 'Ready';
+    case 'watch':
+      return 'Watch';
+    case 'caution':
+      return 'Caution';
+    case 'unavailable':
+      return 'Unavailable';
+    case 'stale':
+      return 'Stale';
+    case 'live':
+      return 'Live';
+    case 'unknown':
+    default:
+      return 'Unknown';
+  }
+}
+
+function tripConfidenceSectionStatusColor(status: TripConfidenceSectionStatus): string {
+  switch (status) {
+    case 'ready':
+    case 'live':
+      return '#66BB6A';
+    case 'watch':
+      return TACTICAL.amber;
+    case 'caution':
+    case 'stale':
+      return '#FF8A65';
+    case 'unavailable':
+      return '#EF5350';
+    case 'unknown':
+    default:
+      return TACTICAL.textMuted;
+  }
+}
+
+function TripConfidenceSummaryPanel({ summary }: { summary: TripConfidenceSummaryViewModel }) {
+  const accent = tripConfidenceCategoryColor(summary.category);
+  return (
+    <View style={styles.tripConfidencePanel} testID="trip-builder-trip-confidence-summary">
+      <View style={styles.tripConfidenceHeader}>
+        <View style={styles.tripConfidenceTitleBlock}>
+          <Text style={styles.tripConfidenceEyebrow}>Trip Confidence</Text>
+          <Text style={[styles.tripConfidenceHeadline, { color: accent }]}>{summary.label}</Text>
+          <Text style={styles.tripConfidenceSubhead} numberOfLines={2}>{summary.headline}</Text>
+        </View>
+        <View style={[styles.tripConfidenceScoreBadge, { borderColor: accent + '55', backgroundColor: accent + '12' }]}>
+          <Text style={[styles.tripConfidenceScoreValue, { color: accent }]}>
+            {summary.score != null ? summary.score : '--'}
+          </Text>
+          <Text style={styles.tripConfidenceScoreLabel}>Score</Text>
+        </View>
+      </View>
+
+      {summary.keyWarnings.length > 0 ? (
+        <View style={styles.tripConfidenceWarnings}>
+          {summary.keyWarnings.slice(0, 3).map((warning) => (
+            <View key={warning} style={styles.tripConfidenceWarningChip}>
+              <Text style={styles.tripConfidenceWarningText} numberOfLines={1}>{warning}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={styles.tripConfidenceSectionList}>
+        {summary.sections.map((section) => {
+          const statusColor = tripConfidenceSectionStatusColor(section.status);
+          return (
+            <View key={section.key} style={styles.tripConfidenceSection}>
+              <View style={styles.tripConfidenceSectionHeader}>
+                <Text style={styles.tripConfidenceSectionTitle}>{section.title}</Text>
+                <Text style={[styles.tripConfidenceSectionStatus, { color: statusColor }]}>
+                  {tripConfidenceSectionStatusLabel(section.status)}
+                </Text>
+              </View>
+              <Text style={styles.tripConfidenceSectionSummary} numberOfLines={2}>{section.summary}</Text>
+              <View style={styles.tripConfidenceReasonRow}>
+                {section.reasons.slice(0, 2).map((reason) => (
+                  <View key={reason.id} style={[styles.tripConfidenceReasonChip, { borderColor: tripConfidenceToneColor(reason.tone) + '38' }]}>
+                    <Text style={[styles.tripConfidenceReasonText, { color: tripConfidenceToneColor(reason.tone) }]} numberOfLines={1}>
+                      {reason.label}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      <View style={styles.tripConfidenceActionRow}>
+        <Text style={styles.tripConfidenceActionLabel}>Recommended Action</Text>
+        <Text style={styles.tripConfidenceActionText} numberOfLines={2}>{summary.recommendedAction.label}</Text>
+      </View>
     </View>
   );
 }
@@ -3615,6 +3750,24 @@ export default function ExploreTripBuilderScreen() {
     () => getTripItineraryReview(editableTripItinerary),
     [editableTripItinerary],
   );
+  const tripConfidenceSummary = useMemo(
+    () => getTripConfidenceSummary({
+      itinerary: editableTripItinerary,
+      selectedRoute: selectedRoute as unknown as TripBuilderRouteInput | null,
+      vehicleProfile,
+      plan,
+      environment: {
+        weather: { status: 'unknown', label: 'Trip Builder weather unavailable' },
+        daylight: { status: 'unknown', label: 'Trip Builder daylight unavailable' },
+        remoteness: {
+          status: selectedRoute?.remotenessScore != null ? 'available' : 'unknown',
+          score: selectedRoute?.remotenessScore ?? null,
+        },
+      },
+      telemetry: { status: 'unavailable', label: 'Telemetry unavailable for Trip Builder MVP' },
+    }),
+    [editableTripItinerary, plan, selectedRoute, vehicleProfile],
+  );
 
   const tripPlanMapAvailability = useMemo(() => {
     if (!selectedRoute || !plan) {
@@ -5049,6 +5202,7 @@ export default function ExploreTripBuilderScreen() {
                       onMapPress={tripPlanMapAvailability.itinerary ? () => openPlanMap('itinerary') : undefined}
                       onEditPress={itineraryEditMode ? undefined : handleStartItineraryEdit}
                     >
+                      <TripConfidenceSummaryPanel summary={tripConfidenceSummary} />
                       <ItinerarySummaryPanel summary={itinerarySummary} />
                       <ItineraryReviewPanel
                         review={itineraryReview}
@@ -5980,6 +6134,156 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.9,
     textTransform: 'uppercase',
+  },
+  tripConfidencePanel: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '24',
+    backgroundColor: 'rgba(4,10,12,0.56)',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  tripConfidenceHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  tripConfidenceTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  tripConfidenceEyebrow: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+  },
+  tripConfidenceHeadline: {
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  tripConfidenceSubhead: {
+    color: TACTICAL.text,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '800',
+  },
+  tripConfidenceScoreBadge: {
+    minWidth: 52,
+    minHeight: 44,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+  },
+  tripConfidenceScoreValue: {
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  tripConfidenceScoreLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  tripConfidenceWarnings: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  tripConfidenceWarningChip: {
+    maxWidth: '100%',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#EF535055',
+    backgroundColor: '#EF535012',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  tripConfidenceWarningText: {
+    color: '#FFAB91',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+  },
+  tripConfidenceSectionList: {
+    gap: 6,
+  },
+  tripConfidenceSection: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+    paddingTop: 6,
+    gap: 4,
+  },
+  tripConfidenceSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  tripConfidenceSectionTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: TACTICAL.text,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  tripConfidenceSectionStatus: {
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  tripConfidenceSectionSummary: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '700',
+  },
+  tripConfidenceReasonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  tripConfidenceReasonChip: {
+    maxWidth: '100%',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  tripConfidenceReasonText: {
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+  },
+  tripConfidenceActionRow: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+    paddingTop: 6,
+    gap: 2,
+  },
+  tripConfidenceActionLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  tripConfidenceActionText: {
+    color: TACTICAL.amber,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '900',
   },
   itinerarySummary: {
     gap: 7,
