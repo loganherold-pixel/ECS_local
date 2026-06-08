@@ -103,6 +103,18 @@ import { useEcsTopBannerHeight } from '../../components/ECSGlobalBanner';
 import { offlineExpeditionModeEngine } from '../../lib/offlineExpeditionModeEngine';
 import { dashboardModeEngine, type ModeEngineOutput } from '../../lib/dashboardModeEngine';
 import { tripRecorderEngine } from '../../lib/tripRecorderEngine';
+import {
+  activeTripModeStore,
+  type ActiveTripModeSnapshot,
+} from '../../lib/activeTripMode';
+import {
+  offlineIncidentPacketStore,
+  type OfflineIncidentPacket,
+} from '../../lib/offlineIncidentPacket';
+import {
+  buildActiveTripResumeCardModel,
+  type ActiveTripResumeCardModel,
+} from '../../lib/activeTripResumeCard';
 
 import { advisoryStore } from '../../lib/advisoryStore';
 import { isLowValueTelemetryDegradedSummary } from '../../lib/ai/degradedOperationsEngine';
@@ -212,6 +224,8 @@ const TAB_SLIDE_PX = MOTION.screenShiftPx;
 const DASHBOARD_WIDGET_FRAME_EDGE_MARGIN = 2;
 const DASHBOARD_EXPANDED_TOP_SAFE_GAP = 8;
 const DASHBOARD_CUSTOMIZE_STACK_ESTIMATED_HEIGHT = 38;
+const DASHBOARD_RUNTIME_STARTED_AT_MS = Date.now();
+let dashboardActiveTripRecoveryChecked = false;
 
 // ── Mode Color Cues ────────────────────────────────────
 // Dashboard tab accents come from the ECS tactical palette.
@@ -247,6 +261,15 @@ function firstNonEmptyString(...values: unknown[]): string | null {
     if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   }
   return null;
+}
+
+function activeTripSnapshotPredatesDashboardRuntime(snapshot: ActiveTripModeSnapshot | null): boolean {
+  if (!snapshot || snapshot.status !== 'active') return false;
+  const referenceIso = firstNonEmptyString(snapshot.updatedAt, snapshot.freshness?.updatedAt, snapshot.startedAt);
+  if (!referenceIso) return false;
+  const referenceMs = Date.parse(referenceIso);
+  if (!Number.isFinite(referenceMs)) return false;
+  return referenceMs < DASHBOARD_RUNTIME_STARTED_AT_MS - 1000;
 }
 
 function minutesUntilIso(value: unknown): number | null {
@@ -819,6 +842,194 @@ function DashboardPageSupportCard({
               </Text>
             </TouchableOpacity>
           ) : null}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function DashboardActiveTripResumeCard({
+  model,
+  palette,
+  onResume,
+  onViewPacket,
+}: {
+  model: ActiveTripResumeCardModel;
+  palette: any;
+  onResume: () => void;
+  onViewPacket: () => void;
+}) {
+  const adaptive = useAdaptiveLayout();
+
+  if (!model.visible) {
+    return null;
+  }
+
+  const accent = palette.amber ?? TACTICAL.amber;
+  const confidenceText = model.confidenceLabel
+    ? `${model.confidenceLabel}${model.confidenceScore !== null ? ` • ${model.confidenceScore}` : ''}`
+    : null;
+  const authorityText = [model.routeAuthorityLabel, model.routeGeometryStatus]
+    .filter(Boolean)
+    .join(' • ');
+  const metaItems = [
+    model.vehicleLabel ? `Vehicle ${model.vehicleLabel}` : null,
+    confidenceText,
+    model.timeLabel,
+  ].filter(Boolean);
+
+  return (
+    <View
+      style={[
+        styles.dashboardActiveTripResumeWrap,
+        {
+          paddingHorizontal: adaptive.dashboard.gridPadding,
+          paddingTop: adaptive.shortHeight ? 2 : 3,
+          paddingBottom: adaptive.shortHeight ? 1 : 2,
+        },
+      ]}
+    >
+      <View
+        testID="dashboard-resume-active-trip-card"
+        style={[
+          styles.dashboardActiveTripResumeCard,
+          {
+            backgroundColor: palette.panel,
+            borderColor: `${accent}32`,
+          },
+        ]}
+      >
+        <View style={styles.dashboardActiveTripResumeHeader}>
+          <View
+            style={[
+              styles.dashboardActiveTripResumeIconWrap,
+              {
+                borderColor: `${accent}34`,
+                backgroundColor: `${accent}12`,
+              },
+            ]}
+          >
+            <Ionicons name="navigate-circle-outline" size={15} color={accent} />
+          </View>
+          <View style={styles.dashboardActiveTripResumeCopy}>
+            <Text
+              style={[styles.dashboardActiveTripResumeEyebrow, { color: accent }]}
+              numberOfLines={1}
+            >
+              {model.title}
+            </Text>
+            <Text
+              style={[styles.dashboardActiveTripResumeTitle, { color: palette.text }]}
+              numberOfLines={1}
+            >
+              {model.routeName}
+            </Text>
+            {metaItems.length ? (
+              <Text
+                style={[styles.dashboardActiveTripResumeMeta, { color: palette.textMuted }]}
+                numberOfLines={1}
+              >
+                {metaItems.join(' • ')}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+
+        <Text
+          testID="dashboard-resume-active-trip-stale-label"
+          style={[styles.dashboardActiveTripResumeFreshness, { color: palette.textMuted }]}
+          numberOfLines={2}
+        >
+          {model.freshnessLabel}
+        </Text>
+
+        <View style={styles.dashboardActiveTripResumeFooter}>
+          <View style={styles.dashboardActiveTripResumeChipRow}>
+            {authorityText ? (
+              <View
+                style={[
+                  styles.dashboardActiveTripResumeChip,
+                  {
+                    borderColor: `${accent}22`,
+                    backgroundColor: `${accent}0C`,
+                  },
+                ]}
+              >
+                <Text
+                  style={[styles.dashboardActiveTripResumeChipText, { color: accent }]}
+                  numberOfLines={1}
+                >
+                  {authorityText}
+                </Text>
+              </View>
+            ) : null}
+            {model.packetBadgeLabel ? (
+              <View
+                testID="dashboard-resume-active-trip-packet-badge"
+                style={[
+                  styles.dashboardActiveTripResumeChip,
+                  {
+                    borderColor: 'rgba(137,171,246,0.24)',
+                    backgroundColor: 'rgba(137,171,246,0.08)',
+                  },
+                ]}
+              >
+                <Text
+                  style={[styles.dashboardActiveTripResumeChipText, { color: '#89ABF6' }]}
+                  numberOfLines={1}
+                >
+                  {model.packetBadgeLabel}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.dashboardActiveTripResumeActions}>
+            {model.packetActionVisible ? (
+              <TouchableOpacity
+                testID="dashboard-view-offline-packet-action"
+                style={[
+                  styles.dashboardActiveTripResumeSecondaryAction,
+                  { borderColor: 'rgba(137,171,246,0.24)' },
+                ]}
+                onPress={onViewPacket}
+                activeOpacity={0.76}
+              >
+                <Text
+                  style={[
+                    styles.dashboardActiveTripResumeSecondaryActionText,
+                    { color: '#89ABF6' },
+                  ]}
+                  numberOfLines={1}
+                >
+                  View Offline Packet
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
+            <TouchableOpacity
+              testID="dashboard-resume-active-trip-action"
+              style={[
+                styles.dashboardActiveTripResumePrimaryAction,
+                {
+                  backgroundColor: `${accent}18`,
+                  borderColor: `${accent}36`,
+                },
+              ]}
+              onPress={onResume}
+              activeOpacity={0.78}
+            >
+              <Text
+                style={[
+                  styles.dashboardActiveTripResumePrimaryActionText,
+                  { color: accent },
+                ]}
+                numberOfLines={1}
+              >
+                Resume Active Trip
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </View>
@@ -1417,6 +1628,71 @@ function DashboardScreenInner() {
   const [manageSlot, setManageSlot] = useState<WidgetSlot | null>(null);
   const [authVisible, setAuthVisible] = useState(false);
   const [createWidgetVisible, setCreateWidgetVisible] = useState(false);
+  const [activeTripResumeSnapshot, setActiveTripResumeSnapshot] = useState<ActiveTripModeSnapshot | null>(null);
+  const [activeTripResumePacket, setActiveTripResumePacket] = useState<OfflineIncidentPacket | null>(null);
+
+  const refreshDashboardActiveTripResume = useCallback((recoverPersistedSnapshot = false) => {
+    let snapshot = activeTripModeStore.get();
+
+    if (recoverPersistedSnapshot && !dashboardActiveTripRecoveryChecked) {
+      dashboardActiveTripRecoveryChecked = true;
+      if (activeTripSnapshotPredatesDashboardRuntime(snapshot)) {
+        const recovered = activeTripModeStore.getRecovered();
+        if (recovered) {
+          activeTripModeStore.save(recovered);
+          snapshot = recovered;
+        }
+      }
+    }
+
+    setActiveTripResumeSnapshot(snapshot);
+    setActiveTripResumePacket(offlineIncidentPacketStore.get());
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    Promise.all([
+      activeTripModeStore.waitForHydration(),
+      offlineIncidentPacketStore.waitForHydration(),
+    ])
+      .catch(() => undefined)
+      .then(() => {
+        if (!cancelled) {
+          refreshDashboardActiveTripResume(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshDashboardActiveTripResume]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      Promise.all([
+        activeTripModeStore.waitForHydration(),
+        offlineIncidentPacketStore.waitForHydration(),
+      ])
+        .catch(() => undefined)
+        .then(() => {
+          if (!cancelled) {
+            refreshDashboardActiveTripResume(false);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }, [refreshDashboardActiveTripResume]),
+  );
+
+  const activeTripResumeCard = useMemo(
+    () => buildActiveTripResumeCardModel(activeTripResumeSnapshot, activeTripResumePacket),
+    [activeTripResumeSnapshot, activeTripResumePacket],
+  );
 
 
   // ── Collision Detection State ─────────────────────────
@@ -3472,6 +3748,26 @@ function DashboardScreenInner() {
       }
     }, [closeDashboardTransientOverlays, router, showToast]);
 
+  const handleResumeActiveTrip = useCallback(() => {
+    closeDashboardTransientOverlays();
+    try {
+      router.push('/active-trip');
+    } catch {
+      console.warn('[dashboard] Failed to open active trip route');
+      showToast('Active Trip unavailable');
+    }
+  }, [closeDashboardTransientOverlays, router, showToast]);
+
+  const handleViewOfflineIncidentPacket = useCallback(() => {
+    closeDashboardTransientOverlays();
+    try {
+      router.push('/offline-incident-packet');
+    } catch {
+      console.warn('[dashboard] Failed to open offline incident packet route');
+      showToast('Offline packet unavailable');
+    }
+  }, [closeDashboardTransientOverlays, router, showToast]);
+
   const handleOpenCommandBrief = useCallback(() => {
     closeDashboardTransientOverlays();
     handleTabSwitchWithModeSync('brief');
@@ -4133,6 +4429,15 @@ function DashboardScreenInner() {
 
       {!startupHydrating && dashboardChromeVisible ? <OfflineStateBanner expanded /> : null}
 
+      {!startupHydrating && dashboardChromeVisible && !layoutMode ? (
+        <DashboardActiveTripResumeCard
+          model={activeTripResumeCard}
+          palette={palette}
+          onResume={handleResumeActiveTrip}
+          onViewPacket={handleViewOfflineIncidentPacket}
+        />
+      ) : null}
+
       <DashboardTabBar
         activeTab={activeTab}
         palette={palette}
@@ -4697,6 +5002,117 @@ dashboardPageSupportActionText: {
   fontSize: 9,
   fontWeight: '800',
   letterSpacing: 0.8,
+  textTransform: 'uppercase',
+},
+
+dashboardActiveTripResumeWrap: {
+  flexShrink: 0,
+},
+dashboardActiveTripResumeCard: {
+  borderWidth: 1,
+  borderRadius: 8,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  gap: 8,
+},
+dashboardActiveTripResumeHeader: {
+  flexDirection: 'row',
+  alignItems: 'flex-start',
+  gap: 10,
+},
+dashboardActiveTripResumeIconWrap: {
+  width: 28,
+  height: 28,
+  borderRadius: 8,
+  borderWidth: 1,
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+},
+dashboardActiveTripResumeCopy: {
+  flex: 1,
+  minWidth: 0,
+},
+dashboardActiveTripResumeEyebrow: {
+  fontSize: 9,
+  fontWeight: '800',
+  letterSpacing: 0.9,
+  textTransform: 'uppercase',
+  marginBottom: 3,
+},
+dashboardActiveTripResumeTitle: {
+  fontSize: 12,
+  fontWeight: '800',
+  letterSpacing: 0,
+},
+dashboardActiveTripResumeMeta: {
+  marginTop: 3,
+  fontSize: 10,
+  lineHeight: 14,
+  fontWeight: '600',
+},
+dashboardActiveTripResumeFreshness: {
+  fontSize: 10,
+  lineHeight: 14,
+  fontWeight: '600',
+},
+dashboardActiveTripResumeFooter: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  flexWrap: 'wrap',
+  gap: 8,
+},
+dashboardActiveTripResumeChipRow: {
+  flex: 1,
+  minWidth: 0,
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  gap: 6,
+},
+dashboardActiveTripResumeChip: {
+  maxWidth: '100%',
+  borderWidth: 1,
+  borderRadius: 999,
+  paddingHorizontal: 8,
+  paddingVertical: 5,
+},
+dashboardActiveTripResumeChipText: {
+  fontSize: 8.5,
+  fontWeight: '800',
+  letterSpacing: 0.35,
+  textTransform: 'uppercase',
+},
+dashboardActiveTripResumeActions: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 6,
+  flexShrink: 0,
+},
+dashboardActiveTripResumePrimaryAction: {
+  borderWidth: 1,
+  borderRadius: 8,
+  paddingHorizontal: 10,
+  paddingVertical: 7,
+},
+dashboardActiveTripResumeSecondaryAction: {
+  borderWidth: 1,
+  borderRadius: 8,
+  paddingHorizontal: 10,
+  paddingVertical: 7,
+  backgroundColor: 'rgba(137,171,246,0.06)',
+},
+dashboardActiveTripResumePrimaryActionText: {
+  fontSize: 9,
+  fontWeight: '900',
+  letterSpacing: 0.7,
+  textTransform: 'uppercase',
+},
+dashboardActiveTripResumeSecondaryActionText: {
+  fontSize: 9,
+  fontWeight: '800',
+  letterSpacing: 0.5,
   textTransform: 'uppercase',
 },
 

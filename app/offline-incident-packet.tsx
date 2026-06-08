@@ -18,6 +18,11 @@ import {
   type OfflineIncidentPacket,
 } from '../lib/offlineIncidentPacket';
 import type { ActiveTripOperationalSummary } from '../lib/activeTripMode';
+import {
+  evaluateTerrainRiskForOfflineIncidentPacket,
+  type TerrainRiskV1Category,
+  type TerrainRiskV1Result,
+} from '../lib/terrainRiskEngine';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { ECS, TACTICAL } from '../lib/theme';
 
@@ -72,6 +77,22 @@ function statusColor(status: ActiveTripOperationalSummary['status']): string {
   }
 }
 
+function terrainRiskColor(category: TerrainRiskV1Category): string {
+  switch (category) {
+    case 'low':
+      return '#66BB6A';
+    case 'moderate':
+      return TACTICAL.amber;
+    case 'elevated':
+      return '#FF8A65';
+    case 'severe':
+      return '#EF5350';
+    case 'unknown':
+    default:
+      return TACTICAL.textMuted;
+  }
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.metricTile}>
@@ -89,6 +110,56 @@ function StatusRow({ label, item }: { label: string; item: ActiveTripOperational
         <Text style={styles.statusSource} numberOfLines={1}>{item.source}</Text>
       </View>
       <Text style={[styles.statusValue, { color: statusColor(item.status) }]}>{item.label}</Text>
+    </View>
+  );
+}
+
+function TerrainRiskCard({ terrainRisk }: { terrainRisk: TerrainRiskV1Result }) {
+  const color = terrainRiskColor(terrainRisk.category);
+  const terrainReasons = [
+    ...terrainRisk.missingDataReasons,
+    ...terrainRisk.riskReasons,
+  ].slice(0, 5);
+
+  return (
+    <View style={styles.sectionCard} testID="offline-incident-packet-terrain-risk">
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>Terrain Risk</Text>
+          <Text style={styles.sectionMeta}>LOCAL PACKET</Text>
+        </View>
+        <View style={[styles.confidenceBadge, { borderColor: color + '55' }]}>
+          <Text style={[styles.confidenceText, { color }]}>
+            {terrainRisk.label}
+          </Text>
+          <Text style={styles.confidenceScore}>
+            {terrainRisk.score != null ? `${terrainRisk.score}` : '--'}
+          </Text>
+        </View>
+      </View>
+      <Text style={styles.recommendedAction}>
+        Recommended Action: {terrainRisk.recommendedAction.label}
+      </Text>
+      {terrainReasons.length > 0 ? (
+        <View style={styles.warningList}>
+          {terrainReasons.map((reason) => (
+            <Text
+              key={`${reason.id}-${reason.label}`}
+              style={reason.tone === 'positive' ? styles.mutedText : styles.warningText}
+            >
+              - {reason.label}
+            </Text>
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.mutedText}>No terrain risk drivers available in the local packet.</Text>
+      )}
+      <View style={styles.metricGrid}>
+        <Metric label="Authority" value={terrainRisk.route.authorityLabel} />
+        <Metric label="Geometry" value={terrainRisk.route.geometryStatus} />
+        <Metric label="Weather" value={String(terrainRisk.weather.status).toUpperCase()} />
+        <Metric label="Data" value={terrainRisk.dataConfidence.state.toUpperCase()} />
+      </View>
     </View>
   );
 }
@@ -142,6 +213,10 @@ export default function OfflineIncidentPacketScreen() {
   }, []);
 
   const warnings = useMemo(() => packet?.keyWarnings.slice(0, 5) ?? [], [packet]);
+  const terrainRisk = useMemo(
+    () => packet ? evaluateTerrainRiskForOfflineIncidentPacket(packet) : null,
+    [packet],
+  );
 
   const handleClearPacket = useCallback(async () => {
     offlineIncidentPacketStore.clear();
@@ -223,6 +298,8 @@ export default function OfflineIncidentPacketScreen() {
                   <Text style={styles.mutedText}>No extra warnings in the stored packet.</Text>
                 )}
               </View>
+
+              {terrainRisk ? <TerrainRiskCard terrainRisk={terrainRisk} /> : null}
 
               <View style={styles.sectionCard}>
                 <View style={styles.sectionHeader}>

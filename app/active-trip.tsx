@@ -18,6 +18,11 @@ import {
   type ActiveTripModeSnapshot,
   type ActiveTripOperationalSummary,
 } from '../lib/activeTripMode';
+import {
+  evaluateTerrainRiskForActiveTrip,
+  type TerrainRiskV1Category,
+  type TerrainRiskV1Result,
+} from '../lib/terrainRiskEngine';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { ECS, TACTICAL } from '../lib/theme';
 
@@ -72,6 +77,22 @@ function statusColor(status: ActiveTripOperationalSummary['status']): string {
   }
 }
 
+function terrainRiskColor(category: TerrainRiskV1Category): string {
+  switch (category) {
+    case 'low':
+      return '#66BB6A';
+    case 'moderate':
+      return TACTICAL.amber;
+    case 'elevated':
+      return '#FF8A65';
+    case 'severe':
+      return '#EF5350';
+    case 'unknown':
+    default:
+      return TACTICAL.textMuted;
+  }
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.metricTile}>
@@ -90,6 +111,56 @@ function StatusRow({ label, item }: { label: string; item: ActiveTripOperational
         <Text style={styles.statusSource} numberOfLines={1}>{item.source}</Text>
       </View>
       <Text style={[styles.statusValue, { color }]}>{item.label}</Text>
+    </View>
+  );
+}
+
+function TerrainRiskCard({ terrainRisk }: { terrainRisk: TerrainRiskV1Result }) {
+  const color = terrainRiskColor(terrainRisk.category);
+  const terrainReasons = [
+    ...terrainRisk.missingDataReasons,
+    ...terrainRisk.riskReasons,
+  ].slice(0, 5);
+
+  return (
+    <View style={styles.sectionCard} testID="active-trip-terrain-risk">
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>Terrain Risk</Text>
+          <Text style={styles.sectionMeta}>Terrain Risk v1</Text>
+        </View>
+        <View style={[styles.confidenceBadge, { borderColor: color + '55' }]}>
+          <Text style={[styles.confidenceText, { color }]}>
+            {terrainRisk.label}
+          </Text>
+          <Text style={styles.confidenceScore}>
+            {terrainRisk.score != null ? `${terrainRisk.score}` : '--'}
+          </Text>
+        </View>
+      </View>
+      <Text style={styles.recommendedAction}>
+        Recommended Action: {terrainRisk.recommendedAction.label}
+      </Text>
+      {terrainReasons.length > 0 ? (
+        <View style={styles.warningList}>
+          {terrainReasons.map((reason) => (
+            <Text
+              key={`${reason.id}-${reason.label}`}
+              style={reason.tone === 'positive' ? styles.mutedText : styles.warningText}
+            >
+              - {reason.label}
+            </Text>
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.mutedText}>No terrain risk drivers available.</Text>
+      )}
+      <View style={styles.metricGrid}>
+        <Metric label="Authority" value={terrainRisk.route.authorityLabel} />
+        <Metric label="Geometry" value={terrainRisk.route.geometryStatus} />
+        <Metric label="Weather" value={String(terrainRisk.weather.status).toUpperCase()} />
+        <Metric label="Data" value={terrainRisk.dataConfidence.state.toUpperCase()} />
+      </View>
     </View>
   );
 }
@@ -144,6 +215,10 @@ export default function ActiveTripScreen() {
   }, []);
 
   const warnings = useMemo(() => snapshot?.warnings.slice(0, 5) ?? [], [snapshot]);
+  const terrainRisk = useMemo(
+    () => snapshot ? evaluateTerrainRiskForActiveTrip(snapshot) : null,
+    [snapshot],
+  );
 
   const handleStopTrip = useCallback(async () => {
     setStopping(true);
@@ -233,6 +308,8 @@ export default function ActiveTripScreen() {
                   <Text style={styles.mutedText}>No extra warnings in the stored snapshot.</Text>
                 )}
               </View>
+
+              {terrainRisk ? <TerrainRiskCard terrainRisk={terrainRisk} /> : null}
 
               <View style={styles.sectionCard}>
                 <View style={styles.sectionHeader}>

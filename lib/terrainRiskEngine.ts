@@ -1080,3 +1080,569 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// TERRAIN RISK V1
+//
+// Conservative route-terrain readiness signal for Active Trip and
+// Offline Incident Packet surfaces. This v1 API uses only existing route
+// authority, geometry status, vehicle, weather, remoteness, elevation/grade,
+// and confidence metadata. It does not fetch terrain data or infer trail
+// terrain from approach guidance.
+// ═══════════════════════════════════════════════════════════════
+
+export const TERRAIN_RISK_V1_CATEGORIES = [
+  'low',
+  'moderate',
+  'elevated',
+  'severe',
+  'unknown',
+] as const;
+
+export type TerrainRiskV1Category = typeof TERRAIN_RISK_V1_CATEGORIES[number];
+export type TerrainRiskV1DataState =
+  | 'unknown'
+  | 'unavailable'
+  | 'stale'
+  | 'demo'
+  | 'mock'
+  | 'partial'
+  | 'available'
+  | 'live'
+  | 'verified';
+export type TerrainRiskV1ReasonTone = 'positive' | 'watch' | 'caution' | 'critical' | 'neutral';
+
+export type TerrainRiskV1Reason = {
+  id: string;
+  label: string;
+  tone: TerrainRiskV1ReasonTone;
+};
+
+export type TerrainRiskV1StatusInput = {
+  status?: string | null;
+  label?: string | null;
+  score?: number | null;
+  risk?: string | null;
+};
+
+export type TerrainRiskV1Input = {
+  route?: {
+    authorityStatus?: string | null;
+    authorityLabel?: string | null;
+    geometryStatus?: string | null;
+    geometrySource?: string | null;
+    geometryValid?: boolean | null;
+    distanceMiles?: number | null;
+    trailDifficulty?: string | number | null;
+  } | null;
+  vehicle?: {
+    status?: 'complete' | 'incomplete' | 'missing' | 'unknown' | string | null;
+    label?: string | null;
+    vehicleType?: string | null;
+    rangeMiles?: number | null;
+  } | null;
+  weather?: TerrainRiskV1StatusInput | null;
+  daylight?: TerrainRiskV1StatusInput | null;
+  remoteness?: TerrainRiskV1StatusInput | null;
+  elevation?: TerrainRiskV1StatusInput | null;
+  dataState?: TerrainRiskV1DataState | string | null;
+};
+
+export type TerrainRiskV1Result = {
+  category: TerrainRiskV1Category;
+  label: string;
+  score: number | null;
+  headline: string;
+  riskReasons: TerrainRiskV1Reason[];
+  missingDataReasons: TerrainRiskV1Reason[];
+  route: {
+    authorityStatus: string;
+    authorityLabel: string;
+    geometryStatus: string;
+    geometrySource: string | null;
+    geometryValid: boolean;
+    distanceMiles: number | null;
+    trailDifficulty: string | null;
+  };
+  vehicle: {
+    status: 'complete' | 'incomplete' | 'missing' | 'unknown';
+    label: string | null;
+  };
+  weather: {
+    status: TerrainRiskV1DataState | string;
+    label: string | null;
+  };
+  daylight: {
+    status: TerrainRiskV1DataState | string;
+    label: string | null;
+  };
+  remoteness: {
+    status: TerrainRiskV1DataState | string;
+    label: string | null;
+  };
+  elevation: {
+    status: TerrainRiskV1DataState | string;
+    label: string | null;
+  };
+  dataConfidence: {
+    state: TerrainRiskV1DataState;
+    knownLimitations: string[];
+  };
+  recommendedAction: {
+    id:
+      | 'verify_trail_geometry'
+      | 'complete_vehicle_profile'
+      | 'review_weather'
+      | 'review_remoteness'
+      | 'review_elevation_grade'
+      | 'proceed_with_caution'
+      | 'reduce_terrain_exposure';
+    label: string;
+  };
+};
+
+type TerrainRiskSnapshotLike = {
+  route?: TerrainRiskV1Input['route'] & {
+    authorityStatus?: string | null;
+    authorityLabel?: string | null;
+  } | null;
+  vehicle?: {
+    id?: string | null;
+    label?: string | null;
+    vehicleType?: string | null;
+    rangeMiles?: number | null;
+  } | null;
+  routeConfidence?: {
+    metadata?: {
+      weatherStatus?: string | null;
+    } | null;
+    dataConfidence?: {
+      state?: string | null;
+      knownLimitations?: string[];
+    } | null;
+    knownLimitations?: string[];
+  } | null;
+  freshness?: {
+    state?: string | null;
+  } | null;
+};
+
+type TerrainRiskPacketLike = {
+  route?: TerrainRiskSnapshotLike['route'] | null;
+  vehicle?: TerrainRiskSnapshotLike['vehicle'] | null;
+  confidence?: {
+    knownLimitations?: string[];
+  } | null;
+  dataFreshness?: {
+    state?: string | null;
+  } | null;
+};
+
+function cleanTerrainText(value: unknown): string | null {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return text || null;
+}
+
+function terrainToken(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function terrainNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeTerrainDataState(value: unknown): TerrainRiskV1DataState | string {
+  const normalized = terrainToken(value);
+  switch (normalized) {
+    case 'available':
+    case 'unknown':
+    case 'unavailable':
+    case 'stale':
+    case 'demo':
+    case 'mock':
+    case 'partial':
+    case 'live':
+    case 'verified':
+      return normalized;
+    case 'mocked':
+      return 'mock';
+    case '':
+      return 'unknown';
+    default:
+      return normalized;
+  }
+}
+
+export function terrainRiskV1Label(category: TerrainRiskV1Category): string {
+  switch (category) {
+    case 'low':
+      return 'Low';
+    case 'moderate':
+      return 'Moderate';
+    case 'elevated':
+      return 'Elevated';
+    case 'severe':
+      return 'Severe';
+    case 'unknown':
+    default:
+      return 'Unknown';
+  }
+}
+
+function addTerrainReason(
+  list: TerrainRiskV1Reason[],
+  id: string,
+  label: string,
+  tone: TerrainRiskV1ReasonTone,
+): void {
+  if (list.some((reason) => reason.id === id)) return;
+  list.push({ id, label, tone });
+}
+
+function terrainCategoryFromScore(score: number): TerrainRiskV1Category {
+  if (score >= 76) return 'severe';
+  if (score >= 51) return 'elevated';
+  if (score >= 26) return 'moderate';
+  return 'low';
+}
+
+function terrainRecommendedAction(
+  category: TerrainRiskV1Category,
+  missing: TerrainRiskV1Reason[],
+): TerrainRiskV1Result['recommendedAction'] {
+  const missingIds = new Set(missing.map((reason) => reason.id));
+  if (missingIds.has('approach_only') || missingIds.has('trailhead_guidance') || missingIds.has('route_geometry_missing') || missingIds.has('demo_route') || missingIds.has('preview_geometry')) {
+    return { id: 'verify_trail_geometry', label: 'Verify trail terrain' };
+  }
+  if (missingIds.has('vehicle_missing') || missingIds.has('vehicle_incomplete')) {
+    return { id: 'complete_vehicle_profile', label: 'Complete vehicle profile' };
+  }
+  if (missingIds.has('weather_unavailable') || missingIds.has('weather_unknown')) {
+    return { id: 'review_weather', label: 'Review weather before departure' };
+  }
+  if (missingIds.has('remoteness_unknown')) {
+    return { id: 'review_remoteness', label: 'Review remoteness context' };
+  }
+  if (missingIds.has('elevation_unavailable')) {
+    return { id: 'review_elevation_grade', label: 'Review elevation and grade' };
+  }
+  if (category === 'elevated' || category === 'severe') {
+    return { id: 'reduce_terrain_exposure', label: 'Reduce terrain exposure' };
+  }
+  return { id: 'proceed_with_caution', label: 'Proceed with caution' };
+}
+
+function terrainDifficultyRisk(value: string | number | null): { label: string | null; score: number } {
+  const numeric = terrainNumber(value);
+  if (numeric != null) {
+    if (numeric >= 8) return { label: String(value), score: 34 };
+    if (numeric >= 5) return { label: String(value), score: 20 };
+    if (numeric >= 3) return { label: String(value), score: 12 };
+    return { label: String(value), score: 3 };
+  }
+
+  const difficulty = terrainToken(value);
+  if (!difficulty) return { label: null, score: 0 };
+  if (['severe', 'extreme', 'black_diamond'].includes(difficulty)) return { label: difficulty.replace(/_/g, ' '), score: 36 };
+  if (['hard', 'difficult', 'technical', 'high'].includes(difficulty)) return { label: difficulty.replace(/_/g, ' '), score: 26 };
+  if (['moderate', 'medium'].includes(difficulty)) return { label: difficulty.replace(/_/g, ' '), score: 14 };
+  if (['easy', 'low', 'graded'].includes(difficulty)) return { label: difficulty.replace(/_/g, ' '), score: 4 };
+  return { label: difficulty.replace(/_/g, ' '), score: 10 };
+}
+
+function terrainVehicleStatus(vehicle: TerrainRiskV1Input['vehicle']): TerrainRiskV1Result['vehicle']['status'] {
+  const explicit = terrainToken(vehicle?.status);
+  if (explicit === 'complete' || explicit === 'incomplete' || explicit === 'missing' || explicit === 'unknown') {
+    return explicit;
+  }
+  if (!vehicle) return 'missing';
+  if (!cleanTerrainText(vehicle.label) || !cleanTerrainText(vehicle.vehicleType) || terrainNumber(vehicle.rangeMiles) == null) {
+    return 'incomplete';
+  }
+  return 'complete';
+}
+
+function buildUnknownTerrainResult(
+  input: TerrainRiskV1Input,
+  missing: TerrainRiskV1Reason[],
+  riskReasons: TerrainRiskV1Reason[] = [],
+  dataState: TerrainRiskV1DataState = 'partial',
+): TerrainRiskV1Result {
+  const route = normalizeTerrainRoute(input);
+  const vehicleStatus = terrainVehicleStatus(input.vehicle);
+  const knownLimitations = Array.from(new Set(missing.map((reason) => reason.label)));
+  const recommendedAction = terrainRecommendedAction('unknown', missing);
+
+  return {
+    category: 'unknown',
+    label: terrainRiskV1Label('unknown'),
+    score: null,
+    headline: `${terrainRiskV1Label('unknown')} - ${recommendedAction.label}`,
+    riskReasons,
+    missingDataReasons: missing,
+    route,
+    vehicle: {
+      status: vehicleStatus,
+      label: cleanTerrainText(input.vehicle?.label),
+    },
+    weather: terrainStatusSummary(input.weather),
+    daylight: terrainStatusSummary(input.daylight),
+    remoteness: terrainStatusSummary(input.remoteness),
+    elevation: terrainStatusSummary(input.elevation),
+    dataConfidence: {
+      state: dataState,
+      knownLimitations,
+    },
+    recommendedAction,
+  };
+}
+
+function normalizeTerrainRoute(input: TerrainRiskV1Input): TerrainRiskV1Result['route'] {
+  return {
+    authorityStatus: terrainToken(input.route?.authorityStatus) || 'unknown',
+    authorityLabel: cleanTerrainText(input.route?.authorityLabel) ?? 'Unknown Route Authority',
+    geometryStatus: terrainToken(input.route?.geometryStatus) || 'unknown',
+    geometrySource: cleanTerrainText(input.route?.geometrySource),
+    geometryValid: input.route?.geometryValid === true,
+    distanceMiles: terrainNumber(input.route?.distanceMiles),
+    trailDifficulty: cleanTerrainText(input.route?.trailDifficulty),
+  };
+}
+
+function terrainStatusSummary(input: TerrainRiskV1StatusInput | null | undefined): TerrainRiskV1Result['weather'] {
+  return {
+    status: normalizeTerrainDataState(input?.status),
+    label: cleanTerrainText(input?.label),
+  };
+}
+
+function routeHasVerifiedTrailTerrain(route: TerrainRiskV1Result['route']): boolean {
+  const trueTrailGeometry = ['trail_available', 'trail_route', 'imported_geometry', 'live_verified_geometry', 'verified'].includes(route.geometryStatus);
+  return route.geometryValid && trueTrailGeometry;
+}
+
+export function evaluateTerrainRiskV1(input: TerrainRiskV1Input): TerrainRiskV1Result {
+  const route = normalizeTerrainRoute(input);
+  const missing: TerrainRiskV1Reason[] = [];
+  const riskReasons: TerrainRiskV1Reason[] = [];
+
+  if (route.geometryStatus === 'approach_only') {
+    addTerrainReason(missing, 'approach_only', 'Approach route only. Trail terrain not verified.', 'critical');
+    return buildUnknownTerrainResult(input, missing, riskReasons, 'partial');
+  }
+
+  if (route.authorityStatus === 'trailhead_guidance' && !routeHasVerifiedTrailTerrain(route)) {
+    addTerrainReason(missing, 'trailhead_guidance', 'Trailhead guidance only. Trail terrain not available.', 'critical');
+    return buildUnknownTerrainResult(input, missing, riskReasons, 'partial');
+  }
+
+  if (route.authorityStatus === 'demo_fixture') {
+    addTerrainReason(missing, 'demo_route', 'Demo route. Terrain risk not verified.', 'critical');
+    return buildUnknownTerrainResult(input, missing, riskReasons, 'demo');
+  }
+
+  if (!routeHasVerifiedTrailTerrain(route)) {
+    addTerrainReason(missing, 'route_geometry_missing', 'Route geometry missing.', 'critical');
+    return buildUnknownTerrainResult(input, missing, riskReasons, 'unknown');
+  }
+
+  const preview = route.authorityStatus === 'preview_geometry';
+  if (preview) {
+    addTerrainReason(missing, 'preview_geometry', 'Preview geometry. Terrain risk limited.', 'caution');
+  } else if (route.authorityStatus === 'live_verified_geometry' || route.authorityStatus === 'imported_geometry' || route.authorityStatus === 'trail_route' || route.authorityStatus === 'expedition_itinerary') {
+    addTerrainReason(riskReasons, 'verified_trail_geometry', 'Verified trail geometry available.', 'positive');
+  } else {
+    addTerrainReason(missing, 'route_authority_unknown', 'Route authority unknown.', 'watch');
+  }
+
+  let score = preview ? 32 : 22;
+  const difficulty = terrainDifficultyRisk(route.trailDifficulty);
+  if (difficulty.label) {
+    score += difficulty.score;
+    addTerrainReason(riskReasons, 'trail_difficulty_known', `Known trail difficulty: ${difficulty.label}.`, difficulty.score >= 26 ? 'caution' : difficulty.score >= 14 ? 'watch' : 'positive');
+  } else {
+    score += 8;
+    addTerrainReason(missing, 'trail_difficulty_unknown', 'Trail difficulty unknown.', 'watch');
+  }
+
+  if (route.distanceMiles != null) {
+    if (route.distanceMiles >= 60) {
+      score += 14;
+      addTerrainReason(riskReasons, 'route_distance_long', 'Long trail distance increases exposure.', 'caution');
+    } else if (route.distanceMiles >= 25) {
+      score += 7;
+      addTerrainReason(riskReasons, 'route_distance_moderate', 'Moderate trail distance exposure.', 'watch');
+    } else {
+      score += 3;
+      addTerrainReason(riskReasons, 'route_distance_known', 'Route distance available.', 'positive');
+    }
+  } else {
+    score += 8;
+    addTerrainReason(missing, 'route_distance_unknown', 'Route distance unknown.', 'watch');
+  }
+
+  const vehicleStatus = terrainVehicleStatus(input.vehicle);
+  if (vehicleStatus === 'missing') {
+    score += 12;
+    addTerrainReason(missing, 'vehicle_missing', 'Vehicle profile missing.', 'caution');
+  } else if (vehicleStatus === 'incomplete' || vehicleStatus === 'unknown') {
+    score += 7;
+    addTerrainReason(missing, 'vehicle_incomplete', 'Vehicle profile incomplete.', 'watch');
+  } else {
+    addTerrainReason(riskReasons, 'vehicle_profile_complete', 'Vehicle profile available.', 'positive');
+  }
+
+  const weather = terrainStatusSummary(input.weather);
+  if (weather.status === 'unavailable') {
+    score += 12;
+    addTerrainReason(missing, 'weather_unavailable', 'Weather unavailable.', 'caution');
+  } else if (weather.status === 'unknown') {
+    score += 8;
+    addTerrainReason(missing, 'weather_unknown', 'Weather unknown.', 'watch');
+  } else if (weather.status === 'stale') {
+    score += 6;
+    addTerrainReason(missing, 'weather_stale', 'Weather stale.', 'watch');
+  } else if (['elevated', 'caution', 'warning', 'severe'].includes(String(weather.status))) {
+    score += weather.status === 'severe' ? 22 : 12;
+    addTerrainReason(riskReasons, 'weather_elevated', 'Weather may increase terrain risk.', 'caution');
+  } else {
+    addTerrainReason(riskReasons, 'weather_available', 'Weather input available.', 'positive');
+  }
+
+  const remoteness = terrainStatusSummary(input.remoteness);
+  const remotenessScore = terrainNumber(input.remoteness?.score);
+  if (remoteness.status === 'unknown' || remoteness.status === 'unavailable') {
+    score += 5;
+    addTerrainReason(missing, 'remoteness_unknown', 'Remoteness unknown.', 'watch');
+  } else if (remotenessScore != null && remotenessScore >= 70) {
+    score += 12;
+    addTerrainReason(riskReasons, 'remote_route', 'High remoteness increases recovery exposure.', 'caution');
+  } else if (remotenessScore != null && remotenessScore >= 40) {
+    score += 6;
+    addTerrainReason(riskReasons, 'moderate_remoteness', 'Moderate remoteness exposure.', 'watch');
+  } else {
+    addTerrainReason(riskReasons, 'remoteness_available', 'Remoteness input available.', 'positive');
+  }
+
+  const elevation = terrainStatusSummary(input.elevation);
+  if (elevation.status === 'unknown' || elevation.status === 'unavailable') {
+    score += 8;
+    addTerrainReason(missing, 'elevation_unavailable', 'Elevation/grade unavailable.', 'watch');
+  } else if (['elevated', 'caution', 'warning', 'severe'].includes(String(elevation.status))) {
+    score += elevation.status === 'severe' ? 20 : 10;
+    addTerrainReason(riskReasons, 'elevation_grade_elevated', 'Elevation or grade may increase terrain risk.', 'caution');
+  } else {
+    addTerrainReason(riskReasons, 'elevation_available', 'Elevation/grade input available.', 'positive');
+  }
+
+  const daylight = terrainStatusSummary(input.daylight);
+  if (daylight.status === 'unknown' || daylight.status === 'unavailable') {
+    addTerrainReason(missing, 'daylight_unknown', 'Daylight unknown.', 'watch');
+  } else if (['limited', 'caution', 'warning'].includes(String(daylight.status))) {
+    score += 5;
+    addTerrainReason(riskReasons, 'daylight_limited', 'Limited daylight increases terrain exposure.', 'watch');
+  }
+
+  let category = terrainCategoryFromScore(clamp(Math.round(score), 0, 100));
+  if (preview && category === 'low') category = 'moderate';
+  if (category === 'low' && missing.length > 0) category = 'moderate';
+  if (category === 'severe' && !riskReasons.some((reason) => reason.tone === 'critical' || /severe|high|long|remote|weather|grade/i.test(reason.label))) {
+    category = 'elevated';
+  }
+  const finalScore = clamp(Math.round(score), 0, 100);
+  const dataState = terrainRiskDataConfidence(route, missing, input.dataState);
+  const recommendedAction = terrainRecommendedAction(category, missing);
+
+  return {
+    category,
+    label: terrainRiskV1Label(category),
+    score: finalScore,
+    headline: `${terrainRiskV1Label(category)} - ${recommendedAction.label}`,
+    riskReasons,
+    missingDataReasons: missing,
+    route,
+    vehicle: {
+      status: vehicleStatus,
+      label: cleanTerrainText(input.vehicle?.label),
+    },
+    weather,
+    daylight,
+    remoteness,
+    elevation,
+    dataConfidence: {
+      state: dataState,
+      knownLimitations: Array.from(new Set(missing.map((reason) => reason.label))),
+    },
+    recommendedAction,
+  };
+}
+
+function terrainRiskDataConfidence(
+  route: TerrainRiskV1Result['route'],
+  missing: TerrainRiskV1Reason[],
+  inputState: TerrainRiskV1Input['dataState'],
+): TerrainRiskV1DataState {
+  const explicit = normalizeTerrainDataState(inputState);
+  if (explicit === 'demo' || explicit === 'mock' || explicit === 'stale') return explicit;
+  if (route.authorityStatus === 'demo_fixture') return 'demo';
+  if (missing.some((reason) => reason.tone === 'critical' || reason.tone === 'caution')) return 'partial';
+  if (route.authorityStatus === 'live_verified_geometry') return 'verified';
+  if (route.authorityStatus === 'imported_geometry' || route.authorityStatus === 'trail_route' || route.authorityStatus === 'expedition_itinerary') return 'available';
+  if (explicit === 'verified' || explicit === 'live' || explicit === 'available' || explicit === 'partial' || explicit === 'unknown' || explicit === 'unavailable') return explicit;
+  return 'unknown';
+}
+
+export function evaluateTerrainRiskForActiveTrip(snapshot: TerrainRiskSnapshotLike | null | undefined): TerrainRiskV1Result {
+  return evaluateTerrainRiskV1({
+    route: {
+      authorityStatus: snapshot?.route?.authorityStatus,
+      authorityLabel: snapshot?.route?.authorityLabel,
+      geometryStatus: snapshot?.route?.geometryStatus,
+      geometrySource: snapshot?.route?.geometrySource,
+      geometryValid: snapshot?.route?.geometryValid,
+      distanceMiles: snapshot?.route?.distanceMiles,
+    },
+    vehicle: {
+      status: snapshot?.vehicle?.id ? undefined : snapshot?.vehicle ? 'incomplete' : 'missing',
+      label: snapshot?.vehicle?.label,
+      vehicleType: snapshot?.vehicle?.vehicleType,
+      rangeMiles: snapshot?.vehicle?.rangeMiles,
+    },
+    weather: {
+      status: snapshot?.routeConfidence?.metadata?.weatherStatus ?? 'unknown',
+      label: snapshot?.routeConfidence?.metadata?.weatherStatus
+        ? `Weather ${snapshot.routeConfidence.metadata.weatherStatus}`
+        : 'Weather unknown',
+    },
+    daylight: { status: 'unknown', label: 'Daylight unknown' },
+    remoteness: { status: 'unknown', label: 'Remoteness unknown' },
+    elevation: { status: 'unknown', label: 'Elevation/grade unavailable' },
+    dataState: snapshot?.freshness?.state ?? snapshot?.routeConfidence?.dataConfidence?.state,
+  });
+}
+
+export function evaluateTerrainRiskForOfflineIncidentPacket(packet: TerrainRiskPacketLike | null | undefined): TerrainRiskV1Result {
+  return evaluateTerrainRiskV1({
+    route: {
+      authorityStatus: packet?.route?.authorityStatus,
+      authorityLabel: packet?.route?.authorityLabel,
+      geometryStatus: packet?.route?.geometryStatus,
+      geometrySource: packet?.route?.geometrySource,
+      geometryValid: packet?.route?.geometryValid,
+      distanceMiles: packet?.route?.distanceMiles,
+    },
+    vehicle: {
+      status: packet?.vehicle ? undefined : 'missing',
+      label: packet?.vehicle?.label,
+      vehicleType: packet?.vehicle?.vehicleType,
+      rangeMiles: packet?.vehicle?.rangeMiles,
+    },
+    weather: { status: 'unknown', label: 'Weather unknown from local packet' },
+    daylight: { status: 'unknown', label: 'Daylight unknown from local packet' },
+    remoteness: { status: 'unknown', label: 'Remoteness unknown from local packet' },
+    elevation: { status: 'unknown', label: 'Elevation/grade unavailable from local packet' },
+    dataState: packet?.dataFreshness?.state,
+  });
+}
+
