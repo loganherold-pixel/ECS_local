@@ -284,6 +284,55 @@ function routeContextCandidateCount(
   return null;
 }
 
+function userPreferenceText(userPreferences: Record<string, unknown> | null | undefined, key: string): string {
+  return String(userPreferences?.[key] ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function userPreferenceDisabled(userPreferences: Record<string, unknown> | null | undefined, key: string): boolean {
+  const value = userPreferences?.[key];
+  return value === false || userPreferenceText(userPreferences, key) === 'false' || userPreferenceText(userPreferences, key) === 'no';
+}
+
+function preTrailBucketRequested(
+  bucket: PreTrailStopBucket,
+  userPreferences: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!userPreferences) return true;
+
+  const preference =
+    userPreferenceText(userPreferences, 'smartResupplyPreference') ||
+    userPreferenceText(userPreferences, 'smart_resupply_preference') ||
+    userPreferenceText(userPreferences, 'preTrailPoiPreference');
+
+  if (preference === 'no' || preference === 'none' || preference === 'disabled' || preference === 'not_requested') {
+    return false;
+  }
+
+  if (bucket === 'fuel') {
+    if (userPreferenceDisabled(userPreferences, 'refuelEnabled') || userPreferenceDisabled(userPreferences, 'fuelEnabled')) {
+      return false;
+    }
+    return true;
+  }
+
+  if (bucket === 'water') {
+    return false;
+  }
+
+  if (
+    userPreferenceDisabled(userPreferences, 'resupplyEnabled') ||
+    userPreferenceDisabled(userPreferences, 'suppliesEnabled')
+  ) {
+    return false;
+  }
+
+  if (preference === 'fuel_only' || preference === 'fuel' || preference === 'refuel_only') {
+    return false;
+  }
+
+  return true;
+}
+
 function stopDistanceFromTrailheadMiles(anchor: GeoPoint | null, coordinate: GeoPoint | null): number | null {
   if (!anchor || !coordinate) return null;
   return Math.round(haversineDistanceMiles(anchor, coordinate) * 10) / 10;
@@ -869,6 +918,7 @@ function bucketSummary(args: {
   selectedCount: number;
   providerCandidateCount: number;
   providerAvailable: boolean;
+  requested: boolean;
   routeContextCount: number | null;
   generatedAt: string;
   dataUsed: ItineraryDataSource[];
@@ -878,13 +928,16 @@ function bucketSummary(args: {
   const warnings: string[] = [];
   let status: ItineraryPreTrailStopSearchSummary['status'];
 
-  if (!args.anchor) {
-    status = 'missing_anchor';
-    warnings.push('Trailhead start is unavailable, so pre-trail stops cannot be searched relative to the trailhead.');
-  } else if (args.selectedCount > 0) {
+  if (args.selectedCount > 0) {
     status = 'selected';
   } else if (args.stopCount > 0) {
     status = 'ranked';
+  } else if (!args.requested) {
+    status = 'not_requested';
+    warnings.push('Pre-trail POI planning not requested.');
+  } else if (!args.anchor) {
+    status = 'missing_anchor';
+    warnings.push('Trailhead start is unavailable, so pre-trail stops cannot be searched relative to the trailhead.');
   } else if (args.providerAvailable) {
     status = 'no_results';
     warnings.push('Pre-trail provider search returned no usable stops for this bucket.');
@@ -911,6 +964,7 @@ function bucketSummary(args: {
     metadata: {
       searchAnchor: args.anchorBasis,
       providerAvailable: args.providerAvailable,
+      requested: args.requested,
       providerCandidateCount: args.providerCandidateCount,
       routeContextCandidateCount: args.routeContextCount,
       candidateCountBeforeDedupe: args.candidateCountBeforeDedupe,
@@ -944,12 +998,16 @@ export function rankPreTrailStops({
       'Future providers should search relative to trailheadStart, not user GPS.',
     ],
   });
+  const notRequestedSource = source('pre_trail_poi_planning', 'manual', {
+    notes: ['Pre-trail POI planning not requested.'],
+  });
   const providerResultSource = source('pre_trail_poi_provider', 'cached', {
     provider: 'pre_trail_candidates',
     notes: ['Pre-trail candidate data was ranked relative to the trailhead start.'],
   });
   const candidateItems = candidateEntries(candidates);
   const providerIsAvailable = providerAvailable ?? candidates != null;
+  const anyBucketRequested = ITINERARY_PRE_TRAIL_STOP_BUCKETS.some((bucket) => preTrailBucketRequested(bucket, userPreferences));
   const ranked: RankedPreTrailCandidate[] = [];
 
   ITINERARY_PRE_TRAIL_STOP_BUCKETS.forEach((bucket) => {
@@ -1009,7 +1067,8 @@ export function rankPreTrailStops({
 
   const dataUsed = dedupeDataSources([
     ...(rankedCandidates.some((candidate) => candidate.source.label === selectedSource.label) ? [selectedSource] : []),
-    ...(providerIsAvailable ? [providerResultSource] : [providerUnavailableSource]),
+    ...(!anyBucketRequested ? [notRequestedSource] : []),
+    ...(anyBucketRequested ? (providerIsAvailable ? [providerResultSource] : [providerUnavailableSource]) : []),
     ...rankedCandidates.map((candidate) => candidate.source),
     ...(userPreferences ? [source('pre_trail_user_preferences', 'manual')] : []),
     ...(vehicleProfile ? [source('pre_trail_vehicle_profile', 'manual', { confidence: vehicleProfile.confidence ?? null })] : []),
@@ -1017,6 +1076,7 @@ export function rankPreTrailStops({
 
   const bucketSummaries = ITINERARY_PRE_TRAIL_STOP_BUCKETS.map((bucket) => {
     const selectedCount = selectedPreTrailOptions?.[bucket]?.length ?? 0;
+    const requested = preTrailBucketRequested(bucket, userPreferences);
     const providerCandidateCount = candidateItems.filter((item) => (
       item.bucketHint === bucket ||
       (isRecord(item.candidate) && candidateBucket(item.candidate as Record<string, unknown>, item.bucketHint) === bucket)
@@ -1025,7 +1085,7 @@ export function rankPreTrailStops({
     const duplicateCount = Math.max(0, selectedCount + providerCandidateCount - stopCount);
     const bucketDataUsed = dedupeDataSources([
       ...(selectedCount > 0 ? [selectedSource] : []),
-      ...(providerIsAvailable ? [providerResultSource] : [providerUnavailableSource]),
+      ...(!requested ? [notRequestedSource] : providerIsAvailable ? [providerResultSource] : [providerUnavailableSource]),
       ...rankedCandidates
         .filter((candidate) => candidate.bucket === bucket)
         .map((candidate) => candidate.source),
@@ -1038,6 +1098,7 @@ export function rankPreTrailStops({
       selectedCount,
       providerCandidateCount,
       providerAvailable: providerIsAvailable,
+      requested,
       routeContextCount: null,
       generatedAt,
       dataUsed: bucketDataUsed,

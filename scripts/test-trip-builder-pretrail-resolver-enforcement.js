@@ -22,6 +22,9 @@ const {
   rankPreTrailStops,
   resolvePreTrailStops,
 } = require(path.join(root, 'lib', 'tripBuilder', 'preTrailResupplyResolver.ts'));
+const {
+  filterBailoutPlanCandidates,
+} = require(path.join(root, 'lib', 'tripBuilder', 'bailoutCandidateQuality.ts'));
 
 const screen = fs.readFileSync(path.join(root, 'app', 'explore-trip-builder.tsx'), 'utf8');
 const itineraryBuilder = fs.readFileSync(path.join(root, 'lib', 'tripBuilder', 'tripItineraryBuilderService.ts'), 'utf8');
@@ -142,6 +145,87 @@ assert.ok(
   'An available provider with an empty candidate list should be reported as no_results, not provider_unavailable.',
 );
 
+const farBailoutFilter = filterBailoutPlanCandidates({
+  providerCandidates: [{
+    id: 'mapbox-tennessee-noise',
+    title: 'Tennessee Highway 197',
+    source: 'mapbox_search',
+    coordinate: { latitude: 35.63, longitude: -88.62 },
+    distanceFromRouteStartMiles: 1800.5,
+  }],
+  routeFallbackCandidates: [{
+    id: 'ecs-mid-route-bailout-search',
+    title: 'Mid-route bailout search',
+    source: 'ecs_suggested',
+    coordinate: { latitude: 38.04, longitude: -110.04 },
+    distanceFromRouteStartMiles: 3.8,
+  }],
+  routeStart: trailheadStart.coordinate,
+  routePoints: approachRoute.geometry,
+  limit: 5,
+});
+assert.deepStrictEqual(
+  farBailoutFilter.candidates.map((candidate) => candidate.id),
+  ['ecs-mid-route-bailout-search'],
+  'Far-away provider bailout noise should be rejected while route-derived fallback candidates remain.',
+);
+assert.strictEqual(farBailoutFilter.rejectedProviderCount, 1);
+assert.strictEqual(farBailoutFilter.usedRouteFallback, true);
+
+const noBailoutCandidates = filterBailoutPlanCandidates({
+  providerCandidates: [{
+    id: 'mapbox-far-noise',
+    title: 'Wrong state highway',
+    source: 'mapbox_search',
+    coordinate: { latitude: 42, longitude: -74 },
+    distanceFromRouteStartMiles: 1600,
+  }],
+  routeFallbackCandidates: [],
+  routeStart: trailheadStart.coordinate,
+  routePoints: approachRoute.geometry,
+  limit: 5,
+});
+assert.deepStrictEqual(
+  noBailoutCandidates.candidates,
+  [],
+  'Rejected provider candidates with no route-derived fallback should leave no usable bailout candidates.',
+);
+
+const skippedSmartResupply = resolvePreTrailStops({
+  trailheadStart,
+  candidates: null,
+  providerAvailable: false,
+  userPreferences: { smartResupplyPreference: 'no' },
+  generatedAt,
+});
+assert.ok(
+  skippedSmartResupply.bucketSummaries.every((summary) => summary.status === 'not_requested'),
+  'Skipping smart resupply should emit not_requested instead of provider_unavailable.',
+);
+
+const fuelOnlyResupply = resolvePreTrailStops({
+  trailheadStart,
+  candidates: null,
+  providerAvailable: false,
+  userPreferences: { smartResupplyPreference: 'fuel_only' },
+  generatedAt,
+});
+assert.strictEqual(
+  statusFor(fuelOnlyResupply, 'fuel').status,
+  'provider_unavailable',
+  'Fuel-only planning still requests refuel lookup, so provider failure should remain visible.',
+);
+assert.strictEqual(
+  statusFor(fuelOnlyResupply, 'grocery').status,
+  'not_requested',
+  'Fuel-only planning should not report grocery/resupply lookup as provider unavailable.',
+);
+assert.strictEqual(
+  statusFor(fuelOnlyResupply, 'water').status,
+  'not_requested',
+  'Fuel-only planning should keep water lookup neutral when not requested.',
+);
+
 assertIncludes(
   itineraryBuilder,
   'resolvePreTrailStops({',
@@ -166,6 +250,21 @@ assertIncludes(
   screen,
   'routeStart: selectedPreTrailSupplyAnchorCoordinate',
   'Live grocery/supply search should use the refuel-anchored resolver input instead of independently searching the trailhead',
+);
+assertIncludes(
+  screen,
+  'filterBailoutPlanCandidates({',
+  'Trip Builder should filter provider bailout candidates before replacing route-derived fallbacks',
+);
+assertIncludes(
+  screen,
+  'setBailoutOptionsLoading(false);',
+  'Trip Builder should clear bailout loading state on early-return/final states',
+);
+assertIncludes(
+  screen,
+  'No usable bailout candidates were found near this route.',
+  'Trip Builder should show honest no-results copy when no bailout candidates survive filtering',
 );
 
 console.log('Trip Builder pre-trail resolver enforcement checks passed.');

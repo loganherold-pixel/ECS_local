@@ -120,12 +120,45 @@ assert.strictEqual(
 );
 assert.strictEqual(
   summary.phases.find((phase) => phase.key === 'fuel_supplies').status,
-  'pending',
-  'Trip Builder summary should show scaffolded pre-trail buckets as pending when providers are unavailable.',
+  'unavailable',
+  'Trip Builder summary should show unavailable pre-trail buckets as unavailable when providers are unavailable.',
+);
+assert.strictEqual(
+  summary.phases.find((phase) => phase.key === 'fuel_supplies').detail,
+  'Provider unavailable',
+  'Trip Builder summary should distinguish provider unavailable from pending/updating.',
 );
 assert.ok(
   summary.dataNotes.some((note) => /true trail geometry is unavailable/i.test(note)),
   'Summary data notes should explain that approach guidance was not promoted to trail navigation.',
+);
+
+const skippedPoiItinerary = buildTripItineraryFromSuggestedRoute({
+  suggestedRoute: {
+    id: 'qa-skipped-poi',
+    name: 'QA Skipped POI Route',
+    routeGeometry: approachGeometry,
+  },
+  userLocation: { latitude: 37.89, longitude: -110.31 },
+  userPreferences: { smartResupplyPreference: 'no' },
+  preTrailProviderAvailable: false,
+  generatedAt: '2026-05-30T12:00:00.000Z',
+});
+assert.ok(
+  skippedPoiItinerary.preTrailStopStatus.every((item) => item.status === 'not_requested'),
+  'Skipped smart resupply should persist not_requested on the generated itinerary.',
+);
+const skippedPoiSummary = getTripItinerarySummary(skippedPoiItinerary);
+const skippedPoiPhase = skippedPoiSummary.phases.find((phase) => phase.key === 'fuel_supplies');
+assert.strictEqual(skippedPoiPhase.status, 'optional');
+assert.strictEqual(skippedPoiPhase.detail, 'Not requested');
+assert.ok(
+  skippedPoiSummary.dataNotes.some((note) => /pre-trail poi planning not requested/i.test(note)),
+  'Skipped smart resupply should use explicit not-requested summary copy.',
+);
+assert.ok(
+  !skippedPoiSummary.dataNotes.some((note) => /provider data is unavailable|provider pending/i.test(note)),
+  'Skipped smart resupply must not display provider unavailable or pending copy.',
 );
 
 const renderData = tripItineraryToMapboxRenderData(approachOnlyItinerary);

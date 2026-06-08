@@ -1932,6 +1932,13 @@ function AuthGate() {
                 }}
               />
               <Stack.Screen
+                name="active-trip"
+                options={{
+                  animation: 'fade_from_bottom',
+                  animationDuration: MOTION.modalSlide,
+                }}
+              />
+              <Stack.Screen
                 name="expedition-archive"
                 options={{
                   animation: 'fade_from_bottom',

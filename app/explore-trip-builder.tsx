@@ -40,6 +40,7 @@ import {
   buildTripPlan,
   clearTripBuilderRouteHandoff,
   createMapboxRouteContextProviderRegistry,
+  filterBailoutPlanCandidates,
   acceptTripItineraryEditItem,
   addUserItineraryStop,
   addUserTrailWaypoint,
@@ -101,6 +102,7 @@ import {
   loadExplorePlanningRouteContext,
   upsertExplorePlanningRoute,
 } from '../lib/explore/explorePlanningRouteContextStore';
+import { activeTripModeStore } from '../lib/activeTripMode';
 import { loadoutItemStore, loadoutStore } from '../lib/loadoutStore';
 import {
   createRoadSearchSessionToken,
@@ -2606,7 +2608,13 @@ async function loadBailoutPlanOptions(params: {
     )
     .slice(0, BAILOUT_OPTION_LIMIT);
 
-  return (mapboxOptions.length > 0 ? mapboxOptions : suggested).slice(0, BAILOUT_OPTION_LIMIT);
+  return filterBailoutPlanCandidates({
+    providerCandidates: mapboxOptions,
+    routeFallbackCandidates: suggested,
+    routeStart,
+    routePoints: params.routePoints,
+    limit: BAILOUT_OPTION_LIMIT,
+  }).candidates;
 }
 
 function interpolateTripRouteCoordinate(
@@ -3288,6 +3296,8 @@ export default function ExploreTripBuilderScreen() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTripActivating, setActiveTripActivating] = useState(false);
+  const [activeTripActivationError, setActiveTripActivationError] = useState<string | null>(null);
   const roadSearchSessionTokenRef = useRef(createRoadSearchSessionToken());
   const smartResupplyFuelOptionsRef = useRef<SmartResupplyPoi[]>([]);
   const smartResupplySupplyOptionsRef = useRef<SmartResupplyPoi[]>([]);
@@ -4083,6 +4093,7 @@ export default function ExploreTripBuilderScreen() {
   useEffect(() => {
     setSelectedBailoutPoint(null);
     setBailoutOptions([]);
+    setBailoutOptionsLoading(false);
     setBailoutOptionsError(null);
   }, [selectedRouteId]);
 
@@ -4096,6 +4107,8 @@ export default function ExploreTripBuilderScreen() {
     if (bailoutPlanPreference === 'no') {
       setBailoutPickerVisible(false);
       setSelectedBailoutPoint(null);
+      setBailoutOptions([]);
+      setBailoutOptionsLoading(false);
       setBailoutOptionsError(null);
       return;
     }
@@ -4104,6 +4117,7 @@ export default function ExploreTripBuilderScreen() {
       : [selectedRouteStartCoordinate, selectedRouteEndCoordinate].filter(isValidMapCoordinate);
     if (routePoints.length < 2) {
       setBailoutOptions([]);
+      setBailoutOptionsLoading(false);
       setBailoutOptionsError('Route geometry is unavailable, so ECS cannot suggest bailout points. Tap the map if available or select No.');
       return;
     }
@@ -4121,7 +4135,14 @@ export default function ExploreTripBuilderScreen() {
           sessionToken: roadSearchSessionTokenRef.current,
           routePoints,
         });
-        if (!cancelled) setBailoutOptions(options);
+        if (!cancelled) {
+          setBailoutOptions(options);
+          setBailoutOptionsError(
+            options.length === 0
+              ? 'No usable bailout candidates were found near this route. Use Map Pick or select No.'
+              : null,
+          );
+        }
       } catch (searchError) {
         if (!cancelled) {
           setBailoutOptions([]);
@@ -4618,6 +4639,49 @@ export default function ExploreTripBuilderScreen() {
       setItinerarySearchError(selectError instanceof Error ? selectError.message : 'Selected location could not be added.');
     } finally {
       setItinerarySearchLoading(false);
+    }
+  };
+
+  const handleActivateTrip = async () => {
+    const itineraryForActiveTrip = editableTripItinerary ?? selectedTripItinerary;
+    if (!plan || !selectedRoute || !itineraryForActiveTrip) {
+      setActiveTripActivationError('Build or preview an itinerary before activating Active Trip Mode.');
+      return;
+    }
+
+    hapticMicro();
+    setActiveTripActivating(true);
+    setActiveTripActivationError(null);
+    try {
+      activeTripModeStore.activate({
+        itinerary: itineraryForActiveTrip,
+        selectedRoute: selectedRoute as unknown as TripBuilderRouteInput,
+        vehicleProfile,
+        plan,
+        routeConfidence: tripConfidenceSummary,
+        lastKnownLocation: liveTripBuilderUserLocation,
+        environment: {
+          weather: { status: 'unknown', label: 'Trip Builder weather unavailable' },
+          daylight: { status: 'unknown', label: 'Trip Builder daylight unavailable' },
+          remoteness: {
+            status: selectedRoute.remotenessScore != null ? 'available' : 'unknown',
+            score: selectedRoute.remotenessScore ?? null,
+          },
+        },
+        telemetry: { status: 'unavailable', label: 'Telemetry unavailable for Trip Builder MVP' },
+      });
+      await activeTripModeStore.flush();
+      setPlanMapScope(null);
+      setPlanModalVisible(false);
+      router.push('/active-trip' as any);
+    } catch (activationError) {
+      setActiveTripActivationError(
+        activationError instanceof Error
+          ? activationError.message
+          : 'Active Trip Mode could not be started from this itinerary.',
+      );
+    } finally {
+      setActiveTripActivating(false);
     }
   };
 
@@ -5204,6 +5268,35 @@ export default function ExploreTripBuilderScreen() {
                     >
                       <TripConfidenceSummaryPanel summary={tripConfidenceSummary} />
                       <ItinerarySummaryPanel summary={itinerarySummary} />
+                      <View style={styles.activeTripActionCard}>
+                        <View style={styles.activeTripActionCopy}>
+                          <Text style={styles.activeTripActionTitle}>Active Trip Snapshot</Text>
+                          <Text style={styles.activeTripActionText} numberOfLines={2}>
+                            Start a local, read-only operational trip from this itinerary and keep current warnings visible.
+                          </Text>
+                          {activeTripActivationError ? (
+                            <Text style={styles.activeTripActionError}>{activeTripActivationError}</Text>
+                          ) : null}
+                        </View>
+                        <TouchableOpacity
+                          style={[styles.activeTripButton, activeTripActivating && styles.activeTripButtonDisabled]}
+                          activeOpacity={activeTripActivating ? 1 : 0.84}
+                          disabled={activeTripActivating}
+                          onPress={handleActivateTrip}
+                          accessibilityRole="button"
+                          accessibilityLabel="Activate Trip"
+                          testID="trip-builder-activate-trip"
+                        >
+                          {activeTripActivating ? (
+                            <ActivityIndicator size="small" color="#081014" />
+                          ) : (
+                            <Ionicons name="navigate-circle-outline" size={14} color="#081014" />
+                          )}
+                          <Text style={styles.activeTripButtonText}>
+                            {activeTripActivating ? 'Starting' : 'Activate Trip'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                       <ItineraryReviewPanel
                         review={itineraryReview}
                         editing={itineraryEditMode}
@@ -6133,6 +6226,59 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: '900',
     letterSpacing: 0.9,
+    textTransform: 'uppercase',
+  },
+  activeTripActionCard: {
+    minHeight: 56,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '28',
+    backgroundColor: TACTICAL.amber + '0B',
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  activeTripActionCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  activeTripActionTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  activeTripActionText: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '700',
+  },
+  activeTripActionError: {
+    marginTop: 2,
+    color: '#EF5350',
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '800',
+  },
+  activeTripButton: {
+    minHeight: 31,
+    borderRadius: 10,
+    backgroundColor: TACTICAL.amber,
+    paddingHorizontal: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  activeTripButtonDisabled: { opacity: 0.56 },
+  activeTripButtonText: {
+    color: '#081014',
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   tripConfidencePanel: {

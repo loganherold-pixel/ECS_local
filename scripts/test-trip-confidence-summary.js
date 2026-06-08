@@ -309,6 +309,24 @@ const providerUnavailable = getTripConfidenceSummary({
 assert.ok(providerUnavailable.keyWarnings.some((warning) => /provider unavailable/i.test(warning)));
 assert.ok(labels(providerUnavailable).includes('POI provider unavailable'));
 
+const poiNotRequested = getTripConfidenceSummary({
+  itinerary: itinerary({
+    fuelStops: [],
+    groceryStops: [],
+    preTrailStopStatus: [
+      { bucket: 'fuel', status: 'not_requested', anchorCoordinate: pointA, stopCount: 0, warnings: ['Pre-trail POI planning not requested.'] },
+      { bucket: 'grocery', status: 'not_requested', anchorCoordinate: pointA, stopCount: 0, warnings: ['Pre-trail POI planning not requested.'] },
+      { bucket: 'water', status: 'not_requested', anchorCoordinate: pointA, stopCount: 0, warnings: ['Pre-trail POI planning not requested.'] },
+      { bucket: 'generalSupply', status: 'not_requested', anchorCoordinate: pointA, stopCount: 0, warnings: ['Pre-trail POI planning not requested.'] },
+    ],
+  }),
+  selectedRoute: { id: 'route-3b', name: 'POI Not Requested', routeMetadata: { routeTypeStatus: 'imported_geometry' } },
+  vehicleProfile: completeVehicle,
+});
+
+assert.ok(!poiNotRequested.keyWarnings.some((warning) => /provider unavailable/i.test(warning)));
+assert.ok(!labels(poiNotRequested).includes('POI provider unavailable'));
+
 const demo = getTripConfidenceSummary({
   itinerary: itinerary({
     metadata: { routeTypeStatus: 'demo_fixture', geometrySource: 'ecs_demo_full_route_fixture' },

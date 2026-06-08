@@ -6,6 +6,7 @@ export * from './fuelRangeConfidenceResolver';
 export * from './trailWaypointIntelligenceResolver';
 export * from './trailWaypointScoring';
 export * from './bailoutRouteConfidenceResolver';
+export * from './bailoutCandidateQuality';
 export * from './tripItineraryMapboxAdapter';
 export * from './tripItinerarySummary';
 export * from './tripItineraryReview';

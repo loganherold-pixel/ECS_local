@@ -148,6 +148,7 @@
     "test:trip-confidence-summary": "node ./scripts/test-trip-confidence-summary.js",
     "test:route-confidence-engine": "node ./scripts/test-route-confidence-engine.js",
     "test:trip-confidence-qa-fixtures": "node ./scripts/test-trip-confidence-qa-fixtures.js",
+    "test:active-trip-mode-foundation": "node ./scripts/test-active-trip-mode-foundation.js",
     "test:explore-tripbuilder-manifest-export": "node ./scripts/test-explore-tripbuilder-manifest-export.js",
     "test:explore-suggested-trailheads-production-guard": "node ./scripts/test-explore-suggested-trailheads-production-guard.js",
     "test:canonical-route-geometry-normalizer": "node ./scripts/test-canonical-route-geometry-normalizer.js",

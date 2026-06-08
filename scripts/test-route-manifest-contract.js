@@ -57,6 +57,7 @@ assert.deepStrictEqual(
   ['/explore', 'explore'],
   ['/explore-trip-builder', 'explore'],
   ['/explore-offline-prep-pack', 'explore'],
+  ['/active-trip', 'explore'],
   ['/alert', 'dispatch'],
   ['/safety', 'dispatch'],
   ['/intel', 'dispatch'],
@@ -74,6 +75,7 @@ assert.deepStrictEqual(
 [
   ['/explore-trip-builder', '/discover'],
   ['/explore-offline-prep-pack', '/discover'],
+  ['/active-trip', '/discover'],
   ['/convoy-command', '/alert'],
   ['/expedition-dispatch', '/alert'],
 ].forEach(([route, expectedRestorable]) => {
@@ -97,6 +99,11 @@ assert.deepStrictEqual(
   assert.ok(isProtectedRoutePath(`/${screen}`), `/${screen} should be recognized as protected.`);
 });
 
+assert.strictEqual(
+  isSharedShellBackgroundRoute('/active-trip'),
+  true,
+  '/active-trip should retain shared shell background behavior as an Explore-owned child route.',
+);
 assert.strictEqual(
   isSharedShellBackgroundRoute('/convoy-command'),
   true,

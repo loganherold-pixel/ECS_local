@@ -62,14 +62,22 @@ export type TripItinerarySummaryViewModel = {
     hasTrailEnd: boolean;
     hasPreTrailPoiUnavailable: boolean;
     routeGeometryStatus: TripItinerary['routeGeometryStatus'] | null;
+    preTrailPoiState: TripItinerarySummaryPreTrailState;
   };
 };
 
 const PRE_TRAIL_BUCKETS: ItineraryPreTrailStopBucket[] = ['fuel', 'grocery', 'water', 'generalSupply'];
 
+export type TripItinerarySummaryPreTrailState =
+  | 'available'
+  | 'not_requested'
+  | 'provider_unavailable'
+  | 'pending'
+  | 'no_results'
+  | 'optional';
+
 const POI_UNAVAILABLE_STATUSES: ItineraryPreTrailStopBucketStatus[] = [
   'provider_unavailable',
-  'provider_pending',
   'missing_anchor',
 ];
 
@@ -91,6 +99,17 @@ function hasPreTrailPoiUnavailable(itinerary: TripItinerary, stopCount: number):
   return summaries.some((summary) => POI_UNAVAILABLE_STATUSES.includes(summary.status));
 }
 
+function preTrailPoiState(itinerary: TripItinerary | null | undefined, stopCount: number): TripItinerarySummaryPreTrailState {
+  if (stopCount > 0) return 'available';
+  const summaries = itinerary?.preTrailStopStatus ?? [];
+  if (summaries.length === 0) return 'optional';
+  if (summaries.every((summary) => summary.status === 'not_requested')) return 'not_requested';
+  if (summaries.some((summary) => summary.status === 'provider_pending')) return 'pending';
+  if (summaries.some((summary) => POI_UNAVAILABLE_STATUSES.includes(summary.status))) return 'provider_unavailable';
+  if (summaries.some((summary) => summary.status === 'no_results')) return 'no_results';
+  return 'optional';
+}
+
 function hasTrueTrailRoute(itinerary: TripItinerary): boolean {
   return routeHasGeometry(itinerary.trailRoute);
 }
@@ -100,6 +119,7 @@ function dataNotes(args: {
   hasUserStart: boolean;
   hasApproachRoute: boolean;
   hasPreTrailPoiUnavailable: boolean;
+  preTrailState: TripItinerarySummaryPreTrailState;
   hasTrailRoute: boolean;
   hasTrailWaypoints: boolean;
   hasTrailEnd: boolean;
@@ -109,7 +129,10 @@ function dataNotes(args: {
 
   if (!args.hasUserStart) notes.push('GPS start is pending; approach routing remains incomplete.');
   if (!args.hasApproachRoute) notes.push('Approach geometry is unavailable or has not been resolved yet.');
-  if (args.hasPreTrailPoiUnavailable) notes.push('Pre-trail fuel and supply buckets are scaffolded, but provider data is unavailable.');
+  if (args.preTrailState === 'not_requested') notes.push('Pre-trail POI planning not requested.');
+  if (args.preTrailState === 'provider_unavailable') notes.push('POI provider unavailable for pre-trail fuel and supply planning.');
+  if (args.preTrailState === 'pending') notes.push('Pre-trail POI planning is still updating.');
+  if (args.preTrailState === 'no_results') notes.push('No nearby refuel or resupply candidates were found.');
   if (!args.hasTrailRoute) notes.push('True trail geometry is unavailable; approach guidance was not promoted to trail navigation.');
   if (!args.hasTrailWaypoints) notes.push('No verified camp, scenic, bailout, hazard, or user waypoint data has been added yet.');
   if (!args.hasTrailEnd) notes.push('Trail end is unavailable and was not inferred from the approach route.');
@@ -138,6 +161,7 @@ function buildPhases(args: {
   preTrailCount: number;
   hasUserStart: boolean;
   hasPreTrailPoiUnavailable: boolean;
+  preTrailState: TripItinerarySummaryPreTrailState;
   hasTrailRoute: boolean;
   hasTrailWaypoints: boolean;
   hasTrailEnd: boolean;
@@ -156,12 +180,24 @@ function buildPhases(args: {
       key: 'fuel_supplies',
       phase: 'pre_trail_resupply',
       label: 'Fuel/Supplies',
-      status: args.preTrailCount > 0 ? 'available' : args.hasPreTrailPoiUnavailable ? 'pending' : 'optional',
+      status: args.preTrailCount > 0
+        ? 'available'
+        : args.preTrailState === 'pending'
+          ? 'pending'
+          : args.preTrailState === 'provider_unavailable'
+            ? 'unavailable'
+            : 'optional',
       detail: args.preTrailCount > 0
         ? `${args.preTrailCount} stop${args.preTrailCount === 1 ? '' : 's'}`
-        : args.hasPreTrailPoiUnavailable
-          ? 'Provider pending'
-          : 'No stops selected',
+        : args.preTrailState === 'not_requested'
+          ? 'Not requested'
+          : args.preTrailState === 'pending'
+            ? 'Updating'
+            : args.preTrailState === 'provider_unavailable'
+              ? 'Provider unavailable'
+              : args.preTrailState === 'no_results'
+                ? 'No candidates found'
+                : 'No stops selected',
       count: args.preTrailCount,
     },
     {
@@ -218,6 +254,7 @@ export function getTripItinerarySummary(
         preTrailCount: 0,
         hasUserStart: false,
         hasPreTrailPoiUnavailable: false,
+        preTrailState: 'optional',
         hasTrailRoute: false,
         hasTrailWaypoints: false,
         hasTrailEnd: false,
@@ -232,6 +269,7 @@ export function getTripItinerarySummary(
         hasTrailWaypoints: false,
         hasTrailEnd: false,
         hasPreTrailPoiUnavailable: false,
+        preTrailPoiState: 'optional',
         routeGeometryStatus: null,
       },
     };
@@ -241,6 +279,7 @@ export function getTripItinerarySummary(
   const hasApproachRoute = routeHasGeometry(itinerary.approachRoute);
   const preTrailCount = preTrailStopCount(itinerary);
   const hasPreTrailStops = preTrailCount > 0;
+  const preTrailState = preTrailPoiState(itinerary, preTrailCount);
   const hasPreTrailPoiMissing = hasPreTrailPoiUnavailable(itinerary, preTrailCount);
   const hasTrailheadStart = !!itinerary.trailheadStart?.coordinate;
   const hasTrailRoute = hasTrueTrailRoute(itinerary);
@@ -269,6 +308,7 @@ export function getTripItinerarySummary(
       preTrailCount,
       hasUserStart,
       hasPreTrailPoiUnavailable: hasPreTrailPoiMissing,
+      preTrailState,
       hasTrailRoute,
       hasTrailWaypoints,
       hasTrailEnd,
@@ -278,6 +318,7 @@ export function getTripItinerarySummary(
       hasUserStart,
       hasApproachRoute,
       hasPreTrailPoiUnavailable: hasPreTrailPoiMissing,
+      preTrailState,
       hasTrailRoute,
       hasTrailWaypoints,
       hasTrailEnd,
@@ -291,6 +332,7 @@ export function getTripItinerarySummary(
       hasTrailWaypoints,
       hasTrailEnd,
       hasPreTrailPoiUnavailable: hasPreTrailPoiMissing,
+      preTrailPoiState: preTrailState,
       routeGeometryStatus: itinerary.routeGeometryStatus,
     },
   };
