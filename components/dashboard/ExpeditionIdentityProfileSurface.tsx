@@ -41,6 +41,23 @@ export function ExpeditionIdentityProfileSurface({
         {model.hasEarnedState ? model.titleBasis : 'Complete expeditions to build this profile.'}
       </Text>
 
+      <View style={styles.detailGrid}>
+        <View style={styles.detailTile}>
+          <Text style={styles.detailLabel}>Latest Badge</Text>
+          <Text style={styles.detailValue} numberOfLines={1}>
+            {model.latestEarnedBadge ? model.latestEarnedBadge.title : 'None earned yet'}
+          </Text>
+        </View>
+        <View style={styles.detailTile}>
+          <Text style={styles.detailLabel}>Next Milestone</Text>
+          <Text style={styles.detailValue} numberOfLines={1}>
+            {model.nextMilestone
+              ? `${model.nextMilestone.remainingCount} to ${model.nextMilestone.label}`
+              : 'Milestone depth reached'}
+          </Text>
+        </View>
+      </View>
+
       {model.excludedBadgeCount > 0 ? (
         <Text style={styles.guardCopy}>Demo/mock badge state ignored.</Text>
       ) : null}
@@ -122,6 +139,33 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '700',
     lineHeight: 13,
+  },
+  detailGrid: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  detailTile: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 42,
+    justifyContent: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: 'rgba(0,0,0,0.16)',
+    paddingHorizontal: 8,
+  },
+  detailLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  detailValue: {
+    marginTop: 3,
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
   },
   guardCopy: {
     color: TACTICAL.textMuted,

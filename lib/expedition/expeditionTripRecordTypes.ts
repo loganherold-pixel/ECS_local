@@ -83,7 +83,8 @@ export type ExpeditionBadgeEvaluationType =
   | 'season'
   | 'context_terms'
   | 'clean_completion'
-  | 'hidden_combo';
+  | 'hidden_combo'
+  | 'safe_signal';
 
 export type ExpeditionBadgeEvaluationConfig = {
   threshold?: number;
@@ -118,6 +119,7 @@ export type ExpeditionBadgeEvaluationConfig = {
   requireAll?: boolean;
   maxRouteEvents?: number;
   maxRecoveryUsage?: number;
+  signalId?: string;
 };
 
 export interface ExpeditionBadge {

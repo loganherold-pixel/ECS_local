@@ -1,0 +1,50 @@
+[
+  {
+    "Command": "npm run test:badge-expedition-identity-mvp",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run test:badge-expedition-identity-readiness",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run test:expedition-badge-system",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run test:expedition-badge-visual-system",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run test:expedition-badge-collection-view",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run test:active-trip-mode-foundation",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run test:offline-incident-packet-foundation",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run test:terrain-risk-v1",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run test:camp-viability-score-v1",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run lint",
+    "ExitCode": 0
+  },
+  {
+    "Command": "npm run smoke -- --json",
+    "ExitCode": 0
+  },
+  {
+    "Command": "git diff --check",
+    "ExitCode": 0
+  }
+]

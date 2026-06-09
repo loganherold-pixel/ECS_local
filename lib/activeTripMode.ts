@@ -18,9 +18,7 @@ import {
   type OfflineIncidentPacketStore,
 } from './offlineIncidentPacket';
 
-declare const require: (id: string) => {
-  createPersistedKeyValueCache: (fileKey: string) => ActiveTripModeStorage;
-};
+declare const require: (id: string) => any;
 
 export const ACTIVE_TRIP_MODE_STORAGE_FILE = 'ecs_active_trip_mode';
 export const ACTIVE_TRIP_MODE_STORAGE_KEY = 'active_trip_mode_snapshot';
@@ -163,6 +161,27 @@ const RESUPPLY_BUCKETS: ItineraryPreTrailStopBucket[] = ['grocery', 'water', 'ge
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function recordBadgeIdentitySafeSignal(input: {
+  signalId: string;
+  source?: string | null;
+  occurredAt?: string | null;
+  sourceQuality?: string | null;
+}): Promise<unknown> {
+  try {
+    const badgeStore = require('./expedition/expeditionBadgeStore') as typeof import('./expedition/expeditionBadgeStore');
+    return badgeStore.recordBadgeIdentitySafeSignal(input).catch(() => []);
+  } catch {
+    return Promise.resolve([]);
+  }
+}
+
+function routeAuthorityIsSourceBacked(status: string | null | undefined): boolean {
+  return status === 'trail_route' ||
+    status === 'expedition_itinerary' ||
+    status === 'imported_geometry' ||
+    status === 'live_verified_geometry';
 }
 
 function cleanText(value: unknown): string | null {
@@ -458,6 +477,11 @@ export function createActiveTripModeStore({
       const snapshot = buildActiveTripModeSnapshot(args);
       storage.set(ACTIVE_TRIP_MODE_STORAGE_KEY, JSON.stringify(snapshot));
       incidentPacketStore?.createOrUpdateFromActiveTrip(snapshot, snapshot.updatedAt);
+      void recordBadgeIdentitySafeSignal({ signalId: 'active_trip_activated', source: 'active_trip_mode', occurredAt: snapshot.updatedAt }).catch(() => null);
+      void recordBadgeIdentitySafeSignal({ signalId: 'offline_incident_packet_created', source: 'active_trip_mode', occurredAt: snapshot.updatedAt }).catch(() => null);
+      if (routeAuthorityIsSourceBacked(snapshot.route.authorityStatus)) {
+        void recordBadgeIdentitySafeSignal({ signalId: 'route_authority_recognized', source: 'active_trip_mode', occurredAt: snapshot.updatedAt }).catch(() => null);
+      }
       return cloneSnapshot(snapshot);
     },
 
@@ -476,6 +500,7 @@ export function createActiveTripModeStore({
       if (!snapshot) return null;
       const recovered = markActiveTripModeSnapshotRecovered(snapshot, now);
       incidentPacketStore?.createOrUpdateFromActiveTrip(recovered, now);
+      void recordBadgeIdentitySafeSignal({ signalId: 'active_trip_resumed_after_restart', source: 'active_trip_mode', occurredAt: now }).catch(() => null);
       return recovered;
     },
 
@@ -548,6 +573,9 @@ export function createActiveTripModeStore({
       };
       storage.delete(ACTIVE_TRIP_MODE_STORAGE_KEY);
       incidentPacketStore?.clear();
+      if (current) {
+        void recordBadgeIdentitySafeSignal({ signalId: 'clean_trip_stopped_or_completed', source: 'active_trip_mode', occurredAt: now }).catch(() => null);
+      }
       return cloneSnapshot(stopped);
     },
 

@@ -28,6 +28,7 @@ import {
   type CampViabilityV1Category,
   type CampViabilityV1Result,
 } from '../lib/campViabilityEngine';
+import { recordBadgeIdentitySafeSignal } from '../lib/expedition/expeditionBadgeStore';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { ECS, TACTICAL } from '../lib/theme';
 
@@ -112,6 +113,27 @@ function campViabilityColor(category: CampViabilityV1Category): string {
     default:
       return TACTICAL.textMuted;
   }
+}
+
+function isUnavailableLike(value: unknown): boolean {
+  const token = String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return token === 'unknown' || token === 'unavailable' || token === 'stale' || token === 'partial';
+}
+
+function terrainHasUnavailableState(terrainRisk: TerrainRiskV1Result): boolean {
+  return isUnavailableLike(terrainRisk.dataConfidence.state) ||
+    isUnavailableLike(terrainRisk.weather.status) ||
+    isUnavailableLike(terrainRisk.daylight.status) ||
+    isUnavailableLike(terrainRisk.remoteness.status) ||
+    isUnavailableLike(terrainRisk.elevation.status) ||
+    terrainRisk.missingDataReasons.length > 0;
+}
+
+function campHasUnavailableState(campViability: CampViabilityV1Result): boolean {
+  return isUnavailableLike(campViability.dataConfidence.state) ||
+    isUnavailableLike(campViability.camp.sourceStatus) ||
+    isUnavailableLike(campViability.camp.legalStatus) ||
+    campViability.missingDataReasons.length > 0;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -295,6 +317,22 @@ export default function ActiveTripScreen() {
     () => snapshot ? evaluateCampViabilityForActiveTrip(snapshot, terrainRisk) : null,
     [snapshot, terrainRisk],
   );
+
+  useEffect(() => {
+    if (!snapshot || !terrainRisk) return;
+    void recordBadgeIdentitySafeSignal({ signalId: 'terrain_risk_evaluated', source: 'active_trip_screen', sourceQuality: terrainRisk.dataConfidence.state, occurredAt: snapshot.updatedAt }).catch(() => null);
+    if (terrainHasUnavailableState(terrainRisk)) {
+      void recordBadgeIdentitySafeSignal({ signalId: 'unavailable_state_handled', source: 'active_trip_screen', sourceQuality: terrainRisk.dataConfidence.state, occurredAt: snapshot.updatedAt }).catch(() => null);
+    }
+  }, [snapshot, terrainRisk]);
+
+  useEffect(() => {
+    if (!snapshot || !campViability) return;
+    void recordBadgeIdentitySafeSignal({ signalId: 'camp_viability_evaluated', source: 'active_trip_screen', sourceQuality: campViability.dataConfidence.state, occurredAt: snapshot.updatedAt }).catch(() => null);
+    if (campHasUnavailableState(campViability)) {
+      void recordBadgeIdentitySafeSignal({ signalId: 'unavailable_state_handled', source: 'active_trip_screen', sourceQuality: campViability.dataConfidence.state, occurredAt: snapshot.updatedAt }).catch(() => null);
+    }
+  }, [snapshot, campViability]);
 
   const handleStopTrip = useCallback(async () => {
     setStopping(true);

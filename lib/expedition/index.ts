@@ -47,6 +47,7 @@ export {
 export {
   BADGE_IDENTITY_CATEGORIES,
   BADGE_IDENTITY_DEFERRED_SIGNALS,
+  BADGE_IDENTITY_MVP_BADGE_MAPPING,
   BADGE_IDENTITY_PRODUCTION_GUARDS,
   BADGE_IDENTITY_SAFE_SIGNALS,
   BADGE_IDENTITY_SOURCE_OF_TRUTH,
@@ -60,6 +61,7 @@ export {
 
 export type {
   BadgeIdentityCategoryRecommendation,
+  BadgeIdentityMvpSignalId,
   BadgeIdentitySignal,
   BadgeIdentitySignalStatus,
   BadgeIdentityProfileBadgeInput,
@@ -78,6 +80,11 @@ export {
   getRecentBadgeUnlocks,
   getUnlockedBadges,
   hasBadge,
+  recordBadgeIdentitySafeSignal,
+} from './expeditionBadgeStore';
+
+export type {
+  BadgeIdentitySafeSignalInput,
 } from './expeditionBadgeStore';
 
 export {

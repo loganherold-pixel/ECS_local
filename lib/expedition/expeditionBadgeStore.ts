@@ -1,5 +1,11 @@
 import { createMigratingNonSecureStorage } from '../nonSecureStorage';
 import {
+  BADGE_IDENTITY_MVP_BADGE_MAPPING,
+  isBadgeIdentitySignalDeferred,
+  isBadgeIdentitySignalSafe,
+  type BadgeIdentityMvpSignalId,
+} from './badgeExpeditionIdentityReadiness';
+import {
   EXPEDITION_BADGE_DEFINITIONS,
   getBadgeDefinition,
 } from './expeditionBadgeRegistry';
@@ -22,6 +28,16 @@ const badgeStorage = createMigratingNonSecureStorage('ecs_expedition_badges', {
 type PersistedExpeditionBadges = {
   version: number;
   badges: ExpeditionBadge[];
+};
+
+export type BadgeIdentitySafeSignalInput = {
+  signalId: string;
+  source?: string | null;
+  occurredAt?: string | null;
+  sourceQuality?: string | null;
+  dataQuality?: string | null;
+  isDemo?: boolean | null;
+  isMock?: boolean | null;
 };
 
 type BadgeEvaluationContext = {
@@ -71,6 +87,30 @@ function finiteNumberOrNull(value: unknown): number | null {
 
 function nullableString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function qualityToken(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function isMockOrDemoSignal(input: BadgeIdentitySafeSignalInput): boolean {
+  if (input.isDemo || input.isMock) return true;
+  const tokens = [
+    input.source,
+    input.sourceQuality,
+    input.dataQuality,
+  ].map(qualityToken);
+  return tokens.some((token) => (
+    token.includes('mock') ||
+    token.includes('demo') ||
+    token.includes('fixture') ||
+    token.includes('test_only')
+  ));
+}
+
+function badgeIdForSafeSignal(signalId: string): string | null {
+  if (!isBadgeIdentitySignalSafe(signalId) || isBadgeIdentitySignalDeferred(signalId)) return null;
+  return BADGE_IDENTITY_MVP_BADGE_MAPPING[signalId as BadgeIdentityMvpSignalId] ?? null;
 }
 
 function badgeCategoryFromUnknown(value: unknown): ExpeditionBadge['category'] {
@@ -466,6 +506,8 @@ function shouldUnlockBadge(definition: ExpeditionBadgeDefinition, context: Badge
       return hasSeasonMatch(definition, context);
     case 'clean_completion':
       return hasCleanCompletion(definition, context);
+    case 'safe_signal':
+      return false;
     case 'hidden_combo':
       return hasHiddenCombo(definition, context);
     default:
@@ -756,6 +798,33 @@ export async function getBadgesForTrip(tripId: string): Promise<ExpeditionBadge[
 export async function getRecentBadgeUnlocks(limit = 5): Promise<ExpeditionBadge[]> {
   const unlocked = await getUnlockedBadges();
   return unlocked.slice(0, Math.max(0, limit));
+}
+
+export async function recordBadgeIdentitySafeSignal(input: BadgeIdentitySafeSignalInput): Promise<ExpeditionBadge[]> {
+  try {
+    if (isMockOrDemoSignal(input)) return [];
+    const badgeId = badgeIdForSafeSignal(input.signalId);
+    if (!badgeId) return [];
+    const definition = getBadgeDefinition(badgeId);
+    if (!definition) return [];
+
+    const snapshot = await loadSnapshot();
+    if (snapshot.badges.some((badge) => badge.id === badgeId && !!badge.unlockedAt)) return [];
+
+    const unlockedAt = nullableString(input.occurredAt) ?? nowISO();
+    const badge = badgeFromDefinition(definition, {
+      unlockedAt,
+      unlockedTripId: null,
+      progressCurrent: 1,
+    });
+    await saveSnapshot({
+      version: STORAGE_VERSION,
+      badges: upsertBadges(snapshot.badges, [badge]),
+    });
+    return [badge];
+  } catch {
+    return [];
+  }
 }
 
 export async function getCurrentExpeditionBadgeTitle(): Promise<string | null> {

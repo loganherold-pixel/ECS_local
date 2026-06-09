@@ -78,6 +78,15 @@ export type BadgeIdentityProfileModel = {
     category: ExpeditionBadgeCategory;
     unlockedAt: string;
   }>;
+  latestEarnedBadge: {
+    id: string;
+    title: string;
+    unlockedAt: string;
+  } | null;
+  nextMilestone: {
+    label: string;
+    remainingCount: number;
+  } | null;
 };
 
 export const BADGE_IDENTITY_SOURCE_OF_TRUTH = {
@@ -173,6 +182,22 @@ export const BADGE_IDENTITY_SAFE_SIGNALS: BadgeIdentitySignal[] = [
     reason: 'Can reward honest unavailable-state handling only when copy remains explicit.',
   },
 ];
+
+export const BADGE_IDENTITY_MVP_BADGE_MAPPING = {
+  vehicle_profile_completed: 'profile-ready',
+  trip_confidence_summary_generated: 'confidence-checked',
+  active_trip_activated: 'trip-activated',
+  active_trip_resumed_after_restart: 'resume-ready',
+  offline_incident_packet_created: 'local-packet-ready',
+  local_only_packet_viewed: 'packet-reviewed',
+  terrain_risk_evaluated: 'terrain-aware',
+  camp_viability_evaluated: 'basecamp-reviewed',
+  clean_trip_stopped_or_completed: 'clean-stop',
+  route_authority_recognized: 'route-authority-recognized',
+  unavailable_state_handled: 'honest-unknown',
+} as const;
+
+export type BadgeIdentityMvpSignalId = keyof typeof BADGE_IDENTITY_MVP_BADGE_MAPPING;
 
 export const BADGE_IDENTITY_DEFERRED_SIGNALS: BadgeIdentitySignal[] = [
   {
@@ -449,6 +474,29 @@ function normalizeProfileBadge(input: BadgeIdentityProfileBadgeInput): BadgeIden
   };
 }
 
+function compareEarnedBadgeDates(
+  left: BadgeIdentityProfileModel['visibleEarnedBadges'][number],
+  right: BadgeIdentityProfileModel['visibleEarnedBadges'][number],
+): number {
+  return new Date(right.unlockedAt).getTime() - new Date(left.unlockedAt).getTime();
+}
+
+function nextProfileMilestone(earnedBadgeCount: number): BadgeIdentityProfileModel['nextMilestone'] {
+  const milestones = [
+    { target: 1, label: 'First earned badge' },
+    { target: 5, label: '5 earned badges' },
+    { target: 10, label: '10 earned badges' },
+    { target: 25, label: 'Field Commander app title depth' },
+  ];
+  const next = milestones.find((milestone) => earnedBadgeCount < milestone.target);
+  return next
+    ? {
+      label: next.label,
+      remainingCount: Math.max(0, next.target - earnedBadgeCount),
+    }
+    : null;
+}
+
 function buildCategoryCounts(input: BadgeIdentityTitleInput | undefined, badgeIds: string[]): Partial<Record<ExpeditionBadgeCategory, number>> {
   const counts: Partial<Record<ExpeditionBadgeCategory, number>> = {
     ...(input?.categoryCounts ?? {}),
@@ -540,12 +588,14 @@ export function buildBadgeIdentityProfileModel(input: { badges?: BadgeIdentityPr
   const rawBadges = Array.isArray(input.badges) ? input.badges : [];
   const visibleEarnedBadges = rawBadges
     .map(normalizeProfileBadge)
-    .filter((badge): badge is BadgeIdentityProfileModel['visibleEarnedBadges'][number] => !!badge);
+    .filter((badge): badge is BadgeIdentityProfileModel['visibleEarnedBadges'][number] => !!badge)
+    .sort(compareEarnedBadgeDates);
   const earnedBadgeIds = visibleEarnedBadges.map((badge) => badge.id);
   const title = deriveExpeditionIdentityTitle({
     earnedBadgeIds,
     earnedBadgeCount: visibleEarnedBadges.length,
   });
+  const latest = visibleEarnedBadges[0] ?? null;
 
   return {
     title: title.title,
@@ -556,5 +606,13 @@ export function buildBadgeIdentityProfileModel(input: { badges?: BadgeIdentityPr
     hasEarnedState: visibleEarnedBadges.length > 0,
     excludedBadgeCount: Math.max(0, rawBadges.length - visibleEarnedBadges.length),
     visibleEarnedBadges,
+    latestEarnedBadge: latest
+      ? {
+        id: latest.id,
+        title: latest.title,
+        unlockedAt: latest.unlockedAt,
+      }
+      : null,
+    nextMilestone: nextProfileMilestone(visibleEarnedBadges.length),
   };
 }

@@ -24,6 +24,7 @@ import { vehicleStore } from '../../lib/vehicleStore';
 import { FUEL_WEIGHT_PER_GAL, vehicleSpecStore, type FuelType } from '../../lib/vehicleSpecStore';
 import { consumablesStore, WATER_DENSITY_LB_PER_GAL } from '../../lib/consumablesStore';
 import { tiresLiftStore } from '../../lib/tiresLiftStore';
+import { recordBadgeIdentitySafeSignal } from '../../lib/expedition/expeditionBadgeStore';
 import {
   applyFleetProfilePrefillOption,
   calculateConfirmedPayloadRemaining,
@@ -627,6 +628,7 @@ export default function FleetVehicleProfileModal({
         showToast?.(firstError);
         return;
       }
+      void recordBadgeIdentitySafeSignal({ signalId: 'vehicle_profile_completed', source: 'fleet_profile', occurredAt: new Date().toISOString() }).catch(() => null);
       showToast?.('Vehicle profile saved');
       onSaved?.();
       handleClose();
@@ -662,6 +664,7 @@ export default function FleetVehicleProfileModal({
       }
 
       const targetVehicle = profileResult.vehicle;
+      void recordBadgeIdentitySafeSignal({ signalId: 'vehicle_profile_completed', source: 'fleet_profile', occurredAt: new Date().toISOString() }).catch(() => null);
       const waterGallons = normalized.waterGallons;
       const fuelGallons = normalized.fuelGallons;
       const fuelType = resolveFuelType(targetVehicle);

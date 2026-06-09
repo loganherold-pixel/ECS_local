@@ -28,6 +28,7 @@ import {
   type CampViabilityV1Category,
   type CampViabilityV1Result,
 } from '../lib/campViabilityEngine';
+import { recordBadgeIdentitySafeSignal } from '../lib/expedition/expeditionBadgeStore';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { ECS, TACTICAL } from '../lib/theme';
 
@@ -293,6 +294,11 @@ export default function OfflineIncidentPacketScreen() {
     () => packet ? evaluateCampViabilityForOfflineIncidentPacket(packet, terrainRisk) : null,
     [packet, terrainRisk],
   );
+
+  useEffect(() => {
+    if (!packet) return;
+    void recordBadgeIdentitySafeSignal({ signalId: 'local_only_packet_viewed', source: 'offline_incident_packet', sourceQuality: packet.dataFreshness.state, occurredAt: packet.packetUpdatedAt }).catch(() => null);
+  }, [packet]);
 
   const handleClearPacket = useCallback(async () => {
     offlineIncidentPacketStore.clear();

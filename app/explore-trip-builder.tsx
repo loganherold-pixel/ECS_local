@@ -35,6 +35,7 @@ import {
 } from '../lib/readiness/exploreRouteReadiness';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { hapticMicro } from '../lib/haptics';
+import { recordBadgeIdentitySafeSignal } from '../lib/expedition/expeditionBadgeStore';
 import {
   buildTripItineraryFromSuggestedRoute,
   buildTripPlan,
@@ -1430,6 +1431,10 @@ function tripConfidenceSectionStatusColor(status: TripConfidenceSectionStatus): 
 
 function TripConfidenceSummaryPanel({ summary }: { summary: TripConfidenceSummaryViewModel }) {
   const accent = tripConfidenceCategoryColor(summary.category);
+  useEffect(() => {
+    void recordBadgeIdentitySafeSignal({ signalId: 'trip_confidence_summary_generated', source: 'trip_builder', occurredAt: new Date().toISOString() }).catch(() => null);
+  }, [summary.category, summary.route.routeId, summary.score]);
+
   return (
     <View style={styles.tripConfidencePanel} testID="trip-builder-trip-confidence-summary">
       <View style={styles.tripConfidenceHeader}>

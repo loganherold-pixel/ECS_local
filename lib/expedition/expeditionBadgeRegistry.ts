@@ -58,6 +58,20 @@ const FIRST_BADGES: ExpeditionBadgeDefinition[] = [
   makeBadge('first-route-deviation', 'First Route Deviation', 'Completed your first expedition with a recorded route deviation.', 'firsts', 'common', 'reroute', 'route_event_count', { threshold: 1 }),
 ];
 
+const IDENTITY_MVP_BADGES: ExpeditionBadgeDefinition[] = [
+  makeBadge('profile-ready', 'Profile Ready', 'Completed a saved Fleet profile for ECS planning context.', 'firsts', 'common', 'vehicle', 'safe_signal', { signalId: 'vehicle_profile_completed' }),
+  makeBadge('confidence-checked', 'Confidence Checked', 'Generated a deterministic Trip Confidence summary.', 'exploration', 'common', 'checkmark', 'safe_signal', { signalId: 'trip_confidence_summary_generated' }),
+  makeBadge('trip-activated', 'Trip Activated', 'Started Active Trip Mode from a local itinerary snapshot.', 'firsts', 'common', 'route', 'safe_signal', { signalId: 'active_trip_activated' }),
+  makeBadge('resume-ready', 'Resume Ready', 'Recovered an Active Trip snapshot after restart.', 'consistency', 'common', 'compass', 'safe_signal', { signalId: 'active_trip_resumed_after_restart' }),
+  makeBadge('local-packet-ready', 'Local Packet Ready', 'Created a local-only Offline Incident Packet.', 'recovery', 'common', 'document', 'safe_signal', { signalId: 'offline_incident_packet_created' }),
+  makeBadge('packet-reviewed', 'Packet Reviewed', 'Opened a local-only Offline Incident Packet for review.', 'recovery', 'common', 'document', 'safe_signal', { signalId: 'local_only_packet_viewed' }),
+  makeBadge('terrain-aware', 'Terrain Aware', 'Reviewed deterministic Terrain Risk output.', 'terrain', 'common', 'terrain', 'safe_signal', { signalId: 'terrain_risk_evaluated' }),
+  makeBadge('basecamp-reviewed', 'Basecamp Reviewed', 'Reviewed deterministic Camp Viability output without legal or safety claims.', 'exploration', 'common', 'camp', 'safe_signal', { signalId: 'camp_viability_evaluated' }),
+  makeBadge('clean-stop', 'Clean Stop', 'Stopped Active Trip Mode without deleting saved trip, Fleet, packet, or catalog data.', 'route_behavior', 'common', 'checkmark', 'safe_signal', { signalId: 'clean_trip_stopped_or_completed' }),
+  makeBadge('route-authority-recognized', 'Route Authority Recognized', 'Reviewed visible source-backed route authority metadata.', 'route_behavior', 'common', 'map', 'safe_signal', { signalId: 'route_authority_recognized' }),
+  makeBadge('honest-unknown', 'Honest Unknown', 'Handled unavailable or unknown field data without treating it as safe or live.', 'exploration', 'common', 'caution', 'safe_signal', { signalId: 'unavailable_state_handled' }),
+];
+
 const DISTANCE_BADGES: ExpeditionBadgeDefinition[] = [
   makeBadge('miles-50', '50 Miles Explored', 'Logged 50 completed expedition miles.', 'distance', 'common', 'route', 'lifetime_distance', { threshold: 50 }),
   makeBadge('miles-100', '100 Miles Explored', 'Logged 100 completed expedition miles.', 'distance', 'uncommon', 'route', 'lifetime_distance', { threshold: 100 }),
@@ -241,6 +255,7 @@ const SEASONAL_BADGES: ExpeditionBadgeDefinition[] = [
 
 export const EXPEDITION_BADGE_DEFINITIONS: ExpeditionBadgeDefinition[] = [
   ...FIRST_BADGES,
+  ...IDENTITY_MVP_BADGES,
   ...DISTANCE_BADGES,
   ...ELEVATION_BADGES,
   ...DURATION_BADGES,
