@@ -179,19 +179,6 @@ function roleFromCommandMember(member: ConvoyMember): ConvoyMapVehicle['role'] {
   return 'member';
 }
 
-function expeditionBadgeTitleFromRole(role: ConvoyMapVehicle['role']): string {
-  switch (role) {
-    case 'lead':
-      return 'Lead';
-    case 'sweep':
-      return 'Sweep';
-    case 'support':
-      return 'Support';
-    default:
-      return 'Convoy';
-  }
-}
-
 function fallbackVehiclesFromCommandData(commandData: ConvoyCommandData): ConvoyMapVehicle[] {
   return commandData.members.flatMap((member) => {
     if (!member.coordinates) return [];
@@ -202,7 +189,7 @@ function fallbackVehiclesFromCommandData(commandData: ConvoyCommandData): Convoy
       memberId: member.id,
       callsign: member.displayName,
       displayName: member.displayName,
-      expeditionBadgeTitle: expeditionBadgeTitleFromRole(role),
+      expeditionBadgeTitle: null,
       role,
       latitude: member.coordinates.latitude,
       longitude: member.coordinates.longitude,
@@ -255,8 +242,7 @@ function localVehicleFromRouteSession(
     memberId: activeContext?.memberId ?? 'local-user',
     callsign: activeContext?.callsign ?? 'YOU',
     displayName: activeContext?.callsign ?? 'YOU',
-    expeditionBadgeTitle: activeContext?.expeditionBadgeTitle ??
-      (activeContext?.role ? expeditionBadgeTitleFromRole(activeContext.role) : 'Your position'),
+    expeditionBadgeTitle: null,
     role: activeContext?.role ?? 'member',
     latitude: location.latitude,
     longitude: location.longitude,
@@ -287,8 +273,7 @@ function localVehicleFromUserLocation(
     memberId: activeContext?.memberId ?? 'local-user',
     callsign: activeContext?.callsign ?? 'YOU',
     displayName: activeContext?.callsign ?? 'YOU',
-    expeditionBadgeTitle: activeContext?.expeditionBadgeTitle ??
-      (activeContext?.role ? expeditionBadgeTitleFromRole(activeContext.role) : 'Your position'),
+    expeditionBadgeTitle: null,
     role: activeContext?.role ?? 'member',
     latitude: location.latitude,
     longitude: location.longitude,

@@ -125,6 +125,8 @@
     "test:dispatch-live": "node ./scripts/test-dispatch-live-hard-conversion.js",
     "test:dispatch-scenarios": "node ./scripts/test-dispatch-scenarios.js",
     "test:convoy-command": "node ./scripts/test-convoy-command.js",
+    "test:convoy-command-v1-5-readiness": "node ./scripts/test-convoy-command-v1-5-readiness.js",
+    "test:convoy-command-v1-5-foundation": "node ./scripts/test-convoy-command-v1-5-foundation.js",
     "test:convoy-command-panel-selector": "node ./scripts/test-convoy-command-panel-selector.js",
     "test:convoy-team-tracking-schema": "node ./scripts/test-convoy-team-tracking-schema.js",
     "test:dispatch-convoy-production": "node ./scripts/test-dispatch-convoy-production-readiness.js",

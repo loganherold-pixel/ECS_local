@@ -1,0 +1,60 @@
+
+06-09 02:53:48.459 D/InputDispatcher( 1955): Inject motion (16610/2000): action=0x0, time=1707057462000000, f=0x0, d=0 dsdx=1.000000 dtdx=0.000000
+06-09 02:53:48.459 I/InputDispatcher( 1955): Delivering touch to (2888): action: 0x4, f=0x0, d=0, '4cf22ae', t=1 
+06-09 02:53:48.459 I/InputDispatcher( 1955): Delivering touch to (16250): action: 0x0, f=0x0, d=0, '276cbc0', t=1 
+06-09 02:53:48.465 I/GestureDetector( 1955): obtain mCurrentDownEvent. id: -932989477 caller: com.android.server.wm.SystemGesturesPointerEventListener.onPointerEvent:17 com.android.server.wm.PointerEventDispatcher.onInputEvent:51 android.view.InputEventReceiver.dispatchInputEvent:392 
+06-09 02:53:48.466 I/GestureDetector( 1955): obtain mCurrentDownEvent. id: -932989477 caller: com.android.server.wm.SystemPerformancePointerEventListener.onPointerEvent:13 com.android.server.wm.PointerEventDispatcher.onInputEvent:51 android.view.InputEventReceiver.dispatchInputEvent:392 
+06-09 02:53:48.471 D/InputDispatcher( 1955): Inject motion (16610/2000): action=0x1, time=1707057462000000, f=0x0, d=0 dsdx=1.000000 dtdx=0.000000
+06-09 02:53:48.471 I/InputDispatcher( 1955): Delivering touch to (16250): action: 0x1, f=0x0, d=0, '276cbc0', t=1 
+06-09 02:53:49.179 I/ReactNativeJS(16250): '[BLU_SCAN]', 'obd2_scan_stop', { vendor: 'obd2',
+06-09 02:53:49.179 I/ReactNativeJS(16250):   reason: 'unified_panel_unmount',
+06-09 02:53:49.179 I/ReactNativeJS(16250):   rawDeviceCallbacksCount: 0,
+06-09 02:53:49.179 I/ReactNativeJS(16250):   acceptedDevicesCount: 0,
+06-09 02:53:49.179 I/ReactNativeJS(16250):   likelyObdDevicesCount: 0 }
+06-09 02:53:49.183 I/ReactNativeJS(16250): '[BLU_SCAN]', 'obd2_scan_stop', { vendor: 'obd2',
+06-09 02:53:49.183 I/ReactNativeJS(16250):   reason: 'unified_panel_unmount',
+06-09 02:53:49.183 I/ReactNativeJS(16250):   rawDeviceCallbacksCount: 0,
+06-09 02:53:49.183 I/ReactNativeJS(16250):   acceptedDevicesCount: 0,
+06-09 02:53:49.183 I/ReactNativeJS(16250):   likelyObdDevicesCount: 0 }
+06-09 02:53:49.220 I/thermal_core( 1643): "get control socket error, reason:Permission denied\n"
+06-09 02:53:49.233 I/ReactNativeJS(16250): '[DISPATCH_WIRE]', 'weather_events reason=no_alerts', { reason: 'no_alerts',
+06-09 02:53:49.233 I/ReactNativeJS(16250):   signatureScope: '{"alerts":[],"available":true,"current":{"condition":"Clouds","precipChance":0,"precipType":null,"temp":60.51,"visibility":10000,"windSpeed":5.99},"forecastCount":8,"freshness":"fresh","location":{"lat":38.78068,"lng":-121.20761},"locationName":"38.78, -121.21","source":"cache_fresh","stale":false,"trail":{"factors":[{"detail":"Current trail weather appears within normal operating range.","factor":"Conditions","status":"good"}],"overall":"good"}}' }
+06-09 02:53:49.383 W/unknown:ReactNative(16250): StatusBarModule: Ignored status bar change, current activity is edge-to-edge.
+06-09 02:53:49.383 W/unknown:ReactNative(16250): StatusBarModule: Ignored status bar change, current activity is edge-to-edge.
+06-09 02:53:54.733 W/WindowOnBackDispatcher(16250): sendCancelIfRunning: isInProgress=false callback=android.view.ViewRootImpl$$ExternalSyntheticLambda16@d016894
+06-09 02:53:54.735 I/VRI[PopupWindow:2d0030b]@ff7f401(16250): dispatchDetachedFromWindow
+06-09 02:53:54.749 I/VRI[PopupWindow:e38207e]@829362c(16250): dispatchDetachedFromWindow
+06-09 02:53:54.758 I/VRI[PopupWindow:36bc4fb]@c64df71(16250): dispatchDetachedFromWindow
+06-09 02:53:54.766 I/VRI[PopupWindow:89a1ec4]@19c9ce2(16250): dispatchDetachedFromWindow
+06-09 02:53:54.775 I/VRI[PopupWindow:84f0ba9]@c3d88cf(16250): dispatchDetachedFromWindow
+06-09 02:53:54.784 I/VRI[PopupWindow:c10e63a]@5fd6848(16250): dispatchDetachedFromWindow
+06-09 02:53:54.794 I/VRI[PopupWindow:6ebc2c7]@da8b01d(16250): dispatchDetachedFromWindow
+06-09 02:53:55.494 W/WindowOnBackDispatcher(16250): sendCancelIfRunning: isInProgress=false callback=android.view.ViewRootImpl$$ExternalSyntheticLambda16@7744f24
+06-09 02:53:55.496 I/VRI[PopupWindow:6f75cdb]@5c2ea51(16250): dispatchDetachedFromWindow
+06-09 02:53:55.505 I/VRI[PopupWindow:815528e]@2205ebc(16250): dispatchDetachedFromWindow
+06-09 02:53:55.513 I/VRI[PopupWindow:f4532cb]@24209c1(16250): dispatchDetachedFromWindow
+06-09 02:53:55.522 I/VRI[PopupWindow:21bc954]@78631f2(16250): dispatchDetachedFromWindow
+06-09 02:53:55.530 I/VRI[PopupWindow:8bd2ff9]@5e28d9f(16250): dispatchDetachedFromWindow
+06-09 02:53:55.543 I/VRI[PopupWindow:6d60d4a]@27a0dd8(16250): dispatchDetachedFromWindow
+06-09 02:53:55.552 I/VRI[PopupWindow:bf29197]@57ca36d(16250): dispatchDetachedFromWindow
+06-09 02:53:56.003 W/WindowOnBackDispatcher(16250): sendCancelIfRunning: isInProgress=false callback=android.view.ViewRootImpl$$ExternalSyntheticLambda16@51a41dd
+06-09 02:53:56.009 I/VRI[PopupWindow:ef89d08]@55b4ec6(16250): dispatchDetachedFromWindow
+06-09 02:53:56.018 I/VRI[PopupWindow:5f7477f]@3a8cf95(16250): dispatchDetachedFromWindow
+06-09 02:53:56.023 D/AndroidRuntime(16632): >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+06-09 02:53:56.029 I/VRI[PopupWindow:1915838]@afaf576(16250): dispatchDetachedFromWindow
+06-09 02:53:56.032 I/AndroidRuntime(16632): Using default boot image
+06-09 02:53:56.032 I/AndroidRuntime(16632): Leaving lock profiling enabled
+06-09 02:53:56.034 D/AndroidRuntime(16632): addProductProperty not brand or 7
+06-09 02:53:56.038 I/VRI[PopupWindow:1545c4d]@1b64413(16250): dispatchDetachedFromWindow
+06-09 02:53:56.048 I/VRI[PopupWindow:4273d4e]@a31277c(16250): dispatchDetachedFromWindow
+06-09 02:53:56.057 I/VRI[PopupWindow:c50228b]@777df81(16250): dispatchDetachedFromWindow
+06-09 02:53:56.071 I/VRI[PopupWindow:8e4ea14]@73820b2(16250): dispatchDetachedFromWindow
+06-09 02:53:56.192 D/AndroidRuntime(16632): Calling main entry com.android.commands.uiautomator.Launcher
+06-09 02:53:56.196 W/PlatformAconfigPackage(16632): android.os.flagging.AconfigStorageReadException: ERROR_CANNOT_READ_STORAGE_FILE: Fail to mmap storage
+06-09 02:53:56.203 E/FeatureFlagsImplExport(16632): android.os.flagging.AconfigStorageReadException: ERROR_PACKAGE_NOT_FOUND: package android.xr cannot be found on the device
+06-09 02:53:57.230 E/AccessibilityNodeInfoDumper(16632): java.io.FileNotFoundException: /dev/tty: open failed: ENXIO (No such device or address)
+06-09 02:53:57.230 E/AccessibilityNodeInfoDumper(16632): Caused by: android.system.ErrnoException: open failed: ENXIO (No such device or address)
+06-09 02:53:57.235 W/IPCThreadState(16632): call to talkWithDriver in joinThreadPool returned error: -9 (Bad file descriptor), FD: -1
+06-09 02:53:57.235 W/IPCThreadState(16632): call to talkWithDriver in joinThreadPool returned error: -9 (Bad file descriptor), FD: -1
+06-09 02:53:57.235 D/AndroidRuntime(16632): Shutting down VM
+

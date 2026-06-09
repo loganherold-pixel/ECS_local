@@ -11,6 +11,10 @@ import {
   buildConvoyMarkerIdentities,
   type ConvoyMarkerIdentity,
 } from '../../lib/convoy/convoyMarkerIdentity';
+import {
+  buildConvoyParticipantsFromMapVehicles,
+  formatConvoyParticipantLastUpdated,
+} from '../../lib/convoy/convoyParticipantModel';
 
 interface ConvoyMapFallbackProps {
   members: ConvoyMapVehicle[];
@@ -25,7 +29,7 @@ function formatMemberStatus(identity: ConvoyMarkerIdentity): string {
   if (identity.status === 'needs_assistance') return 'Needs assistance';
   if (identity.status === 'stale') return identity.ageLabel ? `Location stale ${identity.ageLabel}` : 'Location stale';
   if (identity.status === 'offline') return 'Member offline';
-  return identity.status === 'unknown' ? 'Location received' : identity.status;
+  return identity.status === 'unknown' ? 'Location status unknown' : identity.status;
 }
 
 export function ConvoyMapFallback({
@@ -40,13 +44,17 @@ export function ConvoyMapFallback({
   const hasMembers = members.length > 0;
   const identities = markerIdentities ?? buildConvoyMarkerIdentities(members);
   const identityByMember = new Map(identities.map((identity) => [identity.memberId, identity]));
+  const participants = buildConvoyParticipantsFromMapVehicles(members, {
+    source: connectionStatus === 'connected' ? 'live' : connectionStatus === 'idle' ? 'unknown' : 'cached',
+  });
+  const participantByMember = new Map(participants.map((participant) => [participant.participantId, participant]));
 
   return (
     <View
       style={[styles.container, { backgroundColor: palette.panel, borderColor: palette.border }]}
       accessible
       accessibilityRole="summary"
-      accessibilityLabel={`Convoy map limited view. ${reason} ${members.length} live members listed.`}
+      accessibilityLabel={`Convoy map limited view. ${reason} ${members.length} members listed.`}
     >
       <View style={styles.header}>
         <View>
@@ -73,16 +81,25 @@ export function ConvoyMapFallback({
         <View style={styles.memberList} accessibilityLabel="Convoy member location list">
           {members.map((member) => {
             const identity = identityByMember.get(member.memberId) ?? buildConvoyMarkerIdentities([member])[0];
+            const participant = participantByMember.get(member.memberId);
+            const participantLabel = participant
+              ? [
+                  participant.displayName,
+                  participant.roleLabel,
+                  participant.statusLabel,
+                  formatConvoyParticipantLastUpdated(participant),
+                ].filter(Boolean).join(' · ')
+              : `${identity.label} · ${identity.role} · ${formatMemberStatus(identity)}`;
             const selected = selectedMemberId === member.memberId;
             const alert = identity.status === 'needs_assistance';
             return (
               <ECSButton
                 key={member.memberId}
-                label={`${identity.label} · ${identity.role} · ${formatMemberStatus(identity)}`}
+                label={participantLabel}
                 size="compact"
                 variant={selected ? 'active' : alert ? 'destructive' : 'secondary'}
                 onPress={() => onSelectMember?.(member)}
-                accessibilityLabel={`${identity.label}, ${identity.role}, ${formatMemberStatus(identity)}`}
+                accessibilityLabel={participantLabel.replace(/ · /g, ', ')}
                 style={styles.memberButton}
                 numberOfLines={1}
               />

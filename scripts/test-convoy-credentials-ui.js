@@ -89,11 +89,11 @@ assert.ok(
 );
 
 assert.ok(
-  screen.includes('getCurrentExpeditionBadgeTitle') &&
-    screen.includes('setExpeditionBadgeTitle') &&
-    screen.includes('leaderExpeditionBadgeTitle: expeditionBadgeTitle') &&
-    screen.includes('expeditionBadgeTitle,'),
-  'Convoy credentials UI should snapshot the current Expedition badge title into leader and join membership requests.',
+  !screen.includes('getCurrentExpeditionBadgeTitle') &&
+    !screen.includes('setExpeditionBadgeTitle') &&
+    !screen.includes('leaderExpeditionBadgeTitle: expeditionBadgeTitle') &&
+    !screen.includes('expeditionBadgeTitle,'),
+  'Convoy credentials UI should not attach Badge / Expedition Identity titles until Convoy badge integration is explicitly built.',
 );
 
 for (const validationCopy of [

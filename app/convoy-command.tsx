@@ -29,7 +29,6 @@ import {
   type ConvoyRole,
 } from '../lib/convoy/convoyMembershipService';
 import { dispatchProfileStore } from '../lib/dispatchProfileStore';
-import { getCurrentExpeditionBadgeTitle } from '../lib/expedition/expeditionBadgeStore';
 import { TACTICAL, TYPO } from '../lib/theme';
 import { ECS_SURFACE } from '../lib/ecsSurfaceTokens';
 import type { Vehicle } from '../lib/types';
@@ -122,7 +121,6 @@ export default function ConvoyCommandCredentialsScreen() {
   const [maxUses, setMaxUses] = useState('1');
   const [lastInviteCode, setLastInviteCode] = useState<string | null>(null);
   const [lastInvitePayload, setLastInvitePayload] = useState<string | null>(null);
-  const [expeditionBadgeTitle, setExpeditionBadgeTitle] = useState<string | null>(null);
 
   const [joinCode, setJoinCode] = useState('');
   const [joinCallsign, setJoinCallsign] = useState('V2');
@@ -189,20 +187,6 @@ export default function ConvoyCommandCredentialsScreen() {
 
   useEffect(() => {
     let mounted = true;
-    void getCurrentExpeditionBadgeTitle()
-      .then((title) => {
-        if (mounted) setExpeditionBadgeTitle(title);
-      })
-      .catch(() => {
-        if (mounted) setExpeditionBadgeTitle(null);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
     void vehicleStore.waitForHydration().then(async () => {
       const result = await vehicleStore.getAll(user?.id);
       if (!mounted) return;
@@ -235,7 +219,6 @@ export default function ConvoyCommandCredentialsScreen() {
       name: convoyName,
       leaderCallsign,
       leaderVehicleId,
-      leaderExpeditionBadgeTitle: expeditionBadgeTitle,
       startsAt: new Date(),
     });
     if (result.ok) {
@@ -296,7 +279,6 @@ export default function ConvoyCommandCredentialsScreen() {
       rawCode: normalizeConvoyInviteCodeForSubmit(joinCode),
       callsign: joinCallsign,
       vehicleId: joinVehicleId,
-      expeditionBadgeTitle,
     });
     if (result.ok) {
       setNotice('Joined convoy. Location sharing is still off until you start it from Convoy Command.');

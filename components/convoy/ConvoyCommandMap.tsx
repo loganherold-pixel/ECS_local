@@ -15,6 +15,12 @@ import {
   buildConvoyMarkerIdentities,
   type ConvoyMarkerIdentity,
 } from '../../lib/convoy/convoyMarkerIdentity';
+import {
+  buildConvoyParticipantsFromMapVehicles,
+  formatConvoyParticipantLastUpdated,
+  type ConvoyParticipant,
+  type ConvoyParticipantSource,
+} from '../../lib/convoy/convoyParticipantModel';
 import { normalizeCanonicalRouteGeometry } from '../../lib/routeGeometryLifecycle';
 import { ECSIconButton } from '../ECSButton';
 import { ConvoyMapFallback } from './ConvoyMapFallback';
@@ -50,27 +56,7 @@ function cleanIdentityText(value: unknown, maxLength: number): string | null {
   return trimmed.slice(0, maxLength);
 }
 
-function badgeTitleForRole(role: ConvoyMarkerIdentity['role'], isCurrentUser?: boolean): string {
-  if (isCurrentUser) return 'Your position';
-  switch (role) {
-    case 'lead':
-      return 'Lead';
-    case 'sweep':
-      return 'Sweep';
-    case 'scout':
-      return 'Scout';
-    case 'medic':
-      return 'Medic';
-    case 'recovery':
-      return 'Recovery';
-    case 'support':
-      return 'Support';
-    default:
-      return 'Convoy';
-  }
-}
-
-function teamDisplayNameFor(member: ConvoyMapVehicle, identity: ConvoyMarkerIdentity): string {
+function participantDisplayNameFor(member: ConvoyMapVehicle, identity: ConvoyMarkerIdentity): string {
   return (
     cleanIdentityText(member.callsign, 24) ??
     cleanIdentityText(member.displayName, 24) ??
@@ -78,11 +64,10 @@ function teamDisplayNameFor(member: ConvoyMapVehicle, identity: ConvoyMarkerIden
   );
 }
 
-function expeditionBadgeTitleFor(member: ConvoyMapVehicle, identity: ConvoyMarkerIdentity): string {
-  return (
-    cleanIdentityText(member.expeditionBadgeTitle, 28) ??
-    badgeTitleForRole(identity.role, identity.isCurrentUser)
-  );
+function participantSourceForConnection(connectionStatus: ConvoyRealtimeConnectionStatus): ConvoyParticipantSource {
+  if (connectionStatus === 'connected') return 'live';
+  if (connectionStatus === 'degraded' || connectionStatus === 'disconnected') return 'cached';
+  return 'unknown';
 }
 
 function formatLastUpdate(members: ConvoyMapVehicle[]): string {
@@ -99,9 +84,23 @@ function formatLastUpdate(members: ConvoyMapVehicle[]): string {
   return `${Math.floor(minutes / 60)}h ago`;
 }
 
+function validMapCoordinate(member: ConvoyMapVehicle): boolean {
+  return (
+    Number.isFinite(member.latitude) &&
+    Number.isFinite(member.longitude) &&
+    member.latitude >= -90 &&
+    member.latitude <= 90 &&
+    member.longitude >= -180 &&
+    member.longitude <= 180
+  );
+}
+
 function boundsForMembers(members: ConvoyMapVehicle[]) {
-  if (members.length === 0) return null;
-  return boundsForCoordinates(members.map((member) => [member.longitude, member.latitude] as [number, number]));
+  const coordinates = members
+    .filter(validMapCoordinate)
+    .map((member) => [member.longitude, member.latitude] as [number, number]);
+  if (coordinates.length === 0) return null;
+  return boundsForCoordinates(coordinates);
 }
 
 function boundsForCoordinates(coordinates: [number, number][]) {
@@ -145,16 +144,22 @@ function roleRank(role: ConvoyMarkerIdentity['role']): number {
 function featureCollection(
   members: ConvoyMapVehicle[],
   identities: ConvoyMarkerIdentity[],
+  participants: ConvoyParticipant[],
   selectedMemberId?: string | null,
 ) {
   const identityByMember = new Map(identities.map((identity) => [identity.memberId, identity]));
+  const participantByMember = new Map(participants.map((participant) => [participant.participantId, participant]));
   return {
     type: 'FeatureCollection',
-    features: members.map((member) => {
+    features: members.flatMap((member) => {
       const identity = identityByMember.get(member.memberId) ?? buildConvoyMarkerIdentities([member])[0];
-      const teamDisplayName = teamDisplayNameFor(member, identity);
-      const expeditionBadgeTitle = expeditionBadgeTitleFor(member, identity);
-      return {
+      const participant = participantByMember.get(member.memberId);
+      if (!participant?.shouldRenderMarker || !validMapCoordinate(member)) return [];
+      const participantName = participantDisplayNameFor(member, identity);
+      const participantRoleLabel = participant.roleLabel;
+      const participantStatusLabel = participant.statusLabel;
+      const participantLastUpdated = formatConvoyParticipantLastUpdated(participant);
+      return [{
         type: 'Feature',
         id: member.memberId,
         properties: {
@@ -168,8 +173,12 @@ function featureCollection(
           headingVisible: identity.shouldShowHeading,
           iconKey: identity.iconKey,
           label: identity.label,
-          teamDisplayName,
-          expeditionBadgeTitle,
+          participantName,
+          participantRoleLabel,
+          participantStatusLabel,
+          participantLastUpdated,
+          participantVehicleSummary: participant.vehicleSummary ?? '',
+          participantSourceLabel: participant.sourceLabel,
           shapeGlyph: identity.shapeGlyph,
           statusLabel: identity.statusLabel,
           ageLabel: identity.ageLabel ?? '',
@@ -184,14 +193,14 @@ function featureCollection(
           type: 'Point',
           coordinates: [member.longitude, member.latitude],
         },
-      };
+      }];
     }),
   };
 }
 
-function memberSummary(members: ConvoyMapVehicle[]) {
-  const activeCount = members.filter((member) => !member.isStale && member.movementStatus !== 'offline').length;
-  const staleCount = members.filter((member) => member.isStale || member.movementStatus === 'offline').length;
+function memberSummary(participants: ConvoyParticipant[], members: ConvoyMapVehicle[]) {
+  const activeCount = participants.filter((participant) => participant.status === 'live').length;
+  const staleCount = participants.filter((participant) => participant.status !== 'live').length;
   const assistanceCount = members.filter((member) => member.movementStatus === 'needs_assistance').length;
   return { activeCount, staleCount, assistanceCount };
 }
@@ -270,14 +279,19 @@ export function ConvoyCommandMap({
   );
   const hasRouteLine = normalizedRouteCoordinates.length >= 2;
   const shouldFollowUser = followUserWhenEmpty && !hasRouteLine;
-  const summary = useMemo(() => memberSummary(members), [members]);
+  const participantSource = participantSourceForConnection(connectionStatus);
+  const participants = useMemo(
+    () => buildConvoyParticipantsFromMapVehicles(members, { source: participantSource }),
+    [members, participantSource],
+  );
+  const summary = useMemo(() => memberSummary(participants, members), [members, participants]);
   const identities = useMemo(
     () => buildConvoyMarkerIdentities(members, currentUserMemberId),
     [currentUserMemberId, members],
   );
   const geojson = useMemo(
-    () => featureCollection(members, identities, selectedMemberId),
-    [identities, members, selectedMemberId],
+    () => featureCollection(members, identities, participants, selectedMemberId),
+    [identities, members, participants, selectedMemberId],
   );
   const bounds = useMemo(() => boundsForMembers(members), [members]);
   const routeBounds = useMemo(() => boundsForCoordinates(normalizedRouteCoordinates), [normalizedRouteCoordinates]);
@@ -292,6 +306,10 @@ export function ConvoyCommandMap({
   const selectedMember = useMemo(
     () => members.find((member) => member.memberId === selectedMemberId) ?? null,
     [members, selectedMemberId],
+  );
+  const selectedParticipant = useMemo(
+    () => participants.find((participant) => participant.participantId === selectedMemberId) ?? null,
+    [participants, selectedMemberId],
   );
   const selectedIdentity = useMemo(
     () => identities.find((identity) => identity.memberId === selectedMemberId) ?? null,
@@ -634,7 +652,7 @@ export function ConvoyCommandMap({
           <Mapbox.SymbolLayer
             id="convoy-members-identity-name"
             style={{
-              textField: ['get', 'teamDisplayName'],
+              textField: ['get', 'participantName'],
               textSize: 10,
               textOffset: [0, -3.05],
               textAnchor: 'bottom',
@@ -648,9 +666,9 @@ export function ConvoyCommandMap({
             }}
           />
           <Mapbox.SymbolLayer
-            id="convoy-members-identity-badge"
+            id="convoy-members-identity-role"
             style={{
-              textField: ['get', 'expeditionBadgeTitle'],
+              textField: ['get', 'participantRoleLabel'],
               textSize: 8,
               textOffset: [0, -2.05],
               textAnchor: 'bottom',
@@ -698,18 +716,21 @@ export function ConvoyCommandMap({
         />
       </View>
 
-      {selectedMember && selectedIdentity ? (
+      {selectedMember && selectedIdentity && selectedParticipant ? (
         <View style={[styles.detailCard, { backgroundColor: palette.panel, borderColor: palette.border }]}>
           <View style={styles.detailHeader}>
             <Text style={[styles.detailTitle, { color: palette.text }]} numberOfLines={1}>
-              {selectedIdentity.label}
+              {selectedParticipant.displayName}
             </Text>
             <Text style={[styles.detailBadge, { color: palette.amber }]} numberOfLines={1}>
-              {selectedIdentity.iconKey}
+              {selectedParticipant.roleLabel}
             </Text>
           </View>
           <Text style={[styles.detailLine, { color: palette.textMuted }]} numberOfLines={1}>
-            {selectedIdentity.role} / {selectedIdentity.status} / {selectedIdentity.ageLabel ?? 'No update age'}
+            {selectedParticipant.statusLabel} / {formatConvoyParticipantLastUpdated(selectedParticipant)}
+          </Text>
+          <Text style={[styles.detailLine, { color: palette.textMuted }]} numberOfLines={1}>
+            {selectedParticipant.vehicleSummary ?? 'Vehicle unavailable'} / {selectedParticipant.sourceLabel}
           </Text>
           <Text style={[styles.detailLine, { color: palette.textMuted }]} numberOfLines={1}>
             Speed {selectedIdentity.speedMph != null ? `${Math.round(selectedIdentity.speedMph)} mph` : 'unavailable'} / Heading {selectedIdentity.headingDegrees != null ? `${Math.round(selectedIdentity.headingDegrees)}°` : 'unavailable'}

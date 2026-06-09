@@ -96,11 +96,20 @@ assert.ok(
     mapSource.includes('identityLabelOpacity') &&
     mapSource.includes('onTouchStart={revealConvoyIdentityLabels}') &&
     mapSource.includes('onPress={revealConvoyIdentityLabels}') &&
-    mapSource.includes('teamDisplayName') &&
-    mapSource.includes('expeditionBadgeTitle') &&
+    mapSource.includes('participantName') &&
+    mapSource.includes('participantRoleLabel') &&
+    mapSource.includes('participantStatusLabel') &&
+    mapSource.includes('participantLastUpdated') &&
     mapSource.includes('textOpacity: identityLabelOpacity') &&
     mapSource.includes('textOpacityTransition'),
-  'ConvoyCommandMap should reveal team display names and badge titles on map tap or movement, then fade them after five seconds.',
+  'ConvoyCommandMap should reveal participant name, role, status, and last update on map tap or movement, then fade them after five seconds.',
+);
+assert.ok(
+  !mapSource.includes('badgeTitleForRole') &&
+    !mapSource.includes('expeditionBadgeTitleFor') &&
+    !mapSource.includes("textField: ['get', 'expeditionBadgeTitle']") &&
+    !mapSource.includes('convoy-members-identity-badge'),
+  'ConvoyCommandMap should not render Badge / Expedition Identity titles in Convoy yet.',
 );
 assert.ok(
   !mapSource.includes("textField: ['get', 'label']") &&
@@ -280,11 +289,11 @@ const identities = buildConvoyMarkerIdentities([
 assert.strictEqual(identities[0].callsign, 'SWEEP', 'Sweep should render as SWEEP.');
 assert.strictEqual(identities[1].label, 'YOU', 'Current user should receive a single YOU identity without duplicating callsign text.');
 assert.ok(
-  mapSource.includes('teamDisplayNameFor(member, identity)') &&
-    mapSource.includes('badgeTitleForRole(identity.role, identity.isCurrentUser)'),
-  'Current user and convoy members should resolve temporary identity text from the same revealed marker identity path.',
+  mapSource.includes('participantDisplayNameFor(member, identity)') &&
+    mapSource.includes('participant.roleLabel'),
+  'Current user and convoy members should resolve revealed identity text through the canonical participant path.',
 );
-const teamDisplayNameBlock = mapSource.match(/function teamDisplayNameFor[\s\S]*?\n}\n/)?.[0] ?? '';
+const teamDisplayNameBlock = mapSource.match(/function participantDisplayNameFor[\s\S]*?\n}\n/)?.[0] ?? '';
 assert.ok(
   teamDisplayNameBlock.indexOf('member.callsign') >= 0 &&
     teamDisplayNameBlock.indexOf('member.callsign') < teamDisplayNameBlock.indexOf('member.displayName'),
