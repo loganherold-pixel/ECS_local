@@ -1,3 +1,0 @@
-appPid=5056
-model=SM-X230
-android=16

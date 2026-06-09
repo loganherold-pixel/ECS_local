@@ -1,8 +1,0 @@
-Starting: Intent { act=android.intent.action.VIEW dat=planning-offline-sync:///... pkg=com.expeditioncommand.planningofflinesync }
-Warning: Activity not started, intent has been delivered to currently running top-most instance.
-Status: ok
-LaunchState: UNKNOWN (0)
-Activity: com.expeditioncommand.planningofflinesync/.MainActivity
-TotalTime: 0
-WaitTime: 18
-Complete

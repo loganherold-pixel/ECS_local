@@ -1,6 +1,0 @@
-Starting: Intent { cmp=com.expeditioncommand.planningofflinesync/.MainActivity }
-Status: timeout
-LaunchState: UNKNOWN (-1)
-Activity: com.expeditioncommand.planningofflinesync/.MainActivity
-WaitTime: 10841
-Complete

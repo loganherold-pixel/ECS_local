@@ -62,6 +62,8 @@ tmp/
 .tmp-*
 .worktrees/
 build-log.txt
+.qa/
+qa-evidence/
 .smoke/
 .expo-export-check/
 .expo-runtime/

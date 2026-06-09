@@ -1,7 +1,0 @@
-Starting: Intent { act=android.intent.action.VIEW dat=planning-offline-sync:///... pkg=com.expeditioncommand.planningofflinesync }
-Status: timeout
-LaunchState: UNKNOWN (-1)
-Activity: com.expeditioncommand.planningofflinesync/.MainActivity
-WaitTime: 10956
-Complete
-

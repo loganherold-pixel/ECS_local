@@ -1,3 +1,0 @@
-List of devices attached
-R5GL13VYSRY            device product:gta11pwifixx model:SM_X230 device:gta11pwifi transport_id:1
-

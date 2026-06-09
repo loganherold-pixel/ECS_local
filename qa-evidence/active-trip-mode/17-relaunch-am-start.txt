@@ -1,8 +1,0 @@
-Starting: Intent { cmp=com.expeditioncommand.planningofflinesync/.MainActivity }
-Status: ok
-LaunchState: COLD
-Activity: com.expeditioncommand.planningofflinesync/.MainActivity
-TotalTime: 9736
-WaitTime: 9749
-Complete
-
