@@ -7,6 +7,7 @@ import type {
   GeoPoint,
   ItineraryPreTrailStopBucket,
   ItineraryPreTrailStopBucketStatus,
+  CampCandidate,
   TripBuilderRouteInput,
   TripBuilderVehicleProfile,
   TripItinerary,
@@ -81,6 +82,20 @@ export type ActiveTripOperationalSummary = {
   warnings: string[];
 };
 
+export type ActiveTripCampCandidateSummary = {
+  id: string | null;
+  name: string | null;
+  coordinate: GeoPoint | null;
+  routeMileMarker: number | null;
+  distanceFromRouteMiles: number | null;
+  source: string | null;
+  legalStatus: string | null;
+  legalConfidence: string | number | null;
+  accessConfidence: string | number | null;
+  score: number | null;
+  notes: string[];
+};
+
 export type ActiveTripModeSnapshot = {
   version: typeof ACTIVE_TRIP_MODE_VERSION;
   activeTripId: string;
@@ -96,6 +111,7 @@ export type ActiveTripModeSnapshot = {
     camp: ActiveTripOperationalSummary;
     bailout: ActiveTripOperationalSummary;
   };
+  campCandidate: ActiveTripCampCandidateSummary | null;
   lastLocation: {
     status: ActiveTripLocationStatus;
     coordinate: GeoPoint | null;
@@ -280,6 +296,23 @@ function vehicleSummary(vehicleProfile: TripBuilderVehicleProfile | null | undef
   };
 }
 
+function campCandidateSummary(candidate: CampCandidate | null | undefined): ActiveTripCampCandidateSummary | null {
+  if (!candidate) return null;
+  return {
+    id: cleanText(candidate.id),
+    name: cleanText(candidate.name),
+    coordinate: candidate.location ?? null,
+    routeMileMarker: finiteNumber(candidate.routeMileMarker),
+    distanceFromRouteMiles: finiteNumber(candidate.distanceFromRouteMiles),
+    source: cleanText(candidate.source),
+    legalStatus: null,
+    legalConfidence: candidate.legalConfidence ?? null,
+    accessConfidence: candidate.accessConfidence ?? null,
+    score: finiteNumber(candidate.score),
+    notes: (candidate.notes ?? []).filter(Boolean),
+  };
+}
+
 function activeTripIdFor(routeConfidence: RouteConfidenceEngineResult, itinerary: TripItinerary): string {
   return `active-trip-${safeIdPart(itinerary.id ?? routeConfidence.route.routeId ?? routeConfidence.route.routeName, 'trip')}`;
 }
@@ -383,6 +416,7 @@ export function buildActiveTripModeSnapshot(args: BuildActiveTripModeSnapshotArg
       camp: campSummary(args.plan, args.itinerary),
       bailout: bailoutSummary(args.plan, args.itinerary),
     },
+    campCandidate: campCandidateSummary(args.plan?.primaryCampCandidate),
     lastLocation: {
       status: args.lastKnownLocation ? 'available' : 'unknown',
       coordinate: args.lastKnownLocation ?? null,
@@ -492,6 +526,7 @@ export function createActiveTripModeStore({
             camp: operationalSummary('unknown', 'not_enough_data'),
             bailout: operationalSummary('unknown', 'not_enough_data'),
           },
+          campCandidate: null,
           lastLocation: {
             status: 'unknown',
             coordinate: null,

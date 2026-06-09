@@ -23,6 +23,11 @@ import {
   type TerrainRiskV1Category,
   type TerrainRiskV1Result,
 } from '../lib/terrainRiskEngine';
+import {
+  evaluateCampViabilityForOfflineIncidentPacket,
+  type CampViabilityV1Category,
+  type CampViabilityV1Result,
+} from '../lib/campViabilityEngine';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { ECS, TACTICAL } from '../lib/theme';
 
@@ -86,6 +91,22 @@ function terrainRiskColor(category: TerrainRiskV1Category): string {
     case 'elevated':
       return '#FF8A65';
     case 'severe':
+      return '#EF5350';
+    case 'unknown':
+    default:
+      return TACTICAL.textMuted;
+  }
+}
+
+function campViabilityColor(category: CampViabilityV1Category): string {
+  switch (category) {
+    case 'strong_candidate':
+      return '#66BB6A';
+    case 'reasonable_candidate':
+      return TACTICAL.amber;
+    case 'caution':
+      return '#FF8A65';
+    case 'poor_candidate':
       return '#EF5350';
     case 'unknown':
     default:
@@ -164,6 +185,57 @@ function TerrainRiskCard({ terrainRisk }: { terrainRisk: TerrainRiskV1Result }) 
   );
 }
 
+function CampViabilityCard({ campViability }: { campViability: CampViabilityV1Result }) {
+  const color = campViabilityColor(campViability.category);
+  const campReasons = [
+    ...campViability.missingDataReasons,
+    ...campViability.cautionReasons,
+    ...campViability.positiveReasons,
+  ].slice(0, 5);
+
+  return (
+    <View style={styles.sectionCard} testID="offline-incident-packet-camp-viability">
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>Camp Viability</Text>
+          <Text style={styles.sectionMeta}>LOCAL PACKET</Text>
+        </View>
+        <View style={[styles.confidenceBadge, { borderColor: color + '55' }]}>
+          <Text style={[styles.confidenceText, { color }]}>
+            {campViability.label}
+          </Text>
+          <Text style={styles.confidenceScore}>
+            {campViability.score != null ? `${campViability.score}` : '--'}
+          </Text>
+        </View>
+      </View>
+      <Text style={styles.recommendedAction}>
+        Recommended Action: {campViability.recommendedAction.label}
+      </Text>
+      {campReasons.length > 0 ? (
+        <View style={styles.warningList}>
+          {campReasons.map((reason) => (
+            <Text
+              key={`${reason.id}-${reason.label}`}
+              style={reason.tone === 'positive' ? styles.mutedText : styles.warningText}
+            >
+              - {reason.label}
+            </Text>
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.mutedText}>No camp viability drivers available in the local packet.</Text>
+      )}
+      <View style={styles.metricGrid}>
+        <Metric label="Camp" value={campViability.camp.name ?? 'No camp selected'} />
+        <Metric label="Source" value={campViability.camp.sourceStatus.toUpperCase()} />
+        <Metric label="Legal" value={campViability.camp.legalStatus.toUpperCase()} />
+        <Metric label="Data" value={campViability.dataConfidence.state.toUpperCase()} />
+      </View>
+    </View>
+  );
+}
+
 function EmptyState({ message, onOpenActiveTrip }: { message: string | null; onOpenActiveTrip: () => void }) {
   return (
     <View style={styles.emptyCard}>
@@ -216,6 +288,10 @@ export default function OfflineIncidentPacketScreen() {
   const terrainRisk = useMemo(
     () => packet ? evaluateTerrainRiskForOfflineIncidentPacket(packet) : null,
     [packet],
+  );
+  const campViability = useMemo(
+    () => packet ? evaluateCampViabilityForOfflineIncidentPacket(packet, terrainRisk) : null,
+    [packet, terrainRisk],
   );
 
   const handleClearPacket = useCallback(async () => {
@@ -300,6 +376,7 @@ export default function OfflineIncidentPacketScreen() {
               </View>
 
               {terrainRisk ? <TerrainRiskCard terrainRisk={terrainRisk} /> : null}
+              {campViability ? <CampViabilityCard campViability={campViability} /> : null}
 
               <View style={styles.sectionCard}>
                 <View style={styles.sectionHeader}>

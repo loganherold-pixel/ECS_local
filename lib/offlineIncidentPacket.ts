@@ -1,6 +1,7 @@
 import type {
   ActiveTripModeSnapshot,
   ActiveTripModeStatus,
+  ActiveTripCampCandidateSummary,
   ActiveTripOperationalSummary,
   ActiveTripRouteSummary,
   ActiveTripVehicleSummary,
@@ -82,6 +83,7 @@ export type OfflineIncidentPacket = {
     camp: ActiveTripOperationalSummary;
     bailout: ActiveTripOperationalSummary;
   };
+  campCandidate: ActiveTripCampCandidateSummary | null;
   lastKnownLocation: OfflineIncidentPacketLocationSummary;
   startedAt: string;
   packetCreatedAt: string;
@@ -170,6 +172,7 @@ export function buildOfflineIncidentPacketFromActiveTrip(
       camp: snapshot.logistics.camp,
       bailout: snapshot.logistics.bailout,
     },
+    campCandidate: snapshot.campCandidate ?? null,
     lastKnownLocation: {
       status: snapshot.lastLocation.status,
       coordinate: snapshot.lastLocation.coordinate,

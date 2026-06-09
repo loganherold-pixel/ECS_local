@@ -152,6 +152,7 @@
     "test:active-trip-resume-discoverability": "node ./scripts/test-active-trip-resume-discoverability.js",
     "test:offline-incident-packet-foundation": "node ./scripts/test-offline-incident-packet-foundation.js",
     "test:terrain-risk-v1": "node ./scripts/test-terrain-risk-v1.js",
+    "test:camp-viability-score-v1": "node ./scripts/test-camp-viability-score-v1.js",
     "test:explore-tripbuilder-manifest-export": "node ./scripts/test-explore-tripbuilder-manifest-export.js",
     "test:explore-suggested-trailheads-production-guard": "node ./scripts/test-explore-suggested-trailheads-production-guard.js",
     "test:canonical-route-geometry-normalizer": "node ./scripts/test-canonical-route-geometry-normalizer.js",
