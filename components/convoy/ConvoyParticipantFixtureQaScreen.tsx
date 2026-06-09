@@ -56,12 +56,17 @@ function ParticipantRow({
       <Text style={styles.participantMeta} numberOfLines={1}>
         {participant.roleLabel} / {participant.vehicleSummary ?? 'Vehicle unavailable'}
       </Text>
+      {participant.badgeIdentity.title ? (
+        <Text style={styles.participantIdentityTitle} numberOfLines={1}>
+          {participant.badgeIdentity.title}
+        </Text>
+      ) : null}
       <Text style={styles.participantMeta} numberOfLines={1}>
         Updated {formatConvoyParticipantLastUpdated(participant)} / Marker{' '}
         {participant.shouldRenderMarker ? 'eligible' : 'suppressed'}
       </Text>
       <Text style={styles.participantBoundary} numberOfLines={2}>
-        {participant.statusCopy} Badge titles: Not rendered.
+        {participant.statusCopy} Read-only title: {participant.badgeIdentity.title ? participant.badgeIdentity.source : 'not shown'}.
       </Text>
     </TouchableOpacity>
   );
@@ -98,7 +103,7 @@ export function ConvoyParticipantFixtureQaScreen() {
             ['Membership', 'Not created'],
             ['Location publish', 'Not called'],
             ['Badge unlocks', 'Deferred'],
-            ['Badge titles', 'Not rendered'],
+            ['Badge titles', 'Read-only display'],
             ['Fixture status', 'Non-live'],
           ].map(([label, value]) => (
             <View key={label} style={styles.guardrail}>
@@ -111,6 +116,7 @@ export function ConvoyParticipantFixtureQaScreen() {
         <View style={styles.mapShell}>
           <Text style={styles.sectionLabel}>Convoy Command Map Path</Text>
           <ConvoyCommandMap
+            convoyId="convoy-participant-qa-dev-only"
             members={members}
             currentUserMemberId="qa-live-leader"
             connectionStatus="connected"
@@ -298,6 +304,12 @@ const styles = StyleSheet.create({
   },
   participantMeta: {
     color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '800',
+  },
+  participantIdentityTitle: {
+    color: TACTICAL.amber,
     fontSize: 10,
     lineHeight: 14,
     fontWeight: '800',

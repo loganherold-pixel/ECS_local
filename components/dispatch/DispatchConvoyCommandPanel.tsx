@@ -242,7 +242,7 @@ function localVehicleFromRouteSession(
     memberId: activeContext?.memberId ?? 'local-user',
     callsign: activeContext?.callsign ?? 'YOU',
     displayName: activeContext?.callsign ?? 'YOU',
-    expeditionBadgeTitle: null,
+    expeditionBadgeTitle: activeContext?.expeditionBadgeTitle ?? null,
     role: activeContext?.role ?? 'member',
     latitude: location.latitude,
     longitude: location.longitude,
@@ -273,7 +273,7 @@ function localVehicleFromUserLocation(
     memberId: activeContext?.memberId ?? 'local-user',
     callsign: activeContext?.callsign ?? 'YOU',
     displayName: activeContext?.callsign ?? 'YOU',
-    expeditionBadgeTitle: null,
+    expeditionBadgeTitle: activeContext?.expeditionBadgeTitle ?? null,
     role: activeContext?.role ?? 'member',
     latitude: location.latitude,
     longitude: location.longitude,
@@ -628,6 +628,7 @@ export default function DispatchConvoyCommandPanel({
       <View style={[styles.panelStage, isFeedPresentation || isMapOnlyPresentation ? styles.feedPanelStage : null]}>
         {hasActiveConvoy ? (
           <ConvoyCommandMap
+            convoyId={activeContext?.convoyId ?? null}
             members={mapMembers}
             currentUserMemberId={activeContext?.memberId ?? (localMapMember ? 'local-user' : null)}
             connectionStatus={mapConnectionStatus}

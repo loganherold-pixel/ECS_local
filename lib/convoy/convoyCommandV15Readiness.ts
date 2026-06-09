@@ -108,7 +108,6 @@ export const CONVOY_COMMAND_V15_PRIVACY_SCOPE = {
 } as const;
 
 export const CONVOY_COMMAND_V15_DEFERRED_ITEMS = [
-  'badge_identity_title_display',
   'convoy_badge_unlocks',
   'public_convoy_presence',
   'community_convoy_publishing',
@@ -132,7 +131,9 @@ export const CONVOY_COMMAND_V15_SOURCE_OF_TRUTH_CONTRACT = {
   sourceKind: 'Source kind distinguishes live, cached, manual, mock/demo, and unknown data.',
   badgeIdentity: {
     status: CONVOY_COMMAND_V15_BADGE_IDENTITY_STATUS,
-    convoyDisplayField: null,
+    convoyDisplayField: 'badgeIdentity.title',
+    displayContract: 'read_only_scoped_known_participants_only',
+    unlocks: 'deferred',
   },
 } as const;
 

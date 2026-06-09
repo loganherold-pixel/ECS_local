@@ -83,40 +83,53 @@ assert.strictEqual(byId.get('qa-live-leader').roleLabel, 'Leader');
 assert.strictEqual(byId.get('qa-live-leader').isProductionLive, false);
 assert.strictEqual(byId.get('qa-live-leader').shouldRenderMarker, true);
 assert.ok(/fixture|not production live/i.test(byId.get('qa-live-leader').statusCopy));
+assert.strictEqual(byId.get('qa-live-leader').badgeIdentity.title, 'Field Commander');
+assert.strictEqual(byId.get('qa-live-leader').badgeIdentity.source, 'qa_fixture');
+assert.strictEqual(byId.get('qa-live-leader').badgeIdentity.isCredential, false);
 
 assert.strictEqual(byId.get('qa-stale-tail').status, 'stale');
 assert.strictEqual(byId.get('qa-stale-tail').roleLabel, 'Tail');
 assert.strictEqual(byId.get('qa-stale-tail').isProductionLive, false);
+assert.strictEqual(byId.get('qa-stale-tail').badgeIdentity.title, null);
 
 assert.strictEqual(byId.get('qa-disconnected-member').status, 'disconnected');
 assert.strictEqual(byId.get('qa-disconnected-member').roleLabel, 'Member');
 assert.strictEqual(byId.get('qa-disconnected-member').shouldRenderMarker, false);
+assert.strictEqual(byId.get('qa-disconnected-member').badgeIdentity.title, null);
 
 const unknownScout = participants.find((participant) => participant.displayName === 'Unknown scout');
 assert.ok(unknownScout, 'Unknown scout fixture should still render a safe display row.');
 assert.strictEqual(unknownScout.status, 'unknown');
 assert.strictEqual(unknownScout.roleLabel, 'Scout');
+assert.strictEqual(unknownScout.badgeIdentity.title, null);
+assert.strictEqual(unknownScout.badgeIdentity.source, 'untrusted');
 
 assert.strictEqual(byId.get('qa-missing-coordinates-recovery').roleLabel, 'Recovery');
 assert.strictEqual(byId.get('qa-missing-coordinates-recovery').shouldRenderMarker, false);
+assert.strictEqual(byId.get('qa-missing-coordinates-recovery').badgeIdentity.title, null);
 
 assert.strictEqual(byId.get('qa-demo-medic').status, 'demo');
 assert.strictEqual(byId.get('qa-demo-medic').roleLabel, 'Medic');
 assert.strictEqual(byId.get('qa-demo-medic').isProductionLive, false);
+assert.strictEqual(byId.get('qa-demo-medic').badgeIdentity.title, null);
+assert.strictEqual(byId.get('qa-demo-medic').badgeIdentity.source, 'untrusted');
 
 assert.strictEqual(byId.get('qa-mock-member').status, 'demo');
 assert.strictEqual(byId.get('qa-mock-member').source, 'mock');
 assert.strictEqual(byId.get('qa-mock-member').isProductionLive, false);
+assert.strictEqual(byId.get('qa-mock-member').badgeIdentity.title, null);
+assert.strictEqual(byId.get('qa-mock-member').badgeIdentity.source, 'untrusted');
 
 for (const participant of participants) {
   assert.strictEqual(participant.convoyId, 'convoy-participant-qa-dev-only');
   assert.strictEqual(participant.privacyScope, 'active_convoy_members_only');
   assert.strictEqual(participant.isFixtureOnly, true);
   assert.strictEqual(participant.isProductionLive, false);
-  assert.strictEqual(participant.badgeIdentity.title, null);
+  assert.strictEqual(participant.badgeIdentity.status, 'deferred');
+  assert.strictEqual(participant.badgeIdentity.isCredential, false);
   assert.ok(
     !Object.prototype.hasOwnProperty.call(participant, 'expeditionBadgeTitle'),
-    'Fixture participants must not expose Badge / Expedition Identity titles.',
+    'Canonical fixture participants should expose title display only through badgeIdentity.',
   );
 }
 
@@ -158,8 +171,10 @@ assert.ok(
     screenSource.includes('NON-LIVE CONVOY FIXTURE') &&
     screenSource.includes('ConvoyCommandMap') &&
     screenSource.includes('Badge titles') &&
-    screenSource.includes('Not rendered'),
-  'QA screen must visibly disclose dev-only non-live fixture data and badge deferral.',
+    screenSource.includes('Read-only display') &&
+    screenSource.includes('Read-only title') &&
+    screenSource.includes('not shown'),
+  'QA screen must visibly disclose dev-only non-live fixture data and read-only badge title behavior.',
 );
 assert.ok(
   mapSource.includes('participantSource') && participantSource.includes('participantSource'),

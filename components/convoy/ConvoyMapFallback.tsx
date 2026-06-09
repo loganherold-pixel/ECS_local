@@ -17,6 +17,7 @@ import {
 } from '../../lib/convoy/convoyParticipantModel';
 
 interface ConvoyMapFallbackProps {
+  convoyId?: string | null;
   members: ConvoyMapVehicle[];
   connectionStatus: ConvoyRealtimeConnectionStatus;
   reason?: string;
@@ -33,6 +34,7 @@ function formatMemberStatus(identity: ConvoyMarkerIdentity): string {
 }
 
 export function ConvoyMapFallback({
+  convoyId,
   members,
   connectionStatus,
   reason = 'Mapbox is not ready for this build.',
@@ -45,6 +47,7 @@ export function ConvoyMapFallback({
   const identities = markerIdentities ?? buildConvoyMarkerIdentities(members);
   const identityByMember = new Map(identities.map((identity) => [identity.memberId, identity]));
   const participants = buildConvoyParticipantsFromMapVehicles(members, {
+    convoyId,
     source: connectionStatus === 'connected' ? 'live' : connectionStatus === 'idle' ? 'unknown' : 'cached',
   });
   const participantByMember = new Map(participants.map((participant) => [participant.participantId, participant]));
@@ -85,6 +88,7 @@ export function ConvoyMapFallback({
             const participantLabel = participant
               ? [
                   participant.displayName,
+                  participant.badgeIdentity.title,
                   participant.roleLabel,
                   participant.statusLabel,
                   formatConvoyParticipantLastUpdated(participant),

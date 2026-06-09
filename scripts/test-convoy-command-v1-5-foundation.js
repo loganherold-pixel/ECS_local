@@ -59,7 +59,44 @@ assert.strictEqual(live.shouldRenderMarker, true);
 assert.strictEqual(live.privacyScope, 'active_convoy_members_only');
 assert.strictEqual(live.badgeIdentity.status, 'deferred');
 assert.strictEqual(live.badgeIdentity.title, null);
+assert.strictEqual(live.badgeIdentity.source, 'unavailable');
 assert.ok(!Object.prototype.hasOwnProperty.call(live, 'expeditionBadgeTitle'));
+
+const trustedTitle = buildConvoyParticipant({
+  convoyId: 'convoy-1',
+  participantId: 'lead-1',
+  activeParticipant: true,
+  displayName: 'LEAD',
+  vehicleSummary: 'Tacoma',
+  role: 'lead',
+  coordinates: { latitude: 38.1, longitude: -121.2 },
+  lastUpdated: '2026-06-09T11:58:00.000Z',
+  movementStatus: 'moving',
+  source: 'live',
+  expeditionBadgeTitle: 'Field Commander',
+  nowMs,
+});
+assert.strictEqual(trustedTitle.status, 'live');
+assert.strictEqual(trustedTitle.badgeIdentity.title, 'Field Commander');
+assert.strictEqual(trustedTitle.badgeIdentity.source, 'scoped_convoy_snapshot');
+assert.strictEqual(trustedTitle.badgeIdentity.isCredential, false);
+
+const untrustedTitle = buildConvoyParticipant({
+  convoyId: 'convoy-1',
+  participantId: 'demo-1',
+  activeParticipant: true,
+  displayName: 'DEMO',
+  role: 'member',
+  coordinates: { latitude: 38.1, longitude: -121.2 },
+  lastUpdated: '2026-06-09T11:58:00.000Z',
+  movementStatus: 'moving',
+  source: 'demo',
+  expeditionBadgeTitle: 'Field Commander',
+  nowMs,
+});
+assert.strictEqual(untrustedTitle.status, 'demo');
+assert.strictEqual(untrustedTitle.badgeIdentity.title, null);
+assert.strictEqual(untrustedTitle.badgeIdentity.source, 'untrusted');
 
 const stale = buildConvoyParticipant({
   convoyId: 'convoy-1',
@@ -184,6 +221,8 @@ assert.strictEqual(fromVehicles.length, 2);
 assert.strictEqual(fromVehicles[0].displayName, 'Lead Vehicle');
 assert.strictEqual(fromVehicles[0].roleLabel, 'Leader');
 assert.strictEqual(fromVehicles[0].shouldRenderMarker, true);
+assert.strictEqual(fromVehicles[0].badgeIdentity.title, null);
+assert.strictEqual(fromVehicles[0].badgeIdentity.source, 'untrusted');
 assert.strictEqual(fromVehicles[1].shouldRenderMarker, false);
 assert.strictEqual(fromVehicles[1].status, 'disconnected');
 assert.ok(!Object.prototype.hasOwnProperty.call(fromVehicles[0], 'expeditionBadgeTitle'));
@@ -208,20 +247,27 @@ assert(mapSource.includes('buildConvoyParticipantsFromMapVehicles'), 'Convoy map
 assert(mapSource.includes('participantRoleLabel'), 'Convoy map should expose safe role labels.');
 assert(mapSource.includes('participantStatusLabel'), 'Convoy map should expose participant status labels.');
 assert(mapSource.includes('participantLastUpdated'), 'Convoy map should expose last-updated copy.');
+assert(
+  mapSource.includes('selectedParticipant.badgeIdentity.title') &&
+    mapSource.indexOf('selectedParticipant.displayName') < mapSource.indexOf('selectedParticipant.badgeIdentity.title') &&
+    mapSource.indexOf('selectedParticipant.badgeIdentity.title') < mapSource.indexOf('selectedParticipant.roleLabel'),
+  'Convoy selected participant detail should render trusted read-only title below name and separate from role/status.',
+);
 assert(!mapSource.includes('badgeTitleForRole'), 'Convoy map must not use badge-title role fallback.');
 assert(!mapSource.includes('expeditionBadgeTitleFor'), 'Convoy map must not render expedition badge title text.');
-assert(!mapSource.includes("textField: ['get', 'expeditionBadgeTitle']"), 'Convoy map must not render badge title under participant name.');
-assert(!mapSource.includes('convoy-members-identity-badge'), 'Convoy map should not keep a badge-title layer.');
+assert(!mapSource.includes("textField: ['get', 'expeditionBadgeTitle']"), 'Convoy map must not render raw badge title snapshots as marker text.');
+assert(!mapSource.includes('convoy-members-identity-badge'), 'Convoy map should not synthesize a badge-title marker layer.');
 
 assert(fallbackSource.includes('buildConvoyParticipantsFromMapVehicles'), 'Fallback card should consume canonical participants.');
 assert(fallbackSource.includes('participant.roleLabel'), 'Fallback card should show safe role labels.');
 assert(fallbackSource.includes('participant.statusLabel'), 'Fallback card should show safe status labels.');
+assert(fallbackSource.includes('participant.badgeIdentity.title'), 'Fallback rows should use canonical trusted badge identity title when available.');
 
 assert(!dispatchPanelSource.includes('expeditionBadgeTitleFromRole'), 'Dispatch panel should not synthesize expedition badge titles for convoy participants.');
-assert(!dispatchPanelSource.includes('activeContext?.expeditionBadgeTitle'), 'Dispatch panel should not display active badge title in Convoy.');
-assert(!convoyCredentialsSource.includes('getCurrentExpeditionBadgeTitle'), 'Convoy credentials flow should not import Badge Identity title yet.');
-assert(!convoyCredentialsSource.includes('leaderExpeditionBadgeTitle: expeditionBadgeTitle'), 'Convoy creation should not attach badge title yet.');
-assert(!convoyCredentialsSource.includes('expeditionBadgeTitle,'), 'Convoy join should not attach badge title yet.');
+assert(dispatchPanelSource.includes('activeContext?.expeditionBadgeTitle'), 'Dispatch panel may pass a scoped active-context title snapshot into canonical participants.');
+assert(convoyCredentialsSource.includes('getCurrentExpeditionIdentityTitle'), 'Convoy credentials flow should read the existing Expedition Identity title derivation.');
+assert(convoyCredentialsSource.includes('leaderExpeditionBadgeTitle: expeditionIdentityTitle'), 'Convoy creation should attach only the read-only derived title snapshot when available.');
+assert(convoyCredentialsSource.includes('expeditionBadgeTitle: expeditionIdentityTitle'), 'Convoy join should attach only the read-only derived title snapshot when available.');
 assert(!convoyRuntimeSources.includes('recordBadgeIdentitySafeSignal'), 'Convoy behavior must not unlock badges.');
 
 const packageJson = JSON.parse(read('package.json'));

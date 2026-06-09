@@ -108,8 +108,9 @@ assert.ok(
   !mapSource.includes('badgeTitleForRole') &&
     !mapSource.includes('expeditionBadgeTitleFor') &&
     !mapSource.includes("textField: ['get', 'expeditionBadgeTitle']") &&
-    !mapSource.includes('convoy-members-identity-badge'),
-  'ConvoyCommandMap should not render Badge / Expedition Identity titles in Convoy yet.',
+    !mapSource.includes('convoy-members-identity-badge') &&
+    mapSource.includes('selectedParticipant.badgeIdentity.title'),
+  'ConvoyCommandMap should render trusted detail-card titles while avoiding role-derived or raw marker badge-title layers.',
 );
 assert.ok(
   !mapSource.includes("textField: ['get', 'label']") &&

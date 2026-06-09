@@ -89,11 +89,13 @@ assert.ok(
 );
 
 assert.ok(
-  !screen.includes('getCurrentExpeditionBadgeTitle') &&
+  screen.includes('getCurrentExpeditionIdentityTitle') &&
+    screen.includes('leaderExpeditionBadgeTitle: expeditionIdentityTitle') &&
+    screen.includes('expeditionBadgeTitle: expeditionIdentityTitle') &&
+    !screen.includes('getCurrentExpeditionBadgeTitle') &&
     !screen.includes('setExpeditionBadgeTitle') &&
-    !screen.includes('leaderExpeditionBadgeTitle: expeditionBadgeTitle') &&
-    !screen.includes('expeditionBadgeTitle,'),
-  'Convoy credentials UI should not attach Badge / Expedition Identity titles until Convoy badge integration is explicitly built.',
+    !screen.includes('recordBadgeIdentitySafeSignal'),
+  'Convoy credentials UI should attach only the read-only derived Expedition Identity title snapshot without unlocking badges.',
 );
 
 for (const validationCopy of [

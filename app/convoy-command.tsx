@@ -33,6 +33,7 @@ import { TACTICAL, TYPO } from '../lib/theme';
 import { ECS_SURFACE } from '../lib/ecsSurfaceTokens';
 import type { Vehicle } from '../lib/types';
 import { vehicleStore } from '../lib/vehicleStore';
+import { getCurrentExpeditionIdentityTitle } from '../lib/expedition/expeditionBadgeStore';
 
 type Mode = 'leader' | 'join' | 'roster';
 type ExpirationPreset = '2h' | '24h' | '7d';
@@ -112,6 +113,7 @@ export default function ConvoyCommandCredentialsScreen() {
   const [members, setMembers] = useState<ConvoyMemberRecord[]>([]);
   const [locationSummaries, setLocationSummaries] = useState<ConvoyLocationSummaryRecord[]>([]);
   const [invites, setInvites] = useState<ConvoyInviteRecord[]>([]);
+  const [expeditionIdentityTitle, setExpeditionIdentityTitle] = useState<string | null>(null);
 
   const [convoyName, setConvoyName] = useState('Trail Convoy');
   const [leaderCallsign, setLeaderCallsign] = useState('LEAD');
@@ -202,6 +204,20 @@ export default function ConvoyCommandCredentialsScreen() {
   }, [refreshConvoys, user?.id]);
 
   useEffect(() => {
+    let mounted = true;
+    void getCurrentExpeditionIdentityTitle()
+      .then((title) => {
+        if (mounted) setExpeditionIdentityTitle(title);
+      })
+      .catch(() => {
+        if (mounted) setExpeditionIdentityTitle(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (selectedConvoy?.syncState === 'local_pending') {
       setMembers([selectedConvoy.membership]);
       setInvites([]);
@@ -219,6 +235,7 @@ export default function ConvoyCommandCredentialsScreen() {
       name: convoyName,
       leaderCallsign,
       leaderVehicleId,
+      leaderExpeditionBadgeTitle: expeditionIdentityTitle,
       startsAt: new Date(),
     });
     if (result.ok) {
@@ -279,6 +296,7 @@ export default function ConvoyCommandCredentialsScreen() {
       rawCode: normalizeConvoyInviteCodeForSubmit(joinCode),
       callsign: joinCallsign,
       vehicleId: joinVehicleId,
+      expeditionBadgeTitle: expeditionIdentityTitle,
     });
     if (result.ok) {
       setNotice('Joined convoy. Location sharing is still off until you start it from Convoy Command.');

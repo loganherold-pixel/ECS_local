@@ -60,9 +60,9 @@ assert.ok(
   'Privacy contract should explicitly scope precise locations to active convoy context.',
 );
 assert.ok(
-  CONVOY_COMMAND_V15_DEFERRED_ITEMS.includes('badge_identity_title_display') &&
+  !CONVOY_COMMAND_V15_DEFERRED_ITEMS.includes('badge_identity_title_display') &&
     CONVOY_COMMAND_V15_DEFERRED_ITEMS.includes('convoy_badge_unlocks'),
-  'Badge identity display and convoy badge unlocks should remain deferred.',
+  'Read-only badge identity title display is allowed, while convoy badge unlocks remain deferred.',
 );
 
 const requiredContractFields = [
@@ -85,7 +85,12 @@ for (const field of requiredContractFields) {
   assert.ok(CONVOY_COMMAND_V15_SOURCE_OF_TRUTH_CONTRACT[field], `Contract should document ${field}.`);
 }
 assert.strictEqual(CONVOY_COMMAND_V15_SOURCE_OF_TRUTH_CONTRACT.badgeIdentity.status, 'deferred');
-assert.strictEqual(CONVOY_COMMAND_V15_SOURCE_OF_TRUTH_CONTRACT.badgeIdentity.convoyDisplayField, null);
+assert.strictEqual(CONVOY_COMMAND_V15_SOURCE_OF_TRUTH_CONTRACT.badgeIdentity.convoyDisplayField, 'badgeIdentity.title');
+assert.strictEqual(
+  CONVOY_COMMAND_V15_SOURCE_OF_TRUTH_CONTRACT.badgeIdentity.displayContract,
+  'read_only_scoped_known_participants_only',
+);
+assert.strictEqual(CONVOY_COMMAND_V15_SOURCE_OF_TRUTH_CONTRACT.badgeIdentity.unlocks, 'deferred');
 
 const roleExpectations = new Map([
   ['lead', 'leader'],

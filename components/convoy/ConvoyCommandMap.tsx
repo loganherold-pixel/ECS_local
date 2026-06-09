@@ -26,6 +26,7 @@ import { ECSIconButton } from '../ECSButton';
 import { ConvoyMapFallback } from './ConvoyMapFallback';
 
 interface ConvoyCommandMapProps {
+  convoyId?: string | null;
   members: ConvoyMapVehicle[];
   currentUserMemberId?: string | null;
   connectionStatus: ConvoyRealtimeConnectionStatus;
@@ -250,6 +251,7 @@ function fallbackReason(reason: MapboxNativeInitReason | null): string {
 }
 
 export function ConvoyCommandMap({
+  convoyId,
   members,
   currentUserMemberId,
   connectionStatus,
@@ -281,8 +283,8 @@ export function ConvoyCommandMap({
   const shouldFollowUser = followUserWhenEmpty && !hasRouteLine;
   const participantSource = participantSourceForConnection(connectionStatus);
   const participants = useMemo(
-    () => buildConvoyParticipantsFromMapVehicles(members, { source: participantSource }),
-    [members, participantSource],
+    () => buildConvoyParticipantsFromMapVehicles(members, { convoyId, source: participantSource }),
+    [convoyId, members, participantSource],
   );
   const summary = useMemo(() => memberSummary(participants, members), [members, participants]);
   const identities = useMemo(
@@ -450,6 +452,7 @@ export function ConvoyCommandMap({
   if (!hasMembers && !showMapWhenEmpty) {
     return (
       <ConvoyMapFallback
+        convoyId={convoyId}
         members={members}
         connectionStatus={connectionStatus}
         reason="No live convoy locations yet."
@@ -463,6 +466,7 @@ export function ConvoyCommandMap({
   if (!mapbox || initReason !== 'ready') {
     return (
       <ConvoyMapFallback
+        convoyId={convoyId}
         members={members}
         connectionStatus={connectionStatus}
         reason={fallbackReason(initReason)}
@@ -722,15 +726,17 @@ export function ConvoyCommandMap({
             <Text style={[styles.detailTitle, { color: palette.text }]} numberOfLines={1}>
               {selectedParticipant.displayName}
             </Text>
-            <Text style={[styles.detailBadge, { color: palette.amber }]} numberOfLines={1}>
-              {selectedParticipant.roleLabel}
-            </Text>
           </View>
+          {selectedParticipant.badgeIdentity.title ? (
+            <Text style={[styles.detailIdentityTitle, { color: palette.amber }]} numberOfLines={1}>
+              {selectedParticipant.badgeIdentity.title}
+            </Text>
+          ) : null}
           <Text style={[styles.detailLine, { color: palette.textMuted }]} numberOfLines={1}>
-            {selectedParticipant.statusLabel} / {formatConvoyParticipantLastUpdated(selectedParticipant)}
+            {selectedParticipant.roleLabel} / {selectedParticipant.statusLabel} / {selectedParticipant.vehicleSummary ?? 'Vehicle unavailable'}
           </Text>
           <Text style={[styles.detailLine, { color: palette.textMuted }]} numberOfLines={1}>
-            {selectedParticipant.vehicleSummary ?? 'Vehicle unavailable'} / {selectedParticipant.sourceLabel}
+            Updated {formatConvoyParticipantLastUpdated(selectedParticipant)} / {selectedParticipant.sourceLabel}
           </Text>
           <Text style={[styles.detailLine, { color: palette.textMuted }]} numberOfLines={1}>
             Speed {selectedIdentity.speedMph != null ? `${Math.round(selectedIdentity.speedMph)} mph` : 'unavailable'} / Heading {selectedIdentity.headingDegrees != null ? `${Math.round(selectedIdentity.headingDegrees)}°` : 'unavailable'}
@@ -811,7 +817,6 @@ const styles = StyleSheet.create({
   detailHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: 8,
   },
   detailTitle: {
@@ -821,11 +826,11 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
-  detailBadge: {
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
+  detailIdentityTitle: {
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
   },
   detailLine: {
     fontSize: 10,

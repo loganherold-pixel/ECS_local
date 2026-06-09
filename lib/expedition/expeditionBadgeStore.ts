@@ -1,6 +1,7 @@
 import { createMigratingNonSecureStorage } from '../nonSecureStorage';
 import {
   BADGE_IDENTITY_MVP_BADGE_MAPPING,
+  buildBadgeIdentityProfileModel,
   isBadgeIdentitySignalDeferred,
   isBadgeIdentitySignalSafe,
   type BadgeIdentityMvpSignalId,
@@ -831,6 +832,12 @@ export async function getCurrentExpeditionBadgeTitle(): Promise<string | null> {
   const [badge] = await getRecentBadgeUnlocks(1);
   const title = typeof badge?.title === 'string' ? badge.title.trim() : '';
   return title || null;
+}
+
+export async function getCurrentExpeditionIdentityTitle(): Promise<string | null> {
+  const unlockedBadges = await getUnlockedBadges();
+  const profile = buildBadgeIdentityProfileModel({ badges: unlockedBadges });
+  return profile.hasEarnedState ? profile.title : null;
 }
 
 function isNextProgressMilestone(

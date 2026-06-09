@@ -9,9 +9,14 @@ import {
   type ConvoyV15Role,
 } from './convoyCommandV15Readiness';
 import type { ConvoyMapVehicle } from './convoyRealtimeService';
+import {
+  BADGE_IDENTITY_TITLE_TIERS,
+  type BadgeIdentityTitle,
+} from '../expedition/badgeExpeditionIdentityReadiness';
 
 export type ConvoyParticipantStatus = 'live' | 'stale' | 'disconnected' | 'unknown' | 'demo';
 export type ConvoyParticipantSource = 'live' | 'cached' | 'mock' | 'demo' | 'unknown';
+export type ConvoyParticipantBadgeIdentitySource = 'scoped_convoy_snapshot' | 'qa_fixture' | 'unavailable' | 'untrusted';
 
 export interface ConvoyParticipantInput {
   convoyId?: unknown;
@@ -27,6 +32,7 @@ export interface ConvoyParticipantInput {
   lastUpdated?: string | number | Date | null;
   movementStatus?: unknown;
   source?: unknown;
+  expeditionBadgeTitle?: unknown;
   nowMs?: number;
 }
 
@@ -55,7 +61,10 @@ export interface ConvoyParticipant {
   recoveryFlag: boolean;
   badgeIdentity: {
     status: typeof CONVOY_COMMAND_V15_BADGE_IDENTITY_STATUS;
-    title: null;
+    title: BadgeIdentityTitle | null;
+    source: ConvoyParticipantBadgeIdentitySource;
+    copy: string;
+    isCredential: false;
   };
 }
 
@@ -66,6 +75,7 @@ export interface BuildConvoyParticipantsFromMapVehiclesOptions {
 }
 
 export const CONVOY_PARTICIPANT_LIVE_MAX_AGE_MS = CONVOY_COMMAND_V15_LIVE_LOCATION_MAX_AGE_MS;
+const BADGE_IDENTITY_TITLES = new Set(BADGE_IDENTITY_TITLE_TIERS.map((tier) => tier.title));
 
 function text(value: unknown): string {
   return String(value ?? '').trim();
@@ -175,11 +185,67 @@ function sourceForContract(source: ConvoyParticipantSource): string {
   return source;
 }
 
+function normalizeBadgeIdentityTitle(value: unknown): BadgeIdentityTitle | null {
+  const title = compactText(value);
+  return title && BADGE_IDENTITY_TITLES.has(title as BadgeIdentityTitle) ? title as BadgeIdentityTitle : null;
+}
+
+function badgeIdentityForParticipant(input: {
+  convoyId: string | null;
+  participantId: string | null;
+  activeParticipant?: boolean | null;
+  fixtureOnly: boolean;
+  source: ConvoyParticipantSource;
+  title: unknown;
+}): ConvoyParticipant['badgeIdentity'] {
+  const requestedTitle = compactText(input.title);
+  const title = normalizeBadgeIdentityTitle(input.title);
+  if (!requestedTitle) {
+    return {
+      status: CONVOY_COMMAND_V15_BADGE_IDENTITY_STATUS,
+      title: null,
+      source: 'unavailable',
+      copy: 'No Expedition Identity title snapshot is available for this participant.',
+      isCredential: false,
+    };
+  }
+
+  const scopedIdentityKnown = Boolean(input.convoyId && input.participantId);
+  const untrusted =
+    !title ||
+    !scopedIdentityKnown ||
+    input.activeParticipant === false ||
+    input.source === 'mock' ||
+    input.source === 'demo';
+
+  if (untrusted) {
+    return {
+      status: CONVOY_COMMAND_V15_BADGE_IDENTITY_STATUS,
+      title: null,
+      source: 'untrusted',
+      copy: 'Expedition Identity title is unavailable or not trusted for this convoy participant.',
+      isCredential: false,
+    };
+  }
+
+  return {
+    status: CONVOY_COMMAND_V15_BADGE_IDENTITY_STATUS,
+    title,
+    source: input.fixtureOnly ? 'qa_fixture' : 'scoped_convoy_snapshot',
+    copy: input.fixtureOnly
+      ? 'Read-only QA fixture title; not production membership or badge progress.'
+      : 'Read-only Expedition Identity title from the scoped convoy participant snapshot.',
+    isCredential: false,
+  };
+}
+
 export function buildConvoyParticipant(input: ConvoyParticipantInput): ConvoyParticipant {
   const source = normalizeSource(input.source);
   const fixtureOnly = input.fixtureOnly === true;
   const coordinates = normalizeCoordinate(input.coordinates);
   const lastUpdated = timestampIso(input.lastUpdated);
+  const participantId = compactText(input.participantId);
+  const convoyId = compactText(input.convoyId);
   const contract = buildConvoyV15ParticipantContract({
     convoyId: input.convoyId,
     convoySource: sourceForContract(source),
@@ -201,7 +267,7 @@ export function buildConvoyParticipant(input: ConvoyParticipantInput): ConvoyPar
   const status = participantStatusFromContract(contract.status.status, source);
 
   return {
-    participantId: compactText(input.participantId) ?? 'unknown-participant',
+    participantId: participantId ?? 'unknown-participant',
     displayName: compactText(input.displayName) ?? 'Convoy member',
     vehicleSummary: compactText(input.vehicleSummary),
     role,
@@ -221,14 +287,18 @@ export function buildConvoyParticipant(input: ConvoyParticipantInput): ConvoyPar
     isFixtureOnly: fixtureOnly,
     isProductionLive: !fixtureOnly && contract.status.isProductionLive && status === 'live' && source === 'live',
     privacyScope: CONVOY_COMMAND_V15_PRIVACY_SCOPE.scope,
-    convoyId: compactText(input.convoyId),
+    convoyId,
     shouldRenderMarker: Boolean(coordinates),
     needsAssistance: contract.emergency.needsAssistance,
     recoveryFlag: contract.emergency.recoveryFlag,
-    badgeIdentity: {
-      status: CONVOY_COMMAND_V15_BADGE_IDENTITY_STATUS,
-      title: null,
-    },
+    badgeIdentity: badgeIdentityForParticipant({
+      convoyId,
+      participantId,
+      activeParticipant: input.activeParticipant,
+      fixtureOnly,
+      source,
+      title: input.expeditionBadgeTitle,
+    }),
   };
 }
 
@@ -254,6 +324,7 @@ export function buildConvoyParticipantsFromMapVehicles(
       lastUpdated: member.updatedAt ?? member.capturedAt,
       movementStatus: member.isStale ? 'stale' : member.movementStatus,
       source: member.participantSource ?? options.source ?? (member.isStale ? 'cached' : 'live'),
+      expeditionBadgeTitle: member.expeditionBadgeTitle,
       nowMs: options.nowMs,
     }),
   );
