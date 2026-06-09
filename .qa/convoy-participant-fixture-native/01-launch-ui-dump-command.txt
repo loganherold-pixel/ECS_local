@@ -1,0 +1,1 @@
+UI hierchary dumped to: /sdcard/ecs-convoy-fixture-launch-ui.xml

@@ -60,10 +60,16 @@ export interface ConvoyMemberLocationRow {
 
 export interface ConvoyMapVehicle {
   memberId: string;
+  participantId?: string | null;
   callsign: string;
   displayName?: string | null;
   expeditionBadgeTitle?: string | null;
   role: ConvoyRole;
+  participantRole?: string | null;
+  participantSource?: 'live' | 'cached' | 'mock' | 'demo' | 'unknown' | null;
+  participantActive?: boolean | null;
+  participantFixtureOnly?: boolean | null;
+  vehicleSummary?: string | null;
   latitude: number;
   longitude: number;
   accuracyMeters: number | null;

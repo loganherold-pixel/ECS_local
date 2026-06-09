@@ -17,6 +17,7 @@ export interface ConvoyParticipantInput {
   convoyId?: unknown;
   participantId?: unknown;
   activeParticipant?: boolean | null;
+  fixtureOnly?: boolean | null;
   displayName?: unknown;
   vehicleSummary?: unknown;
   role?: unknown;
@@ -45,6 +46,7 @@ export interface ConvoyParticipant {
   statusCopy: string;
   source: ConvoyParticipantSource;
   sourceLabel: string;
+  isFixtureOnly: boolean;
   isProductionLive: boolean;
   privacyScope: typeof CONVOY_COMMAND_V15_PRIVACY_SCOPE.scope;
   convoyId: string | null;
@@ -154,6 +156,11 @@ function sourceLabel(source: ConvoyParticipantSource): string {
   }
 }
 
+function fixtureStatusCopy(status: ConvoyParticipantStatus): string | null {
+  if (status !== 'live') return null;
+  return 'Recent QA fixture update; not production live.';
+}
+
 function participantStatusFromContract(
   contractStatus: ReturnType<typeof buildConvoyV15ParticipantContract>['status']['status'],
   source: ConvoyParticipantSource,
@@ -170,6 +177,7 @@ function sourceForContract(source: ConvoyParticipantSource): string {
 
 export function buildConvoyParticipant(input: ConvoyParticipantInput): ConvoyParticipant {
   const source = normalizeSource(input.source);
+  const fixtureOnly = input.fixtureOnly === true;
   const coordinates = normalizeCoordinate(input.coordinates);
   const lastUpdated = timestampIso(input.lastUpdated);
   const contract = buildConvoyV15ParticipantContract({
@@ -205,10 +213,13 @@ export function buildConvoyParticipant(input: ConvoyParticipantInput): ConvoyPar
     lastUpdated,
     status,
     statusLabel: statusLabel(status),
-    statusCopy: statusCopy(status, contract.status.reason),
+    statusCopy: fixtureOnly
+      ? fixtureStatusCopy(status) ?? statusCopy(status, contract.status.reason)
+      : statusCopy(status, contract.status.reason),
     source,
     sourceLabel: sourceLabel(source),
-    isProductionLive: contract.status.isProductionLive && status === 'live' && source === 'live',
+    isFixtureOnly: fixtureOnly,
+    isProductionLive: !fixtureOnly && contract.status.isProductionLive && status === 'live' && source === 'live',
     privacyScope: CONVOY_COMMAND_V15_PRIVACY_SCOPE.scope,
     convoyId: compactText(input.convoyId),
     shouldRenderMarker: Boolean(coordinates),
@@ -228,11 +239,12 @@ export function buildConvoyParticipantsFromMapVehicles(
   return members.map((member) =>
     buildConvoyParticipant({
       convoyId: options.convoyId,
-      participantId: member.memberId,
-      activeParticipant: member.movementStatus !== 'offline',
+      participantId: member.participantId === undefined ? member.memberId : member.participantId,
+      activeParticipant: member.participantActive === undefined ? member.movementStatus !== 'offline' : member.participantActive,
+      fixtureOnly: member.participantFixtureOnly,
       displayName: member.callsign || member.displayName,
       vehicleSummary: (member as ConvoyMapVehicle & { vehicleSummary?: string | null }).vehicleSummary ?? null,
-      role: member.role,
+      role: member.participantRole ?? member.role,
       coordinates: {
         latitude: member.latitude,
         longitude: member.longitude,
@@ -241,7 +253,7 @@ export function buildConvoyParticipantsFromMapVehicles(
       speedMps: member.speedMps,
       lastUpdated: member.updatedAt ?? member.capturedAt,
       movementStatus: member.isStale ? 'stale' : member.movementStatus,
-      source: options.source ?? (member.isStale ? 'cached' : 'live'),
+      source: member.participantSource ?? options.source ?? (member.isStale ? 'cached' : 'live'),
       nowMs: options.nowMs,
     }),
   );
