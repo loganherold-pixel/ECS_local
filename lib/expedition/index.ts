@@ -45,6 +45,32 @@ export {
 } from './expeditionBadgeRegistry';
 
 export {
+  BADGE_IDENTITY_CATEGORIES,
+  BADGE_IDENTITY_DEFERRED_SIGNALS,
+  BADGE_IDENTITY_PRODUCTION_GUARDS,
+  BADGE_IDENTITY_SAFE_SIGNALS,
+  BADGE_IDENTITY_SOURCE_OF_TRUTH,
+  BADGE_IDENTITY_TITLE_TIERS,
+  BADGE_IDENTITY_UI_SURFACES,
+  buildBadgeIdentityProfileModel,
+  deriveExpeditionIdentityTitle,
+  isBadgeIdentitySignalDeferred,
+  isBadgeIdentitySignalSafe,
+} from './badgeExpeditionIdentityReadiness';
+
+export type {
+  BadgeIdentityCategoryRecommendation,
+  BadgeIdentitySignal,
+  BadgeIdentitySignalStatus,
+  BadgeIdentityProfileBadgeInput,
+  BadgeIdentityProfileModel,
+  BadgeIdentityTitle,
+  BadgeIdentityTitleInput,
+  BadgeIdentityTitleResult,
+  BadgeIdentityTitleTier,
+} from './badgeExpeditionIdentityReadiness';
+
+export {
   clearAllBadgesForTests,
   evaluateBadgesForCompletedTrip,
   getBadgeProgress,

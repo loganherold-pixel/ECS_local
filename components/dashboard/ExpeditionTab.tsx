@@ -20,6 +20,7 @@ import {
   BadgeMilestoneList,
   BadgeUnlockSummary,
 } from './ExpeditionBadgeVisuals';
+import { ExpeditionIdentityProfileSurface } from './ExpeditionIdentityProfileSurface';
 import {
   dismissInsight,
   downloadExpeditionReport,
@@ -970,6 +971,8 @@ function UnlockedBadgesView({
           <Text style={styles.detailTitle}>Unlocked Badges</Text>
           <Text style={styles.detailDate}>{unlockedBadges.length} earned</Text>
         </View>
+
+        <ExpeditionIdentityProfileSurface badges={unlockedBadges} />
 
         {unlockedBadges.length === 0 ? (
           <BadgeGrid

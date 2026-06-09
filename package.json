@@ -153,6 +153,7 @@
     "test:offline-incident-packet-foundation": "node ./scripts/test-offline-incident-packet-foundation.js",
     "test:terrain-risk-v1": "node ./scripts/test-terrain-risk-v1.js",
     "test:camp-viability-score-v1": "node ./scripts/test-camp-viability-score-v1.js",
+    "test:badge-expedition-identity-readiness": "node ./scripts/test-badge-expedition-identity-readiness.js",
     "test:explore-tripbuilder-manifest-export": "node ./scripts/test-explore-tripbuilder-manifest-export.js",
     "test:explore-suggested-trailheads-production-guard": "node ./scripts/test-explore-suggested-trailheads-production-guard.js",
     "test:canonical-route-geometry-normalizer": "node ./scripts/test-canonical-route-geometry-normalizer.js",
