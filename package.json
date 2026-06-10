@@ -432,6 +432,7 @@
     "test:vehicle-telemetry-live": "node ./scripts/test-vehicle-telemetry-live.js",
     "test:obd2-live-pipeline": "node ./scripts/test-obd2-live-pipeline.js",
     "test:unified-telemetry-pipeline": "node ./scripts/test-unified-telemetry-pipeline.js",
+    "test:hardware-telemetry-field-qualification": "node ./scripts/test-hardware-telemetry-field-qualification.js",
     "test:vehicle-systems-source-labels": "node ./scripts/test-vehicle-systems-source-labels.js",
     "test:expo-video-lifecycle": "node ./scripts/test-expo-video-lifecycle.js",
     "test:remoteness-live-destinations": "node ./scripts/test-remoteness-live-destinations.js",
