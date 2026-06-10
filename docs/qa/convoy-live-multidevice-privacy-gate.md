@@ -336,3 +336,87 @@ Live multi-device native QA is ready to run after:
 - Convoy Supabase migrations and Edge Function are deployed.
 - Realtime is enabled for `convoy_member_locations`.
 - Raw evidence folder is prepared under `.qa/convoy-live-multidevice-privacy-gate/`.
+
+## 2026-06-10 True Two-Device Android Native QA Attempt
+
+Raw evidence folder: `.qa/convoy-two-device-live-privacy/`
+
+Devices:
+
+- Device A: Samsung SM-X230, Android 16.
+- Device B: Samsung SM-S948U, Android 16.
+
+Backend/session setup:
+
+- Both devices ran the ECS Android dev-client path through Metro with `adb reverse tcp:8081 tcp:8081`.
+- Expo loaded the repo `.env` public Supabase and Mapbox configuration during verification commands.
+- The exact backend project label and QA account split were not independently confirmed from the UI.
+- Both devices had persisted app state before the run, so this was not a clean account/device baseline.
+
+Native launch/navigation evidence:
+
+- Device A launched after an initial splash-screen delay and then rendered the ECS Dashboard.
+- Device B launched cleanly into the ECS Dashboard.
+- No app redbox or app fatal crash pattern was found in captured launch, tab, Dispatch, Convoy Command, or roster evidence. `AndroidRuntime` lines observed in logs were from ADB/uiautomator helper processes, not ECS app crash traces.
+- Bottom tabs opened on both devices through ADB taps: Fleet, Navigate, Dashboard, Explore, Dispatch.
+- Dispatch opened on both devices and Convoy Command opened read-only on both devices.
+
+Clean baseline result:
+
+- Failed / blocked.
+- Device A already had multiple persisted `Trail Convoy` records. The read-only roster showed `LEAD / YOU` with `No location yet / unknown`.
+- Device B already had multiple persisted `Trail Convoy` records marked `ACTIVE / LEAD`.
+- Because both devices were already carrying active/local Convoy state, the run could not truthfully verify "no active convoy", "Device A creates convoy", or "Device B joins only after invite" from a clean baseline.
+
+Read-only privacy evidence gathered before stopping:
+
+- Convoy Command displayed private convoy access copy on both devices.
+- Device A roster stayed inside the active convoy context and did not show global users.
+- Device B showed persisted active leader convoy records only; no unrelated global user list was observed in the inspected roster screen.
+- No badge/expedition title leakage was observed in the inspected screens.
+- No location sharing was started.
+- No invite was generated.
+- No convoy was created or joined during this run.
+- No revoke/delete action was tapped.
+- No telemetry or hardware path was touched.
+
+Blocked live scenarios:
+
+- Device A creates a new clean convoy.
+- Device B joins Device A through an intended invite/credential.
+- Device A sees Device B only after join.
+- Device B sees Device A only after join.
+- Fresh scoped live updates across devices.
+- Permission denied/revoked propagation across devices.
+- Stop sharing across devices.
+- Stale threshold across devices.
+- Leave/end convoy cross-device cleanup.
+- Restart recovery for a newly-created shared convoy.
+- Live telemetry isolation during an active shared convoy.
+
+Cleanup status:
+
+- No new production/backend convoy state was created by this QA pass.
+- No new location publish, invite generation, badge unlock, telemetry mutation, Fleet mutation, Active Trip mutation, or Offline Packet mutation was initiated.
+- Existing persisted convoy state was not reset because no safe universal cleanup path was visible from the clean baseline screen, and destructive app-data/backend cleanup was not approved for this pass.
+
+Automated verification run:
+
+- `npm run test:convoy-live-multidevice-privacy-gate` - pass
+- `npm run test:convoy-command-v1-5-foundation` - pass
+- `npm run test:convoy-command-v1-5-readiness` - pass
+- `npm run test:convoy-participant-fixture-qa` - pass
+- `npm run test:convoy-badge-title-display` - pass
+- `npm run test:convoy-command` - pass
+- `npm run test:convoy-command-map-component` - pass
+- `npm run test:convoy-privacy-safety` - pass
+- `npm run test:badge-expedition-identity-mvp` - pass
+- `npm run lint` - pass
+- `npm run smoke -- --json` - pass
+- `git diff --check` - pass
+
+Closed-beta gate result:
+
+- Not cleared.
+- The branch passes automated privacy/scoping guards and two-device native launch/navigation/Convoy-read-only evidence.
+- True live two-device privacy/scoping remains blocked until both devices/accounts/backend are reset to a clean Convoy baseline or an approved admin cleanup path is available.
