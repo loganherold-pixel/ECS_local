@@ -420,3 +420,156 @@ Closed-beta gate result:
 - Not cleared.
 - The branch passes automated privacy/scoping guards and two-device native launch/navigation/Convoy-read-only evidence.
 - True live two-device privacy/scoping remains blocked until both devices/accounts/backend are reset to a clean Convoy baseline or an approved admin cleanup path is available.
+
+## 2026-06-10 Two-Device Live Privacy QA Rerun After Reset
+
+Raw evidence folder: `.qa/convoy-two-device-live-privacy-rerun-after-reset/`
+
+Devices:
+
+- Device A: Samsung SM-X230, Android 16.
+- Device B: Samsung SM-S948U, Android 16 target, but ADB authorization was not available during this rerun.
+
+Backend/session setup:
+
+- Branch: `codex/convoy-live-multidevice-privacy-gate`.
+- Device A was visible over ADB as an authorized device.
+- Device B appeared as `unauthorized`, so app launch, clean baseline confirmation, create/join, and location-sharing verification could not be run on the second device.
+- Backend environment, QA account/session split, and backend cleanup completion could not be independently verified from the blocked native run.
+
+Clean baseline result:
+
+- Blocked before baseline verification.
+- Device B must be unlocked and the Android USB debugging authorization prompt must be accepted before the true two-device run can start.
+- Because Device B was unauthorized, this pass did not verify no active convoy, no active team, tracking disabled, no stale roster, no pending invite/join state, no global users, no badge/title leakage, or no location publishing on both devices.
+
+Native QA scenarios not run because of the precondition blocker:
+
+- Device A creates a convoy from a clean baseline.
+- Device B joins through intended invite credentials.
+- Cross-device participant visibility and same-convoy scoping.
+- Fresh live location updates.
+- Location denied/revoked propagation.
+- Stop sharing propagation.
+- Stale threshold behavior.
+- Leave/end convoy cleanup.
+- Restart recovery.
+- Telemetry isolation during live convoy.
+
+Automated verification run:
+
+- `npm run test:convoy-live-multidevice-privacy-gate` - pass
+- `npm run test:convoy-command-v1-5-foundation` - pass
+- `npm run test:convoy-command-v1-5-readiness` - pass
+- `npm run test:convoy-participant-fixture-qa` - pass
+- `npm run test:convoy-badge-title-display` - pass
+- `npm run test:convoy-command` - pass
+- `npm run test:convoy-command-map-component` - pass
+- `npm run test:convoy-privacy-safety` - pass
+- `npm run test:badge-expedition-identity-mvp` - pass
+- `npm run lint` - pass
+- `npm run smoke -- --json` - pass
+- `git diff --check` - pass
+
+Closed-beta gate result:
+
+- Not cleared.
+- Automated privacy/scoping guards pass, but true two-device live privacy QA remains blocked until Device B is authorized over ADB and both devices can be inspected from a confirmed clean baseline.
+
+## 2026-06-10 Two-Device Live Privacy QA Rerun After Reset, Authorized Devices
+
+Raw evidence folder: `.qa/convoy-two-device-live-privacy-rerun-after-reset-authorized/`
+
+Devices:
+
+- Device A: Samsung SM-X230, Android 16.
+- Device B: Samsung SM-S948U, Android 16.
+- Both devices were visible over ADB as authorized devices and were awake/unlocked for the run.
+
+Backend/session setup:
+
+- Branch: `codex/convoy-live-multidevice-privacy-gate`.
+- Both devices used the ECS Android dev-client path with Metro and `adb reverse tcp:8081 tcp:8081`.
+- The intended QA backend was used through the app environment loaded by the dev-client path. Raw backend identifiers, account ids, and invite credentials are intentionally not recorded in this git-tracked summary.
+- The clean local/backend baseline appeared effective at the start of the run, but the two-device account/session split was not valid: both devices resolved to the same visible leader identity after Device B joined.
+
+Clean baseline result:
+
+- Passed on both devices.
+- Device A and Device B both showed `No active convoys yet.` and `No invite records visible.` on Convoy Command.
+- Roster on both devices showed no active convoy, no active members, member view, no global users, no visible badge/title leakage, and no location publishing.
+
+Device A create/invite result:
+
+- Device A created `Trail Convoy` successfully.
+- Device A saw only the expected leader/self roster state after creation.
+- Device A generated an invite through the intended UI. Raw invite code evidence is stored only in the ignored local evidence folder and is not included here.
+- Location sharing remained off; no publish was started.
+
+Device B join result:
+
+- Blocked as a valid two-participant privacy run.
+- An initial malformed invite entry was rejected with invalid-code copy, which was expected for the entered malformed value.
+- After entering the intended invite code, Device B joined successfully, but it displayed the same leader/self identity and leader controls rather than a distinct member participant.
+- Device A still showed only its own leader/self roster after Device B joined.
+- No unrelated global users appeared, but the run cannot validate participant visibility, cross-device scoping, live status propagation, or member privacy because Device B was not a distinct QA account/session.
+
+Participant visibility and privacy result:
+
+- Baseline visibility was clean on both devices.
+- Device A after create showed only the expected self participant.
+- Device B join did not create a distinct visible participant due to same-account/session behavior.
+- No global users were observed.
+- No production location sharing was started.
+- No precise stale location was exposed outside convoy context.
+
+Badge title and badge isolation result:
+
+- No badge/title leakage was observed at baseline.
+- No convoy-driven badge unlock was observed.
+- Title behavior across distinct real identities was not validated because the session split was invalid.
+
+Telemetry isolation result:
+
+- Hardware telemetry paths were not touched during this QA pass.
+- No OBD2/EcoFlow/Mopeka/Bluestack state was used as convoy presence.
+- Live telemetry isolation under an active two-participant convoy remains not run because the valid participant split was blocked.
+
+Native QA scenarios not run after the session-split blocker:
+
+- Fresh live updates between two distinct participants.
+- Location denied/revoked status propagation.
+- Stop sharing propagation.
+- Stale threshold behavior.
+- Member leave/end behavior from a true member account.
+- Restart recovery for a true two-participant convoy.
+- Telemetry isolation during a true two-participant live convoy.
+
+Cleanup result:
+
+- Passed.
+- Device A revoked the active invite and ended the convoy.
+- Final Convoy Command state on both devices returned to `No active convoys yet.` and `No invite records visible.`
+- Final roster state on both devices returned to no active convoy, member view, and no active members.
+- No location sharing was started, no telemetry state was changed, and no badge unlock was observed.
+
+Automated verification run:
+
+- `npm run test:convoy-live-multidevice-privacy-gate` - pass
+- `npm run test:convoy-command-v1-5-foundation` - pass
+- `npm run test:convoy-command-v1-5-readiness` - pass
+- `npm run test:convoy-participant-fixture-qa` - pass
+- `npm run test:convoy-badge-title-display` - pass
+- `npm run test:convoy-command` - pass
+- `npm run test:convoy-command-map-component` - pass
+- `npm run test:convoy-privacy-safety` - pass
+- `npm run test:badge-expedition-identity-mvp` - pass
+- `npm run lint` - pass
+- `npm run smoke -- --json` - pass
+- `git diff --check` - pass
+
+Closed-beta gate result:
+
+- Not cleared.
+- This rerun proves the reset baseline, create/invite path, invalid invite rejection, cleanup path, and automated guards, but it does not prove true two-device live privacy.
+- Rerun true live Convoy privacy only after Device B is signed into a separate QA account, or after an explicitly approved safe session split is confirmed before creating/joining the convoy.
