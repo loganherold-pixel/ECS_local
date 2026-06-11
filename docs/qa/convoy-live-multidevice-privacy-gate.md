@@ -643,3 +643,249 @@ Closed-beta gate result:
 
 - Not cleared.
 - True two-device live Convoy privacy remains blocked until Device A and Device B both show present, distinct authenticated QA user ids before Convoy creation.
+
+## 2026-06-11 Two-Device Live Privacy QA Rerun With Account Separation
+
+Raw evidence folder: `.qa/convoy-two-device-live-privacy-account-separated/`
+
+Devices:
+
+- Device A: Samsung SM-X230, Android 16, serial `R5GL13VYSRY`.
+- Device B: Samsung SM-S948U, Android 16, serial `R3GL302P1YE`.
+
+Backend/session setup:
+
+- Branch: `codex/convoy-live-multidevice-privacy-gate`.
+- Backend environment: `ppullxxprgyeoakzqnxi` Supabase project from the repo `.env`.
+- Both devices were visible over ADB.
+- Raw user ids, tokens, invite codes, and account credentials are intentionally not recorded in this git-tracked summary.
+
+Account separation preflight result:
+
+- Blocked before Convoy creation.
+- Device A auth cache was readable, but no authenticated Supabase user id was present in `supabase_auth_state.json`.
+- Device B was reachable over ADB, but the installed app package was not debuggable, so `run-as` could not read the persisted Supabase auth state.
+- Distinct authenticated QA identities could not be proven.
+- The hard-stop precondition failed with `missing_authenticated_user_id_or_unreadable_auth_state`.
+- No convoy was created, no invite was generated, no join was attempted, and no location sharing was started.
+
+Clean baseline result:
+
+- Not run after the account preflight blocker.
+- Because distinct authenticated QA identities were not confirmed, this pass could not truthfully validate active convoy, active team, stale roster, pending invite/join, badge/title leakage, or location publishing behavior under separate QA accounts.
+
+Native QA scenarios not run because of the preflight blocker:
+
+- Device A creates convoy.
+- Device A generates invite.
+- Device B joins as a distinct participant.
+- Cross-device participant visibility and participant id comparison.
+- Fresh live updates.
+- Location denied/revoked propagation.
+- Stop sharing propagation.
+- Stale threshold behavior.
+- Leave/end convoy behavior.
+- Restart recovery.
+- Telemetry isolation during active live convoy.
+
+Cleanup result:
+
+- No cleanup action was required because no Convoy action was initiated.
+- No production/backend convoy state, invite, location publish, badge state, telemetry state, Fleet state, Active Trip state, or Offline Packet state was intentionally mutated during this pass.
+
+Automated verification run:
+
+- `npm run test:convoy-qa-account-session-separation` - missing on this branch
+- `npm run test:convoy-live-multidevice-privacy-gate` - pass
+- `npm run test:convoy-command-v1-5-foundation` - pass
+- `npm run test:convoy-command-v1-5-readiness` - pass
+- `npm run test:convoy-participant-fixture-qa` - pass
+- `npm run test:convoy-badge-title-display` - pass
+- `npm run test:convoy-command` - pass
+- `npm run test:convoy-command-map-component` - pass
+- `npm run test:convoy-privacy-safety` - pass
+- `npm run test:badge-expedition-identity-mvp` - pass
+- `npm run lint` - fail: `expo lint` exited with ESLint `patterns must be a non-empty string or an array of non-empty strings`
+- `npm run smoke -- --json` - pass
+- `git diff --check` - pass
+
+Closed-beta gate result:
+
+- Not cleared.
+- Automated Convoy privacy/scoping guards remain healthy, but true two-device live Convoy privacy is still blocked.
+- Rerun only after Device A and Device B both expose present, distinct authenticated QA user ids before Convoy creation. Device B also needs a debuggable QA/dev-client build or another approved non-secret identity diagnostic surface so account separation can be verified without reading raw credentials.
+
+## 2026-06-11 Identity Diagnostic And Lint Follow-Up
+
+Branch: `codex/convoy-qa-identity-diagnostic-and-lint-fix`
+
+Follow-up result:
+
+- Added a dev/test-only identity diagnostic route at `planning-offline-sync:///dev/convoy-identity-qa`.
+- The diagnostic shows only redacted user id, redacted email/display label, backend/project label, redacted active convoy id, redacted participant id, live sharing state, baseline state, and local preflight result.
+- The diagnostic is read-only and does not create convoys, join invites, publish location, unlock badges, mutate Fleet, mutate Active Trip, mutate Offline Packet, touch telemetry, or modify provider state.
+- Restored `npm run test:convoy-qa-account-session-separation`.
+- Fixed the lint command path with a wrapper that drops empty forwarded args before invoking Expo lint.
+
+Updated rerun requirement:
+
+- Device A and Device B must both show present, distinct authenticated QA user ids through either a debuggable dev-client build, the safe in-app diagnostic route, or another approved non-secret identity diagnostic.
+- Do not rely on `run-as` if the installed package is not debuggable.
+- True two-device live Convoy privacy remains not cleared until the live create/join/share/revoke scenarios are rerun after this preflight passes.
+
+Device A QA Leader designation:
+
+- `admin@expeditioncommand.com` is explicitly approved as Device A's intended QA Leader identity for the live Convoy two-device privacy rerun.
+- Device B should remain signed in as the QA Member account, and the two redacted authenticated user ids must remain distinct before Convoy creation.
+
+## 2026-06-11 Final Two-Device Live Privacy QA Rerun Preflight
+
+Raw evidence folder: `.qa/convoy-two-device-live-privacy-final-rerun/`
+
+Devices:
+
+- Device A: Samsung SM-X230, Android 16, serial `R5GL13VYSRY`.
+- Device B: Samsung SM-S948U, Android 16, serial `R3GL302P1YE`.
+
+Backend/session setup:
+
+- Requested branch: `codex/convoy-live-multidevice-privacy-gate`.
+- Current runnable worktree branch: `codex/convoy-qa-identity-diagnostic-and-lint-fix`.
+- Backend environment shown by both device diagnostics: `ppullxxprgyeoakzqnxi`.
+- Both devices were visible over ADB, on `com.expeditioncommand.planningofflinesync` versionCode 4/versionName 1.0.0, and running debuggable builds.
+- Both devices had Metro reverse active on tcp:8081 and opened the dev/test-only diagnostic route.
+
+Identity diagnostic result:
+
+- Device A auth present: yes.
+- Device A redacted user id: present and distinct from Device B.
+- Device A visible label: `admin@expeditioncommand.com`.
+- Device A active convoy id: unknown.
+- Device A participant id: unknown.
+- Device A live sharing active: no.
+- Device A convoy baseline: clean.
+- Device A preflight result: ready / `local_identity_ready_for_pairing`.
+- Device B auth present: yes.
+- Device B redacted user id: present and distinct from Device A.
+- Device B visible label: `QA Member`.
+- Device B active convoy id: unknown.
+- Device B participant id: unknown.
+- Device B live sharing active: no.
+- Device B convoy baseline: clean.
+- Device B preflight result: ready / `local_identity_ready_for_pairing`.
+
+Hard-stop result:
+
+- Blocked before Convoy creation.
+- The technical identity/baseline checks passed, but the documented hard-stop contract requires Device A to be confirmed as the intended QA Leader account before creating a convoy.
+- Device A displayed `admin@expeditioncommand.com`, not `QA Leader`; no local doc or automated guard designates that visible identity as the intended QA Leader.
+- No convoy was created, no invite was generated, no join was attempted, and no location sharing was started.
+
+Scenario result:
+
+- Clean baseline diagnostic: pass on both devices.
+- Device A creates convoy: not run due hard-stop blocker.
+- Device B joins convoy: not run due hard-stop blocker.
+- Fresh live updates: not run.
+- Location denied/revoked propagation: not run.
+- Stop sharing propagation: not run.
+- Stale threshold: not run.
+- Leave/end convoy: not run.
+- Restart behavior: not run.
+- Telemetry isolation during active convoy: not run.
+
+Cleanup result:
+
+- No cleanup action was required because no Convoy action was initiated.
+- No production/backend convoy state, invite, location publish, badge state, telemetry state, Fleet state, Active Trip state, or Offline Packet state was intentionally mutated during this pass.
+
+Automated verification run:
+
+- `npm run test:convoy-qa-account-session-separation` - pass
+- `npm run test:convoy-live-multidevice-privacy-gate` - pass
+- `npm run test:convoy-command-v1-5-foundation` - pass
+- `npm run test:convoy-command-v1-5-readiness` - pass
+- `npm run test:convoy-participant-fixture-qa` - pass
+- `npm run test:convoy-badge-title-display` - pass
+- `npm run test:convoy-command` - pass
+- `npm run test:convoy-command-map-component` - pass
+- `npm run test:convoy-privacy-safety` - pass
+- `npm run test:badge-expedition-identity-mvp` - pass
+- `npm run lint` - pass
+- `npm run smoke -- --json` - pass
+- `git diff --check` - pass
+
+Closed-beta gate result:
+
+- Not cleared.
+- Rerun true live Convoy privacy after confirming Device A still displays `admin@expeditioncommand.com`, Device B still displays `QA Member`, both redacted user ids remain distinct, and both devices still show a clean Convoy baseline.
+
+## 2026-06-11 Final Two-Device Live Privacy QA Rerun After Leader Designation
+
+Raw evidence folder: `.qa/convoy-two-device-live-privacy-final-rerun/`
+
+Devices:
+
+- Device A: Samsung SM-X230, Android 16, serial `R5GL13VYSRY`.
+- Device B: Samsung SM-S948U, Android 16, serial `R3GL302P1YE`.
+
+Backend/session setup:
+
+- Backend environment shown by both device diagnostics: `ppullxxprgyeoakzqnxi`.
+- Device A displayed the approved QA Leader identity `admin@expeditioncommand.com`.
+- Device B displayed the QA Member identity `QA Member`.
+- Both devices showed present, distinct redacted authenticated user ids.
+- Both device diagnostics showed no active convoy id, no participant id, live sharing inactive, clean Convoy baseline, and `local_identity_ready_for_pairing`.
+
+Clean baseline result:
+
+- Device A Convoy Command opened and showed `No active convoys yet.` and `No invite records visible.`
+- Device B did not reach Convoy Command. Opening `planning-offline-sync:///convoy-command` redirected to Fleet Profile setup because the app session reported setup incomplete.
+- Because Device B could not reach the intended Convoy join surface without changing Fleet/setup state, the true two-device create/join/privacy run was blocked before Convoy creation.
+
+Hard-stop result:
+
+- Blocked before Convoy creation.
+- No convoy was created, no invite was generated, no join was attempted, and no location sharing was started.
+- Device B must complete or recover the required Fleet/setup state through an approved QA path before true live two-device Convoy privacy can run.
+
+Scenario result:
+
+- Identity diagnostic final preflight: pass.
+- Clean baseline on Device A Convoy Command: pass.
+- Clean baseline on Device B Convoy Command: blocked by setup/Fleet Profile redirect.
+- Device A creates convoy: not run.
+- Device B joins convoy: not run.
+- Fresh live updates: not run.
+- Location denied/revoked propagation: not run.
+- Stop sharing propagation: not run.
+- Stale threshold: not run.
+- Leave/end convoy: not run.
+- Restart behavior: not run.
+- Telemetry isolation during active convoy: not run.
+
+Cleanup result:
+
+- No cleanup action was required because no Convoy action was initiated.
+- No production/backend convoy state, invite, location publish, badge state, telemetry state, Active Trip state, or Offline Packet state was intentionally mutated during this pass.
+
+Automated verification run:
+
+- `npm run test:convoy-qa-account-session-separation` - pass
+- `npm run test:convoy-live-multidevice-privacy-gate` - pass
+- `npm run test:convoy-command-v1-5-foundation` - pass
+- `npm run test:convoy-command-v1-5-readiness` - pass
+- `npm run test:convoy-participant-fixture-qa` - pass
+- `npm run test:convoy-badge-title-display` - pass
+- `npm run test:convoy-command` - pass
+- `npm run test:convoy-command-map-component` - pass
+- `npm run test:convoy-privacy-safety` - pass
+- `npm run test:badge-expedition-identity-mvp` - pass
+- `npm run lint` - pass
+- `npm run smoke -- --json` - pass
+- `git diff --check` - pass
+
+Closed-beta gate result:
+
+- Not cleared.
+- The identity/account split is now valid, but Device B is not yet ready for the true two-device Convoy flow because protected Convoy routing is blocked by incomplete Fleet/setup state.
