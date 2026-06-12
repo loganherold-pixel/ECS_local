@@ -223,6 +223,7 @@ assert(
 
 const dispatchPanelSource = readSource('components/dispatch/DispatchConvoyCommandPanel.tsx');
 const dispatchCommandCenterSource = readSource('components/dispatch/DispatchCadCommandCenter.tsx');
+const convoyCredentialsSource = readSource('app/convoy-command.tsx');
 assert(
   !dispatchPanelSource.includes('ECSConvoyCommandPanelRive') &&
     !dispatchPanelSource.includes("from '../rive/ECSConvoyCommandPanelRive'") &&
@@ -299,9 +300,10 @@ assert(
     dispatchCommandCenterSource.includes('handleEmergencyPingButtonPress') &&
     dispatchCommandCenterSource.includes('accessibilityLabel="Create recovery report"') &&
     dispatchCommandCenterSource.includes('showEmergencyOverlay={false}') &&
+    dispatchCommandCenterSource.includes('await loadConvoyLifecycleControl()') &&
     dispatchCommandCenterSource.includes('convoyLifecycleRevision={convoyLifecycleRevision}') &&
     dispatchCommandCenterSource.includes("presentation={isLandscapeDispatch ? 'map' : 'feed'}"),
-  'Dispatch CAD screen should keep convoy/team setup, compact header actions, convoy lifecycle controls, and a larger middle Convoy Command surface.',
+  'Dispatch CAD screen should keep convoy/team setup, compact header actions, convoy lifecycle controls, SYNC DISPATCH reconciliation, and a larger middle Convoy Command surface.',
 );
 assert(
   !dispatchCommandCenterSource.includes('<DispatchReadinessContextCard />') &&
@@ -321,6 +323,25 @@ assert(
     dispatchPanelSource.includes('activeConvoyRawMemberCount') &&
     dispatchPanelSource.includes('widestLiveVehicleGapMiles'),
   'Dispatch Convoy Command should use existing selectors while preferring active convoy roster and live tracking metrics',
+);
+assert(
+  convoyCredentialsSource.includes('useFocusEffect') &&
+    convoyCredentialsSource.includes('reconcileConvoyState') &&
+    convoyCredentialsSource.includes('listMyActiveConvoys()') &&
+    convoyCredentialsSource.includes('listConvoyRoster') &&
+    convoyCredentialsSource.includes('rosterRefreshInFlightRef') &&
+    convoyCredentialsSource.includes('setInterval') &&
+    convoyCredentialsSource.includes('clearInterval'),
+  'Convoy Command credentials screen should reconcile active convoy and roster state on focus and while mounted so it does not keep stale member rows after joins or leader end.',
+);
+assert(
+  convoyCredentialsSource.includes('No active convoys yet.') &&
+    convoyCredentialsSource.includes('Roster syncing') &&
+    convoyCredentialsSource.includes('showing last known roster') &&
+    convoyCredentialsSource.includes('setMembers([])') &&
+    convoyCredentialsSource.includes('setInvites([])') &&
+    convoyCredentialsSource.includes('setLocationSummaries([])'),
+  'Convoy Command roster UI should clear ended/inactive backend state and label stale roster data when reconciliation is unavailable.',
 );
 assert(
   dispatchPanelSource.includes('onEmergencyPing') &&

@@ -399,6 +399,22 @@ async function readFunctionErrorBody(error: unknown, response?: unknown): Promis
 export class ConvoyMembershipService {
   constructor(private readonly backend: ConvoyMembershipBackend) {}
 
+  private async clearStaleActiveContext(activeConvoys: ConvoyListItem[]): Promise<void> {
+    const activeContext = await this.backend.readActiveContext();
+    if (!activeContext?.convoyId || !activeContext.memberId) return;
+
+    const stillActive = activeConvoys.some((item) => (
+      item.convoy.id === activeContext.convoyId &&
+      item.membership.id === activeContext.memberId &&
+      item.membership.revoked_at == null &&
+      (item.convoy.status === 'planned' || item.convoy.status === 'active' || item.convoy.status === 'paused')
+    ));
+    if (stillActive) return;
+
+    await this.backend.clearActiveContext(activeContext.convoyId);
+    await stopConvoyLocationSharing('Convoy is no longer active. Live sharing stopped.');
+  }
+
   async createConvoy(input: CreateConvoyInput): Promise<ConvoyMembershipServiceResult<ConvoyListItem>> {
     const user = await requireUser(this.backend);
     if (!user.ok) return user;
@@ -646,7 +662,11 @@ export class ConvoyMembershipService {
   async listMyActiveConvoys(): Promise<ConvoyMembershipServiceResult<ConvoyListItem[]>> {
     const user = await requireUser(this.backend);
     if (!user.ok) return user;
-    return this.backend.listActiveMemberships(user.data.id);
+    const activeConvoys = await this.backend.listActiveMemberships(user.data.id);
+    if (activeConvoys.ok) {
+      await this.clearStaleActiveContext(activeConvoys.data);
+    }
+    return activeConvoys;
   }
 
   async listConvoyRoster(convoyId: string): Promise<ConvoyMembershipServiceResult<ConvoyRoster>> {

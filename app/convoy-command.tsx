@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import QRCode from 'react-native-qrcode-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -39,6 +40,7 @@ type Mode = 'leader' | 'join' | 'roster';
 type ExpirationPreset = '2h' | '24h' | '7d';
 
 const ROLE_OPTIONS: ConvoyRole[] = ['lead', 'sweep', 'member', 'support'];
+const ROSTER_RECONCILE_INTERVAL_MS = 15_000;
 const EXPIRATION_OPTIONS: { label: string; value: ExpirationPreset; hours: number }[] = [
   { label: '2 hr', value: '2h', hours: 2 },
   { label: '24 hr', value: '24h', hours: 24 },
@@ -114,6 +116,10 @@ export default function ConvoyCommandCredentialsScreen() {
   const [locationSummaries, setLocationSummaries] = useState<ConvoyLocationSummaryRecord[]>([]);
   const [invites, setInvites] = useState<ConvoyInviteRecord[]>([]);
   const [expeditionIdentityTitle, setExpeditionIdentityTitle] = useState<string | null>(null);
+  const [rosterRefreshing, setRosterRefreshing] = useState(false);
+  const [rosterStaleMessage, setRosterStaleMessage] = useState<string | null>(null);
+  const selectedConvoyIdRef = useRef<string | null>(null);
+  const rosterRefreshInFlightRef = useRef(false);
 
   const [convoyName, setConvoyName] = useState('Trail Convoy');
   const [leaderCallsign, setLeaderCallsign] = useState('LEAD');
@@ -139,42 +145,98 @@ export default function ConvoyCommandCredentialsScreen() {
     [locationSummaries],
   );
 
-  const refreshConvoys = useCallback(async () => {
+  useEffect(() => {
+    selectedConvoyIdRef.current = selectedConvoyId;
+  }, [selectedConvoyId]);
+
+  const clearRosterState = useCallback(() => {
+    setMembers([]);
+    setInvites([]);
+    setLocationSummaries([]);
+  }, []);
+
+  const refreshConvoys = useCallback(async (preferredConvoyId?: string | null): Promise<ConvoyListItem | null> => {
     const result = await convoyMembershipService.listMyActiveConvoys();
     if (!result.ok) {
       setError(normalizeError(result.error));
-      return;
+      setRosterStaleMessage('Roster refresh unavailable; showing last known roster.');
+      return null;
     }
     setConvoys(result.data);
-    setSelectedConvoyId((current) => current ?? result.data[0]?.convoy.id ?? null);
-  }, []);
+    const targetConvoyId = preferredConvoyId ?? selectedConvoyIdRef.current;
+    const nextSelectedConvoy = (
+      targetConvoyId
+        ? result.data.find((item) => item.convoy.id === targetConvoyId)
+        : null
+    ) ?? result.data[0] ?? null;
+    const nextSelectedId = nextSelectedConvoy?.convoy.id ?? null;
+    selectedConvoyIdRef.current = nextSelectedId;
+    setSelectedConvoyId(nextSelectedId);
+    if (!nextSelectedConvoy) {
+      clearRosterState();
+      setRosterStaleMessage(null);
+    }
+    return nextSelectedConvoy;
+  }, [clearRosterState]);
 
-  const refreshRoster = useCallback(async (convoyId: string | null) => {
+  const refreshRoster = useCallback(async (
+    convoyId: string | null,
+    options?: { canLoadInvites?: boolean },
+  ): Promise<boolean> => {
     if (!convoyId) {
-      setMembers([]);
-      setInvites([]);
-      setLocationSummaries([]);
-      return;
+      clearRosterState();
+      return true;
     }
 
+    const canLoadInvites = options?.canLoadInvites ?? isLeader;
     const [rosterResult, inviteResult] = await Promise.all([
       convoyMembershipService.listConvoyRoster(convoyId),
-      convoyMembershipService.listConvoyInvites(convoyId),
+      canLoadInvites
+        ? convoyMembershipService.listConvoyInvites(convoyId)
+        : Promise.resolve({ ok: true as const, data: [] as ConvoyInviteRecord[] }),
     ]);
     if (rosterResult.ok) {
       setMembers(rosterResult.data.members);
       setLocationSummaries(rosterResult.data.locationSummaries);
+      setRosterStaleMessage(null);
     } else {
       setError(normalizeError(rosterResult.error));
+      setRosterStaleMessage('Roster refresh unavailable; showing last known roster.');
     }
     if (inviteResult.ok) {
       setInvites(inviteResult.data);
-    } else if (isLeader) {
+    } else if (canLoadInvites) {
       setError(normalizeError(inviteResult.error));
     } else {
       setInvites([]);
     }
-  }, [isLeader]);
+    return rosterResult.ok;
+  }, [clearRosterState, isLeader]);
+
+  const reconcileConvoyState = useCallback(async (
+    preferredConvoyId?: string | null,
+    options?: { showPending?: boolean },
+  ) => {
+    if (rosterRefreshInFlightRef.current) return;
+    rosterRefreshInFlightRef.current = true;
+    if (options?.showPending) setRosterRefreshing(true);
+    try {
+      const activeConvoy = await refreshConvoys(preferredConvoyId);
+      if (!activeConvoy) return;
+      if (activeConvoy.syncState === 'local_pending') {
+        setMembers([activeConvoy.membership]);
+        setInvites([]);
+        setLocationSummaries([]);
+        setRosterStaleMessage('Local convoy roster pending backend sync.');
+        return;
+      }
+      const activeUserIsLeader = Boolean(user?.id && activeConvoy.convoy.leader_user_id === user.id);
+      await refreshRoster(activeConvoy.convoy.id, { canLoadInvites: activeUserIsLeader });
+    } finally {
+      rosterRefreshInFlightRef.current = false;
+      if (options?.showPending) setRosterRefreshing(false);
+    }
+  }, [refreshConvoys, refreshRoster, user?.id]);
 
   useEffect(() => dispatchProfileStore.subscribe((profile) => {
     const profileCallsign = profile.callsign?.trim();
@@ -197,11 +259,26 @@ export default function ConvoyCommandCredentialsScreen() {
       setLeaderVehicleId((current) => current ?? firstVehicleId);
       setJoinVehicleId((current) => current ?? firstVehicleId);
     });
-    void refreshConvoys();
+    void reconcileConvoyState(null, { showPending: true });
     return () => {
       mounted = false;
     };
-  }, [refreshConvoys, user?.id]);
+  }, [reconcileConvoyState, user?.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void reconcileConvoyState(null, { showPending: true });
+      const timer = setInterval(() => {
+        if (cancelled || !selectedConvoyIdRef.current) return;
+        void reconcileConvoyState(null);
+      }, ROSTER_RECONCILE_INTERVAL_MS);
+      return () => {
+        cancelled = true;
+        clearInterval(timer);
+      };
+    }, [reconcileConvoyState]),
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -224,8 +301,8 @@ export default function ConvoyCommandCredentialsScreen() {
       setLocationSummaries([]);
       return;
     }
-    void refreshRoster(selectedConvoy?.convoy.id ?? null);
-  }, [refreshRoster, selectedConvoy]);
+    void refreshRoster(selectedConvoy?.convoy.id ?? null, { canLoadInvites: isLeader });
+  }, [isLeader, refreshRoster, selectedConvoy]);
 
   async function handleCreateConvoy() {
     setLoading(true);
@@ -251,7 +328,7 @@ export default function ConvoyCommandCredentialsScreen() {
           ...current.filter((item) => item.convoy.id !== result.data.convoy.id),
         ]);
       } else {
-        await refreshConvoys();
+        await reconcileConvoyState(result.data.convoy.id, { showPending: true });
       }
     } else {
       setError(normalizeError(result.error));
@@ -302,7 +379,7 @@ export default function ConvoyCommandCredentialsScreen() {
       setNotice('Joined convoy. Location sharing is still off until you start it from Convoy Command.');
       setMode('roster');
       setSelectedConvoyId(result.data.convoy.id);
-      await refreshConvoys();
+      await reconcileConvoyState(result.data.convoy.id, { showPending: true });
     } else {
       setError(normalizeError(result.error));
     }
@@ -380,7 +457,10 @@ export default function ConvoyCommandCredentialsScreen() {
             style={[styles.tab, mode === item ? styles.tabActive : null]}
             accessibilityRole="button"
             accessibilityLabel={`Open ${item} convoy tab`}
-            onPress={() => setMode(item)}
+            onPress={() => {
+              setMode(item);
+              if (item === 'roster') void reconcileConvoyState(null, { showPending: true });
+            }}
             activeOpacity={0.82}
           >
             <Text style={[styles.tabText, mode === item ? styles.tabTextActive : null]}>
@@ -494,6 +574,8 @@ export default function ConvoyCommandCredentialsScreen() {
             <Text style={styles.helper}>
               Your role: {selectedRole.toUpperCase()} / {isLeader ? 'leader controls enabled' : 'member view'}
             </Text>
+            {rosterRefreshing ? <Text style={styles.helper}>Roster syncing with convoy backend.</Text> : null}
+            {rosterStaleMessage ? <Text style={styles.rosterWarning}>{rosterStaleMessage}</Text> : null}
             <RosterList
               members={members}
               locationByMember={locationByMember}
@@ -925,6 +1007,12 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
     fontWeight: '700',
+  },
+  rosterWarning: {
+    color: TACTICAL.amber,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '800',
   },
   inviteCard: {
     gap: 6,

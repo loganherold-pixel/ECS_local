@@ -230,6 +230,11 @@ assert.strictEqual(isProductionConvoyInviteAuthority({
 assert.ok(membershipSource.includes('listActiveMemberships(user.data.id)'), 'Membership list should be scoped to current user.');
 assert.ok(membershipSource.includes(".eq('convoy_id', convoyId)"), 'Roster and invite lookups should be convoy scoped.');
 assert.ok(membershipSource.includes('clearActiveContext(convoyId)'), 'Leave/end should clear the active convoy context for the same convoy.');
+assert.ok(
+  membershipSource.includes('clearStaleActiveContext') &&
+    membershipSource.includes("stopConvoyLocationSharing('Convoy is no longer active. Live sharing stopped.')"),
+  'Membership refresh should clear stale member-side active context when backend no longer has an active convoy after leader end.',
+);
 assert.ok(membershipSource.includes("stopConvoyLocationSharing('You left the convoy. Live sharing stopped.')"));
 assert.ok(membershipSource.includes("stopConvoyLocationSharing('Convoy ended. Live sharing stopped.')"));
 assert.ok(!membershipSource.includes('globalUsers'), 'Membership service must not expose global user discovery.');
@@ -288,6 +293,13 @@ for (const phrase of [
   'hardware connection presence must not affect convoy live status',
   'Device A creates convoy',
   'Device B joins',
+  'Device B Join After Supabase Visibility Fix',
+  'stale local `active_convoy_present` / `convoy_baseline_not_clean`',
+  '`SYNC DISPATCH` runs the same convoy lifecycle reconciliation when online',
+  'Convoy Roster Refresh/Reconciliation Repair',
+  'Convoy Command treats `convoyMembershipService.listMyActiveConvoys()` as the active-roster gate',
+  'Roster refresh unavailable; showing last known roster.',
+  'On Device A, open the Convoy Command Roster tab and confirm Device B appears as `MEMBER`',
   'location denied',
   'stop sharing',
   'stale threshold',

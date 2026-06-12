@@ -82,7 +82,7 @@ function makeMember(overrides = {}) {
 
 function createMockBackend(options = {}) {
   const calls = [];
-  let activeContext = null;
+  let activeContext = options.initialActiveContext ?? null;
   const functionResponses = options.functionResponses || {};
 
   return {
@@ -100,6 +100,7 @@ function createMockBackend(options = {}) {
     },
     listActiveMemberships: async (userId) => {
       calls.push(['listActiveMemberships', userId]);
+      if (options.listActiveMembershipsResponse) return options.listActiveMembershipsResponse;
       return { ok: true, data: [{ convoy: makeConvoy(), membership: makeMember() }] };
     },
     invokeMembershipFunction: async (action, body) => {
@@ -341,6 +342,30 @@ async function main() {
   assert.ok(
     endBackend.calls.some((call) => call[0] === 'clearActiveContext' && call[1] === 'convoy-1'),
     'endConvoy should clear the local active convoy context.',
+  );
+
+  const staleMemberBackend = createMockBackend({
+    initialActiveContext: {
+      convoyId: 'convoy-ended',
+      memberId: 'member-ended',
+      role: 'member',
+      callsign: 'V2',
+      storedAt: '2026-06-12T15:00:00.000Z',
+    },
+    listActiveMembershipsResponse: { ok: true, data: [] },
+  });
+  const staleMemberService = new ConvoyMembershipService(staleMemberBackend);
+  const staleMemberRefresh = await staleMemberService.listMyActiveConvoys();
+  assert.strictEqual(staleMemberRefresh.ok, true, 'stale member active convoy refresh should still succeed.');
+  assert.deepStrictEqual(staleMemberRefresh.data, [], 'stale member active convoy refresh should return no active convoys.');
+  assert.ok(
+    staleMemberBackend.calls.some((call) => call[0] === 'clearActiveContext' && call[1] === 'convoy-ended'),
+    'when backend returns no active memberships, listMyActiveConvoys should clear stale local active context left after leader end.',
+  );
+  assert.strictEqual(
+    await staleMemberService.getActiveConvoyContext(),
+    null,
+    'stale member active context should be gone after backend reconciliation.',
   );
 
   const source = fs.readFileSync(edgeFunctionPath, 'utf8');

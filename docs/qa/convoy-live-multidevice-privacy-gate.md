@@ -858,3 +858,102 @@ Closed-beta gate result:
 - Not cleared.
 - Integrated device preflight is now working and Device A create/invite flow works from a clean baseline.
 - True live two-device Convoy privacy remains blocked until the Supabase Convoy tracking API/schema visibility issue is resolved and Device B can successfully join as a distinct member.
+
+## 2026-06-12 Device B Join After Supabase Visibility Fix
+
+Raw evidence folder: `.qa/convoy-device-b-join-after-visibility-fix/`
+
+Backend/API result:
+
+- Supabase project `ppullxxprgyeoakzqnxi` passed the strict Convoy API visibility check after migration `036` was applied and the schema cache was refreshed.
+- `public.claim_convoy_invite(uuid)` was visible through PostgREST to the service role diagnostic.
+- Device A created `Trail Convoy`, generated a member invite, and Device B joined through the intended invite flow.
+- Device B appeared as a distinct member participant, and Device A saw Device B only after the join.
+- No unrelated/global users appeared.
+- Badge title scope remained clean, and no badge unlock was observed.
+
+Stale member cleanup blocker observed before this repair:
+
+- Device A ended the convoy through the normal leader lifecycle control and returned clean.
+- Device B Convoy Command later showed `No active convoys yet.`
+- Device B `/dev/convoy-identity-qa` still reported stale local `active_convoy_present` / `convoy_baseline_not_clean`.
+- `SYNC DISPATCH` did not clear Device B's stale local active convoy context.
+- The stale state was local member context (`ecs_convoy_membership_state`), not a visible active roster or new backend membership.
+
+Expected behavior after the stale cleanup repair:
+
+- A successful active-membership refresh reconciles local active convoy context against backend truth.
+- If backend returns no active membership for the cached convoy/member, ECS clears only the stale active convoy context and stops any leftover live-sharing state.
+- `SYNC DISPATCH` runs the same convoy lifecycle reconciliation when online.
+- Convoy Command no-active state and `/dev/convoy-identity-qa` should agree after sync/recovery.
+- Fleet, Active Trip, Offline Incident Packet, Badge, telemetry/provider, route catalog, and auth/session state must remain untouched.
+
+Rerun checklist after this fix:
+
+- Confirm both devices start from clean `/dev/convoy-identity-qa` baselines.
+- Device A creates a convoy and generates a fresh member invite.
+- Device B joins as the distinct QA Member account.
+- Device A ends the convoy.
+- On Device B, tap `SYNC DISPATCH` or reopen Convoy Command while online.
+- Confirm Device B shows no active convoy, no active participant id, live sharing inactive, and clean Convoy baseline.
+- Confirm no badge unlock, telemetry mutation, Fleet mutation, Active Trip mutation, Offline Packet mutation, or auth/session mutation.
+
+## 2026-06-12 Convoy Roster Refresh/Reconciliation Repair
+
+Risk captured during member cleanup QA:
+
+- Device A Dispatch reflected the joined convoy as `2 VEHICLES`, but the Device A Convoy Command roster capture still showed only the leader after a roster tab refresh.
+- Device B's already-mounted Convoy Command roster remained on the active member view after Device A ended the convoy until Dispatch reconciliation ran.
+- Root cause: Dispatch and Convoy Command were using different refresh lifecycles. Dispatch reconciled active convoy context through the lifecycle/Tracking path, while Convoy Command kept local `convoys` and `members` state that refreshed only on mount, selected convoy changes, or explicit join/create actions.
+
+Expected fixed behavior:
+
+- Convoy Command treats `convoyMembershipService.listMyActiveConvoys()` as the active-roster gate before showing active roster rows.
+- Convoy Command refreshes on screen focus, when the Roster tab is opened, after create/join, and on a low-rate focused interval while an active convoy is selected.
+- If backend active membership returns empty after leader end, Convoy Command clears selected convoy, members, invites, and location summaries instead of showing an ended roster as active.
+- If backend reconciliation fails while old rows are visible, Convoy Command labels the rows with stale copy: `Roster refresh unavailable; showing last known roster.`
+- `/dev/convoy-identity-qa`, Dispatch `SYNC DISPATCH`, and Convoy Command should converge on the same clean baseline after backend reports no active convoy.
+
+Roster refresh rerun checklist:
+
+- Device A creates `Trail Convoy`, generates a member invite, and remains on Convoy Command.
+- Device B joins through the invite and sees Device A as `LEAD` and itself as `MEMBER / YOU`.
+- On Device A, open the Convoy Command Roster tab and confirm Device B appears as `MEMBER` without requiring a Dispatch visit.
+- Device A ends the convoy through normal Dispatch `END CONVOY`.
+- Leave Device B on Convoy Command and confirm the focused reconciliation clears the active roster without requiring Dispatch, or tap the Roster tab to force the same reconciliation.
+- Confirm Device B Convoy Command, Dispatch, and `/dev/convoy-identity-qa` agree: no active convoy, no participant id, live sharing inactive, and clean Convoy baseline.
+- Confirm no badge unlock, telemetry mutation, Fleet mutation, Active Trip mutation, Offline Packet mutation, route catalog mutation, or auth/session mutation.
+
+## 2026-06-12 Full Live/Stale/Revoke Convoy QA
+
+Raw evidence folder: `.qa/convoy-full-live-stale-revoke-qa/`
+
+Devices and backend:
+
+- Device A: Samsung SM-X230, Android 16, serial `R5GL13VYSRY`.
+- Device B: Samsung SM-S948U, Android 16, serial `R3GL302P1YE`.
+- Backend: Supabase project `ppullxxprgyeoakzqnxi`.
+
+Result:
+
+- Pass with one threshold-bound caveat.
+- Both devices were unlocked, awake, debuggable `versionCode=4`, and passed `/dev/convoy-identity-qa`.
+- Both devices started from a clean Convoy baseline with distinct authenticated QA identities and configured vehicles.
+- Device A created `Trail Convoy`, generated a `MEMBER` invite, and Device B joined through the intended credential flow.
+- Device B saw Device A as `LEAD`; Device A saw Device B as `MEMBER`; Dispatch and Convoy Command agreed on a two-vehicle roster.
+- Device A and Device B each started live sharing through the explicit opt-in Dispatch control. Dispatch reached `RPT 2/2`; roster rows showed fresh timestamps and stationary movement status.
+- Revoking Device B location permission did not crash. Device B showed location permission required/stale weather copy and disabled local sharing without fake success.
+- Stopping Device A live sharing used the confirmation dialog and returned to `Tracking: disabled` with `Live sharing stopped by user.`
+- Force-stop/relaunch recovered active convoy membership without fake live tracking; both devices returned with tracking disabled.
+- Device B left through the normal `LEAVE CONVOY` flow and returned to `No Active Convoy`; Device A roster dropped Device B.
+- Device A ended the remaining convoy through normal `END CONVOY`; both diagnostics returned clean baselines with no active convoy, no participant id, and live sharing inactive.
+- No badge unlock, telemetry/provider mutation, Fleet mutation, Active Trip mutation, Offline Packet mutation, route catalog mutation, or auth/session mutation was observed.
+
+Caveat:
+
+- The native stale-threshold transition was not waited out because the configured threshold is 15 minutes and no safe native fast-forward mechanism was used in this pass. Last-known remote rows remained visible with explicit age labels below the stale threshold. Automated stale-threshold guards remain the coverage for the exact transition.
+
+Non-blocking copy notes:
+
+- Dispatch can still display stale lifecycle note copy such as `Convoy ended. Live sharing stopped.` or `Convoy is no longer active. Live sharing stopped.` while an active convoy card is visible.
+- The top Dispatch team card may show `NO ACTIVE TEAM` while the Convoy panel correctly shows an active convoy and roster count.

@@ -2931,6 +2931,13 @@ export default function DispatchCadCommandCenter() {
       return;
     }
 
+    const nextConvoyControl = await loadConvoyLifecycleControl();
+    setActiveConvoyControl(nextConvoyControl);
+    if (!nextConvoyControl && activeConvoyControl?.convoyId) {
+      stopConvoyLocationSubscription();
+    }
+    setConvoyLifecycleRevision((current) => current + 1);
+
     const session = realtimeSessionRef.current;
     if (!session || realtimeStatus !== 'connected' || !recoveryCadSharingEnabled || !localDispatchPersistenceId) {
       const retryableRecoveryEvents = events.filter((event) => (
@@ -2970,7 +2977,9 @@ export default function DispatchCadCommandCenter() {
     }
   }, [
     events,
+    activeConvoyControl?.convoyId,
     isOnline,
+    loadConvoyLifecycleControl,
     localDispatchPersistenceId,
     offlineMode,
     publishRecoveryCadEvent,
