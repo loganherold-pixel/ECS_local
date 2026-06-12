@@ -226,6 +226,14 @@ function formatTrackingStatus(state: ConvoyLocationSharingState | null): string 
   }
 }
 
+function isConvoyLifecycleStopMessage(message: string | null | undefined): boolean {
+  if (!message) return false;
+  const normalized = message.trim().toLowerCase();
+  return normalized.includes('live sharing stopped') ||
+    normalized.includes('location sharing stopped') ||
+    normalized.includes('convoy is no longer active');
+}
+
 function useNavigateRouteSessionSnapshot() {
   return useSyncExternalStore(
     navigateRouteSessionStore.subscribe,
@@ -484,7 +492,7 @@ export default function DispatchConvoyCommandPanel({
   const visibleTrackingNote =
     trackingNote ??
     (!hasActiveConvoy ? sharingState?.lastStopReason : null) ??
-    sharingState?.lastError ??
+    (hasActiveConvoy && isConvoyLifecycleStopMessage(sharingState?.lastError) ? null : sharingState?.lastError) ??
     (hasActiveConvoy && trackingSnapshot.convoyId === activeContext?.convoyId ? trackingSnapshot.error : null);
   const showCommandFooterFacts = !summaryCompact;
   const showSummaryConvoySignals = isSummaryOnlyPresentation && panelViewModel.isUsingLiveData && panelViewModel.members.length > 0;

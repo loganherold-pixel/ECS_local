@@ -327,6 +327,7 @@ assert(
     dispatchPanelSource.includes('Tracking disabled. Active convoy roster is available.') &&
     dispatchPanelSource.includes('panelViewModel.isUsingLiveData && isSharingLiveLocation') &&
     dispatchPanelSource.includes('(!hasActiveConvoy ? sharingState?.lastStopReason : null)') &&
+    dispatchPanelSource.includes('isConvoyLifecycleStopMessage(sharingState?.lastError)') &&
     !dispatchPanelSource.includes('Live convoy telemetry is active.'),
   'Dispatch Convoy Command should truthfully distinguish live sharing, tracking disabled, stale/all-non-live, and inactive convoy state',
 );
