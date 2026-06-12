@@ -26,6 +26,7 @@ import type { ConvoyCommandData, ConvoyMember } from '../../lib/navigation/convo
 import { useConvoyCommandData } from '../dashboard/commandCenter/useConvoyCommandData';
 import { navigateRouteSessionStore, type NavigateRouteSessionSnapshot } from '../../lib/navigateRouteSessionStore';
 import {
+  refreshConvoyTrackingStaleness,
   stopConvoyLocationSubscription,
   subscribeToConvoyLocations,
   useConvoyTrackingStore,
@@ -59,6 +60,8 @@ type DispatchConvoyUserLocation = {
   speedMps?: number | null;
   timestamp?: string | number | null;
 };
+
+const CONVOY_TRACKING_STALENESS_REFRESH_MS = 30_000;
 
 function formatVehicleCount(count: number): string {
   if (count <= 0) return '0 VEHICLES';
@@ -329,7 +332,7 @@ function buildActiveConvoyPanelViewModel(params: {
         isLostSignal: false,
       }];
   const widestGapMiles = widestLiveVehicleGapMiles(params.mapMembers);
-  const hasLiveTracking = params.trackingConnectionStatus === 'connected' && params.mapMembers.length > 0;
+  const hasLiveTracking = params.trackingConnectionStatus === 'connected' && reportingCount > 0;
   const hasStale = members.some((member) => member.isStale);
 
   return {
@@ -520,6 +523,16 @@ export default function DispatchConvoyCommandPanel({
     void subscribeToConvoyLocations(activeContext.convoyId);
     return () => {
       stopConvoyLocationSubscription();
+    };
+  }, [activeContext?.convoyId]);
+
+  useEffect(() => {
+    if (!activeContext?.convoyId) return undefined;
+    const timer = setInterval(() => {
+      refreshConvoyTrackingStaleness();
+    }, CONVOY_TRACKING_STALENESS_REFRESH_MS);
+    return () => {
+      clearInterval(timer);
     };
   }, [activeContext?.convoyId]);
 

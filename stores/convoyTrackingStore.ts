@@ -158,6 +158,12 @@ export function createConvoyTrackingStore(service: ConvoyRealtimeService = convo
     setState({ ...initialState, connectionStatus: 'disconnected' });
   }
 
+  function refreshStalenessForCurrentTime() {
+    if (!state.convoyId) return state;
+    recomputeSnapshot(state.connectionStatus);
+    return state;
+  }
+
   return {
     subscribe(listener: Listener): () => void {
       listeners.add(listener);
@@ -170,6 +176,7 @@ export function createConvoyTrackingStore(service: ConvoyRealtimeService = convo
 
     subscribeToConvoyLocations,
     stopConvoyLocationSubscription,
+    refreshStalenessForCurrentTime,
 
     applyRealtimeChangeForTest(change: ConvoyLocationChange) {
       applyChange(change);
@@ -217,6 +224,10 @@ export function setConvoyTrackingDataForTest(input: {
 
 export function stopConvoyLocationSubscription() {
   return convoyTrackingStore.stopConvoyLocationSubscription();
+}
+
+export function refreshConvoyTrackingStaleness() {
+  return convoyTrackingStore.refreshStalenessForCurrentTime();
 }
 
 export function useConvoyTrackingStore(): ConvoyTrackingStoreState {

@@ -47,6 +47,7 @@ const membershipSource = read('lib/convoy/convoyMembershipService.ts');
 const realtimeSource = read('lib/convoy/convoyRealtimeService.ts');
 const publisherSource = read('lib/convoy/convoyLocationPublisher.ts');
 const trackingStoreSource = read('stores/convoyTrackingStore.ts');
+const dispatchPanelSource = read('components/dispatch/DispatchConvoyCommandPanel.tsx');
 const participantModelSource = read('lib/convoy/convoyParticipantModel.ts');
 const fixtureSource = read('lib/convoy/convoyParticipantQaFixtures.ts');
 const fixtureRouteSource = read('app/dev/convoy-participant-qa.tsx');
@@ -257,6 +258,20 @@ assert.ok(!publisherSource.includes('TaskManager'), 'This gate must not add back
 
 assert.ok(trackingStoreSource.includes('stopConvoyLocationSubscription'), 'Tracking store should expose subscription stop/cleanup.');
 assert.ok(trackingStoreSource.includes('currentMembers = []') && trackingStoreSource.includes('currentLocations = new Map()'), 'Tracking store cleanup should clear in-memory roster/location state.');
+assert.ok(
+  trackingStoreSource.includes('refreshStalenessForCurrentTime') &&
+    trackingStoreSource.includes('refreshConvoyTrackingStaleness'),
+  'Tracking store should expose a time-only stale recompute so mounted convoy views can age last-known rows without new realtime events.',
+);
+assert.ok(
+  dispatchPanelSource.includes('CONVOY_TRACKING_STALENESS_REFRESH_MS') &&
+    dispatchPanelSource.includes('refreshConvoyTrackingStaleness()'),
+  'Dispatch convoy panel should periodically recompute stale rows while an active convoy is visible.',
+);
+assert.ok(
+  dispatchPanelSource.includes("params.trackingConnectionStatus === 'connected' && reportingCount > 0"),
+  'Dispatch convoy panel must only label telemetry live when at least one member is fresh/reporting.',
+);
 
 assert.ok(fixtureSource.includes('typeof __DEV__') && fixtureSource.includes("nodeEnv === 'test'"), 'Fixture harness must be dev/test guarded.');
 assert.ok(fixtureRouteSource.includes('Redirect'), 'Fixture route must redirect when disabled.');
