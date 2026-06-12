@@ -73,6 +73,12 @@ export const setupStore = {
   isHydrated: (): boolean => cache.isHydrated(),
   flush: (): Promise<void> => cache.flush(),
 
+  /**
+   * Read-only persisted completion flag for QA/preflight diagnostics.
+   * Use isComplete() for product gating because it also handles legacy recovery.
+   */
+  getCompletionFlag: (): boolean => read(SETUP_COMPLETE_KEY) === 'true',
+
   isComplete: (): boolean => {
     const flag = read(SETUP_COMPLETE_KEY);
     if (flag === 'true') {

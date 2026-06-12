@@ -4,8 +4,10 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const migrationPath = path.join(root, 'supabase', 'migrations', '022_convoy_team_tracking.sql');
+const repairMigrationPath = path.join(root, 'supabase', 'migrations', '036_convoy_invite_claim_helper_api_visibility.sql');
 const docsPath = path.join(root, 'docs', 'dispatch', 'CONVOY_TRACKING_RLS.md');
 const migration = fs.readFileSync(migrationPath, 'utf8');
+const repairMigration = fs.readFileSync(repairMigrationPath, 'utf8');
 const docs = fs.readFileSync(docsPath, 'utf8');
 
 for (const table of ['convoys', 'convoy_invites', 'convoy_members', 'convoy_member_locations']) {
@@ -88,6 +90,14 @@ assert(
     migration.includes('set used_count = convoy_invites.used_count + 1') &&
     migration.includes('grant execute on function public.claim_convoy_invite(uuid) to service_role'),
   'Migration should provide a service-role-only atomic invite claim helper.',
+);
+assert(
+  repairMigration.includes('create or replace function public.claim_convoy_invite(target_invite_id uuid)') &&
+    repairMigration.includes('set used_count = convoy_invites.used_count + 1') &&
+    repairMigration.includes('revoke execute on function public.claim_convoy_invite(uuid) from public, anon, authenticated') &&
+    repairMigration.includes('grant execute on function public.claim_convoy_invite(uuid) to service_role') &&
+    repairMigration.includes("notify pgrst, 'reload schema'"),
+  'Repair migration should restore PostgREST visibility for the invite claim helper without broad schema changes.',
 );
 assert(!migration.match(/\bcode\b text/i), 'Migration must not store raw invite codes.');
 

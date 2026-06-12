@@ -15,6 +15,7 @@ Required backend steps for the field-test project:
 5. Set Edge Function secret `CONVOY_INVITE_HASH_PEPPER`. The function also accepts `ECS_SUPABASE_URL` and `ECS_SERVICE_ROLE_KEY` when provided, but falls back to Supabase's built-in `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` runtime variables.
 6. Refresh the PostgREST schema cache after migration, for example with `NOTIFY pgrst, 'reload schema';` from SQL editor or by restarting the Supabase API.
 7. Run `supabase/smoke/rls_catalog_check.sql` in staging SQL tooling, then run `scripts/supabase-rls-smoke.sh` with the staging anon key.
+8. Run `npm run check:supabase-convoy-api-visibility:rpc` with a shell-provided service-role key before true two-device Convoy QA. This verifies the join-specific dependency `public.claim_convoy_invite(uuid)` through PostgREST.
 
 The app should never query `public.convois`; that spelling is invalid. The runtime table name is `public.convoys`.
 
@@ -75,6 +76,16 @@ These steps still happen outside the mobile repo for each target Supabase projec
 
    Also run `supabase/smoke/rls_catalog_check.sql` in staging SQL tooling. The check must show convoy tables with RLS enabled, `convoy_member_locations` in `supabase_realtime`, replica identity full, and no authenticated execute privilege on the service-role-only cleanup/claim helpers.
 
+8. Verify API visibility for the true join path:
+
+   ```bash
+   npm run check:supabase-convoy-api-visibility:rpc
+   ```
+
+   Device A create/invite can succeed while join remains blocked if PostgREST cannot resolve `public.claim_convoy_invite(uuid)`. The checker probes Convoy tables with the anon key and probes `public.claim_convoy_invite(uuid)` with a non-mutating fake invite id when a service-role key is supplied in the shell environment. Do not store service-role keys in `.env`, screenshots, logs, or mobile code.
+
+   If the checker reports `PGRST202` for `public.claim_convoy_invite(target_invite_id)` while the four Convoy tables are visible, apply `supabase/migrations/036_convoy_invite_claim_helper_api_visibility.sql`. That repair migration recreates only the atomic invite claim helper, restores service-role-only execute grants, and sends `NOTIFY pgrst, 'reload schema';`.
+
 Expected app recovery copy by failure case:
 
 - Missing migration: convoy roster/live tracking are not deployed on this backend yet.
@@ -82,6 +93,13 @@ Expected app recovery copy by failure case:
 - Missing Edge Function: creating and joining convoys are blocked until `convoy-membership` is deployed.
 - Missing invite secret: invite creation/join are blocked until `CONVOY_INVITE_HASH_PEPPER` is set.
 - Missing Realtime publication: roster can load, but live location updates show last-known/manual state until Realtime is enabled.
+
+Join-specific dependency:
+
+- Invite redemption increments `used_count` through `public.claim_convoy_invite(uuid)` inside the `convoy-membership` Edge Function.
+- The helper is intentionally executable by `service_role` only; mobile clients never call it directly.
+- If migrations are present in SQL catalog but PostgREST still returns a schema-cache error for this helper, reload the API schema cache with `NOTIFY pgrst, 'reload schema';` or restart the Supabase API before rerunning Device B join.
+- If the original migration was already marked applied before the helper became API-visible, apply `036_convoy_invite_claim_helper_api_visibility.sql` instead of replaying the full Convoy schema.
 
 ## Security Model
 

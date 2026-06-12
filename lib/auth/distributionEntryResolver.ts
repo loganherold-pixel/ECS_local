@@ -11,9 +11,19 @@ const DEV_CONVOY_RIVE_QA =
   process.env.EXPO_PUBLIC_ECS_CONVOY_RIVE_QA === '1';
 const DEV_CAMPOPS_VISUAL_QA_ROUTE =
   typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+const DEV_CONVOY_IDENTITY_QA_ROUTE =
+  typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
 
 function isDevCampOpsVisualQaRoute(path: string | null | undefined): boolean {
   return DEV_CAMPOPS_VISUAL_QA_ROUTE && path === '/dev/campops-visual-qa';
+}
+
+function isDevConvoyIdentityQaRoute(path: string | null | undefined): boolean {
+  return DEV_CONVOY_IDENTITY_QA_ROUTE && path === '/dev/convoy-identity-qa';
+}
+
+function isPublicDevQaRoute(path: string | null | undefined): boolean {
+  return isDevCampOpsVisualQaRoute(path) || isDevConvoyIdentityQaRoute(path);
 }
 
 function isPrimaryShellRoute(path: string | null | undefined): boolean {
@@ -53,7 +63,7 @@ function resolveAuthenticatedShellTarget(params: {
     allowRouteRestore,
   } = params;
 
-  if (allowRequestedEntryRoute && isDevCampOpsVisualQaRoute(requestedEntryRoute)) {
+  if (allowRequestedEntryRoute && isPublicDevQaRoute(requestedEntryRoute)) {
     return {
       target: requestedEntryRoute!,
       destinationSource: 'requested_entry_route',
@@ -140,7 +150,7 @@ export function resolveDistributionEntryState(
       currentPath === '/vehicle-config' ||
       currentPath === '/more' ||
       currentPath === '/intel' ||
-      isDevCampOpsVisualQaRoute(currentPath) ||
+      isPublicDevQaRoute(currentPath) ||
       (DEV_CONVOY_RIVE_QA && currentPath === '/dashboard'));
   const rememberedShellTarget = resolveAuthenticatedShellTarget({
     setupComplete,
@@ -337,6 +347,22 @@ export function resolveDistributionEntryState(
   if (isRecoveryScreen) {
     return {
       kind: authenticated ? 'steady' : 'public_entry',
+      redirectTarget: null,
+      loadingLabel,
+      loadingDetail,
+      bootstrapLabel,
+      shellAccessReady,
+      shellRestoreEligible,
+      routeRestoreEligible,
+      destinationSource: 'current_route',
+      routeRestoreRejected: false,
+      requestedRestorableRoute: restorableShellRoute,
+    };
+  }
+
+  if (isPublicDevQaRoute(currentPath)) {
+    return {
+      kind: 'public_entry',
       redirectTarget: null,
       loadingLabel,
       loadingDetail,
