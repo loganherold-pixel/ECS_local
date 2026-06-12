@@ -20,6 +20,7 @@ A valid run requires:
 - Distinct Supabase user ids.
 - Same intended backend/project/environment.
 - Same intended app build family.
+- Fleet/setup eligibility complete on each device that must open Convoy Command.
 - Clean local Convoy baseline on both devices.
 - No active convoy membership before the test.
 - No live sharing is active.
@@ -50,6 +51,7 @@ The diagnostic displays only non-secret redacted fields:
 - Redacted participant id if present
 - Live sharing active: yes/no
 - Current Convoy baseline state
+- Fleet/setup eligibility and Convoy Command reachability
 - Local preflight result: ready / blocked / incomplete
 
 It must not display:
@@ -85,6 +87,7 @@ Stop immediately unless all of these are true:
 - No live sharing is active on either device.
 - No pending invite/join state exists on either device.
 - Confirm no pending invite/join state exists before continuing.
+- Fleet/setup eligibility shows Convoy Command reachable on Device B before attempting create/join.
 
 If any condition fails, do not create a convoy, do not generate an invite, do not join, and do not start location sharing.
 
@@ -101,8 +104,9 @@ Before creating a convoy:
 7. Confirm Device A is the QA Leader account. The currently approved Device A QA Leader identity is `admin@expeditioncommand.com`.
 8. Confirm Device B is the QA Member account.
 9. Confirm redacted user ids differ.
-10. Confirm no active convoy, live sharing, or pending invite/join state exists.
-11. Only then create the convoy on Device A.
+10. Confirm Fleet/setup eligibility reports Setup complete, Configured vehicle, and Convoy Command reachable on Device B.
+11. Confirm no active convoy, live sharing, or pending invite/join state exists.
+12. Only then create the convoy on Device A.
 
 After QA:
 
@@ -128,6 +132,7 @@ The guard covers:
 - active convoy present blocked
 - live sharing active blocked
 - pending invite/join state blocked
+- Fleet/setup eligibility and protected Convoy Command reachability documented
 - redaction of user ids, participant ids, convoy ids, and emails
 - no tokens or secrets exposed
 - diagnostic route dev/test guard

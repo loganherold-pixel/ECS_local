@@ -12,6 +12,10 @@ import {
   getConvoyQaBackendProjectLabelFromUrl,
   type ConvoyQaIdentityDiagnostic,
 } from '../../lib/convoy/convoyQaIdentityPreflight';
+import {
+  buildLocalConvoyQaSetupEligibility,
+  type ConvoyQaSetupEligibilityDiagnostic,
+} from '../../lib/convoy/convoyQaSetupEligibility';
 import { supabase } from '../../lib/supabase';
 import { TACTICAL } from '../../lib/theme';
 
@@ -29,6 +33,20 @@ const FIELD_LABELS: [keyof ConvoyQaIdentityDiagnostic, string][] = [
   ['preflightCode', 'Preflight code'],
 ];
 
+const SETUP_FIELD_LABELS: [keyof ConvoyQaSetupEligibilityDiagnostic, string][] = [
+  ['status', 'Setup preflight'],
+  ['code', 'Setup code'],
+  ['setupComplete', 'Setup complete'],
+  ['setupCompletionFlag', 'Setup flag'],
+  ['hasConfiguredVehicle', 'Configured vehicle'],
+  ['fleetProfileCount', 'Fleet profiles'],
+  ['activeVehiclePresent', 'Active vehicle'],
+  ['setupVehiclePresent', 'Setup vehicle'],
+  ['cleanConvoyBaseline', 'Clean Convoy baseline'],
+  ['convoyCommandReachable', 'Convoy Command reachable'],
+  ['missingRequirement', 'Missing requirement'],
+];
+
 function getDisplayName(user: Record<string, any> | null): string | null {
   const metadata = user?.user_metadata ?? {};
   const candidates = [
@@ -43,9 +61,17 @@ function getDisplayName(user: Record<string, any> | null): string | null {
   return null;
 }
 
+function formatDiagnosticValue(value: unknown): string {
+  if (Array.isArray(value)) return value.join(' | ') || 'none';
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  if (value == null || value === '') return 'unknown';
+  return String(value);
+}
+
 export function ConvoyQaIdentityDiagnosticScreen() {
   const insets = useSafeAreaInsets();
   const [diagnostic, setDiagnostic] = useState<ConvoyQaIdentityDiagnostic | null>(null);
+  const [setupEligibility, setSetupEligibility] = useState<ConvoyQaSetupEligibilityDiagnostic | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
@@ -84,7 +110,15 @@ export function ConvoyQaIdentityDiagnosticScreen() {
       authStateReadable,
     });
 
+    const nextSetupEligibility = await buildLocalConvoyQaSetupEligibility({
+      authenticated: !!user?.id,
+      activeConvoyId: activeContext?.convoyId ?? null,
+      liveSharingActive: sharingState.enabled,
+      pendingInviteOrJoinState: false,
+    });
+
     setDiagnostic(next);
+    setSetupEligibility(nextSetupEligibility);
     setUpdatedAt(new Date().toLocaleString());
   }, []);
 
@@ -129,9 +163,24 @@ export function ConvoyQaIdentityDiagnosticScreen() {
           {FIELD_LABELS.map(([field, label]) => (
             <View key={field} style={styles.row}>
               <Text style={styles.label}>{label}</Text>
-              <Text style={styles.value}>{diagnostic?.[field] ?? 'unknown'}</Text>
+              <Text style={styles.value}>{formatDiagnosticValue(diagnostic?.[field])}</Text>
             </View>
           ))}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Setup eligibility</Text>
+          {SETUP_FIELD_LABELS.map(([field, label]) => (
+            <View key={field} style={styles.row}>
+              <Text style={styles.label}>{label}</Text>
+              <Text style={styles.value}>{formatDiagnosticValue(setupEligibility?.[field])}</Text>
+            </View>
+          ))}
+          {setupEligibility?.notes.length ? (
+            <View style={styles.noteBlock}>
+              <Text style={styles.noteText}>{setupEligibility.notes.join(' ')}</Text>
+            </View>
+          ) : null}
         </View>
 
         <Pressable
@@ -254,6 +303,17 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: '800',
     textAlign: 'right',
+  },
+  noteBlock: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+    paddingTop: 8,
+  },
+  noteText: {
+    color: TACTICAL.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
   },
   refreshButton: {
     minHeight: 42,

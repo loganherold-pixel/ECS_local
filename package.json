@@ -130,6 +130,7 @@
     "test:convoy-participant-fixture-qa": "node ./scripts/test-convoy-participant-fixture-qa.js",
     "test:convoy-badge-title-display": "node ./scripts/test-convoy-badge-title-display.js",
     "test:convoy-qa-account-session-separation": "node ./scripts/test-convoy-qa-account-session-separation.js",
+    "test:convoy-qa-device-b-setup-eligibility": "node ./scripts/test-convoy-qa-device-b-setup-eligibility.js",
     "test:convoy-live-multidevice-privacy-gate": "node ./scripts/test-convoy-live-multidevice-privacy-gate.js",
     "test:convoy-command-panel-selector": "node ./scripts/test-convoy-command-panel-selector.js",
     "test:convoy-team-tracking-schema": "node ./scripts/test-convoy-team-tracking-schema.js",
