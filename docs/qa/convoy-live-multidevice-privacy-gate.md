@@ -936,7 +936,7 @@ Devices and backend:
 
 Result:
 
-- Pass with one threshold-bound caveat.
+- Pass. The threshold-bound stale-transition caveat was later closed by the patched native long-wait run.
 - Both devices were unlocked, awake, debuggable `versionCode=4`, and passed `/dev/convoy-identity-qa`.
 - Both devices started from a clean Convoy baseline with distinct authenticated QA identities and configured vehicles.
 - Device A created `Trail Convoy`, generated a `MEMBER` invite, and Device B joined through the intended credential flow.
@@ -949,11 +949,7 @@ Result:
 - Device A ended the remaining convoy through normal `END CONVOY`; both diagnostics returned clean baselines with no active convoy, no participant id, and live sharing inactive.
 - No badge unlock, telemetry/provider mutation, Fleet mutation, Active Trip mutation, Offline Packet mutation, route catalog mutation, or auth/session mutation was observed.
 
-Caveat:
+Caveat resolution:
 
-- The native stale-threshold transition was not waited out because the configured threshold is 15 minutes and no safe native fast-forward mechanism was used in this pass. Last-known remote rows remained visible with explicit age labels below the stale threshold. Automated stale-threshold guards remain the coverage for the exact transition.
-
-Non-blocking copy notes:
-
-- Dispatch can still display stale lifecycle note copy such as `Convoy ended. Live sharing stopped.` or `Convoy is no longer active. Live sharing stopped.` while an active convoy card is visible.
-- The top Dispatch team card may show `NO ACTIVE TEAM` while the Convoy panel correctly shows an active convoy and roster count.
+- The patched stale-threshold native long-wait run on 2026-06-12 confirmed mounted Dispatch transitions to stale without restart after the configured threshold.
+- The Dispatch / Convoy copy polish branch resolves the remaining presentation inconsistencies: active Convoy context now prevents the top Dispatch card from showing no-active-team copy, tracking disabled does not read as live telemetry, and stopped/ended lifecycle notes are not shown as the active Convoy panel's primary note while an active convoy roster is visible.

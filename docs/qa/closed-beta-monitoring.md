@@ -102,8 +102,7 @@ Do not include raw provider credentials, precise private coordinates, raw route 
 ## Known Caveats
 
 - Hardware telemetry remains truth-boundary cleared only, not fully field-qualified for all live providers.
-- Convoy stale-threshold transition is covered by automated guards; the full native wait was not repeated during the last closed-beta pass.
-- Dispatch can briefly show stale lifecycle copy while the active Convoy card is visible.
-- The top Dispatch team card can show `NO ACTIVE TEAM` while the Convoy panel correctly shows an active convoy roster.
+- Convoy stale-threshold transition was closed by the patched two-device native long-wait run on 2026-06-12.
+- Dispatch / Convoy copy polish resolved the stale lifecycle note and no-active-team display caveats for active convoy context.
 - Standalone lint passes; the smoke harness embedded lint substage can locally skip with the known spawn EINVAL condition.
 - Broader Android device coverage is still needed.

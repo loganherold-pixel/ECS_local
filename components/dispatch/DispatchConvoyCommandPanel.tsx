@@ -455,13 +455,17 @@ export default function DispatchConvoyCommandPanel({
   const selectedMapMember = mapMembers.find((member) => member.memberId === selectedMemberId) ?? null;
   const widestGapLabel = formatConvoyDistanceMiles(panelViewModel.widestGapMiles) ?? '--';
   const hasConvoyData = panelViewModel.vehicleCount > 0 || panelViewModel.members.length > 0;
-  const truthLine = panelViewModel.isUsingLiveData
-    ? 'Live convoy telemetry is active.'
-    : hasConvoyData
-      ? hasActiveConvoy
-        ? 'Active convoy roster available. Start live sharing to publish this vehicle.'
-        : 'Convoy roster/check-in state available; live tracking is not active.'
-      : 'No active convoy. Live convoy tracking is not being simulated.';
+  const canShareLiveLocation = Boolean(activeContext?.convoyId && activeContext?.memberId);
+  const isSharingLiveLocation = Boolean(sharingState?.enabled);
+  const truthLine = panelViewModel.isUsingLiveData && isSharingLiveLocation
+    ? 'Live convoy location sharing is active.'
+    : hasActiveConvoy
+      ? isSharingLiveLocation
+        ? 'Live sharing is on; waiting for fresh convoy reports.'
+        : 'Tracking disabled. Active convoy roster is available.'
+      : hasConvoyData
+        ? 'Convoy roster/check-in state available; live tracking is not active.'
+        : 'No active convoy. Live convoy tracking is not being simulated.';
   const primaryEmergencyEvent = emergencyEvents[0] ?? null;
   const isFeedPresentation = presentation === 'feed';
   const isMapOnlyPresentation = presentation === 'map';
@@ -477,11 +481,9 @@ export default function DispatchConvoyCommandPanel({
     (!isFeedPresentation || emergencyEvents.length > 0);
   const shouldShowEmergencyOverlay =
     showEmergencyOverlay ?? (!isFeedPresentation && !isMapOnlyPresentation && !isSummaryOnlyPresentation);
-  const canShareLiveLocation = Boolean(activeContext?.convoyId && activeContext?.memberId);
-  const isSharingLiveLocation = Boolean(sharingState?.enabled);
   const visibleTrackingNote =
     trackingNote ??
-    sharingState?.lastStopReason ??
+    (!hasActiveConvoy ? sharingState?.lastStopReason : null) ??
     sharingState?.lastError ??
     (hasActiveConvoy && trackingSnapshot.convoyId === activeContext?.convoyId ? trackingSnapshot.error : null);
   const showCommandFooterFacts = !summaryCompact;

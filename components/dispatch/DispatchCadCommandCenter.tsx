@@ -258,6 +258,7 @@ type DispatchChannelAvailability = {
 
 type ConvoyLifecycleControlState = {
   convoyId: string;
+  convoyName: string;
   role: ActiveConvoyContext['role'];
   isLeader: boolean;
   memberUserIds: string[];
@@ -2053,6 +2054,7 @@ function resolveConvoyLifecycleControl(
 
   return {
     convoyId: activeItem.convoy.id,
+    convoyName: activeItem.convoy.name,
     role: activeItem.membership.role,
     isLeader: activeItem.membership.role === 'lead' || Boolean(userId && activeItem.convoy.leader_user_id === userId),
     memberUserIds: Array.from(new Set([
@@ -2723,6 +2725,12 @@ export default function DispatchCadCommandCenter() {
     snapshot: teamSnapshot,
   });
   const teamStatusLabel = teamSyncState.label;
+  const hasDispatchConvoyContext = Boolean(activeConvoyControl?.convoyId);
+  const dispatchTeamStatusLabel = hasDispatchConvoyContext ? 'Active convoy roster' : teamStatusLabel;
+  const dispatchTeamMemberCount = hasActiveTeam
+    ? teamMemberCount
+    : activeConvoyControl?.memberUserIds.length ?? 0;
+  const hasDispatchTeamContext = hasActiveTeam || hasDispatchConvoyContext;
   const channelSnapshots = useMemo(
     () => {
       if (channelRevision < 0) {
@@ -3609,7 +3617,7 @@ export default function DispatchCadCommandCenter() {
           <View style={styles.titleRow}>
             <Text style={styles.title} numberOfLines={1}>DISPATCH</Text>
           </View>
-          <Text style={styles.channel} numberOfLines={1}>{teamStatusLabel}</Text>
+          <Text style={styles.channel} numberOfLines={1}>{dispatchTeamStatusLabel}</Text>
         </View>
       ) : null}
       <View style={[styles.headerActions, isLandscapeDispatch ? styles.headerActionsLandscape : null]}>
@@ -3839,9 +3847,11 @@ export default function DispatchCadCommandCenter() {
               {advisoryLine ?? <View style={styles.landscapeSetupTopSpacer} />}
               <DispatchConvoyTeamSetupCard
                 compact
-                teamStatusLabel={teamStatusLabel}
-                teamMemberCount={teamMemberCount}
-                hasActiveTeam={hasActiveTeam}
+                teamStatusLabel={dispatchTeamStatusLabel}
+                teamMemberCount={dispatchTeamMemberCount}
+                hasActiveTeam={hasDispatchTeamContext}
+                activeConvoyName={activeConvoyControl?.convoyName ?? null}
+                activeConvoyMemberCount={activeConvoyControl?.memberUserIds.length ?? 0}
                 emergencyCount={emergencyCoordinatePingEvents.length}
                 emergencyAlertActive={emergencyPingAttentionActive}
                 onOpenEmergencyPings={primaryEmergencyCoordinatePing ? () => handleOpenEmergencyPing(primaryEmergencyCoordinatePing) : undefined}
@@ -3852,9 +3862,9 @@ export default function DispatchCadCommandCenter() {
               {headerStrip}
               <DispatchConvoyCommandPanel
                 connectionLabel={connectionState.label}
-                teamStatusLabel={teamStatusLabel}
-                teamMemberCount={teamMemberCount}
-                hasActiveTeam={hasActiveTeam}
+                teamStatusLabel={dispatchTeamStatusLabel}
+                teamMemberCount={dispatchTeamMemberCount}
+                hasActiveTeam={hasDispatchTeamContext}
                 userLocation={dispatchConvoyUserLocation}
                 emergencyEvents={emergencyCoordinatePingEvents}
                 emergencyAlertActive={emergencyPingAttentionActive}
@@ -3876,9 +3886,11 @@ export default function DispatchCadCommandCenter() {
           {headerStrip}
           {advisoryLine}
           <DispatchConvoyTeamSetupCard
-            teamStatusLabel={teamStatusLabel}
-            teamMemberCount={teamMemberCount}
-            hasActiveTeam={hasActiveTeam}
+            teamStatusLabel={dispatchTeamStatusLabel}
+            teamMemberCount={dispatchTeamMemberCount}
+            hasActiveTeam={hasDispatchTeamContext}
+            activeConvoyName={activeConvoyControl?.convoyName ?? null}
+            activeConvoyMemberCount={activeConvoyControl?.memberUserIds.length ?? 0}
             emergencyCount={emergencyCoordinatePingEvents.length}
             emergencyAlertActive={emergencyPingAttentionActive}
             onOpenEmergencyPings={primaryEmergencyCoordinatePing ? () => handleOpenEmergencyPing(primaryEmergencyCoordinatePing) : undefined}
@@ -3896,9 +3908,9 @@ export default function DispatchCadCommandCenter() {
         </View>
         <DispatchConvoyCommandPanel
           connectionLabel={connectionState.label}
-          teamStatusLabel={teamStatusLabel}
-          teamMemberCount={teamMemberCount}
-          hasActiveTeam={hasActiveTeam}
+          teamStatusLabel={dispatchTeamStatusLabel}
+          teamMemberCount={dispatchTeamMemberCount}
+          hasActiveTeam={hasDispatchTeamContext}
           userLocation={dispatchConvoyUserLocation}
           emergencyEvents={emergencyCoordinatePingEvents}
           emergencyAlertActive={emergencyPingAttentionActive}
@@ -4013,6 +4025,8 @@ export default function DispatchCadCommandCenter() {
 }
 
 function DispatchConvoyTeamSetupCard({
+  activeConvoyMemberCount = 0,
+  activeConvoyName,
   compact = false,
   emergencyAlertActive,
   emergencyCount,
@@ -4021,6 +4035,8 @@ function DispatchConvoyTeamSetupCard({
   teamMemberCount,
   teamStatusLabel,
 }: {
+  activeConvoyMemberCount?: number;
+  activeConvoyName?: string | null;
   compact?: boolean;
   emergencyAlertActive: boolean;
   emergencyCount: number;
@@ -4031,6 +4047,8 @@ function DispatchConvoyTeamSetupCard({
 }) {
   const emergencyCellActive = emergencyCount > 0 && !!onOpenEmergencyPings;
   const emergencyCountOpacity = useDispatchPulse(emergencyCellActive && emergencyAlertActive);
+  const hasActiveConvoy = Boolean(activeConvoyName);
+  const displayedMemberCount = hasActiveConvoy ? activeConvoyMemberCount : teamMemberCount;
 
   return (
     <View style={[styles.convoyTeamCard, compact ? styles.convoyTeamCardCompact : null]} testID="dispatch-convoy-team-setup-card">
@@ -4038,7 +4056,7 @@ function DispatchConvoyTeamSetupCard({
         <View style={styles.convoyTeamTitleBlock}>
           <Text style={[styles.convoyTeamEyebrow, compact ? styles.convoyTeamEyebrowCompact : null]}>CONVOY SETUP / TEAM</Text>
           <Text style={[styles.convoyTeamTitle, compact ? styles.convoyTeamTitleCompact : null]} numberOfLines={1}>
-            {hasActiveTeam ? 'Team channel staged' : 'Team channel not configured'}
+            {hasActiveConvoy ? activeConvoyName ?? 'Active convoy' : hasActiveTeam ? 'Team channel staged' : 'Team channel not configured'}
           </Text>
         </View>
       </View>
@@ -4046,12 +4064,18 @@ function DispatchConvoyTeamSetupCard({
         <View style={styles.convoyTeamMetaCell}>
           <Text style={styles.convoyTeamMetaLabel}>Team</Text>
           <Text style={styles.convoyTeamMetaValue} numberOfLines={1}>
-            {hasActiveTeam ? `${teamMemberCount} member${teamMemberCount === 1 ? '' : 's'}` : 'Inactive'}
+            {hasActiveConvoy
+              ? `${displayedMemberCount} member${displayedMemberCount === 1 ? '' : 's'}`
+              : hasActiveTeam
+                ? `${teamMemberCount} member${teamMemberCount === 1 ? '' : 's'}`
+                : 'Inactive'}
           </Text>
         </View>
         <View style={styles.convoyTeamMetaCell}>
           <Text style={styles.convoyTeamMetaLabel}>Sync</Text>
-          <Text style={styles.convoyTeamMetaValue} numberOfLines={1}>{teamStatusLabel}</Text>
+          <Text style={styles.convoyTeamMetaValue} numberOfLines={1}>
+            {hasActiveConvoy ? 'Active convoy' : teamStatusLabel}
+          </Text>
         </View>
         {emergencyCellActive ? (
           <TouchableOpacity

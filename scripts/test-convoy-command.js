@@ -306,14 +306,29 @@ assert(
   'Dispatch CAD screen should keep convoy/team setup, compact header actions, convoy lifecycle controls, SYNC DISPATCH reconciliation, and a larger middle Convoy Command surface.',
 );
 assert(
+  dispatchCommandCenterSource.includes('const hasDispatchConvoyContext = Boolean(activeConvoyControl?.convoyId)') &&
+    dispatchCommandCenterSource.includes('const dispatchTeamStatusLabel = hasDispatchConvoyContext') &&
+    dispatchCommandCenterSource.includes('const dispatchTeamMemberCount = hasActiveTeam') &&
+    dispatchCommandCenterSource.includes('activeConvoyName={activeConvoyControl?.convoyName ?? null}') &&
+    dispatchCommandCenterSource.includes('activeConvoyMemberCount={activeConvoyControl?.memberUserIds.length ?? 0}') &&
+    dispatchCommandCenterSource.includes("hasDispatchConvoyContext ? 'Active convoy roster' : teamStatusLabel") &&
+    dispatchCommandCenterSource.includes("hasActiveConvoy ? activeConvoyName ?? 'Active convoy'") &&
+    dispatchCommandCenterSource.includes("hasActiveConvoy ? 'Active convoy'"),
+  'Dispatch top team card should use active Convoy context for copy so it does not show no-active-team while an active convoy is visible.',
+);
+assert(
   !dispatchCommandCenterSource.includes('<DispatchReadinessContextCard />') &&
     !dispatchCommandCenterSource.includes("import DispatchReadinessContextCard"),
   'Dispatch CAD screen should not render the Expedition Readiness Context card.',
 );
 assert(
   dispatchPanelSource.includes('No active convoy. Live convoy tracking is not being simulated.') &&
-    dispatchPanelSource.includes('Live convoy telemetry is active.'),
-  'Dispatch Convoy Command should truthfully distinguish live telemetry from inactive convoy state',
+    dispatchPanelSource.includes('Live convoy location sharing is active.') &&
+    dispatchPanelSource.includes('Tracking disabled. Active convoy roster is available.') &&
+    dispatchPanelSource.includes('panelViewModel.isUsingLiveData && isSharingLiveLocation') &&
+    dispatchPanelSource.includes('(!hasActiveConvoy ? sharingState?.lastStopReason : null)') &&
+    !dispatchPanelSource.includes('Live convoy telemetry is active.'),
+  'Dispatch Convoy Command should truthfully distinguish live sharing, tracking disabled, stale/all-non-live, and inactive convoy state',
 );
 assert(
   dispatchPanelSource.includes('formatConvoyDistanceMiles') &&
