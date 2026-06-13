@@ -5,6 +5,7 @@ import ECSModalShell, { ECSOverlayFooter } from '../ECSModalShell';
 import { ECSButton } from '../ECSButton';
 import { ECSBadge } from '../ECSStatus';
 import { ECSCard, ECSPanel } from '../ECSSurface';
+import LoadoutConsequencePreviewPanel from './LoadoutConsequencePreviewPanel';
 import { TACTICAL } from '../../lib/theme';
 import { ECS_TEXT } from '../../lib/ecsTypographyTokens';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
@@ -27,6 +28,8 @@ import {
   readFleetBuildLoadoutState,
   removeFleetAccessoryInstall,
   removeFleetCompartmentLoadoutItem,
+  toFleetAccessoryInstalls,
+  toFleetCompartmentLoadoutItems,
   upsertFleetAccessoryInstall,
   upsertFleetCompartmentLoadoutItem,
   validateFleetCompartmentLoadoutDraft,
@@ -41,6 +44,10 @@ import {
 } from '../../lib/fleet/fleetBuildLoadout';
 import { FLEET_LOAD_ZONES, toFleetLoadZone, type FleetLoadZone, type FleetWeightSource } from '../../lib/fleet/fleetPremiumDomain';
 import { emitFleetTelemetryEvent } from '../../lib/fleet/fleetTelemetryEvents';
+import {
+  buildLoadoutConsequencePreview,
+  publishLoadoutConsequencePreview,
+} from '../../lib/fleet/loadoutConsequencePreview';
 import {
   FLEET_LOADOUT_QUICK_ADD_CATALOG,
   FLEET_LOADOUT_QUICK_ADD_CATEGORIES,
@@ -155,10 +162,47 @@ export default function FleetBuildLoadoutModal({
     });
   }, [vehicle]);
 
+  const committedBuildLoadoutState = useMemo(
+    () => vehicle ? readFleetBuildLoadoutState(vehicle as any) : normalizeFleetBuildLoadoutState(null),
+    [vehicle],
+  );
+
   const summary = useMemo(() => {
     if (!fleetVehicle) return null;
     return calculateFleetBuildLoadoutSummary(fleetVehicle, state);
   }, [fleetVehicle, state]);
+  const consequencePreview = useMemo(() => {
+    if (!fleetVehicle || !vehicle) return null;
+    return buildLoadoutConsequencePreview({
+      vehicleId: fleetVehicle.id,
+      vehicle: fleetVehicle,
+      currentAccessories: toFleetAccessoryInstalls(committedBuildLoadoutState, fleetVehicle.id),
+      currentLoadoutItems: toFleetCompartmentLoadoutItems(committedBuildLoadoutState, fleetVehicle.id),
+      proposedAccessories: toFleetAccessoryInstalls(state, fleetVehicle.id),
+      proposedLoadoutItems: toFleetCompartmentLoadoutItems(state, fleetVehicle.id),
+      tireLiftState: {
+        tireSizeInches: fleetVehicle.buildProfile.tireSizeInches,
+        suspensionLiftInches: fleetVehicle.buildProfile.suspensionLiftInches,
+        isLeveled: fleetVehicle.buildProfile.isLeveled,
+      },
+      routeContext: { difficulty: 'unknown', remoteness: 'unknown', recoveryPosture: 'unknown' },
+      calculationMode: 'preview',
+    });
+  }, [committedBuildLoadoutState, fleetVehicle, state, vehicle]);
+
+  useEffect(() => {
+    if (!visible || !consequencePreview) return;
+    publishLoadoutConsequencePreview(consequencePreview);
+    emitFleetTelemetryEvent('preview_generated', {
+      vehicleId: consequencePreview.vehicleId,
+      meta: {
+        availability: consequencePreview.availability,
+        payloadDeltaLb: consequencePreview.payloadDeltaLb,
+        gvwrPercentAfter: consequencePreview.gvwrPercentAfter,
+      },
+    });
+  }, [consequencePreview, visible]);
+
   const activeCompartments = useMemo(
     () => state.compartments.filter((item) => item.status !== 'removed'),
     [state.compartments],
@@ -177,6 +221,11 @@ export default function FleetBuildLoadoutModal({
     [selectedQuickAddCategoryId],
   );
   const isCustomLoadoutDraft = selectedDraftCompartment?.accessoryId === 'custom_accessory';
+
+  const closeAndClearPreview = useCallback(() => {
+    publishLoadoutConsequencePreview(null);
+    onClose();
+  }, [onClose]);
 
   const openEditor = useCallback((catalog: FleetAccessoryCatalogItem) => {
     const existing = state.accessories.find((item) => item.accessoryId === catalog.id);
@@ -279,6 +328,14 @@ export default function FleetBuildLoadoutModal({
         fleet_build_loadout: nextState,
       },
     } as any, userId);
+    emitFleetTelemetryEvent('loadout_committed', {
+      vehicleId: vehicle.id,
+      meta: {
+        accessoryCount: nextState.accessories.length,
+        loadoutItemCount: nextState.loadoutItems?.length ?? 0,
+        acknowledgedHighMountedRisk: Boolean(options?.acknowledgeHighMountedRisk),
+      },
+    });
     showToast?.('Build & Loadout saved');
     onSaved?.();
     onClose();
@@ -407,7 +464,7 @@ export default function FleetBuildLoadoutModal({
     <>
       <ECSModalShell
         visible={visible}
-        onClose={onClose}
+        onClose={closeAndClearPreview}
         title="Build & Loadout"
         subtitle="Add installed accessories, let ECS estimate weight, and create compartments for load planning."
         eyebrow="FLEET ACCESSORY FRAMEWORK"
@@ -420,7 +477,7 @@ export default function FleetBuildLoadoutModal({
         allowSwipeDismiss={false}
         footer={
           <ECSOverlayFooter>
-            <ECSButton label="Cancel" variant="tertiary" size="medium" onPress={onClose} grow />
+            <ECSButton label="Cancel" variant="tertiary" size="medium" onPress={closeAndClearPreview} grow />
             <ECSButton label="Save Build" icon="checkmark-circle-outline" variant="primary" size="medium" onPress={handleSave} grow />
           </ECSOverlayFooter>
         }
@@ -444,6 +501,13 @@ export default function FleetBuildLoadoutModal({
               <Text style={styles.metricValue}>{summary?.activeCompartmentCount ?? 0}</Text>
             </View>
           </ECSPanel>
+
+          <LoadoutConsequencePreviewPanel
+            preview={consequencePreview}
+            onSuggestionAccepted={(suggestion) => {
+              showToast?.(`${suggestion.itemName} suggestion recorded`);
+            }}
+          />
 
           <View style={styles.tileGrid}>
             {FLEET_ACCESSORY_CATALOG.map((catalog) => {

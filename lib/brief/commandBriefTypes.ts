@@ -2,6 +2,7 @@ import type {
   ExpeditionReadinessAssessment,
   ExpeditionReadinessVehicleInput,
 } from '../readiness/expeditionReadinessTypes';
+import type { WeakPointAssessment } from '../readiness/expeditionWeakPointAnalyzer';
 
 export type CommandBriefPacketFormat = 'markdown' | 'text';
 
@@ -15,6 +16,7 @@ export type CommandBriefExportContext = {
   activeVehicle?: ExpeditionReadinessVehicleInput | null;
   activeTripId?: string | null;
   activeRouteId?: string | null;
+  weakPointAssessment?: WeakPointAssessment | null;
   generatedAt?: string | null;
 };
 

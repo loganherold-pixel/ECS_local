@@ -255,6 +255,76 @@ export type BailoutCandidate = {
   providerMetadata?: RouteContextProviderMetadata | null;
 };
 
+export type RouteConfidenceTimelineConfidenceLevel = 'high' | 'medium' | 'low' | 'unknown';
+
+export type RouteConfidenceTimelineConditionState = 'normal' | 'known_risky' | 'unknown';
+
+export type RouteConfidenceTimelineDriverCategory =
+  | 'legal_access'
+  | 'closure_current_condition'
+  | 'offline_coverage'
+  | 'terrain_weather'
+  | 'bailout_density'
+  | 'camp_deadline'
+  | 'recovery_exposure';
+
+export type RouteConfidenceTimelineSourceFreshness = 'fresh' | 'stale' | 'missing' | 'unknown';
+
+export type RouteConfidenceTimelineSource = {
+  id: string;
+  label: string;
+  sourceType?: string | null;
+  observedAt?: string | null;
+  freshness: RouteConfidenceTimelineSourceFreshness;
+  detail?: string | null;
+};
+
+export type RouteConfidenceTimelineDriver = {
+  id: string;
+  category: RouteConfidenceTimelineDriverCategory;
+  label: string;
+  confidenceLevel: RouteConfidenceTimelineConfidenceLevel;
+  conditionState: RouteConfidenceTimelineConditionState;
+  source: RouteConfidenceTimelineSource;
+  detail?: string | null;
+};
+
+export type RouteConfidenceTimelineItem = {
+  id: string;
+  routeId: string;
+  geometryVersion: string;
+  startMeasure: number;
+  endMeasure: number;
+  label: string;
+  confidenceLevel: RouteConfidenceTimelineConfidenceLevel;
+  conditionState: RouteConfidenceTimelineConditionState;
+  primaryDriver: RouteConfidenceTimelineDriver;
+  drivers: RouteConfidenceTimelineDriver[];
+  sourceFreshness: RouteConfidenceTimelineSource[];
+};
+
+export type RouteConfidenceTimeline = {
+  routeId: string;
+  geometryVersion: string;
+  totalMeasure: number;
+  generatedAt: string;
+  items: RouteConfidenceTimelineItem[];
+  warnings: string[];
+  readiness: 'feature_flagged';
+};
+
+export type RouteConfidenceTimelineOverlay = {
+  id: string;
+  startMeasure: number;
+  endMeasure: number;
+  label: string;
+  confidenceLevel: RouteConfidenceTimelineConfidenceLevel;
+  conditionState: RouteConfidenceTimelineConditionState;
+  driverCategory: RouteConfidenceTimelineDriverCategory;
+  source: RouteConfidenceTimelineSource;
+  detail?: string | null;
+};
+
 export type RouteContext = {
   id: string;
   trailId: string;
@@ -269,6 +339,7 @@ export type RouteContext = {
   campCandidates: CampCandidate[];
   campEndpointPlan?: CampOpsRouteCampEndpointPlan | null;
   bailoutCandidates: BailoutCandidate[];
+  routeConfidenceTimeline?: RouteConfidenceTimeline | null;
   confidence: Confidence;
   status: RouteContextStatus;
   warnings: RouteContextWarning[];

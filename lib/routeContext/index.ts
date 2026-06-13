@@ -3,6 +3,7 @@ export * from './routeContextConfig';
 export * from './routeContextProviders';
 export * from './trailheadResolver';
 export * from './routeContextGeometry';
+export * from './routeConfidenceTimeline';
 export * from './routeContextTelemetry';
 export * from './routeContextAdapters';
 export {

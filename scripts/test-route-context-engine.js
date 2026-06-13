@@ -87,6 +87,7 @@ async function main() {
     'ecs.routeContextEngine.trailheadAnchoredSupplyChain': false,
     'ecs.routeContextEngine.enableCampCandidates': false,
     'ecs.routeContextEngine.enableBailoutCandidates': false,
+    'ecs.routeContextEngine.routeConfidenceTimeline': false,
     'ecs.routeContextEngine.debugLogging': false,
   });
   assert.ok(ROUTE_CONTEXT_WARNING_CODES.includes('missing_origin'));
@@ -98,11 +99,13 @@ async function main() {
     'ecs.routeContextEngine.trailheadAnchoredSupplyChain': true,
     'ecs.routeContextEngine.enableCampCandidates': true,
     'ecs.routeContextEngine.enableBailoutCandidates': true,
+    'ecs.routeContextEngine.routeConfidenceTimeline': true,
   });
   assert.strictEqual(gatedFlags['ecs.routeContextEngine.prefetchOnTrailSelect'], false);
   assert.strictEqual(gatedFlags['ecs.routeContextEngine.trailheadAnchoredSupplyChain'], false);
   assert.strictEqual(gatedFlags['ecs.routeContextEngine.enableCampCandidates'], false);
   assert.strictEqual(gatedFlags['ecs.routeContextEngine.enableBailoutCandidates'], false);
+  assert.strictEqual(gatedFlags['ecs.routeContextEngine.routeConfidenceTimeline'], false);
 
   const nestedFlags = resolveRouteContextFeatureFlags({
     ecs: {

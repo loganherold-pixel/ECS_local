@@ -215,6 +215,7 @@ import {
   ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
   type RouteGeometryOverlaySegment,
 } from '../../lib/navigateRouteGeometryOverlay';
+import { buildRouteConfidenceTimeline, isRouteConfidenceTimelineFeatureEnabled, routeConfidenceTimelineItemCopy, type RouteConfidenceTimeline, type RouteConfidenceTimelineItem, type RouteConfidenceTimelineOverlay, type RouteGeometry } from '../../lib/routeContext';
 import {
   clearExploreRoutesMapHandoff,
   consumeExploreRoutesMapHandoff,
@@ -497,6 +498,7 @@ import {
   isCampOpsMapPinPayload,
 } from '../../lib/campops/campOpsMapPins';
 import { buildCampOpsCampIntelViewModel } from '../../lib/campops/campOpsCampIntelViewModel';
+import { buildCampDecisionClockDecisionFromRecommendationSet } from '../../lib/campops/campDecisionClock';
 import {
   CAMPOPS_NO_ROUTE_CANDIDATES_MESSAGE,
   CAMPOPS_ROUTE_SCAN_ERROR_MESSAGE,
@@ -1784,6 +1786,256 @@ function formatNavMeters(value: number | null | undefined): string {
     return `${Math.max(Math.round(value / 5) * 5, 5)} ft`;
   }
   return formatNavMiles(value / 1609.344);
+}
+
+function routeConfidenceTimelineConfidenceFromPercent(
+  value: number | null | undefined,
+): RouteConfidenceTimelineOverlay['confidenceLevel'] {
+  if (value == null || !Number.isFinite(value)) return 'unknown';
+  if (value >= 70) return 'high';
+  if (value >= 45) return 'medium';
+  if (value > 0) return 'low';
+  return 'unknown';
+}
+
+function routeConfidenceTimelineTimestamp(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : trimmed;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const millis = value > 0 && value < 100000000000 ? value * 1000 : value;
+    const parsed = new Date(millis);
+    return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+  }
+  return null;
+}
+
+function routeConfidenceTimelineString(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function routeConfidenceTimelineSource(
+  id: string,
+  label: string,
+  observedAt: unknown,
+  freshness: RouteConfidenceTimelineOverlay['source']['freshness'] = 'fresh',
+): RouteConfidenceTimelineOverlay['source'] {
+  return {
+    id,
+    label,
+    sourceType: 'navigate',
+    observedAt: routeConfidenceTimelineTimestamp(observedAt),
+    freshness,
+  };
+}
+
+function navigateRouteConfidenceGeometry(
+  routePoints: readonly { lat: number; lng: number }[],
+  geometryVersion: string,
+  distanceMeters?: number | null,
+): RouteGeometry | null {
+  const coordinates = routePoints
+    .map((point) => ({
+      lat: Number(point.lat),
+      lng: Number(point.lng),
+    }))
+    .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+  if (coordinates.length < 2) return null;
+  return {
+    origin: coordinates[0],
+    destination: coordinates[coordinates.length - 1],
+    waypoints: coordinates.slice(1, -1),
+    coordinates,
+    distanceMeters: Number.isFinite(Number(distanceMeters)) ? Number(distanceMeters) : null,
+    durationSeconds: null,
+    bbox: null,
+    corridor: null,
+    segments: [],
+    providerMetadata: {
+      geometryVersion,
+      source: 'navigate_displayed_route',
+    },
+  };
+}
+
+function navigateTimelineMeasure(
+  routePoints: readonly { lat: number; lng: number }[],
+  distanceMeters?: number | null,
+): number {
+  const explicit = Number(distanceMeters);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return Math.max((routePoints.length - 1) * 1000, 1000);
+}
+
+function buildNavigateRouteConfidenceTimelineOverlays(args: {
+  totalMeasure: number;
+  routeConfidenceSummary: { confidence?: number | null; status?: string | null; summary?: string | null } | null;
+  cacheSnapshot: ReturnType<typeof evaluateCacheReadiness> | null;
+  routeHazardIntel: { headline?: string | null; summaryLine?: string | null } | null;
+  weatherObservedAt?: unknown;
+  weatherSource?: string | null;
+  generatedAt: string;
+}): RouteConfidenceTimelineOverlay[] {
+  const total = Math.max(args.totalMeasure, 1);
+  const overlays: RouteConfidenceTimelineOverlay[] = [];
+  const confidence = Number(args.routeConfidenceSummary?.confidence);
+  if (Number.isFinite(confidence)) {
+    const confidenceLevel = routeConfidenceTimelineConfidenceFromPercent(confidence);
+    overlays.push({
+      id: 'navigate-route-confidence-summary',
+      startMeasure: 0,
+      endMeasure: total,
+      label: confidenceLevel === 'low' || confidenceLevel === 'unknown'
+        ? 'Route confidence uncertainty'
+        : 'Route confidence baseline',
+      confidenceLevel,
+      conditionState: confidenceLevel === 'low' || confidenceLevel === 'unknown' ? 'unknown' : 'normal',
+      driverCategory: 'terrain_weather',
+      source: routeConfidenceTimelineSource('route-confidence-summary', 'Route confidence summary', args.generatedAt),
+      detail: routeConfidenceTimelineString(args.routeConfidenceSummary?.summary),
+    });
+  }
+
+  if (args.cacheSnapshot && !args.cacheSnapshot.cached_route_available) {
+    overlays.push({
+      id: 'navigate-offline-map-gap',
+      startMeasure: total * 0.35,
+      endMeasure: total * 0.62,
+      label: 'Offline map gap',
+      confidenceLevel: args.cacheSnapshot.offline_cache_ready ? 'low' : 'unknown',
+      conditionState: 'unknown',
+      driverCategory: 'offline_coverage',
+      source: routeConfidenceTimelineSource(
+        'offline-cache-readiness',
+        'Offline cache readiness',
+        args.cacheSnapshot.evaluated_at || null,
+        args.cacheSnapshot.offline_cache_ready ? 'fresh' : 'missing',
+      ),
+      detail: 'Offline package coverage is incomplete for this route context.',
+    });
+  }
+
+  if (args.routeHazardIntel) {
+    overlays.push({
+      id: 'navigate-weather-risk',
+      startMeasure: total * 0.55,
+      endMeasure: total * 0.86,
+      label: args.routeHazardIntel.headline ?? 'Weather-exposed corridor',
+      confidenceLevel: args.weatherSource === 'live' ? 'high' : 'medium',
+      conditionState: 'known_risky',
+      driverCategory: 'terrain_weather',
+      source: routeConfidenceTimelineSource(
+        'route-corridor-weather',
+        'Route corridor weather',
+        args.weatherObservedAt ?? args.generatedAt,
+        args.weatherSource === 'cache_stale' ? 'stale' : 'fresh',
+      ),
+      detail: routeConfidenceTimelineString(args.routeHazardIntel.summaryLine),
+    });
+  }
+
+  return overlays;
+}
+
+function routeConfidenceTimelinePointAtMeasure(
+  routePoints: readonly { lat: number; lng: number }[],
+  item: RouteConfidenceTimelineItem,
+  totalMeasure: number,
+): { lat: number; lng: number } | null {
+  if (routePoints.length === 0) return null;
+  const midpoint = (item.startMeasure + item.endMeasure) / 2;
+  const ratio = totalMeasure > 0 ? Math.max(0, Math.min(1, midpoint / totalMeasure)) : 0;
+  const index = Math.max(0, Math.min(routePoints.length - 1, Math.round(ratio * (routePoints.length - 1))));
+  const point = routePoints[index];
+  return point && Number.isFinite(point.lat) && Number.isFinite(point.lng)
+    ? { lat: point.lat, lng: point.lng }
+    : null;
+}
+
+function routeConfidenceTimelineTone(item: RouteConfidenceTimelineItem): string {
+  if (item.conditionState === 'known_risky') return '#EF5350';
+  if (item.confidenceLevel === 'low' || item.confidenceLevel === 'unknown' || item.conditionState === 'unknown') return TACTICAL.amber;
+  if (item.confidenceLevel === 'medium') return '#65D4FF';
+  return '#66BB6A';
+}
+
+function RouteConfidenceTimelinePanel({
+  timeline,
+  selectedItemId,
+  onSelectItem,
+}: {
+  timeline: RouteConfidenceTimeline | null;
+  selectedItemId: string | null;
+  onSelectItem: (item: RouteConfidenceTimelineItem) => void;
+}) {
+  const selectedItem = timeline?.items.find((item) => item.id === selectedItemId) ?? timeline?.items[0] ?? null;
+  return (
+    <View style={styles.routeConfidenceTimelinePanel}>
+      <View style={styles.routeConfidenceTimelineHeader}>
+        <View style={styles.routeConfidenceTimelineTitleBlock}>
+          <Text style={styles.intelSectionTitle}>Route Confidence Timeline</Text>
+          <Text style={styles.routeConfidenceTimelineSubtitle}>What certainty changes along this route?</Text>
+        </View>
+        <View style={styles.routeConfidenceTimelineBadge}>
+          <Text style={styles.routeConfidenceTimelineBadgeText}>FEATURE-FLAGGED</Text>
+        </View>
+      </View>
+      <Text style={styles.routeConfidenceTimelineSafetyCopy}>
+        Unknown/low confidence means uncertainty, not confirmed danger.
+      </Text>
+      {timeline && timeline.items.length > 0 ? (
+        <>
+          <View style={styles.routeConfidenceTimelineTrack}>
+            {timeline.items.map((item) => {
+              const color = routeConfidenceTimelineTone(item);
+              const selected = item.id === selectedItem?.id;
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[
+                    styles.routeConfidenceTimelineSpan,
+                    {
+                      flexGrow: Math.max(1, item.endMeasure - item.startMeasure),
+                      borderColor: selected ? color : `${color}55`,
+                      backgroundColor: `${color}${selected ? '44' : '24'}`,
+                    },
+                  ]}
+                  activeOpacity={0.82}
+                  onPress={() => onSelectItem(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Route confidence timeline segment ${item.label}`}
+                />
+              );
+            })}
+          </View>
+          {selectedItem ? (
+            <View style={styles.routeConfidenceTimelineDetail}>
+              <Text style={styles.intelPrimaryLine}>{selectedItem.label}</Text>
+              <Text style={styles.intelSecondaryLine}>{routeConfidenceTimelineItemCopy(selectedItem)}</Text>
+              <Text style={styles.intelCalloutText}>
+                {formatNavMeters(selectedItem.startMeasure)} to {formatNavMeters(selectedItem.endMeasure)} - {selectedItem.primaryDriver.category.replace(/_/g, ' ')}
+              </Text>
+              {selectedItem.drivers.slice(0, 3).map((driver) => (
+                <Text key={`${selectedItem.id}:${driver.id}`} style={styles.intelCalloutText}>
+                  {driver.label}: {driver.confidenceLevel} confidence / {driver.conditionState.replace(/_/g, ' ')}
+                </Text>
+              ))}
+            </View>
+          ) : null}
+        </>
+      ) : (
+        <Text style={styles.intelEmptyText}>No route confidence timeline available.</Text>
+      )}
+    </View>
+  );
 }
 
 function formatNavDuration(seconds: number | null | undefined): string {
@@ -3679,6 +3931,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const [exploreRoutesHandoff, setExploreRoutesHandoff] = useState<ExploreRoutesMapHandoff | null>(null);
   const [routeGeometryOverlayEnabled, setRouteGeometryOverlayEnabled] = useState(false);
   const [selectedRouteGeometrySegmentIds, setSelectedRouteGeometrySegmentIds] = useState<string[]>([]);
+  const [selectedRouteConfidenceTimelineItemId, setSelectedRouteConfidenceTimelineItemId] = useState<string | null>(null);
   const [aiRouteSnapshotVersion, setAiRouteSnapshotVersion] = useState(0);
   const lastExploreRoutesFitSignatureRef = useRef<string | null>(null);
   const lastRouteGeometryFitSignatureRef = useRef<string | null>(null);
@@ -5479,6 +5732,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const campOpsRecommendationSet = campsiteCandidates?.campOps?.enabled
     ? campsiteCandidates.campOps.recommendationSet
     : null;
+  const navigateCampDecisionClock = useMemo(
+    () => buildCampDecisionClockDecisionFromRecommendationSet(campOpsRecommendationSet, new Date().toISOString()),
+    [campOpsRecommendationSet],
+  );
 
   useEffect(() => {
     if (campScoutAreaMode !== 'results') return;
@@ -14117,6 +14374,73 @@ const intelRouteContext = useMemo(() => {
   trailNavigation.uiMode,
 ]);
 const intelHasRoute = intelRouteContext.hasRoute;
+const routeConfidenceTimelineEnabled = isRouteConfidenceTimelineFeatureEnabled();
+const navigateRouteConfidenceTimeline = useMemo(() => {
+  if (!routeConfidenceTimelineEnabled || !intelHasRoute) return null;
+  const routeId = intelRouteContext.routeId ?? 'navigate-route';
+  const distanceMeters =
+    routeIntelligence?.totalDistanceMiles != null
+      ? routeIntelligence.totalDistanceMiles * 1609.344
+      : roadNavigation.session.route?.distanceM ??
+        (activeRun?.stats?.distance_miles != null ? activeRun.stats.distance_miles * 1609.344 : null);
+  const geometry = navigateRouteConfidenceGeometry(
+    displayedRoutePoints,
+    intelRouteContext.routeFingerprint,
+    distanceMeters,
+  );
+  if (!geometry) return null;
+  const totalMeasure = navigateTimelineMeasure(displayedRoutePoints, distanceMeters);
+  const cacheSnapshot = (() => {
+    try {
+      return evaluateCacheReadiness();
+    } catch {
+      return null;
+    }
+  })();
+  const generatedAt = routeConfidenceTimelineTimestamp(
+    visibleMissionBrief?.generatedAt ??
+    routeIntelligence?.analyzedAt ??
+    routeCorridorWeather.lastFetchAt,
+  ) ?? new Date().toISOString();
+  return buildRouteConfidenceTimeline({
+    routeId,
+    geometryVersion: intelRouteContext.routeFingerprint,
+    routeGeometry: geometry,
+    generatedAt,
+    overlays: buildNavigateRouteConfidenceTimelineOverlays({
+      totalMeasure,
+      routeConfidenceSummary: navigateRouteConfidenceSummary,
+      cacheSnapshot,
+      routeHazardIntel,
+      weatherObservedAt: routeCorridorWeather.lastFetchAt,
+      weatherSource: routeCorridorWeather.source,
+      generatedAt,
+    }),
+  });
+}, [
+  activeRun?.stats?.distance_miles,
+  displayedRoutePoints,
+  intelHasRoute,
+  intelRouteContext.routeFingerprint,
+  intelRouteContext.routeId,
+  navigateRouteConfidenceSummary,
+  roadNavigation.session.route?.distanceM,
+  routeConfidenceTimelineEnabled,
+  routeCorridorWeather.lastFetchAt,
+  routeCorridorWeather.source,
+  routeHazardIntel,
+  routeIntelligence?.analyzedAt,
+  routeIntelligence?.totalDistanceMiles,
+  visibleMissionBrief?.generatedAt,
+]);
+
+useEffect(() => {
+  if (!selectedRouteConfidenceTimelineItemId) return;
+  if (!navigateRouteConfidenceTimeline?.items.some((item) => item.id === selectedRouteConfidenceTimelineItemId)) {
+    setSelectedRouteConfidenceTimelineItemId(null);
+  }
+}, [navigateRouteConfidenceTimeline, selectedRouteConfidenceTimelineItemId]);
+
 const navigateCampOverlayReadinessCandidates = useMemo(() => {
   const campOverlayVisible =
     campScoutAreaMode === 'results' ||
@@ -14171,12 +14495,14 @@ useEffect(() => {
     campCandidates: navigateCampOverlayReadinessCandidates && navigateCampOverlayReadinessCandidates.length > 0
       ? navigateCampOverlayReadinessCandidates
       : null,
+    campDecisionClock: navigateCampDecisionClock,
     tripIntent: shouldInferOvernightCamp ? 'overnightCamp' : readinessSnapshot.inputPatch.tripIntent,
     tripIntentSource: shouldInferOvernightCamp ? 'ecs_inferred' : readinessSnapshot.inputPatch.tripIntentSource,
   });
 }, [
   intelHasRoute,
   intelRouteContext.routeFingerprint,
+  navigateCampDecisionClock,
   navigateCampOverlayReadinessCandidates,
 ]);
 const intelReadinessStack =
@@ -14325,6 +14651,23 @@ const issueCameraCommand = useCallback((command: CameraCommand) => {
     });
   }
 }, [enableFollowLock, mapZoom, queueMapCameraCommand, userLocation]);
+
+const handleRouteConfidenceTimelineItemPress = useCallback((item: RouteConfidenceTimelineItem) => {
+  setSelectedRouteConfidenceTimelineItemId(item.id);
+  const target = routeConfidenceTimelinePointAtMeasure(
+    displayedRoutePoints,
+    item,
+    navigateRouteConfidenceTimeline?.totalMeasure ?? item.endMeasure,
+  );
+  if (target) {
+    issueCameraCommand({
+      mode: 'route_overview',
+      target,
+      zoom: 12,
+      force: true,
+    });
+  }
+}, [displayedRoutePoints, issueCameraCommand, navigateRouteConfidenceTimeline?.totalMeasure]);
 
 const handleOpenOfflineCache = useCallback(() => {
   hapticCommand();
@@ -20756,6 +21099,14 @@ const stableMapSurface = useMemo(() => {
           )}
         </View>
 
+        {routeConfidenceTimelineEnabled ? (
+          <RouteConfidenceTimelinePanel
+            timeline={navigateRouteConfidenceTimeline}
+            selectedItemId={selectedRouteConfidenceTimelineItemId}
+            onSelectItem={handleRouteConfidenceTimelineItemPress}
+          />
+        ) : null}
+
         <View style={styles.intelSectionCard}>
           <Text style={styles.intelSectionTitle}>Staging / Pre-Departure</Text>
           {intelHasRoute ? (
@@ -23968,6 +24319,81 @@ intelEmptyText: {
   color: TACTICAL.textMuted,
   fontSize: 11,
   lineHeight: 16,
+},
+
+routeConfidenceTimelinePanel: {
+  borderRadius: 16,
+  borderWidth: 1,
+  borderColor: 'rgba(196,138,44,0.14)',
+  backgroundColor: 'rgba(12,16,20,0.9)',
+  paddingHorizontal: 14,
+  paddingVertical: 14,
+  gap: 10,
+},
+
+routeConfidenceTimelineHeader: {
+  flexDirection: 'row',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 10,
+},
+
+routeConfidenceTimelineTitleBlock: {
+  flex: 1,
+  minWidth: 0,
+  gap: 3,
+},
+
+routeConfidenceTimelineSubtitle: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 11,
+  lineHeight: 15,
+},
+
+routeConfidenceTimelineBadge: {
+  borderRadius: 999,
+  borderWidth: 1,
+  borderColor: 'rgba(101,212,255,0.3)',
+  backgroundColor: 'rgba(101,212,255,0.12)',
+  paddingHorizontal: 8,
+  paddingVertical: 5,
+},
+
+routeConfidenceTimelineBadgeText: {
+  ...TYPO.U2,
+  color: '#65D4FF',
+  fontSize: 7.5,
+  letterSpacing: 1,
+},
+
+routeConfidenceTimelineSafetyCopy: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 10.5,
+  lineHeight: 15,
+},
+
+routeConfidenceTimelineTrack: {
+  minHeight: 28,
+  flexDirection: 'row',
+  gap: 4,
+},
+
+routeConfidenceTimelineSpan: {
+  minWidth: 18,
+  borderRadius: 8,
+  borderWidth: 1,
+},
+
+routeConfidenceTimelineDetail: {
+  borderRadius: 12,
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.08)',
+  backgroundColor: 'rgba(0,0,0,0.18)',
+  paddingHorizontal: 10,
+  paddingVertical: 9,
+  gap: 5,
 },
 
 intelSummaryPillRow: {

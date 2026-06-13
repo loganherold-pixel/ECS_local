@@ -12,6 +12,8 @@ export * from './exploreRouteReadiness';
 export * from './campReadinessAdapter';
 export * from './fleetReadinessAdapter';
 export * from './departureAudit';
+export * from './departureDeltaBrief';
+export * from './expeditionWeakPointAnalyzer';
 export * from './recoveryReadinessAdapter';
 export * from './dispatchReadinessAdapter';
 export * from './powerReadinessAdapter';

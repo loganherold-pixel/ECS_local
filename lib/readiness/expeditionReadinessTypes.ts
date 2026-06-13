@@ -2,6 +2,8 @@ import type {
   ExpeditionReadinessPreferences,
   ExpeditionReadinessPreferenceEffect,
 } from './expeditionReadinessPreferences';
+import type { DepartureDeltaPreviousAuditSnapshot } from './departureDeltaBrief';
+import type { CampDecisionClockDecision } from '../campops/campDecisionClock';
 
 export const EXPEDITION_READINESS_STATUSES = ['ready', 'caution', 'hold'] as const;
 export type ExpeditionReadinessStatus = (typeof EXPEDITION_READINESS_STATUSES)[number];
@@ -515,6 +517,10 @@ export type ExpeditionReadinessInput = {
   daylight?: ExpeditionReadinessDaylightInput | null;
   offline?: ExpeditionReadinessOfflineInput | null;
   campCandidates?: ExpeditionReadinessCampCandidateInput[] | null;
+  campDecisionClock?: CampDecisionClockDecision | null;
+  previousDepartureAudit?: DepartureDeltaPreviousAuditSnapshot | null;
+  departureDeltaBriefFeatureEnabled?: boolean | null;
+  weakPointAnalyzerFeatureEnabled?: boolean | null;
   fuel?: ExpeditionReadinessFuelInput | null;
   power?: ExpeditionReadinessPowerInput | null;
   recovery?: ExpeditionReadinessRecoveryInput | null;

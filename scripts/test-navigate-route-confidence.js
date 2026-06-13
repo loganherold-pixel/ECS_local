@@ -10,6 +10,9 @@ function readSource(...segments) {
 
 const summarySource = readSource('lib', 'remote', 'routeConfidenceSummary.ts');
 const readinessSource = readSource('lib', 'routeGuidanceReadinessPresentation.ts');
+const timelineSource = readSource('lib', 'routeContext', 'routeConfidenceTimeline.ts');
+const routeContextTypesSource = readSource('lib', 'routeContext', 'routeContextTypes.ts');
+const routeContextIndexSource = readSource('lib', 'routeContext', 'index.ts');
 const overlaySource = readSource('components', 'navigate', 'RoadNavigationOverlay.tsx');
 const navigateSource = readSource('app', '(tabs)', 'navigate.tsx');
 const packageSource = readSource('package.json');
@@ -46,6 +49,26 @@ assertIncludes(
   summarySource,
   "'High Remoteness - Prepare'",
   'Route confidence summary should surface high-remoteness preparation copy.',
+);
+assertIncludes(
+  timelineSource,
+  'export function buildRouteConfidenceTimeline',
+  'Route Context Engine should expose a deterministic Route Confidence Timeline builder.',
+);
+assertIncludes(
+  timelineSource,
+  'routeConfidenceTimelineItemCopy',
+  'Route Confidence Timeline should own safety copy for uncertainty versus known risk.',
+);
+assertIncludes(
+  routeContextTypesSource,
+  'routeConfidenceTimeline?: RouteConfidenceTimeline | null;',
+  'Route Context contract should carry an optional feature-flagged Route Confidence Timeline.',
+);
+assertIncludes(
+  routeContextIndexSource,
+  "export * from './routeConfidenceTimeline';",
+  'Route Confidence Timeline should be exported from the Route Context public barrel.',
 );
 
 assertIncludes(
@@ -135,11 +158,61 @@ assertIncludes(
   'routeConfidenceSummary: navigateRouteConfidenceSummary,\n    });',
   'Start Guidance readiness stack should receive the numeric route confidence summary.',
 );
+assertIncludes(
+  navigateSource,
+  "import { buildRouteConfidenceTimeline, isRouteConfidenceTimelineFeatureEnabled, routeConfidenceTimelineItemCopy",
+  'Navigate should import the Route Context timeline contract and safety-copy helper.',
+);
+assertIncludes(
+  navigateSource,
+  'const routeConfidenceTimelineEnabled = isRouteConfidenceTimelineFeatureEnabled()',
+  'Navigate should keep the Route Confidence Timeline behind a feature flag.',
+);
+assertIncludes(
+  navigateSource,
+  'const navigateRouteConfidenceTimeline = useMemo(',
+  'Navigate should derive the route confidence timeline from current route context.',
+);
+assertIncludes(
+  navigateSource,
+  'RouteConfidenceTimelinePanel',
+  'Navigate should render a compact Route Confidence Timeline panel.',
+);
+assertIncludes(
+  navigateSource,
+  'routeConfidenceTimelineEnabled ? (',
+  'Navigate should render the Route Confidence Timeline only when enabled.',
+);
+assertIncludes(
+  navigateSource,
+  'What certainty changes along this route?',
+  'Route Confidence Timeline should explain the non-blocking comprehension layer.',
+);
+assertIncludes(
+  navigateSource,
+  'Unknown/low confidence means uncertainty, not confirmed danger.',
+  'Navigate copy should separate uncertainty from known risk.',
+);
+assertIncludes(
+  navigateSource,
+  'No route confidence timeline available.',
+  'Navigate should gracefully fall back when timeline data is unavailable.',
+);
+assertIncludes(
+  navigateSource,
+  'handleRouteConfidenceTimelineItemPress',
+  'Navigate should link timeline item selection to map-oriented segment detail behavior.',
+);
 
 assertIncludes(
   packageSource,
   '"test:navigate-route-confidence": "node ./scripts/test-navigate-route-confidence.js"',
   'package.json should expose the navigate route confidence regression test.',
+);
+assertIncludes(
+  packageSource,
+  '"test:route-confidence-timeline": "node ./scripts/test-route-confidence-timeline.js"',
+  'package.json should expose the Route Confidence Timeline regression test.',
 );
 
 console.log('Navigate route confidence presentation checks passed.');

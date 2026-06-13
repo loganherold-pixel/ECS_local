@@ -29,6 +29,12 @@ import {
   type ConvoyMemberRecord,
   type ConvoyRole,
 } from '../lib/convoy/convoyMembershipService';
+import {
+  buildConvoyStalenessLadder,
+  type ConvoyStalenessLadder,
+  type ConvoyStalenessLadderRow,
+  type StalenessPolicy,
+} from '../lib/convoy/convoyStalenessLadder';
 import { dispatchProfileStore } from '../lib/dispatchProfileStore';
 import { TACTICAL, TYPO } from '../lib/theme';
 import { ECS_SURFACE } from '../lib/ecsSurfaceTokens';
@@ -83,6 +89,58 @@ function formatLocationAge(summary: ConvoyLocationSummaryRecord | null): string 
   if (ageMinutes < 1) return 'Just now';
   if (ageMinutes < 60) return `${ageMinutes}m ago`;
   return `${Math.floor(ageMinutes / 60)}h ago`;
+}
+
+function convoyStalenessPolicyFromConfig(convoy: ConvoyListItem['convoy'] | null | undefined): StalenessPolicy | null {
+  const source = convoy as (ConvoyListItem['convoy'] & {
+    staleness_policy?: Partial<StalenessPolicy> | null;
+    stalenessPolicy?: Partial<StalenessPolicy> | null;
+  }) | null | undefined;
+  const policy = source?.staleness_policy ?? source?.stalenessPolicy ?? null;
+  const delayedAfter = Number(policy?.delayedAfter);
+  const staleAfter = Number(policy?.staleAfter);
+  const missingAfter = Number(policy?.missingAfter);
+  if (
+    !Number.isFinite(delayedAfter) ||
+    !Number.isFinite(staleAfter) ||
+    !Number.isFinite(missingAfter) ||
+    delayedAfter < 0 ||
+    staleAfter <= delayedAfter ||
+    missingAfter <= staleAfter
+  ) {
+    return null;
+  }
+  return { delayedAfter, staleAfter, missingAfter };
+}
+
+function convoyStalenessStatusLabel(status: ConvoyStalenessLadderRow['status']): string {
+  switch (status) {
+    case 'recovery_event_active':
+      return 'Recovery event active';
+    case 'assistance_requested':
+      return 'Assistance requested';
+    case 'missing_check_in':
+      return 'Missing check-in';
+    case 'stale':
+      return 'Stale';
+    case 'delayed':
+      return 'Delayed';
+    case 'fresh':
+      return 'Fresh';
+    case 'unknown_no_permission':
+      return 'Unknown - no permission';
+    case 'unknown_no_data':
+    default:
+      return 'Unknown - no data';
+  }
+}
+
+function formatCheckInAge(row: ConvoyStalenessLadderRow): string {
+  if (!row.lastCheckInAt) return 'No accepted check-in source';
+  if (row.lastCheckInAgeMinutes == null) return `Last accepted check-in ${formatDateTime(row.lastCheckInAt)}`;
+  if (row.lastCheckInAgeMinutes < 1) return 'Last accepted check-in just now';
+  if (row.lastCheckInAgeMinutes < 60) return `Last accepted check-in ${row.lastCheckInAgeMinutes}m ago`;
+  return `Last accepted check-in ${Math.floor(row.lastCheckInAgeMinutes / 60)}h ago`;
 }
 
 function vehicleLabel(vehicle: Vehicle): string {
@@ -143,6 +201,55 @@ export default function ConvoyCommandCredentialsScreen() {
   const locationByMember = useMemo(
     () => new Map(locationSummaries.map((summary) => [summary.member_id, summary])),
     [locationSummaries],
+  );
+  const convoyStalenessPolicy = useMemo(
+    () => convoyStalenessPolicyFromConfig(selectedConvoy?.convoy ?? null),
+    [selectedConvoy?.convoy],
+  );
+  const convoyStalenessLadder = useMemo(
+    () => buildConvoyStalenessLadder({
+      now: new Date().toISOString(),
+      policy: convoyStalenessPolicy,
+      roster: members.map((member) => ({
+        memberId: member.id,
+        displayName: member.callsign,
+        role: member.role,
+      })),
+      permissions: {
+        canViewRoster: Boolean(selectedConvoy),
+        canViewStatus: Boolean(selectedConvoy),
+        canViewCheckInTimestamps: Boolean(selectedConvoy),
+        canViewSharedCoordinates: Boolean(selectedConvoy),
+        canViewOfflineReplayState: Boolean(selectedConvoy),
+      },
+      lastAcceptedCheckIns: locationSummaries
+        .map((summary) => ({
+          memberId: summary.member_id,
+          acceptedAt: summary.captured_at ?? summary.updated_at ?? '',
+          source: 'convoy_location_summary',
+        }))
+        .filter((checkIn) => checkIn.acceptedAt),
+      channelStates: locationSummaries.map((summary) => ({
+        memberId: summary.member_id,
+        state: summary.movement_status ?? 'unknown',
+        observedAt: summary.updated_at ?? summary.captured_at ?? null,
+      })),
+      offlineReplay: rosterStaleMessage
+        ? members.map((member) => ({
+            memberId: member.id,
+            state: 'pending',
+            capturedAt: null,
+            visible: true,
+          }))
+        : [],
+    }),
+    [
+      convoyStalenessPolicy,
+      locationSummaries,
+      members,
+      rosterStaleMessage,
+      selectedConvoy,
+    ],
   );
 
   useEffect(() => {
@@ -576,6 +683,7 @@ export default function ConvoyCommandCredentialsScreen() {
             </Text>
             {rosterRefreshing ? <Text style={styles.helper}>Roster syncing with convoy backend.</Text> : null}
             {rosterStaleMessage ? <Text style={styles.rosterWarning}>{rosterStaleMessage}</Text> : null}
+            <ConvoyStalenessLadderPanel ladder={convoyStalenessLadder} />
             <RosterList
               members={members}
               locationByMember={locationByMember}
@@ -747,6 +855,68 @@ function InviteList({
           </View>
         );
       })}
+    </View>
+  );
+}
+
+function ConvoyStalenessLadderPanel({ ladder }: { ladder: ConvoyStalenessLadder }) {
+  return (
+    <View style={styles.stalenessLadderCard}>
+      <View style={styles.stalenessLadderHeader}>
+        <View style={styles.stalenessLadderTitleBlock}>
+          <Text style={styles.listTitle}>Convoy Staleness Ladder</Text>
+          <Text style={styles.stalenessLadderBeta}>Current user-facing/internal beta extension</Text>
+        </View>
+        <Text style={styles.stalenessLadderPolicy}>
+          {ladder.policy
+            ? `${ladder.policy.delayedAfter}/${ladder.policy.staleAfter}/${ladder.policy.missingAfter}m`
+            : 'Policy needed'}
+        </Text>
+      </View>
+      <Text style={styles.helper}>
+        Groups show check-in overdue status from accepted sources only. ECS does not infer distress from silence.
+      </Text>
+      {ladder.groups.length === 0 ? <Text style={styles.emptyText}>No convoy roster data visible.</Text> : null}
+      {ladder.groups.map((group) => (
+        <View key={group.group} style={styles.stalenessGroup}>
+          <Text style={styles.stalenessGroupTitle}>{group.label}</Text>
+          {group.rows.map((row) => (
+            <View key={row.memberId} style={styles.stalenessRow}>
+              <View style={styles.stalenessRowHeader}>
+                <Text style={styles.stalenessMember} numberOfLines={1}>
+                  {row.displayName}
+                </Text>
+                <Text style={styles.stalenessStatus} numberOfLines={1}>
+                  {convoyStalenessStatusLabel(row.status)}
+                </Text>
+              </View>
+              <Text style={styles.stalenessMeta} numberOfLines={2}>
+                {formatCheckInAge(row)}{row.channelState ? ` / channel ${row.channelState}` : ''}
+              </Text>
+              {row.activeEventSummary ? (
+                <Text style={styles.stalenessMeta} numberOfLines={2}>
+                  Event: {row.activeEventSummary}
+                </Text>
+              ) : null}
+              <Text style={styles.stalenessMeta} numberOfLines={2}>
+                {row.lastSharedCoordinate
+                  ? `last shared coordinate: ${row.lastSharedCoordinate.label ?? `${row.lastSharedCoordinate.lat.toFixed(4)}, ${row.lastSharedCoordinate.lng.toFixed(4)}`}`
+                  : 'last shared coordinate: not explicitly shared or not permissioned'}
+              </Text>
+              {[...row.sourceNotes, ...row.privacyNotes].slice(0, 3).map((note, index) => (
+                <Text key={`${row.memberId}-note-${index}`} style={styles.stalenessNote} numberOfLines={2}>
+                  {note.includes('pending replay') ? note : note}
+                </Text>
+              ))}
+            </View>
+          ))}
+        </View>
+      ))}
+      {ladder.sourceNotes.length ? (
+        <Text style={styles.stalenessNote} numberOfLines={2}>
+          {ladder.sourceNotes.join(' ')}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -1058,6 +1228,90 @@ const styles = StyleSheet.create({
     color: TACTICAL.text,
     fontSize: 12,
     fontWeight: '900',
+  },
+  stalenessLadderCard: {
+    gap: 8,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.selected,
+    borderRadius: 9,
+    backgroundColor: ECS_SURFACE.background.selected,
+    padding: 9,
+  },
+  stalenessLadderHeader: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  stalenessLadderTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  stalenessLadderBeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '800',
+  },
+  stalenessLadderPolicy: {
+    color: TACTICAL.amber,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  stalenessGroup: {
+    gap: 5,
+  },
+  stalenessGroupTitle: {
+    color: TACTICAL.amber,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  stalenessRow: {
+    gap: 4,
+    borderWidth: 1,
+    borderColor: TACTICAL.border,
+    borderRadius: 8,
+    backgroundColor: ECS_SURFACE.background.compact,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  stalenessRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  stalenessMember: {
+    flex: 1,
+    minWidth: 0,
+    color: TACTICAL.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  stalenessStatus: {
+    color: TACTICAL.text,
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    flexShrink: 0,
+  },
+  stalenessMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
+  stalenessNote: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
   },
   rowCard: {
     minHeight: 44,

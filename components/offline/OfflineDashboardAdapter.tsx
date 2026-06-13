@@ -19,6 +19,12 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import OfflineFailureDrillPanel from './OfflineFailureDrillPanel';
+import { dispatchQueue } from '../../lib/dispatchQueueStore';
+import {
+  buildOfflineFailureDrillFromSystemProfiles,
+  type OfflineFailureDrillResult,
+} from '../../lib/offlineFailureDrillService';
 import { offlineExpeditionModeEngine } from '../../lib/offlineExpeditionModeEngine';
 import type {
   SystemOfflineProfile,
@@ -72,10 +78,22 @@ export default function OfflineDashboardAdapter({
 }: OfflineDashboardAdapterProps) {
   const [profiles, setProfiles] = useState<SystemOfflineProfile[]>([]);
   const [connState, setConnState] = useState('online');
+  const [drillResult, setDrillResult] = useState<OfflineFailureDrillResult | null>(null);
 
   const refresh = useCallback(() => {
-    setProfiles(offlineExpeditionModeEngine.getSystemProfiles());
-    setConnState(offlineExpeditionModeEngine.getConnectivityState());
+    const nextProfiles = offlineExpeditionModeEngine.getSystemProfiles();
+    const nextConnectivityState = offlineExpeditionModeEngine.getConnectivityState();
+    setProfiles(nextProfiles);
+    setConnState(nextConnectivityState);
+    setDrillResult(buildOfflineFailureDrillFromSystemProfiles({
+      connectivityState: nextConnectivityState,
+      profiles: nextProfiles,
+      dispatchQueue: {
+        size: dispatchQueue.size,
+        pendingCount: dispatchQueue.pendingCount,
+        failedCount: dispatchQueue.failedCount,
+      },
+    }));
   }, []);
 
   useEffect(() => {
@@ -100,27 +118,34 @@ export default function OfflineDashboardAdapter({
 
   if (compact) {
     return (
-      <View style={styles.compactContainer}>
-        <View style={styles.compactRow}>
-          <View style={styles.compactGroup}>
-            <Ionicons name="checkmark-circle" size={12} color="#4CAF50" />
-            <Text style={styles.compactText}>
-              {available.length} available
-            </Text>
-          </View>
-          <View style={styles.compactGroup}>
-            <Ionicons name="folder-outline" size={12} color="#42A5F5" />
-            <Text style={styles.compactText}>
-              {cached.length} cached
-            </Text>
-          </View>
-          <View style={styles.compactGroup}>
-            <Ionicons name="alert-circle-outline" size={12} color="#78909C" />
-            <Text style={styles.compactText}>
-              {limited.length} limited
-            </Text>
+      <View>
+        <View style={styles.compactContainer}>
+          <View style={styles.compactRow}>
+            <View style={styles.compactGroup}>
+              <Ionicons name="checkmark-circle" size={12} color="#4CAF50" />
+              <Text style={styles.compactText}>
+                {available.length} available
+              </Text>
+            </View>
+            <View style={styles.compactGroup}>
+              <Ionicons name="folder-outline" size={12} color="#42A5F5" />
+              <Text style={styles.compactText}>
+                {cached.length} cached
+              </Text>
+            </View>
+            <View style={styles.compactGroup}>
+              <Ionicons name="alert-circle-outline" size={12} color="#78909C" />
+              <Text style={styles.compactText}>
+                {limited.length} limited
+              </Text>
+            </View>
           </View>
         </View>
+        {drillResult ? (
+          <View testID="offline-failure-drill-panel">
+            <OfflineFailureDrillPanel result={drillResult} compact />
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -132,6 +157,12 @@ export default function OfflineDashboardAdapter({
         <Text style={styles.headerTitle}>System Status</Text>
         <Text style={styles.headerSubtitle}>Offline Availability</Text>
       </View>
+
+      {drillResult ? (
+        <View testID="offline-failure-drill-panel" style={styles.drillPanel}>
+          <OfflineFailureDrillPanel result={drillResult} />
+        </View>
+      ) : null}
 
       <ScrollView
         style={styles.list}
@@ -230,6 +261,11 @@ const styles = StyleSheet.create({
   },
   list: {
     maxHeight: 300,
+  },
+  drillPanel: {
+    padding: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2A2A2A',
   },
   section: {
     paddingHorizontal: 14,

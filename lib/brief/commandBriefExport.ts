@@ -152,6 +152,23 @@ function formatRouteSummary(context: CommandBriefExportContext) {
   return [title ? cleanPacketCopy(title) : null, summary, ...ids].filter(Boolean).join('\n');
 }
 
+function formatWeakPointAssessment(context: CommandBriefExportContext) {
+  const assessment = context.weakPointAssessment;
+  if (!assessment) {
+    return 'Unavailable / feature-flagged. Weak Point Analyzer is not enabled for this Command Brief packet.';
+  }
+  const primary = assessment.mostFragileAssumption;
+  const lines = [
+    `Maturity: ${assessment.maturityLabel}. Score version: ${assessment.scoreVersion}. Source snapshot: ${assessment.sourceSnapshotId}.`,
+    primary ? `Primary weak point: ${primary.label} (${primary.riskScore.toFixed(2)}/5). ${primary.consequenceStatement}` : 'Primary weak point: unavailable.',
+    assessment.mostSevereConsequence ? `Most severe consequence: ${assessment.mostSevereConsequence.consequenceStatement}` : null,
+    assessment.easiestFixBeforeDeparture ? `Easiest fix before departure: ${assessment.easiestFixBeforeDeparture.easiestPreDepartureFix}` : null,
+    assessment.monitorDuringTravel ? `Monitor during travel: ${assessment.monitorDuringTravel.travelMonitorSignal}` : null,
+    assessment.missingData.length ? `Missing data: ${assessment.missingData.slice(0, 6).join(', ')}.` : null,
+  ].filter(Boolean);
+  return lines.map((line) => cleanPacketCopy(String(line))).join('\n');
+}
+
 function packetFilename(title: string, generatedAt: string, extension: 'md' | 'txt') {
   const dateStamp = generatedAt.replace(/[:.]/g, '-');
   const cleanTitle = title
@@ -226,6 +243,9 @@ export function buildCommandBriefPacket(
     '',
     '## Route Summary',
     formatRouteSummary(context),
+    '',
+    '## What Breaks First?',
+    formatWeakPointAssessment(context),
     '',
     '## Top Blockers',
     markdownList(blockerLines, 'No hard blockers are present in the current assessment.', 5),

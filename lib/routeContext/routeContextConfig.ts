@@ -4,6 +4,7 @@ export type RouteContextFeatureFlag =
   | 'ecs.routeContextEngine.trailheadAnchoredSupplyChain'
   | 'ecs.routeContextEngine.enableCampCandidates'
   | 'ecs.routeContextEngine.enableBailoutCandidates'
+  | 'ecs.routeContextEngine.routeConfidenceTimeline'
   | 'ecs.routeContextEngine.debugLogging';
 
 export type RouteContextFeatureFlags = Record<RouteContextFeatureFlag, boolean>;
@@ -14,6 +15,7 @@ export const DEFAULT_ROUTE_CONTEXT_FEATURE_FLAGS: RouteContextFeatureFlags = {
   'ecs.routeContextEngine.trailheadAnchoredSupplyChain': false,
   'ecs.routeContextEngine.enableCampCandidates': false,
   'ecs.routeContextEngine.enableBailoutCandidates': false,
+  'ecs.routeContextEngine.routeConfidenceTimeline': false,
   'ecs.routeContextEngine.debugLogging': false,
 };
 
@@ -73,6 +75,7 @@ export type RouteContextFeatureFlagOverrides =
         trailheadAnchoredSupplyChain?: boolean;
         enableCampCandidates?: boolean;
         enableBailoutCandidates?: boolean;
+        routeConfidenceTimeline?: boolean;
         debugLogging?: boolean;
       };
     };
@@ -87,6 +90,7 @@ const NESTED_FLAG_TO_DOT_FLAG: Record<
   trailheadAnchoredSupplyChain: 'ecs.routeContextEngine.trailheadAnchoredSupplyChain',
   enableCampCandidates: 'ecs.routeContextEngine.enableCampCandidates',
   enableBailoutCandidates: 'ecs.routeContextEngine.enableBailoutCandidates',
+  routeConfidenceTimeline: 'ecs.routeContextEngine.routeConfidenceTimeline',
   debugLogging: 'ecs.routeContextEngine.debugLogging',
 };
 
@@ -119,6 +123,7 @@ export function resolveRouteContextFeatureFlags(
     resolved['ecs.routeContextEngine.trailheadAnchoredSupplyChain'] = false;
     resolved['ecs.routeContextEngine.enableCampCandidates'] = false;
     resolved['ecs.routeContextEngine.enableBailoutCandidates'] = false;
+    resolved['ecs.routeContextEngine.routeConfidenceTimeline'] = false;
   }
 
   return resolved;

@@ -26,6 +26,31 @@ function assertNotIncludes(source, fragment, message) {
   'Route Intelligence',
   'Vehicle Fit',
   'CampOps / Camp Legality Confidence',
+  'Camp Decision Clock',
+  'Departure Delta Brief',
+  'Weak Point Analyzer',
+  'What breaks first?',
+  'Internal beta / restricted field-test',
+  'Primary weak point:',
+  'Most severe consequence:',
+  'Easiest fix before departure:',
+  'Monitor during travel:',
+  'What changed since last check?',
+  'No comparable previous departure audit available.',
+  'New blockers',
+  'Resolved blockers',
+  'Stale inputs',
+  'Changed vehicle/loadout values',
+  'Offline package regressions',
+  'Camp confidence changes',
+  'Updated posture',
+  'Continue to planned camp until:',
+  'After that, divert to backup endpoint',
+  'Divert to backup endpoint now.',
+  'Emergency endpoint remains viable until:',
+  'Main risk:',
+  'Feature flagged',
+  'continueCutoffPassed',
   'Weather + Daylight Window',
   'Offline Preparedness',
   'Fuel / Power / Range',
@@ -41,6 +66,14 @@ function assertNotIncludes(source, fragment, message) {
   'useReadinessDecision',
   'useCanStartExpedition',
   'useExpeditionReadinessState',
+  'campDecisionClock',
+  'departureDeltaBriefEnabled',
+  'buildDepartureDeltaBrief',
+  'isDepartureDeltaBriefFeatureEnabled',
+  'weakPointAnalyzerEnabled',
+  'scoreExpeditionWeakPoints',
+  'buildExpeditionReadinessSnapshotForWeakPoints',
+  'isWeakPointAnalyzerFeatureEnabled',
 ].forEach((fragment) => {
   assertIncludes(commandBrief, fragment, `Command Brief should consume readiness selector "${fragment}".`);
 });
@@ -85,6 +118,12 @@ function assertNotIncludes(source, fragment, message) {
   'recoveryMetric',
   'recoveryInferredNotice',
   'recoveryPrepList',
+  'campDecisionClockCard',
+  'campDecisionClockLine',
+  'departureDeltaBriefCard',
+  'departureDeltaBriefSection',
+  'weakPointAnalyzerCard',
+  'weakPointAnalyzerRow',
   'actionRow',
 ].forEach((styleName) => {
   const start = commandBrief.indexOf(`${styleName}: {`);
@@ -114,6 +153,31 @@ assertIncludes(
   packageSource,
   '"test:command-brief-readiness": "node ./scripts/test-command-brief-readiness-surface.js"',
   'package.json should expose the Command Brief readiness regression test.',
+);
+assertIncludes(
+  packageSource,
+  '"test:camp-decision-clock": "node ./scripts/test-camp-decision-clock.js"',
+  'package.json should expose the Camp Decision Clock regression test.',
+);
+assertIncludes(
+  packageSource,
+  '"test:departure-delta-brief": "node ./scripts/test-departure-delta-brief.js"',
+  'package.json should expose the Departure Delta Brief regression test.',
+);
+assertIncludes(
+  packageSource,
+  '"test:expedition-weak-point-analyzer": "node ./scripts/test-expedition-weak-point-analyzer.js"',
+  'package.json should expose the Expedition weak-point analyzer regression test.',
+);
+assertIncludes(
+  commandBrief,
+  'departureDeltaBriefEnabled ? <DepartureDeltaBriefPanel result={departureDeltaBrief} /> : null',
+  'Command Brief should render the Departure Delta Brief panel only behind the feature flag.',
+);
+assertIncludes(
+  commandBrief,
+  'weakPointAnalyzerEnabled ? <WeakPointAnalyzerPanel assessment={weakPointAssessment} /> : null',
+  'Command Brief should render the Weak Point Analyzer panel only behind the feature flag.',
 );
 
 assertNotIncludes(commandBrief, 'AI says', 'Command Brief must not use generic AI labeling.');

@@ -15,6 +15,7 @@ import type {
   CampCandidate,
   RouteContext,
   RouteContextCoordinate,
+  RouteConfidenceTimelineOverlay,
   RouteContextProviderMetadata,
   RouteContextWarning,
   RouteGeometry,
@@ -42,6 +43,7 @@ import type {
 import { buildSupplyAwareRouteGeometry } from './routeContextSupplyRoutes';
 import { findCampCandidates } from './routeContextCampCandidates';
 import { findBailoutCandidates } from './routeContextBailoutCandidates';
+import { buildRouteConfidenceTimeline } from './routeConfidenceTimeline';
 
 export type GenerateRouteContextInput = {
   trail: RouteContextTrailInput;
@@ -52,6 +54,7 @@ export type GenerateRouteContextInput = {
   providers?: RouteContextProviderBundle | null;
   providerRegistry?: RouteContextProviderRegistry | RouteContextProviderRegistryInput | null;
   featureFlags?: RouteContextFeatureFlagOverrides;
+  routeConfidenceTimelineOverlays?: RouteConfidenceTimelineOverlay[] | null;
   tripDate?: string | null;
   campPreferences?: Record<string, unknown> | null;
   now?: string;
@@ -376,6 +379,7 @@ export function createIdleRouteContext(
     routeGeometry: null,
     campCandidates: [],
     bailoutCandidates: [],
+    routeConfidenceTimeline: null,
     confidence: UNKNOWN_CONFIDENCE,
     status: 'idle',
     warnings: [],
@@ -614,6 +618,16 @@ export async function generateRouteContext(input: GenerateRouteContextInput): Pr
     }
   }
 
+  const routeConfidenceTimeline =
+    flags['ecs.routeContextEngine.routeConfidenceTimeline'] && routeGeometry
+      ? buildRouteConfidenceTimeline({
+          routeId: input.trail.id,
+          routeGeometry,
+          overlays: input.routeConfidenceTimelineOverlays ?? [],
+          generatedAt: now,
+        })
+      : null;
+
   const contextConfidence = overallConfidence([
     anchor.confidence,
     routeGeometry ? confidence(0.68, ['Route geometry is available for background planning.']) : UNKNOWN_CONFIDENCE,
@@ -656,6 +670,7 @@ export async function generateRouteContext(input: GenerateRouteContextInput): Pr
     routeGeometry,
     campCandidates,
     bailoutCandidates,
+    routeConfidenceTimeline,
     confidence: contextConfidence,
     status,
     warnings,

@@ -4,7 +4,13 @@ export type FleetTelemetryEventName =
   | 'fleet_accessory_added'
   | 'fleet_loadout_item_added'
   | 'fleet_weight_verified'
-  | 'fleet_checklist_completed';
+  | 'fleet_checklist_completed'
+  | 'preview_generated'
+  | 'suggestion_viewed'
+  | 'suggestion_accepted'
+  | 'source_confirmed'
+  | 'warning_acknowledged'
+  | 'loadout_committed';
 
 export type FleetTelemetryEvent = {
   name: FleetTelemetryEventName;
