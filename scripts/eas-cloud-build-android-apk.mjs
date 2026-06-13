@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -33,7 +34,60 @@ function resolveDirtyFlag() {
   return readGitValue("git status --porcelain").length > 0 ? "dirty" : "clean";
 }
 
+function resolveEasEnvironmentName(profile) {
+  try {
+    const easJsonPath = path.join(projectRoot, "eas.json");
+    const easJson = JSON.parse(fs.readFileSync(easJsonPath, "utf8"));
+    return easJson?.build?.[profile]?.environment || profile;
+  } catch (_error) {
+    return profile;
+  }
+}
+
+function runFieldtestMapboxEnvGuard(profile) {
+  if (profile !== "fieldtest") return;
+
+  const environmentName = resolveEasEnvironmentName(profile);
+  const command = process.platform === "win32" ? "eas.cmd" : "eas";
+  const guardCommand =
+    "node ./scripts/check-fieldtest-mapbox-token-split.mjs --require-runtime-env --require-build-env";
+  const result =
+    process.platform === "win32"
+      ? spawnSync(
+          `${command} env:exec ${environmentName} "${guardCommand}" --non-interactive`,
+          {
+            cwd: projectRoot,
+            env: process.env,
+            shell: true,
+            stdio: "inherit",
+          },
+        )
+      : spawnSync(
+          command,
+          ["env:exec", environmentName, guardCommand, "--non-interactive"],
+          {
+            cwd: projectRoot,
+            env: process.env,
+            stdio: "inherit",
+          },
+        );
+
+  if (result.error) {
+    console.error(`Fieldtest Mapbox token split guard failed to run: ${result.error.message}`);
+    process.exit(1);
+  }
+
+  if (result.status !== 0) {
+    console.error(
+      `Fieldtest Mapbox token split guard failed for EAS environment "${environmentName}". ` +
+        "Fix EXPO_PUBLIC_MAPBOX_TOKEN/MAPBOX_DOWNLOADS_TOKEN before building.",
+    );
+    process.exit(result.status ?? 1);
+  }
+}
+
 const buildProfile = resolveProfileArg(process.argv.slice(2));
+runFieldtestMapboxEnvGuard(buildProfile);
 
 const args = [
   "build",

@@ -1,6 +1,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const root = path.join(__dirname, '..');
 
@@ -25,6 +26,10 @@ const easJson = readJson('eas.json');
 const appJson = readJson('app.json');
 const moreScreen = read('app/(tabs)/more.tsx');
 const buildScript = read('scripts/eas-cloud-build-android-apk.mjs');
+const mapboxEnvGuardPath = path.join(root, 'scripts', 'check-fieldtest-mapbox-token-split.mjs');
+const mapboxEnvGuard = fs.existsSync(mapboxEnvGuardPath)
+  ? read('scripts/check-fieldtest-mapbox-token-split.mjs')
+  : '';
 const easIgnore = read('.easignore');
 
 assertIncludes(appConfig, 'buildFingerprint', 'Expo config should expose a buildFingerprint in extra.');
@@ -60,6 +65,101 @@ assertIncludes(buildScript, 'ECS_BUILD_COMMIT_SHA', 'Cloud APK helper should sta
 assertIncludes(buildScript, 'ECS_BUILD_TIME', 'Cloud APK helper should stamp a build time into the build env.');
 assertIncludes(buildScript, 'ECS_BUILD_DIRTY', 'Cloud APK helper should stamp dirty state into the build env.');
 assertIncludes(buildScript, '"--clear-cache"', 'Cloud APK helper should always pass --clear-cache.');
+assertIncludes(
+  buildScript,
+  'check-fieldtest-mapbox-token-split.mjs',
+  'Cloud APK helper should run the field-test Mapbox token split guard before uploading to EAS.',
+);
+assertIncludes(
+  appConfig,
+  'assertFieldtestRuntimeMapboxToken',
+  'Field-test Expo config should reject secret/download Mapbox tokens before bundling runtime config.',
+);
+assertIncludes(
+  appConfig,
+  'EXPO_PUBLIC_MAPBOX_TOKEN',
+  'Field-test Expo config should explicitly validate EXPO_PUBLIC_MAPBOX_TOKEN.',
+);
+assertIncludes(
+  appConfig,
+  "startsWith('pk.')",
+  'Field-test runtime Mapbox token guard should require a public pk.* token.',
+);
+assertIncludes(
+  appConfig,
+  "startsWith('sk.')",
+  'Field-test runtime Mapbox token guard should call out secret sk.* token shape without printing token values.',
+);
+assertIncludes(
+  mapboxEnvGuard,
+  'MAPBOX_DOWNLOADS_TOKEN',
+  'Field-test Mapbox token split guard should distinguish the build-only downloads token.',
+);
+assertIncludes(
+  mapboxEnvGuard,
+  'describeTokenShape',
+  'Field-test Mapbox token split guard should report token shape instead of raw token values.',
+);
+
+function runMapboxEnvGuard(envOverrides) {
+  return spawnSync(
+    process.execPath,
+    [
+      path.join(root, 'scripts', 'check-fieldtest-mapbox-token-split.mjs'),
+      '--require-runtime-env',
+      '--require-build-env',
+    ],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        EXPO_PUBLIC_MAPBOX_TOKEN: '',
+        EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN: '',
+        MAPBOX_DOWNLOADS_TOKEN: '',
+        ...envOverrides,
+      },
+    },
+  );
+}
+
+const validSplit = runMapboxEnvGuard({
+  EXPO_PUBLIC_MAPBOX_TOKEN: 'pk.test-public-runtime-token',
+  MAPBOX_DOWNLOADS_TOKEN: 'sk.test-downloads-token',
+});
+assert.strictEqual(validSplit.status, 0, validSplit.stderr || validSplit.stdout);
+assert.match(validSplit.stdout, /runtimeTokenShape=pk\.\*/);
+assert.match(validSplit.stdout, /downloadsTokenShape=sk\.\*/);
+assert.ok(
+  !validSplit.stdout.includes('pk.test-public-runtime-token') &&
+    !validSplit.stdout.includes('sk.test-downloads-token'),
+  'Field-test Mapbox token split guard must not print token values for valid env.',
+);
+
+const secretRuntime = runMapboxEnvGuard({
+  EXPO_PUBLIC_MAPBOX_TOKEN: 'sk.secret-runtime-token',
+  MAPBOX_DOWNLOADS_TOKEN: 'sk.test-downloads-token',
+});
+assert.notStrictEqual(secretRuntime.status, 0, 'sk.* runtime Mapbox tokens should fail field-test provenance.');
+assert.match(secretRuntime.stderr + secretRuntime.stdout, /EXPO_PUBLIC_MAPBOX_TOKEN must be a public pk\.\* token/);
+assert.match(secretRuntime.stderr + secretRuntime.stdout, /runtimeTokenShape=sk\.\*/);
+assert.ok(
+  !(secretRuntime.stderr + secretRuntime.stdout).includes('sk.secret-runtime-token'),
+  'Field-test Mapbox token split guard must not print rejected sk.* runtime token values.',
+);
+
+const missingRuntime = runMapboxEnvGuard({
+  MAPBOX_DOWNLOADS_TOKEN: 'sk.test-downloads-token',
+});
+assert.notStrictEqual(missingRuntime.status, 0, 'Missing public runtime Mapbox token should fail field-test provenance.');
+assert.match(missingRuntime.stderr + missingRuntime.stdout, /EXPO_PUBLIC_MAPBOX_TOKEN is required/);
+
+const sharedToken = runMapboxEnvGuard({
+  EXPO_PUBLIC_MAPBOX_TOKEN: 'pk.same-token',
+  MAPBOX_DOWNLOADS_TOKEN: 'pk.same-token',
+});
+assert.notStrictEqual(sharedToken.status, 0, 'Runtime and downloads Mapbox tokens must not be the same value.');
+assert.match(sharedToken.stderr + sharedToken.stdout, /must not match MAPBOX_DOWNLOADS_TOKEN/);
 
 for (const ignoredPath of [
   'apps/web/.next/',

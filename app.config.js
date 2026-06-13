@@ -43,6 +43,58 @@ function resolveProfile() {
   ) ?? 'development';
 }
 
+function describeMapboxTokenShape(value) {
+  const token = typeof value === 'string' ? value.trim() : '';
+  if (!token) return 'missing';
+  const normalized = token.toLowerCase();
+  if (normalized === 'undefined' || normalized === 'null' || normalized === 'your_token_here') return 'placeholder';
+  if (token.startsWith('pk.')) return 'pk.*';
+  if (token.startsWith('sk.')) return 'sk.*';
+  return 'other';
+}
+
+function isPublicRuntimeMapboxToken(value) {
+  const token = typeof value === 'string' ? value.trim() : '';
+  return token.length >= 10 && token.startsWith('pk.');
+}
+
+function assertFieldtestRuntimeMapboxToken(profile) {
+  const isFieldtest = profile === 'fieldtest' || process.env.EXPO_PUBLIC_ECS_FIELD_TEST_BUILD === 'true';
+  if (!isFieldtest) return;
+
+  const runtimeToken = firstNonEmpty(process.env.EXPO_PUBLIC_MAPBOX_TOKEN);
+  const runtimeAliasToken = firstNonEmpty(process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN);
+  const downloadsToken = firstNonEmpty(process.env.MAPBOX_DOWNLOADS_TOKEN);
+  const shouldRequireRuntimeToken =
+    process.env.EAS_BUILD === 'true' ||
+    process.env.ECS_REQUIRE_FIELDTEST_MAPBOX_TOKEN === 'true';
+
+  if (!runtimeToken) {
+    if (shouldRequireRuntimeToken) {
+      throw new Error(
+        '[Fieldtest Mapbox] EXPO_PUBLIC_MAPBOX_TOKEN is required and must be a public pk.* runtime token.',
+      );
+    }
+    return;
+  }
+
+  if (!isPublicRuntimeMapboxToken(runtimeToken)) {
+    throw new Error(
+      `[Fieldtest Mapbox] EXPO_PUBLIC_MAPBOX_TOKEN must be a public pk.* runtime token; runtimeTokenShape=${describeMapboxTokenShape(runtimeToken)}.`,
+    );
+  }
+
+  if (runtimeAliasToken && !isPublicRuntimeMapboxToken(runtimeAliasToken)) {
+    throw new Error(
+      `[Fieldtest Mapbox] EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN must be a public pk.* runtime token when set; runtimeAliasTokenShape=${describeMapboxTokenShape(runtimeAliasToken)}.`,
+    );
+  }
+
+  if (downloadsToken && runtimeToken.trim() === downloadsToken.trim()) {
+    throw new Error('[Fieldtest Mapbox] EXPO_PUBLIC_MAPBOX_TOKEN must not match MAPBOX_DOWNLOADS_TOKEN.');
+  }
+}
+
 function buildFingerprint(profile) {
   const commitSha =
     firstNonEmpty(
@@ -69,6 +121,8 @@ function buildFingerprint(profile) {
 module.exports = () => {
   const expo = JSON.parse(JSON.stringify(baseConfig.expo));
   const profile = resolveProfile();
+  assertFieldtestRuntimeMapboxToken(profile);
+
   const updates = { ...(expo.updates ?? {}) };
 
   if (profile === 'fieldtest' || process.env.EXPO_PUBLIC_ECS_FIELD_TEST_BUILD === 'true') {
