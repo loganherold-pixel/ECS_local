@@ -1,0 +1,26 @@
+{
+  "fixtureId": "offline-failure-drill-manual-fallback",
+  "profile": "manual_fallback",
+  "generatedAt": "2026-06-13T18:00:00.000Z",
+  "routeId": "route-offline-fixture",
+  "expeditionId": "expedition-offline-fixture",
+  "inputs": [
+    { "inputId": "route_geometry", "sourceType": "local_route_geometry", "path": "route/geometry.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Route geometry cached locally."] },
+    { "inputId": "route_tiles", "sourceType": "tile_cache", "path": "tiles/route.mbtiles", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Route tile cache present."] },
+    { "inputId": "route_cache", "sourceType": "route_cache", "path": "route/cache.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Route cache verified."] },
+    { "inputId": "saved_route", "sourceType": "route_cache", "path": "route/saved.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Saved route available locally."] },
+    { "inputId": "cache_manifest", "sourceType": "cache_manifest", "path": "manifest/cache.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Cache manifest recorded."] },
+    { "inputId": "source_timestamps", "sourceType": "cache_manifest", "path": "manifest/source-timestamps.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Source timestamps available."] },
+    { "inputId": "command_brief_snapshot", "sourceType": "offline_profile", "path": "brief/snapshot.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Command Brief snapshot saved."] },
+    { "inputId": "credential_restore_material", "sourceType": "credential_restore", "path": "auth/restore-state.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Credential restore metadata present without raw secrets."] },
+    { "inputId": "weather_packet", "sourceType": "weather_cache", "path": "weather/packet.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Weather packet cached locally."] },
+    { "inputId": "camp_packet", "sourceType": "camp_cache", "path": "camp/packet.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Camp packet cached."] },
+    { "inputId": "camp_cache", "sourceType": "camp_cache", "path": "camp/cache.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Camp cache present."] },
+    { "inputId": "dispatch_queue_persistence", "sourceType": "dispatch_queue", "path": "dispatch/queue.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Dispatch local queue persistence present."] },
+    { "inputId": "fresh_dispatch_state", "sourceType": "dispatch_queue", "path": "dispatch/state.json", "present": false, "freshness": "unavailable", "notes": ["Remote Dispatch acceptance unavailable while offline."] },
+    { "inputId": "recovery_docs", "sourceType": "recovery_doc", "path": "recovery/docs.pdf", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Recovery documents saved locally."] },
+    { "inputId": "incident_protocols", "sourceType": "local_protocol_doc", "path": "incident/protocols.pdf", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Incident protocols saved locally."] },
+    { "inputId": "coordinate_tools", "sourceType": "local_protocol_doc", "path": "tools/coordinates.json", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Coordinate tools available locally."] },
+    { "inputId": "field_protocols", "sourceType": "local_protocol_doc", "path": "field/protocols.pdf", "present": true, "lastCachedAt": "2026-06-13T17:30:00.000Z", "freshness": "current", "notes": ["Local field protocols exist, but this profile requires manual fallback instead of automated offline behavior."] }
+  ]
+}

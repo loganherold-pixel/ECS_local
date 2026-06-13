@@ -8,6 +8,7 @@ import {
   getConvoyBackendReadinessGuidance,
 } from './convoyBackendReadiness';
 import { stopConvoyLocationSharing } from './convoyLocationPublisher';
+import type { ConvoyStalenessPolicySourceKind, StalenessPolicy } from './convoyStalenessLadder';
 
 const CONVOYS_TABLE = 'convoys';
 const CONVOY_MEMBERS_TABLE = 'convoy_members';
@@ -52,6 +53,17 @@ export interface ConvoyRecord {
   name: string;
   leader_user_id: string;
   status: ConvoyStatus;
+  expedition_id?: string | null;
+  dispatch_id?: string | null;
+  staleness_policy?: StalenessPolicy | null;
+  staleness_policy_source?: ConvoyStalenessPolicySourceKind | null;
+  staleness_policy_source_id?: string | null;
+  staleness_policy_id?: string | null;
+  staleness_policy_generated_at?: string | null;
+  staleness_policy_updated_at?: string | null;
+  staleness_policy_observed_at?: string | null;
+  staleness_policy_stale_at?: string | null;
+  staleness_policy_schema_version?: string | null;
   starts_at: string | null;
   expires_at: string | null;
   created_at?: string;

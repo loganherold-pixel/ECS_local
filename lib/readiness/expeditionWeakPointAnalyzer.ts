@@ -19,13 +19,85 @@ export type WeakPointConfidence = 'high' | 'medium' | 'low' | 'unknown' | string
 export type WeakPointFreshness = 'fresh' | 'stale' | 'missing' | 'unknown' | string;
 export type WeakPointConditionState = 'normal' | 'known_risky' | 'unknown' | string;
 
+export type WeakPointSnapshotDomain = WeakPointCategory;
+
+export type WeakPointSnapshotCoverageStatus =
+  | 'complete'
+  | 'partial'
+  | 'missing'
+  | 'stale'
+  | 'unavailable';
+
+export type WeakPointAssessmentCompleteness =
+  | 'complete'
+  | 'source_limited'
+  | 'partial'
+  | 'insufficient';
+
+export type WeakPointSourceSystem =
+  | 'route_confidence'
+  | 'logistics'
+  | 'fleet'
+  | 'weather'
+  | 'offline_honesty'
+  | 'campops'
+  | 'recovery_bailout'
+  | 'daylight'
+  | 'convoy'
+  | 'readiness_snapshot'
+  | 'command_brief_adapter'
+  | 'unknown';
+
+export type WeakPointSourceFreshness = 'fresh' | 'stale' | 'expired' | 'unavailable';
+export type WeakPointSourceConfidence = 'validated' | 'inferred' | 'unvalidated' | 'unknown';
+
 export type WeakPointSourceFact = {
-  id: string;
-  label: string;
+  id?: string;
+  factId?: string;
+  sourceSystem?: WeakPointSourceSystem;
+  fieldPath?: string;
+  label?: string;
   value?: string | number | boolean | null;
+  unit?: string;
   source?: string | null;
+  observedAt?: string;
+  generatedAt?: string;
+  expiresAt?: string;
   updatedAt?: string | null;
-  freshness?: WeakPointFreshness | null;
+  freshness?: WeakPointSourceFreshness | WeakPointFreshness | null;
+  confidence?: WeakPointSourceConfidence;
+  sourceId?: string;
+  sourceName?: string;
+  schemaVersion?: string;
+};
+
+export type WeakPointMissingFact = {
+  factId: string;
+  domain: WeakPointSnapshotDomain;
+  fieldPath: string;
+  label: string;
+  reason: 'missing' | 'stale' | 'expired' | 'unavailable' | 'not_comparable' | 'unsupported';
+  requiredFor: 'likelihood' | 'consequence' | 'uncertainty' | 'data_gap' | 'fix' | 'monitor_signal';
+};
+
+export type WeakPointSnapshotDomainCoverage = {
+  domain: WeakPointSnapshotDomain;
+  status: WeakPointSnapshotCoverageStatus;
+  requiredFactIds: string[];
+  availableFactIds: string[];
+  missingFactIds: string[];
+  staleFactIds: string[];
+  unavailableFactIds: string[];
+  observedAt?: string;
+  generatedAt?: string;
+  freshness?: WeakPointSourceFreshness;
+  reason?: string;
+};
+
+export type ExpeditionReadinessSnapshotCoverage = {
+  domains: WeakPointSnapshotDomainCoverage[];
+  assessmentCompleteness: WeakPointAssessmentCompleteness;
+  generatedAt: string;
 };
 
 type WeakPointSnapshotSection = {
@@ -108,7 +180,71 @@ export type WeakPointScoreComponents = {
   dataGap: number;
 };
 
+export type WeakPointScoreComponentTrace = {
+  score: number;
+  reason: string;
+  sourceFactIds: string[];
+  missingFactIds: string[];
+};
+
+export type WeakPointTieBreakTrace = {
+  likelihood: number;
+  consequence: number;
+  dataGap: number;
+  categoryOrder: number;
+};
+
+export type WeakPointScoreTrace = {
+  category: WeakPointCategory;
+  candidateId: string;
+  likelihood: WeakPointScoreComponentTrace;
+  consequence: WeakPointScoreComponentTrace;
+  uncertainty: WeakPointScoreComponentTrace;
+  dataGap: WeakPointScoreComponentTrace;
+  weightedScore: number;
+  tieBreak: WeakPointTieBreakTrace;
+  scoreVersion: string;
+};
+
+export type WeakPointAllowedActionType =
+  | 'verify'
+  | 'refresh_data'
+  | 'add_resource_buffer'
+  | 'reduce_load'
+  | 'confirm_endpoint'
+  | 'review_roster'
+  | 'monitor'
+  | 'inspect_vehicle'
+  | 'review_route';
+
+export type WeakPointAllowedAction = {
+  actionId: string;
+  category: WeakPointCategory;
+  actionType: WeakPointAllowedActionType;
+  label: string;
+  sourceFactIds: string[];
+  missingFactIds: string[];
+};
+
+export type WeakPointMonitorSignal = {
+  signalId: string;
+  category: WeakPointCategory;
+  label: string;
+  sourceFactIds: string[];
+  missingFactIds: string[];
+  signalType:
+    | 'watch_threshold'
+    | 'refresh_source'
+    | 'confirm_access'
+    | 'track_margin'
+    | 'watch_weather'
+    | 'watch_daylight'
+    | 'watch_convoy'
+    | 'watch_recovery_access';
+};
+
 export type WeakPointCandidate = {
+  candidateId: string;
   category: WeakPointCategory;
   label: string;
   rank: number;
@@ -117,8 +253,11 @@ export type WeakPointCandidate = {
   consequenceStatement: string;
   easiestPreDepartureFix: string;
   travelMonitorSignal: string;
+  actionId: string;
+  monitorSignalId: string;
   sourceFactIds: string[];
   missingFacts: string[];
+  missingFactIds: string[];
 };
 
 export type WeakPointCandidateInput = {
@@ -157,6 +296,13 @@ export type WeakPointAssessment = {
   missingData: string[];
   scoreVersion: WeakPointScoreVersion;
   sourceSnapshotId: string;
+  assessmentCompleteness: WeakPointAssessmentCompleteness;
+  snapshotCoverage: ExpeditionReadinessSnapshotCoverage;
+  sourceFacts: WeakPointSourceFact[];
+  missingFacts: WeakPointMissingFact[];
+  scoringTrace: WeakPointScoreTrace[];
+  allowedActions: WeakPointAllowedAction[];
+  monitorSignals: WeakPointMonitorSignal[];
   explanation: WeakPointExplanation;
 };
 
@@ -224,6 +370,62 @@ const DEFAULT_MONITORS: Record<WeakPointCategory, string> = {
   convoy_state: 'Watch roster accountability, radio checks, and separation intervals.',
 };
 
+const CATEGORY_SOURCE_SYSTEMS: Record<WeakPointCategory, WeakPointSourceSystem> = {
+  route_confidence: 'route_confidence',
+  fuel_margin: 'logistics',
+  water_margin: 'logistics',
+  power_margin: 'logistics',
+  payload_gvwr: 'fleet',
+  camp_endpoint_confidence: 'campops',
+  offline_readiness: 'offline_honesty',
+  weather_freshness: 'weather',
+  daylight: 'daylight',
+  recovery_bailout_access: 'recovery_bailout',
+  convoy_state: 'convoy',
+};
+
+const DEFAULT_REQUIRED_FACT_IDS: Record<WeakPointCategory, string[]> = {
+  route_confidence: ['route-confidence'],
+  fuel_margin: ['fuel-margin'],
+  water_margin: ['water-margin'],
+  power_margin: ['power-margin'],
+  payload_gvwr: ['payload-margin'],
+  camp_endpoint_confidence: ['camp-access'],
+  offline_readiness: ['offline-package'],
+  weather_freshness: ['weather'],
+  daylight: ['daylight'],
+  recovery_bailout_access: ['recovery'],
+  convoy_state: ['convoy'],
+};
+
+const ACTION_TYPES: Record<WeakPointCategory, WeakPointAllowedActionType> = {
+  route_confidence: 'review_route',
+  fuel_margin: 'add_resource_buffer',
+  water_margin: 'add_resource_buffer',
+  power_margin: 'refresh_data',
+  payload_gvwr: 'reduce_load',
+  camp_endpoint_confidence: 'confirm_endpoint',
+  offline_readiness: 'refresh_data',
+  weather_freshness: 'refresh_data',
+  daylight: 'verify',
+  recovery_bailout_access: 'verify',
+  convoy_state: 'review_roster',
+};
+
+const MONITOR_SIGNAL_TYPES: Record<WeakPointCategory, WeakPointMonitorSignal['signalType']> = {
+  route_confidence: 'watch_threshold',
+  fuel_margin: 'track_margin',
+  water_margin: 'track_margin',
+  power_margin: 'track_margin',
+  payload_gvwr: 'watch_threshold',
+  camp_endpoint_confidence: 'confirm_access',
+  offline_readiness: 'refresh_source',
+  weather_freshness: 'watch_weather',
+  daylight: 'watch_daylight',
+  recovery_bailout_access: 'watch_recovery_access',
+  convoy_state: 'watch_convoy',
+};
+
 function clampScore(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(5, Math.round(value)));
@@ -245,6 +447,135 @@ function uniqueStrings(values: readonly (string | null | undefined)[] | null | u
     if (trimmed && !output.includes(trimmed)) output.push(trimmed);
   });
   return output;
+}
+
+function slug(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'unknown';
+}
+
+function missingFactId(category: WeakPointCategory, label: string): string {
+  return `${category}:missing:${slug(label)}`;
+}
+
+function sectionForCategory(
+  snapshot: ExpeditionReadinessSnapshot,
+  category: WeakPointCategory,
+): WeakPointSnapshotSection | null | undefined {
+  switch (category) {
+    case 'route_confidence':
+      return snapshot.routeConfidence;
+    case 'fuel_margin':
+      return snapshot.fuelMargin;
+    case 'water_margin':
+      return snapshot.waterMargin;
+    case 'power_margin':
+      return snapshot.powerMargin;
+    case 'payload_gvwr':
+      return snapshot.payloadGvwr;
+    case 'camp_endpoint_confidence':
+      return snapshot.campEndpointConfidence;
+    case 'offline_readiness':
+      return snapshot.offlineReadiness;
+    case 'weather_freshness':
+      return snapshot.weatherFreshness;
+    case 'daylight':
+      return snapshot.daylight;
+    case 'recovery_bailout_access':
+      return snapshot.recoveryBailoutAccess;
+    case 'convoy_state':
+      return snapshot.convoyState;
+    default:
+      return null;
+  }
+}
+
+function categoryForSourceFactId(factId: string): WeakPointCategory | null {
+  return CATEGORY_ORDER.find((category) => DEFAULT_REQUIRED_FACT_IDS[category].includes(factId)) ?? null;
+}
+
+function normalizeFreshness(
+  freshness: WeakPointSourceFact['freshness'] | undefined,
+  hasTimestamp: boolean,
+): WeakPointSourceFreshness {
+  const normalized = String(freshness ?? '').toLowerCase();
+  if (normalized === 'fresh') return 'fresh';
+  if (normalized === 'stale') return 'stale';
+  if (normalized === 'expired') return 'expired';
+  if (normalized === 'missing' || normalized === 'unknown' || normalized === 'unavailable') return 'unavailable';
+  return hasTimestamp ? 'fresh' : 'unavailable';
+}
+
+function normalizeSourceFact(
+  fact: WeakPointSourceFact,
+  fallbackCategory?: WeakPointCategory | null,
+  fallbackUpdatedAt?: string | null,
+): WeakPointSourceFact | null {
+  const factId = (fact.factId ?? fact.id ?? '').trim();
+  if (!factId) return null;
+  const category = fallbackCategory ?? categoryForSourceFactId(factId);
+  const timestamp = fact.observedAt ?? fact.generatedAt ?? fact.updatedAt ?? fallbackUpdatedAt ?? undefined;
+  const freshness = normalizeFreshness(fact.freshness, Boolean(timestamp));
+  const sourceSystem = fact.sourceSystem ?? (category ? CATEGORY_SOURCE_SYSTEMS[category] : 'unknown');
+  return {
+    ...fact,
+    id: fact.id ?? factId,
+    factId,
+    sourceSystem,
+    fieldPath: fact.fieldPath ?? `${category ?? sourceSystem}.${slug(fact.label ?? factId)}`,
+    label: fact.label ?? factId,
+    observedAt: fact.observedAt ?? fact.updatedAt ?? undefined,
+    generatedAt: fact.generatedAt ?? fallbackUpdatedAt ?? undefined,
+    updatedAt: fact.updatedAt ?? fallbackUpdatedAt ?? null,
+    freshness,
+    confidence: fact.confidence ?? 'inferred',
+    sourceName: fact.sourceName ?? fact.source ?? sourceSystem,
+    schemaVersion: fact.schemaVersion ?? 'weak-point-source-fact-v1',
+  };
+}
+
+function normalizeSnapshotSourceFacts(snapshot: ExpeditionReadinessSnapshot): WeakPointSourceFact[] {
+  const factsById = new Map<string, WeakPointSourceFact>();
+  snapshot.sourceFacts?.forEach((fact) => {
+    const normalized = normalizeSourceFact(fact, categoryForSourceFactId(fact.factId ?? fact.id ?? ''));
+    if (normalized?.factId) factsById.set(normalized.factId, normalized);
+  });
+
+  CATEGORY_ORDER.forEach((category) => {
+    const section = sectionForCategory(snapshot, category);
+    sectionFactIds(section).forEach((factId) => {
+      if (factsById.has(factId)) return;
+      const generated = normalizeSourceFact(
+        {
+          id: factId,
+          factId,
+          label: CATEGORY_LABELS[category],
+          value: null,
+          updatedAt: section?.updatedAt ?? snapshot.capturedAt,
+          sourceSystem: CATEGORY_SOURCE_SYSTEMS[category],
+          fieldPath: `${category}.${slug(factId)}`,
+          confidence: 'inferred',
+        },
+        category,
+        section?.updatedAt ?? snapshot.capturedAt,
+      );
+      if (generated?.factId) factsById.set(generated.factId, generated);
+    });
+  });
+
+  const ordered: WeakPointSourceFact[] = [];
+  CATEGORY_ORDER.forEach((category) => {
+    sectionFactIds(sectionForCategory(snapshot, category)).forEach((factId) => {
+      const fact = factsById.get(factId);
+      if (fact && !ordered.some((existing) => existing.factId === fact.factId)) ordered.push(fact);
+    });
+  });
+  factsById.forEach((fact) => {
+    if (!ordered.some((existing) => existing.factId === fact.factId)) ordered.push(fact);
+  });
+  return ordered;
 }
 
 function scoreFromConfidence(value: WeakPointConfidence | number | null | undefined): number {
@@ -622,7 +953,9 @@ function normalizeCandidate(input: WeakPointCandidateInput): WeakPointCandidate 
     uncertainty: clampScore(input.scoreComponents.uncertainty),
     dataGap: clampScore(input.scoreComponents.dataGap),
   };
+  const missingFacts = uniqueStrings(input.missingFacts ?? []);
   return {
+    candidateId: `weak-point:${input.category}`,
     category: input.category,
     label: input.label || CATEGORY_LABELS[input.category],
     rank: 0,
@@ -631,8 +964,11 @@ function normalizeCandidate(input: WeakPointCandidateInput): WeakPointCandidate 
     consequenceStatement: input.consequenceStatement || `${CATEGORY_LABELS[input.category]} is the weak-point candidate.`,
     easiestPreDepartureFix: input.easiestPreDepartureFix || DEFAULT_FIXES[input.category],
     travelMonitorSignal: input.travelMonitorSignal || DEFAULT_MONITORS[input.category],
+    actionId: `weak-point-action:${input.category}`,
+    monitorSignalId: `weak-point-monitor:${input.category}`,
     sourceFactIds: uniqueStrings(input.sourceFactIds ?? []),
-    missingFacts: uniqueStrings(input.missingFacts ?? []),
+    missingFacts,
+    missingFactIds: missingFacts.map((fact) => missingFactId(input.category, fact)),
   };
 }
 
@@ -668,7 +1004,180 @@ function severeConsequence(candidates: readonly WeakPointCandidate[]): WeakPoint
     ))[0] ?? null;
 }
 
-function deterministicExplanation(assessment: Pick<WeakPointAssessment, 'rankedWeakPoints' | 'missingData'>): WeakPointExplanation {
+function buildMissingFacts(candidates: readonly WeakPointCandidate[]): WeakPointMissingFact[] {
+  const facts = new Map<string, WeakPointMissingFact>();
+  candidates.forEach((candidate) => {
+    candidate.missingFacts.forEach((label) => {
+      const factId = missingFactId(candidate.category, label);
+      if (facts.has(factId)) return;
+      facts.set(factId, {
+        factId,
+        domain: candidate.category,
+        fieldPath: `${candidate.category}.${slug(label)}`,
+        label,
+        reason: 'missing',
+        requiredFor: 'data_gap',
+      });
+    });
+  });
+  return Array.from(facts.values());
+}
+
+function buildSnapshotCoverage(
+  snapshot: ExpeditionReadinessSnapshot,
+  sourceFacts: readonly WeakPointSourceFact[],
+  candidates: readonly WeakPointCandidate[],
+): ExpeditionReadinessSnapshotCoverage {
+  const factsById = new Map<string, WeakPointSourceFact>();
+  sourceFacts.forEach((fact) => {
+    const factId = fact.factId ?? fact.id;
+    if (factId) factsById.set(factId, fact);
+  });
+  const missingIdsByCategory = new Map<WeakPointCategory, string[]>();
+  candidates.forEach((candidate) => {
+    missingIdsByCategory.set(candidate.category, candidate.missingFactIds);
+  });
+
+  const domains = CATEGORY_ORDER.map((category): WeakPointSnapshotDomainCoverage => {
+    const section = sectionForCategory(snapshot, category);
+    const requiredFactIds = sectionFactIds(section).length > 0
+      ? sectionFactIds(section)
+      : DEFAULT_REQUIRED_FACT_IDS[category];
+    const availableFactIds: string[] = [];
+    const staleFactIds: string[] = [];
+    const unavailableFactIds: string[] = [];
+    requiredFactIds.forEach((factId) => {
+      const fact = factsById.get(factId);
+      const freshness = fact?.freshness;
+      if (!fact || freshness === 'unavailable') unavailableFactIds.push(factId);
+      else if (freshness === 'stale' || freshness === 'expired') staleFactIds.push(factId);
+      else availableFactIds.push(factId);
+    });
+    const missingFactIds = section
+      ? uniqueStrings([...(missingIdsByCategory.get(category) ?? [])])
+      : uniqueStrings([
+        ...(missingIdsByCategory.get(category) ?? []),
+        ...requiredFactIds.map((factId) => missingFactId(category, factId)),
+      ]);
+    let status: WeakPointSnapshotCoverageStatus = 'complete';
+    if (!section) status = 'missing';
+    else if (unavailableFactIds.length === requiredFactIds.length) status = 'unavailable';
+    else if (unavailableFactIds.length > 0 || missingFactIds.length > 0) status = 'partial';
+    else if (staleFactIds.length > 0) status = 'stale';
+
+    const firstFact = requiredFactIds.map((factId) => factsById.get(factId)).find(Boolean);
+    const firstFreshness = firstFact?.freshness;
+    const coverageFreshness: WeakPointSourceFreshness | undefined =
+      firstFreshness === 'fresh' || firstFreshness === 'stale' || firstFreshness === 'expired' || firstFreshness === 'unavailable'
+        ? firstFreshness
+        : undefined;
+    return {
+      domain: category,
+      status,
+      requiredFactIds,
+      availableFactIds,
+      missingFactIds,
+      staleFactIds,
+      unavailableFactIds,
+      observedAt: firstFact?.observedAt ?? section?.updatedAt ?? undefined,
+      generatedAt: firstFact?.generatedAt ?? section?.updatedAt ?? snapshot.capturedAt,
+      freshness: coverageFreshness,
+      reason: status === 'complete'
+        ? undefined
+        : `${CATEGORY_LABELS[category]} source coverage is ${status}.`,
+    };
+  });
+
+  const incompleteCount = domains.filter((domain) => domain.status !== 'complete').length;
+  const missingOrUnavailableCount = domains.filter((domain) => (
+    domain.status === 'missing' || domain.status === 'unavailable'
+  )).length;
+  const assessmentCompleteness: WeakPointAssessmentCompleteness =
+    incompleteCount === 0
+      ? 'complete'
+      : missingOrUnavailableCount >= 6
+        ? 'insufficient'
+        : domains.some((domain) => domain.status === 'partial' || domain.status === 'missing' || domain.status === 'unavailable')
+          ? 'partial'
+          : 'source_limited';
+
+  return {
+    domains,
+    assessmentCompleteness,
+    generatedAt: snapshot.capturedAt,
+  };
+}
+
+function scoreComponentTrace(
+  candidate: WeakPointCandidate,
+  component: keyof WeakPointScoreComponents,
+): WeakPointScoreComponentTrace {
+  const score = candidate.scoreComponents[component];
+  const sourceFactIds = component === 'dataGap'
+    ? candidate.sourceFactIds
+    : candidate.sourceFactIds;
+  const missingFactIds = component === 'dataGap' || score >= 4
+    ? candidate.missingFactIds
+    : [];
+  return {
+    score,
+    reason: `${candidate.label} ${component} scored ${score} by deterministic ${DEFAULT_SCORE_VERSION} thresholds.`,
+    sourceFactIds,
+    missingFactIds,
+  };
+}
+
+function buildScoringTrace(
+  candidates: readonly WeakPointCandidate[],
+  scoreVersion: WeakPointScoreVersion,
+): WeakPointScoreTrace[] {
+  return candidates.map((candidate) => ({
+    category: candidate.category,
+    candidateId: candidate.candidateId,
+    likelihood: scoreComponentTrace(candidate, 'likelihood'),
+    consequence: scoreComponentTrace(candidate, 'consequence'),
+    uncertainty: scoreComponentTrace(candidate, 'uncertainty'),
+    dataGap: scoreComponentTrace(candidate, 'dataGap'),
+    weightedScore: riskScore(candidate.scoreComponents),
+    tieBreak: {
+      likelihood: candidate.scoreComponents.likelihood,
+      consequence: candidate.scoreComponents.consequence,
+      dataGap: candidate.scoreComponents.dataGap,
+      categoryOrder: CATEGORY_ORDER.indexOf(candidate.category),
+    },
+    scoreVersion,
+  }));
+}
+
+function buildAllowedActions(candidates: readonly WeakPointCandidate[]): WeakPointAllowedAction[] {
+  return candidates.map((candidate) => ({
+    actionId: candidate.actionId,
+    category: candidate.category,
+    actionType: ACTION_TYPES[candidate.category],
+    label: candidate.easiestPreDepartureFix,
+    sourceFactIds: candidate.sourceFactIds,
+    missingFactIds: candidate.missingFactIds,
+  }));
+}
+
+function buildMonitorSignals(candidates: readonly WeakPointCandidate[]): WeakPointMonitorSignal[] {
+  return candidates.map((candidate) => ({
+    signalId: candidate.monitorSignalId,
+    category: candidate.category,
+    label: candidate.travelMonitorSignal,
+    sourceFactIds: candidate.sourceFactIds,
+    missingFactIds: candidate.missingFactIds,
+    signalType: MONITOR_SIGNAL_TYPES[candidate.category],
+  }));
+}
+
+type WeakPointExplanationAssessment = Pick<WeakPointAssessment, 'rankedWeakPoints' | 'missingData'> &
+  Partial<Pick<
+    WeakPointAssessment,
+    'sourceFacts' | 'missingFacts' | 'scoringTrace' | 'allowedActions' | 'monitorSignals'
+  >>;
+
+function deterministicExplanation(assessment: WeakPointExplanationAssessment): WeakPointExplanation {
   const primary = assessment.rankedWeakPoints[0];
   if (!primary) {
     return {
@@ -694,9 +1203,13 @@ function sameOrder(left: readonly (string | null | undefined)[] | null | undefin
   return left.every((value, index) => value === right[index]);
 }
 
-export function buildWeakPointAiExplanationPayload(assessment: Pick<WeakPointAssessment, 'rankedWeakPoints'>) {
+export function buildWeakPointAiExplanationPayload(assessment: WeakPointExplanationAssessment) {
+  const sourceFacts = assessment.sourceFacts ?? [];
+  const allowedActions = assessment.allowedActions ?? buildAllowedActions(assessment.rankedWeakPoints);
+  const monitorSignals = assessment.monitorSignals ?? buildMonitorSignals(assessment.rankedWeakPoints);
   return {
     rankedCandidates: assessment.rankedWeakPoints.map((candidate) => ({
+      candidateId: candidate.candidateId,
       rank: candidate.rank,
       category: candidate.category,
       label: candidate.label,
@@ -704,15 +1217,25 @@ export function buildWeakPointAiExplanationPayload(assessment: Pick<WeakPointAss
       scoreComponents: candidate.scoreComponents,
       consequenceStatement: candidate.consequenceStatement,
       missingFacts: candidate.missingFacts,
+      missingFactIds: candidate.missingFactIds,
       sourceFactIds: candidate.sourceFactIds,
+      actionId: candidate.actionId,
+      monitorSignalId: candidate.monitorSignalId,
     })),
-    allowedActions: uniqueStrings(assessment.rankedWeakPoints.map((candidate) => candidate.easiestPreDepartureFix)),
-    sourceFactIds: uniqueStrings(assessment.rankedWeakPoints.flatMap((candidate) => candidate.sourceFactIds)),
+    allowedActions,
+    sourceFactIds: uniqueStrings([
+      ...assessment.rankedWeakPoints.flatMap((candidate) => candidate.sourceFactIds),
+      ...sourceFacts.map((fact) => fact.factId ?? fact.id),
+    ]),
+    sourceFacts,
+    missingFacts: assessment.missingFacts ?? buildMissingFacts(assessment.rankedWeakPoints),
+    scoringTrace: assessment.scoringTrace ?? buildScoringTrace(assessment.rankedWeakPoints, DEFAULT_SCORE_VERSION),
+    monitorSignals,
   };
 }
 
 export function buildWeakPointExplanation(
-  assessment: Pick<WeakPointAssessment, 'rankedWeakPoints' | 'missingData'>,
+  assessment: WeakPointExplanationAssessment,
   aiDraft?: WeakPointAiDraft | null,
 ): WeakPointExplanation {
   if (!aiDraft) return deterministicExplanation(assessment);
@@ -720,7 +1243,11 @@ export function buildWeakPointExplanation(
   const expectedOrder = assessment.rankedWeakPoints.map((candidate) => candidate.category);
   const allowedCategories = new Set(expectedOrder);
   const allowedSources = new Set(payload.sourceFactIds);
-  const allowedActions = new Set(payload.allowedActions);
+  const allowedActions = new Set([
+    ...payload.allowedActions.map((action) => action.actionId),
+    ...payload.allowedActions.map((action) => action.label),
+    ...assessment.rankedWeakPoints.map((candidate) => candidate.easiestPreDepartureFix),
+  ]);
   const warnings: string[] = [];
   const draftText = aiDraft.text?.trim() ?? '';
 
@@ -735,6 +1262,19 @@ export function buildWeakPointExplanation(
   uniqueStrings((aiDraft.referencedCategories ?? []) as readonly string[]).forEach((category) => {
     if (!allowedCategories.has(category as WeakPointCategory)) warnings.push(`AI explanation referenced unsupported category ${category}.`);
   });
+  if (/\b(go\/no-go|no-go|departure blocked|do not depart|trip is unsafe|route rejected)\b/i.test(draftText)) {
+    warnings.push('AI explanation attempted to create a go/no-go or blocking readiness posture.');
+  }
+  if (/\bno missing data\b|\bmissing data remains\b|\bno missing inputs\b/i.test(draftText)) {
+    warnings.push('AI explanation attempted to hide or override missing-data status.');
+  }
+  if (
+    payload.missingFacts.length > 0 &&
+    uniqueStrings(aiDraft.sourceFactIds ?? []).length === 0 &&
+    /\b(low|empty|failed|unsafe|blocked|closed|confirmed hazard|hazard confirmed)\b/i.test(draftText)
+  ) {
+    warnings.push('AI explanation inferred a confirmed hazard from missing data.');
+  }
 
   if (warnings.length > 0) {
     const fallback = deterministicExplanation(assessment);
@@ -770,6 +1310,12 @@ export function scoreExpeditionWeakPoints(
     convoyCandidate(snapshot),
   ]);
   const missingData = uniqueStrings(rankedWeakPoints.flatMap((candidate) => candidate.missingFacts));
+  const sourceFacts = normalizeSnapshotSourceFacts(snapshot);
+  const missingFacts = buildMissingFacts(rankedWeakPoints);
+  const snapshotCoverage = buildSnapshotCoverage(snapshot, sourceFacts, rankedWeakPoints);
+  const scoringTrace = buildScoringTrace(rankedWeakPoints, scoringPolicyVersion);
+  const allowedActions = buildAllowedActions(rankedWeakPoints);
+  const monitorSignals = buildMonitorSignals(rankedWeakPoints);
   const partialAssessment: Omit<WeakPointAssessment, 'explanation'> = {
     maturityLabel: MATURITY_LABEL,
     rankedWeakPoints,
@@ -780,6 +1326,13 @@ export function scoreExpeditionWeakPoints(
     missingData,
     scoreVersion: scoringPolicyVersion,
     sourceSnapshotId: snapshot.snapshotId,
+    assessmentCompleteness: snapshotCoverage.assessmentCompleteness,
+    snapshotCoverage,
+    sourceFacts,
+    missingFacts,
+    scoringTrace,
+    allowedActions,
+    monitorSignals,
   };
   return {
     ...partialAssessment,

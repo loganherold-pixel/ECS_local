@@ -95,6 +95,42 @@ function capability(result, id) {
   return item;
 }
 
+function downloadLabels(item) {
+  return item.recommendedDownloads.map((download) => download.label);
+}
+
+function downloadActions(item) {
+  return item.recommendedDownloads.map((download) => download.actionType);
+}
+
+function assertProbeEvidence(result) {
+  for (const item of result.capabilities) {
+    assert.ok(Array.isArray(item.probeEvidence), `${item.capabilityId} should include probe evidence.`);
+    assert.ok(item.probeEvidence.length > 0, `${item.capabilityId} should include at least one probe.`);
+    assert.ok(
+      item.probeEvidence.every((probeItem) => probeItem.localOnly === true),
+      `${item.capabilityId} probe evidence should always be local-only.`,
+    );
+    for (const inputId of item.requiredInputs) {
+      assert.ok(
+        item.probeEvidence.some((probeItem) => probeItem.inputId === inputId),
+        `${item.capabilityId} should include probe evidence for required input ${inputId}.`,
+      );
+    }
+    if (item.status === 'available_offline') {
+      for (const inputId of item.requiredInputs) {
+        const probeItem = item.probeEvidence.find((candidate) => candidate.inputId === inputId);
+        assert.ok(probeItem, `${item.capabilityId} missing required probe ${inputId}.`);
+        assert.ok(
+          ['valid', 'present'].includes(probeItem.result),
+          `${item.capabilityId}/${inputId} cannot be available without valid local probe evidence.`,
+        );
+        assert.equal(probeItem.freshness, 'current', `${item.capabilityId}/${inputId} must be current for available_offline.`);
+      }
+    }
+  }
+}
+
 assert.deepStrictEqual(OFFLINE_DRILL_CAPABILITY_ORDER, [
   'offline_navigation',
   'offline_honesty',
@@ -116,6 +152,8 @@ const baseline = drill();
 assert.strictEqual(baseline.enabled, true);
 assert.strictEqual(baseline.readiness, 'current_user_facing_extension');
 assert.strictEqual(baseline.localOnly, true, 'Drill must declare local-only evaluation.');
+assert.strictEqual(baseline.runtimeNetworkEvidence.runtimeNetworkProbe, 'offline');
+assertProbeEvidence(baseline);
 assert.strictEqual(capability(baseline, 'offline_navigation').status, 'available_offline');
 assert.strictEqual(capability(baseline, 'navigate').status, 'available_offline');
 assert.strictEqual(capability(baseline, 'dispatch_offline_replay').status, 'partially_available');
@@ -126,7 +164,7 @@ assert.ok(
 );
 assert.strictEqual(baseline.productionReadiness.status, 'blocked_android_no_network_evidence_required');
 assert.ok(
-  baseline.productionReadiness.blockers.includes('android_no_network_device_evidence_missing'),
+  baseline.productionReadiness.blockers.includes('android_evidence_manifest_missing'),
   'Android no-network evidence should block production readiness.',
 );
 
@@ -141,8 +179,12 @@ const routeCacheWithoutTiles = drill({
 assert.strictEqual(capability(routeCacheWithoutTiles, 'navigate').status, 'partially_available');
 assert.deepStrictEqual(capability(routeCacheWithoutTiles, 'navigate').missingInputs, ['route_tiles']);
 assert.ok(
-  capability(routeCacheWithoutTiles, 'navigate').recommendedDownloads.includes('Download route tiles'),
+  downloadLabels(capability(routeCacheWithoutTiles, 'navigate')).includes('Download route tiles'),
   'Missing route tiles should produce a route tile download recommendation.',
+);
+assert.ok(
+  downloadActions(capability(routeCacheWithoutTiles, 'navigate')).includes('download_route_tiles'),
+  'Missing route tiles should include structured download_route_tiles metadata.',
 );
 
 const staleWeather = drill({
@@ -157,8 +199,12 @@ const staleWeather = drill({
 assert.strictEqual(capability(staleWeather, 'command_brief').status, 'cached_but_stale');
 assert.strictEqual(capability(staleWeather, 'command_brief').lastCachedAt, staleWeatherAt);
 assert.ok(
-  capability(staleWeather, 'command_brief').recommendedDownloads.includes('Refresh weather packet'),
+  downloadLabels(capability(staleWeather, 'command_brief')).includes('Refresh weather packet'),
   'Stale weather should recommend refreshing the weather packet.',
+);
+assert.ok(
+  downloadActions(capability(staleWeather, 'command_brief')).includes('refresh_weather_packet'),
+  'Stale weather should include structured refresh_weather_packet metadata.',
 );
 
 const missingRecoveryDocs = drill({
@@ -180,13 +226,33 @@ const invalidCredentials = drill({
     dispatch_offline_replay: probe({
       availableInputs: ['dispatch_queue_persistence'],
       invalidInputs: ['credential_restore_material'],
+      probeEvidence: [{
+        probeId: 'credential-secret-probe',
+        capabilityId: 'dispatch_offline_replay',
+        inputId: 'credential_restore_material',
+        sourceType: 'credential_restore',
+        localOnly: true,
+        checkedAt: now,
+        freshness: 'unavailable',
+        result: 'corrupt',
+        notes: ['credential_restore token=super-secret-token restore_code=restore-code-123 invalid'],
+      }],
     }),
   },
 });
 assert.strictEqual(capability(invalidCredentials, 'dispatch_offline_replay').status, 'unavailable');
 assert.ok(
-  capability(invalidCredentials, 'dispatch_offline_replay').recommendedDownloads.includes('Refresh credential restore material'),
+  downloadLabels(capability(invalidCredentials, 'dispatch_offline_replay')).includes('Refresh credential restore material'),
   'Invalid credential restore state should produce a restore-material recommendation.',
+);
+assert.ok(
+  downloadActions(capability(invalidCredentials, 'dispatch_offline_replay')).includes('prepare_credential_restore'),
+  'Invalid credential restore state should include structured prepare_credential_restore metadata.',
+);
+assert.ok(
+  !JSON.stringify(invalidCredentials).includes('super-secret-token') &&
+    !JSON.stringify(invalidCredentials).includes('restore-code-123'),
+  'Secret-like credential values must be redacted from drill output.',
 );
 
 const unavailableDefault = drill({
@@ -199,8 +265,12 @@ const unavailableDefault = drill({
 });
 assert.strictEqual(capability(unavailableDefault, 'campops').status, 'unavailable');
 assert.ok(
-  unavailableDefault.recommendedDownloads.includes('Download camp packet'),
+  downloadLabels(unavailableDefault).includes('Download camp packet'),
   'Aggregate recommendations should include missing camp packet downloads.',
+);
+assert.ok(
+  downloadActions(unavailableDefault).includes('download_camp_packet'),
+  'Aggregate recommendations should include structured camp packet metadata.',
 );
 
 const disabled = buildOfflineFailureDrill({
@@ -298,6 +368,16 @@ const panelSource = fs.readFileSync(panelPath, 'utf8');
   'lastCachedAt',
 ].forEach((fragment) => {
   assert.ok(panelSource.includes(fragment), `Offline Failure Drill panel should include fragment: ${fragment}`);
+});
+
+[
+  'probeEvidence',
+  'Available from local cache',
+  'Pending Dispatch replay',
+  'Not confirmed by source of truth',
+  'No-network evidence required before production',
+].forEach((fragment) => {
+  assert.ok(panelSource.includes(fragment), `Offline Failure Drill panel should include conservative evidence fragment: ${fragment}`);
 });
 
 const dashboardAdapterSource = fs.readFileSync(dashboardAdapterPath, 'utf8');

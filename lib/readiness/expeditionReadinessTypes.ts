@@ -518,6 +518,7 @@ export type ExpeditionReadinessInput = {
   offline?: ExpeditionReadinessOfflineInput | null;
   campCandidates?: ExpeditionReadinessCampCandidateInput[] | null;
   campDecisionClock?: CampDecisionClockDecision | null;
+  campDecisionClockFeatureEnabled?: boolean | null;
   previousDepartureAudit?: DepartureDeltaPreviousAuditSnapshot | null;
   departureDeltaBriefFeatureEnabled?: boolean | null;
   weakPointAnalyzerFeatureEnabled?: boolean | null;

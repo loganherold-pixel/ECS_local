@@ -126,6 +126,38 @@ function loadoutItem(id, lbs, loadZone, name = id, options = {}) {
   };
 }
 
+function stateItem(id, lbs, loadZone, compartmentId, name = id, options = {}) {
+  return {
+    id,
+    name,
+    category: options.category ?? 'gear',
+    typicalWeightLb: lbs,
+    quantity: options.quantity ?? 1,
+    compartmentId,
+    loadZone,
+    permanence: options.permanence ?? 'trip',
+    source: options.source ?? 'user_estimate',
+    confidence: options.confidence ?? 66,
+    presetId: options.presetId ?? 'custom',
+    placement: { x: 0, y: 0, z: 0, source: 'fleet_load_zone', status: 'assigned' },
+  };
+}
+
+function compartment(id, loadZone, name = id) {
+  return {
+    id,
+    name,
+    accessoryInstallId: `${id}:install`,
+    accessoryId: 'custom_accessory',
+    loadZone,
+    maxWeightLbs: null,
+    volumeLiters: null,
+    status: 'active',
+    display: display(name),
+    placement: { x: 0, y: 0, z: 0, source: 'fleet_load_zone', status: 'assigned' },
+  };
+}
+
 function riskAtLeast(level, expected) {
   const order = { unknown: -1, clear: 0, watch: 1, caution: 2, critical: 3 };
   return order[level] >= order[expected];
@@ -170,9 +202,22 @@ function riskAtLeast(level, expected) {
   assert.strictEqual(result.payloadRemainingAfter, 1150);
   assert.strictEqual(result.gvwrPercentBefore, 77.1);
   assert.strictEqual(result.gvwrPercentAfter, 83.6);
+  assert.strictEqual(result.calculationTrace.vehicleId, vehicle.id);
+  assert.strictEqual(result.calculationTrace.calculationMode, 'preview');
+  assert.ok(result.calculationTrace.weightContributionsBefore.some((item) => item.kind === 'base_or_curb_weight'));
+  assert.ok(result.calculationTrace.weightContributionsAfter.some((item) => item.kind === 'accessory_weight' && item.itemIds.includes('bed-drawers')));
+  assert.ok(result.calculationTrace.weightContributionsAfter.some((item) => item.kind === 'water_weight' && item.itemIds.includes('water-cans')));
+  assert.ok(result.calculationTrace.weightContributionsAfter.some((item) => item.kind === 'trailer_tongue_weight'));
+  assert.strictEqual(result.calculationTrace.loadedWeightAfter, result.loadedVehicleWeightAfter);
+  assert.strictEqual(result.calculationTrace.payloadRemainingAfter, result.payloadRemainingAfter);
+  assert.ok(result.calculationTrace.sourcePrecedenceApplied.some((item) => item.fieldPath === 'vehicle.buildProfile.gvwr'));
   assert.ok(result.sourceWarnings.some((warning) => warning.id === 'source-estimated-loadout'));
   assert.ok(result.evidenceEvents.includes('preview_generated'));
   assert.ok(result.evidenceEvents.includes('loadout_committed'));
+  assert.ok(result.evidenceEvents.includes('suggestion_acknowledged'));
+  assert.ok(result.evidenceEvents.includes('suggestion_applied'));
+  assert.ok(result.evidenceEvents.includes('suggestion_apply_failed'));
+  assert.ok(result.evidenceEvents.includes('command_brief_mirror_invalidated'));
 }
 
 {
@@ -199,8 +244,43 @@ function riskAtLeast(level, expected) {
 
   assert.strictEqual(result.payloadRemainingBefore, 1800);
   assert.strictEqual(result.payloadRemainingAfter, 1640);
+  assert.strictEqual(result.calculationTrace.inferredCurbWeight.sourceKind, 'estimated');
+  assert.ok(result.calculationTrace.sourcePrecedenceApplied.some((item) =>
+    item.fieldPath === 'vehicle.buildProfile.baseNetWeight' &&
+    item.reason.includes('inferred from GVWR minus net payload')));
   assert.ok(result.sourceWarnings.some((warning) => warning.id === 'inferred-base-from-net-payload'));
   assert.ok(result.sourceWarnings.some((warning) => warning.message.includes('estimated')));
+}
+
+{
+  const vehicle = makeVehicle({
+    buildProfile: {
+      baseNetWeight: weight(5200, 'user_estimate', 55, 'old estimate'),
+      gvwr: weight(7000, 'ecs_default', 60, 'class default GVWR'),
+    },
+  });
+  const result = preview.buildLoadoutConsequencePreview({
+    vehicleId: vehicle.id,
+    vehicle,
+    vehicleSpecEvidence: {
+      baseWeight: evidence(5150, 'oem', 90, 'OEM base'),
+      gvwr: evidence(7200, 'user_confirmed', 98, 'door placard'),
+    },
+    currentAccessories: [],
+    currentLoadoutItems: [],
+    proposedAccessories: [],
+    proposedLoadoutItems: [],
+    calculationMode: 'preview',
+  });
+
+  const gvwrTrace = result.calculationTrace.sourcePrecedenceApplied.find((item) => item.fieldPath === 'vehicle.buildProfile.gvwr');
+  const baseTrace = result.calculationTrace.sourcePrecedenceApplied.find((item) => item.fieldPath === 'vehicle.buildProfile.baseNetWeight');
+  assert.strictEqual(gvwrTrace.chosenSourceKind, 'user_confirmed');
+  assert.deepStrictEqual(gvwrTrace.availableSourceKinds, ['default', 'user_confirmed']);
+  assert.strictEqual(baseTrace.chosenSourceKind, 'oem');
+  assert.deepStrictEqual(baseTrace.availableSourceKinds, ['estimated', 'oem']);
+  assert.strictEqual(result.calculationTrace.gvwr.value, 7200);
+  assert.strictEqual(result.calculationTrace.baseWeight.value, 5150);
 }
 
 {
@@ -228,8 +308,16 @@ function riskAtLeast(level, expected) {
   assert.ok(riskAtLeast(result.topHeavyRisk.level, 'caution'), `expected top-heavy caution, got ${result.topHeavyRisk.level}`);
   assert.ok(riskAtLeast(result.recoveryDifficultyImpact.level, 'caution'), `expected recovery caution, got ${result.recoveryDifficultyImpact.level}`);
   assert.ok(riskAtLeast(result.routeSuitabilityImpact.level, 'caution'), `expected route caution, got ${result.routeSuitabilityImpact.level}`);
+  const topTrace = result.riskTraces.find((item) => item.signalId === 'top_heavy');
+  const recoveryTrace = result.riskTraces.find((item) => item.signalId === 'recovery_difficulty');
+  assert.ok(topTrace.factors.some((factor) => factor.factorId === 'roof_weight' && factor.impact !== 'none'));
+  assert.ok(topTrace.factors.some((factor) => factor.factorId === 'load_zone_height'));
+  assert.ok(topTrace.factors.some((factor) => factor.factorId === 'route_difficulty'));
+  assert.ok(recoveryTrace.factors.some((factor) => factor.factorId === 'tire_lift_state'));
   assert.ok(result.suggestions.some((item) => item.action === 'relocate' && item.targetZone === 'bedLow'));
   assert.ok(result.suggestions.some((item) => /Roof tent|Water cans/.test(item.itemName)));
+  assert.ok(result.suggestions.every((item) => item.actions.length > 0));
+  assert.ok(result.suggestions.some((item) => item.actions.some((action) => action.label !== 'Accept')));
 }
 
 {
@@ -260,6 +348,8 @@ function riskAtLeast(level, expected) {
 
   assert.ok(riskAtLeast(result.recoveryDifficultyImpact.level, 'critical'));
   assert.ok(riskAtLeast(result.routeSuitabilityImpact.level, 'caution'));
+  assert.ok(result.riskTraces.find((item) => item.signalId === 'recovery_difficulty').factors.some((factor) => factor.factorId === 'trailer_state'));
+  assert.ok(result.calculationTrace.weightContributionsAfter.some((item) => item.kind === 'trailer_tongue_weight'));
   assert.ok(result.suggestions.some((item) => item.action === 'relocate' && item.reason.includes('rear')));
   assert.ok(result.sourceWarnings.some((warning) => warning.id === 'source-estimated-trailer-tongue'));
 }
@@ -285,6 +375,252 @@ function riskAtLeast(level, expected) {
   assert.strictEqual(result.availability, 'partial');
   assert.ok(result.sourceWarnings.some((warning) => warning.id === 'missing-gvwr'));
   assert.ok(result.mainRisk.toLowerCase().includes('missing gvwr'));
+  assert.strictEqual(result.calculationTrace.gvwrPercentAfter, null);
+  assert.ok(result.calculationTrace.warnings.some((warning) => warning.id === 'missing-gvwr'));
+}
+
+{
+  const vehicle = makeVehicle();
+  const missingRoute = preview.buildLoadoutConsequencePreview({
+    vehicleId: vehicle.id,
+    vehicle,
+    currentAccessories: [],
+    currentLoadoutItems: [],
+    proposedAccessories: [],
+    proposedLoadoutItems: [loadoutItem('camp-box', 120, 'bedLow', 'Camp box', { source: 'ecs_default', confidence: 70 })],
+    routeContext: null,
+    calculationMode: 'preview',
+  });
+  assert.strictEqual(missingRoute.routeSuitabilityImpact.level, 'unknown');
+  assert.ok(missingRoute.sourceWarnings.some((warning) => warning.id === 'missing-route-context'));
+  assert.ok(missingRoute.riskTraces.find((item) => item.signalId === 'route_suitability').factors.some((factor) => factor.factorId === 'missing_source'));
+
+  const staleRoute = preview.buildLoadoutConsequencePreview({
+    vehicleId: vehicle.id,
+    vehicle,
+    currentAccessories: [],
+    currentLoadoutItems: [],
+    proposedAccessories: [],
+    proposedLoadoutItems: [loadoutItem('camp-box', 120, 'bedLow', 'Camp box', { source: 'ecs_default', confidence: 70 })],
+    routeContext: { difficulty: 'hard', terrainRisk: 'caution', freshness: 'stale', sourceKind: 'oem', observedAt: '2026-06-01T00:00:00.000Z' },
+    calculationMode: 'preview',
+  });
+  assert.ok(staleRoute.sourceWarnings.some((warning) => warning.id === 'stale-route-context'));
+  assert.ok(staleRoute.calculationTrace.sourcePrecedenceApplied.some((item) => item.fieldPath === 'routeContext'));
+}
+
+{
+  const vehicleA = makeVehicle({ id: 'vehicle-A' });
+  const vehicleB = makeVehicle({
+    id: 'vehicle-B',
+    buildProfile: {
+      baseNetWeight: weight(6100, 'ecs_default', 60, 'Vehicle B default'),
+      gvwr: weight(7600, 'manufacturer_spec', 91, 'Vehicle B OEM GVWR'),
+    },
+  });
+  const vehicleAResult = preview.buildLoadoutConsequencePreview({
+    vehicleId: vehicleA.id,
+    vehicle: vehicleA,
+    vehicleSpecEvidence: {
+      baseWeight: evidence(5000, 'user_confirmed', 98, 'Vehicle A scale'),
+      gvwr: evidence(7000, 'user_confirmed', 98, 'Vehicle A placard'),
+    },
+    currentAccessories: [],
+    currentLoadoutItems: [],
+    proposedAccessories: [],
+    proposedLoadoutItems: [],
+    profileId: 'profile-A',
+    calculationMode: 'preview',
+  });
+  const vehicleBResult = preview.buildLoadoutConsequencePreview({
+    vehicleId: vehicleB.id,
+    vehicle: vehicleB,
+    currentAccessories: [],
+    currentLoadoutItems: [],
+    proposedAccessories: [],
+    proposedLoadoutItems: [],
+    profileId: 'profile-B',
+    trailerState: { attached: false, tongueWeightLb: evidence(0) },
+    calculationMode: 'preview',
+  });
+  assert.strictEqual(vehicleAResult.calculationTrace.baseWeight.value, 5000);
+  assert.strictEqual(vehicleBResult.calculationTrace.baseWeight.value, 6100);
+  assert.strictEqual(vehicleBResult.calculationTrace.profileId, 'profile-B');
+  assert.ok(!vehicleBResult.calculationTrace.weightContributionsAfter.some((item) => item.kind === 'trailer_tongue_weight'));
+}
+
+{
+  const vehicle = makeVehicle();
+  const previewResult = preview.buildLoadoutConsequencePreview({
+    vehicleId: vehicle.id,
+    vehicle,
+    currentAccessories: [],
+    currentLoadoutItems: [],
+    proposedAccessories: [],
+    proposedLoadoutItems: [
+      loadoutItem('roof-tent', 185, 'roof', 'Roof tent', { category: 'camp', isCritical: false }),
+      loadoutItem('recovery-board', 40, 'roof', 'Recovery board', { category: 'recovery', isCritical: true }),
+    ],
+    calculationMode: 'preview',
+    profileId: 'profile-1',
+    loadoutId: 'loadout-1',
+  });
+  const roofSuggestion = previewResult.suggestions.find((item) => item.itemId === 'roof-tent');
+  const relocateAction = roofSuggestion.actions.find((action) => action.actionKind === 'relocate_item');
+  assert.ok(relocateAction.canApplyAutomatically);
+  const initialState = {
+    accessories: [],
+    compartments: [
+      compartment('roof-bin', 'roof', 'Roof bin'),
+      compartment('bed-bin', 'bedLow', 'Bed bin'),
+    ],
+    loadoutItems: [
+      stateItem('roof-tent', 185, 'roof', 'roof-bin', 'Roof tent', { category: 'camp', permanence: 'optional' }),
+      stateItem('recovery-board', 40, 'roof', 'roof-bin', 'Recovery board', { category: 'recovery', permanence: 'always' }),
+    ],
+  };
+  const applied = preview.applyLoadoutSuggestionAction({
+    preview: previewResult,
+    actionId: relocateAction.actionId,
+    state: initialState,
+    currentVehicleId: vehicle.id,
+    currentProfileId: 'profile-1',
+    currentLoadoutId: 'loadout-1',
+  });
+  assert.strictEqual(applied.applicationState, 'applied');
+  assert.strictEqual(applied.telemetryEvent, 'suggestion_applied');
+  assert.strictEqual(applied.nextState.loadoutItems.find((item) => item.id === 'roof-tent').loadZone, 'bedLow');
+
+  const wrongVehicle = preview.applyLoadoutSuggestionAction({
+    preview: previewResult,
+    actionId: relocateAction.actionId,
+    state: initialState,
+    currentVehicleId: 'vehicle-B',
+    currentProfileId: 'profile-1',
+    currentLoadoutId: 'loadout-1',
+  });
+  assert.strictEqual(wrongVehicle.applicationState, 'failed');
+  assert.strictEqual(wrongVehicle.telemetryEvent, 'suggestion_apply_failed');
+  assert.strictEqual(wrongVehicle.nextState, initialState);
+
+  const removeCriticalSuggestion = {
+    ...roofSuggestion,
+    actions: [{
+      actionId: 'remove-critical',
+      suggestionId: roofSuggestion.id,
+      actionKind: 'remove_item',
+      label: 'Remove optional item',
+      canApplyAutomatically: true,
+      targetItemIds: ['recovery-board'],
+    }],
+  };
+  const criticalPreview = { ...previewResult, suggestions: [removeCriticalSuggestion] };
+  const failedRemove = preview.applyLoadoutSuggestionAction({
+    preview: criticalPreview,
+    actionId: 'remove-critical',
+    state: initialState,
+    currentVehicleId: vehicle.id,
+    currentProfileId: 'profile-1',
+    currentLoadoutId: 'loadout-1',
+  });
+  assert.strictEqual(failedRemove.applicationState, 'failed');
+  assert.strictEqual(failedRemove.telemetryEvent, 'suggestion_apply_failed');
+  assert.ok(failedRemove.reason.includes('required recovery or safety'));
+}
+
+{
+  const vehicle = makeVehicle();
+  const result = preview.buildLoadoutConsequencePreview({
+    vehicleId: vehicle.id,
+    vehicle,
+    currentAccessories: [],
+    currentLoadoutItems: [],
+    proposedAccessories: [],
+    proposedLoadoutItems: [],
+    routeId: 'route-1',
+    routeGeometryVersion: 'geom-1',
+    profileId: 'profile-1',
+    loadoutId: 'loadout-1',
+    calculationMode: 'preview',
+  });
+  const published = preview.publishLoadoutConsequencePreview(result, { source: 'proposed_preview' });
+  assert.strictEqual(published.mirror.source, 'proposed_preview');
+  assert.strictEqual(published.summary.stale, false);
+  const invalid = preview.invalidateLoadoutConsequenceMirror('preview_cancelled', {
+    vehicleId: vehicle.id,
+    profileId: 'profile-1',
+    loadoutId: 'loadout-1',
+  });
+  assert.strictEqual(invalid.mirror.stale, true);
+  assert.strictEqual(invalid.mirror.invalidationReason, 'preview_cancelled');
+  assert.strictEqual(invalid.summary.stale, true);
+
+  const vehicleSwitch = preview.isLoadoutConsequenceMirrorValid(published.mirror, { vehicleId: 'vehicle-2' });
+  assert.strictEqual(vehicleSwitch.valid, false);
+  assert.strictEqual(vehicleSwitch.invalidationReason, 'vehicle_changed');
+}
+
+{
+  const scale = preview.validateLoadoutScaleValidationEvidence({
+    evidenceId: 'scale-1',
+    vehicleId: 'vehicle-1',
+    measuredAt: '2026-06-13T00:00:00.000Z',
+    sourceKind: 'scale_ticket',
+    predictedLoadedWeight: 6500,
+    measuredLoadedWeight: 6565,
+    unit: 'lb',
+    delta: 65,
+    deltaPercent: 1,
+    artifactPath: '.smoke/scale-ticket.json',
+    confidence: 'high',
+    acceptedBy: 'QA',
+    acceptedAt: '2026-06-13T01:00:00.000Z',
+    notes: ['accepted'],
+  });
+  assert.strictEqual(scale.valid, true);
+  assert.strictEqual(scale.blocked, false);
+
+  const highDelta = preview.validateLoadoutScaleValidationEvidence({
+    evidenceId: 'scale-2',
+    vehicleId: 'vehicle-1',
+    measuredAt: '2026-06-13T00:00:00.000Z',
+    sourceKind: 'loaded_scale',
+    predictedLoadedWeight: 6500,
+    measuredLoadedWeight: 7200,
+    unit: 'lb',
+    delta: 700,
+    deltaPercent: 10.8,
+    confidence: 'medium',
+    acceptedBy: 'QA',
+    acceptedAt: '2026-06-13T01:00:00.000Z',
+    notes: [],
+  });
+  assert.strictEqual(highDelta.valid, false);
+  assert.ok(highDelta.blockers.includes('loaded_scale_delta_exceeds_policy'));
+}
+
+{
+  const vehicle = makeVehicle();
+  const largeItems = Array.from({ length: 260 }, (_, index) =>
+    loadoutItem(`large-${index}`, 8 + (index % 5), index % 3 === 0 ? 'roof' : index % 3 === 1 ? 'bedLow' : 'rearLow', `Large item ${index}`, {
+      source: index % 2 === 0 ? 'ecs_default' : 'user_estimate',
+      confidence: 64,
+    }));
+  const started = Date.now();
+  const result = preview.buildLoadoutConsequencePreview({
+    vehicleId: vehicle.id,
+    vehicle,
+    currentAccessories: [],
+    currentLoadoutItems: [],
+    proposedAccessories: [accessory('roof-platform', 100, 'roof', 'Roof platform')],
+    proposedLoadoutItems: largeItems,
+    routeContext: { difficulty: 'moderate', remoteness: 'medium', recoveryPosture: 'limited' },
+    trailerState: { attached: true, tongueWeightLb: evidence(300, 'estimated', 60) },
+    calculationMode: 'preview',
+  });
+  const durationMs = Date.now() - started;
+  assert.strictEqual(result.calculationTrace.weightContributionsAfter.filter((item) => item.kind === 'gear_weight').length >= 250, true);
+  assert.ok(durationMs < 1500, `large loadout preview should remain responsive in local unit run, took ${durationMs}ms`);
 }
 
 {
@@ -293,11 +629,21 @@ function riskAtLeast(level, expected) {
   const commandBriefSource = fs.readFileSync(commandBriefPath, 'utf8');
   assert.ok(uiSource.includes('LoadoutConsequencePreviewPanel'), 'Fleet loadout editor must render the consequence preview panel.');
   assert.ok(uiSource.includes('publishLoadoutConsequencePreview'), 'Fleet loadout editor must publish latest preview for Command Brief mirroring.');
+  assert.ok(uiSource.includes('applyLoadoutSuggestionAction'), 'Fleet loadout editor must use safe suggestion application helper.');
+  assert.ok(uiSource.includes('suggestion_applied'), 'Fleet loadout editor must emit applied telemetry only after mutation.');
+  assert.ok(uiSource.includes('suggestion_apply_failed'), 'Fleet loadout editor must emit failure telemetry when mutation is rejected.');
+  assert.ok(uiSource.includes('command_brief_mirror_invalidated'), 'Fleet loadout editor must emit mirror invalidation telemetry.');
   assert.ok(panelSource.includes('sourceWarnings'), 'Preview panel must render source/confidence warnings.');
   assert.ok(panelSource.includes('suggestion_viewed'), 'Suggestion view evidence event must be wired.');
-  assert.ok(panelSource.includes('suggestion_accepted'), 'Suggestion accept evidence event must be wired.');
+  assert.ok(panelSource.includes('suggestion_acknowledged'), 'Review-only suggestions should acknowledge instead of accept.');
+  assert.ok(!panelSource.includes('label="Accept"'), 'Review-only suggestions must not render Accept.');
+  ['unsafe', 'do not drive', 'route blocked', 'vehicle unfit'].forEach((claim) => {
+    assert.ok(!panelSource.toLowerCase().includes(claim), `Panel copy must avoid unsupported hard claim: ${claim}`);
+  });
   assert.ok(commandBriefSource.includes('LoadoutConsequenceCommandBriefPanel'), 'Command Brief must mirror aggregate loadout consequence impact.');
   assert.ok(commandBriefSource.includes('useLoadoutConsequencePreviewSnapshot'), 'Command Brief must subscribe to latest preview snapshot.');
+  assert.ok(commandBriefSource.includes('invalidationReason'), 'Command Brief mirror should expose validity/staleness metadata.');
+  assert.ok(commandBriefSource.includes('summary.stale'), 'Command Brief should avoid active proposed preview when stale.');
 }
 
 {
@@ -306,7 +652,10 @@ function riskAtLeast(level, expected) {
   assert.ok(productionGateSource.includes('profile_variance_evidence'), 'Production gate must require profile variance evidence.');
   assert.ok(productionGateSource.includes('multi_vehicle_evidence'), 'Production gate must require multi-vehicle evidence.');
   assert.ok(productionGateSource.includes('scale_ticket_evidence'), 'Production gate must require scale ticket evidence.');
+  assert.ok(productionGateSource.includes('loaded_scale_delta_evidence'), 'Production gate must require loaded-scale delta evidence.');
   assert.ok(productionGateSource.includes('offline_cache_evidence'), 'Production gate must require offline/cache evidence.');
+  assert.ok(productionGateSource.includes('large_loadout_performance_evidence'), 'Production gate must require large-loadout performance evidence.');
+  assert.ok(productionGateSource.includes('validateLoadoutConsequencePreviewProductionEvidenceManifest'), 'Production gate must validate a manifest contract.');
 }
 
 console.log('Loadout consequence preview checks passed.');

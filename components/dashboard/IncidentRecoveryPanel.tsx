@@ -46,23 +46,26 @@ import ECSAssessmentModal from './ECSAssessmentModal';
 import CommunicationPacketModal from './CommunicationPacketModal';
 import IncidentTimelineModal from './IncidentTimelineModal';
 import ResolveDebriefModal from './ResolveDebriefModal';
+import RecoveryPacketBuilderModal from './RecoveryPacketBuilderModal';
 import type { IncidentCommunicationPacketAudience } from '../../lib/incidentCommunicationPacket';
 import type { ExpeditionAssessmentEscalationRequest } from '../../lib/expedition/assessmentEscalation';
 import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
+import { isRecoveryPacketBuilderFeatureEnabled } from '../../lib/recovery/recoveryPacketBuilder';
 
 type IncidentActionId =
   | 'report'
   | 'checklist'
   | 'assessment'
   | 'packet'
+  | 'recovery_packet'
   | 'timeline'
   | 'debrief';
 
 type IncidentActionConfig = {
   id: IncidentActionId;
-  label: ExpeditionPlaceholderTitle;
+  label: ExpeditionPlaceholderTitle | 'Build Recovery Packet';
   icon: React.ComponentProps<typeof Ionicons>['name'];
-  stateKey: keyof IncidentRecoveryButtonStates;
+  stateKey?: keyof IncidentRecoveryButtonStates;
 };
 
 type IncidentRecoveryPanelProps = {
@@ -86,6 +89,12 @@ const INCIDENT_ACTIONS: IncidentActionConfig[] = [
   { id: 'timeline', label: 'Timeline', icon: 'time-outline', stateKey: 'timeline' },
   { id: 'debrief', label: 'Resolve / Debrief', icon: 'checkmark-done-outline', stateKey: 'resolveDebrief' },
 ];
+
+const RECOVERY_PACKET_ACTION: IncidentActionConfig = {
+  id: 'recovery_packet',
+  label: 'Build Recovery Packet',
+  icon: 'document-text-outline',
+};
 
 function subscribeDispatchEventsForReact(listener: () => void): () => void {
   let initialSnapshotDelivered = false;
@@ -168,6 +177,14 @@ function getActionState(
   buttonStates: IncidentRecoveryButtonStates | undefined,
   action: IncidentActionConfig,
 ): IncidentWorkflowButtonState {
+  if (!action.stateKey) {
+    return {
+      enabled: true,
+      status: 'not_started',
+      label: action.label,
+      description: 'Current user-facing/internal beta.',
+    };
+  }
   return buttonStates?.[action.stateKey] ?? { enabled: true, status: 'not_started' };
 }
 
@@ -193,8 +210,10 @@ export default function IncidentRecoveryPanel({
   const [safetyModalVisible, setSafetyModalVisible] = useState(false);
   const [assessmentModalVisible, setAssessmentModalVisible] = useState(false);
   const [packetModalVisible, setPacketModalVisible] = useState(false);
+  const [recoveryPacketModalVisible, setRecoveryPacketModalVisible] = useState(false);
   const [timelineModalVisible, setTimelineModalVisible] = useState(false);
   const [resolveDebriefModalVisible, setResolveDebriefModalVisible] = useState(false);
+  const recoveryPacketBuilderEnabled = isRecoveryPacketBuilderFeatureEnabled();
   const frameworkState = useSyncExternalStore(
     subscribeExpeditionFrameworkState,
     getExpeditionFrameworkState,
@@ -259,6 +278,16 @@ export default function IncidentRecoveryPanel({
     incidentState.displayMode === 'resolved_recent';
   const lastCheckedLabel = formatLastUpdated(incidentState.lastUpdated);
   const missingCriticalData = incidentState.missingCriticalData ?? [];
+  const incidentActions = useMemo(
+    () => recoveryPacketBuilderEnabled
+      ? [
+          ...INCIDENT_ACTIONS.slice(0, 4),
+          RECOVERY_PACKET_ACTION,
+          ...INCIDENT_ACTIONS.slice(4),
+        ]
+      : INCIDENT_ACTIONS,
+    [recoveryPacketBuilderEnabled],
+  );
 
   useEffect(() => {
     if (!assessmentEscalation) return;
@@ -309,6 +338,10 @@ export default function IncidentRecoveryPanel({
       setPacketModalVisible(true);
       return;
     }
+    if (action.id === 'recovery_packet') {
+      setRecoveryPacketModalVisible(true);
+      return;
+    }
     if (action.id === 'timeline') {
       setTimelineModalVisible(true);
       return;
@@ -317,7 +350,7 @@ export default function IncidentRecoveryPanel({
       setResolveDebriefModalVisible(true);
       return;
     }
-    onOpenPlaceholder(action.label);
+    onOpenPlaceholder(action.label as ExpeditionPlaceholderTitle);
   };
   const handleReportSubmit = (input: ReportIncidentInput) => {
     incidentRecoveryWorkflowStore.reportIncident(input);
@@ -511,7 +544,7 @@ export default function IncidentRecoveryPanel({
         </View>
 
         <View style={[styles.actionGrid, compact && styles.actionGridCompact]}>
-          {INCIDENT_ACTIONS.map((action) => {
+          {incidentActions.map((action) => {
             const actionState = getActionState(incidentState.buttonStates, action);
             const enabled = actionState.enabled !== false;
             return (
@@ -589,6 +622,17 @@ export default function IncidentRecoveryPanel({
         incident={incidentState.activeIncident}
         onCopyPacket={handlePacketCopy}
       />
+      {recoveryPacketBuilderEnabled ? (
+        <RecoveryPacketBuilderModal
+          visible={recoveryPacketModalVisible}
+          onClose={() => setRecoveryPacketModalVisible(false)}
+          stackBehavior={modalStackBehavior}
+          activeIncident={incidentState.activeIncident}
+          contextSnapshot={incidentContextSnapshot}
+          gpsLocation={gpsLocation ?? incidentContextSnapshot.route?.currentLocation}
+          confirmingUserId={expeditionId ?? 'local-operator'}
+        />
+      ) : null}
       <IncidentTimelineModal
         visible={timelineModalVisible}
         onClose={() => setTimelineModalVisible(false)}

@@ -1,0 +1,124 @@
+{
+  "fixtureId": "missing_policy_and_evidence",
+  "description": "Missing staleness policy, missing previous departure audit, missing backup endpoint, and absent platform evidence.",
+  "now": "2026-06-13T18:00:00.000Z",
+  "featureFlags": {
+    "campDecisionClock": true,
+    "departureDeltaBrief": true,
+    "routeConfidenceTimeline": true,
+    "expeditionWeakPointAnalyzer": true,
+    "convoyStalenessLadder": true,
+    "recoveryPacketBuilder": true,
+    "expeditionReplayDebrief": true,
+    "offlineFailureDrill": true,
+    "loadoutConsequencePreview": true
+  },
+  "campClock": {
+    "currentTime": "2026-06-13T18:00:00.000Z",
+    "routeProgress": {
+      "driveTimeRemainingMinutes": 90,
+      "distanceRemainingMiles": 42,
+      "source": "manual",
+      "confidence": "medium"
+    },
+    "eta": {
+      "plannedArrivalAt": "2026-06-13T19:30:00.000Z",
+      "latestSafeArrivalAt": "2026-06-13T21:00:00.000Z",
+      "confidence": "medium",
+      "source": "manual",
+      "updatedAt": "2026-06-13T17:30:00.000Z"
+    },
+    "delayScenario": "no_delay",
+    "daylightWindow": {
+      "sunsetAt": "2026-06-13T21:20:00.000Z",
+      "usableLightEndsAt": "2026-06-13T20:50:00.000Z"
+    },
+    "plannedCamp": {
+      "id": "camp-alpha",
+      "name": "Planned Ridge Camp",
+      "location": { "latitude": 38.2, "longitude": -110.4 },
+      "source": "route_endpoint_candidate",
+      "sourceConfidence": "medium",
+      "latestSafeArrivalAt": "2026-06-13T21:00:00.000Z"
+    },
+    "emergencyEndpoint": {
+      "id": "emergency-alpha",
+      "name": "Emergency Trailhead",
+      "latestDivertAt": null,
+      "viableUntil": "2026-06-13T21:30:00.000Z",
+      "source": { "kind": "manual", "validated": true, "updatedAt": "2026-06-13T17:30:00.000Z" },
+      "dataFreshness": "fresh",
+      "legalAccessConfidence": "validated"
+    },
+    "margins": {
+      "fuel": { "status": "comfortable", "value": 90, "unit": "miles", "confidence": "medium", "source": "manual", "updatedAt": "2026-06-13T17:30:00.000Z" },
+      "water": { "status": "comfortable", "value": 18, "unit": "gallons", "confidence": "medium", "source": "manual", "updatedAt": "2026-06-13T17:30:00.000Z" },
+      "power": { "status": "comfortable", "value": 70, "unit": "percent", "confidence": "medium", "source": "manual", "updatedAt": "2026-06-13T17:30:00.000Z" }
+    },
+    "routeDifficulty": "moderate",
+    "weatherRisk": "unknown",
+    "legalAccessConfidence": "uncertain",
+    "dataFreshness": "stale"
+  },
+  "departureDelta": {
+    "featureFlags": { "departureDeltaBrief": true },
+    "previousAudit": null,
+    "now": "2026-06-13T18:00:00.000Z",
+    "current": {
+      "domainIdentity": {
+        "tripId": "trip-alpha",
+        "expeditionId": "expedition-alpha",
+        "routeId": "route-alpha",
+        "vehicleId": "vehicle-integrated",
+        "loadoutId": "loadout-integrated",
+        "dispatchRosterId": "roster-alpha",
+        "auditSchemaVersion": "departure-delta-v1",
+        "createdAt": "2026-06-13T18:00:00.000Z"
+      },
+      "readiness": {
+        "posture": "caution",
+        "observedAt": "2026-06-13T18:00:00.000Z",
+        "source": "readiness_engine",
+        "blockers": [
+          { "id": "offline-package-partial", "label": "Offline package partial", "severity": "warning", "observedAt": "2026-06-13T18:00:00.000Z", "source": "readiness_engine" }
+        ]
+      },
+      "vehicleLoadoutValues": [
+        { "fieldId": "vehicle:active:payloadRemainingLbs", "label": "Payload remaining", "value": 420, "observedAt": "2026-06-13T18:00:00.000Z", "source": "fleet" }
+      ],
+      "weatherFreshness": { "status": "expired", "observedAt": "2026-06-13T18:00:00.000Z", "expiresAt": "2026-06-13T17:30:00.000Z", "source": "weather" },
+      "offlinePackage": { "packageStatus": "partial", "coverage": "partial", "freshness": "stale", "routeMatch": true, "cacheCompletenessPct": 74, "observedAt": "2026-06-13T18:00:00.000Z", "source": "offline_cache" },
+      "campEndpointConfidence": { "endpointId": "camp-alpha", "confidence": "low", "confidenceScale": "low_medium_high", "observedAt": "2026-06-13T18:00:00.000Z", "source": "campops" },
+      "dispatchRoster": { "status": "stale", "observedAt": "2026-06-13T18:00:00.000Z", "source": "dispatch" },
+      "margins": {
+        "fuel": { "label": "Fuel margin", "value": 46, "unit": "miles", "observedAt": "2026-06-13T18:00:00.000Z", "source": "manual" },
+        "water": { "label": "Water margin", "value": 14, "unit": "gallons", "observedAt": "2026-06-13T18:00:00.000Z", "source": "manual" },
+        "power": { "label": "Power margin", "value": 54, "unit": "percent", "observedAt": "2026-06-13T18:00:00.000Z", "source": "manual" }
+      }
+    }
+  },
+  "convoy": {
+    "now": "2026-06-13T18:00:00.000Z",
+    "policy": null,
+    "policySource": {
+      "source": "expedition_config",
+      "sourceId": "expedition-alpha",
+      "expeditionId": "expedition-alpha",
+      "convoyId": "convoy-alpha"
+    },
+    "context": { "expeditionId": "expedition-alpha", "convoyId": "convoy-alpha" },
+    "permissions": {
+      "canViewRoster": true,
+      "canViewStatus": true,
+      "canViewCheckInTimestamps": true,
+      "canViewSharedCoordinates": true,
+      "canViewOfflineReplayState": true
+    },
+    "roster": [
+      { "memberId": "lead", "displayName": "Lead", "role": "driver" }
+    ],
+    "lastAcceptedCheckIns": [
+      { "memberId": "lead", "acceptedAt": "2026-06-13T17:56:00.000Z", "source": "dispatch" }
+    ]
+  }
+}

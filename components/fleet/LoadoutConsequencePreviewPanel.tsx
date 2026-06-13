@@ -9,6 +9,7 @@ import { ECS_TEXT } from '../../lib/ecsTypographyTokens';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import {
   type LoadoutConsequencePreview,
+  type LoadoutSuggestionAction,
   type LoadoutConsequenceSuggestion,
 } from '../../lib/fleet/loadoutConsequencePreview';
 import { emitFleetTelemetryEvent } from '../../lib/fleet/fleetTelemetryEvents';
@@ -17,6 +18,7 @@ type Props = {
   preview: LoadoutConsequencePreview | null;
   compact?: boolean;
   onSuggestionAccepted?: (suggestion: LoadoutConsequenceSuggestion) => void;
+  onSuggestionAction?: (suggestion: LoadoutConsequenceSuggestion, action: LoadoutSuggestionAction) => void;
 };
 
 function formatLbs(value: number | null | undefined): string {
@@ -43,15 +45,19 @@ function riskTone(level: LoadoutConsequencePreview['topHeavyRisk']['level']): Re
 }
 
 function emitSuggestionEvent(
-  name: 'suggestion_viewed' | 'suggestion_accepted',
+  name: 'suggestion_viewed' | 'suggestion_acknowledged' | 'suggestion_editor_opened',
   preview: LoadoutConsequencePreview,
   suggestion: LoadoutConsequenceSuggestion,
+  action?: LoadoutSuggestionAction,
 ) {
   emitFleetTelemetryEvent(name, {
     vehicleId: preview.vehicleId,
     meta: {
       suggestionId: suggestion.id,
       action: suggestion.action,
+      actionId: action?.actionId ?? null,
+      actionKind: action?.actionKind ?? null,
+      canApplyAutomatically: action?.canApplyAutomatically ?? false,
       itemId: suggestion.itemId ?? null,
       itemName: suggestion.itemName,
       fromZone: suggestion.fromZone ?? null,
@@ -65,6 +71,7 @@ export default function LoadoutConsequencePreviewPanel({
   preview,
   compact = false,
   onSuggestionAccepted,
+  onSuggestionAction,
 }: Props) {
   if (!preview) {
     return (
@@ -124,7 +131,7 @@ export default function LoadoutConsequencePreviewPanel({
         <View style={styles.warningStack}>
           {sourceWarnings.map((warning) => (
             <View key={warning.id} style={styles.warningRow}>
-              <ECSBadge label={(warning.sourceKind ?? warning.severity).toUpperCase()} tone={warning.severity === 'critical' ? 'unavailable' : 'warning'} compact />
+          <ECSBadge label={(warning.sourceKind ?? warning.severity).toUpperCase()} tone={warning.severity === 'critical' ? 'unavailable' : 'warning'} compact />
               <Text style={styles.warningText} numberOfLines={2}>{warning.message}</Text>
             </View>
           ))}
@@ -146,6 +153,9 @@ export default function LoadoutConsequencePreviewPanel({
               <View style={styles.suggestionCopy}>
                 <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.itemName}</Text>
                 <Text style={styles.suggestionReason} numberOfLines={2}>{suggestion.reason}</Text>
+                <Text style={styles.traceHint} numberOfLines={1}>
+                  Trace: {suggestion.actions.map((action) => action.actionKind).join(' / ')}
+                </Text>
               </View>
               <View style={styles.suggestionActions}>
                 <ECSButton
@@ -154,15 +164,26 @@ export default function LoadoutConsequencePreviewPanel({
                   size="compact"
                   onPress={() => emitSuggestionEvent('suggestion_viewed', preview, suggestion)}
                 />
-                <ECSButton
-                  label="Accept"
-                  variant="secondary"
-                  size="compact"
-                  onPress={() => {
-                    emitSuggestionEvent('suggestion_accepted', preview, suggestion);
-                    onSuggestionAccepted?.(suggestion);
-                  }}
-                />
+                {suggestion.actions.slice(0, 1).map((action) => (
+                  <ECSButton
+                    key={action.actionId}
+                    label={action.label}
+                    variant={action.canApplyAutomatically ? 'secondary' : 'tertiary'}
+                    size="compact"
+                    onPress={() => {
+                      if (!action.canApplyAutomatically && !onSuggestionAction) {
+                        emitSuggestionEvent(
+                          action.actionKind === 'open_editor' ? 'suggestion_editor_opened' : 'suggestion_acknowledged',
+                          preview,
+                          suggestion,
+                          action,
+                        );
+                      }
+                      onSuggestionAction?.(suggestion, action);
+                      if (!onSuggestionAction) onSuggestionAccepted?.(suggestion);
+                    }}
+                  />
+                ))}
               </View>
             </View>
           ))}
@@ -281,6 +302,11 @@ const styles = StyleSheet.create({
     ...ECS_TEXT.helper,
     color: TACTICAL.textMuted,
     lineHeight: 16,
+  },
+  traceHint: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
   },
   suggestionActions: {
     flexDirection: 'row',

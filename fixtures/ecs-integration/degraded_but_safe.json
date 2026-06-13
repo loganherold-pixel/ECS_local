@@ -1,0 +1,225 @@
+{
+  "fixtureId": "degraded_but_safe",
+  "description": "Safe-but-degraded expedition with stale camp inputs, low route confidence, top-heavy loadout risk, and delayed convoy member.",
+  "now": "2026-06-13T18:00:00.000Z",
+  "featureFlags": {
+    "campDecisionClock": true,
+    "departureDeltaBrief": true,
+    "routeConfidenceTimeline": true,
+    "expeditionWeakPointAnalyzer": true,
+    "convoyStalenessLadder": true,
+    "recoveryPacketBuilder": true,
+    "expeditionReplayDebrief": true,
+    "offlineFailureDrill": true,
+    "loadoutConsequencePreview": true
+  },
+  "route": {
+    "routeId": "route-alpha",
+    "geometryVersion": "geom-v7",
+    "generatedAt": "2026-06-13T18:00:00.000Z",
+    "coverageMode": "notable_spans_only",
+    "routeGeometry": {
+      "origin": { "lat": 38.0, "lng": -110.0 },
+      "destination": { "lat": 38.0, "lng": -109.7 },
+      "waypoints": [],
+      "coordinates": [
+        { "lat": 38.0, "lng": -110.0 },
+        { "lat": 38.0, "lng": -109.9 },
+        { "lat": 38.0, "lng": -109.8 },
+        { "lat": 38.0, "lng": -109.7 }
+      ],
+      "distanceMeters": 3000,
+      "durationSeconds": 900,
+      "bbox": { "west": -110.0, "south": 38.0, "east": -109.7, "north": 38.0 },
+      "corridor": null,
+      "segments": [],
+      "providerMetadata": { "geometryVersion": "geom-v7", "source": "integration_fixture" }
+    },
+    "overlays": [
+      {
+        "id": "unverified-camp-approach",
+        "routeId": "route-alpha",
+        "routeGeometryVersion": "geom-v7",
+        "startMeasure": 2250,
+        "endMeasure": 2925,
+        "label": "Unverified camp approach",
+        "confidenceLevel": "low",
+        "conditionState": "unknown",
+        "driverCategory": "legal_access",
+        "impactRank": 20,
+        "source": {
+          "id": "source-camp-approach",
+          "label": "Route Catalog access overlay",
+          "sourceType": "route_catalog",
+          "observedAt": "2026-06-13T15:00:00.000Z",
+          "freshness": "stale",
+          "validation": "unvalidated"
+        }
+      },
+      {
+        "id": "camp-deadline-pressure",
+        "routeId": "route-alpha",
+        "routeGeometryVersion": "geom-v7",
+        "startMeasure": 2500,
+        "endMeasure": 3000,
+        "label": "Camp deadline pressure",
+        "confidenceLevel": "medium",
+        "conditionState": "unknown",
+        "driverCategory": "camp_deadline",
+        "impactRank": 15,
+        "source": {
+          "id": "source-camp-clock",
+          "label": "Camp Decision Clock",
+          "sourceType": "campops",
+          "observedAt": "2026-06-13T18:00:00.000Z",
+          "freshness": "fresh",
+          "validation": "validated"
+        }
+      }
+    ]
+  },
+  "campClock": {
+    "currentTime": "2026-06-13T18:00:00.000Z",
+    "routeProgress": {
+      "driveTimeRemainingMinutes": 90,
+      "distanceRemainingMiles": 42,
+      "source": "manual",
+      "confidence": "medium"
+    },
+    "eta": {
+      "plannedArrivalAt": "2026-06-13T19:30:00.000Z",
+      "latestSafeArrivalAt": "2026-06-13T21:00:00.000Z",
+      "confidence": "medium",
+      "source": "manual",
+      "updatedAt": "2026-06-13T17:00:00.000Z"
+    },
+    "delayScenario": { "kind": "custom", "minutes": 30, "label": "30 minute trail delay" },
+    "daylightWindow": {
+      "sunsetAt": "2026-06-13T21:20:00.000Z",
+      "usableLightEndsAt": "2026-06-13T20:50:00.000Z"
+    },
+    "plannedCamp": {
+      "id": "camp-alpha",
+      "name": "Planned Ridge Camp",
+      "location": { "latitude": 38.2, "longitude": -110.4 },
+      "source": "route_endpoint_candidate",
+      "sourceConfidence": "low",
+      "latestSafeArrivalAt": "2026-06-13T21:00:00.000Z"
+    },
+    "backupEndpoint": {
+      "id": "backup-alpha",
+      "name": "Backup Basin",
+      "latestDivertAt": "2026-06-13T19:45:00.000Z",
+      "viableUntil": "2026-06-13T20:45:00.000Z",
+      "source": { "kind": "manual", "validated": true, "updatedAt": "2026-06-13T17:30:00.000Z" },
+      "dataFreshness": "fresh",
+      "legalAccessConfidence": "validated"
+    },
+    "emergencyEndpoint": {
+      "id": "emergency-alpha",
+      "name": "Emergency Trailhead",
+      "latestDivertAt": null,
+      "viableUntil": "2026-06-13T21:30:00.000Z",
+      "source": { "kind": "manual", "validated": true, "updatedAt": "2026-06-13T17:30:00.000Z" },
+      "dataFreshness": "fresh",
+      "legalAccessConfidence": "validated"
+    },
+    "margins": {
+      "fuel": { "status": "tight", "value": 24, "unit": "miles", "confidence": "medium", "source": "manual", "updatedAt": "2026-06-13T17:00:00.000Z" },
+      "water": { "status": "comfortable", "value": 14, "unit": "gallons", "confidence": "medium", "source": "manual", "updatedAt": "2026-06-13T17:00:00.000Z" },
+      "power": { "status": "comfortable", "value": 58, "unit": "percent", "confidence": "medium", "source": "manual", "updatedAt": "2026-06-13T17:00:00.000Z" }
+    },
+    "routeDifficulty": "hard",
+    "weatherRisk": "adverse",
+    "legalAccessConfidence": "uncertain",
+    "dataFreshness": "stale"
+  },
+  "convoy": {
+    "now": "2026-06-13T18:00:00.000Z",
+    "policy": { "delayedAfter": 10, "staleAfter": 20, "missingAfter": 40, "unit": "minutes" },
+    "policySource": {
+      "policyId": "policy-alpha",
+      "source": "expedition_config",
+      "sourceId": "expedition-alpha",
+      "expeditionId": "expedition-alpha",
+      "convoyId": "convoy-alpha",
+      "updatedAt": "2026-06-13T17:50:00.000Z",
+      "schemaVersion": "convoy-staleness-policy-v1"
+    },
+    "context": { "expeditionId": "expedition-alpha", "convoyId": "convoy-alpha" },
+    "permissions": {
+      "canViewRoster": true,
+      "canViewStatus": true,
+      "canViewCheckInTimestamps": true,
+      "canViewSharedCoordinates": true,
+      "canViewOfflineReplayState": true
+    },
+    "roster": [
+      { "memberId": "lead", "displayName": "Lead", "role": "driver" },
+      { "memberId": "sweep", "displayName": "Sweep", "role": "sweep" }
+    ],
+    "lastAcceptedCheckIns": [
+      { "memberId": "lead", "acceptedAt": "2026-06-13T17:56:00.000Z", "source": "dispatch" },
+      { "memberId": "sweep", "acceptedAt": "2026-06-13T17:45:00.000Z", "source": "dispatch" }
+    ],
+    "events": [
+      { "eventId": "ping-sweep", "memberId": "sweep", "type": "ping", "active": true, "summary": "Ping sent", "createdAt": "2026-06-13T17:50:00.000Z" },
+      { "eventId": "rally-sweep", "memberId": "sweep", "type": "rally", "active": true, "summary": "Rally point requested", "createdAt": "2026-06-13T17:51:00.000Z" }
+    ]
+  },
+  "recoveryPacket": {
+    "draftInput": {
+      "packetId": "packet-degraded-1",
+      "createdAt": "2026-06-13T18:00:00.000Z",
+      "updatedAt": "2026-06-13T18:00:00.000Z",
+      "incidentType": "stuck",
+      "incidentNotes": "User-entered note with stale context.",
+      "confirmedLocation": {
+        "confirmed": false,
+        "coordinates": { "latitude": 38.57312, "longitude": -109.54984, "altitudeMeters": 1284, "accuracyMeters": 8 },
+        "selectedFormat": "decimal_degrees",
+        "source": { "sourceKind": "user_entered", "sourceName": "manual confirmation", "freshness": "user_entered", "observedAt": "2026-06-13T18:00:00.000Z" }
+      },
+      "activeRoute": { "value": "route-alpha", "freshness": "stale", "source": { "sourceKind": "navigate", "sourceName": "Navigate", "freshness": "stale", "observedAt": "2026-06-13T15:00:00.000Z" } },
+      "vehicleProfile": { "value": "Integrated Rig / trail loadout", "freshness": "current", "source": { "sourceKind": "fleet", "sourceName": "Fleet", "freshness": "current", "updatedAt": "2026-06-13T17:55:00.000Z" } },
+      "recoveryGear": { "value": ["kinetic rope", "soft shackles"], "freshness": "current", "source": { "sourceKind": "field_utilities", "sourceName": "Field Utilities", "freshness": "current" } },
+      "teamRoster": { "value": ["Lead", "Sweep"], "freshness": "stale", "source": { "sourceKind": "dispatch_recovery", "sourceName": "Dispatch", "freshness": "stale", "observedAt": "2026-06-13T16:30:00.000Z" } },
+      "lastKnownCommsStatus": { "value": "Radio contact intermittent", "freshness": "stale", "source": { "sourceKind": "dispatch_recovery", "sourceName": "Dispatch", "freshness": "stale", "observedAt": "2026-06-13T16:30:00.000Z" } },
+      "offlineAvailability": { "value": "Route tiles cached; weather packet stale", "freshness": "stale", "source": { "sourceKind": "offline_honesty", "sourceName": "Offline Honesty", "freshness": "stale" } },
+      "weatherFreshness": { "value": "Weather cache older than route policy", "freshness": "stale", "source": { "sourceKind": "offline_cached", "sourceName": "Weather cache", "freshness": "stale" } },
+      "nearbyBailoutCandidates": { "value": ["Sand Flats Road pullout"], "freshness": "stale", "source": { "sourceKind": "navigate", "sourceName": "Navigate", "freshness": "stale" } },
+      "garminInreachReviewSignals": [
+        { "label": "Garmin/inReach review signal available for human review", "source": { "sourceKind": "garmin_inreach_review_context", "sourceName": "Garmin/inReach", "freshness": "current", "observedAt": "2026-06-13T17:58:00.000Z" } }
+      ],
+      "networkShareAvailable": false
+    }
+  },
+  "weakPointSnapshot": {
+    "snapshotId": "weak-degraded-loadout",
+    "capturedAt": "2026-06-13T18:00:00.000Z",
+    "routeConfidence": { "confidence": "low", "conditionState": "unknown", "sourceFactIds": ["route-confidence"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "fuelMargin": { "reserveMiles": 24, "rangeRemainingMiles": 96, "routeDistanceRemainingMiles": 72, "sourceFactIds": ["fuel-margin"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "waterMargin": { "daysRemaining": 2, "requiredDays": 1, "sourceFactIds": ["water-margin"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "powerMargin": { "runtimeHoursRemaining": 18, "requiredRuntimeHours": 8, "batteryPercent": 58, "dataFreshness": "fresh", "sourceFactIds": ["power-margin"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "payloadGvwr": { "gvwrUsagePct": 86, "payloadRemainingLbs": 460, "confidence": "medium", "sourceFactIds": ["payload-margin"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "campEndpointConfidence": { "endpointId": "camp-alpha", "legalAccessConfidence": "low", "accessConfidence": "low", "etaCreatesLateArrivalRisk": true, "confidence": "low", "sourceFactIds": ["camp-access"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "offlineReadiness": { "packageStatus": "partial", "routeMatched": true, "coverage": "partial", "freshness": "stale", "sourceFactIds": ["offline-package"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "weatherFreshness": { "riskLevel": "moderate", "freshness": "stale", "severeAlertActive": false, "sourceFactIds": ["weather"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "daylight": { "minutesRemainingAtArrival": 40, "arrivalAfterDark": false, "sourceFactIds": ["daylight"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "recoveryBailoutAccess": { "bailoutRoutesAvailable": true, "routeBailoutOptionCount": 1, "nearestExitMiles": 11, "recoveryAccessConfidence": "medium", "sourceFactIds": ["recovery"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "convoyState": { "rosterReady": true, "communicationsReady": true, "membersAccountedFor": true, "sourceFactIds": ["convoy"], "updatedAt": "2026-06-13T18:00:00.000Z" },
+    "sourceFacts": [
+      { "id": "route-confidence", "sourceSystem": "route_confidence", "fieldPath": "route.confidence", "label": "Route confidence", "value": "low", "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "fresh", "confidence": "validated" },
+      { "id": "fuel-margin", "sourceSystem": "logistics", "fieldPath": "fuel.reserveMiles", "label": "Fuel reserve", "value": 24, "unit": "miles", "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "fresh", "confidence": "validated" },
+      { "id": "water-margin", "sourceSystem": "logistics", "fieldPath": "water.daysRemaining", "label": "Water remaining", "value": 2, "unit": "days", "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "fresh", "confidence": "validated" },
+      { "id": "power-margin", "sourceSystem": "logistics", "fieldPath": "power.runtimeHoursRemaining", "label": "Power runtime", "value": 18, "unit": "hours", "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "fresh", "confidence": "validated" },
+      { "id": "payload-margin", "sourceSystem": "fleet", "fieldPath": "payload.gvwrUsagePct", "label": "Payload usage", "value": 86, "unit": "percent", "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "fresh", "confidence": "validated" },
+      { "id": "camp-access", "sourceSystem": "campops", "fieldPath": "camp.legalAccessConfidence", "label": "Camp legal/access confidence", "value": "low", "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "stale", "confidence": "unvalidated" },
+      { "id": "offline-package", "sourceSystem": "offline_honesty", "fieldPath": "offline.packageStatus", "label": "Offline package", "value": "partial", "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "stale", "confidence": "validated" },
+      { "id": "weather", "sourceSystem": "weather", "fieldPath": "weather.freshness", "label": "Weather freshness", "value": "stale", "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "stale", "confidence": "validated" },
+      { "id": "daylight", "sourceSystem": "daylight", "fieldPath": "daylight.minutesRemainingAtArrival", "label": "Daylight margin", "value": 40, "unit": "minutes", "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "fresh", "confidence": "validated" },
+      { "id": "recovery", "sourceSystem": "recovery_bailout", "fieldPath": "recovery.routeBailoutOptionCount", "label": "Bailout options", "value": 1, "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "fresh", "confidence": "validated" },
+      { "id": "convoy", "sourceSystem": "convoy", "fieldPath": "convoy.membersAccountedFor", "label": "Convoy accounted for", "value": true, "observedAt": "2026-06-13T18:00:00.000Z", "freshness": "fresh", "confidence": "validated" }
+    ]
+  }
+}

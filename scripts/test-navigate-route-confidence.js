@@ -25,6 +25,14 @@ function assertNotIncludes(source, fragment, message) {
   assert.ok(!source.includes(fragment), message);
 }
 
+function sourceSliceBetween(source, startFragment, endFragment, message) {
+  const start = source.indexOf(startFragment);
+  assert.ok(start >= 0, message || `Missing start fragment ${startFragment}`);
+  const end = source.indexOf(endFragment, start + startFragment.length);
+  assert.ok(end > start, `Missing end fragment ${endFragment}`);
+  return source.slice(start, end);
+}
+
 assertIncludes(
   summarySource,
   "import { computeRouteConfidence } from './remoteEngine';",
@@ -170,8 +178,23 @@ assertIncludes(
 );
 assertIncludes(
   navigateSource,
+  'function routeConfidenceTimelineMatchesRoute(',
+  'Navigate should validate timeline route and geometry identity before rendering spans.',
+);
+assertIncludes(
+  navigateSource,
+  'routeConfidenceTimelineMatchesRoute(navigateRouteConfidenceTimeline, intelRouteContext.routeId, intelRouteContext.routeFingerprint)',
+  'Navigate should compare the timeline against the selected route ID and route geometry version.',
+);
+assertIncludes(
+  navigateSource,
   'const navigateRouteConfidenceTimeline = useMemo(',
   'Navigate should derive the route confidence timeline from current route context.',
+);
+assertIncludes(
+  navigateSource,
+  'const validNavigateRouteConfidenceTimeline = useMemo(',
+  'Navigate should clear or mark stale previous timelines unavailable when route identity changes.',
 );
 assertIncludes(
   navigateSource,
@@ -195,14 +218,129 @@ assertIncludes(
 );
 assertIncludes(
   navigateSource,
-  'No route confidence timeline available.',
+  'Route confidence timeline unavailable.',
   'Navigate should gracefully fall back when timeline data is unavailable.',
+);
+assertIncludes(
+  navigateSource,
+  'Timeline limited by available source data.',
+  'Navigate should label partial or source-limited timelines honestly.',
+);
+assertIncludes(
+  navigateSource,
+  'Showing notable confidence changes only.',
+  'Navigate should not imply full-route confidence for notable-spans-only timelines.',
+);
+assertIncludes(
+  navigateSource,
+  'No notable confidence changes from available sources.',
+  'Navigate should avoid implying full-route safety when no notable spans render.',
 );
 assertIncludes(
   navigateSource,
   'handleRouteConfidenceTimelineItemPress',
   'Navigate should link timeline item selection to map-oriented segment detail behavior.',
 );
+assertIncludes(
+  navigateSource,
+  'Source: {routeConfidenceTimelineSourceName(selectedItem.primaryDriver.source)}',
+  'Expanded route confidence details should expose primary source provenance.',
+);
+assertIncludes(
+  navigateSource,
+  'Freshness: {selectedItem.primaryDriver.source.freshness.replace(/_/g, \' \')}',
+  'Expanded route confidence details should expose source freshness.',
+);
+assertIncludes(
+  navigateSource,
+  'Observed: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.observedAt)}',
+  'Expanded route confidence details should expose observed timestamps when available.',
+);
+assertIncludes(
+  navigateSource,
+  'Generated: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.generatedAt)}',
+  'Expanded route confidence details should expose generated timestamps when available.',
+);
+assertIncludes(
+  navigateSource,
+  'Expires: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.expiresAt)}',
+  'Expanded route confidence details should expose source expiry when available.',
+);
+assertIncludes(
+  navigateSource,
+  'Contributing drivers: {routeConfidenceTimelineDriverSummary(selectedItem)}',
+  'Expanded route confidence details should list contributing drivers.',
+);
+assertIncludes(
+  navigateSource,
+  'Unknown source',
+  'Missing source metadata should fall back to Unknown source, not fake certainty.',
+);
+assertIncludes(
+  navigateSource,
+  'Stale/unavailable source metadata present.',
+  'Stale or unavailable source details should be visible in segment detail.',
+);
+assertIncludes(
+  navigateSource,
+  'Timeline diagnostics do not affect route readiness or route choice.',
+  'Navigate should explicitly keep timeline diagnostics explanatory only.',
+);
+
+const timelinePanelSource = sourceSliceBetween(
+  navigateSource,
+  'function RouteConfidenceTimelinePanel({',
+  'function formatNavDuration(',
+  'RouteConfidenceTimelinePanel source should be present.',
+);
+[
+  'dangerous',
+  'unsafe',
+  'do not proceed',
+  'hazard confirmed',
+  'Route confidence verified',
+  'All other sections safe',
+  'No risk detected',
+].forEach((fragment) => {
+  assertNotIncludes(
+    timelinePanelSource.toLowerCase(),
+    fragment.toLowerCase(),
+    `Timeline panel should not use forbidden certainty/danger wording: ${fragment}`,
+  );
+});
+
+const timelinePressHandlerSource = sourceSliceBetween(
+  navigateSource,
+  'const handleRouteConfidenceTimelineItemPress = useCallback((item: RouteConfidenceTimelineItem) => {',
+  'const handleOpenOfflineCache = useCallback(',
+  'Route confidence timeline press handler should be present.',
+);
+assertIncludes(
+  timelinePressHandlerSource,
+  'setSelectedRouteConfidenceTimelineItemId(item.id)',
+  'Clicking a timeline segment should only select/expand segment detail.',
+);
+assertIncludes(
+  timelinePressHandlerSource,
+  "reason: 'route_confidence_timeline_focus'",
+  'Clicking a timeline segment may link to the map as explanatory focus.',
+);
+[
+  'routeStore.setActive',
+  'routeStore.update',
+  'roadNavigation.start',
+  'setIntelReadinessStack',
+  'setCampDecisionClock',
+  'avoidance',
+  'blocker',
+  'rerank',
+].forEach((fragment) => {
+  assertNotIncludes(
+    timelinePressHandlerSource,
+    fragment,
+    `Timeline interaction must not mutate route choice/readiness: ${fragment}`,
+  );
+});
 
 assertIncludes(
   packageSource,

@@ -2,9 +2,13 @@ import type {
   RouteConfidenceTimeline,
   RouteConfidenceTimelineConditionState,
   RouteConfidenceTimelineConfidenceLevel,
+  RouteConfidenceTimelineCompleteness,
+  RouteConfidenceTimelineCoverageMode,
+  RouteConfidenceTimelineDiagnostics,
   RouteConfidenceTimelineDriver,
   RouteConfidenceTimelineDriverCategory,
   RouteConfidenceTimelineItem,
+  RouteConfidenceTimelineMergeReason,
   RouteConfidenceTimelineOverlay,
   RouteConfidenceTimelineSource,
   RouteGeometry,
@@ -17,12 +21,24 @@ export type BuildRouteConfidenceTimelineInput = {
   routeGeometry: RouteGeometry | null;
   overlays?: RouteConfidenceTimelineOverlay[] | null;
   generatedAt?: string | null;
+  coverageMode?: RouteConfidenceTimelineCoverageMode | null;
+  sourceWarnings?: string[] | null;
+  unavailableSources?: string[] | null;
+  staleSources?: string[] | null;
 };
 
 type Partition = {
   startMeasure: number;
   endMeasure: number;
   overlays: RouteConfidenceTimelineOverlay[];
+};
+
+type NormalizeOverlayContext = {
+  routeId: string;
+  geometryVersion: string;
+  totalMeasure: number;
+  rejectedReasons: string[];
+  acceptedLegacyOverlay: boolean;
 };
 
 const CATEGORY_PRIORITY: Record<RouteConfidenceTimelineDriverCategory, number> = {
@@ -67,23 +83,67 @@ function normalizeSource(source: RouteConfidenceTimelineSource | null | undefine
     label: source?.label || 'Unknown source',
     sourceType: source?.sourceType ?? null,
     observedAt: source?.observedAt ?? null,
+    generatedAt: source?.generatedAt ?? null,
+    expiresAt: source?.expiresAt ?? null,
     freshness: source?.freshness ?? 'unknown',
+    validation: source?.validation ?? null,
+    schemaVersion: source?.schemaVersion ?? null,
     detail: source?.detail ?? null,
   };
 }
 
+function rejectOverlay(context: NormalizeOverlayContext, overlay: RouteConfidenceTimelineOverlay, reason: string): null {
+  context.rejectedReasons.push(`${overlay.id}: ${reason}`);
+  return null;
+}
+
+function knownRiskSourceIsCurrent(source: RouteConfidenceTimelineSource): boolean {
+  if (source.freshness !== 'fresh') return false;
+  return source.validation == null || source.validation === 'validated';
+}
+
 function normalizeOverlay(
   overlay: RouteConfidenceTimelineOverlay,
-  totalMeasure: number,
+  context: NormalizeOverlayContext,
 ): RouteConfidenceTimelineOverlay | null {
-  const start = clamp(Math.min(overlay.startMeasure, overlay.endMeasure), 0, totalMeasure);
-  const end = clamp(Math.max(overlay.startMeasure, overlay.endMeasure), 0, totalMeasure);
-  if (end <= start) return null;
+  if (overlay.routeId && overlay.routeId !== context.routeId) {
+    return rejectOverlay(context, overlay, `routeId mismatch (${overlay.routeId} !== ${context.routeId})`);
+  }
+  if (overlay.routeGeometryVersion && overlay.routeGeometryVersion !== context.geometryVersion) {
+    return rejectOverlay(
+      context,
+      overlay,
+      `geometry version mismatch (${overlay.routeGeometryVersion} !== ${context.geometryVersion})`,
+    );
+  }
+  if (!overlay.routeId || !overlay.routeGeometryVersion) {
+    context.acceptedLegacyOverlay = true;
+  }
+
+  if (!Number.isFinite(overlay.startMeasure) || !Number.isFinite(overlay.endMeasure)) {
+    return rejectOverlay(context, overlay, 'non-finite route measure');
+  }
+
+  const orderedStart = Math.min(overlay.startMeasure, overlay.endMeasure);
+  const orderedEnd = Math.max(overlay.startMeasure, overlay.endMeasure);
+  if (orderedEnd <= orderedStart) return rejectOverlay(context, overlay, 'zero-length route measure');
+  if (orderedEnd <= 0 || orderedStart >= context.totalMeasure) {
+    return rejectOverlay(context, overlay, 'outside route bounds');
+  }
+
+  const start = clamp(orderedStart, 0, context.totalMeasure);
+  const end = clamp(orderedEnd, 0, context.totalMeasure);
+  if (end <= start) return rejectOverlay(context, overlay, 'zero-length route measure after clamping');
+  const source = normalizeSource(overlay.source, overlay.id);
+  const conditionState = overlay.conditionState === 'known_risky' && !knownRiskSourceIsCurrent(source)
+    ? 'unknown'
+    : overlay.conditionState;
   return {
     ...overlay,
     startMeasure: start,
     endMeasure: end,
-    source: normalizeSource(overlay.source, overlay.id),
+    conditionState,
+    source,
   };
 }
 
@@ -101,14 +161,15 @@ function conditionImpact(state: RouteConfidenceTimelineConditionState): number {
 }
 
 function sourceImpact(source: RouteConfidenceTimelineSource): number {
-  if (source.freshness === 'missing') return 12;
-  if (source.freshness === 'stale') return 8;
+  if (source.freshness === 'missing' || source.freshness === 'unavailable') return 12;
+  if (source.freshness === 'stale' || source.freshness === 'expired') return 8;
   if (source.freshness === 'unknown') return 4;
   return 0;
 }
 
 function overlayImpact(overlay: RouteConfidenceTimelineOverlay): number {
   return (
+    (Number.isFinite(Number(overlay.impactRank)) ? Number(overlay.impactRank) : 0) +
     conditionImpact(overlay.conditionState) +
     confidenceImpact(overlay.confidenceLevel) +
     sourceImpact(overlay.source) +
@@ -117,10 +178,10 @@ function overlayImpact(overlay: RouteConfidenceTimelineOverlay): number {
 }
 
 function sourceWarning(source: RouteConfidenceTimelineSource): string | null {
-  if (source.freshness === 'missing' || !validIso(source.observedAt)) {
+  if (source.freshness === 'missing' || source.freshness === 'unavailable' || !validIso(source.observedAt)) {
     return `${source.label} has missing source metadata for route confidence timeline.`;
   }
-  if (source.freshness === 'stale') {
+  if (source.freshness === 'stale' || source.freshness === 'expired') {
     return `${source.label} is stale source metadata for route confidence timeline.`;
   }
   return null;
@@ -135,6 +196,7 @@ function buildDriver(overlay: RouteConfidenceTimelineOverlay): RouteConfidenceTi
     conditionState: overlay.conditionState,
     source: overlay.source,
     detail: overlay.detail ?? null,
+    impactRank: overlay.impactRank ?? null,
   };
 }
 
@@ -197,6 +259,7 @@ function itemFromPartition(
 ): RouteConfidenceTimelineItem {
   const primary = primaryOverlay(partition.overlays);
   const drivers = uniqueDrivers(partition.overlays.map(buildDriver));
+  const sources = uniqueSources(partition.overlays.map((overlay) => overlay.source));
   return {
     id: `route-confidence:${routeId}:${geometryVersion}:${index}:${Math.round(partition.startMeasure)}-${Math.round(partition.endMeasure)}`,
     routeId,
@@ -208,11 +271,16 @@ function itemFromPartition(
     conditionState: primary.conditionState,
     primaryDriver: buildDriver(primary),
     drivers,
-    sourceFreshness: uniqueSources(partition.overlays.map((overlay) => overlay.source)),
+    sourceFreshness: sources,
+    contributingDrivers: drivers,
+    sources,
+    mergeReason: partition.overlays.length > 1 ? 'overlap_highest_impact' : 'none',
   };
 }
 
 function compatibleForMerge(left: RouteConfidenceTimelineItem, right: RouteConfidenceTimelineItem): boolean {
+  const leftFreshness = left.sources.map((source) => source.freshness).sort().join('|');
+  const rightFreshness = right.sources.map((source) => source.freshness).sort().join('|');
   return (
     left.routeId === right.routeId &&
     left.geometryVersion === right.geometryVersion &&
@@ -220,6 +288,7 @@ function compatibleForMerge(left: RouteConfidenceTimelineItem, right: RouteConfi
     left.confidenceLevel === right.confidenceLevel &&
     left.conditionState === right.conditionState &&
     left.primaryDriver.category === right.primaryDriver.category &&
+    leftFreshness === rightFreshness &&
     left.endMeasure === right.startMeasure
   );
 }
@@ -238,28 +307,110 @@ function mergeAdjacent(items: RouteConfidenceTimelineItem[]): RouteConfidenceTim
       id: `${previous.id}+${Math.round(item.endMeasure)}`,
       drivers: uniqueDrivers([...previous.drivers, ...item.drivers]),
       sourceFreshness: uniqueSources([...previous.sourceFreshness, ...item.sourceFreshness]),
+      contributingDrivers: uniqueDrivers([...previous.contributingDrivers, ...item.contributingDrivers]),
+      sources: uniqueSources([...previous.sources, ...item.sources]),
+      mergeReason: previous.mergeReason === 'overlap_highest_impact' || item.mergeReason === 'overlap_highest_impact'
+        ? 'overlap_highest_impact'
+        : 'adjacent_same_state',
     };
   });
   return merged;
 }
 
+function uniqueStrings(items: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(items.filter((item): item is string => Boolean(item))));
+}
+
+function sourceName(source: RouteConfidenceTimelineSource): string {
+  return source.label || source.id || source.sourceType || 'unknown_source';
+}
+
+function diagnosticsFor(args: {
+  generatedAt: string;
+  overlays: RouteConfidenceTimelineOverlay[];
+  rejectedReasons: string[];
+  unavailableSources?: string[] | null;
+  staleSources?: string[] | null;
+}): RouteConfidenceTimelineDiagnostics {
+  return {
+    rejectedSpanCount: args.rejectedReasons.length,
+    rejectedReasons: uniqueStrings(args.rejectedReasons),
+    unavailableSources: uniqueStrings([
+      ...(args.unavailableSources ?? []),
+      ...args.overlays
+        .filter((overlay) => overlay.source.freshness === 'unavailable' || overlay.source.freshness === 'missing')
+        .map((overlay) => overlay.source.sourceType ?? sourceName(overlay.source)),
+    ]),
+    staleSources: uniqueStrings([
+      ...(args.staleSources ?? []),
+      ...args.overlays
+        .filter((overlay) => overlay.source.freshness === 'stale' || overlay.source.freshness === 'expired')
+        .map((overlay) => sourceName(overlay.source)),
+    ]),
+    generatedAt: args.generatedAt,
+  };
+}
+
+function completenessFor(args: {
+  itemCount: number;
+  rawOverlayCount: number;
+  diagnostics: RouteConfidenceTimelineDiagnostics;
+  acceptedLegacyOverlay: boolean;
+  sourceWarningCount: number;
+  coverageMode: RouteConfidenceTimelineCoverageMode;
+}): RouteConfidenceTimelineCompleteness {
+  if (args.itemCount === 0 && args.diagnostics.unavailableSources.length > 0) return 'unavailable';
+  if (args.diagnostics.rejectedSpanCount > 0) return 'partial';
+  if (
+    args.acceptedLegacyOverlay ||
+    args.sourceWarningCount > 0 ||
+    args.diagnostics.unavailableSources.length > 0 ||
+    args.diagnostics.staleSources.length > 0
+  ) {
+    return 'source_limited';
+  }
+  if (args.itemCount === 0 && args.rawOverlayCount === 0 && args.coverageMode === 'full_route') return 'complete';
+  if (args.itemCount === 0 && args.rawOverlayCount === 0) return 'source_limited';
+  return 'complete';
+}
+
 export function buildRouteConfidenceTimeline(input: BuildRouteConfidenceTimelineInput): RouteConfidenceTimeline {
   const totalMeasure = measuredRouteDistance(input.routeGeometry);
   const geometryVersion = geometryVersionFrom(input.routeGeometry, input.geometryVersion);
-  const overlays = (input.overlays ?? [])
-    .map((overlay) => normalizeOverlay(overlay, totalMeasure))
-    .filter((overlay): overlay is RouteConfidenceTimelineOverlay => Boolean(overlay));
   const generatedAt = input.generatedAt ?? new Date().toISOString();
+  const normalizeContext: NormalizeOverlayContext = {
+    routeId: input.routeId,
+    geometryVersion,
+    totalMeasure,
+    rejectedReasons: [],
+    acceptedLegacyOverlay: false,
+  };
+  const overlays = (input.overlays ?? [])
+    .map((overlay) => normalizeOverlay(overlay, normalizeContext))
+    .filter((overlay): overlay is RouteConfidenceTimelineOverlay => Boolean(overlay));
+  const sourceWarnings = input.sourceWarnings ?? [];
   const warnings = Array.from(new Set(
-    overlays
-      .map((overlay) => sourceWarning(overlay.source))
-      .filter((warning): warning is string => Boolean(warning)),
+    [
+      ...sourceWarnings,
+      ...normalizeContext.rejectedReasons,
+      ...overlays
+        .map((overlay) => sourceWarning(overlay.source))
+        .filter((warning): warning is string => Boolean(warning)),
+    ],
   ));
   const items = mergeAdjacent(
     partitionOverlays(overlays, totalMeasure).map((partition, index) =>
       itemFromPartition(input.routeId, geometryVersion, partition, index),
     ),
   );
+  const diagnostics = diagnosticsFor({
+    generatedAt,
+    overlays,
+    rejectedReasons: normalizeContext.rejectedReasons,
+    unavailableSources: input.unavailableSources,
+    staleSources: input.staleSources,
+  });
+  const coverageMode = input.coverageMode ?? 'notable_spans_only';
   return {
     routeId: input.routeId,
     geometryVersion,
@@ -268,6 +419,16 @@ export function buildRouteConfidenceTimeline(input: BuildRouteConfidenceTimeline
     items,
     warnings,
     readiness: 'feature_flagged',
+    coverageMode,
+    completeness: completenessFor({
+      itemCount: items.length,
+      rawOverlayCount: input.overlays?.length ?? 0,
+      diagnostics,
+      acceptedLegacyOverlay: normalizeContext.acceptedLegacyOverlay,
+      sourceWarningCount: sourceWarnings.length,
+      coverageMode,
+    }),
+    diagnostics,
   };
 }
 

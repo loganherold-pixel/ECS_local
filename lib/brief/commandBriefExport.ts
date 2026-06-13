@@ -152,6 +152,75 @@ function formatRouteSummary(context: CommandBriefExportContext) {
   return [title ? cleanPacketCopy(title) : null, summary, ...ids].filter(Boolean).join('\n');
 }
 
+type WeakPointExportAssessment = NonNullable<CommandBriefExportContext['weakPointAssessment']>;
+
+function formatWeakPointCoverage(assessment: WeakPointExportAssessment) {
+  return assessment.snapshotCoverage.domains.map((domain) => {
+    const details = [
+      domain.requiredFactIds.length ? `required ${domain.requiredFactIds.join(', ')}` : null,
+      domain.availableFactIds.length ? `available ${domain.availableFactIds.join(', ')}` : null,
+      domain.staleFactIds.length ? `stale ${domain.staleFactIds.join(', ')}` : null,
+      domain.unavailableFactIds.length ? `unavailable ${domain.unavailableFactIds.join(', ')}` : null,
+      domain.missingFactIds.length ? `missing ${domain.missingFactIds.join(', ')}` : null,
+    ].filter(Boolean).join('; ');
+    return `- ${domain.domain}: ${domain.status}${details ? ` (${details})` : ''}`;
+  }).join('\n');
+}
+
+function formatWeakPointSourceFacts(assessment: WeakPointExportAssessment) {
+  if (!assessment.sourceFacts.length) return '- none';
+  return assessment.sourceFacts.map((fact) => {
+    const factId = fact.factId ?? fact.id ?? 'unknown';
+    const timestamp = fact.observedAt ?? fact.generatedAt ?? fact.updatedAt ?? 'no timestamp';
+    const value = fact.value == null ? 'unavailable' : String(fact.value);
+    return `- ${factId}: ${fact.label ?? factId} = ${value}; source ${fact.sourceSystem ?? 'unknown'}; freshness ${fact.freshness ?? 'unavailable'}; confidence ${fact.confidence ?? 'unknown'}; timestamp ${timestamp}; field ${fact.fieldPath ?? 'unknown'}`;
+  }).join('\n');
+}
+
+function formatWeakPointMissingFacts(assessment: WeakPointExportAssessment) {
+  if (!assessment.missingFacts.length) return '- none';
+  return assessment.missingFacts.map((fact) => (
+    `- ${fact.factId}: ${fact.label}; domain ${fact.domain}; reason ${fact.reason}; required for ${fact.requiredFor}`
+  )).join('\n');
+}
+
+function formatWeakPointScoringTrace(assessment: WeakPointExportAssessment) {
+  if (!assessment.scoringTrace.length) return '- none';
+  return assessment.scoringTrace.map((trace) => {
+    const sourceIds = [
+      ...trace.likelihood.sourceFactIds,
+      ...trace.consequence.sourceFactIds,
+      ...trace.uncertainty.sourceFactIds,
+      ...trace.dataGap.sourceFactIds,
+    ];
+    const missingIds = [
+      ...trace.likelihood.missingFactIds,
+      ...trace.consequence.missingFactIds,
+      ...trace.uncertainty.missingFactIds,
+      ...trace.dataGap.missingFactIds,
+    ];
+    return `- ${trace.category} (${trace.candidateId}): weighted ${trace.weightedScore}/5; L${trace.likelihood.score} C${trace.consequence.score} U${trace.uncertainty.score} D${trace.dataGap.score}; score version ${trace.scoreVersion}; tie order ${trace.tieBreak.categoryOrder}; sources ${uniqueForExport(sourceIds).join(', ') || 'none'}; missing ${uniqueForExport(missingIds).join(', ') || 'none'}`;
+  }).join('\n');
+}
+
+function uniqueForExport(values: readonly (string | null | undefined)[]) {
+  return Array.from(new Set(values.filter(Boolean))) as string[];
+}
+
+function formatWeakPointActions(assessment: WeakPointExportAssessment) {
+  if (!assessment.allowedActions.length) return '- none';
+  return assessment.allowedActions.map((action) => (
+    `- ${action.actionId}: ${action.label} (${action.actionType}); sources ${action.sourceFactIds.join(', ') || 'none'}; missing ${action.missingFactIds.join(', ') || 'none'}`
+  )).join('\n');
+}
+
+function formatWeakPointMonitorSignals(assessment: WeakPointExportAssessment) {
+  if (!assessment.monitorSignals.length) return '- none';
+  return assessment.monitorSignals.map((signal) => (
+    `- ${signal.signalId}: ${signal.label} (${signal.signalType}); sources ${signal.sourceFactIds.join(', ') || 'none'}; missing ${signal.missingFactIds.join(', ') || 'none'}`
+  )).join('\n');
+}
+
 function formatWeakPointAssessment(context: CommandBriefExportContext) {
   const assessment = context.weakPointAssessment;
   if (!assessment) {
@@ -160,11 +229,30 @@ function formatWeakPointAssessment(context: CommandBriefExportContext) {
   const primary = assessment.mostFragileAssumption;
   const lines = [
     `Maturity: ${assessment.maturityLabel}. Score version: ${assessment.scoreVersion}. Source snapshot: ${assessment.sourceSnapshotId}.`,
+    `Advisory only. Assessment completeness: ${assessment.assessmentCompleteness}.`,
     primary ? `Primary weak point: ${primary.label} (${primary.riskScore.toFixed(2)}/5). ${primary.consequenceStatement}` : 'Primary weak point: unavailable.',
     assessment.mostSevereConsequence ? `Most severe consequence: ${assessment.mostSevereConsequence.consequenceStatement}` : null,
     assessment.easiestFixBeforeDeparture ? `Easiest fix before departure: ${assessment.easiestFixBeforeDeparture.easiestPreDepartureFix}` : null,
     assessment.monitorDuringTravel ? `Monitor during travel: ${assessment.monitorDuringTravel.travelMonitorSignal}` : null,
     assessment.missingData.length ? `Missing data: ${assessment.missingData.slice(0, 6).join(', ')}.` : null,
+    '',
+    'Snapshot coverage:',
+    formatWeakPointCoverage(assessment),
+    '',
+    'Source facts:',
+    formatWeakPointSourceFacts(assessment),
+    '',
+    'Missing facts:',
+    formatWeakPointMissingFacts(assessment),
+    '',
+    'Scoring trace:',
+    formatWeakPointScoringTrace(assessment),
+    '',
+    'Allowed actions:',
+    formatWeakPointActions(assessment),
+    '',
+    'Monitor signals:',
+    formatWeakPointMonitorSignals(assessment),
   ].filter(Boolean);
   return lines.map((line) => cleanPacketCopy(String(line))).join('\n');
 }

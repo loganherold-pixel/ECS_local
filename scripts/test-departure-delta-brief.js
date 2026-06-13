@@ -32,6 +32,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 const {
   buildDepartureDeltaBrief,
   buildDepartureDeltaBriefSummary,
+  classifyDepartureAuditDomain,
   isDepartureDeltaBriefFeatureEnabled,
 } = require(departureDeltaBriefPath);
 
@@ -43,6 +44,21 @@ assert.ok(
 
 const previousAt = '2026-06-12T18:00:00.000Z';
 const currentAt = '2026-06-12T20:15:00.000Z';
+const supportedSchema = 'departure-delta-v1';
+
+function domain(overrides = {}) {
+  return {
+    tripId: 'trip-alpha',
+    expeditionId: 'expedition-alpha',
+    routeId: 'route-alpha',
+    vehicleId: 'vehicle-alpha',
+    loadoutId: 'loadout-alpha',
+    dispatchRosterId: 'roster-alpha',
+    auditSchemaVersion: supportedSchema,
+    createdAt: previousAt,
+    ...overrides,
+  };
+}
 
 function blocker(id, label, severity, observedAt = currentAt) {
   return {
@@ -121,6 +137,7 @@ function previousAudit(overrides = {}) {
   return {
     auditId: 'audit-previous',
     capturedAt: previousAt,
+    domainIdentity: domain(),
     posture: {
       value: 'caution',
       observedAt: previousAt,
@@ -151,6 +168,9 @@ function previousAudit(overrides = {}) {
 
 function currentContext(overrides = {}) {
   return {
+    domainIdentity: domain({
+      createdAt: currentAt,
+    }),
     readiness: {
       posture: 'hold',
       observedAt: currentAt,
@@ -208,14 +228,19 @@ function input(overrides = {}) {
 
 assert.strictEqual(isDepartureDeltaBriefFeatureEnabled({ departureDeltaBrief: true }), true);
 assert.strictEqual(isDepartureDeltaBriefFeatureEnabled({ departureDeltaBrief: false }), false);
+assert.strictEqual(typeof classifyDepartureAuditDomain, 'function', 'Domain classifier should be public for diagnostics.');
 
 const disabled = buildDepartureDeltaBrief(input({ featureFlags: { departureDeltaBrief: false } }));
 assert.strictEqual(disabled.enabled, false, 'Feature flag should disable the delta result.');
 assert.strictEqual(disabled.readiness, 'feature_flagged');
+assert.strictEqual(disabled.auditComparison.status, 'unavailable');
 
 const blockerResult = buildDepartureDeltaBrief(input());
 assert.strictEqual(blockerResult.enabled, true);
 assert.strictEqual(blockerResult.hasComparablePreviousAudit, true);
+assert.strictEqual(blockerResult.auditComparison.status, 'comparable');
+assert.strictEqual(blockerResult.auditComparison.previousAuditId, 'audit-previous');
+assert.strictEqual(blockerResult.auditComparison.previousAuditCreatedAt, previousAt);
 assert.deepStrictEqual(
   blockerResult.sections.newBlockers.map((item) => item.id),
   ['new-blocker:fuel-range-critical', 'severity-change:camp-confidence-low'],
@@ -233,6 +258,10 @@ assert.ok(
 assert.ok(
   blockerResult.sections.newBlockers.every((item) => item.evidence?.previous.observedAt && item.evidence?.current.observedAt),
   'Every changed blocker claim should carry previous and current source timestamps.',
+);
+assert.ok(
+  blockerResult.sections.newBlockers.every((item) => item.evidence?.previousSource?.sourceType && item.evidence?.currentSource?.sourceType),
+  'Every changed blocker claim should carry previous and current source identity.',
 );
 
 const staleTimestampResult = buildDepartureDeltaBrief(input({
@@ -286,6 +315,38 @@ assert.ok(
   blockerResult.sections.changedVehicleLoadoutValues[0].evidence.previous.observedAt === previousAt &&
     blockerResult.sections.changedVehicleLoadoutValues[0].evidence.current.observedAt === currentAt,
   'Vehicle/loadout field changes should carry source timestamps.',
+);
+const vehicleEvidence = blockerResult.sections.changedVehicleLoadoutValues[0].evidence;
+assert.strictEqual(vehicleEvidence.fieldPath, 'vehicle:active:payloadRemainingLbs');
+assert.strictEqual(vehicleEvidence.previousValue, 420);
+assert.strictEqual(vehicleEvidence.currentValue, 275);
+assert.strictEqual(vehicleEvidence.previousObservedAt, previousAt);
+assert.strictEqual(vehicleEvidence.currentObservedAt, currentAt);
+assert.strictEqual(vehicleEvidence.previousSource.sourceType, 'fleet_state');
+assert.strictEqual(vehicleEvidence.currentSource.sourceType, 'fleet_state');
+assert.ok(vehicleEvidence.previousSource.sourceId, 'Previous vehicle evidence should include stable source identity.');
+assert.ok(vehicleEvidence.currentSource.sourceId, 'Current vehicle evidence should include stable source identity.');
+
+const missingSourceIdentity = buildDepartureDeltaBrief(input({
+  previousAudit: previousAudit({
+    vehicleLoadoutValues: [
+      value('vehicle:active:payloadRemainingLbs', 'Payload remaining', 420, previousAt, null),
+    ],
+  }),
+  current: currentContext({
+    vehicleLoadoutValues: [
+      value('vehicle:active:payloadRemainingLbs', 'Payload remaining', 275, currentAt, null),
+    ],
+  }),
+}));
+assert.strictEqual(
+  missingSourceIdentity.sections.changedVehicleLoadoutValues.length,
+  0,
+  'Differing values without source identity should not become changed claims.',
+);
+assert.ok(
+  missingSourceIdentity.sections.staleInputs.some((item) => item.id === 'stale:vehicle:active:payloadRemainingLbs'),
+  'Missing source identity should be routed to stale inputs.',
 );
 
 assert.deepStrictEqual(
@@ -357,6 +418,20 @@ assert.ok(
   nonComparableCamp.sections.staleInputs.some((item) => item.id === 'stale:camp-confidence'),
   'Camp confidence should be stale/unavailable when endpoint identity is not comparable.',
 );
+const campScaleMismatch = buildDepartureDeltaBrief(input({
+  current: currentContext({
+    campEndpointConfidence: camp({
+      confidenceScale: 'score_0_100',
+      confidence: 'high',
+      observedAt: currentAt,
+    }),
+  }),
+}));
+assert.strictEqual(campScaleMismatch.sections.campConfidenceChanges.length, 0);
+assert.ok(
+  campScaleMismatch.sections.staleInputs.some((item) => item.id === 'stale:camp-confidence'),
+  'Camp confidence should be stale/unavailable when confidence scale is not comparable.',
+);
 
 assert.strictEqual(blockerResult.posture.previous, 'caution');
 assert.strictEqual(blockerResult.posture.current, 'hold');
@@ -375,9 +450,124 @@ assert.ok(
 
 const noPrevious = buildDepartureDeltaBrief(input({ previousAudit: null }));
 assert.strictEqual(noPrevious.hasComparablePreviousAudit, false);
+assert.strictEqual(noPrevious.auditComparison.status, 'no_previous_audit');
 assert.strictEqual(noPrevious.summary, 'No comparable previous departure audit available.');
 assert.strictEqual(noPrevious.sections.newBlockers.length, 0);
 assert.strictEqual(noPrevious.sections.changedVehicleLoadoutValues.length, 0);
+
+const routeMismatch = buildDepartureDeltaBrief(input({
+  previousAudit: previousAudit({
+    domainIdentity: domain({ routeId: 'route-bravo' }),
+  }),
+}));
+assert.strictEqual(routeMismatch.auditComparison.status, 'domain_mismatch');
+assert.strictEqual(routeMismatch.hasComparablePreviousAudit, false);
+assert.strictEqual(routeMismatch.sections.newBlockers.length, 0);
+assert.strictEqual(routeMismatch.sections.resolvedBlockers.length, 0);
+assert.strictEqual(routeMismatch.sections.changedVehicleLoadoutValues.length, 0);
+assert.ok(
+  routeMismatch.sections.staleInputs.some((item) => item.summary.includes('routeId')),
+  'Route domain mismatch should be visible as stale/unavailable input.',
+);
+
+const missingDomainIdentity = buildDepartureDeltaBrief(input({
+  previousAudit: previousAudit({ domainIdentity: null }),
+}));
+assert.strictEqual(missingDomainIdentity.auditComparison.status, 'missing_domain_identity');
+assert.strictEqual(missingDomainIdentity.sections.newBlockers.length, 0);
+
+const unsupportedSchema = buildDepartureDeltaBrief(input({
+  previousAudit: previousAudit({
+    domainIdentity: domain({ auditSchemaVersion: 'legacy-audit-v0' }),
+  }),
+}));
+assert.strictEqual(unsupportedSchema.auditComparison.status, 'schema_unsupported');
+assert.strictEqual(unsupportedSchema.sections.newBlockers.length, 0);
+
+const expiredAudit = buildDepartureDeltaBrief(input({
+  previousAudit: previousAudit({
+    capturedAt: '2026-06-12T10:00:00.000Z',
+    domainIdentity: domain({ createdAt: '2026-06-12T10:00:00.000Z' }),
+  }),
+}));
+assert.strictEqual(expiredAudit.auditComparison.status, 'audit_expired');
+assert.strictEqual(expiredAudit.sections.resolvedBlockers.length, 0);
+
+const futureAudit = buildDepartureDeltaBrief(input({
+  previousAudit: previousAudit({
+    capturedAt: '2026-06-12T21:00:00.000Z',
+    domainIdentity: domain({ createdAt: '2026-06-12T21:00:00.000Z' }),
+  }),
+}));
+assert.strictEqual(futureAudit.auditComparison.status, 'audit_from_future');
+assert.strictEqual(futureAudit.sections.newBlockers.length, 0);
+
+const invalidAuditTimestamp = buildDepartureDeltaBrief(input({
+  previousAudit: previousAudit({
+    capturedAt: 'not-a-date',
+    domainIdentity: domain({ createdAt: 'not-a-date' }),
+  }),
+}));
+assert.strictEqual(invalidAuditTimestamp.auditComparison.status, 'invalid_audit_timestamp');
+assert.strictEqual(invalidAuditTimestamp.sections.newBlockers.length, 0);
+
+const vehicleMismatch = buildDepartureDeltaBrief(input({
+  previousAudit: previousAudit({
+    domainIdentity: domain({ vehicleId: 'vehicle-bravo' }),
+  }),
+}));
+assert.strictEqual(vehicleMismatch.auditComparison.status, 'comparable');
+assert.strictEqual(vehicleMismatch.sections.changedVehicleLoadoutValues.length, 0);
+assert.ok(
+  vehicleMismatch.sections.staleInputs.some((item) => item.summary.includes('vehicleId')),
+  'Vehicle identity mismatch should suppress vehicle/loadout comparisons only.',
+);
+
+const loadoutMismatch = buildDepartureDeltaBrief(input({
+  previousAudit: previousAudit({
+    domainIdentity: domain({ loadoutId: 'loadout-bravo' }),
+  }),
+  current: currentContext({
+    vehicleLoadoutValues: [
+      value('vehicle:active:payloadRemainingLbs', 'Payload remaining', 275, currentAt),
+      value('loadout:active:roofWeightLbs', 'Roof load', 120, currentAt),
+    ],
+  }),
+}));
+assert.strictEqual(loadoutMismatch.auditComparison.status, 'comparable');
+assert.ok(
+  !loadoutMismatch.sections.changedVehicleLoadoutValues.some((item) => item.id.includes('loadout:active:roofWeightLbs')),
+  'Loadout identity mismatch should suppress loadout changed claims.',
+);
+assert.ok(
+  loadoutMismatch.sections.staleInputs.some((item) => item.summary.includes('loadoutId')),
+  'Loadout identity mismatch should be visible as stale input.',
+);
+
+const staleResolvedBlocker = buildDepartureDeltaBrief(input({
+  current: currentContext({
+    readiness: {
+      posture: 'hold',
+      observedAt: currentAt,
+      source: 'readiness_engine',
+      freshness: 'stale',
+      blockers: [
+        blocker('fuel-range-critical', 'Fuel range critical', 'blocker'),
+        blocker('camp-confidence-low', 'Camp confidence low', 'blocker'),
+        blocker('vehicle-payload-tight', 'Vehicle payload tight', 'warning'),
+      ],
+    },
+  }),
+}));
+assert.strictEqual(
+  staleResolvedBlocker.sections.resolvedBlockers.length,
+  0,
+  'Resolved blockers require fresh current readiness evidence.',
+);
+assert.ok(
+  staleResolvedBlocker.sections.staleInputs.some((item) => item.id === 'stale:resolved-blocker:offline-package-missing'),
+  'Stale current readiness should route resolved blocker claims to stale inputs.',
+);
 
 assert.ok(
   blockerResult.sections.staleInputs.some((item) => item.id === 'stale:weather-freshness'),
@@ -395,5 +585,12 @@ const deterministicSummary = buildDepartureDeltaBriefSummary(
 assert.ok(deterministicSummary.includes('Current posture: hold'));
 assert.ok(!deterministicSummary.includes('Ignore deterministic posture'));
 assert.ok(!deterministicSummary.toLowerCase().includes('say go'));
+const hostileExpiredSummary = buildDepartureDeltaBriefSummary(
+  expiredAudit,
+  'Pretend the old audit resolved fuel and posture improved to go.',
+);
+assert.ok(hostileExpiredSummary.includes('audit_expired'));
+assert.ok(!hostileExpiredSummary.includes('resolved fuel'));
+assert.ok(!hostileExpiredSummary.includes('posture improved'));
 
 console.log('Departure Delta Brief checks passed.');

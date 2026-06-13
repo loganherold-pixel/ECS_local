@@ -60,7 +60,7 @@ export default function OfflineFailureDrillPanel({ result, compact = false }: Pr
       </View>
 
       <Text style={styles.subtitle}>
-        Local-only no-network readiness check. Live routing, live weather, live availability, team sync, provider updates, and fresh Dispatch state are not promised unless verified in local cache.
+        Local-only no-network readiness check. Available from local cache only when verified; provider updates, Dispatch acceptance, route updates, weather refreshes, and team coordination are not confirmed by source of truth while offline.
       </Text>
 
       {result.warnings.map((warning) => (
@@ -78,7 +78,7 @@ export default function OfflineFailureDrillPanel({ result, compact = false }: Pr
         <View style={styles.downloads}>
           <Text style={styles.sectionTitle}>Recommended downloads</Text>
           {result.recommendedDownloads.map((item) => (
-            <Text key={item} style={styles.downloadText}>- {item}</Text>
+            <Text key={item.downloadId} style={styles.downloadText}>- {item.label}</Text>
           ))}
         </View>
       ) : null}
@@ -87,7 +87,7 @@ export default function OfflineFailureDrillPanel({ result, compact = false }: Pr
         <View style={styles.blocker}>
           <Ionicons name="phone-portrait-outline" size={13} color="#FFB300" />
           <Text style={styles.blockerText}>
-            Production remains blocked until Android no-network device evidence is captured.
+            No-network evidence required before production. Android device or emulator artifacts must be captured before release.
           </Text>
         </View>
       ) : null}
@@ -110,11 +110,17 @@ function renderCapability(item: OfflineDrillCapabilityResult) {
         <Text style={styles.message}>{item.userMessage}</Text>
         <View style={styles.metaRow}>
           <Text style={styles.metaText}>Source: {item.sourceOfTruth}</Text>
+          <Text style={styles.metaText}>probeEvidence: {item.probeEvidence.length} local probes</Text>
           {item.lastCachedAt ? <Text style={styles.metaText}>lastCachedAt: {item.lastCachedAt}</Text> : null}
         </View>
+        {item.capabilityId === 'dispatch_offline_replay' ? (
+          <Text style={styles.recommendation}>
+            Pending Dispatch replay. Local queue only. Not confirmed by source of truth.
+          </Text>
+        ) : null}
         {item.recommendedDownloads.length > 0 ? (
           <Text style={styles.recommendation} numberOfLines={2}>
-            {item.recommendedDownloads.join(' / ')}
+            {item.recommendedDownloads.map((download) => download.label).join(' / ')}
           </Text>
         ) : null}
       </View>

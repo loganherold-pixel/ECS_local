@@ -166,7 +166,9 @@ assert.ok(assessment.warnings.some((warning) => /official confirmation|Legal Acc
 const navigateSource = read('app', '(tabs)', 'navigate.tsx');
 assert.ok(navigateSource.includes('buildReadinessCampCandidatesFromCampOps'), 'Navigate should feed CampOps recommendations into readiness.');
 assert.ok(navigateSource.includes('buildCampDecisionClockDecisionFromRecommendationSet'), 'Navigate should translate CampOps decision points into Command Brief decision clock readiness.');
+assert.ok(navigateSource.includes('isCampDecisionClockFeatureEnabled'), 'Navigate should resolve the Camp Decision Clock runtime feature flag.');
 assert.ok(navigateSource.includes('campDecisionClock: navigateCampDecisionClock'), 'Navigate should pass Camp Decision Clock output through readiness.');
+assert.ok(navigateSource.includes('campDecisionClockFeatureEnabled: navigateCampDecisionClockFeatureEnabled'), 'Navigate should pass the Camp Decision Clock runtime feature flag through readiness.');
 assert.ok(navigateSource.includes('buildReadinessCampCandidatesFromCampScout'), 'Navigate should feed dispersed Camp Scout candidates into readiness.');
 assert.ok(navigateSource.includes('mergeReadinessCampCandidateSets'), 'Navigate should merge camp candidate sources for readiness.');
 assert.ok(navigateSource.includes("campScoutAreaMode === 'results'"), 'Dispersed camping scan/filter state should affect readiness context.');

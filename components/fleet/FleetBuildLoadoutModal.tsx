@@ -45,8 +45,12 @@ import {
 import { FLEET_LOAD_ZONES, toFleetLoadZone, type FleetLoadZone, type FleetWeightSource } from '../../lib/fleet/fleetPremiumDomain';
 import { emitFleetTelemetryEvent } from '../../lib/fleet/fleetTelemetryEvents';
 import {
+  applyLoadoutSuggestionAction,
   buildLoadoutConsequencePreview,
+  invalidateLoadoutConsequenceMirror,
   publishLoadoutConsequencePreview,
+  type LoadoutSuggestionAction,
+  type LoadoutConsequenceSuggestion,
 } from '../../lib/fleet/loadoutConsequencePreview';
 import {
   FLEET_LOADOUT_QUICK_ADD_CATALOG,
@@ -175,6 +179,8 @@ export default function FleetBuildLoadoutModal({
     if (!fleetVehicle || !vehicle) return null;
     return buildLoadoutConsequencePreview({
       vehicleId: fleetVehicle.id,
+      profileId: fleetVehicle.buildProfile.id,
+      loadoutId: fleetVehicle.activeLoadoutId ?? undefined,
       vehicle: fleetVehicle,
       currentAccessories: toFleetAccessoryInstalls(committedBuildLoadoutState, fleetVehicle.id),
       currentLoadoutItems: toFleetCompartmentLoadoutItems(committedBuildLoadoutState, fleetVehicle.id),
@@ -185,20 +191,35 @@ export default function FleetBuildLoadoutModal({
         suspensionLiftInches: fleetVehicle.buildProfile.suspensionLiftInches,
         isLeveled: fleetVehicle.buildProfile.isLeveled,
       },
-      routeContext: { difficulty: 'unknown', remoteness: 'unknown', recoveryPosture: 'unknown' },
+      routeContext: {
+        difficulty: 'unknown',
+        remoteness: 'unknown',
+        recoveryPosture: 'unknown',
+        freshness: 'unavailable',
+        sourceKind: 'estimated',
+      },
       calculationMode: 'preview',
     });
   }, [committedBuildLoadoutState, fleetVehicle, state, vehicle]);
 
   useEffect(() => {
     if (!visible || !consequencePreview) return;
-    publishLoadoutConsequencePreview(consequencePreview);
+    publishLoadoutConsequencePreview(consequencePreview, { source: 'proposed_preview' });
     emitFleetTelemetryEvent('preview_generated', {
       vehicleId: consequencePreview.vehicleId,
       meta: {
         availability: consequencePreview.availability,
         payloadDeltaLb: consequencePreview.payloadDeltaLb,
         gvwrPercentAfter: consequencePreview.gvwrPercentAfter,
+      },
+    });
+    emitFleetTelemetryEvent('command_brief_mirror_updated', {
+      vehicleId: consequencePreview.vehicleId,
+      meta: {
+        source: 'proposed_preview',
+        profileId: consequencePreview.calculationTrace.profileId ?? null,
+        loadoutId: consequencePreview.calculationTrace.loadoutId ?? null,
+        routeId: consequencePreview.calculationTrace.routeId ?? null,
       },
     });
   }, [consequencePreview, visible]);
@@ -223,9 +244,23 @@ export default function FleetBuildLoadoutModal({
   const isCustomLoadoutDraft = selectedDraftCompartment?.accessoryId === 'custom_accessory';
 
   const closeAndClearPreview = useCallback(() => {
-    publishLoadoutConsequencePreview(null);
+    const nextSnapshot = invalidateLoadoutConsequenceMirror('preview_cancelled', {
+      vehicleId: fleetVehicle?.id ?? vehicle?.id ?? null,
+      profileId: fleetVehicle?.buildProfile.id ?? null,
+      loadoutId: fleetVehicle?.activeLoadoutId ?? null,
+      routeId: consequencePreview?.calculationTrace.routeId ?? null,
+      routeGeometryVersion: consequencePreview?.calculationTrace.routeGeometryVersion ?? null,
+    });
+    emitFleetTelemetryEvent('command_brief_mirror_invalidated', {
+      vehicleId: fleetVehicle?.id ?? vehicle?.id ?? null,
+      meta: {
+        invalidationReason: 'preview_cancelled',
+        source: nextSnapshot.mirror?.source ?? null,
+        stale: nextSnapshot.mirror?.stale ?? true,
+      },
+    });
     onClose();
-  }, [onClose]);
+  }, [consequencePreview, fleetVehicle, onClose, vehicle]);
 
   const openEditor = useCallback((catalog: FleetAccessoryCatalogItem) => {
     const existing = state.accessories.find((item) => item.accessoryId === catalog.id);
@@ -336,10 +371,22 @@ export default function FleetBuildLoadoutModal({
         acknowledgedHighMountedRisk: Boolean(options?.acknowledgeHighMountedRisk),
       },
     });
+    if (consequencePreview) {
+      publishLoadoutConsequencePreview(consequencePreview, { source: 'committed_loadout' });
+      emitFleetTelemetryEvent('command_brief_mirror_updated', {
+        vehicleId: vehicle.id,
+        meta: {
+          source: 'committed_loadout',
+          profileId: consequencePreview.calculationTrace.profileId ?? null,
+          loadoutId: consequencePreview.calculationTrace.loadoutId ?? null,
+          routeId: consequencePreview.calculationTrace.routeId ?? null,
+        },
+      });
+    }
     showToast?.('Build & Loadout saved');
     onSaved?.();
     onClose();
-  }, [onClose, onSaved, showToast, state, userId, vehicle]);
+  }, [consequencePreview, onClose, onSaved, showToast, state, userId, vehicle]);
 
   const handleSave = useCallback(async () => {
     if (!vehicle) return;
@@ -458,6 +505,71 @@ export default function FleetBuildLoadoutModal({
     closeLoadoutEditor();
   }, [activeCompartments, closeLoadoutEditor, loadoutDraft, selectedQuickAddIds, showToast, vehicle]);
 
+  const handleConsequenceSuggestionAction = useCallback((
+    suggestion: LoadoutConsequenceSuggestion,
+    action: LoadoutSuggestionAction,
+  ) => {
+    if (!vehicle || !fleetVehicle || !consequencePreview) return;
+    const result = applyLoadoutSuggestionAction({
+      preview: consequencePreview,
+      actionId: action.actionId,
+      state,
+      currentVehicleId: fleetVehicle.id,
+      currentProfileId: fleetVehicle.buildProfile.id,
+      currentLoadoutId: fleetVehicle.activeLoadoutId ?? undefined,
+    });
+    const telemetryEvent = result.applicationState === 'applied'
+      ? 'suggestion_applied'
+      : result.applicationState === 'failed'
+        ? 'suggestion_apply_failed'
+        : result.telemetryEvent;
+    emitFleetTelemetryEvent(telemetryEvent, {
+      vehicleId: fleetVehicle.id,
+      meta: {
+        suggestionId: suggestion.id,
+        actionId: action.actionId,
+        actionKind: action.actionKind,
+        applicationState: result.applicationState,
+        reason: result.reason,
+        itemId: suggestion.itemId ?? null,
+        targetZone: suggestion.targetZone ?? null,
+      },
+    });
+
+    if (result.applicationState === 'applied') {
+      const nextSnapshot = invalidateLoadoutConsequenceMirror('loadout_changed', {
+        vehicleId: fleetVehicle.id,
+        profileId: fleetVehicle.buildProfile.id,
+        loadoutId: fleetVehicle.activeLoadoutId ?? null,
+        routeId: consequencePreview.calculationTrace.routeId ?? null,
+        routeGeometryVersion: consequencePreview.calculationTrace.routeGeometryVersion ?? null,
+      });
+      emitFleetTelemetryEvent('command_brief_mirror_invalidated', {
+        vehicleId: fleetVehicle.id,
+        meta: {
+          invalidationReason: 'loadout_changed',
+          source: nextSnapshot.mirror?.source ?? null,
+          stale: nextSnapshot.mirror?.stale ?? true,
+        },
+      });
+      setState(result.nextState);
+      showToast?.(result.reason);
+      return;
+    }
+
+    if (result.applicationState === 'review_only' && action.actionKind === 'open_editor') {
+      const targetItem = (state.loadoutItems ?? []).find((item) => item.id === action.targetItemIds[0]) ?? null;
+      const compartment = targetItem
+        ? state.compartments.find((item) => item.id === targetItem.compartmentId && item.status !== 'removed') ?? null
+        : null;
+      if (targetItem && compartment) {
+        openLoadoutEditor(compartment, targetItem);
+      }
+    }
+
+    showToast?.(result.reason);
+  }, [consequencePreview, fleetVehicle, openLoadoutEditor, showToast, state, vehicle]);
+
   if (!vehicle) return null;
 
   return (
@@ -504,9 +616,7 @@ export default function FleetBuildLoadoutModal({
 
           <LoadoutConsequencePreviewPanel
             preview={consequencePreview}
-            onSuggestionAccepted={(suggestion) => {
-              showToast?.(`${suggestion.itemName} suggestion recorded`);
-            }}
+            onSuggestionAction={handleConsequenceSuggestionAction}
           />
 
           <View style={styles.tileGrid}>

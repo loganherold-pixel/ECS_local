@@ -1,0 +1,78 @@
+{
+  "fixtureId": "offline_source_limited",
+  "description": "No-network profile with cached route, stale weather, pending Dispatch replay, and local recovery documents.",
+  "now": "2026-06-13T18:00:00.000Z",
+  "featureFlags": {
+    "campDecisionClock": true,
+    "departureDeltaBrief": true,
+    "routeConfidenceTimeline": true,
+    "expeditionWeakPointAnalyzer": true,
+    "convoyStalenessLadder": true,
+    "recoveryPacketBuilder": true,
+    "expeditionReplayDebrief": true,
+    "offlineFailureDrill": true,
+    "loadoutConsequencePreview": true
+  },
+  "offlineDrill": {
+    "now": "2026-06-13T18:00:00.000Z",
+    "featureFlags": { "offlineFailureDrill": true },
+    "noNetworkModeVerified": true,
+    "capabilities": {
+      "offline_navigation": {
+        "availableInputs": ["route_geometry", "route_cache"],
+        "missingInputs": ["route_tiles"],
+        "lastCachedAt": "2026-06-13T17:45:00.000Z",
+        "sourceOfTruth": "offline_navigation_local_cache"
+      },
+      "offline_honesty": {
+        "availableInputs": ["cache_manifest", "source_timestamps"],
+        "lastCachedAt": "2026-06-13T17:45:00.000Z",
+        "sourceOfTruth": "offline_honesty_manifest"
+      },
+      "command_brief": {
+        "availableInputs": ["command_brief_snapshot", "credential_restore_material"],
+        "staleInputs": ["weather_packet"],
+        "lastCachedAt": "2026-06-12T12:00:00.000Z",
+        "sourceOfTruth": "command_brief_local_snapshot"
+      },
+      "navigate": {
+        "availableInputs": ["saved_route", "route_geometry", "route_cache"],
+        "missingInputs": ["route_tiles"],
+        "lastCachedAt": "2026-06-13T17:45:00.000Z",
+        "sourceOfTruth": "navigate_local_route_state"
+      },
+      "campops": {
+        "availableInputs": ["camp_packet", "camp_cache"],
+        "staleInputs": ["weather_packet"],
+        "lastCachedAt": "2026-06-12T12:00:00.000Z",
+        "sourceOfTruth": "campops_local_cache"
+      },
+      "dispatch_offline_replay": {
+        "availableInputs": ["dispatch_queue_persistence", "credential_restore_material"],
+        "missingInputs": ["fresh_dispatch_state"],
+        "lastCachedAt": "2026-06-13T17:30:00.000Z",
+        "sourceOfTruth": "dispatch_local_queue"
+      },
+      "incident_recovery": {
+        "availableInputs": ["recovery_docs", "incident_protocols", "coordinate_tools"],
+        "staleInputs": ["weather_packet"],
+        "lastCachedAt": "2026-06-13T17:45:00.000Z",
+        "sourceOfTruth": "incident_recovery_local_docs"
+      },
+      "field_utilities": {
+        "availableInputs": ["field_protocols", "recovery_docs"],
+        "manualFallbackRequired": true,
+        "lastCachedAt": "2026-06-13T17:45:00.000Z",
+        "sourceOfTruth": "field_utilities_local_docs"
+      }
+    },
+    "androidEvidence": {
+      "noNetworkDeviceEvidence": false,
+      "screenshotsCaptured": false,
+      "logsCaptured": false,
+      "cacheManifestCaptured": false,
+      "noRemoteSyncConfirmed": false,
+      "productionDecision": "blocked"
+    }
+  }
+}

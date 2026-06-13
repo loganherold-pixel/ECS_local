@@ -268,14 +268,62 @@ export type RouteConfidenceTimelineDriverCategory =
   | 'camp_deadline'
   | 'recovery_exposure';
 
-export type RouteConfidenceTimelineSourceFreshness = 'fresh' | 'stale' | 'missing' | 'unknown';
+export type RouteConfidenceTimelineSourceFreshness = 'fresh' | 'stale' | 'missing' | 'unknown' | 'expired' | 'unavailable';
+
+export type RouteConfidenceOverlaySourceType =
+  | 'route_catalog'
+  | 'closure_condition'
+  | 'offline_navigation'
+  | 'weather_intelligence'
+  | 'terrain_exposure'
+  | 'bailout_density'
+  | 'campops'
+  | 'incident_recovery'
+  | 'route_context_engine'
+  | 'unknown';
+
+export type RouteConfidenceDriverCategory = RouteConfidenceTimelineDriverCategory;
+export type RouteConfidenceLevel = RouteConfidenceTimelineConfidenceLevel;
+export type RouteConditionState = RouteConfidenceTimelineConditionState;
+export type RouteConfidenceSourceFreshness = 'fresh' | 'stale' | 'expired' | 'unavailable';
+export type RouteConfidenceValidationState = 'validated' | 'inferred' | 'unvalidated' | 'unknown';
+
+export type RouteConfidenceTimelineCoverageMode =
+  | 'full_route'
+  | 'notable_spans_only';
+
+export type RouteConfidenceTimelineCompleteness =
+  | 'complete'
+  | 'partial'
+  | 'source_limited'
+  | 'unavailable';
+
+export type RouteConfidenceTimelineMergeReason =
+  | 'none'
+  | 'adjacent_same_state'
+  | 'overlap_highest_impact'
+  | 'source_gap_preserved'
+  | 'not_merged_different_condition'
+  | 'not_merged_different_driver';
+
+export type RouteConfidenceTimelineDiagnostics = {
+  rejectedSpanCount: number;
+  rejectedReasons: string[];
+  unavailableSources: string[];
+  staleSources: string[];
+  generatedAt: string;
+};
 
 export type RouteConfidenceTimelineSource = {
   id: string;
   label: string;
   sourceType?: string | null;
   observedAt?: string | null;
+  generatedAt?: string | null;
+  expiresAt?: string | null;
   freshness: RouteConfidenceTimelineSourceFreshness;
+  validation?: RouteConfidenceValidationState | null;
+  schemaVersion?: string | null;
   detail?: string | null;
 };
 
@@ -287,6 +335,7 @@ export type RouteConfidenceTimelineDriver = {
   conditionState: RouteConfidenceTimelineConditionState;
   source: RouteConfidenceTimelineSource;
   detail?: string | null;
+  impactRank?: number | null;
 };
 
 export type RouteConfidenceTimelineItem = {
@@ -301,6 +350,9 @@ export type RouteConfidenceTimelineItem = {
   primaryDriver: RouteConfidenceTimelineDriver;
   drivers: RouteConfidenceTimelineDriver[];
   sourceFreshness: RouteConfidenceTimelineSource[];
+  contributingDrivers: RouteConfidenceTimelineDriver[];
+  sources: RouteConfidenceTimelineSource[];
+  mergeReason?: RouteConfidenceTimelineMergeReason;
 };
 
 export type RouteConfidenceTimeline = {
@@ -311,10 +363,15 @@ export type RouteConfidenceTimeline = {
   items: RouteConfidenceTimelineItem[];
   warnings: string[];
   readiness: 'feature_flagged';
+  coverageMode: RouteConfidenceTimelineCoverageMode;
+  completeness: RouteConfidenceTimelineCompleteness;
+  diagnostics: RouteConfidenceTimelineDiagnostics;
 };
 
 export type RouteConfidenceTimelineOverlay = {
   id: string;
+  routeId?: string | null;
+  routeGeometryVersion?: string | null;
   startMeasure: number;
   endMeasure: number;
   label: string;
@@ -323,6 +380,43 @@ export type RouteConfidenceTimelineOverlay = {
   driverCategory: RouteConfidenceTimelineDriverCategory;
   source: RouteConfidenceTimelineSource;
   detail?: string | null;
+  impactRank?: number | null;
+};
+
+export type RouteConfidenceOverlaySource = {
+  sourceType: RouteConfidenceOverlaySourceType;
+  sourceId?: string;
+  sourceName?: string;
+  observedAt?: string;
+  generatedAt?: string;
+  expiresAt?: string;
+  freshness: RouteConfidenceSourceFreshness;
+  validation: RouteConfidenceValidationState;
+  schemaVersion?: string;
+};
+
+export type RouteConfidenceOverlaySpan = {
+  routeId: string;
+  routeGeometryVersion: string;
+  startMeasure: number;
+  endMeasure: number;
+  driverCategory: RouteConfidenceDriverCategory;
+  confidenceLevel: RouteConfidenceLevel;
+  conditionState: RouteConditionState;
+  label: string;
+  detail?: string;
+  source: RouteConfidenceOverlaySource;
+  impactRank?: number;
+};
+
+export type RouteConfidenceOverlayAdapterResult = {
+  routeId: string;
+  routeGeometryVersion: string;
+  sourceType: RouteConfidenceOverlaySourceType;
+  spans: RouteConfidenceOverlaySpan[];
+  warnings: string[];
+  unavailableReason?: string;
+  generatedAt: string;
 };
 
 export type RouteContext = {

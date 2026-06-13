@@ -48,11 +48,37 @@ const readiness = {
   ...require(path.join(root, 'lib', 'readiness', 'expeditionReadinessScoring.ts')),
   ...require(path.join(root, 'lib', 'readiness', 'expeditionReadinessFixtures.ts')),
 };
+const weakPoint = require(path.join(root, 'lib', 'readiness', 'expeditionWeakPointAnalyzer.ts'));
 const brief = require(path.join(root, 'lib', 'brief'));
 const packageSource = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
 const commandBriefSource = fs.readFileSync(path.join(root, 'components', 'brief', 'CommandBriefScreen.tsx'), 'utf8');
 
 const assessment = readiness.buildExpeditionReadiness(readiness.overnightDispersedCampingFixture);
+const weakPointAssessment = weakPoint.scoreExpeditionWeakPoints({
+  snapshotId: 'command-brief-export-weak-point',
+  capturedAt: '2026-05-13T19:00:00.000Z',
+  routeConfidence: { confidence: 'high', sourceFactIds: ['route-confidence'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  fuelMargin: { reserveMiles: 80, sourceFactIds: ['fuel-margin'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  waterMargin: { daysRemaining: 2, requiredDays: 1, sourceFactIds: ['water-margin'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  powerMargin: { runtimeHoursRemaining: 18, requiredRuntimeHours: 8, sourceFactIds: ['power-margin'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  payloadGvwr: { gvwrUsagePct: 74, sourceFactIds: ['payload-margin'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  campEndpointConfidence: {
+    endpointId: 'camp-a',
+    legalAccessConfidence: 'low',
+    accessConfidence: 'low',
+    etaCreatesLateArrivalRisk: true,
+    sourceFactIds: ['camp-access'],
+    updatedAt: '2026-05-13T18:45:00.000Z',
+  },
+  offlineReadiness: { packageStatus: 'ready', routeMatched: true, coverage: 'complete', freshness: 'fresh', sourceFactIds: ['offline-package'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  weatherFreshness: { riskLevel: 'low', freshness: 'fresh', sourceFactIds: ['weather'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  daylight: { minutesRemainingAtArrival: 45, sourceFactIds: ['daylight'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  recoveryBailoutAccess: { bailoutRoutesAvailable: true, routeBailoutOptionCount: 2, sourceFactIds: ['recovery'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  convoyState: { rosterReady: true, communicationsReady: true, membersAccountedFor: true, sourceFactIds: ['convoy'], updatedAt: '2026-05-13T18:45:00.000Z' },
+  sourceFacts: [
+    { id: 'camp-access', label: 'Camp endpoint confidence', value: 'low legal/access confidence', updatedAt: '2026-05-13T18:45:00.000Z' },
+  ],
+});
 const packet = brief.buildCommandBriefPacket({
   assessment,
   routeName: 'Canyon Rim Overnight Route',
@@ -60,6 +86,7 @@ const packet = brief.buildCommandBriefPacket({
   activeVehicle: readiness.overnightDispersedCampingFixture.activeVehicle,
   activeRouteId: 'route-overnight-dispersed',
   activeTripId: 'trip-command-brief-test',
+  weakPointAssessment,
 }, { generatedAt: '2026-05-13T19:00:00.000Z' });
 
 assert.strictEqual(packet.format, 'markdown');
@@ -72,6 +99,16 @@ assert.ok(packet.body.includes('## Trip Intent'), 'Packet should include trip in
 assert.ok(packet.body.includes('## Active Vehicle'), 'Packet should include active vehicle section.');
 assert.ok(packet.body.includes('Vehicle Capacity / Clearance Status'), 'Packet should include vehicle capacity and clearance status.');
 assert.ok(packet.body.includes('## Route Summary'), 'Packet should include route summary.');
+assert.ok(packet.body.includes('## What Breaks First?'), 'Packet should include the Weak Point Analyzer section.');
+assert.ok(packet.body.includes('Advisory only. Assessment completeness:'), 'Weak Point export should keep advisory beta posture and completeness.');
+assert.ok(packet.body.includes('Snapshot coverage:'), 'Weak Point export should include domain coverage.');
+assert.ok(packet.body.includes('Source facts:'), 'Weak Point export should include source fact provenance.');
+assert.ok(packet.body.includes('Missing facts:'), 'Weak Point export should include missing fact provenance.');
+assert.ok(packet.body.includes('Scoring trace:'), 'Weak Point export should include deterministic scoring trace.');
+assert.ok(packet.body.includes('Allowed actions:'), 'Weak Point export should include deterministic allowed actions.');
+assert.ok(packet.body.includes('Monitor signals:'), 'Weak Point export should include deterministic monitor signals.');
+assert.ok(packet.body.includes('camp-access'), 'Weak Point export should preserve source fact IDs.');
+assert.ok(packet.body.includes('weighted'), 'Weak Point export should preserve weighted score trace lines.');
 assert.ok(packet.body.includes('## Top Blockers'), 'Packet should include blockers.');
 assert.ok(packet.body.includes('## Top Warnings'), 'Packet should include warnings.');
 assert.ok(packet.body.includes('Camp Confidence Summary'), 'Packet should include camp confidence.');

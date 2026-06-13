@@ -4,6 +4,7 @@ export * from './routeContextProviders';
 export * from './trailheadResolver';
 export * from './routeContextGeometry';
 export * from './routeConfidenceTimeline';
+export * from './routeConfidenceOverlayAdapters';
 export * from './routeContextTelemetry';
 export * from './routeContextAdapters';
 export {

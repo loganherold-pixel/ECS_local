@@ -35,8 +35,16 @@ function assertNotIncludes(source, fragment, message) {
   'Most severe consequence:',
   'Easiest fix before departure:',
   'Monitor during travel:',
+  'Assessment completeness:',
+  'Provenance / trace:',
+  'Source facts:',
+  'Scoring trace:',
+  'Advisory only.',
   'What changed since last check?',
   'No comparable previous departure audit available.',
+  'auditComparison',
+  'departureDeltaBriefUnavailableCopy',
+  "result.auditComparison.status !== 'comparable'",
   'New blockers',
   'Resolved blockers',
   'Stale inputs',
@@ -67,6 +75,12 @@ function assertNotIncludes(source, fragment, message) {
   'useCanStartExpedition',
   'useExpeditionReadinessState',
   'campDecisionClock',
+  'campDecisionClockEnabled',
+  'isCampDecisionClockFeatureEnabled',
+  'useCampDecisionClockRuntimeNow',
+  'nextCampDecisionClockDeadlineMs',
+  "AppState.addEventListener('change'",
+  'useFocusEffect',
   'departureDeltaBriefEnabled',
   'buildDepartureDeltaBrief',
   'isDepartureDeltaBriefFeatureEnabled',
@@ -74,6 +88,10 @@ function assertNotIncludes(source, fragment, message) {
   'scoreExpeditionWeakPoints',
   'buildExpeditionReadinessSnapshotForWeakPoints',
   'isWeakPointAnalyzerFeatureEnabled',
+  'assessment.assessmentCompleteness',
+  'assessment.snapshotCoverage.domains',
+  'assessment.sourceFacts.length',
+  'assessment.scoringTrace.length',
 ].forEach((fragment) => {
   assertIncludes(commandBrief, fragment, `Command Brief should consume readiness selector "${fragment}".`);
 });
@@ -171,8 +189,38 @@ assertIncludes(
 );
 assertIncludes(
   commandBrief,
+  'campDecisionClockEnabled ? <CampDecisionClockBriefModule decision={campDecisionClock} /> : null',
+  'Command Brief should render the Camp Decision Clock module only behind the runtime feature flag.',
+);
+assertIncludes(
+  commandBrief,
+  'nowMs >= continueCutoffMs',
+  'Command Brief should transition to divert-now at continueUntil, not after it.',
+);
+assertIncludes(
+  commandBrief,
+  'emergencyViabilityExpired',
+  'Command Brief should stop presenting expired emergency viability as active guidance.',
+);
+assertIncludes(
+  commandBrief,
+  'Emergency endpoint viability expired.',
+  'Command Brief should render an expired emergency endpoint as unavailable/equivalent guidance.',
+);
+assertIncludes(
+  commandBrief,
+  'Camp Decision Clock disabled',
+  'Command Brief should keep disabled Camp Decision Clock guidance out of the user-facing section stack.',
+);
+assertIncludes(
+  commandBrief,
   'departureDeltaBriefEnabled ? <DepartureDeltaBriefPanel result={departureDeltaBrief} /> : null',
   'Command Brief should render the Departure Delta Brief panel only behind the feature flag.',
+);
+assertIncludes(
+  commandBrief,
+  'result.auditComparison.warnings[0]',
+  'Command Brief should surface compact audit-comparison stale/unavailable reasons without raw debug metadata.',
 );
 assertIncludes(
   commandBrief,

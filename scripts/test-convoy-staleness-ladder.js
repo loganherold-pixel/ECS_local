@@ -23,10 +23,20 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 const {
   CONVOY_STALENESS_GROUP_ORDER,
   buildConvoyStalenessLadder,
+  buildConvoyStalenessPolicyEvidenceFromConfig,
+  validateConvoyStalenessPolicy,
 } = require(ladderPath);
 
 const now = '2026-06-13T16:00:00.000Z';
-const policy = { delayedAfter: 10, staleAfter: 20, missingAfter: 40 };
+const policy = { delayedAfter: 10, staleAfter: 20, missingAfter: 40, unit: 'minutes' };
+const policySource = {
+  policyId: 'policy-convoy-1',
+  source: 'expedition_config',
+  sourceId: 'expedition-1',
+  convoyId: 'convoy-1',
+  updatedAt: '2026-06-13T15:55:00.000Z',
+  schemaVersion: 'convoy-staleness-policy-v1',
+};
 const basePermissions = {
   canViewRoster: true,
   canViewStatus: true,
@@ -58,6 +68,8 @@ function ladder(overrides = {}) {
   return buildConvoyStalenessLadder({
     now,
     policy,
+    policySource,
+    context: { convoyId: 'convoy-1', expeditionId: 'expedition-1' },
     permissions: basePermissions,
     roster: [member('lead')],
     lastAcceptedCheckIns: [{ memberId: 'lead', acceptedAt: minutesAgo(5), source: 'dispatch' }],
@@ -65,6 +77,16 @@ function ladder(overrides = {}) {
     ...overrides,
   });
 }
+
+const validPolicyEvidence = validateConvoyStalenessPolicy(policy, policySource, {
+  now,
+  context: { convoyId: 'convoy-1', expeditionId: 'expedition-1' },
+});
+assert.strictEqual(validPolicyEvidence.status, 'valid');
+assert.deepStrictEqual(validPolicyEvidence.policy, policy);
+assert.strictEqual(validPolicyEvidence.source.source, 'expedition_config');
+assert.strictEqual(validPolicyEvidence.source.policyId, 'policy-convoy-1');
+assert.strictEqual(validPolicyEvidence.source.schemaVersion, 'convoy-staleness-policy-v1');
 
 const denied = ladder({
   permissions: {
@@ -84,12 +106,96 @@ assert.ok(rowById(denied, 'lead').privacyNotes.some((note) => note.includes('no 
 const noPolicy = buildConvoyStalenessLadder({
   now,
   policy: null,
+  policySource: { source: 'expedition_config', sourceId: 'expedition-1', convoyId: 'convoy-1' },
+  context: { convoyId: 'convoy-1', expeditionId: 'expedition-1' },
   permissions: basePermissions,
   roster: [member('lead')],
   lastAcceptedCheckIns: [{ memberId: 'lead', acceptedAt: minutesAgo(5), source: 'dispatch' }],
 });
 assert.strictEqual(rowById(noPolicy, 'lead').status, 'unknown_no_data');
-assert.ok(rowById(noPolicy, 'lead').privacyNotes.some((note) => note.includes('missing expedition staleness policy')));
+assert.strictEqual(noPolicy.policyEvidence.status, 'missing');
+assert.strictEqual(noPolicy.policy, null);
+assert.ok(noPolicy.warnings.some((warning) => warning.includes('Expedition staleness policy is missing')));
+assert.ok(rowById(noPolicy, 'lead').sourceNotes.some((note) => note.includes('Expedition staleness policy is missing')));
+assert.ok(!noPolicy.rows.some((row) => ['fresh', 'delayed', 'stale', 'missing_check_in'].includes(row.status)));
+
+for (const [name, invalidPolicy] of [
+  ['missing delayedAfter', { staleAfter: 20, missingAfter: 40, unit: 'minutes' }],
+  ['stale before delayed', { delayedAfter: 10, staleAfter: 10, missingAfter: 40, unit: 'minutes' }],
+  ['missing before stale', { delayedAfter: 10, staleAfter: 20, missingAfter: 20, unit: 'minutes' }],
+  ['negative threshold', { delayedAfter: -1, staleAfter: 20, missingAfter: 40, unit: 'minutes' }],
+  ['zero threshold', { delayedAfter: 0, staleAfter: 20, missingAfter: 40, unit: 'minutes' }],
+  ['non-finite threshold', { delayedAfter: Number.POSITIVE_INFINITY, staleAfter: 20, missingAfter: 40, unit: 'minutes' }],
+  ['unsupported unit', { delayedAfter: 10, staleAfter: 20, missingAfter: 40, unit: 'seconds' }],
+]) {
+  const invalid = buildConvoyStalenessLadder({
+    now,
+    policy: invalidPolicy,
+    policySource,
+    context: { convoyId: 'convoy-1', expeditionId: 'expedition-1' },
+    permissions: basePermissions,
+    roster: [member(`invalid-${name}`)],
+    lastAcceptedCheckIns: [{ memberId: `invalid-${name}`, acceptedAt: minutesAgo(5), source: 'dispatch' }],
+  });
+  assert.strictEqual(invalid.policyEvidence.status, 'invalid', `${name} should invalidate policy evidence.`);
+  assert.strictEqual(rowById(invalid, `invalid-${name}`).status, 'unknown_no_data');
+  assert.ok(!invalid.rows.some((row) => ['fresh', 'delayed', 'stale', 'missing_check_in'].includes(row.status)));
+  assert.ok(rowById(invalid, `invalid-${name}`).sourceNotes.some((note) => note.includes('Expedition staleness policy is invalid')));
+}
+
+const stalePolicy = buildConvoyStalenessLadder({
+  now,
+  policy,
+  policySource: { ...policySource, staleAt: '2026-06-13T15:00:00.000Z' },
+  context: { convoyId: 'convoy-1', expeditionId: 'expedition-1' },
+  permissions: basePermissions,
+  roster: [member('stale-policy')],
+  lastAcceptedCheckIns: [{ memberId: 'stale-policy', acceptedAt: minutesAgo(5), source: 'dispatch' }],
+});
+assert.strictEqual(stalePolicy.policyEvidence.status, 'stale');
+assert.strictEqual(rowById(stalePolicy, 'stale-policy').status, 'unknown_no_data');
+
+const mismatchedPolicy = buildConvoyStalenessLadder({
+  now,
+  policy,
+  policySource: { ...policySource, convoyId: 'convoy-a' },
+  context: { convoyId: 'convoy-b', expeditionId: 'expedition-1' },
+  permissions: basePermissions,
+  roster: [member('mismatch')],
+  lastAcceptedCheckIns: [{ memberId: 'mismatch', acceptedAt: minutesAgo(5), source: 'dispatch' }],
+});
+assert.strictEqual(mismatchedPolicy.policyEvidence.status, 'unavailable');
+assert.strictEqual(rowById(mismatchedPolicy, 'mismatch').status, 'unknown_no_data');
+assert.ok(mismatchedPolicy.warnings.some((warning) => warning.includes('identity mismatch')));
+
+const configEvidence = buildConvoyStalenessPolicyEvidenceFromConfig({
+  id: 'convoy-1',
+  expedition_id: 'expedition-1',
+  staleness_policy: policy,
+  staleness_policy_source: 'dispatch_config',
+  staleness_policy_id: 'dispatch-policy-1',
+  staleness_policy_updated_at: '2026-06-13T15:55:00.000Z',
+  staleness_policy_schema_version: 'dispatch-convoy-policy-v1',
+}, {
+  now,
+  context: { convoyId: 'convoy-1', expeditionId: 'expedition-1' },
+});
+assert.strictEqual(configEvidence.status, 'valid');
+assert.strictEqual(configEvidence.source.source, 'dispatch_config');
+assert.strictEqual(configEvidence.source.sourceId, 'expedition-1');
+assert.strictEqual(configEvidence.source.policyId, 'dispatch-policy-1');
+
+const convoyBNoPolicy = buildConvoyStalenessLadder({
+  now,
+  policy: null,
+  policySource: { source: 'convoy_config', convoyId: 'convoy-b', sourceId: 'convoy-b' },
+  context: { convoyId: 'convoy-b' },
+  permissions: basePermissions,
+  roster: [member('convoy-b-member')],
+  lastAcceptedCheckIns: [{ memberId: 'convoy-b-member', acceptedAt: minutesAgo(5), source: 'dispatch' }],
+});
+assert.strictEqual(rowById(convoyBNoPolicy, 'convoy-b-member').status, 'unknown_no_data');
+assert.ok(!convoyBNoPolicy.rows.some((row) => ['fresh', 'delayed', 'stale', 'missing_check_in'].includes(row.status)), 'Old convoy policy must not be reused after selected convoy changes.');
 
 const boundaries = ladder({
   roster: [member('fresh'), member('delayed'), member('stale'), member('missing')],
@@ -104,6 +210,9 @@ assert.strictEqual(rowById(boundaries, 'fresh').status, 'fresh');
 assert.strictEqual(rowById(boundaries, 'delayed').status, 'delayed');
 assert.strictEqual(rowById(boundaries, 'stale').status, 'stale');
 assert.strictEqual(rowById(boundaries, 'missing').status, 'missing_check_in');
+assert.ok(boundaries.rows.every((row) => row.policyStatus === 'valid'));
+assert.strictEqual(boundaries.policyEvidence.status, 'valid');
+assert.ok(boundaries.sourceNotes.some((note) => note.includes('expedition_config')));
 
 const recoveryPrecedence = ladder({
   roster: [member('lead')],
@@ -115,6 +224,7 @@ const recoveryPrecedence = ladder({
 });
 assert.strictEqual(rowById(recoveryPrecedence, 'lead').status, 'recovery_event_active');
 assert.strictEqual(rowById(recoveryPrecedence, 'lead').activeEventSummary, 'Winch recovery active');
+assert.strictEqual(rowById(recoveryPrecedence, 'lead').policyStatus, 'valid');
 
 const assistancePrecedence = ladder({
   roster: [member('lead')],
@@ -211,14 +321,22 @@ assert.deepStrictEqual(
 const convoyCommand = fs.readFileSync(convoyCommandPath, 'utf8');
 [
   'buildConvoyStalenessLadder',
+  'buildConvoyStalenessPolicyEvidenceFromConfig',
   'ConvoyStalenessLadderPanel',
   'Convoy Staleness Ladder',
   'Current user-facing/internal beta extension',
   'last shared coordinate',
   'check-in overdue',
   'pending replay',
+  'staleness policy needed',
+  'policyEvidence.status',
+  'Expedition staleness thresholds unavailable',
 ].forEach((fragment) => {
   assert.ok(convoyCommand.includes(fragment), `Convoy Command should include ladder surface fragment: ${fragment}`);
 });
+
+for (const forbidden of ['live location', 'real-time tracking', 'currently located at', 'distress inferred', 'emergency inferred', 'silent means distress']) {
+  assert.ok(!convoyCommand.toLowerCase().includes(forbidden), `Convoy Command copy must not include forbidden phrase: ${forbidden}`);
+}
 
 console.log('Convoy staleness ladder checks passed.');

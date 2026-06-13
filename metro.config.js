@@ -93,6 +93,13 @@ const generatedPathBlockList = [
   androidDirBlock('app', 'build'),
   rootDirBlock('artifacts'),
   rootDirBlock('dist'),
+  rootDirBlock('docs'),
+  rootDirBlock('fixtures'),
+  rootDirBlock('qa-evidence'),
+  rootDirBlock('tmp'),
+  rootDirBlock('.tmp'),
+  rootDirBlock('.metro-tmp'),
+  rootDirBlock('.qa'),
 ];
 
 if (process.platform === 'win32') {

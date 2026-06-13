@@ -1,0 +1,146 @@
+{
+  "fixtureId": "mismatch_guardrails",
+  "description": "Route geometry mismatch, wrong previous audit domain, expired emergency endpoint, and stale mirror guardrails.",
+  "now": "2026-06-13T18:00:00.000Z",
+  "featureFlags": {
+    "campDecisionClock": true,
+    "departureDeltaBrief": true,
+    "routeConfidenceTimeline": true,
+    "expeditionWeakPointAnalyzer": true,
+    "convoyStalenessLadder": true,
+    "recoveryPacketBuilder": true,
+    "expeditionReplayDebrief": true,
+    "offlineFailureDrill": true,
+    "loadoutConsequencePreview": true
+  },
+  "campClock": {
+    "currentTime": "2026-06-13T18:00:00.000Z",
+    "routeProgress": {
+      "driveTimeRemainingMinutes": 90,
+      "distanceRemainingMiles": 42,
+      "source": "manual",
+      "confidence": "medium"
+    },
+    "eta": {
+      "plannedArrivalAt": "2026-06-13T19:30:00.000Z",
+      "latestSafeArrivalAt": "2026-06-13T21:00:00.000Z",
+      "confidence": "medium",
+      "source": "manual",
+      "updatedAt": "2026-06-13T17:30:00.000Z"
+    },
+    "delayScenario": "no_delay",
+    "daylightWindow": {
+      "sunsetAt": "2026-06-13T21:20:00.000Z",
+      "usableLightEndsAt": "2026-06-13T20:50:00.000Z"
+    },
+    "plannedCamp": {
+      "id": "camp-alpha",
+      "name": "Planned Ridge Camp",
+      "location": { "latitude": 38.2, "longitude": -110.4 },
+      "source": "route_endpoint_candidate",
+      "sourceConfidence": "medium",
+      "latestSafeArrivalAt": "2026-06-13T21:00:00.000Z"
+    },
+    "emergencyEndpoint": {
+      "id": "emergency-expired",
+      "name": "Expired emergency trailhead",
+      "latestDivertAt": null,
+      "viableUntil": "2026-06-13T17:00:00.000Z",
+      "source": { "kind": "manual", "validated": true, "updatedAt": "2026-06-13T16:00:00.000Z" },
+      "dataFreshness": "fresh",
+      "legalAccessConfidence": "validated"
+    },
+    "margins": {
+      "fuel": { "status": "comfortable", "value": 90, "unit": "miles", "confidence": "medium", "source": "manual", "updatedAt": "2026-06-13T17:30:00.000Z" },
+      "water": { "status": "comfortable", "value": 18, "unit": "gallons", "confidence": "medium", "source": "manual", "updatedAt": "2026-06-13T17:30:00.000Z" },
+      "power": { "status": "comfortable", "value": 70, "unit": "percent", "confidence": "medium", "source": "manual", "updatedAt": "2026-06-13T17:30:00.000Z" }
+    },
+    "routeDifficulty": "moderate",
+    "weatherRisk": "unknown",
+    "legalAccessConfidence": "uncertain",
+    "dataFreshness": "stale"
+  },
+  "departureDelta": {
+    "featureFlags": { "departureDeltaBrief": true },
+    "now": "2026-06-13T18:00:00.000Z",
+    "previousAudit": {
+      "auditId": "audit-wrong-route",
+      "capturedAt": "2026-06-13T16:00:00.000Z",
+      "domainIdentity": {
+        "tripId": "trip-alpha",
+        "expeditionId": "expedition-alpha",
+        "routeId": "route-old",
+        "vehicleId": "vehicle-integrated",
+        "loadoutId": "loadout-integrated",
+        "dispatchRosterId": "roster-alpha",
+        "auditSchemaVersion": "departure-delta-v1",
+        "createdAt": "2026-06-13T16:00:00.000Z"
+      },
+      "posture": { "value": "go", "observedAt": "2026-06-13T16:00:00.000Z", "source": "readiness_engine" },
+      "blockers": [
+        { "id": "old-route-blocker", "label": "Old route blocker", "severity": "warning", "observedAt": "2026-06-13T16:00:00.000Z", "source": "readiness_engine" }
+      ],
+      "vehicleLoadoutValues": [
+        { "fieldId": "vehicle:active:payloadRemainingLbs", "label": "Payload remaining", "value": 520, "observedAt": "2026-06-13T16:00:00.000Z", "source": "fleet" }
+      ]
+    },
+    "current": {
+      "domainIdentity": {
+        "tripId": "trip-alpha",
+        "expeditionId": "expedition-alpha",
+        "routeId": "route-alpha",
+        "vehicleId": "vehicle-integrated",
+        "loadoutId": "loadout-integrated",
+        "dispatchRosterId": "roster-alpha",
+        "auditSchemaVersion": "departure-delta-v1",
+        "createdAt": "2026-06-13T18:00:00.000Z"
+      },
+      "readiness": {
+        "posture": "hold",
+        "observedAt": "2026-06-13T18:00:00.000Z",
+        "source": "readiness_engine",
+        "blockers": [
+          { "id": "fuel-range-critical", "label": "Fuel range critical", "severity": "blocker", "observedAt": "2026-06-13T18:00:00.000Z", "source": "readiness_engine" }
+        ]
+      },
+      "vehicleLoadoutValues": [
+        { "fieldId": "vehicle:active:payloadRemainingLbs", "label": "Payload remaining", "value": 275, "observedAt": "2026-06-13T18:00:00.000Z", "source": "fleet" }
+      ],
+      "weatherFreshness": { "status": "expired", "observedAt": "2026-06-13T18:00:00.000Z", "expiresAt": "2026-06-13T17:30:00.000Z", "source": "weather" },
+      "offlinePackage": { "packageStatus": "partial", "coverage": "partial", "freshness": "stale", "routeMatch": false, "cacheCompletenessPct": 62, "observedAt": "2026-06-13T18:00:00.000Z", "source": "offline_cache" },
+      "campEndpointConfidence": { "endpointId": "camp-beta", "confidence": "low", "confidenceScale": "low_medium_high", "observedAt": "2026-06-13T18:00:00.000Z", "source": "campops" },
+      "dispatchRoster": { "status": "stale", "observedAt": "2026-06-13T18:00:00.000Z", "source": "dispatch" },
+      "margins": {
+        "fuel": { "label": "Fuel margin", "value": 28, "unit": "miles", "observedAt": "2026-06-13T18:00:00.000Z", "source": "manual" }
+      }
+    }
+  },
+  "debrief": {
+    "input": {
+      "debriefId": "debrief-mismatch-1",
+      "tripId": "trip-mismatch-1",
+      "routeId": "route-alpha",
+      "routeGeometryVersion": "geom-v7",
+      "generatedAt": "2026-06-13T22:30:00.000Z",
+      "tripSummary": {
+        "completionStatus": "partial",
+        "readinessDelta": "unknown",
+        "incidentCount": 0,
+        "offlineGapCount": 1,
+        "topRecommendationIds": []
+      },
+      "evidence": [
+        { "evidenceId": "ev-route-mismatch", "sourceSystem": "route_confidence", "eventTime": "2026-06-13T18:30:00.000Z", "knownAt": "2026-06-13T18:30:00.000Z", "generatedAt": "2026-06-13T18:30:00.000Z", "valueState": "observed", "confidence": "high", "freshness": "current", "label": "Wrong geometry confidence segment", "value": "geom-old" }
+      ],
+      "events": [
+        { "eventId": "event-route-mismatch", "chapterId": "route_confidence_changes", "title": "Wrong geometry confidence segment", "summary": "This overlay belongs to another geometry version.", "eventTime": "2026-06-13T18:30:00.000Z", "knownAt": "2026-06-13T18:30:00.000Z", "evidenceIds": ["ev-route-mismatch"] }
+      ],
+      "mapOverlays": [
+        { "overlayId": "overlay-wrong-geometry", "type": "confidence_segment", "routeId": "route-alpha", "routeGeometryVersion": "geom-old", "startMeasure": 1000, "endMeasure": 1400, "label": "Wrong geometry confidence segment", "confidence": "high", "valueState": "observed", "freshness": "current", "eventIds": ["event-route-mismatch"], "evidenceIds": ["ev-route-mismatch"] }
+      ],
+      "missingSources": [
+        { "sourceSystem": "offline_honesty", "reason": "offline source evidence not attached" }
+      ]
+    }
+  }
+}

@@ -1,3 +1,25 @@
+import {
+  buildOfflineFailureDrillRuntimeNetworkEvidence,
+  type OfflineDrillProbeEvidence,
+  type OfflineDrillProbeFreshness,
+  type OfflineDrillProbeResult,
+  type OfflineDrillProbeSourceType,
+  type OfflineFailureDrillAndroidEvidenceManifest,
+  type OfflineFailureDrillCacheFixtureInput,
+  type OfflineFailureDrillCacheFixtureManifest,
+  type OfflineFailureDrillRuntimeNetworkEvidence,
+} from './offlineFailureDrillEvidence';
+
+export type {
+  OfflineDrillProbeEvidence,
+  OfflineDrillProbeFreshness,
+  OfflineDrillProbeResult,
+  OfflineDrillProbeSourceType,
+  OfflineFailureDrillAndroidEvidenceManifest,
+  OfflineFailureDrillCacheFixtureManifest,
+  OfflineFailureDrillRuntimeNetworkEvidence,
+} from './offlineFailureDrillEvidence';
+
 export type OfflineDrillCapabilityStatus =
   | 'available_offline'
   | 'partially_available'
@@ -23,6 +45,8 @@ export interface OfflineDrillCapabilityProbe {
   missingInputs?: string[];
   staleInputs?: string[];
   invalidInputs?: string[];
+  corruptInputs?: string[];
+  probeEvidence?: OfflineDrillProbeEvidence[];
   lastCachedAt?: string | null;
   sourceOfTruth?: string | null;
   userMessage?: string | null;
@@ -45,8 +69,10 @@ export interface OfflineFailureDrillInput {
     offlineFailureDrill?: boolean;
   } | null;
   noNetworkModeVerified?: boolean | null;
+  runtimeNetworkEvidence?: OfflineFailureDrillRuntimeNetworkEvidence | null;
   capabilities?: Partial<Record<OfflineDrillCapabilityId, OfflineDrillCapabilityProbe>> | null;
   androidEvidence?: OfflineDrillAndroidEvidence | null;
+  androidEvidenceManifest?: OfflineFailureDrillAndroidEvidenceManifest | null;
 }
 
 export interface OfflineDrillSystemProfileInput {
@@ -76,6 +102,33 @@ export interface OfflineFailureDrillSystemProfileInput {
   fieldProtocolsAvailable?: boolean | null;
   recoveryDocsAvailable?: boolean | null;
   androidEvidence?: OfflineDrillAndroidEvidence | null;
+  androidEvidenceManifest?: OfflineFailureDrillAndroidEvidenceManifest | null;
+}
+
+export type OfflineDrillDownloadPriority = 'required' | 'recommended' | 'optional';
+
+export type OfflineDrillDownloadActionType =
+  | 'download_route_geometry'
+  | 'download_route_tiles'
+  | 'refresh_weather_packet'
+  | 'download_camp_packet'
+  | 'save_field_protocols'
+  | 'save_recovery_docs'
+  | 'verify_dispatch_queue'
+  | 'prepare_credential_restore'
+  | 'save_command_brief_snapshot'
+  | 'refresh_cache_manifest';
+
+export interface OfflineDrillRecommendedDownload {
+  downloadId: string;
+  label: string;
+  reason: string;
+  capabilityIds: OfflineDrillCapabilityId[];
+  inputIds: string[];
+  priority: OfflineDrillDownloadPriority;
+  actionType: OfflineDrillDownloadActionType;
+  canStartNow: boolean;
+  unavailableReason?: string;
 }
 
 export interface OfflineDrillCapabilityResult {
@@ -89,7 +142,8 @@ export interface OfflineDrillCapabilityResult {
   lastCachedAt: string | null;
   sourceOfTruth: string;
   userMessage: string;
-  recommendedDownloads: string[];
+  probeEvidence: OfflineDrillProbeEvidence[];
+  recommendedDownloads: OfflineDrillRecommendedDownload[];
 }
 
 export interface OfflineDrillProductionReadiness {
@@ -103,8 +157,9 @@ export interface OfflineFailureDrillResult {
   readiness: OfflineDrillReadiness;
   evaluatedAt: string;
   localOnly: boolean;
+  runtimeNetworkEvidence: OfflineFailureDrillRuntimeNetworkEvidence;
   capabilities: OfflineDrillCapabilityResult[];
-  recommendedDownloads: string[];
+  recommendedDownloads: OfflineDrillRecommendedDownload[];
   warnings: string[];
   productionReadiness: OfflineDrillProductionReadiness;
 }
@@ -187,32 +242,117 @@ const CAPABILITY_DEFINITIONS: Record<OfflineDrillCapabilityId, CapabilityDefinit
   },
 };
 
-const DOWNLOAD_LABELS: Record<string, string> = {
-  route_geometry: 'Download route geometry',
-  route_tiles: 'Download route tiles',
-  route_cache: 'Refresh route cache',
-  saved_route: 'Save route for offline use',
-  camp_packet: 'Download camp packet',
-  camp_cache: 'Refresh camp cache',
-  weather_packet: 'Refresh weather packet',
-  field_protocols: 'Download field protocols',
-  recovery_docs: 'Download recovery docs',
-  dispatch_queue_persistence: 'Verify Dispatch queue persistence',
-  credential_restore_material: 'Refresh credential restore material',
-  command_brief_snapshot: 'Save Command Brief snapshot',
-  incident_protocols: 'Download incident protocols',
-  coordinate_tools: 'Download coordinate tools',
-  cache_manifest: 'Refresh cache manifest',
-  source_timestamps: 'Refresh source timestamps',
+const PROBE_SOURCE_TYPES: Record<string, OfflineDrillProbeSourceType> = {
+  route_geometry: 'local_route_geometry',
+  route_tiles: 'tile_cache',
+  route_cache: 'route_cache',
+  saved_route: 'route_cache',
+  camp_packet: 'camp_cache',
+  camp_cache: 'camp_cache',
+  weather_packet: 'weather_cache',
+  field_protocols: 'local_protocol_doc',
+  recovery_docs: 'recovery_doc',
+  dispatch_queue_persistence: 'dispatch_queue',
+  fresh_dispatch_state: 'dispatch_queue',
+  credential_restore_material: 'credential_restore',
+  command_brief_snapshot: 'offline_profile',
+  incident_protocols: 'local_protocol_doc',
+  coordinate_tools: 'local_protocol_doc',
+  cache_manifest: 'cache_manifest',
+  source_timestamps: 'cache_manifest',
 };
 
-const ANDROID_EVIDENCE_REQUIREMENTS: Array<keyof OfflineDrillAndroidEvidence> = [
-  'noNetworkDeviceEvidence',
-  'screenshotsCaptured',
-  'logsCaptured',
-  'cacheManifestCaptured',
-  'noRemoteSyncConfirmed',
-];
+const DOWNLOAD_DEFINITIONS: Partial<Record<string, {
+  label: string;
+  actionType: OfflineDrillDownloadActionType;
+  priority: OfflineDrillDownloadPriority;
+}>> = {
+  route_geometry: {
+    label: 'Download route geometry',
+    actionType: 'download_route_geometry',
+    priority: 'required',
+  },
+  route_cache: {
+    label: 'Refresh route cache',
+    actionType: 'download_route_geometry',
+    priority: 'required',
+  },
+  saved_route: {
+    label: 'Save route for offline use',
+    actionType: 'download_route_geometry',
+    priority: 'required',
+  },
+  route_tiles: {
+    label: 'Download route tiles',
+    actionType: 'download_route_tiles',
+    priority: 'recommended',
+  },
+  camp_packet: {
+    label: 'Download camp packet',
+    actionType: 'download_camp_packet',
+    priority: 'required',
+  },
+  camp_cache: {
+    label: 'Download camp packet',
+    actionType: 'download_camp_packet',
+    priority: 'required',
+  },
+  weather_packet: {
+    label: 'Refresh weather packet',
+    actionType: 'refresh_weather_packet',
+    priority: 'recommended',
+  },
+  field_protocols: {
+    label: 'Download field protocols',
+    actionType: 'save_field_protocols',
+    priority: 'required',
+  },
+  incident_protocols: {
+    label: 'Download incident protocols',
+    actionType: 'save_field_protocols',
+    priority: 'required',
+  },
+  coordinate_tools: {
+    label: 'Download coordinate tools',
+    actionType: 'save_field_protocols',
+    priority: 'required',
+  },
+  recovery_docs: {
+    label: 'Download recovery docs',
+    actionType: 'save_recovery_docs',
+    priority: 'required',
+  },
+  dispatch_queue_persistence: {
+    label: 'Verify Dispatch queue persistence',
+    actionType: 'verify_dispatch_queue',
+    priority: 'required',
+  },
+  fresh_dispatch_state: {
+    label: 'Verify Dispatch queue persistence',
+    actionType: 'verify_dispatch_queue',
+    priority: 'optional',
+  },
+  credential_restore_material: {
+    label: 'Refresh credential restore material',
+    actionType: 'prepare_credential_restore',
+    priority: 'required',
+  },
+  command_brief_snapshot: {
+    label: 'Save Command Brief snapshot',
+    actionType: 'save_command_brief_snapshot',
+    priority: 'required',
+  },
+  cache_manifest: {
+    label: 'Refresh cache manifest',
+    actionType: 'refresh_cache_manifest',
+    priority: 'required',
+  },
+  source_timestamps: {
+    label: 'Refresh source timestamps',
+    actionType: 'refresh_cache_manifest',
+    priority: 'required',
+  },
+};
 
 function nowIso(input?: string): string {
   if (typeof input === 'string' && input.trim().length > 0) return input;
@@ -233,15 +373,142 @@ function dedupe(values: Array<string | null | undefined>): string[] {
   return output;
 }
 
+function redactSecretText(value: string): string {
+  return value
+    .replace(/((?:token|secret|password|restore[_ -]?code|api[_ -]?key|credential)[^:=]*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/\b(?:super-secret-token|restore-code-123)\b/gi, '[redacted]');
+}
+
+function sanitizeNotes(notes: unknown): string[] {
+  if (!Array.isArray(notes)) return [];
+  return notes.map((note) => redactSecretText(String(note)));
+}
+
+function sourceTypeForInput(inputId: string): OfflineDrillProbeSourceType {
+  return PROBE_SOURCE_TYPES[inputId] ?? 'unknown';
+}
+
+function normalizeProbeEvidence(
+  evidence: OfflineDrillProbeEvidence,
+  definition: CapabilityDefinition,
+  checkedAt: string,
+): OfflineDrillProbeEvidence {
+  return {
+    probeId: evidence.probeId || `${definition.capabilityId}_${evidence.inputId}_probe`,
+    capabilityId: definition.capabilityId,
+    inputId: evidence.inputId,
+    sourceType: evidence.sourceType ?? sourceTypeForInput(evidence.inputId),
+    localOnly: true,
+    checkedAt: evidence.checkedAt || checkedAt,
+    lastCachedAt: evidence.lastCachedAt,
+    freshness: evidence.freshness ?? 'unavailable',
+    result: evidence.result ?? 'unavailable',
+    notes: sanitizeNotes(evidence.notes),
+  };
+}
+
+function synthesizeProbeEvidence(
+  definition: CapabilityDefinition,
+  inputId: string,
+  probe: OfflineDrillCapabilityProbe,
+  checkedAt: string,
+): OfflineDrillProbeEvidence {
+  const available = new Set(probe.availableInputs ?? []);
+  const missing = new Set(probe.missingInputs ?? []);
+  const stale = new Set(probe.staleInputs ?? []);
+  const invalid = new Set([...(probe.invalidInputs ?? []), ...(probe.corruptInputs ?? [])]);
+  let freshness: OfflineDrillProbeFreshness = 'unavailable';
+  let result: OfflineDrillProbeResult = 'missing';
+  if (invalid.has(inputId)) {
+    result = 'corrupt';
+    freshness = 'unavailable';
+  } else if (stale.has(inputId)) {
+    result = 'stale';
+    freshness = 'stale';
+  } else if (available.has(inputId)) {
+    result = 'valid';
+    freshness = 'current';
+  } else if (missing.has(inputId)) {
+    result = 'missing';
+    freshness = 'unavailable';
+  }
+
+  return {
+    probeId: `${definition.capabilityId}_${inputId}_probe`,
+    capabilityId: definition.capabilityId,
+    inputId,
+    sourceType: sourceTypeForInput(inputId),
+    localOnly: true,
+    checkedAt,
+    lastCachedAt: probe.lastCachedAt ?? undefined,
+    freshness,
+    result,
+    notes: [`Local-only probe for ${inputId}: ${result}.`],
+  };
+}
+
+function buildProbeEvidence(
+  definition: CapabilityDefinition,
+  probe: OfflineDrillCapabilityProbe,
+  checkedAt: string,
+): OfflineDrillProbeEvidence[] {
+  const explicit = (probe.probeEvidence ?? []).map((item) => normalizeProbeEvidence(item, definition, checkedAt));
+  const explicitKeys = new Set(explicit.map((item) => item.inputId));
+  const inputIds = dedupe([
+    ...definition.requiredInputs,
+    ...definition.partialInputs,
+    ...(probe.requiredInputs ?? []),
+    ...(probe.availableInputs ?? []),
+    ...(probe.missingInputs ?? []),
+    ...(probe.staleInputs ?? []),
+    ...(probe.invalidInputs ?? []),
+    ...(probe.corruptInputs ?? []),
+  ]);
+  const synthesized = inputIds
+    .filter((inputId) => !explicitKeys.has(inputId))
+    .map((inputId) => synthesizeProbeEvidence(definition, inputId, probe, checkedAt));
+  return [...explicit, ...synthesized];
+}
+
+function evidenceInputs(
+  probeEvidence: OfflineDrillProbeEvidence[],
+  predicate: (probe: OfflineDrillProbeEvidence) => boolean,
+): string[] {
+  return dedupe(probeEvidence.filter(predicate).map((probe) => probe.inputId));
+}
+
+function mergeRecommendedDownloads(downloads: OfflineDrillRecommendedDownload[]): OfflineDrillRecommendedDownload[] {
+  const byActionAndLabel = new Map<string, OfflineDrillRecommendedDownload>();
+  for (const download of downloads) {
+    const key = `${download.actionType}:${download.label}`;
+    const existing = byActionAndLabel.get(key);
+    if (!existing) {
+      byActionAndLabel.set(key, {
+        ...download,
+        capabilityIds: dedupe(download.capabilityIds) as OfflineDrillCapabilityId[],
+        inputIds: dedupe(download.inputIds),
+      });
+      continue;
+    }
+    existing.capabilityIds = dedupe([
+      ...existing.capabilityIds,
+      ...download.capabilityIds,
+    ]) as OfflineDrillCapabilityId[];
+    existing.inputIds = dedupe([...existing.inputIds, ...download.inputIds]);
+    if (download.priority === 'required') existing.priority = 'required';
+  }
+  return Array.from(byActionAndLabel.values());
+}
+
 function missingRequiredInputs(definition: CapabilityDefinition, probe: OfflineDrillCapabilityProbe): string[] {
   const available = new Set((probe.availableInputs ?? []).map((item) => item.trim()).filter(Boolean));
   const stale = new Set((probe.staleInputs ?? []).map((item) => item.trim()).filter(Boolean));
-  const invalid = new Set((probe.invalidInputs ?? []).map((item) => item.trim()).filter(Boolean));
+  const invalid = new Set([...(probe.invalidInputs ?? []), ...(probe.corruptInputs ?? [])].map((item) => item.trim()).filter(Boolean));
   const explicitMissing = probe.missingInputs ?? [];
   const inferredMissing = definition.requiredInputs.filter(
     (input) => !available.has(input) && !stale.has(input) && !invalid.has(input),
   );
-  return dedupe([...explicitMissing, ...probe.invalidInputs ?? [], ...inferredMissing])
+  return dedupe([...explicitMissing, ...(probe.invalidInputs ?? []), ...(probe.corruptInputs ?? []), ...inferredMissing])
     .filter((input) => definition.requiredInputs.includes(input) || input === 'credential_restore_material');
 }
 
@@ -250,14 +517,34 @@ function nonCriticalMissingInputs(definition: CapabilityDefinition, probe: Offli
   return definition.partialInputs.filter((input) => missing.has(input));
 }
 
-function recommendedDownloadsFor(inputs: string[], stale: boolean): string[] {
-  return dedupe(inputs.map((input) => {
-    const label = DOWNLOAD_LABELS[input] ?? `Prepare ${input.replace(/_/g, ' ')}`;
-    if (!stale) return label;
-    if (label.startsWith('Download ')) return label.replace('Download ', 'Refresh ');
-    if (label.startsWith('Save ')) return label.replace('Save ', 'Refresh ');
-    return label;
-  }));
+function recommendedDownloadsFor(
+  definition: CapabilityDefinition,
+  inputs: string[],
+  stale: boolean,
+): OfflineDrillRecommendedDownload[] {
+  const downloads: OfflineDrillRecommendedDownload[] = [];
+  for (const inputId of dedupe(inputs)) {
+    const definitionForInput = DOWNLOAD_DEFINITIONS[inputId];
+    if (!definitionForInput) continue;
+    let label = definitionForInput.label;
+    if (stale && label.startsWith('Download ') && definitionForInput.actionType !== 'download_camp_packet') {
+      label = label.replace('Download ', 'Refresh ');
+    }
+    if (stale && label.startsWith('Save ')) label = label.replace('Save ', 'Refresh ');
+    downloads.push({
+      downloadId: `${definition.capabilityId}_${definitionForInput.actionType}_${inputId}`,
+      label,
+      reason: stale
+        ? `${inputId.replace(/_/g, ' ')} is stale or expired in the local cache.`
+        : `${inputId.replace(/_/g, ' ')} is missing, corrupt, unavailable, or not locally verified.`,
+      capabilityIds: [definition.capabilityId],
+      inputIds: [inputId],
+      priority: stale && definitionForInput.priority === 'required' ? 'recommended' : definitionForInput.priority,
+      actionType: definitionForInput.actionType,
+      canStartNow: true,
+    });
+  }
+  return mergeRecommendedDownloads(downloads);
 }
 
 export function formatOfflineDrillStatus(status: OfflineDrillCapabilityStatus): string {
@@ -297,11 +584,11 @@ function buildUserMessage(
   result: Pick<OfflineDrillCapabilityResult, 'status' | 'missingInputs' | 'staleInputs' | 'availableInputs'>,
 ): string {
   if (definition.capabilityId === 'dispatch_offline_replay' && result.status === 'partially_available') {
-    return 'Dispatch events can be queued locally; live roster updates and replay sync wait for network.';
+    return 'Pending Dispatch replay is queued locally; local queue only. Not confirmed by source of truth until network acceptance.';
   }
 
   if (result.status === 'available_offline') {
-    return `${definition.capabilityName} can use verified local inputs while the network is unavailable.`;
+    return `${definition.capabilityName} is available from local cache with verified local inputs.`;
   }
 
   if (result.status === 'partially_available') {
@@ -313,7 +600,7 @@ function buildUserMessage(
   }
 
   if (result.status === 'manual_fallback_required') {
-    return `${definition.capabilityName} has local documents or protocols; use manual fallback because automated app behavior is unsupported offline.`;
+    return `${definition.capabilityName} has local documents or protocols; manual fallback required because automated app behavior is unsupported offline.`;
   }
 
   return `Missing required local inputs for ${definition.capabilityName}: ${result.missingInputs.join(', ')}.`;
@@ -322,17 +609,32 @@ function buildUserMessage(
 function buildCapabilityResult(
   definition: CapabilityDefinition,
   probe: OfflineDrillCapabilityProbe | null | undefined,
+  checkedAt: string,
 ): OfflineDrillCapabilityResult {
   const effectiveProbe = probe ?? {};
+  const initialProbeEvidence = buildProbeEvidence(definition, effectiveProbe, checkedAt);
+  const evidenceMissingInputs = evidenceInputs(initialProbeEvidence, (item) =>
+    ['missing', 'corrupt', 'unavailable'].includes(item.result));
+  const evidenceStaleInputs = evidenceInputs(initialProbeEvidence, (item) =>
+    ['stale', 'expired'].includes(item.result) || ['stale', 'expired'].includes(item.freshness));
+  const evidenceInvalidInputs = evidenceInputs(initialProbeEvidence, (item) =>
+    ['corrupt', 'unavailable'].includes(item.result));
+  const enrichedProbe: OfflineDrillCapabilityProbe = {
+    ...effectiveProbe,
+    missingInputs: dedupe([...(effectiveProbe.missingInputs ?? []), ...evidenceMissingInputs]),
+    staleInputs: dedupe([...(effectiveProbe.staleInputs ?? []), ...evidenceStaleInputs]),
+    invalidInputs: dedupe([...(effectiveProbe.invalidInputs ?? []), ...evidenceInvalidInputs]),
+  };
+  const probeEvidence = buildProbeEvidence(definition, enrichedProbe, checkedAt);
   const requiredInputs = effectiveProbe.requiredInputs ?? definition.requiredInputs;
-  const missingRequired = missingRequiredInputs({ ...definition, requiredInputs }, effectiveProbe);
-  const partialMissing = nonCriticalMissingInputs(definition, effectiveProbe);
-  const staleInputs = dedupe(effectiveProbe.staleInputs ?? []);
+  const missingRequired = missingRequiredInputs({ ...definition, requiredInputs }, enrichedProbe);
+  const partialMissing = nonCriticalMissingInputs(definition, enrichedProbe);
+  const staleInputs = dedupe(enrichedProbe.staleInputs ?? []);
   const missingInputs = dedupe([...missingRequired, ...partialMissing]);
-  const status = classifyCapability({ ...definition, requiredInputs }, effectiveProbe);
-  const staleRecommendations = recommendedDownloadsFor(staleInputs, true);
-  const missingRecommendations = recommendedDownloadsFor(missingInputs, false);
-  const availableInputs = dedupe(effectiveProbe.availableInputs ?? []);
+  const status = classifyCapability({ ...definition, requiredInputs }, enrichedProbe);
+  const staleRecommendations = recommendedDownloadsFor(definition, staleInputs, true);
+  const missingRecommendations = recommendedDownloadsFor(definition, missingInputs, false);
+  const availableInputs = dedupe(enrichedProbe.availableInputs ?? []);
   const baseResult = {
     capabilityId: definition.capabilityId,
     capabilityName: definition.capabilityName,
@@ -341,38 +643,34 @@ function buildCapabilityResult(
     availableInputs,
     missingInputs,
     staleInputs,
-    lastCachedAt: effectiveProbe.lastCachedAt ?? null,
-    sourceOfTruth: effectiveProbe.sourceOfTruth ?? definition.sourceOfTruth,
-    recommendedDownloads: dedupe([...missingRecommendations, ...staleRecommendations]),
+    lastCachedAt: enrichedProbe.lastCachedAt ?? null,
+    sourceOfTruth: enrichedProbe.sourceOfTruth ?? definition.sourceOfTruth,
+    probeEvidence,
+    recommendedDownloads: mergeRecommendedDownloads([...missingRecommendations, ...staleRecommendations]),
   };
 
   return {
     ...baseResult,
-    userMessage: effectiveProbe.userMessage ?? buildUserMessage(definition, baseResult),
+    userMessage: enrichedProbe.userMessage ?? buildUserMessage(definition, baseResult),
   };
 }
 
 function buildProductionReadiness(
   input: OfflineFailureDrillInput,
+  runtimeNetworkEvidence: OfflineFailureDrillRuntimeNetworkEvidence,
 ): OfflineDrillProductionReadiness {
-  const evidence = input.androidEvidence ?? {};
   const blockers: string[] = [];
 
-  if (input.noNetworkModeVerified !== true) {
+  if (
+    runtimeNetworkEvidence.appObservedOffline !== true ||
+    runtimeNetworkEvidence.runtimeNetworkProbe !== 'offline'
+  ) {
     blockers.push('runtime_no_network_confirmation_missing');
   }
 
-  for (const key of ANDROID_EVIDENCE_REQUIREMENTS) {
-    if (evidence[key] !== true) {
-      blockers.push(
-        key === 'noNetworkDeviceEvidence'
-          ? 'android_no_network_device_evidence_missing'
-          : `android_${String(key).replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`)}_missing`,
-      );
-    }
-  }
+  if (!input.androidEvidenceManifest) blockers.push('android_evidence_manifest_missing');
 
-  if (String(evidence.productionDecision ?? '').toLowerCase() !== 'accepted') {
+  if (!input.androidEvidenceManifest) {
     blockers.push('production_owner_decision_missing');
   }
 
@@ -386,6 +684,7 @@ function buildProductionReadiness(
       'Android no-network test logs',
       'Cache manifest used for the run',
       'Confirmation that no remote provider update or live sync succeeded',
+      'Validated Android evidence manifest',
       'Production owner decision',
     ],
   };
@@ -395,7 +694,11 @@ export function buildOfflineFailureDrill(input: OfflineFailureDrillInput = {}): 
   const evaluatedAt = nowIso(input.now);
   const readiness: OfflineDrillReadiness = 'current_user_facing_extension';
   const enabled = input.featureFlags?.offlineFailureDrill !== false;
-  const productionReadiness = buildProductionReadiness(input);
+  const runtimeNetworkEvidence = input.runtimeNetworkEvidence ?? buildOfflineFailureDrillRuntimeNetworkEvidence({
+    checkedAt: evaluatedAt,
+    connectivityState: input.noNetworkModeVerified === true ? 'offline' : null,
+  });
+  const productionReadiness = buildProductionReadiness(input, runtimeNetworkEvidence);
 
   if (!enabled) {
     return {
@@ -403,6 +706,7 @@ export function buildOfflineFailureDrill(input: OfflineFailureDrillInput = {}): 
       readiness,
       evaluatedAt,
       localOnly: true,
+      runtimeNetworkEvidence,
       capabilities: [],
       recommendedDownloads: [],
       warnings: [],
@@ -413,8 +717,9 @@ export function buildOfflineFailureDrill(input: OfflineFailureDrillInput = {}): 
   const capabilities = OFFLINE_DRILL_CAPABILITY_ORDER.map((capabilityId) => buildCapabilityResult(
     CAPABILITY_DEFINITIONS[capabilityId],
     input.capabilities?.[capabilityId],
+    evaluatedAt,
   ));
-  const warnings = input.noNetworkModeVerified === true
+  const warnings = runtimeNetworkEvidence.runtimeNetworkProbe === 'offline' && runtimeNetworkEvidence.appObservedOffline === true
     ? []
     : ['No-network mode was not verified inside the app/runtime.'];
 
@@ -423,8 +728,9 @@ export function buildOfflineFailureDrill(input: OfflineFailureDrillInput = {}): 
     readiness,
     evaluatedAt,
     localOnly: true,
+    runtimeNetworkEvidence,
     capabilities,
-    recommendedDownloads: dedupe(capabilities.flatMap((capability) => capability.recommendedDownloads)),
+    recommendedDownloads: mergeRecommendedDownloads(capabilities.flatMap((capability) => capability.recommendedDownloads)),
     warnings,
     productionReadiness,
   };
@@ -482,6 +788,11 @@ export function buildOfflineFailureDrillFromSystemProfiles(
     featureFlags: input.featureFlags,
     noNetworkModeVerified: input.connectivityState === 'offline',
     androidEvidence: input.androidEvidence,
+    androidEvidenceManifest: input.androidEvidenceManifest,
+    runtimeNetworkEvidence: buildOfflineFailureDrillRuntimeNetworkEvidence({
+      checkedAt: nowIso(input.now),
+      connectivityState: input.connectivityState,
+    }),
     capabilities: {
       offline_navigation: {
         availableInputs: routeAvailable ? ['route_geometry', 'route_cache', 'route_tiles'] : [],
@@ -564,6 +875,98 @@ export function buildOfflineFailureDrillFromSystemProfiles(
         sourceOfTruth: 'field_utilities_local_docs',
       },
     },
+  });
+}
+
+function fixtureInputResult(input: OfflineFailureDrillCacheFixtureInput): OfflineDrillProbeResult {
+  if (input.corrupt === true) return 'corrupt';
+  if (input.present !== true) return 'missing';
+  if (input.freshness === 'expired') return 'expired';
+  if (input.freshness === 'stale') return 'stale';
+  if (input.freshness === 'unavailable') return 'unavailable';
+  return 'valid';
+}
+
+function fixtureCapabilityProbe(
+  definition: CapabilityDefinition,
+  fixture: OfflineFailureDrillCacheFixtureManifest,
+  checkedAt: string,
+): OfflineDrillCapabilityProbe {
+  const byInputId = new Map(fixture.inputs.map((input) => [input.inputId, input]));
+  const inputIds = dedupe([...definition.requiredInputs, ...definition.partialInputs]);
+  const availableInputs: string[] = [];
+  const missingInputs: string[] = [];
+  const staleInputs: string[] = [];
+  const invalidInputs: string[] = [];
+  const probeEvidence: OfflineDrillProbeEvidence[] = [];
+
+  for (const inputId of inputIds) {
+    const fixtureInput = byInputId.get(inputId) ?? {
+      inputId,
+      sourceType: sourceTypeForInput(inputId),
+      present: false,
+      freshness: 'unavailable' as OfflineDrillProbeFreshness,
+      notes: ['Fixture omitted this local input.'],
+    };
+    const result = fixtureInputResult(fixtureInput);
+    if (result === 'valid' || result === 'present') availableInputs.push(inputId);
+    if (result === 'stale' || result === 'expired') staleInputs.push(inputId);
+    if (result === 'missing' || result === 'unavailable') missingInputs.push(inputId);
+    if (result === 'corrupt') invalidInputs.push(inputId);
+    probeEvidence.push({
+      probeId: `${fixture.fixtureId}_${definition.capabilityId}_${inputId}`,
+      capabilityId: definition.capabilityId,
+      inputId,
+      sourceType: fixtureInput.sourceType,
+      localOnly: true,
+      checkedAt,
+      lastCachedAt: fixtureInput.lastCachedAt,
+      freshness: fixtureInput.freshness,
+      result,
+      notes: sanitizeNotes(fixtureInput.notes),
+    });
+  }
+
+  const lastCachedAt = fixture.inputs
+    .map((input) => input.lastCachedAt)
+    .find((value): value is string => typeof value === 'string' && value.length > 0) ?? null;
+
+  return {
+    availableInputs,
+    missingInputs,
+    staleInputs,
+    invalidInputs,
+    probeEvidence,
+    lastCachedAt,
+    sourceOfTruth: `offline_failure_drill_cache_fixture:${fixture.profile}`,
+    manualFallbackRequired: fixture.profile === 'manual_fallback' && definition.capabilityId === 'field_utilities',
+  };
+}
+
+export function buildOfflineFailureDrillFromCacheFixture(
+  fixture: OfflineFailureDrillCacheFixtureManifest,
+  options: {
+    now?: string;
+    noNetworkModeVerified?: boolean;
+    androidEvidenceManifest?: OfflineFailureDrillAndroidEvidenceManifest | null;
+  } = {},
+): OfflineFailureDrillResult {
+  const checkedAt = nowIso(options.now);
+  const capabilities = Object.fromEntries(OFFLINE_DRILL_CAPABILITY_ORDER.map((capabilityId) => [
+    capabilityId,
+    fixtureCapabilityProbe(CAPABILITY_DEFINITIONS[capabilityId], fixture, checkedAt),
+  ])) as Partial<Record<OfflineDrillCapabilityId, OfflineDrillCapabilityProbe>>;
+
+  return buildOfflineFailureDrill({
+    now: checkedAt,
+    featureFlags: { offlineFailureDrill: true },
+    noNetworkModeVerified: options.noNetworkModeVerified === true,
+    runtimeNetworkEvidence: buildOfflineFailureDrillRuntimeNetworkEvidence({
+      checkedAt,
+      connectivityState: options.noNetworkModeVerified === true ? 'offline' : null,
+    }),
+    androidEvidenceManifest: options.androidEvidenceManifest ?? null,
+    capabilities,
   });
 }
 

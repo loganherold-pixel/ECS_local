@@ -1,0 +1,15 @@
+{
+  "requireProductionArtifact": true,
+  "maxApkBytes": 419430400,
+  "warnApkBytes": 367001600,
+  "maxAabBytes": 272629760,
+  "warnAabBytes": 230686720,
+  "maxExpoExportBytes": 314572800,
+  "warnExpoExportBytes": 262144000,
+  "maxProductionAssetsBytes": 235929600,
+  "warnProductionAssetsBytes": 188743680,
+  "maxLargestAssetBytes": 33554432,
+  "warnLargestAssetBytes": 26214400,
+  "maxOfflineStarterBytes": 52428800,
+  "warnOfflineStarterBytes": 31457280
+}

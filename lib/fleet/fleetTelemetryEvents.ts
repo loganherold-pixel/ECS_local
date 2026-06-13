@@ -8,8 +8,15 @@ export type FleetTelemetryEventName =
   | 'preview_generated'
   | 'suggestion_viewed'
   | 'suggestion_accepted'
+  | 'suggestion_acknowledged'
+  | 'suggestion_editor_opened'
+  | 'suggestion_applied'
+  | 'suggestion_dismissed'
+  | 'suggestion_apply_failed'
   | 'source_confirmed'
   | 'warning_acknowledged'
+  | 'command_brief_mirror_updated'
+  | 'command_brief_mirror_invalidated'
   | 'loadout_committed';
 
 export type FleetTelemetryEvent = {

@@ -27,10 +27,53 @@ export const CONVOY_STALENESS_GROUP_ORDER: ConvoyStalenessGroup[] = [
   'unknown',
 ];
 
+export type ConvoyStalenessPolicyUnit = 'minutes' | 'milliseconds';
+
 export type StalenessPolicy = {
   delayedAfter: number;
   staleAfter: number;
   missingAfter: number;
+  unit?: ConvoyStalenessPolicyUnit;
+};
+
+export type ConvoyStalenessPolicySourceKind =
+  | 'expedition_config'
+  | 'dispatch_config'
+  | 'convoy_config'
+  | 'unknown';
+
+export type ConvoyStalenessPolicySource = {
+  policyId?: string | null;
+  source: ConvoyStalenessPolicySourceKind;
+  sourceId?: string | null;
+  expeditionId?: string | null;
+  dispatchId?: string | null;
+  convoyId?: string | null;
+  generatedAt?: string | null;
+  updatedAt?: string | null;
+  observedAt?: string | null;
+  staleAt?: string | null;
+  schemaVersion?: string | null;
+};
+
+export type ConvoyStalenessPolicyStatus =
+  | 'valid'
+  | 'missing'
+  | 'invalid'
+  | 'stale'
+  | 'unavailable';
+
+export type ConvoyStalenessPolicyEvidence = {
+  status: ConvoyStalenessPolicyStatus;
+  policy?: StalenessPolicy;
+  source: ConvoyStalenessPolicySource;
+  validationNotes: string[];
+};
+
+export type ConvoyStalenessContextIdentity = {
+  expeditionId?: string | null;
+  dispatchId?: string | null;
+  convoyId?: string | null;
 };
 
 export type ConvoyStalenessRosterMember = {
@@ -95,6 +138,9 @@ export type ConvoyGarminInReachInput = {
 export type ConvoyStalenessLadderInput = {
   now: string;
   policy?: StalenessPolicy | null;
+  policySource?: ConvoyStalenessPolicySource | null;
+  policyEvidence?: ConvoyStalenessPolicyEvidence | null;
+  context?: ConvoyStalenessContextIdentity | null;
   roster?: ConvoyStalenessRosterMember[] | null;
   permissions: ConvoyStalenessPermissions;
   lastAcceptedCheckIns?: ConvoyAcceptedCheckIn[] | null;
@@ -125,6 +171,7 @@ export type ConvoyStalenessLadderRow = {
   activeEventSummary: string | null;
   sourceNotes: string[];
   privacyNotes: string[];
+  policyStatus?: ConvoyStalenessPolicyStatus;
 };
 
 export type ConvoyStalenessLadderGroup = {
@@ -137,9 +184,11 @@ export type ConvoyStalenessLadder = {
   generatedAt: string;
   readinessLabel: 'Current user-facing/internal beta extension';
   policy: StalenessPolicy | null;
+  policyEvidence: ConvoyStalenessPolicyEvidence;
   rows: ConvoyStalenessLadderRow[];
   groups: ConvoyStalenessLadderGroup[];
   sourceNotes: string[];
+  warnings: string[];
 };
 
 const GROUP_LABELS: Record<ConvoyStalenessGroup, string> = {
@@ -152,19 +201,173 @@ const GROUP_LABELS: Record<ConvoyStalenessGroup, string> = {
   unknown: 'Unknown',
 };
 
-function validPolicy(policy: StalenessPolicy | null | undefined): policy is StalenessPolicy {
-  if (!policy) return false;
-  const delayed = Number(policy.delayedAfter);
-  const stale = Number(policy.staleAfter);
-  const missing = Number(policy.missingAfter);
-  return (
-    Number.isFinite(delayed) &&
-    Number.isFinite(stale) &&
-    Number.isFinite(missing) &&
-    delayed >= 0 &&
-    stale > delayed &&
-    missing > stale
-  );
+function normalizeSource(source?: ConvoyStalenessPolicySource | null): ConvoyStalenessPolicySource {
+  return {
+    source: source?.source ?? 'unknown',
+    policyId: source?.policyId ?? null,
+    sourceId: source?.sourceId ?? null,
+    expeditionId: source?.expeditionId ?? null,
+    dispatchId: source?.dispatchId ?? null,
+    convoyId: source?.convoyId ?? null,
+    generatedAt: source?.generatedAt ?? null,
+    updatedAt: source?.updatedAt ?? null,
+    observedAt: source?.observedAt ?? null,
+    staleAt: source?.staleAt ?? null,
+    schemaVersion: source?.schemaVersion ?? null,
+  };
+}
+
+function finitePositive(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function normalizePolicy(policy: StalenessPolicy): { policy: StalenessPolicy | null; notes: string[] } {
+  const notes: string[] = [];
+  const unit = policy.unit ?? 'minutes';
+  if (unit !== 'minutes' && unit !== 'milliseconds') {
+    return { policy: null, notes: [`Unsupported staleness policy unit: ${String(unit)}.`] };
+  }
+  const divisor = unit === 'milliseconds' ? 60_000 : 1;
+  const delayedAfter = finitePositive(policy.delayedAfter);
+  const staleAfter = finitePositive(policy.staleAfter);
+  const missingAfter = finitePositive(policy.missingAfter);
+  if (delayedAfter == null) notes.push('delayedAfter must be finite and greater than 0.');
+  if (staleAfter == null) notes.push('staleAfter must be finite and greater than 0.');
+  if (missingAfter == null) notes.push('missingAfter must be finite and greater than 0.');
+  if (delayedAfter == null || staleAfter == null || missingAfter == null) return { policy: null, notes };
+
+  const normalized = {
+    delayedAfter: delayedAfter / divisor,
+    staleAfter: staleAfter / divisor,
+    missingAfter: missingAfter / divisor,
+    unit: 'minutes' as const,
+  };
+  if (normalized.staleAfter <= normalized.delayedAfter) {
+    notes.push('staleAfter must be greater than delayedAfter.');
+  }
+  if (normalized.missingAfter <= normalized.staleAfter) {
+    notes.push('missingAfter must be greater than staleAfter.');
+  }
+  return { policy: notes.length ? null : normalized, notes };
+}
+
+function sameIdentity(
+  label: string,
+  sourceValue: string | null | undefined,
+  expectedValue: string | null | undefined,
+): string | null {
+  if (!sourceValue || !expectedValue || sourceValue === expectedValue) return null;
+  return `${label} identity mismatch: policy ${sourceValue} does not match active ${expectedValue}.`;
+}
+
+export function validateConvoyStalenessPolicy(
+  policy: StalenessPolicy | null | undefined,
+  source?: ConvoyStalenessPolicySource | null,
+  options: { now?: string | null; context?: ConvoyStalenessContextIdentity | null } = {},
+): ConvoyStalenessPolicyEvidence {
+  const normalizedSource = normalizeSource(source);
+  const validationNotes: string[] = [];
+  const context = options.context ?? null;
+  const identityNotes = [
+    sameIdentity('convoy', normalizedSource.convoyId, context?.convoyId),
+    sameIdentity('expedition', normalizedSource.expeditionId ?? (normalizedSource.source === 'expedition_config' ? normalizedSource.sourceId : null), context?.expeditionId),
+    sameIdentity('dispatch', normalizedSource.dispatchId ?? (normalizedSource.source === 'dispatch_config' ? normalizedSource.sourceId : null), context?.dispatchId),
+  ].filter(Boolean) as string[];
+  if (identityNotes.length > 0) {
+    return {
+      status: 'unavailable',
+      source: normalizedSource,
+      validationNotes: identityNotes,
+    };
+  }
+
+  if (!policy) {
+    return {
+      status: 'missing',
+      source: normalizedSource,
+      validationNotes: ['Expedition staleness policy is missing.'],
+    };
+  }
+
+  const normalizedPolicy = normalizePolicy(policy);
+  validationNotes.push(...normalizedPolicy.notes);
+  if (!normalizedPolicy.policy) {
+    return {
+      status: 'invalid',
+      source: normalizedSource,
+      validationNotes: validationNotes.length ? validationNotes : ['Expedition staleness policy is invalid.'],
+    };
+  }
+
+  const nowMs = Date.parse(String(options.now ?? ''));
+  const staleAtMs = Date.parse(String(normalizedSource.staleAt ?? ''));
+  if (Number.isFinite(nowMs) && Number.isFinite(staleAtMs) && staleAtMs <= nowMs) {
+    return {
+      status: 'stale',
+      policy: normalizedPolicy.policy,
+      source: normalizedSource,
+      validationNotes: ['Expedition staleness policy metadata is stale.'],
+    };
+  }
+
+  return {
+    status: 'valid',
+    policy: normalizedPolicy.policy,
+    source: normalizedSource,
+    validationNotes,
+  };
+}
+
+function normalizeSourceKind(value: unknown): ConvoyStalenessPolicySourceKind {
+  const normalized = String(value ?? '').trim();
+  if (
+    normalized === 'expedition_config' ||
+    normalized === 'dispatch_config' ||
+    normalized === 'convoy_config' ||
+    normalized === 'unknown'
+  ) {
+    return normalized;
+  }
+  return 'convoy_config';
+}
+
+export function buildConvoyStalenessPolicyEvidenceFromConfig(
+  config: unknown,
+  options: { now?: string | null; context?: ConvoyStalenessContextIdentity | null } = {},
+): ConvoyStalenessPolicyEvidence {
+  const configRecord = config && typeof config === 'object' ? config as Record<string, unknown> : null;
+  const policy = (configRecord?.staleness_policy ?? configRecord?.stalenessPolicy ?? null) as StalenessPolicy | null;
+  const sourceKind = normalizeSourceKind(configRecord?.staleness_policy_source ?? configRecord?.stalenessPolicySource);
+  const source: ConvoyStalenessPolicySource = {
+    source: sourceKind,
+    policyId: String(configRecord?.staleness_policy_id ?? configRecord?.stalenessPolicyId ?? '').trim() || null,
+    sourceId: String(
+      configRecord?.staleness_policy_source_id ??
+      configRecord?.stalenessPolicySourceId ??
+      configRecord?.expedition_id ??
+      configRecord?.dispatch_id ??
+      configRecord?.id ??
+      '',
+    ).trim() || null,
+    expeditionId: String(configRecord?.expedition_id ?? configRecord?.expeditionId ?? '').trim() || null,
+    dispatchId: String(configRecord?.dispatch_id ?? configRecord?.dispatchId ?? '').trim() || null,
+    convoyId: String(configRecord?.convoy_id ?? configRecord?.convoyId ?? configRecord?.id ?? '').trim() || null,
+    generatedAt: String(configRecord?.staleness_policy_generated_at ?? configRecord?.stalenessPolicyGeneratedAt ?? '').trim() || null,
+    updatedAt: String(configRecord?.staleness_policy_updated_at ?? configRecord?.stalenessPolicyUpdatedAt ?? configRecord?.updated_at ?? '').trim() || null,
+    observedAt: String(configRecord?.staleness_policy_observed_at ?? configRecord?.stalenessPolicyObservedAt ?? '').trim() || null,
+    staleAt: String(configRecord?.staleness_policy_stale_at ?? configRecord?.stalenessPolicyStaleAt ?? '').trim() || null,
+    schemaVersion: String(configRecord?.staleness_policy_schema_version ?? configRecord?.stalenessPolicySchemaVersion ?? '').trim() || null,
+  };
+  return validateConvoyStalenessPolicy(policy, source, options);
+}
+
+function policyProblemNote(evidence: ConvoyStalenessPolicyEvidence): string {
+  if (evidence.status === 'missing') return 'Expedition staleness policy is missing.';
+  if (evidence.status === 'invalid') return `Expedition staleness policy is invalid: ${evidence.validationNotes.join(' ')}`;
+  if (evidence.status === 'stale') return 'Expedition staleness thresholds unavailable: policy metadata is stale.';
+  if (evidence.status === 'unavailable') return `Expedition staleness thresholds unavailable: ${evidence.validationNotes.join(' ')}`;
+  return '';
 }
 
 function minutesSince(timestamp: string | null | undefined, nowMs: number): number | null {
@@ -255,6 +458,11 @@ function unknownRow(
   status: Extract<ConvoyStalenessStatus, 'unknown_no_permission' | 'unknown_no_data'>,
   reason: string,
   channelState: ConvoyChannelState | null,
+  options: {
+    sourceNotes?: string[];
+    privacyNotes?: string[];
+    policyStatus?: ConvoyStalenessPolicyStatus;
+  } = {},
 ): ConvoyStalenessLadderRow {
   return {
     memberId: member.memberId,
@@ -267,25 +475,29 @@ function unknownRow(
     lastSharedCoordinate: null,
     channelState: channelState?.state ?? null,
     activeEventSummary: null,
-    sourceNotes: [],
-    privacyNotes: [reason],
+    sourceNotes: options.sourceNotes ?? [],
+    privacyNotes: options.privacyNotes ?? [reason],
+    policyStatus: options.policyStatus,
   };
 }
 
 function rowForMember(
   input: ConvoyStalenessLadderInput,
   member: ConvoyStalenessRosterMember,
-  policy: StalenessPolicy | null,
+  policyEvidence: ConvoyStalenessPolicyEvidence,
   nowMs: number,
   checkIns: readonly ConvoyAcceptedCheckIn[],
   events: readonly ConvoyStalenessEvent[],
 ): ConvoyStalenessLadderRow {
   const channel = latestByMember(input.channelStates, member.memberId, (state) => state.observedAt);
   if (!input.permissions.canViewRoster || !input.permissions.canViewStatus) {
-    return unknownRow(member, 'unknown_no_permission', 'unknown: no permission to view convoy status details.', channel);
-  }
-  if (!policy) {
-    return unknownRow(member, 'unknown_no_data', 'unknown: missing expedition staleness policy.', channel);
+    return unknownRow(
+      member,
+      'unknown_no_permission',
+      'unknown: no permission to view convoy status details.',
+      channel,
+      { policyStatus: policyEvidence.status },
+    );
   }
 
   const recovery = activeRecoveryEvent(events, member.memberId);
@@ -295,12 +507,40 @@ function rowForMember(
   const sourceNotes: string[] = [];
   const privacyNotes: string[] = [];
 
+  if (policyEvidence.status === 'valid') {
+    sourceNotes.push(`staleness policy: ${policyEvidence.source.source}${policyEvidence.source.policyId ? ` / ${policyEvidence.source.policyId}` : ''}.`);
+  } else {
+    const note = policyProblemNote(policyEvidence);
+    if (note) sourceNotes.push(note);
+  }
+
+  if (policyEvidence.status !== 'valid' && !recovery && !assist) {
+    const note = policyProblemNote(policyEvidence);
+    return unknownRow(
+      member,
+      'unknown_no_data',
+      note,
+      channel,
+      {
+        sourceNotes,
+        privacyNotes: [],
+        policyStatus: policyEvidence.status,
+      },
+    );
+  }
+
   if (!latestCheckIn && !recovery && !assist) {
     if (input.garminInReach?.enabled && (!input.garminInReach.connected || !input.garminInReach.permitted)) {
       privacyNotes.push('unknown: Garmin/inReach check-in source is not enabled, connected, and permitted.');
     }
     privacyNotes.push('unknown: no accepted check-in source.');
-    return unknownRow(member, 'unknown_no_data', privacyNotes.join(' '), channel);
+    return unknownRow(
+      member,
+      'unknown_no_data',
+      privacyNotes.join(' '),
+      channel,
+      { privacyNotes, sourceNotes, policyStatus: policyEvidence.status },
+    );
   }
 
   if (latestReplay && input.permissions.canViewOfflineReplayState !== false) {
@@ -312,7 +552,9 @@ function rowForMember(
   });
 
   const ageMinutes = minutesSince(latestCheckIn?.acceptedAt, nowMs);
-  let status: ConvoyStalenessStatus = ageMinutes == null ? 'unknown_no_data' : timeStatus(ageMinutes, policy);
+  let status: ConvoyStalenessStatus = ageMinutes == null || !policyEvidence.policy
+    ? 'unknown_no_data'
+    : timeStatus(ageMinutes, policyEvidence.policy);
   let activeEventSummary: string | null = null;
   if (recovery) {
     status = 'recovery_event_active';
@@ -360,6 +602,7 @@ function rowForMember(
     activeEventSummary,
     sourceNotes,
     privacyNotes,
+    policyStatus: policyEvidence.status,
   };
 }
 
@@ -376,7 +619,12 @@ function groupsFromRows(rows: ConvoyStalenessLadderRow[]): ConvoyStalenessLadder
 export function buildConvoyStalenessLadder(input: ConvoyStalenessLadderInput): ConvoyStalenessLadder {
   const nowMs = Date.parse(input.now);
   const generatedAt = Number.isFinite(nowMs) ? new Date(nowMs).toISOString() : new Date().toISOString();
-  const policy = validPolicy(input.policy) ? input.policy : null;
+  const policyEvidence = input.policyEvidence
+    ?? validateConvoyStalenessPolicy(input.policy, input.policySource, {
+      now: generatedAt,
+      context: input.context,
+    });
+  const policy = policyEvidence.status === 'valid' ? policyEvidence.policy ?? null : null;
   const roster = input.roster?.length
     ? input.roster
     : [{
@@ -388,12 +636,17 @@ export function buildConvoyStalenessLadder(input: ConvoyStalenessLadderInput): C
   const events = allEvents(input);
   const sourceNotes: string[] = [];
   if (!input.roster?.length) sourceNotes.push('unknown: no roster data.');
-  if (!policy) sourceNotes.push('unknown: missing expedition staleness policy.');
+  if (policyEvidence.status === 'valid') {
+    sourceNotes.push(`staleness policy source: ${policyEvidence.source.source}${policyEvidence.source.policyId ? ` / ${policyEvidence.source.policyId}` : ''}.`);
+  } else {
+    sourceNotes.push(policyProblemNote(policyEvidence));
+  }
+  const warnings = policyEvidence.status === 'valid' ? [] : [policyProblemNote(policyEvidence)];
 
   const rows = roster.map((member) => rowForMember(
     input,
     member,
-    policy,
+    policyEvidence,
     Number.isFinite(nowMs) ? nowMs : Date.now(),
     checkIns,
     events,
@@ -403,8 +656,10 @@ export function buildConvoyStalenessLadder(input: ConvoyStalenessLadderInput): C
     generatedAt,
     readinessLabel: 'Current user-facing/internal beta extension',
     policy,
+    policyEvidence,
     rows,
     groups: groupsFromRows(rows),
     sourceNotes,
+    warnings,
   };
 }

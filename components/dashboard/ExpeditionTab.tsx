@@ -13,6 +13,7 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { fsGetInfo } from '../../lib/fsCompat';
+import ExpeditionReplayDebriefPanel from './ExpeditionReplayDebriefPanel';
 import ExpeditionRecapMap from './ExpeditionRecapMap';
 import ExpeditionNotableMomentsTimeline from './ExpeditionNotableMomentsTimeline';
 import {
@@ -44,6 +45,10 @@ import {
   type ExpeditionTripSummary,
   type PersonalExpeditionRecord,
 } from '../../lib/expedition';
+import {
+  buildExpeditionDebriefRecordFromTripRecord,
+  isExpeditionReplayDebriefFeatureEnabled,
+} from '../../lib/debrief/expeditionDebriefRecord';
 import type { IncidentCoordinate } from '../../lib/types/incidentRecovery';
 
 type ExpeditionTabProps = {
@@ -433,6 +438,11 @@ function ExpeditionDetailView({
 }) {
   const [reportStatus, setReportStatus] = useState<ExpeditionReportExportStatus>('idle');
   const [reportMessage, setReportMessage] = useState<string | null>(null);
+  const expeditionReplayDebriefEnabled = isExpeditionReplayDebriefFeatureEnabled();
+  const replayDebriefRecord = useMemo(
+    () => expeditionReplayDebriefEnabled ? buildExpeditionDebriefRecordFromTripRecord(trip) : null,
+    [expeditionReplayDebriefEnabled, trip],
+  );
 
   const handleExportReport = useCallback(async () => {
     if (reportStatus === 'generating') return;
@@ -525,6 +535,13 @@ function ExpeditionDetailView({
           recap={trip.recap}
           tripStartedAt={trip.startedAt}
         />
+
+        {expeditionReplayDebriefEnabled ? (
+          <ExpeditionReplayDebriefPanel
+            record={replayDebriefRecord}
+            enabled={expeditionReplayDebriefEnabled}
+          />
+        ) : null}
 
         <ExpeditionTripBadgesEarned badges={earnedBadges} tripTitle={trip.title} />
 

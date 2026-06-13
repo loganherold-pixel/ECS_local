@@ -24,6 +24,7 @@ const {
   DEFAULT_ROUTE_CONTEXT_FEATURE_FLAGS,
   ROUTE_CONTEXT_WARNING_CODES,
   buildSupplyPlan,
+  buildOfflineCoverageOverlays,
   generateRouteContext,
   resolveRouteContextFeatureFlags,
   resolveTrailheadAnchor,
@@ -292,6 +293,91 @@ async function main() {
   });
   assert.strictEqual(futureContext.campCandidates.length, 1);
   assert.strictEqual(futureContext.bailoutCandidates.length, 1);
+
+  const adapterTimelineContext = await generateRouteContext({
+    trail: {
+      id: 'adapter-timeline-trail',
+      explicitTrailhead: { lat: 38.0, lng: -110.1 },
+      endpointCoordinate: { lat: 38.2, lng: -109.8 },
+    },
+    providers: {
+      geometryProvider: {
+        id: 'adapter-timeline-geometry-provider',
+        async buildRouteGeometry() {
+          return {
+            ...completeGeometry,
+            providerMetadata: { geometryVersion: 'engine-geom-v1', source: 'test_geometry' },
+          };
+        },
+      },
+    },
+    routeConfidenceOverlayAdapterResults: [
+      buildOfflineCoverageOverlays({
+        routeId: 'adapter-timeline-trail',
+        routeGeometryVersion: 'engine-geom-v1',
+        totalMeasure: 28000,
+        generatedAt: '2026-05-29T12:00:00.000Z',
+        coverageOverlays: [
+          {
+            id: 'engine-offline-gap',
+            startMeasure: 1000,
+            endMeasure: 4000,
+            coverageState: 'missing',
+            freshness: 'unavailable',
+            sourceId: 'engine-offline-cache',
+          },
+        ],
+      }),
+      buildOfflineCoverageOverlays({
+        routeId: 'adapter-timeline-trail',
+        routeGeometryVersion: 'engine-geom-stale',
+        totalMeasure: 28000,
+        generatedAt: '2026-05-29T12:00:00.000Z',
+        coverageOverlays: [
+          {
+            id: 'engine-wrong-geometry-gap',
+            startMeasure: 5000,
+            endMeasure: 7000,
+            coverageState: 'missing',
+            freshness: 'unavailable',
+            sourceId: 'engine-wrong-geometry-cache',
+          },
+        ],
+      }),
+    ],
+    featureFlags: {
+      'ecs.routeContextEngine.enabled': true,
+      'ecs.routeContextEngine.routeConfidenceTimeline': true,
+    },
+    now: '2026-05-29T12:00:00.000Z',
+  });
+  assert.ok(adapterTimelineContext.routeConfidenceTimeline, 'Route Context Engine should accept source overlay adapter results.');
+  assert.ok(
+    adapterTimelineContext.routeConfidenceTimeline.items.some((item) => item.primaryDriver.category === 'offline_coverage'),
+    'Adapter result spans should flow into the assembled Route Confidence Timeline.',
+  );
+  assert.ok(
+    adapterTimelineContext.routeConfidenceTimeline.items.every((item) => item.conditionState !== 'known_risky'),
+    'Missing offline coverage adapter spans should remain uncertainty, not route-blocking risk.',
+  );
+  assert.strictEqual(adapterTimelineContext.routeConfidenceTimeline.coverageMode, 'notable_spans_only');
+  assert.strictEqual(adapterTimelineContext.routeConfidenceTimeline.completeness, 'partial');
+  assert.ok(
+    adapterTimelineContext.routeConfidenceTimeline.diagnostics.rejectedSpanCount >= 1,
+    'Adapter spans with mismatched geometry should be rejected into diagnostics.',
+  );
+  assert.ok(
+    adapterTimelineContext.routeConfidenceTimeline.diagnostics.rejectedReasons.some((reason) =>
+      reason.includes('geometry version mismatch'),
+    ),
+    'Rejected adapter spans should include a geometry mismatch reason.',
+  );
+  assert.ok(
+    !adapterTimelineContext.routeConfidenceTimeline.items.some((item) =>
+      item.drivers.some((driver) => driver.source.id === 'engine-wrong-geometry-cache'),
+    ),
+    'Mismatched adapter spans must not appear in the canonical timeline.',
+  );
 
   let unresolvedSupplyCalled = false;
   const unresolvedContext = await generateRouteContext({

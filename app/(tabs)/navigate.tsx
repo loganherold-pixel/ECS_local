@@ -498,7 +498,10 @@ import {
   isCampOpsMapPinPayload,
 } from '../../lib/campops/campOpsMapPins';
 import { buildCampOpsCampIntelViewModel } from '../../lib/campops/campOpsCampIntelViewModel';
-import { buildCampDecisionClockDecisionFromRecommendationSet } from '../../lib/campops/campDecisionClock';
+import {
+  buildCampDecisionClockDecisionFromRecommendationSet,
+  isCampDecisionClockFeatureEnabled,
+} from '../../lib/campops/campDecisionClock';
 import {
   CAMPOPS_NO_ROUTE_CANDIDATES_MESSAGE,
   CAMPOPS_ROUTE_SCAN_ERROR_MESSAGE,
@@ -1967,6 +1970,53 @@ function routeConfidenceTimelineTone(item: RouteConfidenceTimelineItem): string 
   return '#66BB6A';
 }
 
+function routeConfidenceTimelineMatchesRoute(
+  timeline: RouteConfidenceTimeline | null,
+  selectedRouteId: string | null | undefined,
+  selectedRouteGeometryVersion: string | null | undefined,
+): boolean {
+  if (!timeline) return false;
+  const expectedRouteId = selectedRouteId ?? 'navigate-route';
+  return (
+    timeline.routeId === expectedRouteId &&
+    timeline.geometryVersion === selectedRouteGeometryVersion
+  );
+}
+
+function routeConfidenceTimelineSourceName(
+  source: RouteConfidenceTimelineItem['primaryDriver']['source'] | null | undefined,
+): string {
+  const label = routeConfidenceTimelineString(source?.label) ?? routeConfidenceTimelineString(source?.sourceType);
+  return label ? label.replace(/_/g, ' ') : 'Unknown source';
+}
+
+function routeConfidenceTimelineTimestampLabel(value: string | null | undefined): string {
+  if (!value) return 'unavailable';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function routeConfidenceTimelineDriverSummary(item: RouteConfidenceTimelineItem): string {
+  const drivers = item.contributingDrivers?.length ? item.contributingDrivers : item.drivers;
+  const labels = Array.from(new Set(
+    drivers
+      .map((driver) => driver.category.replace(/_/g, ' '))
+      .filter(Boolean),
+  ));
+  return labels.length ? labels.join(', ') : 'No contributing drivers';
+}
+
+function routeConfidenceTimelineHasLimitedSource(item: RouteConfidenceTimelineItem): boolean {
+  const sources = item.sources?.length ? item.sources : item.sourceFreshness;
+  return sources.some((source) =>
+    source.freshness === 'stale' ||
+    source.freshness === 'expired' ||
+    source.freshness === 'missing' ||
+    source.freshness === 'unavailable',
+  );
+}
+
 function RouteConfidenceTimelinePanel({
   timeline,
   selectedItemId,
@@ -1977,6 +2027,9 @@ function RouteConfidenceTimelinePanel({
   onSelectItem: (item: RouteConfidenceTimelineItem) => void;
 }) {
   const selectedItem = timeline?.items.find((item) => item.id === selectedItemId) ?? timeline?.items[0] ?? null;
+  const timelineUnavailable = !timeline || timeline.completeness === 'unavailable';
+  const timelineLimited = timeline?.completeness === 'partial' || timeline?.completeness === 'source_limited';
+  const notableOnly = timeline?.coverageMode === 'notable_spans_only';
   return (
     <View style={styles.routeConfidenceTimelinePanel}>
       <View style={styles.routeConfidenceTimelineHeader}>
@@ -1991,6 +2044,15 @@ function RouteConfidenceTimelinePanel({
       <Text style={styles.routeConfidenceTimelineSafetyCopy}>
         Unknown/low confidence means uncertainty, not confirmed danger.
       </Text>
+      <Text style={styles.routeConfidenceTimelineSafetyCopy}>
+        Timeline diagnostics do not affect route readiness or route choice.
+      </Text>
+      {timelineLimited ? (
+        <Text style={styles.routeConfidenceTimelineSafetyCopy}>Timeline limited by available source data.</Text>
+      ) : null}
+      {notableOnly ? (
+        <Text style={styles.routeConfidenceTimelineSafetyCopy}>Showing notable confidence changes only.</Text>
+      ) : null}
       {timeline && timeline.items.length > 0 ? (
         <>
           <View style={styles.routeConfidenceTimelineTrack}>
@@ -2023,6 +2085,27 @@ function RouteConfidenceTimelinePanel({
               <Text style={styles.intelCalloutText}>
                 {formatNavMeters(selectedItem.startMeasure)} to {formatNavMeters(selectedItem.endMeasure)} - {selectedItem.primaryDriver.category.replace(/_/g, ' ')}
               </Text>
+              <Text style={styles.intelCalloutText}>
+                Source: {routeConfidenceTimelineSourceName(selectedItem.primaryDriver.source)}
+              </Text>
+              <Text style={styles.intelCalloutText}>
+                Freshness: {selectedItem.primaryDriver.source.freshness.replace(/_/g, ' ')}
+              </Text>
+              <Text style={styles.intelCalloutText}>
+                Observed: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.observedAt)}
+              </Text>
+              <Text style={styles.intelCalloutText}>
+                Generated: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.generatedAt)}
+              </Text>
+              <Text style={styles.intelCalloutText}>
+                Expires: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.expiresAt)}
+              </Text>
+              <Text style={styles.intelCalloutText}>
+                Contributing drivers: {routeConfidenceTimelineDriverSummary(selectedItem)}
+              </Text>
+              {routeConfidenceTimelineHasLimitedSource(selectedItem) ? (
+                <Text style={styles.intelCalloutText}>Stale/unavailable source metadata present.</Text>
+              ) : null}
               {selectedItem.drivers.slice(0, 3).map((driver) => (
                 <Text key={`${selectedItem.id}:${driver.id}`} style={styles.intelCalloutText}>
                   {driver.label}: {driver.confidenceLevel} confidence / {driver.conditionState.replace(/_/g, ' ')}
@@ -2032,7 +2115,9 @@ function RouteConfidenceTimelinePanel({
           ) : null}
         </>
       ) : (
-        <Text style={styles.intelEmptyText}>No route confidence timeline available.</Text>
+        <Text style={styles.intelEmptyText}>
+          {timelineUnavailable ? 'Route confidence timeline unavailable.' : 'No notable confidence changes from available sources.'}
+        </Text>
       )}
     </View>
   );
@@ -5736,6 +5821,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     () => buildCampDecisionClockDecisionFromRecommendationSet(campOpsRecommendationSet, new Date().toISOString()),
     [campOpsRecommendationSet],
   );
+  const navigateCampDecisionClockFeatureEnabled = isCampDecisionClockFeatureEnabled();
 
   useEffect(() => {
     if (campScoutAreaMode !== 'results') return;
@@ -14434,12 +14520,22 @@ const navigateRouteConfidenceTimeline = useMemo(() => {
   visibleMissionBrief?.generatedAt,
 ]);
 
+const validNavigateRouteConfidenceTimeline = useMemo(() => (
+  routeConfidenceTimelineMatchesRoute(navigateRouteConfidenceTimeline, intelRouteContext.routeId, intelRouteContext.routeFingerprint)
+    ? navigateRouteConfidenceTimeline
+    : null
+), [
+  intelRouteContext.routeFingerprint,
+  intelRouteContext.routeId,
+  navigateRouteConfidenceTimeline,
+]);
+
 useEffect(() => {
   if (!selectedRouteConfidenceTimelineItemId) return;
-  if (!navigateRouteConfidenceTimeline?.items.some((item) => item.id === selectedRouteConfidenceTimelineItemId)) {
+  if (!validNavigateRouteConfidenceTimeline?.items.some((item) => item.id === selectedRouteConfidenceTimelineItemId)) {
     setSelectedRouteConfidenceTimelineItemId(null);
   }
-}, [navigateRouteConfidenceTimeline, selectedRouteConfidenceTimelineItemId]);
+}, [selectedRouteConfidenceTimelineItemId, validNavigateRouteConfidenceTimeline]);
 
 const navigateCampOverlayReadinessCandidates = useMemo(() => {
   const campOverlayVisible =
@@ -14496,6 +14592,7 @@ useEffect(() => {
       ? navigateCampOverlayReadinessCandidates
       : null,
     campDecisionClock: navigateCampDecisionClock,
+    campDecisionClockFeatureEnabled: navigateCampDecisionClockFeatureEnabled,
     tripIntent: shouldInferOvernightCamp ? 'overnightCamp' : readinessSnapshot.inputPatch.tripIntent,
     tripIntentSource: shouldInferOvernightCamp ? 'ecs_inferred' : readinessSnapshot.inputPatch.tripIntentSource,
   });
@@ -14503,6 +14600,7 @@ useEffect(() => {
   intelHasRoute,
   intelRouteContext.routeFingerprint,
   navigateCampDecisionClock,
+  navigateCampDecisionClockFeatureEnabled,
   navigateCampOverlayReadinessCandidates,
 ]);
 const intelReadinessStack =
@@ -14608,6 +14706,7 @@ type CameraCommand = {
   zoom?: number;
   followUser?: boolean;
   force?: boolean;
+  reason?: string;
 };
 
 const issueCameraCommand = useCallback((command: CameraCommand) => {
@@ -14639,7 +14738,7 @@ const issueCameraCommand = useCallback((command: CameraCommand) => {
       zoom: Number.isFinite(command.zoom) ? Number(command.zoom) : mapZoom,
       durationMs: 450,
       animate: true,
-      reason: shouldFollow ? 'camera_command_follow' : 'camera_command_focus',
+      reason: command.reason ?? (shouldFollow ? 'camera_command_follow' : 'camera_command_focus'),
     }, { force: command.force });
     return;
   }
@@ -14657,7 +14756,7 @@ const handleRouteConfidenceTimelineItemPress = useCallback((item: RouteConfidenc
   const target = routeConfidenceTimelinePointAtMeasure(
     displayedRoutePoints,
     item,
-    navigateRouteConfidenceTimeline?.totalMeasure ?? item.endMeasure,
+    validNavigateRouteConfidenceTimeline?.totalMeasure ?? item.endMeasure,
   );
   if (target) {
     issueCameraCommand({
@@ -14665,9 +14764,10 @@ const handleRouteConfidenceTimelineItemPress = useCallback((item: RouteConfidenc
       target,
       zoom: 12,
       force: true,
+      reason: 'route_confidence_timeline_focus',
     });
   }
-}, [displayedRoutePoints, issueCameraCommand, navigateRouteConfidenceTimeline?.totalMeasure]);
+}, [displayedRoutePoints, issueCameraCommand, validNavigateRouteConfidenceTimeline?.totalMeasure]);
 
 const handleOpenOfflineCache = useCallback(() => {
   hapticCommand();
@@ -21101,7 +21201,7 @@ const stableMapSurface = useMemo(() => {
 
         {routeConfidenceTimelineEnabled ? (
           <RouteConfidenceTimelinePanel
-            timeline={navigateRouteConfidenceTimeline}
+            timeline={validNavigateRouteConfidenceTimeline}
             selectedItemId={selectedRouteConfidenceTimelineItemId}
             onSelectItem={handleRouteConfidenceTimelineItemPress}
           />

@@ -32,6 +32,7 @@ const {
   buildCampDecisionClockDecisionFromRecommendationSet,
   evaluateCampDecisionClock,
   campDecisionClockUnavailableDecision,
+  isCampDecisionClockFeatureEnabled,
 } = require(campopsPath);
 
 function candidate(id, name, source = 'route_endpoint_candidate') {
@@ -106,6 +107,43 @@ function baseInput(overrides = {}) {
   };
 }
 
+function traceFactors(decision) {
+  return new Set((decision.decisionTrace ?? []).map((item) => item.factor));
+}
+
+function assertTraceIncludes(decision, factors, label) {
+  const present = traceFactors(decision);
+  factors.forEach((factor) => {
+    assert.ok(present.has(factor), `${label} should include decision trace factor ${factor}.`);
+  });
+}
+
+const originalCampDecisionClockGlobal = globalThis.__ECS_CAMP_DECISION_CLOCK__;
+const originalExpoCampDecisionClockEnv = process.env.EXPO_PUBLIC_ECS_CAMP_DECISION_CLOCK;
+const originalCampDecisionClockEnv = process.env.ECS_CAMP_DECISION_CLOCK;
+delete globalThis.__ECS_CAMP_DECISION_CLOCK__;
+delete process.env.EXPO_PUBLIC_ECS_CAMP_DECISION_CLOCK;
+delete process.env.ECS_CAMP_DECISION_CLOCK;
+assert.strictEqual(isCampDecisionClockFeatureEnabled(), false, 'Camp Decision Clock should be off unless a runtime feature flag enables it.');
+assert.strictEqual(
+  isCampDecisionClockFeatureEnabled({ campDecisionClock: true }),
+  true,
+  'Explicit Camp Decision Clock feature flag should enable the module.',
+);
+assert.strictEqual(
+  isCampDecisionClockFeatureEnabled({ campDecisionClock: false }),
+  false,
+  'Explicit disabled feature flag should keep guidance hidden.',
+);
+globalThis.__ECS_CAMP_DECISION_CLOCK__ = true;
+assert.strictEqual(isCampDecisionClockFeatureEnabled(), true, 'Global runtime flag should enable Camp Decision Clock.');
+if (originalCampDecisionClockGlobal === undefined) delete globalThis.__ECS_CAMP_DECISION_CLOCK__;
+else globalThis.__ECS_CAMP_DECISION_CLOCK__ = originalCampDecisionClockGlobal;
+if (originalExpoCampDecisionClockEnv === undefined) delete process.env.EXPO_PUBLIC_ECS_CAMP_DECISION_CLOCK;
+else process.env.EXPO_PUBLIC_ECS_CAMP_DECISION_CLOCK = originalExpoCampDecisionClockEnv;
+if (originalCampDecisionClockEnv === undefined) delete process.env.ECS_CAMP_DECISION_CLOCK;
+else process.env.ECS_CAMP_DECISION_CLOCK = originalCampDecisionClockEnv;
+
 const conservative = evaluateCampDecisionClock(baseInput());
 assert.strictEqual(conservative.readiness, 'feature_flagged');
 assert.strictEqual(conservative.state, 'continue');
@@ -113,6 +151,65 @@ assert.strictEqual(conservative.continueUntil, '2026-06-12T21:35:00.000Z');
 assert.strictEqual(conservative.backupEndpointId, 'backup');
 assert.strictEqual(conservative.emergencyViableUntil, '2026-06-13T01:05:00.000Z');
 assert.ok(conservative.mainRisk.includes('fuel'), 'Main risk should identify the low resource margin that set the earliest cutoff.');
+assert.ok(Array.isArray(conservative.decisionTrace), 'Decision Clock should expose deterministic decisionTrace proof.');
+assert.strictEqual(conservative.winningConstraint.factor, 'fuel_margin');
+assertTraceIncludes(conservative, [
+  'planned_camp_arrival',
+  'backup_endpoint_viability',
+  'emergency_endpoint_viability',
+  'usable_light',
+  'setup_buffer',
+  'delay_scenario',
+  'route_difficulty',
+  'weather_risk',
+  'fuel_margin',
+  'water_margin',
+  'power_margin',
+  'camp_confidence',
+  'legal_access_confidence',
+  'data_freshness',
+  'provider_validation',
+  'input_validation',
+], 'Conservative decision');
+
+const daylightSetupWinner = evaluateCampDecisionClock(baseInput({
+  delayScenario: 'no_delay',
+  daylightWindow: {
+    sunsetAt: '2026-06-13T01:00:00.000Z',
+    usableLightEndsAt: '2026-06-12T23:00:00.000Z',
+  },
+  eta: {
+    plannedArrivalAt: '2026-06-12T22:30:00.000Z',
+    latestSafeArrivalAt: '2026-06-13T02:00:00.000Z',
+    confidence: 'medium',
+    source: 'manual',
+    updatedAt: '2026-06-12T20:45:00.000Z',
+  },
+  backupEndpoint: endpoint('backup', { latestDivertAt: '2026-06-13T01:30:00.000Z' }),
+  margins: {
+    fuel: margin('comfortable'),
+    water: margin('comfortable', { unit: 'gallons' }),
+    power: margin('comfortable', { unit: 'percent' }),
+  },
+  routeDifficulty: 'easy',
+  weatherRisk: 'clear',
+}));
+assert.strictEqual(daylightSetupWinner.continueUntil, '2026-06-12T21:00:00.000Z');
+assert.strictEqual(daylightSetupWinner.winningConstraint.factor, 'usable_light');
+
+const backupWinner = evaluateCampDecisionClock(baseInput({
+  delayScenario: 'no_delay',
+  backupEndpoint: endpoint('backup', { latestDivertAt: '2026-06-12T21:20:00.000Z' }),
+  margins: {
+    fuel: margin('comfortable'),
+    water: margin('comfortable', { unit: 'gallons' }),
+    power: margin('comfortable', { unit: 'percent' }),
+  },
+  routeDifficulty: 'easy',
+  weatherRisk: 'clear',
+}));
+assert.strictEqual(backupWinner.continueUntil, '2026-06-12T21:20:00.000Z');
+assert.strictEqual(backupWinner.winningConstraint.factor, 'backup_endpoint_viability');
 
 const freshBaseline = evaluateCampDecisionClock(baseInput({
   margins: {
@@ -150,6 +247,8 @@ assert.ok(
   ![staleUnvalidated.mainRisk, ...staleUnvalidated.warnings].join(' ').toLowerCase().includes('legal campsite'),
   'Clock output must not present camp legality as certain.',
 );
+assert.strictEqual(staleUnvalidated.winningConstraint.factor, 'legal_access_confidence');
+assertTraceIncludes(staleUnvalidated, ['legal_access_confidence', 'data_freshness'], 'Stale/unvalidated decision');
 
 const unvalidatedProviderBackup = evaluateCampDecisionClock(baseInput({
   backupEndpoint: endpoint('backup', {
@@ -168,18 +267,86 @@ assert.ok(
   unvalidatedProviderBackup.warnings.some((warning) => warning.includes('unvalidated provider')),
   'Provider validation limitation should be visible.',
 );
+assert.strictEqual(unvalidatedProviderBackup.winningConstraint.factor, 'backup_endpoint_viability');
+assert.ok(
+  unvalidatedProviderBackup.decisionTrace.some((item) => item.factor === 'provider_validation' && item.severity === 'critical'),
+  'Unvalidated provider rejection should be visible in trace.',
+);
 
 const missingBackup = evaluateCampDecisionClock(baseInput({ backupEndpoint: undefined }));
 assert.strictEqual(missingBackup.state, 'emergency_only');
 assert.strictEqual(missingBackup.continueUntil, undefined);
 assert.strictEqual(missingBackup.emergencyViableUntil, '2026-06-13T01:05:00.000Z');
 assert.ok(missingBackup.warnings.some((warning) => warning.includes('Backup endpoint data is missing')));
+assert.strictEqual(missingBackup.winningConstraint.factor, 'backup_endpoint_viability');
+
+const missingEmergency = evaluateCampDecisionClock(baseInput({ emergencyEndpoint: undefined }));
+assert.strictEqual(missingEmergency.emergencyViableUntil, undefined);
+assert.ok(
+  missingEmergency.warnings.some((warning) => warning.includes('Emergency endpoint data is missing')),
+  'Missing emergency endpoint should be explicit.',
+);
+
+const expiredEmergency = evaluateCampDecisionClock(baseInput({
+  emergencyEndpoint: endpoint('emergency', { viableUntil: '2026-06-12T21:00:00.000Z' }),
+}));
+assert.strictEqual(expiredEmergency.state, 'unavailable');
+assert.strictEqual(expiredEmergency.continueUntil, undefined);
+assert.strictEqual(expiredEmergency.emergencyViableUntil, undefined);
+assert.strictEqual(expiredEmergency.winningConstraint.factor, 'emergency_endpoint_viability');
+assert.ok(
+  expiredEmergency.warnings.some((warning) => warning.includes('Emergency endpoint viability has expired')),
+  'Expired emergency endpoint should not remain active.',
+);
 
 const pastCutoff = evaluateCampDecisionClock(baseInput({
   currentTime: '2026-06-12T21:40:00.000Z',
 }));
 assert.strictEqual(pastCutoff.state, 'divert_now');
 assert.strictEqual(pastCutoff.continueUntil, '2026-06-12T21:35:00.000Z');
+
+const atCutoff = evaluateCampDecisionClock(baseInput({
+  currentTime: '2026-06-12T21:35:00.000Z',
+}));
+assert.strictEqual(atCutoff.state, 'divert_now', 'At continueUntil the clock should transition to divert-now.');
+
+const invalidTimestamps = evaluateCampDecisionClock(baseInput({
+  currentTime: 'not-a-date',
+  daylightWindow: {
+    sunsetAt: 'not-a-sunset',
+    usableLightEndsAt: 'not-a-light-window',
+  },
+  eta: {
+    plannedArrivalAt: 'bad-eta',
+    latestSafeArrivalAt: 'bad-safe-arrival',
+    travelTimeRemainingMinutes: null,
+    confidence: 'unknown',
+    source: 'manual',
+  },
+  routeProgress: {
+    driveTimeRemainingMinutes: null,
+    source: 'manual',
+    confidence: 'unknown',
+  },
+  emergencyEndpoint: endpoint('emergency', { viableUntil: 'not-an-emergency-window' }),
+}));
+assert.strictEqual(invalidTimestamps.state, 'unavailable');
+assert.strictEqual(invalidTimestamps.continueUntil, undefined);
+assert.ok(
+  invalidTimestamps.decisionTrace.some((item) => item.factor === 'input_validation' && item.severity === 'critical'),
+  'Invalid timestamps should degrade safely with input validation trace.',
+);
+
+const contradictoryDaylight = evaluateCampDecisionClock(baseInput({
+  daylightWindow: {
+    sunsetAt: '2026-06-12T23:00:00.000Z',
+    usableLightEndsAt: '2026-06-13T00:00:00.000Z',
+  },
+}));
+assert.ok(
+  contradictoryDaylight.warnings.some((warning) => warning.includes('Usable light window extends after sunset')),
+  'Contradictory daylight windows should be visible.',
+);
 
 const recommendationClock = buildCampDecisionClockDecisionFromRecommendationSet({
   recommendedCamp: candidate('planned', 'Planned Ridge Camp'),
@@ -226,6 +393,8 @@ assert.strictEqual(recommendationClock.continueUntil, '2026-06-12T22:15:00.000Z'
 assert.strictEqual(recommendationClock.backupEndpointId, 'backup');
 assert.strictEqual(recommendationClock.emergencyViableUntil, '2026-06-12T23:00:00.000Z');
 assert.ok(recommendationClock.warnings.some((warning) => warning.includes('Safe End Point')));
+assert.strictEqual(recommendationClock.winningConstraint.factor, 'backup_endpoint_viability');
+assertTraceIncludes(recommendationClock, ['backup_endpoint_viability', 'emergency_endpoint_viability'], 'CampOps recommendation decision');
 
 const recommendationClockPast = buildCampDecisionClockDecisionFromRecommendationSet({
   recommendedCamp: candidate('planned', 'Planned Ridge Camp'),
@@ -259,5 +428,7 @@ const unavailable = campDecisionClockUnavailableDecision('No Safe End Point resu
 assert.strictEqual(unavailable.state, 'unavailable');
 assert.strictEqual(unavailable.readiness, 'feature_flagged');
 assert.ok(unavailable.warnings[0].includes('No Safe End Point result'));
+assert.strictEqual(unavailable.winningConstraint.factor, 'input_validation');
+assert.ok(unavailable.decisionTrace.some((item) => item.factor === 'input_validation'));
 
 console.log('Camp Decision Clock checks passed.');

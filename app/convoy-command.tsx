@@ -30,10 +30,10 @@ import {
   type ConvoyRole,
 } from '../lib/convoy/convoyMembershipService';
 import {
+  buildConvoyStalenessPolicyEvidenceFromConfig,
   buildConvoyStalenessLadder,
   type ConvoyStalenessLadder,
   type ConvoyStalenessLadderRow,
-  type StalenessPolicy,
 } from '../lib/convoy/convoyStalenessLadder';
 import { dispatchProfileStore } from '../lib/dispatchProfileStore';
 import { TACTICAL, TYPO } from '../lib/theme';
@@ -89,28 +89,6 @@ function formatLocationAge(summary: ConvoyLocationSummaryRecord | null): string 
   if (ageMinutes < 1) return 'Just now';
   if (ageMinutes < 60) return `${ageMinutes}m ago`;
   return `${Math.floor(ageMinutes / 60)}h ago`;
-}
-
-function convoyStalenessPolicyFromConfig(convoy: ConvoyListItem['convoy'] | null | undefined): StalenessPolicy | null {
-  const source = convoy as (ConvoyListItem['convoy'] & {
-    staleness_policy?: Partial<StalenessPolicy> | null;
-    stalenessPolicy?: Partial<StalenessPolicy> | null;
-  }) | null | undefined;
-  const policy = source?.staleness_policy ?? source?.stalenessPolicy ?? null;
-  const delayedAfter = Number(policy?.delayedAfter);
-  const staleAfter = Number(policy?.staleAfter);
-  const missingAfter = Number(policy?.missingAfter);
-  if (
-    !Number.isFinite(delayedAfter) ||
-    !Number.isFinite(staleAfter) ||
-    !Number.isFinite(missingAfter) ||
-    delayedAfter < 0 ||
-    staleAfter <= delayedAfter ||
-    missingAfter <= staleAfter
-  ) {
-    return null;
-  }
-  return { delayedAfter, staleAfter, missingAfter };
 }
 
 function convoyStalenessStatusLabel(status: ConvoyStalenessLadderRow['status']): string {
@@ -202,49 +180,55 @@ export default function ConvoyCommandCredentialsScreen() {
     () => new Map(locationSummaries.map((summary) => [summary.member_id, summary])),
     [locationSummaries],
   );
-  const convoyStalenessPolicy = useMemo(
-    () => convoyStalenessPolicyFromConfig(selectedConvoy?.convoy ?? null),
-    [selectedConvoy?.convoy],
-  );
   const convoyStalenessLadder = useMemo(
-    () => buildConvoyStalenessLadder({
-      now: new Date().toISOString(),
-      policy: convoyStalenessPolicy,
-      roster: members.map((member) => ({
-        memberId: member.id,
-        displayName: member.callsign,
-        role: member.role,
-      })),
-      permissions: {
-        canViewRoster: Boolean(selectedConvoy),
-        canViewStatus: Boolean(selectedConvoy),
-        canViewCheckInTimestamps: Boolean(selectedConvoy),
-        canViewSharedCoordinates: Boolean(selectedConvoy),
-        canViewOfflineReplayState: Boolean(selectedConvoy),
-      },
-      lastAcceptedCheckIns: locationSummaries
-        .map((summary) => ({
-          memberId: summary.member_id,
-          acceptedAt: summary.captured_at ?? summary.updated_at ?? '',
-          source: 'convoy_location_summary',
-        }))
-        .filter((checkIn) => checkIn.acceptedAt),
-      channelStates: locationSummaries.map((summary) => ({
-        memberId: summary.member_id,
-        state: summary.movement_status ?? 'unknown',
-        observedAt: summary.updated_at ?? summary.captured_at ?? null,
-      })),
-      offlineReplay: rosterStaleMessage
-        ? members.map((member) => ({
-            memberId: member.id,
-            state: 'pending',
-            capturedAt: null,
-            visible: true,
+    () => {
+      const generatedAt = new Date().toISOString();
+      const policyEvidence = buildConvoyStalenessPolicyEvidenceFromConfig(
+        selectedConvoy?.convoy ?? null,
+        {
+          now: generatedAt,
+          context: { convoyId: selectedConvoy?.convoy.id ?? null },
+        },
+      );
+      return buildConvoyStalenessLadder({
+        now: generatedAt,
+        policyEvidence,
+        context: { convoyId: selectedConvoy?.convoy.id ?? null },
+        roster: members.map((member) => ({
+          memberId: member.id,
+          displayName: member.callsign,
+          role: member.role,
+        })),
+        permissions: {
+          canViewRoster: Boolean(selectedConvoy),
+          canViewStatus: Boolean(selectedConvoy),
+          canViewCheckInTimestamps: Boolean(selectedConvoy),
+          canViewSharedCoordinates: Boolean(selectedConvoy),
+          canViewOfflineReplayState: Boolean(selectedConvoy),
+        },
+        lastAcceptedCheckIns: locationSummaries
+          .map((summary) => ({
+            memberId: summary.member_id,
+            acceptedAt: summary.captured_at ?? summary.updated_at ?? '',
+            source: 'convoy_location_summary',
           }))
-        : [],
-    }),
+          .filter((checkIn) => checkIn.acceptedAt),
+        channelStates: locationSummaries.map((summary) => ({
+          memberId: summary.member_id,
+          state: summary.movement_status ?? 'unknown',
+          observedAt: summary.updated_at ?? summary.captured_at ?? null,
+        })),
+        offlineReplay: rosterStaleMessage
+          ? members.map((member) => ({
+              memberId: member.id,
+              state: 'pending',
+              capturedAt: null,
+              visible: true,
+            }))
+          : [],
+      });
+    },
     [
-      convoyStalenessPolicy,
       locationSummaries,
       members,
       rosterStaleMessage,
@@ -668,7 +652,7 @@ export default function ConvoyCommandCredentialsScreen() {
               emptyLabel="Join without vehicle"
             />
             <Text style={styles.helper}>
-              Joining adds you to the roster only. Live location sharing is optional; use Start live sharing separately from Convoy Command.
+              Joining adds you to the roster only. Location sharing is optional; use Start sharing separately from Convoy Command.
             </Text>
             <ECSButton label="Join Convoy" icon="log-in-outline" variant="primary" size="compact" onPress={handleJoinConvoy} loading={loading} />
           </View>
@@ -705,7 +689,7 @@ function PrivacyCard() {
       <View style={styles.privacyCopy}>
         <Text style={styles.privacyTitle}>Private convoy access</Text>
         <Text style={styles.privacyText}>
-          Live location is shared only with active convoy members. Tracking can be turned off at any time. Leaders can revoke member or invite access.
+          Location sharing is scoped to active convoy members and can be turned off at any time. Leaders can revoke member or invite access.
         </Text>
       </View>
     </View>
@@ -860,6 +844,14 @@ function InviteList({
 }
 
 function ConvoyStalenessLadderPanel({ ladder }: { ladder: ConvoyStalenessLadder }) {
+  const policyStatus = ladder.policyEvidence.status;
+  const policyLabel = ladder.policy
+    ? `${ladder.policy.delayedAfter}/${ladder.policy.staleAfter}/${ladder.policy.missingAfter}m`
+    : 'staleness policy needed';
+  const helperText = policyStatus === 'valid'
+    ? 'Groups show check-in overdue status from accepted sources only. ECS does not infer distress from silence.'
+    : 'Expedition staleness thresholds unavailable; staleness policy needed before ECS can classify overdue check-ins.';
+
   return (
     <View style={styles.stalenessLadderCard}>
       <View style={styles.stalenessLadderHeader}>
@@ -867,15 +859,14 @@ function ConvoyStalenessLadderPanel({ ladder }: { ladder: ConvoyStalenessLadder 
           <Text style={styles.listTitle}>Convoy Staleness Ladder</Text>
           <Text style={styles.stalenessLadderBeta}>Current user-facing/internal beta extension</Text>
         </View>
-        <Text style={styles.stalenessLadderPolicy}>
-          {ladder.policy
-            ? `${ladder.policy.delayedAfter}/${ladder.policy.staleAfter}/${ladder.policy.missingAfter}m`
-            : 'Policy needed'}
-        </Text>
+        <Text style={styles.stalenessLadderPolicy}>{policyLabel}</Text>
       </View>
-      <Text style={styles.helper}>
-        Groups show check-in overdue status from accepted sources only. ECS does not infer distress from silence.
-      </Text>
+      <Text style={styles.helper}>{helperText}</Text>
+      {ladder.warnings.length ? (
+        <Text style={styles.stalenessNote} numberOfLines={2}>
+          {ladder.warnings.join(' ')}
+        </Text>
+      ) : null}
       {ladder.groups.length === 0 ? <Text style={styles.emptyText}>No convoy roster data visible.</Text> : null}
       {ladder.groups.map((group) => (
         <View key={group.group} style={styles.stalenessGroup}>

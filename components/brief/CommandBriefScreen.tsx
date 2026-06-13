@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
+  AppState,
   Pressable,
   ScrollView,
   StyleProp,
@@ -7,8 +8,10 @@ import {
   TextStyle,
   View,
   ViewStyle,
+  type AppStateStatus,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 
 import { ECSText } from '../ECSText';
 import { ECSBadge, ECSIcon } from '../ECSStatus';
@@ -36,6 +39,7 @@ import {
 } from '../../lib/readiness/expeditionReadinessTypes';
 import {
   buildDepartureDeltaBrief,
+  DEFAULT_DEPARTURE_DELTA_AUDIT_SCHEMA_VERSION,
   scoreExpeditionWeakPoints,
   expeditionReadinessStore,
   buildReadinessVehicleInputFromFleetState,
@@ -51,6 +55,8 @@ import {
   type ExpeditionReadinessVehicleInput,
   type WeakPointAssessment,
   type WeakPointCandidate,
+  type WeakPointSourceFact,
+  type WeakPointSourceSystem,
   useCanStartExpedition,
   useCurrentExpeditionReadiness,
   useExpeditionReadinessState,
@@ -63,6 +69,7 @@ import {
 } from '../../lib/brief';
 import {
   campDecisionClockUnavailableDecision,
+  isCampDecisionClockFeatureEnabled,
   type CampDecisionClockDecision,
 } from '../../lib/campops/campDecisionClock';
 import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
@@ -508,37 +515,95 @@ function campDecisionClockTone(
   return 'info';
 }
 
+function campDecisionClockDeadlineMs(value: string | undefined): number | null {
+  const parsed = Date.parse(value ?? '');
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nextCampDecisionClockDeadlineMs(
+  decision: CampDecisionClockDecision | null,
+  nowMs: number = Date.now(),
+): number | null {
+  const deadlines = [
+    campDecisionClockDeadlineMs(decision?.continueUntil),
+    campDecisionClockDeadlineMs(decision?.emergencyViableUntil),
+  ].filter((value): value is number => value != null && value > nowMs);
+  if (deadlines.length === 0) return null;
+  return Math.min(...deadlines);
+}
+
+function useCampDecisionClockRuntimeNow(decision: CampDecisionClockDecision | null): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const refreshNow = useCallback(() => setNowMs(Date.now()), []);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshNow();
+      return undefined;
+    }, [refreshNow]),
+  );
+
+  useEffect(() => {
+    const nextDeadlineMs = nextCampDecisionClockDeadlineMs(decision, nowMs);
+    const refreshDelayMs = nextDeadlineMs == null
+      ? 60_000
+      : Math.min(Math.max(nextDeadlineMs - nowMs + 100, 250), 60_000);
+    const timeout = setTimeout(refreshNow, refreshDelayMs);
+    return () => clearTimeout(timeout);
+  }, [decision, nowMs, refreshNow]);
+
+  useEffect(() => {
+    const handleAppStateChange = (nextState: AppStateStatus) => {
+      if (nextState === 'active') refreshNow();
+    };
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, [refreshNow]);
+
+  return nowMs;
+}
+
 function CampDecisionClockBriefModule({
   decision,
 }: {
   decision: CampDecisionClockDecision | null;
 }) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const interval = setInterval(() => setNowMs(Date.now()), 60_000);
-    return () => clearInterval(interval);
-  }, []);
+  const nowMs = useCampDecisionClockRuntimeNow(decision);
   const effectiveDecision = decision ?? campDecisionClockUnavailableDecision(
     'No Safe End Point result is attached to Command Brief. Continue window unavailable until CampOps provides backup endpoint timing.',
   );
   const continueCutoffMs = Date.parse(effectiveDecision.continueUntil ?? '');
+  const emergencyViableUntilMs = Date.parse(effectiveDecision.emergencyViableUntil ?? '');
+  const emergencyViabilityExpired =
+    Number.isFinite(emergencyViableUntilMs) &&
+    nowMs >= emergencyViableUntilMs;
+  const runtimeUnavailable = Boolean(effectiveDecision.emergencyViableUntil) && emergencyViabilityExpired;
   const continueCutoffPassed =
     effectiveDecision.state === 'continue' &&
     Number.isFinite(continueCutoffMs) &&
-    nowMs > continueCutoffMs;
-  const shouldDivertNow = effectiveDecision.state === 'divert_now' || continueCutoffPassed;
-  const firstLine = shouldDivertNow
+    nowMs >= continueCutoffMs;
+  const shouldDivertNow = !runtimeUnavailable && (effectiveDecision.state === 'divert_now' || continueCutoffPassed);
+  const firstLine = runtimeUnavailable
+    ? 'Camp decision clock unavailable.'
+    : shouldDivertNow
     ? 'Divert to backup endpoint now.'
     : effectiveDecision.state === 'continue'
     ? `Continue to planned camp until: ${formatCampDecisionClockTime(effectiveDecision.continueUntil)}`
     : effectiveDecision.state === 'emergency_only'
         ? 'Emergency endpoint only. Continue window unavailable.'
         : 'Camp decision clock unavailable.';
-  const backupLine = effectiveDecision.state === 'continue' && !continueCutoffPassed
+  const backupLine = runtimeUnavailable
+    ? 'Backup endpoint: unavailable'
+    : effectiveDecision.state === 'continue' && !continueCutoffPassed
     ? 'After that, divert to backup endpoint'
     : effectiveDecision.backupEndpointId
       ? `Backup endpoint: ${effectiveDecision.backupEndpointId}`
       : 'Backup endpoint: unavailable';
+  const emergencyLine = effectiveDecision.emergencyViableUntil && !emergencyViabilityExpired
+    ? `Emergency endpoint remains viable until: ${formatCampDecisionClockTime(effectiveDecision.emergencyViableUntil)}`
+    : effectiveDecision.emergencyViableUntil
+      ? 'Emergency endpoint viability expired.'
+      : 'Emergency endpoint: unavailable';
 
   return (
     <View style={styles.campDecisionClockCard}>
@@ -556,7 +621,7 @@ function CampDecisionClockBriefModule({
           {backupLine}
         </ECSText>
         <ECSText variant="helper" style={styles.campDecisionClockLine} numberOfLines={2}>
-          Emergency endpoint remains viable until: {formatCampDecisionClockTime(effectiveDecision.emergencyViableUntil)}
+          {emergencyLine}
         </ECSText>
         <ECSText variant="helper" style={styles.campDecisionClockRisk} numberOfLines={3}>
           Main risk: {effectiveDecision.mainRisk}
@@ -669,6 +734,9 @@ function DepartureDeltaBriefPanel({ result }: { result: DepartureDeltaBriefResul
   const postureCopy = result.posture.changed && result.posture.previous
     ? `Changed from ${result.posture.previous} to ${result.posture.current}.`
     : `Current posture: ${result.posture.current}.`;
+  const departureDeltaBriefUnavailableCopy = result.auditComparison.status !== 'comparable'
+    ? result.auditComparison.warnings[0] ?? `Departure audit comparison unavailable: ${result.auditComparison.status}.`
+    : 'No comparable previous departure audit available.';
 
   return (
     <View style={styles.departureDeltaBriefCard}>
@@ -686,7 +754,7 @@ function DepartureDeltaBriefPanel({ result }: { result: DepartureDeltaBriefResul
 
       {!result.hasComparablePreviousAudit ? (
         <ECSText variant="helper" style={styles.departureDeltaBriefEmptyState} numberOfLines={3}>
-          No comparable previous departure audit available.
+          {departureDeltaBriefUnavailableCopy}
         </ECSText>
       ) : (
         <View style={styles.departureDeltaBriefGrid}>
@@ -749,6 +817,7 @@ function deltaField(
   observedAt: string | null | undefined,
   source: string | null | undefined,
   unit?: string | null,
+  sourceType?: DepartureDeltaComparableField['sourceType'] | null,
 ): DepartureDeltaComparableField | null {
   if (value == null) return null;
   return {
@@ -758,6 +827,7 @@ function deltaField(
     observedAt: observedAt ?? null,
     source: source ?? null,
     unit: unit ?? null,
+    sourceType: sourceType ?? null,
   };
 }
 
@@ -765,11 +835,11 @@ function buildVehicleLoadoutDeltaValues(vehicle: ExpeditionReadinessVehicleInput
   if (!vehicle) return [];
   const vehicleId = vehicle.vehicleId ?? 'active';
   return [
-    deltaField(`vehicle:${vehicleId}:operatingWeightLbs`, 'Operating weight', vehicle.operatingWeightLbs, vehicle.updatedAt, vehicle.source, 'lb'),
-    deltaField(`vehicle:${vehicleId}:payloadRemainingLbs`, 'Payload remaining', vehicle.payloadRemainingLbs, vehicle.updatedAt, vehicle.source, 'lb'),
-    deltaField(`vehicle:${vehicleId}:gvwrUsagePct`, 'GVWR usage', vehicle.gvwrUsagePct, vehicle.updatedAt, vehicle.source, 'percent'),
-    deltaField(`loadout:${vehicleId}:activeLoadoutWeightLbs`, 'Active loadout', vehicle.activeLoadoutWeightLbs, vehicle.updatedAt, vehicle.source, 'lb'),
-    deltaField(`loadout:${vehicleId}:accessoryLoadoutWeightLbs`, 'Accessory loadout', vehicle.accessoryLoadoutWeightLbs, vehicle.updatedAt, vehicle.source, 'lb'),
+    deltaField(`vehicle:${vehicleId}:operatingWeightLbs`, 'Operating weight', vehicle.operatingWeightLbs, vehicle.updatedAt, vehicle.source, 'lb', 'fleet_state'),
+    deltaField(`vehicle:${vehicleId}:payloadRemainingLbs`, 'Payload remaining', vehicle.payloadRemainingLbs, vehicle.updatedAt, vehicle.source, 'lb', 'fleet_state'),
+    deltaField(`vehicle:${vehicleId}:gvwrUsagePct`, 'GVWR usage', vehicle.gvwrUsagePct, vehicle.updatedAt, vehicle.source, 'percent', 'fleet_state'),
+    deltaField(`loadout:${vehicleId}:activeLoadoutWeightLbs`, 'Active loadout', vehicle.activeLoadoutWeightLbs, vehicle.updatedAt, vehicle.source, 'lb', 'fleet_state'),
+    deltaField(`loadout:${vehicleId}:accessoryLoadoutWeightLbs`, 'Accessory loadout', vehicle.accessoryLoadoutWeightLbs, vehicle.updatedAt, vehicle.source, 'lb', 'fleet_state'),
   ].filter((item): item is DepartureDeltaComparableField => Boolean(item));
 }
 
@@ -778,32 +848,51 @@ function buildDepartureDeltaCurrentContext({
   input,
   activeVehicle,
   routeSession,
+  activeTripId,
+  activeRouteId,
 }: {
   assessment: ExpeditionReadinessAssessment | null;
   input: ExpeditionReadinessInput;
   activeVehicle: ExpeditionReadinessVehicleInput | null;
   routeSession: ReturnType<typeof useRouteSessionSnapshot>;
+  activeTripId?: string | null;
+  activeRouteId?: string | null;
 }): DepartureDeltaCurrentContext {
   const currentAt = assessment?.updatedAt ?? input.capturedAt ?? routeSession.updatedAt ?? new Date().toISOString();
   const offline = input.offline ?? null;
   const packageStatus = offline?.packageStatus ?? 'unknown';
   const campCandidate = input.campCandidates?.[0] ?? null;
+  const currentRouteId = input.route?.routeId ?? routeSession.routeId ?? activeRouteId ?? null;
+  const currentVehicleId = activeVehicle?.vehicleId ?? null;
+  const currentLoadoutId = currentVehicleId ? `loadout:${currentVehicleId}` : null;
   const campConfidence =
     campCandidate?.legalAccessConfidence === 'high' || campCandidate?.legalAccessConfidence === 'medium' || campCandidate?.legalAccessConfidence === 'low'
       ? campCandidate.legalAccessConfidence
       : 'unknown';
 
   return {
+    domainIdentity: {
+      tripId: activeTripId ?? null,
+      expeditionId: activeTripId ?? null,
+      routeId: currentRouteId,
+      vehicleId: currentVehicleId,
+      loadoutId: currentLoadoutId,
+      dispatchRosterId: 'command-brief-dispatch-roster',
+      auditSchemaVersion: DEFAULT_DEPARTURE_DELTA_AUDIT_SCHEMA_VERSION,
+      createdAt: currentAt,
+    },
     readiness: {
       posture: deltaPostureFromAssessment(assessment),
       observedAt: assessment?.updatedAt ?? currentAt,
       source: 'readiness_engine',
+      sourceType: 'readiness_engine',
       blockers: (assessment?.blockers ?? []).map((blocker) => ({
         id: blocker.id,
         label: blocker.label,
         severity: blocker.severity,
         observedAt: assessment?.updatedAt ?? currentAt,
         source: 'readiness_engine',
+        sourceType: 'readiness_engine',
         detail: blocker.detail,
       })),
     },
@@ -815,13 +904,17 @@ function buildDepartureDeltaCurrentContext({
       routeSession.lifecycle,
       routeSession.updatedAt ?? input.route?.updatedAt ?? currentAt,
       input.route?.source ?? 'live',
+      undefined,
+      'route_state',
     ),
     weatherFreshness: {
       status: input.weather?.isStale ? 'stale' : input.weather?.updatedAt ? 'fresh' : 'missing',
       observedAt: input.weather?.updatedAt ?? null,
       source: input.weather?.source ?? null,
+      sourceType: 'weather_state',
     },
     offlinePackage: {
+      packageId: currentRouteId ? `offline:${currentRouteId}` : null,
       packageStatus,
       coverage: packageStatus === 'ready' ? 'complete' : packageStatus === 'partial' ? 'partial' : packageStatus === 'missing' ? 'missing' : 'unknown',
       freshness: offline?.isStale || offline?.currentRoutePackageFresh === false ? 'stale' : offline?.updatedAt ? 'fresh' : 'missing',
@@ -829,6 +922,7 @@ function buildDepartureDeltaCurrentContext({
       cacheCompletenessPct: packageStatus === 'ready' ? 100 : packageStatus === 'partial' ? 50 : packageStatus === 'missing' ? 0 : null,
       observedAt: offline?.updatedAt ?? null,
       source: offline?.source ?? null,
+      sourceType: 'offline_package',
     },
     campEndpointConfidence: campCandidate
       ? {
@@ -837,17 +931,20 @@ function buildDepartureDeltaCurrentContext({
           confidenceScale: 'low_medium_high',
           observedAt: campCandidate.updatedAt ?? null,
           source: campCandidate.source ?? null,
+          sourceType: 'camp_endpoint',
         }
       : null,
     dispatchRoster: {
+      rosterId: 'command-brief-dispatch-roster',
       status: 'missing',
       observedAt: null,
       source: 'missing',
+      sourceType: 'dispatch_roster',
     },
     margins: {
-      fuel: deltaField('margin:fuel', 'Fuel margin', input.fuel?.rangeRemainingMiles ?? input.fuel?.fuelPercent ?? null, input.fuel?.updatedAt ?? null, input.fuel?.source ?? null),
-      water: deltaField('margin:water', 'Water margin', activeVehicle?.waterCapacityGal ?? null, activeVehicle?.updatedAt ?? null, activeVehicle?.source ?? null, 'gal'),
-      power: deltaField('margin:power', 'Power margin', input.power?.batteryPercent ?? input.power?.runtimeHoursRemaining ?? null, input.power?.updatedAt ?? null, input.power?.source ?? null),
+      fuel: deltaField('margin:fuel', 'Fuel margin', input.fuel?.rangeRemainingMiles ?? input.fuel?.fuelPercent ?? null, input.fuel?.updatedAt ?? null, input.fuel?.source ?? null, undefined, 'resource_margin'),
+      water: deltaField('margin:water', 'Water margin', activeVehicle?.waterCapacityGal ?? null, activeVehicle?.updatedAt ?? null, activeVehicle?.source ?? null, 'gal', 'resource_margin'),
+      power: deltaField('margin:power', 'Power margin', input.power?.batteryPercent ?? input.power?.runtimeHoursRemaining ?? null, input.power?.updatedAt ?? null, input.power?.source ?? null, undefined, 'resource_margin'),
     },
   };
 }
@@ -857,12 +954,23 @@ function weakPointFact(
   label: string,
   value: string | number | boolean | null | undefined,
   updatedAt?: string | null,
-) {
+  sourceSystem: WeakPointSourceSystem = 'command_brief_adapter',
+  fieldPath?: string,
+): WeakPointSourceFact {
   return {
     id,
+    factId: id,
+    sourceSystem,
+    fieldPath: fieldPath ?? `commandBrief.${id}`,
     label,
     value: value ?? null,
     updatedAt: updatedAt ?? null,
+    observedAt: updatedAt ?? undefined,
+    generatedAt: updatedAt ?? undefined,
+    freshness: updatedAt ? 'fresh' : 'unavailable',
+    confidence: 'inferred',
+    sourceName: 'Command Brief readiness adapter',
+    schemaVersion: 'weak-point-source-fact-v1',
   };
 }
 
@@ -898,20 +1006,22 @@ function buildExpeditionReadinessSnapshotForWeakPoints({
   const powerCategory = categoryById(assessment, 'power_runtime');
   const recoveryCategory = categoryById(assessment, 'recovery_bailout_access');
   const vehicleCategory = categoryById(assessment, 'vehicle_fit');
+  const convoyCategory = categoryById(assessment, 'communications_signal_confidence');
   const campCandidate = input.campCandidates?.[0] ?? null;
   const routeId = activeRouteId ?? routeSession.routeId ?? input.route?.routeId ?? 'none';
   const tripId = activeTripId ?? 'trip';
   const sourceFacts = [
-    weakPointFact('route-confidence', 'Route confidence', input.route?.routeConfidence ?? routeCategory?.confidence ?? null, input.route?.updatedAt ?? routeCategory?.lastUpdatedAt ?? capturedAt),
-    weakPointFact('fuel-margin', 'Fuel margin', input.fuel?.reserveMiles ?? input.fuel?.rangeRemainingMiles ?? input.fuel?.fuelPercent ?? null, input.fuel?.updatedAt ?? fuelCategory?.lastUpdatedAt ?? null),
-    weakPointFact('water-margin', 'Water margin', activeVehicle?.waterCapacityGal ?? null, activeVehicle?.updatedAt ?? null),
-    weakPointFact('power-margin', 'Power margin', input.power?.runtimeHoursRemaining ?? input.power?.batteryPercent ?? null, input.power?.updatedAt ?? powerCategory?.lastUpdatedAt ?? null),
-    weakPointFact('payload-margin', 'Payload/GVWR', activeVehicle?.gvwrUsagePct ?? activeVehicle?.payloadRemainingLbs ?? null, activeVehicle?.updatedAt ?? vehicleCategory?.lastUpdatedAt ?? null),
-    weakPointFact('camp-access', 'Camp endpoint confidence', campCandidate?.legalAccessConfidence ?? campCategory?.confidence ?? null, campCandidate?.updatedAt ?? campCategory?.lastUpdatedAt ?? null),
-    weakPointFact('offline-package', 'Offline readiness', input.offline?.packageStatus ?? offlineCategory?.status ?? null, input.offline?.updatedAt ?? offlineCategory?.lastUpdatedAt ?? null),
-    weakPointFact('weather', 'Weather freshness', input.weather?.riskLevel ?? weatherCategory?.status ?? null, input.weather?.updatedAt ?? weatherCategory?.lastUpdatedAt ?? null),
-    weakPointFact('daylight', 'Daylight margin', input.daylight?.minutesRemainingAtArrival ?? daylightCategory?.status ?? null, input.daylight?.updatedAt ?? daylightCategory?.lastUpdatedAt ?? null),
-    weakPointFact('recovery', 'Recovery/bailout access', input.recovery?.routeBailoutOptionCount ?? input.recovery?.nearestExitMiles ?? recoveryCategory?.status ?? null, input.recovery?.updatedAt ?? recoveryCategory?.lastUpdatedAt ?? null),
+    weakPointFact('route-confidence', 'Route confidence', input.route?.routeConfidence ?? routeCategory?.confidence ?? null, input.route?.updatedAt ?? routeCategory?.lastUpdatedAt ?? capturedAt, 'route_confidence', 'commandBrief.routeConfidence'),
+    weakPointFact('fuel-margin', 'Fuel margin', input.fuel?.reserveMiles ?? input.fuel?.rangeRemainingMiles ?? input.fuel?.fuelPercent ?? null, input.fuel?.updatedAt ?? fuelCategory?.lastUpdatedAt ?? null, 'logistics', 'commandBrief.fuelMargin'),
+    weakPointFact('water-margin', 'Water margin', activeVehicle?.waterCapacityGal ?? null, activeVehicle?.updatedAt ?? null, 'logistics', 'commandBrief.waterMargin'),
+    weakPointFact('power-margin', 'Power margin', input.power?.runtimeHoursRemaining ?? input.power?.batteryPercent ?? null, input.power?.updatedAt ?? powerCategory?.lastUpdatedAt ?? null, 'logistics', 'commandBrief.powerMargin'),
+    weakPointFact('payload-margin', 'Payload/GVWR', activeVehicle?.gvwrUsagePct ?? activeVehicle?.payloadRemainingLbs ?? null, activeVehicle?.updatedAt ?? vehicleCategory?.lastUpdatedAt ?? null, 'fleet', 'commandBrief.payloadGvwr'),
+    weakPointFact('camp-access', 'Camp endpoint confidence', campCandidate?.legalAccessConfidence ?? campCategory?.confidence ?? null, campCandidate?.updatedAt ?? campCategory?.lastUpdatedAt ?? null, 'campops', 'commandBrief.campEndpointConfidence'),
+    weakPointFact('offline-package', 'Offline readiness', input.offline?.packageStatus ?? offlineCategory?.status ?? null, input.offline?.updatedAt ?? offlineCategory?.lastUpdatedAt ?? null, 'offline_honesty', 'commandBrief.offlineReadiness'),
+    weakPointFact('weather', 'Weather freshness', input.weather?.riskLevel ?? weatherCategory?.status ?? null, input.weather?.updatedAt ?? weatherCategory?.lastUpdatedAt ?? null, 'weather', 'commandBrief.weatherFreshness'),
+    weakPointFact('daylight', 'Daylight margin', input.daylight?.minutesRemainingAtArrival ?? daylightCategory?.status ?? null, input.daylight?.updatedAt ?? daylightCategory?.lastUpdatedAt ?? null, 'daylight', 'commandBrief.daylight'),
+    weakPointFact('recovery', 'Recovery/bailout access', input.recovery?.routeBailoutOptionCount ?? input.recovery?.nearestExitMiles ?? recoveryCategory?.status ?? null, input.recovery?.updatedAt ?? recoveryCategory?.lastUpdatedAt ?? null, 'recovery_bailout', 'commandBrief.recoveryBailoutAccess'),
+    weakPointFact('convoy', 'Convoy state', convoyCategory?.status ?? null, convoyCategory?.lastUpdatedAt ?? capturedAt, 'convoy', 'commandBrief.convoyState'),
   ];
 
   return {
@@ -1013,7 +1123,15 @@ function buildExpeditionReadinessSnapshotForWeakPoints({
           updatedAt: input.recovery?.updatedAt ?? recoveryCategory?.lastUpdatedAt ?? capturedAt,
         }
       : null,
-    convoyState: null,
+    convoyState: convoyCategory
+      ? {
+          rosterReady: null,
+          communicationsReady: convoyCategory.status !== 'hold',
+          membersAccountedFor: null,
+          sourceFactIds: ['convoy'],
+          updatedAt: convoyCategory.lastUpdatedAt ?? capturedAt,
+        }
+      : null,
     sourceFacts,
   };
 }
@@ -1022,6 +1140,9 @@ function WeakPointAnalyzerPanel({ assessment }: { assessment: WeakPointAssessmen
   const primary = assessment.mostFragileAssumption;
   const ranked = assessment.rankedWeakPoints.slice(0, 3);
   const maturityLabel = assessment.maturityLabel || 'Internal beta / restricted field-test';
+  const completeDomains = assessment.snapshotCoverage.domains.filter((domain) => domain.status === 'complete').length;
+  const coverageTotal = assessment.snapshotCoverage.domains.length;
+  const completenessLabel = assessment.assessmentCompleteness.replace(/_/g, ' ');
   return (
     <View style={styles.weakPointAnalyzerCard}>
       <View style={styles.sectionHeader}>
@@ -1051,6 +1172,14 @@ function WeakPointAnalyzerPanel({ assessment }: { assessment: WeakPointAssessmen
         <WeakPointAnalyzerRow
           label="Monitor during travel:"
           value={assessment.monitorDuringTravel?.travelMonitorSignal ?? 'Monitor manually until ECS has snapshot data.'}
+        />
+        <WeakPointAnalyzerRow
+          label="Assessment completeness:"
+          value={`${completenessLabel}; ${completeDomains}/${coverageTotal} domains complete.`}
+        />
+        <WeakPointAnalyzerRow
+          label="Provenance / trace:"
+          value={`Source facts: ${assessment.sourceFacts.length}. Scoring trace: ${assessment.scoringTrace.length}. Advisory only.`}
         />
       </View>
       <View style={styles.weakPointAnalyzerRankList}>
@@ -1109,6 +1238,14 @@ function LoadoutConsequenceCommandBriefPanel({
 }: {
   summary: CommandBriefLoadoutConsequenceSummary;
 }) {
+  const sourceLabel = summary.source === 'committed_loadout'
+    ? 'committed Fleet loadout'
+    : summary.source === 'saved_loadout'
+      ? 'saved Fleet loadout'
+      : 'Fleet staged loadout preview';
+  const mirrorStatus = summary.stale
+    ? `Stale mirror: ${summary.invalidationReason ?? 'expired'}`
+    : `Source: ${sourceLabel}`;
   return (
     <View style={styles.loadoutConsequencePanel}>
       <View style={styles.loadoutConsequenceHeader}>
@@ -1117,7 +1254,7 @@ function LoadoutConsequenceCommandBriefPanel({
             Loadout Consequence Preview
           </ECSText>
           <ECSText variant="helper" style={styles.loadoutConsequenceSubtitle} numberOfLines={2}>
-            Current user-facing extension / mirrored from Fleet staged loadout preview.
+            Current user-facing extension / {mirrorStatus}.
           </ECSText>
         </View>
         <ECSBadge label={summary.status.toUpperCase()} tone={loadoutConsequenceTone(summary.status)} compact />
@@ -1152,7 +1289,7 @@ function LoadoutConsequenceCommandBriefPanel({
         {summary.mainRisk}
       </ECSText>
       <ECSText variant="helper" style={styles.loadoutConsequenceFooter} numberOfLines={1}>
-        {summary.suggestionCount} suggestions / {summary.warningCount} source warnings
+        {summary.suggestionCount} suggestions / {summary.warningCount} source warnings / last updated {new Date(summary.generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
       </ECSText>
     </View>
   );
@@ -1423,6 +1560,7 @@ export default function CommandBriefScreen({
   const loadoutConsequenceSummary = useMemo(() => {
     const summary = loadoutConsequencePreviewSnapshot.summary;
     if (!summary) return null;
+    if (summary.stale) return null;
     if (activeVehicleReadiness?.vehicleId && summary.vehicleId !== activeVehicleReadiness.vehicleId) return null;
     return summary;
   }, [activeVehicleReadiness?.vehicleId, loadoutConsequencePreviewSnapshot.summary]);
@@ -1590,6 +1728,9 @@ export default function CommandBriefScreen({
     [readinessState.inputPatch.campCandidates],
   );
   const campDecisionClock = readinessState.inputPatch.campDecisionClock ?? null;
+  const campDecisionClockEnabled = isCampDecisionClockFeatureEnabled({
+    campDecisionClock: readinessState.inputPatch.campDecisionClockFeatureEnabled ?? null,
+  });
   const departureDeltaBriefEnabled = isDepartureDeltaBriefFeatureEnabled({
     departureDeltaBrief: readinessState.inputPatch.departureDeltaBriefFeatureEnabled ?? null,
   });
@@ -1599,8 +1740,17 @@ export default function CommandBriefScreen({
       input: readinessState.inputPatch,
       activeVehicle: activeVehicleReadiness,
       routeSession,
+      activeTripId: readinessState.activeTripId,
+      activeRouteId: readinessState.activeRouteId,
     }),
-    [activeVehicleReadiness, assessment, readinessState.inputPatch, routeSession],
+    [
+      activeVehicleReadiness,
+      assessment,
+      readinessState.activeRouteId,
+      readinessState.activeTripId,
+      readinessState.inputPatch,
+      routeSession,
+    ],
   );
   const departureDeltaBrief = useMemo(
     () => buildDepartureDeltaBrief({
@@ -1675,7 +1825,8 @@ export default function CommandBriefScreen({
         ) : null}
 
         <View style={styles.sectionStack}>
-          <CampDecisionClockBriefModule decision={campDecisionClock} />
+          {/* Camp Decision Clock disabled: runtime feature flag keeps continue/divert guidance out of the user-facing section stack. */}
+          {campDecisionClockEnabled ? <CampDecisionClockBriefModule decision={campDecisionClock} /> : null}
           {departureDeltaBriefEnabled ? <DepartureDeltaBriefPanel result={departureDeltaBrief} /> : null}
           {weakPointAnalyzerEnabled ? <WeakPointAnalyzerPanel assessment={weakPointAssessment} /> : null}
 

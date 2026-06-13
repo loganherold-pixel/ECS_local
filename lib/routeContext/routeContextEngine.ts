@@ -15,6 +15,7 @@ import type {
   CampCandidate,
   RouteContext,
   RouteContextCoordinate,
+  RouteConfidenceOverlayAdapterResult,
   RouteConfidenceTimelineOverlay,
   RouteContextProviderMetadata,
   RouteContextWarning,
@@ -44,6 +45,7 @@ import { buildSupplyAwareRouteGeometry } from './routeContextSupplyRoutes';
 import { findCampCandidates } from './routeContextCampCandidates';
 import { findBailoutCandidates } from './routeContextBailoutCandidates';
 import { buildRouteConfidenceTimeline } from './routeConfidenceTimeline';
+import { buildRouteConfidenceTimelineOverlaysFromAdapterResults } from './routeConfidenceOverlayAdapters';
 
 export type GenerateRouteContextInput = {
   trail: RouteContextTrailInput;
@@ -55,6 +57,7 @@ export type GenerateRouteContextInput = {
   providerRegistry?: RouteContextProviderRegistry | RouteContextProviderRegistryInput | null;
   featureFlags?: RouteContextFeatureFlagOverrides;
   routeConfidenceTimelineOverlays?: RouteConfidenceTimelineOverlay[] | null;
+  routeConfidenceOverlayAdapterResults?: RouteConfidenceOverlayAdapterResult[] | null;
   tripDate?: string | null;
   campPreferences?: Record<string, unknown> | null;
   now?: string;
@@ -618,14 +621,32 @@ export async function generateRouteContext(input: GenerateRouteContextInput): Pr
     }
   }
 
+  const adapterTimelineOverlays = buildRouteConfidenceTimelineOverlaysFromAdapterResults(
+    input.routeConfidenceOverlayAdapterResults,
+  );
   const routeConfidenceTimeline =
     flags['ecs.routeContextEngine.routeConfidenceTimeline'] && routeGeometry
-      ? buildRouteConfidenceTimeline({
-          routeId: input.trail.id,
-          routeGeometry,
-          overlays: input.routeConfidenceTimelineOverlays ?? [],
-          generatedAt: now,
-        })
+      ? (() => {
+          const timeline = buildRouteConfidenceTimeline({
+            routeId: input.trail.id,
+            routeGeometry,
+            overlays: [
+              ...(input.routeConfidenceTimelineOverlays ?? []),
+              ...adapterTimelineOverlays.overlays,
+            ],
+            sourceWarnings: adapterTimelineOverlays.warnings,
+            unavailableSources: adapterTimelineOverlays.unavailableSources,
+            staleSources: adapterTimelineOverlays.staleSources,
+            generatedAt: now,
+          });
+          return {
+            ...timeline,
+            warnings: Array.from(new Set([
+              ...timeline.warnings,
+              ...adapterTimelineOverlays.warnings,
+            ])),
+          };
+        })()
       : null;
 
   const contextConfidence = overallConfidence([

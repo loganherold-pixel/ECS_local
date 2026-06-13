@@ -27,6 +27,28 @@ const {
 } = require(weakPointAnalyzerPath);
 
 const now = '2026-06-13T15:00:00.000Z';
+const REQUIRED_CATEGORIES = [
+  'route_confidence',
+  'fuel_margin',
+  'water_margin',
+  'power_margin',
+  'payload_gvwr',
+  'camp_endpoint_confidence',
+  'offline_readiness',
+  'weather_freshness',
+  'daylight',
+  'recovery_bailout_access',
+  'convoy_state',
+];
+
+function traceWeightedScore(trace) {
+  return Number((
+    trace.likelihood.score * 0.40 +
+    trace.consequence.score * 0.35 +
+    trace.uncertainty.score * 0.15 +
+    trace.dataGap.score * 0.10
+  ).toFixed(2));
+}
 
 function completeSnapshot(overrides = {}) {
   return {
@@ -150,6 +172,25 @@ const campFragile = scoreExpeditionWeakPoints(completeSnapshot({
 assert.strictEqual(campFragile.maturityLabel, 'Internal beta / restricted field-test');
 assert.strictEqual(campFragile.scoreVersion, 'weak-point-beta-v1');
 assert.strictEqual(campFragile.sourceSnapshotId, 'camp-fragile');
+assert.strictEqual(campFragile.assessmentCompleteness, 'complete');
+assert.ok(campFragile.snapshotCoverage, 'Assessment should include snapshot coverage metadata.');
+assert.strictEqual(campFragile.snapshotCoverage.generatedAt, now);
+assert.deepStrictEqual(
+  campFragile.snapshotCoverage.domains.map((domain) => domain.domain),
+  REQUIRED_CATEGORIES,
+  'Snapshot coverage should include every required weak-point category in stable order.',
+);
+assert.ok(
+  campFragile.snapshotCoverage.domains.every((domain) => (
+    ['complete', 'partial', 'missing', 'stale', 'unavailable'].includes(domain.status) &&
+    Array.isArray(domain.requiredFactIds) &&
+    Array.isArray(domain.availableFactIds) &&
+    Array.isArray(domain.missingFactIds) &&
+    Array.isArray(domain.staleFactIds) &&
+    Array.isArray(domain.unavailableFactIds)
+  )),
+  'Every coverage domain should expose complete source coverage bookkeeping.',
+);
 assert.strictEqual(campFragile.rankedWeakPoints[0].category, 'camp_endpoint_confidence');
 assert.strictEqual(campFragile.mostFragileAssumption?.category, 'camp_endpoint_confidence');
 assert.strictEqual(campFragile.rankedWeakPoints[0].scoreComponents.likelihood, 4);
@@ -166,6 +207,43 @@ assert.ok(
   'Camp endpoint weak point should preserve source fact ids.',
 );
 assert.ok(
+  campFragile.rankedWeakPoints.every((point) => point.sourceFactIds.length > 0 || point.missingFactIds.length > 0),
+  'Every ranked weak-point candidate should reference source or missing facts.',
+);
+const sourceFactIds = new Set(campFragile.sourceFacts.map((fact) => fact.factId));
+const missingFactIds = new Set(campFragile.missingFacts.map((fact) => fact.factId));
+campFragile.rankedWeakPoints.forEach((point) => {
+  point.sourceFactIds.forEach((factId) => assert.ok(sourceFactIds.has(factId), `${point.category} references unknown source fact ${factId}.`));
+  point.missingFactIds.forEach((factId) => assert.ok(missingFactIds.has(factId), `${point.category} references unknown missing fact ${factId}.`));
+});
+campFragile.sourceFacts.forEach((fact) => {
+  assert.ok(fact.factId, 'Source fact should expose factId.');
+  assert.ok(fact.sourceSystem, 'Source fact should expose sourceSystem.');
+  assert.ok(fact.fieldPath, 'Source fact should expose fieldPath.');
+  assert.ok(fact.freshness, 'Source fact should expose freshness.');
+  assert.ok(fact.confidence, 'Source fact should expose confidence.');
+  assert.ok(fact.observedAt || fact.generatedAt, 'Source fact should preserve a timestamp when available.');
+});
+assert.strictEqual(campFragile.scoringTrace.length, campFragile.rankedWeakPoints.length);
+campFragile.scoringTrace.forEach((trace) => {
+  assert.ok(trace.candidateId, 'Trace should identify the candidate.');
+  ['likelihood', 'consequence', 'uncertainty', 'dataGap'].forEach((key) => {
+    assert.strictEqual(typeof trace[key].score, 'number', `${key} trace should include numeric score.`);
+    assert.ok(trace[key].reason, `${key} trace should include deterministic reason.`);
+    assert.ok(Array.isArray(trace[key].sourceFactIds), `${key} trace should include source fact references.`);
+    assert.ok(Array.isArray(trace[key].missingFactIds), `${key} trace should include missing fact references.`);
+  });
+  assert.strictEqual(trace.weightedScore, traceWeightedScore(trace), 'Trace weighted score should match formula exactly.');
+  assert.strictEqual(trace.scoreVersion, 'weak-point-beta-v1');
+  assert.strictEqual(typeof trace.tieBreak.categoryOrder, 'number');
+});
+const firstAction = campFragile.allowedActions.find((action) => action.actionId === campFragile.easiestFixBeforeDeparture?.actionId);
+assert.ok(firstAction, 'Easiest fix should reference a deterministic allowed action.');
+assert.ok(firstAction.sourceFactIds.length > 0 || firstAction.missingFactIds.length > 0);
+const firstMonitor = campFragile.monitorSignals.find((signal) => signal.signalId === campFragile.monitorDuringTravel?.monitorSignalId);
+assert.ok(firstMonitor, 'Monitor during travel should reference a deterministic monitor signal.');
+assert.ok(firstMonitor.sourceFactIds.length > 0 || firstMonitor.missingFactIds.length > 0);
+assert.ok(
   campFragile.explanation.text.includes('Primary weak point: camp endpoint confidence'),
   'Deterministic explanation should name the primary weak point.',
 );
@@ -179,21 +257,50 @@ const missingInputs = scoreExpeditionWeakPoints({
   capturedAt: now,
   sourceFacts: [],
 });
+assert.ok(['partial', 'source_limited', 'insufficient'].includes(missingInputs.assessmentCompleteness));
+assert.deepStrictEqual(
+  missingInputs.rankedWeakPoints.map((point) => point.category).sort(),
+  REQUIRED_CATEGORIES.slice().sort(),
+  'Every required category should produce a scored weak-point or data-gap candidate.',
+);
 const missingCategories = missingInputs.rankedWeakPoints
   .filter((point) => point.scoreComponents.dataGap === 5)
   .map((point) => point.category);
-['route_confidence', 'fuel_margin', 'water_margin', 'weather_freshness'].forEach((category) => {
+['route_confidence', 'fuel_margin', 'water_margin', 'weather_freshness', 'convoy_state'].forEach((category) => {
   assert.ok(missingCategories.includes(category), `${category} should be scored as an explicit missing-data weak point.`);
 });
 assert.ok(
   missingInputs.rankedWeakPoints
     .filter((point) => point.scoreComponents.dataGap === 5)
-    .every((point) => point.missingFacts.length > 0 && point.consequenceStatement.toLowerCase().includes('unknown')),
+    .every((point) => point.missingFactIds.length > 0 && point.consequenceStatement.toLowerCase().includes('unknown')),
   'Missing inputs should describe what is unknown instead of inferring a hazard exists.',
+);
+assert.ok(
+  missingInputs.rankedWeakPoints
+    .filter((point) => point.scoreComponents.dataGap === 5)
+    .every((point) => !/low|empty|failed|unsafe|blocked/i.test(point.consequenceStatement)),
+  'Missing inputs should not fabricate concrete low-resource or blocked-route hazards.',
 );
 assert.ok(
   missingInputs.missingData.some((item) => item.includes('route confidence')),
   'Assessment should aggregate missing data labels.',
+);
+
+const noTimestampAssessment = scoreExpeditionWeakPoints(completeSnapshot({
+  snapshotId: 'no-freshness-metadata',
+  sourceFacts: [
+    { id: 'route-confidence', label: 'Route confidence', value: 'high' },
+  ],
+}));
+const routeFact = noTimestampAssessment.sourceFacts.find((fact) => fact.factId === 'route-confidence');
+assert.ok(routeFact, 'Normalized source facts should include route confidence.');
+assert.strictEqual(routeFact.freshness, 'unavailable');
+assert.strictEqual(routeFact.confidence, 'inferred');
+assert.ok(
+  noTimestampAssessment.snapshotCoverage.domains.some((domain) =>
+    domain.domain === 'route_confidence' && domain.status === 'unavailable',
+  ),
+  'Missing timestamp/freshness metadata should downgrade source coverage.',
 );
 
 const thresholdSnapshot = completeSnapshot({
@@ -297,21 +404,27 @@ assert.deepStrictEqual(
 const deterministicA = scoreExpeditionWeakPoints(thresholdSnapshot);
 const deterministicB = scoreExpeditionWeakPoints(thresholdSnapshot);
 assert.deepStrictEqual(deterministicA, deterministicB, 'Same snapshot and policy should produce identical ranking.');
+const customPolicy = scoreExpeditionWeakPoints(thresholdSnapshot, 'weak-point-beta-v2');
+assert.strictEqual(customPolicy.scoreVersion, 'weak-point-beta-v2');
+assert.ok(customPolicy.scoringTrace.every((trace) => trace.scoreVersion === 'weak-point-beta-v2'));
 
 const explanationPayload = buildWeakPointAiExplanationPayload(campFragile);
-assert.deepStrictEqual(Object.keys(explanationPayload).sort(), ['allowedActions', 'rankedCandidates', 'sourceFactIds']);
+assert.deepStrictEqual(
+  Object.keys(explanationPayload).sort(),
+  ['allowedActions', 'missingFacts', 'monitorSignals', 'rankedCandidates', 'scoringTrace', 'sourceFactIds', 'sourceFacts'],
+);
 assert.deepStrictEqual(
   explanationPayload.rankedCandidates.map((point) => point.category),
   campFragile.rankedWeakPoints.map((point) => point.category),
   'AI payload should preserve the deterministic order only.',
 );
-assert.ok(!JSON.stringify(explanationPayload).includes('sourceFacts'), 'AI payload should not include raw snapshot facts.');
+assert.ok(explanationPayload.sourceFacts.every((fact) => sourceFactIds.has(fact.factId)), 'AI payload source facts should be normalized assessment facts only.');
 
 const validDraft = buildWeakPointExplanation(campFragile, {
   text: 'Primary weak point: camp endpoint confidence. Confirm access or pick a backup before departure.',
   rankedCategoryOrder: campFragile.rankedWeakPoints.map((point) => point.category),
   sourceFactIds: ['camp-access'],
-  recommendations: [campFragile.rankedWeakPoints[0].easiestPreDepartureFix],
+  recommendations: [campFragile.easiestFixBeforeDeparture.easiestPreDepartureFix],
   referencedCategories: ['camp_endpoint_confidence'],
 });
 assert.strictEqual(validDraft.source, 'validated_ai');
@@ -323,7 +436,7 @@ assert.strictEqual(validDraft.source, 'validated_ai');
       text: 'Primary weak point: fuel margin.',
       rankedCategoryOrder: campFragile.rankedWeakPoints.map((point) => point.category).reverse(),
       sourceFactIds: ['camp-access'],
-      recommendations: [campFragile.rankedWeakPoints[0].easiestPreDepartureFix],
+      recommendations: [campFragile.easiestFixBeforeDeparture.easiestPreDepartureFix],
       referencedCategories: ['camp_endpoint_confidence'],
     },
   },
@@ -333,7 +446,7 @@ assert.strictEqual(validDraft.source, 'validated_ai');
       text: 'Primary weak point: camp endpoint confidence due to a new road report.',
       rankedCategoryOrder: campFragile.rankedWeakPoints.map((point) => point.category),
       sourceFactIds: ['unprovided-road-report'],
-      recommendations: [campFragile.rankedWeakPoints[0].easiestPreDepartureFix],
+      recommendations: [campFragile.easiestFixBeforeDeparture.easiestPreDepartureFix],
       referencedCategories: ['camp_endpoint_confidence'],
     },
   },
@@ -353,12 +466,43 @@ assert.strictEqual(validDraft.source, 'validated_ai');
       text: 'Primary weak point: camp endpoint confidence, plus tire pressure.',
       rankedCategoryOrder: campFragile.rankedWeakPoints.map((point) => point.category),
       sourceFactIds: ['camp-access'],
-      recommendations: [campFragile.rankedWeakPoints[0].easiestPreDepartureFix],
+      recommendations: [campFragile.easiestFixBeforeDeparture.easiestPreDepartureFix],
       referencedCategories: ['camp_endpoint_confidence', 'tire_pressure'],
     },
   },
-].forEach(({ name, draft }) => {
-  const guarded = buildWeakPointExplanation(campFragile, draft);
+  {
+    name: 'go/no-go posture',
+    draft: {
+      text: 'Departure blocked. Go/no-go: no-go.',
+      rankedCategoryOrder: campFragile.rankedWeakPoints.map((point) => point.category),
+      sourceFactIds: ['camp-access'],
+      recommendations: [campFragile.easiestFixBeforeDeparture.easiestPreDepartureFix],
+      referencedCategories: ['camp_endpoint_confidence'],
+    },
+  },
+  {
+    name: 'hidden missing data',
+    draft: {
+      text: 'Primary weak point: camp endpoint confidence. No missing data remains.',
+      rankedCategoryOrder: campFragile.rankedWeakPoints.map((point) => point.category),
+      sourceFactIds: ['camp-access'],
+      recommendations: [campFragile.easiestFixBeforeDeparture.easiestPreDepartureFix],
+      referencedCategories: ['camp_endpoint_confidence'],
+    },
+  },
+  {
+    name: 'confirmed hazard from missing data',
+    draft: {
+      text: 'Water supply is low and hazard confirmed.',
+      rankedCategoryOrder: missingInputs.rankedWeakPoints.map((point) => point.category),
+      sourceFactIds: [],
+      recommendations: [missingInputs.easiestFixBeforeDeparture.easiestPreDepartureFix],
+      referencedCategories: ['water_margin'],
+    },
+    assessment: missingInputs,
+  },
+].forEach(({ name, draft, assessment = campFragile }) => {
+  const guarded = buildWeakPointExplanation(assessment, draft);
   assert.strictEqual(guarded.source, 'deterministic_template', `Guardrail should reject ${name}.`);
   assert.ok(guarded.validationWarnings.length > 0, `Guardrail should explain rejection for ${name}.`);
 });

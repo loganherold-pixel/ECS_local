@@ -36,6 +36,16 @@ web-build/
 metro-cache/
 .metro-cache-*/
 
+# Non-runtime documentation, fixtures, and evidence
+docs/
+fixtures/
+qa-evidence/
+mock-data-inventory.md
+scripts/test-*.js
+scripts/test-*.mjs
+scripts/check-*readiness*.mjs
+scripts/run-offline-failure-drill-android-evidence.mjs
+
 # Native build outputs
 android/.gradle/
 android/.gradle/**

@@ -30,9 +30,9 @@ for (const copy of [
   'Generate Invite Code',
   'Join Convoy',
   'Convoy Roster',
-  'Start live sharing',
-  'Live location is shared only with active convoy members.',
-  'Tracking can be turned off at any time.',
+  'Start sharing',
+  'Location sharing is scoped to active convoy members',
+  'can be turned off at any time.',
   'Leaders can revoke member or invite access.',
   'Scan Invite QR',
 ]) {
