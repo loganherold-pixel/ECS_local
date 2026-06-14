@@ -319,6 +319,8 @@
     "test:route-context-bailout-candidates": "node ./scripts/test-route-context-bailout-candidates.js",
     "test:trip-builder-route-context": "node ./scripts/test-trip-builder-route-context-integration.js",
     "test:trip-builder-route-context-itinerary": "node ./scripts/test-trip-builder-route-context-itinerary.js",
+    "test:trip-builder-approach-resupply-corridor": "node ./scripts/test-trip-builder-approach-resupply-corridor.js",
+    "test:trip-builder-reference-pins": "node ./scripts/test-trip-builder-reference-pins.js",
     "test:trip-builder-core": "node ./scripts/test-trip-builder-core.js",
     "test:trip-builder-ui": "node ./scripts/test-trip-builder-ui.js",
     "test:trip-builder-e2e-hardening": "node ./scripts/test-trip-builder-e2e-hardening.js",

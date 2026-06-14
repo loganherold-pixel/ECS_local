@@ -248,8 +248,8 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'routeStart: selectedPreTrailSupplyAnchorCoordinate',
-  'Live grocery/supply search should use the refuel-anchored resolver input instead of independently searching the trailhead',
+  'fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate',
+  'Live grocery/supply search should keep the selected refuel as the fallback anchor while ranking against the approach route',
 );
 assertIncludes(
   screen,

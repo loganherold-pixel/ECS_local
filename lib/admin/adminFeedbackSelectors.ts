@@ -138,6 +138,7 @@ export function buildAdminFeedbackSummary(
   });
 
   const groups = summarizeGroupedEvents(groupedEvents, latestVersion);
+  const activeGroups = groups.filter((group) => group.trendDirection !== 'quieted');
   const frequentIssues = [...groups].sort((left, right) => right.eventCount - left.eventCount || compareSeverity(left, right)).slice(0, 8);
   const newSinceLatestRelease = groups.filter((group) => group.trendDirection === 'new' || group.releaseRegression).sort(compareFreshness).slice(0, 8);
   const regressions = groups.filter((group) => group.releaseRegression).sort(compareSeverity).slice(0, 8);
@@ -149,6 +150,7 @@ export function buildAdminFeedbackSummary(
   return {
     latestVersion,
     groups,
+    activeGroups,
     frequentIssues,
     newSinceLatestRelease,
     regressions,

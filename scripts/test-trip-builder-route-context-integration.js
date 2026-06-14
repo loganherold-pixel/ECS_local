@@ -165,13 +165,13 @@ assert.ok(!screen.includes('providerMetadata: candidate.providerMetadata'), 'Tri
 assertIncludes(screen, 'routeWithRouteContext(selectedRoute as unknown as TripBuilderRouteInput, routeContext)', 'Trip Builder should enrich route geometry before planning.');
 assertIncludes(screen, 'routeContextToTripBuilderItineraryContext(routeContext, selectedSupplyMode)', 'Trip Builder should pass RouteContext into the itinerary generator.');
 assertIncludes(screen, 'routeContextSupplyCandidatesToResupplyPoints(routeContext, selectedSupplyMode)', 'Trip Builder should pass RouteContext POI data into Smart Resupply.');
-assertIncludes(screen, 'const selectedTrailheadResupplyAnchorCoordinate = selectedRouteStartCoordinate', 'Trip Builder should make the trailhead endpoint the explicit Smart Resupply anchor.');
-assertIncludes(screen, 'routeStart: selectedTrailheadResupplyAnchorCoordinate', 'Trip Builder should search fuel from the trailhead endpoint, not the approach-route origin.');
-assertIncludes(screen, 'routeStart: selectedPreTrailSupplyAnchorCoordinate', 'Trip Builder should search groceries from the selected refuel stop when fuel is the active anchor.');
+assertIncludes(screen, 'const selectedTrailheadResupplyAnchorCoordinate = selectedRouteStartCoordinate', 'Trip Builder should keep the trailhead endpoint as the fallback Smart Resupply anchor.');
+assertIncludes(screen, 'approachRoute: liveApproachRoutePoints', 'Trip Builder should search fuel along the approach route before falling back to the trailhead endpoint.');
+assertIncludes(screen, 'fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate', 'Trip Builder should search groceries along the approach route with the selected refuel stop as fallback.');
 assertIncludes(screen, 'mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current)', 'Fuel picker should merge route context supply options into the existing visible list.');
 assertIncludes(screen, 'mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current)', 'Grocery picker should merge route context supply options into the existing visible list.');
-assertIncludes(screen, 'function compareSmartResupplyOptionsByDistance', 'Smart Resupply merge should rank nearest trailhead stops before source-priority tie breakers.');
-assertIncludes(screen, "left.sourceType === 'route_context_engine' ? 0 : 1", 'Smart Resupply merge should preserve Route Context priority as a distance tie breaker.');
+assertIncludes(screen, 'function compareSmartResupplyOptionsByApproach', 'Smart Resupply merge should rank approach-corridor stops before source-priority tie breakers.');
+assertIncludes(screen, "left.sourceType === 'route_context_engine' ? 0 : 1", 'Smart Resupply merge should preserve Route Context priority as an approach-score tie breaker.');
 assertIncludes(screen, 'orderedCandidateIds.get(left.id)', 'Smart Resupply options should use selected SupplyPlan order before raw candidate score.');
 assertIncludes(screen, 'orderSelectedSmartResupplyPoints', 'Gas+grocery selected stops should preserve route context order when available.');
 

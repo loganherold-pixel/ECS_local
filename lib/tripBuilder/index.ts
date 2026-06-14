@@ -19,3 +19,4 @@ export * from './tripBuilderRouteHandoffStore';
 export * from './smartResupplyPlanner';
 export * from './routeContextTripBuilderAdapter';
 export * from './mapboxRouteContextAdapters';
+export * from './approachResupplyPlanner';

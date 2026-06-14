@@ -138,6 +138,7 @@ export interface EcsIssueGroupSummary {
 export interface EcsIssueAdminSummary {
   latestVersion: string | null;
   groups: EcsIssueGroupSummary[];
+  activeGroups: EcsIssueGroupSummary[];
   frequentIssues: EcsIssueGroupSummary[];
   newSinceLatestRelease: EcsIssueGroupSummary[];
   regressions: EcsIssueGroupSummary[];

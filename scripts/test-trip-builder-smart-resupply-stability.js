@@ -21,8 +21,8 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'function compareSmartResupplyOptionsByDistance',
-  'Smart resupply options should keep the closest trailhead stops first',
+  'function compareSmartResupplyOptionsByApproach',
+  'Smart resupply options should keep the best approach-corridor stops first',
 );
 assertIncludes(
   screen,
@@ -52,12 +52,12 @@ assertIncludes(
 assertIncludes(
   screen,
   'smartResupplyFuelSearchSignatureRef',
-  'Fuel resupply search should be signature-gated so the same trailhead is not searched repeatedly',
+  'Fuel resupply search should be signature-gated so the same approach corridor is not searched repeatedly',
 );
 assertIncludes(
   screen,
   'smartResupplySupplySearchSignatureRef',
-  'Supply resupply search should be signature-gated so the same trailhead is not searched repeatedly',
+  'Supply resupply search should be signature-gated so the same approach corridor is not searched repeatedly',
 );
 assertIncludes(
   screen,
@@ -92,12 +92,17 @@ assertIncludes(
 assertIncludes(
   screen,
   'smartResupplySearchSignature(selectedTrailheadResupplyAnchorCoordinate,',
-  'Fuel resupply effects should key refreshes to the prepared trailhead anchor',
+  'Fuel resupply effects should key refreshes to the prepared trailhead anchor and approach geometry',
 );
 assertIncludes(
   screen,
-  'selectedPreTrailSupplyAnchorCoordinate,',
-  'Supply resupply effects should key refreshes to the selected refuel anchor',
+  'liveApproachRoutePoints',
+  'Supply resupply effects should key refreshes to the live approach route',
+);
+assertIncludes(
+  screen,
+  'rankApproachResupplyOptions',
+  'Smart resupply refreshes should run all candidates through the shared approach-aware ranker',
 );
 
 console.log('Trip Builder smart resupply stability checks passed.');

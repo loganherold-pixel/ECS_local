@@ -17,6 +17,7 @@ import type {
   TripBuilderRouteInput,
   TripBuilderWarning,
   TripPlan,
+  TripPlanReferencePoint,
   TripPlanRouteSummary,
   TripPlanSegment,
   TripPlanStop,
@@ -1010,7 +1011,48 @@ function stopFromExit(routeId: string, exit: ExitPoint, sequence: number): TripP
     etaOffsetHours: null,
     source: exit.source ?? 'exit_point',
     confidence: exit.location ? 'medium' : 'low',
-    notes: exit.notes ?? undefined,
+    guidanceRole: 'reference_only',
+    referenceType: 'bailout',
+    notes: [
+      ...(exit.notes ?? []),
+      'This bailout point is a reference marker and is not inserted into the required navigation route.',
+    ],
+  };
+}
+
+function referenceTypeForStopType(type: TripPlanReferencePoint['type']): NonNullable<TripPlanStop['referenceType']> {
+  if (type === 'camp' || type === 'backup_camp') return 'camp_candidate';
+  if (type === 'exit') return 'bailout';
+  return 'operator_note';
+}
+
+function referencePointStop(routeId: string, point: TripPlanReferencePoint, sequence: number): TripPlanStop {
+  const referenceType = point.referenceType ?? referenceTypeForStopType(point.type);
+  const defaultCampNote = referenceType === 'camp_candidate'
+    ? 'Operator-marked potential camp. Legal access, land use, fire restrictions, and posted rules are unknown.'
+    : null;
+  const defaultBailoutNote = referenceType === 'bailout'
+    ? 'Reference-only emergency bailout pin. Verify legal access, drivability, and current conditions before relying on it.'
+    : null;
+  return {
+    id: `${routeId}-reference-${point.id}`,
+    type: point.type,
+    title: point.title,
+    sequence,
+    plannedDay: Math.max(1, Math.floor(point.plannedDay ?? 1)),
+    coordinate: point.coordinate ?? null,
+    routeMileMarker: finiteNumber(point.routeMileMarker),
+    etaOffsetHours: null,
+    source: point.source ?? 'operator_reference_point',
+    confidence: normalizeConfidence(point.confidence),
+    guidanceRole: 'reference_only',
+    referenceType,
+    notes: [
+      ...(point.notes ?? []),
+      defaultCampNote,
+      defaultBailoutNote,
+      'This point is a map reference only and will not be inserted into the required navigation route.',
+    ].filter((note): note is string => !!note),
   };
 }
 
@@ -1023,6 +1065,10 @@ function computeStopMile(stop: TripPlanStop, routeDistanceMiles: number | null):
   if (stop.type === 'backup_camp') return routeDistanceMiles * 0.72;
   if (stop.type === 'exit') return routeDistanceMiles * 0.5;
   return null;
+}
+
+function isRequiredGuidanceStop(stop: TripPlanStop): boolean {
+  return stop.guidanceRole !== 'reference_only';
 }
 
 function isPreRouteSupportStop(stop: TripPlanStop): boolean {
@@ -1044,8 +1090,9 @@ function riskFromInputs(route: TripPlanRouteSummary, priorities: TripPriority[])
 }
 
 function buildSegments(stops: TripPlanStop[], route: TripPlanRouteSummary, priorities: TripPriority[]): TripPlanSegment[] {
-  if (stops.length < 2) return [];
-  const sorted = [...stops].sort((left, right) => left.sequence - right.sequence);
+  const guidanceStops = stops.filter(isRequiredGuidanceStop);
+  if (guidanceStops.length < 2) return [];
+  const sorted = [...guidanceStops].sort((left, right) => left.sequence - right.sequence);
   const miles = sorted.map((stop) => computeStopMile(stop, route.distanceMiles));
   const totalTime = route.estimatedDriveTimeHours;
 
@@ -1221,6 +1268,9 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
   const dailyPlanningStops = needsCamping
     ? buildDailyPlanningStops(routeId, tripDays, routeSummary, campsiteCandidates, usedCampIds)
     : [];
+  const referenceStops = (args.referencePoints ?? [])
+    .filter((point) => point && point.title && point.coordinate)
+    .map((point, index) => referencePointStop(routeId, point, index + 1));
 
   const stops: TripPlanStop[] = [
     ...preRouteSupportStops,
@@ -1239,6 +1289,7 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
     ...inRouteSupportStops,
     ...buildWaypointStops(routeId, args.route, priorities, args.input.tripType),
     ...dailyPlanningStops,
+    ...referenceStops,
   ];
 
   if (needsCamping && primaryCampCandidate && !stops.some((stop) => stop.id.includes(primaryCampCandidate.id))) {

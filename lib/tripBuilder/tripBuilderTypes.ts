@@ -639,6 +639,13 @@ export type TripPlanStopType =
   | 'planning_checkpoint'
   | 'unknown';
 
+export type TripPlanGuidanceRole = 'required' | 'reference_only';
+
+export type TripPlanReferenceType =
+  | 'camp_candidate'
+  | 'bailout'
+  | 'operator_note';
+
 export type TripPlanStop = {
   id: string;
   type: TripPlanStopType;
@@ -650,7 +657,22 @@ export type TripPlanStop = {
   etaOffsetHours: number | null;
   source: string;
   confidence: TripBuilderConfidence;
+  guidanceRole?: TripPlanGuidanceRole;
+  referenceType?: TripPlanReferenceType | null;
   notes?: string[];
+};
+
+export type TripPlanReferencePoint = {
+  id: string;
+  type: Extract<TripPlanStopType, 'camp' | 'backup_camp' | 'exit' | 'waypoint' | 'planning_checkpoint'>;
+  title: string;
+  coordinate: TripBuilderCoordinate | null;
+  routeMileMarker?: number | null;
+  plannedDay?: number | null;
+  source?: string | null;
+  confidence?: TripBuilderConfidence | null;
+  referenceType?: TripPlanReferenceType | null;
+  notes?: string[] | null;
 };
 
 export type TripPlanSegment = {
@@ -840,6 +862,7 @@ export type BuildTripPlanArgs = {
   readiness?: TripBuilderReadinessReference | null;
   campsiteCandidates?: CampCandidate[] | null;
   exitPoints?: ExitPoint[] | null;
+  referencePoints?: TripPlanReferencePoint[] | null;
   resupplyPoints?: ResupplyPoint[] | null;
   availablePoiData?: ResupplyPoint[] | null;
   routeContext?: TripBuilderRouteContextInput | null;

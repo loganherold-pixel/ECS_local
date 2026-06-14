@@ -46,6 +46,7 @@ import {
   addUserItineraryStop,
   addUserTrailWaypoint,
   applyTripItineraryEditSession,
+  buildApproachResupplySearchAnchors,
   createTripItineraryEditSession,
   dismissTripItineraryEditItem,
   getTripItineraryReview,
@@ -54,12 +55,14 @@ import {
   isUsableRouteContext,
   loadTripBuilderRouteHandoff,
   reorderTripItineraryStop,
+  rankApproachResupplyOptions,
   resolvePreTrailStops,
   routeContextRoutePoints,
   routeContextSupplyCandidatesToResupplyPoints,
   routeContextTrailheadCoordinate,
   routeContextToTripBuilderItineraryContext,
   routeWithRouteContext,
+  type ApproachResupplyCandidate,
   type CampCandidate,
   type GroupType,
   type TimeWindow,
@@ -72,6 +75,7 @@ import {
   type TripPlan,
   type TripBuilderRouteInput,
   type TripPlanStop,
+  type TripPlanReferencePoint,
   type TripPriority,
   type TripType,
   type ResupplyCategory,
@@ -146,6 +150,10 @@ const TRIP_TYPE_OPTIONS: { value: TripType; label: string }[] = [
   { value: 'technical_trail_run', label: 'Technical' },
 ];
 
+const DEFAULT_TRIP_BUILDER_TRIP_TYPE: TripType = 'day_trip';
+const DEFAULT_TRIP_BUILDER_GROUP_TYPE: GroupType = 'solo';
+const DEFAULT_TRIP_BUILDER_PRIORITIES: TripPriority[] = ['low_risk'];
+
 function routeContextSupplyModeForTripBuilder(
   preference: TripBuilderInput['smartResupplyPreference'],
 ): SupplyMode {
@@ -215,6 +223,7 @@ type ItineraryInsertState = {
 type SmartResupplyPreference = 'fuel_only' | 'fuel_supplies' | 'no';
 
 type BailoutPlanPreference = 'yes' | 'no';
+type CampPlanPreference = 'skip' | 'pins';
 
 type RouteImportState = {
   status: 'idle' | 'loading' | 'error' | 'success';
@@ -228,6 +237,15 @@ type SmartResupplyPoi = {
   category: 'fuel' | 'food_supplies';
   coordinate: TripMapCoordinate;
   distanceFromRouteStartMiles: number | null;
+  distanceFromTrailheadMiles: number | null;
+  distanceFromApproachRouteMiles: number | null;
+  routeDeviationMiles: number | null;
+  remainingApproachMilesToTrailhead: number | null;
+  approachProgressRatio: number | null;
+  approachScore: number | null;
+  beforeTrailEntry: boolean | null;
+  fallbackState: 'approach_route' | 'trailhead_only';
+  warnings: string[];
   diesel: boolean;
   groceries: boolean;
   sourceType: string;
@@ -249,6 +267,13 @@ type BailoutPlanPoint = {
   coordinate: TripMapCoordinate;
   source: 'ecs_suggested' | 'mapbox_search' | 'operator_drop';
   distanceFromRouteStartMiles: number | null;
+};
+
+type CampPlanPin = {
+  id: string;
+  title: string;
+  coordinate: TripMapCoordinate;
+  note: string | null;
 };
 
 type PreparedTripRoutePreview = {
@@ -302,8 +327,8 @@ const SMART_RESUPPLY_FUEL_QUERY = 'gas station fuel diesel';
 const SMART_RESUPPLY_SUPPLY_QUERY = 'grocery store supermarket supplies';
 const SMART_RESUPPLY_OPTION_LIMIT = 5;
 const SMART_RESUPPLY_SEARCH_LIMIT = 20;
-const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [12, 25, 50] as const;
-const SMART_RESUPPLY_MAX_DISTANCE_FROM_START_MILES = 60;
+const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [8, 16, 30] as const;
+const SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 12;
 const BAILOUT_SEARCH_QUERY = 'trailhead parking road access ranger station highway';
 const BAILOUT_OPTION_LIMIT = 5;
 const BAILOUT_SEARCH_LIMIT = 10;
@@ -379,10 +404,19 @@ function stopNoteIncludes(stop: TripPlanStop, pattern: RegExp): boolean {
 }
 
 function isBailoutItineraryStop(stop: TripPlanStop): boolean {
+  if (stop.referenceType === 'bailout') return true;
   if (stop.source === ITINERARY_BAILOUT_SOURCE) return true;
   const source = stop.source.toLowerCase();
   if (source.includes('bailout') || source.includes('emergency')) return true;
   return stop.type === 'exit' && stopNoteIncludes(stop, /\b(bailout|emergency|escape)\b/);
+}
+
+function isGuidanceConnectedTripPlanStop(stop: TripPlanStop): boolean {
+  return stop.guidanceRole !== 'reference_only' && !isBailoutItineraryStop(stop);
+}
+
+function isCampReferenceStop(stop: TripPlanStop): boolean {
+  return stop.guidanceRole === 'reference_only' && stop.referenceType === 'camp_candidate';
 }
 
 function isAlternateItineraryStop(stop: TripPlanStop): boolean {
@@ -424,8 +458,9 @@ function stripBailoutMetadataNotes(stop: TripPlanStop): string[] {
 
 function toggleItineraryStopBailout(stop: TripPlanStop): TripPlanStop {
   if (isBailoutItineraryStop(stop)) {
+    const { guidanceRole, referenceType, ...rest } = stop;
     return {
-      ...stop,
+      ...rest,
       type: extractOriginalBailoutType(stop),
       source: extractOriginalBailoutSource(stop),
       notes: stripBailoutMetadataNotes(stop),
@@ -437,11 +472,14 @@ function toggleItineraryStopBailout(stop: TripPlanStop): TripPlanStop {
     type: 'exit',
     source: ITINERARY_BAILOUT_SOURCE,
     confidence: stop.confidence === 'unknown' ? 'medium' : stop.confidence,
+    guidanceRole: 'reference_only',
+    referenceType: 'bailout',
     notes: [
       ITINERARY_BAILOUT_NOTE,
       `${ITINERARY_BAILOUT_ORIGINAL_TYPE_PREFIX}${stop.type}.`,
       `${ITINERARY_BAILOUT_ORIGINAL_SOURCE_PREFIX}${stop.source}.`,
       ...stripBailoutMetadataNotes(stop),
+      'This bailout point remains unconnected from the projected guidance line.',
     ],
   };
 }
@@ -739,6 +777,10 @@ function exitPointsFromPlan(plan: TripPlan | null | undefined, routePoints: Trip
   return points;
 }
 
+function campReferenceStopsFromPlan(plan: TripPlan | null | undefined): TripPlanStop[] {
+  return plan?.suggestedStops.filter(isCampReferenceStop) ?? [];
+}
+
 function routeWaypointsFromPlan(plan: TripPlan, routePoints: TripMapCoordinate[] = []): unknown[] {
   return plan.suggestedStops
     .flatMap((stop) => {
@@ -754,6 +796,8 @@ function routeWaypointsFromPlan(plan: TripPlan, routePoints: TripMapCoordinate[]
         routeMileMarker: stop.routeMileMarker,
         plannedDay: stop.plannedDay,
         source: stop.source,
+        guidanceRole: stop.guidanceRole,
+        referenceType: stop.referenceType,
         notes: stop.notes,
       }];
     });
@@ -781,10 +825,13 @@ function routeForOfflinePrep(
       offlinePrepGeometryPointCount: routePoints.length,
       tripBuilderPlanId: plan.id,
       tripBuilderStopCount: plan.suggestedStops.length,
-      tripBuilderCampCandidateCount: [plan.primaryCampCandidate, plan.backupCampCandidate].filter(Boolean).length,
+      tripBuilderCampCandidateCount: [plan.primaryCampCandidate, plan.backupCampCandidate].filter(Boolean).length + campReferenceStopsFromPlan(plan).length,
       tripBuilderExitPointCount: exitPointsFromPlan(plan, routePoints).length,
       tripBuilderBailoutPointCount: plan.suggestedStops.filter(isBailoutItineraryStop).length,
       tripBuilderResupplyPointCount: resupplyPointsFromPlan(plan).length,
+      referencePoints: plan.suggestedStops
+        .filter((stop) => stop.guidanceRole === 'reference_only')
+        .map((stop) => ({ id: stop.id, type: stop.type, referenceType: stop.referenceType ?? null })),
     },
   };
 }
@@ -916,7 +963,14 @@ function SmartResupplyOptionCard({
       <View style={styles.smartResupplyOptionCopy}>
         <Text style={styles.smartResupplyOptionTitle} numberOfLines={1}>{option.title}</Text>
         <Text style={styles.smartResupplyOptionMeta} numberOfLines={1}>
-          {option.distanceFromRouteStartMiles != null ? `${option.distanceFromRouteStartMiles.toFixed(1)} mi from route start` : 'Near route start'}
+          {option.fallbackState === 'trailhead_only'
+            ? option.distanceFromTrailheadMiles != null
+              ? `${option.distanceFromTrailheadMiles.toFixed(1)} mi from trailhead fallback`
+              : 'Trailhead fallback'
+            : option.remainingApproachMilesToTrailhead != null
+              ? `${option.remainingApproachMilesToTrailhead.toFixed(1)} mi before trail entry`
+              : 'On approach corridor'}
+          {option.routeDeviationMiles != null ? ` | ${option.routeDeviationMiles.toFixed(1)} mi off approach` : ''}
           {option.subtitle ? ` | ${option.subtitle}` : ''}
         </Text>
         <View style={styles.smartResupplyPillRow}>
@@ -2066,7 +2120,7 @@ function smartResupplyPoiFromDestination(
   suggestion: RoadNavSearchSuggestion,
   destination: RoadNavDestination,
   category: SmartResupplyPoi['category'],
-  routeStart: TripMapCoordinate,
+  fallbackAnchor: TripMapCoordinate,
 ): SmartResupplyPoi | null {
   const coordinate = {
     latitude: destination.coordinate.lat,
@@ -2080,7 +2134,16 @@ function smartResupplyPoiFromDestination(
     subtitle: destination.subtitle ?? suggestion.subtitle ?? null,
     category,
     coordinate,
-    distanceFromRouteStartMiles: Math.round(tripMapCoordinateDistanceMiles(routeStart, coordinate) * 10) / 10,
+    distanceFromRouteStartMiles: Math.round(tripMapCoordinateDistanceMiles(fallbackAnchor, coordinate) * 10) / 10,
+    distanceFromTrailheadMiles: Math.round(tripMapCoordinateDistanceMiles(fallbackAnchor, coordinate) * 10) / 10,
+    distanceFromApproachRouteMiles: null,
+    routeDeviationMiles: null,
+    remainingApproachMilesToTrailhead: null,
+    approachProgressRatio: null,
+    approachScore: null,
+    beforeTrailEntry: null,
+    fallbackState: 'trailhead_only',
+    warnings: [],
     diesel: category === 'fuel' && hasDieselSupport(text),
     groceries: category === 'fuel' && hasFuelAndGrocerySupport(text),
     sourceType: destination.sourceType,
@@ -2100,8 +2163,12 @@ function smartResupplyPointForPlan(option: SmartResupplyPoi): ResupplyPoint {
     source: 'operator_selected_pre_route_resupply',
     notes: [
       option.category === 'fuel'
-        ? 'Operator selected as a pre-route fuel stop near the route start.'
-        : 'Operator selected as a pre-route grocery/supply stop near the route start.',
+        ? 'Operator selected as a pre-route fuel stop ranked along the GPS-to-trailhead approach.'
+        : 'Operator selected as a pre-route grocery/supply stop ranked along the GPS-to-trailhead approach.',
+      option.fallbackState === 'trailhead_only'
+        ? 'GPS approach route was unavailable; this stop used trailhead-only fallback ranking.'
+        : null,
+      option.routeDeviationMiles != null ? `${option.routeDeviationMiles.toFixed(1)} mi estimated approach-route deviation.` : null,
       option.diesel ? 'Returned place data suggests diesel support. Verify pump availability before departure.' : null,
       option.groceries ? 'Returned place data suggests fuel and groceries/supplies at the same stop.' : null,
       option.subtitle ? `Mapbox place context: ${option.subtitle}.` : null,
@@ -2121,14 +2188,22 @@ function selectedPreTrailOptionFromSmartResupply(
     confidence: 'medium',
     notes: [
       bucket === 'fuel'
-        ? 'Operator selected as a pre-trail fuel stop near the trailhead start.'
-        : 'Operator selected as a pre-trail grocery or supply stop near the trailhead start.',
+        ? 'Operator selected as a pre-trail fuel stop ranked along the approach route before trail entry.'
+        : 'Operator selected as a pre-trail grocery or supply stop ranked along the approach route before trail entry.',
+      option.fallbackState === 'trailhead_only'
+        ? 'GPS approach route was unavailable; ECS used trailhead-only fallback ranking.'
+        : null,
       option.subtitle ? `Mapbox place context: ${option.subtitle}.` : null,
     ].filter((note): note is string => !!note),
     metadata: {
       preTrailStopBucket: bucket,
       sourceType: option.sourceType,
       routeStartDistanceMiles: option.distanceFromRouteStartMiles,
+      distanceFromTrailheadMiles: option.distanceFromTrailheadMiles,
+      routeDeviationMiles: option.routeDeviationMiles,
+      remainingApproachMilesToTrailhead: option.remainingApproachMilesToTrailhead,
+      approachScore: option.approachScore,
+      fallbackState: option.fallbackState,
       mapboxId: option.suggestion.mapboxId ?? null,
       operatorSelected: true,
     },
@@ -2150,7 +2225,9 @@ function preTrailCandidateFromSmartResupply(
     waypointType: bucket,
     coordinate: option.coordinate,
     address: option.subtitle ?? null,
-    distanceFromTrailheadMiles: option.distanceFromRouteStartMiles,
+    distanceFromTrailheadMiles: option.distanceFromTrailheadMiles ?? option.distanceFromRouteStartMiles,
+    distanceFromRouteMiles: option.distanceFromApproachRouteMiles,
+    detourDistanceMeters: option.routeDeviationMiles != null ? option.routeDeviationMiles * 1609.344 : null,
     openStatus: 'unknown',
     confidence: option.sourceType === 'route_context_engine' ? 'high' : 'medium',
     score: option.sourceType === 'route_context_engine' ? 0.86 : 0.72,
@@ -2159,7 +2236,10 @@ function preTrailCandidateFromSmartResupply(
     notes: [
       option.sourceType === 'route_context_engine'
         ? 'Ranked by Route Context as a pre-trail resupply candidate.'
-        : 'Returned by live Mapbox lookup near the trailhead start.',
+        : 'Returned by live Mapbox lookup and ranked against the GPS-to-trailhead approach.',
+      option.fallbackState === 'trailhead_only'
+        ? 'GPS approach route was unavailable; this candidate used trailhead-only fallback ranking.'
+        : null,
       option.subtitle ? `Place context: ${option.subtitle}.` : null,
       option.diesel ? 'Search text suggests diesel support; verify pump availability.' : null,
       option.groceries ? 'Search text suggests fuel and grocery/supply support at the same stop.' : null,
@@ -2170,6 +2250,10 @@ function preTrailCandidateFromSmartResupply(
       mapboxId: option.suggestion.mapboxId ?? null,
       routeContextCandidateId: routeContextCandidateIdFromSmartOption(option),
       distanceFromRouteStartMiles: option.distanceFromRouteStartMiles,
+      distanceFromTrailheadMiles: option.distanceFromTrailheadMiles,
+      routeDeviationMiles: option.routeDeviationMiles,
+      approachScore: option.approachScore,
+      fallbackState: option.fallbackState,
     },
   };
 }
@@ -2205,7 +2289,7 @@ function routeContextSupplySelectionFromSmartOptions(
 function smartResupplyPoiFromRouteContextCandidate(
   candidate: SupplyCandidate,
   category: SmartResupplyPoi['category'],
-  routeStart: TripMapCoordinate,
+  fallbackAnchor: TripMapCoordinate,
 ): SmartResupplyPoi | null {
   const coordinate = {
     latitude: candidate.lat,
@@ -2235,17 +2319,27 @@ function smartResupplyPoiFromRouteContextCandidate(
     coordinate,
     distanceFromRouteStartMiles: candidate.driveDistanceToTrailheadMeters != null
       ? Math.round((candidate.driveDistanceToTrailheadMeters / 1609.344) * 10) / 10
-      : Math.round(tripMapCoordinateDistanceMiles(routeStart, coordinate) * 10) / 10,
+      : Math.round(tripMapCoordinateDistanceMiles(fallbackAnchor, coordinate) * 10) / 10,
+    distanceFromTrailheadMiles: candidate.driveDistanceToTrailheadMeters != null
+      ? Math.round((candidate.driveDistanceToTrailheadMeters / 1609.344) * 10) / 10
+      : Math.round(tripMapCoordinateDistanceMiles(fallbackAnchor, coordinate) * 10) / 10,
+    distanceFromApproachRouteMiles: candidate.detourDistanceMeters != null
+      ? Math.round((candidate.detourDistanceMeters / 1609.344) * 10) / 10
+      : null,
+    routeDeviationMiles: candidate.detourDistanceMeters != null
+      ? Math.round((candidate.detourDistanceMeters / 1609.344) * 10) / 10
+      : null,
+    remainingApproachMilesToTrailhead: null,
+    approachProgressRatio: null,
+    approachScore: candidate.supplyChainScore ?? candidate.approachScore ?? candidate.score ?? null,
+    beforeTrailEntry: null,
+    fallbackState: 'trailhead_only',
+    warnings: candidate.warnings.map((warning) => warning.message),
     diesel: false,
     groceries: candidate.category === 'grocery',
     sourceType: 'route_context_engine',
     suggestion,
   };
-}
-
-function isSmartResupplyOptionNearRouteStart(option: SmartResupplyPoi): boolean {
-  return option.distanceFromRouteStartMiles != null &&
-    option.distanceFromRouteStartMiles <= SMART_RESUPPLY_MAX_DISTANCE_FROM_START_MILES;
 }
 
 function normalizeSmartResupplyKeyPart(value: string | null | undefined): string {
@@ -2279,6 +2373,9 @@ function smartResupplyOptionDisplaySignature(option: SmartResupplyPoi): string {
     normalizeSmartResupplyKeyPart(option.title),
     normalizeSmartResupplyKeyPart(option.subtitle),
     option.distanceFromRouteStartMiles == null ? 'unknown' : option.distanceFromRouteStartMiles.toFixed(1),
+    option.routeDeviationMiles == null ? 'route-unknown' : option.routeDeviationMiles.toFixed(1),
+    option.approachScore == null ? 'score-unknown' : option.approachScore.toFixed(3),
+    option.fallbackState,
     option.sourceType,
     option.diesel ? 'diesel' : 'no-diesel',
     option.groceries ? 'groceries' : 'no-groceries',
@@ -2292,24 +2389,43 @@ function smartResupplyOptionListSignature(options: SmartResupplyPoi[]): string {
 function smartResupplySearchSignature(
   routeStart: TripMapCoordinate,
   kind: SmartResupplySearchKind,
+  approachRoute: TripMapCoordinate[] = [],
   selectionKey: string | null = null,
 ): string {
+  const approachSignature = approachRoute
+    .filter(isValidMapCoordinate)
+    .map((point) => `${point.latitude.toFixed(4)},${point.longitude.toFixed(4)}`)
+    .join(';') || 'no-approach';
   return [
     kind,
     routeStart.latitude.toFixed(5),
     routeStart.longitude.toFixed(5),
+    approachSignature,
     selectionKey ?? 'none',
   ].join(':');
 }
 
-function compareSmartResupplyOptionsByDistance(left: SmartResupplyPoi, right: SmartResupplyPoi): number {
-  const distanceDelta =
-    (left.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY) -
-    (right.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY);
-  if (Math.abs(distanceDelta) > 0.001) return distanceDelta;
+function isSmartResupplyOptionRouteAware(option: SmartResupplyPoi): boolean {
+  if (option.fallbackState === 'trailhead_only') return true;
+  if (option.routeDeviationMiles == null) return true;
+  return option.routeDeviationMiles <= SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES;
+}
+
+function compareSmartResupplyOptionsByApproach(left: SmartResupplyPoi, right: SmartResupplyPoi): number {
+  const approachDelta =
+    (right.approachScore ?? Number.NEGATIVE_INFINITY) -
+    (left.approachScore ?? Number.NEGATIVE_INFINITY);
+  if (Math.abs(approachDelta) > 0.001) return approachDelta;
+  const leftFallback = left.fallbackState === 'approach_route' ? 0 : 1;
+  const rightFallback = right.fallbackState === 'approach_route' ? 0 : 1;
+  if (leftFallback !== rightFallback) return leftFallback - rightFallback;
   const leftRouteContext = left.sourceType === 'route_context_engine' ? 0 : 1;
   const rightRouteContext = right.sourceType === 'route_context_engine' ? 0 : 1;
   if (leftRouteContext !== rightRouteContext) return leftRouteContext - rightRouteContext;
+  const distanceDelta =
+    (left.remainingApproachMilesToTrailhead ?? left.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY) -
+    (right.remainingApproachMilesToTrailhead ?? right.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY);
+  if (Math.abs(distanceDelta) > 0.001) return distanceDelta;
   return left.title.localeCompare(right.title);
 }
 
@@ -2318,9 +2434,63 @@ function preferredSmartResupplyOption(current: SmartResupplyPoi, candidate: Smar
   const candidateRouteContext = candidate.sourceType === 'route_context_engine' ? 0 : 1;
   if (candidateRouteContext < currentRouteContext) return candidate;
   if (currentRouteContext < candidateRouteContext) return current;
+  if ((candidate.approachScore ?? -1) > (current.approachScore ?? -1)) return candidate;
   if (current.distanceFromRouteStartMiles == null && candidate.distanceFromRouteStartMiles != null) return candidate;
   if (!current.subtitle && candidate.subtitle) return candidate;
   return current;
+}
+
+function approachCandidateFromSmartResupplyOption(option: SmartResupplyPoi): ApproachResupplyCandidate {
+  return {
+    id: smartResupplyOptionStableKey(option),
+    title: option.title,
+    category: option.category,
+    coordinate: option.coordinate,
+    sourceType: option.sourceType,
+    confidence: option.sourceType === 'route_context_engine' ? 'high' : 'medium',
+    score: option.approachScore ?? undefined,
+    beforeTrailEntry: option.beforeTrailEntry,
+    distanceFromTrailheadMiles: option.distanceFromTrailheadMiles,
+    distanceFromApproachRouteMiles: option.distanceFromApproachRouteMiles,
+    detourDistanceMiles: option.routeDeviationMiles,
+    warnings: option.warnings,
+  };
+}
+
+function applyApproachRankingToSmartResupplyOptions(params: {
+  options: SmartResupplyPoi[];
+  category: SmartResupplyPoi['category'];
+  trailhead: TripMapCoordinate;
+  approachRoute: TripMapCoordinate[];
+  origin?: TripMapCoordinate | null;
+  limit?: number;
+}): SmartResupplyPoi[] {
+  const byKey = new Map(params.options.map((option) => [smartResupplyOptionStableKey(option), option]));
+  return rankApproachResupplyOptions({
+    category: params.category,
+    origin: params.origin ?? params.approachRoute.find(isValidMapCoordinate) ?? null,
+    trailhead: params.trailhead,
+    approachRoute: params.approachRoute,
+    candidates: params.options.map(approachCandidateFromSmartResupplyOption),
+    maxRouteDeviationMiles: SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES,
+    limit: params.limit ?? params.options.length,
+  }).flatMap((ranked): SmartResupplyPoi[] => {
+    const option = byKey.get(ranked.id);
+    if (!option) return [];
+    return [{
+      ...option,
+      distanceFromRouteStartMiles: ranked.distanceFromTrailheadMiles,
+      distanceFromTrailheadMiles: ranked.distanceFromTrailheadMiles,
+      distanceFromApproachRouteMiles: ranked.distanceFromApproachRouteMiles,
+      routeDeviationMiles: ranked.routeDeviationMiles,
+      remainingApproachMilesToTrailhead: ranked.remainingApproachMilesToTrailhead,
+      approachProgressRatio: ranked.approachProgressRatio,
+      approachScore: ranked.approachScore,
+      beforeTrailEntry: ranked.beforeTrailEntry,
+      fallbackState: ranked.fallbackState,
+      warnings: ranked.warnings,
+    }];
+  });
 }
 
 function applySmartResupplyOptionRefresh(
@@ -2345,13 +2515,15 @@ function smartResupplyOptionsFromRouteContext(
   context: RouteContext | null,
   category: SmartResupplyPoi['category'],
   routeStart: TripMapCoordinate | null,
+  approachRoute: TripMapCoordinate[] = [],
+  fallbackAnchor: TripMapCoordinate | null = routeStart,
 ): SmartResupplyPoi[] {
   if (!isUsableRouteContext(context) || !routeStart) return [];
   const supplyCategory = category === 'fuel' ? 'gas' : 'grocery';
   const orderedCandidateIds = new Map(
     context.selectedSupplyPlan?.orderedStops.map((stop, index) => [stop.candidateId, index]) ?? [],
   );
-  return context.supplyCandidates
+  const options = context.supplyCandidates
     .filter((candidate) => candidate.category === supplyCategory)
     .sort((left, right) => {
       const leftOrder = orderedCandidateIds.get(left.id) ?? Number.POSITIVE_INFINITY;
@@ -2361,9 +2533,16 @@ function smartResupplyOptionsFromRouteContext(
       const rightChainScore = typeof right.supplyChainScore === 'number' ? right.supplyChainScore : right.score;
       return rightChainScore - leftChainScore || right.score - left.score || right.confidence.value - left.confidence.value;
     })
-    .map((candidate) => smartResupplyPoiFromRouteContextCandidate(candidate, category, routeStart))
-    .filter((option): option is SmartResupplyPoi => option != null)
-    .filter(isSmartResupplyOptionNearRouteStart)
+    .map((candidate) => smartResupplyPoiFromRouteContextCandidate(candidate, category, fallbackAnchor ?? routeStart))
+    .filter((option): option is SmartResupplyPoi => option != null);
+  return applyApproachRankingToSmartResupplyOptions({
+    options,
+    category,
+    trailhead: routeStart,
+    approachRoute,
+    limit: SMART_RESUPPLY_OPTION_LIMIT,
+  })
+    .filter(isSmartResupplyOptionRouteAware)
     .slice(0, SMART_RESUPPLY_OPTION_LIMIT);
 }
 
@@ -2374,13 +2553,13 @@ function mergeSmartResupplyOptions(
 ): SmartResupplyPoi[] {
   const merged = new Map<string, SmartResupplyPoi>();
   [...previous, ...primary, ...secondary].forEach((option) => {
-    if (!isSmartResupplyOptionNearRouteStart(option)) return;
+    if (!isSmartResupplyOptionRouteAware(option)) return;
     const key = smartResupplyOptionStableKey(option);
     const current = merged.get(key);
     merged.set(key, current ? preferredSmartResupplyOption(current, option) : option);
   });
   return Array.from(merged.values())
-    .sort(compareSmartResupplyOptionsByDistance)
+    .sort(compareSmartResupplyOptionsByApproach)
     .slice(0, SMART_RESUPPLY_OPTION_LIMIT);
 }
 
@@ -2423,6 +2602,45 @@ function bailoutPlanPointFromDestination(
   };
 }
 
+function bailoutPlanPointsFromRouteContext(context: RouteContext | null): BailoutPlanPoint[] {
+  if (!isUsableRouteContext(context)) return [];
+  const routeStart = routeContextTrailheadCoordinate(context);
+  return context.bailoutCandidates
+    .map((candidate): BailoutPlanPoint | null => {
+      const coordinate = { latitude: candidate.lat, longitude: candidate.lng };
+      if (!isValidMapCoordinate(coordinate)) return null;
+      return {
+        id: `route-context-bailout-${candidate.id}`,
+        title: candidate.label,
+        subtitle: [
+          candidate.category ? candidate.category.replace(/_/g, ' ') : 'Route Context bailout candidate',
+          candidate.reachableByVehicle === false ? 'vehicle reachability unknown/limited' : null,
+        ].filter(Boolean).join(' | ') || 'Route Context bailout candidate. Verify legal access and drivability.',
+        coordinate,
+        source: 'ecs_suggested',
+        distanceFromRouteStartMiles: routeStart ? Math.round(tripMapCoordinateDistanceMiles(routeStart, coordinate) * 10) / 10 : null,
+      };
+    })
+    .filter((point): point is BailoutPlanPoint => point != null);
+}
+
+function buildBailoutSearchAnchors(routePoints: TripMapCoordinate[]): TripMapCoordinate[] {
+  const validPoints = routePoints.filter(isValidMapCoordinate);
+  if (validPoints.length === 0) return [];
+  const indexes = [
+    0,
+    Math.floor(validPoints.length * 0.5),
+    Math.floor(validPoints.length * 0.75),
+    validPoints.length - 1,
+  ];
+  const anchors: TripMapCoordinate[] = [];
+  indexes.forEach((index) => {
+    const point = validPoints[Math.max(0, Math.min(validPoints.length - 1, index))];
+    if (point && !anchors.some((existing) => sameTripCoordinate(existing, point))) anchors.push(point);
+  });
+  return anchors;
+}
+
 function bailoutExitPointForPlan(point: BailoutPlanPoint): ExitPoint {
   return {
     id: point.id,
@@ -2439,10 +2657,42 @@ function bailoutExitPointForPlan(point: BailoutPlanPoint): ExitPoint {
   };
 }
 
+function tripPlanReferencePointFromCampPin(pin: CampPlanPin): TripPlanReferencePoint {
+  return {
+    id: pin.id,
+    type: 'camp',
+    title: pin.title,
+    coordinate: pin.coordinate,
+    source: 'operator_drop',
+    confidence: 'unknown',
+    referenceType: 'camp_candidate',
+    notes: [
+      'Operator-marked potential camp. Legal access, land use, fire restrictions, and posted rules are unknown.',
+      pin.note,
+    ].filter((note): note is string => !!note),
+  };
+}
+
+function tripPlanReferencePointFromBailoutPoint(point: BailoutPlanPoint): TripPlanReferencePoint {
+  return {
+    id: point.id,
+    type: 'exit',
+    title: point.title,
+    coordinate: point.coordinate,
+    source: point.source,
+    confidence: point.source === 'operator_drop' ? 'low' : 'medium',
+    referenceType: 'bailout',
+    notes: [
+      point.subtitle ?? 'Emergency bailout or rendezvous point selected.',
+      'Reference-only bailout pin. Verify legal access, drivability, and current conditions before relying on it.',
+    ],
+  };
+}
+
 function appendBailoutStopToPlan(plan: TripPlan, point: BailoutPlanPoint | null): TripPlan {
   if (!point) return plan;
   const duplicate = plan.suggestedStops.some((stop) => (
-    stop.source === ITINERARY_BAILOUT_SOURCE &&
+    isBailoutItineraryStop(stop) &&
     stop.coordinate &&
     Math.abs(stop.coordinate.latitude - point.coordinate.latitude) < 0.0001 &&
     Math.abs(stop.coordinate.longitude - point.coordinate.longitude) < 0.0001
@@ -2461,6 +2711,8 @@ function appendBailoutStopToPlan(plan: TripPlan, point: BailoutPlanPoint | null)
       etaOffsetHours: null,
       source: ITINERARY_BAILOUT_SOURCE,
       confidence: 'medium' as const,
+      guidanceRole: 'reference_only' as const,
+      referenceType: 'bailout' as const,
       notes: [
         ITINERARY_BAILOUT_NOTE,
         point.subtitle ?? 'Operator selected as an emergency bailout or rendezvous point.',
@@ -2477,11 +2729,16 @@ async function loadSmartResupplyOptions(params: {
   query: string;
   category: SmartResupplyPoi['category'];
   routeStart: TripMapCoordinate;
+  approachRoute: TripMapCoordinate[];
+  origin?: TripMapCoordinate | null;
+  fallbackAnchor?: TripMapCoordinate | null;
 }): Promise<SmartResupplyPoi[]> {
-  const routeStartProximity = {
-    lat: params.routeStart.latitude,
-    lng: params.routeStart.longitude,
-  };
+  const searchAnchors = buildApproachResupplySearchAnchors({
+    trailhead: params.routeStart,
+    approachRoute: params.approachRoute,
+    fallbackAnchor: params.fallbackAnchor ?? params.routeStart,
+    maxAnchors: 5,
+  });
   const suggestionMap = new Map<string, RoadNavSearchSuggestion>();
   const collectSuggestions = (suggestions: RoadNavSearchSuggestion[]) => {
     suggestions.forEach((suggestion) => {
@@ -2489,27 +2746,31 @@ async function loadSmartResupplyOptions(params: {
       if (!suggestionMap.has(key)) suggestionMap.set(key, suggestion);
     });
   };
-  const collectSearchPass = async (bbox?: SmartResupplySearchBounds) => {
+  const collectSearchPass = async (anchor: TripMapCoordinate, bbox?: SmartResupplySearchBounds) => {
     const suggestions = await searchRoadDestinations({
       accessToken: params.accessToken,
       query: params.query,
       sessionToken: params.sessionToken,
-      proximity: routeStartProximity,
+      proximity: { lat: anchor.latitude, lng: anchor.longitude },
       bbox,
       limit: SMART_RESUPPLY_SEARCH_LIMIT,
     });
     collectSuggestions(suggestions);
   };
 
-  for (const radiusMiles of SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES) {
-    try {
-      await collectSearchPass(smartResupplySearchBounds(params.routeStart, radiusMiles));
-    } catch {}
-    if (suggestionMap.size >= SMART_RESUPPLY_OPTION_LIMIT * 2) break;
+  for (const anchor of searchAnchors) {
+    for (const radiusMiles of SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES) {
+      try {
+        await collectSearchPass(anchor.coordinate, smartResupplySearchBounds(anchor.coordinate, radiusMiles));
+      } catch {}
+      if (suggestionMap.size >= SMART_RESUPPLY_OPTION_LIMIT * 3) break;
+    }
+    if (suggestionMap.size >= SMART_RESUPPLY_OPTION_LIMIT * 3) break;
   }
 
   const options: SmartResupplyPoi[] = [];
   const seen = new Set<string>();
+  const fallbackAnchor = params.fallbackAnchor ?? params.routeStart;
   for (const suggestion of suggestionMap.values()) {
     try {
       const destination = await resolveRoadDestination({
@@ -2517,26 +2778,24 @@ async function loadSmartResupplyOptions(params: {
         sessionToken: params.sessionToken,
         suggestion,
       });
-      const option = smartResupplyPoiFromDestination(suggestion, destination, params.category, params.routeStart);
+      const option = smartResupplyPoiFromDestination(suggestion, destination, params.category, fallbackAnchor);
       if (!option) continue;
-      if (
-        option.distanceFromRouteStartMiles == null ||
-        option.distanceFromRouteStartMiles > SMART_RESUPPLY_MAX_DISTANCE_FROM_START_MILES
-      ) {
-        continue;
-      }
       const key = `${option.title.toLowerCase()}:${option.coordinate.latitude.toFixed(4)}:${option.coordinate.longitude.toFixed(4)}`;
       if (seen.has(key)) continue;
       seen.add(key);
       options.push(option);
     } catch {}
   }
-  return options
-    .sort(
-      (left, right) =>
-        (left.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY) -
-        (right.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY),
-    )
+  return applyApproachRankingToSmartResupplyOptions({
+    options,
+    category: params.category,
+    trailhead: params.routeStart,
+    approachRoute: params.approachRoute,
+    origin: params.origin ?? null,
+    limit: SMART_RESUPPLY_OPTION_LIMIT * 2,
+  })
+    .filter(isSmartResupplyOptionRouteAware)
+    .sort(compareSmartResupplyOptionsByApproach)
     .slice(0, SMART_RESUPPLY_OPTION_LIMIT);
 }
 
@@ -2544,12 +2803,15 @@ async function loadBailoutPlanOptions(params: {
   accessToken: string;
   sessionToken: string;
   routePoints: TripMapCoordinate[];
+  routeContextOptions?: BailoutPlanPoint[];
 }): Promise<BailoutPlanPoint[]> {
   const routeStart = params.routePoints[0];
   const midRoute = params.routePoints[Math.max(0, Math.floor(params.routePoints.length * 0.5))] ?? routeStart;
   const lateRoute = params.routePoints[Math.max(0, Math.floor(params.routePoints.length * 0.75))] ?? midRoute;
   const routeEnd = params.routePoints[params.routePoints.length - 1] ?? lateRoute;
+  const routeContextOptions = params.routeContextOptions ?? [];
   const suggestedCandidates: (BailoutPlanPoint | null)[] = [
+    ...routeContextOptions,
     routeEnd ? {
       id: 'ecs-route-finish-rendezvous',
       title: 'Route finish rendezvous',
@@ -2577,13 +2839,19 @@ async function loadBailoutPlanOptions(params: {
   ];
   const suggested = suggestedCandidates.filter((point): point is BailoutPlanPoint => !!point && isValidMapCoordinate(point.coordinate));
 
-  const suggestions = await searchRoadDestinations({
-    accessToken: params.accessToken,
-    query: BAILOUT_SEARCH_QUERY,
-    sessionToken: params.sessionToken,
-    proximity: { lat: routeStart.latitude, lng: routeStart.longitude },
-    limit: BAILOUT_SEARCH_LIMIT,
-  });
+  const suggestions: RoadNavSearchSuggestion[] = [];
+  for (const anchor of buildBailoutSearchAnchors(params.routePoints)) {
+    try {
+      const anchorSuggestions = await searchRoadDestinations({
+        accessToken: params.accessToken,
+        query: BAILOUT_SEARCH_QUERY,
+        sessionToken: params.sessionToken,
+        proximity: { lat: anchor.latitude, lng: anchor.longitude },
+        limit: BAILOUT_SEARCH_LIMIT,
+      });
+      anchorSuggestions.forEach((suggestion) => suggestions.push(suggestion));
+    } catch {}
+  }
   const seen = new Set<string>();
   const options: BailoutPlanPoint[] = [];
   const addOption = (point: BailoutPlanPoint) => {
@@ -2604,6 +2872,9 @@ async function loadBailoutPlanOptions(params: {
       if (point) addOption(point);
     } catch {}
   }
+  const routeEvidenceOptions = options
+    .filter((point) => point.source !== 'mapbox_search')
+    .slice(0, BAILOUT_OPTION_LIMIT);
   const mapboxOptions = options
     .filter((point) => point.source === 'mapbox_search')
     .sort(
@@ -2614,7 +2885,7 @@ async function loadBailoutPlanOptions(params: {
     .slice(0, BAILOUT_OPTION_LIMIT);
 
   return filterBailoutPlanCandidates({
-    providerCandidates: mapboxOptions,
+    providerCandidates: [...routeEvidenceOptions, ...mapboxOptions],
     routeFallbackCandidates: suggested,
     routeStart,
     routePoints: params.routePoints,
@@ -2701,7 +2972,7 @@ function getTripPlanMapReadyCount(
   if (scope === 'camps') {
     return [plan.primaryCampCandidate, plan.backupCampCandidate]
       .filter((candidate) => isValidMapCoordinate(candidate?.location))
-      .length;
+      .length + campReferenceStopsFromPlan(plan).filter((stop) => isValidMapCoordinate(stop.coordinate)).length;
   }
   if (scope === 'exits') {
     return exitPointsFromPlan(plan, routePointsForTripMap(route))
@@ -2868,7 +3139,6 @@ function buildTripPlanMapModel(
       .sort((left, right) => left.sequence - right.sequence)
       .forEach((stop, index) => {
         const mapChar = formatTripMapLetter(index);
-        const isBailoutStop = isBailoutItineraryStop(stop);
         const coordinate = coordinateForTripPlanStop(plan, stop, stopRoutePoints);
         const tone = itineraryStopTone(stop);
         markerSources.push({
@@ -2880,7 +3150,7 @@ function buildTripPlanMapModel(
           subtitle: [tone.label, stop.type.replace(/_/g, ' '), formatRouteMarker(stop.routeMileMarker)].filter(Boolean).join(' | '),
           mapChar,
           color: tone.color,
-          connectToRouteLine: !isBailoutStop,
+          connectToRouteLine: isGuidanceConnectedTripPlanStop(stop),
         });
       });
   } else if (scope === 'camps') {
@@ -2892,6 +3162,16 @@ function buildTripPlanMapModel(
         type: index === 0 ? 'camp' : 'backup_camp',
         coordinate: candidate.location ?? null,
         subtitle: campCandidateLine(candidate),
+      });
+    });
+    campReferenceStopsFromPlan(plan).forEach((stop, index) => {
+      markerSources.push({
+        id: stop.id,
+        title: `Operator ${index + 1}: ${stop.title}`,
+        type: 'camp',
+        coordinate: stop.coordinate,
+        subtitle: stop.notes?.[0] ?? 'Operator-marked potential camp. Verify legal access before relying on it.',
+        connectToRouteLine: false,
       });
     });
   } else if (scope === 'exits') {
@@ -3071,6 +3351,167 @@ function TripPlanMapOverlay({
             ))
           )}
         </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+function CampPlanPickerOverlay({
+  visible,
+  route,
+  routePreviewPoints,
+  pins,
+  onDropPin,
+  onRemovePin,
+  onClearPins,
+  onClose,
+}: {
+  visible: boolean;
+  route: TripBuilderRouteInput | null;
+  routePreviewPoints: TripMapCoordinate[];
+  pins: CampPlanPin[];
+  onDropPin: (coordinate: TripMapCoordinate) => void;
+  onRemovePin: (id: string) => void;
+  onClearPins: () => void;
+  onClose: () => void;
+}) {
+  const [mapboxToken, setMapboxToken] = useState(() => getMapboxTokenSync());
+  const routePoints = useMemo(() => {
+    const prepared = routePreviewPoints.filter(isValidMapCoordinate);
+    if (prepared.length > 0) return prepared;
+    return route ? routePointsForTripMap(route) : [];
+  }, [route, routePreviewPoints]);
+  const campCameraCommand = useMemo(
+    () => buildTripRoutePreviewCameraCommand(routePoints, 'camp_plan'),
+    [routePoints],
+  );
+  const campMarkers = pins.map((pin, index): TripPlanMapMarker => ({
+    id: pin.id,
+    latitude: pin.coordinate.latitude,
+    longitude: pin.coordinate.longitude,
+    title: pin.title,
+    subtitle: 'Operator-marked potential camp. Verify access, land use, fire restrictions, and posted rules.',
+    type: 'camp',
+    color: '#66BB6A',
+    mapChar: String(index + 1),
+    connectToRouteLine: false,
+  }));
+
+  useEffect(() => {
+    if (!visible || mapboxToken) return;
+    let cancelled = false;
+    getMapboxToken().then((token) => {
+      if (!cancelled) setMapboxToken(token);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mapboxToken, visible]);
+
+  if (!visible) return null;
+
+  return (
+    <View style={styles.tripMapOverlay} testID="trip-builder-camp-picker-overlay">
+      <View style={styles.bailoutPickerCard}>
+        <View style={styles.tripMapHeader}>
+          <View style={styles.tripMapHeaderCopy}>
+            <Text style={styles.eyebrow}>REFERENCE CAMP PLAN</Text>
+            <Text style={styles.tripMapTitle}>Camp Plan</Text>
+            <Text style={styles.tripMapSubtitle}>
+              Tap the map to drop operator reference camp pins. These pins do not alter navigation.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.modalCloseButton}
+            activeOpacity={0.82}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close camp picker"
+            testID="trip-builder-camp-picker-close"
+          >
+            <Ionicons name="close" size={18} color={TACTICAL.text} />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.bailoutPickerMapFrame}>
+          {mapboxToken && routePoints.length > 0 ? (
+            <MapRenderer
+              points={routePoints}
+              pinMarkers={campMarkers}
+              routeColor={TACTICAL.amber}
+              mapStyle={DEFAULT_MAP_STYLE}
+              mapboxToken={mapboxToken}
+              hasToken={!!mapboxToken}
+              motionPriority="warm"
+              interactive
+              cameraMode="route_overview"
+              cameraCommand={campCameraCommand}
+              onMapTap={(coordinate) => onDropPin(coordinate)}
+              style={styles.tripMapSurface}
+            />
+          ) : (
+            <View style={styles.tripMapFallback}>
+              <Ionicons name="map-outline" size={24} color={TACTICAL.textMuted} />
+              <Text style={styles.tripMapFallbackTitle}>Camp map unavailable</Text>
+              <Text style={styles.tripMapFallbackText}>Route geometry or map token is unavailable. Camp pins can be added when the route map is available.</Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.bailoutPickerFooter}>
+          <View style={styles.bailoutPickerFooterHeader}>
+            <Text style={styles.bailoutPickerTitle}>Camp Reference Pins</Text>
+            {pins.length > 0 ? (
+              <TouchableOpacity
+                style={styles.bailoutOpenButton}
+                activeOpacity={0.82}
+                onPress={onClearPins}
+                accessibilityRole="button"
+                accessibilityLabel="Clear camp pins"
+                testID="trip-builder-clear-camp-pins"
+              >
+                <Ionicons name="trash-outline" size={12} color={TACTICAL.amber} />
+                <Text style={styles.bailoutOpenButtonText}>Clear</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <ScrollView style={styles.bailoutOptionList} contentContainerStyle={styles.bailoutOptionListContent}>
+            {pins.length === 0 ? (
+              <Text style={styles.tripMapPointMeta}>Tap the map to drop camp reference pins along the selected route.</Text>
+            ) : (
+              pins.map((pin, index) => (
+                <View key={pin.id} style={styles.campPinRow}>
+                  <View style={styles.campPinIcon}>
+                    <Text style={styles.smartResupplyMarkerText}>{index + 1}</Text>
+                  </View>
+                  <View style={styles.campPinCopy}>
+                    <Text style={styles.campPinTitle}>{pin.title}</Text>
+                    <Text style={styles.campPinMeta} numberOfLines={1}>
+                      Operator-marked potential camp. Legal access, land use, fire restrictions, and posted rules are unknown.
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.campPinRemove}
+                    activeOpacity={0.82}
+                    onPress={() => onRemovePin(pin.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove camp pin ${index + 1}`}
+                  >
+                    <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
+          </ScrollView>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            activeOpacity={0.84}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Save camp pins"
+            testID="trip-builder-save-camp-pins"
+          >
+            <Text style={styles.primaryButtonText}>{pins.length > 0 ? 'Save Camp Pins' : 'Done'}</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
@@ -3265,11 +3706,11 @@ export default function ExploreTripBuilderScreen() {
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [tripSetupStarted, setTripSetupStarted] = useState(false);
   const [preparedTripRoutePreview, setPreparedTripRoutePreview] = useState<PreparedTripRoutePreview | null>(null);
-  const [tripType, setTripType] = useState<TripType>('day_trip');
-  const [groupType, setGroupType] = useState<GroupType>('solo');
-  const [priorities, setPriorities] = useState<TripPriority[]>(['low_risk']);
   const [smartResupplyPreference, setSmartResupplyPreference] = useState<SmartResupplyPreference>('fuel_only');
   const [bailoutPlanPreference, setBailoutPlanPreference] = useState<BailoutPlanPreference>('yes');
+  const [campPlanPreference, setCampPlanPreference] = useState<CampPlanPreference>('skip');
+  const [campPickerVisible, setCampPickerVisible] = useState(false);
+  const [campPlanPins, setCampPlanPins] = useState<CampPlanPin[]>([]);
   const [routeImportState, setRouteImportState] = useState<RouteImportState>({ status: 'idle', message: null });
   const [smartResupplyFuelOptions, setSmartResupplyFuelOptions] = useState<SmartResupplyPoi[]>([]);
   const [smartResupplySupplyOptions, setSmartResupplySupplyOptions] = useState<SmartResupplyPoi[]>([]);
@@ -3310,6 +3751,9 @@ export default function ExploreTripBuilderScreen() {
   const smartResupplySupplyRequestRef = useRef(0);
   const smartResupplyFuelSearchSignatureRef = useRef<string | null>(null);
   const smartResupplySupplySearchSignatureRef = useRef<string | null>(null);
+  const tripType = DEFAULT_TRIP_BUILDER_TRIP_TYPE;
+  const groupType = DEFAULT_TRIP_BUILDER_GROUP_TYPE;
+  const priorities = DEFAULT_TRIP_BUILDER_PRIORITIES;
   const tripBuilderGps = useThrottledGPS({ enabled: true, highAccuracy: true });
   const liveTripBuilderUserLocation = useMemo(
     () => tripBuilderCoordinateFromGpsPosition(tripBuilderGps.rawGPS.position ?? tripBuilderGps.position),
@@ -3819,14 +4263,15 @@ export default function ExploreTripBuilderScreen() {
     return selectedSmartFuel.groceries || !!selectedSmartSupply;
   }, [selectedSmartFuel, selectedSmartSupply, smartResupplyPreference]);
   const routeContextFuelOptions = useMemo(
-    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'fuel', selectedTrailheadResupplyAnchorCoordinate),
-    [routeContextSnapshot, selectedTrailheadResupplyAnchorCoordinate],
+    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'fuel', selectedTrailheadResupplyAnchorCoordinate, liveApproachRoutePoints),
+    [liveApproachRoutePoints, routeContextSnapshot, selectedTrailheadResupplyAnchorCoordinate],
   );
   const routeContextSupplyOptions = useMemo(
-    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedPreTrailSupplyAnchorCoordinate),
-    [routeContextSnapshot, selectedPreTrailSupplyAnchorCoordinate],
+    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedTrailheadResupplyAnchorCoordinate, liveApproachRoutePoints, selectedPreTrailSupplyAnchorCoordinate),
+    [liveApproachRoutePoints, routeContextSnapshot, selectedPreTrailSupplyAnchorCoordinate, selectedTrailheadResupplyAnchorCoordinate],
   );
   const bailoutPlanReady = bailoutPlanPreference === 'no' || !!selectedBailoutPoint;
+  const campPlanReady = campPlanPreference === 'skip' || campPlanPins.length > 0;
 
   useEffect(() => {
     if (!itineraryEditMode || !insertState || itinerarySearchToken) return;
@@ -3945,7 +4390,7 @@ export default function ExploreTripBuilderScreen() {
       return;
     }
 
-    const searchSignature = smartResupplySearchSignature(selectedTrailheadResupplyAnchorCoordinate, 'fuel');
+    const searchSignature = smartResupplySearchSignature(selectedTrailheadResupplyAnchorCoordinate, 'fuel', liveApproachRoutePoints);
     const routeContextMergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, [], smartResupplyFuelOptionsRef.current);
     if (routeContextFuelOptions.length > 0 || smartResupplyFuelOptionsRef.current.length > 0) {
       commitSmartResupplyFuelOptions(routeContextMergedOptions);
@@ -3975,6 +4420,8 @@ export default function ExploreTripBuilderScreen() {
           query: SMART_RESUPPLY_FUEL_QUERY,
           category: 'fuel',
           routeStart: selectedTrailheadResupplyAnchorCoordinate,
+          approachRoute: liveApproachRoutePoints,
+          origin: liveTripBuilderUserLocation,
         });
         if (cancelled || requestId !== smartResupplyFuelRequestRef.current) return;
         const mergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current);
@@ -4002,6 +4449,8 @@ export default function ExploreTripBuilderScreen() {
     commitSmartResupplyFuelOptions,
     itinerarySearchToken,
     routeContextFuelOptions,
+    liveApproachRoutePoints,
+    liveTripBuilderUserLocation,
     selectedTrailheadResupplyAnchorCoordinate,
     smartResupplyPreference,
     tripSetupStarted,
@@ -4031,6 +4480,7 @@ export default function ExploreTripBuilderScreen() {
     const searchSignature = smartResupplySearchSignature(
       selectedPreTrailSupplyAnchorCoordinate,
       'supplies',
+      liveApproachRoutePoints,
       smartResupplyOptionStableKey(selectedSmartFuel),
     );
     const routeContextMergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, [], smartResupplySupplyOptionsRef.current);
@@ -4061,7 +4511,10 @@ export default function ExploreTripBuilderScreen() {
           sessionToken: roadSearchSessionTokenRef.current,
           query: SMART_RESUPPLY_SUPPLY_QUERY,
           category: 'food_supplies',
-          routeStart: selectedPreTrailSupplyAnchorCoordinate,
+          routeStart: selectedTrailheadResupplyAnchorCoordinate ?? selectedPreTrailSupplyAnchorCoordinate,
+          approachRoute: liveApproachRoutePoints,
+          origin: liveTripBuilderUserLocation,
+          fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate,
         });
         if (cancelled || requestId !== smartResupplySupplyRequestRef.current) return;
         const mergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current);
@@ -4089,7 +4542,10 @@ export default function ExploreTripBuilderScreen() {
     commitSmartResupplySupplyOptions,
     itinerarySearchToken,
     routeContextSupplyOptions,
+    liveApproachRoutePoints,
+    liveTripBuilderUserLocation,
     selectedPreTrailSupplyAnchorCoordinate,
+    selectedTrailheadResupplyAnchorCoordinate,
     selectedSmartFuel,
     smartResupplyPreference,
     tripSetupStarted,
@@ -4139,6 +4595,7 @@ export default function ExploreTripBuilderScreen() {
           accessToken: token,
           sessionToken: roadSearchSessionTokenRef.current,
           routePoints,
+          routeContextOptions: bailoutPlanPointsFromRouteContext(routeContextSnapshot),
         });
         if (!cancelled) {
           setBailoutOptions(options);
@@ -4165,6 +4622,7 @@ export default function ExploreTripBuilderScreen() {
     bailoutPlanPreference,
     itinerarySearchToken,
     selectedPreparedRoutePoints,
+    routeContextSnapshot,
     selectedRouteEndCoordinate,
     selectedRouteId,
     selectedRouteStartCoordinate,
@@ -4267,6 +4725,9 @@ export default function ExploreTripBuilderScreen() {
     setSmartResupplyError(null);
     setSelectedBailoutPoint(null);
     setBailoutPickerVisible(false);
+    setCampPlanPreference('skip');
+    setCampPickerVisible(false);
+    setCampPlanPins([]);
     setResupplyOverrides({});
     lastTripBuilderPlanState = {
       selectedRouteId: routeId,
@@ -4335,6 +4796,9 @@ export default function ExploreTripBuilderScreen() {
       setSmartResupplyError(null);
       setSelectedBailoutPoint(null);
       setBailoutPickerVisible(false);
+      setCampPlanPreference('skip');
+      setCampPickerVisible(false);
+      setCampPlanPins([]);
       setResupplyOverrides({});
       setRouteImportState({ status: 'success', message: `${fileName} ready for Trip Builder.` });
       lastTripBuilderPlanState = {
@@ -4360,31 +4824,45 @@ export default function ExploreTripBuilderScreen() {
     setError(null);
   };
 
-  const togglePriority = (priority: TripPriority) => {
-    setPriorities((current) => {
-      if (current.includes(priority)) return current.filter((item) => item !== priority);
-      if (current.length >= 2) return [current[1], priority];
-      return [...current, priority];
-    });
-  };
-
-  const setCampingNeeded = (needed: boolean) => {
-    setPriorities((current) => {
-      if (needed) {
-        if (current.includes('camping')) return current;
-        if (current.length >= 2) return ['camping', current[1]];
-        return ['camping', ...current];
-      }
-      return current.filter((item) => item !== 'camping');
-    });
-  };
-
-  const setTripTypeAndDefaults = (next: TripType) => {
+  const handleSkipCampPlan = () => {
     hapticMicro();
-    setTripType(next);
-    if (campingImplied(next)) {
-      setPriorities((current) => current.filter((item) => item !== 'camping').slice(0, 2));
-    }
+    setCampPlanPreference('skip');
+    setCampPickerVisible(false);
+    setCampPlanPins([]);
+  };
+
+  const handleOpenCampPicker = () => {
+    hapticMicro();
+    setCampPlanPreference('pins');
+    setCampPickerVisible(true);
+  };
+
+  const handleDropCampPin = (coordinate: TripMapCoordinate) => {
+    if (!isValidMapCoordinate(coordinate)) return;
+    hapticMicro();
+    setCampPlanPreference('pins');
+    setCampPlanPins((current) => {
+      const nextIndex = current.length + 1;
+      return [
+        ...current,
+        {
+          id: `operator-camp-${Date.now().toString(36)}-${nextIndex}`,
+          title: `Camp candidate ${nextIndex}`,
+          coordinate,
+          note: null,
+        },
+      ].slice(0, 8);
+    });
+  };
+
+  const handleRemoveCampPin = (id: string) => {
+    hapticMicro();
+    setCampPlanPins((current) => current.filter((pin) => pin.id !== id));
+  };
+
+  const handleClearCampPins = () => {
+    hapticMicro();
+    setCampPlanPins([]);
   };
 
   const handleGenerate = () => {
@@ -4403,6 +4881,11 @@ export default function ExploreTripBuilderScreen() {
     if (!bailoutPlanReady) {
       setError('Select a bailout or rendezvous point before building this trip plan, or choose No for bailout planning.');
       setBailoutPickerVisible(true);
+      return;
+    }
+    if (!campPlanReady) {
+      setError('Drop at least one camp reference pin, or choose Skip for Camp Plan.');
+      setCampPickerVisible(true);
       return;
     }
     try {
@@ -4435,11 +4918,12 @@ export default function ExploreTripBuilderScreen() {
       const routeContextPoiData = routeContextSupplyCandidatesToResupplyPoints(routeContext, selectedSupplyMode);
       const routeContextItineraryInput = routeContextToTripBuilderItineraryContext(routeContext, selectedSupplyMode);
       const selectedBailoutExitPoints = selectedBailoutPoint ? [bailoutExitPointForPlan(selectedBailoutPoint)] : null;
+      const referencePoints: TripPlanReferencePoint[] = campPlanPins.map(tripPlanReferencePointFromCampPin);
       const input: TripBuilderInput = {
-        tripType,
-        timeWindow: timeWindowForTripType(tripType),
-        groupType,
-        priorities,
+        tripType: DEFAULT_TRIP_BUILDER_TRIP_TYPE,
+        timeWindow: timeWindowForTripType(DEFAULT_TRIP_BUILDER_TRIP_TYPE),
+        groupType: DEFAULT_TRIP_BUILDER_GROUP_TYPE,
+        priorities: DEFAULT_TRIP_BUILDER_PRIORITIES,
         smartResupplyPreference,
         bailoutPlanRequested: bailoutPlanPreference === 'yes',
       };
@@ -4451,6 +4935,7 @@ export default function ExploreTripBuilderScreen() {
         readiness: readinessReference,
         campsiteCandidates: routeToCampCandidates(selectedRoute),
         exitPoints: selectedBailoutExitPoints,
+        referencePoints,
         resupplyPoints: selectedPreRouteResupplyPoints,
         availablePoiData: routeContextPoiData,
         routeContext: routeContextItineraryInput,
@@ -4875,93 +5360,18 @@ export default function ExploreTripBuilderScreen() {
                       nestedScrollEnabled
                       showsVerticalScrollIndicator={false}
                     >
-                      <Text style={styles.groupLabel}>Trip Type</Text>
-                      <View style={styles.optionGrid}>
-                        {TRIP_TYPE_OPTIONS.map((option) => (
-                          <TouchableOpacity
-                            key={option.value}
-                            style={[styles.tripTypeCard, tripType === option.value && styles.tripTypeCardSelected]}
-                            activeOpacity={0.82}
-                            onPress={() => setTripTypeAndDefaults(option.value)}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Trip type ${option.label}`}
-                            accessibilityState={{ selected: tripType === option.value }}
-                            testID={`trip-builder-trip-type-${option.value}`}
-                          >
-                            <Text style={[styles.tripTypeLabel, tripType === option.value && styles.tripTypeLabelSelected]}>{option.label}</Text>
-                          </TouchableOpacity>
-                        ))}
+                      <View style={styles.tripSetupDefaults} testID="trip-builder-setup-defaults">
+                        <View style={styles.tripSetupDefaultItem}>
+                          <Text style={styles.tripSetupDefaultLabel}>Route</Text>
+                          <Text style={styles.tripSetupDefaultValue} numberOfLines={1}>
+                            {selectedRouteDisplayName ?? selectedRoute.name}
+                          </Text>
+                        </View>
+                        <View style={styles.tripSetupDefaultItem}>
+                          <Text style={styles.tripSetupDefaultLabel}>Mode</Text>
+                          <Text style={styles.tripSetupDefaultValue}>Point A to B</Text>
+                        </View>
                       </View>
-
-                      <Text style={styles.groupLabel}>Group Type</Text>
-                      <View style={styles.chipRow}>
-                        {GROUP_OPTIONS.map((option) => (
-                          <OptionChip
-                            key={option.value}
-                            label={option.label}
-                            selected={groupType === option.value}
-                            onPress={() => {
-                              hapticMicro();
-                              setGroupType(option.value);
-                            }}
-                            testID={`trip-builder-group-${option.value}`}
-                          />
-                        ))}
-                      </View>
-
-                  <View
-                    style={styles.campingToggleRow}
-                    accessibilityLabel={campingImplied(tripType) ? 'Camping included for this trip type' : 'Camping needed'}
-                    testID="trip-builder-camping-needed"
-                  >
-                    <View style={styles.campingToggleCopy}>
-                      <Text style={styles.groupLabel}>Include Camping</Text>
-                      <Text style={styles.campingToggleHint}>
-                        {campingImplied(tripType)
-                          ? 'Included for this trip type.'
-                          : 'Adds camp checks and camp candidate priority.'}
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      style={[
-                        styles.togglePill,
-                        (campingImplied(tripType) || priorities.includes('camping')) && styles.togglePillOn,
-                        campingImplied(tripType) && styles.togglePillLocked,
-                      ]}
-                      activeOpacity={campingImplied(tripType) ? 1 : 0.82}
-                      disabled={campingImplied(tripType)}
-                      onPress={() => setCampingNeeded(!priorities.includes('camping'))}
-                      accessibilityRole="switch"
-                      accessibilityState={{
-                        checked: campingImplied(tripType) || priorities.includes('camping'),
-                        disabled: campingImplied(tripType),
-                      }}
-                      testID="trip-builder-camping-needed-toggle"
-                    >
-                      <Ionicons
-                        name={(campingImplied(tripType) || priorities.includes('camping')) ? 'checkmark' : 'remove'}
-                        size={13}
-                        color={(campingImplied(tripType) || priorities.includes('camping')) ? '#081014' : TACTICAL.textMuted}
-                      />
-                    </TouchableOpacity>
-                  </View>
-
-                  <View style={styles.priorityHeader}>
-                    <Text style={styles.groupLabel}>Priorities</Text>
-                    <Text style={styles.priorityLimit}>Choose up to 2</Text>
-                  </View>
-                  <View style={styles.chipRow}>
-                    {PRIORITY_OPTIONS.filter((option) => !campingImplied(tripType) || option.value !== 'camping').map((option) => (
-                      <OptionChip
-                        key={option.value}
-                        label={option.label}
-                        icon={option.icon}
-                        selected={priorities.includes(option.value)}
-                        onPress={() => togglePriority(option.value)}
-                        testID={`trip-builder-priority-${option.value}`}
-                      />
-                    ))}
-                  </View>
 
                   <View style={styles.planningQuestionsBlock}>
                     <View style={styles.planningQuestion}>
@@ -5004,11 +5414,11 @@ export default function ExploreTripBuilderScreen() {
                       {smartResupplyPreference !== 'no' ? (
                         <View style={styles.smartResupplyPicker} testID="trip-builder-smart-resupply-picker">
                           <View style={styles.smartResupplyPickerHeader}>
-                            <Text style={styles.smartResupplyPickerTitle}>Fuel Near Trailhead</Text>
+                            <Text style={styles.smartResupplyPickerTitle}>Last Fuel Before Trail Entry</Text>
                             <Text style={styles.smartResupplyPickerMeta}>PICK 1 OF UP TO 5</Text>
                           </View>
                           <Text style={styles.smartResupplyPickerHint}>
-                            ECS uses the trailhead as ground zero for pre-trail fuel.
+                            ECS ranks fuel along your GPS-to-trailhead approach first, then uses trailhead-only fallback if GPS routing is unavailable.
                           </Text>
                           {smartResupplyLoading === 'fuel' && smartResupplyFuelOptions.length === 0 ? (
                             <View style={styles.smartResupplyLoadingRow}>
@@ -5046,11 +5456,11 @@ export default function ExploreTripBuilderScreen() {
                           {smartResupplyPreference === 'fuel_supplies' && selectedSmartFuel && !selectedSmartFuel.groceries ? (
                             <View style={styles.smartResupplySupplyBlock} testID="trip-builder-smart-resupply-supply-step">
                               <View style={styles.smartResupplyPickerHeader}>
-                                <Text style={styles.smartResupplyPickerTitle}>Groceries / Supplies Near Fuel</Text>
+                                <Text style={styles.smartResupplyPickerTitle}>Groceries / Supplies Along Approach</Text>
                                 <Text style={styles.smartResupplyPickerMeta}>NEXT STOP B</Text>
                               </View>
                               <Text style={styles.smartResupplyPickerHint}>
-                                ECS ranks this stop against your selected fuel anchor.
+                                ECS keeps supplies on the same approach corridor when possible, then falls back near your selected fuel stop.
                               </Text>
                               {smartResupplyLoading === 'supplies' && smartResupplySupplyOptions.length === 0 ? (
                                 <View style={styles.smartResupplyLoadingRow}>
@@ -5175,14 +5585,104 @@ export default function ExploreTripBuilderScreen() {
                         </View>
                       ) : null}
                     </View>
+
+                    <View style={styles.planningQuestion} testID="trip-builder-camp-plan">
+                      <Text style={styles.groupLabel}>Camp Plan</Text>
+                      <Text style={styles.planningQuestionText}>
+                        Drop optional reference camp pins along this route, or skip camp planning for this trip.
+                      </Text>
+                      <View style={styles.planningChoiceRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.planningChoice,
+                            styles.planningChoiceHalf,
+                            campPlanPreference === 'skip' && styles.planningChoiceSelected,
+                          ]}
+                          activeOpacity={0.82}
+                          onPress={handleSkipCampPlan}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: campPlanPreference === 'skip' }}
+                          testID="trip-builder-camp-skip"
+                        >
+                          <Text style={[
+                            styles.planningChoiceLabel,
+                            campPlanPreference === 'skip' && styles.planningChoiceLabelSelected,
+                          ]}>
+                            Skip
+                          </Text>
+                          <Text style={[
+                            styles.planningChoiceDetail,
+                            campPlanPreference === 'skip' && styles.planningChoiceDetailSelected,
+                          ]} numberOfLines={2}>
+                            No camp reference pins.
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            styles.planningChoice,
+                            styles.planningChoiceHalf,
+                            campPlanPreference === 'pins' && styles.planningChoiceSelected,
+                          ]}
+                          activeOpacity={0.82}
+                          onPress={handleOpenCampPicker}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: campPlanPreference === 'pins' }}
+                          testID="trip-builder-open-camp-picker"
+                        >
+                          <Text style={[
+                            styles.planningChoiceLabel,
+                            campPlanPreference === 'pins' && styles.planningChoiceLabelSelected,
+                          ]}>
+                            Open Map
+                          </Text>
+                          <Text style={[
+                            styles.planningChoiceDetail,
+                            campPlanPreference === 'pins' && styles.planningChoiceDetailSelected,
+                          ]} numberOfLines={2}>
+                            Drop reference camp pins.
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                      {campPlanPins.length > 0 ? (
+                        <View style={styles.campPinList} testID="trip-builder-camp-pin-list">
+                          {campPlanPins.map((pin, index) => (
+                            <View key={pin.id} style={styles.campPinRow}>
+                              <View style={styles.campPinIcon}>
+                                <Ionicons name="bonfire-outline" size={12} color={TACTICAL.amber} />
+                              </View>
+                              <View style={styles.campPinCopy}>
+                                <Text style={styles.campPinTitle}>{pin.title}</Text>
+                                <Text style={styles.campPinMeta} numberOfLines={1}>
+                                  Operator-marked potential camp. Legal access, land use, fire restrictions, and posted rules are unknown.
+                                </Text>
+                              </View>
+                              <TouchableOpacity
+                                style={styles.campPinRemove}
+                                activeOpacity={0.82}
+                                onPress={() => handleRemoveCampPin(pin.id)}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Remove camp pin ${index + 1}`}
+                                testID={`trip-builder-remove-camp-pin-${pin.id}`}
+                              >
+                                <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+                              </TouchableOpacity>
+                            </View>
+                          ))}
+                        </View>
+                      ) : (
+                        <Text style={styles.smartResupplyPickerHint}>
+                          Camp pins are reference-only and will not change the guidance route.
+                        </Text>
+                      )}
+                    </View>
                   </View>
 
                     </ScrollView>
 
                     <TouchableOpacity
-                      style={[styles.primaryButton, (!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady) && styles.primaryButtonDisabled]}
-                      activeOpacity={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady ? 1 : 0.84}
-                      disabled={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady}
+                      style={[styles.primaryButton, (!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady) && styles.primaryButtonDisabled]}
+                      activeOpacity={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady ? 1 : 0.84}
+                      disabled={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady}
                       onPress={handleGenerate}
                       accessibilityRole="button"
                       accessibilityLabel="Build Trip Plan"
@@ -5399,6 +5899,11 @@ export default function ExploreTripBuilderScreen() {
                     >
                       <Text style={styles.resultText}>Primary: {campCandidateLine(plan.primaryCampCandidate)}</Text>
                       <Text style={styles.resultText}>Backup: {campCandidateLine(plan.backupCampCandidate)}</Text>
+                      {campReferenceStopsFromPlan(plan).map((stop, index) => (
+                        <Text key={stop.id} style={styles.resultSubtext}>
+                          Operator {index + 1}: {stop.title} - reference pin only; verify access, land use, fire restrictions, and posted rules.
+                        </Text>
+                      ))}
                     </ResultBlock>
 
                     <ResultBlock
@@ -5495,6 +6000,16 @@ export default function ExploreTripBuilderScreen() {
             onSelect={handleSelectBailoutPoint}
             onDropPoint={handleDropBailoutPoint}
             onClose={() => setBailoutPickerVisible(false)}
+          />
+          <CampPlanPickerOverlay
+            visible={campPickerVisible}
+            route={selectedRoute as unknown as TripBuilderRouteInput | null}
+            routePreviewPoints={selectedPreparedRoutePoints}
+            pins={campPlanPins}
+            onDropPin={handleDropCampPin}
+            onRemovePin={handleRemoveCampPin}
+            onClearPins={handleClearCampPins}
+            onClose={() => setCampPickerVisible(false)}
           />
         </View>
       </View>
@@ -5681,6 +6196,29 @@ const styles = StyleSheet.create({
   },
   tripSetupScroller: { flex: 1, minHeight: 0 },
   tripSetupContent: { gap: 7, paddingBottom: 2 },
+  tripSetupDefaults: {
+    flexDirection: 'row',
+    gap: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '24',
+    backgroundColor: TACTICAL.amber + '08',
+    padding: 8,
+  },
+  tripSetupDefaultItem: { flex: 1, minWidth: 0, gap: 2 },
+  tripSetupDefaultLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  tripSetupDefaultValue: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '900',
+  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -6083,6 +6621,53 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
     fontSize: 8,
     fontWeight: '900',
+  },
+  campPinList: {
+    gap: 6,
+  },
+  campPinRow: {
+    minHeight: 42,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: '#66BB6A35',
+    backgroundColor: '#66BB6A0B',
+    paddingHorizontal: 7,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  campPinIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#66BB6A45',
+    backgroundColor: '#66BB6A12',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  campPinCopy: { flex: 1, minWidth: 0 },
+  campPinTitle: {
+    color: TACTICAL.text,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  campPinMeta: {
+    marginTop: 1,
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 10,
+    fontWeight: '700',
+  },
+  campPinRemove: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: ECS.stroke,
   },
   campingToggleRow: {
     borderRadius: 10,

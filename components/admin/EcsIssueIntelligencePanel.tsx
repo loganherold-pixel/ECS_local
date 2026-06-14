@@ -314,8 +314,8 @@ export default function EcsIssueIntelligencePanel({
 
         <View style={styles.heroStats}>
           <View style={styles.heroStat}>
-            <Text style={[styles.heroStatValue, { color: colors.textPrimary }]}>{summary?.groups.length ?? '--'}</Text>
-            <Text style={[styles.heroStatLabel, { color: colors.textMuted }]}>Grouped Issues</Text>
+            <Text style={[styles.heroStatValue, { color: colors.textPrimary }]}>{summary?.activeGroups.length ?? '--'}</Text>
+            <Text style={[styles.heroStatLabel, { color: colors.textMuted }]}>Active Groups</Text>
           </View>
           <View style={styles.heroStat}>
             <Text style={[styles.heroStatValue, { color: colors.textPrimary }]}>{summary?.latestVersion ?? '--'}</Text>

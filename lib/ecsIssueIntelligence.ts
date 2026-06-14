@@ -413,6 +413,9 @@ function normalizeRemoteSummary(summary: any): EcsIssueAdminSummary {
   return {
     latestVersion: summary?.latestVersion || getAppVersion(),
     groups,
+    activeGroups: toGroups(summary?.activeGroups).length
+      ? toGroups(summary?.activeGroups)
+      : groups.filter((group) => group.trendDirection !== 'quieted'),
     frequentIssues: toGroups(summary?.frequentIssues).length ? toGroups(summary?.frequentIssues) : [...groups].sort((a, b) => b.eventCount - a.eventCount).slice(0, 8),
     newSinceLatestRelease: toGroups(summary?.newSinceLatestRelease),
     regressions: toGroups(summary?.regressions),

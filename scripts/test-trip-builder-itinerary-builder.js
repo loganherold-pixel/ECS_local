@@ -145,7 +145,7 @@ assert.strictEqual(
 );
 assert.strictEqual(
   fullItinerary.preTrailStopStatus.find((summary) => summary.bucket === 'water').status,
-  'provider_unavailable',
+  'not_requested',
 );
 assert.strictEqual(
   fullItinerary.preTrailStops.fuel[0].metadata.distanceBasis,
