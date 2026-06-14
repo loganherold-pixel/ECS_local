@@ -79,4 +79,12 @@ make migrate
 
 The local stack starts PostGIS, runs the FastAPI API at `http://localhost:8000`, and starts the web app at `http://localhost:3000`. The API exposes `/healthz` and `/v1/system/info`.
 
+Weather provider config:
+
+- NWS uses `https://api.weather.gov` and requires a `User-Agent` header, not an API key.
+- Configure `NWS_API_BASE_URL=https://api.weather.gov`, `NWS_USER_AGENT=ECS/1.0.0 (admin@example.com)`, and `NWS_ACCEPT=application/geo+json` in local/container environments.
+- Replace the contact email in `NWS_USER_AGENT` with the service owner or support contact for the deployment.
+- AirNow and NPS provider keys are runtime secrets. ECS task definitions should inject `AIRNOW_API_KEY` and `NPS_API_KEY` through the container `secrets` block from AWS Secrets Manager or SSM Parameter Store.
+- Keep non-secret AirNow/NPS config in normal env vars: `AIRNOW_ENABLED=true`, `NPS_ENABLED=true`, `AIRNOW_API_BASE_URL=https://www.airnowapi.org/aq`, and `NPS_API_BASE_URL=https://developer.nps.gov/api/v1`.
+
 Architecture notes live in `docs/architecture.md`. The central rule is that ECS owns vehicle trail legality, access checks, routeability, closures, and source confidence. Mapbox is used for basemap, presentation, and on-road support only; it is not the legal trail authority.

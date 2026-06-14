@@ -40,6 +40,7 @@ const {
   createOpenWeatherOneCallAdapter,
 } = loadTypeScriptModule('lib/openWeatherOneCallAdapter.ts');
 const {
+  buildNwsWeatherConfig,
   buildNwsPointAlertsUrl,
   buildNwsPointsUrl,
   createNwsWeatherAdapter,
@@ -63,6 +64,30 @@ const nwsProvider = getProviderConfig('nws', providerRegistry);
 const openWeatherProvider = getProviderConfig('openweather_onecall', providerRegistry);
 assert.strictEqual(getProviderHealth('nws', providerRegistry).status, 'configured', 'NWS should configure with User-Agent.');
 assert.strictEqual(getProviderHealth('nws', createECS5ProviderRegistry({ ENABLE_NWS: 'true' }, [], now)).status, 'missing_config');
+const nwsRuntimeConfig = buildNwsWeatherConfig({
+  NWS_API_BASE_URL: 'https://nws-proxy.example.test/',
+  NWS_USER_AGENT: 'ECS/1.0.0 (ops@example.com)',
+  NWS_ACCEPT: 'application/geo+json',
+});
+assert.deepStrictEqual(nwsRuntimeConfig, {
+  baseUrl: 'https://nws-proxy.example.test',
+  userAgent: 'ECS/1.0.0 (ops@example.com)',
+  accept: 'application/geo+json',
+});
+assert.deepStrictEqual(buildNwsWeatherConfig({
+  NWS_USER_AGENT: 'ECS/1.0.0 (ops@example.com)',
+}), {
+  baseUrl: 'https://api.weather.gov',
+  userAgent: 'ECS/1.0.0 (ops@example.com)',
+  accept: 'application/geo+json',
+});
+const legacyUserAgentName = ['AWS', 'USER', 'AGENT'].join('_');
+assert.throws(
+  () => buildNwsWeatherConfig({ [legacyUserAgentName]: 'ECS/legacy (ops@example.com)' }),
+  (error) => error.message.includes('NWS_USER_AGENT missing or not configured') &&
+    !error.message.includes(legacyUserAgentName),
+  'NWS config must not require or mention the AWS-prefixed user-agent name.',
+);
 assert.deepStrictEqual([...NWS_WEATHER_KNOWN_LIMITATIONS], [
   'us_only_or_us_territories',
   'weather_only',
@@ -71,6 +96,8 @@ assert.deepStrictEqual([...NWS_WEATHER_KNOWN_LIMITATIONS], [
 ]);
 assert.strictEqual(buildNwsPointsUrl(38.78123, -121.20761), 'https://api.weather.gov/points/38.7812,-121.2076');
 assert.strictEqual(buildNwsPointAlertsUrl(38.78123, -121.20761), 'https://api.weather.gov/alerts/active?point=38.7812,-121.2076');
+assert.strictEqual(buildNwsPointsUrl(38.78123, -121.20761, 'https://nws-proxy.example.test'), 'https://nws-proxy.example.test/points/38.7812,-121.2076');
+assert.strictEqual(buildNwsPointAlertsUrl(38.78123, -121.20761, 'https://nws-proxy.example.test/'), 'https://nws-proxy.example.test/alerts/active?point=38.7812,-121.2076');
 
 const pointsFixture = {
   type: 'Feature',
@@ -182,18 +209,37 @@ assert.ok(alert.confidenceScore > 90, 'NWS alert should carry higher official al
 (async () => {
   const captured = [];
   const adapter = createNwsWeatherAdapter(nwsProvider);
-  await adapter.fetch({ lat: 38.78, lon: -121.2 }, {
-    serverFetch: async ({ url, headers }) => {
-      captured.push({ url, headers });
-      if (url.includes('/points/')) return pointsFixture;
-      if (url.endsWith('/forecast/hourly')) return forecastFixture;
-      if (url.endsWith('/forecast')) return forecastFixture;
-      if (url.includes('/alerts/active')) return severeAlertFixture;
-      throw new Error(`Unexpected URL ${url}`);
-    },
-  });
+  const previousNwsEnv = {
+    NWS_API_BASE_URL: process.env.NWS_API_BASE_URL,
+    NWS_USER_AGENT: process.env.NWS_USER_AGENT,
+    NWS_ACCEPT: process.env.NWS_ACCEPT,
+  };
+  process.env.NWS_API_BASE_URL = 'https://nws-proxy.example.test';
+  process.env.NWS_USER_AGENT = 'ECS/1.0.0 (ops@example.com)';
+  process.env.NWS_ACCEPT = 'application/geo+json';
+  try {
+    await adapter.fetch({ lat: 38.78, lon: -121.2 }, {
+      serverFetch: async ({ url, headers }) => {
+        captured.push({ url, headers });
+        if (url.includes('/points/')) return pointsFixture;
+        if (url.endsWith('/forecast/hourly')) return forecastFixture;
+        if (url.endsWith('/forecast')) return forecastFixture;
+        if (url.includes('/alerts/active')) return severeAlertFixture;
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    });
+  } finally {
+    for (const [key, value] of Object.entries(previousNwsEnv)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
   assert.ok(captured.length >= 4, 'NWS live fetch should use points, forecast, hourly, and alerts endpoints.');
-  assert.ok(captured.every((request) => request.headers['User-Agent'] === '{{NWS_USER_AGENT}}'));
+  assert.strictEqual(captured[0].url, 'https://nws-proxy.example.test/points/38.78,-121.2');
+  assert.ok(captured.some((request) => request.url === 'https://nws-proxy.example.test/alerts/active?point=38.78,-121.2'));
+  assert.ok(captured.every((request) => request.headers['User-Agent'] === 'ECS/1.0.0 (ops@example.com)'));
+  assert.ok(captured.every((request) => request.headers.Accept === 'application/geo+json'));
+  assert.ok(captured.every((request) => !('Authorization' in request.headers)), 'NWS requests must not use an API key header.');
 
   const registry = new ECS5ProviderAdapterRegistry({ providerRegistry });
   registry.registerAdapter(createNwsWeatherAdapter(nwsProvider));

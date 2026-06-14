@@ -21,6 +21,15 @@ export interface AirNowFetchPolicy {
   retryBackoffMs: number;
 }
 
+export interface AirNowConfig {
+  apiKey: string;
+  baseUrl: string;
+}
+
+export type AirNowEnv = Record<string, string | undefined>;
+
+export const DEFAULT_AIRNOW_API_BASE_URL = 'https://www.airnowapi.org/aq';
+
 export const AIRNOW_KNOWN_LIMITATIONS = [
   'preliminary_air_quality_data',
   'not_regulatory_data',
@@ -46,16 +55,14 @@ export function createAirNowAdapter(
     async fetch(input: AirNowAdapterInput, context: ProviderAdapterContext): Promise<unknown> {
       if (context.fixtureMode && input.fixturePayload != null) return input.fixturePayload;
       if (input.fixturePayload != null) return input.fixturePayload;
-      if (!(input as any).apiKeyAvailable) {
-        throw new Error('AirNow server API key is not available.');
-      }
       if (!context.serverFetch) {
         throw new Error('AirNow live fetch requires serverFetch. Do not call this adapter directly from the client.');
       }
 
+      const config = buildAirNowConfig();
       const urls = [
-        buildAirNowCurrentLatLonUrl(input),
-        buildAirNowForecastLatLonUrl(input),
+        buildAirNowCurrentLatLonUrl(input, config),
+        buildAirNowForecastLatLonUrl(input, config),
       ];
       const [current, forecast] = await Promise.all(urls.map((url) => fetchWithRetry(context, url, policy)));
       return { current, forecast };
@@ -75,6 +82,14 @@ export function createAirNowAdapter(
     getCacheTtl(): number {
       return provider.cacheTtlSeconds;
     },
+  };
+}
+
+export function buildAirNowConfig(env: AirNowEnv = getProcessEnv()): AirNowConfig {
+  const apiKey = normalizeRequiredAirNowApiKey(env.AIRNOW_API_KEY);
+  return {
+    apiKey,
+    baseUrl: normalizeAirNowBaseUrl(env.AIRNOW_API_BASE_URL) ?? DEFAULT_AIRNOW_API_BASE_URL,
   };
 }
 
@@ -121,7 +136,10 @@ export function normalizeAirNowPayload(
   });
 }
 
-export function buildAirNowCurrentLatLonUrl(input: AirNowAdapterInput): string {
+export function buildAirNowCurrentLatLonUrl(
+  input: AirNowAdapterInput,
+  config: AirNowConfig = buildAirNowConfig(),
+): string {
   const lat = assertCoordinate(input.lat, 'lat');
   const lon = assertCoordinate(input.lon, 'lon');
   const distance = Math.max(5, Math.min(250, Number(input.distanceMiles ?? 25)));
@@ -130,11 +148,15 @@ export function buildAirNowCurrentLatLonUrl(input: AirNowAdapterInput): string {
     latitude: String(lat),
     longitude: String(lon),
     distance: String(distance),
+    API_KEY: config.apiKey,
   });
-  return `https://www.airnowapi.org/aq/observation/latLong/current/?${params.toString()}&API_KEY={{AIRNOW_API_KEY}}`;
+  return `${normalizeAirNowBaseUrl(config.baseUrl) ?? DEFAULT_AIRNOW_API_BASE_URL}/observation/latLong/current/?${params.toString()}`;
 }
 
-export function buildAirNowForecastLatLonUrl(input: AirNowAdapterInput): string {
+export function buildAirNowForecastLatLonUrl(
+  input: AirNowAdapterInput,
+  config: AirNowConfig = buildAirNowConfig(),
+): string {
   const lat = assertCoordinate(input.lat, 'lat');
   const lon = assertCoordinate(input.lon, 'lon');
   const distance = Math.max(5, Math.min(250, Number(input.distanceMiles ?? 25)));
@@ -143,8 +165,9 @@ export function buildAirNowForecastLatLonUrl(input: AirNowAdapterInput): string 
     latitude: String(lat),
     longitude: String(lon),
     distance: String(distance),
+    API_KEY: config.apiKey,
   });
-  return `https://www.airnowapi.org/aq/forecast/latLong/?${params.toString()}&API_KEY={{AIRNOW_API_KEY}}`;
+  return `${normalizeAirNowBaseUrl(config.baseUrl) ?? DEFAULT_AIRNOW_API_BASE_URL}/forecast/latLong/?${params.toString()}`;
 }
 
 export function mapAirNowAqiRisk(aqi: number | null, categoryName?: string | null): {
@@ -305,8 +328,32 @@ function nullableString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function normalizeRequiredAirNowApiKey(value: unknown): string {
+  const apiKey = normalizeAirNowEnvValue(value);
+  if (!apiKey || apiKey.includes('{{') || apiKey.includes('}}')) {
+    throw new Error('AIRNOW_API_KEY missing or not configured.');
+  }
+  return apiKey;
+}
+
+function normalizeAirNowBaseUrl(value: unknown): string | null {
+  const normalized = normalizeAirNowEnvValue(value);
+  if (!normalized) return null;
+  return normalized.replace(/\/+$/, '');
+}
+
+function normalizeAirNowEnvValue(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed !== '""' ? trimmed : null;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getProcessEnv(): AirNowEnv {
+  return typeof process !== 'undefined' ? process.env as AirNowEnv : {};
 }
 
 function isRecord(value: unknown): value is Record<string, any> {

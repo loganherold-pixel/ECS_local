@@ -38,6 +38,7 @@ const {
 } = loadTypeScriptModule('lib/ecs5ObservationPipeline.ts');
 const {
   AIRNOW_KNOWN_LIMITATIONS,
+  buildAirNowConfig,
   buildAirNowCurrentLatLonUrl,
   buildAirNowForecastLatLonUrl,
   createAirNowAdapter,
@@ -50,7 +51,7 @@ const {
 
 const now = new Date('2026-04-29T22:00:00.000Z');
 const providerRegistry = createECS5ProviderRegistry({
-  ENABLE_AIRNOW: 'true',
+  AIRNOW_ENABLED: 'true',
   AIRNOW_API_KEY: 'server-only-airnow-key',
 }, [], now);
 const airNowProvider = getProviderConfig('airnow', providerRegistry);
@@ -71,8 +72,23 @@ assert.strictEqual(mapAirNowAqiRisk(125, 'Unhealthy for Sensitive Groups').risk,
 assert.strictEqual(mapAirNowAqiRisk(165, 'Unhealthy').risk, 'high');
 assert.strictEqual(mapAirNowAqiRisk(230, 'Very Unhealthy').risk, 'severe');
 assert.strictEqual(mapAirNowAqiRisk(330, 'Hazardous').risk, 'severe');
-assert.ok(buildAirNowCurrentLatLonUrl({ lat: 38.78123, lon: -121.20761 }).includes('API_KEY={{AIRNOW_API_KEY}}'));
-assert.ok(buildAirNowForecastLatLonUrl({ lat: 38.78123, lon: -121.20761 }).includes('API_KEY={{AIRNOW_API_KEY}}'));
+const airNowConfig = buildAirNowConfig({
+  AIRNOW_API_KEY: 'server-only-airnow-key',
+  AIRNOW_API_BASE_URL: 'https://airnow-proxy.example.test/aq/',
+});
+assert.deepStrictEqual(airNowConfig, {
+  apiKey: 'server-only-airnow-key',
+  baseUrl: 'https://airnow-proxy.example.test/aq',
+});
+assert.throws(
+  () => buildAirNowConfig({}),
+  (error) => error.message.includes('AIRNOW_API_KEY missing or not configured'),
+  'AirNow config should name AIRNOW_API_KEY when the runtime secret is missing.',
+);
+assert.ok(buildAirNowCurrentLatLonUrl({ lat: 38.78123, lon: -121.20761 }, airNowConfig).startsWith('https://airnow-proxy.example.test/aq/observation/latLong/current/?'));
+assert.ok(buildAirNowCurrentLatLonUrl({ lat: 38.78123, lon: -121.20761 }, airNowConfig).includes('API_KEY=server-only-airnow-key'));
+assert.ok(buildAirNowForecastLatLonUrl({ lat: 38.78123, lon: -121.20761 }, airNowConfig).includes('API_KEY=server-only-airnow-key'));
+assert.ok(!buildAirNowCurrentLatLonUrl({ lat: 38.78123, lon: -121.20761 }, airNowConfig).includes('{{AIRNOW_API_KEY}}'));
 
 const airNowFixture = {
   current: [{
@@ -119,6 +135,32 @@ assert.ok(!JSON.stringify(observations).includes('server-only-airnow-key'));
 (async () => {
   const registry = new ECS5ProviderAdapterRegistry({ providerRegistry });
   registry.registerAdapter(createAirNowAdapter(airNowProvider));
+
+  const captured = [];
+  const previousAirNowEnv = {
+    AIRNOW_API_KEY: process.env.AIRNOW_API_KEY,
+    AIRNOW_API_BASE_URL: process.env.AIRNOW_API_BASE_URL,
+  };
+  process.env.AIRNOW_API_KEY = 'server-only-airnow-key';
+  process.env.AIRNOW_API_BASE_URL = 'https://airnow-proxy.example.test/aq';
+  try {
+    const adapter = createAirNowAdapter(airNowProvider);
+    await adapter.fetch({ lat: 38.78, lon: -121.2 }, {
+      serverFetch: async ({ url, headers }) => {
+        captured.push({ url, headers });
+        return [];
+      },
+    });
+  } finally {
+    for (const [key, value] of Object.entries(previousAirNowEnv)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+  assert.strictEqual(captured.length, 2, 'AirNow live fetch should request current and forecast AQI.');
+  assert.ok(captured.every((request) => request.url.startsWith('https://airnow-proxy.example.test/aq/')));
+  assert.ok(captured.every((request) => request.url.includes('API_KEY=server-only-airnow-key')));
+  assert.ok(captured.every((request) => !request.url.includes('{{AIRNOW_API_KEY}}')));
 
   const routeResult = await sampleRouteWeatherRisk({
     routeId: 'route-smoke-aqi',

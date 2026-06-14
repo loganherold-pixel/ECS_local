@@ -21,6 +21,17 @@ export interface NwsWeatherFetchPolicy {
   retryBackoffMs: number;
 }
 
+export interface NwsWeatherConfig {
+  baseUrl: string;
+  userAgent: string;
+  accept: string;
+}
+
+export type NwsWeatherEnv = Record<string, string | undefined>;
+
+export const DEFAULT_NWS_API_BASE_URL = 'https://api.weather.gov';
+export const DEFAULT_NWS_ACCEPT = 'application/geo+json';
+
 export const NWS_WEATHER_KNOWN_LIMITATIONS = [
   'us_only_or_us_territories',
   'weather_only',
@@ -49,10 +60,11 @@ export function createNwsWeatherAdapter(
         throw new Error('NWS live fetch requires serverFetch. Do not call this adapter directly from the client.');
       }
 
-      const headers = buildNwsHeaders();
-      const pointsUrl = buildNwsPointsUrl(input.lat, input.lon);
+      const config = buildNwsWeatherConfig();
+      const headers = buildNwsHeaders(config);
+      const pointsUrl = buildNwsPointsUrl(input.lat, input.lon, config.baseUrl);
       const points = await fetchWithRetry(context, pointsUrl, headers, policy);
-      const endpoints = extractNwsEndpointRefs(points, input.lat, input.lon);
+      const endpoints = extractNwsEndpointRefs(points, input.lat, input.lon, config.baseUrl);
       const [forecast, forecastHourly, alerts] = await Promise.all([
         endpoints.forecast ? fetchWithRetry(context, endpoints.forecast, headers, policy) : Promise.resolve(null),
         endpoints.forecastHourly ? fetchWithRetry(context, endpoints.forecastHourly, headers, policy) : Promise.resolve(null),
@@ -201,19 +213,41 @@ export function normalizeNwsWeatherPayload(
   return observations;
 }
 
-export function buildNwsPointsUrl(lat: number, lon: number): string {
-  const cleanLat = assertCoordinate(lat, 'lat');
-  const cleanLon = assertCoordinate(lon, 'lon');
-  return `https://api.weather.gov/points/${cleanLat},${cleanLon}`;
+export function buildNwsWeatherConfig(env: NwsWeatherEnv = getProcessEnv()): NwsWeatherConfig {
+  const userAgent = normalizeRequiredNwsUserAgent(env.NWS_USER_AGENT);
+  return {
+    baseUrl: normalizeNwsBaseUrl(env.NWS_API_BASE_URL) ?? DEFAULT_NWS_API_BASE_URL,
+    userAgent,
+    accept: normalizeNwsHeaderValue(env.NWS_ACCEPT) ?? DEFAULT_NWS_ACCEPT,
+  };
 }
 
-export function buildNwsPointAlertsUrl(lat: number, lon: number): string {
+export function buildNwsPointsUrl(
+  lat: number,
+  lon: number,
+  baseUrl: string = DEFAULT_NWS_API_BASE_URL,
+): string {
   const cleanLat = assertCoordinate(lat, 'lat');
   const cleanLon = assertCoordinate(lon, 'lon');
-  return `https://api.weather.gov/alerts/active?point=${cleanLat},${cleanLon}`;
+  return `${normalizeNwsBaseUrl(baseUrl) ?? DEFAULT_NWS_API_BASE_URL}/points/${cleanLat},${cleanLon}`;
 }
 
-export function extractNwsEndpointRefs(pointsPayload: unknown, lat: number, lon: number): {
+export function buildNwsPointAlertsUrl(
+  lat: number,
+  lon: number,
+  baseUrl: string = DEFAULT_NWS_API_BASE_URL,
+): string {
+  const cleanLat = assertCoordinate(lat, 'lat');
+  const cleanLon = assertCoordinate(lon, 'lon');
+  return `${normalizeNwsBaseUrl(baseUrl) ?? DEFAULT_NWS_API_BASE_URL}/alerts/active?point=${cleanLat},${cleanLon}`;
+}
+
+export function extractNwsEndpointRefs(
+  pointsPayload: unknown,
+  lat: number,
+  lon: number,
+  baseUrl: string = DEFAULT_NWS_API_BASE_URL,
+): {
   forecast: string | null;
   forecastHourly: string | null;
   alerts: string;
@@ -222,7 +256,7 @@ export function extractNwsEndpointRefs(pointsPayload: unknown, lat: number, lon:
   return {
     forecast: nullableString(properties.forecast),
     forecastHourly: nullableString(properties.forecastHourly),
-    alerts: buildNwsPointAlertsUrl(lat, lon),
+    alerts: buildNwsPointAlertsUrl(lat, lon, baseUrl),
   };
 }
 
@@ -245,11 +279,31 @@ async function fetchWithRetry(
   throw lastError instanceof Error ? lastError : new Error('NWS fetch failed.');
 }
 
-function buildNwsHeaders(): Record<string, string> {
+function buildNwsHeaders(config: NwsWeatherConfig): Record<string, string> {
   return {
-    Accept: 'application/geo+json, application/json',
-    'User-Agent': '{{NWS_USER_AGENT}}',
+    Accept: config.accept,
+    'User-Agent': config.userAgent,
   };
+}
+
+function normalizeNwsBaseUrl(value: unknown): string | null {
+  const normalized = normalizeNwsHeaderValue(value);
+  if (!normalized) return null;
+  return normalized.replace(/\/+$/, '');
+}
+
+function normalizeRequiredNwsUserAgent(value: unknown): string {
+  const userAgent = normalizeNwsHeaderValue(value);
+  if (!userAgent || userAgent.includes('{{') || userAgent.includes('}}')) {
+    throw new Error('NWS_USER_AGENT missing or not configured. National Weather Service requests require a User-Agent header; no API key is required.');
+  }
+  return userAgent;
+}
+
+function normalizeNwsHeaderValue(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed !== '""' ? trimmed : null;
 }
 
 function extractNwsPeriods(payload: Record<string, unknown>): Array<Record<string, unknown>> {
@@ -374,6 +428,10 @@ function isRetryableNwsError(error: unknown): boolean {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getProcessEnv(): NwsWeatherEnv {
+  return typeof process !== 'undefined' ? process.env as NwsWeatherEnv : {};
 }
 
 function isRecord(value: unknown): value is Record<string, any> {

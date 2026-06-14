@@ -25,6 +25,13 @@ services:
       ECS_ENVIRONMENT: ${ECS_ENVIRONMENT:-local}
       DATABASE_URL: ${API_DATABASE_URL:-postgresql+psycopg://ecs_trails:ecs_trails@db:5432/ecs_trails}
       MAPBOX_ACCESS_TOKEN: ${MAPBOX_ACCESS_TOKEN:-}
+      NWS_API_BASE_URL: ${NWS_API_BASE_URL:-https://api.weather.gov}
+      NWS_USER_AGENT: ${NWS_USER_AGENT:-ECS/1.0.0 (admin@example.com)}
+      NWS_ACCEPT: ${NWS_ACCEPT:-application/geo+json}
+      AIRNOW_ENABLED: ${AIRNOW_ENABLED:-true}
+      AIRNOW_API_BASE_URL: ${AIRNOW_API_BASE_URL:-https://www.airnowapi.org/aq}
+      NPS_ENABLED: ${NPS_ENABLED:-true}
+      NPS_API_BASE_URL: ${NPS_API_BASE_URL:-https://developer.nps.gov/api/v1}
       RIDB_API_KEY: ${RIDB_API_KEY:-}
     ports:
       - "${API_PORT:-8000}:8000"
@@ -43,6 +50,13 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
       NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN: ${NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN:-}
+      NWS_API_BASE_URL: ${NWS_API_BASE_URL:-https://api.weather.gov}
+      NWS_USER_AGENT: ${NWS_USER_AGENT:-ECS/1.0.0 (admin@example.com)}
+      NWS_ACCEPT: ${NWS_ACCEPT:-application/geo+json}
+      AIRNOW_ENABLED: ${AIRNOW_ENABLED:-true}
+      AIRNOW_API_BASE_URL: ${AIRNOW_API_BASE_URL:-https://www.airnowapi.org/aq}
+      NPS_ENABLED: ${NPS_ENABLED:-true}
+      NPS_API_BASE_URL: ${NPS_API_BASE_URL:-https://developer.nps.gov/api/v1}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:

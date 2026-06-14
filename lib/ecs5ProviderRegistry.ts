@@ -108,6 +108,7 @@ type ProviderTemplate = Omit<
   'enabled' | 'status' | 'lastCheckedAt' | 'lastSuccessfulFetchAt' | 'lastError'
 > & {
   enableEnvVar: string;
+  enableEnvAliases?: string[];
   defaultEnabled: boolean;
   intentionallyDisabled?: boolean;
 };
@@ -195,8 +196,9 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = [
     id: 'airnow',
     displayName: 'AirNow API',
     category: 'smoke_aqi',
-    enableEnvVar: 'ENABLE_AIRNOW',
-    defaultEnabled: true,
+    enableEnvVar: 'AIRNOW_ENABLED',
+    enableEnvAliases: ['ENABLE_AIRNOW'],
+    defaultEnabled: false,
     required: false,
     requiresApiKey: true,
     requiredEnvVars: ['AIRNOW_API_KEY'],
@@ -298,8 +300,9 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = [
     id: 'nps',
     displayName: 'National Park Service API',
     category: 'agency',
-    enableEnvVar: 'ENABLE_NPS',
-    defaultEnabled: true,
+    enableEnvVar: 'NPS_ENABLED',
+    enableEnvAliases: ['ENABLE_NPS'],
+    defaultEnabled: false,
     required: false,
     requiresApiKey: true,
     requiredEnvVars: ['NPS_API_KEY'],
@@ -375,9 +378,10 @@ export function createECS5ProviderRegistry(
   return {
     generatedAt: now.toISOString(),
     providers: PROVIDER_TEMPLATES.map((template) => {
-      const { enableEnvVar: _enableEnvVar, defaultEnabled: _defaultEnabled, intentionallyDisabled: _intentionallyDisabled, ...definition } = template;
+      const { enableEnvVar: _enableEnvVar, enableEnvAliases: _enableEnvAliases, defaultEnabled: _defaultEnabled, intentionallyDisabled: _intentionallyDisabled, ...definition } = template;
       const enabled = resolveProviderEnabled(template, env);
       const runtime: Partial<ECS5ProviderRuntimeState> = runtimeByProvider.get(template.id) ?? {};
+      const missingEnvVars = missingRequiredEnvVars(template, env);
       const status = resolveProviderStatus(template, enabled, env, runtime, now);
       return {
         ...definition,
@@ -385,7 +389,9 @@ export function createECS5ProviderRegistry(
         status,
         lastCheckedAt: runtime.lastCheckedAt ?? null,
         lastSuccessfulFetchAt: runtime.lastSuccessfulFetchAt ?? null,
-        lastError: sanitizeError(runtime.lastError),
+        lastError: status === 'missing_config'
+          ? `Missing required configuration: ${missingEnvVars.join(', ')}`
+          : sanitizeError(runtime.lastError),
       };
     }),
   };
@@ -420,7 +426,8 @@ export function assertProviderConfigured(
     throw new Error(`Unknown provider: ${providerId}`);
   }
   if (provider.status !== 'configured') {
-    throw new Error(`${provider.displayName} is ${provider.status}.`);
+    const detail = provider.lastError ? ` ${provider.lastError}.` : '';
+    throw new Error(`${provider.displayName} is ${provider.status}.${detail}`);
   }
   return provider;
 }
@@ -454,7 +461,12 @@ function resolveProviderEnabled(template: ProviderTemplate, env: ECS5ProviderEnv
   if (template.id === 'openweather_onecall' && parseBoolean(env.ENABLE_OPENWEATHER, true) === false) {
     return false;
   }
-  return parseBoolean(env[template.enableEnvVar], template.defaultEnabled);
+  if (typeof env[template.enableEnvVar] === 'string') {
+    return parseBoolean(env[template.enableEnvVar], template.defaultEnabled);
+  }
+  const alias = template.enableEnvAliases?.find((key) => typeof env[key] === 'string');
+  if (alias) return parseBoolean(env[alias], template.defaultEnabled);
+  return template.defaultEnabled;
 }
 
 function resolveProviderStatus(

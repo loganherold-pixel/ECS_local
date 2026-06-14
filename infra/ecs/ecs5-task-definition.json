@@ -1,0 +1,70 @@
+{
+  "family": "ecs5-runtime",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecs5RuntimeTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "ecs5-runtime",
+      "image": "123456789012.dkr.ecr.us-west-2.amazonaws.com/ecs5-runtime:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "AIRNOW_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "NPS_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "AIRNOW_API_BASE_URL",
+          "value": "https://www.airnowapi.org/aq"
+        },
+        {
+          "name": "NPS_API_BASE_URL",
+          "value": "https://developer.nps.gov/api/v1"
+        },
+        {
+          "name": "NWS_API_BASE_URL",
+          "value": "https://api.weather.gov"
+        },
+        {
+          "name": "NWS_USER_AGENT",
+          "value": "ECS/1.0.0 (admin@example.com)"
+        },
+        {
+          "name": "NWS_ACCEPT",
+          "value": "application/geo+json"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "AIRNOW_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:123456789012:secret:ecs/airnow-api-key"
+        },
+        {
+          "name": "NPS_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:123456789012:secret:ecs/nps-api-key"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/ecs5-runtime",
+          "awslogs-region": "us-west-2",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
