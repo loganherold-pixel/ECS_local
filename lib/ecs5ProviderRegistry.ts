@@ -217,11 +217,12 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = [
     id: 'nasa_firms',
     displayName: 'NASA FIRMS',
     category: 'fire',
-    enableEnvVar: 'ENABLE_NASA_FIRMS',
-    defaultEnabled: true,
+    enableEnvVar: 'NASA_FIRMS_ENABLED',
+    enableEnvAliases: ['ENABLE_NASA_FIRMS'],
+    defaultEnabled: false,
     required: false,
     requiresApiKey: true,
-    requiredEnvVars: ['NASA_FIRMS_MAP_KEY'],
+    requiredEnvVars: ['NASA_FIRMS_API_KEY'],
     knownLimitations: [
       'satellite_detection_not_ground_confirmation',
       'not_legal_closure_order',
@@ -390,7 +391,7 @@ export function createECS5ProviderRegistry(
         lastCheckedAt: runtime.lastCheckedAt ?? null,
         lastSuccessfulFetchAt: runtime.lastSuccessfulFetchAt ?? null,
         lastError: status === 'missing_config'
-          ? `Missing required configuration: ${missingEnvVars.join(', ')}`
+          ? missingConfigMessage(template, missingEnvVars)
           : sanitizeError(runtime.lastError),
       };
     }),
@@ -487,6 +488,13 @@ function resolveProviderStatus(
 function missingRequiredEnvVars(template: ProviderTemplate, env: ECS5ProviderEnv): string[] {
   if (template.intentionallyDisabled) return [];
   return template.requiredEnvVars.filter((key) => !hasValue(env[key]));
+}
+
+function missingConfigMessage(template: ProviderTemplate, missingEnvVars: string[]): string {
+  if (template.id === 'nasa_firms') {
+    return `Missing required NASA FIRMS configuration: ${missingEnvVars.join(', ')}`;
+  }
+  return `Missing required configuration: ${missingEnvVars.join(', ')}`;
 }
 
 function authority(

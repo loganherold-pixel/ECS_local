@@ -548,6 +548,7 @@
     "test:openweather-onecall-route-sampler": "node ./scripts/test-openweather-onecall-route-sampler.js",
     "test:nws-weather-adapter-route-sampler": "node ./scripts/test-nws-weather-adapter-route-sampler.js",
     "test:airnow-adapter-route-smoke": "node ./scripts/test-airnow-adapter-route-smoke.js",
+    "test:nasa-firms-provider": "node ./scripts/test-nasa-firms-provider.js",
     "test:ecs5-fire-intelligence": "node ./scripts/test-ecs5-fire-intelligence.js",
     "test:ecs5-agency-ingestion": "node ./scripts/test-ecs5-agency-ingestion.js",
     "test:ecs5-source-confidence": "node ./scripts/test-ecs5-source-confidence.js",

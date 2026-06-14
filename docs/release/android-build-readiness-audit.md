@@ -51,7 +51,7 @@ Server/provider secrets that must stay out of client-visible config unless inten
 
 - `OPENWEATHER_API_KEY`
 - `AIRNOW_API_KEY`
-- `NASA_FIRMS_MAP_KEY`
+- `NASA_FIRMS_API_KEY`
 - `NPS_API_KEY`
 - `STATE_DOT_511_API_KEY`
 - `STATE_FIRE_AGENCY_API_KEY`

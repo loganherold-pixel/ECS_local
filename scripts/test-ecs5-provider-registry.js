@@ -92,8 +92,17 @@ assert.throws(
   'AirNow missing configuration should name AIRNOW_API_KEY exactly.',
 );
 
-env = { ENABLE_NASA_FIRMS: 'true' };
-assert.strictEqual(status('nasa_firms', env), 'missing_config', 'NASA FIRMS enabled without MAP_KEY should be missing_config.');
+assert.strictEqual(status('nasa_firms', {}), 'intentionally_disabled', 'NASA FIRMS should not require a key when NASA_FIRMS_ENABLED is unset.');
+assert.strictEqual(status('nasa_firms', { NASA_FIRMS_ENABLED: 'false', NASA_FIRMS_API_KEY: 'server-only-firms-key' }), 'intentionally_disabled', 'NASA FIRMS should not require or activate a key when NASA_FIRMS_ENABLED=false.');
+assert.strictEqual(status('nasa_firms', { NASA_FIRMS_ENABLED: 'true' }), 'missing_config', 'NASA FIRMS should require NASA_FIRMS_API_KEY only when NASA_FIRMS_ENABLED=true.');
+assert.strictEqual(status('nasa_firms', { NASA_FIRMS_ENABLED: 'true', NASA_FIRMS_API_KEY: 'server-only-firms-key' }), 'configured', 'NASA FIRMS should configure from runtime secret env when NASA_FIRMS_ENABLED=true.');
+assert.strictEqual(status('nasa_firms', { ENABLE_NASA_FIRMS: 'true', NASA_FIRMS_API_KEY: 'server-only-firms-key' }), 'configured', 'Legacy ENABLE_NASA_FIRMS should remain a deprecated enable alias.');
+registry = createECS5ProviderRegistry({ NASA_FIRMS_ENABLED: 'true' }, [], now);
+assert.throws(
+  () => assertProviderConfigured('nasa_firms', registry),
+  (error) => error.message.includes('Missing required NASA FIRMS configuration: NASA_FIRMS_API_KEY'),
+  'NASA FIRMS missing configuration should name NASA_FIRMS_API_KEY exactly.',
+);
 
 env = { ENABLE_NPS: 'true' };
 assert.strictEqual(status('nps', env), 'missing_config', 'NPS enabled without API key should be missing_config.');
@@ -184,6 +193,11 @@ assert.ok(envExample.includes('NWS_USER_AGENT=ECS/1.0.0 (admin@example.com)'));
 assert.ok(envExample.includes('NWS_ACCEPT=application/geo+json'));
 assert.ok(envExample.includes('AIRNOW_ENABLED=true'));
 assert.ok(envExample.includes('AIRNOW_API_BASE_URL=https://www.airnowapi.org/aq'));
+assert.ok(envExample.includes('NASA_FIRMS_ENABLED=true'));
+assert.ok(envExample.includes('NASA_FIRMS_API_KEY='));
+assert.ok(envExample.includes('NASA_FIRMS_API_BASE_URL=https://firms.modaps.eosdis.nasa.gov'));
+assert.ok(envExample.includes('NASA_FIRMS_DEFAULT_SOURCE=VIIRS_SNPP_NRT'));
+assert.ok(envExample.includes('NASA_FIRMS_DEFAULT_DAY_RANGE=1'));
 assert.ok(envExample.includes('NPS_ENABLED=true'));
 assert.ok(envExample.includes('NPS_API_BASE_URL=https://developer.nps.gov/api/v1'));
 assert.ok(!/^AIRNOW_API_KEY=/m.test(envExample), 'AirNow API key must not be listed as a normal env assignment in .env.example.');

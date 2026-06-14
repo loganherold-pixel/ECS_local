@@ -86,5 +86,8 @@ Weather provider config:
 - Replace the contact email in `NWS_USER_AGENT` with the service owner or support contact for the deployment.
 - AirNow and NPS provider keys are runtime secrets. ECS task definitions should inject `AIRNOW_API_KEY` and `NPS_API_KEY` through the container `secrets` block from AWS Secrets Manager or SSM Parameter Store.
 - Keep non-secret AirNow/NPS config in normal env vars: `AIRNOW_ENABLED=true`, `NPS_ENABLED=true`, `AIRNOW_API_BASE_URL=https://www.airnowapi.org/aq`, and `NPS_API_BASE_URL=https://developer.nps.gov/api/v1`.
+- NASA FIRMS is server-mediated through the Supabase Edge Function `nasa-firms-intelligence`. Store the FIRMS MAP_KEY as the Supabase secret `NASA_FIRMS_API_KEY`, with non-secret config `NASA_FIRMS_ENABLED=true`, `NASA_FIRMS_API_BASE_URL=https://firms.modaps.eosdis.nasa.gov`, `NASA_FIRMS_DEFAULT_SOURCE=VIIRS_SNPP_NRT`, and `NASA_FIRMS_DEFAULT_DAY_RANGE=1`.
+- Do not log full NASA FIRMS URLs; the MAP_KEY is embedded in FIRMS URL paths or query parameters.
+- Supabase setup details live in `docs/nasa-firms-supabase-provider.md`.
 
 Architecture notes live in `docs/architecture.md`. The central rule is that ECS owns vehicle trail legality, access checks, routeability, closures, and source confidence. Mapbox is used for basemap, presentation, and on-road support only; it is not the legal trail authority.

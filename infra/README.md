@@ -13,5 +13,6 @@ Container weather configuration:
 - `ecs/ecs5-task-definition.json` is the ECS runtime task definition template for provider config.
 - `AIRNOW_API_KEY` and `NPS_API_KEY` must be injected through the ECS container `secrets` block from AWS Secrets Manager or SSM Parameter Store.
 - Keep `AIRNOW_ENABLED`, `NPS_ENABLED`, `AIRNOW_API_BASE_URL`, and `NPS_API_BASE_URL` in the normal ECS `environment` block because they are not secrets.
+- NASA FIRMS is Supabase-backed. Store the FIRMS MAP_KEY as the Edge Function secret `NASA_FIRMS_API_KEY`, and configure `NASA_FIRMS_ENABLED`, `NASA_FIRMS_API_BASE_URL`, `NASA_FIRMS_DEFAULT_SOURCE`, and `NASA_FIRMS_DEFAULT_DAY_RANGE` in Supabase function env/secrets. Do not place the key in client-visible env.
 
 The API also has an Alembic migration that enables PostGIS so non-Docker databases can be migrated with the same baseline.

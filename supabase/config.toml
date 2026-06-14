@@ -446,6 +446,14 @@ verify_jwt = false
 import_map = "./functions/issue-intelligence/deno.json"
 entrypoint = "./functions/issue-intelligence/index.ts"
 
+[functions.nasa-firms-intelligence]
+enabled = true
+# NASA FIRMS MAP_KEY stays server-side in Edge Function secrets. Callers must
+# send a valid Supabase JWT; responses expose only redacted health/intelligence.
+verify_jwt = true
+import_map = "./functions/nasa-firms-intelligence/deno.json"
+entrypoint = "./functions/nasa-firms-intelligence/index.ts"
+
 [functions.campgrounds-search]
 enabled = true
 # Mobile clients call this public map endpoint with the project publishable key.

@@ -8,6 +8,31 @@ import type {
   SourceObservationConfidenceBreakdown,
 } from './ecs5ObservationPipeline';
 import { stableContentHash } from './ecs5ObservationPipeline';
+import {
+  buildNasaFirmsDataAvailabilityUrl,
+  buildNasaFirmsMapKeyStatusUrl,
+  buildNasaFirmsRequest,
+  buildNasaFirmsRuntimeConfig as buildSharedNasaFirmsRuntimeConfig,
+  normalizeNasaFirmsDetections,
+  parseNasaFirmsCsv,
+  processNasaFirmsWildfireSignals,
+  redactNasaFirmsUrl,
+  validateNasaFirmsArea,
+  validateNasaFirmsDayRange,
+  type NasaFirmsConfig,
+  type NasaFirmsRequestInput,
+} from '../supabase/functions/_shared/nasaFirms';
+
+export {
+  buildNasaFirmsDataAvailabilityUrl,
+  buildNasaFirmsMapKeyStatusUrl,
+  normalizeNasaFirmsDetections,
+  parseNasaFirmsCsv,
+  processNasaFirmsWildfireSignals,
+  redactNasaFirmsUrl,
+  validateNasaFirmsArea,
+  validateNasaFirmsDayRange,
+};
 
 export type FireRiskLevel = 'low' | 'moderate' | 'high' | 'critical' | 'unknown';
 export type FireWeatherContextLevel = 'low' | 'elevated' | 'critical' | 'unknown';
@@ -68,10 +93,11 @@ export function createNasaFirmsAdapter(provider: ProviderDefinition): ProviderAd
     async fetch(input: any, context: ProviderAdapterContext): Promise<unknown> {
       if (context.fixtureMode && input?.fixturePayload != null) return input.fixturePayload;
       if (input?.fixturePayload != null) return input.fixturePayload;
-      if (!input?.apiKeyAvailable) throw new Error('NASA FIRMS MAP_KEY is not available.');
       if (!context.serverFetch) throw new Error('NASA FIRMS live fetch requires serverFetch. Do not call this adapter directly from the client.');
+      const config = input?.config ?? buildNasaFirmsRuntimeConfig();
+      const request = buildNasaFirmsRequest(config, input ?? {});
       return context.serverFetch({
-        url: buildNasaFirmsAreaUrl(input),
+        url: request.url,
         timeoutMs: 10_000,
         headers: { Accept: 'text/csv, application/json' },
       });
@@ -170,9 +196,12 @@ export function normalizeNasaFirmsPayload(
         acquisitionDate: row.acq_date ?? null,
         acquisitionTime: row.acq_time ?? null,
         satellite: row.satellite ?? null,
+        instrument: row.instrument ?? row.sensor ?? null,
         sensor: row.instrument ?? row.sensor ?? null,
         frp: toNumber(row.frp),
-        sourceDataset: row.source_dataset ?? row.dataset ?? row.daynight ?? null,
+        daynight: row.daynight ?? null,
+        source: row.source_dataset ?? row.dataset ?? context.provider?.id ?? 'VIIRS_SNPP_NRT',
+        sourceDataset: row.source_dataset ?? row.dataset ?? null,
         legalClosureSignal: false,
       },
       evidenceUrl: context.sourceUrl ?? 'https://firms.modaps.eosdis.nasa.gov/',
@@ -366,12 +395,13 @@ export function evaluateRouteFireIntelligence(input: RouteFireIntelligenceInput)
   };
 }
 
-export function buildNasaFirmsAreaUrl(input: { bbox?: [number, number, number, number]; dataset?: string; days?: number }): string {
-  const dataset = encodeURIComponent(String(input.dataset ?? 'VIIRS_SNPP_NRT'));
-  const bbox = input.bbox ?? [-125, 32, -114, 42];
-  const area = bbox.map((value) => Number(value).toFixed(4)).join(',');
-  const days = Math.max(1, Math.min(10, Number(input.days ?? 1)));
-  return `https://firms.modaps.eosdis.nasa.gov/api/area/csv/{{NASA_FIRMS_MAP_KEY}}/${dataset}/${area}/${days}`;
+export function buildNasaFirmsRuntimeConfig(env?: Record<string, string | undefined>): NasaFirmsConfig {
+  return buildSharedNasaFirmsRuntimeConfig(env ?? getProcessEnv());
+}
+
+export function buildNasaFirmsAreaUrl(input: NasaFirmsRequestInput & { config?: NasaFirmsConfig }): string {
+  const config = input.config ?? buildNasaFirmsRuntimeConfig();
+  return buildNasaFirmsRequest(config, input).url;
 }
 
 function fireRiskFromDetection(observation: SourceObservation, distanceMiles: number | null, now: Date): FireRiskLevel {
@@ -391,7 +421,7 @@ function parseFirmsRows(rawPayload: unknown): Array<Record<string, any>> {
     if (Array.isArray(rawPayload.items)) return rawPayload.items.filter(isRecord);
     if (Array.isArray(rawPayload.features)) return rawPayload.features.map((feature) => isRecord(feature) ? { ...(feature.properties ?? {}), geometry: feature.geometry } : {}).filter(isRecord);
   }
-  if (typeof rawPayload === 'string') return csvRows(rawPayload);
+  if (typeof rawPayload === 'string') return parseNasaFirmsCsv(rawPayload);
   return [];
 }
 
@@ -631,4 +661,8 @@ function dedupe(values: Array<string | null | undefined>): string[] {
 
 function isRecord(value: unknown): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function getProcessEnv(): Record<string, string | undefined> {
+  return typeof process !== 'undefined' ? process.env as Record<string, string | undefined> : {};
 }

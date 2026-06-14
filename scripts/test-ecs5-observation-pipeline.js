@@ -46,8 +46,8 @@ const env = {
   ENABLE_NWS: 'true',
   NWS_USER_AGENT: 'admin@example.com',
   ENABLE_AIRNOW: 'true',
-  ENABLE_NASA_FIRMS: 'true',
-  NASA_FIRMS_MAP_KEY: 'test-firms-key',
+  NASA_FIRMS_ENABLED: 'true',
+  NASA_FIRMS_API_KEY: 'test-firms-key',
   ENABLE_OPENWEATHER_ROAD_RISK: 'false',
 };
 const providerRegistry = createECS5ProviderRegistry(env, [], now);

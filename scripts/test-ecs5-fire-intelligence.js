@@ -49,8 +49,8 @@ const {
 
 const now = new Date('2026-04-29T22:00:00.000Z');
 const registry = createECS5ProviderRegistry({
-  ENABLE_NASA_FIRMS: 'true',
-  NASA_FIRMS_MAP_KEY: 'server-only-firms-key',
+  NASA_FIRMS_ENABLED: 'true',
+  NASA_FIRMS_API_KEY: 'server-only-firms-key',
   ENABLE_NIFC_WFIGS: 'true',
   ENABLE_INCIWEB: 'true',
   ENABLE_NWS: 'true',
@@ -62,7 +62,7 @@ const inciWebProvider = getProviderConfig('inciweb', registry);
 const nwsProvider = getProviderConfig('nws', registry);
 
 assert.strictEqual(getProviderHealth('nasa_firms', registry).status, 'configured');
-assert.strictEqual(getProviderHealth('nasa_firms', createECS5ProviderRegistry({ ENABLE_NASA_FIRMS: 'true' }, [], now)).status, 'missing_config');
+assert.strictEqual(getProviderHealth('nasa_firms', createECS5ProviderRegistry({ NASA_FIRMS_ENABLED: 'true' }, [], now)).status, 'missing_config');
 assert.strictEqual(getProviderHealth('openweather_fire_index', registry).status, 'intentionally_disabled');
 assert.deepStrictEqual([...NASA_FIRMS_KNOWN_LIMITATIONS], [
   'satellite_detection_not_ground_confirmation',
@@ -81,10 +81,18 @@ assert.deepStrictEqual([...INCIWEB_KNOWN_LIMITATIONS], [
   'closure_language_requires_careful_parsing',
 ]);
 assert.ok(buildNasaFirmsAreaUrl({
-  bbox: [-121.6, 38.7, -121.1, 39.1],
-  dataset: 'VIIRS_SNPP_NRT',
-  days: 2,
-}).includes('{{NASA_FIRMS_MAP_KEY}}'));
+  config: {
+    enabled: true,
+    apiKey: 'server-only-firms-key',
+    baseUrl: 'https://firms.modaps.eosdis.nasa.gov',
+    defaultSource: 'VIIRS_SNPP_NRT',
+    defaultDayRange: 1,
+    missingEnv: [],
+  },
+  area: '-121.6000,38.7000,-121.1000,39.1000',
+  source: 'VIIRS_SNPP_NRT',
+  dayRange: 2,
+}).includes('/api/area/csv/server-only-firms-key/VIIRS_SNPP_NRT/-121.6000,38.7000,-121.1000,39.1000/2'));
 
 const firmsCsv = [
   'latitude,longitude,brightness,acq_date,acq_time,satellite,instrument,confidence,frp,source_dataset',
@@ -223,7 +231,8 @@ assert.strictEqual(fireResult.legalClosureImplied, false);
 assert.ok(fireResult.concerns.some((concern) => concern.includes('not an active fire detection')));
 
 const source = fs.readFileSync(path.join(process.cwd(), 'lib/ecs5FireIntelligence.ts'), 'utf8');
+const legacyFirmsMapKeyName = 'NASA_FIRMS' + '_MAP_KEY';
 assert.ok(!source.includes('OPENWEATHER_FIRE_INDEX'));
-assert.ok(!source.includes('NASA_FIRMS_MAP_KEY='));
+assert.ok(!source.includes(legacyFirmsMapKeyName));
 
 console.log('ECS 5.0 fire intelligence tests passed.');
