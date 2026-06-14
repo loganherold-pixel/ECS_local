@@ -1132,6 +1132,88 @@ type DashboardGridZoneProps = {
   expeditionEcsOnline?: boolean;
 };
 
+type DashboardBriefErrorBoundaryProps = {
+  children: React.ReactNode;
+  palette: any;
+};
+
+type DashboardBriefErrorBoundaryState = {
+  errorMessage: string | null;
+  hasError: boolean;
+};
+
+class DashboardBriefErrorBoundary extends React.Component<
+  DashboardBriefErrorBoundaryProps,
+  DashboardBriefErrorBoundaryState
+> {
+  state: DashboardBriefErrorBoundaryState = {
+    errorMessage: null,
+    hasError: false,
+  };
+
+  static getDerivedStateFromError(error: unknown): DashboardBriefErrorBoundaryState {
+    return {
+      errorMessage: error instanceof Error ? error.message : 'Command Brief render failed.',
+      hasError: true,
+    };
+  }
+
+  componentDidCatch(error: unknown) {
+    if (__DEV__) {
+      console.warn('[DASHBOARD] command_brief_render_failed', error);
+    }
+  }
+
+  handleRetry = () => {
+    this.setState({ errorMessage: null, hasError: false });
+  };
+
+  render() {
+    if (!this.state.hasError) {
+      return this.props.children;
+    }
+
+    const { palette } = this.props;
+
+    return (
+      <View
+        style={[
+          styles.briefTabErrorCard,
+          {
+            backgroundColor: palette.panel,
+            borderColor: `${palette.amber}44`,
+          },
+        ]}
+      >
+        <Ionicons name="warning-outline" size={22} color={palette.amber} />
+        <Text style={[styles.briefTabErrorTitle, { color: palette.text }]}>
+          Command Brief unavailable
+        </Text>
+        <Text style={[styles.briefTabErrorText, { color: palette.textMuted }]} numberOfLines={3}>
+          ECS caught a brief render issue and kept the Dashboard online. Retry after readiness data refreshes.
+        </Text>
+        {this.state.errorMessage ? (
+          <Text style={[styles.briefTabErrorMeta, { color: palette.textMuted }]} numberOfLines={2}>
+            {this.state.errorMessage}
+          </Text>
+        ) : null}
+        <TouchableOpacity
+          style={[styles.briefTabErrorButton, { borderColor: `${palette.amber}55`, backgroundColor: `${palette.amber}12` }]}
+          accessibilityRole="button"
+          accessibilityLabel="Retry ECS Command Brief"
+          activeOpacity={0.78}
+          onPress={this.handleRetry}
+        >
+          <Ionicons name="refresh-outline" size={13} color={palette.amber} />
+          <Text style={[styles.briefTabErrorButtonText, { color: palette.amber }]}>
+            Retry Brief
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+}
+
 function areDashboardSlotsEquivalent(a: WidgetSlot[], b: WidgetSlot[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -1236,7 +1318,9 @@ function DashboardGridZone({
               ]}
             >
               <View style={styles.briefTabCommandWrap}>
-                <CommandBriefScreen embedded />
+                <DashboardBriefErrorBoundary palette={palette}>
+                  <CommandBriefScreen embedded />
+                </DashboardBriefErrorBoundary>
               </View>
             </View>
           ) : showExpeditionPlaceholderTab && !layoutMode ? (
@@ -4858,6 +4942,60 @@ layoutHint: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizont
   briefTabCommandWrap: {
     flex: 1,
     minHeight: 0,
+  },
+
+  briefTabErrorCard: {
+    flex: 1,
+    minHeight: 0,
+    borderWidth: 1,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    gap: 8,
+  },
+
+  briefTabErrorTitle: {
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+  },
+
+  briefTabErrorText: {
+    maxWidth: 360,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  briefTabErrorMeta: {
+    maxWidth: 360,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  briefTabErrorButton: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+  },
+
+  briefTabErrorButtonText: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
 
   ecsBriefMetaRow: {

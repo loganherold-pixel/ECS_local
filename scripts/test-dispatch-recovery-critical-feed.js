@@ -4,6 +4,10 @@ const path = require('path');
 
 const sourcePath = path.join(process.cwd(), 'components/dispatch/DispatchCadCommandCenter.tsx');
 const source = fs.readFileSync(sourcePath, 'utf8');
+const panelSource = fs.readFileSync(
+  path.join(process.cwd(), 'components/dispatch/DispatchConvoyCommandPanel.tsx'),
+  'utf8',
+);
 
 assert.match(
   source,
@@ -146,9 +150,9 @@ assert.match(
   'New recovery GPS pings should trigger one-time alert feedback.',
 );
 assert.match(
-  source,
-  /handleOpenEmergencyPing\(primaryEmergencyCoordinatePing\)[\s\S]*accessibilityLabel="Open active emergency GPS ping"/,
-  'Emergency pings count in the convoy setup card should open and mark the active GPS ping viewed.',
+  panelSource,
+  /const primaryEmergencyEvent = emergencyEvents\[0\] \?\? null[\s\S]*onPress=\{\(\) => onOpenEmergencyEvent\(primaryEmergencyEvent\)\}/,
+  'Emergency pings in the active Convoy Command feed should open and mark the active GPS ping viewed.',
 );
 assert.match(
   source,

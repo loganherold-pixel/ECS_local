@@ -118,14 +118,15 @@ assert.ok(
 assert.ok(
   discoverSource.includes('const publicRefinedTrailPacks = useMemo') &&
     discoverSource.includes('applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement)') &&
-    discoverSource.includes('const exploreWizardTrailPackRoutes = useMemo') &&
-    discoverSource.includes('visibleTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack))') &&
-    discoverSource.includes('const exploreWizardHiddenGemRoutes = useMemo') &&
-    discoverSource.includes('visibleHiddenGemRoutes') &&
-    discoverSource.includes('ecsRouteIdeas: visibleAIRoutes') &&
-    discoverSource.includes('filteredExploreWizardSavedBuiltRoutes') &&
-    discoverSource.includes('filteredExploreWizardImportedStitchedRoutes'),
-  'Explore TripBuilder guidance candidates should use the same refined visible route pools instead of broader unfiltered lists.',
+    discoverSource.includes('buildExploreGuidanceReadyInventory({') &&
+    discoverSource.includes('trailPacks: exploreWizardTrailPackSourceRoutes') &&
+    discoverSource.includes('hiddenGemRoutes: exploreWizardHiddenGemSourceRoutes') &&
+    discoverSource.includes('ecsRouteIdeas: exploreWizardEcsIdeaSourceRoutes') &&
+    discoverSource.includes('selectedRefinement: exploreRefinement') &&
+    discoverSource.includes('radiusFilteredExploreWizardSavedBuiltRoutes') &&
+    discoverSource.includes('radiusFilteredExploreWizardImportedStitchedRoutes') &&
+    !discoverSource.includes('ecsRouteIdeas: visibleAIRoutes'),
+  'Explore TripBuilder guidance candidates should use the shared ready-route inventory instead of page-sized visible route pools.',
 );
 assert.ok(
   discoverSource.includes('const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);') &&

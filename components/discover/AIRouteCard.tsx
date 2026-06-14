@@ -186,27 +186,23 @@ export default function AIRouteCard({
         </View>
 
         {/* Name + Region */}
-        <View style={s.nameBlock}>
-          <Text style={s.cardName} numberOfLines={2}>{route.name}</Text>
-          <Text style={s.cardRegion}>{route.region}</Text>
-        </View>
-
-        {showThumbnail ? (
-          <View style={[s.thumbnailFrame, compactPreview && s.thumbnailFrameCompact]}>
-            <Image
-              source={{ uri: thumbnail.uri as string }}
-              style={s.thumbnailImage}
-              resizeMode="cover"
-              accessibilityLabel={`${route.name} route thumbnail`}
-              onError={() => setThumbnailFailed(true)}
-            />
-            <View style={s.thumbnailScrim} />
-            <View style={s.thumbnailBadge}>
-              <Ionicons name="image-outline" size={9} color={TACTICAL.amber} />
-              <Text style={s.thumbnailBadgeText}>ROUTE VISUAL</Text>
+        <View style={s.nameRow}>
+          {showThumbnail ? (
+            <View style={[s.thumbnailFrame, compactPreview && s.thumbnailFrameCompact]}>
+              <Image
+                source={{ uri: thumbnail.uri as string }}
+                style={s.thumbnailImage}
+                resizeMode="cover"
+                accessibilityLabel={`${route.name} route thumbnail`}
+                onError={() => setThumbnailFailed(true)}
+              />
             </View>
+          ) : null}
+          <View style={s.nameBlock}>
+            <Text style={s.cardName} numberOfLines={2}>{route.name}</Text>
+            <Text style={s.cardRegion} numberOfLines={1}>{route.region}</Text>
           </View>
-        ) : null}
+        </View>
 
         {/* Key Stats Row */}
         <View style={[s.statsRow, compactPreview && s.statsRowCompact]}>
@@ -407,11 +403,17 @@ const s = StyleSheet.create({
     color: TACTICAL.amber,
   },
 
-  nameBlock: { gap: 2 },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  nameBlock: { flex: 1, minWidth: 0, gap: 2 },
   cardName: { fontSize: 15, fontWeight: '700', color: ECS.text, letterSpacing: 1 },
   cardRegion: { fontSize: 11, fontWeight: '500', color: TACTICAL.textMuted, letterSpacing: 0.5 },
   thumbnailFrame: {
-    height: 76,
+    width: 70,
+    height: 52,
     borderRadius: 8,
     overflow: 'hidden',
     borderWidth: 1,
@@ -419,7 +421,8 @@ const s = StyleSheet.create({
     backgroundColor: ECS.bgElev,
   },
   thumbnailFrameCompact: {
-    height: 58,
+    width: 58,
+    height: 44,
   },
   thumbnailImage: {
     width: '100%',

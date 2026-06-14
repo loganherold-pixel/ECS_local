@@ -485,8 +485,7 @@ export default function DispatchConvoyCommandPanel({
   const resolvedEmergencyButtonTone = emergencyButtonTone ?? TACTICAL.danger;
   const shouldShowEmergencyFeed =
     !isMapOnlyPresentation &&
-    (!isSummaryOnlyPresentation || emergencyEvents.length > 0) &&
-    (!isFeedPresentation || emergencyEvents.length > 0);
+    (!isSummaryOnlyPresentation || emergencyEvents.length > 0);
   const shouldShowEmergencyOverlay =
     showEmergencyOverlay ?? (!isFeedPresentation && !isMapOnlyPresentation && !isSummaryOnlyPresentation);
   const visibleTrackingNote =

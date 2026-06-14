@@ -170,9 +170,11 @@ import {
 import {
   applyExploreRefinementFilter,
   EXPLORE_REFINEMENT_OPTIONS,
-  getExploreRefinementCounts,
   type ExploreRefinementFilter,
 } from '../../lib/explore/exploreRefinementFilter';
+import {
+  buildExploreGuidanceReadyInventory,
+} from '../../lib/explore/exploreGuidanceReadyInventory';
 import {
   getVisibleExploreFeatures,
   type ExploreFeatureId,
@@ -203,7 +205,6 @@ import {
 import {
   getExploreWizardSourceLabel,
   importedRouteToExploreWizardRoute,
-  normalizeExploreWizardRouteCandidates,
   runToExploreWizardRoute,
   type ExploreWizardRouteCandidate,
   type ExploreWizardRouteSourceKind,
@@ -1162,10 +1163,6 @@ function DiscoverScreenInner() {
         activeDistanceRadius,
       ),
     [radiusFilteredOpportunities, compatResults, activeDistanceRadius],
-  );
-  const exploreRefinementCounts = useMemo(
-    () => getExploreRefinementCounts(canonicalRadiusFilteredRoutes),
-    [canonicalRadiusFilteredRoutes],
   );
   const refinedCanonicalRoutes = useMemo<ExpeditionOpportunity[]>(
     () => applyExploreRefinementFilter(canonicalRadiusFilteredRoutes, exploreRefinement),
@@ -2957,102 +2954,78 @@ function DiscoverScreenInner() {
       importedStitchedRoutes,
     };
   }, [localRouteAssetRevision]);
-  const filteredExploreWizardSavedBuiltRoutes = useMemo<ExpeditionOpportunity[]>(
+  const radiusFilteredExploreWizardSavedBuiltRoutes = useMemo<ExpeditionOpportunity[]>(
     () =>
-      applyExploreRefinementFilter(
-        filterByRadius(
-          computeDistancesFromUser(exploreWizardLocalRouteAssets.savedBuiltRoutes, userLat, userLng),
-          activeDistanceRadius,
-        ),
-        exploreRefinement,
+      filterByRadius(
+        computeDistancesFromUser(exploreWizardLocalRouteAssets.savedBuiltRoutes, userLat, userLng),
+        activeDistanceRadius,
       ),
     [
       activeDistanceRadius,
-      exploreRefinement,
       exploreWizardLocalRouteAssets.savedBuiltRoutes,
       userLat,
       userLng,
     ],
   );
-  const filteredExploreWizardImportedStitchedRoutes = useMemo<ExpeditionOpportunity[]>(
+  const radiusFilteredExploreWizardImportedStitchedRoutes = useMemo<ExpeditionOpportunity[]>(
     () =>
-      applyExploreRefinementFilter(
-        filterByRadius(
-          computeDistancesFromUser(exploreWizardLocalRouteAssets.importedStitchedRoutes, userLat, userLng),
-          activeDistanceRadius,
-        ),
-        exploreRefinement,
+      filterByRadius(
+        computeDistancesFromUser(exploreWizardLocalRouteAssets.importedStitchedRoutes, userLat, userLng),
+        activeDistanceRadius,
       ),
     [
       activeDistanceRadius,
-      exploreRefinement,
       exploreWizardLocalRouteAssets.importedStitchedRoutes,
       userLat,
       userLng,
     ],
   );
-  const exploreWizardTrailPackRoutes = useMemo(
-    () =>
-      visibleTrailPacks
-        .map((trailPack) => trailPackToExpeditionOpportunity(trailPack))
-        .filter(routePassesExploreMapLength)
-        .filter(hasGuidanceReadyGeometry)
-        .filter(isPublicSuggestedTrailheadRoute),
-    [visibleTrailPacks],
+  const exploreWizardTrailPackSourceRoutes = useMemo(
+    () => publicDiscoverableTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack)),
+    [publicDiscoverableTrailPacks],
   );
-  const exploreWizardHiddenGemRoutes = useMemo(
-    () =>
-      visibleHiddenGemRoutes
-        .filter(routePassesExploreMapLength)
-        .filter(hasGuidanceReadyGeometry)
-        .filter(isPublicSuggestedTrailheadRoute),
-    [visibleHiddenGemRoutes],
+  const exploreWizardHiddenGemSourceRoutes = useMemo(
+    () => {
+      const routes = hiddenGemExploreOrchestration.items
+        .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
+        .filter(Boolean);
+      return routes as ExpeditionOpportunity[];
+    },
+    [hiddenGemExploreOrchestration.items, hiddenGemExploreOrchestration.routeMap],
+  );
+  const exploreWizardEcsIdeaSourceRoutes = useMemo(
+    () => radiusFilteredAIRoutes.filter(isPublicSuggestedTrailheadRoute),
+    [radiusFilteredAIRoutes],
   );
   const exploreWizardFavoriteRoutes = useMemo(
     () => filteredFavoriteTrails.map((favorite) => favoriteTrailToExpeditionRoute(favorite)),
     [filteredFavoriteTrails],
   );
-  const exploreWizardCandidateSet = useMemo(
+  const exploreGuidanceReadyInventory = useMemo(
     () =>
-      normalizeExploreWizardRouteCandidates({
-        trailPacks: exploreWizardTrailPackRoutes,
-        hiddenGemRoutes: exploreWizardHiddenGemRoutes,
-        ecsRouteIdeas: visibleAIRoutes
-          .filter(routePassesExploreMapLength)
-          .filter(hasGuidanceReadyGeometry),
+      buildExploreGuidanceReadyInventory({
+        trailPacks: exploreWizardTrailPackSourceRoutes,
+        hiddenGemRoutes: exploreWizardHiddenGemSourceRoutes,
+        ecsRouteIdeas: exploreWizardEcsIdeaSourceRoutes,
         favoriteRoutes: [
           ...exploreWizardFavoriteRoutes,
-          ...filteredExploreWizardSavedBuiltRoutes,
-        ]
-          .filter(routePassesExploreMapLength)
-          .filter(hasGuidanceReadyGeometry),
-        savedRouteAssets: filteredExploreWizardImportedStitchedRoutes
-          .filter(routePassesExploreMapLength)
-          .filter(hasGuidanceReadyGeometry),
+          ...radiusFilteredExploreWizardSavedBuiltRoutes,
+        ],
+        savedRouteAssets: radiusFilteredExploreWizardImportedStitchedRoutes,
+        selectedRefinement: exploreRefinement,
       }),
     [
       exploreWizardFavoriteRoutes,
-      exploreWizardHiddenGemRoutes,
-      filteredExploreWizardImportedStitchedRoutes,
-      filteredExploreWizardSavedBuiltRoutes,
-      exploreWizardTrailPackRoutes,
-      visibleAIRoutes,
+      exploreWizardHiddenGemSourceRoutes,
+      exploreWizardEcsIdeaSourceRoutes,
+      radiusFilteredExploreWizardImportedStitchedRoutes,
+      radiusFilteredExploreWizardSavedBuiltRoutes,
+      exploreWizardTrailPackSourceRoutes,
+      exploreRefinement,
     ],
   );
-  const exploreWizardSourceCounts = useMemo(() => {
-    const counts: Record<ExploreWizardRouteSourceKind | 'all', number> = {
-      all: exploreWizardCandidateSet.candidates.length,
-      trail_pack: 0,
-      hidden_gem: 0,
-      ecs_idea: 0,
-      saved_built: 0,
-      imported_stitched: 0,
-    };
-    exploreWizardCandidateSet.candidates.forEach((candidate) => {
-      counts[candidate.sourceKind] += 1;
-    });
-    return counts;
-  }, [exploreWizardCandidateSet.candidates]);
+  const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet;
+  const exploreWizardSourceCounts = exploreGuidanceReadyInventory.sourceCounts;
   const visibleExploreWizardCandidates = useMemo(
     () =>
       exploreWizardSourceFilter === 'all'
@@ -4079,11 +4052,11 @@ function DiscoverScreenInner() {
                 selectedRadius={distanceRadius}
                 onChangeRadius={handleRadiusChange}
                 hasGPSFix={hasGPSFix}
-                totalCount={opportunities.length}
-                filteredCount={radiusFilteredOpportunities.length}
-                refinedCount={refinedCanonicalRoutes.length}
+                totalCount={exploreGuidanceReadyInventory.totalReadyCount}
+                filteredCount={exploreGuidanceReadyInventory.totalReadyCount}
+                refinedCount={exploreGuidanceReadyInventory.readyCount}
                 selectedRefinement={exploreRefinement}
-                refinementCounts={exploreRefinementCounts}
+                refinementCounts={exploreGuidanceReadyInventory.refinementCounts}
                 onChangeRefinement={handleExploreRefinementChange}
                 isLoading={isLoading}
               />
@@ -4092,14 +4065,14 @@ function DiscoverScreenInner() {
                 <View style={s.exploreWizardStatusCopy}>
                   <Text style={s.exploreWizardStatusTitle}>Guidance Ready Routes</Text>
                   <Text style={s.exploreWizardStatusText}>
-                    {`Guidance Ready Routes are source-backed routes with usable stitched geometry, visible confidence, and data state labels. ${exploreWizardCandidateSet.candidates.length} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start. ${exploreWizardCandidateSet.hiddenTotal} routes are hidden because active-guidance geometry is unavailable.`}
+                    {`Guidance Ready Routes are source-backed routes with usable stitched geometry, visible confidence, and data state labels. ${exploreGuidanceReadyInventory.candidateSet.candidates.length} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start. ${exploreGuidanceReadyInventory.hiddenTotal} routes are hidden because active guidance, length, public state, or route geometry is unavailable.`}
                   </Text>
                   {exploreWizardSaveNotice ? (
                     <Text style={s.exploreWizardNotice} numberOfLines={2}>{exploreWizardSaveNotice}</Text>
                   ) : null}
                 </View>
                 <View style={s.exploreWizardCountPlate}>
-                  <Text style={s.exploreWizardCountValue}>{exploreWizardCandidateSet.candidates.length}</Text>
+                  <Text style={s.exploreWizardCountValue}>{exploreGuidanceReadyInventory.candidateSet.candidates.length}</Text>
                   <Text style={s.exploreWizardCountLabel}>READY</Text>
                 </View>
               </View>

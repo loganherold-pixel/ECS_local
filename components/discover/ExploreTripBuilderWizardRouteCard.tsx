@@ -9,6 +9,7 @@ import {
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECS, TACTICAL } from '../../lib/theme';
 import type { ExploreWizardRouteCandidate } from '../../lib/explore/exploreTripBuilderWizard';
+import { buildExploreRouteCardSummary } from '../../lib/explore/exploreRouteCardSummary';
 
 type ExploreTripBuilderWizardRouteCardProps = {
   candidate: ExploreWizardRouteCandidate;
@@ -42,40 +43,45 @@ export default function ExploreTripBuilderWizardRouteCard({
   onSave,
   onBuildTrip,
 }: ExploreTripBuilderWizardRouteCardProps) {
-  const warning = candidate.warnings[0] ?? null;
-  const reason = candidate.confidence.reasons[0] ?? 'Guidance-ready route geometry is available.';
   const thumbnailUri = candidate.thumbnail?.uri ?? null;
+  const summary = buildExploreRouteCardSummary(candidate);
+  const summaryRows = [
+    { label: 'Status', value: summary.status },
+    { label: 'Current Condition', value: summary.currentCondition },
+    { label: 'Why', value: summary.why },
+    { label: 'What to Watch', value: summary.whatToWatch },
+    { label: 'Recommended Action', value: summary.recommendedAction },
+    { label: 'To Improve Status', value: summary.toImproveStatus },
+  ];
 
   return (
     <View style={styles.card} testID={`explore-tripbuilder-route-card-${candidate.id}`}>
-      <View style={styles.thumbnailWrap}>
-        {thumbnailUri ? (
-          <Image
-            source={{ uri: thumbnailUri }}
-            style={styles.thumbnail}
-            resizeMode="cover"
-            accessibilityIgnoresInvertColors
-          />
-        ) : (
-          <View style={styles.thumbnailFallback}>
-            <Ionicons name="trail-sign-outline" size={24} color={TACTICAL.amber} />
-          </View>
-        )}
-        <View style={styles.thumbnailOverlay} />
-        <View style={styles.thumbnailBadgeRow}>
-          <View style={styles.sourceBadge}>
-            <Text style={styles.sourceBadgeText}>{sourceLabel}</Text>
-          </View>
-          <View style={styles.readyBadge}>
-            <Ionicons name="navigate-outline" size={9} color={TACTICAL.amber} />
-            <Text style={styles.readyBadgeText}>GUIDANCE READY</Text>
-          </View>
-        </View>
-      </View>
-
       <View style={styles.body}>
         <View style={styles.titleRow}>
+          <View style={styles.headerThumbnail}>
+            {thumbnailUri ? (
+              <Image
+                source={{ uri: thumbnailUri }}
+                style={styles.thumbnail}
+                resizeMode="cover"
+                accessibilityIgnoresInvertColors
+              />
+            ) : (
+              <View style={styles.thumbnailFallback}>
+                <Ionicons name="trail-sign-outline" size={18} color={TACTICAL.amber} />
+              </View>
+            )}
+          </View>
           <View style={styles.titleCopy}>
+            <View style={styles.badgeRow}>
+              <View style={styles.sourceBadge}>
+                <Text style={styles.sourceBadgeText}>{sourceLabel}</Text>
+              </View>
+              <View style={styles.readyBadge}>
+                <Ionicons name="navigate-outline" size={9} color={TACTICAL.amber} />
+                <Text style={styles.readyBadgeText}>READY</Text>
+              </View>
+            </View>
             <Text style={styles.title} numberOfLines={2}>{candidate.title}</Text>
             <Text style={styles.subtitle} numberOfLines={1}>
               {candidate.subtitle ?? candidate.route.region ?? 'Explore route'}
@@ -92,10 +98,6 @@ export default function ExploreTripBuilderWizardRouteCard({
             <Ionicons name="map-outline" size={9} color={TACTICAL.textMuted} />
             <Text style={styles.metaText}>{routeDistance(candidate)}</Text>
           </View>
-          <View style={styles.metaPill}>
-            <Ionicons name="layers-outline" size={9} color={TACTICAL.textMuted} />
-            <Text style={styles.metaText}>{candidate.dataUsed.length || 1} SOURCES</Text>
-          </View>
           {isSaved ? (
             <View style={[styles.metaPill, styles.savedPill]}>
               <Ionicons name="star" size={9} color={TACTICAL.amber} />
@@ -104,15 +106,14 @@ export default function ExploreTripBuilderWizardRouteCard({
           ) : null}
         </View>
 
-        <Text style={styles.reason} numberOfLines={2}>
-          {reason}
-        </Text>
-        {warning ? (
-          <View style={styles.warningRow}>
-            <Ionicons name="warning-outline" size={10} color={TACTICAL.amber} />
-            <Text style={styles.warningText} numberOfLines={2}>{warning}</Text>
-          </View>
-        ) : null}
+        <View style={styles.summaryList}>
+          {summaryRows.map((row) => (
+            <View key={row.label} style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>{row.label}</Text>
+              <Text style={styles.summaryText} numberOfLines={1}>{row.value}</Text>
+            </View>
+          ))}
+        </View>
 
         <View style={styles.actionRow}>
           <TouchableOpacity
@@ -169,10 +170,14 @@ const styles = StyleSheet.create({
     backgroundColor: ECS.bgPanel,
     overflow: 'hidden',
   },
-  thumbnailWrap: {
-    height: 138,
+  headerThumbnail: {
+    width: 72,
+    height: 54,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.amber}24`,
     backgroundColor: ECS.bgElev,
-    position: 'relative',
+    overflow: 'hidden',
   },
   thumbnail: {
     width: '100%',
@@ -184,27 +189,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.035)',
   },
-  thumbnailOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.18)',
-  },
-  thumbnailBadgeRow: {
-    position: 'absolute',
-    left: 10,
-    right: 10,
-    bottom: 10,
+  badgeRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 8,
+    flexWrap: 'wrap',
+    gap: 5,
   },
   sourceBadge: {
-    maxWidth: '58%',
+    maxWidth: '100%',
     borderRadius: 999,
     borderWidth: 1,
     borderColor: `${TACTICAL.amber}44`,
-    backgroundColor: 'rgba(6,9,11,0.82)',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    backgroundColor: `${TACTICAL.amber}0D`,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
   },
   sourceBadgeText: {
     color: TACTICAL.amber,
@@ -222,9 +219,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     borderColor: `${TACTICAL.amber}44`,
-    backgroundColor: 'rgba(6,9,11,0.82)',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    backgroundColor: `${TACTICAL.amber}0D`,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
   },
   readyBadgeText: {
     color: TACTICAL.amber,
@@ -235,7 +232,7 @@ const styles = StyleSheet.create({
   },
   body: {
     padding: 11,
-    gap: 8,
+    gap: 7,
   },
   titleRow: {
     flexDirection: 'row',
@@ -312,26 +309,22 @@ const styles = StyleSheet.create({
   savedPillText: {
     color: TACTICAL.amber,
   },
-  reason: {
-    color: TACTICAL.text,
-    fontSize: 10,
-    lineHeight: 14,
-    fontWeight: '700',
+  summaryList: {
+    gap: 4,
   },
-  warningRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: `${TACTICAL.amber}28`,
-    backgroundColor: `${TACTICAL.amber}0A`,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
+  summaryRow: {
+    gap: 1,
   },
-  warningText: {
-    flex: 1,
+  summaryLabel: {
     color: TACTICAL.amber,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  summaryText: {
+    color: TACTICAL.text,
     fontSize: 9,
     lineHeight: 12,
     fontWeight: '800',

@@ -117,9 +117,22 @@ export default function TrailPackCard({
       <View style={s.accentBar} />
       <View style={s.body}>
         <View style={s.headerRow}>
-          <View style={s.titleBlock}>
-            <Text style={s.eyebrow}>TRAIL PACK</Text>
-            <Text style={s.title} numberOfLines={2}>{trailPack.name}</Text>
+          <View style={s.titleCluster}>
+            {showThumbnail ? (
+              <View style={[s.thumbnailFrame, compactPreview && s.thumbnailFrameCompact]}>
+                <Image
+                  source={{ uri: thumbnailOverride.uri as string }}
+                  style={s.thumbnailImage}
+                  resizeMode="cover"
+                  accessibilityLabel={`${trailPack.name} trail thumbnail`}
+                  onError={() => setThumbnailFailed(true)}
+                />
+              </View>
+            ) : null}
+            <View style={s.titleBlock}>
+              <Text style={s.eyebrow}>TRAIL PACK</Text>
+              <Text style={s.title} numberOfLines={2}>{trailPack.name}</Text>
+            </View>
           </View>
           <ECSBadge
             label={sourceLabel}
@@ -130,22 +143,6 @@ export default function TrailPackCard({
         </View>
 
         {metaLine ? <Text style={s.metaText}>{metaLine}</Text> : null}
-        {showThumbnail ? (
-          <View style={[s.thumbnailFrame, compactPreview && s.thumbnailFrameCompact]}>
-            <Image
-              source={{ uri: thumbnailOverride.uri as string }}
-              style={s.thumbnailImage}
-              resizeMode="cover"
-              accessibilityLabel={`${trailPack.name} trail thumbnail`}
-              onError={() => setThumbnailFailed(true)}
-            />
-            <View style={s.thumbnailScrim} />
-            <View style={s.thumbnailBadge}>
-              <Ionicons name="image-outline" size={9} color={TACTICAL.amber} />
-              <Text style={s.thumbnailBadgeText}>TRAIL VISUAL</Text>
-            </View>
-          </View>
-        ) : null}
         <Text style={s.confidenceText}>
           ECS confidence {Math.round(trailPack.confidenceScore)}% | {feedbackText}
         </Text>
@@ -281,6 +278,13 @@ const s = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  titleCluster: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
   eyebrow: {
     color: TACTICAL.amber,
     fontSize: 10,
@@ -302,7 +306,8 @@ const s = StyleSheet.create({
     letterSpacing: 0,
   },
   thumbnailFrame: {
-    height: 74,
+    width: 70,
+    height: 52,
     borderRadius: 8,
     overflow: 'hidden',
     borderWidth: 1,
@@ -310,7 +315,8 @@ const s = StyleSheet.create({
     backgroundColor: ECS.bgElev,
   },
   thumbnailFrameCompact: {
-    height: 56,
+    width: 58,
+    height: 44,
   },
   thumbnailImage: {
     width: '100%',

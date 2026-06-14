@@ -16,6 +16,14 @@ const trailPackCardSource = fs.readFileSync(
   path.join(root, 'components', 'discover', 'TrailPackCard.tsx'),
   'utf8',
 );
+const tripBuilderCardSource = fs.readFileSync(
+  path.join(root, 'components', 'discover', 'ExploreTripBuilderWizardRouteCard.tsx'),
+  'utf8',
+);
+const routeCardSummaryPath = path.join(root, 'lib', 'explore', 'exploreRouteCardSummary.ts');
+const routeCardSummarySource = fs.existsSync(routeCardSummaryPath)
+  ? fs.readFileSync(routeCardSummaryPath, 'utf8')
+  : '';
 const exploreFilterStateSource = fs.readFileSync(
   path.join(root, 'lib', 'exploreFilterStateStore.ts'),
   'utf8',
@@ -148,6 +156,33 @@ assert.ok(
     trailPackCardSource.includes('PREVIEW') &&
     trailPackCardSource.includes('START'),
   'Trail Pack cards should use the compact Explore card pattern with Preview and guarded Start actions.',
+);
+
+assert.ok(
+  tripBuilderCardSource.includes('buildExploreRouteCardSummary(candidate)') &&
+    tripBuilderCardSource.includes('styles.headerThumbnail') &&
+    !tripBuilderCardSource.includes('thumbnailWrap') &&
+    !tripBuilderCardSource.includes('thumbnailOverlay') &&
+    !tripBuilderCardSource.includes('candidate.dataUsed.length') &&
+    !tripBuilderCardSource.includes('SOURCES'),
+  'TripBuilder route cards should use a compact side thumbnail and remove the large banner/Data Used surface.',
+);
+
+assert.ok(
+  hasStyleValue(tripBuilderCardSource, 'headerThumbnail', 'width', '72') &&
+    hasStyleValue(tripBuilderCardSource, 'headerThumbnail', 'height', '54') &&
+    hasStyleValue(trailPackCardSource, 'thumbnailFrame', 'width', '70') &&
+    hasStyleValue(aiCardSource, 'thumbnailFrame', 'width', '70'),
+  'Explorer route visuals should be small thumbnails, not full-width top-half banners.',
+);
+
+assert.ok(
+  routeCardSummarySource.includes('export type ExploreRouteCardSummary') &&
+    routeCardSummarySource.includes('currentCondition') &&
+    routeCardSummarySource.includes('recommendedAction') &&
+    routeCardSummarySource.includes('toImproveStatus') &&
+    !routeCardSummarySource.includes('dataUsed'),
+  'Explore compact cards should use a six-field summary model with no Data Used field.',
 );
 
 assert.ok(

@@ -73,8 +73,8 @@ assertIncludes(
 );
 assertIncludes(
   navigateTab,
-  'clearStagedBuildRoutePreview();\n  showToast(\'BUILD ROUTE CANCELLED\');',
-  'Cancel should clear the Build Route-owned staged preview before reporting cancellation.',
+  "clearStagedBuildRoutePreview();\n  setLongPressContext(null);\n  setLongPressInfoExpanded(false);\n  showToast('ROUTE BUILDER CLOSED');",
+  'Cancel should clear the Build Route-owned staged preview before quietly closing the builder.',
 );
 const mapRouteIndicatorBlock = blockBetween(
   navigateTab,
@@ -93,8 +93,8 @@ assertNotIncludes(
 );
 assertIncludes(
   navigateTab,
-  'resetBuildRouteDraft({ keepActive: true });',
-  'The draft CLEAR action should remove drawn points without leaving Build Route mode.',
+  'const nextDraft = clearNavigateRouteDraft(routeBuilderDraft);',
+  'The draft CLEAR action should remove dropped anchors without leaving Build Route mode.',
 );
 assertIncludes(
   navigateTab,

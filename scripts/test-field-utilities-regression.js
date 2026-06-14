@@ -571,6 +571,18 @@ assertIncludes(
   "import { ECS_SURFACE } from '../lib/ecsSurfaceTokens';",
   'Field Utilities should reuse the shared ECS fleet surface tokens for gold action containers.',
 );
+['#9CCC65', '#64B5F6', '#BCAAA4'].forEach((legacyColor) => {
+  assertNotIncludes(
+    quickActionsSource,
+    legacyColor,
+    `Dashboard long-press Quick Actions should avoid the legacy mixed utility color ${legacyColor} and stay on ECS tactical tokens.`,
+  );
+});
+assertIncludes(
+  quickActionsSource,
+  'color: TACTICAL.textMuted',
+  'Lower-priority Quick Actions should use muted ECS tactical color tokens instead of one-off pastel utility colors.',
+);
 assertIncludes(
   quickActionsSource,
   "item.key !== 'protocols' && item.key !== 'recovery-protocol' && styles.fleetGoldUtilityTile",
@@ -588,13 +600,13 @@ assertIncludes(
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'emergencyProtocolTile'),
-  "backgroundColor: 'rgba(239,83,80,0.055)'",
-  'Emergency Protocol should keep the critical transparent red surface.',
+  'backgroundColor: `${TACTICAL.danger}10`',
+  'Emergency Protocol should keep the critical transparent red surface through the ECS danger token.',
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'recoveryProtocolTile'),
-  "backgroundColor: 'rgba(239,83,80,0.055)'",
-  'Recovery Protocol should match the Emergency Protocol critical transparent red surface.',
+  'backgroundColor: `${TACTICAL.danger}10`',
+  'Recovery Protocol should match the Emergency Protocol critical transparent red ECS token surface.',
 );
 assertIncludes(
   quickActionsSource,

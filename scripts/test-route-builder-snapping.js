@@ -228,13 +228,13 @@ assertNotIncludes(
 );
 assertIncludes(
   navigate,
-  "routeBuilderSnapSource && routeBuilderSnapSource !== 'free'",
-  'Navigate status should distinguish snapped route geometry from free visible geometry.',
+  'routeBuilderDraft.anchors.length > 1',
+  'Navigate status should summarize dropped anchor count.',
 );
 assertIncludes(
   navigate,
-  "`${routeBuilderSavableSegments.length} seg${routeBuilderSavableSegments.length === 1 ? '' : 's'} - ${",
-  'Navigate status should count saved Build Route strokes as segments, not one merged drawing.',
+  "snapped leg${routeBuilderSavableSegments.length === 1 ? '' : 's'}",
+  'Navigate status should count saved Build Route geometry as snapped legs.',
 );
 assertIncludes(
   navigate,
@@ -243,8 +243,8 @@ assertIncludes(
 );
 assertIncludes(
   navigate,
-  "routeBuilderSnapStatus === 'raw_smoothed' || routeBuilderSnapStatus === 'ambiguous'",
-  'Navigate should show a clear retry/undo hint when final segment snapping keeps raw geometry.',
+  'No loaded route geometry between these points',
+  'Navigate should show a clear blocked-leg hint instead of keeping raw freehand geometry.',
 );
 assertIncludes(
   finalSnap,

@@ -310,14 +310,14 @@ export default function ExploreRoutePreviewModal({
             ) : previewModel.hasRouteData ? (
               <MapRenderer
                 points={previewModel.mapPoints}
-                waypoints={previewModel.waypoints}
+                waypoints={[]}
                 routeColor={TACTICAL.amber}
                 mapStyle={DEFAULT_MAP_STYLE}
                 mapboxToken={mapboxToken}
                 hasToken={!!mapboxToken}
                 isLoading={tokenLoading}
-                showUserLocation={!!previewModel.origin}
-                userLocation={previewModel.origin}
+                showUserLocation={false}
+                userLocation={null}
                 motionPriority="warm"
                 interactive={false}
                 cameraMode="route_overview"
@@ -331,27 +331,10 @@ export default function ExploreRoutePreviewModal({
                 <Text style={s.mapStateTitle}>Route geometry unavailable</Text>
                 <Text style={s.mapStateText}>
                   {previewModel.previewUnavailableReason ??
-                    'Endpoint or route geometry metadata is missing.'}
+                    'Route geometry metadata is missing.'}
                 </Text>
               </View>
             )}
-          </View>
-
-          <View style={s.markerLegend}>
-            <View style={[s.legendPill, previewModel.origin ? s.legendPillActive : s.legendPillMuted]}>
-              <View style={[s.legendDot, previewModel.origin ? s.legendDotGps : s.legendDotMuted]} />
-              <Text style={[s.legendText, !previewModel.origin && s.legendTextMuted]} numberOfLines={1}>
-                {previewModel.origin ? 'Current GPS' : 'GPS waiting'}
-              </Text>
-            </View>
-            <View style={s.legendPill}>
-              <View style={[s.legendDot, s.legendDotStart]} />
-              <Text style={s.legendText} numberOfLines={1}>Route start</Text>
-            </View>
-            <View style={s.legendPill}>
-              <View style={[s.legendDot, s.legendDotEnd]} />
-              <Text style={s.legendText} numberOfLines={1}>Endpoint</Text>
-            </View>
           </View>
 
           {!previewModel.origin ? (
@@ -543,11 +526,6 @@ const s = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0,
   },
-  markerLegend: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
   metadataRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -577,52 +555,6 @@ const s = StyleSheet.create({
     lineHeight: 13,
     fontWeight: '900',
     letterSpacing: 0,
-  },
-  legendPill: {
-    minHeight: 24,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-  },
-  legendPillActive: {
-    borderColor: TACTICAL.amber + '30',
-  },
-  legendPillMuted: {
-    opacity: 0.82,
-  },
-  legendDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: TACTICAL.amber,
-  },
-  legendDotGps: {
-    backgroundColor: '#5AC8FA',
-  },
-  legendDotStart: {
-    backgroundColor: '#66BB6A',
-  },
-  legendDotEnd: {
-    backgroundColor: TACTICAL.amber,
-  },
-  legendDotMuted: {
-    backgroundColor: TACTICAL.textMuted,
-  },
-  legendText: {
-    color: TACTICAL.text,
-    fontSize: 9,
-    lineHeight: 12,
-    fontWeight: '800',
-    letterSpacing: 0,
-  },
-  legendTextMuted: {
-    color: TACTICAL.textMuted,
   },
   notice: {
     flexDirection: 'row',

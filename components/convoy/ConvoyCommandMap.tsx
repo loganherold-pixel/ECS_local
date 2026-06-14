@@ -503,7 +503,6 @@ export function ConvoyCommandMap({
           followUserLocation={shouldFollowUser}
           followZoomLevel={13}
         />
-        <Mapbox.UserLocation visible showsUserHeadingIndicator />
         {hasRouteLine ? (
           <Mapbox.ShapeSource id="convoy-active-route-source" shape={routeGeoJson as any}>
             <Mapbox.LineLayer

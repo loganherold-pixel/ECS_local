@@ -69,27 +69,6 @@ function sameCoordinate(
   return Math.abs(left.lat - right.lat) < 0.00001 && Math.abs(left.lng - right.lng) < 0.00001;
 }
 
-function pushUniqueWaypoint(
-  waypoints: ExploreRoutePreviewWaypoint[],
-  id: string,
-  coordinate: ExplorePreviewCoordinate | null | undefined,
-  title: string,
-  description?: string,
-): void {
-  if (!isValidCoordinate(coordinate)) return;
-  if (waypoints.some((waypoint) => sameCoordinate({ lat: waypoint.latitude, lng: waypoint.longitude }, coordinate))) {
-    return;
-  }
-
-  waypoints.push({
-    id,
-    latitude: coordinate.lat,
-    longitude: coordinate.lng,
-    title,
-    description,
-  });
-}
-
 export function getExploreRoutePreviewRoutePoints(
   payload: NavigationHandoffPayload,
 ): ExplorePreviewCoordinate[] {
@@ -186,13 +165,8 @@ export function normalizeNavigationHandoffPreview(
 ): ExploreRoutePreviewModel {
   const routePoints = getExploreRoutePreviewRoutePoints(payload);
   const origin = isValidCoordinate(userLocation) ? userLocation : null;
-  const routeStart = routePoints[0] ?? null;
-  const mapPoints = origin && routeStart
-    ? [origin, ...routePoints].filter(isValidCoordinate)
-    : routePoints.filter(isValidCoordinate);
+  const mapPoints = routePoints.filter(isValidCoordinate);
   const camera = buildExploreRoutePreviewCameraCommand(mapPoints);
-  const waypoints: ExploreRoutePreviewWaypoint[] = [];
-  const routeEnd = routePoints[routePoints.length - 1] ?? null;
   const hasRouteData = routePoints.length >= 2;
   const metadataReason =
     typeof payload.routeMetadata?.routePreviewUnavailableReason === 'string'
@@ -202,16 +176,12 @@ export function normalizeNavigationHandoffPreview(
     ? null
     : metadataReason ?? 'Route preview unavailable for this route until endpoint or route geometry is added.';
 
-  pushUniqueWaypoint(waypoints, `${payload.id}-gps`, origin, 'Current GPS', 'Preview origin');
-  pushUniqueWaypoint(waypoints, `${payload.id}-start`, routeStart, 'Route start', 'Selected route access point');
-  pushUniqueWaypoint(waypoints, `${payload.id}-end`, routeEnd, payload.title, payload.subtitle ?? undefined);
-
   return {
     payload,
     origin,
     routePoints,
     mapPoints,
-    waypoints,
+    waypoints: [],
     routeBounds: camera.bounds,
     cameraCommand: camera.command,
     hasFullGeometry: payload.trailGeometry.filter(isValidCoordinate).length > 1,

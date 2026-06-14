@@ -145,9 +145,9 @@ assert(sideProfileSource.includes('High risk route sections are highlighted'), '
 assert(sideProfileSource.includes('transparentBackground = false'), 'Terrain Risk chart should keep opaque detail rendering by default.');
 assert(sideProfileSource.includes('!transparentBackground ?'), 'Terrain Risk chart should be able to suppress the opaque SVG background.');
 assert(sideProfileSource.includes('shellTransparent'), 'Terrain Risk chart needs a transparent shell style for compact route panels.');
-assert(sideProfileSource.includes('left: 34'), 'Terrain Risk chart should preserve a wider readable left elevation-label lane.');
-assert(sideProfileSource.includes('right: 12'), 'Terrain Risk chart should reserve a right-side lane so the final distance/unit labels are not clipped.');
-assert(sideProfileSource.includes('top: 18') && sideProfileSource.includes('bottom: 24'), 'Terrain Risk chart should keep top markers and bottom axis labels inside the viewBox.');
+assert(sideProfileSource.includes('left: 24'), 'Terrain Risk chart should preserve a compact readable left elevation-label lane.');
+assert(sideProfileSource.includes('right: 16'), 'Terrain Risk chart should reserve a right-side lane so the final distance/unit labels are not clipped.');
+assert(sideProfileSource.includes('top: 8') && sideProfileSource.includes('bottom: 24'), 'Terrain Risk chart should keep top markers and bottom axis labels inside the viewBox.');
 assert(sideProfileSource.includes('labelX: ratio === 1 ? x - 10 : ratio === 0 ? x + 2 : x'), 'Terrain Risk chart should keep first/final distance labels clear of the chart edges and unit label.');
 assert(sideProfileSource.includes('y={CHART_FRAME.baselineY + 13}'), 'Terrain Risk chart distance ticks and unit label should share a single aligned bottom axis row.');
 assert(sideProfileSource.includes('x={CHART_FRAME.left + 2}') && sideProfileSource.includes('y={CHART_FRAME.top + 8}'), 'Terrain Risk FT label should stay inside the slimmer elevation tick label lane.');

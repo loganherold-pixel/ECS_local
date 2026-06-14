@@ -21,77 +21,84 @@ function assertNotIncludes(source, fragment, message) {
 assertIncludes(
   navigateTab,
   'const sameCoordinateList = (leftInput: any, rightInput: any) => {',
-  'Build Route segment equality should compare full geometry lists, not only segment endpoints.',
+  'Build Route segment equality should still compare full geometry lists for saved snapped legs.',
 );
 assertIncludes(
   navigateTab,
   '!sameCoordinateList(left.rawSegment, right.rawSegment)',
-  'Build Route segment equality should include raw stroke geometry so raw fallback state stays consistent.',
+  'Build Route segment equality should include raw geometry metadata when present.',
 );
 assertIncludes(
   navigateTab,
   '!sameCoordinateList(left.snappedSegment, right.snappedSegment)',
-  'Build Route segment equality should include snapped geometry so pointer-up corrections are retained.',
+  'Build Route segment equality should include snapped geometry.',
 );
 assertNotIncludes(
   navigateTab,
   'const leftLast = leftCoords[leftCoords.length - 1]',
   'Build Route segment equality should no longer rely on the last point only.',
 );
+
 assertIncludes(
+  navigateTab,
+  'const [routeBuilderDraft, setRouteBuilderDraft] = useState<NavigateRouteDraft>(() => createNavigateRouteDraft());',
+  'Navigate should track a first-class anchor/leg route draft.',
+);
+assertIncludes(
+  navigateTab,
+  'const nextDraft = undoLastNavigateRouteAnchor(routeBuilderDraft);',
+  'Undo should remove the latest dropped route anchor.',
+);
+assertIncludes(
+  navigateTab,
+  'applyRouteBuilderDraft(nextDraft);',
+  'Undo should rebuild saved route-builder segments from the anchor draft.',
+);
+assertIncludes(
+  navigateTab,
+  'const nextDraft = clearNavigateRouteDraft(routeBuilderDraft);',
+  'Clear should remove every dropped anchor and traced leg.',
+);
+assertIncludes(
+  navigateTab,
+  'buildRouteBuilderSegmentsFromDraft(nextDraft)',
+  'Navigate should derive saveable route segments from the anchor draft.',
+);
+assertIncludes(
+  navigateTab,
+  "showToast('LAST ROUTE POINT UNDONE')",
+  'Undo feedback should describe points rather than freehand segments.',
+);
+assertNotIncludes(
   navigateTab,
   'const nextSegments = routeBuilderSegments.filter((_, index) => index !== removeIndex);',
-  'Undo should remove exactly one latest drawable Build Route segment.',
+  'Undo should no longer mutate freehand segment arrays directly.',
 );
-assertIncludes(
+assertNotIncludes(
   navigateTab,
-  'const previousEndpointSegment = [...nextSegments]',
-  'Undo should find the previous remaining segment for retrace/status restoration.',
+  "showToast('LIFT FINGER TO UNDO')",
+  'Undo should not reference the removed freehand gesture mode.',
 );
+
 assertIncludes(
-  navigateTab,
-  'setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);',
-  'Undo should restore snap source from the previous segment instead of clearing all route context.',
-);
-assertIncludes(
-  navigateTab,
-  'setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);',
-  'Undo should restore snapped/raw status from the previous segment.',
-);
-assertIncludes(
-  navigateTab,
-  'setRouteBuilderSnapMessage(previousEndpointSegment?.snapMessage ?? null);',
-  'Undo should restore any low-confidence/raw fallback hint from the previous segment.',
-);
-assertIncludes(
-  navigateTab,
-  'syncSelectedDispersedRouteLegIds(nextSegments);',
-  'Undo should keep selected yellow dispersed leg styling in sync with the remaining Build Route draft.',
-);
-assertIncludes(
-  navigateTab,
-  'segment.sourceSegmentId',
-  'Undo and equality paths should preserve tapped dispersed route leg identity on draft segments.',
+  mapRenderer,
+  'routeBuilderAnchors = payload.routeBuilderAnchors || [];',
+  'MapRenderer should sync route-builder anchors from React.',
 );
 assertIncludes(
   mapRenderer,
-  'routeBuilderRawTraceSegments = [];\n          routeBuilderActiveRawSegmentId = null;\n          routeBuilderTraceSessionId = null;\n          routeBuilderDraftSegments = cloneBuilderSegments(payload.routeBuilderSegments || []);',
-  'MapRenderer should drop stale raw trace sessions when React syncs an undo/clear result.',
+  'updateRouteBuilder(routeBuilderDraftSegments, routeBuilderColor, routeBuilderAnchors);',
+  'MapRenderer should render anchors alongside traced legs.',
 );
 assertIncludes(
   mapRenderer,
-  'syncRouteBuilderTraceAnchorFromDraft();',
-  'MapRenderer should rebuild the drawing anchor from the previous segment endpoint after undo.',
+  "if (routeBuilderMode === 'anchor_trace') return false;",
+  'Anchor route builder should disable the old pointer-drag freehand path.',
 );
 assertIncludes(
   mapRenderer,
-  'segment.rawSegment = rawCoordinates.slice();',
-  'Undo must work with raw fallback segments because raw geometry is retained on the segment.',
-);
-assertIncludes(
-  mapRenderer,
-  'segment.snappedSegment = highLine.slice();',
-  'Undo must work with snapped segments because snapped geometry is retained on the segment.',
+  'route-profile-focus-source',
+  'MapRenderer should preserve profile-focus rendering for the route profile scrubber.',
 );
 
 console.log('Route builder undo behavior checks passed.');

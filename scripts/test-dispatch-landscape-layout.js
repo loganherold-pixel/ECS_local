@@ -16,10 +16,6 @@ const landscapeSummaryDockStyle = commandCenterSource.slice(
   commandCenterSource.indexOf('landscapeSummaryDock:'),
   commandCenterSource.indexOf('landscapeDockRevealButton:'),
 );
-const convoyTeamCardStyle = commandCenterSource.slice(
-  commandCenterSource.indexOf('convoyTeamCard:'),
-  commandCenterSource.indexOf('convoyTeamCardCompact:'),
-);
 const liveChipPrimaryStyle = commandCenterSource.slice(
   commandCenterSource.indexOf('liveChipPrimary:'),
   commandCenterSource.indexOf('liveChipSourceLive:'),
@@ -31,10 +27,6 @@ const liveChipSourceLiveStyle = commandCenterSource.slice(
 const feedPanelStyle = commandCenterSource.slice(
   commandCenterSource.indexOf('feedPanel:'),
   commandCenterSource.indexOf('feedPanelLandscapeMap:'),
-);
-const feedHeaderStyle = commandCenterSource.slice(
-  commandCenterSource.indexOf('feedHeader:'),
-  commandCenterSource.indexOf('feedHeaderLandscape:'),
 );
 const summaryCommandSummaryStyle = panelSource.slice(
   panelSource.indexOf('summaryCommandSummary:'),
@@ -77,21 +69,22 @@ assert.ok(
 
 assert.ok(
   commandCenterSource.includes('const isLandscapeDispatch = windowWidth > windowHeight') &&
-    commandCenterSource.includes('styles.landscapeTitleBar') &&
+    !commandCenterSource.includes('styles.landscapeTitleBar') &&
     commandCenterSource.includes('styles.landscapeTopRow') &&
     commandCenterSource.includes('styles.landscapeSetupRail') &&
     commandCenterSource.includes('styles.feedPanelLandscapeMap'),
-  'DispatchCadCommandCenter should split landscape into a safe title bar, compact top row, and larger lower map panel.',
+  'DispatchCadCommandCenter should split landscape into a compact top row and larger lower map panel without the redundant Dispatch title bar.',
 );
 
 assert.ok(
-  commandCenterSource.includes('landscapeTitleCenter') &&
+  !commandCenterSource.includes('landscapeTitleCenter') &&
     !commandCenterSource.includes('<Text style={styles.channelLandscape} numberOfLines={1}>{teamStatusLabel}</Text>') &&
-    commandCenterSource.includes('advisoryLine ?? <View style={styles.landscapeSetupTopSpacer} />') &&
+    commandCenterSource.includes('{advisoryLine}') &&
+    !commandCenterSource.includes('landscapeSetupTopSpacer') &&
     commandCenterSource.includes('{headerStrip}') &&
     commandCenterSource.includes('marginHorizontal: 2') &&
     commandCenterSource.includes('paddingHorizontal: 2'),
-  'Dispatch landscape should center the title, reserve matching advisory/action lanes, and align setup/advisory with live chips.',
+  'Dispatch landscape should remove the title/spacer lane and align advisory/action lanes with live chips.',
 );
 
 assert.ok(
@@ -140,7 +133,7 @@ assert.ok(
 assert.ok(
   commandCenterSource.includes('revealDashboardDock(5000)') &&
     commandCenterSource.includes('setDashboardExpanded(isLandscapeDispatch)') &&
-    dockSource.includes("pathname.includes('/alert')"),
+    dockSource.includes("expandedChromeTab === 'dispatch'"),
   'Dispatch landscape should share the Dashboard expanded chrome hide/reveal behavior for the lower dock.',
 );
 
@@ -180,11 +173,12 @@ assert.ok(
 );
 
 assert.ok(
-  convoyTeamCardStyle.includes('borderColor: `${TACTICAL.amber}2E`') &&
-    convoyTeamCardStyle.includes('backgroundColor: `${TACTICAL.amber}12`') &&
-    !convoyTeamCardStyle.includes('shadowColor: TACTICAL.amber') &&
-    !convoyTeamCardStyle.includes('elevation: 1'),
-  'Dispatch convoy setup/team should match the Fleet readiness command translucent gold surface.',
+  !commandCenterSource.includes('DispatchConvoyTeamSetupCard') &&
+    !commandCenterSource.includes('CONVOY SETUP / TEAM') &&
+    !commandCenterSource.includes('dispatch-convoy-team-setup-card') &&
+    panelSource.includes('shouldShowEmergencyFeed') &&
+    !panelSource.includes('(!isFeedPresentation || emergencyEvents.length > 0)'),
+  'Dispatch should remove the redundant setup/team card and keep emergency pings in the active Convoy Command feed surface.',
 );
 
 assert.ok(
@@ -203,10 +197,11 @@ assert.ok(
     feedPanelStyle.includes("backgroundColor: 'transparent'") &&
     !feedPanelStyle.includes('borderColor: ECS_SURFACE.border.selected') &&
     !feedPanelStyle.includes('backgroundColor: ECS_SURFACE.background.selected') &&
-    feedHeaderStyle.includes('borderBottomColor: ECS_SURFACE.border.quiet') &&
-    feedHeaderStyle.includes("backgroundColor: 'transparent'") &&
-    !feedHeaderStyle.includes('borderBottomColor: ECS_SURFACE.border.selected'),
-  'Dispatch bottom Convoy Command map surface should keep the command surface background transparent instead of gold.',
+    !commandCenterSource.includes('styles.feedHeader') &&
+    !commandCenterSource.includes('COMMAND SURFACE') &&
+    mapSource.includes('convoy-members-source') &&
+    !mapSource.includes('<Mapbox.UserLocation visible showsUserHeadingIndicator />'),
+  'Dispatch bottom Convoy Command map surface should keep the transparent surface, remove its header banner, and avoid a second Mapbox user-location dot.',
 );
 
 assert.ok(
@@ -227,11 +222,11 @@ assert.ok(
 );
 
 assert.ok(
-  commandCenterSource.includes("justifyContent: 'flex-end'") &&
+  commandCenterSource.includes("justifyContent: 'center'") &&
     commandCenterSource.includes('maxWidth: 110') &&
     commandCenterSource.includes('alignSelf: \'stretch\'') &&
     commandCenterSource.includes('textAlign: \'center\''),
-  'Dispatch landscape action controls should sit tightly together on the right with shared sizing and centered labels.',
+  'Dispatch landscape action controls should be centered with shared sizing and centered labels.',
 );
 
 console.log('dispatch landscape layout checks passed');

@@ -145,10 +145,12 @@ assert.ok(
     previewModalSource.includes('Route geometry unavailable') &&
     previewModalSource.includes('Map rendering unavailable') &&
     previewModalSource.includes('GPS is unavailable') &&
-    previewModalSource.includes('markerLegend') &&
-    previewModalSource.includes('Current GPS') &&
-    previewModalSource.includes('Endpoint'),
-  'Route Preview popup should include map, loading, and clear error/unavailable states.',
+    previewModalSource.includes('waypoints={[]}') &&
+    previewModalSource.includes('showUserLocation={false}') &&
+    !previewModalSource.includes('markerLegend') &&
+    !previewModalSource.includes('Route start') &&
+    !previewModalSource.includes('Endpoint'),
+  'Route Preview popup should include map/loading states but render the preview as a route line without generated pins.',
 );
 assert.ok(
   previewModalSource.includes('function TouchablePreviewAction') &&
@@ -187,6 +189,11 @@ assert.ok(
   'Missing geometry should return a clear preview-unavailable reason instead of crashing.',
 );
 assert.ok(missingGeometryModel.cameraCommand, 'Missing geometry with one point can still produce a safe camera command.');
+assert.deepStrictEqual(
+  missingGeometryModel.waypoints,
+  [],
+  'Preview normalization should not generate GPS/start/end waypoint pins for single-point fallback previews.',
+);
 
 const endpointModel = normalizeNavigationHandoffPreview(
   makePayload({
@@ -198,6 +205,7 @@ const endpointModel = normalizeNavigationHandoffPreview(
 assert.strictEqual(endpointModel.hasRouteData, true, 'Distinct start and endpoint should render a preview.');
 assert.strictEqual(endpointModel.routePoints.length, 2, 'Endpoint fallback preview should include start and end.');
 assert.ok(endpointModel.cameraCommand?.fitBounds, 'Endpoint preview should fit map bounds.');
+assert.deepStrictEqual(endpointModel.waypoints, [], 'Endpoint previews should not create generated yellow pins.');
 
 const geometryModel = normalizeNavigationHandoffPreview(
   makePayload({
@@ -211,7 +219,8 @@ const geometryModel = normalizeNavigationHandoffPreview(
 );
 assert.strictEqual(geometryModel.hasRouteData, true, 'Valid route geometry should render preview data.');
 assert.strictEqual(geometryModel.hasFullGeometry, true, 'Multi-point geometry should be recognized as full geometry.');
-assert.ok(geometryModel.mapPoints.length >= 4, 'Map points should include current GPS plus route geometry.');
+assert.strictEqual(geometryModel.mapPoints.length, 3, 'Map points should include only route geometry, not GPS-to-trail guidance.');
+assert.deepStrictEqual(geometryModel.waypoints, [], 'Full route previews should not create generated waypoint pins.');
 assert.ok(geometryModel.cameraCommand?.fitBounds, 'Valid geometry should render with fit-to-route bounds.');
 
 const exploreOpportunityModel = normalizeExploreRoutePreview(

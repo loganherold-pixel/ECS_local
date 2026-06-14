@@ -11,6 +11,10 @@ import {
   getExploreTrailThumbnail,
   type ExploreTrailThumbnailAssignment,
 } from '../exploreTrailThumbnails';
+import {
+  deriveExploreLiveConfidence,
+  type ExploreLiveConfidence,
+} from './exploreLiveConfidence';
 
 export type ExploreWizardRouteSourceKind =
   | 'trail_pack'
@@ -38,11 +42,7 @@ export type ExploreWizardRouteCandidate = {
   route: ExpeditionOpportunity;
   navigationPayload: NavigationHandoffPayload;
   thumbnail: ExploreTrailThumbnailAssignment | null;
-  confidence: {
-    score: number | null;
-    label: string;
-    reasons: string[];
-  };
+  confidence: ExploreLiveConfidence;
   warnings: string[];
   dataUsed: Array<Record<string, unknown>>;
   guidanceReady: boolean;
@@ -181,32 +181,6 @@ function readNumber(...values: unknown[]): number | null {
   return null;
 }
 
-function buildConfidence(route: ExpeditionOpportunity): ExploreWizardRouteCandidate['confidence'] {
-  const metadata = metadataRecord(route);
-  const score = readNumber(
-    metadata.confidenceScore,
-    metadata.confidence,
-    route.matchScore,
-    route.rigCompatibility,
-  );
-  const normalizedScore = score == null ? null : Math.max(0, Math.min(100, Math.round(score)));
-  const reasons = [
-    ...normalizeStringArray(metadata.confidenceReasons),
-    ...normalizeStringArray(metadata.reasons),
-    ...normalizeStringArray(route.highlights),
-  ].slice(0, 5);
-  const label =
-    normalizedScore == null
-      ? 'Confidence unavailable'
-      : normalizedScore >= 80
-        ? 'High confidence'
-        : normalizedScore >= 55
-          ? 'Medium confidence'
-          : 'Low confidence';
-
-  return { score: normalizedScore, label, reasons };
-}
-
 function buildWarnings(route: ExpeditionOpportunity): string[] {
   const metadata = metadataRecord(route);
   const catalogVerification = metadata.catalogVerification as
@@ -264,7 +238,7 @@ function buildCandidate(
     route,
     navigationPayload,
     thumbnail: getExploreTrailThumbnail(route),
-    confidence: buildConfidence(route),
+    confidence: deriveExploreLiveConfidence(route),
     warnings: buildWarnings(route),
     dataUsed: buildDataUsed(route),
     guidanceReady: true,

@@ -216,6 +216,24 @@ import {
   type RouteGeometryOverlaySegment,
 } from '../../lib/navigateRouteGeometryOverlay';
 import {
+  buildNavigateLongPressContext,
+  type NavigateLongPressContext,
+  type NavigateLongPressRouteableFeature,
+} from '../../lib/navigateLongPressActions';
+import {
+  addAnchorToDraft,
+  buildRouteBuilderSegmentsFromDraft,
+  buildRouteFromNearestAnchor,
+  clearNavigateRouteDraft,
+  createNavigateRouteDraft,
+  resolveNearestNavigateRouteAnchor,
+  undoLastNavigateRouteAnchor,
+  type NavigateRouteCoordinate,
+  type NavigateRouteDraft,
+  type NavigateRouteTraceableSegment,
+} from '../../lib/navigatePointRouteBuilder';
+import { resolveNavigateRouteProfileFocus } from '../../lib/navigateRouteProfileScrubber';
+import {
   isRouteGeometryViewportZoomEligible,
   mergeRouteGeometryViewportSegmentsWithSelected,
   resolveNearestRouteGeometryEndpoint,
@@ -2880,6 +2898,58 @@ function sourceMetadataForRouteBuilderSegment(segment: RouteBuilderSegmentData):
   };
 }
 
+function routeGeometrySegmentToNavigateTraceableSegment(
+  segment: RouteGeometryOverlaySegment,
+): NavigateRouteTraceableSegment {
+  return {
+    id: segment.id,
+    name: segment.name,
+    sourceLabel: segment.sourceLabel,
+    confidence: segment.confidence,
+    dataState: segment.dataState,
+    coordinates: segment.coordinates.map((point) => ({
+      latitude: point.latitude,
+      longitude: point.longitude,
+    })),
+    warnings: segment.warnings,
+  };
+}
+
+function segmentPayloadToLongPressFeature(
+  payload: any,
+): NavigateLongPressRouteableFeature | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const warnings = typeof payload.routeGeometryWarningsJson === 'string'
+    ? (() => {
+        try {
+          const parsed = JSON.parse(payload.routeGeometryWarningsJson);
+          return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+        } catch {
+          return [];
+        }
+      })()
+    : [];
+  return {
+    id: payload.id ?? null,
+    kind: payload.kind ?? null,
+    name: payload.name ?? payload.categoryLabel ?? null,
+    sourceLabel: payload.routeGeometrySourceKind ?? payload.categoryLabel ?? payload.name ?? null,
+    confidence: payload.routeGeometryConfidence ?? payload.confidence ?? null,
+    dataState: payload.routeGeometryDataState ?? payload.dataState ?? null,
+    warnings,
+  };
+}
+
+function toNavigateRouteCoordinate(
+  coordinate: { latitude?: number; longitude?: number; lat?: number; lng?: number } | null | undefined,
+): NavigateRouteCoordinate | null {
+  const latitude = Number(coordinate?.latitude ?? coordinate?.lat);
+  const longitude = Number(coordinate?.longitude ?? coordinate?.lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  return { latitude, longitude };
+}
+
 function routeBuilderFinalSnapSignature(segment: RouteBuilderSegmentData): string {
   const line = normalizeRouteBuilderLine(
     Array.isArray(segment.rawSegment) && segment.rawSegment.length > 1
@@ -4041,11 +4111,20 @@ const queueMapCameraCommand = useCallback((
   const [routeBuilderActive, setRouteBuilderActive] = useState(false);
   const [routeBuilderDrawing, setRouteBuilderDrawing] = useState(false);
   const [routeBuilderSegments, setRouteBuilderSegments] = useState<RouteBuilderSegmentData[]>([]);
+  const [routeBuilderDraft, setRouteBuilderDraft] = useState<NavigateRouteDraft>(() => createNavigateRouteDraft());
   const [routeBuilderSnapSource, setRouteBuilderSnapSource] = useState<string | null>(null);
   const [routeBuilderSnapStatus, setRouteBuilderSnapStatus] = useState<RouteBuilderSegmentData['snapStatus']>(null);
   const [routeBuilderSnapMessage, setRouteBuilderSnapMessage] = useState<string | null>(null);
   const routeBuilderSegmentsRef = useRef<RouteBuilderSegmentData[]>([]);
   const routeBuilderFinalSnapInFlightRef = useRef<Set<string>>(new Set());
+  const routeBuilderTraceableSegmentsRef = useRef<NavigateRouteTraceableSegment[]>([]);
+  const [longPressContext, setLongPressContext] = useState<NavigateLongPressContext | null>(null);
+  const [longPressInfoExpanded, setLongPressInfoExpanded] = useState(false);
+  const [routeBuilderSaveVisible, setRouteBuilderSaveVisible] = useState(false);
+  const [routeBuilderSaveName, setRouteBuilderSaveName] = useState('');
+  const [routeBuilderSaveNote, setRouteBuilderSaveNote] = useState('');
+  const [routeProfileScrubRatio, setRouteProfileScrubRatio] = useState(0);
+  const [routeProfileScrubWidth, setRouteProfileScrubWidth] = useState(1);
   const [dispersedRouteBuildActive, setDispersedRouteBuildActive] = useState(false);
   const [selectedDispersedRouteLegIds, setSelectedDispersedRouteLegIds] = useState<string[]>([]);
   const [dispersedRouteBuildStatus, setDispersedRouteBuildStatus] = useState<string | null>(null);
@@ -8100,7 +8179,50 @@ const handleQuickPinDrop = useCallback(() => {
   showToast('TAP MAP TO DROP PIN');
 }, [closeTopPopup, showToast]);
 
-  const handleLongPress = useCallback((coord: { latitude?: number; longitude?: number }) => {
+const applyRouteBuilderDraft = useCallback((nextDraft: NavigateRouteDraft) => {
+  const nextSegments = buildRouteBuilderSegmentsFromDraft(nextDraft) as unknown as RouteBuilderSegmentData[];
+  const lastLeg = nextDraft.legs[nextDraft.legs.length - 1] ?? null;
+  setRouteBuilderDraft(nextDraft);
+  setRouteBuilderSegments(nextSegments);
+  setRouteBuilderDrawing(false);
+  setRouteBuilderSnapSource(lastLeg?.source ?? nextSegments[nextSegments.length - 1]?.snapSource ?? null);
+  setRouteBuilderSnapStatus(
+    lastLeg?.status === 'blocked'
+      ? 'blocked'
+      : nextSegments[nextSegments.length - 1]?.snapStatus ?? null,
+  );
+  setRouteBuilderSnapMessage(
+    lastLeg?.unavailableReason ??
+      nextSegments[nextSegments.length - 1]?.snapMessage ??
+      (nextDraft.anchors.length <= 1 ? 'Point A set. Tap the next point on the trail.' : null),
+  );
+}, []);
+
+const handleRouteBuilderAnchorTap = useCallback((coordinate: NavigateRouteCoordinate) => {
+  hapticCommand();
+  closeTopPopup();
+  setLongPressContext(null);
+  setLongPressInfoExpanded(false);
+  setRouteBuilderActive(true);
+  setPinDropMode(false);
+  setShowCrosshair(false);
+  setFollowUser(false);
+  setUserHasManuallyMovedMap(true);
+  const result = addAnchorToDraft(routeBuilderDraft, {
+    coordinate,
+    availableSegments: routeBuilderTraceableSegmentsRef.current,
+  });
+  applyRouteBuilderDraft(result.draft);
+  if (!result.leg) {
+    showToast('POINT A SET');
+  } else if (result.leg.status === 'blocked') {
+    showToast('NO LOADED TRAIL GEOMETRY BETWEEN POINTS');
+  } else {
+    showToast(`POINT ${result.draft.anchors[result.draft.anchors.length - 1]?.label ?? ''} LINKED`);
+  }
+}, [applyRouteBuilderDraft, closeTopPopup, routeBuilderDraft, showToast]);
+
+  const handleLongPress = useCallback((coord: { latitude?: number; longitude?: number; routeableFeature?: any }) => {
   if (!Number.isFinite(coord.latitude) || !Number.isFinite(coord.longitude)) return;
   const latitude = Number(coord.latitude);
   const longitude = Number(coord.longitude);
@@ -8108,10 +8230,62 @@ const handleQuickPinDrop = useCallback(() => {
   closeTopPopup();
   setPinDropMode(false);
   setShowCrosshair(false);
-  setDropCoords({ lat: latitude, lng: longitude });
   setEditingPin(null);
+  setDropCoords(null);
+  setLongPressInfoExpanded(false);
+  const routeableFeature = segmentPayloadToLongPressFeature(coord.routeableFeature);
+  setLongPressContext(buildNavigateLongPressContext({
+    coordinate: { latitude, longitude },
+    routeableFeature,
+    hasGpsFix: !!safeUserLocation,
+    canBuildRoute:
+      roadNavigation.session.status === 'idle' ||
+      roadNavigation.session.status === 'cancelled',
+  }));
+}, [closeTopPopup, roadNavigation.session.status, safeUserLocation]);
+
+const handleLongPressDrawRoute = useCallback(() => {
+  if (!longPressContext || !longPressContext.actions.draw_route.enabled) return;
+  handleRouteBuilderAnchorTap(longPressContext.coordinate);
+}, [handleRouteBuilderAnchorTap, longPressContext]);
+
+const handleLongPressAddWaypoint = useCallback(() => {
+  if (!longPressContext) return;
+  hapticCommand();
+  setDropCoords({ lat: longPressContext.coordinate.latitude, lng: longPressContext.coordinate.longitude });
+  setEditingPin(null);
+  setLongPressContext(null);
+  setLongPressInfoExpanded(false);
   openTopPopup('pinEditor');
-}, [closeTopPopup, openTopPopup]);
+}, [longPressContext, openTopPopup]);
+
+const handleLongPressInfo = useCallback(() => {
+  hapticMicro();
+  setLongPressInfoExpanded((current) => !current);
+}, []);
+
+const handleLongPressNavigateHere = useCallback(() => {
+  if (!longPressContext || !longPressContext.actions.navigate_here.enabled) return;
+  hapticCommand();
+  const destination: RoadNavDestination = {
+    id: `long-press-${longPressContext.coordinate.latitude.toFixed(5)}-${longPressContext.coordinate.longitude.toFixed(5)}`,
+    title: longPressContext.routeableFeature?.name || 'Selected map point',
+    subtitle: longPressContext.routeableFeature?.sourceLabel || 'Long-pressed map point',
+    coordinate: {
+      lat: longPressContext.coordinate.latitude,
+      lng: longPressContext.coordinate.longitude,
+    },
+    sourceType: 'manual_selection',
+    raw: {
+      longPressContext,
+    },
+  };
+  setLongPressContext(null);
+  setLongPressInfoExpanded(false);
+  void previewRoadDestination(destination, 'manual_selection').then(() => {
+    startRoadNavigation();
+  });
+}, [longPressContext, previewRoadDestination, startRoadNavigation]);
 
   const handlePinTap = useCallback((pinPayload: any) => {
   hapticMicro();
@@ -9304,6 +9478,14 @@ const locateCampsitesForCompletedPolygon = useCallback(
 
 const handleDirectMapTapForPin = useCallback(
   async ({ latitude, longitude }: { latitude: number; longitude: number }) => {
+    if (routeBuilderActive) {
+      const coordinate = toNavigateRouteCoordinate({ latitude, longitude });
+      if (coordinate) {
+        handleRouteBuilderAnchorTap(coordinate);
+      }
+      return;
+    }
+
     if (campsiteDrawMode) {
       hapticMicro();
       const nextPoint = { latitude, longitude };
@@ -9399,6 +9581,8 @@ const handleDirectMapTapForPin = useCallback(
     campsiteDrawMode,
     campsiteDrawingClosed,
     campsiteDrawingPoints,
+    routeBuilderActive,
+    handleRouteBuilderAnchorTap,
     resetDrawAreaKnownCampsiteSources,
     pinDropMode,
     recommendCampsiteDropMode,
@@ -11108,6 +11292,73 @@ const handleCreateRun = useCallback(() => {
     validatedRunPoints,
   ]);
 
+  const navigateRouteProfileCoordinates = useMemo(
+    () =>
+      displayedRoutePoints
+        .map((point: any) => toNavigateRouteCoordinate(point))
+        .filter((point): point is NavigateRouteCoordinate => !!point),
+    [displayedRoutePoints],
+  );
+  const navigateRouteProfilePoints = useMemo(() => {
+    if (navigateRouteProfileCoordinates.length < 2) return [];
+    let cumulativeMiles = 0;
+    return navigateRouteProfileCoordinates
+      .map((coordinate, index) => {
+        const rawPoint: any = (displayedRoutePoints as any[])[index] ?? {};
+        if (index > 0) {
+          cumulativeMiles += getCampsiteDrawingDistanceMiles(
+            navigateRouteProfileCoordinates[index - 1],
+            coordinate,
+          );
+        }
+        const elevationFeet =
+          Number.isFinite(rawPoint.elevationFeet)
+            ? Number(rawPoint.elevationFeet)
+            : Number.isFinite(rawPoint.ele_m)
+              ? Number(rawPoint.ele_m) * 3.28084
+              : Number.isFinite(rawPoint.ele)
+                ? Number(rawPoint.ele) * 3.28084
+                : null;
+        if (!Number.isFinite(elevationFeet ?? NaN)) return null;
+        const previousRaw: any = (displayedRoutePoints as any[])[index - 1] ?? {};
+        const previousElevation =
+          index > 0
+            ? Number.isFinite(previousRaw.elevationFeet)
+              ? Number(previousRaw.elevationFeet)
+              : Number.isFinite(previousRaw.ele_m)
+                ? Number(previousRaw.ele_m) * 3.28084
+                : Number.isFinite(previousRaw.ele)
+                  ? Number(previousRaw.ele) * 3.28084
+                  : elevationFeet
+            : elevationFeet;
+        const gradeProxy = Math.abs(Number(elevationFeet) - Number(previousElevation));
+        const riskScore = Math.max(0, Math.min(100, Math.round(gradeProxy / 8)));
+        return {
+          distanceMiles: cumulativeMiles,
+          elevationFeet: Math.round(Number(elevationFeet)),
+          riskScore,
+          riskLevel: riskScore >= 67 ? 'high' : riskScore >= 34 ? 'moderate' : 'low',
+        };
+      })
+      .filter(Boolean);
+  }, [displayedRoutePoints, navigateRouteProfileCoordinates]);
+  const routeProfileFocus = useMemo(
+    () =>
+      resolveNavigateRouteProfileFocus({
+        profile: navigateRouteProfilePoints as any,
+        routeCoordinates: navigateRouteProfileCoordinates,
+        referenceEvents: [],
+        distanceRatio: routeProfileScrubRatio,
+      }),
+    [navigateRouteProfileCoordinates, navigateRouteProfilePoints, routeProfileScrubRatio],
+  );
+  const routeProfileAvailable = navigateRouteProfileCoordinates.length > 1;
+  const handleRouteProfileScrub = useCallback((event: any) => {
+    const locationX = Number(event?.nativeEvent?.locationX);
+    if (!Number.isFinite(locationX)) return;
+    setRouteProfileScrubRatio(Math.max(0, Math.min(1, locationX / Math.max(1, routeProfileScrubWidth))));
+  }, [routeProfileScrubWidth]);
+
   const routeAheadDisplayHeading = useMemo(() => {
     if (!safeUserLocation || routeLifecycleState.phase !== 'navigating') return null;
     return resolveRouteAheadBearingDeg(
@@ -12032,6 +12283,13 @@ const handleCreateRun = useCallback(() => {
     () => (routeGeometryOverlayEnabled ? routeGeometryOverlayBuild.segments : []),
     [routeGeometryOverlayBuild.segments, routeGeometryOverlayEnabled],
   );
+  const routeBuilderTraceableSegments = useMemo(
+    () => routeGeometryOverlayBuild.segments.map(routeGeometrySegmentToNavigateTraceableSegment),
+    [routeGeometryOverlayBuild.segments],
+  );
+  useEffect(() => {
+    routeBuilderTraceableSegmentsRef.current = routeBuilderTraceableSegments;
+  }, [routeBuilderTraceableSegments]);
   const routeGeometryOverlaySignature = useMemo(
     () =>
       routeGeometryOverlaySegments
@@ -15378,12 +15636,15 @@ const routeBuilderCanSave =
   !routeBuilderHasPendingSnap &&
   !routeBuilderHasBlockedSnap &&
   canSaveRouteBuilderSegments(routeBuilderSavableSegments as FinalizableRouteBuilderSegment[]);
-const routeBuilderCanUndo = routeBuilderSegments.some(
-  (segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1,
-);
+const routeBuilderCanUndo = routeBuilderDraft.anchors.length > 0;
 const routeBuilderHasRouteGeometrySegments = routeBuilderSavableSegments.some(
   (segment) => segment.buildSource?.kind === 'ecs_route_geometry',
 );
+const routeBuilderStartDisabledReason = !safeUserLocation
+  ? 'START NEEDS GPS'
+  : !routeBuilderCanSave
+    ? 'LINK POINTS FIRST'
+    : null;
 const routeBuilderCanPlanGeometry =
   routeBuilderCanSave && routeBuilderHasRouteGeometrySegments && selectedRouteGeometrySegmentIds.length > 0;
 const selectedRouteGeometryOverlaySegmentsForPlanning = useMemo(() => {
@@ -15898,59 +16159,6 @@ const toggleCampsiteDrawMode = useCallback(() => {
   startCampScoutDrawing,
 ]);
 
-const toggleRouteBuilder = useCallback(() => {
-  hapticCommand();
-  if (!routeBuilderActive && (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition)) {
-    showToast('END ACTIVE NAVIGATION TO BUILD A ROUTE');
-    return;
-  }
-  const nextRouteBuilderActive = !routeBuilderActive;
-
-  closeNavigateDetailSurfaces();
-  setToolsMenuOpen(false);
-  setActiveTopPopup(null);
-  setPinDropMode(false);
-  setCampsiteDrawMode(false);
-  if (nextRouteBuilderActive && !campsiteDrawingClosed) {
-    setCampScoutAreaMode('idle');
-    setCampsiteDrawingClosed(false);
-    setCampsiteDrawingPoints([]);
-    setRouteDesignContext(null);
-    campsitePolygonLocateRequestRef.current = null;
-    setCampsitePolygonLocateState('idle');
-    setCampsitePolygonLocateMessage(null);
-    resetDrawAreaKnownCampsiteSources();
-  } else if (!campsiteDrawingClosed) {
-    setRouteDesignContext(null);
-  }
-  setShowCrosshair(false);
-  setFollowUser(false);
-  setUserHasManuallyMovedMap(true);
-  setRouteBuilderActive(nextRouteBuilderActive);
-  if (!nextRouteBuilderActive) {
-    setDispersedRouteBuildActive(false);
-    setSelectedDispersedRouteLegIds([]);
-    setSelectedRouteGeometrySegmentIds([]);
-    setDispersedRouteBuildStatus(null);
-    setDispersedRouteBuildRenderKey((key) => key + 1);
-  }
-  setRouteBuilderDrawing(false);
-  setRouteBuilderSnapSource(null);
-  setRouteBuilderSnapStatus(null);
-  setRouteBuilderSnapMessage(null);
-  showToast(routeBuilderActive ? 'BUILD ROUTE PAUSED' : 'TRACE A TRAIL TO BUILD ROUTE');
-}, [
-  closeNavigateDetailSurfaces,
-  campsiteDrawingClosed,
-  campsitePolygonLocateRequestRef,
-  pendingHybridTrailTransition,
-  resetDrawAreaKnownCampsiteSources,
-  roadNavigationActive,
-  routeBuilderActive,
-  showToast,
-  trailNavigationActive,
-]);
-
 const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boolean; keepActive?: boolean }) => {
   if (!options?.keepActive) {
     setRouteBuilderActive(false);
@@ -15962,6 +16170,10 @@ const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boole
   setRouteBuilderSnapStatus(null);
   setRouteBuilderSnapMessage(null);
   setRouteBuilderSegments([]);
+  setRouteBuilderDraft(createNavigateRouteDraft());
+  setRouteBuilderSaveVisible(false);
+  setRouteBuilderSaveName('');
+  setRouteBuilderSaveNote('');
   routeBuilderFinalSnapInFlightRef.current.clear();
   setSelectedDispersedRouteLegIds([]);
   setSelectedRouteGeometrySegmentIds([]);
@@ -16022,7 +16234,7 @@ const startDispersedRouteSegmentBuild = useCallback(() => {
   );
   setDispersedRouteBuildRenderKey((key) => key + 1);
   setDispersedRouteBuildStatus(
-    'Tap yellow route legs or draw a trace. Planning geometry - verify locally before travel or camping.',
+    'Tap yellow route legs or use dropped route points. Planning geometry - verify locally before travel or camping.',
   );
   showToast('TAP YELLOW LEGS OR TRACE ROUTE');
 }, [
@@ -16134,32 +16346,42 @@ const clearStagedBuildRoutePreview = useCallback(() => {
 const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
   stage?: boolean;
   autoStart?: boolean;
+  name?: string | null;
   sourceApp?: string | null;
   externalSourceType?: string | null;
   description?: string | null;
   routeGeometryStartEndpoint?: RouteGeometryPlanningEndpoint | null;
+  segmentsOverride?: RouteBuilderSegmentData[] | null;
 }) => {
-  if (routeBuilderSavableSegments.length === 0 || routeBuilderPointCount < 2) {
-    showToast('TRACE AT LEAST TWO POINTS TO SAVE');
+  const segmentsForSave = options?.segmentsOverride?.length
+    ? options.segmentsOverride
+    : routeBuilderSavableSegments;
+  const pointCountForSave = segmentsForSave.reduce(
+    (count, segment) => count + (Array.isArray(segment.coordinates) ? segment.coordinates.length : 0),
+    0,
+  );
+  if (segmentsForSave.length === 0 || pointCountForSave < 2) {
+    showToast('DROP AT LEAST TWO LINKED POINTS TO SAVE');
     return null;
   }
-  if (!routeBuilderCanSave) {
+  const canSaveSegments = canSaveRouteBuilderSegments(segmentsForSave as FinalizableRouteBuilderSegment[]);
+  if (!canSaveSegments) {
     showToast(
       routeBuilderHasPendingSnap
         ? 'WAIT FOR ROUTE SNAP VERIFICATION'
-        : 'UNVERIFIED ROUTE SEGMENT NEEDS REVIEW',
+        : 'UNVERIFIED ROUTE LEG NEEDS REVIEW',
     );
     return null;
   }
 
   try {
-    const hasDispersedSegmentBuild = routeBuilderSavableSegments.some(
+    const hasDispersedSegmentBuild = segmentsForSave.some(
       (segment) => segment.buildSource?.kind === 'dispersed_route_leg',
     );
-    const hasRouteGeometrySegmentBuild = routeBuilderSavableSegments.some(
+    const hasRouteGeometrySegmentBuild = segmentsForSave.some(
       (segment) => segment.buildSource?.kind === 'ecs_route_geometry',
     );
-    const customRouteSegments = routeBuilderSavableSegments.map((segment) => ({
+    const customRouteSegments = segmentsForSave.map((segment) => ({
       coordinates: segment.coordinates,
       source_metadata: sourceMetadataForRouteBuilderSegment(segment),
     }));
@@ -16171,6 +16393,7 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
           ? `kind: 'route_geometry_overlay'. ${ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING}`
           : undefined);
     const savedRoute = routeStore.createCustomRoute(customRouteSegments, {
+      name: options?.name ?? undefined,
       description: savedRouteDescription,
       sourceApp: options?.sourceApp ?? (hasRouteGeometrySegmentBuild ? 'ecs_route_geometry_overlay' : undefined),
       externalSourceType:
@@ -16226,31 +16449,94 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
   endTrailNavigation,
   loadRuns,
   resetBuildRouteDraft,
-  routeBuilderCanSave,
   routeBuilderHasPendingSnap,
-  routeBuilderPointCount,
   routeBuilderSavableSegments,
   showToast,
 ]);
 
 const finishRouteBuilder = useCallback(async () => {
   hapticCommand();
-  await saveVerifiedRouteBuilderDraft();
-}, [saveVerifiedRouteBuilderDraft]);
+  if (!routeBuilderCanSave) {
+    showToast('DROP AT LEAST TWO LINKED POINTS TO SAVE');
+    return;
+  }
+  setRouteBuilderSaveName(`ECS Route ${String(new Date().getMonth() + 1).padStart(2, '0')}/${String(new Date().getDate()).padStart(2, '0')}`);
+  setRouteBuilderSaveNote('');
+  setRouteBuilderSaveVisible(true);
+}, [routeBuilderCanSave, showToast]);
+
+const handleCommitRouteBuilderSave = useCallback(async () => {
+  const name = routeBuilderSaveName.trim();
+  const note = routeBuilderSaveNote.trim();
+  const description = note
+    ? `kind: 'pin_to_pin_anchor_trace'. NOTE: ${note}`
+    : "kind: 'pin_to_pin_anchor_trace'. Built from dropped route anchors.";
+  const result = await saveVerifiedRouteBuilderDraft({
+    name: name || null,
+    description,
+    sourceApp: 'ecs_anchor_route_builder',
+    externalSourceType: 'pin_to_pin_anchor_trace',
+  });
+  if (!result) return;
+  setRouteBuilderSaveVisible(false);
+  setRouteBuilderSaveName('');
+  setRouteBuilderSaveNote('');
+}, [routeBuilderSaveName, routeBuilderSaveNote, saveVerifiedRouteBuilderDraft]);
 
 const routeToRouteBuilder = useCallback(async () => {
   hapticCommand();
+  const origin = safeUserLocation
+    ? { latitude: safeUserLocation.lat, longitude: safeUserLocation.lng }
+    : null;
+  if (!origin) {
+    showToast('START NEEDS GPS');
+    return;
+  }
+  const startPlan = buildRouteFromNearestAnchor(routeBuilderDraft, origin);
+  const entryAnchor = resolveNearestNavigateRouteAnchor(routeBuilderDraft, origin);
+  const startCoordinates = startPlan.coordinates.map((point) => [point.longitude, point.latitude] as [number, number]);
+  const startSegments: RouteBuilderSegmentData[] | null = startCoordinates.length > 1
+    ? [{
+        id: 'route-builder-nearest-anchor-start',
+        coordinates: startCoordinates,
+        rawSegment: startCoordinates,
+        snappedSegment: startCoordinates,
+        snapConfidence: 'medium',
+        snapSource: 'nearest_anchor_trace',
+        snapStatus: 'snapped' as const,
+        snapProvider: 'ecs_route_geometry' as const,
+        snapProfile: null,
+        snapMessage: `Starting from nearest dropped anchor ${entryAnchor?.label ?? ''}.`,
+        sourceSegmentId: entryAnchor?.id ?? null,
+        buildSource: {
+          kind: 'ecs_route_geometry',
+          sourceLabel: 'Nearest dropped route anchor',
+          confidence: 'planning_geometry',
+        },
+      }]
+    : null;
   await saveVerifiedRouteBuilderDraft({
     stage: true,
     autoStart: true,
-    routeGeometryStartEndpoint: routeBuilderHasRouteGeometrySegments
-      ? routeGeometryNearestPlanningEndpoint
+    name: 'Route To Drawn Route',
+    sourceApp: 'ecs_anchor_route_builder',
+    externalSourceType: 'pin_to_pin_anchor_trace',
+    description: "kind: 'pin_to_pin_anchor_trace_start'. Starts from current GPS to the nearest dropped route anchor.",
+    segmentsOverride: startSegments,
+    routeGeometryStartEndpoint: entryAnchor
+      ? {
+          latitude: entryAnchor.coordinate.latitude,
+          longitude: entryAnchor.coordinate.longitude,
+          segmentId: entryAnchor.id,
+          distanceMiles: 0,
+        }
       : null,
   });
 }, [
-  routeBuilderHasRouteGeometrySegments,
-  routeGeometryNearestPlanningEndpoint,
+  routeBuilderDraft,
+  safeUserLocation,
   saveVerifiedRouteBuilderDraft,
+  showToast,
 ]);
 
 const handlePlanRouteBuilderDraft = useCallback(async () => {
@@ -16339,68 +16625,35 @@ const handlePlanRouteBuilderDraft = useCallback(async () => {
 
 const undoLastRouteBuilderSegment = useCallback(() => {
   hapticCommand();
-  if (routeBuilderDrawing) {
-    showToast('LIFT FINGER TO UNDO');
-    return;
-  }
   if (!routeBuilderCanUndo) {
-    showToast('NO BUILD SEGMENT TO UNDO');
+    showToast('NO ROUTE POINT TO UNDO');
     return;
   }
-
-  const lastDrawableIndex = [...routeBuilderSegments]
-    .reverse()
-    .findIndex((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1);
-  if (lastDrawableIndex === -1) {
-    showToast('NO BUILD SEGMENT TO UNDO');
-    return;
-  }
-  const removeIndex = routeBuilderSegments.length - 1 - lastDrawableIndex;
-  const nextSegments = routeBuilderSegments.filter((_, index) => index !== removeIndex);
-  const previousEndpointSegment = [...nextSegments]
-    .reverse()
-    .find((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1);
-
-  setRouteBuilderSegments(nextSegments);
-  syncSelectedDispersedRouteLegIds(nextSegments);
-  syncSelectedRouteGeometrySegmentIds(nextSegments);
-  setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);
-  setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
-  setRouteBuilderSnapMessage(previousEndpointSegment?.snapMessage ?? null);
-  showToast('LAST BUILD SEGMENT UNDONE');
+  const nextDraft = undoLastNavigateRouteAnchor(routeBuilderDraft);
+  applyRouteBuilderDraft(nextDraft);
+  showToast('LAST ROUTE POINT UNDONE');
 }, [
+  applyRouteBuilderDraft,
   routeBuilderCanUndo,
-  routeBuilderDrawing,
-  routeBuilderSegments,
+  routeBuilderDraft,
   showToast,
-  syncSelectedDispersedRouteLegIds,
-  syncSelectedRouteGeometrySegmentIds,
 ]);
 
 const clearRouteBuilderDraft = useCallback(() => {
   hapticCommand();
-  if (routeBuilderDrawing) {
-    showToast('LIFT FINGER TO CLEAR');
-    return;
-  }
-  resetBuildRouteDraft({ keepActive: true });
-  showToast('BUILD ROUTE DRAFT CLEARED');
-}, [resetBuildRouteDraft, routeBuilderDrawing, showToast]);
+  const nextDraft = clearNavigateRouteDraft(routeBuilderDraft);
+  applyRouteBuilderDraft(nextDraft);
+  showToast('ROUTE DRAFT CLEARED');
+}, [applyRouteBuilderDraft, routeBuilderDraft, showToast]);
 
 const cancelRouteBuilder = useCallback(() => {
   hapticCommand();
   resetBuildRouteDraft({ clearDesignContext: true });
   clearStagedBuildRoutePreview();
-  showToast('BUILD ROUTE CANCELLED');
+  setLongPressContext(null);
+  setLongPressInfoExpanded(false);
+  showToast('ROUTE BUILDER CLOSED');
 }, [clearStagedBuildRoutePreview, resetBuildRouteDraft, showToast]);
-
-const handleRouteBuilderTriggerPress = useCallback(() => {
-  if (routeBuilderActive) {
-    cancelRouteBuilder();
-    return;
-  }
-  toggleRouteBuilder();
-}, [cancelRouteBuilder, routeBuilderActive, toggleRouteBuilder]);
 
 const ensureSavedRouteAssetRun = useCallback((asset: SavedRouteAsset): ECSRun | null => {
   if (asset.runId) {
@@ -17864,8 +18117,11 @@ const stableMapSurface = useMemo(() => {
         cameraCommand={mapCameraCommand}
         cameraCommandTrigger={mapCameraCommandTrigger}
         routeBuilderActive={routeBuilderActive}
+        routeBuilderMode="anchor_trace"
         routeBuilderSegments={routeBuilderSegments}
+        routeBuilderAnchors={routeBuilderDraft.anchors}
         routeBuilderColor="#65F0D4"
+        routeProfileFocusCoordinate={routeProfileFocus?.coordinate ?? null}
         selectedRouteGeometrySegmentIds={selectedRouteGeometrySegmentIds}
         onRouteBuilderUpdate={handleRouteBuilderUpdate}
         onRouteBuilderGestureStateChange={handleRouteBuilderGestureStateChange}
@@ -17877,6 +18133,114 @@ const stableMapSurface = useMemo(() => {
           closed: campsiteDrawingClosed,
         }}
       />
+
+      {longPressContext ? (
+        <View style={[styles.longPressActionMenu, { left: OVERLAY_EDGE, right: OVERLAY_EDGE }]}>
+          <View style={styles.longPressActionHeader}>
+            <View>
+              <Text style={styles.longPressActionTitle}>MAP POINT</Text>
+              <Text style={styles.longPressActionSubtitle} numberOfLines={1}>
+                {longPressContext.coordinate.latitude.toFixed(5)}, {longPressContext.coordinate.longitude.toFixed(5)}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.longPressCloseButton}
+              onPress={() => {
+                setLongPressContext(null);
+                setLongPressInfoExpanded(false);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Close map point actions"
+            >
+              <Ionicons name="close" size={16} color={TACTICAL.textMuted} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.longPressActionRow}>
+            <TouchableOpacity
+              style={[styles.longPressActionButton, !longPressContext.actions.draw_route.enabled && styles.longPressActionButtonDisabled]}
+              onPress={handleLongPressDrawRoute}
+              disabled={!longPressContext.actions.draw_route.enabled}
+              accessibilityRole="button"
+              accessibilityLabel="Draw route from map point"
+            >
+              <Ionicons name="git-branch-outline" size={15} color={TACTICAL.amber} />
+              <Text style={styles.longPressActionText}>DRAW ROUTE</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.longPressActionButton}
+              onPress={handleLongPressAddWaypoint}
+              accessibilityRole="button"
+              accessibilityLabel="Add waypoint at map point"
+            >
+              <Ionicons name="pin-outline" size={15} color={TACTICAL.amber} />
+              <Text style={styles.longPressActionText}>ADD WAYPOINT</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.longPressActionButton}
+              onPress={handleLongPressInfo}
+              accessibilityRole="button"
+              accessibilityLabel="Show map point info"
+            >
+              <Ionicons name="information-circle-outline" size={15} color={TACTICAL.amber} />
+              <Text style={styles.longPressActionText}>INFO</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.longPressActionButton,
+                !longPressContext.actions.navigate_here.enabled && styles.longPressActionButtonDisabled,
+              ]}
+              onPress={handleLongPressNavigateHere}
+              disabled={!longPressContext.actions.navigate_here.enabled}
+              accessibilityRole="button"
+              accessibilityLabel="Navigate here"
+            >
+              <Ionicons name="navigate-outline" size={15} color={TACTICAL.amber} />
+              <Text style={styles.longPressActionText}>NAVIGATE HERE</Text>
+            </TouchableOpacity>
+          </View>
+          {longPressInfoExpanded ? (
+            <View style={styles.longPressInfoRows}>
+              {longPressContext.infoRows.slice(0, 6).map((row) => (
+                <View key={`${row.label}:${row.value}`} style={styles.longPressInfoRow}>
+                  <Text style={styles.longPressInfoLabel}>{row.label}</Text>
+                  <Text style={styles.longPressInfoValue} numberOfLines={2}>{row.value}</Text>
+                </View>
+              ))}
+              {!longPressContext.actions.navigate_here.enabled ? (
+                <Text style={styles.longPressDisabledReason} numberOfLines={2}>
+                  {longPressContext.actions.navigate_here.disabledReason}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {routeProfileAvailable ? (
+        <View style={[styles.navigateRouteProfileScrubber, { left: OVERLAY_EDGE, right: OVERLAY_EDGE }]}>
+          <View style={styles.navigateRouteProfileHeader}>
+            <Text style={styles.navigateRouteProfileTitle}>ELEVATION PROFILE</Text>
+            <Text style={styles.navigateRouteProfileMeta} numberOfLines={1}>
+              {routeProfileFocus
+                ? `${routeProfileFocus.distanceMiles.toFixed(1)} mi | ${routeProfileFocus.point.riskLevel.toUpperCase()} TERRAIN RISK`
+                : navigateRouteProfilePoints.length > 0
+                  ? 'Drag profile to inspect route point'
+                  : 'TERRAIN PROFILE UNAVAILABLE'}
+            </Text>
+          </View>
+          <View
+            style={styles.navigateRouteProfileTrack}
+            onLayout={(event) => setRouteProfileScrubWidth(Math.max(1, event.nativeEvent.layout.width))}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderGrant={handleRouteProfileScrub}
+            onResponderMove={handleRouteProfileScrub}
+          >
+            <View style={[styles.navigateRouteProfileFill, { width: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%` }]} />
+            <View style={[styles.navigateRouteProfileThumb, { left: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%` }]} />
+          </View>
+        </View>
+      ) : null}
 
       {idleDestinationSearchVisible ? (
         <View
@@ -18890,11 +19254,7 @@ const stableMapSurface = useMemo(() => {
             <View style={styles.routeBuilderStatusHeader}>
               <View style={styles.routeBuilderStatusTextWrap}>
                 <Text style={styles.routeBuilderStatusTitle}>
-                  {selectedRouteGeometrySegmentIds.length > 0
-                    ? 'ROUTE GEOMETRY'
-                    : routeBuilderDrawing
-                      ? 'DRAWING ROUTE'
-                      : 'DRAW ROUTE'}
+                  DRAW ROUTE
                 </Text>
                 <Text style={styles.routeBuilderStatusHint} numberOfLines={1}>
                   {routeBuilderSnapSource === 'snapping'
@@ -18902,24 +19262,14 @@ const stableMapSurface = useMemo(() => {
                     : routeBuilderHasPendingSnap || routeBuilderSnapStatus === 'network_pending'
                       ? routeBuilderSnapMessage ?? 'Verifying route snap...'
                     : routeBuilderHasBlockedSnap || routeBuilderSnapStatus === 'blocked'
-                      ? routeBuilderSnapMessage ?? 'Unverified segment - undo and redraw'
+                      ? routeBuilderSnapMessage ?? 'No loaded route geometry between these points'
                     : dispersedRouteBuildActive && dispersedRouteBuildStatus
                       ? dispersedRouteBuildStatus
-                    : selectedRouteGeometrySegmentIds.length > 0
-                      ? `${selectedRouteGeometrySegmentIds.length} ECS geometry segments selected - planning/reference geometry`
-                    : routeBuilderSnapStatus === 'raw_smoothed' || routeBuilderSnapStatus === 'ambiguous'
-                      ? routeBuilderSnapMessage ?? 'Raw kept - undo and retry if needed'
-                      : routeBuilderSnapStatus === 'too_short'
-                        ? routeBuilderSnapMessage ?? 'Segment too short - draw longer'
-                        : routeBuilderPointCount > 1
-                    ? `${routeBuilderSavableSegments.length} seg${routeBuilderSavableSegments.length === 1 ? '' : 's'} - ${
-                        routeBuilderSnapSource && routeBuilderSnapSource !== 'free'
-                          ? 'snapped path'
-                          : 'visible geometry'
-                      }`
-                    : routeDesignContext?.source === 'polygon'
-                      ? 'Draw through campsite area. Polygon stays visible.'
-                      : 'Trace a trail. Pinch zoom stays active.'}
+                    : routeBuilderDraft.anchors.length > 1
+                    ? `${routeBuilderDraft.anchors.length} points - ${routeBuilderSavableSegments.length} snapped leg${routeBuilderSavableSegments.length === 1 ? '' : 's'}`
+                    : routeBuilderDraft.anchors.length === 1
+                      ? 'Point A set. Tap the next point on the trail.'
+                      : 'Long-press the map, choose Draw Route, then drop point A.'}
                 </Text>
               </View>
             </View>
@@ -18933,7 +19283,7 @@ const stableMapSurface = useMemo(() => {
                 disabled={!routeBuilderCanUndo}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel="Undo last Build Route segment"
+                accessibilityLabel="Undo last Build Route point"
               >
                 <Text
                   style={[
@@ -18949,7 +19299,7 @@ const stableMapSurface = useMemo(() => {
                 onPress={clearRouteBuilderDraft}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel="Clear all Build Route segments"
+                accessibilityLabel="Clear all Build Route points"
               >
                 <Text style={styles.routeBuilderStatusActionText}>CLEAR ALL</Text>
               </TouchableOpacity>
@@ -18972,29 +19322,29 @@ const stableMapSurface = useMemo(() => {
                     !routeBuilderCanSave && styles.routeBuilderStatusActionTextDisabled,
                   ]}
                 >
-                  SAVE
+                  SAVE ROUTE
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
                   styles.routeBuilderStatusAction,
-                  !routeBuilderCanSave && styles.routeBuilderStatusActionDisabled,
+                  !!routeBuilderStartDisabledReason && styles.routeBuilderStatusActionDisabled,
                 ]}
                 onPress={() => {
                   void routeToRouteBuilder();
                 }}
-                disabled={!routeBuilderCanSave}
+                disabled={!!routeBuilderStartDisabledReason}
                 activeOpacity={0.82}
                 accessibilityRole="button"
-                accessibilityLabel="Route to Build Route"
+                accessibilityLabel="Start Build Route"
               >
                 <Text
                   style={[
                     styles.routeBuilderStatusActionText,
-                    !routeBuilderCanSave && styles.routeBuilderStatusActionTextDisabled,
+                    !!routeBuilderStartDisabledReason && styles.routeBuilderStatusActionTextDisabled,
                   ]}
                 >
-                  ROUTE TO
+                  {routeBuilderStartDisabledReason ?? 'START'}
                 </Text>
               </TouchableOpacity>
               {selectedRouteGeometrySegmentIds.length > 0 ? (
@@ -19063,6 +19413,12 @@ const stableMapSurface = useMemo(() => {
   filteredPinMarkers,
   showCrosshair,
   handleLongPress,
+  handleLongPressAddWaypoint,
+  handleLongPressDrawRoute,
+  handleLongPressInfo,
+  handleLongPressNavigateHere,
+  longPressContext,
+  longPressInfoExpanded,
   handlePinTap,
   handleMapSegmentTap,
   handleCampIntelTap,
@@ -19230,10 +19586,14 @@ const stableMapSurface = useMemo(() => {
   navigationActiveContext,
   trailNavigationActive,
   routeBuilderActive,
-  routeBuilderDrawing,
   selectedRouteGeometrySegmentIds,
-  routeBuilderPointCount,
   routeBuilderSegments,
+  routeBuilderDraft.anchors,
+  routeProfileAvailable,
+  routeProfileFocus,
+  routeProfileScrubRatio,
+  navigateRouteProfilePoints.length,
+  handleRouteProfileScrub,
   routeBuilderSnapSource,
   routeBuilderSnapStatus,
   routeBuilderSnapMessage,
@@ -19242,8 +19602,8 @@ const stableMapSurface = useMemo(() => {
   routeBuilderSavableSegments.length,
   routeBuilderHasPendingSnap,
   routeBuilderHasBlockedSnap,
-  routeDesignContext,
   routeBuilderCanSave,
+  routeBuilderStartDisabledReason,
   routeBuilderCanPlanGeometry,
   routeBuilderCanUndo,
   finishRouteBuilder,
@@ -20267,17 +20627,6 @@ const stableMapSurface = useMemo(() => {
               hideChevron
               onPress={handleOpenStitch}
               accessibilityLabel="Stitch routes"
-              style={styles.toolsDenseActionCard}
-            />
-
-            <NavigateToolActionCard
-              title={routeBuilderActive ? 'EXIT BUILD' : 'BUILD ROUTE'}
-              icon={routeBuilderActive ? 'close' : 'map-outline'}
-              active={routeBuilderActive}
-              compact
-              hideChevron
-              onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}
-              accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}
               style={styles.toolsDenseActionCard}
             />
 
@@ -21461,15 +21810,6 @@ const stableMapSurface = useMemo(() => {
             }}
             accessibilityLabel="Record trail for route recommendation"
           />
-
-          <NavigateToolActionCard
-            title={routeBuilderActive ? 'Exit Build Route' : 'Build Route On Map'}
-            subtitle={routeBuilderActive ? 'Leave map drawing mode before choosing another route source.' : 'Draw a custom route directly on the Navigate map.'}
-            icon={routeBuilderActive ? 'close' : 'map-outline'}
-            active={routeBuilderActive}
-            onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}
-            accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}
-          />
         </NavigateToolSection>
 
         <NavigateToolSection
@@ -22076,6 +22416,70 @@ const stableMapSurface = useMemo(() => {
 
 {/* TILT ALERT DETAIL MODAL */}
 </View>
+<Modal
+  visible={routeBuilderSaveVisible}
+  transparent
+  animationType="fade"
+  onRequestClose={() => setRouteBuilderSaveVisible(false)}
+>
+  <View style={styles.routeBuilderSaveBackdrop}>
+    <View style={styles.routeBuilderSaveCard}>
+      <View style={styles.routeBuilderSaveHeader}>
+        <View>
+          <Text style={styles.routeBuilderSaveTitle}>SAVE ROUTE</Text>
+          <Text style={styles.routeBuilderSaveSubtitle}>
+            Name this pin-to-pin route for Route Command Center.
+          </Text>
+        </View>
+        <TouchableOpacity
+          style={styles.longPressCloseButton}
+          onPress={() => setRouteBuilderSaveVisible(false)}
+          accessibilityRole="button"
+          accessibilityLabel="Close save route"
+        >
+          <Ionicons name="close" size={16} color={TACTICAL.textMuted} />
+        </TouchableOpacity>
+      </View>
+      <Text style={styles.routeBuilderSaveLabel}>ROUTE NAME</Text>
+      <TextInput
+        value={routeBuilderSaveName}
+        onChangeText={setRouteBuilderSaveName}
+        placeholder="Route name"
+        placeholderTextColor={TACTICAL.textMuted}
+        style={styles.routeBuilderSaveInput}
+      />
+      <Text style={styles.routeBuilderSaveLabel}>NOTE</Text>
+      <TextInput
+        value={routeBuilderSaveNote}
+        onChangeText={setRouteBuilderSaveNote}
+        placeholder="Optional field note"
+        placeholderTextColor={TACTICAL.textMuted}
+        style={[styles.routeBuilderSaveInput, styles.routeBuilderSaveNoteInput]}
+        multiline
+      />
+      <View style={styles.routeBuilderSaveActions}>
+        <TouchableOpacity
+          style={styles.routeBuilderSaveSecondary}
+          onPress={() => setRouteBuilderSaveVisible(false)}
+          accessibilityRole="button"
+          accessibilityLabel="Cancel save route"
+        >
+          <Text style={styles.routeBuilderSaveSecondaryText}>CANCEL</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.routeBuilderSavePrimary}
+          onPress={() => {
+            void handleCommitRouteBuilderSave();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Save route"
+        >
+          <Text style={styles.routeBuilderSavePrimaryText}>SAVE ROUTE</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </View>
+</Modal>
 <TrailPackSubmissionModal
   visible={!!trailPackSubmissionRoute}
   routeInput={trailPackSubmissionRoute}
@@ -22338,6 +22742,252 @@ emptyMapBody: {
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
     backgroundColor: 'rgba(255,255,255,0.035)',
+  },
+  longPressActionMenu: {
+    position: 'absolute',
+    bottom: 118,
+    zIndex: NAV_OVERLAY_Z.contextual + 2,
+    elevation: NAV_OVERLAY_Z.contextual + 2,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.26)',
+    backgroundColor: 'rgba(8,12,15,0.96)',
+    padding: 10,
+    gap: 8,
+  },
+  longPressActionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  longPressActionTitle: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 9,
+    letterSpacing: 1.2,
+  },
+  longPressActionSubtitle: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    marginTop: 2,
+  },
+  longPressCloseButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.035)',
+  },
+  longPressActionRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  longPressActionButton: {
+    minHeight: 34,
+    flexGrow: 1,
+    flexBasis: 126,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    backgroundColor: 'rgba(196,138,44,0.10)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 9,
+  },
+  longPressActionButtonDisabled: {
+    opacity: 0.42,
+  },
+  longPressActionText: {
+    ...TYPO.U2,
+    color: TACTICAL.text,
+    fontSize: 8,
+    letterSpacing: 0.8,
+  },
+  longPressInfoRows: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(196,138,44,0.14)',
+    paddingTop: 8,
+    gap: 5,
+  },
+  longPressInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  longPressInfoLabel: {
+    ...TYPO.U2,
+    width: 74,
+    color: TACTICAL.textMuted,
+    fontSize: 7.5,
+    letterSpacing: 0.8,
+  },
+  longPressInfoValue: {
+    ...TYPO.B2,
+    flex: 1,
+    color: TACTICAL.text,
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  longPressDisabledReason: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  navigateRouteProfileScrubber: {
+    position: 'absolute',
+    bottom: 52,
+    zIndex: NAV_OVERLAY_Z.contextual + 1,
+    elevation: NAV_OVERLAY_Z.contextual + 1,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(101,240,212,0.20)',
+    backgroundColor: 'rgba(8,12,15,0.90)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 7,
+  },
+  navigateRouteProfileHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  navigateRouteProfileTitle: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 8,
+    letterSpacing: 1,
+  },
+  navigateRouteProfileMeta: {
+    ...TYPO.B2,
+    flexShrink: 1,
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+  },
+  navigateRouteProfileTrack: {
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  navigateRouteProfileFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(242,194,77,0.28)',
+  },
+  navigateRouteProfileThumb: {
+    position: 'absolute',
+    top: -2,
+    width: 4,
+    height: 22,
+    marginLeft: -2,
+    borderRadius: 2,
+    backgroundColor: TACTICAL.amber,
+  },
+  routeBuilderSaveBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  routeBuilderSaveCard: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.28)',
+    backgroundColor: 'rgba(8,12,15,0.98)',
+    padding: 14,
+    gap: 9,
+  },
+  routeBuilderSaveHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  routeBuilderSaveTitle: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 10,
+    letterSpacing: 1.4,
+  },
+  routeBuilderSaveSubtitle: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 2,
+  },
+  routeBuilderSaveLabel: {
+    ...TYPO.U2,
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    letterSpacing: 0.8,
+  },
+  routeBuilderSaveInput: {
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    color: TACTICAL.text,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 12,
+  },
+  routeBuilderSaveNoteInput: {
+    minHeight: 72,
+    textAlignVertical: 'top',
+  },
+  routeBuilderSaveActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 4,
+  },
+  routeBuilderSaveSecondary: {
+    minHeight: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  routeBuilderSaveSecondaryText: {
+    ...TYPO.U2,
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    letterSpacing: 0.8,
+  },
+  routeBuilderSavePrimary: {
+    minHeight: 34,
+    borderRadius: 8,
+    backgroundColor: TACTICAL.amber,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  routeBuilderSavePrimaryText: {
+    ...TYPO.U2,
+    color: '#091014',
+    fontSize: 8,
+    letterSpacing: 0.8,
   },
   // -- Floating Map Overlays ---------------------------------
 floatingPill: {

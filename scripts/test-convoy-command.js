@@ -282,9 +282,9 @@ assert(
   'Dispatch Convoy Command should support a feed-only presentation for the lower CAD feed surface.',
 );
 assert(
-  dispatchCommandCenterSource.includes('DispatchConvoyTeamSetupCard') &&
-    dispatchCommandCenterSource.includes('dispatch-convoy-team-setup-card') &&
-    dispatchCommandCenterSource.includes('CONVOY SETUP / TEAM') &&
+  !dispatchCommandCenterSource.includes('DispatchConvoyTeamSetupCard') &&
+    !dispatchCommandCenterSource.includes('dispatch-convoy-team-setup-card') &&
+    !dispatchCommandCenterSource.includes('CONVOY SETUP / TEAM') &&
     dispatchCommandCenterSource.includes('End Convoy') &&
     dispatchCommandCenterSource.includes('Leave Convoy') &&
     dispatchCommandCenterSource.includes('handleConvoyLifecycleAction') &&
@@ -292,7 +292,8 @@ assert(
     dispatchCommandCenterSource.includes('convoyMembershipService.leaveConvoy') &&
     dispatchCommandCenterSource.includes('renderLiveStrip(false)') &&
     dispatchCommandCenterSource.includes('styles.feedPanel') &&
-    dispatchCommandCenterSource.includes('COMMAND SURFACE') &&
+    !dispatchCommandCenterSource.includes('COMMAND SURFACE') &&
+    !dispatchCommandCenterSource.includes('styles.feedHeader') &&
     !dispatchCommandCenterSource.includes('RIVE COMMAND SURFACE') &&
     dispatchCommandCenterSource.includes('emergencyPingButtonAccessibilityLabel') &&
     dispatchCommandCenterSource.includes('Cancel') &&
@@ -303,18 +304,21 @@ assert(
     dispatchCommandCenterSource.includes('await loadConvoyLifecycleControl()') &&
     dispatchCommandCenterSource.includes('convoyLifecycleRevision={convoyLifecycleRevision}') &&
     dispatchCommandCenterSource.includes("presentation={isLandscapeDispatch ? 'map' : 'feed'}"),
-  'Dispatch CAD screen should keep convoy/team setup, compact header actions, convoy lifecycle controls, SYNC DISPATCH reconciliation, and a larger middle Convoy Command surface.',
+  'Dispatch CAD screen should remove the redundant setup/team card and command-surface banner while keeping compact header actions, convoy lifecycle controls, emergency ping wiring, SYNC DISPATCH reconciliation, and the larger Convoy Command surface.',
 );
 assert(
   dispatchCommandCenterSource.includes('const hasDispatchConvoyContext = Boolean(activeConvoyControl?.convoyId)') &&
     dispatchCommandCenterSource.includes('const dispatchTeamStatusLabel = hasDispatchConvoyContext') &&
     dispatchCommandCenterSource.includes('const dispatchTeamMemberCount = hasActiveTeam') &&
-    dispatchCommandCenterSource.includes('activeConvoyName={activeConvoyControl?.convoyName ?? null}') &&
-    dispatchCommandCenterSource.includes('activeConvoyMemberCount={activeConvoyControl?.memberUserIds.length ?? 0}') &&
-    dispatchCommandCenterSource.includes("hasDispatchConvoyContext ? 'Active convoy roster' : teamStatusLabel") &&
-    dispatchCommandCenterSource.includes("hasActiveConvoy ? activeConvoyName ?? 'Active convoy'") &&
-    dispatchCommandCenterSource.includes("hasActiveConvoy ? 'Active convoy'"),
-  'Dispatch top team card should use active Convoy context for copy so it does not show no-active-team while an active convoy is visible.',
+    dispatchCommandCenterSource.includes("hasDispatchConvoyContext ? activeConvoyControl?.convoyName ?? 'Active convoy' : teamStatusLabel") &&
+    !dispatchCommandCenterSource.includes("hasDispatchConvoyContext ? 'Active convoy roster' : teamStatusLabel") &&
+    !dispatchCommandCenterSource.includes('Active convoy roster') &&
+    !dispatchCommandCenterSource.includes('>DISPATCH</Text>') &&
+    !dispatchCommandCenterSource.includes('styles.headerCopy') &&
+    dispatchPanelSource.includes('const hasActiveConvoy = Boolean(activeContext?.convoyId)') &&
+    dispatchPanelSource.includes('activeContext?.convoyId') &&
+    dispatchPanelSource.includes('Tracking disabled. Active convoy roster is available.'),
+  'Dispatch header should center actions without the Dispatch/active-roster text while panel copy still uses active Convoy context.',
 );
 assert(
   !dispatchCommandCenterSource.includes('<DispatchReadinessContextCard />') &&

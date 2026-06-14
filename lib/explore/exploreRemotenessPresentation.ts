@@ -2,6 +2,7 @@ import type { ExpeditionOpportunity } from '../discoverEngine';
 import type { RouteConfidenceResult } from '../routeConfidencePresentation';
 import type { ECSConfidenceResult } from '../ai/confidenceTypes';
 import type { AIRouteConfidence } from '../aiRouteTypes';
+import { deriveExploreLiveConfidence } from './exploreLiveConfidence';
 
 type ExploreRemotenessRoute = Partial<ExpeditionOpportunity> & {
   recommendationConfidence?: ECSConfidenceResult;
@@ -38,18 +39,8 @@ export function getExploreRouteConfidencePercent(
   route: ExploreRemotenessRoute,
   routeConfidence?: RouteConfidenceResult | null,
 ): number {
-  const explicitScore = finiteNumber(route.recommendationConfidence?.score);
-  if (explicitScore != null) return Math.round(Math.max(0, Math.min(100, explicitScore)));
-
-  const numericConfidence = finiteNumber(route.confidence);
-  if (numericConfidence != null) {
-    return Math.round(Math.max(0, Math.min(100, numericConfidence <= 1 ? numericConfidence * 100 : numericConfidence)));
-  }
-
-  const aiConfidence = route.aiConfidence ?? (typeof route.confidence === 'string' ? route.confidence : null);
-  if (aiConfidence === 'high') return 88;
-  if (aiConfidence === 'good') return 76;
-  if (aiConfidence === 'explore') return 62;
+  const liveConfidence = deriveExploreLiveConfidence(route);
+  if (liveConfidence.score != null) return liveConfidence.score;
 
   switch (routeConfidence?.level) {
     case 'high':

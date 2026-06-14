@@ -6871,8 +6871,8 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             accessibilityLabel={expanded ? 'Route terrain risk expanded' : 'Expand route terrain risk'}
             expanded={expanded}
             detailMode={mode === 'detail'}
-            headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}
-            headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}
+            headerStatusLabel={null}
+            headerStatusValue={null}
             headerStatusColor={terrainRiskRoute ? getTerrainCommandRiskColor(terrainRiskRoute.overallRiskLabel) : undefined}
           >
             <AttitudeCommandTerrainRiskPreview

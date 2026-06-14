@@ -74,8 +74,10 @@ assert.ok(
   'Fallback should reference the shared runtime token resolver and native Mapbox build requirement.',
 );
 assert.ok(
-  mapSource.includes('Mapbox.UserLocation'),
-  'ConvoyCommandMap should render the user location puck where supported.',
+  !mapSource.includes('Mapbox.UserLocation') &&
+    mapSource.includes('convoy-members-source') &&
+    mapSource.includes('isCurrentUser'),
+  'ConvoyCommandMap should avoid the duplicate Mapbox user puck and keep the ECS current-user convoy marker as the single GPS dot.',
 );
 assert.ok(
   mapSource.includes('showMapWhenEmpty') &&

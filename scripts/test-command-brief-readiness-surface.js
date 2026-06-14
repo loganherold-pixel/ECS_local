@@ -15,6 +15,14 @@ function assertNotIncludes(source, fragment, message) {
   assert.ok(!source.includes(fragment), message);
 }
 
+function blockBetween(source, startFragment, endFragment) {
+  const start = source.indexOf(startFragment);
+  assert.notStrictEqual(start, -1, `Expected source to include ${startFragment}`);
+  const end = source.indexOf(endFragment, start);
+  assert.notStrictEqual(end, -1, `Expected source to include ${endFragment}`);
+  return source.slice(start, end);
+}
+
 [
   'Command Brief',
   'ECS Expedition Readiness',
@@ -167,6 +175,35 @@ assertNotIncludes(
   'Command Brief must not return a fresh vehicle readiness object from getSnapshot.',
 );
 assertIncludes(dashboard, '<CommandBriefScreen embedded />', 'Dashboard ECS Brief should mount Command Brief without the obsolete activity log.');
+assertIncludes(
+  dashboard,
+  'class DashboardBriefErrorBoundary extends React.Component',
+  'Dashboard ECS Brief should use a local error boundary so a brief render fault cannot crash the whole Dashboard tab.',
+);
+assertIncludes(
+  dashboard,
+  '[DASHBOARD] command_brief_render_failed',
+  'Dashboard ECS Brief render faults should be visible in development diagnostics.',
+);
+assertIncludes(
+  dashboard,
+  'Command Brief unavailable',
+  'Dashboard ECS Brief should show an ECS-styled fallback if the embedded brief render fails.',
+);
+const freshnessCopyFunction = blockBetween(
+  commandBrief,
+  'function getBriefFreshnessCopy(assessment: ExpeditionReadinessAssessment | null) {',
+  'function CommandBriefEmptyState',
+);
+assertIncludes(
+  freshnessCopyFunction,
+  "if (!assessment) return 'Readiness sources have not been evaluated yet.';",
+  'Dashboard ECS Brief should render while readiness assessment is still null instead of crashing on source freshness.',
+);
+assert.ok(
+  freshnessCopyFunction.indexOf('if (!assessment)') < freshnessCopyFunction.indexOf('Object.values(assessment.sourceFreshness)'),
+  'Command Brief freshness copy must guard null assessments before reading assessment.sourceFreshness.',
+);
 assertIncludes(
   packageSource,
   '"test:command-brief-readiness": "node ./scripts/test-command-brief-readiness-surface.js"',

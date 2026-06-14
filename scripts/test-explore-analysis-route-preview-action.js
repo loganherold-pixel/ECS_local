@@ -89,11 +89,12 @@ assert.ok(
     previewSource.includes('getMapboxToken') &&
     previewSource.includes('DEFAULT_MAP_STYLE') &&
     previewSource.includes('cameraCommand={previewModel.cameraCommand as CameraCommand | null}') &&
-    previewSource.includes('Current GPS') &&
     previewSource.includes('GPS is unavailable') &&
     previewSource.includes('Route geometry unavailable') &&
     previewSource.includes('Map rendering unavailable') &&
-    previewSource.includes('markerLegend') &&
+    previewSource.includes('waypoints={[]}') &&
+    previewSource.includes('showUserLocation={false}') &&
+    !previewSource.includes('markerLegend') &&
     previewSource.includes('Opening this preview does not start navigation') &&
     previewSource.includes('START GUIDANCE') &&
     previewSource.includes('SAVE ROUTE') &&
@@ -109,8 +110,10 @@ assert.ok(
     previewNormalizerSource.includes('payload.coordinate') &&
     previewNormalizerSource.includes('computeBounds') &&
     previewNormalizerSource.includes("mode: 'route_overview'") &&
-    previewNormalizerSource.includes('fitBounds:'),
-  'Explore route preview should normalize selected route geometry/start/end metadata into MapRenderer bounds and camera commands.',
+    previewNormalizerSource.includes('fitBounds:') &&
+    previewNormalizerSource.includes('waypoints: []') &&
+    !previewNormalizerSource.includes('pushUniqueWaypoint'),
+  'Explore route preview should normalize selected route geometry into MapRenderer bounds without generated waypoint pins.',
 );
 
 assert.ok(

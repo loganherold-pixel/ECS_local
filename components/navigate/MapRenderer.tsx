@@ -255,6 +255,12 @@ export type RouteBuilderSegmentData = {
   buildSource?: RouteSegmentSourceMetadata | null;
 };
 
+export type RouteBuilderAnchorMarker = {
+  id: string;
+  label: string;
+  coordinate: LatLng;
+};
+
 export type RouteBuilderUpdatePayload = {
   segments: RouteBuilderSegmentData[];
   pointCount: number;
@@ -365,9 +371,12 @@ export type MapRendererProps = {
   cameraCommand?: CameraCommand | null;
   cameraCommandTrigger?: number;
   routeBuilderActive?: boolean;
+  routeBuilderMode?: 'freehand' | 'anchor_trace';
   routeBuilderSegments?: RouteBuilderSegmentData[];
+  routeBuilderAnchors?: RouteBuilderAnchorMarker[];
   selectedRouteGeometrySegmentIds?: string[];
   routeBuilderColor?: string;
+  routeProfileFocusCoordinate?: LatLng | null;
   onRouteBuilderUpdate?: (payload: RouteBuilderUpdatePayload) => void;
   onRouteBuilderGestureStateChange?: (payload: {
     isDrawing: boolean;
@@ -516,6 +525,7 @@ type WebMapPayload = {
     type: string;
   }[];
   routeBuilderActive: boolean;
+  routeBuilderMode: 'freehand' | 'anchor_trace';
   routeBuilderColor: string;
   routeBuilderSegments: {
     id: string;
@@ -531,6 +541,8 @@ type WebMapPayload = {
     sourceSegmentId?: string | null;
     buildSource?: RouteSegmentSourceMetadata | null;
   }[];
+  routeBuilderAnchors: RouteBuilderAnchorMarker[];
+  routeProfileFocusCoordinate: { latitude: number; longitude: number } | null;
   remoteOverlay: RemoteMapOverlayPayload;
   campsiteSearchPolygon: {
     coordinates: [number, number][];
@@ -547,6 +559,7 @@ type WebMapDynamicPayload = {
   cameraMode: CameraMode | null;
   interactive: boolean;
   routeBuilderActive: boolean;
+  routeBuilderMode: 'freehand' | 'anchor_trace';
 };
 
 type RouteRenderMode = 'idle' | 'preview' | 'active' | 'completed' | 'selected';
@@ -1448,6 +1461,7 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
         };
       }),
     routeBuilderActive: !!props.routeBuilderActive,
+    routeBuilderMode: props.routeBuilderMode ?? 'freehand',
     routeBuilderColor: props.routeBuilderColor || '#65F0D4',
     routeBuilderSegments: (props.routeBuilderSegments || []).map((segment, index) => ({
       id: toMarkerId('route-builder', segment.id, index),
@@ -1463,6 +1477,25 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
       sourceSegmentId: segment.sourceSegmentId ?? null,
       buildSource: segment.buildSource ?? null,
     })),
+    routeBuilderAnchors: (props.routeBuilderAnchors || [])
+      .filter((anchor) => isValidCoord(anchor.coordinate?.latitude, anchor.coordinate?.longitude))
+      .map((anchor) => ({
+        id: String(anchor.id),
+        label: String(anchor.label || ''),
+        coordinate: {
+          latitude: Number(anchor.coordinate.latitude),
+          longitude: Number(anchor.coordinate.longitude),
+        },
+      })),
+    routeProfileFocusCoordinate: isValidCoord(
+      props.routeProfileFocusCoordinate?.latitude,
+      props.routeProfileFocusCoordinate?.longitude,
+    )
+      ? {
+          latitude: Number(props.routeProfileFocusCoordinate?.latitude),
+          longitude: Number(props.routeProfileFocusCoordinate?.longitude),
+        }
+      : null,
     remoteOverlay: props.remoteOverlay ?? { enabled: false, heatmapAreas: [], forecastSegments: [] },
     campsiteSearchPolygon: props.campsiteSearchPolygon
       ? {
@@ -1483,6 +1516,7 @@ export function buildDynamicPayload(props: Pick<
   | 'cameraMode'
   | 'interactive'
   | 'routeBuilderActive'
+  | 'routeBuilderMode'
 >): WebMapDynamicPayload {
   const replay = normalizeLatLng(props.replayMarker as LatLng | null);
   const user = normalizeLatLng(props.userLocation ?? null);
@@ -1505,6 +1539,7 @@ export function buildDynamicPayload(props: Pick<
     cameraMode: liveMotionEnabled ? props.cameraMode ?? null : null,
     interactive: props.interactive !== false,
     routeBuilderActive: !!props.routeBuilderActive,
+    routeBuilderMode: props.routeBuilderMode ?? 'freehand',
   };
 }
 
@@ -2483,8 +2518,10 @@ function makeMapHtml(
       var dragTimeout = null;
       var crosshairEl = document.getElementById('crosshair');
       var routeBuilderActive = false;
+      var routeBuilderMode = 'freehand';
       var routeBuilderColor = '#65F0D4';
       var routeBuilderDraftSegments = [];
+      var routeBuilderAnchors = [];
       var routeBuilderRawTraceSegments = [];
       var routeBuilderPointerId = null;
       var routeBuilderIsDrawing = false;
@@ -4134,7 +4171,7 @@ function makeMapHtml(
         updateLastGoodTracePoint(tracePoint);
       }
 
-      function updateRouteBuilder(segments, color) {
+      function updateRouteBuilder(segments, color, anchors) {
         var fc = featureCollection(
           (segments || [])
             .filter(function(segment) { return segment.coordinates && segment.coordinates.length > 1; })
@@ -4143,6 +4180,17 @@ function makeMapHtml(
             })
         );
         setGeoJson('route-builder-source', fc);
+
+        var anchorFeatures = (anchors || routeBuilderAnchors || [])
+          .filter(function(anchor) {
+            return anchor && anchor.coordinate && isFinite(anchor.coordinate.latitude) && isFinite(anchor.coordinate.longitude);
+          })
+          .map(function(anchor) {
+            return pointFeature(anchor.id || ('route-builder-anchor-' + anchor.label), [anchor.coordinate.longitude, anchor.coordinate.latitude], {
+              color: color || routeBuilderColor || '#65F0D4',
+              label: anchor.label || ''
+            });
+          });
 
         var lastPoint = null;
         for (var i = (segments || []).length - 1; i >= 0; i--) {
@@ -4154,8 +4202,15 @@ function makeMapHtml(
         }
         setGeoJson(
           'route-builder-endpoint-source',
-          featureCollection(lastPoint ? [pointFeature('route-builder-endpoint', lastPoint, { color: color || routeBuilderColor || '#65F0D4' })] : [])
+          featureCollection(anchorFeatures.length ? anchorFeatures : lastPoint ? [pointFeature('route-builder-endpoint', lastPoint, { color: color || routeBuilderColor || '#65F0D4' })] : [])
         );
+      }
+
+      function updateRouteProfileFocus(coordinate) {
+        var point = coordinate && isFinite(coordinate.latitude) && isFinite(coordinate.longitude)
+          ? pointFeature('route-profile-focus', [coordinate.longitude, coordinate.latitude], { color: '#F2C24D' })
+          : null;
+        setGeoJson('route-profile-focus-source', featureCollection(point ? [point] : []));
       }
 
       function lastRouteBuilderSnapMeta() {
@@ -4237,6 +4292,7 @@ function makeMapHtml(
         ensureSource('ecs-remote-forecast-v1', { type: 'geojson', data: featureCollection([]) });
         ensureSource('route-builder-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource('route-builder-endpoint-source', { type: 'geojson', data: featureCollection([]) });
+        ensureSource('route-profile-focus-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource(DISPERSED_ROUTE_BUILD_SOURCE_ID, { type: 'geojson', data: featureCollection([]) });
         ensureSource('campsite-search-polygon-fill-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource('campsite-search-polygon-line-source', { type: 'geojson', data: featureCollection([]) });
@@ -4264,6 +4320,8 @@ function makeMapHtml(
         ensureLineLayer('route-builder-layer', 'route-builder-source', ['get', 'color'], 5.25, 0.98);
         ensureCircleLayer('route-builder-endpoint-halo-layer', 'route-builder-endpoint-source', ['get', 'color'], 9, 0.18, 'rgba(8,14,18,0.92)', 2);
         ensureCircleLayer('route-builder-endpoint-layer', 'route-builder-endpoint-source', ['get', 'color'], 4.75, 0.96, 'rgba(8,14,18,0.96)', 2);
+        ensureCircleLayer('route-profile-focus-halo-layer', 'route-profile-focus-source', '#F2C24D', 10.5, 0.2, 'rgba(8,14,18,0.92)', 2);
+        ensureCircleLayer('route-profile-focus-layer', 'route-profile-focus-source', '#F2C24D', 5.5, 0.98, 'rgba(8,14,18,0.96)', 2);
         ensureFillLayer('campsite-search-polygon-fill-layer', 'campsite-search-polygon-fill-source', 'rgba(242,194,77,1)', 0.16);
         ensureLineLayer('campsite-search-polygon-line-layer', 'campsite-search-polygon-line-source', 'rgba(242,194,77,0.95)', 2.5, 0.86, [2, 1.4]);
         ensureCircleLayer('campsite-search-polygon-point-layer', 'campsite-search-polygon-point-source', 'rgba(242,194,77,0.92)', 4.2, 0.95, 'rgba(8,14,18,0.96)', 1.5);
@@ -5530,6 +5588,7 @@ function makeMapHtml(
       }
 
       function startRouteBuilderDraw(event) {
+        if (routeBuilderMode === 'anchor_trace') return false;
         if (!routeBuilderActive || !map || routeBuilderPointerId !== null || routeBuilderPointerCount > 1) return false;
         var point = getRouteBuilderEventPoint(event);
         if (dispersedRouteBuildState.enabled && findDispersedRouteBuildFeatureAtPoint(point)) return false;
@@ -5688,7 +5747,7 @@ function makeMapHtml(
           clearRouteBuilderDraftRuntime();
         }
         if (map && map.getCanvasContainer()) {
-          map.getCanvasContainer().style.cursor = routeBuilderActive ? 'crosshair' : '';
+          map.getCanvasContainer().style.cursor = routeBuilderActive && routeBuilderMode !== 'anchor_trace' ? 'crosshair' : '';
         }
       }
 
@@ -5815,6 +5874,7 @@ function makeMapHtml(
         if (!map || !payload) return;
 
         setMapInteractionEnabled(payload.interactive !== false);
+        routeBuilderMode = payload.routeBuilderMode || routeBuilderMode || 'freehand';
         setRouteBuilderActive(!!payload.routeBuilderActive);
         if (routeBuilderActive && routeBuilderIsDrawing) {
           setRouteBuilderDragPanEnabled(false);
@@ -5901,7 +5961,9 @@ function makeMapHtml(
         }
 
         reinitializeStyleArtifacts();
+        routeBuilderMode = payload.routeBuilderMode || 'freehand';
         routeBuilderColor = payload.routeBuilderColor || routeBuilderColor || '#65F0D4';
+        routeBuilderAnchors = payload.routeBuilderAnchors || [];
         if (!routeBuilderIsDrawing) {
           routeBuilderRawTraceSegments = [];
           routeBuilderActiveRawSegmentId = null;
@@ -5920,7 +5982,8 @@ function makeMapHtml(
         updateTrail(payload.trailSegments || []);
         updateSpeedTrail(payload.speedSegments || []);
         updateRemoteOverlay(payload.remoteOverlay || null);
-        updateRouteBuilder(routeBuilderDraftSegments, routeBuilderColor);
+        updateRouteBuilder(routeBuilderDraftSegments, routeBuilderColor, routeBuilderAnchors);
+        updateRouteProfileFocus(payload.routeProfileFocusCoordinate || null);
         updateCampsiteSearchPolygon(payload.campsiteSearchPolygon || null);
         promoteRouteGuidanceLayers();
 
@@ -6090,16 +6153,67 @@ function makeMapHtml(
           }, 90);
         });
 
+        function buildRouteableFeaturePayloadAtPoint(point, lngLat) {
+          try {
+            var routeGeometryFeature = findRouteGeometrySegmentFeatureAtPoint(point);
+            var routeGeometryProps = routeGeometryFeature && routeGeometryFeature.properties ? routeGeometryFeature.properties : {};
+            if (routeGeometryFeature && routeGeometryProps.kind === 'route_geometry_segment') {
+              return {
+                kind: routeGeometryProps.kind || null,
+                id: routeGeometryFeature.id || null,
+                name: routeGeometryProps.name || null,
+                category: routeGeometryProps.category || null,
+                categoryLabel: routeGeometryProps.categoryLabel || null,
+                color: routeGeometryProps.color || null,
+                routeGeometrySourceKind: routeGeometryProps.routeGeometrySourceKind || null,
+                routeGeometryDataState: routeGeometryProps.routeGeometryDataState || null,
+                routeGeometryConfidence: routeGeometryProps.routeGeometryConfidence || null,
+                routeGeometryWarningsJson: routeGeometryProps.routeGeometryWarningsJson || null,
+                latitude: lngLat.lat,
+                longitude: lngLat.lng
+              };
+            }
+          } catch (err) {}
+          try {
+            var segmentFeatures = map.queryRenderedFeatures(point, { layers: ['segment-layer'] }) || [];
+            for (var i = 0; i < segmentFeatures.length; i += 1) {
+              var props = segmentFeatures[i] && segmentFeatures[i].properties ? segmentFeatures[i].properties : {};
+              if (props.kind === 'explore_route') {
+                return {
+                  kind: props.kind || null,
+                  id: segmentFeatures[i].id || null,
+                  name: props.name || null,
+                  category: props.category || null,
+                  categoryLabel: props.categoryLabel || null,
+                  color: props.color || null,
+                  latitude: lngLat.lat,
+                  longitude: lngLat.lng
+                };
+              }
+            }
+          } catch (err) {}
+          return null;
+        }
+
         map.on('contextmenu', function(e) {
           send('longPress', {
             latitude: e.lngLat.lat,
-            longitude: e.lngLat.lng
+            longitude: e.lngLat.lng,
+            routeableFeature: buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat)
           });
         });
 
         map.on('click', function(e) {
           if (routeBuilderActive && Date.now() < routeBuilderSuppressClickUntil) return;
           if (Date.now() < dispersedCampingMapTapSuppressUntil) return;
+          if (routeBuilderMode === 'anchor_trace') {
+            send('mapTap', {
+              latitude: e.lngLat.lat,
+              longitude: e.lngLat.lng,
+              routeableFeature: buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat)
+            });
+            return;
+          }
           try {
             var dispersedLegFeature = findDispersedRouteBuildFeatureAtPoint(e.point);
             var dispersedLegPayload = buildDispersedRouteBuildPayloadFromFeature(dispersedLegFeature);
@@ -6342,8 +6456,11 @@ const MapRenderer = React.memo(function MapRenderer({
   cameraCommand = null,
   cameraCommandTrigger,
   routeBuilderActive = false,
+  routeBuilderMode = 'freehand',
   routeBuilderSegments = [],
+  routeBuilderAnchors = [],
   routeBuilderColor = '#65F0D4',
+  routeProfileFocusCoordinate = null,
   onRouteBuilderUpdate,
   onRouteBuilderGestureStateChange,
   remoteOverlay = null,
@@ -6528,8 +6645,11 @@ const MapRenderer = React.memo(function MapRenderer({
         campScoutMarkers,
         tiltAlertMarkers,
         routeBuilderActive,
+        routeBuilderMode,
         routeBuilderSegments,
+        routeBuilderAnchors,
         routeBuilderColor,
+        routeProfileFocusCoordinate,
         remoteOverlay,
         campsiteSearchPolygon,
       }),
@@ -6563,8 +6683,11 @@ const MapRenderer = React.memo(function MapRenderer({
       campScoutMarkers,
       tiltAlertMarkers,
       routeBuilderActive,
+      routeBuilderMode,
       routeBuilderSegments,
+      routeBuilderAnchors,
       routeBuilderColor,
+      routeProfileFocusCoordinate,
       remoteOverlay,
       campsiteSearchPolygon,
     ],
@@ -6581,8 +6704,9 @@ const MapRenderer = React.memo(function MapRenderer({
         cameraMode,
         interactive,
         routeBuilderActive,
+        routeBuilderMode,
       }),
-    [replayMarker, userLocation, showUserLocation, vehicleHeading, motionPriority, cameraMode, interactive, routeBuilderActive],
+    [replayMarker, userLocation, showUserLocation, vehicleHeading, motionPriority, cameraMode, interactive, routeBuilderActive, routeBuilderMode],
   );
 
   const payloadHash = useMemo(() => buildMapOverlayPayloadHash(payload), [payload]);

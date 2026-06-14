@@ -90,8 +90,10 @@ assert.ok(
     previewNormalizerSource.includes('previewUnavailableReason') &&
     previewNormalizerSource.includes('Route preview unavailable for this route until endpoint or route geometry is added.') &&
     previewNormalizerSource.includes('computeBounds') &&
-    previewNormalizerSource.includes("mode: 'route_overview'"),
-  'Route preview normalizer should use geometry, waypoints, endpoints, bounds, and clear unavailable state.',
+    previewNormalizerSource.includes("mode: 'route_overview'") &&
+    previewNormalizerSource.includes('waypoints: []') &&
+    !previewNormalizerSource.includes('pushUniqueWaypoint'),
+  'Route preview normalizer should use geometry/endpoints/bounds while suppressing generated waypoint pins.',
 );
 
 assert.ok(

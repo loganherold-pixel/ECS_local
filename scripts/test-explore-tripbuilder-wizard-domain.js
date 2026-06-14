@@ -55,6 +55,12 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 };
 
 const wizard = require(path.join(root, 'lib', 'explore', 'exploreTripBuilderWizard.ts'));
+const {
+  deriveExploreLiveConfidence,
+} = require(path.join(root, 'lib', 'explore', 'exploreLiveConfidence.ts'));
+const {
+  buildExploreRouteCardSummary,
+} = require(path.join(root, 'lib', 'explore', 'exploreRouteCardSummary.ts'));
 const planningSave = require(path.join(root, 'lib', 'explore', 'exploreRoutePlanningSave.ts'));
 const favoritesStore = require(path.join(root, 'lib', 'exploreFavoritesStore.ts'));
 const { routeStore } = require(path.join(root, 'lib', 'routeStore.ts'));
@@ -180,6 +186,77 @@ async function main() {
   assert.ok(
     thumbnailUris.every((uri) => typeof uri === 'string' && /[?&]w=960\b/.test(uri) && /[?&]h=640\b/.test(uri) && /[?&]q=88\b/.test(uri)),
     'TripBuilder thumbnails should use high-resolution photo URLs.',
+  );
+
+  const verifiedConfidence = deriveExploreLiveConfidence(makeRoute('verified-confidence', 'Verified Confidence', {
+    routeMetadata: {
+      catalogVerification: {
+        confidenceScore: 94,
+        sourceLabel: 'Validated route catalog',
+      },
+    },
+  }));
+  const estimatedConfidence = deriveExploreLiveConfidence(makeRoute('estimated-confidence', 'Estimated Confidence', {
+    routeMetadata: {
+      confidenceScore: 68,
+      confidenceReasons: ['Estimated from catalog metadata'],
+    },
+  }));
+  const missingConfidence = deriveExploreLiveConfidence(makeRoute('missing-confidence', 'Missing Confidence', {
+    confidence: 75,
+    matchScore: 75,
+    rigCompatibility: 75,
+    routeMetadata: {
+      source: 'test_source',
+    },
+  }));
+
+  assert.strictEqual(verifiedConfidence.score, 94, 'Live confidence should prefer catalog verification confidence.');
+  assert.strictEqual(estimatedConfidence.score, 68, 'Live confidence should preserve explicit route metadata confidence.');
+  assert.notStrictEqual(
+    verifiedConfidence.score,
+    estimatedConfidence.score,
+    'Different source confidence inputs should produce different displayed scores.',
+  );
+  assert.strictEqual(
+    missingConfidence.score,
+    null,
+    'Placeholder 75 confidence values should not be shown as live route confidence.',
+  );
+  assert.match(missingConfidence.label, /unavailable|unknown/i, 'Missing confidence should be explicit.');
+
+  const summaryCandidateSet = wizard.normalizeExploreWizardRouteCandidates({
+    trailPacks: [
+      makeRoute('summary-route', 'Summary Route', {
+        highlights: ['continuous geometry', 'continuous geometry', 'verify closures'],
+        routeMetadata: {
+          confidenceScore: 88,
+          confidenceReasons: ['continuous geometry', 'verified source timestamp', 'continuous geometry'],
+          warnings: ['verify closures', 'verify closures'],
+          currentConditions: ['dry wash', 'dry wash', 'narrow shelf'],
+          recommendedActions: ['air down before trailhead', 'air down before trailhead'],
+          improvementActions: ['cache offline map', 'cache offline map'],
+          dataUsed: [{ label: 'Should stay off compact card' }],
+        },
+      }),
+    ],
+  });
+  const cardSummary = buildExploreRouteCardSummary(summaryCandidateSet.candidates[0]);
+  assert.deepStrictEqual(
+    Object.keys(cardSummary),
+    ['status', 'currentCondition', 'why', 'whatToWatch', 'recommendedAction', 'toImproveStatus'],
+    'Compact route card summary should expose exactly the six user-facing fields.',
+  );
+  assert.ok(!('dataUsed' in cardSummary), 'Compact route card summary must not expose Data Used.');
+  assert.strictEqual(
+    cardSummary.currentCondition,
+    'Dry wash; narrow shelf',
+    'Repeated current-condition facts should be deduped into a concise line.',
+  );
+  assert.strictEqual(
+    cardSummary.whatToWatch,
+    'Verify closures',
+    'Repeated watch items should only render once.',
   );
 
   const draft = wizard.createExploreWizardDraft(normalized.candidates[0], {

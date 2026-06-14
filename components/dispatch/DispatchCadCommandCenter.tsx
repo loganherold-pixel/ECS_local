@@ -2683,7 +2683,6 @@ export default function DispatchCadCommandCenter() {
     () => visibleEvents.filter(isRecoveryCriticalEvent),
     [visibleEvents],
   );
-  const primaryEmergencyCoordinatePing = emergencyCoordinatePingEvents[0] ?? null;
   const ownedEmergencyCoordinatePingEvents = useMemo(
     () => emergencyCoordinatePingEvents.filter((event) => isDispatchEventCreatedByIdentity(event, commandIdentity)),
     [
@@ -2726,7 +2725,7 @@ export default function DispatchCadCommandCenter() {
   });
   const teamStatusLabel = teamSyncState.label;
   const hasDispatchConvoyContext = Boolean(activeConvoyControl?.convoyId);
-  const dispatchTeamStatusLabel = hasDispatchConvoyContext ? 'Active convoy roster' : teamStatusLabel;
+  const dispatchTeamStatusLabel = hasDispatchConvoyContext ? activeConvoyControl?.convoyName ?? 'Active convoy' : teamStatusLabel;
   const dispatchTeamMemberCount = hasActiveTeam
     ? teamMemberCount
     : activeConvoyControl?.memberUserIds.length ?? 0;
@@ -3612,14 +3611,6 @@ export default function DispatchCadCommandCenter() {
 
   const headerStrip = (
     <View style={[styles.headerStrip, isLandscapeDispatch ? styles.headerStripLandscape : null]}>
-      {!isLandscapeDispatch ? (
-        <View style={styles.headerCopy}>
-          <View style={styles.titleRow}>
-            <Text style={styles.title} numberOfLines={1}>DISPATCH</Text>
-          </View>
-          <Text style={styles.channel} numberOfLines={1}>{dispatchTeamStatusLabel}</Text>
-        </View>
-      ) : null}
       <View style={[styles.headerActions, isLandscapeDispatch ? styles.headerActionsLandscape : null]}>
         <TouchableOpacity
           style={[styles.headerUtilityButton, isLandscapeDispatch ? styles.headerUtilityButtonLandscape : null, styles.headerConvoyButton]}
@@ -3774,14 +3765,6 @@ export default function DispatchCadCommandCenter() {
     </View>
   );
 
-  const landscapeTitleBar = isLandscapeDispatch ? (
-    <View style={styles.landscapeTitleBar}>
-      <View style={styles.landscapeTitleCenter}>
-        <Text style={[styles.title, styles.titleLandscape]} numberOfLines={1}>DISPATCH</Text>
-      </View>
-    </View>
-  ) : null;
-
   const advisoryLine = advisory ? (
     <View
       style={[
@@ -3806,7 +3789,7 @@ export default function DispatchCadCommandCenter() {
       ) : null}
       <Ionicons name="pulse-outline" size={isLandscapeDispatch ? 12 : 14} color={TACTICAL.amber} />
       <Text style={[styles.advisoryLabel, isLandscapeDispatch ? styles.advisoryLabelLandscape : null]}>ECS Advisory</Text>
-      <Text style={[styles.advisoryText, isLandscapeDispatch ? styles.advisoryTextLandscape : null]} numberOfLines={1}>{advisory.message}</Text>
+      <Text style={[styles.advisoryText, isLandscapeDispatch ? styles.advisoryTextLandscape : null]} numberOfLines={isLandscapeDispatch ? 2 : 3}>{advisory.message}</Text>
       <TouchableOpacity
         style={styles.advisoryDismiss}
         accessibilityRole="button"
@@ -3841,21 +3824,9 @@ export default function DispatchCadCommandCenter() {
     <View style={[styles.root, isLandscapeDispatch ? styles.rootLandscape : null]}>
       {isLandscapeDispatch ? (
         <>
-          {landscapeTitleBar}
           <View style={styles.landscapeTopRow}>
             <View style={styles.landscapeSetupRail}>
-              {advisoryLine ?? <View style={styles.landscapeSetupTopSpacer} />}
-              <DispatchConvoyTeamSetupCard
-                compact
-                teamStatusLabel={dispatchTeamStatusLabel}
-                teamMemberCount={dispatchTeamMemberCount}
-                hasActiveTeam={hasDispatchTeamContext}
-                activeConvoyName={activeConvoyControl?.convoyName ?? null}
-                activeConvoyMemberCount={activeConvoyControl?.memberUserIds.length ?? 0}
-                emergencyCount={emergencyCoordinatePingEvents.length}
-                emergencyAlertActive={emergencyPingAttentionActive}
-                onOpenEmergencyPings={primaryEmergencyCoordinatePing ? () => handleOpenEmergencyPing(primaryEmergencyCoordinatePing) : undefined}
-              />
+              {advisoryLine}
               {renderLiveStrip(true)}
             </View>
             <View style={styles.landscapeSummaryDock}>
@@ -3885,27 +3856,11 @@ export default function DispatchCadCommandCenter() {
         <>
           {headerStrip}
           {advisoryLine}
-          <DispatchConvoyTeamSetupCard
-            teamStatusLabel={dispatchTeamStatusLabel}
-            teamMemberCount={dispatchTeamMemberCount}
-            hasActiveTeam={hasDispatchTeamContext}
-            activeConvoyName={activeConvoyControl?.convoyName ?? null}
-            activeConvoyMemberCount={activeConvoyControl?.memberUserIds.length ?? 0}
-            emergencyCount={emergencyCoordinatePingEvents.length}
-            emergencyAlertActive={emergencyPingAttentionActive}
-            onOpenEmergencyPings={primaryEmergencyCoordinatePing ? () => handleOpenEmergencyPing(primaryEmergencyCoordinatePing) : undefined}
-          />
           {renderLiveStrip(false)}
         </>
       )}
 
       <View style={[styles.feedPanel, isLandscapeDispatch ? styles.feedPanelLandscapeMap : null]}>
-        <View style={[styles.feedHeader, isLandscapeDispatch ? styles.feedHeaderLandscape : null]}>
-          <View>
-            <Text style={[styles.feedTitle, isLandscapeDispatch ? styles.feedTitleLandscape : null]}>Convoy Command</Text>
-            <Text style={[styles.feedSource, isLandscapeDispatch ? styles.feedSourceLandscape : null]}>COMMAND SURFACE</Text>
-          </View>
-        </View>
         <DispatchConvoyCommandPanel
           connectionLabel={connectionState.label}
           teamStatusLabel={dispatchTeamStatusLabel}
@@ -4020,92 +3975,6 @@ export default function DispatchCadCommandCenter() {
           router.push('/join-expedition' as any);
         }}
       />
-    </View>
-  );
-}
-
-function DispatchConvoyTeamSetupCard({
-  activeConvoyMemberCount = 0,
-  activeConvoyName,
-  compact = false,
-  emergencyAlertActive,
-  emergencyCount,
-  hasActiveTeam,
-  onOpenEmergencyPings,
-  teamMemberCount,
-  teamStatusLabel,
-}: {
-  activeConvoyMemberCount?: number;
-  activeConvoyName?: string | null;
-  compact?: boolean;
-  emergencyAlertActive: boolean;
-  emergencyCount: number;
-  hasActiveTeam: boolean;
-  onOpenEmergencyPings?: () => void;
-  teamMemberCount: number;
-  teamStatusLabel: string;
-}) {
-  const emergencyCellActive = emergencyCount > 0 && !!onOpenEmergencyPings;
-  const emergencyCountOpacity = useDispatchPulse(emergencyCellActive && emergencyAlertActive);
-  const hasActiveConvoy = Boolean(activeConvoyName);
-  const displayedMemberCount = hasActiveConvoy ? activeConvoyMemberCount : teamMemberCount;
-
-  return (
-    <View style={[styles.convoyTeamCard, compact ? styles.convoyTeamCardCompact : null]} testID="dispatch-convoy-team-setup-card">
-      <View style={[styles.convoyTeamHeader, compact ? styles.convoyTeamHeaderCompact : null]}>
-        <View style={styles.convoyTeamTitleBlock}>
-          <Text style={[styles.convoyTeamEyebrow, compact ? styles.convoyTeamEyebrowCompact : null]}>CONVOY SETUP / TEAM</Text>
-          <Text style={[styles.convoyTeamTitle, compact ? styles.convoyTeamTitleCompact : null]} numberOfLines={1}>
-            {hasActiveConvoy ? activeConvoyName ?? 'Active convoy' : hasActiveTeam ? 'Team channel staged' : 'Team channel not configured'}
-          </Text>
-        </View>
-      </View>
-      <View style={[styles.convoyTeamMetaRow, compact ? styles.convoyTeamMetaRowCompact : null]}>
-        <View style={styles.convoyTeamMetaCell}>
-          <Text style={styles.convoyTeamMetaLabel}>Team</Text>
-          <Text style={styles.convoyTeamMetaValue} numberOfLines={1}>
-            {hasActiveConvoy
-              ? `${displayedMemberCount} member${displayedMemberCount === 1 ? '' : 's'}`
-              : hasActiveTeam
-                ? `${teamMemberCount} member${teamMemberCount === 1 ? '' : 's'}`
-                : 'Inactive'}
-          </Text>
-        </View>
-        <View style={styles.convoyTeamMetaCell}>
-          <Text style={styles.convoyTeamMetaLabel}>Sync</Text>
-          <Text style={styles.convoyTeamMetaValue} numberOfLines={1}>
-            {hasActiveConvoy ? 'Active convoy' : teamStatusLabel}
-          </Text>
-        </View>
-        {emergencyCellActive ? (
-          <TouchableOpacity
-            style={[styles.convoyTeamMetaCell, styles.convoyTeamMetaCellAction]}
-            accessibilityRole="button"
-            accessibilityLabel="Open active emergency GPS ping"
-            activeOpacity={0.78}
-            onPress={onOpenEmergencyPings}
-          >
-            <Text style={styles.convoyTeamMetaLabel}>Emergency pings</Text>
-            <Animated.Text
-              style={[
-                styles.convoyTeamMetaValue,
-                styles.convoyTeamMetaValueAlert,
-                emergencyAlertActive ? { opacity: emergencyCountOpacity } : null,
-              ]}
-              numberOfLines={1}
-            >
-              {emergencyCount} active
-            </Animated.Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.convoyTeamMetaCell}>
-            <Text style={styles.convoyTeamMetaLabel}>Emergency pings</Text>
-            <Text style={[styles.convoyTeamMetaValue, emergencyCount > 0 ? styles.convoyTeamMetaValueAlert : null]} numberOfLines={1}>
-              {emergencyCount} active
-            </Text>
-          </View>
-        )}
-      </View>
     </View>
   );
 }
@@ -6209,21 +6078,6 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
     gap: 3,
   },
-  landscapeTitleBar: {
-    minHeight: 22,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    paddingHorizontal: 2,
-  },
-  landscapeTitleCenter: {
-    position: 'absolute',
-    left: 72,
-    right: 72,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   landscapeTopRow: {
     flex: 0,
     minHeight: 0,
@@ -6259,12 +6113,12 @@ const styles = StyleSheet.create({
     minHeight: 38,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+    justifyContent: 'center',
+    gap: 6,
   },
   headerStripLandscape: {
     minHeight: 24,
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     gap: 0,
   },
   headerCopy: {
@@ -6272,16 +6126,20 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   headerActions: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
     gap: 6,
-    flexShrink: 0,
   },
   headerActionsLandscape: {
     gap: 4,
     flex: 1,
     flexShrink: 1,
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    flexWrap: 'nowrap',
   },
   headerUtilityButton: {
     minHeight: 30,
@@ -6467,9 +6325,6 @@ const styles = StyleSheet.create({
     rowGap: 4,
     columnGap: 0,
     paddingHorizontal: 2,
-  },
-  landscapeSetupTopSpacer: {
-    minHeight: 24,
   },
   rolloutNotice: {
     minHeight: 32,
@@ -6758,7 +6613,7 @@ const styles = StyleSheet.create({
   advisoryLine: {
     minHeight: 30,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 7,
     borderWidth: 1,
     borderColor: ECS_SURFACE.border.default,
@@ -6817,12 +6672,15 @@ const styles = StyleSheet.create({
   },
   advisoryText: {
     flex: 1,
+    minWidth: 0,
     color: TACTICAL.text,
     fontSize: 11,
     fontWeight: '800',
+    lineHeight: 14,
   },
   advisoryTextLandscape: {
     fontSize: 8,
+    lineHeight: 11,
   },
   advisoryDismiss: {
     width: 28,
