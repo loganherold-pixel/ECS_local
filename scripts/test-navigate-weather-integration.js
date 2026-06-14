@@ -4,7 +4,7 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+  return fs.readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function assert(condition, message) {
@@ -15,6 +15,10 @@ function assert(condition, message) {
 
 const navigate = read('app/(tabs)/navigate.tsx');
 const routeWeather = read('components/navigate/RouteCorridorWeather.tsx');
+const toolsPopupStart = navigate.indexOf("renderMapPopup(\n    toolsPopupVisible");
+const toolsPopupEnd = navigate.indexOf("renderMapPopup(\n    campScoutIntroVisible", toolsPopupStart);
+assert(toolsPopupStart >= 0 && toolsPopupEnd > toolsPopupStart, 'Navigate should render Tools and Camp Scout popup sections.');
+const toolsPopupSource = navigate.slice(toolsPopupStart, toolsPopupEnd);
 
 assert(
   navigate.includes("import type { WeatherCoordinate } from '../../lib/weatherTypes'"),
@@ -53,11 +57,21 @@ assert(
   'Selected camp, CampOps, campsite, and pin coordinates should be available to the weather tool.',
 );
 assert(
-  navigate.includes('navigateWeatherToolHeader') &&
-    navigate.includes('CURRENT LOCATION FORECAST') &&
-    navigate.includes('ROUTE WEATHER') &&
-    navigate.includes('SELECTED POINT FORECAST'),
-  'The Tools popup should expose current, route, and selected-point weather panels.',
+  toolsPopupSource.includes('CURRENT LOCATION FORECAST') &&
+    toolsPopupSource.includes('toolsCurrentForecastSummary') &&
+    toolsPopupSource.includes('<ECSBadge') &&
+    toolsPopupSource.includes('onPress={operationalWeather.refresh}') &&
+    navigate.includes('formatWeatherHeadline') &&
+    navigate.includes('formatWeatherWindLine') &&
+    navigate.includes('formatWeatherAlertLine'),
+  'The Tools popup should expose a compact current-location forecast row backed by shared weather formatters and refresh path.',
+);
+assert(
+  !toolsPopupSource.includes('<WeatherIntelPanel') &&
+    !toolsPopupSource.includes('ROUTE WEATHER') &&
+    !toolsPopupSource.includes('SELECTED POINT FORECAST') &&
+    !toolsPopupSource.includes('navigateWeatherToolStack'),
+  'The main Tools popup should not embed full current, route, or selected-point WeatherIntelPanel stacks.',
 );
 assert(
   !navigate.includes('Coordinate-first forecasts from the shared ECS weather service') &&
@@ -65,9 +79,10 @@ assert(
   'The Tools weather popup should not expose internal weather-service implementation copy.',
 );
 assert(
-  navigate.includes('weatherSnapshot={operationalWeather.snapshot}') &&
-    navigate.includes('onRefreshWeather={operationalWeather.refresh}'),
-  'Current-location panel should render the shared operational weather snapshot and refresh path.',
+  navigate.includes('const toolsCurrentForecastSummary = useMemo') &&
+    navigate.includes('operationalWeather.snapshot.status.kind') &&
+    navigate.includes('operationalWeather.refresh'),
+  'Current-location forecast should render the shared operational weather snapshot state and refresh path.',
 );
 assert(
   navigate.includes("const navigateTrailAssessmentActive = navigationOverlayMode === 'active'") &&
@@ -75,13 +90,10 @@ assert(
   'Navigate weather Trail Conditions should only show active route assessment when guidance is active.',
 );
 assert(
-  navigate.includes('coordinates={navigateRouteWeatherCoordinates}') &&
-    navigate.includes('latitude={navigateSelectedWeatherCoordinate.lat}') &&
-    navigate.includes('longitude={navigateSelectedWeatherCoordinate.lng}'),
-  'Route and selected-point panels should fetch by their own coordinates.',
-);
-assert(
-  navigate.includes('const hideWeatherTopOverlays = !topStatusOverlaysVisible || topRouteSurfaceVisible'),
+  navigate.includes('const hideWeatherTopOverlays =') &&
+    navigate.includes('!topStatusOverlaysVisible ||') &&
+    navigate.includes('topRouteSurfaceVisible ||') &&
+    navigate.includes('idleDestinationSearchVisible'),
   'Floating weather overlays should stay out of the active/preview guidance band.',
 );
 assert(

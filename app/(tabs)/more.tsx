@@ -5,7 +5,7 @@ import TabErrorBoundary from '../../components/TabErrorBoundary';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SPACING, RADIUS, ZONES } from '../../lib/theme';
 import { useApp } from '../../context/AppContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -108,6 +108,18 @@ function MoreScreenInner() {
   } = useApp();
   const { palette, colors, appearanceMode, autoDrivingEnabled, effectiveTheme, isAutoDrivingActive, setAppearanceMode, setAutoDrivingEnabled } = useTheme();
   const router = useRouter();
+  const searchParams = useLocalSearchParams<{
+    subTab?: string | string[];
+    campsiteSubmissionId?: string | string[];
+    campsiteSubmissionMode?: string | string[];
+  }>();
+  const subTabParam = Array.isArray(searchParams.subTab) ? searchParams.subTab[0] : searchParams.subTab;
+  const campsiteSubmissionIdParam = Array.isArray(searchParams.campsiteSubmissionId)
+    ? searchParams.campsiteSubmissionId[0]
+    : searchParams.campsiteSubmissionId ?? null;
+  const campsiteSubmissionModeParam = Array.isArray(searchParams.campsiteSubmissionMode)
+    ? searchParams.campsiteSubmissionMode[0]
+    : searchParams.campsiteSubmissionMode;
   const buildFingerprint = React.useMemo(() => getEcsBuildFingerprint(), []);
 
   const [authVisible, setAuthVisible] = useState(false);
@@ -149,6 +161,12 @@ function MoreScreenInner() {
   useFocusEffect(useCallback(() => {
     refreshActiveTrip();
   }, [refreshActiveTrip]));
+
+  React.useEffect(() => {
+    if (subTabParam === 'my-campsites') {
+      setSubTab('my-campsites');
+    }
+  }, [subTabParam]);
 
   // Update risk fields when riskScore changes
   React.useEffect(() => {
@@ -504,7 +522,12 @@ Expedition Command System
         ) : subTab === 'stability' && hasAdminAccess ? (
           <EcsIssueIntelligencePanel colors={colors} onToast={showToast} />
         ) : subTab === 'my-campsites' && user ? (
-          <MyCampsiteSubmissions colors={colors} onToast={showToast} />
+          <MyCampsiteSubmissions
+            colors={colors}
+            onToast={showToast}
+            initialSubmissionId={campsiteSubmissionIdParam}
+            initialMode={campsiteSubmissionModeParam === 'edit' ? 'edit' : 'view'}
+          />
         ) : subTab === 'community-campsite-review' && user ? (
           <CommunityCampsiteReview colors={colors} onToast={showToast} />
         ) : subTab === 'campsite-review' && hasAdminAccess ? (

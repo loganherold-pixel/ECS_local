@@ -139,30 +139,31 @@ const pins = buildCampOpsCampEndpointMapPins(recommendationSet, {
   selectedCampOpsCandidateId: 'rec-1',
 });
 
-assert.strictEqual(pins.length, 5, 'CampOps should render at most five ranked route candidate pins.');
+assert.deepStrictEqual(
+  pins.map((pin) => pin.campOpsCandidateId),
+  ['emergency-1'],
+  'CampOps should only render user-confirmed/imported camp endpoints as actionable map pins.',
+);
 assert.deepStrictEqual(
   pins.map((pin) => pin.rankLabel),
-  ['1', '2', '3', '4', '5'],
-  'CampOps route candidates should use rank numbers on the shared camp pin.',
+  ['1'],
+  'Actionable CampOps endpoint pins should use compact numeric rank labels.',
 );
 assert.deepStrictEqual(
   pins.map((pin) => pin.title),
-  ['Camp 1', 'Camp 2', 'Camp 3', 'Camp 4', 'Camp 5'],
-  'CampOps route candidate labels should read Camp 1 through Camp 5.',
+  ['Camp 1'],
+  'Actionable CampOps endpoint labels should stay generic and compact.',
 );
 assert(
   pins.every((pin) => pin.pinFamily === 'campops' && isCampOpsMapPinPayload(pin)),
   'CampOps pins should be tagged for behavior while reusing the Camp Scout marker payload.',
 );
 assert(
-  pins.every((pin) => ['ecs_inferred', 'community_suggested', 'imported_route_context'].includes(pin.sourceType)),
-  'CampOps pins should normalize into existing Camp Scout source style buckets.',
+  pins.every((pin) => pin.sourceType === 'imported_route_context'),
+  'Actionable CampOps pins should come from user-controlled or imported route context sources.',
 );
-assert.strictEqual(pins[0].selected, true, 'Selected CampOps endpoint should use the shared selected pin state.');
-assert.strictEqual(pins[1].selected, false, 'Unselected CampOps endpoint should not use selected state.');
-assert.strictEqual(pins[0].confidenceGrade, 'A', 'Recommended endpoint should carry a shared confidence grade.');
-assert.strictEqual(pins[1].confidenceGrade, 'B', 'Backup endpoint should carry a shared confidence grade.');
-assert.strictEqual(pins[2].confidenceGrade, 'B', 'Emergency endpoint should carry a shared confidence grade.');
+assert.strictEqual(pins[0].selected, false, 'Suppressed inferred endpoint selection should not leak onto another pin.');
+assert.strictEqual(pins[0].confidenceGrade, 'B', 'Actionable endpoint should carry a shared confidence grade.');
 
 for (const role of ['recommended', 'backup', 'emergency']) {
   assert(
@@ -182,6 +183,16 @@ assert.strictEqual(
   'An explicit empty ranked candidate list should not fall back to role pins.',
 );
 assert.strictEqual(
+  buildCampOpsCampEndpointMapPins({
+    ...recommendationSet,
+    rankedCandidates: recommendationSet.rankedCandidates.filter((candidate) =>
+      ['route_candidate', 'route_endpoint_candidate', 'draw_area_candidate', 'inferred', 'offline_dataset'].includes(candidate.source),
+    ),
+  }).length,
+  0,
+  'ECS-inferred, draw-area, route-candidate, and offline-only candidates must stay research-only and never render as navigable pins.',
+);
+assert.strictEqual(
   campOpsSourceToSharedCampPinSource('community'),
   'community_suggested',
   'Community CampOps endpoints should reuse the community Camp Scout source style.',
@@ -195,15 +206,15 @@ assert.strictEqual(
 const duplicatePins = buildCampOpsCampEndpointMapPins({
   ...recommendationSet,
   rankedCandidates: [
-    recommendationSet.rankedCandidates[0],
-    recommendationSet.rankedCandidates[0],
-    recommendationSet.rankedCandidates[1],
+    recommendationSet.rankedCandidates[2],
+    recommendationSet.rankedCandidates[2],
+    makeCamp('manual-2', 'Second User Camp', 'user_saved', 'medium', 39.6, -120.6, 74),
   ],
 });
 assert.strictEqual(
   duplicatePins.length,
   2,
-  'Duplicate ranked CampOps route candidates for the same camp should not create duplicate pins.',
+  'Duplicate actionable CampOps candidates for the same camp should not create duplicate pins.',
 );
 assert.strictEqual(
   buildCampOpsCampEndpointMapPins({ ...recommendationSet, rankedCandidates: [recommendationSet.rankedCandidates[5]] }).length,
@@ -217,7 +228,7 @@ const structureBufferPins = buildCampOpsCampEndpointMapPins({
     makeCamp('near-structure', 'Too Close To Structure', 'route_candidate', 'high', 39.7, -120.7, 95, {
       nearestStructureDistanceMiles: 0.8,
     }),
-    makeCamp('clear-structure', 'Clear Structure Buffer', 'route_candidate', 'high', 39.8, -120.8, 94, {
+    makeCamp('clear-structure', 'Clear Structure Buffer', 'manual', 'high', 39.8, -120.8, 94, {
       nearestStructureDistanceMiles: 1.2,
     }),
   ],
@@ -233,11 +244,11 @@ assert.deepStrictEqual(
 );
 
 const renderedPins = normalizeRenderedCampEndpointMarkers(pins);
-assert.strictEqual(renderedPins.length, 5, 'Shared renderer should accept CampOps pins through campEndpointMarkers.');
+assert.strictEqual(renderedPins.length, 1, 'Shared renderer should accept actionable CampOps pins through campEndpointMarkers.');
 assert.strictEqual(renderedPins[0].pinFamily, 'campops', 'Renderer payload should preserve CampOps behavior tag.');
 assert.strictEqual(
   renderedPins[0].campOpsCandidateId,
-  'rec-1',
+  'emergency-1',
   'Renderer payload should preserve the CampOps candidate id for marker tap behavior.',
 );
 assert.strictEqual(renderedPins[0].rankLabel, '1', 'Renderer should keep numeric CampOps rank labels.');
@@ -292,9 +303,9 @@ assert(
 );
 assert(
   adapterSource.includes("pinFamily: 'campops'") &&
-    adapterSource.includes('CAMP_OPS_ROUTE_PIN_LIMIT = 5') &&
+    adapterSource.includes('isCampOpsActionableMapPinCandidate') &&
     adapterSource.includes('Camp ${rank}'),
-  'Adapter should preserve CampOps behavior tags while rendering the top five route candidates as shared camp pins.',
+  'Adapter should preserve CampOps behavior tags only for user-confirmed/imported actionable camp pins.',
 );
 assert(
   !adapterSource.includes('definitely legal') &&
@@ -305,8 +316,9 @@ assert(
 assert(
   docs.includes('components/navigate/MapRenderer.tsx') &&
     docs.includes('lib/campops/campOpsMapPins.ts') &&
+    docs.includes('research-only') &&
     docs.includes('Community publishing and telemetry remain off'),
-  'Map pin parity documentation should describe shared style, adapter, and feature flag posture.',
+  'Map pin parity documentation should describe shared style, research-only filtering, adapter, and feature flag posture.',
 );
 
 console.log('CampOps map pin parity checks passed.');

@@ -33,8 +33,25 @@ export type DispersedCampingEligibilityCandidateAssessment = {
   warnings: string[];
 };
 
+export type DispersedCampingResearchArea = {
+  regionId: string;
+  title: string;
+  confidence: DispersedCampingConfidence;
+  landManager: DispersedCampingLandManager;
+  eligibilityScore: number;
+  eligibilityLabel: string;
+  basis: string[];
+  restrictions: string[];
+  sourceNames: string[];
+  requiresVerification: boolean;
+  routeDistanceMiles?: number;
+  verificationWarning: string;
+  warnings: string[];
+};
+
 export type DispersedCampingCandidateGenerationResult = {
   candidates: CampScoutCandidate[];
+  researchAreas: DispersedCampingResearchArea[];
   rejectedRegionIds: string[];
   warnings: string[];
   generatedAt: string;

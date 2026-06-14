@@ -112,17 +112,12 @@ export function detectDispersedCampingRuntimeContradictions(
     });
   }
 
-  if (
-    snapshot.candidatePinCount > 0 &&
-    snapshot.candidateGenerationTrigger &&
-    snapshot.candidateGenerationTrigger !== 'explicit_user_action' &&
-    !(snapshot.candidateGenerationTrigger === 'route_auto_stage' && snapshot.routeExists)
-  ) {
+  if (snapshot.candidatePinCount > 0 || snapshot.candidatePins.length > 0) {
     pushContradiction(contradictions, {
       code: 'dispersed_camping_candidate_auto_generated',
       severity: 'error',
-      message: 'ECS-inferred camp candidate pins were generated without explicit user action.',
-      detail: snapshot.candidateGenerationTrigger,
+      message: 'Dispersed Camping Eligibility must remain research-only and must not generate exact campsite pins.',
+      detail: snapshot.candidateGenerationTrigger ?? null,
     });
   }
 
@@ -130,7 +125,7 @@ export function detectDispersedCampingRuntimeContradictions(
     pushContradiction(contradictions, {
       code: 'dispersed_camping_candidate_limit_exceeded',
       severity: 'warning',
-      message: 'Dispersed Camping candidate pins exceed the compact release limit.',
+      message: 'Dispersed Camping candidate pin count should remain zero in the research-only release posture.',
       detail: String(Math.max(snapshot.candidatePinCount, snapshot.candidatePins.length)),
     });
   }

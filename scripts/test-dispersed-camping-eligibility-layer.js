@@ -209,7 +209,7 @@ assert.ok(
   'Current local restrictions not confirmed.',
   'Not shown as eligible.',
   'Live source:',
-  'Scout nearby pins',
+  'Research area',
 ].forEach((copy) => {
   assert.ok(regionSheetSource.includes(copy), `Region sheet missing copy: ${copy}`);
 });
@@ -217,40 +217,41 @@ assert.ok(
 assert.ok(
   regionSheetSource.includes('onScoutNearbyPins') &&
     regionSheetSource.includes('onClearScoutPins') &&
-    regionSheetSource.includes('Clear pins') &&
+    regionSheetSource.includes('Research area') &&
+    regionSheetSource.includes('Clear') &&
     navigateSource.includes('handleScoutSelectedDispersedCampingRegionPins') &&
     navigateSource.includes('handleClearDispersedCampingCampScoutPins') &&
     navigateSource.includes('generateDispersedCampingCampScoutPins') &&
-    navigateSource.includes("setSelectedDispersedCampingRegion(null);") &&
+    navigateSource.includes('DISPERSED_CAMPING_RESEARCH_ONLY_STATUS') &&
     !regionSheetSource.includes('Coming later'),
-  'Selected dispersed regions should wire Scout Nearby pins into the live Camp Scout candidate pipeline with clear/reset controls.',
+  'Selected dispersed regions should wire Research Area into the research-only eligibility flow with clear/reset controls.',
 );
 
 assert.ok(
   navigateSource.includes('!dispersedCampingRouteSummaryVisible') &&
     navigateSource.includes('clearScoutPinsFloatingButton') &&
     !navigateSource.includes('if (!dispersedCampingRouteHasRoute) {\n      setDispersedCampingCampScoutCandidates([]);'),
-  'Dispersed Camp Scout pins should persist until the explicit clear action, even when route overlays are hidden.',
+  'Dispersed camping research results should persist until the explicit clear action, even when route overlays are hidden.',
 );
 
 assert.ok(
   navigateSource.includes('scoutPinsVisible={dispersedCampingCampScoutCandidates.length > 0}') &&
-    regionSheetSource.includes('accessibilityLabel="Clear dispersed camping scout pins"') &&
-    routeSummarySource.includes('accessibilityLabel="Clear dispersed camping scout pins"'),
-  'Dispersed camping popup and route summary should expose a clear button when scout pins are visible.',
+    regionSheetSource.includes('accessibilityLabel="Clear dispersed camping research results"') &&
+    routeSummarySource.includes('accessibilityLabel="Clear dispersed camping research results"'),
+  'Dispersed camping popup and route summary should expose a clear button when research results are visible.',
 );
 
 assert.ok(
   !navigateSource.includes('ECS-INFERRED CAMP CANDIDATES') &&
     !navigateSource.includes('NO ELIGIBLE CAMP CANDIDATES FOUND') &&
     navigateSource.includes('setDispersedCampingCampScoutStatus('),
-  'Scout candidate pins should update the dispersed camping status container without showing redundant map toasts.',
+  'Research actions should update the dispersed camping status container without showing redundant map toasts.',
 );
 
 assert.ok(
   !navigateSource.includes("showToast('DISPERSED CAMP SCOUT PINS CLEARED')") &&
-    navigateSource.includes("setDispersedCampingCampScoutStatus('Dispersed camping scout pins cleared.');"),
-  'Clearing dispersed camp scout pins should update local status without showing a redundant map toast.',
+    navigateSource.includes("setDispersedCampingCampScoutStatus('Dispersed camping research results cleared.');"),
+  'Clearing dispersed camping research results should update local status without showing a redundant map toast.',
 );
 
 assert.ok(
@@ -320,9 +321,10 @@ assert.ok(
     navigateSource.includes('dispersedCampingRegions.filter((region) => dispersedCampingRouteNearbyIds.has(region.id))') &&
     navigateSource.includes('CAMP_LAYER_ROUTE_MAP_RESULT_LIMIT') &&
     navigateSource.includes('candidateGenerationTrigger:') &&
-    navigateSource.includes("'explicit_user_action'") &&
+    navigateSource.includes("'explicit_user_research_action'") &&
+    navigateSource.includes('researchOnly: true') &&
     !navigateSource.includes("origin: 'route'"),
-  'Route-nearby dispersed camping should render only 3-mile corridor regions and generate ECS-inferred pins from explicit Scout actions.',
+  'Route-nearby dispersed camping should render only 3-mile corridor regions and keep explicit research actions research-only.',
 );
 assert.ok(
   routeSearchSource.includes('MAX_DISPERSED_CAMPING_ROUTE_ANALYSIS_POINTS') &&
@@ -437,15 +439,15 @@ assert.ok(
     navigateSource.includes('maxCandidates: 10') &&
     navigateSource.includes('maxScoutRadiusMiles: 2') &&
     navigateSource.includes('maxCandidates: 5') &&
-    navigateSource.includes("reason: 'dispersed_camping_scout_pin_focus'") &&
-    navigateSource.includes('focusGeneratedPins: true') &&
+    navigateSource.includes('focusGeneratedPins: false') &&
+    navigateSource.includes('researchAreaCount') &&
     typesSource.includes('latitude?: number') &&
     typesSource.includes('longitude?: number') &&
     mapRendererSource.includes('buildDispersedCampingSelectionPayload(feature, event && event.lngLat)') &&
     mapRendererSource.includes("tent.textContent = '\\u26FA';") &&
     campCandidateScoringSource.includes('buildScoutCandidateCoordinates') &&
-    campCandidateScoringSource.includes('isEligibleScoutCoordinate') &&
-    campCandidateScoringSource.includes('pointInPolygonGeometry(coordinate, region.geometry)') &&
+    campCandidateScoringSource.includes('buildResearchAreaFromRegion') &&
+    campCandidateScoringSource.includes('researchAreas: researchAreas.sort') &&
     campCandidateScoringSource.includes('routeDistanceLimitMiles') &&
     campCandidateScoringSource.includes('MAX_SCOUT_RADIUS_MILES = 2') &&
     campCandidateScoringSource.includes('MAX_INFERRED_CANDIDATE_LIMIT = 10') &&
@@ -455,7 +457,7 @@ assert.ok(
     mapRendererSource.includes("'circle-radius': 0") &&
     mapRendererSource.includes("'circle-opacity': 0") &&
     mapRendererSource.includes('camp-scout-tent'),
-  'Selected dispersed camping region scouting should focus generated ECS-inferred camp icons without paired yellow circles.',
+  'Selected dispersed camping region research should stay explicit while suppressing generated ECS-inferred camp icons.',
 );
 
 console.log('Dispersed camping eligibility layer checks passed.');

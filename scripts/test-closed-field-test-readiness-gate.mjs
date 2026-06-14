@@ -42,6 +42,8 @@ function writeCampOpsLiveReadinessFixtures(root) {
   writeFile(root, 'lib/campops/campOpsCampIntelViewModel.ts', 'export const copy = "ECS-Inferred Camp Candidate Needs verification Access not fully verified Source confidence Legal/source confidence";\n');
   writeFile(root, 'lib/campops/campOpsMapPins.ts', [
     'export function isCampOpsMapPinPayload(payload) { return payload?.pinFamily === "campops"; }',
+    'const RESEARCH_ONLY_CAMPOPS_MAP_PIN_SOURCES = new Set(["route_candidate", "route_endpoint_candidate", "draw_area_candidate", "community", "offline_dataset", "inferred", "unknown"]);',
+    'export function isCampOpsActionableMapPinCandidate(camp) { return camp?.source === "manual" || camp?.source === "user_saved"; }',
     'const CAMP_OPS_ROUTE_PIN_LIMIT = 5;',
     'export function buildCampOpsCampScoutMapPins(recommendationSet) {',
     'const seen = new Set<string>();',
@@ -235,7 +237,7 @@ function readinessDoc(status, options = {}) {
       '| Gate | Required criterion | Current status | Closed field-test effect |',
       '| --- | --- | --- | --- |',
       '| Rendering | Pins render on Navigate Mapbox without duplicates and popups open/dismiss. | Pass | Required. |',
-      '| Scoring | Thresholds, top 5, nearby dedupe, and no production demo fallback. | Pass | Required. |',
+      '| Scoring | Thresholds, research-only route candidates, nearby dedupe, and no production demo fallback. | Pass | Required. |',
       '| Safety/copy | Safe ECS-Inferred copy and unverified access/legal labels. | Pass | Required. |',
       '| Privacy/storage | Saved camps/report unusable handling documented and approved. | Pass | Required. |',
       '| Provider/source | Source confidence, limitations, and region/category readiness documented and approved. | Pass | Required. |',

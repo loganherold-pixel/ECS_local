@@ -54,6 +54,22 @@ const ROLE_CONFIG: Record<
 };
 const CAMP_OPS_ROUTE_PIN_LIMIT = 5;
 const CAMP_OPS_ROUTE_PIN_MIN_CONFIDENCE_SCORE = 70;
+const ACTIONABLE_CAMPOPS_MAP_PIN_SOURCES = new Set<CampOpsDataSource>([
+  'private',
+  'group',
+  'gpx',
+  'manual',
+  'user_saved',
+]);
+const RESEARCH_ONLY_CAMPOPS_MAP_PIN_SOURCES = new Set<CampOpsDataSource>([
+  'route_candidate',
+  'route_endpoint_candidate',
+  'draw_area_candidate',
+  'community',
+  'offline_dataset',
+  'inferred',
+  'unknown',
+]);
 
 const CONFIDENCE_FALLBACK_SCORE: Record<CampOpsConfidence, number> = {
   high: 85,
@@ -73,6 +89,18 @@ export function isCampOpsMapPinPayload(payload: unknown): payload is CampOpsMapP
     (payload as { pinFamily?: unknown }).pinFamily === 'campops' &&
     typeof (payload as { campOpsCandidateId?: unknown }).campOpsCandidateId === 'string'
   );
+}
+
+export function isCampOpsResearchOnlyMapPinSource(source: CampOpsDataSource | null | undefined): boolean {
+  return !source || RESEARCH_ONLY_CAMPOPS_MAP_PIN_SOURCES.has(source);
+}
+
+export function isCampOpsActionableMapPinCandidate(
+  camp: CampCandidate | null | undefined,
+): camp is CampCandidate {
+  if (!camp) return false;
+  if (camp.existingRef?.system === 'camp_site') return true;
+  return ACTIONABLE_CAMPOPS_MAP_PIN_SOURCES.has(camp.source);
 }
 
 export function campOpsSourceToSharedCampPinSource(
@@ -146,6 +174,7 @@ function pinForCamp(
   rankOverride?: number,
 ): CampOpsMapPinPayload | null {
   if (!camp) return null;
+  if (!isCampOpsActionableMapPinCandidate(camp)) return null;
   if (
     !camp.location ||
     typeof camp.location.latitude !== 'number' ||
@@ -219,10 +248,10 @@ export function buildCampOpsCampScoutMapPins(
 
   for (const camp of rankedCandidates) {
     if (seen.has(camp.id)) continue;
-    seen.add(camp.id);
     const pin = pinForCamp('candidate', camp, recommendationSet, options, pins.length + 1);
     if (!pin) continue;
     if (minimumConfidenceScore != null && pin.confidenceScore < minimumConfidenceScore) continue;
+    seen.add(camp.id);
     pins.push(pin);
     if (pins.length >= CAMP_OPS_ROUTE_PIN_LIMIT) break;
   }

@@ -224,8 +224,23 @@ assert(
   'Trail Pack submission module should remain standalone from CampOps',
 );
 
-const navigateSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8');
-assert(navigateSource.includes('SUBMIT AS TRAIL PACK'), 'Navigate route preview entry point should be present');
+const navigateSource = fs
+  .readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8')
+  .replace(/\r\n/g, '\n');
+const toolsPopupStart = navigateSource.indexOf("renderMapPopup(\n    toolsPopupVisible");
+const toolsPopupEnd = navigateSource.indexOf("renderMapPopup(\n    campScoutIntroVisible", toolsPopupStart);
+assert(toolsPopupStart >= 0 && toolsPopupEnd > toolsPopupStart, 'Navigate should render Tools and Camp Scout popup sections.');
+const toolsPopupSource = navigateSource.slice(toolsPopupStart, toolsPopupEnd);
+assert(
+  !toolsPopupSource.includes('SUBMIT AS TRAIL PACK'),
+  'Primary Navigate Tools should no longer expose Submit as Trail Pack directly.',
+);
+assert(
+  navigateSource.includes('handleSubmitActiveRouteAsTrailPack') &&
+    navigateSource.includes('<TrailPackSubmissionModal') &&
+    navigateSource.includes('trailPackSubmissionRoute'),
+  'Navigate route preview Trail Pack submission wiring should remain present behind the Recommend Route flow.',
+);
 assert(
   navigateSource.includes('CREATE TRAIL PACK FROM IMPORT'),
   'Imported GPX/KML route entry point should be present',
@@ -237,16 +252,20 @@ assert(
 
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
 assert(
-  discoverSource.includes('handleEditTrailPackSubmission'),
-  'Discover should let owners edit pending Trail Pack route recommendations',
-);
-assert(
-  discoverSource.includes('handleWithdrawTrailPackSubmission'),
-  'Discover should let owners withdraw pending Trail Pack route recommendations',
+  discoverSource.includes('trailPackSubmissionStore') &&
+    discoverSource.includes('trailPackSubmissionSnapshot') &&
+    discoverSource.includes('handleTrailPackSubmitted'),
+  'Discover should keep pending Trail Pack route recommendation store and submission callback wiring',
 );
 assert(
   discoverSource.includes("'explore_saved_route'"),
   'Explore saved route detail should submit through the saved-route entry point',
+);
+assert(
+  discoverSource.includes('handleSubmitFavoriteTrailPack') &&
+    discoverSource.includes('<TrailPackSubmissionModal') &&
+    discoverSource.includes('trailPackSubmissionRoute'),
+  'Explore saved route detail should keep Trail Pack submission modal wiring.',
 );
 assert(
   discoverSource.includes('Submit to ECS Trail Packs'),

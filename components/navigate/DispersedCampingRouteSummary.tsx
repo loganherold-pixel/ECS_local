@@ -164,7 +164,7 @@ export default function DispersedCampingRouteSummary({
               activeOpacity={0.84}
               disabled={scoutDisabled}
               accessibilityRole="button"
-              accessibilityLabel="Scout candidate camp pins"
+              accessibilityLabel="Research dispersed camping eligibility areas"
             >
               <Ionicons name="search-outline" size={12} color={scoutDisabled ? TACTICAL.textMuted : '#091014'} />
               <Text
@@ -173,7 +173,7 @@ export default function DispersedCampingRouteSummary({
                 adjustsFontSizeToFit
                 minimumFontScale={0.76}
               >
-                Scout pins
+                Research areas
               </Text>
             </TouchableOpacity>
           ) : null}
@@ -183,7 +183,7 @@ export default function DispersedCampingRouteSummary({
               onPress={onClearScoutPins}
               activeOpacity={0.84}
               accessibilityRole="button"
-              accessibilityLabel="Clear dispersed camping scout pins"
+              accessibilityLabel="Clear dispersed camping research results"
             >
               <Ionicons name="close-circle-outline" size={12} color="#F07D71" />
               <Text style={styles.clearPinsButtonText}>Clear</Text>

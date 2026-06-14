@@ -26,6 +26,7 @@ import {
   type DispersedCampingCandidateGenerationInput,
   type DispersedCampingCandidateGenerationResult,
   type DispersedCampingEligibilityCandidateAssessment,
+  type DispersedCampingResearchArea,
 } from './campCandidateTypes';
 
 const DEFAULT_INFERRED_CANDIDATE_LIMIT = 5;
@@ -54,11 +55,12 @@ const ELIGIBILITY_SCORE = {
 
 const LAND_MANAGER_BLOCKLIST = new Set(['PRIVATE', 'TRIBAL', 'MILITARY']);
 
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  const next = values
+function uniqueStrings(values: Array<string | null | undefined> | null | undefined, fallback?: string): string[] {
+  const next = (values ?? [])
     .map((value) => String(value ?? '').trim())
     .filter((value) => value.length > 0);
-  return next.filter((value, index) => next.indexOf(value) === index);
+  const unique = next.filter((value, index) => next.indexOf(value) === index);
+  return unique.length > 0 ? unique : fallback ? [fallback] : [];
 }
 
 function includesBlockedRestriction(region: DispersedCampingRegion): boolean {
@@ -418,6 +420,65 @@ function buildCandidateFromRegion(
   };
 }
 
+function routeNearbyDistanceMiles(
+  regionId: string,
+  input: DispersedCampingCandidateGenerationInput,
+): number | undefined {
+  const distance = input.routeNearbyRegions?.find((result) => result.regionId === regionId)?.distanceFromRouteMiles;
+  return typeof distance === 'number' && Number.isFinite(distance) ? Math.round(distance * 10) / 10 : undefined;
+}
+
+function buildResearchAreaFromRegion(
+  region: DispersedCampingRegion,
+  assessment: DispersedCampingEligibilityCandidateAssessment,
+  input: DispersedCampingCandidateGenerationInput,
+): DispersedCampingResearchArea {
+  const routeDistanceMiles = routeNearbyDistanceMiles(region.id, input);
+  const warnings = uniqueStrings([
+    ...assessment.warnings,
+    ...region.restrictions,
+    ECS_INFERRED_CAMP_CANDIDATE_WARNING,
+    routeDistanceMiles != null ? `${routeDistanceMiles} mi from route corridor; exact campsite not selected by ECS.` : null,
+  ]);
+
+  return {
+    regionId: region.id,
+    title: 'Dispersed camping research area',
+    confidence: assessment.confidence,
+    landManager: assessment.landManager,
+    eligibilityScore: assessment.eligibilityScore,
+    eligibilityLabel: region.eligibilityLabel || 'Verify locally',
+    basis: uniqueStrings(region.basis),
+    restrictions: uniqueStrings(region.restrictions, 'Verify locally'),
+    sourceNames: uniqueStrings(region.sourceNames, 'Source unavailable'),
+    requiresVerification: true,
+    routeDistanceMiles,
+    verificationWarning: ECS_INFERRED_CAMP_CANDIDATE_WARNING,
+    warnings,
+  };
+}
+
+function compareResearchAreas(
+  input: DispersedCampingCandidateGenerationInput,
+): (left: DispersedCampingResearchArea, right: DispersedCampingResearchArea) => number {
+  const routeRank = new Map((input.routeNearbyRegions ?? []).map((result, index) => [result.regionId, index]));
+  return (left, right) => {
+    const leftDistance = typeof left.routeDistanceMiles === 'number' ? left.routeDistanceMiles : Number.POSITIVE_INFINITY;
+    const rightDistance = typeof right.routeDistanceMiles === 'number' ? right.routeDistanceMiles : Number.POSITIVE_INFINITY;
+    const distanceDelta = leftDistance - rightDistance;
+    if (Math.abs(distanceDelta) > 0.05) return distanceDelta;
+
+    const scoreDelta = right.eligibilityScore - left.eligibilityScore;
+    if (scoreDelta !== 0) return scoreDelta;
+
+    const leftRank = routeRank.get(left.regionId) ?? Number.POSITIVE_INFINITY;
+    const rightRank = routeRank.get(right.regionId) ?? Number.POSITIVE_INFINITY;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+
+    return left.regionId.localeCompare(right.regionId);
+  };
+}
+
 export function buildDispersedCampingCampScoutCandidates(
   input: DispersedCampingCandidateGenerationInput,
 ): DispersedCampingCandidateGenerationResult {
@@ -431,7 +492,7 @@ export function buildDispersedCampingCampScoutCandidates(
     : input.regions;
   const rejectedRegionIds: string[] = [];
   const warnings = new Set<string>();
-  const rawCandidates: CampScoutCandidate[] = [];
+  const researchAreas: DispersedCampingResearchArea[] = [];
 
   for (const region of candidateRegions) {
     const assessment = assessDispersedCampingRegionForCandidate(region);
@@ -443,49 +504,12 @@ export function buildDispersedCampingCampScoutCandidates(
     if (region.confidence === 'verify' && input.includeVerifyCandidates === false) {
       continue;
     }
-    const scoutCoordinates = buildScoutCandidateCoordinates(region, input, maxCandidates);
-    scoutCoordinates.forEach((coordinate, index) => {
-      const candidate = buildCandidateFromRegion(region, assessment, input, coordinate, index);
-      if (candidate) rawCandidates.push(candidate);
-    });
+    researchAreas.push(buildResearchAreaFromRegion(region, assessment, input));
   }
 
-  const ranked = rankCampScoutCandidates(rawCandidates, {
-    filterMode: 'balanced',
-    sourceTypes: ['ecs_inferred'],
-    includeUnknownSource: false,
-    expandedResults: true,
-    expandedLimit: maxCandidates,
-    maximumCandidates: maxCandidates,
-    allowLowConfidenceFallback: true,
-    minimumLegalityConfidence: CAMP_SCOUT_MIN_LEGALITY_CONFIDENCE,
-    minimumConfidenceScore: CAMP_SCOUT_MIN_DISPLAY_SCORE,
-    minimumAccessConfidence: CAMP_SCOUT_MIN_ACCESS_CONFIDENCE,
-    minimumRemotenessScore: CAMP_SCOUT_MIN_REMOTENESS_SCORE,
-    maximumSlopeEstimate: CAMP_SCOUT_MAX_VIABLE_SLOPE_ESTIMATE,
-    context: {
-      preferredMinimumRoadDistanceMiles: 0,
-      preferredMaximumRoadDistanceMiles: 1,
-    },
-  }).slice(0, maxCandidates);
-
-  const filtered = ranked.filter(
-    (candidate) =>
-      candidate.confidenceScore >= CAMP_SCOUT_MIN_DISPLAY_SCORE &&
-      candidate.accessConfidence >= CAMP_SCOUT_MIN_ACCESS_CONFIDENCE &&
-      candidate.legalityConfidence >= CAMP_SCOUT_MIN_LEGALITY_CONFIDENCE &&
-      candidate.remotenessScore >= CAMP_SCOUT_MIN_REMOTENESS_SCORE &&
-      (candidate.terrainConfidence ?? 0) >= CAMP_SCOUT_MIN_TERRAIN_CONFIDENCE,
-  );
-
   return {
-    candidates: filtered.map((candidate) => ({
-      ...candidate,
-      reasons: uniqueStrings([
-        ...candidate.reasons,
-        'Ranked by ECS against eligibility confidence, access, remoteness, route proximity, and terrain confidence.',
-      ]).slice(0, 5),
-    })),
+    candidates: [],
+    researchAreas: researchAreas.sort(compareResearchAreas(input)).slice(0, maxCandidates),
     rejectedRegionIds,
     warnings: Array.from(warnings),
     generatedAt: new Date().toISOString(),

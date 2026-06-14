@@ -16,6 +16,12 @@ function assert(condition, message) {
   }
 }
 
+function requireIndex(haystack, needle, message) {
+  const index = haystack.indexOf(needle);
+  assert(index >= 0, message);
+  return index;
+}
+
 const toolsPopupStart = source.indexOf("renderMapPopup(\n    toolsPopupVisible");
 const toolsPopupEnd = source.indexOf("renderMapPopup(\n    campScoutIntroVisible", toolsPopupStart);
 assert(toolsPopupStart >= 0 && toolsPopupEnd > toolsPopupStart, 'Navigate should render Tools and Camp Scout popup sections.');
@@ -126,35 +132,68 @@ assert(
 );
 
 assert(
-  toolsPopupSource.includes('STITCH ROUTES') &&
-    toolsPopupSource.includes('MANUAL CAMP AREA REVIEW') &&
-    !toolsPopupSource.includes('DRAW CAMP POTENTIAL AREA') &&
-    toolsPopupSource.indexOf('STITCH ROUTES') < toolsPopupSource.indexOf('MANUAL CAMP AREA REVIEW'),
-  'Stitch routes should stay in Route utilities while internal manual CampOps area review remains lower in Explore.',
+  !toolsPopupSource.includes('<ScrollView') &&
+    !toolsPopupSource.includes('styles.mapPopupScroll') &&
+    !toolsPopupSource.includes('styles.toolsPopupScrollContent') &&
+    toolsPopupSource.includes('styles.toolsFixedContent'),
+  'Main Tools popup should be a fixed command panel, not a scroll-owned drawer.',
+);
+
+const toolsSectionTitles = Array.from(
+  toolsPopupSource.matchAll(/<NavigateToolSection\s+title="([^"]+)"/g),
+).map((match) => match[1]);
+assert(
+  JSON.stringify(toolsSectionTitles) === JSON.stringify(['SAVED ROUTES', 'ROUTE PLANNING', 'COMMUNITY CONTRIBUTIONS']),
+  `Main Tools sections should be Saved Routes, Route Planning, and Community Contributions only. Saw: ${toolsSectionTitles.join(', ')}`,
+);
+
+const mapPresentationIndex = requireIndex(toolsPopupSource, 'MAP PRESENTATION', 'Tools should put the map presentation selector first.');
+const styleSelectorIndex = requireIndex(toolsPopupSource, 'MAP_STYLE_MODE_OPTIONS.map', 'Tools should preserve the existing map style selector options.');
+const forecastIndex = requireIndex(toolsPopupSource, 'CURRENT LOCATION FORECAST', 'Tools should render a compact current-location forecast row.');
+const savedRoutesIndex = requireIndex(toolsPopupSource, 'title="SAVED ROUTES"', 'Tools should expose a Saved Routes section.');
+const routePlanningIndex = requireIndex(toolsPopupSource, 'title="ROUTE PLANNING"', 'Tools should expose a Route Planning section.');
+const communityIndex = requireIndex(toolsPopupSource, 'title="COMMUNITY CONTRIBUTIONS"', 'Tools should expose a Community Contributions section.');
+assert(
+  mapPresentationIndex < styleSelectorIndex &&
+    styleSelectorIndex < forecastIndex &&
+    forecastIndex < savedRoutesIndex &&
+    savedRoutesIndex < routePlanningIndex &&
+    routePlanningIndex < communityIndex,
+  'Tools panel order should be map presentation, forecast, saved routes, route planning, then community contributions.',
 );
 
 assert(
-  toolsPopupSource.includes('styles.toolsUtilityStack') &&
-    toolsPopupSource.includes('title="ROUTE PLANNING"') &&
-    toolsPopupSource.includes('title="COMMUNITY CONTRIBUTIONS"') &&
-    toolsPopupSource.includes('title="FIELD OPS"') &&
-    toolsPopupSource.includes('title="MAP AND OFFLINE"') &&
-    toolsPopupSource.indexOf('title="ROUTE PLANNING"') < toolsPopupSource.indexOf('BUILD ROUTE PLAN') &&
-    toolsPopupSource.indexOf('BUILD ROUTE PLAN') < toolsPopupSource.indexOf('STITCH ROUTES') &&
-    toolsPopupSource.indexOf('STITCH ROUTES') < toolsPopupSource.indexOf("accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}") &&
-    toolsPopupSource.indexOf("accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}") < toolsPopupSource.indexOf('IMPORT') &&
-    !toolsPopupSource.includes('EXPLORE ROUTES') &&
-    toolsPopupSource.indexOf('title="COMMUNITY CONTRIBUTIONS"') < toolsPopupSource.indexOf('RECOMMEND CAMPSITE') &&
-    toolsPopupSource.indexOf('RECOMMEND CAMPSITE') < toolsPopupSource.indexOf('RECOMMEND ROUTE') &&
-    toolsPopupSource.indexOf('RECOMMEND ROUTE') < toolsPopupSource.indexOf('MANUAL CAMP AREA REVIEW') &&
-    toolsPopupSource.indexOf('title="FIELD OPS"') < toolsPopupSource.indexOf('RECORD TRAIL') &&
-    toolsPopupSource.indexOf('RECORD TRAIL') < toolsPopupSource.indexOf('SUBMIT AS TRAIL PACK') &&
-    toolsPopupSource.indexOf('SUBMIT AS TRAIL PACK') < toolsPopupSource.indexOf('DROP PIN') &&
-    toolsPopupSource.indexOf('title="MAP AND OFFLINE"') > toolsPopupSource.indexOf('DROP PIN') &&
-    toolsPopupSource.indexOf('OFFLINE MAPS') > toolsPopupSource.indexOf('title="MAP AND OFFLINE"') &&
+  !toolsPopupSource.includes('FIELD OPS') &&
+    !toolsPopupSource.includes('MAP AND OFFLINE') &&
+    !toolsPopupSource.includes('MY CAMPSITES') &&
+    !toolsPopupSource.includes('SUBMIT AS TRAIL PACK') &&
+    !toolsPopupSource.includes('MANUAL CAMP AREA REVIEW') &&
+    !toolsPopupSource.includes('DRAW CAMP POTENTIAL AREA') &&
+    !toolsPopupSource.includes('EXPLORE ROUTES'),
+  'Primary Tools panel should not include removed Field Ops, Map and Offline, My Campsites, Trail Pack, CampOps review, or Explore Routes entries.',
+);
+
+assert(
+  routePlanningIndex < requireIndex(toolsPopupSource, 'BUILD ROUTE PLAN', 'Route Planning should include Build Route Plan.') &&
+    requireIndex(toolsPopupSource, 'BUILD ROUTE PLAN', 'Route Planning should include Build Route Plan.') <
+      requireIndex(toolsPopupSource, 'STITCH ROUTES', 'Route Planning should include Stitch Routes.') &&
+    requireIndex(toolsPopupSource, 'STITCH ROUTES', 'Route Planning should include Stitch Routes.') <
+      requireIndex(
+        toolsPopupSource,
+        "accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}",
+        'Route Planning should include Build Route.',
+      ) &&
+    requireIndex(
+      toolsPopupSource,
+      "accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}",
+      'Route Planning should include Build Route.',
+    ) < requireIndex(toolsPopupSource, 'IMPORT', 'Route Planning should include Import.') &&
+    toolsPopupSource.includes('RECORD TRAIL') &&
     toolsPopupSource.includes('RECENT SEARCHES') &&
+    toolsPopupSource.includes('DROP PIN') &&
+    toolsPopupSource.includes('OFFLINE MAPS') &&
     toolsPopupSource.includes('PINS'),
-  'Utilities should be grouped into Route Planning, Community Contributions, Field Ops, and Map and Offline while preserving existing Recent Searches and Pins utilities.',
+  'Route Planning should keep build, stitch, import, record, recent searches, pin, pins, and offline map actions together.',
 );
 
 assert(
@@ -163,15 +202,15 @@ assert(
     toolsPopupSource.includes('onPress={handleOpenStitch}') &&
     toolsPopupSource.includes('onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}') &&
     toolsPopupSource.includes('onPress={handleOpenImportRoute}') &&
-    !toolsPopupSource.includes('onPress={toggleExploreRoutesOverlay}') &&
-    toolsPopupSource.includes('onPress={openRecommendCampsiteChooser}') &&
-    toolsPopupSource.includes('onPress={openRecommendRouteChooser}') &&
-    toolsPopupSource.includes('onPress={() => runToolsAction(handleOpenCampScoutIntro)}') &&
     toolsPopupSource.includes("openToolsChildPopup('trail')") &&
-    toolsPopupSource.includes('onPress={() => runToolsAction(handleSubmitActiveRouteAsTrailPack)}') &&
     toolsPopupSource.includes('onPress={() => runToolsAction(handleDropPinHere)}') &&
-    toolsPopupSource.includes("openToolsChildPopup('offlineCache')"),
-  'Grouped utilities should keep the existing button handlers wired.',
+    toolsPopupSource.includes("openToolsChildPopup('offlineCache')") &&
+    !toolsPopupSource.includes('onPress={toggleExploreRoutesOverlay}') &&
+    !toolsPopupSource.includes('onPress={() => runToolsAction(handleOpenCampScoutIntro)}') &&
+    !toolsPopupSource.includes('onPress={() => runToolsAction(handleSubmitActiveRouteAsTrailPack)}') &&
+    toolsPopupSource.includes('onPress={openRecommendCampsiteChooser}') &&
+    toolsPopupSource.includes('onPress={openRecommendRouteChooser}'),
+  'Grouped utilities should keep route/community handlers wired while removing primary Trail Pack and manual CampOps actions.',
 );
 
 assert(

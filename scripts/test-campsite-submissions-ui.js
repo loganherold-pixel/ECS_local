@@ -12,10 +12,14 @@ const migrationPath = path.join(root, 'supabase', 'migrations', '014_campsite_su
 
 const component = fs.readFileSync(componentPath, 'utf8');
 const moreTab = fs.readFileSync(moreTabPath, 'utf8');
-const navigate = fs.readFileSync(navigatePath, 'utf8');
+const navigate = fs.readFileSync(navigatePath, 'utf8').replace(/\r\n/g, '\n');
 const service = fs.readFileSync(servicePath, 'utf8');
 const types = fs.readFileSync(typesPath, 'utf8');
 const migration = fs.readFileSync(migrationPath, 'utf8');
+const toolsPopupStart = navigate.indexOf("renderMapPopup(\n    toolsPopupVisible");
+const toolsPopupEnd = navigate.indexOf("renderMapPopup(\n    campScoutIntroVisible", toolsPopupStart);
+assert.ok(toolsPopupStart >= 0 && toolsPopupEnd > toolsPopupStart, 'Navigate should render Tools and Camp Scout popup sections.');
+const toolsPopupSource = navigate.slice(toolsPopupStart, toolsPopupEnd);
 
 assert.ok(component.includes('My Campsite Submissions'), 'Submitter screen should use the requested title.');
 assert.ok(component.includes('Private saves'), 'Screen should bucket private saves.');
@@ -61,7 +65,7 @@ assert.ok(moreTab.includes('initialSubmissionId={campsiteSubmissionIdParam}'), '
 assert.ok(moreTab.includes("initialMode={campsiteSubmissionModeParam === 'edit' ? 'edit' : 'view'}"), 'More tab should pass routed edit mode to the submitter screen.');
 
 assert.ok(navigate.includes('openMyCampsiteSubmissions'), 'Navigate should expose a My Campsites handoff.');
-assert.ok(navigate.includes('MY CAMPSITES'), 'Navigate Tools should make the saved campsite list discoverable.');
+assert.ok(!toolsPopupSource.includes('MY CAMPSITES'), 'Navigate Tools should not expose My Campsites in the primary tools panel.');
 assert.ok(navigate.includes("pathname: '/more'"), 'Navigate campsite edit should route to the More tab.');
 assert.ok(navigate.includes("subTab: 'my-campsites'"), 'Navigate campsite edit should open the My Campsites subtab.');
 assert.ok(

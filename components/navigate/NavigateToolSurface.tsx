@@ -39,6 +39,8 @@ type NavigateToolActionCardProps = {
   onPress?: () => void;
   disabled?: boolean;
   active?: boolean;
+  compact?: boolean;
+  hideChevron?: boolean;
   badge?: string | null;
   accessibilityLabel?: string;
   children?: React.ReactNode;
@@ -116,6 +118,8 @@ export function NavigateToolActionCard({
   onPress,
   disabled = false,
   active = false,
+  compact = false,
+  hideChevron = false,
   badge,
   accessibilityLabel,
   children,
@@ -123,7 +127,13 @@ export function NavigateToolActionCard({
 }: NavigateToolActionCardProps) {
   return (
     <TouchableOpacity
-      style={[styles.actionCard, active && styles.actionCardActive, disabled && styles.disabled, style]}
+      style={[
+        styles.actionCard,
+        compact && styles.actionCardCompact,
+        active && styles.actionCardActive,
+        disabled && styles.disabled,
+        style,
+      ]}
       onPress={onPress}
       disabled={disabled || !onPress}
       activeOpacity={0.86}
@@ -131,12 +141,15 @@ export function NavigateToolActionCard({
       accessibilityLabel={accessibilityLabel ?? title}
       accessibilityState={{ disabled, selected: active }}
     >
-      <View style={[styles.actionIcon, active && styles.actionIconActive]}>
-        <Ionicons name={icon} size={16} color={active ? '#091014' : TACTICAL.amber} />
+      <View style={[styles.actionIcon, compact && styles.actionIconCompact, active && styles.actionIconActive]}>
+        <Ionicons name={icon} size={compact ? 14 : 16} color={active ? '#091014' : TACTICAL.amber} />
       </View>
       <View style={styles.actionTextWrap}>
         <View style={styles.actionTitleRow}>
-          <Text style={[styles.actionTitle, active && styles.actionTitleActive]} numberOfLines={1}>
+          <Text
+            style={[styles.actionTitle, compact && styles.actionTitleCompact, active && styles.actionTitleActive]}
+            numberOfLines={compact ? 2 : 1}
+          >
             {title}
           </Text>
           {badge ? <Text style={[styles.actionBadge, active && styles.actionBadgeActive]}>{badge}</Text> : null}
@@ -148,7 +161,9 @@ export function NavigateToolActionCard({
         ) : null}
         {children}
       </View>
-      <Ionicons name="chevron-forward" size={14} color={active ? '#091014' : TACTICAL.textMuted} />
+      {hideChevron ? null : (
+        <Ionicons name="chevron-forward" size={14} color={active ? '#091014' : TACTICAL.textMuted} />
+      )}
     </TouchableOpacity>
   );
 }
@@ -262,6 +277,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
+  actionCardCompact: {
+    minHeight: 50,
+    borderRadius: 11,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 7,
+  },
   actionCardActive: {
     borderColor: 'rgba(255,220,140,0.38)',
     backgroundColor: 'rgba(196,138,44,0.94)',
@@ -278,6 +300,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(196,138,44,0.08)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  actionIconCompact: {
+    width: 26,
+    height: 26,
+    borderRadius: 9,
   },
   actionIconActive: {
     borderColor: 'rgba(9,16,20,0.22)',
@@ -299,6 +326,10 @@ const styles = StyleSheet.create({
     color: TACTICAL.text,
     fontSize: 12,
     flexShrink: 1,
+  },
+  actionTitleCompact: {
+    fontSize: 10,
+    lineHeight: 12,
   },
   actionTitleActive: {
     color: '#091014',

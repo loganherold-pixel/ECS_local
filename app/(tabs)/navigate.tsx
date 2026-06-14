@@ -215,6 +215,26 @@ import {
   ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
   type RouteGeometryOverlaySegment,
 } from '../../lib/navigateRouteGeometryOverlay';
+import {
+  isRouteGeometryViewportZoomEligible,
+  mergeRouteGeometryViewportSegmentsWithSelected,
+  resolveNearestRouteGeometryEndpoint,
+  routeGeometryViewportSegmentsToOverlaySegments,
+  RouteGeometryViewportFetchCoordinator,
+  ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM,
+  ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
+  type RouteGeometryViewportBbox,
+  type RouteGeometryViewportSegment,
+} from '../../lib/routeGeometryViewport';
+import {
+  fetchRouteGeometryViewportSegments,
+  isRouteGeometryViewportOverlayFeatureEnabled,
+} from '../../lib/routeGeometryViewportClient';
+import {
+  readRouteGeometryViewportOfflineCache,
+  resolveRouteGeometryViewportOfflineCacheLookup,
+  writeRouteGeometryViewportOfflineCache,
+} from '../../lib/routeGeometryViewportCache';
 import { buildRouteConfidenceTimeline, isRouteConfidenceTimelineFeatureEnabled, routeConfidenceTimelineItemCopy, type RouteConfidenceTimeline, type RouteConfidenceTimelineItem, type RouteConfidenceTimelineOverlay, type RouteGeometry } from '../../lib/routeContext';
 import {
   clearExploreRoutesMapHandoff,
@@ -564,6 +584,11 @@ import { resolveMapSurfaceMotionState } from '../../lib/mapSurfaceCoordinator';
 import { resolveRouteAheadBearingDeg } from '../../lib/dashboardNavigationChaseCamera';
 import { resolveVehicleGuidanceHeading } from '../../lib/mapMotion';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
+import {
+  formatWeatherAlertLine,
+  formatWeatherHeadline,
+  formatWeatherWindLine,
+} from '../../lib/ecsWeather';
 import { buildUnifiedWeatherCorridor } from '../../lib/weatherSurfaceSelectors';
 import type { WeatherCoordinate } from '../../lib/weatherTypes';
 import { useRemoteWeatherRouteWatcher } from '../../lib/remote/useRemoteWeatherRouteWatcher';
@@ -664,6 +689,10 @@ const CAMPOPS_MANUAL_AREA_REVIEW_ENABLED =
   typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_CAMPOPS_MANUAL_AREA_REVIEW === '1';
 const campopsManualAreaReviewEnabled = CAMPOPS_MANUAL_AREA_REVIEW_ENABLED;
 const CAMPOPS_ROUTE_RESULT_CACHE_LIMIT = 6;
+const CAMP_ENDPOINT_RESEARCH_ONLY_STATUS =
+  'Camp research leads found. ECS no longer drops inferred campsite pins; use eligibility and known campsite layers, then add a user camp after local verification.';
+const DISPERSED_CAMPING_RESEARCH_ONLY_STATUS =
+  'Dispersed eligibility is research-only. ECS will not place exact campsite pins from eligibility areas.';
 const NAV_AI_ASSIST_FADE_IN_MS = 180;
 const NAV_AI_ASSIST_FADE_OUT_MS = 220;
 const NAV_AI_ASSIST_VISIBLE_MS = 7000;
@@ -766,6 +795,49 @@ function formatCampLayerErrorDiagnostic(diagnostic?: CampLayerUiState['diagnosti
   const status = diagnostic.status != null ? `status ${diagnostic.status}` : 'status n/a';
   const code = diagnostic.errorCode || diagnostic.errorName || 'code n/a';
   return `${diagnostic.layer} - ${status} - ${code} - ${diagnostic.endpoint}`;
+}
+
+type RouteGeometryViewportUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'zoom' | 'offline';
+
+type RouteGeometryViewportUiState = {
+  enabled: boolean;
+  status: RouteGeometryViewportUiStatus;
+  errorMessage: string | null;
+  featureCount: number;
+  cappedCount: number;
+  skippedMissingGeometryCount: number;
+  skippedClosedCount: number;
+  dataState: 'live' | 'cached' | 'stale' | 'unknown';
+  lastAttemptedBbox: RouteGeometryViewportBbox | null;
+  lastAttemptedCacheKey: string | null;
+  lastSuccessfulBbox: RouteGeometryViewportBbox | null;
+  lastSuccessfulCacheKey: string | null;
+};
+
+function createRouteGeometryViewportUiState(enabled = false): RouteGeometryViewportUiState {
+  return {
+    enabled,
+    status: enabled ? 'loading' : 'idle',
+    errorMessage: null,
+    featureCount: 0,
+    cappedCount: 0,
+    skippedMissingGeometryCount: 0,
+    skippedClosedCount: 0,
+    dataState: 'unknown',
+    lastAttemptedBbox: null,
+    lastAttemptedCacheKey: null,
+    lastSuccessfulBbox: null,
+    lastSuccessfulCacheKey: null,
+  };
+}
+
+function markRouteGeometryViewportSegmentsCached(
+  segments: RouteGeometryViewportSegment[],
+): RouteGeometryViewportSegment[] {
+  return segments.map((segment) => ({
+    ...segment,
+    dataState: segment.dataState === 'live' || segment.dataState === 'local' ? 'cached' : segment.dataState,
+  }));
 }
 
 function normalizeCampScoutLegalityStatus(value: unknown): CampScoutLegalityStatus | undefined {
@@ -2602,6 +2674,65 @@ function isRestorableNavigationHandoffPayload(
   );
 }
 
+type RouteGeometryPlanningEndpoint = {
+  latitude: number;
+  longitude: number;
+  segmentId: string;
+  distanceMiles: number;
+};
+
+function coordinateEndpointScore(
+  coordinate: RoadNavCoordinate | null | undefined,
+  endpoint: RouteGeometryPlanningEndpoint,
+): number {
+  if (!coordinate || !Number.isFinite(coordinate.lat) || !Number.isFinite(coordinate.lng)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return (coordinate.lat - endpoint.latitude) ** 2 + (coordinate.lng - endpoint.longitude) ** 2;
+}
+
+function applyRouteGeometryPlanningEndpoint(
+  payload: NavigationHandoffPayload,
+  endpoint: RouteGeometryPlanningEndpoint | null,
+): NavigationHandoffPayload {
+  if (!endpoint) return payload;
+  const startCoordinate: RoadNavCoordinate = {
+    lat: endpoint.latitude,
+    lng: endpoint.longitude,
+  };
+  const trailGeometry = Array.isArray(payload.trailGeometry) ? payload.trailGeometry : [];
+  const firstScore = coordinateEndpointScore(trailGeometry[0], endpoint);
+  const lastScore = coordinateEndpointScore(trailGeometry[trailGeometry.length - 1], endpoint);
+  const orientedTrailGeometry =
+    trailGeometry.length > 1 && lastScore < firstScore
+      ? [...trailGeometry].reverse()
+      : trailGeometry;
+  const rawRecord =
+    payload.raw && typeof payload.raw === 'object' && !Array.isArray(payload.raw)
+      ? (payload.raw as Record<string, unknown>)
+      : {};
+
+  return {
+    ...payload,
+    coordinate: orientedTrailGeometry[orientedTrailGeometry.length - 1] ?? payload.coordinate,
+    trailheadCoordinate: startCoordinate,
+    roadDestinationCoordinate: startCoordinate,
+    trailGeometry: orientedTrailGeometry,
+    routeMetadata: {
+      ...(payload.routeMetadata ?? {}),
+      routeGeometryPlanningSource: ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
+      routeGeometryNearestEndpoint: endpoint,
+      routeGeometryNearestEndpointBehavior:
+        'Road navigation is staged from current GPS to the nearest selected ECS route geometry endpoint before trail guidance.',
+    },
+    raw: {
+      ...rawRecord,
+      routeGeometryPlanningSource: ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
+      routeGeometryNearestEndpoint: endpoint,
+    },
+  };
+}
+
 function buildMapCameraCommandSignature(command: MapSurfaceCameraCommand | null): string {
   if (!command) return 'null';
   return JSON.stringify({
@@ -3655,6 +3786,45 @@ const operationalWeather = useOperationalWeather({
     accuracyM: gps.position?.accuracyM ?? null,
   },
 });
+const toolsCurrentForecastSummary = useMemo(() => {
+  const statusKind = operationalWeather.snapshot.status.kind;
+  const statusLabel =
+    statusKind === 'live' || statusKind === 'ready'
+      ? 'LIVE'
+      : statusKind === 'cached' || statusKind === 'stale' || statusKind === 'offline'
+        ? 'LIMITED'
+        : 'UNAVAILABLE';
+  const statusTone =
+    statusKind === 'live' || statusKind === 'ready'
+      ? ('live' as const)
+      : statusKind === 'cached' || statusKind === 'stale' || statusKind === 'offline'
+        ? ('warning' as const)
+        : ('unavailable' as const);
+  const freshnessLabel = operationalWeather.snapshot.status.stale
+    ? 'stale'
+    : operationalWeather.snapshot.cache.freshness === 'fresh'
+      ? 'fresh'
+      : operationalWeather.snapshot.cache.freshness;
+  const ageLabel =
+    operationalWeather.snapshot.status.ageMinutes != null
+      ? `${Math.max(0, Math.round(operationalWeather.snapshot.status.ageMinutes))} min old`
+      : null;
+  const sourceLabel = [
+    operationalWeather.snapshot.status.label ?? operationalWeather.snapshot.locationName,
+    freshnessLabel,
+    ageLabel,
+  ]
+    .filter(Boolean)
+    .join(' - ');
+  return {
+    statusLabel,
+    statusTone,
+    headline: formatWeatherHeadline(operationalWeather.snapshot),
+    detail: formatWeatherWindLine(operationalWeather.snapshot),
+    alertLine: formatWeatherAlertLine(operationalWeather.snapshot),
+    sourceLabel: sourceLabel || 'Current-location weather unavailable',
+  };
+}, [operationalWeather.snapshot]);
 useRemoteWeatherRouteWatcher({ enabled: true });
 
 
@@ -4016,6 +4186,21 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const [exploreRoutesHandoff, setExploreRoutesHandoff] = useState<ExploreRoutesMapHandoff | null>(null);
   const [routeGeometryOverlayEnabled, setRouteGeometryOverlayEnabled] = useState(false);
   const [selectedRouteGeometrySegmentIds, setSelectedRouteGeometrySegmentIds] = useState<string[]>([]);
+  const routeGeometryViewportOverlayEnabled = useMemo(
+    () => isRouteGeometryViewportOverlayFeatureEnabled(),
+    [],
+  );
+  const [routeGeometryViewportSegments, setRouteGeometryViewportSegments] = useState<RouteGeometryViewportSegment[]>([]);
+  const [
+    routeGeometryViewportSelectedSegments,
+    setRouteGeometryViewportSelectedSegments,
+  ] = useState<RouteGeometryOverlaySegment[]>([]);
+  const routeGeometryViewportSelectedSegmentsRef = useRef<RouteGeometryOverlaySegment[]>([]);
+  const [routeGeometryViewportUiState, setRouteGeometryViewportUiState] = useState<RouteGeometryViewportUiState>(
+    () => createRouteGeometryViewportUiState(false),
+  );
+  const routeGeometryViewportFetchCoordinatorRef = useRef(new RouteGeometryViewportFetchCoordinator());
+  const routeGeometryViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedRouteConfidenceTimelineItemId, setSelectedRouteConfidenceTimelineItemId] = useState<string | null>(null);
   const [aiRouteSnapshotVersion, setAiRouteSnapshotVersion] = useState(0);
   const lastExploreRoutesFitSignatureRef = useRef<string | null>(null);
@@ -4440,6 +4625,12 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     isOnline &&
     (!navigateConnectivity.initialized ||
       (navigateConnectivity.status === 'online' && navigateConnectivity.isInternetReachable));
+  const routeGeometryViewportFetchOnline = campLayerFetchOnline;
+  const routeGeometryViewportZoomReady = isRouteGeometryViewportZoomEligible(mapZoom);
+
+  useEffect(() => {
+    routeGeometryViewportSelectedSegmentsRef.current = routeGeometryViewportSelectedSegments;
+  }, [routeGeometryViewportSelectedSegments]);
 
   useEffect(() => {
     if (!selectedEstablishedCampsite) return;
@@ -4494,9 +4685,242 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       clearTimeout(establishedCampgroundsFetchTimerRef.current);
       establishedCampgroundsFetchTimerRef.current = null;
     }
+    if (routeGeometryViewportFetchTimerRef.current) {
+      clearTimeout(routeGeometryViewportFetchTimerRef.current);
+      routeGeometryViewportFetchTimerRef.current = null;
+    }
     dispersedCampingFetchCoordinatorRef.current.cancel();
     establishedCampgroundsFetchCoordinatorRef.current.cancel();
+    routeGeometryViewportFetchCoordinatorRef.current.cancel();
   }, []);
+
+  useEffect(() => {
+    if (
+      !routeGeometryOverlayEnabled ||
+      !routeGeometryViewportOverlayEnabled ||
+      !routeGeometryViewportZoomReady
+    ) {
+      return;
+    }
+    if (!mapBounds) {
+      setRouteGeometryViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: 'loading',
+        errorMessage: null,
+      }));
+      setRequestBoundsTrigger((prev) => prev + 1);
+    }
+  }, [
+    mapBounds,
+    routeGeometryOverlayEnabled,
+    routeGeometryViewportOverlayEnabled,
+    routeGeometryViewportZoomReady,
+  ]);
+
+  useEffect(() => {
+    const layerAvailable = routeGeometryOverlayEnabled && routeGeometryViewportOverlayEnabled;
+    if (!layerAvailable) {
+      routeGeometryViewportFetchCoordinatorRef.current.cancel();
+      if (routeGeometryViewportFetchTimerRef.current) {
+        clearTimeout(routeGeometryViewportFetchTimerRef.current);
+        routeGeometryViewportFetchTimerRef.current = null;
+      }
+      setRouteGeometryViewportSegments([]);
+      setRouteGeometryViewportUiState((current) =>
+        current.enabled ? createRouteGeometryViewportUiState(false) : current,
+      );
+      return;
+    }
+
+    if (!routeGeometryViewportZoomReady) {
+      routeGeometryViewportFetchCoordinatorRef.current.cancel();
+      if (routeGeometryViewportFetchTimerRef.current) {
+        clearTimeout(routeGeometryViewportFetchTimerRef.current);
+        routeGeometryViewportFetchTimerRef.current = null;
+      }
+      setRouteGeometryViewportSegments([]);
+      setRouteGeometryViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: 'zoom',
+        errorMessage: null,
+        featureCount: 0,
+        dataState: 'unknown',
+      }));
+      return;
+    }
+
+    const planBbox: RouteGeometryViewportBbox | null = mapBounds
+      ? {
+          minLng: mapBounds.minLng,
+          minLat: mapBounds.minLat,
+          maxLng: mapBounds.maxLng,
+          maxLat: mapBounds.maxLat,
+        }
+      : null;
+    const plan = routeGeometryViewportFetchCoordinatorRef.current.plan({
+      bbox: planBbox,
+      zoom: mapZoom,
+      enabled: routeGeometryOverlayEnabled,
+      featureEnabled: routeGeometryViewportOverlayEnabled,
+      online: routeGeometryViewportFetchOnline,
+      now: Date.now(),
+      includeReferenceGeometry: true,
+      vehicleClass: null,
+    });
+
+    if (plan.type === 'skip') {
+      if (plan.reason === 'offline') {
+        const lookup = resolveRouteGeometryViewportOfflineCacheLookup(planBbox, mapZoom, {
+          includeReferenceGeometry: true,
+          vehicleClass: null,
+        });
+        if (lookup) {
+          let cancelled = false;
+          void readRouteGeometryViewportOfflineCache(lookup.cacheKey).then((cached) => {
+            if (cancelled) return;
+            if (!cached) {
+              setRouteGeometryViewportSegments([]);
+              setRouteGeometryViewportUiState((current) => ({
+                ...current,
+                enabled: true,
+                status: 'offline',
+                errorMessage: 'ECS route geometry needs live coverage or a cached viewport.',
+                featureCount: 0,
+                dataState: 'unknown',
+                lastAttemptedBbox: lookup.bbox,
+                lastAttemptedCacheKey: lookup.cacheKey,
+              }));
+              return;
+            }
+            const cachedSegments = markRouteGeometryViewportSegmentsCached(cached.result.segments);
+            setRouteGeometryViewportSegments(cachedSegments);
+            setRouteGeometryViewportUiState((current) => ({
+              ...current,
+              enabled: true,
+              status: cachedSegments.length > 0 ? 'ready' : 'empty',
+              errorMessage: null,
+              featureCount: cachedSegments.length,
+              cappedCount: cached.result.cappedCount,
+              skippedMissingGeometryCount: cached.result.skippedMissingGeometryCount,
+              skippedClosedCount: cached.result.skippedClosedCount,
+              dataState: 'cached',
+              lastAttemptedBbox: lookup.bbox,
+              lastAttemptedCacheKey: lookup.cacheKey,
+              lastSuccessfulBbox: lookup.bbox,
+              lastSuccessfulCacheKey: lookup.cacheKey,
+            }));
+          });
+          return () => {
+            cancelled = true;
+          };
+        }
+        setRouteGeometryViewportSegments([]);
+        setRouteGeometryViewportUiState((current) => ({
+          ...current,
+          enabled: true,
+          status: 'offline',
+          errorMessage: 'ECS route geometry needs live coverage or a cached viewport.',
+          featureCount: 0,
+          dataState: 'unknown',
+        }));
+      }
+
+      if (plan.reason === 'missing_bbox') {
+        setRouteGeometryViewportUiState((current) => ({
+          ...current,
+          enabled: true,
+          status: 'loading',
+          errorMessage: null,
+        }));
+        setRequestBoundsTrigger((prev) => prev + 1);
+      } else if (plan.reason === 'invalid_bbox' || plan.reason === 'bbox_too_small') {
+        setRouteGeometryViewportSegments([]);
+        setRouteGeometryViewportUiState((current) => ({
+          ...current,
+          enabled: true,
+          status: 'empty',
+          errorMessage: null,
+          featureCount: 0,
+          dataState: 'unknown',
+        }));
+      }
+      return;
+    }
+
+    if (routeGeometryViewportFetchTimerRef.current) {
+      clearTimeout(routeGeometryViewportFetchTimerRef.current);
+      routeGeometryViewportFetchTimerRef.current = null;
+    }
+
+    const now = Date.now();
+    setRouteGeometryViewportUiState((current) => ({
+      ...current,
+      enabled: true,
+      status: 'loading',
+      errorMessage: null,
+      lastAttemptedBbox: plan.bbox,
+      lastAttemptedCacheKey: plan.cacheKey,
+    }));
+
+    routeGeometryViewportFetchTimerRef.current = setTimeout(() => {
+      routeGeometryViewportFetchTimerRef.current = null;
+      const request = routeGeometryViewportFetchCoordinatorRef.current.consumeDue(Date.now());
+      if (!request) return;
+
+      fetchRouteGeometryViewportSegments({
+        bbox: request.bbox,
+        zoom: mapZoom,
+        includeReferenceGeometry: true,
+      })
+        .then((result) => {
+          if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
+          setRouteGeometryViewportSegments(result.segments);
+          writeRouteGeometryViewportOfflineCache({
+            lookup: {
+              bbox: request.bbox,
+              cacheKey: request.cacheKey,
+            },
+            result,
+          });
+          setRouteGeometryViewportUiState((current) => ({
+            ...current,
+            enabled: true,
+            status: result.segments.length > 0 ? 'ready' : 'empty',
+            errorMessage: null,
+            featureCount: result.segments.length,
+            cappedCount: result.cappedCount,
+            skippedMissingGeometryCount: result.skippedMissingGeometryCount,
+            skippedClosedCount: result.skippedClosedCount,
+            dataState: 'live',
+            lastAttemptedBbox: request.bbox,
+            lastAttemptedCacheKey: request.cacheKey,
+            lastSuccessfulBbox: request.bbox,
+            lastSuccessfulCacheKey: request.cacheKey,
+          }));
+        })
+        .catch((error) => {
+          if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
+          setRouteGeometryViewportUiState((current) => ({
+            ...current,
+            enabled: true,
+            status: 'error',
+            errorMessage: error instanceof Error ? error.message : 'ECS route geometry is unavailable.',
+            dataState: 'unknown',
+            lastAttemptedBbox: request.bbox,
+            lastAttemptedCacheKey: request.cacheKey,
+          }));
+        });
+    }, Math.max(0, plan.dueAt - now));
+  }, [
+    mapBounds,
+    mapZoom,
+    routeGeometryOverlayEnabled,
+    routeGeometryViewportFetchOnline,
+    routeGeometryViewportOverlayEnabled,
+    routeGeometryViewportZoomReady,
+  ]);
 
   useEffect(() => {
     if (
@@ -5595,7 +6019,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     selectedScopedCampsite,
   ]);
   const drawAreaKnownCampsiteMarkers = useMemo<CampMapMarker[]>(() => {
-    // Camp Endpoints manual review absorbs mapped/community sources into ranked candidate pins.
+    // Camp Endpoint review stays research-only unless the user adds or imports a confirmed camp.
     return [];
   }, []);
   const exploreRouteCampMarkers = useMemo<CampMapMarker[]>(
@@ -5841,21 +6265,21 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     if (campScoutLimitedDataMode) {
       setCampsitePolygonLocateState('limited');
       setCampsitePolygonLocateMessage(
-        `Offline/limited data mode: ${campScoutCandidatesShown.length} Camp Endpoint pin${campScoutCandidatesShown.length === 1 ? '' : 's'} ranked from cached/local signals. Verify rules, access, and conditions.`,
+        `Offline/limited data mode: ${campScoutCandidatesShown.length} Camp Endpoint research lead${campScoutCandidatesShown.length === 1 ? '' : 's'} found from cached/local signals. ${CAMP_ENDPOINT_RESEARCH_ONLY_STATUS}`,
       );
       return;
     }
     if (campScoutPartialDataMode) {
       setCampsitePolygonLocateState('partial');
       setCampsitePolygonLocateMessage(
-        `Partial results: ${campScoutCandidatesShown.length} Camp Endpoint pin${campScoutCandidatesShown.length === 1 ? '' : 's'} shown in or near the drawn area from available signals. Verify rules and access.`,
+        `Partial results: ${campScoutCandidatesShown.length} Camp Endpoint research lead${campScoutCandidatesShown.length === 1 ? '' : 's'} found in or near the drawn area from available signals. ${CAMP_ENDPOINT_RESEARCH_ONLY_STATUS}`,
       );
       return;
     }
 
     setCampsitePolygonLocateState('ready');
     setCampsitePolygonLocateMessage(
-      `${campScoutCandidatesShown.length} Camp Endpoint pin${campScoutCandidatesShown.length === 1 ? '' : 's'} shown in or near the drawn area for ${filterLabel}.`,
+      `${campScoutCandidatesShown.length} Camp Endpoint research lead${campScoutCandidatesShown.length === 1 ? '' : 's'} found in or near the drawn area for ${filterLabel}. ${CAMP_ENDPOINT_RESEARCH_ONLY_STATUS}`,
     );
   }, [
     campScoutAreaMode,
@@ -5875,88 +6299,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     : campScoutLocateStateTitle('no_area');
 
   const campScoutMapMarkers = useMemo<CampScoutMapMarkerPayload[]>(() => {
-    return campScoutCandidatesShown.map((candidate, index) => {
-      return {
-        id: candidate.id,
-        latitude: candidate.coordinate.latitude,
-        longitude: candidate.coordinate.longitude,
-        title: candidate.title,
-        sourceType: candidate.sourceType,
-        confidenceGrade: candidate.confidenceGrade,
-        confidenceScore: candidate.confidenceScore,
-        rank: index + 1,
-        selected: candidate.id === selectedCampScoutCandidateId,
-        legalityStatus: candidate.legalityStatus ?? 'unknown_needs_verification',
-        confidenceLabel:
-          candidate.confidenceGrade === 'A'
-            ? 'higher confidence'
-            : candidate.confidenceGrade === 'B'
-              ? 'moderate confidence'
-              : 'lower confidence',
-        warnings: candidate.warnings ?? candidate.cautions ?? [],
-        reasons: candidate.reasons ?? [],
-        distanceFromRoadOrTrail: candidate.distanceFromRoadOrTrail ?? candidate.distanceFromNearestRoadMiles,
-        slope: candidate.slope ?? candidate.slopeEstimate,
-        accessNotes: candidate.accessNotes ?? candidate.sourceNotes?.join('; '),
-        nearBuildings: candidate.nearBuildings,
-        nearStructure: candidate.nearStructure,
-        nearResidentialStructure: candidate.nearResidentialStructure,
-        nearestBuildingMiles: candidate.nearestBuildingMiles,
-        nearestBuildingDistanceMiles: candidate.nearestBuildingDistanceMiles,
-        buildingDistanceMiles: candidate.buildingDistanceMiles,
-        distanceToBuildingMiles: candidate.distanceToBuildingMiles,
-        distanceFromBuildingMiles: candidate.distanceFromBuildingMiles,
-        nearestStructureMiles: candidate.nearestStructureMiles,
-        nearestStructureDistanceMiles: candidate.nearestStructureDistanceMiles,
-        structureDistanceMiles: candidate.structureDistanceMiles,
-        distanceToStructureMiles: candidate.distanceToStructureMiles,
-        distanceFromStructureMiles: candidate.distanceFromStructureMiles,
-        nearestResidentialStructureMiles: candidate.nearestResidentialStructureMiles,
-        nearestResidentialStructureDistanceMiles: candidate.nearestResidentialStructureDistanceMiles,
-        residentialStructureDistanceMiles: candidate.residentialStructureDistanceMiles,
-        distanceToResidentialStructureMiles: candidate.distanceToResidentialStructureMiles,
-        distanceFromResidentialStructureMiles: candidate.distanceFromResidentialStructureMiles,
-      };
-    });
+    void campScoutCandidatesShown;
+    void selectedCampScoutCandidateId;
+    return [];
   }, [campScoutCandidatesShown, selectedCampScoutCandidateId]);
   const dispersedCampingCampScoutMapMarkers = useMemo<CampScoutMapMarkerPayload[]>(() => {
-    return dispersedCampingCampScoutCandidates.map((candidate, index) => ({
-      id: candidate.id,
-      latitude: candidate.coordinate.latitude,
-      longitude: candidate.coordinate.longitude,
-      title: candidate.title,
-      sourceType: candidate.sourceType,
-      confidenceGrade: candidate.confidenceGrade,
-      confidenceScore: candidate.confidenceScore,
-      rank: index + 1,
-      selected: candidate.id === selectedCampScoutCandidateId,
-      legalityStatus: candidate.legalityStatus ?? 'unknown_needs_verification',
-      confidenceLabel: 'ECS-Inferred',
-      warnings: candidate.warnings ?? candidate.cautions ?? [],
-      reasons: candidate.reasons ?? [],
-      distanceFromRoadOrTrail: candidate.distanceFromRoadOrTrail ?? candidate.distanceFromNearestRoadMiles,
-      slope: candidate.slope ?? candidate.slopeEstimate,
-      accessNotes: candidate.accessNotes ?? candidate.sourceNotes?.join('; '),
-      nearBuildings: candidate.nearBuildings,
-      nearStructure: candidate.nearStructure,
-      nearResidentialStructure: candidate.nearResidentialStructure,
-      nearestBuildingMiles: candidate.nearestBuildingMiles,
-      nearestBuildingDistanceMiles: candidate.nearestBuildingDistanceMiles,
-      buildingDistanceMiles: candidate.buildingDistanceMiles,
-      distanceToBuildingMiles: candidate.distanceToBuildingMiles,
-      distanceFromBuildingMiles: candidate.distanceFromBuildingMiles,
-      nearestStructureMiles: candidate.nearestStructureMiles,
-      nearestStructureDistanceMiles: candidate.nearestStructureDistanceMiles,
-      structureDistanceMiles: candidate.structureDistanceMiles,
-      distanceToStructureMiles: candidate.distanceToStructureMiles,
-      distanceFromStructureMiles: candidate.distanceFromStructureMiles,
-      nearestResidentialStructureMiles: candidate.nearestResidentialStructureMiles,
-      nearestResidentialStructureDistanceMiles: candidate.nearestResidentialStructureDistanceMiles,
-      residentialStructureDistanceMiles: candidate.residentialStructureDistanceMiles,
-      distanceToResidentialStructureMiles: candidate.distanceToResidentialStructureMiles,
-      distanceFromResidentialStructureMiles: candidate.distanceFromResidentialStructureMiles,
-      accessibilityLabel: `ECS-Inferred Camp Candidate. Candidate scouting location. Verify locally before camping.`,
-    }));
+    void dispersedCampingCampScoutCandidates;
+    void selectedCampScoutCandidateId;
+    return [];
   }, [dispersedCampingCampScoutCandidates, selectedCampScoutCandidateId]);
   const campOpsMapMarkers = useMemo<CampOpsCampEndpointMapMarkerPayload[]>(
     () =>
@@ -8937,7 +9287,9 @@ const locateCampsitesForCompletedPolygon = useCallback(
                   : 'viable';
         setCampScoutAreaMode('results');
         setCampsitePolygonLocateState('ready');
-        setCampsitePolygonLocateMessage(`${cappedCount} ${confidenceLabel} Camp Endpoint pin${cappedCount === 1 ? '' : 's'} shown in or near the drawn area.`);
+        setCampsitePolygonLocateMessage(
+          `${cappedCount} ${confidenceLabel} Camp Endpoint research lead${cappedCount === 1 ? '' : 's'} found in or near the drawn area. ${CAMP_ENDPOINT_RESEARCH_ONLY_STATUS}`,
+        );
       } catch (error) {
         console.warn('[Navigate] Polygon campsite locating failed:', error);
         setCampScoutAreaMode('error');
@@ -11179,19 +11531,12 @@ const handleCreateRun = useCallback(() => {
       selectedRegionId: selectedDispersedCampingRegion?.regionId ?? null,
       routeExists: dispersedCampingRouteHasRoute,
       routeAwareSummaryVisible: dispersedCampingEligibilityLayer.enabled && dispersedCampingRouteHasRoute,
-      candidatePinCount: dispersedCampingCampScoutCandidates.length,
-      candidatePins: dispersedCampingCampScoutCandidates.map((candidate) => ({
-        id: candidate.id,
-        regionId: candidate.dispersedCampingRegionId ?? null,
-        landManager: candidate.landManager ?? null,
-        confidence: candidate.eligibilityConfidence ?? null,
-        sourceType: candidate.sourceType,
-        isRestricted: candidate.isPrivateLand || candidate.isClosed || candidate.noCamping || candidate.isProtectedArea,
-        verificationWarning: candidate.verificationWarning ?? null,
-      })),
+      candidatePinCount: 0,
+      candidatePins: [],
+      researchOnly: true,
       candidateGenerationTrigger:
-        dispersedCampingCampScoutCandidates.length > 0
-          ? 'explicit_user_action'
+        dispersedCampingCampScoutStatus
+          ? 'explicit_user_research_action'
           : null,
       dataFreshnessState: dispersedCampingEligibilityLayer.enabled ? 'cached' : 'unavailable',
       dataFreshnessLabel: dispersedCampingEligibilityLayer.enabled
@@ -11201,7 +11546,7 @@ const handleCreateRun = useCallback(() => {
       createdEligibilityClaimsWithoutData: false,
     });
   }, [
-    dispersedCampingCampScoutCandidates,
+    dispersedCampingCampScoutStatus,
     dispersedCampingEligibilityLayer.enabled,
     dispersedCampingEligibilityLayer.geojson,
     dispersedCampingEligibilityLayerAvailable,
@@ -11599,7 +11944,7 @@ const handleCreateRun = useCallback(() => {
     () => (exploreRoutesEnabled ? exploreRouteOverlayBuild.segments : []),
     [exploreRouteOverlayBuild.segments, exploreRoutesEnabled],
   );
-  const routeGeometryOverlayBuild = useMemo(
+  const localRouteGeometryOverlayBuild = useMemo(
     () => {
       void customRouteRefreshKey;
       void savedRoutesRefreshKey;
@@ -11621,6 +11966,68 @@ const handleCreateRun = useCallback(() => {
       selectedRouteGeometrySegmentIds,
     ],
   );
+  const visibleCatalogRouteGeometryOverlaySegments = useMemo(
+    () =>
+      routeGeometryViewportOverlayEnabled
+        ? routeGeometryViewportSegmentsToOverlaySegments(
+            routeGeometryViewportSegments,
+            selectedRouteGeometrySegmentIds,
+          )
+        : [],
+    [
+      routeGeometryViewportOverlayEnabled,
+      routeGeometryViewportSegments,
+      selectedRouteGeometrySegmentIds,
+    ],
+  );
+  const catalogRouteGeometryOverlaySegments = useMemo(
+    () =>
+      mergeRouteGeometryViewportSegmentsWithSelected(
+        visibleCatalogRouteGeometryOverlaySegments,
+        routeGeometryViewportSelectedSegments,
+      ),
+    [
+      routeGeometryViewportSelectedSegments,
+      visibleCatalogRouteGeometryOverlaySegments,
+    ],
+  );
+  const routeGeometryOverlayBuild = useMemo(
+    () => {
+      const sourceCounts = { ...localRouteGeometryOverlayBuild.sourceCounts };
+      if (catalogRouteGeometryOverlaySegments.length > 0) {
+        sourceCounts.route_catalog =
+          (sourceCounts.route_catalog ?? 0) + catalogRouteGeometryOverlaySegments.length;
+      }
+      return {
+        ...localRouteGeometryOverlayBuild,
+        segments: [
+          ...localRouteGeometryOverlayBuild.segments,
+          ...catalogRouteGeometryOverlaySegments,
+        ],
+        candidateCount:
+          localRouteGeometryOverlayBuild.candidateCount +
+          routeGeometryViewportUiState.featureCount,
+        cappedCount:
+          localRouteGeometryOverlayBuild.cappedCount +
+          routeGeometryViewportUiState.cappedCount,
+        skippedMissingGeometryCount:
+          localRouteGeometryOverlayBuild.skippedMissingGeometryCount +
+          routeGeometryViewportUiState.skippedMissingGeometryCount,
+        sourceCounts,
+        catalogViewportActive:
+          routeGeometryViewportOverlayEnabled &&
+          catalogRouteGeometryOverlaySegments.length > 0,
+      };
+    },
+    [
+      catalogRouteGeometryOverlaySegments,
+      localRouteGeometryOverlayBuild,
+      routeGeometryViewportOverlayEnabled,
+      routeGeometryViewportUiState.cappedCount,
+      routeGeometryViewportUiState.featureCount,
+      routeGeometryViewportUiState.skippedMissingGeometryCount,
+    ],
+  );
   const routeGeometryOverlaySegments = useMemo(
     () => (routeGeometryOverlayEnabled ? routeGeometryOverlayBuild.segments : []),
     [routeGeometryOverlayBuild.segments, routeGeometryOverlayEnabled],
@@ -11638,6 +12045,33 @@ const handleCreateRun = useCallback(() => {
       .map(([source, count]) => `${source.replace(/_/g, ' ')} ${count}`);
     return loadedSources.length > 0 ? loadedSources.join(' / ') : 'no ECS-owned sources';
   }, [routeGeometryOverlayBuild.sourceCounts]);
+  const routeGeometryViewportLegendMessage = useMemo(() => {
+    if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
+      return 'Zoom to 10+ to load ECS route geometry.';
+    }
+    if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'loading') {
+      return 'Loading ECS route geometry for the visible viewport.';
+    }
+    if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'offline') {
+      return routeGeometryViewportUiState.errorMessage ?? 'Offline. Cached ECS route geometry only.';
+    }
+    if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'error') {
+      return routeGeometryViewportUiState.errorMessage ?? 'ECS route geometry unavailable.';
+    }
+    const dataStateCopy =
+      routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.dataState === 'cached'
+        ? ' Cached viewport data.'
+        : '';
+    return `${routeGeometryOverlayBuild.segments.length} loaded from ${routeGeometryOverlaySourceSummary}.${dataStateCopy}`;
+  }, [
+    routeGeometryOverlayBuild.segments.length,
+    routeGeometryOverlaySourceSummary,
+    routeGeometryViewportOverlayEnabled,
+    routeGeometryViewportUiState.dataState,
+    routeGeometryViewportUiState.errorMessage,
+    routeGeometryViewportUiState.status,
+    routeGeometryViewportZoomReady,
+  ]);
   const selectedExploreRouteSegment = useMemo(
     () =>
       selectedExploreRouteSegmentId
@@ -11718,6 +12152,7 @@ const handleCreateRun = useCallback(() => {
 
     if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) return;
     if (routeGeometryOverlaySegments.length === 0) return;
+    if (routeGeometryOverlayBuild.catalogViewportActive) return;
     if (lastRouteGeometryFitSignatureRef.current === routeGeometryOverlaySignature) return;
 
     lastRouteGeometryFitSignatureRef.current = routeGeometryOverlaySignature;
@@ -11726,6 +12161,7 @@ const handleCreateRun = useCallback(() => {
     fitMapToRouteGeometrySegments,
     pendingHybridTrailTransition,
     roadNavigationActive,
+    routeGeometryOverlayBuild.catalogViewportActive,
     routeGeometryOverlayEnabled,
     routeGeometryOverlaySegments,
     routeGeometryOverlaySignature,
@@ -11752,6 +12188,25 @@ const handleCreateRun = useCallback(() => {
         : next;
     });
   }, [routeGeometryOverlayBuild.segments, selectedRouteGeometrySegmentIds.length]);
+
+  useEffect(() => {
+    if (selectedRouteGeometrySegmentIds.length === 0) {
+      if (routeGeometryViewportSelectedSegmentsRef.current.length > 0) {
+        routeGeometryViewportSelectedSegmentsRef.current = [];
+        setRouteGeometryViewportSelectedSegments([]);
+      }
+      return;
+    }
+    const selectedIds = new Set(selectedRouteGeometrySegmentIds);
+    setRouteGeometryViewportSelectedSegments((current) => {
+      const next = current.filter((segment) => selectedIds.has(segment.id));
+      if (next.length === current.length && next.every((segment, index) => segment.id === current[index].id)) {
+        return current;
+      }
+      routeGeometryViewportSelectedSegmentsRef.current = next;
+      return next;
+    });
+  }, [selectedRouteGeometrySegmentIds]);
 
   const cachedRemoteRemotenessScore = getRemoteCacheFallbackScore(activeRun?.offline_cache?.remote_cache);
   const remotenessOverlayRouteAvailable = displayedRoutePoints.length > 1;
@@ -14931,6 +15386,24 @@ const routeBuilderHasRouteGeometrySegments = routeBuilderSavableSegments.some(
 );
 const routeBuilderCanPlanGeometry =
   routeBuilderCanSave && routeBuilderHasRouteGeometrySegments && selectedRouteGeometrySegmentIds.length > 0;
+const selectedRouteGeometryOverlaySegmentsForPlanning = useMemo(() => {
+  if (selectedRouteGeometrySegmentIds.length === 0) return [];
+  const selectedIds = new Set(selectedRouteGeometrySegmentIds);
+  return routeGeometryOverlayBuild.segments.filter((segment) => selectedIds.has(segment.id));
+}, [routeGeometryOverlayBuild.segments, selectedRouteGeometrySegmentIds]);
+const routeGeometryNearestPlanningEndpoint = useMemo(
+  () =>
+    resolveNearestRouteGeometryEndpoint(
+      selectedRouteGeometryOverlaySegmentsForPlanning,
+      safeUserLocation
+        ? {
+            latitude: safeUserLocation.lat,
+            longitude: safeUserLocation.lng,
+          }
+        : null,
+    ),
+  [safeUserLocation, selectedRouteGeometryOverlaySegmentsForPlanning],
+);
 
 const syncSelectedDispersedRouteLegIds = useCallback((segments: RouteBuilderSegmentData[]) => {
   const remainingIds = new Set(
@@ -15492,6 +15965,8 @@ const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boole
   routeBuilderFinalSnapInFlightRef.current.clear();
   setSelectedDispersedRouteLegIds([]);
   setSelectedRouteGeometrySegmentIds([]);
+  routeGeometryViewportSelectedSegmentsRef.current = [];
+  setRouteGeometryViewportSelectedSegments([]);
   setDispersedRouteBuildRenderKey((key) => key + 1);
   if (options?.clearDesignContext) {
     setRouteDesignContext(null);
@@ -15662,6 +16137,7 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
   sourceApp?: string | null;
   externalSourceType?: string | null;
   description?: string | null;
+  routeGeometryStartEndpoint?: RouteGeometryPlanningEndpoint | null;
 }) => {
   if (routeBuilderSavableSegments.length === 0 || routeBuilderPointCount < 2) {
     showToast('TRACE AT LEAST TWO POINTS TO SAVE');
@@ -15715,11 +16191,15 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
       await clearRoadDestination();
       const previewPayload = buildNavigationPayloadFromRun(savedRun);
       if (previewPayload) {
+        const stagedPayload = applyRouteGeometryPlanningEndpoint(
+          previewPayload,
+          options.routeGeometryStartEndpoint ?? null,
+        );
         if (options.autoStart) {
-          pendingAutoStartRouteIdRef.current = previewPayload.id;
+          pendingAutoStartRouteIdRef.current = stagedPayload.id;
           setFollowUser(true);
         }
-        await applyExploreNavigationPayload(previewPayload);
+        await applyExploreNavigationPayload(stagedPayload);
       }
     } else {
       routeBuilderStagedRouteIdRef.current = null;
@@ -15760,8 +16240,18 @@ const finishRouteBuilder = useCallback(async () => {
 
 const routeToRouteBuilder = useCallback(async () => {
   hapticCommand();
-  await saveVerifiedRouteBuilderDraft({ stage: true, autoStart: true });
-}, [saveVerifiedRouteBuilderDraft]);
+  await saveVerifiedRouteBuilderDraft({
+    stage: true,
+    autoStart: true,
+    routeGeometryStartEndpoint: routeBuilderHasRouteGeometrySegments
+      ? routeGeometryNearestPlanningEndpoint
+      : null,
+  });
+}, [
+  routeBuilderHasRouteGeometrySegments,
+  routeGeometryNearestPlanningEndpoint,
+  saveVerifiedRouteBuilderDraft,
+]);
 
 const handlePlanRouteBuilderDraft = useCallback(async () => {
   hapticCommand();
@@ -15793,7 +16283,13 @@ const handlePlanRouteBuilderDraft = useCallback(async () => {
       }))
       .filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude)),
   );
-  const startCoordinate = trailGeometry[0] ?? null;
+  const nearestRouteGeometryEndpoint = routeGeometryNearestPlanningEndpoint;
+  const startCoordinate = nearestRouteGeometryEndpoint
+    ? {
+        latitude: nearestRouteGeometryEndpoint.latitude,
+        longitude: nearestRouteGeometryEndpoint.longitude,
+      }
+    : trailGeometry[0] ?? null;
   const endCoordinate = trailGeometry[trailGeometry.length - 1] ?? null;
   const tripBuilderRoute: TripBuilderRouteInput = {
     id: savedRoute.id,
@@ -15819,6 +16315,8 @@ const handlePlanRouteBuilderDraft = useCallback(async () => {
       sourceApp: 'ecs_route_geometry_overlay',
       sourceLabel: 'ECS Route Geometry Overlay',
       sourceState: savedRoute.sync_status,
+      routeGeometryPlanningSource: ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
+      routeGeometryNearestEndpoint: nearestRouteGeometryEndpoint,
       routeGeometryWarning: ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
       routeGeometryConfidence:
         'planning/reference geometry - not legal access, closure, or safety approval',
@@ -15831,7 +16329,13 @@ const handlePlanRouteBuilderDraft = useCallback(async () => {
     params: { routeId: savedRoute.id },
   } as any);
   showToast(`TRIP BUILDER READY: ${savedRoute.name}`);
-}, [routeBuilderCanPlanGeometry, router, saveVerifiedRouteBuilderDraft, showToast]);
+}, [
+  routeBuilderCanPlanGeometry,
+  routeGeometryNearestPlanningEndpoint,
+  router,
+  saveVerifiedRouteBuilderDraft,
+  showToast,
+]);
 
 const undoLastRouteBuilderSegment = useCallback(() => {
   hapticCommand();
@@ -16446,12 +16950,27 @@ const toggleRemotenessOverlay = useCallback(() => {
     setRouteGeometryOverlayEnabled(next);
     if (!next) return;
 
+    if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
+      showToast(`ZOOM TO ${ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM}+ TO LOAD ECS ROUTE GEOMETRY`);
+      return;
+    }
+
     if (routeGeometryOverlayBuild.segments.length > 0) {
       return;
     }
 
-    showToast('NO ECS ROUTE GEOMETRY AVAILABLE');
-  }, [routeGeometryOverlayBuild.segments.length, routeGeometryOverlayEnabled, showToast]);
+    showToast(
+      routeGeometryViewportOverlayEnabled
+        ? 'ECS ROUTE GEOMETRY LOADING FOR THIS VIEWPORT'
+        : 'NO ECS ROUTE GEOMETRY AVAILABLE',
+    );
+  }, [
+    routeGeometryOverlayBuild.segments.length,
+    routeGeometryOverlayEnabled,
+    routeGeometryViewportOverlayEnabled,
+    routeGeometryViewportZoomReady,
+    showToast,
+  ]);
 
   const toggleExploreRoutesOverlay = useCallback(() => {
     hapticMicro();
@@ -16536,6 +17055,23 @@ const toggleRemotenessOverlay = useCallback(() => {
           ? current
           : [...current, match.id],
     );
+    if (match.sourceKind === 'route_catalog') {
+      setRouteGeometryViewportSelectedSegments((current) => {
+        const next = alreadySelected
+          ? current.filter((item) => item.id !== match.id)
+          : current.some((item) => item.id === match.id)
+            ? current
+            : [
+                ...current,
+                {
+                  ...match,
+                  routeGeometrySelected: true,
+                },
+              ];
+        routeGeometryViewportSelectedSegmentsRef.current = next;
+        return next;
+      });
+    }
     setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);
     setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
     setRouteBuilderSnapMessage(
@@ -16892,45 +17428,23 @@ const toggleRemotenessOverlay = useCallback(() => {
       includeVerifyCandidates: true,
     });
 
-    setDispersedCampingCampScoutCandidates(result.candidates);
+    const researchAreaCount = result.researchAreas?.length ?? 0;
+    setDispersedCampingCampScoutCandidates([]);
     setDispersedCampingCampScoutStatus(
-      result.candidates.length > 0
-        ? `${result.candidates.length} ECS-Inferred ${input.scopeLabel ?? 'candidate'} scouting pin${result.candidates.length === 1 ? '' : 's'} added. Verify locally.`
-        : `No eligible candidate scouting locations found for ${input.scopeLabel ?? 'this selection'}.`,
+      researchAreaCount > 0
+        ? `${researchAreaCount} ${input.scopeLabel ?? 'dispersed'} research area${researchAreaCount === 1 ? '' : 's'} found. ${DISPERSED_CAMPING_RESEARCH_ONLY_STATUS}`
+        : `No eligible dispersed camping research areas found for ${input.scopeLabel ?? 'this selection'}.`,
     );
-    if (result.candidates.length > 0 && input.selectFirstCandidate !== false) {
-      setSelectedCampScoutCandidateId(result.candidates[0].id);
-    } else {
-      setSelectedCampScoutCandidateId(null);
-    }
-    if (result.candidates.length > 0 && input.focusGeneratedPins) {
-      const firstCandidate = result.candidates[0];
-      queueMapCameraCommand(
-        {
-          mode: 'pin_focus',
-          center: {
-            latitude: firstCandidate.coordinate.latitude,
-            longitude: firstCandidate.coordinate.longitude,
-          },
-          zoom: result.candidates.length === 1 ? 14.2 : 12.8,
-          pitch: 28,
-          animate: true,
-          durationMs: 650,
-          reason: 'dispersed_camping_scout_pin_focus',
-        },
-        { force: true },
-      );
-    }
-    return result.candidates.length;
+    setSelectedCampScoutCandidateId(null);
+    return researchAreaCount;
   }, [
     displayedRoutePoints,
-    queueMapCameraCommand,
     safeUserLocation,
   ]);
 
   const handleScoutDispersedCampingCandidatePins = useCallback(() => {
     if (!dispersedCampingEligibilityLayer.enabled || !dispersedCampingRouteHasRoute) {
-      setDispersedCampingCampScoutStatus('Enable the eligibility layer and select a route before scouting pins.');
+      setDispersedCampingCampScoutStatus('Enable the eligibility layer and select a route before researching dispersed camp areas.');
       showToast('SELECT A ROUTE AND ENABLE ELIGIBILITY FIRST');
       return;
     }
@@ -16940,8 +17454,8 @@ const toggleRemotenessOverlay = useCallback(() => {
       regions: dispersedCampingRegions,
       routeNearbyRegions: dispersedCampingRouteNearbyResults,
       selectFirstCandidate: false,
-      focusGeneratedPins: true,
-      scopeLabel: 'route-corridor candidate',
+      focusGeneratedPins: false,
+      scopeLabel: 'route-corridor',
       maxRouteDistanceMiles: DEFAULT_DISPERSED_CAMPING_ROUTE_CORRIDOR_MILES,
       maxCandidates: 10,
     });
@@ -16956,7 +17470,7 @@ const toggleRemotenessOverlay = useCallback(() => {
 
   const handleScoutSelectedDispersedCampingRegionPins = useCallback(() => {
     if (!selectedDispersedCampingRegionLive || !dispersedCampingEligibilityLayer.enabled) {
-      setDispersedCampingCampScoutStatus('Select a visible dispersed camping region before scouting pins.');
+      setDispersedCampingCampScoutStatus('Select a visible dispersed camping region before researching camp areas.');
       showToast('SELECT A DISPERSED CAMPING REGION FIRST');
       return;
     }
@@ -16986,12 +17500,10 @@ const toggleRemotenessOverlay = useCallback(() => {
       maxScoutRadiusMiles: 2,
       maxCandidates: 5,
       selectFirstCandidate: false,
-      focusGeneratedPins: true,
+      focusGeneratedPins: false,
       scopeLabel: 'selected-region',
     });
-    if (generatedCount > 0) {
-      setSelectedDispersedCampingRegion(null);
-    }
+    void generatedCount;
   }, [
     dispersedCampingEligibilityLayer.enabled,
     dispersedCampingRegions,
@@ -17004,7 +17516,7 @@ const toggleRemotenessOverlay = useCallback(() => {
   const handleClearDispersedCampingCampScoutPins = useCallback(() => {
     hapticMicro();
     setDispersedCampingCampScoutCandidates([]);
-    setDispersedCampingCampScoutStatus('Dispersed camping scout pins cleared.');
+    setDispersedCampingCampScoutStatus('Dispersed camping research results cleared.');
     setSelectedCampScoutCandidateId(null);
   }, []);
 
@@ -19510,10 +20022,10 @@ const stableMapSurface = useMemo(() => {
       onPress={handleClearDispersedCampingCampScoutPins}
       activeOpacity={0.84}
       accessibilityRole="button"
-      accessibilityLabel="Clear dispersed camping scout pins"
+      accessibilityLabel="Clear dispersed camping research results"
     >
       <Ionicons name="close-circle-outline" size={13} color="#F07D71" />
-      <Text style={styles.clearScoutPinsFloatingText}>Clear scout pins</Text>
+      <Text style={styles.clearScoutPinsFloatingText}>Clear research</Text>
     </TouchableOpacity>
   ) : null}
 
@@ -19579,9 +20091,12 @@ const stableMapSurface = useMemo(() => {
         <Text style={styles.routeGeometryOverlayLegendTitle}>ECS ROUTE GEOMETRY</Text>
       </View>
       <Text style={styles.routeGeometryOverlayLegendText} numberOfLines={2}>
-        {routeGeometryOverlayBuild.segments.length} loaded from {routeGeometryOverlaySourceSummary}.
+        {routeGeometryViewportLegendMessage}
         {routeGeometryOverlayBuild.skippedMissingGeometryCount > 0
           ? ` ${routeGeometryOverlayBuild.skippedMissingGeometryCount} skipped.`
+          : ''}
+        {routeGeometryViewportUiState.skippedClosedCount > 0
+          ? ` ${routeGeometryViewportUiState.skippedClosedCount} closed/prohibited hidden.`
           : ''}
         {routeGeometryOverlayBuild.cappedCount > 0
           ? ` ${routeGeometryOverlayBuild.cappedCount} capped.`
@@ -19648,305 +20163,233 @@ const stableMapSurface = useMemo(() => {
     'options-outline',
     closeToolsPopup,
     <View style={styles.toolsPopupContent}>
-      <ScrollView
-        style={styles.mapPopupScroll}
-        contentContainerStyle={styles.toolsPopupScrollContent}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        <View style={styles.toolsResultsBlock}>
-          <View style={styles.navigateWeatherToolHeader}>
-            <View style={styles.navigateWeatherToolTitleRow}>
-              <Ionicons name="partly-sunny-outline" size={14} color={TACTICAL.amber} />
-            </View>
-            <ECSBadge
-              label={
-                operationalWeather.snapshot.status.kind === 'live' ||
-                operationalWeather.snapshot.status.kind === 'ready'
-                  ? 'LIVE'
-                  : operationalWeather.snapshot.status.kind === 'cached' ||
-                      operationalWeather.snapshot.status.kind === 'stale'
-                    ? 'LIMITED'
-                    : 'UNAVAILABLE'
-              }
-              tone={
-                operationalWeather.snapshot.status.kind === 'live' ||
-                operationalWeather.snapshot.status.kind === 'ready'
-                  ? 'live'
-                  : operationalWeather.snapshot.status.kind === 'cached' ||
-                      operationalWeather.snapshot.status.kind === 'stale'
-                    ? 'warning'
-                    : 'unavailable'
-              }
-              compact
-            />
-          </View>
-
-          <View style={styles.navigateWeatherToolStack}>
-            <View style={styles.navigateWeatherToolPanel}>
-              <Text style={styles.navigateWeatherToolPanelTitle}>CURRENT LOCATION FORECAST</Text>
-              <WeatherIntelPanel
-                latitude={weatherLocation?.lat ?? null}
-                longitude={weatherLocation?.lng ?? null}
-                locationLabel="Current location"
-                autoFetch
-                compact
-                units="imperial"
-                weatherSnapshot={operationalWeather.snapshot}
-                onRefreshWeather={operationalWeather.refresh}
-                trailAssessmentActive={navigateTrailAssessmentActive}
-                frameless
-              />
-            </View>
-
-            {navigateRouteWeatherCoordinates.length > 0 ? (
-              <View style={styles.navigateWeatherToolPanel}>
-                <Text style={styles.navigateWeatherToolPanelTitle}>ROUTE WEATHER</Text>
-                <WeatherIntelPanel
-                  coordinates={navigateRouteWeatherCoordinates}
-                  locationLabel="Route weather"
-                  autoFetch
-                  compact
-                  units="imperial"
-                  trailAssessmentActive={navigateTrailAssessmentActive}
-                  frameless
-                />
-              </View>
-            ) : null}
-
-            {navigateSelectedWeatherCoordinate ? (
-              <View style={styles.navigateWeatherToolPanel}>
-                <Text style={styles.navigateWeatherToolPanelTitle}>SELECTED POINT FORECAST</Text>
-                <WeatherIntelPanel
-                  latitude={navigateSelectedWeatherCoordinate.lat}
-                  longitude={navigateSelectedWeatherCoordinate.lng}
-                  locationLabel={navigateSelectedWeatherCoordinate.label ?? 'Selected point'}
-                  autoFetch
-                  compact
-                  units="imperial"
-                  trailAssessmentActive={navigateTrailAssessmentActive}
-                  frameless
-                />
-              </View>
-            ) : null}
+      <View style={styles.toolsFixedContent}>
+        <View style={styles.toolsMapPresentationBlock}>
+          <Text style={styles.toolsUtilitySectionLabel}>MAP PRESENTATION</Text>
+          <View style={styles.quickActionsStyleRow}>
+            {MAP_STYLE_MODE_OPTIONS.map(({ key, label }) => {
+              const isActive = mapStyleMode === key;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={[
+                    styles.quickActionsStyleButton,
+                    isActive && styles.quickActionsStyleButtonActive,
+                  ]}
+                  onPress={() => handleMapStyleModeChange(key)}
+                  activeOpacity={0.85}
+                >
+                  <Text
+                    style={[
+                      styles.quickActionsStyleText,
+                      isActive && styles.quickActionsStyleTextActive,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
 
+        <TouchableOpacity
+          style={styles.toolsCompactForecastRow}
+          onPress={operationalWeather.refresh}
+          activeOpacity={0.86}
+          accessibilityRole="button"
+          accessibilityLabel="Refresh current location forecast"
+        >
+          <View style={styles.toolsCompactForecastIcon}>
+            <Ionicons name="partly-sunny-outline" size={15} color={TACTICAL.amber} />
+          </View>
+          <View style={styles.toolsCompactForecastCopy}>
+            <View style={styles.toolsCompactForecastTitleRow}>
+              <Text style={styles.toolsCompactForecastTitle}>CURRENT LOCATION FORECAST</Text>
+              <ECSBadge
+                label={toolsCurrentForecastSummary.statusLabel}
+                tone={toolsCurrentForecastSummary.statusTone}
+                compact
+              />
+            </View>
+            <Text style={styles.toolsCompactForecastHeadline} numberOfLines={1}>
+              {toolsCurrentForecastSummary.headline}
+            </Text>
+            <Text style={styles.toolsCompactForecastDetail} numberOfLines={1}>
+              {toolsCurrentForecastSummary.detail}
+            </Text>
+            <Text style={styles.toolsCompactForecastSource} numberOfLines={1}>
+              {toolsCurrentForecastSummary.alertLine ?? toolsCurrentForecastSummary.sourceLabel}
+            </Text>
+          </View>
+          <Ionicons name="refresh" size={14} color={TACTICAL.textMuted} />
+        </TouchableOpacity>
+
         <NavigateToolSection
-          title="SAVED ROUTE COMMAND CENTER"
-          subtitle="Imported, custom, stitched, and saved route assets stay in one review surface."
+          title="SAVED ROUTES"
           badge={<ECSBadge label={`${savedRouteAssetCounts.all} ROUTES`} tone="category" compact />}
+          style={styles.toolsFixedSection}
         >
           <NavigateToolActionCard
             title="Route Command Center"
             subtitle={`${savedRouteAssetCounts.imported} imported - ${savedRouteAssetCounts.custom} custom - ${savedRouteAssetCounts.stitched} stitched - ${savedRouteAssetCounts.bookmarked} saved`}
             icon="albums-outline"
             badge="OPEN"
+            compact
             onPress={() => {
               hapticCommand();
               openToolsChildPopup('savedRoutes');
             }}
             accessibilityLabel="Open Route Command Center"
+            style={styles.toolsWideActionCard}
           />
         </NavigateToolSection>
 
-        <View style={styles.toolsUtilityStack}>
-          <NavigateToolSection
-            title="ROUTE PLANNING"
-            subtitle="Build, import, stitch, or review destinations without leaving the map context."
-          >
+        <NavigateToolSection
+          title="ROUTE PLANNING"
+          style={styles.toolsFixedSection}
+        >
+          <View style={styles.toolsDenseActionGrid}>
             <NavigateToolActionCard
               title="BUILD ROUTE PLAN"
-              subtitle="Open the normal Explorer Trip Builder tab for full route setup."
               icon="map-outline"
+              compact
+              hideChevron
               onPress={handleOpenBuildRoutePlan}
               accessibilityLabel="Build route plan in Trip Builder"
+              style={styles.toolsDenseActionCard}
             />
 
             <NavigateToolActionCard
               title="STITCH ROUTES"
-              subtitle="Chain imported, recorded, or custom route assets into one expedition plan."
               icon="git-merge-outline"
+              compact
+              hideChevron
               onPress={handleOpenStitch}
               accessibilityLabel="Stitch routes"
+              style={styles.toolsDenseActionCard}
             />
 
             <NavigateToolActionCard
               title={routeBuilderActive ? 'EXIT BUILD' : 'BUILD ROUTE'}
-              subtitle={routeBuilderActive ? 'Leave active map drawing mode.' : 'Draw a route directly on the map.'}
               icon={routeBuilderActive ? 'close' : 'map-outline'}
               active={routeBuilderActive}
+              compact
+              hideChevron
               onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}
               accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}
+              style={styles.toolsDenseActionCard}
             />
 
             <NavigateToolActionCard
               title={isImportPending ? 'IMPORTING' : 'IMPORT'}
-              subtitle="Load GPX, KML, GeoJSON, JSON, or XML route files into Navigate."
               icon="cloud-upload-outline"
+              compact
+              hideChevron
               onPress={handleOpenImportRoute}
               disabled={isImportPending}
               accessibilityLabel="Import route file"
+              style={styles.toolsDenseActionCard}
+            />
+
+            <NavigateToolActionCard
+              title="RECORD TRAIL"
+              icon="trail-sign-outline"
+              compact
+              hideChevron
+              onPress={() => {
+                hapticCommand();
+                openToolsChildPopup('trail');
+              }}
+              accessibilityLabel="Record trail"
+              style={styles.toolsDenseActionCard}
             />
 
             <NavigateToolActionCard
               title="RECENT SEARCHES"
-              subtitle="Close Tools and reopen recent destinations in the map search banner."
               icon="time-outline"
               active={recentSearchesVisible}
+              compact
+              hideChevron
               onPress={() => {
                 hapticCommand();
                 setRecentSearchesVisible(true);
                 closeToolsPopup();
               }}
               accessibilityLabel="Toggle recent searches"
-            />
-          </NavigateToolSection>
-
-          <NavigateToolSection
-            title="COMMUNITY CONTRIBUTIONS"
-            subtitle="Help ECS grow with reviewed campsites and routes while keeping safety checks visible."
-          >
-            {communityCampsitesEnabled ? (
-              <NavigateToolActionCard
-                title="RECOMMEND CAMPSITE"
-                subtitle="Save privately, share with a group, or submit an established campsite for ECS review."
-                icon="pin-outline"
-                badge="COMMUNITY"
-                onPress={openRecommendCampsiteChooser}
-                accessibilityLabel="Recommend campsite"
-              />
-            ) : null}
-
-            <NavigateToolActionCard
-              title="MY CAMPSITES"
-              subtitle="Open private saves, pending reviews, needs-info requests, and withdrawn campsite submissions."
-              icon="trail-sign-outline"
-              badge="SAVED"
-              onPress={() => openMyCampsiteSubmissions()}
-              accessibilityLabel="Open My Campsites"
-            />
-
-            <NavigateToolActionCard
-              title="RECOMMEND ROUTE"
-              subtitle="Use the current Trail Pack-backed flow to submit a staged, imported, built, or recorded route."
-              icon="trail-sign-outline"
-              badge="PHASE 1"
-              onPress={openRecommendRouteChooser}
-              accessibilityLabel="Recommend route"
-            />
-
-            {campopsManualAreaReviewEnabled ? (
-              <NavigateToolActionCard
-                title="MANUAL CAMP AREA REVIEW"
-                subtitle="Run the internal Camp Endpoints area fallback with visible source confidence."
-                icon="shapes-outline"
-                active={campScoutAreaMode !== 'idle'}
-                onPress={() => runToolsAction(handleOpenCampScoutIntro)}
-                accessibilityLabel="Manual CampOps area review"
-              />
-            ) : null}
-          </NavigateToolSection>
-
-          <NavigateToolSection
-            title="FIELD OPS"
-            subtitle="Fast map actions for recording, pins, and active route submission."
-          >
-            <NavigateToolActionCard
-              title="RECORD TRAIL"
-              subtitle="Open Trail Status to start, stop, export, replay, or recommend completed trail recordings."
-              icon="trail-sign-outline"
-              onPress={() => {
-                hapticCommand();
-                openToolsChildPopup('trail');
-              }}
-              accessibilityLabel="Record trail"
-            />
-
-            <NavigateToolActionCard
-              title="SUBMIT AS TRAIL PACK"
-              subtitle="Submit the staged route through the existing ECS Trail Pack review flow."
-              icon="trail-sign-outline"
-              onPress={() => runToolsAction(handleSubmitActiveRouteAsTrailPack)}
-              accessibilityLabel="Submit staged route as Trail Pack"
+              style={styles.toolsDenseActionCard}
             />
 
             <NavigateToolActionCard
               title={pinDropMode ? 'PINNING' : 'DROP PIN'}
-              subtitle={pinDropMode ? 'Pin placement mode is active.' : 'Drop a field pin at the current map target.'}
               icon={pinDropMode ? 'radio-button-on' : 'pin-outline'}
               active={pinDropMode}
+              compact
+              hideChevron
               onPress={() => runToolsAction(handleDropPinHere)}
               accessibilityLabel={pinDropMode ? 'Cancel pin placement' : 'Drop pin'}
+              style={styles.toolsDenseActionCard}
             />
-
-            {allPins.length > 0 ? (
-              <NavigateToolActionCard
-                title="PINS"
-                subtitle="Open the pin drawer to review, edit, export, or resolve map pins."
-                icon="list-outline"
-                onPress={() => runToolsAction(() => toggleTopPopup('pinDrawer'))}
-                accessibilityLabel="Open pins"
-              />
-            ) : null}
-          </NavigateToolSection>
-
-          <NavigateToolSection
-            title="MAP AND OFFLINE"
-            subtitle="Switch map presentation and prepare cache coverage for field use."
-          >
-            <View style={styles.quickActionsStyleRow}>
-              {MAP_STYLE_MODE_OPTIONS.map(({ key, label }) => {
-                const isActive = mapStyleMode === key;
-                return (
-                  <TouchableOpacity
-                    key={key}
-                    style={[
-                      styles.quickActionsStyleButton,
-                      isActive && styles.quickActionsStyleButtonActive,
-                    ]}
-                    onPress={() => handleMapStyleModeChange(key)}
-                    activeOpacity={0.85}
-                  >
-                    <Text
-                      style={[
-                        styles.quickActionsStyleText,
-                        isActive && styles.quickActionsStyleTextActive,
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
 
             <NavigateToolActionCard
               title="OFFLINE MAPS"
-              subtitle="Open map cache controls for the current map bounds and style."
               icon="cloud-offline-outline"
+              compact
+              hideChevron
               onPress={() => {
                 hapticCommand();
                 setRequestBoundsTrigger((prev) => prev + 1);
                 openToolsChildPopup('offlineCache');
               }}
               accessibilityLabel="Open offline map cache"
+              style={styles.toolsDenseActionCard}
             />
 
-            {exploreRoutesEnabled ? (
-              <Text style={styles.toolsSuggestionSubtitle}>
-                {exploreRoutesHandoff
-                  ? `${exploreRoutesHandoff.label}: ${exploreRouteOverlayBuild.segments.length} route line${exploreRouteOverlayBuild.segments.length === 1 ? '' : 's'} from Explorer filters${exploreRoutesHandoff.cappedCount > 0 ? `; ${exploreRoutesHandoff.cappedCount} held back for map performance` : ''}.`
-                  : exploreRouteOverlayBuild.segments.length > 0
-                    ? `${exploreRouteOverlayBuild.segments.length} Explore route line${exploreRouteOverlayBuild.segments.length === 1 ? '' : 's'} loaded from Hidden Gems, Trail Packs, Favorites, and ECS Route Ideas.`
-                  : exploreRouteOverlayBuild.candidateCount > 0
-                    ? 'Explore Routes is on, but the available Explorer results do not include map geometry yet.'
-                    : 'No Explore Routes are available for this area yet.'}
-              </Text>
+            {allPins.length > 0 ? (
+              <NavigateToolActionCard
+                title="PINS"
+                icon="list-outline"
+                compact
+                hideChevron
+                onPress={() => runToolsAction(() => toggleTopPopup('pinDrawer'))}
+                accessibilityLabel="Open pins"
+                style={styles.toolsDenseActionCard}
+              />
             ) : null}
-          </NavigateToolSection>
-        </View>
-      </ScrollView>
+          </View>
+        </NavigateToolSection>
+
+        <NavigateToolSection
+          title="COMMUNITY CONTRIBUTIONS"
+          style={styles.toolsFixedSection}
+        >
+          <View style={styles.toolsDenseActionGrid}>
+            {communityCampsitesEnabled ? (
+              <NavigateToolActionCard
+                title="RECOMMEND CAMPSITE"
+                icon="pin-outline"
+                badge="COMMUNITY"
+                compact
+                hideChevron
+                onPress={openRecommendCampsiteChooser}
+                accessibilityLabel="Recommend campsite"
+                style={styles.toolsDenseActionCard}
+              />
+            ) : null}
+
+            <NavigateToolActionCard
+              title="RECOMMEND ROUTE"
+              icon="trail-sign-outline"
+              badge="ROUTE"
+              compact
+              hideChevron
+              onPress={openRecommendRouteChooser}
+              accessibilityLabel="Recommend route"
+              style={styles.toolsDenseActionCard}
+            />
+          </View>
+        </NavigateToolSection>
+      </View>
     </View>,
     TOOLS_POPUP_WIDTH,
     { placement: 'center', backdropTint: 'transparent', fullBody: true }
@@ -22775,6 +23218,108 @@ idleDestinationSearchSuggestionSubtitle: {
 
 toolsPopupContent: {
   flex: 1,
+},
+
+toolsFixedContent: {
+  flex: 1,
+  paddingHorizontal: 12,
+  paddingVertical: 11,
+  gap: 9,
+},
+
+toolsMapPresentationBlock: {
+  borderRadius: 12,
+  borderWidth: 1,
+  borderColor: 'rgba(196,138,44,0.16)',
+  backgroundColor: 'rgba(12,16,20,0.88)',
+  paddingHorizontal: 10,
+  paddingVertical: 9,
+  gap: 7,
+},
+
+toolsCompactForecastRow: {
+  minHeight: 76,
+  borderRadius: 12,
+  borderWidth: 1,
+  borderColor: 'rgba(196,138,44,0.18)',
+  backgroundColor: 'rgba(12,16,20,0.92)',
+  paddingHorizontal: 10,
+  paddingVertical: 9,
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 9,
+},
+
+toolsCompactForecastIcon: {
+  width: 30,
+  height: 30,
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: 'rgba(196,138,44,0.24)',
+  backgroundColor: 'rgba(196,138,44,0.08)',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+toolsCompactForecastCopy: {
+  flex: 1,
+  minWidth: 0,
+  gap: 2,
+},
+
+toolsCompactForecastTitleRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+},
+
+toolsCompactForecastTitle: {
+  ...TYPO.U2,
+  color: TACTICAL.goldMedium,
+  fontSize: 7.5,
+  letterSpacing: 1.2,
+  flexShrink: 1,
+},
+
+toolsCompactForecastHeadline: {
+  ...TYPO.T3,
+  color: TACTICAL.text,
+  fontSize: 12,
+  lineHeight: 15,
+},
+
+toolsCompactForecastDetail: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 10,
+  lineHeight: 13,
+},
+
+toolsCompactForecastSource: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 9,
+  lineHeight: 12,
+},
+
+toolsFixedSection: {
+  gap: 6,
+},
+
+toolsWideActionCard: {
+  minHeight: 54,
+},
+
+toolsDenseActionGrid: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  gap: 7,
+},
+
+toolsDenseActionCard: {
+  width: '48%',
+  minHeight: 50,
 },
 
 toolsSearchWrap: {

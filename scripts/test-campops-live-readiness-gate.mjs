@@ -79,6 +79,8 @@ function writeSourceFixtures(root) {
 
   writeFile(root, 'lib/campops/campOpsMapPins.ts', [
     'export function isCampOpsMapPinPayload(payload) { return payload?.pinFamily === "campops"; }',
+    'const RESEARCH_ONLY_CAMPOPS_MAP_PIN_SOURCES = new Set(["route_candidate", "route_endpoint_candidate", "draw_area_candidate", "community", "offline_dataset", "inferred", "unknown"]);',
+    'export function isCampOpsActionableMapPinCandidate(camp) { return camp?.source === "manual" || camp?.source === "user_saved"; }',
     'const CAMP_OPS_ROUTE_PIN_LIMIT = 5;',
     'export function buildCampOpsCampScoutMapPins(recommendationSet) {',
     '  const seen = new Set<string>();',

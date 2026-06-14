@@ -329,14 +329,18 @@ assert(
   'Explore should surface honest partial-coverage copy, search with current criteria, enrich selected Trail Pack previews, and hydrate route-catalog handoffs through route-catalog-detail',
 );
 const suggestedRoutesBlock = discover
-  .split('const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>')[1]
-  ?.split('const exploreMapHandoffBuild = useMemo')[0] ?? '';
+  .split('const guidanceReadyRouteOptions = useMemo<ExpeditionOpportunity[]>')[1]
+  ?.split('const exploreSuggestedRouteOptions = guidanceReadyRouteOptions')[0] ?? '';
 assert(
   suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.trailPackRoutes') &&
-    !suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.hiddenGemRoutes') &&
+    suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.hiddenGemRoutes') &&
+    suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.ecsRouteIdeaRoutes') &&
+    suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.favoriteRoutes') &&
+    suggestedRoutesBlock.includes('routePassesExploreMapLength(route)') &&
+    suggestedRoutesBlock.includes('hasGuidanceReadyGeometry(route)') &&
     !suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.popularTrailRoutes') &&
-    !suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.ecsRouteIdeaRoutes'),
-  'Explore planning/offline Suggested Trailheads should only use source-backed catalog Trail Pack routes',
+    discover.includes('const exploreSuggestedRouteOptions = guidanceReadyRouteOptions'),
+  'Explore planning/offline routes should use the source-backed Guidance Ready route set with 5+ mile and geometry gates',
 );
 assert(
   !discover.includes('ecs_demo_full_route_fixture') &&

@@ -134,16 +134,20 @@ const generated = buildDispersedCampingCampScoutCandidates({
 
 assert.strictEqual(
   generated.candidates.length,
-  10,
-  'Route-corridor dispersed camping scout should allow up to 10 viable camp candidates.',
+  0,
+  'Route-corridor dispersed camping research should not create exact camp candidate pins.',
 );
 assert(
-  generated.candidates.every((candidate) => (candidate.routeDistanceMiles ?? 99) <= 3),
-  'Generated route-corridor camp candidates should remain within the 3-mile route corridor.',
+  generated.researchAreas.length === 10,
+  'Route-corridor dispersed camping research should keep up to 10 eligible research areas.',
 );
 assert(
-  generated.candidates.every((candidate) => candidate.verificationWarning?.includes('projection only')),
-  'Generated route-corridor camp candidates should clearly identify ECS-inferred projections.',
+  generated.researchAreas.every((area) => (area.routeDistanceMiles ?? 99) <= 3),
+  'Route-corridor research areas should remain within the 3-mile route corridor.',
+);
+assert(
+  generated.researchAreas.every((area) => area.verificationWarning?.includes('projection only')),
+  'Route-corridor research areas should clearly identify ECS-inferred projections.',
 );
 
 const routeIntersectingButWideRegion = rectangleRegion('wide-region', 39.0, 39.12, -119.95, -119.85);
@@ -164,7 +168,7 @@ const wideGenerated = buildDispersedCampingCampScoutCandidates({
 assert.strictEqual(
   wideGenerated.candidates.length,
   0,
-  'Route-corridor scout pins should not use eligibility-region centroids that fall outside the 3-mile guidance corridor.',
+  'Route-corridor research should not create scout pins from eligibility-region centroids.',
 );
 
-console.log('[dispersed-camping-route-corridor] 3-mile corridor and 10-pin route scout checks passed');
+console.log('[dispersed-camping-route-corridor] 3-mile corridor and research-only route checks passed');

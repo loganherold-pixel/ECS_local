@@ -184,11 +184,12 @@ function checkScoringGate(root, paths) {
       [rel(root, paths.source.config)],
     ),
     boolCheck(
-      'top_five_and_nearby_dedupe',
-      'Route candidates are limited to top 5 and deduped by nearby practical location.',
+      'route_candidates_research_only',
+      'Route candidates remain scored/deduped for research but are suppressed from actionable map pins.',
       hasAll(config, [/routeCandidateLimit:\s*5\b/, /duplicateCandidateRadiusMiles:\s*0\.\d+/]) &&
-        hasAll(recommendations, [/topDedupedRouteCandidates/, /milesBetween/, /kept\.length >= config\.routeCandidateLimit/]),
-      [rel(root, paths.source.config), rel(root, paths.source.recommendations)],
+        hasAll(recommendations, [/topDedupedRouteCandidates/, /milesBetween/, /kept\.length >= config\.routeCandidateLimit/]) &&
+        hasAll(pinBuilder, [/isCampOpsActionableMapPinCandidate/, /RESEARCH_ONLY_CAMPOPS_MAP_PIN_SOURCES/]),
+      [rel(root, paths.source.config), rel(root, paths.source.recommendations), rel(root, paths.source.pinBuilder)],
     ),
     boolCheck(
       'rank_source_confidence_order',

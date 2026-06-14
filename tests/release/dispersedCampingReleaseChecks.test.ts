@@ -84,7 +84,7 @@ const happyReleaseIssues = collectDispersedCampingReleaseReadinessIssues({
   candidateGeneration: {
     requiresExplicitUserAction: true,
     canRunOnMapPan: false,
-    maxCandidateCount: 5,
+    maxCandidateCount: 0,
     blocksRestrictedPrivateTribalClosedCandidates: true,
   },
   freshness: {
@@ -171,16 +171,17 @@ assert.strictEqual(
 
 assert.ok(
   navigateSource.includes('onScoutCandidatePins={handleScoutDispersedCampingCandidatePins}') &&
-    routeSummarySource.includes('Scout candidate camp pins'),
-  'Candidate pin generation should keep an explicit Scout action available.',
+    routeSummarySource.includes('Research dispersed camping eligibility areas'),
+  'Dispersed camping should keep an explicit research action available without generating campsite pins.',
 );
 
 assert.ok(
   navigateSource.includes('runtimeSmokeStore.updateDispersedCamping') &&
     navigateSource.includes("candidateGenerationTrigger:") &&
-    navigateSource.includes("'explicit_user_action'") &&
+    navigateSource.includes("'explicit_user_research_action'") &&
+    navigateSource.includes('researchOnly: true') &&
     navigateSource.includes("dataFreshnessState: dispersedCampingEligibilityLayer.enabled ? 'cached' : 'unavailable'"),
-  'Navigate should publish Dispersed Camping runtime smoke state with trigger and freshness labels.',
+  'Navigate should publish Dispersed Camping runtime smoke state with research-only trigger and freshness labels.',
 );
 
 assert.ok(
@@ -256,23 +257,17 @@ assert.deepStrictEqual(
     selectedRegionId: null,
     routeExists: true,
     routeAwareSummaryVisible: true,
-    candidatePinCount: 1,
-    candidateGenerationTrigger: 'explicit_user_action',
+    candidatePinCount: 0,
+    candidateGenerationTrigger: 'explicit_user_research_action',
     dataFreshnessState: 'cached',
     dataFreshnessLabel: 'Cached eligibility data',
     offlineMode: false,
     createdEligibilityClaimsWithoutData: false,
-    candidatePins: [
-      {
-        id: 'blm-candidate',
-        landManager: 'BLM',
-        confidence: 'high',
-        verificationWarning: 'Verify local rules, closures, fire restrictions, permits, road access, and posted signs before camping.',
-      },
-    ],
+    candidatePins: [],
+    researchOnly: true,
   }),
   [],
-  'Healthy runtime smoke snapshot should pass without contradictions.',
+  'Healthy research-only runtime smoke snapshot should pass without contradictions.',
 );
 
 assert.deepStrictEqual(
@@ -289,21 +284,15 @@ assert.deepStrictEqual(
     selectedRegionId: null,
     routeExists: true,
     routeAwareSummaryVisible: true,
-    candidatePinCount: 1,
-    candidateGenerationTrigger: 'explicit_user_action',
+    candidatePinCount: 0,
+    candidateGenerationTrigger: 'explicit_user_research_action',
     dataFreshnessState: 'cached',
     dataFreshnessLabel: 'Cached eligibility data',
     offlineMode: false,
     createdEligibilityClaimsWithoutData: false,
-    candidatePins: [
-      {
-        id: 'route-stage-candidate',
-        landManager: 'BLM',
-        confidence: 'high',
-        verificationWarning: 'Verify local rules, closures, fire restrictions, permits, road access, and posted signs before camping.',
-      },
-    ],
+    candidatePins: [],
+    researchOnly: true,
   }),
   [],
-  'Explicit route candidate scouting should be allowed when an active or preview route exists.',
+  'Explicit route research should be allowed when an active or preview route exists.',
 );

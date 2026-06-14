@@ -91,16 +91,16 @@ const generated = buildDispersedCampingCampScoutCandidates({
   maxCandidates: 5,
 });
 
-assert.ok(generated.candidates.length > 0);
-assert.ok(generated.candidates.every((candidate) => candidate.sourceType === 'ecs_inferred'));
-assert.ok(generated.candidates.every((candidate) => candidate.title === ECS_INFERRED_CAMP_CANDIDATE_TITLE));
-assert.ok(generated.candidates.every((candidate) => candidate.verificationWarning === ECS_INFERRED_CAMP_CANDIDATE_WARNING));
-assert.ok(generated.candidates.every((candidate) => candidate.eligibilityConfidence !== 'restricted'));
-assert.ok(generated.candidates.every((candidate) => candidate.confidenceScore >= 70));
-assert.ok(generated.candidates.every((candidate) => candidate.legalityConfidence >= 70));
+assert.strictEqual(generated.candidates.length, 0, 'Dispersed eligibility research must not create campsite pins.');
+assert.ok(Array.isArray(generated.researchAreas), 'Research-only dispersed output should expose areas instead of points.');
+assert.ok(generated.researchAreas.length > 0, 'Eligible dispersed regions should still be available as research areas.');
+assert.ok(generated.researchAreas.every((area) => area.title === 'Dispersed camping research area'));
+assert.ok(generated.researchAreas.every((area) => area.verificationWarning === ECS_INFERRED_CAMP_CANDIDATE_WARNING));
+assert.ok(generated.researchAreas.every((area) => area.confidence !== 'restricted'));
+assert.ok(generated.researchAreas.every((area) => Number.isFinite(area.eligibilityScore)));
 
-const unknownCandidate = generated.candidates.find((candidate) => candidate.dispersedCampingRegionId === 'unknown');
-assert.notStrictEqual(unknownCandidate?.eligibilityConfidence, 'high', 'Unknown land manager must not become high confidence.');
+const unknownArea = generated.researchAreas.find((area) => area.regionId === 'unknown');
+assert.notStrictEqual(unknownArea?.confidence, 'high', 'Unknown land manager must not become high confidence.');
 
 const selectedRegionScoutCenter = { latitude: 37.225, longitude: -118.985 };
 const selectedRegionScouts = buildDispersedCampingCampScoutCandidates({
@@ -113,25 +113,22 @@ const selectedRegionScouts = buildDispersedCampingCampScoutCandidates({
 });
 assert.strictEqual(
   selectedRegionScouts.candidates.length,
-  5,
-  'Selected eligibility regions should fan out up to five scout pins when viable locations exist.',
+  0,
+  'Selected eligibility regions should not fan out into exact campsite pins.',
 );
 assert.strictEqual(
-  new Set(selectedRegionScouts.candidates.map((candidate) => candidate.id)).size,
-  selectedRegionScouts.candidates.length,
-  'Generated selected-region scout pins should have unique IDs.',
+  selectedRegionScouts.researchAreas.length,
+  1,
+  'Selected eligibility regions should remain available as one research area.',
+);
+assert.strictEqual(
+  selectedRegionScouts.researchAreas[0].regionId,
+  'high-blm',
+  'Research area output should preserve the selected eligibility region id.',
 );
 assert.ok(
-  selectedRegionScouts.candidates.every((candidate) =>
-    haversineDistanceMiles(candidate.coordinate, selectedRegionScoutCenter) <= 2,
-  ),
-  'Selected-region scout pins should stay within two miles of the scout click point.',
-);
-assert.ok(
-  selectedRegionScouts.candidates.every((candidate) =>
-    candidate.reasons.some((reason) => reason.includes('Ranked by ECS')),
-  ),
-  'Generated selected-region scout pins should explain why ECS scored them as camp candidates.',
+  selectedRegionScouts.researchAreas[0].warnings.some((warning) => warning.includes('Verify')),
+  'Research area output should keep local verification warnings.',
 );
 
 const routePrioritized = buildDispersedCampingCampScoutCandidates({
@@ -152,9 +149,9 @@ const routePrioritized = buildDispersedCampingCampScoutCandidates({
   maxCandidates: 5,
 });
 assert.deepStrictEqual(
-  routePrioritized.candidates.map((candidate) => candidate.dispersedCampingRegionId),
+  routePrioritized.researchAreas.map((area) => area.regionId),
   ['high-blm'],
-  'Route corridor candidates should prioritize nearby eligible regions.',
+  'Route corridor research areas should prioritize nearby eligible regions.',
 );
 
 const closeRouteRanked = buildDispersedCampingCampScoutCandidates({
@@ -188,9 +185,9 @@ const closeRouteRanked = buildDispersedCampingCampScoutCandidates({
   maxCandidates: 5,
 });
 assert.strictEqual(
-  closeRouteRanked.candidates[0]?.dispersedCampingRegionId,
+  closeRouteRanked.researchAreas[0]?.regionId,
   'close-route-blm',
-  'Route corridor candidate ranks should favor stronger scored candidates near the active route.',
+  'Route corridor research areas should favor stronger scored regions near the active route.',
 );
 
 const cardSource = fs.readFileSync(
@@ -198,7 +195,8 @@ const cardSource = fs.readFileSync(
   'utf8',
 );
 assert.ok(cardSource.includes(ECS_INFERRED_CAMP_CANDIDATE_TITLE));
-assert.ok(cardSource.includes(ECS_INFERRED_CAMP_CANDIDATE_WARNING));
+assert.ok(cardSource.includes('not a confirmed permitted overnight location'));
+assert.ok(cardSource.includes('verify locally before relying on it'));
 [
   'Approved campsite',
   'Guaranteed campsite',

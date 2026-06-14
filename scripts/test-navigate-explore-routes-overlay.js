@@ -136,17 +136,19 @@ assert(
   'Explorer should replace the old Map Active Trails / Display on Map container.',
 );
 assert(
-  discover.includes('Filtered Route Map Preview') &&
-    discover.includes('Show Routes on Map') &&
+  discover.includes('Guidance Ready Routes') &&
+    discover.includes('guidanceReadyRouteOptions') &&
+    discover.includes('hasGuidanceReadyGeometry') &&
     discover.includes('exploreMapPreviewRouteCounts') &&
     discover.includes('Hidden Gems') &&
     discover.includes('Trail Packs') &&
     discover.includes('ECS Ideas') &&
-    discover.includes('Suggested Trailheads') &&
+    discover.includes('source-backed routes with usable stitched geometry') &&
+    discover.includes('confidence') &&
+    discover.includes('data state') &&
     !discover.includes("label: 'Popular Trails'") &&
-    !discover.includes('popularTrailRoutes: exploreMapPreviewRouteSets.popularTrailRoutes') &&
-    discover.includes('Tap a route line on the Navigate map to review details, then start guidance from that one route.'),
-  'Explorer route map preview should summarize Hidden Gems, Trail Packs, Favorites, and ECS Ideas without the Popular Trails container.',
+    !discover.includes('popularTrailRoutes: exploreMapPreviewRouteSets.popularTrailRoutes'),
+  'Explorer guidance-ready route set should summarize source-backed Hidden Gems, Trail Packs, Favorites, and ECS Ideas without the Popular Trails container.',
 );
 assert(
   discover.includes('exploreSuggestedRouteOptions') &&

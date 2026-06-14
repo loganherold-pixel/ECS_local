@@ -126,6 +126,7 @@ export interface ECSRuntimeSmokeCommandSnapshot {
 }
 
 export type ECSDispersedCampingCandidateGenerationTrigger =
+  | 'explicit_user_research_action'
   | 'explicit_user_action'
   | 'route_auto_stage'
   | 'map_pan'
@@ -159,6 +160,7 @@ export interface ECSDispersedCampingRuntimeSmokeSnapshot {
   routeAwareSummaryVisible: boolean;
   candidatePinCount: number;
   candidatePins: ECSDispersedCampingRuntimeCandidatePin[];
+  researchOnly?: boolean;
   candidateGenerationTrigger?: ECSDispersedCampingCandidateGenerationTrigger | null;
   dataFreshnessState?: 'current' | 'stale' | 'cached' | 'unavailable' | 'unknown' | null;
   dataFreshnessLabel?: string | null;

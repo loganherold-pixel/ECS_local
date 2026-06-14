@@ -127,27 +127,36 @@ const routePins = buildCampOpsCampEndpointMapPins(recommendationSet(ranked), {
   selectedCampOpsCandidateId: 'route-camp-3',
 });
 
-assert.strictEqual(routePins.length, 5, 'Route camp rendering should cap visible CampOps pins at five.');
+assert.strictEqual(routePins.length, 0, 'ECS route candidate rendering should stay research-only and produce no map pins.');
+const actionableRanked = [
+  camp('manual-camp-1', 92, 1, { source: 'manual' }),
+  camp('saved-camp-2', 88, 2, { source: 'user_saved' }),
+  camp('route-camp-hidden', 84, 3),
+];
+const actionablePins = buildCampOpsCampEndpointMapPins(recommendationSet(actionableRanked), {
+  selectedCampOpsCandidateId: 'saved-camp-2',
+});
+assert.strictEqual(actionablePins.length, 2, 'User-confirmed/imported CampOps camps should still render actionable pins.');
 assert.deepStrictEqual(
-  routePins.map((pin) => pin.title),
-  ['Camp 1', 'Camp 2', 'Camp 3', 'Camp 4', 'Camp 5'],
-  'Route camp pins should use Camp 1 through Camp 5 labels.',
+  actionablePins.map((pin) => pin.title),
+  ['Camp 1', 'Camp 2'],
+  'Actionable camp pins should use compact generic labels.',
 );
 assert.deepStrictEqual(
-  routePins.map((pin) => pin.rankLabel),
-  ['1', '2', '3', '4', '5'],
-  'Route camp pins should show rank numbers.',
+  actionablePins.map((pin) => pin.rankLabel),
+  ['1', '2'],
+  'Actionable camp pins should show rank numbers.',
 );
-assert(routePins.every(isCampOpsMapPinPayload), 'Route camp pins should keep the CampOps behavior tag.');
-assert.strictEqual(routePins[2].selected, true, 'Selected route camp pin should preserve selected state.');
+assert(actionablePins.every(isCampOpsMapPinPayload), 'Actionable camp pins should keep the CampOps behavior tag.');
+assert.strictEqual(actionablePins[1].selected, true, 'Selected actionable camp pin should preserve selected state.');
 
 assert.strictEqual(
   normalizeRenderedCampEndpointMarkers,
   normalizeRenderedCampScoutMarkers,
   'Legacy CampScout renderer callers should remain shimmed to Camp Endpoint rendering for one release.',
 );
-const renderedPins = normalizeRenderedCampEndpointMarkers(routePins);
-assert.strictEqual(renderedPins.length, 5, 'Route CampOps pins should pass through the shared Camp Endpoint renderer.');
+const renderedPins = normalizeRenderedCampEndpointMarkers(actionablePins);
+assert.strictEqual(renderedPins.length, 2, 'Actionable CampOps pins should pass through the shared Camp Endpoint renderer.');
 assert.strictEqual(renderedPins[0].pinFamily, 'campops', 'Renderer should preserve route camp behavior metadata.');
 assert.strictEqual(renderedPins[0].campOpsRoleLabel, 'Camp 1', 'Renderer should preserve camp role labels.');
 
@@ -169,24 +178,24 @@ assert.strictEqual(
 );
 
 const duplicatePins = buildCampOpsCampEndpointMapPins(
-  recommendationSet([ranked[0], ranked[0], ranked[1], ranked[1], ranked[2]]),
+  recommendationSet([actionableRanked[0], actionableRanked[0], actionableRanked[1], actionableRanked[1], actionableRanked[2]]),
 );
 assert.deepStrictEqual(
   duplicatePins.map((pin) => pin.campOpsCandidateId),
-  ['route-camp-1', 'route-camp-2', 'route-camp-3'],
-  'Route camp rendering should dedupe repeated CampOps candidate ids before render.',
+  ['manual-camp-1', 'saved-camp-2'],
+  'Actionable camp rendering should dedupe repeated CampOps candidate ids before render and suppress route-only candidates.',
 );
 
 const structureBufferedPins = buildCampOpsCampEndpointMapPins(
   recommendationSet([
     camp('inside-structure-buffer', 96, 1, { nearestResidentialStructureDistanceMiles: 0.9 }),
-    camp('outside-structure-buffer', 92, 2, { nearestResidentialStructureDistanceMiles: 1.15 }),
+    camp('outside-structure-buffer', 92, 2, { source: 'manual', nearestResidentialStructureDistanceMiles: 1.15 }),
   ]),
 );
 assert.deepStrictEqual(
   structureBufferedPins.map((pin) => pin.campOpsCandidateId),
   ['outside-structure-buffer'],
-  'Route camp pins should suppress any candidate inside the one-mile residential/structure buffer.',
+  'Actionable camp pins should suppress any candidate inside the one-mile residential/structure buffer.',
 );
 
 assert.deepStrictEqual(
@@ -224,11 +233,11 @@ assert(
     mapRendererSource.includes('root.appendChild(rank)') &&
     !mapRendererSource.includes('camp-scout-label') &&
     !mapRendererSource.includes("label.textContent = 'camp'"),
-  'Route camp pins should reuse the remote camp scout tent style with the rank hovering above the pin.',
+  'Actionable camp pins should reuse the remote camp scout tent style with the rank hovering above the pin.',
 );
 assert(
   mapRendererSource.includes("send('pinTap', Object.assign({ kind: 'campScout' }, item))"),
-  'Route camp pins should open the existing camp scout/Camp Intel tap path.',
+  'Actionable camp pins should open the existing camp scout/Camp Intel tap path.',
 );
 
 const navigateSource = fs.readFileSync(navigatePath, 'utf8');
@@ -237,20 +246,20 @@ assert(
     navigateSource.includes('campEndpointMarkers={sharedCampPinMapMarkers}') &&
     navigateSource.includes('onCampEndpointTap={handleCampScoutTap}') &&
     navigateSource.includes('onCampScoutTap={handleCampScoutTap}'),
-  'Navigate should feed route CampOps pins into MapRenderer through the Camp Endpoint marker prop while retaining legacy CampScout taps.',
+  'Navigate should feed actionable CampOps pins into MapRenderer through the Camp Endpoint marker prop while retaining legacy CampScout taps.',
 );
 assert(
   navigateSource.includes('isCampOpsMapPinPayload(payload)') &&
     navigateSource.includes('setSelectedCampOpsEndpointId(endpointId)') &&
     navigateSource.includes('campOpsDetail={selectedCampOpsIntel}') &&
     navigateSource.includes('onDismiss={selectedCampOpsIntel ? handleCampOpsDismiss : handleCampScoutDismiss}'),
-  'Tapping a route camp pin should open and dismiss the existing Camp Intel popup path.',
+  'Tapping an actionable CampOps pin should open and dismiss the existing Camp Intel popup path.',
 );
 assert(
   navigateSource.includes('scheduleRouteCampsiteClear') &&
     navigateSource.includes('setSelectedCampOpsEndpointId(null)') &&
     navigateSource.includes('applyCampsiteCandidates(null)'),
-  'Route camp pins should clear with route-owned campsite candidates.',
+  'Actionable CampOps pins should clear with route-owned campsite candidates.',
 );
 
-console.log('Route camp pin rendering checks passed.');
+console.log('Route camp research-only pin rendering checks passed.');

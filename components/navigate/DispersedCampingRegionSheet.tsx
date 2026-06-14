@@ -240,7 +240,7 @@ export default function DispersedCampingRegionSheet({
                   disabled={!onScoutNearbyPins || scoutNearbyDisabled}
                   onPress={onScoutNearbyPins}
                   accessibilityRole="button"
-                  accessibilityLabel="Scout nearby dispersed camping pins"
+                  accessibilityLabel="Research nearby dispersed camping eligibility"
                 >
                   <Ionicons
                     name="search-outline"
@@ -253,7 +253,7 @@ export default function DispersedCampingRegionSheet({
                       (!onScoutNearbyPins || scoutNearbyDisabled) && styles.secondaryButtonTextDisabled,
                     ]}
                   >
-                    Scout nearby pins
+                    Research area
                   </Text>
                 </TouchableOpacity>
                 {scoutPinsVisible && onClearScoutPins ? (
@@ -262,10 +262,10 @@ export default function DispersedCampingRegionSheet({
                     activeOpacity={0.78}
                     onPress={onClearScoutPins}
                     accessibilityRole="button"
-                    accessibilityLabel="Clear dispersed camping scout pins"
+                    accessibilityLabel="Clear dispersed camping research results"
                   >
                     <Ionicons name="close-circle-outline" size={12} color="#F07D71" />
-                    <Text style={styles.clearPinsButtonText}>Clear pins</Text>
+                    <Text style={styles.clearPinsButtonText}>Clear</Text>
                   </TouchableOpacity>
                 ) : null}
               </View>

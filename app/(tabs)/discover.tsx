@@ -285,6 +285,59 @@ function routePassesExploreMapLength(route: ExpeditionOpportunity | null | undef
   return Number.isFinite(Number(route?.distanceMiles)) && Number(route?.distanceMiles) >= MIN_DISCOVERY_ROUTE_MILES;
 }
 
+function readExploreRouteRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function hasGuidanceReadyLineGeometry(value: unknown): boolean {
+  const record = readExploreRouteRecord(value);
+  if (Array.isArray(value)) return value.length > 1;
+  if (Array.isArray(record.coordinates)) return record.coordinates.length > 1;
+  if (record.type === 'LineString' && Array.isArray(record.coordinates)) return record.coordinates.length > 1;
+  if (record.type === 'MultiLineString' && Array.isArray(record.coordinates)) {
+    return record.coordinates.some((line) => Array.isArray(line) && line.length > 1);
+  }
+  return false;
+}
+
+function hasGuidanceReadyGeometry(route: ExpeditionOpportunity | null | undefined): route is ExpeditionOpportunity {
+  if (!route) return false;
+  const routeRecord = readExploreRouteRecord(route);
+  const routeMetadata = readExploreRouteRecord(route.routeMetadata);
+  const catalogVerification = readExploreRouteRecord(routeMetadata.catalogVerification);
+  const communitySignal = readExploreRouteRecord(routeRecord.communitySignal ?? routeMetadata.communitySignal);
+  const activeGuidance = readExploreRouteRecord(
+    routeRecord.activeGuidance ??
+      routeMetadata.activeGuidance ??
+      catalogVerification.activeGuidance ??
+      communitySignal.activeGuidance,
+  );
+  const routeGeometryMode = String(
+    routeRecord.routeGeometryMode ??
+      routeMetadata.routeGeometryMode ??
+      catalogVerification.routeGeometryMode ??
+      '',
+  );
+  const activeGuidanceReady =
+    activeGuidance.status === 'ready' ||
+    activeGuidance.guidanceReady === true ||
+    activeGuidance.available === true;
+  const stitchedOrFullGeometry =
+    routeGeometryMode === 'full' ||
+    routeGeometryMode === 'stitched' ||
+    String(routeMetadata.geometrySource ?? '').includes('stitched');
+  return (
+    activeGuidanceReady ||
+    stitchedOrFullGeometry ||
+    hasGuidanceReadyLineGeometry(routeRecord.routeGeometry) ||
+    hasGuidanceReadyLineGeometry(routeRecord.trailGeometry) ||
+    hasGuidanceReadyLineGeometry(routeMetadata.routeGeometry) ||
+    hasGuidanceReadyLineGeometry(routeMetadata.trailGeometry)
+  );
+}
+
 type HiddenGemOrchestrationStatus =
   | 'baseline_candidates_ready'
   | 'ai_requested'
@@ -2427,12 +2480,16 @@ function DiscoverScreenInner() {
   const exploreMapPreviewRouteSets = useMemo(() => {
     const hiddenGemRoutes = hiddenGemExploreOrchestration.items
       .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
-      .filter(routePassesExploreMapLength);
+      .filter(routePassesExploreMapLength)
+      .filter(hasGuidanceReadyGeometry);
     const trailPackRoutes = publicRefinedTrailPacks
       .map((pack) => trailPackToExpeditionOpportunity(pack))
       .filter(routePassesExploreMapLength)
+      .filter(hasGuidanceReadyGeometry)
       .filter(isPublicSuggestedTrailheadRoute);
-    const ecsRouteIdeaRoutes = publicRefinedAIRoutes.filter(routePassesExploreMapLength);
+    const ecsRouteIdeaRoutes = publicRefinedAIRoutes
+      .filter(routePassesExploreMapLength)
+      .filter(hasGuidanceReadyGeometry);
     const currentSuggestedRouteIds = new Set(
       [...hiddenGemRoutes, ...trailPackRoutes, ...ecsRouteIdeaRoutes].map((route) =>
         String(route.id ?? '').trim(),
@@ -2441,7 +2498,8 @@ function DiscoverScreenInner() {
     const favoriteRoutes = favoritesSnapshot.favorites
       .filter((favorite) => currentSuggestedRouteIds.has(String(favorite.sourceTrailId).trim()))
       .map((favorite) => favoriteTrailToExpeditionRoute(favorite))
-      .filter(routePassesExploreMapLength);
+      .filter(routePassesExploreMapLength)
+      .filter(hasGuidanceReadyGeometry);
     const total =
       hiddenGemRoutes.length +
       trailPackRoutes.length +
@@ -2482,17 +2540,25 @@ function DiscoverScreenInner() {
     [exploreMapPreviewRouteCounts],
   );
 
-  const exploreSuggestedRouteOptions = useMemo<ExpeditionOpportunity[]>(() => {
+  const guidanceReadyRouteOptions = useMemo<ExpeditionOpportunity[]>(() => {
     const seen = new Set<string>();
     return [
+      ...exploreMapPreviewRouteSets.hiddenGemRoutes,
       ...exploreMapPreviewRouteSets.trailPackRoutes,
+      ...exploreMapPreviewRouteSets.ecsRouteIdeaRoutes,
+      ...exploreMapPreviewRouteSets.favoriteRoutes,
     ].filter((route) => {
       const key = String(route.id ?? route.name).trim().toLowerCase();
       if (!key || seen.has(key)) return false;
       seen.add(key);
-      return isPublicSuggestedTrailheadRoute(route);
+      return (
+        routePassesExploreMapLength(route) &&
+        hasGuidanceReadyGeometry(route) &&
+        isPublicSuggestedTrailheadRoute(route)
+      );
     });
   }, [exploreMapPreviewRouteSets]);
+  const exploreSuggestedRouteOptions = guidanceReadyRouteOptions;
   const publicSuggestedTrailheadRoutes = exploreSuggestedRouteOptions;
 
   const exploreMapHandoffBuild = useMemo(() => {
@@ -2927,12 +2993,19 @@ function DiscoverScreenInner() {
   );
   const exploreWizardTrailPackRoutes = useMemo(
     () =>
-      visibleTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack)).filter(isPublicSuggestedTrailheadRoute),
+      visibleTrailPacks
+        .map((trailPack) => trailPackToExpeditionOpportunity(trailPack))
+        .filter(routePassesExploreMapLength)
+        .filter(hasGuidanceReadyGeometry)
+        .filter(isPublicSuggestedTrailheadRoute),
     [visibleTrailPacks],
   );
   const exploreWizardHiddenGemRoutes = useMemo(
     () =>
-      visibleHiddenGemRoutes.filter(isPublicSuggestedTrailheadRoute),
+      visibleHiddenGemRoutes
+        .filter(routePassesExploreMapLength)
+        .filter(hasGuidanceReadyGeometry)
+        .filter(isPublicSuggestedTrailheadRoute),
     [visibleHiddenGemRoutes],
   );
   const exploreWizardFavoriteRoutes = useMemo(
@@ -2944,12 +3017,18 @@ function DiscoverScreenInner() {
       normalizeExploreWizardRouteCandidates({
         trailPacks: exploreWizardTrailPackRoutes,
         hiddenGemRoutes: exploreWizardHiddenGemRoutes,
-        ecsRouteIdeas: visibleAIRoutes,
+        ecsRouteIdeas: visibleAIRoutes
+          .filter(routePassesExploreMapLength)
+          .filter(hasGuidanceReadyGeometry),
         favoriteRoutes: [
           ...exploreWizardFavoriteRoutes,
           ...filteredExploreWizardSavedBuiltRoutes,
-        ],
-        savedRouteAssets: filteredExploreWizardImportedStitchedRoutes,
+        ]
+          .filter(routePassesExploreMapLength)
+          .filter(hasGuidanceReadyGeometry),
+        savedRouteAssets: filteredExploreWizardImportedStitchedRoutes
+          .filter(routePassesExploreMapLength)
+          .filter(hasGuidanceReadyGeometry),
       }),
     [
       exploreWizardFavoriteRoutes,
@@ -4011,9 +4090,9 @@ function DiscoverScreenInner() {
 
               <View style={s.exploreWizardStatusCard}>
                 <View style={s.exploreWizardStatusCopy}>
-                  <Text style={s.exploreWizardStatusTitle}>Guidance-Ready Routes</Text>
+                  <Text style={s.exploreWizardStatusTitle}>Guidance Ready Routes</Text>
                   <Text style={s.exploreWizardStatusText}>
-                    {`Guidance-ready routes reflect the visible refined Explore results. ${exploreWizardCandidateSet.candidates.length} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start. ${exploreWizardCandidateSet.hiddenTotal} routes are hidden because active-guidance geometry is unavailable.`}
+                    {`Guidance Ready Routes are source-backed routes with usable stitched geometry, visible confidence, and data state labels. ${exploreWizardCandidateSet.candidates.length} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start. ${exploreWizardCandidateSet.hiddenTotal} routes are hidden because active-guidance geometry is unavailable.`}
                   </Text>
                   {exploreWizardSaveNotice ? (
                     <Text style={s.exploreWizardNotice} numberOfLines={2}>{exploreWizardSaveNotice}</Text>
@@ -4751,7 +4830,7 @@ function DiscoverScreenInner() {
                   <Text style={s.explorePlanningEyebrow}>EXPLORER PLANNING</Text>
                   <Text style={s.explorePlanningTitle}>Offline Prep Pack</Text>
                   <Text style={s.explorePlanningText}>
-                    Choose from the active Suggested Trailheads filter, then save route essentials for low-service travel.
+                    Choose from the active Guidance Ready filter, then save route essentials for low-service travel.
                   </Text>
                 </View>
               </View>
@@ -4770,7 +4849,7 @@ function DiscoverScreenInner() {
                 <View style={s.explorePlanningContextPill}>
                   <Ionicons name="trail-sign-outline" size={10} color={TACTICAL.textMuted} />
                   <Text style={s.explorePlanningContextText}>
-                    {publicSuggestedTrailheadRoutes.length} TRAILHEAD{publicSuggestedTrailheadRoutes.length === 1 ? '' : 'S'}
+                    {publicSuggestedTrailheadRoutes.length} READY ROUTE{publicSuggestedTrailheadRoutes.length === 1 ? '' : 'S'}
                   </Text>
                 </View>
               </View>
