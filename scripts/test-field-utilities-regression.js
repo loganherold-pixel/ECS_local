@@ -613,15 +613,25 @@ assertIncludes(
   'fieldUtilityContainerSurface(documentationTile.color)',
   'Documentation should use the same low-opacity container treatment as the protocol tiles without changing its color.',
 );
-assertIncludes(
+assertNotIncludes(
   quickActionsSource,
   'styles.fieldUtilitiesCommandHeader',
-  'Field Utilities should use a polished ECS command header instead of a flat summary card.',
+  'Field Utilities should not render the redundant ActionStack command header container.',
 );
-assertIncludes(
+assertNotIncludes(
   quickActionsSource,
   'styles.fieldUtilitiesStatusPill',
-  'Field Utilities command header should expose compact status pills for quick scanning.',
+  'Field Utilities should not render redundant ActionStack status pills.',
+);
+assertNotIncludes(
+  quickActionsSource,
+  'ACTION STACK',
+  'Field Utilities should not render the redundant ActionStack title.',
+);
+assertNotIncludes(
+  quickActionsSource,
+  'Operational shortcuts',
+  'Field Utilities should not render redundant Operational Shortcuts copy.',
 );
 assertIncludes(
   quickActionsSource,
@@ -632,11 +642,6 @@ assertIncludes(
   quickActionsSource,
   'styles.quickActionTileAccent',
   'Field Utilities action tiles should include a compact accent rail for stronger ECS hierarchy.',
-);
-assertIncludes(
-  styleBlock(quickActionsSource, 'fieldUtilitiesCommandHeader'),
-  'borderColor: ECS_SURFACE.border.selected',
-  'Field Utilities command header should reuse ECS selected surface border tokens.',
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'fieldUtilitiesActionDeck'),

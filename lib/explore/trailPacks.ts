@@ -10,6 +10,7 @@ import {
   type ECSTrailPackReviewState,
 } from './trailPackReviewQueue';
 import { normalizeNavigationGuidanceGeometry } from '../navigationCatalogGuidanceGeometry';
+import { deriveRouteTerrainConfidenceImpact } from './routeTerrainConfidence';
 
 export type ECSTrailPackSource =
   | 'ecs_submitted'
@@ -155,6 +156,12 @@ export type ECSTrailPack = {
   minimumFuelRangeMiles?: number;
   minimumWaterCapacityGallons?: number;
   routeIntelligence?: Record<string, unknown>;
+  elevationGainFt?: number;
+  elevationLossFt?: number;
+  elevationChangeFt?: number;
+  terrainRiskScore?: number;
+  terrainRiskLevel?: string;
+  terrainRiskEventCount?: number;
   confidenceScore: number;
   confidenceReasons: string[];
   dataState?: ECSTrailPackDataState;
@@ -504,12 +511,19 @@ export function trailPackToExpeditionOpportunity(
       ? pack.distanceFromUserMiles
       : undefined;
   const difficulty = pack.difficulty ?? 'unknown';
-  const terrainDifficulty =
+  const terrainImpact = deriveRouteTerrainConfidenceImpact(pack, {
+    routeIntelligence: pack.routeIntelligence,
+    remotenessScore: pack.remotenessScore,
+    catalogVerification: pack.catalogVerification,
+  });
+  const fallbackTerrainDifficulty =
     difficulty === 'easy' ? 2 :
     difficulty === 'moderate' ? 4 :
     difficulty === 'technical' ? 7 :
     difficulty === 'extreme' ? 9 :
     5;
+  const terrainDifficulty = terrainImpact.terrainDifficulty ?? fallbackTerrainDifficulty;
+  const elevationGainFt = Math.max(0, Math.round(terrainImpact.elevationGainFt ?? pack.elevationGainFt ?? 0));
   const routeCatalogOperationalCriteria: ECSTrailPackOperationalCriteria = {
     remotenessScore: pack.remotenessScore,
     campabilityScore: pack.campabilityScore,
@@ -534,7 +548,7 @@ export function trailPackToExpeditionOpportunity(
     highlights: pack.confidenceReasons.length > 0
       ? pack.confidenceReasons.slice(0, 4)
       : ['Approved Trail Pack available for Explore preview.'],
-    elevationGainFt: 0,
+    elevationGainFt,
     estimatedDays: Math.max(1, Math.ceil((pack.estimatedDurationMinutes ?? 180) / 480)),
     bestSeason: 'Verify locally',
     permitRequired: false,
@@ -558,6 +572,13 @@ export function trailPackToExpeditionOpportunity(
       trailPackDataState: pack.dataState ?? null,
       trailPackRouteType: pack.routeType,
       confidenceScore: pack.confidenceScore,
+      elevationGainFt,
+      elevationLossFt: terrainImpact.elevationLossFt,
+      elevationChangeFt: terrainImpact.elevationChangeFt,
+      terrainRiskScore: terrainImpact.terrainRiskScore,
+      terrainRiskLevel: terrainImpact.terrainRiskLevel,
+      terrainRiskEventCount: terrainImpact.terrainRiskEventCount,
+      routeTerrainConfidence: terrainImpact,
       reviewStatus: pack.reviewStatus,
       catalogVerification: pack.catalogVerification,
       routeCatalogOperationalCriteria,

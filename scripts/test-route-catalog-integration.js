@@ -308,11 +308,8 @@ assert(
     discover.includes('liveTrailPackCatalogSnapshot.coverageState') &&
     discover.includes('routeCatalogSearchCriteria') &&
     discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
-    discover.includes('routeCatalogRefinementCriteria') &&
-    discover.includes('maxDurationMinutes: 480') &&
-    discover.includes('minDurationMinutes: 481') &&
-    discover.includes('minDurationMinutes: 961') &&
-    discover.includes('minRemotenessScore: 7') &&
+    !discover.includes('routeCatalogRefinementCriteria') &&
+    discover.includes('applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement)') &&
     discover.includes('availableFuelRangeMiles: vehicleProfile?.fuel_range_miles') &&
     discover.includes('availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal') &&
     discover.includes('vehicleClass: vehicleProfile?.vehicleType') &&
@@ -326,7 +323,7 @@ assert(
     discover.includes('route: routeForHandoff as any') &&
     discover.includes('trailPackPreviewDetailStatus') &&
     discover.includes('trailPackPreviewRequestRef'),
-  'Explore should surface honest partial-coverage copy, search with current criteria, enrich selected Trail Pack previews, and hydrate route-catalog handoffs through route-catalog-detail',
+  'Explore should surface honest partial-coverage copy, broad-search the current radius, refine locally, enrich selected Trail Pack previews, and hydrate route-catalog handoffs through route-catalog-detail',
 );
 const suggestedRoutesBlock = discover
   .split('const guidanceReadyRouteOptions = useMemo<ExpeditionOpportunity[]>')[1]

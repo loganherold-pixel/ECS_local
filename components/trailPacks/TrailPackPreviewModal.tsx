@@ -139,6 +139,14 @@ function conciseAssessmentLine(values: string[], fallback: string, maxItems = 4)
   return output.length > 0 ? output.join('; ') : fallback;
 }
 
+function effectiveTrailPackConfidenceScore(trailPack: ECSTrailPackDiscoveryItem): number {
+  const evaluatedScore = trailPack.evaluatedConfidence?.score;
+  if (typeof evaluatedScore === 'number' && Number.isFinite(evaluatedScore)) {
+    return evaluatedScore;
+  }
+  return Number.isFinite(trailPack.confidenceScore) ? trailPack.confidenceScore : 0;
+}
+
 function formatConditionToken(value: unknown): string | null {
   const clean = cleanAssessmentText(value);
   return clean ? clean.replace(/_/g, ' ') : null;
@@ -163,11 +171,13 @@ function buildCurrentConditionLine(currentCondition: any): string {
   );
 }
 
-function buildRouteAssessmentRows(detailAssessment: any, currentCondition: any) {
+function buildRouteAssessmentRows(detailAssessment: any, currentCondition: any, routeConfidenceScore?: number) {
   const status = cleanAssessmentText(detailAssessment?.status)?.toUpperCase() ?? 'REVIEW';
   const confidence =
-    typeof detailAssessment?.confidence === 'number' && Number.isFinite(detailAssessment.confidence)
-      ? `Confidence ${Math.round(detailAssessment.confidence)}%`
+    typeof routeConfidenceScore === 'number' && Number.isFinite(routeConfidenceScore)
+      ? `Confidence ${Math.round(routeConfidenceScore)}%`
+      : typeof detailAssessment?.confidence === 'number' && Number.isFinite(detailAssessment.confidence)
+        ? `Confidence ${Math.round(detailAssessment.confidence)}%`
       : null;
   return [
     {
@@ -342,13 +352,14 @@ export default function TrailPackPreviewModal({
   const offlineFreshnessWarnings = offlineCache?.freshnessWarnings ?? [];
   const routeTypeLabel = trailPack ? getTrailPackRouteTypeLabel(trailPack.routeType) : '';
   const difficultyLabel = trailPack ? getTrailPackDifficultyLabel(trailPack.difficulty) : '';
+  const displayConfidenceScore = trailPack ? effectiveTrailPackConfidenceScore(trailPack) : 0;
   const warnings = useMemo(
     () => trailPack?.evaluatedConfidence.warnings.concat(trailPack.evaluatedConfidence.blockers).slice(0, 4) ?? [],
     [trailPack],
   );
   const routeAssessmentRows = useMemo(
-    () => (detailAssessment ? buildRouteAssessmentRows(detailAssessment, currentCondition) : []),
-    [currentCondition, detailAssessment],
+    () => (detailAssessment ? buildRouteAssessmentRows(detailAssessment, currentCondition, displayConfidenceScore) : []),
+    [currentCondition, detailAssessment, displayConfidenceScore],
   );
 
   if (!trailPack || !guidanceReadiness) return null;
@@ -486,7 +497,7 @@ export default function TrailPackPreviewModal({
         <View style={s.headerBlock}>
           <Text style={s.title}>{trailPack.name}</Text>
           <Text style={s.subtitle}>
-            {routeTypeLabel} | {difficultyLabel} | ECS confidence {Math.round(trailPack.confidenceScore)}%
+            {routeTypeLabel} | {difficultyLabel} | ECS confidence {Math.round(displayConfidenceScore)}%
           </Text>
           <Text style={s.metaText}>{sourceLabel} | {formatDate(trailPack.lastVerifiedAt)}</Text>
           <Text style={s.metaText}>{guidanceReadiness.label} | {guidanceReadiness.description}</Text>

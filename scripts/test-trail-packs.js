@@ -92,6 +92,28 @@ assert.strictEqual(
   'Fixture-backed Trail Pack opportunities must not pass the public Suggested Trailheads route guard',
 );
 
+const elevationAwareOpportunity = trailPackToExpeditionOpportunity({
+  ...approvedWithGeometry,
+  id: 'elevation-aware-pack',
+  difficulty: 'technical',
+  routeIntelligence: {
+    elevationGainFt: 3200,
+    elevationLossFt: 2800,
+    terrainRiskScore: 72,
+    terrainRiskEvents: ['shelf road exposure', 'steep grade'],
+  },
+});
+assert.strictEqual(
+  elevationAwareOpportunity.elevationGainFt,
+  3200,
+  'Trail Pack opportunity projection should preserve route-profile elevation instead of defaulting to zero.',
+);
+assert.strictEqual(
+  elevationAwareOpportunity.routeMetadata.routeTerrainConfidence.terrainRiskEventCount,
+  2,
+  'Trail Pack opportunity metadata should carry terrain-risk event context for route-specific confidence.',
+);
+
 const liveCatalogPack = {
   ...approvedWithGeometry,
   id: 'live-route-catalog-pack',

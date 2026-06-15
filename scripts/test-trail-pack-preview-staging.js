@@ -220,6 +220,7 @@ assert(
 );
 assert(
     previewSource.includes('ECS confidence') &&
+    previewSource.includes('effectiveTrailPackConfidenceScore(trailPack)') &&
     previewSource.includes('WARNINGS') &&
     previewSource.includes('ROUTE ASSESSMENT') &&
     previewSource.includes("label: 'STATUS'") &&
@@ -245,6 +246,11 @@ assert(
     discoverSource.includes('onCacheOffline={() =>') &&
     discoverSource.includes('handleCacheTrailPackOffline(trailPackPreview)'),
   'Explore should stage Trail Packs into Navigate with a clear far-from-start message, fetch detail metadata, and wire cache action for previews',
+);
+assert(
+  discoverSource.includes('confidenceScore: current.confidenceScore') &&
+    discoverSource.includes('confidenceReasons: current.confidenceReasons'),
+  'Trail Pack detail hydration should not overwrite the route-specific evaluated confidence already shown on the card.',
 );
 assert(
   discoverSource.includes("handleTrailPackFeedback(trailPackPreview.id, 'saved')"),

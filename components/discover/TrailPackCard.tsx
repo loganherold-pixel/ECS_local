@@ -67,6 +67,12 @@ function getGuidanceCardLabel(readiness: ECSTrailPackGuidanceReadiness): string 
   return 'Preview only';
 }
 
+function displayTrailPackConfidence(trailPack: ECSTrailPackDiscoveryItem): number {
+  const evaluatedScore = trailPack.evaluatedConfidence?.score;
+  if (typeof evaluatedScore === 'number' && Number.isFinite(evaluatedScore)) return evaluatedScore;
+  return Number.isFinite(trailPack.confidenceScore) ? trailPack.confidenceScore : 0;
+}
+
 export default function TrailPackCard({
   trailPack,
   hasVehicle = false,
@@ -83,6 +89,7 @@ export default function TrailPackCard({
   const difficultyLabel = getTrailPackDifficultyLabel(trailPack.difficulty);
   const guidanceReadiness = getTrailPackGuidanceReadiness(trailPack);
   const canStartGuidance = canStartTrailPackGuidance(trailPack);
+  const confidenceScore = displayTrailPackConfidence(trailPack);
   const routeMiles = formatMiles(trailPack.distanceMiles);
   const distanceAway = formatMiles(trailPack.distanceFromUserMiles);
   const duration = formatDuration(trailPack.estimatedDurationMinutes);
@@ -144,7 +151,7 @@ export default function TrailPackCard({
 
         {metaLine ? <Text style={s.metaText}>{metaLine}</Text> : null}
         <Text style={s.confidenceText}>
-          ECS confidence {Math.round(trailPack.confidenceScore)}% | {feedbackText}
+          ECS confidence {Math.round(confidenceScore)}% | {feedbackText}
         </Text>
         <View style={[
           s.guidanceStrip,

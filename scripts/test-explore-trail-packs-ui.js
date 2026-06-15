@@ -64,13 +64,12 @@ assert(
     discover.includes('liveTrailPackCatalogSnapshot.trailPacks') &&
     discover.includes('routeCatalogSearchCriteria') &&
     discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
-    discover.includes('routeCatalogRefinementCriteria') &&
-    discover.includes('maxDurationMinutes: 480') &&
-    discover.includes('minRemotenessScore: 7') &&
+    !discover.includes('routeCatalogRefinementCriteria') &&
+    discover.includes('applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement)') &&
     discover.includes('availableFuelRangeMiles: vehicleProfile?.fuel_range_miles') &&
     discover.includes('availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal') &&
     !discover.includes('getDefaultECSTrailPacks'),
-  'Explore Trail Packs should use criteria-filtered live reviewed catalog content instead of default fixture packs, including operational resource criteria when available',
+  'Explore Trail Packs should use live reviewed catalog content with broad radius search criteria, then apply refinement locally for fast chip changes',
 );
 assert(
   discover.includes('DEFAULT_USER_LOCATION') &&

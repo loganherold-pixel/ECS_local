@@ -1064,20 +1064,6 @@ function DiscoverScreenInner() {
   }, [opportunities, distanceRadius]);
   const activeDistanceRadius =
     distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1];
-  const routeCatalogRefinementCriteria = useMemo(() => {
-    switch (exploreRefinement) {
-      case 'remoteness':
-        return { minRemotenessScore: 7 };
-      case 'dayTrip':
-        return { maxDurationMinutes: 480 };
-      case 'weekendTrip':
-        return { minDurationMinutes: 481, maxDurationMinutes: 960 };
-      case 'expedition':
-        return { minDurationMinutes: 961 };
-      default:
-        return {};
-    }
-  }, [exploreRefinement]);
   const routeCatalogSelectedSearchArea = useMemo(
     () => ROUTE_CATALOG_PRESET_SEARCH_AREAS.find((area) => area.key === routeCatalogSearchAreaKey) ?? null,
     [routeCatalogSearchAreaKey],
@@ -1132,13 +1118,11 @@ function DiscoverScreenInner() {
         availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
         availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal,
         locationSource: routeCatalogEffectiveSearchArea ? routeCatalogEffectiveSearchArea.source : 'search_area_required',
-        ...routeCatalogRefinementCriteria,
       };
     },
     [
       activeDistanceRadius,
       routeCatalogEffectiveSearchArea,
-      routeCatalogRefinementCriteria,
       vehicleProfile?.fuel_range_miles,
       vehicleProfile?.water_capacity_gal,
       vehicleProfile?.vehicleType,
@@ -1803,6 +1787,8 @@ function DiscoverScreenInner() {
             ...current,
             ...detail,
             distanceFromUserMiles: current.distanceFromUserMiles,
+            confidenceScore: current.confidenceScore,
+            confidenceReasons: current.confidenceReasons,
             evaluatedConfidence: current.evaluatedConfidence,
           };
         });

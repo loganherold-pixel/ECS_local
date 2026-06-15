@@ -181,6 +181,32 @@ assert.strictEqual(
   'Folded LineString geometry must not count as guidance-ready even when stale metadata claims full ready geometry.',
 );
 
+const performanceRoutes = Array.from({ length: 18 }, (_, index) => makeRoute(`perf-ready-${index + 1}`));
+let performanceEligibilityCalls = 0;
+const performanceInventory = buildExploreGuidanceReadyInventory({
+  trailPacks: performanceRoutes,
+  selectedRefinement: 'remoteness',
+  isRouteEligible: (route) => {
+    performanceEligibilityCalls += 1;
+    return defaultExploreReadyRouteEligibility(route);
+  },
+});
+assert.strictEqual(
+  performanceInventory.refinementCounts.remoteness,
+  performanceRoutes.length,
+  'Remoteness refinement badges should still count every ready route in the selected radius.',
+);
+assert.strictEqual(
+  performanceInventory.readyCount,
+  performanceRoutes.length,
+  'Guidance Ready Routes should stay in parity with the selected refinement after the inventory is optimized.',
+);
+assert.strictEqual(
+  performanceEligibilityCalls,
+  performanceRoutes.length,
+  'Explore inventory should evaluate ready-route eligibility once per loaded route and reuse it for total/refinement counts.',
+);
+
 const sameSourceHighGeometryRoute = makeRoute('same-source-rich-geometry', {
   distanceMiles: 24,
   terrainDifficulty: 4,
@@ -281,6 +307,65 @@ assert.notStrictEqual(
 assert(
   richGeometryConfidence.score > sparseContextConfidence.score,
   'Richer route geometry and cleaner verification support should score above sparse aging route context.',
+);
+
+const flatTerrainConfidence = deriveExploreLiveConfidence(makeRoute('same-source-flat-terrain', {
+  distanceMiles: 18,
+  terrainDifficulty: 3,
+  remotenessScore: 4,
+  elevationGainFt: 120,
+  routeMetadata: {
+    routeGeometryMode: 'full',
+    activeGuidance: { status: 'ready', topologyResolved: true },
+    elevationGainFt: 120,
+    routeTerrainConfidence: {
+      elevationGainFt: 120,
+      terrainRiskScore: 8,
+      terrainRiskEventCount: 0,
+    },
+    catalogVerification: {
+      confidenceScore: 92,
+      publicRecommendation: true,
+      warnings: [],
+      blockers: [],
+      dataUsed: [{ label: 'Official route geometry', freshness: 'fresh' }],
+      currentCondition: { status: 'clear', activeClosureCount: 0, warnings: [], blockers: [] },
+    },
+  },
+}));
+const mountainTerrainConfidence = deriveExploreLiveConfidence(makeRoute('same-source-mountain-terrain', {
+  distanceMiles: 18,
+  terrainDifficulty: 7,
+  remotenessScore: 8,
+  elevationGainFt: 3200,
+  routeMetadata: {
+    routeGeometryMode: 'full',
+    activeGuidance: { status: 'ready', topologyResolved: true },
+    elevationGainFt: 3200,
+    routeTerrainConfidence: {
+      elevationGainFt: 3200,
+      elevationLossFt: 2800,
+      terrainRiskScore: 78,
+      terrainRiskEvents: ['shelf road exposure', 'steep grade', 'recovery obstacle'],
+    },
+    catalogVerification: {
+      confidenceScore: 92,
+      publicRecommendation: true,
+      warnings: [],
+      blockers: [],
+      dataUsed: [{ label: 'Official route geometry', freshness: 'fresh' }],
+      currentCondition: { status: 'clear', activeClosureCount: 0, warnings: [], blockers: [] },
+    },
+  },
+}));
+
+assert(
+  flatTerrainConfidence.score > mountainTerrainConfidence.score,
+  'Same-source Explore confidence should drop for high elevation gain and terrain-risk events.',
+);
+assert(
+  flatTerrainConfidence.score - mountainTerrainConfidence.score >= 8,
+  'Explore preview confidence should not display the same 92 for flat and 3,000 ft riskier route profiles.',
 );
 
 console.log('Explore guidance-ready routes checks passed.');

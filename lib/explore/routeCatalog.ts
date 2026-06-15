@@ -65,6 +65,12 @@ export type RouteCatalogRecord = {
   minimumFuelRangeMiles?: number;
   minimumWaterCapacityGallons?: number;
   routeIntelligence?: Record<string, unknown>;
+  elevationGainFt?: number;
+  elevationLossFt?: number;
+  elevationChangeFt?: number;
+  terrainRiskScore?: number;
+  terrainRiskLevel?: string;
+  terrainRiskEventCount?: number;
   officialAccessCoveragePct: number;
   unknownAccessCoveragePct: number;
   restrictedAccessCoveragePct: number;
@@ -870,6 +876,12 @@ export function normalizeRouteCatalogRecord(value: unknown): RouteCatalogRecord 
       'minWaterCapacityGallons',
     ),
     routeIntelligence: readRecord(record.route_intelligence ?? record.routeIntelligence) ?? undefined,
+    elevationGainFt: readNumber(record, 'elevation_gain_ft', 'elevationGainFt', 'elevation_gain_feet', 'elevationGainFeet'),
+    elevationLossFt: readNumber(record, 'elevation_loss_ft', 'elevationLossFt', 'elevation_loss_feet', 'elevationLossFeet'),
+    elevationChangeFt: readNumber(record, 'elevation_change_ft', 'elevationChangeFt', 'elevation_delta_ft', 'elevationDeltaFt'),
+    terrainRiskScore: readNumber(record, 'terrain_risk_score', 'terrainRiskScore', 'route_terrain_risk_score', 'routeTerrainRiskScore'),
+    terrainRiskLevel: readString(record, 'terrain_risk_level', 'terrainRiskLevel', 'route_terrain_risk_level', 'routeTerrainRiskLevel'),
+    terrainRiskEventCount: readNumber(record, 'terrain_risk_event_count', 'terrainRiskEventCount', 'risk_event_count', 'riskEventCount'),
     officialAccessCoveragePct: readNumber(record, 'official_access_coverage_pct', 'officialAccessCoveragePct') ?? 0,
     unknownAccessCoveragePct: readNumber(record, 'unknown_access_coverage_pct', 'unknownAccessCoveragePct') ?? 100,
     restrictedAccessCoveragePct: readNumber(record, 'restricted_access_coverage_pct', 'restrictedAccessCoveragePct') ?? 0,
@@ -1062,6 +1074,12 @@ export function catalogRouteToTrailPack(
     minimumFuelRangeMiles: route.minimumFuelRangeMiles,
     minimumWaterCapacityGallons: route.minimumWaterCapacityGallons,
     routeIntelligence: route.routeIntelligence,
+    elevationGainFt: route.elevationGainFt,
+    elevationLossFt: route.elevationLossFt,
+    elevationChangeFt: route.elevationChangeFt,
+    terrainRiskScore: route.terrainRiskScore,
+    terrainRiskLevel: route.terrainRiskLevel,
+    terrainRiskEventCount: route.terrainRiskEventCount,
     confidenceScore: verification.confidenceScore,
     confidenceReasons: verification.reasons.length > 0 ? verification.reasons : [verification.sourceLabel],
     dataState: 'live',

@@ -1,4 +1,5 @@
 import type { ECSTrailPack, ECSTrailPackCoordinate } from './trailPacks';
+import { deriveRouteTerrainConfidenceImpact } from './routeTerrainConfidence';
 
 export type ECSTrailPackConfidenceBand = 'low' | 'moderate' | 'high' | 'verified';
 
@@ -354,6 +355,17 @@ function operationalScore(pack: ECSTrailPack, input: ECSTrailPackConfidenceInput
   return Math.max(0, Math.min(20, score));
 }
 
+function terrainConfidenceModifier(pack: ECSTrailPack, reasons: string[], warnings: string[]): number {
+  const terrainImpact = deriveRouteTerrainConfidenceImpact(pack, {
+    routeIntelligence: pack.routeIntelligence,
+    remotenessScore: pack.remotenessScore,
+    catalogVerification: pack.catalogVerification,
+  });
+  terrainImpact.reasons.forEach((reason) => reasons.push(reason));
+  terrainImpact.warnings.forEach((warning) => warnings.push(warning));
+  return terrainImpact.modifier;
+}
+
 function sourceAdjustment(pack: ECSTrailPack, reasons: string[], warnings: string[], blockers: string[]): number {
   switch (pack.reviewStatus) {
     case 'approved':
@@ -412,6 +424,7 @@ export function scoreECSTrailPackConfidence(
     integrityScore(pack, input, reasons, warnings, blockers) +
     recencyScore(pack, input, nowMs, reasons, warnings) +
     operationalScore(pack, input, reasons, warnings, blockers) +
+    terrainConfidenceModifier(pack, reasons, warnings) +
     sourceAdjustment(pack, reasons, warnings, blockers);
 
   const finalScore = blockers.length > 0 ? Math.min(clampScore(score), 39) : clampScore(score);

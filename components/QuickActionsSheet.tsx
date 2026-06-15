@@ -29,7 +29,6 @@ import { useApp } from '../context/AppContext';
 import { calculateRisk, getPackingStats, getRiskColor } from '../lib/calculations';
 import { getBuilderState, getCachedExpeditions } from '../lib/expeditionCache';
 import { missionEventStore, missionNoteStore } from '../lib/missionStore';
-import { expeditionStateStore } from '../lib/expeditionStateStore';
 import { dispatchStore } from '../lib/dispatchStore';
 import { ensureForegroundLocationPermission } from '../lib/locationPermissions';
 import { commsStore, type CustomCommsData } from '../lib/commsStore';
@@ -271,7 +270,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   );
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
 
-  const expeditionState = expeditionStateStore.getState();
   const hasTeam = (activeTrip?.team_size ?? 1) > 1;
   const missionId = activeTrip?.id ?? 'general';
   const fieldUtilitiesTopClearance = getShellHeaderTopPadding(insets.top) + ECS_TOP_SHELL_COMMAND_PILL_HEIGHT + 10;
@@ -801,30 +799,6 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
 
   const renderMainPanel = () => (
     <View style={styles.mainPanel}>
-      <View style={styles.fieldUtilitiesCommandHeader}>
-        <View style={styles.fieldUtilitiesHeaderRail} />
-        <View style={styles.fieldUtilitiesHeaderIcon}>
-          <Ionicons name="flash-outline" size={18} color={TACTICAL.amber} />
-        </View>
-        <View style={styles.fieldUtilitiesHeaderCopy}>
-          <Text style={styles.summaryEyebrow}>ACTION STACK</Text>
-          <Text style={styles.summaryTitle}>Operational shortcuts</Text>
-          <Text style={styles.summaryText} numberOfLines={2}>
-            {expeditionState === 'active' || expeditionState === 'paused'
-              ? 'Fast field controls stay aligned with the current ECS session context.'
-              : 'Fast field controls stay available even when no route is active.'}
-          </Text>
-        </View>
-        <View style={styles.fieldUtilitiesStatusColumn}>
-          <View style={styles.fieldUtilitiesStatusPill}>
-            <Text style={styles.fieldUtilitiesStatusText}>LOCAL READY</Text>
-          </View>
-          <View style={styles.fieldUtilitiesStatusPill}>
-            <Text style={styles.fieldUtilitiesStatusText}>6 ACTIONS</Text>
-          </View>
-        </View>
-      </View>
-
       <View style={styles.availableActionsSection}>
         <View style={styles.fieldUtilitiesActionDeck}>
           <View style={styles.fieldUtilitiesDeckHeader}>
@@ -1447,86 +1421,11 @@ const styles = StyleSheet.create({
     gap: 8,
     justifyContent: 'flex-start',
   },
-  fieldUtilitiesCommandHeader: {
-    minHeight: 78,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: ECS_SURFACE.border.selected,
-    backgroundColor: ECS_SURFACE.background.selected,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    overflow: 'hidden',
-  },
-  fieldUtilitiesHeaderRail: {
-    width: 3,
-    alignSelf: 'stretch',
-    borderRadius: 999,
-    backgroundColor: TACTICAL.amber,
-    opacity: 0.9,
-  },
-  fieldUtilitiesHeaderIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.36)',
-    backgroundColor: 'rgba(196,138,44,0.10)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fieldUtilitiesHeaderCopy: {
-    flex: 1,
-    minWidth: 0,
-    gap: 3,
-  },
-  fieldUtilitiesStatusColumn: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    gap: 5,
-  },
-  fieldUtilitiesStatusPill: {
-    minHeight: 22,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.28)',
-    backgroundColor: 'rgba(0,0,0,0.18)',
-    paddingHorizontal: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fieldUtilitiesStatusText: {
-    fontSize: 6.8,
-    lineHeight: 8,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-    letterSpacing: 0.8,
-  },
-  summaryEyebrow: {
-    fontSize: 7,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-    letterSpacing: 2,
-  },
-  summaryTitle: {
-    fontSize: 12,
-    lineHeight: 15,
-    fontWeight: '900',
-    color: TACTICAL.text,
-    letterSpacing: 0.5,
-  },
   sectionLabel: {
     fontSize: 9,
     fontWeight: '900',
     color: TACTICAL.amber,
     letterSpacing: 1.8,
-  },
-  summaryText: {
-    fontSize: 8.4,
-    lineHeight: 12,
-    color: TACTICAL.textMuted,
   },
   availableActionsSection: {
     flex: 1,
@@ -1798,8 +1697,8 @@ const styles = StyleSheet.create({
     minHeight: 150,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
+    borderColor: 'rgba(196, 138, 44, 0.2)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
     color: TACTICAL.text,
     paddingHorizontal: 12,
     paddingVertical: 12,
@@ -1833,8 +1732,8 @@ const styles = StyleSheet.create({
   savedNoteCard: {
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.14)',
-    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderColor: 'rgba(196, 138, 44, 0.2)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
     paddingHorizontal: 12,
     paddingVertical: 10,
     flexDirection: 'row',
@@ -1842,8 +1741,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   savedNoteCardSelected: {
-    borderColor: 'rgba(196,138,44,0.34)',
-    backgroundColor: 'rgba(196,138,44,0.08)',
+    borderColor: 'rgba(62, 79, 60, 0.12)',
+    backgroundColor: 'rgba(62, 79, 60, 0.08)',
   },
   savedNoteCopy: {
     flex: 1,
@@ -1897,8 +1796,8 @@ const styles = StyleSheet.create({
   infoCard: {
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
+    borderColor: 'rgba(196, 138, 44, 0.2)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
     padding: 12,
     gap: 10,
   },
@@ -1910,6 +1809,8 @@ const styles = StyleSheet.create({
   commsSectionCard: {
     flex: 1,
     minHeight: 0,
+    borderColor: 'rgba(196, 138, 44, 0.2)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
     paddingHorizontal: 10,
     paddingVertical: 9,
     gap: 7,
@@ -1932,8 +1833,8 @@ const styles = StyleSheet.create({
     minHeight: 44,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.14)',
-    backgroundColor: 'rgba(0,0,0,0.16)',
+    borderColor: 'rgba(196, 138, 44, 0.2)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
     paddingHorizontal: 10,
     paddingVertical: 9,
     flexDirection: 'row',
@@ -1975,8 +1876,8 @@ const styles = StyleSheet.create({
     minHeight: 42,
     borderRadius: 9,
     borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.22)',
-    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderColor: 'rgba(62, 79, 60, 0.12)',
+    backgroundColor: 'rgba(62, 79, 60, 0.08)',
     paddingHorizontal: 10,
     paddingVertical: 8,
     color: TACTICAL.text,
@@ -2030,6 +1931,8 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   commsCoordinatesCard: {
+    borderColor: 'rgba(196, 138, 44, 0.2)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
     paddingHorizontal: 10,
     paddingVertical: 9,
     gap: 7,

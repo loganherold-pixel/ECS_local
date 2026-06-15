@@ -1,4 +1,5 @@
 import type { ExpeditionOpportunity } from '../discoverEngine';
+import { deriveRouteTerrainConfidenceImpact } from './routeTerrainConfidence';
 
 export type ExploreLiveConfidenceSource =
   | 'catalog_verification'
@@ -313,15 +314,12 @@ function verificationModifier(
 }
 
 function routeComplexityModifier(route: ConfidenceRoute, metadata: Record<string, unknown>): number {
-  const terrainDifficulty = readNumber(route.terrainDifficulty, metadata.terrainDifficulty) ?? 0;
-  const remotenessScore = readNumber(route.remotenessScore, metadata.remotenessScore) ?? 0;
+  const terrainImpact = deriveRouteTerrainConfidenceImpact(route, metadata);
+  const terrainDifficulty = terrainImpact.terrainDifficulty ?? readNumber(route.terrainDifficulty, metadata.terrainDifficulty) ?? 0;
+  const remotenessScore = terrainImpact.remotenessScore ?? readNumber(route.remotenessScore, metadata.remotenessScore) ?? 0;
   const { pointCount } = routeGeometryStats(route, metadata);
-  let modifier = 0;
+  let modifier = terrainImpact.modifier;
 
-  if (terrainDifficulty >= 8) modifier -= 3;
-  else if (terrainDifficulty >= 6) modifier -= 1;
-  if (remotenessScore >= 9) modifier -= 2;
-  else if (remotenessScore >= 7) modifier -= 1;
   if ((terrainDifficulty >= 7 || remotenessScore >= 8) && pointCount < 8) modifier -= 4;
 
   return modifier;
@@ -443,10 +441,13 @@ export function deriveExploreLiveConfidence(route: ConfidenceRoute | null | unde
     selected?.score != null
       ? deriveRouteSpecificScore(route, selected.score, metadata, catalogVerification, state)
       : null;
+  const terrainImpact = deriveRouteTerrainConfidenceImpact(route, metadata);
   const reasons = uniqueLimited([
     ...normalizeStringArray(catalogVerification.confidenceReasons),
     ...normalizeStringArray(metadata.confidenceReasons),
     ...normalizeStringArray(recommendation.reasons),
+    ...terrainImpact.reasons,
+    ...terrainImpact.warnings,
     catalogVerification.sourceLabel,
     selected?.source === 'route_metadata' ? 'Route metadata confidence' : null,
   ]);

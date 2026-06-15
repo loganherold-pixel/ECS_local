@@ -113,6 +113,76 @@ assert(
   'High confidence reasons should cite real positive and closure-clear inputs',
 );
 
+const flatLowRiskRoute = scoreECSTrailPackConfidence(
+  makePack({
+    id: 'flat-low-risk-route',
+    source: 'ecs_validated',
+    difficulty: 'easy',
+    remotenessScore: 3,
+    distanceMiles: 12,
+    routeIntelligence: {
+      elevationGainFt: 120,
+      terrainRiskScore: 8,
+      terrainRiskEvents: [],
+    },
+    positiveFeedbackCount: 30,
+    completionCount: 16,
+    lastVerifiedAt: new Date().toISOString(),
+  }),
+  {
+    independentConfirmationCount: 5,
+    saveCount: 12,
+    lastCompletedAt: new Date().toISOString(),
+    closureStatus: 'clear',
+    weatherStatus: 'clear',
+    fireSmokeStatus: 'clear',
+    routeSnapStatus: 'matched',
+    offlineCacheReady: true,
+    vehicleFitMatchesSelectedProfile: true,
+  },
+);
+const elevatedRiskRoute = scoreECSTrailPackConfidence(
+  makePack({
+    id: 'elevated-risk-route',
+    source: 'ecs_validated',
+    difficulty: 'technical',
+    remotenessScore: 9,
+    distanceMiles: 12,
+    routeIntelligence: {
+      elevationGainFt: 3200,
+      elevationLossFt: 2900,
+      terrainRiskScore: 78,
+      terrainRiskEvents: ['shelf road exposure', 'steep grade', 'recovery obstacle'],
+    },
+    positiveFeedbackCount: 30,
+    completionCount: 16,
+    lastVerifiedAt: new Date().toISOString(),
+  }),
+  {
+    independentConfirmationCount: 5,
+    saveCount: 12,
+    lastCompletedAt: new Date().toISOString(),
+    closureStatus: 'clear',
+    weatherStatus: 'clear',
+    fireSmokeStatus: 'clear',
+    routeSnapStatus: 'matched',
+    offlineCacheReady: true,
+    vehicleFitMatchesSelectedProfile: true,
+  },
+);
+assert(
+  flatLowRiskRoute.score > elevatedRiskRoute.score,
+  'Terrain/elevation risk should make two otherwise-equal Trail Packs produce different ECS confidence scores.',
+);
+assert(
+  flatLowRiskRoute.score - elevatedRiskRoute.score >= 8,
+  'A 3,000 ft high-risk route should not sit near the same confidence as a flat low-risk route.',
+);
+assert(
+  elevatedRiskRoute.warnings.some((warning) => /elevation|terrain|risk/i.test(warning)),
+  'Terrain/elevation adjustments should explain the score reduction.',
+);
+
 const negativeFeedback = scoreECSTrailPackConfidence(
   makePack({
     id: 'negative-feedback',

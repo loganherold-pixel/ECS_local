@@ -218,14 +218,36 @@ function sourceTitle(route: ExpeditionOpportunity): string {
   return String(route.name || route.id || 'Explore route');
 }
 
+type EligibilityResolver = (route: ExpeditionOpportunity) => ExploreReadyRouteEligibilityResult;
+
+function createEligibilityResolver(input: ExploreGuidanceReadyInventoryInput): EligibilityResolver {
+  const isRouteEligible = input.isRouteEligible ?? defaultExploreReadyRouteEligibility;
+  const routeObjectCache = new WeakMap<object, ExploreReadyRouteEligibilityResult>();
+
+  const resolve: EligibilityResolver = (route) => {
+    const cachedByObject = routeObjectCache.get(route as unknown as object);
+    if (cachedByObject) return cachedByObject;
+
+    const eligibility = isRouteEligible(route);
+    routeObjectCache.set(route as unknown as object, eligibility);
+    return eligibility;
+  };
+
+  SOURCE_ORDER.forEach((source) => {
+    (input[source.key] ?? []).forEach(resolve);
+  });
+
+  return resolve;
+}
+
 function buildForRefinement(
   input: ExploreGuidanceReadyInventoryInput,
   refinement: ExploreRefinementFilter | null,
+  getEligibility: EligibilityResolver,
 ): ExploreWizardCandidateSet {
   const eligibleInput: NormalizeExploreWizardCandidatesInput = {};
   const hiddenRoutes: ExploreWizardHiddenRoute[] = [];
   const hiddenBySource = emptyHiddenCounts();
-  const isRouteEligible = input.isRouteEligible ?? defaultExploreReadyRouteEligibility;
 
   SOURCE_ORDER.forEach((source) => {
     const routes = input[source.key] ?? [];
@@ -233,7 +255,7 @@ function buildForRefinement(
     eligibleInput[source.key] = [];
 
     refinedRoutes.forEach((route) => {
-      const eligibility = isRouteEligible(route);
+      const eligibility = getEligibility(route);
       if (eligibility.eligible) {
         eligibleInput[source.key]?.push(route);
         return;
@@ -266,6 +288,20 @@ function buildForRefinement(
   };
 }
 
+function countEligibleRoutesForRefinement(
+  input: ExploreGuidanceReadyInventoryInput,
+  refinement: ExploreRefinementFilter | null,
+  getEligibility: EligibilityResolver,
+): number {
+  return SOURCE_ORDER.reduce((total, source) => {
+    const routes = input[source.key] ?? [];
+    const refinedRoutes = applyExploreRefinementFilter(routes, refinement);
+    return total + refinedRoutes.reduce((sourceTotal, route) => {
+      return sourceTotal + (getEligibility(route).eligible ? 1 : 0);
+    }, 0);
+  }, 0);
+}
+
 function sourceCounts(candidateSet: ExploreWizardCandidateSet): Record<ExploreWizardRouteSourceKind | 'all', number> {
   const counts = emptySourceCounts();
   candidateSet.candidates.forEach((candidate) => {
@@ -279,11 +315,11 @@ export function buildExploreGuidanceReadyInventory(
   input: ExploreGuidanceReadyInventoryInput,
 ): ExploreGuidanceReadyInventory {
   const selectedRefinement = input.selectedRefinement ?? null;
-  const totalCandidateSet = buildForRefinement(input, null);
-  const candidateSet = buildForRefinement(input, selectedRefinement);
+  const getEligibility = createEligibilityResolver(input);
+  const candidateSet = buildForRefinement(input, selectedRefinement, getEligibility);
   const refinementCounts = EXPLORE_REFINEMENT_OPTIONS.reduce(
     (counts, option) => {
-      counts[option.key] = buildForRefinement(input, option.key).candidates.length;
+      counts[option.key] = countEligibleRoutesForRefinement(input, option.key, getEligibility);
       return counts;
     },
     {
@@ -297,7 +333,7 @@ export function buildExploreGuidanceReadyInventory(
   return {
     candidateSet,
     readyCount: candidateSet.candidates.length,
-    totalReadyCount: totalCandidateSet.candidates.length,
+    totalReadyCount: countEligibleRoutesForRefinement(input, null, getEligibility),
     refinementCounts,
     sourceCounts: sourceCounts(candidateSet),
     hiddenTotal: candidateSet.hiddenTotal,

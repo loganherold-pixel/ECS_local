@@ -22,6 +22,9 @@ const refinement = require(path.join(root, 'lib', 'explore', 'exploreRefinementF
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
 const filterSource = fs.readFileSync(path.join(root, 'components', 'discover', 'DistanceRadiusFilter.tsx'), 'utf8');
 const helperSource = fs.readFileSync(path.join(root, 'lib', 'explore', 'exploreRefinementFilter.ts'), 'utf8');
+const routeCatalogSearchCriteriaBlock = discoverSource
+  .split('const routeCatalogSearchCriteria = useMemo')[1]
+  ?.split('useEffect(() => {')[0] ?? '';
 
 function route(id, overrides = {}) {
   return {
@@ -127,6 +130,14 @@ assert.ok(
     discoverSource.includes('radiusFilteredExploreWizardImportedStitchedRoutes') &&
     !discoverSource.includes('ecsRouteIdeas: visibleAIRoutes'),
   'Explore TripBuilder guidance candidates should use the shared ready-route inventory instead of page-sized visible route pools.',
+);
+assert.ok(
+  !discoverSource.includes('routeCatalogRefinementCriteria') &&
+    !routeCatalogSearchCriteriaBlock.includes('exploreRefinement') &&
+    !routeCatalogSearchCriteriaBlock.includes('minRemotenessScore') &&
+    !routeCatalogSearchCriteriaBlock.includes('maxDurationMinutes') &&
+    !routeCatalogSearchCriteriaBlock.includes('minDurationMinutes'),
+  'Changing Explore refinements should stay local and must not trigger a live route-catalog refetch.',
 );
 assert.ok(
   discoverSource.includes('const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);') &&
