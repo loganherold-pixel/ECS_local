@@ -40,6 +40,7 @@ export interface ECSPin {
   resolved: boolean;
   photo_url: string | null;
   icon_key: string;
+  road_label?: string | null;
 }
 
 // ── Pin Type Metadata ───────────────────────────────────────

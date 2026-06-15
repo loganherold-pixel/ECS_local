@@ -108,6 +108,7 @@ export const pinStore = {
     expedition_id?: string | null;
     vehicle_id?: string | null;
     severity?: PinSeverity | null;
+    road_label?: string | null;
     created_by?: string;
   }): ECSPin => {
     const meta = getPinTypeMeta(data.type);
@@ -127,6 +128,7 @@ export const pinStore = {
       resolved: false,
       photo_url: null,
       icon_key: meta.icon,
+      road_label: data.road_label ?? null,
     };
     const all = getAllPins();
     all.push(pin);

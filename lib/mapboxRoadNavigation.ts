@@ -17,6 +17,7 @@ export type RoadNavSourceType =
   | 'searchbox_retrieve'
   | 'forward_geocode'
   | 'manual_selection'
+  | 'saved_pin'
   | 'explore_handoff'
   | 'offline_sync_open'
   | 'dispatch_recovery'

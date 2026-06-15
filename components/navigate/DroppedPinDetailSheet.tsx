@@ -19,8 +19,9 @@ type Props = {
   topOffset: number;
   bottomOffset: number;
   nearestRoadLabel?: string | null;
+  onNavigateHere: () => void;
   onEdit: () => void;
-  onDelete: () => void;
+  onClear: () => void;
   onClose: () => void;
 };
 
@@ -51,8 +52,9 @@ export default function DroppedPinDetailSheet({
   topOffset,
   bottomOffset,
   nearestRoadLabel = null,
+  onNavigateHere,
   onEdit,
-  onDelete,
+  onClear,
   onClose,
 }: Props) {
   if (!visible || !pin) return null;
@@ -130,16 +132,20 @@ export default function DroppedPinDetailSheet({
           </ScrollView>
 
           <View style={styles.actions}>
+            <TouchableOpacity style={styles.primaryButton} onPress={onNavigateHere} activeOpacity={0.84}>
+              <Ionicons name="navigate-outline" size={13} color="#091014" />
+              <Text style={styles.primaryButtonText}>Navigate</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryButton} onPress={onEdit} activeOpacity={0.78}>
               <Ionicons name="pencil-outline" size={13} color={TACTICAL.text} />
               <Text style={styles.secondaryButtonText}>Edit</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.dangerButton} onPress={onDelete} activeOpacity={0.78}>
+            <TouchableOpacity style={styles.dangerButton} onPress={onClear} activeOpacity={0.78}>
               <Ionicons name="trash-outline" size={13} color="#F07D71" />
-              <Text style={styles.dangerButtonText}>Delete</Text>
+              <Text style={styles.dangerButtonText}>Clear Pin</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.primaryButton} onPress={onClose} activeOpacity={0.84}>
-              <Text style={styles.primaryButtonText}>Close</Text>
+            <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.84}>
+              <Text style={styles.closeButtonText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -307,6 +313,7 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    flexWrap: 'wrap',
     gap: 8,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -353,12 +360,30 @@ const styles = StyleSheet.create({
     minHeight: 38,
     borderRadius: 10,
     backgroundColor: TACTICAL.amber,
-    paddingHorizontal: 18,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     justifyContent: 'center',
   },
   primaryButtonText: {
     ...TYPO.U2,
     color: '#091014',
+    fontSize: 9,
+    letterSpacing: 1,
+  },
+  closeButton: {
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+  },
+  closeButtonText: {
+    ...TYPO.U2,
+    color: TACTICAL.textMuted,
     fontSize: 9,
     letterSpacing: 1,
   },

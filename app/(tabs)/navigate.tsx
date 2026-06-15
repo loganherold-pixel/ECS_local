@@ -4035,6 +4035,7 @@ const [allPins, setAllPins] = useState<ECSPin[]>([]);
 const [editingPin, setEditingPin] = useState<ECSPin | null>(null);
 const [dropCoords, setDropCoords] = useState<{ lat: number; lng: number } | null>(null);
 const [selectedDroppedPinId, setSelectedDroppedPinId] = useState<string | null>(null);
+const [pendingPinRoadLabel, setPendingPinRoadLabel] = useState<string | null>(null);
 const [recommendCampsiteLocation, setRecommendCampsiteLocation] =
   useState<RecommendCampsiteSelectedLocation | null>(null);
 const [recommendCampsiteGpxImport, setRecommendCampsiteGpxImport] =
@@ -7933,6 +7934,7 @@ const handleDropPinHere = useCallback(() => {
   if (followUser && userLocation) {
     setDropCoords({ lat: userLocation.lat, lng: userLocation.lng });
     setEditingPin(null);
+    setPendingPinRoadLabel(null);
     setPinDropMode(false);
     openTopPopup('pinEditor');
     return;
@@ -7940,6 +7942,7 @@ const handleDropPinHere = useCallback(() => {
 
   setEditingPin(null);
   setDropCoords(null);
+  setPendingPinRoadLabel(null);
   setShowCrosshair(false);
   setPinDropMode(prev => !prev);
 
@@ -8309,6 +8312,7 @@ const handleLongPressAddWaypoint = useCallback(() => {
   hapticCommand();
   setDropCoords({ lat: longPressContext.coordinate.latitude, lng: longPressContext.coordinate.longitude });
   setEditingPin(null);
+  setPendingPinRoadLabel(longPressContext.routeableFeature?.name ?? longPressContext.routeableFeature?.sourceLabel ?? null);
   setLongPressContext(null);
   setLongPressInfoExpanded(false);
   openTopPopup('pinEditor');
@@ -9136,6 +9140,7 @@ const handleLongPressNavigateHere = useCallback(() => {
     pinStore.create({
       type: data.type, lat: dropCoords.lat, lng: dropCoords.lng,
       title: data.title, notes: data.notes, severity: data.severity,
+      road_label: pendingPinRoadLabel,
       expedition_id: activeExpeditionId, created_by: user?.email || 'local',
     });
     showToast(`PIN DROPPED: ${data.title}`);
@@ -9147,8 +9152,9 @@ const handleLongPressNavigateHere = useCallback(() => {
   closeTopPopup();
   setEditingPin(null);
   setDropCoords(null);
+  setPendingPinRoadLabel(null);
   loadPins();
-}, [editingPin, dropCoords, activeExpeditionId, user, showToast, closeTopPopup, loadPins]);
+}, [editingPin, dropCoords, pendingPinRoadLabel, activeExpeditionId, user, showToast, closeTopPopup, loadPins]);
 
   const handlePinDelete = useCallback(() => {
   if (editingPin) {
@@ -9160,6 +9166,7 @@ const handleLongPressNavigateHere = useCallback(() => {
       closeTopPopup();
       setEditingPin(null);
       setDropCoords(null);
+      setPendingPinRoadLabel(null);
       loadPins();
       showToast('PIN DELETED');
     };
@@ -9178,10 +9185,34 @@ const handleLongPressNavigateHere = useCallback(() => {
     setSelectedDroppedPinId(null);
     setEditingPin(selectedDroppedPin);
     setDropCoords({ lat: selectedDroppedPin.lat, lng: selectedDroppedPin.lng });
+    setPendingPinRoadLabel(selectedDroppedPin.road_label ?? null);
     openTopPopup('pinEditor');
   }, [openTopPopup, selectedDroppedPin]);
 
-  const handleDroppedPinDelete = useCallback(() => {
+  const handleDroppedPinNavigateHere = useCallback(() => {
+    if (!selectedDroppedPin) return;
+    hapticCommand();
+    const pin = selectedDroppedPin;
+    const destination: RoadNavDestination = {
+      id: `saved-pin-${pin.id}`,
+      title: pin.title || 'Dropped pin',
+      subtitle: pin.road_label || `${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)}`,
+      coordinate: {
+        lat: pin.lat,
+        lng: pin.lng,
+      },
+      sourceType: 'saved_pin',
+      raw: {
+        pin,
+      },
+    };
+    setSelectedDroppedPinId(null);
+    void previewRoadDestination(destination, 'saved_pin').then(() => {
+      startRoadNavigation();
+    });
+  }, [previewRoadDestination, selectedDroppedPin, startRoadNavigation]);
+
+  const handleDroppedPinClear = useCallback(() => {
     if (!selectedDroppedPin) return;
     const pin = selectedDroppedPin;
     const doDelete = () => {
@@ -9189,19 +9220,20 @@ const handleLongPressNavigateHere = useCallback(() => {
       setSelectedDroppedPinId(null);
       setEditingPin(null);
       setDropCoords(null);
+      setPendingPinRoadLabel(null);
       loadPins();
-      showToast('PIN DELETED');
+      showToast('PIN CLEARED');
     };
     if (Platform.OS === 'web') {
-      if (confirm(`Delete "${pin.title}"?`)) doDelete();
+      if (confirm(`Clear "${pin.title}" from the map?`)) doDelete();
       return;
     }
     Alert.alert(
-      'Delete Pin',
+      'Clear Pin',
       `Remove "${pin.title}" from the map?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: doDelete },
+        { text: 'Clear', style: 'destructive', onPress: doDelete },
       ],
     );
   }, [loadPins, selectedDroppedPin, showToast]);
@@ -9229,6 +9261,7 @@ const handleLongPressNavigateHere = useCallback(() => {
     setSelectedDroppedPinId(null);
     setEditingPin(pin);
     setDropCoords({ lat: pin.lat, lng: pin.lng });
+    setPendingPinRoadLabel(pin.road_label ?? null);
     openTopPopup('pinEditor');
   }, [openTopPopup]);
 
@@ -9251,6 +9284,7 @@ const handleLongPressNavigateHere = useCallback(() => {
     setSelectedDroppedPinId(null);
     setEditingPin(null);
     setDropCoords(null);
+    setPendingPinRoadLabel(null);
     handlePinTypeFilterReset();
     loadPins();
     showToast(`CLEARED ${deletedCount} PIN${deletedCount === 1 ? '' : 'S'}`);
@@ -9636,6 +9670,8 @@ const handleDirectMapTapForPin = useCallback(
     setSelectedDroppedPinId(null);
     setDropCoords({ lat: latitude, lng: longitude });
     setEditingPin(null);
+    const droppedRouteableFeature = segmentPayloadToLongPressFeature(routeableFeature);
+    setPendingPinRoadLabel(droppedRouteableFeature?.name ?? droppedRouteableFeature?.sourceLabel ?? null);
     setPinDropMode(false);
     setShowCrosshair(false);
     openTopPopup('pinEditor');
@@ -18615,9 +18651,10 @@ const stableMapSurface = useMemo(() => {
         pin={selectedDroppedPin}
         topOffset={campsiteDetailTopOffset}
         bottomOffset={campLayerDetailBottomOffset}
-        nearestRoadLabel={null}
+        nearestRoadLabel={selectedDroppedPin?.road_label ?? null}
+        onNavigateHere={handleDroppedPinNavigateHere}
         onEdit={handleDroppedPinEdit}
-        onDelete={handleDroppedPinDelete}
+        onClear={handleDroppedPinClear}
         onClose={handleDroppedPinClose}
       />
 
@@ -19531,8 +19568,9 @@ const stableMapSurface = useMemo(() => {
   selectedCampIntelRank,
   selectedCampIntelSearchContext,
   selectedDroppedPin,
+  handleDroppedPinNavigateHere,
   handleDroppedPinEdit,
-  handleDroppedPinDelete,
+  handleDroppedPinClear,
   handleDroppedPinClose,
   selectedCampScoutCandidate,
   selectedCampScoutCandidateId,
@@ -20182,6 +20220,7 @@ const stableMapSurface = useMemo(() => {
     closeTopPopup('pinEditor');
     setEditingPin(null);
     setDropCoords(null);
+    setPendingPinRoadLabel(null);
     setShowCrosshair(false);
   }, [closeTopPopup]);
 

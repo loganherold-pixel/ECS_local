@@ -17,9 +17,18 @@ assert(
 assert(navigateSource.includes('selectedDroppedPinId'), 'Navigate should track selected dropped pin state');
 assert(navigateSource.includes('<DroppedPinDetailSheet'), 'Navigate should render dropped pin detail sheet');
 assert(navigateSource.includes('onEdit={handleDroppedPinEdit}'), 'Dropped pin sheet should wire edit action');
-assert(navigateSource.includes('onDelete={handleDroppedPinDelete}'), 'Dropped pin sheet should wire delete action');
+assert(navigateSource.includes('onClear={handleDroppedPinClear}'), 'Dropped pin sheet should wire clear action');
+assert(navigateSource.includes('onNavigateHere={handleDroppedPinNavigateHere}'), 'Dropped pin sheet should wire navigate action');
 assert(navigateSource.includes('onClose={handleDroppedPinClose}'), 'Dropped pin sheet should wire close action');
 assert(navigateSource.includes('setSelectedDroppedPinId(pin.id)'), 'Map pin tap should select the dropped pin');
+assert(
+  navigateSource.includes('setPendingPinRoadLabel(longPressContext.routeableFeature?.name ?? longPressContext.routeableFeature?.sourceLabel ?? null)'),
+  'Long-press Add Waypoint should preserve road/source label for the dropped pin detail sheet',
+);
+assert(
+  navigateSource.includes("sourceType: 'saved_pin'"),
+  'Dropped pin Navigate Here should create a saved-pin road navigation destination',
+);
 assert(navigateSource.includes('onClearAllPins={handleClearAllPins}'), 'Pin drawer should receive clear all handler');
 
 assert(sheetSource.includes('Latitude') || sheetSource.includes('LATITUDE'), 'Dropped pin sheet should show latitude');
@@ -27,7 +36,8 @@ assert(sheetSource.includes('Longitude') || sheetSource.includes('LONGITUDE'), '
 assert(sheetSource.includes('Nearest road'), 'Dropped pin sheet should show nearest road field');
 assert(sheetSource.includes('Notes'), 'Dropped pin sheet should show notes');
 assert(sheetSource.includes('Edit'), 'Dropped pin sheet should show edit action');
-assert(sheetSource.includes('Delete'), 'Dropped pin sheet should show delete action');
+assert(sheetSource.includes('Navigate'), 'Dropped pin sheet should show navigate action');
+assert(sheetSource.includes('Clear Pin'), 'Dropped pin sheet should show clear action');
 assert(sheetSource.includes('Close'), 'Dropped pin sheet should show close action');
 assert(
   sheetSource.includes('Not resolved for this dropped pin.'),
@@ -44,5 +54,7 @@ assert(drawerSource.includes("text: 'Yes'"), 'Clear all confirmation should prov
 
 assert(storeSource.includes('deleteAll: ()'), 'Pin store should expose deleteAll');
 assert(storeSource.includes('deleteMany: (ids: string[])'), 'Pin store should expose scoped deleteMany');
+assert(storeSource.includes('road_label?: string | null'), 'Pin store create payload should accept optional road/source labels');
+assert(storeSource.includes('road_label: data.road_label ?? null'), 'Pin store should persist the optional road/source label');
 
 console.log('Navigate pin system static checks passed');
