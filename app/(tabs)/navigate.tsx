@@ -113,7 +113,10 @@ import {
   DISPERSED_CAMPING_CACHE_TTL_MS,
 } from '../../lib/map/dispersedCampingMobile';
 import { fetchDispersedCampingEligibilityForMap } from '../../lib/map/dispersedCampingSearchClient';
-import { CampLayerFetchCoordinator } from '../../lib/map/campLayerFetchScheduler';
+import {
+  CampLayerFetchCoordinator,
+  expandCampLayerFetchBbox,
+} from '../../lib/map/campLayerFetchScheduler';
 import {
   getCampLayerZoomPrompt,
   isCampLayerZoomEligible,
@@ -1723,6 +1726,9 @@ const COMPASS_MOVEMENT_DISTANCE_M = 4;
 const COMPASS_MOVEMENT_SPEED_MPH = 1.5;
 const ACTIVE_GUIDANCE_AUTO_MINIMIZE_MS = 2500;
 const CAMP_LAYER_ROUTE_MAP_RESULT_LIMIT = 64;
+const ESTABLISHED_CAMPGROUNDS_FETCH_DEBOUNCE_MS = 180;
+const ESTABLISHED_CAMPGROUNDS_PREFETCH_PADDING_RATIO = 0.5;
+const ESTABLISHED_CAMPGROUNDS_PREFETCH_MIN_PADDING_DEGREES = 0.02;
 const NAVIGATION_HANDOFF_RESTORE_DELAY_MS = 220;
 const NAVIGATION_HANDOFF_RESTORE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const EDGE_CONTROL_HIT_SLOP = { top: 10, bottom: 10, left: 10, right: 10 } as const;
@@ -4750,7 +4756,9 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const establishedCampgroundsCacheRef = useRef<
     Map<string, { expiresAt: number; campsites: EstablishedCampsite[] }>
   >(new Map());
-  const establishedCampgroundsFetchCoordinatorRef = useRef(new CampLayerFetchCoordinator());
+  const establishedCampgroundsFetchCoordinatorRef = useRef(
+    new CampLayerFetchCoordinator({ debounceMs: ESTABLISHED_CAMPGROUNDS_FETCH_DEBOUNCE_MS }),
+  );
   const establishedCampgroundsFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const establishedCampgroundsFailedCacheKeysRef = useRef<Set<string>>(new Set());
   const establishedCampgroundsRetryBboxRef = useRef<TileBounds | null>(null);
@@ -5448,7 +5456,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       return;
     }
 
-    const planBbox = establishedCampgroundsRetryBboxRef.current ?? mapBounds;
+    const retryBbox = establishedCampgroundsRetryBboxRef.current;
+    const visiblePlanBbox = retryBbox ?? mapBounds;
+    const planBbox = retryBbox
+      ? retryBbox
+      : expandCampLayerFetchBbox(mapBounds, {
+          paddingRatio: ESTABLISHED_CAMPGROUNDS_PREFETCH_PADDING_RATIO,
+          minPaddingDegrees: ESTABLISHED_CAMPGROUNDS_PREFETCH_MIN_PADDING_DEGREES,
+        }) ?? mapBounds;
     establishedCampgroundsRetryBboxRef.current = null;
     const plan = establishedCampgroundsFetchCoordinatorRef.current.plan({
       layer: 'established_campgrounds',
@@ -5461,7 +5476,8 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       if (plan.reason === 'offline' || plan.reason === 'invalid_bbox' || plan.reason === 'bbox_too_small') {
         logCampLayerDebug('frontend_fetch_skipped', {
           layer: 'established_campgrounds',
-          bbox: sanitizeCampLayerBbox(planBbox),
+          bbox: sanitizeCampLayerBbox(visiblePlanBbox),
+          prefetchBbox: sanitizeCampLayerBbox(planBbox),
           reason: plan.reason,
           cacheKey: plan.cacheKey ?? null,
         });
@@ -5512,6 +5528,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       establishedCampgroundsFetchCoordinatorRef.current.cancel();
       logCampLayerDebug('frontend_cache_hit', {
         layer: 'established_campgrounds',
+        visibleBbox: sanitizeCampLayerBbox(visiblePlanBbox),
         bbox: sanitizeCampLayerBbox(plan.bbox),
         cacheKey: plan.cacheKey,
         campsiteCount: cached.campsites.length,
@@ -5539,6 +5556,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     );
     logCampLayerDebug('frontend_fetch_scheduled', {
       layer: 'established_campgrounds',
+      visibleBbox: sanitizeCampLayerBbox(visiblePlanBbox),
       bbox: sanitizeCampLayerBbox(plan.bbox),
       cacheKey: plan.cacheKey,
       debounceMs: Math.max(0, plan.dueAt - now),

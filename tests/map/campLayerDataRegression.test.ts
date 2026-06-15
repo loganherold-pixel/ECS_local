@@ -26,6 +26,7 @@ import {
 import {
   CampLayerFetchCoordinator,
   buildCampLayerFetchCacheKey,
+  expandCampLayerFetchBbox,
   normalizeCampLayerFetchBbox,
 } from '../../lib/map/campLayerFetchScheduler';
 import {
@@ -355,6 +356,25 @@ assert.strictEqual(
   'established_campgrounds:-119.81:37.60:-119.40:37.91',
 );
 
+const prefetchBbox = expandCampLayerFetchBbox(
+  { minLng: -119.8, minLat: 37.6, maxLng: -119.4, maxLat: 37.9 },
+  { paddingRatio: 0.5, minPaddingDegrees: 0 },
+);
+assert.deepStrictEqual(
+  prefetchBbox,
+  { minLng: -120, minLat: 37.45, maxLng: -119.2, maxLat: 38.05 },
+  'Established campground fetches should be able to prefetch beyond the exact visible viewport so pins are ready while panning.',
+);
+
+assert.deepStrictEqual(
+  expandCampLayerFetchBbox(
+    { minLng: -179.9, minLat: -89.9, maxLng: 179.9, maxLat: 89.9 },
+    { paddingRatio: 0.5, minPaddingDegrees: 5 },
+  ),
+  { minLng: -180, minLat: -90, maxLng: 180, maxLat: 90 },
+  'Camp layer bbox expansion should clamp to valid longitude and latitude limits.',
+);
+
 const debounceScheduler = new CampLayerFetchCoordinator({ debounceMs: 500 });
 const debouncePlan = debounceScheduler.plan({
   layer: 'established_campgrounds',
@@ -643,10 +663,12 @@ const endpointProbeSource = read('scripts/test-camp-layer-endpoints.mjs');
 assert.ok(
   navigateSource.includes('toggleEstablishedCampsites') &&
     navigateSource.includes('toggleDispersedCampingEligibility') &&
+    navigateSource.includes('expandCampLayerFetchBbox') &&
+    navigateSource.includes('ESTABLISHED_CAMPGROUNDS_PREFETCH_PADDING_RATIO') &&
     navigateSource.includes('checkbox_change') &&
     navigateSource.includes('frontend_fetch_start') &&
     navigateSource.includes('frontend_fetch_empty'),
-  'Navigate should log checkbox and fetch lifecycle diagnostics for both camp layers.',
+  'Navigate should prefetch established campground bounds and log checkbox/fetch lifecycle diagnostics for both camp layers.',
 );
 assert.ok(
   navigateSource.includes('isCampLayerVerboseDebugEnabled') &&
@@ -688,9 +710,9 @@ assert.ok(
 assert.ok(
   mapRendererSource.includes('removeEstablishedCampsitesLayer') &&
     mapRendererSource.includes('removeDispersedCampingEligibilityLayer') &&
-    mapRendererSource.includes('map_layer_removed') &&
+    mapRendererSource.includes('map_layer_hidden') &&
     mapRendererSource.includes('map_source_update'),
-  'MapRenderer should expose clean layer removal and registration diagnostics.',
+  'MapRenderer should expose clean layer visibility and registration diagnostics.',
 );
 assert.ok(
   mapRendererSource.includes('isMapStyleReady()') &&
@@ -699,7 +721,7 @@ assert.ok(
     mapRendererSource.includes("sendCampLayerDebug('skipped_stale_payload'") &&
     mapRendererSource.includes("sendCampLayerDebug('source_set_data'") &&
     mapRendererSource.includes("sendCampLayerDebug('source_created'") &&
-    mapRendererSource.includes("sendCampLayerDebug('layer_removed'") &&
+    mapRendererSource.includes("sendCampLayerDebug('map_layer_hidden'") &&
     mapRendererSource.includes("applyDispersedCampingDesiredState('style_load')") &&
     mapRendererSource.includes("applyEstablishedCampsitesDesiredState('style_load')"),
   'MapRenderer should queue camp layers until style load, apply the latest desired state once, and emit lifecycle diagnostics.',

@@ -7,6 +7,11 @@ export type CampLayerFetchBbox = {
   maxLat: number;
 };
 
+export type CampLayerFetchBboxExpansionOptions = {
+  paddingRatio?: number;
+  minPaddingDegrees?: number;
+};
+
 export type CampLayerFetchPlan =
   | {
       type: 'schedule';
@@ -53,7 +58,57 @@ function bucketUp(value: number, bucketDegrees: number): number {
 }
 
 function roundBucket(value: number): number {
-  return Number(value.toFixed(6));
+  const rounded = Number(value.toFixed(6));
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+export function expandCampLayerFetchBbox(
+  bbox: CampLayerFetchBbox | null | undefined,
+  options: CampLayerFetchBboxExpansionOptions = {},
+): CampLayerFetchBbox | null {
+  if (!bbox) return null;
+  const { minLng, minLat, maxLng, maxLat } = bbox;
+  if (![minLng, minLat, maxLng, maxLat].every(finiteNumber)) return null;
+
+  const west = Math.max(-180, Math.min(minLng, maxLng));
+  const east = Math.min(180, Math.max(minLng, maxLng));
+  const south = Math.max(-90, Math.min(minLat, maxLat));
+  const north = Math.min(90, Math.max(minLat, maxLat));
+  if (east <= west || north <= south) return null;
+
+  const paddingRatio =
+    finiteNumber(options.paddingRatio) && options.paddingRatio > 0
+      ? options.paddingRatio
+      : 0;
+  const minPaddingDegrees =
+    finiteNumber(options.minPaddingDegrees) && options.minPaddingDegrees > 0
+      ? options.minPaddingDegrees
+      : 0;
+  const lngPadding = Math.max((east - west) * paddingRatio, minPaddingDegrees);
+  const latPadding = Math.max((north - south) * paddingRatio, minPaddingDegrees);
+
+  const expanded = {
+    minLng: Math.max(-180, west - lngPadding),
+    minLat: Math.max(-90, south - latPadding),
+    maxLng: Math.min(180, east + lngPadding),
+    maxLat: Math.min(90, north + latPadding),
+  };
+
+  if (
+    expanded.maxLng <= expanded.minLng ||
+    expanded.maxLat <= expanded.minLat ||
+    expanded.maxLng - expanded.minLng < MIN_BBOX_SPAN_DEGREES ||
+    expanded.maxLat - expanded.minLat < MIN_BBOX_SPAN_DEGREES
+  ) {
+    return null;
+  }
+
+  return {
+    minLng: roundBucket(expanded.minLng),
+    minLat: roundBucket(expanded.minLat),
+    maxLng: roundBucket(expanded.maxLng),
+    maxLat: roundBucket(expanded.maxLat),
+  };
 }
 
 export function normalizeCampLayerFetchBbox(

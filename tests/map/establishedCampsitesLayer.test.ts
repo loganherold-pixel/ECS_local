@@ -27,6 +27,7 @@ const messagesSource = read('lib/map/mapboxLayerMessages.ts');
 const typesSource = read('lib/map/establishedCampsiteTypes.ts');
 const sourcesSource = read('lib/map/establishedCampsiteSources.ts');
 const adapterSource = read('lib/map/establishedCampsiteGeojsonAdapter.ts');
+const detailRowsSource = read('lib/map/establishedCampgroundDetailRows.ts');
 const routeSearchSource = read('lib/map/establishedCampsiteRouteSearch.ts');
 const envSource = read('.env.example');
 
@@ -128,11 +129,18 @@ assert.ok(
   'Established Campground',
   'Availability, fees, seasons, and restrictions may change. Verify current details with the campground operator before travel.',
   'Campground type',
-  'Managing agency',
   'Navigate',
+  'buildEstablishedCampgroundDetailRows',
   'formatCampgroundAvailabilityLabel',
 ].forEach((copy) => {
   assert.ok(sheetSource.includes(copy), `Established campsite sheet missing copy: ${copy}`);
+});
+[
+  'Managing agency',
+  'Source / attribution',
+  'Tent / RV / trailers',
+].forEach((copy) => {
+  assert.ok(detailRowsSource.includes(copy), `Established campsite detail row formatter missing copy: ${copy}`);
 });
 
 [
@@ -240,9 +248,10 @@ assert.ok(
 
 assert.ok(
   mapRendererSource.includes('removeEstablishedCampsitesLayer') &&
-    mapRendererSource.includes('removeMapLayer(ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID)') &&
-    mapRendererSource.includes('removeMapSource(ESTABLISHED_CAMPSITES_SOURCE_ID)'),
-  'Established campsite layer should remove symbol/backplate/source when disabled.',
+    mapRendererSource.includes("map.setLayoutProperty(ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID, 'visibility', 'none')") &&
+    mapRendererSource.includes("map.setLayoutProperty(ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID, 'visibility', 'none')") &&
+    !mapRendererSource.includes('removeMapSource(ESTABLISHED_CAMPSITES_SOURCE_ID)'),
+  'Established campsite layer should hide cached symbol/backplate layers instead of removing sources when disabled.',
 );
 
 assert.ok(
