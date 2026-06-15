@@ -475,6 +475,7 @@
     "test:remoteness-live-destinations": "node ./scripts/test-remoteness-live-destinations.js",
     "test:full-route-guidance": "node ./scripts/test-full-route-guidance.js",
     "test:route-guidance-copy": "node ./scripts/test-route-guidance-copy.js",
+    "test:road-navigation-turn-progress": "node ./scripts/test-road-navigation-turn-progress.js",
     "test:navigate-active-guidance": "node ./scripts/test-navigate-active-guidance.js",
     "test:navigate-road-preview-layout": "node ./scripts/test-navigate-road-preview-layout.js",
     "test:map-route-rendering-overlays": "node ./scripts/test-map-route-rendering-overlays.js",

@@ -139,6 +139,21 @@ assert(
   'Main Tools popup should be a fixed command panel, not a scroll-owned drawer.',
 );
 
+assert(
+  toolsPopupSource.includes("snapToContent: true") &&
+    !toolsPopupSource.includes("fullBody: true") &&
+    source.includes('snapToContent?: boolean') &&
+    source.includes('styles.mapPopupShellSnapToContent'),
+  'Main Tools popup should snap its parent shell to content height instead of filling the map overlay.',
+);
+
+assert(
+  source.includes('toolsPopupContent: {\n  alignSelf:') &&
+    !source.includes('toolsPopupContent: {\n  flex: 1') &&
+    !source.includes('toolsFixedContent: {\n  flex: 1'),
+  'Tools popup content should not stretch with flex: 1, which creates dead space below the final section.',
+);
+
 const toolsSectionTitles = Array.from(
   toolsPopupSource.matchAll(/<NavigateToolSection\s+title="([^"]+)"/g),
 ).map((match) => match[1]);
@@ -178,16 +193,7 @@ assert(
     requireIndex(toolsPopupSource, 'BUILD ROUTE PLAN', 'Route Planning should include Build Route Plan.') <
       requireIndex(toolsPopupSource, 'STITCH ROUTES', 'Route Planning should include Stitch Routes.') &&
     requireIndex(toolsPopupSource, 'STITCH ROUTES', 'Route Planning should include Stitch Routes.') <
-      requireIndex(
-        toolsPopupSource,
-        "accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}",
-        'Route Planning should include Build Route.',
-      ) &&
-    requireIndex(
-      toolsPopupSource,
-      "accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}",
-      'Route Planning should include Build Route.',
-    ) < requireIndex(toolsPopupSource, 'IMPORT', 'Route Planning should include Import.') &&
+      requireIndex(toolsPopupSource, 'IMPORT', 'Route Planning should include Import.') &&
     toolsPopupSource.includes('RECORD TRAIL') &&
     toolsPopupSource.includes('RECENT SEARCHES') &&
     toolsPopupSource.includes('DROP PIN') &&
@@ -200,7 +206,8 @@ assert(
   toolsPopupSource.includes('BUILD ROUTE PLAN') &&
     source.includes("router.push('/explore-trip-builder' as any)") &&
     toolsPopupSource.includes('onPress={handleOpenStitch}') &&
-    toolsPopupSource.includes('onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}') &&
+    !toolsPopupSource.includes('onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}') &&
+    source.includes('handleLongPressDrawRoute') &&
     toolsPopupSource.includes('onPress={handleOpenImportRoute}') &&
     toolsPopupSource.includes("openToolsChildPopup('trail')") &&
     toolsPopupSource.includes('onPress={() => runToolsAction(handleDropPinHere)}') &&
@@ -229,7 +236,8 @@ assert(
     recommendRoutePopupSource.includes('onPress={() => runToolsAction(handleSubmitImportedRouteAsTrailPack)}') &&
     recommendRoutePopupSource.includes('onPress={handleOpenBuildRoutePlan}') &&
     recommendRoutePopupSource.includes("openToolsChildPopup('trail')") &&
-    recommendRoutePopupSource.includes('onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}'),
+    !recommendRoutePopupSource.includes('onPress={() => runToolsAction(handleRouteBuilderTriggerPress)}') &&
+    source.includes('handleLongPressDrawRoute'),
   'Recommend Route should explain the phase-1 Trail Pack path and expose staged/imported/build/record route sources.',
 );
 

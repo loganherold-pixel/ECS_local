@@ -181,11 +181,16 @@ assert(
 );
 
 const roadNavigationHook = read('lib/useRoadNavigation.ts');
+const roadNavigationProgress = read('lib/roadNavigationProgress.ts');
 assert(
-  roadNavigationHook.includes('getDistanceToGuidanceStep') &&
-    roadNavigationHook.includes('guidanceStepSelection.step') &&
-    !roadNavigationHook.includes('currentStep != null\n      ? Math.max(currentStep.endDistanceM - progress.traveledDistanceM, 0)'),
-  'Road navigation should calculate next-action distance from the selected upcoming guidance step, not the whole current/cached segment.',
+  roadNavigationHook.includes("import { resolveRoadNavigationProgress } from './roadNavigationProgress';") &&
+    roadNavigationHook.includes('const progress = resolveRoadNavigationProgress(route, {') &&
+    roadNavigationHook.includes('lockForwardProgress:') &&
+    roadNavigationProgress.includes('function getDistanceToGuidanceStep(') &&
+    roadNavigationProgress.includes('selection.stepIndex > currentStepIndex') &&
+    roadNavigationProgress.includes('? step.startDistanceM') &&
+    !roadNavigationProgress.includes('return Math.max(step.endDistanceM - traveledDistanceM, 0);'),
+  'Road navigation should calculate next-action distance to the selected maneuver start and avoid regressing active turn guidance.',
 );
 
 const toast = read('components/Toast.tsx');

@@ -3376,11 +3376,13 @@ const renderMapPopup = (
     backdropTint?: string;
     fullBody?: boolean;
     showBackdrop?: boolean;
+    snapToContent?: boolean;
   },
 ) => {
   if (!visible) return null;
 
-  const fullBody = options?.fullBody !== false;
+  const snapToContent = options?.snapToContent === true;
+  const fullBody = snapToContent ? false : options?.fullBody !== false;
   const centeredLeft = Math.max(
     OVERLAY_EDGE,
     Math.round((adaptive.windowWidth - popupWidth) / 2),
@@ -3391,6 +3393,7 @@ const renderMapPopup = (
     ? activeGuidancePopupTopOffset ?? PAGE_FRAME_TOP_GAP
     : activeGuidancePopupTopOffset ?? MAP_POPUP_TOP;
   const popupBottom = MAP_POPUP_BOTTOM;
+  const popupMaxHeight = Math.max(260, adaptive.windowHeight - popupTop - popupBottom);
 
   return (
     <View style={styles.mapPopupLayer} pointerEvents="box-none">
@@ -3412,6 +3415,7 @@ const renderMapPopup = (
       <View
         style={[
           styles.mapPopupShell,
+          snapToContent && styles.mapPopupShellSnapToContent,
           fullBody
             ? {
                 top: popupTop,
@@ -3422,14 +3426,15 @@ const renderMapPopup = (
               }
             : {
                 top: popupTop,
-                bottom: popupBottom,
+                bottom: snapToContent ? undefined : popupBottom,
+                maxHeight: snapToContent ? popupMaxHeight : undefined,
                 right: options?.placement === 'center' ? undefined : OVERLAY_EDGE,
                 width: popupWidth,
                 left: options?.placement === 'center' ? centeredLeft : undefined,
               },
         ]}
       >
-        <View style={styles.mapPopupHeader}>
+        <View style={[styles.mapPopupHeader, snapToContent && styles.mapPopupHeaderSnapToContent]}>
           <View style={styles.mapPopupTitleRow}>
             <Ionicons name={icon} size={16} color={TACTICAL.amber} />
             <Text style={styles.mapPopupTitle}>{title}</Text>
@@ -3440,7 +3445,7 @@ const renderMapPopup = (
           </TouchableOpacity>
         </View>
 
-        <View style={styles.mapPopupBody}>{children}</View>
+        <View style={[styles.mapPopupBody, snapToContent && styles.mapPopupBodySnapToContent]}>{children}</View>
       </View>
     </View>
   );
@@ -12872,7 +12877,7 @@ const handleCreateRun = useCallback(() => {
   const routeArrivedVisualMode = navigationOverlayMode === 'arrived';
   const routeSearchVisualMode = navigationOverlayMode === 'error';
   const activeGuidanceLandscapeWidth = navigateLandscapeExpanded
-    ? Math.min(260, Math.max(228, Math.round(adaptive.windowWidth * 0.26)))
+    ? Math.min(360, Math.max(316, Math.round(adaptive.windowWidth * 0.32)))
     : undefined;
   const topRouteSurfaceVisible =
     routePreviewVisualMode || routeActiveVisualMode || routeArrivedVisualMode;
@@ -20910,7 +20915,7 @@ const stableMapSurface = useMemo(() => {
       </View>
     </View>,
     TOOLS_POPUP_WIDTH,
-    { placement: 'center', backdropTint: 'transparent', fullBody: true }
+    { placement: 'center', backdropTint: 'transparent', snapToContent: true }
   )}
 
   {campopsManualAreaReviewEnabled ? renderMapPopup(
@@ -24043,37 +24048,37 @@ idleDestinationSearchSuggestionSubtitle: {
 },
 
 toolsPopupContent: {
-  flex: 1,
+  alignSelf: 'stretch',
 },
 
 toolsFixedContent: {
-  flex: 1,
-  paddingHorizontal: 12,
-  paddingVertical: 11,
-  gap: 9,
+  paddingHorizontal: 10,
+  paddingVertical: 10,
+  gap: 8,
+  backgroundColor: 'rgba(7,12,16,0.96)',
 },
 
 toolsMapPresentationBlock: {
-  borderRadius: 12,
+  borderRadius: 10,
   borderWidth: 1,
-  borderColor: 'rgba(196,138,44,0.16)',
-  backgroundColor: 'rgba(12,16,20,0.88)',
+  borderColor: 'rgba(242,194,77,0.18)',
+  backgroundColor: 'rgba(13,18,22,0.90)',
   paddingHorizontal: 10,
-  paddingVertical: 9,
-  gap: 7,
+  paddingVertical: 8,
+  gap: 6,
 },
 
 toolsCompactForecastRow: {
-  minHeight: 76,
-  borderRadius: 12,
+  minHeight: 68,
+  borderRadius: 10,
   borderWidth: 1,
-  borderColor: 'rgba(196,138,44,0.18)',
-  backgroundColor: 'rgba(12,16,20,0.92)',
+  borderColor: 'rgba(242,194,77,0.20)',
+  backgroundColor: 'rgba(13,18,22,0.93)',
   paddingHorizontal: 10,
-  paddingVertical: 9,
+  paddingVertical: 8,
   flexDirection: 'row',
   alignItems: 'center',
-  gap: 9,
+  gap: 8,
 },
 
 toolsCompactForecastIcon: {
@@ -24130,22 +24135,22 @@ toolsCompactForecastSource: {
 },
 
 toolsFixedSection: {
-  gap: 6,
+  gap: 5,
 },
 
 toolsWideActionCard: {
-  minHeight: 54,
+  minHeight: 50,
 },
 
 toolsDenseActionGrid: {
   flexDirection: 'row',
   flexWrap: 'wrap',
-  gap: 7,
+  gap: 6,
 },
 
 toolsDenseActionCard: {
   width: '48%',
-  minHeight: 50,
+  minHeight: 46,
 },
 
 toolsSearchWrap: {
@@ -24911,6 +24916,15 @@ mapPopupShell: {
   elevation: 18,
 },
 
+mapPopupShellSnapToContent: {
+  borderRadius: 14,
+  borderColor: 'rgba(242,194,77,0.34)',
+  backgroundColor: 'rgba(7,12,16,0.97)',
+  shadowColor: '#F2C24D',
+  shadowOpacity: 0.18,
+  shadowRadius: 14,
+},
+
 mapPopupHeader: {
   minHeight: 48,
   paddingHorizontal: 16,
@@ -24920,6 +24934,12 @@ mapPopupHeader: {
   alignItems: 'center',
   justifyContent: 'space-between',
   backgroundColor: 'rgba(12,16,20,0.98)',
+},
+
+mapPopupHeaderSnapToContent: {
+  minHeight: 42,
+  paddingHorizontal: 12,
+  backgroundColor: 'rgba(10,15,18,0.98)',
 },
 
 mapPopupTitleRow: {
@@ -24938,6 +24958,11 @@ mapPopupTitle: {
 mapPopupBody: {
   flex: 1,
   backgroundColor: 'rgba(9,13,16,0.98)',
+},
+
+mapPopupBodySnapToContent: {
+  flex: 0,
+  backgroundColor: 'rgba(7,12,16,0.97)',
 },
 
 mapPopupScroll: {

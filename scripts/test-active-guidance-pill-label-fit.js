@@ -73,18 +73,18 @@ assert.ok(
 
 const basePill = extractStyleBlock('activeGuidanceTopActionPill');
 assert.ok(
-  /minHeight:\s*24/.test(basePill) && /minWidth:\s*64/.test(basePill),
+  /minHeight:\s*26/.test(basePill) && /minWidth:\s*70/.test(basePill),
   'Active Guidance action pills should keep a stable minimum tap and label area.',
 );
 
 const minimize = extractStyleBlock('activeGuidanceMinimizeButton');
 const offline = extractStyleBlock('activeGuidanceOfflineButton');
-assert.ok(/minWidth:\s*108/.test(minimize), 'Minimize pill should reserve enough width for the full label.');
-assert.ok(/minWidth:\s*92/.test(offline), 'Offline pill should reserve enough width for the full label.');
+assert.ok(/minWidth:\s*112/.test(minimize), 'Minimize pill should reserve enough width for the full MINIMIZE label.');
+assert.ok(/minWidth:\s*98/.test(offline), 'Offline pill should reserve enough width for the full OFFLINE label.');
 
 assert.ok(
-  navigateSource.includes('Math.min(260, Math.max(228, Math.round(adaptive.windowWidth * 0.26)))'),
-  'Landscape active guidance should compact to the top-left portion of the map instead of spanning too much width.',
+  navigateSource.includes('Math.min(360, Math.max(316, Math.round(adaptive.windowWidth * 0.32)))'),
+  'Landscape active guidance should stay compact while reserving enough width for MINIMIZE, OFFLINE, and END pills.',
 );
 
 console.log('Active Guidance pill label fit checks passed.');

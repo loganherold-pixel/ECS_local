@@ -27,6 +27,7 @@ import {
   routeGeometryLineStringToLatLng,
   validateRouteGeometry,
 } from './routeGeometryLifecycle';
+import { resolveRoadNavigationProgress } from './roadNavigationProgress';
 
 const SEARCH_DEBOUNCE_MS = 320;
 const ARRIVAL_DISTANCE_M = 200;
@@ -111,15 +112,6 @@ export interface UseRoadNavigationOutput {
   reroute: (reason?: string) => Promise<void>;
 }
 
-type GeometryProgress = {
-  nearestIndex: number;
-  progressCoords: RoadNavCoordinate[];
-  traveledDistanceM: number;
-  remainingDistanceM: number;
-  offRouteDistanceM: number;
-  distanceToDestinationM: number;
-};
-
 type RoadNavigationLocation = RoadNavCoordinate & {
   accuracyM?: number | null;
   speedMph?: number | null;
@@ -182,20 +174,6 @@ function randomSessionId(): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
-}
-
-function toMetersDeltaLat(latDelta: number): number {
-  return latDelta * 111320;
-}
-
-function toMetersDeltaLng(lngDelta: number, latitude: number): number {
-  return lngDelta * 111320 * Math.cos((latitude * Math.PI) / 180);
-}
-
-function distanceMeters(a: RoadNavCoordinate, b: RoadNavCoordinate): number {
-  const dLat = toMetersDeltaLat(b.lat - a.lat);
-  const dLng = toMetersDeltaLng(b.lng - a.lng, (a.lat + b.lat) / 2);
-  return Math.sqrt(dLat ** 2 + dLng ** 2);
 }
 
 function getAccuracyPadMeters(location: RoadNavigationLocation | null): number {
@@ -376,139 +354,6 @@ function buildCachedRoadRouteFromRestoredSession(
   });
 }
 
-function buildCumulativeDistances(points: RoadNavCoordinate[]): number[] {
-  const cumulative: number[] = [0];
-  for (let i = 1; i < points.length; i += 1) {
-    cumulative[i] = cumulative[i - 1] + distanceMeters(points[i - 1], points[i]);
-  }
-  return cumulative;
-}
-
-function isArrivalLikeInstruction(instruction: string | null | undefined): boolean {
-  const normalized = String(instruction ?? '').trim().toLowerCase();
-  return normalized.includes('arrive') || normalized.includes('destination');
-}
-
-function selectGuidanceStep(
-  steps: RoadNavRoute['steps'],
-  currentStepIndex: number,
-): { stepIndex: number; step: RoadNavRoute['steps'][number] | null } {
-  if (steps.length === 0) {
-    return { stepIndex: 0, step: null };
-  }
-
-  const resolvedCurrentIndex = clamp(currentStepIndex, 0, steps.length - 1);
-  const currentStep = steps[resolvedCurrentIndex] ?? null;
-  if (!currentStep) {
-    return { stepIndex: resolvedCurrentIndex, step: null };
-  }
-
-  const lastIndex = steps.length - 1;
-  if (
-    resolvedCurrentIndex >= lastIndex ||
-    currentStep.maneuverType === 'arrive' ||
-    isArrivalLikeInstruction(currentStep.instruction)
-  ) {
-    return { stepIndex: resolvedCurrentIndex, step: currentStep };
-  }
-
-  return {
-    stepIndex: resolvedCurrentIndex + 1,
-    step: steps[resolvedCurrentIndex + 1] ?? currentStep,
-  };
-}
-
-function getDistanceToGuidanceStep(
-  step: RoadNavRoute['steps'][number] | null | undefined,
-  traveledDistanceM: number,
-): number | null {
-  if (!step) {
-    return null;
-  }
-
-  return Math.max(step.endDistanceM - traveledDistanceM, 0);
-}
-
-function projectProgressOnRoute(
-  location: RoadNavCoordinate,
-  points: RoadNavCoordinate[],
-  cumulativeDistances: number[],
-): GeometryProgress {
-  if (points.length === 0) {
-    return {
-      nearestIndex: 0,
-      progressCoords: [],
-      traveledDistanceM: 0,
-      remainingDistanceM: 0,
-      offRouteDistanceM: Infinity,
-      distanceToDestinationM: Infinity,
-    };
-  }
-
-  if (points.length === 1) {
-    const distanceToDestinationM = distanceMeters(location, points[0]);
-    return {
-      nearestIndex: 0,
-      progressCoords: [points[0]],
-      traveledDistanceM: 0,
-      remainingDistanceM: 0,
-      offRouteDistanceM: distanceToDestinationM,
-      distanceToDestinationM,
-    };
-  }
-
-  let bestDistanceM = Infinity;
-  let bestNearestIndex = 0;
-  let bestAlongDistanceM = 0;
-  let bestProjection = points[0];
-
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const start = points[i];
-    const end = points[i + 1];
-    const referenceLat = (start.lat + end.lat + location.lat) / 3;
-
-    const bx = toMetersDeltaLng(end.lng - start.lng, referenceLat);
-    const by = toMetersDeltaLat(end.lat - start.lat);
-    const px = toMetersDeltaLng(location.lng - start.lng, referenceLat);
-    const py = toMetersDeltaLat(location.lat - start.lat);
-    const segmentLengthSquared = bx * bx + by * by;
-    const tRaw =
-      segmentLengthSquared > 0 ? (px * bx + py * by) / segmentLengthSquared : 0;
-    const t = clamp(tRaw, 0, 1);
-    const projectionX = bx * t;
-    const projectionY = by * t;
-    const distanceFromSegmentM = Math.sqrt(
-      (px - projectionX) ** 2 + (py - projectionY) ** 2,
-    );
-
-    if (distanceFromSegmentM < bestDistanceM) {
-      bestDistanceM = distanceFromSegmentM;
-      bestNearestIndex = i + (t >= 0.5 ? 1 : 0);
-      bestAlongDistanceM =
-        cumulativeDistances[i] + Math.sqrt(projectionX ** 2 + projectionY ** 2);
-      bestProjection = {
-        lat: start.lat + (end.lat - start.lat) * t,
-        lng: start.lng + (end.lng - start.lng) * t,
-      };
-    }
-  }
-
-  const progressCoords = points.slice(0, Math.max(bestNearestIndex, 1));
-  progressCoords.push(bestProjection);
-
-  const totalDistanceM = cumulativeDistances[cumulativeDistances.length - 1] ?? 0;
-  const remainingDistanceM = Math.max(totalDistanceM - bestAlongDistanceM, 0);
-
-  return {
-    nearestIndex: bestNearestIndex,
-    progressCoords,
-    traveledDistanceM: bestAlongDistanceM,
-    remainingDistanceM,
-    offRouteDistanceM: bestDistanceM,
-    distanceToDestinationM: distanceMeters(location, points[points.length - 1]),
-  };
-}
-
 function computeSessionFromRoute(
   route: RoadNavRoute,
   location: RoadNavigationLocation | null,
@@ -567,19 +412,15 @@ function computeSessionFromRoute(
     };
   }
 
-  const cumulativeDistances = buildCumulativeDistances(route.geometry);
-  const progress = projectProgressOnRoute(location, route.geometry, cumulativeDistances);
-  const currentStepIndex = route.steps.findIndex(
-    (step) => progress.traveledDistanceM < step.endDistanceM,
-  );
-  const resolvedStepIndex =
-    currentStepIndex >= 0 ? currentStepIndex : Math.max(route.steps.length - 1, 0);
-  const currentStep = route.steps[resolvedStepIndex] ?? null;
-  const guidanceStepSelection = selectGuidanceStep(route.steps, resolvedStepIndex);
-  const distanceToNextM = getDistanceToGuidanceStep(
-    guidanceStepSelection.step,
-    progress.traveledDistanceM,
-  );
+  const progress = resolveRoadNavigationProgress(route, {
+    location,
+    previousStepIndex: previous.currentStepIndex,
+    previousRemainingDistanceM: previous.remainingDistanceM,
+    lockForwardProgress:
+      previous.status === 'navigation_active' ||
+      previous.status === 'rerouting' ||
+      previous.status === 'arrived',
+  });
   const remainingDistanceM = progress.remainingDistanceM;
   const remainingDurationS =
     route.distanceM > 0
@@ -591,15 +432,15 @@ function computeSessionFromRoute(
       : null;
 
   return {
-    currentStepIndex: resolvedStepIndex,
-    nextInstruction: guidanceStepSelection.step?.instruction ?? currentStep?.instruction ?? null,
-    nextInstructionDistanceM: distanceToNextM,
+    currentStepIndex: progress.currentStepIndex,
+    nextInstruction: progress.nextInstruction,
+    nextInstructionDistanceM: progress.nextInstructionDistanceM,
     remainingDistanceM,
     remainingDurationS,
     etaIso,
     offRouteDistanceM: progress.offRouteDistanceM,
     distanceToDestinationM: progress.distanceToDestinationM,
-    progressGeometry: progress.progressCoords,
+    progressGeometry: progress.progressGeometry,
     updatedAt: nowIso,
   };
 }

@@ -1503,9 +1503,9 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   activeGuidanceTopActionPill: {
-    minHeight: 24,
-    minWidth: 64,
-    paddingHorizontal: 7,
+    minHeight: 26,
+    minWidth: 70,
+    paddingHorizontal: 8,
     borderRadius: 999,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1514,7 +1514,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   activeGuidanceMinimizeButton: {
-    minWidth: 108,
+    minWidth: 112,
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(196,138,44,0.08)',
   },
@@ -1529,7 +1529,7 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
   },
   activeGuidanceOfflineButton: {
-    minWidth: 92,
+    minWidth: 98,
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(196,138,44,0.08)',
   },

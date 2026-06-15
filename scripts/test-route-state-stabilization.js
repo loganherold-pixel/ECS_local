@@ -51,7 +51,7 @@ assertIncludes(
 );
 assertIncludes(
   useRoadNavigation,
-  'withRouteRequestTimeout(\n          fetchRoadRoute({',
+  'withRouteRequestTimeout(\n          fetchRoadRouteAlternatives({',
   'Road route fetches should be wrapped in the route timeout guard.',
 );
 assertIncludes(
