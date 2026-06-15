@@ -25,6 +25,7 @@ import {
   DEFAULT_MAP_STYLE,
   getMapboxToken,
   getMapboxTokenSync,
+  type MapStyleKey,
 } from '../lib/mapConfig';
 import { loadOpportunitiesWithCompatibility, type ExpeditionOpportunity } from '../lib/discoverEngine';
 import { buildProfileFromSpecs } from '../lib/rigCompatibilityEngine';
@@ -41,12 +42,12 @@ import {
   buildTripPlan,
   clearTripBuilderRouteHandoff,
   createMapboxRouteContextProviderRegistry,
-  filterBailoutPlanCandidates,
   acceptTripItineraryEditItem,
   addUserItineraryStop,
   addUserTrailWaypoint,
   applyTripItineraryEditSession,
   buildApproachResupplySearchAnchors,
+  buildSuggestedEstablishedCampPins,
   createTripItineraryEditSession,
   dismissTripItineraryEditItem,
   getTripItineraryReview,
@@ -98,6 +99,7 @@ import {
   type TripConfidenceReasonTone,
   type TripConfidenceSectionStatus,
   type TripConfidenceSummaryViewModel,
+  type TripBuilderSuggestedEstablishedCampPin,
 } from '../lib/tripBuilder';
 import {
   getOfflinePrepRouteCoordinates,
@@ -265,7 +267,7 @@ type BailoutPlanPoint = {
   title: string;
   subtitle: string | null;
   coordinate: TripMapCoordinate;
-  source: 'ecs_suggested' | 'mapbox_search' | 'operator_drop';
+  source: 'operator_drop';
   distanceFromRouteStartMiles: number | null;
 };
 
@@ -323,6 +325,10 @@ const BAILOUT_PLAN_OPTIONS: { value: BailoutPlanPreference; label: string; detai
   { value: 'no', label: 'Skip', detail: 'No bailout reference pins.' },
   { value: 'yes', label: 'Open Map', detail: 'Drop reference bailout pins.' },
 ];
+const TRIP_BUILDER_PICKER_MAP_STYLES: { key: MapStyleKey; label: string; icon: string }[] = [
+  { key: DEFAULT_MAP_STYLE, label: 'Day', icon: 'navigate-outline' },
+  { key: 'satellite', label: 'Sat', icon: 'earth-outline' },
+];
 const SMART_RESUPPLY_FUEL_QUERY = 'gas station fuel diesel';
 const SMART_RESUPPLY_SUPPLY_QUERY = 'grocery store supermarket supplies';
 const SMART_RESUPPLY_OPTION_LIMIT = 5;
@@ -330,9 +336,6 @@ const SMART_RESUPPLY_SEARCH_LIMIT = 20;
 const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const;
 const SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES = 10;
 const SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 20;
-const BAILOUT_SEARCH_QUERY = 'trailhead parking road access ranger station highway';
-const BAILOUT_OPTION_LIMIT = 5;
-const BAILOUT_SEARCH_LIMIT = 10;
 const RESUPPLY_OVERRIDE_CATEGORIES = new Set<ResupplyCategory>(['water', 'food_supplies', 'repair', 'medical']);
 
 function makePlanIdPart(value: string | null | undefined): string {
@@ -990,40 +993,6 @@ function SmartResupplyOptionCard({
         </View>
       </View>
       <Ionicons name={selected ? 'checkmark-circle' : 'chevron-forward'} size={15} color={selected ? TACTICAL.amber : TACTICAL.textMuted} />
-    </TouchableOpacity>
-  );
-}
-
-function BailoutPlanOptionCard({
-  option,
-  selected,
-  onPress,
-}: {
-  option: BailoutPlanPoint;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.bailoutOption, selected && styles.bailoutOptionSelected]}
-      activeOpacity={0.82}
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`Select bailout ${option.title}`}
-      accessibilityState={{ selected }}
-      testID={`trip-builder-bailout-option-${option.id}`}
-    >
-      <View style={[styles.bailoutOptionDot, selected && styles.bailoutOptionDotSelected]}>
-        <Ionicons name={option.source === 'operator_drop' ? 'pin-outline' : 'exit-outline'} size={12} color={selected ? '#081014' : ITINERARY_BAILOUT_COLOR} />
-      </View>
-      <View style={styles.bailoutOptionCopy}>
-        <Text style={styles.bailoutOptionTitle} numberOfLines={1}>{option.title}</Text>
-        <Text style={styles.bailoutOptionMeta} numberOfLines={2}>
-          {option.distanceFromRouteStartMiles != null ? `${option.distanceFromRouteStartMiles.toFixed(1)} mi from route start | ` : ''}
-          {option.subtitle ?? 'Emergency bailout or rendezvous candidate.'}
-        </Text>
-      </View>
-      <Ionicons name={selected ? 'checkmark-circle' : 'chevron-forward'} size={15} color={selected ? ITINERARY_BAILOUT_COLOR : TACTICAL.textMuted} />
     </TouchableOpacity>
   );
 }
@@ -2584,76 +2553,17 @@ function orderSelectedSmartResupplyPoints(
     .map((item) => item.point);
 }
 
-function bailoutPlanPointFromDestination(
-  suggestion: RoadNavSearchSuggestion,
-  destination: RoadNavDestination,
-  routeStart: TripMapCoordinate,
-): BailoutPlanPoint | null {
-  const coordinate = {
-    latitude: destination.coordinate.lat,
-    longitude: destination.coordinate.lng,
-  };
-  if (!isValidMapCoordinate(coordinate)) return null;
-  return {
-    id: `mapbox-bailout-${makePlanIdPart(destination.id || suggestion.id)}`,
-    title: destination.title || suggestion.title,
-    subtitle: destination.subtitle ?? suggestion.subtitle ?? 'Nearby road-access or rendezvous option.',
-    coordinate,
-    source: 'mapbox_search',
-    distanceFromRouteStartMiles: Math.round(tripMapCoordinateDistanceMiles(routeStart, coordinate) * 10) / 10,
-  };
-}
-
-function bailoutPlanPointsFromRouteContext(context: RouteContext | null): BailoutPlanPoint[] {
-  if (!isUsableRouteContext(context)) return [];
-  const routeStart = routeContextTrailheadCoordinate(context);
-  return context.bailoutCandidates
-    .map((candidate): BailoutPlanPoint | null => {
-      const coordinate = { latitude: candidate.lat, longitude: candidate.lng };
-      if (!isValidMapCoordinate(coordinate)) return null;
-      return {
-        id: `route-context-bailout-${candidate.id}`,
-        title: candidate.label,
-        subtitle: [
-          candidate.category ? candidate.category.replace(/_/g, ' ') : 'Route Context bailout candidate',
-          candidate.reachableByVehicle === false ? 'vehicle reachability unknown/limited' : null,
-        ].filter(Boolean).join(' | ') || 'Route Context bailout candidate. Verify legal access and drivability.',
-        coordinate,
-        source: 'ecs_suggested',
-        distanceFromRouteStartMiles: routeStart ? Math.round(tripMapCoordinateDistanceMiles(routeStart, coordinate) * 10) / 10 : null,
-      };
-    })
-    .filter((point): point is BailoutPlanPoint => point != null);
-}
-
-function buildBailoutSearchAnchors(routePoints: TripMapCoordinate[]): TripMapCoordinate[] {
-  const validPoints = routePoints.filter(isValidMapCoordinate);
-  if (validPoints.length === 0) return [];
-  const indexes = [
-    0,
-    Math.floor(validPoints.length * 0.5),
-    Math.floor(validPoints.length * 0.75),
-    validPoints.length - 1,
-  ];
-  const anchors: TripMapCoordinate[] = [];
-  indexes.forEach((index) => {
-    const point = validPoints[Math.max(0, Math.min(validPoints.length - 1, index))];
-    if (point && !anchors.some((existing) => sameTripCoordinate(existing, point))) anchors.push(point);
-  });
-  return anchors;
-}
-
 function bailoutExitPointForPlan(point: BailoutPlanPoint): ExitPoint {
   return {
     id: point.id,
     name: point.title,
-    type: point.source === 'operator_drop' ? 'operator_selected_bailout' : 'suggested_bailout_rendezvous',
+    type: 'operator_selected_bailout',
     location: point.coordinate,
     routeMileMarker: null,
     priority: 1,
     source: point.source,
     notes: [
-      point.subtitle ?? 'Operator selected as an emergency bailout or rendezvous point.',
+      point.subtitle ?? 'Operator selected as an emergency bailout reference point.',
       'Verify legal access, drivability, and current conditions before relying on this point.',
     ],
   };
@@ -2682,10 +2592,10 @@ function tripPlanReferencePointFromBailoutPoint(point: BailoutPlanPoint): TripPl
     title: point.title,
     coordinate: point.coordinate,
     source: point.source,
-    confidence: point.source === 'operator_drop' ? 'low' : 'medium',
+    confidence: 'low',
     referenceType: 'bailout',
     notes: [
-      point.subtitle ?? 'Emergency bailout or rendezvous point selected.',
+      point.subtitle ?? 'Emergency bailout reference point selected.',
       'Reference-only bailout pin. Verify legal access, drivability, and current conditions before relying on it.',
     ],
   };
@@ -2737,7 +2647,7 @@ function appendBailoutStopToPlan(plan: TripPlan, point: BailoutPlanPoint | null)
       referenceType: 'bailout' as const,
       notes: [
         ITINERARY_BAILOUT_NOTE,
-        point.subtitle ?? 'Operator selected as an emergency bailout or rendezvous point.',
+        point.subtitle ?? 'Operator selected as an emergency bailout reference point.',
         'This bailout point remains unconnected from the projected guidance line.',
       ],
     },
@@ -2831,100 +2741,6 @@ async function loadSmartResupplyOptions(params: {
     .filter(isSmartResupplyOptionRouteAware)
     .sort(compareSmartResupplyOptionsByApproach)
     .slice(0, SMART_RESUPPLY_OPTION_LIMIT);
-}
-
-async function loadBailoutPlanOptions(params: {
-  accessToken: string;
-  sessionToken: string;
-  routePoints: TripMapCoordinate[];
-  routeContextOptions?: BailoutPlanPoint[];
-}): Promise<BailoutPlanPoint[]> {
-  const routeStart = params.routePoints[0];
-  const midRoute = params.routePoints[Math.max(0, Math.floor(params.routePoints.length * 0.5))] ?? routeStart;
-  const lateRoute = params.routePoints[Math.max(0, Math.floor(params.routePoints.length * 0.75))] ?? midRoute;
-  const routeEnd = params.routePoints[params.routePoints.length - 1] ?? lateRoute;
-  const routeContextOptions = params.routeContextOptions ?? [];
-  const suggestedCandidates: (BailoutPlanPoint | null)[] = [
-    ...routeContextOptions,
-    routeEnd ? {
-      id: 'ecs-route-finish-rendezvous',
-      title: 'Route finish rendezvous',
-      subtitle: 'End-of-route rendezvous option. Verify this is not the only escape path.',
-      coordinate: routeEnd,
-      source: 'ecs_suggested' as const,
-      distanceFromRouteStartMiles: routeStart ? Math.round(tripMapCoordinateDistanceMiles(routeStart, routeEnd) * 10) / 10 : null,
-    } : null,
-    lateRoute ? {
-      id: 'ecs-late-route-road-access-search',
-      title: 'Late-route road access search',
-      subtitle: 'Route-derived candidate near the last quarter of the trail. Verify road access before relying on it.',
-      coordinate: lateRoute,
-      source: 'ecs_suggested' as const,
-      distanceFromRouteStartMiles: routeStart ? Math.round(tripMapCoordinateDistanceMiles(routeStart, lateRoute) * 10) / 10 : null,
-    } : null,
-    midRoute ? {
-      id: 'ecs-mid-route-bailout-search',
-      title: 'Mid-route bailout search',
-      subtitle: 'Route-derived candidate near the midpoint for emergency planning.',
-      coordinate: midRoute,
-      source: 'ecs_suggested' as const,
-      distanceFromRouteStartMiles: routeStart ? Math.round(tripMapCoordinateDistanceMiles(routeStart, midRoute) * 10) / 10 : null,
-    } : null,
-  ];
-  const suggested = suggestedCandidates.filter((point): point is BailoutPlanPoint => !!point && isValidMapCoordinate(point.coordinate));
-
-  const suggestions: RoadNavSearchSuggestion[] = [];
-  for (const anchor of buildBailoutSearchAnchors(params.routePoints)) {
-    try {
-      const anchorSuggestions = await searchRoadDestinations({
-        accessToken: params.accessToken,
-        query: BAILOUT_SEARCH_QUERY,
-        sessionToken: params.sessionToken,
-        proximity: { lat: anchor.latitude, lng: anchor.longitude },
-        limit: BAILOUT_SEARCH_LIMIT,
-      });
-      anchorSuggestions.forEach((suggestion) => suggestions.push(suggestion));
-    } catch {}
-  }
-  const seen = new Set<string>();
-  const options: BailoutPlanPoint[] = [];
-  const addOption = (point: BailoutPlanPoint) => {
-    const key = `${point.title.toLowerCase()}:${point.coordinate.latitude.toFixed(4)}:${point.coordinate.longitude.toFixed(4)}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    options.push(point);
-  };
-  suggested.forEach(addOption);
-  for (const suggestion of suggestions) {
-    try {
-      const destination = await resolveRoadDestination({
-        accessToken: params.accessToken,
-        sessionToken: params.sessionToken,
-        suggestion,
-      });
-      const point = bailoutPlanPointFromDestination(suggestion, destination, routeStart);
-      if (point) addOption(point);
-    } catch {}
-  }
-  const routeEvidenceOptions = options
-    .filter((point) => point.source !== 'mapbox_search')
-    .slice(0, BAILOUT_OPTION_LIMIT);
-  const mapboxOptions = options
-    .filter((point) => point.source === 'mapbox_search')
-    .sort(
-      (left, right) =>
-        (left.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY) -
-        (right.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY),
-    )
-    .slice(0, BAILOUT_OPTION_LIMIT);
-
-  return filterBailoutPlanCandidates({
-    providerCandidates: [...routeEvidenceOptions, ...mapboxOptions],
-    routeFallbackCandidates: suggested,
-    routeStart,
-    routePoints: params.routePoints,
-    limit: BAILOUT_OPTION_LIMIT,
-  }).candidates;
 }
 
 function interpolateTripRouteCoordinate(
@@ -3390,11 +3206,45 @@ function TripPlanMapOverlay({
   );
 }
 
+function TripBuilderPickerMapStyleSwitch({
+  value,
+  onChange,
+}: {
+  value: MapStyleKey;
+  onChange: (style: MapStyleKey) => void;
+}) {
+  return (
+    <View style={styles.tripPickerMapStyleRow} testID="trip-builder-picker-map-style">
+      {TRIP_BUILDER_PICKER_MAP_STYLES.map((style) => {
+        const selected = value === style.key;
+        return (
+          <TouchableOpacity
+            key={style.key}
+            style={[styles.tripPickerMapStyleButton, selected && styles.tripPickerMapStyleButtonActive]}
+            activeOpacity={0.82}
+            onPress={() => onChange(style.key)}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={`Use ${style.label} map style`}
+            testID={`trip-builder-picker-map-style-${style.key}`}
+          >
+            <Ionicons name={style.icon as any} size={12} color={selected ? '#081014' : TACTICAL.amber} />
+            <Text style={[styles.tripPickerMapStyleText, selected && styles.tripPickerMapStyleTextActive]}>
+              {style.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 function CampPlanPickerOverlay({
   visible,
   route,
   routePreviewPoints,
   pins,
+  suggestedEstablishedCampPins,
   onDropPin,
   onRemovePin,
   onClearPins,
@@ -3404,12 +3254,14 @@ function CampPlanPickerOverlay({
   route: TripBuilderRouteInput | null;
   routePreviewPoints: TripMapCoordinate[];
   pins: CampPlanPin[];
+  suggestedEstablishedCampPins: TripBuilderSuggestedEstablishedCampPin[];
   onDropPin: (coordinate: TripMapCoordinate) => void;
   onRemovePin: (id: string) => void;
   onClearPins: () => void;
   onClose: () => void;
 }) {
   const [mapboxToken, setMapboxToken] = useState(() => getMapboxTokenSync());
+  const [pickerMapStyle, setPickerMapStyle] = useState<MapStyleKey>(DEFAULT_MAP_STYLE);
   const routePoints = useMemo(() => {
     const prepared = routePreviewPoints.filter(isValidMapCoordinate);
     if (prepared.length > 0) return prepared;
@@ -3428,6 +3280,17 @@ function CampPlanPickerOverlay({
     type: 'camp',
     color: '#66BB6A',
     mapChar: String(index + 1),
+    connectToRouteLine: false,
+  }));
+  const suggestedCampMarkers = suggestedEstablishedCampPins.map((pin, index): TripPlanMapMarker => ({
+    id: `suggested-established-${pin.id}`,
+    latitude: pin.coordinate.latitude,
+    longitude: pin.coordinate.longitude,
+    title: pin.title,
+    subtitle: pin.subtitle,
+    type: 'established_camp',
+    color: '#66BB6A',
+    mapChar: `E${index + 1}`,
     connectToRouteLine: false,
   }));
 
@@ -3466,13 +3329,14 @@ function CampPlanPickerOverlay({
             <Ionicons name="close" size={18} color={TACTICAL.text} />
           </TouchableOpacity>
         </View>
+        <TripBuilderPickerMapStyleSwitch value={pickerMapStyle} onChange={setPickerMapStyle} />
         <View style={styles.bailoutPickerMapFrame}>
           {mapboxToken && routePoints.length > 0 ? (
             <MapRenderer
               points={routePoints}
-              pinMarkers={campMarkers}
+              pinMarkers={[...suggestedCampMarkers, ...campMarkers]}
               routeColor={TACTICAL.amber}
-              mapStyle={DEFAULT_MAP_STYLE}
+              mapStyle={pickerMapStyle}
               mapboxToken={mapboxToken}
               hasToken={!!mapboxToken}
               motionPriority="warm"
@@ -3508,6 +3372,21 @@ function CampPlanPickerOverlay({
             ) : null}
           </View>
           <ScrollView style={styles.bailoutOptionList} contentContainerStyle={styles.bailoutOptionListContent}>
+            {suggestedEstablishedCampPins.length > 0 ? (
+              <View style={styles.campPinList} testID="trip-builder-suggested-established-camps">
+                {suggestedEstablishedCampPins.map((pin, index) => (
+                  <View key={pin.id} style={styles.campPinRow}>
+                    <View style={styles.campPinIcon}>
+                      <Text style={styles.smartResupplyMarkerText}>E{index + 1}</Text>
+                    </View>
+                    <View style={styles.campPinCopy}>
+                      <Text style={styles.campPinTitle}>{pin.title}</Text>
+                      <Text style={styles.campPinMeta} numberOfLines={2}>{pin.subtitle}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             {pins.length === 0 ? (
               <Text style={styles.tripMapPointMeta}>Tap the map to drop camp reference pins along the selected route.</Text>
             ) : (
@@ -3555,12 +3434,8 @@ function BailoutPlanPickerOverlay({
   visible,
   route,
   routePreviewPoints,
-  options,
   pins,
   selectedPoint,
-  loading,
-  error,
-  onSelect,
   onDropPoint,
   onRemovePin,
   onClearPins,
@@ -3569,18 +3444,15 @@ function BailoutPlanPickerOverlay({
   visible: boolean;
   route: TripBuilderRouteInput | null;
   routePreviewPoints: TripMapCoordinate[];
-  options: BailoutPlanPoint[];
   pins: BailoutPlanPoint[];
   selectedPoint: BailoutPlanPoint | null;
-  loading: boolean;
-  error: string | null;
-  onSelect: (point: BailoutPlanPoint) => void;
   onDropPoint: (coordinate: TripMapCoordinate) => void;
   onRemovePin: (id: string) => void;
   onClearPins: () => void;
   onClose: () => void;
 }) {
   const [mapboxToken, setMapboxToken] = useState(() => getMapboxTokenSync());
+  const [pickerMapStyle, setPickerMapStyle] = useState<MapStyleKey>(DEFAULT_MAP_STYLE);
   const routePoints = useMemo(() => {
     const prepared = routePreviewPoints.filter(isValidMapCoordinate);
     if (prepared.length > 0) return prepared;
@@ -3594,11 +3466,11 @@ function BailoutPlanPickerOverlay({
       id: 'bailout-route-start',
       latitude: start.latitude,
       longitude: start.longitude,
-      title: 'Route start',
+      title: 'Trail entry',
       subtitle: 'Selected Trip Builder route entry point.',
       type: 'start',
-      color: '#FFFFFF',
-      mapChar: 'S',
+      color: TACTICAL.amber,
+      mapChar: 'T',
     }];
     if (end && !sameTripCoordinate(start, end)) {
       markers.push({
@@ -3638,18 +3510,6 @@ function BailoutPlanPickerOverlay({
     color: ITINERARY_BAILOUT_COLOR,
     mapChar: `B${index + 1}`,
   }));
-  const optionMarkers = options
-    .filter((option) => option.id !== selectedPoint?.id && !pins.some((pin) => pin.id === option.id))
-    .map((option, index) => ({
-      id: option.id,
-      latitude: option.coordinate.latitude,
-      longitude: option.coordinate.longitude,
-      title: option.title,
-      subtitle: option.subtitle ?? undefined,
-      type: 'bailout',
-      color: ITINERARY_BAILOUT_COLOR,
-      mapChar: String(index + 1),
-    }));
 
   useEffect(() => {
     if (!visible || mapboxToken) return;
@@ -3672,7 +3532,7 @@ function BailoutPlanPickerOverlay({
             <Text style={styles.eyebrow}>PRE-GUIDANCE TRAIL VIEW</Text>
             <Text style={styles.tripMapTitle}>Bailout Plan</Text>
             <Text style={styles.tripMapSubtitle}>
-              Select a suggested road-access/rendezvous point, or tap the map to drop your own emergency point.
+              Trail entry is marked. Tap the map to drop reference bailout pins along the selected route.
             </Text>
           </View>
           <TouchableOpacity
@@ -3686,13 +3546,14 @@ function BailoutPlanPickerOverlay({
             <Ionicons name="close" size={18} color={TACTICAL.text} />
           </TouchableOpacity>
         </View>
+        <TripBuilderPickerMapStyleSwitch value={pickerMapStyle} onChange={setPickerMapStyle} />
         <View style={styles.bailoutPickerMapFrame}>
           {mapboxToken && routePoints.length > 0 ? (
             <MapRenderer
               points={routePoints}
-              pinMarkers={[...routeEndpointMarkers, ...optionMarkers, ...operatorPinMarkers, ...selectedMarker]}
+              pinMarkers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}
               routeColor={TACTICAL.amber}
-              mapStyle={DEFAULT_MAP_STYLE}
+              mapStyle={pickerMapStyle}
               mapboxToken={mapboxToken}
               hasToken={!!mapboxToken}
               motionPriority="warm"
@@ -3706,14 +3567,13 @@ function BailoutPlanPickerOverlay({
             <View style={styles.tripMapFallback}>
               <Ionicons name="map-outline" size={24} color={TACTICAL.textMuted} />
               <Text style={styles.tripMapFallbackTitle}>Bailout map unavailable</Text>
-              <Text style={styles.tripMapFallbackText}>Route geometry or map token is unavailable. Use a suggested point below if available.</Text>
+              <Text style={styles.tripMapFallbackText}>Route geometry or map token is unavailable. Bailout pins can be added when the route map is available.</Text>
             </View>
           )}
         </View>
         <View style={styles.bailoutPickerFooter}>
           <View style={styles.bailoutPickerFooterHeader}>
-            <Text style={styles.bailoutPickerTitle}>Suggested Bailout / Rendezvous Points</Text>
-            {loading ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : null}
+            <Text style={styles.bailoutPickerTitle}>Bailout Reference Pins</Text>
             {pins.length > 0 ? (
               <TouchableOpacity
                 style={styles.bailoutOpenButton}
@@ -3728,7 +3588,6 @@ function BailoutPlanPickerOverlay({
               </TouchableOpacity>
             ) : null}
           </View>
-          {error ? <Text style={styles.smartResupplyErrorText}>{error}</Text> : null}
           <ScrollView style={styles.bailoutOptionList} contentContainerStyle={styles.bailoutOptionListContent}>
             {pins.length > 0 ? (
               <View style={styles.campPinList} testID="trip-builder-bailout-picker-pin-list">
@@ -3756,29 +3615,19 @@ function BailoutPlanPickerOverlay({
                 ))}
               </View>
             ) : null}
-            {options.length === 0 && !loading ? (
-              <Text style={styles.tripMapPointMeta}>No suggested points yet. Tap the map to drop an operator-selected bailout point.</Text>
-            ) : (
-              options.map((option) => (
-                <BailoutPlanOptionCard
-                  key={option.id}
-                  option={option}
-                  selected={selectedPoint?.id === option.id}
-                  onPress={() => onSelect(option)}
-                />
-              ))
-            )}
+            {pins.length === 0 ? (
+              <Text style={styles.tripMapPointMeta}>Tap the map to drop operator-selected bailout reference pins. Legal access, drivability, and current conditions remain unknown until verified.</Text>
+            ) : null}
           </ScrollView>
           <TouchableOpacity
-            style={[styles.primaryButton, !selectedPoint && styles.primaryButtonDisabled]}
-            activeOpacity={selectedPoint ? 0.84 : 1}
-            disabled={!selectedPoint}
+            style={styles.primaryButton}
+            activeOpacity={0.84}
             onPress={onClose}
             accessibilityRole="button"
-            accessibilityLabel="Use selected bailout point"
+            accessibilityLabel="Save bailout pins"
             testID="trip-builder-bailout-picker-use"
           >
-            <Text style={styles.primaryButtonText}>{selectedPoint ? 'Use Bailout Point' : 'Select Bailout Point'}</Text>
+            <Text style={styles.primaryButtonText}>{pins.length > 0 ? 'Save Bailout Pins' : 'Done'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -3809,11 +3658,8 @@ export default function ExploreTripBuilderScreen() {
   const [smartResupplyLoading, setSmartResupplyLoading] = useState<SmartResupplySearchKind | null>(null);
   const [smartResupplyError, setSmartResupplyError] = useState<string | null>(null);
   const [bailoutPickerVisible, setBailoutPickerVisible] = useState(false);
-  const [bailoutOptions, setBailoutOptions] = useState<BailoutPlanPoint[]>([]);
   const [selectedBailoutPoint, setSelectedBailoutPoint] = useState<BailoutPlanPoint | null>(null);
   const [bailoutPlanPins, setBailoutPlanPins] = useState<BailoutPlanPoint[]>([]);
-  const [bailoutOptionsLoading, setBailoutOptionsLoading] = useState(false);
-  const [bailoutOptionsError, setBailoutOptionsError] = useState<string | null>(null);
   const [resupplyOverrides, setResupplyOverrides] = useState<Partial<Record<ResupplyCategory, ResupplyOverride>>>({});
   const [plan, setPlan] = useState<TripPlan | null>(null);
   const [planModalVisible, setPlanModalVisible] = useState(false);
@@ -4043,6 +3889,15 @@ export default function ExploreTripBuilderScreen() {
     }
     return selectedRoute ? routePointsForTripMap(selectedRoute as unknown as TripBuilderRouteInput) : [];
   }, [preparedTripRoutePreview, routeContextSnapshot, selectedRoute, tripSetupStarted]);
+
+  const suggestedEstablishedCampPins = useMemo(
+    () => buildSuggestedEstablishedCampPins({
+      routePoints: selectedPreparedRoutePoints,
+      candidates: routeContextSnapshot?.campCandidates ?? [],
+      limit: 5,
+    }),
+    [routeContextSnapshot, selectedPreparedRoutePoints],
+  );
 
   useEffect(() => {
     if (
@@ -4649,81 +4504,19 @@ export default function ExploreTripBuilderScreen() {
   useEffect(() => {
     setSelectedBailoutPoint(null);
     setBailoutPlanPins([]);
-    setBailoutOptions([]);
-    setBailoutOptionsLoading(false);
-    setBailoutOptionsError(null);
   }, [selectedRouteId]);
 
   useEffect(() => {
     if (!tripSetupStarted) {
       setBailoutPickerVisible(false);
-      setBailoutOptionsLoading(false);
-      setBailoutOptionsError(null);
       return;
     }
     if (bailoutPlanPreference === 'no') {
       setBailoutPickerVisible(false);
       setSelectedBailoutPoint(null);
-      setBailoutOptions([]);
-      setBailoutOptionsLoading(false);
-      setBailoutOptionsError(null);
-      return;
-    }
-    const routePoints = selectedPreparedRoutePoints.length >= 2
-      ? selectedPreparedRoutePoints
-      : [selectedRouteStartCoordinate, selectedRouteEndCoordinate].filter(isValidMapCoordinate);
-    if (routePoints.length < 2) {
-      setBailoutOptions([]);
-      setBailoutOptionsLoading(false);
-      setBailoutOptionsError('Route geometry is unavailable, so ECS cannot suggest bailout points. Tap the map if available or select No.');
-      return;
-    }
-
-    let cancelled = false;
-    setBailoutOptionsLoading(true);
-    setBailoutOptionsError(null);
-    void (async () => {
-      try {
-        const token = itinerarySearchToken ?? await getMapboxToken();
-        if (!token) throw new Error('Map search unavailable until Mapbox token is ready.');
-        if (!itinerarySearchToken) setItinerarySearchToken(token);
-        const options = await loadBailoutPlanOptions({
-          accessToken: token,
-          sessionToken: roadSearchSessionTokenRef.current,
-          routePoints,
-          routeContextOptions: bailoutPlanPointsFromRouteContext(routeContextSnapshot),
-        });
-        if (!cancelled) {
-          setBailoutOptions(options);
-          setBailoutOptionsError(
-            options.length === 0
-              ? 'No usable bailout candidates were found near this route. Use Map Pick or select No.'
-              : null,
-          );
-        }
-      } catch (searchError) {
-        if (!cancelled) {
-          setBailoutOptions([]);
-          setBailoutOptionsError(searchError instanceof Error ? searchError.message : 'Bailout search unavailable.');
-        }
-      } finally {
-        if (!cancelled) setBailoutOptionsLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
+      setBailoutPlanPins([]);
     };
-  }, [
-    bailoutPlanPreference,
-    itinerarySearchToken,
-    selectedPreparedRoutePoints,
-    routeContextSnapshot,
-    selectedRouteEndCoordinate,
-    selectedRouteId,
-    selectedRouteStartCoordinate,
-    tripSetupStarted,
-  ]);
+  }, [bailoutPlanPreference, tripSetupStarted]);
 
   const handleSmartResupplyPreference = (preference: SmartResupplyPreference) => {
     hapticMicro();
@@ -4749,7 +4542,6 @@ export default function ExploreTripBuilderScreen() {
   const handleBailoutPlanPreference = (preference: BailoutPlanPreference) => {
     hapticMicro();
     setBailoutPlanPreference(preference);
-    setBailoutOptionsError(null);
     if (preference === 'yes') {
       setBailoutPickerVisible(true);
     } else {
@@ -4767,12 +4559,6 @@ export default function ExploreTripBuilderScreen() {
     handleBailoutPlanPreference('yes');
   };
 
-  const handleSelectBailoutPoint = (point: BailoutPlanPoint) => {
-    hapticMicro();
-    setSelectedBailoutPoint(point);
-    setBailoutOptionsError(null);
-  };
-
   const handleDropBailoutPoint = (coordinate: TripMapCoordinate) => {
     if (!isValidMapCoordinate(coordinate)) return;
     hapticMicro();
@@ -4781,7 +4567,7 @@ export default function ExploreTripBuilderScreen() {
     const point: BailoutPlanPoint = {
       id: `operator-bailout-${Date.now().toString(36)}-${nextIndex}`,
       title: `Bailout reference ${nextIndex}`,
-      subtitle: 'Manual emergency bailout or rendezvous point. Verify legal access and drivability.',
+      subtitle: 'Manual emergency bailout reference point. Verify legal access and drivability.',
       coordinate,
       source: 'operator_drop',
       distanceFromRouteStartMiles: routeStart ? Math.round(tripMapCoordinateDistanceMiles(routeStart, coordinate) * 10) / 10 : null,
@@ -4789,15 +4575,12 @@ export default function ExploreTripBuilderScreen() {
     setBailoutPlanPreference('yes');
     setSelectedBailoutPoint(point);
     setBailoutPlanPins((current) => [...current, point].slice(0, 8));
-    setBailoutOptions((current) => [point, ...current.filter((item) => item.id !== point.id)].slice(0, BAILOUT_OPTION_LIMIT));
-    setBailoutOptionsError(null);
   };
 
   const handleRemoveBailoutPin = (id: string) => {
     hapticMicro();
     setBailoutPlanPins((current) => current.filter((pin) => pin.id !== id));
     setSelectedBailoutPoint((current) => current?.id === id ? null : current);
-    setBailoutOptions((current) => current.filter((option) => option.id !== id));
   };
 
   const handleClearBailoutPins = () => {
@@ -4805,7 +4588,6 @@ export default function ExploreTripBuilderScreen() {
     const operatorPinIds = new Set(bailoutPlanPins.map((pin) => pin.id));
     setBailoutPlanPins([]);
     setSelectedBailoutPoint((current) => current && operatorPinIds.has(current.id) ? null : current);
-    setBailoutOptions((current) => current.filter((option) => !operatorPinIds.has(option.id)));
   };
 
   const cycleResupplyOverride = (category: ResupplyCategory) => {
@@ -5680,12 +5462,12 @@ export default function ExploreTripBuilderScreen() {
                                   ? selectedBailoutPoint.title
                                   : bailoutPlanPins.length > 0
                                     ? `${bailoutPlanPins.length} bailout reference pin${bailoutPlanPins.length === 1 ? '' : 's'}`
-                                    : 'Suggested Bailout / Rendezvous Points'}
+                                    : 'Bailout reference pins'}
                               </Text>
                               <Text style={styles.bailoutSummaryMeta} numberOfLines={2}>
                                 {selectedBailoutPoint
-                                  ? selectedBailoutPoint.subtitle ?? 'Emergency bailout or rendezvous point selected.'
-                                  : 'Open the map to drop reference bailout pins, or choose one of the ECS-calculated road-access points.'}
+                                  ? selectedBailoutPoint.subtitle ?? 'Emergency bailout reference point selected.'
+                                  : 'Open the map to drop operator-selected reference bailout pins along the route.'}
                               </Text>
                             </View>
                             <TouchableOpacity
@@ -5726,27 +5508,6 @@ export default function ExploreTripBuilderScreen() {
                                 </View>
                               ))}
                             </View>
-                          ) : null}
-                          {bailoutOptionsLoading ? (
-                            <View style={styles.smartResupplyLoadingRow}>
-                              <ActivityIndicator size="small" color={TACTICAL.amber} />
-                              <Text style={styles.smartResupplyPickerHint}>Calculating bailout options...</Text>
-                            </View>
-                          ) : null}
-                          {bailoutOptions.length > 0 ? (
-                            <View style={styles.bailoutInlineList} testID="trip-builder-bailout-inline-options">
-                              {bailoutOptions.slice(0, BAILOUT_OPTION_LIMIT).map((option) => (
-                                <BailoutPlanOptionCard
-                                  key={option.id}
-                                  option={option}
-                                  selected={selectedBailoutPoint?.id === option.id}
-                                  onPress={() => handleSelectBailoutPoint(option)}
-                                />
-                              ))}
-                            </View>
-                          ) : null}
-                          {bailoutOptionsError ? (
-                            <Text style={styles.smartResupplyErrorText}>{bailoutOptionsError}</Text>
                           ) : null}
                         </View>
                       ) : null}
@@ -6159,12 +5920,8 @@ export default function ExploreTripBuilderScreen() {
             visible={bailoutPickerVisible}
             route={selectedRoute as unknown as TripBuilderRouteInput | null}
             routePreviewPoints={selectedPreparedRoutePoints}
-            options={bailoutOptions}
             pins={bailoutPlanPins}
             selectedPoint={selectedBailoutPoint}
-            loading={bailoutOptionsLoading}
-            error={bailoutOptionsError}
-            onSelect={handleSelectBailoutPoint}
             onDropPoint={handleDropBailoutPoint}
             onRemovePin={handleRemoveBailoutPin}
             onClearPins={handleClearBailoutPins}
@@ -6175,6 +5932,7 @@ export default function ExploreTripBuilderScreen() {
             route={selectedRoute as unknown as TripBuilderRouteInput | null}
             routePreviewPoints={selectedPreparedRoutePoints}
             pins={campPlanPins}
+            suggestedEstablishedCampPins={suggestedEstablishedCampPins}
             onDropPin={handleDropCampPin}
             onRemovePin={handleRemoveCampPin}
             onClearPins={handleClearCampPins}
@@ -6761,9 +6519,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   bailoutSummaryCopy: { flex: 1, minWidth: 0 },
-  bailoutInlineList: {
-    gap: 6,
-  },
   bailoutSummaryTitle: {
     color: TACTICAL.text,
     fontSize: 10,
@@ -7905,6 +7660,37 @@ const styles = StyleSheet.create({
   tripMapHeaderCopy: { flex: 1, minWidth: 0 },
   tripMapTitle: { color: TACTICAL.text, fontSize: 16, fontWeight: '900' },
   tripMapSubtitle: { color: TACTICAL.textMuted, fontSize: 9, lineHeight: 13, fontWeight: '700' },
+  tripPickerMapStyleRow: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    padding: 3,
+  },
+  tripPickerMapStyleButton: {
+    minHeight: 28,
+    borderRadius: 7,
+    paddingHorizontal: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  tripPickerMapStyleButtonActive: {
+    backgroundColor: TACTICAL.amber,
+  },
+  tripPickerMapStyleText: {
+    color: TACTICAL.amber,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  tripPickerMapStyleTextActive: {
+    color: '#081014',
+  },
   tripMapFrame: {
     flex: 1,
     minHeight: 220,
@@ -7979,46 +7765,4 @@ const styles = StyleSheet.create({
     maxHeight: 150,
   },
   bailoutOptionListContent: { gap: 6 },
-  bailoutOption: {
-    minHeight: 48,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-  },
-  bailoutOptionSelected: {
-    borderColor: ITINERARY_BAILOUT_COLOR + '60',
-    backgroundColor: ITINERARY_BAILOUT_COLOR + '10',
-  },
-  bailoutOptionDot: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: ITINERARY_BAILOUT_COLOR + '40',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bailoutOptionDotSelected: {
-    backgroundColor: ITINERARY_BAILOUT_COLOR,
-    borderColor: ITINERARY_BAILOUT_COLOR,
-  },
-  bailoutOptionCopy: { flex: 1, minWidth: 0 },
-  bailoutOptionTitle: {
-    color: TACTICAL.text,
-    fontSize: 10,
-    fontWeight: '900',
-  },
-  bailoutOptionMeta: {
-    marginTop: 2,
-    color: TACTICAL.textMuted,
-    fontSize: 8,
-    lineHeight: 11,
-    fontWeight: '700',
-  },
 });

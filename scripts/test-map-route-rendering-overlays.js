@@ -113,8 +113,8 @@ assert.strictEqual(previewRoute.routeRenderMode, 'preview', 'Preview route rende
 assert.strictEqual(previewRoute.routeColor, '#65D4FF', 'Preview routes should use a distinct route color by default.');
 assert.deepStrictEqual(
   previewRoute.waypoints.map((waypoint) => waypoint.title),
-  ['Start', 'End'],
-  'Renderer should synthesize start/end route markers and dedupe destination markers at the same coordinate.',
+  ['Trail entry', 'Trail end'],
+  'Renderer should synthesize trail entry/end route markers and dedupe destination markers at the same coordinate.',
 );
 
 const activeRoute = buildWebPayload({

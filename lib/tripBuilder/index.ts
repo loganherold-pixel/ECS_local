@@ -20,3 +20,4 @@ export * from './smartResupplyPlanner';
 export * from './routeContextTripBuilderAdapter';
 export * from './mapboxRouteContextAdapters';
 export * from './approachResupplyPlanner';
+export * from './tripBuilderCampSuggestionPins';

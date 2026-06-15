@@ -251,20 +251,17 @@ assertIncludes(
   'fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate',
   'Live grocery/supply search should keep the selected refuel as the fallback anchor while ranking against the approach route',
 );
-assertIncludes(
-  screen,
-  'filterBailoutPlanCandidates({',
-  'Trip Builder should filter provider bailout candidates before replacing route-derived fallbacks',
+assert(
+  !screen.includes('filterBailoutPlanCandidates({'),
+  'Trip Builder should not run suggested bailout/rendezvous provider filtering in setup',
 );
-assertIncludes(
-  screen,
-  'setBailoutOptionsLoading(false);',
-  'Trip Builder should clear bailout loading state on early-return/final states',
+assert(
+  !screen.includes('setBailoutOptionsLoading(false);'),
+  'Trip Builder should not expose bailout suggestion loading state after removing suggested bailout search',
 );
-assertIncludes(
-  screen,
-  'No usable bailout candidates were found near this route.',
-  'Trip Builder should show honest no-results copy when no bailout candidates survive filtering',
+assert(
+  !screen.includes('No usable bailout candidates were found near this route.'),
+  'Trip Builder should not show no-results copy for removed bailout suggestions',
 );
 
 console.log('Trip Builder pre-trail resolver enforcement checks passed.');
