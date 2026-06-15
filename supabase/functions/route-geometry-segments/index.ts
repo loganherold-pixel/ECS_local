@@ -13,11 +13,32 @@ const ROUTE_SEGMENTS_SOURCE_TABLE = 'route_segments';
 const MIN_ZOOM = 10;
 const DEFAULT_LIMIT = 240;
 const MAX_LIMIT = 500;
+const ROUTE_GEOMETRY_UNAVAILABLE_MESSAGE =
+  'ECS trail segments are temporarily unavailable for this map view. Saved and imported route geometry remain available.';
 
 type JsonRecord = Record<string, unknown>;
 
 function jsonResponse(body: JsonRecord, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
+}
+
+function routeGeometryUnavailableResponse(reason: string): Response {
+  return jsonResponse({
+    ok: true,
+    segments: [],
+    meta: {
+      source: ROUTE_SEGMENTS_SOURCE_TABLE,
+      bboxFilterApplied: true,
+      degraded: true,
+      unavailableReason: reason,
+      userMessage: ROUTE_GEOMETRY_UNAVAILABLE_MESSAGE,
+      candidateCount: 0,
+      cappedCount: 0,
+      skippedMissingGeometryCount: 0,
+      skippedClosedCount: 0,
+      fetchedAt: new Date().toISOString(),
+    },
+  });
 }
 
 function getEnvAny(names: string[]): string {
@@ -260,9 +281,6 @@ serve(async (req) => {
     console.error('[route-geometry-segments]', {
       message: error instanceof Error ? error.message : 'Unknown route geometry viewport failure.',
     });
-    return jsonResponse({
-      ok: false,
-      error: 'ECS route geometry is temporarily unavailable. Existing saved/imported route geometry remains available.',
-    }, 503);
+    return routeGeometryUnavailableResponse('backend_unavailable');
   }
 });

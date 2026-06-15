@@ -257,6 +257,7 @@
     "test:predictive-advisory-regression": "node ./scripts/test-predictive-advisory-regression.js",
     "test:navigate-remoteness-map-layer": "node ./scripts/test-navigate-remoteness-map-layer.js",
     "test:navigate-dispersed-camping-layout": "node ./scripts/test-navigate-dispersed-camping-layout.js",
+    "test:navigate-camp-layer-menu-layout": "node ./scripts/test-navigate-camp-layer-menu-layout.js",
     "test:navigate-route-confidence": "node ./scripts/test-navigate-route-confidence.js",
     "test:navigate-readiness": "node ./scripts/test-navigate-readiness-integration.js",
     "test:navigate-compass-recenter-hint": "node ./scripts/test-navigate-compass-recenter-hint.js",

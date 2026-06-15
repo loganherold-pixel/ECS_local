@@ -25,6 +25,7 @@ assert(fs.existsSync(modulePath), 'Route geometry viewport domain module should 
 
 const {
   ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM,
+  ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
   ROUTE_GEOMETRY_VIEWPORT_WARNING,
   buildRouteGeometryViewportCacheKey,
   isRouteGeometryViewportZoomEligible,
@@ -135,6 +136,26 @@ assert.strictEqual(normalized.skippedClosedCount, 1, 'Closed/prohibited segments
 assert.strictEqual(normalized.skippedMissingGeometryCount, 1, 'Invalid short geometry should be counted as skipped.');
 assert.strictEqual(normalized.segments[1].dataState, 'cached', 'Cached/reference data state should remain visible.');
 assert.strictEqual(normalized.segments[1].confidence, 'low', 'Reference geometry confidence should remain visible.');
+assert.strictEqual(normalized.degraded, false, 'Normal viewport payloads should not be marked degraded.');
+
+const degraded = normalizeRouteGeometryViewportResponse({
+  ok: true,
+  segments: [],
+  meta: {
+    degraded: true,
+    unavailableReason: 'backend_unavailable',
+    userMessage: ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
+    candidateCount: 0,
+    cappedCount: 0,
+    skippedMissingGeometryCount: 0,
+    skippedClosedCount: 0,
+    bboxFilterApplied: true,
+  },
+});
+assert.strictEqual(degraded.degraded, true, 'Backend fallback payloads should remain explicitly degraded.');
+assert.strictEqual(degraded.segments.length, 0, 'Degraded viewport payloads should not fabricate route geometry.');
+assert.strictEqual(degraded.unavailableReason, 'backend_unavailable');
+assert.strictEqual(degraded.userMessage, ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE);
 
 const overlaySegment = routeGeometryViewportSegmentToOverlaySegment(
   normalized.segments[0],

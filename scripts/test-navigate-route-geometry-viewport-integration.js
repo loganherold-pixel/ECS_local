@@ -18,6 +18,13 @@ assert(
   'Route geometry viewport overlay should be enabled by default unless explicitly disabled.',
 );
 assert(
+  client.includes('friendlyRouteGeometryViewportError') &&
+    client.includes('readRouteGeometryViewportErrorBody') &&
+    client.includes('ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE') &&
+    !client.includes("throw new Error(error.message || 'ECS route geometry is unavailable.')"),
+  'Route geometry viewport client should recover Edge Function error bodies and hide raw non-2XX Supabase copy.',
+);
+assert(
   navigate.includes('fetchRouteGeometryViewportSegments') &&
     navigate.includes('routeGeometryViewportUiState') &&
     navigate.includes('routeGeometryViewportFetchCoordinatorRef') &&
@@ -27,6 +34,13 @@ assert(
 assert(
   navigate.includes('Zoom to 10+ to show ECS trail segments.'),
   'Navigate should show explicit zoom-too-low copy for ECS trail segments.',
+);
+assert(
+  navigate.includes('result.degraded') &&
+    navigate.includes('ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE') &&
+    navigate.includes('if (!result.degraded)') &&
+    navigate.includes("status: result.degraded ? 'error'"),
+  'Navigate should render degraded route geometry viewport failures with ECS copy and avoid caching outage payloads.',
 );
 assert(
   navigate.includes('routeGeometryViewportSelectedSegmentsRef') &&

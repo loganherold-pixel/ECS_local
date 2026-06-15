@@ -16,6 +16,8 @@ export const ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT = 500;
 export const ROUTE_GEOMETRY_VIEWPORT_WARNING =
   'ECS catalog route geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.';
 export const ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE = 'route_geometry_viewport';
+export const ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE =
+  'ECS trail segments are temporarily unavailable for this map view. Saved and imported route geometry remain available.';
 
 export type RouteGeometryViewportBbox = {
   minLng: number;
@@ -53,6 +55,9 @@ export type RouteGeometryViewportResult = {
   skippedMissingGeometryCount: number;
   skippedClosedCount: number;
   bboxFilterApplied: boolean;
+  degraded: boolean;
+  unavailableReason?: string | null;
+  userMessage?: string | null;
   cacheKey?: string | null;
   fetchedAt?: string | null;
 };
@@ -311,6 +316,13 @@ export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeo
   const record = readRecord(value);
   const rawSegments = readArray(record?.segments);
   const meta = readRecord(record?.meta);
+  const degraded = Boolean(meta?.degraded ?? record?.degraded ?? record?.ok === false);
+  const unavailableReason = cleanText(
+    meta?.unavailableReason ?? meta?.unavailable_reason ?? record?.unavailableReason ?? record?.unavailable_reason,
+  ) || null;
+  const userMessage = cleanText(
+    meta?.userMessage ?? meta?.user_message ?? record?.userMessage ?? record?.message ?? record?.error,
+  ) || (degraded ? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE : null);
   const segments: RouteGeometryViewportSegment[] = [];
   let skippedMissingGeometryCount = finiteNumber(meta?.skippedMissingGeometryCount ?? meta?.skipped_missing_geometry_count) ?? 0;
   let skippedClosedCount = finiteNumber(meta?.skippedClosedCount ?? meta?.skipped_closed_count) ?? 0;
@@ -360,6 +372,9 @@ export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeo
     skippedMissingGeometryCount,
     skippedClosedCount,
     bboxFilterApplied: Boolean(meta?.bboxFilterApplied ?? meta?.bbox_filter_applied ?? true),
+    degraded,
+    unavailableReason,
+    userMessage,
     cacheKey: cleanText(meta?.cacheKey ?? meta?.cache_key) || null,
     fetchedAt: cleanText(meta?.fetchedAt ?? meta?.fetched_at) || null,
   };

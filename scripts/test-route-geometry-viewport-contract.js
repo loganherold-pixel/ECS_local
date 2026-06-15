@@ -43,6 +43,10 @@ for (const required of [
   'ECS_SERVICE_ROLE_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
   'route_segments',
+  'routeGeometryUnavailableResponse',
+  'degraded: true',
+  'unavailableReason',
+  'userMessage',
   "rpc('search_route_geometry_segments_for_viewport'",
   'cleanBbox',
   'cleanZoom',
@@ -54,6 +58,12 @@ for (const required of [
 ]) {
   assert(edgeFunction.includes(required), `route-geometry-segments should include ${required}.`);
 }
+assert(
+  !edgeFunction.includes('}, 503)') &&
+    !edgeFunction.includes('status, 503') &&
+    edgeFunction.includes("return routeGeometryUnavailableResponse('backend_unavailable');"),
+  'Route geometry viewport function should degrade with a 200 JSON payload instead of surfacing Supabase non-2XX errors.',
+);
 assert(
   !edgeFunction.includes('RIDB_API_KEY') &&
     !edgeFunction.includes('NPS_API_KEY') &&
