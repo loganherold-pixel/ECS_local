@@ -10,6 +10,9 @@ create index if not exists route_segments_viewport_access_idx
 create index if not exists route_access_rules_segment_vehicle_idx
   on public.route_access_rules (route_segment_id, vehicle_class, allowed);
 
+alter table public.route_segment_sources
+  add column if not exists last_verified_at timestamptz;
+
 create or replace function public.search_route_geometry_segments_for_viewport(
   p_min_lng double precision,
   p_min_lat double precision,

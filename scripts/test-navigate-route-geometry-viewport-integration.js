@@ -58,7 +58,11 @@ assert(
 assert(
   navigate.includes('resolveNearestRouteGeometryEndpoint') &&
     navigate.includes('ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE') &&
-    navigate.includes('sourceApp: options?.sourceApp ?? (hasRouteGeometrySegmentBuild ?'),
+    navigate.includes('hasRouteGeometrySegmentBuild') &&
+    navigate.includes("sourceApp:\n        options?.sourceApp ??") &&
+    navigate.includes("'ecs_route_geometry_overlay'") &&
+    navigate.includes("externalSourceType:\n        options?.externalSourceType ??") &&
+    navigate.includes("'route_geometry_overlay'"),
   'Navigate Plan should resolve a nearest endpoint while preserving ECS route geometry planning metadata.',
 );
 assert(

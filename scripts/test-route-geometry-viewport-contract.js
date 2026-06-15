@@ -32,6 +32,14 @@ assert(
   'Migration should expose a bounded PostGIS viewport RPC that excludes closed/prohibited segments.',
 );
 assert(
+  migration.includes('alter table public.route_segment_sources') &&
+    migration.includes('add column if not exists last_verified_at timestamptz') &&
+    migration.indexOf('add column if not exists last_verified_at timestamptz') <
+      migration.indexOf('create or replace function public.search_route_geometry_segments_for_viewport') &&
+    migration.includes('coalesce(rss.last_verified_at, dl.source_last_updated)'),
+  'Viewport migration should add route_segment_sources.last_verified_at before the RPC reads it.',
+);
+assert(
   migration.includes('grant execute on function public.search_route_geometry_segments_for_viewport') &&
     migration.includes('to service_role') &&
     !migration.includes('to anon') &&
