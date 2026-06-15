@@ -22,9 +22,7 @@ type Props = {
   cardMaxWidth?: number;
   cardAlignSelf?: 'center' | 'flex-start';
   onClose: () => void;
-  onScoutNearbyPins?: () => void;
   onClearScoutPins?: () => void;
-  scoutNearbyDisabled?: boolean;
   scoutNearbyStatusText?: string | null;
   scoutPinsVisible?: boolean;
 };
@@ -131,9 +129,7 @@ export default function DispersedCampingRegionSheet({
   cardMaxWidth = 430,
   cardAlignSelf = 'center',
   onClose,
-  onScoutNearbyPins,
   onClearScoutPins,
-  scoutNearbyDisabled = false,
   scoutNearbyStatusText = null,
   scoutPinsVisible = false,
 }: Props) {
@@ -244,28 +240,6 @@ export default function DispersedCampingRegionSheet({
           <View style={styles.actions}>
             <View style={styles.secondaryActionWrap}>
               <View style={styles.secondaryButtonRow}>
-                <TouchableOpacity
-                  style={[styles.secondaryButton, scoutNearbyDisabled && styles.secondaryButtonDisabled]}
-                  activeOpacity={0.78}
-                  disabled={!onScoutNearbyPins || scoutNearbyDisabled}
-                  onPress={onScoutNearbyPins}
-                  accessibilityRole="button"
-                  accessibilityLabel="Research nearby dispersed camping eligibility"
-                >
-                  <Ionicons
-                    name="search-outline"
-                    size={12}
-                    color={!onScoutNearbyPins || scoutNearbyDisabled ? TACTICAL.textMuted : TACTICAL.amber}
-                  />
-                  <Text
-                    style={[
-                      styles.secondaryButtonText,
-                      (!onScoutNearbyPins || scoutNearbyDisabled) && styles.secondaryButtonTextDisabled,
-                    ]}
-                  >
-                    Research area
-                  </Text>
-                </TouchableOpacity>
                 {scoutPinsVisible && onClearScoutPins ? (
                   <TouchableOpacity
                     style={styles.clearPinsButton}
@@ -494,18 +468,6 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 7,
   },
-  secondaryButton: {
-    minHeight: 38,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(242,194,77,0.13)',
-    backgroundColor: 'rgba(18,24,29,0.58)',
-    paddingHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    justifyContent: 'center',
-  },
   clearPinsButton: {
     minHeight: 38,
     borderRadius: 10,
@@ -523,18 +485,6 @@ const styles = StyleSheet.create({
     color: '#F07D71',
     fontSize: 8,
     letterSpacing: 0.8,
-  },
-  secondaryButtonDisabled: {
-    opacity: 0.6,
-  },
-  secondaryButtonText: {
-    ...TYPO.U2,
-    color: TACTICAL.amber,
-    fontSize: 8,
-    letterSpacing: 0.8,
-  },
-  secondaryButtonTextDisabled: {
-    color: TACTICAL.textMuted,
   },
   scoutStatusText: {
     ...TYPO.B2,

@@ -209,22 +209,23 @@ assert.ok(
   'Current local restrictions not confirmed.',
   'Not shown as eligible.',
   'Live source:',
-  'Research area',
 ].forEach((copy) => {
   assert.ok(regionSheetSource.includes(copy), `Region sheet missing copy: ${copy}`);
 });
 
 assert.ok(
-  regionSheetSource.includes('onScoutNearbyPins') &&
+  !regionSheetSource.includes('onScoutNearbyPins') &&
+    !regionSheetSource.includes('Research area') &&
+    !regionSheetSource.includes('Research nearby dispersed camping eligibility') &&
+    !navigateSource.includes('onScoutNearbyPins={handleScoutSelectedDispersedCampingRegionPins}') &&
     regionSheetSource.includes('onClearScoutPins') &&
-    regionSheetSource.includes('Research area') &&
     regionSheetSource.includes('Clear') &&
     navigateSource.includes('handleScoutSelectedDispersedCampingRegionPins') &&
     navigateSource.includes('handleClearDispersedCampingCampScoutPins') &&
     navigateSource.includes('generateDispersedCampingCampScoutPins') &&
     navigateSource.includes('DISPERSED_CAMPING_RESEARCH_ONLY_STATUS') &&
     !regionSheetSource.includes('Coming later'),
-  'Selected dispersed regions should wire Research Area into the research-only eligibility flow with clear/reset controls.',
+  'Selected dispersed regions should not show the inactive Research Area button in the tap-opened map region sheet, while clear/reset research plumbing stays intact.',
 );
 
 assert.ok(

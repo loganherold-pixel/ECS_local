@@ -18802,9 +18802,7 @@ const stableMapSurface = useMemo(() => {
         cardMaxWidth={dispersedCampingRegionSheetLayout.maxWidth}
         cardAlignSelf={dispersedCampingRegionSheetLayout.cardAlignSelf}
         onClose={closeDispersedCampingRegionSheet}
-        onScoutNearbyPins={handleScoutSelectedDispersedCampingRegionPins}
         onClearScoutPins={handleClearDispersedCampingCampScoutPins}
-        scoutNearbyDisabled={!selectedDispersedCampingRegionLive || !dispersedCampingEligibilityLayer.enabled}
         scoutNearbyStatusText={dispersedCampingCampScoutStatus}
         scoutPinsVisible={dispersedCampingCampScoutCandidates.length > 0}
       />
@@ -19721,7 +19719,6 @@ const stableMapSurface = useMemo(() => {
   handleGroupCampsiteNavigateHere,
   handleGroupCampsiteRemoveShare,
   closeDispersedCampingRegionSheet,
-  handleScoutSelectedDispersedCampingRegionPins,
   handleClearDispersedCampingCampScoutPins,
   closeEstablishedCampsiteSheet,
   handleEstablishedCampsiteNavigate,

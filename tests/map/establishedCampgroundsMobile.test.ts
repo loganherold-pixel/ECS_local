@@ -18,6 +18,7 @@ import {
   ESTABLISHED_CAMPGROUND_PIN_DEDUPE_RADIUS_METERS,
   toEstablishedCampsiteFeatureCollection,
 } from '../../lib/map/establishedCampsiteGeojsonAdapter';
+import { buildEstablishedCampgroundDetailRows } from '../../lib/map/establishedCampgroundDetailRows';
 import { resolveEstablishedCampgroundScore } from '../../lib/map/establishedCampgroundScore';
 
 const root = path.resolve(__dirname, '..', '..');
@@ -373,6 +374,32 @@ assert.ok(
   'Established campground confidence copy should anchor explanation to the displayed ECS score.',
 );
 
+const officialSparseCamp = mapCampgroundRecordToEstablishedCampsite({
+  id: 'prosser-style-sparse',
+  name: 'Prosser Style Family Campground',
+  latitude: 39.36,
+  longitude: -120.15,
+  facilityType: 'campground',
+  status: 'unknown',
+  availabilityStatus: 'unknown',
+  sourceConfidence: 57,
+  primaryProvider: 'ridb',
+  reservationStatus: 'required',
+  siteTypes: ['Tent', 'RV', 'Trailer'],
+  seasonDescription: 'Typical three-season operation',
+  amenities: ['toilets'],
+});
+assert.ok(officialSparseCamp);
+const officialSparseScore = resolveEstablishedCampgroundScore(officialSparseCamp, Date.now());
+assert.ok(
+  officialSparseScore.score >= 74,
+  `Official established campgrounds with partial real details should not be dragged into the 50s by sparse freshness fields; got ${officialSparseScore.score}.`,
+);
+assert.ok(
+  officialSparseScore.dataBasis.some((basis) => basis.includes('official provider baseline floor')),
+  'Official campground score should disclose when an official provider baseline floor tempers low source-confidence inputs.',
+);
+
 assert.strictEqual(formatCampgroundStatusLabel('unknown'), 'Status unknown');
 assert.strictEqual(formatCampgroundStatusLabel('seasonal'), 'Seasonal');
 assert.strictEqual(isCampgroundAvailabilityFresh(freshCheckedAt), true);
@@ -428,16 +455,52 @@ assert.ok(
 
 [
   'Established Campground',
-  'Managing agency',
-  'Managing org',
-  'Source / attribution',
   'Reservation / info',
   'Navigate',
+  'buildEstablishedCampgroundDetailRows',
   'formatCampgroundAvailabilityLabel',
   'resolveEstablishedCampgroundScore',
 ].forEach((copy) => {
   assert.ok(sheetSource.includes(copy), `Established campground detail sheet missing: ${copy}`);
 });
+
+const sparseDetailRows = buildEstablishedCampgroundDetailRows({
+  id: 'sparse-detail',
+  name: 'Sparse Detail Campground',
+  latitude: 37.71,
+  longitude: -119.61,
+  campsiteType: 'campground',
+  source: 'RECREATION_GOV',
+  feeStatus: 'unknown',
+  reservationStatus: 'unknown',
+  amenities: ['unknown'],
+  siteCount: null,
+  seasonDescription: undefined,
+  openingHours: undefined,
+  maxVehicleLengthFt: undefined,
+  tentAllowed: true,
+  rvAllowed: undefined,
+  trailersAllowed: undefined,
+  phone: undefined,
+  requiresVerification: true,
+});
+const sparseDetailLabels = sparseDetailRows.map((row) => row.label);
+assert.ok(!sparseDetailLabels.includes('Site count'), 'Missing site count should not render a campground detail row.');
+assert.ok(!sparseDetailLabels.includes('Season / hours'), 'Missing season/hours should not render a campground detail row.');
+assert.ok(!sparseDetailLabels.includes('Max vehicle length'), 'Missing max vehicle length should not render a campground detail row.');
+assert.ok(!sparseDetailLabels.includes('Contact'), 'Missing contact should not render a campground detail row.');
+assert.ok(
+  sparseDetailRows.some((row) => row.label === 'Tent / RV / trailers' && row.value === 'Yes / Unknown / Unknown'),
+  'Partially supplied stay-type data should stay visible in campground detail rows.',
+);
+assert.ok(
+  sparseDetailRows.some((row) => row.label === 'Source / attribution' && row.value === 'Recreation.gov'),
+  'Source / attribution should remain visible when provider attribution is available from the source.',
+);
+assert.ok(
+  sparseDetailRows.every((row) => row.value !== 'Not supplied by source'),
+  'Established campground detail rows should omit missing values rather than showing Not supplied by source.',
+);
 
 assert.ok(
   mapRendererSource.includes("type: props.type ? String(props.type) : 'established_campground'") &&

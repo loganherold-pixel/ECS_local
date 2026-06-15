@@ -16,6 +16,7 @@ import {
   formatCampgroundAvailabilityLabel,
   formatCampgroundStatusLabel,
 } from '../../lib/map/establishedCampgroundMobile';
+import { buildEstablishedCampgroundDetailRows } from '../../lib/map/establishedCampgroundDetailRows';
 import { resolveEstablishedCampgroundScore } from '../../lib/map/establishedCampgroundScore';
 
 type Props = {
@@ -43,40 +44,6 @@ function words(value?: string): string {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
-function sourceLabel(value?: string): string {
-  switch (String(value ?? '').toUpperCase()) {
-    case 'RIDB':
-    case 'RECREATION_GOV':
-      return 'Recreation.gov';
-    case 'NPS':
-      return 'NPS';
-    case 'CAMPFLARE':
-      return 'Campflare';
-    case 'ACTIVE':
-      return 'ACTIVE';
-    case 'RESERVEAMERICA':
-      return 'ReserveAmerica';
-    case 'ASPIRA':
-      return 'Aspira';
-    case 'OSM':
-      return 'OSM';
-    case 'STATE':
-      return 'State';
-    case 'COUNTY':
-      return 'County';
-    case 'PRIVATE':
-      return 'Private';
-    default:
-      return 'Unknown';
-  }
-}
-
-function boolLabel(value?: boolean): string {
-  if (value === true) return 'Yes';
-  if (value === false) return 'No';
-  return 'Unknown';
-}
-
 function formatDate(value?: string): string | null {
   if (!value) return null;
   const date = new Date(value);
@@ -84,39 +51,13 @@ function formatDate(value?: string): string | null {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function DetailRow({ label, value }: { label: string; value: string | number | null | undefined }) {
+function DetailRow({ label, value }: { label: string; value: string | number }) {
   return (
     <View style={styles.detailRow}>
       <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value == null || value === '' ? 'Not supplied by source' : String(value)}</Text>
+      <Text style={styles.detailValue}>{String(value)}</Text>
     </View>
   );
-}
-
-function reservationCopy(campsite: EstablishedCampsite, reservationUrl?: string | null): string {
-  if (reservationUrl) return 'Reservation / info link available';
-  switch (campsite.reservationStatus) {
-    case 'reservable':
-      return 'Reservable source reported';
-    case 'first_come':
-      return 'First come / first served reported';
-    case 'mixed':
-      return 'Mixed reservable and first come reported';
-    case 'required':
-      return 'Reservation required';
-    default:
-      return 'Not supplied by source';
-  }
-}
-
-function siteCountCopy(value?: number | null): string | null {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
-  return `${Math.round(value)} sites`;
-}
-
-function stayTypeCopy(campsite: EstablishedCampsite): string | null {
-  const values = [boolLabel(campsite.tentAllowed), boolLabel(campsite.rvAllowed), boolLabel(campsite.trailersAllowed)];
-  return values.every((value) => value === 'Unknown') ? null : values.join(' / ');
 }
 
 export default function EstablishedCampsiteSheet({
@@ -130,9 +71,6 @@ export default function EstablishedCampsiteSheet({
   if (!visible || !campsite) return null;
 
   const amenities = campsite.amenities.filter((amenity) => amenity !== 'unknown');
-  const sourceDate = formatDate(campsite.sourceUpdatedAt || campsite.lastSyncedAt || undefined);
-  const availabilityDate = formatDate(campsite.lastAvailabilityCheckedAt || undefined);
-  const verifiedDate = formatDate(campsite.lastVerifiedAt || undefined);
   const siteTypes = campsite.siteTypes?.length ? campsite.siteTypes : [campsite.campsiteType];
   const reservationUrl = campsite.reservationUrl || campsite.bookingUrl;
   const detailUrl = campsite.detailUrl || campsite.bookingUrl;
@@ -142,6 +80,7 @@ export default function EstablishedCampsiteSheet({
     campsite.lastAvailabilityCheckedAt,
   );
   const scoreSummary = resolveEstablishedCampgroundScore(campsite);
+  const detailRows = buildEstablishedCampgroundDetailRows(campsite);
   const scrollContentStyle = WEB_SCROLL_CONTAINMENT_STYLE
     ? [styles.bodyContent, WEB_SCROLL_CONTAINMENT_STYLE]
     : styles.bodyContent;
@@ -225,20 +164,9 @@ export default function EstablishedCampsiteSheet({
             </View>
 
             <View style={styles.section}>
-              <DetailRow label="Managing agency" value={campsite.managingAgency || campsite.operatorName || sourceLabel(campsite.source)} />
-              <DetailRow label="Managing org" value={campsite.managingOrg} />
-              <DetailRow label="Source / attribution" value={campsite.attribution || sourceLabel(campsite.primaryProvider || campsite.source)} />
-              <DetailRow label="Reservation" value={reservationCopy(campsite, reservationUrl)} />
-              <DetailRow label="Site count" value={siteCountCopy(campsite.siteCount)} />
-              <DetailRow label="Season / hours" value={campsite.seasonDescription || campsite.openingHours} />
-              <DetailRow label="Max vehicle length" value={campsite.maxVehicleLengthFt ? `${campsite.maxVehicleLengthFt} ft` : null} />
-              <DetailRow label="Tent / RV / trailers" value={stayTypeCopy(campsite)} />
-              <DetailRow label="Contact" value={campsite.phone} />
-              {sourceDate ? <DetailRow label="Last updated" value={sourceDate} /> : null}
-              {availabilityDate ? <DetailRow label="Last checked" value={availabilityDate} /> : null}
-              {verifiedDate ? <DetailRow label="Last verified" value={verifiedDate} /> : null}
-              {typeof campsite.sourceRecordCount === 'number' ? <DetailRow label="Source records" value={campsite.sourceRecordCount} /> : null}
-              {typeof campsite.availabilityRecordCount === 'number' ? <DetailRow label="Availability rows" value={campsite.availabilityRecordCount} /> : null}
+              {detailRows.map((detail) => (
+                <DetailRow key={detail.label} label={detail.label} value={detail.value} />
+              ))}
             </View>
 
             <View style={styles.section}>

@@ -9,6 +9,7 @@ export type EstablishedCampgroundScoreSummary = {
 
 const RECENT_SYNC_MS = 14 * 24 * 60 * 60 * 1000;
 const FRESH_AVAILABILITY_MS = 60 * 60 * 1000;
+const OFFICIAL_PROVIDER_CONFIDENCE_FLOOR_DELTA = 6;
 
 function cleanToken(value: unknown): string {
   return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '_');
@@ -41,6 +42,18 @@ function providerBaseline(campsite: EstablishedCampsite): number {
   }
 }
 
+function officialProviderBaselineFloor(campsite: EstablishedCampsite): number | null {
+  const provider = cleanToken(campsite.primaryProvider ?? campsite.source);
+  switch (provider) {
+    case 'ridb':
+    case 'recreation_gov':
+    case 'nps':
+      return Math.max(providerBaseline(campsite) - OFFICIAL_PROVIDER_CONFIDENCE_FLOOR_DELTA, 0);
+    default:
+      return null;
+  }
+}
+
 function scoreNumber(value: unknown): number | null {
   const numberValue = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(numberValue) ? Math.max(0, Math.min(100, numberValue)) : null;
@@ -57,11 +70,19 @@ export function resolveEstablishedCampgroundScore(
   now = Date.now(),
 ): EstablishedCampgroundScoreSummary {
   const sourceConfidence = scoreNumber(campsite.sourceConfidence);
-  let score = sourceConfidence ?? providerBaseline(campsite);
+  const baseline = providerBaseline(campsite);
+  const officialFloor = officialProviderBaselineFloor(campsite);
+  let score =
+    sourceConfidence != null && officialFloor != null
+      ? Math.max(sourceConfidence, officialFloor)
+      : sourceConfidence ?? baseline;
   const dataBasis: string[] = [];
 
   if (sourceConfidence != null) {
     dataBasis.push(`source confidence ${Math.round(sourceConfidence)}/100`);
+    if (officialFloor != null && sourceConfidence < officialFloor) {
+      dataBasis.push(`official provider baseline floor ${Math.round(officialFloor)}/100`);
+    }
   } else {
     dataBasis.push(`${campsite.primaryProvider ?? campsite.source ?? 'unknown'} provider baseline`);
   }
@@ -118,6 +139,16 @@ export function resolveEstablishedCampgroundScore(
     dataBasis.push('operator or reservation link');
   }
 
+  if (
+    campsite.reservationStatus === 'required' ||
+    campsite.reservationStatus === 'reservable' ||
+    campsite.reservationStatus === 'first_come' ||
+    campsite.reservationStatus === 'mixed'
+  ) {
+    score += 2;
+    dataBasis.push(`${campsite.reservationStatus.replace(/_/g, ' ')} reservation signal`);
+  }
+
   if (campsite.managingAgency || campsite.managingOrg || campsite.operatorName) {
     score += 2;
     dataBasis.push('operator identified');
@@ -126,6 +157,18 @@ export function resolveEstablishedCampgroundScore(
   if (typeof campsite.siteCount === 'number' && Number.isFinite(campsite.siteCount)) {
     score += campsite.siteCount > 0 ? 2 : -2;
     dataBasis.push(`${campsite.siteCount} sites reported`);
+  }
+
+  if (campsite.seasonDescription || campsite.openingHours) {
+    score += 2;
+    dataBasis.push('season or hours supplied');
+  }
+
+  const stayTypeSignals = [campsite.tentAllowed, campsite.rvAllowed, campsite.trailersAllowed]
+    .filter((value): value is boolean => typeof value === 'boolean').length;
+  if (stayTypeSignals > 0) {
+    score += Math.min(3, stayTypeSignals);
+    dataBasis.push(`${stayTypeSignals} stay type signal${stayTypeSignals === 1 ? '' : 's'}`);
   }
 
   const knownAmenities = campsite.amenities.filter((amenity) => amenity !== 'unknown').length;

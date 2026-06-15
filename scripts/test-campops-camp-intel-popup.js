@@ -9,6 +9,7 @@ const viewModelPath = path.join(root, 'lib', 'campops', 'campOpsCampIntelViewMod
 const popupPath = path.join(root, 'components', 'navigate', 'CampScoutIntelCard.tsx');
 const establishedPopupPath = path.join(root, 'components', 'navigate', 'EstablishedCampsiteSheet.tsx');
 const establishedScorePath = path.join(root, 'lib', 'map', 'establishedCampgroundScore.ts');
+const establishedDetailRowsPath = path.join(root, 'lib', 'map', 'establishedCampgroundDetailRows.ts');
 const navigatePath = path.join(root, 'app', '(tabs)', 'navigate.tsx');
 
 const originalLoad = Module._load;
@@ -53,6 +54,7 @@ require.extensions['.ts'] = compileTypescript;
 require.extensions['.tsx'] = compileTypescript;
 
 const { buildCampOpsCampIntelViewModel } = require(viewModelPath);
+const { buildEstablishedCampgroundDetailRows } = require(establishedDetailRowsPath);
 
 const recommendationSet = {
   recommendedCamp: {
@@ -205,6 +207,44 @@ assert(
     establishedPopupSource.includes('camp confidence') &&
     establishedScoreSource.includes('live campground status, source confidence, availability freshness, operator data, and provider attribution'),
   'Established campground popups should explain live-data ECS scoring in layman terms without claiming live availability.',
+);
+
+const sparseEstablishedCampground = {
+  id: 'established-sparse-1',
+  name: 'Sparse Source Campground',
+  latitude: 38.78,
+  longitude: -121.2,
+  type: 'established_campground',
+  category: 'campground',
+  campsiteType: 'campground',
+  source: 'RECREATION_GOV',
+  feeStatus: 'unknown',
+  reservationStatus: 'unknown',
+  amenities: ['unknown'],
+  siteCount: null,
+  seasonDescription: null,
+  openingHours: null,
+  maxVehicleLengthFt: null,
+  tentAllowed: true,
+  rvAllowed: undefined,
+  trailersAllowed: undefined,
+  phone: null,
+  requiresVerification: true,
+};
+
+const sparseRows = buildEstablishedCampgroundDetailRows(sparseEstablishedCampground);
+const sparseRowLabels = sparseRows.map((row) => row.label);
+assert(!sparseRowLabels.includes('Site count'), 'Established campground popups should hide missing site counts.');
+assert(!sparseRowLabels.includes('Season / hours'), 'Established campground popups should hide missing season/hours.');
+assert(!sparseRowLabels.includes('Max vehicle length'), 'Established campground popups should hide missing max vehicle length.');
+assert(!sparseRowLabels.includes('Contact'), 'Established campground popups should hide missing contact rows.');
+assert(
+  sparseRows.some((row) => row.label === 'Tent / RV / trailers' && row.value === 'Yes / Unknown / Unknown'),
+  'Established campground popups should keep partially supplied stay-type data such as tent allowed with RV/trailer unknown.',
+);
+assert(
+  sparseRows.every((row) => row.value !== 'Not supplied by source'),
+  'Established campground detail rows should omit missing values instead of rendering Not supplied by source.',
 );
 
 const forbiddenCopy = [
