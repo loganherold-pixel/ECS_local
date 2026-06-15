@@ -10,6 +10,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   AppState,
+  Platform,
   useWindowDimensions,
   type AppStateStatus,
 } from 'react-native';
@@ -74,7 +75,7 @@ import { redactAuthUserId } from '../lib/auth/authLogRedaction';
 import { runtimeSmokeStore } from '../lib/ai/runtimeSmokeStore';
 import { openManageSubscription } from '../lib/subscriptionAccess';
 import {
-  getCommandDockHeight,
+  getCommandDockTotalClearance,
 } from '../lib/shellLayout';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
 import { stageNavigationFlow } from '../lib/ecsNavigationFlow';
@@ -931,10 +932,12 @@ function AuthGate() {
   const showSharedShellBodyBackground =
     !inPreAuthTree &&
     isSharedShellBackgroundRoute(normalizedPathname);
+  const androidTabletWindow = Platform.OS === 'android' && Math.min(width, height) >= 720;
+  const commandDockTabletScale = adaptive.isTablet || androidTabletWindow;
   const shellBodyTopInset = 0;
   const shellBodyBottomInset = useMemo(
-    () => (showCommandDock ? getCommandDockHeight(insets.bottom) : 0),
-    [insets.bottom, showCommandDock],
+    () => (showCommandDock ? getCommandDockTotalClearance(insets.bottom, commandDockTabletScale) : 0),
+    [commandDockTabletScale, insets.bottom, showCommandDock],
   );
   const stackScreenOptions = useMemo(
     () => ({

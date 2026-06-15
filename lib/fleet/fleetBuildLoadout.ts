@@ -63,6 +63,14 @@ export type FleetBuildCompartment = FleetCompartment & {
   placement: FleetPlacementMetadata;
 };
 
+export type FleetAccessoryLoadRating = {
+  dynamicLoadLb: number | null;
+  staticLoadLb: number | null;
+  source: FleetWeightSource;
+  confidence: number;
+  sourceLabel?: string | null;
+};
+
 export type FleetBuildAccessoryInstall = {
   id: string;
   accessoryId: FleetAccessoryId;
@@ -70,6 +78,7 @@ export type FleetBuildAccessoryInstall = {
   brandModel?: string | null;
   installedWeightLb: number;
   affectsPayload?: boolean;
+  loadRating?: FleetAccessoryLoadRating | null;
   mountZone: FleetLoadZone;
   permanence: FleetAccessoryPermanence;
   source: FleetWeightSource;
@@ -159,6 +168,7 @@ export type FleetAccessoryCatalogItem = {
   icon: string;
   defaultWeightLb: number;
   affectsPayload?: boolean;
+  defaultLoadRating?: FleetAccessoryLoadRating | null;
   mountZone: FleetLoadZone;
   permanence: FleetAccessoryPermanence;
   scoringEffects: FleetAccessoryScoringEffect[];
@@ -185,7 +195,7 @@ export const FLEET_ACCESSORY_CATALOG: readonly FleetAccessoryCatalogItem[] = [
   { id: 'roof_rack_platform', label: 'Roof Rack / Platform', icon: 'grid-outline', defaultWeightLb: 85, mountZone: 'roof', permanence: 'permanent', scoringEffects: ['payload', 'top_heavy', 'aero', 'maintenance'], defaultCompartments: [{ id: 'roof_platform', name: 'Roof Platform', loadZone: 'roof' }] },
   { id: 'cab_rack', label: 'Cab Rack', icon: 'car-sport-outline', defaultWeightLb: 85, affectsPayload: false, mountZone: 'cab', permanence: 'permanent', scoringEffects: ['front_axle', 'top_heavy', 'aero'], defaultCompartments: [{ id: 'cab_rack_zone', name: 'Cab Rack Zone', loadZone: 'cab' }] },
   { id: 'bed_rack', label: 'Bed Rack', icon: 'layers-outline', defaultWeightLb: 125, mountZone: 'bedHigh', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'top_heavy', 'aero'], defaultCompartments: [{ id: 'bed_rack_deck', name: 'Bed Rack Deck', loadZone: 'bedHigh' }] },
-  { id: 'truck_cap_smartcap', label: 'Truck Cap / SmartCap', icon: 'archive-outline', defaultWeightLb: 213, mountZone: 'bedHigh', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'top_heavy', 'aero', 'maintenance'], defaultCompartments: [
+  { id: 'truck_cap_smartcap', label: 'Truck Cap / SmartCap', icon: 'archive-outline', defaultWeightLb: 213, defaultLoadRating: { dynamicLoadLb: 330, staticLoadLb: 770, source: 'manufacturer_spec', confidence: 88, sourceLabel: 'SmartCap published load rating' }, mountZone: 'bedHigh', permanence: 'permanent', scoringEffects: ['payload', 'rear_axle', 'top_heavy', 'aero', 'maintenance'], defaultCompartments: [
     { id: 'side_bin_driver', name: 'Driver Side Bin', loadZone: 'bedLow' },
     { id: 'side_bin_passenger', name: 'Passenger Side Bin', loadZone: 'bedLow' },
     { id: 'cap_roof', name: 'Cap Roof Zone', loadZone: 'bedHigh' },
@@ -328,6 +338,31 @@ function normalizeLoadoutPreset(value: unknown): FleetLoadoutPresetId {
   return FLEET_LOADOUT_PRESETS.some((preset) => preset.id === value) ? value as FleetLoadoutPresetId : 'empty';
 }
 
+function normalizeOptionalLoadRatingWeight(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.round(numeric * 10) / 10 : null;
+}
+
+function normalizeLoadRating(
+  value: unknown,
+  fallback?: FleetAccessoryLoadRating | null,
+): FleetAccessoryLoadRating | null {
+  const source = value && typeof value === 'object' ? value as Partial<FleetAccessoryLoadRating> : {};
+  const rating = value && typeof value === 'object' ? source : fallback;
+  if (!rating) return null;
+  const dynamicLoadLb = normalizeOptionalLoadRatingWeight(rating.dynamicLoadLb);
+  const staticLoadLb = normalizeOptionalLoadRatingWeight(rating.staticLoadLb);
+  if (dynamicLoadLb == null && staticLoadLb == null) return null;
+  return {
+    dynamicLoadLb,
+    staticLoadLb,
+    source: normalizeWeightSource(rating.source, fallback?.source ?? 'ecs_default'),
+    confidence: Math.max(0, Math.min(100, Number(rating.confidence) || fallback?.confidence || 66)),
+    sourceLabel: rating.sourceLabel ?? fallback?.sourceLabel ?? null,
+  };
+}
+
 export function createEmptyFleetBuildLoadoutState(): FleetBuildLoadoutState {
   return { accessories: [], compartments: [], loadoutItems: [], activePreset: 'empty', acknowledgedRiskIds: [] };
 }
@@ -373,6 +408,7 @@ export function normalizeFleetBuildLoadoutState(raw: unknown): FleetBuildLoadout
             installedWeightLb: Number.isFinite(installedWeight) ? Math.max(0, installedWeight) : catalog.defaultWeightLb,
             confidence: Math.max(0, Math.min(100, Number(item.confidence) || confidenceForMode(knowledgeMode))),
             knowledgeMode,
+            loadRating: normalizeLoadRating(item.loadRating, catalog.defaultLoadRating),
             source: normalizeWeightSource(item.source, sourceForMode(knowledgeMode)),
             scoringEffects: Array.isArray(item.scoringEffects) && item.scoringEffects.length > 0
               ? item.scoringEffects.filter((effect): effect is FleetAccessoryScoringEffect =>
@@ -471,6 +507,7 @@ export function buildFleetAccessoryInstall(input: {
   knowledgeMode: FleetAccessoryKnowledgeMode;
   brandModel?: string | null;
   manualWeightLb?: number | null;
+  loadRating?: FleetAccessoryLoadRating | null;
   mountZone?: FleetLoadZone | null;
   permanence?: FleetAccessoryPermanence | null;
 }): FleetBuildAccessoryInstall {
@@ -489,6 +526,7 @@ export function buildFleetAccessoryInstall(input: {
     source: sourceForMode(input.knowledgeMode),
     confidence: confidenceForMode(input.knowledgeMode),
     knowledgeMode: input.knowledgeMode,
+    loadRating: normalizeLoadRating(input.loadRating, catalog.defaultLoadRating),
     affectsPayload: catalog.affectsPayload !== false,
     scoringEffects: [...catalog.scoringEffects],
   };
@@ -500,11 +538,19 @@ export function generateFleetAccessoryCompartments(
   const catalog = getFleetAccessoryCatalogItem(install.accessoryId);
   return catalog.defaultCompartments.map((compartment, index) => {
     const loadZone = install.accessoryId === 'custom_accessory' ? install.mountZone : compartment.loadZone;
+    const dynamicCapacity =
+      install.loadRating?.dynamicLoadLb != null && /roof/i.test(`${compartment.name} ${compartment.id}`)
+        ? createFleetWeightValue(install.loadRating.dynamicLoadLb, install.loadRating.source, {
+            confidence: install.loadRating.confidence,
+            sourceLabel: install.loadRating.sourceLabel ?? `${catalog.label} dynamic load rating`,
+          })
+        : null;
     return {
       id: `${install.id}:${compartment.id}`,
       vehicleId: install.id.split(':')[0] ?? install.id,
       name: compartment.name,
       loadZone,
+      capacityWeight: dynamicCapacity,
       accessoryInstallId: install.id,
       accessoryId: install.accessoryId,
       sortOrder: index,
@@ -779,6 +825,18 @@ export function toFleetAccessoryInstalls(state: FleetBuildLoadoutState, vehicleI
         : install.name,
     }),
     affectsPayload: install.affectsPayload !== false,
+    dynamicLoadRating: install.loadRating?.dynamicLoadLb != null
+      ? createFleetWeightValue(install.loadRating.dynamicLoadLb, install.loadRating.source, {
+          confidence: install.loadRating.confidence,
+          sourceLabel: install.loadRating.sourceLabel ?? `${install.name} dynamic load rating`,
+        })
+      : null,
+    staticLoadRating: install.loadRating?.staticLoadLb != null
+      ? createFleetWeightValue(install.loadRating.staticLoadLb, install.loadRating.source, {
+          confidence: install.loadRating.confidence,
+          sourceLabel: install.loadRating.sourceLabel ?? `${install.name} static load rating`,
+        })
+      : null,
     loadZone: install.mountZone,
     placement: placementFromDescriptor(install.mountZone, install.name, 'assigned'),
     display: {

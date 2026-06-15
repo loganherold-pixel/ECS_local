@@ -16,6 +16,8 @@ export type NavigationGuidanceGeometryResult = {
 };
 
 export const CATALOG_GUIDANCE_JOIN_GAP_MAX_METERS = 120;
+const CATALOG_GUIDANCE_REVISIT_MAX_METERS = 35;
+const CATALOG_GUIDANCE_MIN_REVISIT_PATH_METERS = 120;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -159,6 +161,53 @@ function distanceMeters(a: RoadNavCoordinate, b: RoadNavCoordinate): number {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+function cumulativeLineDistances(points: RoadNavCoordinate[]): number[] {
+  const distances = [0];
+  for (let index = 1; index < points.length; index += 1) {
+    distances[index] = distances[index - 1] + distanceMeters(points[index - 1], points[index]);
+  }
+  return distances;
+}
+
+function findLineRevisitIssue(
+  points: RoadNavCoordinate[],
+  options: { allowLoop?: boolean; revisitMaxMeters?: number; minRevisitPathMeters?: number },
+): string | null {
+  if (points.length < 3) return null;
+
+  const revisitMaxMeters = Math.max(0, options.revisitMaxMeters ?? CATALOG_GUIDANCE_REVISIT_MAX_METERS);
+  const minRevisitPathMeters = Math.max(
+    0,
+    options.minRevisitPathMeters ?? CATALOG_GUIDANCE_MIN_REVISIT_PATH_METERS,
+  );
+  const cumulativeDistances = cumulativeLineDistances(points);
+  const lastIndex = points.length - 1;
+
+  for (let leftIndex = 0; leftIndex < points.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 2; rightIndex < points.length; rightIndex += 1) {
+      const isAllowedClosingLoop =
+        options.allowLoop === true &&
+        leftIndex === 0 &&
+        rightIndex === lastIndex &&
+        distanceMeters(points[leftIndex], points[rightIndex]) <= revisitMaxMeters;
+      if (isAllowedClosingLoop) continue;
+
+      const revisitDistanceMeters = distanceMeters(points[leftIndex], points[rightIndex]);
+      if (revisitDistanceMeters > revisitMaxMeters) continue;
+
+      const pathBetweenMeters = cumulativeDistances[rightIndex] - cumulativeDistances[leftIndex];
+      if (pathBetweenMeters < minRevisitPathMeters) continue;
+
+      const closingDescription = leftIndex === 0 && rightIndex === lastIndex
+        ? 'closes back onto its start'
+        : 'revisits the same corridor or junction';
+      return `Active guidance is blocked because this route line ${closingDescription}. ECS requires one curated point-to-point route spine, or an explicit loop route label when the source is intentionally a loop.`;
+    }
+  }
+
+  return null;
 }
 
 function joinConnectedSegments(
@@ -334,7 +383,13 @@ function joinConnectedSegments(
 
 export function normalizeNavigationGuidanceGeometry(
   value: unknown,
-  options: { joinGapMaxMeters?: number; preferredStart?: RoadNavCoordinate | null } = {},
+  options: {
+    joinGapMaxMeters?: number;
+    preferredStart?: RoadNavCoordinate | null;
+    allowLoop?: boolean;
+    revisitMaxMeters?: number;
+    minRevisitPathMeters?: number;
+  } = {},
 ): NavigationGuidanceGeometryResult {
   const joinGapMaxMeters = Math.max(0, options.joinGapMaxMeters ?? CATALOG_GUIDANCE_JOIN_GAP_MAX_METERS);
   const preferredStart = options.preferredStart ?? null;
@@ -362,6 +417,26 @@ export function normalizeNavigationGuidanceGeometry(
   }
 
   if (sourceSegmentCount === 1) {
+    const revisitIssue = findLineRevisitIssue(segments[0], {
+      allowLoop: options.allowLoop === true,
+      revisitMaxMeters: options.revisitMaxMeters,
+      minRevisitPathMeters: options.minRevisitPathMeters,
+    });
+    if (revisitIssue) {
+      return {
+        status: 'preview_only',
+        points: [],
+        segments,
+        sourceGeometryType,
+        sourceSegmentCount,
+        joinedSegmentGapCount: 0,
+        disjointSegmentGapCount: 0,
+        maxSegmentGapMeters: 0,
+        topologyResolved: false,
+        unavailableReason: revisitIssue,
+      };
+    }
+
     return {
       status: 'ready',
       points: segments[0],

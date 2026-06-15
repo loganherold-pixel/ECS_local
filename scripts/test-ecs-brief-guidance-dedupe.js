@@ -47,6 +47,7 @@ const { ecsUpdateDedupeTestHooks } = loadTypeScriptModule('lib/ecsUpdateDedupe.t
 const packageSource = fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8');
 const storeSource = fs.readFileSync(path.join(process.cwd(), 'lib', 'briefCadLogStore.ts'), 'utf8');
 const hookSource = fs.readFileSync(path.join(process.cwd(), 'lib', 'useEcsBriefTopBannerMessage.ts'), 'utf8');
+const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'app', '(tabs)', 'dashboard.tsx'), 'utf8');
 const dashboardHeaderSource = fs.readFileSync(path.join(process.cwd(), 'components', 'dashboard', 'DashboardHeader.tsx'), 'utf8');
 const shellHeaderSource = fs.readFileSync(path.join(process.cwd(), 'components', 'Header.tsx'), 'utf8');
 
@@ -104,6 +105,12 @@ assert(
     dashboardHeaderSource.includes('briefBannerCopy') &&
     dashboardHeaderSource.includes('displayBriefBanner.eyebrow'),
   'Dashboard header should present ECS Brief updates through the top intelligence banner.',
+);
+assert(
+  !dashboardSource.includes('ecsBriefMetaRow') &&
+    !dashboardSource.includes('latestMissionBriefLabel') &&
+    !dashboardSource.includes('ECS •'),
+  'Dashboard should not render a second ECS Brief meta readout between the intelligence banner and tabs.',
 );
 assert(
   shellHeaderSource.includes('useEcsBriefTopBannerMessage') &&

@@ -2609,7 +2609,6 @@ function DashboardScreenInner() {
 
   const latestMissionBrief = (aiState?.brief as MissionBrief | null) ?? null;
   const summaryLineLabel = normalizeVisibleEcsCopy(summaryLine);
-  const compactLineLabel = normalizeVisibleEcsCopy(compactLine);
   const topSignalTitleLabel = normalizeVisibleEcsCopy(topSignalTitle);
   const currentExpeditionState = expeditionStateStore.getState();
   const currentExpeditionRecord = expeditionStateStore.getCurrentExpedition();
@@ -3131,9 +3130,6 @@ function DashboardScreenInner() {
 
     previousMissionBriefLogRef.current = currentEntry;
   }, [briefCommandState, latestMissionBrief]);
-  const latestMissionBriefLabel = activeTab === 'brief'
-    ? (dashboardCommandState.metaLabel ?? compactLineLabel)
-    : null;
   // Cleanup advisory store and intelligence engine on unmount
   useEffect(() => {
     return () => {
@@ -3760,10 +3756,6 @@ function DashboardScreenInner() {
   // ── Mode Color Cue: Active tab accent color (non-animated) ──
   const expeditionAccent = palette.amber;
 
-  const showEcsBriefMeta =
-    activeTab === 'brief' &&
-    !!latestMissionBriefLabel &&
-    (isAIActive || dashboardCommandState.surface.visible);
   const startupHydrating = !dashboardHydrated;
 
   const handleToggleDashboardExpanded = useCallback(() => {
@@ -4497,20 +4489,6 @@ function DashboardScreenInner() {
         />
       ) : null}
 
-      {!startupHydrating && dashboardChromeVisible && showEcsBriefMeta ? (
-        <View style={styles.ecsBriefMetaRow}>
-          <Ionicons name="sparkles-outline" size={12} color={palette.amber} />
-          <Text style={[styles.ecsBriefMetaText, { color: palette.textMuted }]}>
-            ECS • {latestMissionBriefLabel}
-          </Text>
-          {dashboardCommandState.metaSignal ? (
-            <Text style={[styles.ecsBriefMetaSignal, { color: palette.amber }]}>
-              {dashboardCommandState.metaSignal}
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
-
       {!startupHydrating && dashboardChromeVisible ? <OfflineStateBanner expanded /> : null}
 
       {!startupHydrating && dashboardChromeVisible && !layoutMode ? (
@@ -4996,33 +4974,6 @@ layoutHint: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizont
     fontWeight: '900',
     letterSpacing: 0.8,
     textTransform: 'uppercase',
-  },
-
-  ecsBriefMetaRow: {
-    minHeight: 20,
-    paddingHorizontal: 14,
-    paddingTop: 2,
-    paddingBottom: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(196,138,44,0.10)',
-  },
-
-  ecsBriefMetaText: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1.1,
-    textTransform: 'uppercase',
-  },
-
-  ecsBriefMetaSignal: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    marginLeft: 8,
   },
 
 dashboardContentStack: {

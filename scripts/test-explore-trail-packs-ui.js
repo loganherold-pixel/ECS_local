@@ -18,7 +18,8 @@ const domain = read(path.join('lib', 'explore', 'trailPacks.ts'));
 assert(
   discover.includes('ExploreTripBuilderWizardRouteCard') &&
     discover.includes('testID="explore-tripbuilder-wizard-surface"') &&
-    discover.includes('normalizeExploreWizardRouteCandidates') &&
+    discover.includes('buildExploreGuidanceReadyInventory') &&
+    discover.includes('visibleExploreWizardCardCandidates') &&
     discover.includes('exploreWizardCandidateSet.hiddenTotal'),
   'Explore should render the route-first TripBuilder wizard using normalized guidance-ready candidates and hidden unavailable route counts',
 );
@@ -167,7 +168,7 @@ assert(
   'Trail Pack preview details should expose active-guidance readiness, route assessment, current-condition overlays, offline cache metadata, and preview-only reasons',
 );
 assert(
-  previewPanel.includes('detailDataUsed') &&
+  !previewPanel.includes('detailDataUsed') &&
     previewPanel.includes('offlineCache?.sourceTimestamps') &&
     previewPanel.includes('offlineCache?.sourceAttribution') &&
     previewPanel.includes('offlineCache?.freshnessWarnings') &&

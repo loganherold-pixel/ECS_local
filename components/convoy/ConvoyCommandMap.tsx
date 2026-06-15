@@ -37,10 +37,17 @@ interface ConvoyCommandMapProps {
   styleURL?: string;
   routeCoordinates?: [number, number][];
   cameraResetKey?: string | number;
+  advisoryFocusCoordinate?: ConvoyAdvisoryFocusCoordinate | null;
+  advisoryFocusKey?: string | number;
   showMapWhenEmpty?: boolean;
   showStatusSummary?: boolean;
   compact?: boolean;
 }
+
+type ConvoyAdvisoryFocusCoordinate = {
+  latitude: number;
+  longitude: number;
+};
 
 type MapboxModule = any;
 
@@ -93,6 +100,18 @@ function validMapCoordinate(member: ConvoyMapVehicle): boolean {
     member.latitude <= 90 &&
     member.longitude >= -180 &&
     member.longitude <= 180
+  );
+}
+
+function validAdvisoryFocusCoordinate(coordinate: ConvoyAdvisoryFocusCoordinate | null | undefined): coordinate is ConvoyAdvisoryFocusCoordinate {
+  return (
+    !!coordinate &&
+    Number.isFinite(coordinate.latitude) &&
+    Number.isFinite(coordinate.longitude) &&
+    coordinate.latitude >= -90 &&
+    coordinate.latitude <= 90 &&
+    coordinate.longitude >= -180 &&
+    coordinate.longitude <= 180
   );
 }
 
@@ -222,6 +241,25 @@ function routeFeatureCollection(coordinates: [number, number][]) {
   };
 }
 
+function advisoryFocusFeatureCollection(coordinate: ConvoyAdvisoryFocusCoordinate | null) {
+  return {
+    type: 'FeatureCollection',
+    features: coordinate
+      ? [{
+          type: 'Feature',
+          properties: {
+            kind: 'dispatch_advisory_focus',
+            label: 'GPS',
+          },
+          geometry: {
+            type: 'Point',
+            coordinates: [coordinate.longitude, coordinate.latitude],
+          },
+        }]
+      : [],
+  };
+}
+
 function routeCoordinateSignature(coordinates: [number, number][]): string {
   if (coordinates.length < 2) return 'no-route';
   const first = coordinates[0];
@@ -262,6 +300,8 @@ export function ConvoyCommandMap({
   styleURL,
   routeCoordinates,
   cameraResetKey,
+  advisoryFocusCoordinate,
+  advisoryFocusKey,
   showMapWhenEmpty = false,
   showStatusSummary = false,
   compact = false,
@@ -301,10 +341,30 @@ export function ConvoyCommandMap({
     () => routeFeatureCollection(normalizedRouteCoordinates),
     [normalizedRouteCoordinates],
   );
+  const normalizedAdvisoryFocusCoordinate = useMemo(
+    () => validAdvisoryFocusCoordinate(advisoryFocusCoordinate)
+      ? {
+          latitude: advisoryFocusCoordinate.latitude,
+          longitude: advisoryFocusCoordinate.longitude,
+        }
+      : null,
+    [advisoryFocusCoordinate],
+  );
+  const advisoryFocusGeoJson = useMemo(
+    () => advisoryFocusFeatureCollection(normalizedAdvisoryFocusCoordinate),
+    [normalizedAdvisoryFocusCoordinate],
+  );
   const routeSignature = useMemo(
     () => routeCoordinateSignature(normalizedRouteCoordinates),
     [normalizedRouteCoordinates],
   );
+  const advisoryFocusSignature = normalizedAdvisoryFocusCoordinate
+    ? [
+        advisoryFocusKey ?? 'focus',
+        normalizedAdvisoryFocusCoordinate.latitude.toFixed(5),
+        normalizedAdvisoryFocusCoordinate.longitude.toFixed(5),
+      ].join(':')
+    : 'none';
   const selectedMember = useMemo(
     () => members.find((member) => member.memberId === selectedMemberId) ?? null,
     [members, selectedMemberId],
@@ -326,6 +386,7 @@ export function ConvoyCommandMap({
   });
   const lastCameraResetKeyRef = useRef(cameraResetKey);
   const lastRouteCameraSignatureRef = useRef(routeSignature);
+  const lastAdvisoryFocusSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
     cameraStateRef.current = {
@@ -412,6 +473,21 @@ export function ConvoyCommandMap({
     hasFitInitialCameraRef.current = true;
     fitDefaultCamera();
   }, [fitDefaultCamera, hasRouteLine, mapReady, routeSignature]);
+
+  useEffect(() => {
+    if (!mapReady || !normalizedAdvisoryFocusCoordinate || !cameraRef.current) return;
+    if (lastAdvisoryFocusSignatureRef.current === advisoryFocusSignature) return;
+    lastAdvisoryFocusSignatureRef.current = advisoryFocusSignature;
+    hasFitInitialCameraRef.current = true;
+    cameraRef.current.setCamera?.({
+      centerCoordinate: [
+        normalizedAdvisoryFocusCoordinate.longitude,
+        normalizedAdvisoryFocusCoordinate.latitude,
+      ],
+      zoomLevel: 15.5,
+      animationDuration: 520,
+    });
+  }, [advisoryFocusSignature, mapReady, normalizedAdvisoryFocusCoordinate]);
 
   const handleRecenter = useCallback(() => {
     fitDefaultCamera();
@@ -523,6 +599,44 @@ export function ConvoyCommandMap({
                 lineWidth: 3.5,
                 lineJoin: 'round',
                 lineCap: 'round',
+              }}
+            />
+          </Mapbox.ShapeSource>
+        ) : null}
+        {normalizedAdvisoryFocusCoordinate ? (
+          <Mapbox.ShapeSource id="convoy-advisory-focus-source" shape={advisoryFocusGeoJson as any}>
+            <Mapbox.CircleLayer
+              id="convoy-advisory-focus-halo"
+              style={{
+                circleRadius: 18,
+                circleColor: palette.amber,
+                circleOpacity: 0.16,
+                circleStrokeColor: palette.amber,
+                circleStrokeWidth: 1.5,
+                circleStrokeOpacity: 0.82,
+              }}
+            />
+            <Mapbox.CircleLayer
+              id="convoy-advisory-focus-point"
+              style={{
+                circleRadius: 6,
+                circleColor: palette.amber,
+                circleOpacity: 0.95,
+                circleStrokeColor: palette.bg,
+                circleStrokeWidth: 2,
+              }}
+            />
+            <Mapbox.SymbolLayer
+              id="convoy-advisory-focus-label"
+              style={{
+                textField: ['get', 'label'],
+                textSize: 10,
+                textOffset: [0, -2.2],
+                textAnchor: 'bottom',
+                textColor: palette.amber,
+                textHaloColor: palette.bg,
+                textHaloWidth: 1.5,
+                textAllowOverlap: true,
               }}
             />
           </Mapbox.ShapeSource>

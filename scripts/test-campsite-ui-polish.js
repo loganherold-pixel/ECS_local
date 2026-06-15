@@ -104,6 +104,14 @@ assertNotIncludes(polygonTextStyle, 'wordBreak', 'Draw action labels must not op
 assertNotIncludes(polygonTextStyle, 'break-all', 'Draw action labels must not use break-all wrapping.');
 assertNotIncludes(polygonTextStyle, 'overflowWrap', 'Draw action labels must not force arbitrary character wrapping.');
 
+const campLayerMenuPanelStyle = styleBlock(navigateSource, 'campLayerMenuPanel');
+assertIncludes(campLayerMenuPanelStyle, 'width: 276', 'Camp layer menu should stay compact beside the floating tools rail.');
+assertIncludes(campLayerMenuPanelStyle, 'maxWidth: SCREEN_W - 16', 'Camp layer menu should preserve edge clearance on small screens.');
+assertIncludes(campLayerMenuPanelStyle, 'gap: 6', 'Camp layer menu should use compact spacing.');
+const campLayerMenuToggleStyle = styleBlock(navigateSource, 'campLayerMenuToggle');
+assertIncludes(campLayerMenuToggleStyle, 'minHeight: 56', 'Camp layer options should not stretch into tall information rows.');
+assertIncludes(campLayerMenuToggleStyle, 'paddingVertical: 7', 'Camp layer options should use compact vertical padding.');
+
 // Campsite marker label.
 assertIncludes(
   mapRendererSource,

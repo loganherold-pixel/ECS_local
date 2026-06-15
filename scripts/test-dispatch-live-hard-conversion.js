@@ -38,6 +38,7 @@ require.extensions['.ts'] = function compileTypeScript(mod, filename) {
 const liveEventsSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchLiveEvents.ts'), 'utf8');
 const commandCenterSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchCadCommandCenter.tsx'), 'utf8');
 const convoyPanelSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchConvoyCommandPanel.tsx'), 'utf8');
+const convoyMapSource = fs.readFileSync(path.join(process.cwd(), 'components/convoy/ConvoyCommandMap.tsx'), 'utf8');
 const legacyCommandCenterSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchCommandCenter.tsx'), 'utf8');
 const alertTabSource = fs.readFileSync(path.join(process.cwd(), 'app/(tabs)/alert.tsx'), 'utf8');
 const serviceAdaptersSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchServiceAdapters.ts'), 'utf8');
@@ -67,6 +68,9 @@ const {
   getTeamStatusLabel,
   teamStore,
 } = loadTypeScriptModule('lib/teamStore.ts');
+const {
+  tokenizeDispatchAdvisoryCoordinateLinks,
+} = loadTypeScriptModule('lib/dispatchAdvisoryCoordinateLinks.ts');
 
 for (const requiredType of [
   "'weather'",
@@ -133,6 +137,35 @@ assert.strictEqual(getDispatchSourceLabel('cache'), 'Last Known');
 assert.strictEqual(getDispatchSourceLabel('user_report'), 'User Report');
 assert.strictEqual(getTopDispatchAdvisory([validEvent])?.id, 'weather-1', 'ECS advisory should use an existing warning/critical event.');
 assert.strictEqual(getTopDispatchAdvisory([{ ...validEvent, severity: 'info' }]), null, 'Info-only data should not invent an advisory.');
+
+const advisoryCoordinateMessage = [
+  'Recovery assist requested from current GPS position.',
+  'GPS 38.78069, -121.20755',
+  'ECS team coordination only. This does not contact emergency services.',
+].join('\n');
+const advisoryCoordinateTokens = tokenizeDispatchAdvisoryCoordinateLinks(advisoryCoordinateMessage);
+const advisoryCoordinateLinks = advisoryCoordinateTokens.filter((token) => token.type === 'coordinate');
+assert.strictEqual(advisoryCoordinateLinks.length, 1, 'Dispatch advisory should expose GPS coordinates as a single link token.');
+assert.deepStrictEqual(
+  advisoryCoordinateLinks[0].coordinate,
+  { latitude: 38.78069, longitude: -121.20755 },
+  'Dispatch advisory coordinate links should preserve precise lat/lon values.',
+);
+assert.strictEqual(
+  advisoryCoordinateLinks[0].text,
+  '38.78069, -121.20755',
+  'Dispatch advisory should underline only the coordinate pair, not the GPS label.',
+);
+assert.strictEqual(
+  advisoryCoordinateTokens.map((token) => token.text).join(''),
+  advisoryCoordinateMessage,
+  'Dispatch advisory coordinate tokenization should preserve the full banner text.',
+);
+assert.strictEqual(
+  tokenizeDispatchAdvisoryCoordinateLinks('Invalid GPS 238.00000, -921.00000').some((token) => token.type === 'coordinate'),
+  false,
+  'Dispatch advisory should not link invalid coordinate pairs.',
+);
 
 const originalLogForAggregator = console.log;
 console.log = () => {};
@@ -513,6 +546,19 @@ assert.ok(
     convoyPanelSource.includes('<InactiveConvoySurface'),
   'Dispatch convoy panel should preserve the active map and only swap to standby presentation when no convoy is active.',
 );
+assert.ok(commandCenterSource.includes('tokenizeDispatchAdvisoryCoordinateLinks'), 'Dispatch advisory banner should tokenize GPS coordinates into linkable spans.');
+assert.ok(commandCenterSource.includes('handleDispatchAdvisoryCoordinatePress'), 'Dispatch advisory coordinate links should have a click handler.');
+assert.ok(commandCenterSource.includes('setDispatchConvoyMapFocusCoordinate'), 'Dispatch advisory coordinate links should focus the Dispatch convoy map when active.');
+assert.ok(commandCenterSource.includes('saveNavigationHandoffPayload(payload)'), 'Dispatch advisory coordinate fallback should stage a Navigate handoff.');
+assert.ok(commandCenterSource.includes('accessibilityRole="link"'), 'Dispatch advisory GPS coordinate should render as an accessible link.');
+assert.ok(commandCenterSource.includes('advisoryCoordinateLink'), 'Dispatch advisory GPS coordinate should use a distinct underline/link style.');
+assert.ok(!/numberOfLines=\{isLandscapeDispatch \? 2 : 3\}>\{advisory\.message\}/.test(commandCenterSource), 'Dispatch advisory should not truncate the third line with a hard numberOfLines cap.');
+assert.ok(convoyPanelSource.includes('advisoryFocusCoordinate'), 'Dispatch convoy panel should accept advisory map focus coordinates.');
+assert.ok(convoyMapSource.includes('advisoryFocusCoordinate'), 'Convoy command map should accept advisory map focus coordinates.');
+assert.ok(convoyMapSource.includes('convoy-advisory-focus-source'), 'Convoy command map should render the advisory focus marker source.');
+assert.ok(convoyPanelSource.includes('shouldShowIntegratedEmergencyFeed'), 'Emergency pings should be integrated into the Dispatch Convoy Command container.');
+assert.ok(convoyPanelSource.includes('styles.emergencyInlineRail'), 'Emergency pings should use a compact inline rail instead of a separate bottom panel.');
+assert.ok(!convoyPanelSource.includes('{shouldShowEmergencyFeed ? ('), 'Emergency pings should no longer render as a separate bottom block.');
 
 for (const liveImport of [
   'getSharedOperationalWeatherState',

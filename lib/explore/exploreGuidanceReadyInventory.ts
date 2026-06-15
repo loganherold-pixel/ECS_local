@@ -14,6 +14,7 @@ import {
   type ExploreWizardRouteSourceKind,
   type NormalizeExploreWizardCandidatesInput,
 } from './exploreTripBuilderWizard';
+import { normalizeNavigationGuidanceGeometry } from '../navigationCatalogGuidanceGeometry';
 
 export type ExploreReadyRouteEligibilityResult = {
   eligible: boolean;
@@ -79,20 +80,55 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function hasLineStringGeometry(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    if (value.length < 2) return false;
-    const first = value[0];
-    return Array.isArray(first)
-      ? Number.isFinite(Number(first[0])) && Number.isFinite(Number(first[1]))
-      : record(first).lat != null || record(first).latitude != null;
-  }
+function routeAllowsLoopGuidance(route: ExpeditionOpportunity): boolean {
+  const routeRecord = record(route);
+  const metadata = metadataRecord(route);
+  const catalogVerification = record(metadata.catalogVerification);
+  const values = [
+    routeRecord.routeType,
+    routeRecord.route_type,
+    metadata.routeType,
+    metadata.route_type,
+    metadata.trailPackRouteType,
+    metadata.trail_pack_route_type,
+    metadata.routeShape,
+    metadata.route_shape,
+    metadata.guidanceRouteShape,
+    metadata.guidance_route_shape,
+    catalogVerification.routeType,
+    catalogVerification.route_type,
+  ];
+  const hasLoopType = values.some((entry) => {
+    const normalized = String(entry ?? '').trim().toLowerCase();
+    return normalized === 'loop' || normalized === 'closed_loop' || normalized === 'loop_route';
+  });
+  return hasLoopType ||
+    routeRecord.allowLoopGuidance === true ||
+    metadata.allowLoopGuidance === true ||
+    catalogVerification.allowLoopGuidance === true;
+}
 
-  const geometry = record(value);
-  const coordinates = Array.isArray(geometry.coordinates) ? geometry.coordinates : null;
-  if (geometry.type === 'LineString' && coordinates && coordinates.length > 1) return true;
-  if (Array.isArray(geometry.points) && geometry.points.length > 1) return true;
-  return false;
+function hasReadyNormalizedGeometry(route: ExpeditionOpportunity): boolean {
+  const routeRecord = record(route);
+  const metadata = metadataRecord(route);
+  const allowLoop = routeAllowsLoopGuidance(route);
+  const fields = [
+    routeRecord.routeGeometry,
+    routeRecord.route_geometry,
+    routeRecord.trailGeometry,
+    routeRecord.trail_geometry,
+    routeRecord.geometry,
+    metadata.routeGeometry,
+    metadata.route_geometry,
+    metadata.trailGeometry,
+    metadata.trail_geometry,
+    metadata.geometry,
+  ];
+
+  return fields.some((field) => {
+    const normalized = normalizeNavigationGuidanceGeometry(field, { allowLoop });
+    return normalized.status === 'ready' && normalized.points.length > 1;
+  });
 }
 
 export function hasExploreGuidanceReadyGeometry(
@@ -124,14 +160,13 @@ export function hasExploreGuidanceReadyGeometry(
     routeGeometryMode === 'stitched' ||
     String(metadata.geometrySource ?? '').includes('stitched');
 
-  return (
-    activeGuidanceReady ||
-    stitchedOrFullGeometry ||
-    hasLineStringGeometry(routeRecord.routeGeometry) ||
-    hasLineStringGeometry(routeRecord.trailGeometry) ||
-    hasLineStringGeometry(metadata.routeGeometry) ||
-    hasLineStringGeometry(metadata.trailGeometry)
-  );
+  const activeGuidanceStatus = String(activeGuidance.status ?? '').trim().toLowerCase();
+  if (activeGuidanceStatus === 'preview_only' || activeGuidanceStatus === 'unavailable') return false;
+  if (routeGeometryMode === 'preview_simplified' || routeGeometryMode === 'omitted') return false;
+  if (!activeGuidanceReady && !stitchedOrFullGeometry) {
+    return hasReadyNormalizedGeometry(route);
+  }
+  return hasReadyNormalizedGeometry(route);
 }
 
 function hasPublicExplorerState(route: ExpeditionOpportunity): boolean {

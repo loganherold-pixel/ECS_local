@@ -73,6 +73,20 @@ export default function LoadoutConsequencePreviewPanel({
   onSuggestionAccepted,
   onSuggestionAction,
 }: Props) {
+  const sourceWarnings = preview?.sourceWarnings.slice(0, compact ? 2 : 4) ?? [];
+  const suggestions = preview?.suggestions.slice(0, compact ? 2 : 3) ?? [];
+  const warningSignature = sourceWarnings.map((warning) => `${warning.id}:${warning.message}`).join('|');
+  const [acknowledgedWarningSignature, setAcknowledgedWarningSignature] = React.useState<string | null>(null);
+  const [selectedSuggestionId, setSelectedSuggestionId] = React.useState<string | null>(null);
+  const warningsAcknowledged = sourceWarnings.length > 0 && acknowledgedWarningSignature === warningSignature;
+  const selectedSuggestion = suggestions.find((suggestion) => suggestion.id === selectedSuggestionId) ?? null;
+
+  const handleViewSuggestion = (suggestion: LoadoutConsequenceSuggestion) => {
+    if (!preview) return;
+    setSelectedSuggestionId((current) => current === suggestion.id ? null : suggestion.id);
+    emitSuggestionEvent('suggestion_viewed', preview, suggestion);
+  };
+
   if (!preview) {
     return (
       <ECSPanel variant="compact" style={styles.panel}>
@@ -84,9 +98,6 @@ export default function LoadoutConsequencePreviewPanel({
       </ECSPanel>
     );
   }
-
-  const sourceWarnings = preview.sourceWarnings.slice(0, compact ? 2 : 4);
-  const suggestions = preview.suggestions.slice(0, compact ? 2 : 3);
 
   return (
     <ECSPanel variant={preview.availability === 'available' ? 'secondary' : 'warning'} style={styles.panel}>
@@ -129,19 +140,33 @@ export default function LoadoutConsequencePreviewPanel({
 
       {sourceWarnings.length > 0 ? (
         <View style={styles.warningStack}>
-          {sourceWarnings.map((warning) => (
-            <View key={warning.id} style={styles.warningRow}>
-          <ECSBadge label={(warning.sourceKind ?? warning.severity).toUpperCase()} tone={warning.severity === 'critical' ? 'unavailable' : 'warning'} compact />
-              <Text style={styles.warningText} numberOfLines={2}>{warning.message}</Text>
+          {warningsAcknowledged ? (
+            <View style={styles.acknowledgedRow}>
+              <ECSBadge label="ACKNOWLEDGED" tone="ready" compact />
+              <Text style={styles.warningText} numberOfLines={2}>
+                Source warnings acknowledged for this staged preview. No loadout changes were made.
+              </Text>
             </View>
-          ))}
-          <ECSButton
-            label="Acknowledge"
-            icon="checkmark-circle-outline"
-            variant="tertiary"
-            size="compact"
-            onPress={() => emitFleetTelemetryEvent('warning_acknowledged', { vehicleId: preview.vehicleId, meta: { warningCount: preview.sourceWarnings.length } })}
-          />
+          ) : (
+            <>
+              {sourceWarnings.map((warning) => (
+                <View key={warning.id} style={styles.warningRow}>
+                  <ECSBadge label={(warning.sourceKind ?? warning.severity).toUpperCase()} tone={warning.severity === 'critical' ? 'unavailable' : 'warning'} compact />
+                  <Text style={styles.warningText} numberOfLines={2}>{warning.message}</Text>
+                </View>
+              ))}
+              <ECSButton
+                label="Acknowledge"
+                icon="checkmark-circle-outline"
+                variant="tertiary"
+                size="compact"
+                onPress={() => {
+                  setAcknowledgedWarningSignature(warningSignature);
+                  emitFleetTelemetryEvent('warning_acknowledged', { vehicleId: preview.vehicleId, meta: { warningCount: preview.sourceWarnings.length } });
+                }}
+              />
+            </>
+          )}
         </View>
       ) : null}
 
@@ -162,7 +187,7 @@ export default function LoadoutConsequencePreviewPanel({
                   label="View"
                   variant="tertiary"
                   size="compact"
-                  onPress={() => emitSuggestionEvent('suggestion_viewed', preview, suggestion)}
+                  onPress={() => handleViewSuggestion(suggestion)}
                 />
                 {suggestion.actions.slice(0, 1).map((action) => (
                   <ECSButton
@@ -187,6 +212,18 @@ export default function LoadoutConsequencePreviewPanel({
               </View>
             </View>
           ))}
+          {selectedSuggestion ? (
+            <View style={styles.suggestionDetail}>
+              <ECSBadge label="VIEWING" tone="info" compact />
+              <View style={styles.suggestionDetailCopy}>
+                <Text style={styles.suggestionTitle} numberOfLines={1}>{selectedSuggestion.itemName}</Text>
+                <Text style={styles.suggestionReason} numberOfLines={3}>{selectedSuggestion.reason}</Text>
+                <Text style={styles.traceHint} numberOfLines={2}>
+                  Actions: {selectedSuggestion.actions.map((action) => action.label).join(' / ')}
+                </Text>
+              </View>
+            </View>
+          ) : null}
         </View>
       ) : (
         <Text style={styles.helper}>No remove or relocate suggestions from the available staged load.</Text>
@@ -264,6 +301,17 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 7,
   },
+  acknowledgedRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    backgroundColor: ECS_SURFACE.background.compact,
+  },
   warningText: {
     ...ECS_TEXT.helper,
     color: TACTICAL.textMuted,
@@ -313,5 +361,21 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'flex-end',
     gap: 6,
+  },
+  suggestionDetail: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    backgroundColor: ECS_SURFACE.background.compact,
+  },
+  suggestionDetailCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
   },
 });

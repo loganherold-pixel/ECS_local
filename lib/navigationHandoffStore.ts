@@ -126,6 +126,44 @@ function readRouteMetadata(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function isExplicitLoopRoute(value: unknown): boolean {
+  const route = readRouteMetadata(value) ?? {};
+  const metadata = readRouteMetadata(route.routeMetadata) ?? readRouteMetadata(route.route_metadata) ?? {};
+  const catalogVerification =
+    readRouteMetadata(route.catalogVerification) ??
+    readRouteMetadata(metadata.catalogVerification) ??
+    readRouteMetadata(metadata.catalog_verification) ??
+    {};
+  const loopFlagValues = [
+    route.allowLoopGuidance,
+    route.allow_loop_guidance,
+    metadata.allowLoopGuidance,
+    metadata.allow_loop_guidance,
+    catalogVerification.allowLoopGuidance,
+    catalogVerification.allow_loop_guidance,
+  ];
+  if (loopFlagValues.some((entry) => entry === true)) return true;
+
+  const routeTypeValues = [
+    route.routeType,
+    route.route_type,
+    metadata.routeType,
+    metadata.route_type,
+    metadata.trailPackRouteType,
+    metadata.trail_pack_route_type,
+    metadata.routeShape,
+    metadata.route_shape,
+    metadata.guidanceRouteShape,
+    metadata.guidance_route_shape,
+    catalogVerification.routeType,
+    catalogVerification.route_type,
+  ];
+  return routeTypeValues.some((entry) => {
+    const normalized = String(entry ?? '').trim().toLowerCase();
+    return normalized === 'loop' || normalized === 'closed_loop' || normalized === 'loop_route';
+  });
+}
+
 export function getNavigationHandoffActiveGuidanceUnavailableReason(
   payload: Pick<
     NavigationHandoffPayload,
@@ -391,7 +429,7 @@ function extractTrailGeometry(value: unknown): RoadNavCoordinate[] {
 
 function extractTrailGeometryResult(
   value: unknown,
-  options: { preferredStart?: RoadNavCoordinate | null } = {},
+  options: { preferredStart?: RoadNavCoordinate | null; allowLoop?: boolean } = {},
 ): NavigationGuidanceGeometryResult {
   const empty = normalizeNavigationGuidanceGeometry(null);
   if (!value || typeof value !== 'object') return empty;
@@ -411,6 +449,7 @@ function extractTrailGeometryResult(
   for (const field of fields) {
     const geometry = normalizeNavigationGuidanceGeometry(field, {
       preferredStart: options.preferredStart ?? null,
+      allowLoop: options.allowLoop === true,
     });
     if (geometry.points.length > 1 || geometry.segments.length > 0) return geometry;
   }
@@ -595,6 +634,7 @@ export function buildExploreNavigationPayload(
   const preferredTrailStart = approachOriginCoordinate ?? declaredTrailheadCoordinate;
   const trailGeometryResult = extractTrailGeometryResult(route, {
     preferredStart: preferredTrailStart,
+    allowLoop: isExplicitLoopRoute(route),
   });
   const trailGeometry = orientTrailGeometryFromEndpoint(
     trailGeometryResult.points,

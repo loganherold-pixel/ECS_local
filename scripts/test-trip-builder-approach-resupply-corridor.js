@@ -42,6 +42,14 @@ assert.ok(
   anchors.some((anchor) => anchor.basis === 'approach_corridor'),
   'Approach resupply should search along the approach corridor before trail entry.',
 );
+assert.ok(
+  anchors.some((anchor) => anchor.basis === 'approach_corridor' && anchor.progressRatio != null && anchor.progressRatio <= 0.2),
+  'Approach resupply should sample the early/home-side corridor instead of only searching near the trailhead.',
+);
+assert.ok(
+  anchors.some((anchor) => anchor.basis === 'approach_corridor' && anchor.progressRatio != null && anchor.progressRatio >= 0.9),
+  'Approach resupply should still sample the last approach segment before trail entry.',
+);
 assert.strictEqual(
   anchors[anchors.length - 1].basis,
   'trailhead_fallback',

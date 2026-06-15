@@ -23,6 +23,7 @@ import {
   buildFleetAccessoryInstall,
   buildFleetCompartmentLoadoutItem,
   calculateFleetBuildLoadoutSummary,
+  getFleetAccessoryCatalogItem,
   groupFleetCompartmentsByZone,
   normalizeFleetBuildLoadoutState,
   readFleetBuildLoadoutState,
@@ -35,6 +36,7 @@ import {
   validateFleetCompartmentLoadoutDraft,
   type FleetAccessoryCatalogItem,
   type FleetAccessoryKnowledgeMode,
+  type FleetAccessoryLoadRating,
   type FleetAccessoryPermanence,
   type FleetBuildCompartment,
   type FleetBuildAccessoryInstall,
@@ -73,6 +75,8 @@ type AccessoryDraft = {
   knowledgeMode: FleetAccessoryKnowledgeMode;
   brandModel: string;
   installedWeightLb: string;
+  dynamicLoadLb: string;
+  staticLoadLb: string;
   mountZone: FleetLoadZone;
   permanence: FleetAccessoryPermanence;
 };
@@ -107,6 +111,10 @@ function parseWeight(value: string): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+function formatDraftWeight(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? '' : String(Math.round(value));
+}
+
 function hasHighMountedLoadRisk(summary: ReturnType<typeof calculateFleetBuildLoadoutSummary> | null): boolean {
   if (!summary) return false;
   const highMountedWeight =
@@ -121,8 +129,35 @@ function createDraft(catalog: FleetAccessoryCatalogItem, install?: FleetBuildAcc
     knowledgeMode: install?.knowledgeMode ?? 'estimate',
     brandModel: install?.brandModel ?? '',
     installedWeightLb: String(Math.round(install?.installedWeightLb ?? catalog.defaultWeightLb)),
+    dynamicLoadLb: formatDraftWeight(install?.loadRating?.dynamicLoadLb ?? catalog.defaultLoadRating?.dynamicLoadLb ?? null),
+    staticLoadLb: formatDraftWeight(install?.loadRating?.staticLoadLb ?? catalog.defaultLoadRating?.staticLoadLb ?? null),
     mountZone: install?.mountZone ?? catalog.mountZone,
     permanence: install?.permanence ?? catalog.permanence,
+  };
+}
+
+function buildDraftLoadRating(
+  catalog: FleetAccessoryCatalogItem,
+  draft: AccessoryDraft,
+): FleetAccessoryLoadRating | null {
+  const dynamicLoadLb = parseWeight(draft.dynamicLoadLb);
+  const staticLoadLb = parseWeight(draft.staticLoadLb);
+  if (dynamicLoadLb == null && staticLoadLb == null && !catalog.defaultLoadRating) return null;
+  const fallback = catalog.defaultLoadRating;
+  const source = draft.knowledgeMode === 'manual_weight'
+    ? 'user_estimate'
+    : fallback?.source ?? 'ecs_default';
+  const confidence = draft.knowledgeMode === 'known_brand_model'
+    ? Math.max(fallback?.confidence ?? 0, 88)
+    : draft.knowledgeMode === 'manual_weight'
+      ? 70
+      : fallback?.confidence ?? 66;
+  return {
+    dynamicLoadLb,
+    staticLoadLb,
+    source,
+    confidence,
+    sourceLabel: fallback?.sourceLabel ?? `${catalog.label} load rating`,
   };
 }
 
@@ -284,6 +319,10 @@ export default function FleetBuildLoadoutModal({
       permanence: catalog.permanence,
     });
     setState((current) => upsertFleetAccessoryInstall(current, install));
+    if (catalog.id === 'truck_cap_smartcap') {
+      setEditingCatalog(catalog);
+      setDraft(createDraft(catalog, install));
+    }
     emitFleetTelemetryEvent('fleet_accessory_added', {
       vehicleId: vehicle.id,
       meta: { accessoryId: install.accessoryId, weightLb: install.installedWeightLb },
@@ -327,6 +366,7 @@ export default function FleetBuildLoadoutModal({
       knowledgeMode: draft.knowledgeMode,
       brandModel: draft.brandModel,
       manualWeightLb: parseWeight(draft.installedWeightLb),
+      loadRating: buildDraftLoadRating(editingCatalog, draft),
       mountZone: toFleetLoadZone(draft.mountZone),
       permanence: draft.permanence,
     });
@@ -558,12 +598,20 @@ export default function FleetBuildLoadoutModal({
     }
 
     if (result.applicationState === 'review_only' && action.actionKind === 'open_editor') {
-      const targetItem = (state.loadoutItems ?? []).find((item) => item.id === action.targetItemIds[0]) ?? null;
+      const targetId = action.targetItemIds[0];
+      const targetItem = (state.loadoutItems ?? []).find((item) => item.id === targetId) ?? null;
       const compartment = targetItem
         ? state.compartments.find((item) => item.id === targetItem.compartmentId && item.status !== 'removed') ?? null
         : null;
       if (targetItem && compartment) {
         openLoadoutEditor(compartment, targetItem);
+      } else {
+        const targetAccessory = state.accessories.find((item) => item.id === targetId) ?? null;
+        if (targetAccessory) {
+          const catalog = getFleetAccessoryCatalogItem(targetAccessory.accessoryId);
+          setEditingCatalog(catalog);
+          setDraft(createDraft(catalog, targetAccessory));
+        }
       }
     }
 
@@ -643,6 +691,11 @@ export default function FleetBuildLoadoutModal({
                         ? `ECS estimated this at ${Math.round(install.installedWeightLb)} lb`
                         : `Default ${Math.round(catalog.defaultWeightLb)} lb`}
                     </Text>
+                    {install?.loadRating?.dynamicLoadLb != null ? (
+                      <Text style={styles.tileMeta} numberOfLines={1}>
+                        {`Dynamic ${Math.round(install.loadRating.dynamicLoadLb)} lb / Static ${Math.round(install.loadRating.staticLoadLb ?? 0)} lb`}
+                      </Text>
+                    ) : null}
                     {install ? <Text style={styles.tileMeta} numberOfLines={1}>{`${install.confidence}% confidence`}</Text> : null}
                   </ECSCard>
                 </TouchableOpacity>
@@ -707,7 +760,10 @@ export default function FleetBuildLoadoutModal({
         icon="warning-outline"
         stackBehavior="allow-stack"
         overlayClass="dialog"
-        maxWidth={520}
+        maxWidth={560}
+        maxHeightFraction={0.72}
+        scrollable
+        contentContainerStyle={styles.highMountedWarningContent}
         dismissOnBackdrop={false}
         allowSwipeDismiss={false}
         footer={
@@ -819,6 +875,43 @@ export default function FleetBuildLoadoutModal({
                 />
               </View>
             </View>
+            {editingCatalog.defaultLoadRating || draft.dynamicLoadLb || draft.staticLoadLb ? (
+              <ECSPanel variant="secondary" style={styles.ratingPanel}>
+                <View style={styles.ratingHeader}>
+                  <View>
+                    <Text style={styles.sectionTitle}>Cap Load Rating</Text>
+                    <Text style={styles.tileMeta}>
+                      Dynamic rating affects top-heavy scoring while static rating is retained for camp/load reference.
+                    </Text>
+                  </View>
+                  <ECSBadge label="DEFAULT OK" tone="info" compact />
+                </View>
+                <View style={styles.fieldGrid}>
+                  <View style={styles.field}>
+                    <Text style={styles.metricLabel}>DYNAMIC LOAD LB</Text>
+                    <TextInput
+                      value={draft.dynamicLoadLb}
+                      onChangeText={(value) => setDraft((current) => current ? ({ ...current, dynamicLoadLb: value }) : current)}
+                      keyboardType="numeric"
+                      placeholder={formatDraftWeight(editingCatalog.defaultLoadRating?.dynamicLoadLb ?? null) || '330'}
+                      placeholderTextColor={TACTICAL.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={styles.field}>
+                    <Text style={styles.metricLabel}>STATIC LOAD LB</Text>
+                    <TextInput
+                      value={draft.staticLoadLb}
+                      onChangeText={(value) => setDraft((current) => current ? ({ ...current, staticLoadLb: value }) : current)}
+                      keyboardType="numeric"
+                      placeholder={formatDraftWeight(editingCatalog.defaultLoadRating?.staticLoadLb ?? null) || '770'}
+                      placeholderTextColor={TACTICAL.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+              </ECSPanel>
+            ) : null}
             <ECSPanel variant="warning" style={styles.estimatePanel}>
               <Text style={styles.estimateText}>
                 ECS estimated this at {Math.round(parseWeight(draft.installedWeightLb) ?? editingCatalog.defaultWeightLb)} lb. Confidence improves when you add brand/model or a verified weight.
@@ -1085,7 +1178,11 @@ const styles = StyleSheet.create({
     lineHeight: 15,
   },
   highMountedWarningPanel: {
+    gap: 12,
+  },
+  highMountedWarningContent: {
     gap: 10,
+    paddingBottom: 18,
   },
   warningHeaderRow: {
     flexDirection: 'row',
@@ -1104,7 +1201,7 @@ const styles = StyleSheet.create({
   warningCopy: {
     ...ECS_TEXT.body,
     color: TACTICAL.textMuted,
-    lineHeight: 18,
+    lineHeight: 20,
   },
   optionGrid: {
     flexDirection: 'row',
@@ -1356,6 +1453,15 @@ const styles = StyleSheet.create({
   },
   estimatePanel: {
     gap: 4,
+  },
+  ratingPanel: {
+    gap: 10,
+  },
+  ratingHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
   },
   estimateText: {
     ...ECS_TEXT.body,

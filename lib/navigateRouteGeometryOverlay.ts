@@ -3,6 +3,7 @@ import type { RouteSegmentSourceMetadata } from './map/dispersedCampingSegmentBu
 
 export const ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING =
   'ECS route geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.';
+export const ROUTE_GEOMETRY_OVERLAY_COLOR = '#F2C24D';
 
 export type RouteGeometryOverlaySourceKind =
   | 'route_catalog'
@@ -220,12 +221,8 @@ function firstSourceRecordLabel(record: Record<string, unknown>): string | null 
   return null;
 }
 
-function sourceColor(sourceKind: RouteGeometryOverlaySourceKind, dataState: RouteGeometryOverlayDataState): string {
-  if (dataState === 'stale' || dataState === 'fixture' || dataState === 'unknown') return '#7D8C91';
-  if (sourceKind === 'route_catalog' || sourceKind === 'trail_pack' || sourceKind === 'explore_route') {
-    return '#65D4FF';
-  }
-  return '#65C97A';
+function sourceColor(_sourceKind: RouteGeometryOverlaySourceKind, _dataState: RouteGeometryOverlayDataState): string {
+  return ROUTE_GEOMETRY_OVERLAY_COLOR;
 }
 
 function normalizeWarnings(input: unknown): string[] {

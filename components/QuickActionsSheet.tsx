@@ -774,6 +774,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
       activeOpacity={0.78}
       disabled={item.disabled || busy}
     >
+      <View style={[styles.quickActionTileAccent, { backgroundColor: item.disabled ? ECS.muted : item.color }]} />
       <View style={[styles.tileIconWrap, fieldUtilityIconSurface(item.color)]}>
         <Ionicons name={item.icon as any} size={16} color={item.disabled ? ECS.muted : item.color} />
       </View>
@@ -800,24 +801,45 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
 
   const renderMainPanel = () => (
     <View style={styles.mainPanel}>
-      <View style={styles.summaryCard}>
-        <Text style={styles.summaryEyebrow}>ACTION STACK</Text>
-        <Text style={styles.summaryTitle}>Operational shortcuts</Text>
-        <Text style={styles.summaryText} numberOfLines={2}>
-          {expeditionState === 'active' || expeditionState === 'paused'
-            ? 'Fast field controls stay aligned with the current ECS session context.'
-            : 'Fast field controls stay available even when no route is active.'}
-        </Text>
+      <View style={styles.fieldUtilitiesCommandHeader}>
+        <View style={styles.fieldUtilitiesHeaderRail} />
+        <View style={styles.fieldUtilitiesHeaderIcon}>
+          <Ionicons name="flash-outline" size={18} color={TACTICAL.amber} />
+        </View>
+        <View style={styles.fieldUtilitiesHeaderCopy}>
+          <Text style={styles.summaryEyebrow}>ACTION STACK</Text>
+          <Text style={styles.summaryTitle}>Operational shortcuts</Text>
+          <Text style={styles.summaryText} numberOfLines={2}>
+            {expeditionState === 'active' || expeditionState === 'paused'
+              ? 'Fast field controls stay aligned with the current ECS session context.'
+              : 'Fast field controls stay available even when no route is active.'}
+          </Text>
+        </View>
+        <View style={styles.fieldUtilitiesStatusColumn}>
+          <View style={styles.fieldUtilitiesStatusPill}>
+            <Text style={styles.fieldUtilitiesStatusText}>LOCAL READY</Text>
+          </View>
+          <View style={styles.fieldUtilitiesStatusPill}>
+            <Text style={styles.fieldUtilitiesStatusText}>6 ACTIONS</Text>
+          </View>
+        </View>
       </View>
 
       <View style={styles.availableActionsSection}>
-        <Text style={styles.sectionLabel}>AVAILABLE ACTIONS</Text>
-        <View style={styles.tileGrid}>
-          {fieldUtilityActionColumns.map((column, columnIndex) => (
-            <View key={`field-utilities-actions-${columnIndex}`} style={styles.tileColumn}>
-              {column.map(renderQuickActionTile)}
+        <View style={styles.fieldUtilitiesActionDeck}>
+          <View style={styles.fieldUtilitiesDeckHeader}>
+            <Text style={styles.sectionLabel}>AVAILABLE ACTIONS</Text>
+            <View style={styles.fieldUtilitiesDeckBadge}>
+              <Text style={styles.fieldUtilitiesDeckBadgeText}>READY SET</Text>
             </View>
-          ))}
+          </View>
+          <View style={styles.tileGrid}>
+            {fieldUtilityActionColumns.map((column, columnIndex) => (
+              <View key={`field-utilities-actions-${columnIndex}`} style={styles.tileColumn}>
+                {column.map(renderQuickActionTile)}
+              </View>
+            ))}
+          </View>
         </View>
       </View>
 
@@ -1422,17 +1444,65 @@ const styles = StyleSheet.create({
   mainPanel: {
     flex: 1,
     minHeight: 0,
-    gap: 6,
+    gap: 8,
     justifyContent: 'flex-start',
   },
-  summaryCard: {
-    borderRadius: 12,
+  fieldUtilitiesCommandHeader: {
+    minHeight: 78,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: ECS_SURFACE.border.selected,
     backgroundColor: ECS_SURFACE.background.selected,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    overflow: 'hidden',
+  },
+  fieldUtilitiesHeaderRail: {
+    width: 3,
+    alignSelf: 'stretch',
+    borderRadius: 999,
+    backgroundColor: TACTICAL.amber,
+    opacity: 0.9,
+  },
+  fieldUtilitiesHeaderIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.36)',
+    backgroundColor: 'rgba(196,138,44,0.10)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fieldUtilitiesHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
     gap: 3,
+  },
+  fieldUtilitiesStatusColumn: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  fieldUtilitiesStatusPill: {
+    minHeight: 22,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.28)',
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fieldUtilitiesStatusText: {
+    fontSize: 6.8,
+    lineHeight: 8,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 0.8,
   },
   summaryEyebrow: {
     fontSize: 7,
@@ -1441,7 +1511,8 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   summaryTitle: {
-    fontSize: 11,
+    fontSize: 12,
+    lineHeight: 15,
     fontWeight: '900',
     color: TACTICAL.text,
     letterSpacing: 0.5,
@@ -1453,14 +1524,47 @@ const styles = StyleSheet.create({
     letterSpacing: 1.8,
   },
   summaryText: {
-    fontSize: 8,
-    lineHeight: 11,
+    fontSize: 8.4,
+    lineHeight: 12,
     color: TACTICAL.textMuted,
   },
   availableActionsSection: {
     flex: 1,
     minHeight: 0,
-    gap: 6,
+  },
+  fieldUtilitiesActionDeck: {
+    flex: 1,
+    minHeight: 0,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.default,
+    backgroundColor: ECS_SURFACE.background.compact,
+    padding: 8,
+    gap: 7,
+  },
+  fieldUtilitiesDeckHeader: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  fieldUtilitiesDeckBadge: {
+    minHeight: 20,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fieldUtilitiesDeckBadgeText: {
+    fontSize: 6.6,
+    lineHeight: 8,
+    fontWeight: '900',
+    color: TACTICAL.textMuted,
+    letterSpacing: 0.8,
   },
   tileGrid: {
     flex: 1,
@@ -1468,12 +1572,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     justifyContent: 'space-between',
-    gap: 5,
+    gap: 7,
   },
   tileColumn: {
     flex: 1,
     minHeight: 0,
-    gap: 4,
+    gap: 6,
   },
   tile: {
     width: '23.5%',
@@ -1498,9 +1602,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
     paddingVertical: 4,
     gap: 5,
+    overflow: 'hidden',
+  },
+  quickActionTileAccent: {
+    width: 3,
+    alignSelf: 'stretch',
+    borderRadius: 999,
+    opacity: 0.85,
   },
   quickActionTileCopy: {
     flex: 1,
@@ -1511,16 +1622,16 @@ const styles = StyleSheet.create({
   },
   quickActionTileLabel: {
     textAlign: 'left',
-    fontSize: 8,
-    lineHeight: 9,
-    letterSpacing: 0.2,
+    fontSize: 9.6,
+    lineHeight: 12,
+    letterSpacing: 0.35,
   },
   quickActionTileSubLabel: {
     minHeight: 0,
     textAlign: 'left',
-    fontSize: 6.6,
-    lineHeight: 8,
-    letterSpacing: 0.15,
+    fontSize: 7.4,
+    lineHeight: 9,
+    letterSpacing: 0.2,
   },
   quickActionTileBadge: {
     marginTop: 0,
@@ -1562,9 +1673,9 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   tileIconWrap: {
-    width: 24,
-    height: 24,
-    borderRadius: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',

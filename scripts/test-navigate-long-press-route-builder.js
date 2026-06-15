@@ -54,6 +54,24 @@ assert(
   'Point info should preserve routeable feature confidence.',
 );
 
+const renderedRoadContext = actions.buildNavigateLongPressContext({
+  coordinate: { latitude: 38.0007, longitude: -110.0007 },
+  routeableFeature: {
+    kind: 'road',
+    name: 'Rendered Forest Road',
+    sourceLabel: 'Visible road geometry',
+    confidence: 'map_rendered',
+    dataState: 'live',
+  },
+  hasGpsFix: true,
+  canBuildRoute: true,
+});
+assert.strictEqual(
+  renderedRoadContext.actions.navigate_here.enabled,
+  true,
+  'Navigate Here should be enabled on explicit rendered road/trail long-press context.',
+);
+
 const wildernessContext = actions.buildNavigateLongPressContext({
   coordinate: { latitude: 39, longitude: -111 },
   routeableFeature: null,

@@ -2533,6 +2533,15 @@ function makeMapHtml(
       var routeBuilderLastSnapSource = null;
       var routeBuilderPointerCount = 0;
       var routeBuilderSuppressClickUntil = 0;
+      var longPressSuppressClickUntil = 0;
+      var longPressTouchTimer = null;
+      var longPressTouchStartPoint = null;
+      var longPressPointerTimer = null;
+      var longPressPointerStartPoint = null;
+      var longPressPointerId = null;
+      var longPressLastSentAt = 0;
+      var LONG_PRESS_TOUCH_DELAY_MS = 520;
+      var LONG_PRESS_TOUCH_MOVE_CANCEL_PX = 12;
       var routeBuilderLastGoodTracePoint = null;
       var routeBuilderFreeDrawMode = false;
       var routeBuilderGestureStartedAt = 0;
@@ -2694,9 +2703,9 @@ function makeMapHtml(
               'line-join': 'round'
             },
             paint: {
-              'line-color': ['get', 'color'],
-              'line-width': 2.75,
-              'line-opacity': 0.76
+              'line-color': '#F2C24D',
+              'line-width': 4.25,
+              'line-opacity': 0.9
             }
           }, 'segment-layer');
         }
@@ -2716,8 +2725,8 @@ function makeMapHtml(
               'line-join': 'round'
             },
             paint: {
-              'line-color': ['get', 'color'],
-              'line-width': 5.5,
+              'line-color': '#F2C24D',
+              'line-width': 6.25,
               'line-opacity': 0.98,
               'line-blur': 0.2
             }
@@ -6153,6 +6162,42 @@ function makeMapHtml(
           }, 90);
         });
 
+        function buildRenderedRouteableLongPressPayloadAtPoint(point, lngLat) {
+          if (!map || !point || !lngLat) return null;
+          try {
+            var radius = 22;
+            var features = map.queryRenderedFeatures([
+              [point.x - radius, point.y - radius],
+              [point.x + radius, point.y + radius]
+            ]) || [];
+            for (var i = 0; i < Math.min(features.length, 80); i += 1) {
+              var feature = features[i];
+              if (!isRouteBuilderRouteableFeature(feature)) continue;
+              var snapSource = classifyRouteBuilderSnapSource(feature);
+              var label = sourceLabelForDispersedRouteFeature(feature);
+              return {
+                kind: 'rendered_routeable_feature',
+                id: feature && feature.id != null ? String(feature.id) : null,
+                name: label,
+                sourceLabel:
+                  snapSource === 'trail'
+                    ? 'Visible trail geometry'
+                    : snapSource === 'road'
+                      ? 'Visible road geometry'
+                      : 'Visible routeable geometry',
+                confidence: 'map_rendered',
+                dataState: 'live',
+                accessLabel: 'Unknown - verify posted rules and closures locally.',
+                category: snapSource,
+                categoryLabel: snapSource,
+                latitude: lngLat.lat,
+                longitude: lngLat.lng
+              };
+            }
+          } catch (err) {}
+          return null;
+        }
+
         function buildRouteableFeaturePayloadAtPoint(point, lngLat) {
           try {
             var routeGeometryFeature = findRouteGeometrySegmentFeatureAtPoint(point);
@@ -6192,18 +6237,209 @@ function makeMapHtml(
               }
             }
           } catch (err) {}
-          return null;
+          return buildRenderedRouteableLongPressPayloadAtPoint(point, lngLat);
+        }
+
+        function sendLongPressPayload(point, lngLat) {
+          if (!point || !lngLat) return;
+          var now = Date.now();
+          if (now - longPressLastSentAt < 300) return;
+          longPressLastSentAt = now;
+          send('longPress', {
+            latitude: lngLat.lat,
+            longitude: lngLat.lng,
+            routeableFeature: buildRouteableFeaturePayloadAtPoint(point, lngLat)
+          });
+        }
+
+        function clearTouchLongPressTimer() {
+          if (longPressTouchTimer) {
+            clearTimeout(longPressTouchTimer);
+            longPressTouchTimer = null;
+          }
+        }
+
+        function clearPointerLongPressTimer() {
+          if (longPressPointerTimer) {
+            clearTimeout(longPressPointerTimer);
+            longPressPointerTimer = null;
+          }
+        }
+
+        function getLongPressEventTargets() {
+          var canvas = map && map.getCanvas ? map.getCanvas() : null;
+          var container = map && map.getCanvasContainer ? map.getCanvasContainer() : null;
+          var targets = [];
+          function addTarget(target) {
+            if (target && target.addEventListener && targets.indexOf(target) === -1) {
+              targets.push(target);
+            }
+          }
+          addTarget(container);
+          addTarget(canvas);
+          addTarget(document);
+          return targets;
+        }
+
+        function addLongPressEventListener(target, type, handler) {
+          try {
+            target.addEventListener(type, handler, { passive: true, capture: true });
+          } catch (err) {
+            target.addEventListener(type, handler, true);
+          }
+        }
+
+        function pointerPointFromEvent(event) {
+          var canvas = map && map.getCanvas ? map.getCanvas() : null;
+          if (!event || !canvas || !canvas.getBoundingClientRect) return null;
+          var rect = canvas.getBoundingClientRect();
+          return {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top
+          };
+        }
+
+        function installPointerLongPressMenuHandler() {
+          var targets = getLongPressEventTargets();
+          if (!targets.length || typeof window.PointerEvent === 'undefined') return;
+
+          var onPointerDown = function(event) {
+            if (routeBuilderActive) return;
+            if (event && event.pointerType === 'mouse' && event.button !== 0) return;
+            clearPointerLongPressTimer();
+            longPressPointerId = event ? event.pointerId : null;
+            var point = pointerPointFromEvent(event);
+            if (!point) {
+              longPressPointerStartPoint = null;
+              return;
+            }
+            longPressPointerStartPoint = point;
+            longPressPointerTimer = setTimeout(function() {
+              longPressPointerTimer = null;
+              if (!longPressPointerStartPoint || !map || !map.unproject || routeBuilderActive) return;
+              var lngLat = map.unproject(longPressPointerStartPoint);
+              longPressSuppressClickUntil = Date.now() + 650;
+              sendLongPressPayload(longPressPointerStartPoint, lngLat);
+            }, LONG_PRESS_TOUCH_DELAY_MS);
+          };
+
+          var onPointerMove = function(event) {
+            if (!longPressPointerStartPoint) return;
+            if (longPressPointerId !== null && event && event.pointerId !== longPressPointerId) return;
+            var point = pointerPointFromEvent(event);
+            if (!point) {
+              clearPointerLongPressTimer();
+              longPressPointerStartPoint = null;
+              longPressPointerId = null;
+              return;
+            }
+            var dx = point.x - longPressPointerStartPoint.x;
+            var dy = point.y - longPressPointerStartPoint.y;
+            if (Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_TOUCH_MOVE_CANCEL_PX) {
+              clearPointerLongPressTimer();
+              longPressPointerStartPoint = null;
+              longPressPointerId = null;
+            }
+          };
+
+          var onPointerUp = function(event) {
+            if (longPressPointerId !== null && event && event.pointerId !== longPressPointerId) return;
+            clearPointerLongPressTimer();
+            longPressPointerStartPoint = null;
+            longPressPointerId = null;
+          };
+
+          var onPointerCancel = function(event) {
+            if (longPressPointerId !== null && event && event.pointerId !== longPressPointerId) return;
+            clearPointerLongPressTimer();
+            longPressPointerStartPoint = null;
+            longPressPointerId = null;
+          };
+
+          for (var i = 0; i < targets.length; i += 1) {
+            addLongPressEventListener(targets[i], 'pointerdown', onPointerDown);
+            addLongPressEventListener(targets[i], 'pointermove', onPointerMove);
+            addLongPressEventListener(targets[i], 'pointerup', onPointerUp);
+            addLongPressEventListener(targets[i], 'pointercancel', onPointerCancel);
+          }
+        }
+
+        function touchPointFromEvent(event) {
+          if (!event || !event.touches || event.touches.length !== 1) return null;
+          var touch = event.touches[0];
+          var canvas = map && map.getCanvas ? map.getCanvas() : null;
+          if (!touch || !canvas || !canvas.getBoundingClientRect) return null;
+          var rect = canvas.getBoundingClientRect();
+          return {
+            x: touch.clientX - rect.left,
+            y: touch.clientY - rect.top
+          };
+        }
+
+        function installTouchLongPressMenuHandler() {
+          var targets = getLongPressEventTargets();
+          if (!targets.length) return;
+
+          var onTouchStart = function(event) {
+            clearTouchLongPressTimer();
+            var point = touchPointFromEvent(event);
+            if (!point) {
+              longPressTouchStartPoint = null;
+              return;
+            }
+            longPressTouchStartPoint = point;
+            longPressTouchTimer = setTimeout(function() {
+              longPressTouchTimer = null;
+              if (!longPressTouchStartPoint || !map || !map.unproject) return;
+              var lngLat = map.unproject(longPressTouchStartPoint);
+              longPressSuppressClickUntil = Date.now() + 650;
+              sendLongPressPayload(longPressTouchStartPoint, lngLat);
+            }, LONG_PRESS_TOUCH_DELAY_MS);
+          };
+
+          var onTouchMove = function(event) {
+            if (!longPressTouchStartPoint) return;
+            var point = touchPointFromEvent(event);
+            if (!point) {
+              clearTouchLongPressTimer();
+              longPressTouchStartPoint = null;
+              return;
+            }
+            var dx = point.x - longPressTouchStartPoint.x;
+            var dy = point.y - longPressTouchStartPoint.y;
+            if (Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_TOUCH_MOVE_CANCEL_PX) {
+              clearTouchLongPressTimer();
+              longPressTouchStartPoint = null;
+            }
+          };
+
+          var onTouchEnd = function() {
+            clearTouchLongPressTimer();
+            longPressTouchStartPoint = null;
+          };
+
+          var onTouchCancel = function() {
+            clearTouchLongPressTimer();
+            longPressTouchStartPoint = null;
+          };
+
+          for (var i = 0; i < targets.length; i += 1) {
+            addLongPressEventListener(targets[i], 'touchstart', onTouchStart);
+            addLongPressEventListener(targets[i], 'touchmove', onTouchMove);
+            addLongPressEventListener(targets[i], 'touchend', onTouchEnd);
+            addLongPressEventListener(targets[i], 'touchcancel', onTouchCancel);
+          }
         }
 
         map.on('contextmenu', function(e) {
-          send('longPress', {
-            latitude: e.lngLat.lat,
-            longitude: e.lngLat.lng,
-            routeableFeature: buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat)
-          });
+          longPressSuppressClickUntil = Date.now() + 650;
+          sendLongPressPayload(e.point, e.lngLat);
         });
+        installPointerLongPressMenuHandler();
+        installTouchLongPressMenuHandler();
 
         map.on('click', function(e) {
+          if (Date.now() < longPressSuppressClickUntil) return;
           if (routeBuilderActive && Date.now() < routeBuilderSuppressClickUntil) return;
           if (Date.now() < dispersedCampingMapTapSuppressUntil) return;
           if (routeBuilderMode === 'anchor_trace') {

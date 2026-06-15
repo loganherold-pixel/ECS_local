@@ -27,6 +27,16 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 const fleet = require(domainPath);
 const preview = require(previewPath);
 
+{
+  const firstSnapshot = preview.getLoadoutConsequencePreviewSnapshot();
+  const secondSnapshot = preview.getLoadoutConsequencePreviewSnapshot();
+  assert.strictEqual(
+    secondSnapshot,
+    firstSnapshot,
+    'Command Brief external-store snapshot reads must be referentially stable between publishes.',
+  );
+}
+
 function display(title) {
   return {
     iconKey: 'pickup',
@@ -526,6 +536,32 @@ function riskAtLeast(level, expected) {
   assert.strictEqual(failedRemove.applicationState, 'failed');
   assert.strictEqual(failedRemove.telemetryEvent, 'suggestion_apply_failed');
   assert.ok(failedRemove.reason.includes('required recovery or safety'));
+
+  const acknowledgePreview = {
+    ...previewResult,
+    suggestions: [{
+      ...roofSuggestion,
+      actions: [{
+        actionId: 'ack-roof-tent',
+        suggestionId: roofSuggestion.id,
+        actionKind: 'acknowledge',
+        label: 'Acknowledge',
+        canApplyAutomatically: false,
+        targetItemIds: ['roof-tent'],
+      }],
+    }],
+  };
+  const acknowledged = preview.applyLoadoutSuggestionAction({
+    preview: acknowledgePreview,
+    actionId: 'ack-roof-tent',
+    state: initialState,
+    currentVehicleId: vehicle.id,
+    currentProfileId: 'profile-1',
+    currentLoadoutId: 'loadout-1',
+  });
+  assert.strictEqual(acknowledged.applicationState, 'review_only');
+  assert.strictEqual(acknowledged.telemetryEvent, 'suggestion_acknowledged');
+  assert.ok(acknowledged.reason.includes('acknowledged'));
 }
 
 {
@@ -630,10 +666,17 @@ function riskAtLeast(level, expected) {
   assert.ok(uiSource.includes('LoadoutConsequencePreviewPanel'), 'Fleet loadout editor must render the consequence preview panel.');
   assert.ok(uiSource.includes('publishLoadoutConsequencePreview'), 'Fleet loadout editor must publish latest preview for Command Brief mirroring.');
   assert.ok(uiSource.includes('applyLoadoutSuggestionAction'), 'Fleet loadout editor must use safe suggestion application helper.');
+  assert.ok(uiSource.includes('getFleetAccessoryCatalogItem'), 'Suggestion Open editor should resolve accessory catalog entries.');
+  assert.ok(uiSource.includes('targetAccessory'), 'Suggestion Open editor should open accessory editors when a target item is an accessory.');
+  assert.ok(uiSource.includes('defaultLoadRating') && uiSource.includes('dynamicLoadLb') && uiSource.includes('staticLoadLb'), 'SmartCap accessory editor should expose default dynamic/static load ratings.');
+  assert.ok(uiSource.includes("catalog.id === 'truck_cap_smartcap'") && uiSource.includes('setEditingCatalog(catalog)'), 'Selecting SmartCap should immediately open the rating editor with defaults.');
   assert.ok(uiSource.includes('suggestion_applied'), 'Fleet loadout editor must emit applied telemetry only after mutation.');
   assert.ok(uiSource.includes('suggestion_apply_failed'), 'Fleet loadout editor must emit failure telemetry when mutation is rejected.');
   assert.ok(uiSource.includes('command_brief_mirror_invalidated'), 'Fleet loadout editor must emit mirror invalidation telemetry.');
   assert.ok(panelSource.includes('sourceWarnings'), 'Preview panel must render source/confidence warnings.');
+  assert.ok(panelSource.includes('acknowledgedWarningSignature'), 'Warning acknowledgement should update visible panel state instead of telemetry only.');
+  assert.ok(panelSource.includes('selectedSuggestionId'), 'Suggestion View should select a visible detail state instead of telemetry only.');
+  assert.ok(panelSource.includes('handleViewSuggestion'), 'Suggestion View button must route through a visible view handler.');
   assert.ok(panelSource.includes('suggestion_viewed'), 'Suggestion view evidence event must be wired.');
   assert.ok(panelSource.includes('suggestion_acknowledged'), 'Review-only suggestions should acknowledge instead of accept.');
   assert.ok(!panelSource.includes('label="Accept"'), 'Review-only suggestions must not render Accept.');

@@ -736,24 +736,27 @@ function deriveTopHeavyRisk(
   routeContext: LoadoutConsequenceRouteContext | null | undefined,
 ): LoadoutConsequenceImpact {
   const highAfter = highMountedWeight(after);
+  const capacityAdjustedHighAfter = after.highMountedCapacityAdjustedWeight?.lbs ?? highAfter;
+  const dynamicRating = after.highMountedDynamicLoadRating?.lbs ?? 0;
   const heuristicRisk =
-    highAfter >= 500
+    capacityAdjustedHighAfter >= 500
       ? 'critical'
-      : highAfter >= 320
+      : capacityAdjustedHighAfter >= 320
         ? 'caution'
-        : highAfter >= 180
+        : capacityAdjustedHighAfter >= 180
           ? 'watch'
           : 'clear';
   const routeBump =
-    routeContext?.difficulty === 'hard' && highAfter >= 250
+    routeContext?.difficulty === 'hard' && capacityAdjustedHighAfter >= 250
       ? 'caution'
-      : routeContext?.difficulty === 'moderate' && highAfter >= 320
+      : routeContext?.difficulty === 'moderate' && capacityAdjustedHighAfter >= 320
         ? 'caution'
         : 'clear';
   const afterLevel = riskMax(after.topHeavyRisk, heuristicRisk, routeBump);
   const beforeLevel = riskMax(before.topHeavyRisk);
   const reasons = [
     highAfter > 0 ? `${Math.round(highAfter)} lb is carried in roof or high-bed zones.` : null,
+    dynamicRating > 0 ? `${Math.round(dynamicRating)} lb dynamic accessory rating offsets high-mounted load risk.` : null,
     routeContext?.difficulty === 'hard' ? 'Hard route context increases sensitivity to high-mounted weight.' : null,
     after.topHeavyRisk !== 'clear' ? `Fleet center-of-gravity model reports ${after.topHeavyRisk} top-heavy risk.` : null,
   ].filter((item): item is string => Boolean(item));
@@ -1080,6 +1083,7 @@ function buildRiskTraces(input: {
 }): LoadoutRiskSignalTrace[] {
   const warningIds = input.sourceWarnings.map((warning) => warning.id);
   const roofWeight = highMountedWeight(input.afterWeight);
+  const capacityAdjustedRoofWeight = input.afterWeight.highMountedCapacityAdjustedWeight?.lbs ?? roofWeight;
   const rearWeight = rearBiasedWeight(input.afterWeight);
   const routeDifficulty = input.routeContext?.difficulty ?? 'unknown';
   return [
@@ -1090,8 +1094,8 @@ function buildRiskTraces(input: {
       factors: [
         {
           factorId: 'roof_weight',
-          impact: roofWeight >= 500 ? 'high' : roofWeight >= 320 ? 'medium' : roofWeight >= 180 ? 'low' : 'none',
-          reason: `${Math.round(roofWeight)} lb is mounted in roof/high-bed zones.`,
+          impact: capacityAdjustedRoofWeight >= 500 ? 'high' : capacityAdjustedRoofWeight >= 320 ? 'medium' : capacityAdjustedRoofWeight >= 180 ? 'low' : 'none',
+          reason: `${Math.round(roofWeight)} lb is mounted in roof/high-bed zones; ${Math.round(capacityAdjustedRoofWeight)} lb remains after dynamic rating credit.`,
           sourceWarningIds: [],
           zoneIds: ['roof', 'bedHigh'],
         },
@@ -1707,7 +1711,9 @@ export function applyLoadoutSuggestionAction(input: {
     return {
       applicationState: 'review_only',
       telemetryEvent: action.actionKind === 'open_editor' ? 'suggestion_editor_opened' : 'suggestion_acknowledged',
-      reason: 'Suggestion requires review in the editor before changing loadout state.',
+      reason: action.actionKind === 'open_editor'
+        ? 'Suggestion requires review in the editor before changing loadout state.'
+        : 'Suggestion acknowledged; no loadout state was changed.',
       nextState: input.state,
       appliedAction: action,
     };
@@ -2000,12 +2006,7 @@ export function validateLoadoutScaleValidationEvidence(
 }
 
 export function getLoadoutConsequencePreviewSnapshot(): LoadoutConsequencePreviewSnapshot {
-  return {
-    preview: snapshot.preview,
-    summary: snapshot.summary ? { ...snapshot.summary } : null,
-    mirror: snapshot.mirror ? { ...snapshot.mirror, aggregateImpact: { ...snapshot.mirror.aggregateImpact } } : null,
-    updatedAt: snapshot.updatedAt,
-  };
+  return snapshot;
 }
 
 export function subscribeLoadoutConsequencePreview(listener: () => void): () => void {

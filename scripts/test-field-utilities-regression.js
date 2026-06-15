@@ -614,6 +614,41 @@ assertIncludes(
   'Documentation should use the same low-opacity container treatment as the protocol tiles without changing its color.',
 );
 assertIncludes(
+  quickActionsSource,
+  'styles.fieldUtilitiesCommandHeader',
+  'Field Utilities should use a polished ECS command header instead of a flat summary card.',
+);
+assertIncludes(
+  quickActionsSource,
+  'styles.fieldUtilitiesStatusPill',
+  'Field Utilities command header should expose compact status pills for quick scanning.',
+);
+assertIncludes(
+  quickActionsSource,
+  'styles.fieldUtilitiesActionDeck',
+  'Available Actions should sit inside a tactical deck surface instead of floating directly on the modal body.',
+);
+assertIncludes(
+  quickActionsSource,
+  'styles.quickActionTileAccent',
+  'Field Utilities action tiles should include a compact accent rail for stronger ECS hierarchy.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'fieldUtilitiesCommandHeader'),
+  'borderColor: ECS_SURFACE.border.selected',
+  'Field Utilities command header should reuse ECS selected surface border tokens.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'fieldUtilitiesActionDeck'),
+  'backgroundColor: ECS_SURFACE.background.compact',
+  'Field Utilities action deck should reuse ECS compact surface background tokens.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'quickActionTileAccent'),
+  'width: 3',
+  'Field Utilities tile accent rail should stay compact and professional.',
+);
+assertIncludes(
   styleBlock(quickActionsSource, 'quickActionTile'),
   'paddingVertical: 4',
   'Available Actions tiles should be shorter so Incident & Recovery has enough vertical room.',

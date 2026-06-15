@@ -38,6 +38,9 @@ const {
   buildExploreGuidanceReadyInventory,
   defaultExploreReadyRouteEligibility,
 } = require(path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'));
+const {
+  deriveExploreLiveConfidence,
+} = require(path.join(root, 'lib', 'explore', 'exploreLiveConfidence.ts'));
 
 function makeRoute(id, overrides = {}) {
   return {
@@ -130,11 +133,28 @@ const shortRoute = makeRoute('too-short', { distanceMiles: 3 });
 const privateRoute = makeRoute('private-route', {
   routeMetadata: { routeTypeStatus: 'private', routeGeometryMode: 'full' },
 });
+const foldedLineRoute = makeRoute('folded-line-route', {
+  routeGeometry: {
+    type: 'LineString',
+    coordinates: [
+      [-110, 38],
+      [-109.95, 38.05],
+      [-109.9, 38.1],
+      [-109.95, 38.05],
+      [-109.85, 38.15],
+    ],
+  },
+  routeMetadata: {
+    routeTypeStatus: 'suggested_trailhead',
+    routeGeometryMode: 'full',
+    activeGuidance: { status: 'ready' },
+  },
+});
 const inventory = buildExploreGuidanceReadyInventory({
   trailPacks: remoteReadyRoutes.slice(0, 5),
   hiddenGemRoutes: remoteReadyRoutes.slice(5, 7),
   ecsRouteIdeas: remoteReadyRoutes.slice(7),
-  favoriteRoutes: [previewOnlyRoute, shortRoute, privateRoute],
+  favoriteRoutes: [previewOnlyRoute, shortRoute, privateRoute, foldedLineRoute],
   selectedRefinement: 'remoteness',
 });
 
@@ -149,11 +169,118 @@ assert.strictEqual(
   'Guidance Ready Routes count should use the same ready inventory as the active refinement count.',
 );
 assert.strictEqual(inventory.readyCount, 9, 'Ready count should ignore pagination-sized source windows.');
-assert.strictEqual(inventory.hiddenTotal, 3, 'Routes hidden for geometry/public/length gates should be tracked separately.');
+assert.strictEqual(inventory.hiddenTotal, 4, 'Routes hidden for geometry/public/length gates should be tracked separately.');
 assert.strictEqual(
   defaultExploreReadyRouteEligibility(previewOnlyRoute).eligible,
   false,
   'Preview-only split geometry must not be treated as active-guidance-ready.',
+);
+assert.strictEqual(
+  defaultExploreReadyRouteEligibility(foldedLineRoute).eligible,
+  false,
+  'Folded LineString geometry must not count as guidance-ready even when stale metadata claims full ready geometry.',
+);
+
+const sameSourceHighGeometryRoute = makeRoute('same-source-rich-geometry', {
+  distanceMiles: 24,
+  terrainDifficulty: 4,
+  routeGeometry: {
+    type: 'LineString',
+    coordinates: [
+      [-110, 38],
+      [-109.99, 38.01],
+      [-109.98, 38.02],
+      [-109.97, 38.03],
+      [-109.96, 38.04],
+      [-109.95, 38.05],
+      [-109.94, 38.06],
+      [-109.93, 38.07],
+      [-109.92, 38.08],
+      [-109.91, 38.09],
+    ],
+  },
+  routeMetadata: {
+    routeGeometryMode: 'full',
+    activeGuidance: {
+      status: 'ready',
+      topologyResolved: true,
+      sourceSegmentCount: 10,
+      componentCount: 1,
+      branchDetected: false,
+      joinedSegmentGapCount: 0,
+      disjointSegmentGapCount: 0,
+    },
+    catalogVerification: {
+      confidenceScore: 92,
+      publicRecommendation: true,
+      warnings: [],
+      blockers: [],
+      dataUsed: [
+        { label: 'Official route geometry', freshness: 'fresh' },
+        { label: 'Recent completion signal', freshness: 'fresh' },
+      ],
+      currentCondition: {
+        status: 'clear',
+        activeClosureCount: 0,
+        warnings: [],
+        blockers: [],
+      },
+    },
+  },
+});
+
+const sameSourceSparseContextRoute = makeRoute('same-source-sparse-context', {
+  distanceMiles: 92,
+  terrainDifficulty: 8,
+  routeGeometry: {
+    type: 'LineString',
+    coordinates: [
+      [-110, 38],
+      [-109.4, 38.6],
+      [-108.8, 39.2],
+    ],
+  },
+  routeMetadata: {
+    routeGeometryMode: 'full',
+    activeGuidance: {
+      status: 'ready',
+      topologyResolved: false,
+      sourceSegmentCount: 3,
+      componentCount: 1,
+      branchDetected: false,
+      joinedSegmentGapCount: 1,
+      disjointSegmentGapCount: 0,
+      maxJoinGapMeters: 42,
+    },
+    catalogVerification: {
+      confidenceScore: 92,
+      publicRecommendation: true,
+      warnings: ['Sparse route geometry needs field review'],
+      blockers: [],
+      dataUsed: [
+        { label: 'Official route geometry', freshness: 'aging' },
+      ],
+      currentCondition: {
+        status: 'watch',
+        activeClosureCount: 0,
+        warnings: ['Seasonal condition requires review'],
+        blockers: [],
+      },
+    },
+  },
+});
+
+const richGeometryConfidence = deriveExploreLiveConfidence(sameSourceHighGeometryRoute);
+const sparseContextConfidence = deriveExploreLiveConfidence(sameSourceSparseContextRoute);
+
+assert.notStrictEqual(
+  richGeometryConfidence.score,
+  sparseContextConfidence.score,
+  'Routes with the same source confidence must still render independent live scores from geometry/readiness/support criteria.',
+);
+assert(
+  richGeometryConfidence.score > sparseContextConfidence.score,
+  'Richer route geometry and cleaner verification support should score above sparse aging route context.',
 );
 
 console.log('Explore guidance-ready routes checks passed.');

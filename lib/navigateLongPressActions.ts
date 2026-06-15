@@ -58,7 +58,17 @@ function normalizeCoordinate(
 
 function isRouteableFeature(feature: NavigateLongPressRouteableFeature | null | undefined): boolean {
   const kind = String(feature?.kind ?? '').toLowerCase();
-  return kind === 'route_geometry_segment' || kind === 'explore_route' || kind.includes('route');
+  return (
+    kind === 'route_geometry_segment' ||
+    kind === 'explore_route' ||
+    kind === 'rendered_routeable_feature' ||
+    kind === 'trail' ||
+    kind === 'road' ||
+    kind === 'track' ||
+    kind === 'path' ||
+    kind === 'street' ||
+    kind.includes('route')
+  );
 }
 
 function unavailable(reason: string): NavigateLongPressActionAvailability {

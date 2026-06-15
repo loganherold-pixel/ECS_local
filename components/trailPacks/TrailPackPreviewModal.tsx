@@ -103,6 +103,106 @@ function isLoopRoute(trailPack: ECSTrailPackDiscoveryItem, points: ReturnType<ty
   return distanceMilesBetween(points[0], points[points.length - 1]) <= 0.5;
 }
 
+function cleanAssessmentText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const clean = value.trim().replace(/\s+/g, ' ');
+  return clean.length > 0 ? clean : null;
+}
+
+function assessmentValues(...values: unknown[]): string[] {
+  const output: string[] = [];
+  values.forEach((value) => {
+    if (Array.isArray(value)) {
+      value.forEach((entry) => {
+        const clean = cleanAssessmentText(entry);
+        if (clean) output.push(clean);
+      });
+      return;
+    }
+    const clean = cleanAssessmentText(value);
+    if (clean) output.push(clean);
+  });
+  return output;
+}
+
+function conciseAssessmentLine(values: string[], fallback: string, maxItems = 4): string {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const clean = value.trim().replace(/\s+/g, ' ');
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
+    output.push(clean);
+    if (output.length >= maxItems) break;
+  }
+  return output.length > 0 ? output.join('; ') : fallback;
+}
+
+function formatConditionToken(value: unknown): string | null {
+  const clean = cleanAssessmentText(value);
+  return clean ? clean.replace(/_/g, ' ') : null;
+}
+
+function buildCurrentConditionLine(currentCondition: any): string {
+  if (!currentCondition) return 'Current trail condition is not verified in route detail.';
+  return conciseAssessmentLine(
+    assessmentValues(
+      currentCondition.label,
+      formatConditionToken(currentCondition.currentlyOpenStatus)
+        ? `Open ${formatConditionToken(currentCondition.currentlyOpenStatus)}`
+        : null,
+      formatConditionToken(currentCondition.passabilityStatus)
+        ? `Passability ${formatConditionToken(currentCondition.passabilityStatus)}`
+        : null,
+      currentCondition.blockers,
+      currentCondition.warnings,
+    ),
+    'Current trail condition is not verified in route detail.',
+    6,
+  );
+}
+
+function buildRouteAssessmentRows(detailAssessment: any, currentCondition: any) {
+  const status = cleanAssessmentText(detailAssessment?.status)?.toUpperCase() ?? 'REVIEW';
+  const confidence =
+    typeof detailAssessment?.confidence === 'number' && Number.isFinite(detailAssessment.confidence)
+      ? `Confidence ${Math.round(detailAssessment.confidence)}%`
+      : null;
+  return [
+    {
+      label: 'STATUS',
+      value: conciseAssessmentLine([status, ...(confidence ? [confidence] : [])], 'Review required', 2),
+    },
+    {
+      label: 'CURRENT CONDITION',
+      value: buildCurrentConditionLine(currentCondition),
+    },
+    {
+      label: 'WHY',
+      value: conciseAssessmentLine(assessmentValues(detailAssessment?.why), 'Source-backed route detail is available for review.'),
+    },
+    {
+      label: 'WHAT TO WATCH',
+      value: conciseAssessmentLine(
+        assessmentValues(detailAssessment?.whatToWatch),
+        'Verify current closures, weather, and access before departure.',
+      ),
+    },
+    {
+      label: 'RECOMMENDED ACTION',
+      value: cleanAssessmentText(detailAssessment?.recommendedAction) ?? 'Preview the route line and start only when staged.',
+    },
+    {
+      label: 'TO IMPROVE STATUS',
+      value: conciseAssessmentLine(
+        assessmentValues(detailAssessment?.toImproveStatus),
+        'Cache route detail and verify field conditions before departure.',
+      ),
+    },
+  ];
+}
+
 function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
   const [mapboxToken, setMapboxToken] = useState(() => getMapboxTokenSync());
   const [tokenLoading, setTokenLoading] = useState(() => !getMapboxTokenSync());
@@ -134,28 +234,6 @@ function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
   const cameraCommandTrigger = useMemo(
     () => routeSignature.split('').reduce((hash, char) => ((hash * 31) + char.charCodeAt(0)) >>> 0, routePoints.length),
     [routeSignature, routePoints.length],
-  );
-  const waypoints = useMemo(
-    () => {
-      if (!hasGeometry) return [];
-      const start = geometry[0];
-      const end = geometry[geometry.length - 1];
-      return [
-        {
-          id: `${trailPack.id}-start`,
-          latitude: start.latitude,
-          longitude: start.longitude,
-          title: 'Route start',
-        },
-        {
-          id: `${trailPack.id}-end`,
-          latitude: end.latitude,
-          longitude: end.longitude,
-          title: loop ? 'Loop return' : 'Route end',
-        },
-      ];
-    },
-    [geometry, hasGeometry, loop, trailPack.id],
   );
 
   useEffect(() => {
@@ -191,7 +269,7 @@ function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
           <MapRenderer
             points={mapRoutePoints}
             trailSegments={sourceTrailSegments}
-            waypoints={waypoints}
+            waypoints={[]}
             routeColor={TACTICAL.amber}
             mapStyle={DEFAULT_MAP_STYLE}
             mapboxToken={mapboxToken}
@@ -259,9 +337,6 @@ export default function TrailPackPreviewModal({
     offlineCache?.currentCondition ??
     trailPack?.catalogVerification?.currentCondition;
   const effectiveOfflineCacheAvailable = offlineCacheAvailable || Boolean(offlineCache?.cacheable);
-  const detailDataUsed = detailAssessment?.dataUsed?.length
-    ? detailAssessment.dataUsed
-    : trailPack?.catalogVerification?.dataUsed ?? [];
   const offlineSourceTimestamps = offlineCache?.sourceTimestamps ?? [];
   const offlineSourceAttribution = offlineCache?.sourceAttribution ?? [];
   const offlineFreshnessWarnings = offlineCache?.freshnessWarnings ?? [];
@@ -270,6 +345,10 @@ export default function TrailPackPreviewModal({
   const warnings = useMemo(
     () => trailPack?.evaluatedConfidence.warnings.concat(trailPack.evaluatedConfidence.blockers).slice(0, 4) ?? [],
     [trailPack],
+  );
+  const routeAssessmentRows = useMemo(
+    () => (detailAssessment ? buildRouteAssessmentRows(detailAssessment, currentCondition) : []),
+    [currentCondition, detailAssessment],
   );
 
   if (!trailPack || !guidanceReadiness) return null;
@@ -478,53 +557,10 @@ export default function TrailPackPreviewModal({
               <Ionicons name="shield-checkmark-outline" size={12} color={TACTICAL.amber} />
               <Text style={s.sectionTitle}>ROUTE ASSESSMENT</Text>
             </View>
-            <View style={s.reasonRow}>
-              <View style={s.reasonDot} />
-              <Text style={s.reasonText}>
-                STATUS | {detailAssessment.status.toUpperCase()} | Confidence {Math.round(detailAssessment.confidence)}%
-              </Text>
-            </View>
-            {currentCondition ? (
-              <>
-                <View style={s.reasonRow}>
-                  <View style={[
-                    s.reasonDot,
-                    currentCondition.status === 'blocked' || currentCondition.status === 'watch'
-                      ? { backgroundColor: '#E6A23C' }
-                      : null,
-                  ]} />
-                  <Text style={s.reasonText}>
-                    CURRENT CONDITION | {currentCondition.label} | Open {currentCondition.currentlyOpenStatus.replace(/_/g, ' ')} | Passability {currentCondition.passabilityStatus.replace(/_/g, ' ')}
-                  </Text>
-                </View>
-                {[...(currentCondition.blockers ?? []), ...(currentCondition.warnings ?? [])].slice(0, 3).map((warning) => (
-                  <View key={`current-condition-${warning}`} style={s.reasonRow}>
-                    <View style={[s.reasonDot, { backgroundColor: '#E6A23C' }]} />
-                    <Text style={s.reasonText}>CURRENT CONDITION | {warning}</Text>
-                  </View>
-                ))}
-              </>
-            ) : null}
-            {detailAssessment.why.slice(0, 3).map((reason) => (
-              <View key={`why-${reason}`} style={s.reasonRow}>
+            {routeAssessmentRows.map((row) => (
+              <View key={row.label} style={s.reasonRow}>
                 <View style={s.reasonDot} />
-                <Text style={s.reasonText}>WHY | {reason}</Text>
-              </View>
-            ))}
-            {detailAssessment.whatToWatch.slice(0, 3).map((watchItem) => (
-              <View key={`watch-${watchItem}`} style={s.reasonRow}>
-                <View style={s.reasonDot} />
-                <Text style={s.reasonText}>WHAT TO WATCH | {watchItem}</Text>
-              </View>
-            ))}
-            <View style={s.reasonRow}>
-              <View style={s.reasonDot} />
-              <Text style={s.reasonText}>RECOMMENDED ACTION | {detailAssessment.recommendedAction}</Text>
-            </View>
-            {detailAssessment.toImproveStatus.slice(0, 3).map((improvement) => (
-              <View key={`improve-${improvement}`} style={s.reasonRow}>
-                <View style={s.reasonDot} />
-                <Text style={s.reasonText}>TO IMPROVE STATUS | {improvement}</Text>
+                <Text style={s.reasonText}>{row.label} | {row.value}</Text>
               </View>
             ))}
           </View>
@@ -592,19 +628,6 @@ export default function TrailPackPreviewModal({
           </View>
         ) : null}
 
-        <View style={s.section}>
-          <View style={s.sectionHeader}>
-            <Ionicons name="analytics-outline" size={12} color={TACTICAL.amber} />
-            <Text style={s.sectionTitle}>CONFIDENCE SIGNALS</Text>
-          </View>
-          {trailPack.confidenceReasons.slice(0, 4).map((reason) => (
-            <View key={reason} style={s.reasonRow}>
-              <View style={s.reasonDot} />
-              <Text style={s.reasonText}>{reason}</Text>
-            </View>
-          ))}
-        </View>
-
         {warnings.length > 0 ? (
           <View style={s.section}>
             <View style={s.sectionHeader}>
@@ -615,25 +638,6 @@ export default function TrailPackPreviewModal({
               <View key={warning} style={s.reasonRow}>
                 <View style={[s.reasonDot, { backgroundColor: '#E6A23C' }]} />
                 <Text style={s.reasonText}>{warning}</Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
-
-        {detailDataUsed.length ? (
-          <View style={s.section}>
-            <View style={s.sectionHeader}>
-              <Ionicons name="server-outline" size={12} color={TACTICAL.amber} />
-              <Text style={s.sectionTitle}>DATA USED</Text>
-            </View>
-            {detailDataUsed.slice(0, 4).map((source) => (
-              <View key={`${source.providerId}-${source.label}`} style={s.reasonRow}>
-                <View style={s.reasonDot} />
-                <Text style={s.reasonText}>
-                  {source.label} | {source.freshness.toUpperCase()} | {source.authority}
-                  {source.lastVerifiedAt ? ` | Last checked ${formatCatalogTimestamp(source.lastVerifiedAt)}` : ' | Last checked unavailable'}
-                  {source.attribution ? ` | ${source.attribution}` : ''}
-                </Text>
               </View>
             ))}
           </View>

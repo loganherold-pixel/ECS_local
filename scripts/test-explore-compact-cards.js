@@ -104,6 +104,25 @@ assert.ok(
 );
 
 assert.ok(
+  discoverSource.includes('useState<ExpeditionOpportunity[]>(() =>') &&
+    discoverSource.includes('computeDistancesFromUser(') &&
+    discoverSource.includes('loadExpeditionOpportunities(),') &&
+    discoverSource.includes("showInitialLoading = isLoading && !hasLoadedExplorer && opportunities.length === 0") &&
+    discoverSource.includes('showSectionLoading = isLoading && (hasLoadedExplorer || opportunities.length > 0)'),
+  'Explore should paint seeded route cards immediately and reserve full-screen loading for an actually empty initial route set.',
+);
+
+assert.ok(
+  discoverSource.includes('EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT = 12') &&
+    discoverSource.includes('exploreGuidanceReadyVisibleLimit') &&
+    discoverSource.includes('visibleExploreWizardCardCandidates') &&
+    discoverSource.includes('visibleExploreWizardCandidates.slice(0, exploreGuidanceReadyVisibleLimit)') &&
+    discoverSource.includes('SHOW MORE ROUTES') &&
+    discoverSource.includes('setExploreGuidanceReadyVisibleLimit(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT)'),
+  'Guidance Ready should mount a small first paint batch and let users reveal more routes without blocking initial render.',
+);
+
+assert.ok(
   exploreFilterStateSource.includes('export type ExplorerCategoryPanelKey =') &&
     exploreFilterStateSource.includes("'hiddenGems'") &&
     !exploreFilterStateSource.includes("'popularTrails'") &&
@@ -159,13 +178,20 @@ assert.ok(
 );
 
 assert.ok(
-  tripBuilderCardSource.includes('buildExploreRouteCardSummary(candidate)') &&
-    tripBuilderCardSource.includes('styles.headerThumbnail') &&
+  tripBuilderCardSource.includes('styles.headerThumbnail') &&
+    !tripBuilderCardSource.includes('buildExploreRouteCardSummary(candidate)') &&
+    !tripBuilderCardSource.includes("label: 'Status'") &&
+    !tripBuilderCardSource.includes("label: 'Current Condition'") &&
+    !tripBuilderCardSource.includes("label: 'Why'") &&
+    !tripBuilderCardSource.includes("label: 'What to Watch'") &&
+    !tripBuilderCardSource.includes("label: 'Recommended Action'") &&
+    !tripBuilderCardSource.includes("label: 'To Improve Status'") &&
+    !tripBuilderCardSource.includes('styles.summaryList') &&
     !tripBuilderCardSource.includes('thumbnailWrap') &&
     !tripBuilderCardSource.includes('thumbnailOverlay') &&
     !tripBuilderCardSource.includes('candidate.dataUsed.length') &&
     !tripBuilderCardSource.includes('SOURCES'),
-  'TripBuilder route cards should use a compact side thumbnail and remove the large banner/Data Used surface.',
+  'TripBuilder route cards should use a compact side thumbnail and keep readiness assessment detail out of the card face.',
 );
 
 assert.ok(

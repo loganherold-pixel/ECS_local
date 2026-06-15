@@ -23,6 +23,7 @@ import {
   View,
   Text,
   Pressable,
+  Platform,
   StyleSheet,
   Animated,
   useWindowDimensions,
@@ -49,6 +50,7 @@ import {
   ECS_COMMAND_DOCK_INNER_SLOT_FLEX,
   ECS_COMMAND_DOCK_LABEL_HEIGHT,
   ECS_COMMAND_DOCK_OUTER_ITEM_MAX_WIDTH,
+  getCommandDockBottomLift,
 } from '../lib/shellLayout';
 import {
   getDashboardChromeState,
@@ -525,7 +527,9 @@ export default function CommandDock() {
     setQuickActionsVisible(false);
   }, []);
 
+  const androidTabletWindow = Platform.OS === 'android' && Math.min(windowWidth, adaptive.windowHeight) >= 720;
   const dockBottomPadding = getEcsBottomSafePadding(insets.bottom);
+  const dockBottomLift = getCommandDockBottomLift(insets.bottom, adaptive.isTablet || androidTabletWindow);
   const dockHeight = ECS_COMMAND_DOCK_BAR_HEIGHT + dockBottomPadding;
   const dockBackgroundDrop = Math.max(6, Math.min(dockBottomPadding, 10));
   const dockBackgroundTopOffset = BOTTOM_BANNER_BACKGROUND_DROP_OFFSET;
@@ -713,7 +717,7 @@ export default function CommandDock() {
         style={[
           styles.dockContainer,
           {
-            bottom: MIN_DOCK_LIFT,
+            bottom: MIN_DOCK_LIFT + dockBottomLift,
             paddingHorizontal: dockOuterGutter,
             opacity: dockVisibilityAnim,
             transform: [

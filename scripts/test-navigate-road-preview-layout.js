@@ -129,6 +129,22 @@ assertNavigateIncludes(
   '{ top: roadNavigationSurfaceTopOffset }',
   'Landscape dock reveal control should align vertically with Active Guidance.',
 );
+assertNavigateIncludes(
+  'const DESTINATION_SEARCH_HORIZONTAL_INSET = Math.max(6, Math.floor(OVERLAY_EDGE * 0.5));',
+  'Idle destination search should use a narrower horizontal inset so the top search bar fits more of the screen.',
+);
+assertNavigateIncludes(
+  'left: DESTINATION_SEARCH_HORIZONTAL_INSET',
+  'Idle destination search should apply the wider-screen inset on the left edge.',
+);
+assertNavigateIncludes(
+  'right: DESTINATION_SEARCH_HORIZONTAL_INSET',
+  'Idle destination search should apply the wider-screen inset on the right edge.',
+);
+assertNavigateIncludes(
+  'maxWidth: 720',
+  'Idle destination search shell should support wider map layouts without changing height or position.',
+);
 
 assert.ok(
   dispersedSummarySource.includes('zIndex: 24') && dispersedSummarySource.includes('elevation: 24'),
@@ -158,12 +174,12 @@ assertNavigateIncludes(
   'Manual CampOps area review should remain behind an explicit feature flag.',
 );
 assertNavigateIncludes(
-  "accessibilityLabel=\"Manual CampOps area review\"",
-  'Manual area review control should have a clear internal CampOps accessibility label.',
+  'accessibilityLabel="Draw Camp Endpoints area"',
+  'Manual area review popup should keep a clear Camp Endpoints draw action label.',
 );
 assertNavigateIncludes(
-  'MANUAL CAMP AREA REVIEW',
-  'Manual area review control should use clear visible internal review copy.',
+  'INTERNAL AREA REVIEW',
+  'Manual area review popup should use clear visible internal review copy.',
 );
 assertNavigateNotIncludes(
   "accessibilityLabel=\"Draw camp potential area\"",
@@ -174,28 +190,28 @@ assertNavigateNotIncludes(
   'Public Navigate tools should no longer expose old Draw Camp Potential Area copy.',
 );
 assertNavigateIncludes(
-  "accessibilityLabel={routeBuilderActive ? 'Exit Build Route mode' : 'Build a route'}",
-  'Build Route control should have a clear accessibility label.',
+  'accessibilityLabel="Draw route from map point"',
+  'Long-press Draw Route action should have a clear accessibility label.',
 );
 assertNavigateIncludes(
-  "{routeBuilderActive ? 'EXIT BUILD' : 'BUILD ROUTE'}",
-  'Build Route control should use a clear visible text label.',
+  '<Text style={styles.longPressActionText}>DRAW ROUTE</Text>',
+  'Long-press route builder entry should use a clear visible text label.',
 );
 assertNavigateIncludes(
-  "quickActionButton: {\n  width: '48%',",
-  'Manual review and Build Route controls should use stable half-width text cards on phone and tablet.',
+  'longPressActionButton: {\n    minHeight: 34',
+  'Long-press map actions should keep compact tappable rows.',
 );
 assertNavigateIncludes(
-  'minHeight: 54',
-  'Manual review and Build Route controls should keep a usable touch target height.',
-);
-assertNavigateNotIncludes(
-  "name={routeBuilderActive ? 'close' : 'git-branch-outline'}",
-  'Build Route quick action should not use the unclear git-branch icon.',
+  'flexBasis: 126',
+  'Long-press map actions should wrap into stable compact buttons on phone and tablet.',
 );
 assertNavigateIncludes(
-  "const routeIndicatorVisible = topStatusOverlaysVisible && navigationOverlayMode !== 'preview';",
-  'Road Preview should suppress the top-left Route/Preview indicator artifact.',
+  'accessibilityLabel="Navigate here"',
+  'Long-press action menu should keep Navigate Here available with a clear label.',
+);
+assertNavigateIncludes(
+  "topStatusOverlaysVisible && navigationOverlayMode !== 'preview' && !idleDestinationSearchVisible;",
+  'Road Preview and the destination search should suppress the top-left Route/Preview indicator artifact.',
 );
 assertNavigateIncludes(
   'if (!roadStepListExpanded || navigationOverlayMode !== \'preview\') return;',

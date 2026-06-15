@@ -16,6 +16,7 @@ import { resolveEcsPopupSurfaceTheme } from '../lib/theme';
 export const ECS_BANNER_DARK_BACKGROUND = '#020304';
 export const ECS_BANNER_LIGHT_BACKGROUND = '#F7F1E8';
 export const ECS_GLOBAL_BANNER_ASPECT_RATIO = 3;
+const ECS_ANDROID_BOTTOM_SAFE_PADDING_MAX = 96;
 
 type ECSGlobalBannerProps = {
   source: ImageSourcePropType;
@@ -51,7 +52,10 @@ export function resolveEcsBottomBannerHeight(width: number, height: number): num
 
 export function getEcsBottomSafePadding(bottomInset: number): number {
   if (Platform.OS === 'web') return 10;
-  if (Platform.OS === 'android') return Math.max(Math.min(bottomInset, 10), 8);
+  if (Platform.OS === 'android') {
+    const normalizedInset = Number.isFinite(bottomInset) ? Math.max(0, bottomInset) : 0;
+    return Math.max(Math.min(normalizedInset, ECS_ANDROID_BOTTOM_SAFE_PADDING_MAX), 8);
+  }
   return bottomInset > 0 ? bottomInset : 10;
 }
 

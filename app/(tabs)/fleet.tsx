@@ -1182,7 +1182,6 @@ function FleetPremiumVehicleCard({
 }) {
   const { vehicle, weightResult, scoringResult } = model;
   const connectivity = resolveFleetConnectivityBadge(isOnline, offlineMode);
-  const verificationTone = model.verificationStatus === 'Verified' ? 'ready' : 'warning';
   return (
     <ECSCard variant="primary" selected={isActive} style={s.premiumVehicleCard}>
       <View style={s.premiumCardHeader}>
@@ -1251,7 +1250,6 @@ function FleetPremiumVehicleCard({
 
       <ECSPanel variant="quiet" style={s.vehicleEvidenceStrip}>
         <View style={s.vehicleEvidenceBadges}>
-          <ECSBadge label={model.verificationStatus.toUpperCase()} tone={verificationTone} compact />
           <ECSBadge label={`${formatFleetPercent(weightResult.confidence)} CONF`} tone={weightResult.confidence >= 88 ? 'ready' : 'warning'} compact />
           <ECSBadge label={connectivity.label} tone={connectivity.tone} compact />
         </View>

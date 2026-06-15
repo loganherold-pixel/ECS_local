@@ -320,14 +320,14 @@ const SMART_RESUPPLY_OPTIONS: { value: SmartResupplyPreference; label: string; d
   { value: 'no', label: 'No', detail: 'Skip smart resupply planning.' },
 ];
 const BAILOUT_PLAN_OPTIONS: { value: BailoutPlanPreference; label: string; detail: string }[] = [
-  { value: 'yes', label: 'Yes', detail: 'Build emergency exit thinking into the plan.' },
-  { value: 'no', label: 'No', detail: 'Do not request bailout planning.' },
+  { value: 'no', label: 'Skip', detail: 'No bailout reference pins.' },
+  { value: 'yes', label: 'Open Map', detail: 'Drop reference bailout pins.' },
 ];
 const SMART_RESUPPLY_FUEL_QUERY = 'gas station fuel diesel';
 const SMART_RESUPPLY_SUPPLY_QUERY = 'grocery store supermarket supplies';
 const SMART_RESUPPLY_OPTION_LIMIT = 5;
 const SMART_RESUPPLY_SEARCH_LIMIT = 20;
-const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [8, 16, 30] as const;
+const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [8, 16, 30, 50] as const;
 const SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 12;
 const BAILOUT_SEARCH_QUERY = 'trailhead parking road access ranger station highway';
 const BAILOUT_OPTION_LIMIT = 5;
@@ -2689,6 +2689,26 @@ function tripPlanReferencePointFromBailoutPoint(point: BailoutPlanPoint): TripPl
   };
 }
 
+function collectBailoutPlanPoints(
+  selectedPoint: BailoutPlanPoint | null,
+  operatorPins: BailoutPlanPoint[],
+): BailoutPlanPoint[] {
+  const seen = new Set<string>();
+  const points: BailoutPlanPoint[] = [];
+  [selectedPoint, ...operatorPins].forEach((point) => {
+    if (!point) return;
+    const key = [
+      point.id,
+      point.coordinate.latitude.toFixed(5),
+      point.coordinate.longitude.toFixed(5),
+    ].join(':');
+    if (seen.has(key)) return;
+    seen.add(key);
+    points.push(point);
+  });
+  return points;
+}
+
 function appendBailoutStopToPlan(plan: TripPlan, point: BailoutPlanPoint | null): TripPlan {
   if (!point) return plan;
   const duplicate = plan.suggestedStops.some((stop) => (
@@ -2723,6 +2743,10 @@ function appendBailoutStopToPlan(plan: TripPlan, point: BailoutPlanPoint | null)
   return updateTripPlanStops({ ...plan, suggestedStops: nextStops }, nextStops);
 }
 
+function appendBailoutStopsToPlan(plan: TripPlan, points: BailoutPlanPoint[]): TripPlan {
+  return points.reduce((nextPlan, point) => appendBailoutStopToPlan(nextPlan, point), plan);
+}
+
 async function loadSmartResupplyOptions(params: {
   accessToken: string;
   sessionToken: string;
@@ -2737,7 +2761,7 @@ async function loadSmartResupplyOptions(params: {
     trailhead: params.routeStart,
     approachRoute: params.approachRoute,
     fallbackAnchor: params.fallbackAnchor ?? params.routeStart,
-    maxAnchors: 5,
+    maxAnchors: 7,
   });
   const suggestionMap = new Map<string, RoadNavSearchSuggestion>();
   const collectSuggestions = (suggestions: RoadNavSearchSuggestion[]) => {
@@ -3522,22 +3546,28 @@ function BailoutPlanPickerOverlay({
   route,
   routePreviewPoints,
   options,
+  pins,
   selectedPoint,
   loading,
   error,
   onSelect,
   onDropPoint,
+  onRemovePin,
+  onClearPins,
   onClose,
 }: {
   visible: boolean;
   route: TripBuilderRouteInput | null;
   routePreviewPoints: TripMapCoordinate[];
   options: BailoutPlanPoint[];
+  pins: BailoutPlanPoint[];
   selectedPoint: BailoutPlanPoint | null;
   loading: boolean;
   error: string | null;
   onSelect: (point: BailoutPlanPoint) => void;
   onDropPoint: (coordinate: TripMapCoordinate) => void;
+  onRemovePin: (id: string) => void;
+  onClearPins: () => void;
   onClose: () => void;
 }) {
   const [mapboxToken, setMapboxToken] = useState(() => getMapboxTokenSync());
@@ -3578,7 +3608,7 @@ function BailoutPlanPickerOverlay({
     () => buildBailoutRoutePreviewCameraCommand(routePoints),
     [routePoints],
   );
-  const selectedMarker = selectedPoint ? [{
+  const selectedMarker = selectedPoint && !pins.some((pin) => pin.id === selectedPoint.id) ? [{
     id: selectedPoint.id,
     latitude: selectedPoint.coordinate.latitude,
     longitude: selectedPoint.coordinate.longitude,
@@ -3588,8 +3618,18 @@ function BailoutPlanPickerOverlay({
     color: ITINERARY_BAILOUT_COLOR,
     mapChar: 'B',
   }] : [];
+  const operatorPinMarkers = pins.map((pin, index) => ({
+    id: pin.id,
+    latitude: pin.coordinate.latitude,
+    longitude: pin.coordinate.longitude,
+    title: pin.title,
+    subtitle: pin.subtitle ?? 'Operator-marked bailout reference pin. Verify legal access and drivability.',
+    type: 'bailout',
+    color: ITINERARY_BAILOUT_COLOR,
+    mapChar: `B${index + 1}`,
+  }));
   const optionMarkers = options
-    .filter((option) => option.id !== selectedPoint?.id)
+    .filter((option) => option.id !== selectedPoint?.id && !pins.some((pin) => pin.id === option.id))
     .map((option, index) => ({
       id: option.id,
       latitude: option.coordinate.latitude,
@@ -3640,7 +3680,7 @@ function BailoutPlanPickerOverlay({
           {mapboxToken && routePoints.length > 0 ? (
             <MapRenderer
               points={routePoints}
-              pinMarkers={[...routeEndpointMarkers, ...optionMarkers, ...selectedMarker]}
+              pinMarkers={[...routeEndpointMarkers, ...optionMarkers, ...operatorPinMarkers, ...selectedMarker]}
               routeColor={TACTICAL.amber}
               mapStyle={DEFAULT_MAP_STYLE}
               mapboxToken={mapboxToken}
@@ -3664,9 +3704,48 @@ function BailoutPlanPickerOverlay({
           <View style={styles.bailoutPickerFooterHeader}>
             <Text style={styles.bailoutPickerTitle}>Suggested Bailout / Rendezvous Points</Text>
             {loading ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : null}
+            {pins.length > 0 ? (
+              <TouchableOpacity
+                style={styles.bailoutOpenButton}
+                activeOpacity={0.82}
+                onPress={onClearPins}
+                accessibilityRole="button"
+                accessibilityLabel="Clear bailout pins"
+                testID="trip-builder-clear-bailout-pins"
+              >
+                <Ionicons name="trash-outline" size={12} color={TACTICAL.amber} />
+                <Text style={styles.bailoutOpenButtonText}>Clear</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
           {error ? <Text style={styles.smartResupplyErrorText}>{error}</Text> : null}
           <ScrollView style={styles.bailoutOptionList} contentContainerStyle={styles.bailoutOptionListContent}>
+            {pins.length > 0 ? (
+              <View style={styles.campPinList} testID="trip-builder-bailout-picker-pin-list">
+                {pins.map((pin, index) => (
+                  <View key={pin.id} style={styles.campPinRow}>
+                    <View style={styles.campPinIcon}>
+                      <Text style={styles.smartResupplyMarkerText}>{index + 1}</Text>
+                    </View>
+                    <View style={styles.campPinCopy}>
+                      <Text style={styles.campPinTitle}>{pin.title}</Text>
+                      <Text style={styles.campPinMeta} numberOfLines={1}>
+                        Operator-marked bailout reference pin. Legal access, drivability, and current conditions are unknown.
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.campPinRemove}
+                      activeOpacity={0.82}
+                      onPress={() => onRemovePin(pin.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove bailout pin ${index + 1}`}
+                    >
+                      <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             {options.length === 0 && !loading ? (
               <Text style={styles.tripMapPointMeta}>No suggested points yet. Tap the map to drop an operator-selected bailout point.</Text>
             ) : (
@@ -3699,7 +3778,7 @@ function BailoutPlanPickerOverlay({
 
 export default function ExploreTripBuilderScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ routeId?: string }>();
+  const params = useLocalSearchParams<{ routeId?: string; setup?: string }>();
   const insets = useSafeAreaInsets();
   const bottomClearance = getShellBottomClearance(insets.bottom, 8);
   const [routes, setRoutes] = useState<ExpeditionOpportunity[]>([]);
@@ -3707,7 +3786,7 @@ export default function ExploreTripBuilderScreen() {
   const [tripSetupStarted, setTripSetupStarted] = useState(false);
   const [preparedTripRoutePreview, setPreparedTripRoutePreview] = useState<PreparedTripRoutePreview | null>(null);
   const [smartResupplyPreference, setSmartResupplyPreference] = useState<SmartResupplyPreference>('fuel_only');
-  const [bailoutPlanPreference, setBailoutPlanPreference] = useState<BailoutPlanPreference>('yes');
+  const [bailoutPlanPreference, setBailoutPlanPreference] = useState<BailoutPlanPreference>('no');
   const [campPlanPreference, setCampPlanPreference] = useState<CampPlanPreference>('skip');
   const [campPickerVisible, setCampPickerVisible] = useState(false);
   const [campPlanPins, setCampPlanPins] = useState<CampPlanPin[]>([]);
@@ -3722,6 +3801,7 @@ export default function ExploreTripBuilderScreen() {
   const [bailoutPickerVisible, setBailoutPickerVisible] = useState(false);
   const [bailoutOptions, setBailoutOptions] = useState<BailoutPlanPoint[]>([]);
   const [selectedBailoutPoint, setSelectedBailoutPoint] = useState<BailoutPlanPoint | null>(null);
+  const [bailoutPlanPins, setBailoutPlanPins] = useState<BailoutPlanPoint[]>([]);
   const [bailoutOptionsLoading, setBailoutOptionsLoading] = useState(false);
   const [bailoutOptionsError, setBailoutOptionsError] = useState<string | null>(null);
   const [resupplyOverrides, setResupplyOverrides] = useState<Partial<Record<ResupplyCategory, ResupplyOverride>>>({});
@@ -3821,8 +3901,10 @@ export default function ExploreTripBuilderScreen() {
       const nextRoutes = Array.from(routeMap.values());
       setRoutes(nextRoutes as unknown as ExpeditionOpportunity[]);
       const requestedRouteId = params.routeId ? String(params.routeId) : null;
+      const shouldAutoOpenTripSetup = Boolean(requestedRouteId && params.setup === '1');
       const restoredRouteId = lastTripBuilderPlanState.visible ? lastTripBuilderPlanState.selectedRouteId : null;
-      setSelectedRouteId(requestedRouteId ?? restoredRouteId ?? (handoffRoute?.id ? String(handoffRoute.id) : null));
+      const selectedRouteIdForState = requestedRouteId ?? restoredRouteId ?? (handoffRoute?.id ? String(handoffRoute.id) : null);
+      setSelectedRouteId(selectedRouteIdForState);
       if (
         lastTripBuilderPlanState.visible &&
         lastTripBuilderPlanState.plan &&
@@ -3839,8 +3921,11 @@ export default function ExploreTripBuilderScreen() {
         setItinerarySaved(lastTripBuilderPlanState.itinerarySaved);
         setSavedTripItineraryEditSession(lastTripBuilderPlanState.itineraryEditSession);
       } else {
-        setTripSetupStarted(false);
-        setPreparedTripRoutePreview(null);
+        const autoSetupRoute = shouldAutoOpenTripSetup
+          ? nextRoutes.find((route) => String(route.id) === String(selectedRouteIdForState)) ?? handoffRoute ?? null
+          : null;
+        setTripSetupStarted(shouldAutoOpenTripSetup);
+        setPreparedTripRoutePreview(shouldAutoOpenTripSetup ? buildPreparedTripRoutePreview(autoSetupRoute as ExpeditionOpportunity | null) : null);
         setSavedTripItineraryEditSession(null);
       }
       setError(null);
@@ -3849,7 +3934,7 @@ export default function ExploreTripBuilderScreen() {
     } finally {
       setLoading(false);
     }
-  }, [params.routeId]);
+  }, [params.routeId, params.setup]);
 
   const selectedRoute = useMemo(
     () => routes.find((route) => String(route.id) === selectedRouteId) ?? null,
@@ -4270,7 +4355,7 @@ export default function ExploreTripBuilderScreen() {
     () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedTrailheadResupplyAnchorCoordinate, liveApproachRoutePoints, selectedPreTrailSupplyAnchorCoordinate),
     [liveApproachRoutePoints, routeContextSnapshot, selectedPreTrailSupplyAnchorCoordinate, selectedTrailheadResupplyAnchorCoordinate],
   );
-  const bailoutPlanReady = bailoutPlanPreference === 'no' || !!selectedBailoutPoint;
+  const bailoutPlanReady = bailoutPlanPreference === 'no' || !!selectedBailoutPoint || bailoutPlanPins.length > 0;
   const campPlanReady = campPlanPreference === 'skip' || campPlanPins.length > 0;
 
   useEffect(() => {
@@ -4427,7 +4512,7 @@ export default function ExploreTripBuilderScreen() {
         const mergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current);
         commitSmartResupplyFuelOptions(mergedOptions);
         if (mergedOptions.length === 0) {
-          setSmartResupplyError('No fuel options were found near the route start. Try selecting No, or verify manually.');
+          setSmartResupplyError('Map search returned no usable fuel candidates along the GPS-to-trailhead approach. Try again, or select No and verify manually before departure.');
         }
       } catch (searchError) {
         if (!cancelled && requestId === smartResupplyFuelRequestRef.current) {
@@ -4520,7 +4605,7 @@ export default function ExploreTripBuilderScreen() {
         const mergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current);
         commitSmartResupplySupplyOptions(mergedOptions);
         if (mergedOptions.length === 0) {
-          setSmartResupplyError('No grocery or supply options were found near the route start. Verify manually before departure.');
+          setSmartResupplyError('Map search returned no usable grocery or supply candidates along the GPS-to-trailhead approach. Try again, or verify manually before departure.');
         }
       } catch (searchError) {
         if (!cancelled && requestId === smartResupplySupplyRequestRef.current) {
@@ -4553,6 +4638,7 @@ export default function ExploreTripBuilderScreen() {
 
   useEffect(() => {
     setSelectedBailoutPoint(null);
+    setBailoutPlanPins([]);
     setBailoutOptions([]);
     setBailoutOptionsLoading(false);
     setBailoutOptionsError(null);
@@ -4658,8 +4744,17 @@ export default function ExploreTripBuilderScreen() {
       setBailoutPickerVisible(true);
     } else {
       setSelectedBailoutPoint(null);
+      setBailoutPlanPins([]);
       setBailoutPickerVisible(false);
     }
+  };
+
+  const handleSkipBailoutPlan = () => {
+    handleBailoutPlanPreference('no');
+  };
+
+  const handleOpenBailoutPicker = () => {
+    handleBailoutPlanPreference('yes');
   };
 
   const handleSelectBailoutPoint = (point: BailoutPlanPoint) => {
@@ -4672,17 +4767,35 @@ export default function ExploreTripBuilderScreen() {
     if (!isValidMapCoordinate(coordinate)) return;
     hapticMicro();
     const routeStart = selectedRouteStartCoordinate;
+    const nextIndex = bailoutPlanPins.length + 1;
     const point: BailoutPlanPoint = {
-      id: `operator-bailout-${Date.now().toString(36)}`,
-      title: 'Operator dropped bailout point',
+      id: `operator-bailout-${Date.now().toString(36)}-${nextIndex}`,
+      title: `Bailout reference ${nextIndex}`,
       subtitle: 'Manual emergency bailout or rendezvous point. Verify legal access and drivability.',
       coordinate,
       source: 'operator_drop',
       distanceFromRouteStartMiles: routeStart ? Math.round(tripMapCoordinateDistanceMiles(routeStart, coordinate) * 10) / 10 : null,
     };
+    setBailoutPlanPreference('yes');
     setSelectedBailoutPoint(point);
-    setBailoutOptions((current) => [point, ...current.filter((item) => item.source !== 'operator_drop')].slice(0, BAILOUT_OPTION_LIMIT));
+    setBailoutPlanPins((current) => [...current, point].slice(0, 8));
+    setBailoutOptions((current) => [point, ...current.filter((item) => item.id !== point.id)].slice(0, BAILOUT_OPTION_LIMIT));
     setBailoutOptionsError(null);
+  };
+
+  const handleRemoveBailoutPin = (id: string) => {
+    hapticMicro();
+    setBailoutPlanPins((current) => current.filter((pin) => pin.id !== id));
+    setSelectedBailoutPoint((current) => current?.id === id ? null : current);
+    setBailoutOptions((current) => current.filter((option) => option.id !== id));
+  };
+
+  const handleClearBailoutPins = () => {
+    hapticMicro();
+    const operatorPinIds = new Set(bailoutPlanPins.map((pin) => pin.id));
+    setBailoutPlanPins([]);
+    setSelectedBailoutPoint((current) => current && operatorPinIds.has(current.id) ? null : current);
+    setBailoutOptions((current) => current.filter((option) => !operatorPinIds.has(option.id)));
   };
 
   const cycleResupplyOverride = (category: ResupplyCategory) => {
@@ -4723,7 +4836,9 @@ export default function ExploreTripBuilderScreen() {
     setSelectedSmartFuel(null);
     setSelectedSmartSupply(null);
     setSmartResupplyError(null);
+    setBailoutPlanPreference('no');
     setSelectedBailoutPoint(null);
+    setBailoutPlanPins([]);
     setBailoutPickerVisible(false);
     setCampPlanPreference('skip');
     setCampPickerVisible(false);
@@ -4794,7 +4909,9 @@ export default function ExploreTripBuilderScreen() {
       setSelectedSmartFuel(null);
       setSelectedSmartSupply(null);
       setSmartResupplyError(null);
+      setBailoutPlanPreference('no');
       setSelectedBailoutPoint(null);
+      setBailoutPlanPins([]);
       setBailoutPickerVisible(false);
       setCampPlanPreference('skip');
       setCampPickerVisible(false);
@@ -4879,7 +4996,7 @@ export default function ExploreTripBuilderScreen() {
       return;
     }
     if (!bailoutPlanReady) {
-      setError('Select a bailout or rendezvous point before building this trip plan, or choose No for bailout planning.');
+      setError('Drop at least one bailout reference pin, select a suggested bailout point, or choose Skip for Bailout Plan.');
       setBailoutPickerVisible(true);
       return;
     }
@@ -4917,8 +5034,14 @@ export default function ExploreTripBuilderScreen() {
       );
       const routeContextPoiData = routeContextSupplyCandidatesToResupplyPoints(routeContext, selectedSupplyMode);
       const routeContextItineraryInput = routeContextToTripBuilderItineraryContext(routeContext, selectedSupplyMode);
-      const selectedBailoutExitPoints = selectedBailoutPoint ? [bailoutExitPointForPlan(selectedBailoutPoint)] : null;
-      const referencePoints: TripPlanReferencePoint[] = campPlanPins.map(tripPlanReferencePointFromCampPin);
+      const selectedBailoutPoints = collectBailoutPlanPoints(selectedBailoutPoint, bailoutPlanPins);
+      const selectedBailoutExitPoints = selectedBailoutPoints.length > 0
+        ? selectedBailoutPoints.map(bailoutExitPointForPlan)
+        : null;
+      const referencePoints: TripPlanReferencePoint[] = [
+        ...campPlanPins.map(tripPlanReferencePointFromCampPin),
+        ...selectedBailoutPoints.map(tripPlanReferencePointFromBailoutPoint),
+      ];
       const input: TripBuilderInput = {
         tripType: DEFAULT_TRIP_BUILDER_TRIP_TYPE,
         timeWindow: timeWindowForTripType(DEFAULT_TRIP_BUILDER_TRIP_TYPE),
@@ -4941,7 +5064,7 @@ export default function ExploreTripBuilderScreen() {
         routeContext: routeContextItineraryInput,
         currentLocation: liveTripBuilderUserLocation,
       });
-      const finalizedPlan = appendBailoutStopToPlan(nextPlan, selectedBailoutPoint);
+      const finalizedPlan = appendBailoutStopsToPlan(nextPlan, selectedBailoutPoints);
       setPlan(finalizedPlan);
       setPlanModalVisible(true);
       setPlanMapScope(null);
@@ -5500,7 +5623,9 @@ export default function ExploreTripBuilderScreen() {
 
                     <View style={styles.planningQuestion}>
                       <Text style={styles.groupLabel}>Bailout Plan</Text>
-                      <Text style={styles.planningQuestionText}>Would you like to establish a bailout plan?</Text>
+                      <Text style={styles.planningQuestionText}>
+                        Drop optional reference bailout pins along this route, or skip bailout planning for this trip.
+                      </Text>
                       <View style={styles.planningChoiceRow}>
                         {BAILOUT_PLAN_OPTIONS.map((option) => (
                           <TouchableOpacity
@@ -5511,7 +5636,7 @@ export default function ExploreTripBuilderScreen() {
                               bailoutPlanPreference === option.value && styles.planningChoiceSelected,
                             ]}
                             activeOpacity={0.82}
-                            onPress={() => handleBailoutPlanPreference(option.value)}
+                            onPress={option.value === 'yes' ? handleOpenBailoutPicker : handleSkipBailoutPlan}
                             accessibilityRole="button"
                             accessibilityState={{ selected: bailoutPlanPreference === option.value }}
                             testID={`trip-builder-bailout-plan-${option.value}`}
@@ -5541,26 +5666,57 @@ export default function ExploreTripBuilderScreen() {
                           <View style={styles.bailoutSummaryHeader}>
                             <View style={styles.bailoutSummaryCopy}>
                               <Text style={styles.bailoutSummaryTitle}>
-                                {selectedBailoutPoint ? selectedBailoutPoint.title : 'Suggested Bailout / Rendezvous Points'}
+                                {selectedBailoutPoint
+                                  ? selectedBailoutPoint.title
+                                  : bailoutPlanPins.length > 0
+                                    ? `${bailoutPlanPins.length} bailout reference pin${bailoutPlanPins.length === 1 ? '' : 's'}`
+                                    : 'Suggested Bailout / Rendezvous Points'}
                               </Text>
                               <Text style={styles.bailoutSummaryMeta} numberOfLines={2}>
                                 {selectedBailoutPoint
                                   ? selectedBailoutPoint.subtitle ?? 'Emergency bailout or rendezvous point selected.'
-                                  : 'Pick one of up to five ECS-calculated road-access points, or open the map to drop your own.'}
+                                  : 'Open the map to drop reference bailout pins, or choose one of the ECS-calculated road-access points.'}
                               </Text>
                             </View>
                             <TouchableOpacity
                               style={styles.bailoutOpenButton}
                               activeOpacity={0.82}
-                              onPress={() => setBailoutPickerVisible(true)}
+                              onPress={handleOpenBailoutPicker}
                               accessibilityRole="button"
                               accessibilityLabel="Open bailout picker"
                               testID="trip-builder-open-bailout-picker"
                             >
                               <Ionicons name="map-outline" size={12} color={TACTICAL.amber} />
-                              <Text style={styles.bailoutOpenButtonText}>{selectedBailoutPoint ? 'Change' : 'Map Pick'}</Text>
+                              <Text style={styles.bailoutOpenButtonText}>{selectedBailoutPoint || bailoutPlanPins.length > 0 ? 'Change' : 'Open Map'}</Text>
                             </TouchableOpacity>
                           </View>
+                          {bailoutPlanPins.length > 0 ? (
+                            <View style={styles.campPinList} testID="trip-builder-bailout-pin-list">
+                              {bailoutPlanPins.map((pin, index) => (
+                                <View key={pin.id} style={styles.campPinRow}>
+                                  <View style={styles.campPinIcon}>
+                                    <Ionicons name="exit-outline" size={12} color={TACTICAL.amber} />
+                                  </View>
+                                  <View style={styles.campPinCopy}>
+                                    <Text style={styles.campPinTitle}>{pin.title}</Text>
+                                    <Text style={styles.campPinMeta} numberOfLines={1}>
+                                      Operator-marked bailout reference pin. Legal access, drivability, and current conditions are unknown.
+                                    </Text>
+                                  </View>
+                                  <TouchableOpacity
+                                    style={styles.campPinRemove}
+                                    activeOpacity={0.82}
+                                    onPress={() => handleRemoveBailoutPin(pin.id)}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`Remove bailout pin ${index + 1}`}
+                                    testID={`trip-builder-remove-bailout-pin-${pin.id}`}
+                                  >
+                                    <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+                                  </TouchableOpacity>
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
                           {bailoutOptionsLoading ? (
                             <View style={styles.smartResupplyLoadingRow}>
                               <ActivityIndicator size="small" color={TACTICAL.amber} />
@@ -5994,11 +6150,14 @@ export default function ExploreTripBuilderScreen() {
             route={selectedRoute as unknown as TripBuilderRouteInput | null}
             routePreviewPoints={selectedPreparedRoutePoints}
             options={bailoutOptions}
+            pins={bailoutPlanPins}
             selectedPoint={selectedBailoutPoint}
             loading={bailoutOptionsLoading}
             error={bailoutOptionsError}
             onSelect={handleSelectBailoutPoint}
             onDropPoint={handleDropBailoutPoint}
+            onRemovePin={handleRemoveBailoutPin}
+            onClearPins={handleClearBailoutPins}
             onClose={() => setBailoutPickerVisible(false)}
           />
           <CampPlanPickerOverlay

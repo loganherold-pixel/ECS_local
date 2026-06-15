@@ -138,6 +138,15 @@ includes(buildLoadoutModal, 'Choose a compartment before saving this item', 'Mis
 includes(buildLoadoutModal, 'FLEET_BUILD_LOADOUT_HIGH_MOUNTED_RISK_ACK_ID', 'Save Build should persist high-mounted load risk acknowledgement.');
 includes(buildLoadoutModal, 'High-mounted load is increasing top-heavy risk.', 'Save Build should warn before saving high-mounted load risk.');
 includes(buildLoadoutModal, 'Dismiss & Continue', 'High-mounted load warning should allow the user to dismiss and continue saving.');
+const highMountedWarningModal = between(
+  buildLoadoutModal,
+  'visible={highMountedWarningVisible}',
+  '<ECSPanel variant="warning" style={styles.highMountedWarningPanel}>',
+  'High-mounted load warning modal should be present.',
+);
+includes(highMountedWarningModal, 'scrollable', 'High-mounted load warning modal should be scrollable so all warning copy is readable.');
+includes(highMountedWarningModal, 'maxHeightFraction={0.72}', 'High-mounted load warning modal should allow enough vertical space for the full warning copy.');
+includes(highMountedWarningModal, 'contentContainerStyle={styles.highMountedWarningContent}', 'High-mounted load warning modal should use dedicated readable content spacing.');
 includes(buildLoadoutDomain, 'acknowledgedRiskIds', 'Build & Loadout state should preserve acknowledged risk ids.');
 notIncludes(buildLoadoutModal, "router.push('/(tabs)/fleet')", 'Add Item should not navigate back to Fleet.');
 notIncludes(buildLoadoutModal, 'router.replace', 'Add Item should not replace the Fleet route.');

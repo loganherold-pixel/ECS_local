@@ -9,7 +9,6 @@ import {
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECS, TACTICAL } from '../../lib/theme';
 import type { ExploreWizardRouteCandidate } from '../../lib/explore/exploreTripBuilderWizard';
-import { buildExploreRouteCardSummary } from '../../lib/explore/exploreRouteCardSummary';
 
 type ExploreTripBuilderWizardRouteCardProps = {
   candidate: ExploreWizardRouteCandidate;
@@ -44,15 +43,6 @@ export default function ExploreTripBuilderWizardRouteCard({
   onBuildTrip,
 }: ExploreTripBuilderWizardRouteCardProps) {
   const thumbnailUri = candidate.thumbnail?.uri ?? null;
-  const summary = buildExploreRouteCardSummary(candidate);
-  const summaryRows = [
-    { label: 'Status', value: summary.status },
-    { label: 'Current Condition', value: summary.currentCondition },
-    { label: 'Why', value: summary.why },
-    { label: 'What to Watch', value: summary.whatToWatch },
-    { label: 'Recommended Action', value: summary.recommendedAction },
-    { label: 'To Improve Status', value: summary.toImproveStatus },
-  ];
 
   return (
     <View style={styles.card} testID={`explore-tripbuilder-route-card-${candidate.id}`}>
@@ -104,15 +94,6 @@ export default function ExploreTripBuilderWizardRouteCard({
               <Text style={[styles.metaText, styles.savedPillText]}>SAVED</Text>
             </View>
           ) : null}
-        </View>
-
-        <View style={styles.summaryList}>
-          {summaryRows.map((row) => (
-            <View key={row.label} style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>{row.label}</Text>
-              <Text style={styles.summaryText} numberOfLines={1}>{row.value}</Text>
-            </View>
-          ))}
         </View>
 
         <View style={styles.actionRow}>
@@ -308,26 +289,6 @@ const styles = StyleSheet.create({
   },
   savedPillText: {
     color: TACTICAL.amber,
-  },
-  summaryList: {
-    gap: 4,
-  },
-  summaryRow: {
-    gap: 1,
-  },
-  summaryLabel: {
-    color: TACTICAL.amber,
-    fontSize: 7,
-    lineHeight: 9,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  summaryText: {
-    color: TACTICAL.text,
-    fontSize: 9,
-    lineHeight: 12,
-    fontWeight: '800',
   },
   actionRow: {
     flexDirection: 'row',

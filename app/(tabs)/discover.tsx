@@ -256,6 +256,7 @@ export const FALLBACK_DISCOVERY_TABS: { id: DiscoveryTabId; label: string; icon:
 
 const FAVORITES_VISIBLE_LIMIT = 5;
 const EXPLORE_CATEGORY_PAGE_SIZE = 10;
+const EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT = 12;
 const HIDDEN_GEM_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
 const TRAIL_PACK_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
 const AI_ROUTE_IDEA_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
@@ -706,7 +707,14 @@ function DiscoverScreenInner() {
   const isFocused = useIsFocused();
   const { width: windowWidth } = useWindowDimensions();
   const adaptive = useAdaptiveLayout();
-  const [opportunities, setOpportunities] = useState<ExpeditionOpportunity[]>([]);
+  const [opportunities, setOpportunities] = useState<ExpeditionOpportunity[]>(() =>
+    computeDistancesFromUser(
+      loadExpeditionOpportunities(),
+      DEFAULT_USER_LOCATION.latitude,
+      DEFAULT_USER_LOCATION.longitude,
+      'default_location',
+    ),
+  );
   const [compatResults, setCompatResults] = useState<Map<string, CompatibilityResult>>(new Map());
   const [vehicleProfile, setVehicleProfile] = useState<VehicleProfile | null>(null);
   const [activeVehicleId, setActiveVehicleId] = useState<string | null>(vehicleSetupStore.getActiveVehicleId());
@@ -760,6 +768,8 @@ function DiscoverScreenInner() {
   const [trailPackPageIndex, setTrailPackPageIndex] = useState(0);
   const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);
   const [favoritesPageIndex, setFavoritesPageIndex] = useState(0);
+  const [exploreGuidanceReadyVisibleLimit, setExploreGuidanceReadyVisibleLimit] =
+    useState(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT);
   const [activeExplorerCategoryPanel, setActiveExplorerCategoryPanel] = useState<ExplorerCategoryPanelKey | null>(null);
   const [hasLoadedExplorer, setHasLoadedExplorer] = useState(false);
   const [exploreFilterHydrated, setExploreFilterHydrated] = useState(false);
@@ -1670,7 +1680,7 @@ function DiscoverScreenInner() {
       setTrailPackPreview(null);
       router.push({
         pathname: '/explore-trip-builder',
-        params: { routeId: routeForHandoff.id },
+        params: { routeId: routeForHandoff.id, setup: '1' },
       } as any);
     },
     [guardPublicSuggestedTrailheadHandoff, hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
@@ -2814,6 +2824,7 @@ function DiscoverScreenInner() {
     setTrailPackPageIndex(0);
     setAiRouteIdeaPageIndex(0);
     setFavoritesPageIndex(0);
+    setExploreGuidanceReadyVisibleLimit(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT);
     setHiddenGemCycleNotice(null);
     setExploreMapHandoffNotice(null);
   }, [distanceRadius, exploreRefinement, vehicleProfileSignature, activeTabRouteSignature]);
@@ -3033,6 +3044,12 @@ function DiscoverScreenInner() {
         : exploreWizardCandidateSet.candidates.filter((candidate) => candidate.sourceKind === exploreWizardSourceFilter),
     [exploreWizardCandidateSet.candidates, exploreWizardSourceFilter],
   );
+  const visibleExploreWizardCardCandidates = useMemo(
+    () => visibleExploreWizardCandidates.slice(0, exploreGuidanceReadyVisibleLimit),
+    [exploreGuidanceReadyVisibleLimit, visibleExploreWizardCandidates],
+  );
+  const hasMoreExploreWizardCandidates =
+    visibleExploreWizardCardCandidates.length < visibleExploreWizardCandidates.length;
   const favoriteTrailMap = useMemo(() => {
     const map = new Map<string, FavoriteTrailRecord>();
     favoriteTrails.forEach((favorite) => {
@@ -3204,8 +3221,8 @@ function DiscoverScreenInner() {
     setSelectedPlanFavoriteIds((current) => current.filter((entry) => entry !== favoriteId));
   }, []);
 
-  const showInitialLoading = isLoading && !hasLoadedExplorer;
-  const showSectionLoading = isLoading && hasLoadedExplorer;
+  const showInitialLoading = isLoading && !hasLoadedExplorer && opportunities.length === 0;
+  const showSectionLoading = isLoading && (hasLoadedExplorer || opportunities.length > 0);
   const showTrailPackSectionLoading =
     showSectionLoading ||
     liveTrailPackCatalogSnapshot.status === 'idle' ||
@@ -4319,7 +4336,7 @@ function DiscoverScreenInner() {
                 />
               ) : (
                 <View style={[s.exploreWizardCardGrid, showExploreRouteGrid && s.exploreWizardCardGridExpanded]}>
-                  {visibleExploreWizardCandidates.map((candidate) => (
+                  {visibleExploreWizardCardCandidates.map((candidate) => (
                     <View
                       key={`${candidate.sourceKind}:${candidate.id}`}
                       style={[s.exploreWizardCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}
@@ -4343,6 +4360,22 @@ function DiscoverScreenInner() {
                   ))}
                 </View>
               )}
+
+              {hasMoreExploreWizardCandidates ? (
+                <TouchableOpacity
+                  style={s.hiddenGemPagerBtn}
+                  activeOpacity={0.82}
+                  onPress={() => {
+                    hapticMicro();
+                    setExploreGuidanceReadyVisibleLimit((current) =>
+                      Math.min(current + EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT, visibleExploreWizardCandidates.length),
+                    );
+                  }}
+                >
+                  <Ionicons name="chevron-down-outline" size={14} color={TACTICAL.amber} />
+                  <Text style={s.hiddenGemPagerText}>SHOW MORE ROUTES</Text>
+                </TouchableOpacity>
+              ) : null}
 
               {exploreWizardCandidateSet.hiddenTotal > 0 ? (
                 <View style={s.exploreWizardHiddenNotice}>

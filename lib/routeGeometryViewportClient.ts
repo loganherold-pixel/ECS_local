@@ -11,7 +11,8 @@ export function isRouteGeometryViewportOverlayFeatureEnabled(): boolean {
     typeof process !== 'undefined'
       ? process.env.EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY
       : undefined;
-  return value === '1' || value === 'true';
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized !== '0' && normalized !== 'false' && normalized !== 'off';
 }
 
 export async function fetchRouteGeometryViewportSegments(args: {

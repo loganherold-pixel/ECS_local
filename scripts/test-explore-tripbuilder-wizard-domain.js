@@ -189,10 +189,35 @@ async function main() {
   );
 
   const verifiedConfidence = deriveExploreLiveConfidence(makeRoute('verified-confidence', 'Verified Confidence', {
+    distanceMiles: 8,
+    terrainDifficulty: 3,
+    remotenessScore: 5,
+    routeGeometry: {
+      type: 'LineString',
+      coordinates: [
+        [-110, 38],
+        [-109.99, 38.01],
+        [-109.98, 38.02],
+        [-109.97, 38.03],
+        [-109.96, 38.04],
+        [-109.95, 38.05],
+        [-109.94, 38.06],
+        [-109.93, 38.07],
+        [-109.92, 38.08],
+        [-109.91, 38.09],
+      ],
+    },
     routeMetadata: {
+      routeGeometryMode: 'full',
+      activeGuidance: { status: 'ready', topologyResolved: true },
       catalogVerification: {
         confidenceScore: 94,
         sourceLabel: 'Validated route catalog',
+        publicRecommendation: true,
+        warnings: [],
+        blockers: [],
+        dataUsed: [{ label: 'Validated route catalog', freshness: 'fresh' }],
+        currentCondition: { status: 'clear', warnings: [], blockers: [], activeClosureCount: 0 },
       },
     },
   }));
@@ -211,8 +236,10 @@ async function main() {
     },
   }));
 
-  assert.strictEqual(verifiedConfidence.score, 94, 'Live confidence should prefer catalog verification confidence.');
-  assert.strictEqual(estimatedConfidence.score, 68, 'Live confidence should preserve explicit route metadata confidence.');
+  assert.strictEqual(verifiedConfidence.source, 'catalog_verification', 'Live confidence should prefer catalog verification as the source.');
+  assert(verifiedConfidence.score >= 90, 'Strong catalog verification with strong route evidence should remain high confidence.');
+  assert.strictEqual(estimatedConfidence.source, 'route_metadata', 'Live confidence should fall back to explicit route metadata confidence.');
+  assert(estimatedConfidence.score < 68, 'Route metadata confidence should be adjusted by route-specific geometry/readiness evidence.');
   assert.notStrictEqual(
     verifiedConfidence.score,
     estimatedConfidence.score,

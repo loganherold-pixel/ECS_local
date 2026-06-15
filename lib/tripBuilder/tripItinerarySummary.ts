@@ -185,7 +185,7 @@ function buildPhases(args: {
         : args.preTrailState === 'pending'
           ? 'pending'
           : args.preTrailState === 'provider_unavailable'
-            ? 'unavailable'
+            ? 'pending'
             : 'optional',
       detail: args.preTrailCount > 0
         ? `${args.preTrailCount} stop${args.preTrailCount === 1 ? '' : 's'}`

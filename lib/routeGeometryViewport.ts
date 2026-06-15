@@ -5,11 +5,14 @@ import type {
   RouteGeometryOverlaySegment,
   RouteGeometryOverlaySourceKind,
 } from './navigateRouteGeometryOverlay';
-import { ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING } from './navigateRouteGeometryOverlay';
+import {
+  ROUTE_GEOMETRY_OVERLAY_COLOR,
+  ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
+} from './navigateRouteGeometryOverlay';
 
 export const ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM = 10;
-export const ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT = 240;
 export const ROUTE_GEOMETRY_VIEWPORT_MAX_LIMIT = 500;
+export const ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT = 500;
 export const ROUTE_GEOMETRY_VIEWPORT_WARNING =
   'ECS catalog route geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.';
 export const ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE = 'route_geometry_viewport';
@@ -215,14 +218,8 @@ function isClosedOrProhibited(raw: RawViewportSegment): boolean {
   );
 }
 
-function sourceColor(segment: Pick<RouteGeometryViewportSegment, 'dataState' | 'legalityStatus'>): string {
-  if (segment.dataState === 'stale' || segment.dataState === 'fixture' || segment.dataState === 'unknown') {
-    return '#7D8C91';
-  }
-  if (segment.legalityStatus === 'geometry_only' || segment.legalityStatus === 'community_unverified') {
-    return '#F2C24D';
-  }
-  return '#65D4FF';
+function sourceColor(_segment: Pick<RouteGeometryViewportSegment, 'dataState' | 'legalityStatus'>): string {
+  return ROUTE_GEOMETRY_OVERLAY_COLOR;
 }
 
 function overlayIdForSegment(segment: Pick<RouteGeometryViewportSegment, 'sourceKind' | 'id'>): string {

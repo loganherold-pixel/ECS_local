@@ -172,6 +172,10 @@ const trailPackSegments = result.segments.filter((segment) => segment.sourceKind
 assert.strictEqual(trailPackSegments.length, 2, 'Trail Pack MultiLineString should normalize into separate selectable segments.');
 assert(trailPackSegments.every((segment) => segment.dataState === 'live'), 'Trail Pack data state should stay visible.');
 assert(trailPackSegments.every((segment) => segment.confidence === 'high'), 'High-confidence Trail Pack geometry should keep high confidence.');
+assert(
+  result.segments.every((segment) => segment.color === '#F2C24D'),
+  'All ECS route geometry overlay segments should render in ECS gold/yellow, not source-specific blue/green.',
+);
 
 const favorite = result.segments.find((segment) => segment.sourceKind === 'favorite_trail');
 assert(favorite, 'Favorite trail payload should be normalized.');

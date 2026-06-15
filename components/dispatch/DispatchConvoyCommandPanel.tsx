@@ -47,6 +47,8 @@ type DispatchConvoyCommandPanelProps = {
   onOpenEmergencyEvent: (event: DispatchEvent) => void;
   presentation?: 'full' | 'feed' | 'map' | 'summary';
   cameraResetKey?: string | number;
+  advisoryFocusCoordinate?: DispatchConvoyUserLocation | null;
+  advisoryFocusKey?: string | number;
   showEmergencyOverlay?: boolean;
   convoyLifecycleRevision?: number;
   testID?: string;
@@ -376,6 +378,8 @@ export default function DispatchConvoyCommandPanel({
   onOpenEmergencyEvent,
   presentation = 'full',
   cameraResetKey,
+  advisoryFocusCoordinate,
+  advisoryFocusKey,
   showEmergencyOverlay,
   convoyLifecycleRevision = 0,
   testID = 'dispatch-convoy-command-panel',
@@ -483,7 +487,7 @@ export default function DispatchConvoyCommandPanel({
   const emergencyPulseOpacity = useEmergencyPulse(shouldPulseEmergencyCount);
   const resolvedEmergencyButtonLabel = emergencyButtonLabel ?? (emergencySubmitting ? 'GETTING GPS' : 'PING GPS');
   const resolvedEmergencyButtonTone = emergencyButtonTone ?? TACTICAL.danger;
-  const shouldShowEmergencyFeed =
+  const shouldShowIntegratedEmergencyFeed =
     !isMapOnlyPresentation &&
     (!isSummaryOnlyPresentation || emergencyEvents.length > 0);
   const shouldShowEmergencyOverlay =
@@ -658,6 +662,8 @@ export default function DispatchConvoyCommandPanel({
             onSelectMember={(member) => setSelectedMemberId(member.memberId)}
             routeCoordinates={routeCoordinates}
             cameraResetKey={cameraResetKey}
+            advisoryFocusCoordinate={advisoryFocusCoordinate}
+            advisoryFocusKey={advisoryFocusKey}
             followUserWhenEmpty={!hasActiveConvoy}
             showMapWhenEmpty
             showStatusSummary={false}
@@ -794,6 +800,63 @@ export default function DispatchConvoyCommandPanel({
           />
         </View>
 
+        {shouldShowIntegratedEmergencyFeed ? (
+          <View
+            style={[
+              styles.emergencyInlineRail,
+              isFeedPresentation || isSummaryOnlyPresentation ? styles.emergencyInlineRailCompact : null,
+              primaryEmergencyEvent ? styles.emergencyInlineRailActive : null,
+            ]}
+          >
+            <View style={styles.emergencyInlineHeader}>
+              <View style={styles.emergencyInlineTitleGroup}>
+                <Ionicons
+                  name={primaryEmergencyEvent ? 'alert-circle-outline' : 'locate-outline'}
+                  size={isFeedPresentation || isSummaryOnlyPresentation ? 12 : 14}
+                  color={primaryEmergencyEvent ? TACTICAL.danger : TACTICAL.textMuted}
+                />
+                <Text style={styles.emergencyInlineTitle} numberOfLines={1}>Emergency Pings</Text>
+              </View>
+              <Animated.Text
+                style={[
+                  styles.emergencyInlineCount,
+                  primaryEmergencyEvent ? styles.emergencyInlineCountActive : null,
+                  primaryEmergencyEvent && shouldPulseEmergencyCount ? { opacity: emergencyPulseOpacity } : null,
+                ]}
+              >
+                {emergencyEvents.length} active
+              </Animated.Text>
+            </View>
+            {primaryEmergencyEvent ? (
+              <TouchableOpacity
+                style={[
+                  styles.emergencyInlineEventRow,
+                  isFeedPresentation || isSummaryOnlyPresentation ? styles.emergencyInlineEventRowCompact : null,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Open active GPS ping tactical map"
+                activeOpacity={0.8}
+                onPress={() => onOpenEmergencyEvent(primaryEmergencyEvent)}
+              >
+                <View style={styles.emergencyInlineCopy}>
+                  <Text style={styles.emergencyInlineEventTitle} numberOfLines={1}>
+                    Active GPS Ping
+                  </Text>
+                  <Text style={styles.emergencyInlineEventMeta} numberOfLines={1}>
+                    {formatEmergencyEventTime(primaryEmergencyEvent)} / {getEmergencyLocationLabel(primaryEmergencyEvent)}
+                  </Text>
+                </View>
+                <Text style={styles.emergencyInlineActionText} numberOfLines={1}>Open</Text>
+                <Ionicons name="navigate-outline" size={14} color={TACTICAL.amber} />
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.emergencyInlineEmptyText} numberOfLines={1}>
+                No active GPS pings. Use PING GPS only for immediate convoy recovery targets.
+              </Text>
+            )}
+          </View>
+        ) : null}
+
         {!isFeedPresentation && (!isSummaryOnlyPresentation || showSummaryConvoySignals) ? (
           <View style={[styles.legendMemberStack, showSummaryConvoySignals ? styles.summaryMemberStack : null]}>
             <Text style={[styles.memberTitle, summaryCompact ? styles.memberTitleCompact : null]}>CONVOY SIGNALS</Text>
@@ -861,64 +924,6 @@ export default function DispatchConvoyCommandPanel({
             </TouchableOpacity>
           </View>
         ) : null}
-      </View>
-      ) : null}
-
-      {shouldShowEmergencyFeed ? (
-      <View
-        style={[
-          styles.emergencyFeed,
-          isFeedPresentation || isSummaryOnlyPresentation ? styles.emergencyFeedCompact : null,
-          primaryEmergencyEvent ? styles.emergencyFeedActive : null,
-        ]}
-      >
-        <View style={[styles.emergencyFeedHeader, isFeedPresentation || isSummaryOnlyPresentation ? styles.emergencyFeedHeaderCompact : null]}>
-          <Text style={styles.emergencyFeedTitle}>Emergency Pings</Text>
-          <Animated.Text
-            style={[
-              styles.emergencyFeedCount,
-              primaryEmergencyEvent ? styles.emergencyFeedCountActive : null,
-              primaryEmergencyEvent && shouldPulseEmergencyCount ? { opacity: emergencyPulseOpacity } : null,
-            ]}
-          >
-            {emergencyEvents.length} active
-          </Animated.Text>
-        </View>
-        {primaryEmergencyEvent ? (
-          <TouchableOpacity
-            style={[
-              styles.emergencyEventRow,
-              styles.emergencyEventRowActive,
-              isFeedPresentation || isSummaryOnlyPresentation ? styles.emergencyEventRowCompact : null,
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel="Open active GPS ping tactical map"
-            activeOpacity={0.8}
-            onPress={() => onOpenEmergencyEvent(primaryEmergencyEvent)}
-          >
-            <View style={styles.emergencyEventIcon}>
-              <Ionicons name="alert-circle-outline" size={15} color={TACTICAL.danger} />
-            </View>
-            <View style={styles.emergencyEventCopy}>
-              <Text style={styles.emergencyEventTitle} numberOfLines={1}>
-                Active GPS Ping
-              </Text>
-              <Text style={styles.emergencyEventMeta} numberOfLines={1}>
-                {formatEmergencyEventTime(primaryEmergencyEvent)} / {getEmergencyLocationLabel(primaryEmergencyEvent)}
-              </Text>
-              <Text style={styles.emergencyEventActionText} numberOfLines={1}>
-                Tap for tactical map and active guidance route
-              </Text>
-            </View>
-            <Ionicons name="navigate-outline" size={16} color={TACTICAL.amber} />
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.emptyEmergencyRow}>
-            <Text style={styles.emptyEmergencyText}>
-              No active emergency coordinate pings. Use PING GPS only when a convoy partner needs an immediate map target.
-            </Text>
-          </View>
-        )}
       </View>
       ) : null}
     </View>
@@ -1284,6 +1289,94 @@ const styles = StyleSheet.create({
   },
   legendMetricExpanded: {
     minHeight: 0,
+  },
+  emergencyInlineRail: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(212,160,23,0.14)',
+    paddingTop: 6,
+    gap: 4,
+  },
+  emergencyInlineRailCompact: {
+    paddingTop: 4,
+    gap: 3,
+  },
+  emergencyInlineRailActive: {
+    borderTopColor: `${TACTICAL.danger}52`,
+  },
+  emergencyInlineHeader: {
+    minHeight: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  emergencyInlineTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flex: 1,
+    minWidth: 0,
+  },
+  emergencyInlineTitle: {
+    color: TACTICAL.text,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.45,
+    textTransform: 'uppercase',
+  },
+  emergencyInlineCount: {
+    ...TYPO.U2,
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    letterSpacing: 0.7,
+    flexShrink: 0,
+  },
+  emergencyInlineCountActive: {
+    color: TACTICAL.danger,
+  },
+  emergencyInlineEventRow: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 7,
+    backgroundColor: `${TACTICAL.danger}0F`,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+  },
+  emergencyInlineEventRowCompact: {
+    minHeight: 30,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    gap: 5,
+  },
+  emergencyInlineCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  emergencyInlineEventTitle: {
+    color: TACTICAL.text,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  emergencyInlineEventMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '700',
+    marginTop: 1,
+  },
+  emergencyInlineActionText: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.45,
+    textTransform: 'uppercase',
+  },
+  emergencyInlineEmptyText: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '700',
   },
   legendMemberStack: {
     gap: 4,

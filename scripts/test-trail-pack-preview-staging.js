@@ -93,10 +93,17 @@ const opportunity = trailPackToExpeditionOpportunity({
   },
 });
 const payload = buildExploreNavigationPayload(opportunity);
+const firstLoopGeometryCoordinate = loopTrailPack.routeGeometry.type === 'LineString'
+  ? loopTrailPack.routeGeometry.coordinates[0]
+  : loopTrailPack.routeGeometry.coordinates[0][0];
 assert.strictEqual(payload.source, 'explore');
 assert.strictEqual(payload.tripMode, 'hybrid');
 assert.strictEqual(payload.trailGeometry.length, 5, 'Trail Pack geometry should stage into Navigate payload');
-assert.strictEqual(payload.trailheadCoordinate.lat, loopTrailPack.centerCoordinate.latitude);
+assert.strictEqual(
+  payload.trailheadCoordinate.lat,
+  firstLoopGeometryCoordinate[1],
+  'Trail Pack staging should use the actual route geometry start, not the center fallback.',
+);
 assert.strictEqual(payload.routeMetadata.source, 'trail_pack', 'Trail Pack source metadata should survive staging');
 assert.strictEqual(payload.routeMetadata.trailPackId, loopTrailPack.id);
 assert.strictEqual(payload.routeMetadata.trailPackRouteType, 'loop');
@@ -191,6 +198,7 @@ assert.match(catalogPreviewReadiness.description, /branching source network/i);
 assert(
   previewSource.includes('MapRenderer') &&
     previewSource.includes('trailSegments={sourceTrailSegments}') &&
+    previewSource.includes('waypoints={[]}') &&
     previewSource.includes('DEFAULT_MAP_STYLE') &&
     previewSource.includes('getMapboxToken') &&
     previewSource.includes('cameraMode="route_overview"') &&
@@ -199,7 +207,7 @@ assert(
     !previewSource.includes('projectGeometry(') &&
     previewSource.includes('LOOP ROUTE') &&
     previewSource.includes('POINT ROUTE'),
-  'Trail Pack preview should display a map-rendered route snapshot with loop/point indicators',
+  'Trail Pack preview should display a map-rendered route-line-only snapshot with loop/point indicators and no generated pins',
 );
 assert(
   previewSource.includes('Offline cache unavailable for this Trail Pack.') &&
@@ -211,15 +219,22 @@ assert(
   'Offline cache action should use route catalog detail metadata and be disabled when Trail Pack cache support is unavailable',
 );
 assert(
-  previewSource.includes('ECS confidence') &&
+    previewSource.includes('ECS confidence') &&
     previewSource.includes('WARNINGS') &&
     previewSource.includes('ROUTE ASSESSMENT') &&
-    previewSource.includes('WHAT TO WATCH') &&
-    previewSource.includes('TO IMPROVE STATUS') &&
+    previewSource.includes("label: 'STATUS'") &&
+    previewSource.includes("label: 'CURRENT CONDITION'") &&
+    previewSource.includes("label: 'WHY'") &&
+    previewSource.includes("label: 'WHAT TO WATCH'") &&
+    previewSource.includes("label: 'RECOMMENDED ACTION'") &&
+    previewSource.includes("label: 'TO IMPROVE STATUS'") &&
     previewSource.includes('sourceLabel') &&
     previewSource.includes('communitySummary') &&
-    previewSource.includes('GUIDANCE STATUS'),
-  'Trail Pack preview should show difficulty, confidence, warnings, source, route assessment, verification, and community summary',
+    previewSource.includes('GUIDANCE STATUS') &&
+    !previewSource.includes('CONFIDENCE SIGNALS') &&
+    !previewSource.includes('DATA USED') &&
+    !previewSource.includes('detailDataUsed'),
+  'Trail Pack preview should show concise Route Assessment detail while removing separate Confidence Signals and Data Used containers',
 );
 assert(
   discoverSource.includes('Trail Pack staged. Navigate to the route start before beginning guidance.') &&

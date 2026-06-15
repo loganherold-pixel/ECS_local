@@ -271,6 +271,79 @@ assert.strictEqual(
   'Branching aggregate source networks should not be flattened into active guidance geometry.',
 );
 
+const revisitingLineString = buildExploreNavigationPayload(
+  makeCatalogRoute({
+    id: 'trail-pack:usfs-mvum-tahoe-road-revisit',
+    name: 'USFS MVUM Tahoe Road Revisit',
+    routeGeometry: {
+      type: 'LineString',
+      coordinates: [
+        [-120, 39],
+        [-120.001, 39.001],
+        [-120.002, 39.002],
+        [-120.001, 39.001],
+        [-120.003, 39.003],
+      ],
+    },
+  }),
+);
+
+assert.strictEqual(
+  revisitingLineString.routeMetadata.activeGuidanceStatus,
+  'preview_only',
+  'Single LineString routes that revisit an interior junction should stay preview-only until curated into one point-to-point spine.',
+);
+assert.strictEqual(
+  revisitingLineString.trailGeometry.length,
+  0,
+  'Revisiting LineString routes must not stage a looping or branching trail line for active guidance.',
+);
+assert.strictEqual(
+  revisitingLineString.trailGeometrySegments.length,
+  1,
+  'Revisiting LineString routes should keep their source-backed preview segment available for map display.',
+);
+assert(
+  String(revisitingLineString.routeMetadata.activeGuidanceUnavailableReason).includes('revisits'),
+  'Preview-only revisiting LineString routes should explain that the source line revisits the same corridor or junction.',
+);
+
+const declaredLoopLineString = buildExploreNavigationPayload(
+  makeCatalogRoute({
+    id: 'trail-pack:usfs-mvum-tahoe-loop-road',
+    name: 'USFS MVUM Tahoe Loop Road',
+    routeMetadata: {
+      source: 'trail_pack',
+      trailPackId: 'usfs-mvum-tahoe-loop-road',
+      trailPackRouteType: 'loop',
+      catalogVerification: {
+        sourceLabel: 'Official loop verified',
+        confidenceScore: 93,
+      },
+    },
+    routeGeometry: {
+      type: 'LineString',
+      coordinates: [
+        [-120, 39],
+        [-120.001, 39.001],
+        [-120.002, 39],
+        [-120, 39],
+      ],
+    },
+  }),
+);
+
+assert.strictEqual(
+  declaredLoopLineString.routeMetadata.activeGuidanceStatus,
+  'ready',
+  'Explicitly labeled loop routes should remain active-guidance-ready when the only revisit is the closing endpoint.',
+);
+assert.strictEqual(
+  declaredLoopLineString.trailGeometry.length,
+  4,
+  'Declared loop routes should preserve their closing route geometry for guidance staging.',
+);
+
 const navigateSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8');
 assert(
   navigateSource.includes('getNavigationHandoffActiveGuidanceUnavailableReason') &&

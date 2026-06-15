@@ -108,6 +108,37 @@ function routeDistanceMiles(points: ApproachResupplyCoordinate[]): number {
   return total;
 }
 
+function coordinateAtRouteProgress(
+  points: ApproachResupplyCoordinate[],
+  progressRatio: number,
+): ApproachResupplyCoordinate | null {
+  const validPoints = points.filter(isValidCoordinate);
+  if (validPoints.length === 0) return null;
+  if (validPoints.length === 1) return validPoints[0];
+
+  const totalMiles = routeDistanceMiles(validPoints);
+  if (totalMiles <= 0) return validPoints[validPoints.length - 1] ?? null;
+
+  const targetMiles = totalMiles * clamp01(progressRatio);
+  let coveredMiles = 0;
+
+  for (let index = 1; index < validPoints.length; index += 1) {
+    const start = validPoints[index - 1];
+    const end = validPoints[index];
+    const segmentMiles = haversineDistanceMiles(start, end);
+    if (coveredMiles + segmentMiles >= targetMiles || index === validPoints.length - 1) {
+      const ratio = segmentMiles > 0 ? clamp01((targetMiles - coveredMiles) / segmentMiles) : 0;
+      return {
+        latitude: start.latitude + (end.latitude - start.latitude) * ratio,
+        longitude: start.longitude + (end.longitude - start.longitude) * ratio,
+      };
+    }
+    coveredMiles += segmentMiles;
+  }
+
+  return validPoints[validPoints.length - 1] ?? null;
+}
+
 function projectionOnApproachRoute(
   points: ApproachResupplyCoordinate[],
   coordinate: ApproachResupplyCoordinate,
@@ -204,17 +235,20 @@ export function buildApproachResupplySearchAnchors({
   trailhead,
   approachRoute = [],
   fallbackAnchor = null,
-  maxAnchors = 5,
+  maxAnchors = 7,
 }: BuildApproachResupplySearchAnchorsArgs): ApproachResupplySearchAnchor[] {
-  const limit = Math.max(2, Math.floor(maxAnchors ?? 5));
+  const limit = Math.max(2, Math.floor(maxAnchors ?? 7));
   const routePoints = (approachRoute ?? []).filter(isValidCoordinate);
   const anchors: ApproachResupplySearchAnchor[] = [];
+  const hasTrailhead = !!trailhead && isValidCoordinate(trailhead);
+  const approachAnchorLimit = Math.max(1, hasTrailhead ? limit - 1 : limit);
 
   if (routePoints.length >= 2) {
-    const sampleRatios = [0.55, 0.7, 0.84, 0.94];
-    sampleRatios.forEach((ratio) => {
-      const index = Math.min(routePoints.length - 2, Math.max(0, Math.floor((routePoints.length - 1) * ratio)));
-      const coordinate = routePoints[index];
+    const fullCorridorRatios = [0.08, 0.18, 0.34, 0.55, 0.74, 0.94];
+    const compactCorridorRatios = [0.12, 0.4, 0.68, 0.92];
+    const sampleRatios = approachAnchorLimit <= 4 ? compactCorridorRatios : fullCorridorRatios;
+    sampleRatios.slice(0, approachAnchorLimit).forEach((ratio) => {
+      const coordinate = coordinateAtRouteProgress(routePoints, ratio);
       if (coordinate) {
         pushAnchor(anchors, {
           coordinate,
@@ -231,7 +265,7 @@ export function buildApproachResupplySearchAnchors({
     });
   }
 
-  if (trailhead && isValidCoordinate(trailhead)) {
+  if (hasTrailhead) {
     pushAnchor(anchors, {
       coordinate: trailhead,
       basis: 'trailhead_fallback',

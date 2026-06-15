@@ -476,6 +476,36 @@ assert.ok(
   'Readiness intelligence should explain follow-up checks for the saved tire and level setup.',
 );
 
+let ramAccessoryState = buildLoadout.createEmptyFleetBuildLoadoutState();
+for (const accessoryId of ['roof_rack_platform', 'cab_rack', 'truck_cap_smartcap', 'bed_drawers_storage', 'winch']) {
+  ramAccessoryState = buildLoadout.upsertFleetAccessoryInstall(
+    ramAccessoryState,
+    buildLoadout.buildFleetAccessoryInstall({
+      accessoryId,
+      vehicleId: leveledRamFleetVehicle.id,
+      knowledgeMode: 'estimate',
+    }),
+  );
+}
+const ramAccessoryWeightResult = fleet.calculateFleetWeightResult(
+  leveledRamFleetVehicle,
+  buildLoadout.toFleetAccessoryInstalls(ramAccessoryState, leveledRamFleetVehicle.id),
+  [],
+);
+const ramAccessoryScore = fleet.scoreFleetVehicle(leveledRamFleetVehicle, ramAccessoryWeightResult, []);
+assert.ok(
+  ramAccessoryWeightResult.payloadRemaining.lbs >= 1500,
+  `Accessory-only Ram 2500 scenario should retain healthy payload margin, got ${ramAccessoryWeightResult.payloadRemaining.lbs}.`,
+);
+assert.ok(
+  ramAccessoryScore.payloadScore >= 75,
+  `Accessory-only Ram 2500 payload score should stay healthy with ${ramAccessoryWeightResult.payloadRemaining.lbs} lb remaining, not ${ramAccessoryScore.payloadScore}.`,
+);
+assert.ok(
+  ramAccessoryScore.readinessScore >= 75,
+  `Accessory-only Ram 2500 readiness should not collapse before gear is added; got ${ramAccessoryScore.readinessScore}.`,
+);
+
 const consumableFleetVehicle = fleet.adaptLegacyVehicleToFleetVehicle({
   vehicle: {
     id: 'resource-1',
@@ -843,10 +873,68 @@ buildState = {
   }],
 };
 assert.strictEqual(buildState.accessories[0].installedWeightLb, 213);
+assert.strictEqual(buildState.accessories[0].loadRating.dynamicLoadLb, 330);
+assert.strictEqual(buildState.accessories[0].loadRating.staticLoadLb, 770);
 assert.deepStrictEqual(
   buildState.compartments.map((item) => item.name),
   ['Driver Side Bin', 'Passenger Side Bin', 'Cap Roof Zone', 'Enclosed Bed'],
   'SmartCap should create side-bin, roof, and enclosed-bed compartments.',
+);
+const smartCapFleetAccessory = buildLoadout.toFleetAccessoryInstalls(buildState, legacy.vehicle.id)
+  .find((item) => item.catalogItemId === 'truck_cap_smartcap');
+assert.strictEqual(
+  smartCapFleetAccessory.dynamicLoadRating.lbs,
+  330,
+  'SmartCap dynamic load rating should flow into Fleet accessory installs.',
+);
+assert.strictEqual(
+  smartCapFleetAccessory.staticLoadRating.lbs,
+  770,
+  'SmartCap static load rating should flow into Fleet accessory installs.',
+);
+
+const smartCapRiskRank = { clear: 0, watch: 1, caution: 2, critical: 3 };
+function smartCapStateWithDynamicRating(dynamicLoadLb) {
+  let state = buildLoadout.createEmptyFleetBuildLoadoutState();
+  state = buildLoadout.upsertFleetAccessoryInstall(state, {
+    ...buildLoadout.buildFleetAccessoryInstall({
+      accessoryId: 'truck_cap_smartcap',
+      vehicleId: legacy.vehicle.id,
+      knowledgeMode: 'estimate',
+    }),
+    loadRating: {
+      dynamicLoadLb,
+      staticLoadLb: 770,
+      source: 'manufacturer_spec',
+      confidence: 88,
+      sourceLabel: 'SmartCap published load rating',
+    },
+  });
+  const capRoof = state.compartments.find((item) => item.name === 'Cap Roof Zone');
+  assert.ok(capRoof, 'SmartCap rating test needs the cap roof compartment.');
+  return buildLoadout.upsertFleetCompartmentLoadoutItem(state, buildLoadout.buildFleetCompartmentLoadoutItem({
+    vehicleId: legacy.vehicle.id,
+    name: 'Cap roof cargo',
+    category: 'camp',
+    typicalWeightLb: 220,
+    compartment: capRoof,
+    permanence: 'trip',
+    source: 'user_estimate',
+    confidence: 62,
+  }));
+}
+const lowRatedSmartCapSummary = buildLoadout.calculateFleetBuildLoadoutSummary(
+  legacy.vehicle,
+  smartCapStateWithDynamicRating(50),
+);
+const defaultRatedSmartCapSummary = buildLoadout.calculateFleetBuildLoadoutSummary(
+  legacy.vehicle,
+  smartCapStateWithDynamicRating(330),
+);
+assert.ok(
+  smartCapRiskRank[defaultRatedSmartCapSummary.weightResult.topHeavyRisk] <
+    smartCapRiskRank[lowRatedSmartCapSummary.weightResult.topHeavyRisk],
+  'Higher SmartCap dynamic load allowance should reduce top-heavy risk.',
 );
 
 const drawers = buildLoadout.buildFleetAccessoryInstall({

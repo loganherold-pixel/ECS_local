@@ -200,6 +200,8 @@ export interface FleetAccessoryInstall {
   name: string;
   installedWeight: FleetWeightValue;
   affectsPayload?: boolean;
+  dynamicLoadRating?: FleetWeightValue | null;
+  staticLoadRating?: FleetWeightValue | null;
   loadZone: FleetLoadZone;
   compartmentId?: string | null;
   placement?: FleetPlacementMetadata | null;
@@ -279,6 +281,8 @@ export interface FleetWeightResult {
   payloadCapacity: FleetWeightValue | null;
   gvwrUsagePct: number | null;
   zoneWeights: Record<FleetLoadZone, FleetZoneWeightResult>;
+  highMountedDynamicLoadRating: FleetWeightValue;
+  highMountedCapacityAdjustedWeight: FleetWeightValue;
   topHeavyRisk: FleetRiskLevel;
   frontAxleRisk: FleetRiskLevel;
   rearAxleRisk: FleetRiskLevel;
@@ -1218,6 +1222,60 @@ function riskPenaltyForFleetScore(level: FleetRiskLevel): number {
   }
 }
 
+function fleetRiskRank(level: FleetRiskLevel): number {
+  const rank: Record<FleetRiskLevel, number> = { clear: 0, watch: 1, caution: 2, critical: 3 };
+  return rank[level];
+}
+
+function fleetRiskFromRank(rank: number): FleetRiskLevel {
+  if (rank >= 3) return 'critical';
+  if (rank >= 2) return 'caution';
+  if (rank >= 1) return 'watch';
+  return 'clear';
+}
+
+function payloadMarginContext(weightResult: FleetWeightResult): {
+  marginLb: number | null;
+  marginPctOfGvwr: number | null;
+  healthy: boolean;
+  moderate: boolean;
+} {
+  const marginLb = weightResult.payloadRemaining?.lbs ?? null;
+  const gvwrLb = weightResult.gvwr?.lbs ?? null;
+  const marginPctOfGvwr =
+    marginLb != null && gvwrLb != null && gvwrLb > 0
+      ? marginLb / gvwrLb
+      : null;
+  return {
+    marginLb,
+    marginPctOfGvwr,
+    healthy: marginLb != null && marginLb >= 1000 && (marginPctOfGvwr == null || marginPctOfGvwr >= 0.12),
+    moderate: marginLb != null && marginLb >= 0 && (marginPctOfGvwr == null || marginPctOfGvwr >= 0.1),
+  };
+}
+
+function readinessLoadZoneRiskLevel(weightResult: FleetWeightResult): FleetRiskLevel {
+  const rawLoadZoneRisk = maxRisk(
+    weightResult.topHeavyRisk,
+    weightResult.frontAxleRisk,
+    weightResult.rearAxleRisk,
+  );
+  const margin = payloadMarginContext(weightResult);
+  const hasStagedLoadout = weightResult.activeLoadoutWeight.lbs > 0;
+
+  if (weightResult.payloadRemaining && weightResult.payloadRemaining.lbs < 0) return rawLoadZoneRisk;
+  if (margin.healthy && !hasStagedLoadout) {
+    return fleetRiskFromRank(Math.min(fleetRiskRank(rawLoadZoneRisk), 1));
+  }
+  if (margin.healthy) {
+    return fleetRiskFromRank(Math.min(fleetRiskRank(rawLoadZoneRisk), 2));
+  }
+  if (margin.moderate && !hasStagedLoadout) {
+    return fleetRiskFromRank(Math.min(fleetRiskRank(rawLoadZoneRisk), 2));
+  }
+  return rawLoadZoneRisk;
+}
+
 function confidenceLevelForWeight(value: FleetWeightValue | null | undefined): FleetWeightConfidenceLevel {
   if (!value || value.lbs <= 0 || value.source === 'unknown') return 'unknown';
   if (value.source === 'scale_ticket' || value.source === 'vin_oem_match') return 'verified';
@@ -1423,7 +1481,22 @@ export function calculateFleetWeightResult(
   }
 
   const loadedWeight = Math.max(1, allInstalledAccessoryWeight.lbs + activeLoadoutWeight.lbs);
-  const topShare = (zoneWeights.roof.totalWeight.lbs + zoneWeights.bedHigh.totalWeight.lbs) / loadedWeight;
+  const highMountedRawWeight = zoneWeights.roof.totalWeight.lbs + zoneWeights.bedHigh.totalWeight.lbs;
+  const highMountedDynamicLoadRating = sumFleetWeightValues(
+    accessories
+      .map((accessory) => accessory.dynamicLoadRating ?? null)
+      .filter((rating): rating is FleetWeightValue => Boolean(rating && rating.lbs > 0)),
+    'High-mounted accessory dynamic load rating',
+  );
+  const highMountedCapacityAdjustedWeight = createFleetWeightValue(
+    Math.max(0, highMountedRawWeight - highMountedDynamicLoadRating.lbs),
+    'calculated',
+    {
+      confidence: highMountedDynamicLoadRating.lbs > 0 ? highMountedDynamicLoadRating.confidence : 0,
+      sourceLabel: 'High-mounted load after accessory dynamic rating credit',
+    },
+  );
+  const topShare = highMountedCapacityAdjustedWeight.lbs / loadedWeight;
   const frontShare = zoneWeights.frontLow.totalWeight.lbs / loadedWeight;
   const rearShare =
     (zoneWeights.rearLow.totalWeight.lbs +
@@ -1488,6 +1561,8 @@ export function calculateFleetWeightResult(
     payloadCapacity,
     gvwrUsagePct,
     zoneWeights,
+    highMountedDynamicLoadRating,
+    highMountedCapacityAdjustedWeight,
     topHeavyRisk: riskFromShare(topShare),
     frontAxleRisk: riskFromShare(frontShare),
     rearAxleRisk: riskFromShare(rearShare),
@@ -1510,12 +1585,8 @@ export function scoreFleetVehicle(
     blockingIssues.push(`Required checklist incomplete: ${item.label}`);
   }
 
-  const riskLevel = maxRisk(
-    weightResult.topHeavyRisk,
-    weightResult.frontAxleRisk,
-    weightResult.rearAxleRisk,
-    weightResult.gvwrOverageRisk,
-  );
+  const loadZoneReadinessRisk = readinessLoadZoneRiskLevel(weightResult);
+  const riskLevel = maxRisk(loadZoneReadinessRisk, weightResult.gvwrOverageRisk);
   const payloadScore = scoreFleetPayloadReadiness(weightResult);
   const checklistPenalty = Math.min(25, incompleteRequired.length * 8);
   const readinessScore = Math.max(0, Math.min(100, payloadScore - checklistPenalty - riskPenaltyForFleetScore(riskLevel)));

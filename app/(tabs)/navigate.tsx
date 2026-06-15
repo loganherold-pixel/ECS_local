@@ -210,7 +210,6 @@ import {
   type ExploreRouteOverlaySegment,
 } from '../../lib/navigateExploreRoutesOverlay';
 import {
-  buildRouteGeometryOverlaySegments,
   routeGeometrySegmentToRouteBuilderSegment,
   ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
   type RouteGeometryOverlaySegment,
@@ -657,7 +656,7 @@ import type {
 } from '../../lib/rigCompatibilityEngine';
 
 import GPSStatusOverlay from '../../components/navigate/GPSStatusOverlay';
-import { getCommandDockHeight } from '../../lib/shellLayout';
+import { getCommandDockTotalClearance } from '../../lib/shellLayout';
 import { ECS_STATE_COPY } from '../../lib/ecsStateCopy';
 import { reportDegradedState } from '../../lib/ecsIssueIntelligence';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
@@ -3204,9 +3203,14 @@ const [storageBannerHeight, setStorageBannerHeight] = useState(0);
 const actionBarHeight = 0;
 
 // -- Layout offsets ----------------------------------------
-const commandDockHeight = navigateLandscapeExpanded ? 0 : getCommandDockHeight(insets.bottom);
+const androidTabletWindow = Platform.OS === 'android' && Math.min(adaptive.windowWidth, adaptive.windowHeight) >= 720;
+const commandDockTabletScale = adaptive.isTablet || androidTabletWindow;
+const commandDockHeight = navigateLandscapeExpanded
+  ? 0
+  : getCommandDockTotalClearance(insets.bottom, commandDockTabletScale);
 
 const OVERLAY_EDGE = adaptive.navigate.overlayEdge;
+const DESTINATION_SEARCH_HORIZONTAL_INSET = Math.max(6, Math.floor(OVERLAY_EDGE * 0.5));
 const OVERLAY_GAP = adaptive.navigate.overlayGap;
 const OVERLAY_GROUP_GAP = adaptive.navigate.overlayGroupGap;
 const LOWER_DOCK_EXCLUSION = commandDockHeight + adaptive.navigate.overlayGroupGap;
@@ -8247,6 +8251,8 @@ const handleRouteBuilderAnchorTap = useCallback((coordinate: NavigateRouteCoordi
 const handleLongPressDrawRoute = useCallback(() => {
   if (!longPressContext || !longPressContext.actions.draw_route.enabled) return;
   handleRouteBuilderAnchorTap(longPressContext.coordinate);
+  setLongPressContext(null);
+  setLongPressInfoExpanded(false);
 }, [handleRouteBuilderAnchorTap, longPressContext]);
 
 const handleLongPressAddWaypoint = useCallback(() => {
@@ -12195,28 +12201,6 @@ const handleCreateRun = useCallback(() => {
     () => (exploreRoutesEnabled ? exploreRouteOverlayBuild.segments : []),
     [exploreRouteOverlayBuild.segments, exploreRoutesEnabled],
   );
-  const localRouteGeometryOverlayBuild = useMemo(
-    () => {
-      void customRouteRefreshKey;
-      void savedRoutesRefreshKey;
-      return buildRouteGeometryOverlaySegments({
-        routes: routeStore.getAll(),
-        runs,
-        savedRouteAssets,
-        exploreSegments: exploreRouteOverlayBuild.segments,
-        selectedSegmentIds: selectedRouteGeometrySegmentIds,
-        maxSegments: 240,
-      });
-    },
-    [
-      customRouteRefreshKey,
-      exploreRouteOverlayBuild.segments,
-      runs,
-      savedRouteAssets,
-      savedRoutesRefreshKey,
-      selectedRouteGeometrySegmentIds,
-    ],
-  );
   const visibleCatalogRouteGeometryOverlaySegments = useMemo(
     () =>
       routeGeometryViewportOverlayEnabled
@@ -12244,27 +12228,22 @@ const handleCreateRun = useCallback(() => {
   );
   const routeGeometryOverlayBuild = useMemo(
     () => {
-      const sourceCounts = { ...localRouteGeometryOverlayBuild.sourceCounts };
-      if (catalogRouteGeometryOverlaySegments.length > 0) {
-        sourceCounts.route_catalog =
-          (sourceCounts.route_catalog ?? 0) + catalogRouteGeometryOverlaySegments.length;
-      }
       return {
-        ...localRouteGeometryOverlayBuild,
-        segments: [
-          ...localRouteGeometryOverlayBuild.segments,
-          ...catalogRouteGeometryOverlaySegments,
-        ],
-        candidateCount:
-          localRouteGeometryOverlayBuild.candidateCount +
-          routeGeometryViewportUiState.featureCount,
-        cappedCount:
-          localRouteGeometryOverlayBuild.cappedCount +
-          routeGeometryViewportUiState.cappedCount,
-        skippedMissingGeometryCount:
-          localRouteGeometryOverlayBuild.skippedMissingGeometryCount +
-          routeGeometryViewportUiState.skippedMissingGeometryCount,
-        sourceCounts,
+        segments: catalogRouteGeometryOverlaySegments,
+        candidateCount: routeGeometryViewportUiState.featureCount,
+        cappedCount: routeGeometryViewportUiState.cappedCount,
+        skippedMissingGeometryCount: routeGeometryViewportUiState.skippedMissingGeometryCount,
+        sourceCounts: {
+          route_catalog: catalogRouteGeometryOverlaySegments.length,
+          trail_pack: 0,
+          explore_route: 0,
+          saved_route: 0,
+          imported_route: 0,
+          custom_route: 0,
+          recorded_run: 0,
+          favorite_trail: 0,
+        },
+        dedupedCount: 0,
         catalogViewportActive:
           routeGeometryViewportOverlayEnabled &&
           catalogRouteGeometryOverlaySegments.length > 0,
@@ -12272,7 +12251,6 @@ const handleCreateRun = useCallback(() => {
     },
     [
       catalogRouteGeometryOverlaySegments,
-      localRouteGeometryOverlayBuild,
       routeGeometryViewportOverlayEnabled,
       routeGeometryViewportUiState.cappedCount,
       routeGeometryViewportUiState.featureCount,
@@ -12297,33 +12275,30 @@ const handleCreateRun = useCallback(() => {
         .join('|'),
     [routeGeometryOverlaySegments],
   );
-  const routeGeometryOverlaySourceSummary = useMemo(() => {
-    const loadedSources = Object.entries(routeGeometryOverlayBuild.sourceCounts)
-      .filter(([, count]) => count > 0)
-      .map(([source, count]) => `${source.replace(/_/g, ' ')} ${count}`);
-    return loadedSources.length > 0 ? loadedSources.join(' / ') : 'no ECS-owned sources';
-  }, [routeGeometryOverlayBuild.sourceCounts]);
   const routeGeometryViewportLegendMessage = useMemo(() => {
     if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
-      return 'Zoom to 10+ to load ECS route geometry.';
+      return 'Zoom to 10+ to show ECS trail segments.';
     }
     if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'loading') {
-      return 'Loading ECS route geometry for the visible viewport.';
+      return 'Loading ECS trail segments for this map view.';
     }
     if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'offline') {
-      return routeGeometryViewportUiState.errorMessage ?? 'Offline. Cached ECS route geometry only.';
+      return routeGeometryViewportUiState.errorMessage ?? 'Offline. Cached ECS trail segments only.';
     }
     if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'error') {
-      return routeGeometryViewportUiState.errorMessage ?? 'ECS route geometry unavailable.';
+      return routeGeometryViewportUiState.errorMessage ?? 'ECS trail segments unavailable.';
+    }
+    if (routeGeometryOverlayBuild.segments.length === 0) {
+      return 'No ECS trail segments in this map view. Pan or zoom to inspect nearby trails.';
     }
     const dataStateCopy =
       routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.dataState === 'cached'
         ? ' Cached viewport data.'
         : '';
-    return `${routeGeometryOverlayBuild.segments.length} loaded from ${routeGeometryOverlaySourceSummary}.${dataStateCopy}`;
+    const segmentCount = routeGeometryOverlayBuild.segments.length;
+    return `${segmentCount} ECS trail segment${segmentCount === 1 ? '' : 's'} shown in this map view.${dataStateCopy}`;
   }, [
     routeGeometryOverlayBuild.segments.length,
-    routeGeometryOverlaySourceSummary,
     routeGeometryViewportOverlayEnabled,
     routeGeometryViewportUiState.dataState,
     routeGeometryViewportUiState.errorMessage,
@@ -17204,7 +17179,7 @@ const toggleRemotenessOverlay = useCallback(() => {
     if (!next) return;
 
     if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
-      showToast(`ZOOM TO ${ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM}+ TO LOAD ECS ROUTE GEOMETRY`);
+      showToast(`ZOOM TO ${ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM}+ TO SHOW ECS TRAIL SEGMENTS`);
       return;
     }
 
@@ -17214,8 +17189,8 @@ const toggleRemotenessOverlay = useCallback(() => {
 
     showToast(
       routeGeometryViewportOverlayEnabled
-        ? 'ECS ROUTE GEOMETRY LOADING FOR THIS VIEWPORT'
-        : 'NO ECS ROUTE GEOMETRY AVAILABLE',
+        ? 'ECS TRAIL SEGMENTS LOADING FOR THIS MAP VIEW'
+        : 'ECS TRAIL SEGMENTS UNAVAILABLE',
     );
   }, [
     routeGeometryOverlayBuild.segments.length,
@@ -17329,13 +17304,13 @@ const toggleRemotenessOverlay = useCallback(() => {
     setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
     setRouteBuilderSnapMessage(
       alreadySelected
-        ? 'ECS route geometry segment removed.'
+        ? 'ECS trail segment removed.'
         : ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
     );
     showToast(
       alreadySelected
-        ? 'ECS ROUTE GEOMETRY SEGMENT REMOVED'
-        : `ECS ROUTE GEOMETRY ADDED: ${match.sourceLabel}`.toUpperCase(),
+        ? 'ECS TRAIL SEGMENT REMOVED'
+        : 'ECS TRAIL SEGMENT ADDED',
     );
   }, [
     closeNavigateDetailSurfaces,
@@ -18135,7 +18110,16 @@ const stableMapSurface = useMemo(() => {
       />
 
       {longPressContext ? (
-        <View style={[styles.longPressActionMenu, { left: OVERLAY_EDGE, right: OVERLAY_EDGE }]}>
+        <View
+          style={[
+            styles.longPressActionMenu,
+            {
+              left: OVERLAY_EDGE,
+              right: OVERLAY_EDGE,
+              bottom: routeSurfaceBottomOffset + OVERLAY_GAP,
+            },
+          ]}
+        >
           <View style={styles.longPressActionHeader}>
             <View>
               <Text style={styles.longPressActionTitle}>MAP POINT</Text>
@@ -18249,8 +18233,8 @@ const stableMapSurface = useMemo(() => {
             styles.idleDestinationSearchWrap,
             {
               top: roadNavigationSurfaceTopOffset,
-              left: OVERLAY_EDGE,
-              right: OVERLAY_EDGE,
+              left: DESTINATION_SEARCH_HORIZONTAL_INSET,
+              right: DESTINATION_SEARCH_HORIZONTAL_INSET,
             },
           ]}
         >
@@ -19046,7 +19030,7 @@ const stableMapSurface = useMemo(() => {
                 <Ionicons
                   name="git-branch-outline"
                   size={17}
-                  color={routeGeometryOverlayEnabled ? '#091014' : '#65D4FF'}
+                  color={routeGeometryOverlayEnabled ? '#091014' : TACTICAL.amber}
                 />
               </TouchableOpacity>
             </View>
@@ -19519,6 +19503,8 @@ const stableMapSurface = useMemo(() => {
   communityCampSitePhotosById,
   adaptive.isExpanded,
   OVERLAY_EDGE,
+  OVERLAY_GAP,
+  DESTINATION_SEARCH_HORIZONTAL_INSET,
   adaptive.windowWidth,
   campsiteDetailTopOffset,
   campLayerDetailBottomOffset,
@@ -20447,7 +20433,7 @@ const stableMapSurface = useMemo(() => {
       ]}
     >
       <View style={styles.routeGeometryOverlayLegendHeader}>
-        <Ionicons name="git-branch-outline" size={12} color="#65D4FF" />
+        <Ionicons name="git-branch-outline" size={12} color={TACTICAL.amber} />
         <Text style={styles.routeGeometryOverlayLegendTitle}>ECS ROUTE GEOMETRY</Text>
       </View>
       <Text style={styles.routeGeometryOverlayLegendText} numberOfLines={2}>
@@ -22745,7 +22731,6 @@ emptyMapBody: {
   },
   longPressActionMenu: {
     position: 'absolute',
-    bottom: 118,
     zIndex: NAV_OVERLAY_Z.contextual + 2,
     elevation: NAV_OVERLAY_Z.contextual + 2,
     borderRadius: 10,
@@ -23055,15 +23040,15 @@ rightFloatingRail: {
 },
 
 campLayerMenuPanel: {
-  width: 292,
-  maxWidth: SCREEN_W - 28,
-  borderRadius: 14,
+  width: 276,
+  maxWidth: SCREEN_W - 16,
+  borderRadius: 12,
   borderWidth: 1,
   borderColor: 'rgba(196,138,44,0.28)',
   backgroundColor: 'rgba(8,12,15,0.96)',
-  paddingHorizontal: 10,
-  paddingVertical: 10,
-  gap: 8,
+  paddingHorizontal: 8,
+  paddingVertical: 8,
+  gap: 6,
   shadowColor: '#000',
   shadowOffset: { width: 0, height: 8 },
   shadowOpacity: 0.34,
@@ -23093,9 +23078,9 @@ campLayerMenuTitle: {
 },
 
 campLayerMenuCloseButton: {
-  width: 28,
-  height: 28,
-  borderRadius: 14,
+  width: 26,
+  height: 26,
+  borderRadius: 13,
   alignItems: 'center',
   justifyContent: 'center',
   borderWidth: 1,
@@ -23104,9 +23089,9 @@ campLayerMenuCloseButton: {
 },
 
 campLayerMenuToggle: {
-  minHeight: 78,
-  paddingHorizontal: 10,
-  paddingVertical: 9,
+  minHeight: 56,
+  paddingHorizontal: 8,
+  paddingVertical: 7,
 },
 
 campLayerMenuNotes: {
@@ -23276,14 +23261,14 @@ routeGeometryOverlayLegend: {
   maxWidth: SCREEN_W - 28,
   borderRadius: 10,
   borderWidth: 1,
-  borderColor: 'rgba(101,212,255,0.34)',
+  borderColor: 'rgba(242,194,77,0.34)',
   backgroundColor: 'rgba(7,12,16,0.90)',
   paddingHorizontal: 10,
   paddingVertical: 8,
   gap: 4,
   zIndex: NAV_OVERLAY_Z.contextual,
   elevation: NAV_OVERLAY_Z.contextual,
-  shadowColor: '#65D4FF',
+  shadowColor: '#F2C24D',
   shadowOffset: { width: 0, height: 4 },
   shadowOpacity: 0.16,
   shadowRadius: 10,
@@ -23297,7 +23282,7 @@ routeGeometryOverlayLegendHeader: {
 
 routeGeometryOverlayLegendTitle: {
   ...TYPO.U2,
-  color: '#65D4FF',
+  color: TACTICAL.amber,
   fontSize: 8,
   letterSpacing: 1,
 },
@@ -23736,7 +23721,7 @@ idleDestinationSearchWrap: {
 
 idleDestinationSearchShell: {
   width: '100%',
-  maxWidth: 560,
+  maxWidth: 720,
   borderRadius: 12,
   borderWidth: 1,
   borderColor: 'rgba(196,138,44,0.34)',

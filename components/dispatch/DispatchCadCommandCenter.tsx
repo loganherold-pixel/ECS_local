@@ -123,6 +123,10 @@ import {
   resolveDispatchRolloutConfig,
   type DispatchRolloutFeature,
 } from '../../lib/dispatchRolloutConfig';
+import {
+  tokenizeDispatchAdvisoryCoordinateLinks,
+  type DispatchAdvisoryCoordinate,
+} from '../../lib/dispatchAdvisoryCoordinateLinks';
 
 const DISPATCH_ROLLOUT_NOTICE_LABELS: Partial<Record<DispatchRolloutFeature, string>> = {
   teamPositionSharing: 'team sharing',
@@ -816,6 +820,55 @@ function buildRecoveryAssistNavigationPayload(event: DispatchEvent): NavigationH
       coordinate,
       accuracyMeters: event.location.accuracyMeters ?? null,
       locationTimestamp: event.location.timestamp ?? null,
+    },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function buildDispatchAdvisoryCoordinateNavigationPayload(
+  coordinate: DispatchAdvisoryCoordinate,
+  event: DispatchEvent | null,
+): NavigationHandoffPayload {
+  const roadCoordinate = {
+    lat: coordinate.latitude,
+    lng: coordinate.longitude,
+  };
+  const title = event?.title?.trim() || 'Dispatch Advisory GPS';
+  const subtitle = event?.message?.split('\n').map((line) => line.trim()).find(Boolean) ?? 'ECS advisory coordinate';
+
+  return {
+    id: `dispatch-advisory-coordinate-${event?.id ?? 'gps'}-${Date.now()}`,
+    source: 'dispatch',
+    type: 'place',
+    title,
+    subtitle,
+    coordinate: roadCoordinate,
+    trailheadCoordinate: null,
+    roadDestinationCoordinate: roadCoordinate,
+    trailGeometry: [],
+    trailLengthMiles: null,
+    trailCategory: 'Dispatch advisory',
+    tripMode: 'road',
+    routeSource: 'dispatch_recovery',
+    requiresOnlineRouting: true,
+    trailWaypoints: [],
+    trailDecisionPoints: [],
+    routeMetadata: {
+      navigationMode: 'dispatch_advisory_coordinate',
+      dispatchAdvisoryCoordinate: true,
+      dispatchEventId: event?.id ?? null,
+      sourceLabel: 'Dispatch advisory GPS',
+    },
+    landmarkMetadata: {
+      kind: 'dispatch_advisory_coordinate',
+      source: 'dispatch_advisory',
+    },
+    raw: {
+      source: 'dispatch_advisory',
+      eventId: event?.id ?? null,
+      title: event?.title ?? null,
+      severity: event?.severity ?? null,
+      coordinate: roadCoordinate,
     },
     createdAt: new Date().toISOString(),
   };
@@ -2133,6 +2186,8 @@ export default function DispatchCadCommandCenter() {
   const [convoyLifecycleBusy, setConvoyLifecycleBusy] = useState(false);
   const [convoyLifecycleRevision, setConvoyLifecycleRevision] = useState(0);
   const [mapCameraResetKey, setMapCameraResetKey] = useState(0);
+  const [dispatchConvoyMapFocusCoordinate, setDispatchConvoyMapFocusCoordinate] = useState<ThreatCoordinate | null>(null);
+  const [dispatchConvoyMapFocusKey, setDispatchConvoyMapFocusKey] = useState(0);
   const [pulsingAdvisoryId, setPulsingAdvisoryId] = useState<string | null>(null);
   const [teamSnapshot, setTeamSnapshot] = useState<TeamStoreSnapshot>(() => teamStore.getSnapshot());
   const [dispatchProfile, setDispatchProfile] = useState<DispatchProfileSnapshot>(() => dispatchProfileStore.getSnapshot());
@@ -2759,6 +2814,10 @@ export default function DispatchCadCommandCenter() {
     const topEvent = getTopDispatchAdvisory(visibleEvents);
     return topEvent?.id === dismissedAdvisoryId ? null : topEvent;
   }, [dismissedAdvisoryId, visibleEvents]);
+  const advisoryCoordinateTokens = useMemo(
+    () => tokenizeDispatchAdvisoryCoordinateLinks(advisory?.message ?? ''),
+    [advisory?.message],
+  );
   const advisoryIsEmergencyPing = advisory ? isRecoveryCriticalEvent(advisory) : false;
   useEffect(() => {
     if (!isDispatchFocused || !advisory || !advisoryIsEmergencyPing) {
@@ -2783,6 +2842,43 @@ export default function DispatchCadCommandCenter() {
     inputRange: [0.48, 1],
     outputRange: [0.75, 1.18],
   });
+  const handleDispatchAdvisoryCoordinatePress = useCallback(async (coordinate: DispatchAdvisoryCoordinate) => {
+    if (!isValidCoordinate(coordinate)) {
+      showToast?.('Advisory GPS coordinate unavailable.');
+      return;
+    }
+
+    if (activeConvoyControl?.convoyId) {
+      setDispatchConvoyMapFocusCoordinate(coordinate);
+      setDispatchConvoyMapFocusKey((current) => current + 1);
+      setMapCameraResetKey((current) => current + 1);
+      showToast?.('Convoy map centered on ECS advisory GPS.');
+      return;
+    }
+
+    try {
+      const payload = buildDispatchAdvisoryCoordinateNavigationPayload(coordinate, advisory);
+      await saveNavigationHandoffPayload(payload);
+      await stageNavigationFlow({
+        source: 'alert',
+        target: 'navigate',
+        intent: 'route_preview',
+        label: 'Dispatch Advisory GPS',
+        message: 'Advisory coordinate ready on Navigate.',
+        context: {
+          routeId: payload.id,
+          dispatchAdvisoryCoordinate: true,
+          dispatchEventId: advisory?.id ?? null,
+        },
+      });
+      showToast?.('Opening advisory GPS in Navigate.');
+      setTimeout(() => {
+        router.push('/navigate' as any);
+      }, 0);
+    } catch (error) {
+      showToast?.(error instanceof Error ? error.message : 'Advisory GPS route unavailable.');
+    }
+  }, [activeConvoyControl?.convoyId, advisory, router, showToast]);
 
   useEffect(() => {
     const signature = `${visibleEvents.length}:${createLiveDispatchEventListFingerprint(visibleEvents)}`;
@@ -3789,7 +3885,21 @@ export default function DispatchCadCommandCenter() {
       ) : null}
       <Ionicons name="pulse-outline" size={isLandscapeDispatch ? 12 : 14} color={TACTICAL.amber} />
       <Text style={[styles.advisoryLabel, isLandscapeDispatch ? styles.advisoryLabelLandscape : null]}>ECS Advisory</Text>
-      <Text style={[styles.advisoryText, isLandscapeDispatch ? styles.advisoryTextLandscape : null]} numberOfLines={isLandscapeDispatch ? 2 : 3}>{advisory.message}</Text>
+      <Text style={[styles.advisoryText, isLandscapeDispatch ? styles.advisoryTextLandscape : null]}>
+        {advisoryCoordinateTokens.map((token, index) => token.type === 'coordinate' ? (
+          <Text
+            key={`advisory-coordinate-${index}`}
+            accessibilityRole="link"
+            accessibilityLabel={`Open ECS advisory GPS ${token.coordinate.latitude.toFixed(5)}, ${token.coordinate.longitude.toFixed(5)}`}
+            onPress={() => handleDispatchAdvisoryCoordinatePress(token.coordinate)}
+            style={styles.advisoryCoordinateLink}
+          >
+            {token.text}
+          </Text>
+        ) : (
+          <Text key={`advisory-copy-${index}`}>{token.text}</Text>
+        ))}
+      </Text>
       <TouchableOpacity
         style={styles.advisoryDismiss}
         accessibilityRole="button"
@@ -3876,6 +3986,8 @@ export default function DispatchCadCommandCenter() {
           onOpenEmergencyEvent={handleOpenEmergencyPing}
           presentation={isLandscapeDispatch ? 'map' : 'feed'}
           cameraResetKey={mapCameraResetKey}
+          advisoryFocusCoordinate={dispatchConvoyMapFocusCoordinate}
+          advisoryFocusKey={dispatchConvoyMapFocusKey}
           showEmergencyOverlay={false}
           convoyLifecycleRevision={convoyLifecycleRevision}
           testID="dispatch-convoy-command-feed-panel"
@@ -6681,6 +6793,12 @@ const styles = StyleSheet.create({
   advisoryTextLandscape: {
     fontSize: 8,
     lineHeight: 11,
+  },
+  advisoryCoordinateLink: {
+    color: TACTICAL.amber,
+    fontWeight: '900',
+    textDecorationLine: 'underline',
+    textDecorationColor: TACTICAL.amber,
   },
   advisoryDismiss: {
     width: 28,

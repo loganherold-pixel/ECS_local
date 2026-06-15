@@ -186,6 +186,12 @@ assert(
   'CampOps popup actions should stay tappable and fit labels on small screens.',
 );
 assert(
+  popupSource.includes('maxHeight: 340') &&
+    popupSource.includes('paddingVertical: 9') &&
+    popupSource.includes('minHeight: 34'),
+  'CampOps popup should stay compact instead of running up the map screen.',
+);
+assert(
   navigateSource.includes('selectedCampOpsIntel') &&
     navigateSource.includes('handleCampOpsNavigateHere') &&
     navigateSource.includes('previewCampsiteDestination') &&

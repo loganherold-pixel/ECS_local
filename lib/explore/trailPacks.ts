@@ -322,9 +322,11 @@ export function getTrailPackDistanceFromUserMiles(
 }
 
 export function getTrailPackGuidanceReadiness(
-  pack: Pick<ECSTrailPack, 'routeGeometry' | 'catalogVerification'>,
+  pack: Pick<ECSTrailPack, 'routeGeometry' | 'catalogVerification'> & Partial<Pick<ECSTrailPack, 'routeType'>>,
 ): ECSTrailPackGuidanceReadiness {
-  const guidanceGeometry = normalizeNavigationGuidanceGeometry(pack.routeGeometry);
+  const guidanceGeometry = normalizeNavigationGuidanceGeometry(pack.routeGeometry, {
+    allowLoop: pack.routeType === 'loop',
+  });
   const activeGuidance = pack.catalogVerification?.activeGuidance;
 
   if (activeGuidance?.status === 'preview_only') {
@@ -373,7 +375,9 @@ export function getTrailPackGuidanceReadiness(
   };
 }
 
-export function canStartTrailPackGuidance(pack: Pick<ECSTrailPack, 'routeGeometry' | 'catalogVerification'>): boolean {
+export function canStartTrailPackGuidance(
+  pack: Pick<ECSTrailPack, 'routeGeometry' | 'catalogVerification'> & Partial<Pick<ECSTrailPack, 'routeType'>>,
+): boolean {
   return getTrailPackGuidanceReadiness(pack).canStart;
 }
 

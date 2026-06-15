@@ -31,6 +31,12 @@ assert(
     source.includes('route-geometry-selected-layer'),
   'MapRenderer should style route geometry segments through dedicated line/halo treatment.',
 );
+assert(
+  source.includes("'line-color': '#F2C24D'") &&
+    !source.includes("'line-color': ['get', 'color'],\n              'line-width': 2.75") &&
+    !source.includes("'line-color': ['get', 'color'],\n              'line-width': 5.5"),
+  'Route geometry segment layers should render in ECS gold/yellow rather than source-specific blue/green.',
+);
 
 assert(
   source.includes('findRouteGeometrySegmentFeatureAtPoint') &&
