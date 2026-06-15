@@ -73,6 +73,43 @@ assert.strictEqual(
 assert.strictEqual(overlay.forecastSegments[0].signal, 'good', 'Green/low remoteness segment should map to good signal.');
 assert.strictEqual(overlay.forecastSegments[1].signal, 'weak', 'Remote/backcountry segment should map to weak signal.');
 
+const colorOverlay = buildRemoteMapOverlay({
+  enabled: true,
+  segmentFeatures: [
+    {
+      coordinates: [[-121.20, 38.78], [-121.19, 38.78]],
+      remoteness_level: 'green',
+      risk_score: 8,
+    },
+    {
+      coordinates: [[-121.19, 38.78], [-121.18, 38.78]],
+      remoteness_level: 'moderate',
+      risk_score: 34,
+    },
+    {
+      coordinates: [[-121.18, 38.78], [-121.17, 38.78]],
+      remoteness_level: 'remote',
+      risk_score: 64,
+    },
+    {
+      coordinates: [[-121.17, 38.78], [-121.16, 38.78]],
+      remoteness_level: 'wilderness',
+      risk_score: 91,
+    },
+  ],
+});
+
+assert.deepStrictEqual(
+  colorOverlay.forecastSegments.map((segment) => segment.color),
+  ['#5FD1FF', '#65C97A', '#F2C24D', '#C66A4A'],
+  'Zoom-visible remoteness forecast line should preserve low/moderate/remote/high colors instead of collapsing low and moderate into one green line.',
+);
+assert.deepStrictEqual(
+  colorOverlay.forecastSegments.map((segment) => segment.signal),
+  ['good', 'good', 'weak', 'dead'],
+  'Connectivity signal buckets should stay conservative while line colors remain four-level for map readability.',
+);
+
 const disabled = buildRemoteMapOverlay({
   enabled: false,
   routePoints: [{ lat: 38.78, lng: -121.2 }, { lat: 38.79, lng: -121.19 }],

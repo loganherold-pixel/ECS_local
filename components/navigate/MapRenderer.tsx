@@ -2354,6 +2354,10 @@ function makeMapHtml(
       var dispersedCampingMapTapSuppressUntil = 0;
       var establishedCampsitesState = { enabled: false, geojson: null, version: 0, appliedVersion: 0 };
       var establishedCampsitesLayerHandlersAttached = false;
+      var REMOTE_FORECAST_VISIBLE_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 22, 8, 20, 11, 18, 14, 15, 17, 12];
+      var REMOTE_FORECAST_HALO_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 32, 8, 29, 11, 25, 14, 21, 17, 17];
+      var REMOTE_FORECAST_VISIBLE_OPACITY = ['interpolate', ['linear'], ['zoom'], 5, 0.76, 8, 0.7, 12, 0.62, 16, 0.54];
+      var REMOTE_FORECAST_HALO_OPACITY = ['interpolate', ['linear'], ['zoom'], 5, 0.64, 8, 0.56, 12, 0.46, 16, 0.34];
 
       function isMapStyleReady() {
         try {
@@ -4312,7 +4316,7 @@ function makeMapHtml(
           'ecs-remote-heatmap-fill',
           'ecs-remote-v1',
           ['match', ['get', 'label'], 'A', '#C66A4A', 'B', '#F2C24D', 'C', '#65C97A', 'D', '#5FD1FF', '#5FD1FF'],
-          0.32
+          0.42
         );
         ensureLineLayer('route-halo-layer', 'route-source', 'rgba(8,14,18,0.88)', 10.5, 0.72);
         ensureLineLayer('route-layer', 'route-source', ['get', 'color'], 5, 0.95);
@@ -4325,7 +4329,8 @@ function makeMapHtml(
         applySegmentLineStyle();
         ensureLineLayer('trail-layer', 'trail-source', ['get', 'color'], 3.5, 0.9);
         ensureLineLayer('speed-layer', 'speed-source', ['get', 'color'], 2.25, 0.85, [1, 1]);
-        ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 16, 0.44);
+        ensureLineLayer('ecs-remote-forecast-halo-line', 'ecs-remote-forecast-v1', 'rgba(4,7,9,0.92)', REMOTE_FORECAST_HALO_WIDTH, REMOTE_FORECAST_HALO_OPACITY);
+        ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], REMOTE_FORECAST_VISIBLE_WIDTH, REMOTE_FORECAST_VISIBLE_OPACITY);
         ensureLineLayer('route-builder-halo-layer', 'route-builder-source', ['get', 'color'], 12, 0.22);
         ensureLineLayer('route-builder-layer', 'route-builder-source', ['get', 'color'], 5.25, 0.98);
         ensureCircleLayer('route-builder-endpoint-halo-layer', 'route-builder-endpoint-source', ['get', 'color'], 9, 0.18, 'rgba(8,14,18,0.92)', 2);

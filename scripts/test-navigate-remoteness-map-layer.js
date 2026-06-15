@@ -27,13 +27,25 @@ assert(
   'MapRenderer should add the remoteness heatmap fill layer.',
 );
 assert(
-  mapRenderer.includes("'ecs-remote-forecast-line'") && mapRenderer.includes("ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 16, 0.44)"),
-  'MapRenderer should add a wide translucent route-snapped forecast segment layer.',
+  mapRenderer.includes("'ecs-remote-forecast-line'") &&
+    mapRenderer.includes("ensureLineLayer('ecs-remote-forecast-halo-line', 'ecs-remote-forecast-v1'") &&
+    mapRenderer.includes('REMOTE_FORECAST_VISIBLE_WIDTH') &&
+    mapRenderer.includes('REMOTE_FORECAST_HALO_WIDTH'),
+  'MapRenderer should add zoom-visible route-snapped remoteness forecast and halo layers.',
 );
 assert(
-  mapRenderer.includes("ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], 16") &&
+  mapRenderer.includes("ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], REMOTE_FORECAST_VISIBLE_WIDTH") &&
     overlayBuilder.includes('const BUFFER_DEGREES = 0.00125'),
   'Remoteness route corridor should render as a wider, readable corridor at full-route zoom.',
+);
+assert(
+  overlayBuilder.includes('function remoteColorForLabel') &&
+    overlayBuilder.includes("color: remoteColorForLabel(label)") &&
+    overlayBuilder.includes("'D': '#5FD1FF'") &&
+    overlayBuilder.includes("'C': '#65C97A'") &&
+    overlayBuilder.includes("'B': '#F2C24D'") &&
+    overlayBuilder.includes("'A': '#C66A4A'"),
+  'Remoteness overlay forecast lines should preserve four visible colors for low, moderate, remote, and high remoteness.',
 );
 ['#C66A4A', '#F2C24D', '#65C97A', '#5FD1FF'].forEach((color) => {
   assert(mapRenderer.includes(color), `MapRenderer should include heatmap color stop ${color}.`);

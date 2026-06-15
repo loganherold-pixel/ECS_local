@@ -45,10 +45,11 @@ const MAX_HEATMAP_AREAS = 48;
 const MAX_FORECAST_SEGMENTS = 12;
 const BUFFER_DEGREES = 0.00125;
 
-const FORECAST_COLORS: Record<RemoteForecastSignal, string> = {
-  good: '#66BB6A',
-  weak: '#F2C24D',
-  dead: '#C66A4A',
+const REMOTE_LABEL_COLORS: Record<RemoteOverlayLabel, string> = {
+  'A': '#C66A4A',
+  'B': '#F2C24D',
+  'C': '#65C97A',
+  'D': '#5FD1FF',
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -71,6 +72,10 @@ export function forecastSignalForLabel(label: RemoteOverlayLabel): RemoteForecas
   if (label === 'A') return 'dead';
   if (label === 'B') return 'weak';
   return 'good';
+}
+
+function remoteColorForLabel(label: RemoteOverlayLabel): string {
+  return REMOTE_LABEL_COLORS[label] ?? REMOTE_LABEL_COLORS.D;
 }
 
 function labelForSegmentFeature(segment: RemoteSegmentFeatureInput, fallbackScore: number): RemoteOverlayLabel {
@@ -213,7 +218,7 @@ export function buildRemoteMapOverlay(input: BuildRemoteMapOverlayInput): Remote
             id: `remote-forecast-segment-${index}`,
             signal,
             coordinates: segment.coordinates,
-            color: FORECAST_COLORS[signal],
+            color: remoteColorForLabel(label),
           };
         })
       : (() => {
@@ -227,7 +232,7 @@ export function buildRemoteMapOverlay(input: BuildRemoteMapOverlayInput): Remote
               id: `remote-forecast-${index}`,
               signal,
               coordinates: chunk,
-              color: FORECAST_COLORS[signal],
+              color: remoteColorForLabel(label),
             };
           });
         })();
