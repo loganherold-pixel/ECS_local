@@ -511,6 +511,7 @@ export type ExpeditionReadinessInput = {
   tripIntent?: ExpeditionTripIntent | null;
   tripIntentSource?: ExpeditionTripIntentSource | null;
   readinessProfile?: ExpeditionReadinessProfile | null;
+  readinessMode?: 'planning' | 'active' | null;
   route?: ExpeditionReadinessRouteInput | null;
   activeVehicle?: ExpeditionReadinessVehicleInput | null;
   weather?: ExpeditionReadinessWeatherInput | null;

@@ -119,6 +119,12 @@ function assertAssessmentShape(assessment) {
   }
 }
 
+function categoryById(assessment, id) {
+  const category = assessment.categories.find((item) => item.id === id);
+  assert.ok(category, `Expected readiness category ${id}.`);
+  return category;
+}
+
 const ready = readiness.buildExpeditionReadiness(readiness.completeReadyReadinessFixture);
 assertAssessmentShape(ready);
 assert.strictEqual(ready.status, 'ready');
@@ -138,9 +144,21 @@ const partial = readiness.buildExpeditionReadiness(readiness.partialReadinessFix
 assertAssessmentShape(partial);
 assert.notStrictEqual(partial.status, 'ready');
 assert.ok(partial.confidence === 'low');
-assert.ok(readiness.selectReadinessMissingInputs(partial).includes('Route plan'));
+assert.ok(
+  !readiness.selectReadinessMissingInputs(partial).includes('Route plan'),
+  'Pre-route planning readiness should not treat the missing route plan as score-affecting input debt.',
+);
 assert.ok(partial.dataIntegrity.usesDemoData, 'Demo fixture should be marked as demo data.');
 assert.ok(!partial.explanation.includes('legal campsite'), 'Readiness copy must not guarantee legal campsite status.');
+
+const activeMissingRoute = readiness.buildExpeditionReadiness({
+  ...readiness.partialReadinessFixture,
+  readinessMode: 'active',
+});
+assert.ok(
+  readiness.selectReadinessMissingInputs(activeMissingRoute).includes('Route plan'),
+  'Active guidance readiness should still surface a missing route plan when guidance context is active.',
+);
 
 const hold = readiness.buildExpeditionReadiness(readiness.holdReadinessFixture);
 assertAssessmentShape(hold);
@@ -226,9 +244,124 @@ assert.ok(
   localDayTrip.categories.find((category) => category.id === 'camp_legality_confidence').score >= 82,
   'Day trips without a camp plan should not be penalized as if camp legality data were missing.',
 );
+assert.strictEqual(
+  localDayTrip.calibration.weights.camp_legality_confidence,
+  0,
+  'Day trips without camp intent should not include Camp Legality Confidence in the weighted readiness score.',
+);
 assert.ok(
   localDayTrip.categories.find((category) => category.id === 'power_runtime').score >= 82,
   'Day trips without connected power should not be penalized as power-critical.',
+);
+
+const vehiclePowerSpecMissing = readiness.buildExpeditionReadiness({
+  ...readiness.localDayTripNoCampFixture,
+  activeVehicle: {
+    ...(readiness.localDayTripNoCampFixture.activeVehicle ?? {}),
+    missingSpecs: ['power system', 'Power System / Battery', 'drivetrain'],
+  },
+});
+const vehiclePowerSpecCategory = categoryById(vehiclePowerSpecMissing, 'vehicle_fit');
+assert.ok(
+  !vehiclePowerSpecCategory.missingInputs.some((input) => /power system/i.test(input)),
+  'Vehicle Fit should not treat missing power-system specs as score-affecting missing vehicle inputs.',
+);
+assert.ok(
+  vehiclePowerSpecCategory.missingInputs.includes('drivetrain'),
+  'Vehicle Fit should keep real route/vehicle fit missing specs after filtering optional power-system specs.',
+);
+
+const noRoutePlanningAssessment = readiness.buildExpeditionReadiness({
+  capturedAt: '2026-05-13T18:00:00.000Z',
+  readinessProfile: 'dayTrip',
+  tripIntent: 'dayTrip',
+  tripIntentSource: 'selected',
+  route: null,
+  campCandidates: null,
+  recovery: null,
+  activeVehicle: {
+    vehicleId: 'fleet-ready-truck',
+    label: 'Ready truck',
+    gvwrUsagePct: 74,
+    profileComplete: true,
+    vehicleFitConfidence: 'high',
+    missingSpecs: ['power system'],
+    source: 'manual',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+  weather: {
+    riskLevel: 'low',
+    severeAlertActive: false,
+    confidence: 'high',
+    source: 'live',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+  daylight: {
+    minutesRemainingAtArrival: 180,
+    arrivalAfterDark: false,
+    confidence: 'high',
+    source: 'inferred',
+    isInferred: true,
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+  offline: {
+    packageStatus: 'ready',
+    currentRoutePackageFresh: true,
+    mapsDownloaded: true,
+    mapTilesCachedForRoute: true,
+    campCandidatesCached: true,
+    bailoutPointsCached: true,
+    weatherSnapshotAvailable: true,
+    fuelTownRoadReferencesCached: true,
+    emergencyPacketAvailable: true,
+    isOnline: true,
+    source: 'cached',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+  fuel: {
+    rangeRemainingMiles: 210,
+    reserveMiles: 210,
+    source: 'live',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+  power: null,
+  communications: {
+    signalConfidence: 'high',
+    satelliteCommsReady: false,
+    teamCheckInPlanReady: true,
+    cellularExpected: true,
+    source: 'manual',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+  currentLocation: {
+    latitude: 38.57,
+    longitude: -109.55,
+    accuracyMeters: 12,
+    source: 'live',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+});
+assertAssessmentShape(noRoutePlanningAssessment);
+assert.strictEqual(
+  noRoutePlanningAssessment.status,
+  'ready',
+  'Solid pre-route planning readiness should be able to reach Ready before route-specific categories become applicable.',
+);
+['route_risk', 'camp_legality_confidence', 'recovery_bailout_access'].forEach((id) => {
+  assert.strictEqual(
+    noRoutePlanningAssessment.calibration.weights[id],
+    0,
+    `${id} should be held out of weighted readiness scoring until route context makes it applicable.`,
+  );
+  assert.deepStrictEqual(
+    categoryById(noRoutePlanningAssessment, id).missingInputs,
+    [],
+    `${id} should not show missing-input debt while the user is still pre-route planning.`,
+  );
+});
+assert.ok(
+  !noRoutePlanningAssessment.warnings.some((warning) => warning.categoryId === 'recovery_bailout_access'),
+  'Recovery/bailout warnings should wait until route context exists.',
 );
 
 const overnight = readiness.buildExpeditionReadiness(readiness.overnightDispersedCampingFixture);
@@ -388,6 +521,29 @@ assert.ok(
 assert.ok(
   missingManualFuelCategory.factors.some((item) => /not reporting/i.test(item.detail)),
   'Manual/default 0% fuel should explain that live fuel is not reporting.',
+);
+
+const manualFuelEstimateAssessment = readiness.buildExpeditionReadiness({
+  ...readiness.completeReadyReadinessFixture,
+  fuel: {
+    fuelPercent: 65,
+    source: 'manual',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+});
+const manualFuelEstimateCategory = categoryById(manualFuelEstimateAssessment, 'fuel_range_margin');
+assert.ok(
+  manualFuelEstimateCategory.score >= 84,
+  'A user-entered manual fuel estimate should improve Fuel / Range Margin instead of being ignored as reminder-only.',
+);
+assert.strictEqual(
+  manualFuelEstimateCategory.confidence,
+  'medium',
+  'Manual fuel estimates should improve readiness with lower confidence than live telemetry.',
+);
+assert.ok(
+  !manualFuelEstimateCategory.factors.some((item) => /not reporting/i.test(item.detail)),
+  'A timestamped manual fuel estimate should not use the saved-fleet reminder-only copy.',
 );
 
 const lowLiveFuelAssessment = readiness.buildExpeditionReadiness({

@@ -679,6 +679,7 @@ function buildSourceInput(): ExpeditionReadinessInput {
   return {
     capturedAt,
     plannedDepartureAt,
+    readinessMode: state.readinessMode,
     route,
     activeVehicle,
     weather,

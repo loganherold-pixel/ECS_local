@@ -1,5 +1,6 @@
 import type {
   ExpeditionReadinessAssessment,
+  ExpeditionReadinessCalibration,
   ExpeditionReadinessCampCandidateInput,
   ExpeditionReadinessCategory,
   ExpeditionReadinessCategoryId,
@@ -15,6 +16,7 @@ import type {
   ExpeditionReadinessSourceKind,
   ExpeditionReadinessStatus,
   ExpeditionReadinessThresholds,
+  ExpeditionTripIntent,
 } from './expeditionReadinessTypes';
 import { EXPEDITION_READINESS_CATEGORY_IDS } from './expeditionReadinessTypes';
 import { buildDepartureAudit } from './departureAudit';
@@ -245,6 +247,115 @@ function routeIsRemote(input: ExpeditionReadinessInput): boolean {
   return false;
 }
 
+type ReadinessScoringScope = {
+  routeContextActive: boolean;
+  routeScored: boolean;
+  campScored: boolean;
+  recoveryScored: boolean;
+};
+
+function hasRouteReadinessContext(input: ExpeditionReadinessInput): boolean {
+  const route = input.route;
+  return Boolean(
+    route?.routeId
+      || route?.name
+      || (typeof route?.distanceMiles === 'number' && route.distanceMiles > 0)
+      || input.readinessMode === 'active',
+  );
+}
+
+function tripIntentRequiresCampConfidence(tripIntent: ExpeditionTripIntent): boolean {
+  return tripIntent === 'overnightCamp'
+    || tripIntent === 'weekendExpedition'
+    || tripIntent === 'remoteExpedition';
+}
+
+function resolveReadinessScoringScope(input: ExpeditionReadinessInput, tripIntent: ExpeditionTripIntent): ReadinessScoringScope {
+  const routeContextActive = hasRouteReadinessContext(input);
+  return {
+    routeContextActive,
+    routeScored: routeContextActive,
+    campScored: routeContextActive && tripIntentRequiresCampConfidence(tripIntent),
+    recoveryScored: routeContextActive,
+  };
+}
+
+function isCategoryScoredForScope(categoryId: ExpeditionReadinessCategoryId, scope: ReadinessScoringScope): boolean {
+  if (categoryId === 'route_risk') return scope.routeScored;
+  if (categoryId === 'camp_legality_confidence') return scope.campScored;
+  if (categoryId === 'recovery_bailout_access') return scope.recoveryScored;
+  return true;
+}
+
+function applyReadinessScoringScopeToCalibration(
+  calibration: ExpeditionReadinessCalibration,
+  scope: ReadinessScoringScope,
+): ExpeditionReadinessCalibration {
+  const weights = { ...calibration.weights };
+  const notes = [...calibration.notes];
+
+  if (!scope.routeScored) {
+    weights.route_risk = 0;
+    notes.push('Route Intelligence is held out of readiness scoring until route or active guidance context exists.');
+  }
+
+  if (!scope.campScored) {
+    weights.camp_legality_confidence = 0;
+    notes.push('Camp Legality Confidence is held out unless route context and camp intent make it applicable.');
+  }
+
+  if (!scope.recoveryScored) {
+    weights.recovery_bailout_access = 0;
+    notes.push('Recovery / Bailout Access is held out of readiness scoring until route or active guidance context exists.');
+  }
+
+  const criticalFreshnessSources = calibration.criticalFreshnessSources.filter((source) => {
+    if (source === 'route' && !scope.routeScored) return false;
+    if (source === 'camp' && !scope.campScored) return false;
+    if (source === 'recovery' && !scope.recoveryScored) return false;
+    return true;
+  });
+
+  return {
+    ...calibration,
+    weights,
+    criticalFreshnessSources,
+    notes: notes.filter((item, index, all) => all.indexOf(item) === index),
+  };
+}
+
+function inactiveReadinessCategory(
+  category: ExpeditionReadinessCategory,
+  summary: string,
+  detail: string,
+  thresholds: ExpeditionReadinessThresholds,
+): ExpeditionReadinessCategory {
+  return retuneCategory(category, {
+    score: 86,
+    confidence: 'medium',
+    summary,
+    missingInputs: [],
+    factors: [
+      factor(
+        `${category.id}-not-active`,
+        category.label,
+        detail,
+        'neutral',
+        'inferred',
+        'medium',
+        { isInferred: true },
+      ),
+    ],
+  }, thresholds);
+}
+
+function isOptionalPowerSystemSpecLabel(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return false;
+  if (!/power|battery|aux|auxiliary|house/.test(normalized)) return false;
+  return /system|battery|aux|auxiliary|house|electrical/.test(normalized);
+}
+
 function vehicleClassConcern(vehicleClass: string | null | undefined, difficultyRank: number): string | null {
   if (!vehicleClass || difficultyRank <= 1) return null;
   if (vehicleClass === 'compact_suv_crossover' && difficultyRank >= 3) {
@@ -304,10 +415,13 @@ function vehicleFit(input: ExpeditionReadinessInput, nowIso: string): CategoryDr
   }
 
   if (vehicle) {
-    (vehicle.missingSpecs ?? []).forEach((item) => {
+    const scoreableMissingSpecs = (vehicle.missingSpecs ?? [])
+      .filter((item) => !isOptionalPowerSystemSpecLabel(item));
+
+    scoreableMissingSpecs.forEach((item) => {
       if (!missingInputs.includes(item)) missingInputs.push(item);
     });
-    const missingPenalty = Math.min(18, (vehicle.missingSpecs?.length ?? 0) * 3);
+    const missingPenalty = Math.min(18, scoreableMissingSpecs.length * 3);
     score -= missingPenalty;
 
     if (vehicle.classificationLabel) {
@@ -948,7 +1062,8 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
     : null;
   const liveFuelPercent = fuel?.source === 'live' ? fuelPercent : null;
   const liveFuelLow = liveFuelPercent != null && liveFuelPercent < 40;
-  const fuelPercentReminderOnly = range == null && fuelPercent != null && liveFuelPercent == null;
+  const manualFuelEstimateAvailable = range == null && fuelPercent != null && fuel?.source === 'manual' && Boolean(fuel.updatedAt);
+  const fuelPercentReminderOnly = range == null && fuelPercent != null && liveFuelPercent == null && !manualFuelEstimateAvailable;
 
   if (!fuel || (range == null && fuel.fuelPercent == null)) {
     missingInputs.push('Fuel range remaining');
@@ -956,6 +1071,30 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
   } else if (range == null && fuelPercent != null) {
     if (fuelPercentReminderOnly) {
       score = 88;
+    } else if (manualFuelEstimateAvailable) {
+      if (fuelPercent <= 15) {
+        score = 62;
+        warnings.push(issue(
+          'fuel_range_margin',
+          'warning',
+          'fuel-manual-low-reserve',
+          'Manual fuel reserve low',
+          `Manual fuel estimate is ${Math.round(fuelPercent)}%, below the 40% reserve marker.`,
+        ));
+      } else if (fuelPercent < 40) {
+        score = 78;
+        warnings.push(issue(
+          'fuel_range_margin',
+          'warning',
+          'fuel-manual-reserve-watch',
+          'Manual fuel reserve needs review',
+          `Manual fuel estimate is ${Math.round(fuelPercent)}%, below the 40% reserve marker.`,
+        ));
+      } else if (fuelPercent < 70) {
+        score = 86;
+      } else {
+        score = 90;
+      }
     } else if (liveFuelLow) {
       score = liveFuelPercent <= 15 ? 58 : 76;
       warnings.push(issue(
@@ -987,13 +1126,23 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
     id: 'fuel_range_margin',
     label: CATEGORY_LABELS.fuel_range_margin,
     score,
-    confidence: missingInputs.length ? 'low' : range == null && flags.source === 'manual' ? 'high' : flags.source === 'manual' ? 'medium' : 'high',
+    confidence: missingInputs.length
+      ? 'low'
+      : manualFuelEstimateAvailable
+        ? 'medium'
+        : range == null && flags.source === 'manual'
+          ? 'high'
+          : flags.source === 'manual'
+            ? 'medium'
+            : 'high',
     summary: blockers[0]?.detail ?? warnings[0]?.detail ?? (
       fuelPercentReminderOnly
         ? 'Fuel telemetry is not reporting live; saved Fleet fuel is reminder-only for readiness scoring.'
-        : range == null && liveFuelPercent != null
-          ? 'Live fuel telemetry is available.'
-          : 'Fuel range margin is usable.'
+        : manualFuelEstimateAvailable
+          ? 'Manual fuel estimate is available; live telemetry will raise confidence when connected.'
+          : range == null && liveFuelPercent != null
+            ? 'Live fuel telemetry is available.'
+            : 'Fuel range margin is usable.'
     ),
     factors: fuel
       ? [factor(
@@ -1003,10 +1152,12 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
             ? `${range} miles remaining${reserve == null ? '' : `, ${Math.round(reserve)} miles reserve`}.`
             : fuelPercentReminderOnly
               ? 'Live fuel level is not reporting; saved Fleet fuel is shown as a reminder and does not reduce readiness.'
-              : `${Math.round(fuelPercent ?? 0)}% live fuel level available; readiness changes only below the 40% reserve marker.`,
+              : manualFuelEstimateAvailable
+                ? `${Math.round(fuelPercent ?? 0)}% manually entered fuel estimate; live telemetry is still preferred.`
+                : `${Math.round(fuelPercent ?? 0)}% live fuel level available; readiness changes only below the 40% reserve marker.`,
           score < 82 ? 'warning' : fuelPercentReminderOnly ? 'neutral' : 'positive',
           flags.source,
-          fuelPercentReminderOnly ? 'high' : 'medium',
+          manualFuelEstimateAvailable ? 'medium' : fuelPercentReminderOnly ? 'high' : 'medium',
           flags,
         )]
       : [factor('fuel-missing', 'Fuel range', 'Fuel range input is missing.', 'missing', 'missing', 'low')],
@@ -1604,40 +1755,54 @@ function applyProfileCategoryTuning(
   categories: ExpeditionReadinessCategory[],
   input: ExpeditionReadinessInput,
   thresholds: ExpeditionReadinessThresholds,
+  scope: ReadinessScoringScope,
+  tripIntent: ExpeditionTripIntent,
+  calibrationProfile: ExpeditionReadinessCalibration['profile'],
 ): ExpeditionReadinessCategory[] {
-  const calibration = resolveExpeditionReadinessCalibration(input);
-  const hasCampPlan = (input.campCandidates?.length ?? 0) > 0;
   const powerRelevant = input.power?.powerRelevantForTrip === true || routeIsRemote(input);
 
-  if (calibration.profile !== 'dayTrip') {
-    return categories;
-  }
-
   return categories.map((category) => {
-    if (category.id === 'camp_legality_confidence' && !hasCampPlan) {
-      return retuneCategory(category, {
-        score: 86,
-        confidence: 'medium',
-        summary: 'No camp plan is selected for this day trip; Camp Legality Confidence is not a primary scoring factor.',
-        missingInputs: [],
-        factors: [
-          factor(
-            'camp-not-planned-day-trip',
-            'Camp plan',
-            'No camp endpoint is selected. ECS is treating camp confidence as not applicable for this day trip profile.',
-            'neutral',
-            'inferred',
-            'medium',
-            { isInferred: true },
-          ),
-        ],
-      }, thresholds);
+    if (category.id === 'route_risk' && !scope.routeScored) {
+      return inactiveReadinessCategory(
+        category,
+        'Route Intelligence is waiting for an active route or guidance; it is not included in planning readiness yet.',
+        'No route context is active. ECS will score route intelligence after guidance or route setup is selected.',
+        thresholds,
+      );
     }
 
-    if (category.id === 'power_runtime' && !powerRelevant && !input.power) {
+    if (category.id === 'camp_legality_confidence' && !scope.campScored) {
+      const routeWaiting = !scope.routeContextActive;
+      const dayTrip = tripIntent === 'dayTrip';
+      return inactiveReadinessCategory(
+        category,
+        routeWaiting
+          ? 'Camp Legality Confidence is waiting for route context; it is not included in planning readiness yet.'
+          : dayTrip
+            ? 'No camp plan is selected for this day trip; Camp Legality Confidence is not included in readiness scoring.'
+            : 'Camp Legality Confidence is held until camp intent is selected or inferred.',
+        routeWaiting
+          ? 'No route context is active. ECS will score camp legality when route context and camping intent make it relevant.'
+          : dayTrip
+            ? 'Current trip intent is day trip. ECS is not treating camp legality as required for this readiness score.'
+            : 'Current trip intent does not require a camp endpoint. ECS will score camp confidence for overnight, weekend, or remote camp plans.',
+        thresholds,
+      );
+    }
+
+    if (category.id === 'recovery_bailout_access' && !scope.recoveryScored) {
+      return inactiveReadinessCategory(
+        category,
+        'Recovery and bailout scoring starts once route or active guidance context exists.',
+        'No route context is active. ECS will score bailout options and recovery access after a route is selected.',
+        thresholds,
+      );
+    }
+
+    if (category.id === 'power_runtime' && calibrationProfile === 'dayTrip' && !powerRelevant && !input.power) {
       return retuneCategory(category, {
         score: 84,
-        confidence: 'medium',
+        confidence: 'high',
         summary: 'Connected power telemetry is optional for this day trip context.',
         missingInputs: [],
         factors: [
@@ -1647,7 +1812,7 @@ function applyProfileCategoryTuning(
             'No connected power system is required by the current day trip profile.',
             'neutral',
             'inferred',
-            'medium',
+            'high',
             { isInferred: true },
           ),
         ],
@@ -1663,27 +1828,40 @@ export function buildExpeditionReadiness(input: ExpeditionReadinessInput = {}): 
   const readinessPreferences = normalizeExpeditionReadinessPreferences(
     input.readinessPreferences ?? DEFAULT_EXPEDITION_READINESS_PREFERENCES,
   );
+  const resolvedTripIntent = resolveExpeditionTripIntent(input);
+  const scoringScope = resolveReadinessScoringScope(input, resolvedTripIntent.tripIntent);
   const baseCalibration = resolveExpeditionReadinessCalibration(input);
   const preferenceCalibration = applyReadinessPreferenceCalibration(baseCalibration, readinessPreferences);
-  const calibration = preferenceCalibration.calibration;
-  const resolvedTripIntent = resolveExpeditionTripIntent(input);
+  const calibration = applyReadinessScoringScopeToCalibration(preferenceCalibration.calibration, scoringScope);
   const drafts = categoryBuilders(input, nowIso);
   const untunedCategories = drafts.map((draft) => finalizeCategory(draft, calibration.thresholds));
-  const categories = applyProfileCategoryTuning(untunedCategories, input, calibration.thresholds);
+  const categories = applyProfileCategoryTuning(
+    untunedCategories,
+    input,
+    calibration.thresholds,
+    scoringScope,
+    resolvedTripIntent.tripIntent,
+    calibration.profile,
+  );
   const preferenceGuardrails = buildReadinessPreferenceGuardrails(categories, input, calibration, readinessPreferences);
   const blockers = [
-    ...drafts.flatMap((draft) => draft.blockerIssues ?? []),
-    ...preferenceGuardrails.blockers,
+    ...drafts
+      .flatMap((draft) => draft.blockerIssues ?? [])
+      .filter((item) => isCategoryScoredForScope(item.categoryId, scoringScope)),
+    ...preferenceGuardrails.blockers.filter((item) => isCategoryScoredForScope(item.categoryId, scoringScope)),
   ];
   const warnings = [
-    ...drafts.flatMap((draft) => draft.warningIssues ?? []),
-    ...preferenceGuardrails.warnings,
+    ...drafts
+      .flatMap((draft) => draft.warningIssues ?? [])
+      .filter((item) => isCategoryScoredForScope(item.categoryId, scoringScope)),
+    ...preferenceGuardrails.warnings.filter((item) => isCategoryScoredForScope(item.categoryId, scoringScope)),
   ];
   const weightedTotal = categories.reduce((sum, category) => sum + category.score * calibration.weights[category.id], 0);
   const weightTotal = EXPEDITION_READINESS_CATEGORY_IDS.reduce((sum, id) => sum + calibration.weights[id], 0);
   const overallScore = clampScore(weightTotal > 0 ? weightedTotal / weightTotal : 0);
   const sourceFreshness = buildFreshness(input, nowIso);
-  const confidence = confidenceForCalibratedAssessment(categories, warnings, sourceFreshness, calibration.criticalFreshnessSources);
+  const scoredCategories = categories.filter((category) => calibration.weights[category.id] > 0);
+  const confidence = confidenceForCalibratedAssessment(scoredCategories, warnings, sourceFreshness, calibration.criticalFreshnessSources);
   const status = applyStatusCaps(getReadinessStatusFromScore(overallScore, blockers, calibration.thresholds), confidence, warnings);
   const recommendations = [
     ...recommendationsFor(categories, blockers, warnings, input),
