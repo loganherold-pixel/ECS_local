@@ -8,7 +8,7 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
 }
 
-const migrationPath = path.join('supabase', 'migrations', '036_route_geometry_viewport_segments.sql');
+const migrationPath = path.join('supabase', 'migrations', '038_route_geometry_viewport_segments.sql');
 const functionPath = path.join('supabase', 'functions', 'route-geometry-segments', 'index.ts');
 const supabasePath = path.join('lib', 'supabase.ts');
 const envExamplePath = '.env.example';
