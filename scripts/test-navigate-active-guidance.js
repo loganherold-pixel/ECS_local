@@ -123,6 +123,37 @@ assert(
   'Navigate popups should reserve the Active Guidance band instead of covering it during active navigation.',
 );
 assert(
+  navigate.includes('const ACTIVE_GUIDANCE_ENDPOINT_HINT_MS = 3600;') &&
+    navigate.includes('type ActiveGuidanceEndpointHint =') &&
+    navigate.includes('const [activeGuidanceEndpointHint, setActiveGuidanceEndpointHint] = useState<ActiveGuidanceEndpointHint | null>(null);') &&
+    navigate.includes('const activeGuidanceEndpointHintOpacity = useRef(new Animated.Value(0)).current;') &&
+    navigate.includes('const activeGuidanceEndpointHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);'),
+  'Navigate should keep a compact fading hint state for tapped active-guidance route endpoints.',
+);
+assert(
+  navigate.includes('const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) =>') &&
+    navigate.includes("endpointRole === 'trail_entry'") &&
+    navigate.includes("title: isEntry ? 'Trail entry' : 'Trail end'") &&
+    navigate.includes("message: isEntry ? 'The trail begins here.' : 'Route guidance end.'") &&
+    navigate.includes('ACTIVE_GUIDANCE_ENDPOINT_HINT_MS') &&
+    navigate.includes('Animated.timing(activeGuidanceEndpointHintOpacity'),
+  'Tapping route endpoint waypoints should show trail-entry/end copy and then fade it out.',
+);
+assert(
+  navigate.includes("if (pinPayload?.kind === 'waypoint' && (pinPayload?.endpointRole === 'trail_entry' || pinPayload?.endpointRole === 'trail_end'))") &&
+    navigate.includes('showActiveGuidanceEndpointHint(pinPayload);') &&
+    navigate.includes('return;'),
+  'Route endpoint waypoint taps should be handled before dropped-pin lookup.',
+);
+assert(
+  navigate.includes('{activeGuidanceEndpointHint ? (') &&
+    navigate.includes('styles.activeGuidanceEndpointHint') &&
+    navigate.includes('opacity: activeGuidanceEndpointHintOpacity') &&
+    navigate.includes('{activeGuidanceEndpointHint.title}') &&
+    navigate.includes('{activeGuidanceEndpointHint.message}'),
+  'Active guidance endpoint hints should render as a subtle map overlay that can fade out.',
+);
+assert(
   !navigate.includes('const ROUTE_STAGED_TOAST_MIN_INTERVAL_MS') &&
     !navigate.includes('const routeStagedToastRef = useRef') &&
     !navigate.includes('const showRouteStagedToast = useCallback') &&

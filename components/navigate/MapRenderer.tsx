@@ -259,6 +259,8 @@ export type RouteBuilderAnchorMarker = {
   id: string;
   label: string;
   coordinate: LatLng;
+  role?: 'operator_drop' | 'active_guidance_end';
+  hidden?: boolean;
 };
 
 export type RouteBuilderUpdatePayload = {
@@ -401,6 +403,14 @@ export type MapRendererProps = {
   style?: any;
 };
 
+function isRouteBuilderSegmentProvisional(segment: RouteBuilderSegmentData): boolean {
+  return (
+    segment.buildSource?.kind === 'active_guidance_extension' &&
+    segment.snapProvider !== 'ecs_route_geometry' &&
+    segment.snapProvider !== 'mapbox_map_matching'
+  );
+}
+
 export type PinMarker = {
   id?: string | number;
   lat?: number;
@@ -454,6 +464,8 @@ type WebMapPayload = {
     latitude: number;
     longitude: number;
     title: string;
+    subtitle?: string;
+    endpointRole?: 'trail_entry' | 'trail_end';
   }[];
   bailouts: {
     id: string;
@@ -540,6 +552,7 @@ type WebMapPayload = {
     snapMessage?: string | null;
     sourceSegmentId?: string | null;
     buildSource?: RouteSegmentSourceMetadata | null;
+    provisional?: boolean;
   }[];
   routeBuilderAnchors: RouteBuilderAnchorMarker[];
   routeProfileFocusCoordinate: { latitude: number; longitude: number } | null;
@@ -868,17 +881,21 @@ function normalizeRenderedRouteWaypoints(
     latitude: number,
     longitude: number,
     title: string,
+    options: { subtitle?: string; endpointRole?: 'trail_entry' | 'trail_end' } = {},
   ) => {
     if (!isValidCoord(latitude, longitude)) return;
     const coordinateKey = routeCoordinateKey(latitude, longitude);
     if (seen.has(coordinateKey)) return;
     seen.add(coordinateKey);
-    rendered.push({ id, latitude, longitude, title });
+    rendered.push({ id, latitude, longitude, title, ...options });
   };
 
   if (hasRoute) {
     const [startLng, startLat] = startCoord!;
-    addWaypoint('route-start', startLat, startLng, 'Start');
+    addWaypoint('route-start', startLat, startLng, 'Trail entry', {
+      endpointRole: 'trail_entry',
+      subtitle: 'The trail begins here.',
+    });
   }
 
   for (let index = 0; index < waypoints.length; index += 1) {
@@ -905,7 +922,10 @@ function normalizeRenderedRouteWaypoints(
 
   if (endCoord) {
     const [endLng, endLat] = endCoord;
-    addWaypoint('route-end', endLat, endLng, 'End');
+    addWaypoint('route-end', endLat, endLng, 'Trail end', {
+      endpointRole: 'trail_end',
+      subtitle: 'Route guidance end.',
+    });
   }
 
   return rendered;
@@ -1476,6 +1496,7 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
       snapMessage: segment.snapMessage ?? null,
       sourceSegmentId: segment.sourceSegmentId ?? null,
       buildSource: segment.buildSource ?? null,
+      provisional: isRouteBuilderSegmentProvisional(segment),
     })),
     routeBuilderAnchors: (props.routeBuilderAnchors || [])
       .filter((anchor) => isValidCoord(anchor.coordinate?.latitude, anchor.coordinate?.longitude))
@@ -1486,6 +1507,8 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
           latitude: Number(anchor.coordinate.latitude),
           longitude: Number(anchor.coordinate.longitude),
         },
+        role: anchor.role,
+        hidden: !!anchor.hidden,
       })),
     routeProfileFocusCoordinate: isValidCoord(
       props.routeProfileFocusCoordinate?.latitude,
@@ -1621,6 +1644,28 @@ function makeMapHtml(
       box-shadow: 0 0 10px rgba(0,0,0,0.35);
     }
     .marker-waypoint { background: #FFD700; }
+    .marker-waypoint-entry {
+      background: rgba(242, 194, 77, 0.16);
+      border-color: rgba(242, 194, 77, 0.92);
+      box-shadow:
+        0 0 0 2px rgba(7, 10, 12, 0.48),
+        0 0 14px rgba(242, 194, 77, 0.42);
+    }
+    .marker-waypoint-entry::after {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(242, 194, 77, 0.34);
+      box-shadow: 0 0 8px rgba(242, 194, 77, 0.46);
+    }
+    .marker-waypoint-end {
+      background: #FFD700;
+      border-color: rgba(255,255,255,0.96);
+      box-shadow:
+        0 0 0 2px rgba(7, 10, 12, 0.52),
+        0 0 14px rgba(255, 215, 0, 0.55);
+    }
     .marker-bailout { background: #E14B4B; }
     .marker-camp {
       width: 26px;
@@ -4129,6 +4174,7 @@ function makeMapHtml(
               snapMessage: segment.snapMessage || null,
               sourceSegmentId: segment.sourceSegmentId || null,
               buildSource: segment.buildSource || null,
+              provisional: !!segment.provisional,
             };
           })
           .filter(function(segment) { return segment.coordinates.length > 0; });
@@ -4190,14 +4236,17 @@ function makeMapHtml(
           (segments || [])
             .filter(function(segment) { return segment.coordinates && segment.coordinates.length > 1; })
             .map(function(segment) {
-              return lineFeature(segment.id, segment.coordinates, { color: color || routeBuilderColor || '#65F0D4' });
+              return lineFeature(segment.id, segment.coordinates, {
+                color: color || routeBuilderColor || '#65F0D4',
+                provisional: !!segment.provisional
+              });
             })
         );
         setGeoJson('route-builder-source', fc);
 
         var anchorFeatures = (anchors || routeBuilderAnchors || [])
           .filter(function(anchor) {
-            return anchor && anchor.coordinate && isFinite(anchor.coordinate.latitude) && isFinite(anchor.coordinate.longitude);
+            return anchor && !anchor.hidden && anchor.coordinate && isFinite(anchor.coordinate.latitude) && isFinite(anchor.coordinate.longitude);
           })
           .map(function(anchor) {
             return pointFeature(anchor.id || ('route-builder-anchor-' + anchor.label), [anchor.coordinate.longitude, anchor.coordinate.latitude], {
@@ -4333,6 +4382,13 @@ function makeMapHtml(
         ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], REMOTE_FORECAST_VISIBLE_WIDTH, REMOTE_FORECAST_VISIBLE_OPACITY);
         ensureLineLayer('route-builder-halo-layer', 'route-builder-source', ['get', 'color'], 12, 0.22);
         ensureLineLayer('route-builder-layer', 'route-builder-source', ['get', 'color'], 5.25, 0.98);
+        try {
+          map.setPaintProperty(
+            'route-builder-layer',
+            'line-dasharray',
+            ['case', ['get', 'provisional'], [1.2, 1.1], [1, 0]]
+          );
+        } catch (e) {}
         ensureCircleLayer('route-builder-endpoint-halo-layer', 'route-builder-endpoint-source', ['get', 'color'], 9, 0.18, 'rgba(8,14,18,0.92)', 2);
         ensureCircleLayer('route-builder-endpoint-layer', 'route-builder-endpoint-source', ['get', 'color'], 4.75, 0.96, 'rgba(8,14,18,0.96)', 2);
         ensureCircleLayer('route-profile-focus-halo-layer', 'route-profile-focus-source', '#F2C24D', 10.5, 0.2, 'rgba(8,14,18,0.92)', 2);
@@ -4467,12 +4523,19 @@ function makeMapHtml(
         );
       }
 
+      function waypointMarkerClass(item) {
+        if (item && item.endpointRole === 'trail_entry') return 'marker-dot marker-waypoint marker-waypoint-entry';
+        if (item && item.endpointRole === 'trail_end') return 'marker-dot marker-waypoint marker-waypoint-end';
+        return 'marker-dot marker-waypoint';
+      }
+
       function replaceMarkers(list, items, className, kind) {
         safeRemoveMarkers(list);
         list.length = 0;
 
         (items || []).forEach(function(item) {
-          var marker = mkMarker(className, item.longitude, item.latitude, Object.assign({ kind: kind }, item));
+          var markerClass = typeof className === 'function' ? className(item) : className;
+          var marker = mkMarker(markerClass, item.longitude, item.latitude, Object.assign({ kind: kind }, item));
           marker.addTo(map);
           list.push(marker);
         });
@@ -6055,7 +6118,7 @@ function makeMapHtml(
         promoteRouteGuidanceLayers();
 
         if (markerPayloadChanged('waypoints', payload.waypoints || [])) {
-          replaceMarkers(waypointMarkers, payload.waypoints || [], 'marker-dot marker-waypoint', 'waypoint');
+          replaceMarkers(waypointMarkers, payload.waypoints || [], waypointMarkerClass, 'waypoint');
         }
         if (markerPayloadChanged('bailouts', payload.bailouts || [])) {
           replaceMarkers(bailoutMarkers, payload.bailouts || [], 'marker-dot marker-bailout', 'bailout');

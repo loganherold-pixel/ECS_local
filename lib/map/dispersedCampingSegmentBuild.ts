@@ -4,7 +4,13 @@ export const DISPERSED_ROUTE_LEG_PLANNING_WARNING =
 export type DispersedRouteLegConfidence = 'planning_geometry' | 'official_shadow' | 'unknown';
 
 export type RouteSegmentSourceMetadata = {
-  kind: 'dispersed_route_leg' | 'freehand_trace' | 'snapped_trace' | 'ecs_route_geometry';
+  kind:
+    | 'dispersed_route_leg'
+    | 'freehand_trace'
+    | 'snapped_trace'
+    | 'ecs_route_geometry'
+    | 'rendered_routeable_geometry'
+    | 'active_guidance_extension';
   sourceLabel: string;
   confidence: DispersedRouteLegConfidence;
   regionIds?: string[];

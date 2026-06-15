@@ -177,6 +177,41 @@ assert.strictEqual(
   'Rendered routeable line traces should become save/start-capable planning geometry.',
 );
 
+const activeGuidanceEnd = { latitude: 38.0040, longitude: -110.0040 };
+const futureSegment = {
+  id: 'future-trail-spine',
+  name: 'Continuation Trail',
+  sourceLabel: 'Visible road geometry',
+  confidence: 'medium',
+  dataState: 'live',
+  provider: 'rendered_features',
+  coordinates: [
+    activeGuidanceEnd,
+    { latitude: 38.0050, longitude: -110.0050 },
+    { latitude: 38.0060, longitude: -110.0060 },
+  ],
+};
+const activeExtensionResult = builder.addActiveGuidanceExtensionAnchor(builder.createNavigateRouteDraft(), {
+  activeRouteEnd: activeGuidanceEnd,
+  coordinate: { latitude: 38.00585, longitude: -110.00585 },
+  routeableSegment: futureSegment,
+  availableSegments: [futureSegment],
+});
+assert.strictEqual(
+  activeExtensionResult.seededFromActiveGuidanceEnd,
+  true,
+  'Active guidance extension should seed the draft from the current route end.',
+);
+assert.strictEqual(activeExtensionResult.draft.anchors.length, 2, 'Active extension should include the hidden route-end base plus the user point.');
+assert.strictEqual(activeExtensionResult.draft.anchors[0].role, 'active_guidance_end', 'The seed anchor should be marked as the active guidance end.');
+assert.strictEqual(activeExtensionResult.draft.anchors[0].hidden, true, 'The active route-end seed should not draw a second visible route-builder pin.');
+assert.strictEqual(activeExtensionResult.draft.anchors[1].label, 'A', 'The first user-dropped extension point should still read as point A.');
+assert.strictEqual(activeExtensionResult.leg.status, 'snapped', 'The extension leg should stitch from route end to the selected future trail segment.');
+const extensionSegments = builder.buildRouteBuilderSegmentsFromDraft(activeExtensionResult.draft);
+assert.strictEqual(extensionSegments.length, 1, 'Active extension should create one savable stitched leg.');
+assert.strictEqual(extensionSegments[0].buildSource.kind, 'active_guidance_extension', 'Saved metadata should distinguish active guidance extension legs.');
+assert.strictEqual(extensionSegments[0].snapProvider, 'rendered_features', 'Visible continuation trails should remain provisional until provider verification.');
+
 const nearest = builder.resolveNearestNavigateRouteAnchor(draft, { latitude: 38.0021, longitude: -110.0021 });
 assert.strictEqual(nearest && nearest.label, 'B', 'Start should route GPS to the nearest user-dropped anchor.');
 

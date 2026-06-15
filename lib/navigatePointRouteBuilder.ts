@@ -8,6 +8,8 @@ export type NavigateRouteAnchor = {
   label: string;
   coordinate: NavigateRouteCoordinate;
   routeableSegment?: NavigateRouteTraceableSegment | null;
+  role?: 'operator_drop' | 'active_guidance_end';
+  hidden?: boolean;
 };
 
 export type NavigateRouteTraceProvider = 'ecs_route_geometry' | 'rendered_features' | 'mapbox_map_matching' | 'unavailable';
@@ -51,6 +53,10 @@ export type AddAnchorToDraftInput = {
   routeableSegment?: NavigateRouteTraceableSegment | null;
 };
 
+export type AddActiveGuidanceExtensionAnchorInput = AddAnchorToDraftInput & {
+  activeRouteEnd?: NavigateRouteCoordinate | null;
+};
+
 export type RouteBuilderSegmentFromDraft = {
   id: string;
   coordinates: [number, number][];
@@ -86,7 +92,7 @@ function distanceMiles(a: NavigateRouteCoordinate, b: NavigateRouteCoordinate): 
   return EARTH_RADIUS_MI * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-function normalizeCoordinate(coordinate: NavigateRouteCoordinate): NavigateRouteCoordinate | null {
+function normalizeCoordinate(coordinate: NavigateRouteCoordinate | null | undefined): NavigateRouteCoordinate | null {
   const latitude = Number(coordinate?.latitude);
   const longitude = Number(coordinate?.longitude);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
@@ -98,6 +104,13 @@ function nextAnchorLabel(index: number): string {
   const normalized = Math.max(0, index);
   if (normalized < 26) return String.fromCharCode(65 + normalized);
   return `P${normalized + 1}`;
+}
+
+function nextOperatorAnchorLabel(anchors: NavigateRouteAnchor[]): string {
+  const visibleOperatorAnchors = anchors.filter(
+    (anchor) => !anchor.hidden && anchor.role !== 'active_guidance_end',
+  );
+  return nextAnchorLabel(visibleOperatorAnchors.length);
 }
 
 type ProjectedPoint = {
@@ -346,8 +359,9 @@ export function addAnchorToDraft(
   const routeableSegment = normalizeTraceableSegments([input.routeableSegment])[0] ?? null;
   const anchor: NavigateRouteAnchor = {
     id: `anchor-${draft.anchors.length + 1}`,
-    label: nextAnchorLabel(draft.anchors.length),
+    label: nextOperatorAnchorLabel(draft.anchors),
     coordinate,
+    role: 'operator_drop',
     routeableSegment,
   };
   const anchors = [...draft.anchors, anchor];
@@ -369,6 +383,34 @@ export function addAnchorToDraft(
     },
     leg,
   };
+}
+
+export function addActiveGuidanceExtensionAnchor(
+  draft: NavigateRouteDraft,
+  input: AddActiveGuidanceExtensionAnchorInput,
+): { draft: NavigateRouteDraft; leg: NavigateRouteLeg | null; seededFromActiveGuidanceEnd: boolean } {
+  const activeRouteEnd = normalizeCoordinate(input.activeRouteEnd);
+  if (!activeRouteEnd || draft.anchors.length > 0) {
+    const result = addAnchorToDraft(draft, input);
+    return { ...result, seededFromActiveGuidanceEnd: false };
+  }
+
+  const routeableSegment = normalizeTraceableSegments([input.routeableSegment])[0] ?? null;
+  const seededDraft: NavigateRouteDraft = {
+    anchors: [
+      {
+        id: 'active-guidance-end',
+        label: 'END',
+        coordinate: activeRouteEnd,
+        role: 'active_guidance_end',
+        hidden: true,
+        routeableSegment,
+      },
+    ],
+    legs: [],
+  };
+  const result = addAnchorToDraft(seededDraft, input);
+  return { ...result, seededFromActiveGuidanceEnd: true };
 }
 
 export function undoLastNavigateRouteAnchor(draft: NavigateRouteDraft): NavigateRouteDraft {
@@ -394,6 +436,8 @@ export function buildRouteBuilderSegmentsFromDraft(
         leg.sourceLabel ??
         (leg.provider === 'rendered_features' ? 'Visible routeable geometry' : 'ECS route geometry');
       const snapProvider = leg.provider === 'rendered_features' ? 'rendered_features' : 'ecs_route_geometry';
+      const fromAnchor = draft.anchors.find((anchor) => anchor.id === leg.fromAnchorId) ?? null;
+      const isActiveGuidanceExtension = fromAnchor?.role === 'active_guidance_end';
       return {
         id: `route-builder-${leg.id}`,
         coordinates,
@@ -410,9 +454,20 @@ export function buildRouteBuilderSegmentsFromDraft(
             : 'ECS route geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.',
         sourceSegmentId: leg.sourceSegmentId,
         buildSource: {
-          kind: leg.provider === 'rendered_features' ? 'rendered_routeable_geometry' : 'ecs_route_geometry',
-          sourceLabel,
+          kind: isActiveGuidanceExtension
+            ? 'active_guidance_extension'
+            : leg.provider === 'rendered_features'
+              ? 'rendered_routeable_geometry'
+              : 'ecs_route_geometry',
+          sourceLabel: isActiveGuidanceExtension
+            ? `Active guidance extension via ${sourceLabel}`
+            : sourceLabel,
           confidence: 'planning_geometry',
+          warnings: isActiveGuidanceExtension
+            ? [
+                'Operator-added extension beyond the original active guidance. Verify access, closures, and posted rules.',
+              ]
+            : undefined,
         },
       };
     });

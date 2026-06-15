@@ -197,6 +197,7 @@ import {
   finalizeRouteBuilderSegmentSnap,
   isVerifiedRouteBuilderSegment,
   normalizeRouteBuilderLine,
+  routeBuilderLineDistanceMeters,
   routeBuilderSegmentMetadataSourceLabel,
   type FinalizableRouteBuilderSegment,
 } from '../../lib/routeBuilderSnapFinalization';
@@ -228,6 +229,7 @@ import {
   type NavigateLongPressRouteableFeature,
 } from '../../lib/navigateLongPressActions';
 import {
+  addActiveGuidanceExtensionAnchor,
   addAnchorToDraft,
   buildRouteBuilderSegmentsFromDraft,
   buildRouteFromNearestAnchor,
@@ -2243,6 +2245,26 @@ function formatNavEta(etaIso: string | null | undefined): string {
   });
 }
 
+function estimateActiveGuidanceExtensionDurationS(
+  extensionDistanceM: number,
+  baseDistanceM: number | null | undefined,
+  baseDurationS: number | null | undefined,
+): number | null {
+  if (!Number.isFinite(extensionDistanceM) || extensionDistanceM <= 0) return null;
+  const routeMetersPerSecond =
+    baseDistanceM != null &&
+    baseDurationS != null &&
+    Number.isFinite(baseDistanceM) &&
+    Number.isFinite(baseDurationS) &&
+    baseDistanceM > 0 &&
+    baseDurationS > 0
+      ? baseDistanceM / baseDurationS
+      : null;
+  const fallbackTrailMetersPerSecond = 6.7;
+  const metersPerSecond = Math.max(2, routeMetersPerSecond ?? fallbackTrailMetersPerSecond);
+  return extensionDistanceM / metersPerSecond;
+}
+
 function formatNavTimestamp(value: string | null | undefined): string {
   if (!value) return 'Updated just now';
   const date = new Date(value);
@@ -3203,6 +3225,16 @@ type RecommendCampsiteGpxMapSelection = {
   sourceSegmentIndex?: number | null;
 };
 
+type ActiveGuidanceEndpointHint = {
+  id: string;
+  title: string;
+  message: string;
+};
+
+const ACTIVE_GUIDANCE_ENDPOINT_HINT_MS = 3600;
+const ROUTE_BUILDER_DEFAULT_COLOR = '#65F0D4';
+const ACTIVE_GUIDANCE_EXTENSION_COLOR = '#4F9BFF';
+
 const SAVED_ROUTE_FILTER_OPTIONS: { key: SavedRouteAssetFilter; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'imported', label: 'Imported' },
@@ -3231,10 +3263,13 @@ const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
 const [campLayerMenuOpen, setCampLayerMenuOpen] = useState(false);
 const [activeGuidanceMinimized, setActiveGuidanceMinimized] = useState(false);
 const [activeGuidanceMeasuredHeight, setActiveGuidanceMeasuredHeight] = useState(0);
+const [activeGuidanceEndpointHint, setActiveGuidanceEndpointHint] = useState<ActiveGuidanceEndpointHint | null>(null);
 const [activeGuidanceManualOverride, setActiveGuidanceManualOverride] = useState(false);
 const activeGuidanceAutoMinimizeSinceRef = useRef<number | null>(null);
 const activeGuidanceAutoMinimizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 const activeGuidanceSessionKeyRef = useRef<string | null>(null);
+const activeGuidanceEndpointHintOpacity = useRef(new Animated.Value(0)).current;
+const activeGuidanceEndpointHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 const [selectedExploreRouteSegmentId, setSelectedExploreRouteSegmentId] = useState<string | null>(null);
 const [activeVehicleId, setActiveVehicleId] = useState<string | null>(() => vehicleSetupStore.getActiveVehicleId());
 const [activeVehicleRevision, setActiveVehicleRevision] = useState(0);
@@ -3821,6 +3856,16 @@ function buildRouteConfidenceInputFromPreview(args: {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (activeGuidanceEndpointHintTimerRef.current) {
+        clearTimeout(activeGuidanceEndpointHintTimerRef.current);
+        activeGuidanceEndpointHintTimerRef.current = null;
+      }
+      activeGuidanceEndpointHintOpacity.stopAnimation();
+    };
+  }, [activeGuidanceEndpointHintOpacity]);
+
   useEffect(() => expeditionStateStore.subscribe(() => {
     setExpeditionSessionRevision((revision) => revision + 1);
   }), []);
@@ -4199,12 +4244,15 @@ const queueMapCameraCommand = useCallback((
   const [routeBuilderDrawing, setRouteBuilderDrawing] = useState(false);
   const [routeBuilderSegments, setRouteBuilderSegments] = useState<RouteBuilderSegmentData[]>([]);
   const [routeBuilderDraft, setRouteBuilderDraft] = useState<NavigateRouteDraft>(() => createNavigateRouteDraft());
+  const [routeBuilderActiveExtensionMode, setRouteBuilderActiveExtensionMode] = useState(false);
   const [routeBuilderSnapSource, setRouteBuilderSnapSource] = useState<string | null>(null);
   const [routeBuilderSnapStatus, setRouteBuilderSnapStatus] = useState<RouteBuilderSegmentData['snapStatus']>(null);
   const [routeBuilderSnapMessage, setRouteBuilderSnapMessage] = useState<string | null>(null);
   const routeBuilderSegmentsRef = useRef<RouteBuilderSegmentData[]>([]);
   const routeBuilderFinalSnapInFlightRef = useRef<Set<string>>(new Set());
   const routeBuilderTraceableSegmentsRef = useRef<NavigateRouteTraceableSegment[]>([]);
+  const activeGuidanceRouteEndRef = useRef<NavigateRouteCoordinate | null>(null);
+  const activeGuidanceRouteExtensionAvailableRef = useRef(false);
   const [longPressContext, setLongPressContext] = useState<NavigateLongPressContext | null>(null);
   const [longPressInfoExpanded, setLongPressInfoExpanded] = useState(false);
   const [routeBuilderSaveVisible, setRouteBuilderSaveVisible] = useState(false);
@@ -4673,6 +4721,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const appliedTrailPayloadRef = useRef<string | null>(null);
   const hybridTrailTransitionRef = useRef<string | null>(null);
   const lastTrailStateSignatureRef = useRef<string | null>(null);
+  const activeNavigationRunning =
+    roadNavigation.uiMode === 'active' ||
+    roadNavigation.uiMode === 'arrived' ||
+    trailNavigation.uiMode === 'active' ||
+    trailNavigation.uiMode === 'arrived';
 
   const currentGpsHeadingDeg = gps.position?.headingDeg ?? null;
   const vehicleHeadingHook = useVehicleHeading({
@@ -8319,13 +8372,26 @@ const handleRouteBuilderAnchorTap = useCallback((
   setShowCrosshair(false);
   setFollowUser(false);
   setUserHasManuallyMovedMap(true);
-  const result = addAnchorToDraft(routeBuilderDraft, {
+  const routeableSegment = routeableFeatureToNavigateTraceableSegment(routeableFeature);
+  const result = activeNavigationRunning || routeBuilderActiveExtensionMode
+    ? addActiveGuidanceExtensionAnchor(routeBuilderDraft, {
+        activeRouteEnd: activeGuidanceRouteEndRef.current,
+        coordinate,
+        routeableSegment,
+        availableSegments: routeBuilderTraceableSegmentsRef.current,
+      })
+    : addAnchorToDraft(routeBuilderDraft, {
     coordinate,
-    routeableSegment: routeableFeatureToNavigateTraceableSegment(routeableFeature),
+    routeableSegment,
     availableSegments: routeBuilderTraceableSegmentsRef.current,
   });
+  const seededFromActiveGuidanceEnd =
+    'seededFromActiveGuidanceEnd' in result && result.seededFromActiveGuidanceEnd === true;
+  if (seededFromActiveGuidanceEnd || routeBuilderActiveExtensionMode) {
+    setRouteBuilderActiveExtensionMode(true);
+  }
   applyRouteBuilderDraft(result.draft);
-}, [applyRouteBuilderDraft, closeTopPopup, routeBuilderDraft]);
+}, [activeNavigationRunning, applyRouteBuilderDraft, closeTopPopup, routeBuilderActiveExtensionMode, routeBuilderDraft]);
 
   const handleLongPress = useCallback((coord: { latitude?: number; longitude?: number; routeableFeature?: any }) => {
   if (!Number.isFinite(coord.latitude) || !Number.isFinite(coord.longitude)) return;
@@ -8339,15 +8405,14 @@ const handleRouteBuilderAnchorTap = useCallback((
   setDropCoords(null);
   setLongPressInfoExpanded(false);
   const routeableFeature = segmentPayloadToLongPressFeature(coord.routeableFeature);
+  const activeGuidanceRouteExtensionAvailable = activeGuidanceRouteExtensionAvailableRef.current;
   setLongPressContext(buildNavigateLongPressContext({
     coordinate: { latitude, longitude },
     routeableFeature,
     hasGpsFix: !!safeUserLocation,
-    canBuildRoute:
-      roadNavigation.session.status === 'idle' ||
-      roadNavigation.session.status === 'cancelled',
+    canBuildRoute: !activeNavigationRunning || activeGuidanceRouteExtensionAvailable,
   }));
-}, [closeTopPopup, roadNavigation.session.status, safeUserLocation]);
+}, [activeNavigationRunning, closeTopPopup, safeUserLocation]);
 
 const handleLongPressDrawRoute = useCallback(() => {
   if (!longPressContext || !longPressContext.actions.draw_route.enabled) return;
@@ -8393,8 +8458,51 @@ const handleLongPressNavigateHere = useCallback(() => {
   void previewRoadDestination(destination, 'manual_selection');
 }, [longPressContext, previewRoadDestination]);
 
+const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) => {
+  const endpointRole = String(pinPayload?.endpointRole ?? '').toLowerCase();
+  const isEntry = endpointRole === 'trail_entry';
+  const isEnd = endpointRole === 'trail_end';
+  if (!isEntry && !isEnd) return;
+
+  if (activeGuidanceEndpointHintTimerRef.current) {
+    clearTimeout(activeGuidanceEndpointHintTimerRef.current);
+    activeGuidanceEndpointHintTimerRef.current = null;
+  }
+
+  setActiveGuidanceEndpointHint({
+    id: isEntry ? 'trail-entry' : 'trail-end',
+    title: isEntry ? 'Trail entry' : 'Trail end',
+    message: isEntry ? 'The trail begins here.' : 'Route guidance end.',
+  });
+
+  activeGuidanceEndpointHintOpacity.stopAnimation();
+  activeGuidanceEndpointHintOpacity.setValue(0);
+  Animated.timing(activeGuidanceEndpointHintOpacity, {
+    toValue: 1,
+    duration: 140,
+    easing: Easing.out(Easing.cubic),
+    useNativeDriver: true,
+  }).start();
+
+  activeGuidanceEndpointHintTimerRef.current = setTimeout(() => {
+    Animated.timing(activeGuidanceEndpointHintOpacity, {
+      toValue: 0,
+      duration: 420,
+      easing: Easing.inOut(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setActiveGuidanceEndpointHint(null);
+    });
+  }, ACTIVE_GUIDANCE_ENDPOINT_HINT_MS);
+}, [activeGuidanceEndpointHintOpacity]);
+
   const handlePinTap = useCallback((pinPayload: any) => {
   hapticMicro();
+
+  if (pinPayload?.kind === 'waypoint' && (pinPayload?.endpointRole === 'trail_entry' || pinPayload?.endpointRole === 'trail_end')) {
+    showActiveGuidanceEndpointHint(pinPayload);
+    return;
+  }
 
   if (pinPayload?.kind === 'campIntel') {
     if (roadStepListExpanded) {
@@ -8431,7 +8539,7 @@ const handleLongPressNavigateHere = useCallback(() => {
     setDropCoords(null);
     setSelectedDroppedPinId(pin.id);
   }
-}, [closeTopPopup, roadStepListExpanded, setRoadStepListExpanded]);
+}, [closeTopPopup, roadStepListExpanded, setRoadStepListExpanded, showActiveGuidanceEndpointHint]);
 
   const handleCampIntelTap = useCallback((payload: any) => {
     hapticMicro();
@@ -11562,6 +11670,16 @@ const handleCreateRun = useCallback(() => {
     trailNavigationMarkers,
   ]);
 
+  useEffect(() => {
+    const lastPoint = displayedRoutePoints[displayedRoutePoints.length - 1] ?? null;
+    const activeEnd =
+      routeLifecycleState.phase === 'navigating' && lastPoint
+        ? toNavigateRouteCoordinate(lastPoint as any)
+        : null;
+    activeGuidanceRouteEndRef.current = activeEnd;
+    activeGuidanceRouteExtensionAvailableRef.current = !!activeEnd;
+  }, [displayedRoutePoints, routeLifecycleState.phase]);
+
   const navigateRouteWeatherRiskPoint = useMemo(
     () =>
       routeCorridorWeather.approachingHazard.point ??
@@ -13814,6 +13932,32 @@ const handleTopToolboxLayout = useCallback(
     navigationStartReadinessStack,
     navigateRouteConfidenceSummary,
   ]);
+
+  const activeGuidanceExtensionStats = useMemo(() => {
+    if (!routeBuilderActiveExtensionMode) return null;
+    const extensionSegments = routeBuilderSegments.filter(
+      (segment) => segment.buildSource?.kind === 'active_guidance_extension',
+    );
+    if (extensionSegments.length === 0) return null;
+    const verifiedSegments = extensionSegments.filter((segment) =>
+      isVerifiedRouteBuilderSegment(segment as FinalizableRouteBuilderSegment),
+    );
+    const verifiedDistanceM = verifiedSegments.reduce(
+      (total, segment) => total + routeBuilderLineDistanceMeters(segment.coordinates),
+      0,
+    );
+    const provisionalCount = extensionSegments.length - verifiedSegments.length;
+    return {
+      verified: verifiedSegments.length > 0 && provisionalCount === 0 && verifiedDistanceM > 0,
+      distanceM: verifiedDistanceM,
+      provisionalCount,
+      statusText:
+        provisionalCount > 0
+          ? 'Active guidance extension provisional'
+          : 'Active guidance extension verified',
+    };
+  }, [routeBuilderActiveExtensionMode, routeBuilderSegments]);
+
   const navigationActiveContext = useMemo(() => {
     const roadRouteActive = roadNavigation.uiMode === 'active';
     const trailRouteActive =
@@ -13826,6 +13970,31 @@ const handleTopToolboxLayout = useCallback(
       navigateOperationalState.activeStatusLabel;
     const activeOperationalNote =
       navigateOperationalState.mode === 'live' ? null : navigateOperationalState.activeDetail;
+    const extensionRemainingDistanceM = activeGuidanceExtensionStats?.verified
+      ? activeGuidanceExtensionStats.distanceM
+      : 0;
+    const extensionDurationS = activeGuidanceExtensionStats?.verified
+      ? estimateActiveGuidanceExtensionDurationS(
+          activeGuidanceExtensionStats.distanceM,
+          roadNavigation.session.route?.distanceM ?? null,
+          roadNavigation.session.route?.durationS ?? null,
+        )
+      : null;
+    const extensionEtaIso = activeGuidanceExtensionStats?.verified
+      ? new Date(
+          Date.now() +
+            Math.max(
+              0,
+              (roadNavigation.session.remainingDurationS ?? 0) + (extensionDurationS ?? 0),
+            ) *
+              1000,
+        ).toISOString()
+      : roadNavigation.session.etaIso;
+    const extensionNoteText = activeGuidanceExtensionStats
+      ? activeGuidanceExtensionStats.verified
+        ? `Active guidance extension verified. Remaining mileage and ETA include ${formatNavMeters(activeGuidanceExtensionStats.distanceM)} of operator-added extension estimate.`
+        : 'Active guidance extension provisional. Dashed blue route builder legs are not included in ETA until ECS or Mapbox verifies the stitch.'
+      : null;
 
     if (!pendingHybridTrailTransition && !trailRouteActive && !roadRouteActive) {
       return null;
@@ -13848,6 +14017,13 @@ const handleTopToolboxLayout = useCallback(
         remainingDistance != null
           ? Math.max(0, Math.min(1, 1 - remainingDistance / routeDistance))
           : null;
+      const baseRemainingDistanceM = hybridApproachActive
+        ? fullRouteGuidanceModel.remainingDistanceM
+        : roadNavigation.session.remainingDistanceM;
+      const remainingWithExtensionM =
+        baseRemainingDistanceM != null
+          ? baseRemainingDistanceM + extensionRemainingDistanceM
+          : extensionRemainingDistanceM || null;
 
       return {
         tripMode: hybridApproachActive ? 'hybrid' as const : 'road' as const,
@@ -13893,28 +14069,28 @@ const handleTopToolboxLayout = useCallback(
             ),
         statusText: joinOperationalStatus(
           roadNavigation.session.routeStatusLabel ?? 'Route active',
-          activeOperationalStatus,
+          joinOperationalStatus(activeGuidanceExtensionStats?.statusText ?? null, activeOperationalStatus),
         ),
         metrics: [
           {
             label: 'REMAIN',
             value: routeUpdating
               ? 'UPDATING'
-              : formatNavMeters(
-                  hybridApproachActive
-                    ? fullRouteGuidanceModel.remainingDistanceM
-                    : roadNavigation.session.remainingDistanceM,
-                ),
+              : formatNavMeters(remainingWithExtensionM),
           },
           {
             label: 'ETA',
-            value: routeUpdating ? '--' : formatNavEta(roadNavigation.session.etaIso),
+            value: routeUpdating ? '--' : formatNavEta(extensionEtaIso),
           },
           {
             label: 'TIME',
             value: routeUpdating
               ? '--'
-              : formatNavDuration(roadNavigation.session.remainingDurationS),
+              : formatNavDuration(
+                  roadNavigation.session.remainingDurationS != null
+                    ? roadNavigation.session.remainingDurationS + (extensionDurationS ?? 0)
+                    : extensionDurationS,
+                ),
           },
         ],
         progressLabel:
@@ -13928,6 +14104,7 @@ const handleTopToolboxLayout = useCallback(
                 ? `${Math.round(progressRatio * 100)}% COMPLETE`
                 : null,
         noteText:
+          extensionNoteText ??
           activeOperationalNote ??
           (routeUpdating
             ? 'ECS is recalculating the road route while guidance stays active on the map.'
@@ -14024,15 +14201,23 @@ const handleTopToolboxLayout = useCallback(
       statusText: joinOperationalStatus(
         trailNavigation.session.routeStatusLabel ??
           (arrived ? 'Arrived' : 'Trail active'),
-        activeOperationalStatus,
+        joinOperationalStatus(activeGuidanceExtensionStats?.statusText ?? null, activeOperationalStatus),
       ),
       metrics: [
-        { label: 'REMAIN', value: formatNavMeters(trailNavigation.session.remainingDistanceM) },
+        {
+          label: 'REMAIN',
+          value: formatNavMeters(
+            trailNavigation.session.remainingDistanceM != null
+              ? trailNavigation.session.remainingDistanceM + extensionRemainingDistanceM
+              : extensionRemainingDistanceM || null,
+          ),
+        },
         { label: 'NEXT', value: offTrail ? formatNavMeters(trailNavigation.session.rejoinDistanceM) : nextDistanceValue },
         { label: 'PROGRESS', value: progressValue },
       ],
       progressLabel: progressValue !== '--' ? `${progressValue} COMPLETE` : null,
       noteText:
+        extensionNoteText ??
         activeOperationalNote ??
         trailNavigation.session.promptDetail ??
         (arrived ? 'Trail route complete.' : 'Stay on highlighted route.'),
@@ -14048,6 +14233,7 @@ const handleTopToolboxLayout = useCallback(
           : 'Trail route complete.',
     };
   }, [
+    activeGuidanceExtensionStats,
     exploreNavigationPayload,
     explorePreviewMode,
     explorePreviewTrailLengthMiles,
@@ -14063,6 +14249,7 @@ const handleTopToolboxLayout = useCallback(
     roadNavigation.session.remainingDistanceM,
     roadNavigation.session.remainingDurationS,
     roadNavigation.session.route?.distanceM,
+    roadNavigation.session.route?.durationS,
     roadNavigation.session.routeConfidenceState,
     roadNavigation.session.routeStatusLabel,
     roadNavigation.uiMode,
@@ -16320,6 +16507,7 @@ const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boole
   setRouteBuilderSnapMessage(null);
   setRouteBuilderSegments([]);
   setRouteBuilderDraft(createNavigateRouteDraft());
+  setRouteBuilderActiveExtensionMode(false);
   setRouteBuilderSaveVisible(false);
   setRouteBuilderSaveName('');
   setRouteBuilderSaveNote('');
@@ -16530,6 +16718,9 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
     const hasRouteGeometrySegmentBuild = segmentsForSave.some(
       (segment) => segment.buildSource?.kind === 'ecs_route_geometry',
     );
+    const hasActiveGuidanceExtensionBuild = segmentsForSave.some(
+      (segment) => segment.buildSource?.kind === 'active_guidance_extension',
+    );
     const customRouteSegments = segmentsForSave.map((segment) => ({
       coordinates: segment.coordinates,
       source_metadata: sourceMetadataForRouteBuilderSegment(segment),
@@ -16538,15 +16729,28 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
       options?.description ??
       (hasDispersedSegmentBuild
         ? `kind: 'dispersed_segment_build'. ${DISPERSED_ROUTE_LEG_PLANNING_WARNING} Source confidence: planning_geometry for tapped yellow legs.`
+        : hasActiveGuidanceExtensionBuild
+          ? "kind: 'active_guidance_extension'. Original active guidance remains ECS-confirmed; operator-added continuation legs remain planning geometry unless provider verification is present."
         : hasRouteGeometrySegmentBuild
           ? `kind: 'route_geometry_overlay'. ${ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING}`
           : undefined);
     const savedRoute = routeStore.createCustomRoute(customRouteSegments, {
       name: options?.name ?? undefined,
       description: savedRouteDescription,
-      sourceApp: options?.sourceApp ?? (hasRouteGeometrySegmentBuild ? 'ecs_route_geometry_overlay' : undefined),
+      sourceApp:
+        options?.sourceApp ??
+        (hasActiveGuidanceExtensionBuild
+          ? 'ecs_active_guidance_extension'
+          : hasRouteGeometrySegmentBuild
+            ? 'ecs_route_geometry_overlay'
+            : undefined),
       externalSourceType:
-        options?.externalSourceType ?? (hasRouteGeometrySegmentBuild ? 'route_geometry_overlay' : undefined),
+        options?.externalSourceType ??
+        (hasActiveGuidanceExtensionBuild
+          ? 'active_guidance_extension'
+          : hasRouteGeometrySegmentBuild
+            ? 'route_geometry_overlay'
+            : undefined),
     });
     const savedRun = runStore.createFromRoute(savedRoute, activeRun?.build_snapshot);
     routeBuilderStagedRouteIdRef.current = savedRoute.id;
@@ -16617,20 +16821,24 @@ const finishRouteBuilder = useCallback(async () => {
 const handleCommitRouteBuilderSave = useCallback(async () => {
   const name = routeBuilderSaveName.trim();
   const note = routeBuilderSaveNote.trim();
-  const description = note
-    ? `kind: 'pin_to_pin_anchor_trace'. NOTE: ${note}`
-    : "kind: 'pin_to_pin_anchor_trace'. Built from dropped route anchors.";
+  const description = routeBuilderActiveExtensionMode
+    ? note
+      ? `kind: 'active_guidance_extension'. NOTE: ${note}`
+      : "kind: 'active_guidance_extension'. Original active guidance plus operator-added continuation legs."
+    : note
+      ? `kind: 'pin_to_pin_anchor_trace'. NOTE: ${note}`
+      : "kind: 'pin_to_pin_anchor_trace'. Built from dropped route anchors.";
   const result = await saveVerifiedRouteBuilderDraft({
     name: name || null,
     description,
-    sourceApp: 'ecs_anchor_route_builder',
-    externalSourceType: 'pin_to_pin_anchor_trace',
+    sourceApp: routeBuilderActiveExtensionMode ? 'ecs_active_guidance_extension' : 'ecs_anchor_route_builder',
+    externalSourceType: routeBuilderActiveExtensionMode ? 'active_guidance_extension' : 'pin_to_pin_anchor_trace',
   });
   if (!result) return;
   setRouteBuilderSaveVisible(false);
   setRouteBuilderSaveName('');
   setRouteBuilderSaveNote('');
-}, [routeBuilderSaveName, routeBuilderSaveNote, saveVerifiedRouteBuilderDraft]);
+}, [routeBuilderActiveExtensionMode, routeBuilderSaveName, routeBuilderSaveNote, saveVerifiedRouteBuilderDraft]);
 
 const routeToRouteBuilder = useCallback(async () => {
   hapticCommand();
@@ -17245,17 +17453,19 @@ const confirmRemoveSavedRouteAsset = useCallback((asset: SavedRouteAsset) => {
 
 useEffect(() => {
   if (!routeBuilderActive) return;
+  if (routeBuilderActiveExtensionMode) return;
   if (!roadNavigationActive && !trailNavigationActive && !pendingHybridTrailTransition) return;
   setRouteBuilderActive(false);
   setRouteBuilderDrawing(false);
   setRouteBuilderSnapSource(null);
   setRouteBuilderSegments([]);
+  setRouteBuilderActiveExtensionMode(false);
   setDispersedRouteBuildActive(false);
   setSelectedDispersedRouteLegIds([]);
   setSelectedRouteGeometrySegmentIds([]);
   setDispersedRouteBuildStatus(null);
   setDispersedRouteBuildRenderKey((key) => key + 1);
-}, [pendingHybridTrailTransition, roadNavigationActive, routeBuilderActive, trailNavigationActive]);
+}, [pendingHybridTrailTransition, roadNavigationActive, routeBuilderActive, routeBuilderActiveExtensionMode, trailNavigationActive]);
 
 useFocusEffect(
   useCallback(() => {
@@ -17266,6 +17476,7 @@ useFocusEffect(
       setRouteBuilderDrawing(false);
       setRouteBuilderSnapSource(null);
       setRouteBuilderSegments([]);
+      setRouteBuilderActiveExtensionMode(false);
       setDispersedRouteBuildActive(false);
       setSelectedDispersedRouteLegIds([]);
       setSelectedRouteGeometrySegmentIds([]);
@@ -18269,7 +18480,7 @@ const stableMapSurface = useMemo(() => {
         routeBuilderMode="anchor_trace"
         routeBuilderSegments={routeBuilderSegments}
         routeBuilderAnchors={routeBuilderDraft.anchors}
-        routeBuilderColor="#65F0D4"
+        routeBuilderColor={routeBuilderActiveExtensionMode ? ACTIVE_GUIDANCE_EXTENSION_COLOR : ROUTE_BUILDER_DEFAULT_COLOR}
         routeProfileFocusCoordinate={routeProfileFocus?.coordinate ?? null}
         selectedRouteGeometrySegmentIds={selectedRouteGeometrySegmentIds}
         onRouteBuilderUpdate={handleRouteBuilderUpdate}
@@ -18699,6 +18910,28 @@ const stableMapSurface = useMemo(() => {
           executeStartExpeditionNow(pendingStartMode ?? (explorePreviewMode === 'trail' ? 'trail' : 'road'), acknowledgedOverride);
         }}
       />
+
+      {activeGuidanceEndpointHint ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.activeGuidanceEndpointHint,
+            {
+              top: activeGuidanceToastTopOffset,
+              left: adaptive.isExpanded ? Math.max(OVERLAY_EDGE, 120) : OVERLAY_EDGE,
+              right: adaptive.isExpanded ? Math.max(OVERLAY_EDGE, 120) : OVERLAY_EDGE,
+              opacity: activeGuidanceEndpointHintOpacity,
+            },
+          ]}
+        >
+          <Text style={styles.activeGuidanceEndpointHintTitle} numberOfLines={1}>
+            {activeGuidanceEndpointHint.title}
+          </Text>
+          <Text style={styles.activeGuidanceEndpointHintMessage} numberOfLines={1}>
+            {activeGuidanceEndpointHint.message}
+          </Text>
+        </Animated.View>
+      ) : null}
 
       <Toast
         placement="top"
@@ -19775,6 +20008,7 @@ const stableMapSurface = useMemo(() => {
   navigationActiveContext,
   trailNavigationActive,
   routeBuilderActive,
+  routeBuilderActiveExtensionMode,
   selectedRouteGeometrySegmentIds,
   routeBuilderSegments,
   routeBuilderDraft.anchors,
@@ -19846,6 +20080,9 @@ const stableMapSurface = useMemo(() => {
   routeSurfaceBottomOffset,
   routeBuilderControlBottomOffset,
   mapToastAttachedToGuidance,
+  activeGuidanceEndpointHint,
+  activeGuidanceEndpointHintOpacity,
+  activeGuidanceToastTopOffset,
   mapToastBottomOffset,
   mapToastTopOffset,
   routeStepDrawerBottomOffset,
@@ -23825,6 +24062,41 @@ routeIndicatorStateText: {
   fontSize: 6.7,
   fontWeight: '900',
   letterSpacing: 0.9,
+},
+
+activeGuidanceEndpointHint: {
+  position: 'absolute',
+  minHeight: 42,
+  paddingHorizontal: 12,
+  paddingVertical: 8,
+  borderRadius: 12,
+  backgroundColor: 'rgba(10,14,18,0.92)',
+  borderWidth: 1,
+  borderColor: 'rgba(242,194,77,0.34)',
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 5 },
+  shadowOpacity: 0.28,
+  shadowRadius: 12,
+  elevation: 14,
+  zIndex: 86,
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 2,
+},
+
+activeGuidanceEndpointHintTitle: {
+  color: TACTICAL.amber,
+  fontSize: 9,
+  fontWeight: '900',
+  letterSpacing: 1.1,
+  textTransform: 'uppercase',
+},
+
+activeGuidanceEndpointHintMessage: {
+  color: TACTICAL.text,
+  fontSize: 11,
+  fontWeight: '800',
+  letterSpacing: 0.2,
 },
 
 quickActionsMenu: {

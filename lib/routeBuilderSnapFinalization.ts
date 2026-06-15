@@ -209,6 +209,10 @@ export function isVerifiedRouteBuilderSegment(segment: FinalizableRouteBuilderSe
   if (segment.buildSource?.kind === 'ecs_route_geometry' && segment.snapStatus === 'snapped') {
     return segment.snapProvider === 'ecs_route_geometry' && localSnapIsAcceptable(segment);
   }
+  if (segment.buildSource?.kind === 'active_guidance_extension' && segment.snapStatus === 'snapped') {
+    if (segment.snapProvider === 'ecs_route_geometry') return localSnapIsAcceptable(segment);
+    if (segment.snapProvider === 'mapbox_map_matching' && segment.snapProfile === 'driving') return true;
+  }
   if (segment.snapStatus !== 'snapped') return false;
   if (segment.snapProvider === 'mapbox_map_matching' && segment.snapProfile === 'driving') return true;
   if (segment.snapProvider === 'rendered_features' && localSnapIsAcceptable(segment)) return true;

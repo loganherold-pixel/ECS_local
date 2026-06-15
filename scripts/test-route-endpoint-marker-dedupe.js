@@ -31,6 +31,29 @@ assert(
 );
 
 assert(
+  mapRendererSource.includes("endpointRole: 'trail_entry'") &&
+    mapRendererSource.includes("endpointRole: 'trail_end'") &&
+    mapRendererSource.includes("subtitle: 'The trail begins here.'") &&
+    mapRendererSource.includes("subtitle: 'Route guidance end.'"),
+  'Route endpoint waypoints should carry tappable trail-entry/end copy for active guidance hints.',
+);
+
+assert(
+  mapRendererSource.includes('function waypointMarkerClass') &&
+    mapRendererSource.includes("marker-waypoint-entry") &&
+    mapRendererSource.includes("marker-waypoint-end") &&
+    mapRendererSource.includes("replaceMarkers(waypointMarkers, payload.waypoints || [], waypointMarkerClass, 'waypoint')"),
+  'Route endpoint waypoint markers should render with role-aware entry/end styling.',
+);
+
+assert(
+  mapRendererSource.includes('.marker-waypoint-entry') &&
+    mapRendererSource.includes('background: rgba(242, 194, 77, 0.16)') &&
+    mapRendererSource.includes('.marker-waypoint-end'),
+  'Trail entry should render as a transparent route endpoint marker while trail end stays visually anchored.',
+);
+
+assert(
   navigateSource.includes('if (roadRoutePoints.length > 1) {\n      return explorePreviewWaypoints;\n    }') &&
     !navigateSource.includes('? roadRouteWaypoints\n        : activeRunWaypointList'),
   'Navigate should not pass the road destination waypoint when route geometry already provides the canonical route endpoint marker.',

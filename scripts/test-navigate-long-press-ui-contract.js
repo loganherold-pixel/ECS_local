@@ -29,6 +29,51 @@ includes(
   'handleRouteBuilderAnchorTap(longPressContext.coordinate, longPressContext.routeableFeature);',
   'Draw Route should pass routeable feature geometry into the anchor route builder.',
 );
+includes(
+  navigate,
+  'activeGuidanceRouteExtensionAvailable',
+  'Navigate should detect when an active guidance route can be extended from its endpoint.',
+);
+includes(
+  navigate,
+  'addActiveGuidanceExtensionAnchor(routeBuilderDraft, {',
+  'Draw Route during active guidance should seed the builder from the active route end.',
+);
+includes(
+  navigate,
+  "canBuildRoute: !activeNavigationRunning || activeGuidanceRouteExtensionAvailable",
+  'Long-press Draw Route should remain available during active guidance only when ECS can extend from the active endpoint.',
+);
+includes(
+  navigate,
+  'routeBuilderActiveExtensionMode',
+  'Navigate should track active-guidance route extension mode for UI and save metadata.',
+);
+includes(
+  navigate,
+  'routeBuilderColor={routeBuilderActiveExtensionMode ? ACTIVE_GUIDANCE_EXTENSION_COLOR : ROUTE_BUILDER_DEFAULT_COLOR}',
+  'Active guidance extensions should render in the same blue family as active guidance while normal builder remains unchanged.',
+);
+includes(
+  navigate,
+  'const activeGuidanceExtensionStats = useMemo(() =>',
+  'Navigate should derive active-guidance extension distance/verification stats from the drafted legs.',
+);
+includes(
+  navigate,
+  'const extensionRemainingDistanceM = activeGuidanceExtensionStats?.verified',
+  'Verified active-guidance extensions should be included in remaining distance calculations.',
+);
+includes(
+  navigate,
+  'const extensionEtaIso = activeGuidanceExtensionStats?.verified',
+  'Verified active-guidance extensions should adjust the active guidance ETA estimate.',
+);
+includes(
+  navigate,
+  'Active guidance extension verified',
+  'Active guidance copy should clearly label extension ETA/mileage as an operator-added extension estimate.',
+);
 includes(navigate, 'handleLongPressAddWaypoint', 'Long-press menu should add waypoints.');
 includes(navigate, 'handleLongPressInfo', 'Long-press menu should open point info.');
 includes(navigate, 'handleLongPressNavigateHere', 'Long-press menu should expose Navigate Here.');
@@ -77,5 +122,8 @@ includes(mapRenderer, 'longPressSuppressClickUntil', 'Touch long-press should su
 includes(mapRenderer, "if (routeBuilderMode === 'anchor_trace') return false;", 'Anchor-trace mode should disable freehand pointer drawing.');
 includes(mapRenderer, "if (routeBuilderMode === 'anchor_trace')", 'Anchor-trace mode should alter click handling.');
 includes(mapRenderer, 'route-profile-focus-source', 'MapRenderer should render the profile focus point.');
+includes(mapRenderer, "provisional: isRouteBuilderSegmentProvisional(segment)", 'MapRenderer should flag unverified route-builder extension segments as provisional.');
+includes(mapRenderer, "['case', ['get', 'provisional'], [1.2, 1.1], [1, 0]]", 'Route-builder provisional segments should render dashed until ECS/Mapbox verification is solid.');
+includes(mapRenderer, 'anchor.hidden', 'MapRenderer should skip hidden active-route-end seed anchors.');
 
 console.log('Navigate long-press UI contract checks passed.');
