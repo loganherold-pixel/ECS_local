@@ -4,6 +4,9 @@ import type {
   ExpeditionReadinessCategory,
   ExpeditionReadinessInput,
 } from './expeditionReadinessTypes';
+import { resolveExpeditionTripIntent } from './expeditionReadinessCalibration';
+
+const ROUTE_REQUIRED_ACTION_MESSAGE = 'You must first have an active route or build a trip.';
 
 function statusFromBoolean(
   value: boolean | null | undefined,
@@ -28,8 +31,9 @@ function item(
   summary: string,
   actionLabel?: string | null,
   actionTarget?: string | null,
+  disabledActionReason?: string | null,
 ): ExpeditionDepartureAuditItem {
-  return { itemId, label, status, summary, actionLabel, actionTarget };
+  return { itemId, label, status, summary, actionLabel, actionTarget, disabledActionReason };
 }
 
 function categoryMap(categories: ExpeditionReadinessCategory[]): Map<string, ExpeditionReadinessCategory> {
@@ -99,6 +103,20 @@ function emergencyCommsSummary(
   return category?.summary ?? 'Emergency communications can be completed by reviewing Comms references and adding personal frequencies, signals, or emergency numbers.';
 }
 
+function hasRouteContext(input: ExpeditionReadinessInput): boolean {
+  const route = input.route;
+  return Boolean(
+    route?.routeId
+      || route?.name
+      || (typeof route?.distanceMiles === 'number' && route.distanceMiles > 0)
+      || input.readinessMode === 'active',
+  );
+}
+
+function routeRequiredReason(input: ExpeditionReadinessInput): string | null {
+  return hasRouteContext(input) ? null : ROUTE_REQUIRED_ACTION_MESSAGE;
+}
+
 export function buildDepartureAudit(
   input: ExpeditionReadinessInput,
   categories: ExpeditionReadinessCategory[],
@@ -110,8 +128,11 @@ export function buildDepartureAudit(
   const power = categoriesById.get('power_runtime');
   const recovery = categoriesById.get('recovery_bailout_access');
   const communications = categoriesById.get('communications_signal_confidence');
+  const resolvedTripIntent = resolveExpeditionTripIntent(input).tripIntent;
+  const includeCampCandidates = resolvedTripIntent !== 'dayTrip';
+  const routeActionDisabledReason = routeRequiredReason(input);
 
-  return [
+  const auditItems = [
     item(
       'offline-map-package',
       'Offline map package',
@@ -125,17 +146,21 @@ export function buildDepartureAudit(
       offlinePackageSummary(input),
       offline?.packageStatus === 'ready' ? null : 'Download Route Package',
       offline?.packageStatus === 'ready' ? null : '/navigate',
+      offline?.packageStatus === 'ready' ? null : routeActionDisabledReason,
     ),
-    item(
-      'camp-candidates',
-      'Camp candidates',
-      statusFromBoolean(offline?.campCandidatesCached ?? offline?.campIntelDownloaded),
-      offline?.campCandidatesCached || offline?.campIntelDownloaded
-        ? 'Camp candidate context is cached from available ECS signals.'
-        : 'Camp candidate cache is limited; Legal Access Confidence may degrade offline.',
-      'Open CampOps',
-      '/navigate',
-    ),
+    includeCampCandidates
+      ? item(
+          'camp-candidates',
+          'Camp candidates',
+          statusFromBoolean(offline?.campCandidatesCached ?? offline?.campIntelDownloaded),
+          offline?.campCandidatesCached || offline?.campIntelDownloaded
+            ? 'Camp candidate context is cached from available ECS signals.'
+            : 'Camp candidate cache is limited; Legal Access Confidence may degrade offline.',
+          'Open CampOps',
+          '/navigate',
+          routeActionDisabledReason,
+        )
+      : null,
     item(
       'weather-snapshot',
       'Weather snapshot',
@@ -155,6 +180,7 @@ export function buildDepartureAudit(
         : 'Bailout point cache is not confirmed.',
       'Review Bailouts',
       '/navigate-bailouts',
+      routeActionDisabledReason,
     ),
     item(
       'fuel-range-plan',
@@ -195,6 +221,9 @@ export function buildDepartureAudit(
       recovery?.summary ?? 'Recovery plan is unavailable.',
       'Review Bailouts',
       '/navigate-bailouts',
+      routeActionDisabledReason,
     ),
   ];
+
+  return auditItems.filter((auditItem): auditItem is ExpeditionDepartureAuditItem => Boolean(auditItem));
 }

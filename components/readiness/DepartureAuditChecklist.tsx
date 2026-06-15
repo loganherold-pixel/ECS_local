@@ -9,6 +9,8 @@ import type {
   ExpeditionDepartureAuditItemStatus,
 } from '../../lib/readiness/expeditionReadinessTypes';
 
+const COMPLETE_GREEN = '#2FD36B';
+
 type DepartureAuditChecklistProps = {
   items: ExpeditionDepartureAuditItem[];
   limit?: number;
@@ -47,16 +49,30 @@ export function DepartureAuditChecklist({
   return (
     <View style={styles.list}>
       {visibleItems.map((item) => {
-        const hasAction = Boolean(item.actionLabel && item.actionTarget && onActionPress);
+        const hasAction = Boolean(item.actionLabel && onActionPress && (item.actionTarget || item.disabledActionReason));
+        const actionUnavailable = Boolean(item.disabledActionReason);
+        const isComplete = item.status === 'complete';
         return (
           <View key={item.itemId} style={[styles.row, rowStyle]}>
-            <ECSIcon name={statusIcon(item.status)} tier="compact" tone={statusTone(item.status)} />
+            <ECSIcon
+              name={statusIcon(item.status)}
+              tier="compact"
+              tone={statusTone(item.status)}
+              color={isComplete ? COMPLETE_GREEN : undefined}
+            />
             <View style={styles.copyBlock}>
               <View style={styles.titleRow}>
-                <ECSText variant="body" style={styles.label} numberOfLines={1}>
+                <ECSText variant="body" style={styles.label} numberOfLines={2}>
                   {item.label}
                 </ECSText>
-                <ECSBadge label={statusLabel(item.status)} tone={statusTone(item.status)} compact />
+                <ECSBadge
+                  label={statusLabel(item.status)}
+                  tone={statusTone(item.status)}
+                  colorOverride={isComplete ? COMPLETE_GREEN : undefined}
+                  compact
+                  style={isComplete ? styles.statusBadgeComplete : null}
+                  textStyle={isComplete ? styles.statusBadgeCompleteText : null}
+                />
               </View>
               <ECSText variant="helper" style={styles.summary} numberOfLines={2}>
                 {item.summary}
@@ -65,10 +81,20 @@ export function DepartureAuditChecklist({
             {hasAction ? (
               <Pressable
                 accessibilityRole="button"
+                accessibilityState={{ disabled: actionUnavailable }}
+                accessibilityHint={item.disabledActionReason ?? undefined}
                 onPress={() => onActionPress?.(item)}
-                style={({ pressed }) => [styles.action, pressed && styles.pressed]}
+                style={({ pressed }) => [
+                  styles.action,
+                  actionUnavailable && styles.actionDisabled,
+                  pressed && styles.pressed,
+                ]}
               >
-                <ECSText variant="chip" style={styles.actionText} numberOfLines={1}>
+                <ECSText
+                  variant="chip"
+                  style={[styles.actionText, actionUnavailable && styles.actionTextDisabled]}
+                  numberOfLines={2}
+                >
                   {item.actionLabel}
                 </ECSText>
               </Pressable>
@@ -106,9 +132,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     minWidth: 0,
+    flexWrap: 'wrap',
   },
   label: {
     flex: 1,
+    minWidth: 120,
     color: ECS.text,
     fontSize: 13,
     lineHeight: 17,
@@ -118,8 +146,15 @@ const styles = StyleSheet.create({
     color: ECS.muted,
     lineHeight: 15,
   } as TextStyle,
+  statusBadgeComplete: {
+    backgroundColor: 'rgba(47,211,107,0.18)',
+    borderColor: 'rgba(47,211,107,0.44)',
+  },
+  statusBadgeCompleteText: {
+    color: COMPLETE_GREEN,
+  } as TextStyle,
   action: {
-    maxWidth: 94,
+    width: 112,
     minHeight: 28,
     justifyContent: 'center',
     paddingHorizontal: 8,
@@ -131,6 +166,15 @@ const styles = StyleSheet.create({
   actionText: {
     color: ECS.accent,
     includeFontPadding: false,
+    textAlign: 'center',
+    lineHeight: 13,
+  } as TextStyle,
+  actionDisabled: {
+    borderColor: ECS.strokeSoft,
+    backgroundColor: 'rgba(255,255,255,0.035)',
+  },
+  actionTextDisabled: {
+    color: ECS.muted,
   } as TextStyle,
   pressed: {
     opacity: 0.78,

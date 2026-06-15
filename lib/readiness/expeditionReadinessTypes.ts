@@ -178,6 +178,7 @@ export type ExpeditionDepartureAuditItem = {
   summary: string;
   actionLabel?: string | null;
   actionTarget?: string | null;
+  disabledActionReason?: string | null;
 };
 
 export type ExpeditionRecoveryDifficulty = 'low' | 'moderate' | 'high' | 'unknown';

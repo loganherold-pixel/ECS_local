@@ -90,6 +90,53 @@ assert.ok(missingRemoteOffline.blockers.some((issue) => issue.id === 'offline-pa
 const missingOfflineAuditItem = missingRemoteOffline.departureAudit.find((item) => item.itemId === 'offline-map-package');
 assert.strictEqual(missingOfflineAuditItem.actionTarget, '/navigate', 'Missing offline package should route to Navigate for route-specific package prep.');
 
+const noRouteDayTripAudit = buildExpeditionReadiness({
+  ...base,
+  tripIntent: 'dayTrip',
+  tripIntentSource: 'selected',
+  readinessProfile: 'dayTrip',
+  route: null,
+  campCandidates: [],
+  recovery: null,
+  offline: {
+    packageStatus: 'missing',
+    campCandidatesCached: false,
+    bailoutPointsCached: false,
+    weatherSnapshotAvailable: true,
+    fuelTownRoadReferencesCached: true,
+    emergencyPacketAvailable: true,
+    currentRoutePackageFresh: null,
+    isOnline: true,
+    source: 'cached',
+    updatedAt: now,
+  },
+});
+assert.ok(
+  !noRouteDayTripAudit.departureAudit.some((item) => item.itemId === 'camp-candidates'),
+  'Day trip Departure Audit should omit Camp candidates because camp planning is not part of the selected intent.',
+);
+['offline-map-package', 'bailout-points', 'recovery-plan'].forEach((itemId) => {
+  const auditItem = noRouteDayTripAudit.departureAudit.find((item) => item.itemId === itemId);
+  assert.ok(auditItem, `${itemId} should still be visible as a route-dependent audit item.`);
+  assert.strictEqual(
+    auditItem.disabledActionReason,
+    'You must first have an active route or build a trip.',
+    `${itemId} should explain why its route-dependent action is unavailable without a route.`,
+  );
+});
+
+const noRouteOvernightAudit = buildExpeditionReadiness({
+  ...noRouteDayTripAudit,
+  tripIntent: 'overnightCamp',
+  tripIntentSource: 'selected',
+  readinessProfile: 'overnight',
+});
+assert.strictEqual(
+  noRouteOvernightAudit.departureAudit.find((item) => item.itemId === 'camp-candidates')?.disabledActionReason,
+  'You must first have an active route or build a trip.',
+  'Camp candidate actions should be route-gated for camping trips when no route exists yet.',
+);
+
 const readyPackageWithoutRouteAssetCache = buildExpeditionReadiness({
   ...base,
   offline: {
@@ -172,8 +219,17 @@ assert.strictEqual(manualFuelLevelOnly.departureAudit.find((item) => item.itemId
 const commandBrief = read('components', 'brief', 'CommandBriefScreen.tsx');
 assert.ok(commandBrief.includes('Departure Audit'), 'Command Brief should render Departure Audit.');
 assert.ok(commandBrief.includes('DepartureAuditChecklist'), 'Command Brief should use the reusable DepartureAuditChecklist.');
+assert.ok(commandBrief.includes('disabledActionReason'), 'Command Brief should surface disabled route-dependent audit action reasons.');
 assert.ok(commandBrief.includes("intent: 'prepare_offline_route_package'"), 'Command Brief offline package action should stage route-specific offline prep.');
 assert.ok(commandBrief.includes("sourceSurface: 'command_brief_departure_audit'"), 'Command Brief offline package action should identify the departure audit source.');
+
+const departureAuditChecklist = read('components', 'readiness', 'DepartureAuditChecklist.tsx');
+assert.ok(departureAuditChecklist.includes('statusBadgeComplete'), 'Departure Audit should use a stronger stoplight-green Complete badge style.');
+assert.ok(departureAuditChecklist.includes('actionDisabled'), 'Departure Audit should render unavailable route actions in a disabled state.');
+assert.ok(
+  !departureAuditChecklist.includes('style={styles.actionText} numberOfLines={1}'),
+  'Departure Audit action buttons should allow wrapped labels instead of truncating full words.',
+);
 
 const navigateStrip = read('components', 'navigate', 'NavigateReadinessStrip.tsx');
 assert.ok(navigateStrip.includes('Offline: {offlineStatus}'), 'Navigate strip should show compact offline readiness.');

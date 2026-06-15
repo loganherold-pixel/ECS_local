@@ -1593,6 +1593,11 @@ export default function CommandBriefScreen({
   }, []);
   const handleAuditAction = useCallback(
     (item: ExpeditionDepartureAuditItem) => {
+      if (item.disabledActionReason) {
+        setBriefExportMessage(item.disabledActionReason);
+        showToast(item.disabledActionReason);
+        return;
+      }
       if (item.itemId === 'offline-map-package') {
         void stageNavigationFlow({
           source: 'dashboard',
@@ -1611,7 +1616,7 @@ export default function CommandBriefScreen({
       }
       if (item.actionTarget) pushRoute(item.actionTarget);
     },
-    [pushRoute],
+    [pushRoute, showToast],
   );
   const weakPointAnalyzerEnabled = isWeakPointAnalyzerFeatureEnabled({
     weakPointAnalyzer: readinessState.inputPatch.weakPointAnalyzerFeatureEnabled ?? null,
