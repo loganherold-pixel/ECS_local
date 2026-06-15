@@ -67,6 +67,13 @@ type Props = {
     sourceLabel?: string | null;
     phaseLabel?: string | null;
     metrics: { label: string; value: string }[];
+    alternateRoutes?: {
+      id: string;
+      label: string;
+      distanceLabel: string;
+      durationLabel: string;
+      selected: boolean;
+    }[];
     statusText: string;
     noteText?: string | null;
     primaryActionLabel?: string;
@@ -101,6 +108,7 @@ type Props = {
     routeConfidenceSummary?: NavigateRouteConfidenceSummary | null;
   } | null;
   onPrimaryPreviewAction?: () => void;
+  onSelectRouteAlternative?: (routeId: string) => void;
   onPrepareOffline?: () => void;
   onRouteOverview?: () => void;
   onOpenCommandBrief?: () => void;
@@ -364,6 +372,7 @@ function PreviewCard({
   stepListExpanded,
   previewContext,
   onPrimaryPreviewAction,
+  onSelectRouteAlternative,
   onPrepareOffline,
   onRouteOverview,
   onOpenCommandBrief,
@@ -382,6 +391,7 @@ function PreviewCard({
   | 'stepListExpanded'
   | 'previewContext'
   | 'onPrimaryPreviewAction'
+  | 'onSelectRouteAlternative'
   | 'onPrepareOffline'
   | 'onRouteOverview'
   | 'onOpenCommandBrief'
@@ -432,6 +442,7 @@ function PreviewCard({
     ...(routeConfidenceExplanation?.uncertainSignals ?? []),
   ].slice(0, 3);
   const readinessActions = readinessStack?.recommendedActions ?? [];
+  const alternateRoutes = previewContext?.alternateRoutes ?? [];
 
   return (
     <View
@@ -513,6 +524,49 @@ function PreviewCard({
 
           {previewContext?.noteText ? (
             <Text style={styles.previewNoteText}>{previewContext.noteText}</Text>
+          ) : null}
+
+          {alternateRoutes.length > 1 ? (
+            <View style={styles.alternateRoutesCard}>
+              <View style={styles.alternateRoutesHeader}>
+                <Text style={styles.alternateRoutesTitle}>Route choices</Text>
+                <Text style={styles.alternateRoutesHint}>Fastest first</Text>
+              </View>
+              <View style={styles.alternateRouteList}>
+                {alternateRoutes.map((option) => (
+                  <TouchableOpacity
+                    key={option.id}
+                    style={[
+                      styles.alternateRouteOption,
+                      option.selected && styles.alternateRouteOptionSelected,
+                    ]}
+                    onPress={() => onSelectRouteAlternative?.(option.id)}
+                    disabled={option.selected}
+                    activeOpacity={0.84}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select alternate route ${option.label}`}
+                  >
+                    <View style={styles.alternateRouteLabelWrap}>
+                      <Text
+                        style={[
+                          styles.alternateRouteLabel,
+                          option.selected && styles.alternateRouteLabelSelected,
+                        ]}
+                      >
+                        {option.label}
+                      </Text>
+                      {option.selected ? (
+                        <Text style={styles.alternateRouteSelectedText}>Selected</Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.alternateRouteMetricWrap}>
+                      <Text style={styles.alternateRouteMetric}>{option.durationLabel}</Text>
+                      <Text style={styles.alternateRouteMetricMuted}>{option.distanceLabel}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
           ) : null}
 
           {readinessStack ? (
@@ -1050,6 +1104,7 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
           stepListExpanded={props.stepListExpanded}
           previewContext={props.previewContext}
           onPrimaryPreviewAction={props.onPrimaryPreviewAction}
+          onSelectRouteAlternative={props.onSelectRouteAlternative}
           onPrepareOffline={props.onPrepareOffline}
           onRouteOverview={props.onRouteOverview}
           previewAccessory={props.previewAccessory}
@@ -1677,6 +1732,85 @@ const styles = StyleSheet.create({
     ...ECS_TEXT.statValue,
     marginTop: ECS_TEXT_SPACING.statLabelToValue + 1,
     fontSize: 13,
+  },
+  alternateRoutesCard: {
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.16)',
+    backgroundColor: 'rgba(212,160,23,0.055)',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 7,
+  },
+  alternateRoutesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  alternateRoutesTitle: {
+    ...ECS_TEXT.chip,
+    color: TACTICAL.text,
+    fontSize: 9,
+  },
+  alternateRoutesHint: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+  },
+  alternateRouteList: {
+    gap: 6,
+  },
+  alternateRouteOption: {
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.075)',
+    backgroundColor: 'rgba(4,7,9,0.34)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  alternateRouteOptionSelected: {
+    borderColor: 'rgba(212,160,23,0.52)',
+    backgroundColor: 'rgba(212,160,23,0.13)',
+  },
+  alternateRouteLabelWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  alternateRouteLabel: {
+    ...ECS_TEXT.body,
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  alternateRouteLabelSelected: {
+    color: TACTICAL.text,
+  },
+  alternateRouteSelectedText: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.amber,
+    fontSize: 9,
+    marginTop: 1,
+  },
+  alternateRouteMetricWrap: {
+    alignItems: 'flex-end',
+    gap: 1,
+  },
+  alternateRouteMetric: {
+    ...ECS_TEXT.statValue,
+    color: TACTICAL.text,
+    fontSize: 11,
+  },
+  alternateRouteMetricMuted: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    fontSize: 9,
   },
   compactMetricRow: {
     flexDirection: 'row',

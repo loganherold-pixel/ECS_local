@@ -9,7 +9,7 @@ import {
 import {
   buildRoadRouteFromCachedGeometry,
   createRoadSearchSessionToken,
-  fetchRoadRoute,
+  fetchRoadRouteAlternatives,
   resolveRoadDestination,
   searchRoadDestinations,
   type RoadNavCoordinate,
@@ -70,6 +70,7 @@ export interface RoadNavigationSessionState {
   remainingDurationS: number | null;
   etaIso: string | null;
   routeStatusLabel: string | null;
+  routeAlternatives: RoadNavRoute[];
   routeConfidenceState: RoadNavigationConfidenceState;
   offRouteDistanceM: number | null;
   distanceToDestinationM: number | null;
@@ -103,6 +104,7 @@ export interface UseRoadNavigationOutput {
     route: RoadNavRoute,
     createdFrom?: RoadNavSourceType,
   ) => Promise<void>;
+  selectRouteAlternative: (routeId: string) => void;
   startNavigation: () => void;
   endNavigation: () => Promise<void>;
   clearDestination: () => Promise<void>;
@@ -608,6 +610,7 @@ function createEmptySession(): RoadNavigationSessionState {
     status: 'idle',
     destination: null,
     route: null,
+    routeAlternatives: [],
     currentStepIndex: 0,
     nextInstruction: null,
     nextInstructionDistanceM: null,
@@ -773,6 +776,7 @@ export function useRoadNavigation(params: {
       destination: RoadNavDestination,
       createdFrom: RoadNavSourceType,
       rerouteCount?: number,
+      routeAlternatives?: RoadNavRoute[],
     ) => {
       const validRoute = ensureRoadRouteGeometry(route, {
         phase: 'apply',
@@ -784,6 +788,7 @@ export function useRoadNavigation(params: {
           ...prev,
           status: 'error',
           route: null,
+          routeAlternatives: [],
           error: 'Route geometry unavailable',
           routeStatusLabel: 'Route unavailable',
           routeConfidenceState: 'on_route',
@@ -791,6 +796,19 @@ export function useRoadNavigation(params: {
         }));
         return;
       }
+      const validRoutes = (routeAlternatives?.length ? routeAlternatives : [validRoute])
+        .map((candidate) =>
+          ensureRoadRouteGeometry(candidate, {
+            phase: 'apply',
+            source: 'road',
+            status: nextStatus,
+          }),
+        )
+        .filter((candidate): candidate is RoadNavRoute => !!candidate)
+        .slice(0, 3);
+      const nextRouteAlternatives = validRoutes.some((candidate) => candidate.id === validRoute.id)
+        ? validRoutes
+        : [validRoute, ...validRoutes].slice(0, 3);
 
       setSession((prev) => {
         const computed = computeSessionFromRoute(validRoute, currentLocation, prev);
@@ -800,6 +818,7 @@ export function useRoadNavigation(params: {
           status: nextStatus,
           destination,
           route: validRoute,
+          routeAlternatives: nextRouteAlternatives,
           rerouteCount: rerouteCount ?? prev.rerouteCount,
           error: null,
           createdFrom,
@@ -876,8 +895,8 @@ export function useRoadNavigation(params: {
       routeRequestSeqRef.current = requestSeq;
       setPreviewLoading(true);
       try {
-        const route = await withRouteRequestTimeout(
-          fetchRoadRoute({
+        const routes = await withRouteRequestTimeout(
+          fetchRoadRouteAlternatives({
             accessToken,
             origin: currentLocation,
             destination,
@@ -891,16 +910,22 @@ export function useRoadNavigation(params: {
           return;
         }
 
-        const validRoute = ensureRoadRouteGeometry(route, {
-          phase: 'fetch',
-          source: 'road',
-          status: requestedStatus,
-        });
+        const validRoutes = routes
+          .map((candidate) =>
+            ensureRoadRouteGeometry(candidate, {
+              phase: 'fetch',
+              source: 'road',
+              status: requestedStatus,
+            }),
+          )
+          .filter((candidate): candidate is RoadNavRoute => !!candidate)
+          .slice(0, 3);
+        const validRoute = validRoutes[0] ?? null;
         if (!validRoute) {
           throw new Error('Route geometry unavailable');
         }
 
-        applyRoute(validRoute, requestedStatus, destination, createdFrom, rerouteCount);
+        applyRoute(validRoute, requestedStatus, destination, createdFrom, rerouteCount, validRoutes);
       } finally {
         if (inFlightRouteKeyRef.current === routeKey) {
           inFlightRouteKeyRef.current = null;
@@ -949,6 +974,7 @@ export function useRoadNavigation(params: {
           sessionId: restored.sessionId,
           destination: restored.destination,
           route: restoredRoute,
+          routeAlternatives: restoredRoute ? [restoredRoute] : [],
           status: restoredStatus,
           error: restoredRoute || currentLocation ? null : 'GPS required',
           createdFrom: 'restored_session',
@@ -1091,6 +1117,7 @@ export function useRoadNavigation(params: {
           sessionId: randomSessionId(),
           destination,
           route: null,
+          routeAlternatives: [],
           status: 'destination_selected',
           error: currentLocation ? null : 'GPS required',
           currentStepIndex: 0,
@@ -1141,6 +1168,7 @@ export function useRoadNavigation(params: {
           sessionId: randomSessionId(),
           destination,
           route: null,
+          routeAlternatives: [],
           status: 'destination_selected',
         error: currentLocation ? null : 'GPS required',
         currentStepIndex: 0,
@@ -1182,6 +1210,24 @@ export function useRoadNavigation(params: {
       applyRoute(route, 'route_preview', route.destination, createdFrom, 0);
     },
     [applyRoute, clearSearchUi],
+  );
+
+  const selectRouteAlternative = useCallback(
+    (routeId: string) => {
+      const activeSession = sessionRef.current;
+      if (activeSession.status !== 'route_preview' || !activeSession.destination) return;
+      const selectedRoute = activeSession.routeAlternatives.find((route) => route.id === routeId);
+      if (!selectedRoute || selectedRoute.id === activeSession.route?.id) return;
+      applyRoute(
+        selectedRoute,
+        'route_preview',
+        activeSession.destination,
+        activeSession.createdFrom,
+        activeSession.rerouteCount,
+        activeSession.routeAlternatives,
+      );
+    },
+    [applyRoute],
   );
 
   const reroute = useCallback(
@@ -1431,6 +1477,7 @@ export function useRoadNavigation(params: {
         ...prev,
         status: 'error',
         route: null,
+        routeAlternatives: [],
         error: 'Route geometry unavailable',
         routeStatusLabel: 'Route unavailable',
       }));
@@ -1448,6 +1495,7 @@ export function useRoadNavigation(params: {
         ...prev,
         status: 'navigation_active' as const,
         route: validRoute,
+        routeAlternatives: prev.routeAlternatives.length ? prev.routeAlternatives : [validRoute],
         routeStatusLabel: 'Route active',
         routeConfidenceState: 'on_route' as const,
         completionReason: null,
@@ -1512,6 +1560,7 @@ export function useRoadNavigation(params: {
     selectSuggestion,
     previewDestination,
     previewRoute,
+    selectRouteAlternative,
     startNavigation,
     endNavigation,
     clearDestination,

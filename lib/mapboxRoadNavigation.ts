@@ -487,26 +487,16 @@ export function buildRoadRouteFromCachedGeometry(params: {
   };
 }
 
-export async function fetchRoadRoute(params: {
-  accessToken: string;
-  origin: RoadNavCoordinate;
-  destination: RoadNavDestination;
-}): Promise<RoadNavRoute> {
-  const coordinates = `${params.origin.lng},${params.origin.lat};${params.destination.coordinate.lng},${params.destination.coordinate.lat}`;
-  const url = new URL(`${DIRECTIONS_URL}/${coordinates}`);
-  url.searchParams.set('access_token', params.accessToken);
-  url.searchParams.set('geometries', 'geojson');
-  url.searchParams.set('overview', 'full');
-  url.searchParams.set('steps', 'true');
-  url.searchParams.set('banner_instructions', 'false');
-  url.searchParams.set('voice_instructions', 'false');
-  url.searchParams.set('alternatives', 'false');
-  url.searchParams.set('language', 'en');
-
-  const data = await fetchJsonWithTimeout<{ routes?: any[] }>(url.toString(), 9000);
-  const route = data?.routes?.[0];
+function normalizeMapboxRoadRoute(
+  route: any,
+  params: {
+    origin: RoadNavCoordinate;
+    destination: RoadNavDestination;
+  },
+  routeIndex = 0,
+): RoadNavRoute | null {
   if (!route?.geometry?.coordinates?.length) {
-    throw new Error('No driving route found');
+    return null;
   }
 
   const geometry = (route.geometry.coordinates as [number, number][])
@@ -514,7 +504,7 @@ export async function fetchRoadRoute(params: {
     .filter((coord): coord is RoadNavCoordinate => !!coord);
 
   if (geometry.length < 2) {
-    throw new Error('Route geometry was incomplete');
+    return null;
   }
 
   let cumulativeDistanceM = 0;
@@ -532,7 +522,7 @@ export async function fetchRoadRoute(params: {
         .filter((coord: RoadNavCoordinate | null): coord is RoadNavCoordinate => !!coord);
 
       const nextStep: RoadNavStep = {
-        id: `${legIndex}-${stepIndex}-${String(step?.maneuver?.type ?? 'step')}`,
+        id: `${routeIndex}-${legIndex}-${stepIndex}-${String(step?.maneuver?.type ?? 'step')}`,
         instruction: instruction || 'Continue',
         distanceM: Number.isFinite(stepDistanceM) ? stepDistanceM : 0,
         durationS: Number.isFinite(stepDurationS) ? stepDurationS : 0,
@@ -601,4 +591,47 @@ export async function fetchRoadRoute(params: {
       : null,
     createdAt: new Date().toISOString(),
   };
+}
+
+export async function fetchRoadRouteAlternatives(params: {
+  accessToken: string;
+  origin: RoadNavCoordinate;
+  destination: RoadNavDestination;
+}): Promise<RoadNavRoute[]> {
+  const coordinates = `${params.origin.lng},${params.origin.lat};${params.destination.coordinate.lng},${params.destination.coordinate.lat}`;
+  const url = new URL(`${DIRECTIONS_URL}/${coordinates}`);
+  url.searchParams.set('access_token', params.accessToken);
+  url.searchParams.set('geometries', 'geojson');
+  url.searchParams.set('overview', 'full');
+  url.searchParams.set('steps', 'true');
+  url.searchParams.set('banner_instructions', 'false');
+  url.searchParams.set('voice_instructions', 'false');
+  url.searchParams.set('alternatives', 'true');
+  url.searchParams.set('language', 'en');
+
+  const data = await fetchJsonWithTimeout<{ routes?: any[] }>(url.toString(), 9000);
+  const routes = (data?.routes ?? [])
+    .map((route, index) => normalizeMapboxRoadRoute(route, params, index))
+    .filter((route): route is RoadNavRoute => !!route)
+    .sort((a, b) => {
+      const durationDelta = a.durationS - b.durationS;
+      if (Math.abs(durationDelta) > 1) return durationDelta;
+      return a.distanceM - b.distanceM;
+    })
+    .slice(0, 3);
+
+  if (routes.length === 0) {
+    throw new Error('No driving route found');
+  }
+
+  return routes;
+}
+
+export async function fetchRoadRoute(params: {
+  accessToken: string;
+  origin: RoadNavCoordinate;
+  destination: RoadNavDestination;
+}): Promise<RoadNavRoute> {
+  const routes = await fetchRoadRouteAlternatives(params);
+  return routes[0];
 }

@@ -8341,10 +8341,8 @@ const handleLongPressNavigateHere = useCallback(() => {
   };
   setLongPressContext(null);
   setLongPressInfoExpanded(false);
-  void previewRoadDestination(destination, 'manual_selection').then(() => {
-    startRoadNavigation();
-  });
-}, [longPressContext, previewRoadDestination, startRoadNavigation]);
+  void previewRoadDestination(destination, 'manual_selection');
+}, [longPressContext, previewRoadDestination]);
 
   const handlePinTap = useCallback((pinPayload: any) => {
   hapticMicro();
@@ -13567,6 +13565,15 @@ const handleTopToolboxLayout = useCallback(
           { label: 'TIME', value: formatNavDuration(route?.durationS ?? null) },
           { label: 'ETA', value: formatNavEta(roadPreviewEtaIso) },
         ],
+        alternateRoutes: roadNavigation.session.routeAlternatives
+          .slice(0, 3)
+          .map((candidate, index) => ({
+            id: candidate.id,
+            label: index === 0 ? 'Fastest route' : `Alternate ${index + 1}`,
+            distanceLabel: formatNavMeters(candidate.distanceM),
+            durationLabel: formatNavDuration(candidate.durationS),
+            selected: candidate.id === route?.id,
+          })),
         statusText: roadNavigation.previewLoading
           ? 'Preparing road route'
           : (previewOperationalStatus ??
@@ -13725,6 +13732,7 @@ const handleTopToolboxLayout = useCallback(
     roadNavigation.session.destination,
     roadNavigation.session.error,
     roadNavigation.session.route,
+    roadNavigation.session.routeAlternatives,
     roadNavigation.session.routeStatusLabel,
     roadNavigation.uiMode,
     roadPreviewEtaIso,
@@ -18589,6 +18597,7 @@ const stableMapSurface = useMemo(() => {
         onRouteOverview={handleRouteOverview}
         onOpenCommandBrief={handleOpenCommandBriefFromNavigate}
         onPrimaryPreviewAction={handleRoadOverlayStartNavigation}
+        onSelectRouteAlternative={roadNavigation.selectRouteAlternative}
         onPrepareOffline={handlePrepareOfflineFromRoadPreview}
         previewAccessory={previewReadinessAccessory}
         activeAccessory={activeReadinessAccessory}

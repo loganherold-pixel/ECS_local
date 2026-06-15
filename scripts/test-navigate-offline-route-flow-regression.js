@@ -117,7 +117,7 @@ assertIncludes(
     'searchRoadDestinations({',
     'resolveRoadDestination({',
     "requestRouteForDestination(destination, 'route_preview'",
-    'fetchRoadRoute({',
+    'fetchRoadRouteAlternatives({',
     'applyRoute(validRoute, requestedStatus, destination, createdFrom',
   ],
   'Search selection should still geocode, request a road route, and enter route preview.',

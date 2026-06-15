@@ -70,7 +70,7 @@ assertIncludes(
     'const selectSuggestion = useCallback(',
     'resolveRoadDestination({',
     "requestRouteForDestination(\n          destination,\n          'route_preview',",
-    'fetchRoadRoute({',
+    'fetchRoadRouteAlternatives({',
     'applyRoute(validRoute, requestedStatus, destination, createdFrom',
   ],
   'Road navigation hook should still geocode, resolve, route, and enter route preview.',
