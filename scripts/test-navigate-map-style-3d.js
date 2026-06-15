@@ -46,6 +46,18 @@ assert(
   'MapRenderer should continue resolving the active style through getMapStyleUrl.',
 );
 assert(
+  mapRenderer.includes('function replayPendingPayloadAfterStyleChange(reason, attempt)') &&
+    mapRenderer.includes("map.on('styledata', function()") &&
+    mapRenderer.includes("replayPendingPayloadAfterStyleChange('styledata', 0)") &&
+    mapRenderer.includes("replayPendingPayloadAfterStyleChange('set_style', 0)"),
+  'MapRenderer should replay active route payloads after Day/Tac/Sat/3D style changes so route lines survive presentation switches.',
+);
+assert(
+  mapRenderer.includes('setTimeout(function() { replayPendingPayloadAfterStyleChange(reason, attempt + 1); },') &&
+    mapRenderer.includes('updateRoute(payload.routeCoords || [], payload.routeColor, payload.routeRenderMode)'),
+  'MapRenderer style replay should retry until style readiness and then restore route-source geometry.',
+);
+assert(
   offlineReadiness.includes('Map style ${current.mapStyle.toUpperCase()} is not cached for this route.'),
   'Offline readiness should keep style-specific cache mismatch reporting for 3D.',
 );

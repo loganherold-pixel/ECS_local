@@ -99,9 +99,9 @@ assertIncludes(
 assertIncludes(
   navigate,
   [
-    'styles.toolsSearchHeader',
+    'styles.idleDestinationSearchHeader',
     'SEARCH ADDRESS OR PLACE',
-    'Build custom road navigation from a destination search.',
+    "accessibilityHint: 'Search for a destination to build a road navigation route.'",
     'value={roadNavigation.query}',
     'onChangeText={roadNavigation.setQuery}',
     'roadNavigation.suggestions.map((suggestion) =>',

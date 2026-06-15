@@ -2336,6 +2336,7 @@ function makeMapHtml(
       var initialized = false;
       var bootstrapDone = false;
       var pendingPayload = null;
+      var styleReplayTimer = null;
       var bootstrapReadyTimer = null;
       var requestedStyleUrl = ${escapedInitialStyleUrl};
       var fallbackStyleUrls = ${escapedFallbackStyleUrls};
@@ -5989,6 +5990,24 @@ function makeMapHtml(
         });
       }
 
+      function replayPendingPayloadAfterStyleChange(reason, attempt) {
+        attempt = attempt || 0;
+        if (!map || !pendingPayload) return;
+        if (styleReplayTimer) {
+          clearTimeout(styleReplayTimer);
+          styleReplayTimer = null;
+        }
+        if (!isMapStyleReady()) {
+          if (attempt >= 10) {
+            sendLog('style replay skipped before style ready: ' + String(reason || 'unknown'));
+            return;
+          }
+          styleReplayTimer = setTimeout(function() { replayPendingPayloadAfterStyleChange(reason, attempt + 1); }, Math.min(320, 45 + attempt * 35));
+          return;
+        }
+        applyPayload(pendingPayload);
+      }
+
       function applyPayload(payload) {
         if (!map || !payload || !map.isStyleLoaded()) return;
 
@@ -5999,6 +6018,7 @@ function makeMapHtml(
           attemptedStyles = Object.create(null);
           attemptedStyles[payload.styleUrl] = true;
           map.setStyle(payload.styleUrl);
+          replayPendingPayloadAfterStyleChange('set_style', 0);
           return;
         }
 
@@ -6122,11 +6142,7 @@ function makeMapHtml(
 
         map.on('load', function() {
           sendLog('map load event fired');
-          reinitializeStyleArtifacts();
-
-          if (pendingPayload) {
-            applyPayload(pendingPayload);
-          }
+          replayPendingPayloadAfterStyleChange('load', 0);
 
           if (bootstrapReadyTimer) {
             clearTimeout(bootstrapReadyTimer);
@@ -6138,10 +6154,11 @@ function makeMapHtml(
         });
 
         map.on('style.load', function() {
-          reinitializeStyleArtifacts();
-          if (pendingPayload) {
-            applyPayload(pendingPayload);
-          }
+          replayPendingPayloadAfterStyleChange('style_load', 0);
+        });
+
+        map.on('styledata', function() {
+          replayPendingPayloadAfterStyleChange('styledata', 0);
         });
 
         map.on('error', function(e) {
