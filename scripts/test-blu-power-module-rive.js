@@ -10,6 +10,7 @@ const fallbackComponentSource = fs.readFileSync(path.join(root, 'components/dash
 const powerWidgetSource = fs.readFileSync(path.join(root, 'components/dashboard/PowerSystemWidget.tsx'), 'utf8');
 const widgetRenderers = fs.readFileSync(path.join(root, 'components/dashboard/WidgetRenderers.tsx'), 'utf8');
 const powerManagementVisualBlock = widgetRenderers.match(/function AttitudeCommandPowerManagementVisual\([\s\S]*?\r?\n}\r?\n\r?\nfunction AttitudeCommandTerrainRiskBackgroundVisual/)?.[0] ?? '';
+const powerCommandPanelBlock = widgetRenderers.match(/case 'power':[\s\S]*?default:/)?.[0] ?? '';
 const metroConfig = fs.readFileSync(path.join(root, 'metro.config.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
@@ -163,14 +164,15 @@ assert(
     widgetRenderers.includes('height: 142') &&
     widgetRenderers.includes('transform: [{ translateY: -12 }]') &&
     widgetRenderers.includes('borderTopWidth: 0') &&
-    !widgetRenderers.includes('{powerVisual.statusLabel}') &&
+    powerCommandPanelBlock.includes('powerCompactReadout') &&
+    !powerCommandPanelBlock.includes('<AttitudeCommandPowerRiveForeground') &&
     widgetRenderers.includes('zIndex: 12') &&
     widgetRenderers.includes('elevation: 12') &&
     widgetRenderers.includes("justifyContent: 'center'") &&
     widgetRenderers.includes("alignSelf: 'center'") &&
     widgetRenderers.includes('minWidth: 96') &&
     widgetRenderers.includes('minHeight: 56'),
-  'Attitude Command Power Monitor must always render the centered BLU Rive module in a foreground layer.',
+  'Attitude Command Power Monitor must keep the BLU Rive module available while using the compact text-only readout in command cards.',
 );
 
 assert(

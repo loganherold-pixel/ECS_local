@@ -157,12 +157,12 @@ notIncludes(
 notIncludes(
   widgetRenderersSource,
   'suppressPowerDetailBackground',
-  'Expanded Power module should keep the same background visual as the compact power monitor.',
+  'Expanded Power module should keep its background visual without using a suppression flag.',
 );
 includes(
   widgetRenderersSource,
-  'isPowerPanel && powerVisual',
-  'Power module panel background should remain active for compact and expanded power surfaces.',
+  'const showPowerDetailBackdrop = expanded && isPowerPanel && Boolean(powerVisual);',
+  'Power module panel background should remain active only for expanded power surfaces.',
 );
 
 console.log('Dashboard power systems live/refresh checks passed.');

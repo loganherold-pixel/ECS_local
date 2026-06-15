@@ -80,6 +80,9 @@ includes('formatWholeMiles(liveHubStats.totalMiles)', 'Total miles should includ
 includes('formatElevation(liveHubStats.highestElevationFt)', 'Highest elevation should include live GPS elevation before falling back to trip summaries.');
 includes('formatHours(liveHubStats.totalHours)', 'Hours logged should include just-completed guidance before falling back to trip durations.');
 notIncludes('<IncidentRecoveryPanel', 'Incident & Recovery should move out of Expedition Hub and into Field Utilities.');
+includes('backgroundColor: ECS_SURFACE.background.selected', 'Expedition Hub parent surface should use the gold transparent ECS Brief surface background.');
+includes('borderColor: ECS_SURFACE.border.selected', 'Expedition Hub parent surface should use the gold ECS Brief surface border.');
+notIncludes("backgroundColor: 'rgba(17, 22, 26, 0.88)'", 'Expedition Hub parent surface should not use the old dark translucent shell.');
 
 for (const todo of [
   'TODO Expedition Hub: add recap map region',

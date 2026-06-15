@@ -273,12 +273,21 @@ assert(
 
 assert(
   powerCommandPanelBlock.includes('expanded && detailMode && isPowerPanel && attitudeCommandS.powerPanelContentDetailOnly') &&
-    powerCommandPanelBlock.includes('background={suppressCompactPanelChrome && !(isPowerPanel && powerVisual) ? null : (') &&
+    powerCommandPanelBlock.includes('const showPowerDetailBackdrop = expanded && isPowerPanel && Boolean(powerVisual);') &&
+    powerCommandPanelBlock.includes('background={shouldRenderPanelVisual ? (') &&
     !powerCommandPanelBlock.includes('suppressPowerDetailBackground') &&
     widgetRenderers.includes('powerPanelContentDetailOnly') &&
     powerRenderBlock.includes('expanded && detailMode ? (') &&
     powerRenderBlock.includes('<AttitudeCommandPowerDeviceDetail') &&
-    powerRenderBlock.includes('<AttitudeCommandPowerRiveForeground') &&
+    !powerRenderBlock.includes('<AttitudeCommandPowerRiveForeground') &&
+    powerRenderBlock.includes('PowerCommandCompactMetric') &&
+    powerRenderBlock.includes('RESERVE') &&
+    powerRenderBlock.includes('powerCompactPrimaryValue') &&
+    powerRenderBlock.includes("label=\"SOLAR\"") &&
+    powerRenderBlock.includes("label=\"IN\"") &&
+    powerRenderBlock.includes("label=\"OUT\"") &&
+    widgetRenderers.includes('powerCompactReadoutGrid') &&
+    widgetRenderers.includes('powerCompactPrimaryValue') &&
     powerDetailBlock.includes('powerMonitorFixedDetailSurface') &&
     powerDetailBlock.includes('powerMonitorTopCompartments') &&
     powerDetailBlock.includes('detail={solarSourceLabel}') &&
@@ -288,6 +297,7 @@ assert(
     powerDetailBlock.includes('getActivePowerMonitorDevices(power.devices)') &&
     powerDetailBlock.includes('POWER_MONITOR_SOURCE_SCROLL_THRESHOLD') &&
     powerDetailBlock.includes('scrollEnabled={activeDevices.length > POWER_MONITOR_SOURCE_SCROLL_THRESHOLD}') &&
+    widgetRenderers.includes('const POWER_MONITOR_SOURCE_SCROLL_THRESHOLD = 1;') &&
     powerDetailBlock.includes('nestedScrollEnabled') &&
     powerDetailBlock.includes('contentContainerStyle={attitudeCommandS.powerMonitorSourceRowsContent}') &&
     widgetRenderers.includes('resolvePowerMonitorDeviceNetWatts(device)') &&
@@ -297,7 +307,7 @@ assert(
     widgetRenderers.includes('powerMonitorSourceRowsContent') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailRow'),
-  'Expanded Power Monitor must hide compact widget details, preserve the power background, and keep current power sources in a bounded nested scroll table after four active sources.',
+  'Expanded Power Monitor must hide compact widget details, preserve the power background, and keep current power sources in a bounded nested scroll table when multiple active sources exist.',
 );
 
 assert(

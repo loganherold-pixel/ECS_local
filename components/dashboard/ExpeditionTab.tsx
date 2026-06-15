@@ -1662,8 +1662,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderRadius: ECS_SURFACE.radius.primary,
     borderWidth: 1,
-    borderColor: 'rgba(62, 79, 60, 0.24)',
-    backgroundColor: 'rgba(17, 22, 26, 0.88)',
+    borderColor: ECS_SURFACE.border.selected,
+    backgroundColor: ECS_SURFACE.background.selected,
     padding: 12,
   },
   header: {

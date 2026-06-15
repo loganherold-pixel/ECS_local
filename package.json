@@ -85,6 +85,8 @@
     "test:dashboard-widgets": "node ./scripts/test-dashboard-widget-config.js",
     "test:dashboard-production": "node ./scripts/test-dashboard-production-readiness.js",
     "test:dashboard-weather-widget-polish": "node ./scripts/test-dashboard-weather-widget-polish.js",
+    "test:dashboard-widget-compact-backdrops": "node ./scripts/test-dashboard-widget-compact-backdrops.js",
+    "test:dashboard-vehicle-widget-compact-expanded": "node ./scripts/test-dashboard-vehicle-widget-compact-expanded.js",
     "test:vehicle-attitude-stage": "node ./scripts/test-vehicle-attitude-stage.js",
     "test:vehicle-attitude-assets": "node ./scripts/test-vehicle-attitude-assets.js",
     "test:attitude-vehicle-hud": "node ./scripts/test-attitude-vehicle-hud-shared.js",
