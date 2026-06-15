@@ -1346,7 +1346,7 @@ function DiscoverScreenInner() {
       ? `${vehicleProfile.vehicleName || 'Unknown Vehicle'}`
       : 'stock SUV';
 
-    const existingNames = refinedCanonicalRoutes.map((route) => route.name);
+    const existingNames = canonicalRadiusFilteredRoutes.map((route) => route.name);
 
     await aiRouteStore.fetchRoutes({
       latitude: userLat,
@@ -1358,7 +1358,7 @@ function DiscoverScreenInner() {
       count: 6,
       existingRouteNames: existingNames,
     });
-  }, [activeDistanceRadius, aiEnabled, userLat, userLng, vehicleProfile, refinedCanonicalRoutes]);
+  }, [activeDistanceRadius, aiEnabled, userLat, userLng, vehicleProfile, canonicalRadiusFilteredRoutes]);
 
   // ── Phase 17: Auto-fetch AI routes on tab/radius change ───
   useEffect(() => {
@@ -2981,39 +2981,79 @@ function DiscoverScreenInner() {
     () => publicDiscoverableTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack)),
     [publicDiscoverableTrailPacks],
   );
-  const exploreWizardHiddenGemSourceRoutes = useMemo(
+  const exploreWizardRangeOnlyHiddenGemSourceRoutes = useMemo<ExpeditionOpportunity[]>(
     () => {
-      const routes = hiddenGemExploreOrchestration.items
-        .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
-        .filter(Boolean);
-      return routes as ExpeditionOpportunity[];
+      if (canonicalRadiusFilteredRoutes.length === 0) return [];
+      try {
+        return getHiddenGemRecommendations(
+          canonicalRadiusFilteredRoutes,
+          compatResults,
+          {
+            radiusMiles: distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1],
+            pageIndex: 0,
+            pageSize: HIDDEN_GEMS_MAX_RESULTS_RENDERED,
+            vehicleProfile,
+            expeditionPhase: aiState?.expeditionPhase ?? null,
+            operationalState: aiState?.operationalState ?? null,
+            recommendationStatus: liveStatus?.recommendations ?? null,
+          },
+        ).items.map((item) => item.route as ExpeditionOpportunity);
+      } catch (error) {
+        if (__DEV__) {
+          ecsLog.debug('DISCOVERY', `${TAG} Range-only Hidden Gem inventory unavailable`, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return [];
+      }
     },
-    [hiddenGemExploreOrchestration.items, hiddenGemExploreOrchestration.routeMap],
+    [
+      canonicalRadiusFilteredRoutes,
+      compatResults,
+      distanceRadius,
+      vehicleProfile,
+      aiState?.expeditionPhase,
+      aiState?.operationalState,
+      liveStatus?.recommendations,
+    ],
   );
   const exploreWizardEcsIdeaSourceRoutes = useMemo(
     () => radiusFilteredAIRoutes.filter(isPublicSuggestedTrailheadRoute),
     [radiusFilteredAIRoutes],
   );
-  const exploreWizardFavoriteRoutes = useMemo(
-    () => filteredFavoriteTrails.map((favorite) => favoriteTrailToExpeditionRoute(favorite)),
-    [filteredFavoriteTrails],
+  const radiusFilteredExploreWizardFavoriteRoutes = useMemo<ExpeditionOpportunity[]>(
+    () =>
+      filterByRadius(
+        computeDistancesFromUser(
+          favoriteTrails.map((favorite) => favoriteTrailToExpeditionRoute(favorite)),
+          userLat,
+          userLng,
+        ),
+        activeDistanceRadius,
+      ),
+    [
+      activeDistanceRadius,
+      favoriteTrails,
+      userLat,
+      userLng,
+    ],
   );
   const exploreGuidanceReadyInventory = useMemo(
     () =>
       buildExploreGuidanceReadyInventory({
         trailPacks: exploreWizardTrailPackSourceRoutes,
-        hiddenGemRoutes: exploreWizardHiddenGemSourceRoutes,
+        hiddenGemRoutes: exploreWizardRangeOnlyHiddenGemSourceRoutes,
         ecsRouteIdeas: exploreWizardEcsIdeaSourceRoutes,
         favoriteRoutes: [
-          ...exploreWizardFavoriteRoutes,
+          ...radiusFilteredExploreWizardFavoriteRoutes,
           ...radiusFilteredExploreWizardSavedBuiltRoutes,
         ],
         savedRouteAssets: radiusFilteredExploreWizardImportedStitchedRoutes,
         selectedRefinement: exploreRefinement,
       }),
     [
-      exploreWizardFavoriteRoutes,
-      exploreWizardHiddenGemSourceRoutes,
+      radiusFilteredExploreWizardFavoriteRoutes,
+      exploreWizardRangeOnlyHiddenGemSourceRoutes,
       exploreWizardEcsIdeaSourceRoutes,
       radiusFilteredExploreWizardImportedStitchedRoutes,
       radiusFilteredExploreWizardSavedBuiltRoutes,
@@ -3023,12 +3063,17 @@ function DiscoverScreenInner() {
   );
   const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet;
   const exploreWizardSourceCounts = exploreGuidanceReadyInventory.sourceCounts;
+  const hasSelectedExploreRefinement = exploreRefinement != null;
+  const showGuidanceReadyRefinementPrompt =
+    !hasSelectedExploreRefinement && exploreGuidanceReadyInventory.totalReadyCount > 0;
   const visibleExploreWizardCandidates = useMemo(
-    () =>
-      exploreWizardSourceFilter === 'all'
+    () => {
+      if (!hasSelectedExploreRefinement) return [];
+      return exploreWizardSourceFilter === 'all'
         ? exploreWizardCandidateSet.candidates
-        : exploreWizardCandidateSet.candidates.filter((candidate) => candidate.sourceKind === exploreWizardSourceFilter),
-    [exploreWizardCandidateSet.candidates, exploreWizardSourceFilter],
+        : exploreWizardCandidateSet.candidates.filter((candidate) => candidate.sourceKind === exploreWizardSourceFilter);
+    },
+    [exploreWizardCandidateSet.candidates, exploreWizardSourceFilter, hasSelectedExploreRefinement],
   );
   const visibleExploreWizardCardCandidates = useMemo(
     () => visibleExploreWizardCandidates.slice(0, exploreGuidanceReadyVisibleLimit),
@@ -4068,15 +4113,26 @@ function DiscoverScreenInner() {
                 <View style={s.exploreWizardStatusCopy}>
                   <Text style={s.exploreWizardStatusTitle}>Guidance Ready Routes</Text>
                   <Text style={s.exploreWizardStatusText}>
-                    {`Guidance Ready Routes are source-backed routes with usable stitched geometry, visible confidence, and data state labels. ${exploreGuidanceReadyInventory.candidateSet.candidates.length} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start. ${exploreGuidanceReadyInventory.hiddenTotal} routes are hidden because active guidance, length, public state, or route geometry is unavailable.`}
+                    {hasSelectedExploreRefinement
+                      ? `Guidance Ready Routes are source-backed routes with usable stitched geometry, visible confidence, and data state labels. ${exploreGuidanceReadyInventory.readyCount} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start. ${exploreGuidanceReadyInventory.hiddenTotal} routes are hidden because active guidance, length, public state, or route geometry is unavailable.`
+                      : `Select a refinement bucket to populate Guidance Ready route cards. The counts above show guidance-ready routes inside ${distanceRadiusNarrative}, without changing the range results when you switch buckets.`}
                   </Text>
+                  {showGuidanceReadyRefinementPrompt ? (
+                    <Text style={s.exploreWizardNotice} numberOfLines={2}>
+                      Choose Remoteness, Day Trip, Weekend Trip, or Expedition to load only that route set.
+                    </Text>
+                  ) : null}
                   {exploreWizardSaveNotice ? (
                     <Text style={s.exploreWizardNotice} numberOfLines={2}>{exploreWizardSaveNotice}</Text>
                   ) : null}
                 </View>
                 <View style={s.exploreWizardCountPlate}>
-                  <Text style={s.exploreWizardCountValue}>{exploreGuidanceReadyInventory.candidateSet.candidates.length}</Text>
-                  <Text style={s.exploreWizardCountLabel}>READY</Text>
+                  <Text style={s.exploreWizardCountValue}>
+                    {hasSelectedExploreRefinement ? exploreGuidanceReadyInventory.readyCount : exploreGuidanceReadyInventory.totalReadyCount}
+                  </Text>
+                  <Text style={s.exploreWizardCountLabel}>
+                    {hasSelectedExploreRefinement ? 'READY' : 'IN RANGE'}
+                  </Text>
                 </View>
               </View>
 
@@ -4277,7 +4333,7 @@ function DiscoverScreenInner() {
             </View>
           )}
 
-          {(!showInitialLoading && !showRefinementEmptyState && (radiusFilteredOpportunities.length > 0 || showSectionLoading)) && (
+          {(!showInitialLoading && hasSelectedExploreRefinement && !showRefinementEmptyState && (radiusFilteredOpportunities.length > 0 || showSectionLoading)) && (
             <View style={s.exploreWizardRouteSurface}>
               <View style={s.exploreWizardFilterRow}>
                 {EXPLORE_WIZARD_SOURCE_FILTERS.map((filter) => {

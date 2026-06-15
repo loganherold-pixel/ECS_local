@@ -154,8 +154,9 @@ assertIncludes(screen, 'setPreparedTripRoutePreview(buildPreparedTripRoutePrevie
 assertIncludes(screen, 'preparedRoutePreviewMatches(preparedTripRoutePreview, selectedRoute)', 'Trip Builder should keep live setup searches tied to the prepared selected route.');
 assertIncludes(screen, 'tripSetupStarted &&', 'Live Trip Builder searches should wait until the user opens setup for the selected route.');
 assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_LIMIT', 'Trip Builder should request enough nearby resupply candidates before ranking the closest five.');
-assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [8, 16, 30, 50] as const', 'Trip Builder should search the full approach corridor with a wide fallback radius before accepting resupply options.');
-assertIncludes(screen, 'SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 12', 'Trip Builder should reject or warn on large off-corridor resupply deviations.');
+assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const', 'Trip Builder should search the full approach corridor with a wide fallback radius before accepting resupply options.');
+assertIncludes(screen, 'SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES = 10', 'Trip Builder should prefer fuel and supplies within a practical approach-route buffer.');
+assertIncludes(screen, 'SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 20', 'Trip Builder should keep reasonable small-town detours before declaring no usable resupply options.');
 assertIncludes(screen, "smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'fuel', selectedTrailheadResupplyAnchorCoordinate, liveApproachRoutePoints)", 'RouteContext fuel candidates should be measured against the approach route.');
 assertIncludes(screen, "smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedTrailheadResupplyAnchorCoordinate, liveApproachRoutePoints, selectedPreTrailSupplyAnchorCoordinate)", 'RouteContext grocery candidates should be measured against the approach route with the selected refuel fallback anchor.');
 assertIncludes(screen, 'buildApproachResupplySearchAnchors', 'Trip Builder should sample approach-route search anchors for Smart Resupply.');
@@ -165,6 +166,8 @@ assertIncludes(screen, 'isSmartResupplyOptionRouteAware', 'RouteContext resupply
 assertIncludes(screen, '(left.approachScore ?? Number.NEGATIVE_INFINITY)', 'Fuel and supply options should be ranked by approach score before title tie breakers.');
 assertIncludes(screen, 'approachRoute: liveApproachRoutePoints', 'Live fuel search should use the GPS-to-trailhead approach route when available.');
 assertIncludes(screen, 'fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate', 'Live grocery search should fall back near the selected refuel stop when approach routing is unavailable.');
+assertIncludes(screen, 'const minimumAnchorCoverageCount = searchAnchors.length', 'Smart Resupply should query every approach/trailhead anchor before accepting an empty or early-biased fuel set.');
+assertIncludes(screen, 'coveredAnchorKeys.size >= minimumAnchorCoverageCount', 'Smart Resupply should not stop after home-side results before checking the last-fuel corridor.');
 assertIncludes(screen, 'const preTrailDraftResolution = useMemo(', 'Trip Builder should derive draft pre-trail POI status from the canonical resolver.');
 assertIncludes(screen, 'bailoutPlanPointsFromRouteContext(routeContextSnapshot)', 'Bailout choices should prefer Route Context bailout candidates when available.');
 assertIncludes(screen, 'buildBailoutSearchAnchors(params.routePoints)', 'Bailout search should sample endpoints and route geometry instead of route-start only.');

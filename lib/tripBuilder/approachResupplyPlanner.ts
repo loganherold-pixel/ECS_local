@@ -67,9 +67,11 @@ export type RankApproachResupplyOptionsArgs = {
   candidates: ApproachResupplyCandidate[];
   limit?: number | null;
   maxRouteDeviationMiles?: number | null;
+  preferredRouteBufferMiles?: number | null;
 };
 
 const DEFAULT_MAX_ROUTE_DEVIATION_MILES = 12;
+const DEFAULT_PREFERRED_ROUTE_BUFFER_MILES = 10;
 
 function isValidCoordinate(point: ApproachResupplyCoordinate | null | undefined): point is ApproachResupplyCoordinate {
   return !!point &&
@@ -284,11 +286,13 @@ export function rankApproachResupplyOptions({
   candidates,
   limit = 5,
   maxRouteDeviationMiles = DEFAULT_MAX_ROUTE_DEVIATION_MILES,
+  preferredRouteBufferMiles = DEFAULT_PREFERRED_ROUTE_BUFFER_MILES,
 }: RankApproachResupplyOptionsArgs): ApproachResupplyRankedOption[] {
   const routePoints = (approachRoute ?? []).filter(isValidCoordinate);
   const hasApproachRoute = isValidCoordinate(origin) && routePoints.length >= 2;
   const fallbackState: ApproachResupplyFallbackState = hasApproachRoute ? 'approach_route' : 'trailhead_only';
   const maxDeviation = maxRouteDeviationMiles ?? DEFAULT_MAX_ROUTE_DEVIATION_MILES;
+  const preferredBuffer = preferredRouteBufferMiles ?? DEFAULT_PREFERRED_ROUTE_BUFFER_MILES;
 
   return candidates
     .filter((candidate) => candidate.category === category && isValidCoordinate(candidate.coordinate))
@@ -319,6 +323,13 @@ export function rankApproachResupplyOptions({
       const warnings = [...(candidate.warnings ?? [])];
       if (fallbackState === 'trailhead_only') {
         warnings.push('GPS approach route is unavailable; ECS used trailhead-only fallback ranking.');
+      }
+      if (
+        routeDeviationMiles != null &&
+        routeDeviationMiles > preferredBuffer &&
+        routeDeviationMiles <= maxDeviation
+      ) {
+        warnings.push(`Candidate is outside the preferred ${preferredBuffer}-mile approach corridor; verify the detour before relying on it.`);
       }
       if (routeDeviationMiles != null && routeDeviationMiles > maxDeviation) {
         warnings.push('Candidate appears to require a large approach-route deviation.');

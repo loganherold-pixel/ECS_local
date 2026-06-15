@@ -327,8 +327,9 @@ const SMART_RESUPPLY_FUEL_QUERY = 'gas station fuel diesel';
 const SMART_RESUPPLY_SUPPLY_QUERY = 'grocery store supermarket supplies';
 const SMART_RESUPPLY_OPTION_LIMIT = 5;
 const SMART_RESUPPLY_SEARCH_LIMIT = 20;
-const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [8, 16, 30, 50] as const;
-const SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 12;
+const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const;
+const SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES = 10;
+const SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 20;
 const BAILOUT_SEARCH_QUERY = 'trailhead parking road access ranger station highway';
 const BAILOUT_OPTION_LIMIT = 5;
 const BAILOUT_SEARCH_LIMIT = 10;
@@ -2472,6 +2473,7 @@ function applyApproachRankingToSmartResupplyOptions(params: {
     trailhead: params.trailhead,
     approachRoute: params.approachRoute,
     candidates: params.options.map(approachCandidateFromSmartResupplyOption),
+    preferredRouteBufferMiles: SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES,
     maxRouteDeviationMiles: SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES,
     limit: params.limit ?? params.options.length,
   }).flatMap((ranked): SmartResupplyPoi[] => {
@@ -2770,7 +2772,9 @@ async function loadSmartResupplyOptions(params: {
       if (!suggestionMap.has(key)) suggestionMap.set(key, suggestion);
     });
   };
-  const collectSearchPass = async (anchor: TripMapCoordinate, bbox?: SmartResupplySearchBounds) => {
+  const minimumAnchorCoverageCount = searchAnchors.length;
+  const coveredAnchorKeys = new Set<number>();
+  const collectSearchPass = async (anchor: TripMapCoordinate, anchorIndex: number, bbox?: SmartResupplySearchBounds) => {
     const suggestions = await searchRoadDestinations({
       accessToken: params.accessToken,
       query: params.query,
@@ -2779,17 +2783,23 @@ async function loadSmartResupplyOptions(params: {
       bbox,
       limit: SMART_RESUPPLY_SEARCH_LIMIT,
     });
+    coveredAnchorKeys.add(anchorIndex);
     collectSuggestions(suggestions);
   };
 
-  for (const anchor of searchAnchors) {
-    for (const radiusMiles of SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES) {
+  for (const radiusMiles of SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES) {
+    for (let anchorIndex = 0; anchorIndex < searchAnchors.length; anchorIndex += 1) {
+      const anchor = searchAnchors[anchorIndex];
       try {
-        await collectSearchPass(anchor.coordinate, smartResupplySearchBounds(anchor.coordinate, radiusMiles));
+        await collectSearchPass(anchor.coordinate, anchorIndex, smartResupplySearchBounds(anchor.coordinate, radiusMiles));
       } catch {}
-      if (suggestionMap.size >= SMART_RESUPPLY_OPTION_LIMIT * 3) break;
     }
-    if (suggestionMap.size >= SMART_RESUPPLY_OPTION_LIMIT * 3) break;
+    if (
+      suggestionMap.size >= SMART_RESUPPLY_OPTION_LIMIT * 3 &&
+      coveredAnchorKeys.size >= minimumAnchorCoverageCount
+    ) {
+      break;
+    }
   }
 
   const options: SmartResupplyPoi[] = [];

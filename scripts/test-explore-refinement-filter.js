@@ -25,6 +25,12 @@ const helperSource = fs.readFileSync(path.join(root, 'lib', 'explore', 'exploreR
 const routeCatalogSearchCriteriaBlock = discoverSource
   .split('const routeCatalogSearchCriteria = useMemo')[1]
   ?.split('useEffect(() => {')[0] ?? '';
+const guidanceReadyInventoryBlock = discoverSource
+  .split('const exploreGuidanceReadyInventory = useMemo')[1]
+  ?.split('const exploreWizardCandidateSet')[0] ?? '';
+const aiFetchBlock = discoverSource
+  .split('const handleFetchAIRoutes = useCallback')[1]
+  ?.split('// ── Phase 17: Auto-fetch AI routes on tab/radius change')[0] ?? '';
 
 function route(id, overrides = {}) {
   return {
@@ -123,13 +129,16 @@ assert.ok(
     discoverSource.includes('applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement)') &&
     discoverSource.includes('buildExploreGuidanceReadyInventory({') &&
     discoverSource.includes('trailPacks: exploreWizardTrailPackSourceRoutes') &&
-    discoverSource.includes('hiddenGemRoutes: exploreWizardHiddenGemSourceRoutes') &&
+    discoverSource.includes('hiddenGemRoutes: exploreWizardRangeOnlyHiddenGemSourceRoutes') &&
     discoverSource.includes('ecsRouteIdeas: exploreWizardEcsIdeaSourceRoutes') &&
     discoverSource.includes('selectedRefinement: exploreRefinement') &&
+    discoverSource.includes('const radiusFilteredExploreWizardFavoriteRoutes = useMemo') &&
     discoverSource.includes('radiusFilteredExploreWizardSavedBuiltRoutes') &&
     discoverSource.includes('radiusFilteredExploreWizardImportedStitchedRoutes') &&
+    !guidanceReadyInventoryBlock.includes('hiddenGemExploreOrchestration') &&
+    !guidanceReadyInventoryBlock.includes('filteredFavoriteTrails') &&
     !discoverSource.includes('ecsRouteIdeas: visibleAIRoutes'),
-  'Explore TripBuilder guidance candidates should use the shared ready-route inventory instead of page-sized visible route pools.',
+  'Explore TripBuilder guidance candidates should use range-only ready-route pools instead of active-refinement or page-sized visible route pools.',
 );
 assert.ok(
   !discoverSource.includes('routeCatalogRefinementCriteria') &&
@@ -138,6 +147,18 @@ assert.ok(
     !routeCatalogSearchCriteriaBlock.includes('maxDurationMinutes') &&
     !routeCatalogSearchCriteriaBlock.includes('minDurationMinutes'),
   'Changing Explore refinements should stay local and must not trigger a live route-catalog refetch.',
+);
+assert.ok(
+  aiFetchBlock.includes('canonicalRadiusFilteredRoutes.map((route) => route.name)') &&
+    !aiFetchBlock.includes('refinedCanonicalRoutes'),
+  'Changing Explore refinements should not refresh ECS Route Ideas from a different source universe.',
+);
+assert.ok(
+  discoverSource.includes('const hasSelectedExploreRefinement = exploreRefinement != null') &&
+    discoverSource.includes('if (!hasSelectedExploreRefinement) return []') &&
+    discoverSource.includes('showGuidanceReadyRefinementPrompt') &&
+    discoverSource.includes('Select a refinement bucket to populate Guidance Ready route cards.'),
+  'Explore should show range refinement counts first and keep Guidance Ready route cards empty until a refinement is selected.',
 );
 assert.ok(
   discoverSource.includes('const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);') &&

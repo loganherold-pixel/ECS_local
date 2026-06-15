@@ -129,4 +129,31 @@ assert.ok(
   'Trailhead fallback ranking should be explicit when GPS/approach geometry is missing.',
 );
 
+const bufferedOffRouteFuel = rankApproachResupplyOptions({
+  category: 'fuel',
+  origin,
+  trailhead,
+  approachRoute,
+  maxRouteDeviationMiles: 20,
+  preferredRouteBufferMiles: 10,
+  candidates: [{
+    id: 'small-town-two-streets-off-route',
+    title: 'Small Town Fuel Near Approach',
+    category: 'fuel',
+    coordinate: { latitude: 40.18, longitude: -121.31 },
+    sourceType: 'mapbox_search',
+    confidence: 'medium',
+    detourDistanceMiles: 11.8,
+  }],
+});
+assert.strictEqual(
+  bufferedOffRouteFuel.length,
+  1,
+  'Smart Resupply should keep reasonable off-corridor fuel candidates inside the extended approach buffer.',
+);
+assert.ok(
+  bufferedOffRouteFuel[0].warnings.some((warning) => /outside the preferred 10-mile approach corridor/i.test(warning)),
+  'Fuel outside the preferred corridor but inside the extended buffer should stay selectable with a clear detour warning.',
+);
+
 console.log('Trip Builder approach resupply corridor checks passed.');

@@ -69,6 +69,16 @@ function emptySourceCounts(): Record<ExploreWizardRouteSourceKind | 'all', numbe
   };
 }
 
+function emptyCandidateSet(): ExploreWizardCandidateSet {
+  return {
+    candidates: [],
+    hiddenRoutes: [],
+    hiddenTotal: 0,
+    hiddenBySource: emptyHiddenCounts(),
+    hiddenReasons: [],
+  };
+}
+
 function metadataRecord(route: ExpeditionOpportunity | null | undefined): Record<string, unknown> {
   const metadata = route?.routeMetadata;
   return metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {};
@@ -316,7 +326,6 @@ export function buildExploreGuidanceReadyInventory(
 ): ExploreGuidanceReadyInventory {
   const selectedRefinement = input.selectedRefinement ?? null;
   const getEligibility = createEligibilityResolver(input);
-  const candidateSet = buildForRefinement(input, selectedRefinement, getEligibility);
   const refinementCounts = EXPLORE_REFINEMENT_OPTIONS.reduce(
     (counts, option) => {
       counts[option.key] = countEligibleRoutesForRefinement(input, option.key, getEligibility);
@@ -329,6 +338,9 @@ export function buildExploreGuidanceReadyInventory(
       expedition: 0,
     } as Record<ExploreRefinementFilter, number>,
   );
+  const candidateSet = selectedRefinement
+    ? buildForRefinement(input, selectedRefinement, getEligibility)
+    : emptyCandidateSet();
 
   return {
     candidateSet,

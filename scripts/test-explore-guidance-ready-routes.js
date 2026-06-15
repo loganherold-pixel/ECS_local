@@ -100,7 +100,8 @@ assert(
 assert(
   discover.includes('buildExploreGuidanceReadyInventory') &&
     discover.includes('exploreGuidanceReadyInventory.refinementCounts') &&
-    discover.includes('exploreGuidanceReadyInventory.candidateSet.candidates.length'),
+    discover.includes('exploreGuidanceReadyInventory.readyCount') &&
+    discover.includes('exploreGuidanceReadyInventory.totalReadyCount'),
   'Discover should drive filter chips and Guidance Ready Routes from the shared ready-route inventory.',
 );
 assert(
@@ -179,6 +180,31 @@ assert.strictEqual(
   defaultExploreReadyRouteEligibility(foldedLineRoute).eligible,
   false,
   'Folded LineString geometry must not count as guidance-ready even when stale metadata claims full ready geometry.',
+);
+
+const unselectedInventory = buildExploreGuidanceReadyInventory({
+  trailPacks: remoteReadyRoutes,
+  selectedRefinement: null,
+});
+assert.strictEqual(
+  unselectedInventory.totalReadyCount,
+  remoteReadyRoutes.length,
+  'Range-only inventory should still count guidance-ready routes for refinement badges.',
+);
+assert.strictEqual(
+  unselectedInventory.refinementCounts.remoteness,
+  remoteReadyRoutes.length,
+  'Range-only refinement counts should be available before a refinement is selected.',
+);
+assert.strictEqual(
+  unselectedInventory.candidateSet.candidates.length,
+  0,
+  'Explorer should not build or render route cards until the user selects a refinement bucket.',
+);
+assert.strictEqual(
+  unselectedInventory.readyCount,
+  0,
+  'The selected ready count should remain zero until a refinement bucket is active.',
 );
 
 const performanceRoutes = Array.from({ length: 18 }, (_, index) => makeRoute(`perf-ready-${index + 1}`));
