@@ -334,10 +334,10 @@ export type MapRendererProps = {
   bailoutMarkers?: MarkerLike[];
   pinMarkers?: MarkerLike[];
   showCrosshair?: boolean;
-  onLongPress?: (coord: LatLng) => void;
+  onLongPress?: (coord: LatLng & { routeableFeature?: any }) => void;
   onPinTap?: (pin: any) => void;
   onSegmentTap?: (segment: SegmentSelectionPayload) => void;
-  onMapTap?: (coord: { latitude: number; longitude: number }) => void;
+  onMapTap?: (coord: { latitude: number; longitude: number; routeableFeature?: any }) => void;
   onMapCenterReply?: (center: MapCenterReply) => void;
   requestCenterTrigger?: number;
   onMapBoundsReply?: (bounds: MapBoundsReply) => void;
@@ -4995,6 +4995,39 @@ function makeMapHtml(
         return [];
       }
 
+      function compactRouteablePayloadLine(coordinates) {
+        var line = normalizeLngLatLine(coordinates || []);
+        if (line.length <= 420) return line;
+        var sampled = [];
+        var step = Math.ceil(line.length / 420);
+        for (var i = 0; i < line.length; i += step) {
+          sampled.push(line[i]);
+        }
+        var last = line[line.length - 1];
+        var sampledLast = sampled[sampled.length - 1];
+        if (!sampledLast || sampledLast[0] !== last[0] || sampledLast[1] !== last[1]) {
+          sampled.push(last);
+        }
+        return sampled;
+      }
+
+      function routeablePayloadLineForFeatureAtPoint(feature, point) {
+        var lines = extractFeatureLineCoordinates(feature);
+        var best = null;
+        lines.forEach(function(line, index) {
+          var normalized = normalizeLngLatLine(line || []);
+          if (normalized.length < 2) return;
+          var candidate = point
+            ? scanLineForNearest(point, normalized, 'payload-line:' + String(index), 'payload', 80)
+            : null;
+          var distance = candidate ? candidate.distancePx : index;
+          if (!best || distance < best.distancePx) {
+            best = { coordinates: normalized, distancePx: distance };
+          }
+        });
+        return best ? compactRouteablePayloadLine(best.coordinates) : [];
+      }
+
       function isRouteBuilderRouteableFeature(feature) {
         if (!feature || !feature.geometry) return false;
         var layerId = feature.layer && feature.layer.id ? String(feature.layer.id).toLowerCase() : '';
@@ -6190,6 +6223,7 @@ function makeMapHtml(
                 accessLabel: 'Unknown - verify posted rules and closures locally.',
                 category: snapSource,
                 categoryLabel: snapSource,
+                coordinates: routeablePayloadLineForFeatureAtPoint(feature, point),
                 latitude: lngLat.lat,
                 longitude: lngLat.lng
               };
@@ -6214,6 +6248,7 @@ function makeMapHtml(
                 routeGeometryDataState: routeGeometryProps.routeGeometryDataState || null,
                 routeGeometryConfidence: routeGeometryProps.routeGeometryConfidence || null,
                 routeGeometryWarningsJson: routeGeometryProps.routeGeometryWarningsJson || null,
+                coordinates: routeablePayloadLineForFeatureAtPoint(routeGeometryFeature, point),
                 latitude: lngLat.lat,
                 longitude: lngLat.lng
               };
@@ -6231,6 +6266,7 @@ function makeMapHtml(
                   category: props.category || null,
                   categoryLabel: props.categoryLabel || null,
                   color: props.color || null,
+                  coordinates: routeablePayloadLineForFeatureAtPoint(segmentFeatures[i], point),
                   latitude: lngLat.lat,
                   longitude: lngLat.lng
                 };

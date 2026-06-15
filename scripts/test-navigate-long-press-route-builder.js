@@ -118,6 +118,65 @@ assert.strictEqual(savable.length, 2, 'Savable custom route segments should be p
 assert(savable.every((segment) => segment.snapStatus === 'snapped'), 'Savable segments should remain verified snapped geometry.');
 assert(savable.every((segment) => segment.snapProvider === 'ecs_route_geometry'), 'Saved segments should preserve ECS geometry source.');
 
+const sparseGeometry = [
+  { latitude: 38.0000, longitude: -110.0000 },
+  { latitude: 38.0000, longitude: -109.9600 },
+];
+let sparseDraft = builder.createNavigateRouteDraft();
+sparseDraft = builder.addAnchorToDraft(sparseDraft, {
+  coordinate: { latitude: 38.00008, longitude: -109.9900 },
+  availableSegments: [{ id: 'sparse-forest-road', name: 'Sparse Forest Road', coordinates: sparseGeometry, confidence: 'medium', dataState: 'cached' }],
+}).draft;
+sparseDraft = builder.addAnchorToDraft(sparseDraft, {
+  coordinate: { latitude: 37.99994, longitude: -109.9750 },
+  availableSegments: [{ id: 'sparse-forest-road', name: 'Sparse Forest Road', coordinates: sparseGeometry, confidence: 'medium', dataState: 'cached' }],
+}).draft;
+sparseDraft = builder.addAnchorToDraft(sparseDraft, {
+  coordinate: { latitude: 38.00005, longitude: -109.9660 },
+  availableSegments: [{ id: 'sparse-forest-road', name: 'Sparse Forest Road', coordinates: sparseGeometry, confidence: 'medium', dataState: 'cached' }],
+}).draft;
+
+assert(
+  sparseDraft.legs.every((leg) => leg.status === 'snapped'),
+  'Sparse loaded route geometry should snap taps to the route spine instead of failing between distant vertices.',
+);
+assert(
+  sparseDraft.legs.every((leg) => Math.abs(leg.coordinates[0].latitude - 38) < 0.00002),
+  'Off-center taps should be projected onto the road/trail centerline before building the leg.',
+);
+assert.strictEqual(
+  builder.buildRouteBuilderSegmentsFromDraft(sparseDraft).length,
+  2,
+  'Projected sparse route legs should be saveable/startable geometry.',
+);
+
+let renderedDraft = builder.createNavigateRouteDraft();
+renderedDraft = builder.addAnchorToDraft(renderedDraft, {
+  coordinate: { latitude: 38.00005, longitude: -109.9900 },
+  routeableSegment: {
+    id: 'rendered-road:visible-spine',
+    name: 'Rendered Road Spine',
+    sourceLabel: 'Visible road geometry',
+    confidence: 'map_rendered',
+    dataState: 'live',
+    coordinates: sparseGeometry,
+  },
+}).draft;
+renderedDraft = builder.addAnchorToDraft(renderedDraft, {
+  coordinate: { latitude: 37.99998, longitude: -109.9720 },
+  availableSegments: [],
+}).draft;
+assert.strictEqual(
+  renderedDraft.legs[0].status,
+  'snapped',
+  'A routeable line captured from the previous tap should be reused so the next point can trace the same visible road.',
+);
+assert.strictEqual(
+  builder.buildRouteBuilderSegmentsFromDraft(renderedDraft).length,
+  1,
+  'Rendered routeable line traces should become save/start-capable planning geometry.',
+);
+
 const nearest = builder.resolveNearestNavigateRouteAnchor(draft, { latitude: 38.0021, longitude: -110.0021 });
 assert.strictEqual(nearest && nearest.label, 'B', 'Start should route GPS to the nearest user-dropped anchor.');
 

@@ -375,6 +375,8 @@ export default function WeightDashboardPanel({
           stability={dashData.stability}
           frontAxlePercent={dashData.frontAxlePercent}
           rearAxlePercent={dashData.rearAxlePercent}
+          frontAxleLoad={dashData.frontAxleLoad}
+          rearAxleLoad={dashData.rearAxleLoad}
           totalWeight={dashData.totalVehicleWeight}
           vehicleType={dashData.vehicleType}
           showVehicleProfile={!hideVehicleProfile}

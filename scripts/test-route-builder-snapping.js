@@ -243,7 +243,7 @@ assertIncludes(
 );
 assertIncludes(
   navigate,
-  'No loaded route geometry between these points',
+  'Point not linked. Tap closer to loaded road or trail geometry.',
   'Navigate should show a clear blocked-leg hint instead of keeping raw freehand geometry.',
 );
 assertIncludes(

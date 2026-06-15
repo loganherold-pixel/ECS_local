@@ -61,6 +61,12 @@ import {
   type FleetLoadZone,
   type FleetWeightResult,
 } from './fleet/fleetPremiumDomain';
+import {
+  FLEET_AXLE_LOAD_ZONE_X,
+  FLEET_FRONT_AXLE_X,
+  FLEET_NORMALIZED_WHEELBASE,
+  FLEET_REAR_AXLE_X,
+} from './fleet/fleetAxleLoadModel';
 
 // ── Types ────────────────────────────────────────────────
 
@@ -122,6 +128,12 @@ export interface FleetDashboardCenterOfGravity {
   warnings: string[];
   missingWeightCount: number;
   missingZoneMetadataCount: number;
+  frontAxleLoadLb?: number;
+  rearAxleLoadLb?: number;
+  frontAxlePercent?: number;
+  rearAxlePercent?: number;
+  frontOverhangWeightLb?: number;
+  rearOverhangWeightLb?: number;
 }
 
 export interface ZoneWarning {
@@ -183,9 +195,9 @@ const DEFAULT_DASHBOARD_ZONES = [
   { id: 'hitch', name: 'Hitch', zone_type: 'hitch' },
 ];
 
-const FRONT_AXLE_X = 0.22;
-const REAR_AXLE_X = 0.72;
-const WHEELBASE = REAR_AXLE_X - FRONT_AXLE_X;
+const FRONT_AXLE_X = FLEET_FRONT_AXLE_X;
+const REAR_AXLE_X = FLEET_REAR_AXLE_X;
+const WHEELBASE = FLEET_NORMALIZED_WHEELBASE;
 
 const FLEET_ZONE_POSITION: Record<FleetLoadZone, {
   label: string;
@@ -197,15 +209,15 @@ const FLEET_ZONE_POSITION: Record<FleetLoadZone, {
   yIn?: number;
   moduleZone: WeightModule['zone'];
 }> = {
-  frontLow: { label: 'Front Low', x: 0.26, y: 0.50, z: 0.20, xIn: 86, zIn: 20, moduleZone: 'front' },
-  rearLow: { label: 'Rear Low', x: 0.78, y: 0.50, z: 0.22, xIn: -16, zIn: 22, moduleZone: 'rear' },
-  bedLow: { label: 'Bed Low', x: 0.70, y: 0.50, z: 0.25, xIn: -4, zIn: 24, moduleZone: 'rear' },
-  bedHigh: { label: 'Bed High', x: 0.70, y: 0.50, z: 0.62, xIn: -4, zIn: 54, moduleZone: 'rear' },
-  roof: { label: 'Roof', x: 0.48, y: 0.50, z: 0.86, xIn: 42, zIn: 72, moduleZone: 'mid' },
-  cab: { label: 'Cab', x: 0.36, y: 0.50, z: 0.42, xIn: 76, zIn: 36, moduleZone: 'front' },
-  underbody: { label: 'Underbody', x: 0.50, y: 0.50, z: 0.16, xIn: 36, zIn: 16, moduleZone: 'mid' },
-  hitch: { label: 'Hitch', x: 0.94, y: 0.50, z: 0.22, xIn: -36, zIn: 22, moduleZone: 'rear' },
-  trailer: { label: 'Trailer', x: 0.98, y: 0.50, z: 0.32, xIn: -60, zIn: 32, moduleZone: 'rear' },
+  frontLow: { label: 'Front Low', x: FLEET_AXLE_LOAD_ZONE_X.frontLow, y: 0.50, z: 0.20, xIn: 86, zIn: 20, moduleZone: 'front' },
+  rearLow: { label: 'Rear Low', x: FLEET_AXLE_LOAD_ZONE_X.rearLow, y: 0.50, z: 0.22, xIn: -16, zIn: 22, moduleZone: 'rear' },
+  bedLow: { label: 'Bed Low', x: FLEET_AXLE_LOAD_ZONE_X.bedLow, y: 0.50, z: 0.25, xIn: -4, zIn: 24, moduleZone: 'rear' },
+  bedHigh: { label: 'Bed High', x: FLEET_AXLE_LOAD_ZONE_X.bedHigh, y: 0.50, z: 0.62, xIn: -4, zIn: 54, moduleZone: 'rear' },
+  roof: { label: 'Roof', x: FLEET_AXLE_LOAD_ZONE_X.roof, y: 0.50, z: 0.86, xIn: 42, zIn: 72, moduleZone: 'mid' },
+  cab: { label: 'Cab', x: FLEET_AXLE_LOAD_ZONE_X.cab, y: 0.50, z: 0.42, xIn: 76, zIn: 36, moduleZone: 'front' },
+  underbody: { label: 'Underbody', x: FLEET_AXLE_LOAD_ZONE_X.underbody, y: 0.50, z: 0.16, xIn: 36, zIn: 16, moduleZone: 'mid' },
+  hitch: { label: 'Hitch', x: FLEET_AXLE_LOAD_ZONE_X.hitch, y: 0.50, z: 0.22, xIn: -36, zIn: 22, moduleZone: 'rear' },
+  trailer: { label: 'Trailer', x: FLEET_AXLE_LOAD_ZONE_X.trailer, y: 0.50, z: 0.32, xIn: -60, zIn: 32, moduleZone: 'rear' },
 };
 
 
@@ -595,7 +607,7 @@ function computeCgFromFleetModules(modules: WeightModule[]): CGResult {
   const xCG = modules.reduce((sum, module) => sum + module.mass * module.x, 0) / totalMass;
   const yCG = modules.reduce((sum, module) => sum + module.mass * (module.y ?? 0.5), 0) / totalMass;
   const zCG = modules.reduce((sum, module) => sum + module.mass * module.z, 0) / totalMass;
-  const rearLoadFraction = Math.max(0, Math.min(1, (xCG - FRONT_AXLE_X) / WHEELBASE));
+  const rearLoadFraction = (xCG - FRONT_AXLE_X) / WHEELBASE;
   const rearAxlePercent = Math.round(rearLoadFraction * 100);
   const frontAxlePercent = Math.round((1 - rearLoadFraction) * 100);
   const stability: CGResult['stability'] =
@@ -675,6 +687,15 @@ export function computeWeightDashboardFromFleetWeightResult(
   };
   const modules = buildFleetWeightModules(weightResult, baseline);
   const rawCgResult = computeCgFromFleetModules(modules);
+  const fallbackRearAxlePercent = Math.round(((centerOfGravity?.x ?? rawCgResult.xCG) - FRONT_AXLE_X) / WHEELBASE * 100);
+  const resolvedRearAxlePercent = centerOfGravity?.rearAxlePercent ?? fallbackRearAxlePercent;
+  const resolvedFrontAxlePercent = centerOfGravity?.frontAxlePercent ?? Math.round(100 - fallbackRearAxlePercent);
+  const resolvedStability =
+    resolvedRearAxlePercent > 75
+      ? 'extreme_rear' as const
+      : resolvedRearAxlePercent > 65
+        ? 'moderate_rear' as const
+        : 'balanced' as const;
   const cgResult = centerOfGravity
     ? {
         ...rawCgResult,
@@ -682,22 +703,17 @@ export function computeWeightDashboardFromFleetWeightResult(
         yCG: centerOfGravity.y,
         zCG: centerOfGravity.z,
         totalMass: centerOfGravity.totalKnownWeightLb || rawCgResult.totalMass,
-        frontAxlePercent: Math.round((1 - Math.max(0, Math.min(1, (centerOfGravity.x - FRONT_AXLE_X) / WHEELBASE))) * 100),
-        rearAxlePercent: Math.round(Math.max(0, Math.min(1, (centerOfGravity.x - FRONT_AXLE_X) / WHEELBASE)) * 100),
-        stability:
-          Math.round(Math.max(0, Math.min(1, (centerOfGravity.x - FRONT_AXLE_X) / WHEELBASE)) * 100) > 75
-            ? 'extreme_rear' as const
-            : Math.round(Math.max(0, Math.min(1, (centerOfGravity.x - FRONT_AXLE_X) / WHEELBASE)) * 100) > 65
-              ? 'moderate_rear' as const
-              : 'balanced' as const,
+        frontAxlePercent: resolvedFrontAxlePercent,
+        rearAxlePercent: resolvedRearAxlePercent,
+        stability: resolvedStability,
       }
     : rawCgResult;
   const stability = computeStability(baseline, buildFleetStabilityModules(weightResult), 0);
   const zoneSummary = buildFleetZoneSummary(weightResult);
   const zoneWarnings = computeZoneWarnings(zoneSummary);
   const totalVehicleWeight = weightResult.operatingWeight.lbs;
-  const frontAxleLoad = Math.round(totalVehicleWeight * (cgResult.frontAxlePercent / 100));
-  const rearAxleLoad = Math.round(totalVehicleWeight * (cgResult.rearAxlePercent / 100));
+  const frontAxleLoad = Math.round(centerOfGravity?.frontAxleLoadLb ?? totalVehicleWeight * (cgResult.frontAxlePercent / 100));
+  const rearAxleLoad = Math.round(centerOfGravity?.rearAxleLoadLb ?? totalVehicleWeight * (cgResult.rearAxlePercent / 100));
   const sourceLabels = [
     weightResult.baseNetWeight.sourceLabel,
     weightResult.installedAccessoryWeight.sourceLabel,

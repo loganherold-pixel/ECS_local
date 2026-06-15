@@ -20,14 +20,14 @@ includes(navigate, "from '../../lib/navigateLongPressActions'", 'Navigate should
 includes(navigate, "from '../../lib/navigatePointRouteBuilder'", 'Navigate should use the pin-to-pin route builder domain helper.');
 includes(navigate, "from '../../lib/navigateRouteProfileScrubber'", 'Navigate should use the route profile scrubber helper.');
 includes(navigate, "from '../../lib/shellLayout'", 'Navigate should use shared shell layout helpers for dock-safe overlays.');
-includes(navigate, 'getCommandDockTotalClearance(insets.bottom, commandDockTabletScale)', 'Navigate overlays should reserve Android tablet command dock lift clearance.');
+includes(navigate, 'getCommandDockTotalClearance(insets.bottom, commandDockTabletScale)', 'Navigate overlays should reserve bottom-pinned CommandDock clearance.');
 includes(navigate, 'longPressContext', 'Navigate should track long-press menu context.');
 includes(navigate, 'routeBuilderDraft', 'Navigate should track the anchor/leg route draft.');
 includes(navigate, 'handleLongPressDrawRoute', 'Long-press menu should start Draw Route.');
 includes(
   navigate,
-  'handleRouteBuilderAnchorTap(longPressContext.coordinate);\n  setLongPressContext(null);\n  setLongPressInfoExpanded(false);',
-  'Draw Route should dismiss the long-press menu after setting the route anchor.',
+  'handleRouteBuilderAnchorTap(longPressContext.coordinate, longPressContext.routeableFeature);',
+  'Draw Route should pass routeable feature geometry into the anchor route builder.',
 );
 includes(navigate, 'handleLongPressAddWaypoint', 'Long-press menu should add waypoints.');
 includes(navigate, 'handleLongPressInfo', 'Long-press menu should open point info.');
@@ -41,14 +41,18 @@ includes(navigate, 'NOTE', 'Builder save should include a note field.');
 includes(navigate, 'DRAW ROUTE', 'Long-press menu should include Draw Route.');
 includes(navigate, 'ADD WAYPOINT', 'Long-press menu should include Add Waypoint.');
 includes(navigate, 'NAVIGATE HERE', 'Long-press menu should include Navigate Here.');
-includes(navigate, 'bottom: routeSurfaceBottomOffset + OVERLAY_GAP', 'Long-press menu should clear the command dock using the shared route surface offset.');
+includes(navigate, 'const mapPointBannerTopOffset = TOP_STATUS_STACK_START;', 'Navigate should anchor the long-press map point banner at the top of the Mapbox body.');
+includes(navigate, 'top: mapPointBannerTopOffset', 'Long-press map point banner should render from the top map body anchor.');
+excludes(navigate, 'bottom: routeSurfaceBottomOffset + OVERLAY_GAP', 'Long-press map point banner must not anchor near the lower dock/route surface.');
 excludes(navigate, 'TRACE A TRAIL TO BUILD ROUTE', 'Old trace-mode toast should be removed.');
 excludes(navigate, 'BUILD ROUTE CANCELLED', 'Old cancellation warning toast should be removed.');
+excludes(navigate, "showToast('NO LOADED TRAIL GEOMETRY BETWEEN POINTS')", 'Route-builder geometry misses should not show a top warning banner.');
 
 includes(mapRenderer, "routeBuilderMode?: 'freehand' | 'anchor_trace'", 'MapRenderer should expose an explicit route builder mode.');
 includes(mapRenderer, 'routeBuilderAnchors?: RouteBuilderAnchorMarker[]', 'MapRenderer should accept anchor markers.');
 includes(mapRenderer, 'routeProfileFocusCoordinate?: LatLng | null', 'MapRenderer should accept route profile focus coordinates.');
 includes(mapRenderer, 'routeableFeature: buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat)', 'Long-press payload should include routeable feature context.');
+includes(mapRenderer, 'coordinates: routeablePayloadLineForFeatureAtPoint', 'Long-press and route-builder taps should include compact routeable feature geometry.');
 includes(mapRenderer, 'buildRenderedRouteableLongPressPayloadAtPoint', 'Long-press should resolve visible rendered roads/trails when ECS overlay geometry is not present.');
 includes(mapRenderer, "kind: 'rendered_routeable_feature'", 'Rendered road/trail long-press payload should be marked routeable for Navigate Here.');
 includes(mapRenderer, 'isRouteBuilderRouteableFeature(feature)', 'Rendered road/trail long-press fallback should reuse route-builder routeability rules.');

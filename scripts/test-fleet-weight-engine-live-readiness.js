@@ -148,6 +148,80 @@ assert.ok(
   'Estimated base axle split should be disclosed until front/rear scale weights are available.',
 );
 
+function cgAccessory(vehicle, id, weightLb, loadZone, name) {
+  return {
+    id,
+    vehicleId: vehicle.id,
+    name,
+    installedWeight: fleet.createFleetWeightValue(weightLb, 'scale_ticket', { sourceLabel: name }),
+    loadZone,
+    display: fleet.buildFleetDisplayMetadata({ title: name, vehicleType: 'accessory' }),
+  };
+}
+
+function cgLoadoutItem(vehicle, id, weightLb, loadZone, name) {
+  return {
+    id,
+    vehicleId: vehicle.id,
+    name,
+    category: 'cargo',
+    quantity: 1,
+    weight: fleet.createFleetWeightValue(weightLb, 'scale_ticket', { sourceLabel: name }),
+    loadZone,
+    isCritical: true,
+    isPacked: true,
+    display: fleet.buildFleetDisplayMetadata({ title: name, vehicleType: 'cargo' }),
+  };
+}
+
+const frontAccessoryRamCg = operatingWeight.calculateVehicleOperatingWeight({
+  vehicle: stockRamCgVehicle,
+  buildState: buildLoadout.createEmptyFleetBuildLoadoutState(),
+  accessories: [
+    cgAccessory(stockRamCgVehicle, 'front-bumper-winch', 220, 'frontLow', 'Front bumper and winch'),
+  ],
+  legacyLoadoutItems: [],
+  frameworkContainerZones: [],
+});
+assert.ok(
+  frontAccessoryRamCg.dashboardData.frontAxleLoad > stockRamCg.dashboardData.frontAxleLoad + 220,
+  `Front overhang hardware should add more than its own weight to the front axle reaction; got ${stockRamCg.dashboardData.frontAxleLoad} -> ${frontAccessoryRamCg.dashboardData.frontAxleLoad}.`,
+);
+assert.ok(
+  frontAccessoryRamCg.dashboardData.rearAxleLoad < stockRamCg.dashboardData.rearAxleLoad,
+  `Front overhang hardware should unload the rear axle; got ${stockRamCg.dashboardData.rearAxleLoad} -> ${frontAccessoryRamCg.dashboardData.rearAxleLoad}.`,
+);
+assert.ok(
+  frontAccessoryRamCg.partialDataReasons.some((reason) => /front overhang.*rear axle/i.test(reason)),
+  'Front-overhang axle transfer should be disclosed in Weight Summary advisory copy.',
+);
+
+const rearLoadRamCg = operatingWeight.calculateVehicleOperatingWeight({
+  vehicle: stockRamCgVehicle,
+  buildState: buildLoadout.createEmptyFleetBuildLoadoutState(),
+  accessories: [
+    cgAccessory(stockRamCgVehicle, 'smart-cap', 220, 'bedHigh', 'Smart cap'),
+  ],
+  loadoutItems: [
+    cgLoadoutItem(stockRamCgVehicle, 'bed-drawers-cargo', 400, 'bedLow', 'Bed drawer cargo'),
+    cgLoadoutItem(stockRamCgVehicle, 'hitch-carrier', 200, 'hitch', 'Hitch carrier'),
+  ],
+  legacyLoadoutItems: [],
+  frameworkContainerZones: [],
+});
+assert.ok(
+  rearLoadRamCg.dashboardData.rearAxleLoad > stockRamCg.dashboardData.rearAxleLoad + 820,
+  `Bed and hitch loads should account for rear-axle transfer from overhang; got ${stockRamCg.dashboardData.rearAxleLoad} -> ${rearLoadRamCg.dashboardData.rearAxleLoad}.`,
+);
+assert.ok(
+  rearLoadRamCg.dashboardData.frontAxleLoad < stockRamCg.dashboardData.frontAxleLoad,
+  `Rear overhang/hitch load should be able to unload the front axle; got ${stockRamCg.dashboardData.frontAxleLoad} -> ${rearLoadRamCg.dashboardData.frontAxleLoad}.`,
+);
+assert.ok(
+  rearLoadRamCg.partialDataReasons.some((reason) => /rear overhang|hitch load.*front axle/i.test(reason)),
+  'Rear-overhang axle transfer should be disclosed in Weight Summary advisory copy.',
+);
+
 const noGvwrVehicle = {
   ...toFleetVehicle('no-gvwr', { make: null, model: null, type: null }),
   buildProfile: {

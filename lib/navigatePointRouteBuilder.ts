@@ -7,9 +7,10 @@ export type NavigateRouteAnchor = {
   id: string;
   label: string;
   coordinate: NavigateRouteCoordinate;
+  routeableSegment?: NavigateRouteTraceableSegment | null;
 };
 
-export type NavigateRouteTraceProvider = 'ecs_route_geometry' | 'mapbox_map_matching' | 'unavailable';
+export type NavigateRouteTraceProvider = 'ecs_route_geometry' | 'rendered_features' | 'mapbox_map_matching' | 'unavailable';
 export type NavigateRouteLegStatus = 'snapped' | 'blocked';
 
 export type NavigateRouteLeg = {
@@ -39,6 +40,7 @@ export type NavigateRouteTraceableSegment = {
   sourceLabel?: string | null;
   confidence?: 'high' | 'medium' | 'low' | 'unknown' | string | null;
   dataState?: string | null;
+  provider?: NavigateRouteTraceProvider | null;
   coordinates: NavigateRouteCoordinate[];
   warnings?: string[] | null;
 };
@@ -46,6 +48,7 @@ export type NavigateRouteTraceableSegment = {
 export type AddAnchorToDraftInput = {
   coordinate: NavigateRouteCoordinate;
   availableSegments?: NavigateRouteTraceableSegment[];
+  routeableSegment?: NavigateRouteTraceableSegment | null;
 };
 
 export type RouteBuilderSegmentFromDraft = {
@@ -56,7 +59,7 @@ export type RouteBuilderSegmentFromDraft = {
   snapConfidence: 'high' | 'medium' | 'low' | null;
   snapSource: string | null;
   snapStatus: 'snapped';
-  snapProvider: 'ecs_route_geometry';
+  snapProvider: 'ecs_route_geometry' | 'rendered_features';
   snapProfile: null;
   snapMessage: string | null;
   sourceSegmentId: string | null;
@@ -65,6 +68,8 @@ export type RouteBuilderSegmentFromDraft = {
 
 const EARTH_RADIUS_MI = 3958.8;
 const DEFAULT_TRACE_MATCH_THRESHOLD_MI = 0.35;
+const MILES_PER_LATITUDE_DEGREE = 69.0;
+const COORDINATE_EPSILON = 0.0000005;
 
 function toRadians(value: number): number {
   return (value * Math.PI) / 180;
@@ -95,16 +100,109 @@ function nextAnchorLabel(index: number): string {
   return `P${normalized + 1}`;
 }
 
-function nearestCoordinateIndex(
+type ProjectedPoint = {
+  segmentIndex: number;
+  t: number;
+  coordinate: NavigateRouteCoordinate;
+  distanceMiles: number;
+};
+
+function pointsEqual(a: NavigateRouteCoordinate, b: NavigateRouteCoordinate): boolean {
+  return (
+    Math.abs(a.latitude - b.latitude) <= COORDINATE_EPSILON &&
+    Math.abs(a.longitude - b.longitude) <= COORDINATE_EPSILON
+  );
+}
+
+function dedupeLine(line: NavigateRouteCoordinate[]): NavigateRouteCoordinate[] {
+  const output: NavigateRouteCoordinate[] = [];
+  for (const point of line) {
+    const coordinate = normalizeCoordinate(point);
+    if (!coordinate) continue;
+    const previous = output[output.length - 1];
+    if (!previous || !pointsEqual(previous, coordinate)) output.push(coordinate);
+  }
+  return output;
+}
+
+function projectPointToSegment(
+  point: NavigateRouteCoordinate,
+  a: NavigateRouteCoordinate,
+  b: NavigateRouteCoordinate,
+): { t: number; coordinate: NavigateRouteCoordinate; distanceMiles: number } | null {
+  const latScale = MILES_PER_LATITUDE_DEGREE;
+  const lngScale = Math.max(
+    0.000001,
+    Math.cos(toRadians((point.latitude + a.latitude + b.latitude) / 3)),
+  ) * MILES_PER_LATITUDE_DEGREE;
+  const ax = a.longitude * lngScale;
+  const ay = a.latitude * latScale;
+  const bx = b.longitude * lngScale;
+  const by = b.latitude * latScale;
+  const px = point.longitude * lngScale;
+  const py = point.latitude * latScale;
+  const abx = bx - ax;
+  const aby = by - ay;
+  const abLengthSq = abx * abx + aby * aby;
+  if (abLengthSq <= 0) return null;
+  const unclampedT = ((px - ax) * abx + (py - ay) * aby) / abLengthSq;
+  const t = Math.max(0, Math.min(1, unclampedT));
+  const snappedX = ax + abx * t;
+  const snappedY = ay + aby * t;
+  const coordinate = {
+    latitude: a.latitude + (b.latitude - a.latitude) * t,
+    longitude: a.longitude + (b.longitude - a.longitude) * t,
+  };
+  const dx = px - snappedX;
+  const dy = py - snappedY;
+  return {
+    t,
+    coordinate,
+    distanceMiles: Math.sqrt(dx * dx + dy * dy),
+  };
+}
+
+function nearestProjectedPointOnLine(
   line: NavigateRouteCoordinate[],
   coordinate: NavigateRouteCoordinate,
-): { index: number; distanceMiles: number } | null {
-  let nearest: { index: number; distanceMiles: number } | null = null;
-  line.forEach((point, index) => {
-    const distance = distanceMiles(point, coordinate);
-    if (!nearest || distance < nearest.distanceMiles) nearest = { index, distanceMiles: distance };
-  });
+): ProjectedPoint | null {
+  let nearest: ProjectedPoint | null = null;
+  for (let index = 1; index < line.length; index += 1) {
+    const projected = projectPointToSegment(coordinate, line[index - 1], line[index]);
+    if (!projected) continue;
+    const candidate = {
+      segmentIndex: index - 1,
+      t: projected.t,
+      coordinate: projected.coordinate,
+      distanceMiles: projected.distanceMiles,
+    };
+    if (!nearest || candidate.distanceMiles < nearest.distanceMiles) nearest = candidate;
+  }
   return nearest;
+}
+
+function projectionProgress(projection: ProjectedPoint): number {
+  return projection.segmentIndex + projection.t;
+}
+
+function extractProjectedLine(
+  line: NavigateRouteCoordinate[],
+  start: ProjectedPoint,
+  end: ProjectedPoint,
+): NavigateRouteCoordinate[] {
+  const startProgress = projectionProgress(start);
+  const endProgress = projectionProgress(end);
+  if (startProgress > endProgress) {
+    return extractProjectedLine(line, end, start).reverse();
+  }
+
+  const output: NavigateRouteCoordinate[] = [start.coordinate];
+  for (let vertexIndex = start.segmentIndex + 1; vertexIndex <= end.segmentIndex; vertexIndex += 1) {
+    const vertex = line[vertexIndex];
+    if (vertex) output.push(vertex);
+  }
+  output.push(end.coordinate);
+  return dedupeLine(output);
 }
 
 function cleanConfidence(value: unknown): 'high' | 'medium' | 'low' | 'unknown' {
@@ -113,16 +211,59 @@ function cleanConfidence(value: unknown): 'high' | 'medium' | 'low' | 'unknown' 
   return 'unknown';
 }
 
+function cleanTraceProvider(value: unknown): Exclude<NavigateRouteTraceProvider, 'unavailable'> {
+  const normalized = String(value ?? '').toLowerCase();
+  if (normalized === 'rendered_features' || normalized === 'mapbox_map_matching') return normalized;
+  return 'ecs_route_geometry';
+}
+
+function normalizeTraceableSegments(
+  segments: Array<NavigateRouteTraceableSegment | null | undefined>,
+): NavigateRouteTraceableSegment[] {
+  const seen = new Set<string>();
+  const normalized: NavigateRouteTraceableSegment[] = [];
+  for (const segment of segments) {
+    if (!segment) continue;
+    const line = (segment.coordinates ?? [])
+      .map(normalizeCoordinate)
+      .filter((point): point is NavigateRouteCoordinate => !!point);
+    if (line.length < 2) continue;
+    const id = String(segment.id || `segment-${normalized.length}`).trim();
+    const signature = `${id}:${line
+      .slice(0, 4)
+      .map((point) => `${point.latitude.toFixed(6)},${point.longitude.toFixed(6)}`)
+      .join(';')}:${line.length}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    normalized.push({
+      ...segment,
+      id,
+      coordinates: dedupeLine(line),
+    });
+  }
+  return normalized;
+}
+
 function traceLeg(
   from: NavigateRouteAnchor,
   to: NavigateRouteAnchor,
   segments: NavigateRouteTraceableSegment[],
 ): NavigateRouteLeg {
-  for (const segment of segments) {
-    const line = (segment.coordinates ?? []).map(normalizeCoordinate).filter((point): point is NavigateRouteCoordinate => !!point);
+  let best:
+    | {
+        segment: NavigateRouteTraceableSegment;
+        line: NavigateRouteCoordinate[];
+        start: ProjectedPoint;
+        end: ProjectedPoint;
+        score: number;
+      }
+    | null = null;
+
+  for (const segment of normalizeTraceableSegments(segments)) {
+    const line = segment.coordinates;
     if (line.length < 2) continue;
-    const start = nearestCoordinateIndex(line, from.coordinate);
-    const end = nearestCoordinateIndex(line, to.coordinate);
+    const start = nearestProjectedPointOnLine(line, from.coordinate);
+    const end = nearestProjectedPointOnLine(line, to.coordinate);
     if (!start || !end) continue;
     if (
       start.distanceMiles > DEFAULT_TRACE_MATCH_THRESHOLD_MI ||
@@ -130,28 +271,33 @@ function traceLeg(
     ) {
       continue;
     }
-    const coordinates =
-      start.index <= end.index
-        ? line.slice(start.index, end.index + 1)
-        : line.slice(end.index, start.index + 1).reverse();
-    const snappedLine =
-      coordinates.length >= 2
-        ? coordinates
-        : [from.coordinate, to.coordinate];
+    const score = start.distanceMiles + end.distanceMiles;
+    if (!best || score < best.score) {
+      best = { segment, line, start, end, score };
+    }
+  }
+
+  if (best) {
+    const snappedLine = extractProjectedLine(best.line, best.start, best.end);
+    const provider = cleanTraceProvider(best.segment.provider);
+    const sourceLabel =
+      best.segment.sourceLabel ??
+      best.segment.name ??
+      (provider === 'rendered_features' ? 'Visible routeable geometry' : null);
 
     return {
       id: `leg-${from.label}-${to.label}`,
       fromAnchorId: from.id,
       toAnchorId: to.id,
       coordinates: snappedLine,
-      provider: 'ecs_route_geometry',
+      provider,
       status: 'snapped',
-      confidence: cleanConfidence(segment.confidence),
-      source: 'ecs_route_geometry',
-      sourceSegmentId: segment.id,
-      sourceLabel: segment.sourceLabel ?? segment.name ?? null,
-      dataState: segment.dataState ?? null,
-      warnings: [...(segment.warnings ?? [])],
+      confidence: cleanConfidence(best.segment.confidence),
+      source: provider,
+      sourceSegmentId: best.segment.id,
+      sourceLabel,
+      dataState: best.segment.dataState ?? null,
+      warnings: [...(best.segment.warnings ?? [])],
       unavailableReason: null,
     };
   }
@@ -169,7 +315,7 @@ function traceLeg(
     sourceLabel: null,
     dataState: null,
     warnings: [],
-    unavailableReason: 'No loaded ECS route geometry connects these anchors.',
+    unavailableReason: 'Point not linked. Tap closer to loaded road or trail geometry.',
   };
 }
 
@@ -197,15 +343,25 @@ export function addAnchorToDraft(
 ): { draft: NavigateRouteDraft; leg: NavigateRouteLeg | null } {
   const coordinate = normalizeCoordinate(input.coordinate);
   if (!coordinate) return { draft, leg: null };
+  const routeableSegment = normalizeTraceableSegments([input.routeableSegment])[0] ?? null;
   const anchor: NavigateRouteAnchor = {
     id: `anchor-${draft.anchors.length + 1}`,
     label: nextAnchorLabel(draft.anchors.length),
     coordinate,
+    routeableSegment,
   };
   const anchors = [...draft.anchors, anchor];
   const previous = draft.anchors[draft.anchors.length - 1] ?? null;
   if (!previous) return { draft: { anchors, legs: [...draft.legs] }, leg: null };
-  const leg = traceLeg(previous, anchor, input.availableSegments ?? []);
+  const leg = traceLeg(
+    previous,
+    anchor,
+    normalizeTraceableSegments([
+      previous.routeableSegment,
+      routeableSegment,
+      ...(input.availableSegments ?? []),
+    ]),
+  );
   return {
     draft: {
       anchors,
@@ -234,21 +390,27 @@ export function buildRouteBuilderSegmentsFromDraft(
     .filter((leg) => leg.status === 'snapped' && leg.coordinates.length >= 2)
     .map((leg) => {
       const coordinates = leg.coordinates.map((point) => [point.longitude, point.latitude] as [number, number]);
-      const sourceLabel = leg.sourceLabel ?? 'ECS route geometry';
+      const sourceLabel =
+        leg.sourceLabel ??
+        (leg.provider === 'rendered_features' ? 'Visible routeable geometry' : 'ECS route geometry');
+      const snapProvider = leg.provider === 'rendered_features' ? 'rendered_features' : 'ecs_route_geometry';
       return {
         id: `route-builder-${leg.id}`,
         coordinates,
         rawSegment: coordinates,
         snappedSegment: coordinates,
         snapConfidence: leg.confidence === 'unknown' ? 'medium' : leg.confidence,
-        snapSource: 'route_geometry_overlay',
+        snapSource: leg.provider === 'rendered_features' ? sourceLabel : 'route_geometry_overlay',
         snapStatus: 'snapped',
-        snapProvider: 'ecs_route_geometry',
+        snapProvider,
         snapProfile: null,
-        snapMessage: 'ECS route geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.',
+        snapMessage:
+          leg.provider === 'rendered_features'
+            ? 'Snapped to visible routeable map geometry. Verify access, closures, and posted rules before travel.'
+            : 'ECS route geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.',
         sourceSegmentId: leg.sourceSegmentId,
         buildSource: {
-          kind: 'ecs_route_geometry',
+          kind: leg.provider === 'rendered_features' ? 'rendered_routeable_geometry' : 'ecs_route_geometry',
           sourceLabel,
           confidence: 'planning_geometry',
         },

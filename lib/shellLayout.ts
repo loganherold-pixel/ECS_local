@@ -3,7 +3,6 @@ import { Platform } from 'react-native';
 export const ECS_COMMAND_DOCK_BAR_HEIGHT = 80;
 export const ECS_COMMAND_DOCK_MIN_BOTTOM_PADDING = 4;
 export const ECS_ANDROID_COMMAND_DOCK_BOTTOM_PADDING_MAX = 96;
-export const ECS_ANDROID_TABLET_TASKBAR_DOCK_LIFT = 72;
 export const ECS_TOP_SHELL_EDGE_SLOT_WIDTH = 52;
 export const ECS_TOP_SHELL_PROFILE_BUTTON_SIZE = 40;
 export const ECS_COMMAND_DOCK_LABEL_HEIGHT = 16;
@@ -115,15 +114,9 @@ export function getCommandDockHeight(bottomInset: number): number {
   return ECS_COMMAND_DOCK_BAR_HEIGHT + getCommandDockBottomPadding(bottomInset);
 }
 
-export function getCommandDockBottomLift(bottomInset: number, isTablet: boolean): number {
-  if (Platform.OS !== 'android' || !isTablet) return 0;
-
-  const normalizedBottomInset = Number.isFinite(bottomInset) ? Math.max(0, bottomInset) : 0;
-  return Math.max(0, ECS_ANDROID_TABLET_TASKBAR_DOCK_LIFT - normalizedBottomInset);
-}
-
 export function getCommandDockTotalClearance(bottomInset: number, isTablet: boolean): number {
-  return getCommandDockHeight(bottomInset) + getCommandDockBottomLift(bottomInset, isTablet);
+  void isTablet;
+  return getCommandDockHeight(bottomInset);
 }
 
 export function getShellBodyBackgroundTopInset(

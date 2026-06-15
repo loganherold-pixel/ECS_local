@@ -2928,6 +2928,7 @@ function segmentPayloadToLongPressFeature(
         }
       })()
     : [];
+  const coordinates = payloadLineToNavigateRouteCoordinates(payload.coordinates);
   return {
     id: payload.id ?? null,
     kind: payload.kind ?? null,
@@ -2935,15 +2936,66 @@ function segmentPayloadToLongPressFeature(
     sourceLabel: payload.routeGeometrySourceKind ?? payload.categoryLabel ?? payload.name ?? null,
     confidence: payload.routeGeometryConfidence ?? payload.confidence ?? null,
     dataState: payload.routeGeometryDataState ?? payload.dataState ?? null,
+    coordinates: coordinates.length >= 2 ? coordinates : null,
     warnings,
   };
 }
 
+function payloadLineToNavigateRouteCoordinates(value: unknown): NavigateRouteCoordinate[] {
+  if (!Array.isArray(value)) return [];
+  const coordinates: NavigateRouteCoordinate[] = [];
+  value.forEach((point) => {
+    const coordinate = toNavigateRouteCoordinate(point as any);
+    if (!coordinate) return;
+    const previous = coordinates[coordinates.length - 1];
+    if (
+      previous &&
+      Math.abs(previous.latitude - coordinate.latitude) <= 0.0000005 &&
+      Math.abs(previous.longitude - coordinate.longitude) <= 0.0000005
+    ) {
+      return;
+    }
+    coordinates.push(coordinate);
+  });
+  return coordinates;
+}
+
+function routeableFeatureToNavigateTraceableSegment(
+  feature: NavigateLongPressRouteableFeature | null | undefined,
+): NavigateRouteTraceableSegment | null {
+  const coordinates = payloadLineToNavigateRouteCoordinates(feature?.coordinates ?? null);
+  if (coordinates.length < 2) return null;
+  const provider =
+    String(feature?.kind ?? '').toLowerCase() === 'rendered_routeable_feature'
+      ? 'rendered_features'
+      : 'ecs_route_geometry';
+  const id =
+    String(feature?.id ?? '').trim() ||
+    `${provider}:${coordinates[0].latitude.toFixed(5)},${coordinates[0].longitude.toFixed(5)}:${coordinates[coordinates.length - 1].latitude.toFixed(5)},${coordinates[coordinates.length - 1].longitude.toFixed(5)}`;
+  return {
+    id,
+    name: feature?.name ?? null,
+    sourceLabel:
+      feature?.sourceLabel ??
+      feature?.name ??
+      (provider === 'rendered_features' ? 'Visible routeable geometry' : 'ECS route geometry'),
+    confidence: feature?.confidence ?? (provider === 'rendered_features' ? 'medium' : 'unknown'),
+    dataState: feature?.dataState ?? null,
+    provider,
+    coordinates,
+    warnings: feature?.warnings ?? null,
+  };
+}
+
 function toNavigateRouteCoordinate(
-  coordinate: { latitude?: number; longitude?: number; lat?: number; lng?: number } | null | undefined,
+  coordinate: { latitude?: number; longitude?: number; lat?: number; lng?: number } | [number, number] | null | undefined,
 ): NavigateRouteCoordinate | null {
-  const latitude = Number(coordinate?.latitude ?? coordinate?.lat);
-  const longitude = Number(coordinate?.longitude ?? coordinate?.lng);
+  const latitude = Array.isArray(coordinate)
+    ? Number(coordinate[1])
+    : Number(coordinate?.latitude ?? coordinate?.lat);
+  const longitude = Array.isArray(coordinate)
+    ? Number(coordinate[0])
+    : Number(coordinate?.longitude ?? coordinate?.lng);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
   return { latitude, longitude };
@@ -8202,7 +8254,10 @@ const applyRouteBuilderDraft = useCallback((nextDraft: NavigateRouteDraft) => {
   );
 }, []);
 
-const handleRouteBuilderAnchorTap = useCallback((coordinate: NavigateRouteCoordinate) => {
+const handleRouteBuilderAnchorTap = useCallback((
+  coordinate: NavigateRouteCoordinate,
+  routeableFeature?: NavigateLongPressRouteableFeature | null,
+) => {
   hapticCommand();
   closeTopPopup();
   setLongPressContext(null);
@@ -8214,17 +8269,11 @@ const handleRouteBuilderAnchorTap = useCallback((coordinate: NavigateRouteCoordi
   setUserHasManuallyMovedMap(true);
   const result = addAnchorToDraft(routeBuilderDraft, {
     coordinate,
+    routeableSegment: routeableFeatureToNavigateTraceableSegment(routeableFeature),
     availableSegments: routeBuilderTraceableSegmentsRef.current,
   });
   applyRouteBuilderDraft(result.draft);
-  if (!result.leg) {
-    showToast('POINT A SET');
-  } else if (result.leg.status === 'blocked') {
-    showToast('NO LOADED TRAIL GEOMETRY BETWEEN POINTS');
-  } else {
-    showToast(`POINT ${result.draft.anchors[result.draft.anchors.length - 1]?.label ?? ''} LINKED`);
-  }
-}, [applyRouteBuilderDraft, closeTopPopup, routeBuilderDraft, showToast]);
+}, [applyRouteBuilderDraft, closeTopPopup, routeBuilderDraft]);
 
   const handleLongPress = useCallback((coord: { latitude?: number; longitude?: number; routeableFeature?: any }) => {
   if (!Number.isFinite(coord.latitude) || !Number.isFinite(coord.longitude)) return;
@@ -8250,7 +8299,7 @@ const handleRouteBuilderAnchorTap = useCallback((coordinate: NavigateRouteCoordi
 
 const handleLongPressDrawRoute = useCallback(() => {
   if (!longPressContext || !longPressContext.actions.draw_route.enabled) return;
-  handleRouteBuilderAnchorTap(longPressContext.coordinate);
+  handleRouteBuilderAnchorTap(longPressContext.coordinate, longPressContext.routeableFeature);
   setLongPressContext(null);
   setLongPressInfoExpanded(false);
 }, [handleRouteBuilderAnchorTap, longPressContext]);
@@ -9483,11 +9532,19 @@ const locateCampsitesForCompletedPolygon = useCallback(
 );
 
 const handleDirectMapTapForPin = useCallback(
-  async ({ latitude, longitude }: { latitude: number; longitude: number }) => {
+  async ({
+    latitude,
+    longitude,
+    routeableFeature,
+  }: {
+    latitude: number;
+    longitude: number;
+    routeableFeature?: any;
+  }) => {
     if (routeBuilderActive) {
       const coordinate = toNavigateRouteCoordinate({ latitude, longitude });
       if (coordinate) {
-        handleRouteBuilderAnchorTap(coordinate);
+        handleRouteBuilderAnchorTap(coordinate, segmentPayloadToLongPressFeature(routeableFeature));
       }
       return;
     }
@@ -12934,6 +12991,7 @@ const handleCreateRun = useCallback(() => {
   const routeIndicatorTopOffset = routeIndicatorAnchoredToTopToolbox
     ? MAP_TOP_CONTROL_ROW + topToolboxStackHeight + OVERLAY_GAP
     : TOP_STATUS_STACK_START;
+  const mapPointBannerTopOffset = TOP_STATUS_STACK_START;
 
   const hideWeatherTopOverlays =
     !topStatusOverlaysVisible || topRouteSurfaceVisible || idleDestinationSearchVisible;
@@ -18116,7 +18174,7 @@ const stableMapSurface = useMemo(() => {
             {
               left: OVERLAY_EDGE,
               right: OVERLAY_EDGE,
-              bottom: routeSurfaceBottomOffset + OVERLAY_GAP,
+              top: mapPointBannerTopOffset,
             },
           ]}
         >
@@ -19246,7 +19304,7 @@ const stableMapSurface = useMemo(() => {
                     : routeBuilderHasPendingSnap || routeBuilderSnapStatus === 'network_pending'
                       ? routeBuilderSnapMessage ?? 'Verifying route snap...'
                     : routeBuilderHasBlockedSnap || routeBuilderSnapStatus === 'blocked'
-                      ? routeBuilderSnapMessage ?? 'No loaded route geometry between these points'
+                      ? routeBuilderSnapMessage ?? 'Point not linked. Tap closer to loaded road or trail geometry.'
                     : dispersedRouteBuildActive && dispersedRouteBuildStatus
                       ? dispersedRouteBuildStatus
                     : routeBuilderDraft.anchors.length > 1
@@ -19503,7 +19561,6 @@ const stableMapSurface = useMemo(() => {
   communityCampSitePhotosById,
   adaptive.isExpanded,
   OVERLAY_EDGE,
-  OVERLAY_GAP,
   DESTINATION_SEARCH_HORIZONTAL_INSET,
   adaptive.windowWidth,
   campsiteDetailTopOffset,
@@ -19630,6 +19687,7 @@ const stableMapSurface = useMemo(() => {
   routeIndicatorVisible,
   routeIndicatorAnchoredToTopToolbox,
   routeIndicatorTopOffset,
+  mapPointBannerTopOffset,
   handleTopToolboxLayout,
   handleRecenter,
   handleRouteOverview,

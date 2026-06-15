@@ -1,11 +1,16 @@
 import {
   createFleetWeightValue,
+  FLEET_LOAD_ZONES,
   type FleetRiskLevel,
   type FleetScoringResult,
   type FleetVehicle,
   type FleetWeightResult,
   type WeightVerification,
 } from './fleetPremiumDomain';
+import {
+  estimateFleetAxleLoad,
+  FLEET_AXLE_LOAD_ZONE_X,
+} from './fleetAxleLoadModel';
 
 export type FleetWeightRiskFlag = {
   id: string;
@@ -89,23 +94,24 @@ export function buildFleetWeightSummary(
 
   const frontBase = vehicle.buildProfile.frontBaseWeight?.lbs ?? Math.round(weightResult.baseNetWeight.lbs * 0.52);
   const rearBase = vehicle.buildProfile.rearBaseWeight?.lbs ?? Math.max(0, weightResult.baseNetWeight.lbs - frontBase);
-  const estimatedFrontAxleWeightLb = Math.round(
-    frontBase +
-      weightResult.zoneWeights.frontLow.totalWeight.lbs +
-      weightResult.zoneWeights.cab.totalWeight.lbs * 0.55 +
-      weightResult.zoneWeights.underbody.totalWeight.lbs * 0.5,
-  );
-  const estimatedRearAxleWeightLb = Math.round(
-    rearBase +
-      weightResult.zoneWeights.rearLow.totalWeight.lbs +
-      weightResult.zoneWeights.bedLow.totalWeight.lbs +
-      weightResult.zoneWeights.bedHigh.totalWeight.lbs +
-      weightResult.zoneWeights.hitch.totalWeight.lbs +
-      weightResult.zoneWeights.trailer.totalWeight.lbs +
-      weightResult.zoneWeights.roof.totalWeight.lbs * 0.5 +
-      weightResult.zoneWeights.cab.totalWeight.lbs * 0.45 +
-      weightResult.zoneWeights.underbody.totalWeight.lbs * 0.5,
-  );
+  const baseFrontAxleFraction =
+    frontBase + rearBase > 0
+      ? frontBase / (frontBase + rearBase)
+      : 0.52;
+  const axleEstimate = estimateFleetAxleLoad({
+    baseWeightLb: weightResult.baseNetWeight.lbs,
+    baseFrontAxleFraction,
+    modules: FLEET_LOAD_ZONES.map((zone) => ({
+      id: zone,
+      label: zone,
+      weightLb: weightResult.zoneWeights[zone].totalWeight.lbs,
+      x: FLEET_AXLE_LOAD_ZONE_X[zone],
+    })),
+    frontGawrLb: vehicle.buildProfile.frontGawr?.lbs ?? null,
+    rearGawrLb: vehicle.buildProfile.rearGawr?.lbs ?? null,
+  });
+  const estimatedFrontAxleWeightLb = Math.round(axleEstimate.frontAxleLoadLb);
+  const estimatedRearAxleWeightLb = Math.round(axleEstimate.rearAxleLoadLb);
 
   const payloadRisk = payloadRiskLevel(weightResult.payloadRemaining?.lbs ?? null, weightResult.gvwr?.lbs ?? null);
   const highMountedRisk = addedHighMountedRisk(highMountedAddedWeightLb, weightResult.topHeavyRisk);

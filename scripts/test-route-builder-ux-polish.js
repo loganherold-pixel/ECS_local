@@ -70,8 +70,13 @@ assertIncludes(
 );
 assertIncludes(
   navigate,
-  'No loaded route geometry between these points',
-  'Build Route should explain blocked anchor legs without saving raw geometry.',
+  'Point not linked. Tap closer to loaded road or trail geometry.',
+  'Build Route should explain blocked anchor legs in the compact control strip without saving raw geometry.',
+);
+assertNotIncludes(
+  navigate,
+  "showToast('NO LOADED TRAIL GEOMETRY BETWEEN POINTS')",
+  'Build Route trace failures should not surface as top map warning banners.',
 );
 assertIncludes(
   navigate,

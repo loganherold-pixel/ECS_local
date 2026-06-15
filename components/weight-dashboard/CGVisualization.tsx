@@ -18,6 +18,8 @@ interface Props {
   stability: StabilityResult;
   frontAxlePercent: number;
   rearAxlePercent: number;
+  frontAxleLoad?: number;
+  rearAxleLoad?: number;
   totalWeight: number;
   vehicleType?: string | null;
   showVehicleProfile?: boolean;
@@ -30,6 +32,10 @@ type VehicleProfileKind = 'truck' | 'suv' | 'van' | 'wagon' | 'generic';
 function clampPercent(value: number, fallback: number): number {
   const safe = Number.isFinite(value) ? value : fallback;
   return Math.max(7, Math.min(93, safe * 100));
+}
+
+function clampBarPercent(value: number): number {
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 }
 
 function resolveVehicleProfileKind(vehicleType: string | null | undefined): VehicleProfileKind {
@@ -127,6 +133,8 @@ export default function CGVisualization({
   stability,
   frontAxlePercent,
   rearAxlePercent,
+  frontAxleLoad,
+  rearAxleLoad,
   totalWeight,
   vehicleType,
   showVehicleProfile = true,
@@ -226,7 +234,7 @@ export default function CGVisualization({
                 style={[
                   styles.axleBarFill,
                   {
-                    width: `${Math.min(100, frontAxlePercent)}%`,
+                    width: `${clampBarPercent(frontAxlePercent)}%`,
                     backgroundColor: frontAxlePercent > 65 ? '#FF9800' : '#66BB6A',
                   },
                 ]}
@@ -237,7 +245,7 @@ export default function CGVisualization({
             </Text>
           </View>
           <Text style={styles.axleWeight}>
-            {Math.round(totalWeight * frontAxlePercent / 100)} lbs
+            {Math.round(frontAxleLoad ?? totalWeight * frontAxlePercent / 100)} lbs
           </Text>
         </View>
 
@@ -250,7 +258,7 @@ export default function CGVisualization({
                 style={[
                   styles.axleBarFill,
                   {
-                    width: `${Math.min(100, rearAxlePercent)}%`,
+                    width: `${clampBarPercent(rearAxlePercent)}%`,
                     backgroundColor: rearAxlePercent > 75 ? '#EF5350' : rearAxlePercent > 65 ? '#FF9800' : '#66BB6A',
                   },
                 ]}
@@ -261,7 +269,7 @@ export default function CGVisualization({
             </Text>
           </View>
           <Text style={styles.axleWeight}>
-            {Math.round(totalWeight * rearAxlePercent / 100)} lbs
+            {Math.round(rearAxleLoad ?? totalWeight * rearAxlePercent / 100)} lbs
           </Text>
         </View>
       </View>

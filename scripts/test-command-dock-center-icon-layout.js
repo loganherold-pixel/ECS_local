@@ -49,19 +49,17 @@ assert(
 );
 
 assert(
-  shellLayout.includes('ECS_ANDROID_TABLET_TASKBAR_DOCK_LIFT = 72') &&
-    shellLayout.includes('getCommandDockBottomLift(bottomInset: number, isTablet: boolean)') &&
-    shellLayout.includes('ECS_ANDROID_TABLET_TASKBAR_DOCK_LIFT - normalizedBottomInset') &&
-    shellLayout.includes('getCommandDockTotalClearance(bottomInset: number, isTablet: boolean)'),
-  'Android tablet CommandDock layout must add a taskbar lift when safe-area insets underreport the bottom gesture region.',
+  !shellLayout.includes('ECS_ANDROID_TABLET_TASKBAR_DOCK_LIFT') &&
+    shellLayout.includes('getCommandDockTotalClearance(bottomInset: number, isTablet: boolean)') &&
+    shellLayout.includes('return getCommandDockHeight(bottomInset);'),
+  'CommandDock clearance should come from the actual bottom-pinned dock height, not a tablet taskbar lift.',
 );
 
 assert(
-  commandDock.includes('getCommandDockBottomLift') &&
-    commandDock.includes("Platform.OS === 'android' && Math.min(windowWidth, adaptive.windowHeight) >= 720") &&
-    commandDock.includes('const dockBottomLift = getCommandDockBottomLift(insets.bottom, adaptive.isTablet || androidTabletWindow);') &&
-    commandDock.includes('bottom: MIN_DOCK_LIFT + dockBottomLift'),
-  'CommandDock must lift above Android tablet taskbar space so bottom tabs receive normal taps.',
+  !commandDock.includes('getCommandDockBottomLift') &&
+    !commandDock.includes('dockBottomLift') &&
+    commandDock.includes('bottom: 0,'),
+  'CommandDock must pin the ECS bottom banner and tab icons to the bottom of the device.',
 );
 
 assert(
@@ -69,7 +67,7 @@ assert(
     appLayout.includes("Platform.OS === 'android' && Math.min(width, height) >= 720") &&
     appLayout.includes('getCommandDockTotalClearance(insets.bottom, commandDockTabletScale)') &&
     !appLayout.includes('getCommandDockHeight(insets.bottom)'),
-  'Root shell body clearance must include the Android tablet CommandDock lift.',
+  'Root shell body clearance should continue to use the shared CommandDock clearance helper.',
 );
 
 console.log('Command dock center icon layout checks passed.');

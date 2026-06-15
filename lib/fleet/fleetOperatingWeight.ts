@@ -24,6 +24,11 @@ import {
   type WeightDashboardData,
 } from '../weightDashboardStore';
 import { DEFAULT_VEHICLE_BASELINE, type VehicleBaseline } from '../stabilityEngine';
+import {
+  estimateFleetAxleLoad,
+  FLEET_AXLE_LOAD_ZONE_X,
+  type FleetAxleLoadModule,
+} from './fleetAxleLoadModel';
 
 type LegacyLoadoutLike = {
   id: string;
@@ -65,15 +70,15 @@ type CogPlacement = {
 };
 
 const COG_ZONE_COORDINATES: Record<string, Omit<CogPlacement, 'hasExplicitZone'>> = {
-  frontLow: { x: 0.26, y: 0.50, z: 0.20 },
-  rearLow: { x: 0.78, y: 0.50, z: 0.22 },
-  bedLow: { x: 0.70, y: 0.50, z: 0.25 },
-  bedHigh: { x: 0.70, y: 0.50, z: 0.62 },
-  roof: { x: 0.48, y: 0.50, z: 0.86 },
-  cab: { x: 0.36, y: 0.50, z: 0.42 },
-  underbody: { x: 0.50, y: 0.50, z: 0.16 },
-  hitch: { x: 0.94, y: 0.50, z: 0.22 },
-  trailer: { x: 0.98, y: 0.50, z: 0.32 },
+  frontLow: { x: FLEET_AXLE_LOAD_ZONE_X.frontLow, y: 0.50, z: 0.20 },
+  rearLow: { x: FLEET_AXLE_LOAD_ZONE_X.rearLow, y: 0.50, z: 0.22 },
+  bedLow: { x: FLEET_AXLE_LOAD_ZONE_X.bedLow, y: 0.50, z: 0.25 },
+  bedHigh: { x: FLEET_AXLE_LOAD_ZONE_X.bedHigh, y: 0.50, z: 0.62 },
+  roof: { x: FLEET_AXLE_LOAD_ZONE_X.roof, y: 0.50, z: 0.86 },
+  cab: { x: FLEET_AXLE_LOAD_ZONE_X.cab, y: 0.50, z: 0.42 },
+  underbody: { x: FLEET_AXLE_LOAD_ZONE_X.underbody, y: 0.50, z: 0.16 },
+  hitch: { x: FLEET_AXLE_LOAD_ZONE_X.hitch, y: 0.50, z: 0.22 },
+  trailer: { x: FLEET_AXLE_LOAD_ZONE_X.trailer, y: 0.50, z: 0.32 },
 };
 
 function clampUnit(value: number, fallback: number): number {
@@ -283,6 +288,7 @@ export function calculateVehicleCenterOfGravity(input: {
     input.vehicle.buildProfile.curbWeight?.lbs ??
     input.vehicle.buildProfile.emptyWeight?.lbs ??
     baseline.curbWeightLbs;
+  const baseAxleSplit = resolveBaseAxleSplit(input.vehicle, baseWeight);
   let totalKnownWeight = Math.max(0, baseWeight);
   let weightedX = totalKnownWeight * normalizedBaseXFromBaseline(baseline);
   let weightedY = totalKnownWeight * 0.5;
@@ -290,8 +296,9 @@ export function calculateVehicleCenterOfGravity(input: {
   let missingWeightCount = baseWeight > 0 ? 0 : 1;
   let missingZoneMetadataCount = 0;
   let highMountedWeight = 0;
+  const axleLoadModules: FleetAxleLoadModule[] = [];
 
-  const addWeightedItem = (weightLb: number, placement: CogPlacement) => {
+  const addWeightedItem = (weightLb: number, placement: CogPlacement, label: string) => {
     if (weightLb <= 0) {
       missingWeightCount += 1;
       return;
@@ -306,6 +313,11 @@ export function calculateVehicleCenterOfGravity(input: {
     if (placement.z >= 0.62) {
       highMountedWeight += weightLb;
     }
+    axleLoadModules.push({
+      label,
+      weightLb,
+      x: placement.x,
+    });
   };
 
   for (const accessory of input.accessories ?? []) {
@@ -314,7 +326,7 @@ export function calculateVehicleCenterOfGravity(input: {
       accessory.loadZone,
       `${accessory.name} ${accessory.compartmentId ?? ''} ${accessory.display?.classLabel ?? ''}`,
     );
-    addWeightedItem(Math.max(0, accessory.installedWeight.lbs), placement);
+    addWeightedItem(Math.max(0, accessory.installedWeight.lbs), placement, accessory.name);
   }
 
   for (const item of input.loadoutItems ?? []) {
@@ -323,18 +335,26 @@ export function calculateVehicleCenterOfGravity(input: {
       item.loadZone,
       `${item.name} ${item.compartmentId ?? ''} ${item.category} ${item.display?.classLabel ?? ''}`,
     );
-    addWeightedItem(Math.max(0, item.weight.lbs) * Math.max(1, item.quantity), placement);
+    addWeightedItem(Math.max(0, item.weight.lbs) * Math.max(1, item.quantity), placement, item.name);
   }
 
-  const x = totalKnownWeight > 0 ? clampUnit(weightedX / totalKnownWeight, 0.42) : 0.42;
+  const axleLoadEstimate = estimateFleetAxleLoad({
+    baseWeightLb: baseWeight,
+    baseFrontAxleFraction: baseAxleSplit.frontFraction,
+    modules: axleLoadModules,
+    frontGawrLb: input.vehicle.buildProfile.frontGawr?.lbs ?? null,
+    rearGawrLb: input.vehicle.buildProfile.rearGawr?.lbs ?? null,
+  });
+
+  const x = totalKnownWeight > 0 ? axleLoadEstimate.longitudinalCgX : 0.42;
   const y = totalKnownWeight > 0 ? clampUnit(weightedY / totalKnownWeight, 0.5) : 0.5;
   const z = totalKnownWeight > 0 ? clampUnit(weightedZ / totalKnownWeight, 0.25) : 0.25;
-  const baseAxleSplit = resolveBaseAxleSplit(input.vehicle, baseWeight);
   const warnings: string[] = [];
   if (baseAxleSplit.isEstimated && baseWeight > 0) {
     const frontPct = Math.round(baseAxleSplit.frontFraction * 100);
     warnings.push(`Base front/rear axle split is estimated from vehicle class (${frontPct}/${100 - frontPct}). Add front/rear scale weights for exact COG.`);
   }
+  warnings.push(...axleLoadEstimate.warnings);
   if (highMountedWeight >= 150) warnings.push('High-mounted load is raising the center of gravity.');
   if (x >= 0.64) warnings.push('Rear-biased load placement is moving COG aft.');
   if (Math.abs(y - 0.5) >= 0.04) {
@@ -363,6 +383,12 @@ export function calculateVehicleCenterOfGravity(input: {
     warnings: Array.from(new Set(warnings)),
     missingWeightCount,
     missingZoneMetadataCount,
+    frontAxleLoadLb: axleLoadEstimate.frontAxleLoadLb,
+    rearAxleLoadLb: axleLoadEstimate.rearAxleLoadLb,
+    frontAxlePercent: axleLoadEstimate.frontAxlePercent,
+    rearAxlePercent: axleLoadEstimate.rearAxlePercent,
+    frontOverhangWeightLb: axleLoadEstimate.frontOverhangWeightLb,
+    rearOverhangWeightLb: axleLoadEstimate.rearOverhangWeightLb,
   };
 }
 

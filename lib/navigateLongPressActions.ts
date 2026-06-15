@@ -10,6 +10,7 @@ export type NavigateLongPressRouteableFeature = {
   sourceLabel?: string | null;
   confidence?: string | null;
   dataState?: string | null;
+  coordinates?: NavigateLongPressCoordinate[] | null;
   warnings?: string[] | null;
   accessLabel?: string | null;
   ownershipLabel?: string | null;
