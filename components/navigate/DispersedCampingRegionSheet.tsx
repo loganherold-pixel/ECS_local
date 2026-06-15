@@ -17,6 +17,10 @@ type Props = {
   region: DispersedCampingRegionSelectionPayload | null;
   topOffset: number;
   bottomOffset: number;
+  leftOffset?: number;
+  rightOffset?: number;
+  cardMaxWidth?: number;
+  cardAlignSelf?: 'center' | 'flex-start';
   onClose: () => void;
   onScoutNearbyPins?: () => void;
   onClearScoutPins?: () => void;
@@ -122,6 +126,10 @@ export default function DispersedCampingRegionSheet({
   region,
   topOffset,
   bottomOffset,
+  leftOffset = 12,
+  rightOffset = 12,
+  cardMaxWidth = 430,
+  cardAlignSelf = 'center',
   onClose,
   onScoutNearbyPins,
   onClearScoutPins,
@@ -145,16 +153,18 @@ export default function DispersedCampingRegionSheet({
   return (
     <View pointerEvents="box-none" style={styles.layer}>
       <View
-        pointerEvents="auto"
+        pointerEvents="box-none"
         style={[
           styles.shell,
           {
             top: topOffset,
             bottom: bottomOffset + 10,
+            left: leftOffset,
+            right: rightOffset,
           },
         ]}
       >
-        <View style={styles.card}>
+        <View pointerEvents="auto" style={[styles.card, { maxWidth: cardMaxWidth, alignSelf: cardAlignSelf }]}>
           <View style={styles.header}>
             <View style={styles.headerText}>
               <Text style={styles.eyebrow}>MAP REGION</Text>
@@ -289,8 +299,6 @@ const styles = StyleSheet.create({
   },
   shell: {
     position: 'absolute',
-    left: 12,
-    right: 12,
     justifyContent: 'flex-end',
   },
   card: {

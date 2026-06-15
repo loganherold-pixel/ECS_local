@@ -163,6 +163,7 @@ import {
   hasRouteGeometryForDispersedCampingSearch,
   type RouteNearbyDispersedCampingRegion,
 } from '../../lib/map/dispersedCampingRouteSearch';
+import { resolveDispersedCampingRegionPanelLayout } from '../../lib/navigation/dispersedCampingOverlayLayout';
 import {
   DISPERSED_ROUTE_LEG_PLANNING_WARNING,
   dispersedRouteLegToRouteBuilderSegment,
@@ -12998,6 +12999,16 @@ const handleCreateRun = useCallback(() => {
     exploreRoutesEnabled ? bottomLeftMapOverlayStackBottom + 42 + OVERLAY_GAP : 0,
     routeGeometryOverlayEnabled ? bottomLeftMapOverlayStackBottom + 112 + OVERLAY_GAP : 0,
   );
+  const dispersedCampingRegionSheetLayout = resolveDispersedCampingRegionPanelLayout({
+    windowWidth: adaptive.windowWidth,
+    overlayEdge: OVERLAY_EDGE,
+    overlayGap: OVERLAY_GAP,
+    routeSummaryVisible: dispersedCampingRouteSummaryVisible,
+    routeSummaryLeft: OVERLAY_EDGE,
+    defaultBottomOffset: campLayerDetailBottomOffset,
+    compactBottomOffset: LOWER_DOCK_EXCLUSION + PAGE_FRAME_BOTTOM_GAP,
+    rightControlInset: ACTIVE_GUIDANCE_RIGHT_INSET,
+  });
   const campOpsRouteLifecycleNotice =
     CAMPOPS_ROUTE_PINS_ENABLED &&
     campOpsRouteLifecycle.message &&
@@ -18742,7 +18753,11 @@ const stableMapSurface = useMemo(() => {
         visible={!!selectedDispersedCampingRegionLive && dispersedCampingEligibilityLayer.enabled}
         region={selectedDispersedCampingRegionLive}
         topOffset={campsiteDetailTopOffset}
-        bottomOffset={campLayerDetailBottomOffset}
+        bottomOffset={dispersedCampingRegionSheetLayout.bottomOffset}
+        leftOffset={dispersedCampingRegionSheetLayout.left}
+        rightOffset={dispersedCampingRegionSheetLayout.right}
+        cardMaxWidth={dispersedCampingRegionSheetLayout.maxWidth}
+        cardAlignSelf={dispersedCampingRegionSheetLayout.cardAlignSelf}
         onClose={closeDispersedCampingRegionSheet}
         onScoutNearbyPins={handleScoutSelectedDispersedCampingRegionPins}
         onClearScoutPins={handleClearDispersedCampingCampScoutPins}
@@ -19612,6 +19627,11 @@ const stableMapSurface = useMemo(() => {
   adaptive.windowWidth,
   campsiteDetailTopOffset,
   campLayerDetailBottomOffset,
+  dispersedCampingRegionSheetLayout.bottomOffset,
+  dispersedCampingRegionSheetLayout.cardAlignSelf,
+  dispersedCampingRegionSheetLayout.left,
+  dispersedCampingRegionSheetLayout.maxWidth,
+  dispersedCampingRegionSheetLayout.right,
   LOWER_DOCK_EXCLUSION,
   handleCampIntelNavigateHere,
   handleCampIntelSave,
