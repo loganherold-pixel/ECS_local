@@ -104,6 +104,9 @@ includes(miniMapSource, "routeColor: 'rgba(95, 209, 255, 0.86)'", 'Mini-map shou
 includes(miniMapSource, 'maxZoom: ROUTE_PROGRESS_3D_MAX_ZOOM', 'Mini-map should use compact full-route zoom limits for long active guidance routes.');
 includes(miniMapSource, 'pitch: ROUTE_PROGRESS_3D_PITCH', 'Mini-map payload should preserve the active 3D pitch.');
 includes(miniMapSource, 'bearing: cameraBearing', 'Mini-map payload should preserve the active route camera bearing.');
+includes(miniMapSource, 'const routeMatchedMarkerLocation = useMemo(', 'Active guidance mini-map should derive a route-matched marker point.');
+includes(miniMapSource, 'isGuidanceActive ? getCurrentPointOnRoute(routeFeature, resolvedProgress) : null', 'Active guidance mini-map marker should ride the route spine instead of raw GPS drift.');
+includes(miniMapSource, 'const markerLocation = routeMatchedMarkerLocation ?? currentLocation ?? getCurrentPointOnRoute(routeFeature, resolvedProgress);', 'Inactive mini-map should still fall back to raw GPS or progress point.');
 includes(miniMapSource, 'top: 6', 'Mini-map metric overlay should sit at the top of the map away from the Mapbox watermark.');
 includes(miniMapSource, 'right: 7', 'Mini-map metric overlay should sit on the top-right of the map away from the Mapbox watermark.');
 includes(miniMapSource, 'zIndex: 12', 'Mini-map metric overlay should render above the fallback SVG map surface.');

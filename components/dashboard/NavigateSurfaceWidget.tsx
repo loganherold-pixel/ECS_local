@@ -6,6 +6,7 @@ import MapRenderer from '../navigate/MapRenderer';
 import type { CameraCommand, CameraMode } from '../navigate/MapRenderer';
 import { TACTICAL } from '../../lib/theme';
 import { getMapboxToken, getMapboxTokenSync, type MapStyleKey } from '../../lib/mapConfig';
+import { createPersistedKeyValueCache } from '../../lib/keyValuePersistence';
 import {
   navigateRouteSessionStore,
   type NavigateRouteSessionSnapshot,
@@ -14,6 +15,7 @@ import {
   resolveDashboardNavigationChaseCamera,
   type DashboardNavigationPoint,
 } from '../../lib/dashboardNavigationChaseCamera';
+import { resolveActiveGuidanceDisplayLocation } from '../../lib/activeGuidanceProgressPath';
 import { resolveMapSurfaceMotionState, type MapMotionPriority } from '../../lib/mapSurfaceCoordinator';
 import type { WidgetData, WidgetRenderOptions } from './WidgetRenderers';
 
@@ -28,6 +30,7 @@ const COMMAND_3D_FREE_DRIVE_ZOOM = 16.2;
 const COMMAND_3D_FOLLOW_PITCH = 70;
 const COMMAND_3D_ACTIVE_FOLLOW_OFFSET: [number, number] = [0, 72];
 const COMMAND_3D_FREE_DRIVE_OFFSET: [number, number] = [0, 56];
+const COMMAND_3D_MAP_VIEW_STORAGE_KEY = 'ecs_dashboard_command_3d_map_view';
 
 type RouteRenderMode = 'idle' | 'preview' | 'active' | 'completed' | 'selected';
 type NextTurnStripTone = 'active' | 'warning';
@@ -63,6 +66,17 @@ const COMMAND_3D_MAP_VIEWS: {
     icon: 'earth-outline',
   },
 ];
+const DEFAULT_COMMAND_3D_MAP_VIEW: Command3DMapViewKey = 'satellite';
+const command3DMapViewPreference = createPersistedKeyValueCache('ecs_dashboard_map_preferences');
+
+function isCommand3DMapViewKey(value: string | null | undefined): value is Command3DMapViewKey {
+  return value === 'tactical' || value === 'day' || value === 'satellite';
+}
+
+function readPersistedCommand3DMapView(): Command3DMapViewKey {
+  const stored = command3DMapViewPreference.get(COMMAND_3D_MAP_VIEW_STORAGE_KEY);
+  return isCommand3DMapViewKey(stored) ? stored : DEFAULT_COMMAND_3D_MAP_VIEW;
+}
 
 function formatRemainingDistance(meters: number | null): string | null {
   if (meters == null || !Number.isFinite(meters)) return null;
@@ -430,35 +444,52 @@ export function useNavigateSurfaceState(options?: WidgetRenderOptions, enabled =
   const hasAnyRoute = routeSession.lifecycle !== 'inactive';
   const routePoints = routeSession.routePoints;
   const progressPoints = routeSession.progressPoints;
-  const showUserLocation = !!gpsLocation;
+  const displayGpsPoint = useMemo(
+    () =>
+      resolveActiveGuidanceDisplayLocation({
+        active: hasActiveGuidance,
+        routePoints,
+        currentLocation: gpsLocation,
+      }),
+    [gpsLocation, hasActiveGuidance, routePoints],
+  );
+  const displayGpsLocation = useMemo(
+    () =>
+      displayGpsPoint
+        ? { latitude: displayGpsPoint.lat, longitude: displayGpsPoint.lng }
+        : gpsLocation,
+    [displayGpsPoint, gpsLocation],
+  );
+  const showUserLocation = !!displayGpsLocation;
   const motionState = resolveMapSurfaceMotionState({
     surface: 'dashboard',
     isFocused: enabled,
     selected: enabled,
     hasActiveGuidance,
   });
-  const shouldFollowUser = motionState.allowCameraFollow && !!gpsLocation && (hasActiveGuidance || !hasAnyRoute);
+  const shouldFollowUser = motionState.allowCameraFollow && !!displayGpsLocation && (hasActiveGuidance || !hasAnyRoute);
   const cameraMode: CameraMode | undefined = shouldFollowUser
     ? 'follow_user'
     : routePoints.length > 1
       ? 'route_overview'
       : undefined;
   const activeGuidanceCameraCommand = useMemo<CameraCommand | null>(() => {
-    if (!hasActiveGuidance || !gpsLocation) return null;
+    if (!hasActiveGuidance || !displayGpsLocation) return null;
     return {
       mode: 'follow_user',
-      center: gpsLocation,
+      center: displayGpsLocation,
       zoom: ACTIVE_ROUTE_WIDGET_ZOOM,
       durationMs: 350,
       animate: true,
       reason: 'dashboard_active_guidance_quarter_mile',
     };
-  }, [gpsLocation, hasActiveGuidance]);
+  }, [displayGpsLocation, hasActiveGuidance]);
 
   return {
     mapToken,
     routeSession,
     gpsLocation,
+    displayGpsLocation,
     showUserLocation,
     shouldFollowUser,
     cameraMode,
@@ -475,7 +506,7 @@ export default function NavigateSurfaceWidget({ data: _data, options }: Props) {
   const {
     mapToken,
     routeSession,
-    gpsLocation,
+    displayGpsLocation,
     showUserLocation,
     shouldFollowUser,
     cameraMode,
@@ -493,7 +524,7 @@ export default function NavigateSurfaceWidget({ data: _data, options }: Props) {
         progressPoints={progressPoints}
         showUserLocation={showUserLocation}
         shouldFollowUser={shouldFollowUser}
-        gpsLocation={gpsLocation}
+        gpsLocation={displayGpsLocation}
         headingDeg={routeSession.headingDeg}
         cameraMode={cameraMode}
         cameraCommand={activeGuidanceCameraCommand}
@@ -512,7 +543,7 @@ export function NavigateSurfaceDetailView({ data: _data, options }: Props) {
   const {
     mapToken,
     routeSession,
-    gpsLocation,
+    displayGpsLocation,
     showUserLocation,
     shouldFollowUser,
     cameraMode,
@@ -530,7 +561,7 @@ export function NavigateSurfaceDetailView({ data: _data, options }: Props) {
         progressPoints={progressPoints}
         showUserLocation={showUserLocation}
         shouldFollowUser={shouldFollowUser}
-        gpsLocation={gpsLocation}
+        gpsLocation={displayGpsLocation}
         headingDeg={routeSession.headingDeg}
         cameraMode={cameraMode}
         cameraCommand={activeGuidanceCameraCommand}
@@ -553,7 +584,7 @@ export function Mini3DFollowMap({
   const {
     mapToken,
     routeSession,
-    gpsLocation,
+    displayGpsLocation,
     showUserLocation,
     routePoints,
     progressPoints,
@@ -562,16 +593,19 @@ export function Mini3DFollowMap({
   const lastBearingRef = useRef<number | null>(normalizeBearingDeg(routeSession.headingDeg));
   const [recenterRequestId, setRecenterRequestId] = useState(0);
   const [followLocked, setFollowLocked] = useState(true);
-  const [mapViewKey, setMapViewKey] = useState<Command3DMapViewKey>('tactical');
+  const [mapViewKey, setMapViewKey] = useState<Command3DMapViewKey>(() => readPersistedCommand3DMapView());
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const liveGpsBearing = normalizeBearingDeg(options?.gpsHeadingDeg);
   const routeSessionBearing = normalizeBearingDeg(routeSession.headingDeg);
   const activeMapView = useMemo(
-    () => COMMAND_3D_MAP_VIEWS.find((view) => view.key === mapViewKey) ?? COMMAND_3D_MAP_VIEWS[0],
+    () =>
+      COMMAND_3D_MAP_VIEWS.find((view) => view.key === mapViewKey) ??
+      COMMAND_3D_MAP_VIEWS.find((view) => view.key === DEFAULT_COMMAND_3D_MAP_VIEW) ??
+      COMMAND_3D_MAP_VIEWS[0],
     [mapViewKey],
   );
   const chaseCamera = useMemo(() => resolveDashboardNavigationChaseCamera({
-    currentLocation: gpsLocation,
+    currentLocation: displayGpsLocation,
     routePoints,
     gpsHeadingDeg: liveGpsBearing,
     routeSessionHeadingDeg: routeSessionBearing,
@@ -579,7 +613,7 @@ export function Mini3DFollowMap({
     hasActiveGuidance,
     speedMph: options?.gpsSpeedMph ?? null,
   }), [
-    gpsLocation,
+    displayGpsLocation,
     hasActiveGuidance,
     liveGpsBearing,
     options?.gpsSpeedMph,
@@ -593,8 +627,20 @@ export function Mini3DFollowMap({
     }
   }, [chaseCamera.bearingDeg]);
 
-  const gpsCameraLatitude = gpsLocation?.latitude ?? null;
-  const gpsCameraLongitude = gpsLocation?.longitude ?? null;
+  useEffect(() => {
+    let mounted = true;
+    void command3DMapViewPreference.waitForHydration().then(() => {
+      if (!mounted) return;
+      const stored = readPersistedCommand3DMapView();
+      setMapViewKey((current) => (current === stored ? current : stored));
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const gpsCameraLatitude = displayGpsLocation?.latitude ?? null;
+  const gpsCameraLongitude = displayGpsLocation?.longitude ?? null;
   const cameraCenter = useMemo<DashboardNavigationPoint | null>(() => {
     if (gpsCameraLatitude == null || gpsCameraLongitude == null) return null;
     return quantizeGpsCameraPoint({
@@ -634,13 +680,14 @@ export function Mini3DFollowMap({
   }, []);
   const handleSelectMapView = useCallback((key: Command3DMapViewKey) => {
     setMapViewKey(key);
+    command3DMapViewPreference.set(COMMAND_3D_MAP_VIEW_STORAGE_KEY, key);
     setViewMenuOpen(false);
   }, []);
 
   if (!selected) {
     return (
       <View style={styles.commandMapStandby}>
-        <Text style={styles.commandMapStandbyTitle}>3D Follow Map paused</Text>
+        <Text style={styles.commandMapStandbyTitle}>Navigation map paused</Text>
         <Text style={styles.commandMapStandbyText}>
           Select this center module to resume the compact navigation surface.
         </Text>
@@ -670,7 +717,7 @@ export function Mini3DFollowMap({
         progressPoints={progressPoints}
         showUserLocation={showUserLocation}
         shouldFollowUser={followLocked && !!cameraCenter}
-        gpsLocation={gpsLocation}
+        gpsLocation={displayGpsLocation}
         headingDeg={cameraBearing}
         cameraMode={cameraMode}
         cameraCommand={cameraCommand}
@@ -697,7 +744,7 @@ export function Mini3DFollowMap({
         onToggle={handleToggleViewMenu}
         onSelect={handleSelectMapView}
       />
-      {!gpsLocation ? (
+      {!displayGpsLocation ? (
         <View style={styles.commandGpsNotice} pointerEvents="none">
           <Text style={styles.commandGpsNoticeText}>GPS POSITION UNAVAILABLE</Text>
         </View>
@@ -941,10 +988,11 @@ const styles = StyleSheet.create({
   },
   nextTurnStrip: {
     left: 10,
-    right: 58,
-    bottom: 10,
+    right: 92,
+    top: 10,
     position: 'absolute',
     minHeight: 44,
+    zIndex: 3,
     borderRadius: 13,
     borderWidth: 1,
     borderColor: 'rgba(247,214,122,0.4)',

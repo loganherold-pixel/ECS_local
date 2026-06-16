@@ -350,7 +350,10 @@ export default function IncidentRecoveryPanel({
       setResolveDebriefModalVisible(true);
       return;
     }
-    onOpenPlaceholder(action.label as ExpeditionPlaceholderTitle);
+    if (action.label === 'Build Recovery Packet') {
+      return;
+    }
+    onOpenPlaceholder(action.label);
   };
   const handleReportSubmit = (input: ReportIncidentInput) => {
     incidentRecoveryWorkflowStore.reportIncident(input);

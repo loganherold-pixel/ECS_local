@@ -103,6 +103,21 @@ includes(
 );
 includes(
   progressSource,
+  'projectLiveLocationToNavigateRoute',
+  'Route Progress should project dashboard GPS onto the active Navigate route when mirroring guidance.',
+);
+includes(
+  progressSource,
+  'Progress calculated from dashboard GPS projected onto Navigate route',
+  'Route Progress should disclose when dashboard GPS is driving live route progress.',
+);
+includes(
+  progressSource,
+  'getNavigateSessionProgressSnapshot(params.navigateSession, gpsSpeed, liveGpsLocation)',
+  'Dashboard Route Progress should pass live GPS into the Navigate-session progress adapter.',
+);
+includes(
+  progressSource,
   'remainingDistanceM / 1609.344',
   'Route Progress should derive remaining miles from the existing Navigate map session when available.',
 );

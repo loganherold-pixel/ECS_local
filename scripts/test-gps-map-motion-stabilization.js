@@ -237,5 +237,11 @@ assert(
     mapRendererSource.includes('requestAnimationFrame'),
   'MapRenderer should animate user-marker movement between GPS samples.',
 );
+assert(
+  mapRendererSource.includes('var currentLngLat = userMarker.getLngLat();') &&
+    mapRendererSource.includes('start = { latitude: currentLngLat.lat, longitude: currentLngLat.lng };') &&
+    mapRendererSource.includes('var duration = 950;'),
+  'MapRenderer should continue GPS marker interpolation from the current rendered marker position.',
+);
 
 console.log('GPS and Mapbox motion stabilization checks passed.');

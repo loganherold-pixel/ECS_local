@@ -97,9 +97,16 @@ assert(navigateSurface.includes("type Command3DMapViewKey = 'tactical' | 'day' |
 assert(navigateSurface.includes("mapStyle: 'tactical'"), '3D follow map view menu must retain the tactical dark style.');
 assert(navigateSurface.includes("mapStyle: 'ecs'"), '3D follow map view menu must offer the daytime map style.');
 assert(navigateSurface.includes("mapStyle: 'satellite'"), '3D follow map view menu must offer the satellite map style.');
+assert(navigateSurface.includes("const DEFAULT_COMMAND_3D_MAP_VIEW: Command3DMapViewKey = 'satellite';"), 'Dashboard command map should default to satellite presentation.');
+assert(navigateSurface.includes("createPersistedKeyValueCache('ecs_dashboard_map_preferences')"), 'Dashboard command map should persist the user-selected presentation.');
+assert(navigateSurface.includes('command3DMapViewPreference.waitForHydration()'), 'Dashboard command map should restore persisted native map presentation after hydration.');
 assert(mapRenderer.includes('styleUrl: getMapStyleUrl(props.mapStyle || DEFAULT_MAP_STYLE)'), 'MapRenderer payload should include the selected map style so TAC/DAY/SAT changes reach the WebView.');
 assert(mapRenderer.includes("ensureLineLayer('route-halo-layer', 'route-source'"), 'Active guidance route lines need a contrast halo so the path remains visible on DAY and SAT map views.');
-assert(mapRenderer.includes("'route-halo-layer',\n          'route-layer'"), 'Route halo must be promoted directly beneath the route layer after style or overlay changes.');
+assert(
+  mapRenderer.includes('function promoteRouteGuidanceLayers()') &&
+    mapRenderer.indexOf("'route-halo-layer'") < mapRenderer.indexOf("'route-layer'"),
+  'Route halo must be promoted with the route layer after style or overlay changes.',
+);
 assert(mapRenderer.includes("map.setPaintProperty('route-halo-layer', 'line-width'"), 'Route halo styling should update with active/preview render mode changes.');
 assert(navigateSurface.includes('const [followLocked, setFollowLocked] = useState(true);'), '3D follow map must start locked to live GPS follow.');
 assert(navigateSurface.includes('if (!selected || !cameraCenter || !followLocked) return null;'), 'Manual map interaction must suspend automatic follow camera commands.');
@@ -108,5 +115,7 @@ assert(navigateSurface.includes('setFollowLocked(true);') && navigateSurface.inc
 assert(navigateSurface.includes('onUserDrag={handleUserDrag}'), '3D follow map must listen for user drag/zoom events from MapRenderer.');
 assert(navigateSurface.includes('accessibilityLabel="Open 3D follow map view menu"'), '3D follow map needs an accessible top-right view selector.');
 assert(navigateSurface.includes('activeView={activeMapView}'), '3D follow map view selector should reflect the active map style.');
+assert(navigateSurface.includes('top: 10,') && navigateSurface.includes('right: 92,'), 'Dashboard command turn guidance should sit at the top and clear the map presentation selector.');
+assert(navigateSurface.includes('Navigation map paused'), 'Dashboard command map standby copy should not show redundant 3D Follow Map text.');
 
 console.log('Dashboard Navigation 3D follow camera checks passed.');

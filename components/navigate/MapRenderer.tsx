@@ -4848,8 +4848,22 @@ function makeMapHtml(
         }
 
         var start = userMarkerLocation;
+        try {
+          if (typeof userMarker.getLngLat === 'function') {
+            var currentLngLat = userMarker.getLngLat();
+            if (
+              currentLngLat &&
+              typeof currentLngLat.lat === 'number' &&
+              typeof currentLngLat.lng === 'number' &&
+              Number.isFinite(currentLngLat.lat) &&
+              Number.isFinite(currentLngLat.lng)
+            ) {
+              start = { latitude: currentLngLat.lat, longitude: currentLngLat.lng };
+            }
+          }
+        } catch (e) {}
         var end = { latitude: loc.latitude, longitude: loc.longitude };
-        var duration = 650;
+        var duration = 950;
         var startedAt = Date.now();
         cancelUserMarkerAnimation();
 

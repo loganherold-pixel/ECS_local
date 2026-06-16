@@ -120,7 +120,7 @@ assert.strictEqual(onTrail.status, 'ready');
 assert.strictEqual(onTrail.phase, 'trail');
 assert.strictEqual(onTrail.startSource, 'gps_on_trail');
 assert(onTrail.trailStartIndex > 0, 'Already-on-trail starts should advance to the nearest forward trail index.');
-assertCoord(onTrail.routePoints[0], onTrailGps, 'Already-on-trail route should start at live GPS');
+assertCoord(onTrail.routePoints[0], trailhead, 'Already-on-trail route should keep the fixed trail entry point');
 assertCoord(onTrail.routePoints[onTrail.routePoints.length - 1], trailEnd, 'Already-on-trail route should still end at the trail end');
 assert.strictEqual(onTrail.remainingDistanceM, 900);
 
@@ -139,16 +139,11 @@ const earlySegmentStart = buildFullRouteGuidanceModel({
 
 assert.strictEqual(earlySegmentStart.status, 'ready');
 assert.strictEqual(earlySegmentStart.startSource, 'gps_on_trail');
-assertCoord(earlySegmentStart.routePoints[0], earlySegmentGps, 'Early on-trail start should begin at live GPS');
+assertCoord(earlySegmentStart.routePoints[0], trailhead, 'Early on-trail guidance should keep the fixed trail entry point');
 assertCoord(
   earlySegmentStart.routePoints[1],
   trailMid,
   'Early on-trail start should continue to the next forward trail point, not backtrack to the trailhead',
-);
-assert.notDeepStrictEqual(
-  earlySegmentStart.routePoints[1],
-  trailhead,
-  'Already-on-trail guidance must not force the user back to the trailhead.',
 );
 
 const explorePayload = buildExploreNavigationPayload({

@@ -124,6 +124,7 @@ async function runMapboxAlternativeAssertions() {
     });
 
     const url = new URL(requestedUrl);
+    assert.ok(url.pathname.includes('/directions/v5/mapbox/driving-traffic/'), 'Mapbox directions should use the traffic-aware driving profile for road guidance alternatives.');
     assert.strictEqual(url.searchParams.get('alternatives'), 'true', 'Mapbox directions should request alternative routes.');
     assert.strictEqual(routes.length, 3, 'Navigate Here should retain at most three route choices.');
     assert.deepStrictEqual(

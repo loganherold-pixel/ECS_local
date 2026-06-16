@@ -358,6 +358,8 @@ async function buildSnapshotFromPersistence(): Promise<NavigateRouteSessionSnaps
       fingerprint: routeGeometryValidation.fingerprint,
     });
 
+    const isRoadRerouting = road.status === 'rerouting';
+
     return normalizeSnapshot({
       sessionId: road.sessionId,
       lifecycle: roadLifecycle,
@@ -365,8 +367,16 @@ async function buildSnapshotFromPersistence(): Promise<NavigateRouteSessionSnaps
       routeId: road.destination.id,
       routeTitle: road.destination.title,
       routeSubtitle: road.destination.subtitle ?? null,
-      statusLabel: roadLifecycle === 'active' ? 'Road guidance active' : 'Road route staged',
-      instruction: roadLifecycle === 'active' ? 'Continue on active route' : 'Open Navigate to start guidance',
+      statusLabel: isRoadRerouting
+        ? 'Road guidance rerouting'
+        : roadLifecycle === 'active'
+          ? 'Road guidance active'
+          : 'Road route staged',
+      instruction: isRoadRerouting
+        ? 'Rerouting to best remaining route'
+        : roadLifecycle === 'active'
+          ? 'Continue on active route'
+          : 'Open Navigate to start guidance',
       routePoints,
       progressPoints: [],
       currentLocation: null,
@@ -376,10 +386,10 @@ async function buildSnapshotFromPersistence(): Promise<NavigateRouteSessionSnaps
       etaIso: null,
       progressPercent: null,
       nextInstructionDistanceM: null,
-      isRerouting: road.status === 'rerouting',
+      isRerouting: isRoadRerouting,
       isOffRoute: false,
       offRouteDistanceM: null,
-      routeStatusKind: road.status === 'rerouting' ? 'rerouting' : roadLifecycle === 'arrived' ? 'arrived' : 'nominal',
+      routeStatusKind: isRoadRerouting ? 'rerouting' : roadLifecycle === 'arrived' ? 'arrived' : 'nominal',
       updatedAt: road.updatedAt,
     });
   }

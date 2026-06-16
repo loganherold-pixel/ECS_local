@@ -31,8 +31,8 @@ assertIncludes(
 );
 
 assertIncludes(
-  'const usesCompactAmberSurface = !expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel);',
-  'Compact sunlight/weather/vehicle/terrain/power panels must use the shared amber transparency surface.',
+  'const usesTransparentCompactSurface = !expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel);',
+  'Compact sunlight/weather/vehicle/terrain/power panels must use the shared transparent command surface.',
 );
 
 assertIncludes(
@@ -41,28 +41,28 @@ assertIncludes(
 );
 
 assertIncludes(
-  'usesCompactAmberSurface && attitudeCommandS.compactCommandPanelSurface',
-  'Compact command widget cards must apply the Fleet-like amber transparent surface.',
+  'usesTransparentCompactSurface && attitudeCommandS.compactCommandPanelSurface',
+  'Compact command widget cards must apply the shared transparent compact surface.',
 );
 
 assertIncludes(
-  'usesCompactAmberSurface && attitudeCommandS.compactCommandPanelFrameContent',
+  'usesTransparentCompactSurface && attitudeCommandS.compactCommandPanelFrameContent',
   'Compact command widget cards must apply compact-only content padding for readability.',
 );
 
 assertIncludes(
-  'usesCompactAmberSurface && attitudeCommandS.commandPanelHeaderTitleCompact',
+  'usesTransparentCompactSurface && attitudeCommandS.commandPanelHeaderTitleCompact',
   'Compact command widget headers must use compact-only readable text styling.',
 );
 
 assertIncludes(
-  "backgroundColor: `${TACTICAL.amber}12`,",
-  'Compact command widget surface should use the same amber transparency family as readiness command surfaces.',
+  "backgroundColor: 'transparent',",
+  'Compact command widget surface should let the dashboard/map texture bleed through.',
 );
 
 assertIncludes(
-  "borderColor: `${TACTICAL.amber}2E`,",
-  'Compact command widget surface should use the same amber border family as readiness command surfaces.',
+  "borderColor: 'transparent',",
+  'Compact command widget surface should remove the yellow overlay border.',
 );
 
 assertIncludes(

@@ -446,7 +446,11 @@ export default function RouteProgressMiniMap({
     explicitProgress != null && (explicitProgress > 0 || inferredProgress == null)
       ? explicitProgress
       : inferredProgress ?? explicitProgress ?? 0;
-  const markerLocation = currentLocation ?? getCurrentPointOnRoute(routeFeature, resolvedProgress);
+  const routeMatchedMarkerLocation = useMemo(
+    () => (isGuidanceActive ? getCurrentPointOnRoute(routeFeature, resolvedProgress) : null),
+    [isGuidanceActive, resolvedProgress, routeFeature],
+  );
+  const markerLocation = routeMatchedMarkerLocation ?? currentLocation ?? getCurrentPointOnRoute(routeFeature, resolvedProgress);
   const hasRenderableMap = Boolean(routeFeature && mapToken);
   const styleUrl = useMemo(() => getMapStyleUrl('route-progress'), []);
   const miniMapHtml = useMemo(
@@ -490,7 +494,7 @@ export default function RouteProgressMiniMap({
   const cameraBearing = useMemo(() => getRouteCameraBearing(routeFeature), [routeFeature]);
   const miniMapPayload = useMemo(() => {
     if (!routeFeature) return null;
-    const bounds = getRouteBounds(routeFeature, [currentLocation, originLocation, destinationLocation]);
+    const bounds = getRouteBounds(routeFeature, [markerLocation, originLocation, destinationLocation]);
     return {
       routeCoords: routeFeature.geometry.coordinates,
       progressCoords: split.completedRouteGeoJson?.geometry.coordinates ?? [],
@@ -504,7 +508,7 @@ export default function RouteProgressMiniMap({
       bearing: cameraBearing,
       animate: true,
     };
-  }, [cameraBearing, currentLocation, destinationLocation, ecsGold, markerLocation, originLocation, routeFeature, split.completedRouteGeoJson]);
+  }, [cameraBearing, destinationLocation, ecsGold, markerLocation, originLocation, routeFeature, split.completedRouteGeoJson]);
   const miniMapPayloadHash = useMemo(() => JSON.stringify(miniMapPayload), [miniMapPayload]);
   const showFallbackMap = Boolean(hasRenderableMap && !mapReady && miniMapPayload);
 

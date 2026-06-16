@@ -1223,12 +1223,12 @@ assert.ok(
   'Navigation Command 3D map must include a bottom-right compass rose button that triggers recenter/follow camera reset while preserving 3D map gestures.',
 );
 assert.ok(
-  navigateSurfaceSource.includes('right: 58') &&
-    navigateSurfaceSource.includes('bottom: 10') &&
+  navigateSurfaceSource.includes('right: 92') &&
+    navigateSurfaceSource.includes('top: 10') &&
     navigateSurfaceSource.includes("backgroundColor: 'rgba(2,4,6,0.94)'") &&
     navigateSurfaceSource.includes('<NextTurnStrip snapshot={routeSession} />') &&
     navigateSurfaceSource.includes('<CompassRoseButton headingDeg={headingDeg} onPress={onRecenter} />'),
-  'Navigation Command turn-by-turn guidance must sit at the darkened bottom/base of the map and reserve space for the compass.',
+  'Navigation Command turn-by-turn guidance must sit at the top of the map and reserve space for the map presentation control.',
 );
 assert.ok(
   !widgetRenderersSource.includes("selectedCommandModule !== 'follow3d' && selectedCommandModule !== 'terrainRisk' && !commandCenterFrameSelected ? (") &&

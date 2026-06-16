@@ -21,6 +21,9 @@ function compileTypescript(module, filename) {
 require.extensions['.ts'] = compileTypescript;
 
 const scrubber = require(path.join(root, 'lib', 'navigateRouteProfileScrubber.ts'));
+const navigateTab = fs
+  .readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8')
+  .replace(/\r\n/g, '\n');
 
 const profile = [
   { distanceMiles: 0, elevationFeet: 5200, riskScore: 12, riskLevel: 'low' },
@@ -59,10 +62,43 @@ assert(high, 'Profile focus should resolve by distance ratio.');
 assert.strictEqual(high.point.riskLevel, 'high');
 assert.strictEqual(high.referenceEvent.id, 'event-high-grade', 'Nearby terrain risk reference event should surface while scrubbing.');
 
+const unevenRouteCoordinates = [
+  { latitude: 38.0, longitude: -110.0 },
+  { latitude: 38.001, longitude: -110.001 },
+  { latitude: 38.04, longitude: -110.04 },
+];
+const unevenMidpoint = scrubber.resolveNavigateRouteProfileFocus({
+  profile,
+  routeCoordinates: unevenRouteCoordinates,
+  distanceRatio: 0.5,
+});
+
+assert(unevenMidpoint, 'Uneven route geometry should still resolve a profile focus.');
+assert(
+  unevenMidpoint.coordinate.latitude > 38.015 && unevenMidpoint.coordinate.latitude < 38.025,
+  'Profile focus should interpolate by route distance instead of snapping to an array index.',
+);
+
 assert.strictEqual(
   scrubber.resolveNavigateRouteProfileFocus({ profile: [], routeCoordinates, distanceRatio: 0.5 }),
   null,
   'Unavailable elevation profile should return null instead of a fake focus point.',
+);
+
+assert(
+  navigateTab.includes('const [routeProfileScrubTrackHeight, setRouteProfileScrubTrackHeight] = useState(1);') &&
+    navigateTab.includes('const locationY = Number(event?.nativeEvent?.locationY);') &&
+    navigateTab.includes('1 - locationY / Math.max(1, routeProfileScrubTrackHeight)'),
+  'Navigate route profile scrubber should use vertical drag position for the compact rail control.',
+);
+assert(
+  navigateTab.includes('height: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%`') &&
+    navigateTab.includes('bottom: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%`'),
+  'Navigate route profile scrubber should render a vertical progress fill and thumb.',
+);
+assert(
+  !navigateTab.includes('<View style={[styles.navigateRouteProfileScrubber, { left: OVERLAY_EDGE, right: OVERLAY_EDGE }]}>'),
+  'Navigate route profile scrubber should not render as a full-width bottom overlay.',
 );
 
 console.log('Navigate route profile scrubber checks passed.');

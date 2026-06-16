@@ -44,7 +44,6 @@ export interface FullRouteGuidanceModel {
 
 const DEFAULT_TRAIL_START_JOIN_MAX_METERS = 120;
 const DEFAULT_TRAIL_START_DEDUPE_METERS = 30;
-const GPS_ROUTE_START_DEDUPE_METERS = 30;
 
 function finitePositive(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
@@ -90,19 +89,6 @@ function progressPercent(totalDistanceM: number | null, remainingDistanceM: numb
   return Math.max(0, Math.min(100, (1 - remainingDistanceM / totalDistanceM) * 100));
 }
 
-function buildRouteStartingAtGps(
-  currentLocation: RoadNavCoordinate,
-  trailGeometry: RoadNavCoordinate[],
-  trailStartIndex: number,
-): RoadNavCoordinate[] {
-  const startIndex = Math.max(0, Math.min(trailStartIndex, trailGeometry.length - 1));
-  const tail = trailGeometry.slice(startIndex);
-  const firstTail = tail[0] ?? null;
-  return firstTail && trailDistanceMeters(currentLocation, firstTail) <= GPS_ROUTE_START_DEDUPE_METERS
-    ? [currentLocation, ...tail.slice(1)]
-    : [currentLocation, ...tail];
-}
-
 function findForwardTrailIndex(cumulativeDistances: number[], traveledDistanceM: number): number {
   const targetDistance = Math.max(0, traveledDistanceM);
   for (let index = 0; index < cumulativeDistances.length; index += 1) {
@@ -131,7 +117,7 @@ function resolveAlreadyOnTrail(
   const forwardTrailIndex = findForwardTrailIndex(cumulative, projection.traveledDistanceM);
 
   return {
-    routePoints: buildRouteStartingAtGps(currentLocation, trailGeometry, forwardTrailIndex),
+    routePoints: trailGeometry,
     progressPoints: projection.progressCoords,
     trailStartIndex: forwardTrailIndex,
     remainingDistanceM: projection.remainingDistanceM,

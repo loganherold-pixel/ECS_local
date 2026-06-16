@@ -73,14 +73,18 @@ assert.ok(
 
 const basePill = extractStyleBlock('activeGuidanceTopActionPill');
 assert.ok(
-  /minHeight:\s*26/.test(basePill) && /minWidth:\s*70/.test(basePill),
+  /minHeight:\s*28/.test(basePill) &&
+    /minWidth:\s*70/.test(basePill) &&
+    /flexShrink:\s*0/.test(basePill),
   'Active Guidance action pills should keep a stable minimum tap and label area.',
 );
 
 const minimize = extractStyleBlock('activeGuidanceMinimizeButton');
 const offline = extractStyleBlock('activeGuidanceOfflineButton');
-assert.ok(/minWidth:\s*112/.test(minimize), 'Minimize pill should reserve enough width for the full MINIMIZE label.');
-assert.ok(/minWidth:\s*98/.test(offline), 'Offline pill should reserve enough width for the full OFFLINE label.');
+const actionText = extractStyleBlock('activeGuidanceTopActionText');
+assert.ok(/minWidth:\s*128/.test(minimize), 'Minimize pill should reserve enough width for the full MINIMIZE label.');
+assert.ok(/minWidth:\s*112/.test(offline), 'Offline pill should reserve enough width for the full OFFLINE label.');
+assert.ok(/flexShrink:\s*0/.test(actionText), 'Active Guidance action label text should not shrink away letters.');
 
 assert.ok(
   navigateSource.includes('Math.min(360, Math.max(316, Math.round(adaptive.windowWidth * 0.32)))'),

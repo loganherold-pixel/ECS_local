@@ -274,6 +274,10 @@ import {
   rememberRecentRoadSearch,
 } from '../../lib/navigateRecentSearchStore';
 import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
+import {
+  buildActiveGuidanceProgressPath,
+  resolveActiveGuidanceDisplayLocation,
+} from '../../lib/activeGuidanceProgressPath';
 import { logRouteGeometryLifecycle, validateRouteGeometry } from '../../lib/routeGeometryLifecycle';
 import { normalizeRouteLifecycle } from '../../lib/routeLifecycleState';
 import { buildFullRouteGuidanceModel } from '../../lib/fullRouteGuidance';
@@ -4259,7 +4263,7 @@ const queueMapCameraCommand = useCallback((
   const [routeBuilderSaveName, setRouteBuilderSaveName] = useState('');
   const [routeBuilderSaveNote, setRouteBuilderSaveNote] = useState('');
   const [routeProfileScrubRatio, setRouteProfileScrubRatio] = useState(0);
-  const [routeProfileScrubWidth, setRouteProfileScrubWidth] = useState(1);
+  const [routeProfileScrubTrackHeight, setRouteProfileScrubTrackHeight] = useState(1);
   const [dispersedRouteBuildActive, setDispersedRouteBuildActive] = useState(false);
   const [selectedDispersedRouteLegIds, setSelectedDispersedRouteLegIds] = useState<string[]>([]);
   const [dispersedRouteBuildStatus, setDispersedRouteBuildStatus] = useState<string | null>(null);
@@ -11606,23 +11610,37 @@ const handleCreateRun = useCallback(() => {
       }),
     [navigateRouteProfileCoordinates, navigateRouteProfilePoints, routeProfileScrubRatio],
   );
-  const routeProfileAvailable = navigateRouteProfileCoordinates.length > 1;
+  const routeProfileAvailable =
+    navigateRouteProfileCoordinates.length > 1 && navigateRouteProfilePoints.length > 1;
   const handleRouteProfileScrub = useCallback((event: any) => {
-    const locationX = Number(event?.nativeEvent?.locationX);
-    if (!Number.isFinite(locationX)) return;
-    setRouteProfileScrubRatio(Math.max(0, Math.min(1, locationX / Math.max(1, routeProfileScrubWidth))));
-  }, [routeProfileScrubWidth]);
+    const locationY = Number(event?.nativeEvent?.locationY);
+    if (!Number.isFinite(locationY)) return;
+    setRouteProfileScrubRatio(
+      Math.max(0, Math.min(1, 1 - locationY / Math.max(1, routeProfileScrubTrackHeight))),
+    );
+  }, [routeProfileScrubTrackHeight]);
+
+  const mapDisplayUserLocation = useMemo(
+    () =>
+      resolveActiveGuidanceDisplayLocation({
+        active: routeLifecycleState.phase === 'navigating',
+        routePoints: displayedRoutePoints,
+        currentLocation: safeUserLocation,
+      }),
+    [displayedRoutePoints, routeLifecycleState.phase, safeUserLocation],
+  );
 
   const routeAheadDisplayHeading = useMemo(() => {
-    if (!safeUserLocation || routeLifecycleState.phase !== 'navigating') return null;
+    const headingLocation = mapDisplayUserLocation ?? safeUserLocation;
+    if (!headingLocation || routeLifecycleState.phase !== 'navigating') return null;
     return resolveRouteAheadBearingDeg(
       {
-        latitude: safeUserLocation.lat,
-        longitude: safeUserLocation.lng,
+        latitude: headingLocation.lat,
+        longitude: headingLocation.lng,
       },
       displayedRoutePoints,
     );
-  }, [displayedRoutePoints, routeLifecycleState.phase, safeUserLocation]);
+  }, [displayedRoutePoints, mapDisplayUserLocation, routeLifecycleState.phase, safeUserLocation]);
 
   const compassDisplayHeading = useMemo(() => {
     const resolved = resolveVehicleGuidanceHeading({
@@ -11755,6 +11773,7 @@ const handleCreateRun = useCallback(() => {
   );
 
   const displayedRouteProgressPoints = useMemo(() => {
+    let baseProgressPoints: any[] = [];
     if (
       fullRouteGuidanceModel.status !== 'unavailable' &&
       (
@@ -11763,19 +11782,29 @@ const handleCreateRun = useCallback(() => {
         trailNavigation.session.payload?.tripMode === 'hybrid'
       )
     ) {
-      return fullRouteGuidanceModel.progressPoints;
+      baseProgressPoints = fullRouteGuidanceModel.progressPoints;
+    } else if (pendingHybridTrailTransition) {
+      baseProgressPoints = [];
+    } else if (trailNavigation.session.progressGeometry.length > 1) {
+      baseProgressPoints = trailNavigation.session.progressGeometry;
+    } else {
+      baseProgressPoints = roadRouteProgressPoints.length > 1 ? roadRouteProgressPoints : [];
     }
-    if (pendingHybridTrailTransition) return [];
-    if (trailNavigation.session.progressGeometry.length > 1) {
-      return trailNavigation.session.progressGeometry;
-    }
-    return roadRouteProgressPoints.length > 1 ? roadRouteProgressPoints : [];
+    return buildActiveGuidanceProgressPath({
+      active: routeLifecycleState.phase === 'navigating',
+      routePoints: displayedRoutePoints,
+      progressPoints: baseProgressPoints,
+      currentLocation: safeUserLocation,
+    });
   }, [
+    displayedRoutePoints,
     explorePreviewMode,
     fullRouteGuidanceModel.progressPoints,
     fullRouteGuidanceModel.status,
     pendingHybridTrailTransition,
     roadRouteProgressPoints,
+    routeLifecycleState.phase,
+    safeUserLocation,
     trailNavigation.session.progressGeometry,
     trailNavigation.session.payload?.tripMode,
   ]);
@@ -18428,9 +18457,9 @@ const stableMapSurface = useMemo(() => {
         routeRenderMode={displayedRouteRenderMode}
         mapStyle={mapStyle}
         mapboxToken={mapToken || ''}
-        showUserLocation={!!safeUserLocation}
+        showUserLocation={!!(mapDisplayUserLocation ?? safeUserLocation)}
         followUser={followUser}
-        userLocation={safeUserLocation}
+        userLocation={mapDisplayUserLocation ?? safeUserLocation}
         motionPriority={navigateMapMotion.motionPriority}
         interactive
         segments={mapSegmentFeatures}
@@ -18582,32 +18611,6 @@ const stableMapSurface = useMemo(() => {
               ) : null}
             </View>
           ) : null}
-        </View>
-      ) : null}
-
-      {routeProfileAvailable ? (
-        <View style={[styles.navigateRouteProfileScrubber, { left: OVERLAY_EDGE, right: OVERLAY_EDGE }]}>
-          <View style={styles.navigateRouteProfileHeader}>
-            <Text style={styles.navigateRouteProfileTitle}>ELEVATION PROFILE</Text>
-            <Text style={styles.navigateRouteProfileMeta} numberOfLines={1}>
-              {routeProfileFocus
-                ? `${routeProfileFocus.distanceMiles.toFixed(1)} mi | ${routeProfileFocus.point.riskLevel.toUpperCase()} TERRAIN RISK`
-                : navigateRouteProfilePoints.length > 0
-                  ? 'Drag profile to inspect route point'
-                  : 'TERRAIN PROFILE UNAVAILABLE'}
-            </Text>
-          </View>
-          <View
-            style={styles.navigateRouteProfileTrack}
-            onLayout={(event) => setRouteProfileScrubWidth(Math.max(1, event.nativeEvent.layout.width))}
-            onStartShouldSetResponder={() => true}
-            onMoveShouldSetResponder={() => true}
-            onResponderGrant={handleRouteProfileScrub}
-            onResponderMove={handleRouteProfileScrub}
-          >
-            <View style={[styles.navigateRouteProfileFill, { width: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%` }]} />
-            <View style={[styles.navigateRouteProfileThumb, { left: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%` }]} />
-          </View>
         </View>
       ) : null}
 
@@ -19437,6 +19440,46 @@ const stableMapSurface = useMemo(() => {
               </View>
             ) : null}
 
+            {routeProfileAvailable ? (
+              <View
+                style={styles.navigateRouteProfileScrubber}
+                accessible
+                accessibilityRole="adjustable"
+                accessibilityLabel={
+                  routeProfileFocus
+                    ? `Elevation profile scrubber, ${routeProfileFocus.distanceMiles.toFixed(1)} miles, ${routeProfileFocus.point.riskLevel} terrain risk`
+                    : 'Elevation profile scrubber'
+                }
+              >
+                <Ionicons name="trending-up-outline" size={13} color={TACTICAL.amber} />
+                <View
+                  style={styles.navigateRouteProfileTrack}
+                  onLayout={(event) => setRouteProfileScrubTrackHeight(Math.max(1, event.nativeEvent.layout.height))}
+                  onStartShouldSetResponder={() => true}
+                  onMoveShouldSetResponder={() => true}
+                  onResponderGrant={handleRouteProfileScrub}
+                  onResponderMove={handleRouteProfileScrub}
+                >
+                  <View
+                    style={[
+                      styles.navigateRouteProfileFill,
+                      { height: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%` },
+                    ]}
+                  />
+                  <View
+                    style={[
+                      styles.navigateRouteProfileThumb,
+                      { bottom: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%` },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.navigateRouteProfileTitle} numberOfLines={1}>ELEV</Text>
+                <Text style={styles.navigateRouteProfileMeta} numberOfLines={1}>
+                  {routeProfileFocus ? `${routeProfileFocus.distanceMiles.toFixed(1)}MI` : '--'}
+                </Text>
+              </View>
+            ) : null}
+
             <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
               <TouchableOpacity
                 style={[
@@ -19815,6 +19858,7 @@ const stableMapSurface = useMemo(() => {
   displayedRouteRenderMode,
   mapStyle,
   mapToken,
+  mapDisplayUserLocation,
   safeUserLocation,
   followUser,
   navigateMapMotion.motionPriority,
@@ -20015,7 +20059,6 @@ const stableMapSurface = useMemo(() => {
   routeProfileAvailable,
   routeProfileFocus,
   routeProfileScrubRatio,
-  navigateRouteProfilePoints.length,
   handleRouteProfileScrub,
   routeBuilderSnapSource,
   routeBuilderSnapStatus,
@@ -23269,58 +23312,71 @@ emptyMapBody: {
     lineHeight: 14,
   },
   navigateRouteProfileScrubber: {
-    position: 'absolute',
-    bottom: 52,
+    width: 40,
+    minHeight: 122,
     zIndex: NAV_OVERLAY_Z.contextual + 1,
     elevation: NAV_OVERLAY_Z.contextual + 1,
-    borderRadius: 9,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(101,240,212,0.20)',
-    backgroundColor: 'rgba(8,12,15,0.90)',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    gap: 7,
-  },
-  navigateRouteProfileHeader: {
-    flexDirection: 'row',
+    borderColor: 'rgba(242,194,77,0.34)',
+    backgroundColor: 'rgba(9,14,17,0.94)',
+    paddingHorizontal: 5,
+    paddingVertical: 7,
+    gap: 5,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
+    shadowColor: '#F2C24D',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
   },
   navigateRouteProfileTitle: {
     ...TYPO.U2,
     color: TACTICAL.amber,
-    fontSize: 8,
-    letterSpacing: 1,
+    fontSize: 6.6,
+    lineHeight: 8,
+    letterSpacing: 0.55,
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   navigateRouteProfileMeta: {
     ...TYPO.B2,
-    flexShrink: 1,
-    color: TACTICAL.textMuted,
-    fontSize: 9,
+    color: TACTICAL.text,
+    fontSize: 7,
+    lineHeight: 8,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   navigateRouteProfileTrack: {
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    width: 16,
+    height: 74,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(242,194,77,0.22)',
+    backgroundColor: 'rgba(255,255,255,0.07)',
     overflow: 'hidden',
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
   },
   navigateRouteProfileFill: {
     position: 'absolute',
     left: 0,
-    top: 0,
+    right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(242,194,77,0.28)',
+    backgroundColor: 'rgba(242,194,77,0.34)',
   },
   navigateRouteProfileThumb: {
     position: 'absolute',
-    top: -2,
-    width: 4,
-    height: 22,
-    marginLeft: -2,
-    borderRadius: 2,
+    left: 2,
+    width: 10,
+    height: 4,
+    marginBottom: -2,
+    borderRadius: 999,
     backgroundColor: TACTICAL.amber,
+    shadowColor: '#F2C24D',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 5,
   },
   routeBuilderSaveBackdrop: {
     flex: 1,

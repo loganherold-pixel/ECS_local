@@ -168,6 +168,48 @@ function calcNavigatePointPathMiles(points: NavigateRouteMapPoint[]): number | n
   return totalMiles > 0 ? totalMiles : null;
 }
 
+function projectLiveLocationToNavigateRoute(
+  routePoints: NavigateRouteMapPoint[],
+  currentLocation: { latitude: number; longitude: number } | null | undefined,
+): { completedMiles: number; offRouteMiles: number } | null {
+  if (!currentLocation || routePoints.length < 2) return null;
+  if (!Number.isFinite(currentLocation.latitude) || !Number.isFinite(currentLocation.longitude)) return null;
+
+  const originLatRad = (currentLocation.latitude * Math.PI) / 180;
+  const milesPerDegreeLat = 69.0;
+  const milesPerDegreeLng = Math.max(0.001, 69.172 * Math.cos(originLatRad));
+  let best: { completedMiles: number; offRouteMiles: number } | null = null;
+  let accumulatedMiles = 0;
+
+  for (let index = 1; index < routePoints.length; index += 1) {
+    const start = routePoints[index - 1];
+    const end = routePoints[index];
+    const segmentMiles = haversineMi(start.lat, start.lng, end.lat, end.lng);
+    if (!Number.isFinite(segmentMiles) || segmentMiles <= 0) continue;
+
+    const sx = (start.lng - currentLocation.longitude) * milesPerDegreeLng;
+    const sy = (start.lat - currentLocation.latitude) * milesPerDegreeLat;
+    const ex = (end.lng - currentLocation.longitude) * milesPerDegreeLng;
+    const ey = (end.lat - currentLocation.latitude) * milesPerDegreeLat;
+    const vx = ex - sx;
+    const vy = ey - sy;
+    const lengthSquared = vx * vx + vy * vy;
+    const t = lengthSquared > 0 ? Math.max(0, Math.min(1, -(sx * vx + sy * vy) / lengthSquared)) : 0;
+    const px = sx + vx * t;
+    const py = sy + vy * t;
+    const offRouteMiles = Math.sqrt(px * px + py * py);
+    const completedMiles = accumulatedMiles + segmentMiles * t;
+
+    if (!best || offRouteMiles < best.offRouteMiles) {
+      best = { completedMiles, offRouteMiles };
+    }
+
+    accumulatedMiles += segmentMiles;
+  }
+
+  return best;
+}
+
 function formatRouteEtaIso(etaIso: string | null | undefined): string | null {
   if (!etaIso) return null;
   const eta = new Date(etaIso);
@@ -191,6 +233,7 @@ function getNavigateRouteProgressSource(
 export function getNavigateSessionProgressSnapshot(
   navigateSession: NavigateRouteSessionSnapshot,
   gpsSpeedMph?: number | null,
+  liveLocation?: { latitude: number; longitude: number } | null,
 ): ActiveRouteProgressSnapshot | null {
   const hasRoute =
     navigateSession.lifecycle !== 'inactive' &&
@@ -203,6 +246,22 @@ export function getNavigateSessionProgressSnapshot(
   const isComplete = navigateSession.lifecycle === 'arrived';
   const isActive = isComplete || navigateSession.lifecycle === 'active';
   const routePathMiles = calcNavigatePointPathMiles(navigateSession.routePoints);
+  const liveProjection = isActive
+    ? projectLiveLocationToNavigateRoute(navigateSession.routePoints, liveLocation)
+    : null;
+  const canUseLiveProjection =
+    !!liveProjection &&
+    routePathMiles != null &&
+    routePathMiles > 0 &&
+    (!navigateSession.isOffRoute || liveProjection.offRouteMiles <= 0.25);
+  const liveProjectedProgressPercent =
+    canUseLiveProjection && liveProjection && routePathMiles != null && routePathMiles > 0
+      ? clampProgressPercent((liveProjection.completedMiles / routePathMiles) * 100)
+      : null;
+  const liveProjectedCompletedMiles =
+    canUseLiveProjection && liveProjection
+      ? Math.max(liveProjection.completedMiles, 0)
+      : null;
   const progressPathMiles = calcNavigatePointPathMiles(navigateSession.progressPoints);
   const remainingMiles = isComplete
     ? 0
@@ -210,7 +269,9 @@ export function getNavigateSessionProgressSnapshot(
       ? Math.max(navigateSession.remainingDistanceM / 1609.344, 0)
       : null;
   const rawProgressPercent =
-    navigateSession.progressPercent != null && Number.isFinite(navigateSession.progressPercent)
+    liveProjectedProgressPercent != null
+      ? liveProjectedProgressPercent
+      : navigateSession.progressPercent != null && Number.isFinite(navigateSession.progressPercent)
       ? clampProgressPercent(navigateSession.progressPercent)
       : null;
   const inferredTotalMiles =
@@ -243,7 +304,9 @@ export function getNavigateSessionProgressSnapshot(
             ? progressFromGeometry
             : rawProgressPercent ?? progressFromRemaining ?? progressFromGeometry ?? 0;
   const completedMiles =
-    totalMiles != null && remainingMiles != null
+    liveProjectedCompletedMiles != null
+      ? liveProjectedCompletedMiles
+      : totalMiles != null && remainingMiles != null
       ? Math.max(totalMiles - remainingMiles, 0)
       : progressPathMiles != null && resolvedProgressPercent > 0
         ? progressPathMiles
@@ -323,7 +386,9 @@ export function getNavigateSessionProgressSnapshot(
     confidenceLine: `Route status: ${navigateSession.routeStatusKind ?? 'nominal'}`,
     calculationState:
       rawProgressPercent != null && rawProgressPercent > 0
-        ? 'Progress calculated from Navigate map route session'
+          ? canUseLiveProjection
+            ? 'Progress calculated from dashboard GPS projected onto Navigate route'
+            : 'Progress calculated from Navigate map route session'
         : progressFromRemaining != null
           ? 'Progress calculated from Navigate map route distance'
           : progressFromGeometry != null
@@ -336,7 +401,7 @@ export function getNavigateSessionProgressSnapshot(
     sourceDetail: 'Navigate map route session',
     routePoints: navigateSession.routePoints,
     progressPoints: navigateSession.progressPoints,
-    currentLocation: navigateSession.currentLocation,
+    currentLocation: liveLocation ?? navigateSession.currentLocation,
     originLocation: toRouteLocation(routeOrigin),
     destinationLocation: toRouteLocation(routeDestination),
   });
@@ -884,7 +949,11 @@ export function getActiveRouteProgressSnapshot(params: {
     isComplete,
     totalMi: params.activeRoute?.total_distance_miles ?? 0,
   });
-  const navigateProgressSummary = getNavigateSessionProgressSnapshot(params.navigateSession, gpsSpeed);
+  const liveGpsLocation =
+    hasGps && resolvedGpsLat != null && resolvedGpsLon != null
+      ? { latitude: resolvedGpsLat, longitude: resolvedGpsLon }
+      : null;
+  const navigateProgressSummary = getNavigateSessionProgressSnapshot(params.navigateSession, gpsSpeed, liveGpsLocation);
   const roadProgressSummary = getRoadProgressSnapshot(params.roadSession, gpsSpeed);
   const trailProgressSummary = getTrailProgressSnapshot(params.trailSession, gpsSpeed);
   const activeNavigateProgressSummary =

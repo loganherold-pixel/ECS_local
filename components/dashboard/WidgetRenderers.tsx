@@ -3934,7 +3934,7 @@ function AttitudeCommandPanel({
   const showRouteTerrainBackdrop = expanded && isRoutePanel;
   const showPowerDetailBackdrop = expanded && isPowerPanel && Boolean(powerVisual);
   const shouldRenderPanelVisual = showDecorativeBackdrop || showRouteTerrainBackdrop || showPowerDetailBackdrop;
-  const usesCompactAmberSurface = !expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel);
+  const usesTransparentCompactSurface = !expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel);
   const content = (
     <ECSInstrumentPanel
       title={undefined}
@@ -3956,7 +3956,7 @@ function AttitudeCommandPanel({
           <Text
             style={[
               attitudeCommandS.commandPanelHeaderTitle,
-              usesCompactAmberSurface && attitudeCommandS.commandPanelHeaderTitleCompact,
+              usesTransparentCompactSurface && attitudeCommandS.commandPanelHeaderTitleCompact,
               isWeatherPanel && attitudeCommandS.commandPanelHeaderTitleInlineIcon,
               isRoutePanel && headerStatusValue && attitudeCommandS.commandPanelHeaderTitleWithStatus,
               usesTrailingHeaderIcon && attitudeCommandS.commandPanelHeaderTitleTrailingIcon,
@@ -4004,8 +4004,8 @@ function AttitudeCommandPanel({
       selected={tone === 'attention' || tone === 'warning' || tone === 'critical'}
       showActiveEdge={false}
       innerTexture={false}
-      style={[attitudeCommandS.panelFrame, usesCompactAmberSurface && attitudeCommandS.compactCommandPanelSurface, expanded && attitudeCommandS.expandedPanelFrame]}
-      contentStyle={[attitudeCommandS.panelFrameContent, usesCompactAmberSurface && attitudeCommandS.compactCommandPanelFrameContent, expanded && attitudeCommandS.expandedPanelFrameContent]}
+      style={[attitudeCommandS.panelFrame, usesTransparentCompactSurface && attitudeCommandS.compactCommandPanelSurface, expanded && attitudeCommandS.expandedPanelFrame]}
+      contentStyle={[attitudeCommandS.panelFrameContent, usesTransparentCompactSurface && attitudeCommandS.compactCommandPanelFrameContent, expanded && attitudeCommandS.expandedPanelFrameContent]}
       background={shouldRenderPanelVisual ? (
         <AttitudeCommandPanelVisual
           icon={icon}
@@ -4019,6 +4019,9 @@ function AttitudeCommandPanel({
         />
       ) : null}
     >
+      {expanded && isPowerPanel ? (
+        <AttitudeCommandPowerRiveForeground power={powerVisual} expanded={expanded} />
+      ) : null}
       <View style={[
         attitudeCommandS.panelContent,
         expanded && attitudeCommandS.expandedPanelContent,
@@ -4043,14 +4046,14 @@ function AttitudeCommandPanel({
         {isSunlightPanel && !suppressCompactPanelChrome ? (
           <View pointerEvents="none" style={attitudeCommandS.sunlightBottomReadout}>
             <View style={attitudeCommandS.sunlightRemainingBlock}>
-              <Text style={[attitudeCommandS.sunlightBottomLabel, usesCompactAmberSurface && attitudeCommandS.sunlightBottomLabelCompact]} numberOfLines={1}>
+              <Text style={[attitudeCommandS.sunlightBottomLabel, usesTransparentCompactSurface && attitudeCommandS.sunlightBottomLabelCompact]} numberOfLines={1}>
                 {sunlightVisual?.countdownLabel ?? 'Daylight remaining'}
               </Text>
               <Text
                 style={[
                   attitudeCommandS.sunlightTimeReadout,
                   { color: 'rgba(247, 201, 104, 0.9)' },
-                  usesCompactAmberSurface && attitudeCommandS.sunlightTimeReadoutCompact,
+                  usesTransparentCompactSurface && attitudeCommandS.sunlightTimeReadoutCompact,
                   expanded && attitudeCommandS.sunlightTimeReadoutExpanded,
                 ]}
                 numberOfLines={2}
@@ -4060,22 +4063,22 @@ function AttitudeCommandPanel({
                 {title}
               </Text>
               <View style={attitudeCommandS.sunlightFieldMetaRow}>
-                <Text style={[attitudeCommandS.sunlightFieldMetaText, usesCompactAmberSurface && attitudeCommandS.sunlightFieldMetaTextCompact]} numberOfLines={1}>
+                <Text style={[attitudeCommandS.sunlightFieldMetaText, usesTransparentCompactSurface && attitudeCommandS.sunlightFieldMetaTextCompact]} numberOfLines={1}>
                   {sunlightVisual?.phase ?? 'Sun position unknown'}
                 </Text>
-                <Text style={[attitudeCommandS.sunlightFieldMetaText, usesCompactAmberSurface && attitudeCommandS.sunlightFieldMetaTextCompact, attitudeCommandS.sunlightFieldMetaTextRight]} numberOfLines={1}>
+                <Text style={[attitudeCommandS.sunlightFieldMetaText, usesTransparentCompactSurface && attitudeCommandS.sunlightFieldMetaTextCompact, attitudeCommandS.sunlightFieldMetaTextRight]} numberOfLines={1}>
                   {sunlightVisual?.glare ?? 'Glare unknown'}
                 </Text>
               </View>
             </View>
             <View style={attitudeCommandS.sunlightRiseSetStack}>
-              <Text style={[attitudeCommandS.sunlightRiseSetText, usesCompactAmberSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
+              <Text style={[attitudeCommandS.sunlightRiseSetText, usesTransparentCompactSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
                 RISE {sunlightVisual?.sunrise ?? '--'}
               </Text>
-              <Text style={[attitudeCommandS.sunlightRiseSetText, usesCompactAmberSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
+              <Text style={[attitudeCommandS.sunlightRiseSetText, usesTransparentCompactSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
                 SET {sunlightVisual?.sunset ?? '--'}
               </Text>
-              <Text style={[attitudeCommandS.sunlightRiseSetText, usesCompactAmberSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
+              <Text style={[attitudeCommandS.sunlightRiseSetText, usesTransparentCompactSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
                 {sunlightVisual?.uvIndex ?? 'UV --'}
               </Text>
             </View>
@@ -4085,7 +4088,7 @@ function AttitudeCommandPanel({
             style={[
               attitudeCommandS.panelTitle,
               { color },
-              usesCompactAmberSurface && attitudeCommandS.panelTitleCompact,
+              usesTransparentCompactSurface && attitudeCommandS.panelTitleCompact,
               expanded && attitudeCommandS.panelTitleExpanded,
               align === 'center' && attitudeCommandS.panelTextCenter,
               align === 'right' && attitudeCommandS.panelTextRight,
@@ -4101,7 +4104,7 @@ function AttitudeCommandPanel({
           <Text
             style={[
               attitudeCommandS.panelDetail,
-              usesCompactAmberSurface && attitudeCommandS.panelDetailCompact,
+              usesTransparentCompactSurface && attitudeCommandS.panelDetailCompact,
               expanded && attitudeCommandS.panelDetailExpanded,
               align === 'center' && attitudeCommandS.panelTextCenter,
               align === 'right' && attitudeCommandS.panelTextRight,
@@ -6904,8 +6907,8 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             accessibilityLabel={expanded ? 'Route terrain risk expanded' : 'Expand route terrain risk'}
             expanded={expanded}
             detailMode={mode === 'detail'}
-            headerStatusLabel={null}
-            headerStatusValue={null}
+            headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}
+            headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}
             headerStatusColor={terrainRiskRoute ? getTerrainCommandRiskColor(terrainRiskRoute.overallRiskLabel) : undefined}
           >
             <AttitudeCommandTerrainRiskPreview
@@ -7963,13 +7966,13 @@ const attitudeCommandS = StyleSheet.create({
     minWidth: 0,
   },
   compactCommandPanelSurface: {
-    backgroundColor: `${TACTICAL.amber}12`,
-    borderColor: `${TACTICAL.amber}2E`,
-    shadowColor: TACTICAL.amber,
-    shadowOpacity: 0.22,
-    shadowRadius: 10,
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    shadowRadius: 0,
     shadowOffset: { width: 0, height: 0 },
-    elevation: 5,
+    elevation: 0,
   },
   expandedPanelFrame: {
     borderColor: 'rgba(247, 201, 104, 0.78)',
@@ -7984,8 +7987,8 @@ const attitudeCommandS = StyleSheet.create({
     paddingVertical: 6,
   },
   compactCommandPanelFrameContent: {
-    paddingHorizontal: 9,
-    paddingVertical: 7,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
   expandedPanelFrameContent: {
     paddingHorizontal: 12,
@@ -9066,15 +9069,17 @@ const attitudeCommandS = StyleSheet.create({
     alignSelf: 'stretch',
     flex: 1,
     minHeight: 0,
-    justifyContent: 'space-between',
-    gap: 5,
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 1,
+    overflow: 'hidden',
   },
   powerCompactHeader: {
-    minHeight: 30,
+    minHeight: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: 5,
   },
   powerCompactReserveBlock: {
     flex: 1,
@@ -9083,25 +9088,25 @@ const attitudeCommandS = StyleSheet.create({
   },
   powerCompactLabel: {
     color: 'rgba(255, 246, 220, 0.78)',
-    fontSize: 6.4,
-    lineHeight: 8,
+    fontSize: 5.8,
+    lineHeight: 7,
     fontWeight: '900',
     letterSpacing: 0.58,
     includeFontPadding: false,
   },
   powerCompactPrimaryValue: {
     marginTop: 1,
-    fontSize: 18,
-    lineHeight: 20,
+    fontSize: 15.5,
+    lineHeight: 17,
     fontWeight: '900',
     letterSpacing: 0,
     includeFontPadding: false,
   },
   powerCompactStatus: {
-    width: 62,
+    width: 56,
     color: 'rgba(255, 246, 220, 0.78)',
-    fontSize: 6.4,
-    lineHeight: 8,
+    fontSize: 5.8,
+    lineHeight: 7,
     fontWeight: '900',
     letterSpacing: 0.35,
     textAlign: 'right',
@@ -9113,31 +9118,32 @@ const attitudeCommandS = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'stretch',
-    gap: 4,
+    justifyContent: 'center',
+    gap: 3,
   },
   powerCompactMetricCard: {
-    width: '48%',
+    width: '47.5%',
     minWidth: 0,
-    minHeight: 25,
+    minHeight: 21,
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(245, 199, 73, 0.24)',
     borderRadius: 6,
     backgroundColor: 'rgba(3, 7, 10, 0.56)',
-    paddingHorizontal: 5,
-    paddingVertical: 3,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
   },
   powerCompactMetricLabel: {
     color: 'rgba(255, 246, 220, 0.76)',
-    fontSize: 6,
-    lineHeight: 7,
+    fontSize: 5.4,
+    lineHeight: 6,
     fontWeight: '900',
     letterSpacing: 0.42,
     includeFontPadding: false,
   },
   powerCompactMetricValue: {
-    fontSize: 8.1,
-    lineHeight: 10,
+    fontSize: 7.5,
+    lineHeight: 9,
     fontWeight: '900',
     letterSpacing: 0,
     includeFontPadding: false,
