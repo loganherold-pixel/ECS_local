@@ -179,8 +179,11 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
         trailPackPreview.includes('cameraMode="route_overview"') &&
         trailPackPreview.includes('surfaceMode="compact"') &&
         !trailPackPreview.includes('function RouteSegment') &&
-        trailPackPreview.includes('LOOP ROUTE') &&
-        trailPackPreview.includes('POINT ROUTE') &&
+        !trailPackPreview.includes('LOOP ROUTE') &&
+        !trailPackPreview.includes('POINT ROUTE') &&
+        !trailPackPreview.includes('s.mapBadge') &&
+        trailPackPreview.includes('accessibilityLabel="Build Trip"') &&
+        discover.includes('handleBuildTripFromRoute(trailPackToExpeditionOpportunity(trailPackPreview))') &&
         trailPackPreview.includes('Offline cache unavailable for this Trail Pack.') &&
         trailPackPreview.includes('disabled={!effectiveOfflineCacheAvailable}') &&
         discover.includes('trailPackToOfflinePrepCatalogInput') &&

@@ -148,6 +148,15 @@ assert(
 );
 
 assert(
+  source.includes('const TOOLS_POPUP_WIDTH = Math.min(MAP_POPUP_WIDTH, adaptive.isExpanded ? 420 : 348);') &&
+    source.includes('toolsDenseActionCard: {\n  width: \'48%\',\n  minHeight: 54') &&
+    toolSurfaceSource.includes('actionTitleRow: {\n    flexDirection: \'row\',\n    alignItems: \'flex-start\'') &&
+    toolSurfaceSource.includes('flexWrap: \'wrap\'') &&
+    toolSurfaceSource.includes('alignSelf: \'flex-start\''),
+  'Tools popup should be wide enough and allow compact action labels/badges to wrap without cutting off wording.',
+);
+
+assert(
   source.includes('toolsPopupContent: {\n  alignSelf:') &&
     !source.includes('toolsPopupContent: {\n  flex: 1') &&
     !source.includes('toolsFixedContent: {\n  flex: 1'),

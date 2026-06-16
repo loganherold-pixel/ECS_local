@@ -205,9 +205,19 @@ assert(
     previewSource.includes('surfaceMode="compact"') &&
     !previewSource.includes('function RouteSegment') &&
     !previewSource.includes('projectGeometry(') &&
-    previewSource.includes('LOOP ROUTE') &&
-    previewSource.includes('POINT ROUTE'),
-  'Trail Pack preview should display a map-rendered route-line-only snapshot with loop/point indicators and no generated pins',
+    !previewSource.includes('LOOP ROUTE') &&
+    !previewSource.includes('POINT ROUTE') &&
+    !previewSource.includes('s.mapBadge') &&
+    !previewSource.includes('mapBadge:'),
+  'Trail Pack preview should display a map-rendered route-line-only snapshot without generated pins or route-type overlay badges',
+);
+assert(
+  previewSource.includes('onBuildTrip?: () => void;') &&
+    previewSource.includes('accessibilityLabel="Build Trip"') &&
+    previewSource.includes('onBuildTrip();') &&
+    previewSource.includes('BUILD TRIP') &&
+    discoverSource.includes('handleBuildTripFromRoute(trailPackToExpeditionOpportunity(trailPackPreview))'),
+  'Trail Pack preview should let users build a trip directly from the preview footer.',
 );
 assert(
   previewSource.includes('Offline cache unavailable for this Trail Pack.') &&

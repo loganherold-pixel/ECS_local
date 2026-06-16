@@ -45,17 +45,21 @@ assert.strictEqual(presentation.getExploreRemotenessRating({ remotenessScore: 8 
 assert.strictEqual(presentation.getExploreRemotenessRating({ remotenessScore: 6 }), 'B');
 assert.strictEqual(presentation.getExploreRemotenessRating({ remotenessScore: 3 }), 'C');
 assert.strictEqual(presentation.getExploreRemotenessRating({ remotenessScore: 1 }), 'D');
-assert.strictEqual(
-  presentation.getExploreRouteConfidencePercent({
-    recommendationConfidence: { score: 78 },
-  }),
-  78,
-  'Explore card confidence should prefer existing ECS recommendation confidence score.',
+const confidenceGeometry = Array.from({ length: 20 }, (_, index) => [-121 + index * 0.001, 39 + index * 0.001]);
+const recommendationSeedConfidence = presentation.getExploreRouteConfidencePercent({
+  recommendationConfidence: { score: 78 },
+  distanceMiles: 10,
+  geometry: { type: 'LineString', coordinates: confidenceGeometry },
+  activeGuidance: { status: 'ready', topologyResolved: true },
+});
+assert.ok(
+  recommendationSeedConfidence > 78 && recommendationSeedConfidence <= 86,
+  'Explore card confidence should use existing ECS recommendation confidence as a live seed and adjust it with geometry/readiness evidence.',
 );
 assert.strictEqual(
   presentation.getExploreRouteConfidencePercent({ confidence: 'good' }),
-  76,
-  'AI route confidence should map to a numeric percent when no ECS score is present.',
+  58,
+  'AI route confidence should map to a numeric percent and still drop when route geometry/readiness evidence is missing.',
 );
 
 for (const source of [enrichedCardSource, aiCardSource]) {

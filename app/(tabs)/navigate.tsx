@@ -3362,7 +3362,7 @@ const MAP_POPUP_WIDTH = Math.min(
   adaptive.windowWidth - OVERLAY_EDGE * 2,
   adaptive.navigate.popupWidth ?? (adaptive.isExpanded ? 420 : 360),
 );
-const TOOLS_POPUP_WIDTH = Math.min(MAP_POPUP_WIDTH, adaptive.isExpanded ? 360 : 324);
+const TOOLS_POPUP_WIDTH = Math.min(MAP_POPUP_WIDTH, adaptive.isExpanded ? 420 : 348);
 const TOP_RIGHT_UTILITY_WIDTH = adaptive.isExpanded ? 156 : 140;
 const TOOLS_TRIGGER_SIZE = 40;
 const TOOLS_TRIGGER_BOTTOM = COMPASS_BOTTOM + COMPASS_SIZE + 20;
@@ -24493,7 +24493,7 @@ toolsDenseActionGrid: {
 
 toolsDenseActionCard: {
   width: '48%',
-  minHeight: 46,
+  minHeight: 54,
 },
 
 toolsSearchWrap: {

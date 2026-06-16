@@ -317,7 +317,8 @@ const styles = StyleSheet.create({
   },
   actionTitleRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    flexWrap: 'wrap',
     gap: 7,
     minWidth: 0,
   },
@@ -354,6 +355,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(101,240,212,0.08)',
     paddingHorizontal: 7,
     paddingVertical: 3,
+    alignSelf: 'flex-start',
     overflow: 'hidden',
   },
   actionBadgeActive: {

@@ -20,8 +20,9 @@ assert(
     discover.includes('testID="explore-tripbuilder-wizard-surface"') &&
     discover.includes('buildExploreGuidanceReadyInventory') &&
     discover.includes('visibleExploreWizardCardCandidates') &&
-    discover.includes('exploreWizardCandidateSet.hiddenTotal'),
-  'Explore should render the route-first TripBuilder wizard using normalized guidance-ready candidates and hidden unavailable route counts',
+    !discover.includes('exploreWizardHiddenNotice') &&
+    !discover.includes('ECS will not save, stitch, or navigate those routes from Explore'),
+  'Explore should render the route-first TripBuilder wizard using normalized guidance-ready candidates without user-facing hidden unavailable route warnings',
 );
 assert(
   discover.includes('EXPLORE_WIZARD_SOURCE_FILTERS') &&

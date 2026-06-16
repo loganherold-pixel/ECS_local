@@ -64,6 +64,10 @@ const previewModalSource = fs.readFileSync(
   path.join(root, 'components', 'discover', 'ExploreRoutePreviewModal.tsx'),
   'utf8',
 );
+const trailPackPreviewModalSource = fs.readFileSync(
+  path.join(root, 'components', 'trailPacks', 'TrailPackPreviewModal.tsx'),
+  'utf8',
+);
 const shellSource = fs.readFileSync(path.join(root, 'components', 'ECSModalShell.tsx'), 'utf8');
 const thumbnails = require(path.join(root, 'lib', 'exploreTrailThumbnails.ts'));
 const {
@@ -158,6 +162,23 @@ assert.ok(
     previewModalSource.includes('React.createElement(Text, { style: labelStyle }, actionLabel)') &&
     previewModalSource.includes('accessibilityLabel: actionLabel'),
   'If the legacy modal is reused later, TouchablePreviewAction should remain Text-safe.',
+);
+
+assert.ok(
+  !trailPackPreviewModalSource.includes('POINT ROUTE') &&
+    !trailPackPreviewModalSource.includes('LOOP ROUTE') &&
+    !trailPackPreviewModalSource.includes('s.mapBadge') &&
+    !trailPackPreviewModalSource.includes('mapBadge:'),
+  'Trail Pack preview maps should not overlay point/loop route badges or other route-type containers over the map.',
+);
+assert.ok(
+  trailPackPreviewModalSource.includes('onBuildTrip?: () => void;') &&
+    trailPackPreviewModalSource.includes('accessibilityLabel="Build Trip"') &&
+    trailPackPreviewModalSource.includes('onBuildTrip();') &&
+    trailPackPreviewModalSource.includes('BUILD TRIP') &&
+    discoverSource.includes('onBuildTrip={() => {') &&
+    discoverSource.includes('handleBuildTripFromRoute(trailPackToExpeditionOpportunity(trailPackPreview))'),
+  'Trail Pack preview footer should expose Build Trip and wire it to the same Explore Trip Builder handoff as route cards.',
 );
 
 const missingImageAssignment = thumbnails.getExploreRouteThumbnail({

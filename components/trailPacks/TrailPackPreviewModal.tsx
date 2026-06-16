@@ -19,10 +19,8 @@ import {
 } from '../../lib/shellLayout';
 import {
   canStartTrailPackGuidance,
-  distanceMilesBetween,
   getTrailPackDifficultyLabel,
   getTrailPackGeometryCoordinateSegments,
-  getTrailPackGeometryCoordinates,
   getTrailPackGuidanceReadiness,
   getTrailPackRouteTypeLabel,
   getTrailPackSourceLabel,
@@ -52,6 +50,7 @@ type TrailPackPreviewModalProps = {
   onRoutePreview?: () => void;
   routePreviewDisabled?: boolean;
   routePreviewDisabledReason?: string | null;
+  onBuildTrip?: () => void;
   onStartGuidance: () => void;
   onSave: () => void;
   onFeedback: (type: ECSTrailPackFeedbackType, note?: string) => ECSTrailPackFeedbackResult;
@@ -95,12 +94,6 @@ function formatCatalogTimestamp(isoDate: string | null | undefined): string {
     day: 'numeric',
     year: 'numeric',
   });
-}
-
-function isLoopRoute(trailPack: ECSTrailPackDiscoveryItem, points: ReturnType<typeof getTrailPackGeometryCoordinates>): boolean {
-  if (trailPack.routeType === 'loop') return true;
-  if (points.length < 3) return false;
-  return distanceMilesBetween(points[0], points[points.length - 1]) <= 0.5;
 }
 
 function cleanAssessmentText(value: unknown): string | null {
@@ -232,7 +225,6 @@ function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
       })),
     [geometrySegments, trailPack.id],
   );
-  const loop = isLoopRoute(trailPack, geometry);
   const hasGeometry = routePoints.length >= 2;
   const routeSignature = routePoints
     .map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`)
@@ -301,11 +293,6 @@ function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
         )}
 
       </View>
-
-      <View style={s.mapBadge}>
-        <Ionicons name={loop ? 'sync-circle-outline' : 'git-branch-outline'} size={12} color={TACTICAL.amber} />
-        <Text style={s.mapBadgeText}>{loop ? 'LOOP ROUTE' : 'POINT ROUTE'}</Text>
-      </View>
     </View>
   );
 }
@@ -318,6 +305,7 @@ export default function TrailPackPreviewModal({
   onRoutePreview,
   routePreviewDisabled = false,
   routePreviewDisabledReason = null,
+  onBuildTrip,
   onStartGuidance,
   onSave,
   onFeedback,
@@ -450,6 +438,22 @@ export default function TrailPackPreviewModal({
               >
                 ROUTE{'\n'}PREVIEW
               </Text>
+            </TouchableOpacity>
+          ) : null}
+          {onBuildTrip ? (
+            <TouchableOpacity
+              style={[s.secondaryAction, s.tripBuildAction]}
+              activeOpacity={0.78}
+              accessibilityRole="button"
+              accessibilityLabel="Build Trip"
+              accessibilityHint="Open Trip Builder with this Trail Pack already selected."
+              onPress={() => {
+                hapticMicro();
+                onBuildTrip();
+              }}
+            >
+              <Ionicons name="git-merge-outline" size={14} color={TACTICAL.amber} />
+              <Text style={[s.secondaryActionText, s.tripBuildActionText]} numberOfLines={1}>BUILD TRIP</Text>
             </TouchableOpacity>
           ) : null}
           <TouchableOpacity
@@ -718,27 +722,6 @@ const s = StyleSheet.create({
     textAlign: 'center',
     letterSpacing: 0,
   },
-  mapBadge: {
-    position: 'absolute',
-    left: 10,
-    bottom: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '28',
-    backgroundColor: 'rgba(10,13,16,0.86)',
-  },
-  mapBadgeText: {
-    color: TACTICAL.amber,
-    fontSize: 8,
-    lineHeight: 10,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
   noGeometryPanel: {
     position: 'absolute',
     top: 0,
@@ -892,6 +875,11 @@ const s = StyleSheet.create({
     borderColor: TACTICAL.amber + '38',
     backgroundColor: TACTICAL.amber + '10',
   },
+  tripBuildAction: {
+    borderColor: TACTICAL.amber + '38',
+    backgroundColor: TACTICAL.amber + '10',
+    minWidth: 112,
+  },
   disabledAction: {
     opacity: 0.56,
   },
@@ -903,6 +891,9 @@ const s = StyleSheet.create({
     letterSpacing: 0,
   },
   routePreviewActionText: {
+    color: TACTICAL.amber,
+  },
+  tripBuildActionText: {
     color: TACTICAL.amber,
   },
   withdrawActionText: {

@@ -39,16 +39,20 @@ function route(id, overrides = {}) {
     remotenessScore: 5,
     popularityScore: 50,
     estimatedDays: 1,
+    estimatedHours: 8,
+    distanceMiles: 34,
+    distanceToNearestTownMiles: 6,
+    requiresCamping: false,
     ...overrides,
   };
 }
 
 const routes = [
-  route('local-day', { remotenessScore: 4, popularityScore: 70, estimatedDays: 1 }),
-  route('remote-day', { remotenessScore: 8, popularityScore: 25, estimatedDays: 1 }),
-  route('weekend', { remotenessScore: 6, popularityScore: 35, estimatedDays: 2 }),
-  route('expedition', { remotenessScore: 9, popularityScore: 20, estimatedDays: 4 }),
-  route('unknown-duration', { remotenessScore: 3, popularityScore: 80, estimatedDays: undefined }),
+  route('local-day', { remotenessScore: 4, popularityScore: 70, estimatedHours: 8, estimatedDays: 1, distanceToNearestTownMiles: 4 }),
+  route('remote-day', { remotenessScore: 8, popularityScore: 25, estimatedHours: 10, estimatedDays: 1, distanceToNearestTownMiles: 18 }),
+  route('weekend', { remotenessScore: 6, popularityScore: 35, estimatedHours: 20, estimatedDays: 2, distanceToNearestTownMiles: 10 }),
+  route('expedition', { remotenessScore: 9, popularityScore: 20, estimatedHours: 60, estimatedDays: 4, distanceToNearestTownMiles: 25 }),
+  route('unknown-duration', { remotenessScore: 3, popularityScore: 80, estimatedDays: undefined, estimatedHours: undefined, distanceToNearestTownMiles: 3 }),
 ];
 
 assert.deepStrictEqual(
@@ -64,17 +68,35 @@ assert.deepStrictEqual(
 assert.deepStrictEqual(
   refinement.applyExploreRefinementFilter(routes, 'dayTrip').map((item) => item.id),
   ['local-day', 'remote-day'],
-  'Day Trip should include trails estimated at 1 day or less.',
+  'Day Trip should include trails that can be completed within 12 hours and do not require camping.',
 );
 assert.deepStrictEqual(
   refinement.applyExploreRefinementFilter(routes, 'weekendTrip').map((item) => item.id),
   ['weekend'],
-  'Weekend Trip should include trails over 1 day and up to 2 days.',
+  'Weekend Trip should include trails that split into two field days.',
 );
 assert.deepStrictEqual(
   refinement.applyExploreRefinementFilter(routes, 'expedition').map((item) => item.id),
   ['expedition'],
-  'Expedition should include trails estimated at 3 or more days.',
+  'Expedition should include trails that need three or more field days.',
+);
+
+assert.deepStrictEqual(
+  refinement.applyExploreRefinementFilter([
+    route('far-from-town-low-score', { remotenessScore: 4, distanceToNearestTownMiles: 18 }),
+    route('near-town-high-score', { remotenessScore: 9, distanceToNearestTownMiles: 3 }),
+    route('paved-road-remote', { remotenessScore: 3, distanceToNearestTownMiles: 7, nearestPavedRoadDistanceMiles: 9 }),
+  ], 'remoteness').map((item) => item.id),
+  ['far-from-town-low-score', 'paved-road-remote'],
+  'Remoteness should mean real isolation from towns/services or paved access, with score fallback only when distance facts are missing.',
+);
+
+assert.deepStrictEqual(
+  refinement.applyExploreRefinementFilter([
+    route('short-overnight', { estimatedHours: 10, estimatedDays: 1, requiresCamping: true, description: 'Overnight camp required.' }),
+  ], 'dayTrip').map((item) => item.id),
+  [],
+  'Day Trip should reject short routes when camping or overnight travel is required.',
 );
 
 const counts = refinement.getExploreRefinementCounts(routes);
@@ -84,20 +106,34 @@ assert.strictEqual(counts.weekendTrip, 1, 'Weekend Trip count should be computed
 assert.strictEqual(counts.expedition, 1, 'Expedition count should be computed from current results.');
 
 const unknownDurationRoutes = [
-  route('imported-gpx-one', { estimatedDays: undefined, description: 'Imported trail missing duration metadata.' }),
-  route('imported-gpx-two', { estimatedDays: undefined, description: 'Saved route without trip length.' }),
+  route('imported-gpx-one', { estimatedDays: undefined, estimatedHours: undefined, description: 'Imported trail missing duration metadata.' }),
+  route('imported-gpx-two', { estimatedDays: undefined, estimatedHours: undefined, description: 'Saved route without trip length.' }),
 ];
 assert.deepStrictEqual(
   refinement.applyExploreRefinementFilter(unknownDurationRoutes, 'dayTrip').map((item) => item.id),
-  ['imported-gpx-one', 'imported-gpx-two'],
-  'Trip-type filters should not create a false empty state when every route is missing duration metadata.',
+  [],
+  'Trip-type filters should not inflate a selected bucket with routes missing duration metadata.',
 );
 assert.deepStrictEqual(
   refinement.applyExploreRefinementFilter([
-    route('hinted-weekend', { estimatedDays: undefined, description: 'Weekend overnight route.' }),
+    route('hinted-weekend', { estimatedDays: undefined, estimatedHours: undefined, description: 'Weekend overnight route.' }),
   ], 'weekendTrip').map((item) => item.id),
   ['hinted-weekend'],
   'Trip-type filters should use text/category hints when duration metadata is unavailable.',
+);
+assert.deepStrictEqual(
+  refinement.applyExploreRefinementFilter([
+    route('hinted-day', { estimatedDays: undefined, estimatedHours: undefined, description: 'Short same day trail run under 10 hours.' }),
+  ], 'dayTrip').map((item) => item.id),
+  ['hinted-day'],
+  'Day Trip should still honor explicit same-day text hints when structured duration is unavailable.',
+);
+assert.deepStrictEqual(
+  refinement.applyExploreRefinementFilter([
+    route('long-distance-expedition', { estimatedDays: undefined, estimatedHours: undefined, distanceMiles: 180, description: 'Long desert route.' }),
+  ], 'expedition').map((item) => item.id),
+  ['long-distance-expedition'],
+  'Expedition should include high-mileage routes when duration metadata is unavailable.',
 );
 
 assert.ok(

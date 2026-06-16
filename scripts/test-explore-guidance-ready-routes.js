@@ -105,6 +105,15 @@ assert(
   'Discover should drive filter chips and Guidance Ready Routes from the shared ready-route inventory.',
 );
 assert(
+  !discover.includes('routes are hidden because') &&
+    !discover.includes('were hidden because active-guidance geometry was unavailable') &&
+    !discover.includes('geometry was not ready for active guidance') &&
+    !discover.includes('ECS will not save, stitch, or navigate those routes from Explore') &&
+    !discover.includes('exploreWizardHiddenNotice') &&
+    !discover.includes('exploreWizardHiddenText'),
+  'Explore should keep hidden/not-ready route diagnostics out of user-facing Guidance Ready copy and containers.',
+);
+assert(
   !discover.includes('visibleTrailPacks\n        .map((trailPack) => trailPackToExpeditionOpportunity(trailPack))') &&
     !discover.includes('visibleAIRoutes\n          .filter(routePassesExploreMapLength)'),
   'TripBuilder ready counts must not be built from page-sized visible Trail Pack or AI route windows.',

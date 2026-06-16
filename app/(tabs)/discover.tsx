@@ -4112,7 +4112,7 @@ function DiscoverScreenInner() {
                   <Text style={s.exploreWizardStatusTitle}>Guidance Ready Routes</Text>
                   <Text style={s.exploreWizardStatusText}>
                     {hasSelectedExploreRefinement
-                      ? `Guidance Ready Routes are source-backed routes with usable stitched geometry, visible confidence, and data state labels. ${exploreGuidanceReadyInventory.readyCount} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start. ${exploreGuidanceReadyInventory.hiddenTotal} routes are hidden because active guidance, length, public state, or route geometry is unavailable.`
+                      ? `Guidance Ready Routes are source-backed routes with usable stitched geometry, visible confidence, and data state labels. ${exploreGuidanceReadyInventory.readyCount} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start.`
                       : `Select a refinement bucket to populate Guidance Ready route cards. The counts above show guidance-ready routes inside ${distanceRadiusNarrative}, without changing the range results when you switch buckets.`}
                   </Text>
                   {showGuidanceReadyRefinementPrompt ? (
@@ -4365,11 +4365,7 @@ function DiscoverScreenInner() {
                 <ECSResultsEmptyState
                   style={s.exploreWizardEmpty}
                   title="No Guidance-Ready Routes"
-                  message={
-                    exploreWizardCandidateSet.hiddenTotal > 0
-                      ? `${exploreWizardCandidateSet.hiddenTotal} routes matched the current Explore context but were hidden because active-guidance geometry was unavailable.`
-                      : 'No routes from the current Explore sources are ready for active guidance inside these filters.'
-                  }
+                  message="No routes from the current Explore sources are ready for active guidance inside these filters."
                   helper="Adjust the radius or source chip, import a verified route file, or try again when route catalog geometry is available."
                   icon="navigate-outline"
                   variant="compact"
@@ -4415,15 +4411,6 @@ function DiscoverScreenInner() {
                   <Ionicons name="chevron-down-outline" size={14} color={TACTICAL.amber} />
                   <Text style={s.hiddenGemPagerText}>SHOW MORE ROUTES</Text>
                 </TouchableOpacity>
-              ) : null}
-
-              {exploreWizardCandidateSet.hiddenTotal > 0 ? (
-                <View style={s.exploreWizardHiddenNotice}>
-                  <Ionicons name="information-circle-outline" size={12} color={TACTICAL.textMuted} />
-                  <Text style={s.exploreWizardHiddenText}>
-                    {`${exploreWizardCandidateSet.hiddenTotal} route${exploreWizardCandidateSet.hiddenTotal === 1 ? '' : 's'} hidden: geometry was not ready for active guidance, so ECS will not save, stitch, or navigate those routes from Explore.`}
-                  </Text>
-                </View>
               ) : null}
             </View>
           )}
@@ -5173,6 +5160,9 @@ function DiscoverScreenInner() {
                 }
               : undefined
           }
+          onBuildTrip={() => {
+            if (trailPackPreview) handleBuildTripFromRoute(trailPackToExpeditionOpportunity(trailPackPreview));
+          }}
           onStartGuidance={() => {
             if (trailPackPreview) void handleStartTrailPackGuidance(trailPackPreview);
           }}
@@ -5919,24 +5909,6 @@ const s = StyleSheet.create({
   },
   exploreWizardEmpty: {
     marginTop: 2,
-  },
-  exploreWizardHiddenNotice: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-    borderRadius: ECS.radius,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    paddingHorizontal: 9,
-    paddingVertical: 8,
-  },
-  exploreWizardHiddenText: {
-    flex: 1,
-    color: TACTICAL.textMuted,
-    fontSize: 9,
-    lineHeight: 13,
-    fontWeight: '700',
   },
   explorerCategoryTileGold: {
     borderColor: ECS_SURFACE.border.selected,
