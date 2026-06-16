@@ -101,10 +101,15 @@ assert.deepStrictEqual(
 );
 
 assert.ok(
-  discoverSource.includes('const [exploreRefinement, setExploreRefinement] = useState<ExploreRefinementFilter | null>(') &&
-    discoverSource.includes('initialExploreFilterStateRef.current.refinement') &&
+  discoverSource.includes('const [exploreRefinement, setExploreRefinement] = useState<ExploreRefinementFilter | null>(null);') &&
     discoverSource.includes('loadExploreFilterStateSnapshot'),
-  'Explore should keep a single selected refinement state and restore it from the Explorer filter snapshot.',
+  'Explore should keep a single selected refinement state but start with no active refinement selected.',
+);
+assert.ok(
+  discoverSource.includes('setDistanceRadius(snapshot.radiusMiles)') &&
+    discoverSource.includes('setExploreRefinement(null)') &&
+    !discoverSource.includes('setExploreRefinement(snapshot.refinement)'),
+  'Explore should hydrate the saved range while clearing any saved refinement on tab entry.',
 );
 assert.ok(
   discoverSource.includes('applyExploreRefinementFilter(canonicalRadiusFilteredRoutes, exploreRefinement)'),

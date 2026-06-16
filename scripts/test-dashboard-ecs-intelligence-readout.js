@@ -42,11 +42,13 @@ assert.ok(
   'Dashboard expanded mode should reclaim banner height while preserving top safe-area clearance.',
 );
 assert.ok(
-  dashboard.includes('showDockRevealControl={isLandscape}') &&
-    dashboard.includes('accessibilityLabel="Reveal ECS navigation dock"') &&
+  dashboard.includes("import LandscapeShellControls from '../../components/LandscapeShellControls';") &&
+    dashboard.includes('showDockRevealControl={isLandscape}') &&
+    dashboard.includes('<LandscapeShellControls') &&
+    dashboard.includes('revealAccessibilityLabel="Reveal ECS navigation dock"') &&
     dashboard.includes('revealDashboardDock(5000)') &&
     !dashboard.includes("accessibilityLabel={isDashboardExpanded ? 'Contract Dashboard widgets' : 'Expand Dashboard widgets'}"),
-  'Dashboard portrait should remove the expand/contract control while landscape keeps a timed lower dock reveal action.',
+  'Dashboard portrait should remove the expand/contract control while landscape keeps a timed lower dock reveal action in the shared shell control cluster.',
 );
 assert.ok(
   dashboard.includes('const isLandscape = windowWidth > windowHeight;') &&

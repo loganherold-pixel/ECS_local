@@ -106,6 +106,18 @@ assert.ok(
 );
 
 assert.ok(
+  commandCenterSource.includes("import LandscapeShellControls from '../LandscapeShellControls'") &&
+    commandCenterSource.includes('<LandscapeShellControls') &&
+    commandCenterSource.includes('onBluetoothPress={handleOpenLandscapeBluetoothControls}') &&
+    commandCenterSource.includes('onProfilePress={() => setProfileVisible(true)}') &&
+    commandCenterSource.includes('onRevealDock={handleRevealDispatchDock}') &&
+    commandCenterSource.includes("profileAccessibilityLabel=\"Open dispatch profile command hub\"") &&
+    commandCenterSource.includes('styles.headerActionsPrimaryLandscape') &&
+    commandCenterSource.includes('styles.headerActionsShellLandscape'),
+  'Dispatch landscape should place Bluetooth, theme, profile, and lower dock reveal controls in a compact top-right shell cluster.',
+);
+
+assert.ok(
   commandCenterSource.includes('rootLandscape:') &&
     commandCenterSource.includes('paddingBottom: 0') &&
     commandCenterSource.includes('landscapeSummaryDock') &&

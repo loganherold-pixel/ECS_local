@@ -487,7 +487,7 @@ export default function DispatchConvoyCommandPanel({
   const emergencyPulseOpacity = useEmergencyPulse(shouldPulseEmergencyCount);
   const resolvedEmergencyButtonLabel = emergencyButtonLabel ?? (emergencySubmitting ? 'GETTING GPS' : 'PING GPS');
   const resolvedEmergencyButtonTone = emergencyButtonTone ?? TACTICAL.danger;
-  const shouldShowIntegratedEmergencyFeed =
+  const shouldShowEmergencyFeed =
     !isMapOnlyPresentation &&
     (!isSummaryOnlyPresentation || emergencyEvents.length > 0);
   const shouldShowEmergencyOverlay =
@@ -800,7 +800,7 @@ export default function DispatchConvoyCommandPanel({
           />
         </View>
 
-        {shouldShowIntegratedEmergencyFeed ? (
+        {shouldShowEmergencyFeed ? (
           <View
             style={[
               styles.emergencyInlineRail,

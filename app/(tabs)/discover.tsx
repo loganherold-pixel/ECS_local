@@ -733,9 +733,7 @@ function DiscoverScreenInner() {
   const [distanceRadius, setDistanceRadius] = useState<DistanceRadius | null>(
     initialExploreFilterStateRef.current.radiusMiles,
   );
-  const [exploreRefinement, setExploreRefinement] = useState<ExploreRefinementFilter | null>(
-    initialExploreFilterStateRef.current.refinement,
-  );
+  const [exploreRefinement, setExploreRefinement] = useState<ExploreRefinementFilter | null>(null);
   const [activeExplorePrimaryTab, setActiveExplorePrimaryTab] = useState<ExplorePrimaryTab>('suggested_routes');
   const [explorePlanningSelectedRouteId, setExplorePlanningSelectedRouteId] = useState<string | null>(null);
   const [exploreWizardSourceFilter, setExploreWizardSourceFilter] = useState<ExploreWizardRouteSourceKind | 'all'>('all');
@@ -821,7 +819,7 @@ function DiscoverScreenInner() {
     void loadExploreFilterStateSnapshot().then((snapshot) => {
       if (cancelled) return;
       setDistanceRadius(snapshot.radiusMiles);
-      setExploreRefinement(snapshot.refinement);
+      setExploreRefinement(null);
       setActiveExplorerCategoryPanel(null);
       setExploreFilterHydrated(true);
     });

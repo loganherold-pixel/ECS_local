@@ -48,7 +48,7 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { DiscoverIcon } from '../../components/DockIcons';
-import LandscapeDockRevealButton from '../../components/LandscapeDockRevealButton';
+import LandscapeShellControls from '../../components/LandscapeShellControls';
 import TabErrorBoundary from '../../components/TabErrorBoundary';
 
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
@@ -197,6 +197,7 @@ import {
   revealDashboardDock,
   setDashboardExpanded,
 } from '../../lib/dashboardChromeStore';
+import { openUnifiedBluetoothCommand } from '../../lib/bluetoothCommandNavigation';
 import { runAfterShellInteractions } from '../../lib/shellInteractionScheduler';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
 import { ecsLog } from '../../lib/ecsLogger';
@@ -542,6 +543,8 @@ type DashboardTabBarProps = {
   autoModeSustaining: boolean;
   isDashboardExpanded: boolean;
   showDockRevealControl: boolean;
+  onOpenBluetoothControls: () => void;
+  onOpenProfileCommand: () => void;
   onSelectTab: (tab: DashboardTab) => void;
   onToggleAutoMode: () => void;
   onToggleDashboardExpanded: () => void;
@@ -557,6 +560,8 @@ function DashboardTabBar({
   autoModeSustaining,
   isDashboardExpanded,
   showDockRevealControl,
+  onOpenBluetoothControls,
+  onOpenProfileCommand,
   onSelectTab,
   onToggleAutoMode,
   onToggleDashboardExpanded,
@@ -646,18 +651,14 @@ function DashboardTabBar({
 
       {showDockRevealControl ? (
         <View style={styles.tabControlsSection}>
-          <LandscapeDockRevealButton
-            inline
-            style={[
-              styles.dashboardExpandBtn,
-              {
-                borderColor: `${palette.amber}32`,
-                backgroundColor: `${palette.amber}10`,
-              },
-            ]}
-            onPress={onToggleDashboardExpanded}
-            accessibilityLabel="Reveal ECS navigation dock"
-            accessibilityHint="Temporarily shows the lower ECS tab bar for five seconds."
+          <LandscapeShellControls
+            style={styles.dashboardExpandBtn}
+            onBluetoothPress={onOpenBluetoothControls}
+            onProfilePress={onOpenProfileCommand}
+            onRevealDock={onToggleDashboardExpanded}
+            profileAccessibilityLabel="Open profile command hub"
+            revealAccessibilityLabel="Reveal ECS navigation dock"
+            revealAccessibilityHint="Temporarily shows the lower ECS tab bar for five seconds."
           />
         </View>
       ) : null}
@@ -3768,6 +3769,16 @@ function DashboardScreenInner() {
     hideDashboardDockReveal();
   }, [isLandscape]);
 
+  const handleOpenLandscapeBluetoothControls = useCallback(() => {
+    openUnifiedBluetoothCommand(router, {
+      onUnavailable: () => showToast('Bluetooth controls unavailable'),
+    });
+  }, [router, showToast]);
+
+  const handleOpenLandscapeProfileCommand = useCallback(() => {
+    setAuthVisible(true);
+  }, []);
+
   const handleOpenPowerConnections = useCallback(() => {
     try {
       router.push('/power/blu');
@@ -4510,6 +4521,8 @@ function DashboardScreenInner() {
         autoModeSustaining={modeEngineState.sustainedCondition?.isSustaining ?? false}
         isDashboardExpanded={isDashboardExpanded}
         showDockRevealControl={isLandscape}
+        onOpenBluetoothControls={handleOpenLandscapeBluetoothControls}
+        onOpenProfileCommand={handleOpenLandscapeProfileCommand}
         onSelectTab={handleTabSwitchWithModeSync}
         onToggleAutoMode={handleToggleAutoMode}
         onToggleDashboardExpanded={handleToggleDashboardExpanded}
@@ -4733,20 +4746,14 @@ const styles = StyleSheet.create({
   tabControlsSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
     paddingLeft: 4,
     paddingRight: 2,
     height: 34,
-    width: 34,
+    minWidth: 128,
     justifyContent: 'flex-end',
   },
   dashboardExpandBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignSelf: 'center',
   },
 
 

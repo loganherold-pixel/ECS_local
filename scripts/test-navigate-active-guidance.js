@@ -201,14 +201,19 @@ assert(
 );
 
 const landscapeDockReveal = read('components/LandscapeDockRevealButton.tsx');
+const landscapeShellControls = read('components/LandscapeShellControls.tsx');
 const dashboardSource = read('app/(tabs)/dashboard.tsx');
 assert(
   landscapeDockReveal.includes("name=\"apps-outline\"") &&
     landscapeDockReveal.includes('accessibilityLabel') &&
+    landscapeShellControls.includes("import LandscapeDockRevealButton from './LandscapeDockRevealButton';") &&
+    landscapeShellControls.includes("name=\"bluetooth-outline\"") &&
+    landscapeShellControls.includes('<ThemeToggle') &&
+    landscapeShellControls.includes("name=\"person-circle-outline\"") &&
     navigate.includes("import LandscapeDockRevealButton from '../../components/LandscapeDockRevealButton';") &&
-    dashboardSource.includes("import LandscapeDockRevealButton from '../../components/LandscapeDockRevealButton';") &&
-    dashboardSource.includes('<LandscapeDockRevealButton'),
-  'Landscape dock reveal affordance should use the shared apps-outline component across expanded map/dashboard tabs.',
+    dashboardSource.includes("import LandscapeShellControls from '../../components/LandscapeShellControls';") &&
+    dashboardSource.includes('<LandscapeShellControls'),
+  'Landscape dock reveal affordance should use the shared apps-outline control directly on Navigate and through the shell control cluster on Dashboard.',
 );
 
 const roadNavigationHook = read('lib/useRoadNavigation.ts');

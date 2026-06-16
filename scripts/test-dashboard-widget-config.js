@@ -287,8 +287,19 @@ assert.ok(
     !dashboardSource.includes('onOpenLibraryManager') &&
     dashboardSource.includes('tabControlsSection') &&
     dashboardSource.includes('dashboardExpandBtn') &&
-    dashboardSource.includes('width: 34'),
-  'Dashboard tab controls must not render the tiny add/plus button or reserve its old spacing.',
+    dashboardSource.includes('minWidth: 128'),
+  'Dashboard tab controls must not render the tiny add/plus button and must reserve a compact landscape shell-control lane.',
+);
+assert.ok(
+  dashboardSource.includes("import LandscapeShellControls from '../../components/LandscapeShellControls'") &&
+    dashboardSource.includes('<LandscapeShellControls') &&
+    dashboardSource.includes('onOpenBluetoothControls={handleOpenLandscapeBluetoothControls}') &&
+    dashboardSource.includes('onOpenProfileCommand={handleOpenLandscapeProfileCommand}') &&
+    dashboardSource.includes('onBluetoothPress={onOpenBluetoothControls}') &&
+    dashboardSource.includes('onProfilePress={onOpenProfileCommand}') &&
+    dashboardSource.includes('onRevealDock={onToggleDashboardExpanded}') &&
+    dashboardSource.includes("profileAccessibilityLabel=\"Open profile command hub\""),
+  'Dashboard landscape dock reveal control must also expose Bluetooth, theme, and profile command icons beside the lower dock toggle.',
 );
 assert.ok(
   dashboardSource.includes("type DashboardTab = 'widgets' | 'brief' | 'expedition'"),
@@ -665,15 +676,13 @@ assert.ok(
     expeditionTabIndex < widgetGridIndex,
   'New Expedition tab must render its scaffold before the widget grid branch.',
 );
-for (const label of [
-  'Overview',
-  'Route',
-  'Convoy',
-  'Camp',
-  'Logistics',
-  'Vehicles',
+for (const obsolete of [
+  'Operational Assessments',
+  'EXPEDITION_OPERATIONAL_ACTIONS',
+  'activeOperationalPanel',
+  'operationalPanel',
 ]) {
-  assert.ok(expeditionTabSource.includes(label), `Expedition scaffold must include "${label}".`);
+  assert.ok(!expeditionTabSource.includes(obsolete), `Expedition Hub must not render the retired operational assessment strip: ${obsolete}.`);
 }
 assert.ok(
   expeditionSummaryCardSource.includes('Expedition Summary'),
@@ -699,12 +708,9 @@ assert.ok(
   !incidentRecoveryPanelSource.includes('AI Assessment') &&
     incidentRecoveryPanelSource.includes('buildIncidentRecoveryContainerState') &&
     incidentRecoveryContainerStateSource.includes("headline: 'No active incident'") &&
-    expeditionTabSource.includes('EXPEDITION_OPERATIONAL_ACTIONS') &&
-    expeditionTabSource.includes('Operational Assessments') &&
-    expeditionTabSource.includes('accessibilityLabel={`Open ${action.title} assessment`}') &&
     expeditionPlaceholderModalSource.includes('ECS Assessment') &&
     expeditionSummaryCardSource.includes('disabled={!enabled}'),
-  'Expedition scaffold must expose operational assessment buttons, support ECS Assessment, render live incident container state, and disable Summary until completion.',
+  'Incident recovery surfaces must support ECS Assessment, render live incident container state, and keep Summary disabled until completion.',
 );
 assert.ok(
   expeditionTypesSource.includes("export type RouteLifecycleState = 'idle' | 'active' | 'ended' | 'completed'") &&
@@ -762,11 +768,10 @@ for (const snippet of [
   "onPress={() => setActiveOperationalPanel(action.title)}",
   'accessibilityLabel={`Open ${action.title} assessment`}',
   'accessibilityState={{ selected: activeOperationalPanel === action.title }}',
-  'activeOpacity={0.78}',
   'styles.operationalButton,',
   'activeOperationalPanel === action.title && styles.operationalButtonActive',
 ]) {
-  assert.ok(expeditionTabSource.includes(snippet), `Expedition operational buttons must include behavior snippet: ${snippet}`);
+  assert.ok(!expeditionTabSource.includes(snippet), `Expedition Hub must not include retired operational button snippet: ${snippet}`);
 }
 for (const snippet of [
   'export function createDefaultExpeditionFrameworkState',

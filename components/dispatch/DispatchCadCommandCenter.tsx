@@ -21,6 +21,7 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 
 import ECSModalShell from '../ECSModalShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import LandscapeShellControls from '../LandscapeShellControls';
 import DispatchConvoyCommandPanel from './DispatchConvoyCommandPanel';
 import { useApp } from '../../context/AppContext';
 import {
@@ -82,6 +83,7 @@ import {
   revealDashboardDock,
   setDashboardExpanded,
 } from '../../lib/dashboardChromeStore';
+import { openUnifiedBluetoothCommand } from '../../lib/bluetoothCommandNavigation';
 import {
   convoyMembershipService,
   type ActiveConvoyContext,
@@ -3679,16 +3681,24 @@ export default function DispatchCadCommandCenter() {
     revealDashboardDock(5000);
   };
 
+  const handleOpenLandscapeBluetoothControls = useCallback(() => {
+    openUnifiedBluetoothCommand(router, {
+      onUnavailable: () => showToast?.('Bluetooth controls unavailable.'),
+    });
+  }, [router, showToast]);
+
   const dockRevealControl = isLandscapeDispatch ? (
-    <TouchableOpacity
+    <LandscapeShellControls
       style={styles.landscapeDockRevealButton}
-      accessibilityRole="button"
-      accessibilityLabel="Show Dispatch navigation dock"
-      activeOpacity={0.82}
-      onPress={handleRevealDispatchDock}
-    >
-      <Ionicons name="apps-outline" size={13} color={TACTICAL.amber} />
-    </TouchableOpacity>
+      onBluetoothPress={handleOpenLandscapeBluetoothControls}
+      onProfilePress={() => setProfileVisible(true)}
+      onRevealDock={handleRevealDispatchDock}
+      bluetoothAccessibilityLabel="Open Dispatch Bluetooth controls"
+      profileAccessibilityLabel="Open dispatch profile command hub"
+      revealAccessibilityLabel="Show Dispatch navigation dock"
+      revealAccessibilityHint="Temporarily shows the lower ECS tab bar for five seconds."
+      testID="dispatch-landscape-shell-controls"
+    />
   ) : null;
 
   const convoyLifecycleButtonLabel = activeConvoyControl?.isLeader ? 'End Convoy' : 'Leave Convoy';
@@ -3708,6 +3718,7 @@ export default function DispatchCadCommandCenter() {
   const headerStrip = (
     <View style={[styles.headerStrip, isLandscapeDispatch ? styles.headerStripLandscape : null]}>
       <View style={[styles.headerActions, isLandscapeDispatch ? styles.headerActionsLandscape : null]}>
+        <View style={[styles.headerActionsPrimary, isLandscapeDispatch ? styles.headerActionsPrimaryLandscape : null]}>
         <TouchableOpacity
           style={[styles.headerUtilityButton, isLandscapeDispatch ? styles.headerUtilityButtonLandscape : null, styles.headerConvoyButton]}
           accessibilityRole="button"
@@ -3856,7 +3867,12 @@ export default function DispatchCadCommandCenter() {
             {connectionState.label}
           </Text>
         </View>
-        {dockRevealControl}
+        </View>
+        {dockRevealControl ? (
+          <View style={styles.headerActionsShellLandscape}>
+            {dockRevealControl}
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -6212,14 +6228,8 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   landscapeDockRevealButton: {
-    width: 28,
-    height: 24,
-    borderRadius: 7,
-    borderWidth: 1,
-    borderColor: `${TACTICAL.amber}66`,
-    backgroundColor: ECS_SURFACE.background.compact,
-    alignItems: 'center',
-    justifyContent: 'center',
+    minHeight: 28,
+    flexShrink: 0,
   },
   headerStrip: {
     minHeight: 38,
@@ -6250,8 +6260,29 @@ const styles = StyleSheet.create({
     gap: 4,
     flex: 1,
     flexShrink: 1,
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     flexWrap: 'nowrap',
+  },
+  headerActionsPrimary: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  headerActionsPrimaryLandscape: {
+    justifyContent: 'flex-start',
+    flexWrap: 'nowrap',
+    gap: 4,
+    flexShrink: 1,
+  },
+  headerActionsShellLandscape: {
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    marginLeft: 4,
   },
   headerUtilityButton: {
     minHeight: 30,

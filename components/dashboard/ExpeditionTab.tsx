@@ -101,22 +101,6 @@ type ReportFileInfo = {
   size: number | null;
 };
 
-type ExpeditionOperationalTitle = 'Overview' | 'Route' | 'Convoy' | 'Camp' | 'Logistics' | 'Vehicles';
-
-type ExpeditionOperationalAction = {
-  title: ExpeditionOperationalTitle;
-  icon: string;
-};
-
-const EXPEDITION_OPERATIONAL_ACTIONS: ExpeditionOperationalAction[] = [
-  { title: 'Overview', icon: 'compass-outline' },
-  { title: 'Route', icon: 'navigate-outline' },
-  { title: 'Convoy', icon: 'people-outline' },
-  { title: 'Camp', icon: 'bonfire-outline' },
-  { title: 'Logistics', icon: 'cube-outline' },
-  { title: 'Vehicles', icon: 'car-sport-outline' },
-];
-
 export default function ExpeditionTab({
   hasActiveRoute,
   teamMemberCount,
@@ -144,7 +128,6 @@ export default function ExpeditionTab({
   const [showUnlockedBadgesView, setShowUnlockedBadgesView] = useState(false);
   const [showArchiveView, setShowArchiveView] = useState(false);
   const [showReportsView, setShowReportsView] = useState(false);
-  const [activeOperationalPanel, setActiveOperationalPanel] = useState<ExpeditionOperationalTitle | null>(null);
 
   const loadCompletedTrips = useCallback(async () => {
     setLoading(true);
@@ -302,34 +285,6 @@ export default function ExpeditionTab({
             <Text style={styles.subtitle}>
               {liveHubStats.subtitle}
             </Text>
-          </View>
-        </View>
-
-        <View style={styles.operationalPanel}>
-          <View style={styles.sectionHeaderCompact}>
-            <Text style={styles.sectionTitle}>Operational Assessments</Text>
-            <Text style={styles.sectionCount}>6 views</Text>
-          </View>
-          <View style={styles.operationalGrid}>
-            {EXPEDITION_OPERATIONAL_ACTIONS.map((action) => (
-              <TouchableOpacity
-                key={action.title}
-                style={[
-                  styles.operationalButton,
-                  activeOperationalPanel === action.title && styles.operationalButtonActive,
-                ]}
-                activeOpacity={0.78}
-                accessibilityRole="button"
-                accessibilityLabel={`Open ${action.title} assessment`}
-                accessibilityState={{ selected: activeOperationalPanel === action.title }}
-                onPress={() => setActiveOperationalPanel(action.title)}
-              >
-                <Ionicons name={action.icon as any} size={14} color={TACTICAL.amber} />
-                <Text style={styles.operationalButtonText} numberOfLines={1}>
-                  {action.title}
-                </Text>
-              </TouchableOpacity>
-            ))}
           </View>
         </View>
 
@@ -1698,43 +1653,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     lineHeight: 15,
-  },
-  operationalPanel: {
-    borderTopWidth: 1,
-    borderTopColor: GOLD_RAIL.internal,
-    paddingTop: 10,
-    gap: 8,
-  },
-  operationalGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 7,
-  },
-  operationalButton: {
-    flexGrow: 1,
-    flexBasis: '30%',
-    minHeight: 44,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: 'rgba(17,20,24,0.82)',
-    paddingHorizontal: 9,
-    paddingVertical: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  operationalButtonActive: {
-    borderColor: GOLD_RAIL.subsection,
-    backgroundColor: ECS.accentSoft,
-  },
-  operationalButtonText: {
-    flexShrink: 1,
-    minWidth: 0,
-    color: TACTICAL.text,
-    fontSize: 10,
-    fontWeight: '900',
   },
   statsRow: {
     flexDirection: 'row',
