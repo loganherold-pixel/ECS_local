@@ -144,7 +144,14 @@ const routeSource = read('app/dev/route-overlay-qa.tsx');
   );
 });
 
-assert.ok(routeSource.includes('<Redirect href="/" />'), 'Dev route must redirect when the harness is disabled.');
+assert.ok(
+  routeSource.includes('<Redirect href="/dashboard" />'),
+  'Disabled route overlay QA route must redirect to the stable Dashboard tab.',
+);
+assert.ok(
+  !routeSource.includes('<Redirect href="/" />'),
+  'Disabled route overlay QA route must not redirect to the root loading route.',
+);
 assert.ok(routeSource.includes('isRouteOverlayQaHarnessEnabled'), 'Dev route must use the production guard.');
 assert.ok(screenSource.includes('getMapboxTokenSync'), 'QA screen may read already configured token synchronously.');
 assert.ok(!screenSource.includes('getMapboxToken('), 'QA screen must not call async token/provider resolution.');

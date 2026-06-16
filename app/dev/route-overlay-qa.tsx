@@ -10,7 +10,7 @@ export function isRouteOverlayQaRouteEnabled(): boolean {
 
 export default function RouteOverlayQaRoute() {
   if (!isRouteOverlayQaRouteEnabled()) {
-    return <Redirect href="/" />;
+    return <Redirect href="/dashboard" />;
   }
 
   return <RouteOverlayFixtureQaScreen />;
