@@ -73,6 +73,15 @@ export type {
 } from './badgeExpeditionIdentityReadiness';
 
 export {
+  materializeCompletedGuidanceSummary,
+} from './completedGuidanceSummaryMaterializer';
+
+export type {
+  CompletedGuidanceSummaryMaterializerInput,
+  CompletedGuidanceSummaryMaterializerResult,
+} from './completedGuidanceSummaryMaterializer';
+
+export {
   clearAllBadgesForTests,
   evaluateBadgesForCompletedTrip,
   getBadgeProgress,

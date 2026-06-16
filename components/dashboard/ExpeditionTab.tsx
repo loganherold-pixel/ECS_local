@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -35,6 +35,7 @@ import {
   getRecordsForTrip,
   getTripById,
   getUnlockedBadges,
+  materializeCompletedGuidanceSummary,
   refreshExpeditionInsights,
   shareExpeditionReport,
   type ExpeditionBadge,
@@ -128,6 +129,8 @@ export default function ExpeditionTab({
   const [showUnlockedBadgesView, setShowUnlockedBadgesView] = useState(false);
   const [showArchiveView, setShowArchiveView] = useState(false);
   const [showReportsView, setShowReportsView] = useState(false);
+  const [newBadgeUnlocks, setNewBadgeUnlocks] = useState<ExpeditionBadge[]>([]);
+  const materializedGuidanceSignaturesRef = useRef<Set<string>>(new Set());
 
   const loadCompletedTrips = useCallback(async () => {
     setLoading(true);
@@ -156,6 +159,50 @@ export default function ExpeditionTab({
       void loadCompletedTrips();
     }, [loadCompletedTrips]),
   );
+
+  useEffect(() => {
+    const signature = completedGuidanceMaterializationSignature({
+      completedExpeditionRecord,
+      routeCompleted,
+      routeLifecycleState,
+      routeLabel,
+    });
+    if (!signature || materializedGuidanceSignaturesRef.current.has(signature)) return;
+
+    materializedGuidanceSignaturesRef.current.add(signature);
+    let isCurrent = true;
+
+    void (async () => {
+      try {
+        const result = await materializeCompletedGuidanceSummary({
+          completedExpeditionRecord,
+          routeCompleted,
+          routeLabel,
+          gpsElevationFt,
+        });
+        if (!isCurrent) return;
+        if (result.badges.length > 0) {
+          setNewBadgeUnlocks(result.badges);
+        }
+        if (result.trip) {
+          await loadCompletedTrips();
+        }
+      } catch {
+        materializedGuidanceSignaturesRef.current.delete(signature);
+      }
+    })();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [
+    completedExpeditionRecord,
+    gpsElevationFt,
+    loadCompletedTrips,
+    routeCompleted,
+    routeLabel,
+    routeLifecycleState,
+  ]);
 
   const stats = useMemo(() => buildHubStats(completedTrips), [completedTrips]);
   const liveHubStats = useMemo(
@@ -317,7 +364,17 @@ export default function ExpeditionTab({
           </ExpeditionHubSection>
         )}
 
-        {hasUnlockedBadges ? (
+        {newBadgeUnlocks.length > 0 ? (
+          <View style={styles.badgeAchievementNotice}>
+            <BadgeUnlockSummary
+              badges={newBadgeUnlocks}
+              onOpenCollection={() => setShowUnlockedBadgesView(true)}
+              limit={4}
+              actionLabel="View Badges"
+              showAction
+            />
+          </View>
+        ) : hasUnlockedBadges ? (
           <BadgeUnlockSummary
             badges={unlockedBadges}
             onOpenCollection={() => setShowUnlockedBadgesView(true)}
@@ -1277,6 +1334,35 @@ function readStringValue(source: unknown, keys: string[]): string | null {
   return null;
 }
 
+function completedGuidanceMaterializationSignature({
+  completedExpeditionRecord,
+  routeCompleted,
+  routeLifecycleState,
+  routeLabel,
+}: {
+  completedExpeditionRecord?: unknown;
+  routeCompleted: boolean;
+  routeLifecycleState?: string;
+  routeLabel?: string;
+}): string | null {
+  const completedState = readStringValue(completedExpeditionRecord, ['state', 'status', 'lifecycle']);
+  const completedRouteVisible =
+    routeCompleted ||
+    routeLifecycleState === 'ended' ||
+    routeLifecycleState === 'completed' ||
+    completedState === 'complete' ||
+    completedState === 'completed' ||
+    completedState === 'arrived';
+  if (!completedRouteVisible) return null;
+
+  const id = readStringValue(completedExpeditionRecord, ['id', 'tripId', 'routeId', 'activeRouteId', 'guidanceSessionId']);
+  if (!id) return null;
+  const updatedAt =
+    readStringValue(completedExpeditionRecord, ['completedAt', 'endedAt', 'updatedAt', 'lastUpdatedAt', 'timestamp']) ??
+    'unknown';
+  return [id, completedState ?? routeLifecycleState ?? 'completed', updatedAt, routeLabel ?? ''].join(':');
+}
+
 function buildLiveHubStats({
   archivedStats,
   campCount,
@@ -1657,6 +1743,13 @@ const styles = StyleSheet.create({
   statsRow: {
     flexDirection: 'row',
     gap: 7,
+  },
+  badgeAchievementNotice: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(29,24,16,0.78)',
+    overflow: 'hidden',
   },
   statTile: {
     flex: 1,
