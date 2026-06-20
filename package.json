@@ -110,6 +110,8 @@
     "test:route-progress-minimap": "node ./scripts/test-route-progress-minimap.js",
     "test:gps-map-motion": "node ./scripts/test-gps-map-motion-stabilization.js",
     "test:active-guidance-live-gps-progress": "node ./scripts/test-active-guidance-live-gps-progress.js",
+    "test:active-guidance-directions-list": "node ./scripts/test-active-guidance-directions-list.js",
+    "test:hybrid-guidance-start-selection": "node ./scripts/test-hybrid-guidance-start-selection.js",
     "test:gps-permission-preflight": "node ./scripts/test-gps-permission-preflight.js",
     "test:gps-watch-sharing": "node ./scripts/test-gps-watch-sharing.js",
     "test:terrain-risk-reference-events": "node ./scripts/test-terrain-risk-reference-events.js",

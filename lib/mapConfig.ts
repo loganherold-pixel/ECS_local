@@ -46,10 +46,13 @@ export interface MapStyleDef {
   label: string;
   shortLabel: string;
   url: string;
+  renderUrl?: string;
   icon: string; // Ionicons name
 }
 
 export const DEFAULT_MAP_STYLE: MapStyleKey = 'ecs';
+export const MAPBOX_3D_STYLE_URL = 'mapbox://styles/expeditioncommand/cmonsduoz000b01spgl7bepey';
+export const MAPBOX_3D_RENDER_BASE_STYLE_URL = 'mapbox://styles/mapbox/satellite-streets-v12';
 
 export const MAP_STYLES: MapStyleDef[] = [
   {
@@ -77,7 +80,8 @@ export const MAP_STYLES: MapStyleDef[] = [
     key: '3d',
     label: '3D',
     shortLabel: '3D',
-    url: 'mapbox://styles/expeditioncommand/cmonsduoz000b01spgl7bepey',
+    url: MAPBOX_3D_STYLE_URL,
+    renderUrl: MAPBOX_3D_RENDER_BASE_STYLE_URL,
     icon: 'cube-outline',
   },
   {
@@ -94,7 +98,8 @@ export function getMapStyleDef(key?: MapStyleKey | null): MapStyleDef {
 }
 
 export function getMapStyleUrl(key?: MapStyleKey | null): string {
-  return getMapStyleDef(key).url;
+  const def = getMapStyleDef(key);
+  return def.renderUrl || def.url;
 }
 
 // ── Health Colors ───────────────────────────────────────────

@@ -25,6 +25,13 @@ assert(
   'MAP_STYLES should define the 3D style with the ECS Mapbox URL.',
 );
 assert(
+  mapConfig.includes("export const MAPBOX_3D_STYLE_URL =") &&
+    mapConfig.includes("export const MAPBOX_3D_RENDER_BASE_STYLE_URL = 'mapbox://styles/mapbox/satellite-streets-v12'") &&
+    mapConfig.includes('renderUrl: MAPBOX_3D_RENDER_BASE_STYLE_URL') &&
+    mapConfig.includes('return def.renderUrl || def.url;'),
+  'Live 3D rendering should resolve to a stable Mapbox base style while preserving the ECS 3D style identity.',
+);
+assert(
   navigate.includes("type NavigateMapStyleMode = 'day' | 'tac' | 'sat' | '3d'"),
   'Navigate style mode type should include the 3D UI mode.',
 );
@@ -44,6 +51,18 @@ assert(
   mapRenderer.includes('styleUrl: getMapStyleUrl(props.mapStyle || DEFAULT_MAP_STYLE)') &&
     mapRenderer.includes('() => getMapStyleUrl(mapStyle || DEFAULT_MAP_STYLE)'),
   'MapRenderer should continue resolving the active style through getMapStyleUrl.',
+);
+assert(
+  mapRenderer.includes('MAPBOX_3D_RENDER_BASE_STYLE_URL') &&
+    mapRenderer.includes('const MAPBOX_3D_TERRAIN_SOURCE_ID') &&
+    mapRenderer.includes('mapStyleKey: MapStyleKey') &&
+    mapRenderer.includes('mapStyleKey: props.mapStyle || DEFAULT_MAP_STYLE') &&
+    mapRenderer.includes("payload.mapStyleKey === '3d'") &&
+    mapRenderer.includes('map.addSource(terrainSourceId') &&
+    mapRenderer.includes('map.setTerrain({ source: terrainSourceId') &&
+    mapRenderer.includes('map.setTerrain(null)') &&
+    mapRenderer.includes('applyTerrainForMapStyle(activeMapStyleKey)'),
+  'MapRenderer should render 3D on a stable base map and layer Mapbox terrain additively.',
 );
 assert(
   mapRenderer.includes('function replayPendingPayloadAfterStyleChange(reason, attempt)') &&

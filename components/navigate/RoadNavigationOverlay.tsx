@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -19,6 +19,12 @@ import { ECS_TEXT, ECS_TEXT_SPACING } from '../../lib/ecsTypographyTokens';
 import type { RoadNavSearchSuggestion } from '../../lib/mapboxRoadNavigation';
 import type { RoadNavigationSessionState } from '../../lib/useRoadNavigation';
 import { ECS_CTA_LABELS } from '../../lib/ecsStateCopy';
+import {
+  buildActiveRoadDirectionList,
+  buildFallbackActiveDirectionList,
+  formatActiveDirectionDistance,
+  type ActiveGuidanceDirectionItem,
+} from '../../lib/activeGuidanceDirections';
 import type {
   RouteGuidanceReadinessTone,
   RouteGuidanceReadinessViewModel,
@@ -355,6 +361,67 @@ function StepList({
           })}
         </ScrollView>
       </ECSPanel>
+    </View>
+  );
+}
+
+function ActiveDirectionsDropdown({
+  items,
+}: {
+  items: ActiveGuidanceDirectionItem[];
+}) {
+  return (
+    <View style={styles.activeDirectionsDropdown}>
+      <View style={styles.activeDirectionsHeaderRow}>
+        <Text style={styles.activeDirectionsTitle} numberOfLines={1}>
+          DIRECTIONS
+        </Text>
+        <Text style={styles.activeDirectionsCount} numberOfLines={1}>
+          {items.length} remaining
+        </Text>
+      </View>
+      <ScrollView
+        style={styles.activeDirectionsScroll}
+        contentContainerStyle={styles.activeDirectionsScrollContent}
+        nestedScrollEnabled
+        showsVerticalScrollIndicator={false}
+      >
+        {items.map((item) => {
+          const metaParts = [
+            formatActiveDirectionDistance(item.distanceM),
+            item.detail,
+          ].filter((part): part is string => !!part && part !== '--');
+          return (
+            <View key={item.id} style={styles.activeDirectionsRow}>
+              <View
+                style={[
+                  styles.activeDirectionsSequenceBadge,
+                  item.kind === 'arrival' && styles.activeDirectionsSequenceBadgeArrival,
+                ]}
+              >
+                <Text style={styles.activeDirectionsSequenceText} numberOfLines={1}>
+                  {item.kind === 'arrival' ? 'END' : item.sequenceLabel}
+                </Text>
+              </View>
+              <View style={styles.activeDirectionsIconWrap}>
+                <Ionicons
+                  name={getManeuverIcon(item.instruction)}
+                  size={13}
+                  color={item.kind === 'arrival' ? '#FFD9C7' : TACTICAL.amber}
+                />
+              </View>
+              <View style={styles.activeDirectionsCopy}>
+                <Text style={styles.activeDirectionsInstruction} numberOfLines={2}>
+                  {item.instruction}
+                </Text>
+                <Text style={styles.activeDirectionsMeta} numberOfLines={1}>
+                  {metaParts.length > 0 ? metaParts.join(' - ') : 'Updating from active guidance'}
+                </Text>
+              </View>
+            </View>
+          );
+        })}
+      </ScrollView>
     </View>
   );
 }
@@ -746,6 +813,7 @@ function ActiveNavigationCard({
 >) {
   const nextInstruction =
     activeContext?.instruction ?? session.nextInstruction ?? 'Continue on highlighted route';
+  const [directionsExpanded, setDirectionsExpanded] = useState(false);
   const isRerouting = !activeContext && (session.status === 'rerouting' || session.isOffRoute);
   const effectiveMetrics =
     activeContext?.metrics && activeContext.metrics.length > 0
@@ -774,6 +842,34 @@ function ActiveNavigationCard({
   const guidanceEyebrow =
     activeContext?.eyebrow ?? (isRerouting ? 'ROUTE UPDATE' : 'NEXT ACTION');
   const maneuverIcon = getManeuverIcon(nextInstruction);
+  const roadDirections = useMemo(
+    () => buildActiveRoadDirectionList({
+      route: session.route,
+      currentStepIndex: session.currentStepIndex,
+      remainingDistanceM: session.remainingDistanceM,
+      nextInstructionDistanceM: session.nextInstructionDistanceM,
+    }),
+    [
+      session.currentStepIndex,
+      session.nextInstructionDistanceM,
+      session.remainingDistanceM,
+      session.route,
+    ],
+  );
+  const fallbackDirections = useMemo(
+    () => buildFallbackActiveDirectionList({
+      instruction: nextInstruction,
+      distanceM: session.nextInstructionDistanceM,
+      detail: activeContext?.noteText ?? 'Directions update from active guidance prompts.',
+    }),
+    [
+      activeContext?.noteText,
+      nextInstruction,
+      session.nextInstructionDistanceM,
+    ],
+  );
+  const activeDirections = roadDirections.length > 0 ? roadDirections : fallbackDirections;
+  const hasActiveDirections = activeDirections.length > 0;
   const landscapeCompact = typeof activeGuidanceWidth === 'number' && activeGuidanceWidth > 0;
   const guidancePosition = landscapeCompact
     ? {
@@ -908,21 +1004,47 @@ function ActiveNavigationCard({
               </TouchableOpacity>
             </View>
           </View>
-          {activeAccessoryMinimized && onExpandActiveAccessory ? (
-            <View style={styles.activeReadinessMiniRow}>
-              <TouchableOpacity
-                style={styles.activeReadinessMiniButton}
-                onPress={onExpandActiveAccessory}
-                activeOpacity={0.82}
-                accessibilityRole="button"
-                accessibilityLabel="Reopen Active Expedition Readiness"
-              >
-                <Ionicons name="document-text-outline" size={12} color={TACTICAL.amber} />
-                <Text style={styles.activeReadinessMiniButtonText} numberOfLines={1}>
-                  Readiness
-                </Text>
-              </TouchableOpacity>
+          {hasActiveDirections || (activeAccessoryMinimized && onExpandActiveAccessory) ? (
+            <View style={styles.activeGuidanceAuxActionRow}>
+              {hasActiveDirections ? (
+                <TouchableOpacity
+                  style={[
+                    styles.activeGuidanceDirectionsButton,
+                    directionsExpanded && styles.activeGuidanceDirectionsButtonActive,
+                  ]}
+                  onPress={() => setDirectionsExpanded((value) => !value)}
+                  activeOpacity={0.82}
+                  accessibilityRole="button"
+                  accessibilityLabel={directionsExpanded ? 'Hide active guidance directions' : 'Show active guidance directions'}
+                >
+                  <Ionicons
+                    name={directionsExpanded ? 'list' : 'list-outline'}
+                    size={12}
+                    color={TACTICAL.amber}
+                  />
+                  <Text style={styles.activeGuidanceDirectionsButtonText} numberOfLines={1}>
+                    Directions
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+              {activeAccessoryMinimized && onExpandActiveAccessory ? (
+                <TouchableOpacity
+                  style={styles.activeReadinessMiniButton}
+                  onPress={onExpandActiveAccessory}
+                  activeOpacity={0.82}
+                  accessibilityRole="button"
+                  accessibilityLabel="Reopen Active Expedition Readiness"
+                >
+                  <Ionicons name="document-text-outline" size={12} color={TACTICAL.amber} />
+                  <Text style={styles.activeReadinessMiniButtonText} numberOfLines={1}>
+                    Readiness
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
+          ) : null}
+          {directionsExpanded && hasActiveDirections ? (
+            <ActiveDirectionsDropdown items={activeDirections} />
           ) : null}
           <View style={styles.activeGuidanceRow}>
             <View style={styles.activeGuidanceIconWrap}>
@@ -1310,6 +1432,39 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 0,
   },
+  activeGuidanceAuxActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+    marginTop: 4,
+    marginBottom: 0,
+  },
+  activeGuidanceDirectionsButton: {
+    minHeight: 28,
+    minWidth: 92,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.24)',
+    backgroundColor: 'rgba(196,138,44,0.08)',
+  },
+  activeGuidanceDirectionsButtonActive: {
+    borderColor: 'rgba(242,194,77,0.42)',
+    backgroundColor: 'rgba(196,138,44,0.16)',
+  },
+  activeGuidanceDirectionsButtonText: {
+    ...ECS_TEXT.chip,
+    color: TACTICAL.amber,
+    fontSize: 7,
+    letterSpacing: 0,
+  },
   activeReadinessMiniButton: {
     minHeight: 28,
     flexDirection: 'row',
@@ -1327,6 +1482,100 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
     fontSize: 7,
     letterSpacing: 0,
+  },
+  activeDirectionsDropdown: {
+    width: '100%',
+    maxHeight: 190,
+    marginTop: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.22)',
+    backgroundColor: 'rgba(5,8,10,0.96)',
+    overflow: 'hidden',
+  },
+  activeDirectionsHeaderRow: {
+    minHeight: 30,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(196,138,44,0.12)',
+  },
+  activeDirectionsTitle: {
+    ...ECS_TEXT.statLabel,
+    color: TACTICAL.amber,
+    fontSize: 7,
+    letterSpacing: 0,
+  },
+  activeDirectionsCount: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+  },
+  activeDirectionsScroll: {
+    maxHeight: 156,
+  },
+  activeDirectionsScrollContent: {
+    paddingVertical: 3,
+  },
+  activeDirectionsRow: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  activeDirectionsSequenceBadge: {
+    width: 34,
+    height: 22,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.24)',
+    backgroundColor: 'rgba(196,138,44,0.09)',
+  },
+  activeDirectionsSequenceBadgeArrival: {
+    borderColor: 'rgba(255,128,92,0.28)',
+    backgroundColor: 'rgba(82,18,12,0.36)',
+  },
+  activeDirectionsSequenceText: {
+    ...ECS_TEXT.statLabel,
+    color: TACTICAL.amber,
+    fontSize: 7,
+    letterSpacing: 0,
+  },
+  activeDirectionsIconWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.18)',
+    backgroundColor: 'rgba(212,160,23,0.08)',
+  },
+  activeDirectionsCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  activeDirectionsInstruction: {
+    ...ECS_TEXT.cardTitle,
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  activeDirectionsMeta: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    marginTop: 2,
+    fontSize: 10,
+    lineHeight: 12,
   },
   previewSummaryWrap: {
     gap: 8,

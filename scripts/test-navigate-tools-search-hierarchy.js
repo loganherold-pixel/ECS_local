@@ -178,6 +178,15 @@ assert(
   `Main Tools sections should be Saved Routes, Route Planning, and Community Contributions only. Saw: ${toolsSectionTitles.join(', ')}`,
 );
 
+assert(
+  source.includes('const refreshSavedRouteAssets = useCallback(() => {') &&
+    source.includes('setSavedRoutesRefreshKey((key) => key + 1);') &&
+    source.includes('const unsubscribeRoutes = routeStore.subscribe(refreshSavedRouteAssets);') &&
+    source.includes('refreshSavedRouteAssets();') &&
+    source.includes('[refreshSavedRouteAssets]'),
+  'Route Command Center preview counts should subscribe to routeStore changes so imported/custom routes are counted before opening the center.',
+);
+
 const mapPresentationIndex = requireIndex(toolsPopupSource, 'MAP PRESENTATION', 'Tools should put the map presentation selector first.');
 const styleSelectorIndex = requireIndex(toolsPopupSource, 'MAP_STYLE_MODE_OPTIONS.map', 'Tools should preserve the existing map style selector options.');
 const forecastIndex = requireIndex(toolsPopupSource, 'CURRENT LOCATION FORECAST', 'Tools should render a compact current-location forecast row.');

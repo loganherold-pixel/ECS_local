@@ -10,6 +10,7 @@ import { WebView } from 'react-native-webview';
 import {
   getMapStyleUrl,
   DEFAULT_MAP_STYLE,
+  MAPBOX_3D_RENDER_BASE_STYLE_URL,
   type MapStyleKey,
   HEALTH_COLORS,
   computeBounds,
@@ -77,6 +78,7 @@ const DEBUG_CAMP_LAYERS =
   ((globalThis as typeof globalThis & { __ECS_CAMP_LAYER_DEBUG__?: boolean }).__ECS_CAMP_LAYER_DEBUG__ === true) ||
   (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_CAMP_LAYER_DEBUG === '1') ||
   DEBUG_CAMP_SCOUT_MAP;
+const MAPBOX_3D_TERRAIN_SOURCE_ID = 'ecs-navigate-3d-terrain-dem';
 export const CAMP_SCOUT_PIN_SOURCE_ID = 'ecs-camp-scout-pins-source';
 export const CAMP_SCOUT_PIN_LAYER_ID = 'ecs-camp-scout-pins-layer';
 export const DISPERSED_CAMPING_ELIGIBILITY_SOURCE_ID = 'ecs-dispersed-camping-eligibility';
@@ -88,10 +90,11 @@ export const DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID = 'ecs-dispersed-route-buil
 export const ESTABLISHED_CAMPSITES_SOURCE_ID = 'ecs-established-campsites';
 export const ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID = 'ecs-established-campsites-backplate';
 export const ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID = 'ecs-established-campsites-symbol';
-const MAP_STYLE_FALLBACK_CHAIN = [
+const MAP_STYLE_FALLBACK_CHAIN = Array.from(new Set([
+  MAPBOX_3D_RENDER_BASE_STYLE_URL,
   'mapbox://styles/mapbox/streets-v12',
   'mapbox://styles/mapbox/dark-v11',
-];
+]));
 
 type LatLng = {
   latitude?: number;
@@ -505,6 +508,7 @@ type WebMapPayload = {
   motionPriority: MapMotionPriority;
   showCrosshair: boolean;
   interactive: boolean;
+  mapStyleKey: MapStyleKey;
   styleUrl: string;
   cameraMode: CameraMode | null;
   campsites: {
@@ -1440,6 +1444,7 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
     motionPriority: props.motionPriority ?? 'hot',
     showCrosshair: !!props.showCrosshair,
     interactive: props.interactive !== false,
+    mapStyleKey: props.mapStyle || DEFAULT_MAP_STYLE,
     styleUrl: getMapStyleUrl(props.mapStyle || DEFAULT_MAP_STYLE),
     cameraMode: props.cameraMode ?? null,
     campsites: normalizeRenderedCampsiteMarkers(pickCampsiteMarkerInput(props)),
@@ -1585,6 +1590,7 @@ function makeMapHtml(
   const escapedInitialInteractive = JSON.stringify(initialInteractive);
   const compactTileCacheSize = surfaceMode === 'compact' ? COMPACT_MAP_MAX_TILE_CACHE_SIZE : null;
   const escapedCompactTileCacheSize = JSON.stringify(compactTileCacheSize);
+  const escapedTerrainSourceId = JSON.stringify(MAPBOX_3D_TERRAIN_SOURCE_ID);
 
   return `<!DOCTYPE html>
 <html>
@@ -2391,7 +2397,9 @@ function makeMapHtml(
       var fallbackStyleUrls = ${escapedFallbackStyleUrls};
       var initialInteractive = ${escapedInitialInteractive};
       var compactTileCacheSize = ${escapedCompactTileCacheSize};
+      var terrainSourceId = ${escapedTerrainSourceId};
       var activeStyleUrl = ${escapedInitialStyleUrl};
+      var activeMapStyleKey = null;
       var attemptedStyles = Object.create(null);
       attemptedStyles[activeStyleUrl] = true;
       var lastAppliedStyleUrl = activeStyleUrl;
@@ -2447,6 +2455,58 @@ function makeMapHtml(
           sendLog('style fallback setStyle failed: ' + String(e && e.message ? e.message : e));
           return false;
         }
+      }
+
+      function resolvePayloadMapStyleKey(payload) {
+        if (payload && payload.mapStyleKey === '3d') return '3d';
+        if (payload && payload.mapStyleKey) return payload.mapStyleKey;
+        return null;
+      }
+
+      function enableNavigate3dTerrain() {
+        if (!map || !isMapStyleReady()) return;
+        try {
+          if (!map.getSource(terrainSourceId)) {
+            map.addSource(terrainSourceId, {
+              type: 'raster-dem',
+              url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+              tileSize: 512,
+              maxzoom: 14
+            });
+          }
+          if (map.setTerrain) {
+            map.setTerrain({ source: terrainSourceId, exaggeration: 1.14 });
+          }
+          if (map.setFog) {
+            map.setFog({
+              color: 'rgba(5, 9, 13, 0.9)',
+              'high-color': 'rgba(62, 82, 94, 0.42)',
+              'horizon-blend': 0.08,
+              'space-color': '#020608',
+              'star-intensity': 0
+            });
+          }
+        } catch (e) {
+          sendLog('3d terrain skipped: ' + String(e && e.message ? e.message : e));
+        }
+      }
+
+      function clearNavigate3dTerrain() {
+        if (!map || !map.setTerrain) return;
+        try {
+          map.setTerrain(null);
+        } catch (e) {}
+        try {
+          if (map.setFog) map.setFog({});
+        } catch (e) {}
+      }
+
+      function applyTerrainForMapStyle(styleKey) {
+        if (styleKey === '3d') {
+          enableNavigate3dTerrain();
+          return;
+        }
+        clearNavigate3dTerrain();
       }
 
       function featureCollection(features) {
@@ -4376,6 +4436,7 @@ function makeMapHtml(
       }
 
       function reinitializeStyleArtifacts() {
+        applyTerrainForMapStyle(activeMapStyleKey);
         ensureSource('route-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource('route-progress-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource('segment-source', { type: 'geojson', data: featureCollection([]) });
@@ -6122,6 +6183,9 @@ function makeMapHtml(
 
       function applyPayload(payload) {
         if (!map || !payload || !map.isStyleLoaded()) return;
+
+        var nextMapStyleKey = resolvePayloadMapStyleKey(payload);
+        if (nextMapStyleKey) activeMapStyleKey = nextMapStyleKey;
 
         if (payload.styleUrl && payload.styleUrl !== requestedStyleUrl) {
           requestedStyleUrl = payload.styleUrl;

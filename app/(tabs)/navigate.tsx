@@ -628,6 +628,7 @@ import { useRemoteWeatherRouteWatcher } from '../../lib/remote/useRemoteWeatherR
 import { useVehicleHeading } from '../../lib/useVehicleHeading';
 import { useRoadNavigation } from '../../lib/useRoadNavigation';
 import { useTrailNavigation } from '../../lib/useTrailNavigation';
+import { shouldHybridStartWithTrail } from '../../lib/hybridGuidanceStart';
 import { analyzeRoute, type RouteAnalysis } from '../../lib/routeTileCacheEngine';
 import { evaluateCacheReadiness } from '../../lib/offlineCacheAwarenessEngine';
 import { deriveOfflineReadiness } from '../../lib/offlineReadinessPresentation';
@@ -11064,8 +11065,12 @@ const handleCreateRun = useCallback(() => {
     trailNavigationActive,
   ]);
   const hybridStartCanUseTrail =
-    fullRouteGuidanceModel.status === 'ready' &&
-    fullRouteGuidanceModel.startSource === 'gps_on_trail';
+    shouldHybridStartWithTrail({
+      fullRouteStatus: fullRouteGuidanceModel.status,
+      startSource: fullRouteGuidanceModel.startSource,
+      trailStartIndex: fullRouteGuidanceModel.trailStartIndex,
+      roadRoute: roadNavigation.session.route,
+    });
 
   const showTrailEntryEndpointMarker = useMemo(() => (
     fullRouteGuidanceModel.status === 'ready' &&
@@ -15190,23 +15195,27 @@ useEffect(() => {
 }, [recentSearchesVisible, roadNavigation.query]);
 const showIntelPopup = intelOpen && isMapUIReady;
 const activeImportedRoute = routeStore.getActive();
+const refreshSavedRouteAssets = useCallback(() => {
+  setSavedRoutesRefreshKey((key) => key + 1);
+}, []);
 useEffect(() => {
   let cancelled = false;
   void hydrateExploreFavoritesStore().finally(() => {
     if (!cancelled) {
-      setSavedRoutesRefreshKey((key) => key + 1);
+      refreshSavedRouteAssets();
     }
   });
 
-  const unsubscribe = subscribeExploreFavorites(() => {
-    setSavedRoutesRefreshKey((key) => key + 1);
-  });
+  const unsubscribeFavorites = subscribeExploreFavorites(refreshSavedRouteAssets);
+  const unsubscribeRoutes = routeStore.subscribe(refreshSavedRouteAssets);
+  refreshSavedRouteAssets();
 
   return () => {
     cancelled = true;
-    unsubscribe();
+    unsubscribeFavorites();
+    unsubscribeRoutes();
   };
-}, []);
+}, [refreshSavedRouteAssets]);
 
 const savedRouteAssetCounts = useMemo(
   () => calculateSavedRouteAssetCounts(savedRouteAssets),

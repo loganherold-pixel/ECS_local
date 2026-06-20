@@ -113,12 +113,33 @@ function createRouteAsset(route: ImportedRoute): SavedRouteAsset {
   };
 }
 
+function classifyRunAssetKind(source: string | null | undefined): SavedRouteAssetKind {
+  const normalized = String(source ?? '').toLowerCase();
+  if (normalized === 'stitch') return 'stitched';
+  if (normalized === 'custom') return 'custom';
+  if (
+    normalized === 'gpx' ||
+    normalized === 'kml' ||
+    normalized === 'kmz' ||
+    normalized === 'geojson' ||
+    normalized === 'json' ||
+    normalized === 'fit' ||
+    normalized === 'import' ||
+    normalized === 'imported' ||
+    normalized === 'cached_gpx'
+  ) {
+    return 'imported';
+  }
+  return 'recorded';
+}
+
 function createRunAsset(run: ECSRun): SavedRouteAsset {
-  const isStitched = String(run.source).toLowerCase() === 'stitch';
+  const kind = classifyRunAssetKind(run.source);
+  const isStitched = kind === 'stitched';
   const hasRouteGeometry = run.points.length > 1;
   return {
     id: `run:${run.id}`,
-    kind: isStitched ? 'stitched' : String(run.source).toLowerCase() === 'custom' ? 'custom' : 'recorded',
+    kind,
     title: run.title || (isStitched ? 'Stitched Expedition' : 'Saved Run'),
     subtitle: isStitched
       ? 'Multi-route expedition chain'
