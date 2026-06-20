@@ -1531,11 +1531,11 @@ const styles = StyleSheet.create({
   },
   quickActionTileBackgroundImage: {
     borderRadius: 11,
-    opacity: 0.78,
+    opacity: 0.72,
   },
   quickActionTileScrim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(0,0,0,0.62)',
   },
   quickActionTileVignette: {
     ...StyleSheet.absoluteFillObject,
@@ -1573,9 +1573,10 @@ const styles = StyleSheet.create({
     fontSize: 9.6,
     lineHeight: 12,
     letterSpacing: 0.35,
+    color: '#FFF7E2',
     textShadowColor: 'rgba(0,0,0,0.75)',
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    textShadowRadius: 3,
   },
   quickActionTileSubLabel: {
     minHeight: 0,
@@ -1583,7 +1584,7 @@ const styles = StyleSheet.create({
     fontSize: 7.4,
     lineHeight: 9,
     letterSpacing: 0.2,
-    color: 'rgba(240,236,224,0.72)',
+    color: 'rgba(255,247,226,0.82)',
     textShadowColor: 'rgba(0,0,0,0.72)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,

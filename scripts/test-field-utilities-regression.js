@@ -631,7 +631,7 @@ assertIncludes(
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'quickActionTileScrim'),
-  "backgroundColor: 'rgba(0,0,0,0.55)'",
+  "backgroundColor: 'rgba(0,0,0,0.62)'",
   'Available Actions image scrim should be strong enough to avoid washed-out text.',
 );
 assertIncludes(

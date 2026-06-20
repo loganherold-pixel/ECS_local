@@ -417,6 +417,7 @@
     "test:expedition-cloud-sync": "node ./scripts/test-expedition-cloud-sync-persistence.js",
     "test:gpx-run-detail-navigation": "node ./scripts/test-gpx-run-detail-navigation.js",
     "test:field-utilities-regression": "node ./scripts/test-field-utilities-regression.js",
+    "test:field-utilities-action-backgrounds": "node ./scripts/test-field-utilities-action-background-assets.js",
     "test:field-utilities-trip-summary-surfaces": "node ./scripts/test-field-utilities-trip-summary-surfaces.js",
     "test:field-utilities-weather-parity": "node ./scripts/test-field-utilities-weather-parity.js",
     "test:field-utilities-production": "node ./scripts/test-field-utilities-production-readiness.js",
