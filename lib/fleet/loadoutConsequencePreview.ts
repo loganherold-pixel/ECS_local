@@ -873,6 +873,7 @@ function sortSuggestionCandidates(
     isCritical: boolean;
     sourceKind: SourceKind;
     kind: 'accessory' | 'loadout';
+    category?: string | null;
   }>,
 ) {
   const zonePriority: Partial<Record<FleetLoadZone, number>> = {
@@ -893,6 +894,49 @@ function sortSuggestionCandidates(
   });
 }
 
+const LOAD_ZONE_ACTION_LABELS: Record<FleetLoadZone, string> = {
+  frontLow: 'front low storage',
+  rearLow: 'rear low storage',
+  bedLow: 'bed space',
+  bedHigh: 'high bed/cap storage',
+  roof: 'roof',
+  cab: 'cab interior',
+  underbody: 'underbody storage',
+  hitch: 'hitch storage',
+  trailer: 'trailer storage',
+};
+
+function loadZoneActionLabel(zone: FleetLoadZone): string {
+  return LOAD_ZONE_ACTION_LABELS[zone] ?? zone;
+}
+
+function itemLooksFixedMounted(input: {
+  kind: 'accessory' | 'loadout';
+  name: string;
+  category?: string | null;
+  loadZone: FleetLoadZone;
+}): boolean {
+  if (input.kind === 'accessory') return true;
+  if (input.loadZone !== 'roof' && input.loadZone !== 'bedHigh') return false;
+  const text = `${input.name} ${input.category ?? ''}`.toLowerCase();
+  return /\b(awning|rack|platform|mount|mounted|ladder|cap|carrier|solar)\b/.test(text);
+}
+
+function fixedMountedReason(itemName: string, loadZone: FleetLoadZone): string {
+  const location = loadZone === 'roof'
+    ? 'mounted on the roof'
+    : `mounted in ${loadZoneActionLabel(loadZone)}`;
+  return `${itemName} is ${location}; review the mount, weight, or whether it should stay installed instead of relocating it into bed/cab storage.`;
+}
+
+function portableHighMountedReason(itemName: string): string {
+  return `Move ${itemName} down to bed space or cab interior before committing the loadout.`;
+}
+
+function portableRearBiasedReason(itemName: string): string {
+  return `Move ${itemName} toward bed space or cab interior to reduce rear-biased load before committing the loadout.`;
+}
+
 function buildSuggestions(input: {
   afterWeight: FleetWeightResult;
   proposedAccessories: readonly FleetAccessoryInstall[];
@@ -908,6 +952,7 @@ function buildSuggestions(input: {
       loadZone: item.loadZone,
       isCritical: item.isCritical,
       sourceKind: fleetWeightSourceToSourceKind(item.weight.source),
+      category: item.category,
       kind: 'loadout' as const,
     })),
     ...input.proposedAccessories.map((item) => ({
@@ -917,6 +962,7 @@ function buildSuggestions(input: {
       loadZone: item.loadZone,
       isCritical: item.affectsPayload === false,
       sourceKind: fleetWeightSourceToSourceKind(item.installedWeight.source),
+      category: 'accessory',
       kind: 'accessory' as const,
     })),
   ]).filter((item) => item.weightLb > 0);
@@ -935,23 +981,35 @@ function buildSuggestions(input: {
     canApplyAutomatically: false,
     targetItemIds,
   });
+  const dismissAction = (
+    suggestionId: string,
+    targetItemIds: string[] = [],
+  ): LoadoutSuggestionAction => ({
+    actionId: `${suggestionId}:dismiss`,
+    suggestionId,
+    actionKind: 'dismiss',
+    label: 'Dismiss',
+    canApplyAutomatically: false,
+    targetItemIds,
+  });
   const automaticRelocateAction = (
     suggestionId: string,
     itemId: string,
     targetZone: FleetLoadZone,
     weightLb: number,
+    label: string,
   ): LoadoutSuggestionAction => ({
-    actionId: `${suggestionId}:relocate_item`,
+    actionId: `${suggestionId}:relocate_item:${targetZone}`,
     suggestionId,
     actionKind: 'relocate_item',
-    label: 'Apply relocation',
+    label,
     canApplyAutomatically: true,
     targetItemIds: [itemId],
     targetZoneId: targetZone,
     expectedImpact: {
       payloadRemainingDelta: 0,
       gvwrPercentDelta: 0,
-      riskSignalChanges: [`Move ${Math.round(weightLb)} lb to ${targetZone}`],
+      riskSignalChanges: [`Move ${Math.round(weightLb)} lb to ${loadZoneActionLabel(targetZone)}`],
     },
   });
   const automaticRemoveAction = (
@@ -975,6 +1033,8 @@ function buildSuggestions(input: {
     if (suggestions.length >= 5) break;
     if (item.loadZone === 'roof' || item.loadZone === 'bedHigh') {
       const suggestionId = `relocate-${item.id}`;
+      const fixedMounted = itemLooksFixedMounted(item);
+      const targetZones: FleetLoadZone[] = ['bedLow', 'cab'];
       suggestions.push({
         id: suggestionId,
         action: 'relocate',
@@ -984,17 +1044,33 @@ function buildSuggestions(input: {
         targetZone: 'bedLow',
         estimatedImpactLb: roundLbs(item.weightLb) ?? 0,
         priority: 100 + item.weightLb,
-        reason: `Move high-mounted ${item.kind} weight lower and more central before committing the loadout.`,
-        evidenceEvents: ['suggestion_viewed', item.kind === 'loadout' ? 'suggestion_applied' : 'suggestion_editor_opened'],
-        actions: item.kind === 'loadout'
-          ? [automaticRelocateAction(suggestionId, item.id, 'bedLow', item.weightLb)]
-          : [reviewAction(suggestionId, 'Open editor', 'open_editor', [item.id])],
-        applicationState: item.kind === 'loadout' ? 'pending' : 'review_only',
+        reason: fixedMounted
+          ? fixedMountedReason(item.name, item.loadZone)
+          : portableHighMountedReason(item.name),
+        evidenceEvents: fixedMounted
+          ? ['suggestion_viewed', 'suggestion_editor_opened', 'suggestion_dismissed']
+          : ['suggestion_viewed', 'suggestion_applied', 'suggestion_dismissed'],
+        actions: fixedMounted
+          ? [reviewAction(suggestionId, 'Review mount', 'open_editor', [item.id]), dismissAction(suggestionId, [item.id])]
+          : [
+              ...targetZones.map((zone) =>
+                automaticRelocateAction(
+                  suggestionId,
+                  item.id,
+                  zone,
+                  item.weightLb,
+                  `Relocate to ${loadZoneActionLabel(zone)}`,
+                )),
+              dismissAction(suggestionId, [item.id]),
+            ],
+        applicationState: fixedMounted ? 'review_only' : 'pending',
       });
       continue;
     }
     if (item.loadZone === 'hitch' || item.loadZone === 'trailer' || item.loadZone === 'rearLow') {
       const suggestionId = `relocate-${item.id}`;
+      const fixedMounted = itemLooksFixedMounted(item);
+      const targetZones: FleetLoadZone[] = ['bedLow', 'cab'];
       suggestions.push({
         id: suggestionId,
         action: 'relocate',
@@ -1004,12 +1080,26 @@ function buildSuggestions(input: {
         targetZone: 'bedLow',
         estimatedImpactLb: roundLbs(item.weightLb) ?? 0,
         priority: 80 + item.weightLb,
-        reason: `Reduce rear-biased load by moving this ${item.kind} toward a low central zone.`,
-        evidenceEvents: ['suggestion_viewed', item.kind === 'loadout' ? 'suggestion_applied' : 'suggestion_editor_opened'],
-        actions: item.kind === 'loadout'
-          ? [automaticRelocateAction(suggestionId, item.id, 'bedLow', item.weightLb)]
-          : [reviewAction(suggestionId, 'Open editor', 'open_editor', [item.id])],
-        applicationState: item.kind === 'loadout' ? 'pending' : 'review_only',
+        reason: fixedMounted
+          ? fixedMountedReason(item.name, item.loadZone)
+          : portableRearBiasedReason(item.name),
+        evidenceEvents: fixedMounted
+          ? ['suggestion_viewed', 'suggestion_editor_opened', 'suggestion_dismissed']
+          : ['suggestion_viewed', 'suggestion_applied', 'suggestion_dismissed'],
+        actions: fixedMounted
+          ? [reviewAction(suggestionId, 'Review mount', 'open_editor', [item.id]), dismissAction(suggestionId, [item.id])]
+          : [
+              ...targetZones.map((zone) =>
+                automaticRelocateAction(
+                  suggestionId,
+                  item.id,
+                  zone,
+                  item.weightLb,
+                  `Relocate to ${loadZoneActionLabel(zone)}`,
+                )),
+              dismissAction(suggestionId, [item.id]),
+            ],
+        applicationState: fixedMounted ? 'review_only' : 'pending',
       });
       continue;
     }
@@ -1026,7 +1116,7 @@ function buildSuggestions(input: {
         priority: 20 + item.weightLb,
         reason: 'Confirm this weight source before relying on the preview.',
         evidenceEvents: ['suggestion_viewed', 'suggestion_acknowledged', 'source_confirmed'],
-        actions: [reviewAction(suggestionId, 'Review suggestion', 'acknowledge', [item.id])],
+        actions: [reviewAction(suggestionId, 'Review suggestion', 'acknowledge', [item.id]), dismissAction(suggestionId, [item.id])],
         applicationState: 'review_only',
       });
     }
@@ -1050,8 +1140,8 @@ function buildSuggestions(input: {
         estimatedImpactLb: roundLbs(removable.weightLb) ?? 0,
         priority: 70 + removable.weightLb,
         reason: 'Payload margin is tight; remove optional weight before committing the loadout.',
-        evidenceEvents: ['suggestion_viewed', 'suggestion_applied'],
-        actions: [automaticRemoveAction(suggestionId, removable.id, removable.weightLb)],
+        evidenceEvents: ['suggestion_viewed', 'suggestion_applied', 'suggestion_dismissed'],
+        actions: [automaticRemoveAction(suggestionId, removable.id, removable.weightLb), dismissAction(suggestionId, [removable.id])],
         applicationState: 'pending',
       });
     }
@@ -1703,6 +1793,15 @@ export function applyLoadoutSuggestionAction(input: {
       applicationState: 'failed',
       telemetryEvent: 'suggestion_apply_failed',
       reason: 'Suggestion belongs to a different loadout.',
+      nextState: input.state,
+      appliedAction: action,
+    };
+  }
+  if (action.actionKind === 'dismiss') {
+    return {
+      applicationState: 'review_only',
+      telemetryEvent: 'suggestion_dismissed',
+      reason: 'Suggestion dismissed; no loadout state was changed.',
       nextState: input.state,
       appliedAction: action,
     };

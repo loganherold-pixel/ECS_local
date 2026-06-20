@@ -26,6 +26,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 
 const fleet = require(domainPath);
 const preview = require(previewPath);
+const panelSource = fs.readFileSync(panelPath, 'utf8');
 
 {
   const firstSnapshot = preview.getLoadoutConsequencePreviewSnapshot();
@@ -36,6 +37,28 @@ const preview = require(previewPath);
     'Command Brief external-store snapshot reads must be referentially stable between publishes.',
   );
 }
+
+assert.ok(
+  panelSource.includes('selectedImpactId') &&
+    panelSource.includes('selectedImpact') &&
+    panelSource.includes('impactExplanation'),
+  'Loadout consequence preview should keep selected top-heavy/recovery/route-fit explanation state.',
+);
+assert.ok(
+  panelSource.includes('preview.topHeavyRisk.reasons') &&
+    panelSource.includes('preview.recoveryDifficultyImpact.reasons') &&
+    panelSource.includes('preview.routeSuitabilityImpact.reasons'),
+  'Clickable consequence statuses should explain themselves from the deterministic preview impact reasons.',
+);
+assert.ok(
+  panelSource.includes('accessibilityRole="button"') &&
+    panelSource.includes('setSelectedImpactId'),
+  'Top-heavy, recovery, and route-fit status tiles should be pressable buttons.',
+);
+assert.ok(
+  !panelSource.includes('Main risk: {preview.mainRisk}'),
+  'The old blunt main-risk line should be replaced by the selected status explanation panel.',
+);
 
 function display(title) {
   return {
@@ -365,6 +388,105 @@ function riskAtLeast(level, expected) {
 }
 
 {
+  const vehicle = makeVehicle();
+  const result = preview.buildLoadoutConsequencePreview({
+    vehicleId: vehicle.id,
+    vehicle,
+    currentAccessories: [],
+    currentLoadoutItems: [],
+    proposedAccessories: [],
+    proposedLoadoutItems: [
+      loadoutItem('vehicle-awning', 48, 'roof', 'Vehicle awning', { category: 'camp' }),
+      loadoutItem('heated-blanket', 12, 'roof', 'Heated blanket', { category: 'winter' }),
+    ],
+    calculationMode: 'preview',
+    profileId: 'profile-1',
+    loadoutId: 'loadout-1',
+  });
+
+  const awningSuggestion = result.suggestions.find((item) => item.itemId === 'vehicle-awning');
+  assert.ok(awningSuggestion, 'Fixed roof-mounted awning should still be visible as a reviewable high-mounted load risk.');
+  assert.strictEqual(awningSuggestion.applicationState, 'review_only');
+  assert.ok(!awningSuggestion.actions.some((action) => action.actionKind === 'relocate_item'));
+  assert.ok(awningSuggestion.actions.some((action) => action.actionKind === 'open_editor'));
+  assert.ok(awningSuggestion.actions.some((action) => action.actionKind === 'dismiss'));
+  assert.ok(
+    awningSuggestion.reason.includes('mounted on the roof') &&
+      !awningSuggestion.reason.toLowerCase().includes('move high-mounted'),
+    'Awning copy should not imply the awning can be relocated into bed/cab storage.',
+  );
+
+  const blanketSuggestion = result.suggestions.find((item) => item.itemId === 'heated-blanket');
+  assert.ok(blanketSuggestion, 'Portable roof-stowed heated blanket should get concrete relocation choices.');
+  assert.ok(
+    blanketSuggestion.reason.includes('bed space') &&
+      blanketSuggestion.reason.includes('cab interior'),
+    'Portable relocation copy should name the possible target locations.',
+  );
+  const relocationActions = blanketSuggestion.actions.filter((action) => action.actionKind === 'relocate_item');
+  assert.deepStrictEqual(
+    relocationActions.map((action) => action.targetZoneId).sort(),
+    ['bedLow', 'cab'],
+    'Portable high-mounted gear should offer bed and cab relocation actions.',
+  );
+  assert.ok(relocationActions.some((action) => action.label === 'Relocate to bed space'));
+  assert.ok(relocationActions.some((action) => action.label === 'Relocate to cab interior'));
+  assert.ok(blanketSuggestion.actions.some((action) => action.actionKind === 'dismiss'));
+
+  const initialState = {
+    accessories: [],
+    compartments: [
+      compartment('roof-bin', 'roof', 'Roof bin'),
+      compartment('bed-bin', 'bedLow', 'Bed space'),
+      compartment('cab-bin', 'cab', 'Cab interior'),
+    ],
+    loadoutItems: [
+      stateItem('vehicle-awning', 48, 'roof', 'roof-bin', 'Vehicle awning', { category: 'camp' }),
+      stateItem('heated-blanket', 12, 'roof', 'roof-bin', 'Heated blanket', { category: 'winter' }),
+    ],
+  };
+
+  const bedAction = relocationActions.find((action) => action.targetZoneId === 'bedLow');
+  const bedApplied = preview.applyLoadoutSuggestionAction({
+    preview: result,
+    actionId: bedAction.actionId,
+    state: initialState,
+    currentVehicleId: vehicle.id,
+    currentProfileId: 'profile-1',
+    currentLoadoutId: 'loadout-1',
+  });
+  assert.strictEqual(bedApplied.applicationState, 'applied');
+  assert.strictEqual(bedApplied.nextState.loadoutItems.find((item) => item.id === 'heated-blanket').loadZone, 'bedLow');
+  assert.strictEqual(bedApplied.nextState.loadoutItems.find((item) => item.id === 'heated-blanket').compartmentId, 'bed-bin');
+
+  const cabAction = relocationActions.find((action) => action.targetZoneId === 'cab');
+  const cabApplied = preview.applyLoadoutSuggestionAction({
+    preview: result,
+    actionId: cabAction.actionId,
+    state: initialState,
+    currentVehicleId: vehicle.id,
+    currentProfileId: 'profile-1',
+    currentLoadoutId: 'loadout-1',
+  });
+  assert.strictEqual(cabApplied.applicationState, 'applied');
+  assert.strictEqual(cabApplied.nextState.loadoutItems.find((item) => item.id === 'heated-blanket').loadZone, 'cab');
+  assert.strictEqual(cabApplied.nextState.loadoutItems.find((item) => item.id === 'heated-blanket').compartmentId, 'cab-bin');
+
+  const dismissAction = blanketSuggestion.actions.find((action) => action.actionKind === 'dismiss');
+  const dismissed = preview.applyLoadoutSuggestionAction({
+    preview: result,
+    actionId: dismissAction.actionId,
+    state: initialState,
+    currentVehicleId: vehicle.id,
+    currentProfileId: 'profile-1',
+    currentLoadoutId: 'loadout-1',
+  });
+  assert.strictEqual(dismissed.applicationState, 'review_only');
+  assert.strictEqual(dismissed.telemetryEvent, 'suggestion_dismissed');
+  assert.strictEqual(dismissed.nextState, initialState);
+}
+
+{
   const vehicle = makeVehicle({
     buildProfile: {
       gvwr: null,
@@ -679,6 +801,9 @@ function riskAtLeast(level, expected) {
   assert.ok(panelSource.includes('handleViewSuggestion'), 'Suggestion View button must route through a visible view handler.');
   assert.ok(panelSource.includes('suggestion_viewed'), 'Suggestion view evidence event must be wired.');
   assert.ok(panelSource.includes('suggestion_acknowledged'), 'Review-only suggestions should acknowledge instead of accept.');
+  assert.ok(panelSource.includes('dismissedSuggestionIds'), 'Dismissed suggestions should disappear locally so the next suggestion can populate the panel.');
+  assert.ok(panelSource.includes("action.actionKind === 'dismiss'"), 'Dismiss action should be handled as an explicit visible suggestion action.');
+  assert.ok(!panelSource.includes('suggestion.actions.slice(0, 1)'), 'Suggestion rows should render all concrete destination actions, not only the first generic action.');
   assert.ok(!panelSource.includes('label="Accept"'), 'Review-only suggestions must not render Accept.');
   ['unsafe', 'do not drive', 'route blocked', 'vehicle unfit'].forEach((claim) => {
     assert.ok(!panelSource.toLowerCase().includes(claim), `Panel copy must avoid unsupported hard claim: ${claim}`);

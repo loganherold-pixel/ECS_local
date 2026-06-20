@@ -468,12 +468,16 @@ assert.ok(
   'Ram 2500 catalog confidence should stay distinct from readiness scoring.',
 );
 assert.ok(
-  leveledRamScore.recommendations.some((item) => /door.?placard|scale/i.test(item)),
-  'Readiness intelligence should tell the user how to improve confidence with placard or scale evidence.',
+  leveledRamScore.recommendations.some((item) => /optional precision|door.?placard|saved spec/i.test(item)),
+  'Readiness intelligence should frame placard/spec checks as optional precision, not required score recovery.',
 );
 assert.ok(
-  leveledRamScore.recommendations.some((item) => /37|tire|level/i.test(item)),
-  'Readiness intelligence should explain follow-up checks for the saved tire and level setup.',
+  !leveledRamScore.recommendations.some((item) => /scale ticket|before increasing route difficulty/i.test(item)),
+  'Readiness intelligence should not require a scale ticket or re-verifying saved tire/lift setup to recover readiness.',
+);
+assert.ok(
+  leveledRamScore.recommendations.some((item) => /37|tire|level|saved/i.test(item)),
+  'Readiness intelligence should acknowledge saved tire and level setup without treating it as a penalty.',
 );
 
 let ramAccessoryState = buildLoadout.createEmptyFleetBuildLoadoutState();
@@ -504,6 +508,55 @@ assert.ok(
 assert.ok(
   ramAccessoryScore.readinessScore >= 75,
   `Accessory-only Ram 2500 readiness should not collapse before gear is added; got ${ramAccessoryScore.readinessScore}.`,
+);
+
+function ramFieldAccessory(id, name, lbs, loadZone) {
+  return {
+    id,
+    vehicleId: leveledRamFleetVehicle.id,
+    catalogItemId: id,
+    name,
+    installedWeight: fleet.createFleetWeightValue(lbs, 'ecs_default', {
+      confidence: 70,
+      sourceLabel: `ECS ${name} estimate`,
+    }),
+    affectsPayload: true,
+    loadZone,
+    display: fleet.buildFleetDisplayMetadata({ title: name, vehicleType: 'accessory', useCases: ['overland'] }),
+  };
+}
+
+const fieldLoadedRamAccessories = [
+  ramFieldAccessory('roof-platform-field', 'Roof platform', 300, 'roof'),
+  ramFieldAccessory('bed-high-rack-field', 'Bed high rack', 300, 'bedHigh'),
+  ramFieldAccessory('bed-drawer-field', 'Bed drawer system', 723, 'bedLow'),
+  ramFieldAccessory('rear-bumper-field', 'Rear bumper and hitch gear', 300, 'hitch'),
+];
+const fieldLoadedRamWeightResult = fleet.calculateFleetWeightResult(leveledRamFleetVehicle, fieldLoadedRamAccessories, []);
+const fieldLoadedRamScore = fleet.scoreFleetVehicle(leveledRamFleetVehicle, fieldLoadedRamWeightResult, []);
+assert.strictEqual(fieldLoadedRamWeightResult.payloadRemaining.lbs, 825);
+assert.strictEqual(fieldLoadedRamWeightResult.gvwrUsagePct, 91.9);
+assert.strictEqual(fieldLoadedRamWeightResult.topHeavyRisk, 'critical');
+assert.strictEqual(fieldLoadedRamWeightResult.rearAxleRisk, 'critical');
+assert.notStrictEqual(
+  fieldLoadedRamScore.riskLevel,
+  'critical',
+  'A vehicle with 825 lb payload remaining and 91.9% GVWR use should not be called critical solely from load-zone bias.',
+);
+assert.ok(
+  fieldLoadedRamScore.payloadScore >= 80,
+  `Payload score should stay planning-usable with 825 lb remaining and 91.9% GVWR use, not ${fieldLoadedRamScore.payloadScore}.`,
+);
+assert.ok(
+  fieldLoadedRamScore.readinessScore >= 75,
+  `Readiness should stay in the realistic 75-95 band for this loaded-but-not-overloaded setup, not ${fieldLoadedRamScore.readinessScore}.`,
+);
+assert.ok(
+  fieldLoadedRamScore.readinessDeductions.some((deduction) =>
+    deduction.id === 'load-zone-risk' &&
+    deduction.points <= 6 &&
+    /load-zone/i.test(deduction.detail)),
+  'Load-zone readiness deductions should be explicit and bounded instead of silently dropping the score by 25 points.',
 );
 
 const consumableFleetVehicle = fleet.adaptLegacyVehicleToFleetVehicle({
@@ -833,6 +886,17 @@ const checklist = [
 ];
 const score = fleet.scoreFleetVehicle(legacy.vehicle, weightResult, checklist);
 assert.ok(score.blockingIssues.some((issue) => issue.includes('Verify tire pressure')));
+assert.ok(
+  score.missingRequiredChecklistItems.includes('Verify tire pressure'),
+  'Missing required checklist items should be exposed by label so the UI can explain actual gaps.',
+);
+assert.ok(
+  score.readinessDeductions.some((deduction) =>
+    deduction.id === 'required-checklist' &&
+    deduction.points <= 4 &&
+    deduction.detail.includes('Verify tire pressure')),
+  'Required checklist deduction should name the missing item and stay a small readiness nudge.',
+);
 
 const payload = fleet.generateFleetFabricPayload({
   vehicle: legacy.vehicle,

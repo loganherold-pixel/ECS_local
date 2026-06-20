@@ -116,7 +116,7 @@ assert(
 
 assert(
   fleetScreen.includes('readiness starts with payload margin') &&
-    fleetScreen.includes('Source confidence is evidence quality; it does not directly drag down readiness.') &&
+    fleetScreen.includes('Source confidence is evidence quality, not a direct readiness penalty.') &&
     !fleetScreen.includes('readiness blends payload score'),
   'Fleet readiness intelligence should separate readiness score drivers from source confidence evidence quality.',
 );

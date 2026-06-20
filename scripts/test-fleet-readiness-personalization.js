@@ -374,6 +374,25 @@ assert.ok(/configuration looks fit/i.test(readyCommand.summary), 'Ready Fleet co
 assert.ok(/verify scale weight|heavy cargo low/i.test(readyCommand.detail), 'Ready Fleet command should still offer a practical improvement recommendation.');
 
 const fleetSource = read('app', '(tabs)', 'fleet.tsx');
+assert.ok(
+  fleetSource.includes('resolveVisibleFleetScoring(model)'),
+  'Fleet card, readiness modal, and intelligence copy should use the same checklist-adjusted visible scoring result.',
+);
+assert.ok(
+  fleetSource.includes('readinessDeductions') &&
+    fleetSource.includes('missingRequiredChecklistItems') &&
+    fleetSource.includes('Missing required checklist:'),
+  'Fleet readiness explanation should list actual score deductions and missing required checklist labels.',
+);
+assert.ok(
+  !fleetSource.includes('Required setup/checklist gaps reduced readiness by ${checklistDelta} points'),
+  'Fleet readiness copy should not blame generic checklist gaps for load-zone or GVWR deductions.',
+);
+assert.ok(
+  fleetSource.includes('Saved and ECS-estimated values are usable for planning') ||
+    fleetSource.includes('Source confidence is evidence quality, not a direct readiness penalty'),
+  'Fleet readiness copy should separate evidence confidence from the readiness score.',
+);
 assert.ok(fleetSource.includes('commandSkipButton'), 'Fleet command should render a quiet concern skip control.');
 assert.ok(fleetSource.includes('Skip concern'), 'Fleet command skip control should use concise user-facing copy.');
 assert.ok(

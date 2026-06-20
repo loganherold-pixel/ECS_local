@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { ECSButton } from '../ECSButton';
 import { ECSBadge } from '../ECSStatus';
@@ -11,8 +11,20 @@ import {
   type LoadoutConsequencePreview,
   type LoadoutSuggestionAction,
   type LoadoutConsequenceSuggestion,
+  type LoadoutConsequenceImpact,
 } from '../../lib/fleet/loadoutConsequencePreview';
 import { emitFleetTelemetryEvent } from '../../lib/fleet/fleetTelemetryEvents';
+
+type ImpactId = 'topHeavy' | 'recovery' | 'routeFit';
+
+type ImpactDetail = {
+  id: ImpactId;
+  label: string;
+  impact: LoadoutConsequenceImpact;
+  reasons: string[];
+  clearCopy: string;
+  improvementCopy: string;
+};
 
 type Props = {
   preview: LoadoutConsequencePreview | null;
@@ -45,7 +57,7 @@ function riskTone(level: LoadoutConsequencePreview['topHeavyRisk']['level']): Re
 }
 
 function emitSuggestionEvent(
-  name: 'suggestion_viewed' | 'suggestion_acknowledged' | 'suggestion_editor_opened',
+  name: 'suggestion_viewed' | 'suggestion_acknowledged' | 'suggestion_editor_opened' | 'suggestion_dismissed',
   preview: LoadoutConsequencePreview,
   suggestion: LoadoutConsequenceSuggestion,
   action?: LoadoutSuggestionAction,
@@ -74,10 +86,20 @@ export default function LoadoutConsequencePreviewPanel({
   onSuggestionAction,
 }: Props) {
   const sourceWarnings = preview?.sourceWarnings.slice(0, compact ? 2 : 4) ?? [];
-  const suggestions = preview?.suggestions.slice(0, compact ? 2 : 3) ?? [];
   const warningSignature = sourceWarnings.map((warning) => `${warning.id}:${warning.message}`).join('|');
   const [acknowledgedWarningSignature, setAcknowledgedWarningSignature] = React.useState<string | null>(null);
   const [selectedSuggestionId, setSelectedSuggestionId] = React.useState<string | null>(null);
+  const [dismissedSuggestionIds, setDismissedSuggestionIds] = React.useState<Set<string>>(() => new Set());
+  const [selectedImpactId, setSelectedImpactId] = React.useState<ImpactId>('topHeavy');
+  const suggestionSignature = preview?.suggestions.map((suggestion) => suggestion.id).join('|') ?? 'none';
+  React.useEffect(() => {
+    setDismissedSuggestionIds(new Set());
+    setSelectedSuggestionId(null);
+    setSelectedImpactId('topHeavy');
+  }, [preview?.vehicleId, preview?.generatedAt, suggestionSignature]);
+  const suggestions = (preview?.suggestions ?? [])
+    .filter((suggestion) => !dismissedSuggestionIds.has(suggestion.id))
+    .slice(0, compact ? 2 : 3);
   const warningsAcknowledged = sourceWarnings.length > 0 && acknowledgedWarningSignature === warningSignature;
   const selectedSuggestion = suggestions.find((suggestion) => suggestion.id === selectedSuggestionId) ?? null;
 
@@ -85,6 +107,33 @@ export default function LoadoutConsequencePreviewPanel({
     if (!preview) return;
     setSelectedSuggestionId((current) => current === suggestion.id ? null : suggestion.id);
     emitSuggestionEvent('suggestion_viewed', preview, suggestion);
+  };
+
+  const handleSuggestionAction = (
+    suggestion: LoadoutConsequenceSuggestion,
+    action: LoadoutSuggestionAction,
+  ) => {
+    if (!preview) return;
+    if (action.actionKind === 'dismiss') {
+      setDismissedSuggestionIds((current) => {
+        const next = new Set(current);
+        next.add(suggestion.id);
+        return next;
+      });
+      setSelectedSuggestionId((current) => current === suggestion.id ? null : current);
+      emitSuggestionEvent('suggestion_dismissed', preview, suggestion, action);
+      return;
+    }
+    if (!action.canApplyAutomatically && !onSuggestionAction) {
+      emitSuggestionEvent(
+        action.actionKind === 'open_editor' ? 'suggestion_editor_opened' : 'suggestion_acknowledged',
+        preview,
+        suggestion,
+        action,
+      );
+    }
+    onSuggestionAction?.(suggestion, action);
+    if (!onSuggestionAction) onSuggestionAccepted?.(suggestion);
   };
 
   if (!preview) {
@@ -98,6 +147,42 @@ export default function LoadoutConsequencePreviewPanel({
       </ECSPanel>
     );
   }
+
+  const impactDetails: ImpactDetail[] = [
+    {
+      id: 'topHeavy',
+      label: 'TOP-HEAVY',
+      impact: preview.topHeavyRisk,
+      reasons: preview.topHeavyRisk.reasons,
+      clearCopy: 'High-mounted weight is not currently driving this staged change.',
+      improvementCopy: 'Keep dense gear low, avoid adding roof weight, and move portable high-mounted items to bed-low or cab storage.',
+    },
+    {
+      id: 'recovery',
+      label: 'RECOVERY',
+      impact: preview.recoveryDifficultyImpact,
+      reasons: preview.recoveryDifficultyImpact.reasons,
+      clearCopy: 'Recovery difficulty is not increasing from the staged loadout change.',
+      improvementCopy: 'Reduce rear or hitch bias, keep recovery gear reachable, and verify trailer tongue weight when attached.',
+    },
+    {
+      id: 'routeFit',
+      label: 'ROUTE FIT',
+      impact: preview.routeSuitabilityImpact,
+      reasons: preview.routeSuitabilityImpact.reasons,
+      clearCopy: 'Route fit is clear for the staged loadout signals ECS can see.',
+      improvementCopy: 'Match added weight to route difficulty, terrain risk, remoteness, and available recovery posture before committing.',
+    },
+  ];
+  const selectedImpact = impactDetails.find((detail) => detail.id === selectedImpactId) ?? impactDetails[0];
+  const impactExplanation =
+    selectedImpact.reasons.length > 0
+      ? selectedImpact.reasons.slice(0, compact ? 2 : 3)
+      : [
+          selectedImpact.impact.level === 'unknown'
+            ? 'ECS needs more route, source, or weight context before it can explain this status.'
+            : selectedImpact.clearCopy,
+        ];
 
   return (
     <ECSPanel variant={preview.availability === 'available' ? 'secondary' : 'warning'} style={styles.panel}>
@@ -120,23 +205,38 @@ export default function LoadoutConsequencePreviewPanel({
           <Text style={styles.metricValue}>{formatPct(preview.gvwrPercentAfter)}</Text>
           <Text style={styles.metricDelta}>{formatPct(preview.gvwrPercentDelta)}</Text>
         </View>
-        <View style={styles.metricTile}>
-          <Text style={styles.metricLabel}>TOP-HEAVY</Text>
-          <ECSBadge label={preview.topHeavyRisk.level.toUpperCase()} tone={riskTone(preview.topHeavyRisk.level)} compact />
-        </View>
-        <View style={styles.metricTile}>
-          <Text style={styles.metricLabel}>RECOVERY</Text>
-          <ECSBadge label={preview.recoveryDifficultyImpact.level.toUpperCase()} tone={riskTone(preview.recoveryDifficultyImpact.level)} compact />
-        </View>
-        <View style={styles.metricTile}>
-          <Text style={styles.metricLabel}>ROUTE FIT</Text>
-          <ECSBadge label={preview.routeSuitabilityImpact.level.toUpperCase()} tone={riskTone(preview.routeSuitabilityImpact.level)} compact />
-        </View>
+        {impactDetails.map((detail) => {
+          const selected = selectedImpact.id === detail.id;
+          return (
+            <TouchableOpacity
+              key={detail.id}
+              style={[styles.metricTile, styles.impactTile, selected && styles.metricTileSelected]}
+              onPress={() => setSelectedImpactId(detail.id)}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`${detail.label} status ${detail.impact.level}`}
+            >
+              <Text style={styles.metricLabel}>{detail.label}</Text>
+              <ECSBadge label={detail.impact.level.toUpperCase()} tone={riskTone(detail.impact.level)} compact />
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
-      <Text style={styles.mainRisk} numberOfLines={compact ? 2 : 3}>
-        Main risk: {preview.mainRisk}
-      </Text>
+      <View style={styles.impactExplanation}>
+        <View style={styles.impactHeaderRow}>
+          <ECSBadge label={selectedImpact.impact.level.toUpperCase()} tone={riskTone(selectedImpact.impact.level)} compact />
+          <Text style={styles.impactTitle}>{selectedImpact.label}</Text>
+        </View>
+        {impactExplanation.map((reason) => (
+          <Text key={reason} style={styles.impactReason} numberOfLines={compact ? 2 : 3}>
+            {reason}
+          </Text>
+        ))}
+        <Text style={styles.impactHelp} numberOfLines={compact ? 2 : 3}>
+          What helps: {selectedImpact.improvementCopy}
+        </Text>
+      </View>
 
       {sourceWarnings.length > 0 ? (
         <View style={styles.warningStack}>
@@ -173,45 +273,40 @@ export default function LoadoutConsequencePreviewPanel({
       {suggestions.length > 0 ? (
         <View style={styles.suggestionStack}>
           <Text style={styles.sectionLabel}>Remove or relocate</Text>
-          {suggestions.map((suggestion) => (
-            <View key={suggestion.id} style={styles.suggestionRow}>
-              <View style={styles.suggestionCopy}>
-                <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.itemName}</Text>
-                <Text style={styles.suggestionReason} numberOfLines={2}>{suggestion.reason}</Text>
-                <Text style={styles.traceHint} numberOfLines={1}>
-                  Trace: {suggestion.actions.map((action) => action.actionKind).join(' / ')}
-                </Text>
-              </View>
-              <View style={styles.suggestionActions}>
-                <ECSButton
-                  label="View"
-                  variant="tertiary"
-                  size="compact"
-                  onPress={() => handleViewSuggestion(suggestion)}
-                />
-                {suggestion.actions.slice(0, 1).map((action) => (
+          {suggestions.map((suggestion) => {
+            const hasDirectAction = suggestion.actions.some((action) =>
+              action.actionKind === 'relocate_item' || action.actionKind === 'remove_item');
+            return (
+              <View key={suggestion.id} style={styles.suggestionRow}>
+                <View style={styles.suggestionCopy}>
+                  <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.itemName}</Text>
+                  <Text style={styles.suggestionReason} numberOfLines={3}>{suggestion.reason}</Text>
+                  <Text style={styles.traceHint} numberOfLines={1}>
+                    Trace: {suggestion.actions.map((action) => action.actionKind).join(' / ')}
+                  </Text>
+                </View>
+                <View style={styles.suggestionActions}>
+                  {hasDirectAction ? null : (
+                    <ECSButton
+                      label="View"
+                      variant="tertiary"
+                      size="compact"
+                      onPress={() => handleViewSuggestion(suggestion)}
+                    />
+                  )}
+                  {suggestion.actions.map((action) => (
                   <ECSButton
                     key={action.actionId}
                     label={action.label}
                     variant={action.canApplyAutomatically ? 'secondary' : 'tertiary'}
                     size="compact"
-                    onPress={() => {
-                      if (!action.canApplyAutomatically && !onSuggestionAction) {
-                        emitSuggestionEvent(
-                          action.actionKind === 'open_editor' ? 'suggestion_editor_opened' : 'suggestion_acknowledged',
-                          preview,
-                          suggestion,
-                          action,
-                        );
-                      }
-                      onSuggestionAction?.(suggestion, action);
-                      if (!onSuggestionAction) onSuggestionAccepted?.(suggestion);
-                    }}
+                    onPress={() => handleSuggestionAction(suggestion, action)}
                   />
-                ))}
+                  ))}
+                </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
           {selectedSuggestion ? (
             <View style={styles.suggestionDetail}>
               <ECSBadge label="VIEWING" tone="info" compact />
@@ -277,6 +372,12 @@ const styles = StyleSheet.create({
     gap: 3,
     backgroundColor: ECS_SURFACE.background.compact,
   },
+  impactTile: {
+    justifyContent: 'space-between',
+  },
+  metricTileSelected: {
+    borderColor: TACTICAL.amber,
+  },
   metricLabel: {
     ...ECS_TEXT.statLabel,
   },
@@ -288,10 +389,33 @@ const styles = StyleSheet.create({
     ...ECS_TEXT.helper,
     color: TACTICAL.textMuted,
   },
-  mainRisk: {
-    ...ECS_TEXT.body,
+  impactExplanation: {
+    gap: 6,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    backgroundColor: ECS_SURFACE.background.compact,
+  },
+  impactHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  impactTitle: {
+    ...ECS_TEXT.statLabel,
     color: TACTICAL.text,
-    lineHeight: 18,
+  },
+  impactReason: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    lineHeight: 16,
+  },
+  impactHelp: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.text,
+    lineHeight: 16,
   },
   warningStack: {
     gap: 7,

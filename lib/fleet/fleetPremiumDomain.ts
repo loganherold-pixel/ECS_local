@@ -302,7 +302,16 @@ export interface FleetScoringResult {
   riskLevel: FleetRiskLevel;
   blockingIssues: string[];
   recommendations: string[];
+  missingRequiredChecklistItems?: string[];
+  readinessDeductions?: FleetReadinessDeduction[];
   confidence: number;
+}
+
+export interface FleetReadinessDeduction {
+  id: 'required-checklist' | 'checklist-prep' | 'load-zone-risk' | 'gvwr-use-risk';
+  label: string;
+  points: number;
+  detail: string;
 }
 
 export interface FleetFabricPayload {
@@ -1185,38 +1194,40 @@ function interpolateFleetScore(value: number, lowValue: number, lowScore: number
 }
 
 function payloadMarginScore(marginPctOfGvwr: number | null): number {
-  if (marginPctOfGvwr == null || !Number.isFinite(marginPctOfGvwr)) return 70;
-  if (marginPctOfGvwr >= 0.25) return 95;
-  if (marginPctOfGvwr >= 0.15) return interpolateFleetScore(marginPctOfGvwr, 0.15, 80, 0.25, 95);
-  if (marginPctOfGvwr >= 0.1) return interpolateFleetScore(marginPctOfGvwr, 0.1, 65, 0.15, 80);
-  if (marginPctOfGvwr >= 0.05) return interpolateFleetScore(marginPctOfGvwr, 0.05, 45, 0.1, 65);
-  return interpolateFleetScore(Math.max(0, marginPctOfGvwr), 0, 25, 0.05, 45);
+  if (marginPctOfGvwr == null || !Number.isFinite(marginPctOfGvwr)) return 75;
+  if (marginPctOfGvwr >= 0.25) return 97;
+  if (marginPctOfGvwr >= 0.15) return interpolateFleetScore(marginPctOfGvwr, 0.15, 90, 0.25, 97);
+  if (marginPctOfGvwr >= 0.1) return interpolateFleetScore(marginPctOfGvwr, 0.1, 84, 0.15, 90);
+  if (marginPctOfGvwr >= 0.075) return interpolateFleetScore(marginPctOfGvwr, 0.075, 79, 0.1, 84);
+  if (marginPctOfGvwr >= 0.05) return interpolateFleetScore(marginPctOfGvwr, 0.05, 68, 0.075, 79);
+  return interpolateFleetScore(Math.max(0, marginPctOfGvwr), 0, 35, 0.05, 68);
 }
 
 function scoreFleetPayloadReadiness(weightResult: FleetWeightResult): number {
-  if (!weightResult.payloadRemaining || !weightResult.gvwr || weightResult.gvwr.lbs <= 0) return 45;
+  if (!weightResult.payloadRemaining || !weightResult.gvwr || weightResult.gvwr.lbs <= 0) return 55;
   if (weightResult.payloadRemaining.lbs < 0) return 20;
 
   const payloadCapacity = weightResult.payloadCapacity?.lbs ?? null;
   const marginPctOfGvwr = weightResult.payloadRemaining.lbs / weightResult.gvwr.lbs;
   if (payloadCapacity == null || !Number.isFinite(payloadCapacity) || payloadCapacity <= 0) {
-    return Math.max(40, Math.min(85, 120 - (weightResult.gvwrUsagePct ?? 100)));
+    const usagePenalty = Math.max(0, (weightResult.gvwrUsagePct ?? 90) - 75) * 0.8;
+    return Math.max(55, Math.min(90, 92 - usagePenalty));
   }
 
   const usedPayload = Math.max(0, payloadCapacity - weightResult.payloadRemaining.lbs);
   const payloadUseRatio = Math.max(0, Math.min(1, usedPayload / payloadCapacity));
-  const capacityScore = 95 - payloadUseRatio * 55;
+  const capacityScore = 98 - payloadUseRatio * 27;
   return clampFleetConfidence(Math.min(capacityScore, payloadMarginScore(marginPctOfGvwr)));
 }
 
 function riskPenaltyForFleetScore(level: FleetRiskLevel): number {
   switch (level) {
     case 'critical':
-      return 25;
-    case 'caution':
       return 12;
-    case 'watch':
+    case 'caution':
       return 5;
+    case 'watch':
+      return 2;
     default:
       return 0;
   }
@@ -1250,7 +1261,7 @@ function payloadMarginContext(weightResult: FleetWeightResult): {
     marginLb,
     marginPctOfGvwr,
     healthy: marginLb != null && marginLb >= 1000 && (marginPctOfGvwr == null || marginPctOfGvwr >= 0.12),
-    moderate: marginLb != null && marginLb >= 0 && (marginPctOfGvwr == null || marginPctOfGvwr >= 0.1),
+    moderate: marginLb != null && marginLb >= 500 && (marginPctOfGvwr == null || marginPctOfGvwr >= 0.075),
   };
 }
 
@@ -1270,7 +1281,7 @@ function readinessLoadZoneRiskLevel(weightResult: FleetWeightResult): FleetRiskL
   if (margin.healthy) {
     return fleetRiskFromRank(Math.min(fleetRiskRank(rawLoadZoneRisk), 2));
   }
-  if (margin.moderate && !hasStagedLoadout) {
+  if (margin.moderate) {
     return fleetRiskFromRank(Math.min(fleetRiskRank(rawLoadZoneRisk), 2));
   }
   return rawLoadZoneRisk;
@@ -1306,7 +1317,7 @@ function copyForWeightConfidence(level: FleetWeightConfidenceLevel): Pick<FleetW
     case 'catalog_estimate':
       return { label: 'Catalog estimate', copy: 'Weight profile uses catalog/spec data for saved vehicle values.' };
     case 'ecs_estimate':
-      return { label: 'Saved profile', copy: 'Weight profile uses saved vehicle values. Confirm estimated or user-entered core weights for higher Fleet confidence.' };
+      return { label: 'Saved profile', copy: 'Weight profile uses saved or ECS-estimated values as planning-grade inputs. Measured values tighten confidence but are not required for readiness.' };
     case 'class_estimate':
       return { label: 'Class estimate', copy: 'Weight profile uses generic vehicle-class values until specific vehicle values are entered.' };
     case 'incomplete':
@@ -1581,6 +1592,7 @@ export function scoreFleetVehicle(
 ): FleetScoringResult {
   const blockingIssues = [...weightResult.warnings.filter((warning) => warning.includes('missing') || warning.includes('exceeds'))];
   const incompleteRequired = checklistItems.filter((item) => item.isRequired && !item.isComplete);
+  const missingRequiredChecklistItems = incompleteRequired.map((item) => item.label);
   for (const item of incompleteRequired) {
     blockingIssues.push(`Required checklist incomplete: ${item.label}`);
   }
@@ -1588,10 +1600,38 @@ export function scoreFleetVehicle(
   const loadZoneReadinessRisk = readinessLoadZoneRiskLevel(weightResult);
   const riskLevel = maxRisk(loadZoneReadinessRisk, weightResult.gvwrOverageRisk);
   const payloadScore = scoreFleetPayloadReadiness(weightResult);
-  const checklistPenalty = Math.min(25, incompleteRequired.length * 8);
-  const readinessScore = Math.max(0, Math.min(100, payloadScore - checklistPenalty - riskPenaltyForFleetScore(riskLevel)));
+  const checklistPenalty = Math.min(10, incompleteRequired.length * 3);
+  const riskPenalty = riskPenaltyForFleetScore(riskLevel);
+  const readinessScore = Math.max(0, Math.min(100, payloadScore - checklistPenalty - riskPenalty));
   const confidenceScore = weightResult.confidence;
   const overallScore = clampFleetConfidence(readinessScore * 0.5 + payloadScore * 0.25 + confidenceScore * 0.25);
+  const readinessDeductions: FleetReadinessDeduction[] = [
+    checklistPenalty > 0
+      ? {
+          id: 'required-checklist',
+          label: 'Required checklist',
+          points: checklistPenalty,
+          detail: `Missing required checklist item${missingRequiredChecklistItems.length === 1 ? '' : 's'}: ${missingRequiredChecklistItems.join(', ')}.`,
+        }
+      : null,
+    riskPenalty > 0
+      ? fleetRiskRank(weightResult.gvwrOverageRisk) >= fleetRiskRank(loadZoneReadinessRisk)
+        ? {
+            id: 'gvwr-use-risk',
+            label: 'GVWR use',
+            points: riskPenalty,
+            detail: weightResult.payloadRemaining && weightResult.payloadRemaining.lbs < 0
+              ? 'Operating weight exceeds GVWR.'
+              : `GVWR use is ${weightResult.gvwrUsagePct ?? '--'}%; payload margin is being watched but the vehicle is not over GVWR.`,
+          }
+        : {
+            id: 'load-zone-risk',
+            label: 'Load-zone balance',
+            points: riskPenalty,
+            detail: `Current load-zone risk is ${loadZoneReadinessRisk}; payload remains available but high, rear, hitch, or axle-biased weight still needs operator awareness.`,
+          }
+      : null,
+  ].filter((item): item is FleetReadinessDeduction => Boolean(item));
   const hasModifiedTiresOrLevel =
     (vehicle.buildProfile.tireSizeInches ?? 0) >= 35 ||
     (vehicle.buildProfile.suspensionLiftInches ?? 0) > 0 ||
@@ -1609,16 +1649,16 @@ export function scoreFleetVehicle(
       ? ['Move roof or bed-high weight lower when possible.']
       : []),
     ...(weightResult.installedAccessoryWeight.lbs > 0 && weightResult.installedAccessoryWeight.confidence < 75
-      ? ['Replace major accessory weight estimates with measured or manufacturer-listed weights.']
+      ? ['ECS accessory weight estimates are planning-grade; measure only major items if you want tighter confidence.']
       : []),
     ...(weightResult.activeLoadoutWeight.lbs > 0 && weightResult.activeLoadoutWeight.confidence < 75
-      ? ['Replace loadout item estimates with measured item or loaded-bin weights.']
+      ? ['ECS loadout weight estimates are planning-grade; measure loaded bins only when you need tighter precision.']
       : []),
     ...(weightResult.confidenceMetadata.level !== 'verified'
-      ? ['Confirm door-placard GVWR and measured operating weight with a scale ticket to raise confidence from estimate to verified.']
+      ? ['Optional precision: keep door-placard GVWR or saved spec notes current if you want higher evidence confidence.']
       : []),
     ...(hasModifiedTiresOrLevel
-      ? [`Verify ${tireSetupLabel} load rating, clearance, alignment, gearing/speedometer calibration, and level setup before increasing route difficulty.`]
+      ? [`Saved ${tireSetupLabel} and level setup is included in readiness; update load rating, clearance, gearing, or alignment notes only if the build changes.`]
       : []),
     ...(vehicle.buildProfile.useCases.includes('towing') && weightResult.zoneWeights.hitch.totalWeight.lbs > 0
       ? ['Review hitch and rear axle load before towing.']
@@ -1634,6 +1674,8 @@ export function scoreFleetVehicle(
     riskLevel,
     blockingIssues,
     recommendations,
+    missingRequiredChecklistItems,
+    readinessDeductions,
     confidence: clampFleetConfidence((confidenceScore + overallScore) / 2),
   };
 }

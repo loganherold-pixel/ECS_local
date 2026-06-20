@@ -275,14 +275,25 @@ function applyChecklistScoringContext(
   const optionalBonus = Math.min(4, completedCount);
   const readinessScore = Math.max(0, Math.min(100, scoring.readinessScore - optionalPenalty + optionalBonus));
   const overallScore = Math.max(0, Math.min(100, scoring.overallScore - optionalPenalty * 0.5 + optionalBonus));
-  const recommendationLabels = checklistRecommendations
+  const prepRecommendations = checklistRecommendations
     .filter((item) => checklistState.prepList.includes(item.id))
-    .slice(0, 3)
-    .map((item) => `Prep optional Fleet checklist item: ${item.label}.`);
+    .slice(0, 3);
+  const recommendationLabels = prepRecommendations.map((item) => `Prep optional Fleet checklist item: ${item.label}.`);
   return {
     ...scoring,
     readinessScore,
     overallScore,
+    readinessDeductions: [
+      ...(scoring.readinessDeductions ?? []),
+      optionalPenalty > 0
+        ? {
+            id: 'checklist-prep' as const,
+            label: 'Checklist prep',
+            points: optionalPenalty,
+            detail: `Prep checklist item${prepRecommendations.length === 1 ? '' : 's'} still open: ${prepRecommendations.map((item) => item.label).join(', ') || `${prepCount + unsureCount} item(s)`}.`,
+          }
+        : null,
+    ].filter((item): item is NonNullable<FleetScoringResult['readinessDeductions']>[number] => Boolean(item)),
     recommendations: [...scoring.recommendations, ...recommendationLabels],
   };
 }

@@ -300,6 +300,10 @@ function uniqueNoticeItems(values: readonly (string | null | undefined)[]): stri
   return Array.from(new Set(values.map((value) => (value ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean)));
 }
 
+function resolveVisibleFleetScoring(model: FleetVehicleCardModel): FleetScoringResult {
+  return model.fabricPayload?.scoring ?? model.scoringResult;
+}
+
 function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetConfidenceNotice {
   if (!model) {
     return {
@@ -315,7 +319,8 @@ function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetCo
     };
   }
 
-  const { vehicle, scoringResult, weightResult, weightSummary } = model;
+  const { vehicle, weightResult, weightSummary } = model;
+  const scoringResult = resolveVisibleFleetScoring(model);
   const score = Number.isFinite(scoringResult.readinessScore) ? Math.round(scoringResult.readinessScore) : null;
   const payloadScore = formatFleetScore(scoringResult.payloadScore);
   const confidenceScore = formatFleetPercent(scoringResult.confidenceScore);
@@ -323,30 +328,37 @@ function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetCo
     weightSummary.payloadRemainingLb == null
       ? 'Payload margin is unavailable until operating weight and GVWR are known.'
       : `Payload remaining is ${formatFleetWeightValue(weightSummary.payloadRemainingLb)}.`;
-  const checklistDelta = Math.max(0, Math.round(scoringResult.payloadScore - scoringResult.readinessScore));
   const riskFlags = weightSummary.riskFlags.map((flag) => `${flag.label}: ${flag.detail}`);
   const verificationActions = model.verificationTargets.map(
-    (target) => `Verify ${target} so ECS can raise confidence in readiness scoring.`,
+    (target) => `Optional precision: update ${target} evidence if you want tighter confidence.`,
   );
+  const readinessDeductions = scoringResult.readinessDeductions ?? [];
+  const deductionReasons = readinessDeductions.map(
+    (deduction) => `${deduction.label} reduced readiness by ${deduction.points} point${deduction.points === 1 ? '' : 's'}: ${deduction.detail}`,
+  );
+  const missingRequiredChecklistItems = scoringResult.missingRequiredChecklistItems ?? [];
+  const missingRequiredChecklistCopy = missingRequiredChecklistItems.length > 0
+    ? `Missing required checklist: ${missingRequiredChecklistItems.join(', ')}.`
+    : 'No required setup checklist penalty is currently reducing readiness.';
   const checklistActions = model.checklistRecommendations
     .filter((item) => item.status === 'recommended' || item.status === 'need_it' || item.status === 'not_sure')
     .slice(0, 3)
     .map((item) => `${item.label}: ${item.reason}`);
 
   const reasons = uniqueNoticeItems([
-    `${vehicle.name}: readiness starts with payload margin score ${payloadScore}, then applies required setup and current loadout risk penalties.`,
-    `Source confidence is evidence quality; it does not directly drag down readiness. Current source confidence is ${confidenceScore}.`,
+    `${vehicle.name}: readiness starts with payload margin score ${payloadScore}, then applies bounded current-load deductions when needed.`,
+    `Source confidence is evidence quality, not a direct readiness penalty. Current source confidence is ${confidenceScore}.`,
     `${vehicle.name}: current risk level is ${formatFleetRiskCopy(scoringResult.riskLevel)}.`,
     payloadMargin,
-    checklistDelta > 0
-      ? `Required setup/checklist gaps reduced readiness by ${checklistDelta} points from payload readiness.`
-      : 'No required setup checklist penalty is currently reducing readiness.',
+    missingRequiredChecklistCopy,
+    ...deductionReasons,
     ...riskFlags,
     ...scoringResult.blockingIssues.map((issue) => `${vehicle.name}: ${issue}`),
     ...weightResult.validationFlags.map((flag) => `${vehicle.name}: ${flag.message}`),
   ]).slice(0, 8);
 
   const improvements = uniqueNoticeItems([
+    ...missingRequiredChecklistItems.map((label) => `Complete required checklist item: ${label}.`),
     ...scoringResult.blockingIssues,
     ...scoringResult.recommendations,
     ...verificationActions,
@@ -354,7 +366,7 @@ function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetCo
     ...(weightResult.payloadRemaining && weightResult.payloadRemaining.lbs < 0
       ? ['Remove weight or re-stage loadout before using this vehicle for a trip.']
       : []),
-    model.needsVerification ? 'Open Weight Summary and replace estimated values with measured or manufacturer-backed values.' : null,
+    model.needsVerification ? 'Open Weight Summary only if you want to tighten evidence confidence beyond saved/ECS estimates.' : null,
     'Keep build, loadout, consumables, and recovery checklist entries current before departure.',
   ]).slice(0, 8);
 
@@ -367,13 +379,16 @@ function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetCo
         ? 'ECS needs more saved Fleet inputs before it can explain readiness for this vehicle.'
         : score >= 85
           ? 'This vehicle has a strong readiness posture from the saved Fleet inputs. Keep verification and loadout records current before departure.'
-          : 'This vehicle can be scored, but readiness is limited by payload margin, setup gaps, risk flags, or estimated source data.',
+          : score >= 75
+            ? 'This vehicle remains in a usable planning band. ECS is watching payload margin and load placement without treating saved estimates as a hard blocker.'
+            : 'This vehicle can be scored, but readiness is limited by payload margin, open checklist items, or active load risk flags.',
     intelligenceSummary: `ECS sees ${formatFleetRiskCopy(scoringResult.riskLevel)} readiness risk with payload score ${payloadScore}. Source confidence is evidence quality at ${confidenceScore}.`,
     intelligenceDetail:
+      readinessDeductions[0]?.detail ??
       scoringResult.blockingIssues[0] ??
       scoringResult.recommendations[0] ??
       (model.needsVerification
-        ? 'Verification gaps are limiting how much confidence ECS can place in this readiness score.'
+        ? 'Saved and ECS-estimated values are usable for planning; evidence confidence can be tightened from Weight Summary.'
         : 'No active readiness blockers are present in the saved Fleet profile.'),
     intelligenceConfidenceLabel: model.verificationStatus,
     reasons,
@@ -859,7 +874,8 @@ function FleetDetailPanel({
     buildLoadoutState?: FleetBuildLoadoutState,
   ) => Promise<void> | void;
 }) {
-  const { vehicle, weightResult, scoringResult, weightSummary } = model;
+  const { vehicle, weightResult, weightSummary } = model;
+  const scoringResult = resolveVisibleFleetScoring(model);
   const [showAdvancedMath, setShowAdvancedMath] = useState(false);
   const [pendingChecklistItem, setPendingChecklistItem] = useState<FleetChecklistRecommendation | null>(null);
   const activeChecklistCompartments = model.buildLoadoutState.compartments.filter((item) => item.status === 'active');
@@ -1180,7 +1196,8 @@ function FleetPremiumVehicleCard({
   onReadinessPress: () => void;
   onConfidencePress: () => void;
 }) {
-  const { vehicle, weightResult, scoringResult } = model;
+  const { vehicle, weightResult } = model;
+  const scoringResult = resolveVisibleFleetScoring(model);
   const connectivity = resolveFleetConnectivityBadge(isOnline, offlineMode);
   return (
     <ECSCard variant="primary" selected={isActive} style={s.premiumVehicleCard}>
