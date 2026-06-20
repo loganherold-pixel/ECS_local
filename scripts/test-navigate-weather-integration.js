@@ -97,10 +97,10 @@ assert(
   'Floating weather overlays should stay out of the active/preview guidance band.',
 );
 assert(
-  navigate.includes("const mapToastAttachedToGuidance = navigationOverlayMode === 'active'") &&
-    navigate.includes('topOffset={mapToastTopOffset}') &&
-    navigate.includes('zIndex={mapToastAttachedToGuidance ? 84 : undefined}'),
-  'Weather advisory toasts should share the active-guidance-safe toast offset.',
+  !navigate.includes("import Toast from '../../components/Toast';") &&
+    !navigate.includes('<Toast') &&
+    !navigate.includes('mapToastTopOffset'),
+  'Navigate weather should not revive the legacy centered Toast status banner.',
 );
 assert(
   !navigate.includes('const hideWeatherTopOverlays = true'),

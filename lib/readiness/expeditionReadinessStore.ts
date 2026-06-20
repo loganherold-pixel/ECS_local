@@ -2,7 +2,7 @@ import { getActiveVehicleState, subscribeActiveVehicleState } from '../fleet/act
 import { connectivity } from '../connectivity';
 import { evaluateCacheReadiness } from '../offlineCacheAwarenessEngine';
 import { powerSetupStore } from '../powerSetupStore';
-import { routeStore } from '../routeStore';
+import { routeStore, type ImportedRoute, type RouteWaypoint } from '../routeStore';
 import { tileCacheStore } from '../tileCacheStore';
 import { gpsUIState } from '../gpsUIState';
 import { bailoutStore } from '../bailoutStore';
@@ -45,6 +45,7 @@ import type {
   ExpeditionReadinessSourceKind,
   ExpeditionTripIntent,
   ExpeditionTripIntentSource,
+  ExpeditionReadinessRouteReferenceCoordinate,
 } from './expeditionReadinessTypes';
 
 type ReadinessListener = () => void;
@@ -227,13 +228,67 @@ function routeDistanceMilesFromSession(snapshot: NavigateRouteSessionSnapshot): 
   return null;
 }
 
+function normalizeReadinessRouteCoordinate(
+  latitude: unknown,
+  longitude: unknown,
+  label?: string | null,
+): ExpeditionReadinessRouteReferenceCoordinate | null {
+  const lat = Number(latitude);
+  const lon = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  return {
+    latitude: lat,
+    longitude: lon,
+    label: label ?? null,
+  };
+}
+
+function sessionEndpointCoordinate(snapshot: NavigateRouteSessionSnapshot): ExpeditionReadinessRouteReferenceCoordinate | null {
+  const endpoint = snapshot.routePoints[snapshot.routePoints.length - 1];
+  return endpoint ? normalizeReadinessRouteCoordinate(endpoint.lat, endpoint.lng, 'Trail endpoint') : null;
+}
+
+function importedRouteEndpointCoordinate(route: ImportedRoute | null | undefined): ExpeditionReadinessRouteReferenceCoordinate | null {
+  if (!route?.segments?.length) return null;
+  for (let segmentIndex = route.segments.length - 1; segmentIndex >= 0; segmentIndex -= 1) {
+    const segment = route.segments[segmentIndex];
+    const endpoint = segment.points?.[segment.points.length - 1];
+    const coordinate = endpoint ? normalizeReadinessRouteCoordinate(endpoint.lat, endpoint.lon, 'Trail endpoint') : null;
+    if (coordinate) return coordinate;
+  }
+  return null;
+}
+
+function importedWaypointCoordinate(
+  waypoint: RouteWaypoint,
+  index: number,
+): ExpeditionReadinessRouteReferenceCoordinate | null {
+  return normalizeReadinessRouteCoordinate(
+    waypoint.lat,
+    waypoint.lon,
+    waypoint.name || `Waypoint ${index + 1}`,
+  );
+}
+
+function importedWaypointCoordinates(route: ImportedRoute | null | undefined): ExpeditionReadinessRouteReferenceCoordinate[] {
+  return (route?.waypoints ?? [])
+    .map((waypoint, index) => importedWaypointCoordinate(waypoint, index))
+    .filter((coordinate): coordinate is ExpeditionReadinessRouteReferenceCoordinate => Boolean(coordinate));
+}
+
 function buildRouteInput() {
   const session = navigateRouteSessionStore.getSnapshot();
   if (session.lifecycle !== 'inactive') {
+    const importedRoute = session.routeId ? routeStore.getById(session.routeId) : null;
+    const endpointCoordinate = sessionEndpointCoordinate(session) ?? importedRouteEndpointCoordinate(importedRoute);
+    const waypointCoordinates = importedWaypointCoordinates(importedRoute);
     return {
       routeId: session.routeId ?? session.sessionId,
       name: session.routeTitle ?? session.statusLabel,
       distanceMiles: routeDistanceMilesFromSession(session),
+      endpointCoordinate,
+      waypointCoordinates: waypointCoordinates.length > 0 ? waypointCoordinates : null,
       difficulty: 'unknown' as const,
       riskLevel: session.isOffRoute ? 'high' as const : session.isRerouting ? 'moderate' as const : 'unknown' as const,
       routeConfidence: session.isOffRoute ? 'low' as const : session.lifecycle === 'active' ? 'high' as const : 'medium' as const,
@@ -246,10 +301,14 @@ function buildRouteInput() {
 
   const activeRoute = routeStore.getActive();
   if (!activeRoute) return null;
+  const endpointCoordinate = importedRouteEndpointCoordinate(activeRoute);
+  const waypointCoordinates = importedWaypointCoordinates(activeRoute);
   return {
     routeId: activeRoute.id,
     name: activeRoute.name,
     distanceMiles: activeRoute.total_distance_miles,
+    endpointCoordinate,
+    waypointCoordinates: waypointCoordinates.length > 0 ? waypointCoordinates : null,
     difficulty: 'unknown' as const,
     riskLevel: 'unknown' as const,
     routeConfidence: 'medium' as const,
@@ -323,7 +382,8 @@ function buildOfflineInput(
 ) {
   try {
     const snapshot = evaluateCacheReadiness();
-    const bailoutCount = bailoutStore.count();
+    const routeBailoutCount = activeRouteId ? bailoutStore.getRunBailouts(activeRouteId).length : 0;
+    const bailoutCount = activeRouteId ? routeBailoutCount : bailoutStore.count();
     const routeDownloaded = activeRouteId ? snapshot.cached_route_available || snapshot.expedition_data_covers_route : snapshot.cached_route_available;
     const mapsDownloaded = snapshot.cached_region_available || snapshot.cached_tile_count > 0;
     const routeGeometryCached = routeDownloaded;
@@ -344,6 +404,7 @@ function buildOfflineInput(
       campIntelDownloaded: expeditionDataAvailable,
       campCandidatesCached: expeditionDataAvailable,
       bailoutPointsCached: expeditionDataAvailable || bailoutCount > 0 ? true : null,
+      routeBailoutPointCount: activeRouteId ? routeBailoutCount : bailoutCount,
       weatherSnapshotAvailable,
       fuelTownRoadReferencesCached: expeditionDataAvailable ? true : null,
       emergencyDocsAvailable: null,

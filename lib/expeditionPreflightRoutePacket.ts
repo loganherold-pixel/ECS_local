@@ -186,20 +186,49 @@ function buildAdvisorySummary(
   asset: SavedRouteAsset,
   missionBrief?: MissionBrief | null,
   routeHazard?: ExpeditionPreflightRoutePacketInput['routeHazard'],
+  routeContext?: {
+    payload?: NavigationHandoffPayload | null;
+    run?: ECSRun | null;
+  },
 ): ExpeditionPreflightRoutePacket['advisory'] {
-  const lines = [
+  const routeGeometryPointCount =
+    (Array.isArray(routeContext?.payload?.trailGeometry) ? routeContext?.payload?.trailGeometry.length : 0) ||
+    (Array.isArray(routeContext?.run?.points) ? routeContext?.run?.points.length : 0);
+  const hasPlannedRouteGeometry = routeGeometryPointCount > 1;
+  const genericRoutePlanPattern = /confirm a planned route to sharpen expedition planning/i;
+  const downloadMapsLine = 'Download maps for the planned route area.';
+  const rawLines = [
     routeHazard?.approachingLine ?? null,
     ...(routeHazard?.detailLines ?? []),
     ...(missionBrief?.priorityMessage ? [missionBrief.priorityMessage] : []),
     ...(missionBrief?.operatorTasks ?? []).slice(0, 2).map((task) => task.title),
   ].filter((line): line is string => !!line);
+  const hadGenericRoutePlanAction =
+    rawLines.some((line) => genericRoutePlanPattern.test(line)) ||
+    genericRoutePlanPattern.test(missionBrief?.summary ?? '');
+  const lines = hasPlannedRouteGeometry
+    ? rawLines.filter((line) => !genericRoutePlanPattern.test(line))
+    : rawLines;
+  if (
+    hasPlannedRouteGeometry &&
+    hadGenericRoutePlanAction &&
+    !lines.some((line) => line.trim() === downloadMapsLine)
+  ) {
+    lines.push(downloadMapsLine);
+  }
+
+  const missionSummary = missionBrief?.summary ?? null;
+  const summary =
+    hasPlannedRouteGeometry && (!missionSummary || genericRoutePlanPattern.test(missionSummary))
+      ? `${asset.title} is already staged as the planned route. ${downloadMapsLine}`
+      : missionSummary ?? routeHazard?.summaryLine ?? 'Confirm route, weather, vehicle readiness, and key stops before departure.';
 
   return {
-    headline: missionBrief?.headline ?? `Preflight ready for ${asset.title}`,
-    summary:
-      missionBrief?.summary ??
-      routeHazard?.summaryLine ??
-      'Confirm route, weather, vehicle readiness, and key stops before departure.',
+    headline:
+      hasPlannedRouteGeometry && hadGenericRoutePlanAction
+        ? `Preflight ready for ${asset.title}`
+        : missionBrief?.headline ?? `Preflight ready for ${asset.title}`,
+    summary,
     lines: lines.slice(0, 4),
   };
 }
@@ -221,7 +250,10 @@ export function buildExpeditionPreflightRoutePacket(
   const checkpoints = buildCheckpointSummary(payload);
   const readiness = buildVehicleReadiness(input.vehicleContext);
   const weather = buildWeatherSummary(input.weatherSnapshot, input.routeHazard);
-  const advisory = buildAdvisorySummary(asset, input.missionBrief, input.routeHazard);
+  const advisory = buildAdvisorySummary(asset, input.missionBrief, input.routeHazard, {
+    payload,
+    run: input.run ?? null,
+  });
   const statusLabel =
     readiness.status === 'incomplete'
       ? 'Preflight incomplete'

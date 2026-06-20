@@ -77,6 +77,7 @@ import {
   type SavedRouteAsset,
   type SavedRouteAssetFilter,
 } from '../../lib/savedRouteAssets';
+import { buildTripBuilderRouteFromSavedRouteAsset } from '../../lib/savedRouteTripBuilderRoute';
 import {
   buildExpeditionPreflightRoutePacket,
   type ExpeditionPreflightRoutePacket,
@@ -366,7 +367,6 @@ import {
 
 import Header from '../../components/Header';
 import AuthModal from '../../components/AuthModal';
-import Toast from '../../components/Toast';
 import { ECSSearchField, ECSResultsEmptyState } from '../../components/ECSResults';
 import { ECSBadge } from '../../components/ECSStatus';
 import MapRenderer from '../../components/navigate/MapRenderer';
@@ -2484,6 +2484,68 @@ function buildRouteIntentForRoadPreview(input: {
       styleKey: input.mapStyle,
       // Campsite visibility layers are marker/data overlays, not tile-cache layers.
       layerContext: ['route-corridor', 'road-preview'],
+      zoomMin: input.analysis.zoomMin,
+      zoomMax: input.analysis.zoomMax,
+      corridorMiles: input.analysis.bufferMiles,
+    },
+    routeAnalysisSnapshot: input.analysis,
+    readinessSnapshot: input.readinessSnapshot ?? null,
+    preparedAt: new Date().toISOString(),
+  };
+}
+
+function runRoutePoints(run: ECSRun): RoadNavCoordinate[] {
+  return (Array.isArray(run.points) ? run.points : [])
+    .map((point) => ({
+      lat: Number(point.lat),
+      lng: Number(point.lng),
+    }))
+    .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+}
+
+function buildRouteIntentForSavedRouteRun(input: {
+  run: ECSRun;
+  routePoints: RoadNavCoordinate[];
+  analysis: RouteAnalysis;
+  mapStyle: string;
+  readinessSnapshot?: unknown | null;
+  source: 'saved_route_packet' | 'active_route_package';
+}): OfflineRouteIntentMetadata {
+  const first = input.routePoints[0] ?? null;
+  const last = input.routePoints[input.routePoints.length - 1] ?? null;
+  const distanceMeters =
+    Number.isFinite(input.run.stats?.distance_m)
+      ? input.run.stats.distance_m
+      : Number.isFinite(input.run.stats?.distance_miles)
+        ? input.run.stats.distance_miles * 1609.344
+        : null;
+
+  return {
+    syncType: 'route',
+    origin: {
+      mode: 'saved_route_start',
+      latitude: first?.lat ?? null,
+      longitude: first?.lng ?? null,
+      label: 'Saved route start',
+    },
+    destination: {
+      latitude: last?.lat ?? input.run.stats?.end_lat ?? first?.lat ?? 0,
+      longitude: last?.lng ?? input.run.stats?.end_lng ?? first?.lng ?? 0,
+      label: input.run.title || 'Saved route destination',
+      subtitle: `${String(input.run.source || 'saved route').toUpperCase()} route geometry`,
+      source: 'route_geometry',
+    },
+    routeGeometryPointCount: input.routePoints.length,
+    encodedPolyline: null,
+    routeSummary: {
+      distanceMeters,
+      distanceMiles: Number.isFinite(input.run.stats?.distance_miles) ? input.run.stats.distance_miles : null,
+      durationSeconds: null,
+      primaryName: input.run.title || 'Saved route',
+    },
+    mapContext: {
+      styleKey: input.mapStyle,
+      layerContext: ['route-corridor', input.source],
       zoomMin: input.analysis.zoomMin,
       zoomMax: input.analysis.zoomMax,
       corridorMiles: input.analysis.bufferMiles,
@@ -9966,18 +10028,34 @@ const activeSegmentProfile = useMemo<SegmentRiskProfile | null>(() => {
 }, [activeRun, validatedRunPoints]);
 
 
-    // -- Bailouts + Remoteness for active run -------
+    // -- Bailouts + Remoteness for active route -------
+  const activeBailoutRouteSnapshot = navigateRouteSessionStore.getSnapshot();
+  const activeBailoutRouteId =
+    activeBailoutRouteSnapshot.routeId ??
+    activeRun?.id ??
+    routeStore.getActive()?.id ??
+    activeBailoutRouteSnapshot.sessionId ??
+    null;
   const [activeBailouts, setActiveBailouts] = useState<BailoutPoint[]>([]);
 
-  useEffect(() => {
-    if (!activeRun) {
+  const refreshActiveBailouts = useCallback(() => {
+    if (!activeBailoutRouteId) {
       setActiveBailouts([]);
       return;
     }
 
-    const runBailouts = bailoutStore.getRunBailouts(activeRun.id);
-    setActiveBailouts(runBailouts.length > 0 ? runBailouts : bailoutStore.getAll());
-  }, [activeRun]);
+    setActiveBailouts(bailoutStore.getRunBailouts(activeBailoutRouteId));
+  }, [activeBailoutRouteId]);
+
+  useEffect(() => {
+    refreshActiveBailouts();
+  }, [refreshActiveBailouts]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshActiveBailouts();
+    }, [refreshActiveBailouts]),
+  );
 
   const enrichedProfile = useMemo(() => {
     if (!activeSegmentProfile || activeBailouts.length === 0) return activeSegmentProfile;
@@ -10029,6 +10107,26 @@ const segmentFeatures = useMemo(() => {
       };
     });
   }, [activeBailouts]);
+
+  const handleBailoutMarkerTap = useCallback((pinPayload: any) => {
+    hapticMicro();
+    const bailoutId =
+      typeof pinPayload === 'string'
+        ? pinPayload
+        : typeof pinPayload?.id === 'string'
+          ? pinPayload.id
+          : null;
+
+    if (!bailoutId) return;
+
+    router.push({
+      pathname: '/navigate-bailouts',
+      params: {
+        bailoutId,
+        ...(activeBailoutRouteId ? { routeId: activeBailoutRouteId } : {}),
+      },
+    } as any);
+  }, [activeBailoutRouteId, router]);
 
   const resetSnapshotForm = useCallback(() => {
     setPendingGpxContent(null);
@@ -13123,25 +13221,15 @@ const handleCreateRun = useCallback(() => {
       : routeSurfaceHeight;
   const routeBuilderControlBottomOffset =
     routeSurfaceBottomOffset + (routePreviewVisualMode ? routeSurfaceHeight + OVERLAY_GAP : 0);
-  const mapToastAttachedToGuidance = navigationOverlayMode === 'active';
   const activeGuidanceNotificationGap = OVERLAY_GAP + 6;
   const activeGuidanceToastTopOffset =
     roadNavigationSurfaceTopOffset +
     activeGuidanceRenderedHeight +
     activeGuidanceNotificationGap;
-  const mapToastTopOffset = mapToastAttachedToGuidance
-    ? activeGuidanceToastTopOffset
-    : PAGE_FRAME_TOP_GAP + 6;
   const campsiteDetailTopOffset =
     navigationOverlayMode === 'active' || navigationOverlayMode === 'arrived'
       ? activeGuidanceToastTopOffset
       : 0;
-  const mapToastEstimatedHeight = 48;
-  const mapToastGuidanceGap = 6;
-  const mapToastBottomOffset = Math.max(
-    LOWER_DOCK_EXCLUSION + 4,
-    routeSurfaceBottomOffset - mapToastEstimatedHeight - mapToastGuidanceGap,
-  );
   const routeStepDrawerBottomOffset = routeSurfaceBottomOffset + routeSurfaceHeight + OVERLAY_GAP;
   const navigateMajorPanelVisible =
     !!activeTopPopup ||
@@ -13673,10 +13761,156 @@ const handleTopToolboxLayout = useCallback(
       getRouteGuidanceStartReviewReasons(navigationStartReadinessStack);
   }, [navigationStartReadinessStack]);
 
+  const prepareOfflineRoutePackageFromRun = useCallback(async (run: ECSRun, options?: {
+    source?: 'saved_route_packet' | 'active_route_package';
+  }) => {
+    if (!liveNavigateServicesEnabled) {
+      showToast('CANNOT DOWNLOAD ROUTE OFFLINE DATA - LIVE SERVICES UNAVAILABLE');
+      return;
+    }
+
+    const routePoints = runRoutePoints(run);
+    if (routePoints.length < 2) {
+      showToast('SAVED ROUTE GEOMETRY UNAVAILABLE FOR OFFLINE PREP');
+      return;
+    }
+
+    const analysis = analyzeRoute(run);
+    if (!analysis) {
+      showToast('ROUTE OFFLINE ANALYSIS UNAVAILABLE');
+      return;
+    }
+
+    const packageSource = options?.source ?? 'saved_route_packet';
+    const routeIntent = buildRouteIntentForSavedRouteRun({
+      run,
+      routePoints,
+      analysis,
+      mapStyle,
+      readinessSnapshot: navigationStartReadinessStack,
+      source: packageSource,
+    });
+    const region = tileCacheStore.createFromRoute(
+      `Route: ${run.title || 'Saved Route'}`,
+      routePoints,
+      analysis.bufferMiles,
+      analysis.zoomMin,
+      analysis.zoomMax,
+      mapStyle,
+    );
+    if (!region) {
+      showToast('ROUTE OFFLINE CORRIDOR UNAVAILABLE');
+      return;
+    }
+    tileCacheStore.updateRegion(region.id, {
+      routeId: run.id,
+      sourceType: 'route-corridor',
+      syncType: 'route',
+      corridorMiles: analysis.bufferMiles,
+      routeIntent: routeIntent as unknown as Record<string, unknown>,
+    });
+
+    try {
+      const cachedRoute = await cacheOfflineRoute({
+        run,
+        health: computeRunHealth(run),
+        offlineTileRegionId: region.id,
+        tileCacheStatus: 'downloading',
+        routeIntent,
+        segmentRiskAnalysis: navigationStartReadinessStack,
+        includeRemoteConnectivityCache: true,
+      });
+      runStore.upsert({
+        ...run,
+        offline_cache: offlineCachedRouteToRunCacheManifest(cachedRoute, run),
+      });
+      setOfflineRouteReadinessState((prev) => ({
+        hydrated: true,
+        routes: [cachedRoute, ...prev.routes.filter((route) => route.id !== cachedRoute.id)],
+      }));
+      loadRuns();
+    } catch (error) {
+      await tileCacheStore.deleteRegion(region.id).catch(() => {});
+      showToast(error instanceof Error ? error.message : 'ROUTE OFFLINE METADATA SAVE FAILED');
+      return;
+    }
+
+    closeTopPopup('offlineCache');
+    setToolsMenuOpen(false);
+    showToast('ROUTE OFFLINE SYNC STARTED');
+
+    void offlineTileSyncCoordinator
+      .startRegionSync({
+        regionId: region.id,
+        source: 'route-corridor',
+        syncType: 'route',
+        regionName: region.name,
+        routeIntent: routeIntent as unknown as Record<string, unknown>,
+      })
+      .then(async (job) => {
+        const tileCacheStatus =
+          job.status === 'complete'
+            ? 'complete'
+            : job.status === 'cancelled'
+              ? 'not_requested'
+              : 'failed';
+        const updated = await cacheOfflineRoute({
+          run,
+          health: computeRunHealth(run),
+          offlineTileRegionId: region.id,
+          tileCacheStatus,
+          tileCacheError: job.errorMessage ?? null,
+          routeIntent,
+          segmentRiskAnalysis: navigationStartReadinessStack,
+          includeRemoteConnectivityCache: true,
+        });
+        runStore.upsert({
+          ...run,
+          offline_cache: offlineCachedRouteToRunCacheManifest(updated, run),
+        });
+        setOfflineRouteReadinessState((prev) => ({
+          hydrated: true,
+          routes: [updated, ...prev.routes.filter((route) => route.id !== updated.id)],
+        }));
+        loadRuns();
+      })
+      .catch(async (error: unknown) => {
+        const failed = await cacheOfflineRoute({
+          run,
+          health: computeRunHealth(run),
+          offlineTileRegionId: region.id,
+          tileCacheStatus: 'failed',
+          tileCacheError: error instanceof Error ? error.message : 'Route offline sync failed',
+          routeIntent,
+          segmentRiskAnalysis: navigationStartReadinessStack,
+          includeRemoteConnectivityCache: true,
+        }).catch(() => null);
+        if (failed) {
+          setOfflineRouteReadinessState((prev) => ({
+            hydrated: true,
+            routes: [failed, ...prev.routes.filter((route) => route.id !== failed.id)],
+          }));
+        }
+        loadRuns();
+      });
+  }, [
+    closeTopPopup,
+    liveNavigateServicesEnabled,
+    loadRuns,
+    mapStyle,
+    navigationStartReadinessStack,
+    showToast,
+  ]);
+
   const handlePrepareOfflineFromRoadPreview = useCallback(async () => {
     hapticCommand();
     const route = roadNavigation.session.route;
     if (!route || route.geometry.length < 2) {
+      const packageRun = (preflightRunId ? runStore.getById(preflightRunId) : null) ?? activeRun;
+      if (packageRun && packageRun.points.length > 1) {
+        await prepareOfflineRoutePackageFromRun(packageRun, { source: 'saved_route_packet' });
+        return;
+      }
       setRequestBoundsTrigger((prev) => prev + 1);
       openTopPopup('offlineCache');
       showToast('ROUTE PREVIEW NEEDS GPS BEFORE OFFLINE PREP');
@@ -13805,13 +14039,15 @@ const handleTopToolboxLayout = useCallback(
         loadRuns();
       });
   }, [
-    activeRun?.build_snapshot,
+    activeRun,
     closeTopPopup,
     liveNavigateServicesEnabled,
     loadRuns,
     mapStyle,
     navigationStartReadinessStack,
     openTopPopup,
+    preflightRunId,
+    prepareOfflineRoutePackageFromRun,
     roadNavigation.session.route,
     showToast,
   ]);
@@ -17357,15 +17593,34 @@ const stageSavedTrailAsset = useCallback(async (asset: SavedRouteAsset, actionLa
   showToast,
 ]);
 
-const handleOpenSavedRouteAsset = useCallback((asset: SavedRouteAsset) => {
-  void (async () => {
-    if (asset.navigationPayload && !asset.routeId && !asset.runId) {
-      await stageSavedTrailAsset(asset, 'SAVED TRAIL STAGED');
-      return;
-    }
-    await stageSavedRouteRun(asset, 'SAVED ROUTE STAGED');
-  })();
-}, [stageSavedRouteRun, stageSavedTrailAsset]);
+const handlePlanSavedRouteAsset = useCallback((asset: SavedRouteAsset) => {
+  hapticCommand();
+
+  if (!asset.capabilities.canPlan) {
+    showToast('TRIP PLAN NEEDS SAVED ROUTE GEOMETRY');
+    return;
+  }
+
+  const route = asset.routeId ? routeStore.getById(asset.routeId) : null;
+  const run = !route && asset.runId ? runStore.getById(asset.runId) : null;
+  const tripBuilderRoute = buildTripBuilderRouteFromSavedRouteAsset(asset, { route, run });
+
+  if (!tripBuilderRoute) {
+    showToast('TRIP PLAN NEEDS SAVED ROUTE GEOMETRY');
+    return;
+  }
+
+  saveTripBuilderRouteHandoff(tripBuilderRoute);
+  closeToolsPopup();
+  router.push({
+    pathname: '/explore-trip-builder',
+    params: {
+      routeId: String(tripBuilderRoute.id ?? asset.routeId ?? asset.runId ?? asset.id),
+      setup: '1',
+    },
+  } as any);
+  showToast(`TRIP SETUP READY: ${asset.title}`);
+}, [closeToolsPopup, router, showToast]);
 
 const handleNavigateSavedRouteAsset = useCallback((asset: SavedRouteAsset) => {
   void (async () => {
@@ -17419,6 +17674,22 @@ const handleOpenPreflightPacket = useCallback((asset: SavedRouteAsset) => {
   operationalWeather.refresh();
   openToolsChildPopup('preflightPacket');
 }, [ensureSavedRouteAssetRun, openToolsChildPopup, operationalWeather]);
+
+const handlePrepareOfflineFromPreflightPacket = useCallback(async () => {
+  hapticCommand();
+  const packetRun = preflightRun ?? (preflightRouteAsset ? ensureSavedRouteAssetRun(preflightRouteAsset) : null);
+  if (!packetRun) {
+    showToast('SAVED ROUTE GEOMETRY UNAVAILABLE FOR OFFLINE PREP');
+    return;
+  }
+  await prepareOfflineRoutePackageFromRun(packetRun, { source: 'saved_route_packet' });
+}, [
+  ensureSavedRouteAssetRun,
+  preflightRouteAsset,
+  preflightRun,
+  prepareOfflineRoutePackageFromRun,
+  showToast,
+]);
 
 const beginPreflightLaunchConfirmation = useCallback(() => {
   hapticCommand();
@@ -18887,6 +19158,7 @@ const stableMapSurface = useMemo(() => {
         pinMarkers={filteredPinMarkers}
         showCrosshair={showCrosshair}
         onLongPress={handleLongPress}
+        onBailoutTap={handleBailoutMarkerTap}
         onPinTap={handlePinTap}
         onSegmentTap={handleMapSegmentTap}
         onCampIntelTap={handleCampIntelTap}
@@ -19361,15 +19633,6 @@ const stableMapSurface = useMemo(() => {
           </Text>
         </Animated.View>
       ) : null}
-
-      <Toast
-        placement="top"
-        topOffset={mapToastTopOffset}
-        bottomOffset={mapToastBottomOffset}
-        horizontalInset={adaptive.isExpanded ? Math.max(OVERLAY_EDGE, 120) : OVERLAY_EDGE}
-        elevated
-        zIndex={mapToastAttachedToGuidance ? 84 : undefined}
-      />
 
       <CampIntelDetailCard
         visible={campIntelVisible && !!selectedCampIntel}
@@ -20076,6 +20339,7 @@ const stableMapSurface = useMemo(() => {
   handleLongPressNavigateHere,
   longPressContext,
   longPressInfoExpanded,
+  handleBailoutMarkerTap,
   handlePinTap,
   handleMapSegmentTap,
   handleCampIntelTap,
@@ -20328,12 +20592,9 @@ const stableMapSurface = useMemo(() => {
   roadNavigationSurfaceTopOffset,
   routeSurfaceBottomOffset,
   routeBuilderControlBottomOffset,
-  mapToastAttachedToGuidance,
   activeGuidanceEndpointHint,
   activeGuidanceEndpointHintOpacity,
   activeGuidanceToastTopOffset,
-  mapToastBottomOffset,
-  mapToastTopOffset,
   routeStepDrawerBottomOffset,
   TOOLS_TRIGGER_BOTTOM,
   TOOLS_TRIGGER_RIGHT,
@@ -22006,13 +22267,13 @@ const stableMapSurface = useMemo(() => {
                       <TouchableOpacity
                         style={[
                           styles.savedRouteAssetAction,
-                          !asset.capabilities.canOpen && styles.savedRouteAssetActionDisabled,
+                          !asset.capabilities.canPlan && styles.savedRouteAssetActionDisabled,
                         ]}
-                        onPress={() => handleOpenSavedRouteAsset(asset)}
-                        disabled={!asset.capabilities.canOpen}
+                        onPress={() => handlePlanSavedRouteAsset(asset)}
+                        disabled={!asset.capabilities.canPlan}
                         activeOpacity={0.84}
                       >
-                        <Text style={styles.savedRouteAssetActionText}>OPEN</Text>
+                        <Text style={styles.savedRouteAssetActionText}>PLAN</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={[
@@ -22231,6 +22492,13 @@ const stableMapSurface = useMemo(() => {
             >
               <Ionicons name="rocket-outline" size={15} color="#091014" />
               <Text style={styles.preflightPrimaryActionText}>LAUNCH EXPEDITION</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.preflightSecondaryAction}
+              onPress={handlePrepareOfflineFromPreflightPacket}
+              activeOpacity={0.86}
+            >
+              <Text style={styles.preflightSecondaryActionText}>DOWNLOAD MAPS</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.preflightSecondaryAction}

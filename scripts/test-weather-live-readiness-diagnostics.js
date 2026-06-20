@@ -309,9 +309,10 @@ async function run() {
   assertIncludes(dashboardSource, 'formatDashboardWeatherLocationConfidence(snapshot)', 'Dashboard Weather detail popup should expose location confidence.');
 
   const navigateSource = read('app/(tabs)/navigate.tsx');
-  assertIncludes(navigateSource, 'const hideWeatherTopOverlays = !topStatusOverlaysVisible || topRouteSurfaceVisible', 'Navigate weather overlays should stay out of active/preview guidance.');
-  assertIncludes(navigateSource, "const mapToastAttachedToGuidance = navigationOverlayMode === 'active'", 'Navigate weather notifications should attach below active guidance.');
-  assertIncludes(navigateSource, 'zIndex={mapToastAttachedToGuidance ? 84 : undefined}', 'Navigate weather toasts should not cover active guidance.');
+  assertIncludes(navigateSource, 'const hideWeatherTopOverlays =', 'Navigate weather overlays should declare a visibility gate.');
+  assertIncludes(navigateSource, '!topStatusOverlaysVisible || topRouteSurfaceVisible || idleDestinationSearchVisible', 'Navigate weather overlays should stay out of active/preview guidance.');
+  assert(!navigateSource.includes("import Toast from '../../components/Toast';"), 'Navigate weather should not import the legacy centered Toast status banner.');
+  assert(!navigateSource.includes('<Toast'), 'Navigate weather should not render legacy centered Toast notifications over the map.');
 
   resetSharedWeatherBriefPublisherForTests();
   briefCadLogStore.clear();

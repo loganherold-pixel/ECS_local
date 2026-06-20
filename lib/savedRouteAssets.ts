@@ -17,10 +17,10 @@ export type SavedRouteAssetKind =
 
 export type SavedRouteAssetFilter = 'all' | 'imported' | 'custom' | 'stitched' | 'bookmarked';
 
-export type SavedRouteAssetAction = 'open' | 'navigate' | 'stitch';
+export type SavedRouteAssetAction = 'plan' | 'navigate' | 'stitch';
 
 export interface SavedRouteAssetCapabilities {
-  canOpen: boolean;
+  canPlan: boolean;
   canNavigate: boolean;
   canStitch: boolean;
   canRename: boolean;
@@ -104,7 +104,7 @@ function createRouteAsset(route: ImportedRoute): SavedRouteAsset {
     duplicateCount: 1,
     duplicateIndex: 1,
     capabilities: {
-      canOpen: true,
+      canPlan: countRoutePoints(route) > 1,
       canNavigate: true,
       canStitch: true,
       canRename: true,
@@ -162,7 +162,7 @@ function createRunAsset(run: ECSRun): SavedRouteAsset {
     duplicateCount: 1,
     duplicateIndex: 1,
     capabilities: {
-      canOpen: hasRouteGeometry,
+      canPlan: hasRouteGeometry,
       canNavigate: hasRouteGeometry,
       canStitch: hasRouteGeometry,
       canRename: true,
@@ -193,7 +193,7 @@ function createFavoriteAsset(favorite: FavoriteTrailRecord): SavedRouteAsset {
     duplicateCount: 1,
     duplicateIndex: 1,
     capabilities: {
-      canOpen: true,
+      canPlan: false,
       canNavigate: true,
       canStitch: false,
       canRename: false,
@@ -225,7 +225,7 @@ function createPlanAsset(plan: FavoriteTrailPlan): SavedRouteAsset {
     duplicateCount: 1,
     duplicateIndex: 1,
     capabilities: {
-      canOpen: !!firstItem?.navigationPayload,
+      canPlan: false,
       canNavigate: !!firstItem?.navigationPayload,
       canStitch: false,
       canRename: true,

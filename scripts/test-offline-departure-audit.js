@@ -25,6 +25,9 @@ function read(...parts) {
 const {
   buildExpeditionReadiness,
 } = require(path.join(root, 'lib', 'readiness', 'expeditionReadinessScoring.ts'));
+const {
+  evaluateCampCandidateViability,
+} = require(path.join(root, 'lib', 'readiness', 'campCandidateViability.ts'));
 
 const now = '2026-05-14T12:00:00.000Z';
 const route = {
@@ -135,6 +138,225 @@ assert.strictEqual(
   noRouteOvernightAudit.departureAudit.find((item) => item.itemId === 'camp-candidates')?.disabledActionReason,
   'You must first have an active route or build a trip.',
   'Camp candidate actions should be route-gated for camping trips when no route exists yet.',
+);
+
+const endpointCampViableAudit = buildExpeditionReadiness({
+  ...base,
+  tripIntent: 'overnightCamp',
+  tripIntentSource: 'selected',
+  readinessProfile: 'overnight',
+  route: {
+    ...base.route,
+    endpointCoordinate: { latitude: 38.5000, longitude: -109.5000 },
+    waypointCoordinates: [
+      { latitude: 38.4500, longitude: -109.5300, label: 'Trail camp waypoint' },
+    ],
+  },
+  campCandidates: [{
+    id: 'endpoint-camp',
+    name: 'Endpoint established camp',
+    coordinates: { latitude: 38.5050, longitude: -109.5050 },
+    legalAccessConfidence: 'medium',
+    officialConfirmation: false,
+    source: 'cached',
+    updatedAt: now,
+  }],
+  offline: {
+    ...base.offline,
+    packageStatus: 'ready',
+    campCandidatesCached: false,
+    campIntelDownloaded: false,
+    source: 'cached',
+    updatedAt: now,
+  },
+});
+const endpointCampAuditItem = endpointCampViableAudit.departureAudit.find((item) => item.itemId === 'camp-candidates');
+assert.strictEqual(endpointCampAuditItem?.status, 'complete', 'Camp candidate audit should complete when a viable camp is within five miles of the trail endpoint.');
+assert.strictEqual(endpointCampAuditItem?.actionLabel, null, 'Viable endpoint camp candidates should not ask the user to open CampOps.');
+assert.ok(
+  /within 5 mi/i.test(endpointCampAuditItem?.summary ?? ''),
+  'Camp candidate audit should explain the five-mile endpoint or waypoint radius.',
+);
+
+const noViableCampNearStopsAudit = buildExpeditionReadiness({
+  ...base,
+  tripIntent: 'overnightCamp',
+  tripIntentSource: 'selected',
+  readinessProfile: 'overnight',
+  route: {
+    ...base.route,
+    endpointCoordinate: { latitude: 38.5000, longitude: -109.5000 },
+    waypointCoordinates: [
+      { latitude: 38.4500, longitude: -109.5300, label: 'Trail waypoint' },
+    ],
+  },
+  campCandidates: [{
+    id: 'far-camp',
+    name: 'Far established camp',
+    coordinates: { latitude: 38.6800, longitude: -109.6800 },
+    legalAccessConfidence: 'medium',
+    officialConfirmation: false,
+    source: 'cached',
+    updatedAt: now,
+  }],
+  offline: {
+    ...base.offline,
+    packageStatus: 'ready',
+    campCandidatesCached: true,
+    campIntelDownloaded: true,
+    source: 'cached',
+    updatedAt: now,
+  },
+});
+const noViableCampAuditItem = noViableCampNearStopsAudit.departureAudit.find((item) => item.itemId === 'camp-candidates');
+assert.strictEqual(noViableCampAuditItem?.status, 'caution', 'No viable camp within five miles should be a caution, not a missing CampOps task.');
+assert.ok(/no viable camp candidates/i.test(noViableCampAuditItem?.summary ?? ''), 'Camp audit should report no viable camp candidates near route endpoints or waypoints.');
+assert.strictEqual(noViableCampAuditItem?.actionLabel, null, 'No viable nearby camp candidates should not show Open CampOps as a required fix.');
+assert.strictEqual(noViableCampAuditItem?.actionTarget, null, 'No viable nearby camp candidates should not route the user to CampOps as a missing action.');
+const noViableCampCategory = noViableCampNearStopsAudit.categories.find((category) => category.id === 'camp_legality_confidence');
+assert.strictEqual(noViableCampCategory?.status, 'caution', 'Known absence of nearby camp candidates should score as a caution for overnight trips.');
+assert.ok(
+  !(noViableCampCategory?.missingInputs ?? []).includes('Camp candidate'),
+  'Known absence of nearby camp candidates should not be labeled as missing CampOps data.',
+);
+assert.ok(
+  noViableCampNearStopsAudit.warnings.some((warning) => warning.id === 'no-viable-camp-near-route-stops'),
+  'Known absence of nearby camp candidates should surface as an operational warning.',
+);
+
+const routeSpecificBailoutAudit = buildExpeditionReadiness({
+  ...base,
+  offline: {
+    packageStatus: 'partial',
+    routeGeometryCached: true,
+    mapTilesCachedForRoute: false,
+    mapsDownloaded: false,
+    routeDownloaded: true,
+    campCandidatesCached: false,
+    bailoutPointsCached: false,
+    routeBailoutPointCount: 2,
+    weatherSnapshotAvailable: true,
+    fuelTownRoadReferencesCached: false,
+    emergencyPacketAvailable: false,
+    currentRoutePackageFresh: true,
+    isRemoteRoute: true,
+    isOnline: true,
+    source: 'cached',
+    updatedAt: now,
+  },
+});
+const routeSpecificBailoutAuditItem = routeSpecificBailoutAudit.departureAudit.find((item) => item.itemId === 'bailout-points');
+assert.strictEqual(
+  routeSpecificBailoutAuditItem?.status,
+  'complete',
+  'Route-associated bailout pins should complete the Bailout points audit even when the generic cache flag is not confirmed.',
+);
+assert.ok(
+  /2 route bailout points/i.test(routeSpecificBailoutAuditItem?.summary ?? ''),
+  'Bailout points audit should name the route-specific bailout pin count.',
+);
+assert.strictEqual(
+  routeSpecificBailoutAuditItem?.actionTarget,
+  '/navigate-bailouts',
+  'Completed route bailout pins should remain reviewable/editable from Departure Audit.',
+);
+
+const routeSpecificRecoveryAudit = buildExpeditionReadiness({
+  ...base,
+  power: {
+    connectedSourceAvailable: false,
+    connectionState: 'disconnected',
+    dataFreshness: 'stale',
+    runtimeSource: 'unavailable',
+    powerRelevantForTrip: false,
+    powerNeedReason: 'Day trip context does not require connected house power.',
+    source: 'live',
+    updatedAt: now,
+    isStale: true,
+  },
+  recovery: {
+    bailoutRoutesAvailable: true,
+    routeBailoutOptionCount: 2,
+    nearestExitMiles: 4,
+    nearestKnownRoadMiles: 4,
+    nearestBailoutSummary: 'Two route bailout pins are attached to this active guidance.',
+    currentCoordinatesAvailable: true,
+    currentLatitude: 38.5,
+    currentLongitude: -109.5,
+    emergencyCoordinatePacketReady: true,
+    emergencyCoordinatePacketSummary: 'Coordinate packet can include current GPS.',
+    recoveryGearReady: true,
+    recoveryAccessConfidence: 'high',
+    source: 'inferred',
+    updatedAt: now,
+    isInferred: true,
+  },
+  offline: {
+    packageStatus: 'ready',
+    routeGeometryCached: true,
+    mapTilesCachedForRoute: true,
+    mapsDownloaded: true,
+    routeDownloaded: true,
+    campCandidatesCached: true,
+    bailoutPointsCached: true,
+    routeBailoutPointCount: 2,
+    weatherSnapshotAvailable: true,
+    fuelTownRoadReferencesCached: true,
+    emergencyPacketAvailable: true,
+    currentRoutePackageFresh: true,
+    cachedTileCount: 420,
+    cachedRegionCount: 1,
+    isRemoteRoute: false,
+    isOnline: true,
+    source: 'cached',
+    updatedAt: now,
+  },
+});
+const recoveryPlanAuditItem = routeSpecificRecoveryAudit.departureAudit.find((item) => item.itemId === 'recovery-plan');
+assert.strictEqual(
+  recoveryPlanAuditItem?.status,
+  'complete',
+  'Recovery plan should complete in Departure Audit when route bailout pins and emergency coordinate context are confirmed.',
+);
+assert.ok(
+  /2 route bailout/i.test(recoveryPlanAuditItem?.summary ?? ''),
+  'Recovery plan audit should explain the attached route bailout count.',
+);
+const powerRuntimeAuditItem = routeSpecificRecoveryAudit.departureAudit.find((item) => item.itemId === 'power-runtime-estimate');
+assert.strictEqual(
+  powerRuntimeAuditItem?.status,
+  'complete',
+  'Optional stale power telemetry should complete the Departure Audit power item when no reserve or drain risk is present.',
+);
+assert.ok(
+  /optional/i.test(powerRuntimeAuditItem?.summary ?? ''),
+  'Optional power audit copy should tell the user power is not a required departure blocker.',
+);
+
+const unlocatedCampCandidateViability = evaluateCampCandidateViability({
+  ...base,
+  route: {
+    ...base.route,
+    endpointCoordinate: { latitude: 38.5000, longitude: -109.5000 },
+  },
+  campCandidates: [{
+    id: 'unlocated-camp',
+    name: 'Unlocated camp candidate',
+    legalAccessConfidence: 'medium',
+    officialConfirmation: false,
+    source: 'cached',
+    updatedAt: now,
+  }],
+  offline: {
+    ...base.offline,
+    campCandidatesCached: true,
+    campIntelDownloaded: true,
+  },
+});
+assert.strictEqual(
+  unlocatedCampCandidateViability.status,
+  'unknown',
+  'Camp candidates without coordinates should remain unknown instead of being treated as no viable camps near route stops.',
 );
 
 const readyPackageWithoutRouteAssetCache = buildExpeditionReadiness({

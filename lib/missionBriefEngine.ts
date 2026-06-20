@@ -1182,14 +1182,6 @@ function buildResourcesSection(ctx: ECSAIContext): MissionBriefSection {
         : 3,
       providerTelemetry.state === 'waiting_for_provider' ? 'sync-outline' : 'pulse-outline',
     ));
-  } else if (power?.freshness === 'stale' || power?.freshness === 'last_known') {
-    lines.push(line(
-      'res-power-stale',
-      `Shared power telemetry is ${String(power.freshness).replace('_', ' ')}. Verify reserve before committing deeper.`,
-      'advisory',
-      3,
-      'pulse-outline',
-    ));
   } else if (power?.freshness === 'reconnecting') {
     lines.push(line(
       'res-power-reconnecting',

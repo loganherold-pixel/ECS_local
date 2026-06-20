@@ -961,17 +961,12 @@ function buildAuthorityTelemetryReadout(
         ? 'LIVE'
         : authorityPower.freshness === 'reconnecting'
           ? 'PARTIAL'
-          : authorityPower.freshness === 'stale' || authorityPower.freshness === 'last_known'
-            ? 'ATTENTION'
-            : 'PARTIAL'
+          : 'PARTIAL'
     );
 
   const criticals: string[] = [];
   if (authorityPower.batteryPercent != null && authorityPower.batteryPercent <= 15) {
     criticals.push(`House power critically low at ${Math.round(authorityPower.batteryPercent)}%.`);
-  }
-  if (authorityPower.freshness === 'stale') {
-    criticals.push('Shared power telemetry is stale.');
   }
 
   return {

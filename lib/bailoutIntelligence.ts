@@ -126,7 +126,9 @@ function textToBailoutType(text: string): BailoutType | null {
   if (/hospital|clinic|medical|ems|emergency/.test(normalized)) return 'hospital';
   if (/ranger|visitor center|forest service/.test(normalized)) return 'ranger';
   if (/trailhead|staging|parking/.test(normalized)) return 'staging';
-  if (/junction|exit|bailout|alternate|pavement|road/.test(normalized)) return 'alternate_route';
+  if (/\bbailout\b|safe exit|escape point/.test(normalized)) return 'bailout';
+  if (/pavement|paved road/.test(normalized)) return 'pavement';
+  if (/junction|exit|alternate|road/.test(normalized)) return 'alternate_route';
   if (/town|city|village/.test(normalized)) return 'town';
   if (/camp/.test(normalized)) return 'camp';
   return null;

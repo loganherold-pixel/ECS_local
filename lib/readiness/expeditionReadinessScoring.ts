@@ -31,6 +31,10 @@ import {
   DEFAULT_EXPEDITION_READINESS_PREFERENCES,
   normalizeExpeditionReadinessPreferences,
 } from './expeditionReadinessPreferences';
+import {
+  CAMP_CANDIDATE_VIABILITY_RADIUS_MILES,
+  evaluateCampCandidateViability,
+} from './campCandidateViability';
 
 type CategoryDraft = Omit<ExpeditionReadinessCategory, 'status'> & {
   blockerIssues?: ExpeditionReadinessIssue[];
@@ -210,6 +214,46 @@ function sourceFlags(input: { source?: ExpeditionReadinessSourceKind; updatedAt?
     isMock: input?.isMock === true || source === 'mock',
     isDemo: input?.isDemo === true || source === 'demo',
     isInferred: input?.isInferred === true || source === 'inferred',
+  };
+}
+
+function isPowerSourceConnected(power: ExpeditionReadinessInput['power']): boolean {
+  return power?.connectedSourceAvailable === true || power?.connectionState === 'connected';
+}
+
+function getPowerNetWatts(power: ExpeditionReadinessInput['power']): number | null {
+  if (!power) return null;
+  if (power.inputWatts == null && power.solarInputWatts == null && power.outputWatts == null) return null;
+  const recoveryWatts = (power.inputWatts ?? 0) + (power.solarInputWatts ?? 0);
+  return recoveryWatts - (power.outputWatts ?? 0);
+}
+
+function hasActionablePowerReserveOrDrainRisk(power: ExpeditionReadinessInput['power']): boolean {
+  if (!power) return false;
+  if (typeof power.batteryPercent === 'number' && power.batteryPercent < 25) return true;
+  const netWatts = getPowerNetWatts(power);
+  return typeof netWatts === 'number' && netWatts < -350;
+}
+
+function powerDataIsStale(power: ExpeditionReadinessInput['power']): boolean {
+  return power?.isStale === true || power?.dataFreshness === 'stale' || power?.dataFreshness === 'offline';
+}
+
+function actionablePowerStale(input: ExpeditionReadinessInput): boolean {
+  return powerDataIsStale(input.power) && hasActionablePowerReserveOrDrainRisk(input.power);
+}
+
+function powerFreshness(input: ExpeditionReadinessInput, nowIso: string): ExpeditionReadinessFreshnessRecord {
+  const record = freshness('Power', input.power, nowIso);
+  if (!input.power) return record;
+  const rawPowerStale = record.isStale || powerDataIsStale(input.power);
+  if (!rawPowerStale) return record;
+  if (actionablePowerStale(input)) return { ...record, state: 'stale', isStale: true };
+
+  return {
+    ...record,
+    state: record.source === 'manual' ? 'manual' : 'unknown',
+    isStale: false,
   };
 }
 
@@ -630,8 +674,19 @@ function bestCamp(camps: ExpeditionReadinessCampCandidateInput[] | null | undefi
   ))[0] ?? null;
 }
 
+function noViableCampScoreForIntent(input: ExpeditionReadinessInput): number {
+  const intent = resolveExpeditionTripIntent(input).tripIntent;
+  if (intent === 'remoteExpedition') return 52;
+  if (intent === 'weekendExpedition') return 58;
+  return 62;
+}
+
 function campLegality(input: ExpeditionReadinessInput, nowIso: string): CategoryDraft {
-  const camp = bestCamp(input.campCandidates);
+  const viability = evaluateCampCandidateViability(input);
+  const fallbackCamp = bestCamp(input.campCandidates);
+  const camp = viability.status === 'none'
+    ? null
+    : viability.bestCandidate ?? fallbackCamp;
   const flags = sourceFlags(camp, nowIso);
   const missingInputs: string[] = [];
   const blockers: ExpeditionReadinessIssue[] = [];
@@ -640,14 +695,55 @@ function campLegality(input: ExpeditionReadinessInput, nowIso: string): Category
   let score = 78;
 
   if (!camp) {
-    missingInputs.push('Camp candidate');
-    missingInputs.push('Legal Access Confidence');
-    score = 46;
-    factors.push(factor('camp-missing', 'Camp candidate', 'No camp candidate is available for legality-confidence review.', 'missing', 'missing', 'low'));
+    if (viability.status === 'none') {
+      score = noViableCampScoreForIntent(input);
+      const nearestDistance = viability.nearestDistanceMiles == null
+        ? null
+        : viability.nearestDistanceMiles < 10
+          ? `${viability.nearestDistanceMiles.toFixed(1)} mi`
+          : `${Math.round(viability.nearestDistanceMiles)} mi`;
+      factors.push(factor(
+        'camp-no-viable-near-route-stops',
+        'Camp candidates',
+        `No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints${nearestDistance ? `; nearest evaluated candidate is ${nearestDistance}.` : '.'}`,
+        'warning',
+        fallbackCamp?.source ?? input.offline?.source ?? 'cached',
+        fallbackCamp?.sourceConfidence === 'unknown' ? 'low' : fallbackCamp?.sourceConfidence ?? 'medium',
+        sourceFlags(fallbackCamp ?? input.offline, nowIso),
+      ));
+      warnings.push(issue(
+        'camp_legality_confidence',
+        'warning',
+        'no-viable-camp-near-route-stops',
+        'No viable camp near route stops',
+        `No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints.`,
+      ));
+    } else {
+      missingInputs.push('Camp candidate');
+      missingInputs.push('Legal Access Confidence');
+      score = 46;
+      factors.push(factor('camp-missing', 'Camp candidate', 'No camp candidate is available for legality-confidence review.', 'missing', 'missing', 'low'));
+    }
   } else {
     const confidence = camp.legalAccessConfidence ?? 'unknown';
     const campName = camp.name ?? camp.label ?? 'Best available camp candidate.';
     factors.push(factor('camp-candidate', 'Camp candidate', campName, 'neutral', flags.source, confidence === 'unknown' ? 'low' : confidence, flags));
+    if (viability.status === 'viable') {
+      const nearestDistance = viability.nearestDistanceMiles == null
+        ? null
+        : viability.nearestDistanceMiles < 10
+          ? `${viability.nearestDistanceMiles.toFixed(1)} mi`
+          : `${Math.round(viability.nearestDistanceMiles)} mi`;
+      factors.push(factor(
+        'camp-near-route-stops',
+        'Camp proximity',
+        `Camp candidate is within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints${nearestDistance ? `; nearest evaluated distance is ${nearestDistance}.` : '.'}`,
+        'positive',
+        flags.source,
+        confidence === 'unknown' ? 'low' : confidence,
+        flags,
+      ));
+    }
     if (camp.overallCampScore != null || camp.suitabilityScore != null) {
       factors.push(factor(
         'camp-suitability',
@@ -755,11 +851,15 @@ function campLegality(input: ExpeditionReadinessInput, nowIso: string): Category
     id: 'camp_legality_confidence',
     label: CATEGORY_LABELS.camp_legality_confidence,
     score,
-    confidence: camp?.legalAccessConfidence === 'high' || camp?.legalAccessConfidence === 'medium' || camp?.legalAccessConfidence === 'low' ? camp.legalAccessConfidence : 'low',
+    confidence: camp?.legalAccessConfidence === 'high' || camp?.legalAccessConfidence === 'medium' || camp?.legalAccessConfidence === 'low'
+      ? camp.legalAccessConfidence
+      : viability.status === 'none'
+        ? 'medium'
+        : 'low',
     summary: blockers[0]?.detail ?? warnings[0]?.detail ?? 'Camp Legality Confidence is usable, not guaranteed.',
     factors,
     missingInputs,
-    lastUpdatedAt: camp?.updatedAt ?? nowIso,
+    lastUpdatedAt: camp?.updatedAt ?? fallbackCamp?.updatedAt ?? input.offline?.updatedAt ?? nowIso,
     blockerIssues: blockers,
     warningIssues: warnings,
   };
@@ -1174,10 +1274,12 @@ function powerRuntime(input: ExpeditionReadinessInput, nowIso: string): Category
   const missingInputs: string[] = [];
   const warnings: ExpeditionReadinessIssue[] = [];
   const factors: ExpeditionReadinessFactor[] = [];
-  const powerRelevant = power?.powerRelevantForTrip === true || routeIsRemote(input);
+  const powerRelevant = power?.powerRelevantForTrip === true || (power?.powerRelevantForTrip == null && routeIsRemote(input));
   let score = powerRelevant ? 74 : 82;
   const runtime = power?.runtimeHoursRemaining ?? null;
   const required = power?.requiredRuntimeHours ?? null;
+  const staleIsActionable = power ? actionablePowerStale(input) : false;
+  const factorFlags = power && !staleIsActionable ? { ...flags, isStale: false } : flags;
 
   if (!power) {
     if (powerRelevant) {
@@ -1188,26 +1290,20 @@ function powerRuntime(input: ExpeditionReadinessInput, nowIso: string): Category
       score = 78;
     }
   } else {
-    const connected = power.connectedSourceAvailable === true || power.connectionState === 'connected';
-    const stale = power.isStale || power.dataFreshness === 'stale' || power.dataFreshness === 'offline';
+    const connected = isPowerSourceConnected(power);
     if (connected) {
       score += 8;
-      factors.push(factor('power-source', 'Power source', `${power.deviceLabel ?? power.providerLabel ?? 'Power source'} connected.`, 'positive', flags.source, power.runtimeSource === 'provider' ? 'high' : 'medium', flags));
+      factors.push(factor('power-source', 'Power source', `${power.deviceLabel ?? power.providerLabel ?? 'Power source'} connected.`, 'positive', flags.source, power.runtimeSource === 'provider' ? 'high' : 'medium', factorFlags));
     } else if (power.powerRelevantForTrip) {
       score -= 12;
       warnings.push(issue('power_runtime', 'warning', 'power-not-connected', 'Power not connected', 'No connected power source is available for a trip where power may matter.'));
-      factors.push(factor('power-source', 'Power source', 'Not connected. ECS will use manual or last-known values only if available.', 'warning', flags.source, 'low', flags));
+      factors.push(factor('power-source', 'Power source', 'Not connected. ECS will use manual or last-known values only if available.', 'warning', flags.source, 'low', factorFlags));
     } else {
-      factors.push(factor('power-source', 'Power source', 'Not connected. Power telemetry is optional for this trip context.', 'neutral', flags.source, 'medium', flags));
-    }
-
-    if (stale) {
-      score -= power.powerRelevantForTrip ? 16 : 8;
-      warnings.push(issue('power_runtime', 'warning', 'power-data-stale', 'Power data stale', 'Power telemetry is stale or offline; runtime confidence is limited.'));
+      factors.push(factor('power-source', 'Power source', 'Not connected. Power telemetry is optional for this trip context.', 'neutral', flags.source, 'medium', factorFlags));
     }
 
     if (typeof power.batteryPercent === 'number') {
-      factors.push(factor('power-soc', 'State of charge', `${Math.round(power.batteryPercent)}% battery state of charge.`, power.batteryPercent < 25 ? 'warning' : 'positive', flags.source, stale ? 'low' : 'medium', flags));
+      factors.push(factor('power-soc', 'State of charge', `${Math.round(power.batteryPercent)}% battery state of charge.`, power.batteryPercent < 25 ? 'warning' : 'positive', flags.source, staleIsActionable ? 'low' : 'medium', factorFlags));
       if (power.batteryPercent <= 12) {
         score -= 28;
         warnings.push(issue('power_runtime', 'warning', 'power-reserve-critical', 'Power reserve critical', `Power reserve is ${Math.round(power.batteryPercent)}%.`));
@@ -1221,20 +1317,18 @@ function powerRuntime(input: ExpeditionReadinessInput, nowIso: string): Category
     }
 
     if (power.inputWatts != null || power.outputWatts != null || power.solarInputWatts != null) {
-      const recoveryWatts = (power.inputWatts ?? 0) + (power.solarInputWatts ?? 0);
-      const outputWatts = power.outputWatts ?? 0;
-      const net = recoveryWatts - outputWatts;
+      const net = getPowerNetWatts(power) ?? 0;
       factors.push(factor(
         'power-flow',
         'Power flow',
         `Input ${formatPowerWatts(power.inputWatts)} / Output ${formatPowerWatts(power.outputWatts)}${power.solarInputWatts != null ? ` / Solar ${formatPowerWatts(power.solarInputWatts)}` : ''}.`,
         net < -250 ? 'warning' : 'neutral',
         flags.source,
-        stale ? 'low' : 'medium',
-        flags,
+        staleIsActionable ? 'low' : 'medium',
+        factorFlags,
       ));
-      if (net < -350 && power.powerRelevantForTrip) {
-        score -= 10;
+      if (net < -350 && (power.powerRelevantForTrip || connected)) {
+        score -= power.powerRelevantForTrip ? 10 : 8;
         warnings.push(issue('power_runtime', 'warning', 'power-heavy-draw', 'Power draw elevated', 'Output load is materially outpacing input recovery.'));
       }
     }
@@ -1256,14 +1350,14 @@ function powerRuntime(input: ExpeditionReadinessInput, nowIso: string): Category
     }
 
     if (power.powerNeedReason) {
-      factors.push(factor('power-trip-relevance', 'Trip power relevance', power.powerNeedReason, power.powerRelevantForTrip ? 'neutral' : 'positive', flags.source, 'medium', flags));
+      factors.push(factor('power-trip-relevance', 'Trip power relevance', power.powerNeedReason, power.powerRelevantForTrip ? 'neutral' : 'positive', flags.source, 'medium', factorFlags));
     }
   }
 
   if (runtime != null) {
-    factors.unshift(factor('power-runtime', 'Power runtime', `${runtime} hours remaining${required == null ? '' : ` / ${required} hours estimated need`}.`, score < 82 ? 'warning' : 'positive', flags.source, power?.runtimeSource === 'provider' ? 'high' : 'medium', flags));
+    factors.unshift(factor('power-runtime', 'Power runtime', `${runtime} hours remaining${required == null ? '' : ` / ${required} hours estimated need`}.`, score < 82 ? 'warning' : 'positive', flags.source, power?.runtimeSource === 'provider' ? 'high' : 'medium', factorFlags));
   } else if (!power || power.powerRelevantForTrip) {
-    factors.unshift(factor('power-runtime', 'Power runtime', 'Runtime estimate is unknown.', powerRelevant ? 'missing' : 'neutral', power ? flags.source : 'missing', powerRelevant ? 'low' : 'medium', flags));
+    factors.unshift(factor('power-runtime', 'Power runtime', 'Runtime estimate is unknown.', powerRelevant ? 'missing' : 'neutral', power ? flags.source : 'missing', powerRelevant ? 'low' : 'medium', factorFlags));
   }
 
   if (
@@ -1281,7 +1375,7 @@ function powerRuntime(input: ExpeditionReadinessInput, nowIso: string): Category
       ? powerRelevant ? 'low' : 'medium'
       : power.dataFreshness === 'live' && (runtime != null || power.batteryPercent != null)
         ? power.runtimeSource === 'provider' ? 'high' : 'medium'
-        : missingInputs.length > 0 || power.isStale
+        : missingInputs.length > 0
           ? 'low'
           : power.source === 'manual'
             ? 'medium'
@@ -1321,7 +1415,9 @@ function buildPowerBrief(input: ExpeditionReadinessInput, categories: Expedition
   const category = categories.find((item) => item.id === 'power_runtime');
   const runtime = power?.runtimeHoursRemaining;
   const required = power?.requiredRuntimeHours;
-  const connected = power?.connectedSourceAvailable === true || power?.connectionState === 'connected';
+  const connected = isPowerSourceConnected(power);
+  const powerStale = powerDataIsStale(power);
+  const staleIsActionable = actionablePowerStale(input);
   const runtimeSummary = runtime != null
     ? `${runtime} h runtime${required != null ? ` / ${required} h estimated need` : ''}`
     : power?.powerRelevantForTrip
@@ -1355,6 +1451,9 @@ function buildPowerBrief(input: ExpeditionReadinessInput, categories: Expedition
         ? 'Solar input not reporting from the active power source.'
         : 'Solar input unavailable.';
   const freshness = power?.dataFreshness ?? 'unknown';
+  const freshnessSummary = powerStale && !staleIsActionable
+    ? 'Power data freshness: not required for this trip context unless reserve drops or draw accelerates.'
+    : `Power data freshness: ${freshness}.`;
   const status: ExpeditionPowerBrief['status'] =
     !connected && power?.powerRelevantForTrip !== true
       ? 'unknown'
@@ -1371,12 +1470,12 @@ function buildPowerBrief(input: ExpeditionReadinessInput, categories: Expedition
     stateOfChargeSummary,
     flowSummary,
     solarSummary,
-    freshnessSummary: `Power data freshness: ${freshness}.`,
+    freshnessSummary,
     recommendation: power?.powerRecommendation
       ?? (power?.powerRelevantForTrip ? 'Add a runtime estimate or connect a power source before departure.' : 'Connect or update power only if powered loads matter.'),
     connectedSourceAvailable: connected,
     powerRelevantForTrip: power?.powerRelevantForTrip === true,
-    isStale: power?.isStale === true || power?.dataFreshness === 'stale' || power?.dataFreshness === 'offline',
+    isStale: staleIsActionable,
   };
 }
 
@@ -1649,13 +1748,15 @@ function buildRecoveryBrief(input: ExpeditionReadinessInput, categories: Expedit
 }
 
 function buildFreshness(input: ExpeditionReadinessInput, nowIso: string): ExpeditionReadinessSourceFreshness {
+  const campViability = evaluateCampCandidateViability(input);
+  const campFreshnessSource = campViability.bestCandidate ?? bestCamp(input.campCandidates);
   return {
     route: freshness('Route', input.route, nowIso),
     weather: freshness('Weather', input.weather, nowIso),
     fleet: freshness('Fleet', input.activeVehicle, nowIso),
     offline: freshness('Offline package', input.offline, nowIso),
-    camp: freshness('Camp', bestCamp(input.campCandidates), nowIso),
-    power: freshness('Power', input.power, nowIso),
+    camp: freshness('Camp', campFreshnessSource, nowIso),
+    power: powerFreshness(input, nowIso),
     fuel: freshness('Fuel', input.fuel, nowIso),
     recovery: freshness('Recovery', input.recovery, nowIso),
     communications: freshness('Communications', input.communications, nowIso),
@@ -1690,7 +1791,12 @@ function recommendationsFor(
     recs.push('Select trip intent so ECS can tune readiness weighting for this route.');
   }
   if (resolvedIntent.tripIntent === 'overnightCamp' || resolvedIntent.tripIntent === 'weekendExpedition') {
-    if (!input.campCandidates?.length) recs.push('Add or review CampOps candidates for overnight Camp Legality Confidence.');
+    const campViability = evaluateCampCandidateViability(input);
+    if (campViability.status === 'none') {
+      recs.push(`No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints; adjust the endpoint, waypoints, or trip intent before committing.`);
+    } else if (!input.campCandidates?.length) {
+      recs.push('Confirm camp candidate search near the trail endpoint or route waypoints for overnight Camp Legality Confidence.');
+    }
     if (!input.power?.powerRelevantForTrip) recs.push('Confirm whether fridge, comms, navigation, or device power is needed overnight.');
   }
   if (resolvedIntent.tripIntent === 'remoteExpedition') {

@@ -72,6 +72,8 @@ const readiness = require(path.join(root, 'lib', 'readiness'));
 const smokeChecks = require(path.join(root, 'lib', 'ai', 'runtimeSmokeChecks.ts'));
 const aiGuardrails = require(path.join(root, 'lib', 'ai', 'readinessExplanationGuardrails.ts'));
 const readinessStoreSource = fs.readFileSync(path.join(root, 'lib', 'readiness', 'expeditionReadinessStore.ts'), 'utf8');
+const aiContextBuilderSource = fs.readFileSync(path.join(root, 'lib', 'aiContextBuilder.ts'), 'utf8');
+const missionBriefEngineSource = fs.readFileSync(path.join(root, 'lib', 'missionBriefEngine.ts'), 'utf8');
 
 const expectedCategories = [
   'vehicle_fit',
@@ -252,6 +254,91 @@ assert.strictEqual(
 assert.ok(
   localDayTrip.categories.find((category) => category.id === 'power_runtime').score >= 82,
   'Day trips without connected power should not be penalized as power-critical.',
+);
+
+const localDayTripStaleOptionalPower = readiness.buildExpeditionReadiness({
+  ...readiness.localDayTripNoCampFixture,
+  power: {
+    connectedSourceAvailable: false,
+    connectionState: 'disconnected',
+    dataFreshness: 'stale',
+    runtimeSource: 'unavailable',
+    powerRelevantForTrip: false,
+    powerNeedReason: 'Day trip context does not require connected house power.',
+    source: 'live',
+    updatedAt: '2026-05-13T16:00:00.000Z',
+    isStale: true,
+  },
+});
+const localStaleOptionalPowerCategory = categoryById(localDayTripStaleOptionalPower, 'power_runtime');
+assert.strictEqual(
+  localStaleOptionalPowerCategory.status,
+  'ready',
+  'Stale disconnected power data should not downgrade a day trip when powered loads are not relevant.',
+);
+assert.strictEqual(
+  localDayTripStaleOptionalPower.powerBrief.statusLabel,
+  'Unknown',
+  'Optional disconnected power should remain informational in the Command Brief.',
+);
+assert.ok(
+  !localDayTripStaleOptionalPower.warnings.some((warning) => warning.id === 'power-data-stale'),
+  'Optional stale power telemetry should not create a readiness warning.',
+);
+assert.strictEqual(
+  localDayTripStaleOptionalPower.powerBrief.isStale,
+  false,
+  'Optional stale power telemetry should not show stale in the ECS brief unless reserve or drain risk is actionable.',
+);
+assert.ok(
+  !localDayTripStaleOptionalPower.powerBrief.freshnessSummary.toLowerCase().includes('stale'),
+  'Optional disconnected power should not display stale freshness copy.',
+);
+assert.ok(
+  !aiContextBuilderSource.includes("criticals.push('Shared power telemetry is stale.')"),
+  'ECS Intelligence should not turn stale power telemetry into a critical issue by itself.',
+);
+assert.ok(
+  !missionBriefEngineSource.includes("'res-power-stale'"),
+  'ECS Brief should not publish a stale-power advisory unless reserve or drain risk exists.',
+);
+
+const localDayTripLowPower = readiness.buildExpeditionReadiness({
+  ...readiness.localDayTripNoCampFixture,
+  power: {
+    connectedSourceAvailable: true,
+    connectionState: 'connected',
+    dataFreshness: 'live',
+    runtimeSource: 'provider',
+    powerRelevantForTrip: false,
+    batteryPercent: 18,
+    source: 'live',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+});
+assert.ok(
+  localDayTripLowPower.warnings.some((warning) => warning.id === 'power-reserve-low'),
+  'Low connected power reserve should still be read as a departure caution.',
+);
+
+const localDayTripFastPowerDrain = readiness.buildExpeditionReadiness({
+  ...readiness.localDayTripNoCampFixture,
+  power: {
+    connectedSourceAvailable: true,
+    connectionState: 'connected',
+    dataFreshness: 'live',
+    runtimeSource: 'provider',
+    powerRelevantForTrip: false,
+    inputWatts: 0,
+    outputWatts: 520,
+    solarInputWatts: 0,
+    source: 'live',
+    updatedAt: '2026-05-13T18:00:00.000Z',
+  },
+});
+assert.ok(
+  localDayTripFastPowerDrain.warnings.some((warning) => warning.id === 'power-heavy-draw'),
+  'A connected power source with fast net drain should still be read as a departure caution.',
 );
 
 const vehiclePowerSpecMissing = readiness.buildExpeditionReadiness({

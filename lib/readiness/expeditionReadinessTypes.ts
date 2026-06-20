@@ -245,10 +245,18 @@ export type ExpeditionReadinessAssessment = {
   dataIntegrity: ExpeditionReadinessDataIntegrity;
 };
 
+export type ExpeditionReadinessRouteReferenceCoordinate = {
+  latitude: number;
+  longitude: number;
+  label?: string | null;
+};
+
 export type ExpeditionReadinessRouteInput = {
   routeId?: string | null;
   name?: string | null;
   distanceMiles?: number | null;
+  endpointCoordinate?: ExpeditionReadinessRouteReferenceCoordinate | null;
+  waypointCoordinates?: ExpeditionReadinessRouteReferenceCoordinate[] | null;
   difficulty?: 'easy' | 'moderate' | 'hard' | 'technical' | 'unknown' | null;
   riskLevel?: 'low' | 'moderate' | 'high' | 'critical' | 'unknown' | null;
   routeConfidence?: ExpeditionReadinessConfidence | null;
@@ -344,6 +352,7 @@ export type ExpeditionReadinessOfflineInput = {
   campIntelDownloaded?: boolean | null;
   campCandidatesCached?: boolean | null;
   bailoutPointsCached?: boolean | null;
+  routeBailoutPointCount?: number | null;
   weatherSnapshotAvailable?: boolean | null;
   fuelTownRoadReferencesCached?: boolean | null;
   emergencyDocsAvailable?: boolean | null;

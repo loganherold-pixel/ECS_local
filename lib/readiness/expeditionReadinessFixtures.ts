@@ -10,6 +10,16 @@ export const completeReadyReadinessFixture: ExpeditionReadinessInput = {
     routeId: 'route-white-rim-loop',
     name: 'White Rim Loop Segment Plan',
     distanceMiles: 72,
+    endpointCoordinate: {
+      latitude: 38.57,
+      longitude: -109.55,
+      label: 'Mineral Bottom endpoint',
+    },
+    waypointCoordinates: [{
+      latitude: 38.54,
+      longitude: -109.57,
+      label: 'Planned camp waypoint',
+    }],
     difficulty: 'moderate',
     riskLevel: 'low',
     routeConfidence: 'high',
@@ -67,6 +77,10 @@ export const completeReadyReadinessFixture: ExpeditionReadinessInput = {
   campCandidates: [{
     id: 'camp-1',
     name: 'Mineral Bottom zone candidate',
+    coordinates: {
+      latitude: 38.575,
+      longitude: -109.555,
+    },
     legalAccessConfidence: 'high',
     officialConfirmation: true,
     accessStatus: 'open',
@@ -172,6 +186,10 @@ export const partialReadinessFixture: ExpeditionReadinessInput = {
   campCandidates: [{
     id: 'demo-camp',
     name: 'ECS demo camp candidate',
+    coordinates: {
+      latitude: 38.575,
+      longitude: -109.555,
+    },
     legalAccessConfidence: 'low',
     officialConfirmation: false,
     accessStatus: 'unknown',
@@ -283,6 +301,10 @@ export const overnightDispersedCampingFixture: ExpeditionReadinessInput = {
     id: 'camp-overnight-a',
     label: 'A',
     name: 'Canyon Rim candidate A',
+    coordinates: {
+      latitude: 38.555,
+      longitude: -109.565,
+    },
     overallCampScore: 82,
     legalAccessConfidence: 'medium',
     officialConfirmation: false,
@@ -386,6 +408,10 @@ export const lowCampLegalAccessConfidenceFixture: ExpeditionReadinessInput = {
     id: 'camp-low-confidence',
     label: 'A',
     name: 'Low-confidence dispersed candidate',
+    coordinates: {
+      latitude: 38.575,
+      longitude: -109.555,
+    },
     overallCampScore: 64,
     legalAccessConfidence: 'low',
     officialConfirmation: false,

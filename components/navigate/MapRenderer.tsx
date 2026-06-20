@@ -341,6 +341,7 @@ export type MapRendererProps = {
   pinMarkers?: MarkerLike[];
   showCrosshair?: boolean;
   onLongPress?: (coord: LatLng & { routeableFeature?: any }) => void;
+  onBailoutTap?: (pin: any) => void;
   onPinTap?: (pin: any) => void;
   onSegmentTap?: (segment: SegmentSelectionPayload) => void;
   onMapTap?: (coord: { latitude: number; longitude: number; routeableFeature?: any }) => void;
@@ -6886,6 +6887,7 @@ const MapRenderer = React.memo(function MapRenderer({
   pinMarkers = [],
   showCrosshair = false,
   onLongPress,
+  onBailoutTap,
   onPinTap,
   onSegmentTap,
   onMapTap,
@@ -7734,6 +7736,10 @@ const MapRenderer = React.memo(function MapRenderer({
           onTiltAlertTap?.(payload);
           return;
         }
+        if (payload?.kind === 'bailout') {
+          onBailoutTap?.(payload);
+          return;
+        }
         if (payload?.kind === 'campIntel') {
           onCampIntelTap?.(payload);
           return;
@@ -7789,6 +7795,7 @@ const MapRenderer = React.memo(function MapRenderer({
     onDispersedCampingRegionTap,
     onDispersedRouteLegTap,
     onEstablishedCampsiteTap,
+    onBailoutTap,
     onPinTap,
     onMapCenterReply,
     onMapBoundsReply,

@@ -127,6 +127,7 @@ assertIncludes(
   navigate,
   [
     'const handlePrepareOfflineFromRoadPreview = useCallback(async () => {',
+    'prepareOfflineRoutePackageFromRun',
     'buildRouteIntentForRoadPreview({',
     'mapStyle,',
     'tileCacheStore.createFromRoute(',
@@ -142,6 +143,48 @@ assertIncludes(
     "syncType: 'route'",
   ],
   'Prepare Offline should persist route intent metadata and start a route-type offline sync.',
+);
+
+assertIncludes(
+  navigate,
+  [
+    'const prepareOfflineRoutePackageFromRun = useCallback(async (run: ECSRun, options?:',
+    "source: 'saved_route_packet'",
+    "origin: {",
+    "mode: 'saved_route_start'",
+    "source: 'route_geometry'",
+    'routeGeometryPointCount: input.routePoints.length',
+    'tileCacheStore.createFromRoute(',
+    'routePoints,',
+    'cacheOfflineRoute({',
+    "source: 'route-corridor'",
+    "syncType: 'route'",
+  ],
+  'Saved GPX/route assets should be downloadable as route corridors without requiring a live road preview.',
+);
+
+assertInOrder(
+  navigate,
+  [
+    'if (!route || route.geometry.length < 2) {',
+    'const packageRun = (preflightRunId ? runStore.getById(preflightRunId) : null) ?? activeRun;',
+    'if (packageRun && packageRun.points.length > 1) {',
+    "await prepareOfflineRoutePackageFromRun(packageRun, { source: 'saved_route_packet' });",
+    'return;',
+    'setRequestBoundsTrigger((prev) => prev + 1);',
+  ],
+  'Offline package handoffs should prefer saved-route geometry before falling back to generic map bounds.',
+);
+
+assertIncludes(
+  navigate,
+  [
+    'const handlePrepareOfflineFromPreflightPacket = useCallback(async () => {',
+    'await prepareOfflineRoutePackageFromRun(packetRun, { source: \'saved_route_packet\' });',
+    'onPress={handlePrepareOfflineFromPreflightPacket}',
+    'DOWNLOAD MAPS',
+  ],
+  'Preflight packets opened from Saved Routes should expose a route-specific Download Maps action.',
 );
 
 assertIncludes(

@@ -5,6 +5,10 @@ import type {
   ExpeditionReadinessInput,
 } from './expeditionReadinessTypes';
 import { resolveExpeditionTripIntent } from './expeditionReadinessCalibration';
+import {
+  CAMP_CANDIDATE_VIABILITY_RADIUS_MILES,
+  evaluateCampCandidateViability,
+} from './campCandidateViability';
 
 const ROUTE_REQUIRED_ACTION_MESSAGE = 'You must first have an active route or build a trip.';
 
@@ -117,6 +121,189 @@ function routeRequiredReason(input: ExpeditionReadinessInput): string | null {
   return hasRouteContext(input) ? null : ROUTE_REQUIRED_ACTION_MESSAGE;
 }
 
+function formatCampDistance(distanceMiles: number | null): string | null {
+  if (distanceMiles == null || !Number.isFinite(distanceMiles)) return null;
+  return distanceMiles < 10 ? `${distanceMiles.toFixed(1)} mi` : `${Math.round(distanceMiles)} mi`;
+}
+
+function campCandidateAuditItem(
+  input: ExpeditionReadinessInput,
+  category: ExpeditionReadinessCategory | undefined,
+  disabledActionReason: string | null,
+): ExpeditionDepartureAuditItem {
+  if (disabledActionReason) {
+    return item(
+      'camp-candidates',
+      'Camp candidates',
+      categoryStatus(category),
+      category?.summary ?? 'Camp candidate route context is unavailable.',
+      'Open CampOps',
+      '/navigate',
+      disabledActionReason,
+    );
+  }
+
+  const viability = evaluateCampCandidateViability(input);
+  if (viability.status === 'viable') {
+    const count = viability.viableCandidates.length;
+    const distance = formatCampDistance(viability.nearestDistanceMiles);
+    return item(
+      'camp-candidates',
+      'Camp candidates',
+      'complete',
+      `${count} viable camp candidate${count === 1 ? '' : 's'} ${count === 1 ? 'is' : 'are'} within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints${distance ? `; nearest is ${distance}` : ''}.`,
+      null,
+      null,
+    );
+  }
+
+  if (viability.status === 'none') {
+    const nearest = formatCampDistance(viability.nearestDistanceMiles);
+    return item(
+      'camp-candidates',
+      'Camp candidates',
+      'caution',
+      `No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints${nearest ? `; nearest evaluated candidate is ${nearest}` : ''}.`,
+      null,
+      null,
+    );
+  }
+
+  return item(
+    'camp-candidates',
+    'Camp candidates',
+    categoryStatus(category),
+    category?.summary ?? 'Camp candidate proximity to the trail endpoint or route waypoints is not confirmed.',
+    'Open CampOps',
+    '/navigate',
+    null,
+  );
+}
+
+function bailoutPointsAuditItem(
+  input: ExpeditionReadinessInput,
+  disabledActionReason: string | null,
+): ExpeditionDepartureAuditItem {
+  const offline = input.offline;
+  const routeBailoutCount =
+    typeof offline?.routeBailoutPointCount === 'number' && Number.isFinite(offline.routeBailoutPointCount)
+      ? Math.max(0, Math.round(offline.routeBailoutPointCount))
+      : 0;
+  const hasRouteBailouts = routeBailoutCount > 0;
+
+  return item(
+    'bailout-points',
+    'Bailout points',
+    hasRouteBailouts ? 'complete' : statusFromBoolean(offline?.bailoutPointsCached),
+    hasRouteBailouts
+      ? `${routeBailoutCount} route bailout point${routeBailoutCount === 1 ? '' : 's'} ${routeBailoutCount === 1 ? 'is' : 'are'} attached to this route for offline review.`
+      : offline?.bailoutPointsCached
+        ? 'Bailout points are cached for offline review.'
+        : 'Bailout point cache is not confirmed.',
+    'Review Bailouts',
+    '/navigate-bailouts',
+    disabledActionReason,
+  );
+}
+
+function getRouteBailoutCount(input: ExpeditionReadinessInput): number {
+  const offlineCount =
+    typeof input.offline?.routeBailoutPointCount === 'number' && Number.isFinite(input.offline.routeBailoutPointCount)
+      ? input.offline.routeBailoutPointCount
+      : null;
+  const recoveryCount =
+    typeof input.recovery?.routeBailoutOptionCount === 'number' && Number.isFinite(input.recovery.routeBailoutOptionCount)
+      ? input.recovery.routeBailoutOptionCount
+      : null;
+  return Math.max(0, Math.round(offlineCount ?? recoveryCount ?? 0));
+}
+
+function powerNetWatts(power: ExpeditionReadinessInput['power']): number | null {
+  if (!power) return null;
+  if (power.inputWatts == null && power.outputWatts == null && power.solarInputWatts == null) return null;
+  return (power.inputWatts ?? 0) + (power.solarInputWatts ?? 0) - (power.outputWatts ?? 0);
+}
+
+function hasActionablePowerAuditRisk(power: ExpeditionReadinessInput['power']): boolean {
+  if (!power) return false;
+  if (typeof power.batteryPercent === 'number' && power.batteryPercent < 25) return true;
+  const netWatts = powerNetWatts(power);
+  return typeof netWatts === 'number' && netWatts < -350;
+}
+
+function powerRuntimeAuditItem(
+  input: ExpeditionReadinessInput,
+  category: ExpeditionReadinessCategory | undefined,
+): ExpeditionDepartureAuditItem {
+  const power = input.power;
+  const powerRelevant = power?.powerRelevantForTrip === true;
+  const actionableRisk = hasActionablePowerAuditRisk(power);
+  const optionalPower = !powerRelevant && !actionableRisk;
+
+  if (optionalPower) {
+    return item(
+      'power-runtime-estimate',
+      'Power/runtime estimate',
+      'complete',
+      'Power telemetry is optional for this trip context; no low reserve or heavy draw risk is affecting departure readiness.',
+      'Open Power',
+      '/power',
+    );
+  }
+
+  return item(
+    'power-runtime-estimate',
+    'Power/runtime estimate',
+    categoryStatus(category),
+    category?.summary ?? 'Power runtime estimate is unavailable.',
+    'Open Power',
+    '/power',
+  );
+}
+
+function recoveryPlanAuditItem(
+  input: ExpeditionReadinessInput,
+  category: ExpeditionReadinessCategory | undefined,
+  disabledActionReason: string | null,
+): ExpeditionDepartureAuditItem {
+  const recovery = input.recovery;
+  const routeBailoutCount = getRouteBailoutCount(input);
+  const hasRouteBailouts = routeBailoutCount > 0 || recovery?.bailoutRoutesAvailable === true;
+  const coordinatePacketReady =
+    recovery?.emergencyCoordinatePacketReady === true ||
+    recovery?.currentCoordinatesAvailable === true;
+  const hasBlockingRecoveryGap =
+    recovery?.bailoutRoutesAvailable === false ||
+    recovery?.recoveryGearReady === false ||
+    recovery?.recoveryAccessConfidence === 'low';
+
+  if (hasRouteBailouts && coordinatePacketReady && !hasBlockingRecoveryGap) {
+    const countCopy = routeBailoutCount > 0
+      ? `${routeBailoutCount} route bailout point${routeBailoutCount === 1 ? '' : 's'} ${routeBailoutCount === 1 ? 'is' : 'are'} attached`
+      : 'Route bailout access is attached';
+    const nearestCopy = recovery?.nearestBailoutSummary ? ` ${recovery.nearestBailoutSummary}` : '';
+    return item(
+      'recovery-plan',
+      'Recovery plan',
+      'complete',
+      `${countCopy}; emergency coordinate context is ready.${nearestCopy}`,
+      'Review Bailouts',
+      '/navigate-bailouts',
+      disabledActionReason,
+    );
+  }
+
+  return item(
+    'recovery-plan',
+    'Recovery plan',
+    categoryStatus(category),
+    category?.summary ?? 'Recovery plan is unavailable.',
+    'Review Bailouts',
+    '/navigate-bailouts',
+    disabledActionReason,
+  );
+}
+
 export function buildDepartureAudit(
   input: ExpeditionReadinessInput,
   categories: ExpeditionReadinessCategory[],
@@ -128,6 +315,7 @@ export function buildDepartureAudit(
   const power = categoriesById.get('power_runtime');
   const recovery = categoriesById.get('recovery_bailout_access');
   const communications = categoriesById.get('communications_signal_confidence');
+  const camp = categoriesById.get('camp_legality_confidence');
   const resolvedTripIntent = resolveExpeditionTripIntent(input).tripIntent;
   const includeCampCandidates = resolvedTripIntent !== 'dayTrip';
   const routeActionDisabledReason = routeRequiredReason(input);
@@ -149,17 +337,7 @@ export function buildDepartureAudit(
       offline?.packageStatus === 'ready' ? null : routeActionDisabledReason,
     ),
     includeCampCandidates
-      ? item(
-          'camp-candidates',
-          'Camp candidates',
-          statusFromBoolean(offline?.campCandidatesCached ?? offline?.campIntelDownloaded),
-          offline?.campCandidatesCached || offline?.campIntelDownloaded
-            ? 'Camp candidate context is cached from available ECS signals.'
-            : 'Camp candidate cache is limited; Legal Access Confidence may degrade offline.',
-          'Open CampOps',
-          '/navigate',
-          routeActionDisabledReason,
-        )
+      ? campCandidateAuditItem(input, camp, routeActionDisabledReason)
       : null,
     item(
       'weather-snapshot',
@@ -171,17 +349,7 @@ export function buildDepartureAudit(
       'Refresh Weather',
       null,
     ),
-    item(
-      'bailout-points',
-      'Bailout points',
-      statusFromBoolean(offline?.bailoutPointsCached),
-      offline?.bailoutPointsCached
-        ? 'Bailout points are cached for offline review.'
-        : 'Bailout point cache is not confirmed.',
-      'Review Bailouts',
-      '/navigate-bailouts',
-      routeActionDisabledReason,
-    ),
+    bailoutPointsAuditItem(input, routeActionDisabledReason),
     item(
       'fuel-range-plan',
       'Fuel/range plan',
@@ -198,14 +366,7 @@ export function buildDepartureAudit(
       'Select Vehicle',
       '/fleet',
     ),
-    item(
-      'power-runtime-estimate',
-      'Power/runtime estimate',
-      categoryStatus(power),
-      power?.summary ?? 'Power runtime estimate is unavailable.',
-      'Open Power',
-      '/power',
-    ),
+    powerRuntimeAuditItem(input, power),
     item(
       'emergency-communications-packet',
       'Emergency/communications packet',
@@ -214,15 +375,7 @@ export function buildDepartureAudit(
       'Confirm Comms Plan',
       '/safety',
     ),
-    item(
-      'recovery-plan',
-      'Recovery plan',
-      categoryStatus(recovery),
-      recovery?.summary ?? 'Recovery plan is unavailable.',
-      'Review Bailouts',
-      '/navigate-bailouts',
-      routeActionDisabledReason,
-    ),
+    recoveryPlanAuditItem(input, recovery, routeActionDisabledReason),
   ];
 
   return auditItems.filter((auditItem): auditItem is ExpeditionDepartureAuditItem => Boolean(auditItem));

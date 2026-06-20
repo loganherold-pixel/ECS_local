@@ -10,6 +10,7 @@ export * from './expeditionReadinessAlerts';
 export * from './expeditionReadinessStore';
 export * from './exploreRouteReadiness';
 export * from './campReadinessAdapter';
+export * from './campCandidateViability';
 export * from './fleetReadinessAdapter';
 export * from './departureAudit';
 export * from './departureDeltaBrief';

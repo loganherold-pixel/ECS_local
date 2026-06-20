@@ -53,6 +53,7 @@ function clamp(val: number, min: number, max: number): number {
 
 export type BailoutType =
   | 'pavement'
+  | 'bailout'
   | 'town'
   | 'fuel'
   | 'water'
@@ -67,6 +68,7 @@ export type BailoutType =
 
 export const BAILOUT_TYPES: { key: BailoutType; label: string; icon: string; color: string }[] = [
   { key: 'pavement', label: 'Pavement', icon: 'car-outline', color: '#78909C' },
+  { key: 'bailout', label: 'Bailout', icon: 'flag-outline', color: '#C48A2C' },
   { key: 'town', label: 'Town', icon: 'business-outline', color: '#42A5F5' },
   { key: 'fuel', label: 'Fuel', icon: 'flame-outline', color: '#FFA726' },
   { key: 'water', label: 'Water', icon: 'water-outline', color: '#4FC3F7' },

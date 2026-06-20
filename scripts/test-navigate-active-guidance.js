@@ -90,17 +90,17 @@ assert(
 assert(navigate.includes('const roadNavigationSurfaceTopOffset = ACTIVE_GUIDANCE_TOP'), 'active guidance must use the dedicated top-priority route surface offset');
 assert(navigate.includes("guidanceRightInset={navigationOverlayMode === 'active' ? 0 : ACTIVE_GUIDANCE_RIGHT_INSET}"), 'active guidance must span broadly without compass bottom inset');
 assert(
-  navigate.includes("const mapToastAttachedToGuidance = navigationOverlayMode === 'active'"),
-  'active navigation should attach transient toasts to the active guidance stack.',
+  !navigate.includes("import Toast from '../../components/Toast';") &&
+    !navigate.includes('<Toast') &&
+    !navigate.includes('mapToastAttachedToGuidance'),
+  'Active guidance should not render the legacy centered Toast status banner.',
 );
 assert(
   navigate.includes('const activeGuidanceToastTopOffset =') &&
     navigate.includes('roadNavigationSurfaceTopOffset +') &&
     navigate.includes('activeGuidanceRenderedHeight +') &&
-    navigate.includes('activeGuidanceNotificationGap') &&
-    navigate.includes('placement="top"') &&
-    navigate.includes('zIndex={mapToastAttachedToGuidance ? 84 : undefined}'),
-  'temporary navigation notices should render below Active Guidance instead of covering it.',
+    navigate.includes('activeGuidanceNotificationGap'),
+  'Non-toast Navigate popups should still reserve the Active Guidance band instead of covering it.',
 );
 assert(
   navigate.includes('const [activeReadinessMinimized, setActiveReadinessMinimized] = useState(true);') &&
