@@ -13,6 +13,8 @@ import {
 } from '../../lib/navigateRouteSessionStore';
 import {
   resolveDashboardNavigationChaseCamera,
+  resolveStableDashboardGpsCameraSnapshot,
+  type DashboardGpsCameraSnapshot,
   type DashboardNavigationPoint,
 } from '../../lib/dashboardNavigationChaseCamera';
 import { resolveActiveGuidanceDisplayLocation } from '../../lib/activeGuidanceProgressPath';
@@ -129,6 +131,86 @@ function quantizeGpsCameraPoint(gpsLocation: DashboardNavigationPoint | null): D
     latitude: quantizeCoordinate(gpsLocation.latitude),
     longitude: quantizeCoordinate(gpsLocation.longitude),
   };
+}
+
+function areDashboardGpsCameraSnapshotsEqual(
+  left: DashboardGpsCameraSnapshot,
+  right: DashboardGpsCameraSnapshot,
+): boolean {
+  return (
+    left.location?.latitude === right.location?.latitude &&
+    left.location?.longitude === right.location?.longitude &&
+    left.bearingDeg === right.bearingDeg
+  );
+}
+
+function useStableDashboardGpsCameraLocation(
+  location: DashboardNavigationPoint | null,
+  options?: { speedMph?: number | null; accuracyM?: number | null },
+): DashboardNavigationPoint | null {
+  const [snapshot, setSnapshot] = useState<DashboardGpsCameraSnapshot>(() =>
+    resolveStableDashboardGpsCameraSnapshot({
+      nextLocation: location,
+      nextBearingDeg: null,
+      speedMph: options?.speedMph ?? null,
+      accuracyM: options?.accuracyM ?? null,
+    }),
+  );
+  const latitude = location?.latitude ?? null;
+  const longitude = location?.longitude ?? null;
+  const speedMph = options?.speedMph ?? null;
+  const accuracyM = options?.accuracyM ?? null;
+
+  useEffect(() => {
+    setSnapshot((previous) => {
+      const next = resolveStableDashboardGpsCameraSnapshot({
+        previous,
+        nextLocation: location,
+        nextBearingDeg: previous.bearingDeg,
+        speedMph,
+        accuracyM,
+      });
+      return areDashboardGpsCameraSnapshotsEqual(previous, next) ? previous : next;
+    });
+  }, [accuracyM, latitude, longitude, location, speedMph]);
+
+  return snapshot.location;
+}
+
+function useStableDashboardGpsCameraSnapshot(input: {
+  location: DashboardNavigationPoint | null;
+  bearingDeg?: number | null;
+  speedMph?: number | null;
+  accuracyM?: number | null;
+}): DashboardGpsCameraSnapshot {
+  const [snapshot, setSnapshot] = useState<DashboardGpsCameraSnapshot>(() =>
+    resolveStableDashboardGpsCameraSnapshot({
+      nextLocation: input.location,
+      nextBearingDeg: input.bearingDeg ?? null,
+      speedMph: input.speedMph ?? null,
+      accuracyM: input.accuracyM ?? null,
+    }),
+  );
+  const latitude = input.location?.latitude ?? null;
+  const longitude = input.location?.longitude ?? null;
+  const bearingDeg = input.bearingDeg ?? null;
+  const speedMph = input.speedMph ?? null;
+  const accuracyM = input.accuracyM ?? null;
+
+  useEffect(() => {
+    setSnapshot((previous) => {
+      const next = resolveStableDashboardGpsCameraSnapshot({
+        previous,
+        nextLocation: input.location,
+        nextBearingDeg: bearingDeg,
+        speedMph,
+        accuracyM,
+      });
+      return areDashboardGpsCameraSnapshotsEqual(previous, next) ? previous : next;
+    });
+  }, [accuracyM, bearingDeg, input.location, latitude, longitude, speedMph]);
+
+  return snapshot;
 }
 
 function getGuidanceModeLabel(snapshot: NavigateRouteSessionSnapshot): string {
@@ -460,36 +542,40 @@ export function useNavigateSurfaceState(options?: WidgetRenderOptions, enabled =
         : gpsLocation,
     [displayGpsPoint, gpsLocation],
   );
-  const showUserLocation = !!displayGpsLocation;
+  const stableDisplayGpsLocation = useStableDashboardGpsCameraLocation(displayGpsLocation, {
+    speedMph: options?.gpsSpeedMph ?? null,
+    accuracyM: options?.gpsAccuracyM ?? null,
+  });
+  const showUserLocation = !!stableDisplayGpsLocation;
   const motionState = resolveMapSurfaceMotionState({
     surface: 'dashboard',
     isFocused: enabled,
     selected: enabled,
     hasActiveGuidance,
   });
-  const shouldFollowUser = motionState.allowCameraFollow && !!displayGpsLocation && (hasActiveGuidance || !hasAnyRoute);
+  const shouldFollowUser = motionState.allowCameraFollow && !!stableDisplayGpsLocation && (hasActiveGuidance || !hasAnyRoute);
   const cameraMode: CameraMode | undefined = shouldFollowUser
     ? 'follow_user'
     : routePoints.length > 1
       ? 'route_overview'
       : undefined;
   const activeGuidanceCameraCommand = useMemo<CameraCommand | null>(() => {
-    if (!hasActiveGuidance || !displayGpsLocation) return null;
+    if (!hasActiveGuidance || !stableDisplayGpsLocation) return null;
     return {
       mode: 'follow_user',
-      center: displayGpsLocation,
+      center: stableDisplayGpsLocation,
       zoom: ACTIVE_ROUTE_WIDGET_ZOOM,
       durationMs: 350,
       animate: true,
       reason: 'dashboard_active_guidance_quarter_mile',
     };
-  }, [displayGpsLocation, hasActiveGuidance]);
+  }, [hasActiveGuidance, stableDisplayGpsLocation]);
 
   return {
     mapToken,
     routeSession,
     gpsLocation,
-    displayGpsLocation,
+    displayGpsLocation: stableDisplayGpsLocation,
     showUserLocation,
     shouldFollowUser,
     cameraMode,
@@ -620,12 +706,18 @@ export function Mini3DFollowMap({
     routePoints,
     routeSessionBearing,
   ]);
+  const smoothedGpsCamera = useStableDashboardGpsCameraSnapshot({
+    location: displayGpsLocation,
+    bearingDeg: chaseCamera.bearingDeg,
+    speedMph: options?.gpsSpeedMph ?? null,
+    accuracyM: options?.gpsAccuracyM ?? null,
+  });
 
   useEffect(() => {
-    if (chaseCamera.bearingDeg != null) {
-      lastBearingRef.current = chaseCamera.bearingDeg;
+    if (smoothedGpsCamera.bearingDeg != null) {
+      lastBearingRef.current = smoothedGpsCamera.bearingDeg;
     }
-  }, [chaseCamera.bearingDeg]);
+  }, [smoothedGpsCamera.bearingDeg]);
 
   useEffect(() => {
     let mounted = true;
@@ -639,8 +731,8 @@ export function Mini3DFollowMap({
     };
   }, []);
 
-  const gpsCameraLatitude = displayGpsLocation?.latitude ?? null;
-  const gpsCameraLongitude = displayGpsLocation?.longitude ?? null;
+  const gpsCameraLatitude = smoothedGpsCamera.location?.latitude ?? null;
+  const gpsCameraLongitude = smoothedGpsCamera.location?.longitude ?? null;
   const cameraCenter = useMemo<DashboardNavigationPoint | null>(() => {
     if (gpsCameraLatitude == null || gpsCameraLongitude == null) return null;
     return quantizeGpsCameraPoint({
@@ -649,7 +741,7 @@ export function Mini3DFollowMap({
     });
   }, [gpsCameraLatitude, gpsCameraLongitude]);
 
-  const cameraBearing = chaseCamera.bearingDeg ?? lastBearingRef.current ?? 0;
+  const cameraBearing = smoothedGpsCamera.bearingDeg ?? lastBearingRef.current ?? 0;
   const cameraCommand = useMemo<CameraCommand | null>(() => {
     if (!selected || !cameraCenter || !followLocked) return null;
     return {

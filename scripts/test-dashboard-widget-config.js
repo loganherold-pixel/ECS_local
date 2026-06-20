@@ -665,6 +665,14 @@ assert.ok(
     !widgetLibraryManagerSource.includes('highwayWidgets'),
   'Widget Manager must use the Expedition-backed Widgets library and must not keep a separate Highway widget group.',
 );
+assert.ok(
+  widgetGridSource.includes('dashboardWidgetParentTransparent') &&
+    widgetGridSource.includes("backgroundColor: 'transparent'") &&
+    widgetGridSource.includes('styles.dashboardWidgetParentTransparent') &&
+    !widgetGridSource.includes('WIDGET_CONTAINER_BACKGROUND') &&
+    !widgetGridSource.includes('<WidgetContainerBackground />'),
+  'Dashboard widget parent container must be fully transparent with no image or panel fill behind sunlight, weather, vehicle, terrain, or power widgets.',
+);
 const expeditionPlaceholderIndex = dashboardSource.indexOf('showExpeditionPlaceholderTab && !layoutMode');
 const expeditionTabIndex = dashboardSource.indexOf('<ExpeditionTab');
 const widgetGridIndex = dashboardSource.indexOf('<WidgetGrid');

@@ -7,11 +7,13 @@ const ts = require('typescript');
 const root = path.join(__dirname, '..');
 const discoverPath = path.join(root, 'app', '(tabs)', 'discover.tsx');
 const catalogPath = path.join(root, 'lib', 'explore', 'routeCatalog.ts');
+const readyInventoryPath = path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts');
 
 global.__DEV__ = false;
 
 const discover = fs.readFileSync(discoverPath, 'utf8');
 const catalog = fs.readFileSync(catalogPath, 'utf8');
+const readyInventory = fs.readFileSync(readyInventoryPath, 'utf8');
 
 const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
@@ -80,10 +82,11 @@ assert(
   'Explore should expose a Guidance Ready route set while preserving the 5+ mile minimum.',
 );
 assert(
-  discover.includes('hasGuidanceReadyGeometry') &&
-    discover.includes('activeGuidance') &&
-    discover.includes('routeGeometryMode'),
-  'Explore guidance-ready filtering should require usable stitched/full route geometry metadata.',
+  readyInventory.includes('hasExploreGuidanceReadyGeometry') &&
+    readyInventory.includes('normalizeNavigationGuidanceGeometry') &&
+    readyInventory.includes('activeGuidance') &&
+    readyInventory.includes('routeGeometryMode'),
+  'Explore guidance-ready filtering should require shared usable stitched/full route geometry metadata.',
 );
 assert(
   discover.includes('source-backed') &&
@@ -99,10 +102,17 @@ assert(
 
 assert(
   discover.includes('buildExploreGuidanceReadyInventory') &&
+    discover.includes('defaultExploreReadyRouteEligibility') &&
+    discover.includes('isExploreGuidanceReadyRoute') &&
     discover.includes('exploreGuidanceReadyInventory.refinementCounts') &&
     discover.includes('exploreGuidanceReadyInventory.readyCount') &&
     discover.includes('exploreGuidanceReadyInventory.totalReadyCount'),
-  'Discover should drive filter chips and Guidance Ready Routes from the shared ready-route inventory.',
+  'Discover should drive filter chips, map preview, and Guidance Ready Routes from the shared ready-route eligibility.',
+);
+assert(
+  !discover.includes('function hasGuidanceReadyLineGeometry') &&
+    !discover.includes('function hasGuidanceReadyGeometry'),
+  'Discover should not keep a looser local guidance-ready geometry gate that can admit preview-only split route geometry.',
 );
 assert(
   !discover.includes('routes are hidden because') &&
@@ -137,6 +147,35 @@ const previewOnlyRoute = makeRoute('preview-only', {
   routeMetadata: {
     routeTypeStatus: 'suggested_trailhead',
     routeGeometryMode: 'preview_simplified',
+  },
+});
+const activeGuidanceReadySearchPreviewRoute = makeRoute('active-ready-search-preview', {
+  routeGeometry: {
+    type: 'LineString',
+    coordinates: [
+      [-110, 38],
+      [-109.98, 38.02],
+      [-109.96, 38.04],
+    ],
+  },
+  routeMetadata: {
+    routeTypeStatus: 'suggested_trailhead',
+    routeGeometryMode: 'preview_simplified',
+    catalogVerification: {
+      publicRecommendation: true,
+      activeGuidance: {
+        status: 'ready',
+        topologyResolved: true,
+        sourceSegmentCount: 4,
+        componentCount: 1,
+        branchDetected: false,
+        joinedSegmentGapCount: 0,
+        disjointSegmentGapCount: 0,
+        maxJoinGapMeters: 0,
+        maxSegmentGapMeters: 0,
+        unavailableReason: null,
+      },
+    },
   },
 });
 const shortRoute = makeRoute('too-short', { distanceMiles: 3 });
@@ -184,6 +223,11 @@ assert.strictEqual(
   defaultExploreReadyRouteEligibility(previewOnlyRoute).eligible,
   false,
   'Preview-only split geometry must not be treated as active-guidance-ready.',
+);
+assert.strictEqual(
+  defaultExploreReadyRouteEligibility(activeGuidanceReadySearchPreviewRoute).eligible,
+  true,
+  'Source-backed search-preview geometry should stay eligible when catalog active-guidance metadata says the full route is ready and detail hydration will supply it before navigation.',
 );
 assert.strictEqual(
   defaultExploreReadyRouteEligibility(foldedLineRoute).eligible,

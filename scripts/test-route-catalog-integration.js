@@ -334,7 +334,7 @@ assert(
     suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.ecsRouteIdeaRoutes') &&
     suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.favoriteRoutes') &&
     suggestedRoutesBlock.includes('routePassesExploreMapLength(route)') &&
-    suggestedRoutesBlock.includes('hasGuidanceReadyGeometry(route)') &&
+    suggestedRoutesBlock.includes('isExploreGuidanceReadyRoute(route)') &&
     !suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.popularTrailRoutes') &&
     discover.includes('const exploreSuggestedRouteOptions = guidanceReadyRouteOptions'),
   'Explore planning/offline routes should use the source-backed Guidance Ready route set with 5+ mile and geometry gates',

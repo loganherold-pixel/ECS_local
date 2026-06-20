@@ -205,6 +205,21 @@ assert.deepStrictEqual(
   'Trail Pack projection should expose deterministic operational criteria alongside source/confidence metadata',
 );
 
+const searchPreviewTrailPack = catalogRouteToTrailPack(
+  makeRoute({ routeGeometryMode: 'preview_simplified' }),
+  previewGeometryVerification,
+);
+assert.strictEqual(
+  searchPreviewTrailPack.routeGeometryMode,
+  'preview_simplified',
+  'Trail Pack projection should preserve whether route geometry came from lightweight search preview or full detail.',
+);
+assert.strictEqual(
+  trailPackToExpeditionOpportunity(searchPreviewTrailPack).routeMetadata.routeGeometryMode,
+  'preview_simplified',
+  'Expedition opportunity metadata should keep route geometry mode so Explore can require active-guidance detail before calling a preview route ready.',
+);
+
 const opportunity = trailPackToExpeditionOpportunity(trailPack);
 assert.strictEqual(
   opportunity.remotenessScore,

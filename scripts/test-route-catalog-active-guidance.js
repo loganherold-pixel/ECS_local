@@ -139,6 +139,73 @@ assert.strictEqual(
   'Connected aggregate geometry should be active-guidance-ready.',
 );
 
+const accessConnectorOrigin = { lat: 38.95, lng: -120.05 };
+const accessConnectorAggregate = buildExploreNavigationPayload(
+  makeCatalogRoute({
+    id: 'trail-pack:rubicon-spine-with-access-connector',
+    name: 'Rubicon Trail',
+    startLat: 39,
+    startLng: -120,
+    routeGeometry: {
+      type: 'MultiLineString',
+      coordinates: [
+        [
+          [-120.05, 38.95],
+          [-120, 39],
+        ],
+        [
+          [-120, 39],
+          [-120.001, 39.001],
+          [-120.002, 39.002],
+        ],
+      ],
+    },
+  }),
+  { approachOriginCoordinate: accessConnectorOrigin },
+);
+
+assert.strictEqual(
+  accessConnectorAggregate.routeMetadata.activeGuidanceStatus,
+  'ready',
+  'A composite route with a current-position access connector should still stage the named trail spine for active guidance.',
+);
+assert.deepStrictEqual(
+  accessConnectorAggregate.trailGeometry.map((point) => [
+    Number(point.lng.toFixed(3)),
+    Number(point.lat.toFixed(3)),
+  ]),
+  [
+    [-120, 39],
+    [-120.001, 39.001],
+    [-120.002, 39.002],
+  ],
+  'Active trail guidance must start at the declared trailhead and exclude the current-position access connector.',
+);
+assert.deepStrictEqual(
+  [
+    Number(accessConnectorAggregate.trailheadCoordinate.lng.toFixed(3)),
+    Number(accessConnectorAggregate.trailheadCoordinate.lat.toFixed(3)),
+  ],
+  [-120, 39],
+  'The trailhead coordinate should remain the named trail start, not the live GPS approach origin.',
+);
+assert.deepStrictEqual(
+  [
+    Number(accessConnectorAggregate.roadDestinationCoordinate.lng.toFixed(3)),
+    Number(accessConnectorAggregate.roadDestinationCoordinate.lat.toFixed(3)),
+  ],
+  [-120, 39],
+  'Road guidance should terminate at point A before trail guidance begins.',
+);
+assert(
+  !accessConnectorAggregate.trailGeometry.some(
+    (point) =>
+      Math.abs(point.lat - accessConnectorOrigin.lat) < 0.0001 &&
+      Math.abs(point.lng - accessConnectorOrigin.lng) < 0.0001,
+  ),
+  'The live GPS origin must never be included in named trail active-guidance geometry.',
+);
+
 const topologyResolvedAggregate = buildExploreNavigationPayload(
   makeCatalogRoute({
     id: 'trail-pack:usfs-mvum-tahoe-road-topology',

@@ -88,7 +88,10 @@ export function buildDashboardProductionReadinessResult(options = {}) {
         widgetGrid.includes('getDashboardSupportedSizes') &&
         widgetGrid.includes('canResizeDashboardWidget') &&
         widgetGrid.includes('enableLegacyAndroidLayoutAnimation') &&
-        widgetGrid.includes('WidgetContainerBackground') &&
+        widgetGrid.includes('dashboardWidgetParentTransparent') &&
+        widgetGrid.includes("backgroundColor: 'transparent'") &&
+        !widgetGrid.includes('WidgetContainerBackground') &&
+        !widgetGrid.includes('WIDGET_CONTAINER_BACKGROUND') &&
         widgetGrid.includes('layoutMode'),
       [relPath(root, paths.widgetRegistry), relPath(root, paths.widgetGrid)],
       ['Capture Android phone/tablet portrait and landscape evidence for Dashboard widget grid, resize, replace, and error fallback states.'],

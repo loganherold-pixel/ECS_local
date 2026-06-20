@@ -48,6 +48,8 @@ export type ECSTrailPackRouteGeometry = {
   coordinates: number[][] | number[][][];
 };
 
+export type ECSTrailPackRouteGeometryMode = 'full' | 'preview_simplified' | 'omitted';
+
 export type ECSTrailPackActiveGuidance = {
   status: 'ready' | 'preview_only' | 'unavailable';
   topologyResolved: boolean;
@@ -147,6 +149,7 @@ export type ECSTrailPack = {
   routeType: ECSTrailPackRouteType;
   centerCoordinate: ECSTrailPackCoordinate;
   routeGeometry?: ECSTrailPackRouteGeometry;
+  routeGeometryMode?: ECSTrailPackRouteGeometryMode;
   distanceMiles?: number;
   estimatedDurationMinutes?: number;
   difficulty?: ECSTrailPackDifficulty;
@@ -571,6 +574,7 @@ export function trailPackToExpeditionOpportunity(
       trailPackSourceLabel: getTrailPackSourceLabel(pack.source),
       trailPackDataState: pack.dataState ?? null,
       trailPackRouteType: pack.routeType,
+      routeGeometryMode: pack.routeGeometryMode ?? null,
       confidenceScore: pack.confidenceScore,
       elevationGainFt,
       elevationLossFt: terrainImpact.elevationLossFt,

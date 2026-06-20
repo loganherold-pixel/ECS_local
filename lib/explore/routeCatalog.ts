@@ -1065,6 +1065,7 @@ export function catalogRouteToTrailPack(
     routeType: route.routeType,
     centerCoordinate: route.centerCoordinate,
     routeGeometry: route.routeGeometry,
+    routeGeometryMode: route.routeGeometryMode,
     distanceMiles: route.distanceMiles,
     estimatedDurationMinutes: route.estimatedDurationMinutes,
     difficulty: route.difficulty ?? 'unknown',
@@ -1174,6 +1175,7 @@ export function normalizeRouteCatalogDetailResponse(
   return {
     ...baseTrailPack,
     routeGeometry: baseTrailPack.routeGeometry ?? fallbackTrailPack?.routeGeometry,
+    routeGeometryMode: baseTrailPack.routeGeometryMode ?? fallbackTrailPack?.routeGeometryMode,
     distanceMiles: baseTrailPack.distanceMiles ?? fallbackTrailPack?.distanceMiles,
     estimatedDurationMinutes: baseTrailPack.estimatedDurationMinutes ?? fallbackTrailPack?.estimatedDurationMinutes,
     vehicleFit: baseTrailPack.vehicleFit ?? fallbackTrailPack?.vehicleFit,

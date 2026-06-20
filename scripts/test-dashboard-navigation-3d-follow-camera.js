@@ -34,6 +34,7 @@ const mapRenderer = read('components/navigate/MapRenderer.tsx');
 
 assert.strictEqual(chase.normalizeNavigationBearingDeg(370), 10);
 assert.strictEqual(chase.normalizeNavigationBearingDeg(-10), 350);
+assert.strictEqual(typeof chase.resolveStableDashboardGpsCameraSnapshot, 'function');
 
 const origin = { latitude: 39.0, longitude: -120.0 };
 const eastBearing = chase.getDashboardNavigationBearingBetween(origin, {
@@ -85,12 +86,51 @@ const inactiveCamera = chase.resolveDashboardNavigationChaseCamera({
 });
 assert.deepStrictEqual(inactiveCamera.cameraTarget, origin, 'Inactive/free-drive camera should not shift the target ahead of the user.');
 
+const stableSmallDrift = chase.resolveStableDashboardGpsCameraSnapshot({
+  previous: { location: origin, bearingDeg: 90 },
+  nextLocation: { latitude: 39.00002, longitude: -120.00002 },
+  nextBearingDeg: 96,
+  speedMph: 1,
+  accuracyM: 12,
+});
+assert.deepStrictEqual(
+  stableSmallDrift.location,
+  origin,
+  'Dashboard map GPS smoothing should ignore sub-accuracy location drift.',
+);
+assert.strictEqual(
+  stableSmallDrift.bearingDeg,
+  90,
+  'Dashboard map GPS smoothing should freeze heading wobble while nearly stationary.',
+);
+
+const stableMeaningfulMove = chase.resolveStableDashboardGpsCameraSnapshot({
+  previous: stableSmallDrift,
+  nextLocation: { latitude: 39.00018, longitude: -120.00018 },
+  nextBearingDeg: 118,
+  speedMph: 12,
+  accuracyM: 8,
+});
+assert.notDeepStrictEqual(
+  stableMeaningfulMove.location,
+  origin,
+  'Dashboard map GPS smoothing should still accept meaningful movement.',
+);
+assert.strictEqual(
+  stableMeaningfulMove.bearingDeg,
+  118,
+  'Dashboard map GPS smoothing should still accept meaningful course changes while moving.',
+);
+
 assert(dashboard.includes('gpsHeadingDeg: gps.position?.headingDeg ?? null'), 'Dashboard detail render options should include GPS heading.');
 assert(dashboard.includes('gpsHeadingDeg={gps.position?.headingDeg ?? null}'), 'Dashboard grid should pass live GPS heading.');
 assert(widgetGrid.includes('gpsHeadingDeg?: number | null;'), 'WidgetGrid props should carry GPS heading.');
-assert(widgetGrid.includes('renderOptions?.gpsHeadingDeg ??'), 'Navigate surface render key should include heading updates.');
+assert(widgetGrid.includes('areCompactRenderOptionsEqualForSlot'), 'Compact widget memoization should compare slot-specific GPS render state.');
+assert(widgetGrid.includes('getDashboardGpsRenderKey'), 'Dashboard compact map keys should bucket GPS updates instead of using raw samples.');
 assert(widgetRenderers.includes('gpsHeadingDeg?: number | null;'), 'Widget render options should expose GPS heading.');
 assert(navigateSurface.includes('resolveDashboardNavigationChaseCamera'), '3D navigation command should use the chase-camera resolver.');
+assert(navigateSurface.includes('useStableDashboardGpsCameraLocation'), 'Dashboard navigation surfaces should smooth GPS marker/camera location changes.');
+assert(navigateSurface.includes('resolveStableDashboardGpsCameraSnapshot'), '3D navigation command should smooth small location and bearing jitter.');
 assert(navigateSurface.includes('COMMAND_3D_ACTIVE_FOLLOW_OFFSET'), 'Active guidance should use a lower marker chase-camera offset.');
 assert(navigateSurface.includes("dashboard_command_3d_active_guidance:${chaseCamera.bearingSource}:${recenterRequestId}"), 'Camera command reason should include bearing source and recenter generation.');
 assert(navigateSurface.includes("type Command3DMapViewKey = 'tactical' | 'day' | 'satellite';"), '3D follow map must expose tactical, day, and satellite view modes.');

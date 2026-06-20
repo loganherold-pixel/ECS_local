@@ -174,6 +174,7 @@ import {
 } from '../../lib/explore/exploreRefinementFilter';
 import {
   buildExploreGuidanceReadyInventory,
+  defaultExploreReadyRouteEligibility,
 } from '../../lib/explore/exploreGuidanceReadyInventory';
 import {
   getVisibleExploreFeatures,
@@ -287,57 +288,10 @@ function routePassesExploreMapLength(route: ExpeditionOpportunity | null | undef
   return Number.isFinite(Number(route?.distanceMiles)) && Number(route?.distanceMiles) >= MIN_DISCOVERY_ROUTE_MILES;
 }
 
-function readExploreRouteRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function hasGuidanceReadyLineGeometry(value: unknown): boolean {
-  const record = readExploreRouteRecord(value);
-  if (Array.isArray(value)) return value.length > 1;
-  if (Array.isArray(record.coordinates)) return record.coordinates.length > 1;
-  if (record.type === 'LineString' && Array.isArray(record.coordinates)) return record.coordinates.length > 1;
-  if (record.type === 'MultiLineString' && Array.isArray(record.coordinates)) {
-    return record.coordinates.some((line) => Array.isArray(line) && line.length > 1);
-  }
-  return false;
-}
-
-function hasGuidanceReadyGeometry(route: ExpeditionOpportunity | null | undefined): route is ExpeditionOpportunity {
-  if (!route) return false;
-  const routeRecord = readExploreRouteRecord(route);
-  const routeMetadata = readExploreRouteRecord(route.routeMetadata);
-  const catalogVerification = readExploreRouteRecord(routeMetadata.catalogVerification);
-  const communitySignal = readExploreRouteRecord(routeRecord.communitySignal ?? routeMetadata.communitySignal);
-  const activeGuidance = readExploreRouteRecord(
-    routeRecord.activeGuidance ??
-      routeMetadata.activeGuidance ??
-      catalogVerification.activeGuidance ??
-      communitySignal.activeGuidance,
-  );
-  const routeGeometryMode = String(
-    routeRecord.routeGeometryMode ??
-      routeMetadata.routeGeometryMode ??
-      catalogVerification.routeGeometryMode ??
-      '',
-  );
-  const activeGuidanceReady =
-    activeGuidance.status === 'ready' ||
-    activeGuidance.guidanceReady === true ||
-    activeGuidance.available === true;
-  const stitchedOrFullGeometry =
-    routeGeometryMode === 'full' ||
-    routeGeometryMode === 'stitched' ||
-    String(routeMetadata.geometrySource ?? '').includes('stitched');
-  return (
-    activeGuidanceReady ||
-    stitchedOrFullGeometry ||
-    hasGuidanceReadyLineGeometry(routeRecord.routeGeometry) ||
-    hasGuidanceReadyLineGeometry(routeRecord.trailGeometry) ||
-    hasGuidanceReadyLineGeometry(routeMetadata.routeGeometry) ||
-    hasGuidanceReadyLineGeometry(routeMetadata.trailGeometry)
-  );
+function isExploreGuidanceReadyRoute(
+  route: ExpeditionOpportunity | null | undefined,
+): route is ExpeditionOpportunity {
+  return !!route && defaultExploreReadyRouteEligibility(route).eligible;
 }
 
 type HiddenGemOrchestrationStatus =
@@ -2472,15 +2426,15 @@ function DiscoverScreenInner() {
     const hiddenGemRoutes = hiddenGemExploreOrchestration.items
       .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
       .filter(routePassesExploreMapLength)
-      .filter(hasGuidanceReadyGeometry);
+      .filter(isExploreGuidanceReadyRoute);
     const trailPackRoutes = publicRefinedTrailPacks
       .map((pack) => trailPackToExpeditionOpportunity(pack))
       .filter(routePassesExploreMapLength)
-      .filter(hasGuidanceReadyGeometry)
+      .filter(isExploreGuidanceReadyRoute)
       .filter(isPublicSuggestedTrailheadRoute);
     const ecsRouteIdeaRoutes = publicRefinedAIRoutes
       .filter(routePassesExploreMapLength)
-      .filter(hasGuidanceReadyGeometry);
+      .filter(isExploreGuidanceReadyRoute);
     const currentSuggestedRouteIds = new Set(
       [...hiddenGemRoutes, ...trailPackRoutes, ...ecsRouteIdeaRoutes].map((route) =>
         String(route.id ?? '').trim(),
@@ -2490,7 +2444,7 @@ function DiscoverScreenInner() {
       .filter((favorite) => currentSuggestedRouteIds.has(String(favorite.sourceTrailId).trim()))
       .map((favorite) => favoriteTrailToExpeditionRoute(favorite))
       .filter(routePassesExploreMapLength)
-      .filter(hasGuidanceReadyGeometry);
+      .filter(isExploreGuidanceReadyRoute);
     const total =
       hiddenGemRoutes.length +
       trailPackRoutes.length +
@@ -2544,7 +2498,7 @@ function DiscoverScreenInner() {
       seen.add(key);
       return (
         routePassesExploreMapLength(route) &&
-        hasGuidanceReadyGeometry(route) &&
+        isExploreGuidanceReadyRoute(route) &&
         isPublicSuggestedTrailheadRoute(route)
       );
     });

@@ -55,11 +55,14 @@ assert(
   'Explore Routes must merge with existing segment overlays without replacing them.',
 );
 assert(
-  navigate.includes('Explore Routes is on, but the available Explorer results do not include map geometry yet.'),
+  navigate.includes("showToast('NO EXPLORE ROUTES WITH MAP GEOMETRY AVAILABLE')"),
   'Navigate must provide a friendly empty state when Explorer routes lack geometry.',
 );
 assert(
-  navigate.includes('loaded from Hidden Gems, Trail Packs, Favorites, and ECS Route Ideas.') &&
+  discover.includes("label: 'Hidden Gems'") &&
+    discover.includes("label: 'Trail Packs'") &&
+    discover.includes("label: 'ECS Ideas'") &&
+    discover.includes("label: 'Favorites'") &&
     !navigate.includes('loaded from Hidden Gems, Popular Trails, and ECS Route Ideas.'),
   'Navigate Explore Routes status copy should match the active Explorer route buckets.',
 );
@@ -138,7 +141,7 @@ assert(
 assert(
   discover.includes('Guidance Ready Routes') &&
     discover.includes('guidanceReadyRouteOptions') &&
-    discover.includes('hasGuidanceReadyGeometry') &&
+    discover.includes('isExploreGuidanceReadyRoute') &&
     discover.includes('exploreMapPreviewRouteCounts') &&
     discover.includes('Hidden Gems') &&
     discover.includes('Trail Packs') &&

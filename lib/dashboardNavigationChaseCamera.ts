@@ -22,11 +22,22 @@ export type DashboardNavigationChaseCamera = {
   bearingSource: DashboardNavigationChaseBearingSource;
 };
 
+export type DashboardGpsCameraSnapshot = {
+  location: DashboardNavigationPoint | null;
+  bearingDeg: number | null;
+};
+
 const EARTH_RADIUS_M = 6371008.8;
 const MIN_ROUTE_AHEAD_DISTANCE_M = 18;
 const ROUTE_AHEAD_LOOKUP_DISTANCE_M = 95;
 const MAX_ROUTE_SNAP_DISTANCE_M = 900;
 const DEFAULT_ACTIVE_LOOKAHEAD_M = 62;
+export const DASHBOARD_GPS_CAMERA_MIN_MOVE_METERS = 8;
+export const DASHBOARD_GPS_CAMERA_MAX_ACCURACY_MOVE_METERS = 24;
+export const DASHBOARD_GPS_CAMERA_ACCURACY_MOVE_RATIO = 0.65;
+export const DASHBOARD_GPS_CAMERA_MIN_BEARING_DELTA_DEG = 12;
+export const DASHBOARD_GPS_CAMERA_STATIONARY_BEARING_DELTA_DEG = 28;
+export const DASHBOARD_GPS_CAMERA_STATIONARY_SPEED_MPH = 3;
 
 function toRadians(value: number): number {
   return (value * Math.PI) / 180;
@@ -83,6 +94,89 @@ export function getDashboardNavigationBearingBetween(
     Math.cos(lat1) * Math.sin(lat2) -
     Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLon);
   return normalizeNavigationBearingDeg(toDegrees(Math.atan2(y, x)));
+}
+
+function getBearingDeltaDegrees(left: number, right: number): number {
+  const normalizedLeft = normalizeNavigationBearingDeg(left);
+  const normalizedRight = normalizeNavigationBearingDeg(right);
+  if (normalizedLeft == null || normalizedRight == null) return Number.POSITIVE_INFINITY;
+  const delta = Math.abs(normalizedLeft - normalizedRight) % 360;
+  return delta > 180 ? 360 - delta : delta;
+}
+
+function getFiniteNonNegativeNumber(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, value)
+    : null;
+}
+
+export function resolveStableDashboardGpsCameraSnapshot(input: {
+  previous?: DashboardGpsCameraSnapshot | null;
+  nextLocation?: DashboardNavigationPoint | null;
+  nextBearingDeg?: number | null;
+  speedMph?: number | null;
+  accuracyM?: number | null;
+  minMoveMeters?: number;
+  minBearingDeltaDeg?: number;
+}): DashboardGpsCameraSnapshot {
+  const nextLocation = isValidDashboardNavigationPoint(input.nextLocation)
+    ? input.nextLocation
+    : null;
+  if (!nextLocation) {
+    return {
+      location: null,
+      bearingDeg: null,
+    };
+  }
+
+  const previousLocation = isValidDashboardNavigationPoint(input.previous?.location)
+    ? input.previous!.location
+    : null;
+  const speedMph = getFiniteNonNegativeNumber(input.speedMph);
+  const accuracyM = getFiniteNonNegativeNumber(input.accuracyM);
+  const accuracyMoveMeters =
+    accuracyM == null
+      ? DASHBOARD_GPS_CAMERA_MIN_MOVE_METERS
+      : Math.min(
+          DASHBOARD_GPS_CAMERA_MAX_ACCURACY_MOVE_METERS,
+          Math.max(DASHBOARD_GPS_CAMERA_MIN_MOVE_METERS, accuracyM * DASHBOARD_GPS_CAMERA_ACCURACY_MOVE_RATIO),
+        );
+  const minMoveMeters = Math.max(
+    0,
+    input.minMoveMeters ?? accuracyMoveMeters,
+  );
+  const movementMeters = previousLocation
+    ? getDashboardNavigationDistanceMeters(previousLocation, nextLocation)
+    : Number.POSITIVE_INFINITY;
+  const movingFastEnoughForHalfStep = speedMph != null && speedMph >= 10 && movementMeters >= minMoveMeters / 2;
+  const location =
+    !previousLocation || movementMeters >= minMoveMeters || movingFastEnoughForHalfStep
+      ? nextLocation
+      : previousLocation;
+
+  const previousBearing = normalizeNavigationBearingDeg(input.previous?.bearingDeg);
+  const nextBearing = normalizeNavigationBearingDeg(input.nextBearingDeg);
+  const isNearlyStationary = speedMph != null && speedMph < DASHBOARD_GPS_CAMERA_STATIONARY_SPEED_MPH;
+  const bearingDelta =
+    previousBearing != null && nextBearing != null
+      ? getBearingDeltaDegrees(previousBearing, nextBearing)
+      : Number.POSITIVE_INFINITY;
+  const minBearingDeltaDeg =
+    input.minBearingDeltaDeg ??
+    (isNearlyStationary
+      ? DASHBOARD_GPS_CAMERA_STATIONARY_BEARING_DELTA_DEG
+      : DASHBOARD_GPS_CAMERA_MIN_BEARING_DELTA_DEG);
+  const bearingDeg =
+    nextBearing == null
+      ? previousBearing
+      : previousBearing == null || bearingDelta >= minBearingDeltaDeg
+        ? nextBearing
+        : previousBearing;
+
+  return {
+    location,
+    bearingDeg: bearingDeg ?? null,
+  };
 }
 
 export function projectDashboardNavigationPoint(

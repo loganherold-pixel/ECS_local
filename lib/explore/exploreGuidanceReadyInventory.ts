@@ -172,7 +172,10 @@ export function hasExploreGuidanceReadyGeometry(
 
   const activeGuidanceStatus = String(activeGuidance.status ?? '').trim().toLowerCase();
   if (activeGuidanceStatus === 'preview_only' || activeGuidanceStatus === 'unavailable') return false;
-  if (routeGeometryMode === 'preview_simplified' || routeGeometryMode === 'omitted') return false;
+  if (routeGeometryMode === 'omitted') return false;
+  if (routeGeometryMode === 'preview_simplified') {
+    return activeGuidanceReady && hasReadyNormalizedGeometry(route);
+  }
   if (!activeGuidanceReady && !stitchedOrFullGeometry) {
     return hasReadyNormalizedGeometry(route);
   }

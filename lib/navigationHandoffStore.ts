@@ -15,6 +15,7 @@ import { classifyExploreRouteAuthority } from './exploreRouteAuthority';
 
 const STORAGE_KEY = 'ecs_hybrid_navigation_handoff_v1';
 const nativeNavigationHandoffCache = createPersistedKeyValueCache('ecs_navigation_handoff');
+const APPROACH_CONNECTOR_ENDPOINT_MAX_METERS = 500;
 
 export type NavigationHandoffSource = 'search' | 'explore' | 'saved' | 'import' | 'dispatch';
 export type NavigationHandoffType =
@@ -427,10 +428,102 @@ function extractTrailGeometry(value: unknown): RoadNavCoordinate[] {
   return extractTrailGeometryResult(value).points;
 }
 
+type TrailGeometryExtractionOptions = {
+  preferredStart?: RoadNavCoordinate | null;
+  allowLoop?: boolean;
+  approachOriginCoordinate?: RoadNavCoordinate | null;
+  declaredTrailheadCoordinate?: RoadNavCoordinate | null;
+};
+
+type ExtractedTrailGeometryResult = NavigationGuidanceGeometryResult & {
+  droppedApproachConnectorSegmentCount?: number;
+};
+
+function segmentsToGuidanceGeometryValue(segments: RoadNavCoordinate[][]): unknown {
+  const coordinates = segments.map((segment) =>
+    segment.map((point) => [point.lng, point.lat]),
+  );
+
+  if (coordinates.length === 1) {
+    return {
+      type: 'LineString',
+      coordinates: coordinates[0],
+    };
+  }
+
+  return {
+    type: 'MultiLineString',
+    coordinates,
+  };
+}
+
+function isApproachOriginConnectorSegment(
+  segment: RoadNavCoordinate[],
+  approachOrigin: RoadNavCoordinate,
+  declaredTrailhead: RoadNavCoordinate,
+): boolean {
+  if (segment.length < 2) return false;
+  const first = segment[0];
+  const last = segment[segment.length - 1];
+  const firstMatchesOrigin =
+    endpointDistanceMeters(approachOrigin, first) <= APPROACH_CONNECTOR_ENDPOINT_MAX_METERS;
+  const lastMatchesOrigin =
+    endpointDistanceMeters(approachOrigin, last) <= APPROACH_CONNECTOR_ENDPOINT_MAX_METERS;
+  const firstMatchesTrailhead =
+    endpointDistanceMeters(declaredTrailhead, first) <= APPROACH_CONNECTOR_ENDPOINT_MAX_METERS;
+  const lastMatchesTrailhead =
+    endpointDistanceMeters(declaredTrailhead, last) <= APPROACH_CONNECTOR_ENDPOINT_MAX_METERS;
+
+  return (
+    (firstMatchesOrigin && lastMatchesTrailhead) ||
+    (lastMatchesOrigin && firstMatchesTrailhead)
+  );
+}
+
+function removeApproachOriginConnectorSegments(
+  geometry: NavigationGuidanceGeometryResult,
+  options: TrailGeometryExtractionOptions,
+): ExtractedTrailGeometryResult {
+  const approachOrigin = normalizeCoordinate(options.approachOriginCoordinate);
+  const declaredTrailhead = normalizeCoordinate(options.declaredTrailheadCoordinate);
+  if (!approachOrigin || !declaredTrailhead) return geometry;
+  if (geometry.segments.length < 2) return geometry;
+  if (
+    endpointDistanceMeters(approachOrigin, declaredTrailhead) <=
+    APPROACH_CONNECTOR_ENDPOINT_MAX_METERS
+  ) {
+    return geometry;
+  }
+
+  const filteredSegments = geometry.segments.filter(
+    (segment) =>
+      !isApproachOriginConnectorSegment(segment, approachOrigin, declaredTrailhead),
+  );
+  const droppedCount = geometry.segments.length - filteredSegments.length;
+  if (droppedCount === 0 || filteredSegments.length === 0) return geometry;
+
+  const filteredGeometry = normalizeNavigationGuidanceGeometry(
+    segmentsToGuidanceGeometryValue(filteredSegments),
+    {
+      preferredStart: declaredTrailhead,
+      allowLoop: options.allowLoop === true,
+    },
+  );
+
+  if (filteredGeometry.points.length > 1 || filteredGeometry.segments.length > 0) {
+    return {
+      ...filteredGeometry,
+      droppedApproachConnectorSegmentCount: droppedCount,
+    };
+  }
+
+  return geometry;
+}
+
 function extractTrailGeometryResult(
   value: unknown,
-  options: { preferredStart?: RoadNavCoordinate | null; allowLoop?: boolean } = {},
-): NavigationGuidanceGeometryResult {
+  options: TrailGeometryExtractionOptions = {},
+): ExtractedTrailGeometryResult {
   const empty = normalizeNavigationGuidanceGeometry(null);
   if (!value || typeof value !== 'object') return empty;
   const candidate = value as Record<string, unknown>;
@@ -451,7 +544,10 @@ function extractTrailGeometryResult(
       preferredStart: options.preferredStart ?? null,
       allowLoop: options.allowLoop === true,
     });
-    if (geometry.points.length > 1 || geometry.segments.length > 0) return geometry;
+    const trailSpineGeometry = removeApproachOriginConnectorSegments(geometry, options);
+    if (trailSpineGeometry.points.length > 1 || trailSpineGeometry.segments.length > 0) {
+      return trailSpineGeometry;
+    }
   }
 
   return empty;
@@ -635,6 +731,8 @@ export function buildExploreNavigationPayload(
   const trailGeometryResult = extractTrailGeometryResult(route, {
     preferredStart: preferredTrailStart,
     allowLoop: isExplicitLoopRoute(route),
+    approachOriginCoordinate,
+    declaredTrailheadCoordinate,
   });
   const trailGeometry = orientTrailGeometryFromEndpoint(
     trailGeometryResult.points,
@@ -735,6 +833,8 @@ export function buildExploreNavigationPayload(
       activeGuidanceDisjointSegmentGapCount: trailGeometryResult.disjointSegmentGapCount,
       activeGuidanceMaxSegmentGapMeters: trailGeometryResult.maxSegmentGapMeters,
       activeGuidanceTopologyResolved: trailGeometryResult.topologyResolved,
+      activeGuidanceDroppedApproachConnectorSegmentCount:
+        trailGeometryResult.droppedApproachConnectorSegmentCount ?? 0,
     },
     landmarkMetadata: {
       highlights: Array.isArray(route.highlights) ? route.highlights : [],

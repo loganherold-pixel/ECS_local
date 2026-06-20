@@ -12,6 +12,10 @@ import { WebView } from 'react-native-webview';
 
 import { TACTICAL } from '../../lib/theme';
 import { getMapStyleUrl, getMapboxToken, getMapboxTokenSync } from '../../lib/mapConfig';
+import {
+  resolveStableDashboardGpsCameraSnapshot,
+  type DashboardGpsCameraSnapshot,
+} from '../../lib/dashboardNavigationChaseCamera';
 import MapFallbackSurface from '../navigate/MapFallbackSurface';
 import {
   getCurrentPointOnRoute,
@@ -64,6 +68,42 @@ function escapeInlineJson(value: unknown) {
     .replace(/&/g, '\\u0026')
     .replace(/\u2028/g, '\\u2028')
     .replace(/\u2029/g, '\\u2029');
+}
+
+function areRouteMiniMapMarkerSnapshotsEqual(
+  left: DashboardGpsCameraSnapshot,
+  right: DashboardGpsCameraSnapshot,
+): boolean {
+  return (
+    left.location?.latitude === right.location?.latitude &&
+    left.location?.longitude === right.location?.longitude
+  );
+}
+
+function useStableRouteMiniMapMarkerLocation(
+  location: MiniMapCoordinate | null,
+): MiniMapCoordinate | null {
+  const [snapshot, setSnapshot] = useState<DashboardGpsCameraSnapshot>(() =>
+    resolveStableDashboardGpsCameraSnapshot({
+      nextLocation: location,
+      nextBearingDeg: null,
+    }),
+  );
+  const latitude = location?.latitude ?? null;
+  const longitude = location?.longitude ?? null;
+
+  useEffect(() => {
+    setSnapshot((previous) => {
+      const next = resolveStableDashboardGpsCameraSnapshot({
+        previous,
+        nextLocation: location,
+        nextBearingDeg: previous.bearingDeg,
+      });
+      return areRouteMiniMapMarkerSnapshotsEqual(previous, next) ? previous : next;
+    });
+  }, [latitude, location, longitude]);
+
+  return snapshot.location;
 }
 
 function buildMiniMapHtml(mapboxToken: string, styleUrl: string) {
@@ -451,6 +491,7 @@ export default function RouteProgressMiniMap({
     [isGuidanceActive, resolvedProgress, routeFeature],
   );
   const markerLocation = routeMatchedMarkerLocation ?? currentLocation ?? getCurrentPointOnRoute(routeFeature, resolvedProgress);
+  const stableMarkerLocation = useStableRouteMiniMapMarkerLocation(markerLocation);
   const hasRenderableMap = Boolean(routeFeature && mapToken);
   const styleUrl = useMemo(() => getMapStyleUrl('route-progress'), []);
   const miniMapHtml = useMemo(
@@ -494,11 +535,11 @@ export default function RouteProgressMiniMap({
   const cameraBearing = useMemo(() => getRouteCameraBearing(routeFeature), [routeFeature]);
   const miniMapPayload = useMemo(() => {
     if (!routeFeature) return null;
-    const bounds = getRouteBounds(routeFeature, [markerLocation, originLocation, destinationLocation]);
+    const bounds = getRouteBounds(routeFeature, [stableMarkerLocation, originLocation, destinationLocation]);
     return {
       routeCoords: routeFeature.geometry.coordinates,
       progressCoords: split.completedRouteGeoJson?.geometry.coordinates ?? [],
-      marker: markerLocation,
+      marker: stableMarkerLocation,
       bounds,
       routeColor: 'rgba(95, 209, 255, 0.86)',
       progressColor: ecsGold,
@@ -508,7 +549,7 @@ export default function RouteProgressMiniMap({
       bearing: cameraBearing,
       animate: true,
     };
-  }, [cameraBearing, destinationLocation, ecsGold, markerLocation, originLocation, routeFeature, split.completedRouteGeoJson]);
+  }, [cameraBearing, destinationLocation, ecsGold, originLocation, routeFeature, split.completedRouteGeoJson, stableMarkerLocation]);
   const miniMapPayloadHash = useMemo(() => JSON.stringify(miniMapPayload), [miniMapPayload]);
   const showFallbackMap = Boolean(hasRenderableMap && !mapReady && miniMapPayload);
 

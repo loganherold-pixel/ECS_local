@@ -52,7 +52,6 @@ import {
   View,
   Text,
   TouchableOpacity,
-  ImageBackground,
   Pressable,
   StyleSheet,
   Animated,
@@ -111,22 +110,6 @@ import { renderWidgetContent, type WidgetRenderOptions } from './WidgetRenderers
 import { DASHBOARD_WIDGET_GRAMMAR } from './widgetGrammar';
 import type { Trip, LoadItem, RiskScore, Waypoint, UserSettings } from '../../lib/types';
 import { ECSBadge } from '../ECSStatus';
-
-const WIDGET_CONTAINER_BACKGROUND = require('../../assets/chrome/backgrounds/popup-container-bg.png');
-
-function WidgetContainerBackground() {
-  return (
-    <View style={styles.widgetContainerBackgroundLayer} pointerEvents="none">
-      <ImageBackground
-        source={WIDGET_CONTAINER_BACKGROUND}
-        resizeMode="cover"
-        style={styles.widgetContainerBackground}
-        imageStyle={styles.widgetContainerBackgroundImage}
-      />
-    </View>
-  );
-}
-
 
 // ── Types ─────────────────────────────────────────────────
 interface WidgetGridProps {
@@ -981,6 +964,39 @@ function getCompletedExpeditionSignature(completedExpeditionRecord?: unknown) {
   ].join(':');
 }
 
+function getFiniteDashboardNumber(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function getDashboardGpsRenderKey(
+  renderOptions?: WidgetRenderOptions,
+  options: { includeHeading?: boolean; coordinateDecimals?: number } = {},
+) {
+  const hasFix = renderOptions?.gpsHasFix === true;
+  const latitude = getFiniteDashboardNumber(renderOptions?.gpsLatitude);
+  const longitude = getFiniteDashboardNumber(renderOptions?.gpsLongitude);
+  if (!hasFix || latitude == null || longitude == null) {
+    return hasFix ? 'fix:pending' : 'no-fix';
+  }
+
+  const coordinateDecimals = options.coordinateDecimals ?? 4;
+  const speedMph = getFiniteDashboardNumber(renderOptions?.gpsSpeedMph);
+  const accuracyM = getFiniteDashboardNumber(renderOptions?.gpsAccuracyM);
+  const rawHeading = getFiniteDashboardNumber(renderOptions?.gpsHeadingDeg);
+  const headingDeg =
+    options.includeHeading && rawHeading != null
+      ? (((rawHeading % 360) + 360) % 360)
+      : null;
+
+  return [
+    latitude.toFixed(coordinateDecimals),
+    longitude.toFixed(coordinateDecimals),
+    speedMph == null ? '' : Math.round(speedMph / 2) * 2,
+    accuracyM == null ? '' : Math.round(accuracyM / 5) * 5,
+    headingDeg == null ? '' : (Math.round(headingDeg / 15) * 15) % 360,
+  ].join(':');
+}
+
 function getCompactWidgetRenderKey(
   widgetType: string | undefined,
   widgetData: WidgetGridProps['widgetData'],
@@ -1068,10 +1084,7 @@ function getCompactWidgetRenderKey(
         baseTripKey,
         expeditionRouteKey,
         getWaypointSignature(data?.waypoints),
-        renderOptions?.gpsLatitude ?? '',
-        renderOptions?.gpsLongitude ?? '',
-        renderOptions?.gpsSpeedMph ?? '',
-        renderOptions?.gpsHasFix ?? '',
+        getDashboardGpsRenderKey(renderOptions),
       ].join(':');
     case 'navigate-surface':
       return [
@@ -1079,10 +1092,7 @@ function getCompactWidgetRenderKey(
         data?.aiTopSignalTitle ?? '',
         data?.dashboardCommandState?.metaMode ?? '',
         data?.dashboardCommandState?.compactSummary ?? '',
-        renderOptions?.gpsLatitude ?? '',
-        renderOptions?.gpsLongitude ?? '',
-        renderOptions?.gpsHeadingDeg ?? '',
-        renderOptions?.gpsSpeedMph ?? '',
+        getDashboardGpsRenderKey(renderOptions, { includeHeading: true }),
         gps?.hasFix ?? renderOptions?.gpsHasFix ?? '',
       ].join(':');
     case 'hwy-forward-weather':
@@ -1117,6 +1127,26 @@ function getCompactWidgetRenderKey(
         data?.syncStatus ?? '',
       ].join(':');
   }
+}
+
+function areCompactRenderOptionsEqualForSlot(
+  widgetType: string | undefined,
+  previousWidgetData: WidgetGridProps['widgetData'],
+  previousOptions: WidgetRenderOptions | undefined,
+  nextWidgetData: WidgetGridProps['widgetData'],
+  nextOptions: WidgetRenderOptions | undefined,
+) {
+  return (
+    previousOptions?.compact === nextOptions?.compact &&
+    previousOptions?.dashboardMode === nextOptions?.dashboardMode &&
+    previousOptions?.advancedMode === nextOptions?.advancedMode &&
+    previousOptions?.viewerOverrides === nextOptions?.viewerOverrides &&
+    previousOptions?.isFeatured === nextOptions?.isFeatured &&
+    previousOptions?.isCompressedRow === nextOptions?.isCompressedRow &&
+    previousOptions?.onOpenCommandBrief === nextOptions?.onOpenCommandBrief &&
+    getCompactWidgetRenderKey(widgetType, previousWidgetData, previousOptions) ===
+      getCompactWidgetRenderKey(widgetType, nextWidgetData, nextOptions)
+  );
 }
 
 // ── Widget Plate Content ──────────────────────────────────
@@ -1252,7 +1282,6 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
           viewerOverrides?.panelBgOverride ? { backgroundColor: viewerOverrides.panelBgOverride } : null,
           viewerOverrides?.borderColorOverride ? { borderColor: viewerOverrides.borderColorOverride } : null,
         ]}>
-          <WidgetContainerBackground />
           <View style={[styles.widgetContent, styles.widgetUnavailableContent]}>
             <View style={styles.slotHeaderRow}>
               <ECSBadge label="UNAVAILABLE" tone="unavailable" compact />
@@ -1386,7 +1415,6 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
       ]}>
         {/* Phase 8/9: Inset shadow simulation — top-left inner highlight, bottom-right inner shadow */}
         {/* Phase 11: Hierarchy-aware inset tinting (primary=gold, secondary=neutral, support=soft) */}
-        <WidgetContainerBackground />
         {!isAttitudeMonitor ? (
           <>
             <View style={[
@@ -1563,9 +1591,17 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
     prev.isCompact === next.isCompact &&
     (
       !prev.isCompact ||
-      getCompactWidgetRenderKey(prev.slot.widgetType ?? undefined, prev.widgetData, prev.renderOptions) ===
-        getCompactWidgetRenderKey(next.slot.widgetType ?? undefined, next.widgetData, next.renderOptions)
+      areCompactRenderOptionsEqualForSlot(
+        prev.slot.widgetType ?? undefined,
+        prev.widgetData,
+        prev.renderOptions,
+        next.widgetData,
+        next.renderOptions,
+      )
     );
+  const renderOptionsEqual = prev.isCompact
+    ? compactRenderStateEqual
+    : areRenderOptionsEqual(prev.renderOptions, next.renderOptions);
 
   return (
     prev.slot === next.slot &&
@@ -1577,7 +1613,7 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
     prev.compact === next.compact &&
     prev.expanded === next.expanded &&
     prev.isCompact === next.isCompact &&
-    areRenderOptionsEqual(prev.renderOptions, next.renderOptions) &&
+    renderOptionsEqual &&
     prev.gridLayout === next.gridLayout &&
     prev.onResizeWidget === next.onResizeWidget &&
     prev.slotIndex === next.slotIndex &&
@@ -2244,6 +2280,7 @@ export default function WidgetGrid({
     <View
       style={[
         styles.grid,
+        styles.dashboardWidgetParentTransparent,
         {
           width: '100%',
           alignSelf: 'stretch' as const,
@@ -2403,7 +2440,7 @@ export default function WidgetGrid({
   // ── Highway Precision: no scroll, flex fill, centered ──
   if (isHighway) {
     return (
-      <View style={styles.highwayContainer}>
+      <View style={[styles.highwayContainer, styles.dashboardWidgetParentTransparent]}>
         {gridContent}
       </View>
     );
@@ -2411,7 +2448,7 @@ export default function WidgetGrid({
 
   // ── Fill-height: flex container, no scroll ─────────────
   if (isFillHeight) {
-    return <View style={styles.fillHeightContainer}>{gridContent}</View>;
+    return <View style={[styles.fillHeightContainer, styles.dashboardWidgetParentTransparent]}>{gridContent}</View>;
   }
 
   // ── Scrollable layouts (2x3, 1x3, or when content overflows) ──
@@ -2419,8 +2456,8 @@ export default function WidgetGrid({
   if (needsScroll) {
     return (
       <ScrollView
-        style={styles.scrollContainer}
-        contentContainerStyle={styles.scrollContent}
+        style={[styles.scrollContainer, styles.dashboardWidgetParentTransparent]}
+        contentContainerStyle={[styles.scrollContent, styles.dashboardWidgetParentTransparent]}
         showsVerticalScrollIndicator={false}
         removeClippedSubviews={dragIndex === null}
         scrollEnabled={dragIndex === null}
@@ -2437,6 +2474,9 @@ const styles = StyleSheet.create({
   grid: {
     position: 'relative',
     overflow: 'visible',
+  },
+  dashboardWidgetParentTransparent: {
+    backgroundColor: 'transparent',
   },
   scrollContainer: {
     flex: 1,
@@ -2581,17 +2621,6 @@ const styles = StyleSheet.create({
     shadowOpacity: DEPTH_SHADOWS[2].shadowOpacity,
     shadowRadius: DEPTH_SHADOWS[2].shadowRadius,
     elevation: DEPTH_SHADOWS[2].elevation,
-  },
-
-  // Adaptive Depth: Inset shadow simulation — top edge highlight
-  widgetContainerBackgroundLayer: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  widgetContainerBackground: {
-    flex: 1,
-  },
-  widgetContainerBackgroundImage: {
-    borderRadius: 16,
   },
 
   widgetInsetTop: {
