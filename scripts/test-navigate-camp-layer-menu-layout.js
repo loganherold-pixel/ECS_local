@@ -111,6 +111,15 @@ assert(
   'Camp layer menu content should scroll inside a bounded panel instead of falling off the map body.',
 );
 assert(
+  navigateSource.includes('styles.campLayerMenuAnchorSlot') &&
+    navigateSource.includes('const campLayerMenuPanel = campLayerControlsAvailable && campLayerMenuOpen ? (') &&
+    navigateSource.indexOf('style={styles.campLayerMenuAnchorSlot}') <
+      navigateSource.indexOf('{campLayerMenuPanel}') &&
+    navigateSource.indexOf('{campLayerMenuPanel}') <
+      navigateSource.indexOf('accessibilityLabel="Camp map layers"'),
+  'Camp layer menu should render in the right-side tool rail immediately above its button so it reads as expanding from the trigger.',
+);
+assert(
   !/dispersedCampingToggleTitle\} numberOfLines=\{[12]\}/.test(navigateSource) &&
     !/dispersedCampingToggleSubtitle\} numberOfLines=\{[12]\}/.test(navigateSource),
   'Camp layer menu title and subtitle text should wrap instead of truncating with ellipses.',

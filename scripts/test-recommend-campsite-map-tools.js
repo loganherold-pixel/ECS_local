@@ -43,7 +43,8 @@ assert.ok(
 assert.ok(
   navigateSource.includes('openRecommendCampsiteChooser') &&
     navigateSource.includes('communityCampsitesEnabled ?') &&
-    navigateSource.includes('Recommend Campsite</Text>'),
+    navigateSource.includes('title="RECOMMEND CAMPSITE"') &&
+    navigateSource.includes('style={[styles.toolsDenseActionCard, styles.toolsCommunityActionCard]}'),
   'Map Tools utilities should include a Recommend Campsite action when enabled.',
 );
 

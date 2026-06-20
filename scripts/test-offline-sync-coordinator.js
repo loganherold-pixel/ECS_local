@@ -12,6 +12,7 @@ const coordinator = read('lib/offlineTileSyncCoordinator.ts');
 const offlineModal = read('components/navigate/OfflineCacheModal.tsx');
 const offlineSyncStatusChip = read('components/navigate/OfflineSyncStatusChip.tsx');
 const rootLayout = read('app/_layout.tsx');
+const shellHeader = read('components/Header.tsx');
 const tileCacheStore = read('lib/tileCacheStore.ts');
 const navigateScreen = read('app/(tabs)/navigate.tsx');
 const useRoadNavigation = read('lib/useRoadNavigation.ts');
@@ -150,14 +151,24 @@ assertIncludes(
 );
 
 assertIncludes(
-  rootLayout,
-  '<OfflineSyncStatusChip bottomOffset={shellBodyBottomInset + 10} />',
-  'Root shell should show sync progress outside the Offline Cache popup.',
+  navigateScreen,
+  'connectionAccessory={<OfflineSyncStatusChip placement="banner" />}',
+  'Navigate should show sync progress in the top banner connection stack.',
 );
 assertIncludes(
+  shellHeader,
+  'connectionAccessory?: React.ReactNode;',
+  'Shared Header should expose a connection accessory slot for Navigate sync progress.',
+);
+assertNotIncludes(
   rootLayout,
   "import OfflineSyncStatusChip from '../components/navigate/OfflineSyncStatusChip';",
-  'Root shell should import the shared offline sync indicator.',
+  'Root shell should not import the old global offline sync indicator.',
+);
+assertNotIncludes(
+  rootLayout,
+  '<OfflineSyncStatusChip bottomOffset={shellBodyBottomInset + 10} />',
+  'Root shell should no longer float sync progress over app content.',
 );
 assertIncludes(
   rootLayout,

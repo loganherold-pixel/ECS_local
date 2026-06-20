@@ -14,6 +14,7 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 type Props = {
   bottomOffset?: number;
   horizontalInset?: number;
+  placement?: 'floating' | 'banner';
 };
 
 const DISMISSED_SYNC_STATUS_KEY = 'dismissed_terminal_sync_jobs_v1';
@@ -82,6 +83,7 @@ function jobCreatedDuringRuntime(job: OfflineTileSyncJob, runtimeStartedAt: numb
 export default function OfflineSyncStatusChip({
   bottomOffset = 96,
   horizontalInset = 16,
+  placement = 'floating',
 }: Props) {
   const { showToast } = useApp();
   const [snapshot, setSnapshot] = useState<OfflineTileSyncSnapshot>(
@@ -150,6 +152,7 @@ export default function OfflineSyncStatusChip({
   }, [snapshot.activeJobs, snapshot.jobs]);
 
   const displayJob = useMemo(() => {
+    if (placement === 'banner') return snapshot.activeJobs[0] ?? null;
     const active = snapshot.activeJobs[0];
     if (active) return active;
     const latest = snapshot.latestJob;
@@ -164,6 +167,7 @@ export default function OfflineSyncStatusChip({
     dismissalsHydrated,
     dismissedSyncKeys,
     runtimeTerminalKeys,
+    placement,
     snapshot.activeJobs,
     snapshot.latestJob,
   ]);
@@ -198,6 +202,27 @@ export default function OfflineSyncStatusChip({
   const isActive = displayJob.status === 'pending' || displayJob.status === 'running';
   const isError = displayJob.status === 'error';
   const isComplete = displayJob.status === 'complete';
+
+  if (placement === 'banner') {
+    if (!isActive) return null;
+    return (
+      <View pointerEvents="box-none" style={styles.bannerWrap}>
+        <View style={styles.bannerChip}>
+          <Text style={styles.bannerTitle} numberOfLines={1}>OFFLINE SYNC</Text>
+          <Text style={styles.bannerPercent}>{percent}%</Text>
+          <TouchableOpacity
+            style={styles.bannerCancel}
+            onPress={() => offlineTileSyncCoordinator.cancelJob(displayJob.jobId)}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel offline sync"
+          >
+            <Text style={styles.bannerCancelText}>CANCEL</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View
@@ -269,6 +294,54 @@ export default function OfflineSyncStatusChip({
 }
 
 const styles = StyleSheet.create({
+  bannerWrap: {
+    width: '100%',
+  },
+  bannerChip: {
+    minHeight: 20,
+    maxWidth: 142,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(196,138,44,0.28)',
+    backgroundColor: 'rgba(8,12,15,0.88)',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  bannerTitle: {
+    ...TYPO.U2,
+    color: TACTICAL.text,
+    fontSize: 7,
+    lineHeight: 9,
+    letterSpacing: 0.7,
+    flexShrink: 1,
+  },
+  bannerPercent: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 7,
+    lineHeight: 9,
+    letterSpacing: 0.4,
+  },
+  bannerCancel: {
+    minHeight: 14,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255,179,0,0.28)',
+    backgroundColor: 'rgba(255,179,0,0.08)',
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerCancelText: {
+    ...TYPO.U2,
+    color: '#FFB300',
+    fontSize: 6,
+    lineHeight: 8,
+    letterSpacing: 0.6,
+  },
   wrap: {
     position: 'absolute',
     zIndex: 900,

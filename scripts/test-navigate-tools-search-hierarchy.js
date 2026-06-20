@@ -141,19 +141,26 @@ assert(
 
 assert(
   toolsPopupSource.includes("snapToContent: true") &&
+    toolsPopupSource.includes("placement: 'bottomRight'") &&
     !toolsPopupSource.includes("fullBody: true") &&
     source.includes('snapToContent?: boolean') &&
-    source.includes('styles.mapPopupShellSnapToContent'),
-  'Main Tools popup should snap its parent shell to content height instead of filling the map overlay.',
+    source.includes("placement?: 'right' | 'center' | 'bottomRight'") &&
+    source.includes('styles.mapPopupShellSnapToContent') &&
+    source.includes('bottom: TOOLS_TRIGGER_BOTTOM + TOOLS_TRIGGER_SIZE + 8') &&
+    source.includes('right: TOOLS_TRIGGER_RIGHT'),
+  'Main Tools popup should snap to content height and anchor next to the bottom-right Tools trigger instead of floating at map center.',
 );
 
 assert(
   source.includes('const TOOLS_POPUP_WIDTH = Math.min(MAP_POPUP_WIDTH, adaptive.isExpanded ? 420 : 348);') &&
     source.includes('toolsDenseActionCard: {\n  width: \'48%\',\n  minHeight: 54') &&
+    source.includes('toolsCommunityActionCard: {\n  width: \'100%\',\n  minHeight: 58') &&
+    source.includes('toolsCommunityActionGrid: {\n  flexDirection: \'row\',\n  gap: 6') &&
     toolSurfaceSource.includes('actionTitleRow: {\n    flexDirection: \'row\',\n    alignItems: \'flex-start\'') &&
     toolSurfaceSource.includes('flexWrap: \'wrap\'') &&
-    toolSurfaceSource.includes('alignSelf: \'flex-start\''),
-  'Tools popup should be wide enough and allow compact action labels/badges to wrap without cutting off wording.',
+    toolSurfaceSource.includes('alignSelf: \'flex-start\'') &&
+    toolSurfaceSource.includes('actionTitleCompact: {\n    fontSize: 9.5,\n    lineHeight: 12'),
+  'Tools popup should give Recommend Campsite and Recommend Route enough button height/width for full labels without clipping.',
 );
 
 assert(
@@ -227,6 +234,16 @@ assert(
     toolsPopupSource.includes('onPress={openRecommendCampsiteChooser}') &&
     toolsPopupSource.includes('onPress={openRecommendRouteChooser}'),
   'Grouped utilities should keep route/community handlers wired while removing primary Trail Pack and manual CampOps actions.',
+);
+
+assert(
+  toolsPopupSource.includes('style={styles.toolsCommunityActionGrid}') &&
+    toolsPopupSource.includes('[styles.toolsDenseActionCard, styles.toolsCommunityActionCard]') &&
+    requireIndex(toolsPopupSource, 'title="COMMUNITY CONTRIBUTIONS"', 'Tools should expose a Community Contributions section.') <
+      requireIndex(toolsPopupSource, 'RECOMMEND CAMPSITE', 'Community Contributions should include Recommend Campsite.') &&
+    requireIndex(toolsPopupSource, 'RECOMMEND CAMPSITE', 'Community Contributions should include Recommend Campsite.') <
+      requireIndex(toolsPopupSource, 'RECOMMEND ROUTE', 'Community Contributions should include Recommend Route.'),
+  'Community contribution actions should use full-row action cards so Recommend Campsite and Recommend Route fit inside their buttons.',
 );
 
 assert(

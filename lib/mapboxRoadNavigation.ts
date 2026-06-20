@@ -318,7 +318,10 @@ export async function resolveRoadDestination(params: {
   sessionToken: string;
   suggestion: RoadNavSearchSuggestion;
 }): Promise<RoadNavDestination> {
-  if (params.suggestion.coordinate && !params.suggestion.mapboxId) {
+  if (
+    params.suggestion.coordinate &&
+    (!params.suggestion.mapboxId || params.suggestion.sourceType !== 'searchbox_suggest')
+  ) {
     return {
       id: params.suggestion.id,
       title: params.suggestion.title,

@@ -38,7 +38,7 @@ function assertInOrder(source, tokens, message) {
 assertIncludes(
   navigate,
   [
-    'const { showToast, user } = useApp();',
+    'const { showToast, user, operatorInfo } = useApp();',
     'useThrottledGPS',
     '<GPSStatusOverlay',
     'gpsStatus={gps.gpsStatus}',
@@ -129,7 +129,9 @@ assertIncludes(
     'const handlePrepareOfflineFromRoadPreview = useCallback(async () => {',
     'buildRouteIntentForRoadPreview({',
     'mapStyle,',
-    'tileCacheStore.createFromBounds(',
+    'tileCacheStore.createFromRoute(',
+    'route.geometry,',
+    'analysis.bufferMiles,',
     "sourceType: 'route-corridor'",
     "syncType: 'route'",
     'routeIntent: routeIntent as unknown as Record<string, unknown>',

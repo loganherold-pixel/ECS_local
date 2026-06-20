@@ -193,6 +193,18 @@ function routeIntentLayerSet(route: OfflineCachedRoute, region?: OfflineReadines
   return layers;
 }
 
+function routeIntentStyleKey(intent: unknown): string | null {
+  return getString(getRecord(getRecord(intent)?.mapContext)?.styleKey);
+}
+
+function routeSyncStyleKey(
+  route: OfflineCachedRoute | null,
+  region: OfflineReadinessTileRegion | null,
+  job: OfflineReadinessTileSyncJob | null,
+): string | null {
+  return route?.routeIntent?.mapContext?.styleKey ?? region?.styleKey ?? routeIntentStyleKey(job?.routeIntent);
+}
+
 function findRegionForRoute(
   route: OfflineCachedRoute | null,
   regions: OfflineReadinessTileRegion[],
@@ -455,15 +467,34 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
   }
 
   if (matchingJob?.status === 'running' || matchingJob?.status === 'pending') {
+    const activeSyncStyle = routeSyncStyleKey(matchingRoute, matchingRegion, matchingJob);
+    if (current.mapStyle && activeSyncStyle && current.mapStyle !== activeSyncStyle) {
+      return {
+        level: 'partial',
+        label: 'Style Not Cached',
+        readyAssets: matchingRoute ? ['route geometry'] : [],
+        missingAssets: ['active map style'],
+        staleAssets: [],
+        reason: `Map style ${current.mapStyle.toUpperCase()} is not cached for this route.`,
+        recommendedAction: ACTION_PREPARE_OFFLINE,
+      };
+    }
+    const readyAssets = dedupe([
+      matchingRoute ? 'route geometry' : null,
+      activeSyncStyle ? 'active map style' : null,
+    ]);
+    const styleAwareReason = activeSyncStyle
+      ? '; active map style is included in this route sync.'
+      : '.';
     return {
       level: 'partial',
       label: progress ? `${progress} Cached` : 'Downloading',
-      readyAssets: matchingRoute ? ['route geometry'] : [],
+      readyAssets,
       missingAssets: ['offline data incomplete'],
       staleAssets: [],
       reason: progress
-        ? `Offline data incomplete (${progress} downloaded).`
-        : 'Offline data incomplete; route sync is still downloading.',
+        ? `Offline data incomplete (${progress} downloaded)${styleAwareReason}`
+        : `Offline data incomplete; route sync is still downloading${styleAwareReason}`,
       recommendedAction: ACTION_PREPARE_OFFLINE,
     };
   }

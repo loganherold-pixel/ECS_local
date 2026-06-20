@@ -453,6 +453,14 @@ const partialRoute = deriveOfflineReadiness({
 assert(partialRoute.level === 'partial', 'Active route sync should resolve to Partial.');
 assert(partialRoute.label === '40% Cached', 'Active route sync should show progress when available.');
 assert(partialRoute.reason.includes('40%'), 'Active route sync should include percent in the reason.');
+assert(
+  partialRoute.readyAssets.includes('active map style'),
+  'Active route sync should show the current map style is included in the route package being downloaded.',
+);
+assert(
+  partialRoute.reason.includes('active map style'),
+  'Active route sync copy should distinguish a style-aware route package from a generic map-area download.',
+);
 
 const wrongStyleRoute = deriveOfflineReadiness({
   currentRouteContext: { ...currentRouteContext, mapStyle: 'sat' },

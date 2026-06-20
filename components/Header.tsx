@@ -55,6 +55,7 @@ const HEADER = {
 interface HeaderProps {
   title?: string;
   onAuthPress?: () => void;
+  connectionAccessory?: React.ReactNode;
   guidance?: {
     eyebrow?: string;
     title: string;
@@ -81,7 +82,7 @@ function resolveHeaderBannerSubject(
   }
 }
 
-export default function Header({ title, onAuthPress, guidance, commandContext }: HeaderProps) {
+export default function Header({ title, onAuthPress, connectionAccessory, guidance, commandContext }: HeaderProps) {
   const router = useRouter();
   const {
     user,
@@ -612,9 +613,16 @@ export default function Header({ title, onAuthPress, guidance, commandContext }:
             { width: leftControlSlotWidth },
           ]}
         >
-          <View style={styles.connectionWordmark} pointerEvents="none">
-            <View style={[styles.connectionDot, { backgroundColor: connectionTone }]} />
-            <Text style={[styles.connectionText, { color: connectionTone }]}>{connectionLabel}</Text>
+          <View style={styles.connectionStack}>
+            <View style={styles.connectionWordmark} pointerEvents="none">
+              <View style={[styles.connectionDot, { backgroundColor: connectionTone }]} />
+              <Text style={[styles.connectionText, { color: connectionTone }]}>{connectionLabel}</Text>
+            </View>
+            {connectionAccessory ? (
+              <View style={styles.connectionAccessory}>
+                {connectionAccessory}
+              </View>
+            ) : null}
           </View>
         </View>
 
@@ -872,12 +880,22 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 5,
   },
+  connectionStack: {
+    width: '100%',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    gap: 4,
+    minWidth: 0,
+  },
   connectionWordmark: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
     maxWidth: '100%',
     paddingHorizontal: 2,
+  },
+  connectionAccessory: {
+    maxWidth: '100%',
   },
   connectionDot: {
     width: 5,

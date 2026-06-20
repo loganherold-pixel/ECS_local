@@ -105,9 +105,12 @@ assertNotIncludes(polygonTextStyle, 'break-all', 'Draw action labels must not us
 assertNotIncludes(polygonTextStyle, 'overflowWrap', 'Draw action labels must not force arbitrary character wrapping.');
 
 const campLayerMenuPanelStyle = styleBlock(navigateSource, 'campLayerMenuPanel');
-assertIncludes(campLayerMenuPanelStyle, 'width: 276', 'Camp layer menu should stay compact beside the floating tools rail.');
-assertIncludes(campLayerMenuPanelStyle, 'maxWidth: SCREEN_W - 16', 'Camp layer menu should preserve edge clearance on small screens.');
 assertIncludes(campLayerMenuPanelStyle, 'gap: 6', 'Camp layer menu should use compact spacing.');
+assertIncludes(navigateSource, 'width: campLayerMenuLayout.width', 'Camp layer menu should stay compact beside the floating tools rail.');
+assertIncludes(navigateSource, 'maxWidth: campLayerMenuLayout.maxWidth', 'Camp layer menu should preserve edge clearance on small screens.');
+const campLayerMenuAnchorSlotStyle = styleBlock(navigateSource, 'campLayerMenuAnchorSlot');
+assertIncludes(campLayerMenuAnchorSlotStyle, "alignItems: 'flex-end'", 'Camp layer menu should align to the right-side tools rail.');
+assertIncludes(campLayerMenuAnchorSlotStyle, 'gap: 6', 'Camp layer menu should sit adjacent to its trigger with compact spacing.');
 const campLayerMenuToggleStyle = styleBlock(navigateSource, 'campLayerMenuToggle');
 assertIncludes(campLayerMenuToggleStyle, 'minHeight: 56', 'Camp layer options should not stretch into tall information rows.');
 assertIncludes(campLayerMenuToggleStyle, 'paddingVertical: 7', 'Camp layer options should use compact vertical padding.');

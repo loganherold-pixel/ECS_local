@@ -89,7 +89,9 @@ export function buildOfflineNavigationProductionReadinessResult(options = {}) {
       'prepare_offline_persists_route_intent_and_starts_route_sync',
       'Prepare Offline persists route intent metadata and starts a route-corridor tile sync.',
       navigate.includes('buildRouteIntentForRoadPreview({') &&
-        navigate.includes('tileCacheStore.createFromBounds(') &&
+        navigate.includes('tileCacheStore.createFromRoute(') &&
+        navigate.includes('route.geometry,') &&
+        navigate.includes('analysis.bufferMiles,') &&
         navigate.includes("sourceType: 'route-corridor'") &&
         navigate.includes("syncType: 'route'") &&
         navigate.includes('cacheOfflineRoute({') &&

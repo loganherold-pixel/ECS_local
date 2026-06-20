@@ -292,10 +292,11 @@ async function searchMapboxPlaces(args: {
   providerId: string;
 }): Promise<PlaceCandidate[]> {
   const category = primaryCategory(args.input);
+  const sessionToken = nextSessionToken(args.sessionTokenFactory);
   const suggestions = await searchRoadDestinations({
     accessToken: args.accessToken,
     query: searchQuery(args.input),
-    sessionToken: nextSessionToken(args.sessionTokenFactory),
+    sessionToken,
     proximity: args.input.center ?? args.input.origin ?? null,
     bbox: args.input.bbox ?? null,
     limit: args.input.limit ?? DEFAULT_ROUTE_CONTEXT_SEARCH_LIMIT,
@@ -306,7 +307,7 @@ async function searchMapboxPlaces(args: {
     try {
       const destination = await resolveRoadDestination({
         accessToken: args.accessToken,
-        sessionToken: nextSessionToken(args.sessionTokenFactory),
+        sessionToken,
         suggestion,
       });
       const place = placeFromRoadDestination({

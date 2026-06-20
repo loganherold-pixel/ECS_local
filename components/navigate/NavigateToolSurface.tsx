@@ -329,7 +329,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   actionTitleCompact: {
-    fontSize: 10,
+    fontSize: 9.5,
     lineHeight: 12,
   },
   actionTitleActive: {

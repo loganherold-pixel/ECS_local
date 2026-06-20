@@ -19,7 +19,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 };
 
 function read(...parts) {
-  return fs.readFileSync(path.join(root, ...parts), 'utf8');
+  return fs.readFileSync(path.join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
 }
 
 const {
@@ -239,6 +239,9 @@ const navigate = read('app', '(tabs)', 'navigate.tsx');
 assert.ok(navigate.includes('onPrepareOffline={handlePrepareOfflineFromRoadPreview}'), 'Navigate should wire Download Route Package to the existing offline route prep flow.');
 assert.ok(navigate.includes("flow?.intent === 'prepare_offline_route_package'"), 'Navigate should consume the ECS Brief offline package handoff.');
 assert.ok(navigate.includes('handlePrepareOfflineFromRoadPreview()'), 'Navigate should route ECS Brief handoff through the existing route-aware offline package flow.');
-assert.ok(navigate.includes("openTopPopup('offlineCache')"), 'Navigate should reopen the offline cache sheet after the ECS Brief route package handoff.');
+assert.ok(
+  !navigate.includes("setRequestBoundsTrigger((prev) => prev + 1);\n        openTopPopup('offlineCache');"),
+  'Command Brief route package handoff should not reopen the generic Offline Cache sheet after starting the route-aware package.',
+);
 
 console.log('Offline preparedness and departure audit checks passed.');

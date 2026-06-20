@@ -388,6 +388,7 @@ import ReplayBar, { type ReplaySpeed } from '../../components/navigate/ReplayBar
 import TrailStatusModal from '../../components/navigate/TrailStatusModal';
 import TrailPackSubmissionModal from '../../components/trailPacks/TrailPackSubmissionModal';
 import CompassRose from '../../components/navigate/CompassRose';
+import OfflineSyncStatusChip from '../../components/navigate/OfflineSyncStatusChip';
 import OfflineCacheModal, {
   type DownloadedSyncOpenTarget,
 } from '../../components/navigate/OfflineCacheModal';
@@ -3417,7 +3418,7 @@ const renderMapPopup = (
   children: React.ReactNode,
   popupWidth: number = MAP_POPUP_WIDTH,
   options?: {
-    placement?: 'right' | 'center';
+    placement?: 'right' | 'center' | 'bottomRight';
     backdropTint?: string;
     fullBody?: boolean;
     showBackdrop?: boolean;
@@ -3438,7 +3439,15 @@ const renderMapPopup = (
     ? activeGuidancePopupTopOffset ?? PAGE_FRAME_TOP_GAP
     : activeGuidancePopupTopOffset ?? MAP_POPUP_TOP;
   const popupBottom = MAP_POPUP_BOTTOM;
-  const popupMaxHeight = Math.max(260, adaptive.windowHeight - popupTop - popupBottom);
+  const popupMaxHeight =
+    options?.placement === 'bottomRight'
+      ? Math.max(
+          260,
+          adaptive.windowHeight -
+            PAGE_FRAME_TOP_GAP -
+            (TOOLS_TRIGGER_BOTTOM + TOOLS_TRIGGER_SIZE + 8),
+        )
+      : Math.max(260, adaptive.windowHeight - popupTop - popupBottom);
 
   return (
     <View style={styles.mapPopupLayer} pointerEvents="box-none">
@@ -3469,6 +3478,13 @@ const renderMapPopup = (
                 right: OVERLAY_EDGE,
                 width: undefined,
               }
+            : options?.placement === 'bottomRight'
+              ? {
+                  bottom: TOOLS_TRIGGER_BOTTOM + TOOLS_TRIGGER_SIZE + 8,
+                  right: TOOLS_TRIGGER_RIGHT,
+                  maxHeight: popupMaxHeight,
+                  width: popupWidth,
+                }
             : {
                 top: popupTop,
                 bottom: snapToContent ? undefined : popupBottom,
@@ -13639,13 +13655,18 @@ const handleTopToolboxLayout = useCallback(
       mapStyle,
       readinessSnapshot: navigationStartReadinessStack,
     });
-    const region = tileCacheStore.createFromBounds(
+    const region = tileCacheStore.createFromRoute(
       `Route: ${route.destination.title}`,
-      analysis.corridorBounds,
+      route.geometry,
+      analysis.bufferMiles,
       analysis.zoomMin,
       analysis.zoomMax,
       mapStyle,
     );
+    if (!region) {
+      showToast('ROUTE OFFLINE CORRIDOR UNAVAILABLE');
+      return;
+    }
     tileCacheStore.updateRegion(region.id, {
       routeId: previewRun.id,
       sourceType: 'route-corridor',
@@ -13752,15 +13773,10 @@ const handleTopToolboxLayout = useCallback(
   useEffect(() => {
     if (!pendingOfflineRoutePackageFlowId) return;
     setPendingOfflineRoutePackageFlowId(null);
-    void handlePrepareOfflineFromRoadPreview()
-      .then(() => {
-        setRequestBoundsTrigger((prev) => prev + 1);
-        openTopPopup('offlineCache');
-      })
-      .catch((error: unknown) => {
-        showToast(error instanceof Error ? error.message : 'ROUTE OFFLINE PACKAGE COULD NOT OPEN');
-      });
-  }, [handlePrepareOfflineFromRoadPreview, openTopPopup, pendingOfflineRoutePackageFlowId, showToast]);
+    void handlePrepareOfflineFromRoadPreview().catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : 'ROUTE OFFLINE PACKAGE COULD NOT OPEN');
+    });
+  }, [handlePrepareOfflineFromRoadPreview, pendingOfflineRoutePackageFlowId, showToast]);
 
   const navigationPreviewContext = useMemo(() => {
     const route = roadNavigation.session.route;
@@ -18444,6 +18460,233 @@ const stableMapSurface = useMemo(() => {
     );
   }
 
+  const campLayerMenuPanel = campLayerControlsAvailable && campLayerMenuOpen ? (
+    <View
+      style={[
+        styles.campLayerMenuPanel,
+        {
+          width: campLayerMenuLayout.width,
+          maxWidth: campLayerMenuLayout.maxWidth,
+          maxHeight: campLayerMenuLayout.maxHeight,
+        },
+      ]}
+    >
+      <View style={styles.campLayerMenuHeader}>
+        <View style={styles.campLayerMenuTitleRow}>
+          <Ionicons name="bonfire-outline" size={14} color={TACTICAL.amber} />
+          <Text style={styles.campLayerMenuTitle}>Camp Layers</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.campLayerMenuCloseButton}
+          onPress={() => setCampLayerMenuOpen(false)}
+          activeOpacity={0.78}
+          hitSlop={CLOSE_CONTROL_HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityLabel="Close camp layer menu"
+        >
+          <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        style={styles.campLayerMenuScroll}
+        contentContainerStyle={styles.campLayerMenuScrollContent}
+        nestedScrollEnabled
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {canUseCommunityCampsiteLayers ? (
+          <>
+            {campLayerMenuCommunityToggles.map((layer) => {
+              const isActive = campsiteLayerVisibility[layer.key];
+              return (
+                <TouchableOpacity
+                  key={layer.key}
+                  style={[
+                    styles.dispersedCampingToggle,
+                    styles.campLayerMenuToggle,
+                    isActive && styles.dispersedCampingToggleActive,
+                  ]}
+                  onPress={() => handleCampsiteLayerToggle(layer.key)}
+                  activeOpacity={0.86}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: isActive }}
+                  accessibilityLabel={layer.label}
+                >
+                  <View
+                    style={[
+                      styles.dispersedCampingCheckbox,
+                      isActive && styles.dispersedCampingCheckboxActive,
+                    ]}
+                  >
+                    {isActive ? (
+                      <Ionicons name="checkmark" size={13} color="#091014" />
+                    ) : null}
+                  </View>
+                  <View style={styles.dispersedCampingToggleCopy}>
+                    <Text style={styles.dispersedCampingToggleTitle}>
+                      {layer.label}
+                    </Text>
+                    <Text style={styles.dispersedCampingToggleSubtitle}>
+                      {layer.detail}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </>
+        ) : null}
+
+        {establishedCampsitesLayerAvailable ? (
+          <TouchableOpacity
+            style={[
+              styles.dispersedCampingToggle,
+              styles.campLayerMenuToggle,
+              establishedCampsitesEnabled && styles.dispersedCampingToggleActive,
+            ]}
+            onPress={toggleEstablishedCampsites}
+            activeOpacity={0.86}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: establishedCampsitesEnabled }}
+            accessibilityLabel="Established Campgrounds"
+          >
+            <View
+              style={[
+                styles.dispersedCampingCheckbox,
+                establishedCampsitesEnabled && styles.dispersedCampingCheckboxActive,
+              ]}
+            >
+              {establishedCampsitesEnabled ? (
+                <Ionicons name="checkmark" size={13} color="#091014" />
+              ) : null}
+            </View>
+            <View style={styles.dispersedCampingToggleCopy}>
+              <Text style={styles.dispersedCampingToggleTitle}>
+                Established Campgrounds
+              </Text>
+              <Text style={styles.dispersedCampingToggleSubtitle}>
+                Shows known fixed campgrounds, RV parks, and pay-per-night camping locations.
+              </Text>
+            </View>
+          </TouchableOpacity>
+        ) : null}
+
+        {dispersedCampingEligibilityLayerAvailable ? (
+          <TouchableOpacity
+            style={[
+              styles.dispersedCampingToggle,
+              styles.campLayerMenuToggle,
+              dispersedCampingEligibilityEnabled && styles.dispersedCampingToggleActive,
+            ]}
+            onPress={toggleDispersedCampingEligibility}
+            activeOpacity={0.86}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: dispersedCampingEligibilityEnabled }}
+            accessibilityLabel="Dispersed Camping Eligibility"
+          >
+            <View
+              style={[
+                styles.dispersedCampingCheckbox,
+                dispersedCampingEligibilityEnabled && styles.dispersedCampingCheckboxActive,
+              ]}
+            >
+              {dispersedCampingEligibilityEnabled ? (
+                <Ionicons name="checkmark" size={13} color="#091014" />
+              ) : null}
+            </View>
+            <View style={styles.dispersedCampingToggleCopy}>
+              <Text style={styles.dispersedCampingToggleTitle}>
+                Dispersed Camping Eligibility
+              </Text>
+              <Text style={styles.dispersedCampingToggleSubtitle}>
+                Highlights likely eligible public-land regions. Verify local rules before camping.
+              </Text>
+            </View>
+          </TouchableOpacity>
+        ) : null}
+
+        <View style={styles.campLayerMenuNotes}>
+          {establishedCampsitesEnabled ? (
+            <View style={styles.campLayerStatusBlock}>
+              <Text style={styles.dispersedCampingDisclaimer}>
+                {establishedCampgroundsStatus === 'zoom'
+                  ? establishedCampsitesZoomPrompt
+                  : establishedCampgroundsStatus === 'loading'
+                  ? 'Loading established campgrounds from ECS cache.'
+                  : establishedCampgroundsStatus === 'empty'
+                    ? 'No results in this map area.'
+                    : establishedCampgroundsStatus === 'error'
+                      ? establishedCampgroundsError || 'Temporarily unavailable.'
+                      : establishedCampgroundsStatus === 'ready'
+                        ? campLayerFetchOnline
+                          ? `${establishedCampgrounds.length} established campground${establishedCampgrounds.length === 1 ? '' : 's'} loaded.`
+                          : `${establishedCampgrounds.length} cached established campground${establishedCampgrounds.length === 1 ? '' : 's'} loaded for offline reference. Verify status and availability when connected.`
+                        : 'Map bounds updating.'}
+              </Text>
+              {establishedCampgroundsStatus === 'error' ? (
+                <View style={styles.campLayerErrorActions}>
+                  <TouchableOpacity
+                    style={styles.campLayerRetryButton}
+                    onPress={retryEstablishedCampgrounds}
+                    activeOpacity={0.82}
+                    accessibilityRole="button"
+                    accessibilityLabel="Retry established campgrounds"
+                  >
+                    <Text style={styles.campLayerRetryButtonText}>RETRY</Text>
+                  </TouchableOpacity>
+                  {establishedCampgroundsDiagnostic ? (
+                    <Text style={styles.campLayerDiagnosticText}>
+                      {establishedCampgroundsDiagnostic}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+          {dispersedCampingEligibilityLayerAvailable ? (
+            <View style={styles.campLayerStatusBlock}>
+              <Text style={styles.dispersedCampingDisclaimer}>
+                {dispersedCampingEligibilityEnabled
+                  ? dispersedCampingStatus === 'zoom'
+                    ? dispersedCampingZoomPrompt
+                    : dispersedCampingStatus === 'loading'
+                    ? 'Loading public-land eligibility polygons for this map view.'
+                    : dispersedCampingStatus === 'empty'
+                      ? 'No results in this map area.'
+                      : dispersedCampingStatus === 'error'
+                        ? dispersedCampingError || 'Temporarily unavailable.'
+                        : dispersedCampingStatus === 'ready'
+                          ? campLayerFetchOnline
+                            ? `${dispersedCampingRegions.length} public-land eligibility area${dispersedCampingRegions.length === 1 ? '' : 's'} loaded. Verify before camping.`
+                            : `${dispersedCampingRegions.length} cached public-land eligibility area${dispersedCampingRegions.length === 1 ? '' : 's'} loaded for offline reference. Verify before camping.`
+                          : 'Map bounds updating.'
+                  : 'ECS shows areas where dispersed camping may be allowed based on available public-land and access data. Always verify current local rules, posted closures, fire restrictions, permits, and agency guidance before camping.'}
+              </Text>
+              {dispersedCampingEligibilityEnabled && dispersedCampingStatus === 'error' ? (
+                <View style={styles.campLayerErrorActions}>
+                  <TouchableOpacity
+                    style={styles.campLayerRetryButton}
+                    onPress={retryDispersedCampingEligibility}
+                    activeOpacity={0.82}
+                    accessibilityRole="button"
+                    accessibilityLabel="Retry dispersed camping eligibility"
+                  >
+                    <Text style={styles.campLayerRetryButtonText}>RETRY</Text>
+                  </TouchableOpacity>
+                  {dispersedCampingDiagnostic ? (
+                    <Text style={styles.campLayerDiagnosticText}>
+                      {dispersedCampingDiagnostic}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+      </ScrollView>
+    </View>
+  ) : null;
+
   return (
     <View style={{ flex: 1 }}>
       <MapRenderer
@@ -19213,233 +19456,6 @@ const stableMapSurface = useMemo(() => {
             accessible
             accessibilityLabel="Draw area to search for campsites"
           >
-            {campLayerControlsAvailable && campLayerMenuOpen ? (
-              <View
-                style={[
-                  styles.campLayerMenuPanel,
-                  {
-                    width: campLayerMenuLayout.width,
-                    maxWidth: campLayerMenuLayout.maxWidth,
-                    maxHeight: campLayerMenuLayout.maxHeight,
-                  },
-                ]}
-              >
-                <View style={styles.campLayerMenuHeader}>
-                  <View style={styles.campLayerMenuTitleRow}>
-                    <Ionicons name="bonfire-outline" size={14} color={TACTICAL.amber} />
-                    <Text style={styles.campLayerMenuTitle}>Camp Layers</Text>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.campLayerMenuCloseButton}
-                    onPress={() => setCampLayerMenuOpen(false)}
-                    activeOpacity={0.78}
-                    hitSlop={CLOSE_CONTROL_HIT_SLOP}
-                    accessibilityRole="button"
-                    accessibilityLabel="Close camp layer menu"
-                  >
-                    <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
-                  </TouchableOpacity>
-                </View>
-
-                <ScrollView
-                  style={styles.campLayerMenuScroll}
-                  contentContainerStyle={styles.campLayerMenuScrollContent}
-                  nestedScrollEnabled
-                  showsVerticalScrollIndicator={false}
-                  keyboardShouldPersistTaps="handled"
-                >
-                  {canUseCommunityCampsiteLayers ? (
-                    <>
-                      {campLayerMenuCommunityToggles.map((layer) => {
-                        const isActive = campsiteLayerVisibility[layer.key];
-                        return (
-                          <TouchableOpacity
-                            key={layer.key}
-                            style={[
-                              styles.dispersedCampingToggle,
-                              styles.campLayerMenuToggle,
-                              isActive && styles.dispersedCampingToggleActive,
-                            ]}
-                            onPress={() => handleCampsiteLayerToggle(layer.key)}
-                            activeOpacity={0.86}
-                            accessibilityRole="checkbox"
-                            accessibilityState={{ checked: isActive }}
-                            accessibilityLabel={layer.label}
-                          >
-                            <View
-                              style={[
-                                styles.dispersedCampingCheckbox,
-                                isActive && styles.dispersedCampingCheckboxActive,
-                              ]}
-                            >
-                              {isActive ? (
-                                <Ionicons name="checkmark" size={13} color="#091014" />
-                              ) : null}
-                            </View>
-                            <View style={styles.dispersedCampingToggleCopy}>
-                              <Text style={styles.dispersedCampingToggleTitle}>
-                                {layer.label}
-                              </Text>
-                              <Text style={styles.dispersedCampingToggleSubtitle}>
-                                {layer.detail}
-                              </Text>
-                            </View>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </>
-                  ) : null}
-
-                  {establishedCampsitesLayerAvailable ? (
-                    <TouchableOpacity
-                      style={[
-                        styles.dispersedCampingToggle,
-                        styles.campLayerMenuToggle,
-                        establishedCampsitesEnabled && styles.dispersedCampingToggleActive,
-                      ]}
-                      onPress={toggleEstablishedCampsites}
-                      activeOpacity={0.86}
-                      accessibilityRole="checkbox"
-                      accessibilityState={{ checked: establishedCampsitesEnabled }}
-                      accessibilityLabel="Established Campgrounds"
-                    >
-                      <View
-                        style={[
-                          styles.dispersedCampingCheckbox,
-                          establishedCampsitesEnabled && styles.dispersedCampingCheckboxActive,
-                        ]}
-                      >
-                        {establishedCampsitesEnabled ? (
-                          <Ionicons name="checkmark" size={13} color="#091014" />
-                        ) : null}
-                      </View>
-                      <View style={styles.dispersedCampingToggleCopy}>
-                        <Text style={styles.dispersedCampingToggleTitle}>
-                          Established Campgrounds
-                        </Text>
-                        <Text style={styles.dispersedCampingToggleSubtitle}>
-                          Shows known fixed campgrounds, RV parks, and pay-per-night camping locations.
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  ) : null}
-
-                  {dispersedCampingEligibilityLayerAvailable ? (
-                    <TouchableOpacity
-                      style={[
-                        styles.dispersedCampingToggle,
-                        styles.campLayerMenuToggle,
-                        dispersedCampingEligibilityEnabled && styles.dispersedCampingToggleActive,
-                      ]}
-                      onPress={toggleDispersedCampingEligibility}
-                      activeOpacity={0.86}
-                      accessibilityRole="checkbox"
-                      accessibilityState={{ checked: dispersedCampingEligibilityEnabled }}
-                      accessibilityLabel="Dispersed Camping Eligibility"
-                    >
-                      <View
-                        style={[
-                          styles.dispersedCampingCheckbox,
-                          dispersedCampingEligibilityEnabled && styles.dispersedCampingCheckboxActive,
-                        ]}
-                      >
-                        {dispersedCampingEligibilityEnabled ? (
-                          <Ionicons name="checkmark" size={13} color="#091014" />
-                        ) : null}
-                      </View>
-                      <View style={styles.dispersedCampingToggleCopy}>
-                        <Text style={styles.dispersedCampingToggleTitle}>
-                          Dispersed Camping Eligibility
-                        </Text>
-                        <Text style={styles.dispersedCampingToggleSubtitle}>
-                          Highlights likely eligible public-land regions. Verify local rules before camping.
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  ) : null}
-
-                  <View style={styles.campLayerMenuNotes}>
-                    {establishedCampsitesEnabled ? (
-                      <View style={styles.campLayerStatusBlock}>
-                        <Text style={styles.dispersedCampingDisclaimer}>
-                          {establishedCampgroundsStatus === 'zoom'
-                            ? establishedCampsitesZoomPrompt
-                            : establishedCampgroundsStatus === 'loading'
-                            ? 'Loading established campgrounds from ECS cache.'
-                            : establishedCampgroundsStatus === 'empty'
-                              ? 'No results in this map area.'
-                              : establishedCampgroundsStatus === 'error'
-                                ? establishedCampgroundsError || 'Temporarily unavailable.'
-                                : establishedCampgroundsStatus === 'ready'
-                                  ? campLayerFetchOnline
-                                    ? `${establishedCampgrounds.length} established campground${establishedCampgrounds.length === 1 ? '' : 's'} loaded.`
-                                    : `${establishedCampgrounds.length} cached established campground${establishedCampgrounds.length === 1 ? '' : 's'} loaded for offline reference. Verify status and availability when connected.`
-                                  : 'Map bounds updating.'}
-                        </Text>
-                        {establishedCampgroundsStatus === 'error' ? (
-                          <View style={styles.campLayerErrorActions}>
-                            <TouchableOpacity
-                              style={styles.campLayerRetryButton}
-                              onPress={retryEstablishedCampgrounds}
-                              activeOpacity={0.82}
-                              accessibilityRole="button"
-                              accessibilityLabel="Retry established campgrounds"
-                            >
-                              <Text style={styles.campLayerRetryButtonText}>RETRY</Text>
-                            </TouchableOpacity>
-                            {establishedCampgroundsDiagnostic ? (
-                              <Text style={styles.campLayerDiagnosticText}>
-                                {establishedCampgroundsDiagnostic}
-                              </Text>
-                            ) : null}
-                          </View>
-                        ) : null}
-                      </View>
-                    ) : null}
-                    {dispersedCampingEligibilityLayerAvailable ? (
-                      <View style={styles.campLayerStatusBlock}>
-                        <Text style={styles.dispersedCampingDisclaimer}>
-                          {dispersedCampingEligibilityEnabled
-                            ? dispersedCampingStatus === 'zoom'
-                              ? dispersedCampingZoomPrompt
-                              : dispersedCampingStatus === 'loading'
-                              ? 'Loading public-land eligibility polygons for this map view.'
-                              : dispersedCampingStatus === 'empty'
-                                ? 'No results in this map area.'
-                                : dispersedCampingStatus === 'error'
-                                  ? dispersedCampingError || 'Temporarily unavailable.'
-                                  : dispersedCampingStatus === 'ready'
-                                    ? campLayerFetchOnline
-                                      ? `${dispersedCampingRegions.length} public-land eligibility area${dispersedCampingRegions.length === 1 ? '' : 's'} loaded. Verify before camping.`
-                                      : `${dispersedCampingRegions.length} cached public-land eligibility area${dispersedCampingRegions.length === 1 ? '' : 's'} loaded for offline reference. Verify before camping.`
-                                    : 'Map bounds updating.'
-                            : 'ECS shows areas where dispersed camping may be allowed based on available public-land and access data. Always verify current local rules, posted closures, fire restrictions, permits, and agency guidance before camping.'}
-                        </Text>
-                        {dispersedCampingEligibilityEnabled && dispersedCampingStatus === 'error' ? (
-                          <View style={styles.campLayerErrorActions}>
-                            <TouchableOpacity
-                              style={styles.campLayerRetryButton}
-                              onPress={retryDispersedCampingEligibility}
-                              activeOpacity={0.82}
-                              accessibilityRole="button"
-                              accessibilityLabel="Retry dispersed camping eligibility"
-                            >
-                              <Text style={styles.campLayerRetryButtonText}>RETRY</Text>
-                            </TouchableOpacity>
-                            {dispersedCampingDiagnostic ? (
-                              <Text style={styles.campLayerDiagnosticText}>
-                                {dispersedCampingDiagnostic}
-                              </Text>
-                            ) : null}
-                          </View>
-                        ) : null}
-                      </View>
-                    ) : null}
-                  </View>
-                </ScrollView>
-              </View>
-            ) : null}
-
             {routeProfileAvailable ? (
               <View
                 style={styles.navigateRouteProfileScrubber}
@@ -19541,26 +19557,29 @@ const stableMapSurface = useMemo(() => {
             </View>
 
             {campLayerControlsAvailable ? (
-              <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
-                <TouchableOpacity
-                  style={[
-                    styles.quickActionsTrigger,
-                    { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
-                    campLayerControlActive && styles.quickActionsTriggerActive,
-                  ]}
-                  onPress={toggleCampLayerMenu}
-                  activeOpacity={0.85}
-                  hitSlop={EDGE_CONTROL_HIT_SLOP}
-                  accessibilityRole="button"
-                  accessibilityLabel="Camp map layers"
-                  accessibilityState={{ expanded: campLayerMenuOpen }}
-                >
-                  <Ionicons
-                    name="bonfire-outline"
-                    size={17}
-                    color={campLayerControlActive ? '#091014' : TACTICAL.amber}
-                  />
-                </TouchableOpacity>
+              <View style={styles.campLayerMenuAnchorSlot} pointerEvents="box-none">
+                {campLayerMenuPanel}
+                <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
+                  <TouchableOpacity
+                    style={[
+                      styles.quickActionsTrigger,
+                      { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
+                      campLayerControlActive && styles.quickActionsTriggerActive,
+                    ]}
+                    onPress={toggleCampLayerMenu}
+                    activeOpacity={0.85}
+                    hitSlop={EDGE_CONTROL_HIT_SLOP}
+                    accessibilityRole="button"
+                    accessibilityLabel="Camp map layers"
+                    accessibilityState={{ expanded: campLayerMenuOpen }}
+                  >
+                    <Ionicons
+                      name="bonfire-outline"
+                      size={17}
+                      color={campLayerControlActive ? '#091014' : TACTICAL.amber}
+                    />
+                  </TouchableOpacity>
+                </View>
               </View>
             ) : null}
 
@@ -20626,6 +20645,7 @@ const stableMapSurface = useMemo(() => {
             setAuthVisible(true);
           }}
           guidance={navigateHeaderGuidance}
+          connectionAccessory={<OfflineSyncStatusChip placement="banner" />}
           commandContext={{
             expeditionPhase: aiState?.expeditionPhase ?? null,
             operationalState: aiState?.operationalState ?? null,
@@ -21181,7 +21201,7 @@ const stableMapSurface = useMemo(() => {
           title="COMMUNITY CONTRIBUTIONS"
           style={styles.toolsFixedSection}
         >
-          <View style={styles.toolsDenseActionGrid}>
+          <View style={styles.toolsCommunityActionGrid}>
             {communityCampsitesEnabled ? (
               <NavigateToolActionCard
                 title="RECOMMEND CAMPSITE"
@@ -21191,7 +21211,7 @@ const stableMapSurface = useMemo(() => {
                 hideChevron
                 onPress={openRecommendCampsiteChooser}
                 accessibilityLabel="Recommend campsite"
-                style={styles.toolsDenseActionCard}
+                style={[styles.toolsDenseActionCard, styles.toolsCommunityActionCard]}
               />
             ) : null}
 
@@ -21203,14 +21223,14 @@ const stableMapSurface = useMemo(() => {
               hideChevron
               onPress={openRecommendRouteChooser}
               accessibilityLabel="Recommend route"
-              style={styles.toolsDenseActionCard}
+              style={[styles.toolsDenseActionCard, styles.toolsCommunityActionCard]}
             />
           </View>
         </NavigateToolSection>
       </View>
     </View>,
     TOOLS_POPUP_WIDTH,
-    { placement: 'center', backdropTint: 'transparent', snapToContent: true }
+    { placement: 'bottomRight', backdropTint: 'transparent', snapToContent: true }
   )}
 
   {campopsManualAreaReviewEnabled ? renderMapPopup(
@@ -23551,6 +23571,11 @@ campLayerMenuPanel: {
   overflow: 'hidden',
 },
 
+campLayerMenuAnchorSlot: {
+  alignItems: 'flex-end',
+  gap: 6,
+},
+
 campLayerMenuHeader: {
   flexDirection: 'row',
   alignItems: 'center',
@@ -24491,9 +24516,20 @@ toolsDenseActionGrid: {
   gap: 6,
 },
 
+toolsCommunityActionGrid: {
+  flexDirection: 'row',
+  gap: 6,
+  flexWrap: 'wrap',
+},
+
 toolsDenseActionCard: {
   width: '48%',
   minHeight: 54,
+},
+
+toolsCommunityActionCard: {
+  width: '100%',
+  minHeight: 58,
 },
 
 toolsSearchWrap: {

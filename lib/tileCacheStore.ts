@@ -51,6 +51,11 @@ export interface TileBounds {
   maxLng: number;
 }
 
+export interface RouteCorridorPoint {
+  lat: number;
+  lng: number;
+}
+
 /** Freshness verification status for a cached region */
 export type FreshnessStatus =
   | 'unknown'          // Never checked
@@ -101,6 +106,7 @@ export interface TileCacheRegion {
   syncType?: 'route' | 'map-view' | 'manual';
   routeId?: string;
   corridorMiles?: number;
+  routeGeometry?: RouteCorridorPoint[];
   routeIntent?: Record<string, unknown> | null;
   errorMessage?: string;
   /** ISO timestamp of last freshness verification */
@@ -346,9 +352,41 @@ export function estimateSizeMB(tileCount: number, styleKey: string = 'tactical')
   return Math.round((tileCount * avgKB) / 1024 * 10) / 10;
 }
 
-export function computeRouteCorridor(
+export const MAX_ROUTE_CORRIDOR_MILES = 5;
+const MILES_PER_DEGREE_LAT = 69;
+
+function normalizeCorridorMiles(corridorMiles: number): number {
+  return Math.min(
+    MAX_ROUTE_CORRIDOR_MILES,
+    Math.max(0.1, Number.isFinite(corridorMiles) ? corridorMiles : MAX_ROUTE_CORRIDOR_MILES),
+  );
+}
+
+function normalizeRouteCorridorPoints(
   points: Array<{ lat: number; lng: number }>,
-  corridorMiles: number
+): RouteCorridorPoint[] {
+  return points
+    .map((point) => ({
+      lat: Number(point.lat),
+      lng: Number(point.lng),
+    }))
+    .filter((point) => (
+      Number.isFinite(point.lat) &&
+      Number.isFinite(point.lng) &&
+      point.lat >= -90 &&
+      point.lat <= 90 &&
+      point.lng >= -180 &&
+      point.lng <= 180
+    ));
+}
+
+function lngMilesPerDegree(latitude: number): number {
+  return MILES_PER_DEGREE_LAT * Math.max(0.2, Math.abs(Math.cos((latitude * Math.PI) / 180)));
+}
+
+function bufferedBoundsForPoints(
+  points: RouteCorridorPoint[],
+  corridorMiles: number,
 ): TileBounds | null {
   if (points.length === 0) return null;
 
@@ -362,16 +400,230 @@ export function computeRouteCorridor(
     maxLng = Math.max(maxLng, p.lng);
   }
 
-  const bufferDeg = corridorMiles / 69;
+  const safeCorridorMiles = normalizeCorridorMiles(corridorMiles);
+  const latBuffer = safeCorridorMiles / MILES_PER_DEGREE_LAT;
   const avgLat = (minLat + maxLat) / 2;
-  const lngBuffer = bufferDeg / Math.cos((avgLat * Math.PI) / 180);
+  const lngBuffer = safeCorridorMiles / lngMilesPerDegree(avgLat);
 
   return {
-    minLat: minLat - bufferDeg,
-    maxLat: maxLat + bufferDeg,
-    minLng: minLng - lngBuffer,
-    maxLng: maxLng + lngBuffer,
+    minLat: Math.max(-90, minLat - latBuffer),
+    maxLat: Math.min(90, maxLat + latBuffer),
+    minLng: Math.max(-180, minLng - lngBuffer),
+    maxLng: Math.min(180, maxLng + lngBuffer),
   };
+}
+
+export function computeRouteCorridor(
+  points: Array<{ lat: number; lng: number }>,
+  corridorMiles: number
+): TileBounds | null {
+  const routePoints = normalizeRouteCorridorPoints(points);
+  return bufferedBoundsForPoints(routePoints, corridorMiles);
+}
+
+function tileBounds(tile: { x: number; y: number; z: number }): TileBounds {
+  const northWest = tileToLngLat(tile.x, tile.y, tile.z);
+  const southEast = tileToLngLat(tile.x + 1, tile.y + 1, tile.z);
+  return {
+    minLat: Math.min(northWest.lat, southEast.lat),
+    maxLat: Math.max(northWest.lat, southEast.lat),
+    minLng: Math.min(northWest.lng, southEast.lng),
+    maxLng: Math.max(northWest.lng, southEast.lng),
+  };
+}
+
+function projectPoint(
+  point: RouteCorridorPoint,
+  origin: RouteCorridorPoint,
+): { x: number; y: number } {
+  return {
+    x: (point.lng - origin.lng) * lngMilesPerDegree(origin.lat),
+    y: (point.lat - origin.lat) * MILES_PER_DEGREE_LAT,
+  };
+}
+
+function pointSegmentDistanceMiles(
+  point: { x: number; y: number },
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq <= 0) {
+    return Math.hypot(point.x - start.x, point.y - start.y);
+  }
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSq));
+  const projected = { x: start.x + t * dx, y: start.y + t * dy };
+  return Math.hypot(point.x - projected.x, point.y - projected.y);
+}
+
+function pointRectDistanceMiles(
+  point: { x: number; y: number },
+  rect: { minX: number; maxX: number; minY: number; maxY: number },
+): number {
+  const closestX = Math.max(rect.minX, Math.min(rect.maxX, point.x));
+  const closestY = Math.max(rect.minY, Math.min(rect.maxY, point.y));
+  return Math.hypot(point.x - closestX, point.y - closestY);
+}
+
+function pointInRect(
+  point: { x: number; y: number },
+  rect: { minX: number; maxX: number; minY: number; maxY: number },
+): boolean {
+  return point.x >= rect.minX && point.x <= rect.maxX && point.y >= rect.minY && point.y <= rect.maxY;
+}
+
+function ccw(a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function pointOnSegment(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  point: { x: number; y: number },
+): boolean {
+  const epsilon = 1e-9;
+  return (
+    Math.abs(ccw(a, b, point)) <= epsilon &&
+    point.x >= Math.min(a.x, b.x) - epsilon &&
+    point.x <= Math.max(a.x, b.x) + epsilon &&
+    point.y >= Math.min(a.y, b.y) - epsilon &&
+    point.y <= Math.max(a.y, b.y) + epsilon
+  );
+}
+
+function segmentsIntersect(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number },
+  d: { x: number; y: number },
+): boolean {
+  const abC = ccw(a, b, c);
+  const abD = ccw(a, b, d);
+  const cdA = ccw(c, d, a);
+  const cdB = ccw(c, d, b);
+  if (
+    pointOnSegment(a, b, c) ||
+    pointOnSegment(a, b, d) ||
+    pointOnSegment(c, d, a) ||
+    pointOnSegment(c, d, b)
+  ) {
+    return true;
+  }
+  return (
+    ((abC > 0 && abD < 0) || (abC < 0 && abD > 0)) &&
+    ((cdA > 0 && cdB < 0) || (cdA < 0 && cdB > 0))
+  );
+}
+
+function routeSegmentIntersectsTileCorridor(
+  tile: { x: number; y: number; z: number },
+  start: RouteCorridorPoint,
+  end: RouteCorridorPoint,
+  corridorMiles: number,
+): boolean {
+  const bounds = tileBounds(tile);
+  const origin = {
+    lat: (start.lat + end.lat + bounds.minLat + bounds.maxLat) / 4,
+    lng: (start.lng + end.lng + bounds.minLng + bounds.maxLng) / 4,
+  };
+  const a = projectPoint(start, origin);
+  const b = projectPoint(end, origin);
+  const sw = projectPoint({ lat: bounds.minLat, lng: bounds.minLng }, origin);
+  const ne = projectPoint({ lat: bounds.maxLat, lng: bounds.maxLng }, origin);
+  const rect = {
+    minX: Math.min(sw.x, ne.x),
+    maxX: Math.max(sw.x, ne.x),
+    minY: Math.min(sw.y, ne.y),
+    maxY: Math.max(sw.y, ne.y),
+  };
+
+  if (pointInRect(a, rect) || pointInRect(b, rect)) return true;
+
+  const corners = [
+    { x: rect.minX, y: rect.minY },
+    { x: rect.minX, y: rect.maxY },
+    { x: rect.maxX, y: rect.minY },
+    { x: rect.maxX, y: rect.maxY },
+  ];
+  const edges: Array<[{ x: number; y: number }, { x: number; y: number }]> = [
+    [corners[0], corners[1]],
+    [corners[1], corners[3]],
+    [corners[3], corners[2]],
+    [corners[2], corners[0]],
+  ];
+  if (edges.some(([edgeStart, edgeEnd]) => segmentsIntersect(a, b, edgeStart, edgeEnd))) {
+    return true;
+  }
+
+  const distanceMiles = Math.min(
+    pointRectDistanceMiles(a, rect),
+    pointRectDistanceMiles(b, rect),
+    ...corners.map((corner) => pointSegmentDistanceMiles(corner, a, b)),
+  );
+  return distanceMiles <= normalizeCorridorMiles(corridorMiles);
+}
+
+export function getTilesForRouteCorridor(
+  points: Array<{ lat: number; lng: number }>,
+  corridorMiles: number,
+  zoom: number,
+): Array<{ x: number; y: number; z: number }> {
+  const routePoints = normalizeRouteCorridorPoints(points);
+  if (routePoints.length === 0) return [];
+  if (routePoints.length === 1) {
+    const bounds = bufferedBoundsForPoints(routePoints, corridorMiles);
+    return bounds ? getTilesForBounds(bounds, zoom) : [];
+  }
+
+  const seen = new Set<string>();
+  const tiles: Array<{ x: number; y: number; z: number }> = [];
+  for (let index = 1; index < routePoints.length; index += 1) {
+    const start = routePoints[index - 1];
+    const end = routePoints[index];
+    const segmentBounds = bufferedBoundsForPoints([start, end], corridorMiles);
+    if (!segmentBounds) continue;
+    for (const tile of getTilesForBounds(segmentBounds, zoom)) {
+      const key = `${tile.z}/${tile.x}/${tile.y}`;
+      if (seen.has(key)) continue;
+      if (!routeSegmentIntersectsTileCorridor(tile, start, end, corridorMiles)) continue;
+      seen.add(key);
+      tiles.push(tile);
+    }
+  }
+  return tiles.sort((left, right) => left.z - right.z || left.x - right.x || left.y - right.y);
+}
+
+export function countTilesForRouteCorridor(
+  points: Array<{ lat: number; lng: number }>,
+  corridorMiles: number,
+  zoomMin: number,
+  zoomMax: number,
+): number {
+  let total = 0;
+  for (let z = zoomMin; z <= zoomMax; z++) {
+    total += getTilesForRouteCorridor(points, corridorMiles, z).length;
+  }
+  return total;
+}
+
+export function getRouteCorridorTileBreakdown(
+  points: Array<{ lat: number; lng: number }>,
+  corridorMiles: number,
+  zoomMin: number,
+  zoomMax: number,
+): Array<{ zoom: number; tiles: number; sizeMB: number }> {
+  const breakdown: Array<{ zoom: number; tiles: number; sizeMB: number }> = [];
+  for (let z = zoomMin; z <= zoomMax; z++) {
+    const tiles = getTilesForRouteCorridor(points, corridorMiles, z).length;
+    breakdown.push({
+      zoom: z,
+      tiles,
+      sizeMB: Math.round((tiles * 20) / 1024 * 10) / 10,
+    });
+  }
+  return breakdown;
 }
 
 export function getTileBreakdown(
@@ -389,6 +641,24 @@ export function getTileBreakdown(
     });
   }
   return breakdown;
+}
+
+function getTilesForCacheRegion(
+  region: TileCacheRegion,
+  zoom: number,
+): Array<{ x: number; y: number; z: number }> {
+  if (
+    region.sourceType === 'route-corridor' &&
+    Array.isArray(region.routeGeometry) &&
+    region.routeGeometry.length >= 2
+  ) {
+    return getTilesForRouteCorridor(
+      region.routeGeometry,
+      region.corridorMiles ?? MAX_ROUTE_CORRIDOR_MILES,
+      zoom,
+    );
+  }
+  return getTilesForBounds(region.bounds, zoom);
 }
 
 // ── IndexedDB Tile Storage (Web) ────────────────────────
@@ -597,7 +867,7 @@ async function downloadRegion(
   // Enumerate all tiles
   const allTiles: Array<{ x: number; y: number; z: number }> = [];
   for (let z = region.zoomMin; z <= region.zoomMax; z++) {
-    const tiles = getTilesForBounds(region.bounds, z);
+    const tiles = getTilesForCacheRegion(region, z);
     allTiles.push(...tiles);
   }
 
@@ -976,10 +1246,12 @@ class TileCacheStore {
     zoomMax: number,
     styleKey: string
   ): TileCacheRegion | null {
-    const bounds = computeRouteCorridor(points, corridorMiles);
+    const routeGeometry = normalizeRouteCorridorPoints(points);
+    const safeCorridorMiles = normalizeCorridorMiles(corridorMiles);
+    const bounds = computeRouteCorridor(routeGeometry, safeCorridorMiles);
     if (!bounds) return null;
 
-    const tileCount = countTilesForRegion(bounds, zoomMin, zoomMax);
+    const tileCount = countTilesForRouteCorridor(routeGeometry, safeCorridorMiles, zoomMin, zoomMax);
     const region: TileCacheRegion = {
       id: generateId(),
       name,
@@ -995,7 +1267,8 @@ class TileCacheStore {
       status: 'pending',
       sourceType: 'route-corridor',
       syncType: 'route',
-      corridorMiles,
+      corridorMiles: safeCorridorMiles,
+      routeGeometry,
     };
 
     this.addRegion(region);
@@ -1400,7 +1673,7 @@ class TileCacheStore {
   ): Array<{ x: number; y: number; z: number }> {
     const allTiles: Array<{ x: number; y: number; z: number }> = [];
     for (let z = region.zoomMin; z <= region.zoomMax; z++) {
-      allTiles.push(...getTilesForBounds(region.bounds, z));
+      allTiles.push(...getTilesForCacheRegion(region, z));
     }
 
     if (allTiles.length <= sampleSize) return allTiles;

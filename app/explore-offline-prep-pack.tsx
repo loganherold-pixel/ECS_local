@@ -1242,18 +1242,17 @@ export default function ExploreOfflinePrepPackScreen() {
           throw new Error(quotaCheck.message || 'Low-signal segment downloads exceed available offline map storage.');
         }
         const regions = criticalSegments.map((segment, index) => {
-          const region = tileCacheStore.createFromBounds(
+          const region = tileCacheStore.createFromRoute(
             `${segment.label}: ${run.title}`,
-            {
-              minLat: segment.bounds.minLat,
-              maxLat: segment.bounds.maxLat,
-              minLng: segment.bounds.minLng,
-              maxLng: segment.bounds.maxLng,
-            },
+            segment.coordinates.map((point) => ({ lat: point.latitude, lng: point.longitude })),
+            segment.bounds.corridorMiles,
             segment.zoomMin,
             segment.zoomMax,
             'tactical',
           );
+          if (!region) {
+            throw new Error('Low-signal segment route corridor is unavailable.');
+          }
           const segmentRouteIntent = {
             ...routeIntent,
             mapContext: {
@@ -1310,13 +1309,17 @@ export default function ExploreOfflinePrepPackScreen() {
         return;
       }
       const existingCompleteRegion = analysis.cacheComplete ? analysis.cachedRegion : null;
-      const region = existingCompleteRegion ?? tileCacheStore.createFromBounds(
+      const region = existingCompleteRegion ?? tileCacheStore.createFromRoute(
         `Route: ${run.title}`,
-        analysis.corridorBounds,
+        run.points.map((point) => ({ lat: point.lat, lng: point.lng })),
+        analysis.bufferMiles,
         analysis.zoomMin,
         analysis.zoomMax,
         'tactical',
       );
+      if (!region) {
+        throw new Error('Route corridor analysis is required before preparing this Offline Prep Pack.');
+      }
       tileCacheStore.updateRegion(region.id, {
         routeId: run.id,
         sourceType: 'route-corridor',

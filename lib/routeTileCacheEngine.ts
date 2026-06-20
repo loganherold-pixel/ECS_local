@@ -21,12 +21,14 @@ import { Platform } from 'react-native';
 import {
   tileCacheStore,
   computeRouteCorridor,
-  countTilesForRegion,
+  countTilesForRouteCorridor,
   estimateSizeMB,
-  getTileBreakdown,
+  getRouteCorridorTileBreakdown,
+  MAX_ROUTE_CORRIDOR_MILES,
   type TileCacheRegion,
   type TileBounds,
   type DownloadProgress,
+  type RouteCorridorPoint,
 } from './tileCacheStore';
 import type { ECSRun, RunPoint } from './runStore';
 import { connectivity } from './connectivity';
@@ -42,6 +44,8 @@ export interface RouteAnalysis {
   distanceMiles: number;
   /** Number of route points */
   pointCount: number;
+  /** Normalized route geometry used for corridor tile filtering */
+  routeGeometry: RouteCorridorPoint[];
   /** Route bounding box */
   bounds: TileBounds;
   /** Corridor bounds with buffer */
@@ -243,13 +247,14 @@ export function analyzeRoute(run: ECSRun): RouteAnalysis | null {
 
   const routeType = classifyRouteType(run.stats.distance_miles);
   const recommendation = ZOOM_RECOMMENDATIONS[routeType];
+  const bufferMiles = Math.min(recommendation.buffer, MAX_ROUTE_CORRIDOR_MILES);
 
-  const corridorBounds = computeRouteCorridor(points, recommendation.buffer);
+  const corridorBounds = computeRouteCorridor(points, bufferMiles);
   if (!corridorBounds) return null;
 
-  const tileCount = countTilesForRegion(corridorBounds, recommendation.min, recommendation.max);
+  const tileCount = countTilesForRouteCorridor(points, bufferMiles, recommendation.min, recommendation.max);
   const estSizeMB = estimateSizeMB(tileCount, 'tactical');
-  const zoomBreakdown = getTileBreakdown(corridorBounds, recommendation.min, recommendation.max);
+  const zoomBreakdown = getRouteCorridorTileBreakdown(points, bufferMiles, recommendation.min, recommendation.max);
 
   // Check existing cache
   const { region: cachedRegion, coverage: cacheCoverage } = findExistingCacheForRoute(run.id, corridorBounds);
@@ -281,9 +286,10 @@ export function analyzeRoute(run: ECSRun): RouteAnalysis | null {
     routeName: run.title,
     distanceMiles: run.stats.distance_miles,
     pointCount: points.length,
+    routeGeometry: points,
     bounds: rawBounds,
     corridorBounds,
-    bufferMiles: recommendation.buffer,
+    bufferMiles,
     zoomMin: recommendation.min,
     zoomMax: recommendation.max,
     routeType,
@@ -357,16 +363,19 @@ export async function startRouteCaching(
   }
 
   // Create region
-  const routePoints = analysis.corridorBounds;
   const regionName = `Route: ${analysis.routeName}`;
 
-  const region = tileCacheStore.createFromBounds(
+  const region = tileCacheStore.createFromRoute(
     regionName,
-    analysis.corridorBounds,
+    analysis.routeGeometry,
+    analysis.bufferMiles,
     analysis.zoomMin,
     analysis.zoomMax,
     styleKey,
   );
+  if (!region) {
+    return { success: false, regionId: null, error: 'Route corridor unavailable' };
+  }
 
   // Tag with route ID
   tileCacheStore.updateRegion(region.id, { routeId: analysis.routeId, sourceType: 'route-corridor', corridorMiles: analysis.bufferMiles });

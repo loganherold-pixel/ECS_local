@@ -27,7 +27,6 @@ import { WizardStateProvider } from '../context/WizardStateContext';
 import { ViewerSettingsProvider } from '../context/ViewerSettingsContext';
 
 import CommandDock from '../components/CommandDock';
-import OfflineSyncStatusChip from '../components/navigate/OfflineSyncStatusChip';
 
 import { MOTION } from '../lib/motion';
 import { ECS } from '../lib/theme';
@@ -1965,9 +1964,6 @@ function AuthGate() {
               />
             </Stack>
 
-            {showCommandDock ? (
-              <OfflineSyncStatusChip bottomOffset={shellBodyBottomInset + 10} />
-            ) : null}
             {showCommandDock ? <CommandDock /> : null}
           </WizardStateProvider>
         </ViewerSettingsProvider>
