@@ -75,23 +75,132 @@ function formatFreshness(record: ExpeditionReadinessFreshnessRecord | undefined)
   return `${tags.join(', ')}.${updated}${detail}`;
 }
 
+function uniqueClean(values: readonly (string | null | undefined)[]) {
+  const output: string[] = [];
+  values.forEach((value) => {
+    const cleaned = value ? cleanPacketCopy(value) : '';
+    if (cleaned && !output.includes(cleaned)) output.push(cleaned);
+  });
+  return output;
+}
+
+function sentenceList(values: readonly (string | null | undefined)[], maxItems = 3) {
+  const items = uniqueClean(values);
+  if (items.length === 0) return '';
+  if (items.length <= maxItems) return items.join(', ');
+  return `${items.slice(0, maxItems).join(', ')}, and ${items.length - maxItems} more`;
+}
+
+function confidenceLabel(confidence: ExpeditionReadinessAssessment['confidence']) {
+  if (confidence === 'high') return 'strong';
+  if (confidence === 'medium') return 'moderate';
+  return 'limited';
+}
+
+function confidenceReason(assessment: ExpeditionReadinessAssessment) {
+  const freshnessGaps = Object.values(assessment.sourceFreshness)
+    .filter((record) => record.isMissing || record.isStale || record.isInferred || record.isDemo || record.isMock)
+    .map((record) => record.label);
+  const missingInputs = assessment.categories.flatMap((category) => category.missingInputs);
+  const drivers = [
+    freshnessGaps.length
+      ? `${sentenceList(freshnessGaps)} ${freshnessGaps.length === 1 ? 'is' : 'are'} missing, stale, inferred, demo, or mock`
+      : null,
+    missingInputs.length ? `missing inputs include ${sentenceList(missingInputs)}` : null,
+  ].filter(Boolean);
+
+  if (drivers.length === 0) {
+    if (assessment.confidence === 'low') {
+      return 'Confidence is limited because the underlying readiness categories are still low-confidence, even though no single stale or missing source is called out in this packet.';
+    }
+    return `Confidence is ${confidenceLabel(assessment.confidence)} because the available route, vehicle, weather, offline, recovery, and communications inputs are current enough for this packet.`;
+  }
+  return `Confidence is ${confidenceLabel(assessment.confidence)} because ${drivers.join('; ')}.`;
+}
+
+function readinessMeaning(assessment: ExpeditionReadinessAssessment) {
+  if (assessment.status === 'ready') {
+    return 'Field read: this route looks departure-ready from current ECS inputs; keep weather, route, and offline sources fresh before leaving.';
+  }
+  if (assessment.status === 'caution') {
+    const concern = assessment.warnings[0] ?? assessment.blockers[0] ?? null;
+    return `Field read: this route is still workable, but ECS sees prep items to review${concern ? `, led by ${cleanPacketCopy(concern.detail)}` : ''}.`;
+  }
+  const blocker = assessment.blockers[0] ?? null;
+  return `Field read: hold departure until the blocking item is resolved${blocker ? `: ${cleanPacketCopy(blocker.detail)}` : '.'}`;
+}
+
+function formatReadinessDecision(assessment: ExpeditionReadinessAssessment | null) {
+  if (!assessment) return 'Unavailable / limited confidence. No readiness assessment is currently active.';
+  return [
+    `${getReadinessDecisionLabel(assessment.status)} - ${assessment.overallScore}/100.`,
+    'The score is a readiness posture, not a confidence grade.',
+    confidenceReason(assessment),
+    readinessMeaning(assessment),
+  ].join(' ');
+}
+
+function isGenericCategorySummary(value: string) {
+  return /does not show a major blocker|confidence is workable|is workable|usable, not guaranteed|appears prepared/i.test(value);
+}
+
+function usefulFactorDetails(category: ExpeditionReadinessCategory, maxItems = 2) {
+  return uniqueClean(
+    category.factors
+      .map((factor) => factor.detail)
+      .filter((detail) => detail && !isGenericCategorySummary(detail) && !/^(low|medium|moderate|high|critical|unknown|ready|caution|hold)$/i.test(detail.trim())),
+  ).slice(0, maxItems);
+}
+
+function categoryDataNote(category: ExpeditionReadinessCategory) {
+  const parts = [
+    category.confidence !== 'high' ? `confidence is ${confidenceLabel(category.confidence)}` : null,
+    category.missingInputs.length ? `missing ${sentenceList(category.missingInputs)}` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join('; ') : null;
+}
+
+function categoryNarrative(category: ExpeditionReadinessCategory) {
+  const summary = cleanPacketCopy(category.summary);
+  const factorDetails = usefulFactorDetails(category);
+  if (!isGenericCategorySummary(summary)) {
+    return [summary, ...factorDetails].join(' ');
+  }
+
+  if (category.status === 'hold') {
+    return `${CATEGORY_LABELS[category.id]} needs a stop-and-review before departure.${factorDetails.length ? ` ${factorDetails.join(' ')}` : ''}`;
+  }
+  if (category.status === 'caution') {
+    return `${CATEGORY_LABELS[category.id]} needs attention before departure.${factorDetails.length ? ` ${factorDetails.join(' ')}` : ''}`;
+  }
+  return `${CATEGORY_LABELS[category.id]} looks workable from current ECS inputs.${factorDetails.length ? ` ${factorDetails.join(' ')}` : ''}`;
+}
+
 function formatCategory(category: ExpeditionReadinessCategory | undefined, label: string) {
   if (!category) {
     return [
       `### ${label}`,
-      'Status: Unavailable / limited confidence.',
-      'Summary: ECS does not have enough grounded data for this section.',
+      'Field read: Unavailable / limited confidence.',
+      'What it means: ECS does not have enough grounded data for this section.',
     ].join('\n');
   }
 
-  const missing = category.missingInputs.length
-    ? ` Missing inputs: ${category.missingInputs.map(cleanPacketCopy).join(', ')}.`
-    : '';
+  const dataNote = categoryDataNote(category);
   return [
     `### ${label}`,
-    `Status: ${getReadinessDecisionLabel(category.status)} (${category.score}/100), confidence ${category.confidence}.`,
-    `Summary: ${cleanPacketCopy(category.summary)}${missing}`,
-  ].join('\n');
+    `Field read: ${getReadinessDecisionLabel(category.status)}.`,
+    `What it means: ${categoryNarrative(category)}`,
+    dataNote ? `Data note: ${dataNote}.` : null,
+  ].filter(Boolean).join('\n');
+}
+
+function combinedCategoryLine(category: ExpeditionReadinessCategory | undefined, id: ExpeditionReadinessCategoryId) {
+  if (!category) return `${CATEGORY_LABELS[id]}: unavailable / limited confidence.`;
+  const dataNote = categoryDataNote(category);
+  return [
+    `${CATEGORY_LABELS[id]}: ${categoryNarrative(category)}`,
+    dataNote ? `Data note: ${dataNote}.` : null,
+  ].filter(Boolean).join(' ');
 }
 
 function formatCombinedCategories(
@@ -102,20 +211,64 @@ function formatCombinedCategories(
 ) {
   const lines = [`### ${label}`];
   ids.forEach((id) => {
-    const category = categories.get(id);
-    if (!category) {
-      lines.push(`- ${CATEGORY_LABELS[id]}: Unavailable / limited confidence.`);
-      return;
-    }
-    const missing = category.missingInputs.length
-      ? ` Missing: ${category.missingInputs.map(cleanPacketCopy).join(', ')}.`
-      : '';
-    lines.push(
-      `- ${CATEGORY_LABELS[id]}: ${getReadinessDecisionLabel(category.status)} ${category.score}/100, confidence ${category.confidence}. ${cleanPacketCopy(category.summary)}${missing}`,
-    );
+    lines.push(`- ${combinedCategoryLine(categories.get(id), id)}`);
   });
   extraLines.map(cleanPacketCopy).filter(Boolean).forEach((line) => lines.push(`- ${line}`));
   return lines.join('\n');
+}
+
+function weatherNarrative(category: ExpeditionReadinessCategory | undefined) {
+  if (!category) return 'Weather data is unavailable in this packet; refresh the forecast before departure.';
+  const details = usefulFactorDetails(category).join(' ');
+  const note = categoryDataNote(category);
+  const base = category.status === 'ready'
+    ? 'Weather looks workable for this plan. No severe weather blocker is attached to the available forecast.'
+    : category.status === 'caution'
+      ? `Weather needs attention before departure. ${isGenericCategorySummary(category.summary) ? 'Review the forecast window before committing.' : cleanPacketCopy(category.summary)}`
+      : `Weather needs a stop-and-review before departure. ${cleanPacketCopy(category.summary)}`;
+  return [base, details, note ? `Data note: ${note}.` : null].filter(Boolean).join(' ');
+}
+
+function daylightNarrative(category: ExpeditionReadinessCategory | undefined) {
+  if (!category) return 'Daylight data is unavailable; confirm arrival and setup light manually.';
+  const details = usefulFactorDetails(category).join(' ');
+  const note = categoryDataNote(category);
+  const base = category.status === 'ready'
+    ? 'Daylight looks workable for the arrival window.'
+    : category.status === 'caution'
+      ? `Daylight needs attention. ${isGenericCategorySummary(category.summary) ? 'Arrival light is narrowing; confirm timing before departure.' : cleanPacketCopy(category.summary)}`
+      : `Daylight needs a stop-and-review. ${cleanPacketCopy(category.summary)}`;
+  return [base, details, note ? `Data note: ${note}.` : null].filter(Boolean).join(' ');
+}
+
+function formatWeatherDaylightSummary(categories: Map<ExpeditionReadinessCategoryId, ExpeditionReadinessCategory>) {
+  return [
+    '### Weather / Daylight Summary',
+    `- Weather: ${weatherNarrative(categories.get('weather_window'))}`,
+    `- Daylight: ${daylightNarrative(categories.get('daylight_margin'))}`,
+  ].join('\n');
+}
+
+function communicationsNarrative(category: ExpeditionReadinessCategory | undefined) {
+  if (!category) {
+    return 'Communications data is unavailable; set a check-in plan and carry offline route details before departure.';
+  }
+  const details = usefulFactorDetails(category).join(' ');
+  const note = categoryDataNote(category);
+  const base = category.status === 'ready'
+    ? 'Signal and communications look covered from available inputs. Keep offline maps ready for weaker service or dead-zone miles.'
+    : category.status === 'caution'
+      ? `Signal and communications need attention. ${isGenericCategorySummary(category.summary) ? 'Confirm satellite, radio, or team check-in coverage before departure.' : cleanPacketCopy(category.summary)}`
+      : `Communications need a stop-and-review before departure. ${cleanPacketCopy(category.summary)}`;
+  return [base, details, note ? `Data note: ${note}.` : null].filter(Boolean).join(' ');
+}
+
+function formatCommunicationsSummary(category: ExpeditionReadinessCategory | undefined) {
+  return [
+    '### Communications / Signal Confidence',
+    `Field read: ${category ? getReadinessDecisionLabel(category.status) : 'Unavailable / limited confidence'}.`,
+    `What it means: ${communicationsNarrative(category)}`,
+  ].join('\n');
 }
 
 function formatVehicle(vehicle: ExpeditionReadinessVehicleInput | null | undefined) {
@@ -142,117 +295,32 @@ function formatVehicle(vehicle: ExpeditionReadinessVehicleInput | null | undefin
 function formatRouteSummary(context: CommandBriefExportContext) {
   const title = context.routeName ?? context.tripName ?? context.assessment?.recoveryBrief.activeRouteLabel ?? null;
   const summary = context.routeSummary ? cleanPacketCopy(context.routeSummary) : null;
-  const ids = [
-    context.activeRouteId ? `Route ID: ${context.activeRouteId}` : null,
-    context.activeTripId ? `Trip ID: ${context.activeTripId}` : null,
-  ].filter(Boolean);
-  if (!title && !summary && ids.length === 0) {
+  if (!title && !summary) {
     return 'Unavailable / limited confidence. No route summary is present in readiness context.';
   }
-  return [title ? cleanPacketCopy(title) : null, summary, ...ids].filter(Boolean).join('\n');
-}
-
-type WeakPointExportAssessment = NonNullable<CommandBriefExportContext['weakPointAssessment']>;
-
-function formatWeakPointCoverage(assessment: WeakPointExportAssessment) {
-  return assessment.snapshotCoverage.domains.map((domain) => {
-    const details = [
-      domain.requiredFactIds.length ? `required ${domain.requiredFactIds.join(', ')}` : null,
-      domain.availableFactIds.length ? `available ${domain.availableFactIds.join(', ')}` : null,
-      domain.staleFactIds.length ? `stale ${domain.staleFactIds.join(', ')}` : null,
-      domain.unavailableFactIds.length ? `unavailable ${domain.unavailableFactIds.join(', ')}` : null,
-      domain.missingFactIds.length ? `missing ${domain.missingFactIds.join(', ')}` : null,
-    ].filter(Boolean).join('; ');
-    return `- ${domain.domain}: ${domain.status}${details ? ` (${details})` : ''}`;
-  }).join('\n');
-}
-
-function formatWeakPointSourceFacts(assessment: WeakPointExportAssessment) {
-  if (!assessment.sourceFacts.length) return '- none';
-  return assessment.sourceFacts.map((fact) => {
-    const factId = fact.factId ?? fact.id ?? 'unknown';
-    const timestamp = fact.observedAt ?? fact.generatedAt ?? fact.updatedAt ?? 'no timestamp';
-    const value = fact.value == null ? 'unavailable' : String(fact.value);
-    return `- ${factId}: ${fact.label ?? factId} = ${value}; source ${fact.sourceSystem ?? 'unknown'}; freshness ${fact.freshness ?? 'unavailable'}; confidence ${fact.confidence ?? 'unknown'}; timestamp ${timestamp}; field ${fact.fieldPath ?? 'unknown'}`;
-  }).join('\n');
-}
-
-function formatWeakPointMissingFacts(assessment: WeakPointExportAssessment) {
-  if (!assessment.missingFacts.length) return '- none';
-  return assessment.missingFacts.map((fact) => (
-    `- ${fact.factId}: ${fact.label}; domain ${fact.domain}; reason ${fact.reason}; required for ${fact.requiredFor}`
-  )).join('\n');
-}
-
-function formatWeakPointScoringTrace(assessment: WeakPointExportAssessment) {
-  if (!assessment.scoringTrace.length) return '- none';
-  return assessment.scoringTrace.map((trace) => {
-    const sourceIds = [
-      ...trace.likelihood.sourceFactIds,
-      ...trace.consequence.sourceFactIds,
-      ...trace.uncertainty.sourceFactIds,
-      ...trace.dataGap.sourceFactIds,
-    ];
-    const missingIds = [
-      ...trace.likelihood.missingFactIds,
-      ...trace.consequence.missingFactIds,
-      ...trace.uncertainty.missingFactIds,
-      ...trace.dataGap.missingFactIds,
-    ];
-    return `- ${trace.category} (${trace.candidateId}): weighted ${trace.weightedScore}/5; L${trace.likelihood.score} C${trace.consequence.score} U${trace.uncertainty.score} D${trace.dataGap.score}; score version ${trace.scoreVersion}; tie order ${trace.tieBreak.categoryOrder}; sources ${uniqueForExport(sourceIds).join(', ') || 'none'}; missing ${uniqueForExport(missingIds).join(', ') || 'none'}`;
-  }).join('\n');
-}
-
-function uniqueForExport(values: readonly (string | null | undefined)[]) {
-  return Array.from(new Set(values.filter(Boolean))) as string[];
-}
-
-function formatWeakPointActions(assessment: WeakPointExportAssessment) {
-  if (!assessment.allowedActions.length) return '- none';
-  return assessment.allowedActions.map((action) => (
-    `- ${action.actionId}: ${action.label} (${action.actionType}); sources ${action.sourceFactIds.join(', ') || 'none'}; missing ${action.missingFactIds.join(', ') || 'none'}`
-  )).join('\n');
-}
-
-function formatWeakPointMonitorSignals(assessment: WeakPointExportAssessment) {
-  if (!assessment.monitorSignals.length) return '- none';
-  return assessment.monitorSignals.map((signal) => (
-    `- ${signal.signalId}: ${signal.label} (${signal.signalType}); sources ${signal.sourceFactIds.join(', ') || 'none'}; missing ${signal.missingFactIds.join(', ') || 'none'}`
-  )).join('\n');
+  return [title ? cleanPacketCopy(title) : null, summary].filter(Boolean).join('\n');
 }
 
 function formatWeakPointAssessment(context: CommandBriefExportContext) {
   const assessment = context.weakPointAssessment;
   if (!assessment) {
-    return 'Unavailable / feature-flagged. Weak Point Analyzer is not enabled for this Command Brief packet.';
+    return 'Unavailable / limited confidence. ECS could not build a Weak Point Analyzer snapshot for this packet. Refresh Command Brief after route, vehicle, and readiness inputs finish syncing.';
   }
-  const primary = assessment.mostFragileAssumption;
+  const ranked = assessment.rankedWeakPoints.slice(0, 3);
+  const rankLines = ranked.map((point) => [
+    `- ${point.rank}. ${point.label} (${point.riskScore.toFixed(2)}/5): ${point.consequenceStatement}`,
+    `Pre-trip move: ${point.easiestPreDepartureFix}`,
+    `Watch underway: ${point.travelMonitorSignal}`,
+  ].join(' '));
+  const missing = assessment.missingData.length
+    ? `Data caveat: ${sentenceList(assessment.missingData, 4)}.`
+    : null;
   const lines = [
-    `Maturity: ${assessment.maturityLabel}. Score version: ${assessment.scoreVersion}. Source snapshot: ${assessment.sourceSnapshotId}.`,
-    `Advisory only. Assessment completeness: ${assessment.assessmentCompleteness}.`,
-    primary ? `Primary weak point: ${primary.label} (${primary.riskScore.toFixed(2)}/5). ${primary.consequenceStatement}` : 'Primary weak point: unavailable.',
-    assessment.mostSevereConsequence ? `Most severe consequence: ${assessment.mostSevereConsequence.consequenceStatement}` : null,
-    assessment.easiestFixBeforeDeparture ? `Easiest fix before departure: ${assessment.easiestFixBeforeDeparture.easiestPreDepartureFix}` : null,
-    assessment.monitorDuringTravel ? `Monitor during travel: ${assessment.monitorDuringTravel.travelMonitorSignal}` : null,
-    assessment.missingData.length ? `Missing data: ${assessment.missingData.slice(0, 6).join(', ')}.` : null,
-    '',
-    'Snapshot coverage:',
-    formatWeakPointCoverage(assessment),
-    '',
-    'Source facts:',
-    formatWeakPointSourceFacts(assessment),
-    '',
-    'Missing facts:',
-    formatWeakPointMissingFacts(assessment),
-    '',
-    'Scoring trace:',
-    formatWeakPointScoringTrace(assessment),
-    '',
-    'Allowed actions:',
-    formatWeakPointActions(assessment),
-    '',
-    'Monitor signals:',
-    formatWeakPointMonitorSignals(assessment),
+    'Advisory only. Deterministic ECS ranking from current route, vehicle, resource, weather, offline, camp, recovery, and communications inputs.',
+    'Top likely failure points (max 3):',
+    ...(rankLines.length ? rankLines : ['- No likely failure point could be ranked from the current snapshot.']),
+    missing,
+    `Assessment completeness: ${assessment.assessmentCompleteness.replace(/_/g, ' ')}.`,
   ].filter(Boolean);
   return lines.map((line) => cleanPacketCopy(String(line))).join('\n');
 }
@@ -278,9 +346,7 @@ export function buildCommandBriefPacket(
   const routeTitle = context.routeName ?? context.tripName ?? assessment?.recoveryBrief.activeRouteLabel ?? 'Command Brief';
   const title = `ECS Command Brief Packet - ${cleanPacketCopy(routeTitle)}`;
 
-  const readinessLine = assessment
-    ? `${getReadinessDecisionLabel(assessment.status)} - ${assessment.overallScore}/100, confidence ${assessment.confidence}.`
-    : 'Unavailable / limited confidence. No readiness assessment is currently active.';
+  const readinessLine = formatReadinessDecision(assessment);
 
   const intentLine = assessment
     ? `${EXPEDITION_TRIP_INTENT_LABELS[assessment.tripIntent]} (${assessment.tripIntentSource === 'ecs_inferred' ? 'ECS-inferred' : assessment.tripIntentSource}). Profile: ${assessment.calibration.label}.`
@@ -346,7 +412,7 @@ export function buildCommandBriefPacket(
     '',
     formatCategory(categories.get('camp_legality_confidence'), 'Camp Confidence Summary'),
     '',
-    formatCombinedCategories(categories, ['weather_window', 'daylight_margin'], 'Weather / Daylight Summary'),
+    formatWeatherDaylightSummary(categories),
     '',
     formatCategory(categories.get('offline_preparedness'), 'Offline Preparedness'),
     '',
@@ -354,7 +420,7 @@ export function buildCommandBriefPacket(
     '',
     formatCombinedCategories(categories, ['recovery_bailout_access'], 'Recovery / Bailout Summary', recoveryLines),
     '',
-    formatCategory(categories.get('communications_signal_confidence'), 'Communications / Signal Confidence'),
+    formatCommunicationsSummary(categories.get('communications_signal_confidence')),
     '',
     '## Emergency Coordinate Packet',
     recovery

@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { StyleSheet, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { PanResponder, StyleSheet, TouchableOpacity, View } from 'react-native';
 import Svg, {
   Circle,
   Defs,
@@ -80,6 +80,11 @@ type ElevationTick = {
   value: number;
   y: number;
   label: string;
+};
+
+type ChartLayout = {
+  width: number;
+  height: number;
 };
 
 export type TerrainRiskReferenceAnchor = {
@@ -359,6 +364,61 @@ function buildCurrentRouteMarkerPoint(
   };
 }
 
+function buildElevationProbePoint(
+  points: ChartPoint[],
+  totalDistanceMiles: number,
+  distanceMiles: number | null,
+): ChartPoint | null {
+  if (!Number.isFinite(distanceMiles ?? NaN) || points.length < 2 || totalDistanceMiles <= 0) {
+    return null;
+  }
+
+  const probeMiles = clampNumber(distanceMiles ?? 0, 0, totalDistanceMiles);
+  const nextIndex = points.findIndex((point) => point.distanceMiles >= probeMiles);
+  if (nextIndex <= 0) {
+    const first = points[0];
+    return {
+      ...first,
+      id: 'elevation-probe',
+      distanceMiles: probeMiles,
+      x: scaleTerrainDistanceToX(probeMiles, totalDistanceMiles),
+    };
+  }
+  if (nextIndex === -1) {
+    const last = points[points.length - 1];
+    return {
+      ...last,
+      id: 'elevation-probe',
+      distanceMiles: probeMiles,
+      x: scaleTerrainDistanceToX(probeMiles, totalDistanceMiles),
+    };
+  }
+
+  const previous = points[nextIndex - 1];
+  const next = points[nextIndex];
+  const segmentMiles = Math.max(0.001, next.distanceMiles - previous.distanceMiles);
+  const ratio = clampNumber((probeMiles - previous.distanceMiles) / segmentMiles, 0, 1);
+  const elevationFeet = previous.elevationFeet + (next.elevationFeet - previous.elevationFeet) * ratio;
+  const riskScore = previous.riskScore + (next.riskScore - previous.riskScore) * ratio;
+  const gradePercent = (previous.gradePercent ?? 0) + ((next.gradePercent ?? 0) - (previous.gradePercent ?? 0)) * ratio;
+
+  return {
+    ...next,
+    id: 'elevation-probe',
+    distanceMiles: probeMiles,
+    elevationFeet,
+    gradePercent,
+    riskScore,
+    riskLevel: classifyTerrainCommandRisk(riskScore),
+    x: previous.x + (next.x - previous.x) * ratio,
+    y: previous.y + (next.y - previous.y) * ratio,
+  };
+}
+
+function formatElevationProbeLabel(elevationFeet: number): string {
+  return `${Math.round(elevationFeet).toLocaleString('en-US')} ft`;
+}
+
 function buildCurrentPositionMarkerPath(point: ChartPoint): string {
   const x = clampNumber(point.x, CHART_FRAME.left + 6, VIEWBOX_WIDTH - CHART_FRAME.right - 6);
   const y = clampNumber(point.y, CHART_FRAME.top + 6, CHART_FRAME.baselineY - 6);
@@ -386,6 +446,8 @@ export default function TerrainRiskSideProfile({
   selectedReferenceEvent = null,
   onReferencePointPress,
 }: Props) {
+  const [chartLayout, setChartLayout] = useState<ChartLayout | null>(null);
+  const [selectedProbeDistanceMiles, setSelectedProbeDistanceMiles] = useState<number | null>(null);
   const chart = useMemo(() => {
     if (profile.length < 2 || totalDistanceMiles <= 0) return null;
 
@@ -421,6 +483,34 @@ export default function TerrainRiskSideProfile({
     };
   }, [completedDistanceMiles, profile, totalDistanceMiles, unit]);
 
+  const selectedProbePoint = useMemo(
+    () => chart
+      ? buildElevationProbePoint(chart.points, totalDistanceMiles, selectedProbeDistanceMiles)
+      : null,
+    [chart, selectedProbeDistanceMiles, totalDistanceMiles],
+  );
+
+  const updateElevationProbeFromLocation = useCallback((locationX: number) => {
+    if (!interactive || !chartLayout || chartLayout.width <= 0 || totalDistanceMiles <= 0) return;
+    const viewBoxX = (locationX / chartLayout.width) * VIEWBOX_WIDTH;
+    const ratio = clampNumber((viewBoxX - CHART_FRAME.left) / CHART_FRAME.width, 0, 1);
+    setSelectedProbeDistanceMiles(ratio * totalDistanceMiles);
+  }, [chartLayout, interactive, totalDistanceMiles]);
+
+  const elevationProbeResponder = useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => interactive && Boolean(chartLayout?.width),
+      onMoveShouldSetPanResponder: () => interactive && Boolean(chartLayout?.width),
+      onPanResponderGrant: (event) => {
+        updateElevationProbeFromLocation(event.nativeEvent.locationX);
+      },
+      onPanResponderMove: (event) => {
+        updateElevationProbeFromLocation(event.nativeEvent.locationX);
+      },
+    }),
+    [chartLayout?.width, interactive, updateElevationProbeFromLocation],
+  );
+
   if (!chart) {
     return <View style={styles.emptyChart} />;
   }
@@ -440,6 +530,12 @@ export default function TerrainRiskSideProfile({
       accessibilityLabel={`Terrain side profile chart. Distance labels use ${unit === 'mi' ? 'miles' : 'kilometers'}. Elevation is shown in feet. High risk route sections are highlighted.`}
       accessibilityRole="image"
       style={[styles.shell, transparentBackground ? styles.shellTransparent : null]}
+      onLayout={(event) => {
+        const { width, height } = event.nativeEvent.layout;
+        if (width <= 0 || height <= 0) return;
+        setChartLayout((current) =>
+          current?.width === width && current?.height === height ? current : { width, height });
+      }}
     >
       <Svg width="100%" height="100%" viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}>
         <Defs>
@@ -603,6 +699,71 @@ export default function TerrainRiskSideProfile({
           </G>
         ) : null}
 
+        {interactive && selectedProbePoint ? (
+          <G
+            testID="terrainRiskElevationProbe"
+            accessible
+            accessibilityLabel={`Elevation probe ${formatElevationProbeLabel(selectedProbePoint.elevationFeet)} at ${formatDistance(selectedProbePoint.distanceMiles, unit)}`}
+            accessibilityRole="image"
+          >
+            <Line
+              x1={selectedProbePoint.x}
+              y1={CHART_FRAME.top}
+              x2={selectedProbePoint.x}
+              y2={CHART_FRAME.baselineY}
+              stroke={TACTICAL.amber}
+              strokeWidth={1}
+              strokeDasharray="3 4"
+              opacity={0.72}
+            />
+            <Circle
+              cx={selectedProbePoint.x}
+              cy={selectedProbePoint.y}
+              r={8.4}
+              fill={TACTICAL.amber}
+              opacity={0.16}
+            />
+            <Circle
+              cx={selectedProbePoint.x}
+              cy={selectedProbePoint.y}
+              r={3.8}
+              fill="#FFFFFF"
+              stroke={TACTICAL.amber}
+              strokeWidth={1.2}
+            />
+            <Rect
+              x={clampNumber(selectedProbePoint.x - 36, CHART_FRAME.left, VIEWBOX_WIDTH - CHART_FRAME.right - 72)}
+              y={clampNumber(selectedProbePoint.y - 34, CHART_FRAME.top + 2, CHART_FRAME.baselineY - 34)}
+              width={72}
+              height={25}
+              rx={6}
+              fill="rgba(2,5,7,0.92)"
+              stroke="rgba(212,160,23,0.54)"
+              strokeWidth={1}
+            />
+            <SvgText
+              x={clampNumber(selectedProbePoint.x, CHART_FRAME.left + 36, VIEWBOX_WIDTH - CHART_FRAME.right - 36)}
+              y={clampNumber(selectedProbePoint.y - 22, CHART_FRAME.top + 14, CHART_FRAME.baselineY - 22)}
+              fill={TACTICAL.amber}
+              fontSize="8"
+              fontWeight="900"
+              textAnchor="middle"
+            >
+              {formatElevationProbeLabel(selectedProbePoint.elevationFeet)}
+            </SvgText>
+            <SvgText
+              x={clampNumber(selectedProbePoint.x, CHART_FRAME.left + 36, VIEWBOX_WIDTH - CHART_FRAME.right - 36)}
+              y={clampNumber(selectedProbePoint.y - 11, CHART_FRAME.top + 25, CHART_FRAME.baselineY - 11)}
+              fill={TACTICAL.textMuted}
+              fontSize="7"
+              fontWeight="800"
+              textAnchor="middle"
+            >
+              {formatDistance(selectedProbePoint.distanceMiles, unit)}
+            </SvgText>
+          </G>
+        ) : null}
+
         {chart.referencePoints.map((point) => {
           const color = getTerrainCommandRiskColor(point.riskLevel);
           const referenceEvent =
@@ -723,6 +884,13 @@ export default function TerrainRiskSideProfile({
           FT
         </SvgText>
       </Svg>
+      {interactive ? (
+        <View
+          testID="terrainRiskElevationProbeTouchLayer"
+          style={styles.elevationProbeTouchLayer}
+          {...elevationProbeResponder.panHandlers}
+        />
+      ) : null}
       {interactive ? chart.referencePoints.map((point) => {
         const referenceEvent = getReferenceEventForPoint(point);
         return (
@@ -780,6 +948,11 @@ const styles = StyleSheet.create({
     marginLeft: -16,
     marginTop: -16,
     borderRadius: 16,
+    backgroundColor: 'transparent',
+  },
+  elevationProbeTouchLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 6,
     backgroundColor: 'transparent',
   },
   emptyChart: {

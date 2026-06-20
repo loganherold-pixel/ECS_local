@@ -15,7 +15,6 @@ const sources = {
   routeStore: readSource('lib', 'routeStore.ts'),
   elevation: readSource('lib', 'dashboardElevationTerrain.ts'),
   powerWidget: readSource('components', 'dashboard', 'PowerSystemWidget.tsx'),
-  riveAdapter: readSource('lib', 'powerModuleRiveTelemetry.ts'),
   powerDetail: readSource('components', 'dashboard', 'PowerSystemDetail.tsx'),
 };
 
@@ -58,48 +57,20 @@ includes(sources.elevation, 'const hasLiveElevation = hasGpsAltitude && hasFresh
 includes(sources.elevation, "badgeLabel: 'STALE ELEVATION'", 'Elevation resolver should expose stale state copy.');
 includes(sources.elevation, "badgeLabel: 'ELEVATION PENDING'", 'Elevation resolver should expose unavailable state copy.');
 
-// Power: live telemetry should be normalized, stale-gated, manually refreshable, and owned visually by the Rive module.
+// Power: live telemetry should be normalized, stale-gated, manually refreshable, and owned visually by ECS-native readouts.
 includes(sources.powerWidget, 'export interface PowerTelemetrySummary', 'Power widget should normalize telemetry summary.');
 includes(sources.powerWidget, 'export function normalizePowerTelemetrySummary', 'Power widget should share normalized power data.');
 notIncludes(sources.powerWidget, 'function PowerFlowGraphic', 'Power monitor should not render the old center tick/flow graphic.');
 notIncludes(sources.powerWidget, 'function usePowerFlowPulse', 'Power monitor should not keep the old inline flow animation loop.');
-notIncludes(sources.powerWidget, 'useReducedMotion()', 'Power monitor flow animation should be handled by the blue Rive module, not an extra overlay.');
+notIncludes(sources.powerWidget, 'useReducedMotion()', 'Power monitor should not add a separate animation loop.');
 notIncludes(sources.powerWidget, "footer={<WidgetMetaLine", 'Power monitor should not show redundant live/source footer pills.');
-includes(
-  sources.powerWidget,
-  "import PowerModuleRiveWidget from './PowerModuleRiveWidget'",
-  'Power widget should render the shared reusable Rive module.',
-);
-includes(
-  sources.riveAdapter,
-  'export function adaptPowerTelemetryForRive',
-  'Power widget should adapt normalized ECS telemetry before passing it to Rive.',
-);
-includes(
-  sources.powerWidget,
-  'hasEcsData={riveTelemetry.hasEcsData}',
-  'Power widget should pass freshness-gated ECS availability to Rive.',
-);
-includes(
-  sources.powerWidget,
-  'function PowerMonitorRiveHero',
-  'Power widget should centralize the foreground Rive hero.',
-);
-includes(
-  sources.powerWidget,
-  'inputWatts={riveTelemetry.inputWatts}',
-  'Power Rive hero should receive adapted truth-gated input watts.',
-);
-includes(
-  sources.powerWidget,
-  'outputWatts={riveTelemetry.outputWatts}',
-  'Power Rive hero should receive adapted truth-gated output watts.',
-);
-includes(
-  sources.powerWidget,
-  "testID={compact ? 'power-monitor-blu-rive-compact' : 'power-monitor-blu-rive'}",
-  'Power compact/full widgets should expose direct Rive test IDs.',
-);
+notIncludes(sources.powerWidget, "import PowerModuleRiveWidget from './PowerModuleRiveWidget'", 'Power widget should not import the Rive module while Rive widgets are disabled.');
+notIncludes(sources.powerWidget, "import { adaptPowerTelemetryForRive } from '../../lib/powerModuleRiveTelemetry'", 'Power widget should not adapt telemetry for Rive while Rive widgets are disabled.');
+notIncludes(sources.powerWidget, '<PowerModuleRiveWidget', 'Power widget should not render a Rive module.');
+notIncludes(sources.powerWidget, 'function PowerMonitorRiveHero', 'Power widget should not keep the old foreground Rive hero.');
+includes(sources.powerWidget, 'function PowerMonitorTelemetryPanel', 'Power widget should centralize a native telemetry panel.');
+includes(sources.powerWidget, "testID={compact ? 'power-monitor-telemetry-panel-compact' : 'power-monitor-telemetry-panel'}", 'Power compact/full widgets should expose native telemetry panel test IDs.');
+includes(sources.powerWidget, 'canDisplayTelemetryValues', 'Power widget should truth-gate telemetry values before display.');
 includes(sources.powerDetail, 'function PowerRefreshControl', 'Power detail should expose a refresh control.');
 includes(sources.powerDetail, 'const refreshGuardRef = useRef(0);', 'Power refresh should guard repeated taps.');
 includes(sources.powerDetail, 'usePowerTelemetryControls', 'Power detail should refresh through the provider boundary controls.');

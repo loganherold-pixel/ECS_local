@@ -5,7 +5,6 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const widgetSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemWidget.tsx'), 'utf8');
 const widgetRenderersSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'), 'utf8');
-const riveAdapterSource = fs.readFileSync(path.join(root, 'lib', 'powerModuleRiveTelemetry.ts'), 'utf8');
 const detailSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemDetail.tsx'), 'utf8');
 
 function includes(source, fragment, message) {
@@ -39,60 +38,70 @@ function notIncludes(source, fragment, message) {
   includes(widgetSource, fragment, `Power detail surfaces should retain semantic flow token ${fragment}`);
 });
 
-includes(
+notIncludes(
   widgetSource,
   "import PowerModuleRiveWidget from './PowerModuleRiveWidget'",
-  'Power card should use the shared reusable Rive module.',
+  'Power card should not import the Rive module while Rive widgets are disabled.',
 );
-includes(
-  riveAdapterSource,
-  'export function adaptPowerTelemetryForRive',
-  'Power Rive module should use a small adapter from normalized ECS telemetry.',
+notIncludes(
+  widgetSource,
+  "import { adaptPowerTelemetryForRive } from '../../lib/powerModuleRiveTelemetry'",
+  'Power card should not adapt telemetry for Rive while Rive widgets are disabled.',
 );
-includes(
-  riveAdapterSource,
-  'const hasFreshTelemetry =',
-  'Power Rive adapter should centralize freshness gating.',
+notIncludes(
+  widgetSource,
+  'function PowerMonitorRiveHero',
+  'Power card should not keep the old Rive hero wrapper.',
+);
+notIncludes(
+  widgetSource,
+  '<PowerModuleRiveWidget',
+  'Power card should not render a Rive widget.',
 );
 includes(
   widgetSource,
-  'hasEcsData={riveTelemetry.hasEcsData}',
-  'Power Rive module should receive adapted ECS data availability.',
+  'function PowerMonitorTelemetryPanel',
+  'Power card should use a native telemetry panel instead of a Rive module.',
 );
 includes(
   widgetSource,
-  'inputWatts={riveTelemetry.inputWatts}',
-  'Power Rive module should receive adapted input watts.',
+  "testID={compact ? 'power-monitor-telemetry-panel-compact' : 'power-monitor-telemetry-panel'}",
+  'Power telemetry panel should be directly testable in compact and full widgets.',
 );
 includes(
   widgetSource,
-  'outputWatts={riveTelemetry.outputWatts}',
-  'Power Rive module should receive adapted output watts.',
+  'RESERVE',
+  'Power telemetry panel should keep reserve visible without Rive.',
 );
 includes(
   widgetSource,
-  "testID={compact ? 'power-monitor-blu-rive-compact' : 'power-monitor-blu-rive'}",
-  'Power Rive module should be directly testable in compact and full widgets.',
+  "label=\"SOLAR\"",
+  'Power telemetry panel should keep solar input visible without Rive.',
+);
+includes(
+  widgetSource,
+  "label=\"OUT\"",
+  'Power telemetry panel should keep power draw visible without Rive.',
 );
 includes(
   widgetSource,
   "height: '100%'",
-  'Power Rive hero should fill the available widget height.',
+  'Power telemetry panel should fill the available widget height.',
 );
 includes(
   widgetSource,
   'minHeight: 86',
-  'Power Rive hero should preserve a compact minimum height.',
+  'Power telemetry panel should preserve a compact minimum height.',
 );
 includes(
   widgetSource,
   "alignSelf: 'stretch'",
-  'Power Rive hero should stretch across the monitor container while the Rive runtime preserves aspect ratio.',
+  'Power telemetry panel should stretch across the monitor container.',
 );
 includes(
   widgetSource,
   "overflow: 'hidden'",
-  'Power Rive hero should clip to the monitor container instead of floating outside it.',
+  'Power telemetry panel should clip to the monitor container instead of floating outside it.',
 );
 notIncludes(
   widgetSource,

@@ -152,7 +152,6 @@ import {
   normalizePowerTelemetrySummary,
   useUnifiedPowerDevices,
 } from './PowerSystemWidget';
-import PowerModuleRiveWidget from './PowerModuleRiveWidget';
 import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap';
 import { PowerSystemDetailView } from './PowerSystemDetail';
 import { useReducedMotion, useStableAnimatedValue } from '../../lib/ecsAnimations';
@@ -4019,9 +4018,6 @@ function AttitudeCommandPanel({
         />
       ) : null}
     >
-      {expanded && isPowerPanel ? (
-        <AttitudeCommandPowerRiveForeground power={powerVisual} expanded={expanded} />
-      ) : null}
       <View style={[
         attitudeCommandS.panelContent,
         expanded && attitudeCommandS.expandedPanelContent,
@@ -8982,52 +8978,6 @@ const attitudeCommandS = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     transform: [{ translateX: -61 }, { translateY: -36 }],
   },
-  powerRiveForegroundLayer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    zIndex: 12,
-    elevation: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  powerRiveForegroundLayerExpanded: {
-    paddingTop: 8,
-    paddingHorizontal: 8,
-    paddingBottom: 20,
-  },
-  powerRiveForegroundBlock: {
-    width: 236,
-    height: 142,
-    minWidth: 184,
-    minHeight: 110,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'visible',
-    transform: [{ translateY: -12 }],
-  },
-  powerRiveForegroundBlockExpanded: {
-    width: '100%',
-    height: '84%',
-    minWidth: 354,
-    minHeight: 213,
-    maxWidth: 660,
-    maxHeight: 396,
-    transform: [{ translateY: -4 }, { scale: 1.5 }],
-  },
-  powerRiveModule: {
-    width: '100%',
-    height: '100%',
-    minWidth: 96,
-    minHeight: 56,
-    alignSelf: 'center',
-  },
-  powerRiveModuleExpanded: {
-    minWidth: 276,
-    minHeight: 165,
-  },
   powerModuleLabel: {
     color: 'rgba(245, 199, 73, 0.72)',
     fontSize: 5.7,
@@ -13601,43 +13551,6 @@ function AttitudeCommandRouteProgressMapVisual({ route }: { route?: CommandRoute
         testID="attitude-command-route-progress-mini-map"
         style={attitudeCommandS.routeProgressMiniMap}
       />
-    </View>
-  );
-}
-
-function AttitudeCommandPowerRiveForeground({
-  power,
-  expanded = false,
-}: {
-  power?: CommandPowerVisualData;
-  expanded?: boolean;
-}) {
-  return (
-    <View
-      pointerEvents="none"
-      style={[
-        attitudeCommandS.powerRiveForegroundLayer,
-        expanded && attitudeCommandS.powerRiveForegroundLayerExpanded,
-      ]}
-    >
-      <View
-        style={[
-          attitudeCommandS.powerRiveForegroundBlock,
-          expanded && attitudeCommandS.powerRiveForegroundBlockExpanded,
-        ]}
-      >
-        <PowerModuleRiveWidget
-          hasEcsData={Boolean(power?.live)}
-          batteryPercent={power?.batteryPercent ?? null}
-          inputWatts={power?.canDisplayTelemetryValues ? power.inputWatts : null}
-          outputWatts={power?.canDisplayTelemetryValues ? power.outputWatts : null}
-          style={[
-            attitudeCommandS.powerRiveModule,
-            expanded && attitudeCommandS.powerRiveModuleExpanded,
-          ]}
-          testID="attitude-command-blu-power-module-rive"
-        />
-      </View>
     </View>
   );
 }

@@ -48,6 +48,10 @@ export interface BluetoothRoutingDecision {
 
 type BluetoothDiscoveryInput = BluetoothDeviceClassificationInput;
 
+const VEEPEAK_RELEASE_VISIBLE_SERVICE_UUIDS = [
+  'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+];
+
 const POWER_BADGE_TO_PROVIDER_ID: Partial<Record<BluetoothProviderBadge, BluProviderId>> = {
   EcoFlow: 'ecoflow',
   Bluetti: 'bluetti',
@@ -66,6 +70,41 @@ function isFluidLevelSensorCategory(category: string | null | undefined): boolea
 
 function isFallbackBluetoothDisplayName(value: string | null | undefined): boolean {
   return /^(unknown device|bluetooth device)(?:\s+[a-z0-9]{4})?$/i.test(String(value ?? '').trim());
+}
+
+function normalizeBluetoothUuid(value: string): string {
+  return value.toLowerCase().replace(/[^a-f0-9]/g, '');
+}
+
+function hasMatchingBluetoothServiceUuid(
+  serviceUUIDs: string[] | undefined,
+  candidates: string[],
+): boolean {
+  if (!serviceUUIDs?.length) return false;
+  const normalizedCandidates = candidates.map(normalizeBluetoothUuid).filter(Boolean);
+  return serviceUUIDs
+    .map((uuid) => normalizeBluetoothUuid(uuid))
+    .filter(Boolean)
+    .some((uuid) => normalizedCandidates.some((candidate) => (
+      uuid === candidate ||
+      uuid.includes(candidate) ||
+      candidate.includes(uuid)
+    )));
+}
+
+function getObdReleaseDisplayName(
+  device: BluetoothDiscoveryInput,
+  presentation: ReturnType<typeof classifyBluetoothDevice>,
+): string {
+  if (
+    isFallbackBluetoothDisplayName(presentation.displayName) &&
+    presentation.brandLabel === 'V Peak / Veepeak OBD2' &&
+    hasMatchingBluetoothServiceUuid(device.serviceUUIDs, VEEPEAK_RELEASE_VISIBLE_SERVICE_UUIDS)
+  ) {
+    return 'Veepeak OBD2 Adapter';
+  }
+
+  return presentation.displayName;
 }
 
 function getFluidSensorProviderId(providerBadge: BluetoothProviderBadge | null): string {
@@ -182,6 +221,7 @@ export function routeBluetoothDevice(
   }
 
   if (presentation.providerBadge === 'OBD') {
+    const displayName = getObdReleaseDisplayName(device, presentation);
     return {
       owner: 'telemetry',
       routeKey: 'telemetry/live',
@@ -197,7 +237,7 @@ export function routeBluetoothDevice(
       deviceCategory: presentation.deviceCategory,
       suggestedPath: '/vehicle-telemetry-settings',
       shouldNavigate: true,
-      displayName: presentation.displayName,
+      displayName,
       secondaryLabel: presentation.secondaryLabel,
     };
   }

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 
 import { TACTICAL } from '../../lib/theme';
 import {
@@ -31,8 +31,6 @@ import type { PowerTelemetrySnapshot } from '../../src/types/telemetry';
 import { useECSPowerTelemetryReadings } from '../../src/telemetry/useECSTelemetry';
 import type { ECSPowerTelemetryDeviceReading } from '../../src/telemetry/ECSTelemetryTypes';
 import type { BluetoothTelemetrySource } from '../../lib/bluetoothLiveTelemetry';
-import PowerModuleRiveWidget from './PowerModuleRiveWidget';
-import { adaptPowerTelemetryForRive } from '../../lib/powerModuleRiveTelemetry';
 
 export interface PowerDeviceReading {
   deviceId: string;
@@ -443,33 +441,117 @@ export function normalizePowerTelemetrySummary(power: ReturnType<typeof useUnifi
   };
 }
 
-function PowerMonitorRiveHero({
+function formatPowerTelemetryWatts(value: number | null, direction: 'input' | 'output'): string {
+  if (value == null || !Number.isFinite(value)) return '--';
+  const rounded = Math.max(0, Math.round(value));
+  return direction === 'input' && rounded > 0 ? `+${rounded}W` : `${rounded}W`;
+}
+
+function formatPowerTelemetryPercent(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '--';
+  return `${Math.max(0, Math.min(100, Math.round(value)))}%`;
+}
+
+function PowerMonitorTelemetryMetric({
+  label,
+  value,
+  color = TACTICAL.text,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+}) {
+  return (
+    <View style={ws.telemetryMetric}>
+      <Text style={ws.telemetryMetricLabel} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text style={[ws.telemetryMetricValue, { color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.66}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function PowerMonitorTelemetryPanel({
   summary,
   compact = false,
 }: {
   summary: PowerTelemetrySummary;
   compact?: boolean;
 }) {
-  const riveTelemetry = adaptPowerTelemetryForRive(summary);
-  const batteryLabel = summary.batteryPercent == null ? 'battery unavailable' : `${Math.round(summary.batteryPercent)} percent battery`;
+  const canDisplayTelemetryValues = summary.canDisplayTelemetryValues;
+  const visibleBatteryPercent = canDisplayTelemetryValues ? summary.batteryPercent : null;
+  const visibleSolarWatts = canDisplayTelemetryValues ? summary.solarWatts : null;
+  const visibleInputWatts = canDisplayTelemetryValues ? summary.inputWatts : null;
+  const visibleOutputWatts = canDisplayTelemetryValues ? summary.outputWatts : null;
+  const runtimeMinutes = canDisplayTelemetryValues ? summary.primaryDevice?.estimatedRuntimeMinutes ?? null : null;
+  const statusLabel = summary.isLive
+    ? 'LIVE POWER'
+    : summary.isStale
+      ? 'LAST KNOWN'
+      : summary.sourceState.isUnavailable
+        ? 'POWER OFFLINE'
+        : summary.sourceLabel.toUpperCase();
+  const batteryLabel = visibleBatteryPercent == null ? 'reserve unavailable' : `${Math.round(visibleBatteryPercent)} percent reserve`;
   const sourceLabel = summary.sourceLabel ? `, ${summary.sourceLabel}` : '';
 
   return (
     <View
       accessible
-      accessibilityRole="image"
-      accessibilityLabel={`Power Monitor module: ${batteryLabel}${sourceLabel}`}
-      style={[ws.riveHero, compact && ws.riveHeroCompact]}
-      testID={compact ? 'power-monitor-rive-hero-compact' : 'power-monitor-rive-hero'}
+      accessibilityRole="text"
+      accessibilityLabel={`Power Monitor telemetry: ${batteryLabel}${sourceLabel}`}
+      style={[ws.telemetryPanel, compact && ws.telemetryPanelCompact]}
+      testID={compact ? 'power-monitor-telemetry-panel-compact' : 'power-monitor-telemetry-panel'}
     >
-      <PowerModuleRiveWidget
-        hasEcsData={riveTelemetry.hasEcsData}
-        batteryPercent={riveTelemetry.batteryPercent}
-        inputWatts={riveTelemetry.inputWatts}
-        outputWatts={riveTelemetry.outputWatts}
-        style={[ws.riveHeroModule, compact && ws.riveHeroModuleCompact]}
-        testID={compact ? 'power-monitor-blu-rive-compact' : 'power-monitor-blu-rive'}
-      />
+      <View style={ws.telemetryHeader}>
+        <View style={ws.telemetryReserveBlock}>
+          <Text style={ws.telemetryLabel} numberOfLines={1}>
+            RESERVE
+          </Text>
+          <Text
+            style={[ws.telemetryReserveValue, { color: getBatteryColor(visibleBatteryPercent) }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.62}
+          >
+            {formatPowerTelemetryPercent(visibleBatteryPercent)}
+          </Text>
+        </View>
+        <View style={ws.telemetryStatusBlock}>
+          <Text style={ws.telemetryStatus} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.68}>
+            {statusLabel}
+          </Text>
+          <Text style={ws.telemetrySource} numberOfLines={1}>
+            {summary.connectedDeviceCount > 0
+              ? `${summary.connectedDeviceCount} source${summary.connectedDeviceCount === 1 ? '' : 's'}`
+              : 'No live source'}
+          </Text>
+        </View>
+      </View>
+
+      <View style={ws.telemetryMetricGrid}>
+        <PowerMonitorTelemetryMetric
+          label="SOLAR"
+          value={formatPowerTelemetryWatts(visibleSolarWatts, 'input')}
+          color={visibleSolarWatts != null && visibleSolarWatts > 0 ? POWER_SOLAR_COLOR : TACTICAL.textMuted}
+        />
+        <PowerMonitorTelemetryMetric
+          label="IN"
+          value={formatPowerTelemetryWatts(visibleInputWatts, 'input')}
+          color={visibleInputWatts != null && visibleInputWatts > 0 ? POWER_CHARGE_IN_COLOR : TACTICAL.textMuted}
+        />
+        <PowerMonitorTelemetryMetric
+          label="OUT"
+          value={formatPowerTelemetryWatts(visibleOutputWatts, 'output')}
+          color={visibleOutputWatts != null && visibleOutputWatts > 0 ? POWER_DRAW_OUT_COLOR : TACTICAL.textMuted}
+        />
+        <PowerMonitorTelemetryMetric
+          label="RUN"
+          value={formatRuntime(runtimeMinutes)}
+          color={runtimeMinutes != null && runtimeMinutes > 0 ? POWER_CHARGE_IN_COLOR : TACTICAL.textMuted}
+        />
+      </View>
     </View>
   );
 }
@@ -505,8 +587,8 @@ export function PowerSystemCompact({ data: _data }: { data?: PowerWidgetContextD
 
   return (
     <WidgetCardShell>
-      <View style={ws.riveShell}>
-        <PowerMonitorRiveHero summary={summary} compact />
+      <View style={ws.telemetryShell}>
+        <PowerMonitorTelemetryPanel summary={summary} compact />
       </View>
     </WidgetCardShell>
   );
@@ -565,8 +647,8 @@ export function PowerSystemCard({ data }: { data?: PowerWidgetContextData }) {
       <WidgetCardShell
         badge={presentation.badge}
       >
-        <View style={ws.riveShell}>
-          <PowerMonitorRiveHero summary={summary} />
+        <View style={ws.telemetryShell}>
+          <PowerMonitorTelemetryPanel summary={summary} />
         </View>
       </WidgetCardShell>
     );
@@ -574,8 +656,8 @@ export function PowerSystemCard({ data }: { data?: PowerWidgetContextData }) {
 
   return (
     <WidgetCardShell>
-      <View style={ws.riveShell}>
-        <PowerMonitorRiveHero summary={summary} />
+      <View style={ws.telemetryShell}>
+        <PowerMonitorTelemetryPanel summary={summary} />
       </View>
     </WidgetCardShell>
   );
@@ -634,7 +716,7 @@ const ws = StyleSheet.create({
   footerStack: {
     gap: 3,
   },
-  riveShell: {
+  telemetryShell: {
     flex: 1,
     minHeight: 0,
     alignItems: 'stretch',
@@ -643,35 +725,113 @@ const ws = StyleSheet.create({
     zIndex: 4,
     elevation: 4,
   },
-  riveHero: {
+  telemetryPanel: {
     flex: 1,
     width: '100%',
     height: '100%',
     minWidth: 0,
     minHeight: 118,
     alignSelf: 'stretch',
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
     overflow: 'hidden',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.24)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    backgroundColor: 'rgba(3,6,8,0.72)',
     zIndex: 8,
     elevation: 8,
   },
-  riveHeroCompact: {
+  telemetryPanelCompact: {
     minWidth: 0,
     minHeight: 86,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
   },
-  riveHeroModule: {
-    width: '100%',
-    height: '100%',
-    minWidth: 0,
-    minHeight: 0,
-    alignSelf: 'stretch',
-    zIndex: 9,
-    elevation: 9,
+  telemetryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 34,
   },
-  riveHeroModuleCompact: {
+  telemetryReserveBlock: {
+    width: 86,
     minWidth: 0,
-    minHeight: 0,
+    justifyContent: 'center',
+  },
+  telemetryLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  telemetryReserveValue: {
+    marginTop: 2,
+    fontSize: 29,
+    lineHeight: 31,
+    fontWeight: '900',
+    fontFamily: 'Courier',
+    letterSpacing: 0,
+  },
+  telemetryStatusBlock: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  telemetryStatus: {
+    maxWidth: '100%',
+    color: TACTICAL.amber,
+    fontSize: 11,
+    lineHeight: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'right',
+  },
+  telemetrySource: {
+    marginTop: 2,
+    maxWidth: '100%',
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '800',
+    letterSpacing: 0,
+    textAlign: 'right',
+  },
+  telemetryMetricGrid: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 5,
+    minHeight: 36,
+  },
+  telemetryMetric: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.13)',
+    paddingHorizontal: 5,
+    paddingVertical: 5,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.24)',
+  },
+  telemetryMetricLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  telemetryMetricValue: {
+    marginTop: 2,
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '900',
+    fontFamily: 'Courier',
+    letterSpacing: 0,
   },
   cardStatusRow: {
     gap: 1,

@@ -3951,10 +3951,6 @@ export default function DispatchCadCommandCenter() {
       {isLandscapeDispatch ? (
         <>
           <View style={styles.landscapeTopRow}>
-            <View style={styles.landscapeSetupRail}>
-              {advisoryLine}
-              {renderLiveStrip(true)}
-            </View>
             <View style={styles.landscapeSummaryDock}>
               {headerStrip}
               <DispatchConvoyCommandPanel
@@ -6211,18 +6207,15 @@ const styles = StyleSheet.create({
     minHeight: 0,
     flexShrink: 0,
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-  },
-  landscapeSetupRail: {
-    flex: 0.86,
-    minWidth: 0,
-    minHeight: 0,
-    gap: 4,
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    marginHorizontal: -8,
+    gap: 0,
   },
   landscapeSummaryDock: {
-    flex: 1.14,
-    minWidth: 270,
+    flex: 1,
+    width: '100%',
+    minWidth: 0,
     minHeight: 0,
     alignSelf: 'stretch',
     gap: 4,
@@ -6242,6 +6235,7 @@ const styles = StyleSheet.create({
     minHeight: 24,
     justifyContent: 'center',
     gap: 0,
+    paddingHorizontal: 2,
   },
   headerCopy: {
     flex: 1,
@@ -6260,7 +6254,7 @@ const styles = StyleSheet.create({
     gap: 4,
     flex: 1,
     flexShrink: 1,
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     flexWrap: 'nowrap',
   },
   headerActionsPrimary: {
@@ -6273,14 +6267,16 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   headerActionsPrimaryLandscape: {
-    justifyContent: 'flex-start',
+    flex: 0,
+    flexGrow: 0,
+    justifyContent: 'center',
     flexWrap: 'nowrap',
     gap: 4,
     flexShrink: 1,
   },
   headerActionsShellLandscape: {
     flexShrink: 0,
-    alignItems: 'flex-end',
+    alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 4,
   },
@@ -6298,13 +6294,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   headerUtilityButtonLandscape: {
-    flex: 1,
+    flex: 0,
+    flexShrink: 1,
     minHeight: 24,
-    minWidth: 0,
-    maxWidth: 110,
+    minWidth: 50,
+    maxWidth: 96,
     gap: 2,
     borderRadius: 6,
-    paddingHorizontal: 5,
+    paddingHorizontal: 4,
   },
   headerConvoyButton: {
     borderColor: `${TACTICAL.amber}55`,
@@ -6387,14 +6384,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   profileButtonLandscape: {
-    flex: 1,
+    flex: 0,
+    flexShrink: 1,
     minHeight: 24,
-    minWidth: 0,
-    maxWidth: 110,
+    minWidth: 58,
+    maxWidth: 96,
     gap: 2,
     borderRadius: 6,
     justifyContent: 'center',
-    paddingHorizontal: 5,
+    paddingHorizontal: 4,
   },
   profileButtonText: {
     color: TACTICAL.text,
@@ -6419,13 +6417,14 @@ const styles = StyleSheet.create({
     borderRadius: 7,
   },
   connectionPillLandscape: {
-    flex: 1,
+    flex: 0,
+    flexShrink: 1,
     gap: 4,
-    minWidth: 0,
-    maxWidth: 110,
+    minWidth: 54,
+    maxWidth: 96,
     minHeight: 24,
     justifyContent: 'center',
-    paddingHorizontal: 5,
+    paddingHorizontal: 4,
     paddingVertical: 4,
     borderRadius: 6,
   },

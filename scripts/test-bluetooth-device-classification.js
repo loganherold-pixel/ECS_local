@@ -276,6 +276,26 @@ assert.strictEqual(
   'unnamed UART-only OBD hints should stay out of the approved release scanner list',
 );
 
+const unnamedVeepeakSpecificBleService = routeBluetoothDevice({
+  id: 'AA:BB:CC:DD:11:22',
+  name: '',
+  isLikelyOBD: true,
+  rssi: -60,
+  serviceUUIDs: ['e7810a71-73ae-499d-8c15-faa9aef0c3f2'],
+});
+assert.strictEqual(unnamedVeepeakSpecificBleService.owner, 'telemetry');
+assert.strictEqual(unnamedVeepeakSpecificBleService.providerId, 'obd2');
+assert.strictEqual(
+  unnamedVeepeakSpecificBleService.displayName,
+  'Veepeak OBD2 Adapter',
+  'Veepeak-specific BLE service evidence should receive a release-visible adapter label when the platform omits the name',
+);
+assert.strictEqual(
+  isReleaseScannerBluetoothRoute(unnamedVeepeakSpecificBleService),
+  true,
+  'unnamed Veepeak-specific BLE advertisements should remain visible in approved scanner results',
+);
+
 const propaneByName = classifyBluetoothDevice({
   id: 'propane-1',
   name: 'Mopeka Pro Check Propane',
@@ -296,6 +316,30 @@ assert.strictEqual(propaneRoute.providerId, 'propane_monitor');
 assert.strictEqual(propaneRoute.deviceCategory, 'propane_monitor');
 assert.strictEqual(propaneRoute.supportLabel, 'Linkable Sensor');
 assert.strictEqual(isReleaseScannerBluetoothRoute(propaneRoute), true);
+
+for (const [id, name] of [
+  ['mopeka-local-name-route', 'Mopeka'],
+  ['mopeka-pro-local-name-route', 'Mopeka Pro Sensor'],
+]) {
+  const route = routeBluetoothDevice({
+    id,
+    name,
+    isLikelyOBD: false,
+    rssi: -58,
+  });
+  assert.strictEqual(
+    route.owner,
+    'sensor',
+    `${name} should route to the tank sensor domain from its local BLE name`,
+  );
+  assert.strictEqual(route.providerId, 'propane_monitor');
+  assert.strictEqual(route.deviceCategory, 'propane_monitor');
+  assert.strictEqual(
+    isReleaseScannerBluetoothRoute(route),
+    true,
+    `${name} should remain visible in approved scanner results instead of being hidden as generic Bluetooth`,
+  );
+}
 
 const mopekaProManufacturerData = Buffer.from([
   0x59, 0x00,

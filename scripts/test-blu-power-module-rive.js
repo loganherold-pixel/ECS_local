@@ -118,26 +118,24 @@ assert(
 );
 
 assert(
-  powerWidgetSource.includes("import PowerModuleRiveWidget from './PowerModuleRiveWidget'") &&
-    powerWidgetSource.includes("import { adaptPowerTelemetryForRive } from '../../lib/powerModuleRiveTelemetry'") &&
-    powerWidgetSource.includes('function PowerMonitorRiveHero') &&
-    powerWidgetSource.includes('<PowerModuleRiveWidget') &&
-    powerWidgetSource.includes('const riveTelemetry = adaptPowerTelemetryForRive(summary)') &&
-    powerWidgetSource.includes('hasEcsData={riveTelemetry.hasEcsData}') &&
-    powerWidgetSource.includes('batteryPercent={riveTelemetry.batteryPercent}') &&
-    powerWidgetSource.includes('inputWatts={riveTelemetry.inputWatts}') &&
-    powerWidgetSource.includes('outputWatts={riveTelemetry.outputWatts}') &&
-    powerWidgetSource.includes("testID={compact ? 'power-monitor-blu-rive-compact' : 'power-monitor-blu-rive'}") &&
+  !powerWidgetSource.includes("import PowerModuleRiveWidget from './PowerModuleRiveWidget'") &&
+    !powerWidgetSource.includes("import { adaptPowerTelemetryForRive } from '../../lib/powerModuleRiveTelemetry'") &&
+    !powerWidgetSource.includes('function PowerMonitorRiveHero') &&
+    !powerWidgetSource.includes('<PowerModuleRiveWidget') &&
+    !powerWidgetSource.includes('const riveTelemetry = adaptPowerTelemetryForRive(summary)') &&
+    !powerWidgetSource.includes('power-monitor-blu-rive') &&
+    powerWidgetSource.includes('function PowerMonitorTelemetryPanel') &&
+    powerWidgetSource.includes("testID={compact ? 'power-monitor-telemetry-panel-compact' : 'power-monitor-telemetry-panel'}") &&
+    powerWidgetSource.includes('RESERVE') &&
+    powerWidgetSource.includes("label=\"SOLAR\"") &&
+    powerWidgetSource.includes("label=\"OUT\"") &&
     powerWidgetSource.includes("alignItems: 'stretch'") &&
     powerWidgetSource.includes("height: '100%'") &&
     powerWidgetSource.includes("alignSelf: 'stretch'") &&
     powerWidgetSource.includes("overflow: 'hidden'") &&
-    powerWidgetSource.includes('minHeight: 118') &&
     powerWidgetSource.includes('minHeight: 86') &&
-    powerWidgetSource.includes('minHeight: 0') &&
-    powerWidgetSource.includes('zIndex: 8') &&
-    powerWidgetSource.includes('elevation: 8'),
-  'Standalone Power Monitor widget must render the BLU Rive module as a centered, proportional container-filling foreground asset.',
+    powerWidgetSource.includes('minHeight: 0'),
+  'Standalone Power Monitor widget must keep the BLU Rive module dormant and render a native ECS telemetry panel instead.',
 );
 
 assert(
@@ -153,26 +151,18 @@ assert(
 );
 
 assert(
-  widgetRenderers.includes("import PowerModuleRiveWidget from './PowerModuleRiveWidget'") &&
-    widgetRenderers.includes('<PowerModuleRiveWidget') &&
-    widgetRenderers.includes('hasEcsData={Boolean(power?.live)}') &&
-    widgetRenderers.includes('AttitudeCommandPowerRiveForeground') &&
-    widgetRenderers.includes('attitudeCommandS.powerRiveForegroundLayer') &&
-    widgetRenderers.includes('attitudeCommandS.powerRiveForegroundBlock') &&
-    widgetRenderers.includes('attitudeCommandS.powerRiveModule') &&
-    widgetRenderers.includes('width: 236') &&
-    widgetRenderers.includes('height: 142') &&
-    widgetRenderers.includes('transform: [{ translateY: -12 }]') &&
-    widgetRenderers.includes('borderTopWidth: 0') &&
+  !widgetRenderers.includes("import PowerModuleRiveWidget from './PowerModuleRiveWidget'") &&
+    !widgetRenderers.includes('<PowerModuleRiveWidget') &&
+    !widgetRenderers.includes('AttitudeCommandPowerRiveForeground') &&
+    !widgetRenderers.includes('attitudeCommandS.powerRiveForegroundLayer') &&
+    !widgetRenderers.includes('attitudeCommandS.powerRiveForegroundBlock') &&
+    !widgetRenderers.includes('attitudeCommandS.powerRiveModule') &&
+    widgetRenderers.includes('POWER_MANAGEMENT_BACKGROUND') &&
+    widgetRenderers.includes('powerManagementBackground') &&
+    widgetRenderers.includes('powerManagementBackgroundScrim') &&
     powerCommandPanelBlock.includes('powerCompactReadout') &&
-    !powerCommandPanelBlock.includes('<AttitudeCommandPowerRiveForeground') &&
-    widgetRenderers.includes('zIndex: 12') &&
-    widgetRenderers.includes('elevation: 12') &&
-    widgetRenderers.includes("justifyContent: 'center'") &&
-    widgetRenderers.includes("alignSelf: 'center'") &&
-    widgetRenderers.includes('minWidth: 96') &&
-    widgetRenderers.includes('minHeight: 56'),
-  'Attitude Command Power Monitor must keep the BLU Rive module available while using the compact text-only readout in command cards.',
+    !powerCommandPanelBlock.includes('<AttitudeCommandPowerRiveForeground'),
+  'Attitude Command Power Monitor must keep BLU Rive dormant and use the compact ECS text readout in command cards.',
 );
 
 assert(

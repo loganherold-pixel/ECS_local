@@ -10,7 +10,7 @@ const mapSource = fs.readFileSync(path.join(root, 'components', 'convoy', 'Convo
 const dockSource = fs.readFileSync(path.join(root, 'components', 'CommandDock.tsx'), 'utf8');
 const landscapeTopRowStyle = commandCenterSource.slice(
   commandCenterSource.indexOf('landscapeTopRow:'),
-  commandCenterSource.indexOf('landscapeSetupRail:'),
+  commandCenterSource.indexOf('landscapeSummaryDock:'),
 );
 const landscapeSummaryDockStyle = commandCenterSource.slice(
   commandCenterSource.indexOf('landscapeSummaryDock:'),
@@ -71,20 +71,21 @@ assert.ok(
   commandCenterSource.includes('const isLandscapeDispatch = windowWidth > windowHeight') &&
     !commandCenterSource.includes('styles.landscapeTitleBar') &&
     commandCenterSource.includes('styles.landscapeTopRow') &&
-    commandCenterSource.includes('styles.landscapeSetupRail') &&
+    !commandCenterSource.includes('styles.landscapeSetupRail') &&
     commandCenterSource.includes('styles.feedPanelLandscapeMap'),
-  'DispatchCadCommandCenter should split landscape into a compact top row and larger lower map panel without the redundant Dispatch title bar.',
+  'DispatchCadCommandCenter should use a single full-width landscape command row and larger lower map panel without the redundant Dispatch title bar.',
 );
 
 assert.ok(
   !commandCenterSource.includes('landscapeTitleCenter') &&
     !commandCenterSource.includes('<Text style={styles.channelLandscape} numberOfLines={1}>{teamStatusLabel}</Text>') &&
-    commandCenterSource.includes('{advisoryLine}') &&
+    !commandCenterSource.includes('{renderLiveStrip(true)}') &&
+    !commandCenterSource.includes('<View style={styles.landscapeSetupRail}>') &&
     !commandCenterSource.includes('landscapeSetupTopSpacer') &&
     commandCenterSource.includes('{headerStrip}') &&
-    commandCenterSource.includes('marginHorizontal: 2') &&
+    commandCenterSource.includes('marginHorizontal: -8') &&
     commandCenterSource.includes('paddingHorizontal: 2'),
-  'Dispatch landscape should remove the title/spacer lane and align advisory/action lanes with live chips.',
+  'Dispatch landscape should remove the title/spacer/setup lanes and stretch the top command row to the device edges.',
 );
 
 assert.ok(
@@ -102,7 +103,7 @@ assert.ok(
     commandCenterSource.includes("compact && channel.id === 'sync' ? '' : displayActionLabel") &&
     commandCenterSource.includes('feedPanelLandscapeMap') &&
     commandCenterSource.includes('flex: 1'),
-  'Dispatch landscape should place dock reveal beside connection state, suppress the compact Sync footer action, and expand the lower map panel.',
+  'Dispatch landscape should keep dock reveal available from the centered top controls, suppress the compact Sync footer action, and expand the lower map panel.',
 );
 
 assert.ok(
@@ -114,7 +115,7 @@ assert.ok(
     commandCenterSource.includes("profileAccessibilityLabel=\"Open dispatch profile command hub\"") &&
     commandCenterSource.includes('styles.headerActionsPrimaryLandscape') &&
     commandCenterSource.includes('styles.headerActionsShellLandscape'),
-  'Dispatch landscape should place Bluetooth, theme, profile, and lower dock reveal controls in a compact top-right shell cluster.',
+  'Dispatch landscape should place Bluetooth, theme, profile, and lower dock reveal controls in the centered top shell cluster.',
 );
 
 assert.ok(
@@ -123,16 +124,19 @@ assert.ok(
     commandCenterSource.includes('landscapeSummaryDock') &&
     commandCenterSource.includes('styles.landscapeSummaryDock') &&
     commandCenterSource.includes('<View style={styles.landscapeSummaryDock}>') &&
+    !commandCenterSource.includes('<View style={styles.landscapeSetupRail}>') &&
     landscapeTopRowStyle.includes('minHeight: 0') &&
+    landscapeTopRowStyle.includes('marginHorizontal: -8') &&
     !landscapeTopRowStyle.includes('maxHeight: 148') &&
     landscapeSummaryDockStyle.includes("alignSelf: 'stretch'") &&
+    landscapeSummaryDockStyle.includes('width: \'100%\'') &&
     !landscapeSummaryDockStyle.includes('maxHeight: 148') &&
     !landscapeSummaryDockStyle.includes("overflow: 'hidden'") &&
     commandCenterSource.includes('feedPanelLandscapeMap') &&
     commandCenterSource.includes('marginTop: 3') &&
     commandCenterSource.includes("alignSelf: 'stretch'") &&
     commandCenterSource.includes('marginBottom: 0'),
-  'Dispatch landscape summary rail should stretch down to the map surface without clipping its convoy command rows.',
+  'Dispatch landscape Convoy Command summary should span left-to-right device edges without clipping its command rows.',
 );
 
 assert.ok(
@@ -235,10 +239,10 @@ assert.ok(
 
 assert.ok(
   commandCenterSource.includes("justifyContent: 'center'") &&
-    commandCenterSource.includes('maxWidth: 110') &&
+    commandCenterSource.includes('maxWidth: 96') &&
     commandCenterSource.includes('alignSelf: \'stretch\'') &&
     commandCenterSource.includes('textAlign: \'center\''),
-  'Dispatch landscape action controls should be centered with shared sizing and centered labels.',
+  'Dispatch landscape action controls should be centered with compact shared sizing and centered labels.',
 );
 
 console.log('dispatch landscape layout checks passed');

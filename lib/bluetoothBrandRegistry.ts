@@ -479,6 +479,7 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     displayName: 'Mopeka / Propane Level',
     providerBadge: 'Propane',
     nameFragments: [
+      /\bmopeka\b(?!.*\b(?:td\s*(?:40|200)|pro\s*200|pro200|universal|water|fresh|liquid|fluid|top\s*down)\b)/i,
       /\bpropane\b/i,
       /\bbutane\b/i,
       /\blpg\b/i,
@@ -501,6 +502,7 @@ export const BLUETOOTH_BRAND_REGISTRY: BluetoothBrandRegistryEntry[] = [
     displayName: 'Water / Fluid Level Monitor',
     providerBadge: 'Water',
     nameFragments: [
+      /\bmopeka\b.*\b(?:universal|water|fresh|liquid|fluid|td\s*(?:40|200)|pro\s*200|pro200|top\s*down)\b/i,
       /\bsee\s*level\b/i,
       /\bseelevel\b/i,
       /\bgarnet\b/i,

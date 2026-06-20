@@ -45,8 +45,7 @@ function blockBetween(source, startFragment, endFragment) {
   'Monitor during travel:',
   'Assessment completeness:',
   'Provenance / trace:',
-  'Source facts:',
-  'Scoring trace:',
+  'Deterministic ECS ranking. Advisory only.',
   'Advisory only.',
   'What changed since last check?',
   'No comparable previous departure audit available.',
@@ -92,14 +91,10 @@ function blockBetween(source, startFragment, endFragment) {
   'departureDeltaBriefEnabled',
   'buildDepartureDeltaBrief',
   'isDepartureDeltaBriefFeatureEnabled',
-  'weakPointAnalyzerEnabled',
   'scoreExpeditionWeakPoints',
   'buildExpeditionReadinessSnapshotForWeakPoints',
-  'isWeakPointAnalyzerFeatureEnabled',
   'assessment.assessmentCompleteness',
   'assessment.snapshotCoverage.domains',
-  'assessment.sourceFacts.length',
-  'assessment.scoringTrace.length',
 ].forEach((fragment) => {
   assertIncludes(commandBrief, fragment, `Command Brief should consume readiness selector "${fragment}".`);
 });
@@ -261,8 +256,13 @@ assertIncludes(
 );
 assertIncludes(
   commandBrief,
+  '<WeakPointAnalyzerPanel assessment={weakPointAssessment} />',
+  'Command Brief should render the Weak Point Analyzer panel for every packet-ready brief.',
+);
+assertNotIncludes(
+  commandBrief,
   'weakPointAnalyzerEnabled ? <WeakPointAnalyzerPanel assessment={weakPointAssessment} /> : null',
-  'Command Brief should render the Weak Point Analyzer panel only behind the feature flag.',
+  'Command Brief should not hide the Weak Point Analyzer panel behind a feature flag.',
 );
 
 assertNotIncludes(commandBrief, 'AI says', 'Command Brief must not use generic AI labeling.');

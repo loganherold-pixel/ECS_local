@@ -44,7 +44,6 @@ import {
   expeditionReadinessStore,
   buildReadinessVehicleInputFromFleetState,
   isDepartureDeltaBriefFeatureEnabled,
-  isWeakPointAnalyzerFeatureEnabled,
   type DeltaItem,
   type DepartureDeltaBriefPosture,
   type DepartureDeltaBriefResult,
@@ -1179,7 +1178,7 @@ function WeakPointAnalyzerPanel({ assessment }: { assessment: WeakPointAssessmen
         />
         <WeakPointAnalyzerRow
           label="Provenance / trace:"
-          value={`Source facts: ${assessment.sourceFacts.length}. Scoring trace: ${assessment.scoringTrace.length}. Advisory only.`}
+          value="Deterministic ECS ranking. Advisory only."
         />
       </View>
       <View style={styles.weakPointAnalyzerRankList}>
@@ -1618,9 +1617,6 @@ export default function CommandBriefScreen({
     },
     [pushRoute, showToast],
   );
-  const weakPointAnalyzerEnabled = isWeakPointAnalyzerFeatureEnabled({
-    weakPointAnalyzer: readinessState.inputPatch.weakPointAnalyzerFeatureEnabled ?? null,
-  });
   const weakPointSnapshot = useMemo(
     () => buildExpeditionReadinessSnapshotForWeakPoints({
       assessment,
@@ -1662,7 +1658,7 @@ export default function CommandBriefScreen({
       activeVehicle: activeVehicleReadiness,
       activeRouteId: readinessState.activeRouteId ?? routeSession.routeId,
       activeTripId: readinessState.activeTripId,
-      weakPointAssessment: weakPointAnalyzerEnabled ? weakPointAssessment : null,
+      weakPointAssessment,
     };
   }, [
     activeVehicleReadiness,
@@ -1676,7 +1672,6 @@ export default function CommandBriefScreen({
     routeSession.routeSubtitle,
     routeSession.routeTitle,
     routeSession.statusLabel,
-    weakPointAnalyzerEnabled,
     weakPointAssessment,
   ]);
   const handleBriefExport = useCallback(async (action: CommandBriefExportAction) => {
@@ -1833,7 +1828,7 @@ export default function CommandBriefScreen({
           {/* Camp Decision Clock disabled: runtime feature flag keeps continue/divert guidance out of the user-facing section stack. */}
           {campDecisionClockEnabled ? <CampDecisionClockBriefModule decision={campDecisionClock} /> : null}
           {departureDeltaBriefEnabled ? <DepartureDeltaBriefPanel result={departureDeltaBrief} /> : null}
-          {weakPointAnalyzerEnabled ? <WeakPointAnalyzerPanel assessment={weakPointAssessment} /> : null}
+          {hasRoute ? <WeakPointAnalyzerPanel assessment={weakPointAssessment} /> : null}
 
           <View style={[styles.decisionCard, commandBriefFleetSurfaceStyle]}>
             <View style={styles.decisionHeader}>

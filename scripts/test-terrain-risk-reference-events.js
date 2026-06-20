@@ -133,6 +133,14 @@ assert(
   'TerrainRiskSideProfile should place a current GPS/progress marker on the elevation line.',
 );
 assert(
+  sideProfileSource.includes('PanResponder') &&
+    sideProfileSource.includes('function buildElevationProbePoint') &&
+    sideProfileSource.includes('selectedProbePoint') &&
+    sideProfileSource.includes('testID="terrainRiskElevationProbe"') &&
+    sideProfileSource.includes('Elevation probe'),
+  'Expanded TerrainRiskSideProfile should let users drag the route profile and read the live elevation in feet.',
+);
+assert(
   sideProfileSource.includes('left: 24') &&
     sideProfileSource.includes('right: 16') &&
     sideProfileSource.includes('top: 8') &&

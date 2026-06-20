@@ -521,14 +521,14 @@ assert.ok(
   'Power Monitor and Vehicle Profile headers must trail their icons after right-aligned titles.',
 );
 assert.ok(
-  widgetRenderersSource.includes('<AttitudeCommandPowerRiveForeground power={powerVisual} expanded={expanded} />') &&
-    widgetRenderersSource.includes('expanded && attitudeCommandS.powerRiveForegroundLayerExpanded') &&
-    widgetRenderersSource.includes('expanded && attitudeCommandS.powerRiveForegroundBlockExpanded') &&
-    widgetRenderersSource.includes('expanded && attitudeCommandS.powerRiveModuleExpanded') &&
-    widgetRenderersSource.includes('transform: [{ translateY: -4 }, { scale: 1.5 }]') &&
-    widgetRenderersSource.includes('maxWidth: 660') &&
-    widgetRenderersSource.includes('minWidth: 276'),
-  'Expanded Power Monitor must scale the BLU power module at least 50 percent larger with the enlarged container.',
+  !widgetRenderersSource.includes('<AttitudeCommandPowerRiveForeground power={powerVisual} expanded={expanded} />') &&
+    !widgetRenderersSource.includes('powerRiveForegroundLayer') &&
+    !widgetRenderersSource.includes('powerRiveForegroundBlock') &&
+    !widgetRenderersSource.includes('powerRiveModule') &&
+    !widgetRenderersSource.includes('attitude-command-blu-power-module-rive') &&
+    widgetRenderersSource.includes('powerCompactReadout') &&
+    widgetRenderersSource.includes('AttitudeCommandPowerDeviceDetail'),
+  'Expanded Power Monitor must not mount the BLU/Rive power module while Rive widgets are disabled.',
 );
 assert.ok(
   widgetRenderersSource.includes('expanded={expanded}') &&

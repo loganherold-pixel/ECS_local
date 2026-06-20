@@ -75,10 +75,8 @@ assert(widgetRenderersSource.includes('resizeMode="cover"') && widgetRenderersSo
 assert(!widgetRenderersSource.includes('ROUTE GUIDANCE TERRAIN RISK'), 'Terrain Risk widget must not duplicate the Route Terrain Risk label inside the chart.');
 assert(widgetRenderersSource.includes('terrainRiskPreviewActive'), 'Active Terrain Risk preview must let the graph use the full route panel surface.');
 assert(widgetRenderersSource.includes('transparentBackground'), 'Compact Terrain Risk chart must render with a transparent chart background.');
-assert(widgetRenderersSource.includes('headerStatusLabel={null}'), 'Compact Terrain Risk should suppress the top-right widget header label so the chart can breathe.');
-assert(widgetRenderersSource.includes('headerStatusValue={null}'), 'Compact Terrain Risk should suppress the top-right widget header score so the chart can breathe.');
-assert(!widgetRenderersSource.includes("headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}"), 'Compact Terrain Risk data-source label must not overlap the chart.');
-assert(!widgetRenderersSource.includes("headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}"), 'Compact Terrain Risk score must not overlap the chart.');
+assert(widgetRenderersSource.includes("headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}"), 'Route Terrain Risk should keep the data-source label in the top-right header lane.');
+assert(widgetRenderersSource.includes("headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}"), 'Route Terrain Risk should keep the score in the top-right header lane.');
 assert(!widgetRenderersSource.includes('terrainRiskCornerReadoutOverlay'), 'Compact Terrain Risk status readout must not overlay the chart.');
 assert(!widgetRenderersSource.includes('terrainRiskBottomReadoutOverlay'), 'Compact Terrain Risk status readout must not sit over the bottom axis lane.');
 assert(!/commandPanelHeaderStatus[\s\S]{0,160}ROUTE TERRAIN RISK/.test(widgetRenderersSource), 'Compact Terrain Risk header readout should not cover the route profile chart.');
@@ -172,6 +170,11 @@ assert(
 assert(sideProfileSource.includes('completedDistanceMiles?: number | null'), 'Terrain Risk side profile should accept route progress for the live GPS marker.');
 assert(sideProfileSource.includes('buildCurrentRouteMarkerPoint'), 'Terrain Risk side profile should interpolate the current GPS marker on the elevation line.');
 assert(sideProfileSource.includes('Current GPS position'), 'Terrain Risk side profile should label the moving GPS marker for assistive tech.');
+assert(sideProfileSource.includes('PanResponder'), 'Terrain Risk side profile should expose a drag probe for expanded elevation reads.');
+assert(sideProfileSource.includes('function buildElevationProbePoint'), 'Terrain Risk side profile should derive the dragged elevation readout from route data.');
+assert(sideProfileSource.includes('selectedProbePoint'), 'Terrain Risk side profile should track the selected elevation probe point while dragging.');
+assert(sideProfileSource.includes('testID="terrainRiskElevationProbe"'), 'Terrain Risk side profile should render a testable elevation probe overlay.');
+assert(sideProfileSource.includes('Elevation probe'), 'Terrain Risk side profile should label the elevation probe for assistive tech.');
 assert(widgetRenderersSource.includes('completedDistanceMiles={terrainRisk.completedDistanceMiles}'), 'Expanded Terrain Risk preview should pass active route progress into the side profile.');
 assert(!sideProfileSource.includes('ROUTE SIDE PROFILE'), 'Terrain Risk chart should not spend compact dashboard space on a redundant chart title.');
 assert(!commandModuleSource.includes('<Image'), 'Terrain Risk command module must not be a static image.');
