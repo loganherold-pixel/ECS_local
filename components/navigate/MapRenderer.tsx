@@ -326,6 +326,7 @@ export type MapRendererProps = {
   routeColor?: string;
   progressColor?: string;
   routeRenderMode?: RouteRenderMode;
+  showTrailEntryEndpointMarker?: boolean;
   mapStyle?: MapStyleKey;
   mapboxToken: string;
   showUserLocation?: boolean;
@@ -870,6 +871,7 @@ function pickCampsiteMarkerInput(props: MapRendererProps): readonly any[] {
 function normalizeRenderedRouteWaypoints(
   routeCoords: [number, number][],
   waypoints: Waypoint[] = [],
+  options: { showTrailEntryEndpointMarker?: boolean } = {},
 ): WebMapPayload['waypoints'] {
   const rendered: WebMapPayload['waypoints'] = [];
   const seen = new Set<string>();
@@ -890,7 +892,7 @@ function normalizeRenderedRouteWaypoints(
     rendered.push({ id, latitude, longitude, title, ...options });
   };
 
-  if (hasRoute) {
+  if (hasRoute && options.showTrailEntryEndpointMarker) {
     const [startLng, startLat] = startCoord!;
     addWaypoint('route-start', startLat, startLng, 'Trail entry', {
       endpointRole: 'trail_entry',
@@ -1318,7 +1320,9 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
         (Array.isArray(segment.warnings) ? JSON.stringify(segment.warnings) : null),
     })),
     selectedRouteGeometrySegmentIds: (props.selectedRouteGeometrySegmentIds ?? []).map(String),
-    waypoints: normalizeRenderedRouteWaypoints(routeCoords, props.waypoints || []),
+    waypoints: normalizeRenderedRouteWaypoints(routeCoords, props.waypoints || [], {
+      showTrailEntryEndpointMarker: props.showTrailEntryEndpointMarker === true,
+    }),
     bailouts: (props.bailoutMarkers || [])
       .filter((m) => {
         const lat =
@@ -2632,6 +2636,30 @@ function makeMapHtml(
       var ROUTE_BUILDER_FREE_MODE_NOTICE =
         'Build route mode is continuing off network until snapping resumes.';
 
+      function markerClickScreenCoordinate(ev, el) {
+        try {
+          var containerRect = map && map.getContainer ? map.getContainer().getBoundingClientRect() : null;
+          var markerRect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+          var clientX = ev && typeof ev.clientX === 'number'
+            ? ev.clientX
+            : markerRect
+              ? markerRect.left + markerRect.width / 2
+              : null;
+          var clientY = ev && typeof ev.clientY === 'number'
+            ? ev.clientY
+            : markerRect
+              ? markerRect.top + markerRect.height / 2
+              : null;
+          if (!containerRect || typeof clientX !== 'number' || typeof clientY !== 'number') return null;
+          return {
+            x: clientX - containerRect.left,
+            y: clientY - containerRect.top
+          };
+        } catch (e) {
+          return null;
+        }
+      }
+
       function mkMarker(className, lng, lat, clickPayload, rotation) {
         var el = document.createElement('div');
         el.className = className;
@@ -2672,7 +2700,9 @@ function makeMapHtml(
             try {
               if (ev && ev.stopPropagation) ev.stopPropagation();
             } catch (e) {}
-            send('pinTap', clickPayload);
+            send('pinTap', Object.assign({}, clickPayload, {
+              screenCoordinate: markerClickScreenCoordinate(ev, el)
+            }));
           });
         }
 
@@ -6780,6 +6810,7 @@ const MapRenderer = React.memo(function MapRenderer({
   routeColor,
   progressColor,
   routeRenderMode = 'selected',
+  showTrailEntryEndpointMarker = false,
   mapStyle = DEFAULT_MAP_STYLE,
   mapboxToken,
   showUserLocation = false,
@@ -6994,6 +7025,7 @@ const MapRenderer = React.memo(function MapRenderer({
         routeColor,
         progressColor,
         routeRenderMode,
+        showTrailEntryEndpointMarker,
         mapStyle,
         mapboxToken,
         showUserLocation,
@@ -7032,6 +7064,7 @@ const MapRenderer = React.memo(function MapRenderer({
       routeColor,
       progressColor,
       routeRenderMode,
+      showTrailEntryEndpointMarker,
       mapStyle,
       mapboxToken,
       showUserLocation,

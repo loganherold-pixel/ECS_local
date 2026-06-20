@@ -31,6 +31,14 @@ assert(
 );
 
 assert(
+  mapRendererSource.includes('showTrailEntryEndpointMarker?: boolean;') &&
+    mapRendererSource.includes('showTrailEntryEndpointMarker = false') &&
+    mapRendererSource.includes('options: { showTrailEntryEndpointMarker?: boolean } = {}') &&
+    mapRendererSource.includes('if (hasRoute && options.showTrailEntryEndpointMarker)'),
+  'MapRenderer should only synthesize Trail entry when Navigate explicitly marks the route as GPS-to-trailhead approach guidance.',
+);
+
+assert(
   mapRendererSource.includes("endpointRole: 'trail_entry'") &&
     mapRendererSource.includes("endpointRole: 'trail_end'") &&
     mapRendererSource.includes("subtitle: 'The trail begins here.'") &&
@@ -57,6 +65,14 @@ assert(
   navigateSource.includes('if (roadRoutePoints.length > 1) {\n      return explorePreviewWaypoints;\n    }') &&
     !navigateSource.includes('? roadRouteWaypoints\n        : activeRunWaypointList'),
   'Navigate should not pass the road destination waypoint when route geometry already provides the canonical route endpoint marker.',
+);
+
+assert(
+  navigateSource.includes('const showTrailEntryEndpointMarker = useMemo(() =>') &&
+    navigateSource.includes("fullRouteGuidanceModel.startSource === 'road_approach'") &&
+    navigateSource.includes('fullRouteGuidanceModel.transitionRouteIndex != null') &&
+    navigateSource.includes('showTrailEntryEndpointMarker={showTrailEntryEndpointMarker}'),
+  'Navigate should request the translucent Trail entry marker only for GPS-to-trailhead approach guidance.',
 );
 
 console.log('Route endpoint marker dedupe checks passed');

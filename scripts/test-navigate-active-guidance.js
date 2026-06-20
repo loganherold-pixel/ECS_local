@@ -14,6 +14,7 @@ function assert(condition, message) {
 }
 
 const overlay = read('components/navigate/RoadNavigationOverlay.tsx');
+const mapRenderer = read('components/navigate/MapRenderer.tsx');
 assert(!overlay.includes('campsiteStops?: RouteGuidanceCampStop[]'), 'active guidance should no longer accept rendered campsite stop data');
 assert(!overlay.includes('No ideal stops found along this route.'), 'active guidance should not render route-stop empty states');
 assert(!overlay.includes('styles.activeGuidanceCampBlock'), 'camp stops must not render inside the active guidance container');
@@ -132,12 +133,31 @@ assert(
 );
 assert(
   navigate.includes('const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) =>') &&
+    navigate.includes('readActiveGuidanceEndpointScreenCoordinate(pinPayload)') &&
     navigate.includes("endpointRole === 'trail_entry'") &&
     navigate.includes("title: isEntry ? 'Trail entry' : 'Trail end'") &&
     navigate.includes("message: isEntry ? 'The trail begins here.' : 'Route guidance end.'") &&
     navigate.includes('ACTIVE_GUIDANCE_ENDPOINT_HINT_MS') &&
     navigate.includes('Animated.timing(activeGuidanceEndpointHintOpacity'),
   'Tapping route endpoint waypoints should show trail-entry/end copy and then fade it out.',
+);
+assert(
+  navigate.includes('screenCoordinate?: { x: number; y: number } | null;') &&
+    navigate.includes('function readActiveGuidanceEndpointScreenCoordinate') &&
+    navigate.includes('const endpointHintScreenCoordinate = activeGuidanceEndpointHint?.screenCoordinate ?? null') &&
+    navigate.includes('const endpointHintLeft = endpointHintScreenCoordinate') &&
+    navigate.includes('const endpointHintTop = endpointHintScreenCoordinate') &&
+    navigate.includes('styles.activeGuidanceEndpointHintAnchored') &&
+    navigate.includes('styles.activeGuidanceEndpointHintFloating') &&
+    navigate.includes('left: endpointHintLeft') &&
+    navigate.includes('top: endpointHintTop'),
+  'Tapped route endpoint hints should anchor tightly near the clicked trail entry/end marker when screen coordinates are available.',
+);
+assert(
+  mapRenderer.includes('screenCoordinate: markerClickScreenCoordinate(ev, el)') &&
+    mapRenderer.includes('function markerClickScreenCoordinate') &&
+    mapRenderer.includes('map.getContainer().getBoundingClientRect()'),
+  'MapRenderer should include marker click screen coordinates for polished endpoint hint placement.',
 );
 assert(
   navigate.includes("if (pinPayload?.kind === 'waypoint' && (pinPayload?.endpointRole === 'trail_entry' || pinPayload?.endpointRole === 'trail_end'))") &&
@@ -247,7 +267,6 @@ assert(
   'Navigate map retry should clear stale token state and force the MapRenderer surface to remount.',
 );
 
-const mapRenderer = read('components/navigate/MapRenderer.tsx');
 assert(
   mapRenderer.includes("if (payload?.reason === 'bootstrap_timeout')") &&
     mapRenderer.includes("debugLog('[MapRenderer] Provisional bootstrap timeout received; showing initialized map shell'") &&

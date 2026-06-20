@@ -92,6 +92,7 @@ assert.deepStrictEqual(
 const previewRoute = buildWebPayload({
   mapboxToken: 'token',
   routeRenderMode: 'preview',
+  showTrailEntryEndpointMarker: true,
   points: [
     { lat: 39.1, lng: -120.1 },
     { lat: 39.1, lng: -120.1 },
@@ -115,6 +116,44 @@ assert.deepStrictEqual(
   previewRoute.waypoints.map((waypoint) => waypoint.title),
   ['Trail entry', 'Trail end'],
   'Renderer should synthesize trail entry/end route markers and dedupe destination markers at the same coordinate.',
+);
+
+const roadOnlyActiveRoute = buildWebPayload({
+  mapboxToken: 'token',
+  routeRenderMode: 'active',
+  points: [
+    { lat: 39.11, lng: -120.11 },
+    { lat: 39.2, lng: -120.2 },
+  ],
+  userLocation: { lat: 39.11, lng: -120.11 },
+  showUserLocation: true,
+});
+assert.deepStrictEqual(
+  roadOnlyActiveRoute.waypoints.map((waypoint) => waypoint.title),
+  ['Trail end'],
+  'Road-only active guidance should not label the user GPS route start as Trail entry.',
+);
+assert.strictEqual(
+  roadOnlyActiveRoute.waypoints[0]?.endpointRole,
+  'trail_end',
+  'Road-only active guidance should preserve the tappable trail-end marker.',
+);
+
+const approachActiveRoute = buildWebPayload({
+  mapboxToken: 'token',
+  routeRenderMode: 'active',
+  showTrailEntryEndpointMarker: true,
+  points: [
+    { lat: 39.11, lng: -120.11 },
+    { lat: 39.2, lng: -120.2 },
+  ],
+  userLocation: { lat: 39.11, lng: -120.11 },
+  showUserLocation: true,
+});
+assert.deepStrictEqual(
+  approachActiveRoute.waypoints.map((waypoint) => waypoint.title),
+  ['Trail entry', 'Trail end'],
+  'Approach active guidance should keep the translucent trail-entry endpoint for GPS-to-trailhead routing.',
 );
 
 const activeRoute = buildWebPayload({

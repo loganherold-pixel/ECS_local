@@ -26,5 +26,17 @@ assertContains('styles.preflightActionDisabled', 'Modal import button should hav
 assertContains('wasRouteFileRecentlyImported(fileKey)', 'Duplicate selected files should be suppressed at import layer.');
 assertContains('releaseRouteImportPending();', 'Pending state should be released on cancel, success, and failure paths.');
 assertContains('(input as any).oncancel', 'Web picker cancellation should release pending state when supported.');
+assertContains('function importedRouteHasNavigableGeometry(route: ImportedRoute | null | undefined): boolean', 'Navigate should explicitly verify imported route geometry before staging guidance.');
+assertContains('const stagedActiveImportedRoutePreviewRef = useRef<string | null>(null);', 'Navigate should dedupe active imported route preview staging.');
+assertContains('const stageImportedRunPreview = useCallback(async (run: ECSRun) => {', 'Direct Navigate imports should stage imported runs into the preview guidance flow.');
+assertContains('const stageActiveImportedRoutePreview = useCallback(async (route: ImportedRoute) => {', 'Navigate should stage active imported routes into the preview guidance flow.');
+assertContains('if (!importedRouteHasNavigableGeometry(route)) {', 'Waypoint-only imports must not show Start Guidance.');
+assertContains('const linkedRun = route.linked_run_id ? runStore.getById(route.linked_run_id) : null;', 'Active imported route staging should reuse linked runs.');
+assertContains('const run = linkedRun ?? runStore.createFromRoute(route, activeRun?.build_snapshot);', 'Active imported route staging should create a run from route geometry when needed.');
+assertContains('routeStore.attachRun(route.id, run.id);', 'Created imported-route runs should be linked back to the route.');
+assertContains('const previewPayload = buildNavigationPayloadFromRun(run);', 'Active imported route staging should use the existing route preview payload adapter.');
+assertContains('await applyExploreNavigationPayload(previewPayload);', 'Active imported route staging should enter the normal pre-guidance preview flow.');
+assertContains('await stageImportedRunPreview(run);', 'Fresh GPX/KML/GeoJSON imports should show the normal pre-guidance preview after import.');
+assertContains('void stageActiveImportedRoutePreview(activeImportedRoute);', 'Navigate should stage the active imported route when it becomes available.');
 
 console.log('Navigate import dedupe regression checks passed.');

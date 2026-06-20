@@ -3,6 +3,7 @@ import {
   View,
   Text,
   Image,
+  ImageBackground,
   TouchableOpacity,
   StyleSheet,
   TextInput,
@@ -37,6 +38,7 @@ import type { EcsExpedition } from '../lib/expeditionTypes';
 import { hapticMicro } from '../lib/haptics';
 import { TACTICAL, ECS } from '../lib/theme';
 import { ECS_SURFACE } from '../lib/ecsSurfaceTokens';
+import { FIELD_UTILITY_ACTION_BACKGROUNDS } from '../lib/fieldUtilityActionBackgrounds';
 import { ECS_TOAST_COPY } from '../lib/ecsStateCopy';
 import type { IncidentCoordinate } from '../lib/types/incidentRecovery';
 import {
@@ -757,45 +759,60 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
 
   const fieldUtilityActionColumns = [tileItems.slice(0, 3), tileItems.slice(3, 6)];
 
-  const renderQuickActionTile = (item: QuickActionTile) => (
-    <TouchableOpacity
-      key={item.key}
-      style={[
-        styles.tile,
-        styles.quickActionTile,
-        item.key !== 'protocols' && item.key !== 'recovery-protocol' && styles.fleetGoldUtilityTile,
-        item.key === 'protocols' && styles.emergencyProtocolTile,
-        item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
-        item.disabled && styles.tileDisabled,
-      ]}
-      onPress={item.onPress}
-      activeOpacity={0.78}
-      disabled={item.disabled || busy}
-    >
-      <View style={[styles.quickActionTileAccent, { backgroundColor: item.disabled ? ECS.muted : item.color }]} />
-      <View style={[styles.tileIconWrap, fieldUtilityIconSurface(item.color)]}>
-        <Ionicons name={item.icon as any} size={16} color={item.disabled ? ECS.muted : item.color} />
-      </View>
-      <View style={styles.quickActionTileCopy}>
-        <Text
-          style={[styles.tileLabel, styles.quickActionTileLabel, item.disabled && styles.tileLabelDisabled]}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.78}
+  const renderQuickActionTile = (item: QuickActionTile) => {
+    const tileBackground = FIELD_UTILITY_ACTION_BACKGROUNDS[item.key];
+
+    return (
+      <TouchableOpacity
+        key={item.key}
+        style={[
+          styles.tile,
+          styles.quickActionTile,
+          item.key !== 'protocols' && item.key !== 'recovery-protocol' && styles.fleetGoldUtilityTile,
+          item.key === 'protocols' && styles.emergencyProtocolTile,
+          item.key === 'recovery-protocol' && styles.recoveryProtocolTile,
+          item.disabled && styles.tileDisabled,
+        ]}
+        onPress={item.onPress}
+        activeOpacity={0.78}
+        disabled={item.disabled || busy}
+      >
+        <ImageBackground
+          source={tileBackground}
+          resizeMode="cover"
+          style={styles.quickActionTileBackground}
+          imageStyle={styles.quickActionTileBackgroundImage}
         >
-          {item.label}
-        </Text>
-        <Text style={[styles.tileSubLabel, styles.quickActionTileSubLabel, item.disabled && styles.tileSubLabelDisabled]} numberOfLines={1}>
-          {item.subtitle}
-        </Text>
-      </View>
-      <View style={[styles.tileStateBadge, styles.quickActionTileBadge, item.disabled && styles.tileStateBadgeDisabled]}>
-        <Text style={[styles.tileStateText, styles.quickActionTileStateText, item.disabled && styles.tileStateTextDisabled]}>
-          {item.availabilityLabel ?? (item.disabled ? 'UNAVAILABLE' : 'AVAILABLE')}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
+          <View style={styles.quickActionTileScrim} />
+          <View style={styles.quickActionTileVignette} />
+        </ImageBackground>
+        <View style={styles.quickActionTileContent}>
+          <View style={[styles.quickActionTileAccent, { backgroundColor: item.disabled ? ECS.muted : item.color }]} />
+          <View style={[styles.tileIconWrap, fieldUtilityIconSurface(item.color)]}>
+            <Ionicons name={item.icon as any} size={16} color={item.disabled ? ECS.muted : item.color} />
+          </View>
+          <View style={styles.quickActionTileCopy}>
+            <Text
+              style={[styles.tileLabel, styles.quickActionTileLabel, item.disabled && styles.tileLabelDisabled]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.78}
+            >
+              {item.label}
+            </Text>
+            <Text style={[styles.tileSubLabel, styles.quickActionTileSubLabel, item.disabled && styles.tileSubLabelDisabled]} numberOfLines={1}>
+              {item.subtitle}
+            </Text>
+          </View>
+          <View style={[styles.tileStateBadge, styles.quickActionTileBadge, item.disabled && styles.tileStateBadgeDisabled]}>
+            <Text style={[styles.tileStateText, styles.quickActionTileStateText, item.disabled && styles.tileStateTextDisabled]}>
+              {item.availabilityLabel ?? (item.disabled ? 'UNAVAILABLE' : 'AVAILABLE')}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   const renderMainPanel = () => (
     <View style={styles.mainPanel}>
@@ -1505,6 +1522,38 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     gap: 5,
     overflow: 'hidden',
+    position: 'relative',
+  },
+  quickActionTileBackground: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 11,
+    overflow: 'hidden',
+  },
+  quickActionTileBackgroundImage: {
+    borderRadius: 11,
+    opacity: 0.78,
+  },
+  quickActionTileScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  quickActionTileVignette: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: 'rgba(0,0,0,0.16)',
+  },
+  quickActionTileContent: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: '100%',
+    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 5,
+    zIndex: 2,
   },
   quickActionTileAccent: {
     width: 3,
@@ -1524,6 +1573,9 @@ const styles = StyleSheet.create({
     fontSize: 9.6,
     lineHeight: 12,
     letterSpacing: 0.35,
+    textShadowColor: 'rgba(0,0,0,0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   quickActionTileSubLabel: {
     minHeight: 0,
@@ -1531,6 +1583,10 @@ const styles = StyleSheet.create({
     fontSize: 7.4,
     lineHeight: 9,
     letterSpacing: 0.2,
+    color: 'rgba(240,236,224,0.72)',
+    textShadowColor: 'rgba(0,0,0,0.72)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   quickActionTileBadge: {
     marginTop: 0,
@@ -1540,6 +1596,9 @@ const styles = StyleSheet.create({
   quickActionTileStateText: {
     fontSize: 5.8,
     letterSpacing: 0.7,
+    textShadowColor: 'rgba(0,0,0,0.72)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   tileDisabled: {
     opacity: 0.6,
@@ -1632,6 +1691,7 @@ const styles = StyleSheet.create({
   incidentRecoveryUtilityPanel: {
     flex: 1,
     justifyContent: 'space-between',
+    backgroundColor: 'transparent',
   },
   tileStateTextDisabled: {
     color: ECS.muted,

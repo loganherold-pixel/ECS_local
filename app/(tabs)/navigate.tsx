@@ -68,7 +68,7 @@ import {
   type BuildSnapshot,
 } from '../../lib/runStore';
 
-import { routeStore } from '../../lib/routeStore';
+import { routeStore, type ImportedRoute } from '../../lib/routeStore';
 import {
   calculateSavedRouteAssetCounts,
   filterSavedRouteAssets,
@@ -3234,11 +3234,19 @@ type ActiveGuidanceEndpointHint = {
   id: string;
   title: string;
   message: string;
+  screenCoordinate?: { x: number; y: number } | null;
 };
 
 const ACTIVE_GUIDANCE_ENDPOINT_HINT_MS = 3600;
 const ROUTE_BUILDER_DEFAULT_COLOR = '#65F0D4';
 const ACTIVE_GUIDANCE_EXTENSION_COLOR = '#4F9BFF';
+
+function readActiveGuidanceEndpointScreenCoordinate(pinPayload: any): { x: number; y: number } | null {
+  const screenCoordinate = pinPayload?.screenCoordinate;
+  const x = Number(screenCoordinate?.x);
+  const y = Number(screenCoordinate?.y);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
 
 const SAVED_ROUTE_FILTER_OPTIONS: { key: SavedRouteAssetFilter; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -4534,6 +4542,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const currentExpeditionReadiness = useCurrentExpeditionReadiness();
   const [activeReadinessMinimized, setActiveReadinessMinimized] = useState(true);
   const appliedRunNavigationStartRef = useRef<string | null>(null);
+  const stagedActiveImportedRoutePreviewRef = useRef<string | null>(null);
   const currentExploreNavigationPayloadSignature = useMemo(
     () => buildNavigationPayloadSignature(exploreNavigationPayload),
     [exploreNavigationPayload],
@@ -7864,6 +7873,23 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     ],
   );
 
+  const stageImportedRunPreview = useCallback(async (run: ECSRun) => {
+    const previewPayload = buildNavigationPayloadFromRun(run);
+    if (!previewPayload) {
+      showToast('IMPORTED ROUTE PREVIEW UNAVAILABLE');
+      return;
+    }
+
+    await endTrailNavigation();
+    await clearRoadDestination();
+    await applyExploreNavigationPayload(previewPayload);
+  }, [
+    applyExploreNavigationPayload,
+    clearRoadDestination,
+    endTrailNavigation,
+    showToast,
+  ]);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -8493,6 +8519,7 @@ const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) => {
     id: isEntry ? 'trail-entry' : 'trail-end',
     title: isEntry ? 'Trail entry' : 'Trail end',
     message: isEntry ? 'The trail begins here.' : 'Route guidance end.',
+    screenCoordinate: readActiveGuidanceEndpointScreenCoordinate(pinPayload),
   });
 
   activeGuidanceEndpointHintOpacity.stopAnimation();
@@ -10111,7 +10138,7 @@ const markRouteFileImported = useCallback((fileKey: string) => {
 }, []);
 
 const handleImmediateImport = useCallback(
-  (content: string, fileName: string, importFileKey?: string) => {
+  async (content: string, fileName: string, importFileKey?: string) => {
     const fileKey = importFileKey ?? createNavigateImportFileKey(fileName, content);
 
     if (wasRouteFileRecentlyImported(fileKey)) {
@@ -10247,6 +10274,7 @@ const handleImmediateImport = useCallback(
         detail: `${run.title} (${run.stats.distance_miles.toFixed(1)} mi)`,
       });
       closeTopPopup('importRoute');
+      await stageImportedRunPreview(run);
 
       showToast(`RUN CREATED: ${run.title} (${run.stats.distance_miles.toFixed(1)} mi)`);
       markRouteFileImported(fileKey);
@@ -10270,6 +10298,7 @@ const handleImmediateImport = useCallback(
     markRouteFileImported,
     resetSnapshotForm,
     showToast,
+    stageImportedRunPreview,
     validateImportedRouteContent,
     wasRouteFileRecentlyImported,
   ]
@@ -10293,7 +10322,7 @@ const handleImportGPX = useCallback(async () => {
     setImportInfo('Import canceled', 'No file was selected.');
     showToast('IMPORT CANCELED');
   };
-  const importSelectedContent = (content: string, fileName: string) => {
+  const importSelectedContent = async (content: string, fileName: string) => {
     const fileKey = createNavigateImportFileKey(fileName, content);
 
     if (activeImportFileKeyRef.current === fileKey || wasRouteFileRecentlyImported(fileKey)) {
@@ -10344,7 +10373,7 @@ const handleImportGPX = useCallback(async () => {
         }
 
         showToast(`FILE SELECTED: ${fileName}`);
-        importSelectedContent(text, fileName);
+        await importSelectedContent(text, fileName);
         releaseRouteImportPending();
       } catch (readErr) {
         console.error('[Navigate] Failed to read file:', readErr);
@@ -10415,7 +10444,7 @@ try {
       return;
     }
 
-    importSelectedContent(content, fileName);
+    await importSelectedContent(content, fileName);
   } catch (readErr: any) {
     console.error('[Navigate] Failed to read file content:', readErr);
     setImportError('Import failed', 'Could not read file content');
@@ -10569,6 +10598,7 @@ const handleCreateRun = useCallback(() => {
     runStore.setActive(run.id);
     loadRuns();
     resetSnapshotForm();
+    void stageImportedRunPreview(run);
     showToast(`RUN CREATED: ${run.title} (${run.stats.distance_miles.toFixed(1)} mi)`);
   } catch (err: any) {
     console.error('[Navigate] handleCreateRun failed:', err);
@@ -10587,12 +10617,13 @@ const handleCreateRun = useCallback(() => {
   loadRuns,
   resetSnapshotForm,
   showToast,
+  stageImportedRunPreview,
   validateImportedRouteContent,
 ]);
 
   const handleQuickImport = useCallback(() => {
     if (!pendingGpxContent || !pendingGpxName) return;
-    handleImmediateImport(pendingGpxContent, pendingGpxName);
+    void handleImmediateImport(pendingGpxContent, pendingGpxName);
   }, [handleImmediateImport, pendingGpxContent, pendingGpxName]);
 
   const ensureCustomRouteRunLinks = useCallback(() => {
@@ -11035,6 +11066,16 @@ const handleCreateRun = useCallback(() => {
   const hybridStartCanUseTrail =
     fullRouteGuidanceModel.status === 'ready' &&
     fullRouteGuidanceModel.startSource === 'gps_on_trail';
+
+  const showTrailEntryEndpointMarker = useMemo(() => (
+    fullRouteGuidanceModel.status === 'ready' &&
+    fullRouteGuidanceModel.startSource === 'road_approach' &&
+    fullRouteGuidanceModel.transitionRouteIndex != null
+  ), [
+    fullRouteGuidanceModel.startSource,
+    fullRouteGuidanceModel.status,
+    fullRouteGuidanceModel.transitionRouteIndex,
+  ]);
 
   const handleOpenCommandBriefFromNavigate = useCallback(() => {
     hapticMicro();
@@ -15274,6 +15315,40 @@ function getImportedSourceLabel(source: string | null | undefined) {
   return 'IMPORTED';
 }
 
+function importedRouteHasNavigableGeometry(route: ImportedRoute | null | undefined): boolean {
+  const segments = Array.isArray(route?.segments) ? route.segments : [];
+  let firstPoint: { lat: number; lon: number } | null = null;
+  let validPointCount = 0;
+
+  for (const segment of segments) {
+    const points = Array.isArray(segment?.points) ? segment.points : [];
+    for (const point of points) {
+      const lat = Number(point?.lat);
+      const lon = Number(point?.lon);
+      if (
+        !Number.isFinite(lat) ||
+        !Number.isFinite(lon) ||
+        Math.abs(lat) > 90 ||
+        Math.abs(lon) > 180
+      ) {
+        continue;
+      }
+
+      validPointCount += 1;
+      if (!firstPoint) {
+        firstPoint = { lat, lon };
+        continue;
+      }
+
+      if (Math.abs(firstPoint.lat - lat) > 0.000001 || Math.abs(firstPoint.lon - lon) > 0.000001) {
+        return true;
+      }
+    }
+  }
+
+  return validPointCount > 1;
+}
+
 const mapRouteIndicator = useMemo(() => {
   const importedRunSource = getImportedSourceLabel(activeRun?.source);
   const importedRouteSource = getImportedSourceLabel(activeImportedRoute?.source_format);
@@ -17123,6 +17198,76 @@ const confirmLocalRoutePreviewCanReplaceActiveGuidance = useCallback(
   [],
 );
 
+const stageActiveImportedRoutePreview = useCallback(async (route: ImportedRoute) => {
+  if (route.route_category === 'custom' || route.source_format === 'custom') return;
+  if (stagedActiveImportedRoutePreviewRef.current === route.id) return;
+
+  stagedActiveImportedRoutePreviewRef.current = route.id;
+  if (!importedRouteHasNavigableGeometry(route)) {
+    showToast('IMPORTED ROUTE HAS NO NAVIGABLE GEOMETRY');
+    return;
+  }
+
+  const canReplaceActiveGuidance = await confirmLocalRoutePreviewCanReplaceActiveGuidance(
+    route.name,
+    route.id,
+  );
+  if (!canReplaceActiveGuidance) return;
+
+  const linkedRun = route.linked_run_id ? runStore.getById(route.linked_run_id) : null;
+  const run = linkedRun ?? runStore.createFromRoute(route, activeRun?.build_snapshot);
+  if (!linkedRun) {
+    routeStore.attachRun(route.id, run.id);
+  }
+
+  if (!Array.isArray(run.points) || run.points.length < 2) {
+    showToast('IMPORTED ROUTE PREVIEW UNAVAILABLE');
+    return;
+  }
+
+  routeBuilderStagedRunIdRef.current = null;
+  routeBuilderStagedRouteIdRef.current = null;
+  runStore.setActive(run.id);
+  loadRuns();
+  resetBuildRouteDraft({ clearDesignContext: true });
+  await endTrailNavigation();
+  await clearRoadDestination();
+
+  const previewPayload = buildNavigationPayloadFromRun(run);
+  if (!previewPayload) {
+    showToast('IMPORTED ROUTE PREVIEW UNAVAILABLE');
+    return;
+  }
+
+  await applyExploreNavigationPayload(previewPayload);
+  showToast(`IMPORTED ROUTE READY: ${route.name}`);
+}, [
+  activeRun?.build_snapshot,
+  applyExploreNavigationPayload,
+  clearRoadDestination,
+  confirmLocalRoutePreviewCanReplaceActiveGuidance,
+  endTrailNavigation,
+  loadRuns,
+  resetBuildRouteDraft,
+  showToast,
+]);
+
+useEffect(() => {
+  if (
+    !activeImportedRoute ||
+    activeImportedRoute.route_category === 'custom' ||
+    activeImportedRoute.source_format === 'custom'
+  ) {
+    stagedActiveImportedRoutePreviewRef.current = null;
+    return;
+  }
+
+  void stageActiveImportedRoutePreview(activeImportedRoute);
+}, [
+  activeImportedRoute,
+  stageActiveImportedRoutePreview,
+]);
+
 const stageSavedRouteRun = useCallback(async (asset: SavedRouteAsset, actionLabel: string) => {
   const canReplaceActiveGuidance = await confirmLocalRoutePreviewCanReplaceActiveGuidance(
     asset.title,
@@ -18687,6 +18832,28 @@ const stableMapSurface = useMemo(() => {
     </View>
   ) : null;
 
+  const endpointHintScreenCoordinate = activeGuidanceEndpointHint?.screenCoordinate ?? null;
+  const endpointHintWidth = adaptive.isExpanded ? 128 : 116;
+  const endpointHintHeight = 36;
+  const endpointHintLeft = endpointHintScreenCoordinate
+    ? Math.max(
+        OVERLAY_EDGE,
+        Math.min(
+          endpointHintScreenCoordinate.x - endpointHintWidth / 2,
+          adaptive.windowWidth - OVERLAY_EDGE - endpointHintWidth,
+        ),
+      )
+    : adaptive.isExpanded ? Math.max(OVERLAY_EDGE, 120) : OVERLAY_EDGE;
+  const endpointHintTop = endpointHintScreenCoordinate
+    ? Math.max(
+        PAGE_FRAME_TOP_GAP,
+        Math.min(
+          endpointHintScreenCoordinate.y - endpointHintHeight - 12,
+          adaptive.windowHeight - LOWER_DOCK_EXCLUSION - endpointHintHeight - PAGE_FRAME_BOTTOM_GAP,
+        ),
+      )
+    : activeGuidanceToastTopOffset;
+
   return (
     <View style={{ flex: 1 }}>
       <MapRenderer
@@ -18698,6 +18865,7 @@ const stableMapSurface = useMemo(() => {
         routeColor={displayedRouteColor}
         progressColor={displayedRouteProgressColor}
         routeRenderMode={displayedRouteRenderMode}
+        showTrailEntryEndpointMarker={showTrailEntryEndpointMarker}
         mapStyle={mapStyle}
         mapboxToken={mapToken || ''}
         showUserLocation={!!(mapDisplayUserLocation ?? safeUserLocation)}
@@ -19162,10 +19330,16 @@ const stableMapSurface = useMemo(() => {
           pointerEvents="none"
           style={[
             styles.activeGuidanceEndpointHint,
+            endpointHintScreenCoordinate
+              ? styles.activeGuidanceEndpointHintAnchored
+              : styles.activeGuidanceEndpointHintFloating,
             {
-              top: activeGuidanceToastTopOffset,
-              left: adaptive.isExpanded ? Math.max(OVERLAY_EDGE, 120) : OVERLAY_EDGE,
-              right: adaptive.isExpanded ? Math.max(OVERLAY_EDGE, 120) : OVERLAY_EDGE,
+              top: endpointHintTop,
+              left: endpointHintLeft,
+              width: endpointHintScreenCoordinate ? endpointHintWidth : undefined,
+              right: endpointHintScreenCoordinate
+                ? undefined
+                : adaptive.isExpanded ? Math.max(OVERLAY_EDGE, 120) : OVERLAY_EDGE,
               opacity: activeGuidanceEndpointHintOpacity,
             },
           ]}
@@ -19946,6 +20120,7 @@ const stableMapSurface = useMemo(() => {
   handleRoadOverlayToggleSteps,
   handleRoadOverlaySelectSuggestion,
   activeGuidanceLandscapeWidth,
+  showTrailEntryEndpointMarker,
   navigateLandscapeExpanded,
   handleRoadOverlayStartNavigation,
   handleRoadOverlayEndNavigation,
@@ -19996,7 +20171,10 @@ const stableMapSurface = useMemo(() => {
   canUseCommunityCampsiteLayers,
   adaptive.isExpanded,
   OVERLAY_EDGE,
+  PAGE_FRAME_BOTTOM_GAP,
+  PAGE_FRAME_TOP_GAP,
   DESTINATION_SEARCH_HORIZONTAL_INSET,
+  adaptive.windowHeight,
   adaptive.windowWidth,
   campsiteDetailTopOffset,
   campLayerDetailBottomOffset,
@@ -24147,35 +24325,49 @@ routeIndicatorStateText: {
 
 activeGuidanceEndpointHint: {
   position: 'absolute',
+  minHeight: 34,
+  paddingHorizontal: 9,
+  paddingVertical: 6,
+  borderRadius: 10,
+  backgroundColor: 'rgba(10,14,18,0.88)',
+  borderWidth: 1,
+  borderColor: 'rgba(242,194,77,0.34)',
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.24,
+  shadowRadius: 10,
+  elevation: 14,
+  zIndex: 86,
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 1,
+},
+
+activeGuidanceEndpointHintAnchored: {
+  width: 116,
+  transform: [{ translateY: -2 }],
+},
+
+activeGuidanceEndpointHintFloating: {
   minHeight: 42,
   paddingHorizontal: 12,
   paddingVertical: 8,
   borderRadius: 12,
   backgroundColor: 'rgba(10,14,18,0.92)',
-  borderWidth: 1,
-  borderColor: 'rgba(242,194,77,0.34)',
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 5 },
-  shadowOpacity: 0.28,
-  shadowRadius: 12,
-  elevation: 14,
-  zIndex: 86,
-  alignItems: 'center',
-  justifyContent: 'center',
   gap: 2,
 },
 
 activeGuidanceEndpointHintTitle: {
   color: TACTICAL.amber,
-  fontSize: 9,
+  fontSize: 8,
   fontWeight: '900',
-  letterSpacing: 1.1,
+  letterSpacing: 0.8,
   textTransform: 'uppercase',
 },
 
 activeGuidanceEndpointHintMessage: {
   color: TACTICAL.text,
-  fontSize: 11,
+  fontSize: 9,
   fontWeight: '800',
   letterSpacing: 0.2,
 },

@@ -11,6 +11,7 @@ const emergencyDataSource = fs.readFileSync(path.join(root, 'components', 'emerg
 const recoveryDataSource = fs.readFileSync(path.join(root, 'components', 'emergency', 'RecoveryProtocolData.ts'), 'utf8');
 const recoveryDetailSource = fs.readFileSync(path.join(root, 'components', 'emergency', 'RecoveryProtocolDetail.tsx'), 'utf8');
 const fieldUseDetailSource = fs.readFileSync(path.join(root, 'components', 'emergency', 'FieldUseProtocolDetail.tsx'), 'utf8');
+const fieldUtilityBackgroundsSource = fs.readFileSync(path.join(root, 'lib', 'fieldUtilityActionBackgrounds.ts'), 'utf8');
 
 function normalize(source) {
   return source.replace(/\r\n/g, '\n');
@@ -565,6 +566,78 @@ assertIncludes(
   styleBlock(quickActionsSource, 'quickActionTile'),
   'flex: 1',
   'Each Available Actions tile should share equal column height.',
+);
+assertIncludes(
+  quickActionsSource,
+  "import { FIELD_UTILITY_ACTION_BACKGROUNDS } from '../lib/fieldUtilityActionBackgrounds';",
+  'Field Utilities should load bundled action background images through a dedicated asset map.',
+);
+[
+  "note: require('../assets/field-utilities/quick-note.png')",
+  "comms: require('../assets/field-utilities/comms.png')",
+  "'recovery-protocol': require('../assets/field-utilities/recovery-protocol.png')",
+  "'permits-access': require('../assets/field-utilities/permits-access.png')",
+  "'trip-summaries': require('../assets/field-utilities/trip-summaries.png')",
+  "protocols: require('../assets/field-utilities/emergency-protocol.png')",
+].forEach((fragment) => {
+  assertIncludes(
+    fieldUtilityBackgroundsSource,
+    fragment,
+    `Available Actions should define a bundled background image for ${fragment}.`,
+  );
+});
+[
+  'quick-note.png',
+  'comms.png',
+  'recovery-protocol.png',
+  'permits-access.png',
+  'trip-summaries.png',
+  'emergency-protocol.png',
+].forEach((assetName) => {
+  assert.ok(
+    fs.existsSync(path.join(root, 'assets', 'field-utilities', assetName)),
+    `Available Actions should bundle ${assetName} for offline Field Utilities imagery.`,
+  );
+});
+assertIncludes(
+  quickActionsSource,
+  "const tileBackground = FIELD_UTILITY_ACTION_BACKGROUNDS[item.key];",
+  'Available Actions should resolve each tile background from the dedicated asset map.',
+);
+assertIncludes(
+  quickActionsSource,
+  '<ImageBackground',
+  'Available Actions should render complete background images inside each tile.',
+);
+assertIncludes(
+  quickActionsSource,
+  'styles.quickActionTileBackground',
+  'Available Actions should keep the image background constrained to the tile bounds.',
+);
+assertIncludes(
+  quickActionsSource,
+  'styles.quickActionTileScrim',
+  'Available Actions should keep a dark readability scrim above action imagery.',
+);
+assertIncludes(
+  quickActionsSource,
+  'styles.quickActionTileVignette',
+  'Available Actions should add a vignette so labels and badges remain legible over imagery.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'quickActionTileContent'),
+  'zIndex: 2',
+  'Available Actions tile text and controls should sit above image overlays.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'quickActionTileScrim'),
+  "backgroundColor: 'rgba(0,0,0,0.55)'",
+  'Available Actions image scrim should be strong enough to avoid washed-out text.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'incidentRecoveryUtilityPanel'),
+  "backgroundColor: 'transparent'",
+  'Field Utilities Incident & Recovery panel should be transparent inside the long-press popup.',
 );
 assertIncludes(
   quickActionsSource,
