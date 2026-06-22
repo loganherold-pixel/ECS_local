@@ -92,6 +92,21 @@ assert(
   'Navigate route profile scrubber should use vertical drag position for the compact rail control.',
 );
 assert(
+  navigateTab.includes('routeProfileFocusPayload') &&
+    navigateTab.includes("routeProfileAvailable && routeLifecycleState.phase === 'navigating'") &&
+    navigateTab.includes('elevationFeet: routeProfileFocus.point.elevationFeet') &&
+    navigateTab.includes('label: `${Math.round(routeProfileFocus.point.elevationFeet).toLocaleString()} ft`') &&
+    navigateTab.includes('routeProfileFocus={routeProfileFocusPayload}'),
+  'Navigate route profile scrubber should send elevation, distance, and label metadata to the active map focus marker.',
+);
+assert(
+  navigateTab.includes('testID="navigateRouteProfileElevationScrubber"') &&
+    navigateTab.includes('testID="navigateRouteProfileElevationFeet"') &&
+    navigateTab.includes('ACTIVE GUIDANCE') &&
+    navigateTab.includes('{routeProfileFocus ? `${Math.round(routeProfileFocus.point.elevationFeet).toLocaleString()}FT` : \'--\'}'),
+  'Navigate route profile scrubber should expose a polished active-guidance elevation rail with feet feedback.',
+);
+assert(
   navigateTab.includes('height: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%`') &&
     navigateTab.includes('bottom: `${Math.max(0, Math.min(1, routeProfileScrubRatio)) * 100}%`'),
   'Navigate route profile scrubber should render a vertical progress fill and thumb.',
@@ -99,6 +114,25 @@ assert(
 assert(
   !navigateTab.includes('<View style={[styles.navigateRouteProfileScrubber, { left: OVERLAY_EDGE, right: OVERLAY_EDGE }]}>'),
   'Navigate route profile scrubber should not render as a full-width bottom overlay.',
+);
+
+const mapRenderer = fs
+  .readFileSync(path.join(root, 'components', 'navigate', 'MapRenderer.tsx'), 'utf8')
+  .replace(/\r\n/g, '\n');
+
+assert(
+  mapRenderer.includes('type RouteProfileFocusPayload') &&
+    mapRenderer.includes('routeProfileFocus?: RouteProfileFocusPayload | null') &&
+    mapRenderer.includes('routeProfileFocus: props.routeProfileFocus') &&
+    mapRenderer.includes('updateRouteProfileFocus(payload.routeProfileFocus || null)'),
+  'MapRenderer should accept a route profile focus payload instead of coordinate-only focus state.',
+);
+assert(
+  mapRenderer.includes("'route-profile-focus-label-layer'") &&
+    mapRenderer.includes("'text-field': ['coalesce', ['get', 'label'], 'Elevation']") &&
+    mapRenderer.includes("['get', 'bearing']") &&
+    mapRenderer.includes('#FF4D4D'),
+  'MapRenderer should render a red active guidance focus arrow and elevation label for scrubbed terrain segments.',
 );
 
 console.log('Navigate route profile scrubber checks passed.');

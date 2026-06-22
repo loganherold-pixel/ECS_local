@@ -79,7 +79,7 @@ includes(navigate, 'handleLongPressInfo', 'Long-press menu should open point inf
 includes(navigate, 'handleLongPressNavigateHere', 'Long-press menu should expose Navigate Here.');
 includes(navigate, 'routeBuilderMode="anchor_trace"', 'Navigate should put MapRenderer in anchor-trace mode.');
 includes(navigate, 'routeBuilderAnchors={routeBuilderDraft.anchors}', 'Navigate should render route builder anchors on the map.');
-includes(navigate, 'routeProfileFocusCoordinate={routeProfileFocus?.coordinate ?? null}', 'Navigate should focus the map from the route profile scrubber.');
+includes(navigate, 'routeProfileFocus={routeProfileFocusPayload}', 'Navigate should focus the map from the route profile scrubber.');
 includes(navigate, 'START NEEDS GPS', 'Start should be disabled with clear copy when GPS is unavailable.');
 includes(navigate, 'SAVE ROUTE', 'Builder save should open an explicit save route flow.');
 includes(navigate, 'NOTE', 'Builder save should include a note field.');
@@ -95,7 +95,7 @@ excludes(navigate, "showToast('NO LOADED TRAIL GEOMETRY BETWEEN POINTS')", 'Rout
 
 includes(mapRenderer, "routeBuilderMode?: 'freehand' | 'anchor_trace'", 'MapRenderer should expose an explicit route builder mode.');
 includes(mapRenderer, 'routeBuilderAnchors?: RouteBuilderAnchorMarker[]', 'MapRenderer should accept anchor markers.');
-includes(mapRenderer, 'routeProfileFocusCoordinate?: LatLng | null', 'MapRenderer should accept route profile focus coordinates.');
+includes(mapRenderer, 'routeProfileFocus?: RouteProfileFocusPayload | null', 'MapRenderer should accept route profile focus metadata.');
 includes(mapRenderer, 'routeableFeature: buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat)', 'Long-press payload should include routeable feature context.');
 includes(mapRenderer, 'coordinates: routeablePayloadLineForFeatureAtPoint', 'Long-press and route-builder taps should include compact routeable feature geometry.');
 includes(mapRenderer, 'buildRenderedRouteableLongPressPayloadAtPoint', 'Long-press should resolve visible rendered roads/trails when ECS overlay geometry is not present.');

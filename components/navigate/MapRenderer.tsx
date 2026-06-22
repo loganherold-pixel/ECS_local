@@ -103,6 +103,16 @@ type LatLng = {
   lng?: number;
 };
 
+type RouteProfileFocusPayload = {
+  coordinate?: LatLng | null;
+  latitude?: number;
+  longitude?: number;
+  elevationFeet?: number | null;
+  distanceMiles?: number | null;
+  riskLevel?: string | null;
+  label?: string | null;
+};
+
 type RoutePoint = {
   latitude?: number;
   longitude?: number;
@@ -390,7 +400,7 @@ export type MapRendererProps = {
   routeBuilderAnchors?: RouteBuilderAnchorMarker[];
   selectedRouteGeometrySegmentIds?: string[];
   routeBuilderColor?: string;
-  routeProfileFocusCoordinate?: LatLng | null;
+  routeProfileFocus?: RouteProfileFocusPayload | null;
   onRouteBuilderUpdate?: (payload: RouteBuilderUpdatePayload) => void;
   onRouteBuilderGestureStateChange?: (payload: {
     isDrawing: boolean;
@@ -581,7 +591,15 @@ type WebMapPayload = {
     provisional?: boolean;
   }[];
   routeBuilderAnchors: RouteBuilderAnchorMarker[];
-  routeProfileFocusCoordinate: { latitude: number; longitude: number } | null;
+  routeProfileFocus: {
+    latitude: number;
+    longitude: number;
+    elevationFeet: number | null;
+    distanceMiles: number | null;
+    riskLevel: string | null;
+    label: string;
+    bearing: number;
+  } | null;
   remoteOverlay: RemoteMapOverlayPayload;
   campsiteSearchPolygon: {
     coordinates: [number, number][];
@@ -746,6 +764,75 @@ function bearingDegreesBetweenLngLat(start: [number, number], end: [number, numb
     Math.cos(startLat) * Math.sin(endLat) -
     Math.sin(startLat) * Math.cos(endLat) * Math.cos(deltaLng);
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function resolveRouteProfileFocusBearing(
+  routeCoords: [number, number][],
+  coordinate: { latitude: number; longitude: number },
+): number {
+  if (!routeCoords.length) return 0;
+
+  let nearestIndex = 0;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < routeCoords.length; index += 1) {
+    const point = routeCoords[index];
+    const distance =
+      (point[0] - coordinate.longitude) ** 2 +
+      (point[1] - coordinate.latitude) ** 2;
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  }
+
+  const before = routeCoords[Math.max(0, nearestIndex - 1)] ?? null;
+  const after = routeCoords[Math.min(routeCoords.length - 1, nearestIndex + 1)] ?? null;
+  const fallbackCurrent: [number, number] = [coordinate.longitude, coordinate.latitude];
+  const bearing =
+    before && after && !coordinatesSame(before, after)
+      ? bearingDegreesBetweenLngLat(before, after)
+      : after && !coordinatesSame(fallbackCurrent, after)
+        ? bearingDegreesBetweenLngLat(fallbackCurrent, after)
+        : before && !coordinatesSame(before, fallbackCurrent)
+          ? bearingDegreesBetweenLngLat(before, fallbackCurrent)
+          : null;
+
+  return Number.isFinite(bearing ?? NaN) ? Number(bearing) : 0;
+}
+
+function normalizeRouteProfileFocusPayload(
+  input: RouteProfileFocusPayload | null | undefined,
+  routeCoords: [number, number][],
+): WebMapPayload['routeProfileFocus'] {
+  if (!input) return null;
+  const coordinate = normalizeLatLng(input.coordinate ?? input);
+  if (!coordinate) return null;
+
+  const elevationFeet = Number.isFinite(input.elevationFeet ?? NaN)
+    ? Math.round(Number(input.elevationFeet))
+    : null;
+  const distanceMiles = Number.isFinite(input.distanceMiles ?? NaN)
+    ? Number(input.distanceMiles)
+    : null;
+  const label =
+    typeof input.label === 'string' && input.label.trim().length > 0
+      ? input.label.trim()
+      : elevationFeet !== null
+        ? `${elevationFeet.toLocaleString()} ft`
+        : 'Elevation';
+
+  return {
+    latitude: coordinate.latitude,
+    longitude: coordinate.longitude,
+    elevationFeet,
+    distanceMiles,
+    riskLevel:
+      typeof input.riskLevel === 'string' && input.riskLevel.trim().length > 0
+        ? input.riskLevel.trim()
+        : null,
+    label,
+    bearing: resolveRouteProfileFocusBearing(routeCoords, coordinate),
+  };
 }
 
 function bearingDeltaDegrees(
@@ -1551,14 +1638,8 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
         role: anchor.role,
         hidden: !!anchor.hidden,
       })),
-    routeProfileFocusCoordinate: isValidCoord(
-      props.routeProfileFocusCoordinate?.latitude,
-      props.routeProfileFocusCoordinate?.longitude,
-    )
-      ? {
-          latitude: Number(props.routeProfileFocusCoordinate?.latitude),
-          longitude: Number(props.routeProfileFocusCoordinate?.longitude),
-        }
+    routeProfileFocus: props.routeProfileFocus
+      ? normalizeRouteProfileFocusPayload(props.routeProfileFocus, routeCoordsRaw)
       : null,
     remoteOverlay: props.remoteOverlay ?? { enabled: false, heatmapAreas: [], forecastSegments: [] },
     campsiteSearchPolygon: props.campsiteSearchPolygon
@@ -3040,7 +3121,11 @@ function makeMapHtml(
           'route-builder-halo-layer',
           'route-builder-layer',
           'route-builder-endpoint-halo-layer',
-          'route-builder-endpoint-layer'
+          'route-builder-endpoint-layer',
+          'route-profile-focus-halo-layer',
+          'route-profile-focus-layer',
+          'route-profile-focus-arrow-layer',
+          'route-profile-focus-label-layer'
         ].forEach(moveExistingLayerToTop);
       }
 
@@ -4391,9 +4476,16 @@ function makeMapHtml(
         );
       }
 
-      function updateRouteProfileFocus(coordinate) {
-        var point = coordinate && isFinite(coordinate.latitude) && isFinite(coordinate.longitude)
-          ? pointFeature('route-profile-focus', [coordinate.longitude, coordinate.latitude], { color: '#F2C24D' })
+      function updateRouteProfileFocus(focus) {
+        var point = focus && isFinite(focus.latitude) && isFinite(focus.longitude)
+          ? pointFeature('route-profile-focus', [focus.longitude, focus.latitude], {
+              color: '#FF4D4D',
+              label: focus.label || 'Elevation',
+              bearing: isFinite(focus.bearing) ? focus.bearing : 0,
+              elevationFeet: isFinite(focus.elevationFeet) ? focus.elevationFeet : null,
+              distanceMiles: isFinite(focus.distanceMiles) ? focus.distanceMiles : null,
+              riskLevel: focus.riskLevel || null
+            })
           : null;
         setGeoJson('route-profile-focus-source', featureCollection(point ? [point] : []));
       }
@@ -4514,8 +4606,52 @@ function makeMapHtml(
         } catch (e) {}
         ensureCircleLayer('route-builder-endpoint-halo-layer', 'route-builder-endpoint-source', ['get', 'color'], 9, 0.18, 'rgba(8,14,18,0.92)', 2);
         ensureCircleLayer('route-builder-endpoint-layer', 'route-builder-endpoint-source', ['get', 'color'], 4.75, 0.96, 'rgba(8,14,18,0.96)', 2);
-        ensureCircleLayer('route-profile-focus-halo-layer', 'route-profile-focus-source', '#F2C24D', 10.5, 0.2, 'rgba(8,14,18,0.92)', 2);
-        ensureCircleLayer('route-profile-focus-layer', 'route-profile-focus-source', '#F2C24D', 5.5, 0.98, 'rgba(8,14,18,0.96)', 2);
+        ensureCircleLayer('route-profile-focus-halo-layer', 'route-profile-focus-source', '#FF4D4D', 12.5, 0.22, 'rgba(8,14,18,0.94)', 2);
+        ensureCircleLayer('route-profile-focus-layer', 'route-profile-focus-source', '#FF4D4D', 5.75, 0.98, 'rgba(8,14,18,0.96)', 2);
+        if (!map.getLayer('route-profile-focus-arrow-layer')) {
+          map.addLayer({
+            id: 'route-profile-focus-arrow-layer',
+            type: 'symbol',
+            source: 'route-profile-focus-source',
+            layout: {
+              'text-field': '▲',
+              'text-size': 18,
+              'text-rotate': ['get', 'bearing'],
+              'text-offset': ['literal', [0, -1.05]],
+              'text-anchor': 'center',
+              'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
+              'text-allow-overlap': true,
+              'text-ignore-placement': true
+            },
+            paint: {
+              'text-color': '#FF4D4D',
+              'text-halo-color': 'rgba(8,14,18,0.9)',
+              'text-halo-width': 1.15
+            }
+          });
+        }
+        if (!map.getLayer('route-profile-focus-label-layer')) {
+          map.addLayer({
+            id: 'route-profile-focus-label-layer',
+            type: 'symbol',
+            source: 'route-profile-focus-source',
+            layout: {
+              'text-field': ['coalesce', ['get', 'label'], 'Elevation'],
+              'text-size': 11,
+              'text-offset': ['literal', [0, -2.15]],
+              'text-anchor': 'bottom',
+              'text-font': ['DIN Pro Medium', 'Arial Unicode MS Bold'],
+              'text-max-width': 10,
+              'text-allow-overlap': true,
+              'text-ignore-placement': true
+            },
+            paint: {
+              'text-color': '#F7E6A6',
+              'text-halo-color': 'rgba(8,14,18,0.94)',
+              'text-halo-width': 1.3
+            }
+          });
+        }
         ensureFillLayer('campsite-search-polygon-fill-layer', 'campsite-search-polygon-fill-source', 'rgba(242,194,77,1)', 0.16);
         ensureLineLayer('campsite-search-polygon-line-layer', 'campsite-search-polygon-line-source', 'rgba(242,194,77,0.95)', 2.5, 0.86, [2, 1.4]);
         ensureCircleLayer('campsite-search-polygon-point-layer', 'campsite-search-polygon-point-source', 'rgba(242,194,77,0.92)', 4.2, 0.95, 'rgba(8,14,18,0.96)', 1.5);
@@ -6253,7 +6389,7 @@ function makeMapHtml(
         updateSpeedTrail(payload.speedSegments || []);
         updateRemoteOverlay(payload.remoteOverlay || null);
         updateRouteBuilder(routeBuilderDraftSegments, routeBuilderColor, routeBuilderAnchors);
-        updateRouteProfileFocus(payload.routeProfileFocusCoordinate || null);
+        updateRouteProfileFocus(payload.routeProfileFocus || null);
         updateCampsiteSearchPolygon(payload.campsiteSearchPolygon || null);
         promoteRouteGuidanceLayers();
 
@@ -6960,7 +7096,7 @@ const MapRenderer = React.memo(function MapRenderer({
   routeBuilderSegments = [],
   routeBuilderAnchors = [],
   routeBuilderColor = '#65F0D4',
-  routeProfileFocusCoordinate = null,
+  routeProfileFocus = null,
   onRouteBuilderUpdate,
   onRouteBuilderGestureStateChange,
   remoteOverlay = null,
@@ -7151,7 +7287,7 @@ const MapRenderer = React.memo(function MapRenderer({
         routeBuilderSegments,
         routeBuilderAnchors,
         routeBuilderColor,
-        routeProfileFocusCoordinate,
+        routeProfileFocus,
         remoteOverlay,
         campsiteSearchPolygon,
       }),
@@ -7191,7 +7327,7 @@ const MapRenderer = React.memo(function MapRenderer({
       routeBuilderSegments,
       routeBuilderAnchors,
       routeBuilderColor,
-      routeProfileFocusCoordinate,
+      routeProfileFocus,
       remoteOverlay,
       campsiteSearchPolygon,
     ],

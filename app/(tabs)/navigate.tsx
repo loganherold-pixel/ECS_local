@@ -11987,6 +11987,21 @@ const handleCreateRun = useCallback(() => {
   );
   const routeProfileAvailable =
     navigateRouteProfileCoordinates.length > 1 && navigateRouteProfilePoints.length > 1;
+  const routeProfileScrubberAvailable =
+    routeProfileAvailable && routeLifecycleState.phase === 'navigating';
+  const routeProfileFocusPayload = useMemo(
+    () =>
+      routeProfileScrubberAvailable && routeProfileFocus
+        ? {
+            coordinate: routeProfileFocus.coordinate,
+            elevationFeet: routeProfileFocus.point.elevationFeet,
+            distanceMiles: routeProfileFocus.distanceMiles,
+            riskLevel: routeProfileFocus.point.riskLevel,
+            label: `${Math.round(routeProfileFocus.point.elevationFeet).toLocaleString()} ft`,
+          }
+        : null,
+    [routeProfileFocus, routeProfileScrubberAvailable],
+  );
   const handleRouteProfileScrub = useCallback((event: any) => {
     const locationY = Number(event?.nativeEvent?.locationY);
     if (!Number.isFinite(locationY)) return;
@@ -19754,7 +19769,7 @@ const stableMapSurface = useMemo(() => {
         routeBuilderSegments={routeBuilderSegments}
         routeBuilderAnchors={routeBuilderDraft.anchors}
         routeBuilderColor={routeBuilderActiveExtensionMode ? ACTIVE_GUIDANCE_EXTENSION_COLOR : ROUTE_BUILDER_DEFAULT_COLOR}
-        routeProfileFocusCoordinate={routeProfileFocus?.coordinate ?? null}
+        routeProfileFocus={routeProfileFocusPayload}
         selectedRouteGeometrySegmentIds={selectedRouteGeometrySegmentIds}
         onRouteBuilderUpdate={handleRouteBuilderUpdate}
         onRouteBuilderGestureStateChange={handleRouteBuilderGestureStateChange}
@@ -20568,18 +20583,19 @@ const stableMapSurface = useMemo(() => {
             accessible
             accessibilityLabel="Draw area to search for campsites"
           >
-            {routeProfileAvailable ? (
+            {routeProfileScrubberAvailable ? (
               <View
                 style={styles.navigateRouteProfileScrubber}
+                testID="navigateRouteProfileElevationScrubber"
                 accessible
                 accessibilityRole="adjustable"
                 accessibilityLabel={
                   routeProfileFocus
-                    ? `Elevation profile scrubber, ${routeProfileFocus.distanceMiles.toFixed(1)} miles, ${routeProfileFocus.point.riskLevel} terrain risk`
-                    : 'Elevation profile scrubber'
+                    ? `Active guidance elevation scrubber, ${routeProfileFocus.distanceMiles.toFixed(1)} miles, ${Math.round(routeProfileFocus.point.elevationFeet).toLocaleString()} feet, ${routeProfileFocus.point.riskLevel} terrain risk`
+                    : 'Active guidance elevation scrubber'
                 }
               >
-                <Ionicons name="trending-up-outline" size={13} color={TACTICAL.amber} />
+                <Ionicons name="arrow-up-circle-outline" size={14} color={TACTICAL.danger} />
                 <View
                   style={styles.navigateRouteProfileTrack}
                   onLayout={(event) => setRouteProfileScrubTrackHeight(Math.max(1, event.nativeEvent.layout.height))}
@@ -20601,7 +20617,14 @@ const stableMapSurface = useMemo(() => {
                     ]}
                   />
                 </View>
-                <Text style={styles.navigateRouteProfileTitle} numberOfLines={1}>ELEV</Text>
+                <Text style={styles.navigateRouteProfileTitle} numberOfLines={1}>ACTIVE GUIDANCE</Text>
+                <Text
+                  style={styles.navigateRouteProfileElevationFeet}
+                  numberOfLines={1}
+                  testID="navigateRouteProfileElevationFeet"
+                >
+                  {routeProfileFocus ? `${Math.round(routeProfileFocus.point.elevationFeet).toLocaleString()}FT` : '--'}
+                </Text>
                 <Text style={styles.navigateRouteProfileMeta} numberOfLines={1}>
                   {routeProfileFocus ? `${routeProfileFocus.distanceMiles.toFixed(1)}MI` : '--'}
                 </Text>
@@ -21200,8 +21223,9 @@ const stableMapSurface = useMemo(() => {
   selectedRouteGeometrySegmentIds,
   routeBuilderSegments,
   routeBuilderDraft.anchors,
-  routeProfileAvailable,
   routeProfileFocus,
+  routeProfileFocusPayload,
+  routeProfileScrubberAvailable,
   routeProfileScrubRatio,
   handleRouteProfileScrub,
   routeBuilderSnapSource,
@@ -24551,29 +24575,39 @@ emptyMapBody: {
     lineHeight: 14,
   },
   navigateRouteProfileScrubber: {
-    width: 40,
-    minHeight: 122,
+    width: 54,
+    minHeight: 138,
     zIndex: NAV_OVERLAY_Z.contextual + 1,
     elevation: NAV_OVERLAY_Z.contextual + 1,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(242,194,77,0.34)',
+    borderColor: 'rgba(192,57,43,0.42)',
     backgroundColor: 'rgba(9,14,17,0.94)',
     paddingHorizontal: 5,
     paddingVertical: 7,
     gap: 5,
     alignItems: 'center',
-    shadowColor: '#F2C24D',
+    shadowColor: '#C0392B',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
+    shadowOpacity: 0.2,
     shadowRadius: 10,
   },
   navigateRouteProfileTitle: {
     ...TYPO.U2,
-    color: TACTICAL.amber,
-    fontSize: 6.6,
-    lineHeight: 8,
-    letterSpacing: 0.55,
+    color: TACTICAL.textMuted,
+    fontSize: 5.6,
+    lineHeight: 7,
+    letterSpacing: 0,
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  navigateRouteProfileElevationFeet: {
+    ...TYPO.B2,
+    color: TACTICAL.danger,
+    fontSize: 8,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
     textAlign: 'center',
     includeFontPadding: false,
   },
@@ -24592,7 +24626,7 @@ emptyMapBody: {
     height: 74,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: 'rgba(242,194,77,0.22)',
+    borderColor: 'rgba(192,57,43,0.32)',
     backgroundColor: 'rgba(255,255,255,0.07)',
     overflow: 'hidden',
     justifyContent: 'flex-end',
@@ -24602,7 +24636,7 @@ emptyMapBody: {
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(242,194,77,0.34)',
+    backgroundColor: 'rgba(192,57,43,0.36)',
   },
   navigateRouteProfileThumb: {
     position: 'absolute',
@@ -24611,8 +24645,8 @@ emptyMapBody: {
     height: 4,
     marginBottom: -2,
     borderRadius: 999,
-    backgroundColor: TACTICAL.amber,
-    shadowColor: '#F2C24D',
+    backgroundColor: TACTICAL.danger,
+    shadowColor: '#C0392B',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.55,
     shadowRadius: 5,
