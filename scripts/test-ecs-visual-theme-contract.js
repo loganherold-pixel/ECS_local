@@ -25,6 +25,7 @@ const packageJson = read('package.json');
 const rootLayout = read('app', '_layout.tsx');
 const surfaceTokens = read('lib', 'ecsSurfaceTokens.ts');
 const shellChromeTheme = read('lib', 'ui', 'shellChromeTheme.ts');
+const routeManifest = read('lib', 'routeManifest.ts');
 const topoBackground = read('components', 'TopoBackground.tsx');
 const fleet = read('app', '(tabs)', 'fleet.tsx');
 
@@ -46,11 +47,48 @@ assertIncludes(
   'package.json should expose the ECS visual theme contract test.',
 );
 
+assertIncludes(
+  rootLayout,
+  'isSharedShellBackgroundRoute(normalizedPathname)',
+  'Root shell body background should be driven by centralized route ownership.',
+);
+assertIncludes(
+  rootLayout,
+  '<ShellBodyBackground',
+  'Root shell should render the shared body background when route ownership allows it.',
+);
+
+for (const route of ['/fleet', '/navigate', '/dashboard', '/discover']) {
+  assertIncludes(
+    routeManifest,
+    `route: '${route}'`,
+    `Primary shell manifest should include route ${route}.`,
+  );
+}
+
+assertIncludes(
+  routeManifest,
+  "export const ECS_CANONICAL_DISPATCH_ROUTE = '/alert';",
+  'Dispatch canonical route should remain /alert for shell background ownership.',
+);
+assertIncludes(
+  routeManifest,
+  'route: ECS_CANONICAL_DISPATCH_ROUTE',
+  'Primary shell manifest should include the canonical Dispatch route.',
+);
+
+assertIncludes(
+  routeManifest,
+  'const PRIMARY_ROUTE_OWNERSHIP = ECS_PRIMARY_TAB_MANIFEST.map((tab) => ({',
+  'Primary shell routes should derive shared background ownership from the primary tab manifest.',
+);
+assertIncludes(
+  routeManifest,
+  'sharedShellBackground: true',
+  'Route ownership manifest should declare shared shell background coverage.',
+);
+
 for (const route of [
-  '/fleet',
-  '/navigate',
-  '/dashboard',
-  '/discover',
   '/explore',
   '/route',
   '/trips',
@@ -61,13 +99,11 @@ for (const route of [
   '/more',
   '/loadmap',
   '/loaditems',
-  '/alert',
   '/convoy-command',
 ]) {
-  assertIncludes(
-    rootLayout,
-    `normalizedPathname === '${route}'`,
-    `Root shell body background should explicitly cover primary shell route ${route}.`,
+  assert.ok(
+    new RegExp(`path: '${route.replace('/', '\\/')}'[\\s\\S]*?sharedShellBackground: true`).test(routeManifest),
+    `Route ownership manifest should explicitly cover shared shell background route ${route}.`,
   );
 }
 

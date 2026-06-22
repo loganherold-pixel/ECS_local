@@ -115,8 +115,18 @@ assertIncludes(
 );
 assertIncludes(
   widgetRenderers,
-  '<AttitudeCommandWeatherBackgroundVisual weather={weather} />',
-  'Weather panel should render the dynamic background visual without changing content layout.',
+  'const shouldRenderPanelVisual = false;',
+  'Weather panel should preserve the transparent command surface instead of mounting image backdrops.',
+);
+assertIncludes(
+  widgetRenderers,
+  'background={shouldRenderPanelVisual ? (',
+  'Weather panel background visuals should remain behind an explicit render gate.',
+);
+assertIncludes(
+  widgetRenderers,
+  'weather={weatherVisual}',
+  'Weather panel should keep dynamic visual data wired for gated background rendering.',
 );
 assertIncludes(
   widgetRenderers,

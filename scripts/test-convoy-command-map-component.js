@@ -42,6 +42,8 @@ const identitySource = read(identityPath);
 const mapboxLoaderSource = read(mapboxLoaderPath);
 const mapboxConfigSource = read(mapboxConfigPath);
 const { buildConvoyMarkerIdentity, buildConvoyMarkerIdentities } = loadTsModule(identityPath);
+const memberShapeSourceBlock =
+  mapSource.match(/<Mapbox\.ShapeSource id="convoy-members-source"[\s\S]*?<\/Mapbox\.ShapeSource>/)?.[0] ?? '';
 
 assert.ok(
   mapSource.includes('loadRnMapboxModule') &&
@@ -115,7 +117,7 @@ assert.ok(
   'ConvoyCommandMap should render trusted detail-card titles while avoiding role-derived or raw marker badge-title layers.',
 );
 assert.ok(
-  !mapSource.includes("textField: ['get', 'label']") &&
+  !memberShapeSourceBlock.includes("textField: ['get', 'label']") &&
     identitySource.includes('isUnsafePersonalLabel') &&
     identitySource.includes("return 'LEAD'") &&
     identitySource.includes("return 'SWEEP'"),

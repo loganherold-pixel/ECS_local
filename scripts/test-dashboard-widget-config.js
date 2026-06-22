@@ -417,7 +417,7 @@ assert.ok(
   assert.ok(
     commandModuleStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n  'attitude',\n];") &&
       commandModuleStoreSource.includes("label: '3D Nav Command'") &&
-      commandModuleStoreSource.includes("subtitle: '3D Follow Map'") &&
+      commandModuleStoreSource.includes("subtitle: ''") &&
       commandModuleStoreSource.includes("label: 'Attitude Command'") &&
       commandModuleStoreSource.includes("subtitle: 'Fleet Vehicle Profile'") &&
       !commandModuleStoreSource.includes("label: 'Terrain Risk'") &&
