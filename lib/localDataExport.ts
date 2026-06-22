@@ -80,6 +80,10 @@ export interface LocalDataImportResult {
   error?: string;
 }
 
+export interface LocalDataImportOptions {
+  source?: 'file_picker' | 'dev_smoke_seed' | string;
+}
+
 // ── Gather all local data ────────────────────────────────────
 export async function gatherLocalData(): Promise<LocalDataExport> {
   await Promise.all([
@@ -373,22 +377,14 @@ function addCount(target: Record<string, number>, key: string, value: number): v
   target[key] = (target[key] || 0) + Math.max(0, value);
 }
 
-export async function importLocalData(): Promise<LocalDataImportResult> {
+export async function importLocalDataFromRawJson(
+  rawJson: string,
+  options: LocalDataImportOptions = {},
+): Promise<LocalDataImportResult> {
   const importedCounts: Record<string, number> = {};
   const skippedCounts: Record<string, number> = {};
 
   try {
-    const rawJson = await pickLocalDataImportJson();
-    if (!rawJson) {
-      return {
-        success: false,
-        canceled: true,
-        totalItems: 0,
-        importedCounts,
-        skippedCounts,
-      };
-    }
-
     const data = parseLocalDataImport(rawJson);
 
     const trips = asArray(data.trips);
@@ -488,13 +484,75 @@ export async function importLocalData(): Promise<LocalDataImportResult> {
       skippedCounts,
     };
   } catch (e: any) {
-    console.error('[LocalDataExport] Import failed:', e);
+    console.error('[LocalDataExport] Import failed:', e, { source: options.source || 'unknown' });
     return {
       success: false,
       totalItems: 0,
       importedCounts,
       skippedCounts,
       error: e?.message || 'Import failed',
+    };
+  }
+}
+
+export async function importLocalData(): Promise<LocalDataImportResult> {
+  const importedCounts: Record<string, number> = {};
+  const skippedCounts: Record<string, number> = {};
+
+  try {
+    const rawJson = await pickLocalDataImportJson();
+    if (!rawJson) {
+      return {
+        success: false,
+        canceled: true,
+        totalItems: 0,
+        importedCounts,
+        skippedCounts,
+      };
+    }
+
+    return importLocalDataFromRawJson(rawJson, { source: 'file_picker' });
+  } catch (e: any) {
+    console.error('[LocalDataExport] Import picker failed:', e);
+    return {
+      success: false,
+      totalItems: 0,
+      importedCounts,
+      skippedCounts,
+      error: e?.message || 'Import failed',
+    };
+  }
+}
+
+function isDevRuntime(): boolean {
+  return typeof __DEV__ !== 'undefined' && __DEV__;
+}
+
+export async function importDevSmokeLocalData(): Promise<LocalDataImportResult> {
+  const importedCounts: Record<string, number> = {};
+  const skippedCounts: Record<string, number> = {};
+
+  if (!isDevRuntime()) {
+    return {
+      success: false,
+      totalItems: 0,
+      importedCounts,
+      skippedCounts,
+      error: 'Smoke seed import is only available in development builds.',
+    };
+  }
+
+  try {
+    const smokeSeedExport = require('../fixtures/local-data/ecs-smoke-local-profile.json');
+    return importLocalDataFromRawJson(JSON.stringify(smokeSeedExport), { source: 'dev_smoke_seed' });
+  } catch (e: any) {
+    console.error('[LocalDataExport] Dev smoke seed import failed:', e);
+    return {
+      success: false,
+      totalItems: 0,
+      importedCounts,
+      skippedCounts,
+      error: e?.message || 'Unable to load dev smoke seed.',
     };
   }
 }

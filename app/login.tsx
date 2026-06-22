@@ -34,7 +34,7 @@ import {
   LOGIN_STATUS_INDICATOR_HEIGHT,
   resolveLoginScreenLayout,
 } from '../lib/auth/loginScreenLayout';
-import { exportLocalData, importLocalData } from '../lib/localDataExport';
+import { exportLocalData, importDevSmokeLocalData, importLocalData } from '../lib/localDataExport';
 import { resolveConfiguredVehiclePresence } from '../lib/vehiclePresence';
 import { sessionStore } from '../lib/sessionStore';
 import { setupStore } from '../lib/setupStore';
@@ -124,6 +124,7 @@ export default function LoginScreen() {
   const [resetLoading, setResetLoading] = useState(false);
   const [exportingLocalData, setExportingLocalData] = useState(false);
   const [importingLocalData, setImportingLocalData] = useState(false);
+  const [devSeedingLocalData, setDevSeedingLocalData] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [statusTone, setStatusTone] = useState<MessageTone>('neutral');
   const [offlineCredentialStatus, setOfflineCredentialStatus] =
@@ -162,7 +163,8 @@ export default function LoginScreen() {
   }, [loginGuardState]);
   const loginDisabled = loginGuardState.disabled;
   const forgotDisabled = resetLoading || !isOnline || !trimmedResetEmail || !isValidEmail(trimmedResetEmail);
-  const utilityBusy = loading || resetLoading || exportingLocalData || importingLocalData;
+  const utilityBusy = loading || resetLoading || exportingLocalData || importingLocalData || devSeedingLocalData;
+  const isDevSmokeSeedEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
 
   useEffect(() => {
     const notice = consumeAuthNotice();
@@ -355,6 +357,26 @@ export default function LoginScreen() {
     setStatusMessage(result.error || 'Unable to import local data right now.');
     setStatusTone('error');
   }, [clearStatus, showToast]);
+
+  const handleDevSmokeSeed = useCallback(async () => {
+    Keyboard.dismiss();
+    clearStatus();
+    setDevSeedingLocalData(true);
+    const result = await importDevSmokeLocalData();
+    setDevSeedingLocalData(false);
+
+    if (result.success) {
+      showToast(result.totalItems > 0 ? `Loaded smoke seed (${result.totalItems} local items)` : 'Smoke seed loaded');
+      setStatusMessage('Smoke local profile loaded for Fleet, Navigate, Dispatch, and readiness QA.');
+      setStatusTone('success');
+      setPendingFreeDestination('/dashboard');
+      enterOfflineMode();
+      return;
+    }
+
+    setStatusMessage(result.error || 'Unable to load smoke seed right now.');
+    setStatusTone('error');
+  }, [clearStatus, enterOfflineMode, showToast]);
 
   const handleOpenAuthInfo = useCallback((sheet: 'terms' | 'privacy' | 'support') => {
     Keyboard.dismiss();
@@ -577,8 +599,11 @@ export default function LoginScreen() {
                     onViewPro={handleViewPro}
                     onExport={handleExport}
                     onImport={handleImport}
+                    onDevSmokeSeed={handleDevSmokeSeed}
                     exportingLocalData={exportingLocalData}
                     importingLocalData={importingLocalData}
+                    devSeedingLocalData={devSeedingLocalData}
+                    isDevSmokeSeedEnabled={isDevSmokeSeedEnabled}
                     footerMaxWidth={layoutMetrics.footerMaxWidth}
                     compactLayout={loginLayout.compactLayout}
                     cardMaxHeight={loginLayout.formMaxHeight}
@@ -747,6 +772,12 @@ const styles = StyleSheet.create({
   exportButtonCompactLandscape: { minHeight: 31, borderRadius: 11, gap: 6, paddingHorizontal: 7 },
   exportButtonText: { flexShrink: 1, fontSize: 12, lineHeight: 16, fontWeight: '700', color: 'rgba(230,237,243,0.82)', textAlign: 'center' },
   exportHint: { marginTop: 3, textAlign: 'center', fontSize: 10, lineHeight: 13, color: 'rgba(230,237,243,0.48)' },
+  devSeedButton: {
+    marginTop: 6, minHeight: 32, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 10,
+    borderWidth: 1, borderColor: 'rgba(212,160,23,0.22)', backgroundColor: 'rgba(212,160,23,0.075)',
+  },
+  devSeedButtonCompactLandscape: { minHeight: 30, borderRadius: 11, marginTop: 5 },
+  devSeedButtonText: { flexShrink: 1, fontSize: 12, lineHeight: 16, fontWeight: '800', color: TACTICAL.amber, textAlign: 'center' },
   recoveryTitle: { fontSize: 20, lineHeight: 24, fontWeight: '800', color: TACTICAL.text },
   recoveryTitleCompactLandscape: { fontSize: 18, lineHeight: 22 },
   recoverySupporting: { marginTop: 4, marginBottom: 10, fontSize: 13, lineHeight: 18, color: TACTICAL.textMuted },
@@ -883,6 +914,8 @@ type LoginCardProps = {
   passwordRef: React.RefObject<TextInput | null>;
   exportingLocalData: boolean;
   importingLocalData: boolean;
+  devSeedingLocalData: boolean;
+  isDevSmokeSeedEnabled: boolean;
   footerMaxWidth: number;
   compactLayout: boolean;
   cardMaxHeight: number | null;
@@ -900,6 +933,7 @@ type LoginCardProps = {
   onViewPro: () => void;
   onExport: () => Promise<void>;
   onImport: () => Promise<void>;
+  onDevSmokeSeed: () => Promise<void>;
   onOpenAuthInfo: (sheet: 'terms' | 'privacy' | 'support') => void;
   onCreateAccount: () => void;
 };
@@ -920,6 +954,8 @@ const LoginCard = memo(function LoginCard({
   passwordRef,
   exportingLocalData,
   importingLocalData,
+  devSeedingLocalData,
+  isDevSmokeSeedEnabled,
   footerMaxWidth,
   compactLayout,
   cardMaxHeight,
@@ -937,6 +973,7 @@ const LoginCard = memo(function LoginCard({
   onViewPro,
   onExport,
   onImport,
+  onDevSmokeSeed,
   onOpenAuthInfo,
   onCreateAccount,
 }: LoginCardProps) {
@@ -1106,6 +1143,22 @@ const LoginCard = memo(function LoginCard({
         </Pressable>
       </View>
       <Text style={styles.exportHint}>Save your offline data as JSON before signing in or switching devices.</Text>
+      {isDevSmokeSeedEnabled ? (
+        <Pressable
+          style={({ pressed }) => [
+            styles.devSeedButton,
+            compactLayout ? styles.devSeedButtonCompactLandscape : null,
+            utilityBusy ? styles.disabledUtility : null,
+            pressed && !utilityBusy ? styles.utilityPressed : null,
+          ]}
+          disabled={utilityBusy}
+          onPress={() => void onDevSmokeSeed()}
+          testID="auth-dev-smoke-seed-button"
+        >
+          {devSeedingLocalData ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : <Ionicons name="flask-outline" size={15} color={TACTICAL.amber} />}
+          <Text style={styles.devSeedButtonText}>Load smoke seed</Text>
+        </Pressable>
+      ) : null}
       <LoginFooterBlock
         footerMaxWidth={footerMaxWidth}
         marginTop={compactLayout ? 8 : 12}
