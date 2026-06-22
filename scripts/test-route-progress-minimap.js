@@ -110,7 +110,8 @@ includes(miniMapSource, 'const markerLocation = routeMatchedMarkerLocation ?? cu
 includes(miniMapSource, 'top: 6', 'Mini-map metric overlay should sit at the top of the map away from the Mapbox watermark.');
 includes(miniMapSource, 'right: 7', 'Mini-map metric overlay should sit on the top-right of the map away from the Mapbox watermark.');
 includes(miniMapSource, 'zIndex: 12', 'Mini-map metric overlay should render above the fallback SVG map surface.');
-includes(miniMapSource, 'marker: markerLocation', 'Mini-map should render a real current-location marker when available.');
+includes(miniMapSource, 'const stableMarkerLocation = useStableRouteMiniMapMarkerLocation(markerLocation);', 'Mini-map should stabilize the real current-location marker before rendering.');
+includes(miniMapSource, 'marker: stableMarkerLocation', 'Mini-map should render the stabilized current-location marker when available.');
 includes(miniMapSource, 'map.fitBounds', 'Mini-map should fit the active route inside the widget surface.');
 includes(fallbackSurfaceSource, 'transparentBackground?: boolean', 'Native fallback map should support transparent compact surfaces.');
 includes(fallbackSurfaceSource, "fill={transparentBackground ? 'rgba(5,9,13,0.68)' : '#05090D'}", 'Native fallback map should dim, not erase, the route-progress background when embedded.');

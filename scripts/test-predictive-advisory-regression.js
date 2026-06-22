@@ -84,9 +84,8 @@ assertIncludes(
   "if (input.route.lifecycle !== 'active' || !input.route.sessionId) return null;",
   'No-active-route path should not build a hazard input.',
 );
-assertIncludes(
-  watcherSource,
-  "if (route.lifecycle !== 'active' || !route.sessionId) {\n        resetRouteState();\n        return;",
+assert.ok(
+  /if\s*\(\s*route\.lifecycle\s*!==\s*'active'\s*\|\|\s*!route\.sessionId\s*\)\s*\{\s*resetRouteState\(\);\s*return;/m.test(watcherSource),
   'No-active-route path should reset watcher state and return before publishing.',
 );
 
@@ -156,9 +155,8 @@ assert.strictEqual(result.emitted, true);
 assert.strictEqual(result.event.title, 'OFFLINE READINESS GAP');
 
 // 6. Route end cleanup stops future emissions.
-assertIncludes(
-  watcherSource,
-  'const resetRouteState = () => {\n      clearRouteInterval();',
+assert.ok(
+  /const\s+resetRouteState\s*=\s*\(\)\s*=>\s*\{\s*clearRouteInterval\(\);/m.test(watcherSource),
   'Route-end cleanup should clear the active cadence timer.',
 );
 assertIncludes(
@@ -193,7 +191,7 @@ assert.strictEqual(normalEntries.length, 1);
 assert.strictEqual(normalEntries[0].source, 'dashboard_advisory');
 assert.strictEqual(normalEntries[0].message, 'Existing ECS advisory remains readable.');
 assertIncludes(cadLogSource, '{isRemoteWeather ? (', 'CAD log should branch remote/weather rendering.');
-assertIncludes(cadLogSource, ') : (\n                  <>', 'CAD log should retain the existing normal-entry rendering branch.');
+assert.ok(/\)\s*:\s*\(\s*<>/m.test(cadLogSource), 'CAD log should retain the existing normal-entry rendering branch.');
 assertIncludes(cadLogSource, 'LAT {formatCoordinate(entry.latitude)}', 'Normal CAD rows should still render existing coordinate metadata.');
 
 // 8. Dashboard has no duplicate overlays or floating banners.
