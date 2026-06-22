@@ -10,6 +10,8 @@ function read(relativePath) {
 
 const migration = read(path.join('supabase', 'migrations', '027_verified_route_catalog.sql'));
 const liveCatalog = read(path.join('lib', 'explore', 'liveTrailPackCatalog.ts'));
+const visibilityDiagnostics = read(path.join('lib', 'routeCatalogVisibilityDiagnostics.ts'));
+const viewportClient = read(path.join('lib', 'routeCatalogViewportClient.ts'));
 const supabaseClient = read(path.join('lib', 'supabase.ts'));
 const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 
@@ -203,8 +205,20 @@ assert(
     searchFunction.includes('filterRecordsBySourceAdapter') &&
     searchFunction.includes('sourceFilterApplied') &&
     searchFunction.includes('sourceMatchedCount') &&
+    searchFunction.includes('recommendationOnly = readBoolean') &&
+    searchFunction.includes("if (recommendationOnly) query = query.eq('recommendation_status', 'recommendable');") &&
+    searchFunction.includes('recommendationOnly,') &&
     searchFunction.includes('lower_confidence_nearby') &&
     searchFunction.includes('search_distance_miles') &&
+    searchFunction.includes('geometry_distance_miles') &&
+    searchFunction.includes('trailhead_distance_miles') &&
+    searchFunction.includes('search_match_reasons') &&
+    searchFunction.includes('featured_route_score') &&
+    searchFunction.includes('catalog_trip_classification') &&
+    searchFunction.includes('geometryMatchedCount') &&
+    searchFunction.includes('routeTrailhead') &&
+    searchFunction.includes('knownRouteDiagnostics') &&
+    searchFunction.includes('ROUTE_CATALOG_RADIUS_GEOMETRY_PADDING_MILES') &&
     searchFunction.includes('radiusMatchedCount') &&
     searchFunction.includes('candidateLimit') &&
     searchFunction.includes(".gte('distance_miles'") &&
@@ -234,14 +248,33 @@ assert(
     liveCatalog.includes('availableWaterCapacityGallons: criteria.availableWaterCapacityGallons') &&
     liveCatalog.includes('includeGeometry: false') &&
     liveCatalog.includes('includePreviewGeometry: true') &&
+    liveCatalog.includes("expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon']") &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
     liveCatalog.includes('searchMeta: normalized.searchMeta') &&
     liveCatalog.includes('searchMeta: routeCatalog.searchMeta') &&
     liveCatalog.includes("functions.invoke('route-catalog-detail'") &&
     liveCatalog.includes('normalizeRouteCatalogDetailResponse') &&
     liveCatalog.includes('fetchRouteCatalogTrailPackDetail') &&
+    liveCatalog.includes('buildExploreRouteCatalogQueryDiagnostic') &&
+    liveCatalog.includes('logRouteCatalogVisibilityDiagnostic') &&
     liveCatalog.includes("from('trail_packs')"),
   'Live Trail Pack catalog should prefer ECS route-catalog-search, fetch route-catalog-detail for previews, and keep trail_packs as a compatibility fallback',
+);
+assert(
+  visibilityDiagnostics.includes('ECS_ROUTE_CATALOG_DEBUG_FLAG') &&
+    visibilityDiagnostics.includes('buildRouteCatalogAuditReport') &&
+    visibilityDiagnostics.includes('buildExploreRouteCatalogQueryDiagnostic') &&
+    visibilityDiagnostics.includes('buildNavigateRouteCatalogQueryDiagnostic') &&
+    visibilityDiagnostics.includes('findClosestViableRouteCatalogGeometryTarget') &&
+    visibilityDiagnostics.includes('NORCAL_ROUTE_CATALOG_VISIBILITY_AREAS') &&
+    visibilityDiagnostics.includes('Tahoe National Forest') &&
+    visibilityDiagnostics.includes('Eldorado National Forest') &&
+    visibilityDiagnostics.includes('Plumas National Forest') &&
+    visibilityDiagnostics.includes('Mendocino National Forest') &&
+    visibilityDiagnostics.includes("debugFlag: ECS_ROUTE_CATALOG_DEBUG_FLAG") &&
+    viewportClient.includes('buildNavigateRouteCatalogQueryDiagnostic') &&
+    viewportClient.includes('logRouteCatalogVisibilityDiagnostic'),
+  'Route catalog visibility diagnostics should cover audit, Explore, Navigate, NorCal known areas, closest viable route targets, and debug-gated logging.',
 );
 assert(
   supabaseClient.includes('"route-catalog-search"') &&

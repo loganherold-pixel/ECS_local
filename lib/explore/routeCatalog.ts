@@ -1,6 +1,7 @@
 import type {
   ECSTrailPack,
   ECSTrailPackActiveGuidance,
+  ECSTrailPackCatalogTripClassification,
   ECSTrailPackCatalogDataUsed,
   ECSTrailPackCoordinate,
   ECSTrailPackCurrentConditionOverlay,
@@ -14,6 +15,7 @@ import type {
   ECSTrailPackSource,
 } from './trailPacks';
 import { getRouteCatalogSourcePublishingBlocker } from './routeCatalogSourceRestrictions';
+import { classifyRouteCatalogTripType } from './routeCatalogDiscovery';
 
 export type RouteCatalogSourceType =
   | 'official'
@@ -65,6 +67,13 @@ export type RouteCatalogRecord = {
   minimumFuelRangeMiles?: number;
   minimumWaterCapacityGallons?: number;
   routeIntelligence?: Record<string, unknown>;
+  searchDistanceMiles?: number;
+  geometryDistanceMiles?: number;
+  trailheadDistanceMiles?: number;
+  centerDistanceMiles?: number;
+  searchMatchReasons?: string[];
+  featuredRouteScore?: number;
+  catalogTripClassification?: ECSTrailPackCatalogTripClassification;
   elevationGainFt?: number;
   elevationLossFt?: number;
   elevationChangeFt?: number;
@@ -134,9 +143,15 @@ export type RouteCatalogCoverageState = {
 export type RouteCatalogSearchMeta = {
   candidateCount: number;
   radiusMatchedCount: number;
+  geometryMatchedCount?: number;
+  trailheadMatchedCount?: number;
+  centerMatchedCount?: number;
+  aliasMatchedCount?: number;
+  featuredMatchedCount?: number;
   curationCandidateCount: number;
   anySourceBackedCandidateCount: number;
   radiusFilterApplied: boolean;
+  knownRouteDiagnostics?: Array<Record<string, unknown>>;
 };
 
 export type RouteCatalogSearchResult = {
@@ -847,6 +862,7 @@ export function normalizeRouteCatalogRecord(value: unknown): RouteCatalogRecord 
   const sourceRecords = Array.isArray(rawSources)
     ? rawSources.map(sourceRecordFromValue).filter((source): source is RouteCatalogSourceRecord => !!source)
     : [];
+  const routeIntelligence = readRecord(record.route_intelligence ?? record.routeIntelligence) ?? undefined;
 
   return {
     id,
@@ -875,7 +891,17 @@ export function normalizeRouteCatalogRecord(value: unknown): RouteCatalogRecord 
       'minimumWaterCapacityGallons',
       'minWaterCapacityGallons',
     ),
-    routeIntelligence: readRecord(record.route_intelligence ?? record.routeIntelligence) ?? undefined,
+    routeIntelligence,
+    searchDistanceMiles: readNumber(record, 'search_distance_miles', 'searchDistanceMiles'),
+    geometryDistanceMiles: readNumber(record, 'geometry_distance_miles', 'geometryDistanceMiles'),
+    trailheadDistanceMiles: readNumber(record, 'trailhead_distance_miles', 'trailheadDistanceMiles'),
+    centerDistanceMiles: readNumber(record, 'center_distance_miles', 'centerDistanceMiles'),
+    searchMatchReasons: readStringArray(record.search_match_reasons ?? record.searchMatchReasons),
+    featuredRouteScore: readNumber(record, 'featured_route_score', 'featuredRouteScore'),
+    catalogTripClassification: classifyRouteCatalogTripType({
+      ...record,
+      routeIntelligence,
+    }),
     elevationGainFt: readNumber(record, 'elevation_gain_ft', 'elevationGainFt', 'elevation_gain_feet', 'elevationGainFeet'),
     elevationLossFt: readNumber(record, 'elevation_loss_ft', 'elevationLossFt', 'elevation_loss_feet', 'elevationLossFeet'),
     elevationChangeFt: readNumber(record, 'elevation_change_ft', 'elevationChangeFt', 'elevation_delta_ft', 'elevationDeltaFt'),
@@ -1075,6 +1101,13 @@ export function catalogRouteToTrailPack(
     minimumFuelRangeMiles: route.minimumFuelRangeMiles,
     minimumWaterCapacityGallons: route.minimumWaterCapacityGallons,
     routeIntelligence: route.routeIntelligence,
+    searchDistanceMiles: route.searchDistanceMiles,
+    geometryDistanceMiles: route.geometryDistanceMiles,
+    trailheadDistanceMiles: route.trailheadDistanceMiles,
+    centerDistanceMiles: route.centerDistanceMiles,
+    searchMatchReasons: route.searchMatchReasons,
+    featuredRouteScore: route.featuredRouteScore,
+    catalogTripClassification: route.catalogTripClassification,
     elevationGainFt: route.elevationGainFt,
     elevationLossFt: route.elevationLossFt,
     elevationChangeFt: route.elevationChangeFt,
@@ -1249,12 +1282,20 @@ function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta
   return {
     candidateCount: record ? readNumber(record, 'candidateCount', 'candidate_count') ?? 0 : 0,
     radiusMatchedCount,
+    geometryMatchedCount: record ? readNumber(record, 'geometryMatchedCount', 'geometry_matched_count') : undefined,
+    trailheadMatchedCount: record ? readNumber(record, 'trailheadMatchedCount', 'trailhead_matched_count') : undefined,
+    centerMatchedCount: record ? readNumber(record, 'centerMatchedCount', 'center_matched_count') : undefined,
+    aliasMatchedCount: record ? readNumber(record, 'aliasMatchedCount', 'alias_matched_count') : undefined,
+    featuredMatchedCount: record ? readNumber(record, 'featuredMatchedCount', 'featured_matched_count') : undefined,
     curationCandidateCount,
     anySourceBackedCandidateCount: record
       ? readNumber(record, 'anySourceBackedCandidateCount', 'any_source_backed_candidate_count') ??
         radiusMatchedCount + curationCandidateCount
       : 0,
     radiusFilterApplied: record ? readBoolean(record, 'radiusFilterApplied', 'radius_filter_applied') ?? false : false,
+    knownRouteDiagnostics: Array.isArray(record?.knownRouteDiagnostics ?? record?.known_route_diagnostics)
+      ? (record?.knownRouteDiagnostics ?? record?.known_route_diagnostics) as Array<Record<string, unknown>>
+      : undefined,
   };
 }
 

@@ -6,6 +6,10 @@ import {
   type RouteCatalogCoverageState,
   type RouteCatalogSearchMeta,
 } from './routeCatalog';
+import {
+  buildExploreRouteCatalogQueryDiagnostic,
+  logRouteCatalogVisibilityDiagnostic,
+} from '../routeCatalogVisibilityDiagnostics';
 import type {
   ECSTrailPack,
   ECSTrailPackCoordinate,
@@ -37,6 +41,7 @@ export type LiveTrailPackCatalogSearchCriteria = {
   availableWaterCapacityGallons?: number | null;
   locationSource?: 'live_gps' | 'default_location' | string | null;
   limit?: number;
+  expectedKnownRoutes?: string[] | null;
 };
 
 export type LiveTrailPackCatalogSnapshot = {
@@ -433,11 +438,12 @@ export function buildRouteCatalogSearchBody(
   const routeType = cleanText(criteria.routeType);
   const difficulty = cleanText(criteria.difficulty);
   return {
-    limit: criteria.limit ?? 200,
+    limit: criteria.limit ?? 500,
     includeGeometry: false,
     includePreviewGeometry: true,
     includeAssessment: true,
     recommendationOnly: true,
+    expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon'],
     ...(latitude != null && longitude != null && radiusMiles != null
       ? {
           latitude: criteria.latitude,
@@ -480,6 +486,26 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
   }
 
   const normalized = normalizeRouteCatalogSearchResponse(data);
+  logRouteCatalogVisibilityDiagnostic(
+    'explore_query',
+    buildExploreRouteCatalogQueryDiagnostic(normalized.records, {
+      latitude: criteria.latitude,
+      longitude: criteria.longitude,
+      radiusMiles: criteria.radiusMiles,
+      limit: criteria.limit ?? 500,
+      expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon'],
+    }, {
+      serverMeta: normalized.searchMeta,
+    }) as unknown as Record<string, unknown>,
+    {
+      fingerprint: JSON.stringify({
+        lat: criteria.latitude ?? null,
+        lng: criteria.longitude ?? null,
+        radius: criteria.radiusMiles ?? null,
+        count: normalized.records.length,
+      }),
+    },
+  );
   return {
     trailPacks: normalized.trailPacks,
     coverageState: normalized.coverageState,

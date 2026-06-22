@@ -247,23 +247,24 @@ import {
   isRouteGeometryViewportZoomEligible,
   mergeRouteGeometryViewportSegmentsWithSelected,
   resolveNearestRouteGeometryEndpoint,
-  routeGeometryViewportSegmentsToOverlaySegments,
   RouteGeometryViewportFetchCoordinator,
   ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM,
   ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
   ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
   type RouteGeometryViewportBbox,
-  type RouteGeometryViewportSegment,
 } from '../../lib/routeGeometryViewport';
 import {
-  fetchRouteGeometryViewportSegments,
   isRouteGeometryViewportOverlayFeatureEnabled,
 } from '../../lib/routeGeometryViewportClient';
 import {
-  readRouteGeometryViewportOfflineCache,
-  resolveRouteGeometryViewportOfflineCacheLookup,
-  writeRouteGeometryViewportOfflineCache,
-} from '../../lib/routeGeometryViewportCache';
+  buildRouteCatalogViewportQuery,
+  routeCatalogViewportFeaturesToRouteGeometrySegments,
+  RouteCatalogViewportCache,
+  type RouteCatalogViewportFeature,
+  type RouteCatalogViewportFeatureCollection,
+  type RouteCatalogViewportResult,
+} from '../../lib/routeCatalogViewport';
+import { fetchRouteCatalogViewportFeatures } from '../../lib/routeCatalogViewportClient';
 import { buildRouteConfidenceTimeline, isRouteConfidenceTimelineFeatureEnabled, routeConfidenceTimelineItemCopy, type RouteConfidenceTimeline, type RouteConfidenceTimelineItem, type RouteConfidenceTimelineOverlay, type RouteGeometry } from '../../lib/routeContext';
 import {
   clearExploreRoutesMapHandoff,
@@ -866,13 +867,165 @@ function createRouteGeometryViewportUiState(enabled = false): RouteGeometryViewp
   };
 }
 
-function markRouteGeometryViewportSegmentsCached(
-  segments: RouteGeometryViewportSegment[],
-): RouteGeometryViewportSegment[] {
-  return segments.map((segment) => ({
-    ...segment,
-    dataState: segment.dataState === 'live' || segment.dataState === 'local' ? 'cached' : segment.dataState,
-  }));
+const EMPTY_ROUTE_CATALOG_VIEWPORT_FEATURE_COLLECTION: RouteCatalogViewportFeatureCollection = {
+  type: 'FeatureCollection',
+  features: [],
+};
+
+function routeCatalogViewportFeatureLines(feature: RouteCatalogViewportFeature | null | undefined): RoadNavCoordinate[][] {
+  if (!feature || feature.geometry.type === 'Point') return [];
+  const rawLines: unknown[] =
+    feature.geometry.type === 'MultiLineString'
+      ? (feature.geometry.coordinates as unknown[])
+      : [feature.geometry.coordinates as unknown];
+  return rawLines
+    .map((line) => {
+      const coordinates = Array.isArray(line) ? line : [];
+      return coordinates
+        .map((coordinate) => {
+          if (!Array.isArray(coordinate) || coordinate.length < 2) return null;
+          const lng = Number(coordinate[0]);
+          const lat = Number(coordinate[1]);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+          return { lat, lng };
+        })
+        .filter((point): point is RoadNavCoordinate => !!point);
+    })
+    .filter((line) => line.length > 1);
+}
+
+function flattenRouteCatalogViewportFeatureLines(feature: RouteCatalogViewportFeature | null | undefined): RoadNavCoordinate[] {
+  const points: RoadNavCoordinate[] = [];
+  routeCatalogViewportFeatureLines(feature).forEach((line) => {
+    line.forEach((point) => {
+      const previous = points[points.length - 1];
+      if (previous && previous.lat === point.lat && previous.lng === point.lng) return;
+      points.push(point);
+    });
+  });
+  return points;
+}
+
+function routeCatalogViewportFeatureAnchor(feature: RouteCatalogViewportFeature | null | undefined): RoadNavCoordinate | null {
+  if (!feature) return null;
+  const firstGeometryPoint = flattenRouteCatalogViewportFeatureLines(feature)[0] ?? null;
+  if (firstGeometryPoint) return firstGeometryPoint;
+  if (feature.geometry.type !== 'Point') return null;
+  const [lng, lat] = feature.geometry.coordinates;
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+}
+
+function geometryStatusCopy(status: RouteCatalogViewportFeature['properties']['geometryStatus']): string {
+  switch (status) {
+    case 'guidance_ready':
+      return 'GUIDANCE READY';
+    case 'preview_geometry':
+      return 'PREVIEW GEOMETRY';
+    case 'trailhead_only':
+      return 'TRAILHEAD ONLY';
+    case 'insufficient_geometry':
+    default:
+      return 'INSUFFICIENT GEOMETRY';
+  }
+}
+
+function geometryStatusDetail(feature: RouteCatalogViewportFeature | null): string {
+  if (!feature) return '';
+  if (feature.properties.geometryStatus === 'guidance_ready') {
+    return 'Full ECS catalog geometry available for hybrid guidance.';
+  }
+  if (feature.properties.geometryStatus === 'preview_geometry') {
+    return 'Preview geometry shown. Verify route detail before active guidance.';
+  }
+  if (feature.properties.geometryStatus === 'trailhead_only') {
+    return 'Catalog route has a trailhead or centroid only.';
+  }
+  return 'Catalog record is visible, but route geometry is not guidance-ready.';
+}
+
+function routeCatalogViewportFeatureToPinMarker(
+  feature: RouteCatalogViewportFeature,
+  selected: boolean,
+): PinMarker | null {
+  if (feature.geometry.type !== 'Point') return null;
+  const [lng, lat] = feature.geometry.coordinates;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return {
+    id: `route-catalog-marker:${feature.properties.routeId}`,
+    latitude: lat,
+    longitude: lng,
+    title: feature.properties.title,
+    subtitle: geometryStatusCopy(feature.properties.geometryStatus),
+    type: 'route_catalog',
+    color: selected ? TACTICAL.amber : TACTICAL.textMuted,
+    mapChar: feature.properties.guidanceReady ? 'R' : 'TH',
+    resolved: false,
+    markerKind: 'route_catalog_viewport',
+    routeCatalogRouteId: feature.properties.routeId,
+    geometryStatus: feature.properties.geometryStatus,
+    guidanceReady: feature.properties.guidanceReady,
+    sourceLabel: feature.properties.sourceLabel,
+    distanceMiles: feature.properties.distanceMiles,
+  };
+}
+
+function buildRouteCatalogViewportNavigationPayload(
+  feature: RouteCatalogViewportFeature,
+): NavigationHandoffPayload | null {
+  const trailGeometrySegments = routeCatalogViewportFeatureLines(feature);
+  const trailGeometry = flattenRouteCatalogViewportFeatureLines(feature);
+  const anchor = routeCatalogViewportFeatureAnchor(feature);
+  if (!anchor) return null;
+  const hasTrailGeometry = trailGeometry.length > 1;
+  const destination = hasTrailGeometry ? trailGeometry[trailGeometry.length - 1] : anchor;
+  const title = feature.properties.title || 'ECS catalog route';
+  const subtitleParts = [
+    feature.properties.forest ?? feature.properties.region,
+    feature.properties.distanceMiles != null ? `${feature.properties.distanceMiles.toFixed(1)} mi` : null,
+    geometryStatusCopy(feature.properties.geometryStatus),
+  ].filter(Boolean);
+
+  return {
+    id: `route-catalog:${feature.properties.routeId}`,
+    source: 'explore',
+    type: hasTrailGeometry ? 'hybrid_route' : 'trailhead',
+    title,
+    subtitle: subtitleParts.join(' | ') || null,
+    coordinate: destination,
+    trailheadCoordinate: anchor,
+    roadDestinationCoordinate: anchor,
+    trailGeometry,
+    trailGeometrySegments,
+    trailLengthMiles: feature.properties.distanceMiles ?? (hasTrailGeometry ? computeTrailLengthMiles(trailGeometry) : null),
+    trailCategory: feature.properties.tripType ?? 'ECS route catalog',
+    tripMode: hasTrailGeometry ? 'hybrid' : 'road',
+    routeSource: 'explore',
+    requiresOnlineRouting: true,
+    trailWaypoints: [],
+    trailDecisionPoints: [],
+    routeMetadata: {
+      previewSource: 'navigate_route_catalog_viewport',
+      routeCatalogRouteId: feature.properties.routeId,
+      routeCatalogSourceLabel: feature.properties.sourceLabel,
+      routeGeometryPlanningSource: ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
+      routeGeometryWarning: ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
+      geometryStatus: feature.properties.geometryStatus,
+      guidanceReady: feature.properties.guidanceReady,
+      source: feature.properties.source,
+      sourceLabel: feature.properties.sourceLabel,
+      forest: feature.properties.forest,
+      region: feature.properties.region,
+      distanceMiles: feature.properties.distanceMiles,
+      segmentIds: feature.properties.segmentIds,
+      offRouteReturnPolicy: 'closest_viable_point_on_ecs_route_geometry',
+      activeGuidanceUnavailableReason: feature.properties.guidanceReady
+        ? null
+        : geometryStatusDetail(feature),
+    },
+    landmarkMetadata: null,
+    raw: feature,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function normalizeCampScoutLegalityStatus(value: unknown): CampScoutLegalityStatus | undefined {
@@ -4497,17 +4650,19 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     () => isRouteGeometryViewportOverlayFeatureEnabled(),
     [],
   );
-  const [routeGeometryViewportSegments, setRouteGeometryViewportSegments] = useState<RouteGeometryViewportSegment[]>([]);
+  const [routeCatalogViewportResult, setRouteCatalogViewportResult] = useState<RouteCatalogViewportResult | null>(null);
   const [
     routeGeometryViewportSelectedSegments,
     setRouteGeometryViewportSelectedSegments,
   ] = useState<RouteGeometryOverlaySegment[]>([]);
   const routeGeometryViewportSelectedSegmentsRef = useRef<RouteGeometryOverlaySegment[]>([]);
+  const [selectedRouteCatalogViewportFeatureId, setSelectedRouteCatalogViewportFeatureId] = useState<string | null>(null);
   const [routeGeometryViewportUiState, setRouteGeometryViewportUiState] = useState<RouteGeometryViewportUiState>(
     () => createRouteGeometryViewportUiState(false),
   );
   const routeGeometryViewportFetchCoordinatorRef = useRef(new RouteGeometryViewportFetchCoordinator());
   const routeGeometryViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const routeCatalogViewportCacheRef = useRef(new RouteCatalogViewportCache());
   const [selectedRouteConfidenceTimelineItemId, setSelectedRouteConfidenceTimelineItemId] = useState<string | null>(null);
   const [aiRouteSnapshotVersion, setAiRouteSnapshotVersion] = useState(0);
   const lastExploreRoutesFitSignatureRef = useRef<string | null>(null);
@@ -5041,7 +5196,8 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         clearTimeout(routeGeometryViewportFetchTimerRef.current);
         routeGeometryViewportFetchTimerRef.current = null;
       }
-      setRouteGeometryViewportSegments([]);
+      setRouteCatalogViewportResult(null);
+      setSelectedRouteCatalogViewportFeatureId(null);
       setRouteGeometryViewportUiState((current) =>
         current.enabled ? createRouteGeometryViewportUiState(false) : current,
       );
@@ -5054,7 +5210,8 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         clearTimeout(routeGeometryViewportFetchTimerRef.current);
         routeGeometryViewportFetchTimerRef.current = null;
       }
-      setRouteGeometryViewportSegments([]);
+      setRouteCatalogViewportResult(null);
+      setSelectedRouteCatalogViewportFeatureId(null);
       setRouteGeometryViewportUiState((current) => ({
         ...current,
         enabled: true,
@@ -5087,56 +5244,35 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
     if (plan.type === 'skip') {
       if (plan.reason === 'offline') {
-        const lookup = resolveRouteGeometryViewportOfflineCacheLookup(planBbox, mapZoom, {
-          includeReferenceGeometry: true,
-          vehicleClass: null,
-        });
-        if (lookup) {
-          let cancelled = false;
-          void readRouteGeometryViewportOfflineCache(lookup.cacheKey).then((cached) => {
-            if (cancelled) return;
-            if (!cached) {
-              setRouteGeometryViewportSegments([]);
-              setRouteGeometryViewportUiState((current) => ({
-                ...current,
-                enabled: true,
-                status: 'offline',
-                errorMessage: 'ECS route geometry needs live coverage or a cached viewport.',
-                featureCount: 0,
-                dataState: 'unknown',
-                lastAttemptedBbox: lookup.bbox,
-                lastAttemptedCacheKey: lookup.cacheKey,
-              }));
-              return;
-            }
-            const cachedSegments = markRouteGeometryViewportSegmentsCached(cached.result.segments);
-            setRouteGeometryViewportSegments(cachedSegments);
-            setRouteGeometryViewportUiState((current) => ({
-              ...current,
-              enabled: true,
-              status: cachedSegments.length > 0 ? 'ready' : 'empty',
-              errorMessage: null,
-              featureCount: cachedSegments.length,
-              cappedCount: cached.result.cappedCount,
-              skippedMissingGeometryCount: cached.result.skippedMissingGeometryCount,
-              skippedClosedCount: cached.result.skippedClosedCount,
-              dataState: 'cached',
-              lastAttemptedBbox: lookup.bbox,
-              lastAttemptedCacheKey: lookup.cacheKey,
-              lastSuccessfulBbox: lookup.bbox,
-              lastSuccessfulCacheKey: lookup.cacheKey,
-            }));
-          });
-          return () => {
-            cancelled = true;
-          };
+        const cachedQuery = planBbox
+          ? buildRouteCatalogViewportQuery({ bbox: planBbox, zoom: mapZoom })
+          : null;
+        const cached = cachedQuery ? routeCatalogViewportCacheRef.current.get(cachedQuery) : null;
+        if (cached && cachedQuery) {
+          setRouteCatalogViewportResult(cached);
+          setRouteGeometryViewportUiState((current) => ({
+            ...current,
+            enabled: true,
+            status: cached.returnedCount > 0 ? 'ready' : 'empty',
+            errorMessage: null,
+            featureCount: cached.returnedCount,
+            cappedCount: 0,
+            skippedMissingGeometryCount: cached.insufficientGeometryCount + cached.trailheadOnlyCount,
+            skippedClosedCount: 0,
+            dataState: 'cached',
+            lastAttemptedBbox: cachedQuery.bbox,
+            lastAttemptedCacheKey: cachedQuery.cacheKey,
+            lastSuccessfulBbox: cachedQuery.bbox,
+            lastSuccessfulCacheKey: cachedQuery.cacheKey,
+          }));
+          return;
         }
-        setRouteGeometryViewportSegments([]);
+        setRouteCatalogViewportResult(null);
         setRouteGeometryViewportUiState((current) => ({
           ...current,
           enabled: true,
           status: 'offline',
-          errorMessage: 'ECS route geometry needs live coverage or a cached viewport.',
+          errorMessage: 'ECS route catalog geometry needs live coverage or a cached viewport.',
           featureCount: 0,
           dataState: 'unknown',
         }));
@@ -5151,7 +5287,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         }));
         setRequestBoundsTrigger((prev) => prev + 1);
       } else if (plan.reason === 'invalid_bbox' || plan.reason === 'bbox_too_small') {
-        setRouteGeometryViewportSegments([]);
+        setRouteCatalogViewportResult(null);
         setRouteGeometryViewportUiState((current) => ({
           ...current,
           enabled: true,
@@ -5183,53 +5319,64 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       routeGeometryViewportFetchTimerRef.current = null;
       const request = routeGeometryViewportFetchCoordinatorRef.current.consumeDue(Date.now());
       if (!request) return;
-
-      fetchRouteGeometryViewportSegments({
+      const query = buildRouteCatalogViewportQuery({
         bbox: request.bbox,
         zoom: mapZoom,
-        includeReferenceGeometry: true,
-      })
+      });
+      const cached = routeCatalogViewportCacheRef.current.get(query);
+      if (cached) {
+        if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
+        setRouteCatalogViewportResult(cached);
+        setRouteGeometryViewportUiState((current) => ({
+          ...current,
+          enabled: true,
+          status: cached.returnedCount > 0 ? 'ready' : 'empty',
+          errorMessage: null,
+          featureCount: cached.returnedCount,
+          cappedCount: 0,
+          skippedMissingGeometryCount: cached.insufficientGeometryCount + cached.trailheadOnlyCount,
+          skippedClosedCount: 0,
+          dataState: 'cached',
+          lastAttemptedBbox: query.bbox,
+          lastAttemptedCacheKey: query.cacheKey,
+          lastSuccessfulBbox: query.bbox,
+          lastSuccessfulCacheKey: query.cacheKey,
+        }));
+        return;
+      }
+
+      fetchRouteCatalogViewportFeatures(query)
         .then((result) => {
           if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
-          const degradedMessage = result.degraded
-            ? result.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
-            : null;
-          setRouteGeometryViewportSegments(result.segments);
-          if (!result.degraded) {
-            writeRouteGeometryViewportOfflineCache({
-              lookup: {
-                bbox: request.bbox,
-                cacheKey: request.cacheKey,
-              },
-              result,
-            });
-          }
+          routeCatalogViewportCacheRef.current.set(query, result);
+          setRouteCatalogViewportResult(result);
           setRouteGeometryViewportUiState((current) => ({
             ...current,
             enabled: true,
-            status: result.degraded ? 'error' : result.segments.length > 0 ? 'ready' : 'empty',
-            errorMessage: degradedMessage,
-            featureCount: result.segments.length,
-            cappedCount: result.cappedCount,
-            skippedMissingGeometryCount: result.skippedMissingGeometryCount,
-            skippedClosedCount: result.skippedClosedCount,
-            dataState: result.degraded ? 'unknown' : 'live',
-            lastAttemptedBbox: request.bbox,
-            lastAttemptedCacheKey: request.cacheKey,
-            lastSuccessfulBbox: result.degraded ? current.lastSuccessfulBbox : request.bbox,
-            lastSuccessfulCacheKey: result.degraded ? current.lastSuccessfulCacheKey : request.cacheKey,
+            status: result.returnedCount > 0 ? 'ready' : 'empty',
+            errorMessage: null,
+            featureCount: result.returnedCount,
+            cappedCount: Math.max(0, result.candidateCount - result.returnedCount),
+            skippedMissingGeometryCount: result.insufficientGeometryCount + result.trailheadOnlyCount,
+            skippedClosedCount: 0,
+            dataState: 'live',
+            lastAttemptedBbox: query.bbox,
+            lastAttemptedCacheKey: query.cacheKey,
+            lastSuccessfulBbox: query.bbox,
+            lastSuccessfulCacheKey: query.cacheKey,
           }));
         })
         .catch((error) => {
           if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
+          setRouteCatalogViewportResult(null);
           setRouteGeometryViewportUiState((current) => ({
             ...current,
             enabled: true,
             status: 'error',
-            errorMessage: error instanceof Error ? error.message : 'ECS route geometry is unavailable.',
+            errorMessage: error instanceof Error ? error.message : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
             dataState: 'unknown',
-            lastAttemptedBbox: request.bbox,
-            lastAttemptedCacheKey: request.cacheKey,
+            lastAttemptedBbox: query.bbox,
+            lastAttemptedCacheKey: query.cacheKey,
           }));
         });
     }, Math.max(0, plan.dueAt - now));
@@ -8613,6 +8760,21 @@ const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) => {
 
   if (pinPayload?.kind === 'waypoint' && (pinPayload?.endpointRole === 'trail_entry' || pinPayload?.endpointRole === 'trail_end')) {
     showActiveGuidanceEndpointHint(pinPayload);
+    return;
+  }
+
+  if (pinPayload?.markerKind === 'route_catalog_viewport' || typeof pinPayload?.routeCatalogRouteId === 'string') {
+    const routeId =
+      typeof pinPayload?.routeCatalogRouteId === 'string'
+        ? pinPayload.routeCatalogRouteId
+        : String(pinPayload?.id ?? '').replace(/^route-catalog-marker:/, '');
+    if (!routeId) return;
+    if (roadStepListExpanded) {
+      setRoadStepListExpanded(false);
+    }
+    closeTopPopup();
+    setSelectedExploreRouteSegmentId(null);
+    setSelectedRouteCatalogViewportFeatureId(routeId);
     return;
   }
 
@@ -12701,17 +12863,21 @@ const handleCreateRun = useCallback(() => {
     () => (exploreRoutesEnabled ? exploreRouteOverlayBuild.segments : []),
     [exploreRouteOverlayBuild.segments, exploreRoutesEnabled],
   );
+  const routeCatalogViewportFeatureCollection = useMemo(
+    () => routeCatalogViewportResult?.featureCollection ?? EMPTY_ROUTE_CATALOG_VIEWPORT_FEATURE_COLLECTION,
+    [routeCatalogViewportResult?.featureCollection],
+  );
   const visibleCatalogRouteGeometryOverlaySegments = useMemo(
     () =>
       routeGeometryViewportOverlayEnabled
-        ? routeGeometryViewportSegmentsToOverlaySegments(
-            routeGeometryViewportSegments,
+        ? routeCatalogViewportFeaturesToRouteGeometrySegments(
+            routeCatalogViewportFeatureCollection,
             selectedRouteGeometrySegmentIds,
           )
         : [],
     [
       routeGeometryViewportOverlayEnabled,
-      routeGeometryViewportSegments,
+      routeCatalogViewportFeatureCollection,
       selectedRouteGeometrySegmentIds,
     ],
   );
@@ -12724,6 +12890,25 @@ const handleCreateRun = useCallback(() => {
     [
       routeGeometryViewportSelectedSegments,
       visibleCatalogRouteGeometryOverlaySegments,
+    ],
+  );
+  const routeCatalogViewportPointMarkers = useMemo<PinMarker[]>(
+    () =>
+      routeGeometryOverlayEnabled && routeGeometryViewportOverlayEnabled
+        ? routeCatalogViewportFeatureCollection.features
+            .map((feature) =>
+              routeCatalogViewportFeatureToPinMarker(
+                feature,
+                selectedRouteCatalogViewportFeatureId === feature.properties.routeId,
+              ),
+            )
+            .filter((marker): marker is PinMarker => !!marker)
+        : [],
+    [
+      routeCatalogViewportFeatureCollection,
+      routeGeometryOverlayEnabled,
+      routeGeometryViewportOverlayEnabled,
+      selectedRouteCatalogViewportFeatureId,
     ],
   );
   const routeGeometryOverlayBuild = useMemo(
@@ -12746,11 +12931,12 @@ const handleCreateRun = useCallback(() => {
         dedupedCount: 0,
         catalogViewportActive:
           routeGeometryViewportOverlayEnabled &&
-          catalogRouteGeometryOverlaySegments.length > 0,
+          (catalogRouteGeometryOverlaySegments.length > 0 || routeCatalogViewportPointMarkers.length > 0),
       };
     },
     [
       catalogRouteGeometryOverlaySegments,
+      routeCatalogViewportPointMarkers.length,
       routeGeometryViewportOverlayEnabled,
       routeGeometryViewportUiState.cappedCount,
       routeGeometryViewportUiState.featureCount,
@@ -12777,28 +12963,32 @@ const handleCreateRun = useCallback(() => {
   );
   const routeGeometryViewportLegendMessage = useMemo(() => {
     if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
-      return 'Zoom to 10+ to show ECS trail segments.';
+      return 'Zoom to 10+ to show ECS catalog routes.';
     }
     if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'loading') {
-      return 'Loading ECS trail segments for this map view.';
+      return 'Loading ECS catalog routes for this map view.';
     }
     if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'offline') {
-      return routeGeometryViewportUiState.errorMessage ?? 'Offline. Cached ECS trail segments only.';
+      return routeGeometryViewportUiState.errorMessage ?? 'Offline. Cached ECS catalog routes only.';
     }
     if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'error') {
-      return routeGeometryViewportUiState.errorMessage ?? 'ECS trail segments unavailable.';
+      return routeGeometryViewportUiState.errorMessage ?? 'ECS catalog routes unavailable.';
     }
     if (routeGeometryOverlayBuild.segments.length === 0) {
-      return 'No ECS trail segments in this map view. Pan or zoom to inspect nearby trails.';
+      return 'No ECS catalog routes in this map view. Pan or zoom to inspect nearby trails.';
     }
     const dataStateCopy =
       routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.dataState === 'cached'
         ? ' Cached viewport data.'
         : '';
     const segmentCount = routeGeometryOverlayBuild.segments.length;
-    return `${segmentCount} ECS trail segment${segmentCount === 1 ? '' : 's'} shown in this map view.${dataStateCopy}`;
+    const markerCount = routeCatalogViewportPointMarkers.length;
+    const routeLabel = segmentCount === 1 ? 'route geometry line' : 'route geometry lines';
+    const markerCopy = markerCount > 0 ? ` ${markerCount} trailhead/centroid marker${markerCount === 1 ? '' : 's'} shown for routes without full geometry.` : '';
+    return `${segmentCount} ECS catalog ${routeLabel} shown in this map view.${markerCopy}${dataStateCopy}`;
   }, [
     routeGeometryOverlayBuild.segments.length,
+    routeCatalogViewportPointMarkers.length,
     routeGeometryViewportOverlayEnabled,
     routeGeometryViewportUiState.dataState,
     routeGeometryViewportUiState.errorMessage,
@@ -12836,6 +13026,41 @@ const handleCreateRun = useCallback(() => {
         ? getNavigationHandoffRouteUnavailableReason(selectedExploreRouteNavigationPayload)
         : null,
     [selectedExploreRouteNavigationPayload],
+  );
+  const selectedRouteCatalogViewportFeature = useMemo(
+    () =>
+      selectedRouteCatalogViewportFeatureId
+        ? routeCatalogViewportFeatureCollection.features.find(
+            (feature) => feature.properties.routeId === selectedRouteCatalogViewportFeatureId,
+          ) ?? null
+        : null,
+    [routeCatalogViewportFeatureCollection, selectedRouteCatalogViewportFeatureId],
+  );
+  const selectedRouteCatalogViewportOverlaySegments = useMemo(
+    () =>
+      selectedRouteCatalogViewportFeature
+        ? routeGeometryOverlayBuild.segments.filter(
+            (segment) =>
+              segment.sourceMetadata?.routeCatalogRouteId ===
+              selectedRouteCatalogViewportFeature.properties.routeId,
+          )
+        : [],
+    [routeGeometryOverlayBuild.segments, selectedRouteCatalogViewportFeature],
+  );
+  const selectedRouteCatalogViewportNavigationPayload = useMemo(
+    () =>
+      selectedRouteCatalogViewportFeature
+        ? buildRouteCatalogViewportNavigationPayload(selectedRouteCatalogViewportFeature)
+        : null,
+    [selectedRouteCatalogViewportFeature],
+  );
+  const selectedRouteCatalogViewportBuildUnavailableReason = useMemo(
+    () =>
+      selectedRouteCatalogViewportNavigationPayload &&
+      !canStageNavigationHandoffRoute(selectedRouteCatalogViewportNavigationPayload)
+        ? getNavigationHandoffRouteUnavailableReason(selectedRouteCatalogViewportNavigationPayload)
+        : null,
+    [selectedRouteCatalogViewportNavigationPayload],
   );
   const exploreRouteOverlaySignature = useMemo(
     () => buildExploreRouteOverlaySignature(exploreRouteOverlaySegments),
@@ -12910,6 +13135,26 @@ const handleCreateRun = useCallback(() => {
       setSelectedExploreRouteSegmentId(null);
     }
   }, [exploreRouteOverlaySegments, exploreRoutesEnabled, selectedExploreRouteSegmentId]);
+
+  useEffect(() => {
+    if (!selectedRouteCatalogViewportFeatureId) return;
+    if (!routeGeometryOverlayEnabled || !routeGeometryViewportOverlayEnabled) {
+      setSelectedRouteCatalogViewportFeatureId(null);
+      return;
+    }
+    if (
+      !routeCatalogViewportFeatureCollection.features.some(
+        (feature) => feature.properties.routeId === selectedRouteCatalogViewportFeatureId,
+      )
+    ) {
+      setSelectedRouteCatalogViewportFeatureId(null);
+    }
+  }, [
+    routeCatalogViewportFeatureCollection,
+    routeGeometryOverlayEnabled,
+    routeGeometryViewportOverlayEnabled,
+    selectedRouteCatalogViewportFeatureId,
+  ]);
 
   useEffect(() => {
     if (selectedRouteGeometrySegmentIds.length === 0) return;
@@ -15522,8 +15767,8 @@ const mapBailoutMarkers = useMemo(
 );
 
 const mapPinMarkers = useMemo(
-  () => filteredPinMarkers || [],
-  [filteredPinMarkers]
+  () => [...(filteredPinMarkers || []), ...routeCatalogViewportPointMarkers],
+  [filteredPinMarkers, routeCatalogViewportPointMarkers]
 );
 
 const mapTrailSegments = useMemo(
@@ -18165,21 +18410,22 @@ const toggleRemotenessOverlay = useCallback(() => {
     if (!next) return;
 
     if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
-      showToast(`ZOOM TO ${ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM}+ TO SHOW ECS TRAIL SEGMENTS`);
+      showToast(`ZOOM TO ${ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM}+ TO SHOW ECS CATALOG ROUTES`);
       return;
     }
 
-    if (routeGeometryOverlayBuild.segments.length > 0) {
+    if (routeGeometryOverlayBuild.segments.length > 0 || routeCatalogViewportPointMarkers.length > 0) {
       return;
     }
 
     showToast(
       routeGeometryViewportOverlayEnabled
-        ? 'ECS TRAIL SEGMENTS LOADING FOR THIS MAP VIEW'
-        : 'ECS TRAIL SEGMENTS UNAVAILABLE',
+        ? 'ECS CATALOG ROUTES LOADING FOR THIS MAP VIEW'
+        : 'ECS CATALOG ROUTES UNAVAILABLE',
     );
   }, [
     routeGeometryOverlayBuild.segments.length,
+    routeCatalogViewportPointMarkers.length,
     routeGeometryOverlayEnabled,
     routeGeometryViewportOverlayEnabled,
     routeGeometryViewportZoomReady,
@@ -18233,6 +18479,18 @@ const toggleRemotenessOverlay = useCallback(() => {
     }
 
     hapticMicro();
+    const catalogRouteId = match.sourceMetadata?.routeCatalogRouteId ?? null;
+    if (catalogRouteId) {
+      if (roadStepListExpanded) {
+        setRoadStepListExpanded(false);
+      }
+      closeTopPopup();
+      setSelectedExploreRouteSegmentId(null);
+      setSelectedRouteCatalogViewportFeatureId(catalogRouteId);
+      showToast('ECS CATALOG ROUTE SELECTED');
+      return;
+    }
+
     if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) {
       showToast('END ACTIVE NAVIGATION TO BUILD FROM ROUTE GEOMETRY');
       return;
@@ -18300,11 +18558,14 @@ const toggleRemotenessOverlay = useCallback(() => {
     );
   }, [
     closeNavigateDetailSurfaces,
+    closeTopPopup,
     pendingHybridTrailTransition,
     roadNavigationActive,
+    roadStepListExpanded,
     routeBuilderSegments,
     routeGeometryOverlaySegments,
     selectedRouteGeometrySegmentIds,
+    setRoadStepListExpanded,
     showToast,
     trailNavigationActive,
   ]);
@@ -18318,6 +18579,165 @@ const toggleRemotenessOverlay = useCallback(() => {
       handleExploreRouteSegmentTap(segment);
     }
   }, [handleExploreRouteSegmentTap, handleRouteGeometrySegmentTap]);
+
+  const closeRouteCatalogViewportSelection = useCallback(() => {
+    setSelectedRouteCatalogViewportFeatureId(null);
+  }, []);
+
+  const stageRouteCatalogSegmentsForBuilder = useCallback((mode: 'build' | 'stitch') => {
+    if (!selectedRouteCatalogViewportFeature) return false;
+    if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) {
+      showToast('END ACTIVE NAVIGATION TO BUILD FROM ECS CATALOG GEOMETRY');
+      return false;
+    }
+    if (selectedRouteCatalogViewportOverlaySegments.length === 0) {
+      showToast(`${geometryStatusCopy(selectedRouteCatalogViewportFeature.properties.geometryStatus)} - ROUTE GEOMETRY UNAVAILABLE`);
+      return false;
+    }
+
+    const existingSourceIds = new Set(
+      mode === 'stitch'
+        ? routeBuilderSegments
+            .map((segment) => segment.sourceSegmentId)
+            .filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : [],
+    );
+    const addedSegments = selectedRouteCatalogViewportOverlaySegments
+      .filter((segment) => !existingSourceIds.has(segment.id))
+      .map((segment) => routeGeometrySegmentToRouteBuilderSegment(segment) as RouteBuilderSegmentData);
+    if (addedSegments.length === 0) {
+      showToast('ECS CATALOG ROUTE ALREADY IN BUILDER');
+      return false;
+    }
+
+    const nextSegments = mode === 'build'
+      ? addedSegments
+      : [...routeBuilderSegments, ...addedSegments];
+    const previousEndpointSegment = [...nextSegments]
+      .reverse()
+      .find((item) => Array.isArray(item.coordinates) && item.coordinates.length > 1);
+
+    closeNavigateDetailSurfaces();
+    setToolsMenuOpen(false);
+    setActiveTopPopup(null);
+    setPinDropMode(false);
+    setCampsiteDrawMode(false);
+    setShowCrosshair(false);
+    setFollowUser(false);
+    setUserHasManuallyMovedMap(true);
+    setRouteBuilderActive(true);
+    setRouteBuilderDrawing(false);
+    setDispersedRouteBuildActive(false);
+    setDispersedRouteBuildStatus(null);
+    setRouteBuilderSegments(nextSegments);
+    setSelectedRouteGeometrySegmentIds((current) => {
+      const base = mode === 'build' ? [] : current;
+      const next = Array.from(new Set([...base, ...selectedRouteCatalogViewportOverlaySegments.map((segment) => segment.id)]));
+      return next;
+    });
+    setRouteGeometryViewportSelectedSegments((current) => {
+      const base = mode === 'build' ? [] : current;
+      const nextById = new Map(base.map((segment) => [segment.id, segment]));
+      selectedRouteCatalogViewportOverlaySegments.forEach((segment) => {
+        nextById.set(segment.id, {
+          ...segment,
+          routeGeometrySelected: true,
+        });
+      });
+      const next = Array.from(nextById.values());
+      routeGeometryViewportSelectedSegmentsRef.current = next;
+      return next;
+    });
+    setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);
+    setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
+    setRouteBuilderSnapMessage(ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING);
+    showToast(
+      mode === 'build'
+        ? 'ECS CATALOG ROUTE LOADED IN BUILDER'
+        : 'ECS CATALOG SEGMENT ADDED TO BUILDER',
+    );
+    return true;
+  }, [
+    closeNavigateDetailSurfaces,
+    pendingHybridTrailTransition,
+    roadNavigationActive,
+    routeBuilderSegments,
+    selectedRouteCatalogViewportFeature,
+    selectedRouteCatalogViewportOverlaySegments,
+    showToast,
+    trailNavigationActive,
+  ]);
+
+  const handleRouteCatalogNavigateToTrailhead = useCallback(() => {
+    const feature = selectedRouteCatalogViewportFeature;
+    if (!feature) return;
+    const anchor = routeCatalogViewportFeatureAnchor(feature);
+    if (!anchor) {
+      showToast('TRAILHEAD COORDINATE UNAVAILABLE');
+      return;
+    }
+    hapticCommand();
+    const destination: RoadNavDestination = {
+      id: `route-catalog-trailhead-${feature.properties.routeId}`,
+      title: feature.properties.title,
+      subtitle: [feature.properties.forest ?? feature.properties.region, geometryStatusCopy(feature.properties.geometryStatus)]
+        .filter(Boolean)
+        .join(' | ') || null,
+      coordinate: anchor,
+      sourceType: 'explore_handoff',
+      raw: {
+        routeCatalogRouteId: feature.properties.routeId,
+        geometryStatus: feature.properties.geometryStatus,
+        guidanceReady: feature.properties.guidanceReady,
+        sourceLabel: feature.properties.sourceLabel,
+      },
+    };
+    closeRouteCatalogViewportSelection();
+    void previewRoadDestination(destination, 'explore_handoff').then(() => {
+      startRoadNavigation();
+    });
+  }, [
+    closeRouteCatalogViewportSelection,
+    previewRoadDestination,
+    selectedRouteCatalogViewportFeature,
+    showToast,
+    startRoadNavigation,
+  ]);
+
+  const handleRouteCatalogStartHybridGuidance = useCallback(async () => {
+    const feature = selectedRouteCatalogViewportFeature;
+    const payload = selectedRouteCatalogViewportNavigationPayload;
+    if (!feature || !payload) return;
+    if (!feature.properties.guidanceReady || selectedRouteCatalogViewportBuildUnavailableReason) {
+      showToast(
+        (selectedRouteCatalogViewportBuildUnavailableReason ?? geometryStatusDetail(feature)).toUpperCase(),
+      );
+      return;
+    }
+    hapticCommand();
+    closeRouteCatalogViewportSelection();
+    pendingAutoStartRouteIdRef.current = payload.id;
+    setFollowUser(true);
+    await applyExploreNavigationPayload(payload);
+    showToast('HYBRID GUIDANCE STARTING FROM ECS CATALOG ROUTE');
+  }, [
+    applyExploreNavigationPayload,
+    closeRouteCatalogViewportSelection,
+    selectedRouteCatalogViewportBuildUnavailableReason,
+    selectedRouteCatalogViewportFeature,
+    selectedRouteCatalogViewportNavigationPayload,
+    showToast,
+  ]);
+
+  const handleRouteCatalogBuildRouteFromTrail = useCallback(() => {
+    hapticCommand();
+    stageRouteCatalogSegmentsForBuilder('build');
+  }, [stageRouteCatalogSegmentsForBuilder]);
+
+  const handleRouteCatalogAddOrStitchSegment = useCallback(() => {
+    hapticCommand();
+    stageRouteCatalogSegmentsForBuilder('stitch');
+  }, [stageRouteCatalogSegmentsForBuilder]);
 
   const handleBuildRouteFromExploreOverlay = useCallback(async () => {
     if (!selectedExploreRouteNavigationPayload) return;
@@ -19287,7 +19707,7 @@ const stableMapSurface = useMemo(() => {
         interactive
         segments={mapSegmentFeatures}
         bailoutMarkers={bailoutMarkers}
-        pinMarkers={filteredPinMarkers}
+        pinMarkers={mapPinMarkers}
         showCrosshair={showCrosshair}
         onLongPress={handleLongPress}
         onBailoutTap={handleBailoutMarkerTap}
@@ -19935,6 +20355,120 @@ const stableMapSurface = useMemo(() => {
         }
       />
 
+      {selectedRouteCatalogViewportFeature ? (
+        <View
+          style={[
+            styles.routeCatalogSelectionPanel,
+            {
+              top: campsiteDetailTopOffset,
+              left: OVERLAY_EDGE,
+              right: routeBottomRightInset || OVERLAY_EDGE,
+              maxWidth: adaptive.isExpanded ? 430 : undefined,
+            },
+          ]}
+          pointerEvents="box-none"
+        >
+          <View style={styles.routeCatalogSelectionCard}>
+            <View style={styles.routeCatalogSelectionHeader}>
+              <View style={styles.routeCatalogSelectionTitleWrap}>
+                <Text style={styles.routeCatalogSelectionEyebrow} numberOfLines={1}>
+                  ECS ROUTE CATALOG | {geometryStatusCopy(selectedRouteCatalogViewportFeature.properties.geometryStatus)}
+                </Text>
+                <Text style={styles.routeCatalogSelectionTitle} numberOfLines={2}>
+                  {selectedRouteCatalogViewportFeature.properties.title}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={closeRouteCatalogViewportSelection}
+                activeOpacity={0.8}
+                hitSlop={CLOSE_CONTROL_HIT_SLOP}
+                accessibilityRole="button"
+                accessibilityLabel="Close route catalog selection"
+              >
+                <Ionicons name="close" size={18} color={TACTICAL.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.routeCatalogSelectionMetaRow}>
+              <Text style={styles.routeCatalogSelectionMetaText} numberOfLines={1}>
+                {[
+                  selectedRouteCatalogViewportFeature.properties.forest ??
+                    selectedRouteCatalogViewportFeature.properties.region,
+                  selectedRouteCatalogViewportFeature.properties.distanceMiles != null
+                    ? `${selectedRouteCatalogViewportFeature.properties.distanceMiles.toFixed(1)} mi`
+                    : null,
+                  selectedRouteCatalogViewportFeature.properties.sourceLabel,
+                ].filter(Boolean).join(' | ')}
+              </Text>
+            </View>
+
+            <Text style={styles.routeCatalogSelectionDetail} numberOfLines={3}>
+              {geometryStatusDetail(selectedRouteCatalogViewportFeature)}
+            </Text>
+
+            <View style={styles.routeCatalogSelectionActions}>
+              <TouchableOpacity
+                style={styles.routeCatalogSelectionAction}
+                onPress={handleRouteCatalogNavigateToTrailhead}
+                activeOpacity={0.86}
+                accessibilityRole="button"
+                accessibilityLabel="Navigate to trailhead"
+              >
+                <Ionicons name="navigate-outline" size={15} color={TACTICAL.amber} />
+                <Text style={styles.routeCatalogSelectionActionText} numberOfLines={2}>
+                  NAVIGATE TO TRAILHEAD
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.routeCatalogSelectionAction,
+                  (!selectedRouteCatalogViewportFeature.properties.guidanceReady ||
+                    !!selectedRouteCatalogViewportBuildUnavailableReason) &&
+                    styles.routeCatalogSelectionActionDisabled,
+                ]}
+                onPress={handleRouteCatalogStartHybridGuidance}
+                activeOpacity={0.86}
+                disabled={
+                  !selectedRouteCatalogViewportFeature.properties.guidanceReady ||
+                  !!selectedRouteCatalogViewportBuildUnavailableReason
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Start hybrid guidance"
+              >
+                <Ionicons name="compass-outline" size={15} color={TACTICAL.amber} />
+                <Text style={styles.routeCatalogSelectionActionText} numberOfLines={2}>
+                  START HYBRID GUIDANCE
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.routeCatalogSelectionAction}
+                onPress={handleRouteCatalogBuildRouteFromTrail}
+                activeOpacity={0.86}
+                accessibilityRole="button"
+                accessibilityLabel="Build route from trail"
+              >
+                <Ionicons name="map-outline" size={15} color={TACTICAL.amber} />
+                <Text style={styles.routeCatalogSelectionActionText} numberOfLines={2}>
+                  BUILD ROUTE FROM TRAIL
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.routeCatalogSelectionAction}
+                onPress={handleRouteCatalogAddOrStitchSegment}
+                activeOpacity={0.86}
+                accessibilityRole="button"
+                accessibilityLabel="Add or stitch segment"
+              >
+                <Ionicons name="git-merge-outline" size={15} color={TACTICAL.amber} />
+                <Text style={styles.routeCatalogSelectionActionText} numberOfLines={2}>
+                  ADD/STITCH SEGMENT
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      ) : null}
+
       {showInlineIntelPanel && (
         <View style={styles.intelPanel}>
           {surfacedMissionBrief && (
@@ -20463,7 +20997,7 @@ const stableMapSurface = useMemo(() => {
   mapCameraMode,
   mapSegmentFeatures,
   bailoutMarkers,
-  filteredPinMarkers,
+  mapPinMarkers,
   showCrosshair,
   handleLongPress,
   handleLongPressAddWaypoint,
@@ -20629,6 +21163,13 @@ const stableMapSurface = useMemo(() => {
   selectedExploreRouteCompatResult,
   selectedExploreRouteOpportunity,
   selectedExploreRouteVehicleProfile,
+  selectedRouteCatalogViewportFeature,
+  selectedRouteCatalogViewportBuildUnavailableReason,
+  closeRouteCatalogViewportSelection,
+  handleRouteCatalogNavigateToTrailhead,
+  handleRouteCatalogStartHybridGuidance,
+  handleRouteCatalogBuildRouteFromTrail,
+  handleRouteCatalogAddOrStitchSegment,
     mapCameraCommand,
     mapCameraCommandTrigger,
     selectedCampIntelComparison,
@@ -23685,6 +24226,96 @@ mapFloatingControlsLayer: {
 mapFloatingControlsLayerPersistent: {
   zIndex: NAV_OVERLAY_Z.modal - 4,
   elevation: NAV_OVERLAY_Z.modal - 4,
+},
+
+routeCatalogSelectionPanel: {
+  position: 'absolute',
+  zIndex: NAV_OVERLAY_Z.modal - 2,
+  elevation: NAV_OVERLAY_Z.modal - 2,
+  pointerEvents: 'box-none',
+},
+routeCatalogSelectionCard: {
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: 'rgba(242,194,77,0.26)',
+  backgroundColor: 'rgba(8,12,15,0.96)',
+  padding: 12,
+  gap: 9,
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 10 },
+  shadowOpacity: 0.28,
+  shadowRadius: 16,
+},
+routeCatalogSelectionHeader: {
+  flexDirection: 'row',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 12,
+},
+routeCatalogSelectionTitleWrap: {
+  flex: 1,
+  minWidth: 0,
+},
+routeCatalogSelectionEyebrow: {
+  ...TYPO.U2,
+  color: TACTICAL.amber,
+  fontSize: 8,
+  letterSpacing: 0.9,
+},
+routeCatalogSelectionTitle: {
+  ...TYPO.T3,
+  color: TACTICAL.text,
+  fontSize: 15,
+  lineHeight: 19,
+  marginTop: 3,
+},
+routeCatalogSelectionMetaRow: {
+  borderTopWidth: 1,
+  borderBottomWidth: 1,
+  borderColor: 'rgba(255,255,255,0.08)',
+  paddingVertical: 7,
+},
+routeCatalogSelectionMetaText: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 10,
+  lineHeight: 14,
+},
+routeCatalogSelectionDetail: {
+  ...TYPO.B2,
+  color: TACTICAL.text,
+  fontSize: 11,
+  lineHeight: 15,
+},
+routeCatalogSelectionActions: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  gap: 8,
+},
+routeCatalogSelectionAction: {
+  flexGrow: 1,
+  flexBasis: '48%',
+  minHeight: 42,
+  borderRadius: 8,
+  borderWidth: 1,
+  borderColor: 'rgba(242,194,77,0.24)',
+  backgroundColor: 'rgba(242,194,77,0.10)',
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingHorizontal: 8,
+  paddingVertical: 7,
+  gap: 4,
+},
+routeCatalogSelectionActionDisabled: {
+  opacity: 0.42,
+},
+routeCatalogSelectionActionText: {
+  ...TYPO.U2,
+  color: TACTICAL.text,
+  fontSize: 8,
+  lineHeight: 10,
+  textAlign: 'center',
+  letterSpacing: 0.6,
 },
 
 mapModalLayer: {

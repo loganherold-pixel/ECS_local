@@ -177,6 +177,12 @@ type MarkerLike = {
   ratingFactors?: { label: string; value?: string | number; impact?: string; description?: string }[];
   selected?: boolean;
   badges?: { label: string; tone: CampIntelTone }[];
+  markerKind?: string;
+  routeCatalogRouteId?: string;
+  geometryStatus?: string;
+  guidanceReady?: boolean;
+  sourceLabel?: string;
+  distanceMiles?: number | null;
 };
 
 export type CampScoutMapMarkerPayload = {
@@ -431,6 +437,12 @@ export type PinMarker = {
   mapIcon?: string;
   mapChar?: string;
   resolved?: boolean;
+  markerKind?: string;
+  routeCatalogRouteId?: string;
+  geometryStatus?: string;
+  guidanceReady?: boolean;
+  sourceLabel?: string;
+  distanceMiles?: number | null;
 };
 
 export type TrailSegmentData = TrailSegment;
@@ -491,6 +503,12 @@ type WebMapPayload = {
     color?: string;
     mapChar?: string;
     resolved?: boolean;
+    markerKind?: string;
+    routeCatalogRouteId?: string;
+    geometryStatus?: string;
+    guidanceReady?: boolean;
+    sourceLabel?: string;
+    distanceMiles?: number | null;
   }[];
   trailSegments: {
     id: string;
@@ -1407,6 +1425,16 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
           color: m.color,
           mapChar: typeof m.mapChar === 'string' ? m.mapChar.slice(0, 2) : undefined,
           resolved: !!m.resolved,
+          markerKind: typeof m.markerKind === 'string' ? m.markerKind : undefined,
+          routeCatalogRouteId:
+            typeof m.routeCatalogRouteId === 'string' ? m.routeCatalogRouteId : undefined,
+          geometryStatus: typeof m.geometryStatus === 'string' ? m.geometryStatus : undefined,
+          guidanceReady: typeof m.guidanceReady === 'boolean' ? m.guidanceReady : undefined,
+          sourceLabel: typeof m.sourceLabel === 'string' ? m.sourceLabel : undefined,
+          distanceMiles:
+            typeof m.distanceMiles === 'number' && Number.isFinite(m.distanceMiles)
+              ? m.distanceMiles
+              : null,
         };
       }),
     trailSegments: (props.trailSegments || []).map((segment, index) => ({

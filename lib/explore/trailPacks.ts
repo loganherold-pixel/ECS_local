@@ -11,6 +11,11 @@ import {
 } from './trailPackReviewQueue';
 import { normalizeNavigationGuidanceGeometry } from '../navigationCatalogGuidanceGeometry';
 import { deriveRouteTerrainConfidenceImpact } from './routeTerrainConfidence';
+import {
+  classifyRouteCatalogTripType,
+  distanceMilesFromPointToSegment,
+  type RouteCatalogTripClassification,
+} from './routeCatalogDiscovery';
 
 export type ECSTrailPackSource =
   | 'ecs_submitted'
@@ -124,6 +129,8 @@ export type ECSTrailPackOperationalCriteria = {
   routeIntelligence?: Record<string, unknown>;
 };
 
+export type ECSTrailPackCatalogTripClassification = RouteCatalogTripClassification;
+
 export type ECSTrailPackCatalogVerification = {
   status: 'normal' | 'watch' | 'caution' | 'critical';
   sourceLabel: string;
@@ -159,6 +166,13 @@ export type ECSTrailPack = {
   minimumFuelRangeMiles?: number;
   minimumWaterCapacityGallons?: number;
   routeIntelligence?: Record<string, unknown>;
+  searchDistanceMiles?: number;
+  geometryDistanceMiles?: number;
+  trailheadDistanceMiles?: number;
+  centerDistanceMiles?: number;
+  searchMatchReasons?: string[];
+  featuredRouteScore?: number;
+  catalogTripClassification?: ECSTrailPackCatalogTripClassification;
   elevationGainFt?: number;
   elevationLossFt?: number;
   elevationChangeFt?: number;
@@ -320,15 +334,23 @@ export function getTrailPackDistanceFromUserMiles(
   pack: ECSTrailPack,
   userCoordinate: ECSTrailPackCoordinate,
 ): number {
-  const geometryCoordinates = getTrailPackGeometryCoordinates(pack);
-  const candidateCoordinates = geometryCoordinates.length > 0
-    ? geometryCoordinates
-    : [pack.centerCoordinate];
+  if (Number.isFinite(pack.searchDistanceMiles)) {
+    return Number(pack.searchDistanceMiles);
+  }
 
-  return candidateCoordinates.reduce((nearestDistance, coordinate) => {
-    const distance = distanceMilesBetween(userCoordinate, coordinate);
-    return Math.min(nearestDistance, distance);
-  }, Number.POSITIVE_INFINITY);
+  const geometrySegments = getTrailPackGeometryCoordinateSegments(pack);
+  let nearestGeometryDistance = Number.POSITIVE_INFINITY;
+  geometrySegments.forEach((segment) => {
+    for (let index = 1; index < segment.length; index += 1) {
+      nearestGeometryDistance = Math.min(
+        nearestGeometryDistance,
+        distanceMilesFromPointToSegment(userCoordinate, segment[index - 1], segment[index]),
+      );
+    }
+  });
+  if (Number.isFinite(nearestGeometryDistance)) return nearestGeometryDistance;
+
+  return distanceMilesBetween(userCoordinate, pack.centerCoordinate);
 }
 
 export function getTrailPackGuidanceReadiness(
@@ -484,6 +506,9 @@ export function compareTrailPacksForDiscovery(
   left: ECSTrailPackDiscoveryItem,
   right: ECSTrailPackDiscoveryItem,
 ): number {
+  const featuredDelta = (right.featuredRouteScore ?? 0) - (left.featuredRouteScore ?? 0);
+  if (featuredDelta !== 0) return featuredDelta;
+
   const confidenceDelta = right.confidenceScore - left.confidenceScore;
   if (confidenceDelta !== 0) return confidenceDelta;
 
@@ -527,6 +552,13 @@ export function trailPackToExpeditionOpportunity(
     5;
   const terrainDifficulty = terrainImpact.terrainDifficulty ?? fallbackTerrainDifficulty;
   const elevationGainFt = Math.max(0, Math.round(terrainImpact.elevationGainFt ?? pack.elevationGainFt ?? 0));
+  const catalogTripClassification = pack.catalogTripClassification ?? classifyRouteCatalogTripType({
+    name: pack.name,
+    distanceMiles: pack.distanceMiles,
+    estimatedDurationMinutes: pack.estimatedDurationMinutes,
+    tags: pack.tags,
+    routeIntelligence: pack.routeIntelligence,
+  });
   const routeCatalogOperationalCriteria: ECSTrailPackOperationalCriteria = {
     remotenessScore: pack.remotenessScore,
     campabilityScore: pack.campabilityScore,
@@ -552,7 +584,7 @@ export function trailPackToExpeditionOpportunity(
       ? pack.confidenceReasons.slice(0, 4)
       : ['Approved Trail Pack available for Explore preview.'],
     elevationGainFt,
-    estimatedDays: Math.max(1, Math.ceil((pack.estimatedDurationMinutes ?? 180) / 480)),
+    estimatedDays: catalogTripClassification.estimatedDays,
     bestSeason: 'Verify locally',
     permitRequired: false,
     imageTag: 'trail-pack',
@@ -576,6 +608,13 @@ export function trailPackToExpeditionOpportunity(
       trailPackRouteType: pack.routeType,
       routeGeometryMode: pack.routeGeometryMode ?? null,
       confidenceScore: pack.confidenceScore,
+      searchDistanceMiles: pack.searchDistanceMiles ?? null,
+      geometryDistanceMiles: pack.geometryDistanceMiles ?? null,
+      trailheadDistanceMiles: pack.trailheadDistanceMiles ?? null,
+      centerDistanceMiles: pack.centerDistanceMiles ?? null,
+      searchMatchReasons: pack.searchMatchReasons ?? [],
+      featuredRouteScore: pack.featuredRouteScore ?? 0,
+      catalogTripClassification,
       elevationGainFt,
       elevationLossFt: terrainImpact.elevationLossFt,
       elevationChangeFt: terrainImpact.elevationChangeFt,

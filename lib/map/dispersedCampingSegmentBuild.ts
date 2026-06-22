@@ -18,6 +18,10 @@ export type RouteSegmentSourceMetadata = {
   routeGeometrySourceKind?: string | null;
   dataState?: string | null;
   warnings?: string[];
+  routeCatalogRouteId?: string | null;
+  geometryStatus?: string | null;
+  guidanceReady?: boolean | null;
+  segmentIds?: string[];
 };
 
 export type DispersedRouteLegSegment = {

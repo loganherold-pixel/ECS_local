@@ -168,6 +168,15 @@ const PREVIEW_MAX_POINTS = 120;
 const ROUTE_CATALOG_RADIUS_CANDIDATE_FANOUT = 12;
 const ROUTE_CATALOG_RADIUS_CANDIDATE_MIN = 250;
 const ROUTE_CATALOG_RADIUS_CANDIDATE_MAX = 2000;
+const ROUTE_CATALOG_RADIUS_GEOMETRY_PADDING_MILES = 150;
+const ROUTE_CATALOG_KNOWN_FEATURED_ROUTES = [
+  {
+    key: 'rubicon_trail',
+    label: 'Rubicon Trail',
+    aliases: ['rubicon', 'rubicon trail', 'the rubicon'],
+    score: 100,
+  },
+];
 
 function searchSelect(includeGeometry: boolean, includePreviewGeometry: boolean): string {
   const columns = [...ROUTE_CATALOG_SEARCH_COLUMNS];
@@ -219,16 +228,225 @@ function routeCenter(record: Record<string, unknown>): { latitude: number; longi
   return latitude != null && longitude != null ? { latitude, longitude } : null;
 }
 
-function withSearchDistanceMiles(
+function cleanSearchToken(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => cleanText(item))
+    .filter(Boolean);
+}
+
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function recordIntelligence(record: Record<string, unknown>): Record<string, unknown> | null {
+  return readRecord(record.route_intelligence ?? record.routeIntelligence);
+}
+
+function recordAliases(record: Record<string, unknown>): string[] {
+  const intelligence = recordIntelligence(record);
+  return unique([
+    cleanText(record.name),
+    cleanText(record.public_id),
+    cleanText(record.id),
+    ...readStringArray(record.tags),
+    ...readStringArray(record.aliases),
+    ...readStringArray(intelligence?.aliases),
+  ]);
+}
+
+function recordHaystack(record: Record<string, unknown>): string {
+  return cleanSearchToken([
+    record.name,
+    record.public_id,
+    record.id,
+    record.description,
+    readStringArray(record.tags).join(' '),
+    recordAliases(record).join(' '),
+  ].join(' '));
+}
+
+function cleanTripType(value: unknown): string | null {
+  const token = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  if (['day', 'day_trip', 'daytrip', 'same_day', 'single_day'].includes(token)) return 'day_trip';
+  if (['overnight', 'overnight_camp', 'overnight_camping'].includes(token)) return 'overnight_camping';
+  if (['weekend', 'weekend_trip', 'weekend_overland', 'two_day', 'two_day_trip'].includes(token)) return 'weekend_overland';
+  if (['expedition', 'multi_day', 'multi_day_expedition', 'extended'].includes(token)) return 'multi_day_expedition';
+  return null;
+}
+
+function classifyRouteCatalogTrip(record: Record<string, unknown>): Record<string, unknown> {
+  const intelligence = recordIntelligence(record);
+  const explicit = cleanTripType(record.trip_type ?? record.tripType ?? intelligence?.trip_type ?? intelligence?.tripType);
+  const durationMinutes = readNumber(record.estimated_duration_minutes);
+  const durationHours = durationMinutes != null ? durationMinutes / 60 : null;
+  const distanceMiles = readNumber(record.distance_miles);
+  const haystack = recordHaystack(record);
+  let computed = 'day_trip';
+  if (
+    /\b(expedition|multi day|multi-day|extended travel)\b/.test(haystack) ||
+    (durationHours != null && durationHours > 24) ||
+    (distanceMiles != null && distanceMiles >= 150)
+  ) {
+    computed = 'multi_day_expedition';
+  } else if (
+    /\b(weekend|two day|2 day|overnight|requires camping|camping required)\b/.test(haystack) ||
+    (durationHours != null && durationHours > 12)
+  ) {
+    computed = 'weekend_overland';
+  }
+  const tripType = explicit ?? computed;
+  const estimatedDays = tripType === 'day_trip'
+    ? 1
+    : tripType === 'multi_day_expedition'
+      ? Math.max(3, Math.ceil((durationMinutes ?? 1440) / 480))
+      : Math.max(2, Math.min(3, Math.ceil((durationMinutes ?? 960) / 480)));
+  const warnings = explicit && explicit !== computed
+    ? [`Catalog trip type differs from computed ${computed}; keeping catalog trip type.`]
+    : [];
+  return {
+    tripType,
+    estimatedDays,
+    source: explicit ? 'catalog' : 'computed',
+    confidence: explicit ? 'high' : 'medium',
+    reasons: [explicit ? `Catalog trip type is ${explicit}.` : `Computed trip type is ${computed}.`],
+    warnings,
+    computedTripType: computed,
+  };
+}
+
+function coordinateFromRecord(
+  record: Record<string, unknown>,
+  latitudeKeys: string[],
+  longitudeKeys: string[],
+): { latitude: number; longitude: number } | null {
+  const intelligence = recordIntelligence(record);
+  for (const latKey of latitudeKeys) {
+    const latitude = readNumber(record[latKey]) ?? readNumber(intelligence?.[latKey]);
+    if (latitude == null) continue;
+    for (const lngKey of longitudeKeys) {
+      const longitude = readNumber(record[lngKey]) ?? readNumber(intelligence?.[lngKey]);
+      if (longitude == null) continue;
+      if (Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180) return { latitude, longitude };
+    }
+  }
+  return null;
+}
+
+function routeTrailhead(record: Record<string, unknown>): { latitude: number; longitude: number } | null {
+  const intelligence = recordIntelligence(record);
+  const direct = readRecord(record.trailhead_coordinate ?? record.trailheadCoordinate ?? record.start_coordinate ?? record.startCoordinate);
+  if (direct) {
+    const latitude = readNumber(direct.latitude ?? direct.lat);
+    const longitude = readNumber(direct.longitude ?? direct.lng ?? direct.lon);
+    if (latitude != null && longitude != null) return { latitude, longitude };
+  }
+  const nested = readRecord(
+    intelligence?.trailhead_coordinate ??
+      intelligence?.trailheadCoordinate ??
+      intelligence?.start_coordinate ??
+      intelligence?.startCoordinate,
+  );
+  if (nested) {
+    const latitude = readNumber(nested.latitude ?? nested.lat);
+    const longitude = readNumber(nested.longitude ?? nested.lng ?? nested.lon);
+    if (latitude != null && longitude != null) return { latitude, longitude };
+  }
+  return coordinateFromRecord(
+    record,
+    ['trailhead_latitude', 'trailheadLatitude', 'start_latitude', 'startLatitude', 'startLat'],
+    ['trailhead_longitude', 'trailheadLongitude', 'start_longitude', 'startLongitude', 'startLng'],
+  );
+}
+
+function geometryLines(record: Record<string, unknown>): Array<Array<{ latitude: number; longitude: number }>> {
+  const geometry = readRecord(record.route_geometry ?? record.routeGeometry ?? record.geometry);
+  if (!geometry) return [];
+  const type = cleanText(geometry.type);
+  const rawCoordinates = geometry.coordinates;
+  if (type === 'LineString' && Array.isArray(rawCoordinates)) {
+    const line = rawCoordinates
+      .map(cleanCoordinate)
+      .filter((point): point is number[] => !!point)
+      .map(([longitude, latitude]) => ({ latitude, longitude }));
+    return line.length >= 2 ? [line] : [];
+  }
+  if (type === 'MultiLineString' && Array.isArray(rawCoordinates)) {
+    return rawCoordinates
+      .filter(Array.isArray)
+      .map((segment) =>
+        segment
+          .map(cleanCoordinate)
+          .filter((point): point is number[] => !!point)
+          .map(([longitude, latitude]) => ({ latitude, longitude })),
+      )
+      .filter((line) => line.length >= 2);
+  }
+  return [];
+}
+
+function pointToSegmentDistanceMiles(
+  point: { latitude: number; longitude: number },
+  start: { latitude: number; longitude: number },
+  end: { latitude: number; longitude: number },
+): number {
+  const milesPerDegreeLatitude = 69;
+  const milesPerDegreeLongitude = 69.172 * Math.cos(degreesToRadians(point.latitude));
+  const startX = (start.longitude - point.longitude) * milesPerDegreeLongitude;
+  const startY = (start.latitude - point.latitude) * milesPerDegreeLatitude;
+  const endX = (end.longitude - point.longitude) * milesPerDegreeLongitude;
+  const endY = (end.latitude - point.latitude) * milesPerDegreeLatitude;
+  const dx = endX - startX;
+  const dy = endY - startY;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return Math.sqrt(startX * startX + startY * startY);
+  const t = Math.max(0, Math.min(1, (-(startX * dx + startY * dy)) / lengthSquared));
+  const nearestX = startX + t * dx;
+  const nearestY = startY + t * dy;
+  return Math.sqrt(nearestX * nearestX + nearestY * nearestY);
+}
+
+function geometryDistanceMiles(
   record: Record<string, unknown>,
   center: { latitude: number; longitude: number },
-): Record<string, unknown> | null {
-  const route = routeCenter(record);
-  if (!route) return null;
-  return {
-    ...record,
-    search_distance_miles: Number(haversineMiles(center, route).toFixed(2)),
-  };
+): number | null {
+  const lines = geometryLines(record);
+  let nearest = Number.POSITIVE_INFINITY;
+  lines.forEach((line) => {
+    for (let index = 1; index < line.length; index += 1) {
+      nearest = Math.min(nearest, pointToSegmentDistanceMiles(center, line[index - 1], line[index]));
+    }
+  });
+  return Number.isFinite(nearest) ? nearest : null;
+}
+
+function roundDistance(value: number | null): number | null {
+  return value == null || !Number.isFinite(value) ? null : Number(value.toFixed(2));
+}
+
+function featuredRouteScore(record: Record<string, unknown>): number {
+  const haystack = recordHaystack(record);
+  let score = 0;
+  ROUTE_CATALOG_KNOWN_FEATURED_ROUTES.forEach((route) => {
+    if (route.aliases.some((alias) => haystack.includes(alias))) score = Math.max(score, route.score);
+  });
+  if (record.featured === true || recordIntelligence(record)?.featured === true || readStringArray(record.tags).some((tag) => /featured|known|iconic/i.test(tag))) {
+    score = Math.max(score, 40);
+  }
+  return score;
 }
 
 function candidateLimit(limit: number, hasRadiusCriteria: boolean): number {
@@ -237,6 +455,10 @@ function candidateLimit(limit: number, hasRadiusCriteria: boolean): number {
     ROUTE_CATALOG_RADIUS_CANDIDATE_MAX,
     Math.max(ROUTE_CATALOG_RADIUS_CANDIDATE_MIN, limit * ROUTE_CATALOG_RADIUS_CANDIDATE_FANOUT),
   );
+}
+
+function radiusBboxDegrees(radiusMiles: number): number {
+  return Math.max(0.05, (radiusMiles + ROUTE_CATALOG_RADIUS_GEOMETRY_PADDING_MILES) / 69);
 }
 
 function confidenceScore(record: Record<string, unknown>): number {
@@ -252,36 +474,106 @@ function updatedAtTime(record: Record<string, unknown>): number {
 function filterRecordsWithinSearchRadius(
   records: Record<string, unknown>[],
   criteria: { latitude: number | null; longitude: number | null; radiusMiles: number | null },
-): { records: Record<string, unknown>[]; radiusFilterApplied: boolean; radiusMatchedCount: number } {
+): {
+  records: Record<string, unknown>[];
+  radiusFilterApplied: boolean;
+  radiusMatchedCount: number;
+  geometryMatchedCount: number;
+  trailheadMatchedCount: number;
+  centerMatchedCount: number;
+  aliasMatchedCount: number;
+  featuredMatchedCount: number;
+} {
   const { latitude, longitude, radiusMiles } = criteria;
   if (latitude == null || longitude == null || radiusMiles == null) {
     return {
-      records,
+      records: records
+        .map((record) => ({
+          ...record,
+          search_distance_miles: null,
+          geometry_distance_miles: null,
+          trailhead_distance_miles: null,
+          center_distance_miles: null,
+          search_match_reasons: ['radius_not_applied'],
+          featured_route_score: featuredRouteScore(record),
+          catalog_trip_classification: classifyRouteCatalogTrip(record),
+        }))
+        .sort(compareDiscoveryRecords),
       radiusFilterApplied: false,
       radiusMatchedCount: records.length,
+      geometryMatchedCount: 0,
+      trailheadMatchedCount: 0,
+      centerMatchedCount: 0,
+      aliasMatchedCount: 0,
+      featuredMatchedCount: 0,
     };
   }
 
   const searchCenter = { latitude, longitude };
   const filteredRecords = records
-    .map((record) => withSearchDistanceMiles(record, searchCenter))
-    .filter((record): record is Record<string, unknown> =>
-      !!record && readNumber(record.search_distance_miles) <= radiusMiles,
-    )
-    .sort((a, b) => {
-      const confidenceDelta = confidenceScore(b) - confidenceScore(a);
-      if (confidenceDelta !== 0) return confidenceDelta;
-      const distanceDelta = (readNumber(a.search_distance_miles) ?? Number.MAX_SAFE_INTEGER) -
-        (readNumber(b.search_distance_miles) ?? Number.MAX_SAFE_INTEGER);
-      if (distanceDelta !== 0) return distanceDelta;
-      return updatedAtTime(b) - updatedAtTime(a);
-    });
+    .map((record) => {
+      const geometryDistance = geometryDistanceMiles(record, searchCenter);
+      const trailhead = routeTrailhead(record);
+      const trailheadDistance = trailhead ? haversineMiles(searchCenter, trailhead) : null;
+      const center = routeCenter(record);
+      const centerDistance = center ? haversineMiles(searchCenter, center) : null;
+      const distances = [geometryDistance, trailheadDistance, centerDistance]
+        .filter((value): value is number => value != null && Number.isFinite(value));
+      const matchReasons: string[] = [];
+      if (geometryDistance != null && geometryDistance <= radiusMiles) matchReasons.push('geometry_within_radius');
+      if (trailheadDistance != null && trailheadDistance <= radiusMiles) matchReasons.push('trailhead_within_radius');
+      if (centerDistance != null && centerDistance <= radiusMiles) matchReasons.push('centroid_within_radius');
+      const haystack = recordHaystack(record);
+      const knownAlias = ROUTE_CATALOG_KNOWN_FEATURED_ROUTES.some((route) =>
+        route.aliases.some((alias) => haystack.includes(alias))
+      );
+      if (knownAlias) matchReasons.push('known_route_alias');
+      if (!matchReasons.some((reason) => reason.endsWith('_within_radius'))) return null;
+      return {
+        ...record,
+        search_distance_miles: roundDistance(distances.length > 0 ? Math.min(...distances) : null),
+        geometry_distance_miles: roundDistance(geometryDistance),
+        trailhead_distance_miles: roundDistance(trailheadDistance),
+        center_distance_miles: roundDistance(centerDistance),
+        search_match_reasons: unique(matchReasons),
+        featured_route_score: featuredRouteScore(record),
+        catalog_trip_classification: classifyRouteCatalogTrip(record),
+      };
+    })
+    .filter((record): record is Record<string, unknown> => !!record)
+    .sort(compareDiscoveryRecords);
 
   return {
     records: filteredRecords,
     radiusFilterApplied: true,
     radiusMatchedCount: filteredRecords.length,
+    geometryMatchedCount: filteredRecords.filter((record) =>
+      readStringArray(record.search_match_reasons).includes('geometry_within_radius')
+    ).length,
+    trailheadMatchedCount: filteredRecords.filter((record) =>
+      readStringArray(record.search_match_reasons).includes('trailhead_within_radius')
+    ).length,
+    centerMatchedCount: filteredRecords.filter((record) =>
+      readStringArray(record.search_match_reasons).includes('centroid_within_radius')
+    ).length,
+    aliasMatchedCount: filteredRecords.filter((record) =>
+      readStringArray(record.search_match_reasons).some((reason) =>
+        reason === 'known_route_alias' || reason === 'search_term_match'
+      )
+    ).length,
+    featuredMatchedCount: filteredRecords.filter((record) => (readNumber(record.featured_route_score) ?? 0) > 0).length,
   };
+}
+
+function compareDiscoveryRecords(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  const featuredDelta = (readNumber(b.featured_route_score) ?? 0) - (readNumber(a.featured_route_score) ?? 0);
+  if (featuredDelta !== 0) return featuredDelta;
+  const distanceDelta = (readNumber(a.search_distance_miles) ?? Number.MAX_SAFE_INTEGER) -
+    (readNumber(b.search_distance_miles) ?? Number.MAX_SAFE_INTEGER);
+  if (distanceDelta !== 0) return distanceDelta;
+  const confidenceDelta = confidenceScore(b) - confidenceScore(a);
+  if (confidenceDelta !== 0) return confidenceDelta;
+  return updatedAtTime(b) - updatedAtTime(a);
 }
 
 async function countRouteCatalogCurationCandidates(
@@ -332,7 +624,7 @@ async function countRouteCatalogCurationCandidates(
     .limit(args.queryLimit);
 
   if (hasRadiusCriteria) {
-    const degrees = Math.max(0.05, args.radiusMiles / 69);
+    const degrees = radiusBboxDegrees(args.radiusMiles);
     query = query
       .gte('center_latitude', args.latitude - degrees)
       .lte('center_latitude', args.latitude + degrees)
@@ -491,6 +783,57 @@ function filterRecordsBySourceAdapter(records: Record<string, unknown>[], source
   return records.filter((record) => recordMatchesSearchSourceAdapter(record, sourceAdapter));
 }
 
+function expectedKnownRoutes(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => cleanSearchToken(item))
+      .filter(Boolean);
+  }
+  const text = cleanSearchToken(value);
+  return text ? [text] : [];
+}
+
+async function inspectKnownRouteDiagnostics(
+  admin: ReturnType<typeof createAdminClient>,
+  expectedRoutes: string[],
+  matchedRecords: Record<string, unknown>[],
+): Promise<Array<Record<string, unknown>>> {
+  if (expectedRoutes.length === 0) return [];
+  const diagnostics: Array<Record<string, unknown>> = [];
+  for (const known of ROUTE_CATALOG_KNOWN_FEATURED_ROUTES) {
+    const requested = known.aliases.some((alias) => expectedRoutes.includes(cleanSearchToken(alias)));
+    if (!requested) continue;
+    const matched = matchedRecords.some((record) =>
+      known.aliases.some((alias) => recordHaystack(record).includes(alias))
+    );
+    if (matched) {
+      diagnostics.push({
+        routeKey: known.key,
+        status: 'matched',
+        message: `${known.label} matched the current Explore catalog query.`,
+      });
+      continue;
+    }
+
+    const alias = known.aliases[0];
+    const slugAlias = alias.replace(/\s+/g, '-');
+    const { data, error } = await admin
+      .from('verified_routes')
+      .select('id,public_id,name,review_status,recommendation_status')
+      .or(`name.ilike.%${alias}%,public_id.ilike.%${slugAlias}%`)
+      .limit(1);
+    const exists = !error && Array.isArray(data) && data.length > 0;
+    diagnostics.push({
+      routeKey: known.key,
+      status: exists ? 'present_outside_results' : 'missing_from_catalog',
+      message: exists
+        ? `${known.label} exists in the catalog but did not match the current radius or filters.`
+        : `${known.label} is missing from the verified route catalog.`,
+    });
+  }
+  return diagnostics;
+}
+
 async function attachSourceRecords(
   admin: ReturnType<typeof createAdminClient>,
   records: Record<string, unknown>[],
@@ -546,6 +889,7 @@ serve(async (req) => {
       params.includePreviewGeometry ?? params.include_preview_geometry,
       !includeGeometry,
     );
+    const recommendationOnly = readBoolean(params.recommendationOnly ?? params.recommendation_only, true);
     const latitude = readNumber(params.latitude ?? params.lat);
     const longitude = readNumber(params.longitude ?? params.lng ?? params.lon);
     const radiusMiles = readNumber(params.radiusMiles ?? params.radius_miles);
@@ -565,6 +909,7 @@ serve(async (req) => {
     const difficulty = cleanDifficulty(params.difficulty);
     const vehicleClass = cleanText(params.vehicleClass ?? params.vehicle_class);
     const sourceAdapter = cleanSourceAdapter(params.sourceAdapter ?? params.source_adapter);
+    const expectedKnownRouteKeys = expectedKnownRoutes(params.expectedKnownRoutes ?? params.expected_known_routes);
     const hasRadiusCriteria = latitude != null && longitude != null && radiusMiles != null;
     const queryLimit = candidateLimit(limit, hasRadiusCriteria);
 
@@ -573,13 +918,14 @@ serve(async (req) => {
       .from('verified_routes')
       .select(searchSelect(includeGeometry, includePreviewGeometry))
       .eq('review_status', 'approved')
-      .eq('recommendation_status', 'recommendable')
       .order('confidence_score', { ascending: false })
       .order('updated_at', { ascending: false })
       .limit(queryLimit);
 
+    if (recommendationOnly) query = query.eq('recommendation_status', 'recommendable');
+
     if (hasRadiusCriteria) {
-      const degrees = Math.max(0.05, radiusMiles / 69);
+      const degrees = radiusBboxDegrees(radiusMiles);
       query = query
         .gte('center_latitude', latitude - degrees)
         .lte('center_latitude', latitude + degrees)
@@ -622,6 +968,11 @@ serve(async (req) => {
     } else {
       limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(0, limit));
     }
+    const knownRouteDiagnostics = await inspectKnownRouteDiagnostics(
+      admin,
+      expectedKnownRouteKeys,
+      sourceAdapter ? limitedRecords : radiusFiltered.records,
+    );
     const curationCoverage = await countRouteCatalogCurationCandidates(admin, {
       latitude,
       longitude,
@@ -655,12 +1006,18 @@ serve(async (req) => {
       coverageState: coverageState(records, curationCoverage),
       meta: {
         source: 'verified_routes',
-        recommendationOnly: true,
+        recommendationOnly,
         bboxFilterApplied: hasRadiusCriteria,
         radiusFilterApplied: radiusFiltered.radiusFilterApplied,
         candidateLimit: queryLimit,
         candidateCount: candidates.length,
         radiusMatchedCount: radiusFiltered.radiusMatchedCount,
+        geometryMatchedCount: radiusFiltered.geometryMatchedCount,
+        trailheadMatchedCount: radiusFiltered.trailheadMatchedCount,
+        centerMatchedCount: radiusFiltered.centerMatchedCount,
+        aliasMatchedCount: radiusFiltered.aliasMatchedCount,
+        featuredMatchedCount: radiusFiltered.featuredMatchedCount,
+        knownRouteDiagnostics,
         sourceAdapter: sourceAdapter || null,
         sourceFilterApplied: !!sourceAdapter,
         sourceMatchedCount,
