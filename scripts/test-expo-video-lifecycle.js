@@ -63,7 +63,7 @@ assert(
   'LoadingTransitionVideo should guard interval playback calls and clear the interval on unmount.',
 );
 assert(
-  loadingTransition.includes("safePlaybackAction('play');\n\n    const cycleTimer = setInterval(() => {"),
+  /safePlaybackAction\('play'\);\s*const cycleTimer = setInterval\(\(\) => \{/.test(loadingTransition),
   'LoadingTransitionVideo should kick playback immediately after VideoView mounts, before the 5 second replay guard.',
 );
 assert(
