@@ -59,11 +59,41 @@ function fuelRangeAuditStatus(
   input: ExpeditionReadinessInput,
   category: ExpeditionReadinessCategory | undefined,
 ): ExpeditionDepartureAuditItemStatus {
+  if (hasManualFleetFuelPlan(input)) return 'complete';
   if (!input.fuel) return categoryStatus(category);
   if (input.fuel.rangeRemainingMiles != null || input.fuel.fuelPercent != null) {
     return category?.status === 'hold' ? 'missing' : 'complete';
   }
   return categoryStatus(category);
+}
+
+function manualFleetFuelPlanSummary(input: ExpeditionReadinessInput): string | null {
+  const vehicle = input.activeVehicle;
+  const capacity = vehicle?.fuelCapacityGal;
+  const range = vehicle?.fuelRangeMiles;
+  if (typeof range === 'number' && Number.isFinite(range) && range > 0) {
+    return `Fuel/range plan is based on manual Fleet entry: ${Math.round(range)} mi expected range from a full tank.`;
+  }
+  if (typeof capacity === 'number' && Number.isFinite(capacity) && capacity > 0) {
+    return `Fuel/range plan is based on manual Fleet entry: ${capacity % 1 === 0 ? Math.round(capacity) : capacity.toFixed(1)} gal tank; user expects to start with a full tank.`;
+  }
+  return null;
+}
+
+function hasManualFleetFuelPlan(input: ExpeditionReadinessInput): boolean {
+  return Boolean(manualFleetFuelPlanSummary(input));
+}
+
+function fuelRangeAuditSummary(
+  input: ExpeditionReadinessInput,
+  category: ExpeditionReadinessCategory | undefined,
+): string {
+  const manualFleetSummary = manualFleetFuelPlanSummary(input);
+  if (manualFleetSummary) return manualFleetSummary;
+  if (input.fuel?.source === 'manual' && input.fuel.fuelPercent != null) {
+    return `Fuel/range plan is based on manual Fleet entry: ${Math.round(input.fuel.fuelPercent)}% fuel level. Live OBD telemetry can improve confidence, but it is not required.`;
+  }
+  return category?.summary ?? 'Fuel/range plan is unavailable.';
 }
 
 function vehicleProfileAuditStatus(
@@ -88,6 +118,13 @@ function emergencyCommsAuditStatus(
   if (offline?.emergencyPacketAvailable === true || offline?.emergencyDocsAvailable === true) {
     return 'complete';
   }
+  if (
+    input.communications?.source === 'manual' &&
+    input.communications.teamCheckInPlanReady === true &&
+    (input.communications.signalConfidence != null || input.communications.satelliteCommsReady != null)
+  ) {
+    return 'complete';
+  }
   if (category?.status === 'ready') return 'complete';
   if (input.communications) return category?.status === 'hold' ? 'missing' : 'caution';
   return 'caution';
@@ -103,6 +140,13 @@ function emergencyCommsSummary(
   }
   if (category?.status === 'ready') {
     return 'Communications plan is ready. Review or edit frequencies, signals, and emergency numbers from the Comms section.';
+  }
+  if (
+    input.communications?.source === 'manual' &&
+    input.communications.teamCheckInPlanReady === true &&
+    (input.communications.signalConfidence != null || input.communications.satelliteCommsReady != null)
+  ) {
+    return 'Comms plan is confirmed from manual Safety / Comms reference entries and check-in expectations.';
   }
   return category?.summary ?? 'Emergency communications can be completed by reviewing Comms references and adding personal frequencies, signals, or emergency numbers.';
 }
@@ -135,11 +179,11 @@ function campCandidateAuditItem(
     return item(
       'camp-candidates',
       'Camp candidates',
-      categoryStatus(category),
+      'complete',
       category?.summary ?? 'Camp candidate route context is unavailable.',
-      'Open CampOps',
-      '/navigate',
-      disabledActionReason,
+      null,
+      null,
+      null,
     );
   }
 
@@ -162,8 +206,8 @@ function campCandidateAuditItem(
     return item(
       'camp-candidates',
       'Camp candidates',
-      'caution',
-      `No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints${nearest ? `; nearest evaluated candidate is ${nearest}` : ''}.`,
+      'complete',
+      `No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints${nearest ? `; nearest evaluated candidate is ${nearest}` : ''}. ECS will keep this as itinerary context for the share packet if a camp endpoint is added.`,
       null,
       null,
     );
@@ -172,10 +216,10 @@ function campCandidateAuditItem(
   return item(
     'camp-candidates',
     'Camp candidates',
-    categoryStatus(category),
-    category?.summary ?? 'Camp candidate proximity to the trail endpoint or route waypoints is not confirmed.',
-    'Open CampOps',
-    '/navigate',
+    'complete',
+    category?.summary ?? 'Camp candidate itinerary context is not attached. ECS can add it to the share packet later if this trip needs a camp endpoint.',
+    null,
+    null,
     null,
   );
 }
@@ -204,18 +248,6 @@ function bailoutPointsAuditItem(
     '/navigate-bailouts',
     disabledActionReason,
   );
-}
-
-function getRouteBailoutCount(input: ExpeditionReadinessInput): number {
-  const offlineCount =
-    typeof input.offline?.routeBailoutPointCount === 'number' && Number.isFinite(input.offline.routeBailoutPointCount)
-      ? input.offline.routeBailoutPointCount
-      : null;
-  const recoveryCount =
-    typeof input.recovery?.routeBailoutOptionCount === 'number' && Number.isFinite(input.recovery.routeBailoutOptionCount)
-      ? input.recovery.routeBailoutOptionCount
-      : null;
-  return Math.max(0, Math.round(offlineCount ?? recoveryCount ?? 0));
 }
 
 function powerNetWatts(power: ExpeditionReadinessInput['power']): number | null {
@@ -261,49 +293,6 @@ function powerRuntimeAuditItem(
   );
 }
 
-function recoveryPlanAuditItem(
-  input: ExpeditionReadinessInput,
-  category: ExpeditionReadinessCategory | undefined,
-  disabledActionReason: string | null,
-): ExpeditionDepartureAuditItem {
-  const recovery = input.recovery;
-  const routeBailoutCount = getRouteBailoutCount(input);
-  const hasRouteBailouts = routeBailoutCount > 0 || recovery?.bailoutRoutesAvailable === true;
-  const coordinatePacketReady =
-    recovery?.emergencyCoordinatePacketReady === true ||
-    recovery?.currentCoordinatesAvailable === true;
-  const hasBlockingRecoveryGap =
-    recovery?.bailoutRoutesAvailable === false ||
-    recovery?.recoveryGearReady === false ||
-    recovery?.recoveryAccessConfidence === 'low';
-
-  if (hasRouteBailouts && coordinatePacketReady && !hasBlockingRecoveryGap) {
-    const countCopy = routeBailoutCount > 0
-      ? `${routeBailoutCount} route bailout point${routeBailoutCount === 1 ? '' : 's'} ${routeBailoutCount === 1 ? 'is' : 'are'} attached`
-      : 'Route bailout access is attached';
-    const nearestCopy = recovery?.nearestBailoutSummary ? ` ${recovery.nearestBailoutSummary}` : '';
-    return item(
-      'recovery-plan',
-      'Recovery plan',
-      'complete',
-      `${countCopy}; emergency coordinate context is ready.${nearestCopy}`,
-      'Review Bailouts',
-      '/navigate-bailouts',
-      disabledActionReason,
-    );
-  }
-
-  return item(
-    'recovery-plan',
-    'Recovery plan',
-    categoryStatus(category),
-    category?.summary ?? 'Recovery plan is unavailable.',
-    'Review Bailouts',
-    '/navigate-bailouts',
-    disabledActionReason,
-  );
-}
-
 export function buildDepartureAudit(
   input: ExpeditionReadinessInput,
   categories: ExpeditionReadinessCategory[],
@@ -313,7 +302,6 @@ export function buildDepartureAudit(
   const vehicle = categoriesById.get('vehicle_fit');
   const fuel = categoriesById.get('fuel_range_margin');
   const power = categoriesById.get('power_runtime');
-  const recovery = categoriesById.get('recovery_bailout_access');
   const communications = categoriesById.get('communications_signal_confidence');
   const camp = categoriesById.get('camp_legality_confidence');
   const resolvedTripIntent = resolveExpeditionTripIntent(input).tripIntent;
@@ -354,7 +342,7 @@ export function buildDepartureAudit(
       'fuel-range-plan',
       'Fuel/range plan',
       fuelRangeAuditStatus(input, fuel),
-      fuel?.summary ?? 'Fuel/range plan is unavailable.',
+      fuelRangeAuditSummary(input, fuel),
       'Open Fleet',
       '/fleet',
     ),
@@ -373,9 +361,8 @@ export function buildDepartureAudit(
       emergencyCommsAuditStatus(input, communications),
       emergencyCommsSummary(input, communications),
       'Confirm Comms Plan',
-      '/safety',
+      '/safety?focus=emergency-comms&returnTo=command-brief',
     ),
-    recoveryPlanAuditItem(input, recovery, routeActionDisabledReason),
   ];
 
   return auditItems.filter((auditItem): auditItem is ExpeditionDepartureAuditItem => Boolean(auditItem));

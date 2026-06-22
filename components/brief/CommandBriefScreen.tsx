@@ -66,6 +66,7 @@ import { buildReadinessExplanationPayload } from '../../lib/ai/readinessExplanat
 import {
   exportCommandBriefPacket,
   type CommandBriefExportAction,
+  type ECSCommandBriefPacketSource,
 } from '../../lib/brief';
 import { dispatchQueue } from '../../lib/dispatchQueueStore';
 import { offlineExpeditionModeEngine } from '../../lib/offlineExpeditionModeEngine';
@@ -92,6 +93,7 @@ import {
 } from '../../lib/fleet/loadoutConsequencePreview';
 import { useApp } from '../../context/AppContext';
 import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
+import { useConvoyCommandData } from '../dashboard/commandCenter';
 
 type CommandBriefScreenProps = {
   embedded?: boolean;
@@ -108,6 +110,35 @@ type BriefAction = {
   disabledLabel?: string;
   onPress?: () => void;
 };
+
+function formatBriefMilesFromMeters(value: number | null | undefined, suffix = '') {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  const miles = value / 1609.344;
+  return `${miles.toFixed(miles >= 10 ? 0 : 1)} mi${suffix}`;
+}
+
+function formatBriefDuration(seconds: number | null | undefined) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return null;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min remaining`;
+  const hours = Math.floor(minutes / 60);
+  const rem = minutes % 60;
+  return rem > 0 ? `${hours} hr ${rem} min remaining` : `${hours} hr remaining`;
+}
+
+function routeSessionPointToBriefCoordinate(
+  point: { lat: number; lng: number } | null | undefined,
+  label: string,
+  source = 'active_guidance',
+) {
+  if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return null;
+  return {
+    label,
+    latitude: point.lat,
+    longitude: point.lng,
+    source,
+  };
+}
 
 const SECTION_DEFINITION: {
   id: string;
@@ -1563,6 +1594,7 @@ export default function CommandBriefScreen({
   const decision = useReadinessDecision();
   const canStart = useCanStartExpedition();
   const routeSession = useRouteSessionSnapshot();
+  const convoyCommandData = useConvoyCommandData();
   const activeVehicleReadiness = useActiveVehicleReadinessInput();
   const loadoutConsequencePreviewSnapshot = useLoadoutConsequencePreviewSnapshot();
   const loadoutConsequenceSummary = useMemo(() => {
@@ -1623,6 +1655,10 @@ export default function CommandBriefScreen({
         });
         return;
       }
+      if (item.actionTarget === '/safety?focus=emergency-comms&returnTo=command-brief') {
+        pushRoute('/safety?focus=emergency-comms&returnTo=command-brief');
+        return;
+      }
       if (item.actionTarget) pushRoute(item.actionTarget);
     },
     [pushRoute, showToast],
@@ -1650,6 +1686,26 @@ export default function CommandBriefScreen({
     [weakPointSnapshot],
   );
   const briefExportContext = useMemo(() => {
+    const hasActiveGuidance = routeSession.lifecycle === 'active' || routeSession.lifecycle === 'arrived';
+    const hasPlannedRoute = routeSession.lifecycle === 'preview' || Boolean(readinessState.activeTripId);
+    const hasConvoyContext = convoyCommandData.dataState !== 'setupNeeded' && convoyCommandData.convoySize > 1;
+    const packetSource: ECSCommandBriefPacketSource = hasActiveGuidance
+      ? 'active_guidance'
+      : hasPlannedRoute
+        ? 'planned_trip'
+        : hasConvoyContext
+          ? 'convoy'
+          : 'manual';
+    const firstRoutePoint = routeSession.routePoints[0] ?? null;
+    const lastRoutePoint = routeSession.routePoints.length > 1
+      ? routeSession.routePoints[routeSession.routePoints.length - 1]
+      : null;
+    const geometryStatus = routeSession.routePoints.length > 1
+      ? 'full_geometry'
+      : routeSession.routePoints.length === 1
+        ? 'trailhead_only'
+        : 'missing_geometry';
+    const currentLocation = routeSession.currentLocation ?? routeSession.gpsSample ?? null;
     const routeSummary = [
       routeSession.routeSubtitle,
       routeSession.statusLabel,
@@ -1665,23 +1721,78 @@ export default function CommandBriefScreen({
       assessment,
       routeName: routeSession.routeTitle,
       routeSummary,
+      packetSource,
       activeVehicle: activeVehicleReadiness,
       activeRouteId: readinessState.activeRouteId ?? routeSession.routeId,
       activeTripId: readinessState.activeTripId,
+      routeGeometryStatus: geometryStatus,
+      guidanceReady: routeSession.routePoints.length > 1 && routeSession.lifecycle !== 'inactive',
+      startPoint: routeSessionPointToBriefCoordinate(firstRoutePoint, 'Route start / trailhead', packetSource),
+      destinationPoint: routeSessionPointToBriefCoordinate(lastRoutePoint, 'Route endpoint', packetSource),
+      currentGps: currentLocation
+        ? {
+          label: 'Last known GPS at packet generation',
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+          accuracyMeters: currentLocation.accuracyM ?? null,
+          source: 'active_guidance_location',
+        }
+        : null,
+      currentProgressPercent: routeSession.progressPercent,
+      remainingDistance: formatBriefMilesFromMeters(routeSession.remainingDistanceM, ' remaining'),
+      remainingDuration: formatBriefDuration(routeSession.remainingDurationS),
+      etaIso: routeSession.etaIso,
+      routeDataRefreshedAt: routeSession.updatedAt,
+      routePolylineSnapshot: routeSession.routePoints.length > 1
+        ? `${routeSession.routePoints.length} route points (${firstRoutePoint?.lat.toFixed(5)}, ${firstRoutePoint?.lng.toFixed(5)} -> ${lastRoutePoint?.lat.toFixed(5)}, ${lastRoutePoint?.lng.toFixed(5)})`
+        : null,
+      totalPlannedDistance: routeSession.routeSubtitle && /\bmi\b/i.test(routeSession.routeSubtitle) && !/remaining/i.test(routeSession.routeSubtitle)
+        ? routeSession.routeSubtitle
+        : null,
+      vehicleTelemetryRefreshedAt: activeVehicleReadiness?.updatedAt ?? null,
+      convoyName: hasConvoyContext ? convoyCommandData.convoyName : null,
+      convoyMemberCount: hasConvoyContext ? convoyCommandData.convoySize : null,
+      plannedRegroupPoints: convoyCommandData.rallyPoint ? [convoyCommandData.rallyPoint] : [],
+      checkInSchedule: hasConvoyContext
+        ? convoyCommandData.regroupDistance
+          ? `Regroup spacing: ${convoyCommandData.regroupDistance}`
+          : convoyCommandData.channelLabel
+        : null,
+      checkInStatus: hasConvoyContext
+        ? `${convoyCommandData.sourceLabel}: ${convoyCommandData.recommendationLabel}. ${convoyCommandData.recommendationReason}`
+        : null,
+      checkInExpectations: hasConvoyContext
+        ? convoyCommandData.recommendationReason
+        : null,
       weakPointAssessment,
     };
   }, [
     activeVehicleReadiness,
     assessment,
+    convoyCommandData.channelLabel,
+    convoyCommandData.convoyName,
+    convoyCommandData.convoySize,
+    convoyCommandData.dataState,
+    convoyCommandData.rallyPoint,
+    convoyCommandData.recommendationLabel,
+    convoyCommandData.recommendationReason,
+    convoyCommandData.regroupDistance,
+    convoyCommandData.sourceLabel,
     readinessState.activeRouteId,
     readinessState.activeTripId,
+    routeSession.currentLocation,
     routeSession.etaIso,
+    routeSession.gpsSample,
+    routeSession.lifecycle,
     routeSession.progressPercent,
+    routeSession.remainingDurationS,
     routeSession.remainingDistanceM,
     routeSession.routeId,
+    routeSession.routePoints,
     routeSession.routeSubtitle,
     routeSession.routeTitle,
     routeSession.statusLabel,
+    routeSession.updatedAt,
     weakPointAssessment,
   ]);
   const handleBriefExport = useCallback(async (action: CommandBriefExportAction) => {
@@ -1770,7 +1881,7 @@ export default function CommandBriefScreen({
     {
       id: 'share-command-brief',
       label: 'Share packet',
-      detail: 'Open the device share sheet with the current Command Brief packet.',
+      detail: 'Open the device share sheet with the current PDF Command Brief packet.',
       icon: 'share-social-outline',
       disabled: briefExportAction !== null,
       disabledLabel: briefExportAction === 'share' ? 'Sharing' : briefExportAction ? 'Busy' : undefined,
@@ -1779,7 +1890,7 @@ export default function CommandBriefScreen({
     {
       id: 'save-command-brief',
       label: 'Save locally',
-      detail: 'Save a markdown packet to local ECS documents when file storage is available.',
+      detail: 'Save a PDF Command Brief packet to local ECS documents when file storage is available.',
       icon: 'save-outline',
       disabled: briefExportAction !== null,
       disabledLabel: briefExportAction === 'save' ? 'Saving' : briefExportAction ? 'Busy' : undefined,
@@ -2014,10 +2125,10 @@ export default function CommandBriefScreen({
               <ECSText variant="cardTitle" style={styles.sectionTitle}>
                 Share Packet
               </ECSText>
-              <ECSBadge label="Markdown" tone="info" compact />
+              <ECSBadge label="PDF" tone="info" compact />
             </View>
             <ECSText variant="helper" style={styles.exportCopy} numberOfLines={3}>
-              Generate a confidence-based Command Brief packet from the current readiness assessment. Unavailable sections are marked limited confidence.
+              Generate a PDF Command Brief packet from the current readiness assessment. Copy uses a markdown summary; unavailable sections are marked limited confidence.
             </ECSText>
             <View style={styles.actionList}>
               {exportActions.map((action) => (

@@ -85,7 +85,9 @@ function isCriticalIntelligenceState(args: {
 }
 
 function firstFreshnessConcern(assessment: ExpeditionReadinessAssessment): string | null {
-  const records = Object.values(assessment.sourceFreshness);
+  const records = Object.entries(assessment.sourceFreshness)
+    .filter(([source]) => source !== 'camp')
+    .map(([, record]) => record);
   const stale = records.find((record) => record.isStale);
   if (stale) return `${stale.label} is stale`;
   const missing = records.find((record) => record.isMissing);

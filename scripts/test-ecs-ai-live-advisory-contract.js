@@ -229,6 +229,10 @@ assert(!byKey.get('fleet.weight.estimated').message.includes('Your vehicle weigh
 assert(byKey.has('camp.legal.unverified'), 'CampOps inferred candidates should get confidence-aware copy.');
 assert(byKey.get('camp.legal.unverified').title.includes('ECS-Inferred'));
 assert(!/\blegal campsite\b/i.test(byKey.get('camp.legal.unverified').message));
+assert(
+  !(byKey.get('camp.legal.unverified').actions ?? []).some((action) => action.label === 'Open CampOps' || action.type === 'open_campops'),
+  'Inferred camp advisories should not expose Open CampOps as a required action.',
+);
 
 assert(byKey.has('power.source.manual'), 'Manual power source should produce manual-source copy.');
 assert(byKey.get('power.source.manual').message.includes('Manual power estimate active'));

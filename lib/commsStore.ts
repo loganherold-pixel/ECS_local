@@ -18,12 +18,19 @@ export interface CustomCommsData {
   contacts: CommsEntry[];
 }
 
+export interface CommsPlanConfirmation {
+  confirmedAt: string | null;
+}
+
 export type CommsColumnKey = keyof CustomCommsData;
 
 const STORAGE_KEY = 'ecs_custom_comms';
+const CONFIRMATION_STORAGE_KEY = 'ecs_custom_comms_confirmation';
 const persistence = createPersistedKeyValueCache('ecs_custom_comms');
 let memoryStore: CustomCommsData = { frequencies: [], signals: [], contacts: [] };
+let confirmationStore: CommsPlanConfirmation = { confirmedAt: null };
 let hydrated = false;
+const listeners = new Set<() => void>();
 
 function generateId(): string {
   return `custom_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -67,7 +74,23 @@ function hydrateFromPersistence(): void {
     }
   } catch {}
 
+  try {
+    const rawConfirmation = persistence.get(CONFIRMATION_STORAGE_KEY);
+    const parsed = rawConfirmation ? JSON.parse(rawConfirmation) : null;
+    confirmationStore = {
+      confirmedAt: typeof parsed?.confirmedAt === 'string' ? parsed.confirmedAt : null,
+    };
+  } catch {}
+
   hydrated = true;
+}
+
+function notify(): void {
+  listeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {}
+  });
 }
 
 function persist(data: CustomCommsData): void {
@@ -75,6 +98,17 @@ function persist(data: CustomCommsData): void {
   try {
     persistence.set(STORAGE_KEY, JSON.stringify(memoryStore));
   } catch {}
+  notify();
+}
+
+function persistConfirmation(confirmation: CommsPlanConfirmation): void {
+  confirmationStore = {
+    confirmedAt: confirmation.confirmedAt ?? null,
+  };
+  try {
+    persistence.set(CONFIRMATION_STORAGE_KEY, JSON.stringify(confirmationStore));
+  } catch {}
+  notify();
 }
 
 function getStore(): CustomCommsData {
@@ -105,8 +139,20 @@ void persistence.waitForHydration().then(() => {
 });
 
 export const commsStore = {
+  subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  },
+
   getAll(): CustomCommsData {
     return getStore();
+  },
+
+  getConfirmation(): CommsPlanConfirmation {
+    hydrateFromPersistence();
+    return { ...confirmationStore };
   },
 
   waitForHydration(): Promise<void> {
@@ -114,6 +160,11 @@ export const commsStore = {
       hydrated = false;
       hydrateFromPersistence();
     });
+  },
+
+  confirmPlan(confirmedAt = new Date().toISOString()): CommsPlanConfirmation {
+    persistConfirmation({ confirmedAt });
+    return this.getConfirmation();
   },
 
   replaceColumn(column: CommsColumnKey, entries: CommsEntry[]): CustomCommsData {

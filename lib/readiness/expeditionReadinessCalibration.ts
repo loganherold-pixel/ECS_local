@@ -86,7 +86,7 @@ export const EXPEDITION_READINESS_CALIBRATIONS: Record<ExpeditionReadinessProfil
       ready: 84,
       caution: 62,
     },
-    criticalFreshnessSources: [...CORE_FRESHNESS_SOURCES, 'camp', 'power'],
+    criticalFreshnessSources: [...CORE_FRESHNESS_SOURCES, 'power'],
     notes: [
       'Camp legality confidence carries more weight because the route plan depends on a plausible overnight endpoint.',
       'Power, weather, daylight, and offline prep are elevated because late arrival and overnight loads increase consequence.',
@@ -114,7 +114,7 @@ export const EXPEDITION_READINESS_CALIBRATIONS: Record<ExpeditionReadinessProfil
       ready: 85,
       caution: 63,
     },
-    criticalFreshnessSources: [...CORE_FRESHNESS_SOURCES, 'camp', 'power'],
+    criticalFreshnessSources: [...CORE_FRESHNESS_SOURCES, 'power'],
     notes: [
       'Weekend Expedition keeps camp and power high-impact while adding more offline and fuel/range pressure.',
       'It is stricter than a single overnight because delays can stack across multiple days.',
@@ -142,7 +142,7 @@ export const EXPEDITION_READINESS_CALIBRATIONS: Record<ExpeditionReadinessProfil
       ready: 86,
       caution: 65,
     },
-    criticalFreshnessSources: [...CORE_FRESHNESS_SOURCES, 'camp', 'power', 'telemetry'],
+    criticalFreshnessSources: [...CORE_FRESHNESS_SOURCES, 'power', 'telemetry'],
     notes: [
       'Offline, recovery, communications, and fuel/range are high-impact because service and help may be distant.',
       'Ready requires a higher score than the default model because remote trips need stronger margin.',
@@ -184,7 +184,7 @@ export const EXPEDITION_READINESS_CALIBRATIONS: Record<ExpeditionReadinessProfil
     label: 'Unknown Trip',
     weights: DEFAULT_EXPEDITION_READINESS_WEIGHTS,
     thresholds: DEFAULT_EXPEDITION_READINESS_THRESHOLDS,
-    criticalFreshnessSources: [...CORE_FRESHNESS_SOURCES, 'camp', 'power'],
+    criticalFreshnessSources: [...CORE_FRESHNESS_SOURCES, 'power'],
     notes: [
       'Unknown trip type keeps the original balanced model as the safe default.',
       'Missing camp or power context lowers confidence until ECS can infer or receive a more specific trip profile.',

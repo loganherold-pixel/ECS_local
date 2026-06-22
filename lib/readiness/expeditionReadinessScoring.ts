@@ -674,13 +674,6 @@ function bestCamp(camps: ExpeditionReadinessCampCandidateInput[] | null | undefi
   ))[0] ?? null;
 }
 
-function noViableCampScoreForIntent(input: ExpeditionReadinessInput): number {
-  const intent = resolveExpeditionTripIntent(input).tripIntent;
-  if (intent === 'remoteExpedition') return 52;
-  if (intent === 'weekendExpedition') return 58;
-  return 62;
-}
-
 function campLegality(input: ExpeditionReadinessInput, nowIso: string): CategoryDraft {
   const viability = evaluateCampCandidateViability(input);
   const fallbackCamp = bestCamp(input.campCandidates);
@@ -696,7 +689,7 @@ function campLegality(input: ExpeditionReadinessInput, nowIso: string): Category
 
   if (!camp) {
     if (viability.status === 'none') {
-      score = noViableCampScoreForIntent(input);
+      score = 84;
       const nearestDistance = viability.nearestDistanceMiles == null
         ? null
         : viability.nearestDistanceMiles < 10
@@ -705,24 +698,23 @@ function campLegality(input: ExpeditionReadinessInput, nowIso: string): Category
       factors.push(factor(
         'camp-no-viable-near-route-stops',
         'Camp candidates',
-        `No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints${nearestDistance ? `; nearest evaluated candidate is ${nearestDistance}.` : '.'}`,
-        'warning',
+        `No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints${nearestDistance ? `; nearest evaluated candidate is ${nearestDistance}.` : '.'} ECS will treat this as itinerary context unless the user adds a camp endpoint.`,
+        'neutral',
         fallbackCamp?.source ?? input.offline?.source ?? 'cached',
         fallbackCamp?.sourceConfidence === 'unknown' ? 'low' : fallbackCamp?.sourceConfidence ?? 'medium',
         sourceFlags(fallbackCamp ?? input.offline, nowIso),
       ));
-      warnings.push(issue(
-        'camp_legality_confidence',
-        'warning',
-        'no-viable-camp-near-route-stops',
-        'No viable camp near route stops',
-        `No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints.`,
-      ));
     } else {
-      missingInputs.push('Camp candidate');
-      missingInputs.push('Legal Access Confidence');
-      score = 46;
-      factors.push(factor('camp-missing', 'Camp candidate', 'No camp candidate is available for legality-confidence review.', 'missing', 'missing', 'low'));
+      score = 84;
+      factors.push(factor(
+        'camp-itinerary-not-attached',
+        'Camp itinerary context',
+        'No camp candidate is attached. ECS will add camp details to the departure audit and share packet when this trip needs an overnight endpoint.',
+        'neutral',
+        input.route ? 'inferred' : 'missing',
+        'medium',
+        input.route ? { isInferred: true } : undefined,
+      ));
     }
   } else {
     const confidence = camp.legalAccessConfidence ?? 'unknown';
@@ -855,8 +847,12 @@ function campLegality(input: ExpeditionReadinessInput, nowIso: string): Category
       ? camp.legalAccessConfidence
       : viability.status === 'none'
         ? 'medium'
-        : 'low',
-    summary: blockers[0]?.detail ?? warnings[0]?.detail ?? 'Camp Legality Confidence is usable, not guaranteed.',
+        : 'medium',
+    summary: blockers[0]?.detail ?? warnings[0]?.detail ?? (
+      !camp
+        ? 'Camp candidate context is informational for this itinerary and can be added to the share packet when needed.'
+        : 'Camp Legality Confidence is usable, not guaranteed.'
+    ),
     factors,
     missingInputs,
     lastUpdatedAt: camp?.updatedAt ?? fallbackCamp?.updatedAt ?? input.offline?.updatedAt ?? nowIso,
@@ -1154,6 +1150,13 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
   const warnings: ExpeditionReadinessIssue[] = [];
   let score = 78;
 
+  const manualFleetFuelCapacity = typeof input.activeVehicle?.fuelCapacityGal === 'number' && Number.isFinite(input.activeVehicle.fuelCapacityGal) && input.activeVehicle.fuelCapacityGal > 0
+    ? input.activeVehicle.fuelCapacityGal
+    : null;
+  const manualFleetFuelRange = typeof input.activeVehicle?.fuelRangeMiles === 'number' && Number.isFinite(input.activeVehicle.fuelRangeMiles) && input.activeVehicle.fuelRangeMiles > 0
+    ? input.activeVehicle.fuelRangeMiles
+    : null;
+  const hasManualFleetFuelPlan = !fuel && (manualFleetFuelRange != null || manualFleetFuelCapacity != null);
   const range = fuel?.rangeRemainingMiles ?? null;
   const remaining = fuel?.routeDistanceRemainingMiles ?? input.route?.distanceMiles ?? null;
   const reserve = fuel?.reserveMiles ?? (range != null && remaining != null ? range - remaining : null);
@@ -1165,7 +1168,9 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
   const manualFuelEstimateAvailable = range == null && fuelPercent != null && fuel?.source === 'manual' && Boolean(fuel.updatedAt);
   const fuelPercentReminderOnly = range == null && fuelPercent != null && liveFuelPercent == null && !manualFuelEstimateAvailable;
 
-  if (!fuel || (range == null && fuel.fuelPercent == null)) {
+  if (hasManualFleetFuelPlan) {
+    score = 88;
+  } else if (!fuel || (range == null && fuel.fuelPercent == null)) {
     missingInputs.push('Fuel range remaining');
     score = 56;
   } else if (range == null && fuelPercent != null) {
@@ -1228,6 +1233,8 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
     score,
     confidence: missingInputs.length
       ? 'low'
+      : hasManualFleetFuelPlan
+        ? 'medium'
       : manualFuelEstimateAvailable
         ? 'medium'
         : range == null && flags.source === 'manual'
@@ -1236,7 +1243,9 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
             ? 'medium'
             : 'high',
     summary: blockers[0]?.detail ?? warnings[0]?.detail ?? (
-      fuelPercentReminderOnly
+      hasManualFleetFuelPlan
+        ? 'Fuel/range plan is based on manual Fleet entry; live telemetry is optional for higher confidence.'
+        : fuelPercentReminderOnly
         ? 'Fuel telemetry is not reporting live; saved Fleet fuel is reminder-only for readiness scoring.'
         : manualFuelEstimateAvailable
           ? 'Manual fuel estimate is available; live telemetry will raise confidence when connected.'
@@ -1244,8 +1253,20 @@ function fuelRange(input: ExpeditionReadinessInput, nowIso: string): CategoryDra
             ? 'Live fuel telemetry is available.'
             : 'Fuel range margin is usable.'
     ),
-    factors: fuel
+    factors: hasManualFleetFuelPlan
       ? [factor(
+          'fleet-manual-fuel-plan',
+          'Fuel range',
+          manualFleetFuelRange != null
+            ? `${Math.round(manualFleetFuelRange)} mi expected range from manual Fleet entry; user expects to start with a full tank.`
+            : `${manualFleetFuelCapacity != null && manualFleetFuelCapacity % 1 === 0 ? Math.round(manualFleetFuelCapacity) : manualFleetFuelCapacity?.toFixed(1)} gal tank from manual Fleet entry; user expects to start with a full tank.`,
+          'positive',
+          'manual',
+          'medium',
+          { updatedAt: input.activeVehicle?.updatedAt ?? null },
+        )]
+      : fuel
+        ? [factor(
           'fuel-range',
           'Fuel range',
           range != null
@@ -1791,12 +1812,6 @@ function recommendationsFor(
     recs.push('Select trip intent so ECS can tune readiness weighting for this route.');
   }
   if (resolvedIntent.tripIntent === 'overnightCamp' || resolvedIntent.tripIntent === 'weekendExpedition') {
-    const campViability = evaluateCampCandidateViability(input);
-    if (campViability.status === 'none') {
-      recs.push(`No viable camp candidates are within ${CAMP_CANDIDATE_VIABILITY_RADIUS_MILES} mi of the trail endpoint or route waypoints; adjust the endpoint, waypoints, or trip intent before committing.`);
-    } else if (!input.campCandidates?.length) {
-      recs.push('Confirm camp candidate search near the trail endpoint or route waypoints for overnight Camp Legality Confidence.');
-    }
     if (!input.power?.powerRelevantForTrip) recs.push('Confirm whether fridge, comms, navigation, or device power is needed overnight.');
   }
   if (resolvedIntent.tripIntent === 'remoteExpedition') {

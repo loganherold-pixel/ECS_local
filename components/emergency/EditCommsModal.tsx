@@ -30,6 +30,8 @@ interface Props {
   customEntries: CommsEntry[];
   onClose: () => void;
   onDataChanged: () => void;
+  saveLabel?: string;
+  onAfterSave?: () => void;
 }
 
 type DraftEntry = {
@@ -102,6 +104,8 @@ export default function EditCommsModal({
   customEntries,
   onClose,
   onDataChanged,
+  saveLabel = 'Save',
+  onAfterSave,
 }: Props) {
   const config = COLUMN_CONFIG[columnType] ?? COLUMN_CONFIG.frequencies;
   const isContacts = columnType === 'contacts';
@@ -254,6 +258,7 @@ export default function EditCommsModal({
       onDataChanged();
       setValidationError(null);
       onClose();
+      onAfterSave?.();
     } finally {
       setIsSaving(false);
     }
@@ -265,6 +270,7 @@ export default function EditCommsModal({
     newDetail,
     newLabel,
     onClose,
+    onAfterSave,
     onDataChanged,
     showAddForm,
     setIsSaving,
@@ -281,7 +287,7 @@ export default function EditCommsModal({
         grow
       />
       <ECSButton
-        label="Save"
+        label={saveLabel}
         icon="save-outline"
         variant="primary"
         size="large"

@@ -6,7 +6,7 @@
  * this surface to reduce duplication with the mission brief.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,12 +19,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import TabErrorBoundary from '../../components/TabErrorBoundary';
 import { useFocusEffect } from '@react-navigation/native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
 import { useApp } from '../../context/AppContext';
 import TopoBackground from '../../components/TopoBackground';
 import EmergencyGrid from '../../components/emergency/EmergencyGrid';
 import EditCommsModal from '../../components/emergency/EditCommsModal';
 import { commsStore } from '../../lib/commsStore';
+import { expeditionReadinessStore } from '../../lib/readiness/expeditionReadinessStore';
 import type { CommsColumnType } from '../../components/emergency/EditCommsModal';
 import { getShellBottomClearance, getShellHeaderTopPadding } from '../../lib/shellLayout';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
@@ -63,6 +65,8 @@ type SafetySection = 'protocols' | 'comms';
 
 export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) {
   const { refreshActiveTrip, isOnline } = useApp();
+  const router = useRouter();
+  const params = useLocalSearchParams<{ focus?: string; returnTo?: string }>();
   const insets = useSafeAreaInsets();
   const adaptive = useAdaptiveLayout();
   const headerTopPadding = getShellHeaderTopPadding(insets.top);
@@ -71,6 +75,14 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
   const [commsEditVisible, setCommsEditVisible] = useState(false);
   const [commsEditColumn, setCommsEditColumn] = useState<CommsColumnType>('frequencies');
   const [customComms, setCustomComms] = useState(commsStore.getAll());
+  const [commsConfirmation, setCommsConfirmation] = useState(commsStore.getConfirmation());
+  const returningToCommandBrief = params.returnTo === 'command-brief';
+
+  useEffect(() => {
+    if (params.focus === 'emergency-comms') {
+      setActiveSection('comms');
+    }
+  }, [params.focus]);
 
   useFocusEffect(
     useCallback(() => {
@@ -79,6 +91,7 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
       void commsStore.waitForHydration().then(() => {
         if (active) {
           setCustomComms(commsStore.getAll());
+          setCommsConfirmation(commsStore.getConfirmation());
         }
       });
       return () => {
@@ -99,7 +112,21 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
 
   const handleCommsDataChanged = useCallback(() => {
     setCustomComms(commsStore.getAll());
+    setCommsConfirmation(commsStore.getConfirmation());
   }, []);
+
+  const returnToCommandBriefIfNeeded = useCallback(() => {
+    if (returningToCommandBrief) {
+      router.replace('/dashboard?focus=command-brief' as any);
+    }
+  }, [returningToCommandBrief, router]);
+
+  const confirmCommsPlan = useCallback(() => {
+    const confirmation = commsStore.confirmPlan();
+    setCommsConfirmation(confirmation);
+    expeditionReadinessStore.recomputeReadiness({ immediate: true, reason: 'manual_comms_plan_confirmed' });
+    returnToCommandBriefIfNeeded();
+  }, [returnToCommandBriefIfNeeded]);
 
   const allFrequencies = [
     ...DEFAULT_FREQUENCIES,
@@ -352,6 +379,35 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
                   Saved references stay readable offline, and local edits remain available in the field.
                 </Text>
               </View>
+              <View style={styles.commsConfirmPanel}>
+                <View style={styles.commsConfirmCopy}>
+                  <Text style={styles.commsConfirmTitle}>
+                    {commsConfirmation.confirmedAt ? 'COMMS PLAN CONFIRMED' : 'CONFIRM COMMS PLAN'}
+                  </Text>
+                  <Text style={styles.commsConfirmText}>
+                    {commsConfirmation.confirmedAt
+                      ? `Last confirmed ${commsConfirmation.confirmedAt}. Edit if your frequencies, signals, emergency numbers, or check-in expectations changed.`
+                      : 'Confirm that the visible emergency comms reference and check-in expectations are ready for this trip.'}
+                  </Text>
+                </View>
+                <View style={styles.commsConfirmActions}>
+                  <TouchableOpacity
+                    style={styles.commsConfirmSecondary}
+                    onPress={() => openCommsEditor('frequencies')}
+                    activeOpacity={0.78}
+                  >
+                    <Text style={styles.commsConfirmSecondaryText}>Edit</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.commsConfirmPrimary}
+                    onPress={confirmCommsPlan}
+                    activeOpacity={0.78}
+                  >
+                    <Ionicons name="checkmark-circle-outline" size={13} color="#050608" />
+                    <Text style={styles.commsConfirmPrimaryText}>Confirm</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             </View>
           )}
         </View>
@@ -375,6 +431,8 @@ export function SafetyScreenInner({ embedded = false }: { embedded?: boolean }) 
           }
           onClose={() => setCommsEditVisible(false)}
           onDataChanged={handleCommsDataChanged}
+          saveLabel={returningToCommandBrief ? 'Save and Confirm' : undefined}
+          onAfterSave={returningToCommandBrief ? confirmCommsPlan : undefined}
         />
       </View>
     </Wrapper>
@@ -739,5 +797,63 @@ const styles = StyleSheet.create({
     fontSize: 8.5,
     color: TACTICAL.textMuted,
     flex: 1,
+  },
+  commsConfirmPanel: {
+    marginTop: isSmallDevice ? 6 : 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 138, 44, 0.24)',
+    backgroundColor: 'rgba(196, 138, 44, 0.07)',
+    gap: 9,
+  },
+  commsConfirmCopy: {
+    gap: 4,
+  },
+  commsConfirmTitle: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: TACTICAL.amber,
+    letterSpacing: 1.1,
+  },
+  commsConfirmText: {
+    fontSize: 9,
+    lineHeight: 13,
+    color: TACTICAL.textMuted,
+    fontWeight: '700',
+  },
+  commsConfirmActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  commsConfirmSecondary: {
+    flex: 1,
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  commsConfirmSecondaryText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: TACTICAL.text,
+  },
+  commsConfirmPrimary: {
+    flex: 1,
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    borderRadius: 8,
+    backgroundColor: TACTICAL.amber,
+  },
+  commsConfirmPrimaryText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#050608',
   },
 });

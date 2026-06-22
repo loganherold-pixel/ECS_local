@@ -232,6 +232,10 @@ assert.ok(
   'Readout should pair dashboard concerns with practical user-facing recommendations and sentence-case them before display.',
 );
 assert.ok(
+  readout.includes(".filter(([source]) => source !== 'camp')"),
+  'Readout should not headline missing camp freshness as an ECS Intelligence key concern.',
+);
+assert.ok(
   !/title:\s*['"]AI['"]/.test(readout) && !/>\s*AI\s*</.test(readout),
   'Readout should not use AI as the user-facing title.',
 );

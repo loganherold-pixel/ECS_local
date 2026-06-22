@@ -137,7 +137,7 @@ export function generateECSAIAdvisoriesFromContext(
       sourceTypes: ['campops'],
       suppressKey: 'camp.legal.unverified',
       createdAt,
-      actions: [{ label: 'Open CampOps', type: 'open_campops' }],
+      actions: [],
     }));
   }
 

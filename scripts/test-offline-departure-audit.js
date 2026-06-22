@@ -118,7 +118,7 @@ assert.ok(
   !noRouteDayTripAudit.departureAudit.some((item) => item.itemId === 'camp-candidates'),
   'Day trip Departure Audit should omit Camp candidates because camp planning is not part of the selected intent.',
 );
-['offline-map-package', 'bailout-points', 'recovery-plan'].forEach((itemId) => {
+['offline-map-package', 'bailout-points'].forEach((itemId) => {
   const auditItem = noRouteDayTripAudit.departureAudit.find((item) => item.itemId === itemId);
   assert.ok(auditItem, `${itemId} should still be visible as a route-dependent audit item.`);
   assert.strictEqual(
@@ -127,6 +127,10 @@ assert.ok(
     `${itemId} should explain why its route-dependent action is unavailable without a route.`,
   );
 });
+assert.ok(
+  !noRouteDayTripAudit.departureAudit.some((item) => item.itemId === 'recovery-plan'),
+  'Departure Audit should not duplicate Recovery plan when Bailout points already covers route recovery review.',
+);
 
 const noRouteOvernightAudit = buildExpeditionReadiness({
   ...noRouteDayTripAudit,
@@ -134,11 +138,13 @@ const noRouteOvernightAudit = buildExpeditionReadiness({
   tripIntentSource: 'selected',
   readinessProfile: 'overnight',
 });
+const noRouteOvernightCampItem = noRouteOvernightAudit.departureAudit.find((item) => item.itemId === 'camp-candidates');
 assert.strictEqual(
-  noRouteOvernightAudit.departureAudit.find((item) => item.itemId === 'camp-candidates')?.disabledActionReason,
-  'You must first have an active route or build a trip.',
-  'Camp candidate actions should be route-gated for camping trips when no route exists yet.',
+  noRouteOvernightCampItem?.disabledActionReason,
+  null,
+  'Camp candidate audit should stay informational instead of route-gating a CampOps action when no route exists yet.',
 );
+assert.strictEqual(noRouteOvernightCampItem?.actionLabel, null, 'Camp candidate audit should not expose a CampOps action.');
 
 const endpointCampViableAudit = buildExpeditionReadiness({
   ...base,
@@ -173,6 +179,7 @@ const endpointCampViableAudit = buildExpeditionReadiness({
 const endpointCampAuditItem = endpointCampViableAudit.departureAudit.find((item) => item.itemId === 'camp-candidates');
 assert.strictEqual(endpointCampAuditItem?.status, 'complete', 'Camp candidate audit should complete when a viable camp is within five miles of the trail endpoint.');
 assert.strictEqual(endpointCampAuditItem?.actionLabel, null, 'Viable endpoint camp candidates should not ask the user to open CampOps.');
+assert.strictEqual(endpointCampAuditItem?.actionTarget, null, 'Camp candidates should be informational in Departure Audit, not an Open CampOps handoff.');
 assert.ok(
   /within 5 mi/i.test(endpointCampAuditItem?.summary ?? ''),
   'Camp candidate audit should explain the five-mile endpoint or waypoint radius.',
@@ -209,19 +216,19 @@ const noViableCampNearStopsAudit = buildExpeditionReadiness({
   },
 });
 const noViableCampAuditItem = noViableCampNearStopsAudit.departureAudit.find((item) => item.itemId === 'camp-candidates');
-assert.strictEqual(noViableCampAuditItem?.status, 'caution', 'No viable camp within five miles should be a caution, not a missing CampOps task.');
+assert.strictEqual(noViableCampAuditItem?.status, 'complete', 'No viable camp within five miles should be informational when camp is not required to depart.');
 assert.ok(/no viable camp candidates/i.test(noViableCampAuditItem?.summary ?? ''), 'Camp audit should report no viable camp candidates near route endpoints or waypoints.');
 assert.strictEqual(noViableCampAuditItem?.actionLabel, null, 'No viable nearby camp candidates should not show Open CampOps as a required fix.');
 assert.strictEqual(noViableCampAuditItem?.actionTarget, null, 'No viable nearby camp candidates should not route the user to CampOps as a missing action.');
 const noViableCampCategory = noViableCampNearStopsAudit.categories.find((category) => category.id === 'camp_legality_confidence');
-assert.strictEqual(noViableCampCategory?.status, 'caution', 'Known absence of nearby camp candidates should score as a caution for overnight trips.');
+assert.strictEqual(noViableCampCategory?.status, 'ready', 'Known absence of nearby camp candidates should remain informational unless an attached camp has a real access or safety issue.');
 assert.ok(
   !(noViableCampCategory?.missingInputs ?? []).includes('Camp candidate'),
   'Known absence of nearby camp candidates should not be labeled as missing CampOps data.',
 );
 assert.ok(
-  noViableCampNearStopsAudit.warnings.some((warning) => warning.id === 'no-viable-camp-near-route-stops'),
-  'Known absence of nearby camp candidates should surface as an operational warning.',
+  !noViableCampNearStopsAudit.warnings.some((warning) => warning.id === 'no-viable-camp-near-route-stops'),
+  'Known absence of nearby camp candidates should not surface as a key warning in ECS Intelligence.',
 );
 
 const routeSpecificBailoutAudit = buildExpeditionReadiness({
@@ -312,15 +319,9 @@ const routeSpecificRecoveryAudit = buildExpeditionReadiness({
     updatedAt: now,
   },
 });
-const recoveryPlanAuditItem = routeSpecificRecoveryAudit.departureAudit.find((item) => item.itemId === 'recovery-plan');
-assert.strictEqual(
-  recoveryPlanAuditItem?.status,
-  'complete',
-  'Recovery plan should complete in Departure Audit when route bailout pins and emergency coordinate context are confirmed.',
-);
 assert.ok(
-  /2 route bailout/i.test(recoveryPlanAuditItem?.summary ?? ''),
-  'Recovery plan audit should explain the attached route bailout count.',
+  !routeSpecificRecoveryAudit.departureAudit.some((item) => item.itemId === 'recovery-plan'),
+  'Departure Audit should rely on Bailout points instead of showing a duplicate Recovery plan row.',
 );
 const powerRuntimeAuditItem = routeSpecificRecoveryAudit.departureAudit.find((item) => item.itemId === 'power-runtime-estimate');
 assert.strictEqual(
@@ -414,7 +415,7 @@ const readyOffline = buildExpeditionReadiness({
     updatedAt: now,
   },
 });
-assert.strictEqual(readyOffline.departureAudit.length, 9, 'Departure Audit should include the route-actionable checklist items without route geometry.');
+assert.strictEqual(readyOffline.departureAudit.length, 8, 'Departure Audit should include the route-actionable checklist items without duplicate recovery plan or route geometry rows.');
 assert.ok(readyOffline.departureAudit.every((item) => ['complete', 'caution', 'missing', 'unavailable'].includes(item.status)), 'Audit statuses should use the accepted status set.');
 assert.strictEqual(readyOffline.departureAudit.find((item) => item.itemId === 'offline-map-package').status, 'complete', 'Ready offline package should complete the map package audit item.');
 assert.ok(!readyOffline.departureAudit.some((item) => item.itemId === 'route-geometry'), 'Cached route geometry should not create a separate audit item.');
@@ -437,8 +438,63 @@ const manualFuelLevelOnly = buildExpeditionReadiness({
   fuel: { rangeRemainingMiles: null, routeDistanceRemainingMiles: 74, fuelPercent: 68, source: 'manual', updatedAt: now },
 });
 assert.strictEqual(manualFuelLevelOnly.departureAudit.find((item) => item.itemId === 'fuel-range-plan').status, 'complete', 'Manual fuel level should satisfy the fuel/range audit instead of reading missing.');
+assert.ok(
+  /manual/i.test(manualFuelLevelOnly.departureAudit.find((item) => item.itemId === 'fuel-range-plan').summary),
+  'Manual fuel level should explain that Fuel/range plan is based on manual Fleet entry.',
+);
+
+const manualFleetTankCapacityOnly = buildExpeditionReadiness({
+  ...base,
+  fuel: null,
+  activeVehicle: {
+    ...base.activeVehicle,
+    fuelCapacityGal: 32,
+    fuelRangeMiles: null,
+    source: 'manual',
+    updatedAt: now,
+  },
+});
+const manualFleetTankFuelAuditItem = manualFleetTankCapacityOnly.departureAudit.find((item) => item.itemId === 'fuel-range-plan');
+assert.strictEqual(
+  manualFleetTankFuelAuditItem?.status,
+  'complete',
+  'A manual Fleet tank-capacity entry should satisfy the Fuel/range plan when live OBD fuel is unavailable.',
+);
+assert.ok(
+  /32 gal/i.test(manualFleetTankFuelAuditItem?.summary ?? '') && /manual Fleet/i.test(manualFleetTankFuelAuditItem?.summary ?? ''),
+  'Manual Fleet tank-capacity fuel audit should name the manual gallons and source.',
+);
+
+const confirmedManualCommsAudit = buildExpeditionReadiness({
+  ...base,
+  offline: {
+    ...base.offline,
+    emergencyPacketAvailable: false,
+    emergencyDocsAvailable: false,
+  },
+  communications: {
+    signalConfidence: 'medium',
+    satelliteCommsReady: false,
+    teamCheckInPlanReady: true,
+    source: 'manual',
+    updatedAt: now,
+  },
+});
+const confirmedManualCommsItem = confirmedManualCommsAudit.departureAudit.find((item) => item.itemId === 'emergency-communications-packet');
+assert.strictEqual(
+  confirmedManualCommsItem?.status,
+  'complete',
+  'A manually confirmed comms/check-in plan should complete the Emergency/communications packet without requiring offline docs.',
+);
+assert.strictEqual(
+  confirmedManualCommsItem?.actionTarget,
+  '/safety?focus=emergency-comms&returnTo=command-brief',
+  'Confirm Comms Plan should route to the emergency comms reference with a Command Brief return target.',
+);
 
 const commandBrief = read('components', 'brief', 'CommandBriefScreen.tsx');
+const safetyTab = read('app', '(tabs)', 'safety.tsx');
+const editCommsModal = read('components', 'emergency', 'EditCommsModal.tsx');
 assert.ok(commandBrief.includes('Departure Audit'), 'Command Brief should render Departure Audit.');
 assert.ok(commandBrief.includes('DepartureAuditChecklist'), 'Command Brief should use the reusable DepartureAuditChecklist.');
 assert.ok(commandBrief.includes('disabledActionReason'), 'Command Brief should surface disabled route-dependent audit action reasons.');
@@ -447,6 +503,19 @@ assert.ok(commandBrief.includes("sourceSurface: 'command_brief_departure_audit'"
 assert.ok(commandBrief.includes('buildOfflineFailureDrillEvidenceCaptureBundle'), 'Command Brief should be able to export a QA evidence capture bundle.');
 assert.ok(commandBrief.includes('readinessAssessment: assessment'), 'Command Brief evidence capture should include the current Departure Audit readiness assessment.');
 assert.ok(commandBrief.includes('share-offline-drill-evidence-capture'), 'Command Brief should expose the focused Offline Failure Drill evidence capture action.');
+assert.ok(
+  commandBrief.includes("item.actionTarget === '/safety?focus=emergency-comms&returnTo=command-brief'"),
+  'Command Brief should special-case Confirm Comms Plan so the comms reference can return to Command Brief after confirmation.',
+);
+assert.ok(
+  commandBrief.includes("pushRoute('/safety?focus=emergency-comms&returnTo=command-brief')"),
+  'Command Brief Confirm Comms Plan should deep-link to emergency comms reference instead of a generic Safety tab.',
+);
+assert.ok(safetyTab.includes("params.focus === 'emergency-comms'"), 'Safety tab should focus the emergency comms reference from the Command Brief handoff.');
+assert.ok(safetyTab.includes('commsStore.confirmPlan()'), 'Safety tab should persist a user-controlled comms plan confirmation.');
+assert.ok(safetyTab.includes("router.replace('/dashboard?focus=command-brief'"), 'Safety tab should return to Command Brief after a Command Brief comms confirmation.');
+assert.ok(safetyTab.includes("saveLabel={returningToCommandBrief ? 'Save and Confirm' : undefined}"), 'Safety tab editor should show Save and Confirm for Command Brief handoffs.');
+assert.ok(editCommsModal.includes('onAfterSave?.()'), 'Comms editor should support save-and-confirm callbacks without separate placeholder flows.');
 
 const departureAuditChecklist = read('components', 'readiness', 'DepartureAuditChecklist.tsx');
 assert.ok(departureAuditChecklist.includes('statusBadgeComplete'), 'Departure Audit should use a stronger stoplight-green Complete badge style.');
@@ -455,6 +524,9 @@ assert.ok(
   !departureAuditChecklist.includes('style={styles.actionText} numberOfLines={1}'),
   'Departure Audit action buttons should allow wrapped labels instead of truncating full words.',
 );
+const departureAuditSource = read('lib', 'readiness', 'departureAudit.ts');
+assert.ok(!departureAuditSource.includes("'Open CampOps'"), 'Departure Audit should not expose an Open CampOps action.');
+assert.ok(!departureAuditSource.includes("'recovery-plan'"), 'Departure Audit should not emit a duplicate Recovery plan item.');
 
 const navigateStrip = read('components', 'navigate', 'NavigateReadinessStrip.tsx');
 assert.ok(navigateStrip.includes('Offline: {offlineStatus}'), 'Navigate strip should show compact offline readiness.');

@@ -6,6 +6,7 @@ import { routeStore, type ImportedRoute, type RouteWaypoint } from '../routeStor
 import { tileCacheStore } from '../tileCacheStore';
 import { gpsUIState } from '../gpsUIState';
 import { bailoutStore } from '../bailoutStore';
+import { commsStore } from '../commsStore';
 import { buildRouteBailoutCandidates } from '../bailoutIntelligence';
 import {
   buildEnvironmentSnapshot,
@@ -637,13 +638,15 @@ function buildCommunicationsInput() {
   try {
     const detail = connectivity.getDetailedState();
     const level = detail.level;
+    const confirmation = commsStore.getConfirmation();
+    const confirmedAt = confirmation.confirmedAt ?? null;
     return {
       signalConfidence: level === 'normal' ? 'high' as const : level === 'limited' ? 'medium' as const : level === 'no_service' ? 'low' as const : null,
       satelliteCommsReady: null,
-      teamCheckInPlanReady: null,
+      teamCheckInPlanReady: confirmedAt ? true : null,
       cellularExpected: detail.networkType === 'cellular' ? detail.isOnline : null,
-      source: detail.initialized ? 'live' as const : 'unknown' as const,
-      updatedAt: detail.lastOnlineAt ?? detail.lastOfflineAt ?? new Date().toISOString(),
+      source: confirmedAt ? 'manual' as const : detail.initialized ? 'live' as const : 'unknown' as const,
+      updatedAt: confirmedAt ?? detail.lastOnlineAt ?? detail.lastOfflineAt ?? new Date().toISOString(),
     };
   } catch {
     return null;
@@ -850,6 +853,7 @@ function ensureSourceSubscriptions(): void {
     tileCacheStore.subscribe(onSourceChange),
     gpsUIState.subscribe(onSourceChange),
     connectivity.onStatusChange(onSourceChange),
+    commsStore.subscribe(onSourceChange),
     expeditionReadinessPreferencesStore.subscribe((preferences) => {
       state = {
         ...state,
