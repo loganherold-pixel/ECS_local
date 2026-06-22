@@ -62,6 +62,7 @@ type BuildTerrainRiskReferenceEventsArgs = {
   completedDistanceMiles?: number | null;
   totalDistanceMiles?: number | null;
   weatherSnapshot?: WeatherLikeSnapshot;
+  includePassed?: boolean;
 };
 
 type SelectUpcomingTerrainRiskBannerEventArgs = {
@@ -243,68 +244,91 @@ function buildFieldGuidance(
   return guidance;
 }
 
+export function buildTerrainRiskReferenceEventForPoint({
+  completedDistanceMiles = 0,
+  includePassed = false,
+  point,
+  pointIndex = 0,
+  weatherSnapshot,
+}: {
+  point: TerrainProfilePoint;
+  pointIndex?: number;
+  completedDistanceMiles?: number | null;
+  weatherSnapshot?: WeatherLikeSnapshot;
+  includePassed?: boolean;
+}): TerrainRiskReferenceEvent | null {
+  const progressMiles = Math.max(0, finiteNumber(completedDistanceMiles) ?? 0);
+  const weatherInfluence = buildTerrainRiskWeatherInfluence(weatherSnapshot);
+  const distanceMiles = finiteNumber(point.distanceMiles);
+  const elevationFeet = finiteNumber(point.elevationFeet);
+  const riskScore = finiteNumber(point.riskScore);
+  if (distanceMiles == null || elevationFeet == null || riskScore == null) return null;
+  const isReference =
+    point.riskLevel === 'high' ||
+    point.thermalBand === 'hot' ||
+    (point.hazardKinds?.length ?? 0) > 0;
+  if (!isReference) return null;
+
+  const rawDistanceAheadMiles = roundDistance(distanceMiles - progressMiles);
+  if (!includePassed && rawDistanceAheadMiles <= 0) return null;
+
+  const distanceAheadMiles = rawDistanceAheadMiles > 0 ? rawDistanceAheadMiles : 0;
+  const riskType = chooseRiskType(point);
+  const gradePercent = finiteNumber(point.gradePercent);
+  const hazardKind = point.hazardKinds?.[0] ?? null;
+  const riskLabel = terrainHazardLabel(riskType);
+  const gradeLabel = formatGrade(gradePercent);
+  const elevationLabel = `${Math.round(elevationFeet).toLocaleString()} ft`;
+  const detailParts = [
+    gradeLabel,
+    elevationLabel,
+    weatherInfluence.detail,
+  ].filter(Boolean);
+  const bannerDetail = [
+    gradeLabel,
+    weatherInfluence.available && weatherInfluence.contribution !== 'weather_available'
+      ? weatherInfluence.detail
+      : null,
+  ].filter(Boolean).join(' | ') || `${elevationLabel} | ${weatherInfluence.summary}`;
+
+  return {
+    id: `terrain-risk-reference-${pointIndex}-${distanceMiles.toFixed(2)}`,
+    riskType,
+    title: riskLabel,
+    detail: detailParts.join(' | '),
+    distanceMiles: roundDistance(distanceMiles),
+    distanceAheadMiles,
+    elevationFeet: Math.round(elevationFeet),
+    gradePercent: gradePercent == null ? null : Math.round(gradePercent),
+    hazardKind,
+    riskLevel: point.riskLevel,
+    riskScore: Math.round(riskScore),
+    weatherInfluence,
+    fieldGuidance: buildFieldGuidance(riskType, weatherInfluence),
+    banner: {
+      title: distanceAheadMiles > 0
+        ? `${riskLabel} ${formatMiles(distanceAheadMiles)} ahead`
+        : `${riskLabel} at ${formatMiles(distanceMiles)}`,
+      detail: bannerDetail,
+      badge: 'TERRAIN',
+    },
+  };
+}
+
 export function buildTerrainRiskReferenceEvents({
   completedDistanceMiles = 0,
+  includePassed = false,
   profile,
   weatherSnapshot,
 }: BuildTerrainRiskReferenceEventsArgs): TerrainRiskReferenceEvent[] {
-  const progressMiles = Math.max(0, finiteNumber(completedDistanceMiles) ?? 0);
-  const weatherInfluence = buildTerrainRiskWeatherInfluence(weatherSnapshot);
-
   return profile
-    .map((point, index): TerrainRiskReferenceEvent | null => {
-      const distanceMiles = finiteNumber(point.distanceMiles);
-      const elevationFeet = finiteNumber(point.elevationFeet);
-      const riskScore = finiteNumber(point.riskScore);
-      if (distanceMiles == null || elevationFeet == null || riskScore == null) return null;
-      const isReference =
-        point.riskLevel === 'high' ||
-        point.thermalBand === 'hot' ||
-        (point.hazardKinds?.length ?? 0) > 0;
-      if (!isReference) return null;
-
-      const distanceAheadMiles = roundDistance(distanceMiles - progressMiles);
-      if (distanceAheadMiles <= 0) return null;
-
-      const riskType = chooseRiskType(point);
-      const gradePercent = finiteNumber(point.gradePercent);
-      const hazardKind = point.hazardKinds?.[0] ?? null;
-      const riskLabel = terrainHazardLabel(riskType);
-      const gradeLabel = formatGrade(gradePercent);
-      const elevationLabel = `${Math.round(elevationFeet).toLocaleString()} ft`;
-      const detailParts = [
-        gradeLabel,
-        elevationLabel,
-        weatherInfluence.detail,
-      ].filter(Boolean);
-      const bannerDetail = [
-        gradeLabel,
-        weatherInfluence.available && weatherInfluence.contribution !== 'weather_available'
-          ? weatherInfluence.detail
-          : null,
-      ].filter(Boolean).join(' | ') || `${elevationLabel} | ${weatherInfluence.summary}`;
-
-      return {
-        id: `terrain-risk-reference-${index}-${distanceMiles.toFixed(2)}`,
-        riskType,
-        title: riskLabel,
-        detail: detailParts.join(' | '),
-        distanceMiles: roundDistance(distanceMiles),
-        distanceAheadMiles,
-        elevationFeet: Math.round(elevationFeet),
-        gradePercent: gradePercent == null ? null : Math.round(gradePercent),
-        hazardKind,
-        riskLevel: point.riskLevel,
-        riskScore: Math.round(riskScore),
-        weatherInfluence,
-        fieldGuidance: buildFieldGuidance(riskType, weatherInfluence),
-        banner: {
-          title: `${riskLabel} ${formatMiles(distanceAheadMiles)} ahead`,
-          detail: bannerDetail,
-          badge: 'TERRAIN',
-        },
-      };
-    })
+    .map((point, index) => buildTerrainRiskReferenceEventForPoint({
+      point,
+      pointIndex: index,
+      completedDistanceMiles,
+      weatherSnapshot,
+      includePassed,
+    }))
     .filter((event): event is TerrainRiskReferenceEvent => event != null)
     .sort((a, b) => a.distanceAheadMiles - b.distanceAheadMiles || b.riskScore - a.riskScore);
 }

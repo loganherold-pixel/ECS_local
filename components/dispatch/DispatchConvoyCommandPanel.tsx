@@ -835,6 +835,7 @@ export default function DispatchConvoyCommandPanel({
                 ]}
                 accessibilityRole="button"
                 accessibilityLabel="Open active GPS ping tactical map"
+                accessibilityHint="Tap for tactical map and active guidance route"
                 activeOpacity={0.8}
                 onPress={() => onOpenEmergencyEvent(primaryEmergencyEvent)}
               >

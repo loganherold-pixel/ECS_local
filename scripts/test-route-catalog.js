@@ -154,6 +154,26 @@ assert.strictEqual(
   'Search-preview geometry should preserve public recommendation when official source gates pass',
 );
 
+const omittedSearchGeometryRoute = makeRoute({
+  routeGeometry: undefined,
+  routeGeometryMode: 'omitted',
+  geometryQuality: 'good',
+});
+const omittedSearchGeometryVerification = verifyRouteCatalogRecord(omittedSearchGeometryRoute, { now: freshNow });
+assert(
+  !omittedSearchGeometryVerification.blockers.includes('Route geometry is incomplete'),
+  'Lightweight search records with known-good catalog geometry should not be blocked only because coordinates were intentionally omitted.',
+);
+assert(
+  omittedSearchGeometryVerification.warnings.some((warning) => /detail hydration/i.test(warning)),
+  'Lightweight search records should clearly warn that detail hydration is required before active guidance.',
+);
+assert.strictEqual(
+  omittedSearchGeometryVerification.publicRecommendation,
+  true,
+  'Lightweight search records should remain publicly discoverable when authoritative metadata says geometry exists.',
+);
+
 const trailPack = catalogRouteToTrailPack(makeRoute(), verified);
 assert.strictEqual(trailPack.source, 'ecs_validated');
 assert.strictEqual(trailPack.dataState, 'live');
@@ -218,6 +238,26 @@ assert.strictEqual(
   trailPackToExpeditionOpportunity(searchPreviewTrailPack).routeMetadata.routeGeometryMode,
   'preview_simplified',
   'Expedition opportunity metadata should keep route geometry mode so Explore can require active-guidance detail before calling a preview route ready.',
+);
+
+const omittedSearchTrailPack = catalogRouteToTrailPack(
+  omittedSearchGeometryRoute,
+  omittedSearchGeometryVerification,
+);
+assert.strictEqual(
+  omittedSearchTrailPack.routeGeometry,
+  undefined,
+  'Lightweight search Trail Packs should not carry full geometry coordinates into initial Explore rendering.',
+);
+assert.strictEqual(
+  omittedSearchTrailPack.routeGeometryMode,
+  'omitted',
+  'Lightweight search Trail Packs should preserve omitted geometry mode for honest preview/guidance labeling.',
+);
+assert.strictEqual(
+  omittedSearchTrailPack.catalogVerification?.publicRecommendation,
+  true,
+  'Lightweight search Trail Packs should remain discoverable while requiring detail hydration before guidance.',
 );
 
 const opportunity = trailPackToExpeditionOpportunity(trailPack);

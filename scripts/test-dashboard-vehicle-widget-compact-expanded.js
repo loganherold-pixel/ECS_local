@@ -14,12 +14,16 @@ const vehicleRenderBlock = source.match(/case 'vehicle':[\s\S]*?case 'route':/)?
 const vehicleDetailBlock = source.match(/function VehicleCommandExpandedView\([\s\S]*?\n}\n\nfunction VehicleCommandRollZeroButton/)?.[0] ?? '';
 const panelVisualBlock = source.match(/function AttitudeCommandPanelVisual\([\s\S]*?\n}\n\nfunction HwyCellCoverageWidget/)?.[0] ?? '';
 
-includes('const showDecorativeBackdrop = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel);',
-  'Vehicle profile artwork must be gated to expanded mode with sunlight and weather backdrops.');
 assert.ok(
-  panelVisualBlock.includes("if (icon === 'car-sport-outline')") &&
-    panelVisualBlock.includes('<AttitudeCommandVehicleProfileBackgroundVisual vehicle={vehicle} />'),
-  'Expanded vehicle panel must use active fleet vehicle profile artwork as the decorative backdrop.',
+  source.includes('const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;') &&
+    source.includes('const shouldRenderPanelVisual = false;') &&
+    !source.includes('const showDecorativeBackdrop ='),
+  'Vehicle profile should use the shared transparent texture-bleed command surface instead of a decorative backdrop.',
+);
+assert.ok(
+  !panelVisualBlock.includes("if (icon === 'car-sport-outline')") &&
+    !panelVisualBlock.includes('<AttitudeCommandVehicleProfileBackgroundVisual vehicle={vehicle} />'),
+  'Expanded vehicle panel must not mount active fleet vehicle profile artwork as a background layer.',
 );
 
 assert.ok(

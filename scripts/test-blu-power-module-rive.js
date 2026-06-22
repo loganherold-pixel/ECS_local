@@ -157,12 +157,10 @@ assert(
     !widgetRenderers.includes('attitudeCommandS.powerRiveForegroundLayer') &&
     !widgetRenderers.includes('attitudeCommandS.powerRiveForegroundBlock') &&
     !widgetRenderers.includes('attitudeCommandS.powerRiveModule') &&
-    widgetRenderers.includes('POWER_MANAGEMENT_BACKGROUND') &&
-    widgetRenderers.includes('powerManagementBackground') &&
-    widgetRenderers.includes('powerManagementBackgroundScrim') &&
+    widgetRenderers.includes('textureBleedCommandPanelSurface') &&
     powerCommandPanelBlock.includes('powerCompactReadout') &&
     !powerCommandPanelBlock.includes('<AttitudeCommandPowerRiveForeground'),
-  'Attitude Command Power Monitor must keep BLU Rive dormant and use the compact ECS text readout in command cards.',
+  'Attitude Command Power Monitor must keep BLU Rive dormant and use the compact ECS text readout on the transparent command surface.',
 );
 
 assert(
@@ -176,10 +174,10 @@ assert(
 );
 
 assert(
-  powerManagementVisualBlock.includes('POWER_MANAGEMENT_BACKGROUND') &&
-    powerManagementVisualBlock.includes('powerManagementBackground') &&
-    powerManagementVisualBlock.includes('powerManagementBackgroundScrim'),
-  'Power Monitor decorative background must keep the Power Management background image and scrim.',
+  widgetRenderers.includes('const shouldRenderPanelVisual = false;') &&
+    widgetRenderers.includes('usesTextureBleedPanel && attitudeCommandS.textureBleedCommandPanelSurface') &&
+    !powerCommandPanelBlock.includes('showPowerDetailBackdrop'),
+  'Power Monitor command panel must avoid the decorative Power Management background image and scrim.',
 );
 
 assert(

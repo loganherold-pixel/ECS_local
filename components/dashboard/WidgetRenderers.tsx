@@ -3929,11 +3929,9 @@ function AttitudeCommandPanel({
           ? { label: 'ALERT', tone }
           : null;
   const suppressCompactPanelChrome = expanded && detailMode;
-  const showDecorativeBackdrop = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel);
-  const showRouteTerrainBackdrop = expanded && isRoutePanel;
-  const showPowerDetailBackdrop = expanded && isPowerPanel && Boolean(powerVisual);
-  const shouldRenderPanelVisual = showDecorativeBackdrop || showRouteTerrainBackdrop || showPowerDetailBackdrop;
-  const usesTransparentCompactSurface = !expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel);
+  const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;
+  const shouldRenderPanelVisual = false;
+  const usesTransparentCompactSurface = !expanded && usesTextureBleedPanel;
   const content = (
     <ECSInstrumentPanel
       title={undefined}
@@ -4003,7 +4001,12 @@ function AttitudeCommandPanel({
       selected={tone === 'attention' || tone === 'warning' || tone === 'critical'}
       showActiveEdge={false}
       innerTexture={false}
-      style={[attitudeCommandS.panelFrame, usesTransparentCompactSurface && attitudeCommandS.compactCommandPanelSurface, expanded && attitudeCommandS.expandedPanelFrame]}
+      style={[
+        attitudeCommandS.panelFrame,
+        usesTextureBleedPanel && attitudeCommandS.textureBleedCommandPanelSurface,
+        expanded && attitudeCommandS.expandedPanelFrame,
+        usesTextureBleedPanel && attitudeCommandS.textureBleedCommandPanelSurface,
+      ]}
       contentStyle={[attitudeCommandS.panelFrameContent, usesTransparentCompactSurface && attitudeCommandS.compactCommandPanelFrameContent, expanded && attitudeCommandS.expandedPanelFrameContent]}
       background={shouldRenderPanelVisual ? (
         <AttitudeCommandPanelVisual
@@ -7011,11 +7014,15 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
             selectedCommandCenterMode === 'threeDNavigation' ? attitudeCommandS.attitudeStageNavigationCommandMode : null,
           ]}
         >
-          <View pointerEvents="none" style={[attitudeCommandS.commandTitleBlock, commandLayout.commandTitleBlock]}>
-            <Text style={attitudeCommandS.commandSubtitle} numberOfLines={1}>
-              {selectedCommandModuleDefinition.subtitle}
-            </Text>
-          </View>
+          {selectedCommandCenterMode !== 'threeDNavigation' ? (
+            selectedCommandModuleDefinition.subtitle.trim().length > 0 ? (
+              <View pointerEvents="none" style={[attitudeCommandS.commandTitleBlock, commandLayout.commandTitleBlock]}>
+                <Text style={attitudeCommandS.commandSubtitle} numberOfLines={1}>
+                  {selectedCommandModuleDefinition.subtitle}
+                </Text>
+              </View>
+            ) : null
+          ) : null}
           <View style={attitudeCommandS.moduleTouchTarget}>
             <Animated.View
               style={[
@@ -7108,6 +7115,13 @@ const attitudeCommandS = StyleSheet.create({
   shellFrame: {
     flex: 1,
     minHeight: 0,
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0,
   },
   shell: {
     flex: 1,
@@ -7183,6 +7197,8 @@ const attitudeCommandS = StyleSheet.create({
     marginRight: 3,
     marginBottom: 3,
     marginLeft: 3,
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
   },
   landscapeInstrumentTextureLayer: {
     ...StyleSheet.absoluteFillObject,
@@ -7960,6 +7976,15 @@ const attitudeCommandS = StyleSheet.create({
   panelFrame: {
     flex: 1,
     minWidth: 0,
+  },
+  textureBleedCommandPanelSurface: {
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0,
   },
   compactCommandPanelSurface: {
     backgroundColor: 'transparent',
@@ -13417,6 +13442,18 @@ function AttitudeCommandTerrainRiskPreview({
       : [],
     [route, terrainRisk.completedDistanceMiles, terrainRisk.weatherSnapshot],
   );
+  const markerReferenceEvents = useMemo(
+    () => route
+      ? buildTerrainRiskReferenceEvents({
+          profile: route.profile,
+          totalDistanceMiles: route.totalDistanceMiles,
+          completedDistanceMiles: terrainRisk.completedDistanceMiles,
+          weatherSnapshot: terrainRisk.weatherSnapshot,
+          includePassed: true,
+        })
+      : [],
+    [route, terrainRisk.completedDistanceMiles, terrainRisk.weatherSnapshot],
+  );
   const upcomingReferenceEvent = useMemo(
     () => selectUpcomingTerrainRiskBannerEvent(referenceEvents, { proximityMiles: 1 }),
     [referenceEvents],
@@ -13467,7 +13504,7 @@ function AttitudeCommandTerrainRiskPreview({
               completedDistanceMiles={terrainRisk.completedDistanceMiles}
               transparentBackground
               interactive={markersInteractive}
-              referenceEvents={referenceEvents}
+              referenceEvents={markerReferenceEvents}
               selectedReferenceEvent={selectedReferenceEvent}
               onReferencePointPress={handleReferencePointPress}
             />
@@ -13585,16 +13622,7 @@ function AttitudeCommandTerrainRiskBackgroundVisual() {
   );
 }
 
-function AttitudeCommandPanelVisual({
-  icon,
-  color,
-  tone,
-  sunlight,
-  weather,
-  vehicle,
-  route,
-  power,
-}: {
+function AttitudeCommandPanelVisual(props: {
   icon?: string;
   color: string;
   tone: WidgetTone;
@@ -13604,28 +13632,8 @@ function AttitudeCommandPanelVisual({
   route?: CommandRouteVisualData;
   power?: CommandPowerVisualData;
 }) {
-  if (icon === 'sunny-outline') {
-    return <AttitudeCommandSunlightBackgroundVisual sunlight={sunlight} />;
-  }
-
-  if (icon === 'partly-sunny-outline') {
-    return <AttitudeCommandWeatherBackgroundVisual weather={weather} />;
-  }
-
-  if (icon === 'car-sport-outline') {
-    return <AttitudeCommandVehicleProfileBackgroundVisual vehicle={vehicle} />;
-  }
-
-  if (icon === 'navigate-outline') {
-    return <AttitudeCommandRouteProgressMapVisual route={route} />;
-  }
-
-  if (icon === 'warning-outline') {
-    return <AttitudeCommandTerrainRiskBackgroundVisual />;
-  }
-
-  if (icon === 'battery-charging-outline') {
-    return <AttitudeCommandPowerManagementVisual power={power} />;
+  if (props.icon === 'navigate-outline') {
+    return <AttitudeCommandRouteProgressMapVisual route={props.route} />;
   }
 
   return null;

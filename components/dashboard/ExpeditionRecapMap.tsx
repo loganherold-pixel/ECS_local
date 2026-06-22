@@ -1,13 +1,18 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   LayoutChangeEvent,
+  Modal,
+  Pressable,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
+import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
+import { getMapStyleUrl, getMapboxToken, getMapboxTokenSync } from '../../lib/mapConfig';
 import type {
   ExpeditionRecap,
   ExpeditionRecapNotableMoment,
@@ -27,6 +32,29 @@ type RecapMapModel = {
   start: ProjectedPoint | null;
   finish: ProjectedPoint | null;
   callouts: RecapMapCallout[];
+};
+
+type RecapMapMode = 'compact' | 'expanded';
+
+type RecapMapPayload = {
+  routeCoords: [number, number][];
+  startCoord: [number, number] | null;
+  finishCoord: [number, number] | null;
+  bounds: [[number, number], [number, number]];
+  features: {
+    type: 'Feature';
+    properties: {
+      id: string;
+      title: string;
+      description: string;
+      category: CalloutCategory;
+      elapsedLabel: string | null;
+    };
+    geometry: {
+      type: 'Point';
+      coordinates: [number, number];
+    };
+  }[];
 };
 
 type ExpeditionRecapMapProps = {
@@ -65,6 +93,10 @@ const MIN_CALLOUTS = 3;
 const CALLOUT_WIDTH = 124;
 const CALLOUT_HEIGHT = 54;
 const CALLOUT_MARGIN = 8;
+const RECAP_MAPBOX_GL_JS_VERSION = 'v2.15.0';
+const RECAP_TERRAIN_SOURCE_ID = 'ecs-recap-map-terrain-dem';
+const RECAP_MAP_3D_PITCH = 58;
+const RECAP_MAP_MAX_ZOOM = 14.2;
 
 function isValidCoordinate(point: ExpeditionTripCoordinate | null | undefined): point is ExpeditionTripCoordinate {
   return (
@@ -120,6 +152,15 @@ function downsample<T>(items: T[], maxItems: number): T[] {
   }
   result.push(items[items.length - 1]);
   return result;
+}
+
+function escapeInlineJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003C')
+    .replace(/>/g, '\\u003E')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 function timestampMs(value: string | null | undefined): number | null {
@@ -347,6 +388,299 @@ function buildRecapMapModel(
   };
 }
 
+function coordinateToLngLat(coordinate: ExpeditionTripCoordinate | null | undefined): [number, number] | null {
+  return isValidCoordinate(coordinate) ? [coordinate.lng, coordinate.lat] : null;
+}
+
+function buildRecapMapPayload(
+  model: RecapMapModel,
+  startCoordinate: ExpeditionTripCoordinate | null,
+  endCoordinate: ExpeditionTripCoordinate | null,
+): RecapMapPayload {
+  return {
+    routeCoords: model.projectedRoute
+      .map((point) => coordinateToLngLat(point.coordinate))
+      .filter((coordinate): coordinate is [number, number] => coordinate != null),
+    startCoord: coordinateToLngLat(startCoordinate ?? model.start?.coordinate),
+    finishCoord: coordinateToLngLat(endCoordinate ?? model.finish?.coordinate),
+    bounds: [
+      [model.bounds.west, model.bounds.south],
+      [model.bounds.east, model.bounds.north],
+    ],
+    features: model.callouts.map((callout) => ({
+      type: 'Feature' as const,
+      properties: { id: callout.id,
+        title: callout.title,
+        description: callout.description,
+        category: callout.category,
+        elapsedLabel: callout.elapsedLabel,
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [callout.routePoint.coordinate.lng, callout.routePoint.coordinate.lat],
+      },
+    })),
+  };
+}
+
+function buildRecapMapHtml(mapboxToken: string, styleUrl: string, mapMode: RecapMapMode): string {
+  const token = escapeInlineJson(mapboxToken);
+  const style = escapeInlineJson(styleUrl);
+  const interactive = mapMode === 'expanded';
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=${interactive ? 'yes' : 'no'}" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/${RECAP_MAPBOX_GL_JS_VERSION}/mapbox-gl.css" rel="stylesheet" />
+  <style>
+    html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; background: #020608; overflow: hidden; }
+    .mapboxgl-ctrl-top-left, .mapboxgl-ctrl-top-right { display: none !important; }
+    .mapboxgl-ctrl-bottom-right { display: ${interactive ? 'block' : 'none'} !important; }
+    .mapboxgl-ctrl-logo { opacity: 0.58; transform: scale(0.72); transform-origin: bottom left; }
+    .mapboxgl-popup-content {
+      background: rgba(11,14,18,0.94);
+      color: #F4E7C5;
+      border: 1px solid rgba(242,194,77,0.38);
+      border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.38);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 10px;
+    }
+    .mapboxgl-popup-tip { border-top-color: rgba(11,14,18,0.94) !important; }
+    .popup-title { color: #F2C24D; font-size: 11px; font-weight: 900; margin-bottom: 4px; }
+    .popup-copy { color: rgba(244,231,197,0.82); font-size: 10px; font-weight: 650; line-height: 1.35; }
+    .popup-meta { color: rgba(244,231,197,0.56); font-size: 8px; font-weight: 900; margin-top: 5px; text-transform: uppercase; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://api.mapbox.com/mapbox-gl-js/${RECAP_MAPBOX_GL_JS_VERSION}/mapbox-gl.js"></script>
+  <script>
+    (function() {
+      var RNW = window.ReactNativeWebView;
+      var map = null;
+      var pendingPayload = null;
+      var selectedPopup = null;
+      var RECAP_TERRAIN_SOURCE_ID = '${RECAP_TERRAIN_SOURCE_ID}';
+      var RECAP_MAP_3D_PITCH = ${RECAP_MAP_3D_PITCH};
+      var interactive = ${interactive ? 'true' : 'false'};
+
+      function send(type, payload) {
+        try {
+          if (RNW && RNW.postMessage) RNW.postMessage(JSON.stringify({ type: type, payload: payload || null }));
+        } catch (e) {}
+      }
+
+      function fc(features) {
+        return { type: 'FeatureCollection', features: features || [] };
+      }
+
+      function feature(id, geometry, properties) {
+        return { type: 'Feature', id: id, properties: properties || {}, geometry: geometry };
+      }
+
+      function ensureSource(id, data) {
+        if (!map) return;
+        var existing = map.getSource(id);
+        if (existing && existing.setData) {
+          existing.setData(data);
+          return;
+        }
+        map.addSource(id, { type: 'geojson', data: data });
+      }
+
+      function ensureLayer(layer) {
+        if (!map || map.getLayer(layer.id)) return;
+        map.addLayer(layer);
+      }
+
+      function addTerrain() {
+        try {
+          if (!map.getSource(RECAP_TERRAIN_SOURCE_ID)) {
+            map.addSource(RECAP_TERRAIN_SOURCE_ID, {
+              type: 'raster-dem',
+              url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+              tileSize: 512,
+              maxzoom: 14
+            });
+          }
+          map.setTerrain({ source: RECAP_TERRAIN_SOURCE_ID, exaggeration: 1.2 });
+          if (!map.getLayer('ecs-recap-sky')) {
+            map.addLayer({
+              id: 'ecs-recap-sky',
+              type: 'sky',
+              paint: {
+                'sky-type': 'atmosphere',
+                'sky-atmosphere-sun-intensity': 5
+              }
+            });
+          }
+        } catch (e) {
+          send('mapLog', { level: 'warn', message: 'terrain unavailable', detail: String(e && e.message ? e.message : e) });
+        }
+      }
+
+      function fitPayload(payload, animate) {
+        if (!map || !payload || !payload.bounds) return;
+        var options = {
+          padding: interactive ? 84 : 36,
+          pitch: RECAP_MAP_3D_PITCH,
+          bearing: 0,
+          maxZoom: ${RECAP_MAP_MAX_ZOOM},
+          duration: animate ? 650 : 0
+        };
+        try {
+          map.fitBounds(payload.bounds, options);
+        } catch (e) {}
+      }
+
+      function selectCallout(id, lngLat) {
+        if (!map) return;
+        var source = map.getSource('ecs-recap-callouts-selected');
+        var selected = null;
+        var payload = pendingPayload || {};
+        var features = payload.features || [];
+        for (var i = 0; i < features.length; i += 1) {
+          if (features[i].properties && features[i].properties.id === id) {
+            selected = features[i];
+            break;
+          }
+        }
+        if (source && source.setData) {
+          source.setData(fc(selected ? [selected] : []));
+        }
+        if (selected && interactive) {
+          if (selectedPopup) selectedPopup.remove();
+          var props = selected.properties || {};
+          var html =
+            '<div class="popup-title">' + String(props.title || 'Trip moment') + '</div>' +
+            '<div class="popup-copy">' + String(props.description || 'Trip event recorded.') + '</div>' +
+            '<div class="popup-meta">' + String(props.category || 'moment') + (props.elapsedLabel ? ' · ' + props.elapsedLabel : '') + '</div>';
+          selectedPopup = new mapboxgl.Popup({ closeButton: true, closeOnClick: false, offset: 14 })
+            .setLngLat(selected.geometry.coordinates)
+            .setHTML(html)
+            .addTo(map);
+        }
+        send('calloutSelected', { id: id });
+      }
+
+      function applyPayload(payload) {
+        pendingPayload = payload;
+        if (!map || !map.isStyleLoaded()) return;
+        addTerrain();
+        var route = feature('route', { type: 'LineString', coordinates: payload.routeCoords || [] }, {});
+        var start = payload.startCoord ? feature('start', { type: 'Point', coordinates: payload.startCoord }, {}) : null;
+        var finish = payload.finishCoord ? feature('finish', { type: 'Point', coordinates: payload.finishCoord }, {}) : null;
+
+        ensureSource('ecs-recap-route', route);
+        ensureSource('ecs-recap-endpoints', fc([start, finish].filter(Boolean)));
+        ensureSource('ecs-recap-callouts', fc(payload.features || []));
+        ensureSource('ecs-recap-callouts-selected', fc([]));
+
+        ensureLayer({
+          id: 'ecs-recap-route-glow',
+          type: 'line',
+          source: 'ecs-recap-route',
+          paint: {
+            'line-color': 'rgba(242,194,77,0.26)',
+            'line-width': interactive ? 9 : 7,
+            'line-blur': 5
+          }
+        });
+        ensureLayer({
+          id: 'ecs-recap-route-line',
+          type: 'line',
+          source: 'ecs-recap-route',
+          paint: {
+            'line-color': '#F2C24D',
+            'line-width': interactive ? 4 : 3,
+            'line-opacity': 0.92
+          }
+        });
+        ensureLayer({
+          id: 'ecs-recap-endpoints',
+          type: 'circle',
+          source: 'ecs-recap-endpoints',
+          paint: {
+            'circle-radius': interactive ? 7 : 5,
+            'circle-color': '#9BC9A1',
+            'circle-stroke-color': '#0B0F12',
+            'circle-stroke-width': 2
+          }
+        });
+        ensureLayer({
+          id: 'ecs-recap-callouts',
+          type: 'circle',
+          source: 'ecs-recap-callouts',
+          paint: {
+            'circle-radius': interactive ? 7 : 5,
+            'circle-color': '#F2C24D',
+            'circle-opacity': 0.94,
+            'circle-stroke-color': '#0B0F12',
+            'circle-stroke-width': 2
+          }
+        });
+        ensureLayer({
+          id: 'ecs-recap-callouts-selected',
+          type: 'circle',
+          source: 'ecs-recap-callouts-selected',
+          paint: {
+            'circle-radius': interactive ? 12 : 9,
+            'circle-color': 'rgba(242,194,77,0.18)',
+            'circle-stroke-color': '#F2C24D',
+            'circle-stroke-width': 2
+          }
+        });
+        fitPayload(payload, false);
+      }
+
+      window.__ECS_RECAP_MAP_SET__ = function(payload) {
+        applyPayload(payload);
+      };
+      window.__ECS_RECAP_MAP_RECENTER__ = function() {
+        fitPayload(pendingPayload, true);
+      };
+
+      try {
+        mapboxgl.accessToken = ${token};
+        mapboxgl.workerCount = 1;
+        map = new mapboxgl.Map({
+          container: 'map',
+          style: ${style},
+          center: [-98.5795, 39.8283],
+          zoom: 4,
+          pitch: RECAP_MAP_3D_PITCH,
+          bearing: 0,
+          interactive: interactive,
+          antialias: false,
+          failIfMajorPerformanceCaveat: false,
+          scrollZoom: true,
+          dragPan: true,
+          attributionControl: interactive
+        });
+        map.on('load', function() {
+          if (pendingPayload) applyPayload(pendingPayload);
+          send('mapReady', { ok: true });
+        });
+        map.on('style.load', function() {
+          if (pendingPayload) applyPayload(pendingPayload);
+        });
+        map.on('click', 'ecs-recap-callouts', function(event) {
+          var f = event.features && event.features[0];
+          if (!f || !f.properties) return;
+          selectCallout(f.properties.id, event.lngLat);
+        });
+      } catch (e) {
+        send('mapError', { message: String(e && e.message ? e.message : e) });
+      }
+    })();
+  </script>
+</body>
+</html>`;
+}
+
 function formatBounds(bounds: ExpeditionTripBounds): string {
   return `${bounds.south.toFixed(3)}-${bounds.north.toFixed(3)} lat / ${bounds.west.toFixed(3)}-${bounds.east.toFixed(3)} lon`;
 }
@@ -414,7 +748,7 @@ function LeaderLine({ from, toX, toY }: { from: ProjectedPoint; toX: number; toY
   );
 }
 
-function RecapMapCalloutView({ callout }: { callout: RecapMapCallout }) {
+function RecapMapCalloutView({ callout, onPress }: { callout: RecapMapCallout; onPress?: () => void }) {
   const leaderEndX = callout.x + (callout.x > callout.routePoint.x ? 0 : CALLOUT_WIDTH);
   const leaderEndY = callout.y + CALLOUT_HEIGHT / 2;
 
@@ -430,7 +764,8 @@ function RecapMapCalloutView({ callout }: { callout: RecapMapCallout }) {
           },
         ]}
       />
-      <View
+      <Pressable
+        onPress={onPress}
         style={[
           styles.calloutCard,
           {
@@ -445,8 +780,86 @@ function RecapMapCalloutView({ callout }: { callout: RecapMapCallout }) {
         </View>
         <Text style={styles.calloutDescription} numberOfLines={2}>{callout.description}</Text>
         {callout.elapsedLabel ? <Text style={styles.calloutElapsed}>{callout.elapsedLabel}</Text> : null}
-      </View>
+      </Pressable>
     </React.Fragment>
+  );
+}
+
+function SelectedCalloutPopover({ callout }: { callout: RecapMapCallout }) {
+  return (
+    <View style={styles.selectedCalloutPopover}>
+      <View style={styles.calloutTitleRow}>
+        <Ionicons name={iconForCalloutCategory(callout.category)} size={12} color={TACTICAL.amber} />
+        <Text style={styles.selectedCalloutTitle} numberOfLines={1}>{callout.title}</Text>
+      </View>
+      <Text style={styles.selectedCalloutDescription} numberOfLines={3}>{callout.description}</Text>
+      <Text style={styles.selectedCalloutMeta}>
+        {callout.category.toUpperCase()}{callout.elapsedLabel ? ` · ${callout.elapsedLabel}` : ''}
+      </Text>
+    </View>
+  );
+}
+
+function RecapSatelliteMapSurface({
+  payload,
+  mapToken,
+  mapMode,
+  webViewRef,
+  onCalloutSelected,
+  testID,
+}: {
+  payload: RecapMapPayload;
+  mapToken: string;
+  mapMode: RecapMapMode;
+  webViewRef: React.RefObject<WebView | null>;
+  onCalloutSelected: (id: string) => void;
+  testID: string;
+}) {
+  const styleUrl = getMapStyleUrl('3d');
+  const html = useMemo(() => buildRecapMapHtml(mapToken, styleUrl, mapMode), [mapMode, mapToken, styleUrl]);
+  const payloadScript = useMemo(
+    () => `window.__ECS_RECAP_MAP_SET__(${escapeInlineJson(payload)}); true;`,
+    [payload],
+  );
+
+  useEffect(() => {
+    webViewRef.current?.injectJavaScript(payloadScript);
+  }, [payloadScript, webViewRef]);
+
+  const handleMapMessage = (event: WebViewMessageEvent) => {
+    try {
+      const message = JSON.parse(event.nativeEvent.data);
+      if (message?.type === 'calloutSelected') {
+        const id = typeof message.payload?.id === 'string' ? message.payload.id : null;
+        if (id) onCalloutSelected(id);
+      }
+    } catch {
+      // Ignore malformed WebView messages; the native fallback remains usable.
+    }
+  };
+
+  return (
+    <WebView
+      ref={webViewRef}
+      testID={testID}
+      originWhitelist={['*']}
+      source={{ html }}
+      style={styles.mapboxWebView}
+      accessibilityLabel="Completed expedition recap satellite map"
+      pointerEvents={mapMode === 'expanded' ? 'auto' : 'none'}
+      scrollEnabled={mapMode === 'expanded'}
+      bounces={false}
+      javaScriptEnabled
+      domStorageEnabled
+      allowsInlineMediaPlayback
+      mixedContentMode="always"
+      onLoadEnd={() => {
+        webViewRef.current?.injectJavaScript(payloadScript);
+      }}
+      onMessage={handleMapMessage}
+      onError={() => null}
+      onHttpError={() => null}
+    />
   );
 }
 
@@ -459,14 +872,46 @@ export default function ExpeditionRecapMap({
   tripStartedAt,
 }: ExpeditionRecapMapProps) {
   const [width, setWidth] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  const [selectedCalloutId, setSelectedCalloutId] = useState<string | null>(null);
+  const [mapToken, setMapToken] = useState(() => getMapboxTokenSync());
+  const compactWebViewRef = useRef<WebView>(null);
+  const expandedWebViewRef = useRef<WebView>(null);
   const recapReference = recap?.routeSummary.routeGeometryReference ?? null;
   const model = useMemo(
     () => buildRecapMapModel(routeGeometry, routeBounds, startCoordinate, endCoordinate, recap, tripStartedAt, width),
     [endCoordinate, recap, routeBounds, routeGeometry, startCoordinate, tripStartedAt, width],
   );
+  const mapPayload = useMemo(
+    () => model ? buildRecapMapPayload(model, startCoordinate, endCoordinate) : null,
+    [endCoordinate, model, startCoordinate],
+  );
+  const selectedCallout = useMemo(
+    () => model?.callouts.find((callout) => callout.id === selectedCalloutId) ?? null,
+    [model?.callouts, selectedCalloutId],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (mapToken) return undefined;
+    void getMapboxToken()
+      .then((token) => {
+        if (!cancelled) setMapToken(token);
+      })
+      .catch(() => {
+        if (!cancelled) setMapToken('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mapToken]);
 
   const onLayout = (event: LayoutChangeEvent) => {
     setWidth(event.nativeEvent.layout.width);
+  };
+
+  const recenterExpandedMap = () => {
+    expandedWebViewRef.current?.injectJavaScript('window.__ECS_RECAP_MAP_RECENTER__ && window.__ECS_RECAP_MAP_RECENTER__(); true;');
   };
 
   return (
@@ -486,17 +931,37 @@ export default function ExpeditionRecapMap({
       {model ? (
         <View
           style={styles.mapSurface}
-          pointerEvents="none"
+          pointerEvents="box-none"
           accessibilityRole="image"
           accessibilityLabel="Completed expedition recap map"
         >
+          {mapPayload && mapToken ? (
+            <RecapSatelliteMapSurface
+              payload={mapPayload}
+              mapToken={mapToken}
+              mapMode="compact"
+              webViewRef={compactWebViewRef}
+              onCalloutSelected={setSelectedCalloutId}
+              testID="expedition-recap-map-satellite"
+            />
+          ) : null}
+          <View pointerEvents="none" style={styles.mapSatelliteScrim} />
           <View style={styles.gridVerticalA} />
           <View style={styles.gridVerticalB} />
           <View style={styles.gridHorizontalA} />
           <View style={styles.gridHorizontalB} />
+          <TouchableOpacity
+            testID="expedition-recap-map-expand"
+            style={styles.expandButton}
+            onPress={() => setExpanded(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Expand recap map"
+          >
+            <Ionicons name="expand-outline" size={15} color={TACTICAL.text} />
+          </TouchableOpacity>
           <View style={styles.routeReferenceBadge}>
             <Text style={styles.routeReferenceText}>
-              {recapReference ? 'COMPLETED ROUTE' : 'SAVED ROUTE'}
+              {mapPayload && mapToken ? 'SATELLITE RECAP' : recapReference ? 'COMPLETED ROUTE' : 'SAVED ROUTE'}
             </Text>
           </View>
 
@@ -551,14 +1016,21 @@ export default function ExpeditionRecapMap({
           ) : null}
 
           {model.callouts.map((callout) => (
-            <RecapMapCalloutView key={callout.id} callout={callout} />
+            <RecapMapCalloutView
+              key={callout.id}
+              callout={callout}
+              onPress={() => setSelectedCalloutId(callout.id)}
+            />
           ))}
+
+          {selectedCallout ? <SelectedCalloutPopover callout={selectedCallout} /> : null}
 
           {/* TODO Expedition Recap Map: add exploded route annotations after route annotation contracts exist. */}
           {/* TODO Expedition Recap Map: add export-ready map rendering and printable recap map layout. */}
           {/* TODO Expedition Recap Map: add badge stamp overlays for earned expedition badges. */}
           {/* TODO Expedition Recap Map: add weather layer callouts from recap weather snapshots. */}
           {/* TODO Expedition Recap Map: add terrain risk callout styling from recap terrain events. */}
+          {/* TODO Expedition Recap Map: replace WebView recenter with native Mapbox bridge when Expedition Hub adopts native maps. */}
         </View>
       ) : (
         <View style={styles.fallbackSurface}>
@@ -567,6 +1039,60 @@ export default function ExpeditionRecapMap({
           <Text style={styles.fallbackSubtext}>This expedition was saved without route geometry.</Text>
         </View>
       )}
+
+      <Modal
+        visible={expanded && Boolean(model && mapPayload)}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setExpanded(false)}
+      >
+        <View testID="expedition-recap-map-fullscreen" style={styles.fullscreenMap}>
+          <View style={styles.fullscreenHeader}>
+            <View style={styles.fullscreenTitleWrap}>
+              <Text style={styles.fullscreenEyebrow}>EXPEDITION RECAP MAP</Text>
+              <Text style={styles.fullscreenTitle} numberOfLines={1}>
+                {recapReference ? 'Completed Route' : 'Saved Route'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.fullscreenAction}
+              onPress={recenterExpandedMap}
+              accessibilityRole="button"
+              accessibilityLabel="Recenter recap map"
+            >
+              <Ionicons name="locate-outline" size={14} color={TACTICAL.text} />
+              <Text style={styles.fullscreenActionText}>RECENTER</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fullscreenIconButton}
+              onPress={() => setExpanded(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Close recap map"
+            >
+              <Ionicons name="close" size={18} color={TACTICAL.text} />
+            </TouchableOpacity>
+          </View>
+
+          {mapPayload && mapToken ? (
+            <RecapSatelliteMapSurface
+              payload={mapPayload}
+              mapToken={mapToken}
+              mapMode="expanded"
+              webViewRef={expandedWebViewRef}
+              onCalloutSelected={setSelectedCalloutId}
+              testID="expedition-recap-map-expanded-webview"
+            />
+          ) : (
+            <View style={styles.fullscreenFallback}>
+              <Ionicons name="map-outline" size={28} color={TACTICAL.textMuted} />
+              <Text style={styles.fallbackTitle}>Satellite map unavailable.</Text>
+              <Text style={styles.fallbackSubtext}>A Mapbox token is required for the interactive recap map.</Text>
+            </View>
+          )}
+
+          {selectedCallout ? <SelectedCalloutPopover callout={selectedCallout} /> : null}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -613,6 +1139,28 @@ const styles = StyleSheet.create({
     borderColor: GOLD_RAIL.internal,
     backgroundColor: 'rgba(7,10,13,0.96)',
   },
+  mapboxWebView: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#020608',
+  },
+  mapSatelliteScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(4,7,10,0.24)',
+  },
+  expandButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 24,
+    width: 31,
+    height: 31,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(11,14,18,0.86)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   gridVerticalA: {
     position: 'absolute',
     top: 0,
@@ -649,6 +1197,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 9,
     left: 9,
+    zIndex: 20,
     borderRadius: 6,
     borderWidth: 1,
     borderColor: GOLD_RAIL.internal,
@@ -663,18 +1212,21 @@ const styles = StyleSheet.create({
   },
   routeGlow: {
     position: 'absolute',
+    zIndex: 5,
     height: 6,
     borderRadius: 3,
     backgroundColor: 'rgba(242,194,77,0.18)',
   },
   routeSegment: {
     position: 'absolute',
+    zIndex: 6,
     height: 2.5,
     borderRadius: 2,
     backgroundColor: '#F2C24D',
   },
   routeDot: {
     position: 'absolute',
+    zIndex: 7,
     width: 3,
     height: 3,
     borderRadius: 1.5,
@@ -682,6 +1234,7 @@ const styles = StyleSheet.create({
   },
   startMarker: {
     position: 'absolute',
+    zIndex: 12,
     width: 12,
     height: 12,
     borderRadius: 6,
@@ -699,6 +1252,7 @@ const styles = StyleSheet.create({
   },
   finishMarker: {
     position: 'absolute',
+    zIndex: 12,
     width: 16,
     height: 16,
     borderRadius: 8,
@@ -710,12 +1264,14 @@ const styles = StyleSheet.create({
   },
   calloutLeaderLine: {
     position: 'absolute',
+    zIndex: 14,
     height: 1,
     borderRadius: 1,
     backgroundColor: 'rgba(242,194,77,0.36)',
   },
   calloutAnchor: {
     position: 'absolute',
+    zIndex: 15,
     width: 6,
     height: 6,
     borderRadius: 3,
@@ -725,6 +1281,7 @@ const styles = StyleSheet.create({
   },
   calloutCard: {
     position: 'absolute',
+    zIndex: 16,
     width: CALLOUT_WIDTH,
     minHeight: CALLOUT_HEIGHT,
     borderRadius: 7,
@@ -758,6 +1315,101 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
     fontSize: 7,
     fontWeight: '900',
+  },
+  selectedCalloutPopover: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 12,
+    zIndex: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(11,14,18,0.94)',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 4,
+  },
+  selectedCalloutTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: TACTICAL.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  selectedCalloutDescription: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    lineHeight: 14,
+  },
+  selectedCalloutMeta: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  fullscreenMap: {
+    flex: 1,
+    backgroundColor: '#020608',
+  },
+  fullscreenHeader: {
+    minHeight: 66,
+    paddingTop: 14,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(8,11,15,0.98)',
+  },
+  fullscreenTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fullscreenEyebrow: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  fullscreenTitle: {
+    color: TACTICAL.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  fullscreenAction: {
+    minHeight: 32,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(17,20,24,0.9)',
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  fullscreenActionText: {
+    color: TACTICAL.text,
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  fullscreenIconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.subsection,
+    backgroundColor: 'rgba(17,20,24,0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fullscreenFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 22,
   },
   fallbackSurface: {
     minHeight: 150,

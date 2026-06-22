@@ -944,6 +944,10 @@ export function verifyRouteCatalogRecord(
   const blockers: string[] = [];
   const points = geometryCoordinates(route.routeGeometry);
   const geometryIsPreview = route.routeGeometryMode === 'preview_simplified';
+  const geometryOmittedFromLightweightSearch =
+    route.routeGeometryMode === 'omitted' &&
+    (route.geometryQuality === 'good' || route.geometryQuality === 'partial') &&
+    route.recommendationStatus !== 'not_recommended';
   const hasOfficialSource = route.sourceRecords.some(isAuthoritativeSource);
   const hasCommunitySource = route.sourceRecords.some((source) => source.sourceType === 'community');
   const hasOsmOnly =
@@ -971,7 +975,13 @@ export function verifyRouteCatalogRecord(
     authoritativeFreshness.length === 0 ||
     authoritativeFreshness.every((freshness) => freshness === 'stale' || freshness === 'missing');
 
-  if (points.length < 2) blockers.push('Route geometry is incomplete');
+  if (points.length < 2) {
+    if (geometryOmittedFromLightweightSearch) {
+      warnings.push('Route geometry coordinates were omitted from lightweight search; detail hydration is required before active guidance.');
+    } else {
+      blockers.push('Route geometry is incomplete');
+    }
+  }
   if (!geometryIsPreview && hasImpossibleJump(points)) blockers.push('Route geometry contains impossible jumps');
   if (route.activeClosureCount > 0) blockers.push('Route intersects an active official closure');
   currentCondition.blockers.forEach((blocker) => blockers.push(blocker));
@@ -1005,6 +1015,7 @@ export function verifyRouteCatalogRecord(
     reasons.push('Official legal-access coverage meets recommendation threshold');
   }
   if (points.length >= 2) reasons.push('Route geometry is available');
+  if (geometryOmittedFromLightweightSearch) reasons.push('Catalog geometry is available; coordinates omitted from lightweight search');
   if (!officialSourceStale && hasOfficialSource) reasons.push('Official source verification is fresh enough for catalog use');
   if ((route.communitySignal?.independentConfirmations ?? 0) > 0) {
     reasons.push('Independent community confirmations are available');

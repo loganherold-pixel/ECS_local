@@ -35,6 +35,7 @@ const MAX_ROUTE_POINTS = 2500;
 const MAX_NOTABLE_MOMENTS = 200;
 const MAX_DEVIATIONS = 150;
 const MAX_DATA_USED = 80;
+const ROUTE_DEVIATION_EVENT_SUPPRESSION_MS = 10 * 60 * 1000;
 const tripRecordStorage = createMigratingNonSecureStorage('ecs_expedition_trip_records', {
   logTag: 'ExpeditionTripRecordStore',
 });
@@ -262,6 +263,35 @@ function safeDateString(value: unknown): string | null {
   if (!normalized) return null;
   const parsed = new Date(normalized).getTime();
   return Number.isFinite(parsed) ? normalized : null;
+}
+
+function dateMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function latestRouteDeviation(record: ExpeditionTripRecord): ExpeditionTripDeviation | null {
+  let latest: ExpeditionTripDeviation | null = null;
+  let latestMs: number | null = null;
+  for (const deviation of record.deviations) {
+    const deviationMs = dateMs(deviation.capturedAt);
+    if (deviationMs == null) continue;
+    if (latestMs == null || deviationMs > latestMs) {
+      latest = deviation;
+      latestMs = deviationMs;
+    }
+  }
+  return latest;
+}
+
+function shouldStoreRouteDeviation(record: ExpeditionTripRecord, timestamp: string): boolean {
+  const currentMs = dateMs(timestamp);
+  if (currentMs == null) return true;
+  const latest = latestRouteDeviation(record);
+  const latestMs = dateMs(latest?.capturedAt);
+  if (latestMs == null) return true;
+  return currentMs - latestMs > ROUTE_DEVIATION_EVENT_SUPPRESSION_MS;
 }
 
 function shouldGenerateFallbackRecap(record: ExpeditionTripRecord): boolean {
@@ -832,7 +862,7 @@ export function updateTripStatsDuringGuidance(
     syncStatus: record.syncStatus === 'synced' ? 'pending' : record.syncStatus,
   };
 
-  if (input.isOffRoute) {
+  if (input.isOffRoute && shouldStoreRouteDeviation(nextRecord, timestamp)) {
     const deviationSource = input.dataSource ?? defaultSource('navigate_guidance');
     const deviationId = [
       'deviation',

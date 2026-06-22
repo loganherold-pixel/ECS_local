@@ -120,6 +120,29 @@ assert.strictEqual(
   'Passed events should not keep firing after route progress moves beyond them.',
 );
 
+const allMarkerEvents = referenceEvents.buildTerrainRiskReferenceEvents({
+  profile,
+  completedDistanceMiles: 1.9,
+  totalDistanceMiles: 3,
+  weatherSnapshot: wetWeather,
+  includePassed: true,
+});
+const passedMarkerEvent = allMarkerEvents.find((event) => event.distanceMiles === 1.6);
+assert(
+  passedMarkerEvent,
+  'Expanded Terrain Risk marker events should still include visible pressure points that are at or behind route progress.',
+);
+assert.strictEqual(
+  passedMarkerEvent.banner.title,
+  'Steep grade at 1.6 mi',
+  'Passed pressure-point marker briefs should avoid misleading "ahead" copy.',
+);
+assert.ok(
+  passedMarkerEvent.detail.includes('13% grade') &&
+    passedMarkerEvent.fieldGuidance.length > 0,
+  'Fallback marker briefs should explain what placed the pin and why it matters.',
+);
+
 assert(
   sideProfileSource.includes('onReferencePointPress?:') &&
     sideProfileSource.includes('onReferencePointPress?.('),
@@ -155,9 +178,11 @@ assert(
 assert(
   sideProfileSource.includes('TouchableOpacity') &&
     sideProfileSource.includes('testID="terrainRiskReferenceMarkerButton"') &&
+    sideProfileSource.includes('hitSlop={TERRAIN_REFERENCE_MARKER_HIT_SLOP}') &&
     sideProfileSource.includes('accessibilityRole="button"') &&
-    sideProfileSource.includes('accessibilityLabel={referenceEvent'),
-  'Expanded Terrain Risk pressure points should expose button touch targets and labels.',
+    sideProfileSource.includes('accessibilityLabel={formatReferenceMarkerAccessibilityLabel(referenceEvent, point)}') &&
+    sideProfileSource.includes('elevation: 12'),
+  'Expanded Terrain Risk pressure points should expose Android-friendly button touch targets and labels.',
 );
 assert(
   widgetRenderersSource.includes('ECS INTELLIGENCE BRIEF') &&
@@ -166,6 +191,9 @@ assert(
 );
 assert(
   widgetRenderersSource.includes('detailMode={mode === \'detail\'}') &&
+    widgetRenderersSource.includes('markerReferenceEvents') &&
+    widgetRenderersSource.includes('includePassed: true') &&
+    widgetRenderersSource.includes('referenceEvents={markerReferenceEvents}') &&
     widgetRenderersSource.includes('const markersInteractive = expanded;') &&
     widgetRenderersSource.includes('interactive={markersInteractive}') &&
     widgetRenderersSource.includes('completedDistanceMiles={terrainRisk.completedDistanceMiles}') &&

@@ -33,6 +33,14 @@ function notIncludes(source, fragment, message) {
   'recap.expeditionEvents.notableMoments',
   'filter((moment) => isValidCoordinate(moment.coordinate))',
   'nearestRoutePoint',
+  'buildRecapMapPayload',
+  'features: model.callouts.map',
+  'properties: { id: callout.id',
+  'onPress={() => setSelectedCalloutId(callout.id)}',
+  'selectedCalloutId',
+  'selectedCallout',
+  'selectedCalloutPopover',
+  "message?.type === 'calloutSelected'",
   'LeaderLine',
   'calloutLeaderLine',
   'calloutAnchor',
@@ -44,8 +52,20 @@ function notIncludes(source, fragment, message) {
 });
 
 assert(
-  mapSource.indexOf('model.callouts.map') > mapSource.indexOf('styles.finishMarker'),
+  mapSource.lastIndexOf('model.callouts.map') > mapSource.indexOf('styles.finishMarker'),
   'Callouts should render after the completed route markers without modifying active navigation maps.',
+);
+assert(
+  mapSource.includes('Modal') &&
+    mapSource.includes('testID="expedition-recap-map-fullscreen"') &&
+    mapSource.includes('mapMode="expanded"'),
+  'Recap callout map should support an expanded interactive full-screen map.',
+);
+assert(
+  mapSource.includes('scrollEnabled={mapMode === \'expanded\'}') &&
+    mapSource.includes('bounces={false}') &&
+    mapSource.includes('onMessage={handleMapMessage}'),
+  'Expanded recap map WebView should be interactive and feed selected callouts back to React Native.',
 );
 assert(
   tabSource.includes('tripStartedAt={trip.startedAt}'),
@@ -71,7 +91,6 @@ for (const forbidden of [
   'followUser',
   'showUserLocation',
   'MapOverlayControls',
-  'onMapTap',
   'onUserDrag',
   'SafetyChecklist',
   'exportExpeditionDebriefPdf',

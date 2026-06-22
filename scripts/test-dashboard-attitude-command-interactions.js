@@ -273,7 +273,9 @@ assert(
 
 assert(
   powerCommandPanelBlock.includes('expanded && detailMode && isPowerPanel && attitudeCommandS.powerPanelContentDetailOnly') &&
-    powerCommandPanelBlock.includes('const showPowerDetailBackdrop = expanded && isPowerPanel && Boolean(powerVisual);') &&
+    powerCommandPanelBlock.includes('const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;') &&
+    powerCommandPanelBlock.includes('const shouldRenderPanelVisual = false;') &&
+    !powerCommandPanelBlock.includes('const showPowerDetailBackdrop =') &&
     powerCommandPanelBlock.includes('background={shouldRenderPanelVisual ? (') &&
     !powerCommandPanelBlock.includes('suppressPowerDetailBackground') &&
     widgetRenderers.includes('powerPanelContentDetailOnly') &&
@@ -307,20 +309,19 @@ assert(
     widgetRenderers.includes('powerMonitorSourceRowsContent') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailRow'),
-  'Expanded Power Monitor must hide compact widget details, preserve the power background, and keep current power sources in a bounded nested scroll table when multiple active sources exist.',
+  'Expanded Power Monitor must hide compact widget details, use the transparent texture-bleed shell, and keep current power sources in a bounded nested scroll table when multiple active sources exist.',
 );
 
 assert(
-  powerManagementVisualBlock.includes('POWER_MANAGEMENT_BACKGROUND') &&
-    powerManagementVisualBlock.includes('powerManagementBackground') &&
-    powerManagementVisualBlock.includes('powerManagementBackgroundScrim') &&
+  !powerCommandPanelBlock.includes('showPowerDetailBackdrop') &&
+    powerCommandPanelBlock.includes('usesTextureBleedPanel && attitudeCommandS.textureBleedCommandPanelSurface') &&
     !powerManagementVisualBlock.includes('powerSolarSourceBlock') &&
     !powerManagementVisualBlock.includes('powerColumnLeft') &&
     !powerManagementVisualBlock.includes('powerColumnRight') &&
     !powerManagementVisualBlock.includes('SOLAR SOURCE') &&
     !powerManagementVisualBlock.includes('INPUT') &&
     !powerManagementVisualBlock.includes('OUTPUT'),
-  'Expanded Power Monitor background must keep the power-management art without duplicate corner solar/input/output readouts.',
+  'Expanded Power Monitor must avoid decorative power art while keeping duplicate corner solar/input/output readouts removed.',
 );
 
 console.log('[dashboard-attitude-command-interactions] tap-to-expand interaction contract passed');

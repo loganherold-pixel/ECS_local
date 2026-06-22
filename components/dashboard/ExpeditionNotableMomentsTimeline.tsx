@@ -7,73 +7,20 @@ import {
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { GOLD_RAIL, TACTICAL } from '../../lib/theme';
+import {
+  formatNotableMomentLocalTime,
+  normalizeExpeditionNotableMoments,
+  type NormalizedNotableMoment,
+  type TimelineCategory,
+} from '../../lib/expedition/expeditionNotableMomentTimelineModel';
 import type {
   ExpeditionRecap,
-  ExpeditionRecapNotableMoment,
-  ExpeditionTripCoordinate,
 } from '../../lib/expedition';
-
-type TimelineCategory =
-  | 'elevation'
-  | 'weather'
-  | 'route deviation'
-  | 'reroute'
-  | 'terrain risk'
-  | 'recovery'
-  | 'milestone'
-  | 'campsite'
-  | 'resupply';
-
-type NormalizedNotableMoment = {
-  id: string;
-  tripId: string;
-  type: string;
-  title: string;
-  description: string;
-  timestamp: string | null;
-  elapsedSeconds: number | null;
-  coordinate: ExpeditionTripCoordinate | null;
-  severity: 'info' | 'watch' | 'caution' | 'critical';
-  source: 'expedition_recap';
-  createdAt: string | null;
-  category: TimelineCategory;
-};
 
 type ExpeditionNotableMomentsTimelineProps = {
   recap: ExpeditionRecap | null;
   tripStartedAt: string;
 };
-
-function timestampMs(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parsed = new Date(value).getTime();
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function categoryForMoment(type: ExpeditionRecapNotableMoment['type'] | string): TimelineCategory {
-  switch (type) {
-    case 'highest_elevation':
-      return 'elevation';
-    case 'weather_change':
-      return 'weather';
-    case 'route_deviation':
-      return 'route deviation';
-    case 'reroute_accepted':
-      return 'reroute';
-    case 'terrain_risk_warning':
-      return 'terrain risk';
-    case 'recovery_tools_opened':
-      return 'recovery';
-    default:
-      return 'milestone';
-  }
-}
-
-function severityForCategory(category: TimelineCategory): NormalizedNotableMoment['severity'] {
-  if (category === 'terrain risk') return 'caution';
-  if (category === 'route deviation' || category === 'reroute' || category === 'recovery') return 'watch';
-  return 'info';
-}
 
 function iconForCategory(category: TimelineCategory): React.ComponentProps<typeof Ionicons>['name'] {
   switch (category) {
@@ -98,80 +45,6 @@ function iconForCategory(category: TimelineCategory): React.ComponentProps<typeo
   }
 }
 
-function descriptionForMoment(moment: ExpeditionRecapNotableMoment, category: TimelineCategory): string {
-  const detail = moment.detail?.trim();
-  if (detail) {
-    if (category === 'elevation') return `Highest elevation recorded: ${detail}.`;
-    if (category === 'weather') return `Weather change recorded: ${detail}.`;
-    if (category === 'route deviation') return `Route deviation recorded: ${detail}.`;
-    if (category === 'reroute') return `Reroute recorded: ${detail}.`;
-    if (category === 'terrain risk') return `Terrain risk recorded: ${detail}.`;
-    if (category === 'recovery') return `Recovery usage recorded: ${detail}.`;
-    return detail.endsWith('.') ? detail : `${detail}.`;
-  }
-
-  if (category === 'elevation') return 'Highest elevation event captured from trip data.';
-  if (category === 'weather') return 'Weather event captured from trip data.';
-  if (category === 'route deviation') return 'Route deviation captured from trip data.';
-  if (category === 'reroute') return 'Reroute event captured from trip data.';
-  if (category === 'terrain risk') return 'Terrain risk event captured from trip data.';
-  if (category === 'recovery') return 'Recovery tool usage captured from trip data.';
-  return 'Milestone captured from completed trip data.';
-}
-
-function normalizeMoments(
-  recap: ExpeditionRecap | null,
-  tripStartedAt: string,
-): NormalizedNotableMoment[] {
-  const startedMs = timestampMs(tripStartedAt);
-  return (recap?.expeditionEvents.notableMoments ?? [])
-    .map((moment, index) => {
-      const capturedMs = timestampMs(moment.capturedAt);
-      const category = categoryForMoment(moment.type);
-      return {
-        id: moment.id || `moment-${index}`,
-        tripId: recap?.tripId ?? 'unknown-trip',
-        type: moment.type,
-        title: moment.title.trim() || 'Trip moment',
-        description: descriptionForMoment(moment, category),
-        timestamp: moment.capturedAt || null,
-        elapsedSeconds:
-          startedMs != null && capturedMs != null && capturedMs >= startedMs
-            ? Math.round((capturedMs - startedMs) / 1000)
-            : null,
-        coordinate: moment.coordinate ?? null,
-        severity: severityForCategory(category),
-        source: 'expedition_recap' as const,
-        createdAt: moment.capturedAt || null,
-        category,
-      };
-    })
-    .sort((left, right) => {
-      const leftMs = timestampMs(left.timestamp) ?? Number.MAX_SAFE_INTEGER;
-      const rightMs = timestampMs(right.timestamp) ?? Number.MAX_SAFE_INTEGER;
-      if (leftMs !== rightMs) return leftMs - rightMs;
-      return left.id.localeCompare(right.id);
-    });
-}
-
-function formatElapsed(seconds: number | null): string | null {
-  if (seconds == null || !Number.isFinite(seconds)) return null;
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (hours <= 0) return `T+${minutes}m`;
-  if (minutes <= 0) return `T+${hours}h`;
-  return `T+${hours}h ${minutes}m`;
-}
-
-function formatTimestamp(value: string | null): string {
-  const parsedMs = timestampMs(value);
-  if (parsedMs == null) return 'Time unavailable';
-  return new Date(parsedMs).toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
 function severityStyle(severity: NormalizedNotableMoment['severity']) {
   if (severity === 'critical') return styles.markerCritical;
   if (severity === 'caution') return styles.markerCaution;
@@ -186,7 +59,7 @@ function TimelineMomentRow({
   moment: NormalizedNotableMoment;
   isLast: boolean;
 }) {
-  const timeLabel = formatElapsed(moment.elapsedSeconds) ?? formatTimestamp(moment.timestamp);
+  const timeLabel = formatNotableMomentLocalTime(moment.timestamp);
 
   return (
     <View style={styles.momentRow}>
@@ -199,7 +72,7 @@ function TimelineMomentRow({
       <View style={styles.momentBody}>
         <View style={styles.momentTopLine}>
           <Text style={styles.momentTitle} numberOfLines={1}>{moment.title}</Text>
-          <Text style={styles.momentTime}>{timeLabel}</Text>
+          <Text style={styles.momentTime} numberOfLines={2}>{timeLabel}</Text>
         </View>
         <Text style={styles.momentDescription} numberOfLines={2}>{moment.description}</Text>
         <Text style={styles.momentCategory}>{moment.category.toUpperCase()}</Text>
@@ -212,7 +85,7 @@ export default function ExpeditionNotableMomentsTimeline({
   recap,
   tripStartedAt,
 }: ExpeditionNotableMomentsTimelineProps) {
-  const moments = useMemo(() => normalizeMoments(recap, tripStartedAt), [recap, tripStartedAt]);
+  const moments = useMemo(() => normalizeExpeditionNotableMoments(recap, tripStartedAt), [recap, tripStartedAt]);
 
   return (
     <View style={styles.section}>
@@ -352,6 +225,9 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
     fontSize: 9,
     fontWeight: '900',
+    lineHeight: 11,
+    maxWidth: 112,
+    textAlign: 'right',
   },
   momentDescription: {
     color: TACTICAL.textMuted,

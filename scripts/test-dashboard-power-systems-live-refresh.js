@@ -170,8 +170,13 @@ notIncludes(
 );
 includes(
   widgetRenderersSource,
-  'const showPowerDetailBackdrop = expanded && isPowerPanel && Boolean(powerVisual);',
-  'Power module panel background should remain active only for expanded power surfaces.',
+  'const shouldRenderPanelVisual = false;',
+  'Power module panel should use the shared transparent texture-bleed surface instead of a decorative background.',
+);
+includes(
+  widgetRenderersSource,
+  'usesTextureBleedPanel && attitudeCommandS.textureBleedCommandPanelSurface',
+  'Power module panel should share the transparent command surface with the surrounding widgets.',
 );
 
 console.log('Dashboard power systems live/refresh checks passed.');

@@ -44,7 +44,7 @@ export const ECS_COMMAND_MODULE_REGISTRY: Partial<Record<ECSCommandModuleId, ECS
     id: 'follow3d',
     label: '3D Nav Command',
     title: 'NAVIGATION COMMAND',
-    subtitle: '3D Follow Map',
+    subtitle: '',
     icon: 'map-outline',
     statusLabel: 'NAV',
     description: 'Centralized 3D follow map inside the fixed command shell.',

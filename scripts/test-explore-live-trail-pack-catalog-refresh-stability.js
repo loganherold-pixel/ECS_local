@@ -49,6 +49,7 @@ Module._load = function load(request, parent, isMain) {
 const {
   createLiveTrailPackCatalogRefreshKey,
   refreshLiveTrailPackCatalog,
+  liveTrailPackCatalogStore,
 } = require(path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts'));
 
 function routeRecord(id = 'preserved-tahoe-route') {
@@ -132,6 +133,7 @@ function searchResponse(records, coverageState) {
     longitude: -120.8,
     radiusMiles: 100,
     locationSource: 'live_gps',
+    limit: 50,
   };
   const refreshKey = createLiveTrailPackCatalogRefreshKey(criteria);
 
@@ -177,10 +179,65 @@ function searchResponse(records, coverageState) {
   assert.strictEqual(emptyDifferentSearch.preservedFromEmptyRefresh, false);
   assert.notStrictEqual(emptyDifferentSearch.refreshKey, refreshKey);
 
+  const highLimitCriteria = {
+    latitude: 38.78,
+    longitude: -121.21,
+    radiusMiles: 500,
+    locationSource: 'live_gps',
+  };
+  const highLimitRefreshKey = createLiveTrailPackCatalogRefreshKey(highLimitCriteria);
+  const stagedSnapshots = [];
+  const unsubscribe = liveTrailPackCatalogStore.subscribe(() => {
+    stagedSnapshots.push(liveTrailPackCatalogStore.getSnapshot());
+  });
+
+  responses.push(
+    searchResponse([routeRecord('quick-norcal-route')], {
+      state: 'ready',
+      title: 'Verified routes available',
+      message: 'Quick staged route catalog batch is available.',
+    }),
+    {
+      data: null,
+      error: { message: 'Verified route catalog timed out during full refresh.' },
+    },
+  );
+
+  const stagedPreserved = await refreshLiveTrailPackCatalog(highLimitCriteria);
+  unsubscribe();
+  assert.strictEqual(stagedPreserved.status, 'ready');
+  assert.strictEqual(stagedPreserved.source, 'route_catalog');
+  assert.strictEqual(stagedPreserved.refreshKey, highLimitRefreshKey);
+  assert.strictEqual(stagedPreserved.trailPacks.length, 1);
+  assert.strictEqual(stagedPreserved.trailPacks[0].id, 'quick-norcal-route');
+  assert.strictEqual(stagedPreserved.preservedFromEmptyRefresh, true);
+  assert.strictEqual(stagedPreserved.preservedReason, 'same_query_route_catalog_unavailable');
+  assert.match(String(stagedPreserved.error), /timed out/);
+  assert(
+    stagedSnapshots.some(
+      (entry) =>
+        entry.refreshKey === highLimitRefreshKey &&
+        entry.status === 'ready' &&
+        entry.trailPacks.length === 1 &&
+        entry.preservedFromEmptyRefresh === false,
+    ),
+    'High-limit refresh should publish a quick staged route catalog snapshot before the full refresh completes.',
+  );
+
   assert.deepStrictEqual(
     invocations.map((entry) => entry.name),
-    ['route-catalog-search', 'route-catalog-search', 'route-catalog-search'],
+    [
+      'route-catalog-search',
+      'route-catalog-search',
+      'route-catalog-search',
+      'route-catalog-search',
+      'route-catalog-search',
+    ],
   );
+  assert.strictEqual(invocations[3].body.limit, 50);
+  assert.strictEqual(invocations[3].body.includePreviewGeometry, false);
+  assert.strictEqual(invocations[3].body.includeCoverageDiagnostics, false);
+  assert.strictEqual(invocations[4].body.limit, 500);
 
   console.log('Explore live Trail Pack catalog refresh stability checks passed.');
 })().catch((error) => {

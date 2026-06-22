@@ -442,8 +442,9 @@ assert.ok(
   );
   assert.ok(
     !widgetRenderersSource.includes('{selectedCommandModuleDefinition.title}') &&
+      widgetRenderersSource.includes("selectedCommandCenterMode !== 'threeDNavigation' ? (") &&
       widgetRenderersSource.includes('{selectedCommandModuleDefinition.subtitle}'),
-    'Navigation Command face should hide the redundant NAVIGATION COMMAND title and keep the compact 3D Follow Map label.',
+    'Navigation Command face should hide both the redundant NAVIGATION COMMAND title and the 3D Follow Map subtitle over the map.',
   );
 }
 assert.ok(

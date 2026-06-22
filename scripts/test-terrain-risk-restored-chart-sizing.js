@@ -13,7 +13,7 @@ const sideProfileSource = fs.readFileSync(
 );
 
 assert(
-  widgetRenderersSource.includes('<AttitudeCommandTerrainRiskPreview terrainRisk={terrainRiskVisual} expanded={expanded} />'),
+  /<AttitudeCommandTerrainRiskPreview[\s\S]*?terrainRisk=\{terrainRiskVisual\}[\s\S]*?expanded=\{expanded\}[\s\S]*?detailMode=\{mode === 'detail'\}/.test(widgetRenderersSource),
   'Route Terrain Risk panel must pass expanded state into the preview so restored sizing can differ from expanded sizing.',
 );
 
@@ -27,25 +27,28 @@ assert(
 );
 
 assert(
-  sideProfileSource.includes('left: 8,') &&
-    sideProfileSource.includes('right: 0,') &&
-    sideProfileSource.includes('top: 0,') &&
-    sideProfileSource.includes('bottom: 18,'),
-  'Terrain Risk side-profile chart frame must push the mountain line nearly to both horizontal edges while preserving the bottom axis lane.',
+  sideProfileSource.includes('left: 24') &&
+    sideProfileSource.includes('right: 16') &&
+    sideProfileSource.includes('top: 8') &&
+    sideProfileSource.includes('bottom: 24'),
+  'Terrain Risk side-profile chart frame must reserve readable lanes for elevation and distance labels.',
 );
 
 assert(
   sideProfileSource.includes('interactive = false') &&
-    sideProfileSource.includes('selectedReferencePoint') &&
-    sideProfileSource.includes('stopPropagation?.()') &&
+    sideProfileSource.includes('selectedReferenceEvent?: TerrainRiskReferenceEvent | null') &&
+    sideProfileSource.includes('formatReferenceMarkerAccessibilityLabel') &&
+    sideProfileSource.includes('hitSlop={TERRAIN_REFERENCE_MARKER_HIT_SLOP}') &&
     sideProfileSource.includes('terrainRiskReferenceMarker') &&
-    sideProfileSource.includes('Why this point was referenced'),
-  'Expanded Terrain Risk side-profile chart must keep reference dots interactive without collapsing the expanded widget.',
+    sideProfileSource.includes('buildTerrainRiskReferenceEventForPoint'),
+  'Expanded Terrain Risk side-profile chart must keep every reference dot tappable and explainable without rendering a duplicate in-chart callout.',
 );
 
 assert(
-  widgetRenderersSource.includes("pointerEvents={expanded ? 'box-none' : 'none'}") &&
-    widgetRenderersSource.includes('interactive={expanded}'),
+  widgetRenderersSource.includes("pointerEvents={markersInteractive ? 'box-none' : 'none'}") &&
+    widgetRenderersSource.includes('interactive={markersInteractive}') &&
+    widgetRenderersSource.includes('markerReferenceEvents') &&
+    widgetRenderersSource.includes('includePassed: true'),
   'Expanded Terrain Risk preview must allow chart dot presses while restored panels remain passive.',
 );
 

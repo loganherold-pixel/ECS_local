@@ -889,6 +889,11 @@ serve(async (req) => {
       params.includePreviewGeometry ?? params.include_preview_geometry,
       !includeGeometry,
     );
+    const includeCoverageDiagnostics = readBoolean(
+      params.includeCoverageDiagnostics ?? params.include_coverage_diagnostics,
+      true,
+    );
+    const skipCoverageDiagnostics = !includeCoverageDiagnostics;
     const recommendationOnly = readBoolean(params.recommendationOnly ?? params.recommendation_only, true);
     const latitude = readNumber(params.latitude ?? params.lat);
     const longitude = readNumber(params.longitude ?? params.lng ?? params.lon);
@@ -909,7 +914,9 @@ serve(async (req) => {
     const difficulty = cleanDifficulty(params.difficulty);
     const vehicleClass = cleanText(params.vehicleClass ?? params.vehicle_class);
     const sourceAdapter = cleanSourceAdapter(params.sourceAdapter ?? params.source_adapter);
-    const expectedKnownRouteKeys = expectedKnownRoutes(params.expectedKnownRoutes ?? params.expected_known_routes);
+    const expectedKnownRouteKeys = skipCoverageDiagnostics
+      ? []
+      : expectedKnownRoutes(params.expectedKnownRoutes ?? params.expected_known_routes);
     const hasRadiusCriteria = latitude != null && longitude != null && radiusMiles != null;
     const queryLimit = candidateLimit(limit, hasRadiusCriteria);
 
@@ -968,30 +975,34 @@ serve(async (req) => {
     } else {
       limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(0, limit));
     }
-    const knownRouteDiagnostics = await inspectKnownRouteDiagnostics(
-      admin,
-      expectedKnownRouteKeys,
-      sourceAdapter ? limitedRecords : radiusFiltered.records,
-    );
-    const curationCoverage = await countRouteCatalogCurationCandidates(admin, {
-      latitude,
-      longitude,
-      radiusMiles,
-      queryLimit,
-      minDistanceMiles,
-      maxDistanceMiles,
-      minDurationMinutes,
-      maxDurationMinutes,
-      minConfidenceScore,
-      minRemotenessScore,
-      maxRemotenessScore,
-      minCampabilityScore,
-      availableFuelRangeMiles,
-      availableWaterCapacityGallons,
-      routeType,
-      difficulty,
-      vehicleClass,
-    });
+    const knownRouteDiagnostics = skipCoverageDiagnostics
+      ? []
+      : await inspectKnownRouteDiagnostics(
+        admin,
+        expectedKnownRouteKeys,
+        sourceAdapter ? limitedRecords : radiusFiltered.records,
+      );
+    const curationCoverage = skipCoverageDiagnostics
+      ? { curationCandidateCount: 0 }
+      : await countRouteCatalogCurationCandidates(admin, {
+        latitude,
+        longitude,
+        radiusMiles,
+        queryLimit,
+        minDistanceMiles,
+        maxDistanceMiles,
+        minDurationMinutes,
+        maxDurationMinutes,
+        minConfidenceScore,
+        minRemotenessScore,
+        maxRemotenessScore,
+        minCampabilityScore,
+        availableFuelRangeMiles,
+        availableWaterCapacityGallons,
+        routeType,
+        difficulty,
+        vehicleClass,
+      });
     const anySourceBackedCandidateCount = radiusFiltered.radiusMatchedCount + curationCoverage.curationCandidateCount;
 
     const records = attachCurrentConditionOverlays(shapeSearchRecords(
@@ -1007,6 +1018,7 @@ serve(async (req) => {
       meta: {
         source: 'verified_routes',
         recommendationOnly,
+        includeCoverageDiagnostics,
         bboxFilterApplied: hasRadiusCriteria,
         radiusFilterApplied: radiusFiltered.radiusFilterApplied,
         candidateLimit: queryLimit,

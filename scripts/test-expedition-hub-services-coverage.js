@@ -258,6 +258,72 @@ async function testTripRecordHelpers() {
   assert.strictEqual(updated.deviations.length, 1);
   assert(updated.notableMoments.some((moment) => moment.type === 'route_deviation'));
 
+  const sustainedDeviationStart = new Date('2026-05-01T09:05:00.000Z').getTime();
+  let noisyDeviationRecord = active;
+  for (let index = 0; index < 40; index += 1) {
+    noisyDeviationRecord = updateTripStatsDuringGuidance(noisyDeviationRecord, {
+      updatedAt: new Date(sustainedDeviationStart + index * 3000).toISOString(),
+      totalDistanceMiles: 12.5,
+      totalDurationSeconds: 3900 + index * 3,
+      currentCoordinate: {
+        lat: 39.2 + index * 0.0001,
+        lng: -104.2 - index * 0.0001,
+        elevationFt: 6000,
+      },
+      routeGeometry: [
+        { lat: 39, lng: -104, elevationFt: 5200 },
+        { lat: 39.2 + index * 0.0001, lng: -104.2 - index * 0.0001, elevationFt: 6000 },
+      ],
+      isOffRoute: true,
+      offRouteDistanceM: 120 + index,
+      statusLabel: 'Route deviation detected',
+      dataSource: source,
+    });
+  }
+  assert.strictEqual(
+    noisyDeviationRecord.deviations.length,
+    1,
+    'Sustained off-route GPS samples inside one short window should store one deviation event.',
+  );
+  assert.strictEqual(
+    noisyDeviationRecord.notableMoments.filter((moment) => moment.type === 'route_deviation').length,
+    1,
+    'Sustained off-route GPS samples inside one short window should store one notable route deviation.',
+  );
+
+  const noisyDeviationRecap = generateExpeditionRecap({
+    ...noisyDeviationRecord,
+    status: 'completed',
+    completedAt: '2026-05-01T11:00:00.000Z',
+    totalDistanceMiles: 18,
+    totalDurationSeconds: 3 * 3600,
+  });
+  assert.strictEqual(
+    noisyDeviationRecap.expeditionEvents.notableMoments.filter((moment) => moment.type === 'route_deviation').length,
+    1,
+    'Recap generation should not duplicate the stored route deviation moment from the deviations collection.',
+  );
+
+  const laterDeviation = updateTripStatsDuringGuidance(noisyDeviationRecord, {
+    updatedAt: '2026-05-01T09:17:30.000Z',
+    totalDistanceMiles: 13.5,
+    totalDurationSeconds: 4650,
+    currentCoordinate: { lat: 39.31, lng: -104.31, elevationFt: 6100 },
+    routeGeometry: [
+      { lat: 39, lng: -104, elevationFt: 5200 },
+      { lat: 39.31, lng: -104.31, elevationFt: 6100 },
+    ],
+    isOffRoute: true,
+    offRouteDistanceM: 210,
+    statusLabel: 'Route deviation detected',
+    dataSource: source,
+  });
+  assert.strictEqual(
+    laterDeviation.deviations.length,
+    2,
+    'A later route deviation outside the suppression window should still be preserved.',
+  );
+
   const completed = finalizeCompletedTrip(updated, {
     completedAt: '2026-05-01T10:00:00.000Z',
     totalDistanceMiles: 24.2,

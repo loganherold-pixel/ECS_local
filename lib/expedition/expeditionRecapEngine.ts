@@ -6,6 +6,7 @@ import type {
   ExpeditionRecapTerrainRiskEvent,
   ExpeditionRecapTemperatureRange,
   ExpeditionTripCoordinate,
+  ExpeditionTripDeviation,
   ExpeditionTripNotableMoment,
   ExpeditionTripRecord,
   ExpeditionTripTerrainRiskSnapshot,
@@ -165,6 +166,27 @@ function tripMomentToRecapMoment(moment: ExpeditionTripNotableMoment): Expeditio
   };
 }
 
+function timestampMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function recordAlreadyHasDeviationMoment(record: ExpeditionTripRecord, deviation: ExpeditionTripDeviation): boolean {
+  const directMomentId = `${deviation.id}:moment`;
+  const deviationMs = timestampMs(deviation.capturedAt);
+  return record.notableMoments.some((moment) => {
+    if (moment.type !== 'route_deviation') return false;
+    if (moment.id === directMomentId) return true;
+    const momentMs = timestampMs(moment.capturedAt);
+    return (
+      deviationMs != null &&
+      momentMs != null &&
+      Math.abs(momentMs - deviationMs) <= 1000
+    );
+  });
+}
+
 function recapMomentsFromRecord(record: ExpeditionTripRecord): ExpeditionRecapNotableMoment[] {
   const moments = record.notableMoments.map(tripMomentToRecapMoment);
   const generatedAt = record.completedAt ?? record.updatedAt;
@@ -196,6 +218,7 @@ function recapMomentsFromRecord(record: ExpeditionTripRecord): ExpeditionRecapNo
   }
 
   for (const deviation of record.deviations) {
+    if (recordAlreadyHasDeviationMoment(record, deviation)) continue;
     moments.push({
       id: `recap:${deviation.id}`,
       capturedAt: deviation.capturedAt,

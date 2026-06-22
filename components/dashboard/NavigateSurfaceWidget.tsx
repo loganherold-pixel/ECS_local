@@ -1060,7 +1060,7 @@ const styles = StyleSheet.create({
     width: '100%',
     position: 'relative',
     overflow: 'hidden',
-    backgroundColor: 'rgba(2,4,6,0.92)',
+    backgroundColor: 'transparent',
   },
   commandMapFrame: {
     flex: 1,

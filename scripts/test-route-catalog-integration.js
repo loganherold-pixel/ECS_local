@@ -190,6 +190,8 @@ assert(
     searchFunction.includes('availableFuelRangeMiles') &&
     searchFunction.includes('availableWaterCapacityGallons') &&
     searchFunction.includes('includePreviewGeometry') &&
+    searchFunction.includes('includeCoverageDiagnostics') &&
+    searchFunction.includes('skipCoverageDiagnostics') &&
     searchFunction.includes('simplifyGeometryForPreview') &&
     searchFunction.includes('route_geometry_mode') &&
     searchFunction.includes('preview_simplified') &&
@@ -247,7 +249,9 @@ assert(
     liveCatalog.includes('availableFuelRangeMiles: criteria.availableFuelRangeMiles') &&
     liveCatalog.includes('availableWaterCapacityGallons: criteria.availableWaterCapacityGallons') &&
     liveCatalog.includes('includeGeometry: false') &&
-    liveCatalog.includes('includePreviewGeometry: true') &&
+    liveCatalog.includes('const includePreviewGeometry = criteria.includePreviewGeometry === false ? false : true') &&
+    liveCatalog.includes('includePreviewGeometry,') &&
+    liveCatalog.includes('includeCoverageDiagnostics: false') &&
     liveCatalog.includes("expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon']") &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
     liveCatalog.includes('searchMeta: normalized.searchMeta') &&

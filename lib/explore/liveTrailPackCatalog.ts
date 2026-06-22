@@ -49,6 +49,8 @@ export type LiveTrailPackCatalogSearchCriteria = {
   locationSource?: 'live_gps' | 'default_location' | string | null;
   limit?: number;
   expectedKnownRoutes?: string[] | null;
+  includePreviewGeometry?: boolean | null;
+  includeCoverageDiagnostics?: boolean | null;
 };
 
 export type LiveTrailPackCatalogSnapshot = {
@@ -110,6 +112,9 @@ const TRAIL_PACK_SELECT = [
   'updated_at',
 ].join(',');
 
+const ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT = 500;
+const ROUTE_CATALOG_STAGED_REFRESH_LIMIT = 50;
+
 function finiteNumber(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
@@ -118,6 +123,34 @@ function finiteNumber(value: unknown): number | undefined {
 function positiveNumber(value: unknown): number | undefined {
   const number = finiteNumber(value);
   return number != null && number > 0 ? number : undefined;
+}
+
+function routeCatalogSearchLimit(value: unknown): number {
+  const limit = finiteNumber(value);
+  if (limit == null) return ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT;
+  return Math.max(1, Math.min(ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT, Math.round(limit)));
+}
+
+function hasRouteCatalogRadiusCriteria(criteria: LiveTrailPackCatalogSearchCriteria): boolean {
+  return (
+    finiteNumber(criteria.latitude) != null &&
+    finiteNumber(criteria.longitude) != null &&
+    finiteNumber(criteria.radiusMiles) != null
+  );
+}
+
+function stagedRouteCatalogSearchCriteria(
+  criteria: LiveTrailPackCatalogSearchCriteria,
+): LiveTrailPackCatalogSearchCriteria | null {
+  const limit = routeCatalogSearchLimit(criteria.limit);
+  if (!hasRouteCatalogRadiusCriteria(criteria) || limit <= ROUTE_CATALOG_STAGED_REFRESH_LIMIT) return null;
+  return {
+    ...criteria,
+    limit: ROUTE_CATALOG_STAGED_REFRESH_LIMIT,
+    expectedKnownRoutes: [],
+    includePreviewGeometry: false,
+    includeCoverageDiagnostics: false,
+  };
 }
 
 function cleanText(value: unknown): string | undefined {
@@ -474,13 +507,15 @@ export function buildRouteCatalogSearchBody(
   const availableWaterCapacityGallons = positiveNumber(criteria.availableWaterCapacityGallons);
   const routeType = cleanText(criteria.routeType);
   const difficulty = cleanText(criteria.difficulty);
+  const includePreviewGeometry = criteria.includePreviewGeometry === false ? false : true;
   return {
     limit: criteria.limit ?? 500,
     includeGeometry: false,
-    includePreviewGeometry: true,
+    includePreviewGeometry,
     includeAssessment: true,
     recommendationOnly: true,
     expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon'],
+    ...(criteria.includeCoverageDiagnostics === false ? { includeCoverageDiagnostics: false } : {}),
     ...(latitude != null && longitude != null && radiusMiles != null
       ? {
           latitude: criteria.latitude,
@@ -679,6 +714,31 @@ export async function refreshLiveTrailPackCatalog(
   let routeCatalogError: Error | null = null;
 
   const refreshPromise = (async () => {
+    const stagedCriteria = stagedRouteCatalogSearchCriteria(criteria);
+    if (stagedCriteria) {
+      try {
+        const stagedRouteCatalog = await fetchRouteCatalogTrailPacks(stagedCriteria);
+        if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+        if (stagedRouteCatalog.trailPacks.length > 0) {
+          setSnapshot({
+            trailPacks: stagedRouteCatalog.trailPacks,
+            status: 'ready',
+            error: null,
+            lastLoadedAt: loadedAt,
+            lastRefreshAttemptAt: loadedAt,
+            coverageState: stagedRouteCatalog.coverageState,
+            searchMeta: stagedRouteCatalog.searchMeta,
+            source: 'route_catalog',
+            refreshKey,
+            preservedFromEmptyRefresh: false,
+            preservedReason: null,
+          });
+        }
+      } catch {
+        if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+      }
+    }
+
     try {
       const routeCatalog = await fetchRouteCatalogTrailPacks(criteria);
       if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
@@ -710,6 +770,13 @@ export async function refreshLiveTrailPackCatalog(
     } catch (error) {
       if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
       routeCatalogError = error instanceof Error ? error : new Error('Verified route catalog unavailable.');
+      const preserved = preserveSnapshotForEmptyRefresh({
+        refreshKey,
+        attemptedAt: loadedAt,
+        reason: 'same_query_route_catalog_unavailable',
+        error: routeCatalogError.message,
+      });
+      if (preserved) return preserved;
     }
 
     try {

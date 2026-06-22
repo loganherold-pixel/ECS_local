@@ -20,7 +20,10 @@ import {
   type TerrainProfilePoint,
   type TerrainRiskLevel,
 } from '../../lib/terrainRiskCommandProfile';
-import type { TerrainRiskReferenceEvent } from '../../lib/terrainRiskReferenceEvents';
+import {
+  buildTerrainRiskReferenceEventForPoint,
+  type TerrainRiskReferenceEvent,
+} from '../../lib/terrainRiskReferenceEvents';
 
 const VIEWBOX_WIDTH = 340;
 const VIEWBOX_HEIGHT = 154;
@@ -118,6 +121,7 @@ const CONTOUR_PATHS = [
   'M 18 89 C 86 72 126 101 184 82 S 262 77 326 93',
   'M 30 126 C 93 109 139 133 191 117 S 270 107 330 123',
 ];
+const TERRAIN_REFERENCE_MARKER_HIT_SLOP = { top: 8, right: 8, bottom: 8, left: 8 };
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -196,6 +200,17 @@ function formatTerrainReferenceReason(point: TerrainProfilePoint): string {
   if (point.thermalBand === 'hot') return 'Hot terrain segment';
   if (point.riskLevel === 'high') return 'High terrain risk score';
   return 'Terrain risk change';
+}
+
+function formatReferenceMarkerAccessibilityLabel(
+  referenceEvent: TerrainRiskReferenceEvent | null,
+  point: TerrainProfilePoint,
+): string {
+  if (!referenceEvent) return formatTerrainReferenceReason(point);
+  const locationLabel = referenceEvent.distanceAheadMiles > 0
+    ? `${referenceEvent.distanceAheadMiles.toFixed(1)} miles ahead`
+    : `at mile ${referenceEvent.distanceMiles.toFixed(1)}`;
+  return `${referenceEvent.title}, ${locationLabel}. ${referenceEvent.detail}`;
 }
 
 function buildElevationBounds(profile: TerrainProfilePoint[]): ElevationBounds {
@@ -515,8 +530,17 @@ export default function TerrainRiskSideProfile({
     return <View style={styles.emptyChart} />;
   }
 
-  const getReferenceEventForPoint = (point: ChartPoint): TerrainRiskReferenceEvent | null =>
-    referenceEvents.find((event) => Math.abs(event.distanceMiles - point.distanceMiles) <= 0.05) ?? null;
+  const getReferenceEventForPoint = (point: ChartPoint): TerrainRiskReferenceEvent | null => {
+    const matchedEvent = referenceEvents.find((event) => Math.abs(event.distanceMiles - point.distanceMiles) <= 0.05);
+    if (matchedEvent) return matchedEvent;
+    const pointIndex = chart.points.findIndex((candidate) => candidate.id === point.id);
+    return buildTerrainRiskReferenceEventForPoint({
+      point,
+      pointIndex: pointIndex >= 0 ? pointIndex : 0,
+      completedDistanceMiles,
+      includePassed: true,
+    });
+  };
   const handleReferenceMarkerPress = (point: ChartPoint) => {
     const referenceEvent = getReferenceEventForPoint(point);
     if (referenceEvent) {
@@ -898,10 +922,9 @@ export default function TerrainRiskSideProfile({
             key={`terrain-risk-reference-button-${point.id}`}
             testID="terrainRiskReferenceMarkerButton"
             activeOpacity={0.82}
+            hitSlop={TERRAIN_REFERENCE_MARKER_HIT_SLOP}
             accessibilityRole="button"
-            accessibilityLabel={referenceEvent
-              ? `${referenceEvent.title} ${referenceEvent.distanceAheadMiles.toFixed(1)} miles ahead`
-              : formatTerrainReferenceReason(point)}
+            accessibilityLabel={formatReferenceMarkerAccessibilityLabel(referenceEvent, point)}
             onPress={() => handleReferenceMarkerPress(point)}
             style={[
               styles.terrainRiskReferenceButton,
@@ -942,7 +965,8 @@ const styles = StyleSheet.create({
   },
   terrainRiskReferenceButton: {
     position: 'absolute',
-    zIndex: 8,
+    zIndex: 12,
+    elevation: 12,
     width: 32,
     height: 32,
     marginLeft: -16,
