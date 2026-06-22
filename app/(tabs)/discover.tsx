@@ -1248,6 +1248,11 @@ function DiscoverScreenInner() {
     });
     return run;
   }, [explorePerformanceSearchKey]);
+  const explorePerformanceRunRef = useRef(explorePerformanceRun);
+
+  useEffect(() => {
+    explorePerformanceRunRef.current = explorePerformanceRun;
+  }, [explorePerformanceRun]);
 
   useEffect(() => {
     explorePerformanceFirstVisibleLoggedRef.current = null;
@@ -1257,10 +1262,11 @@ function DiscoverScreenInner() {
 
   useEffect(() => {
     if (!routeCatalogHasSearchArea) return;
+    const routeCatalogPerformanceRun = explorePerformanceRunRef.current;
     const startedAtMs = getExplorePerformanceNow();
     void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria).then((nextSnapshot) => {
       const endedAtMs = getExplorePerformanceNow();
-      recordExplorePerformancePhase(explorePerformanceRun, 'route_catalog_query', {
+      recordExplorePerformancePhase(routeCatalogPerformanceRun, 'route_catalog_query', {
         startedAtMs,
         endedAtMs,
         metadata: {
@@ -1270,11 +1276,11 @@ function DiscoverScreenInner() {
           error: nextSnapshot.error,
         },
       });
-      recordExplorePerformanceCount(explorePerformanceRun, {
+      recordExplorePerformanceCount(routeCatalogPerformanceRun, {
         routesEvaluated: nextSnapshot.searchMeta?.candidateCount ?? nextSnapshot.trailPacks.length,
       });
     });
-  }, [explorePerformanceRun, routeCatalogHasSearchArea, routeCatalogSearchCriteria]);
+  }, [routeCatalogHasSearchArea, routeCatalogSearchCriteria]);
 
   // ── Unified drivable trail feed ───────────────────────────
   const activeTabRoutes = useMemo<ExpeditionOpportunity[]>(

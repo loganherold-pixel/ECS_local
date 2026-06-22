@@ -32,7 +32,7 @@ assert(
     discover.includes('routeCatalogEffectiveSearchArea.latitude') &&
     discover.includes('routeCatalogEffectiveSearchArea.longitude') &&
     discover.includes('radiusMiles: activeDistanceRadius') &&
-    discover.includes("locationSource: routeCatalogEffectiveSearchArea ? routeCatalogEffectiveSearchArea.source : 'search_area_required'"),
+    discover.includes("locationSource: routeCatalogEffectiveSearchArea?.source ?? 'search_area_required'"),
   'Route catalog criteria should use the selected search area or live GPS, never the default fallback coordinate.',
 );
 

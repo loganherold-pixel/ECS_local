@@ -57,7 +57,9 @@ assert(
   'Trail Packs should render in their own category panel',
 );
 assert(
-  discover.includes('getDiscoverableTrailPacks(') && discover.includes('activeDistanceRadius'),
+  discover.includes('queryTrailPackDiscoveryIndexCached(routeDiscoveryIndex') &&
+    discover.includes('const trailPackDiscoveryRadius = activeDistanceRadius;') &&
+    discover.includes('radiusMiles: trailPackDiscoveryRadius'),
   'Trail Packs should use the selected Explore radius',
 );
 assert(
@@ -71,6 +73,15 @@ assert(
     discover.includes('availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal') &&
     !discover.includes('getDefaultECSTrailPacks'),
   'Explore Trail Packs should use live reviewed catalog content with broad radius search criteria, then apply refinement locally for fast chip changes',
+);
+assert(
+  discover.includes('const explorePerformanceRunRef = useRef(explorePerformanceRun);') &&
+    discover.includes('explorePerformanceRunRef.current = explorePerformanceRun;') &&
+    discover.includes('const routeCatalogPerformanceRun = explorePerformanceRunRef.current;') &&
+    discover.includes("recordExplorePerformancePhase(routeCatalogPerformanceRun, 'route_catalog_query'") &&
+    discover.includes('recordExplorePerformanceCount(routeCatalogPerformanceRun, {') &&
+    !discover.includes('}, [explorePerformanceRun, routeCatalogHasSearchArea, routeCatalogSearchCriteria]);'),
+  'Changing Explore refinement buckets should not retrigger the live route catalog refresh or erase the loaded radius catalog.',
 );
 assert(
   discover.includes('DEFAULT_USER_LOCATION') &&
