@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Image,
   StyleSheet,
@@ -9,6 +9,11 @@ import {
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECS, TACTICAL } from '../../lib/theme';
 import type { ExploreWizardRouteCandidate } from '../../lib/explore/exploreTripBuilderWizard';
+import {
+  createRouteImageMemoryCache,
+  ECS_ROUTE_IMAGE_NEUTRAL_FALLBACK_URI,
+  resolveRouteCardImage,
+} from '../../lib/explore/routeImageResolver';
 
 type ExploreTripBuilderWizardRouteCardProps = {
   candidate: ExploreWizardRouteCandidate;
@@ -18,6 +23,8 @@ type ExploreTripBuilderWizardRouteCardProps = {
   onStart: () => void;
   onSave: () => void;
   onBuildTrip: () => void;
+  deferThumbnail?: boolean;
+  deferEnrichment?: boolean;
 };
 
 function confidenceValue(candidate: ExploreWizardRouteCandidate): string {
@@ -33,7 +40,7 @@ function routeDistance(candidate: ExploreWizardRouteCandidate): string {
     : 'DISTANCE UNKNOWN';
 }
 
-export default function ExploreTripBuilderWizardRouteCard({
+function ExploreTripBuilderWizardRouteCardComponent({
   candidate,
   sourceLabel,
   isSaved,
@@ -41,8 +48,53 @@ export default function ExploreTripBuilderWizardRouteCard({
   onStart,
   onSave,
   onBuildTrip,
+  deferThumbnail = false,
+  deferEnrichment = false,
 }: ExploreTripBuilderWizardRouteCardProps) {
-  const thumbnailUri = candidate.thumbnail?.uri ?? null;
+  const imageCacheRef = useRef(createRouteImageMemoryCache());
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const [thumbnailReady, setThumbnailReady] = useState(!deferThumbnail);
+  const [enrichmentReady, setEnrichmentReady] = useState(!deferEnrichment);
+  const resolvedThumbnail = useMemo(
+    () =>
+      resolveRouteCardImage({
+        routeId: candidate.id,
+        title: candidate.title,
+        remoteThumbnailUri: thumbnailFailed ? null : candidate.thumbnail?.uri ?? null,
+        route: candidate.route,
+        imageCache: imageCacheRef.current,
+      }),
+    [candidate.id, candidate.route, candidate.thumbnail?.uri, candidate.title, thumbnailFailed],
+  );
+  const thumbnailUri =
+    thumbnailReady && resolvedThumbnail.uri !== ECS_ROUTE_IMAGE_NEUTRAL_FALLBACK_URI
+      ? resolvedThumbnail.uri
+      : null;
+
+  useEffect(() => {
+    setThumbnailFailed(false);
+    imageCacheRef.current.clear();
+  }, [candidate.id]);
+
+  useEffect(() => {
+    if (!deferThumbnail) {
+      setThumbnailReady(true);
+      return undefined;
+    }
+    setThumbnailReady(false);
+    const timer = setTimeout(() => setThumbnailReady(true), 90);
+    return () => clearTimeout(timer);
+  }, [candidate.id, deferThumbnail]);
+
+  useEffect(() => {
+    if (!deferEnrichment) {
+      setEnrichmentReady(true);
+      return undefined;
+    }
+    setEnrichmentReady(false);
+    const timer = setTimeout(() => setEnrichmentReady(true), 140);
+    return () => clearTimeout(timer);
+  }, [candidate.id, deferEnrichment]);
 
   return (
     <View style={styles.card} testID={`explore-tripbuilder-route-card-${candidate.id}`}>
@@ -55,6 +107,13 @@ export default function ExploreTripBuilderWizardRouteCard({
                 style={styles.thumbnail}
                 resizeMode="cover"
                 accessibilityIgnoresInvertColors
+                onLoad={() => {
+                  imageCacheRef.current.markLoaded(candidate.id, thumbnailUri);
+                }}
+                onError={() => {
+                  imageCacheRef.current.markFailed(thumbnailUri);
+                  setThumbnailFailed(true);
+                }}
               />
             ) : (
               <View style={styles.thumbnailFallback}>
@@ -64,23 +123,33 @@ export default function ExploreTripBuilderWizardRouteCard({
           </View>
           <View style={styles.titleCopy}>
             <View style={styles.badgeRow}>
-              <View style={styles.sourceBadge}>
-                <Text style={styles.sourceBadgeText}>{sourceLabel}</Text>
-              </View>
-              <View style={styles.readyBadge}>
-                <Ionicons name="navigate-outline" size={9} color={TACTICAL.amber} />
-                <Text style={styles.readyBadgeText}>READY</Text>
-              </View>
+              {enrichmentReady ? (
+                <>
+                  <View style={styles.sourceBadge}>
+                    <Text style={styles.sourceBadgeText}>{sourceLabel}</Text>
+                  </View>
+                  <View style={styles.readyBadge}>
+                    <Ionicons name="navigate-outline" size={9} color={TACTICAL.amber} />
+                    <Text style={styles.readyBadgeText}>READY</Text>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.enrichmentSkeleton} />
+              )}
             </View>
             <Text style={styles.title} numberOfLines={2}>{candidate.title}</Text>
             <Text style={styles.subtitle} numberOfLines={1}>
               {candidate.subtitle ?? candidate.route.region ?? 'Explore route'}
             </Text>
           </View>
-          <View style={styles.confidenceMeter}>
-            <Text style={styles.confidenceValue}>{confidenceValue(candidate)}</Text>
-            <Text style={styles.confidenceLabel}>CONF</Text>
-          </View>
+          {enrichmentReady ? (
+            <View style={styles.confidenceMeter}>
+              <Text style={styles.confidenceValue}>{confidenceValue(candidate)}</Text>
+              <Text style={styles.confidenceLabel}>CONF</Text>
+            </View>
+          ) : (
+            <View style={[styles.confidenceMeter, styles.confidenceMeterSkeleton]} />
+          )}
         </View>
 
         <View style={styles.metaRow}>
@@ -142,6 +211,18 @@ export default function ExploreTripBuilderWizardRouteCard({
     </View>
   );
 }
+
+const ExploreTripBuilderWizardRouteCard = React.memo(
+  ExploreTripBuilderWizardRouteCardComponent,
+  (previous, next) =>
+    previous.candidate === next.candidate &&
+    previous.sourceLabel === next.sourceLabel &&
+    previous.isSaved === next.isSaved &&
+    previous.deferThumbnail === next.deferThumbnail &&
+    previous.deferEnrichment === next.deferEnrichment,
+);
+
+export default ExploreTripBuilderWizardRouteCard;
 
 const styles = StyleSheet.create({
   card: {
@@ -211,6 +292,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.8,
   },
+  enrichmentSkeleton: {
+    width: 96,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(255,255,255,0.055)',
+  },
   body: {
     padding: 11,
     gap: 7,
@@ -246,6 +333,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 5,
     alignItems: 'center',
+  },
+  confidenceMeterSkeleton: {
+    minHeight: 39,
+    backgroundColor: 'rgba(255,255,255,0.055)',
   },
   confidenceValue: {
     color: TACTICAL.amber,

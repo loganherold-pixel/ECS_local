@@ -540,7 +540,7 @@ assert(
 );
 
 const previousDevFlag = global.__DEV__;
-const previousWeatherDebugFlag = global.__ECS_DEBUG_WEATHER;
+const previousWeatherDebugFlag = global.__EXPO_PUBLIC_ECS_WEATHER_DEBUG;
 const originalConsoleLog = console.log;
 const weatherLogs = [];
 global.__DEV__ = true;
@@ -585,7 +585,7 @@ try {
     'weather normalization logs should stay quiet unless ECS weather debug logging is explicitly enabled',
   );
 
-  global.__ECS_DEBUG_WEATHER = true;
+  global.__EXPO_PUBLIC_ECS_WEATHER_DEBUG = true;
   buildECSWeatherSnapshot({
     result: {
       source: 'live',
@@ -625,9 +625,9 @@ try {
     global.__DEV__ = previousDevFlag;
   }
   if (typeof previousWeatherDebugFlag === 'undefined') {
-    delete global.__ECS_DEBUG_WEATHER;
+    delete global.__EXPO_PUBLIC_ECS_WEATHER_DEBUG;
   } else {
-    global.__ECS_DEBUG_WEATHER = previousWeatherDebugFlag;
+    global.__EXPO_PUBLIC_ECS_WEATHER_DEBUG = previousWeatherDebugFlag;
   }
 }
 

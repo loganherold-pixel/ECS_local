@@ -52,6 +52,11 @@ import {
   fetchSharedWeatherForCoordinates,
   type SharedWeatherFetchResult,
 } from '../lib/weatherService';
+import {
+  buildRouteWeatherSnapshot,
+  routeWeatherSamplesToCoordinates,
+  selectRouteWeatherSamplePoints,
+} from '../lib/routeWeatherSnapshot';
 import type { WeatherCoordinate } from '../lib/weatherTypes';
 import {
   cacheOfflineRoute,
@@ -342,28 +347,22 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function offlinePrepWeatherCoordinates(input: OfflinePrepPackInput): WeatherCoordinate[] {
+function offlinePrepWeatherSampleSelection(input: OfflinePrepPackInput): ReturnType<typeof selectRouteWeatherSamplePoints> {
   const points = getOfflinePrepPackRouteCoordinates(input);
-  if (points.length === 0) return [];
-  const indexes = points.length === 1
-    ? [0]
-    : points.length === 2
-      ? [0, 1]
-      : [0, Math.floor((points.length - 1) / 2), points.length - 1];
-  const seen = new Set<string>();
-  return indexes
-    .map((index) => points[index])
-    .flatMap((point, sampleIndex): WeatherCoordinate[] => {
-      if (!point) return [];
-      const key = `${point.latitude.toFixed(4)}:${point.longitude.toFixed(4)}`;
-      if (seen.has(key)) return [];
-      seen.add(key);
-      return [{
-        lat: point.latitude,
-        lng: point.longitude,
-        label: sampleIndex === 0 ? 'Route start' : sampleIndex === indexes.length - 1 ? 'Route finish' : 'Route midpoint',
-      }];
-    });
+  return selectRouteWeatherSamplePoints({
+    routeId: routeId(input.route),
+    routePoints: points.map((point) => ({
+      lat: point.latitude,
+      lng: point.longitude,
+    })),
+    routeDistanceMiles: routeDistance(input.route),
+    tripType: String((input.route as any).tripType ?? (input.route as any).trip_type ?? ''),
+    maxBuckets: 3,
+  });
+}
+
+function offlinePrepWeatherCoordinates(input: OfflinePrepPackInput): WeatherCoordinate[] {
+  return routeWeatherSamplesToCoordinates(offlinePrepWeatherSampleSelection(input));
 }
 
 function weatherCoordinateSignature(coordinates: WeatherCoordinate[]): string {
@@ -374,6 +373,7 @@ function buildOfflinePrepWeatherSnapshot(
   route: TripBuilderRouteInput,
   coordinates: WeatherCoordinate[],
   weather: SharedWeatherFetchResult,
+  sampleSelection: ReturnType<typeof selectRouteWeatherSamplePoints>,
 ): Record<string, unknown> | null {
   const usableSnapshots = weather.snapshots.filter((snapshot) => (
     snapshot.status.kind !== 'unavailable' &&
@@ -387,12 +387,30 @@ function buildOfflinePrepWeatherSnapshot(
     )
   ));
   if (usableSnapshots.length === 0) return null;
+  const routeWeatherSnapshot = buildRouteWeatherSnapshot({
+    routeId: routeId(route),
+    sampleSelection,
+    weather,
+    refreshReason: 'offline_packet',
+    nowMs: Date.now(),
+  });
   return {
     source: 'ecs_route_weather',
     routeId: routeId(route),
     routeName: routeName(route),
     generatedAt: new Date().toISOString(),
     providerSource: weather.result.source,
+    provider: routeWeatherSnapshot.provider,
+    fetchedAt: routeWeatherSnapshot.fetchedAt,
+    expiresAt: routeWeatherSnapshot.expiresAt,
+    stale: routeWeatherSnapshot.stale,
+    sampleBuckets: routeWeatherSnapshot.sampleBuckets,
+    weatherSnapshotAge: routeWeatherSnapshot.weatherSnapshotAge,
+    lastProviderRefreshAt: routeWeatherSnapshot.lastProviderRefreshAt,
+    currentSummary: routeWeatherSnapshot.currentSummary,
+    riskFlags: routeWeatherSnapshot.riskFlags,
+    sourceCallCount: routeWeatherSnapshot.sourceCallCount,
+    diagnostics: routeWeatherSnapshot.diagnostics,
     coordinateCount: coordinates.length,
     snapshots: usableSnapshots.map((snapshot, index) => ({
       label: snapshot.location.label ?? coordinates[index]?.label ?? `Route weather ${index + 1}`,
@@ -978,7 +996,8 @@ export default function ExploreOfflinePrepPackScreen() {
 
   useEffect(() => {
     if (!selectedInput || selectedInput.weatherSnapshot || weatherResolving) return;
-    const weatherCoordinates = offlinePrepWeatherCoordinates(selectedInput);
+    const weatherSampleSelection = offlinePrepWeatherSampleSelection(selectedInput);
+    const weatherCoordinates = routeWeatherSamplesToCoordinates(weatherSampleSelection);
     if (weatherCoordinates.length === 0) return;
     const selectedRouteKey = routeId(selectedInput.route);
     const attemptKey = `${selectedRouteKey}:${weatherCoordinateSignature(weatherCoordinates)}`;
@@ -990,7 +1009,12 @@ export default function ExploreOfflinePrepPackScreen() {
     fetchSharedWeatherForCoordinates(weatherCoordinates, 'imperial', false, 'route_segment')
       .then((weather) => {
         if (cancelled) return;
-        const weatherSnapshot = buildOfflinePrepWeatherSnapshot(selectedInput.route, weatherCoordinates, weather);
+        const weatherSnapshot = buildOfflinePrepWeatherSnapshot(
+          selectedInput.route,
+          weatherCoordinates,
+          weather,
+          weatherSampleSelection,
+        );
         if (!weatherSnapshot) return;
         setWeatherSnapshotsByRouteId((current) => ({
           ...current,

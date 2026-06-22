@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECSCard } from '../ECSSurface';
@@ -21,6 +21,7 @@ import {
   buildExploreRouteReadinessAssessment,
   getExploreRouteReadinessSummary,
 } from '../../lib/readiness/exploreRouteReadiness';
+import { getExplorePerformanceNow } from '../../lib/explore/explorePerformanceDiagnostics';
 
 interface TrailPackCardProps {
   trailPack: ECSTrailPackDiscoveryItem;
@@ -31,6 +32,9 @@ interface TrailPackCardProps {
   onSave: () => void;
   compactPreview?: boolean;
   thumbnailOverride?: ExploreTrailThumbnailAssignment | null;
+  onThumbnailLoadDuration?: (durationMs: number, metadata: Record<string, unknown>) => void;
+  deferThumbnail?: boolean;
+  deferEnrichment?: boolean;
 }
 
 function formatMiles(value: number | undefined): string | null {
@@ -73,7 +77,7 @@ function displayTrailPackConfidence(trailPack: ECSTrailPackDiscoveryItem): numbe
   return Number.isFinite(trailPack.confidenceScore) ? trailPack.confidenceScore : 0;
 }
 
-export default function TrailPackCard({
+function TrailPackCardComponent({
   trailPack,
   hasVehicle = false,
   isFavorited = false,
@@ -82,8 +86,14 @@ export default function TrailPackCard({
   onSave,
   compactPreview = false,
   thumbnailOverride,
+  onThumbnailLoadDuration,
+  deferThumbnail = false,
+  deferEnrichment = false,
 }: TrailPackCardProps) {
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const [thumbnailReady, setThumbnailReady] = useState(!deferThumbnail);
+  const [enrichmentReady, setEnrichmentReady] = useState(!deferEnrichment);
+  const thumbnailLoadStartedAtRef = useRef<number | null>(null);
   const sourceLabel = trailPack.catalogVerification?.sourceLabel ?? getTrailPackSourceLabel(trailPack.source);
   const routeTypeLabel = getTrailPackRouteTypeLabel(trailPack.routeType);
   const difficultyLabel = getTrailPackDifficultyLabel(trailPack.difficulty);
@@ -106,18 +116,47 @@ export default function TrailPackCard({
   ].filter(Boolean).join(' | ');
   const lastVerified = formatLastVerified(trailPack.lastVerifiedAt);
   const showThumbnail =
+    thumbnailReady &&
     !!thumbnailOverride?.uri &&
     thumbnailOverride.state !== 'suppressed_mismatch' &&
     !thumbnailFailed;
   const readinessRoute = useMemo(() => trailPackToExpeditionOpportunity(trailPack), [trailPack]);
   const readinessAssessment = useMemo(
-    () => buildExploreRouteReadinessAssessment(readinessRoute, { hasVehicle }),
-    [hasVehicle, readinessRoute],
+    () => (enrichmentReady ? buildExploreRouteReadinessAssessment(readinessRoute, { hasVehicle }) : null),
+    [enrichmentReady, hasVehicle, readinessRoute],
   );
   const readinessSummary = useMemo(
-    () => getExploreRouteReadinessSummary(readinessAssessment, readinessRoute, { hasVehicle }),
-    [hasVehicle, readinessAssessment, readinessRoute],
+    () => (
+      enrichmentReady && readinessAssessment
+        ? getExploreRouteReadinessSummary(readinessAssessment, readinessRoute, { hasVehicle })
+        : null
+    ),
+    [enrichmentReady, hasVehicle, readinessAssessment, readinessRoute],
   );
+
+  useEffect(() => {
+    setThumbnailFailed(false);
+  }, [trailPack.id, thumbnailOverride?.uri]);
+
+  useEffect(() => {
+    if (!deferThumbnail) {
+      setThumbnailReady(true);
+      return undefined;
+    }
+    setThumbnailReady(false);
+    const timer = setTimeout(() => setThumbnailReady(true), 90);
+    return () => clearTimeout(timer);
+  }, [deferThumbnail, thumbnailOverride?.uri, trailPack.id]);
+
+  useEffect(() => {
+    if (!deferEnrichment) {
+      setEnrichmentReady(true);
+      return undefined;
+    }
+    setEnrichmentReady(false);
+    const timer = setTimeout(() => setEnrichmentReady(true), 140);
+    return () => clearTimeout(timer);
+  }, [deferEnrichment, trailPack.id]);
 
   return (
     <ECSCard variant="primary" style={[s.card, compactPreview && s.cardCompact]}>
@@ -127,12 +166,46 @@ export default function TrailPackCard({
           <View style={s.titleCluster}>
             {showThumbnail ? (
               <View style={[s.thumbnailFrame, compactPreview && s.thumbnailFrameCompact]}>
+                <View style={s.thumbnailPlaceholder}>
+                  <Ionicons name="image-outline" size={14} color={TACTICAL.textMuted} />
+                </View>
                 <Image
                   source={{ uri: thumbnailOverride.uri as string }}
-                  style={s.thumbnailImage}
+                  style={[s.thumbnailImage, StyleSheet.absoluteFillObject]}
                   resizeMode="cover"
                   accessibilityLabel={`${trailPack.name} trail thumbnail`}
-                  onError={() => setThumbnailFailed(true)}
+                  onLoadStart={() => {
+                    thumbnailLoadStartedAtRef.current = getExplorePerformanceNow();
+                  }}
+                  onLoadEnd={() => {
+                    const startedAtMs = thumbnailLoadStartedAtRef.current;
+                    if (startedAtMs == null) return;
+                    onThumbnailLoadDuration?.(
+                      Math.max(0, getExplorePerformanceNow() - startedAtMs),
+                      {
+                        routeId: trailPack.id,
+                        sourceKey: thumbnailOverride.sourceKey ?? null,
+                        state: thumbnailOverride.state,
+                      },
+                    );
+                    thumbnailLoadStartedAtRef.current = null;
+                  }}
+                  onError={() => {
+                    setThumbnailFailed(true);
+                    const startedAtMs = thumbnailLoadStartedAtRef.current;
+                    if (startedAtMs != null) {
+                      onThumbnailLoadDuration?.(
+                        Math.max(0, getExplorePerformanceNow() - startedAtMs),
+                        {
+                          routeId: trailPack.id,
+                          sourceKey: thumbnailOverride.sourceKey ?? null,
+                          state: thumbnailOverride.state,
+                          status: 'error',
+                        },
+                      );
+                    }
+                    thumbnailLoadStartedAtRef.current = null;
+                  }}
                 />
               </View>
             ) : null}
@@ -171,11 +244,18 @@ export default function TrailPackCard({
             </Text>
           </View>
         </View>
-        <ExploreReadinessSummary
-          assessment={readinessAssessment}
-          summary={readinessSummary}
-          compact={compactPreview}
-        />
+        {readinessAssessment && readinessSummary ? (
+          <ExploreReadinessSummary
+            assessment={readinessAssessment}
+            summary={readinessSummary}
+            compact={compactPreview}
+          />
+        ) : (
+          <View style={s.enrichmentSkeleton}>
+            <View style={s.enrichmentSkeletonLine} />
+            <View style={[s.enrichmentSkeletonLine, s.enrichmentSkeletonLineShort]} />
+          </View>
+        )}
         {statLine ? <Text style={s.subtleText}>{statLine}</Text> : null}
         {lastVerified ? <Text style={s.subtleText}>{lastVerified}</Text> : null}
         {trailPack.catalogVerification?.warnings.length ? (
@@ -256,6 +336,20 @@ export default function TrailPackCard({
   );
 }
 
+const TrailPackCard = React.memo(
+  TrailPackCardComponent,
+  (previous, next) =>
+    previous.trailPack === next.trailPack &&
+    previous.hasVehicle === next.hasVehicle &&
+    previous.isFavorited === next.isFavorited &&
+    previous.compactPreview === next.compactPreview &&
+    previous.thumbnailOverride === next.thumbnailOverride &&
+    previous.deferThumbnail === next.deferThumbnail &&
+    previous.deferEnrichment === next.deferEnrichment,
+);
+
+export default TrailPackCard;
+
 const s = StyleSheet.create({
   card: {
     borderColor: 'rgba(230,184,76,0.22)',
@@ -329,6 +423,12 @@ const s = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  thumbnailPlaceholder: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: ECS.bgElev,
+  },
   thumbnailScrim: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.18)',
@@ -393,6 +493,23 @@ const s = StyleSheet.create({
     lineHeight: 13,
     fontWeight: '700',
     letterSpacing: 0,
+  },
+  enrichmentSkeleton: {
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+  },
+  enrichmentSkeletonLine: {
+    width: '72%',
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,255,255,0.055)',
+  },
+  enrichmentSkeletonLineShort: {
+    width: '46%',
   },
   subtleText: {
     color: TACTICAL.textMuted,

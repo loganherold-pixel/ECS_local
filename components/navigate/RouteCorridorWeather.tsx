@@ -20,10 +20,16 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 import ECSModal from '../ECSModal';
 import { TACTICAL, TYPO, GOLD_RAIL } from '../../lib/theme';
 import { hapticWarning, hapticMicro, hapticCommand } from '../../lib/haptics';
-import {
-  type WeatherFetchResult,
-} from '../../lib/weatherStore';
 import { fetchSharedWeatherForCoordinates } from '../../lib/weatherService';
+import {
+  buildRouteWeatherSnapshot,
+  decideRouteWeatherRefresh,
+  routeWeatherCoordinateSignature,
+  routeWeatherSamplesToCoordinates,
+  selectRouteWeatherSamplePoints,
+  type EcsRouteWeatherSnapshot,
+  type RouteWeatherRefreshReason,
+} from '../../lib/routeWeatherSnapshot';
 import type {
   WeatherCoordinate,
   WeatherAlert,
@@ -33,8 +39,8 @@ import type {
   TrailConditions,
 } from '../../lib/weatherTypes';
 import { getAlertColor, getWeatherIcon, getWindDirection } from '../../lib/weatherTypes';
-import type { ECSRun, RunPoint } from '../../lib/runStore';
-import { haversineMeters, metersToMiles } from '../../lib/runStore';
+import type { ECSRun } from '../../lib/runStore';
+import { haversineMeters } from '../../lib/runStore';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -111,8 +117,7 @@ interface UseRouteCorridorWeatherOptions {
 
 // ── Constants ────────────────────────────────────────────────
 
-const MAX_SAMPLE_POINTS = 10;
-const MIN_SAMPLE_DISTANCE_M = 2000; // Don't sample closer than 2km apart
+const MAX_SAMPLE_POINTS = 6;
 const REFETCH_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes for route weather
 const APPROACHING_THRESHOLD_MI = 5; // Warn when within 5 miles of hazard
 const ROUTE_WX_KEY = 'ecs_route_corridor_wx_visible';
@@ -268,121 +273,6 @@ function shouldEmitRouteWeatherHazardToast(source: RouteCorridorResult['source']
   return source === 'live' || source === 'cache_fresh';
 }
 
-// ── Route Sampling ───────────────────────────────────────────
-
-function sampleRoutePoints(
-  points: RunPoint[],
-  waypoints: { lat: number; lon: number; name?: string; ele?: number | null; time?: string | null }[],
-  maxSamples: number,
-): { lat: number; lng: number; label: string; distanceMi: number }[] {
-  if (points.length < 2) return [];
-
-  // Compute cumulative distances
-  const cumDist: number[] = [0];
-  for (let i = 1; i < points.length; i++) {
-    const d = haversineMeters(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng);
-    cumDist.push(cumDist[i - 1] + d);
-  }
-  const totalM = cumDist[cumDist.length - 1];
-  const totalMi = metersToMiles(totalM);
-
-  if (totalM < 100) return []; // Route too short
-
-  // Always include start and end
-  const samples: { lat: number; lng: number; label: string; distanceMi: number }[] = [];
-
-  // Start point
-  samples.push({
-    lat: points[0].lat,
-    lng: points[0].lng,
-    label: 'START',
-    distanceMi: 0,
-  });
-
-  // Named waypoints from the route (if any)
-  const namedWPs: { lat: number; lng: number; label: string; distanceMi: number }[] = [];
-  for (const wp of waypoints) {
-    // Find closest point on route to this waypoint
-    let minDist = Infinity;
-    let closestIdx = 0;
-    for (let i = 0; i < points.length; i++) {
-      const d = haversineMeters(wp.lat, wp.lon, points[i].lat, points[i].lng);
-      if (d < minDist) { minDist = d; closestIdx = i; }
-    }
-    if (minDist < 5000) { // Within 5km of route
-      namedWPs.push({
-        lat: wp.lat,
-        lng: wp.lon,
-        label: wp.name || `WP`,
-        distanceMi: metersToMiles(cumDist[closestIdx]),
-      });
-    }
-  }
-
-  // Determine how many evenly-spaced samples we need
-  const remainingSlots = maxSamples - 2 - namedWPs.length; // -2 for start+end
-  const evenSamples = Math.max(0, remainingSlots);
-
-  if (evenSamples > 0) {
-    const interval = totalM / (evenSamples + 1);
-    for (let s = 1; s <= evenSamples; s++) {
-      const targetDist = interval * s;
-      // Find the point on the route at this distance
-      let ptIdx = 0;
-      for (let i = 1; i < cumDist.length; i++) {
-        if (cumDist[i] >= targetDist) { ptIdx = i; break; }
-        ptIdx = i;
-      }
-      // Interpolate between ptIdx-1 and ptIdx
-      const prevDist = cumDist[ptIdx - 1] || 0;
-      const nextDist = cumDist[ptIdx] || prevDist;
-      const ratio = nextDist > prevDist ? (targetDist - prevDist) / (nextDist - prevDist) : 0;
-      const lat = points[ptIdx - 1].lat + ratio * (points[ptIdx].lat - points[ptIdx - 1].lat);
-      const lng = points[ptIdx - 1].lng + ratio * (points[ptIdx].lng - points[ptIdx - 1].lng);
-
-      // Check if too close to a named waypoint
-      const tooClose = namedWPs.some(nwp =>
-        Math.abs(metersToMiles(targetDist) - nwp.distanceMi) < metersToMiles(MIN_SAMPLE_DISTANCE_M)
-      );
-      if (!tooClose) {
-        samples.push({
-          lat, lng,
-          label: `MI ${metersToMiles(targetDist).toFixed(0)}`,
-          distanceMi: metersToMiles(targetDist),
-        });
-      }
-    }
-  }
-
-  // Add named waypoints
-  for (const nwp of namedWPs) {
-    samples.push(nwp);
-  }
-
-  // End point
-  samples.push({
-    lat: points[points.length - 1].lat,
-    lng: points[points.length - 1].lng,
-    label: 'END',
-    distanceMi: totalMi,
-  });
-
-  // Sort by distance
-  samples.sort((a, b) => a.distanceMi - b.distanceMi);
-
-  // Deduplicate (remove samples too close together)
-  const deduped: typeof samples = [samples[0]];
-  for (let i = 1; i < samples.length; i++) {
-    const prev = deduped[deduped.length - 1];
-    const distBetween = haversineMeters(prev.lat, prev.lng, samples[i].lat, samples[i].lng);
-    if (distBetween > MIN_SAMPLE_DISTANCE_M / 2 || i === samples.length - 1) {
-      deduped.push(samples[i]);
-    }
-  }
-
-  return deduped.slice(0, maxSamples);
-}
-
 // ══════════════════════════════════════════════════════════════
 // HOOK: useRouteCorridorWeather
 // ══════════════════════════════════════════════════════════════
@@ -417,7 +307,10 @@ export function useRouteCorridorWeather(
 
   const mountedRef = useRef(true);
   const intervalRef = useRef<any>(null);
+  const loadingRef = useRef(false);
   const lastRouteIdRef = useRef<string | null>(null);
+  const lastSampleSignatureRef = useRef<string | null>(null);
+  const routeWeatherSnapshotRef = useRef<EcsRouteWeatherSnapshot | null>(null);
   const seenHazardKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -441,42 +334,79 @@ export function useRouteCorridorWeather(
         setWeatherPoints([]);
         setSource(null);
         setError(null);
+        routeWeatherSnapshotRef.current = null;
+        lastSampleSignatureRef.current = null;
       }
       return next;
     });
   }, [forceActive, persistPreference]);
 
-  // Sample route points when run changes
-  const sampledCoords = useMemo(() => {
-    if (!activeRun || activeRun.points.length < 2) return [];
-    return sampleRoutePoints(
-      activeRun.points,
-      (activeRun.waypoints || []).map((waypoint: any) => ({
+  const routeWeatherSampleSelection = useMemo(() => {
+    if (!activeRun || activeRun.points.length < 2) return null;
+    return selectRouteWeatherSamplePoints({
+      routeId: activeRun.id,
+      routePoints: activeRun.points.map((point: any) => ({
+        lat: point.lat,
+        lng: point.lng,
+        ele: point.ele ?? null,
+        ele_m: point.ele_m ?? null,
+      })),
+      userLocation: userLocation
+        ? { lat: userLocation.lat, lng: userLocation.lng, label: 'Current position' }
+        : null,
+      waypoints: (activeRun.waypoints || []).map((waypoint: any) => ({
         lat: Number(waypoint?.lat ?? waypoint?.latitude ?? 0),
         lon: Number(waypoint?.lon ?? waypoint?.lng ?? waypoint?.longitude ?? 0),
         name: waypoint?.name ?? waypoint?.title ?? undefined,
         ele: waypoint?.ele ?? null,
-        time: waypoint?.time ?? null,
       })),
-      MAX_SAMPLE_POINTS,
-    );
-  }, [activeRun]);
+      routeDistanceMiles: activeRun.stats?.distance_miles ?? null,
+      maxBuckets: MAX_SAMPLE_POINTS,
+      includeHighElevationRiskPoint: true,
+    });
+  }, [activeRun, userLocation]);
 
-  const fetchRouteWeather = useCallback(async () => {
-    if (!intelligenceActive || sampledCoords.length < 2 || loading) return;
+  const sampledCoords = useMemo(() => (
+    routeWeatherSampleSelection?.samples.map((sample) => ({
+      lat: sample.coordinate.lat,
+      lng: sample.coordinate.lng,
+      label: sample.label,
+      distanceMi: sample.distanceMiles,
+    })) ?? []
+  ), [routeWeatherSampleSelection]);
 
+  const sampleSignature = useMemo(() => (
+    routeWeatherSampleSelection ? routeWeatherCoordinateSignature(routeWeatherSampleSelection) : ''
+  ), [routeWeatherSampleSelection]);
+
+  const fetchRouteWeather = useCallback(async (reason: RouteWeatherRefreshReason = 'interval') => {
+    if (!intelligenceActive || !routeWeatherSampleSelection || sampledCoords.length < 2 || loadingRef.current) return;
+
+    const refreshDecision = decideRouteWeatherRefresh({
+      reason,
+      previousSnapshot: routeWeatherSnapshotRef.current,
+      sampleBuckets: routeWeatherSampleSelection.sampleBuckets,
+      currentBucketKey: routeWeatherSampleSelection.sampleBuckets[0] ?? null,
+      nowMs: Date.now(),
+    });
+    if (!refreshDecision.shouldRefresh) {
+      const cachedSnapshot = routeWeatherSnapshotRef.current;
+      if (cachedSnapshot) {
+        const parsedFetchedAt = Date.parse(cachedSnapshot.lastProviderRefreshAt ?? cachedSnapshot.fetchedAt);
+        if (Number.isFinite(parsedFetchedAt)) setLastFetchAt(parsedFetchedAt);
+      }
+      return;
+    }
+
+    loadingRef.current = true;
     setLoading(true);
     try {
-      const coordinates: WeatherCoordinate[] = sampledCoords.map(s => ({
-        lat: s.lat,
-        lng: s.lng,
-        label: s.label,
-      }));
+      const coordinates: WeatherCoordinate[] = routeWeatherSamplesToCoordinates(routeWeatherSampleSelection);
 
       const sharedWeather = await fetchSharedWeatherForCoordinates(
         coordinates,
         'imperial',
-        false,
+        reason === 'manual_refresh',
         'route_segment',
       );
       const result = sharedWeather.result;
@@ -485,7 +415,17 @@ export function useRouteCorridorWeather(
       setSource(result.source);
       setError(result.error);
       {
-        const parsedFetchedAt = Date.parse(result.data.fetched_at);
+        const routeWeatherSnapshot = buildRouteWeatherSnapshot({
+          routeId: activeRun?.id ?? routeWeatherSampleSelection.routeId,
+          navigationSessionId: activeRun?.id ?? null,
+          sampleSelection: routeWeatherSampleSelection,
+          weather: sharedWeather,
+          refreshReason: refreshDecision.refreshReason ?? reason,
+          refreshDeniedReason: refreshDecision.deniedReason,
+          nowMs: Date.now(),
+        });
+        routeWeatherSnapshotRef.current = routeWeatherSnapshot;
+        const parsedFetchedAt = Date.parse(routeWeatherSnapshot.lastProviderRefreshAt ?? routeWeatherSnapshot.fetchedAt);
         setLastFetchAt(Number.isFinite(parsedFetchedAt) ? parsedFetchedAt : Date.now());
       }
 
@@ -533,14 +473,16 @@ export function useRouteCorridorWeather(
       if (mountedRef.current) {
         setError(err?.message || 'Route weather fetch failed');
       }
+    } finally {
+      loadingRef.current = false;
+      if (mountedRef.current) setLoading(false);
     }
-    if (mountedRef.current) setLoading(false);
-  }, [emitToasts, intelligenceActive, loading, sampledCoords, showToast]);
+  }, [activeRun?.id, emitToasts, intelligenceActive, routeWeatherSampleSelection, sampledCoords, showToast]);
 
   const refresh = useCallback(() => {
     hapticMicro();
     seenHazardKeysRef.current.clear();
-    fetchRouteWeather();
+    fetchRouteWeather('manual_refresh');
   }, [fetchRouteWeather]);
 
   // Fetch when enabled, route changes, or on mount
@@ -551,12 +493,18 @@ export function useRouteCorridorWeather(
     const routeId = activeRun?.id || null;
     if (routeId !== lastRouteIdRef.current) {
       lastRouteIdRef.current = routeId;
+      lastSampleSignatureRef.current = sampleSignature;
+      routeWeatherSnapshotRef.current = null;
       seenHazardKeysRef.current.clear();
-      fetchRouteWeather();
+      fetchRouteWeather('navigation_start');
     } else if (!lastFetchAt) {
-      fetchRouteWeather();
+      lastSampleSignatureRef.current = sampleSignature;
+      fetchRouteWeather('navigation_start');
+    } else if (sampleSignature && sampleSignature !== lastSampleSignatureRef.current) {
+      lastSampleSignatureRef.current = sampleSignature;
+      fetchRouteWeather('gps_update');
     }
-  }, [intelligenceActive, activeRun?.id, fetchRouteWeather, lastFetchAt, sampledCoords.length]);
+  }, [intelligenceActive, activeRun?.id, fetchRouteWeather, lastFetchAt, sampleSignature, sampledCoords.length]);
 
   // Periodic refresh
   useEffect(() => {
@@ -566,7 +514,7 @@ export function useRouteCorridorWeather(
     }
 
     intervalRef.current = setInterval(() => {
-      if (mountedRef.current) fetchRouteWeather();
+      if (mountedRef.current) fetchRouteWeather('interval');
     }, REFETCH_INTERVAL_MS);
 
     return () => {

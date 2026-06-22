@@ -12,7 +12,9 @@ assert(edgeFunction.includes('Deno.env.get("OPENWEATHER_API_KEY")'), 'Edge funct
 assert(edgeFunction.includes('https://api.openweathermap.org/data/3.0/onecall'), 'Edge function should call OpenWeather One Call API 3.0.');
 assert(!edgeFunction.includes('https://api.openweathermap.org/data/2.5/weather'), 'Edge function should not call the basic current weather endpoint.');
 assert(!edgeFunction.includes('https://api.openweathermap.org/data/2.5/forecast'), 'Edge function should not call the basic forecast endpoint.');
-assert(edgeFunction.includes('exclude: "minutely"'), 'One Call requests should exclude minutely data.');
+assert(edgeFunction.includes('function normalizeOneCallExclude'), 'One Call exclude sections should be sanitized server-side.');
+assert(edgeFunction.includes(': ["minutely"]'), 'One Call requests should default to excluding minutely data.');
+assert(edgeFunction.includes('provider_request: { exclude }'), 'Edge responses should report shaped provider exclude parameters.');
 assert(edgeFunction.includes('buildHourlyForecastFromOneCall'), 'Edge function should normalize hourly forecast rows.');
 assert(edgeFunction.includes('slice(0, HOURLY_LIMIT)'), 'Hourly forecast should be capped.');
 assert(edgeFunction.includes('slice(0, FORECAST_DAY_LIMIT)'), 'Daily forecast should be capped.');

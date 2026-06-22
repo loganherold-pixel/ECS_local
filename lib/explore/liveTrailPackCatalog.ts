@@ -10,6 +10,13 @@ import {
   buildExploreRouteCatalogQueryDiagnostic,
   logRouteCatalogVisibilityDiagnostic,
 } from '../routeCatalogVisibilityDiagnostics';
+import {
+  buildExplorePerformanceSummary,
+  createExplorePerformanceRun,
+  getExplorePerformanceNow,
+  logExplorePerformanceDiagnostic,
+  recordExplorePerformancePhase,
+} from './explorePerformanceDiagnostics';
 import type {
   ECSTrailPack,
   ECSTrailPackCoordinate,
@@ -477,15 +484,59 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
   coverageState: RouteCatalogCoverageState;
   searchMeta: RouteCatalogSearchMeta;
 }> {
+  const startedAtMs = getExplorePerformanceNow();
+  const perfRun = createExplorePerformanceRun({
+    flow: 'route_catalog_refresh',
+    searchKey: [
+      criteria.locationSource ?? 'unknown_location',
+      criteria.latitude ?? 'na',
+      criteria.longitude ?? 'na',
+      criteria.radiusMiles ?? 'na',
+      criteria.vehicleClass ?? 'any_vehicle',
+    ].join('|'),
+    startedAtMs,
+    metadata: {
+      radiusMiles: criteria.radiusMiles ?? null,
+      locationSource: criteria.locationSource ?? null,
+      vehicleClass: criteria.vehicleClass ?? null,
+      limit: criteria.limit ?? 500,
+    },
+  });
   const { data, error } = await supabase.functions.invoke('route-catalog-search', {
     body: buildRouteCatalogSearchBody(criteria),
   });
+  const queryEndedAtMs = getExplorePerformanceNow();
+  recordExplorePerformancePhase(perfRun, 'route_catalog_query', {
+    startedAtMs,
+    endedAtMs: queryEndedAtMs,
+    metadata: {
+      status: error ? 'error' : 'ok',
+      functionName: 'route-catalog-search',
+    },
+  });
 
   if (error) {
+    logExplorePerformanceDiagnostic(
+      buildExplorePerformanceSummary(perfRun, { completedAtMs: queryEndedAtMs }),
+    );
     throw new Error(error.message || 'Verified route catalog unavailable.');
   }
 
+  const normalizeStartedAtMs = getExplorePerformanceNow();
   const normalized = normalizeRouteCatalogSearchResponse(data);
+  const normalizeEndedAtMs = getExplorePerformanceNow();
+  recordExplorePerformancePhase(perfRun, 'filter_sort', {
+    startedAtMs: normalizeStartedAtMs,
+    endedAtMs: normalizeEndedAtMs,
+    metadata: {
+      candidateCount: normalized.searchMeta.candidateCount,
+      returnedRecords: normalized.records.length,
+      returnedTrailPacks: normalized.trailPacks.length,
+    },
+  });
+  logExplorePerformanceDiagnostic(
+    buildExplorePerformanceSummary(perfRun, { completedAtMs: normalizeEndedAtMs }),
+  );
   logRouteCatalogVisibilityDiagnostic(
     'explore_query',
     buildExploreRouteCatalogQueryDiagnostic(normalized.records, {

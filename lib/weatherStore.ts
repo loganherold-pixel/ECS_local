@@ -4,7 +4,6 @@
  * Manages weather data fetching, caching, and offline support.
  * Uses the get-weather Supabase Edge Function to fetch data from OpenWeather API.
  */
-import { supabase } from './supabase';
 import { connectivity } from './connectivity';
 import { reportDegradedState, reportRecoverableFailure } from './ecsIssueIntelligence';
 import { setIssueRuntimeWeatherStatus } from './ecsIssueRuntime';
@@ -24,6 +23,15 @@ import {
 } from './weatherRequestDedupe';
 import { getWeatherFreshness, parseWeatherTimestampMs } from './weatherFreshness';
 import { ecsLog } from './ecsLogger';
+import {
+  ECS_WEATHER_DEBUG_FLAG,
+  getOpenWeatherCoordinateBucketsForRequestBody,
+  invokeOpenWeatherOneCallEdgeFunction,
+  recordOpenWeatherCacheHit,
+  recordOpenWeatherCacheMiss,
+  recordOpenWeatherDuplicateAvoided,
+  recordOpenWeatherStaleCacheReturn,
+} from './openWeatherClient';
 import type {
   WeatherCoordinate,
   WeatherResponse,
@@ -43,6 +51,55 @@ const RETRY_DELAY_MS = 2000;
 const EDGE_FUNCTION_TIMEOUT_MS = 12000;
 const WEATHER_DEBUG = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
 const WEATHER_JOIN_LOG_THROTTLE_MS = 3000;
+
+type WeatherProviderContext = {
+  sourceType?: string | null;
+  screen?: string | null;
+  routeSessionId?: string | null;
+  providerExclude?: string | null;
+  brokerBucketKey?: string | null;
+  brokerUseCase?: string | null;
+  brokerSections?: string[] | null;
+};
+
+function resolveWeatherProviderScreen(context?: WeatherProviderContext | null): string {
+  if (context?.screen) return context.screen;
+  switch (context?.sourceType) {
+    case 'route_origin':
+    case 'route_segment':
+      return 'Navigate';
+    case 'current_location':
+      return 'Dashboard';
+    case 'selected_coordinate':
+      return 'Explore';
+    case 'last_known':
+    case 'cached':
+      return 'WeatherCache';
+    default:
+      return 'SharedWeather';
+  }
+}
+
+function buildWeatherProviderTelemetry(
+  params: {
+    source: string;
+    requestKey: string;
+    coordinates: WeatherCoordinate[];
+    context?: WeatherProviderContext | null;
+    reason?: string | null;
+  },
+) {
+  const body = { coordinates: params.coordinates, units: 'imperial' };
+  return {
+    source: params.source,
+    screen: resolveWeatherProviderScreen(params.context),
+    routeSessionId: params.context?.routeSessionId ?? null,
+    requestKey: params.requestKey,
+    coordinateBuckets: getOpenWeatherCoordinateBucketsForRequestBody(body),
+    coordinateCount: params.coordinates.length,
+    reason: params.reason,
+  };
+}
 
 const memoryCache = new Map<string, CachedWeather>();
 const weatherCachePersistence = createPersistedKeyValueCache('ecs_weather_cache');
@@ -80,6 +137,16 @@ function weatherJoinedExistingLog(
   requestKey: string,
   payload: Record<string, unknown>,
 ): void {
+  recordOpenWeatherDuplicateAvoided({
+    source: typeof payload.source === 'string' ? payload.source : 'weatherStore.runDedupedWeatherRequest',
+    screen: typeof payload.screen === 'string' ? payload.screen : 'SharedWeather',
+    routeSessionId: typeof payload.routeSessionId === 'string' ? payload.routeSessionId : null,
+    requestKey,
+    coordinateBuckets: Array.isArray(payload.coordinateBuckets)
+      ? payload.coordinateBuckets.filter((entry): entry is string => typeof entry === 'string')
+      : [],
+    coordinateCount: typeof payload.coordinateCount === 'number' ? payload.coordinateCount : undefined,
+  });
   const now = Date.now();
   const lastLoggedAt = lastJoinedExistingLogAt.get(requestKey) ?? 0;
   if (now - lastLoggedAt < WEATHER_JOIN_LOG_THROTTLE_MS) {
@@ -270,7 +337,7 @@ function weatherDebugLog(message: string, payload?: Record<string, unknown>) {
   if (!WEATHER_DEBUG) return;
   ecsLog.dev('WEATHER', event, payload, {
     tag: '[WEATHER]',
-    debugFlag: 'ECS_DEBUG_WEATHER',
+    debugFlag: ECS_WEATHER_DEBUG_FLAG,
     fingerprint: `${event}:${JSON.stringify(payload ?? {})}`,
     throttleMs: 2500,
     aggregateWindowMs: 10_000,
@@ -748,9 +815,17 @@ function normalizeResult(raw: any, fallbackLabel?: string | null, units: 'imperi
   };
 }
 
-async function invokeWeatherEdgeFunction(body: Record<string, unknown>): Promise<{ data: any; error: any }> {
+async function invokeWeatherEdgeFunction(
+  body: Record<string, unknown>,
+  context: {
+    source: string;
+    screen?: string | null;
+    routeSessionId?: string | null;
+    requestKey?: string | null;
+  },
+): Promise<{ data: any; error: any }> {
   return await Promise.race([
-    supabase.functions.invoke('get-weather', { body }),
+    invokeOpenWeatherOneCallEdgeFunction(body, context),
     new Promise<{ data: null; error: { message: string } }>(resolve => {
       setTimeout(() => {
         resolve({
@@ -854,9 +929,17 @@ function generateFallbackWeather(
 async function callWeatherEdgeFunction(
   coordinates: WeatherCoordinate[],
   units: 'imperial' | 'metric',
-  retryCount = 1,
+  requestKey: string,
+  context?: WeatherProviderContext | null,
+  retryCount = 0,
 ): Promise<WeatherResponse> {
   let lastError: Error | null = null;
+  const telemetryContext = {
+    source: 'weatherStore.callWeatherEdgeFunction',
+    screen: resolveWeatherProviderScreen(context),
+    routeSessionId: context?.routeSessionId ?? null,
+    requestKey,
+  };
 
   for (let attempt = 0; attempt <= retryCount; attempt++) {
     try {
@@ -864,7 +947,11 @@ async function callWeatherEdgeFunction(
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
       }
 
-      const { data, error } = await invokeWeatherEdgeFunction({ coordinates, units });
+      const { data, error } = await invokeWeatherEdgeFunction({
+        coordinates,
+        units,
+        ...(context?.providerExclude ? { exclude: context.providerExclude } : null),
+      }, telemetryContext);
 
       if (error) {
         const errMsg = typeof error === 'string' ? error : error?.message || 'Edge function error';
@@ -904,9 +991,17 @@ async function callSimpleWeatherEdgeFunction(
   lat: number,
   lon: number,
   units: 'imperial' | 'metric',
-  retryCount = 1,
+  requestKey: string,
+  context?: WeatherProviderContext | null,
+  retryCount = 0,
 ): Promise<WeatherResponse> {
   let lastError: Error | null = null;
+  const telemetryContext = {
+    source: 'weatherStore.callSimpleWeatherEdgeFunction',
+    screen: resolveWeatherProviderScreen(context),
+    routeSessionId: context?.routeSessionId ?? null,
+    requestKey,
+  };
 
   for (let attempt = 0; attempt <= retryCount; attempt++) {
     try {
@@ -914,7 +1009,12 @@ async function callSimpleWeatherEdgeFunction(
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
       }
 
-      const { data, error } = await invokeWeatherEdgeFunction({ lat, lon, units });
+      const { data, error } = await invokeWeatherEdgeFunction({
+        lat,
+        lon,
+        units,
+        ...(context?.providerExclude ? { exclude: context.providerExclude } : null),
+      }, telemetryContext);
 
       if (error) {
         const errMsg = typeof error === 'string' ? error : error?.message || 'Edge function error';
@@ -998,6 +1098,7 @@ export async function fetchWeatherWithStatus(
   coordinates: WeatherCoordinate[],
   units: 'imperial' | 'metric' = 'imperial',
   forceRefresh = false,
+  context?: WeatherProviderContext | null,
 ): Promise<WeatherFetchResult> {
   if (coordinates.length === 0) {
     return {
@@ -1019,6 +1120,12 @@ export async function fetchWeatherWithStatus(
   if (!forceRefresh) {
     const fresh = getValidatedCached(key, units, { allowStale: false });
     if (fresh) {
+      recordOpenWeatherCacheHit(buildWeatherProviderTelemetry({
+        source: 'weatherStore.fetchWeatherWithStatus',
+        requestKey,
+        coordinates,
+        context,
+      }));
       setIssueRuntimeWeatherFromResult({
         data: fresh.data,
         source: fresh.source,
@@ -1040,6 +1147,13 @@ export async function fetchWeatherWithStatus(
     }
   }
 
+  recordOpenWeatherCacheMiss(buildWeatherProviderTelemetry({
+    source: 'weatherStore.fetchWeatherWithStatus',
+    requestKey,
+    coordinates,
+    context,
+  }));
+
   return runDedupedWeatherRequest(requestKey, async () => {
     try {
     weatherDebugLog('[WEATHER] request_start', {
@@ -1053,7 +1167,7 @@ export async function fetchWeatherWithStatus(
       throw new Error('Device is offline');
     }
 
-    const response = await callWeatherEdgeFunction(coordinates, units);
+    const response = await callWeatherEdgeFunction(coordinates, units, requestKey, context);
     setCache(key, response);
     const successAt = Date.now();
 
@@ -1104,6 +1218,13 @@ export async function fetchWeatherWithStatus(
 
     const stale = getValidatedCached(key, units, { allowStale: true });
     if (stale) {
+      recordOpenWeatherStaleCacheReturn(buildWeatherProviderTelemetry({
+        source: 'weatherStore.fetchWeatherWithStatus',
+        requestKey,
+        coordinates,
+        context,
+        reason: errorMsg,
+      }));
       setIssueRuntimeWeatherFromResult({
         data: stale.data,
         source: stale.source === 'cache_fresh' ? 'cache_fresh' : 'cache_stale',
@@ -1138,7 +1259,14 @@ export async function fetchWeatherWithStatus(
     };
     }
   }, () => {
+    const telemetry = buildWeatherProviderTelemetry({
+      source: 'weatherStore.fetchWeatherWithStatus',
+      requestKey,
+      coordinates,
+      context,
+    });
     weatherJoinedExistingLog(requestKey, {
+      ...telemetry,
       mode: 'coordinates',
       coordinateCount: coordinates.length,
       units,
@@ -1162,6 +1290,7 @@ export async function fetchWeatherForLocation(
   lon: number,
   units: 'imperial' | 'metric' = 'imperial',
   forceRefresh = false,
+  context?: WeatherProviderContext | null,
 ): Promise<WeatherFetchResult> {
   const key = singleCoordKey(lat, lon);
   const coordinates: WeatherCoordinate[] = [{ lat, lng: lon, label: undefined }];
@@ -1174,6 +1303,12 @@ export async function fetchWeatherForLocation(
 
   const fresh = !forceRefresh ? getValidatedCached(key, units, { allowStale: false }) : null;
   if (fresh) {
+    recordOpenWeatherCacheHit(buildWeatherProviderTelemetry({
+      source: 'weatherStore.fetchWeatherForLocation',
+      requestKey,
+      coordinates,
+      context,
+    }));
     setIssueRuntimeWeatherFromResult({
       data: fresh.data,
       source: fresh.source,
@@ -1193,6 +1328,13 @@ export async function fetchWeatherForLocation(
     };
   }
 
+  recordOpenWeatherCacheMiss(buildWeatherProviderTelemetry({
+    source: 'weatherStore.fetchWeatherForLocation',
+    requestKey,
+    coordinates,
+    context,
+  }));
+
   return runDedupedWeatherRequest(requestKey, async () => {
     try {
     weatherDebugLog('[WEATHER] request_start', {
@@ -1205,7 +1347,7 @@ export async function fetchWeatherForLocation(
       throw new Error('Device is offline');
     }
 
-    const response = await callSimpleWeatherEdgeFunction(lat, lon, units);
+    const response = await callSimpleWeatherEdgeFunction(lat, lon, units, requestKey, context);
     setCache(key, response);
     const successAt = Date.now();
 
@@ -1257,6 +1399,13 @@ export async function fetchWeatherForLocation(
 
     const stale = getValidatedCached(key, units, { allowStale: true });
     if (stale) {
+      recordOpenWeatherStaleCacheReturn(buildWeatherProviderTelemetry({
+        source: 'weatherStore.fetchWeatherForLocation',
+        requestKey,
+        coordinates,
+        context,
+        reason: errorMsg,
+      }));
       setIssueRuntimeWeatherFromResult({
         data: stale.data,
         source: stale.source === 'cache_fresh' ? 'cache_fresh' : 'cache_stale',
@@ -1290,7 +1439,14 @@ export async function fetchWeatherForLocation(
     };
     }
   }, () => {
+    const telemetry = buildWeatherProviderTelemetry({
+      source: 'weatherStore.fetchWeatherForLocation',
+      requestKey,
+      coordinates,
+      context,
+    });
     weatherJoinedExistingLog(requestKey, {
+      ...telemetry,
       mode: 'location',
       units,
       forceRefresh,

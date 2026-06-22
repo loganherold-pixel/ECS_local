@@ -433,7 +433,7 @@ function logWeatherNormalization(params: {
   lastNormalizeLogKey = key;
   ecsLog.dev('WEATHER', 'normalize_input', { keys: params.inputKeys }, {
     tag: '[WEATHER]',
-    debugFlag: 'ECS_DEBUG_WEATHER',
+    debugFlag: 'EXPO_PUBLIC_ECS_WEATHER_DEBUG',
     fingerprint: `normalize_input:${key}`,
     throttleMs: 5000,
     aggregateWindowMs: 30_000,
@@ -444,7 +444,7 @@ function logWeatherNormalization(params: {
     windMph: params.windMph,
   }, {
     tag: '[WEATHER]',
-    debugFlag: 'ECS_DEBUG_WEATHER',
+    debugFlag: 'EXPO_PUBLIC_ECS_WEATHER_DEBUG',
     fingerprint: `normalize_output:${key}`,
     throttleMs: 5000,
     aggregateWindowMs: 30_000,

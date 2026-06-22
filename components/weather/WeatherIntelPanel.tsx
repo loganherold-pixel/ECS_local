@@ -166,7 +166,7 @@ function hasUsableWeatherRows(rows: WaypointWeather[] | null | undefined): boole
 function logWeatherPanelRetention(event: string, payload?: Record<string, unknown>): void {
   ecsLog.dev('WEATHER', event, payload, {
     tag: '[WEATHER]',
-    debugFlag: 'ECS_DEBUG_WEATHER',
+    debugFlag: 'EXPO_PUBLIC_ECS_WEATHER_DEBUG',
     fingerprint: `${event}:${JSON.stringify(payload ?? {})}`,
     throttleMs: 5000,
     aggregateWindowMs: 30_000,

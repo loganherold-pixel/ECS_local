@@ -60,6 +60,8 @@ const useOperationalWeather = read('lib/useOperationalWeather.ts');
 const weatherIntelPanel = read('components/weather/WeatherIntelPanel.tsx');
 const routeCorridorWeather = read('components/navigate/RouteCorridorWeather.tsx');
 const weatherStore = read('lib/weatherStore.ts');
+const openWeatherClient = read('lib/openWeatherClient.ts');
+const weatherBroker = read('lib/weatherBroker.ts');
 
 assert(
   weatherService.includes('export async function fetchSharedWeatherForCoordinates'),
@@ -84,6 +86,14 @@ assert(
   'weatherService should validate lat/lon before provider calls.',
 );
 assert(
+  weatherService.includes('fetchWeatherThroughBroker') &&
+    weatherBroker.includes('buildWeatherBucket') &&
+    weatherBroker.includes('buildOpenWeatherExclude') &&
+    weatherBroker.includes('provider=openweather') &&
+    weatherBroker.includes('product=onecall3'),
+  'Shared weather requests should route through the ECS Weather Broker before provider/edge calls.',
+);
+assert(
   useWeather.includes('useOperationalWeather as useWeather') &&
     useWeather.includes('fetchSharedWeatherForCoordinates'),
   'lib/useWeather.ts should be the shared public hook/service entrypoint.',
@@ -106,9 +116,11 @@ assert(
   'RouteCorridorWeather should use shared weather service APIs.',
 );
 assert(
-  weatherStore.includes("supabase.functions.invoke('get-weather'") &&
+  weatherStore.includes('invokeOpenWeatherOneCallEdgeFunction') &&
+    weatherStore.includes('providerExclude') &&
+    openWeatherClient.includes("supabase.functions.invoke('get-weather'") &&
     !weatherService.includes("supabase.functions.invoke('get-weather'"),
-  'Only the low-level weather store should invoke the get-weather edge function.',
+  'Only the central OpenWeather client should invoke the get-weather edge function.',
 );
 
 const sourceFiles = [
@@ -117,7 +129,8 @@ const sourceFiles = [
   ...walkFiles(path.join(process.cwd(), 'lib'), (file) => /\.(ts|tsx)$/.test(file)),
 ];
 const directProviderParsers = sourceFiles
-  .filter((file) => !/[\\/]lib[\\/]weather(Store|Service|EdgeFunctionSpec)\.ts$/.test(file))
+  .filter((file) => !/[\\/]lib[\\/]openWeatherClient\.ts$/.test(file))
+  .filter((file) => !/[\\/]lib[\\/]weatherEdgeFunctionSpec\.ts$/.test(file))
   .filter((file) => read(path.relative(process.cwd(), file)).includes("supabase.functions.invoke('get-weather'"));
 assert.deepStrictEqual(
   directProviderParsers.map((file) => path.relative(process.cwd(), file)),

@@ -279,7 +279,7 @@ function logWeatherRetention(event: string, payload?: Record<string, unknown>): 
 
   ecsLog.dev('WEATHER', event, details, {
     tag: '[WEATHER]',
-    debugFlag: 'ECS_DEBUG_WEATHER',
+    debugFlag: 'EXPO_PUBLIC_ECS_WEATHER_DEBUG',
     fingerprint: `${event}:${JSON.stringify(details)}`,
     throttleMs: 2500,
     aggregateWindowMs: 10_000,

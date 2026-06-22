@@ -57,7 +57,8 @@ function directWeatherEdgeInvocations(root) {
     ...walkFiles(path.join(root, 'lib'), (file) => /\.(ts|tsx)$/.test(file)),
   ];
   return files
-    .filter((file) => !/[\\/]lib[\\/]weather(Store|Service|EdgeFunctionSpec)\.ts$/.test(file))
+    .filter((file) => !/[\\/]lib[\\/]openWeatherClient\.ts$/.test(file))
+    .filter((file) => !/[\\/]lib[\\/]weatherEdgeFunctionSpec\.ts$/.test(file))
     .filter((file) => readIfExists(file).includes("supabase.functions.invoke('get-weather'"))
     .map((file) => relPath(root, file));
 }
@@ -68,11 +69,13 @@ export function buildWeatherProductionReadinessResult(options = {}) {
     result: path.join(root, RESULT_RELATIVE_PATH),
     evidence: path.join(root, EVIDENCE_RELATIVE_PATH),
     weatherService: path.join(root, 'lib', 'weatherService.ts'),
+    weatherBroker: path.join(root, 'lib', 'weatherBroker.ts'),
     weatherStore: path.join(root, 'lib', 'weatherStore.ts'),
     useOperationalWeather: path.join(root, 'lib', 'useOperationalWeather.ts'),
     weatherFreshness: path.join(root, 'lib', 'weatherFreshness.ts'),
     ecsWeather: path.join(root, 'lib', 'ecsWeather.ts'),
     weatherDiagnostics: path.join(root, 'lib', 'weatherDiagnostics.ts'),
+    openWeatherClient: path.join(root, 'lib', 'openWeatherClient.ts'),
     weatherBriefPublisher: path.join(root, 'lib', 'weatherBriefPublisher.ts'),
     dispatchLiveAggregator: path.join(root, 'lib', 'dispatchLiveAggregator.ts'),
     navigate: path.join(root, 'app', '(tabs)', 'navigate.tsx'),
@@ -84,11 +87,13 @@ export function buildWeatherProductionReadinessResult(options = {}) {
 
   const evidence = readJsonIfExists(paths.evidence);
   const weatherService = readIfExists(paths.weatherService);
+  const weatherBroker = readIfExists(paths.weatherBroker);
   const weatherStore = readIfExists(paths.weatherStore);
   const useOperationalWeather = readIfExists(paths.useOperationalWeather);
   const weatherFreshness = readIfExists(paths.weatherFreshness);
   const ecsWeather = readIfExists(paths.ecsWeather);
   const weatherDiagnostics = readIfExists(paths.weatherDiagnostics);
+  const openWeatherClient = readIfExists(paths.openWeatherClient);
   const weatherBriefPublisher = readIfExists(paths.weatherBriefPublisher);
   const dispatchLiveAggregator = readIfExists(paths.dispatchLiveAggregator);
   const navigate = readIfExists(paths.navigate);
@@ -105,18 +110,29 @@ export function buildWeatherProductionReadinessResult(options = {}) {
       weatherService.includes('export async function fetchSharedWeatherForCoordinates') &&
         weatherService.includes('resolveECSWeatherTarget') &&
         weatherService.includes('normalizeWeatherCoordinates') &&
-        weatherStore.includes("supabase.functions.invoke('get-weather'") &&
+        weatherService.includes('fetchWeatherThroughBroker') &&
+        weatherBroker.includes('buildWeatherBucket') &&
+        weatherBroker.includes('buildOpenWeatherExclude') &&
+        weatherBroker.includes('provider=openweather') &&
+        weatherBroker.includes('product=onecall3') &&
+        weatherStore.includes('invokeOpenWeatherOneCallEdgeFunction') &&
+        weatherStore.includes('providerExclude') &&
+        openWeatherClient.includes("supabase.functions.invoke('get-weather'") &&
+        openWeatherClient.includes('EXPO_PUBLIC_ECS_DISABLE_OPENWEATHER') &&
+        openWeatherClient.includes('EXPO_PUBLIC_ECS_WEATHER_DEBUG') &&
         useOperationalWeather.includes('fetchSharedWeatherForCoordinates') &&
         weatherIntelPanel.includes('fetchSharedWeatherForCoordinates') &&
         routeCorridorWeather.includes('fetchSharedWeatherForCoordinates') &&
         directInvocations.length === 0,
       [
         relPath(root, paths.weatherService),
+        relPath(root, paths.weatherBroker),
         relPath(root, paths.weatherStore),
+        relPath(root, paths.openWeatherClient),
         relPath(root, paths.useOperationalWeather),
         ...directInvocations,
       ],
-      ['Keep OpenWeather/NWS/provider invocation behind the shared service/store facade only.'],
+      ['Keep OpenWeather/NWS/provider invocation behind the shared service and central OpenWeather client only.'],
     ),
     check(
       'freshness_stale_cache_and_permission_states_are_explicit',

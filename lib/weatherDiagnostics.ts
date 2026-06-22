@@ -4,7 +4,7 @@ import type { ResolvedWeatherLocation } from './weatherLocationResolver';
 import type { ResolvedECSWeatherTarget } from './weatherService';
 import type { WeatherFetchResult } from './weatherStore';
 
-export const WEATHER_DIAGNOSTICS_DEBUG_FLAG = 'ECS_DEBUG_WEATHER';
+export const WEATHER_DIAGNOSTICS_DEBUG_FLAG = 'EXPO_PUBLIC_ECS_WEATHER_DEBUG';
 export const WEATHER_DIAGNOSTICS_TAG = '[WEATHER_DIAGNOSTICS]';
 export const DEFAULT_WEATHER_PROVIDER_ENDPOINT = 'supabase:functions/get-weather';
 

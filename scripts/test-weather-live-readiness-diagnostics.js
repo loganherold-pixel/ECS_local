@@ -280,10 +280,12 @@ async function run() {
   assert(!sanitizeWeatherProviderEndpoint('get-weather?token=abc123').includes('abc123'), 'Token-like provider endpoint values should be redacted.');
 
   const weatherStoreSource = read('lib/weatherStore.ts');
-  assertIncludes(weatherStoreSource, "invokeWeatherEdgeFunction({ coordinates, units })", 'Forecast fetches should use coordinate arrays for route/shared weather.');
-  assertIncludes(weatherStoreSource, "invokeWeatherEdgeFunction({ lat, lon, units })", 'Single-location weather fetches should send lat/lon, not city names.');
+  assertIncludes(weatherStoreSource, "invokeWeatherEdgeFunction({\n        coordinates,\n        units,", 'Forecast fetches should use coordinate arrays for route/shared weather through the central OpenWeather client.');
+  assertIncludes(weatherStoreSource, "invokeWeatherEdgeFunction({\n        lat,\n        lon,\n        units,", 'Single-location weather fetches should send lat/lon, not city names.');
+  assertIncludes(weatherStoreSource, "context?.providerExclude ? { exclude: context.providerExclude } : null", 'Broker-shaped weather requests should forward OpenWeather exclude parameters.');
 
   const weatherServiceSource = read('lib/weatherService.ts');
+  assertIncludes(weatherServiceSource, 'fetchWeatherThroughBroker', 'Shared weather service should route provider requests through the ECS Weather Broker.');
   assertIncludes(weatherServiceSource, 'const fallbackSnapshots = hasUsableWeatherFetchResult(result)', 'Shared weather service should keep recent valid snapshots for provider failure fallback.');
   assertIncludes(weatherServiceSource, 'getRecentValidSnapshots(requestCoordinates, units)', 'Provider failure should use recent coordinate-keyed weather cache when available.');
 
@@ -293,6 +295,7 @@ async function run() {
   assertIncludes(operationalWeatherSource, 'logWeatherDiagnostics({', 'Shared operational weather should emit debug-gated diagnostics.');
 
   const diagnosticsSource = read('lib/weatherDiagnostics.ts');
+  assertIncludes(diagnosticsSource, "WEATHER_DIAGNOSTICS_DEBUG_FLAG = 'EXPO_PUBLIC_ECS_WEATHER_DEBUG'", 'Weather diagnostics should use the explicit Expo weather debug flag.');
   assertIncludes(diagnosticsSource, "debugFlag: WEATHER_DIAGNOSTICS_DEBUG_FLAG", 'Weather diagnostics logs should be gated behind the explicit weather debug flag.');
   assertIncludes(diagnosticsSource, "tag: WEATHER_DIAGNOSTICS_TAG", 'Weather diagnostics logs should be easy to filter in dev consoles.');
 

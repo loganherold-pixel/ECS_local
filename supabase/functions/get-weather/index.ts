@@ -477,12 +477,23 @@ function deriveAlerts(current: any, dailyForecast: any[], units: Units): Weather
   return alerts;
 }
 
-async function fetchCoordinateWeather(coord: InputCoordinate, units: Units) {
+function normalizeOneCallExclude(value: unknown): string {
+  const allowed = new Set(["current", "minutely", "hourly", "daily", "alerts"]);
+  const raw = typeof value === "string" && value.trim()
+    ? value.split(",").map(part => part.trim().toLowerCase()).filter(Boolean)
+    : ["minutely"];
+  const normalized = Array.from(new Set(raw.filter(part => allowed.has(part))));
+  if (!normalized.length) return "minutely";
+  if (!normalized.includes("minutely")) normalized.push("minutely");
+  return normalized.join(",");
+}
+
+async function fetchCoordinateWeather(coord: InputCoordinate, units: Units, exclude: string) {
   const params = new URLSearchParams({
     lat: String(coord.lat),
     lon: String(coord.lng),
     units,
-    exclude: "minutely",
+    exclude,
     appid: OPENWEATHER_API_KEY ?? "",
   });
   const oneCallData = await fetchJson(`${ONE_CALL_PROVIDER.endpoint}?${params.toString()}`);
@@ -545,11 +556,12 @@ serve(async (req) => {
     }
 
     const units: Units = (body as any).units === "metric" ? "metric" : "imperial";
+    const exclude = normalizeOneCallExclude((body as any).exclude);
 
     const results = await Promise.all(
       coordinates.map(async (coord) => {
         try {
-          return await fetchCoordinateWeather(coord, units);
+          return await fetchCoordinateWeather(coord, units, exclude);
         } catch (error) {
           const providerError = error instanceof WeatherProviderError ? error : null;
           return {
@@ -603,6 +615,7 @@ serve(async (req) => {
         units,
         provider: ONE_CALL_PROVIDER.id,
         provider_metadata: ONE_CALL_PROVIDER,
+        provider_request: { exclude },
         errors,
       });
     }
@@ -613,6 +626,7 @@ serve(async (req) => {
       units,
       provider: ONE_CALL_PROVIDER.id,
       provider_metadata: ONE_CALL_PROVIDER,
+      provider_request: { exclude },
       errors,
     };
 

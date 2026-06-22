@@ -4,12 +4,12 @@ import {
   type ECSWeatherSourceType,
 } from './ecsWeather';
 import {
-  fetchWeatherWithStatus,
   getAnyCachedWeather,
   getCachedWeatherResult,
   hasUsableWeatherFetchResult,
   type WeatherFetchResult,
 } from './weatherStore';
+import { fetchWeatherThroughBroker } from './weatherBroker';
 import {
   formatWeatherCoordinateLabel,
   isValidWeatherLocationCoordinate,
@@ -374,7 +374,17 @@ export async function fetchSharedWeatherForCoordinates(
     ...coordinate,
     label: locationResolutions[index]?.displayLabel ?? coordinate.label ?? formatWeatherCoordinateLabel(coordinate),
   }));
-  const result = await fetchWeatherWithStatus(requestCoordinates, units, forceRefresh);
+  const result = await fetchWeatherThroughBroker(requestCoordinates, units, forceRefresh, {
+    sourceType,
+    useCase: sourceType === 'route_segment' || sourceType === 'route_origin'
+      ? 'active_navigation'
+      : sourceType === 'current_location'
+        ? 'active_navigation'
+        : 'explore_list',
+    sections: sourceType === 'route_segment' || sourceType === 'route_origin'
+      ? ['current', 'alerts']
+      : ['current', 'hourly', 'daily', 'alerts'],
+  });
   const snapshots = buildSharedWeatherSnapshots({
     result,
     coordinates: requestCoordinates,

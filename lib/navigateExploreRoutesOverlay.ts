@@ -7,6 +7,7 @@ import type { CompatibilityResult } from './rigCompatibilityEngine';
 import { buildExploreNavigationPayload } from './navigationHandoffStore';
 import { getExploreRoutePreviewRoutePoints } from './exploreRoutePreview';
 import type { AIGeneratedRoute } from './aiRouteTypes';
+import { simplifyRouteGeometryForPreview } from './explore/exploreMapPreviewOptimization';
 
 export const EXPLORE_ROUTES_AI_CATEGORY = 'all-drivable-trails';
 
@@ -65,6 +66,7 @@ const CATEGORY_LABELS: Record<ExploreRouteOverlayCategory, string> = {
 
 const DEFAULT_CATEGORY_LIMIT = 8;
 const DEFAULT_TOTAL_LIMIT = 60;
+const EXPLORE_ROUTE_OVERLAY_PREVIEW_MAX_POINTS = 48;
 
 function routeIdentity(route: ExpeditionOpportunity): string {
   const routeWithSource = route as ExpeditionOpportunity & {
@@ -85,18 +87,25 @@ function routeIdentity(route: ExpeditionOpportunity): string {
 
 function toOverlaySegment(candidate: ExploreRouteCandidate): ExploreRouteOverlaySegment | null {
   const payload = buildExploreNavigationPayload(candidate.route);
-  const coordinates = getExploreRoutePreviewRoutePoints(payload)
+  const coordinates = simplifyRouteGeometryForPreview(
+    getExploreRoutePreviewRoutePoints(payload)
+      .map((point) => ({
+        latitude: Number(point.lat),
+        longitude: Number(point.lng),
+      }))
+      .filter(
+        (point) =>
+          Number.isFinite(point.latitude) &&
+          Number.isFinite(point.longitude) &&
+          Math.abs(point.latitude) <= 90 &&
+          Math.abs(point.longitude) <= 180,
+      ),
+    { maxPoints: EXPLORE_ROUTE_OVERLAY_PREVIEW_MAX_POINTS },
+  )
     .map((point) => ({
-      latitude: Number(point.lat),
-      longitude: Number(point.lng),
-    }))
-    .filter(
-      (point) =>
-        Number.isFinite(point.latitude) &&
-        Number.isFinite(point.longitude) &&
-        Math.abs(point.latitude) <= 90 &&
-        Math.abs(point.longitude) <= 180,
-    );
+      latitude: point.latitude,
+      longitude: point.longitude,
+    }));
 
   if (coordinates.length < 2) return null;
 
