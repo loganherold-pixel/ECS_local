@@ -164,6 +164,10 @@ assert.strictEqual(logged[0].payload.slowestPhase.phase, 'route_catalog_query');
   'buildExplorePerformanceSummary',
   'logExplorePerformanceDiagnostic',
   'route_catalog_query',
+  'createLiveTrailPackCatalogRefreshKey',
+  'pendingRefreshesByKey',
+  'pendingRefreshesByKey.get(refreshKey)',
+  'pendingRefreshesByKey.delete(refreshKey)',
 ].forEach((needle) => {
   assert(liveCatalogSource.includes(needle), `Live route catalog refresh should wire performance diagnostic ${needle}.`);
 });

@@ -65,6 +65,7 @@ type Listener = () => void;
 
 const listeners = new Set<Listener>();
 let refreshRequestSequence = 0;
+const pendingRefreshesByKey = new Map<string, Promise<LiveTrailPackCatalogSnapshot>>();
 let snapshot: LiveTrailPackCatalogSnapshot = {
   trailPacks: [],
   status: 'idle',
@@ -479,6 +480,22 @@ export function buildRouteCatalogSearchBody(
   };
 }
 
+function stableRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.keys(value)
+    .sort()
+    .reduce<Record<string, unknown>>((acc, key) => {
+      const entry = value[key];
+      acc[key] = Array.isArray(entry) ? [...entry].sort() : entry;
+      return acc;
+    }, {});
+}
+
+export function createLiveTrailPackCatalogRefreshKey(
+  criteria: LiveTrailPackCatalogSearchCriteria = {},
+): string {
+  return JSON.stringify(stableRecord(buildRouteCatalogSearchBody(criteria)));
+}
+
 async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchCriteria = {}): Promise<{
   trailPacks: ECSTrailPack[];
   coverageState: RouteCatalogCoverageState;
@@ -608,6 +625,19 @@ async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {
 export async function refreshLiveTrailPackCatalog(
   criteria: LiveTrailPackCatalogSearchCriteria = {},
 ): Promise<LiveTrailPackCatalogSnapshot> {
+  const refreshKey = createLiveTrailPackCatalogRefreshKey(criteria);
+  const pendingRefresh = pendingRefreshesByKey.get(refreshKey);
+  if (pendingRefresh) {
+    if (snapshot.status !== 'loading') {
+      setSnapshot({
+        ...snapshot,
+        status: 'loading',
+        error: null,
+      });
+    }
+    return pendingRefresh;
+  }
+
   const requestId = refreshRequestSequence + 1;
   refreshRequestSequence = requestId;
   setSnapshot({
@@ -619,47 +649,54 @@ export async function refreshLiveTrailPackCatalog(
   const loadedAt = new Date().toISOString();
   let routeCatalogError: Error | null = null;
 
-  try {
-    const routeCatalog = await fetchRouteCatalogTrailPacks(criteria);
-    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-    return setSnapshot({
-      trailPacks: routeCatalog.trailPacks,
-      status: 'ready',
-      error: null,
-      lastLoadedAt: loadedAt,
-      coverageState: routeCatalog.coverageState,
-      searchMeta: routeCatalog.searchMeta,
-      source: 'route_catalog',
-    });
-  } catch (error) {
-    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-    routeCatalogError = error instanceof Error ? error : new Error('Verified route catalog unavailable.');
-  }
+  const refreshPromise = (async () => {
+    try {
+      const routeCatalog = await fetchRouteCatalogTrailPacks(criteria);
+      if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+      return setSnapshot({
+        trailPacks: routeCatalog.trailPacks,
+        status: 'ready',
+        error: null,
+        lastLoadedAt: loadedAt,
+        coverageState: routeCatalog.coverageState,
+        searchMeta: routeCatalog.searchMeta,
+        source: 'route_catalog',
+      });
+    } catch (error) {
+      if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+      routeCatalogError = error instanceof Error ? error : new Error('Verified route catalog unavailable.');
+    }
 
-  try {
-    const legacyTrailPacks = await fetchLegacyTrailPacks();
-    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-    return setSnapshot({
-      trailPacks: legacyTrailPacks,
-      status: 'ready',
-      error: routeCatalogError.message,
-      lastLoadedAt: loadedAt,
-      coverageState: getRouteCatalogCoverageState(legacyTrailPacks, { userHasCriteria: false }),
-      searchMeta: null,
-      source: 'trail_packs_fallback',
-    });
-  } catch (error) {
-    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-    return setSnapshot({
-      trailPacks: [],
-      status: 'error',
-      error: error instanceof Error ? error.message : routeCatalogError.message,
-      lastLoadedAt: loadedAt,
-      coverageState: getRouteCatalogCoverageState([], { unavailable: true }),
-      searchMeta: null,
-      source: 'unavailable',
-    });
-  }
+    try {
+      const legacyTrailPacks = await fetchLegacyTrailPacks();
+      if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+      return setSnapshot({
+        trailPacks: legacyTrailPacks,
+        status: 'ready',
+        error: routeCatalogError.message,
+        lastLoadedAt: loadedAt,
+        coverageState: getRouteCatalogCoverageState(legacyTrailPacks, { userHasCriteria: false }),
+        searchMeta: null,
+        source: 'trail_packs_fallback',
+      });
+    } catch (error) {
+      if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+      return setSnapshot({
+        trailPacks: [],
+        status: 'error',
+        error: error instanceof Error ? error.message : routeCatalogError.message,
+        lastLoadedAt: loadedAt,
+        coverageState: getRouteCatalogCoverageState([], { unavailable: true }),
+        searchMeta: null,
+        source: 'unavailable',
+      });
+    }
+  })().finally(() => {
+    pendingRefreshesByKey.delete(refreshKey);
+  });
+
+  pendingRefreshesByKey.set(refreshKey, refreshPromise);
+  return refreshPromise;
 }
 
 export const liveTrailPackCatalogStore = {
