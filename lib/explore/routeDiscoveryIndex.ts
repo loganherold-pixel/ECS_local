@@ -35,6 +35,12 @@ export type RouteDiscoveryCoordinate = {
   longitude: number;
 };
 
+export type RouteDiscoveryCoordinateBucket = {
+  coordinate: RouteDiscoveryCoordinate;
+  bucketKey: string;
+  bucketSizeDegrees: number;
+};
+
 export type RouteDiscoveryBounds = {
   minLatitude: number;
   minLongitude: number;
@@ -132,6 +138,7 @@ const DEFAULT_FIRST_BATCH_SIZE = 12;
 const DEFAULT_BATCH_SIZE = 24;
 const DEFAULT_CACHE_TTL_MS = 60_000;
 const DEFAULT_CACHE_STALE_MS = 240_000;
+export const ROUTE_DISCOVERY_COORDINATE_BUCKET_DEGREES = 0.05;
 
 function finiteNumber(value: unknown): number | null {
   const number = Number(value);
@@ -589,18 +596,32 @@ export function getNextRouteDiscoveryBatch(
   };
 }
 
-function roundedCoordinate(value: number): string {
-  return (Math.round(value * 100) / 100).toFixed(2);
+function bucketCoordinateValue(value: number, bucketSizeDegrees: number): number {
+  return Number((Math.floor(value / bucketSizeDegrees) * bucketSizeDegrees).toFixed(4));
+}
+
+export function normalizeRouteDiscoveryCoordinateBucket(
+  coordinate: RouteDiscoveryCoordinate,
+  options: { bucketSizeDegrees?: number } = {},
+): RouteDiscoveryCoordinateBucket {
+  const bucketSizeDegrees = positiveNumber(options.bucketSizeDegrees) ?? ROUTE_DISCOVERY_COORDINATE_BUCKET_DEGREES;
+  const latitude = bucketCoordinateValue(coordinate.latitude, bucketSizeDegrees);
+  const longitude = bucketCoordinateValue(coordinate.longitude, bucketSizeDegrees);
+  return {
+    coordinate: { latitude, longitude },
+    bucketKey: `${latitude.toFixed(2)},${longitude.toFixed(2)}@${bucketSizeDegrees.toFixed(2)}`,
+    bucketSizeDegrees,
+  };
 }
 
 export function createRouteDiscoveryCacheKey(
   index: Pick<RouteDiscoveryIndex, 'versionHash'>,
   query: Pick<RouteDiscoveryIndexQuery, 'coordinate' | 'radiusMiles' | 'refinement' | 'guidanceReadyOnly'>,
 ): string {
+  const bucket = normalizeRouteDiscoveryCoordinateBucket(query.coordinate);
   return [
     index.versionHash,
-    roundedCoordinate(query.coordinate.latitude),
-    roundedCoordinate(query.coordinate.longitude),
+    bucket.bucketKey,
     Math.round(query.radiusMiles),
     query.refinement ?? 'all',
     query.guidanceReadyOnly ? 'guidance_ready' : 'all_geometry',

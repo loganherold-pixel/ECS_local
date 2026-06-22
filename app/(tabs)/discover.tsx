@@ -207,6 +207,7 @@ import {
 } from '../../lib/exploreFilterStateStore';
 import {
   buildRouteDiscoveryIndex,
+  normalizeRouteDiscoveryCoordinateBucket,
   planRouteDiscoveryImagePrefetch,
   queryTrailPackDiscoveryIndexCached,
   revalidateTrailPackDiscoveryIndexCache,
@@ -1152,12 +1153,23 @@ function DiscoverScreenInner() {
       : { latitude: userLat, longitude: userLng },
     [routeCatalogEffectiveSearchArea, userLat, userLng],
   );
+  const routeCatalogSearchBucket = normalizeRouteDiscoveryCoordinateBucket(routeCatalogSearchCoordinate);
+  const routeCatalogSearchBucketKey = routeCatalogSearchBucket.bucketKey;
+  const stableRouteCatalogSearchLatitude = routeCatalogSearchBucket.coordinate.latitude;
+  const stableRouteCatalogSearchLongitude = routeCatalogSearchBucket.coordinate.longitude;
+  const stableRouteCatalogSearchCoordinate = useMemo(
+    () => ({
+      latitude: stableRouteCatalogSearchLatitude,
+      longitude: stableRouteCatalogSearchLongitude,
+    }),
+    [stableRouteCatalogSearchLatitude, stableRouteCatalogSearchLongitude],
+  );
   const routeCatalogSearchCriteria = useMemo(
     () => {
-      const routeCatalogLocationCriteria = routeCatalogEffectiveSearchArea
+      const routeCatalogLocationCriteria = routeCatalogHasSearchArea
         ? {
-            latitude: routeCatalogEffectiveSearchArea.latitude,
-            longitude: routeCatalogEffectiveSearchArea.longitude,
+            latitude: stableRouteCatalogSearchCoordinate.latitude,
+            longitude: stableRouteCatalogSearchCoordinate.longitude,
             radiusMiles: activeDistanceRadius,
           }
         : {};
@@ -1166,12 +1178,15 @@ function DiscoverScreenInner() {
         vehicleClass: vehicleProfile?.vehicleType ?? null,
         availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
         availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal,
-        locationSource: routeCatalogEffectiveSearchArea ? routeCatalogEffectiveSearchArea.source : 'search_area_required',
+        locationSource: routeCatalogEffectiveSearchArea?.source ?? 'search_area_required',
       };
     },
     [
       activeDistanceRadius,
-      routeCatalogEffectiveSearchArea,
+      routeCatalogEffectiveSearchArea?.source,
+      routeCatalogHasSearchArea,
+      stableRouteCatalogSearchCoordinate.latitude,
+      stableRouteCatalogSearchCoordinate.longitude,
       vehicleProfile?.fuel_range_miles,
       vehicleProfile?.water_capacity_gal,
       vehicleProfile?.vehicleType,
@@ -1180,8 +1195,7 @@ function DiscoverScreenInner() {
   const explorePerformanceSearchKey = useMemo(
     () => [
       routeCatalogEffectiveSearchArea?.source ?? 'fallback_location',
-      Number(routeCatalogSearchCoordinate.latitude).toFixed(4),
-      Number(routeCatalogSearchCoordinate.longitude).toFixed(4),
+      routeCatalogSearchBucketKey,
       activeDistanceRadius,
       exploreRefinement ?? 'all_refinements',
       vehicleProfile?.vehicleType ?? 'no_vehicle',
@@ -1190,8 +1204,7 @@ function DiscoverScreenInner() {
       activeDistanceRadius,
       exploreRefinement,
       routeCatalogEffectiveSearchArea?.source,
-      routeCatalogSearchCoordinate.latitude,
-      routeCatalogSearchCoordinate.longitude,
+      routeCatalogSearchBucketKey,
       vehicleProfile?.vehicleType,
     ],
   );
@@ -1199,14 +1212,11 @@ function DiscoverScreenInner() {
     const startedAtMs = getExplorePerformanceNow();
     const [
       locationSource = 'fallback_location',
-      latitudeText = '',
-      longitudeText = '',
+      bucketKey = '',
       radiusText = '',
       refinementText = 'all_refinements',
       vehicleType = 'no_vehicle',
     ] = explorePerformanceSearchKey.split('|');
-    const latitude = Number(latitudeText);
-    const longitude = Number(longitudeText);
     const radiusMiles = Number(radiusText);
     const run = createExplorePerformanceRun({
       flow: 'nearby_route_discovery',
@@ -1217,6 +1227,7 @@ function DiscoverScreenInner() {
         refinement: refinementText === 'all_refinements' ? null : refinementText,
         hasGPSFix: locationSource === 'live_gps',
         locationSource,
+        coordinateBucket: bucketKey,
         vehicleType,
       },
     });
@@ -1232,8 +1243,7 @@ function DiscoverScreenInner() {
       endedAtMs: startedAtMs,
       metadata: {
         radiusMiles: Number.isFinite(radiusMiles) ? radiusMiles : null,
-        latitude: Number.isFinite(latitude) ? latitude : null,
-        longitude: Number.isFinite(longitude) ? longitude : null,
+        coordinateBucket: bucketKey,
       },
     });
     return run;
@@ -1339,7 +1349,7 @@ function DiscoverScreenInner() {
       void routeDiscoveryRefreshRevision;
       const startedAtMs = getExplorePerformanceNow();
       const result = queryTrailPackDiscoveryIndexCached(routeDiscoveryIndex, {
-        coordinate: routeCatalogSearchCoordinate,
+        coordinate: stableRouteCatalogSearchCoordinate,
         radiusMiles: trailPackDiscoveryRadius,
         refinement: exploreRefinement,
         firstBatchSize: EXPLORE_ROUTE_DISCOVERY_FIRST_BATCH_SIZE,
@@ -1377,13 +1387,13 @@ function DiscoverScreenInner() {
       trailPackFeedbackConfidenceInputs,
       trailPackFeedbackReviewStates,
       ownerTrailPackIds,
-      routeCatalogSearchCoordinate,
+      stableRouteCatalogSearchCoordinate,
     ],
   );
   const broaderTrailPackDiscovery = useMemo(
     () =>
       queryTrailPackDiscoveryIndexCached(routeDiscoveryIndex, {
-        coordinate: routeCatalogSearchCoordinate,
+        coordinate: stableRouteCatalogSearchCoordinate,
         radiusMiles: trailPackDiscoveryRadius,
         refinement: exploreRefinement,
         firstBatchSize: EXPLORE_ROUTE_DISCOVERY_FIRST_BATCH_SIZE,
@@ -1398,7 +1408,7 @@ function DiscoverScreenInner() {
     [
       exploreRefinement,
       routeDiscoveryIndex,
-      routeCatalogSearchCoordinate,
+      stableRouteCatalogSearchCoordinate,
       trailPackDiscoveryRadius,
       ownerTrailPackIds,
       trailPackFeedbackConfidenceInputs,
@@ -1434,7 +1444,7 @@ function DiscoverScreenInner() {
     const timer = setTimeout(() => {
       if (!mountedRef.current) return;
       const refreshed = revalidateTrailPackDiscoveryIndexCache(routeDiscoveryIndex, {
-        coordinate: routeCatalogSearchCoordinate,
+        coordinate: stableRouteCatalogSearchCoordinate,
         radiusMiles: trailPackDiscoveryRadius,
         refinement: exploreRefinement,
         firstBatchSize: EXPLORE_ROUTE_DISCOVERY_FIRST_BATCH_SIZE,
@@ -1455,7 +1465,7 @@ function DiscoverScreenInner() {
     exploreRefinement,
     indexedTrailPackDiscovery.shouldRevalidate,
     ownerTrailPackIds,
-    routeCatalogSearchCoordinate,
+    stableRouteCatalogSearchCoordinate,
     routeDiscoveryIndex,
     trailPackDiscoveryRadius,
     trailPackFeedbackConfidenceInputs,
@@ -3605,6 +3615,7 @@ function DiscoverScreenInner() {
     showSectionLoading ||
     liveTrailPackCatalogSnapshot.status === 'idle' ||
     liveTrailPackCatalogSnapshot.status === 'loading';
+  const showTrailPackBlockingLoading = showTrailPackSectionLoading && visibleTrailPacks.length === 0;
   const handleTrailPackThumbnailLoadDuration = useCallback((
     durationMs: number,
     metadata: Record<string, unknown>,
@@ -4272,7 +4283,7 @@ function DiscoverScreenInner() {
             />
           );
         }
-        if (showTrailPackSectionLoading) {
+        if (showTrailPackBlockingLoading) {
           return (
             <ExplorerStateCard
               icon="hourglass-outline"
@@ -4324,6 +4335,14 @@ function DiscoverScreenInner() {
                 <Ionicons name="map-outline" size={12} color={TACTICAL.info} />
                 <Text style={s.inlineSectionNoticeText}>
                   Showing verified routes within {activeDistanceRadius} mi of {routeCatalogEffectiveSearchArea.shortLabel}.
+                </Text>
+              </View>
+            ) : null}
+            {showTrailPackSectionLoading ? (
+              <View style={s.inlineSectionNotice}>
+                <Ionicons name="refresh-outline" size={12} color={TACTICAL.amber} />
+                <Text style={s.inlineSectionNoticeText}>
+                  Refreshing nearby Trail Packs. Current results stay visible while ECS updates this list.
                 </Text>
               </View>
             ) : null}

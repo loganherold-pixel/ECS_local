@@ -25,11 +25,12 @@ assert(
 
 assert(
   discover.includes('routeCatalogLocationCriteria') &&
-    discover.includes('routeCatalogEffectiveSearchArea') &&
-    discover.includes('latitude: routeCatalogEffectiveSearchArea.latitude') &&
-    discover.includes('longitude: routeCatalogEffectiveSearchArea.longitude') &&
-    discover.includes("locationSource: routeCatalogEffectiveSearchArea ? routeCatalogEffectiveSearchArea.source : 'search_area_required'"),
-  'Explore should only send radius-bounded route-catalog searches when a live GPS or explicit search area exists, never around the Kansas fallback.',
+    discover.includes('routeCatalogHasSearchArea') &&
+    discover.includes('stableRouteCatalogSearchCoordinate') &&
+    discover.includes('latitude: stableRouteCatalogSearchCoordinate.latitude') &&
+    discover.includes('longitude: stableRouteCatalogSearchCoordinate.longitude') &&
+    discover.includes("locationSource: routeCatalogEffectiveSearchArea?.source ?? 'search_area_required'"),
+  'Explore should only send radius-bounded route-catalog searches from a stable live GPS/search-area bucket, never around the Kansas fallback or raw GPS jitter.',
 );
 
 assert(

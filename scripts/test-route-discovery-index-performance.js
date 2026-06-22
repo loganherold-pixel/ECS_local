@@ -32,6 +32,7 @@ const {
   createRouteDiscoveryCache,
   createRouteDiscoveryCacheKey,
   createRouteDiscoveryImageCache,
+  normalizeRouteDiscoveryCoordinateBucket,
   getNextRouteDiscoveryBatch,
   planRouteDiscoveryImagePrefetch,
   queryRouteDiscoveryIndex,
@@ -212,6 +213,47 @@ const cacheKey = createRouteDiscoveryCacheKey(index, {
 assert(cacheKey.includes('catalog-v1'));
 assert(cacheKey.includes('100'));
 
+const jitterBucketA = normalizeRouteDiscoveryCoordinateBucket({
+  latitude: 38.921,
+  longitude: -120.779,
+});
+const jitterBucketB = normalizeRouteDiscoveryCoordinateBucket({
+  latitude: 38.944,
+  longitude: -120.752,
+});
+assert.strictEqual(
+  jitterBucketA.bucketKey,
+  jitterBucketB.bucketKey,
+  'Nearby GPS jitter should remain in the same Explore discovery bucket.',
+);
+assert.deepStrictEqual(
+  jitterBucketA.coordinate,
+  { latitude: 38.9, longitude: -120.8 },
+  'Explore discovery buckets should be coarse enough to avoid refresh churn.',
+);
+const movedBucket = normalizeRouteDiscoveryCoordinateBucket({
+  latitude: 38.981,
+  longitude: -120.752,
+});
+assert.notStrictEqual(
+  movedBucket.bucketKey,
+  jitterBucketA.bucketKey,
+  'Meaningful location movement should create a new discovery bucket.',
+);
+assert.strictEqual(
+  createRouteDiscoveryCacheKey(index, {
+    coordinate: jitterBucketA.coordinate,
+    radiusMiles: 100,
+    refinement: 'dayTrip',
+  }),
+  createRouteDiscoveryCacheKey(index, {
+    coordinate: jitterBucketB.coordinate,
+    radiusMiles: 100,
+    refinement: 'dayTrip',
+  }),
+  'Stable Explore discovery buckets should reuse cached nearby results across jitter.',
+);
+
 const uncached = queryRouteDiscoveryIndex(index, {
   coordinate: userNearTahoe,
   radiusMiles: 100,
@@ -363,11 +405,18 @@ assert.notStrictEqual(fallbackImageEntry.thumbnail.state, 'suppressed_mismatch')
   'queryTrailPackDiscoveryIndexCached',
   'revalidateTrailPackDiscoveryIndexCache',
   'planRouteDiscoveryImagePrefetch',
+  'normalizeRouteDiscoveryCoordinateBucket',
+  'stableRouteCatalogSearchCoordinate',
+  'showTrailPackBlockingLoading',
   'routeDiscoveryVisibleCount',
   'EXPLORE_ROUTE_DISCOVERY_FIRST_BATCH_SIZE',
 ].forEach((needle) => {
   assert(discoverSource.includes(needle), `Explore should use indexed route discovery wiring: ${needle}.`);
 });
+assert(
+  !discoverSource.includes('Number(routeCatalogSearchCoordinate.latitude).toFixed(4)'),
+  'Explore performance/search keys should use the stable route discovery bucket, not raw GPS precision.',
+);
 assert(
   !discoverSource.includes('getDiscoverableTrailPacks,'),
   'Explore should not route nearby Trail Pack discovery through the full geometry-heavy helper import.',
