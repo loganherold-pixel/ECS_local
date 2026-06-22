@@ -1331,14 +1331,15 @@ function DiscoverScreenInner() {
       buildRouteDiscoveryIndex(trailPackCatalog, {
         catalogVersionHash: [
           liveTrailPackCatalogSnapshot.source,
-          liveTrailPackCatalogSnapshot.lastLoadedAt,
+          ...trailPackCatalog
+            .map((pack) => `${pack.id}:${pack.updatedAt ?? ''}:${pack.reviewStatus ?? ''}:${pack.confidenceScore ?? ''}`)
+            .sort(),
           liveTrailPackCatalogSnapshot.trailPacks.length,
           trailPackSubmissionSnapshot.submissions.length,
         ].join('|'),
       }),
     [
       trailPackCatalog,
-      liveTrailPackCatalogSnapshot.lastLoadedAt,
       liveTrailPackCatalogSnapshot.source,
       liveTrailPackCatalogSnapshot.trailPacks.length,
       trailPackSubmissionSnapshot.submissions.length,

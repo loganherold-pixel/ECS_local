@@ -418,6 +418,10 @@ assert(
   'Explore performance/search keys should use the stable route discovery bucket, not raw GPS precision.',
 );
 assert(
+  !discoverSource.includes('liveTrailPackCatalogSnapshot.lastLoadedAt,\n          liveTrailPackCatalogSnapshot.trailPacks.length'),
+  'Explore route discovery index versioning should not include refresh timestamps that reset visible batches for identical route data.',
+);
+assert(
   !discoverSource.includes('getDiscoverableTrailPacks,'),
   'Explore should not route nearby Trail Pack discovery through the full geometry-heavy helper import.',
 );
