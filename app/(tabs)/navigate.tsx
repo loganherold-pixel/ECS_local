@@ -4473,6 +4473,8 @@ const queueMapCameraCommand = useCallback((
   const [offlineTileSyncSnapshot, setOfflineTileSyncSnapshot] = useState(() =>
     offlineTileSyncCoordinator.getSnapshot(),
   );
+  const activeGuidanceOfflinePrepStartingRef = useRef(false);
+  const [activeGuidanceOfflinePrepStarting, setActiveGuidanceOfflinePrepStarting] = useState(false);
   const [dismissedOfflineSyncCompletionNoticeIds, setDismissedOfflineSyncCompletionNoticeIds] =
     useState<Set<string>>(() => new Set());
   const [offlineSyncCompletionNotice, setOfflineSyncCompletionNotice] =
@@ -7780,6 +7782,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       unsubscribeTiles();
     };
   }, []);
+
+  const activeGuidanceOfflineSyncInProgress = offlineTileSyncSnapshot.activeJobs.some((job) =>
+    job.source === 'route-corridor' && job.syncType === 'route'
+  );
+  const activeGuidanceOfflineDownloadBusy = activeGuidanceOfflinePrepStarting || activeGuidanceOfflineSyncInProgress;
 
   useEffect(() => {
     let cancelled = false;
@@ -14150,7 +14157,7 @@ const handleTopToolboxLayout = useCallback(
 
     closeTopPopup('offlineCache');
     setToolsMenuOpen(false);
-    showToast('ROUTE OFFLINE SYNC STARTED');
+    showToast('Offline map download started. Progress is shown under OFFLINE.');
 
     void offlineTileSyncCoordinator
       .startRegionSync({
@@ -14216,6 +14223,15 @@ const handleTopToolboxLayout = useCallback(
   ]);
 
   const handlePrepareOfflineFromRoadPreview = useCallback(async () => {
+    if (activeGuidanceOfflinePrepStartingRef.current || activeGuidanceOfflineSyncInProgress) {
+      showToast('Offline map download is already in progress.');
+      return;
+    }
+
+    activeGuidanceOfflinePrepStartingRef.current = true;
+    setActiveGuidanceOfflinePrepStarting(true);
+
+    try {
     hapticCommand();
     const route = roadNavigation.session.route;
     if (!route || route.geometry.length < 2) {
@@ -14295,7 +14311,7 @@ const handleTopToolboxLayout = useCallback(
 
     closeTopPopup('offlineCache');
     setToolsMenuOpen(false);
-    showToast('ROUTE OFFLINE SYNC STARTED');
+    showToast('Offline map download started. Progress is shown under OFFLINE.');
 
     void offlineTileSyncCoordinator
       .startRegionSync({
@@ -14351,7 +14367,14 @@ const handleTopToolboxLayout = useCallback(
         }
         loadRuns();
       });
+    } finally {
+      activeGuidanceOfflinePrepStartingRef.current = false;
+      if (mountedRef.current) {
+        setActiveGuidanceOfflinePrepStarting(false);
+      }
+    }
   }, [
+    activeGuidanceOfflineSyncInProgress,
     activeRun,
     closeTopPopup,
     liveNavigateServicesEnabled,
@@ -20144,6 +20167,7 @@ const stableMapSurface = useMemo(() => {
         onPrimaryPreviewAction={handleRoadOverlayStartNavigation}
         onSelectRouteAlternative={roadNavigation.selectRouteAlternative}
         onPrepareOffline={handlePrepareOfflineFromRoadPreview}
+        offlineDownloadInProgress={activeGuidanceOfflineDownloadBusy}
         previewAccessory={previewReadinessAccessory}
         activeAccessory={activeReadinessAccessory}
       />
@@ -21217,6 +21241,7 @@ const stableMapSurface = useMemo(() => {
   previewReadinessAccessory,
   activeReadinessAccessory,
   navigationActiveContext,
+  activeGuidanceOfflineDownloadBusy,
   trailNavigationActive,
   routeBuilderActive,
   routeBuilderActiveExtensionMode,

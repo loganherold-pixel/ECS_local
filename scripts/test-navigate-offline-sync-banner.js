@@ -20,6 +20,7 @@ const navigate = read('app/(tabs)/navigate.tsx');
 const header = read('components/Header.tsx');
 const rootLayout = read('app/_layout.tsx');
 const chip = read('components/navigate/OfflineSyncStatusChip.tsx');
+const roadOverlay = read('components/navigate/RoadNavigationOverlay.tsx');
 
 assertIncludes(
   navigate,
@@ -30,6 +31,41 @@ assertIncludes(
   navigate,
   'connectionAccessory={<OfflineSyncStatusChip placement="banner" />}',
   'Navigate should place the compact sync bar inside the top banner connection stack.',
+);
+assertIncludes(
+  navigate,
+  "const activeGuidanceOfflineSyncInProgress = offlineTileSyncSnapshot.activeJobs.some((job) =>",
+  'Navigate should derive active route offline sync state from the shared coordinator snapshot.',
+);
+assertIncludes(
+  navigate,
+  "job.source === 'route-corridor' && job.syncType === 'route'",
+  'Navigate active offline sync guard should only treat route-corridor route syncs as active guidance downloads.',
+);
+assertIncludes(
+  navigate,
+  'const activeGuidanceOfflinePrepStartingRef = useRef(false);',
+  'Navigate should guard against fast repeat taps before the sync job reaches the coordinator snapshot.',
+);
+assertIncludes(
+  navigate,
+  'const activeGuidanceOfflineDownloadBusy = activeGuidanceOfflinePrepStarting || activeGuidanceOfflineSyncInProgress;',
+  'Navigate should combine the startup guard and coordinator state for active offline button disabling.',
+);
+assertIncludes(
+  navigate,
+  "showToast('Offline map download started. Progress is shown under OFFLINE.')",
+  'Starting active offline prep should show a pleasant confirmation toast.',
+);
+assertIncludes(
+  navigate,
+  "showToast('Offline map download is already in progress.')",
+  'Repeated active offline prep taps should produce clear duplicate-download feedback.',
+);
+assertIncludes(
+  navigate,
+  'offlineDownloadInProgress={activeGuidanceOfflineDownloadBusy}',
+  'Navigate should pass active offline download state into the active guidance overlay.',
 );
 assertIncludes(
   header,
@@ -86,6 +122,27 @@ assertNotIncludes(
   chip,
   'styles.bannerDetail',
   'Compact banner should not add a route/detail line.',
+);
+
+assertIncludes(
+  roadOverlay,
+  'offlineDownloadInProgress?: boolean;',
+  'RoadNavigationOverlay should accept active offline download state.',
+);
+assertIncludes(
+  roadOverlay,
+  'disabled={offlineDownloadInProgress}',
+  'Active guidance OFFLINE button should be disabled while an offline route sync is active.',
+);
+assertIncludes(
+  roadOverlay,
+  'accessibilityState={{ disabled: offlineDownloadInProgress }}',
+  'Disabled active guidance OFFLINE button should expose accessibility disabled state.',
+);
+assertIncludes(
+  roadOverlay,
+  'offlineDownloadInProgress && styles.activeGuidanceOfflineButtonDisabled',
+  'Active guidance OFFLINE button should gray out while an offline route sync is active.',
 );
 
 console.log('Navigate offline sync banner regression passed.');

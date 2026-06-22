@@ -118,6 +118,7 @@ type Props = {
   onPrimaryPreviewAction?: () => void;
   onSelectRouteAlternative?: (routeId: string) => void;
   onPrepareOffline?: () => void;
+  offlineDownloadInProgress?: boolean;
   onRouteOverview?: () => void;
   onOpenCommandBrief?: () => void;
   previewAccessory?: React.ReactNode;
@@ -843,6 +844,7 @@ function ActiveNavigationCard({
   onToggleActiveGuidanceMinimized,
   onActiveGuidanceLayout,
   onPrepareOffline,
+  offlineDownloadInProgress = false,
   activeContext,
   activeAccessory,
   activeAccessoryMinimized = false,
@@ -860,6 +862,7 @@ function ActiveNavigationCard({
   | 'onToggleActiveGuidanceMinimized'
   | 'onActiveGuidanceLayout'
   | 'onPrepareOffline'
+  | 'offlineDownloadInProgress'
   | 'activeAccessoryMinimized'
   | 'onExpandActiveAccessory'
   | 'activeContext'
@@ -1065,21 +1068,35 @@ function ActiveNavigationCard({
               ) : null}
               {onPrepareOffline ? (
                 <TouchableOpacity
-                  style={[styles.activeGuidanceTopActionPill, styles.activeGuidanceOfflineButton]}
+                  style={[
+                    styles.activeGuidanceTopActionPill,
+                    styles.activeGuidanceOfflineButton,
+                    offlineDownloadInProgress && styles.activeGuidanceOfflineButtonDisabled,
+                  ]}
                   onPress={onPrepareOffline}
-                  activeOpacity={0.82}
+                  activeOpacity={offlineDownloadInProgress ? 1 : 0.82}
+                  disabled={offlineDownloadInProgress}
                   hitSlop={8}
                   accessibilityRole="button"
+                  accessibilityState={{ disabled: offlineDownloadInProgress }}
                   accessibilityLabel="Prepare active route for offline use"
                 >
-                  <Ionicons name="cloud-download-outline" size={13} color={TACTICAL.amber} />
+                  <Ionicons
+                    name={offlineDownloadInProgress ? 'cloud-done-outline' : 'cloud-download-outline'}
+                    size={13}
+                    color={offlineDownloadInProgress ? TACTICAL.textMuted : TACTICAL.amber}
+                  />
                   <Text
-                    style={[styles.activeGuidanceTopActionText, styles.activeGuidanceOfflineButtonText]}
+                    style={[
+                      styles.activeGuidanceTopActionText,
+                      styles.activeGuidanceOfflineButtonText,
+                      offlineDownloadInProgress && styles.activeGuidanceOfflineButtonDisabledText,
+                    ]}
                     numberOfLines={1}
                     adjustsFontSizeToFit
                     minimumFontScale={0.72}
                   >
-                    OFFLINE
+                    {offlineDownloadInProgress ? 'SYNCING' : 'OFFLINE'}
                   </Text>
                 </TouchableOpacity>
               ) : null}
@@ -1353,6 +1370,7 @@ const RoadNavigationOverlay = React.memo(function RoadNavigationOverlay(props: P
           onToggleActiveGuidanceMinimized={props.onToggleActiveGuidanceMinimized}
           onActiveGuidanceLayout={props.onActiveGuidanceLayout}
           onPrepareOffline={props.onPrepareOffline}
+          offlineDownloadInProgress={props.offlineDownloadInProgress}
           activeAccessoryMinimized={props.activeAccessoryMinimized}
           onExpandActiveAccessory={props.onExpandActiveAccessory}
           activeContext={props.activeContext}
@@ -1938,8 +1956,16 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(196,138,44,0.08)',
   },
+  activeGuidanceOfflineButtonDisabled: {
+    borderColor: 'rgba(146,154,160,0.20)',
+    backgroundColor: 'rgba(146,154,160,0.08)',
+    opacity: 0.58,
+  },
   activeGuidanceOfflineButtonText: {
     color: TACTICAL.amber,
+  },
+  activeGuidanceOfflineButtonDisabledText: {
+    color: TACTICAL.textMuted,
   },
   activeGuidanceEndButton: {
     minWidth: 54,
