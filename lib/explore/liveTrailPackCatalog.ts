@@ -56,9 +56,13 @@ export type LiveTrailPackCatalogSnapshot = {
   status: LiveTrailPackCatalogStatus;
   error: string | null;
   lastLoadedAt: string | null;
+  lastRefreshAttemptAt: string | null;
   coverageState: RouteCatalogCoverageState;
   searchMeta: RouteCatalogSearchMeta | null;
   source: 'route_catalog' | 'trail_packs_fallback' | 'unavailable';
+  refreshKey: string | null;
+  preservedFromEmptyRefresh: boolean;
+  preservedReason: string | null;
 };
 
 type Listener = () => void;
@@ -71,9 +75,13 @@ let snapshot: LiveTrailPackCatalogSnapshot = {
   status: 'idle',
   error: null,
   lastLoadedAt: null,
+  lastRefreshAttemptAt: null,
   coverageState: getRouteCatalogCoverageState([], { userHasCriteria: false }),
   searchMeta: null,
   source: 'unavailable',
+  refreshKey: null,
+  preservedFromEmptyRefresh: false,
+  preservedReason: null,
 };
 
 const TRAIL_PACK_SELECT = [
@@ -170,6 +178,27 @@ function setSnapshot(next: LiveTrailPackCatalogSnapshot): LiveTrailPackCatalogSn
   snapshot = next;
   emit();
   return liveTrailPackCatalogStore.getSnapshot();
+}
+
+function preserveSnapshotForEmptyRefresh(args: {
+  refreshKey: string;
+  attemptedAt: string;
+  reason: string;
+  error?: string | null;
+}): LiveTrailPackCatalogSnapshot | null {
+  const current = snapshot;
+  if (current.refreshKey !== args.refreshKey || current.trailPacks.length === 0) {
+    return null;
+  }
+
+  return setSnapshot({
+    ...current,
+    status: 'ready',
+    error: args.error ?? current.error,
+    lastRefreshAttemptAt: args.attemptedAt,
+    preservedFromEmptyRefresh: true,
+    preservedReason: args.reason,
+  });
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -653,14 +682,30 @@ export async function refreshLiveTrailPackCatalog(
     try {
       const routeCatalog = await fetchRouteCatalogTrailPacks(criteria);
       if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+      if (routeCatalog.trailPacks.length === 0) {
+        const preserved = preserveSnapshotForEmptyRefresh({
+          refreshKey,
+          attemptedAt: loadedAt,
+          reason: 'same_query_route_catalog_empty',
+          error:
+            routeCatalog.coverageState.state === 'no_verified_routes'
+              ? routeCatalog.coverageState.message
+              : null,
+        });
+        if (preserved) return preserved;
+      }
       return setSnapshot({
         trailPacks: routeCatalog.trailPacks,
         status: 'ready',
         error: null,
         lastLoadedAt: loadedAt,
+        lastRefreshAttemptAt: loadedAt,
         coverageState: routeCatalog.coverageState,
         searchMeta: routeCatalog.searchMeta,
         source: 'route_catalog',
+        refreshKey,
+        preservedFromEmptyRefresh: false,
+        preservedReason: null,
       });
     } catch (error) {
       if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
@@ -670,25 +715,50 @@ export async function refreshLiveTrailPackCatalog(
     try {
       const legacyTrailPacks = await fetchLegacyTrailPacks();
       if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+      if (legacyTrailPacks.length === 0) {
+        const preserved = preserveSnapshotForEmptyRefresh({
+          refreshKey,
+          attemptedAt: loadedAt,
+          reason: 'same_query_fallback_empty',
+          error: routeCatalogError.message,
+        });
+        if (preserved) return preserved;
+      }
       return setSnapshot({
         trailPacks: legacyTrailPacks,
         status: 'ready',
         error: routeCatalogError.message,
         lastLoadedAt: loadedAt,
+        lastRefreshAttemptAt: loadedAt,
         coverageState: getRouteCatalogCoverageState(legacyTrailPacks, { userHasCriteria: false }),
         searchMeta: null,
         source: 'trail_packs_fallback',
+        refreshKey,
+        preservedFromEmptyRefresh: false,
+        preservedReason: null,
       });
     } catch (error) {
       if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+      const errorMessage = error instanceof Error ? error.message : routeCatalogError.message;
+      const preserved = preserveSnapshotForEmptyRefresh({
+        refreshKey,
+        attemptedAt: loadedAt,
+        reason: 'same_query_refresh_unavailable',
+        error: errorMessage,
+      });
+      if (preserved) return preserved;
       return setSnapshot({
         trailPacks: [],
         status: 'error',
-        error: error instanceof Error ? error.message : routeCatalogError.message,
+        error: errorMessage,
         lastLoadedAt: loadedAt,
+        lastRefreshAttemptAt: loadedAt,
         coverageState: getRouteCatalogCoverageState([], { unavailable: true }),
         searchMeta: null,
         source: 'unavailable',
+        refreshKey,
+        preservedFromEmptyRefresh: false,
+        preservedReason: null,
       });
     }
   })().finally(() => {
@@ -706,9 +776,13 @@ export const liveTrailPackCatalogStore = {
       status: snapshot.status,
       error: snapshot.error,
       lastLoadedAt: snapshot.lastLoadedAt,
+      lastRefreshAttemptAt: snapshot.lastRefreshAttemptAt,
       coverageState: snapshot.coverageState,
       searchMeta: snapshot.searchMeta,
       source: snapshot.source,
+      refreshKey: snapshot.refreshKey,
+      preservedFromEmptyRefresh: snapshot.preservedFromEmptyRefresh,
+      preservedReason: snapshot.preservedReason,
     };
   },
 

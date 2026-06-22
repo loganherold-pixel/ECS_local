@@ -175,6 +175,7 @@
     "test:explore-guidance-ready-routes": "node ./scripts/test-explore-guidance-ready-routes.js",
     "test:explore-route-thumbnails": "node ./scripts/test-explore-route-thumbnails.js",
     "test:explore-performance-diagnostics": "node ./scripts/test-explore-performance-diagnostics.js",
+    "test:explore-live-trail-pack-catalog-refresh": "node ./scripts/test-explore-live-trail-pack-catalog-refresh-stability.js",
     "test:route-discovery-index-performance": "node ./scripts/test-route-discovery-index-performance.js",
     "test:explore-rendering-performance": "node ./scripts/test-explore-rendering-performance.js",
     "test:explore-analysis-route-preview": "node ./scripts/test-explore-analysis-route-preview-action.js",
