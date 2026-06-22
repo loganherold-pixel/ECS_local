@@ -1,0 +1,71 @@
+{
+  "uuid": "unnamed-road-uuid",
+  "distance": 260,
+  "duration": 95,
+  "geometry": {
+    "coordinates": [
+      [-121.21, 38.78],
+      [-121.2095, 38.781],
+      [-121.2097, 38.782],
+      [-121.2102, 38.7825]
+    ]
+  },
+  "legs": [
+    {
+      "summary": "",
+      "distance": 260,
+      "duration": 95,
+      "steps": [
+        {
+          "distance": 110,
+          "duration": 40,
+          "name": "",
+          "maneuver": {
+            "type": "continue",
+            "location": [-121.21, 38.78],
+            "bearing_after": 18
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.21, 38.78],
+              [-121.2095, 38.781]
+            ]
+          }
+        },
+        {
+          "distance": 120,
+          "duration": 45,
+          "name": "",
+          "maneuver": {
+            "type": "turn",
+            "modifier": "left",
+            "location": [-121.2095, 38.781],
+            "bearing_before": 18,
+            "bearing_after": 330
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.2095, 38.781],
+              [-121.2097, 38.782],
+              [-121.2102, 38.7825]
+            ]
+          }
+        },
+        {
+          "distance": 30,
+          "duration": 10,
+          "name": null,
+          "maneuver": {
+            "type": "arrive",
+            "location": [-121.2102, 38.7825]
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.2102, 38.7825]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

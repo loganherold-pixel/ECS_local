@@ -20,6 +20,9 @@ async function main() {
     const artifactDir = path.join(tempRoot, name);
     const cacheManifestPath = writeArtifact(path.join(artifactDir, 'cache-manifest.json'), '{}');
     const drillResultPath = writeArtifact(path.join(artifactDir, 'drill-result.json'), '{}');
+    const offlineAssertionsPath = writeArtifact(path.join(artifactDir, 'offline-assertions.json'), '{}');
+    const readinessMetadataPath = writeArtifact(path.join(artifactDir, 'readiness-metadata.json'), '{}');
+    const captureBundlePath = writeArtifact(path.join(artifactDir, 'capture-bundle.json'), '{}');
     const screenshotPath = writeArtifact(path.join(artifactDir, 'screen.png'), 'png');
     const logPath = writeArtifact(path.join(artifactDir, 'run.log'), 'log');
     const manifestPath = path.join(artifactDir, 'manifest.json');
@@ -50,6 +53,9 @@ async function main() {
       cacheFixtureProfile: 'available',
       cacheManifestPath,
       drillResultPath,
+      offlineAssertionsPath,
+      readinessMetadataPath,
+      captureBundlePath,
       screenshotPaths: [screenshotPath],
       logPaths: [logPath],
       remoteAttemptSummary: {
@@ -98,6 +104,7 @@ async function main() {
     'offline_drill_service_contract_present',
     'offline_drill_user_facing_panel_present',
     'offline_drill_test_script_registered',
+    'offline_drill_capture_helper_present',
     'offline_drill_local_only_safety_copy_present',
   ].forEach((id) => {
     assert.equal(checks.get(id)?.passed, true, `${id} should pass before Android evidence blockers remain`);

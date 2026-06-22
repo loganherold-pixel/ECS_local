@@ -123,6 +123,18 @@ Expected fields:
 
 Do not set `productionDecision` to `accepted` until the Android evidence, source/confidence/offline states, no-photo contract, and reviewer signoff are complete.
 
+## Fleet QA Preload Harness
+
+Development diagnostics builds expose a Fleet QA preload panel behind the existing `developerDiagnostics` rollout flag. These states overwrite local Fleet data only and are meant to make Android evidence capture repeatable:
+
+- `zero_vehicle` clears local Fleet vehicles and active vehicle state.
+- `two_vehicle_active_switch` stages two local-only vehicles and a deterministic active-switch pair.
+- `verified_vs_estimated_weight` stages one scale-ticket/VIN-backed weight profile beside one ECS-estimated profile.
+- `payload_pressure` stages accessory/loadout payload pressure with visible estimated-source warnings and loadout consequence preview output.
+- `offline_restore_migration` stages a cached local migration restore that preserves legacy `wizard_config` keys.
+
+The harness must remain dev-only, local-only, and media-free. It does not satisfy the production evidence gate by itself; Android screenshots, UI XML/logs, offline restart notes, and reviewer signoff are still required.
+
 ## Remaining Evidence Checklist
 
 - Android Fleet QA: capture phone and large-screen evidence for zero-vehicle, add/edit Vehicle Profile, Advanced Specs, Build & Loadout, Weight Summary, confidence modal, safe-area scrolling, keyboard entry, and no vehicle-photo surfaces.

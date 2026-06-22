@@ -49,6 +49,9 @@ function validManifest(tempRoot, overrides = {}) {
   const artifactDir = path.join(tempRoot, 'evidence');
   const cacheManifestPath = writeArtifact(path.join(artifactDir, 'cache-manifest.json'), '{}');
   const drillResultPath = writeArtifact(path.join(artifactDir, 'drill-result.json'), '{}');
+  const offlineAssertionsPath = writeArtifact(path.join(artifactDir, 'offline-assertions.json'), '{}');
+  const readinessMetadataPath = writeArtifact(path.join(artifactDir, 'readiness-metadata.json'), '{}');
+  const captureBundlePath = writeArtifact(path.join(artifactDir, 'capture-bundle.json'), '{}');
   const screenshotPath = writeArtifact(path.join(artifactDir, 'offline-drill.png'), 'png');
   const logPath = writeArtifact(path.join(artifactDir, 'offline-drill.log'), 'log');
   const manifestPath = path.join(artifactDir, 'manifest.json');
@@ -79,6 +82,9 @@ function validManifest(tempRoot, overrides = {}) {
     cacheFixtureProfile: 'available',
     cacheManifestPath,
     drillResultPath,
+    offlineAssertionsPath,
+    readinessMetadataPath,
+    captureBundlePath,
     screenshotPaths: [screenshotPath],
     logPaths: [logPath],
     remoteAttemptSummary: {
@@ -302,6 +308,7 @@ const panelSource = fs.readFileSync(panelPath, 'utf8');
   'Pending Dispatch replay',
   'Not confirmed by source of truth',
   'No-network evidence required before production',
+  'Export Evidence JSON',
 ].forEach((fragment) => {
   assert.ok(panelSource.includes(fragment), `Panel should preserve conservative evidence wording: ${fragment}`);
 });
@@ -326,6 +333,8 @@ const runnerSource = fs.readFileSync(runnerPath, 'utf8');
   'cacheFixtureProfile',
   'appObservedOffline',
   'systemNetworkDisabled',
+  'offlineAssertionsPath',
+  'readinessMetadataPath',
   'Do not fabricate Android evidence',
 ].forEach((fragment) => {
   assert.ok(runnerSource.includes(fragment), `Runner should include evidence harness fragment: ${fragment}`);
@@ -339,6 +348,8 @@ const docsSource = fs.readFileSync(docsPath, 'utf8');
   'screenshots',
   'logs',
   'cache manifest',
+  'offline assertions',
+  'readiness metadata',
   'unit tests do not satisfy',
 ].forEach((fragment) => {
   assert.ok(docsSource.toLowerCase().includes(fragment.toLowerCase()), `Docs should include: ${fragment}`);

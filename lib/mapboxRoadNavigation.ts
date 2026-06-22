@@ -1,4 +1,11 @@
 import { computeBounds } from './mapConfig';
+import {
+  buildSyntheticEcsGuidanceRouteFromGeometry,
+  normalizeMapboxDirectionsRouteToEcsGuidanceRoute,
+  type BuildSyntheticEcsGuidanceRouteOptions,
+  type EcsGuidanceRoute,
+  type EcsGuidanceRouteSource,
+} from './navigation/ecsGuidanceModel';
 import { buildHighlightedRouteInstruction } from './routeGuidanceCopy';
 
 export type RoadNavStatus =
@@ -51,6 +58,23 @@ export interface RoadNavSearchSuggestion {
   raw?: unknown;
 }
 
+export type RoadNavGuidanceMode = 'turn_by_turn' | 'summary_only';
+
+export interface RoadNavBannerInstruction {
+  distanceAlongGeometryM: number | null;
+  primaryText: string | null;
+  primaryType: string | null;
+  primaryModifier: string | null;
+  secondaryText: string | null;
+  subText: string | null;
+}
+
+export interface RoadNavVoiceInstruction {
+  distanceAlongGeometryM: number | null;
+  announcement: string | null;
+  ssmlAnnouncement: string | null;
+}
+
 export interface RoadNavStep {
   id: string;
   instruction: string;
@@ -65,16 +89,32 @@ export interface RoadNavStep {
   roadName: string | null;
   location: RoadNavCoordinate;
   geometry: RoadNavCoordinate[];
+  bannerInstructions: RoadNavBannerInstruction[];
+  voiceInstructions: RoadNavVoiceInstruction[];
+}
+
+export interface RoadNavLeg {
+  id: string;
+  summary: string | null;
+  distanceM: number;
+  durationS: number;
+  stepStartIndex: number;
+  stepEndIndex: number;
+  stepCount: number;
 }
 
 export interface RoadNavRoute {
   id: string;
+  mapboxRouteUuid: string | null;
+  guidance: EcsGuidanceRoute;
   origin: RoadNavCoordinate;
   destination: RoadNavDestination;
   geometry: RoadNavCoordinate[];
   distanceM: number;
   durationS: number;
   steps: RoadNavStep[];
+  legs: RoadNavLeg[];
+  guidanceMode: RoadNavGuidanceMode;
   bounds: {
     north: number;
     south: number;
@@ -380,6 +420,72 @@ function normalizeStepInstruction(step: any): string {
   return [type, modifier, roadName ? `onto ${roadName}` : ''].filter(Boolean).join(' ');
 }
 
+function nullableString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeInstructionList(input: unknown): any[] {
+  return Array.isArray(input) ? input : [];
+}
+
+function normalizeBannerInstructions(step: any): RoadNavBannerInstruction[] {
+  return normalizeInstructionList(step?.bannerInstructions ?? step?.banner_instructions)
+    .map((item: any): RoadNavBannerInstruction | null => {
+      const primary = item?.primary ?? null;
+      const secondary = item?.secondary ?? null;
+      const sub = item?.sub ?? null;
+      const instruction: RoadNavBannerInstruction = {
+        distanceAlongGeometryM: finiteNumber(item?.distanceAlongGeometry),
+        primaryText: nullableString(primary?.text),
+        primaryType: nullableString(primary?.type),
+        primaryModifier: nullableString(primary?.modifier),
+        secondaryText: nullableString(secondary?.text),
+        subText: nullableString(sub?.text),
+      };
+      const hasContent =
+        instruction.distanceAlongGeometryM != null ||
+        instruction.primaryText != null ||
+        instruction.primaryType != null ||
+        instruction.primaryModifier != null ||
+        instruction.secondaryText != null ||
+        instruction.subText != null;
+      return hasContent ? instruction : null;
+    })
+    .filter((item): item is RoadNavBannerInstruction => !!item);
+}
+
+function normalizeVoiceInstructions(step: any): RoadNavVoiceInstruction[] {
+  return normalizeInstructionList(step?.voiceInstructions ?? step?.voice_instructions)
+    .map((item: any): RoadNavVoiceInstruction | null => {
+      const instruction: RoadNavVoiceInstruction = {
+        distanceAlongGeometryM: finiteNumber(item?.distanceAlongGeometry),
+        announcement: nullableString(item?.announcement),
+        ssmlAnnouncement: nullableString(item?.ssmlAnnouncement ?? item?.ssml_announcement),
+      };
+      const hasContent =
+        instruction.distanceAlongGeometryM != null ||
+        instruction.announcement != null ||
+        instruction.ssmlAnnouncement != null;
+      return hasContent ? instruction : null;
+    })
+    .filter((item): item is RoadNavVoiceInstruction => !!item);
+}
+
+function normalizeStepGeometry(step: any): RoadNavCoordinate[] {
+  const coordinates = step?.geometry?.coordinates;
+  if (!Array.isArray(coordinates)) return [];
+  return coordinates
+    .map((coord: [number, number]) => toCoordinate({ center: coord }))
+    .filter((coord: RoadNavCoordinate | null): coord is RoadNavCoordinate => !!coord);
+}
+
 function normalizeStepLocation(step: any): RoadNavCoordinate | null {
   const coords = step?.maneuver?.location;
   if (Array.isArray(coords) && coords.length >= 2) {
@@ -390,6 +496,37 @@ function normalizeStepLocation(step: any): RoadNavCoordinate | null {
     return toCoordinate({ center: geometryCoordinate });
   }
   return null;
+}
+
+function normalizeMapboxRouteUuid(route: any): string | null {
+  return nullableString(route?.uuid ?? route?.route_uuid ?? route?.routeUuid);
+}
+
+function isRoadNavigationDebugMode(): boolean {
+  const globalScope = globalThis as typeof globalThis & {
+    __DEV__?: boolean;
+    __ECS_DEBUG_ROAD_NAVIGATION__?: boolean;
+  };
+  const envDebug =
+    typeof process !== 'undefined' &&
+    (
+      process.env?.EXPO_PUBLIC_ECS_ROAD_NAV_DEBUG === '1' ||
+      process.env?.ECS_ROAD_NAV_DEBUG === '1'
+    );
+  return globalScope.__DEV__ === true || globalScope.__ECS_DEBUG_ROAD_NAVIGATION__ === true || envDebug;
+}
+
+function logRoadNavigationRouteDebug(route: RoadNavRoute, totalStepCount: number): void {
+  if (!isRoadNavigationDebugMode()) return;
+  console.debug('[RoadNavigation] Mapbox route parsed', {
+    routeUuid: route.mapboxRouteUuid,
+    distanceM: route.distanceM,
+    durationS: route.durationS,
+    legCount: route.legs.length,
+    totalStepCount,
+    guidanceMode: route.guidanceMode,
+    turnByTurnAvailable: route.guidanceMode === 'turn_by_turn',
+  });
 }
 
 function toRad(value: number): number {
@@ -424,6 +561,11 @@ export function buildRoadRouteFromCachedGeometry(params: {
   distanceM?: number | null;
   durationS?: number | null;
   createdAt?: string | null;
+  source?: EcsGuidanceRouteSource | null;
+  routeKind?: BuildSyntheticEcsGuidanceRouteOptions['routeKind'];
+  segmentNames?: BuildSyntheticEcsGuidanceRouteOptions['segmentNames'];
+  limitedTrailGuidance?: boolean;
+  guidanceLimitationLabel?: string | null;
 }): RoadNavRoute {
   const validGeometry = params.geometry.filter((point) => toCoordinate(point));
   const first = validGeometry[0];
@@ -454,9 +596,25 @@ export function buildRoadRouteFromCachedGeometry(params: {
           type: 'road_nav_cached',
         } as any)))
       : null;
+  const createdAt = params.createdAt ?? new Date().toISOString();
+  const guidance: EcsGuidanceRoute = buildSyntheticEcsGuidanceRouteFromGeometry({
+    id: params.id,
+    source: params.source ?? 'summary_only',
+    geometry,
+    distanceMeters: distanceM,
+    durationSeconds: durationS,
+    createdAt,
+    destinationName: params.destination.title,
+    routeKind: params.routeKind ?? 'road',
+    segmentNames: params.segmentNames,
+    limitedTrailGuidance: params.limitedTrailGuidance,
+    guidanceLimitationLabel: params.guidanceLimitationLabel,
+  });
 
   return {
     id: params.id,
+    mapboxRouteUuid: null,
+    guidance,
     origin: params.origin,
     destination: params.destination,
     geometry,
@@ -477,8 +635,22 @@ export function buildRoadRouteFromCachedGeometry(params: {
         roadName: null,
         location: geometry[0],
         geometry,
+        bannerInstructions: [],
+        voiceInstructions: [],
       },
     ],
+    legs: [
+      {
+        id: 'cached-offline-leg',
+        summary: 'Cached route geometry',
+        distanceM,
+        durationS,
+        stepStartIndex: 0,
+        stepEndIndex: 0,
+        stepCount: 0,
+      },
+    ],
+    guidanceMode: guidance.guidanceMode === 'turn_by_turn' ? 'turn_by_turn' : 'summary_only',
     bounds: bounds
       ? {
           north: bounds.maxLat,
@@ -487,7 +659,7 @@ export function buildRoadRouteFromCachedGeometry(params: {
           west: bounds.minLng,
         }
       : null,
-    createdAt: params.createdAt ?? new Date().toISOString(),
+    createdAt,
   };
 }
 
@@ -496,14 +668,18 @@ function normalizeMapboxRoadRoute(
   params: {
     origin: RoadNavCoordinate;
     destination: RoadNavDestination;
+    rerouteGeneration?: number | null;
   },
   routeIndex = 0,
 ): RoadNavRoute | null {
-  if (!route?.geometry?.coordinates?.length) {
+  const routeGeometryCoordinates = Array.isArray(route?.geometry?.coordinates)
+    ? route.geometry.coordinates
+    : [];
+  if (routeGeometryCoordinates.length === 0) {
     return null;
   }
 
-  const geometry = (route.geometry.coordinates as [number, number][])
+  const geometry = (routeGeometryCoordinates as [number, number][])
     .map((coord) => toCoordinate({ center: coord }))
     .filter((coord): coord is RoadNavCoordinate => !!coord);
 
@@ -514,16 +690,25 @@ function normalizeMapboxRoadRoute(
   let cumulativeDistanceM = 0;
   let cumulativeDurationS = 0;
   const steps: RoadNavStep[] = [];
+  const legs: RoadNavLeg[] = [];
+  let totalResponseStepCount = 0;
 
-  (route.legs ?? []).forEach((leg: any, legIndex: number) => {
-    (leg.steps ?? []).forEach((step: any, stepIndex: number) => {
+  const responseLegs = Array.isArray(route?.legs) ? route.legs : [];
+  responseLegs.forEach((leg: any, legIndex: number) => {
+    const legSteps = Array.isArray(leg?.steps) ? leg.steps : [];
+    const stepStartIndex = steps.length;
+    totalResponseStepCount += legSteps.length;
+
+    legSteps.forEach((step: any, stepIndex: number) => {
       const stepDistanceM = Number(step?.distance ?? 0);
       const stepDurationS = Number(step?.duration ?? 0);
       const location = normalizeStepLocation(step);
-      const instruction = normalizeStepInstruction(step);
-      const stepGeometry = (step?.geometry?.coordinates ?? [])
-        .map((coord: [number, number]) => toCoordinate({ center: coord }))
-        .filter((coord: RoadNavCoordinate | null): coord is RoadNavCoordinate => !!coord);
+      const instruction = normalizeStepInstruction(step).trim() || 'Continue';
+      const stepGeometry = normalizeStepGeometry(step);
+      const fallbackLocation =
+        stepGeometry[0] ??
+        geometry[Math.min(steps.length, geometry.length - 1)] ??
+        params.origin;
 
       const nextStep: RoadNavStep = {
         id: `${routeIndex}-${legIndex}-${stepIndex}-${String(step?.maneuver?.type ?? 'step')}`,
@@ -537,13 +722,25 @@ function normalizeMapboxRoadRoute(
         maneuverType: String(step?.maneuver?.type ?? 'continue'),
         modifier: step?.maneuver?.modifier ? String(step.maneuver.modifier) : null,
         roadName: step?.name ? String(step.name) : null,
-        location: location ?? geometry[Math.min(stepIndex, geometry.length - 1)],
+        location: location ?? fallbackLocation,
         geometry: stepGeometry,
+        bannerInstructions: normalizeBannerInstructions(step),
+        voiceInstructions: normalizeVoiceInstructions(step),
       };
 
       cumulativeDistanceM = nextStep.endDistanceM;
       cumulativeDurationS = nextStep.endDurationS;
       steps.push(nextStep);
+    });
+
+    legs.push({
+      id: `${routeIndex}-${legIndex}`,
+      summary: nullableString(leg?.summary),
+      distanceM: finiteNumber(leg?.distance) ?? 0,
+      durationS: finiteNumber(leg?.duration) ?? 0,
+      stepStartIndex,
+      stepEndIndex: steps.length,
+      stepCount: steps.length - stepStartIndex,
     });
   });
 
@@ -557,13 +754,18 @@ function normalizeMapboxRoadRoute(
       endDistanceM: Number(route.distance ?? 0),
       startDurationS: 0,
       endDurationS: Number(route.duration ?? 0),
-      maneuverType: 'arrive',
+      maneuverType: 'summary',
       modifier: null,
       roadName: params.destination.title,
       location: params.destination.coordinate,
       geometry,
+      bannerInstructions: [],
+      voiceInstructions: [],
     });
   }
+
+  const guidanceMode: RoadNavGuidanceMode =
+    totalResponseStepCount > 0 ? 'turn_by_turn' : 'summary_only';
 
   const bounds =
     geometry.length > 1
@@ -577,14 +779,28 @@ function normalizeMapboxRoadRoute(
         } as any)))
       : null;
 
-  return {
-    id: randomId('road-route'),
+  const routeId = randomId('road-route');
+  const createdAt = new Date().toISOString();
+  const guidance = normalizeMapboxDirectionsRouteToEcsGuidanceRoute(route, {
+    id: routeId,
+    source: 'mapbox_directions',
+    destinationName: params.destination.title,
+    createdAt,
+    rerouteGeneration: params.rerouteGeneration ?? 0,
+  });
+
+  const normalizedRoute: RoadNavRoute = {
+    id: routeId,
+    mapboxRouteUuid: normalizeMapboxRouteUuid(route),
+    guidance,
     origin: params.origin,
     destination: params.destination,
     geometry,
     distanceM: Number(route.distance ?? 0),
     durationS: Number(route.duration ?? 0),
     steps,
+    legs,
+    guidanceMode,
     bounds: bounds
       ? {
           north: bounds.maxLat,
@@ -593,14 +809,18 @@ function normalizeMapboxRoadRoute(
           west: bounds.minLng,
         }
       : null,
-    createdAt: new Date().toISOString(),
+    createdAt,
   };
+
+  logRoadNavigationRouteDebug(normalizedRoute, totalResponseStepCount);
+  return normalizedRoute;
 }
 
 export async function fetchRoadRouteAlternatives(params: {
   accessToken: string;
   origin: RoadNavCoordinate;
   destination: RoadNavDestination;
+  rerouteGeneration?: number | null;
 }): Promise<RoadNavRoute[]> {
   const coordinates = `${params.origin.lng},${params.origin.lat};${params.destination.coordinate.lng},${params.destination.coordinate.lat}`;
   const url = new URL(`${DIRECTIONS_URL}/${coordinates}`);
@@ -608,8 +828,11 @@ export async function fetchRoadRouteAlternatives(params: {
   url.searchParams.set('geometries', 'geojson');
   url.searchParams.set('overview', 'full');
   url.searchParams.set('steps', 'true');
-  url.searchParams.set('banner_instructions', 'false');
-  url.searchParams.set('voice_instructions', 'false');
+  url.searchParams.set('banner_instructions', 'true');
+  url.searchParams.set('voice_instructions', 'true');
+  url.searchParams.set('voice_units', 'imperial');
+  url.searchParams.set('roundabout_exits', 'true');
+  url.searchParams.set('annotations', 'distance,duration,speed');
   url.searchParams.set('alternatives', 'true');
   url.searchParams.set('language', 'en');
 

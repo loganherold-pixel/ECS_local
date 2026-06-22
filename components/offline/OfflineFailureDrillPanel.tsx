@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import {
@@ -11,6 +11,8 @@ import {
 type Props = {
   result: OfflineFailureDrillResult;
   compact?: boolean;
+  onExportEvidenceCapture?: () => void;
+  evidenceCaptureStatus?: string | null;
 };
 
 const STATUS_META: Record<OfflineDrillCapabilityStatus, { color: string; icon: string }> = {
@@ -29,7 +31,12 @@ const STATUS_LABELS: Record<OfflineDrillCapabilityStatus, string> = {
   manual_fallback_required: 'Manual fallback required',
 };
 
-export default function OfflineFailureDrillPanel({ result, compact = false }: Props) {
+export default function OfflineFailureDrillPanel({
+  result,
+  compact = false,
+  onExportEvidenceCapture,
+  evidenceCaptureStatus,
+}: Props) {
   if (!result.enabled) return null;
 
   const unavailableCount = result.capabilities.filter((item) => item.status === 'unavailable').length;
@@ -89,6 +96,24 @@ export default function OfflineFailureDrillPanel({ result, compact = false }: Pr
           <Text style={styles.blockerText}>
             No-network evidence required before production. Android device or emulator artifacts must be captured before release.
           </Text>
+        </View>
+      ) : null}
+
+      {onExportEvidenceCapture ? (
+        <View style={styles.captureExport}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onExportEvidenceCapture}
+            style={({ pressed }) => [styles.captureButton, pressed ? styles.captureButtonPressed : null]}
+          >
+            <Ionicons name="download-outline" size={13} color="#C48A2C" />
+            <Text style={styles.captureButtonText}>Export Evidence JSON</Text>
+          </Pressable>
+          {evidenceCaptureStatus ? (
+            <Text style={styles.captureStatus} numberOfLines={2}>
+              {evidenceCaptureStatus}
+            </Text>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -280,5 +305,38 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 11,
     fontWeight: '700',
+  },
+  captureExport: {
+    borderTopWidth: 1,
+    borderTopColor: '#2A2A2A',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  captureButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    borderColor: '#C48A2C55',
+    borderRadius: 6,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 32,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  captureButtonPressed: {
+    opacity: 0.72,
+  },
+  captureButtonText: {
+    color: '#C48A2C',
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  captureStatus: {
+    color: '#888',
+    fontSize: 10,
+    lineHeight: 14,
   },
 });

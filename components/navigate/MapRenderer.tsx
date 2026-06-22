@@ -329,6 +329,7 @@ export type MapRendererProps = {
   routeColor?: string;
   progressColor?: string;
   routeRenderMode?: RouteRenderMode;
+  routeLineKey?: string | null;
   showTrailEntryEndpointMarker?: boolean;
   mapStyle?: MapStyleKey;
   mapboxToken: string;
@@ -441,6 +442,7 @@ type WebMapPayload = {
   routeColor: string;
   progressColor: string;
   routeRenderMode: RouteRenderMode;
+  routeLineKey: string | null;
   bounds: {
     minLng: number;
     minLat: number;
@@ -1299,6 +1301,7 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
           : pickRouteColor(props.healthLevel)),
     progressColor: props.progressColor || '#F2C24D',
     routeRenderMode: props.routeRenderMode ?? 'selected',
+    routeLineKey: props.routeLineKey ?? null,
     bounds,
     zoom,
     center,
@@ -4520,10 +4523,10 @@ function makeMapHtml(
         } catch (e) {}
       }
 
-      function updateRoute(coords, color, mode) {
+      function updateRoute(coords, color, mode, routeLineKey) {
         applyRouteRenderMode(mode);
         var fc = featureCollection(
-          coords && coords.length > 1 ? [lineFeature('route', coords, { color: color || '#2ECC71' })] : []
+          coords && coords.length > 1 ? [lineFeature('route', coords, { color: color || '#2ECC71', routeLineKey: routeLineKey || null })] : []
         );
         setGeoJson('route-source', fc);
       }
@@ -6214,7 +6217,7 @@ function makeMapHtml(
             syncRouteBuilderTraceAnchorFromDraft();
           }
         }
-        updateRoute(payload.routeCoords || [], payload.routeColor, payload.routeRenderMode);
+        updateRoute(payload.routeCoords || [], payload.routeColor, payload.routeRenderMode, payload.routeLineKey);
         updateRouteProgress(payload.progressRouteCoords || [], payload.progressColor);
         selectedRouteGeometrySegmentIds = buildDispersedRouteSelectedSet(payload.selectedRouteGeometrySegmentIds || []);
         updateSegments(payload.segments || []);
@@ -6875,6 +6878,7 @@ const MapRenderer = React.memo(function MapRenderer({
   routeColor,
   progressColor,
   routeRenderMode = 'selected',
+  routeLineKey = null,
   showTrailEntryEndpointMarker = false,
   mapStyle = DEFAULT_MAP_STYLE,
   mapboxToken,
@@ -7091,6 +7095,7 @@ const MapRenderer = React.memo(function MapRenderer({
         routeColor,
         progressColor,
         routeRenderMode,
+        routeLineKey,
         showTrailEntryEndpointMarker,
         mapStyle,
         mapboxToken,
@@ -7130,6 +7135,7 @@ const MapRenderer = React.memo(function MapRenderer({
       routeColor,
       progressColor,
       routeRenderMode,
+      routeLineKey,
       showTrailEntryEndpointMarker,
       mapStyle,
       mapboxToken,

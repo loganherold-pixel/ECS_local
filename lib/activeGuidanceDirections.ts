@@ -1,15 +1,39 @@
 import type { RoadNavRoute, RoadNavStep } from './mapboxRoadNavigation';
+import type { EcsActiveGuidanceProgress } from './navigation/ecsActiveGuidanceController';
+import type { EcsGuidanceMode, EcsGuidanceRoute, EcsGuidanceStep } from './navigation/ecsGuidanceModel';
 
 export type ActiveGuidanceDirectionKind = 'maneuver' | 'arrival' | 'status';
+export type ActiveGuidanceDirectionsState = 'ready' | 'summary_only' | 'pending' | 'unavailable';
 
 export interface ActiveGuidanceDirectionItem {
   id: string;
   instruction: string;
   detail: string | null;
+  roadName?: string;
   distanceM: number | null;
   durationS: number | null;
   kind: ActiveGuidanceDirectionKind;
   sequenceLabel: string;
+  iconName?: string;
+  isCurrent?: boolean;
+  globalStepIndex?: number;
+}
+
+export interface ActiveGuidanceDirectionList {
+  state: ActiveGuidanceDirectionsState;
+  items: ActiveGuidanceDirectionItem[];
+  emptyMessage: string | null;
+  routeId: string | null;
+  rerouteGeneration: number | null;
+  currentStepIndex: number | null;
+  guidanceMode: EcsGuidanceMode | null;
+  sourceLabel: string | null;
+}
+
+export interface BuildActiveGuidanceDirectionListInput {
+  route: EcsGuidanceRoute | null | undefined;
+  progress: EcsActiveGuidanceProgress | null | undefined;
+  status?: string | null;
 }
 
 export interface BuildActiveRoadDirectionListInput {
@@ -29,10 +53,25 @@ function finiteNumber(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function cleanString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  if (lower === 'null' || lower === 'undefined') return null;
+  return trimmed;
+}
+
 function clampStepIndex(index: number | null | undefined, stepCount: number): number {
   const normalized = finiteNumber(index) ?? 0;
   if (stepCount <= 1) return 0;
   return Math.max(0, Math.min(stepCount - 1, Math.floor(normalized) + 1));
+}
+
+function clampGuidanceStepIndex(index: number | null | undefined, stepCount: number): number {
+  const normalized = finiteNumber(index) ?? 0;
+  if (stepCount <= 1) return 0;
+  return Math.max(0, Math.min(stepCount - 1, Math.floor(normalized)));
 }
 
 function isArrivalStep(step: RoadNavStep): boolean {
@@ -44,6 +83,59 @@ function isArrivalStep(step: RoadNavStep): boolean {
     instruction.includes('arrive') ||
     instruction.includes('destination')
   );
+}
+
+function isEcsArrivalStep(step: EcsGuidanceStep): boolean {
+  const maneuver = cleanString(step.maneuverType)?.toLowerCase() ?? '';
+  const instruction = cleanString(step.instruction)?.toLowerCase() ?? '';
+  return (
+    maneuver === 'arrive' ||
+    maneuver === 'arrival' ||
+    instruction.includes('arrived') ||
+    instruction.includes('destination')
+  );
+}
+
+function directionIconName(
+  maneuverType: string | null | undefined,
+  maneuverModifier: string | null | undefined,
+): string {
+  const type = cleanString(maneuverType)?.toLowerCase() ?? '';
+  const modifier = cleanString(maneuverModifier)?.toLowerCase().replace(/_/g, ' ') ?? '';
+  if (type === 'arrive' || type === 'arrival') return 'flag';
+  if (modifier.includes('uturn') || modifier.includes('u-turn')) return 'refresh';
+  if (type.includes('roundabout') || type === 'rotary') return 'sync';
+  if (modifier.includes('left')) return 'arrow-back';
+  if (modifier.includes('right')) return 'arrow-forward';
+  if (type === 'merge') return 'git-merge';
+  return 'arrow-up';
+}
+
+function roadNameForStep(step: EcsGuidanceStep): string {
+  return cleanString(step.displayRoadName) ?? cleanString(step.roadName) ?? 'Unnamed road';
+}
+
+function instructionForStep(step: EcsGuidanceStep): string {
+  if (isEcsArrivalStep(step)) return 'You have arrived at your destination';
+  return cleanString(step.instruction) ?? `Continue on ${roadNameForStep(step)}`;
+}
+
+function emptyGuidanceDirectionList(
+  state: ActiveGuidanceDirectionsState,
+  emptyMessage: string,
+  route: EcsGuidanceRoute | null | undefined,
+  progress: EcsActiveGuidanceProgress | null | undefined,
+): ActiveGuidanceDirectionList {
+  return {
+    state,
+    items: [],
+    emptyMessage,
+    routeId: route?.id ?? progress?.routeId ?? null,
+    rerouteGeneration: route?.rerouteGeneration ?? progress?.rerouteGeneration ?? null,
+    currentStepIndex: progress?.currentStepIndex ?? null,
+    guidanceMode: route?.guidanceMode ?? null,
+    sourceLabel: route?.guidanceSourceLabel ?? null,
+  };
 }
 
 function distanceToStep(
@@ -72,6 +164,97 @@ export function formatActiveDirectionDistance(meters: number | null | undefined)
   const miles = value / 1609.344;
   if (miles < 10) return `${miles.toFixed(1)} mi`;
   return `${Math.round(miles)} mi`;
+}
+
+export function buildActiveGuidanceDirectionList(
+  input: BuildActiveGuidanceDirectionListInput,
+): ActiveGuidanceDirectionList {
+  const status = cleanString(input.status)?.toLowerCase() ?? '';
+  if (status === 'rerouting' || status === 'destination_selected' || status === 'searching') {
+    return emptyGuidanceDirectionList(
+      'pending',
+      'Directions will appear when route calculation completes',
+      input.route,
+      input.progress,
+    );
+  }
+
+  const route = input.route ?? null;
+  if (!route) {
+    return emptyGuidanceDirectionList(
+      'pending',
+      'Directions will appear when route calculation completes',
+      route,
+      input.progress,
+    );
+  }
+
+  if (route.guidanceMode !== 'turn_by_turn') {
+    const summaryMessage =
+      cleanString(route.guidanceLimitationLabel) ??
+      'No turn-by-turn directions available for this route';
+    return emptyGuidanceDirectionList(
+      route.guidanceMode === 'summary_only' ? 'summary_only' : 'unavailable',
+      summaryMessage,
+      route,
+      input.progress,
+    );
+  }
+
+  const steps = route.steps ?? [];
+  if (steps.length === 0) {
+    return emptyGuidanceDirectionList(
+      'summary_only',
+      'No turn-by-turn directions available for this route',
+      route,
+      input.progress,
+    );
+  }
+
+  const progress = input.progress ?? null;
+  if (
+    !progress ||
+    progress.routeId !== route.id ||
+    progress.rerouteGeneration !== route.rerouteGeneration
+  ) {
+    return emptyGuidanceDirectionList(
+      'pending',
+      'Directions will appear when route calculation completes',
+      route,
+      progress,
+    );
+  }
+
+  const startIndex = clampGuidanceStepIndex(progress.currentStepIndex, steps.length);
+  const items = steps.slice(startIndex).map((step, offset) => {
+    const isCurrent = offset === 0;
+    const kind: ActiveGuidanceDirectionKind = isEcsArrivalStep(step) ? 'arrival' : 'maneuver';
+    const roadName = roadNameForStep(step);
+    return {
+      id: step.id || `${route.id}-${step.globalStepIndex}`,
+      instruction: instructionForStep(step),
+      detail: roadName,
+      roadName,
+      distanceM: finiteNumber(step.distanceMeters),
+      durationS: finiteNumber(step.durationSeconds),
+      kind,
+      sequenceLabel: isCurrent ? 'NOW' : String(offset + 1),
+      iconName: directionIconName(step.maneuverType, step.maneuverModifier),
+      isCurrent,
+      globalStepIndex: step.globalStepIndex,
+    };
+  });
+
+  return {
+    state: 'ready',
+    items,
+    emptyMessage: items.length > 0 ? null : 'No turn-by-turn directions available for this route',
+    routeId: route.id,
+    rerouteGeneration: route.rerouteGeneration,
+    currentStepIndex: startIndex,
+    guidanceMode: route.guidanceMode,
+    sourceLabel: route.guidanceSourceLabel ?? null,
+  };
 }
 
 export function buildActiveRoadDirectionList(

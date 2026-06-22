@@ -1,0 +1,57 @@
+{
+  "uuid": "uturn-route-uuid",
+  "distance": 310,
+  "duration": 105,
+  "geometry": {
+    "coordinates": [
+      [-121.205, 38.781],
+      [-121.204, 38.781],
+      [-121.205, 38.7812],
+      [-121.206, 38.7814]
+    ]
+  },
+  "legs": [
+    {
+      "summary": "Forest Service Road 12",
+      "distance": 310,
+      "duration": 105,
+      "steps": [
+        {
+          "distance": 210,
+          "duration": 75,
+          "name": "Forest Service Road 12",
+          "maneuver": {
+            "instruction": "Make a U-turn when safe",
+            "type": "turn",
+            "modifier": "uturn",
+            "location": [-121.204, 38.781],
+            "bearing_before": 90,
+            "bearing_after": 270
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.205, 38.781],
+              [-121.204, 38.781],
+              [-121.205, 38.7812]
+            ]
+          }
+        },
+        {
+          "distance": 100,
+          "duration": 30,
+          "name": "",
+          "maneuver": {
+            "type": "arrive",
+            "location": [-121.206, 38.7814]
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.205, 38.7812],
+              [-121.206, 38.7814]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

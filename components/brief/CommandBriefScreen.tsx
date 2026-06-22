@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   AppState,
+  Platform,
   Pressable,
   ScrollView,
   StyleProp,
@@ -66,6 +67,14 @@ import {
   exportCommandBriefPacket,
   type CommandBriefExportAction,
 } from '../../lib/brief';
+import { dispatchQueue } from '../../lib/dispatchQueueStore';
+import { offlineExpeditionModeEngine } from '../../lib/offlineExpeditionModeEngine';
+import { buildOfflineFailureDrillFromSystemProfiles } from '../../lib/offlineFailureDrillService';
+import { buildOfflineFailureDrillEvidenceCaptureBundle } from '../../lib/offlineFailureDrillEvidenceCapture';
+import {
+  exportOfflineFailureDrillEvidenceCaptureBundle,
+  type OfflineFailureDrillEvidenceExportAction,
+} from '../../lib/offlineFailureDrillEvidenceExport';
 import {
   campDecisionClockUnavailableDecision,
   isCampDecisionClockFeatureEnabled,
@@ -1565,6 +1574,7 @@ export default function CommandBriefScreen({
   }, [activeVehicleReadiness?.vehicleId, loadoutConsequencePreviewSnapshot.summary]);
   const [briefExportAction, setBriefExportAction] = useState<CommandBriefExportAction | null>(null);
   const [briefExportMessage, setBriefExportMessage] = useState<string | null>(null);
+  const [evidenceExportAction, setEvidenceExportAction] = useState<OfflineFailureDrillEvidenceExportAction | null>(null);
 
   useEffect(() => {
     void navigateRouteSessionStore.hydrateFromPersistence().then(() => {
@@ -1694,6 +1704,59 @@ export default function CommandBriefScreen({
       setBriefExportAction(null);
     }
   }, [briefExportAction, briefExportContext, showToast]);
+  const handleEvidenceCaptureExport = useCallback(async (action: OfflineFailureDrillEvidenceExportAction) => {
+    if (evidenceExportAction) return;
+    if (!assessment) {
+      showToast('Readiness assessment is unavailable for evidence capture.');
+      return;
+    }
+    setEvidenceExportAction(action);
+    setBriefExportMessage(null);
+    try {
+      const platformOs = Platform.OS === 'android'
+        ? 'android'
+        : Platform.OS === 'ios'
+          ? 'ios'
+          : Platform.OS === 'web'
+            ? 'web'
+            : 'unknown';
+      const profiles = offlineExpeditionModeEngine.getSystemProfiles();
+      const connectivityState = offlineExpeditionModeEngine.getConnectivityState();
+      const drillResult = buildOfflineFailureDrillFromSystemProfiles({
+        now: assessment.updatedAt,
+        connectivityState,
+        profiles,
+        dispatchQueue: {
+          size: dispatchQueue.size,
+          pendingCount: dispatchQueue.pendingCount,
+          failedCount: dispatchQueue.failedCount,
+        },
+      });
+      const bundle = buildOfflineFailureDrillEvidenceCaptureBundle({
+        capturedAt: assessment.updatedAt,
+        source: 'app_runtime_export',
+        drillResult,
+        readinessAssessment: assessment,
+        platform: { os: platformOs },
+        validationNotes: [
+          'Exported from Command Brief with the current Departure Audit readiness metadata.',
+        ],
+      });
+      const result = await exportOfflineFailureDrillEvidenceCaptureBundle(bundle, action);
+      const message = result.ok
+        ? result.message
+        : `${result.message}${result.unavailableReason ? ` ${result.unavailableReason}` : ''}`;
+      setBriefExportMessage(message);
+      showToast(message);
+    } catch (error) {
+      const reason = error instanceof Error ? ` ${error.message}` : '';
+      const message = `Offline evidence capture export failed.${reason}`;
+      setBriefExportMessage(message);
+      showToast(message);
+    } finally {
+      setEvidenceExportAction(null);
+    }
+  }, [assessment, evidenceExportAction, showToast]);
   const exportActions = useMemo<BriefAction[]>(() => ([
     {
       id: 'copy-command-brief',
@@ -1722,7 +1785,16 @@ export default function CommandBriefScreen({
       disabledLabel: briefExportAction === 'save' ? 'Saving' : briefExportAction ? 'Busy' : undefined,
       onPress: () => void handleBriefExport('save'),
     },
-  ]), [briefExportAction, handleBriefExport]);
+    {
+      id: 'share-offline-drill-evidence-capture',
+      label: 'Share evidence JSON',
+      detail: 'Export the current Offline Failure Drill and Departure Audit capture bundle.',
+      icon: 'download-outline',
+      disabled: briefExportAction !== null || evidenceExportAction !== null || !assessment,
+      disabledLabel: evidenceExportAction === 'share' ? 'Sharing' : briefExportAction || evidenceExportAction ? 'Busy' : undefined,
+      onPress: () => void handleEvidenceCaptureExport('share'),
+    },
+  ]), [assessment, briefExportAction, evidenceExportAction, handleBriefExport, handleEvidenceCaptureExport]);
   const campCandidates = useMemo(
     () => (readinessState.inputPatch.campCandidates ?? []).slice(0, 5),
     [readinessState.inputPatch.campCandidates],

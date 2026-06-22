@@ -444,6 +444,9 @@ assert.ok(commandBrief.includes('DepartureAuditChecklist'), 'Command Brief shoul
 assert.ok(commandBrief.includes('disabledActionReason'), 'Command Brief should surface disabled route-dependent audit action reasons.');
 assert.ok(commandBrief.includes("intent: 'prepare_offline_route_package'"), 'Command Brief offline package action should stage route-specific offline prep.');
 assert.ok(commandBrief.includes("sourceSurface: 'command_brief_departure_audit'"), 'Command Brief offline package action should identify the departure audit source.');
+assert.ok(commandBrief.includes('buildOfflineFailureDrillEvidenceCaptureBundle'), 'Command Brief should be able to export a QA evidence capture bundle.');
+assert.ok(commandBrief.includes('readinessAssessment: assessment'), 'Command Brief evidence capture should include the current Departure Audit readiness assessment.');
+assert.ok(commandBrief.includes('share-offline-drill-evidence-capture'), 'Command Brief should expose the focused Offline Failure Drill evidence capture action.');
 
 const departureAuditChecklist = read('components', 'readiness', 'DepartureAuditChecklist.tsx');
 assert.ok(departureAuditChecklist.includes('statusBadgeComplete'), 'Departure Audit should use a stronger stoplight-green Complete badge style.');

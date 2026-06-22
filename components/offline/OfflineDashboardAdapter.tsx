@@ -13,6 +13,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
+  Platform,
   View,
   Text,
   StyleSheet,
@@ -25,6 +26,8 @@ import {
   buildOfflineFailureDrillFromSystemProfiles,
   type OfflineFailureDrillResult,
 } from '../../lib/offlineFailureDrillService';
+import { buildOfflineFailureDrillEvidenceCaptureBundle } from '../../lib/offlineFailureDrillEvidenceCapture';
+import { exportOfflineFailureDrillEvidenceCaptureBundle } from '../../lib/offlineFailureDrillEvidenceExport';
 import { offlineExpeditionModeEngine } from '../../lib/offlineExpeditionModeEngine';
 import type {
   SystemOfflineProfile,
@@ -79,6 +82,7 @@ export default function OfflineDashboardAdapter({
   const [profiles, setProfiles] = useState<SystemOfflineProfile[]>([]);
   const [connState, setConnState] = useState('online');
   const [drillResult, setDrillResult] = useState<OfflineFailureDrillResult | null>(null);
+  const [captureStatus, setCaptureStatus] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     const nextProfiles = offlineExpeditionModeEngine.getSystemProfiles();
@@ -101,6 +105,31 @@ export default function OfflineDashboardAdapter({
     const unsub = offlineExpeditionModeEngine.subscribe(refresh);
     return unsub;
   }, [refresh]);
+
+  const handleExportEvidenceCapture = useCallback(async () => {
+    if (!drillResult) return;
+    const platformOs = Platform.OS === 'android'
+      ? 'android'
+      : Platform.OS === 'ios'
+        ? 'ios'
+        : Platform.OS === 'web'
+          ? 'web'
+          : 'unknown';
+    const bundle = buildOfflineFailureDrillEvidenceCaptureBundle({
+      capturedAt: drillResult.evaluatedAt,
+      source: 'app_runtime_export',
+      drillResult,
+      platform: { os: platformOs },
+      validationNotes: [
+        'Exported from the Offline Failure Drill panel. Android screenshots, logs, system network state, cache manifest, and owner acceptance must still be captured separately.',
+      ],
+    });
+    const result = await exportOfflineFailureDrillEvidenceCaptureBundle(bundle, 'share');
+    const message = result.ok
+      ? result.message
+      : `${result.message}${result.unavailableReason ? ` ${result.unavailableReason}` : ''}`;
+    setCaptureStatus(message);
+  }, [drillResult]);
 
   // Don't show when online
   if (connState === 'online') return null;
@@ -160,7 +189,11 @@ export default function OfflineDashboardAdapter({
 
       {drillResult ? (
         <View testID="offline-failure-drill-panel" style={styles.drillPanel}>
-          <OfflineFailureDrillPanel result={drillResult} />
+          <OfflineFailureDrillPanel
+            result={drillResult}
+            onExportEvidenceCapture={handleExportEvidenceCapture}
+            evidenceCaptureStatus={captureStatus}
+          />
         </View>
       ) : null}
 

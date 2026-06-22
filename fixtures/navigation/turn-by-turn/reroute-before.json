@@ -1,0 +1,73 @@
+{
+  "uuid": "reroute-before-uuid",
+  "distance": 500,
+  "duration": 180,
+  "geometry": {
+    "coordinates": [
+      [-121.22, 38.78],
+      [-121.219, 38.781],
+      [-121.218, 38.782],
+      [-121.217, 38.783]
+    ]
+  },
+  "legs": [
+    {
+      "summary": "Old Mill Road",
+      "distance": 500,
+      "duration": 180,
+      "steps": [
+        {
+          "distance": 180,
+          "duration": 65,
+          "name": "Old Mill Road",
+          "maneuver": {
+            "instruction": "Head north on Old Mill Road",
+            "type": "depart",
+            "location": [-121.22, 38.78],
+            "bearing_after": 35
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.22, 38.78],
+              [-121.219, 38.781]
+            ]
+          }
+        },
+        {
+          "distance": 220,
+          "duration": 80,
+          "name": "Old Mill Road",
+          "maneuver": {
+            "instruction": "Continue on Old Mill Road",
+            "type": "continue",
+            "location": [-121.219, 38.781],
+            "bearing_before": 35,
+            "bearing_after": 35
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.219, 38.781],
+              [-121.218, 38.782]
+            ]
+          }
+        },
+        {
+          "distance": 100,
+          "duration": 35,
+          "name": "",
+          "maneuver": {
+            "instruction": "You have arrived at your destination",
+            "type": "arrive",
+            "location": [-121.217, 38.783]
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.218, 38.782],
+              [-121.217, 38.783]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

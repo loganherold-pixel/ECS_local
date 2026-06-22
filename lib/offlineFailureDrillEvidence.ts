@@ -102,6 +102,9 @@ export interface OfflineFailureDrillAndroidEvidenceManifest {
   cacheFixtureProfile: OfflineFailureDrillCacheFixtureProfile;
   cacheManifestPath: string;
   drillResultPath: string;
+  offlineAssertionsPath: string;
+  readinessMetadataPath: string;
+  captureBundlePath?: string;
   screenshotPaths: string[];
   logPaths: string[];
   remoteAttemptSummary: {
@@ -292,6 +295,11 @@ export function validateOfflineFailureDrillAndroidEvidenceManifest(
 
   pushMissingArtifact(missingArtifacts, failedRules, 'cacheManifestPath', manifest.cacheManifestPath, options);
   pushMissingArtifact(missingArtifacts, failedRules, 'drillResultPath', manifest.drillResultPath, options);
+  pushMissingArtifact(missingArtifacts, failedRules, 'offlineAssertionsPath', manifest.offlineAssertionsPath, options);
+  pushMissingArtifact(missingArtifacts, failedRules, 'readinessMetadataPath', manifest.readinessMetadataPath, options);
+  if (nonEmptyString(manifest.captureBundlePath)) {
+    pushMissingArtifact(missingArtifacts, failedRules, 'captureBundlePath', manifest.captureBundlePath, options);
+  }
 
   if (!Array.isArray(manifest.screenshotPaths) || manifest.screenshotPaths.length < 1) {
     failedRules.push('screenshotPaths.at_least_one_required');

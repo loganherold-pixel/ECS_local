@@ -72,17 +72,21 @@ export function buildOfflineFailureDrillProductionReadinessResult(options = {}) 
     result: path.join(root, RESULT_RELATIVE_PATH),
     evidence: manifestPathFromOptions(root, options),
     evidenceModule: path.join(root, 'lib', 'offlineFailureDrillEvidence.ts'),
+    captureModule: path.join(root, 'lib', 'offlineFailureDrillEvidenceCapture.ts'),
     service: path.join(root, 'lib', 'offlineFailureDrillService.ts'),
     panel: path.join(root, 'components', 'offline', 'OfflineFailureDrillPanel.tsx'),
     test: path.join(root, 'scripts', 'test-offline-failure-drill.js'),
     evidenceTest: path.join(root, 'scripts', 'test-offline-failure-drill-evidence.js'),
+    evidenceCaptureTest: path.join(root, 'scripts', 'test-offline-failure-drill-evidence-capture.js'),
     packageJson: path.join(root, 'package.json'),
   };
 
+  const captureModule = readIfExists(paths.captureModule);
   const service = readIfExists(paths.service);
   const panel = readIfExists(paths.panel);
   const test = readIfExists(paths.test);
   const evidenceTest = readIfExists(paths.evidenceTest);
+  const evidenceCaptureTest = readIfExists(paths.evidenceCaptureTest);
   const packageJson = readIfExists(paths.packageJson);
   const {
     validateOfflineFailureDrillAndroidEvidenceManifest,
@@ -165,12 +169,27 @@ export function buildOfflineFailureDrillProductionReadinessResult(options = {}) 
       'Offline Failure Drill unit/contract and evidence tests are registered in package scripts.',
       packageJson.includes('"test:offline-failure-drill"') &&
         packageJson.includes('"test:offline-failure-drill-evidence"') &&
+        packageJson.includes('"test:offline-failure-drill-evidence-capture"') &&
         packageJson.includes('scripts/test-offline-failure-drill.js') &&
         packageJson.includes('scripts/test-offline-failure-drill-evidence.js') &&
+        packageJson.includes('scripts/test-offline-failure-drill-evidence-capture.js') &&
         test.includes('Offline Failure Drill checks passed.') &&
-        evidenceTest.includes('offline failure drill evidence checks passed'),
-      [relPath(root, paths.packageJson), relPath(root, paths.test), relPath(root, paths.evidenceTest)],
+        evidenceTest.includes('offline failure drill evidence checks passed') &&
+        evidenceCaptureTest.includes('offline failure drill evidence capture checks passed'),
+      [relPath(root, paths.packageJson), relPath(root, paths.test), relPath(root, paths.evidenceTest), relPath(root, paths.evidenceCaptureTest)],
       ['Keep the focused drill test available to CI and local release sweeps.'],
+    ),
+    check(
+      'offline_drill_capture_helper_present',
+      'Offline Drill evidence capture helper exports drill result JSON, offline assertions, and readiness metadata without accepting missing artifacts.',
+      captureModule.includes('buildOfflineFailureDrillEvidenceCaptureBundle') &&
+        captureModule.includes('buildOfflineFailureDrillAndroidManifestFromCapture') &&
+        captureModule.includes('offlineAssertionsPath') &&
+        captureModule.includes('readinessMetadataPath') &&
+        captureModule.includes('ownerAcceptance') &&
+        captureModule.includes('systemNetworkDisabled'),
+      [relPath(root, paths.captureModule), relPath(root, paths.evidenceCaptureTest)],
+      ['Keep app-exported capture data separate from operator-supplied Android artifacts and owner acceptance.'],
     ),
     check(
       'offline_drill_local_only_safety_copy_present',
@@ -192,7 +211,7 @@ export function buildOfflineFailureDrillProductionReadinessResult(options = {}) 
     ),
     check(
       'android_evidence_artifacts_complete',
-      'Android drill screenshots, logs, and cache manifest are captured.',
+      'Android drill result, offline assertions, readiness metadata, screenshots, logs, and cache manifest are captured.',
       validation.structurallyValid === true && validation.missingArtifacts.length === 0,
       [paths.evidence ? relPath(root, paths.evidence) : EVIDENCE_RELATIVE_PATH],
       ['Capture screenshots of results, test logs, and the exact cache manifest used for the run.'],

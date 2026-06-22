@@ -20,6 +20,11 @@ import {
   type RoadNavStatus,
 } from './mapboxRoadNavigation';
 import {
+  resolveEcsActiveGuidanceProgress,
+  type EcsActiveGuidanceOffRouteStatus,
+  type EcsActiveGuidanceProgress,
+} from './navigation/ecsActiveGuidanceController';
+import {
   cacheRouteGeometry,
   getCachedRouteGeometry,
   getRouteGeometryCacheKey,
@@ -49,10 +54,14 @@ const ROUTE_TIMEOUT_ERROR_MESSAGE = 'Route generation timed out. Check connectio
 
 export type RoadNavigationConfidenceState =
   | 'on_route'
+  | 'off_route_candidate'
+  | 'off_route_confirmed'
   | 'low_confidence'
   | 'temporary_deviation'
   | 'off_route'
   | 'rerouting'
+  | 'reroute_failed'
+  | 'reroute_applied'
   | 'rejoined'
   | 'approaching'
   | 'arrived';
@@ -75,6 +84,11 @@ export interface RoadNavigationSessionState {
   routeConfidenceState: RoadNavigationConfidenceState;
   offRouteDistanceM: number | null;
   distanceToDestinationM: number | null;
+  activeGuidanceProgress: EcsActiveGuidanceProgress | null;
+  offRouteUpdateCount: number;
+  gpsAccuracyMeters: number | null;
+  rerouteStatus: EcsActiveGuidanceOffRouteStatus;
+  lastRerouteError: string | null;
   completionReason: RoadNavigationCompletionReason;
   error: string | null;
   isOffRoute: boolean;
@@ -115,6 +129,7 @@ export interface UseRoadNavigationOutput {
 type RoadNavigationLocation = RoadNavCoordinate & {
   accuracyM?: number | null;
   speedMph?: number | null;
+  headingDeg?: number | null;
 };
 
 function isRecentIsoTimestamp(value: string | null | undefined, maxAgeMs: number): boolean {
@@ -191,6 +206,10 @@ function getConfidenceLabel(
   liveServicesEnabled: boolean,
 ): string {
   switch (confidenceState) {
+    case 'off_route_candidate':
+      return 'Checking route';
+    case 'off_route_confirmed':
+      return liveServicesEnabled ? 'Off route' : 'Rejoin route';
     case 'low_confidence':
       return 'GPS settling';
     case 'temporary_deviation':
@@ -199,6 +218,10 @@ function getConfidenceLabel(
       return liveServicesEnabled ? 'Off route' : 'Rejoin route';
     case 'rerouting':
       return liveServicesEnabled ? 'Updating route' : 'Rejoin route';
+    case 'reroute_failed':
+      return 'Unable to recalculate route';
+    case 'reroute_applied':
+      return 'Route updated';
     case 'rejoined':
       return 'Route rejoined';
     case 'approaching':
@@ -368,6 +391,9 @@ function computeSessionFromRoute(
   | 'etaIso'
   | 'offRouteDistanceM'
   | 'distanceToDestinationM'
+  | 'activeGuidanceProgress'
+  | 'offRouteUpdateCount'
+  | 'gpsAccuracyMeters'
   | 'progressGeometry'
   | 'updatedAt'
 > {
@@ -389,6 +415,9 @@ function computeSessionFromRoute(
       etaIso: route.durationS > 0 ? new Date(Date.now() + route.durationS * 1000).toISOString() : null,
       offRouteDistanceM: null,
       distanceToDestinationM: null,
+      activeGuidanceProgress: null,
+      offRouteUpdateCount: previous.offRouteUpdateCount,
+      gpsAccuracyMeters: null,
       progressGeometry: [],
       updatedAt: nowIso,
     };
@@ -407,11 +436,37 @@ function computeSessionFromRoute(
           : null,
       offRouteDistanceM: null,
       distanceToDestinationM: null,
+      activeGuidanceProgress: null,
+      offRouteUpdateCount: previous.offRouteUpdateCount,
+      gpsAccuracyMeters: null,
       progressGeometry: [],
       updatedAt: nowIso,
     };
   }
 
+  const previousProgress =
+    previous.activeGuidanceProgress?.routeId === route.guidance.id &&
+    previous.activeGuidanceProgress.rerouteGeneration === route.guidance.rerouteGeneration
+      ? previous.activeGuidanceProgress
+      : null;
+  const activeGuidanceProgress = resolveEcsActiveGuidanceProgress({
+    currentCoordinate: location,
+    currentSpeedMetersPerSecond:
+      typeof location.speedMph === 'number' && Number.isFinite(location.speedMph)
+        ? location.speedMph * 0.44704
+        : null,
+    currentHeadingDegrees: location.headingDeg,
+    currentGpsAccuracyMeters: location.accuracyM,
+    activeRoute: route.guidance,
+    previousProgress,
+    rerouteStatus:
+      previous.status === 'rerouting'
+        ? 'rerouting'
+        : previous.rerouteStatus === 'reroute_failed'
+          ? 'reroute_failed'
+          : null,
+    updatedAt: nowIso,
+  });
   const progress = resolveRoadNavigationProgress(route, {
     location,
     previousStepIndex: previous.currentStepIndex,
@@ -421,25 +476,32 @@ function computeSessionFromRoute(
       previous.status === 'rerouting' ||
       previous.status === 'arrived',
   });
-  const remainingDistanceM = progress.remainingDistanceM;
+  const remainingDistanceM = activeGuidanceProgress.distanceRemainingMeters;
   const remainingDurationS =
-    route.distanceM > 0
+    activeGuidanceProgress.durationRemainingSeconds ??
+    (route.distanceM > 0
       ? Math.max((route.durationS * remainingDistanceM) / route.distanceM, 0)
-      : 0;
+      : 0);
   const etaIso =
     remainingDurationS > 0
       ? new Date(Date.now() + remainingDurationS * 1000).toISOString()
       : null;
 
   return {
-    currentStepIndex: progress.currentStepIndex,
-    nextInstruction: progress.nextInstruction,
-    nextInstructionDistanceM: progress.nextInstructionDistanceM,
+    currentStepIndex: activeGuidanceProgress.currentStepIndex,
+    nextInstruction:
+      activeGuidanceProgress.nextInstruction ??
+      activeGuidanceProgress.currentInstruction ??
+      progress.nextInstruction,
+    nextInstructionDistanceM: activeGuidanceProgress.distanceToNextManeuverMeters,
     remainingDistanceM,
     remainingDurationS,
     etaIso,
-    offRouteDistanceM: progress.offRouteDistanceM,
+    offRouteDistanceM: activeGuidanceProgress.distanceFromRouteMeters,
     distanceToDestinationM: progress.distanceToDestinationM,
+    activeGuidanceProgress,
+    offRouteUpdateCount: activeGuidanceProgress.offRouteUpdateCount,
+    gpsAccuracyMeters: activeGuidanceProgress.gpsAccuracyMeters,
     progressGeometry: progress.progressGeometry,
     updatedAt: nowIso,
   };
@@ -462,6 +524,11 @@ function createEmptySession(): RoadNavigationSessionState {
     routeConfidenceState: 'on_route',
     offRouteDistanceM: null,
     distanceToDestinationM: null,
+    activeGuidanceProgress: null,
+    offRouteUpdateCount: 0,
+    gpsAccuracyMeters: null,
+    rerouteStatus: 'on_route',
+    lastRerouteError: null,
     completionReason: null,
     error: null,
     isOffRoute: false,
@@ -653,6 +720,18 @@ export function useRoadNavigation(params: {
 
       setSession((prev) => {
         const computed = computeSessionFromRoute(validRoute, currentLocation, prev);
+        const nextRerouteCount = rerouteCount ?? prev.rerouteCount;
+        const routeAppliedFromReroute =
+          nextStatus === 'navigation_active' &&
+          (prev.status === 'rerouting' || nextRerouteCount > prev.rerouteCount);
+        const nextConfidenceState: RoadNavigationConfidenceState =
+          nextStatus === 'arrived'
+            ? 'arrived'
+            : nextStatus === 'rerouting'
+              ? 'rerouting'
+              : routeAppliedFromReroute
+                ? 'reroute_applied'
+                : 'on_route';
         const nextSession: RoadNavigationSessionState = {
           ...prev,
           sessionId: prev.sessionId ?? randomSessionId(),
@@ -660,24 +739,19 @@ export function useRoadNavigation(params: {
           destination,
           route: validRoute,
           routeAlternatives: nextRouteAlternatives,
-          rerouteCount: rerouteCount ?? prev.rerouteCount,
+          rerouteCount: nextRerouteCount,
           error: null,
           createdFrom,
-          routeConfidenceState:
-            nextStatus === 'arrived'
-              ? 'arrived'
-              : nextStatus === 'rerouting'
-                ? 'rerouting'
-                : 'on_route',
-          routeStatusLabel: getRouteStateLabel(
-            nextStatus,
-            nextStatus === 'arrived'
-              ? 'arrived'
-              : nextStatus === 'rerouting'
-                ? 'rerouting'
-                : 'on_route',
-            liveServicesEnabled,
-          ),
+          routeConfidenceState: nextConfidenceState,
+          routeStatusLabel: routeAppliedFromReroute
+            ? 'Route updated'
+            : getRouteStateLabel(nextStatus, nextConfidenceState, liveServicesEnabled),
+          rerouteStatus: routeAppliedFromReroute
+            ? 'reroute_applied'
+            : nextStatus === 'rerouting'
+              ? 'rerouting'
+              : computed.activeGuidanceProgress?.offRouteStatus ?? 'on_route',
+          lastRerouteError: null,
           completionReason: nextStatus === 'arrived' ? 'auto_arrival' : null,
           ...computed,
         };
@@ -722,9 +796,12 @@ export function useRoadNavigation(params: {
 
       const routeKey = [
         destination.id,
+        currentLocation.lat.toFixed(5),
+        currentLocation.lng.toFixed(5),
         destination.coordinate.lat.toFixed(5),
         destination.coordinate.lng.toFixed(5),
         requestedStatus,
+        rerouteCount ?? 0,
       ].join(':');
 
       if (inFlightRouteKeyRef.current === routeKey) {
@@ -741,6 +818,7 @@ export function useRoadNavigation(params: {
             accessToken,
             origin: currentLocation,
             destination,
+            rerouteGeneration: rerouteCount ?? 0,
           }),
         );
 
@@ -806,6 +884,9 @@ export function useRoadNavigation(params: {
               etaIso: null,
               offRouteDistanceM: null,
               distanceToDestinationM: null,
+              activeGuidanceProgress: null,
+              offRouteUpdateCount: 0,
+              gpsAccuracyMeters: null,
               progressGeometry: [],
               updatedAt: restored.updatedAt,
             };
@@ -971,6 +1052,11 @@ export function useRoadNavigation(params: {
           routeConfidenceState: 'on_route',
           offRouteDistanceM: null,
           distanceToDestinationM: null,
+          activeGuidanceProgress: null,
+          offRouteUpdateCount: 0,
+          gpsAccuracyMeters: null,
+          rerouteStatus: 'on_route',
+          lastRerouteError: null,
           completionReason: null,
           progressGeometry: [],
           rerouteCount: 0,
@@ -1022,6 +1108,11 @@ export function useRoadNavigation(params: {
         routeConfidenceState: 'on_route',
         offRouteDistanceM: null,
         distanceToDestinationM: null,
+        activeGuidanceProgress: null,
+        offRouteUpdateCount: 0,
+        gpsAccuracyMeters: null,
+        rerouteStatus: 'on_route',
+        lastRerouteError: null,
         completionReason: null,
         progressGeometry: [],
         rerouteCount: 0,
@@ -1077,13 +1168,17 @@ export function useRoadNavigation(params: {
       if (!activeSession.destination) return;
       if (!currentLocation) return;
       if (!accessToken || !liveServicesEnabled) {
+        const failureMessage = 'Unable to recalculate route';
         setSession((prev) => ({
           ...prev,
           status: 'navigation_active',
-          error: null,
-          routeConfidenceState: 'off_route',
-          routeStatusLabel: 'Rejoin route',
+          error: failureMessage,
+          routeConfidenceState: 'reroute_failed',
+          routeStatusLabel: failureMessage,
+          nextInstruction: 'Return to the highlighted route when safe',
           isOffRoute: true,
+          rerouteStatus: 'reroute_failed',
+          lastRerouteError: failureMessage,
         }));
         return;
       }
@@ -1095,8 +1190,10 @@ export function useRoadNavigation(params: {
         status: 'rerouting',
         error: null,
         routeConfidenceState: 'rerouting',
-        routeStatusLabel: 'Updating route',
+        routeStatusLabel: 'Recalculating route...',
         rerouteCount: nextRerouteCount,
+        rerouteStatus: 'rerouting',
+        lastRerouteError: null,
         completionReason: null,
       }));
 
@@ -1108,11 +1205,17 @@ export function useRoadNavigation(params: {
           nextRerouteCount,
         );
       } catch (error) {
+        const failureMessage = getRouteErrorMessage(error, 'Unable to recalculate route');
         setSession((prev) => ({
           ...prev,
           status: 'navigation_active',
-          error: getRouteErrorMessage(error, 'Route update unavailable'),
-          routeStatusLabel: 'Route update unavailable',
+          error: failureMessage,
+          routeConfidenceState: 'reroute_failed',
+          routeStatusLabel: 'Unable to recalculate route',
+          nextInstruction: 'Return to the highlighted route when safe',
+          isOffRoute: true,
+          rerouteStatus: 'reroute_failed',
+          lastRerouteError: failureMessage,
         }));
       }
     },
@@ -1143,6 +1246,8 @@ export function useRoadNavigation(params: {
     const arrivalThreshold = Math.max(ARRIVAL_DISTANCE_M, 30 + accuracyPad * 0.35);
 
     const offRouteDistance = computed.offRouteDistanceM ?? Infinity;
+    const guidanceOffRouteStatus =
+      computed.activeGuidanceProgress?.offRouteStatus ?? 'on_route';
     const remainingDistance = computed.remainingDistanceM ?? Infinity;
     const distanceToDestination = computed.distanceToDestinationM ?? Infinity;
     const arrivedCandidate =
@@ -1154,7 +1259,11 @@ export function useRoadNavigation(params: {
       'low_confidence',
       'temporary_deviation',
       'off_route',
+      'off_route_candidate',
+      'off_route_confirmed',
       'rerouting',
+      'reroute_failed',
+      'reroute_applied',
       'rejoined',
     ];
     const wasRecovering = recoveringStates.includes(activeSession.routeConfidenceState);
@@ -1182,6 +1291,20 @@ export function useRoadNavigation(params: {
       offRouteHitCountRef.current = 0;
       rejoinHitCountRef.current = 0;
       nextConfidenceState = 'approaching';
+    } else if (guidanceOffRouteStatus === 'off_route_confirmed') {
+      arrivalHitCountRef.current = 0;
+      lowConfidenceHitCountRef.current = 0;
+      tempDeviationHitCountRef.current = 0;
+      rejoinHitCountRef.current = 0;
+      offRouteHitCountRef.current = computed.activeGuidanceProgress?.offRouteUpdateCount ?? 0;
+      nextConfidenceState = 'off_route_confirmed';
+    } else if (guidanceOffRouteStatus === 'off_route_candidate') {
+      arrivalHitCountRef.current = 0;
+      lowConfidenceHitCountRef.current = 0;
+      tempDeviationHitCountRef.current = 0;
+      rejoinHitCountRef.current = 0;
+      offRouteHitCountRef.current = computed.activeGuidanceProgress?.offRouteUpdateCount ?? 1;
+      nextConfidenceState = 'off_route_candidate';
     } else if (offRouteDistance <= rejoinThreshold && wasRecovering) {
       arrivalHitCountRef.current = 0;
       lowConfidenceHitCountRef.current = 0;
@@ -1246,7 +1369,13 @@ export function useRoadNavigation(params: {
     const nextIsOffRoute =
       nextConfidenceState === 'temporary_deviation' ||
       nextConfidenceState === 'off_route' ||
+      nextConfidenceState === 'off_route_candidate' ||
+      nextConfidenceState === 'off_route_confirmed' ||
       nextConfidenceState === 'rerouting';
+    const nextRerouteStatus: EcsActiveGuidanceOffRouteStatus =
+      nextConfidenceState === 'rerouting'
+        ? 'rerouting'
+        : computed.activeGuidanceProgress?.offRouteStatus ?? 'on_route';
 
     setSession((prev) => {
       const nextStatus =
@@ -1263,6 +1392,9 @@ export function useRoadNavigation(params: {
         prev.routeConfidenceState === nextConfidenceState &&
         sameNullableNumber(prev.offRouteDistanceM, computed.offRouteDistanceM, 1) &&
         sameNullableNumber(prev.distanceToDestinationM, computed.distanceToDestinationM, 1) &&
+        prev.offRouteUpdateCount === computed.offRouteUpdateCount &&
+        sameNullableNumber(prev.gpsAccuracyMeters, computed.gpsAccuracyMeters, 1) &&
+        prev.rerouteStatus === nextRerouteStatus &&
         prev.isOffRoute === nextIsOffRoute &&
         prev.completionReason === nextCompletionReason &&
         prev.status === nextStatus &&
@@ -1279,6 +1411,7 @@ export function useRoadNavigation(params: {
         routeConfidenceState: nextConfidenceState,
         routeStatusLabel: nextRouteStatusLabel,
         isOffRoute: nextIsOffRoute,
+        rerouteStatus: nextRerouteStatus,
         completionReason: nextCompletionReason,
       };
       void persistSession(nextSession);
@@ -1287,7 +1420,7 @@ export function useRoadNavigation(params: {
 
     if (activeSession.status === 'navigation_active') {
       if (
-        nextConfidenceState === 'off_route' &&
+        nextConfidenceState === 'off_route_confirmed' &&
         Date.now() - rerouteCooldownRef.current >= REROUTE_COOLDOWN_MS
       ) {
         offRouteHitCountRef.current = 0;
@@ -1339,6 +1472,10 @@ export function useRoadNavigation(params: {
         routeAlternatives: prev.routeAlternatives.length ? prev.routeAlternatives : [validRoute],
         routeStatusLabel: 'Route active',
         routeConfidenceState: 'on_route' as const,
+        offRouteUpdateCount: 0,
+        gpsAccuracyMeters: currentLocation?.accuracyM ?? null,
+        rerouteStatus: 'on_route' as const,
+        lastRerouteError: null,
         completionReason: null,
         error: null,
       };

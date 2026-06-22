@@ -1,0 +1,84 @@
+{
+  "uuid": "reroute-after-uuid",
+  "distance": 440,
+  "duration": 150,
+  "geometry": {
+    "coordinates": [
+      [-121.214, 38.781],
+      [-121.213, 38.781],
+      [-121.2115, 38.782],
+      [-121.21, 38.783]
+    ]
+  },
+  "legs": [
+    {
+      "summary": "Cedar Spur, Ridge Connector",
+      "distance": 440,
+      "duration": 150,
+      "steps": [
+        {
+          "distance": 130,
+          "duration": 45,
+          "name": "Cedar Spur",
+          "maneuver": {
+            "instruction": "Head east on Cedar Spur",
+            "type": "depart",
+            "location": [-121.214, 38.781],
+            "bearing_after": 90
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.214, 38.781],
+              [-121.213, 38.781]
+            ]
+          }
+        },
+        {
+          "distance": 210,
+          "duration": 75,
+          "name": "Ridge Connector",
+          "maneuver": {
+            "instruction": "Turn left onto Ridge Connector",
+            "type": "turn",
+            "modifier": "left",
+            "location": [-121.213, 38.781],
+            "bearing_before": 90,
+            "bearing_after": 35
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.213, 38.781],
+              [-121.2115, 38.782]
+            ]
+          },
+          "bannerInstructions": [
+            {
+              "distanceAlongGeometry": 170,
+              "primary": {
+                "text": "Ridge Connector",
+                "type": "turn",
+                "modifier": "left"
+              }
+            }
+          ]
+        },
+        {
+          "distance": 100,
+          "duration": 30,
+          "name": "",
+          "maneuver": {
+            "instruction": "You have arrived at your destination",
+            "type": "arrive",
+            "location": [-121.21, 38.783]
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.2115, 38.782],
+              [-121.21, 38.783]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

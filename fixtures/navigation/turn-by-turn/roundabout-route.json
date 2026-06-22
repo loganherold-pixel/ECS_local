@@ -1,0 +1,67 @@
+{
+  "uuid": "roundabout-route-uuid",
+  "distance": 360,
+  "duration": 130,
+  "geometry": {
+    "coordinates": [
+      [-121.215, 38.78],
+      [-121.214, 38.7805],
+      [-121.2135, 38.781],
+      [-121.212, 38.7815]
+    ]
+  },
+  "legs": [
+    {
+      "summary": "Town Center Road",
+      "distance": 360,
+      "duration": 130,
+      "steps": [
+        {
+          "distance": 260,
+          "duration": 95,
+          "name": "Town Center Road",
+          "maneuver": {
+            "type": "roundabout",
+            "modifier": "right",
+            "exit": 2,
+            "location": [-121.214, 38.7805],
+            "bearing_before": 70,
+            "bearing_after": 95
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.215, 38.78],
+              [-121.214, 38.7805],
+              [-121.2135, 38.781]
+            ]
+          },
+          "bannerInstructions": [
+            {
+              "distanceAlongGeometry": 200,
+              "primary": {
+                "text": "Town Center Road",
+                "type": "roundabout",
+                "modifier": "right"
+              }
+            }
+          ]
+        },
+        {
+          "distance": 100,
+          "duration": 35,
+          "name": "",
+          "maneuver": {
+            "type": "arrive",
+            "location": [-121.212, 38.7815]
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.2135, 38.781],
+              [-121.212, 38.7815]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

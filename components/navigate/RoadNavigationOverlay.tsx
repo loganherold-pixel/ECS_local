@@ -20,11 +20,13 @@ import type { RoadNavSearchSuggestion } from '../../lib/mapboxRoadNavigation';
 import type { RoadNavigationSessionState } from '../../lib/useRoadNavigation';
 import { ECS_CTA_LABELS } from '../../lib/ecsStateCopy';
 import {
-  buildActiveRoadDirectionList,
+  buildActiveGuidanceDirectionList,
   buildFallbackActiveDirectionList,
   formatActiveDirectionDistance,
+  type ActiveGuidanceDirectionList,
   type ActiveGuidanceDirectionItem,
 } from '../../lib/activeGuidanceDirections';
+import { buildActiveGuidanceManeuverDisplay } from '../../lib/navigation/activeGuidanceManeuverDisplay';
 import type {
   RouteGuidanceReadinessTone,
   RouteGuidanceReadinessViewModel,
@@ -366,10 +368,19 @@ function StepList({
 }
 
 function ActiveDirectionsDropdown({
-  items,
+  directions,
 }: {
-  items: ActiveGuidanceDirectionItem[];
+  directions: ActiveGuidanceDirectionList;
 }) {
+  const items = directions.items;
+  const countLabel =
+    directions.state === 'pending'
+      ? 'pending'
+      : directions.state === 'summary_only' || directions.state === 'unavailable'
+        ? 'summary'
+        : `${items.length} remaining`;
+  const sourceLabel = directions.sourceLabel;
+
   return (
     <View style={styles.activeDirectionsDropdown}>
       <View style={styles.activeDirectionsHeaderRow}>
@@ -377,51 +388,94 @@ function ActiveDirectionsDropdown({
           DIRECTIONS
         </Text>
         <Text style={styles.activeDirectionsCount} numberOfLines={1}>
-          {items.length} remaining
+          {countLabel}
         </Text>
       </View>
-      <ScrollView
-        style={styles.activeDirectionsScroll}
-        contentContainerStyle={styles.activeDirectionsScrollContent}
-        nestedScrollEnabled
-        showsVerticalScrollIndicator={false}
-      >
-        {items.map((item) => {
-          const metaParts = [
-            formatActiveDirectionDistance(item.distanceM),
-            item.detail,
-          ].filter((part): part is string => !!part && part !== '--');
-          return (
-            <View key={item.id} style={styles.activeDirectionsRow}>
+      {sourceLabel ? (
+        <Text style={styles.activeDirectionsSourceLabel} numberOfLines={1}>
+          {sourceLabel}
+        </Text>
+      ) : null}
+      {items.length > 0 ? (
+        <ScrollView
+          style={styles.activeDirectionsScroll}
+          contentContainerStyle={styles.activeDirectionsScrollContent}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
+        >
+          {items.map((item) => {
+            const metaParts = [
+              formatActiveDirectionDistance(item.distanceM),
+              item.detail,
+            ].filter((part): part is string => !!part && part !== '--');
+            const durationLabel =
+              item.durationS != null && Number.isFinite(item.durationS)
+                ? formatDuration(item.durationS)
+                : null;
+            return (
               <View
+                key={item.id}
                 style={[
-                  styles.activeDirectionsSequenceBadge,
-                  item.kind === 'arrival' && styles.activeDirectionsSequenceBadgeArrival,
+                  styles.activeDirectionsRow,
+                  item.isCurrent && styles.activeDirectionsRowCurrent,
                 ]}
               >
-                <Text style={styles.activeDirectionsSequenceText} numberOfLines={1}>
-                  {item.kind === 'arrival' ? 'END' : item.sequenceLabel}
-                </Text>
+                <View
+                  style={[
+                    styles.activeDirectionsSequenceBadge,
+                    item.kind === 'arrival' && styles.activeDirectionsSequenceBadgeArrival,
+                    item.isCurrent && styles.activeDirectionsSequenceBadgeCurrent,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.activeDirectionsSequenceText,
+                      item.isCurrent && styles.activeDirectionsSequenceTextCurrent,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item.kind === 'arrival' ? 'END' : item.sequenceLabel}
+                  </Text>
+                </View>
+                <View style={styles.activeDirectionsIconWrap}>
+                  <Ionicons
+                    name={(item.iconName ?? getManeuverIcon(item.instruction)) as React.ComponentProps<typeof Ionicons>['name']}
+                    size={13}
+                    color={item.kind === 'arrival' ? '#FFD9C7' : TACTICAL.amber}
+                  />
+                </View>
+                <View style={styles.activeDirectionsCopy}>
+                  <Text
+                    style={[
+                      styles.activeDirectionsInstruction,
+                      item.isCurrent && styles.activeDirectionsInstructionCurrent,
+                    ]}
+                    numberOfLines={2}
+                  >
+                    {item.instruction}
+                  </Text>
+                  <View style={styles.activeDirectionsMetaRow}>
+                    <Text style={styles.activeDirectionsMeta} numberOfLines={1}>
+                      {metaParts.length > 0 ? metaParts.join(' - ') : 'Updating from active guidance'}
+                    </Text>
+                    {durationLabel ? (
+                      <Text style={styles.activeDirectionsDuration} numberOfLines={1}>
+                        {durationLabel}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
               </View>
-              <View style={styles.activeDirectionsIconWrap}>
-                <Ionicons
-                  name={getManeuverIcon(item.instruction)}
-                  size={13}
-                  color={item.kind === 'arrival' ? '#FFD9C7' : TACTICAL.amber}
-                />
-              </View>
-              <View style={styles.activeDirectionsCopy}>
-                <Text style={styles.activeDirectionsInstruction} numberOfLines={2}>
-                  {item.instruction}
-                </Text>
-                <Text style={styles.activeDirectionsMeta} numberOfLines={1}>
-                  {metaParts.length > 0 ? metaParts.join(' - ') : 'Updating from active guidance'}
-                </Text>
-              </View>
-            </View>
-          );
-        })}
-      </ScrollView>
+            );
+          })}
+        </ScrollView>
+      ) : (
+        <View style={styles.activeDirectionsEmptyState}>
+          <Text style={styles.activeDirectionsEmptyText} numberOfLines={2}>
+            {directions.emptyMessage ?? 'No turn-by-turn directions available for this route'}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -811,10 +865,35 @@ function ActiveNavigationCard({
   | 'activeContext'
   | 'activeAccessory'
 >) {
-  const nextInstruction =
-    activeContext?.instruction ?? session.nextInstruction ?? 'Continue on highlighted route';
   const [directionsExpanded, setDirectionsExpanded] = useState(false);
   const isRerouting = !activeContext && (session.status === 'rerouting' || session.isOffRoute);
+  const roadManeuverEligible = activeContext?.showSteps !== false && !!session.route;
+  const maneuverDisplay = useMemo(() => {
+    if (!roadManeuverEligible) return null;
+    const guidanceRoute = session.route?.guidance ?? null;
+    return buildActiveGuidanceManeuverDisplay({
+      guidanceMode:
+        guidanceRoute?.guidanceMode ??
+        session.route?.guidanceMode ??
+        'unavailable',
+      route: guidanceRoute,
+      progress: session.activeGuidanceProgress,
+      status: session.status,
+      routeStatusLabel: session.routeStatusLabel,
+    });
+  }, [
+    roadManeuverEligible,
+    session.activeGuidanceProgress,
+    session.route?.guidance,
+    session.route?.guidanceMode,
+    session.routeStatusLabel,
+    session.status,
+  ]);
+  const nextInstruction =
+    maneuverDisplay?.primaryText ??
+    activeContext?.instruction ??
+    session.nextInstruction ??
+    'Continue on highlighted route';
   const effectiveMetrics =
     activeContext?.metrics && activeContext.metrics.length > 0
       ? activeContext.metrics.slice(0, 3)
@@ -824,8 +903,8 @@ function ActiveNavigationCard({
           { label: 'TIME', value: formatDuration(session.remainingDurationS) },
         ];
   const guidanceMetrics = effectiveMetrics
-    .filter((metric) => ['REMAIN', 'REMAINING', 'ETA'].includes(metric.label.toUpperCase()))
-    .slice(0, 2)
+    .filter((metric) => ['REMAIN', 'REMAINING', 'ETA', 'TIME'].includes(metric.label.toUpperCase()))
+    .slice(0, 3)
     .map((metric) => ({
       ...metric,
       label: metric.label.toUpperCase() === 'REMAIN' ? 'REMAINING' : metric.label,
@@ -833,27 +912,35 @@ function ActiveNavigationCard({
   const showReroute = activeContext?.showReroute ?? (isRerouting || session.isOffRoute);
   const statusLine = activeContext?.statusText ?? session.routeStatusLabel ?? 'Route active';
   const distanceLine =
-    activeContext?.distanceLabel ?? formatDistance(session.nextInstructionDistanceM);
+    maneuverDisplay?.distanceLabel ??
+    activeContext?.distanceLabel ??
+    formatDistance(session.nextInstructionDistanceM);
   const guidanceTargetLabel =
     nextInstruction.toLowerCase().includes('arriv') ||
     nextInstruction.toLowerCase().includes('destination')
       ? 'arrival'
       : 'next action';
   const guidanceEyebrow =
-    activeContext?.eyebrow ?? (isRerouting ? 'ROUTE UPDATE' : 'NEXT ACTION');
-  const maneuverIcon = getManeuverIcon(nextInstruction);
-  const roadDirections = useMemo(
-    () => buildActiveRoadDirectionList({
-      route: session.route,
-      currentStepIndex: session.currentStepIndex,
-      remainingDistanceM: session.remainingDistanceM,
-      nextInstructionDistanceM: session.nextInstructionDistanceM,
+    maneuverDisplay?.eyebrow ??
+    activeContext?.eyebrow ??
+    (isRerouting ? 'ROUTE UPDATE' : 'NEXT ACTION');
+  const maneuverIcon = (
+    maneuverDisplay?.iconName ?? getManeuverIcon(nextInstruction)
+  ) as React.ComponentProps<typeof Ionicons>['name'];
+  const maneuverDetailLine =
+    maneuverDisplay?.detailText ??
+    (distanceLine ? `${distanceLine} to ${guidanceTargetLabel}` : statusLine);
+  const activeGuidanceFollowingManeuver = maneuverDisplay?.followingText ?? null;
+  const roadDirectionsList = useMemo(
+    () => buildActiveGuidanceDirectionList({
+      route: session.route?.guidance,
+      progress: session.activeGuidanceProgress,
+      status: session.status,
     }),
     [
-      session.currentStepIndex,
-      session.nextInstructionDistanceM,
-      session.remainingDistanceM,
-      session.route,
+      session.activeGuidanceProgress,
+      session.route?.guidance,
+      session.status,
     ],
   );
   const fallbackDirections = useMemo(
@@ -868,8 +955,20 @@ function ActiveNavigationCard({
       session.nextInstructionDistanceM,
     ],
   );
-  const activeDirections = roadDirections.length > 0 ? roadDirections : fallbackDirections;
-  const hasActiveDirections = activeDirections.length > 0;
+  const activeDirectionsList: ActiveGuidanceDirectionList = roadManeuverEligible
+    ? roadDirectionsList
+    : {
+        state: fallbackDirections.length > 0 ? 'ready' : 'unavailable',
+        items: fallbackDirections,
+        emptyMessage: fallbackDirections.length > 0 ? null : 'No turn-by-turn directions available for this route',
+        routeId: session.route?.id ?? null,
+        rerouteGeneration: session.rerouteCount,
+        currentStepIndex: session.currentStepIndex ?? null,
+        guidanceMode: null,
+        sourceLabel: null,
+      };
+  const hasActiveDirections = activeDirectionsList.items.length > 0;
+  const hasDirectionsControl = roadManeuverEligible || hasActiveDirections;
   const landscapeCompact = typeof activeGuidanceWidth === 'number' && activeGuidanceWidth > 0;
   const guidancePosition = landscapeCompact
     ? {
@@ -1004,9 +1103,9 @@ function ActiveNavigationCard({
               </TouchableOpacity>
             </View>
           </View>
-          {hasActiveDirections || (activeAccessoryMinimized && onExpandActiveAccessory) ? (
+          {hasDirectionsControl || (activeAccessoryMinimized && onExpandActiveAccessory) ? (
             <View style={styles.activeGuidanceAuxActionRow}>
-              {hasActiveDirections ? (
+              {hasDirectionsControl ? (
                 <TouchableOpacity
                   style={[
                     styles.activeGuidanceDirectionsButton,
@@ -1043,20 +1142,27 @@ function ActiveNavigationCard({
               ) : null}
             </View>
           ) : null}
-          {directionsExpanded && hasActiveDirections ? (
-            <ActiveDirectionsDropdown items={activeDirections} />
+          {directionsExpanded && hasDirectionsControl ? (
+            <ActiveDirectionsDropdown directions={activeDirectionsList} />
           ) : null}
-          <View style={styles.activeGuidanceRow}>
-            <View style={styles.activeGuidanceIconWrap}>
-              <Ionicons name={maneuverIcon} size={18} color={TACTICAL.amber} />
-            </View>
-            <View style={styles.activeGuidanceCopy}>
-              <Text style={styles.activeGuidanceInstruction} numberOfLines={2}>
-                {nextInstruction}
-              </Text>
-              <Text style={styles.activeGuidanceDetail} numberOfLines={1}>
-                {distanceLine ? `${distanceLine} to ${guidanceTargetLabel}` : statusLine}
-              </Text>
+          <View style={styles.activeGuidanceManeuverBanner}>
+            <View style={styles.activeGuidanceRow}>
+              <View style={styles.activeGuidanceIconWrap}>
+                <Ionicons name={maneuverIcon} size={18} color={TACTICAL.amber} />
+              </View>
+              <View style={styles.activeGuidanceCopy}>
+                <Text style={styles.activeGuidanceInstruction} numberOfLines={2}>
+                  {nextInstruction}
+                </Text>
+                <Text style={styles.activeGuidanceDetail} numberOfLines={1}>
+                  {maneuverDetailLine}
+                </Text>
+                {activeGuidanceFollowingManeuver ? (
+                  <Text style={styles.activeGuidanceFollowingManeuver} numberOfLines={1}>
+                    {activeGuidanceFollowingManeuver}
+                  </Text>
+                ) : null}
+              </View>
             </View>
           </View>
 
@@ -1514,6 +1620,16 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     fontSize: 10,
   },
+  activeDirectionsSourceLabel: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    paddingHorizontal: 10,
+    paddingTop: 4,
+    paddingBottom: 3,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(196,138,44,0.08)',
+  },
   activeDirectionsScroll: {
     maxHeight: 156,
   },
@@ -1530,6 +1646,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.05)',
   },
+  activeDirectionsRowCurrent: {
+    backgroundColor: 'rgba(212,160,23,0.075)',
+  },
   activeDirectionsSequenceBadge: {
     width: 34,
     height: 22,
@@ -1544,11 +1663,18 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,128,92,0.28)',
     backgroundColor: 'rgba(82,18,12,0.36)',
   },
+  activeDirectionsSequenceBadgeCurrent: {
+    borderColor: 'rgba(212,160,23,0.52)',
+    backgroundColor: 'rgba(212,160,23,0.92)',
+  },
   activeDirectionsSequenceText: {
     ...ECS_TEXT.statLabel,
     color: TACTICAL.amber,
     fontSize: 7,
     letterSpacing: 0,
+  },
+  activeDirectionsSequenceTextCurrent: {
+    color: '#091014',
   },
   activeDirectionsIconWrap: {
     width: 24,
@@ -1570,12 +1696,40 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
   },
+  activeDirectionsInstructionCurrent: {
+    color: TACTICAL.amber,
+  },
+  activeDirectionsMetaRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   activeDirectionsMeta: {
     ...ECS_TEXT.helper,
+    flex: 1,
     color: TACTICAL.textMuted,
-    marginTop: 2,
     fontSize: 10,
     lineHeight: 12,
+  },
+  activeDirectionsDuration: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 12,
+    flexShrink: 0,
+  },
+  activeDirectionsEmptyState: {
+    minHeight: 52,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    justifyContent: 'center',
+  },
+  activeDirectionsEmptyText: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 13,
   },
   previewSummaryWrap: {
     gap: 8,
@@ -1795,6 +1949,14 @@ const styles = StyleSheet.create({
   activeGuidanceEndButtonText: {
     color: '#FFD9C7',
   },
+  activeGuidanceManeuverBanner: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.16)',
+    backgroundColor: 'rgba(212,160,23,0.055)',
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
   activeGuidanceRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1825,6 +1987,12 @@ const styles = StyleSheet.create({
     ...ECS_TEXT.helper,
     marginTop: 2,
     color: TACTICAL.textMuted,
+  },
+  activeGuidanceFollowingManeuver: {
+    ...ECS_TEXT.helper,
+    marginTop: 3,
+    color: TACTICAL.amber,
+    fontSize: 9,
   },
   activeGuidanceMetricsRow: {
     flexDirection: 'row',

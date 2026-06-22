@@ -279,6 +279,7 @@ import {
   buildActiveGuidanceProgressPath,
   resolveActiveGuidanceDisplayLocation,
 } from '../../lib/activeGuidanceProgressPath';
+import { buildActiveGuidanceRouteLineSync } from '../../lib/navigation/activeGuidanceRouteLineSync';
 import { logRouteGeometryLifecycle, validateRouteGeometry } from '../../lib/routeGeometryLifecycle';
 import { normalizeRouteLifecycle } from '../../lib/routeLifecycleState';
 import { buildFullRouteGuidanceModel } from '../../lib/fullRouteGuidance';
@@ -3344,6 +3345,7 @@ const [activeGuidanceManualOverride, setActiveGuidanceManualOverride] = useState
 const activeGuidanceAutoMinimizeSinceRef = useRef<number | null>(null);
 const activeGuidanceAutoMinimizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 const activeGuidanceSessionKeyRef = useRef<string | null>(null);
+const previousActiveRoadRouteLineKeyRef = useRef<string | null>(null);
 const activeGuidanceEndpointHintOpacity = useRef(new Animated.Value(0)).current;
 const activeGuidanceEndpointHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 const [selectedExploreRouteSegmentId, setSelectedExploreRouteSegmentId] = useState<string | null>(null);
@@ -10893,6 +10895,36 @@ const handleCreateRun = useCallback(() => {
     [roadNavigation.session.route?.geometry],
   );
 
+  const activeRoadRouteLineSync = useMemo(
+    () =>
+      buildActiveGuidanceRouteLineSync({
+        route: roadNavigation.session.route?.guidance ?? null,
+        fallbackGeometry: roadNavigation.session.route?.geometry ?? null,
+        navigationStatus: roadNavigation.session.status,
+        routeConfidenceState: roadNavigation.session.routeConfidenceState,
+        routeStatusLabel: roadNavigation.session.routeStatusLabel,
+      }),
+    [
+      roadNavigation.session.route?.geometry,
+      roadNavigation.session.route?.guidance,
+      roadNavigation.session.routeConfidenceState,
+      roadNavigation.session.routeStatusLabel,
+      roadNavigation.session.status,
+    ],
+  );
+
+  const activeRoadRouteLinePoints = useMemo(
+    () =>
+      activeRoadRouteLineSync.geometry.map((point) => ({
+        lat: point.lat,
+        lng: point.lng,
+        ele: point.ele ?? point.ele_m ?? null,
+        ele_m: point.ele_m ?? point.ele ?? null,
+        elevationFeet: point.elevationFeet ?? null,
+      })),
+    [activeRoadRouteLineSync.geometry],
+  );
+
   const roadRouteProgressPoints = useMemo(
     () =>
       safeArray(roadNavigation.session.progressGeometry).map((point) => ({
@@ -11131,7 +11163,7 @@ const handleCreateRun = useCallback(() => {
     return buildFullRouteGuidanceModel({
       phase,
       currentLocation: safeUserLocation,
-      roadRoutePoints: shouldBuildFullRoute ? roadRoutePoints : [],
+      roadRoutePoints: shouldBuildFullRoute ? activeRoadRouteLinePoints : [],
       roadProgressPoints: shouldBuildFullRoute ? roadRouteProgressPoints : [],
       roadDistanceM: roadNavigation.session.route?.distanceM ?? null,
       roadRemainingDistanceM:
@@ -11152,7 +11184,7 @@ const handleCreateRun = useCallback(() => {
     pendingHybridTrailTransition,
     roadNavigation.session.remainingDistanceM,
     roadNavigation.session.route?.distanceM,
-    roadRoutePoints,
+    activeRoadRouteLinePoints,
     roadRouteProgressPoints,
     safeUserLocation,
     trailNavigation.session.payload,
@@ -11694,20 +11726,41 @@ const handleCreateRun = useCallback(() => {
     ) {
       return trailNavigation.session.payload.trailGeometry;
     }
-    return roadRoutePoints.length > 1
-      ? roadRoutePoints
+    return activeRoadRouteLinePoints.length > 1
+      ? activeRoadRouteLinePoints
       : explorePreviewMode
         ? []
         : validatedRunPoints;
   }, [
+    activeRoadRouteLinePoints,
     explorePreviewMode,
     fullRouteGuidanceModel.routePoints,
     fullRouteGuidanceModel.status,
     pendingHybridTrailTransition,
-    roadRoutePoints,
     trailNavigation.session.payload,
     trailNavigationActive,
     validatedRunPoints,
+  ]);
+
+  const displayedRouteLineKey = useMemo(() => {
+    const roadRouteLineKey = activeRoadRouteLineSync.routeLineKey;
+    if (!roadRouteLineKey || displayedRoutePoints.length < 2) return null;
+    if (displayedRoutePoints === activeRoadRouteLinePoints) {
+      return roadRouteLineKey;
+    }
+    if (
+      fullRouteGuidanceModel.status !== 'unavailable' &&
+      displayedRoutePoints === fullRouteGuidanceModel.routePoints
+    ) {
+      return `full-route:${roadRouteLineKey}:${fullRouteGuidanceModel.routePoints.length}`;
+    }
+    return null;
+  }, [
+    activeRoadRouteLinePoints,
+    activeRoadRouteLineSync.routeLineKey,
+    displayedRoutePoints,
+    fullRouteGuidanceModel.routePoints,
+    fullRouteGuidanceModel.status,
   ]);
 
   const navigateRouteProfileCoordinates = useMemo(
@@ -11973,11 +12026,11 @@ const handleCreateRun = useCallback(() => {
     if (trailNavigationActive || pendingHybridTrailTransition) return '#C49A2C';
     if (navigationOverlayMode === 'preview') return '#65D4FF';
     if (navigationOverlayMode === 'arrived') return '#F2C24D';
-    return roadRoutePoints.length > 1 ? '#4F9BFF' : undefined;
+    return activeRoadRouteLinePoints.length > 1 ? '#4F9BFF' : undefined;
   }, [
+    activeRoadRouteLinePoints.length,
     navigationOverlayMode,
     pendingHybridTrailTransition,
-    roadRoutePoints.length,
     trailNavigationActive,
   ]);
 
@@ -14333,8 +14386,15 @@ const handleTopToolboxLayout = useCallback(
       const roadConfidence = roadNavigation.session.routeConfidenceState;
       const hybridApproachActive = !!activeHybridPayload;
       const routeUpdating = roadConfidence === 'rerouting';
+      const routeCandidate = roadConfidence === 'off_route_candidate';
+      const routeFailed = roadConfidence === 'reroute_failed';
+      const routeApplied = roadConfidence === 'reroute_applied';
       const routeDeviation =
-        roadConfidence === 'temporary_deviation' || roadConfidence === 'off_route';
+        roadConfidence === 'temporary_deviation' ||
+        roadConfidence === 'off_route' ||
+        roadConfidence === 'off_route_confirmed' ||
+        routeCandidate ||
+        routeFailed;
       const routeLowConfidence = roadConfidence === 'low_confidence';
       const routeRejoined = roadConfidence === 'rejoined';
       const routeApproaching = roadConfidence === 'approaching';
@@ -14356,8 +14416,12 @@ const handleTopToolboxLayout = useCallback(
         tripMode: hybridApproachActive ? 'hybrid' as const : 'road' as const,
         eyebrow: routeUpdating
           ? 'REROUTING'
+          : routeFailed
+            ? 'REROUTE FAILED'
           : routeApproaching
             ? hybridApproachActive ? 'TRAILHEAD APPROACH' : 'FINAL APPROACH'
+            : routeApplied
+              ? 'ROUTE UPDATED'
             : routeRejoined
               ? 'ROUTE REJOINED'
               : routeDeviation
@@ -14371,8 +14435,12 @@ const handleTopToolboxLayout = useCallback(
           roadNavigation.session.destination?.subtitle ??
           (routeUpdating
             ? 'Refreshing route guidance'
+            : routeFailed
+              ? 'Previous route still visible'
             : routeApproaching
               ? hybridApproachActive ? 'Trailhead close ahead' : 'Destination close ahead'
+              : routeApplied
+                ? 'Guidance refreshed'
               : routeRejoined
                 ? 'Confidence restored'
                 : routeDeviation
@@ -14384,8 +14452,10 @@ const handleTopToolboxLayout = useCallback(
           routeApproaching
             ? 'Arriving at destination'
             : routeUpdating
-            ? 'Updating route guidance'
-            : roadNavigation.session.nextInstruction ?? 'Continue on highlighted route',
+              ? 'Recalculating route...'
+              : routeFailed
+                ? 'Return to the highlighted route when safe'
+                : roadNavigation.session.nextInstruction ?? 'Continue on highlighted route',
         distanceLabel: routeUpdating
           ? 'UPDATING'
           : formatNavMeters(
@@ -14423,6 +14493,8 @@ const handleTopToolboxLayout = useCallback(
         progressLabel:
           routeApproaching
             ? hybridApproachActive ? 'TRAILHEAD APPROACH' : 'FINAL APPROACH'
+            : routeApplied
+              ? 'UPDATED'
             : routeRejoined
               ? 'REJOINED'
               : hybridApproachActive && fullRouteGuidanceModel.progressPercent != null
@@ -14435,8 +14507,12 @@ const handleTopToolboxLayout = useCallback(
           activeOperationalNote ??
           (routeUpdating
             ? 'ECS is recalculating the road route while guidance stays active on the map.'
+            : routeFailed
+              ? 'Unable to recalculate route. Return to the highlighted route when safe.'
             : routeDeviation && !liveNavigateServicesEnabled
               ? 'Live reroute is unavailable. Follow the highlighted route back toward the planned path.'
+              : routeCandidate
+                ? 'GPS indicates a possible route departure. ECS is waiting for one more stable update before recalculating.'
               : routeDeviation
                 ? 'A meaningful deviation was detected. ECS is holding route context while guidance adapts.'
                 : routeLowConfidence
@@ -14453,7 +14529,7 @@ const handleTopToolboxLayout = useCallback(
         showSteps: true,
         showOverview: true,
         showReroute:
-          liveNavigateServicesEnabled && (routeDeviation || routeUpdating),
+          liveNavigateServicesEnabled && (routeDeviation || routeUpdating || routeFailed),
         overviewLabel: 'Overview',
         rerouteLabel: 'Reroute',
         endLabel: 'End Navigation',
@@ -14949,6 +15025,61 @@ const handleTopToolboxLayout = useCallback(
     roadNavigation.session.route?.bounds,
     routeActiveVisualMode,
     trailNavigationActive,
+  ]);
+
+  useEffect(() => {
+    const routeLineKey = activeRoadRouteLineSync.routeLineKey;
+    if (!routeLineKey || navigationOverlayMode !== 'active') {
+      previousActiveRoadRouteLineKeyRef.current = routeLineKey ?? null;
+      return;
+    }
+
+    const previousRouteLineKey = previousActiveRoadRouteLineKeyRef.current;
+    previousActiveRoadRouteLineKeyRef.current = routeLineKey;
+    if (!previousRouteLineKey || previousRouteLineKey === routeLineKey) return;
+    if (!followUser) return;
+
+    const routeBounds =
+      roadNavigation.session.route?.bounds ??
+      (activeRoadRouteLineSync.geometry.length > 1
+        ? activeRoadRouteLineSync.geometry.reduce(
+            (bounds, point) => ({
+              north: Math.max(bounds.north, point.lat),
+              south: Math.min(bounds.south, point.lat),
+              east: Math.max(bounds.east, point.lng),
+              west: Math.min(bounds.west, point.lng),
+            }),
+            {
+              north: activeRoadRouteLineSync.geometry[0].lat,
+              south: activeRoadRouteLineSync.geometry[0].lat,
+              east: activeRoadRouteLineSync.geometry[0].lng,
+              west: activeRoadRouteLineSync.geometry[0].lng,
+            },
+          )
+        : null);
+    if (!routeBounds) return;
+
+    queueMapCameraCommand({
+      mode: 'route_overview',
+      fitBounds: {
+        north: routeBounds.north,
+        south: routeBounds.south,
+        east: routeBounds.east,
+        west: routeBounds.west,
+        padding: 82,
+        maxZoom: 15,
+      },
+      durationMs: 700,
+      animate: true,
+      reason: 'active_guidance_reroute_refit',
+    });
+  }, [
+    activeRoadRouteLineSync.geometry,
+    activeRoadRouteLineSync.routeLineKey,
+    followUser,
+    navigationOverlayMode,
+    queueMapCameraCommand,
+    roadNavigation.session.route?.bounds,
   ]);
 
   useEffect(() => {
@@ -19145,6 +19276,7 @@ const stableMapSurface = useMemo(() => {
         routeColor={displayedRouteColor}
         progressColor={displayedRouteProgressColor}
         routeRenderMode={displayedRouteRenderMode}
+        routeLineKey={displayedRouteLineKey}
         showTrailEntryEndpointMarker={showTrailEntryEndpointMarker}
         mapStyle={mapStyle}
         mapboxToken={mapToken || ''}
@@ -20321,6 +20453,7 @@ const stableMapSurface = useMemo(() => {
   displayedRouteColor,
   displayedRouteProgressColor,
   displayedRouteRenderMode,
+  displayedRouteLineKey,
   mapStyle,
   mapToken,
   mapDisplayUserLocation,

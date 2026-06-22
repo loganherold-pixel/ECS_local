@@ -108,6 +108,12 @@ import {
   resolveFleetPremiumReleaseConfig,
 } from '../../lib/fleet/fleetPremiumReleaseConfig';
 import {
+  FLEET_QA_PRELOAD_STATE_IDS,
+  applyFleetQaPreloadPlan,
+  resolveFleetQaActiveSwitchTargetId,
+  type FleetQaPreloadStateId,
+} from '../../lib/fleet/fleetQaPreload';
+import {
   FLEET_CHECKLIST_CATEGORIES,
   addChecklistItemToLoadoutState,
   buildFleetChecklistRecommendations,
@@ -1299,6 +1305,68 @@ function FleetPremiumVehicleCard({
   );
 }
 
+const FLEET_QA_PRELOAD_ACTIONS: Record<FleetQaPreloadStateId, { label: string; icon: React.ComponentProps<typeof ECSButton>['icon'] }> = {
+  zero_vehicle: { label: 'Zero Vehicle', icon: 'remove-circle-outline' },
+  two_vehicle_active_switch: { label: 'Two Vehicle', icon: 'swap-horizontal-outline' },
+  verified_vs_estimated_weight: { label: 'Verified/Est', icon: 'shield-checkmark-outline' },
+  payload_pressure: { label: 'Payload Press', icon: 'speedometer-outline' },
+  offline_restore_migration: { label: 'Offline Restore', icon: 'cloud-offline-outline' },
+};
+
+function FleetQaPreloadPanel({
+  busyStateId,
+  switchTargetName,
+  onPreload,
+  onSwitchActive,
+}: {
+  busyStateId: FleetQaPreloadStateId | null;
+  switchTargetName: string | null;
+  onPreload: (stateId: FleetQaPreloadStateId) => void;
+  onSwitchActive: () => void;
+}) {
+  return (
+    <ECSPanel variant="quiet" style={s.qaPreloadPanel}>
+      <View style={s.qaPreloadHeader}>
+        <Text style={s.qaPreloadTitle}>QA PRELOAD</Text>
+        <ECSBadge label="DEV ONLY" tone="warning" compact />
+      </View>
+      <ECSActionRow compact wrap style={s.qaPreloadActionRow}>
+        {FLEET_QA_PRELOAD_STATE_IDS.map((stateId) => {
+          const action = FLEET_QA_PRELOAD_ACTIONS[stateId];
+          return (
+            <ECSButton
+              key={stateId}
+              label={action.label}
+              icon={action.icon}
+              variant={stateId === 'zero_vehicle' ? 'tertiary' : 'secondary'}
+              size="compact"
+              loading={busyStateId === stateId}
+              disabled={busyStateId != null}
+              onPress={() => onPreload(stateId)}
+              style={s.qaPreloadButton}
+              numberOfLines={2}
+            />
+          );
+        })}
+      </ECSActionRow>
+      {switchTargetName ? (
+        <ECSActionRow compact>
+          <ECSButton
+            label={`Switch Active: ${switchTargetName}`}
+            icon="radio-button-on-outline"
+            variant="primary"
+            size="compact"
+            disabled={busyStateId != null}
+            onPress={onSwitchActive}
+            grow
+            numberOfLines={2}
+          />
+        </ECSActionRow>
+      ) : null}
+    </ECSPanel>
+  );
+}
+
 function LoadoutSummaryMetrics({
   vehicle,
   userId,
@@ -1485,6 +1553,7 @@ function FleetScreenInner() {
   const [supportDataRevision, setSupportDataRevision] = useState(0);
   const [visibleFleetVehicleId, setVisibleFleetVehicleId] = useState<string | null>(null);
   const [carouselWidth, setCarouselWidth] = useState(0);
+  const [fleetQaPreloadBusy, setFleetQaPreloadBusy] = useState<FleetQaPreloadStateId | null>(null);
 
   const mountedRef = useRef(true);
   const firstRunVccSetupOpenedRef = useRef(false);
@@ -2007,6 +2076,92 @@ function FleetScreenInner() {
     }
   }, [router, showToast, vehicles]);
 
+  const handleFleetQaPreload = useCallback(async (stateId: FleetQaPreloadStateId) => {
+    hapticMicro();
+    closeFleetDetailFlows();
+    setFleetQaPreloadBusy(stateId);
+    try {
+      const result = await applyFleetQaPreloadPlan(stateId, {
+        waitForHydration: async () => {
+          await Promise.all([
+            vehicleStore.waitForHydration(),
+            vehicleSetupStore.waitForHydration(),
+            vehicleSpecStore.waitForHydration(),
+            tiresLiftStore.waitForHydration(),
+            consumablesStore.waitForHydration(),
+          ]);
+        },
+        getExistingVehicles: () => vehicleStore.getLocalSnapshot(),
+        deleteVehicle: async (vehicleId) => {
+          await vehicleStore.delete(vehicleId, null);
+        },
+        importVehicles: async (nextVehicles) => {
+          await vehicleStore.importLocalSnapshot(nextVehicles as Vehicle[]);
+        },
+        setSpec: (vehicleId, nextSpec) => {
+          vehicleSpecStore.set(vehicleId, nextSpec);
+        },
+        removeSpec: (vehicleId) => {
+          vehicleSpecStore.remove(vehicleId);
+        },
+        setConsumables: (vehicleId, nextState) => {
+          consumablesStore.set(vehicleId, nextState);
+        },
+        removeConsumables: (vehicleId) => {
+          consumablesStore.remove(vehicleId);
+        },
+        setTiresLift: (vehicleId, nextState) => {
+          tiresLiftStore.set(vehicleId, nextState);
+        },
+        removeTiresLift: (vehicleId) => {
+          tiresLiftStore.remove(vehicleId);
+        },
+        setActiveVehicleId: (vehicleId) => {
+          vehicleSetupStore.setActiveVehicleId(vehicleId);
+        },
+        clearActiveVehicleId: () => {
+          vehicleSetupStore.clearActiveVehicleId();
+        },
+        flush: async () => {
+          await Promise.all([
+            vehicleStore.flush(),
+            vehicleSetupStore.flush(),
+            vehicleSpecStore.flush(),
+            tiresLiftStore.flush(),
+            consumablesStore.flush(),
+          ]);
+        },
+      });
+      setVehicles(result.plan.vehicles as Vehicle[]);
+      setActiveVehicleId(result.activeVehicleId);
+      setVisibleFleetVehicleId(result.activeVehicleId);
+      setSupportDataRevision((prev) => prev + 1);
+      setLoadoutRefreshKey((prev) => prev + 1);
+      await fetchVehicles();
+      showToast(`Fleet QA preload: ${result.plan.label}`);
+    } catch (error) {
+      console.error(TAG, 'Fleet QA preload failed:', error);
+      showToast('Fleet QA preload failed');
+      await fetchVehicles();
+    } finally {
+      setFleetQaPreloadBusy(null);
+    }
+  }, [closeFleetDetailFlows, fetchVehicles, showToast]);
+
+  const handleFleetQaActiveSwitch = useCallback(() => {
+    const targetId = resolveFleetQaActiveSwitchTargetId(vehicles, activeVehicleId);
+    if (!targetId) {
+      showToast('Fleet QA switch target unavailable');
+      return;
+    }
+    hapticMicro();
+    vehicleSetupStore.setActiveVehicleId(targetId);
+    setActiveVehicleId(targetId);
+    setVisibleFleetVehicleId(targetId);
+    setSupportDataRevision((prev) => prev + 1);
+    showToast('Fleet QA active vehicle switched');
+  }, [activeVehicleId, showToast, vehicles]);
+
   const fleetVehicleSelection = useMemo(
     () => resolveFleetVehicleSelection(vehicles, activeVehicleId, visibleFleetVehicleId),
     [activeVehicleId, vehicles, visibleFleetVehicleId],
@@ -2025,6 +2180,15 @@ function FleetScreenInner() {
     [adaptive.contentMaxWidth, adaptive.horizontalPadding],
   );
   const showFleetPreviewPane = false;
+  const showFleetQaPreload = (typeof __DEV__ !== 'undefined' && __DEV__) && fleetPremiumRollout.developerDiagnostics;
+  const fleetQaActiveSwitchTargetId = useMemo(
+    () => resolveFleetQaActiveSwitchTargetId(vehicles, activeVehicleId),
+    [activeVehicleId, vehicles],
+  );
+  const fleetQaActiveSwitchTargetName = useMemo(() => {
+    if (!fleetQaActiveSwitchTargetId) return null;
+    return vehicles.find((vehicle) => vehicle.id === fleetQaActiveSwitchTargetId)?.name ?? 'target vehicle';
+  }, [fleetQaActiveSwitchTargetId, vehicles]);
   const listSummaryMetricStyle = showFleetPreviewPane ? s.summaryMetricWide : null;
   const previewSummaryMetricStyle = showFleetPreviewPane ? s.summaryMetricPreviewWide : null;
   const previewVehicleData = useMemo(() => {
@@ -2674,6 +2838,14 @@ function FleetScreenInner() {
           <FleetOverviewHeader
             onAddVehicle={handleAddVehicle}
           />
+          {showFleetQaPreload ? (
+            <FleetQaPreloadPanel
+              busyStateId={fleetQaPreloadBusy}
+              switchTargetName={fleetQaActiveSwitchTargetName}
+              onPreload={handleFleetQaPreload}
+              onSwitchActive={handleFleetQaActiveSwitch}
+            />
+          ) : null}
           {fleetCardModels.length === 0 ? (
             <View style={s.emptyStateShell}>
               <ECSStateMessage
@@ -3302,6 +3474,29 @@ const s = StyleSheet.create({
   commandSecondaryText: {
     ...ECS_TEXT.chip,
     color: TACTICAL.textMuted,
+  },
+  qaPreloadPanel: {
+    marginTop: 10,
+    marginBottom: 10,
+    gap: 9,
+  },
+  qaPreloadHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  qaPreloadTitle: {
+    ...ECS_TEXT.sectionTitle,
+    color: TACTICAL.goldMedium,
+  },
+  qaPreloadActionRow: {
+    rowGap: 7,
+  },
+  qaPreloadButton: {
+    minWidth: 116,
+    flexGrow: 1,
+    flexBasis: 116,
   },
   hiddenPanel: {
     display: 'none',

@@ -29,7 +29,7 @@ try {
 }
 
 const {
-  buildActiveRoadDirectionList,
+  buildActiveGuidanceDirectionList,
   buildFallbackActiveDirectionList,
   formatActiveDirectionDistance,
 } = directionsModule;
@@ -38,159 +38,232 @@ const overlaySource = fs.readFileSync(
   'utf8',
 );
 
-assert.strictEqual(typeof buildActiveRoadDirectionList, 'function');
+assert.strictEqual(typeof buildActiveGuidanceDirectionList, 'function');
 assert.strictEqual(typeof buildFallbackActiveDirectionList, 'function');
 assert.strictEqual(typeof formatActiveDirectionDistance, 'function');
 
-const origin = { lat: 38.7807, lng: -121.2076 };
-const firstTurn = { lat: 38.7816, lng: -121.2076 };
-const secondTurn = { lat: 38.7816, lng: -121.2063 };
-const destinationCoordinate = { lat: 38.7824, lng: -121.2063 };
+function makeStep(index, overrides = {}) {
+  const roadName =
+    Object.prototype.hasOwnProperty.call(overrides, 'displayRoadName')
+      ? overrides.displayRoadName
+      : overrides.roadName ?? `Forest Service Road ${index + 1}`;
+  return {
+    id: overrides.id ?? `step-${index}`,
+    legIndex: 0,
+    stepIndex: index,
+    globalStepIndex: index,
+    instruction: overrides.instruction ?? `Continue on ${roadName}`,
+    shortInstruction: overrides.shortInstruction ?? overrides.instruction ?? `Continue on ${roadName}`,
+    maneuverType: overrides.maneuverType ?? (index === 0 ? 'depart' : 'continue'),
+    maneuverModifier: overrides.maneuverModifier,
+    roadName: overrides.roadName,
+    displayRoadName: roadName || 'Unnamed road',
+    isUnnamedRoad: overrides.isUnnamedRoad ?? roadName === 'Unnamed road',
+    distanceMeters: overrides.distanceMeters ?? 250 + index * 10,
+    durationSeconds: overrides.durationSeconds ?? 45 + index,
+    maneuverLocation: [-121.2 + index * 0.001, 38.78 + index * 0.001],
+    geometry: [
+      { lat: 38.78 + index * 0.001, lng: -121.2 + index * 0.001 },
+      { lat: 38.781 + index * 0.001, lng: -121.199 + index * 0.001 },
+    ],
+  };
+}
 
-const route = {
-  id: 'southside-to-rocklin',
-  origin,
-  destination: {
-    id: 'rocklin-road',
-    title: 'Rocklin Road',
-    subtitle: null,
-    coordinate: destinationCoordinate,
-    sourceType: 'manual_selection',
-  },
-  geometry: [origin, firstTurn, secondTurn, destinationCoordinate],
-  distanceM: 270,
-  durationS: 120,
-  bounds: null,
-  createdAt: '2026-06-20T12:00:00.000Z',
+function makeRoute({ id = 'route-a', rerouteGeneration = 0, guidanceMode = 'turn_by_turn', steps }) {
+  return {
+    id,
+    source: guidanceMode === 'turn_by_turn' ? 'mapbox_directions' : 'summary_only',
+    routeUuid: `${id}-uuid`,
+    geometry: steps.flatMap((step) => step.geometry ?? []),
+    distanceMeters: steps.reduce((sum, step) => sum + step.distanceMeters, 0),
+    durationSeconds: steps.reduce((sum, step) => sum + step.durationSeconds, 0),
+    legs: [
+      {
+        legIndex: 0,
+        distanceMeters: steps.reduce((sum, step) => sum + step.distanceMeters, 0),
+        durationSeconds: steps.reduce((sum, step) => sum + step.durationSeconds, 0),
+        summary: 'Fixture route',
+        steps,
+      },
+    ],
+    steps,
+    createdAt: '2026-06-22T12:00:00.000Z',
+    rerouteGeneration,
+    guidanceMode,
+  };
+}
+
+function makeProgress(route, currentStepIndex) {
+  const currentStep = route.steps[currentStepIndex];
+  const nextStep = route.steps[currentStepIndex + 1];
+  const followingStep = route.steps[currentStepIndex + 2];
+  return {
+    routeId: route.id,
+    rerouteGeneration: route.rerouteGeneration,
+    currentLegIndex: currentStep?.legIndex ?? 0,
+    currentStepIndex,
+    distanceToNextManeuverMeters: 120,
+    distanceRemainingMeters: route.steps
+      .slice(currentStepIndex)
+      .reduce((sum, step) => sum + step.distanceMeters, 0),
+    durationRemainingSeconds: route.steps
+      .slice(currentStepIndex)
+      .reduce((sum, step) => sum + step.durationSeconds, 0),
+    currentInstruction: currentStep?.instruction ?? 'Continue on highlighted route',
+    currentRoadName: currentStep?.displayRoadName ?? 'Unnamed road',
+    nextInstruction: nextStep?.instruction,
+    offRouteCandidate: false,
+    confidence: 'high',
+    updatedAt: '2026-06-22T12:01:00.000Z',
+    distanceFromRouteMeters: 4,
+    distanceRemainingOnCurrentStepMeters: currentStep?.distanceMeters ?? null,
+    nearestRoutePoint: null,
+    nearestStepPoint: null,
+    currentStep,
+    nextStep,
+    followingStep,
+    upcomingSteps: route.steps.slice(currentStepIndex),
+  };
+}
+
+const tenStepRoute = makeRoute({
   steps: [
-    {
-      id: 'depart-southside',
-      instruction: 'Head north on Southside Ranch Road',
-      distanceM: 100,
-      durationS: 40,
-      startDistanceM: 0,
-      endDistanceM: 100,
-      startDurationS: 0,
-      endDurationS: 40,
+    makeStep(0, {
+      id: 'depart-yankee',
+      instruction: 'Head north on Yankee Jim Road',
       maneuverType: 'depart',
-      modifier: null,
-      roadName: 'Southside Ranch Road',
-      location: origin,
-      geometry: [origin, firstTurn],
-    },
-    {
-      id: 'left-sierra',
-      instruction: 'Turn left onto Sierra College Boulevard',
-      distanceM: 90,
-      durationS: 40,
-      startDistanceM: 100,
-      endDistanceM: 190,
-      startDurationS: 40,
-      endDurationS: 80,
+      roadName: 'Yankee Jim Road',
+    }),
+    makeStep(1, {
+      id: 'right-foresthill',
+      instruction: 'Turn right onto Foresthill Road',
       maneuverType: 'turn',
-      modifier: 'left',
-      roadName: 'Sierra College Boulevard',
-      location: firstTurn,
-      geometry: [firstTurn, secondTurn],
-    },
-    {
-      id: 'right-rocklin',
-      instruction: 'Turn right onto Rocklin Road',
-      distanceM: 80,
-      durationS: 40,
-      startDistanceM: 190,
-      endDistanceM: 270,
-      startDurationS: 80,
-      endDurationS: 120,
+      maneuverModifier: 'right',
+      roadName: 'Foresthill Road',
+    }),
+    makeStep(2, {
+      id: 'left-canyon',
+      instruction: 'Turn left onto Canyon Way',
       maneuverType: 'turn',
-      modifier: 'right',
-      roadName: 'Rocklin Road',
-      location: secondTurn,
-      geometry: [secondTurn, destinationCoordinate],
-    },
-    {
-      id: 'arrive-rocklin',
-      instruction: 'Arrive at Rocklin Road',
-      distanceM: 0,
-      durationS: 0,
-      startDistanceM: 270,
-      endDistanceM: 270,
-      startDurationS: 120,
-      endDurationS: 120,
-      maneuverType: 'arrive',
-      modifier: null,
-      roadName: 'Rocklin Road',
-      location: destinationCoordinate,
-      geometry: [destinationCoordinate],
-    },
+      maneuverModifier: 'left',
+      roadName: 'Canyon Way',
+    }),
+    makeStep(3, {
+      id: 'bear-unnamed',
+      instruction: 'Bear left onto Unnamed road',
+      maneuverType: 'turn',
+      maneuverModifier: 'slight left',
+      displayRoadName: 'Unnamed road',
+      roadName: undefined,
+      isUnnamedRoad: true,
+      distanceMeters: 183,
+      durationSeconds: 72,
+    }),
+    makeStep(4, {
+      id: 'continue-ridge',
+      instruction: 'Continue on Ridge Track',
+      maneuverType: 'continue',
+      roadName: 'Ridge Track',
+    }),
+    makeStep(5, { id: 'right-quarry', instruction: 'Turn right onto Quarry Road', maneuverType: 'turn', maneuverModifier: 'right', roadName: 'Quarry Road' }),
+    makeStep(6, { id: 'merge-80', instruction: 'Merge onto I-80 East', maneuverType: 'merge', maneuverModifier: 'right', roadName: 'I-80 East' }),
+    makeStep(7, { id: 'roundabout', instruction: 'Enter the roundabout and take the second exit', maneuverType: 'roundabout', maneuverModifier: 'right', roadName: 'Town Center' }),
+    makeStep(8, { id: 'left-service', instruction: 'Turn left onto Service Road', maneuverType: 'turn', maneuverModifier: 'left', roadName: 'Service Road' }),
+    makeStep(9, { id: 'arrive-camp', instruction: 'You have arrived at your destination', maneuverType: 'arrive', roadName: 'Camp Alpha', distanceMeters: 0, durationSeconds: 0 }),
   ],
-};
-
-const beforeFirstTurn = buildActiveRoadDirectionList({
-  route,
-  currentStepIndex: 0,
-  remainingDistanceM: 220,
-  nextInstructionDistanceM: 45,
 });
 
-assert.deepStrictEqual(
-  beforeFirstTurn.map((item) => item.instruction),
-  [
-    'Turn left onto Sierra College Boulevard',
-    'Turn right onto Rocklin Road',
-    'Arrive at Rocklin Road',
-  ],
-  'Active directions should drop the current depart/status step and show only upcoming maneuvers to the end.',
-);
-assert.strictEqual(
-  beforeFirstTurn[0].distanceM,
-  45,
-  'First active direction should use the live next-instruction distance so the dropdown matches the banner.',
-);
-assert.strictEqual(beforeFirstTurn[0].sequenceLabel, 'NEXT');
-assert.strictEqual(beforeFirstTurn[1].sequenceLabel, '2');
-assert.strictEqual(beforeFirstTurn[2].kind, 'arrival');
-
-const afterFirstTurn = buildActiveRoadDirectionList({
-  route,
-  currentStepIndex: 1,
-  remainingDistanceM: 150,
-  nextInstructionDistanceM: 48,
+const initialList = buildActiveGuidanceDirectionList({
+  route: tenStepRoute,
+  progress: makeProgress(tenStepRoute, 0),
+  status: 'navigation_active',
 });
 
-assert.deepStrictEqual(
-  afterFirstTurn.map((item) => item.instruction),
-  ['Turn right onto Rocklin Road', 'Arrive at Rocklin Road'],
-  'Completed maneuvers should fall off the active directions list as currentStepIndex advances.',
-);
+assert.strictEqual(initialList.state, 'ready');
+assert.strictEqual(initialList.routeId, 'route-a');
+assert.strictEqual(initialList.rerouteGeneration, 0);
+assert.strictEqual(initialList.currentStepIndex, 0);
+assert.strictEqual(initialList.items.length, 10, 'Initial dropdown should render all ten upcoming steps.');
+assert.strictEqual(initialList.items[0].id, 'depart-yankee');
+assert.strictEqual(initialList.items[0].isCurrent, true, 'Current step should be highlighted.');
+assert.strictEqual(initialList.items[0].sequenceLabel, 'NOW');
+assert.strictEqual(initialList.items[1].iconName, 'arrow-forward');
+assert.strictEqual(initialList.items[2].iconName, 'arrow-back');
+assert.strictEqual(initialList.items[3].roadName, 'Unnamed road');
+assert.strictEqual(initialList.items[3].detail, 'Unnamed road');
+assert.strictEqual(initialList.items[3].distanceM, 183);
+assert.strictEqual(initialList.items[3].durationS, 72);
+assert.strictEqual(initialList.emptyMessage, null);
 
-const reroutedRoute = {
-  ...route,
-  id: 'rerouted-southside',
+const advancedList = buildActiveGuidanceDirectionList({
+  route: tenStepRoute,
+  progress: makeProgress(tenStepRoute, 4),
+  status: 'navigation_active',
+});
+
+assert.strictEqual(advancedList.items.length, 6);
+assert.strictEqual(advancedList.currentStepIndex, 4);
+assert.strictEqual(advancedList.items[0].id, 'continue-ridge');
+assert.strictEqual(advancedList.items[0].isCurrent, true);
+assert(!advancedList.items.some((item) => item.id === 'bear-unnamed'), 'Completed steps must not remain in the active dropdown.');
+
+const reroutedRoute = makeRoute({
+  id: 'route-b',
+  rerouteGeneration: 1,
   steps: [
-    route.steps[0],
-    {
-      ...route.steps[1],
-      id: 'right-southside',
-      instruction: 'Turn right onto Southside Ranch Road',
-      roadName: 'Southside Ranch Road',
-    },
-    route.steps[3],
+    makeStep(0, { id: 'reroute-depart', instruction: 'Continue on Auburn Ravine Road', maneuverType: 'continue', roadName: 'Auburn Ravine Road' }),
+    makeStep(1, { id: 'reroute-right', instruction: 'Turn right onto Mill Road', maneuverType: 'turn', maneuverModifier: 'right', roadName: 'Mill Road' }),
+    makeStep(2, { id: 'reroute-arrive', instruction: 'You have arrived at your destination', maneuverType: 'arrive', roadName: 'Camp Bravo', distanceMeters: 0, durationSeconds: 0 }),
   ],
-};
-
-const afterReroute = buildActiveRoadDirectionList({
-  route: reroutedRoute,
-  currentStepIndex: 0,
-  remainingDistanceM: 240,
-  nextInstructionDistanceM: 32,
 });
 
+const reroutingPending = buildActiveGuidanceDirectionList({
+  route: tenStepRoute,
+  progress: makeProgress(tenStepRoute, 4),
+  status: 'rerouting',
+});
+
+assert.strictEqual(reroutingPending.state, 'pending');
+assert.deepStrictEqual(reroutingPending.items, []);
+assert.strictEqual(reroutingPending.emptyMessage, 'Directions will appear when route calculation completes');
+
+const reroutedList = buildActiveGuidanceDirectionList({
+  route: reroutedRoute,
+  progress: makeProgress(reroutedRoute, 0),
+  status: 'navigation_active',
+});
+
+assert.strictEqual(reroutedList.routeId, 'route-b');
+assert.strictEqual(reroutedList.rerouteGeneration, 1);
 assert.deepStrictEqual(
-  afterReroute.map((item) => item.instruction),
-  ['Turn right onto Southside Ranch Road', 'Arrive at Rocklin Road'],
-  'Directions should be rebuilt from the current route object so reroutes replace stale maneuver lists.',
+  reroutedList.items.map((item) => item.id),
+  ['reroute-depart', 'reroute-right', 'reroute-arrive'],
+  'Reroute should replace the list instead of mixing old and new route steps.',
 );
+assert(!reroutedList.items.some((item) => item.id === 'continue-ridge'), 'Old route steps must not survive the reroute list.');
+
+const summaryOnlyRoute = makeRoute({
+  id: 'summary-route',
+  guidanceMode: 'summary_only',
+  steps: [],
+});
+const summaryOnlyList = buildActiveGuidanceDirectionList({
+  route: summaryOnlyRoute,
+  progress: null,
+  status: 'navigation_active',
+});
+assert.strictEqual(summaryOnlyList.state, 'summary_only');
+assert.deepStrictEqual(summaryOnlyList.items, []);
+assert.strictEqual(summaryOnlyList.emptyMessage, 'No turn-by-turn directions available for this route');
+
+const calculatingList = buildActiveGuidanceDirectionList({
+  route: null,
+  progress: null,
+  status: 'destination_selected',
+});
+assert.strictEqual(calculatingList.state, 'pending');
+assert.deepStrictEqual(calculatingList.items, []);
+assert.strictEqual(calculatingList.emptyMessage, 'Directions will appear when route calculation completes');
 
 const fallback = buildFallbackActiveDirectionList({
   instruction: 'Stay on highlighted trail',
@@ -205,26 +278,17 @@ assert.strictEqual(formatActiveDirectionDistance(45), '150 ft');
 assert.strictEqual(formatActiveDirectionDistance(1609.344 * 6.2), '6.2 mi');
 
 assert(
-  overlaySource.includes("import {") &&
-    overlaySource.includes("buildActiveRoadDirectionList") &&
-    overlaySource.includes("formatActiveDirectionDistance") &&
-    overlaySource.includes("'../../lib/activeGuidanceDirections'"),
-  'RoadNavigationOverlay should import the active guidance directions helpers.',
+  overlaySource.includes('buildActiveGuidanceDirectionList') &&
+    overlaySource.includes('route: session.route?.guidance') &&
+    overlaySource.includes('progress: session.activeGuidanceProgress') &&
+    overlaySource.includes('status: session.status'),
+  'RoadNavigationOverlay should build dropdown rows from EcsGuidanceRoute and EcsActiveGuidanceProgress.',
 );
 assert(
-  overlaySource.includes('const [directionsExpanded, setDirectionsExpanded] = useState(false);') &&
-    overlaySource.includes('buildActiveRoadDirectionList({') &&
-    overlaySource.includes('currentStepIndex: session.currentStepIndex') &&
-    overlaySource.includes('remainingDistanceM: session.remainingDistanceM') &&
-    overlaySource.includes('nextInstructionDistanceM: session.nextInstructionDistanceM'),
-  'ActiveNavigationCard should rebuild directions from the live road navigation session.',
-);
-assert(
-  overlaySource.includes('accessibilityLabel={directionsExpanded ? \'Hide active guidance directions\' : \'Show active guidance directions\'}') &&
-    overlaySource.includes('Directions') &&
-    overlaySource.includes('activeDirectionsDropdown') &&
-    overlaySource.includes('activeDirectionsRow'),
-  'Active guidance should expose a Directions button and popup list beside the top-right readiness control.',
+  overlaySource.includes('activeDirectionsRowCurrent') &&
+    overlaySource.includes('activeDirectionsEmptyText') &&
+    overlaySource.includes('activeDirectionsDuration'),
+  'Active directions dropdown should render current highlighting, empty states, and optional duration metadata.',
 );
 
 console.log('Active guidance directions list regression passed.');

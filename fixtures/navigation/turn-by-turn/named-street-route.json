@@ -1,0 +1,109 @@
+{
+  "uuid": "named-street-uuid",
+  "distance": 420,
+  "duration": 120,
+  "geometry": {
+    "coordinates": [
+      [-121.21, 38.78],
+      [-121.209, 38.781],
+      [-121.208, 38.7815],
+      [-121.2065, 38.7817],
+      [-121.206, 38.783]
+    ]
+  },
+  "legs": [
+    {
+      "summary": "Yankee Jim Road, Foresthill Road",
+      "distance": 420,
+      "duration": 120,
+      "steps": [
+        {
+          "distance": 140,
+          "duration": 40,
+          "name": "Yankee Jim Road",
+          "maneuver": {
+            "instruction": "Head north on Yankee Jim Road",
+            "type": "depart",
+            "location": [-121.21, 38.78],
+            "bearing_after": 24
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.21, 38.78],
+              [-121.209, 38.781]
+            ]
+          },
+          "bannerInstructions": [
+            {
+              "distanceAlongGeometry": 120,
+              "primary": {
+                "text": "Yankee Jim Road",
+                "type": "depart"
+              }
+            }
+          ],
+          "voiceInstructions": [
+            {
+              "distanceAlongGeometry": 90,
+              "announcement": "Head north on Yankee Jim Road",
+              "ssmlAnnouncement": "<speak>Head north on Yankee Jim Road</speak>"
+            }
+          ]
+        },
+        {
+          "distance": 180,
+          "duration": 55,
+          "name": "Foresthill Road",
+          "maneuver": {
+            "instruction": "Turn right onto Foresthill Road",
+            "type": "turn",
+            "modifier": "right",
+            "location": [-121.209, 38.781],
+            "bearing_before": 24,
+            "bearing_after": 86
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.209, 38.781],
+              [-121.208, 38.7815],
+              [-121.2065, 38.7817]
+            ]
+          },
+          "bannerInstructions": [
+            {
+              "distanceAlongGeometry": 160,
+              "primary": {
+                "text": "Foresthill Road",
+                "type": "turn",
+                "modifier": "right"
+              }
+            }
+          ],
+          "voiceInstructions": [
+            {
+              "distanceAlongGeometry": 120,
+              "announcement": "Turn right onto Foresthill Road",
+              "ssmlAnnouncement": "<speak>Turn right onto Foresthill Road</speak>"
+            }
+          ]
+        },
+        {
+          "distance": 100,
+          "duration": 25,
+          "name": "",
+          "maneuver": {
+            "instruction": "You have arrived at your destination",
+            "type": "arrive",
+            "location": [-121.206, 38.783]
+          },
+          "geometry": {
+            "coordinates": [
+              [-121.2065, 38.7817],
+              [-121.206, 38.783]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

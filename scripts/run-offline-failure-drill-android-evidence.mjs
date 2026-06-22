@@ -48,6 +48,16 @@ function resolveMaybe(filePath) {
   return path.isAbsolute(filePath) ? filePath : path.join(root, filePath);
 }
 
+function readJson(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  return filePath;
+}
+
 function print(lines) {
   process.stdout.write(`${lines.join('\n')}\n`);
 }
@@ -68,47 +78,84 @@ async function main() {
     .filter((arg) => arg.startsWith('--log='))
     .map((arg) => resolveMaybe(arg.slice('--log='.length)))
     .filter(Boolean);
-  const cacheManifestPath = resolveMaybe(argValue('cache-manifest', fixturePath));
+  const explicitCacheManifestPath = argValue('cache-manifest');
+  const cacheManifestPath = resolveMaybe(explicitCacheManifestPath ?? path.join(outDir, 'cache-manifest.json'));
   const drillResultPath = resolveMaybe(argValue('drill-result', path.join(outDir, 'drill-result.json')));
+  const offlineAssertionsPath = resolveMaybe(argValue('offline-assertions', path.join(outDir, 'offline-assertions.json')));
+  const readinessMetadataPath = resolveMaybe(argValue('readiness-metadata', path.join(outDir, 'readiness-metadata.json')));
+  const captureBundleArtifactPath = resolveMaybe(argValue('capture-bundle-artifact', path.join(outDir, 'capture-bundle.json')));
+  const captureBundleInputPath = resolveMaybe(argValue('capture-bundle'));
   const manifestPath = path.join(outDir, 'manifest.json');
   const checkedAt = new Date().toISOString();
 
   fs.mkdirSync(outDir, { recursive: true });
 
-  const manifest = {
-    evidenceId: argValue('evidence-id', `offline-failure-drill-${profile}-${Date.now()}`),
+  const {
+    buildOfflineFailureDrillFromCacheFixture,
+  } = loadTsModule(path.join(root, 'lib', 'offlineFailureDrillService.ts'));
+  const {
+    buildOfflineFailureDrillEvidenceCaptureBundle,
+    buildOfflineFailureDrillAndroidManifestFromCapture,
+    buildOfflineFailureDrillCaptureArtifactPayloads,
+  } = loadTsModule(path.join(root, 'lib', 'offlineFailureDrillEvidenceCapture.ts'));
+
+  const fixture = readJson(fixturePath);
+  const bundle = captureBundleInputPath
+    ? readJson(captureBundleInputPath)
+    : buildOfflineFailureDrillEvidenceCaptureBundle({
+      captureId: argValue('evidence-id', `offline-failure-drill-${profile}-${Date.now()}`),
+      capturedAt: checkedAt,
+      source: 'fixture_harness',
+      evidenceSource: 'fixture',
+      cacheFixtureProfile: profile,
+      systemNetworkDisabled: hasArg('system-network-disabled'),
+      drillResult: buildOfflineFailureDrillFromCacheFixture(fixture, {
+        now: checkedAt,
+        noNetworkModeVerified: hasArg('app-observed-offline') && argValue('runtime-network-probe', 'unknown') === 'offline',
+      }),
+      app: {
+        appBuildId: argValue('app-build-id'),
+        appVersion: argValue('app-version'),
+        gitSha: argValue('git-sha'),
+        bundleId: argValue('bundle-id'),
+      },
+      platform: {
+        os: 'android',
+        deviceName: argValue('device-name'),
+        emulatorName: argValue('emulator-name'),
+        osVersion: argValue('os-version'),
+        apiLevel: argValue('api-level'),
+      },
+      validationNotes: [
+        'Generated from cache fixture profile by the Offline Failure Drill Android evidence harness.',
+        'Do not fabricate Android evidence; fixture harness output remains blocked until real Android artifacts are supplied.',
+      ],
+    });
+
+  const payloads = buildOfflineFailureDrillCaptureArtifactPayloads(bundle, { artifactDir: outDir });
+  writeJson(captureBundleArtifactPath, JSON.parse(payloads.captureBundle.body));
+  writeJson(drillResultPath, JSON.parse(payloads.drillResult.body));
+  writeJson(offlineAssertionsPath, JSON.parse(payloads.offlineAssertions.body));
+  writeJson(readinessMetadataPath, JSON.parse(payloads.readinessMetadata.body));
+
+  if (!explicitCacheManifestPath && !hasArg('real')) {
+    writeJson(cacheManifestPath, fixture);
+  }
+
+  const manifest = buildOfflineFailureDrillAndroidManifestFromCapture(bundle, {
+    artifactDir: outDir,
+    manifestPath,
+    evidenceId: argValue('evidence-id', bundle.captureId),
     evidenceKind: argValue('evidence-kind', 'android_no_network_emulator'),
     evidenceSource: hasArg('real') ? 'real' : 'fixture',
-    generatedAt: checkedAt,
-    app: {
-      appBuildId: argValue('app-build-id'),
-      appVersion: argValue('app-version'),
-      gitSha: argValue('git-sha'),
-      bundleId: argValue('bundle-id'),
-    },
-    platform: {
-      os: 'android',
-      deviceName: argValue('device-name'),
-      emulatorName: argValue('emulator-name'),
-      osVersion: argValue('os-version'),
-      apiLevel: argValue('api-level'),
-    },
-    networkState: {
-      appObservedOffline: hasArg('app-observed-offline'),
-      systemNetworkDisabled: hasArg('system-network-disabled'),
-      checkedAt,
-      runtimeNetworkProbe: argValue('runtime-network-probe', 'unknown'),
-      notes: [
-        hasArg('app-observed-offline')
-          ? 'App/runtime offline assertion supplied by operator.'
-          : 'App/runtime offline assertion missing. Do not fabricate Android evidence.',
-      ],
-    },
-    cacheFixtureProfile: profile,
     cacheManifestPath,
+    captureBundlePath: captureBundleArtifactPath,
     drillResultPath,
+    offlineAssertionsPath,
+    readinessMetadataPath,
     screenshotPaths,
     logPaths,
+    systemNetworkDisabled: hasArg('system-network-disabled') || bundle.offlineAssertions?.systemNetworkDisabled === true,
     remoteAttemptSummary: {
       providerUpdateAttempted: hasArg('provider-update-attempted'),
       providerUpdateSucceeded: hasArg('provider-update-succeeded'),
@@ -122,11 +169,6 @@ async function main() {
       teamSyncAttempted: hasArg('team-sync-attempted'),
       teamSyncSucceeded: hasArg('team-sync-succeeded'),
     },
-    resultSummary: {
-      capabilityCount: Number(argValue('capability-count', '0')),
-      statuses: {},
-      productionReadiness: 'blocked',
-    },
     ownerAcceptance: {
       accepted: hasArg('owner-accepted'),
       acceptedBy: argValue('accepted-by'),
@@ -137,17 +179,21 @@ async function main() {
           : 'Owner acceptance missing; production must remain blocked.',
       ],
     },
-    artifacts: {
-      directory: outDir,
-      manifestPath,
+    app: {
+      appBuildId: argValue('app-build-id') ?? undefined,
+      appVersion: argValue('app-version') ?? undefined,
+      gitSha: argValue('git-sha') ?? undefined,
+      bundleId: argValue('bundle-id') ?? undefined,
     },
-    validationNotes: [
-      'Generated by the Offline Failure Drill Android evidence harness.',
-      'Do not fake Android evidence. Screenshots, logs, runtime offline assertion, and owner acceptance must come from a real no-network run.',
-    ],
-  };
+    platform: {
+      deviceName: argValue('device-name') ?? undefined,
+      emulatorName: argValue('emulator-name') ?? undefined,
+      osVersion: argValue('os-version') ?? undefined,
+      apiLevel: argValue('api-level') ?? undefined,
+    },
+  });
 
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  writeJson(manifestPath, manifest);
 
   const {
     validateOfflineFailureDrillAndroidEvidenceManifest,
@@ -163,6 +209,9 @@ async function main() {
     `appObservedOffline: ${manifest.networkState.appObservedOffline}`,
     `systemNetworkDisabled: ${manifest.networkState.systemNetworkDisabled}`,
     `runtimeNetworkProbe: ${manifest.networkState.runtimeNetworkProbe}`,
+    `drillResultPath: ${manifest.drillResultPath}`,
+    `offlineAssertionsPath: ${manifest.offlineAssertionsPath}`,
+    `readinessMetadataPath: ${manifest.readinessMetadataPath}`,
     `Validation: ${validation.productionEligible ? 'accepted' : validation.structurallyValid ? 'valid but blocked' : 'incomplete'}`,
     ...(validation.blockers.length ? [`Blockers: ${validation.blockers.join(', ')}`] : []),
     ...(validation.failedRules.length ? [`Failed rules: ${validation.failedRules.join(', ')}`] : []),
