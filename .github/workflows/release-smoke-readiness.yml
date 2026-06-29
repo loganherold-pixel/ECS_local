@@ -1,0 +1,68 @@
+name: Release Smoke Readiness
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-smoke-readiness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-smoke-readiness:
+    name: Smoke, release readiness, and pre-closed-field gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
+      BROWSERSLIST_IGNORE_OLD_DATA: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run smoke gate
+        run: npm run smoke
+
+      - name: Run release readiness regression
+        run: npm run test:release-readiness
+
+      - name: Block runtime mock imports
+        run: npm run gate:no-runtime-mocks
+
+      - name: Check closed-field readiness
+        run: npm run gate:closed-field-test:json
+
+      - name: Check provider readiness posture
+        run: npm run gate:provider-readiness
+
+      - name: Check release approval overrides
+        run: npm run gate:release-approval-overrides
+
+      - name: Run pre-closed-field gate regression
+        run: npm run test:pre-closed-field-gate
+
+      - name: Run aggregate pre-closed-field gate
+        run: npm run gate:pre-closed-field-test
+
+      - name: Upload smoke result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-result
+          path: .smoke/smoke-result.json
+          if-no-files-found: ignore

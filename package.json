@@ -172,6 +172,7 @@
     "test:release-doc-consistency": "node ./scripts/test-release-doc-consistency.js",
     "test:release-approval-overrides": "node ./scripts/test-release-approval-override-guards.mjs",
     "test:release-readiness": "node ./scripts/test-release-readiness-sweep.js",
+    "test:release-smoke-ci-workflow": "node ./scripts/test-release-smoke-ci-workflow.js",
     "test:release-log-monitoring-beta": "node ./scripts/test-release-log-monitoring-beta.js",
     "test:explore-favorites": "node ./scripts/test-explore-favorites.js",
     "test:explore-compact-cards": "node ./scripts/test-explore-compact-cards.js",
