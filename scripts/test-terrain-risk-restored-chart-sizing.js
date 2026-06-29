@@ -11,6 +11,13 @@ const sideProfileSource = fs.readFileSync(
   path.join(root, 'components', 'dashboard', 'TerrainRiskSideProfile.tsx'),
   'utf8',
 );
+const packageJson = require(path.join(root, 'package.json'));
+
+assert.strictEqual(
+  packageJson.scripts['test:terrain-risk-restored-chart-sizing'],
+  'node ./scripts/test-terrain-risk-restored-chart-sizing.js',
+  'package.json should expose the Terrain Risk restored chart sizing regression script.',
+);
 
 assert(
   /<AttitudeCommandTerrainRiskPreview[\s\S]*?terrainRisk=\{terrainRiskVisual\}[\s\S]*?expanded=\{expanded\}[\s\S]*?detailMode=\{mode === 'detail'\}/.test(widgetRenderersSource),

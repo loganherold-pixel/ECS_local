@@ -66,7 +66,7 @@ const packageJson = read('package.json');
   'gate:fleet-production',
   'Blocked by Android/profile evidence',
   'gate:dashboard-production',
-  'Blocked by Android/widget evidence',
+  'Blocked by remaining Android/widget evidence',
   'test:dispatch-convoy-production',
   'test:established-campgrounds-production',
   'test:bluetooth-power-obd2-production',
@@ -100,8 +100,9 @@ const packageJson = read('package.json');
   'content review/moderation',
   'Android Fleet profile',
   'scale-ticket/profile evidence',
-  'Android Dashboard widget',
-  'live/stale/unavailable widget source-label evidence',
+  '.smoke/dashboard-production-evidence.json',
+  'command-center switching evidence',
+  'phone/landscape rotation evidence',
   'Shadow-only acceptable; not approved for influence',
   'Provider influence remains not approved',
   'test:release-approval-overrides',
@@ -451,6 +452,12 @@ assert(
 assert(
   packageJson.includes('"gate:dashboard-production"'),
   'package.json should expose the Dashboard production gate script.',
+);
+
+assert(
+  packageJson.includes('"evidence:production-backfill"') &&
+    packageJson.includes('"test:production-evidence-backfill"'),
+  'package.json should expose production evidence backfill and regression scripts.',
 );
 
 console.log('release doc consistency checks passed');

@@ -52,6 +52,7 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
     liveTrailPackCatalog: path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts'),
     trailPackReviewQueue: path.join(root, 'lib', 'explore', 'trailPackReviewQueue.ts'),
     trailPackSubmissions: path.join(root, 'lib', 'explore', 'trailPackSubmissions.ts'),
+    routeDiscoveryIndex: path.join(root, 'lib', 'explore', 'routeDiscoveryIndex.ts'),
     trailPackCard: path.join(root, 'components', 'discover', 'TrailPackCard.tsx'),
     trailPackPreview: path.join(root, 'components', 'trailPacks', 'TrailPackPreviewModal.tsx'),
     trailPackFeedbackPanel: path.join(root, 'components', 'trailPacks', 'TrailPackFeedbackPanel.tsx'),
@@ -68,10 +69,33 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
   const liveTrailPackCatalog = normalize(readIfExists(paths.liveTrailPackCatalog));
   const trailPackReviewQueue = normalize(readIfExists(paths.trailPackReviewQueue));
   const trailPackSubmissions = normalize(readIfExists(paths.trailPackSubmissions));
+  const routeDiscoveryIndex = normalize(readIfExists(paths.routeDiscoveryIndex));
   const trailPackCard = normalize(readIfExists(paths.trailPackCard));
   const trailPackPreview = normalize(readIfExists(paths.trailPackPreview));
   const trailPackFeedbackPanel = normalize(readIfExists(paths.trailPackFeedbackPanel));
   const trailPackSubmissionModal = normalize(readIfExists(paths.trailPackSubmissionModal));
+
+  const directTrailPackDiscovery =
+    discover.includes('getDiscoverableTrailPacks(') &&
+    !discover.includes('getDefaultECSTrailPacks') &&
+    discover.includes('activeDistanceRadius') &&
+    discover.includes('reviewStatesByTrailPackId: trailPackFeedbackReviewStates') &&
+    discover.includes('includeOwnDrafts: ownerTrailPackIds.length > 0');
+
+  const indexedTrailPackDiscovery =
+    discover.includes('buildRouteDiscoveryIndex(trailPackCatalog') &&
+    discover.includes('queryTrailPackDiscoveryIndexCached(routeDiscoveryIndex') &&
+    discover.includes('indexedTrailPackDiscovery.allTrailPacks') &&
+    discover.includes('routeDiscoveryCache') &&
+    discover.includes('includeOwnDrafts: ownerTrailPackIds.length > 0') &&
+    discover.includes('includeBroaderResults: true') &&
+    discover.includes('reviewStatesByTrailPackId: trailPackFeedbackReviewStates') &&
+    discover.includes('confidenceInputsByTrailPackId: trailPackFeedbackConfidenceInputs') &&
+    routeDiscoveryIndex.includes('isTrailPackPubliclyDiscoverable(pack, reviewState)') &&
+    routeDiscoveryIndex.includes('!!options.includeOwnDrafts && ownTrailPackIds.has(pack.id)') &&
+    routeDiscoveryIndex.includes('!shouldPromoteIndexedTrailPack(pack, evaluatedConfidence, !!options.includeBroaderResults)') &&
+    routeDiscoveryIndex.includes('(entry.distanceFromUserMiles ?? Number.POSITIVE_INFINITY) <= query.radiusMiles') &&
+    routeDiscoveryIndex.includes("confidence.band === 'verified' || confidence.band === 'high'");
 
   const checks = [
     check(
@@ -89,17 +113,14 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
         liveTrailPackCatalog.includes("from('trail_packs')") &&
         liveTrailPackCatalog.includes("dataState: 'live'") &&
         liveTrailPackCatalog.includes('normalizeLiveTrailPackRecord') &&
-        discover.includes('getDiscoverableTrailPacks(') &&
         discover.includes('liveTrailPackCatalogStore') &&
         discover.includes('liveTrailPackCatalogSnapshot.trailPacks') &&
-        !discover.includes('getDefaultECSTrailPacks') &&
-        discover.includes('activeDistanceRadius') &&
-        discover.includes('reviewStatesByTrailPackId: trailPackFeedbackReviewStates') &&
-        discover.includes('includeOwnDrafts: ownerTrailPackIds.length > 0'),
+        (directTrailPackDiscovery || indexedTrailPackDiscovery),
       [
         relPath(root, paths.trailPacks),
         relPath(root, paths.trailPackReviewQueue),
         relPath(root, paths.liveTrailPackCatalog),
+        relPath(root, paths.routeDiscoveryIndex),
         relPath(root, paths.discover),
       ],
       ['Validate Explore Trail Pack discovery on Android with approved, pending, rejected, own-draft, low-confidence, and out-of-radius records.'],

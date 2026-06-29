@@ -24,17 +24,25 @@ async function main() {
   });
 
   [
+    'source_confidence_offline_android_qa_evidence_present',
+  ].forEach((id) => {
+    const item = result.checks.find((check) => check.id === id);
+    assert.ok(item, `${id} should be present`);
+    assert.strictEqual(item.passed, true, `${id} should pass from local Fleet source/confidence/offline/no-photo evidence`);
+    assert.ok(!result.blockers.includes(id), `${id} should not remain an active blocker after evidence backfill`);
+  });
+
+  [
     'fleet_production_evidence_contract_complete',
     'android_fleet_profile_visual_evidence_present',
     'multi_vehicle_active_selection_evidence_present',
     'scale_ticket_profile_evidence_present',
-    'source_confidence_offline_android_qa_evidence_present',
     'offline_persistence_migration_evidence_present',
     'production_owner_decision_accepted',
   ].forEach((id) => {
     const item = result.checks.find((check) => check.id === id);
     assert.ok(item, `${id} should be present`);
-    assert.strictEqual(item.passed, false, `${id} should block production until evidence is recorded`);
+    assert.strictEqual(item.passed, false, `${id} should block production until remaining evidence/signoff is recorded`);
     assert.ok(result.blockers.includes(id), `${id} should appear in active blockers`);
   });
 

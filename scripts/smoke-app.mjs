@@ -18,6 +18,7 @@ const resultPath = path.join(smokeDir, 'smoke-result.json');
 const STAGE_TIMEOUTS = {
   inspect: 10_000,
   expoConfig: 45_000,
+  mapboxSearchBoxSessionReuse: 30_000,
   typecheck: 120_000,
   lint: 120_000,
   bundle: 180_000,
@@ -262,6 +263,17 @@ export async function buildSmokeResult() {
     );
   } else if (inspected.expoDependency) {
     stages.push(createStage('expo-config', 'skipped', 'Skipped because local Expo CLI is unavailable.', Date.now()));
+  }
+
+  if (stages.every((stage) => stage.status !== 'failed' && stage.status !== 'timeout')) {
+    stages.push(
+      await runCommandStage(
+        'mapbox-searchbox-session-reuse',
+        process.execPath,
+        [path.join(root, 'scripts', 'test-mapbox-searchbox-session-reuse.js')],
+        STAGE_TIMEOUTS.mapboxSearchBoxSessionReuse,
+      ),
+    );
   }
 
   const packageJson = inspected.packageJson;

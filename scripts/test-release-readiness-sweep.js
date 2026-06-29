@@ -22,6 +22,7 @@ const masterChecklistSource = read('lib/ai/masterReleaseChecklist.ts');
 const releaseRiskSummarySource = read('lib/ai/releaseRiskSummary.ts');
 const releasePolishTypesSource = read('lib/ai/releasePolishAuditTypes.ts');
 const packageSource = read('package.json');
+const smokeAppSource = read('scripts/smoke-app.mjs');
 
 assert(
   orchestratorSource.includes('buildReleaseReadinessDiagnostics') &&
@@ -174,6 +175,13 @@ assert(
 );
 
 assert(
+  packageSource.includes('"test:mapbox-searchbox-session-reuse"') &&
+    smokeAppSource.includes('mapbox-searchbox-session-reuse') &&
+    smokeAppSource.includes('test-mapbox-searchbox-session-reuse.js'),
+  'smoke/release readiness should run the Mapbox Search Box session reuse regression instead of leaving it standalone.',
+);
+
+assert(
   packageSource.includes('"test:pre-closed-field-gate"') &&
     packageSource.includes('"gate:release-approval-overrides"'),
   'package.json should expose aggregate pre-closed-field and release override gate regressions.',
@@ -255,6 +263,12 @@ assert(
   packageSource.includes('"gate:dashboard-production"') &&
     packageSource.includes('"test:dashboard-production"'),
   'package.json should expose Dashboard production gate and regression scripts.',
+);
+
+assert(
+  packageSource.includes('"evidence:production-backfill"') &&
+    packageSource.includes('"test:production-evidence-backfill"'),
+  'package.json should expose production evidence backfill and regression scripts.',
 );
 
 console.log('release-readiness sweep checks passed');

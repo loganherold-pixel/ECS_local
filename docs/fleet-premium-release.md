@@ -123,6 +123,10 @@ Expected fields:
 
 Do not set `productionDecision` to `accepted` until the Android evidence, source/confidence/offline states, no-photo contract, and reviewer signoff are complete.
 
+### Local Evidence Backfill
+
+`scripts/backfill-production-evidence.mjs` can generate a partial manifest from existing Android captures such as `.smoke/android-tab-fleet.png`, `.smoke/android-tab-fleet.xml`, `.smoke/ecs-smoke-fleet.png`, and `.smoke/ecs-smoke-fleet.xml`. That partial manifest may satisfy `sourceConfidenceOfflineStatesVisible` and `androidQaStateMatrix` when the captured XML proves source, confidence, estimated, missing-data, offline, and no-photo states, but it must keep profile visual QA, multi-vehicle switching, scale-ticket evidence, offline migration evidence, build/device metadata, reviewer signoff, and `productionDecision` pending until real device evidence and owner acceptance exist.
+
 ## Fleet QA Preload Harness
 
 Development diagnostics builds expose a Fleet QA preload panel behind the existing `developerDiagnostics` rollout flag. These states overwrite local Fleet data only and are meant to make Android evidence capture repeatable:

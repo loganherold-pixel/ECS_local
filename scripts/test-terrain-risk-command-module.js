@@ -43,11 +43,18 @@ const commandModuleSource = read('components/dashboard/TerrainRiskCommandModule.
 const sideProfileSource = read('components/dashboard/TerrainRiskSideProfile.tsx');
 const navigateSource = read('app/(tabs)/navigate.tsx');
 const navigateRunSource = read('app/navigate-run.tsx');
+const packageJson = require(path.join(root, 'package.json'));
 const elevationEngine = loadTsModule('lib/terrainElevationRouteEngine.ts');
 const profile = loadTsModule('lib/terrainRiskCommandProfile.ts', {
   './terrainElevationRouteEngine': elevationEngine,
 });
 const sampling = loadTsModule('lib/terrainElevationSampling.ts');
+
+assert.strictEqual(
+  packageJson.scripts['test:terrain-risk-command-module'],
+  'node ./scripts/test-terrain-risk-command-module.js',
+  'package.json should expose the Terrain Risk command module regression script.',
+);
 
 assert(
   commandStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n  'attitude',\n];"),

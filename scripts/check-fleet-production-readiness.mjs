@@ -286,6 +286,8 @@ export function buildFleetProductionReadinessResult(options = {}) {
         releaseDoc.includes('premium') &&
         releaseDoc.includes('release') &&
         releaseDoc.includes('.smoke/fleet-production-evidence.json') &&
+        releaseDoc.includes('scripts/backfill-production-evidence.mjs') &&
+        releaseDoc.includes('partial manifest') &&
         releaseDoc.includes('sourceConfidenceOfflineStatesVisible') &&
         releaseDoc.includes('androidQaStateMatrix'),
       [relPath(root, paths.refactorMapDoc), relPath(root, paths.uiContractDoc), relPath(root, paths.releaseDoc)],
