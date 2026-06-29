@@ -22,6 +22,37 @@ function writeArtifactPair(root, relativeBase, visibleText) {
   );
 }
 
+function assertSmokeEvidenceGitignorePolicy() {
+  const gitignorePath = path.join(__dirname, '..', '.gitignore');
+  const source = fs.readFileSync(gitignorePath, 'utf8').replace(/\r\n/g, '\n');
+  const lines = source.split('\n').map((line) => line.trim());
+
+  assert.ok(
+    !lines.includes('.smoke/'),
+    '.gitignore should not ignore the whole .smoke directory when curated evidence manifests are tracked.',
+  );
+  assert.ok(
+    lines.includes('.smoke/*'),
+    '.gitignore should ignore raw .smoke contents with .smoke/* so narrow manifest exceptions can work.',
+  );
+  assert.ok(
+    lines.includes('!.smoke/'),
+    '.gitignore should keep the .smoke directory visible for tracked curated manifests.',
+  );
+  assert.ok(
+    lines.includes('!.smoke/dashboard-production-evidence.json'),
+    'Dashboard production evidence manifest should be explicitly trackable.',
+  );
+  assert.ok(
+    lines.includes('!.smoke/fleet-production-evidence.json'),
+    'Fleet production evidence manifest should be explicitly trackable.',
+  );
+  assert.ok(
+    !lines.includes('!.smoke/*.json'),
+    '.gitignore should not track every generated smoke JSON file.',
+  );
+}
+
 function seedReadiness(root) {
   writeJson(path.join(root, '.smoke', 'dashboard-production-readiness-result.json'), {
     system: 'dashboard_command_center_widgets',
@@ -190,6 +221,8 @@ function seedArtifacts(root) {
 }
 
 async function main() {
+  assertSmokeEvidenceGitignorePolicy();
+
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ecs-evidence-backfill-'));
   seedReadiness(root);
   seedProductionOrientationPolicy(root);

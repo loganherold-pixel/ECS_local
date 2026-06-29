@@ -64,7 +64,10 @@ tmp/
 build-log.txt
 .qa/
 qa-evidence/
-.smoke/
+.smoke/*
+!.smoke/
+!.smoke/dashboard-production-evidence.json
+!.smoke/fleet-production-evidence.json
 .expo-export-check/
 .expo-runtime/
 .eas-spawn-tmp/
