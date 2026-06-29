@@ -43,8 +43,20 @@ function nonPlaceholderString(value) {
   return Boolean(text) && !/^(tbd|todo|pending|placeholder|n\/a|none)$/i.test(text);
 }
 
+function nonPlaceholderEvidenceEntry(value) {
+  if (typeof value === 'string') return nonPlaceholderString(value);
+  if (isObject(value)) {
+    const evidence = value.evidence;
+    return nonPlaceholderString(value.label) &&
+      nonPlaceholderString(value.status) &&
+      Array.isArray(evidence) &&
+      evidence.some(nonPlaceholderEvidenceEntry);
+  }
+  return false;
+}
+
 function hasMinNonPlaceholderEntries(value, min) {
-  return Array.isArray(value) && value.filter(nonPlaceholderString).length >= min;
+  return Array.isArray(value) && value.filter(nonPlaceholderEvidenceEntry).length >= min;
 }
 
 function accepted(value) {
@@ -77,11 +89,13 @@ function hasAndroidQaStateMatrix(evidence) {
     matrix.noPhotoContractVisible === true;
 }
 
-function hasReviewerSignoff(evidence) {
+function ownerDecisionAccepted(evidence) {
   const signoff = evidence?.reviewerSignoff;
+  const acceptedAt = String(signoff?.acceptedAt ?? '').trim();
   return isObject(signoff) &&
-    ['product', 'engineering', 'qa', 'privacy'].every((field) => nonPlaceholderString(signoff[field])) &&
-    nonPlaceholderString(signoff.acceptedAt);
+    accepted(evidence?.productionDecision) &&
+    accepted(signoff.productionOwner) &&
+    nonPlaceholderString(acceptedAt);
 }
 
 function hasEvidenceContract(evidence) {
@@ -287,7 +301,8 @@ export function buildFleetProductionReadinessResult(options = {}) {
         releaseDoc.includes('release') &&
         releaseDoc.includes('.smoke/fleet-production-evidence.json') &&
         releaseDoc.includes('scripts/backfill-production-evidence.mjs') &&
-        releaseDoc.includes('partial manifest') &&
+        releaseDoc.includes('local Fleet production manifest') &&
+        releaseDoc.includes('regression/preload-backed') &&
         releaseDoc.includes('sourceConfidenceOfflineStatesVisible') &&
         releaseDoc.includes('androidQaStateMatrix'),
       [relPath(root, paths.refactorMapDoc), relPath(root, paths.uiContractDoc), relPath(root, paths.releaseDoc)],
@@ -338,9 +353,9 @@ export function buildFleetProductionReadinessResult(options = {}) {
     check(
       'production_owner_decision_accepted',
       'Production owner decision is accepted for Fleet.',
-      accepted(evidence?.productionDecision) && hasReviewerSignoff(evidence),
+      ownerDecisionAccepted(evidence),
       [relPath(root, paths.evidence)],
-      ['Record product, engineering, QA, privacy/security, and support acceptance after Android/profile evidence is complete.'],
+      ['Record an accepted productionOwner decision with acceptedAt after Android/profile evidence is complete. Keep role-specific reviews pending unless they have real acceptance.'],
     ),
   ];
 

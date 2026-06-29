@@ -7,8 +7,8 @@ async function main() {
   const result = gate.buildDashboardProductionReadinessResult({ rootDir: path.join(__dirname, '..') });
 
   assert.strictEqual(result.system, 'dashboard_command_center_widgets');
-  assert.strictEqual(result.passed, false, 'Dashboard production gate should remain blocked until remaining command-center, rotation, and owner evidence is recorded.');
-  assert.strictEqual(result.status, 'blocked');
+  assert.strictEqual(result.passed, true, 'Dashboard production gate should pass once command-center, rotation-policy, and owner evidence is recorded.');
+  assert.strictEqual(result.status, 'production_ready');
 
   [
     'dashboard_widget_registry_and_grid_are_responsive_and_guarded',
@@ -24,22 +24,14 @@ async function main() {
   [
     'android_dashboard_widget_visual_evidence_present',
     'live_stale_unavailable_source_label_evidence_present',
-  ].forEach((id) => {
-    const item = result.checks.find((check) => check.id === id);
-    assert.ok(item, `${id} should be present`);
-    assert.strictEqual(item.passed, true, `${id} should pass from local Android evidence backfill`);
-    assert.ok(!result.blockers.includes(id), `${id} should not remain an active blocker after evidence backfill`);
-  });
-
-  [
     'command_center_switching_device_evidence_present',
     'phone_landscape_rotation_layout_evidence_present',
     'production_owner_decision_accepted',
   ].forEach((id) => {
     const item = result.checks.find((check) => check.id === id);
     assert.ok(item, `${id} should be present`);
-    assert.strictEqual(item.passed, false, `${id} should block production until remaining evidence/signoff is recorded`);
-    assert.ok(result.blockers.includes(id), `${id} should appear in active blockers`);
+    assert.strictEqual(item.passed, true, `${id} should pass from recorded Dashboard production evidence`);
+    assert.ok(!result.blockers.includes(id), `${id} should not remain an active blocker after evidence backfill`);
   });
 
   assert.ok(

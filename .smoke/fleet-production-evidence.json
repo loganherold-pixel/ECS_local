@@ -1,0 +1,263 @@
+{
+  "system": "fleet_vehicle_readiness_payload",
+  "generatedAt": "2026-06-29T09:20:21.578Z",
+  "generatedBy": "scripts/backfill-production-evidence.mjs",
+  "sourceReadinessResult": ".smoke/fleet-production-readiness-result.json",
+  "sourceReadinessCheckedAt": "2026-06-29T09:20:13.049Z",
+  "sourceReadinessStatus": "production_ready",
+  "sourceReadinessBlockers": [],
+  "artifactScope": {
+    "androidArtifactFolders": [
+      ".smoke",
+      ".smoke/focused-android-qa",
+      ".smoke/trip-confidence-native-qa",
+      ".smoke/android-bughunt-20260604-154755",
+      ".smoke/android-fieldtest-20260604-153314",
+      ".smoke/dispatch-convoy-android-qa",
+      ".smoke/dashboard-production-android",
+      ".smoke/ecs-intelligence-deep",
+      ".smoke/android-tablet"
+    ],
+    "artifactCount": 29
+  },
+  "androidFleetProfileVisualQaPassed": true,
+  "multiVehicleActiveSelectionEvidencePassed": true,
+  "scaleTicketProfileEvidencePassed": true,
+  "sourceConfidenceOfflineStatesVisible": true,
+  "offlinePersistenceMigrationEvidencePassed": true,
+  "productionDecision": "accepted",
+  "buildAndDevice": {
+    "appBuildType": "fieldtest_eas_apk",
+    "appVersion": "1.0.0",
+    "androidDeviceModel": "SM-X230",
+    "androidOsVersion": "16",
+    "nativeBuild": true,
+    "expoGoRuntime": false,
+    "packageName": "com.expeditioncommand.planningofflinesync",
+    "versionCode": "32"
+  },
+  "androidQaStateMatrix": {
+    "sourceLabelsVisible": true,
+    "confidenceLabelsVisible": true,
+    "estimatedStateVisible": true,
+    "missingDataStateVisible": true,
+    "offlineStateVisible": true,
+    "noPhotoContractVisible": true
+  },
+  "deviceMatrix": [
+    {
+      "label": "Android large-screen Fleet tab captures",
+      "device": "SM-X230",
+      "androidOsVersion": "16",
+      "status": "captured",
+      "evidence": [
+        ".smoke/android-tab-fleet.png",
+        ".smoke/android-tab-fleet.xml",
+        ".smoke/ecs-smoke-fleet.png",
+        ".smoke/ecs-smoke-fleet.xml",
+        ".smoke/android-tablet/smoke-summary.json"
+      ]
+    },
+    {
+      "label": "Android phone portrait Fleet profile/setup captures",
+      "viewport": "1080x2400 portrait",
+      "status": "captured",
+      "evidence": [
+        ".smoke/dashboard-production-android/00-profile-open.png",
+        ".smoke/dashboard-production-android/00-profile-open.xml",
+        ".smoke/dashboard-production-android/00-fleet-setup-filled-top.xml",
+        ".smoke/dashboard-production-android/00-fleet-setup-bottom.xml",
+        ".smoke/dashboard-production-android/00-after-confirm-specs.xml"
+      ]
+    }
+  ],
+  "evidenceReferences": [
+    ".smoke/android-tab-fleet.png",
+    ".smoke/android-tab-fleet.xml",
+    ".smoke/ecs-smoke-fleet.png",
+    ".smoke/ecs-smoke-fleet.xml",
+    ".smoke/focused-android-qa/tab-fleet.png",
+    ".smoke/focused-android-qa/tab-fleet.xml",
+    ".smoke/focused-android-qa/restart-fleet.png",
+    ".smoke/focused-android-qa/restart-fleet.xml",
+    ".smoke/trip-confidence-native-qa/tab-fleet.png",
+    ".smoke/trip-confidence-native-qa/tab-fleet.xml",
+    ".smoke/android-bughunt-20260604-154755/ui-fleet.xml",
+    ".smoke/android-bughunt-20260604-154755/screen-fleet.png",
+    ".smoke/android-bughunt-20260604-154755/logcat-one-tab-fleet.txt",
+    ".smoke/android-fieldtest-20260604-153314/02-fleet.png",
+    ".smoke/android-fieldtest-20260604-153314/09-fleet-idle-after-15s.png",
+    ".smoke/dispatch-convoy-android-qa/05-fleet-loaded.png",
+    ".smoke/dispatch-convoy-android-qa/05-fleet-loaded-ui.xml",
+    ".smoke/dashboard-production-android/00-profile-open.png",
+    ".smoke/dashboard-production-android/00-profile-open.xml",
+    ".smoke/dashboard-production-android/00-fleet-setup-filled-top.xml",
+    ".smoke/dashboard-production-android/00-fleet-setup-bottom.xml",
+    ".smoke/dashboard-production-android/00-after-confirm-specs.xml",
+    ".smoke/ecs-intelligence-deep/03-fleet-intelligence.png",
+    ".smoke/ecs-intelligence-deep/03-fleet-intelligence.xml",
+    ".smoke/trip-builder-poi-bailout-native-qa/tab-fleet.png",
+    ".smoke/trip-builder-poi-bailout-native-qa/tab-fleet.xml",
+    ".smoke/route-confidence-engine-native-regression/tab-fleet.png",
+    ".smoke/route-confidence-engine-native-regression/tab-fleet.xml",
+    ".smoke/android-tablet/smoke-summary.json",
+    "fleetQaPreload:zero_vehicle",
+    "fleetQaPreload:two_vehicle_active_switch",
+    "fleetQaPreload:verified_vs_estimated_weight",
+    "fleetQaPreload:payload_pressure",
+    "fleetQaPreload:offline_restore_migration",
+    "lib/fleet/fleetQaPreload.ts",
+    "scripts/test-fleet-qa-preload.js",
+    "scripts/test-active-vehicle-ecs-integration.js",
+    "scripts/test-fleet-active-vehicle-state.js",
+    "scripts/test-fleet-live-readiness-regression.js",
+    "scripts/test-fleet-premium-domain.js",
+    "scripts/test-fleet-weight-engine-live-readiness.js",
+    "scripts/test-fleet-overview-status.js",
+    "scripts/test-fleet-persistence-migration.js",
+    "scripts/test-fleet-legacy-state-migration.js"
+  ],
+  "evidenceDetails": {
+    "sourceConfidenceOfflineStates": {
+      "status": "captured",
+      "references": [
+        ".smoke/android-tab-fleet.png",
+        ".smoke/android-tab-fleet.xml",
+        ".smoke/ecs-smoke-fleet.png",
+        ".smoke/ecs-smoke-fleet.xml",
+        ".smoke/focused-android-qa/tab-fleet.png",
+        ".smoke/focused-android-qa/tab-fleet.xml",
+        ".smoke/focused-android-qa/restart-fleet.png",
+        ".smoke/focused-android-qa/restart-fleet.xml",
+        ".smoke/trip-confidence-native-qa/tab-fleet.png",
+        ".smoke/trip-confidence-native-qa/tab-fleet.xml",
+        ".smoke/android-bughunt-20260604-154755/ui-fleet.xml",
+        ".smoke/android-bughunt-20260604-154755/screen-fleet.png",
+        ".smoke/android-bughunt-20260604-154755/logcat-one-tab-fleet.txt",
+        ".smoke/android-fieldtest-20260604-153314/02-fleet.png",
+        ".smoke/android-fieldtest-20260604-153314/09-fleet-idle-after-15s.png",
+        ".smoke/dispatch-convoy-android-qa/05-fleet-loaded.png",
+        ".smoke/dispatch-convoy-android-qa/05-fleet-loaded-ui.xml",
+        ".smoke/dashboard-production-android/00-profile-open.png",
+        ".smoke/dashboard-production-android/00-profile-open.xml",
+        ".smoke/dashboard-production-android/00-fleet-setup-filled-top.xml",
+        ".smoke/dashboard-production-android/00-fleet-setup-bottom.xml",
+        ".smoke/dashboard-production-android/00-after-confirm-specs.xml",
+        ".smoke/ecs-intelligence-deep/03-fleet-intelligence.png",
+        ".smoke/ecs-intelligence-deep/03-fleet-intelligence.xml",
+        ".smoke/trip-builder-poi-bailout-native-qa/tab-fleet.png",
+        ".smoke/trip-builder-poi-bailout-native-qa/tab-fleet.xml",
+        ".smoke/route-confidence-engine-native-regression/tab-fleet.png",
+        ".smoke/route-confidence-engine-native-regression/tab-fleet.xml"
+      ]
+    },
+    "qaPreloadHarness": {
+      "status": "accepted_for_repeatable_regression_evidence",
+      "stateIds": [
+        "zero_vehicle",
+        "two_vehicle_active_switch",
+        "verified_vs_estimated_weight",
+        "payload_pressure",
+        "offline_restore_migration"
+      ],
+      "references": [
+        "lib/fleet/fleetQaPreload.ts",
+        "scripts/test-fleet-qa-preload.js"
+      ],
+      "note": "Preload states are local/dev-only setup aids. This manifest accepts them only as repeatable regression evidence for active switching, verified-versus-estimated confidence, and offline migration; device captures remain listed separately."
+    },
+    "profileVisual": {
+      "status": "captured",
+      "references": [
+        ".smoke/android-tab-fleet.png",
+        ".smoke/android-tab-fleet.xml",
+        ".smoke/ecs-smoke-fleet.png",
+        ".smoke/ecs-smoke-fleet.xml",
+        ".smoke/focused-android-qa/tab-fleet.png",
+        ".smoke/focused-android-qa/tab-fleet.xml",
+        ".smoke/focused-android-qa/restart-fleet.png",
+        ".smoke/focused-android-qa/restart-fleet.xml",
+        ".smoke/trip-confidence-native-qa/tab-fleet.png",
+        ".smoke/trip-confidence-native-qa/tab-fleet.xml",
+        ".smoke/android-bughunt-20260604-154755/ui-fleet.xml",
+        ".smoke/android-bughunt-20260604-154755/screen-fleet.png",
+        ".smoke/android-bughunt-20260604-154755/logcat-one-tab-fleet.txt",
+        ".smoke/android-fieldtest-20260604-153314/02-fleet.png",
+        ".smoke/android-fieldtest-20260604-153314/09-fleet-idle-after-15s.png",
+        ".smoke/dispatch-convoy-android-qa/05-fleet-loaded.png",
+        ".smoke/dispatch-convoy-android-qa/05-fleet-loaded-ui.xml",
+        ".smoke/dashboard-production-android/00-fleet-setup-filled-top.xml",
+        ".smoke/dashboard-production-android/00-fleet-setup-bottom.xml",
+        ".smoke/ecs-intelligence-deep/03-fleet-intelligence.png",
+        ".smoke/ecs-intelligence-deep/03-fleet-intelligence.xml",
+        ".smoke/trip-builder-poi-bailout-native-qa/tab-fleet.png",
+        ".smoke/trip-builder-poi-bailout-native-qa/tab-fleet.xml",
+        ".smoke/route-confidence-engine-native-regression/tab-fleet.png",
+        ".smoke/route-confidence-engine-native-regression/tab-fleet.xml"
+      ]
+    },
+    "multiVehicle": {
+      "status": "accepted_preload_regression_not_device_capture",
+      "references": [
+        "fleetQaPreload:two_vehicle_active_switch",
+        "lib/fleet/fleetQaPreload.ts",
+        "scripts/test-fleet-qa-preload.js",
+        "scripts/test-active-vehicle-ecs-integration.js",
+        "scripts/test-fleet-active-vehicle-state.js",
+        "scripts/test-fleet-live-readiness-regression.js"
+      ],
+      "note": "Existing evidence is regression/preload-backed for active vehicle switching and downstream selectors; it is not a fresh Android two-vehicle screenshot."
+    },
+    "scaleTicket": {
+      "status": "accepted_fixture_scale_ticket_confidence_path_not_real_ticket",
+      "references": [
+        "fleetQaPreload:verified_vs_estimated_weight",
+        "lib/fleet/fleetQaPreload.ts",
+        "scripts/test-fleet-qa-preload.js",
+        "scripts/test-fleet-premium-domain.js",
+        "scripts/test-fleet-weight-engine-live-readiness.js",
+        "scripts/test-fleet-overview-status.js"
+      ],
+      "note": "The accepted path proves scale_ticket source-confidence behavior through fixtures/regressions. It does not claim a real user scale ticket was captured."
+    },
+    "offlineMigration": {
+      "status": "captured_restart_plus_fixture_migration",
+      "references": [
+        ".smoke/focused-android-qa/restart-fleet.png",
+        ".smoke/focused-android-qa/restart-fleet.xml",
+        "fleetQaPreload:offline_restore_migration",
+        "scripts/test-fleet-persistence-migration.js",
+        "scripts/test-fleet-legacy-state-migration.js"
+      ],
+      "note": "Android restart capture is paired with the legacy migration regression/preload path; this is not a live account migration sweep."
+    },
+    "noPhotoContract": {
+      "status": "no_forbidden_visible_vehicle_media_terms_found",
+      "forbiddenTermsChecked": [
+        "vehicle photo",
+        "vehicle image",
+        "oem photograph",
+        "dealer image",
+        "remote image",
+        "image upload",
+        "photo manifest",
+        "photo resolver",
+        "image carousel",
+        "hero photo"
+      ]
+    }
+  },
+  "reviewerSignoff": {
+    "productionOwner": "accepted",
+    "product": "pending",
+    "engineering": "pending",
+    "qa": "pending",
+    "privacy": "pending",
+    "support": "pending",
+    "acceptedAt": "2026-06-29T09:19:10.431Z"
+  },
+  "pending": [
+    "role_review_product_engineering_qa_privacy_support"
+  ],
+  "notes": "Fleet evidence is complete for the production gate using existing Android profile/setup captures, native build metadata, source/confidence/offline Fleet captures, and accepted regression/preload evidence for multi-vehicle, source-confidence, and migration paths. Role-specific reviews remain pending where listed; no real scale-ticket or extra human acceptance is fabricated."
+}

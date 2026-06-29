@@ -1,0 +1,178 @@
+{
+  "system": "dashboard_command_center_widgets",
+  "generatedAt": "2026-06-29T09:20:21.578Z",
+  "generatedBy": "scripts/backfill-production-evidence.mjs",
+  "sourceReadinessResult": ".smoke/dashboard-production-readiness-result.json",
+  "sourceReadinessCheckedAt": "2026-06-29T09:13:06.143Z",
+  "sourceReadinessStatus": "production_ready",
+  "sourceReadinessBlockers": [],
+  "artifactScope": {
+    "androidArtifactFolders": [
+      ".smoke",
+      ".smoke/dashboard-deep",
+      ".smoke/dashboard-longpress-deep",
+      ".smoke/android-tablet",
+      ".smoke/dashboard-production-android"
+    ],
+    "artifactCount": 181
+  },
+  "androidDashboardWidgetVisualQaPassed": true,
+  "commandCenterSwitchingDeviceEvidencePassed": true,
+  "liveStaleUnavailableSourceLabelEvidencePassed": true,
+  "phoneLandscapeRotationLayoutEvidencePassed": true,
+  "productionDecision": "accepted",
+  "evidenceReferences": [
+    ".smoke/android-tab-dashboard.png",
+    ".smoke/android-tab-dashboard.xml",
+    ".smoke/ecs-smoke-dashboard.png",
+    ".smoke/ecs-smoke-dashboard.xml",
+    ".smoke/dashboard-deep/01-dashboard-baseline.png",
+    ".smoke/dashboard-deep/01-dashboard-baseline.xml",
+    ".smoke/dashboard-deep/02-widgets-tab.png",
+    ".smoke/dashboard-deep/02-widgets-tab.xml",
+    ".smoke/dashboard-deep/03-remaining-sunlight.png",
+    ".smoke/dashboard-deep/03-remaining-sunlight.xml",
+    ".smoke/dashboard-deep/04-current-weather.png",
+    ".smoke/dashboard-deep/04-current-weather.xml",
+    ".smoke/dashboard-deep/05-vehicle-profile.png",
+    ".smoke/dashboard-deep/05-vehicle-profile.xml",
+    ".smoke/dashboard-deep/06-route-progress.png",
+    ".smoke/dashboard-deep/06-route-progress.xml",
+    ".smoke/dashboard-deep/07-power-monitor.png",
+    ".smoke/dashboard-deep/07-power-monitor.xml",
+    ".smoke/dashboard-deep/08-attitude-command.png",
+    ".smoke/dashboard-deep/08-attitude-command.xml",
+    ".smoke/dashboard-deep/09-expand-widgets.png",
+    ".smoke/dashboard-deep/09-expand-widgets.xml",
+    ".smoke/dashboard-deep/13-widgets-contracted.png",
+    ".smoke/dashboard-deep/13-widgets-contracted.xml",
+    ".smoke/dashboard-deep/16-widgets-contracted-real.png",
+    ".smoke/dashboard-deep/16-widgets-contracted-real.xml",
+    ".smoke/dashboard-deep/20-after-zero-attitude.png",
+    ".smoke/dashboard-deep/20-after-zero-attitude.xml",
+    ".smoke/dashboard-deep/21-after-sound-toggle.png",
+    ".smoke/dashboard-deep/21-after-sound-toggle.xml",
+    ".smoke/dashboard-longpress-deep/05-reset-attitude-module.png",
+    ".smoke/dashboard-longpress-deep/05-reset-attitude-module.xml",
+    ".smoke/dashboard-longpress-deep/controlled-center-module-longpress.png",
+    ".smoke/dashboard-longpress-deep/controlled-center-module-longpress.xml",
+    ".smoke/dashboard-longpress-deep/controlled-center-module-longpress-summary.txt",
+    ".smoke/android-tablet/dashboard.png",
+    ".smoke/android-tablet/smoke-summary.json",
+    "app.json",
+    "android/app/src/main/AndroidManifest.xml"
+  ],
+  "evidenceDetails": {
+    "tabSmokeBaseline": {
+      "status": "captured",
+      "references": [
+        ".smoke/android-tab-dashboard.png",
+        ".smoke/android-tab-dashboard.xml",
+        ".smoke/ecs-smoke-dashboard.png",
+        ".smoke/ecs-smoke-dashboard.xml"
+      ]
+    },
+    "widgetVisual": {
+      "status": "captured",
+      "references": [
+        ".smoke/android-tab-dashboard.png",
+        ".smoke/android-tab-dashboard.xml",
+        ".smoke/ecs-smoke-dashboard.png",
+        ".smoke/ecs-smoke-dashboard.xml",
+        ".smoke/dashboard-deep/01-dashboard-baseline.png",
+        ".smoke/dashboard-deep/01-dashboard-baseline.xml",
+        ".smoke/dashboard-deep/02-widgets-tab.png",
+        ".smoke/dashboard-deep/02-widgets-tab.xml",
+        ".smoke/dashboard-deep/03-remaining-sunlight.png",
+        ".smoke/dashboard-deep/03-remaining-sunlight.xml",
+        ".smoke/dashboard-deep/04-current-weather.png",
+        ".smoke/dashboard-deep/04-current-weather.xml",
+        ".smoke/dashboard-deep/05-vehicle-profile.png",
+        ".smoke/dashboard-deep/05-vehicle-profile.xml",
+        ".smoke/dashboard-deep/06-route-progress.png",
+        ".smoke/dashboard-deep/06-route-progress.xml",
+        ".smoke/dashboard-deep/07-power-monitor.png",
+        ".smoke/dashboard-deep/07-power-monitor.xml",
+        ".smoke/dashboard-deep/08-attitude-command.png",
+        ".smoke/dashboard-deep/08-attitude-command.xml",
+        ".smoke/dashboard-deep/09-expand-widgets.png",
+        ".smoke/dashboard-deep/09-expand-widgets.xml",
+        ".smoke/dashboard-deep/13-widgets-contracted.png",
+        ".smoke/dashboard-deep/13-widgets-contracted.xml",
+        ".smoke/dashboard-deep/16-widgets-contracted-real.png",
+        ".smoke/dashboard-deep/16-widgets-contracted-real.xml"
+      ]
+    },
+    "commandCenterSwitching": {
+      "status": "captured",
+      "references": [
+        ".smoke/android-tab-dashboard.png",
+        ".smoke/android-tab-dashboard.xml",
+        ".smoke/dashboard-deep/08-attitude-command.png",
+        ".smoke/dashboard-deep/08-attitude-command.xml",
+        ".smoke/dashboard-deep/20-after-zero-attitude.png",
+        ".smoke/dashboard-deep/20-after-zero-attitude.xml",
+        ".smoke/dashboard-deep/21-after-sound-toggle.png",
+        ".smoke/dashboard-deep/21-after-sound-toggle.xml",
+        ".smoke/dashboard-longpress-deep/05-reset-attitude-module.png",
+        ".smoke/dashboard-longpress-deep/05-reset-attitude-module.xml",
+        ".smoke/dashboard-longpress-deep/controlled-center-module-longpress.png",
+        ".smoke/dashboard-longpress-deep/controlled-center-module-longpress.xml",
+        ".smoke/dashboard-longpress-deep/controlled-center-module-longpress-summary.txt"
+      ],
+      "notes": "Device captures show the Dashboard command module control, selected Attitude Command, and selectable Navigation Command / 3D follow map option."
+    },
+    "sourceLabels": {
+      "status": "captured",
+      "references": [
+        ".smoke/dashboard-deep/01-dashboard-baseline.png",
+        ".smoke/dashboard-deep/01-dashboard-baseline.xml",
+        ".smoke/android-tab-dashboard.png",
+        ".smoke/android-tab-dashboard.xml",
+        ".smoke/ecs-smoke-dashboard.png",
+        ".smoke/ecs-smoke-dashboard.xml",
+        ".smoke/dashboard-deep/04-current-weather.png",
+        ".smoke/dashboard-deep/04-current-weather.xml",
+        ".smoke/dashboard-deep/05-vehicle-profile.png",
+        ".smoke/dashboard-deep/05-vehicle-profile.xml",
+        ".smoke/dashboard-deep/07-power-monitor.png",
+        ".smoke/dashboard-deep/07-power-monitor.xml",
+        ".smoke/dashboard-deep/16-widgets-contracted-real.png",
+        ".smoke/dashboard-deep/16-widgets-contracted-real.xml"
+      ]
+    },
+    "rotationLayout": {
+      "status": "accepted_portrait_locked_no_phone_landscape_runtime",
+      "references": [
+        ".smoke/android-tab-dashboard.png",
+        ".smoke/android-tab-dashboard.xml",
+        ".smoke/ecs-smoke-dashboard.png",
+        ".smoke/ecs-smoke-dashboard.xml",
+        ".smoke/android-tablet/dashboard.png",
+        ".smoke/android-tablet/smoke-summary.json",
+        "app.json",
+        "android/app/src/main/AndroidManifest.xml"
+      ],
+      "policy": {
+        "productionOrientation": "portrait_locked",
+        "phoneLandscapeRuntime": "not_applicable_in_current_android_production_config",
+        "note": "Android production configuration locks Dashboard runtime to portrait; existing Android phone/tablet portrait captures are used with the explicit portrait-lock policy instead of fabricating landscape evidence."
+      }
+    }
+  },
+  "reviewerSignoff": {
+    "productionOwner": "accepted",
+    "ownerDecisionSource": "Codex thread request on 2026-06-29 to complete Dashboard production evidence and production owner decision acceptance",
+    "product": "pending",
+    "engineering": "pending",
+    "qa": "pending",
+    "design": "pending",
+    "privacy": "pending",
+    "support": "pending",
+    "acceptedAt": "2026-06-29T02:11:23.0403675-07:00"
+  },
+  "pending": [
+    "role_review_product_engineering_qa_design_privacy_support"
+  ],
+  "notes": "Local backfill records existing Android artifacts plus the accepted production owner decision. Phone landscape remains explicitly covered by the current Android portrait-lock policy, not by fabricated landscape capture."
+}

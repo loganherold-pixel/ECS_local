@@ -62,7 +62,23 @@ function seedReadiness(root) {
   });
 }
 
+function seedProductionOrientationPolicy(root) {
+  writeJson(path.join(root, 'app.json'), {
+    expo: {
+      orientation: 'portrait',
+    },
+  });
+  writeText(
+    path.join(root, 'android', 'app', 'src', 'main', 'AndroidManifest.xml'),
+    '<manifest><application><activity android:name=".MainActivity" android:screenOrientation="portrait" /></application></manifest>',
+  );
+}
+
 function seedArtifacts(root) {
+  writeJson(path.join(root, 'package.json'), {
+    version: '1.0.0',
+  });
+
   writeArtifactPair(
     root,
     path.join('.smoke', 'android-tab-dashboard'),
@@ -88,6 +104,30 @@ function seedArtifacts(root) {
     path.join('.smoke', 'dashboard-deep', '20-after-zero-attitude'),
     'Zero pitch and roll Disable attitude monitor sound',
   );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'dashboard-longpress-deep', 'controlled-center-module-longpress'),
+    'ECS COMMAND MODULE Change Center Module ATTITUDE COMMAND Selected NAVIGATION COMMAND Centralized 3D follow map SELECT',
+  );
+  writeJson(path.join(root, '.smoke', 'android-tablet', 'smoke-summary.json'), {
+    device: 'SM-X230',
+    android: '16',
+    package: 'com.expeditioncommand.planningofflinesync',
+    installedVersion: 'versionCode=32 minSdk=24 targetSdk=36; versionName=1.0.0',
+    routes: [
+      {
+        route: 'dashboard',
+        rotation: '0',
+        screenshot: path.join(root, '.smoke', 'android-tablet', 'dashboard.png'),
+      },
+      {
+        route: 'dispatch-landscape',
+        rotation: '1',
+        screenshot: path.join(root, '.smoke', 'android-tablet', 'dispatch-landscape.png'),
+      },
+    ],
+  });
+  writeText(path.join(root, '.smoke', 'android-tablet', 'dashboard.png'), 'png');
 
   writeArtifactPair(
     root,
@@ -110,24 +150,67 @@ function seedArtifacts(root) {
     path.join('.smoke', 'ecs-smoke-fleet'),
     'OFFLINE FLEET Operating Weight Payload Left user_estimate Verify base weight',
   );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'focused-android-qa', 'restart-fleet'),
+    'OFFLINE FLEET Vehicle Profile Source CONFIDENCE estimated restart restore preserved local profile',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'dashboard-production-android', '00-profile-open'),
+    'FLEET PROFILE Add Vehicle Profile Confirm Specs',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'dashboard-production-android', '00-fleet-setup-filled-top'),
+    'OFFLINE FLEET VEHICLE COMMAND CENTER Fleet Add Vehicle No vehicles configured ECS FLEET NO VEHICLES STAGED',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'dashboard-production-android', '00-fleet-setup-bottom'),
+    'FLEET PROFILE Add Vehicle Profile Confirm specs ECS estimated this from vehicle configuration PAYLOAD REMAINING Use ECS Estimate Confirm Specs',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'dispatch-convoy-android-qa', '05-fleet-loaded-ui'),
+    'FLEET VEHICLE COMMAND CENTER Active Vehicles 1 Operating Weight Payload Left Confidence ecs_default Vehicle Profile Build & Loadout Weight Summary',
+  );
+  writeJson(path.join(root, '.smoke', 'fleet-production-evidence.json'), {
+    productionDecision: 'accepted',
+    reviewerSignoff: {
+      productionOwner: 'accepted',
+      product: 'pending',
+      engineering: 'pending',
+      qa: 'pending',
+      privacy: 'pending',
+      support: 'pending',
+      acceptedAt: '2026-06-29T00:00:00.000Z',
+    },
+  });
 }
 
 async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ecs-evidence-backfill-'));
   seedReadiness(root);
+  seedProductionOrientationPolicy(root);
   seedArtifacts(root);
 
   const script = await import(pathToFileURL(path.join(__dirname, 'backfill-production-evidence.mjs')).href);
   const results = script.buildProductionEvidenceBackfill({ rootDir: root, generatedAt: '2026-06-02T00:00:00.000Z' });
 
   assert.strictEqual(results.dashboard.androidDashboardWidgetVisualQaPassed, true);
-  assert.strictEqual(results.dashboard.commandCenterSwitchingDeviceEvidencePassed, false);
-  assert.strictEqual(results.dashboard.phoneLandscapeRotationLayoutEvidencePassed, false);
+  assert.strictEqual(results.dashboard.commandCenterSwitchingDeviceEvidencePassed, true);
+  assert.strictEqual(results.dashboard.phoneLandscapeRotationLayoutEvidencePassed, true);
   assert.strictEqual(results.dashboard.productionDecision, 'pending_owner_signoff');
   assert.ok(results.dashboard.pending.includes('owner_signoff'));
+  assert.strictEqual(
+    results.dashboard.evidenceDetails.rotationLayout.status,
+    'accepted_portrait_locked_no_phone_landscape_runtime',
+  );
   assert.ok(results.dashboard.evidenceReferences.some((item) => item.includes('.smoke/android-tab-dashboard.png')));
   assert.ok(results.dashboard.evidenceReferences.some((item) => item.includes('.smoke/ecs-smoke-dashboard.xml')));
   assert.ok(results.dashboard.evidenceReferences.some((item) => item.includes('.smoke/dashboard-deep/01-dashboard-baseline.png')));
+  assert.ok(results.dashboard.evidenceReferences.some((item) => item.includes('.smoke/dashboard-longpress-deep/controlled-center-module-longpress.xml')));
 
   assert.strictEqual(results.explore.androidExploreTrailPacksVisualQaPassed, false);
   assert.strictEqual(results.explore.contentReviewModerationEvidencePassed, false);
@@ -137,13 +220,24 @@ async function main() {
   assert.strictEqual(results.explore.productionDecision, 'pending_owner_signoff');
 
   assert.strictEqual(results.fleet.sourceConfidenceOfflineStatesVisible, true);
-  assert.strictEqual(results.fleet.androidFleetProfileVisualQaPassed, false);
-  assert.strictEqual(results.fleet.scaleTicketProfileEvidencePassed, false);
-  assert.strictEqual(results.fleet.offlinePersistenceMigrationEvidencePassed, false);
-  assert.strictEqual(results.fleet.productionDecision, 'pending_owner_signoff');
+  assert.strictEqual(results.fleet.androidFleetProfileVisualQaPassed, true);
+  assert.strictEqual(results.fleet.multiVehicleActiveSelectionEvidencePassed, true);
+  assert.strictEqual(results.fleet.scaleTicketProfileEvidencePassed, true);
+  assert.strictEqual(results.fleet.offlinePersistenceMigrationEvidencePassed, true);
+  assert.strictEqual(results.fleet.productionDecision, 'accepted');
+  assert.strictEqual(results.fleet.reviewerSignoff.productionOwner, 'accepted');
+  assert.strictEqual(results.fleet.reviewerSignoff.qa, 'pending');
+  assert.strictEqual(results.fleet.buildAndDevice.appBuildType, 'fieldtest_eas_apk');
+  assert.strictEqual(results.fleet.buildAndDevice.androidDeviceModel, 'SM-X230');
+  assert.strictEqual(results.fleet.buildAndDevice.androidOsVersion, '16');
   assert.strictEqual(results.fleet.androidQaStateMatrix.noPhotoContractVisible, true);
   assert.ok(results.fleet.evidenceReferences.some((item) => item.includes('fleetQaPreload:verified_vs_estimated_weight')));
-  assert.ok(results.fleet.pending.includes('real_scale_ticket_or_axle_weight_device_evidence'));
+  assert.ok(!results.fleet.pending.includes('owner_signoff'));
+  assert.ok(results.fleet.pending.includes('role_review_product_engineering_qa_privacy_support'));
+  assert.strictEqual(
+    results.fleet.evidenceDetails.scaleTicket.status,
+    'accepted_fixture_scale_ticket_confidence_path_not_real_ticket',
+  );
 
   script.writeProductionEvidenceBackfill(results, { rootDir: root });
   for (const relativePath of [

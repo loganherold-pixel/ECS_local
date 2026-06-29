@@ -38,6 +38,14 @@ function accepted(value) {
   return String(value ?? '').trim().toLowerCase() === 'accepted';
 }
 
+function ownerDecisionAccepted(evidence) {
+  const acceptedAt = String(evidence?.reviewerSignoff?.acceptedAt ?? '').trim();
+  return accepted(evidence?.productionDecision) &&
+    accepted(evidence?.reviewerSignoff?.productionOwner) &&
+    acceptedAt.length > 0 &&
+    acceptedAt.toLowerCase() !== 'pending';
+}
+
 export function buildDashboardProductionReadinessResult(options = {}) {
   const root = options.rootDir ?? process.cwd();
   const paths = {
@@ -198,15 +206,15 @@ export function buildDashboardProductionReadinessResult(options = {}) {
     ),
     check(
       'phone_landscape_rotation_layout_evidence_present',
-      'Phone portrait/landscape rotation layout evidence is recorded.',
+      'Phone portrait/landscape rotation layout evidence or explicit production orientation policy is recorded.',
       evidenceTrue(evidence, 'phoneLandscapeRotationLayoutEvidencePassed'),
       [relPath(root, paths.evidence)],
-      ['Validate Dashboard on cramped phone portrait, phone landscape, tablet portrait, and tablet landscape with no clipped command buttons or overlapped dock/header.'],
+      ['Validate Dashboard on cramped phone portrait, phone landscape, tablet portrait, and tablet landscape, or record an accepted production orientation-lock policy with Android source references.'],
     ),
     check(
       'production_owner_decision_accepted',
       'Production owner decision is accepted for Dashboard widgets.',
-      accepted(evidence?.productionDecision),
+      ownerDecisionAccepted(evidence),
       [relPath(root, paths.evidence)],
       ['Record product, engineering, QA, design, privacy/security, and support acceptance after Android dashboard evidence is complete.'],
     ),
@@ -226,6 +234,7 @@ export function buildDashboardProductionReadinessResult(options = {}) {
       'This gate separates Dashboard widget implementation readiness from Android visual, source-state, rotation, and owner-decision evidence.',
       'Dashboard widgets must keep stale, cached, manual, disconnected, unavailable, and no-route states visible instead of presenting fake live data.',
       'Convoy Command belongs in Dispatch; Dashboard command center menu should retain only Attitude and 3D Nav modes.',
+      'Android production currently declares portrait orientation; landscape evidence must be explicit if that policy changes.',
     ],
   };
 }

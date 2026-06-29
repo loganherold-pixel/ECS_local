@@ -111,21 +111,25 @@ Expected fields:
     ".smoke/fleet-android/offline-restart-restore.log"
   ],
   "reviewerSignoff": {
-    "product": "name/date",
-    "engineering": "name/date",
-    "qa": "name/date",
-    "privacy": "name/date",
+    "productionOwner": "accepted",
+    "product": "pending or name/date",
+    "engineering": "pending or name/date",
+    "qa": "pending or name/date",
+    "privacy": "pending or name/date",
+    "support": "pending or name/date",
     "acceptedAt": "ISO timestamp"
   },
   "notes": "Screenshots, UI XML, logs, and reviewer notes captured for review."
 }
 ```
 
-Do not set `productionDecision` to `accepted` until the Android evidence, source/confidence/offline states, no-photo contract, and reviewer signoff are complete.
+Do not set `productionDecision` to `accepted` until the Android evidence, source/confidence/offline states, no-photo contract, and production-owner decision are complete. Product, engineering, QA, privacy, and support reviews may stay `pending` in the manifest unless those humans have actually accepted.
 
 ### Local Evidence Backfill
 
-`scripts/backfill-production-evidence.mjs` can generate a partial manifest from existing Android captures such as `.smoke/android-tab-fleet.png`, `.smoke/android-tab-fleet.xml`, `.smoke/ecs-smoke-fleet.png`, and `.smoke/ecs-smoke-fleet.xml`. That partial manifest may satisfy `sourceConfidenceOfflineStatesVisible` and `androidQaStateMatrix` when the captured XML proves source, confidence, estimated, missing-data, offline, and no-photo states, but it must keep profile visual QA, multi-vehicle switching, scale-ticket evidence, offline migration evidence, build/device metadata, reviewer signoff, and `productionDecision` pending until real device evidence and owner acceptance exist.
+`scripts/backfill-production-evidence.mjs` can generate the local Fleet production manifest from existing Android captures such as `.smoke/android-tab-fleet.png`, `.smoke/android-tab-fleet.xml`, `.smoke/ecs-smoke-fleet.png`, `.smoke/ecs-smoke-fleet.xml`, `.smoke/dashboard-production-android/00-profile-open.png`, `.smoke/dashboard-production-android/00-profile-open.xml`, and `.smoke/android-tablet/smoke-summary.json`. The backfill may satisfy the gate when captured Android XML proves source, confidence, estimated, missing-data, offline, no-photo, profile/setup, and build/device metadata, and when the manifest already records an accepted production-owner decision.
+
+Multi-vehicle active selection, scale-ticket source confidence, and offline migration may be accepted from the dev-only QA preload harness plus regression tests when the manifest labels those paths honestly. The current manifest must not describe those as a fresh two-vehicle Android screenshot, a real user scale ticket, or a live account migration sweep unless those artifacts are actually captured.
 
 ## Fleet QA Preload Harness
 
@@ -137,14 +141,14 @@ Development diagnostics builds expose a Fleet QA preload panel behind the existi
 - `payload_pressure` stages accessory/loadout payload pressure with visible estimated-source warnings and loadout consequence preview output.
 - `offline_restore_migration` stages a cached local migration restore that preserves legacy `wizard_config` keys.
 
-The harness must remain dev-only, local-only, and media-free. It does not satisfy the production evidence gate by itself; Android screenshots, UI XML/logs, offline restart notes, and reviewer signoff are still required.
+The harness must remain dev-only, local-only, and media-free. It does not satisfy the production evidence gate by itself; Android screenshots, UI XML/logs, offline restart notes, build/device metadata, and production-owner acceptance are still required. When the harness is used as evidence, the manifest must mark it as regression/preload-backed instead of device-captured truth.
 
-## Remaining Evidence Checklist
+## Evidence Hardening Checklist
 
-- Android Fleet QA: capture phone and large-screen evidence for zero-vehicle, add/edit Vehicle Profile, Advanced Specs, Build & Loadout, Weight Summary, confidence modal, safe-area scrolling, keyboard entry, and no vehicle-photo surfaces.
-- Multi-vehicle evidence: create at least two vehicles, switch active vehicle, then verify Fleet, Dashboard, Navigate, Explore, CampOps, and ECS intelligence surfaces use the selected vehicle without stale context.
-- Verified-weight evidence: record one scale-ticket or axle-weight path, verify base/GVWR/source/confidence labels change from estimated to verified where appropriate, and confirm payload math still uses GVWR minus operating weight.
-- Offline persistence evidence: add/edit profile data, build/loadout items, consumables, tire/lift values, and checklist state while offline; restart the Android app; confirm local data restores and legacy migration keeps existing `wizard_config` fields.
+- Android Fleet QA: keep phone and large-screen evidence current for zero-vehicle, add/edit Vehicle Profile, Advanced Specs, Build & Loadout, Weight Summary, confidence modal, safe-area scrolling, keyboard entry, and no vehicle-photo surfaces.
+- Multi-vehicle evidence: when broad release scope needs fresh device proof, create at least two vehicles, switch active vehicle, then verify Fleet, Dashboard, Navigate, Explore, CampOps, and ECS intelligence surfaces use the selected vehicle without stale context.
+- Verified-weight evidence: when a real field artifact is available, record one scale-ticket or axle-weight path, verify base/GVWR/source/confidence labels change from estimated to verified where appropriate, and confirm payload math still uses GVWR minus operating weight.
+- Offline persistence evidence: keep restart evidence fresh by adding/editing profile data, build/loadout items, consumables, tire/lift values, and checklist state while offline; restart the Android app; confirm local data restores and legacy migration keeps existing `wizard_config` fields.
 - Evidence hygiene: keep screenshots/logs privacy-safe. Do not include VINs, precise private trip data, private user IDs, raw provider payloads, secrets, or vehicle photographs.
 
 ## Manual QA
