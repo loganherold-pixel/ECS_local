@@ -11,6 +11,18 @@ import {
   logRouteCatalogVisibilityDiagnostic,
 } from '../routeCatalogVisibilityDiagnostics';
 import {
+  normalizeRouteCatalogSummary,
+  type RouteCatalogSummary,
+  type RouteCatalogSourceType,
+} from '../routeDataContracts';
+import { createPersistedKeyValueCache } from '../keyValuePersistence';
+import {
+  EXPLORE_CATALOG_SUMMARY_CACHE_KEY,
+  EXPLORE_CATALOG_SUMMARY_CACHE_STALE_MS,
+  EXPLORE_CATALOG_SUMMARY_CACHE_TTL_MS,
+  exploreCatalogRegionCacheKey,
+} from './routeCatalogSummaryCache';
+import {
   buildExplorePerformanceSummary,
   createExplorePerformanceRun,
   getExplorePerformanceNow,
@@ -47,6 +59,9 @@ export type LiveTrailPackCatalogSearchCriteria = {
   availableFuelRangeMiles?: number | null;
   availableWaterCapacityGallons?: number | null;
   locationSource?: 'live_gps' | 'default_location' | string | null;
+  regionId?: string | null;
+  page?: number | null;
+  pageSize?: number | null;
   limit?: number;
   expectedKnownRoutes?: string[] | null;
   includePreviewGeometry?: boolean | null;
@@ -55,6 +70,7 @@ export type LiveTrailPackCatalogSearchCriteria = {
 
 export type LiveTrailPackCatalogSnapshot = {
   trailPacks: ECSTrailPack[];
+  routeCatalogSummaries: RouteCatalogSummary[];
   status: LiveTrailPackCatalogStatus;
   error: string | null;
   lastLoadedAt: string | null;
@@ -74,6 +90,7 @@ let refreshRequestSequence = 0;
 const pendingRefreshesByKey = new Map<string, Promise<LiveTrailPackCatalogSnapshot>>();
 let snapshot: LiveTrailPackCatalogSnapshot = {
   trailPacks: [],
+  routeCatalogSummaries: [],
   status: 'idle',
   error: null,
   lastLoadedAt: null,
@@ -113,7 +130,9 @@ const TRAIL_PACK_SELECT = [
 ].join(',');
 
 const ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT = 500;
+const ROUTE_CATALOG_SUMMARY_PAGE_SIZE = 50;
 const ROUTE_CATALOG_STAGED_REFRESH_LIMIT = 50;
+const routeCatalogSummaryPersistentCache = createPersistedKeyValueCache(EXPLORE_CATALOG_SUMMARY_CACHE_KEY);
 
 function finiteNumber(value: unknown): number | undefined {
   const number = Number(value);
@@ -142,7 +161,9 @@ function hasRouteCatalogRadiusCriteria(criteria: LiveTrailPackCatalogSearchCrite
 function stagedRouteCatalogSearchCriteria(
   criteria: LiveTrailPackCatalogSearchCriteria,
 ): LiveTrailPackCatalogSearchCriteria | null {
-  const limit = routeCatalogSearchLimit(criteria.limit);
+  const requestedLimit = finiteNumber(criteria.limit);
+  if (requestedLimit == null) return null;
+  const limit = routeCatalogSearchLimit(requestedLimit);
   if (!hasRouteCatalogRadiusCriteria(criteria) || limit <= ROUTE_CATALOG_STAGED_REFRESH_LIMIT) return null;
   return {
     ...criteria,
@@ -205,6 +226,164 @@ function emit() {
       listener();
     } catch {}
   });
+}
+
+function catalogSourceType(pack: ECSTrailPack): RouteCatalogSourceType {
+  if (pack.dataState === 'fixture') return 'preview';
+  if (pack.source === 'community_reviewed' || pack.source === 'ecs_submitted') return 'community';
+  if (pack.source === 'imported_gpx' || pack.source === 'imported_kml') return 'imported';
+  if (pack.source === 'needs_review') return 'preview';
+  return 'official';
+}
+
+function finiteMetersFromMiles(value: unknown): number | null {
+  const miles = Number(value);
+  return Number.isFinite(miles) && miles >= 0 ? Math.round(miles * 1609.344) : null;
+}
+
+function finiteSecondsFromMinutes(value: unknown): number | null {
+  const minutes = Number(value);
+  return Number.isFinite(minutes) && minutes >= 0 ? Math.round(minutes * 60) : null;
+}
+
+function pointBbox(coordinate: ECSTrailPackCoordinate) {
+  return {
+    minLng: coordinate.longitude,
+    minLat: coordinate.latitude,
+    maxLng: coordinate.longitude,
+    maxLat: coordinate.latitude,
+  };
+}
+
+function trailPackToRouteCatalogSummary(pack: ECSTrailPack): RouteCatalogSummary | null {
+  const positiveFeedbackCount = pack.positiveFeedbackCount ?? 0;
+  const negativeFeedbackCount = pack.negativeFeedbackCount ?? 0;
+  return normalizeRouteCatalogSummary({
+    routeId: pack.id,
+    title: pack.name,
+    region: pack.routeIntelligence?.region ?? null,
+    forestName: pack.routeIntelligence?.forestName ?? pack.routeIntelligence?.forest ?? null,
+    distanceMeters: finiteMetersFromMiles(pack.distanceMiles),
+    estimatedDurationSeconds: finiteSecondsFromMinutes(pack.estimatedDurationMinutes),
+    difficulty: pack.difficulty ?? null,
+    popularityScore: pack.completionCount ?? null,
+    communityRating:
+      positiveFeedbackCount || negativeFeedbackCount
+        ? positiveFeedbackCount / Math.max(1, positiveFeedbackCount + negativeFeedbackCount)
+        : null,
+    sourceType: catalogSourceType(pack),
+    bbox: pointBbox(pack.centerCoordinate),
+    trailheadCoordinate: pack.centerCoordinate,
+    thumbnailUrl: null,
+    thumbnailAssetKey: pack.tags?.find((tag) => tag.startsWith('thumbnail:'))?.slice('thumbnail:'.length) ?? null,
+    updatedAt: pack.updatedAt,
+    tags: pack.tags ?? [],
+  });
+}
+
+function routeCatalogSummariesFromTrailPacks(trailPacks: ECSTrailPack[]): RouteCatalogSummary[] {
+  return trailPacks
+    .map(trailPackToRouteCatalogSummary)
+    .filter((summary): summary is RouteCatalogSummary => !!summary);
+}
+
+type RouteCatalogSummaryCachePayload = {
+  summaries: RouteCatalogSummary[];
+  cachedAt: string;
+  coverageState: RouteCatalogCoverageState;
+  searchMeta: RouteCatalogSearchMeta | null;
+  source: LiveTrailPackCatalogSnapshot['source'];
+  refreshKey: string;
+};
+
+function routeCatalogSummaryCacheKeys(criteria: LiveTrailPackCatalogSearchCriteria): string[] {
+  const keys = [EXPLORE_CATALOG_SUMMARY_CACHE_KEY];
+  const regionId = cleanText(criteria.regionId ?? criteria.locationSource);
+  if (regionId) keys.push(exploreCatalogRegionCacheKey(regionId));
+  return Array.from(new Set(keys));
+}
+
+function parseRouteCatalogSummaryCachePayload(raw: string | null, nowMs = Date.now()): RouteCatalogSummaryCachePayload | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const record = readRecord(parsed);
+    if (!record) return null;
+    const cachedAt = cleanText(record.cachedAt);
+    if (!cachedAt) return null;
+    const cachedAtMs = Date.parse(cachedAt);
+    if (!Number.isFinite(cachedAtMs)) return null;
+    if (nowMs - cachedAtMs > EXPLORE_CATALOG_SUMMARY_CACHE_TTL_MS + EXPLORE_CATALOG_SUMMARY_CACHE_STALE_MS) {
+      return null;
+    }
+    const summaries = Array.isArray(record.summaries)
+      ? record.summaries
+          .map(normalizeRouteCatalogSummary)
+          .filter((summary): summary is RouteCatalogSummary => !!summary)
+      : [];
+    if (summaries.length === 0) return null;
+    const coverageStateRecord = readRecord(record.coverageState);
+    const searchMetaRecord = readRecord(record.searchMeta);
+    return {
+      summaries,
+      cachedAt,
+      coverageState:
+        coverageStateRecord && typeof coverageStateRecord.state === 'string'
+          ? coverageStateRecord as unknown as RouteCatalogCoverageState
+          : getRouteCatalogCoverageState([], { userHasCriteria: true }),
+      searchMeta: searchMetaRecord as unknown as RouteCatalogSearchMeta | null,
+      source: record.source === 'trail_packs_fallback' ? 'trail_packs_fallback' : 'route_catalog',
+      refreshKey: cleanText(record.refreshKey) ?? '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readCachedRouteCatalogSummarySnapshot(
+  criteria: LiveTrailPackCatalogSearchCriteria,
+  refreshKey: string,
+): Promise<LiveTrailPackCatalogSnapshot | null> {
+  await routeCatalogSummaryPersistentCache.waitForHydration();
+  for (const key of routeCatalogSummaryCacheKeys(criteria)) {
+    const cached = parseRouteCatalogSummaryCachePayload(routeCatalogSummaryPersistentCache.get(key));
+    if (!cached) continue;
+    return {
+      trailPacks: [],
+      routeCatalogSummaries: cached.summaries,
+      status: 'loading',
+      error: null,
+      lastLoadedAt: cached.cachedAt,
+      lastRefreshAttemptAt: cached.cachedAt,
+      coverageState: cached.coverageState,
+      searchMeta: cached.searchMeta,
+      source: cached.source,
+      refreshKey,
+      preservedFromEmptyRefresh: false,
+      preservedReason: 'stale_summary_revalidate',
+    };
+  }
+  return null;
+}
+
+function writeRouteCatalogSummaryCache(
+  criteria: LiveTrailPackCatalogSearchCriteria,
+  nextSnapshot: LiveTrailPackCatalogSnapshot,
+): void {
+  if (nextSnapshot.routeCatalogSummaries.length === 0) return;
+  const payload: RouteCatalogSummaryCachePayload = {
+    summaries: nextSnapshot.routeCatalogSummaries,
+    cachedAt: nextSnapshot.lastLoadedAt ?? new Date().toISOString(),
+    coverageState: nextSnapshot.coverageState,
+    searchMeta: nextSnapshot.searchMeta,
+    source: nextSnapshot.source,
+    refreshKey: nextSnapshot.refreshKey ?? createLiveTrailPackCatalogRefreshKey(criteria),
+  };
+  const serialized = JSON.stringify(payload);
+  routeCatalogSummaryCacheKeys(criteria).forEach((key) => {
+    routeCatalogSummaryPersistentCache.set(key, serialized);
+  });
+  void routeCatalogSummaryPersistentCache.flush();
 }
 
 function setSnapshot(next: LiveTrailPackCatalogSnapshot): LiveTrailPackCatalogSnapshot {
@@ -507,9 +686,10 @@ export function buildRouteCatalogSearchBody(
   const availableWaterCapacityGallons = positiveNumber(criteria.availableWaterCapacityGallons);
   const routeType = cleanText(criteria.routeType);
   const difficulty = cleanText(criteria.difficulty);
-  const includePreviewGeometry = criteria.includePreviewGeometry === false ? false : true;
+  const regionId = cleanText(criteria.regionId);
+  const includePreviewGeometry = criteria.includePreviewGeometry === true;
   return {
-    limit: criteria.limit ?? 500,
+    limit: criteria.limit ?? ROUTE_CATALOG_SUMMARY_PAGE_SIZE,
     includeGeometry: false,
     includePreviewGeometry,
     includeAssessment: true,
@@ -530,6 +710,7 @@ export function buildRouteCatalogSearchBody(
     ...(maxDurationMinutes != null ? { maxDurationMinutes: criteria.maxDurationMinutes } : {}),
     ...(routeType ? { routeType: criteria.routeType } : {}),
     ...(difficulty ? { difficulty: criteria.difficulty } : {}),
+    ...(regionId ? { regionId: criteria.regionId } : {}),
     ...(minConfidenceScore != null ? { minConfidenceScore: criteria.minConfidenceScore } : {}),
     ...(minRemotenessScore != null ? { minRemotenessScore: criteria.minRemotenessScore } : {}),
     ...(maxRemotenessScore != null ? { maxRemotenessScore: criteria.maxRemotenessScore } : {}),
@@ -580,7 +761,7 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
       radiusMiles: criteria.radiusMiles ?? null,
       locationSource: criteria.locationSource ?? null,
       vehicleClass: criteria.vehicleClass ?? null,
-      limit: criteria.limit ?? 500,
+      limit: criteria.limit ?? ROUTE_CATALOG_SUMMARY_PAGE_SIZE,
     },
   });
   const { data, error } = await supabase.functions.invoke('route-catalog-search', {
@@ -624,7 +805,7 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
       latitude: criteria.latitude,
       longitude: criteria.longitude,
       radiusMiles: criteria.radiusMiles,
-      limit: criteria.limit ?? 500,
+      limit: criteria.limit ?? ROUTE_CATALOG_SUMMARY_PAGE_SIZE,
       expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon'],
     }, {
       serverMeta: normalized.searchMeta,
@@ -704,13 +885,22 @@ export async function refreshLiveTrailPackCatalog(
 
   const requestId = refreshRequestSequence + 1;
   refreshRequestSequence = requestId;
-  setSnapshot({
-    ...snapshot,
-    status: 'loading',
-    error: null,
-  });
-
   const loadedAt = new Date().toISOString();
+  const cachedSummarySnapshot = await readCachedRouteCatalogSummarySnapshot(criteria, refreshKey);
+  if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+  const preserveReadyDetailsDuringRevalidate =
+    snapshot.refreshKey === refreshKey && snapshot.status === 'ready' && snapshot.trailPacks.length > 0;
+  setSnapshot(
+    cachedSummarySnapshot && !preserveReadyDetailsDuringRevalidate
+      ? cachedSummarySnapshot
+      : {
+          ...snapshot,
+          status: 'loading',
+          error: null,
+          lastRefreshAttemptAt: loadedAt,
+        },
+  );
+
   let routeCatalogError: Error | null = null;
 
   const refreshPromise = (async () => {
@@ -720,8 +910,9 @@ export async function refreshLiveTrailPackCatalog(
         const stagedRouteCatalog = await fetchRouteCatalogTrailPacks(stagedCriteria);
         if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
         if (stagedRouteCatalog.trailPacks.length > 0) {
-          setSnapshot({
+          const nextSnapshot = setSnapshot({
             trailPacks: stagedRouteCatalog.trailPacks,
+            routeCatalogSummaries: routeCatalogSummariesFromTrailPacks(stagedRouteCatalog.trailPacks),
             status: 'ready',
             error: null,
             lastLoadedAt: loadedAt,
@@ -733,6 +924,7 @@ export async function refreshLiveTrailPackCatalog(
             preservedFromEmptyRefresh: false,
             preservedReason: null,
           });
+          writeRouteCatalogSummaryCache(stagedCriteria, nextSnapshot);
         }
       } catch {
         if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
@@ -754,8 +946,9 @@ export async function refreshLiveTrailPackCatalog(
         });
         if (preserved) return preserved;
       }
-      return setSnapshot({
+      const nextSnapshot = setSnapshot({
         trailPacks: routeCatalog.trailPacks,
+        routeCatalogSummaries: routeCatalogSummariesFromTrailPacks(routeCatalog.trailPacks),
         status: 'ready',
         error: null,
         lastLoadedAt: loadedAt,
@@ -767,6 +960,8 @@ export async function refreshLiveTrailPackCatalog(
         preservedFromEmptyRefresh: false,
         preservedReason: null,
       });
+      writeRouteCatalogSummaryCache(criteria, nextSnapshot);
+      return nextSnapshot;
     } catch (error) {
       if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
       routeCatalogError = error instanceof Error ? error : new Error('Verified route catalog unavailable.');
@@ -791,8 +986,9 @@ export async function refreshLiveTrailPackCatalog(
         });
         if (preserved) return preserved;
       }
-      return setSnapshot({
+      const nextSnapshot = setSnapshot({
         trailPacks: legacyTrailPacks,
+        routeCatalogSummaries: routeCatalogSummariesFromTrailPacks(legacyTrailPacks),
         status: 'ready',
         error: routeCatalogError.message,
         lastLoadedAt: loadedAt,
@@ -804,6 +1000,8 @@ export async function refreshLiveTrailPackCatalog(
         preservedFromEmptyRefresh: false,
         preservedReason: null,
       });
+      writeRouteCatalogSummaryCache(criteria, nextSnapshot);
+      return nextSnapshot;
     } catch (error) {
       if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
       const errorMessage = error instanceof Error ? error.message : routeCatalogError.message;
@@ -816,6 +1014,7 @@ export async function refreshLiveTrailPackCatalog(
       if (preserved) return preserved;
       return setSnapshot({
         trailPacks: [],
+        routeCatalogSummaries: [],
         status: 'error',
         error: errorMessage,
         lastLoadedAt: loadedAt,
@@ -840,6 +1039,7 @@ export const liveTrailPackCatalogStore = {
   getSnapshot(): LiveTrailPackCatalogSnapshot {
     return {
       trailPacks: [...snapshot.trailPacks],
+      routeCatalogSummaries: [...snapshot.routeCatalogSummaries],
       status: snapshot.status,
       error: snapshot.error,
       lastLoadedAt: snapshot.lastLoadedAt,

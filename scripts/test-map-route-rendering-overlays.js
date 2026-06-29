@@ -244,7 +244,7 @@ assert(
 );
 assert(
   mapRendererSource.includes('function promoteRouteGuidanceLayers()') &&
-    mapRendererSource.includes("'route-progress-layer'") &&
+    mapRendererSource.includes('ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID') &&
     mapRendererSource.includes('promoteRouteGuidanceLayers();'),
   'MapRenderer should re-promote active route guidance layers after camp/search overlay updates.',
 );

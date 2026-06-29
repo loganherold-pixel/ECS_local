@@ -273,6 +273,7 @@ function MapPreview({ trailPack }: { trailPack: ECSTrailPackDiscoveryItem }) {
             trailSegments={sourceTrailSegments}
             waypoints={[]}
             routeColor={TACTICAL.amber}
+            routeRenderMode="preview"
             mapStyle={DEFAULT_MAP_STYLE}
             mapboxToken={mapboxToken}
             hasToken={!!mapboxToken}

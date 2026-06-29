@@ -26,6 +26,7 @@ const DEPLOYED_EDGE_FUNCTIONS = new Set([
   "route-catalog-search",
   "route-catalog-detail",
   "route-geometry-segments",
+  "navigate-mvum-segment-geometry",
   "route-submission-intake",
   "dispersed-camping-eligibility",
   "convoy-membership",

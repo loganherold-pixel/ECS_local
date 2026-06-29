@@ -249,7 +249,7 @@ assert(
     liveCatalog.includes('availableFuelRangeMiles: criteria.availableFuelRangeMiles') &&
     liveCatalog.includes('availableWaterCapacityGallons: criteria.availableWaterCapacityGallons') &&
     liveCatalog.includes('includeGeometry: false') &&
-    liveCatalog.includes('const includePreviewGeometry = criteria.includePreviewGeometry === false ? false : true') &&
+    liveCatalog.includes('const includePreviewGeometry = criteria.includePreviewGeometry === true') &&
     liveCatalog.includes('includePreviewGeometry,') &&
     liveCatalog.includes('includeCoverageDiagnostics: false') &&
     liveCatalog.includes("expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon']") &&

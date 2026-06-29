@@ -48,7 +48,7 @@ import ExpeditionAnalysisModal from '../../components/discover/ExpeditionAnalysi
 import DistanceRadiusFilter from '../../components/discover/DistanceRadiusFilter';
 import AIRouteCard from '../../components/discover/AIRouteCard';
 import AIRoutePreviewModal from '../../components/discover/AIRoutePreviewModal';
-import TrailPackCard from '../../components/discover/TrailPackCard';
+import RouteCatalogSummaryCard from '../../components/discover/RouteCatalogSummaryCard';
 import TrailPackPreviewModal from '../../components/trailPacks/TrailPackPreviewModal';
 import ExploreTripBuilderWizardRouteCard from '../../components/discover/ExploreTripBuilderWizardRouteCard';
 import { getExploreRouteThumbnailAssignments } from '../../lib/exploreTrailThumbnails';
@@ -140,6 +140,7 @@ import {
   isPublicSuggestedTrailheadRoute,
   isPublicSuggestedTrailheadTrailPack,
   trailPackToExpeditionOpportunity,
+  type ECSTrailPackSource,
   type ECSTrailPackDiscoveryItem,
 } from '../../lib/explore/trailPacks';
 import { trailPackToOfflinePrepCatalogInput } from '../../lib/explore/trailPackOfflineCache';
@@ -195,9 +196,16 @@ import {
   saveExplorePlanningRouteContext,
 } from '../../lib/explore/explorePlanningRouteContextStore';
 import {
+  createExploreNavigateSeparationRun,
+  recordExploreInitialRender,
+  recordExploreRouteDetailFetch,
+} from '../../lib/performance/exploreNavigateSeparationInstrumentation';
+import {
   buildExploreRouteOverlaySegmentsFromRoutes,
   type ExploreRouteOverlayCategory,
 } from '../../lib/navigateExploreRoutesOverlay';
+import type { RouteCatalogSummary, RouteDetail } from '../../lib/routeDataContracts';
+import { paginateRouteCatalogSummaries } from '../../lib/explore/routeCatalogSummaryCache';
 import { saveExploreRoutesMapHandoff } from '../../lib/exploreRoutesMapHandoff';
 import {
   getExploreFilterStateSnapshot,
@@ -208,11 +216,9 @@ import {
 import {
   buildRouteDiscoveryIndex,
   normalizeRouteDiscoveryCoordinateBucket,
-  planRouteDiscoveryImagePrefetch,
   queryTrailPackDiscoveryIndexCached,
   revalidateTrailPackDiscoveryIndexCache,
   routeDiscoveryCache,
-  routeDiscoveryImageCache,
 } from '../../lib/explore/routeDiscoveryIndex';
 import { getShellBottomClearance } from '../../lib/shellLayout';
 import { reportDegradedState, reportRecoverableFailure } from '../../lib/ecsIssueIntelligence';
@@ -281,7 +287,6 @@ const EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT = 12;
 const EXPLORE_ROUTE_DISCOVERY_FIRST_BATCH_SIZE = 12;
 const EXPLORE_ROUTE_DISCOVERY_BATCH_SIZE = 24;
 const EXPLORE_ROUTE_DISCOVERY_BATCH_DELAY_MS = 32;
-const EXPLORE_ROUTE_IMAGE_PREFETCH_COUNT = 4;
 const EXPLORE_ROUTE_CARD_INITIAL_RENDER_COUNT = 8;
 const EXPLORE_ROUTE_CARD_BATCH_SIZE = 8;
 const EXPLORE_ROUTE_CARD_WINDOW_SIZE = 7;
@@ -315,6 +320,107 @@ const TOKEN_STOP_WORDS = new Set([
 
 function routePassesExploreMapLength(route: ExpeditionOpportunity | null | undefined): route is ExpeditionOpportunity {
   return Number.isFinite(Number(route?.distanceMiles)) && Number(route?.distanceMiles) >= MIN_DISCOVERY_ROUTE_MILES;
+}
+
+function routeCatalogSummarySource(summary: RouteCatalogSummary): ECSTrailPackSource {
+  if (summary.sourceType === 'community') return 'community_reviewed';
+  if (summary.sourceType === 'imported') return 'imported_gpx';
+  if (summary.sourceType === 'preview') return 'needs_review';
+  return 'ecs_validated';
+}
+
+function routeCatalogSummaryDifficulty(summary: RouteCatalogSummary): ECSTrailPackDiscoveryItem['difficulty'] {
+  const normalized = String(summary.difficulty ?? '').trim().toLowerCase();
+  if (
+    normalized === 'easy' ||
+    normalized === 'moderate' ||
+    normalized === 'technical' ||
+    normalized === 'extreme' ||
+    normalized === 'unknown'
+  ) {
+    return normalized;
+  }
+  return 'unknown';
+}
+
+function routeCatalogSummaryCoordinate(summary: RouteCatalogSummary) {
+  if (summary.trailheadCoordinate) return summary.trailheadCoordinate;
+  if (summary.bbox) {
+    return {
+      latitude: (summary.bbox.minLat + summary.bbox.maxLat) / 2,
+      longitude: (summary.bbox.minLng + summary.bbox.maxLng) / 2,
+    };
+  }
+  return DEFAULT_USER_LOCATION;
+}
+
+function routeCatalogSummaryConfidence(summary: RouteCatalogSummary): number {
+  if (summary.sourceType === 'official') return 88;
+  if (summary.sourceType === 'community') return 68;
+  if (summary.sourceType === 'imported') return 62;
+  return 45;
+}
+
+function routeCatalogSummaryToTrailPackPreview(summary: RouteCatalogSummary): ECSTrailPackDiscoveryItem {
+  const confidenceScore = routeCatalogSummaryConfidence(summary);
+  const updatedAt = summary.updatedAt ?? new Date(0).toISOString();
+  return {
+    id: summary.routeId,
+    name: summary.title,
+    description: 'Route summary loaded. Open detail to fetch verified geometry and guidance data.',
+    source: routeCatalogSummarySource(summary),
+    routeType: 'unknown',
+    centerCoordinate: routeCatalogSummaryCoordinate(summary),
+    routeGeometryMode: 'omitted',
+    distanceMiles: summary.distanceMeters != null ? summary.distanceMeters / 1609.344 : undefined,
+    estimatedDurationMinutes:
+      summary.estimatedDurationSeconds != null ? summary.estimatedDurationSeconds / 60 : undefined,
+    difficulty: routeCatalogSummaryDifficulty(summary),
+    confidenceScore,
+    confidenceReasons: ['Route catalog summary. Detail fetch required for geometry and guidance.'],
+    dataState: 'live',
+    lastVerifiedAt: summary.updatedAt ?? undefined,
+    positiveFeedbackCount:
+      summary.communityRating != null ? Math.max(0, Math.round(summary.communityRating * 10)) : undefined,
+    completionCount: summary.popularityScore != null ? Math.round(summary.popularityScore) : undefined,
+    reviewStatus: summary.sourceType === 'preview' ? 'pending_review' : 'approved',
+    tags: summary.tags,
+    createdAt: updatedAt,
+    updatedAt,
+    distanceFromUserMiles: 0,
+    evaluatedConfidence: {
+      score: confidenceScore,
+      band: confidenceScore >= 80 ? 'high' : confidenceScore >= 60 ? 'moderate' : 'low',
+      reasons: ['Summary-only catalog card.'],
+      warnings: ['Route geometry loads only after opening detail or starting navigation.'],
+      blockers: [],
+      lastEvaluatedAt: updatedAt,
+    },
+  };
+}
+
+function detailTrailPackToDiscoveryItem(
+  detail: ECSTrailPackDiscoveryItem | Omit<ECSTrailPackDiscoveryItem, 'distanceFromUserMiles' | 'evaluatedConfidence'>,
+  summary: RouteCatalogSummary | null,
+): ECSTrailPackDiscoveryItem {
+  const existing = detail as ECSTrailPackDiscoveryItem;
+  if (existing.evaluatedConfidence && Number.isFinite(existing.distanceFromUserMiles)) return existing;
+  const fallback = summary ? routeCatalogSummaryToTrailPackPreview(summary) : null;
+  const confidenceScore = Number.isFinite(detail.confidenceScore)
+    ? detail.confidenceScore
+    : fallback?.confidenceScore ?? 0;
+  return {
+    ...detail,
+    distanceFromUserMiles: existing.distanceFromUserMiles ?? fallback?.distanceFromUserMiles ?? 0,
+    evaluatedConfidence: existing.evaluatedConfidence ?? {
+      score: confidenceScore,
+      band: confidenceScore >= 80 ? 'high' : confidenceScore >= 60 ? 'moderate' : 'low',
+      reasons: detail.confidenceReasons?.length ? detail.confidenceReasons : ['Route detail loaded.'],
+      warnings: [],
+      blockers: [],
+      lastEvaluatedAt: detail.updatedAt ?? new Date(0).toISOString(),
+    },
+  } as ECSTrailPackDiscoveryItem;
 }
 
 type ExploreWizardRouteCardListItemProps = {
@@ -889,7 +995,6 @@ function DiscoverScreenInner() {
   const lastExploreSourceDiagnosticsSignatureRef = useRef<string | null>(null);
   const explorePerformanceFirstVisibleLoggedRef = useRef<string | null>(null);
   const explorePerformanceFullListLoggedRef = useRef<string | null>(null);
-  const explorePerformanceImageLoggedRef = useRef<string | null>(null);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
   useEffect(() => {
     activeVehicleIdRef.current = activeVehicleId;
@@ -1179,10 +1284,12 @@ function DiscoverScreenInner() {
         availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
         availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal,
         locationSource: routeCatalogEffectiveSearchArea?.source ?? 'search_area_required',
+        regionId: routeCatalogEffectiveSearchArea?.key ?? null,
       };
     },
     [
       activeDistanceRadius,
+      routeCatalogEffectiveSearchArea?.key,
       routeCatalogEffectiveSearchArea?.source,
       routeCatalogHasSearchArea,
       stableRouteCatalogSearchCoordinate.latitude,
@@ -1249,6 +1356,12 @@ function DiscoverScreenInner() {
     return run;
   }, [explorePerformanceSearchKey]);
   const explorePerformanceRunRef = useRef(explorePerformanceRun);
+  const exploreNavigateSeparationRunRef = useRef(
+    createExploreNavigateSeparationRun({
+      runId: 'discover-route-catalog-summary',
+      startedAtMs: getExplorePerformanceNow(),
+    }),
+  );
 
   useEffect(() => {
     explorePerformanceRunRef.current = explorePerformanceRun;
@@ -1257,7 +1370,6 @@ function DiscoverScreenInner() {
   useEffect(() => {
     explorePerformanceFirstVisibleLoggedRef.current = null;
     explorePerformanceFullListLoggedRef.current = null;
-    explorePerformanceImageLoggedRef.current = null;
   }, [explorePerformanceRun.runId]);
 
   useEffect(() => {
@@ -1505,6 +1617,20 @@ function DiscoverScreenInner() {
         : publicDiscoverableTrailPacks.filter((trailPack) => publicRefinedTrailPackIds.has(trailPack.id)),
     [exploreRefinement, publicDiscoverableTrailPacks, publicRefinedTrailPackIds],
   );
+  const routeCatalogRuntimeContract = useMemo<{
+    summaries: RouteCatalogSummary[];
+    selectedDetail: RouteDetail | null;
+  }>(
+    () => ({
+      summaries: liveTrailPackCatalogSnapshot.routeCatalogSummaries,
+      selectedDetail: null,
+    }),
+    [liveTrailPackCatalogSnapshot.routeCatalogSummaries],
+  );
+  const routeCatalogSummaryById = useMemo(
+    () => new Map(routeCatalogRuntimeContract.summaries.map((summary) => [summary.routeId, summary])),
+    [routeCatalogRuntimeContract.summaries],
+  );
 
   const activeTabMeta = UNIFIED_TRAIL_FILTER_META;
   const exploreSourceDiagnostics = useMemo(() => {
@@ -1521,6 +1647,7 @@ function DiscoverScreenInner() {
         : 'pending_initial_load',
       trailPackLiveCatalogStatus: liveTrailPackCatalogSnapshot.status,
       trailPackLiveCatalogCount: liveTrailPackCatalogSnapshot.trailPacks.length,
+      trailPackLiveCatalogSummaryCount: routeCatalogRuntimeContract.summaries.length,
       trailPackLiveCatalogError: liveTrailPackCatalogSnapshot.error,
       trailPackLiveCatalogLastLoadedAt: liveTrailPackCatalogSnapshot.lastLoadedAt,
       trailPackLiveCatalogSource: liveTrailPackCatalogSnapshot.source,
@@ -1545,6 +1672,7 @@ function DiscoverScreenInner() {
     liveTrailPackCatalogSnapshot.source,
     liveTrailPackCatalogSnapshot.status,
     liveTrailPackCatalogSnapshot.trailPacks.length,
+    routeCatalogRuntimeContract.summaries.length,
     liveTrailPackCatalogSnapshot.coverageState.state,
     routeCatalogEffectiveSearchArea,
   ]);
@@ -3010,26 +3138,41 @@ function DiscoverScreenInner() {
     };
   }, [aiRouteIdeaPageIndex, publicRefinedAIRoutes]);
   const visibleAIRoutes = aiRouteIdeaPage.items;
-  const trailPackPage = useMemo(() => {
-    const pageSize = TRAIL_PACK_PAGE_SIZE;
-    const eligibleCount = publicRefinedTrailPacks.length;
-    const totalPages = Math.max(1, Math.ceil(eligibleCount / pageSize));
-    const normalizedPageIndex = eligibleCount === 0
-      ? 0
-      : ((trailPackPageIndex % totalPages) + totalPages) % totalPages;
-    const offset = normalizedPageIndex * pageSize;
-    const items = publicRefinedTrailPacks.slice(offset, offset + pageSize);
-
-    return {
-      items,
-      eligibleCount,
-      pageIndex: normalizedPageIndex,
-      pageSize,
-      totalPages,
-      offset,
-    };
-  }, [publicRefinedTrailPacks, trailPackPageIndex]);
-  const visibleTrailPacks = trailPackPage.items;
+  const routeCatalogSummaryPage = useMemo(
+    () =>
+      paginateRouteCatalogSummaries(routeCatalogRuntimeContract.summaries, {
+        pageIndex: trailPackPageIndex,
+        pageSize: TRAIL_PACK_PAGE_SIZE,
+      }),
+    [routeCatalogRuntimeContract.summaries, trailPackPageIndex],
+  );
+  const visibleRouteCatalogSummaries = routeCatalogSummaryPage.items;
+  useEffect(() => {
+    recordExploreInitialRender(exploreNavigateSeparationRunRef.current, {
+      startedAtMs: exploreNavigateSeparationRunRef.current.startedAtMs,
+      endedAtMs: getExplorePerformanceNow(),
+      summaryCount: routeCatalogRuntimeContract.summaries.length,
+      catalogFilesFetched: routeCatalogHasSearchArea ? 1 : 0,
+      fullGeometryFetches: 0,
+      fullGeometryParsed: false,
+      mvumModulesMounted: false,
+    });
+  }, [
+    routeCatalogHasSearchArea,
+    routeCatalogRuntimeContract.summaries.length,
+    visibleRouteCatalogSummaries.length,
+  ]);
+  const trailPackPage = useMemo(
+    () => ({
+      items: visibleRouteCatalogSummaries,
+      eligibleCount: routeCatalogSummaryPage.totalItems,
+      pageIndex: routeCatalogSummaryPage.pageIndex,
+      pageSize: routeCatalogSummaryPage.pageSize,
+      totalPages: routeCatalogSummaryPage.totalPages,
+      offset: routeCatalogSummaryPage.pageIndex * routeCatalogSummaryPage.pageSize,
+    }),
+    [routeCatalogSummaryPage, visibleRouteCatalogSummaries],
+  );
   const hiddenGemPageCount = hiddenGemPage.totalPages;
   const trailPackPageCount = trailPackPage.totalPages;
   const aiRouteIdeaPageCount = aiRouteIdeaPage.totalPages;
@@ -3042,52 +3185,6 @@ function DiscoverScreenInner() {
     () => getExploreRouteThumbnailAssignments(enrichedKnown, 'knownRoutes'),
     [enrichedKnown],
   );
-  const trailPackThumbnailAssignments = useMemo(
-    () => {
-      const startedAtMs = getExplorePerformanceNow();
-      const routes = visibleTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack));
-      const assignments = getExploreRouteThumbnailAssignments(routes, 'trailPacks');
-      recordExplorePerformancePhase(explorePerformanceRun, 'image_fetch_cache', {
-        startedAtMs,
-        endedAtMs: getExplorePerformanceNow(),
-        metadata: {
-          operation: 'thumbnail_assignment',
-          visibleTrailPacks: visibleTrailPacks.length,
-          assignmentCount: assignments.size,
-        },
-      });
-      recordExplorePerformanceCount(explorePerformanceRun, {
-        imagesRequested: Array.from(assignments.values()).filter((assignment) => !!assignment.uri).length,
-      });
-      return assignments;
-    },
-    [explorePerformanceRun, visibleTrailPacks],
-  );
-  const trailPackImagePrefetchPlan = useMemo(
-    () =>
-      planRouteDiscoveryImagePrefetch(indexedTrailPackDiscovery.allItems, {
-        imageCache: routeDiscoveryImageCache,
-        visibleCount: visibleTrailPacks.length,
-        prefetchCount: EXPLORE_ROUTE_IMAGE_PREFETCH_COUNT,
-      }),
-    [indexedTrailPackDiscovery.allItems, visibleTrailPacks.length],
-  );
-  useEffect(() => {
-    trailPackImagePrefetchPlan.prefetchUris.forEach((uri) => {
-      routeDiscoveryImageCache.markPending(uri);
-      Image.prefetch(uri)
-        .then((loaded) => {
-          if (loaded) {
-            routeDiscoveryImageCache.markLoaded(uri);
-          } else {
-            routeDiscoveryImageCache.markFailed(uri);
-          }
-        })
-        .catch(() => {
-          routeDiscoveryImageCache.markFailed(uri);
-        });
-    });
-  }, [trailPackImagePrefetchPlan.prefetchUris]);
   const aiRouteThumbnailAssignments = useMemo(
     () => getExploreRouteThumbnailAssignments(visibleAIRoutes, 'ecsRouteIdeas'),
     [visibleAIRoutes],
@@ -3475,6 +3572,94 @@ function DiscoverScreenInner() {
     void toggleFavoriteTrail(route);
   }, []);
 
+  const handlePreviewRouteCatalogSummary = useCallback((routeId: string) => {
+    const summary = routeCatalogSummaryById.get(routeId) ?? null;
+    if (!summary) return;
+    hapticMicro();
+    const requestId = trailPackPreviewRequestRef.current + 1;
+    trailPackPreviewRequestRef.current = requestId;
+    setTrailPackPreview(routeCatalogSummaryToTrailPackPreview(summary));
+    setTrailPackPreviewDetailStatus('loading');
+    setTrailPackPreviewDetailError(null);
+
+    const detailStartedAtMs = getExplorePerformanceNow();
+    void fetchRouteCatalogTrailPackDetail(routeId)
+      .then((detail) => {
+        recordExploreRouteDetailFetch(exploreNavigateSeparationRunRef.current, {
+          startedAtMs: detailStartedAtMs,
+          endedAtMs: getExplorePerformanceNow(),
+          routeId,
+          detailFetches: 1,
+          requestedRouteIds: [routeId],
+        });
+        if (!mountedRef.current || trailPackPreviewRequestRef.current !== requestId) return;
+        setTrailPackPreview(detailTrailPackToDiscoveryItem(detail, summary));
+        setTrailPackPreviewDetailStatus('ready');
+      })
+      .catch((error) => {
+        recordExploreRouteDetailFetch(exploreNavigateSeparationRunRef.current, {
+          startedAtMs: detailStartedAtMs,
+          endedAtMs: getExplorePerformanceNow(),
+          routeId,
+          detailFetches: 1,
+          requestedRouteIds: [routeId],
+        });
+        if (!mountedRef.current || trailPackPreviewRequestRef.current !== requestId) return;
+        setTrailPackPreviewDetailStatus('error');
+        setTrailPackPreviewDetailError(
+          error instanceof Error ? error.message : 'Verified route detail unavailable.',
+        );
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Route detail unavailable',
+          ecsArea: 'explore',
+          message: 'Route detail could not be loaded from the selected summary card.',
+          signature: `route_catalog_summary_detail_unavailable:${routeId}`,
+          metadata: { routeId: summary.routeId },
+        });
+      });
+  }, [routeCatalogSummaryById]);
+
+  const handleStartRouteCatalogSummaryGuidance = useCallback(async (routeId: string) => {
+    const summary = routeCatalogSummaryById.get(routeId) ?? null;
+    if (!summary) return;
+    hapticMicro();
+    try {
+      const detail = await fetchRouteCatalogTrailPackDetail(routeId);
+      await handleStartTrailPackGuidance(detailTrailPackToDiscoveryItem(detail, summary));
+    } catch (error) {
+      reportRecoverableFailure({
+        severity: 'low',
+        issueTitle: 'Route detail unavailable',
+        ecsArea: 'explore',
+        message: error instanceof Error ? error.message : 'Verified route detail unavailable.',
+        signature: `route_catalog_summary_navigation_unavailable:${routeId}`,
+        metadata: { routeId: summary.routeId },
+      });
+    }
+  }, [handleStartTrailPackGuidance, routeCatalogSummaryById]);
+
+  const handleSaveRouteCatalogSummary = useCallback(async (routeId: string) => {
+    const summary = routeCatalogSummaryById.get(routeId) ?? null;
+    if (!summary) return;
+    hapticMicro();
+    try {
+      const detail = await fetchRouteCatalogTrailPackDetail(routeId);
+      const discoveryItem = detailTrailPackToDiscoveryItem(detail, summary);
+      handleToggleFavorite(trailPackToExpeditionOpportunity(discoveryItem));
+      handleTrailPackFeedback(routeId, 'saved');
+    } catch (error) {
+      reportRecoverableFailure({
+        severity: 'low',
+        issueTitle: 'Route save unavailable',
+        ecsArea: 'explore',
+        message: error instanceof Error ? error.message : 'Verified route detail unavailable.',
+        signature: `route_catalog_summary_save_unavailable:${routeId}`,
+        metadata: { routeId: summary.routeId },
+      });
+    }
+  }, [handleToggleFavorite, handleTrailPackFeedback, routeCatalogSummaryById]);
+
   const handleNavigateToFavorite = useCallback(
     async (favorite: FavoriteTrailRecord) => {
       hapticMicro();
@@ -3622,37 +3807,13 @@ function DiscoverScreenInner() {
     showSectionLoading ||
     liveTrailPackCatalogSnapshot.status === 'idle' ||
     liveTrailPackCatalogSnapshot.status === 'loading';
-  const showTrailPackBlockingLoading = showTrailPackSectionLoading && visibleTrailPacks.length === 0;
-  const handleTrailPackThumbnailLoadDuration = useCallback((
-    durationMs: number,
-    metadata: Record<string, unknown>,
-  ) => {
-    const endedAtMs = getExplorePerformanceNow();
-    recordExplorePerformancePhase(explorePerformanceRun, 'image_fetch_cache', {
-      startedAtMs: Math.max(explorePerformanceRun.startedAtMs, endedAtMs - Math.max(0, durationMs)),
-      endedAtMs,
-      metadata: {
-        operation: 'visible_thumbnail_load',
-        ...metadata,
-      },
-    });
-    recordExplorePerformanceCount(explorePerformanceRun, {
-      imagesRequested: Math.max(1, explorePerformanceRun.counts.imagesRequested),
-    });
-    if (explorePerformanceImageLoggedRef.current !== explorePerformanceRun.runId) {
-      explorePerformanceImageLoggedRef.current = explorePerformanceRun.runId;
-      logExplorePerformanceDiagnostic(
-        buildExplorePerformanceSummary(explorePerformanceRun, { completedAtMs: endedAtMs }),
-        { logger: ecsLog },
-      );
-    }
-  }, [explorePerformanceRun]);
+  const showTrailPackBlockingLoading = showTrailPackSectionLoading && visibleRouteCatalogSummaries.length === 0;
 
   useEffect(() => {
     if (__DEV__ !== true) return;
     const renderedRouteCards =
       visibleExploreWizardCardCandidates.length +
-      visibleTrailPacks.length +
+      visibleRouteCatalogSummaries.length +
       visibleAIRoutes.length;
     const resultCount = Math.max(
       visibleExploreWizardCandidates.length ||
@@ -3672,7 +3833,7 @@ function DiscoverScreenInner() {
         metadata: {
           renderedRouteCards,
           visibleGuidanceCards: visibleExploreWizardCardCandidates.length,
-          visibleTrailPacks: visibleTrailPacks.length,
+          visibleRouteCatalogSummaries: visibleRouteCatalogSummaries.length,
           visibleAIRoutes: visibleAIRoutes.length,
         },
       });
@@ -3720,7 +3881,7 @@ function DiscoverScreenInner() {
     visibleAIRoutes.length,
     visibleExploreWizardCandidates.length,
     visibleExploreWizardCardCandidates.length,
-    visibleTrailPacks.length,
+    visibleRouteCatalogSummaries.length,
   ]);
 
   const favoriteTrailListScrollable = favoriteTrails.length > FAVORITES_VISIBLE_LIMIT;
@@ -4299,7 +4460,7 @@ function DiscoverScreenInner() {
             />
           );
         }
-        if (visibleTrailPacks.length === 0) {
+        if (visibleRouteCatalogSummaries.length === 0) {
           if (liveTrailPackCatalogSnapshot.status === 'error') {
             return (
               <ExplorerStateCard
@@ -4353,38 +4514,30 @@ function DiscoverScreenInner() {
                 </Text>
               </View>
             ) : null}
-            {visibleTrailPacks.some((trailPack) => trailPack.reviewStatus !== 'approved') ? (
+            {visibleRouteCatalogSummaries.some((summary) => summary.sourceType === 'preview') ? (
               <View style={s.inlineSectionNotice}>
                 <Ionicons name="shield-checkmark-outline" size={12} color={TACTICAL.amber} />
                 <Text style={s.inlineSectionNoticeText}>
-                  This Trail Pack is under ECS review and is not visible to other users.
+                  Preview summaries are not shown as verified public Trail Packs until ECS review is complete.
                 </Text>
               </View>
             ) : null}
             <View style={[s.routeCardGrid, showExploreRouteGrid && s.routeCardGridExpanded]}>
-              {visibleTrailPacks.map((trailPack, index) => {
-                const trailPackRoute = trailPackToExpeditionOpportunity(trailPack);
+              {visibleRouteCatalogSummaries.map((summary) => {
+                const isSaved =
+                  favoriteTrailIds.has(summary.routeId) ||
+                  favoriteTrailIds.has(`trail-pack:${summary.routeId}`);
                 return (
                   <View
-                    key={trailPack.id}
+                    key={summary.routeId}
                     style={[s.hiddenGemCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}
                   >
-                    <TrailPackCard
-                      trailPack={trailPack}
-                      hasVehicle={!!activeVehicleId}
-                      isFavorited={favoriteTrailIds.has(String(trailPackRoute.id))}
-                      thumbnailOverride={trailPackThumbnailAssignments.get(String(trailPackRoute.id)) ?? null}
-                      deferThumbnail={index >= EXPLORE_ROUTE_CARD_DEFERRED_THUMBNAIL_INDEX}
-                      deferEnrichment={index >= EXPLORE_ROUTE_CARD_DEFERRED_THUMBNAIL_INDEX}
-                      onPreview={() => handlePreviewTrailPack(trailPack)}
-                      onStartGuidance={() => {
-                        void handleStartTrailPackGuidance(trailPack);
-                      }}
-                      onSave={() => {
-                        handleToggleFavorite(trailPackRoute);
-                        handleTrailPackFeedback(trailPack.id, 'saved');
-                      }}
-                      onThumbnailLoadDuration={handleTrailPackThumbnailLoadDuration}
+                    <RouteCatalogSummaryCard
+                      summary={summary}
+                      isSaved={isSaved}
+                      onPreview={handlePreviewRouteCatalogSummary}
+                      onStartGuidance={handleStartRouteCatalogSummaryGuidance}
+                      onSave={handleSaveRouteCatalogSummary}
                       compactPreview
                     />
                   </View>

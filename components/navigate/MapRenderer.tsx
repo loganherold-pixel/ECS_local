@@ -48,7 +48,20 @@ import {
   SET_DISPERSED_CAMPING_LAYER_ENABLED,
   SET_DISPERSED_ROUTE_BUILD_ENABLED,
 } from '../../lib/map/mapboxLayerMessages';
+import {
+  NAVIGATE_STITCHED_ROUTE_HALO_LAYER_ID,
+  NAVIGATE_STITCHED_ROUTE_LAYER_ID,
+  NAVIGATE_STITCHED_ROUTE_SOURCE_ID,
+  MVUM_OVERLAY_HALO_LAYER_ID,
+  MVUM_OVERLAY_LAYER_ID,
+  MVUM_OVERLAY_SELECTED_LAYER_ID,
+  MVUM_OVERLAY_SELECTED_SOURCE_ID,
+  MVUM_OVERLAY_SOURCE_ID,
+  type NavigateMvumMapOverlayPayload,
+  type NavigateMvumStitchedRoutePreviewPayload,
+} from '../../src/features/navigate/mvum';
 import type { RemoteMapOverlayPayload } from '../../lib/remote/mapOverlay';
+import type { MapLifecycleSnapshot } from '../../lib/performance/exploreNavigateSeparationInstrumentation';
 import {
   resolveViewportMarkerHeadingDeg,
 } from '../../lib/mapMotion';
@@ -90,6 +103,18 @@ export const DISPERSED_ROUTE_BUILD_SELECTED_LAYER_ID = 'ecs-dispersed-route-buil
 export const ESTABLISHED_CAMPSITES_SOURCE_ID = 'ecs-established-campsites';
 export const ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID = 'ecs-established-campsites-backplate';
 export const ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID = 'ecs-established-campsites-symbol';
+export const EXPLORE_PREVIEW_ROUTE_SOURCE_ID = 'explore-preview-route-source';
+export const EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID = 'explore-preview-route-halo-layer';
+export const EXPLORE_PREVIEW_ROUTE_LAYER_ID = 'explore-preview-route-layer';
+export const ACTIVE_GUIDANCE_ROUTE_SOURCE_ID = 'active-guidance-route-source';
+export const ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID = 'active-guidance-route-halo-layer';
+export const ACTIVE_GUIDANCE_ROUTE_LAYER_ID = 'active-guidance-route-layer';
+export const ACTIVE_GUIDANCE_ROUTE_PROGRESS_SOURCE_ID = 'active-guidance-route-progress-source';
+export const ACTIVE_GUIDANCE_ROUTE_PROGRESS_GLOW_LAYER_ID = 'active-guidance-route-progress-glow-layer';
+export const ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID = 'active-guidance-route-progress-layer';
+export const STAGED_ROUTE_OPTION_SOURCE_ID = 'staged-route-option-source';
+export const STAGED_ROUTE_OPTION_HALO_LAYER_ID = 'staged-route-option-halo-layer';
+export const STAGED_ROUTE_OPTION_LAYER_ID = 'staged-route-option-layer';
 const MAP_STYLE_FALLBACK_CHAIN = Array.from(new Set([
   MAPBOX_3D_RENDER_BASE_STYLE_URL,
   'mapbox://styles/mapbox/streets-v12',
@@ -375,6 +400,11 @@ export type MapRendererProps = {
   onTiltAlertTap?: (payload: any) => void;
   onUserDrag?: () => void;
   onRoadClassification?: (payload: RoadClassificationReply) => void;
+  onMapLifecycleMetrics?: (payload: {
+    label: string;
+    before: MapLifecycleSnapshot | null;
+    after: MapLifecycleSnapshot;
+  }) => void;
   vehicleHeading?: number | null;
   motionPriority?: MapMotionPriority;
   isLoading?: boolean;
@@ -407,6 +437,8 @@ export type MapRendererProps = {
     snapSource?: string | null;
   }) => void;
   remoteOverlay?: RemoteMapOverlayPayload | null;
+  mvumOverlay?: NavigateMvumMapOverlayPayload | null;
+  stitchedRoutePreview?: NavigateMvumStitchedRoutePreviewPayload | null;
   dispersedCampingEligibility?: DispersedCampingEligibilityLayerState | null;
   dispersedRouteBuild?: {
     enabled: boolean;
@@ -537,6 +569,8 @@ type WebMapPayload = {
   showUserLocation: boolean;
   vehicleHeading: number | null;
   motionPriority: MapMotionPriority;
+  mvumOverlay: NavigateMvumMapOverlayPayload | null;
+  stitchedRoutePreview: NavigateMvumStitchedRoutePreviewPayload | null;
   showCrosshair: boolean;
   interactive: boolean;
   mapStyleKey: MapStyleKey;
@@ -1561,6 +1595,8 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
         ? props.vehicleHeading
         : null,
     motionPriority: props.motionPriority ?? 'hot',
+    mvumOverlay: props.mvumOverlay ?? null,
+    stitchedRoutePreview: props.stitchedRoutePreview ?? null,
     showCrosshair: !!props.showCrosshair,
     interactive: props.interactive !== false,
     mapStyleKey: props.mapStyle || DEFAULT_MAP_STYLE,
@@ -2282,10 +2318,31 @@ function makeMapHtml(
     (function() {
       var RNW = window.ReactNativeWebView;
       var mapInstanceKey = ${escapedInstanceKey};
+      var mapLifecycleDiagnosticsEnabled = ${DEBUG_MAP_RENDERER ? 'true' : 'false'};
       var campScoutDebugEnabled = ${DEBUG_CAMP_SCOUT_MAP ? 'true' : 'false'};
       var campLayerDebugEnabled = ${DEBUG_CAMP_LAYERS ? 'true' : 'false'};
       var CAMP_SCOUT_SOURCE_ID = ${JSON.stringify(CAMP_SCOUT_PIN_SOURCE_ID)};
       var CAMP_SCOUT_LAYER_ID = ${JSON.stringify(CAMP_SCOUT_PIN_LAYER_ID)};
+      var EXPLORE_PREVIEW_ROUTE_SOURCE_ID = ${JSON.stringify(EXPLORE_PREVIEW_ROUTE_SOURCE_ID)};
+      var EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID = ${JSON.stringify(EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID)};
+      var EXPLORE_PREVIEW_ROUTE_LAYER_ID = ${JSON.stringify(EXPLORE_PREVIEW_ROUTE_LAYER_ID)};
+      var ACTIVE_GUIDANCE_ROUTE_SOURCE_ID = ${JSON.stringify(ACTIVE_GUIDANCE_ROUTE_SOURCE_ID)};
+      var ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID = ${JSON.stringify(ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID)};
+      var ACTIVE_GUIDANCE_ROUTE_LAYER_ID = ${JSON.stringify(ACTIVE_GUIDANCE_ROUTE_LAYER_ID)};
+      var ACTIVE_GUIDANCE_ROUTE_PROGRESS_SOURCE_ID = ${JSON.stringify(ACTIVE_GUIDANCE_ROUTE_PROGRESS_SOURCE_ID)};
+      var ACTIVE_GUIDANCE_ROUTE_PROGRESS_GLOW_LAYER_ID = ${JSON.stringify(ACTIVE_GUIDANCE_ROUTE_PROGRESS_GLOW_LAYER_ID)};
+      var ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID = ${JSON.stringify(ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID)};
+      var STAGED_ROUTE_OPTION_SOURCE_ID = ${JSON.stringify(STAGED_ROUTE_OPTION_SOURCE_ID)};
+      var STAGED_ROUTE_OPTION_HALO_LAYER_ID = ${JSON.stringify(STAGED_ROUTE_OPTION_HALO_LAYER_ID)};
+      var STAGED_ROUTE_OPTION_LAYER_ID = ${JSON.stringify(STAGED_ROUTE_OPTION_LAYER_ID)};
+      var MVUM_OVERLAY_SOURCE_ID = ${JSON.stringify(MVUM_OVERLAY_SOURCE_ID)};
+      var MVUM_OVERLAY_HALO_LAYER_ID = ${JSON.stringify(MVUM_OVERLAY_HALO_LAYER_ID)};
+      var MVUM_OVERLAY_LAYER_ID = ${JSON.stringify(MVUM_OVERLAY_LAYER_ID)};
+      var MVUM_OVERLAY_SELECTED_SOURCE_ID = ${JSON.stringify(MVUM_OVERLAY_SELECTED_SOURCE_ID)};
+      var MVUM_OVERLAY_SELECTED_LAYER_ID = ${JSON.stringify(MVUM_OVERLAY_SELECTED_LAYER_ID)};
+      var NAVIGATE_STITCHED_ROUTE_SOURCE_ID = ${JSON.stringify(NAVIGATE_STITCHED_ROUTE_SOURCE_ID)};
+      var NAVIGATE_STITCHED_ROUTE_HALO_LAYER_ID = ${JSON.stringify(NAVIGATE_STITCHED_ROUTE_HALO_LAYER_ID)};
+      var NAVIGATE_STITCHED_ROUTE_LAYER_ID = ${JSON.stringify(NAVIGATE_STITCHED_ROUTE_LAYER_ID)};
       var DISPERSED_CAMPING_SOURCE_ID = ${JSON.stringify(DISPERSED_CAMPING_ELIGIBILITY_SOURCE_ID)};
       var DISPERSED_CAMPING_FILL_LAYER_ID = ${JSON.stringify(DISPERSED_CAMPING_ELIGIBILITY_FILL_LAYER_ID)};
       var DISPERSED_CAMPING_OUTLINE_LAYER_ID = ${JSON.stringify(DISPERSED_CAMPING_ELIGIBILITY_OUTLINE_LAYER_ID)};
@@ -2505,6 +2562,7 @@ function makeMapHtml(
       var bootstrapDone = false;
       var pendingPayload = null;
       var lastRouteLineKey = null;
+      var mvumOverlaySourceSignature = null;
       var styleReplayTimer = null;
       var bootstrapReadyTimer = null;
       var requestedStyleUrl = ${escapedInitialStyleUrl};
@@ -2529,6 +2587,188 @@ function makeMapHtml(
       var REMOTE_FORECAST_HALO_WIDTH = ['interpolate', ['linear'], ['zoom'], 5, 32, 8, 29, 11, 25, 14, 21, 17, 17];
       var REMOTE_FORECAST_VISIBLE_OPACITY = ['interpolate', ['linear'], ['zoom'], 5, 0.76, 8, 0.7, 12, 0.62, 16, 0.54];
       var REMOTE_FORECAST_HALO_OPACITY = ['interpolate', ['linear'], ['zoom'], 5, 0.64, 8, 0.56, 12, 0.46, 16, 0.34];
+      var mapSourceRegistry = null;
+      var mapLayerRegistry = null;
+      var mapListenerRegistry = null;
+      var mapLifecycleCounters = {
+        sourceIds: Object.create(null),
+        layerIds: Object.create(null),
+        listenerIds: Object.create(null),
+        duplicateSourceCount: 0,
+        duplicateLayerCount: 0,
+        duplicateListenerCount: 0,
+        lastSnapshot: null
+      };
+
+      function sendMapLifecycleDiagnostic(message, details) {
+        if (!mapLifecycleDiagnosticsEnabled) return;
+        try {
+          sendLog(message + ' ' + JSON.stringify(details || {}));
+        } catch (e) {
+          sendLog(message);
+        }
+      }
+
+      function mapLifecycleKeyCount(record) {
+        return Object.keys(record || {}).length;
+      }
+
+      function mapLifecycleSnapshot() {
+        return {
+          sourceCount: mapLifecycleKeyCount(mapLifecycleCounters.sourceIds),
+          layerCount: mapLifecycleKeyCount(mapLifecycleCounters.layerIds),
+          listenerCount: mapLifecycleKeyCount(mapLifecycleCounters.listenerIds),
+          duplicateSourceCount: mapLifecycleCounters.duplicateSourceCount,
+          duplicateLayerCount: mapLifecycleCounters.duplicateLayerCount,
+          duplicateListenerCount: mapLifecycleCounters.duplicateListenerCount
+        };
+      }
+
+      function emitMapLifecycleMetrics(label) {
+        var before = mapLifecycleCounters.lastSnapshot;
+        var after = mapLifecycleSnapshot();
+        mapLifecycleCounters.lastSnapshot = after;
+        send('mapLifecycleMetrics', {
+          label: label || 'map_lifecycle',
+          before: before,
+          after: after
+        });
+      }
+
+      function createMapSourceRegistry() {
+        return {
+          ensure: function(sourceId, source) {
+            if (!map || !sourceId) return false;
+            try {
+              if (map.getSource(sourceId)) {
+                sendMapLifecycleDiagnostic('[ECS Map] source already exists', { sourceId: sourceId });
+                sendMapLifecycleDiagnostic('[ECS Map] duplicate prevented', { type: 'source', sourceId: sourceId });
+                return false;
+              }
+              map.addSource(sourceId, source);
+              mapLifecycleCounters.sourceIds[sourceId] = true;
+              sendMapLifecycleDiagnostic('[ECS Map] source added', { sourceId: sourceId });
+              return true;
+            } catch (e) {
+              sendMapLifecycleDiagnostic('[ECS Map] duplicate prevented', { type: 'source_error', sourceId: sourceId });
+              return false;
+            }
+          },
+          remove: function(sourceId) {
+            if (!map || !sourceId) return false;
+            try {
+              if (!map.getSource(sourceId)) return false;
+              map.removeSource(sourceId);
+              delete mapLifecycleCounters.sourceIds[sourceId];
+              return true;
+            } catch (e) {
+              return false;
+            }
+          }
+        };
+      }
+
+      function createMapLayerRegistry() {
+        return {
+          ensure: function(layerId, layer, beforeId) {
+            if (!map || !layerId || !layer) return false;
+            try {
+              if (map.getLayer(layerId)) {
+                sendMapLifecycleDiagnostic('[ECS Map] duplicate prevented', { type: 'layer', layerId: layerId });
+                return false;
+              }
+              map.addLayer(layer, beforeId);
+              mapLifecycleCounters.layerIds[layerId] = true;
+              sendMapLifecycleDiagnostic('[ECS Map] layer added', { layerId: layerId });
+              return true;
+            } catch (e) {
+              sendMapLifecycleDiagnostic('[ECS Map] duplicate prevented', { type: 'layer_error', layerId: layerId });
+              return false;
+            }
+          },
+          remove: function(layerId) {
+            if (!map || !layerId) return false;
+            try {
+              if (!map.getLayer(layerId)) return false;
+              map.removeLayer(layerId);
+              delete mapLifecycleCounters.layerIds[layerId];
+              return true;
+            } catch (e) {
+              return false;
+            }
+          }
+        };
+      }
+
+      function createMapListenerRegistry() {
+        var listeners = Object.create(null);
+        function listenerKey(eventName, layerId, key) {
+          return key || [eventName, layerId || 'map'].join(':');
+        }
+        return {
+          attach: function(eventName, layerId, handler, key) {
+            if (!map || !eventName || !handler) return false;
+            var id = listenerKey(eventName, layerId, key);
+            if (listeners[id]) {
+              sendMapLifecycleDiagnostic('[ECS Map] duplicate prevented', { type: 'listener', listenerId: id });
+              return false;
+            }
+            try {
+              if (layerId) {
+                map.on(eventName, layerId, handler);
+              } else {
+                map.on(eventName, handler);
+              }
+              listeners[id] = { eventName: eventName, layerId: layerId || null, handler: handler };
+              mapLifecycleCounters.listenerIds[id] = true;
+              sendMapLifecycleDiagnostic('[ECS Map] listener attached', { listenerId: id });
+              return true;
+            } catch (e) {
+              sendMapLifecycleDiagnostic('[ECS Map] duplicate prevented', { type: 'listener_error', listenerId: id });
+              return false;
+            }
+          },
+          remove: function(eventName, layerId, handler, key) {
+            if (!map) return false;
+            var id = listenerKey(eventName, layerId, key);
+            var entry = listeners[id];
+            if (!entry) return false;
+            try {
+              if (entry.layerId) {
+                map.off(entry.eventName, entry.layerId, entry.handler);
+              } else {
+                map.off(entry.eventName, entry.handler);
+              }
+              delete listeners[id];
+              delete mapLifecycleCounters.listenerIds[id];
+              sendMapLifecycleDiagnostic('[ECS Map] listener removed', { listenerId: id });
+              return true;
+            } catch (e) {
+              return false;
+            }
+          },
+          removeAll: function() {
+            var ids = Object.keys(listeners);
+            for (var i = 0; i < ids.length; i += 1) {
+              var entry = listeners[ids[i]];
+              if (!entry) continue;
+              try {
+                if (entry.layerId) {
+                  map.off(entry.eventName, entry.layerId, entry.handler);
+                } else {
+                  map.off(entry.eventName, entry.handler);
+                }
+                sendMapLifecycleDiagnostic('[ECS Map] listener removed', { listenerId: ids[i] });
+              } catch (e) {}
+              delete listeners[ids[i]];
+              delete mapLifecycleCounters.listenerIds[ids[i]];
+            }
+          }
+        };
+      }
+      mapSourceRegistry = createMapSourceRegistry();
+      mapLayerRegistry = createMapLayerRegistry();
+      mapListenerRegistry = createMapListenerRegistry();
 
       function isMapStyleReady() {
         try {
@@ -2884,16 +3124,21 @@ function makeMapHtml(
       }
 
       function ensureSource(id, source) {
-        if (!map.getSource(id)) {
-          map.addSource(id, source);
-          return true;
+        if (mapSourceRegistry && mapSourceRegistry.ensure) {
+          return mapSourceRegistry.ensure(id, source);
         }
+        try {
+          if (!map.getSource(id)) {
+            map.addSource(id, source);
+            return true;
+          }
+        } catch (e) {}
         return false;
       }
 
       function ensureLineLayer(id, sourceId, color, width, opacity, dasharray) {
         if (!map.getLayer(id)) {
-          map.addLayer({
+          var lineLayer = {
             id: id,
             type: 'line',
             source: sourceId,
@@ -2906,10 +3151,18 @@ function makeMapHtml(
               'line-width': width,
               'line-opacity': opacity
             }
-          });
+          };
 
-          if (dasharray) {
-            map.setPaintProperty(id, 'line-dasharray', dasharray);
+          if (mapLayerRegistry && mapLayerRegistry.ensure) {
+            mapLayerRegistry.ensure(id, lineLayer);
+          } else {
+            map.addLayer(lineLayer);
+          }
+
+          if (dasharray && map.getLayer(id)) {
+            try {
+              map.setPaintProperty(id, 'line-dasharray', dasharray);
+            } catch (e) {}
           }
         } else {
           try {
@@ -2922,12 +3175,11 @@ function makeMapHtml(
       }
 
       function ensureExploreRouteHaloLayer() {
-        if (!map.getLayer('explore-route-halo-layer')) {
-          map.addLayer({
-            id: 'explore-route-halo-layer',
+        if (!map.getLayer(EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID)) {
+          mapLayerRegistry.ensure(EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID, {
+            id: EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID,
             type: 'line',
-            source: 'segment-source',
-            filter: ['==', ['get', 'kind'], 'explore_route'],
+            source: EXPLORE_PREVIEW_ROUTE_SOURCE_ID,
             layout: {
               'line-cap': 'round',
               'line-join': 'round'
@@ -2937,7 +3189,7 @@ function makeMapHtml(
               'line-width': 9,
               'line-opacity': 0.24
             }
-          }, 'segment-layer');
+          }, EXPLORE_PREVIEW_ROUTE_LAYER_ID);
         }
       }
 
@@ -2988,6 +3240,194 @@ function makeMapHtml(
         }
       }
 
+      function mvumSegmentIdExpression() {
+        return ['to-string', ['coalesce', ['get', 'segmentId'], ['get', 'id'], ['id']]];
+      }
+
+      function mvumSelectedFilter(selectedSegmentIds) {
+        var ids = Array.isArray(selectedSegmentIds)
+          ? selectedSegmentIds.map(function(id) { return String(id); }).filter(Boolean)
+          : [];
+        if (!ids.length) {
+          return ['==', ['get', '__ecs_no_mvum_selection__'], true];
+        }
+        return ['in', mvumSegmentIdExpression(), ['literal', ids]];
+      }
+
+      function clearMvumOverlayLayersAndSources() {
+        removeMapLayer(MVUM_OVERLAY_SELECTED_LAYER_ID);
+        removeMapLayer(MVUM_OVERLAY_LAYER_ID);
+        removeMapLayer(MVUM_OVERLAY_HALO_LAYER_ID);
+        removeMapSource(MVUM_OVERLAY_SELECTED_SOURCE_ID);
+        removeMapSource(MVUM_OVERLAY_SOURCE_ID);
+        mvumOverlaySourceSignature = null;
+      }
+
+      function ensureMvumOverlayLayers(payload) {
+        if (!payload || payload.enabled !== true) {
+          clearMvumOverlayLayersAndSources();
+          return false;
+        }
+        var sourceType = payload.sourceType === 'vector' ? 'vector' : 'geojson';
+        var vectorTileUrl = payload.vectorTileUrl ? String(payload.vectorTileUrl) : '';
+        var vectorSourceLayer = payload.vectorSourceLayer ? String(payload.vectorSourceLayer) : 'mvum_segments';
+        var sourceSignature = sourceType + ':' + vectorTileUrl + ':' + vectorSourceLayer;
+
+        if (mvumOverlaySourceSignature !== sourceSignature && map.getSource(MVUM_OVERLAY_SOURCE_ID)) {
+          clearMvumOverlayLayersAndSources();
+        }
+
+        if (sourceType === 'vector' && vectorTileUrl) {
+          mapSourceRegistry.ensure(MVUM_OVERLAY_SOURCE_ID, {
+            type: 'vector',
+            tiles: [vectorTileUrl],
+            minzoom: payload.minZoom || 10,
+            maxzoom: 15
+          });
+        } else {
+          mapSourceRegistry.ensure(MVUM_OVERLAY_SOURCE_ID, {
+            type: 'geojson',
+            data: payload.featureCollection || featureCollection([])
+          });
+        }
+        mvumOverlaySourceSignature = sourceSignature;
+
+        mapSourceRegistry.ensure(MVUM_OVERLAY_SELECTED_SOURCE_ID, {
+          type: 'geojson',
+          data: featureCollection([])
+        });
+
+        function layerSourceLayer() {
+          return sourceType === 'vector' ? { 'source-layer': vectorSourceLayer } : {};
+        }
+
+        mapLayerRegistry.ensure(MVUM_OVERLAY_HALO_LAYER_ID, Object.assign({
+            id: MVUM_OVERLAY_HALO_LAYER_ID,
+            type: 'line',
+            source: MVUM_OVERLAY_SOURCE_ID,
+            minzoom: payload.minZoom || 10,
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round'
+            },
+            paint: {
+              'line-color': 'rgba(5,10,14,0.92)',
+              'line-width': 6.5,
+              'line-opacity': 0.42
+            }
+          }, layerSourceLayer()), 'route-builder-layer');
+
+        mapLayerRegistry.ensure(MVUM_OVERLAY_LAYER_ID, Object.assign({
+            id: MVUM_OVERLAY_LAYER_ID,
+            type: 'line',
+            source: MVUM_OVERLAY_SOURCE_ID,
+            minzoom: payload.minZoom || 10,
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round'
+            },
+            paint: {
+              'line-color': '#77D98B',
+              'line-width': 3.6,
+              'line-opacity': 0.78
+            }
+          }, layerSourceLayer()), MVUM_OVERLAY_HALO_LAYER_ID);
+
+        mapLayerRegistry.ensure(MVUM_OVERLAY_SELECTED_LAYER_ID, Object.assign({
+            id: MVUM_OVERLAY_SELECTED_LAYER_ID,
+            type: 'line',
+            source: MVUM_OVERLAY_SOURCE_ID,
+            minzoom: payload.minZoom || 10,
+            filter: mvumSelectedFilter(payload.selectedSegmentIds || []),
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round'
+            },
+            paint: {
+              'line-color': '#F2C24D',
+              'line-width': 6.2,
+              'line-opacity': 0.98,
+              'line-blur': 0.2
+            }
+          }, layerSourceLayer()));
+
+        return true;
+      }
+
+      function updateMvumOverlay(payload) {
+        if (!payload || payload.enabled !== true) {
+          clearMvumOverlayLayersAndSources();
+          return;
+        }
+        ensureMvumOverlayLayers(payload);
+        if (payload.sourceType !== 'vector') {
+          setGeoJson(MVUM_OVERLAY_SOURCE_ID, payload.featureCollection || featureCollection([]));
+        }
+        try {
+          map.setFilter(MVUM_OVERLAY_SELECTED_LAYER_ID, mvumSelectedFilter(payload.selectedSegmentIds || []));
+        } catch (e) {}
+      }
+
+      function clearStitchedRoutePreviewLayersAndSources() {
+        removeMapLayer(NAVIGATE_STITCHED_ROUTE_LAYER_ID);
+        removeMapLayer(NAVIGATE_STITCHED_ROUTE_HALO_LAYER_ID);
+        removeMapSource(NAVIGATE_STITCHED_ROUTE_SOURCE_ID);
+      }
+
+      function ensureStitchedRoutePreviewLayers(payload) {
+        if (!payload || !payload.featureCollection) {
+          clearStitchedRoutePreviewLayersAndSources();
+          return false;
+        }
+
+        mapSourceRegistry.ensure(NAVIGATE_STITCHED_ROUTE_SOURCE_ID, {
+          type: 'geojson',
+          data: payload.featureCollection || featureCollection([])
+        });
+
+        mapLayerRegistry.ensure(NAVIGATE_STITCHED_ROUTE_HALO_LAYER_ID, {
+            id: NAVIGATE_STITCHED_ROUTE_HALO_LAYER_ID,
+            type: 'line',
+            source: NAVIGATE_STITCHED_ROUTE_SOURCE_ID,
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round'
+            },
+            paint: {
+              'line-color': 'rgba(5,10,14,0.95)',
+              'line-width': 9,
+              'line-opacity': 0.55
+            }
+          }, map.getLayer(MVUM_OVERLAY_SELECTED_LAYER_ID) ? MVUM_OVERLAY_SELECTED_LAYER_ID : undefined);
+
+        mapLayerRegistry.ensure(NAVIGATE_STITCHED_ROUTE_LAYER_ID, {
+            id: NAVIGATE_STITCHED_ROUTE_LAYER_ID,
+            type: 'line',
+            source: NAVIGATE_STITCHED_ROUTE_SOURCE_ID,
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round'
+            },
+            paint: {
+              'line-color': '#F2C24D',
+              'line-width': 5.8,
+              'line-opacity': 0.96,
+              'line-blur': 0.15
+            }
+          });
+
+        return true;
+      }
+
+      function updateStitchedRoutePreview(payload) {
+        if (!payload || !payload.featureCollection || !payload.featureCollection.features || !payload.featureCollection.features.length) {
+          clearStitchedRoutePreviewLayersAndSources();
+          return;
+        }
+        ensureStitchedRoutePreviewLayers(payload);
+        setGeoJson(NAVIGATE_STITCHED_ROUTE_SOURCE_ID, payload.featureCollection || featureCollection([]));
+      }
+
       function ensureCampsiteFinalAccessLayer() {
         if (!map.getLayer('campsite-final-access-layer')) {
           map.addLayer({
@@ -3035,7 +3475,7 @@ function makeMapHtml(
 
       function ensureCircleLayer(id, sourceId, color, radius, opacity, strokeColor, strokeWidth) {
         if (!map.getLayer(id)) {
-          map.addLayer({
+          var circleLayer = {
             id: id,
             type: 'circle',
             source: sourceId,
@@ -3046,13 +3486,18 @@ function makeMapHtml(
               'circle-stroke-color': strokeColor || 'rgba(8,14,18,0.96)',
               'circle-stroke-width': strokeWidth == null ? 2 : strokeWidth
             }
-          });
+          };
+          if (mapLayerRegistry && mapLayerRegistry.ensure) {
+            mapLayerRegistry.ensure(id, circleLayer);
+          } else {
+            map.addLayer(circleLayer);
+          }
         }
       }
 
       function ensureFillLayer(id, sourceId, color, opacity) {
         if (!map.getLayer(id)) {
-          map.addLayer({
+          var fillLayer = {
             id: id,
             type: 'fill',
             source: sourceId,
@@ -3060,7 +3505,12 @@ function makeMapHtml(
               'fill-color': color,
               'fill-opacity': opacity
             }
-          });
+          };
+          if (mapLayerRegistry && mapLayerRegistry.ensure) {
+            mapLayerRegistry.ensure(id, fillLayer);
+          } else {
+            map.addLayer(fillLayer);
+          }
         }
       }
 
@@ -3075,6 +3525,9 @@ function makeMapHtml(
 
       function removeMapLayer(layerId) {
         try {
+          if (mapLayerRegistry && mapLayerRegistry.remove) {
+            return mapLayerRegistry.remove(layerId);
+          }
           if (map && map.getLayer(layerId)) {
             map.removeLayer(layerId);
             return true;
@@ -3085,6 +3538,9 @@ function makeMapHtml(
 
       function removeMapSource(sourceId) {
         try {
+          if (mapSourceRegistry && mapSourceRegistry.remove) {
+            return mapSourceRegistry.remove(sourceId);
+          }
           if (map && map.getSource(sourceId)) {
             map.removeSource(sourceId);
             return true;
@@ -3110,15 +3566,19 @@ function makeMapHtml(
 
       function promoteRouteGuidanceLayers() {
         [
-          'route-halo-layer',
-          'route-layer',
+          EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID,
+          EXPLORE_PREVIEW_ROUTE_LAYER_ID,
+          STAGED_ROUTE_OPTION_HALO_LAYER_ID,
+          STAGED_ROUTE_OPTION_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_LAYER_ID,
           'segment-layer',
           'route-geometry-halo-layer',
           'route-geometry-selected-layer',
           'trail-layer',
           'speed-layer',
-          'route-progress-glow-layer',
-          'route-progress-layer',
+          ACTIVE_GUIDANCE_ROUTE_PROGRESS_GLOW_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID,
           'route-builder-halo-layer',
           'route-builder-layer',
           'route-builder-endpoint-halo-layer',
@@ -3174,10 +3634,12 @@ function makeMapHtml(
         ensureSource(DISPERSED_ROUTE_BUILD_SOURCE_ID, { type: 'geojson', data: featureCollection([]) });
 
         var beforeRouteLayer = getFirstExistingLayerId([
-          'route-progress-glow-layer',
-          'route-progress-layer',
-          'route-halo-layer',
-          'route-layer',
+          ACTIVE_GUIDANCE_ROUTE_PROGRESS_GLOW_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_LAYER_ID,
+          STAGED_ROUTE_OPTION_HALO_LAYER_ID,
+          STAGED_ROUTE_OPTION_LAYER_ID,
           'route-builder-halo-layer',
           'route-builder-layer',
           'segment-layer',
@@ -3629,6 +4091,25 @@ function makeMapHtml(
         }
       }
 
+      function buildMvumSegmentPayloadFromFeature(feature, lngLat) {
+        var props = feature && feature.properties ? feature.properties : {};
+        var segmentId = String(props.segmentId || props.id || feature.id || '').trim();
+        if (!segmentId) return null;
+        return {
+          kind: 'mvum_segment',
+          id: segmentId,
+          name: props.name || props.routeName || props.trailName || 'MVUM segment',
+          category: 'mvum',
+          categoryLabel: 'MVUM',
+          color: '#77D98B',
+          routeGeometrySourceKind: 'mvum',
+          routeGeometryDataState: 'live',
+          routeGeometryConfidence: 'planning_geometry',
+          latitude: lngLat && typeof lngLat.lat === 'number' ? lngLat.lat : null,
+          longitude: lngLat && typeof lngLat.lng === 'number' ? lngLat.lng : null,
+        };
+      }
+
       function readEstablishedCampsiteNumber(value) {
         var numberValue = Number(value);
         return isFinite(numberValue) ? numberValue : undefined;
@@ -3781,9 +4262,11 @@ function makeMapHtml(
           ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID,
           ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID,
           CAMP_SCOUT_LAYER_ID,
-          'route-halo-layer',
-          'route-layer',
-          'route-progress-layer',
+          ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID,
+          STAGED_ROUTE_OPTION_HALO_LAYER_ID,
+          STAGED_ROUTE_OPTION_LAYER_ID,
           'segment-layer',
           'trail-layer',
         ]);
@@ -3951,9 +4434,11 @@ function makeMapHtml(
         }
 
         var beforePinnedLayer = getFirstExistingLayerId([
-          'route-halo-layer',
-          'route-layer',
-          'route-progress-layer',
+          ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID,
+          STAGED_ROUTE_OPTION_HALO_LAYER_ID,
+          STAGED_ROUTE_OPTION_LAYER_ID,
           'segment-layer',
           'trail-layer',
           CAMP_SCOUT_LAYER_ID,
@@ -4560,10 +5045,33 @@ function makeMapHtml(
         });
       }
 
+      function routeLineLayerDefinition(id, sourceId, color, width, opacity, dasharray) {
+        var paint = {
+          'line-color': color,
+          'line-width': width,
+          'line-opacity': opacity
+        };
+        if (dasharray) {
+          paint['line-dasharray'] = dasharray;
+        }
+        return {
+          id: id,
+          type: 'line',
+          source: sourceId,
+          layout: {
+            'line-cap': 'round',
+            'line-join': 'round'
+          },
+          paint: paint
+        };
+      }
+
       function reinitializeStyleArtifacts() {
         applyTerrainForMapStyle(activeMapStyleKey);
-        ensureSource('route-source', { type: 'geojson', data: featureCollection([]) });
-        ensureSource('route-progress-source', { type: 'geojson', data: featureCollection([]) });
+        mapSourceRegistry.ensure(EXPLORE_PREVIEW_ROUTE_SOURCE_ID, { type: 'geojson', data: featureCollection([]) });
+        mapSourceRegistry.ensure(STAGED_ROUTE_OPTION_SOURCE_ID, { type: 'geojson', data: featureCollection([]) });
+        mapSourceRegistry.ensure(ACTIVE_GUIDANCE_ROUTE_SOURCE_ID, { type: 'geojson', data: featureCollection([]) });
+        mapSourceRegistry.ensure(ACTIVE_GUIDANCE_ROUTE_PROGRESS_SOURCE_ID, { type: 'geojson', data: featureCollection([]) });
         ensureSource('segment-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource('trail-source', { type: 'geojson', data: featureCollection([]) });
         ensureSource('speed-source', { type: 'geojson', data: featureCollection([]) });
@@ -4583,10 +5091,14 @@ function makeMapHtml(
           ['match', ['get', 'label'], 'A', '#C66A4A', 'B', '#F2C24D', 'C', '#65C97A', 'D', '#5FD1FF', '#5FD1FF'],
           0.42
         );
-        ensureLineLayer('route-halo-layer', 'route-source', 'rgba(8,14,18,0.88)', 10.5, 0.72);
-        ensureLineLayer('route-layer', 'route-source', ['get', 'color'], 5, 0.95);
-        ensureLineLayer('route-progress-glow-layer', 'route-progress-source', ['get', 'color'], 14, 0.22);
-        ensureLineLayer('route-progress-layer', 'route-progress-source', ['get', 'color'], 6, 0.98);
+        mapLayerRegistry.ensure(EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID, routeLineLayerDefinition(EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID, EXPLORE_PREVIEW_ROUTE_SOURCE_ID, 'rgba(8,14,18,0.88)', 8.5, 0.5, [1.4, 1.2]));
+        mapLayerRegistry.ensure(EXPLORE_PREVIEW_ROUTE_LAYER_ID, routeLineLayerDefinition(EXPLORE_PREVIEW_ROUTE_LAYER_ID, EXPLORE_PREVIEW_ROUTE_SOURCE_ID, ['get', 'color'], 4.25, 0.72, [1.4, 1.2]));
+        mapLayerRegistry.ensure(STAGED_ROUTE_OPTION_HALO_LAYER_ID, routeLineLayerDefinition(STAGED_ROUTE_OPTION_HALO_LAYER_ID, STAGED_ROUTE_OPTION_SOURCE_ID, 'rgba(8,14,18,0.88)', 10.5, 0.72));
+        mapLayerRegistry.ensure(STAGED_ROUTE_OPTION_LAYER_ID, routeLineLayerDefinition(STAGED_ROUTE_OPTION_LAYER_ID, STAGED_ROUTE_OPTION_SOURCE_ID, ['get', 'color'], 5, 0.95));
+        mapLayerRegistry.ensure(ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID, routeLineLayerDefinition(ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID, ACTIVE_GUIDANCE_ROUTE_SOURCE_ID, 'rgba(8,14,18,0.88)', 10.5, 0.72));
+        mapLayerRegistry.ensure(ACTIVE_GUIDANCE_ROUTE_LAYER_ID, routeLineLayerDefinition(ACTIVE_GUIDANCE_ROUTE_LAYER_ID, ACTIVE_GUIDANCE_ROUTE_SOURCE_ID, ['get', 'color'], 5, 0.95));
+        mapLayerRegistry.ensure(ACTIVE_GUIDANCE_ROUTE_PROGRESS_GLOW_LAYER_ID, routeLineLayerDefinition(ACTIVE_GUIDANCE_ROUTE_PROGRESS_GLOW_LAYER_ID, ACTIVE_GUIDANCE_ROUTE_PROGRESS_SOURCE_ID, ['get', 'color'], 14, 0.22));
+        mapLayerRegistry.ensure(ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID, routeLineLayerDefinition(ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID, ACTIVE_GUIDANCE_ROUTE_PROGRESS_SOURCE_ID, ['get', 'color'], 6, 0.98));
         ensureLineLayer('segment-layer', 'segment-source', ['get', 'color'], 4, 0.92);
         ensureExploreRouteHaloLayer();
         ensureRouteGeometryLayers();
@@ -4663,49 +5175,83 @@ function makeMapHtml(
         }
         applyEstablishedCampsitesDesiredState('style_load');
         promoteRouteGuidanceLayers();
+        emitMapLifecycleMetrics('style_artifacts_reinitialized');
       }
 
       function applyRouteRenderMode(mode) {
-        if (!map || !map.getLayer('route-layer')) return;
+        if (!map) return;
         var normalizedMode = mode || 'selected';
         try {
-          if (map.getLayer('route-halo-layer')) {
-            map.setPaintProperty('route-halo-layer', 'line-width', normalizedMode === 'preview' ? 8.5 : 10.5);
-            map.setPaintProperty('route-halo-layer', 'line-opacity', normalizedMode === 'preview' ? 0.5 : 0.72);
+          if (map.getLayer(EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID)) {
+            map.setPaintProperty(EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID, 'line-width', 8.5);
+            map.setPaintProperty(EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID, 'line-opacity', 0.5);
             map.setPaintProperty(
-              'route-halo-layer',
+              EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID,
               'line-dasharray',
               normalizedMode === 'preview' ? [1.4, 1.2] : [1, 0]
             );
           }
-          map.setPaintProperty('route-layer', 'line-width', normalizedMode === 'preview' ? 4.25 : 5);
-          map.setPaintProperty('route-layer', 'line-opacity', normalizedMode === 'preview' ? 0.72 : 0.95);
-          map.setPaintProperty(
-            'route-layer',
-            'line-dasharray',
-            normalizedMode === 'preview' ? [1.4, 1.2] : [1, 0]
-          );
+          if (map.getLayer(EXPLORE_PREVIEW_ROUTE_LAYER_ID)) {
+            map.setPaintProperty(EXPLORE_PREVIEW_ROUTE_LAYER_ID, 'line-width', 4.25);
+            map.setPaintProperty(EXPLORE_PREVIEW_ROUTE_LAYER_ID, 'line-opacity', 0.72);
+            map.setPaintProperty(
+              EXPLORE_PREVIEW_ROUTE_LAYER_ID,
+              'line-dasharray',
+              normalizedMode === 'preview' ? [1.4, 1.2] : [1, 0]
+            );
+          }
+          [
+            [STAGED_ROUTE_OPTION_HALO_LAYER_ID, 10.5, 0.72],
+            [STAGED_ROUTE_OPTION_LAYER_ID, 5, 0.95],
+            [ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID, 10.5, 0.72],
+            [ACTIVE_GUIDANCE_ROUTE_LAYER_ID, 5, 0.95]
+          ].forEach(function(layerConfig) {
+            if (!map.getLayer(layerConfig[0])) return;
+            map.setPaintProperty(layerConfig[0], 'line-width', layerConfig[1]);
+            map.setPaintProperty(layerConfig[0], 'line-opacity', layerConfig[2]);
+            map.setPaintProperty(layerConfig[0], 'line-dasharray', [1, 0]);
+          });
         } catch (e) {}
+      }
+
+      function routeSourceIdForRenderMode(mode) {
+        if (mode === 'active' || mode === 'completed') return ACTIVE_GUIDANCE_ROUTE_SOURCE_ID;
+        if (mode === 'preview') return EXPLORE_PREVIEW_ROUTE_SOURCE_ID;
+        return STAGED_ROUTE_OPTION_SOURCE_ID;
+      }
+
+      function clearRouteSourcesExcept(activeSourceId) {
+        [
+          EXPLORE_PREVIEW_ROUTE_SOURCE_ID,
+          STAGED_ROUTE_OPTION_SOURCE_ID,
+          ACTIVE_GUIDANCE_ROUTE_SOURCE_ID
+        ].forEach(function(sourceId) {
+          if (sourceId !== activeSourceId) {
+            setGeoJson(sourceId, featureCollection([]));
+          }
+        });
       }
 
       function updateRoute(coords, color, mode, routeLineKey) {
         applyRouteRenderMode(mode);
         var normalizedRouteLineKey = routeLineKey || null;
+        var activeRouteSourceId = routeSourceIdForRenderMode(mode);
         if (lastRouteLineKey !== normalizedRouteLineKey) {
-          setGeoJson('route-source', featureCollection([]));
+          clearRouteSourcesExcept(null);
           lastRouteLineKey = normalizedRouteLineKey;
         }
         var fc = featureCollection(
           coords && coords.length > 1 ? [lineFeature('route', coords, { color: color || '#2ECC71', routeLineKey: normalizedRouteLineKey })] : []
         );
-        setGeoJson('route-source', fc);
+        clearRouteSourcesExcept(activeRouteSourceId);
+        setGeoJson(activeRouteSourceId, fc);
       }
 
       function updateRouteProgress(coords, color) {
         var fc = featureCollection(
           coords && coords.length > 1 ? [lineFeature('route-progress', coords, { color: color || '#F2C24D' })] : []
         );
-        setGeoJson('route-progress-source', fc);
+        setGeoJson(ACTIVE_GUIDANCE_ROUTE_PROGRESS_SOURCE_ID, fc);
       }
 
       function updateSegments(segments) {
@@ -6394,6 +6940,8 @@ function makeMapHtml(
         updateTrail(payload.trailSegments || []);
         updateSpeedTrail(payload.speedSegments || []);
         updateRemoteOverlay(payload.remoteOverlay || null);
+        updateMvumOverlay(payload.mvumOverlay || null);
+        updateStitchedRoutePreview(payload.stitchedRoutePreview || null);
         updateRouteBuilder(routeBuilderDraftSegments, routeBuilderColor, routeBuilderAnchors);
         updateRouteProfileFocus(payload.routeProfileFocus || null);
         updateCampsiteSearchPolygon(payload.campsiteSearchPolygon || null);
@@ -6479,6 +7027,9 @@ function makeMapHtml(
           mapOptions.maxTileCacheSize = compactTileCacheSize;
         }
         map = new mapboxgl.Map(mapOptions);
+        mapSourceRegistry = createMapSourceRegistry();
+        mapLayerRegistry = createMapLayerRegistry();
+        mapListenerRegistry = createMapListenerRegistry();
       } catch (err) {
         var constructorMessage = String(err && err.message ? err.message : err);
         sendLog('Map constructor failed: ' + constructorMessage);
@@ -6490,7 +7041,7 @@ function makeMapHtml(
           send('mapReady', { ok: true, reason: 'bootstrap_timeout' });
         }, 1200);
 
-        map.on('load', function() {
+        mapListenerRegistry.attach('load', null, function() {
           sendLog('map load event fired');
           replayPendingPayloadAfterStyleChange('load', 0);
 
@@ -6501,17 +7052,17 @@ function makeMapHtml(
 
           send('mapReady', { ok: true });
           reportRoadClass();
-        });
+        }, 'map:load');
 
-        map.on('style.load', function() {
+        mapListenerRegistry.attach('style.load', null, function() {
           replayPendingPayloadAfterStyleChange('style_load', 0);
-        });
+        }, 'map:style_load');
 
-        map.on('styledata', function() {
+        mapListenerRegistry.attach('styledata', null, function() {
           replayPendingPayloadAfterStyleChange('styledata', 0);
-        });
+        }, 'map:styledata');
 
-        map.on('error', function(e) {
+        mapListenerRegistry.attach('error', null, function(e) {
           var msg = '';
           try {
             msg = e && e.error && e.error.message ? e.error.message : JSON.stringify(e);
@@ -6529,7 +7080,7 @@ function makeMapHtml(
           if (looksLikeStyleFetchFailure) {
             applyFallbackStyle(failedStyleUrl);
           }
-        });
+        }, 'map:error');
 
         function notifyManualMapInteraction(eventName, event) {
           if (!event || !event.originalEvent) return;
@@ -6537,19 +7088,19 @@ function makeMapHtml(
           send('userDrag', { ok: true, mode: activeCameraMode, event: eventName });
         }
 
-        map.on('dragstart', function(event) {
+        mapListenerRegistry.attach('dragstart', null, function(event) {
           notifyManualMapInteraction('dragstart', event);
-        });
+        }, 'map:dragstart');
 
-        map.on('zoomstart', function(event) {
+        mapListenerRegistry.attach('zoomstart', null, function(event) {
           notifyManualMapInteraction('zoomstart', event);
-        });
+        }, 'map:zoomstart');
 
-        map.on('rotate', function() {
+        mapListenerRegistry.attach('rotate', null, function() {
           applyUserMarkerHeading(userMarkerHeading);
-        });
+        }, 'map:rotate');
 
-        map.on('moveend', function() {
+        mapListenerRegistry.attach('moveend', null, function() {
           try {
             sendLog('[CAMP_MARKER] camera_update zoom=' + map.getZoom().toFixed(2));
           } catch (e) {}
@@ -6560,7 +7111,7 @@ function makeMapHtml(
             reportRoadClass();
             scheduleDispersedRouteBuildCandidateUpdate('moveend');
           }, 90);
-        });
+        }, 'map:moveend');
 
         function buildRenderedRouteableLongPressPayloadAtPoint(point, lngLat) {
           if (!map || !point || !lngLat) return null;
@@ -6834,14 +7385,14 @@ function makeMapHtml(
           }
         }
 
-        map.on('contextmenu', function(e) {
+        mapListenerRegistry.attach('contextmenu', null, function(e) {
           longPressSuppressClickUntil = Date.now() + 650;
           sendLongPressPayload(e.point, e.lngLat);
-        });
+        }, 'map:contextmenu');
         installPointerLongPressMenuHandler();
         installTouchLongPressMenuHandler();
 
-        map.on('click', function(e) {
+        mapListenerRegistry.attach('click', null, function(e) {
           if (Date.now() < longPressSuppressClickUntil) return;
           if (routeBuilderActive && Date.now() < routeBuilderSuppressClickUntil) return;
           if (Date.now() < dispersedCampingMapTapSuppressUntil) return;
@@ -6859,6 +7410,18 @@ function makeMapHtml(
             if (dispersedLegPayload) {
               send('dispersedRouteLegTap', dispersedLegPayload);
               return;
+            }
+          } catch (err) {}
+          try {
+            if (map.getLayer(MVUM_OVERLAY_SELECTED_LAYER_ID) || map.getLayer(MVUM_OVERLAY_LAYER_ID)) {
+              var mvumFeatures = map.queryRenderedFeatures(e.point, { layers: [MVUM_OVERLAY_SELECTED_LAYER_ID, MVUM_OVERLAY_LAYER_ID] }) || [];
+              if (mvumFeatures.length > 0) {
+                var mvumPayload = buildMvumSegmentPayloadFromFeature(mvumFeatures[0], e.lngLat);
+                if (mvumPayload) {
+                  send('segmentTap', mvumPayload);
+                  return;
+                }
+              }
             }
           } catch (err) {}
           try {
@@ -6911,12 +7474,12 @@ function makeMapHtml(
             latitude: e.lngLat.lat,
             longitude: e.lngLat.lng
           });
-        });
+        }, 'map:click');
 
-        map.on('idle', function() {
+        mapListenerRegistry.attach('idle', null, function() {
           if (roadClassTimer) clearTimeout(roadClassTimer);
           roadClassTimer = setTimeout(reportRoadClass, 120);
-        });
+        }, 'map:idle');
 
         try {
           var canvas = map.getCanvasContainer();
@@ -6951,6 +7514,12 @@ function makeMapHtml(
           }, { passive: false });
         } catch (e) {}
       }
+
+      window.addEventListener('beforeunload', function() {
+        if (mapListenerRegistry && mapListenerRegistry.removeAll) {
+          mapListenerRegistry.removeAll();
+        }
+      });
 
       window.addEventListener('message', function(e) {
         var msg;
@@ -7078,6 +7647,7 @@ const MapRenderer = React.memo(function MapRenderer({
   onTiltAlertTap,
   onUserDrag,
   onRoadClassification,
+  onMapLifecycleMetrics,
   vehicleHeading = null,
   motionPriority = 'hot',
   isLoading = false,
@@ -7106,6 +7676,8 @@ const MapRenderer = React.memo(function MapRenderer({
   onRouteBuilderUpdate,
   onRouteBuilderGestureStateChange,
   remoteOverlay = null,
+  mvumOverlay = null,
+  stitchedRoutePreview = null,
   dispersedCampingEligibility = null,
   dispersedRouteBuild = null,
   onDispersedCampingRegionTap,
@@ -7295,6 +7867,8 @@ const MapRenderer = React.memo(function MapRenderer({
         routeBuilderColor,
         routeProfileFocus,
         remoteOverlay,
+        mvumOverlay,
+        stitchedRoutePreview,
         campsiteSearchPolygon,
       }),
     [
@@ -7335,6 +7909,8 @@ const MapRenderer = React.memo(function MapRenderer({
       routeBuilderColor,
       routeProfileFocus,
       remoteOverlay,
+      mvumOverlay,
+      stitchedRoutePreview,
       campsiteSearchPolygon,
     ],
   );
@@ -7955,6 +8531,10 @@ const MapRenderer = React.memo(function MapRenderer({
         onRoadClassification?.(payload);
         return;
 
+      case 'mapLifecycleMetrics':
+        onMapLifecycleMetrics?.(payload);
+        return;
+
       case 'styleFallbackExhausted':
         debugLog('[MapRenderer] style fallback exhausted', payload);
         return;
@@ -7983,6 +8563,7 @@ const MapRenderer = React.memo(function MapRenderer({
     onRouteBuilderUpdate,
     onRouteBuilderGestureStateChange,
     onRoadClassification,
+    onMapLifecycleMetrics,
     scheduleConstructorRetry,
   ]);
 

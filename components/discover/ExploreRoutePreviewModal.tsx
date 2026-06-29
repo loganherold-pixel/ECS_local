@@ -312,6 +312,7 @@ export default function ExploreRoutePreviewModal({
                 points={previewModel.mapPoints}
                 waypoints={[]}
                 routeColor={TACTICAL.amber}
+                routeRenderMode="preview"
                 mapStyle={DEFAULT_MAP_STYLE}
                 mapboxToken={mapboxToken}
                 hasToken={!!mapboxToken}

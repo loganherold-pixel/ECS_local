@@ -1,0 +1,252 @@
+import React from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeIcon as Ionicons } from '../SafeIcon';
+import { ECSCard } from '../ECSSurface';
+import { ECSBadge } from '../ECSStatus';
+import { ECS, TACTICAL } from '../../lib/theme';
+import type { RouteCatalogSummary } from '../../lib/routeDataContracts';
+
+type RouteCatalogSummaryCardProps = {
+  summary: RouteCatalogSummary;
+  isSaved?: boolean;
+  onPreview: (routeId: string) => void;
+  onStartGuidance: (routeId: string) => void;
+  onSave: (routeId: string) => void;
+  compactPreview?: boolean;
+};
+
+function formatMeters(meters: number | null): string | null {
+  if (meters == null || !Number.isFinite(meters)) return null;
+  return `${Math.round((meters / 1609.344) * 10) / 10} mi`;
+}
+
+function formatDuration(seconds: number | null): string | null {
+  if (seconds == null || !Number.isFinite(seconds)) return null;
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  return `${Math.round((minutes / 60) * 10) / 10} hr`;
+}
+
+function formatSource(sourceType: RouteCatalogSummary['sourceType']): string {
+  switch (sourceType) {
+    case 'official':
+      return 'Official';
+    case 'community':
+      return 'Community';
+    case 'imported':
+      return 'Imported';
+    case 'preview':
+      return 'Preview';
+    default:
+      return 'Catalog';
+  }
+}
+
+function formatUpdatedAt(updatedAt: string | null): string | null {
+  if (!updatedAt) return null;
+  const timestamp = Date.parse(updatedAt);
+  if (!Number.isFinite(timestamp)) return null;
+  return `Updated ${new Date(timestamp).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  })}`;
+}
+
+export default function RouteCatalogSummaryCard({
+  summary,
+  isSaved = false,
+  onPreview,
+  onStartGuidance,
+  onSave,
+  compactPreview = false,
+}: RouteCatalogSummaryCardProps) {
+  const distance = formatMeters(summary.distanceMeters);
+  const duration = formatDuration(summary.estimatedDurationSeconds);
+  const updatedAt = formatUpdatedAt(summary.updatedAt);
+  const metaLine = [
+    distance,
+    duration,
+    summary.difficulty,
+    summary.forestName ?? summary.region,
+  ].filter(Boolean).join(' | ');
+  const statusLine = [
+    summary.communityRating != null ? `${Math.round(summary.communityRating * 100)}% community` : null,
+    summary.popularityScore != null ? `${Math.round(summary.popularityScore)} activity` : null,
+    updatedAt,
+  ].filter(Boolean).join(' | ');
+
+  return (
+    <ECSCard variant="primary" style={[s.card, compactPreview && s.cardCompact]}>
+      <View style={s.accentBar} />
+      <View style={s.body}>
+        <View style={s.headerRow}>
+          <View style={s.titleBlock}>
+            <Text style={s.eyebrow}>ROUTE SUMMARY</Text>
+            <Text style={s.title} numberOfLines={2}>{summary.title}</Text>
+          </View>
+          <ECSBadge
+            label={formatSource(summary.sourceType)}
+            tone={summary.sourceType === 'official' ? 'live' : summary.sourceType === 'preview' ? 'warning' : 'category'}
+            icon="trail-sign-outline"
+            compact
+          />
+        </View>
+        {metaLine ? <Text style={s.metaText}>{metaLine}</Text> : null}
+        {statusLine ? <Text style={s.subtleText}>{statusLine}</Text> : null}
+        {summary.tags.length > 0 ? (
+          <View style={s.tagRow}>
+            {summary.tags.slice(0, 3).map((tag) => (
+              <Text key={tag} style={s.tag}>{tag}</Text>
+            ))}
+          </View>
+        ) : null}
+        <View style={s.actionRow}>
+          <TouchableOpacity
+            style={s.secondaryAction}
+            onPress={() => onPreview(summary.routeId)}
+            activeOpacity={0.75}
+            accessibilityLabel={`Preview ${summary.title}`}
+          >
+            <Ionicons name="map-outline" size={13} color={TACTICAL.text} />
+            <Text style={s.secondaryActionText}>PREVIEW</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={s.primaryAction}
+            onPress={() => onStartGuidance(summary.routeId)}
+            activeOpacity={0.75}
+            accessibilityLabel={`Navigate ${summary.title}`}
+          >
+            <Ionicons name="navigate-outline" size={13} color={TACTICAL.bg} />
+            <Text style={s.primaryActionText}>NAVIGATE</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={s.iconAction}
+            onPress={() => onSave(summary.routeId)}
+            activeOpacity={0.75}
+            accessibilityLabel={isSaved ? `Saved ${summary.title}` : `Save ${summary.title}`}
+          >
+            <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={15} color={TACTICAL.amber} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </ECSCard>
+  );
+}
+
+const s = StyleSheet.create({
+  card: {
+    overflow: 'hidden',
+  },
+  cardCompact: {
+    minHeight: 0,
+  },
+  accentBar: {
+    height: 3,
+    backgroundColor: TACTICAL.amber,
+  },
+  body: {
+    padding: 12,
+    gap: 8,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  titleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  eyebrow: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  title: {
+    color: TACTICAL.text,
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0,
+    marginTop: 2,
+  },
+  metaText: {
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  subtleText: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  tagRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  tag: {
+    color: TACTICAL.textMuted,
+    backgroundColor: ECS.bgElev,
+    borderColor: ECS.stroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 6,
+    overflow: 'hidden',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  primaryAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    backgroundColor: TACTICAL.amber,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  primaryActionText: {
+    color: TACTICAL.bg,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  secondaryAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    borderColor: ECS.stroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  secondaryActionText: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  iconAction: {
+    width: 34,
+    height: 34,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderColor: ECS.stroke,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+});

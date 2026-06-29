@@ -244,27 +244,53 @@ import {
 } from '../../lib/navigatePointRouteBuilder';
 import { resolveNavigateRouteProfileFocus } from '../../lib/navigateRouteProfileScrubber';
 import {
+  buildRouteGeometryViewportCacheKey,
   isRouteGeometryViewportZoomEligible,
   mergeRouteGeometryViewportSegmentsWithSelected,
+  normalizeRouteGeometryViewportBbox,
   resolveNearestRouteGeometryEndpoint,
+  routeGeometryViewportSegmentsToOverlaySegments,
   RouteGeometryViewportFetchCoordinator,
   ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM,
   ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
   ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
   type RouteGeometryViewportBbox,
+  type RouteGeometryViewportResult,
 } from '../../lib/routeGeometryViewport';
 import {
+  fetchRouteGeometryViewportSegments,
   isRouteGeometryViewportOverlayFeatureEnabled,
 } from '../../lib/routeGeometryViewportClient';
 import {
-  buildRouteCatalogViewportQuery,
-  routeCatalogViewportFeaturesToRouteGeometrySegments,
-  RouteCatalogViewportCache,
   type RouteCatalogViewportFeature,
   type RouteCatalogViewportFeatureCollection,
   type RouteCatalogViewportResult,
 } from '../../lib/routeCatalogViewport';
-import { fetchRouteCatalogViewportFeatures } from '../../lib/routeCatalogViewportClient';
+import type {
+  MvumSegmentSummary,
+  MvumSelectedSegment,
+  StitchedRouteDraft,
+} from '../../lib/routeDataContracts';
+import {
+  buildMvumCanonicalSegmentsFromViewport,
+  buildMvumSelectedSegments,
+  buildNavigateMvumMapOverlay,
+  buildNavigateMvumStitchedRoutePreview,
+  buildMvumStitchedRouteDraft,
+  createNavigateMvumSelectionStore,
+  createNavigateMvumOverlayState,
+  mvumSegmentsToSummaries,
+  planNavigateMvumViewportFetch,
+  resolveNavigateMvumVectorSourceLayer,
+  resolveNavigateMvumVectorTileUrl,
+  toggleMvumSelectedSegmentId,
+  MVUM_OVERLAY_MIN_ZOOM,
+  type MvumCanonicalSegment,
+} from '../../src/features/navigate/mvum';
+import {
+  fetchNavigateMvumCanonicalSegments,
+  fetchNavigateMvumViewportSegments,
+} from '../../src/features/navigate/mvum/client';
 import { buildRouteConfidenceTimeline, isRouteConfidenceTimelineFeatureEnabled, routeConfidenceTimelineItemCopy, type RouteConfidenceTimeline, type RouteConfidenceTimelineItem, type RouteConfidenceTimelineOverlay, type RouteGeometry } from '../../lib/routeContext';
 import {
   clearExploreRoutesMapHandoff,
@@ -283,6 +309,16 @@ import {
 import { buildActiveGuidanceRouteLineSync } from '../../lib/navigation/activeGuidanceRouteLineSync';
 import { buildActiveGuidanceRouteFromState } from '../../lib/navigation/activeGuidanceState';
 import { buildStagedActiveGuidanceRouteOptions } from '../../lib/navigation/stagedActiveGuidanceRouteOptions';
+import {
+  createExploreNavigateSeparationRun,
+  recordActiveGuidanceStart,
+  recordMapLifecycleSample,
+  recordMvumSelectionUpdate,
+  recordMvumStitchRoute,
+  recordMvumToggleLoad,
+  recordNavigateInitialRender,
+  type MapLifecycleSnapshot,
+} from '../../lib/performance/exploreNavigateSeparationInstrumentation';
 import { logRouteGeometryLifecycle, validateRouteGeometry } from '../../lib/routeGeometryLifecycle';
 import { normalizeRouteLifecycle } from '../../lib/routeLifecycleState';
 import { buildFullRouteGuidanceModel } from '../../lib/fullRouteGuidance';
@@ -852,6 +888,12 @@ type RouteGeometryViewportUiState = {
   lastSuccessfulCacheKey: string | null;
 };
 
+type NavigateRouteRuntimeContract = {
+  mvumSegments: MvumSegmentSummary[];
+  selectedSegments: MvumSelectedSegment[];
+  stitchedDraft: StitchedRouteDraft | null;
+};
+
 function createRouteGeometryViewportUiState(enabled = false): RouteGeometryViewportUiState {
   return {
     enabled,
@@ -873,6 +915,26 @@ const EMPTY_ROUTE_CATALOG_VIEWPORT_FEATURE_COLLECTION: RouteCatalogViewportFeatu
   type: 'FeatureCollection',
   features: [],
 };
+
+function bboxForMvumSegment(
+  segment: RouteGeometryViewportResult['segments'][number],
+): MvumSegmentSummary['bbox'] {
+  if (!Array.isArray(segment.coordinates) || segment.coordinates.length < 2) return null;
+  let minLng = Number.POSITIVE_INFINITY;
+  let minLat = Number.POSITIVE_INFINITY;
+  let maxLng = Number.NEGATIVE_INFINITY;
+  let maxLat = Number.NEGATIVE_INFINITY;
+  for (const point of segment.coordinates) {
+    if (!Number.isFinite(point.longitude) || !Number.isFinite(point.latitude)) continue;
+    minLng = Math.min(minLng, point.longitude);
+    minLat = Math.min(minLat, point.latitude);
+    maxLng = Math.max(maxLng, point.longitude);
+    maxLat = Math.max(maxLat, point.latitude);
+  }
+  return Number.isFinite(minLng) && Number.isFinite(minLat) && Number.isFinite(maxLng) && Number.isFinite(maxLat)
+    ? { minLng, minLat, maxLng, maxLat }
+    : null;
+}
 
 function routeCatalogViewportFeatureLines(feature: RouteCatalogViewportFeature | null | undefined): RoadNavCoordinate[][] {
   if (!feature || feature.geometry.type === 'Point') return [];
@@ -4503,6 +4565,13 @@ const queueMapCameraCommand = useCallback((
   const routeBuilderTraceableSegmentsRef = useRef<NavigateRouteTraceableSegment[]>([]);
   const activeGuidanceRouteEndRef = useRef<NavigateRouteCoordinate | null>(null);
   const activeGuidanceRouteExtensionAvailableRef = useRef(false);
+  const exploreNavigateSeparationRunRef = useRef(
+    createExploreNavigateSeparationRun({
+      runId: 'navigate-mvum-separation',
+      startedAtMs: Date.now(),
+    }),
+  );
+  const previousMapLifecycleSnapshotRef = useRef<MapLifecycleSnapshot | null>(null);
   const [longPressContext, setLongPressContext] = useState<NavigateLongPressContext | null>(null);
   const [longPressInfoExpanded, setLongPressInfoExpanded] = useState(false);
   const [routeBuilderSaveVisible, setRouteBuilderSaveVisible] = useState(false);
@@ -4650,23 +4719,50 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const [exploreRoutesHandoff, setExploreRoutesHandoff] = useState<ExploreRoutesMapHandoff | null>(null);
   const [routeGeometryOverlayEnabled, setRouteGeometryOverlayEnabled] = useState(false);
   const [selectedRouteGeometrySegmentIds, setSelectedRouteGeometrySegmentIds] = useState<string[]>([]);
+  const navigateMvumInitialStateRef = useRef(createNavigateMvumOverlayState());
+  const [mvumOverlayEnabled, setMvumOverlayEnabled] = useState(
+    navigateMvumInitialStateRef.current.enabled,
+  );
+  const mvumSelectionStoreRef = useRef(
+    createNavigateMvumSelectionStore({
+      initialSegmentIds: navigateMvumInitialStateRef.current.selectedSegmentIds,
+    }),
+  );
+  const [selectedMvumSegmentIds, setSelectedMvumSegmentIds] = useState<string[]>(
+    () => mvumSelectionStoreRef.current.getSnapshot().selectedSegmentIds,
+  );
+  const [mvumStitchedRouteDraft, setMvumStitchedRouteDraft] = useState<StitchedRouteDraft | null>(null);
+  const [mvumStitchStatus, setMvumStitchStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [mvumStitchMessage, setMvumStitchMessage] = useState<string | null>(null);
+  const mvumStitchRequestIdRef = useRef(0);
   const routeGeometryViewportOverlayEnabled = useMemo(
     () => isRouteGeometryViewportOverlayFeatureEnabled(),
     [],
   );
+  const navigateMvumVectorTileUrl = useMemo(() => resolveNavigateMvumVectorTileUrl(), []);
+  const navigateMvumVectorSourceLayer = useMemo(() => resolveNavigateMvumVectorSourceLayer(), []);
   const [routeCatalogViewportResult, setRouteCatalogViewportResult] = useState<RouteCatalogViewportResult | null>(null);
+  const [mvumViewportResult, setMvumViewportResult] = useState<RouteGeometryViewportResult | null>(null);
+  const [routeGeometryViewportResult, setRouteGeometryViewportResult] = useState<RouteGeometryViewportResult | null>(null);
   const [
     routeGeometryViewportSelectedSegments,
     setRouteGeometryViewportSelectedSegments,
   ] = useState<RouteGeometryOverlaySegment[]>([]);
   const routeGeometryViewportSelectedSegmentsRef = useRef<RouteGeometryOverlaySegment[]>([]);
+  const routeGeometryViewportSelectionTimestampsRef = useRef(new Map<string, string>());
   const [selectedRouteCatalogViewportFeatureId, setSelectedRouteCatalogViewportFeatureId] = useState<string | null>(null);
   const [routeGeometryViewportUiState, setRouteGeometryViewportUiState] = useState<RouteGeometryViewportUiState>(
     () => createRouteGeometryViewportUiState(false),
   );
+  const [mvumViewportUiState, setMvumViewportUiState] = useState<RouteGeometryViewportUiState>(
+    () => createRouteGeometryViewportUiState(false),
+  );
+  const mvumViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mvumViewportFetchRequestIdRef = useRef(0);
+  const mvumViewportCacheRef = useRef(new Map<string, RouteGeometryViewportResult>());
   const routeGeometryViewportFetchCoordinatorRef = useRef(new RouteGeometryViewportFetchCoordinator());
   const routeGeometryViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const routeCatalogViewportCacheRef = useRef(new RouteCatalogViewportCache());
+  const routeGeometryViewportCacheRef = useRef(new Map<string, RouteGeometryViewportResult>());
   const [selectedRouteConfidenceTimelineItemId, setSelectedRouteConfidenceTimelineItemId] = useState<string | null>(null);
   const [aiRouteSnapshotVersion, setAiRouteSnapshotVersion] = useState(0);
   const lastExploreRoutesFitSignatureRef = useRef<string | null>(null);
@@ -5110,10 +5206,34 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       (navigateConnectivity.status === 'online' && navigateConnectivity.isInternetReachable));
   const routeGeometryViewportFetchOnline = campLayerFetchOnline;
   const routeGeometryViewportZoomReady = isRouteGeometryViewportZoomEligible(mapZoom);
+  const mvumViewportFetchOnline = campLayerFetchOnline;
+  const mvumViewportZoomReady = mapZoom >= MVUM_OVERLAY_MIN_ZOOM;
 
   useEffect(() => {
     routeGeometryViewportSelectedSegmentsRef.current = routeGeometryViewportSelectedSegments;
   }, [routeGeometryViewportSelectedSegments]);
+
+  useEffect(() => {
+    const selectedIds = new Set(selectedRouteGeometrySegmentIds);
+    for (const segmentId of routeGeometryViewportSelectionTimestampsRef.current.keys()) {
+      if (!selectedIds.has(segmentId)) {
+        routeGeometryViewportSelectionTimestampsRef.current.delete(segmentId);
+      }
+    }
+  }, [selectedRouteGeometrySegmentIds]);
+
+  useEffect(() => mvumSelectionStoreRef.current.subscribe(() => {
+    const snapshot = mvumSelectionStoreRef.current.getSnapshot();
+    recordMvumSelectionUpdate(exploreNavigateSeparationRunRef.current, {
+      selectedSegmentIds: snapshot.selectedSegmentIds,
+      selectedUpdateCount: snapshot.selectedSegmentIds.length,
+      replacedFullMvumSource: false,
+    });
+    setSelectedMvumSegmentIds(snapshot.selectedSegmentIds);
+    setMvumStitchedRouteDraft(null);
+    setMvumStitchStatus('idle');
+    setMvumStitchMessage(null);
+  }), []);
 
   useEffect(() => {
     if (!selectedEstablishedCampsite) return;
@@ -5160,6 +5280,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   }, [campLayerFetchOnline, selectedEstablishedCampsite]);
 
   useEffect(() => () => {
+    if (mvumViewportFetchTimerRef.current) {
+      clearTimeout(mvumViewportFetchTimerRef.current);
+      mvumViewportFetchTimerRef.current = null;
+    }
     if (dispersedCampingFetchTimerRef.current) {
       clearTimeout(dispersedCampingFetchTimerRef.current);
       dispersedCampingFetchTimerRef.current = null;
@@ -5202,6 +5326,244 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   ]);
 
   useEffect(() => {
+    const clearMvumFetchTimer = () => {
+      if (mvumViewportFetchTimerRef.current) {
+        clearTimeout(mvumViewportFetchTimerRef.current);
+        mvumViewportFetchTimerRef.current = null;
+      }
+    };
+    const planBbox: RouteGeometryViewportBbox | null = mapBounds
+      ? {
+          minLng: mapBounds.minLng,
+          minLat: mapBounds.minLat,
+          maxLng: mapBounds.maxLng,
+          maxLat: mapBounds.maxLat,
+        }
+      : null;
+    const plan = planNavigateMvumViewportFetch({
+      enabled: mvumOverlayEnabled,
+      bbox: planBbox,
+      zoom: mapZoom,
+      online: mvumViewportFetchOnline,
+      vehicleClass: null,
+      vectorTileUrl: navigateMvumVectorTileUrl,
+      vectorSourceLayer: navigateMvumVectorSourceLayer,
+    });
+    const planMeasuredAtMs = Date.now();
+
+    if (plan.status === 'disabled') {
+      recordNavigateInitialRender(exploreNavigateSeparationRunRef.current, {
+        startedAtMs: exploreNavigateSeparationRunRef.current.startedAtMs,
+        endedAtMs: planMeasuredAtMs,
+        mvumEnabled: false,
+        mvumFetches: 0,
+        mvumPlanStatus: plan.status,
+      });
+      clearMvumFetchTimer();
+      mvumViewportFetchRequestIdRef.current += 1;
+      setMvumViewportResult(null);
+      setMvumViewportUiState((current) =>
+        current.enabled ? createRouteGeometryViewportUiState(false) : current,
+      );
+      return;
+    }
+
+    if (plan.status === 'vector_tiles') {
+      recordMvumToggleLoad(exploreNavigateSeparationRunRef.current, {
+        startedAtMs: planMeasuredAtMs,
+        endedAtMs: Date.now(),
+        planStatus: plan.status,
+        sourceType: 'vector',
+        sourceId: 'navigate-mvum-source',
+        layerIds: ['navigate-mvum-line-layer', 'navigate-mvum-selected-layer'],
+      });
+      clearMvumFetchTimer();
+      mvumViewportFetchRequestIdRef.current += 1;
+      setMvumViewportResult(null);
+      setMvumViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: 'ready',
+        errorMessage: null,
+        featureCount: 0,
+        cappedCount: 0,
+        skippedMissingGeometryCount: 0,
+        skippedClosedCount: 0,
+        dataState: 'live',
+      }));
+      return;
+    }
+
+    if (plan.status === 'zoom_deferred') {
+      recordMvumToggleLoad(exploreNavigateSeparationRunRef.current, {
+        startedAtMs: planMeasuredAtMs,
+        endedAtMs: Date.now(),
+        planStatus: plan.status,
+        sourceType: 'deferred',
+        sourceId: 'navigate-mvum-source',
+        layerIds: [],
+      });
+      clearMvumFetchTimer();
+      mvumViewportFetchRequestIdRef.current += 1;
+      setMvumViewportResult(null);
+      setMvumViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: 'zoom',
+        errorMessage: null,
+        featureCount: 0,
+        cappedCount: 0,
+        skippedMissingGeometryCount: 0,
+        skippedClosedCount: 0,
+        dataState: 'unknown',
+      }));
+      return;
+    }
+
+    if (plan.status === 'offline') {
+      recordMvumToggleLoad(exploreNavigateSeparationRunRef.current, {
+        startedAtMs: planMeasuredAtMs,
+        endedAtMs: Date.now(),
+        planStatus: plan.status,
+        sourceType: 'offline',
+        sourceId: 'navigate-mvum-source',
+        layerIds: [],
+      });
+      clearMvumFetchTimer();
+      mvumViewportFetchRequestIdRef.current += 1;
+      setMvumViewportResult(null);
+      setMvumViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: 'offline',
+        errorMessage: 'MVUM segments need live coverage or cached vector tiles for this map view.',
+        featureCount: 0,
+        cappedCount: 0,
+        skippedMissingGeometryCount: 0,
+        skippedClosedCount: 0,
+        dataState: 'unknown',
+      }));
+      return;
+    }
+
+    if (plan.status === 'missing_bbox') {
+      clearMvumFetchTimer();
+      setMvumViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: 'loading',
+        errorMessage: null,
+      }));
+      setRequestBoundsTrigger((prev) => prev + 1);
+      return;
+    }
+
+    const cached = mvumViewportCacheRef.current.get(plan.cacheKey);
+    if (cached) {
+      clearMvumFetchTimer();
+      setMvumViewportResult(cached);
+      setMvumViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: cached.segments.length > 0 ? 'ready' : 'empty',
+        errorMessage: null,
+        featureCount: cached.segments.length,
+        cappedCount: cached.cappedCount,
+        skippedMissingGeometryCount: cached.skippedMissingGeometryCount,
+        skippedClosedCount: cached.skippedClosedCount,
+        dataState: 'cached',
+        lastAttemptedBbox: plan.bbox,
+        lastAttemptedCacheKey: plan.cacheKey,
+        lastSuccessfulBbox: plan.bbox,
+        lastSuccessfulCacheKey: plan.cacheKey,
+      }));
+      return;
+    }
+
+    clearMvumFetchTimer();
+    const requestId = mvumViewportFetchRequestIdRef.current + 1;
+    mvumViewportFetchRequestIdRef.current = requestId;
+    recordMvumToggleLoad(exploreNavigateSeparationRunRef.current, {
+      startedAtMs: planMeasuredAtMs,
+      endedAtMs: Date.now(),
+      planStatus: plan.status,
+      sourceType: 'geojson',
+      sourceId: 'navigate-mvum-source',
+      layerIds: ['navigate-mvum-line-layer', 'navigate-mvum-selected-layer'],
+    });
+    setMvumViewportUiState((current) => ({
+      ...current,
+      enabled: true,
+      status: 'loading',
+      errorMessage: null,
+      lastAttemptedBbox: plan.bbox,
+      lastAttemptedCacheKey: plan.cacheKey,
+    }));
+
+    mvumViewportFetchTimerRef.current = setTimeout(() => {
+      mvumViewportFetchTimerRef.current = null;
+      fetchNavigateMvumViewportSegments({
+        bbox: plan.bbox,
+        zoom: mapZoom,
+        limit: 240,
+        vehicleClass: null,
+      })
+        .then((result) => {
+          if (mvumViewportFetchRequestIdRef.current !== requestId) return;
+          const resultForCache = {
+            ...result,
+            cacheKey: plan.cacheKey,
+          };
+          mvumViewportCacheRef.current.set(plan.cacheKey, resultForCache);
+          setMvumViewportResult(resultForCache);
+          setMvumViewportUiState((current) => ({
+            ...current,
+            enabled: true,
+            status:
+              resultForCache.degraded && resultForCache.segments.length === 0
+                ? 'error'
+                : resultForCache.segments.length > 0
+                  ? 'ready'
+                  : 'empty',
+            errorMessage:
+              resultForCache.degraded && resultForCache.segments.length === 0
+                ? resultForCache.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
+                : null,
+            featureCount: resultForCache.segments.length,
+            cappedCount: resultForCache.cappedCount,
+            skippedMissingGeometryCount: resultForCache.skippedMissingGeometryCount,
+            skippedClosedCount: resultForCache.skippedClosedCount,
+            dataState: 'live',
+            lastAttemptedBbox: plan.bbox,
+            lastAttemptedCacheKey: plan.cacheKey,
+            lastSuccessfulBbox: plan.bbox,
+            lastSuccessfulCacheKey: plan.cacheKey,
+          }));
+        })
+        .catch((error) => {
+          if (mvumViewportFetchRequestIdRef.current !== requestId) return;
+          setMvumViewportResult(null);
+          setMvumViewportUiState((current) => ({
+            ...current,
+            enabled: true,
+            status: 'error',
+            errorMessage: error instanceof Error ? error.message : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
+            dataState: 'unknown',
+            lastAttemptedBbox: plan.bbox,
+            lastAttemptedCacheKey: plan.cacheKey,
+          }));
+        });
+    }, 350);
+  }, [
+    mapBounds,
+    mapZoom,
+    mvumOverlayEnabled,
+    mvumViewportFetchOnline,
+    navigateMvumVectorSourceLayer,
+    navigateMvumVectorTileUrl,
+  ]);
+
+  useEffect(() => {
     const layerAvailable = routeGeometryOverlayEnabled && routeGeometryViewportOverlayEnabled;
     if (!layerAvailable) {
       routeGeometryViewportFetchCoordinatorRef.current.cancel();
@@ -5210,6 +5572,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         routeGeometryViewportFetchTimerRef.current = null;
       }
       setRouteCatalogViewportResult(null);
+      setRouteGeometryViewportResult(null);
       setSelectedRouteCatalogViewportFeatureId(null);
       setRouteGeometryViewportUiState((current) =>
         current.enabled ? createRouteGeometryViewportUiState(false) : current,
@@ -5224,6 +5587,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         routeGeometryViewportFetchTimerRef.current = null;
       }
       setRouteCatalogViewportResult(null);
+      setRouteGeometryViewportResult(null);
       setSelectedRouteCatalogViewportFeatureId(null);
       setRouteGeometryViewportUiState((current) => ({
         ...current,
@@ -5231,6 +5595,9 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         status: 'zoom',
         errorMessage: null,
         featureCount: 0,
+        cappedCount: 0,
+        skippedMissingGeometryCount: 0,
+        skippedClosedCount: 0,
         dataState: 'unknown',
       }));
       return;
@@ -5257,36 +5624,45 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
     if (plan.type === 'skip') {
       if (plan.reason === 'offline') {
-        const cachedQuery = planBbox
-          ? buildRouteCatalogViewportQuery({ bbox: planBbox, zoom: mapZoom })
+        const normalizedBbox = normalizeRouteGeometryViewportBbox(planBbox);
+        const cacheKey = normalizedBbox
+          ? buildRouteGeometryViewportCacheKey(normalizedBbox, mapZoom, {
+              includeReferenceGeometry: true,
+              vehicleClass: null,
+            })
           : null;
-        const cached = cachedQuery ? routeCatalogViewportCacheRef.current.get(cachedQuery) : null;
-        if (cached && cachedQuery) {
-          setRouteCatalogViewportResult(cached);
+        const cached = cacheKey ? routeGeometryViewportCacheRef.current.get(cacheKey) : null;
+        if (cached && normalizedBbox && cacheKey) {
+          setRouteCatalogViewportResult(null);
+          setRouteGeometryViewportResult(cached);
           setRouteGeometryViewportUiState((current) => ({
             ...current,
             enabled: true,
-            status: cached.returnedCount > 0 ? 'ready' : 'empty',
+            status: cached.segments.length > 0 ? 'ready' : 'empty',
             errorMessage: null,
-            featureCount: cached.returnedCount,
-            cappedCount: 0,
-            skippedMissingGeometryCount: cached.insufficientGeometryCount + cached.trailheadOnlyCount,
-            skippedClosedCount: 0,
+            featureCount: cached.segments.length,
+            cappedCount: cached.cappedCount,
+            skippedMissingGeometryCount: cached.skippedMissingGeometryCount,
+            skippedClosedCount: cached.skippedClosedCount,
             dataState: 'cached',
-            lastAttemptedBbox: cachedQuery.bbox,
-            lastAttemptedCacheKey: cachedQuery.cacheKey,
-            lastSuccessfulBbox: cachedQuery.bbox,
-            lastSuccessfulCacheKey: cachedQuery.cacheKey,
+            lastAttemptedBbox: normalizedBbox,
+            lastAttemptedCacheKey: cacheKey,
+            lastSuccessfulBbox: normalizedBbox,
+            lastSuccessfulCacheKey: cacheKey,
           }));
           return;
         }
         setRouteCatalogViewportResult(null);
+        setRouteGeometryViewportResult(null);
         setRouteGeometryViewportUiState((current) => ({
           ...current,
           enabled: true,
           status: 'offline',
-          errorMessage: 'ECS route catalog geometry needs live coverage or a cached viewport.',
+          errorMessage: 'ECS trail segment geometry needs live coverage or a cached viewport.',
           featureCount: 0,
+          cappedCount: 0,
+          skippedMissingGeometryCount: 0,
+          skippedClosedCount: 0,
           dataState: 'unknown',
         }));
       }
@@ -5301,12 +5677,16 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         setRequestBoundsTrigger((prev) => prev + 1);
       } else if (plan.reason === 'invalid_bbox' || plan.reason === 'bbox_too_small') {
         setRouteCatalogViewportResult(null);
+        setRouteGeometryViewportResult(null);
         setRouteGeometryViewportUiState((current) => ({
           ...current,
           enabled: true,
           status: 'empty',
           errorMessage: null,
           featureCount: 0,
+          cappedCount: 0,
+          skippedMissingGeometryCount: 0,
+          skippedClosedCount: 0,
           dataState: 'unknown',
         }));
       }
@@ -5332,64 +5712,80 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       routeGeometryViewportFetchTimerRef.current = null;
       const request = routeGeometryViewportFetchCoordinatorRef.current.consumeDue(Date.now());
       if (!request) return;
-      const query = buildRouteCatalogViewportQuery({
-        bbox: request.bbox,
-        zoom: mapZoom,
-      });
-      const cached = routeCatalogViewportCacheRef.current.get(query);
+      const cached = routeGeometryViewportCacheRef.current.get(request.cacheKey);
       if (cached) {
         if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
-        setRouteCatalogViewportResult(cached);
+        setRouteCatalogViewportResult(null);
+        setRouteGeometryViewportResult(cached);
         setRouteGeometryViewportUiState((current) => ({
           ...current,
           enabled: true,
-          status: cached.returnedCount > 0 ? 'ready' : 'empty',
+          status: cached.segments.length > 0 ? 'ready' : 'empty',
           errorMessage: null,
-          featureCount: cached.returnedCount,
-          cappedCount: 0,
-          skippedMissingGeometryCount: cached.insufficientGeometryCount + cached.trailheadOnlyCount,
-          skippedClosedCount: 0,
+          featureCount: cached.segments.length,
+          cappedCount: cached.cappedCount,
+          skippedMissingGeometryCount: cached.skippedMissingGeometryCount,
+          skippedClosedCount: cached.skippedClosedCount,
           dataState: 'cached',
-          lastAttemptedBbox: query.bbox,
-          lastAttemptedCacheKey: query.cacheKey,
-          lastSuccessfulBbox: query.bbox,
-          lastSuccessfulCacheKey: query.cacheKey,
+          lastAttemptedBbox: request.bbox,
+          lastAttemptedCacheKey: request.cacheKey,
+          lastSuccessfulBbox: request.bbox,
+          lastSuccessfulCacheKey: request.cacheKey,
         }));
         return;
       }
 
-      fetchRouteCatalogViewportFeatures(query)
+      fetchRouteGeometryViewportSegments({
+        bbox: request.bbox,
+        zoom: mapZoom,
+        includeReferenceGeometry: true,
+        vehicleClass: null,
+      })
         .then((result) => {
           if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
-          routeCatalogViewportCacheRef.current.set(query, result);
-          setRouteCatalogViewportResult(result);
+          const resultForCache = {
+            ...result,
+            cacheKey: result.cacheKey ?? request.cacheKey,
+          };
+          routeGeometryViewportCacheRef.current.set(request.cacheKey, resultForCache);
+          setRouteCatalogViewportResult(null);
+          setRouteGeometryViewportResult(resultForCache);
           setRouteGeometryViewportUiState((current) => ({
             ...current,
             enabled: true,
-            status: result.returnedCount > 0 ? 'ready' : 'empty',
-            errorMessage: null,
-            featureCount: result.returnedCount,
-            cappedCount: Math.max(0, result.candidateCount - result.returnedCount),
-            skippedMissingGeometryCount: result.insufficientGeometryCount + result.trailheadOnlyCount,
-            skippedClosedCount: 0,
+            status:
+              resultForCache.degraded && resultForCache.segments.length === 0
+                ? 'error'
+                : resultForCache.segments.length > 0
+                  ? 'ready'
+                  : 'empty',
+            errorMessage:
+              resultForCache.degraded && resultForCache.segments.length === 0
+                ? resultForCache.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
+                : null,
+            featureCount: resultForCache.segments.length,
+            cappedCount: resultForCache.cappedCount,
+            skippedMissingGeometryCount: resultForCache.skippedMissingGeometryCount,
+            skippedClosedCount: resultForCache.skippedClosedCount,
             dataState: 'live',
-            lastAttemptedBbox: query.bbox,
-            lastAttemptedCacheKey: query.cacheKey,
-            lastSuccessfulBbox: query.bbox,
-            lastSuccessfulCacheKey: query.cacheKey,
+            lastAttemptedBbox: request.bbox,
+            lastAttemptedCacheKey: request.cacheKey,
+            lastSuccessfulBbox: request.bbox,
+            lastSuccessfulCacheKey: request.cacheKey,
           }));
         })
         .catch((error) => {
           if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
           setRouteCatalogViewportResult(null);
+          setRouteGeometryViewportResult(null);
           setRouteGeometryViewportUiState((current) => ({
             ...current,
             enabled: true,
             status: 'error',
             errorMessage: error instanceof Error ? error.message : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
             dataState: 'unknown',
-            lastAttemptedBbox: query.bbox,
-            lastAttemptedCacheKey: query.cacheKey,
+            lastAttemptedBbox: request.bbox,
+            lastAttemptedCacheKey: request.cacheKey,
           }));
         });
     }, Math.max(0, plan.dueAt - now));
@@ -12939,17 +13335,21 @@ const handleCreateRun = useCallback(() => {
     () => routeCatalogViewportResult?.featureCollection ?? EMPTY_ROUTE_CATALOG_VIEWPORT_FEATURE_COLLECTION,
     [routeCatalogViewportResult?.featureCollection],
   );
+  const mvumSegmentSummaries = useMemo<MvumSegmentSummary[]>(
+    () => mvumSegmentsToSummaries(mvumViewportResult?.segments ?? [], mvumViewportResult?.fetchedAt),
+    [mvumViewportResult?.fetchedAt, mvumViewportResult?.segments],
+  );
   const visibleCatalogRouteGeometryOverlaySegments = useMemo(
     () =>
       routeGeometryViewportOverlayEnabled
-        ? routeCatalogViewportFeaturesToRouteGeometrySegments(
-            routeCatalogViewportFeatureCollection,
+        ? routeGeometryViewportSegmentsToOverlaySegments(
+            routeGeometryViewportResult?.segments ?? [],
             selectedRouteGeometrySegmentIds,
           )
         : [],
     [
       routeGeometryViewportOverlayEnabled,
-      routeCatalogViewportFeatureCollection,
+      routeGeometryViewportResult?.segments,
       selectedRouteGeometrySegmentIds,
     ],
   );
@@ -12962,6 +13362,27 @@ const handleCreateRun = useCallback(() => {
     [
       routeGeometryViewportSelectedSegments,
       visibleCatalogRouteGeometryOverlaySegments,
+    ],
+  );
+  const navigateRouteRuntimeContract = useMemo<NavigateRouteRuntimeContract>(
+    () => {
+      const selectionSnapshot = mvumSelectionStoreRef.current.getSnapshot();
+      const selectedSegments: MvumSelectedSegment[] = buildMvumSelectedSegments(
+        selectedMvumSegmentIds,
+        selectionSnapshot.selectedAtById,
+        navigateMvumVectorSourceLayer,
+      );
+      return {
+        mvumSegments: mvumSegmentSummaries,
+        selectedSegments,
+        stitchedDraft: mvumStitchedRouteDraft,
+      };
+    },
+    [
+      mvumSegmentSummaries,
+      mvumStitchedRouteDraft,
+      navigateMvumVectorSourceLayer,
+      selectedMvumSegmentIds,
     ],
   );
   const routeCatalogViewportPointMarkers = useMemo<PinMarker[]>(
@@ -13019,6 +13440,27 @@ const handleCreateRun = useCallback(() => {
     () => (routeGeometryOverlayEnabled ? routeGeometryOverlayBuild.segments : []),
     [routeGeometryOverlayBuild.segments, routeGeometryOverlayEnabled],
   );
+  const navigateMvumMapOverlay = useMemo(
+    () =>
+      buildNavigateMvumMapOverlay({
+        enabled: mvumOverlayEnabled,
+        selectedSegmentIds: selectedMvumSegmentIds,
+        vectorTileUrl: navigateMvumVectorTileUrl,
+        vectorSourceLayer: navigateMvumVectorSourceLayer,
+        viewportSegments: mvumViewportResult?.segments ?? [],
+      }),
+    [
+      mvumOverlayEnabled,
+      mvumViewportResult?.segments,
+      navigateMvumVectorSourceLayer,
+      navigateMvumVectorTileUrl,
+      selectedMvumSegmentIds,
+    ],
+  );
+  const navigateMvumStitchedRoutePreview = useMemo(
+    () => buildNavigateMvumStitchedRoutePreview(mvumStitchedRouteDraft),
+    [mvumStitchedRouteDraft],
+  );
   const routeBuilderTraceableSegments = useMemo(
     () => routeGeometryOverlayBuild.segments.map(routeGeometrySegmentToNavigateTraceableSegment),
     [routeGeometryOverlayBuild.segments],
@@ -13067,6 +13509,49 @@ const handleCreateRun = useCallback(() => {
     routeGeometryViewportUiState.status,
     routeGeometryViewportZoomReady,
   ]);
+  const mvumViewportLegendMessage = useMemo(() => {
+    if (!mvumOverlayEnabled) return null;
+    if (navigateMvumVectorTileUrl) {
+      return selectedMvumSegmentIds.length > 0
+        ? `${selectedMvumSegmentIds.length} MVUM segment${selectedMvumSegmentIds.length === 1 ? '' : 's'} selected.`
+        : 'MVUM trail segments visible at useful zoom. Tap segments to select.';
+    }
+    if (!mvumViewportZoomReady) {
+      return `Zoom to ${MVUM_OVERLAY_MIN_ZOOM}+ to show MVUM trail segments.`;
+    }
+    if (mvumViewportUiState.status === 'loading') {
+      return 'Loading MVUM trail segments for this map view.';
+    }
+    if (mvumViewportUiState.status === 'offline') {
+      return mvumViewportUiState.errorMessage ?? 'MVUM segments need live coverage or cached tiles.';
+    }
+    if (mvumViewportUiState.status === 'error') {
+      return mvumViewportUiState.errorMessage ?? 'MVUM trail segments unavailable.';
+    }
+    if (mvumViewportResult?.segments.length) {
+      return `${mvumViewportResult.segments.length} MVUM trail segment${mvumViewportResult.segments.length === 1 ? '' : 's'} visible.`;
+    }
+    return 'No MVUM trail segments visible in this map view yet.';
+  }, [
+    mvumOverlayEnabled,
+    mvumViewportResult?.segments.length,
+    mvumViewportUiState.errorMessage,
+    mvumViewportUiState.status,
+    mvumViewportZoomReady,
+    navigateMvumVectorTileUrl,
+    selectedMvumSegmentIds.length,
+  ]);
+  const mvumStitchActionDisabled =
+    selectedMvumSegmentIds.length === 0 || mvumStitchStatus === 'loading';
+  const mvumStartStitchedGuidanceDisabled =
+    mvumStitchStatus === 'loading' ||
+    !mvumStitchedRouteDraft?.geometry ||
+    (mvumStitchedRouteDraft.unresolvedGaps.length ?? 0) > 0;
+  const mvumStitchLegendMessage =
+    mvumStitchMessage ??
+    (selectedMvumSegmentIds.length > 0
+      ? 'Build a stitched route from selected MVUM segments when ready.'
+      : 'Tap highlighted MVUM segments to build a route.');
   const selectedExploreRouteSegment = useMemo(
     () =>
       selectedExploreRouteSegmentId
@@ -16823,7 +17308,9 @@ const routeBuilderStartDisabledReason = !safeUserLocation
     ? 'LINK POINTS FIRST'
     : null;
 const routeBuilderCanPlanGeometry =
-  routeBuilderCanSave && routeBuilderHasRouteGeometrySegments && selectedRouteGeometrySegmentIds.length > 0;
+  routeBuilderCanSave &&
+  routeBuilderHasRouteGeometrySegments &&
+  navigateRouteRuntimeContract.selectedSegments.length > 0;
 const selectedRouteGeometryOverlaySegmentsForPlanning = useMemo(() => {
   if (selectedRouteGeometrySegmentIds.length === 0) return [];
   const selectedIds = new Set(selectedRouteGeometrySegmentIds);
@@ -18532,6 +19019,30 @@ const toggleRemotenessOverlay = useCallback(() => {
     showToast,
   ]);
 
+  const toggleMvumOverlay = useCallback(() => {
+    hapticMicro();
+    const next = !mvumOverlayEnabled;
+    setMvumOverlayEnabled(next);
+    if (!next) {
+      showToast('MVUM TRAIL SEGMENTS OFF');
+      return;
+    }
+    if (navigateMvumVectorTileUrl) {
+      showToast('MVUM TRAIL SEGMENTS ON');
+      return;
+    }
+    if (!mvumViewportZoomReady) {
+      showToast(`ZOOM TO ${MVUM_OVERLAY_MIN_ZOOM}+ TO SHOW MVUM SEGMENTS`);
+      return;
+    }
+    showToast('MVUM TRAIL SEGMENTS LOADING FOR THIS MAP VIEW');
+  }, [
+    mvumOverlayEnabled,
+    mvumViewportZoomReady,
+    navigateMvumVectorTileUrl,
+    showToast,
+  ]);
+
   const toggleExploreRoutesOverlay = useCallback(() => {
     hapticMicro();
     const next = !exploreRoutesEnabled;
@@ -18670,7 +19181,229 @@ const toggleRemotenessOverlay = useCallback(() => {
     trailNavigationActive,
   ]);
 
+  const handleBuildMvumStitchedRoute = useCallback(async () => {
+    hapticCommand();
+    const selectedIds = mvumSelectionStoreRef.current.getSnapshot().selectedSegmentIds;
+    if (selectedIds.length === 0) {
+      setMvumStitchStatus('error');
+      setMvumStitchMessage('Select MVUM segments before building a route.');
+      showToast('SELECT MVUM SEGMENTS FIRST');
+      return;
+    }
+
+    const requestId = mvumStitchRequestIdRef.current + 1;
+    mvumStitchRequestIdRef.current = requestId;
+    setMvumStitchStatus('loading');
+    setMvumStitchMessage('Fetching canonical MVUM segment geometry...');
+    const stitchStartedAtMs = Date.now();
+
+    let canonicalSegments: MvumCanonicalSegment[] = [];
+    let canonicalFetchFailed = false;
+    try {
+      canonicalSegments = await fetchNavigateMvumCanonicalSegments({ segmentIds: selectedIds });
+    } catch (error) {
+      canonicalFetchFailed = true;
+      canonicalSegments = [];
+    }
+
+    if (mvumStitchRequestIdRef.current !== requestId) return;
+
+    const canonicalIds = new Set(canonicalSegments.map((segment) => segment.segmentId));
+    const missingIds = selectedIds.filter((segmentId) => !canonicalIds.has(segmentId));
+    const fallbackSegments = missingIds.length > 0
+      ? buildMvumCanonicalSegmentsFromViewport(mvumViewportResult?.segments ?? [], missingIds)
+      : [];
+    const stitchedDraft = buildMvumStitchedRouteDraft({
+      selectedSegmentIds: selectedIds,
+      segments: [...canonicalSegments, ...fallbackSegments],
+    });
+    const stitchedPreview = buildNavigateMvumStitchedRoutePreview(stitchedDraft);
+    recordMvumStitchRoute(exploreNavigateSeparationRunRef.current, {
+      startedAtMs: stitchStartedAtMs,
+      endedAtMs: Date.now(),
+      selectedSegmentIds: selectedIds,
+      fetchedCanonicalSegmentIds: canonicalSegments.map((segment) => segment.segmentId),
+      fullGeometryFetches: selectedIds.length > 0 ? 1 : 0,
+      previewSourceId: stitchedPreview?.sourceId ?? null,
+      previewLayerId: stitchedPreview?.layerId ?? null,
+    });
+
+    setMvumStitchedRouteDraft(stitchedDraft);
+    if (!stitchedDraft.geometry) {
+      setMvumStitchStatus('error');
+      setMvumStitchMessage(
+        canonicalFetchFailed
+          ? 'Canonical MVUM geometry is unavailable, and no usable viewport fallback is loaded.'
+          : 'No usable MVUM geometry is available for the selected segments.',
+      );
+      showToast('MVUM ROUTE GEOMETRY UNAVAILABLE');
+      return;
+    }
+
+    setMvumStitchStatus('ready');
+    const gapCount = stitchedDraft.unresolvedGaps.length;
+    const usedLimitedGeometry = stitchedDraft.warnings.some((warning) =>
+      warning.toLowerCase().includes('limited'),
+    );
+    const nextMessage =
+      gapCount > 0
+        ? `${gapCount} unresolved gap${gapCount === 1 ? '' : 's'} detected. Review before guidance.`
+        : usedLimitedGeometry
+          ? 'Route built from limited MVUM geometry. Verify before navigation.'
+          : 'MVUM stitched route draft ready.';
+    setMvumStitchMessage(nextMessage);
+    showToast(
+      gapCount > 0
+        ? 'MVUM STITCH HAS GAPS'
+        : 'MVUM STITCHED ROUTE READY',
+    );
+  }, [mvumViewportResult?.segments, showToast]);
+
+  const handleStartMvumStitchedGuidance = useCallback(async () => {
+    hapticCommand();
+    const draft = mvumStitchedRouteDraft;
+    if (!draft?.geometry) {
+      showToast('BUILD MVUM ROUTE FIRST');
+      return;
+    }
+    if (draft.unresolvedGaps.length > 0) {
+      setMvumStitchMessage('Resolve or review MVUM gaps before starting guidance.');
+      showToast('MVUM STITCH HAS GAPS - REVIEW FIRST');
+      return;
+    }
+
+    const routeLines: [number, number][][] =
+      draft.geometry.type === 'LineString'
+        ? [draft.geometry.coordinates as [number, number][]]
+        : draft.geometry.coordinates as [number, number][][];
+    const routeSegments = routeLines
+      .map((line) =>
+        line
+          .map((coordinate) => [Number(coordinate[0]), Number(coordinate[1])] as [number, number])
+          .filter(([longitude, latitude]) => Number.isFinite(longitude) && Number.isFinite(latitude)),
+      )
+      .filter((line) => line.length > 1);
+
+    if (routeSegments.length === 0) {
+      showToast('MVUM ROUTE GEOMETRY UNAVAILABLE');
+      return;
+    }
+
+    const segmentMetadata: RouteSegmentSourceMetadata = {
+      kind: 'ecs_route_geometry',
+      sourceLabel: 'Navigate MVUM segment stitch',
+      confidence: 'planning_geometry',
+      dataState: draft.warnings.some((warning) => warning.toLowerCase().includes('limited'))
+        ? 'limited_tile_geometry'
+        : 'canonical_mvum_geometry',
+      warnings: draft.warnings,
+      segmentIds: draft.orderedSegmentIds,
+    };
+
+    const savedRoute = routeStore.createCustomRoute(
+      routeSegments.map((coordinates) => ({
+        coordinates,
+        source_metadata: segmentMetadata,
+      })),
+      {
+        name: 'MVUM Stitched Route',
+        description:
+          "kind: 'mvum_segment_stitch'. Built from selected Navigate MVUM segment IDs. Verify posted access, closures, and vehicle legality before travel.",
+        sourceApp: 'ecs_navigate_mvum_stitch',
+        externalSourceId: draft.draftId,
+        externalSourceType: 'mvum_segment_stitch',
+      },
+    );
+    const savedRun = runStore.createFromRoute(savedRoute, activeRun?.build_snapshot);
+    routeStore.attachRun(savedRoute.id, savedRun.id);
+    routeStore.setActive(savedRoute.id);
+    runStore.setActive(savedRun.id);
+    loadRuns();
+    setCustomRouteRefreshKey((key) => key + 1);
+    setSavedRoutesRefreshKey((key) => key + 1);
+
+    const payload = buildNavigationPayloadFromRun(savedRun, {
+      segmentCount: draft.orderedSegmentIds.length,
+      transitionLegCount: 0,
+    });
+    if (!payload) {
+      showToast('MVUM GUIDANCE PAYLOAD UNAVAILABLE');
+      return;
+    }
+
+    const trailPayload: NavigationHandoffPayload = {
+      ...payload,
+      source: 'saved',
+      type: 'trail',
+      tripMode: 'trail',
+      routeSource: 'built',
+      requiresOnlineRouting: false,
+      trailGeometrySegments: routeSegments.map((line) =>
+        line.map(([lng, lat]) => ({ lat, lng })),
+      ),
+      routeMetadata: {
+        ...(payload.routeMetadata ?? {}),
+        sourceApp: 'ecs_navigate_mvum_stitch',
+        routeOrigin: 'navigate_mvum_stitch',
+        selectedSegmentIds: draft.selectedSegmentIds,
+        orderedSegmentIds: draft.orderedSegmentIds,
+        warnings: draft.warnings,
+        unresolvedGaps: draft.unresolvedGaps,
+        requiresOnlineRouting: false,
+      },
+      raw: {
+        ...(typeof payload.raw === 'object' && payload.raw ? payload.raw : {}),
+        mvumStitchedRouteDraftId: draft.draftId,
+        selectedSegmentIds: draft.selectedSegmentIds,
+        orderedSegmentIds: draft.orderedSegmentIds,
+      },
+    };
+
+    await endRoadNavigation();
+    await loadTrailPayload(trailPayload, 'route_preview_trail');
+    recordActiveGuidanceStart(exploreNavigateSeparationRunRef.current, {
+      routeId: draft.draftId,
+      routeVersion: draft.updatedAt,
+      sourceKind: 'stitched_route',
+      usesExploreStore: false,
+      usesMvumOverlayStore: false,
+      hasGeometry: true,
+      stepCount: 0,
+    });
+    setFollowUser(true);
+    requestStartExpedition('trail');
+    showToast('MVUM STITCHED GUIDANCE STARTING');
+  }, [
+    activeRun?.build_snapshot,
+    endRoadNavigation,
+    loadRuns,
+    loadTrailPayload,
+    mvumStitchedRouteDraft,
+    requestStartExpedition,
+    showToast,
+  ]);
+
+  const handleMvumSegmentTap = useCallback((segment: SegmentSelectionPayload) => {
+    if (segment?.kind !== 'mvum_segment' || segment.id == null) return;
+    const segmentId = String(segment.id).trim();
+    if (!segmentId) return;
+    hapticMicro();
+    const currentIds = mvumSelectionStoreRef.current.getSnapshot().selectedSegmentIds;
+    const nextIds = toggleMvumSelectedSegmentId(currentIds, segmentId);
+    const wasSelected = nextIds.length < currentIds.length;
+    mvumSelectionStoreRef.current.toggleSegment(segmentId);
+    showToast(
+      wasSelected
+        ? 'MVUM SEGMENT REMOVED'
+        : 'MVUM SEGMENT SELECTED',
+    );
+  }, [showToast]);
+
   const handleMapSegmentTap = useCallback((segment: SegmentSelectionPayload) => {
+    if (segment?.kind === 'mvum_segment') {
+      handleMvumSegmentTap(segment);
+      return;
+    }
     if (segment?.kind === 'route_geometry_segment') {
       handleRouteGeometrySegmentTap(segment);
       return;
@@ -18678,7 +19411,7 @@ const toggleRemotenessOverlay = useCallback(() => {
     if (segment?.kind === 'explore_route') {
       handleExploreRouteSegmentTap(segment);
     }
-  }, [handleExploreRouteSegmentTap, handleRouteGeometrySegmentTap]);
+  }, [handleExploreRouteSegmentTap, handleMvumSegmentTap, handleRouteGeometrySegmentTap]);
 
   const closeRouteCatalogViewportSelection = useCallback(() => {
     setSelectedRouteCatalogViewportFeatureId(null);
@@ -19495,6 +20228,22 @@ const handleRoadOverlayReroute = useCallback(() => {
   userLocation,
 ]);
 
+const handleMapLifecycleMetrics = useCallback((payload: {
+  label?: string;
+  before?: MapLifecycleSnapshot | null;
+  after?: MapLifecycleSnapshot | null;
+} | null) => {
+  const after = payload?.after ?? null;
+  if (!after) return;
+  const before = previousMapLifecycleSnapshotRef.current ?? payload?.before ?? after;
+  recordMapLifecycleSample(exploreNavigateSeparationRunRef.current, {
+    label: payload?.label ?? 'navigate_map',
+    before,
+    after,
+  });
+  previousMapLifecycleSnapshotRef.current = after;
+}, []);
+
 const mapTiltAlertMarkers = useMemo<React.ComponentProps<typeof MapRenderer>['tiltAlertMarkers']>(
   () => (showTiltAlertZones
     ? (safeArray(tiltAlertMarkers as any) as NonNullable<React.ComponentProps<typeof MapRenderer>['tiltAlertMarkers']>)
@@ -19858,7 +20607,10 @@ const stableMapSurface = useMemo(() => {
         selectedRouteGeometrySegmentIds={selectedRouteGeometrySegmentIds}
         onRouteBuilderUpdate={handleRouteBuilderUpdate}
         onRouteBuilderGestureStateChange={handleRouteBuilderGestureStateChange}
+        onMapLifecycleMetrics={handleMapLifecycleMetrics}
         remoteOverlay={remotenessMapOverlay}
+        mvumOverlay={navigateMvumMapOverlay}
+        stitchedRoutePreview={navigateMvumStitchedRoutePreview}
         dispersedCampingEligibility={dispersedCampingEligibilityLayer}
         establishedCampsites={establishedCampsitesLayer}
         campsiteSearchPolygon={{
@@ -20722,6 +21474,31 @@ const stableMapSurface = useMemo(() => {
                 style={[
                   styles.quickActionsTrigger,
                   { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
+                  mvumOverlayEnabled && styles.quickActionsTriggerActive,
+                ]}
+                onPress={toggleMvumOverlay}
+                activeOpacity={0.85}
+                hitSlop={EDGE_CONTROL_HIT_SLOP}
+                accessibilityRole="switch"
+                accessibilityState={{
+                  checked: mvumOverlayEnabled,
+                }}
+                accessibilityLabel="MVUM trail segments overlay"
+                accessibilityHint="Toggles selectable MVUM trail segments without loading Explore route catalogs."
+              >
+                <Ionicons
+                  name="trail-sign-outline"
+                  size={17}
+                  color={mvumOverlayEnabled ? '#091014' : TACTICAL.amber}
+                />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
+              <TouchableOpacity
+                style={[
+                  styles.quickActionsTrigger,
+                  { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
                   routeGeometryOverlayEnabled && styles.quickActionsTriggerActive,
                 ]}
                 onPress={toggleRouteGeometryOverlay}
@@ -21141,9 +21918,14 @@ const stableMapSurface = useMemo(() => {
   handleTiltAlertTap,
   handleUserDrag,
   handleRoadClassification,
+  handleMapLifecycleMetrics,
   handleRouteBuilderGestureStateChange,
   handleRouteBuilderUpdate,
   remotenessMapOverlay,
+  navigateMvumMapOverlay,
+  navigateMvumStitchedRoutePreview,
+  mvumOverlayEnabled,
+  toggleMvumOverlay,
   dispersedCampingEligibilityLayer,
   dispersedCampingError,
   dispersedCampingRegions.length,
@@ -22187,6 +22969,77 @@ const stableMapSurface = useMemo(() => {
       <Text style={styles.routeGeometryOverlayLegendWarning} numberOfLines={2}>
         ECS geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.
       </Text>
+    </View>
+  ) : null}
+
+  {mvumOverlayEnabled && isMapUIReady ? (
+    <View
+      pointerEvents="auto"
+      style={[
+        styles.routeGeometryOverlayLegend,
+        {
+          left: OVERLAY_EDGE,
+          bottom: bottomLeftMapOverlayStackBottom +
+            (routeGeometryOverlayEnabled ? 86 + OVERLAY_GAP : 0) +
+            (exploreRoutesEnabled ? 42 + OVERLAY_GAP : 0),
+        },
+      ]}
+    >
+      <View style={styles.routeGeometryOverlayLegendHeader}>
+        <Ionicons name="trail-sign-outline" size={12} color={TACTICAL.amber} />
+        <Text style={styles.routeGeometryOverlayLegendTitle}>MVUM SEGMENTS</Text>
+      </View>
+      <Text style={styles.routeGeometryOverlayLegendText} numberOfLines={2}>
+        {mvumViewportLegendMessage}
+      </Text>
+      <Text style={styles.routeGeometryOverlayLegendText} numberOfLines={3}>
+        {mvumStitchLegendMessage}
+      </Text>
+      <Text style={styles.routeGeometryOverlayLegendWarning} numberOfLines={2}>
+        MVUM geometry is planning/reference data. Verify current posted rules, seasonal closures, and vehicle legality.
+      </Text>
+      <View style={styles.routeBuilderStatusActions}>
+        <TouchableOpacity
+          style={[
+            styles.routeBuilderStatusAction,
+            mvumStitchActionDisabled && styles.routeBuilderStatusActionDisabled,
+          ]}
+          onPress={handleBuildMvumStitchedRoute}
+          disabled={mvumStitchActionDisabled}
+          activeOpacity={0.84}
+          accessibilityRole="button"
+          accessibilityLabel="Build Route from selected MVUM segments"
+        >
+          <Text
+            style={[
+              styles.routeBuilderStatusActionText,
+              mvumStitchActionDisabled && styles.routeBuilderStatusActionTextDisabled,
+            ]}
+          >
+            {mvumStitchStatus === 'loading' ? 'BUILDING' : 'BUILD ROUTE'}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.routeBuilderStatusAction,
+            mvumStartStitchedGuidanceDisabled && styles.routeBuilderStatusActionDisabled,
+          ]}
+          onPress={handleStartMvumStitchedGuidance}
+          disabled={mvumStartStitchedGuidanceDisabled}
+          activeOpacity={0.84}
+          accessibilityRole="button"
+          accessibilityLabel="Start stitched MVUM guidance"
+        >
+          <Text
+            style={[
+              styles.routeBuilderStatusActionText,
+              mvumStartStitchedGuidanceDisabled && styles.routeBuilderStatusActionTextDisabled,
+            ]}
+          >
+            START
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   ) : null}
 

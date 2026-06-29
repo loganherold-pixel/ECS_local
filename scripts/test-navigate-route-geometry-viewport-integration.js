@@ -4,83 +4,79 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const navigatePath = path.join(root, 'app', '(tabs)', 'navigate.tsx');
-const domainPath = path.join(root, 'lib', 'routeCatalogViewport.ts');
-const clientPath = path.join(root, 'lib', 'routeCatalogViewportClient.ts');
+const domainPath = path.join(root, 'lib', 'routeGeometryViewport.ts');
+const clientPath = path.join(root, 'lib', 'routeGeometryViewportClient.ts');
+const contractsPath = path.join(root, 'lib', 'routeDataContracts.ts');
 const mapRendererPath = path.join(root, 'components', 'navigate', 'MapRenderer.tsx');
 
 const navigate = fs.readFileSync(navigatePath, 'utf8');
 const domain = fs.existsSync(domainPath) ? fs.readFileSync(domainPath, 'utf8') : '';
 const client = fs.existsSync(clientPath) ? fs.readFileSync(clientPath, 'utf8') : '';
+const contracts = fs.existsSync(contractsPath) ? fs.readFileSync(contractsPath, 'utf8') : '';
 const mapRenderer = fs.existsSync(mapRendererPath) ? fs.readFileSync(mapRendererPath, 'utf8') : '';
 
-assert(domain.includes('ROUTE_CATALOG_VIEWPORT_DEFAULT_LIMIT = 500'), 'Viewport catalog query should request the full ECS route cap for the zoomed viewport.');
-assert(domain.includes('buildRouteCatalogViewportQuery'), 'Viewport catalog service should build bbox/radius/region queries.');
-assert(domain.includes('queryRouteCatalogViewportRecords'), 'Viewport catalog service should filter authoritative route catalog records by map bounds.');
-assert(domain.includes('routeCatalogViewportFeaturesToRouteGeometrySegments'), 'Viewport catalog service should normalize catalog routes into Mapbox line segments.');
-assert(domain.includes('featureKind') && domain.includes('trailhead_marker'), 'Viewport catalog service should emit point fallbacks only when route geometry is missing.');
-assert(domain.includes('guidanceReady') && domain.includes('geometryStatus'), 'Viewport catalog features should expose guidance readiness and geometry status metadata.');
 assert(
-  client.includes("functions.invoke('route-catalog-search'") &&
-    client.includes('includeGeometry: true') &&
-    client.includes('includePreviewGeometry: true') &&
-    client.includes('recommendationOnly: false'),
-  'Navigate route geometry viewport should use route-catalog-search with full catalog geometry, not the segment-only endpoint.',
+  domain.includes('ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT = 500') &&
+    domain.includes('RouteGeometryViewportFetchCoordinator') &&
+    domain.includes('normalizeRouteGeometryViewportResponse') &&
+    domain.includes('routeGeometryViewportSegmentsToOverlaySegments'),
+  'MVUM viewport domain should own segment normalization, debounced fetch coordination, and overlay conversion.',
 );
 assert(
-  navigate.includes('fetchRouteCatalogViewportFeatures') &&
-    navigate.includes('buildRouteCatalogViewportQuery') &&
-    navigate.includes('RouteCatalogViewportCache') &&
-    navigate.includes('routeCatalogViewportFeaturesToRouteGeometrySegments'),
-  'Navigate should wire the ECS route geometry toggle to the shared route catalog viewport service.',
+  client.includes("functions.invoke('route-geometry-segments'") &&
+    client.includes('includeReferenceGeometry') &&
+    client.includes('ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT'),
+  'Navigate MVUM overlay should use the route-geometry-segments endpoint.',
 );
 assert(
-  navigate.includes('routeCatalogViewportResult') &&
-    navigate.includes('routeCatalogViewportPointMarkers') &&
-    navigate.includes('routeGeometryViewportFetchCoordinatorRef') &&
-    navigate.includes('routeGeometryViewportOverlayEnabled'),
-  'Navigate should keep debounced viewport loading, line features, and trailhead/centroid marker fallbacks.',
+  !client.includes("functions.invoke('route-catalog-search'"),
+  'MVUM geometry segment client must not call the Explore/catalog search endpoint.',
 );
 assert(
-  navigate.includes('Zoom to 10+ to show ECS catalog routes.'),
-  'Navigate should show explicit zoom-too-low copy for ECS catalog routes.',
+  contracts.includes('export type RouteCatalogSummary') &&
+    contracts.includes('export type RouteDetail') &&
+    contracts.includes('export type MvumSegmentSummary') &&
+    contracts.includes('export type MvumSelectedSegment') &&
+    contracts.includes('export type StitchedRouteDraft'),
+  'Shared route contracts should expose separate Explore and Navigate runtime models.',
 );
 assert(
-  navigate.includes('setRouteCatalogViewportResult') &&
-    navigate.includes('routeCatalogViewportCacheRef.current.get') &&
-    navigate.includes('routeCatalogViewportCacheRef.current.set'),
-  'Navigate should cache repeated ECS route catalog viewport queries.',
+  navigate.includes('fetchRouteGeometryViewportSegments') &&
+    navigate.includes('routeGeometryViewportResult') &&
+    navigate.includes('routeGeometryViewportCacheRef') &&
+    navigate.includes('routeGeometryViewportSegmentsToOverlaySegments'),
+  'Navigate should fetch, cache, and render MVUM viewport segments through the geometry segment runtime path.',
+);
+assert(
+  navigate.includes('MvumSegmentSummary') &&
+    navigate.includes('MvumSelectedSegment') &&
+    navigate.includes('StitchedRouteDraft') &&
+    navigate.includes('navigateRouteRuntimeContract'),
+  'Navigate should adapt MVUM overlay state to the Navigate route runtime contract.',
+);
+assert(
+  !navigate.includes('fetchRouteCatalogViewportFeatures') &&
+    !navigate.includes('buildRouteCatalogViewportQuery') &&
+    !navigate.includes('RouteCatalogViewportCache') &&
+    !navigate.includes('routeCatalogViewportFeaturesToRouteGeometrySegments'),
+  'Navigate MVUM overlay must not depend on the route catalog viewport fetch/cache/conversion path.',
+);
+assert(
+  navigate.includes('ECS trail segment geometry needs live coverage or a cached viewport.'),
+  'Navigate should present MVUM/segment availability copy instead of implying Explore catalog loading.',
 );
 assert(
   navigate.includes('routeGeometryViewportSelectedSegmentsRef') &&
     navigate.includes('mergeRouteGeometryViewportSegmentsWithSelected') &&
     navigate.includes('selectedRouteGeometrySegmentIds'),
-  'Navigate should preserve selected viewport segments after panning/zooming.',
+  'Navigate should preserve selected MVUM segments after panning/zooming.',
 );
 assert(
   !navigate.includes('localRouteGeometryOverlayBuild') &&
     navigate.includes('catalogRouteGeometryOverlaySegments') &&
     !navigate.includes('buildRouteGeometryOverlaySegments({') &&
     navigate.includes('routeGeometryOverlayBuild = useMemo'),
-  'Route Geometry button should use zoomed ECS catalog viewport segments instead of local Explorer/Favorite inventory.',
-);
-assert(
-  navigate.includes('selectedRouteCatalogViewportFeature') &&
-    navigate.includes('handleRouteCatalogNavigateToTrailhead') &&
-    navigate.includes('handleRouteCatalogStartHybridGuidance') &&
-    navigate.includes('handleRouteCatalogBuildRouteFromTrail') &&
-    navigate.includes('handleRouteCatalogAddOrStitchSegment') &&
-    navigate.includes('NAVIGATE TO TRAILHEAD') &&
-    navigate.includes('START HYBRID GUIDANCE') &&
-    navigate.includes('BUILD ROUTE FROM TRAIL') &&
-    navigate.includes('ADD/STITCH SEGMENT'),
-  'Navigate should let operators select catalog routes and choose trailhead, hybrid guidance, build, or stitch actions.',
-);
-assert(
-  navigate.includes('geometryStatusCopy') &&
-    navigate.includes('TRAILHEAD ONLY') &&
-    navigate.includes('INSUFFICIENT GEOMETRY') &&
-    navigate.includes('GUIDANCE READY'),
-  'Navigate should distinguish guidance-ready, trailhead-only, and insufficient-geometry catalog routes.',
+  'Route Geometry button should use zoomed MVUM viewport segments instead of local Explore/Favorite inventory.',
 );
 assert(
   navigate.includes('resolveNearestRouteGeometryEndpoint') &&
@@ -93,16 +89,16 @@ assert(
   'Navigate Plan should resolve a nearest endpoint while preserving ECS route geometry planning metadata.',
 );
 assert(
-  mapRenderer.includes('markerKind?: string') &&
-    mapRenderer.includes('routeCatalogRouteId') &&
-    mapRenderer.includes('geometryStatus') &&
-    mapRenderer.includes('guidanceReady'),
-  'MapRenderer should preserve route catalog marker metadata through pin tap payloads.',
+  mapRenderer.includes('route-geometry-halo-layer') &&
+    mapRenderer.includes('route-geometry-selected-layer') &&
+    mapRenderer.includes('findRouteGeometrySegmentFeatureAtPoint') &&
+    mapRenderer.includes('selectedRouteGeometrySegmentIds'),
+  'MapRenderer should expose selectable route geometry line layers for MVUM segment stitching.',
 );
 assert(
   !navigate.includes('fitMapToRouteGeometrySegments(routeGeometryOverlaySegments);') ||
     navigate.includes('if (routeGeometryOverlayBuild.catalogViewportActive) return;'),
-  'Navigate should not auto-fit the camera for viewport-fetched catalog geometry.',
+  'Navigate should not auto-fit the camera for viewport-fetched MVUM geometry.',
 );
 
 console.log('Navigate route geometry viewport integration checks passed.');

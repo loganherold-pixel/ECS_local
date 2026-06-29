@@ -404,7 +404,6 @@ assert.notStrictEqual(fallbackImageEntry.thumbnail.state, 'suppressed_mismatch')
   'buildRouteDiscoveryIndex',
   'queryTrailPackDiscoveryIndexCached',
   'revalidateTrailPackDiscoveryIndexCache',
-  'planRouteDiscoveryImagePrefetch',
   'normalizeRouteDiscoveryCoordinateBucket',
   'stableRouteCatalogSearchCoordinate',
   'showTrailPackBlockingLoading',
@@ -413,6 +412,20 @@ assert.notStrictEqual(fallbackImageEntry.thumbnail.state, 'suppressed_mismatch')
 ].forEach((needle) => {
   assert(discoverSource.includes(needle), `Explore should use indexed route discovery wiring: ${needle}.`);
 });
+[
+  'RouteCatalogSummaryCard',
+  'paginateRouteCatalogSummaries',
+  'visibleRouteCatalogSummaries',
+  'handlePreviewRouteCatalogSummary',
+  'handleStartRouteCatalogSummaryGuidance',
+  'fetchRouteCatalogTrailPackDetail(routeId)',
+].forEach((needle) => {
+  assert(discoverSource.includes(needle), `Explore should use summary-first Trail Pack wiring: ${needle}.`);
+});
+assert(
+  !discoverSource.includes('planRouteDiscoveryImagePrefetch'),
+  'Explore Trail Pack summaries should not run image prefetch planning during initial render.',
+);
 assert(
   !discoverSource.includes('Number(routeCatalogSearchCoordinate.latitude).toFixed(4)'),
   'Explore performance/search keys should use the stable route discovery bucket, not raw GPS precision.',

@@ -22,6 +22,7 @@ require.extensions['.ts'] = compileTypescript;
 
 const responses = [];
 const invocations = [];
+const memoryCaches = new Map();
 const mockSupabase = {
   functions: {
     async invoke(name, options) {
@@ -42,6 +43,34 @@ const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
   if (request === '../supabase' && parent?.filename.endsWith(path.join('lib', 'explore', 'liveTrailPackCatalog.ts'))) {
     return { supabase: mockSupabase };
+  }
+  if (
+    request === '../keyValuePersistence' &&
+    parent?.filename.endsWith(path.join('lib', 'explore', 'liveTrailPackCatalog.ts'))
+  ) {
+    return {
+      createPersistedKeyValueCache(fileKey) {
+        if (!memoryCaches.has(fileKey)) {
+          const cache = new Map();
+          memoryCaches.set(fileKey, {
+            get: (key) => cache.get(key) ?? null,
+            set: (key, value) => {
+              cache.set(key, value);
+            },
+            delete: (key) => {
+              cache.delete(key);
+            },
+            clear: () => {
+              cache.clear();
+            },
+            flush: async () => {},
+            waitForHydration: async () => {},
+            isHydrated: () => true,
+          });
+        }
+        return memoryCaches.get(fileKey);
+      },
+    };
   }
   return originalLoad.apply(this, [request, parent, isMain]);
 };
@@ -184,6 +213,7 @@ function searchResponse(records, coverageState) {
     longitude: -121.21,
     radiusMiles: 500,
     locationSource: 'live_gps',
+    limit: 500,
   };
   const highLimitRefreshKey = createLiveTrailPackCatalogRefreshKey(highLimitCriteria);
   const stagedSnapshots = [];
