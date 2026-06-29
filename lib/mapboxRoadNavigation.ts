@@ -614,9 +614,10 @@ export function buildRoadRouteFromCachedGeometry(params: {
         } as any)))
       : null;
   const createdAt = params.createdAt ?? new Date().toISOString();
+  const guidanceSource = params.source ?? 'cached_geometry';
   const guidance: EcsGuidanceRoute = buildSyntheticEcsGuidanceRouteFromGeometry({
     id: params.id,
-    source: params.source ?? 'summary_only',
+    source: guidanceSource,
     geometry,
     distanceMeters: distanceM,
     durationSeconds: durationS,
@@ -637,7 +638,7 @@ export function buildRoadRouteFromCachedGeometry(params: {
     steps: guidance.steps,
   });
   const providerMetadata: RoadNavProviderMetadata = {
-    provider: params.source ?? 'summary_only',
+    provider: guidanceSource,
     routeUuid: null,
     routeIndex: 0,
     alternativesRequested: false,

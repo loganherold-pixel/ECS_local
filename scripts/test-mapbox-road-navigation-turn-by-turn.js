@@ -4,9 +4,12 @@ const path = require('path');
 const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
+const moduleCache = new Map();
 
 function loadTsModule(relativePath) {
   const filename = path.join(root, relativePath);
+  if (moduleCache.has(filename)) return moduleCache.get(filename).exports;
+
   const source = fs.readFileSync(filename, 'utf8');
   const output = ts.transpileModule(source, {
     compilerOptions: {
@@ -17,6 +20,7 @@ function loadTsModule(relativePath) {
     fileName: filename,
   }).outputText;
   const mod = { exports: {} };
+  moduleCache.set(filename, mod);
   const localRequire = (request) => {
     if (request === './mapConfig') {
       return {
@@ -47,6 +51,10 @@ function loadTsModule(relativePath) {
     }
     if (request === './navigation/ecsGuidanceModel') {
       return loadTsModule(path.join('lib', 'navigation', 'ecsGuidanceModel.ts'));
+    }
+    if (request.startsWith('.')) {
+      const target = path.relative(root, path.join(path.dirname(filename), `${request}.ts`));
+      return loadTsModule(target);
     }
     return require(request);
   };

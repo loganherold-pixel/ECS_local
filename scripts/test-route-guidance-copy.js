@@ -60,6 +60,11 @@ function loadTsModule(relativePath) {
 }
 
 const { buildRoadRouteFromCachedGeometry } = loadTsModule(path.join('lib', 'mapboxRoadNavigation.ts'));
+const {
+  ACTIVE_GUIDANCE_REFRESHED_STEPS_UNAVAILABLE_MESSAGE,
+  buildActiveGuidanceStateFromRoadRoute,
+  buildVersionedActiveGuidanceDirectionList,
+} = loadTsModule(path.join('lib', 'navigation', 'activeGuidanceState.ts'));
 
 const origin = { lat: 38.55, lng: -109.62 };
 const destinationCoordinate = { lat: 38.68, lng: -109.48 };
@@ -87,6 +92,45 @@ assert.strictEqual(
 assert(
   !/cached route/i.test(cachedRoute.steps[0].instruction),
   'Active guidance should never read "cached route" as a destination.',
+);
+assert.strictEqual(
+  cachedRoute.guidance.guidanceMode,
+  'turn_by_turn',
+  'Downloaded/cached route geometry should promote into active synthetic guidance when it has usable coordinates.',
+);
+assert.strictEqual(
+  cachedRoute.guidance.guidanceSourceLabel,
+  'ECS geometry guidance',
+  'Cached geometry guidance should disclose that ECS synthesized directions from saved geometry.',
+);
+assert.ok(
+  cachedRoute.guidance.steps.length >= 2,
+  'Cached geometry guidance should include at least a proceed step and an arrival step.',
+);
+
+const cachedActiveGuidance = buildActiveGuidanceStateFromRoadRoute({
+  route: cachedRoute,
+  refreshReason: 'initial',
+  refreshedAt: '2026-06-03T12:01:00.000Z',
+});
+const cachedActiveDirections = buildVersionedActiveGuidanceDirectionList({
+  activeGuidance: cachedActiveGuidance,
+  progress: null,
+  status: 'navigation_active',
+});
+assert.strictEqual(
+  cachedActiveDirections.state,
+  'ready',
+  'Active cached geometry guidance should render a ready direction list without waiting for live progress.',
+);
+assert.ok(
+  cachedActiveDirections.items.length >= 2,
+  'Active cached geometry guidance should expose route steps in the directions list.',
+);
+assert.notStrictEqual(
+  cachedActiveDirections.emptyMessage,
+  ACTIVE_GUIDANCE_REFRESHED_STEPS_UNAVAILABLE_MESSAGE,
+  'Active cached geometry guidance must not show the false refreshed-steps-unavailable message.',
 );
 
 const namedRoute = buildRoadRouteFromCachedGeometry({

@@ -4,6 +4,7 @@ export type EcsGuidanceRouteSource =
   | 'trail_catalog'
   | 'approach_only'
   | 'trailhead_only'
+  | 'cached_geometry'
   | 'imported_trace'
   | 'summary_only';
 
@@ -11,6 +12,7 @@ export type EcsGuidanceMode = 'turn_by_turn' | 'summary_only' | 'unavailable';
 export type EcsGuidanceSourceLabel =
   | 'Mapbox turn-by-turn'
   | 'ECS verified route guidance'
+  | 'ECS geometry guidance'
   | 'Imported route guidance'
   | 'Summary only';
 export type EcsSyntheticGuidanceRouteKind = 'road' | 'trail' | 'path' | 'offroad';
@@ -498,6 +500,7 @@ function sourceLabelForGuidance(
   if (guidanceMode !== 'turn_by_turn') return 'Summary only';
   if (source === 'mapbox_directions') return 'Mapbox turn-by-turn';
   if (source === 'imported_trace') return 'Imported route guidance';
+  if (source === 'cached_geometry') return 'ECS geometry guidance';
   if (source === 'ecs_verified_route' || source === 'trail_catalog') return 'ECS verified route guidance';
   return 'Summary only';
 }
