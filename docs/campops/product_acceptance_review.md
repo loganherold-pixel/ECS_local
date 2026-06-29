@@ -4,7 +4,7 @@ CampOps product objective:
 
 > Help users decide where they can legally, realistically, and conservatively end the day when the plan changes.
 
-This document separates engineering readiness from launch readiness. Fixture tests, typed contracts, guarded Android QA, and restricted risk acceptance make CampOps reviewable for a restricted closed-field test, but public rollout and provider-influenced rollout still depend on real provider validation, broader privacy/storage approval, production acceptance, and field evidence.
+This document separates engineering readiness from launch readiness. Fixture tests, typed contracts, guarded Android QA, guarded privacy/storage approval, and provider shadow-only/no-influence posture make CampOps reviewable for a restricted closed-field test, but public rollout and provider-influenced rollout still depend on real provider validation, broader privacy/storage approval, production acceptance, and field evidence. The prior risk-acceptance packet expired on 2026-06-16 and is retired.
 
 ## Status Legend
 
@@ -21,7 +21,7 @@ This document separates engineering readiness from launch readiness. Fixture tes
 | --- | --- | --- |
 | Internal dev | `pass` | Deterministic pipeline, fixture tests, docs, and disabled-by-default rollout flags are in place. |
 | Internal beta | `pass` | Ready for controlled internal tester evaluation with fixtures, source transparency, guarded Android evidence, and disabled-by-default risky surfaces. |
-| Restricted closed field test | `partial` | CampOps is risk-accepted for the approved cohort/scope only. Android/device QA and guarded privacy/storage pass for this packet; provider influence remains shadow-only/unapproved, field tester sessions remain follow-up, and AI/telemetry/community publishing stay disabled unless separately approved. |
+| Restricted closed field test | `partial` | CampOps is ready with restrictions through standard readiness gates. Android/device QA and guarded privacy/storage pass for this packet; provider influence remains shadow-only/unapproved, field tester sessions remain follow-up, risk acceptance is expired/retired, and AI/telemetry/community publishing stay disabled unless separately approved. |
 | Limited regional rollout | `blocked` | Real legal/access, closure, fire, weather, and service provider quality is not yet proven by region. |
 | Broad rollout | `blocked` | Requires validated providers, product/privacy approval for debrief governance and telemetry sinks, production support playbooks, and field evidence. |
 
@@ -78,7 +78,7 @@ Required:
 - Field testers receive clear limitations for legal/access/provider confidence.
 - `field_test_plan.md` checklists and privacy-safe feedback schema are used for every test route/region label.
 
-Current status: `partial`; risk-accepted for restricted cohort/scope only.
+Current status: `partial`; ready with restrictions under standard gates. The prior risk acceptance is expired/retired.
 
 ### Limited Region Rollout
 

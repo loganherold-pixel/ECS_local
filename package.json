@@ -74,6 +74,7 @@
     "gate:pre-closed-field-test": "node scripts/run-pre-closed-field-test-gates.mjs",
     "gate:pre-closed-field-test:risk-accepted": "node scripts/run-pre-closed-field-test-gates.mjs --risk-accepted",
     "test:closed-field-gate": "node scripts/test-closed-field-test-readiness-gate.mjs",
+    "test:closed-field-risk-acceptance": "node scripts/test-closed-field-risk-acceptance.mjs",
     "test:provider-readiness-gate": "node scripts/test-provider-readiness-gate.mjs",
     "test:pre-closed-field-gate": "node scripts/test-pre-closed-field-test-gate.mjs",
     "test:campops-live-readiness": "node scripts/test-campops-live-readiness-gate.mjs",

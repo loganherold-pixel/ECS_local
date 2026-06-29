@@ -363,8 +363,8 @@ test('implementation gates can be internal beta ready while closed field evidenc
   assert.equal(result.closedFieldTestReady, false);
   assert.equal(result.status, 'internal_beta_ready');
   assert.ok(result.blockers.includes('campops_privacy_storage_gate_failed'));
-  assert.ok(result.blockers.includes('campops_provider_source_gate_failed'));
   assert.ok(result.blockers.includes('campops_android_device_qa_gate_failed'));
+  assert.ok(!result.blockers.includes('campops_provider_source_gate_failed'));
 });
 
 test('all live readiness gates passing marks closed field test ready', () => {
@@ -403,13 +403,13 @@ test('accepted risk acceptance waives missing closed-field evidence without mark
   assert.equal(result.evidence.androidQa.passed, false);
 });
 
-test('risk acceptance plus shadow-only provider posture can clear the provider source gate', () => {
+test('shadow-only provider posture can clear the provider source gate without active risk acceptance', () => {
   const root = makeTempRepo();
   writeFixture(root, {
     providerApproved: false,
     privacyApproved: true,
     androidComplete: true,
-    riskAccepted: true,
+    riskAccepted: false,
   });
 
   const result = buildCampOpsLiveReadinessResult({ rootDir: root, now: fixedNow });
@@ -417,9 +417,8 @@ test('risk acceptance plus shadow-only provider posture can clear the provider s
 
   assert.equal(result.closedFieldTestReady, true);
   assert.equal(result.status, 'closed_field_test_ready');
-  assert.doesNotMatch(riskNote, /provider\/source approval/);
-  assert.doesNotMatch(riskNote, /Android\/device QA/);
-  assert.doesNotMatch(riskNote, /privacy\/storage approval/);
+  assert.equal(result.riskAccepted, false);
+  assert.equal(riskNote, undefined);
   assert.equal(result.evidence.providerReadiness.passed, false);
 });
 

@@ -1,8 +1,10 @@
 # CampOps Closed Field-Test Risk Acceptance
 
-Date: 2026-06-02
+Date: 2026-06-29
 
-Status: accepted
+Status: expired
+
+This risk acceptance expired on 2026-06-16 and is intentionally retired as of 2026-06-29. It is preserved as historical sign-off evidence for the prior restricted APK field-test scope only. It must not be used to waive evidence gates, approve new tester sessions, approve provider influence, or authorize any run outside the expired scope. Any future risk-accepted closed-field run requires renewed product, safety, privacy, and engineering sign-off with a new expiration date.
 
 Risk acceptance mode:
 - restricted_closed_field_test_only
@@ -34,16 +36,16 @@ Risk acceptance mode:
 
 ## APK Field-Test Readiness Sign-Off
 
-- APK field-test readiness status: accepted
+- APK field-test readiness status: expired
 - APK field-test approval date: 2026-06-02
 - APK field-test approver: L. Herold
-- APK field-test decision: CampOps is signed off for restricted closed-field APK testing under the approved scope above.
+- APK field-test decision: historical sign-off only; the approval expired on 2026-06-16 and is not active for new sessions.
 - Provider/source posture: provider output remains shadow-only or unknown unless exact category/region provider influence approval is separately recorded.
 - Non-release posture: this does not approve public release, broad rollout, global provider influence, AI assist, telemetry, or community publishing.
 
 ## Risk-Accepted Incomplete Items
 
-These items are not approved or complete. They are explicitly risk-accepted only if the required sign-offs above are completed.
+These items were not approved or complete. They were explicitly risk-accepted only for the historical scope before the 2026-06-16 expiration.
 
 - Android/device QA evidence incomplete: yes
 - Android QA required fields incomplete: yes
@@ -75,6 +77,6 @@ Provider category/region approval remains incomplete for recommendation influenc
 
 ## Decision
 
-- Status: accepted
-- Decision summary: Guarded closed field-test activation accepted with restrictions and signed off for restricted APK field testing. This accepts the listed incomplete evidence and approval risks for the approved tester cohort only; it does not approve public release, global provider influence, telemetry, AI assist, or community publishing.
-- Remaining concerns: CampOps remains restricted to the approved closed-field scope. Android pin/popup/action QA, cramped-screen QA, broader provider coverage, telemetry sinks, community publishing, and public-safe exports remain follow-up work before broad release.
+- Status: expired
+- Decision summary: Historical guarded closed field-test activation is retired. The expired acceptance no longer accepts incomplete evidence or approval risks for any new run; it does not approve public release, global provider influence, telemetry, AI assist, community publishing, or evidence-gate waivers.
+- Remaining concerns: CampOps can proceed only when standard restricted readiness gates pass without relying on this expired acceptance, or when a new risk-acceptance packet is signed with a current expiration. Broader provider coverage, telemetry sinks, community publishing, and public-safe exports remain follow-up work before broad release.

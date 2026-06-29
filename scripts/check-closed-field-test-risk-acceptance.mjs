@@ -94,6 +94,16 @@ function isDate(value) {
   return /^\d{4}-\d{2}-\d{2}(?:$|T)/.test(value ?? '');
 }
 
+function dateOnly(value) {
+  return String(value ?? '').match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+}
+
+function isExpiredDate(value, now) {
+  const expiration = dateOnly(value);
+  if (!expiration) return false;
+  return expiration < now.toISOString().slice(0, 10);
+}
+
 function isNumeric(value) {
   return /^\d+$/.test(value ?? '') && Number(value) > 0;
 }
@@ -143,9 +153,15 @@ export function buildClosedFieldTestRiskAcceptanceResult(options = {}) {
   const missingFields = [];
   const hardRestrictionViolations = [];
   const riskAcceptedIncompleteItems = [];
+  const blockers = [];
+  const expirationDate = extractBulletValue(markdown, 'Expiration date');
+  const expired = isExpiredDate(expirationDate, now);
+  const explicitExpiredStatus = /^(expired|retired)$/i.test(status) || /^(expired|retired)$/i.test(decision);
+  const statusAccepted = /^accepted$/i.test(status);
+  const decisionAccepted = /^accepted$/i.test(decision);
 
-  if (!/^accepted$/i.test(status)) missingFields.push('Status');
-  if (!/^accepted$/i.test(decision)) missingFields.push('Decision Status');
+  if (!statusAccepted && !explicitExpiredStatus) missingFields.push('Status');
+  if (!decisionAccepted && !explicitExpiredStatus) missingFields.push('Decision Status');
 
   for (const field of SIGN_OFF_FIELDS) {
     const value = extractBulletValue(markdown, field);
@@ -199,26 +215,44 @@ export function buildClosedFieldTestRiskAcceptanceResult(options = {}) {
     engineeringApprovalDate: extractBulletValue(markdown, 'Engineering approval date'),
   };
 
+  if (missingFiles.length > 0) blockers.push('risk_acceptance_required_file_missing');
+  if (missingFields.length > 0) blockers.push('risk_acceptance_required_fields_missing');
+  if (hardRestrictionViolations.length > 0) blockers.push('risk_acceptance_hard_restriction_violation');
+  if (expired || explicitExpiredStatus) blockers.push('risk_acceptance_expired');
+  if ((!statusAccepted || !decisionAccepted) && !expired && !explicitExpiredStatus) {
+    blockers.push('risk_acceptance_not_accepted');
+  }
+
   const passed =
     missingFiles.length === 0 &&
     missingFields.length === 0 &&
-    hardRestrictionViolations.length === 0;
+    hardRestrictionViolations.length === 0 &&
+    statusAccepted &&
+    decisionAccepted &&
+    !expired &&
+    !explicitExpiredStatus;
 
   return {
     passed,
-    status: passed ? 'accepted' : 'not_accepted',
+    status: expired || explicitExpiredStatus ? 'expired' : (passed ? 'accepted' : 'not_accepted'),
     documentStatus: status,
     decisionStatus: decision,
+    expirationDate: expirationDate ?? null,
+    expired: expired || explicitExpiredStatus,
     acceptedBy,
     missingFiles,
     missingFields,
     hardRestrictionViolations: Array.from(new Set(hardRestrictionViolations)),
+    blockers: Array.from(new Set(blockers)),
     riskAcceptedIncompleteItems,
     checkedAt: now.toISOString(),
     notes: [
       'Risk acceptance does not mark Android/device QA, provider readiness, or privacy/storage approval complete.',
       'Provider influence, AI assist, telemetry, and community publishing remain disabled unless separately approved.',
-    ],
+      expired || explicitExpiredStatus
+        ? 'This risk acceptance is expired or retired and must not be used to waive evidence gates.'
+        : null,
+    ].filter(Boolean),
   };
 }
 
@@ -232,11 +266,21 @@ export function writeClosedFieldTestRiskAcceptanceResult(result, options = {}) {
 
 export function formatClosedFieldTestRiskAcceptanceResult(result, options = {}) {
   const root = options.rootDir ?? process.cwd();
+  const statusLabel = result.status === 'expired'
+    ? 'EXPIRED'
+    : result.passed ? 'ACCEPTED' : 'NOT ACCEPTED';
   const lines = [
-    `CampOps closed field-test risk acceptance: ${result.passed ? 'ACCEPTED' : 'NOT ACCEPTED'}`,
+    `CampOps closed field-test risk acceptance: ${statusLabel}`,
     `Result file: ${path.relative(root, pathsFor(root).resultPath)}`,
     `Checked at: ${result.checkedAt}`,
   ];
+  if (result.expirationDate) {
+    lines.push(`Expiration date: ${result.expirationDate}`);
+  }
+  if (result.blockers?.length > 0) {
+    lines.push('', 'Risk acceptance blockers:');
+    for (const blocker of result.blockers) lines.push(`- ${blocker}`);
+  }
   if (result.missingFiles.length > 0) {
     lines.push('', 'Missing files:');
     for (const file of result.missingFiles) lines.push(`- ${file}`);

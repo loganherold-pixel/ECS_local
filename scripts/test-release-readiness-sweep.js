@@ -183,8 +183,9 @@ assert(
 
 assert(
   packageSource.includes('"test:pre-closed-field-gate"') &&
+    packageSource.includes('"test:closed-field-risk-acceptance"') &&
     packageSource.includes('"gate:release-approval-overrides"'),
-  'package.json should expose aggregate pre-closed-field and release override gate regressions.',
+  'package.json should expose aggregate pre-closed-field, risk-acceptance, and release override gate regressions.',
 );
 
 assert(

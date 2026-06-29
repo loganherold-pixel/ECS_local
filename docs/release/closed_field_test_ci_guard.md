@@ -2,7 +2,7 @@
 
 This repository does not currently define a `.github/workflows` CI pattern. Until a release-only or manually triggered CI workflow exists, closed field-test readiness visibility is provided by the local release guard scripts documented here.
 
-This guard is intentionally separate from normal internal beta development. In the current release packet, it is expected to report `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test` and must be treated as restricted closed-field approval only.
+This guard is intentionally separate from normal internal beta development. In the current release packet, it is expected to report `ready_with_restrictions` and must be treated as restricted closed-field approval only. The prior risk-acceptance packet expired on 2026-06-16 and is retired.
 
 ## Release Guard Commands
 
@@ -39,15 +39,15 @@ Passing the static readiness gate with `ready_with_restrictions` still does not 
 
 ## Current Expected Result
 
-Current expected result: `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test`.
+Current expected result: `ready_with_restrictions`.
 
-The static gate may pass only for the approved restricted cohort, region labels, route labels, scenario labels, expiration window, and feature posture recorded in `docs/campops/closed_field_test_risk_acceptance.md`.
+The static gate may pass only while standard restricted readiness gates pass. The expired `docs/campops/closed_field_test_risk_acceptance.md` packet must not be used to waive evidence gates or authorize new sessions.
 
 The aggregate guard may pass only while the restricted evidence posture remains intact. Provider influence is still expected to be `shadow_only_acceptable_not_approved_for_influence`, AI assist remains disabled unless separately approved, telemetry remains disabled unless separately approved, and community publishing remains disabled.
 
-Any result other than `ready_with_restrictions` or `risk_accepted_restricted_closed_field_test` should block closed-field promotion until reviewed.
+Any result other than `ready_with_restrictions` should block closed-field promotion until reviewed.
 
-Latest local audit: 2026-05-17. Risk acceptance is accepted for restricted testing only. Android/device QA is complete for the current QA packet, provider influence remains not approved, guarded privacy/storage is approved for closed-field only, AI assist remains disabled unless separately approved, telemetry remains disabled unless separately approved, and community publishing remains disabled.
+Latest local audit: 2026-06-29. Risk acceptance is expired/retired. Android/device QA is complete for the current QA packet, provider influence remains not approved, guarded privacy/storage is approved for closed-field only, AI assist remains disabled unless separately approved, telemetry remains disabled unless separately approved, and community publishing remains disabled.
 
 ## Future CI Pattern
 

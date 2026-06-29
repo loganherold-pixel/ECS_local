@@ -28,7 +28,7 @@ const packageJson = read('package.json');
   'restricted closed field testing only',
   'Provider readiness | Not approved for influence',
   'Privacy/storage approval | Approved for guarded closed-field only',
-  'Closed field-test risk acceptance | Accepted for restricted test',
+  'Closed field-test risk acceptance | Expired / retired',
 ].forEach((expected) => {
   assert(
     checkoffs.includes(expected),
@@ -40,7 +40,7 @@ const packageJson = read('package.json');
   'restricted closed field testing only',
   'This is not public release approval',
   'ready_with_restrictions',
-  'risk_accepted_restricted_closed_field_test',
+  'Expired / retired',
   'gate:dispatch-convoy-production',
   'Blocked by approvals',
   'gate:established-campgrounds-production',
@@ -110,7 +110,7 @@ const packageJson = read('package.json');
   'is not waived by risk acceptance',
   'blocks forced AI assist, telemetry, and community publishing enablement',
   'Approved for guarded closed-field only',
-  'Accepted for restricted test',
+  'Expired / retired',
 ].forEach((expected) => {
   assert(
     audit.includes(expected),
@@ -167,7 +167,8 @@ assert(
 });
 
 [
-  'risk-accepted restricted closed field test',
+  'ready with restrictions',
+  'prior restricted closed-field risk acceptance expired 2026-06-16',
   'This is not public release approval',
   'Provider influence must remain off until real target-region evidence is accepted',
   'CampOps local debrief `localStorage` must be treated as unencrypted',
@@ -193,9 +194,9 @@ assert(
 });
 
 [
-  'Internal beta ready; restricted closed field test risk-accepted',
-  'internal_beta_ready',
-  'Android/device QA and guarded privacy/storage posture are complete for restricted validation',
+  'Closed field test ready with restrictions; prior risk acceptance expired',
+  'closed_field_test_ready',
+  'visible Android/device QA, guarded privacy/storage approval',
   'Provider/source readiness is not approved for real recommendation influence',
   'Broad real trip/debrief rollout remains blocked',
 ].forEach((expected) => {
@@ -218,8 +219,8 @@ assert(
 });
 
 [
-  'Closed field testing: risk-accepted restricted test',
-  'risk_accepted_restricted_closed_field_test',
+  'Closed field testing: ready with restrictions under standard gates',
+  'Risk acceptance: expired / retired',
   'Provider readiness is not approved for target region/category influence',
   'passes as shadow-only acceptable when provider influence is not requested',
   'shadow_only_acceptable_not_approved_for_influence',
@@ -249,7 +250,7 @@ assert(
 [
   'Restricted closed field test',
   'ready_with_restrictions',
-  'risk_accepted_restricted_closed_field_test',
+  'prior risk-accepted restricted closed field-test packet expired on 2026-06-16 and is retired',
   'provider influence remains unapproved',
   'npm run gate:closed-field-test:json',
 ].forEach((expected) => {
@@ -272,7 +273,8 @@ assert(
 });
 
 [
-  'risk-accepted for the approved cohort/scope only',
+  'ready with restrictions under standard gates',
+  'risk acceptance is expired/retired',
   'Android/device QA and guarded privacy/storage pass for this packet',
   'provider influence remains shadow-only/unapproved',
   'real provider-backed route-line candidate validation remains unresolved',
@@ -314,9 +316,9 @@ assert(
 
 [
   'ready_with_restrictions',
-  'risk_accepted_restricted_closed_field_test',
   'restricted closed-field approval only',
-  'Latest local audit: 2026-05-17',
+  'Latest local audit: 2026-06-29',
+  'Risk acceptance is expired/retired',
   'provider influence remains not approved',
   'provider-readiness stage recorded as `shadow_only_acceptable_not_approved_for_influence`',
   'that status is not provider influence approval',
@@ -345,9 +347,9 @@ assert(
 });
 
 [
-  'risk-accepted for restricted closed field testing only',
+  'ready with restrictions for closed field testing only',
   'ready_with_restrictions',
-  'risk_accepted_restricted_closed_field_test',
+  'Risk acceptance: expired / retired',
   'Provider readiness: not approved for real target-region/category influence',
   'Passing this smoke matrix does not waive public release',
 ].forEach((expected) => {

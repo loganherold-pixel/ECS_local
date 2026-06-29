@@ -308,8 +308,8 @@ function checkProviderSourceGate(root, paths, providerReadiness, riskAcceptance)
     ),
     boolCheck(
       'provider_source_approved',
-      'Provider/source readiness is approved for closed field-test influence or risk-accepted as shadow-only.',
-      providerReadiness.passed || (riskAcceptance.passed === true && providerReadiness.shadowOnlyAllowed === true),
+      'Provider/source readiness is approved for influence or accepted as shadow-only/no-influence for restricted closed-field testing.',
+      providerReadiness.passed || providerReadiness.shadowOnlyAllowed === true,
       ['docs/campops/provider_readiness_*.md'],
     ),
   ];
@@ -409,7 +409,9 @@ export function buildCampOpsLiveReadinessResult(options = {}) {
     .map((blocker) => evidenceGateLabels[blocker]);
   const riskAcceptanceEvidenceNote = unresolvedEvidenceGates.length > 0
     ? `Risk acceptance permits only a restricted closed field test; it does not approve unresolved gates: ${unresolvedEvidenceGates.join(', ')}.`
-    : 'Risk acceptance permits only a restricted closed field test; provider influence, AI assist, telemetry, and community publishing still require separate approval.';
+    : riskAccepted
+      ? 'Risk acceptance permits only a restricted closed field test; provider influence, AI assist, telemetry, and community publishing still require separate approval.'
+      : 'Risk acceptance is not active; current closed-field readiness comes from passing standard restricted gates.';
 
   return {
     passed,

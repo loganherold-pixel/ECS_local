@@ -4,8 +4,9 @@ Date: 2026-05-17
 
 ## Current Status
 
-- Closed field testing: risk-accepted restricted test
-- Effective gate status: `risk_accepted_restricted_closed_field_test`
+- Closed field testing: ready with restrictions under standard gates
+- Effective gate status: `ready_with_restrictions`
+- Risk acceptance: expired / retired; previous packet expired 2026-06-16
 - Public release: blocked
 
 This document separates code-completable work from real provider, device, privacy, and product/safety work. It does not approve public release, provider influence, AI assist, telemetry, community publishing, or broad privacy/storage rollout.
@@ -30,7 +31,8 @@ These items are implementation or repository-scaffolding work. Completion still 
 | Provider readiness gate | `scripts/check-provider-readiness.mjs`, `npm run gate:provider-readiness` | Implemented; passes as shadow-only acceptable when provider influence is not requested; remains not approved for influence |
 | Privacy/storage approval gate | `scripts/check-privacy-storage-approval.mjs`, `npm run gate:privacy-storage` | Implemented; guarded private/local closed-field posture is approved |
 | AI assist approval gate | `scripts/check-ai-assist-approval.mjs`, `npm run gate:ai-assist` | Implemented; passes only because AI assist is disabled |
-| Aggregate pre-closed-field-test gate | `scripts/run-pre-closed-field-test-gates.mjs`, `npm run gate:pre-closed-field-test` | Implemented; evidence mode passes for the current restricted packet with provider-readiness recorded as `shadow_only_acceptable_not_approved_for_influence` |
+| Aggregate pre-closed-field-test gate | `scripts/run-pre-closed-field-test-gates.mjs`, `npm run gate:pre-closed-field-test` | Implemented; evidence mode passes under standard restricted gates with provider-readiness recorded as `shadow_only_acceptable_not_approved_for_influence` |
+| Closed-field risk acceptance gate | `scripts/check-closed-field-test-risk-acceptance.mjs`, `npm run gate:closed-field-test-risk-acceptance` | Implemented; current packet is intentionally expired/retired and must not waive evidence gates |
 
 ## Human/Device/Approval Work
 
@@ -53,14 +55,15 @@ npm run gate:campops-live-readiness:json
 npm run gate:closed-field-test:json
 ```
 
-The closed-field gate reads the evidence docs and should report `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test` for the current restricted packet.
+The closed-field gate reads the evidence docs and should report `ready_with_restrictions` for the current restricted packet. The retired risk-acceptance gate should report expired until a new packet is signed.
 
 ## Expected Current Result
 
-- `gate:campops-live-readiness:json`: `internal_beta_ready`, with provider/source risk-accepted as shadow-only for restricted test
-- `gate:closed-field-test:json`: `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test`
+- `gate:campops-live-readiness:json`: `closed_field_test_ready`, with provider/source accepted as shadow-only/no-influence for restricted test
+- `gate:closed-field-test:json`: `ready_with_restrictions`
 - `gate:pre-closed-field-test`: pass in evidence mode; provider-readiness stage is `shadow_only_acceptable_not_approved_for_influence`
 - `gate:provider-readiness`: shadow-only acceptable when provider influence is not requested; not approved for influence
+- `gate:closed-field-test-risk-acceptance`: expired / retired until new sign-off is recorded
 - `gate:ai-assist`: pass only while AI assist remains disabled
 
 Passing those gates does not approve AI assist, telemetry, community publishing, provider influence, or public release.

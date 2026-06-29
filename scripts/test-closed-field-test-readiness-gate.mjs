@@ -458,6 +458,65 @@ test('ready-with-restrictions fixture passes only with all sections and approved
   assert.ok(blockedByEvidence.blockers.includes('provider_readiness_not_approved'));
 });
 
+test('ready-with-restrictions accepts shadow-only provider readiness without approving influence', () => {
+  const root = makeTempRepo();
+  writeCampOpsLiveReadinessFixtures(root);
+  writeEvidenceDocs(root, { approved: true });
+  writeFile(root, 'docs/campops/rollout.md', rolloutWithGate());
+  writeFile(root, 'docs/campops/closed_field_test_readiness.md', readinessDoc('ready with restrictions'));
+  writeFile(root, 'docs/campops/closed_field_test_risk_acceptance.md', riskAcceptanceDoc('accepted'));
+  writeFile(root, 'docs/campops/provider_readiness.md', [
+    '# CampOps Provider Readiness Reports',
+    '',
+    '## Access Category Policy',
+    '',
+    'CampOps currently treats `legal/access` as one combined provider category unless a region explicitly configures a standalone `access` source provider.',
+    'A combined category can represent legal status and public-access fields, but it must not be reported as independent access readiness.',
+    'Do not approve access influence separately from legal/access.',
+  ].join('\n'));
+  writeFile(root, 'docs/campops/provider_readiness_region_001.md', [
+    '# CampOps Provider Readiness - Region 001',
+    '',
+    '- Region label: Region 001',
+    '- Validation mode: fixture-backed pending real-shadow',
+    '- Provider influence allowed: no',
+    '- Provider shadow mode: yes',
+    '- Raw provider payloads excluded from shared evidence: yes',
+    '- Precise private coordinates excluded: yes',
+    '- Production recommendation impact: none',
+    '- Provider output applied to recommendations: false',
+    '',
+    '## Category Matrix',
+    '',
+    '| Category | Status | Validation mode | Evidence date | Freshness window | Coverage summary | Conflict rate | Stale/unknown rate | Unknown handling behavior | Provider influence allowed | Approver | Approval date | Remaining issues |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| legal/access | not_approved | fixture-backed | 2026-05-17 | fixture only | fixture shape only | 0 | 0 | Unknown remains visible. | no | not approved | not approved | real upstream evidence required |',
+    '| closure/seasonal restriction | not_approved | fixture-backed | 2026-05-17 | fixture only | fixture shape only | 0 | 0 | Unknown remains visible. | no | not approved | not approved | real upstream evidence required |',
+    '| fire restriction | not_approved | fixture-backed | 2026-05-17 | fixture only | fixture shape only | 0 | 0 | Unknown remains visible. | no | not approved | not approved | real upstream evidence required |',
+    '| weather | not_approved | fixture-backed | 2026-05-17 | fixture only | fixture shape only | 0 | 0 | Unknown remains visible. | no | not approved | not approved | real upstream evidence required |',
+    '| service/resupply | not_approved | fixture-backed | 2026-05-17 | fixture only | fixture shape only | 0 | 0 | Unknown remains visible. | no | not approved | not approved | real upstream evidence required |',
+    '',
+    '## Real Upstream Provider Evidence Ledger',
+    '',
+    '| Category | Provider/source | Real shadow status | Coverage rate | Freshness rate | Unknown rate | Stale rate | Conflict rate | Accepted for influence |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
+    '| legal/access | TBD real provider set | not run | n/a | n/a | n/a | n/a | n/a | no |',
+    '| closure/seasonal restriction | TBD real provider set | not run | n/a | n/a | n/a | n/a | n/a | no |',
+    '| fire restriction | TBD real provider set | not run | n/a | n/a | n/a | n/a | n/a | no |',
+    '| weather | TBD real provider set | not run | n/a | n/a | n/a | n/a | n/a | no |',
+    '| service/resupply | TBD real provider set | not run | n/a | n/a | n/a | n/a | n/a | no |',
+  ].join('\n'));
+
+  const result = buildClosedFieldTestReadinessResult({ rootDir: root, now: fixedNow });
+
+  assert.equal(result.status, 'ready_with_restrictions');
+  assert.equal(result.passed, true);
+  assert.equal(result.evidenceStatus.providerReadiness, 'shadow_only_accepted');
+  assert.equal(result.providerReadinessGate.passed, false);
+  assert.equal(result.providerReadinessGate.shadowOnlyAllowed, true);
+  assert.ok(!result.blockers.includes('provider_readiness_not_approved'));
+});
+
 test('closed-field privacy approval ignores broad-rollout caveats outside approval packet', () => {
   const root = makeTempRepo();
   writeCampOpsLiveReadinessFixtures(root);

@@ -2,7 +2,7 @@
 
 Date: 2026-06-02
 
-Latest gate audit: 2026-06-02. `npm run gate:campops-live-readiness` reports **Closed field test ready** for the restricted APK field-test scope. `npm run gate:closed-field-test` remains the aggregate restricted-scope evidence gate. Risk acceptance is accepted for the approved cohort/scope, so guarded APK field testing may proceed under the restrictions in this document.
+Latest gate audit: 2026-06-29. `npm run gate:campops-live-readiness` reports **Closed field test ready** for the restricted APK field-test scope. `npm run gate:closed-field-test` remains the aggregate restricted-scope evidence gate. Risk acceptance expired on 2026-06-16 and is intentionally retired, so guarded APK field testing may proceed only while the standard restricted readiness gates pass.
 
 ## Current Decision
 
@@ -12,7 +12,7 @@ Closed field-test status: **ready with restrictions**.
 
 APK field-test status: **signed off for restricted APK field testing**.
 
-CampOps may move to guarded real-world APK field testing only for the approved cohort, route/region labels, and feature posture recorded in `docs/campops/closed_field_test_risk_acceptance.md`. This does not approve public release, global provider influence, telemetry, AI assist, or community publishing.
+CampOps may move to guarded real-world APK field testing only while the standard restricted readiness gates pass. The historical risk-acceptance packet in `docs/campops/closed_field_test_risk_acceptance.md` expired on 2026-06-16 and is intentionally retired; it must not be used to waive evidence gates or authorize new sessions. This does not approve public release, global provider influence, telemetry, AI assist, or community publishing.
 
 ## APK Field-Test Sign-Off
 
@@ -138,7 +138,7 @@ If and only if the required gates pass, closed field testing must use this restr
 - `campopsTelemetryEnabled=false` unless a sink is explicitly approved.
 - Manual privacy-safe feedback is required after every test session.
 
-If the required gates do not pass, closed field testing remains blocked unless `docs/campops/closed_field_test_risk_acceptance.md` is explicitly accepted. A risk-accepted restricted test must preserve this same posture and must not treat incomplete evidence as approved.
+If the required gates do not pass, closed field testing remains blocked unless a renewed `docs/campops/closed_field_test_risk_acceptance.md` is explicitly accepted. A risk-accepted restricted test must preserve this same posture and must not treat incomplete evidence as approved.
 
 ## Provider Influence Limits
 
@@ -203,7 +203,7 @@ Closed field testing can proceed with any of these blockers only when `docs/camp
 
 ## Current Required Follow-Up
 
-1. Execute the restricted closed-field run only inside the approved cohort, route labels, region labels, and expiration window.
+1. Execute the restricted closed-field run only while the standard readiness gates pass; any run that relies on risk acceptance requires renewed sign-off with a current expiration.
 2. Re-run `npm run gate:campops-live-readiness` after any CampOps route/pin/popup/scoring changes.
 3. Complete real provider-backed active route-line candidate validation before provider-influenced regional rollout.
 4. Run real provider shadow validation for Region 001 and any additional target region label before requesting provider influence.
@@ -222,6 +222,6 @@ Use `docs/campops/closed_field_test_evidence_template.md` for future closed fiel
 
 Current outcome: **ready with restrictions**.
 
-CampOps may proceed as a **restricted APK field test** inside the approved cohort/scope, with community publishing off, telemetry off unless approved, AI disabled unless approved, and provider influence disabled or shadow-only for unapproved categories and regions.
+CampOps may proceed as a **restricted APK field test** only while standard restricted readiness gates pass, with community publishing off, telemetry off unless approved, AI disabled unless approved, and provider influence disabled or shadow-only for unapproved categories and regions. The expired 2026-06-16 risk acceptance does not authorize new sessions.
 
 This path preserves the evidence truth: provider readiness remains unapproved for influence, broad real trip/debrief rollout is not approved, AI/telemetry/community publishing remain disabled, and real provider-backed route-line validation is still required before broader regional rollout.

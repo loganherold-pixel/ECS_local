@@ -4,7 +4,7 @@ Date: 2026-05-17
 
 ## Summary
 
-Automated release smoke coverage is green for the static/source-contract checks captured here. Closed field testing is now **risk-accepted for a restricted scope only** through the release readiness gate; this matrix does not mark ECS ready for public release, broad rollout, provider influence, AI assist, telemetry, or community publishing.
+Automated release smoke coverage is green for the static/source-contract checks captured here. Closed field testing is now **ready with restrictions** through standard readiness gates; the prior risk-acceptance packet expired on 2026-06-16 and is retired. This matrix does not mark ECS ready for public release, broad rollout, provider influence, AI assist, telemetry, or community publishing.
 
 Status key:
 
@@ -44,7 +44,7 @@ Status key:
 | 24 | App survives reload | Needs Device | `npm run smoke`, `npm run test:startup-warning-hygiene` | Headless project smoke and startup warning checks pass; actual app reload must be confirmed on Android runtime. |
 | 25 | TypeScript passes | Passed | `npx tsc --noEmit --pretty false` | Direct TypeScript check passes. |
 | 26 | Lint passes | Passed | `npm run lint` | Expo lint passes. |
-| 27 | Release readiness checks run | Restricted | `npm run test:release-readiness`, `npm run gate:closed-field-test:json` | Diagnostic sweep passes, and the closed-field gate reports `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test`. Provider influence, AI assist, telemetry, community publishing, broad privacy/storage rollout, and public release remain blocked unless separately approved. |
+| 27 | Release readiness checks run | Restricted | `npm run test:release-readiness`, `npm run gate:closed-field-test:json` | Diagnostic sweep passes, and the closed-field gate reports `ready_with_restrictions`. Provider influence, AI assist, telemetry, community publishing, broad privacy/storage rollout, and public release remain blocked unless separately approved. |
 
 ## Checks Run
 
@@ -107,7 +107,7 @@ Dispatch:
 Release gates:
 
 - `npm run test:release-readiness` - passed.
-- `npm run gate:closed-field-test:json` - passed with `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test`.
+- `npm run gate:closed-field-test:json` - passed with `ready_with_restrictions`.
 - `npx tsc --noEmit --pretty false` - passed.
 - `npm run lint` - passed.
 
@@ -137,12 +137,13 @@ These require Android device/emulator runtime and should be run before release c
 
 ## Release Readiness
 
-Current release readiness is **risk-accepted for restricted closed field testing only**.
+Current release readiness is **ready with restrictions for closed field testing only**.
 
 The restricted state is intentional and honest. The latest gate reports:
 
 - Closed-field status: `ready_with_restrictions`.
-- Effective status: `risk_accepted_restricted_closed_field_test`.
+- Effective status: `ready_with_restrictions`.
+- Risk acceptance: expired / retired; the 2026-06-16 packet no longer waives evidence gates.
 - Android/device QA evidence: complete for the current restricted QA packet, with real provider-backed route candidate validation still required before broader rollout.
 - Provider readiness: not approved for real target-region/category influence.
 - Privacy/storage: approved for guarded closed-field posture only; broad real trip/debrief rollout remains blocked.

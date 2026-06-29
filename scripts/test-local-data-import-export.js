@@ -9,6 +9,10 @@ const vehicleStoreSource = fs.readFileSync(path.join(root, 'lib', 'vehicleStore.
 const loadoutStoreSource = fs.readFileSync(path.join(root, 'lib', 'loadoutStore.ts'), 'utf8');
 const routeStoreSource = fs.readFileSync(path.join(root, 'lib', 'routeStore.ts'), 'utf8');
 const smokeFixturePath = path.join(root, 'fixtures', 'local-data', 'ecs-smoke-local-profile.json');
+const devSmokeSeedSourcePath = path.join(root, 'lib', 'dev', 'localDataSmokeSeed.ts');
+const devSmokeSeedSource = fs.existsSync(devSmokeSeedSourcePath)
+  ? fs.readFileSync(devSmokeSeedSourcePath, 'utf8')
+  : '';
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -100,10 +104,22 @@ assert.ok(
   localDataSource.includes('importLocalDataFromRawJson(rawJson') &&
     localDataSource.includes('const rawJson = await pickLocalDataImportJson();') &&
     localDataSource.includes('return importLocalDataFromRawJson(rawJson') &&
-    localDataSource.includes('fixtures/local-data/ecs-smoke-local-profile.json') &&
+    localDataSource.includes("import('./dev/localDataSmokeSeed')") &&
     localDataSource.includes('typeof __DEV__') &&
     localDataSource.includes('dev_smoke_seed'),
   'Local data import should share one raw JSON merge engine between picker import and the dev smoke seed.',
+);
+
+assert.ok(
+  !localDataSource.includes('fixtures/local-data/ecs-smoke-local-profile.json') &&
+    !localDataSource.includes('../fixtures/local-data'),
+  'Production local data runtime must not statically reference smoke fixture paths.',
+);
+
+assert.ok(
+  devSmokeSeedSource.includes('export function loadDevSmokeLocalDataSeed') &&
+    devSmokeSeedSource.includes('fixtures/local-data/ecs-smoke-local-profile.json'),
+  'Smoke seed fixture loading should live in an explicit dev-only module.',
 );
 
 assert.ok(

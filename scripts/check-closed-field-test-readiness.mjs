@@ -4,6 +4,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { buildCampOpsLiveReadinessResult } from './check-campops-live-readiness.mjs';
+import { buildProviderReadinessResult } from './check-provider-readiness.mjs';
 
 const RESULT_RELATIVE_PATH = path.join('.smoke', 'closed-field-test-readiness-result.json');
 
@@ -138,6 +139,10 @@ function isAcceptedStatus(value) {
   return /^accepted$/i.test(value ?? '');
 }
 
+function isExpiredOrRetiredStatus(value) {
+  return /^(expired|retired)$/i.test(value ?? '');
+}
+
 function valueAffirmsYes(markdown, label) {
   const value = extractBulletValue(markdown, label) ?? '';
   return /\byes\b/i.test(value) && !/\bno\b/i.test(value);
@@ -258,20 +263,21 @@ export function buildClosedFieldTestRiskAcceptanceResult(markdown, options = {})
 
   const expirationDate = extractBulletValue(markdown, 'Expiration date');
   const expired = isIsoDate(expirationDate) && new Date(expirationDate).getTime() < now.getTime();
+  const explicitlyExpired = isExpiredOrRetiredStatus(topStatus) || isExpiredOrRetiredStatus(decisionStatus);
   const statusAccepted = isAcceptedStatus(topStatus) && isAcceptedStatus(decisionStatus);
   const blockers = [];
-  if (!statusAccepted) blockers.push('risk_acceptance_not_accepted');
+  if (!statusAccepted && !explicitlyExpired) blockers.push('risk_acceptance_not_accepted');
   if (missingFields.length > 0) blockers.push('risk_acceptance_required_fields_missing');
   if (missingSignOffs.length > 0) blockers.push('risk_acceptance_signoffs_incomplete');
   if (missingScope.length > 0) blockers.push('risk_acceptance_scope_incomplete');
   if (missingRiskAcceptedItems.length > 0) blockers.push('risk_accepted_incomplete_items_not_explicit');
   if (missingRestrictions.length > 0) blockers.push('risk_acceptance_restrictions_incomplete');
-  if (expired) blockers.push('risk_acceptance_expired');
+  if (expired || explicitlyExpired) blockers.push('risk_acceptance_expired');
 
   return {
     exists,
     accepted: blockers.length === 0,
-    status: statusAccepted ? 'accepted' : 'not_accepted',
+    status: expired || explicitlyExpired ? 'expired' : (statusAccepted ? 'accepted' : 'not_accepted'),
     topStatus,
     decisionStatus,
     missingFields,
@@ -311,7 +317,14 @@ export function detectAndroidDeviceQaStatus(markdown) {
   return complete && !negative ? 'complete' : 'incomplete';
 }
 
-export function detectProviderReadinessStatus(markdown) {
+export function detectProviderReadinessStatus(markdown, providerReadinessGate = null) {
+  if (providerReadinessGate?.passed === true) return 'approved';
+  if (
+    providerReadinessGate?.shadowOnlyAllowed === true &&
+    providerReadinessGate?.influenceRequested === false
+  ) {
+    return 'shadow_only_accepted';
+  }
   if (!markdown) return 'not_approved';
   const negative = textMatches(markdown, [
     /\bnot approved\b/i,
@@ -389,7 +402,7 @@ export function detectAiAssistStatus(markdown) {
   return approved ? 'enabled_approved' : 'enabled_unapproved';
 }
 
-export function detectClosedFieldTestEvidenceStatus(markdownByFile = {}) {
+export function detectClosedFieldTestEvidenceStatus(markdownByFile = {}, providerReadinessGate = null) {
   const combinedProvider = [
     markdownByFile.readiness,
     markdownByFile.providerReadiness,
@@ -410,7 +423,7 @@ export function detectClosedFieldTestEvidenceStatus(markdownByFile = {}) {
   const status = detectClosedFieldTestStatus(markdownByFile.readiness);
   return {
     androidDeviceQa: detectAndroidDeviceQaStatus(markdownByFile.mobileQaEvidence),
-    providerReadiness: detectProviderReadinessStatus(combinedProvider),
+    providerReadiness: detectProviderReadinessStatus(combinedProvider, providerReadinessGate),
     privacyStorageApproval: detectPrivacyStorageApprovalStatus(combinedPrivacy),
     aiAssist: detectAiAssistStatus(combinedAi),
     closedFieldTesting: status === 'ready_with_restrictions' ? 'ready_with_restrictions' : 'blocked',
@@ -421,7 +434,9 @@ export function buildNormalizedClosedFieldTestBlockers(evidenceStatus) {
   const blockers = [];
   if (evidenceStatus.closedFieldTesting === 'blocked') blockers.push('closed_field_test_status_blocked');
   if (evidenceStatus.androidDeviceQa !== 'complete') blockers.push('android_device_qa_incomplete');
-  if (evidenceStatus.providerReadiness !== 'approved') blockers.push('provider_readiness_not_approved');
+  if (!['approved', 'shadow_only_accepted'].includes(evidenceStatus.providerReadiness)) {
+    blockers.push('provider_readiness_not_approved');
+  }
   if (evidenceStatus.privacyStorageApproval !== 'approved') blockers.push('privacy_storage_owner_approval_incomplete');
   if (evidenceStatus.aiAssist === 'enabled_unapproved') blockers.push('ai_assist_enabled_without_approval');
   if (evidenceStatus.aiAssist === 'unsafe_override_allowed') blockers.push('ai_hard_gate_override_allowed');
@@ -446,6 +461,7 @@ export function buildClosedFieldTestReadinessResult(options = {}) {
   const privacyStorageReview = readIfExists(evidenceFilePaths.privacyStorageReview);
   const aiRealOutputReview = readIfExists(evidenceFilePaths.aiRealOutputReview);
   const riskAcceptanceMarkdown = readIfExists(evidenceFilePaths.closedFieldTestRiskAcceptance);
+  const providerReadinessGate = buildProviderReadinessResult({ rootDir: root, now });
 
   if (!readiness) missingFiles.push(path.relative(root, readinessPath));
   if (!rollout) missingFiles.push(path.relative(root, rolloutPath));
@@ -472,7 +488,7 @@ export function buildClosedFieldTestReadinessResult(options = {}) {
     mobileQaEvidence,
     privacyStorageReview,
     aiRealOutputReview,
-  });
+  }, providerReadinessGate);
   const riskAcceptance = buildClosedFieldTestRiskAcceptanceResult(riskAcceptanceMarkdown, { now });
   const liveReadiness = buildCampOpsLiveReadinessResult({ rootDir: root, now });
   const normalizedBlockers = buildNormalizedClosedFieldTestBlockers(evidenceStatus);
@@ -503,6 +519,9 @@ export function buildClosedFieldTestReadinessResult(options = {}) {
   }
   if (evidenceStatus.aiAssist === 'disabled') {
     notes.push('AI real-output approval is incomplete; this is a restriction satisfied only while AI assist remains disabled.');
+  }
+  if (evidenceStatus.providerReadiness === 'shadow_only_accepted') {
+    notes.push('Provider readiness is accepted only for restricted shadow-only/no-influence closed-field testing; provider influence remains disabled for unapproved categories and regions.');
   }
   if (riskAcceptance.exists && !riskAcceptance.accepted) {
     notes.push('Closed field-test risk acceptance is present but not accepted; it does not override incomplete evidence gates.');
@@ -550,6 +569,7 @@ export function buildClosedFieldTestReadinessResult(options = {}) {
     blockers,
     followUp,
     evidenceStatus,
+    providerReadinessGate,
     liveReadiness,
     riskAcceptance,
     evidenceFiles,

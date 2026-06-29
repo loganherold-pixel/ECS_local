@@ -6,14 +6,14 @@ Date: 2026-05-18
 
 ECS is ready for **restricted closed field testing only**.
 
-This is not public release approval. The executable gates, QA checkoff record, and risk-acceptance posture now agree that closed-field testing may proceed only inside the approved restricted scope. Provider influence, AI assist, telemetry, community publishing, and broad privacy/storage rollout remain disabled or restricted unless separately approved.
+This is not public release approval. The executable gates and QA checkoff record now agree that closed-field testing may proceed only under the current restricted readiness gates. The prior risk-acceptance packet expired on 2026-06-16 and is intentionally retired; it must not be used to waive evidence gates. Provider influence, AI assist, telemetry, community publishing, and broad privacy/storage rollout remain disabled or restricted unless separately approved.
 
 ## Gate Results
 
 | Gate | Result | Notes |
 | --- | --- | --- |
 | `npm run test:release-readiness` | Passed | Release diagnostic wiring, checklist sections, risk summary, scenario matrix, selectors, and package script coverage are present. |
-| `npm run gate:closed-field-test:json` | Passed with restrictions | Gate reports `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test`. Provider influence remains not approved. AI assist, telemetry, and community publishing remain disabled unless separately approved. |
+| `npm run gate:closed-field-test:json` | Passed with restrictions | Gate reports `ready_with_restrictions`. Provider influence remains not approved. AI assist, telemetry, and community publishing remain disabled unless separately approved. |
 | `npm run gate:dispatch-convoy-production` | Blocked by approvals | Dispatch/Convoy code and Android evidence pass, but production remains blocked until position-sharing privacy/product approval and production owner decision are accepted. |
 | `npm run gate:established-campgrounds-production` | Blocked by deployment/device evidence | Cached endpoint, attribution, freshness, zoom-gated mobile pin/detail/action wiring, and runbook checks pass, but production remains blocked until scheduler, provider-health, sync-run, canonical-row, availability freshness, Android visible pin/popup/action evidence, and owner-decision evidence are recorded. |
 | `npm run gate:bluetooth-power-obd2-production` | Blocked by real-hardware evidence | Native BLE configuration, unified scanner contract, OBD2 pipeline, and E2E plan checks pass, but production remains blocked until Android BLE, power station, EcoFlow BLE/cloud separation, OBD2 live/no-data/disconnect, and owner-decision evidence are recorded. |
@@ -31,7 +31,7 @@ This is not public release approval. The executable gates, QA checkoff record, a
 | `npm run gate:provider-readiness` | Shadow-only acceptable; not approved for influence | The command passes for the current no-influence restricted packet, but provider readiness remains blocked for production influence until real upstream target-region/category evidence is accepted. |
 | `npm run gate:privacy-storage` | Approved for guarded closed-field only | Private/local guarded closed-field posture is approved. Broad real trip/debrief rollout remains blocked until encryption-backed storage, durable provider/source caches, telemetry sinks, community publishing, and public-safe export workflows receive separate approval. |
 | `npm run gate:release-approval-overrides` | Passed | Forced AI assist, telemetry, and community publishing enablement fail closed unless exact approval evidence exists. This gate is included in `npm run gate:pre-closed-field-test`. |
-| `npm run gate:closed-field-test-risk-acceptance` | Accepted for restricted test | Risk acceptance covers the restricted cohort/scope only, with explicit expiration and rollback path. |
+| `npm run gate:closed-field-test-risk-acceptance` | Expired / retired | Historical risk acceptance expired on 2026-06-16. It preserves prior scope/signoff evidence, but no longer waives evidence gates or authorizes new restricted runs. |
 | `npm run test:closed-field-gate` | Passed | Closed-field readiness gate behavior is covered by the contract script. |
 | `npm run test:dispatch-convoy-production` | Passed | Dispatch/Convoy production regression verifies code/evidence checks pass while approval blockers remain active. |
 | `npm run test:established-campgrounds-production` | Passed | Established campgrounds production regression verifies cached mobile endpoint, attribution, freshness, zoom-gated map pins/details, and CampOps action wiring pass while deployment/device evidence blockers remain active. |
@@ -82,9 +82,9 @@ This is not public release approval. The executable gates, QA checkoff record, a
 
 ## Accepted Risks
 
-Restricted closed field-test risk is accepted for the approved cohort, region/route labels, expiration, and rollback path recorded in `docs/campops/closed_field_test_risk_acceptance.md`.
+Restricted closed field-test risk acceptance is expired and retired. The historical cohort, region/route labels, expiration, and rollback path remain recorded in `docs/campops/closed_field_test_risk_acceptance.md`.
 
-That acceptance does not waive public release requirements, provider influence approval, telemetry/community publishing approval, or broad privacy/storage approval.
+That expired acceptance does not waive public release requirements, provider influence approval, telemetry/community publishing approval, broad privacy/storage approval, or any current evidence gate.
 
 ## Passed Evidence
 

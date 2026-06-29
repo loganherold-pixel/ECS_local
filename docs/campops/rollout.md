@@ -117,14 +117,14 @@ Rollout decisions should reference `docs/campops/product_acceptance_review.md` b
 | --- | --- |
 | Internal dev | Core pipeline, feature flags, fixture tests, and docs are `pass`. |
 | Internal beta | Mobile QA is at least partially executed, community publishing remains off, and AI/telemetry are explicitly gated. |
-| Restricted closed field test | `closed_field_test_readiness.md` reports `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test`: no unresolved P0/P1, Android/device QA complete for the guarded packet, guarded privacy/storage approved, rollback path present, community publishing off, telemetry off unless approved, AI assist disabled unless approved, and provider influence shadow-only unless exact provider/category/region approval exists. |
+| Restricted closed field test | `closed_field_test_readiness.md` reports `ready_with_restrictions`: no unresolved P0/P1, Android/device QA complete for the guarded packet, guarded privacy/storage approved, rollback path present, community publishing off, telemetry off unless approved, AI assist disabled unless approved, and provider influence shadow-only unless exact provider/category/region approval exists. |
 | Closed field test without risk acceptance | All closed-field gates pass without risk acceptance: provider readiness approved for the target region/category, Android/device QA complete, privacy/storage approved, rollback verified, community publishing off, telemetry off unless approved, and AI assist approved or disabled. |
 | Limited region rollout | Provider quality, source freshness, stale/unknown/conflict rates, support plan, and rollback plan are accepted for the region. |
 | Broad rollout | Multiple regions pass provider readiness, community governance is approved if used, and field evidence supports user comprehension of confidence/missing-data copy. |
 
 Current product acceptance status is tracked in the launch blocker registry in `product_acceptance_review.md`. A feature flag being technically available does not mean the corresponding product area is launch-ready.
 
-A risk-accepted restricted closed field test is not the same as full closed-field readiness. The current packet has accepted restricted risk, Android/device QA for the guarded packet, and guarded privacy/storage approval, but provider influence remains unapproved and broad rollout remains blocked. Any alternate restricted path requires an explicitly accepted `docs/campops/closed_field_test_risk_acceptance.md` with product, safety, privacy, and engineering sign-offs, a recorded expiration date, approved tester cohort, approved build, approved labels, incident contact, and rollback owner/path.
+The prior risk-accepted restricted closed field-test packet expired on 2026-06-16 and is retired. The current restricted path depends on standard readiness gates passing, Android/device QA for the guarded packet, and guarded privacy/storage approval; provider influence remains unapproved and broad rollout remains blocked. Any future risk-accepted restricted path requires a new explicitly accepted `docs/campops/closed_field_test_risk_acceptance.md` with product, safety, privacy, and engineering sign-offs, a recorded expiration date, approved tester cohort, approved build, approved labels, incident contact, and rollback owner/path.
 
 ## Executable Closed Field-Test Gate
 
@@ -135,7 +135,7 @@ npm run gate:campops-live-readiness:json
 npm run gate:closed-field-test:json
 ```
 
-The JSON closed-field gate reads the evidence docs and currently reports `ready_with_restrictions` / `risk_accepted_restricted_closed_field_test` for the accepted restricted packet. The aggregate gate remains useful for broader release review:
+The JSON closed-field gate reads the evidence docs and currently reports `ready_with_restrictions` for the restricted packet. The aggregate gate remains useful for broader release review:
 
 1. `npm run smoke`
 2. `npm run gate:android-qa`
@@ -144,7 +144,7 @@ The JSON closed-field gate reads the evidence docs and currently reports `ready_
 5. `npm run gate:ai-assist`
 6. `npm run gate:closed-field-test`
 
-The aggregate may pass for a restricted closed field test only when all gates pass or when `docs/campops/closed_field_test_risk_acceptance.md` is explicitly accepted with real sign-offs and scope. That posture is restricted to approved testers, approved labels only, and the recorded expiration date. It must preserve rollback, manual privacy-safe feedback after every session, and all non-negotiable restrictions.
+The aggregate may pass for a restricted closed field test only when all gates pass or when a renewed `docs/campops/closed_field_test_risk_acceptance.md` is explicitly accepted with real sign-offs and scope. Any risk-accepted posture is restricted to approved testers, approved labels only, and the recorded expiration date. It must preserve rollback, manual privacy-safe feedback after every session, and all non-negotiable restrictions.
 
 Passing `npm run smoke` does not mean closed field testing is ready. Smoke only verifies the app can be inspected headlessly; Android/device QA, provider readiness, privacy/storage approval, AI assist approval, telemetry approval, and community publishing posture remain separate release gates.
 

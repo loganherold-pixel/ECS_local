@@ -4,9 +4,9 @@ Date: 2026-05-17
 
 ## Decision Summary
 
-Closed-field-test readiness recommendation: **risk-accepted restricted closed field test**.
+Closed-field-test readiness recommendation: **ready with restrictions**.
 
-CampOps has enough implementation coverage, fixture coverage, Android visual QA evidence, privacy defaults, and controlled activation gates to proceed only inside the restricted closed-field scope recorded in `docs/campops/closed_field_test_risk_acceptance.md`.
+CampOps has enough implementation coverage, fixture coverage, Android visual QA evidence, privacy defaults, and controlled activation gates to proceed only while the standard restricted readiness gates pass. The previous restricted risk-acceptance scope recorded in `docs/campops/closed_field_test_risk_acceptance.md` expired on 2026-06-16 and is retired.
 
 This is not public release approval. Provider influence remains unapproved outside accepted shadow-only validation, AI assist remains disabled unless separately approved, telemetry remains disabled unless separately approved, and community publishing remains disabled.
 
@@ -14,12 +14,12 @@ This is not public release approval. Provider influence remains unapproved outsi
 
 | Evidence area | Current status |
 | --- | --- |
-| Beta dates | Internal beta preparation and controlled enablement artifacts are recorded. Restricted closed-field risk acceptance expires 2026-06-16. |
+| Beta dates | Internal beta preparation and controlled enablement artifacts are recorded. The prior restricted closed-field risk acceptance expired 2026-06-16 and is intentionally retired as of 2026-06-29. |
 | Tester count | No completed real-world closed-field tester sessions recorded in this repo yet. |
 | Device coverage | Android evidence captured on `SM-X230`, including tablet portrait, phone-size portrait, and phone landscape validation where applicable. |
 | Region labels tested | `Region 001 - Northern Nevada controlled provider shadow cell`, fixture-backed/shadow-only unless future real provider evidence is accepted. |
 | Provider mode used | Shadow validation only; provider output is not approved to influence recommendations. |
-| Flags enabled | Fixture/test runs used explicit CampOps flags as needed. Closed-field activation must use the approved risk-accepted restricted scope, not broad raw rollout flags. |
+| Flags enabled | Fixture/test runs used explicit CampOps flags as needed. Closed-field activation must use the standard restricted readiness gates or a renewed risk-accepted scope, not broad raw rollout flags. |
 | AI assist mode | Fixture/adversarial tests pass. Real-output review remains incomplete for enabling AI assist, so AI assist remains off. |
 | Offline/cached scenarios tested | Fixture and contract tests cover offline/stale behavior. Navigate camp-layer smoke confirms zoom-gated/no-result behavior without broad-area pin loading. |
 | Endpoint recommendation scenarios tested | Fixture tests cover endpoint recommendation generation and decision points. Real route field sessions remain follow-up. |
@@ -138,7 +138,9 @@ Remaining Android follow-up:
 
 ## Closed Field-Test Readiness Recommendation
 
-Recommendation: **risk-accepted restricted closed field test**.
+Recommendation: **ready with restrictions**.
+
+CampOps may proceed only when current restricted readiness gates pass, or when a renewed risk-acceptance packet is signed. The expired 2026-06-16 packet no longer waives evidence gates.
 
 CampOps may proceed only with:
 

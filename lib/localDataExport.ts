@@ -528,6 +528,11 @@ function isDevRuntime(): boolean {
   return typeof __DEV__ !== 'undefined' && __DEV__;
 }
 
+async function loadDevSmokeSeedExport(): Promise<LocalDataExport> {
+  const { loadDevSmokeLocalDataSeed } = await import('./dev/localDataSmokeSeed');
+  return loadDevSmokeLocalDataSeed();
+}
+
 export async function importDevSmokeLocalData(): Promise<LocalDataImportResult> {
   const importedCounts: Record<string, number> = {};
   const skippedCounts: Record<string, number> = {};
@@ -543,7 +548,7 @@ export async function importDevSmokeLocalData(): Promise<LocalDataImportResult> 
   }
 
   try {
-    const smokeSeedExport = require('../fixtures/local-data/ecs-smoke-local-profile.json');
+    const smokeSeedExport = await loadDevSmokeSeedExport();
     return importLocalDataFromRawJson(JSON.stringify(smokeSeedExport), { source: 'dev_smoke_seed' });
   } catch (e: any) {
     console.error('[LocalDataExport] Dev smoke seed import failed:', e);
