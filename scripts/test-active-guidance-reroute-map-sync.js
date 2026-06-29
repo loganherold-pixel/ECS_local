@@ -53,6 +53,10 @@ const newGeometry = [
   { lat: 38.7832, lng: -121.2048 },
 ];
 
+function sameCoordinate(left, right) {
+  return left.lat === right.lat && left.lng === right.lng;
+}
+
 const oldRoute = route('route-old', 0, oldGeometry, 320);
 const newRoute = route('route-new', 1, newGeometry, 410);
 
@@ -90,7 +94,11 @@ assert.deepStrictEqual(
 );
 
 const appliedLine = buildActiveGuidanceRouteLineSync({
-  route: newRoute,
+  route: {
+    ...newRoute,
+    routeVersion: 'active-guidance-version-route-new',
+  },
+  routeVersion: 'active-guidance-version-route-new',
   navigationStatus: 'navigation_active',
   routeConfidenceState: 'reroute_applied',
   routeStatusLabel: 'Route updated',
@@ -105,6 +113,128 @@ assert.notStrictEqual(
   appliedLine.routeLineKey,
   activeLine.routeLineKey,
   'Reroute success should produce a new map route-line identity.',
+);
+assert(
+  appliedLine.routeLineKey.includes('active-guidance-version-route-new'),
+  'Active route line key should include the active guidance routeVersion when available.',
+);
+
+const repeatedRerouteGeometries = [
+  [
+    { lat: 38.7812, lng: -121.2068 },
+    { lat: 38.7821, lng: -121.2057 },
+    { lat: 38.7832, lng: -121.2048 },
+  ],
+  [
+    { lat: 38.7814, lng: -121.2062 },
+    { lat: 38.7824, lng: -121.205 },
+    { lat: 38.7832, lng: -121.2048 },
+  ],
+  [
+    { lat: 38.7818, lng: -121.2059 },
+    { lat: 38.7827, lng: -121.2047 },
+    { lat: 38.7832, lng: -121.2048 },
+  ],
+];
+const repeatedRerouteLines = repeatedRerouteGeometries.map((geometry, index) =>
+  buildActiveGuidanceRouteLineSync({
+    route: {
+      ...route(`route-reroute-${index + 1}`, index + 2, geometry, 430 + index * 20),
+      routeVersion: `active-guidance-version-reroute-${index + 1}`,
+    },
+    routeVersion: `active-guidance-version-reroute-${index + 1}`,
+    navigationStatus: 'navigation_active',
+    routeConfidenceState: 'reroute_applied',
+    routeStatusLabel: 'Route updated',
+  }),
+);
+assert.strictEqual(
+  new Set(repeatedRerouteLines.map((line) => line.routeLineKey)).size,
+  repeatedRerouteLines.length,
+  'Repeated reroutes should produce unique keyed route-line replacements instead of reusing stale source identity.',
+);
+assert(
+  repeatedRerouteLines.every((line, index) => {
+    const geometry = repeatedRerouteGeometries[index];
+    return (
+      line.status === 'reroute_applied' &&
+      line.routeLineKey?.includes(`active-guidance-version-reroute-${index + 1}`) &&
+      line.geometry.length === geometry.length &&
+      line.geometry.every((point, pointIndex) => sameCoordinate(point, geometry[pointIndex]))
+    );
+  }),
+  'Each reroute should render only the selected route geometry for that same routeVersion.',
+);
+assert(
+  !repeatedRerouteLines.some((line, index) => {
+    const geometry = repeatedRerouteGeometries[index];
+    return (
+      line.geometry.length === 2 &&
+      sameCoordinate(line.geometry[0], geometry[0]) &&
+      sameCoordinate(line.geometry[1], geometry[geometry.length - 1])
+    );
+  }),
+  'Repeated reroutes must never collapse to a direct user-to-destination connector line.',
+);
+assert.deepStrictEqual(
+  repeatedRerouteLines[repeatedRerouteLines.length - 1].geometry,
+  repeatedRerouteGeometries[repeatedRerouteGeometries.length - 1],
+  'The final visible active route line should be the latest accepted reroute geometry.',
+);
+
+const staleVersionLine = buildActiveGuidanceRouteLineSync({
+  route: {
+    ...newRoute,
+    routeVersion: 'stale-active-guidance-version',
+  },
+  routeVersion: 'active-guidance-version-route-new',
+  navigationStatus: 'navigation_active',
+  routeConfidenceState: 'reroute_applied',
+  routeStatusLabel: 'Route updated',
+});
+assert.strictEqual(staleVersionLine.status, 'unavailable');
+assert.strictEqual(staleVersionLine.routeLineKey, null);
+assert.strictEqual(staleVersionLine.versionMismatchPrevented, true);
+assert.deepStrictEqual(
+  staleVersionLine.geometry,
+  [],
+  'Active route line renderer must ignore geometry whose routeVersion does not match the active guidance routeVersion.',
+);
+
+const directConnectorGeometry = [
+  { lat: 38.781, lng: -121.207 },
+  { lat: 38.7832, lng: -121.2048 },
+];
+const invalidGuidanceRoute = route('route-direct-connector', 2, [], 410);
+const connectorFallbackLine = buildActiveGuidanceRouteLineSync({
+  route: invalidGuidanceRoute,
+  fallbackGeometry: directConnectorGeometry,
+  navigationStatus: 'navigation_active',
+  routeConfidenceState: 'reroute_applied',
+  routeStatusLabel: 'Route updated',
+});
+assert.strictEqual(connectorFallbackLine.status, 'unavailable');
+assert.strictEqual(connectorFallbackLine.routeLineKey, null);
+assert.deepStrictEqual(
+  connectorFallbackLine.geometry,
+  [],
+  'Active guidance route line must not render fallback user-to-destination connector geometry.',
+);
+
+const mixedRouteVersionsLine = buildActiveGuidanceRouteLineSync({
+  route: route('route-mixed', 3, [
+    { lat: 38.781, lng: -121.207, routeVersion: 'old-route' },
+    { lat: 38.7817, lng: -121.2055, routeVersion: 'new-route' },
+    { lat: 38.7832, lng: -121.2048, routeVersion: 'new-route' },
+  ], 410),
+  routeVersion: 'new-route',
+  navigationStatus: 'navigation_active',
+});
+assert.strictEqual(mixedRouteVersionsLine.status, 'unavailable');
+assert.deepStrictEqual(
+  mixedRouteVersionsLine.geometry,
+  [],
+  'Active guidance route line must reject geometry that mixes routeVersion-tagged coordinates.',
 );
 
 const failedLine = buildActiveGuidanceRouteLineSync({
@@ -128,14 +258,35 @@ const directionsSource = fs.readFileSync(path.join(root, 'lib', 'activeGuidanceD
 assert(
   mapRendererSource.includes('routeLineKey?: string | null') &&
     mapRendererSource.includes('routeLineKey: props.routeLineKey ?? null') &&
-    mapRendererSource.includes('routeLineKey'),
-  'MapRenderer should carry an explicit active route-line identity through the map bridge payload.',
+    mapRendererSource.includes('lastRouteLineKey') &&
+    mapRendererSource.includes("setGeoJson('route-source', featureCollection([]))"),
+  'MapRenderer should carry an explicit active route-line identity and clear the route source before keyed replacements.',
+);
+assert.strictEqual(
+  (mapRendererSource.match(/ensureSource\('route-source'/g) || []).length,
+  1,
+  'MapRenderer should maintain one active route source and replace its data on reroute.',
+);
+assert.strictEqual(
+  (mapRendererSource.match(/ensureLineLayer\('route-layer', 'route-source'/g) || []).length,
+  1,
+  'MapRenderer should maintain one active route layer during repeated reroutes.',
 );
 assert(
   navigateSource.includes('buildActiveGuidanceRouteLineSync') &&
     navigateSource.includes('activeRoadRouteLineSync') &&
+    navigateSource.includes('route: activeRoadGuidanceRoute') &&
+    navigateSource.includes('routeVersion: roadNavigation.session.activeGuidance?.routeVersion') &&
+    navigateSource.includes('[ECS Guidance] route line version mismatch') &&
+    !navigateSource.includes('fallbackGeometry: roadNavigation.session.route?.geometry') &&
     navigateSource.includes('routeLineKey={displayedRouteLineKey}'),
-  'Navigate should derive the active road route line from EcsGuidanceRoute identity and pass it to MapRenderer.',
+  'Navigate should derive the active road route line only from the versioned active guidance route and pass it to MapRenderer.',
+);
+assert(
+  navigateSource.includes('const roadNavigationRouteLineRequired') &&
+    navigateSource.includes('if (roadNavigationRouteLineRequired)') &&
+    navigateSource.includes('return [];'),
+  'Navigate should not fall back to stale preview/run geometry when an active guidance route line is unavailable.',
 );
 assert(
   navigateSource.includes('previousActiveRoadRouteLineKeyRef') &&

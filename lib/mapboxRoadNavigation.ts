@@ -6,6 +6,10 @@ import {
   type EcsGuidanceRoute,
   type EcsGuidanceRouteSource,
 } from './navigation/ecsGuidanceModel';
+import {
+  buildRouteVersionFromParts,
+  tagRouteGeometry,
+} from './navigation/routeVersion';
 import { buildHighlightedRouteInstruction } from './routeGuidanceCopy';
 
 export type RoadNavStatus =
@@ -60,6 +64,15 @@ export interface RoadNavSearchSuggestion {
 
 export type RoadNavGuidanceMode = 'turn_by_turn' | 'summary_only';
 
+export interface RoadNavProviderMetadata extends Record<string, unknown> {
+  provider: string;
+  profile?: string | null;
+  routeUuid?: string | null;
+  routeIndex?: number | null;
+  responseRouteIndex?: number | null;
+  alternativesRequested?: boolean;
+}
+
 export interface RoadNavBannerInstruction {
   distanceAlongGeometryM: number | null;
   primaryText: string | null;
@@ -105,7 +118,11 @@ export interface RoadNavLeg {
 
 export interface RoadNavRoute {
   id: string;
+  routeVersion?: string;
+  routeIndex?: number;
   mapboxRouteUuid: string | null;
+  selectedRouteIndex?: number;
+  providerMetadata?: RoadNavProviderMetadata;
   guidance: EcsGuidanceRoute;
   origin: RoadNavCoordinate;
   destination: RoadNavDestination;
@@ -610,14 +627,39 @@ export function buildRoadRouteFromCachedGeometry(params: {
     limitedTrailGuidance: params.limitedTrailGuidance,
     guidanceLimitationLabel: params.guidanceLimitationLabel,
   });
+  const routeVersion = buildRouteVersionFromParts({
+    routeId: params.id,
+    routeUuid: null,
+    rerouteGeneration: guidance.rerouteGeneration,
+    routeIndex: 0,
+    generatedAt: createdAt,
+    geometry,
+    steps: guidance.steps,
+  });
+  const providerMetadata: RoadNavProviderMetadata = {
+    provider: params.source ?? 'summary_only',
+    routeUuid: null,
+    routeIndex: 0,
+    alternativesRequested: false,
+  };
 
   return {
     id: params.id,
+    routeVersion,
+    routeIndex: 0,
     mapboxRouteUuid: null,
-    guidance,
+    selectedRouteIndex: 0,
+    providerMetadata,
+    guidance: {
+      ...guidance,
+      routeVersion,
+      routeIndex: 0,
+      geometry: tagRouteGeometry(guidance.geometry, routeVersion),
+      providerMetadata,
+    },
     origin: params.origin,
     destination: params.destination,
-    geometry,
+    geometry: tagRouteGeometry(geometry, routeVersion),
     distanceM,
     durationS,
     steps: [
@@ -781,6 +823,14 @@ function normalizeMapboxRoadRoute(
 
   const routeId = randomId('road-route');
   const createdAt = new Date().toISOString();
+  const routeUuid = normalizeMapboxRouteUuid(route);
+  const providerMetadata: RoadNavProviderMetadata = {
+    provider: 'mapbox_directions',
+    profile: DIRECTIONS_PROFILE,
+    routeUuid: routeUuid ?? routeId,
+    routeIndex,
+    alternativesRequested: true,
+  };
   const guidance = normalizeMapboxDirectionsRouteToEcsGuidanceRoute(route, {
     id: routeId,
     source: 'mapbox_directions',
@@ -788,14 +838,33 @@ function normalizeMapboxRoadRoute(
     createdAt,
     rerouteGeneration: params.rerouteGeneration ?? 0,
   });
+  const routeVersion = buildRouteVersionFromParts({
+    routeId,
+    routeUuid,
+    rerouteGeneration: params.rerouteGeneration ?? 0,
+    routeIndex,
+    generatedAt: createdAt,
+    geometry,
+    steps: guidance.steps,
+  });
 
   const normalizedRoute: RoadNavRoute = {
     id: routeId,
-    mapboxRouteUuid: normalizeMapboxRouteUuid(route),
-    guidance,
+    routeVersion,
+    routeIndex,
+    mapboxRouteUuid: routeUuid,
+    selectedRouteIndex: routeIndex,
+    providerMetadata,
+    guidance: {
+      ...guidance,
+      routeVersion,
+      routeIndex,
+      geometry: tagRouteGeometry(guidance.geometry, routeVersion),
+      providerMetadata,
+    },
     origin: params.origin,
     destination: params.destination,
-    geometry,
+    geometry: tagRouteGeometry(geometry, routeVersion),
     distanceM: Number(route.distance ?? 0),
     durationS: Number(route.duration ?? 0),
     steps,
@@ -814,6 +883,47 @@ function normalizeMapboxRoadRoute(
 
   logRoadNavigationRouteDebug(normalizedRoute, totalResponseStepCount);
   return normalizedRoute;
+}
+
+function reindexRoadRouteOption(route: RoadNavRoute, routeIndex: number): RoadNavRoute {
+  const responseRouteIndex =
+    typeof route.providerMetadata?.responseRouteIndex === 'number'
+      ? route.providerMetadata.responseRouteIndex
+      : route.providerMetadata?.routeIndex ?? route.selectedRouteIndex ?? route.routeIndex ?? routeIndex;
+  const providerMetadata: RoadNavProviderMetadata = {
+    ...route.providerMetadata,
+    provider: route.providerMetadata?.provider ?? 'mapbox_directions',
+    profile: route.providerMetadata?.profile ?? DIRECTIONS_PROFILE,
+    routeUuid: route.providerMetadata?.routeUuid ?? route.mapboxRouteUuid ?? route.id,
+    routeIndex,
+    responseRouteIndex,
+    alternativesRequested: route.providerMetadata?.alternativesRequested ?? true,
+  };
+  const routeVersion = buildRouteVersionFromParts({
+    routeId: route.guidance.id ?? route.id,
+    routeUuid: route.mapboxRouteUuid ?? route.guidance.routeUuid ?? null,
+    rerouteGeneration: route.guidance.rerouteGeneration ?? 0,
+    routeIndex,
+    generatedAt: route.guidance.createdAt ?? route.createdAt,
+    geometry: route.guidance.geometry?.length ? route.guidance.geometry : route.geometry,
+    steps: route.guidance.steps,
+  });
+
+  return {
+    ...route,
+    routeVersion,
+    routeIndex,
+    selectedRouteIndex: routeIndex,
+    providerMetadata,
+    geometry: tagRouteGeometry(route.geometry, routeVersion),
+    guidance: {
+      ...route.guidance,
+      routeVersion,
+      routeIndex,
+      providerMetadata,
+      geometry: tagRouteGeometry(route.guidance.geometry, routeVersion),
+    },
+  };
 }
 
 export async function fetchRoadRouteAlternatives(params: {
@@ -845,7 +955,8 @@ export async function fetchRoadRouteAlternatives(params: {
       if (Math.abs(durationDelta) > 1) return durationDelta;
       return a.distanceM - b.distanceM;
     })
-    .slice(0, 3);
+    .slice(0, 3)
+    .map(reindexRoadRouteOption);
 
   if (routes.length === 0) {
     throw new Error('No driving route found');

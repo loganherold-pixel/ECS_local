@@ -15,6 +15,7 @@ export type EcsActiveGuidanceOffRouteStatus =
 
 export interface EcsActiveGuidanceProgress {
   routeId: string;
+  routeVersion?: string;
   rerouteGeneration: number;
   currentLegIndex: number;
   currentStepIndex: number;
@@ -440,6 +441,19 @@ function previousOffRouteCount(
   return previousProgress.offRouteUpdateCount ?? 0;
 }
 
+function progressMatchesRoute(
+  route: EcsGuidanceRoute,
+  previousProgress: EcsActiveGuidanceProgress | null | undefined,
+): previousProgress is EcsActiveGuidanceProgress {
+  if (!previousProgress) return false;
+  if (previousProgress.routeId !== route.id) return false;
+  if (previousProgress.rerouteGeneration !== route.rerouteGeneration) return false;
+  if (route.routeVersion && previousProgress.routeVersion !== route.routeVersion) {
+    return false;
+  }
+  return true;
+}
+
 function resolveOffRouteState(input: {
   route: EcsGuidanceRoute;
   thresholds: EcsActiveGuidanceThresholds;
@@ -529,13 +543,16 @@ export function resolveEcsActiveGuidanceProgress(
   const thresholds = normalizeThresholds(input.thresholds);
   const location = toCoordinate(input.currentCoordinate);
   const route = input.activeRoute;
+  const previousProgress = progressMatchesRoute(route, input.previousProgress)
+    ? input.previousProgress
+    : null;
   const metrics = buildStepMetrics(route);
   const routeProjection = projectOnPolyline(location, route.geometry);
   const currentStepIndex = resolveCandidateStepIndex({
     route,
     metrics,
     routeProjection,
-    previousProgress: input.previousProgress,
+    previousProgress,
     location,
     headingDegrees: input.currentHeadingDegrees,
     thresholds,
@@ -570,7 +587,7 @@ export function resolveEcsActiveGuidanceProgress(
     thresholds,
     distanceFromRouteMeters,
     offRouteThresholdMeters,
-    previousProgress: input.previousProgress,
+    previousProgress,
     headingDivergenceDegrees,
     speedMetersPerSecond,
     rerouteStatus: input.rerouteStatus,
@@ -578,18 +595,19 @@ export function resolveEcsActiveGuidanceProgress(
   const confidence = confidenceForDistance(distanceFromRouteMeters, thresholds);
   const upcomingSteps = route.steps.slice(currentStepIndex);
   const pendingStepJumpIndex =
-    currentStepIndex > (input.previousProgress?.currentStepIndex ?? currentStepIndex) + 1
+    currentStepIndex > (previousProgress?.currentStepIndex ?? currentStepIndex) + 1
       ? currentStepIndex
       : undefined;
   const pendingStepJumpCount =
     pendingStepJumpIndex != null
-      ? input.previousProgress?.pendingStepJumpIndex === pendingStepJumpIndex
-        ? (input.previousProgress.pendingStepJumpCount ?? 0) + 1
+      ? previousProgress?.pendingStepJumpIndex === pendingStepJumpIndex
+        ? (previousProgress.pendingStepJumpCount ?? 0) + 1
         : 1
       : undefined;
 
   return {
     routeId: route.id,
+    ...(route.routeVersion ? { routeVersion: route.routeVersion } : null),
     rerouteGeneration: route.rerouteGeneration,
     currentLegIndex: currentStep?.legIndex ?? 0,
     currentStepIndex,

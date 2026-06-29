@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -20,12 +20,17 @@ import type { RoadNavSearchSuggestion } from '../../lib/mapboxRoadNavigation';
 import type { RoadNavigationSessionState } from '../../lib/useRoadNavigation';
 import { ECS_CTA_LABELS } from '../../lib/ecsStateCopy';
 import {
-  buildActiveGuidanceDirectionList,
   buildFallbackActiveDirectionList,
   formatActiveDirectionDistance,
   type ActiveGuidanceDirectionList,
   type ActiveGuidanceDirectionItem,
 } from '../../lib/activeGuidanceDirections';
+import {
+  ACTIVE_GUIDANCE_REFRESHED_STEPS_UNAVAILABLE_MESSAGE,
+  buildActiveGuidanceRouteFromState,
+  buildVersionedActiveGuidanceDirectionList,
+  type VersionedActiveGuidanceDirectionList,
+} from '../../lib/navigation/activeGuidanceState';
 import { buildActiveGuidanceManeuverDisplay } from '../../lib/navigation/activeGuidanceManeuverDisplay';
 import type {
   RouteGuidanceReadinessTone,
@@ -77,10 +82,25 @@ type Props = {
     metrics: { label: string; value: string }[];
     alternateRoutes?: {
       id: string;
+      routeId?: string | null;
+      routeVersion?: string | null;
+      routeIndex?: number | null;
+      selectedRouteIndex?: number | null;
       label: string;
+      geometry?: unknown[] | null;
+      steps?: unknown[] | null;
+      etaIso?: string | null;
+      durationSeconds?: number | null;
+      distanceMeters?: number | null;
+      providerMetadata?: Record<string, unknown> | null;
+      etaLabel: string;
       distanceLabel: string;
       durationLabel: string;
+      summaryLabel?: string | null;
+      dataStatusLabel?: string | null;
       selected: boolean;
+      disabled?: boolean;
+      unavailableReason?: string | null;
     }[];
     statusText: string;
     noteText?: string | null;
@@ -152,6 +172,12 @@ function formatEta(etaIso: string | null): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function formatRouteVersionToken(routeVersion: string | null | undefined): string | null {
+  if (!routeVersion) return null;
+  const compact = routeVersion.replace(/[^a-z0-9]/gi, '').slice(-6).toUpperCase();
+  return compact ? `RV ${compact}` : null;
 }
 
 function getManeuverIcon(instruction: string | null): React.ComponentProps<typeof Ionicons>['name'] {
@@ -648,11 +674,11 @@ function PreviewCard({
             <Text style={styles.previewNoteText}>{previewContext.noteText}</Text>
           ) : null}
 
-          {alternateRoutes.length > 1 ? (
+          {alternateRoutes.length > 0 ? (
             <View style={styles.alternateRoutesCard}>
               <View style={styles.alternateRoutesHeader}>
-                <Text style={styles.alternateRoutesTitle}>Route choices</Text>
-                <Text style={styles.alternateRoutesHint}>Fastest first</Text>
+                <Text style={styles.alternateRoutesTitle}>Route options</Text>
+                <Text style={styles.alternateRoutesHint}>ETA shown</Text>
               </View>
               <View style={styles.alternateRouteList}>
                 {alternateRoutes.map((option) => (
@@ -661,29 +687,56 @@ function PreviewCard({
                     style={[
                       styles.alternateRouteOption,
                       option.selected && styles.alternateRouteOptionSelected,
+                      option.disabled && styles.alternateRouteOptionDisabled,
                     ]}
-                    onPress={() => onSelectRouteAlternative?.(option.id)}
-                    disabled={option.selected}
+                    onPress={() => {
+                      const routeId = option.routeId ?? option.id;
+                      if (option.disabled || option.selected || !routeId) return;
+                      onSelectRouteAlternative?.(routeId);
+                    }}
+                    disabled={option.disabled || option.selected}
                     activeOpacity={0.84}
                     accessibilityRole="button"
-                    accessibilityLabel={`Select alternate route ${option.label}`}
+                    accessibilityState={{
+                      selected: option.selected,
+                      disabled: !!option.disabled,
+                    }}
+                    accessibilityLabel={
+                      option.disabled
+                        ? `${option.label}. ${option.unavailableReason ?? 'No alternate route available.'}`
+                        : `Select route option ${option.label}. ETA ${option.etaLabel}.`
+                    }
                   >
                     <View style={styles.alternateRouteLabelWrap}>
                       <Text
                         style={[
                           styles.alternateRouteLabel,
                           option.selected && styles.alternateRouteLabelSelected,
+                          option.disabled && styles.alternateRouteLabelDisabled,
                         ]}
+                        numberOfLines={1}
                       >
                         {option.label}
                       </Text>
-                      {option.selected ? (
-                        <Text style={styles.alternateRouteSelectedText}>Selected</Text>
-                      ) : null}
+                      <Text style={styles.alternateRouteSummary} numberOfLines={1}>
+                        {option.summaryLabel ?? option.unavailableReason ?? 'Route details unavailable'}
+                      </Text>
+                      <Text style={styles.alternateRouteStatus} numberOfLines={1}>
+                        {option.selected ? 'Selected' : option.dataStatusLabel ?? 'Route data'}
+                      </Text>
                     </View>
                     <View style={styles.alternateRouteMetricWrap}>
-                      <Text style={styles.alternateRouteMetric}>{option.durationLabel}</Text>
+                      <Text
+                        style={[
+                          styles.alternateRouteEta,
+                          option.disabled && styles.alternateRouteMetricDisabled,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {option.etaLabel}
+                      </Text>
                       <Text style={styles.alternateRouteMetricMuted}>{option.distanceLabel}</Text>
+                      <Text style={styles.alternateRouteMetricMuted}>{option.durationLabel}</Text>
                     </View>
                   </TouchableOpacity>
                 ))}
@@ -870,30 +923,94 @@ function ActiveNavigationCard({
 >) {
   const [directionsExpanded, setDirectionsExpanded] = useState(false);
   const isRerouting = !activeContext && (session.status === 'rerouting' || session.isOffRoute);
-  const roadManeuverEligible = activeContext?.showSteps !== false && !!session.route;
-  const maneuverDisplay = useMemo(() => {
-    if (!roadManeuverEligible) return null;
-    const guidanceRoute = session.route?.guidance ?? null;
-    return buildActiveGuidanceManeuverDisplay({
-      guidanceMode:
-        guidanceRoute?.guidanceMode ??
-        session.route?.guidanceMode ??
-        'unavailable',
-      route: guidanceRoute,
+  const roadManeuverEligible = activeContext?.showSteps !== false && !!(session.activeGuidance ?? session.route);
+  const activeGuidanceRoute = useMemo(
+    () =>
+      session.activeGuidance
+        ? buildActiveGuidanceRouteFromState(session.activeGuidance)
+        : session.route?.guidance ?? null,
+    [session.activeGuidance, session.route?.guidance],
+  );
+  const roadDirectionsList = useMemo(
+    () => buildVersionedActiveGuidanceDirectionList({
+      activeGuidance: session.activeGuidance,
       progress: session.activeGuidanceProgress,
       status: session.status,
-      routeStatusLabel: session.routeStatusLabel,
+    }),
+    [
+      session.activeGuidance,
+      session.activeGuidanceProgress,
+      session.status,
+    ],
+  );
+  useEffect(() => {
+    if (!roadDirectionsList.stalePrevented) return;
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.debug('[ECS Guidance] stale guidance prevented', {
+        routeId: roadDirectionsList.routeId,
+        routeVersion: roadDirectionsList.routeVersion,
+      });
+    }
+  }, [
+    roadDirectionsList.routeId,
+    roadDirectionsList.routeVersion,
+    roadDirectionsList.stalePrevented,
+  ]);
+  const refreshedStatusLabelActive =
+    !!session.routeStatusLabel && /updated|rejoined/i.test(session.routeStatusLabel);
+  const activeGuidanceListSynced =
+    !!session.activeGuidance &&
+    roadDirectionsList.routeVersion === session.activeGuidance.routeVersion;
+  const refreshedDirectionsVisible =
+    activeGuidanceListSynced && roadDirectionsList.items.length > 0;
+  const refreshedStepsUnavailable =
+    refreshedStatusLabelActive &&
+    activeGuidanceListSynced &&
+    roadDirectionsList.state === 'unavailable';
+  const guidanceStateReadyForHeader =
+    !!session.activeGuidance &&
+    activeGuidanceListSynced &&
+    (roadDirectionsList.state === 'ready' || roadDirectionsList.state === 'unavailable');
+  const activeGuidanceVersionLabel = guidanceStateReadyForHeader
+    ? formatRouteVersionToken(session.activeGuidance?.routeVersion)
+    : null;
+  const activeGuidanceRefreshLabel =
+    guidanceStateReadyForHeader && session.activeGuidance?.refreshReason !== 'initial'
+      ? `UPD ${formatEta(session.activeGuidance?.refreshedAt ?? null)}`
+      : null;
+  const showActiveGuidanceHeaderBadges =
+    !!activeContext?.progressLabel ||
+    !!activeGuidanceVersionLabel ||
+    !!activeGuidanceRefreshLabel;
+  const maneuverDisplay = useMemo(() => {
+    if (!roadManeuverEligible) return null;
+    return buildActiveGuidanceManeuverDisplay({
+      guidanceMode:
+        activeGuidanceRoute?.guidanceMode ??
+        session.route?.guidanceMode ??
+        'unavailable',
+      route: activeGuidanceRoute,
+      progress: session.activeGuidanceProgress,
+      status: session.status,
+      routeStatusLabel:
+        refreshedStatusLabelActive && !refreshedDirectionsVisible
+          ? null
+          : session.routeStatusLabel,
     });
   }, [
+    activeGuidanceRoute,
     roadManeuverEligible,
+    refreshedDirectionsVisible,
+    refreshedStatusLabelActive,
     session.activeGuidanceProgress,
-    session.route?.guidance,
     session.route?.guidanceMode,
     session.routeStatusLabel,
     session.status,
   ]);
   const nextInstruction =
-    maneuverDisplay?.primaryText ??
+    refreshedStepsUnavailable
+      ? ACTIVE_GUIDANCE_REFRESHED_STEPS_UNAVAILABLE_MESSAGE
+      : maneuverDisplay?.primaryText ??
     activeContext?.instruction ??
     session.nextInstruction ??
     'Continue on highlighted route';
@@ -915,7 +1032,9 @@ function ActiveNavigationCard({
   const showReroute = activeContext?.showReroute ?? (isRerouting || session.isOffRoute);
   const statusLine = activeContext?.statusText ?? session.routeStatusLabel ?? 'Route active';
   const distanceLine =
-    maneuverDisplay?.distanceLabel ??
+    refreshedStepsUnavailable
+      ? '--'
+      : maneuverDisplay?.distanceLabel ??
     activeContext?.distanceLabel ??
     formatDistance(session.nextInstructionDistanceM);
   const guidanceTargetLabel =
@@ -924,28 +1043,20 @@ function ActiveNavigationCard({
       ? 'arrival'
       : 'next action';
   const guidanceEyebrow =
-    maneuverDisplay?.eyebrow ??
+    refreshedStepsUnavailable
+      ? 'GUIDANCE UPDATED'
+      : maneuverDisplay?.eyebrow ??
     activeContext?.eyebrow ??
     (isRerouting ? 'ROUTE UPDATE' : 'NEXT ACTION');
   const maneuverIcon = (
     maneuverDisplay?.iconName ?? getManeuverIcon(nextInstruction)
   ) as React.ComponentProps<typeof Ionicons>['name'];
   const maneuverDetailLine =
-    maneuverDisplay?.detailText ??
+    refreshedStepsUnavailable
+      ? ACTIVE_GUIDANCE_REFRESHED_STEPS_UNAVAILABLE_MESSAGE
+      : maneuverDisplay?.detailText ??
     (distanceLine ? `${distanceLine} to ${guidanceTargetLabel}` : statusLine);
   const activeGuidanceFollowingManeuver = maneuverDisplay?.followingText ?? null;
-  const roadDirectionsList = useMemo(
-    () => buildActiveGuidanceDirectionList({
-      route: session.route?.guidance,
-      progress: session.activeGuidanceProgress,
-      status: session.status,
-    }),
-    [
-      session.activeGuidanceProgress,
-      session.route?.guidance,
-      session.status,
-    ],
-  );
   const fallbackDirections = useMemo(
     () => buildFallbackActiveDirectionList({
       instruction: nextInstruction,
@@ -958,7 +1069,7 @@ function ActiveNavigationCard({
       session.nextInstructionDistanceM,
     ],
   );
-  const activeDirectionsList: ActiveGuidanceDirectionList = roadManeuverEligible
+  const activeDirectionsList: VersionedActiveGuidanceDirectionList = roadManeuverEligible
     ? roadDirectionsList
     : {
         state: fallbackDirections.length > 0 ? 'ready' : 'unavailable',
@@ -969,6 +1080,8 @@ function ActiveNavigationCard({
         currentStepIndex: session.currentStepIndex ?? null,
         guidanceMode: null,
         sourceLabel: null,
+        routeVersion: null,
+        stalePrevented: false,
       };
   const hasActiveDirections = activeDirectionsList.items.length > 0;
   const hasDirectionsControl = roadManeuverEligible || hasActiveDirections;
@@ -1035,13 +1148,29 @@ function ActiveNavigationCard({
               <Text style={styles.activeGuidanceEyebrow} numberOfLines={1}>
                 {guidanceEyebrow}
               </Text>
-              {activeContext?.progressLabel ? (
+              {showActiveGuidanceHeaderBadges ? (
                 <View style={styles.activeGuidanceHeaderBadges}>
-                  <ECSBadge
-                    label={activeContext.progressLabel}
-                    tone={isRerouting ? 'warning' : 'active'}
-                    compact
-                  />
+                  {activeContext?.progressLabel ? (
+                    <ECSBadge
+                      label={activeContext.progressLabel}
+                      tone={isRerouting ? 'warning' : 'active'}
+                      compact
+                    />
+                  ) : null}
+                  {activeGuidanceVersionLabel ? (
+                    <ECSBadge
+                      label={activeGuidanceVersionLabel}
+                      tone="info"
+                      compact
+                    />
+                  ) : null}
+                  {activeGuidanceRefreshLabel ? (
+                    <ECSBadge
+                      label={activeGuidanceRefreshLabel}
+                      tone={refreshedStepsUnavailable ? 'warning' : 'active'}
+                      compact
+                    />
+                  ) : null}
                 </View>
               ) : null}
             </View>
@@ -2180,7 +2309,7 @@ const styles = StyleSheet.create({
   },
   alternateRoutesCard: {
     marginTop: 10,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(212,160,23,0.16)',
     backgroundColor: 'rgba(212,160,23,0.055)',
@@ -2208,7 +2337,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   alternateRouteOption: {
-    minHeight: 38,
+    minHeight: 52,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.075)',
@@ -2224,6 +2353,11 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(212,160,23,0.52)',
     backgroundColor: 'rgba(212,160,23,0.13)',
   },
+  alternateRouteOptionDisabled: {
+    borderColor: 'rgba(255,255,255,0.045)',
+    backgroundColor: 'rgba(255,255,255,0.018)',
+    opacity: 0.72,
+  },
   alternateRouteLabelWrap: {
     flex: 1,
     minWidth: 0,
@@ -2237,20 +2371,46 @@ const styles = StyleSheet.create({
   alternateRouteLabelSelected: {
     color: TACTICAL.text,
   },
+  alternateRouteLabelDisabled: {
+    color: TACTICAL.textMuted,
+  },
   alternateRouteSelectedText: {
     ...ECS_TEXT.helper,
     color: TACTICAL.amber,
     fontSize: 9,
     marginTop: 1,
   },
+  alternateRouteSummary: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.text,
+    fontSize: 9,
+    lineHeight: 12,
+    marginTop: 2,
+  },
+  alternateRouteStatus: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    marginTop: 1,
+  },
   alternateRouteMetricWrap: {
     alignItems: 'flex-end',
     gap: 1,
+  },
+  alternateRouteEta: {
+    ...ECS_TEXT.statValue,
+    color: TACTICAL.text,
+    fontSize: 13,
+    lineHeight: 16,
   },
   alternateRouteMetric: {
     ...ECS_TEXT.statValue,
     color: TACTICAL.text,
     fontSize: 11,
+  },
+  alternateRouteMetricDisabled: {
+    color: TACTICAL.textMuted,
   },
   alternateRouteMetricMuted: {
     ...ECS_TEXT.helper,

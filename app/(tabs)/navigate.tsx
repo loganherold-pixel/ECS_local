@@ -281,6 +281,8 @@ import {
   resolveActiveGuidanceDisplayLocation,
 } from '../../lib/activeGuidanceProgressPath';
 import { buildActiveGuidanceRouteLineSync } from '../../lib/navigation/activeGuidanceRouteLineSync';
+import { buildActiveGuidanceRouteFromState } from '../../lib/navigation/activeGuidanceState';
+import { buildStagedActiveGuidanceRouteOptions } from '../../lib/navigation/stagedActiveGuidanceRouteOptions';
 import { logRouteGeometryLifecycle, validateRouteGeometry } from '../../lib/routeGeometryLifecycle';
 import { normalizeRouteLifecycle } from '../../lib/routeLifecycleState';
 import { buildFullRouteGuidanceModel } from '../../lib/fullRouteGuidance';
@@ -4739,6 +4741,15 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     enabled: true,
     liveServicesEnabled: liveNavigateServicesEnabled,
   });
+  const rehydrateRoadActiveGuidance = roadNavigation.rehydrateActiveGuidance;
+  useFocusEffect(
+    useCallback(() => {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.debug('[ECS Guidance] focus rehydrate');
+      }
+      void rehydrateRoadActiveGuidance('screen_focus');
+    }, [rehydrateRoadActiveGuidance]),
+  );
   const [campsiteFinalAccess, setCampsiteFinalAccess] =
     useState<CampsiteFinalAccess | null>(null);
   const roadSession = roadNavigation.session;
@@ -11064,23 +11075,58 @@ const handleCreateRun = useCallback(() => {
     [roadNavigation.session.route?.geometry],
   );
 
+  const activeRoadGuidanceRoute = useMemo(
+    () => {
+      if (
+        (roadNavigation.session.status === 'navigation_active' ||
+          roadNavigation.session.status === 'rerouting' ||
+          roadNavigation.session.status === 'arrived') &&
+        roadNavigation.session.activeGuidance
+      ) {
+        return buildActiveGuidanceRouteFromState(roadNavigation.session.activeGuidance);
+      }
+      return roadNavigation.session.route?.guidance ?? null;
+    },
+    [
+      roadNavigation.session.activeGuidance,
+      roadNavigation.session.route?.guidance,
+      roadNavigation.session.status,
+    ],
+  );
+
   const activeRoadRouteLineSync = useMemo(
     () =>
       buildActiveGuidanceRouteLineSync({
-        route: roadNavigation.session.route?.guidance ?? null,
-        fallbackGeometry: roadNavigation.session.route?.geometry ?? null,
+        route: activeRoadGuidanceRoute,
+        routeVersion: roadNavigation.session.activeGuidance?.routeVersion ?? null,
         navigationStatus: roadNavigation.session.status,
         routeConfidenceState: roadNavigation.session.routeConfidenceState,
         routeStatusLabel: roadNavigation.session.routeStatusLabel,
       }),
     [
-      roadNavigation.session.route?.geometry,
-      roadNavigation.session.route?.guidance,
+      activeRoadGuidanceRoute,
+      roadNavigation.session.activeGuidance?.routeVersion,
       roadNavigation.session.routeConfidenceState,
       roadNavigation.session.routeStatusLabel,
       roadNavigation.session.status,
     ],
   );
+
+  useEffect(() => {
+    if (!activeRoadRouteLineSync.versionMismatchPrevented) return;
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.debug('[ECS Guidance] route line version mismatch', {
+        activeRouteVersion: roadNavigation.session.activeGuidance?.routeVersion ?? null,
+        routeLineVersion: activeRoadRouteLineSync.routeVersion,
+        routeId: activeRoadRouteLineSync.routeId,
+      });
+    }
+  }, [
+    activeRoadRouteLineSync.routeId,
+    activeRoadRouteLineSync.routeVersion,
+    activeRoadRouteLineSync.versionMismatchPrevented,
+    roadNavigation.session.activeGuidance?.routeVersion,
+  ]);
 
   const activeRoadRouteLinePoints = useMemo(
     () =>
@@ -11093,6 +11139,10 @@ const handleCreateRun = useCallback(() => {
       })),
     [activeRoadRouteLineSync.geometry],
   );
+  const roadNavigationRouteLineRequired =
+    roadNavigation.session.status === 'navigation_active' ||
+    roadNavigation.session.status === 'rerouting' ||
+    roadNavigation.session.status === 'arrived';
 
   const roadRouteProgressPoints = useMemo(
     () =>
@@ -11895,17 +11945,17 @@ const handleCreateRun = useCallback(() => {
     ) {
       return trailNavigation.session.payload.trailGeometry;
     }
-    return activeRoadRouteLinePoints.length > 1
-      ? activeRoadRouteLinePoints
-      : explorePreviewMode
-        ? []
-        : validatedRunPoints;
+    if (activeRoadRouteLinePoints.length > 1) return activeRoadRouteLinePoints;
+    if (roadNavigationRouteLineRequired) return [];
+    if (explorePreviewMode) return [];
+    return validatedRunPoints;
   }, [
     activeRoadRouteLinePoints,
     explorePreviewMode,
     fullRouteGuidanceModel.routePoints,
     fullRouteGuidanceModel.status,
     pendingHybridTrailTransition,
+    roadNavigationRouteLineRequired,
     trailNavigation.session.payload,
     trailNavigationActive,
     validatedRunPoints,
@@ -14416,15 +14466,13 @@ const handleTopToolboxLayout = useCallback(
           { label: 'TIME', value: formatNavDuration(route?.durationS ?? null) },
           { label: 'ETA', value: formatNavEta(roadPreviewEtaIso) },
         ],
-        alternateRoutes: roadNavigation.session.routeAlternatives
-          .slice(0, 3)
-          .map((candidate, index) => ({
-            id: candidate.id,
-            label: index === 0 ? 'Fastest route' : `Alternate ${index + 1}`,
-            distanceLabel: formatNavMeters(candidate.distanceM),
-            durationLabel: formatNavDuration(candidate.durationS),
-            selected: candidate.id === route?.id,
-          })),
+        alternateRoutes: buildStagedActiveGuidanceRouteOptions({
+          routes: roadNavigation.session.routeAlternatives,
+          selectedRouteId: route?.id ?? null,
+          formatDistance: formatNavMeters,
+          formatDuration: formatNavDuration,
+          formatEta: formatNavEta,
+        }),
         statusText: roadNavigation.previewLoading
           ? 'Preparing road route'
           : (previewOperationalStatus ??
@@ -14435,7 +14483,7 @@ const handleTopToolboxLayout = useCallback(
           (route
             ? 'Ready to start this route? Use overview to confirm the full path, then begin guidance when ready.'
             : 'Destination selected. ECS is preparing the route preview.'),
-        primaryActionLabel: 'Start Route',
+        primaryActionLabel: 'Start Guidance',
         primaryActionDisabled: !route || (!navigateOperationalState.liveRoutingAvailable && !navigateOperationalState.hasRouteSupport),
         showSteps: false,
         showOverview: !!route,
@@ -14512,6 +14560,13 @@ const handleTopToolboxLayout = useCallback(
           { label: 'ETA', value: formatNavEta(roadPreviewEtaIso) },
           { label: 'TRAIL', value: trailLengthText },
         ],
+        alternateRoutes: buildStagedActiveGuidanceRouteOptions({
+          routes: roadNavigation.session.routeAlternatives,
+          selectedRouteId: route?.id ?? null,
+          formatDistance: formatNavMeters,
+          formatDuration: formatNavDuration,
+          formatEta: formatNavEta,
+        }),
         statusText:
           activeGuidanceUnavailableReason ??
           (roadNavigation.previewLoading
@@ -14550,6 +14605,13 @@ const handleTopToolboxLayout = useCallback(
         { label: 'TIME', value: formatNavDuration(route?.durationS ?? null) },
         { label: 'ETA', value: formatNavEta(roadPreviewEtaIso) },
       ],
+      alternateRoutes: buildStagedActiveGuidanceRouteOptions({
+        routes: roadNavigation.session.routeAlternatives,
+        selectedRouteId: route?.id ?? null,
+        formatDistance: formatNavMeters,
+        formatDuration: formatNavDuration,
+        formatEta: formatNavEta,
+      }),
       statusText:
         roadNavigation.previewLoading
           ? 'Preparing road route'
@@ -14561,7 +14623,7 @@ const handleTopToolboxLayout = useCallback(
         (route
           ? 'Ready to start this route? Confirm the overview, then begin navigation when you are ready to move.'
           : 'Preparing route preview.'),
-      primaryActionLabel: 'Start Route',
+      primaryActionLabel: 'Start Guidance',
       primaryActionDisabled: !route || (!navigateOperationalState.liveRoutingAvailable && !navigateOperationalState.hasRouteSupport),
       showSteps: false,
       showOverview: !!route,

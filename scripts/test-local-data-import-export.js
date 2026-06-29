@@ -121,6 +121,11 @@ assert.ok(
     devSmokeSeedSource.includes('fixtures/local-data/ecs-smoke-local-profile.json'),
   'Smoke seed fixture loading should live in an explicit dev-only module.',
 );
+assert.ok(
+  !devSmokeSeedSource.includes("require('../../fixtures/local-data/ecs-smoke-local-profile.json')") &&
+    devSmokeSeedSource.includes('dynamicRequire(fixturePath)'),
+  'Dev smoke seed loading must not use a Metro-static require into the blocked fixtures directory.',
+);
 
 assert.ok(
   vehicleStoreSource.includes('importLocalSnapshot: async (incomingVehicles: Vehicle[])') &&

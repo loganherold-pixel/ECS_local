@@ -2504,6 +2504,7 @@ function makeMapHtml(
       var initialized = false;
       var bootstrapDone = false;
       var pendingPayload = null;
+      var lastRouteLineKey = null;
       var styleReplayTimer = null;
       var bootstrapReadyTimer = null;
       var requestedStyleUrl = ${escapedInitialStyleUrl};
@@ -4689,8 +4690,13 @@ function makeMapHtml(
 
       function updateRoute(coords, color, mode, routeLineKey) {
         applyRouteRenderMode(mode);
+        var normalizedRouteLineKey = routeLineKey || null;
+        if (lastRouteLineKey !== normalizedRouteLineKey) {
+          setGeoJson('route-source', featureCollection([]));
+          lastRouteLineKey = normalizedRouteLineKey;
+        }
         var fc = featureCollection(
-          coords && coords.length > 1 ? [lineFeature('route', coords, { color: color || '#2ECC71', routeLineKey: routeLineKey || null })] : []
+          coords && coords.length > 1 ? [lineFeature('route', coords, { color: color || '#2ECC71', routeLineKey: normalizedRouteLineKey })] : []
         );
         setGeoJson('route-source', fc);
       }

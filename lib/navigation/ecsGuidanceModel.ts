@@ -21,6 +21,7 @@ export interface EcsGuidanceCoordinate {
   ele?: number | null;
   ele_m?: number | null;
   elevationFeet?: number | null;
+  routeVersion?: string;
 }
 
 export type EcsGuidanceLngLat = [longitude: number, latitude: number];
@@ -73,6 +74,8 @@ export interface EcsGuidanceLeg {
 
 export interface EcsGuidanceRoute {
   id: string;
+  routeVersion?: string;
+  routeIndex?: number;
   source: EcsGuidanceRouteSource;
   routeUuid?: string;
   geometry: EcsGuidanceCoordinate[];
@@ -86,6 +89,7 @@ export interface EcsGuidanceRoute {
   guidanceMode: EcsGuidanceMode;
   guidanceSourceLabel?: EcsGuidanceSourceLabel;
   guidanceLimitationLabel?: string;
+  providerMetadata?: Record<string, unknown>;
 }
 
 export interface NormalizeMapboxDirectionsRouteOptions {

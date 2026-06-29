@@ -4,6 +4,7 @@ import type {
   RoadNavSourceType,
   RoadNavStatus,
 } from './mapboxRoadNavigation';
+import type { ActiveGuidanceState } from './navigation/activeGuidanceState';
 import { createMigratingNonSecureStorage } from './nonSecureStorage';
 
 const ROAD_NAVIGATION_SESSION_KEY = 'ecs_road_navigation_session_v1';
@@ -29,6 +30,7 @@ export interface PersistedRoadNavigationSession {
   routeCreatedAt?: string | null;
   routeGeometryCacheKey?: string | null;
   routeGeometryFingerprint?: string | null;
+  activeGuidance?: ActiveGuidanceState | null;
 }
 
 async function readStoredSession(): Promise<string | null> {

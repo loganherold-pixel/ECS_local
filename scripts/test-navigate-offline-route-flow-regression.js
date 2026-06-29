@@ -118,7 +118,11 @@ assertIncludes(
     'resolveRoadDestination({',
     "requestRouteForDestination(destination, 'route_preview'",
     'fetchRoadRouteAlternatives({',
-    'applyRoute(validRoute, requestedStatus, destination, createdFrom',
+    'applyRoute(',
+    'validRoute,',
+    'requestedStatus,',
+    'createdFrom,',
+    'validRoutes,',
   ],
   'Search selection should still geocode, request a road route, and enter route preview.',
 );
@@ -304,7 +308,7 @@ assertIncludes(
     "action.id === 'prepare_offline'",
     '? onPrepareOffline',
   ],
-  'Road preview should still expose Start Route and Prepare Offline actions.',
+  'Road preview should still expose Start Guidance and Prepare Offline actions.',
 );
 
 assert(

@@ -25,6 +25,18 @@ import {
   type EcsActiveGuidanceProgress,
 } from './navigation/ecsActiveGuidanceController';
 import {
+  applyActiveGuidanceStateToRoadRoute,
+  buildActiveGuidanceStateFromRoadRoute,
+  normalizeActiveGuidanceRefreshReason,
+  withActiveGuidanceProgressSnapshot,
+  type ActiveGuidanceRefreshReason,
+  type ActiveGuidanceState,
+} from './navigation/activeGuidanceState';
+import {
+  ensureRoadNavRouteVersion,
+  getRoadNavRouteVersion,
+} from './navigation/routeVersion';
+import {
   cacheRouteGeometry,
   getCachedRouteGeometry,
   getRouteGeometryCacheKey,
@@ -51,6 +63,12 @@ const ROAD_NAV_PREVIEW_RESTORE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const ROAD_NAV_ACTIVE_RESTORE_MAX_AGE_MS = 18 * 60 * 60 * 1000;
 const ROUTE_REQUEST_TIMEOUT_MS = 20000;
 const ROUTE_TIMEOUT_ERROR_MESSAGE = 'Route generation timed out. Check connection and retry.';
+
+function logGuidanceDebug(message: string, payload?: Record<string, unknown>): void {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.debug(message, payload);
+  }
+}
 
 export type RoadNavigationConfidenceState =
   | 'on_route'
@@ -85,6 +103,7 @@ export interface RoadNavigationSessionState {
   offRouteDistanceM: number | null;
   distanceToDestinationM: number | null;
   activeGuidanceProgress: EcsActiveGuidanceProgress | null;
+  activeGuidance: ActiveGuidanceState | null;
   offRouteUpdateCount: number;
   gpsAccuracyMeters: number | null;
   rerouteStatus: EcsActiveGuidanceOffRouteStatus;
@@ -124,6 +143,7 @@ export interface UseRoadNavigationOutput {
   endNavigation: () => Promise<void>;
   clearDestination: () => Promise<void>;
   reroute: (reason?: string) => Promise<void>;
+  rehydrateActiveGuidance: (reason?: ActiveGuidanceRefreshReason) => Promise<void>;
 }
 
 type RoadNavigationLocation = RoadNavCoordinate & {
@@ -368,8 +388,11 @@ function buildCachedRoadRouteFromRestoredSession(
     durationS: restored.routeDurationS,
     createdAt: restored.routeCreatedAt ?? restored.updatedAt,
   });
+  const routeWithRestoredGuidance = restored.activeGuidance
+    ? applyActiveGuidanceStateToRoadRoute(route, restored.activeGuidance)
+    : route;
 
-  return ensureRoadRouteGeometry(route, {
+  return ensureRoadRouteGeometry(routeWithRestoredGuidance, {
     phase: 'restore',
     source: 'road',
     status: restored.status,
@@ -444,11 +467,22 @@ function computeSessionFromRoute(
     };
   }
 
+  const routeVersion = getRoadNavRouteVersion(route);
   const previousProgress =
     previous.activeGuidanceProgress?.routeId === route.guidance.id &&
-    previous.activeGuidanceProgress.rerouteGeneration === route.guidance.rerouteGeneration
+    previous.activeGuidanceProgress.rerouteGeneration === route.guidance.rerouteGeneration &&
+    previous.activeGuidanceProgress.routeVersion === routeVersion
       ? previous.activeGuidanceProgress
       : null;
+  const activeGuidanceRoute =
+    route.guidance.routeVersion === routeVersion
+      ? route.guidance
+      : {
+          ...route.guidance,
+          routeVersion,
+          routeIndex: route.routeIndex ?? route.selectedRouteIndex ?? 0,
+          providerMetadata: route.guidance.providerMetadata ?? route.providerMetadata,
+        };
   const activeGuidanceProgress = resolveEcsActiveGuidanceProgress({
     currentCoordinate: location,
     currentSpeedMetersPerSecond:
@@ -457,7 +491,7 @@ function computeSessionFromRoute(
         : null,
     currentHeadingDegrees: location.headingDeg,
     currentGpsAccuracyMeters: location.accuracyM,
-    activeRoute: route.guidance,
+    activeRoute: activeGuidanceRoute,
     previousProgress,
     rerouteStatus:
       previous.status === 'rerouting'
@@ -525,6 +559,7 @@ function createEmptySession(): RoadNavigationSessionState {
     offRouteDistanceM: null,
     distanceToDestinationM: null,
     activeGuidanceProgress: null,
+    activeGuidance: null,
     offRouteUpdateCount: 0,
     gpsAccuracyMeters: null,
     rerouteStatus: 'on_route',
@@ -670,6 +705,7 @@ export function useRoadNavigation(params: {
         routeCreatedAt: nextSession.route?.createdAt ?? null,
         routeGeometryCacheKey: routeCacheKey,
         routeGeometryFingerprint: routeValidation?.fingerprint ?? null,
+        activeGuidance: nextSession.activeGuidance,
       });
       return;
     }
@@ -685,17 +721,20 @@ export function useRoadNavigation(params: {
       createdFrom: RoadNavSourceType,
       rerouteCount?: number,
       routeAlternatives?: RoadNavRoute[],
+      refreshReason?: ActiveGuidanceRefreshReason,
     ) => {
-      const validRoute = ensureRoadRouteGeometry(route, {
+      const validGeometryRoute = ensureRoadRouteGeometry(route, {
         phase: 'apply',
         source: 'road',
         status: nextStatus,
       });
+      const validRoute = validGeometryRoute ? ensureRoadNavRouteVersion(validGeometryRoute) : null;
       if (!validRoute) {
         setSession((prev) => ({
           ...prev,
           status: 'error',
           route: null,
+          activeGuidance: null,
           routeAlternatives: [],
           error: 'Route geometry unavailable',
           routeStatusLabel: 'Route unavailable',
@@ -705,13 +744,14 @@ export function useRoadNavigation(params: {
         return;
       }
       const validRoutes = (routeAlternatives?.length ? routeAlternatives : [validRoute])
-        .map((candidate) =>
-          ensureRoadRouteGeometry(candidate, {
+        .map((candidate) => {
+          const candidateWithGeometry = ensureRoadRouteGeometry(candidate, {
             phase: 'apply',
             source: 'road',
             status: nextStatus,
-          }),
-        )
+          });
+          return candidateWithGeometry ? ensureRoadNavRouteVersion(candidateWithGeometry) : null;
+        })
         .filter((candidate): candidate is RoadNavRoute => !!candidate)
         .slice(0, 3);
       const nextRouteAlternatives = validRoutes.some((candidate) => candidate.id === validRoute.id)
@@ -724,6 +764,31 @@ export function useRoadNavigation(params: {
         const routeAppliedFromReroute =
           nextStatus === 'navigation_active' &&
           (prev.status === 'rerouting' || nextRerouteCount > prev.rerouteCount);
+        const activeGuidance =
+          nextStatus === 'navigation_active' || nextStatus === 'arrived'
+            ? buildActiveGuidanceStateFromRoadRoute({
+                route: validRoute,
+                refreshReason:
+                  refreshReason ?? (routeAppliedFromReroute ? 'reroute' : 'initial'),
+                refreshedAt: computed.updatedAt,
+                currentStepIndex: computed.currentStepIndex,
+              })
+            : null;
+        if (
+          activeGuidance &&
+          activeGuidance.routeVersion !== prev.activeGuidance?.routeVersion
+        ) {
+          logGuidanceDebug('[ECS Guidance] routeVersion updated', {
+            routeId: activeGuidance.routeId,
+            routeVersion: activeGuidance.routeVersion,
+            refreshReason: activeGuidance.refreshReason,
+          });
+          logGuidanceDebug('[ECS Guidance] maneuvers replaced', {
+            routeId: activeGuidance.routeId,
+            routeVersion: activeGuidance.routeVersion,
+            maneuverCount: activeGuidance.steps.length,
+          });
+        }
         const nextConfidenceState: RoadNavigationConfidenceState =
           nextStatus === 'arrived'
             ? 'arrived'
@@ -738,6 +803,7 @@ export function useRoadNavigation(params: {
           status: nextStatus,
           destination,
           route: validRoute,
+          activeGuidance,
           routeAlternatives: nextRouteAlternatives,
           rerouteCount: nextRerouteCount,
           error: null,
@@ -768,6 +834,7 @@ export function useRoadNavigation(params: {
       requestedStatus: Extract<RoadNavStatus, 'route_preview' | 'navigation_active' | 'rerouting'>,
       createdFrom: RoadNavSourceType,
       rerouteCount?: number,
+      refreshReason?: ActiveGuidanceRefreshReason,
     ) => {
       if (!liveServicesEnabled) {
         throw new Error('Offline — route data unavailable');
@@ -826,6 +893,12 @@ export function useRoadNavigation(params: {
           routeRequestSeqRef.current !== requestSeq ||
           inFlightRouteKeyRef.current !== routeKey
         ) {
+          logGuidanceDebug('[ECS Guidance] stale route response ignored', {
+            requestSeq,
+            activeRequestSeq: routeRequestSeqRef.current,
+            routeKey,
+            inFlightRouteKey: inFlightRouteKeyRef.current,
+          });
           return;
         }
 
@@ -844,7 +917,30 @@ export function useRoadNavigation(params: {
           throw new Error('Route geometry unavailable');
         }
 
-        applyRoute(validRoute, requestedStatus, destination, createdFrom, rerouteCount, validRoutes);
+        applyRoute(
+          validRoute,
+          requestedStatus,
+          destination,
+          createdFrom,
+          rerouteCount,
+          validRoutes,
+          refreshReason,
+        );
+      } catch (error) {
+        if (
+          routeRequestSeqRef.current !== requestSeq ||
+          inFlightRouteKeyRef.current !== routeKey
+        ) {
+          logGuidanceDebug('[ECS Guidance] stale route response ignored', {
+            requestSeq,
+            activeRequestSeq: routeRequestSeqRef.current,
+            routeKey,
+            inFlightRouteKey: inFlightRouteKeyRef.current,
+            error: getRouteErrorMessage(error, 'Route request superseded'),
+          });
+          return;
+        }
+        throw error;
       } finally {
         if (inFlightRouteKeyRef.current === routeKey) {
           inFlightRouteKeyRef.current = null;
@@ -896,6 +992,22 @@ export function useRoadNavigation(params: {
           sessionId: restored.sessionId,
           destination: restored.destination,
           route: restoredRoute,
+          activeGuidance: restored.activeGuidance
+            ? withActiveGuidanceProgressSnapshot(
+                {
+                  ...restored.activeGuidance,
+                  refreshReason: 'restored_session',
+                },
+                computed.activeGuidanceProgress,
+              )
+            : restoredRoute && restoredStatus === 'navigation_active'
+              ? buildActiveGuidanceStateFromRoadRoute({
+                  route: restoredRoute,
+                  refreshReason: 'restored_session',
+                  refreshedAt: restored.updatedAt,
+                  currentStepIndex: computed.currentStepIndex,
+                })
+              : null,
           routeAlternatives: restoredRoute ? [restoredRoute] : [],
           status: restoredStatus,
           error: restoredRoute || currentLocation ? null : 'GPS required',
@@ -934,6 +1046,7 @@ export function useRoadNavigation(params: {
       session.status === 'navigation_active' ? 'navigation_active' : 'route_preview',
       session.createdFrom === 'restored_session' ? 'restored_session' : session.createdFrom,
       session.rerouteCount,
+      session.status === 'navigation_active' ? 'restored_session' : undefined,
     ).catch((error: unknown) => {
       setSession((prev) => {
         if (!prev.destination || prev.route) return prev;
@@ -1039,6 +1152,7 @@ export function useRoadNavigation(params: {
           sessionId: randomSessionId(),
           destination,
           route: null,
+          activeGuidance: null,
           routeAlternatives: [],
           status: 'destination_selected',
           error: currentLocation ? null : 'GPS required',
@@ -1091,12 +1205,13 @@ export function useRoadNavigation(params: {
       setStepListExpanded(false);
 
       setSession((prev) => ({
-          ...prev,
-          sessionId: randomSessionId(),
-          destination,
-          route: null,
-          routeAlternatives: [],
-          status: 'destination_selected',
+        ...prev,
+        sessionId: randomSessionId(),
+        destination,
+        route: null,
+        activeGuidance: null,
+        routeAlternatives: [],
+        status: 'destination_selected',
         error: currentLocation ? null : 'GPS required',
         currentStepIndex: 0,
         nextInstruction: null,
@@ -1203,6 +1318,7 @@ export function useRoadNavigation(params: {
           'navigation_active',
           activeSession.createdFrom,
           nextRerouteCount,
+          normalizeActiveGuidanceRefreshReason(_reason),
         );
       } catch (error) {
         const failureMessage = getRouteErrorMessage(error, 'Unable to recalculate route');
@@ -1382,6 +1498,10 @@ export function useRoadNavigation(params: {
         prev.status === 'navigation_active' && nextConfidenceState === 'arrived'
           ? 'arrived'
           : prev.status;
+      const nextActiveGuidance = withActiveGuidanceProgressSnapshot(
+        prev.activeGuidance,
+        computed.activeGuidanceProgress,
+      );
       const noMeaningfulChange =
         prev.currentStepIndex === computed.currentStepIndex &&
         prev.nextInstruction === computed.nextInstruction &&
@@ -1398,6 +1518,7 @@ export function useRoadNavigation(params: {
         prev.isOffRoute === nextIsOffRoute &&
         prev.completionReason === nextCompletionReason &&
         prev.status === nextStatus &&
+        prev.activeGuidance === nextActiveGuidance &&
         sameGeometry(prev.progressGeometry, computed.progressGeometry);
 
       if (noMeaningfulChange) {
@@ -1407,6 +1528,7 @@ export function useRoadNavigation(params: {
       const nextSession = {
         ...prev,
         ...computed,
+        activeGuidance: nextActiveGuidance,
         status: nextStatus,
         routeConfidenceState: nextConfidenceState,
         routeStatusLabel: nextRouteStatusLabel,
@@ -1441,16 +1563,18 @@ export function useRoadNavigation(params: {
 
   const startNavigation = useCallback(() => {
     if (!session.route || !session.destination) return;
-    const validRoute = ensureRoadRouteGeometry(session.route, {
+    const validGeometryRoute = ensureRoadRouteGeometry(session.route, {
       phase: 'start',
       source: 'road',
       status: 'navigation_active',
     });
+    const validRoute = validGeometryRoute ? ensureRoadNavRouteVersion(validGeometryRoute) : null;
     if (!validRoute) {
       setSession((prev) => ({
         ...prev,
         status: 'error',
         route: null,
+        activeGuidance: null,
         routeAlternatives: [],
         error: 'Route geometry unavailable',
         routeStatusLabel: 'Route unavailable',
@@ -1465,10 +1589,29 @@ export function useRoadNavigation(params: {
     arrivalHitCountRef.current = 0;
     setStepListExpanded(false);
     setSession((prev) => {
+      const activeGuidance = buildActiveGuidanceStateFromRoadRoute({
+        route: validRoute,
+        refreshReason: 'initial',
+        refreshedAt: new Date().toISOString(),
+        currentStepIndex: prev.currentStepIndex,
+      });
+      if (activeGuidance.routeVersion !== prev.activeGuidance?.routeVersion) {
+        logGuidanceDebug('[ECS Guidance] routeVersion updated', {
+          routeId: activeGuidance.routeId,
+          routeVersion: activeGuidance.routeVersion,
+          refreshReason: activeGuidance.refreshReason,
+        });
+        logGuidanceDebug('[ECS Guidance] maneuvers replaced', {
+          routeId: activeGuidance.routeId,
+          routeVersion: activeGuidance.routeVersion,
+          maneuverCount: activeGuidance.steps.length,
+        });
+      }
       const nextSession = {
         ...prev,
         status: 'navigation_active' as const,
         route: validRoute,
+        activeGuidance,
         routeAlternatives: prev.routeAlternatives.length ? prev.routeAlternatives : [validRoute],
         routeStatusLabel: 'Route active',
         routeConfidenceState: 'on_route' as const,
@@ -1482,7 +1625,7 @@ export function useRoadNavigation(params: {
       void persistSession(nextSession);
       return nextSession;
     });
-  }, [persistSession, session.destination, session.route]);
+  }, [currentLocation, persistSession, session.destination, session.route]);
 
   const clearDestination = useCallback(async () => {
     routeRequestSeqRef.current += 1;
@@ -1503,6 +1646,101 @@ export function useRoadNavigation(params: {
   const endNavigation = useCallback(async () => {
     await clearDestination();
   }, [clearDestination]);
+
+  const rehydrateActiveGuidance = useCallback(
+    async (reason: ActiveGuidanceRefreshReason = 'screen_focus') => {
+      const restored = await loadRoadNavigationSession();
+      if (!restored?.activeGuidance || !isRestorableRoadSession(restored)) return;
+
+      setSession((prev) => {
+        if (!prev.destination || !['navigation_active', 'rerouting', 'arrived'].includes(prev.status)) {
+          return prev;
+        }
+
+        const activeGuidance: ActiveGuidanceState = {
+          ...restored.activeGuidance!,
+          refreshReason: reason,
+          refreshedAt: new Date().toISOString(),
+        };
+        const restoredRefreshMs = Date.parse(restored.activeGuidance!.refreshedAt);
+        const currentRefreshMs = Date.parse(prev.activeGuidance?.refreshedAt ?? '');
+        if (
+          prev.activeGuidance &&
+          prev.activeGuidance.routeVersion !== activeGuidance.routeVersion &&
+          Number.isFinite(currentRefreshMs) &&
+          (!Number.isFinite(restoredRefreshMs) || restoredRefreshMs <= currentRefreshMs)
+        ) {
+          logGuidanceDebug('[ECS Guidance] stale guidance prevented', {
+            currentRouteVersion: prev.activeGuidance.routeVersion,
+            restoredRouteVersion: activeGuidance.routeVersion,
+            currentRefreshedAt: prev.activeGuidance.refreshedAt,
+            restoredRefreshedAt: restored.activeGuidance!.refreshedAt,
+          });
+          return prev;
+        }
+        const routeAlreadyHydrated =
+          prev.activeGuidance?.routeVersion === activeGuidance.routeVersion &&
+          prev.activeGuidance?.refreshReason === activeGuidance.refreshReason &&
+          prev.route?.guidance?.id === activeGuidance.routeId &&
+          prev.route.guidance.steps.length === activeGuidance.steps.length &&
+          sameGeometry(prev.route.geometry, activeGuidance.geometry);
+
+        if (routeAlreadyHydrated) {
+          return prev;
+        }
+
+        const baseRoute =
+          prev.route ??
+          buildCachedRoadRouteFromRestoredSession(
+            {
+              ...restored,
+              activeGuidance,
+            },
+            currentLocation,
+          );
+        if (!baseRoute) return prev;
+
+        const nextRoute = ensureRoadRouteGeometry(
+          applyActiveGuidanceStateToRoadRoute(baseRoute, activeGuidance),
+          {
+            phase: 'focus_rehydrate',
+            source: 'road',
+            status: prev.status,
+          },
+        );
+        if (!nextRoute) return prev;
+
+        const computed = computeSessionFromRoute(nextRoute, currentLocation, prev);
+        const nextActiveGuidance = withActiveGuidanceProgressSnapshot(
+          activeGuidance,
+          computed.activeGuidanceProgress,
+        );
+        const nextRouteAlternatives = prev.routeAlternatives.some((route) => route.id === nextRoute.id)
+          ? prev.routeAlternatives.map((route) =>
+              route.id === nextRoute.id
+                ? nextRoute
+                : route,
+            )
+          : [nextRoute, ...prev.routeAlternatives].slice(0, 3);
+        const nextSession = {
+          ...prev,
+          route: nextRoute,
+          routeAlternatives: nextRouteAlternatives,
+          activeGuidance: nextActiveGuidance,
+          ...computed,
+        };
+
+        logGuidanceDebug('[ECS Guidance] focus rehydrate', {
+          routeId: nextActiveGuidance?.routeId ?? activeGuidance.routeId,
+          routeVersion: nextActiveGuidance?.routeVersion ?? activeGuidance.routeVersion,
+          refreshReason: reason,
+        });
+        void persistSession(nextSession);
+        return nextSession;
+      });
+    },
+    [currentLocation, persistSession],
+  );
 
   const uiMode = useMemo(() => {
     if (session.status === 'navigation_active' || session.status === 'rerouting') {
@@ -1543,5 +1781,6 @@ export function useRoadNavigation(params: {
     endNavigation,
     clearDestination,
     reroute,
+    rehydrateActiveGuidance,
   };
 }

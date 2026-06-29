@@ -278,11 +278,11 @@ assert.strictEqual(formatActiveDirectionDistance(45), '150 ft');
 assert.strictEqual(formatActiveDirectionDistance(1609.344 * 6.2), '6.2 mi');
 
 assert(
-  overlaySource.includes('buildActiveGuidanceDirectionList') &&
-    overlaySource.includes('route: session.route?.guidance') &&
+  overlaySource.includes('buildVersionedActiveGuidanceDirectionList') &&
+    overlaySource.includes('activeGuidance: session.activeGuidance') &&
     overlaySource.includes('progress: session.activeGuidanceProgress') &&
     overlaySource.includes('status: session.status'),
-  'RoadNavigationOverlay should build dropdown rows from EcsGuidanceRoute and EcsActiveGuidanceProgress.',
+  'RoadNavigationOverlay should build dropdown rows from the versioned active guidance state and EcsActiveGuidanceProgress.',
 );
 assert(
   overlaySource.includes('activeDirectionsRowCurrent') &&

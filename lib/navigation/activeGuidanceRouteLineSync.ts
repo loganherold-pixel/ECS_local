@@ -9,12 +9,14 @@ export type ActiveGuidanceRouteLineStatus =
 
 export interface ActiveGuidanceRouteLineSync {
   routeId: string | null;
+  routeVersion: string | null;
   rerouteGeneration: number | null;
   routeLineKey: string | null;
   geometry: EcsGuidanceCoordinate[];
   status: ActiveGuidanceRouteLineStatus;
   statusLabel: string | null;
   isStale: boolean;
+  versionMismatchPrevented: boolean;
   distanceMeters: number | null;
   durationSeconds: number | null;
   guidanceMode: EcsGuidanceRoute['guidanceMode'] | null;
@@ -23,6 +25,7 @@ export interface ActiveGuidanceRouteLineSync {
 export interface BuildActiveGuidanceRouteLineSyncInput {
   route?: EcsGuidanceRoute | null;
   fallbackGeometry?: readonly EcsGuidanceCoordinate[] | null;
+  routeVersion?: string | null;
   navigationStatus?: string | null;
   routeConfidenceState?: string | null;
   routeStatusLabel?: string | null;
@@ -40,12 +43,45 @@ function isValidRouteCoordinate(point: EcsGuidanceCoordinate | null | undefined)
   );
 }
 
+function coordinateRouteVersion(point: EcsGuidanceCoordinate): string | null {
+  const value = (point as EcsGuidanceCoordinate & { routeVersion?: unknown }).routeVersion;
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function routeGeometryMatchesVersion(
+  geometry: readonly EcsGuidanceCoordinate[],
+  routeVersion: string | null,
+): boolean {
+  const coordinateVersions = new Set(
+    geometry
+      .map(coordinateRouteVersion)
+      .filter((value): value is string => !!value),
+  );
+  if (coordinateVersions.size > 1) return false;
+  if (routeVersion && coordinateVersions.size === 1 && !coordinateVersions.has(routeVersion)) {
+    return false;
+  }
+  return true;
+}
+
+function routeVersionMatches(
+  route: EcsGuidanceRoute | null,
+  activeRouteVersion: string | null,
+): boolean {
+  if (!route || !activeRouteVersion) return true;
+  const routeVersion = cleanLabel((route as EcsGuidanceRoute & { routeVersion?: unknown }).routeVersion);
+  return !routeVersion || routeVersion === activeRouteVersion;
+}
+
 function normalizeGeometry(
   routeGeometry?: readonly EcsGuidanceCoordinate[] | null,
-  fallbackGeometry?: readonly EcsGuidanceCoordinate[] | null,
+  routeVersion?: string | null,
 ): EcsGuidanceCoordinate[] {
-  const source = Array.isArray(routeGeometry) && routeGeometry.length > 1 ? routeGeometry : fallbackGeometry;
-  return Array.isArray(source) ? source.filter(isValidRouteCoordinate) : [];
+  if (!Array.isArray(routeGeometry) || routeGeometry.length < 2) return [];
+  const geometry = routeGeometry.filter(isValidRouteCoordinate);
+  if (geometry.length < 2) return [];
+  if (!routeGeometryMatchesVersion(geometry, cleanLabel(routeVersion))) return [];
+  return geometry;
 }
 
 function hashString(value: string): string {
@@ -103,7 +139,11 @@ export function buildActiveGuidanceRouteLineSync(
   input: BuildActiveGuidanceRouteLineSyncInput,
 ): ActiveGuidanceRouteLineSync {
   const route = input.route ?? null;
-  const geometry = normalizeGeometry(route?.geometry, input.fallbackGeometry);
+  const routeVersion = cleanLabel(input.routeVersion) ?? null;
+  const versionMismatchPrevented = !routeVersionMatches(route, routeVersion);
+  const geometry = versionMismatchPrevented
+    ? []
+    : normalizeGeometry(route?.geometry, routeVersion);
   const hasGeometry = geometry.length > 1;
   const status = resolveStatus({
     navigationStatus: input.navigationStatus,
@@ -119,20 +159,26 @@ export function buildActiveGuidanceRouteLineSync(
   const routeLineKey =
     hasGeometry
       ? [
+          routeVersion,
           routeId ?? 'active-guidance-route',
           rerouteGeneration ?? 'no-generation',
           geometryFingerprint(geometry),
-        ].join(':')
+        ]
+          .map((part) => (part == null ? null : String(part)))
+          .filter((part): part is string => typeof part === 'string' && part.length > 0)
+          .join(':')
       : null;
 
   return {
     routeId,
+    routeVersion,
     rerouteGeneration,
     routeLineKey,
     geometry,
     status,
     statusLabel: resolveStatusLabel(status),
     isStale: status === 'rerouting',
+    versionMismatchPrevented,
     distanceMeters:
       typeof route?.distanceMeters === 'number' && Number.isFinite(route.distanceMeters)
         ? route.distanceMeters

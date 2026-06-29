@@ -126,7 +126,20 @@ async function runMapboxAlternativeAssertions() {
     const url = new URL(requestedUrl);
     assert.ok(url.pathname.includes('/directions/v5/mapbox/driving-traffic/'), 'Mapbox directions should use the traffic-aware driving profile for road guidance alternatives.');
     assert.strictEqual(url.searchParams.get('alternatives'), 'true', 'Mapbox directions should request alternative routes.');
+    assert.strictEqual(url.searchParams.get('steps'), 'true', 'Mapbox route alternatives should include turn-by-turn steps.');
+    assert.strictEqual(url.searchParams.get('overview'), 'full', 'Mapbox route alternatives should include full route geometry.');
     assert.strictEqual(routes.length, 3, 'Navigate Here should retain at most three route choices.');
+    assert(
+      routes.every((route, index) =>
+        typeof route.routeVersion === 'string' &&
+        route.routeVersion.length > 0 &&
+        route.routeIndex === index &&
+        route.selectedRouteIndex === index &&
+        route.providerMetadata?.provider === 'mapbox_directions' &&
+        route.providerMetadata?.routeUuid != null
+      ),
+      'Each accepted Mapbox route option should carry routeVersion, route index, and provider metadata.',
+    );
     assert.deepStrictEqual(
       routes.map((route) => route.durationS),
       [420, 510, 650],
@@ -153,17 +166,19 @@ assertIncludes(
   roadOverlaySource,
   [
     'alternateRoutes?: {',
-    'Select alternate route',
+    'option.disabled',
+    'option.etaLabel',
     'styles.alternateRouteOption',
-    'onSelectRouteAlternative?.(option.id)',
+    'onSelectRouteAlternative?.(routeId)',
   ],
-  'Road preview should render compact alternate-route choices.',
+  'Road preview should render ETA-forward alternate-route choices with honest disabled states.',
 );
 
 assertIncludes(
   navigateSource,
   [
-    'alternateRoutes: roadNavigation.session.routeAlternatives',
+    'buildStagedActiveGuidanceRouteOptions',
+    'selectedRouteId: route?.id ?? null',
     'onSelectRouteAlternative={roadNavigation.selectRouteAlternative}',
     "void previewRoadDestination(destination, 'manual_selection');",
   ],
