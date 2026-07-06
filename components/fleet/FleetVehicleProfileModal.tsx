@@ -737,6 +737,7 @@ export default function FleetVehicleProfileModal({
         maxHeightFraction={1}
         minHeightFraction={1}
         scrollable
+        contentContainerStyle={styles.profileSheetContent}
         dismissOnBackdrop={false}
         allowSwipeDismiss={false}
         footer={
@@ -796,7 +797,7 @@ export default function FleetVehicleProfileModal({
 
           <ECSPanel variant="secondary" style={styles.confirmPanel}>
             <View style={styles.confirmHeader}>
-              <View>
+              <View style={styles.confirmHeaderCopy}>
                 <Text style={styles.title}>Confirm specs</Text>
                 <Text style={styles.copy}>{suggestion.confidenceExplanation}</Text>
               </View>
@@ -1028,6 +1029,9 @@ const styles = StyleSheet.create({
   stack: {
     gap: 12,
   },
+  profileSheetContent: {
+    paddingBottom: 28,
+  },
   guidedCard: {
     gap: 12,
   },
@@ -1093,8 +1097,9 @@ const styles = StyleSheet.create({
   },
   field: {
     flexGrow: 1,
-    flexBasis: 180,
-    minWidth: 0,
+    flexShrink: 1,
+    flexBasis: '48%',
+    minWidth: 150,
     gap: 5,
   },
   fieldLabelRow: {
@@ -1129,6 +1134,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  confirmHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   specGrid: {
     flexDirection: 'row',

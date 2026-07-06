@@ -229,6 +229,21 @@ assertIncludes(
   'Start Expedition decision sheet should display supplemental route-start review reasons.',
 );
 assertIncludes(
+  startDecisionSheetSource,
+  'style={presentation === \'routePreviewMask\' ? [styles.maskFooter, styles.maskFooterDock] : undefined}',
+  'Route-preview Start Expedition review should keep its footer docked outside the scroll body.',
+);
+assertIncludes(
+  startDecisionSheetSource,
+  'overflow: \'hidden\'',
+  'Route-preview Start Expedition card should clip only the shell while preserving internal scroll and footer layout.',
+);
+assertIncludes(
+  startDecisionSheetSource,
+  'flex: 1,\n    minHeight: 0,\n    flexShrink: 1,',
+  'Route-preview Start Expedition scroll area should shrink above the docked action footer on mobile.',
+);
+assertIncludes(
   navigateSource,
   '<StartExpeditionDecisionSheet',
   'Navigate must render the Expedition Readiness pre-start decision sheet.',

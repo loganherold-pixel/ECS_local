@@ -153,6 +153,17 @@ assert(
     vehicleProfileDomain.includes("errors.push('Year is required.')"),
   'Fleet profile setup should visibly mark hard-required fields before spec confirmation.',
 );
+assert(
+  vehicleProfileModal.includes("flexBasis: '48%'") &&
+    vehicleProfileModal.includes('minWidth: 150') &&
+    vehicleProfileModal.includes('flexShrink: 1'),
+  'Fleet profile identity fields should use compact two-column wrapping where mobile width allows so Cab/Bed are not initially pushed behind the footer.',
+);
+assert(
+  vehicleProfileModal.includes('style={styles.confirmHeaderCopy}') &&
+    vehicleProfileModal.includes('confirmHeaderCopy: {\n    flex: 1,\n    minWidth: 0'),
+  'Fleet profile confirm-specs confidence badge should stay inside the mobile sheet by shrinking the explanatory copy block.',
+);
 
 assert(
   vehicleProfileModal.includes('Choose year, make, model, trim, engine, or drivetrain.') &&
@@ -177,6 +188,9 @@ assert(
 assert(
   vehicleProfileModal.includes('maxHeightFraction={1}') &&
     vehicleProfileModal.includes('minHeightFraction={1}') &&
+    vehicleProfileModal.includes('contentContainerStyle={styles.profileSheetContent}') &&
+    vehicleProfileModal.includes('profileSheetContent') &&
+    vehicleProfileModal.includes('paddingBottom: 28') &&
     buildLoadoutModal.includes('maxHeightFraction={1}') &&
     buildLoadoutModal.includes('minHeightFraction={1}') &&
     !vehicleProfileModal.includes('topClearanceOverride={0}') &&
@@ -184,6 +198,11 @@ assert(
     !buildLoadoutModal.includes('topClearanceOverride={0}') &&
     !buildLoadoutModal.includes('bottomClearanceOverride={0}'),
   'Fleet profile and build/loadout primary sheets should fill the ECS body without covering global banners.',
+);
+assert(
+  modalShell.includes('footer: {\n    flexShrink: 0') &&
+    modalShell.includes('scrollView: {\n    flex: 1,\n    flexShrink: 1,\n    minHeight: 0'),
+  'Shared modal shell should keep fixed footers from being pushed below clipped full-height sheets.',
 );
 
 assert(

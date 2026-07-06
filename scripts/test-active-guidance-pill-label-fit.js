@@ -33,8 +33,20 @@ assert.ok(
   'Active Guidance should receive the computed landscape compact width from the Navigate screen.',
 );
 assert.ok(
+  activeCardBlock.includes('styles.activeGuidanceMiniTextWrap') &&
+    activeCardBlock.includes('styles.activeGuidanceMiniInstruction') &&
+    activeCardBlock.includes('styles.activeGuidanceMiniDistance') &&
+    activeCardBlock.includes('numberOfLines={1}') &&
+    activeCardBlock.includes('Expand active guidance. ${nextInstruction}'),
+  'Minimized Active Guidance should keep visible next-turn text and distance instead of collapsing to an icon-only control.',
+);
+assert.ok(
   activeCardBlock.includes('styles.activeGuidanceProtectedActionGroup'),
   'Active Guidance header actions should live in a protected action group.',
+);
+assert.ok(
+  activeCardBlock.includes('styles.activeGuidanceHeaderBadgesRow'),
+  'Active Guidance status/version/update badges should render on their own row so they do not clip beside action pills.',
 );
 assert.ok(
   activeCardBlock.includes('MINIMIZE') &&
@@ -69,6 +81,14 @@ const meta = extractStyleBlock('activeGuidanceHeaderMeta');
 assert.ok(
   /flex:\s*1/.test(meta) && /minWidth:\s*0/.test(meta),
   'Active Guidance header copy should yield space to protected actions on compact screens.',
+);
+
+const badgesRow = extractStyleBlock('activeGuidanceHeaderBadgesRow');
+assert.ok(
+  /flexDirection:\s*'row'/.test(badgesRow) &&
+    /flexWrap:\s*'wrap'/.test(badgesRow) &&
+    /maxWidth:\s*'100%'/.test(badgesRow),
+  'Active Guidance badges row should wrap within the card width instead of shrinking into clipped text.',
 );
 
 const basePill = extractStyleBlock('activeGuidanceTopActionPill');

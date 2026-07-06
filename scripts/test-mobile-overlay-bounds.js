@@ -131,6 +131,8 @@ assert.ok(
 assert.ok(
   navigateSource.includes('idleDestinationSearchMaxHeight') &&
     navigateSource.includes('idleDestinationSearchResultsMaxHeight') &&
+    navigateSource.includes('idleDestinationSearchRenderLimit') &&
+    navigateSource.includes('keyboardHeight > 0 ? 3 : IDLE_DESTINATION_SEARCH_RENDER_LIMIT') &&
     navigateSource.includes('style={[styles.idleDestinationSearchShell, { maxHeight: idleDestinationSearchMaxHeight }]}') &&
     navigateSource.includes('style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}'),
   'Navigate destination search must bound its shell and result scrollers so mobile content stays reachable above keyboard/bottom controls.',

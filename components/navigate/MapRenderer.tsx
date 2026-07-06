@@ -91,7 +91,7 @@ const DEBUG_CAMP_LAYERS =
   ((globalThis as typeof globalThis & { __ECS_CAMP_LAYER_DEBUG__?: boolean }).__ECS_CAMP_LAYER_DEBUG__ === true) ||
   (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_CAMP_LAYER_DEBUG === '1') ||
   DEBUG_CAMP_SCOUT_MAP;
-const FRAME_COALESCED_MAP_MESSAGE_TYPES = new Set(['dynamicState', 'cameraCommand']);
+const FRAME_COALESCED_MAP_MESSAGE_TYPES = new Set(['dynamicState', 'cameraCommand', 'overlayPatch']);
 const MAPBOX_3D_TERRAIN_SOURCE_ID = 'ecs-navigate-3d-terrain-dem';
 export const CAMP_SCOUT_PIN_SOURCE_ID = 'ecs-camp-scout-pins-source';
 export const CAMP_SCOUT_PIN_LAYER_ID = 'ecs-camp-scout-pins-layer';
@@ -1364,6 +1364,29 @@ export function buildMapOverlayPayloadPatch(
   return patch.patchFamilies.length > 0 ? patch : null;
 }
 
+export function mergeMapOverlayPayloadPatches(
+  previousPatch: MapOverlayPayloadPatch | null | undefined,
+  nextPatch: MapOverlayPayloadPatch | null | undefined,
+): MapOverlayPayloadPatch {
+  const patchFamilies: MapOverlayPatchFamily[] = [];
+  const addFamily = (family: unknown) => {
+    if (typeof family !== 'string') return;
+    if (!Object.prototype.hasOwnProperty.call(MAP_OVERLAY_PATCH_FIELDS, family)) return;
+    if (!patchFamilies.includes(family as MapOverlayPatchFamily)) {
+      patchFamilies.push(family as MapOverlayPatchFamily);
+    }
+  };
+
+  (previousPatch?.patchFamilies ?? []).forEach(addFamily);
+  (nextPatch?.patchFamilies ?? []).forEach(addFamily);
+
+  return {
+    ...(previousPatch ?? {}),
+    ...(nextPatch ?? {}),
+    patchFamilies,
+  };
+}
+
 function buildFeatureCollectionSummaryHash(value: unknown): string {
   const collection = value as {
     type?: string;
@@ -1476,6 +1499,16 @@ function scheduleMapBridgeFrame(callback: () => void): () => void {
 function getMapBridgeMessageType(message: unknown): string | null {
   const candidate = message as { type?: unknown } | null;
   return typeof candidate?.type === 'string' ? candidate.type : null;
+}
+
+function mergeMapOverlayPatchMessages(existingMessage: unknown, message: unknown): unknown {
+  const existing = existingMessage as { type?: unknown; payload?: MapOverlayPayloadPatch } | null;
+  const next = message as { type?: unknown; payload?: MapOverlayPayloadPatch } | null;
+  if (existing?.type !== 'overlayPatch' || next?.type !== 'overlayPatch') return message;
+  return {
+    type: 'overlayPatch',
+    payload: mergeMapOverlayPayloadPatches(existing.payload, next.payload),
+  };
 }
 
 export function buildWebPayload(props: MapRendererProps): WebMapPayload {
@@ -8283,7 +8316,13 @@ const MapRenderer = React.memo(function MapRenderer({
   const postToMap = useCallback((message: unknown) => {
     const messageType = getMapBridgeMessageType(message);
     if (messageType && FRAME_COALESCED_MAP_MESSAGE_TYPES.has(messageType)) {
-      pendingMapMessagesRef.current.set(messageType, message);
+      const existingMessage = pendingMapMessagesRef.current.get(messageType);
+      pendingMapMessagesRef.current.set(
+        messageType,
+        messageType === 'overlayPatch' && existingMessage
+          ? mergeMapOverlayPatchMessages(existingMessage, message)
+          : message,
+      );
       if (!pendingMapMessageFrameCancelRef.current) {
         pendingMapMessageFrameCancelRef.current = scheduleMapBridgeFrame(flushPendingMapMessages);
       }

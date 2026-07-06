@@ -290,5 +290,13 @@ assert(
     overlaySource.includes('activeDirectionsDuration'),
   'Active directions dropdown should render current highlighting, empty states, and optional duration metadata.',
 );
+assert(
+  overlaySource.includes('activeDirectionsDropdown:') &&
+    overlaySource.includes('maxHeight: 226') &&
+    overlaySource.includes('activeDirectionsScroll:') &&
+    overlaySource.includes('maxHeight: 168') &&
+    overlaySource.includes('paddingBottom: 8'),
+  'Active directions dropdown should reserve enough internal height and bottom padding so lower rows are reachable instead of clipped on mobile.',
+);
 
 console.log('Active guidance directions list regression passed.');

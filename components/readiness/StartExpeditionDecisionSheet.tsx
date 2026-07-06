@@ -97,7 +97,7 @@ export default function StartExpeditionDecisionSheet({
   const showConcerns = assessment.status !== 'ready';
   const acknowledgedOverride = assessment.status !== 'ready';
   const footer = (
-    <ECSOverlayFooter style={presentation === 'routePreviewMask' ? styles.maskFooter : undefined}>
+    <ECSOverlayFooter style={presentation === 'routePreviewMask' ? [styles.maskFooter, styles.maskFooterDock] : undefined}>
       <ECSButton
         label="Review Command Brief"
         icon="document-text-outline"
@@ -282,6 +282,7 @@ const styles = StyleSheet.create({
     maxWidth: 392,
     maxHeight: '100%',
     flexShrink: 1,
+    overflow: 'hidden',
     paddingHorizontal: 13,
     paddingVertical: 12,
     borderRadius: 16,
@@ -339,6 +340,8 @@ const styles = StyleSheet.create({
   },
   maskScroll: {
     width: '100%',
+    flex: 1,
+    minHeight: 0,
     flexShrink: 1,
   },
   maskScrollContent: {
@@ -347,6 +350,13 @@ const styles = StyleSheet.create({
   maskFooter: {
     paddingHorizontal: 0,
     paddingBottom: 0,
+  },
+  maskFooterDock: {
+    flexShrink: 0,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(196,138,44,0.14)',
   },
   root: {
     gap: 12,

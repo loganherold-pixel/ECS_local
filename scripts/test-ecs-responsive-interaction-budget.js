@@ -59,9 +59,10 @@ assert.ok(
   'MapRenderer must hold pending bridge messages outside React state.',
 );
 assert.ok(
-  mapRenderer.includes('pendingMapMessagesRef.current.set(messageType, message);') &&
-    mapRenderer.includes('FRAME_COALESCED_MAP_MESSAGE_TYPES.has(messageType)'),
-  'MapRenderer must replace same-frame hot bridge messages by message type.',
+  mapRenderer.includes('FRAME_COALESCED_MAP_MESSAGE_TYPES.has(messageType)') &&
+    mapRenderer.includes('const existingMessage = pendingMapMessagesRef.current.get(messageType);') &&
+    mapRenderer.includes('mergeMapOverlayPatchMessages(existingMessage, message)'),
+  'MapRenderer must replace same-frame hot bridge messages by type and merge overlay patches without dropping families.',
 );
 assert.ok(
   mapRenderer.includes('pendingMapMessagesRef.current.clear();') &&

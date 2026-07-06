@@ -620,6 +620,7 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
+    flexShrink: 1,
     minHeight: 0,
   },
   bodyContent: {
@@ -630,6 +631,7 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   footer: {
+    flexShrink: 0,
     paddingTop: 12,
   },
   footerRow: {

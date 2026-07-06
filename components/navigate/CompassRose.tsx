@@ -263,6 +263,8 @@ const CompassRose = React.memo(function CompassRose({
   const displayDeg = hasHeading ? effectiveHeading : null;
   const displayCardinal = hasHeading ? getCardinal(effectiveHeading!) : '—';
   const displaySource = source === 'gps' ? 'GPS' : source === 'compass' ? 'MAG' : 'NO FIX';
+  const recenterHintLabel = paused ? 'POWER SAVE' : isStationaryLocked ? 'LOCKED' : 'TAP TO CENTER';
+  const persistentRecenterHint = paused || isStationaryLocked;
 
   const accuracyColor = getAccuracyColor(accuracy);
 
@@ -362,17 +364,6 @@ const CompassRose = React.memo(function CompassRose({
           <View style={styles.headingDot} />
         </View>
 
-        <Animated.View
-          pointerEvents="none"
-          accessible={false}
-          importantForAccessibility="no"
-          style={[styles.recenterHint, { opacity: hintFadeAnim }]}
-        >
-          <Text style={styles.recenterHintText}>
-            {paused ? 'POWER SAVE' : isStationaryLocked ? 'LOCKED' : 'TAP TO CENTER'}
-          </Text>
-        </Animated.View>
-
         {hasHeading && !paused ? (
           <View style={[styles.headingQualityAccent, { backgroundColor: accuracyColor }]} />
         ) : null}
@@ -383,6 +374,26 @@ const CompassRose = React.memo(function CompassRose({
           </Text>
         </View>
       </Wrapper>
+
+      {persistentRecenterHint ? (
+        <View
+          pointerEvents="none"
+          accessible={false}
+          importantForAccessibility="no"
+          style={styles.recenterHint}
+        >
+          <Text style={styles.recenterHintText}>{recenterHintLabel}</Text>
+        </View>
+      ) : (
+        <Animated.View
+          pointerEvents="none"
+          accessible={false}
+          importantForAccessibility="no"
+          style={[styles.recenterHint, { opacity: hintFadeAnim }]}
+        >
+          <Text style={styles.recenterHintText}>{recenterHintLabel}</Text>
+        </Animated.View>
+      )}
     </Animated.View>
   );
 });
@@ -396,10 +407,16 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 56,
     right: 14,
+    width: COMPASS_SIZE,
+    height: COMPASS_SIZE + 32,
+    overflow: 'visible',
     zIndex: 28,
   },
 
   compassOuter: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
     width: COMPASS_SIZE,
     height: COMPASS_SIZE,
     borderRadius: COMPASS_SIZE / 2,
@@ -605,25 +622,30 @@ const styles = StyleSheet.create({
 
   recenterHint: {
     position: 'absolute',
-    top: COMPASS_SIZE + 6,
-    alignSelf: 'center',
+    bottom: COMPASS_SIZE + 6,
+    left: -14,
+    right: -14,
     minWidth: 64,
+    minHeight: 20,
     paddingHorizontal: 6,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderRadius: 7,
-    backgroundColor: 'rgba(11,15,18,0.56)',
+    backgroundColor: 'rgba(11,15,18,0.72)',
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 1,
+    zIndex: 9,
+    elevation: 9,
   },
 
   recenterHintText: {
-    fontSize: 6,
+    fontSize: 8,
+    lineHeight: 12,
     fontWeight: '800',
-    color: 'rgba(214,208,190,0.58)',
+    color: 'rgba(214,208,190,0.76)',
     letterSpacing: 0.7,
+    textAlign: 'center',
   },
 
   headingQualityAccent: {

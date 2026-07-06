@@ -20130,9 +20130,11 @@ const idleDestinationSearchNoMatchesVisible =
   !roadNavigation.searchError &&
   roadNavigation.suggestions.length === 0 &&
   !searchOperationalState.disabled;
+const idleDestinationSearchRenderLimit =
+  keyboardHeight > 0 ? 3 : IDLE_DESTINATION_SEARCH_RENDER_LIMIT;
 const visibleIdleDestinationSearchSuggestions = useMemo(
-  () => roadNavigation.suggestions.slice(0, IDLE_DESTINATION_SEARCH_RENDER_LIMIT),
-  [roadNavigation.suggestions],
+  () => roadNavigation.suggestions.slice(0, idleDestinationSearchRenderLimit),
+  [idleDestinationSearchRenderLimit, roadNavigation.suggestions],
 );
 const idleDestinationSearchResultsLabel =
   visibleIdleDestinationSearchSuggestions.length < roadNavigation.suggestions.length

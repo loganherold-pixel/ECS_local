@@ -840,46 +840,45 @@ function PreviewCard({
               </Text>
             </TouchableOpacity>
           ) : null}
+        </ScrollView>
+        <ECSActionRow compact wrap style={[styles.actionRow, styles.previewActionRow, styles.previewStickyActionRow]}>
+          <ECSButton
+            label={dismissLabel}
+            icon="close"
+            variant="secondary"
+            size="compact"
+            onPress={onClearDestination}
+            numberOfLines={2}
+            style={styles.previewActionButton}
+            textStyle={styles.previewActionButtonText}
+          />
 
-          <ECSActionRow compact wrap style={[styles.actionRow, styles.previewActionRow]}>
+          {showOverview ? (
             <ECSButton
-              label={dismissLabel}
-              icon="close"
+              label={previewContext?.overviewLabel ?? 'Overview'}
+              icon="scan-outline"
               variant="secondary"
               size="compact"
-              onPress={onClearDestination}
+              onPress={onRouteOverview}
               numberOfLines={2}
               style={styles.previewActionButton}
               textStyle={styles.previewActionButtonText}
             />
+          ) : null}
 
-            {showOverview ? (
-              <ECSButton
-                label={previewContext?.overviewLabel ?? 'Overview'}
-                icon="scan-outline"
-                variant="secondary"
-                size="compact"
-                onPress={onRouteOverview}
-                numberOfLines={2}
-                style={styles.previewActionButton}
-                textStyle={styles.previewActionButtonText}
-              />
-            ) : null}
-
-            <ECSButton
-              label={primaryActionLabel}
-              icon="play"
-              variant="primary"
-              size="compact"
-              onPress={onPrimaryPreviewAction ?? onStartNavigation}
-              disabled={primaryActionDisabled}
-              grow
-              numberOfLines={2}
-              style={[styles.previewActionButton, styles.previewPrimaryActionButton]}
-              textStyle={styles.previewActionButtonText}
-            />
-          </ECSActionRow>
-        </ScrollView>
+          <ECSButton
+            label={primaryActionLabel}
+            icon="play"
+            variant="primary"
+            size="compact"
+            onPress={onPrimaryPreviewAction ?? onStartNavigation}
+            disabled={primaryActionDisabled}
+            grow
+            numberOfLines={2}
+            style={[styles.previewActionButton, styles.previewPrimaryActionButton]}
+            textStyle={styles.previewActionButtonText}
+          />
+        </ECSActionRow>
       </ECSCard>
     </View>
   );
@@ -1120,6 +1119,20 @@ function ActiveNavigationCard({
           accessibilityHint="Restores the route update panel without changing Active Expedition Readiness state."
         >
           <Ionicons name={maneuverIcon} size={21} color={TACTICAL.amber} />
+          <View style={styles.activeGuidanceMiniTextWrap}>
+            <Text
+              style={styles.activeGuidanceMiniInstruction}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.78}
+            >
+              {nextInstruction}
+            </Text>
+            <Text style={styles.activeGuidanceMiniDistance} numberOfLines={1}>
+              {distanceLine ? `${distanceLine} | EXPAND` : 'EXPAND GUIDANCE'}
+            </Text>
+          </View>
+          <Ionicons name="chevron-down" size={15} color={TACTICAL.textMuted} />
         </TouchableOpacity>
       </View>
     );
@@ -1148,31 +1161,6 @@ function ActiveNavigationCard({
               <Text style={styles.activeGuidanceEyebrow} numberOfLines={1}>
                 {guidanceEyebrow}
               </Text>
-              {showActiveGuidanceHeaderBadges ? (
-                <View style={styles.activeGuidanceHeaderBadges}>
-                  {activeContext?.progressLabel ? (
-                    <ECSBadge
-                      label={activeContext.progressLabel}
-                      tone={isRerouting ? 'warning' : 'active'}
-                      compact
-                    />
-                  ) : null}
-                  {activeGuidanceVersionLabel ? (
-                    <ECSBadge
-                      label={activeGuidanceVersionLabel}
-                      tone="info"
-                      compact
-                    />
-                  ) : null}
-                  {activeGuidanceRefreshLabel ? (
-                    <ECSBadge
-                      label={activeGuidanceRefreshLabel}
-                      tone={refreshedStepsUnavailable ? 'warning' : 'active'}
-                      compact
-                    />
-                  ) : null}
-                </View>
-              ) : null}
             </View>
             <View style={styles.activeGuidanceProtectedActionGroup}>
               {onToggleActiveGuidanceMinimized ? (
@@ -1249,6 +1237,31 @@ function ActiveNavigationCard({
               </TouchableOpacity>
             </View>
           </View>
+          {showActiveGuidanceHeaderBadges ? (
+            <View style={styles.activeGuidanceHeaderBadgesRow}>
+              {activeContext?.progressLabel ? (
+                <ECSBadge
+                  label={activeContext.progressLabel}
+                  tone={isRerouting ? 'warning' : 'active'}
+                  compact
+                />
+              ) : null}
+              {activeGuidanceVersionLabel ? (
+                <ECSBadge
+                  label={activeGuidanceVersionLabel}
+                  tone="info"
+                  compact
+                />
+              ) : null}
+              {activeGuidanceRefreshLabel ? (
+                <ECSBadge
+                  label={activeGuidanceRefreshLabel}
+                  tone={refreshedStepsUnavailable ? 'warning' : 'active'}
+                  compact
+                />
+              ) : null}
+            </View>
+          ) : null}
           {hasDirectionsControl || (activeAccessoryMinimized && onExpandActiveAccessory) ? (
             <View style={styles.activeGuidanceAuxActionRow}>
               {hasDirectionsControl ? (
@@ -1738,7 +1751,7 @@ const styles = StyleSheet.create({
   },
   activeDirectionsDropdown: {
     width: '100%',
-    maxHeight: 190,
+    maxHeight: 226,
     marginTop: 4,
     borderRadius: 10,
     borderWidth: 1,
@@ -1778,10 +1791,11 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(196,138,44,0.08)',
   },
   activeDirectionsScroll: {
-    maxHeight: 156,
+    maxHeight: 168,
   },
   activeDirectionsScrollContent: {
     paddingVertical: 3,
+    paddingBottom: 8,
   },
   activeDirectionsRow: {
     minHeight: 46,
@@ -1977,11 +1991,15 @@ const styles = StyleSheet.create({
     paddingRight: 0,
   },
   activeGuidanceMiniButton: {
-    width: 44,
-    height: 44,
+    alignSelf: 'stretch',
+    minHeight: 44,
+    maxWidth: '100%',
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 10,
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.28)',
     backgroundColor: 'rgba(8,12,15,0.88)',
@@ -1990,6 +2008,23 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 14,
     elevation: 14,
+  },
+  activeGuidanceMiniTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  activeGuidanceMiniInstruction: {
+    ...ECS_TEXT.cardTitle,
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  activeGuidanceMiniDistance: {
+    ...ECS_TEXT.statLabel,
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 10,
+    marginTop: 1,
   },
   activeGuidanceCard: {
     width: '100%',
@@ -2052,6 +2087,14 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 6,
     flexShrink: 1,
+  },
+  activeGuidanceHeaderBadgesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 5,
+    maxWidth: '100%',
   },
   activeGuidanceTopActionPill: {
     minHeight: 28,
@@ -2200,7 +2243,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   previewCardScrollContent: {
-    paddingBottom: 1,
+    paddingBottom: 8,
   },
   bottomDrawerWrap: {
     position: 'absolute',
@@ -2571,6 +2614,13 @@ const styles = StyleSheet.create({
   },
   previewActionRow: {
     alignItems: 'stretch',
+  },
+  previewStickyActionRow: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(196,138,44,0.14)',
+    flexShrink: 0,
   },
   previewActionButton: {
     flexGrow: 1,

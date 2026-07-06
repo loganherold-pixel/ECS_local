@@ -69,6 +69,7 @@ const {
   buildMapOverlayPayloadPatch,
   buildMapOverlayPayloadHash,
   buildWebPayload,
+  mergeMapOverlayPayloadPatches,
   normalizeRenderedCampScoutMarkers,
 } = require(mapRendererPath);
 
@@ -256,6 +257,29 @@ assert.ok(
   'Camp/search overlay patches must not resend route geometry or segment payloads.',
 );
 
+const mergedPatch = mergeMapOverlayPayloadPatches(
+  {
+    patchFamilies: ['markers'],
+    pins: [{ id: 'pin-1', latitude: 39.12, longitude: -120.12, title: 'Pin 1' }],
+  },
+  {
+    patchFamilies: ['route', 'presentation'],
+    routeCoords: [[-120.1, 39.1], [-120.2, 39.2]],
+    showCrosshair: true,
+  },
+);
+assert.deepStrictEqual(
+  mergedPatch.patchFamilies,
+  ['markers', 'route', 'presentation'],
+  'Merged overlay patches should preserve every changed family in frame order.',
+);
+assert.ok(
+  Array.isArray(mergedPatch.pins) &&
+    Array.isArray(mergedPatch.routeCoords) &&
+    mergedPatch.showCrosshair === true,
+  'Merged overlay patches should retain marker, route, and presentation payload fields.',
+);
+
 const styleChangedRoute = buildWebPayload({
   mapboxToken: 'token',
   mapStyle: 'satellite',
@@ -327,6 +351,11 @@ assert(
     mapRendererSource.includes('buildCampLayerHash') &&
     mapRendererSource.includes('buildFeatureCollectionSummaryHash'),
   'MapRenderer should avoid re-rendering unchanged camp pins or stringifying full camp GeoJSON on every active-guidance update.',
+);
+assert(
+  mapRendererSource.includes("new Set(['dynamicState', 'cameraCommand', 'overlayPatch'])") &&
+    mapRendererSource.includes('mergeMapOverlayPatchMessages(existingMessage, message)'),
+  'MapRenderer should coalesce and merge overlay patches before injecting them into the WebView.',
 );
 assert(
   navigateSource.includes('routeRenderMode={displayedRouteRenderMode}') &&

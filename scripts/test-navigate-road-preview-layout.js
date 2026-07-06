@@ -51,6 +51,21 @@ assertIncludes(
   'Road Preview should use a preview-specific wrapper style.',
 );
 assertIncludes(
+  'styles.previewStickyActionRow',
+  'Road Preview actions should use a sticky action row outside the scroller so Start Guidance is visible on mobile.',
+);
+{
+  const cardStart = source.indexOf('<ECSCard variant="primary" style={[styles.bottomCard, styles.previewBottomCard]}>');
+  const cardEnd = source.indexOf('</ECSCard>', cardStart);
+  assert.ok(cardStart >= 0 && cardEnd > cardStart, 'Road Preview card markup should be present.');
+  const cardBlock = source.slice(cardStart, cardEnd);
+  assert.ok(
+    cardBlock.indexOf('</ScrollView>') >= 0 &&
+      cardBlock.indexOf('styles.previewStickyActionRow') > cardBlock.indexOf('</ScrollView>'),
+    'Road Preview Start Guidance actions should render after the scroll body, not at the bottom of hidden scroll content.',
+  );
+}
+assertIncludes(
   'style={[StyleSheet.absoluteFill, styles.overlayRoot]}',
   'Road Preview overlay should have a high-priority root stacking context.',
 );

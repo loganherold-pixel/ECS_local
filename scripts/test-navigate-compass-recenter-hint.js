@@ -38,19 +38,30 @@ assert(
   source.includes('pointerEvents="none"') &&
     source.includes('accessible={false}') &&
     source.includes('importantForAccessibility="no"') &&
+    source.includes('const persistentRecenterHint = paused || isStationaryLocked;') &&
+    source.includes('style={styles.recenterHint}') &&
     source.includes('style={[styles.recenterHint, { opacity: hintFadeAnim }]}'),
-  'Recenter helper label must not intercept compass touch events.',
+  'Recenter helper label must not intercept compass touch events, and persistent LOCKED/POWER SAVE status should avoid animated opacity measurement.',
 );
 
 assert(
-  source.includes('top: COMPASS_SIZE + 6') &&
-    !source.includes('top: -18'),
-  'Recenter helper label should sit below the compass instead of over it.',
+  source.includes('bottom: COMPASS_SIZE + 6') &&
+    source.includes("overflow: 'visible'") &&
+    source.includes('height: COMPASS_SIZE + 32') &&
+    source.includes('position: \'absolute\',\n    bottom: 0,\n    left: 0,\n    width: COMPASS_SIZE') &&
+    source.includes('left: -14') &&
+    source.includes('right: -14') &&
+    source.includes('minHeight: 20') &&
+    source.includes('lineHeight: 12') &&
+    source.includes('zIndex: 9') &&
+    source.includes('elevation: 9') &&
+    !source.includes('top: COMPASS_SIZE + 6'),
+  'Recenter helper label should sit above the compass with explicit visible Android bounds so LOCKED/TAP TO CENTER stays clear of the mobile command dock.',
 );
 
 assert(
-  source.includes("backgroundColor: 'rgba(11,15,18,0.56)'") &&
-    source.includes("color: 'rgba(214,208,190,0.58)'"),
+  source.includes("backgroundColor: 'rgba(11,15,18,0.72)'") &&
+    source.includes("color: 'rgba(214,208,190,0.76)'"),
   'Recenter helper label should be visually subtle.',
 );
 
