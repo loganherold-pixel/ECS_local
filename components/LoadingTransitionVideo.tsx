@@ -9,7 +9,7 @@ import { TACTICAL } from '../lib/theme';
 const LOADING_TRANSITION_VIDEO = require('../assets/auth/loading-transition.mp4');
 const LOADING_FALLBACK = require('../assets/attitude/backgrounds/darker-tactical-canyon.png');
 export const LOADING_VIDEO_CYCLE_MS = 5000;
-const STARTUP_LOADING_VIDEO_ENABLED = !(Platform.OS === 'android' && typeof __DEV__ !== 'undefined' && __DEV__);
+const STARTUP_LOADING_VIDEO_ENABLED = Platform.OS !== 'android';
 
 export default function LoadingTransitionVideo() {
   const [videoFailed, setVideoFailed] = useState(!STARTUP_LOADING_VIDEO_ENABLED);

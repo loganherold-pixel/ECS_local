@@ -33,6 +33,7 @@ function loadTypeScriptModule(relativePath) {
 
 const modalShellSource = read('components/ECSModalShell.tsx');
 const exploreRoutePreviewSource = read('components/discover/ExploreRoutePreviewModal.tsx');
+const navigateSource = read('app/(tabs)/navigate.tsx');
 const { resolveMobileOverlayBounds } = loadTypeScriptModule('lib/ui/mobileOverlayBounds.ts');
 
 function assertBoundsFit(result, label) {
@@ -118,6 +119,21 @@ assert.ok(
 assert.ok(
   !exploreRoutePreviewSource.includes('scrollable={false}'),
   'Explore route preview must not disable scrolling for route/readiness/map detail content.',
+);
+assert.ok(
+  navigateSource.includes('Keyboard,') &&
+    navigateSource.includes("Keyboard.addListener('keyboardWillShow'") &&
+    navigateSource.includes("Keyboard.addListener('keyboardDidShow'") &&
+    navigateSource.includes("Keyboard.addListener('keyboardWillHide'") &&
+    navigateSource.includes("Keyboard.addListener('keyboardDidHide'"),
+  'Navigate mobile map search must track keyboard visibility on iOS and Android.',
+);
+assert.ok(
+  navigateSource.includes('idleDestinationSearchMaxHeight') &&
+    navigateSource.includes('idleDestinationSearchResultsMaxHeight') &&
+    navigateSource.includes('style={[styles.idleDestinationSearchShell, { maxHeight: idleDestinationSearchMaxHeight }]}') &&
+    navigateSource.includes('style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}'),
+  'Navigate destination search must bound its shell and result scrollers so mobile content stays reachable above keyboard/bottom controls.',
 );
 
 console.log('Mobile overlay bounds checks passed.');

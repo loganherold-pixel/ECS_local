@@ -34,8 +34,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import { usePathname, useRouter } from 'expo-router';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
 import { useApp } from '../../context/AppContext';
@@ -153,6 +153,8 @@ import { useECSPowerTelemetryReadings } from '../../src/telemetry/useECSTelemetr
 
 
 const TAG = '[FLEET]';
+let zeroVehicleVccSetupAutoOpenedThisSession = false;
+let zeroVehicleVccSetupDismissedThisSession = false;
 
 function logFleetDev(...args: unknown[]) {
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -1509,9 +1511,12 @@ class FleetErrorBoundary extends Component<EBProps, EBState> {
 // ============================================================
 function FleetScreenInner() {
   const router = useRouter();
+  const pathname = usePathname();
   const { user, authLoading, showToast, activeTrip, userSettings, isOnline, offlineMode } = useApp();
   const insets = useSafeAreaInsets();
   const adaptive = useAdaptiveLayout();
+  const isFleetRouteActive = pathname === '/fleet' || pathname === '/(tabs)/fleet' || pathname.endsWith('/fleet');
+  const isFleetFocused = useIsFocused() && isFleetRouteActive;
   const dockClearance = useMemo(() => getShellBottomClearance(insets.bottom, 8), [insets.bottom]);
   const fleetPremiumRollout = useMemo(() => resolveFleetPremiumReleaseConfig(), []);
   const powerTelemetryReadings = useECSPowerTelemetryReadings();
@@ -1717,8 +1722,15 @@ function FleetScreenInner() {
     setWeightSummaryModalVehicle(null);
   }, []);
 
+  useFocusEffect(useCallback(() => {
+    return () => {
+      closeFleetDetailFlows();
+    };
+  }, [closeFleetDetailFlows]));
+
   const handleAddVehicle = useCallback(() => {
     hapticMicro();
+    zeroVehicleVccSetupDismissedThisSession = false;
     closeFleetDetailFlows();
     setProfileModalVehicle(null);
     setProfileModalVisible(true);
@@ -1738,9 +1750,12 @@ function FleetScreenInner() {
   }, [closeFleetDetailFlows, showToast, vehicles]);
 
   const handleCloseVehicleProfile = useCallback(() => {
+    if (vehicles.length === 0 && !profileModalVehicle) {
+      zeroVehicleVccSetupDismissedThisSession = true;
+    }
     setProfileModalVisible(false);
     setProfileModalVehicle(null);
-  }, []);
+  }, [profileModalVehicle, vehicles.length]);
 
   const handleVehicleProfileSaved = useCallback(() => {
     fetchVehicles();
@@ -2507,16 +2522,19 @@ function FleetScreenInner() {
   ]);
 
   useEffect(() => {
-    if (loading || authLoading || vehicles.length > 0 || profileModalVisible) return;
+    if (!isFleetFocused || loading || authLoading || vehicles.length > 0 || profileModalVisible) return;
     if (firstRunVccSetupOpenedRef.current) return;
+    if (zeroVehicleVccSetupAutoOpenedThisSession || zeroVehicleVccSetupDismissedThisSession) return;
 
     firstRunVccSetupOpenedRef.current = true;
+    zeroVehicleVccSetupAutoOpenedThisSession = true;
     closeFleetDetailFlows();
     setProfileModalVehicle(null);
     setProfileModalVisible(true);
   }, [
     authLoading,
     closeFleetDetailFlows,
+    isFleetFocused,
     loading,
     profileModalVisible,
     vehicles.length,
@@ -3289,7 +3307,7 @@ function FleetScreenInner() {
 
       {/* Fleet Loadout Modal — full-screen loadout editor for post-setup editing */}
       <FleetLoadoutModal
-        visible={loadoutModalVisible}
+        visible={isFleetFocused && loadoutModalVisible}
         vehicle={loadoutModalVehicle}
         userId={user?.id || null}
         onClose={handleCloseLoadoutModal}
@@ -3298,7 +3316,7 @@ function FleetScreenInner() {
       />
 
       <FleetVehicleProfileModal
-        visible={profileModalVisible}
+        visible={isFleetFocused && profileModalVisible}
         vehicle={profileModalVehicle}
         userId={user?.id || null}
         onClose={handleCloseVehicleProfile}
@@ -3307,7 +3325,7 @@ function FleetScreenInner() {
       />
 
       <FleetBuildLoadoutModal
-        visible={buildLoadoutModalVisible}
+        visible={isFleetFocused && buildLoadoutModalVisible}
         vehicle={buildLoadoutModalVehicle}
         userId={user?.id || null}
         onClose={handleCloseBuildLoadoutModal}
@@ -3316,7 +3334,7 @@ function FleetScreenInner() {
       />
 
       <FleetConfidenceNoticeModal
-        visible={Boolean(vehicleConfidenceNoticeVehicleId)}
+        visible={isFleetFocused && Boolean(vehicleConfidenceNoticeVehicleId)}
         notice={selectedVehicleConfidenceNotice}
         title="Vehicle Confidence"
         subtitle={selectedVehicleConfidenceModel?.vehicle.name ?? 'Vehicle-specific confidence'}
@@ -3325,7 +3343,7 @@ function FleetScreenInner() {
       />
 
       <FleetConfidenceNoticeModal
-        visible={Boolean(vehicleReadinessNoticeVehicleId)}
+        visible={isFleetFocused && Boolean(vehicleReadinessNoticeVehicleId)}
         notice={selectedVehicleReadinessNotice}
         title="Vehicle Readiness"
         subtitle={selectedVehicleReadinessModel?.vehicle.name ?? 'Vehicle-specific readiness'}
@@ -3335,7 +3353,7 @@ function FleetScreenInner() {
       />
 
       <ECSModalShell
-        visible={weightSummaryModalVisible}
+        visible={isFleetFocused && weightSummaryModalVisible}
         onClose={handleCloseWeightSummaryModal}
         title="Weight Summary"
         subtitle={weightSummaryModalVehicle?.name ?? 'Vehicle payload and balance'}

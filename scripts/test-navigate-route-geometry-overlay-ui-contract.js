@@ -46,7 +46,9 @@ assert(remotenessButton > routeGeometryButton, 'Route geometry overlay switch sh
 assert(
   source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes("name=\"git-branch-outline\"") &&
     source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes('accessibilityRole="switch"') &&
-    source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes('checked: routeGeometryOverlayEnabled'),
+    source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes('checked: routeGeometryOverlayEnabled') &&
+    source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes('testID="navigate-route-geometry-overlay-toggle"') &&
+    source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes("accessibilityValue={{ text: routeGeometryOverlayEnabled ? 'on' : 'off' }}"),
   'Route geometry switch should use the git-branch icon and switch accessibility state.',
 );
 

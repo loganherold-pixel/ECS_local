@@ -104,7 +104,7 @@ assertIncludes(
     "accessibilityHint: 'Search for a destination to build a road navigation route.'",
     'value={roadNavigation.query}',
     'onChangeText={roadNavigation.setQuery}',
-    'roadNavigation.suggestions.map((suggestion) =>',
+    'visibleIdleDestinationSearchSuggestions.map((suggestion) =>',
     'onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}',
     "accessibilityLabel: 'Search address or place'",
   ],

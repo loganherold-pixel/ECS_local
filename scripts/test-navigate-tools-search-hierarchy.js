@@ -58,16 +58,22 @@ assert(
   source.includes('value={roadNavigation.query}') &&
     source.includes('onChangeText={roadNavigation.setQuery}') &&
     source.includes('loading={roadNavigation.searchLoading}') &&
+    source.includes("testID: 'navigate-destination-search-input'") &&
+    source.includes('testID="navigate-destination-search-query-state"') &&
     source.includes("returnKeyType: 'search'") &&
-    source.includes('roadNavigation.suggestions.map((suggestion) =>') &&
+    source.includes('const IDLE_DESTINATION_SEARCH_RENDER_LIMIT = 5;') &&
+    source.includes('const visibleIdleDestinationSearchSuggestions = useMemo(') &&
+    source.includes('.slice(0, IDLE_DESTINATION_SEARCH_RENDER_LIMIT)') &&
+    source.includes('idleDestinationSearchResultsLabel') &&
+    source.includes('visibleIdleDestinationSearchSuggestions.map((suggestion) =>') &&
     source.includes('onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}'),
-  'Idle destination search should preserve the road navigation query, keyboard, loading, and suggestion-selection wiring.',
+  'Idle destination search should preserve query wiring while rendering a compact bounded result window on mobile.',
 );
 
 assert(
   !toolsPopupSource.includes('styles.toolsSearchWrap') &&
     !toolsPopupSource.includes('SEARCH ADDRESS OR PLACE') &&
-    !toolsPopupSource.includes('roadNavigation.suggestions.map((suggestion) =>') &&
+    !toolsPopupSource.includes('visibleIdleDestinationSearchSuggestions.map((suggestion) =>') &&
     !toolsPopupSource.includes('recentSearchesSectionVisible'),
   'Tools popup should no longer own address/place search input, search results, or recent destination rows.',
 );
@@ -99,10 +105,19 @@ assert(
   source.includes('const [campLayerMenuOpen, setCampLayerMenuOpen] = useState(false);') &&
     source.includes('const toggleCampLayerMenu = useCallback') &&
     source.includes('styles.campLayerMenuPanel') &&
+    source.includes('testID="navigate-camp-layer-menu-toggle"') &&
+    source.includes('testID="navigate-camp-layer-menu-panel"') &&
     source.includes('accessibilityLabel="Camp map layers"') &&
     source.includes('name="bonfire-outline"') &&
     source.includes('bottom: TOOLS_TRIGGER_BOTTOM, right: TOOLS_TRIGGER_RIGHT'),
   'Camp layers should be exposed through a dedicated camp icon button above the Tools icon.',
+);
+
+assert(
+  !source.includes('accessibilityLabel="Draw area to search for campsites"\n          >') &&
+    source.includes('testID="navigate-route-geometry-overlay-toggle"') &&
+    source.includes("accessibilityValue={{ text: routeGeometryOverlayEnabled ? 'on' : 'off' }}"),
+  'Right-side map control rail should not be grouped under a stale campsite label, and route geometry needs a stable stateful QA target.',
 );
 
 assert(

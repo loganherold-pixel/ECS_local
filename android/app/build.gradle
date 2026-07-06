@@ -36,7 +36,11 @@ react {
 
     /* Bundling */
     //   A list containing the node command and its flags. Default is just 'node'.
-    // nodeExecutableAndArgs = ["node"]
+    nodeExecutableAndArgs = [
+        "node",
+        "-e",
+        "const path = require('path'); process.env.NODE_ENV = process.env.NODE_ENV || 'production'; require(path.resolve(process.argv[1]));"
+    ]
 
     //
     //   The path to the CLI configuration file. Default is empty.

@@ -46,7 +46,7 @@ assertIncludes(
 );
 assertIncludes(
   useRoadNavigation,
-  'const ROUTE_REQUEST_TIMEOUT_MS = 20000;',
+  'const ROUTE_REQUEST_TIMEOUT_MS = 12000;',
   'Road route requests should have a bounded timeout so loading cannot remain active indefinitely.',
 );
 assertIncludes(

@@ -300,6 +300,11 @@ async function searchMapboxPlaces(args: {
     proximity: args.input.center ?? args.input.origin ?? null,
     bbox: args.input.bbox ?? null,
     limit: args.input.limit ?? DEFAULT_ROUTE_CONTEXT_SEARCH_LIMIT,
+    billingContext: {
+      flow: 'trip_builder_route_context_places',
+      surface: 'Trip Builder',
+      operatorAction: `${category} route context places search`,
+    },
   });
   const places: PlaceCandidate[] = [];
   const seen = new Set<string>();
@@ -309,6 +314,11 @@ async function searchMapboxPlaces(args: {
         accessToken: args.accessToken,
         sessionToken,
         suggestion,
+        billingContext: {
+          flow: 'trip_builder_route_context_places',
+          surface: 'Trip Builder',
+          operatorAction: `${category} route context places retrieve`,
+        },
       });
       const place = placeFromRoadDestination({
         suggestion,

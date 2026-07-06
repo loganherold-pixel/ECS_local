@@ -63,6 +63,20 @@ Before `campopsProviderAdaptersEnabled` may affect recommendations for a region/
 
 Real-shadow validation remains observational until the approval fields are complete. Do not mark legal/access, closure, fire, weather, or service/resupply ready for broader regional rollout from fixture-only evidence.
 
+## Region 001 Live Shadow Pass
+
+Region 001 has a repeatable active-Supabase shadow evidence path:
+
+```sh
+npm run evidence:campops-provider-shadow:region-001
+npm run gate:provider-readiness -- --region "Region 001"
+npm run gate:closed-field-test:json
+```
+
+The evidence script writes `.smoke/campops-provider-shadow-region-001-evidence.json`. It queries only aggregate-safe columns from the active Supabase project behind the repo, excludes raw provider payload columns, and excludes precise private coordinates from the artifact. It prefers server-side service-role credentials when present; if run with the repo's anon key, it records RLS/read limitations instead of treating hidden admin rows as evidence.
+
+The Region 001 artifact is compatible with the Real Upstream Provider Evidence Ledger, but `Accepted for influence` must remain `no` until owner approval, approver/date fields, category acceptance, and any missing fire/weather/service evidence are complete.
+
 ## Readiness Bands
 
 Coverage bands:

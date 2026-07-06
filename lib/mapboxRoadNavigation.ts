@@ -11,6 +11,11 @@ import {
   tagRouteGeometry,
 } from './navigation/routeVersion';
 import { buildHighlightedRouteInstruction } from './routeGuidanceCopy';
+import {
+  buildMapboxSearchRequestSignature,
+  recordMapboxSearchBillingEvent,
+  type MapboxSearchBillingContext,
+} from './mapboxSearchBillingGuard';
 
 export type RoadNavStatus =
   | 'idle'
@@ -146,6 +151,9 @@ const SEARCHBOX_RETRIEVE_URL = 'https://api.mapbox.com/search/searchbox/v1/retri
 const FORWARD_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places';
 const DIRECTIONS_PROFILE = 'driving-traffic';
 const DIRECTIONS_URL = `https://api.mapbox.com/directions/v5/mapbox/${DIRECTIONS_PROFILE}`;
+const SEARCHBOX_SUGGEST_TIMEOUT_MS = 2000;
+const FORWARD_GEOCODE_TIMEOUT_MS = 2500;
+const SEARCHBOX_SUGGEST_LIMIT = 5;
 
 function randomId(prefix: string): string {
   const cryptoRef = typeof crypto !== 'undefined' ? crypto : null;
@@ -294,6 +302,7 @@ export async function searchRoadDestinations(params: {
   accessToken: string;
   query: string;
   sessionToken: string;
+  billingContext?: MapboxSearchBillingContext | null;
   proximity?: RoadNavCoordinate | null;
   bbox?: {
     west: number;
@@ -306,7 +315,21 @@ export async function searchRoadDestinations(params: {
   const trimmed = params.query.trim();
   if (!trimmed) return [];
 
-  const limit = Math.max(1, Math.min(params.limit ?? 8, 10));
+  const limit = Math.max(
+    1,
+    Math.min(params.limit ?? SEARCHBOX_SUGGEST_LIMIT, SEARCHBOX_SUGGEST_LIMIT),
+  );
+  const requestSignature = params.billingContext?.requestSignature ?? buildMapboxSearchRequestSignature({
+    query: trimmed,
+    proximity: params.proximity,
+    bbox: params.bbox,
+    limit,
+  });
+  const billingContext = {
+    ...(params.billingContext ?? { flow: 'unlabeled_mapbox_search' }),
+    requestSignature,
+  };
+  let fallbackReason = 'searchbox_empty';
 
   const searchboxUrl = new URL(SEARCHBOX_URL);
   searchboxUrl.searchParams.set('q', trimmed);
@@ -331,15 +354,34 @@ export async function searchRoadDestinations(params: {
   try {
     const data = await fetchJsonWithTimeout<{ suggestions?: any[] }>(
       searchboxUrl.toString(),
-      7000,
+      SEARCHBOX_SUGGEST_TIMEOUT_MS,
     );
     const suggestions = (data?.suggestions ?? [])
       .map((item) => normalizeSuggestion(item))
       .filter((item): item is RoadNavSearchSuggestion => !!item);
+    recordMapboxSearchBillingEvent({
+      ...billingContext,
+      operation: 'searchbox_suggest',
+      outcome: suggestions.length > 0 ? 'success' : 'empty',
+      sessionToken: params.sessionToken,
+      resultCount: suggestions.length,
+      reason: suggestions.length > 0 ? null : fallbackReason,
+    });
     if (suggestions.length > 0) {
       return suggestions;
     }
-  } catch {}
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    fallbackReason = /429|rate|quota|limit/i.test(message) ? 'quota_limited' : 'searchbox_suggest_error';
+    recordMapboxSearchBillingEvent({
+      ...billingContext,
+      operation: 'searchbox_suggest',
+      outcome: 'error',
+      sessionToken: params.sessionToken,
+      resultCount: 0,
+      reason: fallbackReason,
+    });
+  }
 
   const geocodeUrl = new URL(`${FORWARD_GEOCODE_URL}/${encodeURIComponent(trimmed)}.json`);
   geocodeUrl.searchParams.set('access_token', params.accessToken);
@@ -362,23 +404,47 @@ export async function searchRoadDestinations(params: {
 
   const geocodeData = await fetchJsonWithTimeout<{ features?: any[] }>(
     geocodeUrl.toString(),
-    7000,
+    FORWARD_GEOCODE_TIMEOUT_MS,
   );
 
-  return (geocodeData?.features ?? [])
+  const fallbackSuggestions = (geocodeData?.features ?? [])
     .map((item) => normalizeSuggestion(item))
     .filter((item): item is RoadNavSearchSuggestion => !!item);
+  recordMapboxSearchBillingEvent({
+    ...billingContext,
+    operation: 'forward_geocode_fallback',
+    outcome: fallbackSuggestions.length > 0 ? 'success' : 'empty',
+    sessionToken: params.sessionToken,
+    resultCount: fallbackSuggestions.length,
+    reason: fallbackReason,
+  });
+  return fallbackSuggestions;
 }
 
 export async function resolveRoadDestination(params: {
   accessToken: string;
   sessionToken: string;
   suggestion: RoadNavSearchSuggestion;
+  billingContext?: MapboxSearchBillingContext | null;
 }): Promise<RoadNavDestination> {
+  const requestSignature = params.billingContext?.requestSignature ?? String(params.suggestion.mapboxId ?? params.suggestion.id);
+  const billingContext = {
+    ...(params.billingContext ?? { flow: 'unlabeled_mapbox_search' }),
+    requestSignature,
+  };
   if (
     params.suggestion.coordinate &&
     (!params.suggestion.mapboxId || params.suggestion.sourceType !== 'searchbox_suggest')
   ) {
+    recordMapboxSearchBillingEvent({
+      ...billingContext,
+      operation: 'coordinate_reuse',
+      outcome: 'success',
+      sessionToken: params.sessionToken,
+      suggestionId: params.suggestion.id,
+      resultCount: 1,
+      reason: params.suggestion.sourceType,
+    });
     return {
       id: params.suggestion.id,
       title: params.suggestion.title,
@@ -407,12 +473,47 @@ export async function resolveRoadDestination(params: {
         'searchbox_retrieve',
       );
       if (destination) {
+        recordMapboxSearchBillingEvent({
+          ...billingContext,
+          operation: 'searchbox_retrieve',
+          outcome: 'success',
+          sessionToken: params.sessionToken,
+          suggestionId: params.suggestion.mapboxId,
+          resultCount: 1,
+        });
         return destination;
       }
-    } catch {}
+      recordMapboxSearchBillingEvent({
+        ...billingContext,
+        operation: 'searchbox_retrieve',
+        outcome: 'empty',
+        sessionToken: params.sessionToken,
+        suggestionId: params.suggestion.mapboxId,
+        resultCount: 0,
+      });
+    } catch (error) {
+      recordMapboxSearchBillingEvent({
+        ...billingContext,
+        operation: 'searchbox_retrieve',
+        outcome: 'error',
+        sessionToken: params.sessionToken,
+        suggestionId: params.suggestion.mapboxId,
+        resultCount: 0,
+        reason: error instanceof Error ? error.message : String(error ?? 'retrieve_error'),
+      });
+    }
   }
 
   if (params.suggestion.coordinate) {
+    recordMapboxSearchBillingEvent({
+      ...billingContext,
+      operation: 'coordinate_reuse',
+      outcome: 'success',
+      sessionToken: params.sessionToken,
+      suggestionId: params.suggestion.id,
+      resultCount: 1,
+      reason: 'retrieve_fallback_coordinate',
+    });
     return {
       id: params.suggestion.id,
       title: params.suggestion.title,

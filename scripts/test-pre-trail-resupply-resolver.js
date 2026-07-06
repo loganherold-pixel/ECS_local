@@ -133,6 +133,86 @@ assert.ok(
   'Route context candidates should be disclosed without converting them into fake itinerary stops.',
 );
 
+const liveRouteContextCandidateMerge = resolvePreTrailStops({
+  trailheadStart,
+  approachRoute: [
+    { latitude: 37.9, longitude: -110.2 },
+    { latitude: 37.98, longitude: -110.08 },
+    trailheadStart.coordinate,
+  ],
+  candidates: {
+    fuel: [{
+      id: 'mapbox-live-fuel',
+      providerPlaceId: 'mapbox-fuel-1',
+      category: 'fuel',
+      name: 'Last Fuel Before Trail',
+      coordinate: { latitude: 37.98, longitude: -110.08 },
+      distanceFromTrailheadMiles: 4.8,
+      source: 'mapbox_search',
+      provider: 'mapbox_search',
+      confidence: 'medium',
+      score: 0.74,
+    }],
+  },
+  routeContext: {
+    status: 'ready',
+    supplyMode: 'gas_and_grocery',
+    supplyCandidateCount: 2,
+    supplyCandidates: [{
+      id: 'route-context-grocery-1',
+      providerPlaceId: 'mapbox-grocery-1',
+      category: 'grocery',
+      name: 'Trailhead Market',
+      lat: 37.985,
+      lng: -110.075,
+      address: '12 Approach Rd',
+      distanceToTrailheadMeters: 7400,
+      detourDistanceMeters: 800,
+      openStatus: 'unknown',
+      confidence: { value: 0.78, reasons: ['Mapbox Route Context candidate.'] },
+      score: 0.8,
+      warnings: [],
+      source: 'route_context_engine',
+      providerMetadata: {
+        providerId: 'mapbox_route_context_places',
+        source: 'mapbox_search',
+        searchCategory: 'grocery',
+      },
+    }],
+  },
+  routeId: 'pre-trail-live-route-context',
+  generatedAt,
+});
+
+assert.strictEqual(liveRouteContextCandidateMerge.preTrailStops.fuel.length, 1);
+assert.strictEqual(liveRouteContextCandidateMerge.preTrailStops.grocery.length, 1);
+assert.strictEqual(statusFor(liveRouteContextCandidateMerge, 'fuel').status, 'ranked');
+assert.strictEqual(statusFor(liveRouteContextCandidateMerge, 'grocery').status, 'ranked');
+assert.strictEqual(
+  statusFor(liveRouteContextCandidateMerge, 'grocery').metadata.routeContextCandidateCount,
+  1,
+  'Route Context candidate counts should be bucket-specific once detailed candidates are available.',
+);
+assert.strictEqual(
+  liveRouteContextCandidateMerge.preTrailStops.grocery[0].source.state,
+  'live',
+  'Mapbox-backed Route Context candidates should stay live evidence when converted into itinerary stops.',
+);
+assert.strictEqual(
+  liveRouteContextCandidateMerge.preTrailStops.grocery[0].source.provider,
+  'mapbox_route_context_places',
+);
+assert.strictEqual(
+  liveRouteContextCandidateMerge.preTrailStops.grocery[0].metadata.providerPlaceId,
+  'mapbox-grocery-1',
+);
+assert.ok(
+  !liveRouteContextCandidateMerge.bucketSummaries
+    .flatMap((summary) => summary.warnings ?? [])
+    .some((warning) => /not wired|scaffold/i.test(warning)),
+  'Live Route Context candidates should not retain provider-unavailable scaffold warnings.',
+);
+
 const missingAnchor = resolvePreTrailStops({
   trailheadStart: null,
   selectedPreTrailOptions: null,

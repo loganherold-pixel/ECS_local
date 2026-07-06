@@ -2747,6 +2747,11 @@ async function loadSmartResupplyOptions(params: {
       proximity: { lat: anchor.latitude, lng: anchor.longitude },
       bbox,
       limit: SMART_RESUPPLY_SEARCH_LIMIT,
+      billingContext: {
+        flow: 'trip_builder_smart_resupply',
+        surface: 'Trip Builder',
+        operatorAction: `${params.category} approach resupply suggest`,
+      },
     });
     coveredAnchorKeys.add(anchorIndex);
     collectSuggestions(suggestions);
@@ -2776,6 +2781,11 @@ async function loadSmartResupplyOptions(params: {
         accessToken: params.accessToken,
         sessionToken: params.sessionToken,
         suggestion,
+        billingContext: {
+          flow: 'trip_builder_smart_resupply',
+          surface: 'Trip Builder',
+          operatorAction: `${params.category} approach resupply retrieve`,
+        },
       });
       const option = smartResupplyPoiFromDestination(suggestion, destination, params.category, fallbackAnchor);
       if (!option) continue;
@@ -4090,6 +4100,18 @@ export default function ExploreTripBuilderScreen() {
     };
   }, [smartResupplyFuelOptions, smartResupplySupplyOptions]);
 
+  const selectedRouteContextSupplyMode = useMemo(
+    () => routeContextSupplyModeForTripBuilder(smartResupplyPreference),
+    [smartResupplyPreference],
+  );
+  const routeContextItineraryInput = useMemo(
+    () => routeContextSnapshot
+      ? routeContextToTripBuilderItineraryContext(routeContextSnapshot, selectedRouteContextSupplyMode)
+      : null,
+    [routeContextSnapshot, selectedRouteContextSupplyMode],
+  );
+  const routeContextPreTrailCandidateCount = routeContextItineraryInput?.supplyCandidates?.length ?? 0;
+
   const preTrailProviderAvailableForDraft = Boolean(
     tripSetupStarted &&
       smartResupplyPreference !== 'no' &&
@@ -4097,6 +4119,7 @@ export default function ExploreTripBuilderScreen() {
       smartResupplyLoading == null &&
       (
         preTrailStopCandidatesForDraft != null ||
+        routeContextPreTrailCandidateCount > 0 ||
         (
           itinerarySearchToken &&
           (
@@ -4124,6 +4147,7 @@ export default function ExploreTripBuilderScreen() {
       candidates: preTrailStopCandidatesForDraft,
       providerAvailable: preTrailProviderAvailableForDraft,
       selectedPreTrailOptions: selectedPreTrailOptionsForDraft,
+      routeContext: routeContextItineraryInput,
       userPreferences: {
         smartResupplyPreference,
       },
@@ -4134,6 +4158,7 @@ export default function ExploreTripBuilderScreen() {
       liveApproachRoutePoints,
       preTrailProviderAvailableForDraft,
       preTrailStopCandidatesForDraft,
+      routeContextItineraryInput,
       selectedPreTrailOptionsForDraft,
       selectedPreparedRoutePoints,
       selectedRouteDisplayName,
@@ -4160,10 +4185,6 @@ export default function ExploreTripBuilderScreen() {
     if (!selectedRoute) return null;
     const routeRecord = selectedRoute as unknown as { itinerary?: TripItinerary | null };
     const handoffItinerary = routeRecord.itinerary ?? null;
-    const selectedSupplyMode = routeContextSupplyModeForTripBuilder(smartResupplyPreference);
-    const routeContextItineraryInput = routeContextSnapshot
-      ? routeContextToTripBuilderItineraryContext(routeContextSnapshot, selectedSupplyMode)
-      : null;
     const liveItinerarySuggestedRoute = buildLiveItinerarySuggestedRoute({
       route: selectedRoute as unknown as SuggestedRoute,
       liveApproachRoutePoints,
@@ -4193,7 +4214,7 @@ export default function ExploreTripBuilderScreen() {
     liveTripBuilderUserLocation,
     preTrailProviderAvailableForDraft,
     preTrailStopCandidatesForDraft,
-    routeContextSnapshot,
+    routeContextItineraryInput,
     selectedPreTrailOptionsForDraft,
     selectedRoute,
     smartResupplyPreference,
@@ -4346,6 +4367,11 @@ export default function ExploreTripBuilderScreen() {
         sessionToken: roadSearchSessionTokenRef.current,
         proximity: itinerarySearchProximity,
         limit: 6,
+        billingContext: {
+          flow: 'trip_builder_itinerary_search',
+          surface: 'Trip Builder',
+          operatorAction: 'itinerary insert suggest',
+        },
       })
         .then((suggestions) => {
           if (cancelled) return;
@@ -5096,6 +5122,11 @@ export default function ExploreTripBuilderScreen() {
         accessToken: token,
         sessionToken: roadSearchSessionTokenRef.current,
         suggestion,
+        billingContext: {
+          flow: 'trip_builder_itinerary_search',
+          surface: 'Trip Builder',
+          operatorAction: 'itinerary insert retrieve',
+        },
       });
       const coordinate = {
         latitude: destination.coordinate.lat,

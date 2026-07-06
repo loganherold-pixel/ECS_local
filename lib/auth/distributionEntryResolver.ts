@@ -145,6 +145,8 @@ export function resolveDistributionEntryState(
     !isProtectedScreen &&
     (currentPath === '/fleet' ||
       currentPath === '/navigate' ||
+      currentPath === '/discover' ||
+      currentPath === '/explore' ||
       currentPath === '/alert' ||
       currentPath === '/safety' ||
       currentPath === '/vehicle-config' ||

@@ -26,6 +26,10 @@ const easJson = readJson('eas.json');
 const appJson = readJson('app.json');
 const moreScreen = read('app/(tabs)/more.tsx');
 const buildScript = read('scripts/eas-cloud-build-android-apk.mjs');
+const androidManifest = read('android/app/src/main/AndroidManifest.xml');
+const androidBuildGradle = read('android/app/build.gradle');
+const androidGradlew = read('android/gradlew');
+const androidGradlewBat = read('android/gradlew.bat');
 const mapboxEnvGuardPath = path.join(root, 'scripts', 'check-fieldtest-mapbox-token-split.mjs');
 const mapboxEnvGuard = fs.existsSync(mapboxEnvGuardPath)
   ? read('scripts/check-fieldtest-mapbox-token-split.mjs')
@@ -38,6 +42,36 @@ assertIncludes(appConfig, 'ECS_BUILD_DIRTY', 'Build fingerprint should preserve 
 assertIncludes(appConfig, 'ECS_BUILD_PROFILE', 'Build fingerprint should preserve the EAS/profile name.');
 assertIncludes(appConfig, 'updates.enabled = false', 'Field-test APK config should disable OTA updates so cached JS cannot mask the embedded bundle.');
 assertIncludes(appConfig, "profile === 'fieldtest'", 'OTA disabling should be scoped to the field-test profile.');
+assertIncludes(
+  androidManifest,
+  'expo.modules.updates.ENABLED" android:value="false"',
+  'Checked-in local Android QA APK manifest should disable OTA updates so emulator evidence uses the embedded bundle.',
+);
+assertIncludes(
+  androidManifest,
+  'expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="NEVER"',
+  'Checked-in local Android QA APK manifest should not check Expo Updates during startup.',
+);
+assertIncludes(
+  androidBuildGradle,
+  'nodeExecutableAndArgs = [',
+  'Local Android release bundling should set NODE_ENV=production explicitly so production APK evidence is repeatable.',
+);
+assertIncludes(
+  androidBuildGradle,
+  "const path = require('path'); process.env.NODE_ENV = process.env.NODE_ENV || 'production'; require(path.resolve(process.argv[1]));",
+  'Local Android release bundling should inject NODE_ENV before Expo CLI reads env files.',
+);
+assertIncludes(
+  androidGradlewBat,
+  'if not errorlevel 1 set NODE_ENV=production',
+  'Windows Gradle release wrapper should provide NODE_ENV before config-time Expo tasks run.',
+);
+assertIncludes(
+  androidGradlew,
+  'NODE_ENV=${NODE_ENV:-production}; export NODE_ENV',
+  'POSIX Gradle release wrapper should provide NODE_ENV before config-time Expo tasks run.',
+);
 
 assert.ok(
   Number(appJson.expo?.android?.versionCode) >= 4,

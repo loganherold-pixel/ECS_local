@@ -104,6 +104,75 @@ includes(
   'firstRunVccSetupOpenedRef',
   'Fleet zero-vehicle first arrival should open the current VCC setup path once.',
 );
+includes(
+  fleet,
+  'let zeroVehicleVccSetupAutoOpenedThisSession = false;',
+  'Fleet zero-vehicle setup auto-open should be tracked across shell remounts for the app session.',
+);
+includes(
+  fleet,
+  'let zeroVehicleVccSetupDismissedThisSession = false;',
+  'Fleet should remember when the user dismisses zero-vehicle setup during the app session.',
+);
+includes(
+  fleet,
+  'if (vehicles.length === 0 && !profileModalVehicle) {',
+  'Closing the zero-vehicle profile modal should be recognized as a setup dismissal.',
+);
+includes(
+  fleet,
+  'zeroVehicleVccSetupDismissedThisSession = true;',
+  'Zero-vehicle setup dismissal should suppress automatic reopen on bottom-tab navigation.',
+);
+includes(
+  fleet,
+  'if (zeroVehicleVccSetupAutoOpenedThisSession || zeroVehicleVccSetupDismissedThisSession) return;',
+  'Fleet should not auto-reopen zero-vehicle setup after it already opened or was dismissed in this app session.',
+);
+includes(
+  fleet,
+  'zeroVehicleVccSetupDismissedThisSession = false;',
+  'Explicit Add Vehicle actions should be able to reopen the setup modal after dismissal.',
+);
+includes(
+  fleet,
+  'const isFleetFocused = useIsFocused() && isFleetRouteActive;',
+  'Fleet should combine navigation focus with route-path focus before opening or rendering native modal layers.',
+);
+includes(
+  fleet,
+  'const pathname = usePathname();',
+  'Fleet should read the active Expo Router path because the custom shell can keep Fleet focused while another tab is visible.',
+);
+includes(
+  fleet,
+  "const isFleetRouteActive = pathname === '/fleet' || pathname === '/(tabs)/fleet' || pathname.endsWith('/fleet');",
+  'Fleet modal visibility should be gated by the actual active Fleet route path.',
+);
+includes(
+  fleet,
+  'if (!isFleetFocused || loading || authLoading || vehicles.length > 0 || profileModalVisible) return;',
+  'Fleet zero-vehicle auto-open should be gated to the active Fleet route.',
+);
+includes(
+  fleet,
+  'visible={isFleetFocused && profileModalVisible}',
+  'Fleet profile modal should not stay visible over Explore or Navigate after tab changes.',
+);
+includes(
+  fleet,
+  'visible={isFleetFocused && loadoutModalVisible}',
+  'Fleet loadout modal should be hidden when Fleet is not the active tab.',
+);
+includes(
+  fleet,
+  'visible={isFleetFocused && weightSummaryModalVisible}',
+  'Fleet weight summary modal should be hidden when Fleet is not the active tab.',
+);
+assert.ok(
+  /useFocusEffect\(useCallback\(\(\) => \{\s*return \(\) => \{\s*closeFleetDetailFlows\(\);\s*\};\s*\}, \[closeFleetDetailFlows\]\)\);/.test(fleet),
+  'Fleet should close zero-vehicle/profile modal state when leaving Fleet so other mobile tabs remain reachable.',
+);
 const visibleEmptyStateStart = fleet.indexOf('fleetCardModels.length === 0 ? (');
 assert.ok(visibleEmptyStateStart >= 0, 'Fleet should render the current zero-vehicle branch.');
 const visibleEmptyStateEnd = fleet.indexOf(') : (', visibleEmptyStateStart);

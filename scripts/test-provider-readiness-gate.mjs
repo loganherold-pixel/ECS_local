@@ -47,6 +47,16 @@ function realEvidenceRows({ approved = false } = {}) {
   ));
 }
 
+function realShadowObservedRows() {
+  return [
+    '| legal/access | usfs_mvum_humboldt_toiyabe_nf | real-shadow observed | 98.5% | fresh | 1.5% | 0% | 0% | no |',
+    '| closure/seasonal restriction | usfs_mvum_humboldt_toiyabe_nf | real-shadow observed | 97.2% | fresh | 2.8% | 0% | 0% | no |',
+    '| fire restriction | none observed | missing_live_persisted_evidence | 0% | unknown | 100% | 0% | 0% | no |',
+    '| weather | none observed | missing_live_persisted_evidence | 0% | unknown | 100% | 0% | 0% | no |',
+    '| service/resupply | none observed | missing_live_records | 0% | unknown | 100% | 0% | 0% | no |',
+  ];
+}
+
 function writeRegionReport(root, { approved = false, includeStandaloneAccess = false, includeRealEvidence = approved } = {}) {
   const categories = [
     'legal/access',
@@ -196,4 +206,37 @@ test('provider readiness rejects approved rows without real upstream evidence le
   assert.ok(result.blockers.includes('real_upstream_provider_evidence_incomplete'));
   assert.ok(result.notApprovedCategories.includes('legal/access'));
   assert.ok(result.approvalRowsMissingRealEvidence.includes('legal/access'));
+});
+
+test('provider readiness records real-shadow evidence without approving provider influence', () => {
+  const root = makeTempRepo();
+  writeProviderPolicy(root);
+  writeRegionReport(root, { includeRealEvidence: false });
+  const filePath = path.join(root, 'docs', 'campops', 'provider_readiness_region_001.md');
+  const markdown = fs.readFileSync(filePath, 'utf8').replace(
+    /## Real Upstream Provider Evidence Ledger[\s\S]*$/,
+    [
+      '## Real Upstream Provider Evidence Ledger',
+      '',
+      '| Category | Provider/source | Real shadow status | Coverage rate | Freshness rate | Unknown rate | Stale rate | Conflict rate | Accepted for influence |',
+      '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
+      ...realShadowObservedRows(),
+      '',
+      'Raw provider payloads excluded from shared evidence: yes',
+      'Precise private coordinates excluded: yes',
+    ].join('\n'),
+  );
+  fs.writeFileSync(filePath, markdown, 'utf8');
+
+  const result = buildProviderReadinessResult({ rootDir: root, now: fixedNow });
+
+  assert.equal(result.passed, false);
+  assert.equal(result.shadowOnlyAllowed, true);
+  assert.equal(result.categoryStatus['legal/access'].shadowValidated, true);
+  assert.equal(result.categoryStatus['legal/access'].evidenceMode, 'real-shadow');
+  assert.equal(result.categoryStatus['legal/access'].realUpstreamEvidenceComplete, false);
+  assert.equal(result.categoryStatus['legal/access'].recommendationInfluenceAllowed, false);
+  assert.equal(result.categoryStatus['fire restriction'].shadowValidated, false);
+  assert.equal(result.categoryStatus['fire restriction'].evidenceMode, 'missing_live_persisted_evidence');
+  assert.equal(result.categoryStatus['fire restriction'].status, 'not_approved');
 });

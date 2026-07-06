@@ -51,7 +51,7 @@ import {
 } from './roadNavigationProgressPersistence';
 import { resolveRoadNavigationProgress } from './roadNavigationProgress';
 
-const SEARCH_DEBOUNCE_MS = 320;
+const SEARCH_DEBOUNCE_MS = 180;
 const ARRIVAL_DISTANCE_M = 200;
 const APPROACH_DISTANCE_M = 180;
 const LOW_CONFIDENCE_DISTANCE_M = 26;
@@ -63,10 +63,10 @@ const TEMP_DEVIATION_CONFIRMATION_COUNT = 2;
 const OFF_ROUTE_CONFIRMATION_COUNT = 3;
 const REJOIN_CONFIRMATION_COUNT = 2;
 const ARRIVAL_CONFIRMATION_COUNT = 2;
-const REROUTE_COOLDOWN_MS = 6000;
+const REROUTE_COOLDOWN_MS = 3500;
 const ROAD_NAV_PREVIEW_RESTORE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const ROAD_NAV_ACTIVE_RESTORE_MAX_AGE_MS = 18 * 60 * 60 * 1000;
-const ROUTE_REQUEST_TIMEOUT_MS = 20000;
+const ROUTE_REQUEST_TIMEOUT_MS = 12000;
 const ROUTE_TIMEOUT_ERROR_MESSAGE = 'Route generation timed out. Check connection and retry.';
 
 function logGuidanceDebug(message: string, payload?: Record<string, unknown>): void {
@@ -1114,6 +1114,11 @@ export function useRoadNavigation(params: {
         query: trimmed,
         sessionToken: sessionTokenRef.current,
         proximity: currentLocation,
+        billingContext: {
+          flow: 'navigate_destination_search',
+          surface: 'Navigate',
+          operatorAction: 'destination suggest',
+        },
       })
         .then((results) => {
           if (searchRequestIdRef.current !== requestId) return;
@@ -1156,6 +1161,11 @@ export function useRoadNavigation(params: {
           accessToken,
           sessionToken: sessionTokenRef.current,
           suggestion,
+          billingContext: {
+            flow: 'navigate_destination_search',
+            surface: 'Navigate',
+            operatorAction: 'destination retrieve',
+          },
         });
 
         clearSearchUi();

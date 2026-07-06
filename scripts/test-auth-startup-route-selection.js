@@ -263,6 +263,19 @@ assert.strictEqual(
 
 assert.strictEqual(
   resolve({
+    currentPath: '/discover',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: false,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Explore should remain reachable from the mobile dock before vehicle setup is complete.',
+);
+
+assert.strictEqual(
+  resolve({
     currentPath: '/',
     authenticated: true,
     setupComplete: false,

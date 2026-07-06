@@ -66,6 +66,7 @@ require.extensions['.ts'] = compileTypescript;
 require.extensions['.tsx'] = compileTypescript;
 
 const {
+  buildMapOverlayPayloadPatch,
   buildMapOverlayPayloadHash,
   buildWebPayload,
   normalizeRenderedCampScoutMarkers,
@@ -196,6 +197,78 @@ assert.notStrictEqual(
   buildMapOverlayPayloadHash(activeRoute),
   buildMapOverlayPayloadHash(changedRoute),
   'Meaningful route geometry changes should resend the route overlay payload.',
+);
+const routePatch = buildMapOverlayPayloadPatch(activeRoute, changedRoute);
+assert.ok(routePatch, 'Meaningful route geometry changes should produce a bridge patch after bootstrap.');
+assert.ok(
+  routePatch.patchFamilies.includes('route'),
+  'Route geometry changes should mark the route patch family.',
+);
+assert.ok(
+  Array.isArray(routePatch.routeCoords) && routePatch.routeCoords.length > 1,
+  'Route geometry patches should include the next route coordinates.',
+);
+
+const campSearchChangedRoute = buildWebPayload({
+  mapboxToken: 'token',
+  routeRenderMode: 'active',
+  points: [
+    { lat: 39.1, lng: -120.1 },
+    { lat: 39.2, lng: -120.2 },
+  ],
+  userLocation: { lat: 39.12, lng: -120.12 },
+  showUserLocation: true,
+  campEndpointMarkers: [
+    {
+      id: 'camp-bridge-1',
+      latitude: 39.16,
+      longitude: -120.16,
+      title: 'Camp Bridge',
+      sourceType: 'ecs_inferred',
+      confidenceGrade: 'B',
+      confidenceScore: 78,
+      pinFamily: 'campops',
+      campOpsRole: 'candidate',
+      campOpsCandidateId: 'camp-bridge-1',
+      campOpsRoleLabel: 'Camp Bridge',
+    },
+  ],
+  campsiteSearchPolygon: {
+    closed: true,
+    coordinates: [
+      { latitude: 39.13, longitude: -120.13 },
+      { latitude: 39.14, longitude: -120.13 },
+      { latitude: 39.14, longitude: -120.14 },
+    ],
+  },
+});
+const campSearchPatch = buildMapOverlayPayloadPatch(activeRoute, campSearchChangedRoute);
+assert.ok(campSearchPatch, 'Camp/search overlay changes should produce a bridge patch after bootstrap.');
+assert.ok(
+  campSearchPatch.patchFamilies.includes('markers') &&
+    campSearchPatch.patchFamilies.includes('campSearch'),
+  'Camp/search overlay changes should mark marker and camp-search patch families.',
+);
+assert.ok(
+  !Object.prototype.hasOwnProperty.call(campSearchPatch, 'routeCoords') &&
+    !Object.prototype.hasOwnProperty.call(campSearchPatch, 'progressRouteCoords') &&
+    !Object.prototype.hasOwnProperty.call(campSearchPatch, 'segments'),
+  'Camp/search overlay patches must not resend route geometry or segment payloads.',
+);
+
+const styleChangedRoute = buildWebPayload({
+  mapboxToken: 'token',
+  mapStyle: 'satellite',
+  routeRenderMode: 'active',
+  points: [
+    { lat: 39.1, lng: -120.1 },
+    { lat: 39.2, lng: -120.2 },
+  ],
+});
+assert.strictEqual(
+  buildMapOverlayPayloadPatch(activeRoute, styleChangedRoute),
+  null,
+  'Map style changes should keep using a full update so style replay has a complete payload.',
 );
 
 const campPins = normalizeRenderedCampScoutMarkers([

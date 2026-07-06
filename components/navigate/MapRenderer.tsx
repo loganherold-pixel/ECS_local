@@ -1270,20 +1270,98 @@ export function buildCampScoutPinFeatureCollection(
 export const normalizeRenderedCampEndpointMarkers = normalizeRenderedCampScoutMarkers;
 export const buildCampEndpointPinFeatureCollection = buildCampScoutPinFeatureCollection;
 
-export function buildMapOverlayPayloadHash(payload: WebMapPayload) {
-  const {
-    replayMarker: _replayMarker,
-    userLocation: _userLocation,
-    showUserLocation: _showUserLocation,
-    vehicleHeading: _vehicleHeading,
-    motionPriority: _motionPriority,
-    cameraMode: _cameraMode,
-    interactive: _interactive,
-    routeBuilderActive: _routeBuilderActive,
-    ...staticPayload
-  } = payload;
+type MapOverlayPatchFamily = 'route' | 'markers' | 'routeBuilder' | 'campSearch' | 'presentation';
+type MapOverlayPayloadPatch = Partial<WebMapPayload> & { patchFamilies: MapOverlayPatchFamily[] };
 
-  return stableStringify(staticPayload);
+const MAP_OVERLAY_STYLE_FIELDS: (keyof WebMapPayload)[] = ['mapStyleKey', 'styleUrl'];
+const MAP_OVERLAY_PATCH_FIELDS: Record<MapOverlayPatchFamily, (keyof WebMapPayload)[]> = {
+  route: [
+    'routeCoords',
+    'progressRouteCoords',
+    'routeColor',
+    'progressColor',
+    'routeRenderMode',
+    'routeLineKey',
+    'bounds',
+    'zoom',
+    'center',
+    'segments',
+    'selectedRouteGeometrySegmentIds',
+    'trailSegments',
+    'speedSegments',
+    'trailStyle',
+    'trailActive',
+    'remoteOverlay',
+    'mvumOverlay',
+    'stitchedRoutePreview',
+  ],
+  markers: ['waypoints', 'bailouts', 'pins', 'campsites', 'campScoutPins', 'tiltAlerts'],
+  routeBuilder: [
+    'routeBuilderMode',
+    'routeBuilderColor',
+    'routeBuilderSegments',
+    'routeBuilderAnchors',
+    'routeProfileFocus',
+  ],
+  campSearch: ['campsiteSearchPolygon'],
+  presentation: ['showCrosshair'],
+};
+
+function pickPayloadFields(payload: WebMapPayload, fields: (keyof WebMapPayload)[]) {
+  return fields.reduce((result, field) => {
+    result[field] = payload[field] as never;
+    return result;
+  }, {} as Partial<WebMapPayload>);
+}
+
+export function buildMapOverlayPayloadHashes(payload: WebMapPayload) {
+  const style = pickPayloadFields(payload, MAP_OVERLAY_STYLE_FIELDS);
+  const route = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.route);
+  const markers = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.markers);
+  const routeBuilder = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.routeBuilder);
+  const campSearch = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.campSearch);
+  const presentation = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.presentation);
+
+  return {
+    style: stableStringify(style),
+    route: stableStringify(route),
+    markers: stableStringify(markers),
+    routeBuilder: stableStringify(routeBuilder),
+    campSearch: stableStringify(campSearch),
+    presentation: stableStringify(presentation),
+    all: stableStringify({
+      style,
+      route,
+      markers,
+      routeBuilder,
+      campSearch,
+      presentation,
+    }),
+  };
+}
+
+export function buildMapOverlayPayloadHash(payload: WebMapPayload) {
+  return buildMapOverlayPayloadHashes(payload).all;
+}
+
+export function buildMapOverlayPayloadPatch(
+  previousPayload: WebMapPayload | null | undefined,
+  nextPayload: WebMapPayload,
+): MapOverlayPayloadPatch | null {
+  if (!previousPayload) return null;
+
+  const previousHashes = buildMapOverlayPayloadHashes(previousPayload);
+  const nextHashes = buildMapOverlayPayloadHashes(nextPayload);
+  if (previousHashes.style !== nextHashes.style) return null;
+
+  const patch: MapOverlayPayloadPatch = { patchFamilies: [] };
+  (Object.keys(MAP_OVERLAY_PATCH_FIELDS) as MapOverlayPatchFamily[]).forEach((family) => {
+    if (previousHashes[family] === nextHashes[family]) return;
+    patch.patchFamilies.push(family);
+    Object.assign(patch, pickPayloadFields(nextPayload, MAP_OVERLAY_PATCH_FIELDS[family]));
+  });
+
+  return patch.patchFamilies.length > 0 ? patch : null;
 }
 
 function buildFeatureCollectionSummaryHash(value: unknown): string {
@@ -6917,24 +6995,26 @@ function makeMapHtml(
         applyPayload(pendingPayload);
       }
 
-      function applyPayload(payload) {
-        if (!map || !payload || !map.isStyleLoaded()) return;
+      function mergePayloadPatch(base, patch) {
+        var merged = Object.assign({}, base || {}, patch || {});
+        delete merged.patchFamilies;
+        return merged;
+      }
 
-        var nextMapStyleKey = resolvePayloadMapStyleKey(payload);
-        if (nextMapStyleKey) activeMapStyleKey = nextMapStyleKey;
+      function applyRouteOverlayPayload(payload) {
+        updateRoute(payload.routeCoords || [], payload.routeColor, payload.routeRenderMode, payload.routeLineKey);
+        updateRouteProgress(payload.progressRouteCoords || [], payload.progressColor);
+        selectedRouteGeometrySegmentIds = buildDispersedRouteSelectedSet(payload.selectedRouteGeometrySegmentIds || []);
+        updateSegments(payload.segments || []);
+        updateTrail(payload.trailSegments || []);
+        updateSpeedTrail(payload.speedSegments || []);
+        updateRemoteOverlay(payload.remoteOverlay || null);
+        updateMvumOverlay(payload.mvumOverlay || null);
+        updateStitchedRoutePreview(payload.stitchedRoutePreview || null);
+        promoteRouteGuidanceLayers();
+      }
 
-        if (payload.styleUrl && payload.styleUrl !== requestedStyleUrl) {
-          requestedStyleUrl = payload.styleUrl;
-          activeStyleUrl = payload.styleUrl;
-          lastAppliedStyleUrl = payload.styleUrl;
-          attemptedStyles = Object.create(null);
-          attemptedStyles[payload.styleUrl] = true;
-          map.setStyle(payload.styleUrl);
-          replayPendingPayloadAfterStyleChange('set_style', 0);
-          return;
-        }
-
-        reinitializeStyleArtifacts();
+      function applyRouteBuilderPayload(payload) {
         routeBuilderMode = payload.routeBuilderMode || 'freehand';
         routeBuilderColor = payload.routeBuilderColor || routeBuilderColor || '#65F0D4';
         routeBuilderAnchors = payload.routeBuilderAnchors || [];
@@ -6949,20 +7029,17 @@ function makeMapHtml(
             syncRouteBuilderTraceAnchorFromDraft();
           }
         }
-        updateRoute(payload.routeCoords || [], payload.routeColor, payload.routeRenderMode, payload.routeLineKey);
-        updateRouteProgress(payload.progressRouteCoords || [], payload.progressColor);
-        selectedRouteGeometrySegmentIds = buildDispersedRouteSelectedSet(payload.selectedRouteGeometrySegmentIds || []);
-        updateSegments(payload.segments || []);
-        updateTrail(payload.trailSegments || []);
-        updateSpeedTrail(payload.speedSegments || []);
-        updateRemoteOverlay(payload.remoteOverlay || null);
-        updateMvumOverlay(payload.mvumOverlay || null);
-        updateStitchedRoutePreview(payload.stitchedRoutePreview || null);
         updateRouteBuilder(routeBuilderDraftSegments, routeBuilderColor, routeBuilderAnchors);
         updateRouteProfileFocus(payload.routeProfileFocus || null);
+        promoteRouteGuidanceLayers();
+      }
+
+      function applyCampSearchPayload(payload) {
         updateCampsiteSearchPolygon(payload.campsiteSearchPolygon || null);
         promoteRouteGuidanceLayers();
+      }
 
+      function applyMarkerPayloadPatch(payload) {
         if (markerPayloadChanged('waypoints', payload.waypoints || [])) {
           replaceMarkers(waypointMarkers, payload.waypoints || [], waypointMarkerClass, 'waypoint');
         }
@@ -7000,12 +7077,60 @@ function makeMapHtml(
             pinMarkers.push(marker);
           });
         }
+      }
 
-        applyDynamicState(payload);
-
+      function applyPresentationPayload(payload) {
         if (crosshairEl) {
           crosshairEl.style.opacity = payload.showCrosshair ? '1' : '0';
         }
+      }
+
+      function applyPayloadPatch(payload) {
+        if (!map || !payload || !map.isStyleLoaded()) return;
+        var families = Array.isArray(payload.patchFamilies) ? payload.patchFamilies : [];
+        if (!families.length) return;
+        if (families.indexOf('route') >= 0) {
+          applyRouteOverlayPayload(payload);
+        }
+        if (families.indexOf('routeBuilder') >= 0) {
+          applyRouteBuilderPayload(payload);
+        }
+        if (families.indexOf('campSearch') >= 0) {
+          applyCampSearchPayload(payload);
+        }
+        if (families.indexOf('markers') >= 0) {
+          applyMarkerPayloadPatch(payload);
+        }
+        if (families.indexOf('presentation') >= 0) {
+          applyPresentationPayload(payload);
+        }
+      }
+
+      function applyPayload(payload) {
+        if (!map || !payload || !map.isStyleLoaded()) return;
+
+        var nextMapStyleKey = resolvePayloadMapStyleKey(payload);
+        if (nextMapStyleKey) activeMapStyleKey = nextMapStyleKey;
+
+        if (payload.styleUrl && payload.styleUrl !== requestedStyleUrl) {
+          requestedStyleUrl = payload.styleUrl;
+          activeStyleUrl = payload.styleUrl;
+          lastAppliedStyleUrl = payload.styleUrl;
+          attemptedStyles = Object.create(null);
+          attemptedStyles[payload.styleUrl] = true;
+          map.setStyle(payload.styleUrl);
+          replayPendingPayloadAfterStyleChange('set_style', 0);
+          return;
+        }
+
+        reinitializeStyleArtifacts();
+        applyRouteBuilderPayload(payload);
+        applyRouteOverlayPayload(payload);
+        applyCampSearchPayload(payload);
+        applyMarkerPayloadPatch(payload);
+
+        applyDynamicState(payload);
+        applyPresentationPayload(payload);
 
         if (!bootstrapDone) {
           fitInitialPayload(payload);
@@ -7555,6 +7680,14 @@ function makeMapHtml(
           return;
         }
 
+        if (msg.type === 'overlayPatch') {
+          pendingPayload = mergePayloadPatch(pendingPayload, msg.payload || null);
+          if (map && map.isStyleLoaded()) {
+            applyPayloadPatch(msg.payload || null);
+          }
+          return;
+        }
+
         if (msg.type === 'cameraCommand') {
           issueCameraCommand(msg.payload || null);
           return;
@@ -7711,6 +7844,7 @@ const MapRenderer = React.memo(function MapRenderer({
   const [webViewInstanceKey, setWebViewInstanceKey] = useState(0);
   const bootstrapSentRef = useRef(false);
   const lastPayloadHashRef = useRef('');
+  const lastPayloadRef = useRef<WebMapPayload | null>(null);
   const lastDynamicPayloadHashRef = useRef('');
   const failSafeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hardFailureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -7826,6 +7960,7 @@ const MapRenderer = React.memo(function MapRenderer({
     hasEverReachedReadyRef.current = false;
     bootstrapSentRef.current = false;
     lastPayloadHashRef.current = '';
+    lastPayloadRef.current = null;
     lastDynamicPayloadHashRef.current = '';
     lastCameraCommandHashRef.current = '';
     lastLegacyFollowHashRef.current = '';
@@ -8257,9 +8392,20 @@ const MapRenderer = React.memo(function MapRenderer({
       return;
     }
 
+    if (type === 'update') {
+      const patch = buildMapOverlayPayloadPatch(lastPayloadRef.current, payload);
+      if (patch) {
+        postToMap({ type: 'overlayPatch', payload: patch });
+        lastPayloadRef.current = payload;
+        lastPayloadHashRef.current = payloadHash;
+        return;
+      }
+    }
+
     postToMap({ type, payload: { ...payload, ...dynamicPayload } });
 
     bootstrapSentRef.current = true;
+    lastPayloadRef.current = payload;
     lastPayloadHashRef.current = payloadHash;
     lastDynamicPayloadHashRef.current = dynamicPayloadHash;
   }, [shouldLoadMap, webReady, payload, dynamicPayload, payloadHash, dynamicPayloadHash, postToMap]);

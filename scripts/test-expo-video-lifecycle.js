@@ -63,6 +63,10 @@ assert(
   'LoadingTransitionVideo should guard interval playback calls and clear the interval on unmount.',
 );
 assert(
+  loadingTransition.includes("const STARTUP_LOADING_VIDEO_ENABLED = Platform.OS !== 'android';"),
+  'LoadingTransitionVideo should keep Android startup on the static fallback instead of mounting expo-video during shell handoff.',
+);
+assert(
   /safePlaybackAction\('play'\);\s*const cycleTimer = setInterval\(\(\) => \{/.test(loadingTransition),
   'LoadingTransitionVideo should kick playback immediately after VideoView mounts, before the 5 second replay guard.',
 );

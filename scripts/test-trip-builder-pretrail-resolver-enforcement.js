@@ -243,6 +243,21 @@ assertIncludes(
 );
 assertIncludes(
   screen,
+  'const routeContextItineraryInput = useMemo(',
+  'Trip Builder UI should normalize Route Context once for draft and final itinerary generation',
+);
+assertIncludes(
+  screen,
+  'routeContextPreTrailCandidateCount > 0',
+  'Trip Builder draft POI availability should treat Route Context supply candidates as provider-backed candidates',
+);
+assertIncludes(
+  screen,
+  'routeContext: routeContextItineraryInput,',
+  'Trip Builder draft and final itinerary generation should pass Route Context into the pre-trail resolver',
+);
+assertIncludes(
+  screen,
   'const selectedPreTrailSupplyAnchorCoordinate = selectedSmartFuel?.coordinate ?? selectedTrailheadResupplyAnchorCoordinate',
   'Grocery/supply lookup should anchor to the selected refuel when one exists',
 );

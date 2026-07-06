@@ -276,6 +276,12 @@ function routeContextCandidateCount(
   bucket: PreTrailStopBucket,
 ): number | null {
   if (!routeContext) return null;
+  const detailedCandidates = routeContext.supplyCandidates ?? [];
+  if (detailedCandidates.length > 0) {
+    return detailedCandidates.filter((candidate) => (
+      isRecord(candidate) && candidateBucket(candidate as Record<string, unknown>) === bucket
+    )).length;
+  }
   const mode = String(routeContext.supplyMode ?? '').toLowerCase();
   const count = finiteNumber(routeContext.supplyCandidateCount);
   if (count == null) return null;
@@ -396,7 +402,41 @@ function candidateEntries(
 function routeContextCandidates(
   routeContext: TripBuilderRouteContextInput | null | undefined,
 ): PreTrailStopCandidate[] {
-  return routeContext?.supplyCandidates ?? [];
+  const candidates = routeContext?.supplyCandidates ?? [];
+  if (routeContext?.status !== 'stale') return candidates;
+  return candidates.map((candidate) => (
+    isRecord(candidate)
+      ? {
+          ...candidate,
+          source: 'stale_route_context_engine',
+        }
+      : candidate
+  ));
+}
+
+function mergeCandidateInputWithRouteContext(
+  candidates: PreTrailStopCandidateInput | null | undefined,
+  routeContext: TripBuilderRouteContextInput | null | undefined,
+): PreTrailStopCandidateInput | null {
+  const contextCandidates = routeContextCandidates(routeContext);
+  if (contextCandidates.length === 0) return candidates ?? null;
+  if (!candidates) return contextCandidates;
+  if (Array.isArray(candidates)) return [...candidates, ...contextCandidates];
+
+  const merged: Partial<Record<PreTrailStopBucket, PreTrailStopCandidate[] | null>> = {};
+  ITINERARY_PRE_TRAIL_STOP_BUCKETS.forEach((bucket) => {
+    const bucketCandidates = candidates[bucket] ?? [];
+    if (bucketCandidates.length > 0) merged[bucket] = [...bucketCandidates];
+  });
+
+  contextCandidates.forEach((candidate) => {
+    if (!isRecord(candidate)) return;
+    const bucket = candidateBucket(candidate as Record<string, unknown>);
+    if (!bucket) return;
+    merged[bucket] = [...(merged[bucket] ?? []), candidate];
+  });
+
+  return merged;
 }
 
 function candidateBucket(record: Record<string, unknown>, hint?: PreTrailStopBucket | null): PreTrailStopBucket | null {
@@ -458,10 +498,21 @@ function candidateSourceText(record: Record<string, unknown>, fallback: string):
 function candidateSource(record: Record<string, unknown>, bucket: PreTrailStopBucket): ItineraryDataSource {
   const provider = candidateProvider(record);
   const sourceValue = candidateSourceText(record, bucket);
-  const manual = /operator|manual|selected/i.test(sourceValue);
-  const demo = /demo|fixture|mock/i.test(sourceValue);
-  const stale = /stale/i.test(sourceValue);
-  const live = /mapbox_search|google_places|live/i.test(sourceValue);
+  const providerMetadata = isRecord(record.providerMetadata) ? record.providerMetadata : null;
+  const metadata = isRecord(record.metadata) ? record.metadata : null;
+  const sourceHints = [
+    sourceValue,
+    provider,
+    providerMetadata?.source,
+    providerMetadata?.sourceType,
+    providerMetadata?.providerId,
+    metadata?.source,
+    metadata?.sourceType,
+  ].map((value) => String(value ?? '')).join(' ');
+  const manual = /operator|manual|selected/i.test(sourceHints);
+  const demo = /demo|fixture|mock/i.test(sourceHints);
+  const stale = /stale/i.test(sourceHints);
+  const live = /mapbox_search|google_places|live/i.test(sourceHints);
   const state: ItineraryDataSource['state'] =
     manual ? 'manual' :
     demo ? 'mock' :
@@ -910,6 +961,18 @@ function dedupeDataSources(sources: ItineraryDataSource[]): ItineraryDataSource[
   });
 }
 
+function routeContextDataState(routeContext: TripBuilderRouteContextInput): ItineraryDataSource['state'] {
+  const status = String(routeContext.status ?? '').toLowerCase();
+  if (status === 'stale') return 'stale';
+  if (status === 'error' || status === 'idle') return 'missing';
+  const candidates = routeContextCandidates(routeContext);
+  if (candidates.some((candidate) => isRecord(candidate) && candidateSource(candidate as Record<string, unknown>, 'fuel').state === 'live')) {
+    return 'live';
+  }
+  if (status === 'ready' || status === 'partial') return 'cached';
+  return 'unknown';
+}
+
 function bucketSummary(args: {
   bucket: PreTrailStopBucket;
   anchor: GeoPoint | null;
@@ -943,9 +1006,9 @@ function bucketSummary(args: {
     warnings.push('Pre-trail provider search returned no usable stops for this bucket.');
   } else {
     status = 'provider_unavailable';
-    warnings.push('Live pre-trail POI lookup is not wired yet; no stops were generated.');
+    warnings.push('Live pre-trail POI lookup is unavailable; no provider-backed stops were generated.');
     if (args.routeContextCount != null && args.routeContextCount > 0) {
-      warnings.push('Route context reports supply candidates, but detailed itinerary stop conversion is not wired in this scaffold.');
+      warnings.push('Route context reports supply candidates, but no usable candidate coordinates were provided for this bucket.');
     }
   }
 
@@ -969,8 +1032,7 @@ function bucketSummary(args: {
       routeContextCandidateCount: args.routeContextCount,
       candidateCountBeforeDedupe: args.candidateCountBeforeDedupe,
       duplicateCount: args.duplicateCount,
-      // TODO(pre-trail-poi): add provider adapters for Mapbox Search, Google Places, and ECS/Supabase POI records.
-      providerHooks: ['mapbox_search', 'google_places', 'ecs_supabase_poi'],
+      providerPipeline: ['route_context', 'mapbox_search', 'manual_selection'],
     },
   };
 }
@@ -994,8 +1056,8 @@ export function rankPreTrailStops({
   const providerUnavailableSource = source('pre_trail_poi_provider', 'missing', {
     provider: null,
     notes: [
-      'Pre-trail provider lookup is scaffolded but not wired.',
-      'Future providers should search relative to trailheadStart, not user GPS.',
+      'No live pre-trail POI candidates were available.',
+      'ECS does not invent fuel or grocery stops when provider data is missing.',
     ],
   });
   const notRequestedSource = source('pre_trail_poi_planning', 'manual', {
@@ -1136,8 +1198,7 @@ export function resolvePreTrailStops({
   routeId = 'suggested-route',
   generatedAt = new Date().toISOString(),
 }: ResolvePreTrailStopsArgs): ResolvedPreTrailStops {
-  const routeContextCandidateInput = routeContextCandidates(routeContext);
-  const candidateInput = candidates ?? (routeContextCandidateInput.length > 0 ? routeContextCandidateInput : null);
+  const candidateInput = mergeCandidateInputWithRouteContext(candidates, routeContext);
   const ranking = rankPreTrailStops({
     candidates: candidateInput,
     trailheadStart,
@@ -1157,7 +1218,7 @@ export function resolvePreTrailStops({
         summary.stopCount === 0 &&
         summary.status === 'provider_unavailable' &&
         (routeContextCandidateCount(routeContext, summary.bucket) ?? 0) > 0
-          ? ['Route context reports supply candidates, but detailed itinerary stop conversion is not wired in this scaffold.']
+          ? ['Route context reports supply candidates, but no usable candidate coordinates were provided for this bucket.']
           : []
       ),
     ],
@@ -1173,8 +1234,11 @@ export function resolvePreTrailStops({
     anchorCoordinate: ranking.anchorCoordinate,
     dataUsed: dedupeDataSources([
       ...ranking.dataUsed,
-      ...(routeContext ? [source('pre_trail_route_context', 'cached', { source: routeContext.status ?? 'route_context' })] : []),
+      ...(routeContext ? [source('pre_trail_route_context', routeContextDataState(routeContext), { source: routeContext.status ?? 'route_context' })] : []),
     ]),
-    warnings: ranking.warnings,
+    warnings: Array.from(new Set([
+      ...ranking.warnings,
+      ...bucketSummaries.flatMap((summary) => summary.warnings ?? []),
+    ])),
   };
 }

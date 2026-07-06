@@ -211,6 +211,16 @@ function parseRealUpstreamEvidence(markdown) {
     const staleRate = row['Stale rate'] ?? '';
     const conflictRate = row['Conflict rate'] ?? '';
     const acceptedForInfluence = /^yes$/i.test(row['Accepted for influence'] ?? '');
+    const shadowObserved =
+      !isPlaceholderEvidenceValue(providerSource) &&
+      !/\b(?:TBD|none observed|not configured)\b/i.test(providerSource) &&
+      realShadowStatusRecorded(realShadowStatus) &&
+      !/\b(?:missing|not run)\b/i.test(realShadowStatus) &&
+      evidenceRateRecorded(coverageRate) &&
+      evidenceRateRecorded(freshnessRate) &&
+      evidenceRateRecorded(unknownRate) &&
+      evidenceRateRecorded(staleRate) &&
+      evidenceRateRecorded(conflictRate);
     const complete =
       !isPlaceholderEvidenceValue(providerSource) &&
       !/\bTBD\b/i.test(providerSource) &&
@@ -231,6 +241,7 @@ function parseRealUpstreamEvidence(markdown) {
       staleRate,
       conflictRate,
       acceptedForInfluence,
+      shadowObserved,
       complete,
     };
   }
@@ -326,11 +337,17 @@ export function buildProviderReadinessResult(options = {}) {
       item.recommendationInfluenceAllowed &&
       item.realEvidence?.complete === true
     );
+    const shadowValidated = matches.some((item) =>
+      item.status === 'shadow_validated' ||
+      item.evidenceMode === 'real-shadow' ||
+      item.realEvidence?.shadowObserved === true
+    );
+    const realShadowEvidenceMode = matches.find((item) => item.realEvidence)?.realEvidence?.realShadowStatus ?? null;
     categoryStatus[category] = {
       status: approved ? 'approved' : 'not_approved',
-      evidenceMode: approved ? 'approved' : (matches[0]?.evidenceMode ?? 'missing'),
+      evidenceMode: approved ? 'approved' : (shadowValidated ? 'real-shadow' : (realShadowEvidenceMode ?? matches[0]?.evidenceMode ?? 'missing')),
       recommendationInfluenceAllowed: approved,
-      shadowValidated: matches.some((item) => item.status === 'shadow_validated' || item.evidenceMode === 'real-shadow'),
+      shadowValidated,
       realUpstreamEvidenceComplete: matches.some((item) => item.realEvidence?.complete === true),
       reports: matches,
     };

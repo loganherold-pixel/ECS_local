@@ -32,6 +32,12 @@ if "%DIRNAME%"=="" set DIRNAME=.
 set APP_BASE_NAME=%~n0
 set APP_HOME=%DIRNAME%
 
+@rem Release Android builds need NODE_ENV before Gradle config-time Expo tasks read env files.
+if defined NODE_ENV goto ecsNodeEnvDone
+echo %* | findstr /I "Release" >NUL
+if not errorlevel 1 set NODE_ENV=production
+:ecsNodeEnvDone
+
 @rem Resolve any "." and ".." in APP_HOME to make it shorter.
 for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
 

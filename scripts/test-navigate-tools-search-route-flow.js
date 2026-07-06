@@ -40,7 +40,7 @@ assertIncludes(
 assertIncludes(
   navigateSource,
   [
-    'roadNavigation.suggestions.map((suggestion) =>',
+    'visibleIdleDestinationSearchSuggestions.map((suggestion) =>',
     'onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}',
     'handleRecentSearchSelection(suggestion)',
   ],
@@ -71,7 +71,12 @@ assertIncludes(
     'resolveRoadDestination({',
     "requestRouteForDestination(\n          destination,\n          'route_preview',",
     'fetchRoadRouteAlternatives({',
-    'applyRoute(validRoute, requestedStatus, destination, createdFrom',
+    'applyRoute(',
+    'validRoute,',
+    'requestedStatus,',
+    'destination,',
+    'createdFrom,',
+    'validRoutes,',
   ],
   'Road navigation hook should still geocode, resolve, route, and enter route preview.',
 );

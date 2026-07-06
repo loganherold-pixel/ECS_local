@@ -34,6 +34,7 @@ import {
   Animated,
   BackHandler,
   Easing,
+  Keyboard,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import LandscapeDockRevealButton from '../../components/LandscapeDockRevealButton';
@@ -1951,6 +1952,7 @@ const COMPASS_POWER_SAVE_IDLE_MS = 10000;
 const COMPASS_MOVEMENT_DISTANCE_M = 4;
 const COMPASS_MOVEMENT_SPEED_MPH = 1.5;
 const ACTIVE_GUIDANCE_AUTO_MINIMIZE_MS = 2500;
+const IDLE_DESTINATION_SEARCH_RENDER_LIMIT = 5;
 const CAMP_LAYER_ROUTE_MAP_RESULT_LIMIT = 64;
 const ESTABLISHED_CAMPGROUNDS_FETCH_DEBOUNCE_MS = 180;
 const ESTABLISHED_CAMPGROUNDS_PREFETCH_PADDING_RATIO = 0.5;
@@ -4194,6 +4196,7 @@ const [mapLoading, setMapLoading] = useState(initialMapTokenRef.current.length =
 const [mapSurfaceReady, setMapSurfaceReady] = useState(false);
 const [mapOverlayStartupReady, setMapOverlayStartupReady] = useState(false);
 const [mapSurfaceRevision, setMapSurfaceRevision] = useState(0);
+const [keyboardHeight, setKeyboardHeight] = useState(0);
 
 const hasToken = !!mapToken;
 const isMapUIReady = hasToken && !mapLoading && mapSurfaceReady;
@@ -4241,6 +4244,27 @@ useEffect(() => {
 
   return () => clearTimeout(timer);
 }, [hasToken, isFocused, mapLoading, mapSurfaceReady]);
+
+useEffect(() => {
+  const handleKeyboardShow = (event: { endCoordinates?: { height?: number } }) => {
+    const nextHeight = Math.max(0, Math.round(event.endCoordinates?.height ?? 0));
+    setKeyboardHeight((current) => (Math.abs(current - nextHeight) <= 2 ? current : nextHeight));
+  };
+  const handleKeyboardHide = () => {
+    setKeyboardHeight(0);
+  };
+
+  const subscriptions = [
+    Keyboard.addListener('keyboardWillShow', handleKeyboardShow),
+    Keyboard.addListener('keyboardDidShow', handleKeyboardShow),
+    Keyboard.addListener('keyboardWillHide', handleKeyboardHide),
+    Keyboard.addListener('keyboardDidHide', handleKeyboardHide),
+  ];
+
+  return () => {
+    subscriptions.forEach((subscription) => subscription.remove());
+  };
+}, []);
 
 const [followUser, setFollowUser] = useState(false);
 const [userHasManuallyMovedMap, setUserHasManuallyMovedMap] = useState(false);
@@ -20106,10 +20130,33 @@ const idleDestinationSearchNoMatchesVisible =
   !roadNavigation.searchError &&
   roadNavigation.suggestions.length === 0 &&
   !searchOperationalState.disabled;
+const visibleIdleDestinationSearchSuggestions = useMemo(
+  () => roadNavigation.suggestions.slice(0, IDLE_DESTINATION_SEARCH_RENDER_LIMIT),
+  [roadNavigation.suggestions],
+);
+const idleDestinationSearchResultsLabel =
+  visibleIdleDestinationSearchSuggestions.length < roadNavigation.suggestions.length
+    ? `RESULTS | ${visibleIdleDestinationSearchSuggestions.length} OF ${roadNavigation.suggestions.length}`
+    : `RESULTS | ${roadNavigation.suggestions.length}`;
 const recentSearchesSectionVisible =
   recentSearchesVisible &&
   !idleDestinationSearchHasQuery &&
   !roadNavigation.searchLoading;
+const idleDestinationSearchBottomClearance =
+  keyboardHeight > 0
+    ? Math.max(routeSurfaceBottomOffset, keyboardHeight + PAGE_FRAME_BOTTOM_GAP)
+    : routeSurfaceBottomOffset;
+const idleDestinationSearchMaxHeight = Math.max(
+  136,
+  adaptive.windowHeight -
+    roadNavigationSurfaceTopOffset -
+    idleDestinationSearchBottomClearance -
+    PAGE_FRAME_BOTTOM_GAP,
+);
+const idleDestinationSearchResultsMaxHeight = Math.max(
+  72,
+  Math.min(190, idleDestinationSearchMaxHeight - 132),
+);
 
 const gpsStatusOverlayBottomOffset = LOWER_DOCK_EXCLUSION + PAGE_FRAME_BOTTOM_GAP + 12;
 
@@ -20295,6 +20342,9 @@ const stableMapSurface = useMemo(() => {
           maxHeight: campLayerMenuLayout.maxHeight,
         },
       ]}
+      testID="navigate-camp-layer-menu-panel"
+      accessible
+      accessibilityLabel="Camp layer menu"
     >
       <View style={styles.campLayerMenuHeader}>
         <View style={styles.campLayerMenuTitleRow}>
@@ -20722,7 +20772,7 @@ const stableMapSurface = useMemo(() => {
             },
           ]}
         >
-          <View style={styles.idleDestinationSearchShell}>
+          <View style={[styles.idleDestinationSearchShell, { maxHeight: idleDestinationSearchMaxHeight }]}>
             <View style={styles.idleDestinationSearchHeader}>
               <View style={styles.idleDestinationSearchTitleRow}>
                 <Ionicons name="search-outline" size={14} color={TACTICAL.amber} />
@@ -20765,6 +20815,7 @@ const stableMapSurface = useMemo(() => {
                     autoCapitalize: 'words',
                     autoCorrect: false,
                     returnKeyType: 'search',
+                    testID: 'navigate-destination-search-input',
                     accessibilityLabel: 'Search address or place',
                     accessibilityHint: 'Search for a destination to build a road navigation route.',
                   }}
@@ -20788,7 +20839,15 @@ const stableMapSurface = useMemo(() => {
               </TouchableOpacity>
             </View>
 
-            {searchOperationalState.detail ? (
+            {idleDestinationSearchHasQuery ? (
+              <Text
+                style={styles.idleDestinationSearchOperationalText}
+                numberOfLines={1}
+                testID="navigate-destination-search-query-state"
+              >
+                QUERY | {roadNavigation.query.trim()}
+              </Text>
+            ) : searchOperationalState.detail ? (
               <Text style={styles.idleDestinationSearchOperationalText} numberOfLines={1}>
                 {searchOperationalState.detail}
               </Text>
@@ -20809,14 +20868,14 @@ const stableMapSurface = useMemo(() => {
             {roadNavigation.suggestions.length > 0 ? (
               <View style={styles.idleDestinationSearchResultsBlock}>
                 <Text style={styles.idleDestinationSearchSectionTitle}>
-                  RESULTS | {roadNavigation.suggestions.length}
+                  {idleDestinationSearchResultsLabel}
                 </Text>
                 <ScrollView
-                  style={styles.idleDestinationSearchResultsScroll}
+                  style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
                   nestedScrollEnabled
                   keyboardShouldPersistTaps="handled"
                 >
-                  {roadNavigation.suggestions.map((suggestion) => (
+                  {visibleIdleDestinationSearchSuggestions.map((suggestion) => (
                     <TouchableOpacity
                       key={suggestion.id}
                       style={styles.idleDestinationSearchSuggestionItem}
@@ -20846,7 +20905,7 @@ const stableMapSurface = useMemo(() => {
                 <Text style={styles.idleDestinationSearchSectionTitle}>{recentSearchesTitle}</Text>
                 {recentSearches.length > 0 ? (
                   <ScrollView
-                    style={styles.idleDestinationSearchResultsScroll}
+                    style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
                     nestedScrollEnabled
                     keyboardShouldPersistTaps="handled"
                   >
@@ -21418,8 +21477,6 @@ const stableMapSurface = useMemo(() => {
               { bottom: TOOLS_TRIGGER_BOTTOM, right: TOOLS_TRIGGER_RIGHT },
             ]}
             pointerEvents="box-none"
-            accessible
-            accessibilityLabel="Draw area to search for campsites"
           >
             {routeProfileScrubberAvailable ? (
               <View
@@ -21504,10 +21561,12 @@ const stableMapSurface = useMemo(() => {
                 onPress={toggleRouteGeometryOverlay}
                 activeOpacity={0.85}
                 hitSlop={EDGE_CONTROL_HIT_SLOP}
+                testID="navigate-route-geometry-overlay-toggle"
                 accessibilityRole="switch"
                 accessibilityState={{
                   checked: routeGeometryOverlayEnabled,
                 }}
+                accessibilityValue={{ text: routeGeometryOverlayEnabled ? 'on' : 'off' }}
                 accessibilityLabel="Route geometry overlay"
                 accessibilityHint="Toggles ECS-owned route, trail, leg, and segment geometry for Build Route selection."
               >
@@ -21567,9 +21626,11 @@ const stableMapSurface = useMemo(() => {
                     onPress={toggleCampLayerMenu}
                     activeOpacity={0.85}
                     hitSlop={EDGE_CONTROL_HIT_SLOP}
+                    testID="navigate-camp-layer-menu-toggle"
                     accessibilityRole="button"
                     accessibilityLabel="Camp map layers"
                     accessibilityState={{ expanded: campLayerMenuOpen }}
+                    accessibilityValue={{ text: campLayerMenuOpen ? 'open' : 'closed' }}
                   >
                     <Ionicons
                       name="bonfire-outline"
@@ -22172,7 +22233,10 @@ const stableMapSurface = useMemo(() => {
   handleRecentSearchSelection,
   idleDestinationSearchHasQuery,
   idleDestinationSearchNoMatchesVisible,
+  idleDestinationSearchResultsLabel,
   idleDestinationSearchVisible,
+  idleDestinationSearchMaxHeight,
+  idleDestinationSearchResultsMaxHeight,
   navigateOperationalState.mode,
   recentSearches,
   recentSearchesSectionVisible,
@@ -22180,6 +22244,7 @@ const stableMapSurface = useMemo(() => {
   recentSearchesVisible,
   roadNavigation,
   toggleRecentSearches,
+  visibleIdleDestinationSearchSuggestions,
   weatherLocation?.lat,
   weatherLocation?.lng,
   visibleMissionBrief,
