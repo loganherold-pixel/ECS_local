@@ -259,18 +259,20 @@ assert(
   mapRendererSource.includes('routeLineKey?: string | null') &&
     mapRendererSource.includes('routeLineKey: props.routeLineKey ?? null') &&
     mapRendererSource.includes('lastRouteLineKey') &&
-    mapRendererSource.includes("setGeoJson('route-source', featureCollection([]))"),
+    mapRendererSource.includes('clearRouteSourcesExcept(null)') &&
+    mapRendererSource.includes('routeSourceIdForRenderMode(mode)') &&
+    mapRendererSource.includes('setGeoJson(activeRouteSourceId, fc)'),
   'MapRenderer should carry an explicit active route-line identity and clear the route source before keyed replacements.',
 );
 assert.strictEqual(
-  (mapRendererSource.match(/ensureSource\('route-source'/g) || []).length,
+  (mapRendererSource.match(/mapSourceRegistry\.ensure\(ACTIVE_GUIDANCE_ROUTE_SOURCE_ID/g) || []).length,
   1,
-  'MapRenderer should maintain one active route source and replace its data on reroute.',
+  'MapRenderer should maintain one active guidance route source and replace its data on reroute.',
 );
 assert.strictEqual(
-  (mapRendererSource.match(/ensureLineLayer\('route-layer', 'route-source'/g) || []).length,
+  (mapRendererSource.match(/routeLineLayerDefinition\(ACTIVE_GUIDANCE_ROUTE_LAYER_ID, ACTIVE_GUIDANCE_ROUTE_SOURCE_ID/g) || []).length,
   1,
-  'MapRenderer should maintain one active route layer during repeated reroutes.',
+  'MapRenderer should maintain one active guidance route layer during repeated reroutes.',
 );
 assert(
   navigateSource.includes('buildActiveGuidanceRouteLineSync') &&

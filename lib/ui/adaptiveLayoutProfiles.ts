@@ -83,7 +83,7 @@ export function resolveSurfaceLayoutProfile(
         tier === 'wide_tablet' ? 70 : tier === 'standard_tablet' ? 66 : tier === 'large_phone' ? 58 : 54,
       dockMaxWidth,
       dockHorizontalPadding:
-        tier === 'wide_tablet' ? 38 : tier === 'standard_tablet' ? 32 : tier === 'large_phone' ? 24 : 18,
+        tier === 'wide_tablet' ? 38 : tier === 'standard_tablet' ? 32 : tier === 'large_phone' ? 24 : 8,
       dockOuterGutter:
         tier === 'wide_tablet' ? 12 : tier === 'standard_tablet' ? 10 : 0,
       profilePanelWidth:

@@ -336,6 +336,11 @@ const SMART_RESUPPLY_SEARCH_LIMIT = 20;
 const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const;
 const SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES = 10;
 const SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 20;
+const SMART_RESUPPLY_APPROACH_SIGNATURE_MAX_POINTS = 6;
+const SMART_RESUPPLY_APPROACH_SIGNATURE_DECIMALS = 3;
+const SMART_RESUPPLY_HIGH_REMOTE_ENTRY_PROGRESS_RATIO = 0.88;
+const SMART_RESUPPLY_REMOTE_ENTRY_PROGRESS_RATIO = 0.9;
+const SMART_RESUPPLY_WATCH_REMOTE_ENTRY_PROGRESS_RATIO = 0.93;
 const RESUPPLY_OVERRIDE_CATEGORIES = new Set<ResupplyCategory>(['water', 'food_supplies', 'repair', 'medical']);
 
 function makePlanIdPart(value: string | null | undefined): string {
@@ -1749,6 +1754,15 @@ function finiteCoordinateNumber(value: unknown): number | null {
   return typeof next === 'number' && Number.isFinite(next) ? next : null;
 }
 
+function remoteEntryProgressRatioForResupply(route: TripBuilderRouteInput | null): number | null {
+  const remotenessScore = finiteCoordinateNumber(route?.remotenessScore);
+  if (remotenessScore == null) return null;
+  if (remotenessScore >= 8) return SMART_RESUPPLY_HIGH_REMOTE_ENTRY_PROGRESS_RATIO;
+  if (remotenessScore >= 7) return SMART_RESUPPLY_REMOTE_ENTRY_PROGRESS_RATIO;
+  if (remotenessScore >= 6) return SMART_RESUPPLY_WATCH_REMOTE_ENTRY_PROGRESS_RATIO;
+  return null;
+}
+
 function coordinateFromRouteValue(value: unknown): TripMapCoordinate | null {
   if (Array.isArray(value)) {
     const longitude = finiteCoordinateNumber(value[0]);
@@ -1862,6 +1876,18 @@ function routePointsForTripMap(route: TripBuilderRouteInput): TripMapCoordinate[
   return fallback;
 }
 
+function routeLinePointsForTripMap(route: TripBuilderRouteInput): TripMapCoordinate[] {
+  const normalized = normalizeCanonicalRouteGeometry(route)
+    .latitudeLongitude
+    .map((point) => ({
+      latitude: point.latitude,
+      longitude: point.longitude,
+    }))
+    .filter(isValidMapCoordinate);
+  if (normalized.length >= 2) return normalized;
+  return [];
+}
+
 function tripBuilderCoordinateFromGpsPosition(position: GPSPosition | null): TripBuilderCoordinate | null {
   if (!position) return null;
   const coordinate = {
@@ -1971,7 +1997,7 @@ function buildPreparedTripRoutePreview(
   if (!route) return null;
   const tripRoute = route as unknown as TripBuilderRouteInput;
   const routeId = tripBuilderRoutePreviewId(route) ?? 'selected-route';
-  const routePoints = routePointsForTripMap(tripRoute);
+  const routePoints = routeLinePointsForTripMap(tripRoute);
   const start = routePoints[0] ?? routeStartCoordinateForTrip(tripRoute);
   const end = routePoints.length > 1
     ? routePoints[routePoints.length - 1]
@@ -2356,21 +2382,44 @@ function smartResupplyOptionListSignature(options: SmartResupplyPoi[]): string {
   return options.map(smartResupplyOptionDisplaySignature).join('||');
 }
 
+function smartResupplyCoordinateSignature(point: TripMapCoordinate): string {
+  return [
+    point.latitude.toFixed(SMART_RESUPPLY_APPROACH_SIGNATURE_DECIMALS),
+    point.longitude.toFixed(SMART_RESUPPLY_APPROACH_SIGNATURE_DECIMALS),
+  ].join(',');
+}
+
+function smartResupplyApproachSignature(approachRoute: TripMapCoordinate[] = []): string {
+  const points = approachRoute.filter(isValidMapCoordinate);
+  if (points.length < 2) return 'no-approach';
+  const maxPoints = Math.max(2, SMART_RESUPPLY_APPROACH_SIGNATURE_MAX_POINTS);
+  const lastIndex = points.length - 1;
+  const indexes = new Set<number>([0, lastIndex]);
+  const sampleSlots = Math.min(maxPoints, points.length);
+  for (let slot = 1; slot < sampleSlots - 1; slot += 1) {
+    indexes.add(Math.round((lastIndex * slot) / (sampleSlots - 1)));
+  }
+  return Array.from(indexes)
+    .sort((left, right) => left - right)
+    .map((index) => smartResupplyCoordinateSignature(points[index]))
+    .filter((value, index, values) => index === 0 || values[index - 1] !== value)
+    .join(';') || 'no-approach';
+}
+
 function smartResupplySearchSignature(
   routeStart: TripMapCoordinate,
   kind: SmartResupplySearchKind,
   approachRoute: TripMapCoordinate[] = [],
   selectionKey: string | null = null,
+  remoteEntryProgressRatio: number | null = null,
 ): string {
-  const approachSignature = approachRoute
-    .filter(isValidMapCoordinate)
-    .map((point) => `${point.latitude.toFixed(4)},${point.longitude.toFixed(4)}`)
-    .join(';') || 'no-approach';
+  const approachSignature = smartResupplyApproachSignature(approachRoute);
   return [
     kind,
     routeStart.latitude.toFixed(5),
     routeStart.longitude.toFixed(5),
     approachSignature,
+    remoteEntryProgressRatio == null ? 'remote-entry:auto' : `remote-entry:${remoteEntryProgressRatio.toFixed(3)}`,
     selectionKey ?? 'none',
   ].join(':');
 }
@@ -2434,6 +2483,7 @@ function applyApproachRankingToSmartResupplyOptions(params: {
   approachRoute: TripMapCoordinate[];
   origin?: TripMapCoordinate | null;
   limit?: number;
+  remoteEntryProgressRatio?: number | null;
 }): SmartResupplyPoi[] {
   const byKey = new Map(params.options.map((option) => [smartResupplyOptionStableKey(option), option]));
   return rankApproachResupplyOptions({
@@ -2444,6 +2494,7 @@ function applyApproachRankingToSmartResupplyOptions(params: {
     candidates: params.options.map(approachCandidateFromSmartResupplyOption),
     preferredRouteBufferMiles: SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES,
     maxRouteDeviationMiles: SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES,
+    remoteEntryProgressRatio: params.remoteEntryProgressRatio,
     limit: params.limit ?? params.options.length,
   }).flatMap((ranked): SmartResupplyPoi[] => {
     const option = byKey.get(ranked.id);
@@ -2488,6 +2539,7 @@ function smartResupplyOptionsFromRouteContext(
   routeStart: TripMapCoordinate | null,
   approachRoute: TripMapCoordinate[] = [],
   fallbackAnchor: TripMapCoordinate | null = routeStart,
+  remoteEntryProgressRatio: number | null = null,
 ): SmartResupplyPoi[] {
   if (!isUsableRouteContext(context) || !routeStart) return [];
   const supplyCategory = category === 'fuel' ? 'gas' : 'grocery';
@@ -2511,6 +2563,7 @@ function smartResupplyOptionsFromRouteContext(
     category,
     trailhead: routeStart,
     approachRoute,
+    remoteEntryProgressRatio,
     limit: SMART_RESUPPLY_OPTION_LIMIT,
   })
     .filter(isSmartResupplyOptionRouteAware)
@@ -2668,11 +2721,13 @@ async function loadSmartResupplyOptions(params: {
   approachRoute: TripMapCoordinate[];
   origin?: TripMapCoordinate | null;
   fallbackAnchor?: TripMapCoordinate | null;
+  remoteEntryProgressRatio?: number | null;
 }): Promise<SmartResupplyPoi[]> {
   const searchAnchors = buildApproachResupplySearchAnchors({
     trailhead: params.routeStart,
     approachRoute: params.approachRoute,
     fallbackAnchor: params.fallbackAnchor ?? params.routeStart,
+    remoteEntryProgressRatio: params.remoteEntryProgressRatio,
     maxAnchors: 7,
   });
   const suggestionMap = new Map<string, RoadNavSearchSuggestion>();
@@ -2736,6 +2791,7 @@ async function loadSmartResupplyOptions(params: {
     trailhead: params.routeStart,
     approachRoute: params.approachRoute,
     origin: params.origin ?? null,
+    remoteEntryProgressRatio: params.remoteEntryProgressRatio,
     limit: SMART_RESUPPLY_OPTION_LIMIT * 2,
   })
     .filter(isSmartResupplyOptionRouteAware)
@@ -2966,9 +3022,9 @@ function buildTripPlanMapModel(
   const preparedRoutePoints = routePreviewPoints.filter(isValidMapCoordinate);
   const baseRoutePoints = preparedRoutePoints.length >= 2
     ? preparedRoutePoints
-    : routePointsForTripMap(route);
+    : routeLinePointsForTripMap(route);
   const enrichedRoute = routeForOfflinePrep(route, plan, baseRoutePoints);
-  const enrichedRoutePoints = routePointsForTripMap(enrichedRoute);
+  const enrichedRoutePoints = routeLinePointsForTripMap(enrichedRoute);
   const routePoints = baseRoutePoints.length >= 2 ? baseRoutePoints : enrichedRoutePoints;
   const markerSources: {
     id: string;
@@ -3074,17 +3130,14 @@ function buildTripPlanMapModel(
         connectToRouteLine: entry.connectToRouteLine ?? true,
       }];
     });
-  const fallbackPoints = markers
-    .filter((marker) => marker.connectToRouteLine !== false)
-    .map((marker) => ({ latitude: marker.latitude, longitude: marker.longitude }));
   const itineraryRouteLinePoints = scope === 'itinerary' && routePoints.length >= 2
     ? routePoints
-    : fallbackPoints;
+    : [];
   const points = scope === 'itinerary'
     ? itineraryRouteLinePoints
     : routePoints.length >= 2
       ? routePoints
-      : fallbackPoints;
+      : [];
   const focusMarker = markers[0] ?? null;
   return {
     points,
@@ -3160,7 +3213,7 @@ function TripPlanMapOverlay({
           </TouchableOpacity>
         </View>
         <View style={styles.tripMapFrame}>
-          {mapboxToken && model.points.length > 0 ? (
+          {mapboxToken && (model.points.length > 0 || model.markers.length > 0) ? (
             <MapRenderer
               points={model.points}
               pinMarkers={model.markers}
@@ -3264,8 +3317,8 @@ function CampPlanPickerOverlay({
   const [pickerMapStyle, setPickerMapStyle] = useState<MapStyleKey>(DEFAULT_MAP_STYLE);
   const routePoints = useMemo(() => {
     const prepared = routePreviewPoints.filter(isValidMapCoordinate);
-    if (prepared.length > 0) return prepared;
-    return route ? routePointsForTripMap(route) : [];
+    if (prepared.length >= 2) return prepared;
+    return route ? routeLinePointsForTripMap(route) : [];
   }, [route, routePreviewPoints]);
   const campCameraCommand = useMemo(
     () => buildTripRoutePreviewCameraCommand(routePoints, 'camp_plan'),
@@ -3455,8 +3508,8 @@ function BailoutPlanPickerOverlay({
   const [pickerMapStyle, setPickerMapStyle] = useState<MapStyleKey>(DEFAULT_MAP_STYLE);
   const routePoints = useMemo(() => {
     const prepared = routePreviewPoints.filter(isValidMapCoordinate);
-    if (prepared.length > 0) return prepared;
-    return route ? routePointsForTripMap(route) : [];
+    if (prepared.length >= 2) return prepared;
+    return route ? routeLinePointsForTripMap(route) : [];
   }, [route, routePreviewPoints]);
   const routeEndpointMarkers = useMemo(() => {
     if (routePoints.length === 0) return [];
@@ -3796,6 +3849,10 @@ export default function ExploreTripBuilderScreen() {
     () => routes.find((route) => String(route.id) === selectedRouteId) ?? null,
     [routes, selectedRouteId],
   );
+  const selectedRouteRemoteEntryProgressRatio = useMemo(
+    () => remoteEntryProgressRatioForResupply(selectedRoute as unknown as TripBuilderRouteInput | null),
+    [selectedRoute],
+  );
   const selectedRouteDisplayName = useMemo(
     () => tripBuilderRouteDisplayName(selectedRoute),
     [selectedRoute],
@@ -3887,7 +3944,7 @@ export default function ExploreTripBuilderScreen() {
     ) {
       return preparedTripRoutePreview.routePoints;
     }
-    return selectedRoute ? routePointsForTripMap(selectedRoute as unknown as TripBuilderRouteInput) : [];
+    return selectedRoute ? routeLinePointsForTripMap(selectedRoute as unknown as TripBuilderRouteInput) : [];
   }, [preparedTripRoutePreview, routeContextSnapshot, selectedRoute, tripSetupStarted]);
 
   const suggestedEstablishedCampPins = useMemo(
@@ -4213,12 +4270,26 @@ export default function ExploreTripBuilderScreen() {
     return selectedSmartFuel.groceries || !!selectedSmartSupply;
   }, [selectedSmartFuel, selectedSmartSupply, smartResupplyPreference]);
   const routeContextFuelOptions = useMemo(
-    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'fuel', selectedTrailheadResupplyAnchorCoordinate, liveApproachRoutePoints),
-    [liveApproachRoutePoints, routeContextSnapshot, selectedTrailheadResupplyAnchorCoordinate],
+    () => smartResupplyOptionsFromRouteContext(
+      routeContextSnapshot,
+      'fuel',
+      selectedTrailheadResupplyAnchorCoordinate,
+      liveApproachRoutePoints,
+      selectedTrailheadResupplyAnchorCoordinate,
+      selectedRouteRemoteEntryProgressRatio,
+    ),
+    [liveApproachRoutePoints, routeContextSnapshot, selectedRouteRemoteEntryProgressRatio, selectedTrailheadResupplyAnchorCoordinate],
   );
   const routeContextSupplyOptions = useMemo(
-    () => smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedTrailheadResupplyAnchorCoordinate, liveApproachRoutePoints, selectedPreTrailSupplyAnchorCoordinate),
-    [liveApproachRoutePoints, routeContextSnapshot, selectedPreTrailSupplyAnchorCoordinate, selectedTrailheadResupplyAnchorCoordinate],
+    () => smartResupplyOptionsFromRouteContext(
+      routeContextSnapshot,
+      'food_supplies',
+      selectedTrailheadResupplyAnchorCoordinate,
+      liveApproachRoutePoints,
+      selectedPreTrailSupplyAnchorCoordinate,
+      selectedRouteRemoteEntryProgressRatio,
+    ),
+    [liveApproachRoutePoints, routeContextSnapshot, selectedPreTrailSupplyAnchorCoordinate, selectedRouteRemoteEntryProgressRatio, selectedTrailheadResupplyAnchorCoordinate],
   );
   const bailoutPlanReady = bailoutPlanPreference === 'no' || !!selectedBailoutPoint || bailoutPlanPins.length > 0;
   const campPlanReady = campPlanPreference === 'skip' || campPlanPins.length > 0;
@@ -4340,7 +4411,13 @@ export default function ExploreTripBuilderScreen() {
       return;
     }
 
-    const searchSignature = smartResupplySearchSignature(selectedTrailheadResupplyAnchorCoordinate, 'fuel', liveApproachRoutePoints);
+    const searchSignature = smartResupplySearchSignature(
+      selectedTrailheadResupplyAnchorCoordinate,
+      'fuel',
+      liveApproachRoutePoints,
+      null,
+      selectedRouteRemoteEntryProgressRatio,
+    );
     const routeContextMergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, [], smartResupplyFuelOptionsRef.current);
     if (routeContextFuelOptions.length > 0 || smartResupplyFuelOptionsRef.current.length > 0) {
       commitSmartResupplyFuelOptions(routeContextMergedOptions);
@@ -4372,6 +4449,7 @@ export default function ExploreTripBuilderScreen() {
           routeStart: selectedTrailheadResupplyAnchorCoordinate,
           approachRoute: liveApproachRoutePoints,
           origin: liveTripBuilderUserLocation,
+          remoteEntryProgressRatio: selectedRouteRemoteEntryProgressRatio,
         });
         if (cancelled || requestId !== smartResupplyFuelRequestRef.current) return;
         const mergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current);
@@ -4401,6 +4479,7 @@ export default function ExploreTripBuilderScreen() {
     routeContextFuelOptions,
     liveApproachRoutePoints,
     liveTripBuilderUserLocation,
+    selectedRouteRemoteEntryProgressRatio,
     selectedTrailheadResupplyAnchorCoordinate,
     smartResupplyPreference,
     tripSetupStarted,
@@ -4432,6 +4511,7 @@ export default function ExploreTripBuilderScreen() {
       'supplies',
       liveApproachRoutePoints,
       smartResupplyOptionStableKey(selectedSmartFuel),
+      selectedRouteRemoteEntryProgressRatio,
     );
     const routeContextMergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, [], smartResupplySupplyOptionsRef.current);
     if (routeContextSupplyOptions.length > 0 || smartResupplySupplyOptionsRef.current.length > 0) {
@@ -4465,6 +4545,7 @@ export default function ExploreTripBuilderScreen() {
           approachRoute: liveApproachRoutePoints,
           origin: liveTripBuilderUserLocation,
           fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate,
+          remoteEntryProgressRatio: selectedRouteRemoteEntryProgressRatio,
         });
         if (cancelled || requestId !== smartResupplySupplyRequestRef.current) return;
         const mergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current);
@@ -4495,6 +4576,7 @@ export default function ExploreTripBuilderScreen() {
     liveApproachRoutePoints,
     liveTripBuilderUserLocation,
     selectedPreTrailSupplyAnchorCoordinate,
+    selectedRouteRemoteEntryProgressRatio,
     selectedTrailheadResupplyAnchorCoordinate,
     selectedSmartFuel,
     smartResupplyPreference,

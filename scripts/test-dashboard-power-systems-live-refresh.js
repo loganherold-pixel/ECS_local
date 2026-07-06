@@ -170,7 +170,7 @@ notIncludes(
 );
 includes(
   widgetRenderersSource,
-  'const shouldRenderPanelVisual = false;',
+  'const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);',
   'Power module panel should use the shared transparent texture-bleed surface instead of a decorative background.',
 );
 includes(

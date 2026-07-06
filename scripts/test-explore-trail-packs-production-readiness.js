@@ -7,7 +7,7 @@ async function main() {
   const result = gate.buildExploreTrailPacksProductionReadinessResult({ rootDir: path.join(__dirname, '..') });
 
   assert.strictEqual(result.system, 'explore_trail_packs_route_discovery');
-  assert.strictEqual(result.passed, false, 'Explore Trail Packs production gate should remain blocked until Android/content/privacy evidence is recorded.');
+  assert.strictEqual(result.passed, false, 'Explore Trail Packs production gate should remain blocked until moderation/privacy/owner evidence is recorded.');
   assert.strictEqual(result.status, 'blocked');
 
   [
@@ -25,8 +25,16 @@ async function main() {
 
   [
     'android_explore_trail_packs_visual_evidence_present',
-    'content_review_and_moderation_evidence_present',
     'explore_to_navigate_device_handoff_evidence_present',
+  ].forEach((id) => {
+    const item = result.checks.find((check) => check.id === id);
+    assert.ok(item, `${id} should be present`);
+    assert.strictEqual(item.passed, true, `${id} should pass when curated Explore deep evidence is accepted`);
+    assert.ok(!result.blockers.includes(id), `${id} should not appear in active blockers after evidence capture`);
+  });
+
+  [
+    'content_review_and_moderation_evidence_present',
     'privacy_submission_evidence_present',
     'production_owner_decision_accepted',
   ].forEach((id) => {
@@ -39,6 +47,10 @@ async function main() {
   assert.ok(
     result.notes.some((note) => note.includes('must not publish pending')),
     'Gate notes should keep public visibility guardrails explicit.',
+  );
+  assert.ok(
+    result.remediation.some((item) => item.includes('review-queue evidence')),
+    'Gate remediation should still call out missing moderation evidence.',
   );
 
   console.log('Explore Trail Packs production readiness checks passed');

@@ -45,6 +45,8 @@ import { EASING, MOTION, PRESS } from '../lib/motion';
 import { useApp } from '../context/AppContext';
 
 const LOGIN_LOGO = require('../assets/images/Expedition Command System Logo.png');
+const AUTH_UTILITY_HIT_SLOP = { top: 10, right: 8, bottom: 10, left: 8 } as const;
+const LOGIN_PORTRAIT_SCROLL_BOTTOM_BUFFER = 132;
 
 type ScreenMode = 'login' | 'forgot';
 type MessageTone = 'neutral' | 'error' | 'success';
@@ -522,6 +524,7 @@ export default function LoginScreen() {
   const loginLogoWidth = loginLayout.logoWidth;
   const loginLogoHeight = loginLayout.logoHeight;
   const loginHeaderHeight = loginLayout.headerHeight;
+  const portraitScrollBottomBuffer = isLandscape ? 0 : LOGIN_PORTRAIT_SCROLL_BOTTOM_BUFFER;
 
   return (
     <View style={styles.heroScreen}>
@@ -544,9 +547,12 @@ export default function LoginScreen() {
             contentContainerStyle={[
               styles.screenTopContent,
               isLandscape ? styles.screenTopContentLandscape : null,
-              { minHeight: authViewportHeight },
+              {
+                minHeight: authViewportHeight + portraitScrollBottomBuffer,
+                paddingBottom: portraitScrollBottomBuffer,
+              },
             ]}
-            keyboardShouldPersistTaps="handled"
+            keyboardShouldPersistTaps="always"
             showsVerticalScrollIndicator={false}
             bounces={false}
           >
@@ -666,7 +672,7 @@ const styles = StyleSheet.create({
   heroContentLayer: { ...StyleSheet.absoluteFillObject },
   screenShell: { flex: 1, justifyContent: 'flex-start' },
   screenTopRegion: { flex: 1 },
-  screenTopContent: { flexGrow: 1, justifyContent: 'flex-start' },
+  screenTopContent: { flexGrow: 1, justifyContent: 'flex-start', paddingBottom: 32 },
   screenTopContentLandscape: { justifyContent: 'center' },
   contentShell: { width: '100%', alignSelf: 'center', alignItems: 'center', justifyContent: 'flex-start' },
   contentShellLandscape: {
@@ -719,7 +725,7 @@ const styles = StyleSheet.create({
     borderRadius: 17,
   },
   cardScroll: { width: '100%' },
-  cardScrollContent: { flexGrow: 0 },
+  cardScrollContent: { flexGrow: 0, paddingBottom: 4 },
   fieldBlock: { marginBottom: 6 },
   fieldBlockCompactLandscape: { marginBottom: 4 },
   fieldLabel: { marginBottom: 4, fontSize: 11, lineHeight: 14, fontWeight: '800', color: 'rgba(230,237,243,0.9)', letterSpacing: 1.6 },
@@ -754,29 +760,29 @@ const styles = StyleSheet.create({
   orRowCompactLandscape: { marginTop: 3 },
   orRule: { flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.1)' },
   orText: { color: 'rgba(230,237,243,0.42)', fontSize: 11, lineHeight: 14, fontWeight: '700' },
-  actionRow: { marginTop: 5, flexDirection: 'row', gap: 8 },
+  actionRow: { marginTop: 7, flexDirection: 'row', gap: 8 },
   actionRowCompactLandscape: { marginTop: 4 },
   secondaryButton: {
-    flex: 1, minHeight: 38, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(6,8,10,0.28)',
+    flex: 1, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(6,8,10,0.28)',
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 10,
   },
-  secondaryButtonCompactLandscape: { minHeight: 34, borderRadius: 11, paddingHorizontal: 8 },
+  secondaryButtonCompactLandscape: { minHeight: 40, borderRadius: 11, paddingHorizontal: 8 },
   secondaryButtonTextPrimary: { color: TACTICAL.amber, fontSize: 14, lineHeight: 18, fontWeight: '800' },
   secondaryButtonText: { color: 'rgba(236,239,242,0.9)', fontSize: 14, lineHeight: 18, fontWeight: '800' },
-  dataTransferRow: { marginTop: 5, flexDirection: 'row', gap: 8 },
+  dataTransferRow: { marginTop: 8, flexDirection: 'row', gap: 8 },
   dataTransferRowCompactLandscape: { marginTop: 4 },
   exportButton: {
-    flex: 1, minHeight: 34, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 8,
+    flex: 1, minHeight: 42, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 8,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(255,255,255,0.025)',
   },
-  exportButtonCompactLandscape: { minHeight: 31, borderRadius: 11, gap: 6, paddingHorizontal: 7 },
+  exportButtonCompactLandscape: { minHeight: 38, borderRadius: 11, gap: 6, paddingHorizontal: 7 },
   exportButtonText: { flexShrink: 1, fontSize: 12, lineHeight: 16, fontWeight: '700', color: 'rgba(230,237,243,0.82)', textAlign: 'center' },
-  exportHint: { marginTop: 3, textAlign: 'center', fontSize: 10, lineHeight: 13, color: 'rgba(230,237,243,0.48)' },
+  exportHint: { marginTop: 5, textAlign: 'center', fontSize: 10, lineHeight: 13, color: 'rgba(230,237,243,0.48)' },
   devSeedButton: {
-    marginTop: 6, minHeight: 32, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 10,
+    marginTop: 8, minHeight: 42, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 10,
     borderWidth: 1, borderColor: 'rgba(212,160,23,0.22)', backgroundColor: 'rgba(212,160,23,0.075)',
   },
-  devSeedButtonCompactLandscape: { minHeight: 30, borderRadius: 11, marginTop: 5 },
+  devSeedButtonCompactLandscape: { minHeight: 38, borderRadius: 11, marginTop: 5 },
   devSeedButtonText: { flexShrink: 1, fontSize: 12, lineHeight: 16, fontWeight: '800', color: TACTICAL.amber, textAlign: 'center' },
   recoveryTitle: { fontSize: 20, lineHeight: 24, fontWeight: '800', color: TACTICAL.text },
   recoveryTitleCompactLandscape: { fontSize: 18, lineHeight: 22 },
@@ -787,9 +793,9 @@ const styles = StyleSheet.create({
   bottomLinkText: { fontSize: 13, lineHeight: 17, fontWeight: '700', color: TACTICAL.textMuted },
   footerBlock: { alignSelf: 'center', alignItems: 'center', width: '100%' },
   footerLinkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', rowGap: 8, columnGap: 10 },
-  footerPill: { minHeight: 28, minWidth: 72, paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.045)', backgroundColor: 'rgba(255,255,255,0.016)' },
+  footerPill: { minHeight: 34, minWidth: 72, paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.045)', backgroundColor: 'rgba(255,255,255,0.016)' },
   footerPillText: { fontSize: 11, lineHeight: 14, fontWeight: '800', color: 'rgba(212,160,23,0.9)', letterSpacing: 0.5, textAlign: 'center' },
-  createAccountHit: { marginTop: 10, minHeight: 28, justifyContent: 'center' },
+  createAccountHit: { marginTop: 10, minHeight: 34, justifyContent: 'center' },
   createAccountHitCompactLandscape: { marginTop: 7, minHeight: 24 },
   createAccountText: { fontSize: 14, lineHeight: 18, fontWeight: '800', color: TACTICAL.amber, textAlign: 'center' },
   loginLegalFooter: { marginTop: 8 },
@@ -867,18 +873,30 @@ const LoginFooterBlock = memo(function LoginFooterBlock({
         <Pressable
           style={({ pressed }) => [styles.footerPill, pressed ? styles.utilityPressed : null]}
           onPress={() => onOpenAuthInfo('privacy')}
+          accessibilityRole="button"
+          accessibilityLabel="Privacy policy"
+          hitSlop={AUTH_UTILITY_HIT_SLOP}
+          testID="auth-privacy-policy-button"
         >
           <Text style={styles.footerPillText}>Policy</Text>
         </Pressable>
         <Pressable
           style={({ pressed }) => [styles.footerPill, pressed ? styles.utilityPressed : null]}
           onPress={() => onOpenAuthInfo('terms')}
+          accessibilityRole="button"
+          accessibilityLabel="Site use terms"
+          hitSlop={AUTH_UTILITY_HIT_SLOP}
+          testID="auth-site-use-button"
         >
           <Text style={styles.footerPillText}>Site Use</Text>
         </Pressable>
         <Pressable
           style={({ pressed }) => [styles.footerPill, pressed ? styles.utilityPressed : null]}
           onPress={() => onOpenAuthInfo('support')}
+          accessibilityRole="button"
+          accessibilityLabel="Support"
+          hitSlop={AUTH_UTILITY_HIT_SLOP}
+          testID="auth-support-button"
         >
           <Text style={styles.footerPillText}>Support</Text>
         </Pressable>
@@ -890,6 +908,10 @@ const LoginFooterBlock = memo(function LoginFooterBlock({
           pressed ? styles.utilityPressed : null,
         ]}
         onPress={onCreateAccount}
+        accessibilityRole="button"
+        accessibilityLabel={AUTH_COPY.login.createAccount}
+        hitSlop={AUTH_UTILITY_HIT_SLOP}
+        testID="auth-create-account-button"
       >
         <Text style={styles.createAccountText}>{AUTH_COPY.login.createAccount}</Text>
       </Pressable>
@@ -1122,22 +1144,56 @@ const LoginCard = memo(function LoginCard({
       </View>
 
       <View style={[styles.actionRow, compactLayout ? styles.actionRowCompactLandscape : null]}>
-        <Pressable style={({ pressed }) => [styles.secondaryButton, compactLayout ? styles.secondaryButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={onContinueFree}>
+        <Pressable
+          style={({ pressed }) => [styles.secondaryButton, compactLayout ? styles.secondaryButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]}
+          disabled={utilityBusy}
+          onPress={onContinueFree}
+          accessibilityRole="button"
+          accessibilityLabel="Continue with Free"
+          accessibilityState={{ disabled: utilityBusy, busy: utilityBusy }}
+          hitSlop={AUTH_UTILITY_HIT_SLOP}
+          testID="auth-continue-free-button"
+        >
           <Ionicons name="phone-portrait-outline" size={14} color={TACTICAL.amber} />
           <Text style={styles.secondaryButtonTextPrimary}>Continue with Free</Text>
         </Pressable>
-        <Pressable style={({ pressed }) => [styles.secondaryButton, compactLayout ? styles.secondaryButtonCompactLandscape : null, pressed ? styles.utilityPressed : null]} onPress={onViewPro}>
+        <Pressable
+          style={({ pressed }) => [styles.secondaryButton, compactLayout ? styles.secondaryButtonCompactLandscape : null, pressed ? styles.utilityPressed : null]}
+          onPress={onViewPro}
+          accessibilityRole="button"
+          accessibilityLabel="View Pro"
+          hitSlop={AUTH_UTILITY_HIT_SLOP}
+          testID="auth-view-pro-button"
+        >
           <Ionicons name="diamond-outline" size={14} color="rgba(236,239,242,0.9)" />
           <Text style={styles.secondaryButtonText}>View Pro</Text>
         </Pressable>
       </View>
 
       <View style={[styles.dataTransferRow, compactLayout ? styles.dataTransferRowCompactLandscape : null]}>
-        <Pressable style={({ pressed }) => [styles.exportButton, compactLayout ? styles.exportButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={() => void onImport()}>
+        <Pressable
+          style={({ pressed }) => [styles.exportButton, compactLayout ? styles.exportButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]}
+          disabled={utilityBusy}
+          onPress={() => void onImport()}
+          accessibilityRole="button"
+          accessibilityLabel="Import local data"
+          accessibilityState={{ disabled: utilityBusy, busy: importingLocalData }}
+          hitSlop={AUTH_UTILITY_HIT_SLOP}
+          testID="auth-import-local-data-button"
+        >
           {importingLocalData ? <ActivityIndicator size="small" color="rgba(230,237,243,0.82)" /> : <Ionicons name="cloud-upload-outline" size={15} color="rgba(230,237,243,0.82)" />}
           <Text style={styles.exportButtonText}>Import local data</Text>
         </Pressable>
-        <Pressable style={({ pressed }) => [styles.exportButton, compactLayout ? styles.exportButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={() => void onExport()}>
+        <Pressable
+          style={({ pressed }) => [styles.exportButton, compactLayout ? styles.exportButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]}
+          disabled={utilityBusy}
+          onPress={() => void onExport()}
+          accessibilityRole="button"
+          accessibilityLabel="Export local data"
+          accessibilityState={{ disabled: utilityBusy, busy: exportingLocalData }}
+          hitSlop={AUTH_UTILITY_HIT_SLOP}
+          testID="auth-export-local-data-button"
+        >
           {exportingLocalData ? <ActivityIndicator size="small" color="rgba(230,237,243,0.82)" /> : <Ionicons name="download-outline" size={15} color="rgba(230,237,243,0.82)" />}
           <Text style={styles.exportButtonText}>Export local data</Text>
         </Pressable>
@@ -1153,6 +1209,10 @@ const LoginCard = memo(function LoginCard({
           ]}
           disabled={utilityBusy}
           onPress={() => void onDevSmokeSeed()}
+          accessibilityRole="button"
+          accessibilityLabel="Load smoke seed"
+          accessibilityState={{ disabled: utilityBusy, busy: devSeedingLocalData }}
+          hitSlop={AUTH_UTILITY_HIT_SLOP}
           testID="auth-dev-smoke-seed-button"
         >
           {devSeedingLocalData ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : <Ionicons name="flask-outline" size={15} color={TACTICAL.amber} />}
@@ -1175,7 +1235,7 @@ const LoginCard = memo(function LoginCard({
         <ScrollView
           style={styles.cardScroll}
           contentContainerStyle={styles.cardScrollContent}
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"
           nestedScrollEnabled
           showsVerticalScrollIndicator={false}
           bounces={false}
@@ -1308,7 +1368,7 @@ const ForgotPasswordCard = memo(function ForgotPasswordCard({
         <ScrollView
           style={styles.cardScroll}
           contentContainerStyle={styles.cardScrollContent}
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"
           nestedScrollEnabled
           showsVerticalScrollIndicator={false}
           bounces={false}

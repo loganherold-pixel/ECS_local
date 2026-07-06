@@ -234,7 +234,10 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
         discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.') &&
         discover.includes('No live reviewed Trail Packs found within this radius.') &&
         discover.includes('Live Trail Packs are not available from reviewed sources yet.') &&
-        discover.includes('This Trail Pack is under ECS review and is not visible to other users.') &&
+        (
+          discover.includes('This Trail Pack is under ECS review and is not visible to other users.') ||
+          trailPackPreview.includes('This is your pending route recommendation. It is not visible to other users until ECS review approves it.')
+        ) &&
         trailPackCard.includes('ECS confidence') &&
         trailPackCard.includes('PREVIEW') &&
         trailPackCard.includes('START') &&

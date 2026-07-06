@@ -29,11 +29,23 @@ async function main() {
     'canonical_records_validated',
     'availability_freshness_validated',
     'android_visible_pin_popup_action_evidence_recorded',
+  ].forEach((id) => {
+    assert.equal(checks.get(id)?.passed, true, `${id} should pass from the sanitized handoff evidence manifest`);
+    assert.equal(result.blockers.includes(id), false, `${id} should not remain an active blocker after evidence backfill`);
+  });
+
+  [
     'production_owner_decision_accepted',
   ].forEach((id) => {
-    assert.equal(checks.get(id)?.passed, false, `${id} should remain blocked until real deployment evidence exists`);
+    assert.equal(checks.get(id)?.passed, false, `${id} should remain blocked until production owner acceptance exists`);
     assert.ok(result.blockers.includes(id), `${id} should be reported as an active blocker`);
   });
+
+  assert.deepEqual(
+    result.blockers,
+    ['production_owner_decision_accepted'],
+    'Established Campgrounds production gate should now be blocked only by owner acceptance.',
+  );
 
   console.log('established campgrounds production readiness checks passed');
 }

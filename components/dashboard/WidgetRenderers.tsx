@@ -3930,7 +3930,7 @@ function AttitudeCommandPanel({
           : null;
   const suppressCompactPanelChrome = expanded && detailMode;
   const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;
-  const shouldRenderPanelVisual = false;
+  const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);
   const usesTransparentCompactSurface = !expanded && usesTextureBleedPanel;
   const content = (
     <ECSInstrumentPanel
@@ -13622,7 +13622,12 @@ function AttitudeCommandTerrainRiskBackgroundVisual() {
   );
 }
 
-function AttitudeCommandPanelVisual(props: {
+function AttitudeCommandPanelVisual({
+  icon,
+  sunlight,
+  weather,
+  route,
+}: {
   icon?: string;
   color: string;
   tone: WidgetTone;
@@ -13632,8 +13637,16 @@ function AttitudeCommandPanelVisual(props: {
   route?: CommandRouteVisualData;
   power?: CommandPowerVisualData;
 }) {
-  if (props.icon === 'navigate-outline') {
-    return <AttitudeCommandRouteProgressMapVisual route={props.route} />;
+  if (sunlight) {
+    return <AttitudeCommandSunlightBackgroundVisual sunlight={sunlight} />;
+  }
+
+  if (weather) {
+    return <AttitudeCommandWeatherBackgroundVisual weather={weather} />;
+  }
+
+  if (icon === 'navigate-outline') {
+    return <AttitudeCommandRouteProgressMapVisual route={route} />;
   }
 
   return null;

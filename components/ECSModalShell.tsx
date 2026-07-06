@@ -28,6 +28,7 @@ import type { OverlayStackBehavior } from '../lib/overlayCoordinator';
 import { EASING, MOTION } from '../lib/motion';
 import { useTheme } from '../context/ThemeContext';
 import { resolveEcsPopupSurfaceTheme } from '../lib/theme';
+import { resolveMobileOverlayBounds } from '../lib/ui/mobileOverlayBounds';
 
 export type ECSOverlayClass = 'workflow' | 'editor' | 'action' | 'dialog' | 'info' | 'support';
 
@@ -236,18 +237,19 @@ export default function ECSModalShell({
   const bottomClearance = typeof bottomClearanceOverride === 'number'
     ? bottomClearanceOverride
     : defaultBottomClearance;
-  const availableHeight = Math.max(320, height - topClearance - bottomClearance);
-  const shellMaxHeight = Math.min(availableHeight, Math.round(height * resolvedMaxHeightFraction));
-  const shellMinHeight = typeof resolvedMinHeightFraction === 'number'
-    ? Math.min(shellMaxHeight, Math.max(260, Math.round(availableHeight * resolvedMinHeightFraction)))
-    : undefined;
-  const widthAllowance = width - sideClearance * 2;
   const expandedWidthBias =
     preset.layout === 'sheet' && isExpanded ? adaptive.overlay.expandedWidthBias : 0;
-  const shellWidth = Math.min(
-    Math.max(resolvedMaxWidth, 280),
-    Math.max(280, widthAllowance - expandedWidthBias),
-  );
+  const overlayBounds = resolveMobileOverlayBounds({
+    viewportWidth: width,
+    viewportHeight: height,
+    requestedTopClearance: topClearance,
+    requestedBottomClearance: bottomClearance,
+    requestedSideClearance: sideClearance,
+    maxWidth: resolvedMaxWidth,
+    maxHeightFraction: resolvedMaxHeightFraction,
+    minHeightFraction: resolvedMinHeightFraction,
+    expandedWidthBias,
+  });
 
   useEffect(() => {
     if (!visible) {
@@ -277,7 +279,7 @@ export default function ECSModalShell({
         gestureState.dy > 10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx),
       onPanResponderMove: (_, gestureState) => {
         if (gestureState.dy > 0) {
-          translateY.setValue(Math.min(gestureState.dy, shellMaxHeight));
+          translateY.setValue(Math.min(gestureState.dy, overlayBounds.shellMaxHeight));
         }
       },
       onPanResponderRelease: (_, gestureState) => {
@@ -302,7 +304,7 @@ export default function ECSModalShell({
         }).start();
       },
     });
-  }, [preset.layout, requestClose, resolvedAllowSwipeDismiss, shellMaxHeight, translateY]);
+  }, [preset.layout, requestClose, resolvedAllowSwipeDismiss, overlayBounds.shellMaxHeight, translateY]);
 
   const bodyPaddingBottom = footer
     ? bodyPadding + (isWorkflowSheet ? 2 : 6)
@@ -316,9 +318,9 @@ export default function ECSModalShell({
         styles.shell,
         preset.layout === 'sheet' ? styles.sheetShell : styles.dialogShell,
         {
-          width: shellWidth,
-          maxHeight: shellMaxHeight,
-          minHeight: shellMinHeight,
+          width: overlayBounds.shellWidth,
+          maxHeight: overlayBounds.shellMaxHeight,
+          minHeight: overlayBounds.shellMinHeight,
           transform: [{ translateY }],
           backgroundColor: surfaceTheme.shellBg,
           borderColor: surfaceTheme.shellBorder,
@@ -497,9 +499,9 @@ export default function ECSModalShell({
           styles.root,
           preset.layout === 'sheet' ? styles.rootSheet : styles.rootDialog,
           {
-            paddingHorizontal: sideClearance,
-            paddingTop: topClearance,
-            paddingBottom: bottomClearance,
+            paddingHorizontal: overlayBounds.sideClearance,
+            paddingTop: overlayBounds.topClearance,
+            paddingBottom: overlayBounds.bottomClearance,
           },
         ]}
         pointerEvents="box-none"

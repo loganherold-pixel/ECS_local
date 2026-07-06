@@ -27,13 +27,13 @@ assertIncludes(
 );
 
 assertIncludes(
-  'const shouldRenderPanelVisual = false;',
-  'Texture-bleed command panels must not mount expanded decorative image backdrops.',
+  'const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);',
+  'Expanded sunlight and weather panels may mount semantic background imagery while compact panels remain transparent.',
 );
 
 assertNotIncludes(
   'const showDecorativeBackdrop =',
-  'Sunlight, weather, and vehicle panels must no longer enable expanded image backdrops.',
+  'Sunlight, weather, and vehicle panels must not use the obsolete decorative backdrop flag.',
 );
 
 assertNotIncludes(

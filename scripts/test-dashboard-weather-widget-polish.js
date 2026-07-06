@@ -115,8 +115,8 @@ assertIncludes(
 );
 assertIncludes(
   widgetRenderers,
-  'const shouldRenderPanelVisual = false;',
-  'Weather panel should preserve the transparent command surface instead of mounting image backdrops.',
+  'const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);',
+  'Weather panel should preserve compact transparency while allowing expanded semantic condition imagery.',
 );
 assertIncludes(
   widgetRenderers,

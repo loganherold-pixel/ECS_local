@@ -274,7 +274,7 @@ assert(
 assert(
   powerCommandPanelBlock.includes('expanded && detailMode && isPowerPanel && attitudeCommandS.powerPanelContentDetailOnly') &&
     powerCommandPanelBlock.includes('const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;') &&
-    powerCommandPanelBlock.includes('const shouldRenderPanelVisual = false;') &&
+    powerCommandPanelBlock.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);') &&
     !powerCommandPanelBlock.includes('const showPowerDetailBackdrop =') &&
     powerCommandPanelBlock.includes('background={shouldRenderPanelVisual ? (') &&
     !powerCommandPanelBlock.includes('suppressPowerDetailBackground') &&

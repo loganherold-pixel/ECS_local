@@ -151,8 +151,8 @@ function getOuterSlotHorizontalPadding(
   isLargePhone: boolean,
   isTablet: boolean,
 ): number {
-  const edgePadding = isTablet ? 9 : isLargePhone ? 8 : 7;
-  const innerPadding = isTablet ? 17 : isLargePhone ? 15 : 13;
+  const edgePadding = isTablet ? 9 : isLargePhone ? 8 : 5;
+  const innerPadding = isTablet ? 17 : isLargePhone ? 15 : 4;
 
   switch (key) {
     case 'navigate':

@@ -16,9 +16,9 @@ const panelVisualBlock = source.match(/function AttitudeCommandPanelVisual\([\s\
 
 assert.ok(
   source.includes('const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;') &&
-    source.includes('const shouldRenderPanelVisual = false;') &&
+    source.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);') &&
     !source.includes('const showDecorativeBackdrop ='),
-  'Vehicle profile should use the shared transparent texture-bleed command surface instead of a decorative backdrop.',
+  'Vehicle profile should stay outside the expanded semantic background gate.',
 );
 assert.ok(
   !panelVisualBlock.includes("if (icon === 'car-sport-outline')") &&

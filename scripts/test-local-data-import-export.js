@@ -9,6 +9,7 @@ const vehicleStoreSource = fs.readFileSync(path.join(root, 'lib', 'vehicleStore.
 const loadoutStoreSource = fs.readFileSync(path.join(root, 'lib', 'loadoutStore.ts'), 'utf8');
 const routeStoreSource = fs.readFileSync(path.join(root, 'lib', 'routeStore.ts'), 'utf8');
 const smokeFixturePath = path.join(root, 'fixtures', 'local-data', 'ecs-smoke-local-profile.json');
+const bundledSmokeFixturePath = path.join(root, 'lib', 'dev', 'localDataSmokeSeedFixture.json');
 const devSmokeSeedSourcePath = path.join(root, 'lib', 'dev', 'localDataSmokeSeed.ts');
 const devSmokeSeedSource = fs.existsSync(devSmokeSeedSourcePath)
   ? fs.readFileSync(devSmokeSeedSourcePath, 'utf8')
@@ -118,13 +119,31 @@ assert.ok(
 
 assert.ok(
   devSmokeSeedSource.includes('export function loadDevSmokeLocalDataSeed') &&
-    devSmokeSeedSource.includes('fixtures/local-data/ecs-smoke-local-profile.json'),
+    devSmokeSeedSource.includes('./localDataSmokeSeedFixture.json') &&
+    fs.existsSync(bundledSmokeFixturePath),
   'Smoke seed fixture loading should live in an explicit dev-only module.',
 );
 assert.ok(
-  !devSmokeSeedSource.includes("require('../../fixtures/local-data/ecs-smoke-local-profile.json')") &&
-    devSmokeSeedSource.includes('dynamicRequire(fixturePath)'),
-  'Dev smoke seed loading must not use a Metro-static require into the blocked fixtures directory.',
+  devSmokeSeedSource.includes("require('./localDataSmokeSeedFixture.json')") &&
+    !devSmokeSeedSource.includes('dynamicRequire(fixturePath)'),
+  'Dev smoke seed loading must use a Metro-static dev-bundled fixture require so Android dev-client can bundle it.',
+);
+
+assert.ok(
+  loginSource.includes('AUTH_UTILITY_HIT_SLOP') &&
+    loginSource.includes('auth-continue-free-button') &&
+    loginSource.includes('auth-view-pro-button') &&
+    loginSource.includes('auth-import-local-data-button') &&
+    loginSource.includes('auth-export-local-data-button') &&
+    loginSource.includes('accessibilityLabel="Continue with Free"') &&
+    loginSource.includes('keyboardShouldPersistTaps="always"') &&
+    loginSource.includes('LOGIN_PORTRAIT_SCROLL_BOTTOM_BUFFER = 132') &&
+    loginSource.includes('authViewportHeight + portraitScrollBottomBuffer') &&
+    loginSource.includes("screenTopContent: { flexGrow: 1, justifyContent: 'flex-start', paddingBottom: 32 }") &&
+    /secondaryButton:\s*\{[\s\S]*minHeight:\s*44/.test(loginSource) &&
+    /exportButton:\s*\{[\s\S]*minHeight:\s*42/.test(loginSource) &&
+    /devSeedButton:\s*\{[\s\S]*minHeight:\s*42/.test(loginSource),
+  'Login utility controls should have stable mobile test IDs, persistent taps, and field-ready touch targets.',
 );
 
 assert.ok(
@@ -137,7 +156,14 @@ assert.ok(
 
 assert.ok(fs.existsSync(smokeFixturePath), 'A privacy-safe exported local-data smoke fixture should exist.');
 const smokeFixture = JSON.parse(fs.readFileSync(smokeFixturePath, 'utf8'));
+const bundledSmokeFixture = JSON.parse(fs.readFileSync(bundledSmokeFixturePath, 'utf8'));
 assertNoPrivateSmokeSeedValues(smokeFixture);
+assertNoPrivateSmokeSeedValues(bundledSmokeFixture, 'bundledFixture');
+assert.deepStrictEqual(
+  bundledSmokeFixture,
+  smokeFixture,
+  'Bundled dev smoke seed should stay byte-for-byte equivalent to the canonical privacy-checked fixture data.',
+);
 
 assert.strictEqual(smokeFixture._meta?.export_version, '1.0.0', 'Smoke seed should use the current local export version.');
 assert.strictEqual(smokeFixture._meta?.profile_id, 'post-closed-beta-smoke-local', 'Smoke seed should identify the repeatable profile.');

@@ -1,0 +1,223 @@
+{
+  "system": "offline_navigation",
+  "generatedAt": "2026-07-06T07:21:43.010Z",
+  "generatedBy": "scripts/backfill-production-evidence.mjs",
+  "sourceReadinessResult": ".smoke/offline-navigation-production-readiness-result.json",
+  "sourceReadinessCheckedAt": "2026-07-06T07:04:30.283Z",
+  "sourceReadinessStatus": "blocked",
+  "sourceReadinessBlockers": [
+    "production_owner_decision_accepted"
+  ],
+  "artifactScope": {
+    "androidArtifactFolders": [
+      ".smoke/navigate-deep",
+      ".smoke/offline-readiness-deep",
+      ".smoke/campops-android-qa",
+      ".smoke/focused-android-qa"
+    ],
+    "artifactCount": 111
+  },
+  "evidenceScope": {
+    "acceptedAs": "production_evidence_lane_handoff",
+    "runtimeEvidenceLevel": "android_app_visible_offline_ui_plus_repeatable_route_sync_regressions",
+    "notClaimed": [
+      "production owner acceptance",
+      "real-source Offline Failure Drill production eligibility",
+      "live legal status, access confidence, or camp availability while offline",
+      "fresh provider-backed camp, weather, or route services while offline"
+    ]
+  },
+  "androidNoNetworkRouteE2ePassed": true,
+  "offlineMapTilesRouteCacheVerified": true,
+  "offlineCampPinsAvailabilityVerified": true,
+  "offlineDepartureAuditDeviceVerified": true,
+  "productionDecision": "pending_owner_signoff",
+  "evidenceReferences": [
+    ".smoke/navigate-deep/04-start-guidance.png",
+    ".smoke/navigate-deep/04-start-guidance.xml",
+    ".smoke/navigate-deep/06-continue-anyway.png",
+    ".smoke/navigate-deep/06-continue-anyway.xml",
+    ".smoke/navigate-deep/07-continue-anyway-second-tap.png",
+    ".smoke/navigate-deep/07-continue-anyway-second-tap.xml",
+    ".smoke/navigate-deep/08-minimized-guidance.png",
+    ".smoke/navigate-deep/08-minimized-guidance.xml",
+    ".smoke/navigate-deep/09-active-readiness-reopen.png",
+    ".smoke/navigate-deep/09-active-readiness-reopen.xml",
+    ".smoke/focused-android-qa/route-valid-start.png",
+    ".smoke/focused-android-qa/route-valid-start.xml",
+    ".smoke/focused-android-qa/route-valid-start-2.png",
+    ".smoke/focused-android-qa/route-valid-start-2.xml",
+    ".smoke/dispatch-convoy-android-qa/70-navigate-assist-active-route-after-continue-ui.xml",
+    ".smoke/offline-readiness-deep/01-ecs-brief-offline-audit.png",
+    ".smoke/offline-readiness-deep/01-ecs-brief-offline-audit.xml",
+    ".smoke/offline-readiness-deep/02-ecs-brief-entry.png",
+    ".smoke/offline-readiness-deep/02-ecs-brief-entry.xml",
+    ".smoke/offline-readiness-deep/03-ecs-brief-departure-audit.png",
+    ".smoke/offline-readiness-deep/03-ecs-brief-departure-audit.xml",
+    ".smoke/ecs-brief-deep/05-download-route-package-action.png",
+    ".smoke/ecs-brief-deep/05-download-route-package-action.xml",
+    ".smoke/offline-readiness-deep/04-download-route-package-handoff.png",
+    ".smoke/offline-readiness-deep/04-download-route-package-handoff.xml",
+    ".smoke/offline-readiness-deep/08-offline-prep-pack-tab.png",
+    ".smoke/offline-readiness-deep/08-offline-prep-pack-tab.xml",
+    ".smoke/offline-readiness-deep/09-offline-prep-route-selected.png",
+    ".smoke/offline-readiness-deep/09-offline-prep-route-selected.xml",
+    ".smoke/offline-readiness-deep/10-offline-prep-pack-opened.png",
+    ".smoke/offline-readiness-deep/10-offline-prep-pack-opened.xml",
+    ".smoke/offline-readiness-deep/11-offline-prep-pack-scroll-lower.png",
+    ".smoke/offline-readiness-deep/11-offline-prep-pack-scroll-lower.xml",
+    ".smoke/offline-readiness-deep/12-offline-prep-pack-scroll-bottom.png",
+    ".smoke/offline-readiness-deep/12-offline-prep-pack-scroll-bottom.xml",
+    ".smoke/offline-readiness-deep/13-prepare-offline-pack-action.png",
+    ".smoke/offline-readiness-deep/13-prepare-offline-pack-action.xml",
+    ".smoke/explore-deep/18-offline-prep-prepare-result.png",
+    ".smoke/explore-deep/18-offline-prep-prepare-result.xml",
+    ".smoke/campops-android-qa/phone-navigate-camp-layers-zoom-gated.png",
+    ".smoke/campops-android-qa/phone-navigate-camp-layers-zoom-gated.xml",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-panel.png",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-panel.xml",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-no-results-panel.png",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-no-results-panel.xml",
+    ".smoke/campops-android-qa/resource-and-offline.png",
+    ".smoke/campops-android-qa/resource-and-offline.xml",
+    ".smoke/campops-android-qa/stale-and-legacy.png",
+    ".smoke/campops-android-qa/stale-and-legacy.xml",
+    "scripts/test-navigate-offline-route-flow-regression.js",
+    "scripts/test-offline-sync-coordinator.js",
+    "scripts/test-offline-departure-audit.js",
+    "scripts/test-offline-navigation-production-readiness.js",
+    "lib/offlineRouteCacheService.ts",
+    "lib/offlineTileSyncCoordinator.ts",
+    "lib/offlineReadinessPresentation.ts",
+    "components/navigate/OfflineCacheModal.tsx",
+    "components/navigate/NavigateReadinessStrip.tsx",
+    "app/(tabs)/navigate.tsx",
+    ".smoke/offline-readiness-deep/test-summary.json",
+    ".smoke/offline-readiness-deep/test-test-navigate-offline-route-flow.log",
+    ".smoke/offline-readiness-deep/test-test-offline-sync-coordinator.log",
+    ".smoke/offline-readiness-deep/test-test-offline-departure-audit.log",
+    ".smoke/offline-readiness-deep/test-test-offline-navigation-production.log",
+    ".smoke/offline-failure-drill-android-evidence/manifest.json",
+    ".smoke/offline-failure-drill-android-evidence-smoke-direct/manifest.json"
+  ],
+  "evidenceDetails": {
+    "androidNoNetworkRouteStart": {
+      "status": "captured_app_visible_offline_android_route_start",
+      "references": [
+        ".smoke/navigate-deep/04-start-guidance.png",
+        ".smoke/navigate-deep/04-start-guidance.xml",
+        ".smoke/navigate-deep/06-continue-anyway.png",
+        ".smoke/navigate-deep/06-continue-anyway.xml",
+        ".smoke/navigate-deep/07-continue-anyway-second-tap.png",
+        ".smoke/navigate-deep/07-continue-anyway-second-tap.xml",
+        ".smoke/navigate-deep/08-minimized-guidance.png",
+        ".smoke/navigate-deep/08-minimized-guidance.xml",
+        ".smoke/navigate-deep/09-active-readiness-reopen.png",
+        ".smoke/navigate-deep/09-active-readiness-reopen.xml",
+        ".smoke/focused-android-qa/route-valid-start.png",
+        ".smoke/focused-android-qa/route-valid-start.xml",
+        ".smoke/focused-android-qa/route-valid-start-2.png",
+        ".smoke/focused-android-qa/route-valid-start-2.xml",
+        ".smoke/dispatch-convoy-android-qa/70-navigate-assist-active-route-after-continue-ui.xml"
+      ],
+      "noNetworkAssertion": "app_visible_offline_state_captured",
+      "scope": "Android Navigate captures show app-visible OFFLINE state, route preview/start review, Continue Anyway, and active-guidance/readiness reopen. This does not claim owner acceptance or a production-eligible real-source Offline Failure Drill manifest."
+    },
+    "downloadedSyncReopen": {
+      "status": "accepted_repeatable_regression_plus_android_offline_maps_handoff",
+      "references": [
+        ".smoke/offline-readiness-deep/04-download-route-package-handoff.png",
+        ".smoke/offline-readiness-deep/04-download-route-package-handoff.xml",
+        ".smoke/offline-readiness-deep/08-offline-prep-pack-tab.png",
+        ".smoke/offline-readiness-deep/08-offline-prep-pack-tab.xml",
+        ".smoke/offline-readiness-deep/09-offline-prep-route-selected.png",
+        ".smoke/offline-readiness-deep/09-offline-prep-route-selected.xml",
+        ".smoke/offline-readiness-deep/10-offline-prep-pack-opened.png",
+        ".smoke/offline-readiness-deep/10-offline-prep-pack-opened.xml",
+        ".smoke/offline-readiness-deep/11-offline-prep-pack-scroll-lower.png",
+        ".smoke/offline-readiness-deep/11-offline-prep-pack-scroll-lower.xml",
+        ".smoke/offline-readiness-deep/12-offline-prep-pack-scroll-bottom.png",
+        ".smoke/offline-readiness-deep/12-offline-prep-pack-scroll-bottom.xml",
+        ".smoke/offline-readiness-deep/13-prepare-offline-pack-action.png",
+        ".smoke/offline-readiness-deep/13-prepare-offline-pack-action.xml",
+        ".smoke/explore-deep/18-offline-prep-prepare-result.png",
+        ".smoke/explore-deep/18-offline-prep-prepare-result.xml",
+        "scripts/test-navigate-offline-route-flow-regression.js",
+        "scripts/test-offline-sync-coordinator.js",
+        "scripts/test-offline-departure-audit.js",
+        "scripts/test-offline-navigation-production-readiness.js",
+        "lib/offlineRouteCacheService.ts",
+        "lib/offlineTileSyncCoordinator.ts",
+        "lib/offlineReadinessPresentation.ts",
+        "components/navigate/OfflineCacheModal.tsx",
+        "components/navigate/NavigateReadinessStrip.tsx",
+        "app/(tabs)/navigate.tsx",
+        ".smoke/offline-readiness-deep/test-summary.json",
+        ".smoke/offline-readiness-deep/test-test-navigate-offline-route-flow.log",
+        ".smoke/offline-readiness-deep/test-test-offline-sync-coordinator.log",
+        ".smoke/offline-readiness-deep/test-test-offline-departure-audit.log",
+        ".smoke/offline-readiness-deep/test-test-offline-navigation-production.log"
+      ],
+      "scope": "Android captures show Offline Maps and Offline Prep route-package handoff. Regression harnesses verify route-corridor sync metadata, app-restart resume, Downloaded Syncs Open, and cached-route preview fallback; this is not a fabricated fresh downloaded-sync screenshot."
+    },
+    "offlineCampLayerLabeling": {
+      "status": "captured_cached_or_labeled_offline_camp_layer_states",
+      "references": [
+        ".smoke/campops-android-qa/phone-navigate-camp-layers-zoom-gated.png",
+        ".smoke/campops-android-qa/phone-navigate-camp-layers-zoom-gated.xml",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-panel.png",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-panel.xml",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-no-results-panel.png",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-no-results-panel.xml",
+        ".smoke/campops-android-qa/resource-and-offline.png",
+        ".smoke/campops-android-qa/resource-and-offline.xml",
+        ".smoke/campops-android-qa/stale-and-legacy.png",
+        ".smoke/campops-android-qa/stale-and-legacy.xml"
+      ],
+      "scope": "Android CampOps/Navigate captures show offline cached-source and no-cache/missing-source labels with unknown/stale warnings. The manifest does not claim live legal, access, or availability truth offline."
+    },
+    "departureAudit": {
+      "status": "captured_android_departure_audit_and_navigate_readiness_strip",
+      "references": [
+        ".smoke/offline-readiness-deep/01-ecs-brief-offline-audit.png",
+        ".smoke/offline-readiness-deep/01-ecs-brief-offline-audit.xml",
+        ".smoke/offline-readiness-deep/02-ecs-brief-entry.png",
+        ".smoke/offline-readiness-deep/02-ecs-brief-entry.xml",
+        ".smoke/offline-readiness-deep/03-ecs-brief-departure-audit.png",
+        ".smoke/offline-readiness-deep/03-ecs-brief-departure-audit.xml",
+        ".smoke/navigate-deep/09-active-readiness-reopen.png",
+        ".smoke/navigate-deep/09-active-readiness-reopen.xml",
+        ".smoke/ecs-brief-deep/05-download-route-package-action.png",
+        ".smoke/ecs-brief-deep/05-download-route-package-action.xml"
+      ],
+      "scope": "Android captures show Command Brief Departure Audit, Download Route Package, and Navigate offline readiness strip states with missing/caution labels."
+    },
+    "offlineFailureDrill": {
+      "status": "blocked_fixture_only_or_missing_real_manifest",
+      "references": [
+        ".smoke/offline-failure-drill-android-evidence/manifest.json",
+        ".smoke/offline-failure-drill-android-evidence-smoke-direct/manifest.json"
+      ],
+      "scope": "Existing Offline Failure Drill manifests are fixture-only, missing runtime no-network assertions, or missing artifacts. They are retained as blockers/context and are not used as production acceptance."
+    },
+    "productionOwnerDecision": {
+      "status": "pending_owner_signoff",
+      "references": [
+        ".smoke/offline-navigation-production-evidence.json"
+      ]
+    }
+  },
+  "reviewerSignoff": {
+    "product": "pending",
+    "engineering": "pending",
+    "fieldOps": "pending",
+    "qa": "pending",
+    "privacy": "pending",
+    "support": "pending",
+    "acceptedAt": "pending"
+  },
+  "pending": [
+    "owner_signoff"
+  ],
+  "notes": "Offline Navigation backfill records existing Android offline route-start, Departure Audit, and camp-layer captures plus repeatable route-sync regression evidence. Production owner approval remains pending; fixture-only Offline Failure Drill manifests are not treated as acceptance."
+}

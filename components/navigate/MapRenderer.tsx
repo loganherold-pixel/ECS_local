@@ -91,6 +91,7 @@ const DEBUG_CAMP_LAYERS =
   ((globalThis as typeof globalThis & { __ECS_CAMP_LAYER_DEBUG__?: boolean }).__ECS_CAMP_LAYER_DEBUG__ === true) ||
   (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_CAMP_LAYER_DEBUG === '1') ||
   DEBUG_CAMP_SCOUT_MAP;
+const FRAME_COALESCED_MAP_MESSAGE_TYPES = new Set(['dynamicState', 'cameraCommand']);
 const MAPBOX_3D_TERRAIN_SOURCE_ID = 'ecs-navigate-3d-terrain-dem';
 export const CAMP_SCOUT_PIN_SOURCE_ID = 'ecs-camp-scout-pins-source';
 export const CAMP_SCOUT_PIN_LAYER_ID = 'ecs-camp-scout-pins-layer';
@@ -1382,6 +1383,21 @@ function buildCameraCommandHash(command?: CameraCommand | null, trigger?: number
     animate: command?.animate ?? null,
     reason: command?.reason ?? null,
   });
+}
+
+function scheduleMapBridgeFrame(callback: () => void): () => void {
+  if (typeof requestAnimationFrame === 'function') {
+    const frame = requestAnimationFrame(callback);
+    return () => cancelAnimationFrame(frame);
+  }
+
+  const timer = setTimeout(callback, 0);
+  return () => clearTimeout(timer);
+}
+
+function getMapBridgeMessageType(message: unknown): string | null {
+  const candidate = message as { type?: unknown } | null;
+  return typeof candidate?.type === 'string' ? candidate.type : null;
 }
 
 export function buildWebPayload(props: MapRendererProps): WebMapPayload {
@@ -7713,6 +7729,8 @@ const MapRenderer = React.memo(function MapRenderer({
   const startupSettledRef = useRef(false);
   const definitiveReadyInstanceKeyRef = useRef<number | null>(null);
   const hasEverReachedReadyRef = useRef(false);
+  const pendingMapMessagesRef = useRef<Map<string, unknown>>(new Map());
+  const pendingMapMessageFrameCancelRef = useRef<(() => void) | null>(null);
 
   const shouldLoadMap = !!hasToken && !!mapboxToken;
   const isCompactSurface = surfaceMode === 'compact';
@@ -7795,6 +7813,12 @@ const MapRenderer = React.memo(function MapRenderer({
     }
   }, []);
 
+  const clearPendingMapMessages = useCallback(() => {
+    pendingMapMessagesRef.current.clear();
+    pendingMapMessageFrameCancelRef.current?.();
+    pendingMapMessageFrameCancelRef.current = null;
+  }, []);
+
   const resetRuntimeState = useCallback(() => {
     setWebReady(false);
     setWebBootTimedOut(false);
@@ -7816,7 +7840,14 @@ const MapRenderer = React.memo(function MapRenderer({
     clearHardFailureTimer();
     clearCompactRetryTimer();
     clearConstructorRetryTimer();
-  }, [clearCompactRetryTimer, clearConstructorRetryTimer, clearFailSafeTimer, clearHardFailureTimer]);
+    clearPendingMapMessages();
+  }, [
+    clearCompactRetryTimer,
+    clearConstructorRetryTimer,
+    clearFailSafeTimer,
+    clearHardFailureTimer,
+    clearPendingMapMessages,
+  ]);
 
   const remountWebView = useCallback((reason: string) => {
     debugLog('[MapRenderer] Remounting WebView', {
@@ -8038,8 +8069,9 @@ const MapRenderer = React.memo(function MapRenderer({
     debugLog('[MapRenderer] mounted');
     return () => {
       debugLog('[MapRenderer] unmounted');
+      clearPendingMapMessages();
     };
-  }, []);
+  }, [clearPendingMapMessages]);
 
   useEffect(() => {
     if (previousHtmlHashRef.current && previousHtmlHashRef.current !== htmlHash) {
@@ -8106,9 +8138,25 @@ const MapRenderer = React.memo(function MapRenderer({
     }
   }, []);
 
-  const postToMap = useCallback((message: unknown) => {
-    safeInject(message);
+  const flushPendingMapMessages = useCallback(() => {
+    const messages = Array.from(pendingMapMessagesRef.current.values());
+    pendingMapMessagesRef.current.clear();
+    pendingMapMessageFrameCancelRef.current = null;
+    messages.forEach((message) => safeInject(message));
   }, [safeInject]);
+
+  const postToMap = useCallback((message: unknown) => {
+    const messageType = getMapBridgeMessageType(message);
+    if (messageType && FRAME_COALESCED_MAP_MESSAGE_TYPES.has(messageType)) {
+      pendingMapMessagesRef.current.set(messageType, message);
+      if (!pendingMapMessageFrameCancelRef.current) {
+        pendingMapMessageFrameCancelRef.current = scheduleMapBridgeFrame(flushPendingMapMessages);
+      }
+      return;
+    }
+
+    safeInject(message);
+  }, [flushPendingMapMessages, safeInject]);
 
   const armFailSafeTimer = useCallback(
     (instanceKeyAtSchedule: number, timeoutMs: number, phase: 'initial' | 'bootstrap_progress') => {

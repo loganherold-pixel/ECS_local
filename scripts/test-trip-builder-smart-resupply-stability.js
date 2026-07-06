@@ -91,13 +91,23 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'smartResupplySearchSignature(selectedTrailheadResupplyAnchorCoordinate,',
+  'const searchSignature = smartResupplySearchSignature(',
   'Fuel resupply effects should key refreshes to the prepared trailhead anchor and approach geometry',
+);
+assertIncludes(
+  screen,
+  'selectedTrailheadResupplyAnchorCoordinate',
+  'Fuel resupply effects should include the prepared trailhead anchor in the refresh signature inputs',
 );
 assertIncludes(
   screen,
   'liveApproachRoutePoints',
   'Supply resupply effects should key refreshes to the live approach route',
+);
+assertIncludes(
+  screen,
+  'selectedRouteRemoteEntryProgressRatio',
+  'Smart resupply refresh signatures should include the selected route remote-entry boundary',
 );
 assertIncludes(
   screen,

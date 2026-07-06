@@ -168,6 +168,9 @@ function buildPhases(args: {
 }): TripItinerarySummaryPhase[] {
   const trailheadAvailable = !!args.itinerary?.trailheadStart?.coordinate;
   const trailWaypointCount = args.itinerary?.trailWaypoints?.length ?? 0;
+  const providerUnavailableIsBlocking =
+    args.preTrailState === 'provider_unavailable' &&
+    (!args.hasUserStart || !args.hasTrailRoute);
   const phaseRows: TripItinerarySummaryPhase[] = [
     {
       key: 'start',
@@ -185,7 +188,7 @@ function buildPhases(args: {
         : args.preTrailState === 'pending'
           ? 'pending'
           : args.preTrailState === 'provider_unavailable'
-            ? 'unavailable'
+            ? providerUnavailableIsBlocking ? 'unavailable' : 'pending'
             : 'optional',
       detail: args.preTrailCount > 0
         ? `${args.preTrailCount} stop${args.preTrailCount === 1 ? '' : 's'}`
@@ -194,7 +197,7 @@ function buildPhases(args: {
           : args.preTrailState === 'pending'
             ? 'Updating'
             : args.preTrailState === 'provider_unavailable'
-              ? 'Provider unavailable'
+              ? providerUnavailableIsBlocking ? 'Provider unavailable' : 'Provider pending'
               : args.preTrailState === 'no_results'
                 ? 'No candidates found'
                 : 'No stops selected',

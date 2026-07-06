@@ -44,8 +44,20 @@ function assertSmokeEvidenceGitignorePolicy() {
     'Dashboard production evidence manifest should be explicitly trackable.',
   );
   assert.ok(
+    lines.includes('!.smoke/explore-trail-packs-production-evidence.json'),
+    'Explore Trail Packs production evidence manifest should be explicitly trackable.',
+  );
+  assert.ok(
+    lines.includes('!.smoke/established-campgrounds-production-evidence.json'),
+    'Established Campgrounds production evidence manifest should be explicitly trackable.',
+  );
+  assert.ok(
     lines.includes('!.smoke/fleet-production-evidence.json'),
     'Fleet production evidence manifest should be explicitly trackable.',
+  );
+  assert.ok(
+    lines.includes('!.smoke/offline-navigation-production-evidence.json'),
+    'Offline Navigation production evidence manifest should be explicitly trackable.',
   );
   assert.ok(
     !lines.includes('!.smoke/*.json'),
@@ -77,6 +89,20 @@ function seedReadiness(root) {
       'production_owner_decision_accepted',
     ],
   });
+  writeJson(path.join(root, '.smoke', 'established-campgrounds-production-readiness-result.json'), {
+    system: 'established_campgrounds',
+    status: 'blocked',
+    checkedAt: '2026-06-01T00:00:00.000Z',
+    blockers: [
+      'production_scheduler_configured',
+      'provider_health_checked',
+      'sync_runs_validated',
+      'canonical_records_validated',
+      'availability_freshness_validated',
+      'android_visible_pin_popup_action_evidence_recorded',
+      'production_owner_decision_accepted',
+    ],
+  });
   writeJson(path.join(root, '.smoke', 'fleet-production-readiness-result.json'), {
     system: 'fleet_vehicle_readiness_payload',
     status: 'blocked',
@@ -88,6 +114,18 @@ function seedReadiness(root) {
       'scale_ticket_profile_evidence_present',
       'source_confidence_offline_android_qa_evidence_present',
       'offline_persistence_migration_evidence_present',
+      'production_owner_decision_accepted',
+    ],
+  });
+  writeJson(path.join(root, '.smoke', 'offline-navigation-production-readiness-result.json'), {
+    system: 'offline_navigation',
+    status: 'blocked',
+    checkedAt: '2026-06-01T00:00:00.000Z',
+    blockers: [
+      'android_no_network_route_e2e_evidence_present',
+      'offline_map_tiles_and_route_cache_verified',
+      'offline_camp_pins_or_unavailable_label_verified',
+      'offline_departure_audit_device_verified',
       'production_owner_decision_accepted',
     ],
   });
@@ -163,12 +201,124 @@ function seedArtifacts(root) {
   writeArtifactPair(
     root,
     path.join('.smoke', 'explore-deep', '01-explore-entry'),
-    'EXPLORE SUGGESTED ROUTES Trail Packs 1 TRAIL PACK GPS RANGE DISPLAY ON MAP',
+    'EXPLORE SUGGESTED ROUTES Trail Packs 1 TRAIL PACK GPS RANGE DISPLAY ON MAP Showing 5 Explore picks and 6 drivable trails inside 100 mi',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'explore-deep', '04-display-on-map-result'),
+    'NAVIGATE Filtered Suggested Trailhead routes are displayed on the Navigate map DISPLAY ON MAP 1 map-ready trail line',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'explore-deep', '07-trip-builder-tab'),
+    'EXPLORE TRIP BUILDER LIVE selected route handoff',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'explore-deep', '09-trip-builder-opened'),
+    'EXPLORE PLANNING Trip Builder Turn a selected route into a day trip overnight route or expedition-style plan BUILD TRIP PLAN',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'explore-deep', '13-trip-builder-plan-result'),
+    'TRIP BUILDER Trip Plan result route handoff itinerary camps unavailable exit points unavailable',
   );
   writeArtifactPair(
     root,
     path.join('.smoke', 'explore-deep', '18-offline-prep-prepare-result'),
     'OFFLINE PREP Waypoints Unavailable Vehicle Readiness Ready Route geometry is missing',
+  );
+
+  writeText(
+    path.join(root, 'docs', 'integrations', 'established-campgrounds-provider-sync.md'),
+    [
+      'Production Scheduling Options',
+      'Scheduling is a deployment environment responsibility',
+      'campground_provider_configs.sync_interval_minutes',
+      'campground_sync_runs records_read records_upserted records_failed error_count',
+      'campground_availability.expires_at last_availability_checked_at degrade to `unknown`',
+    ].join('\n'),
+  );
+  writeText(
+    path.join(root, 'scripts', 'test-established-campgrounds-scheduling.js'),
+    'Production Scheduling Options campground_provider_configs.sync_interval_minutes campground_sync_runs records_read records_upserted error_count',
+  );
+  writeText(
+    path.join(root, 'scripts', 'test-campground-provider-health-edge-function.js'),
+    'requireAdmin(req) hasRequiredSecrets missingSecretRefs checkedAt providerId enabled attributionConfigured',
+  );
+  writeText(
+    path.join(root, 'supabase', 'functions', 'campground-provider-health', 'index.ts'),
+    'serve async requireAdmin(req) hasRequiredSecrets missingSecretRefs checkedAt providerId enabled attributionConfigured',
+  );
+  writeText(
+    path.join(root, 'supabase', 'migrations', '020_established_campgrounds_provider_layer.sql'),
+    'campground_provider_configs.sync_interval_minutes campground_sync_runs records_read records_upserted records_failed error_count campground_source_records search_established_campgrounds_bbox campgrounds source_confidence secret_ref campground_availability expires_at',
+  );
+  writeText(
+    path.join(root, 'supabase', 'migrations', '021_campground_availability_checked_at.sql'),
+    'last_availability_checked_at expires_at campgrounds',
+  );
+  writeText(
+    path.join(root, 'supabase', 'functions', '_shared', 'campgroundApi.ts'),
+    'isAvailabilityFresh effectiveAvailabilityStatus rawJson: null expires_at last_availability_checked_at lastAvailabilityCheckedAt campground_source_records sourceRecordCount',
+  );
+  writeText(
+    path.join(root, 'supabase', 'functions', 'campgrounds-search', 'index.ts'),
+    "from('campgrounds') campground_source_records lastAvailabilityCheckedAt source / attribution",
+  );
+  writeText(
+    path.join(root, 'supabase', 'functions', 'campground-detail', 'index.ts'),
+    "from('campgrounds') campground_source_records buildCampgroundDetailResponse lastAvailabilityCheckedAt",
+  );
+  for (const functionName of [
+    'campgrounds-sync-ridb',
+    'campgrounds-sync-nps',
+    'campgrounds-sync-campflare',
+    'campgrounds-sync-active',
+    'campgrounds-sync-reserveamerica',
+    'campgrounds-sync-aspira',
+    'campgrounds-sync-osm',
+    'campgrounds-dedupe',
+  ]) {
+    writeText(
+      path.join(root, 'supabase', 'functions', functionName, 'index.ts'),
+      'campground_sync_runs records_read records_upserted records_failed error_count',
+    );
+  }
+  writeText(
+    path.join(root, 'supabase', 'functions', 'campgrounds-sync-campflare', 'campflareAdapter.ts'),
+    'expires_at last_checked_at',
+  );
+  writeText(
+    path.join(root, 'lib', 'map', 'establishedCampgroundMobile.ts'),
+    'formatCampgroundAvailabilityLabel Availability unknown lastAvailabilityCheckedAt',
+  );
+  writeText(
+    path.join(root, 'lib', 'map', 'establishedCampgroundDetailRows.ts'),
+    'Source / attribution lastAvailabilityCheckedAt',
+  );
+  writeText(
+    path.join(root, 'lib', 'map', 'establishedCampsiteGeojsonAdapter.ts'),
+    'dedupe source confidence coordinates established campground',
+  );
+  writeText(
+    path.join(root, 'tests', 'map', 'establishedCampgroundsMobile.test.ts'),
+    'Source / attribution Availability unknown lastAvailabilityCheckedAt',
+  );
+  writeText(
+    path.join(root, 'tests', 'map', 'establishedCampsitesLayer.test.ts'),
+    'Established Campgrounds Source / attribution lastAvailabilityCheckedAt',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'campops-android-qa', 'phone-navigate-camp-layers-zoom-gated'),
+    'NAVIGATE CAMP LAYERS Established Campgrounds Zoom to 8+ to load established campgrounds Verify local rules before camping',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'campops-android-qa', 'phone-candidate-viewport-popup-actions'),
+    'CAMP INTEL QA Ridge Bench non-live fixture data NAVIGATE HERE SAVE CAMP REPORT UNUSABLE Medium source confidence',
   );
 
   writeArtifactPair(
@@ -218,6 +368,84 @@ function seedArtifacts(root) {
       acceptedAt: '2026-06-29T00:00:00.000Z',
     },
   });
+
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'navigate-deep', '04-start-guidance'),
+    'OFFLINE NAVIGATE ROUTE PREVIEW STAGED Start Guidance ECS Readiness Hold Continue Anyway Route geometry is not cached',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'navigate-deep', '09-active-readiness-reopen'),
+    'OFFLINE NAVIGATE ACTIVE EXPEDITION READINESS Offline: Missing Open Command Brief Minimize active guidance',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'offline-readiness-deep', '03-ecs-brief-departure-audit'),
+    'OFFLINE Departure Audit Offline map package MISSING DOWNLOAD ROUTE PACKAGE Camp candidates CAUTION Weather snapshot COMPLETE',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'offline-readiness-deep', '04-download-route-package-handoff'),
+    'OFFLINE MAPS OFFLINE READINESS NO CACHED REGIONS Saved regions stay available offline across app restarts',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'offline-readiness-deep', '10-offline-prep-pack-opened'),
+    'OFFLINE PREP Offline Prep Pack Offline Map Unavailable Route Line Unavailable Campsites Unavailable',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'offline-readiness-deep', '13-prepare-offline-pack-action'),
+    'OFFLINE PREP Prepare Offline Pack PREPARE OFFLINE PACK Unavailable Items Route geometry is missing Campsites Unavailable',
+  );
+  writeJson(path.join(root, '.smoke', 'offline-readiness-deep', 'test-summary.json'), [
+    { script: 'test:navigate-offline-route-flow', exitCode: 0 },
+    { script: 'test:offline-sync-coordinator', exitCode: 0 },
+    { script: 'test:offline-departure-audit', exitCode: 0 },
+    { script: 'test:offline-navigation-production', exitCode: 0 },
+    { script: 'gate:offline-navigation-production', exitCode: 1 },
+  ]);
+  writeText(
+    path.join(root, '.smoke', 'offline-readiness-deep', 'test-test-navigate-offline-route-flow.log'),
+    'navigate offline route flow regression passed',
+  );
+  writeText(
+    path.join(root, '.smoke', 'offline-readiness-deep', 'test-test-offline-sync-coordinator.log'),
+    'Offline sync coordinator checks passed.',
+  );
+  writeText(
+    path.join(root, '.smoke', 'offline-readiness-deep', 'test-test-offline-departure-audit.log'),
+    'Offline preparedness and departure audit checks passed.',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'campops-android-qa', 'phone-navigate-camp-layers-zoom-gated'),
+    'NAVIGATE OFFLINE CAMP LAYERS Established Campgrounds Dispersed Camping Eligibility Verify local rules before camping Zoom to 8+ to load established campgrounds',
+  );
+  writeArtifactPair(
+    root,
+    path.join('.smoke', 'campops-android-qa', 'stale-and-legacy'),
+    'Offline cached source data Cached data is usable with lower confidence Unknowns remain visible Never show cached data as current Offline no-cache Missing data lowers confidence Unknown fields stay unknown',
+  );
+  writeJson(path.join(root, '.smoke', 'offline-failure-drill-android-evidence', 'manifest.json'), {
+    evidenceSource: 'fixture',
+    networkState: { appObservedOffline: false, systemNetworkDisabled: false, runtimeNetworkProbe: 'unknown' },
+    ownerAcceptance: { accepted: false },
+    validationNotes: ['Do not fake Android evidence.'],
+  });
+  writeText(
+    path.join(root, 'scripts', 'test-navigate-offline-route-flow-regression.js'),
+    "Downloaded Syncs\nROUTE SYNC\npreviewRoadRoute(cachedRoadRoute, 'offline_sync_open')\n",
+  );
+  writeText(
+    path.join(root, 'scripts', 'test-offline-sync-coordinator.js'),
+    "Downloaded Syncs\nofflineTileSyncCoordinator.resumePendingJobs({ syncType: 'route' });\n",
+  );
+  writeText(
+    path.join(root, 'scripts', 'test-offline-departure-audit.js'),
+    'Departure Audit Download Route Package Offline: {offlineStatus}',
+  );
 }
 
 async function main() {
@@ -245,12 +473,50 @@ async function main() {
   assert.ok(results.dashboard.evidenceReferences.some((item) => item.includes('.smoke/dashboard-deep/01-dashboard-baseline.png')));
   assert.ok(results.dashboard.evidenceReferences.some((item) => item.includes('.smoke/dashboard-longpress-deep/controlled-center-module-longpress.xml')));
 
-  assert.strictEqual(results.explore.androidExploreTrailPacksVisualQaPassed, false);
+  assert.strictEqual(results.explore.androidExploreTrailPacksVisualQaPassed, true);
   assert.strictEqual(results.explore.contentReviewModerationEvidencePassed, false);
-  assert.strictEqual(results.explore.exploreToNavigateDeviceHandoffEvidencePassed, false);
+  assert.strictEqual(results.explore.exploreToNavigateDeviceHandoffEvidencePassed, true);
   assert.strictEqual(results.explore.privacySubmissionEvidencePassed, false);
+  assert.ok(results.explore.evidenceReferences.some((item) => item.includes('.smoke/explore-deep/01-explore-entry.png')));
+  assert.ok(results.explore.evidenceReferences.some((item) => item.includes('.smoke/explore-deep/04-display-on-map-result.xml')));
+  assert.ok(results.explore.evidenceReferences.some((item) => item.includes('.smoke/explore-deep/09-trip-builder-opened.png')));
   assert.ok(results.explore.partialEvidenceReferences.some((item) => item.includes('.smoke/explore-deep/01-explore-entry.png')));
+  assert.strictEqual(results.explore.evidenceDetails.trailPackProductionVisual.status, 'captured');
+  assert.strictEqual(results.explore.evidenceDetails.handoff.status, 'captured_existing_explore_to_navigate_and_trip_builder_path');
+  assert.strictEqual(results.explore.evidenceDetails.contentModeration.status, 'blocked_no_review_queue_device_capture');
+  assert.strictEqual(results.explore.evidenceDetails.privacySubmission.status, 'blocked_no_privacy_submission_capture');
+  assert.ok(results.explore.pending.includes('content_review_moderation_suppression_evidence'));
+  assert.ok(results.explore.pending.includes('privacy_certification_submission_evidence'));
+  assert.ok(!results.explore.pending.includes('full_trail_pack_card_preview_feedback_submission_visual_sweep'));
+  assert.ok(!results.explore.pending.includes('trail_pack_to_navigate_device_handoff_evidence'));
   assert.strictEqual(results.explore.productionDecision, 'pending_owner_signoff');
+
+  assert.strictEqual(results.establishedCampgrounds.productionSchedulerConfigured, true);
+  assert.strictEqual(results.establishedCampgrounds.providerHealthChecked, true);
+  assert.strictEqual(results.establishedCampgrounds.syncRunsValidated, true);
+  assert.strictEqual(results.establishedCampgrounds.canonicalRecordsValidated, true);
+  assert.strictEqual(results.establishedCampgrounds.availabilityFreshnessValidated, true);
+  assert.strictEqual(results.establishedCampgrounds.androidVisiblePinPopupActionEvidenceRecorded, true);
+  assert.strictEqual(results.establishedCampgrounds.productionDecision, 'pending_owner_signoff');
+  assert.ok(results.establishedCampgrounds.pending.includes('owner_signoff'));
+  assert.strictEqual(
+    results.establishedCampgrounds.evidenceDetails.scheduler.status,
+    'accepted_deployment_scheduler_contract_not_live_scheduler',
+  );
+  assert.strictEqual(
+    results.establishedCampgrounds.evidenceDetails.androidPinActions.status,
+    'captured_existing_android_camp_layer_actions_not_provider_backed_acceptance',
+  );
+  assert.strictEqual(results.establishedCampgrounds.redaction.providerSecretValuesCaptured, false);
+  assert.strictEqual(results.establishedCampgrounds.redaction.rawProviderPayloadsCaptured, false);
+  assert.ok(
+    results.establishedCampgrounds.evidenceScope.notClaimed.includes('production owner acceptance'),
+    'Established Campgrounds manifest should keep owner acceptance out of the evidence backfill.',
+  );
+  assert.ok(
+    results.establishedCampgrounds.evidenceScope.notClaimed.includes('raw provider payload review'),
+    'Established Campgrounds manifest should not claim raw provider payload review.',
+  );
 
   assert.strictEqual(results.fleet.sourceConfidenceOfflineStatesVisible, true);
   assert.strictEqual(results.fleet.androidFleetProfileVisualQaPassed, true);
@@ -272,11 +538,39 @@ async function main() {
     'accepted_fixture_scale_ticket_confidence_path_not_real_ticket',
   );
 
+  assert.strictEqual(results.offline.androidNoNetworkRouteE2ePassed, true);
+  assert.strictEqual(results.offline.offlineMapTilesRouteCacheVerified, true);
+  assert.strictEqual(results.offline.offlineCampPinsAvailabilityVerified, true);
+  assert.strictEqual(results.offline.offlineDepartureAuditDeviceVerified, true);
+  assert.strictEqual(results.offline.productionDecision, 'pending_owner_signoff');
+  assert.ok(results.offline.pending.includes('owner_signoff'));
+  assert.ok(results.offline.evidenceReferences.some((item) => item.includes('.smoke/navigate-deep/04-start-guidance.png')));
+  assert.ok(results.offline.evidenceReferences.some((item) => item.includes('.smoke/offline-readiness-deep/03-ecs-brief-departure-audit.xml')));
+  assert.ok(results.offline.evidenceReferences.some((item) => item.includes('.smoke/campops-android-qa/stale-and-legacy.xml')));
+  assert.strictEqual(
+    results.offline.evidenceDetails.androidNoNetworkRouteStart.status,
+    'captured_app_visible_offline_android_route_start',
+  );
+  assert.strictEqual(
+    results.offline.evidenceDetails.downloadedSyncReopen.status,
+    'accepted_repeatable_regression_plus_android_offline_maps_handoff',
+  );
+  assert.strictEqual(
+    results.offline.evidenceDetails.offlineFailureDrill.status,
+    'blocked_fixture_only_or_missing_real_manifest',
+  );
+  assert.ok(
+    results.offline.evidenceScope.notClaimed.includes('production owner acceptance'),
+    'Offline manifest should keep production acceptance out of the evidence backfill.',
+  );
+
   script.writeProductionEvidenceBackfill(results, { rootDir: root });
   for (const relativePath of [
     '.smoke/dashboard-production-evidence.json',
     '.smoke/explore-trail-packs-production-evidence.json',
+    '.smoke/established-campgrounds-production-evidence.json',
     '.smoke/fleet-production-evidence.json',
+    '.smoke/offline-navigation-production-evidence.json',
   ]) {
     assert.ok(fs.existsSync(path.join(root, relativePath)), `${relativePath} should be written`);
   }

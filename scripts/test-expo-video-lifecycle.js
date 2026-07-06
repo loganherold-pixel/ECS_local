@@ -41,8 +41,8 @@ assert(
   'LoginHeroBackground should guard player method calls and fall back cleanly on errors.',
 );
 assert(
-  !loginHero.includes("Platform.OS !== 'android'"),
-  'LoginHeroBackground should not disable the login video on Android.',
+  loginHero.includes("const LOGIN_HERO_VIDEO_ENABLED = Platform.OS !== 'android';"),
+  'LoginHeroBackground should keep Android on the static fallback instead of mounting the auth video layer.',
 );
 assert(
   loginHero.includes("status === 'readyToPlay'") &&

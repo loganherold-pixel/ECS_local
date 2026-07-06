@@ -7,6 +7,7 @@ export const LOGIN_LOGO_LANDSCAPE_SCALE = 1.2;
 export const LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.336;
 export const LOGIN_LOGO_LANDSCAPE_MAX_WIDTH = Math.round(LOGIN_LOGO_MAX_WIDTH * LOGIN_LOGO_LANDSCAPE_SCALE);
 export const LOGIN_LOGO_COMPACT_PORTRAIT_HEIGHT_RATIO = 0.22;
+export const LOGIN_CARD_TOP_TARGET_RATIO = 0.35;
 export const LOGIN_FORM_HORIZONTAL_INSET = 24;
 export const LOGIN_STATUS_INDICATOR_HEIGHT = 24;
 export const LOGIN_STATUS_INDICATOR_GAP = 8;
@@ -109,11 +110,19 @@ export function resolveLoginScreenLayout(input: {
     Math.round(authContentWidth * LOGIN_LOGO_WIDTH_RATIO),
     Math.round(logoHeightBudget * LOGIN_LOGO_ASPECT_RATIO),
   );
-  const cardTopTarget = height * 0.5;
+  const cardTopTarget = height * LOGIN_CARD_TOP_TARGET_RATIO;
   const cardOuterMarginTop = 2;
   const logoHeight = logoWidth / LOGIN_LOGO_ASPECT_RATIO;
   const minimumHeaderHeight =
     Math.ceil(logoHeight) + (layoutMetrics.compact ? 28 : 38);
+  const headerHeight = Math.max(
+    minimumHeaderHeight,
+    Math.round(cardTopTarget - shellTopPadding - LOGIN_STATUS_SLOT_HEIGHT - cardOuterMarginTop),
+  );
+  const formMaxHeight = Math.max(
+    360,
+    authViewportHeight - headerHeight - LOGIN_STATUS_SLOT_HEIGHT - cardOuterMarginTop,
+  );
 
   return {
     layoutMetrics,
@@ -124,15 +133,12 @@ export function resolveLoginScreenLayout(input: {
     contentMaxWidth: layoutMetrics.columnMaxWidth,
     contentGap: 0,
     formWidth: authContentWidth,
-    formMaxHeight: null,
-    cardScrollEnabled: false,
+    formMaxHeight,
+    cardScrollEnabled: true,
     compactLayout: false,
     statusSlotHeight: LOGIN_STATUS_SLOT_HEIGHT,
     logoWidth,
     logoHeight,
-    headerHeight: Math.max(
-      minimumHeaderHeight,
-      Math.round(cardTopTarget - shellTopPadding - LOGIN_STATUS_SLOT_HEIGHT - cardOuterMarginTop),
-    ),
+    headerHeight,
   };
 }

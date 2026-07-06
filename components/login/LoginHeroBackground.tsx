@@ -7,7 +7,7 @@ import { ecsLog } from '../../lib/ecsLogger';
 
 const LOGIN_VIDEO = require('../../assets/login/intro-login-video.mp4');
 const LOGIN_FALLBACK = require('../../assets/attitude/backgrounds/darker-tactical-canyon.png');
-const LOGIN_HERO_VIDEO_ENABLED = true;
+const LOGIN_HERO_VIDEO_ENABLED = Platform.OS !== 'android';
 
 function LoginHeroBackground() {
   const reducedMotion = useReducedMotion();

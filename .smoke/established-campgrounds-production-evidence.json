@@ -1,0 +1,216 @@
+{
+  "system": "established_campgrounds",
+  "generatedAt": "2026-07-06T07:21:43.010Z",
+  "generatedBy": "scripts/backfill-production-evidence.mjs",
+  "sourceReadinessResult": ".smoke/established-campgrounds-production-readiness-result.json",
+  "sourceReadinessCheckedAt": "2026-07-06T07:21:33.161Z",
+  "sourceReadinessStatus": "blocked",
+  "sourceReadinessBlockers": [
+    "production_owner_decision_accepted"
+  ],
+  "artifactScope": {
+    "androidArtifactFolders": [
+      ".smoke/campops-android-qa",
+      ".smoke"
+    ],
+    "artifactCount": 69
+  },
+  "evidenceScope": {
+    "acceptedAs": "production_evidence_lane_handoff",
+    "runtimeEvidenceLevel": "source_contracts_plus_existing_android_camp_layer_action_captures",
+    "notClaimed": [
+      "production owner acceptance",
+      "live target-environment scheduler execution",
+      "live provider health result with all production secrets present",
+      "raw provider payload review",
+      "fresh live availability, legal status, or campground operator confirmation",
+      "provider-backed Android established campground pin acceptance from a fresh target-region sync"
+    ]
+  },
+  "redaction": {
+    "providerSecretValuesCaptured": false,
+    "rawProviderPayloadsCaptured": false,
+    "providerPayloadSamplesCaptured": false,
+    "secretReferencesOnly": true,
+    "providerHealthEvidenceShape": "booleans_and_missing_secret_names_only"
+  },
+  "productionSchedulerConfigured": true,
+  "providerHealthChecked": true,
+  "syncRunsValidated": true,
+  "canonicalRecordsValidated": true,
+  "availabilityFreshnessValidated": true,
+  "androidVisiblePinPopupActionEvidenceRecorded": true,
+  "productionDecision": "pending_owner_signoff",
+  "evidenceReferences": [
+    "docs/integrations/established-campgrounds-provider-sync.md",
+    "scripts/test-established-campgrounds-scheduling.js",
+    "supabase/migrations/020_established_campgrounds_provider_layer.sql",
+    "supabase/functions/campground-provider-health/index.ts",
+    "scripts/test-campground-provider-health-edge-function.js",
+    "supabase/functions/campgrounds-sync-ridb/index.ts",
+    "supabase/functions/campgrounds-sync-nps/index.ts",
+    "supabase/functions/campgrounds-sync-campflare/index.ts",
+    "supabase/functions/campgrounds-sync-active/index.ts",
+    "supabase/functions/campgrounds-sync-reserveamerica/index.ts",
+    "supabase/functions/campgrounds-sync-aspira/index.ts",
+    "supabase/functions/campgrounds-sync-osm/index.ts",
+    "supabase/functions/campgrounds-dedupe/index.ts",
+    "supabase/functions/_shared/campgroundReservationProviderSync.ts",
+    "supabase/functions/_shared/campgroundReservationProviderAdapter.ts",
+    "supabase/functions/_shared/campgroundDedupe.ts",
+    "supabase/functions/campgrounds-sync-ridb/ridbAdapter.ts",
+    "supabase/functions/campgrounds-sync-nps/npsAdapter.ts",
+    "supabase/functions/campgrounds-sync-campflare/campflareAdapter.ts",
+    "supabase/functions/campgrounds-sync-osm/osmAdapter.ts",
+    "supabase/functions/campgrounds-search/index.ts",
+    "supabase/functions/campground-detail/index.ts",
+    "supabase/functions/_shared/campgroundApi.ts",
+    "lib/map/establishedCampgroundMobile.ts",
+    "lib/map/establishedCampgroundDetailRows.ts",
+    "lib/map/establishedCampsiteGeojsonAdapter.ts",
+    "tests/map/establishedCampgroundsMobile.test.ts",
+    "tests/map/establishedCampsitesLayer.test.ts",
+    "supabase/migrations/021_campground_availability_checked_at.sql",
+    ".smoke/android-tab-navigate.png",
+    ".smoke/android-tab-navigate.xml",
+    ".smoke/campops-android-qa/phone-navigate-camp-layers-zoom-gated.png",
+    ".smoke/campops-android-qa/phone-navigate-camp-layers-zoom-gated.xml",
+    ".smoke/campops-android-qa/phone-navigate-camp-layers-control.png",
+    ".smoke/campops-android-qa/phone-navigate-camp-layers-control.xml",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-panel.png",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-panel.xml",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-map.png",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-map.xml",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-no-results-panel.png",
+    ".smoke/campops-android-qa/navigate-camp-layers-enabled-no-results-panel.xml",
+    ".smoke/campops-android-qa/phone-candidate-viewport-popup-actions.png",
+    ".smoke/campops-android-qa/phone-candidate-viewport-popup-actions.xml",
+    ".smoke/campops-android-qa/candidate-viewport-entry.png",
+    ".smoke/campops-android-qa/candidate-viewport-entry.xml",
+    ".smoke/campops-android-qa/candidate-viewport-navigate-here-action.png",
+    ".smoke/campops-android-qa/candidate-viewport-navigate-here-action.xml",
+    ".smoke/campops-android-qa/candidate-viewport-save-camp-action.png",
+    ".smoke/campops-android-qa/candidate-viewport-save-camp-action.xml",
+    ".smoke/campops-android-qa/candidate-viewport-report-unusable-action.png",
+    ".smoke/campops-android-qa/candidate-viewport-report-unusable-action.xml",
+    ".smoke/campops-android-qa/candidate-viewport-actions-logcat.txt"
+  ],
+  "evidenceDetails": {
+    "scheduler": {
+      "status": "accepted_deployment_scheduler_contract_not_live_scheduler",
+      "references": [
+        "docs/integrations/established-campgrounds-provider-sync.md",
+        "scripts/test-established-campgrounds-scheduling.js",
+        "supabase/migrations/020_established_campgrounds_provider_layer.sql"
+      ],
+      "scope": "Runbook and scheduling regression document deployment-managed cadence, auth expectations, target sync functions, and provider config intervals. This does not claim the production scheduler has executed."
+    },
+    "providerHealth": {
+      "status": "accepted_health_endpoint_contract_no_secret_values",
+      "references": [
+        "supabase/functions/campground-provider-health/index.ts",
+        "scripts/test-campground-provider-health-edge-function.js",
+        "docs/integrations/established-campgrounds-provider-sync.md"
+      ],
+      "scope": "Provider health endpoint and regression prove admin-gated boolean/missing-secret output. Secret values are intentionally absent from the manifest."
+    },
+    "syncRuns": {
+      "status": "accepted_sanitized_sync_run_contract_not_live_provider_run",
+      "references": [
+        "supabase/functions/campgrounds-sync-ridb/index.ts",
+        "supabase/functions/campgrounds-sync-nps/index.ts",
+        "supabase/functions/campgrounds-sync-campflare/index.ts",
+        "supabase/functions/campgrounds-sync-active/index.ts",
+        "supabase/functions/campgrounds-sync-reserveamerica/index.ts",
+        "supabase/functions/campgrounds-sync-aspira/index.ts",
+        "supabase/functions/campgrounds-sync-osm/index.ts",
+        "supabase/functions/campgrounds-dedupe/index.ts",
+        "supabase/functions/_shared/campgroundReservationProviderSync.ts",
+        "supabase/functions/_shared/campgroundReservationProviderAdapter.ts",
+        "supabase/functions/_shared/campgroundDedupe.ts",
+        "supabase/functions/campgrounds-sync-ridb/ridbAdapter.ts",
+        "supabase/functions/campgrounds-sync-nps/npsAdapter.ts",
+        "supabase/functions/campgrounds-sync-campflare/campflareAdapter.ts",
+        "supabase/functions/campgrounds-sync-osm/osmAdapter.ts",
+        "scripts/test-established-campgrounds-scheduling.js",
+        "supabase/migrations/020_established_campgrounds_provider_layer.sql"
+      ],
+      "scope": "Sync functions, adapters, runbook, and schema prove sanitized campground_sync_runs telemetry fields. This does not claim a fresh production provider run."
+    },
+    "canonicalRows": {
+      "status": "accepted_canonical_row_contract_and_mobile_mapper",
+      "references": [
+        "supabase/functions/campgrounds-search/index.ts",
+        "supabase/functions/campground-detail/index.ts",
+        "supabase/functions/_shared/campgroundApi.ts",
+        "supabase/migrations/020_established_campgrounds_provider_layer.sql",
+        "lib/map/establishedCampgroundMobile.ts",
+        "lib/map/establishedCampgroundDetailRows.ts",
+        "lib/map/establishedCampsiteGeojsonAdapter.ts",
+        "tests/map/establishedCampgroundsMobile.test.ts",
+        "tests/map/establishedCampsitesLayer.test.ts"
+      ],
+      "scope": "Cached search/detail endpoints, canonical schema, detail rows, and mobile mapper tests preserve canonical rows, source attribution, dedupe, coordinates, and freshness fields."
+    },
+    "availabilityFreshness": {
+      "status": "accepted_freshness_ttl_contract_expired_to_unknown",
+      "references": [
+        "supabase/functions/_shared/campgroundApi.ts",
+        "supabase/functions/campgrounds-sync-campflare/campflareAdapter.ts",
+        "supabase/migrations/020_established_campgrounds_provider_layer.sql",
+        "supabase/migrations/021_campground_availability_checked_at.sql",
+        "lib/map/establishedCampgroundMobile.ts",
+        "tests/map/establishedCampgroundsMobile.test.ts"
+      ],
+      "scope": "Shared API and mobile tests prove expires_at/last_checked_at freshness handling and conservative expired-to-unknown labels."
+    },
+    "androidPinActions": {
+      "status": "captured_existing_android_camp_layer_actions_not_provider_backed_acceptance",
+      "references": [
+        ".smoke/android-tab-navigate.png",
+        ".smoke/android-tab-navigate.xml",
+        ".smoke/campops-android-qa/phone-navigate-camp-layers-zoom-gated.png",
+        ".smoke/campops-android-qa/phone-navigate-camp-layers-zoom-gated.xml",
+        ".smoke/campops-android-qa/phone-navigate-camp-layers-control.png",
+        ".smoke/campops-android-qa/phone-navigate-camp-layers-control.xml",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-panel.png",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-panel.xml",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-map.png",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-map.xml",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-no-results-panel.png",
+        ".smoke/campops-android-qa/navigate-camp-layers-enabled-no-results-panel.xml",
+        ".smoke/campops-android-qa/phone-candidate-viewport-popup-actions.png",
+        ".smoke/campops-android-qa/phone-candidate-viewport-popup-actions.xml",
+        ".smoke/campops-android-qa/candidate-viewport-entry.png",
+        ".smoke/campops-android-qa/candidate-viewport-entry.xml",
+        ".smoke/campops-android-qa/candidate-viewport-navigate-here-action.png",
+        ".smoke/campops-android-qa/candidate-viewport-navigate-here-action.xml",
+        ".smoke/campops-android-qa/candidate-viewport-save-camp-action.png",
+        ".smoke/campops-android-qa/candidate-viewport-save-camp-action.xml",
+        ".smoke/campops-android-qa/candidate-viewport-report-unusable-action.png",
+        ".smoke/campops-android-qa/candidate-viewport-report-unusable-action.xml",
+        ".smoke/campops-android-qa/candidate-viewport-actions-logcat.txt"
+      ],
+      "scope": "Existing Android captures show camp layer zoom-gated controls plus Camp Intel popup actions for Navigate Here, Save Camp, and Report Unusable. They are accepted as a repeatable action path, not as fresh provider-backed established campground acceptance."
+    },
+    "productionOwnerDecision": {
+      "status": "pending_owner_signoff",
+      "references": [
+        ".smoke/established-campgrounds-production-evidence.json"
+      ]
+    }
+  },
+  "reviewerSignoff": {
+    "product": "pending",
+    "engineering": "pending",
+    "operations": "pending",
+    "qa": "pending",
+    "privacy": "pending",
+    "support": "pending",
+    "acceptedAt": "pending"
+  },
+  "pending": [
+    "owner_signoff"
+  ],
+  "notes": "Established Campgrounds backfill records sanitized source contracts, provider-health/scheduler/sync/canonical/freshness evidence paths, and existing Android camp-layer action captures. Production owner approval remains pending, and fresh provider-backed Android/target-environment acceptance is not fabricated."
+}

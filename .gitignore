@@ -67,7 +67,10 @@ qa-evidence/
 .smoke/*
 !.smoke/
 !.smoke/dashboard-production-evidence.json
+!.smoke/explore-trail-packs-production-evidence.json
+!.smoke/established-campgrounds-production-evidence.json
 !.smoke/fleet-production-evidence.json
+!.smoke/offline-navigation-production-evidence.json
 .expo-export-check/
 .expo-runtime/
 .eas-spawn-tmp/

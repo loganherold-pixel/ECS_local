@@ -56,6 +56,7 @@ export type BuildApproachResupplySearchAnchorsArgs = {
   trailhead: ApproachResupplyCoordinate | null;
   approachRoute?: ApproachResupplyCoordinate[] | null;
   fallbackAnchor?: ApproachResupplyCoordinate | null;
+  remoteEntryProgressRatio?: number | null;
   maxAnchors?: number | null;
 };
 
@@ -68,10 +69,18 @@ export type RankApproachResupplyOptionsArgs = {
   limit?: number | null;
   maxRouteDeviationMiles?: number | null;
   preferredRouteBufferMiles?: number | null;
+  remoteEntryProgressRatio?: number | null;
+  remoteEntryBufferMiles?: number | null;
 };
 
 const DEFAULT_MAX_ROUTE_DEVIATION_MILES = 12;
 const DEFAULT_PREFERRED_ROUTE_BUFFER_MILES = 10;
+const TRAIL_ENTRY_EDGE_PROGRESS_RATIO = 0.985;
+const TRAIL_ENTRY_EDGE_BUFFER_MILES = 1.5;
+const MIN_REMOTE_ENTRY_PROGRESS_RATIO = 0.55;
+const REMOTE_ENTRY_SEARCH_BACKOFF_RATIO = 0.04;
+const REMOTE_ENTRY_IDEAL_BACKOFF_RATIO = 0.03;
+const REMOTE_ENTRY_IDEAL_WINDOW_RATIO = 0.18;
 
 function isValidCoordinate(point: ApproachResupplyCoordinate | null | undefined): point is ApproachResupplyCoordinate {
   return !!point &&
@@ -88,6 +97,22 @@ function roundTenths(value: number | null): number | null {
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
+}
+
+function clampProgress(value: number, min = 0, max = 1): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalizeRemoteEntryProgressRatio(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return TRAIL_ENTRY_EDGE_PROGRESS_RATIO;
+  return clampProgress(value, MIN_REMOTE_ENTRY_PROGRESS_RATIO, TRAIL_ENTRY_EDGE_PROGRESS_RATIO);
+}
+
+function normalizeRemoteEntryBufferMiles(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : TRAIL_ENTRY_EDGE_BUFFER_MILES;
 }
 
 function confidenceScore(value: ApproachResupplyCandidate['confidence']): number {
@@ -215,6 +240,39 @@ function progressScore(progressRatio: number | null): number {
   return 0.32;
 }
 
+function isRemoteEntryEdge(
+  progressRatio: number | null,
+  remainingMiles: number | null,
+  remoteEntryProgressRatio: number,
+  remoteEntryBufferMiles: number,
+): boolean {
+  if (progressRatio != null && progressRatio >= remoteEntryProgressRatio) return true;
+  return remainingMiles != null && remainingMiles <= remoteEntryBufferMiles;
+}
+
+function civilizationExitScore(
+  progressRatio: number | null,
+  remainingMiles: number | null,
+  beforeTrailEntry: boolean | null,
+  remoteEntryProgressRatio: number,
+  remoteEntryBufferMiles: number,
+): number {
+  if (beforeTrailEntry === false) return 0.05;
+  if (progressRatio == null) return 0.48;
+  if (isRemoteEntryEdge(progressRatio, remainingMiles, remoteEntryProgressRatio, remoteEntryBufferMiles)) return 0.18;
+  const idealEnd = clampProgress(remoteEntryProgressRatio - REMOTE_ENTRY_IDEAL_BACKOFF_RATIO, 0.56, 0.96);
+  const idealStart = clampProgress(
+    idealEnd - REMOTE_ENTRY_IDEAL_WINDOW_RATIO,
+    0.45,
+    Math.max(0.45, idealEnd - 0.01),
+  );
+  if (progressRatio >= idealStart && progressRatio <= idealEnd) return 1;
+  if (progressRatio > idealEnd && progressRatio < remoteEntryProgressRatio) return 0.78;
+  if (progressRatio >= Math.max(0.55, idealStart - 0.14)) return 0.78;
+  if (progressRatio >= 0.45) return 0.5;
+  return 0.24;
+}
+
 function categoryScore(candidate: ApproachResupplyCandidate, category: ApproachResupplyCategory): number {
   return candidate.category === category ? 1 : 0.4;
 }
@@ -237,6 +295,7 @@ export function buildApproachResupplySearchAnchors({
   trailhead,
   approachRoute = [],
   fallbackAnchor = null,
+  remoteEntryProgressRatio = null,
   maxAnchors = 7,
 }: BuildApproachResupplySearchAnchorsArgs): ApproachResupplySearchAnchor[] {
   const limit = Math.max(2, Math.floor(maxAnchors ?? 7));
@@ -244,9 +303,15 @@ export function buildApproachResupplySearchAnchors({
   const anchors: ApproachResupplySearchAnchor[] = [];
   const hasTrailhead = !!trailhead && isValidCoordinate(trailhead);
   const approachAnchorLimit = Math.max(1, hasTrailhead ? limit - 1 : limit);
+  const remoteEntryRatio = normalizeRemoteEntryProgressRatio(remoteEntryProgressRatio);
+  const remoteEntrySearchRatio = Math.round(
+    clampProgress(remoteEntryRatio - REMOTE_ENTRY_SEARCH_BACKOFF_RATIO, 0.12, 0.96) * 100,
+  ) / 100;
 
   if (routePoints.length >= 2) {
-    const fullCorridorRatios = [0.08, 0.18, 0.34, 0.55, 0.74, 0.94];
+    const fullCorridorRatios = [0.08, 0.18, 0.34, 0.55, 0.74, remoteEntrySearchRatio, 0.94]
+      .filter((ratio, index, values) => values.indexOf(ratio) === index)
+      .sort((left, right) => left - right);
     const compactCorridorRatios = [0.12, 0.4, 0.68, 0.92];
     const sampleRatios = approachAnchorLimit <= 4 ? compactCorridorRatios : fullCorridorRatios;
     sampleRatios.slice(0, approachAnchorLimit).forEach((ratio) => {
@@ -287,12 +352,16 @@ export function rankApproachResupplyOptions({
   limit = 5,
   maxRouteDeviationMiles = DEFAULT_MAX_ROUTE_DEVIATION_MILES,
   preferredRouteBufferMiles = DEFAULT_PREFERRED_ROUTE_BUFFER_MILES,
+  remoteEntryProgressRatio = null,
+  remoteEntryBufferMiles = null,
 }: RankApproachResupplyOptionsArgs): ApproachResupplyRankedOption[] {
   const routePoints = (approachRoute ?? []).filter(isValidCoordinate);
   const hasApproachRoute = isValidCoordinate(origin) && routePoints.length >= 2;
   const fallbackState: ApproachResupplyFallbackState = hasApproachRoute ? 'approach_route' : 'trailhead_only';
   const maxDeviation = maxRouteDeviationMiles ?? DEFAULT_MAX_ROUTE_DEVIATION_MILES;
   const preferredBuffer = preferredRouteBufferMiles ?? DEFAULT_PREFERRED_ROUTE_BUFFER_MILES;
+  const remoteEntryRatio = normalizeRemoteEntryProgressRatio(remoteEntryProgressRatio);
+  const remoteEntryBuffer = normalizeRemoteEntryBufferMiles(remoteEntryBufferMiles);
 
   return candidates
     .filter((candidate) => candidate.category === category && isValidCoordinate(candidate.coordinate))
@@ -336,17 +405,30 @@ export function rankApproachResupplyOptions({
       }
       if (beforeTrailEntry === false) {
         warnings.push('Candidate appears after trail entry; keep it out of the pre-trail guidance sequence unless verified.');
+      } else if (
+        fallbackState === 'approach_route' &&
+        isRemoteEntryEdge(approachProgressRatio, remainingApproachMilesToTrailhead, remoteEntryRatio, remoteEntryBuffer)
+      ) {
+        warnings.push('Candidate sits at the remote-entry/trail-entry edge; verify this is still a civilization-side resupply stop before relying on it.');
       }
 
       const providerScore = typeof candidate.score === 'number' && Number.isFinite(candidate.score)
         ? clamp01(candidate.score > 1 ? candidate.score / 100 : candidate.score)
         : null;
+      const exitScore = civilizationExitScore(
+        approachProgressRatio,
+        remainingApproachMilesToTrailhead,
+        beforeTrailEntry,
+        remoteEntryRatio,
+        remoteEntryBuffer,
+      );
       const baseScore =
-        distanceScore(remainingApproachMilesToTrailhead) * 0.3 +
-        deviationScore(routeDeviationMiles) * 0.28 +
-        progressScore(approachProgressRatio) * 0.16 +
-        (beforeTrailEntry === false ? 0.08 : 1) * 0.12 +
-        categoryScore(candidate, category) * 0.08 +
+        distanceScore(remainingApproachMilesToTrailhead) * 0.24 +
+        deviationScore(routeDeviationMiles) * 0.22 +
+        progressScore(approachProgressRatio) * 0.1 +
+        exitScore * 0.26 +
+        (beforeTrailEntry === false ? 0.08 : 1) * 0.06 +
+        categoryScore(candidate, category) * 0.06 +
         confidenceScore(candidate.confidence) * 0.06;
       const routeOrderBoost = candidate.routeOrder != null && Number.isFinite(candidate.routeOrder)
         ? Math.max(0, 0.04 - Math.max(0, candidate.routeOrder) * 0.005)

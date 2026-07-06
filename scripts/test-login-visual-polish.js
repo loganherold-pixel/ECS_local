@@ -42,6 +42,7 @@ const authInfoSource = fs.readFileSync(path.join(root, 'app', 'auth-info.tsx'), 
 const loginHeroSource = fs.readFileSync(path.join(root, 'components', 'login', 'LoginHeroBackground.tsx'), 'utf8');
 const loginLayoutSource = fs.readFileSync(path.join(root, 'lib', 'auth', 'loginScreenLayout.ts'), 'utf8');
 const {
+  LOGIN_CARD_TOP_TARGET_RATIO,
   LOGIN_LOGO_ASPECT_RATIO,
   LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO,
   resolveLoginScreenLayout,
@@ -114,6 +115,7 @@ assert.ok(
     loginLayoutSource.includes('LOGIN_LOGO_MAX_WIDTH = 260') &&
     loginLayoutSource.includes('LOGIN_LOGO_LANDSCAPE_SCALE = 1.2') &&
     loginLayoutSource.includes('LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO = 0.336') &&
+    loginLayoutSource.includes('LOGIN_CARD_TOP_TARGET_RATIO = 0.35') &&
     loginLayoutSource.includes('LOGIN_LOGO_LANDSCAPE_MAX_WIDTH') &&
     loginLayoutSource.includes('LOGIN_LOGO_COMPACT_PORTRAIT_HEIGHT_RATIO = 0.22') &&
     loginLayoutSource.includes('LOGIN_STATUS_INDICATOR_HEIGHT = 24') &&
@@ -122,6 +124,7 @@ assert.ok(
     loginLayoutSource.includes('logoHeight: number') &&
     loginLayoutSource.includes("layoutMode: 'landscape_split'") &&
     loginLayoutSource.includes('authViewportHeight * LOGIN_LOGO_LANDSCAPE_HEIGHT_RATIO') &&
+    loginLayoutSource.includes('height * LOGIN_CARD_TOP_TARGET_RATIO') &&
     loginLayoutSource.includes('authViewportHeight - LOGIN_STATUS_SLOT_HEIGHT') &&
     loginLayoutSource.includes('cardScrollEnabled: authViewportHeight < 520') &&
     loginLayoutSource.includes('minimumBrandRailWidth'),
@@ -137,7 +140,16 @@ const portrait = resolveLoginScreenLayout({ width: 390, height: 844, safeAreaTop
 assert.equal(portrait.layoutMode, 'portrait_stack');
 assert.ok(portrait.headerHeight > portrait.logoWidth / LOGIN_LOGO_ASPECT_RATIO);
 assert.equal(portrait.statusSlotHeight, 32);
-assert.ok(portrait.formMaxHeight == null);
+assert.equal(portrait.cardScrollEnabled, true);
+assert.ok(
+  portrait.formMaxHeight != null && portrait.formMaxHeight <= portrait.authViewportHeight - portrait.headerHeight - portrait.statusSlotHeight,
+  'Portrait login card should cap its height and scroll lower utility/footer controls inside the card.',
+);
+assert.equal(LOGIN_CARD_TOP_TARGET_RATIO, 0.35);
+assert.ok(
+  portrait.headerHeight <= 340,
+  'Portrait login card should start high enough that lower auth utilities are not pinned under the mobile viewport edge.',
+);
 
 const landscape = resolveLoginScreenLayout({ width: 844, height: 390, safeAreaTop: 0, safeAreaBottom: 0 });
 assert.equal(landscape.layoutMode, 'landscape_split');

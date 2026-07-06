@@ -203,7 +203,7 @@ export default function CampScoutIntelCard({
         <View style={styles.card} pointerEvents="auto">
           <View style={styles.header}>
             <View style={styles.headerTextWrap}>
-              <Text style={styles.eyebrow}>CAMP ENDPOINTS</Text>
+              <Text style={styles.eyebrow}>{isCampOps ? 'CAMP INTEL' : 'CAMP ENDPOINTS'}</Text>
               <Text
                 style={styles.title}
                 numberOfLines={2}

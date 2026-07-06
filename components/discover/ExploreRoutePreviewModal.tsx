@@ -193,7 +193,7 @@ export default function ExploreRoutePreviewModal({
       maxHeightFraction={compactPreview ? 0.68 : 0.64}
       minHeightFraction={compactPreview ? 0.34 : 0.38}
       showHandle={false}
-      scrollable={false}
+      scrollable
       topClearanceOverride={shellTopClearance}
       bottomClearanceOverride={shellBottomClearance}
       contentContainerStyle={s.contentContainer}

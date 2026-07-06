@@ -28,11 +28,21 @@ async function main() {
     'offline_map_tiles_and_route_cache_verified',
     'offline_camp_pins_or_unavailable_label_verified',
     'offline_departure_audit_device_verified',
-    'production_owner_decision_accepted',
   ].forEach((id) => {
-    assert.equal(checks.get(id)?.passed, false, `${id} should remain blocked until Android offline evidence exists`);
-    assert.ok(result.blockers.includes(id), `${id} should be reported as an active blocker`);
+    assert.equal(checks.get(id)?.passed, true, `${id} should pass using the tracked evidence manifest`);
+    assert.ok(!result.blockers.includes(id), `${id} should not remain an active blocker`);
   });
+
+  assert.equal(
+    checks.get('production_owner_decision_accepted')?.passed,
+    false,
+    'Production owner decision should remain blocked until accepted explicitly',
+  );
+  assert.deepEqual(
+    result.blockers,
+    ['production_owner_decision_accepted'],
+    'Offline Navigation production gate should now be blocked only on owner acceptance.',
+  );
 
   console.log('offline navigation production readiness checks passed');
 }

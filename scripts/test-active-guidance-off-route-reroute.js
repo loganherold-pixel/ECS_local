@@ -21,6 +21,9 @@ function loadTsModule(relativePath) {
     if (request === './ecsGuidanceModel' || request === './navigation/ecsGuidanceModel') {
       return loadTsModule(path.join('lib', 'navigation', 'ecsGuidanceModel.ts'));
     }
+    if (request === './navigation/routeVersion' || request === './routeVersion') {
+      return loadTsModule(path.join('lib', 'navigation', 'routeVersion.ts'));
+    }
     if (request === './mapConfig') {
       return {
         computeBounds(points) {

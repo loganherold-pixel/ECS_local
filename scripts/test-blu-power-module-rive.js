@@ -174,7 +174,7 @@ assert(
 );
 
 assert(
-  widgetRenderers.includes('const shouldRenderPanelVisual = false;') &&
+  widgetRenderers.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);') &&
     widgetRenderers.includes('usesTextureBleedPanel && attitudeCommandS.textureBleedCommandPanelSurface') &&
     !powerCommandPanelBlock.includes('showPowerDetailBackdrop'),
   'Power Monitor command panel must avoid the decorative Power Management background image and scrim.',

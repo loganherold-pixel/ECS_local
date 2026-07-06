@@ -36,6 +36,19 @@ function evidenceTrue(evidence, key) {
   return evidence?.[key] === true;
 }
 
+function acceptedEvidenceStatus(status) {
+  const value = String(status ?? '').trim().toLowerCase();
+  return value === 'captured' || value.startsWith('captured_') || value.startsWith('accepted_');
+}
+
+function evidenceDetailPassed(evidence, key, detailKey) {
+  const detail = evidence?.evidenceDetails?.[detailKey];
+  return evidenceTrue(evidence, key) &&
+    acceptedEvidenceStatus(detail?.status) &&
+    Array.isArray(detail?.references) &&
+    detail.references.length > 0;
+}
+
 function accepted(value) {
   return String(value ?? '').trim().toLowerCase() === 'accepted';
 }
@@ -174,28 +187,28 @@ export function buildOfflineNavigationProductionReadinessResult(options = {}) {
     check(
       'android_no_network_route_e2e_evidence_present',
       'Android no-network route execution evidence is recorded.',
-      evidenceTrue(evidence, 'androidNoNetworkRouteE2ePassed'),
+      evidenceDetailPassed(evidence, 'androidNoNetworkRouteE2ePassed', 'androidNoNetworkRouteStart'),
       [relPath(root, paths.evidence)],
       ['Run a native Android route preview/start flow with network disabled and capture screenshots/logs.'],
     ),
     check(
       'offline_map_tiles_and_route_cache_verified',
       'Offline map tiles, route geometry, route intent, and downloaded sync Open are verified on device.',
-      evidenceTrue(evidence, 'offlineMapTilesRouteCacheVerified'),
+      evidenceDetailPassed(evidence, 'offlineMapTilesRouteCacheVerified', 'downloadedSyncReopen'),
       [relPath(root, paths.evidence)],
       ['Capture route package download, tile sync completion, app restart, and downloaded sync Open behavior.'],
     ),
     check(
       'offline_camp_pins_or_unavailable_label_verified',
       'Offline camp pin availability or unavailable/limited-data labeling is verified on device.',
-      evidenceTrue(evidence, 'offlineCampPinsAvailabilityVerified'),
+      evidenceDetailPassed(evidence, 'offlineCampPinsAvailabilityVerified', 'offlineCampLayerLabeling'),
       [relPath(root, paths.evidence)],
       ['Verify cached CampOps/established/dispersed layers render, or that missing cached data is explicitly labeled.'],
     ),
     check(
       'offline_departure_audit_device_verified',
       'Departure Audit and Navigate offline readiness strip are verified on Android.',
-      evidenceTrue(evidence, 'offlineDepartureAuditDeviceVerified'),
+      evidenceDetailPassed(evidence, 'offlineDepartureAuditDeviceVerified', 'departureAudit'),
       [relPath(root, paths.evidence)],
       ['Capture Command Brief Departure Audit and Navigate offline readiness strip on Android.'],
     ),

@@ -44,6 +44,11 @@ import {
   routeGeometryLineStringToLatLng,
   validateRouteGeometry,
 } from './routeGeometryLifecycle';
+import {
+  buildRoadNavigationProgressPersistenceSnapshot,
+  shouldPersistRoadNavigationProgressUpdate,
+  type RoadNavigationProgressPersistenceSnapshot,
+} from './roadNavigationProgressPersistence';
 import { resolveRoadNavigationProgress } from './roadNavigationProgress';
 
 const SEARCH_DEBOUNCE_MS = 320;
@@ -631,6 +636,13 @@ export function useRoadNavigation(params: {
   const restoreAttemptedRef = useRef(false);
   const inFlightRouteKeyRef = useRef<string | null>(null);
   const routeRequestSeqRef = useRef(0);
+  const progressPersistenceRef = useRef<{
+    snapshot: RoadNavigationProgressPersistenceSnapshot | null;
+    lastPersistedAtMs: number | null;
+  }>({
+    snapshot: null,
+    lastPersistedAtMs: null,
+  });
 
   const clearSearchUi = useCallback(() => {
     searchRequestIdRef.current += 1;
@@ -1493,6 +1505,8 @@ export function useRoadNavigation(params: {
         ? 'rerouting'
         : computed.activeGuidanceProgress?.offRouteStatus ?? 'on_route';
 
+    const progressPersistNowMs = Date.now();
+
     setSession((prev) => {
       const nextStatus =
         prev.status === 'navigation_active' && nextConfidenceState === 'arrived'
@@ -1536,14 +1550,28 @@ export function useRoadNavigation(params: {
         rerouteStatus: nextRerouteStatus,
         completionReason: nextCompletionReason,
       };
-      void persistSession(nextSession);
+      const nextProgressPersistenceSnapshot =
+        buildRoadNavigationProgressPersistenceSnapshot(nextSession);
+      const shouldPersistProgress = shouldPersistRoadNavigationProgressUpdate({
+        previous: progressPersistenceRef.current.snapshot,
+        next: nextProgressPersistenceSnapshot,
+        nowMs: progressPersistNowMs,
+        lastPersistedAtMs: progressPersistenceRef.current.lastPersistedAtMs,
+      });
+      if (shouldPersistProgress) {
+        progressPersistenceRef.current = {
+          snapshot: nextProgressPersistenceSnapshot,
+          lastPersistedAtMs: progressPersistNowMs,
+        };
+        void persistSession(nextSession);
+      }
       return nextSession;
     });
 
     if (activeSession.status === 'navigation_active') {
       if (
         nextConfidenceState === 'off_route_confirmed' &&
-        Date.now() - rerouteCooldownRef.current >= REROUTE_COOLDOWN_MS
+        progressPersistNowMs - rerouteCooldownRef.current >= REROUTE_COOLDOWN_MS
       ) {
         offRouteHitCountRef.current = 0;
         if (liveServicesEnabled) {
@@ -1587,6 +1615,10 @@ export function useRoadNavigation(params: {
     offRouteHitCountRef.current = 0;
     rejoinHitCountRef.current = 0;
     arrivalHitCountRef.current = 0;
+    progressPersistenceRef.current = {
+      snapshot: null,
+      lastPersistedAtMs: null,
+    };
     setStepListExpanded(false);
     setSession((prev) => {
       const activeGuidance = buildActiveGuidanceStateFromRoadRoute({

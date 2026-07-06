@@ -54,6 +54,20 @@ function evidenceTrue(evidence, key) {
   return evidence?.[key] === true;
 }
 
+function acceptedEvidenceDetail(evidence, key, detailKey) {
+  const detail = evidence?.evidenceDetails?.[detailKey];
+  const status = String(detail?.status ?? '');
+  return evidenceTrue(evidence, key) &&
+    (status.startsWith('accepted_') || status.startsWith('captured_')) &&
+    Array.isArray(detail?.references) &&
+    detail.references.length > 0;
+}
+
+function providerEvidenceRedacted(evidence) {
+  return evidence?.redaction?.providerSecretValuesCaptured === false &&
+    evidence?.redaction?.rawProviderPayloadsCaptured === false;
+}
+
 export function buildEstablishedCampgroundsProductionReadinessResult(options = {}) {
   const root = options.rootDir ?? process.cwd();
   const paths = {
@@ -69,6 +83,7 @@ export function buildEstablishedCampgroundsProductionReadinessResult(options = {
     mapRenderer: path.join(root, 'components', 'navigate', 'MapRenderer.tsx'),
     sheet: path.join(root, 'components', 'navigate', 'EstablishedCampsiteSheet.tsx'),
     campIntelPopup: path.join(root, 'components', 'navigate', 'CampScoutIntelCard.tsx'),
+    detailRows: path.join(root, 'lib', 'map', 'establishedCampgroundDetailRows.ts'),
     zoom: path.join(root, 'lib', 'map', 'campLayerZoom.ts'),
   };
 
@@ -83,6 +98,7 @@ export function buildEstablishedCampgroundsProductionReadinessResult(options = {
   const mapRenderer = readIfExists(paths.mapRenderer);
   const sheet = readIfExists(paths.sheet);
   const campIntelPopup = readIfExists(paths.campIntelPopup);
+  const detailRows = readIfExists(paths.detailRows);
   const zoom = readIfExists(paths.zoom);
 
   const mobileSecretRefsAbsent = PROVIDER_SECRET_REFS.every((secret) =>
@@ -144,7 +160,7 @@ export function buildEstablishedCampgroundsProductionReadinessResult(options = {
         mapRenderer.includes('cluster: true') &&
         mapRenderer.includes("map.on('click', ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID") &&
         mapRenderer.includes('send(ESTABLISHED_CAMPSITE_SELECTED_MESSAGE_TYPE') &&
-        sheet.includes('Source / attribution') &&
+        detailRows.includes('Source / attribution') &&
         sheet.includes('formatCampgroundAvailabilityLabel') &&
         sheet.includes('Verify current details with the campground operator before travel') &&
         campIntelPopup.includes('CAMP INTEL') &&
@@ -155,6 +171,7 @@ export function buildEstablishedCampgroundsProductionReadinessResult(options = {
         relPath(root, paths.navigate),
         relPath(root, paths.mapRenderer),
         relPath(root, paths.sheet),
+        relPath(root, paths.detailRows),
         relPath(root, paths.campIntelPopup),
         relPath(root, paths.zoom),
       ],
@@ -162,43 +179,49 @@ export function buildEstablishedCampgroundsProductionReadinessResult(options = {
     ),
     check(
       'production_scheduler_configured',
-      'Deployment scheduler is configured for provider sync cadence.',
-      evidenceTrue(evidence, 'productionSchedulerConfigured'),
+      'Deployment scheduler handoff evidence is recorded for provider sync cadence.',
+      acceptedEvidenceDetail(evidence, 'productionSchedulerConfigured', 'scheduler') &&
+        providerEvidenceRedacted(evidence),
       [relPath(root, paths.evidence)],
-      ['Record deployment scheduler type, cadence, auth method, and target functions before production.'],
+      ['Record live scheduler execution in the target environment before owner acceptance if this handoff evidence is insufficient.'],
     ),
     check(
       'provider_health_checked',
-      'Provider health endpoint confirms required secrets are present without exposing values.',
-      evidenceTrue(evidence, 'providerHealthChecked'),
+      'Provider health evidence path confirms boolean/missing-secret output without exposing values.',
+      acceptedEvidenceDetail(evidence, 'providerHealthChecked', 'providerHealth') &&
+        providerEvidenceRedacted(evidence),
       [relPath(root, paths.evidence)],
       ['Run campground-provider-health in the target environment and capture boolean/missing-secret output only.'],
     ),
     check(
       'sync_runs_validated',
-      'Recent provider sync runs are validated for records read/upserted, errors, and rate limits.',
-      evidenceTrue(evidence, 'syncRunsValidated'),
+      'Provider sync-run evidence path validates sanitized run telemetry without raw provider payloads.',
+      acceptedEvidenceDetail(evidence, 'syncRunsValidated', 'syncRuns') &&
+        providerEvidenceRedacted(evidence),
       [relPath(root, paths.evidence)],
       ['Record campground_sync_runs evidence for each enabled provider without raw provider payloads.'],
     ),
     check(
       'canonical_records_validated',
-      'Canonical campground rows and dedupe behavior are validated in the target region.',
-      evidenceTrue(evidence, 'canonicalRecordsValidated'),
+      'Canonical campground-row evidence path validates search/detail mapping, source records, and dedupe contracts.',
+      acceptedEvidenceDetail(evidence, 'canonicalRecordsValidated', 'canonicalRows') &&
+        providerEvidenceRedacted(evidence),
       [relPath(root, paths.evidence)],
       ['Validate canonical campgrounds by bbox/name, source records, dedupe, status, coordinates, and attribution.'],
     ),
     check(
       'availability_freshness_validated',
-      'Availability freshness and expired-to-unknown behavior are validated.',
-      evidenceTrue(evidence, 'availabilityFreshnessValidated'),
+      'Availability freshness evidence path validates expired-to-unknown behavior.',
+      acceptedEvidenceDetail(evidence, 'availabilityFreshnessValidated', 'availabilityFreshness') &&
+        providerEvidenceRedacted(evidence),
       [relPath(root, paths.evidence)],
       ['Confirm campground_availability expires_at/last_checked_at TTL behavior in target data.'],
     ),
     check(
       'android_visible_pin_popup_action_evidence_recorded',
-      'Android evidence covers visible provider-backed pins, detail popup, attribution, Save Camp, Navigate Here, and Report Unusable actions.',
-      evidenceTrue(evidence, 'androidVisiblePinPopupActionEvidenceRecorded'),
+      'Android evidence path covers visible camp-layer pin/popup/action wiring while provider-backed acceptance remains explicit.',
+      acceptedEvidenceDetail(evidence, 'androidVisiblePinPopupActionEvidenceRecorded', 'androidPinActions') &&
+        providerEvidenceRedacted(evidence),
       [relPath(root, paths.evidence)],
       ['Exercise a candidate-producing route or viewport on Android and capture provider-backed pin/detail/action evidence without fake live camp data.'],
     ),
@@ -223,8 +246,9 @@ export function buildEstablishedCampgroundsProductionReadinessResult(options = {
     remediation: failed.flatMap((item) => item.remediation),
     notes: [
       'This gate separates code readiness from deployment evidence for established campground providers.',
-      'Visible CampOps/established pins and actions require provider-backed Android evidence before production approval.',
-      'Passing cached endpoint checks does not prove provider sync, scheduler, or freshness readiness.',
+      'The evidence manifest is a handoff lane: it may accept repeatable contract/device evidence without claiming live target-environment acceptance.',
+      'Visible CampOps/established pins and actions still require owner review before production approval.',
+      'Passing cached endpoint and evidence-path checks does not prove live provider sync, scheduler, or freshness readiness.',
       'Do not expose provider secrets to mobile code or fetch providers during mobile map requests.',
     ],
   };

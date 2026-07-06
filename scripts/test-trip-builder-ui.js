@@ -165,8 +165,12 @@ assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_LIMIT', 'Trip Builder should reque
 assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const', 'Trip Builder should search the full approach corridor with a wide fallback radius before accepting resupply options.');
 assertIncludes(screen, 'SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES = 10', 'Trip Builder should prefer fuel and supplies within a practical approach-route buffer.');
 assertIncludes(screen, 'SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 20', 'Trip Builder should keep reasonable small-town detours before declaring no usable resupply options.');
-assertIncludes(screen, "smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'fuel', selectedTrailheadResupplyAnchorCoordinate, liveApproachRoutePoints)", 'RouteContext fuel candidates should be measured against the approach route.');
-assertIncludes(screen, "smartResupplyOptionsFromRouteContext(routeContextSnapshot, 'food_supplies', selectedTrailheadResupplyAnchorCoordinate, liveApproachRoutePoints, selectedPreTrailSupplyAnchorCoordinate)", 'RouteContext grocery candidates should be measured against the approach route with the selected refuel fallback anchor.');
+assertIncludes(screen, 'smartResupplyOptionsFromRouteContext(', 'RouteContext fuel and grocery candidates should flow through the shared Smart Resupply adapter.');
+assertIncludes(screen, 'routeContextSnapshot', 'RouteContext candidates should be merged into Smart Resupply options.');
+assertIncludes(screen, 'selectedTrailheadResupplyAnchorCoordinate', 'RouteContext fuel candidates should be measured against the prepared trailhead anchor.');
+assertIncludes(screen, 'liveApproachRoutePoints', 'RouteContext fuel candidates should be measured against the approach route.');
+assertIncludes(screen, 'selectedPreTrailSupplyAnchorCoordinate', 'RouteContext grocery candidates should be measured with the selected refuel fallback anchor.');
+assertIncludes(screen, 'selectedRouteRemoteEntryProgressRatio', 'RouteContext resupply candidates should use the selected route remote-entry boundary.');
 assertIncludes(screen, 'buildApproachResupplySearchAnchors', 'Trip Builder should sample approach-route search anchors for Smart Resupply.');
 assertIncludes(screen, 'maxAnchors: 7', 'Trip Builder Smart Resupply should keep enough anchors to cover the home-side approach corridor and trailhead fallback.');
 assertIncludes(screen, 'rankApproachResupplyOptions', 'Trip Builder should rank Smart Resupply options with approach-route context.');

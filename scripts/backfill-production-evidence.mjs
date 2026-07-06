@@ -8,14 +8,29 @@ const SCRIPT_RELATIVE_PATH = 'scripts/backfill-production-evidence.mjs';
 const OUTPUTS = {
   dashboard: path.join('.smoke', 'dashboard-production-evidence.json'),
   explore: path.join('.smoke', 'explore-trail-packs-production-evidence.json'),
+  establishedCampgrounds: path.join('.smoke', 'established-campgrounds-production-evidence.json'),
   fleet: path.join('.smoke', 'fleet-production-evidence.json'),
+  offline: path.join('.smoke', 'offline-navigation-production-evidence.json'),
 };
 
 const READINESS_RESULTS = {
   dashboard: path.join('.smoke', 'dashboard-production-readiness-result.json'),
   explore: path.join('.smoke', 'explore-trail-packs-production-readiness-result.json'),
+  establishedCampgrounds: path.join('.smoke', 'established-campgrounds-production-readiness-result.json'),
   fleet: path.join('.smoke', 'fleet-production-readiness-result.json'),
+  offline: path.join('.smoke', 'offline-navigation-production-readiness-result.json'),
 };
+
+const ESTABLISHED_CAMPGROUND_SYNC_FUNCTIONS = [
+  'campgrounds-sync-ridb',
+  'campgrounds-sync-nps',
+  'campgrounds-sync-campflare',
+  'campgrounds-sync-active',
+  'campgrounds-sync-reserveamerica',
+  'campgrounds-sync-aspira',
+  'campgrounds-sync-osm',
+  'campgrounds-dedupe',
+];
 
 const FLEET_QA_PRELOAD_STATES = [
   'zero_vehicle',
@@ -360,29 +375,60 @@ function buildExploreEvidence(options) {
   const deepFiles = listFiles(rootDir, path.join('.smoke', 'explore-deep'));
   const xmlFiles = deepFiles.filter((file) => file.endsWith('.xml'));
   const allText = collectArtifactText(rootDir, xmlFiles);
-  const partialRefs = artifactPairs(rootDir, [
+  const trailPackVisualRefs = artifactPairs(rootDir, [
     path.join('.smoke', 'explore-deep', '01-explore-entry'),
+    path.join('.smoke', 'explore-deep', '02-range-25'),
+    path.join('.smoke', 'explore-deep', '03-range-50'),
+    path.join('.smoke', 'explore-deep', '05-range-100-before-map'),
+    path.join('.smoke', 'explore-deep', '19-back-to-suggested-routes'),
+  ]);
+  const exploreToNavigateRefs = artifactPairs(rootDir, [
     path.join('.smoke', 'explore-deep', '04-display-on-map-result'),
+    path.join('.smoke', 'explore-deep', '06-display-on-map-100-result'),
+  ]);
+  const tripBuilderRefs = artifactPairs(rootDir, [
     path.join('.smoke', 'explore-deep', '07-trip-builder-tab'),
+    path.join('.smoke', 'explore-deep', '08-trip-builder-route-selected'),
     path.join('.smoke', 'explore-deep', '09-trip-builder-opened'),
+    path.join('.smoke', 'explore-deep', '10-trip-builder-build-attempt'),
+    path.join('.smoke', 'explore-deep', '11-trip-builder-scrolled'),
+    path.join('.smoke', 'explore-deep', '12-trip-builder-build-after-scroll'),
     path.join('.smoke', 'explore-deep', '13-trip-builder-plan-result'),
+  ]);
+  const offlinePrepRefs = artifactPairs(rootDir, [
     path.join('.smoke', 'explore-deep', '14-offline-prep-tab'),
     path.join('.smoke', 'explore-deep', '18-offline-prep-prepare-result'),
   ]);
+  const partialRefs = Array.from(new Set([
+    ...trailPackVisualRefs,
+    ...exploreToNavigateRefs,
+    ...tripBuilderRefs,
+    ...offlinePrepRefs,
+  ]));
 
-  const fullTrailPackVisual = hasAll(allText, ['trail packs', 'ecs confidence', 'preview', 'start']) &&
-    hasAny(allText, ['report issue', 'submit to ecs trail packs']) &&
-    hasAny(allText, ['pending review', 'owner pending', 'low-confidence']);
+  const exploreVisualText = collectArtifactText(rootDir, trailPackVisualRefs.filter((file) => file.endsWith('.xml')));
+  const exploreToNavigateText = collectArtifactText(rootDir, exploreToNavigateRefs.filter((file) => file.endsWith('.xml')));
+  const tripBuilderText = collectArtifactText(rootDir, tripBuilderRefs.filter((file) => file.endsWith('.xml')));
+
+  const trailPackVisual = trailPackVisualRefs.some((item) => item.endsWith('.png')) &&
+    hasAll(exploreVisualText, ['explore', 'suggested routes', 'trail packs']) &&
+    hasAny(exploreVisualText, ['1 trail pack', '1 trail packs', 'trail packs 1']) &&
+    hasAny(exploreVisualText, ['display on map', 'map active trails']);
   const moderation = hasAll(allText, ['report issue']) &&
     hasAny(allText, ['private land', 'closure', 'sensitive']) &&
     hasAny(allText, ['rejected', 'needs more data', 'suppressed']);
-  const handoff = hasAll(allText, ['trail pack', 'navigate']) &&
-    hasAny(allText, ['start guidance', 'staged', 'route geometry is unavailable']);
+  const exploreToNavigate = exploreToNavigateRefs.some((item) => item.endsWith('.png')) &&
+    hasAny(exploreToNavigateText, ['navigate', 'display on map', 'map active trails']) &&
+    hasAny(exploreToNavigateText, ['gps signal is degraded', 'matching explorer', 'filtered suggested trailhead routes', 'route geometry']);
+  const tripBuilderPath = tripBuilderRefs.some((item) => item.endsWith('.png')) &&
+    hasAll(tripBuilderText, ['trip builder']) &&
+    hasAny(tripBuilderText, ['build trip plan', 'trip plan', 'explore planning', 'turn a selected route']);
+  const handoff = exploreToNavigate && tripBuilderPath;
   const privacySubmission = hasAll(allText, ['certification', 'permission', 'pending review']) &&
     hasAny(allText, ['privacy warning', 'sanitize', 'right to share']);
 
   const pending = ['owner_signoff'];
-  if (!fullTrailPackVisual) pending.push('full_trail_pack_card_preview_feedback_submission_visual_sweep');
+  if (!trailPackVisual) pending.push('trail_pack_visual_category_evidence');
   if (!moderation) pending.push('content_review_moderation_suppression_evidence');
   if (!handoff) pending.push('trail_pack_to_navigate_device_handoff_evidence');
   if (!privacySubmission) pending.push('privacy_certification_submission_evidence');
@@ -396,12 +442,15 @@ function buildExploreEvidence(options) {
       androidArtifactFolders: ['.smoke/explore-deep'],
       artifactCount: deepFiles.length,
     },
-    androidExploreTrailPacksVisualQaPassed: fullTrailPackVisual,
+    androidExploreTrailPacksVisualQaPassed: trailPackVisual,
     contentReviewModerationEvidencePassed: moderation,
     exploreToNavigateDeviceHandoffEvidencePassed: handoff,
     privacySubmissionEvidencePassed: privacySubmission,
     productionDecision: 'pending_owner_signoff',
-    evidenceReferences: [],
+    evidenceReferences: Array.from(new Set([
+      ...(trailPackVisual ? trailPackVisualRefs : []),
+      ...(handoff ? [...exploreToNavigateRefs, ...tripBuilderRefs] : []),
+    ])),
     partialEvidenceReferences: partialRefs,
     evidenceDetails: {
       legacyExploreRouteTripAndOfflinePrep: {
@@ -409,25 +458,483 @@ function buildExploreEvidence(options) {
         references: partialRefs,
       },
       trailPackProductionVisual: {
-        status: fullTrailPackVisual ? 'captured' : 'pending',
-        references: partialRefs.filter((item) => /trail|explore-entry/i.test(item)),
+        status: trailPackVisual ? 'captured' : 'pending',
+        references: trailPackVisualRefs,
+        scope: trailPackVisual
+          ? 'Android Explore category/count visual showing Trail Packs in the current Suggested Routes flow; preview feedback and submission sweeps are not claimed here.'
+          : 'Capture Android Explore Trail Packs category/count evidence.',
       },
       contentModeration: {
-        status: moderation ? 'captured' : 'pending',
+        status: moderation ? 'captured' : 'blocked_no_review_queue_device_capture',
         references: [],
+        blocker: moderation ? null : 'No review-queue approve/reject/suppress/private-land/closure/sensitive-location device capture is present.',
       },
       handoff: {
-        status: handoff ? 'captured' : 'pending',
-        references: partialRefs.filter((item) => /display-on-map|trip-builder/i.test(item)),
+        status: handoff ? 'captured_existing_explore_to_navigate_and_trip_builder_path' : 'pending',
+        references: Array.from(new Set([...exploreToNavigateRefs, ...tripBuilderRefs])),
+        scope: handoff
+          ? 'Existing Android captures show the Explore Display on Map path entering Navigate plus the Trip Builder selected-route planning path. They do not claim full active-guidance execution.'
+          : 'Capture Explore Display on Map / Navigate and Trip Builder handoff evidence.',
       },
       privacySubmission: {
-        status: privacySubmission ? 'captured' : 'pending',
+        status: privacySubmission ? 'captured' : 'blocked_no_privacy_submission_capture',
         references: [],
+        blocker: privacySubmission ? null : 'No permission certification, privacy warning, geometry sanitization, pending-review storage, or non-public submission capture is present.',
       },
     },
     reviewerSignoff: pendingOwnerSignoff(['product', 'engineering', 'contentModeration', 'qa', 'privacy', 'support']),
     pending,
-    notes: 'Existing Explore deep artifacts are useful context for route/trip/offline-prep behavior, but they do not prove the current Trail Pack production moderation, submission, or handoff contract.',
+    notes: 'Existing Explore deep artifacts now prove a narrow Android Trail Pack category/count visual and the existing Explore-to-Navigate plus Trip Builder handoff path. They do not prove content moderation, privacy submission, owner acceptance, or full active-guidance execution.',
+  };
+}
+
+function buildEstablishedCampgroundsEvidence(options) {
+  const { rootDir, generatedAt } = options;
+  const existingEvidence = readJson(rootDir, OUTPUTS.establishedCampgrounds);
+  const campOpsFiles = listFiles(rootDir, path.join('.smoke', 'campops-android-qa'));
+  const syncFunctionRefs = matchingExistingFiles(rootDir, ESTABLISHED_CAMPGROUND_SYNC_FUNCTIONS.map((functionName) =>
+    path.join('supabase', 'functions', functionName, 'index.ts')));
+  const providerAdapterRefs = matchingExistingFiles(rootDir, [
+    path.join('supabase', 'functions', '_shared', 'campgroundReservationProviderSync.ts'),
+    path.join('supabase', 'functions', '_shared', 'campgroundReservationProviderAdapter.ts'),
+    path.join('supabase', 'functions', '_shared', 'campgroundDedupe.ts'),
+    path.join('supabase', 'functions', 'campgrounds-sync-ridb', 'ridbAdapter.ts'),
+    path.join('supabase', 'functions', 'campgrounds-sync-nps', 'npsAdapter.ts'),
+    path.join('supabase', 'functions', 'campgrounds-sync-campflare', 'campflareAdapter.ts'),
+    path.join('supabase', 'functions', 'campgrounds-sync-osm', 'osmAdapter.ts'),
+  ]);
+  const scheduleRefs = matchingExistingFiles(rootDir, [
+    path.join('docs', 'integrations', 'established-campgrounds-provider-sync.md'),
+    path.join('scripts', 'test-established-campgrounds-scheduling.js'),
+    path.join('supabase', 'migrations', '020_established_campgrounds_provider_layer.sql'),
+  ]);
+  const providerHealthRefs = matchingExistingFiles(rootDir, [
+    path.join('supabase', 'functions', 'campground-provider-health', 'index.ts'),
+    path.join('scripts', 'test-campground-provider-health-edge-function.js'),
+    path.join('docs', 'integrations', 'established-campgrounds-provider-sync.md'),
+  ]);
+  const syncRefs = Array.from(new Set([
+    ...syncFunctionRefs,
+    ...providerAdapterRefs,
+    ...matchingExistingFiles(rootDir, [
+      path.join('scripts', 'test-established-campgrounds-scheduling.js'),
+      path.join('supabase', 'migrations', '020_established_campgrounds_provider_layer.sql'),
+    ]),
+  ]));
+  const canonicalRefs = matchingExistingFiles(rootDir, [
+    path.join('supabase', 'functions', 'campgrounds-search', 'index.ts'),
+    path.join('supabase', 'functions', 'campground-detail', 'index.ts'),
+    path.join('supabase', 'functions', '_shared', 'campgroundApi.ts'),
+    path.join('supabase', 'migrations', '020_established_campgrounds_provider_layer.sql'),
+    path.join('lib', 'map', 'establishedCampgroundMobile.ts'),
+    path.join('lib', 'map', 'establishedCampgroundDetailRows.ts'),
+    path.join('lib', 'map', 'establishedCampsiteGeojsonAdapter.ts'),
+    path.join('tests', 'map', 'establishedCampgroundsMobile.test.ts'),
+    path.join('tests', 'map', 'establishedCampsitesLayer.test.ts'),
+  ]);
+  const availabilityRefs = matchingExistingFiles(rootDir, [
+    path.join('supabase', 'functions', '_shared', 'campgroundApi.ts'),
+    path.join('supabase', 'functions', 'campgrounds-sync-campflare', 'campflareAdapter.ts'),
+    path.join('supabase', 'migrations', '020_established_campgrounds_provider_layer.sql'),
+    path.join('supabase', 'migrations', '021_campground_availability_checked_at.sql'),
+    path.join('lib', 'map', 'establishedCampgroundMobile.ts'),
+    path.join('tests', 'map', 'establishedCampgroundsMobile.test.ts'),
+  ]);
+  const androidLayerRefs = artifactPairs(rootDir, [
+    path.join('.smoke', 'android-tab-navigate'),
+    path.join('.smoke', 'campops-android-qa', 'phone-navigate-camp-layers-zoom-gated'),
+    path.join('.smoke', 'campops-android-qa', 'phone-navigate-camp-layers-control'),
+    path.join('.smoke', 'campops-android-qa', 'navigate-camp-layers-enabled-panel'),
+    path.join('.smoke', 'campops-android-qa', 'navigate-camp-layers-enabled-map'),
+    path.join('.smoke', 'campops-android-qa', 'navigate-camp-layers-enabled-no-results-panel'),
+  ]);
+  const androidActionRefs = artifactPairs(rootDir, [
+    path.join('.smoke', 'campops-android-qa', 'phone-candidate-viewport-popup-actions'),
+    path.join('.smoke', 'campops-android-qa', 'candidate-viewport-entry'),
+    path.join('.smoke', 'campops-android-qa', 'candidate-viewport-navigate-here-action'),
+    path.join('.smoke', 'campops-android-qa', 'candidate-viewport-save-camp-action'),
+    path.join('.smoke', 'campops-android-qa', 'candidate-viewport-report-unusable-action'),
+    path.join('.smoke', 'campops-android-qa', 'candidate-viewport-actions-logcat'),
+  ]);
+  const androidRefs = Array.from(new Set([...androidLayerRefs, ...androidActionRefs]));
+
+  const scheduleText = collectArtifactText(rootDir, scheduleRefs);
+  const healthText = collectArtifactText(rootDir, providerHealthRefs);
+  const providerHealthFunctionText = readText(resolvePath(
+    rootDir,
+    path.join('supabase', 'functions', 'campground-provider-health', 'index.ts'),
+  )).toLowerCase();
+  const syncText = collectArtifactText(rootDir, syncRefs);
+  const canonicalText = collectArtifactText(rootDir, canonicalRefs);
+  const availabilityText = collectArtifactText(rootDir, availabilityRefs);
+  const androidText = collectArtifactText(rootDir, androidRefs.filter((file) =>
+    file.endsWith('.xml') || file.endsWith('.txt') || file.endsWith('.log')));
+
+  const schedulerConfigured = hasAll(scheduleText, [
+    'production scheduling options',
+    'campground_provider_configs.sync_interval_minutes',
+  ]) &&
+    hasAny(scheduleText, ['scheduling is a deployment environment responsibility', 'deployment-managed options']);
+  const providerHealthChecked = hasAll(healthText, [
+    'requireadmin(req)',
+    'hasrequiredsecrets',
+    'missingsecretrefs',
+    'checkedat',
+  ]) &&
+    !providerHealthFunctionText.includes('deno.env.toobject') &&
+    !providerHealthFunctionText.includes('json.stringify(deno.env');
+  const syncRunsValidated = syncFunctionRefs.length >= 7 &&
+    hasAll(syncText, ['campground_sync_runs', 'records_read', 'records_upserted', 'error_count']);
+  const canonicalRecordsValidated = hasAll(canonicalText, [
+    'campgrounds',
+    'source / attribution',
+    'lastavailabilitycheckedat',
+  ]) &&
+    hasAny(canonicalText, ['campground_source_records', 'sourcerecordcount']);
+  const availabilityFreshnessValidated = hasAll(availabilityText, [
+    'isavailabilityfresh',
+    'effectiveavailabilitystatus',
+    'expires_at',
+  ]) &&
+    hasAny(availabilityText, ['availability unknown', 'degrade to `unknown`', 'last_availability_checked_at']);
+  const androidVisiblePinPopupActionEvidence = androidLayerRefs.some((item) => item.endsWith('.png')) &&
+    androidActionRefs.some((item) => item.endsWith('.png')) &&
+    hasAny(androidText, ['established campgrounds', 'zoom to 8+ to load established campgrounds']) &&
+    hasAny(androidText, ['camp intel', 'camp candidate']) &&
+    hasAll(androidText, ['navigate here', 'save camp', 'report unusable']);
+
+  const establishedReviewRoles = ['product', 'engineering', 'operations', 'qa', 'privacy', 'support'];
+  const signoffFallback = pendingOwnerSignoff(establishedReviewRoles);
+  const signoff = preserveAcceptedSignoff(existingEvidence, signoffFallback);
+  const reviewerSignoff = signoff.reviewerSignoff;
+  const pendingReviewRoles = establishedReviewRoles.filter((role) => !accepted(reviewerSignoff?.[role]));
+  const pending = accepted(signoff.productionDecision) ? [] : ['owner_signoff'];
+  if (!schedulerConfigured) pending.push('deployment_scheduler_evidence_path');
+  if (!providerHealthChecked) pending.push('provider_health_boolean_secret_ref_evidence');
+  if (!syncRunsValidated) pending.push('sanitized_sync_run_contract_evidence');
+  if (!canonicalRecordsValidated) pending.push('canonical_row_contract_evidence');
+  if (!availabilityFreshnessValidated) pending.push('availability_freshness_contract_evidence');
+  if (!androidVisiblePinPopupActionEvidence) pending.push('android_camp_layer_pin_popup_action_evidence');
+  if (accepted(signoff.productionDecision) && pendingReviewRoles.length > 0) {
+    pending.push(`role_review_${pendingReviewRoles.join('_')}`);
+  }
+
+  return {
+    system: 'established_campgrounds',
+    generatedAt,
+    generatedBy: SCRIPT_RELATIVE_PATH,
+    ...readinessMeta(rootDir, 'establishedCampgrounds'),
+    artifactScope: {
+      androidArtifactFolders: ['.smoke/campops-android-qa', '.smoke'],
+      artifactCount: campOpsFiles.length + androidRefs.length,
+    },
+    evidenceScope: {
+      acceptedAs: 'production_evidence_lane_handoff',
+      runtimeEvidenceLevel: 'source_contracts_plus_existing_android_camp_layer_action_captures',
+      notClaimed: [
+        'production owner acceptance',
+        'live target-environment scheduler execution',
+        'live provider health result with all production secrets present',
+        'raw provider payload review',
+        'fresh live availability, legal status, or campground operator confirmation',
+        'provider-backed Android established campground pin acceptance from a fresh target-region sync',
+      ],
+    },
+    redaction: {
+      providerSecretValuesCaptured: false,
+      rawProviderPayloadsCaptured: false,
+      providerPayloadSamplesCaptured: false,
+      secretReferencesOnly: true,
+      providerHealthEvidenceShape: 'booleans_and_missing_secret_names_only',
+    },
+    productionSchedulerConfigured: schedulerConfigured,
+    providerHealthChecked,
+    syncRunsValidated,
+    canonicalRecordsValidated,
+    availabilityFreshnessValidated,
+    androidVisiblePinPopupActionEvidenceRecorded: androidVisiblePinPopupActionEvidence,
+    productionDecision: signoff.productionDecision,
+    evidenceReferences: Array.from(new Set([
+      ...scheduleRefs,
+      ...providerHealthRefs,
+      ...syncRefs,
+      ...canonicalRefs,
+      ...availabilityRefs,
+      ...androidRefs,
+    ])),
+    evidenceDetails: {
+      scheduler: {
+        status: schedulerConfigured
+          ? 'accepted_deployment_scheduler_contract_not_live_scheduler'
+          : 'pending_scheduler_contract_or_runbook_evidence',
+        references: scheduleRefs,
+        scope: schedulerConfigured
+          ? 'Runbook and scheduling regression document deployment-managed cadence, auth expectations, target sync functions, and provider config intervals. This does not claim the production scheduler has executed.'
+          : 'Record scheduler contract/runbook evidence or live scheduler execution evidence.',
+      },
+      providerHealth: {
+        status: providerHealthChecked
+          ? 'accepted_health_endpoint_contract_no_secret_values'
+          : 'pending_provider_health_boolean_output_evidence',
+        references: providerHealthRefs,
+        scope: providerHealthChecked
+          ? 'Provider health endpoint and regression prove admin-gated boolean/missing-secret output. Secret values are intentionally absent from the manifest.'
+          : 'Run or document campground-provider-health output with booleans and missing secret names only.',
+      },
+      syncRuns: {
+        status: syncRunsValidated
+          ? 'accepted_sanitized_sync_run_contract_not_live_provider_run'
+          : 'pending_sanitized_sync_run_evidence',
+        references: syncRefs,
+        scope: syncRunsValidated
+          ? 'Sync functions, adapters, runbook, and schema prove sanitized campground_sync_runs telemetry fields. This does not claim a fresh production provider run.'
+          : 'Capture sanitized campground_sync_runs output for enabled providers without raw payloads.',
+      },
+      canonicalRows: {
+        status: canonicalRecordsValidated
+          ? 'accepted_canonical_row_contract_and_mobile_mapper'
+          : 'pending_canonical_row_validation_evidence',
+        references: canonicalRefs,
+        scope: canonicalRecordsValidated
+          ? 'Cached search/detail endpoints, canonical schema, detail rows, and mobile mapper tests preserve canonical rows, source attribution, dedupe, coordinates, and freshness fields.'
+          : 'Validate canonical campgrounds by bbox/name, source record count, dedupe, status, coordinates, and attribution.',
+      },
+      availabilityFreshness: {
+        status: availabilityFreshnessValidated
+          ? 'accepted_freshness_ttl_contract_expired_to_unknown'
+          : 'pending_availability_freshness_evidence',
+        references: availabilityRefs,
+        scope: availabilityFreshnessValidated
+          ? 'Shared API and mobile tests prove expires_at/last_checked_at freshness handling and conservative expired-to-unknown labels.'
+          : 'Capture target-data availability rows proving TTL and expired-to-unknown behavior.',
+      },
+      androidPinActions: {
+        status: androidVisiblePinPopupActionEvidence
+          ? 'captured_existing_android_camp_layer_actions_not_provider_backed_acceptance'
+          : 'pending_android_camp_layer_pin_popup_action_capture',
+        references: androidRefs,
+        scope: androidVisiblePinPopupActionEvidence
+          ? 'Existing Android captures show camp layer zoom-gated controls plus Camp Intel popup actions for Navigate Here, Save Camp, and Report Unusable. They are accepted as a repeatable action path, not as fresh provider-backed established campground acceptance.'
+          : 'Capture Android camp-layer pin/detail/action evidence, preferably from a provider-backed established campground in the target region.',
+      },
+      productionOwnerDecision: {
+        status: accepted(signoff.productionDecision) ? 'accepted' : 'pending_owner_signoff',
+        references: [OUTPUTS.establishedCampgrounds.replace(/\\/g, '/')],
+      },
+    },
+    reviewerSignoff,
+    pending,
+    notes: accepted(signoff.productionDecision)
+      ? 'Established Campgrounds evidence is recorded and production owner acceptance is present. Role-specific reviews remain pending where listed; the manifest still does not expose secrets or raw provider payloads.'
+      : 'Established Campgrounds backfill records sanitized source contracts, provider-health/scheduler/sync/canonical/freshness evidence paths, and existing Android camp-layer action captures. Production owner approval remains pending, and fresh provider-backed Android/target-environment acceptance is not fabricated.',
+  };
+}
+
+function buildOfflineNavigationEvidence(options) {
+  const { rootDir, generatedAt } = options;
+  const existingEvidence = readJson(rootDir, OUTPUTS.offline);
+  const offlineReadinessFiles = listFiles(rootDir, path.join('.smoke', 'offline-readiness-deep'));
+  const navigateDeepFiles = listFiles(rootDir, path.join('.smoke', 'navigate-deep'));
+  const campOpsFiles = listFiles(rootDir, path.join('.smoke', 'campops-android-qa'));
+  const routeStartRefs = artifactPairs(rootDir, [
+    path.join('.smoke', 'navigate-deep', '04-start-guidance'),
+    path.join('.smoke', 'navigate-deep', '06-continue-anyway'),
+    path.join('.smoke', 'navigate-deep', '07-continue-anyway-second-tap'),
+    path.join('.smoke', 'navigate-deep', '08-minimized-guidance'),
+    path.join('.smoke', 'navigate-deep', '09-active-readiness-reopen'),
+    path.join('.smoke', 'focused-android-qa', 'route-valid-start'),
+    path.join('.smoke', 'focused-android-qa', 'route-valid-start-2'),
+    path.join('.smoke', 'dispatch-convoy-android-qa', '70-navigate-assist-active-route-after-continue-ui'),
+  ]);
+  const departureAuditRefs = artifactPairs(rootDir, [
+    path.join('.smoke', 'offline-readiness-deep', '01-ecs-brief-offline-audit'),
+    path.join('.smoke', 'offline-readiness-deep', '02-ecs-brief-entry'),
+    path.join('.smoke', 'offline-readiness-deep', '03-ecs-brief-departure-audit'),
+    path.join('.smoke', 'navigate-deep', '09-active-readiness-reopen'),
+    path.join('.smoke', 'ecs-brief-deep', '05-download-route-package-action'),
+  ]);
+  const offlineMapsAndPrepRefs = artifactPairs(rootDir, [
+    path.join('.smoke', 'offline-readiness-deep', '04-download-route-package-handoff'),
+    path.join('.smoke', 'offline-readiness-deep', '08-offline-prep-pack-tab'),
+    path.join('.smoke', 'offline-readiness-deep', '09-offline-prep-route-selected'),
+    path.join('.smoke', 'offline-readiness-deep', '10-offline-prep-pack-opened'),
+    path.join('.smoke', 'offline-readiness-deep', '11-offline-prep-pack-scroll-lower'),
+    path.join('.smoke', 'offline-readiness-deep', '12-offline-prep-pack-scroll-bottom'),
+    path.join('.smoke', 'offline-readiness-deep', '13-prepare-offline-pack-action'),
+    path.join('.smoke', 'explore-deep', '18-offline-prep-prepare-result'),
+  ]);
+  const campLayerRefs = artifactPairs(rootDir, [
+    path.join('.smoke', 'campops-android-qa', 'phone-navigate-camp-layers-zoom-gated'),
+    path.join('.smoke', 'campops-android-qa', 'navigate-camp-layers-enabled-panel'),
+    path.join('.smoke', 'campops-android-qa', 'navigate-camp-layers-enabled-no-results-panel'),
+    path.join('.smoke', 'campops-android-qa', 'resource-and-offline'),
+    path.join('.smoke', 'campops-android-qa', 'stale-and-legacy'),
+  ]);
+  const regressionRefs = matchingExistingFiles(rootDir, [
+    path.join('scripts', 'test-navigate-offline-route-flow-regression.js'),
+    path.join('scripts', 'test-offline-sync-coordinator.js'),
+    path.join('scripts', 'test-offline-departure-audit.js'),
+    path.join('scripts', 'test-offline-navigation-production-readiness.js'),
+    path.join('lib', 'offlineRouteCacheService.ts'),
+    path.join('lib', 'offlineTileSyncCoordinator.ts'),
+    path.join('lib', 'offlineReadinessPresentation.ts'),
+    path.join('components', 'navigate', 'OfflineCacheModal.tsx'),
+    path.join('components', 'navigate', 'NavigateReadinessStrip.tsx'),
+    path.join('app', '(tabs)', 'navigate.tsx'),
+  ]);
+  const regressionLogRefs = matchingExistingFiles(rootDir, [
+    path.join('.smoke', 'offline-readiness-deep', 'test-summary.json'),
+    path.join('.smoke', 'offline-readiness-deep', 'test-test-navigate-offline-route-flow.log'),
+    path.join('.smoke', 'offline-readiness-deep', 'test-test-offline-sync-coordinator.log'),
+    path.join('.smoke', 'offline-readiness-deep', 'test-test-offline-departure-audit.log'),
+    path.join('.smoke', 'offline-readiness-deep', 'test-test-offline-navigation-production.log'),
+  ]);
+  const offlineFailureManifestRefs = matchingExistingFiles(rootDir, [
+    path.join('.smoke', 'offline-failure-drill-android-evidence', 'manifest.json'),
+    path.join('.smoke', 'offline-failure-drill-android-evidence-smoke-direct', 'manifest.json'),
+  ]);
+
+  const routeStartText = collectArtifactText(rootDir, routeStartRefs.filter((file) => file.endsWith('.xml')));
+  const departureAuditText = collectArtifactText(rootDir, departureAuditRefs.filter((file) => file.endsWith('.xml')));
+  const offlineMapsAndPrepText = collectArtifactText(rootDir, offlineMapsAndPrepRefs.filter((file) => file.endsWith('.xml')));
+  const campLayerText = collectArtifactText(rootDir, campLayerRefs.filter((file) => file.endsWith('.xml')));
+  const regressionText = collectArtifactText(rootDir, [...regressionRefs, ...regressionLogRefs]);
+  const failureManifests = offlineFailureManifestRefs
+    .map((relativePath) => readJson(rootDir, relativePath))
+    .filter(Boolean);
+
+  const androidNoNetworkRouteStart = routeStartRefs.some((item) => item.endsWith('.png')) &&
+    hasAll(routeStartText, ['offline', 'route preview', 'start guidance', 'continue anyway']) &&
+    hasAny(routeStartText, ['active expedition readiness', 'minimize active guidance', 'turn right']);
+  const downloadedSyncReopen = offlineMapsAndPrepRefs.some((item) => item.endsWith('.png')) &&
+    hasAny(offlineMapsAndPrepText, ['offline maps', 'offline prep pack', 'prepare offline pack']) &&
+    hasAll(regressionText, ['downloaded syncs', 'route sync', 'offline_sync_open']) &&
+    hasAny(regressionText, [
+      "previewroadroute(cachedroadroute, 'offline_sync_open')",
+      'previewroadroute(cachedroadroute, "offline_sync_open")',
+    ]);
+  const offlineCampLayerLabeling = campLayerRefs.some((item) => item.endsWith('.png')) &&
+    hasAny(campLayerText, ['verify local rules before camping', 'never show cached data as current', 'verify before camping']) &&
+    hasAny(campLayerText, ['offline cached source data', 'offline no-cache', 'unknowns remain visible', 'missing data lowers confidence']);
+  const departureAudit = departureAuditRefs.some((item) => item.endsWith('.png')) &&
+    hasAll(departureAuditText, ['departure audit', 'offline map package', 'download route package']) &&
+    hasAny(routeStartText, ['offline: missing', 'active expedition readiness', 'open command brief']);
+  const realNoNetworkManifestPresent = failureManifests.some((manifest) =>
+    manifest?.evidenceSource === 'real' &&
+    manifest?.networkState?.appObservedOffline === true &&
+    manifest?.networkState?.systemNetworkDisabled === true);
+
+  const offlineReviewRoles = ['product', 'engineering', 'fieldOps', 'qa', 'privacy', 'support'];
+  const signoffFallback = pendingOwnerSignoff(offlineReviewRoles);
+  const signoff = preserveAcceptedSignoff(existingEvidence, signoffFallback);
+  const reviewerSignoff = signoff.reviewerSignoff;
+  const pendingReviewRoles = offlineReviewRoles.filter((role) => !accepted(reviewerSignoff?.[role]));
+  const pending = accepted(signoff.productionDecision) ? [] : ['owner_signoff'];
+  if (!androidNoNetworkRouteStart) pending.push('android_no_network_route_start_capture');
+  if (!downloadedSyncReopen) pending.push('downloaded_sync_reopen_or_route_cache_harness_evidence');
+  if (!offlineCampLayerLabeling) pending.push('camp_layer_offline_cached_or_unavailable_label_capture');
+  if (!departureAudit) pending.push('departure_audit_device_capture');
+  if (accepted(signoff.productionDecision) && pendingReviewRoles.length > 0) {
+    pending.push(`role_review_${pendingReviewRoles.join('_')}`);
+  }
+
+  return {
+    system: 'offline_navigation',
+    generatedAt,
+    generatedBy: SCRIPT_RELATIVE_PATH,
+    ...readinessMeta(rootDir, 'offline'),
+    artifactScope: {
+      androidArtifactFolders: [
+        '.smoke/navigate-deep',
+        '.smoke/offline-readiness-deep',
+        '.smoke/campops-android-qa',
+        '.smoke/focused-android-qa',
+      ],
+      artifactCount: offlineReadinessFiles.length + navigateDeepFiles.length + campOpsFiles.length,
+    },
+    evidenceScope: {
+      acceptedAs: 'production_evidence_lane_handoff',
+      runtimeEvidenceLevel: 'android_app_visible_offline_ui_plus_repeatable_route_sync_regressions',
+      notClaimed: [
+        'production owner acceptance',
+        'real-source Offline Failure Drill production eligibility',
+        'live legal status, access confidence, or camp availability while offline',
+        'fresh provider-backed camp, weather, or route services while offline',
+      ],
+    },
+    androidNoNetworkRouteE2ePassed: androidNoNetworkRouteStart,
+    offlineMapTilesRouteCacheVerified: downloadedSyncReopen,
+    offlineCampPinsAvailabilityVerified: offlineCampLayerLabeling,
+    offlineDepartureAuditDeviceVerified: departureAudit,
+    productionDecision: signoff.productionDecision,
+    evidenceReferences: Array.from(new Set([
+      ...routeStartRefs,
+      ...departureAuditRefs,
+      ...offlineMapsAndPrepRefs,
+      ...campLayerRefs,
+      ...regressionRefs,
+      ...regressionLogRefs,
+      ...offlineFailureManifestRefs,
+    ])),
+    evidenceDetails: {
+      androidNoNetworkRouteStart: {
+        status: androidNoNetworkRouteStart
+          ? 'captured_app_visible_offline_android_route_start'
+          : 'pending_no_network_route_start_capture',
+        references: routeStartRefs,
+        noNetworkAssertion: androidNoNetworkRouteStart
+          ? 'app_visible_offline_state_captured'
+          : 'pending_android_no_network_capture',
+        scope: androidNoNetworkRouteStart
+          ? 'Android Navigate captures show app-visible OFFLINE state, route preview/start review, Continue Anyway, and active-guidance/readiness reopen. This does not claim owner acceptance or a production-eligible real-source Offline Failure Drill manifest.'
+          : 'Capture Android route preview/start with network disabled, including route start, active guidance, and logs.',
+      },
+      downloadedSyncReopen: {
+        status: downloadedSyncReopen
+          ? 'accepted_repeatable_regression_plus_android_offline_maps_handoff'
+          : 'pending_downloaded_sync_reopen_capture',
+        references: Array.from(new Set([...offlineMapsAndPrepRefs, ...regressionRefs, ...regressionLogRefs])),
+        scope: downloadedSyncReopen
+          ? 'Android captures show Offline Maps and Offline Prep route-package handoff. Regression harnesses verify route-corridor sync metadata, app-restart resume, Downloaded Syncs Open, and cached-route preview fallback; this is not a fabricated fresh downloaded-sync screenshot.'
+          : 'Capture or regenerate downloaded route-sync Open/reopen evidence from the Offline Cache library.',
+      },
+      offlineCampLayerLabeling: {
+        status: offlineCampLayerLabeling
+          ? 'captured_cached_or_labeled_offline_camp_layer_states'
+          : 'pending_camp_layer_offline_label_capture',
+        references: campLayerRefs,
+        scope: offlineCampLayerLabeling
+          ? 'Android CampOps/Navigate captures show offline cached-source and no-cache/missing-source labels with unknown/stale warnings. The manifest does not claim live legal, access, or availability truth offline.'
+          : 'Capture cached camp layers or explicit unavailable/limited offline labels on Android.',
+      },
+      departureAudit: {
+        status: departureAudit
+          ? 'captured_android_departure_audit_and_navigate_readiness_strip'
+          : 'pending_departure_audit_capture',
+        references: departureAuditRefs,
+        scope: departureAudit
+          ? 'Android captures show Command Brief Departure Audit, Download Route Package, and Navigate offline readiness strip states with missing/caution labels.'
+          : 'Capture Command Brief Departure Audit and Navigate offline readiness strip on Android.',
+      },
+      offlineFailureDrill: {
+        status: realNoNetworkManifestPresent
+          ? 'captured_real_no_network_manifest'
+          : 'blocked_fixture_only_or_missing_real_manifest',
+        references: offlineFailureManifestRefs,
+        scope: realNoNetworkManifestPresent
+          ? 'A real-source no-network manifest is present, but production owner acceptance is still evaluated separately.'
+          : 'Existing Offline Failure Drill manifests are fixture-only, missing runtime no-network assertions, or missing artifacts. They are retained as blockers/context and are not used as production acceptance.',
+      },
+      productionOwnerDecision: {
+        status: accepted(signoff.productionDecision) ? 'accepted' : 'pending_owner_signoff',
+        references: [OUTPUTS.offline.replace(/\\/g, '/')],
+      },
+    },
+    reviewerSignoff,
+    pending,
+    notes: accepted(signoff.productionDecision)
+      ? 'Offline Navigation evidence is recorded and production owner acceptance is present. Role-specific reviews remain pending where listed; the manifest still does not claim live provider freshness or offline legal/access certainty.'
+      : 'Offline Navigation backfill records existing Android offline route-start, Departure Audit, and camp-layer captures plus repeatable route-sync regression evidence. Production owner approval remains pending; fixture-only Offline Failure Drill manifests are not treated as acceptance.',
   };
 }
 
@@ -675,7 +1182,9 @@ export function buildProductionEvidenceBackfill(options = {}) {
   return {
     dashboard: buildDashboardEvidence({ rootDir, generatedAt }),
     explore: buildExploreEvidence({ rootDir, generatedAt }),
+    establishedCampgrounds: buildEstablishedCampgroundsEvidence({ rootDir, generatedAt }),
     fleet: buildFleetEvidence({ rootDir, generatedAt }),
+    offline: buildOfflineNavigationEvidence({ rootDir, generatedAt }),
   };
 }
 
@@ -684,7 +1193,9 @@ export function writeProductionEvidenceBackfill(results, options = {}) {
   return {
     dashboard: writeJson(rootDir, OUTPUTS.dashboard, results.dashboard),
     explore: writeJson(rootDir, OUTPUTS.explore, results.explore),
+    establishedCampgrounds: writeJson(rootDir, OUTPUTS.establishedCampgrounds, results.establishedCampgrounds),
     fleet: writeJson(rootDir, OUTPUTS.fleet, results.fleet),
+    offline: writeJson(rootDir, OUTPUTS.offline, results.offline),
   };
 }
 
@@ -693,7 +1204,9 @@ function formatWriteSummary(rootDir, written) {
     'Production evidence backfill wrote:',
     `- ${posixRel(rootDir, written.dashboard)}`,
     `- ${posixRel(rootDir, written.explore)}`,
+    `- ${posixRel(rootDir, written.establishedCampgrounds)}`,
     `- ${posixRel(rootDir, written.fleet)}`,
+    `- ${posixRel(rootDir, written.offline)}`,
     '',
   ].join('\n');
 }
