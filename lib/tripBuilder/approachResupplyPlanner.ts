@@ -79,8 +79,8 @@ const TRAIL_ENTRY_EDGE_PROGRESS_RATIO = 0.985;
 const TRAIL_ENTRY_EDGE_BUFFER_MILES = 1.5;
 const MIN_REMOTE_ENTRY_PROGRESS_RATIO = 0.55;
 const REMOTE_ENTRY_SEARCH_BACKOFF_RATIO = 0.04;
-const REMOTE_ENTRY_IDEAL_BACKOFF_RATIO = 0.03;
-const REMOTE_ENTRY_IDEAL_WINDOW_RATIO = 0.18;
+const REMOTE_ENTRY_IDEAL_BACKOFF_RATIO = 0.015;
+const REMOTE_ENTRY_IDEAL_WINDOW_RATIO = 0.11;
 
 function isValidCoordinate(point: ApproachResupplyCoordinate | null | undefined): point is ApproachResupplyCoordinate {
   return !!point &&
@@ -267,10 +267,10 @@ function civilizationExitScore(
     Math.max(0.45, idealEnd - 0.01),
   );
   if (progressRatio >= idealStart && progressRatio <= idealEnd) return 1;
-  if (progressRatio > idealEnd && progressRatio < remoteEntryProgressRatio) return 0.78;
-  if (progressRatio >= Math.max(0.55, idealStart - 0.14)) return 0.78;
-  if (progressRatio >= 0.45) return 0.5;
-  return 0.24;
+  if (progressRatio > idealEnd && progressRatio < remoteEntryProgressRatio) return 0.62;
+  if (progressRatio >= Math.max(0.55, idealStart - 0.12)) return 0.58;
+  if (progressRatio >= 0.45) return 0.34;
+  return 0.12;
 }
 
 function categoryScore(candidate: ApproachResupplyCandidate, category: ApproachResupplyCategory): number {
@@ -423,18 +423,18 @@ export function rankApproachResupplyOptions({
         remoteEntryBuffer,
       );
       const baseScore =
-        distanceScore(remainingApproachMilesToTrailhead) * 0.24 +
+        distanceScore(remainingApproachMilesToTrailhead) * 0.2 +
         deviationScore(routeDeviationMiles) * 0.22 +
-        progressScore(approachProgressRatio) * 0.1 +
-        exitScore * 0.26 +
+        progressScore(approachProgressRatio) * 0.08 +
+        exitScore * 0.34 +
         (beforeTrailEntry === false ? 0.08 : 1) * 0.06 +
-        categoryScore(candidate, category) * 0.06 +
-        confidenceScore(candidate.confidence) * 0.06;
+        categoryScore(candidate, category) * 0.05 +
+        confidenceScore(candidate.confidence) * 0.05;
       const routeOrderBoost = candidate.routeOrder != null && Number.isFinite(candidate.routeOrder)
         ? Math.max(0, 0.04 - Math.max(0, candidate.routeOrder) * 0.005)
         : 0;
       const approachScore = clamp01(
-        (providerScore == null ? baseScore : baseScore * 0.86 + providerScore * 0.14) + routeOrderBoost,
+        (providerScore == null ? baseScore : baseScore * 0.92 + providerScore * 0.08) + routeOrderBoost,
       );
 
       return {

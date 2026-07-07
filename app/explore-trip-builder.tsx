@@ -21,11 +21,11 @@ import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import TopoBackground from '../components/TopoBackground';
 import { ECS, TACTICAL } from '../lib/theme';
 import MapRenderer, { type CameraCommand } from '../components/navigate/MapRenderer';
+import MapFallbackSurface from '../components/navigate/MapFallbackSurface';
 import {
   DEFAULT_MAP_STYLE,
   getMapboxToken,
   getMapboxTokenSync,
-  type MapStyleKey,
 } from '../lib/mapConfig';
 import { loadOpportunitiesWithCompatibility, type ExpeditionOpportunity } from '../lib/discoverEngine';
 import { buildProfileFromSpecs } from '../lib/rigCompatibilityEngine';
@@ -109,6 +109,7 @@ import {
   loadExplorePlanningRouteContext,
   upsertExplorePlanningRoute,
 } from '../lib/explore/explorePlanningRouteContextStore';
+import { simplifyRouteGeometryForPreview } from '../lib/explore/exploreMapPreviewOptimization';
 import { activeTripModeStore } from '../lib/activeTripMode';
 import { loadoutItemStore, loadoutStore } from '../lib/loadoutStore';
 import {
@@ -321,17 +322,17 @@ const SMART_RESUPPLY_OPTIONS: { value: SmartResupplyPreference; label: string; d
   { value: 'fuel_supplies', label: 'Fuel + groceries/supplies', detail: 'Include fuel and supply margin.' },
   { value: 'no', label: 'No', detail: 'Skip smart resupply planning.' },
 ];
-const BAILOUT_PLAN_OPTIONS: { value: BailoutPlanPreference; label: string; detail: string }[] = [
-  { value: 'no', label: 'Skip', detail: 'No bailout reference pins.' },
-  { value: 'yes', label: 'Open Map', detail: 'Drop reference bailout pins.' },
+const BAILOUT_PLAN_OPTIONS: { value: BailoutPlanPreference; label: string }[] = [
+  { value: 'no', label: 'Skip' },
+  { value: 'yes', label: 'Open Map' },
 ];
-const TRIP_BUILDER_PICKER_MAP_STYLES: { key: MapStyleKey; label: string; icon: string }[] = [
-  { key: DEFAULT_MAP_STYLE, label: 'Day', icon: 'navigate-outline' },
-  { key: 'satellite', label: 'Sat', icon: 'earth-outline' },
-];
+const TRIP_BUILDER_PICKER_MAP_HEIGHT = 300;
+const TRIP_BUILDER_PICKER_ROUTE_PREVIEW_MAX_POINTS = 96;
 const SMART_RESUPPLY_FUEL_QUERY = 'gas station fuel diesel';
 const SMART_RESUPPLY_SUPPLY_QUERY = 'grocery store supermarket supplies';
 const SMART_RESUPPLY_OPTION_LIMIT = 5;
+const SMART_RESUPPLY_OPTION_LIST_HEIGHT = 132;
+const TRIP_SETUP_BUILD_BUTTON_CLEARANCE = 108;
 const SMART_RESUPPLY_SEARCH_LIMIT = 20;
 const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const;
 const SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES = 10;
@@ -1749,9 +1750,40 @@ function isValidMapCoordinate(coordinate: TripMapCoordinate | null | undefined):
   );
 }
 
+function simplifyTripBuilderPickerRoutePoints(points: TripMapCoordinate[]): TripMapCoordinate[] {
+  return simplifyRouteGeometryForPreview(points.filter(isValidMapCoordinate), {
+    maxPoints: TRIP_BUILDER_PICKER_ROUTE_PREVIEW_MAX_POINTS,
+  });
+}
+
 function finiteCoordinateNumber(value: unknown): number | null {
   const next = typeof value === 'string' ? Number(value) : value;
   return typeof next === 'number' && Number.isFinite(next) ? next : null;
+}
+
+function referencePinCountLabel(count: number, subject: string): string {
+  return `${count} ${subject} reference pin${count === 1 ? '' : 's'}`;
+}
+
+function bailoutPlanOptionDetail(value: BailoutPlanPreference, pinCount: number, hasSelectedPoint: boolean): string {
+  if (value === 'no') {
+    return pinCount > 0 || hasSelectedPoint
+      ? 'Clears saved bailout references and skips bailout planning.'
+      : 'No bailout reference pins.';
+  }
+  if (pinCount > 0) return `${referencePinCountLabel(pinCount, 'bailout')} saved. Tap to review or change.`;
+  if (hasSelectedPoint) return 'Bailout reference selected. Tap to review or change.';
+  return 'Drop reference bailout pins.';
+}
+
+function campPlanOptionDetail(value: CampPlanPreference, pinCount: number): string {
+  if (value === 'skip') {
+    return pinCount > 0
+      ? 'Clears saved camp reference pins and skips camp planning.'
+      : 'No camp reference pins.';
+  }
+  if (pinCount > 0) return `${referencePinCountLabel(pinCount, 'camp')} saved. Tap to review or change.`;
+  return 'Drop reference camp pins.';
 }
 
 function remoteEntryProgressRatioForResupply(route: TripBuilderRouteInput | null): number | null {
@@ -3007,10 +3039,6 @@ function buildTripRoutePreviewCameraCommand(
   };
 }
 
-function buildBailoutRoutePreviewCameraCommand(routePoints: TripMapCoordinate[]): CameraCommand | null {
-  return buildTripRoutePreviewCameraCommand(routePoints, 'bailout');
-}
-
 function buildTripPlanMapModel(
   route: TripBuilderRouteInput | null,
   plan: TripPlan | null,
@@ -3231,6 +3259,7 @@ function TripPlanMapOverlay({
               mapStyle={DEFAULT_MAP_STYLE}
               mapboxToken={mapboxToken}
               hasToken={!!mapboxToken}
+              surfaceMode="compact"
               motionPriority="warm"
               interactive
               cameraMode="route_overview"
@@ -3269,39 +3298,6 @@ function TripPlanMapOverlay({
   );
 }
 
-function TripBuilderPickerMapStyleSwitch({
-  value,
-  onChange,
-}: {
-  value: MapStyleKey;
-  onChange: (style: MapStyleKey) => void;
-}) {
-  return (
-    <View style={styles.tripPickerMapStyleRow} testID="trip-builder-picker-map-style">
-      {TRIP_BUILDER_PICKER_MAP_STYLES.map((style) => {
-        const selected = value === style.key;
-        return (
-          <TouchableOpacity
-            key={style.key}
-            style={[styles.tripPickerMapStyleButton, selected && styles.tripPickerMapStyleButtonActive]}
-            activeOpacity={0.82}
-            onPress={() => onChange(style.key)}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            accessibilityLabel={`Use ${style.label} map style`}
-            testID={`trip-builder-picker-map-style-${style.key}`}
-          >
-            <Ionicons name={style.icon as any} size={12} color={selected ? '#081014' : TACTICAL.amber} />
-            <Text style={[styles.tripPickerMapStyleText, selected && styles.tripPickerMapStyleTextActive]}>
-              {style.label}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-}
-
 function CampPlanPickerOverlay({
   visible,
   route,
@@ -3323,16 +3319,15 @@ function CampPlanPickerOverlay({
   onClearPins: () => void;
   onClose: () => void;
 }) {
-  const [mapboxToken, setMapboxToken] = useState(() => getMapboxTokenSync());
-  const [pickerMapStyle, setPickerMapStyle] = useState<MapStyleKey>(DEFAULT_MAP_STYLE);
   const routePoints = useMemo(() => {
     const prepared = routePreviewPoints.filter(isValidMapCoordinate);
     if (prepared.length >= 2) return prepared;
     return route ? routeLinePointsForTripMap(route) : [];
   }, [route, routePreviewPoints]);
-  const campCameraCommand = useMemo(
-    () => buildTripRoutePreviewCameraCommand(routePoints, 'camp_plan'),
-    [routePoints],
+  const pickerRoutePoints = useMemo(() => simplifyTripBuilderPickerRoutePoints(routePoints), [routePoints]);
+  const pickerRouteCoords = useMemo(
+    () => pickerRoutePoints.map((point) => [point.longitude, point.latitude] as [number, number]),
+    [pickerRoutePoints],
   );
   const campMarkers = pins.map((pin, index): TripPlanMapMarker => ({
     id: pin.id,
@@ -3356,17 +3351,6 @@ function CampPlanPickerOverlay({
     mapChar: `E${index + 1}`,
     connectToRouteLine: false,
   }));
-
-  useEffect(() => {
-    if (!visible || mapboxToken) return;
-    let cancelled = false;
-    getMapboxToken().then((token) => {
-      if (!cancelled) setMapboxToken(token);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [mapboxToken, visible]);
 
   if (!visible) return null;
 
@@ -3392,28 +3376,24 @@ function CampPlanPickerOverlay({
             <Ionicons name="close" size={18} color={TACTICAL.text} />
           </TouchableOpacity>
         </View>
-        <TripBuilderPickerMapStyleSwitch value={pickerMapStyle} onChange={setPickerMapStyle} />
         <View style={styles.bailoutPickerMapFrame}>
-          {mapboxToken && routePoints.length > 0 ? (
-            <MapRenderer
-              points={routePoints}
-              pinMarkers={[...suggestedCampMarkers, ...campMarkers]}
-              routeColor={TACTICAL.amber}
-              mapStyle={pickerMapStyle}
-              mapboxToken={mapboxToken}
-              hasToken={!!mapboxToken}
-              motionPriority="warm"
+          {pickerRoutePoints.length > 0 ? (
+            <MapFallbackSurface
+              routeCoords={pickerRouteCoords}
+              markers={[...suggestedCampMarkers, ...campMarkers]}
+              compact
               interactive
-              cameraMode="route_overview"
-              cameraCommand={campCameraCommand}
               onMapTap={(coordinate) => onDropPin(coordinate)}
-              style={styles.tripMapSurface}
+              routeColor={TACTICAL.amber}
+              routeHaloColor="rgba(8,14,18,0.62)"
+              showStatusLabel
+              statusLabel="Reference preview"
             />
           ) : (
             <View style={styles.tripMapFallback}>
               <Ionicons name="map-outline" size={24} color={TACTICAL.textMuted} />
               <Text style={styles.tripMapFallbackTitle}>Camp map unavailable</Text>
-              <Text style={styles.tripMapFallbackText}>Route geometry or map token is unavailable. Camp pins can be added when the route map is available.</Text>
+              <Text style={styles.tripMapFallbackText}>Route geometry is unavailable. Camp pins can be added when the route preview is available.</Text>
             </View>
           )}
         </View>
@@ -3514,13 +3494,16 @@ function BailoutPlanPickerOverlay({
   onClearPins: () => void;
   onClose: () => void;
 }) {
-  const [mapboxToken, setMapboxToken] = useState(() => getMapboxTokenSync());
-  const [pickerMapStyle, setPickerMapStyle] = useState<MapStyleKey>(DEFAULT_MAP_STYLE);
   const routePoints = useMemo(() => {
     const prepared = routePreviewPoints.filter(isValidMapCoordinate);
     if (prepared.length >= 2) return prepared;
     return route ? routeLinePointsForTripMap(route) : [];
   }, [route, routePreviewPoints]);
+  const pickerRoutePoints = useMemo(() => simplifyTripBuilderPickerRoutePoints(routePoints), [routePoints]);
+  const pickerRouteCoords = useMemo(
+    () => pickerRoutePoints.map((point) => [point.longitude, point.latitude] as [number, number]),
+    [pickerRoutePoints],
+  );
   const routeEndpointMarkers = useMemo(() => {
     if (routePoints.length === 0) return [];
     const start = routePoints[0];
@@ -3549,10 +3532,6 @@ function BailoutPlanPickerOverlay({
     }
     return markers;
   }, [routePoints]);
-  const bailoutCameraCommand = useMemo(
-    () => buildBailoutRoutePreviewCameraCommand(routePoints),
-    [routePoints],
-  );
   const selectedMarker = selectedPoint && !pins.some((pin) => pin.id === selectedPoint.id) ? [{
     id: selectedPoint.id,
     latitude: selectedPoint.coordinate.latitude,
@@ -3573,17 +3552,6 @@ function BailoutPlanPickerOverlay({
     color: ITINERARY_BAILOUT_COLOR,
     mapChar: `B${index + 1}`,
   }));
-
-  useEffect(() => {
-    if (!visible || mapboxToken) return;
-    let cancelled = false;
-    getMapboxToken().then((token) => {
-      if (!cancelled) setMapboxToken(token);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [mapboxToken, visible]);
 
   if (!visible) return null;
 
@@ -3609,28 +3577,24 @@ function BailoutPlanPickerOverlay({
             <Ionicons name="close" size={18} color={TACTICAL.text} />
           </TouchableOpacity>
         </View>
-        <TripBuilderPickerMapStyleSwitch value={pickerMapStyle} onChange={setPickerMapStyle} />
         <View style={styles.bailoutPickerMapFrame}>
-          {mapboxToken && routePoints.length > 0 ? (
-            <MapRenderer
-              points={routePoints}
-              pinMarkers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}
-              routeColor={TACTICAL.amber}
-              mapStyle={pickerMapStyle}
-              mapboxToken={mapboxToken}
-              hasToken={!!mapboxToken}
-              motionPriority="warm"
+          {pickerRoutePoints.length > 0 ? (
+            <MapFallbackSurface
+              routeCoords={pickerRouteCoords}
+              markers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}
+              compact
               interactive
-              cameraMode="route_overview"
-              cameraCommand={bailoutCameraCommand}
               onMapTap={(coordinate) => onDropPoint(coordinate)}
-              style={styles.tripMapSurface}
+              routeColor={TACTICAL.amber}
+              routeHaloColor="rgba(8,14,18,0.62)"
+              showStatusLabel
+              statusLabel="Reference preview"
             />
           ) : (
             <View style={styles.tripMapFallback}>
               <Ionicons name="map-outline" size={24} color={TACTICAL.textMuted} />
               <Text style={styles.tripMapFallbackTitle}>Bailout map unavailable</Text>
-              <Text style={styles.tripMapFallbackText}>Route geometry or map token is unavailable. Bailout pins can be added when the route map is available.</Text>
+              <Text style={styles.tripMapFallbackText}>Route geometry is unavailable. Bailout pins can be added when the route preview is available.</Text>
             </View>
           )}
         </View>
@@ -5454,23 +5418,24 @@ export default function ExploreTripBuilderScreen() {
                               <Text style={styles.smartResupplyPickerHint}>Finding fuel options...</Text>
                             </View>
                           ) : null}
-                          {smartResupplyLoading === 'fuel' && smartResupplyFuelOptions.length > 0 ? (
-                            <View style={styles.smartResupplyLoadingRow}>
-                              <ActivityIndicator size="small" color={TACTICAL.amber} />
-                              <Text style={styles.smartResupplyPickerHint}>Updating nearby fuel options...</Text>
-                            </View>
+                          {smartResupplyFuelOptions.length > 0 ? (
+                            <ScrollView
+                              style={styles.smartResupplyOptionScroll}
+                              contentContainerStyle={styles.smartResupplyOptionList}
+                              nestedScrollEnabled
+                              showsVerticalScrollIndicator={smartResupplyFuelOptions.length > 3}
+                            >
+                              {smartResupplyFuelOptions.map((option) => (
+                                <SmartResupplyOptionCard
+                                  key={smartResupplyOptionStableKey(option)}
+                                  option={option}
+                                  selected={selectedSmartFuel ? smartResupplyOptionStableKey(selectedSmartFuel) === smartResupplyOptionStableKey(option) : false}
+                                  markerLabel="A"
+                                  onPress={() => handleSelectSmartFuel(option)}
+                                />
+                              ))}
+                            </ScrollView>
                           ) : null}
-                          <View style={styles.smartResupplyOptionList}>
-                            {smartResupplyFuelOptions.map((option) => (
-                              <SmartResupplyOptionCard
-                                key={smartResupplyOptionStableKey(option)}
-                                option={option}
-                                selected={selectedSmartFuel ? smartResupplyOptionStableKey(selectedSmartFuel) === smartResupplyOptionStableKey(option) : false}
-                                markerLabel="A"
-                                onPress={() => handleSelectSmartFuel(option)}
-                              />
-                            ))}
-                          </View>
 
                           {smartResupplyPreference === 'fuel_supplies' && selectedSmartFuel?.groceries ? (
                             <View style={styles.smartResupplyNotice} testID="trip-builder-smart-resupply-one-stop">
@@ -5496,23 +5461,24 @@ export default function ExploreTripBuilderScreen() {
                                   <Text style={styles.smartResupplyPickerHint}>Finding grocery and supply options...</Text>
                                 </View>
                               ) : null}
-                              {smartResupplyLoading === 'supplies' && smartResupplySupplyOptions.length > 0 ? (
-                                <View style={styles.smartResupplyLoadingRow}>
-                                  <ActivityIndicator size="small" color={TACTICAL.amber} />
-                                  <Text style={styles.smartResupplyPickerHint}>Updating nearby grocery/supply options...</Text>
-                                </View>
+                              {smartResupplySupplyOptions.length > 0 ? (
+                                <ScrollView
+                                  style={styles.smartResupplyOptionScroll}
+                                  contentContainerStyle={styles.smartResupplyOptionList}
+                                  nestedScrollEnabled
+                                  showsVerticalScrollIndicator={smartResupplySupplyOptions.length > 3}
+                                >
+                                  {smartResupplySupplyOptions.map((option) => (
+                                    <SmartResupplyOptionCard
+                                      key={smartResupplyOptionStableKey(option)}
+                                      option={option}
+                                      selected={selectedSmartSupply ? smartResupplyOptionStableKey(selectedSmartSupply) === smartResupplyOptionStableKey(option) : false}
+                                      markerLabel="B"
+                                      onPress={() => handleSelectSmartSupply(option)}
+                                    />
+                                  ))}
+                                </ScrollView>
                               ) : null}
-                              <View style={styles.smartResupplyOptionList}>
-                                {smartResupplySupplyOptions.map((option) => (
-                                  <SmartResupplyOptionCard
-                                    key={smartResupplyOptionStableKey(option)}
-                                    option={option}
-                                    selected={selectedSmartSupply ? smartResupplyOptionStableKey(selectedSmartSupply) === smartResupplyOptionStableKey(option) : false}
-                                    markerLabel="B"
-                                    onPress={() => handleSelectSmartSupply(option)}
-                                  />
-                                ))}
-                              </View>
                             </View>
                           ) : null}
 
@@ -5561,7 +5527,7 @@ export default function ExploreTripBuilderScreen() {
                               ]}
                               numberOfLines={2}
                             >
-                              {option.detail}
+                              {bailoutPlanOptionDetail(option.value, bailoutPlanPins.length, !!selectedBailoutPoint)}
                             </Text>
                           </TouchableOpacity>
                         ))}
@@ -5580,7 +5546,9 @@ export default function ExploreTripBuilderScreen() {
                               <Text style={styles.bailoutSummaryMeta} numberOfLines={2}>
                                 {selectedBailoutPoint
                                   ? selectedBailoutPoint.subtitle ?? 'Emergency bailout reference point selected.'
-                                  : 'Open the map to drop operator-selected reference bailout pins along the route.'}
+                                  : bailoutPlanPins.length > 0
+                                    ? 'Operator-marked bailout reference pins are saved. Verify legal access, drivability, and current conditions before relying on them.'
+                                    : 'Open the map to drop operator-selected reference bailout pins along the route.'}
                               </Text>
                             </View>
                             <TouchableOpacity
@@ -5654,7 +5622,7 @@ export default function ExploreTripBuilderScreen() {
                             styles.planningChoiceDetail,
                             campPlanPreference === 'skip' && styles.planningChoiceDetailSelected,
                           ]} numberOfLines={2}>
-                            No camp reference pins.
+                            {campPlanOptionDetail('skip', campPlanPins.length)}
                           </Text>
                         </TouchableOpacity>
                         <TouchableOpacity
@@ -5679,7 +5647,7 @@ export default function ExploreTripBuilderScreen() {
                             styles.planningChoiceDetail,
                             campPlanPreference === 'pins' && styles.planningChoiceDetailSelected,
                           ]} numberOfLines={2}>
-                            Drop reference camp pins.
+                            {campPlanOptionDetail('pins', campPlanPins.length)}
                           </Text>
                         </TouchableOpacity>
                       </View>
@@ -6235,7 +6203,7 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   tripSetupScroller: { flex: 1, minHeight: 0 },
-  tripSetupContent: { gap: 7, paddingBottom: 2 },
+  tripSetupContent: { gap: 7, paddingBottom: TRIP_SETUP_BUILD_BUTTON_CLEARANCE },
   tripSetupDefaults: {
     flexDirection: 'row',
     gap: 8,
@@ -6504,8 +6472,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 7,
   },
+  smartResupplyOptionScroll: {
+    height: SMART_RESUPPLY_OPTION_LIST_HEIGHT,
+    flexGrow: 0,
+  },
   smartResupplyOptionList: {
     gap: 5,
+    paddingBottom: 1,
   },
   smartResupplyOption: {
     minHeight: 46,
@@ -7773,37 +7746,6 @@ const styles = StyleSheet.create({
   tripMapHeaderCopy: { flex: 1, minWidth: 0 },
   tripMapTitle: { color: TACTICAL.text, fontSize: 16, fontWeight: '900' },
   tripMapSubtitle: { color: TACTICAL.textMuted, fontSize: 9, lineHeight: 13, fontWeight: '700' },
-  tripPickerMapStyleRow: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
-    padding: 3,
-  },
-  tripPickerMapStyleButton: {
-    minHeight: 28,
-    borderRadius: 7,
-    paddingHorizontal: 9,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  tripPickerMapStyleButtonActive: {
-    backgroundColor: TACTICAL.amber,
-  },
-  tripPickerMapStyleText: {
-    color: TACTICAL.amber,
-    fontSize: 9,
-    fontWeight: '900',
-  },
-  tripPickerMapStyleTextActive: {
-    color: '#081014',
-  },
   tripMapFrame: {
     flex: 1,
     minHeight: 220,
@@ -7814,7 +7756,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#081014',
   },
   bailoutPickerMapFrame: {
-    flex: 1,
+    flex: 0,
+    height: TRIP_BUILDER_PICKER_MAP_HEIGHT,
     minHeight: 190,
     borderRadius: 12,
     overflow: 'hidden',

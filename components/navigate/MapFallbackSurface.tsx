@@ -1,6 +1,13 @@
-import React, { useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import Svg, { Circle, Line, Polyline, Rect } from 'react-native-svg';
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type GestureResponderEvent,
+  type LayoutChangeEvent,
+} from 'react-native';
+import Svg, { Circle, Line, Polyline, Rect, Text as SvgText } from 'react-native-svg';
 
 import { TACTICAL } from '../../lib/theme';
 
@@ -13,6 +20,7 @@ type FallbackMarker = {
   lng?: number;
   color?: string;
   type?: string;
+  mapChar?: string;
 };
 
 type FallbackSegment = {
@@ -31,6 +39,10 @@ export type MapFallbackSurfaceProps = {
   showStatusLabel?: boolean;
   statusLabel?: string | null;
   transparentBackground?: boolean;
+  interactive?: boolean;
+  onMapTap?: (coordinate: { latitude: number; longitude: number }) => void;
+  routeColor?: string;
+  routeHaloColor?: string;
 };
 
 function normalizePoint(point: unknown): LngLat | null {
@@ -93,6 +105,24 @@ function makeProjector(bounds: NonNullable<ReturnType<typeof buildBounds>>, widt
   };
 }
 
+function coordinateFromProjectedPoint(
+  bounds: NonNullable<ReturnType<typeof buildBounds>>,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+) {
+  const pad = 18;
+  const usableWidth = Math.max(1, width - pad * 2);
+  const usableHeight = Math.max(1, height - pad * 2);
+  const clampedX = Math.min(1, Math.max(0, (x - pad) / usableWidth));
+  const clampedY = Math.min(1, Math.max(0, (y - pad) / usableHeight));
+  return {
+    latitude: bounds.minLat + (1 - clampedY) * (bounds.maxLat - bounds.minLat),
+    longitude: bounds.minLng + clampedX * (bounds.maxLng - bounds.minLng),
+  };
+}
+
 function lineToSvgPoints(line: LngLat[], project: (point: LngLat) => readonly [number, number]) {
   return line.map((point) => project(point).join(',')).join(' ');
 }
@@ -108,7 +138,12 @@ export default function MapFallbackSurface({
   statusLabel = null,
   transparentBackground = false,
   userLocation,
+  interactive = false,
+  onMapTap,
+  routeColor = 'rgba(95,209,255,0.88)',
+  routeHaloColor = 'rgba(95,209,255,0.2)',
 }: MapFallbackSurfaceProps) {
+  const [surfaceSize, setSurfaceSize] = useState({ width: 1, height: 1 });
   const routeLine = useMemo(() => normalizeLine(routeCoords), [routeCoords]);
   const progressLine = useMemo(() => normalizeLine(progressRouteCoords), [progressRouteCoords]);
   const segmentLines = useMemo(
@@ -134,6 +169,24 @@ export default function MapFallbackSurface({
       ),
     [markerPoints, progressLine, routeLine, segmentLines, userPoint],
   );
+  const width = 360;
+  const height = compact ? 150 : 640;
+  const handleLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = event.nativeEvent.layout.width;
+    const nextHeight = event.nativeEvent.layout.height;
+    if (nextWidth > 0 && nextHeight > 0) {
+      setSurfaceSize({ width: nextWidth, height: nextHeight });
+    }
+  }, []);
+  const handlePress = useCallback(
+    (event: GestureResponderEvent) => {
+      if (!interactive || !onMapTap || !bounds) return;
+      const x = (event.nativeEvent.locationX / Math.max(1, surfaceSize.width)) * width;
+      const y = (event.nativeEvent.locationY / Math.max(1, surfaceSize.height)) * height;
+      onMapTap(coordinateFromProjectedPoint(bounds, width, height, x, y));
+    },
+    [bounds, height, interactive, onMapTap, surfaceSize.height, surfaceSize.width, width],
+  );
 
   if (!bounds) {
     return (
@@ -151,13 +204,14 @@ export default function MapFallbackSurface({
     );
   }
 
-  const width = 360;
-  const height = compact ? 150 : 640;
   const project = makeProjector(bounds, width, height);
 
   return (
-    <View
-      pointerEvents="none"
+    <Pressable
+      pointerEvents={interactive ? 'auto' : 'none'}
+      disabled={!interactive}
+      onLayout={handleLayout}
+      onPress={handlePress}
       style={[
         styles.shell,
         transparentBackground && styles.transparentSurface,
@@ -210,7 +264,7 @@ export default function MapFallbackSurface({
             <Polyline
               points={lineToSvgPoints(routeLine, project)}
               fill="none"
-              stroke="rgba(95,209,255,0.2)"
+              stroke={routeHaloColor}
               strokeWidth={compact ? 12 : 16}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -218,7 +272,7 @@ export default function MapFallbackSurface({
             <Polyline
               points={lineToSvgPoints(routeLine, project)}
               fill="none"
-              stroke="rgba(95,209,255,0.88)"
+              stroke={routeColor}
               strokeWidth={compact ? 4 : 5}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -238,15 +292,28 @@ export default function MapFallbackSurface({
         {markerPoints.map(({ marker, point }, index) => {
           const [x, y] = project(point as LngLat);
           return (
-            <Circle
-              key={`marker-${index}`}
-              cx={x}
-              cy={y}
-              r={compact ? 3.8 : 5}
-              fill={marker.color || (marker.type === 'bailout' ? '#FFCF5A' : '#65D4FF')}
-              stroke="#05090D"
-              strokeWidth="1.5"
-            />
+            <React.Fragment key={`marker-${index}`}>
+              <Circle
+                cx={x}
+                cy={y}
+                r={compact ? 5 : 6.5}
+                fill={marker.color || (marker.type === 'bailout' ? '#FFCF5A' : '#65D4FF')}
+                stroke="#05090D"
+                strokeWidth="1.5"
+              />
+              {marker.mapChar ? (
+                <SvgText
+                  x={x}
+                  y={y + (compact ? 2.6 : 3)}
+                  fill="#05090D"
+                  fontSize={compact ? 6 : 7}
+                  fontWeight="900"
+                  textAnchor="middle"
+                >
+                  {marker.mapChar.slice(0, 2)}
+                </SvgText>
+              ) : null}
+            </React.Fragment>
           );
         })}
         {userPoint ? (
@@ -282,7 +349,7 @@ export default function MapFallbackSurface({
           ) : null}
         </View>
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 

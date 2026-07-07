@@ -64,20 +64,38 @@ assertIncludes(
   'smartResupplyLoading === \'fuel\' && smartResupplyFuelOptions.length === 0',
   'Fuel picker should only show blocking loading state before options exist',
 );
+assert(
+  !screen.includes('Updating nearby fuel options...'),
+  'Fuel picker should not show contradictory background-refresh copy once usable options are already visible.',
+);
 assertIncludes(
   screen,
-  'Updating nearby fuel options...',
-  'Fuel picker should show background refresh copy instead of making cards disappear',
+  'styles.smartResupplyOptionScroll',
+  'Fuel picker should keep candidate rows inside a bounded scroll area so later route-context refreshes do not move downstream controls.',
 );
 assertIncludes(
   screen,
   'smartResupplyLoading === \'supplies\' && smartResupplySupplyOptions.length === 0',
   'Supply picker should only show blocking loading state before options exist',
 );
+assert(
+  !screen.includes('Updating nearby grocery/supply options...'),
+  'Supply picker should not show contradictory background-refresh copy once usable options are already visible.',
+);
 assertIncludes(
   screen,
-  'Updating nearby grocery/supply options...',
-  'Supply picker should show background refresh copy instead of making cards disappear',
+  'nestedScrollEnabled',
+  'Smart Resupply option lists should be independently scrollable on mobile setup screens.',
+);
+assertIncludes(
+  screen,
+  'TRIP_SETUP_BUILD_BUTTON_CLEARANCE',
+  'Trip Setup scroller should reserve bottom clearance for the fixed Build Trip Plan button on mobile.',
+);
+assertIncludes(
+  screen,
+  'paddingBottom: TRIP_SETUP_BUILD_BUTTON_CLEARANCE',
+  'Trip Setup scroll content should let camp and bailout controls scroll above the fixed Build Trip Plan button.',
 );
 assertIncludes(
   screen,

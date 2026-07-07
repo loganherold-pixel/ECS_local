@@ -158,6 +158,62 @@ assert.ok(
   'Early city stops should not beat the last viable pre-remote-entry stop when both are close to the approach route.',
 );
 
+const longApproachOrigin = { latitude: 35.0, longitude: -117.0 };
+const longApproachTrailhead = { latitude: 45.0, longitude: -117.0 };
+const longApproachRoute = [
+  longApproachOrigin,
+  { latitude: 38.0, longitude: -117.0 },
+  { latitude: 41.0, longitude: -117.0 },
+  { latitude: 43.5, longitude: -117.0 },
+  longApproachTrailhead,
+];
+const longApproachRanked = rankApproachResupplyOptions({
+  category: 'fuel',
+  origin: longApproachOrigin,
+  trailhead: longApproachTrailhead,
+  approachRoute: longApproachRoute,
+  remoteEntryProgressRatio: 0.88,
+  candidates: [
+    {
+      id: 'early-high-provider-fuel',
+      title: 'Early High Provider Fuel',
+      category: 'fuel',
+      coordinate: { latitude: 41.0, longitude: -117.0 },
+      sourceType: 'mapbox_search',
+      confidence: 'high',
+      score: 0.99,
+    },
+    {
+      id: 'last-viable-before-remote-fuel',
+      title: 'Last Viable Before Remote Fuel',
+      category: 'fuel',
+      coordinate: { latitude: 43.4, longitude: -117.0 },
+      sourceType: 'mapbox_search',
+      confidence: 'low',
+      score: 0.55,
+    },
+    {
+      id: 'remote-edge-fuel',
+      title: 'Remote Edge Fuel',
+      category: 'fuel',
+      coordinate: { latitude: 44.2, longitude: -117.0 },
+      sourceType: 'mapbox_search',
+      confidence: 'high',
+      score: 0.99,
+    },
+  ],
+  limit: 3,
+});
+assert.strictEqual(
+  longApproachRanked[0].id,
+  'last-viable-before-remote-fuel',
+  'Long GPS-to-trailhead approaches should prefer the last viable civilization-side fuel stop over a stronger provider match far earlier on the route.',
+);
+assert.ok(
+  longApproachRanked.find((option) => option.id === 'early-high-provider-fuel')?.rank > longApproachRanked.find((option) => option.id === 'last-viable-before-remote-fuel')?.rank,
+  'High provider confidence alone should not pull Smart Resupply hundreds of miles before the remote-entry corridor.',
+);
+
 assert.ok(
   screen.includes('SMART_RESUPPLY_APPROACH_SIGNATURE_MAX_POINTS'),
   'Smart Resupply refresh signatures should cap sampled approach-route points.',
