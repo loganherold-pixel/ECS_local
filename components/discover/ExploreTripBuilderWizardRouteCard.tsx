@@ -9,6 +9,7 @@ import {
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECS, TACTICAL } from '../../lib/theme';
 import type { ExploreWizardRouteCandidate } from '../../lib/explore/exploreTripBuilderWizard';
+import { getExplorePerformanceNow } from '../../lib/explore/explorePerformanceDiagnostics';
 import {
   createRouteImageMemoryCache,
   ECS_ROUTE_IMAGE_NEUTRAL_FALLBACK_URI,
@@ -25,6 +26,7 @@ type ExploreTripBuilderWizardRouteCardProps = {
   onBuildTrip: () => void;
   deferThumbnail?: boolean;
   deferEnrichment?: boolean;
+  onThumbnailLoadDuration?: (durationMs: number, metadata: Record<string, unknown>) => void;
 };
 
 function confidenceValue(candidate: ExploreWizardRouteCandidate): string {
@@ -50,8 +52,10 @@ function ExploreTripBuilderWizardRouteCardComponent({
   onBuildTrip,
   deferThumbnail = false,
   deferEnrichment = false,
+  onThumbnailLoadDuration,
 }: ExploreTripBuilderWizardRouteCardProps) {
   const imageCacheRef = useRef(createRouteImageMemoryCache());
+  const thumbnailLoadStartedAtRef = useRef<number | null>(null);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const [thumbnailReady, setThumbnailReady] = useState(!deferThumbnail);
   const [enrichmentReady, setEnrichmentReady] = useState(!deferEnrichment);
@@ -107,11 +111,40 @@ function ExploreTripBuilderWizardRouteCardComponent({
                 style={styles.thumbnail}
                 resizeMode="cover"
                 accessibilityIgnoresInvertColors
+                onLoadStart={() => {
+                  thumbnailLoadStartedAtRef.current = getExplorePerformanceNow();
+                }}
                 onLoad={() => {
                   imageCacheRef.current.markLoaded(candidate.id, thumbnailUri);
+                  const startedAtMs = thumbnailLoadStartedAtRef.current;
+                  if (startedAtMs != null) {
+                    onThumbnailLoadDuration?.(
+                      Math.max(0, getExplorePerformanceNow() - startedAtMs),
+                      {
+                        routeId: candidate.id,
+                        sourceKind: candidate.sourceKind,
+                        status: 'loaded',
+                        uriState: resolvedThumbnail.source,
+                      },
+                    );
+                  }
+                  thumbnailLoadStartedAtRef.current = null;
                 }}
                 onError={() => {
                   imageCacheRef.current.markFailed(thumbnailUri);
+                  const startedAtMs = thumbnailLoadStartedAtRef.current;
+                  if (startedAtMs != null) {
+                    onThumbnailLoadDuration?.(
+                      Math.max(0, getExplorePerformanceNow() - startedAtMs),
+                      {
+                        routeId: candidate.id,
+                        sourceKind: candidate.sourceKind,
+                        status: 'error',
+                        uriState: resolvedThumbnail.source,
+                      },
+                    );
+                  }
+                  thumbnailLoadStartedAtRef.current = null;
                   setThumbnailFailed(true);
                 }}
               />
@@ -219,7 +252,8 @@ const ExploreTripBuilderWizardRouteCard = React.memo(
     previous.sourceLabel === next.sourceLabel &&
     previous.isSaved === next.isSaved &&
     previous.deferThumbnail === next.deferThumbnail &&
-    previous.deferEnrichment === next.deferEnrichment,
+    previous.deferEnrichment === next.deferEnrichment &&
+    previous.onThumbnailLoadDuration === next.onThumbnailLoadDuration,
 );
 
 export default ExploreTripBuilderWizardRouteCard;

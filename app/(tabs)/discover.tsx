@@ -433,6 +433,7 @@ type ExploreWizardRouteCardListItemProps = {
   onStartCandidate: (candidate: ExploreWizardRouteCandidate) => void;
   onSaveCandidate: (candidate: ExploreWizardRouteCandidate) => void;
   onBuildTripCandidate: (candidate: ExploreWizardRouteCandidate) => void;
+  onThumbnailLoadDuration: (durationMs: number, metadata: Record<string, unknown>) => void;
 };
 
 const ExploreWizardRouteCardListItem = React.memo(function ExploreWizardRouteCardListItem({
@@ -445,6 +446,7 @@ const ExploreWizardRouteCardListItem = React.memo(function ExploreWizardRouteCar
   onStartCandidate,
   onSaveCandidate,
   onBuildTripCandidate,
+  onThumbnailLoadDuration,
 }: ExploreWizardRouteCardListItemProps) {
   return (
     <View style={[s.exploreWizardCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}>
@@ -458,6 +460,7 @@ const ExploreWizardRouteCardListItem = React.memo(function ExploreWizardRouteCar
         onStart={() => onStartCandidate(candidate)}
         onSave={() => onSaveCandidate(candidate)}
         onBuildTrip={() => onBuildTripCandidate(candidate)}
+        onThumbnailLoadDuration={onThumbnailLoadDuration}
       />
     </View>
   );
@@ -466,7 +469,8 @@ const ExploreWizardRouteCardListItem = React.memo(function ExploreWizardRouteCar
   previous.routeCardWidth === next.routeCardWidth &&
   previous.isSaved === next.isSaved &&
   previous.deferThumbnail === next.deferThumbnail &&
-  previous.deferEnrichment === next.deferEnrichment);
+  previous.deferEnrichment === next.deferEnrichment &&
+  previous.onThumbnailLoadDuration === next.onThumbnailLoadDuration);
 
 function ExploreWizardRouteListSkeletonFooter({ columns }: { columns: number }) {
   const rows = Array.from({ length: Math.max(1, Math.min(columns, 2)) });
@@ -995,6 +999,17 @@ function DiscoverScreenInner() {
   const lastExploreSourceDiagnosticsSignatureRef = useRef<string | null>(null);
   const explorePerformanceFirstVisibleLoggedRef = useRef<string | null>(null);
   const explorePerformanceFullListLoggedRef = useRef<string | null>(null);
+  const explorePerformanceImageFetchCacheRef = useRef<{
+    runId: string;
+    startedAtMs: number;
+    endedAtMs: number;
+    count: number;
+    failures: number;
+    slowestMs: number;
+    routeIds: string[];
+    lastStatus: string | null;
+    lastSource: string | null;
+  } | null>(null);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
   useEffect(() => {
     activeVehicleIdRef.current = activeVehicleId;
@@ -1370,6 +1385,7 @@ function DiscoverScreenInner() {
   useEffect(() => {
     explorePerformanceFirstVisibleLoggedRef.current = null;
     explorePerformanceFullListLoggedRef.current = null;
+    explorePerformanceImageFetchCacheRef.current = null;
   }, [explorePerformanceRun.runId]);
 
   useEffect(() => {
@@ -3507,6 +3523,63 @@ function DiscoverScreenInner() {
     () => visibleExploreWizardCandidates.slice(0, exploreGuidanceReadyVisibleLimit),
     [exploreGuidanceReadyVisibleLimit, visibleExploreWizardCandidates],
   );
+  const handleExploreWizardThumbnailLoadDuration = useCallback((
+    durationMs: number,
+    metadata: Record<string, unknown>,
+  ) => {
+    const run = explorePerformanceRunRef.current;
+    const nowMs = getExplorePerformanceNow();
+    const safeDurationMs = Math.max(0, Number.isFinite(durationMs) ? durationMs : 0);
+    const routeId = typeof metadata.routeId === 'string' ? metadata.routeId : null;
+    const status = typeof metadata.status === 'string' ? metadata.status : null;
+    const source = typeof metadata.uriState === 'string' ? metadata.uriState : null;
+    const aggregate =
+      explorePerformanceImageFetchCacheRef.current?.runId === run.runId
+        ? explorePerformanceImageFetchCacheRef.current
+        : {
+            runId: run.runId,
+            startedAtMs: Math.max(run.startedAtMs, nowMs - safeDurationMs),
+            endedAtMs: nowMs,
+            count: 0,
+            failures: 0,
+            slowestMs: 0,
+            routeIds: [],
+            lastStatus: null,
+            lastSource: null,
+          };
+
+    aggregate.startedAtMs = Math.min(aggregate.startedAtMs, Math.max(run.startedAtMs, nowMs - safeDurationMs));
+    aggregate.endedAtMs = Math.max(aggregate.endedAtMs, nowMs);
+    aggregate.count += 1;
+    aggregate.failures += status === 'error' ? 1 : 0;
+    aggregate.slowestMs = Math.max(aggregate.slowestMs, safeDurationMs);
+    aggregate.lastStatus = status;
+    aggregate.lastSource = source;
+    if (routeId && !aggregate.routeIds.includes(routeId)) {
+      aggregate.routeIds = aggregate.routeIds.length >= 8
+        ? [...aggregate.routeIds.slice(1), routeId]
+        : [...aggregate.routeIds, routeId];
+    }
+    explorePerformanceImageFetchCacheRef.current = aggregate;
+
+    recordExplorePerformancePhase(run, 'image_fetch_cache', {
+      startedAtMs: aggregate.startedAtMs,
+      endedAtMs: aggregate.endedAtMs,
+      metadata: {
+        imagesRequested: aggregate.count,
+        failures: aggregate.failures,
+        slowestImageMs: Math.round(aggregate.slowestMs),
+        lastStatus: aggregate.lastStatus,
+        lastSource: aggregate.lastSource,
+        sampledRouteIds: aggregate.routeIds,
+        visibleRoutes: visibleExploreWizardCardCandidates.length,
+      },
+    });
+    recordExplorePerformanceCount(run, {
+      imagesRequested: aggregate.count,
+      routesRendered: visibleExploreWizardCardCandidates.length,
+    });
+  }, [visibleExploreWizardCardCandidates.length]);
   const hasMoreExploreWizardCandidates =
     visibleExploreWizardCardCandidates.length < visibleExploreWizardCandidates.length;
   const exploreWizardCandidateKeyExtractor = useCallback(
@@ -3525,11 +3598,13 @@ function DiscoverScreenInner() {
         onStartCandidate={handleStartExploreWizardCandidate}
         onSaveCandidate={handleSaveExploreWizardCandidate}
         onBuildTripCandidate={handleBuildTripFromExploreWizardCandidate}
+        onThumbnailLoadDuration={handleExploreWizardThumbnailLoadDuration}
       />
     ),
     [
       favoriteTrailIds,
       handleBuildTripFromExploreWizardCandidate,
+      handleExploreWizardThumbnailLoadDuration,
       handlePreviewExploreWizardCandidate,
       handleSaveExploreWizardCandidate,
       handleStartExploreWizardCandidate,
