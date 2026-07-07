@@ -74,7 +74,8 @@ const WEBVIEW_HARD_FAILURE_TIMEOUT_MS = 90000;
 const MAP_CONSTRUCTOR_RETRY_LIMIT = 3;
 const MAP_CONSTRUCTOR_RETRY_BASE_MS = 650;
 const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
-const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 48;
+const FULL_MAP_MAX_TILE_CACHE_SIZE = 96;
+const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 32;
 const MAX_KNOWN_CAMPSITE_SOURCE_MARKERS = 40;
 const MAX_ROUTE_RENDER_POINTS = 2400;
 const MAX_PROGRESS_ROUTE_RENDER_POINTS = 2400;
@@ -1920,15 +1921,17 @@ function makeMapHtml(
   fallbackStyleUrls: string[],
   instanceKey: number,
   surfaceMode: MapRendererProps['surfaceMode'],
-  initialInteractive: boolean,
 ) {
   const escapedToken = JSON.stringify(token);
   const escapedInitialStyleUrl = JSON.stringify(initialStyleUrl);
   const escapedFallbackStyleUrls = JSON.stringify(fallbackStyleUrls || []);
   const escapedInstanceKey = JSON.stringify(instanceKey);
+  const initialInteractive = surfaceMode !== 'compact';
   const escapedInitialInteractive = JSON.stringify(initialInteractive);
   const compactTileCacheSize = surfaceMode === 'compact' ? COMPACT_MAP_MAX_TILE_CACHE_SIZE : null;
+  const maxTileCacheSize = compactTileCacheSize ?? FULL_MAP_MAX_TILE_CACHE_SIZE;
   const escapedCompactTileCacheSize = JSON.stringify(compactTileCacheSize);
+  const escapedMaxTileCacheSize = JSON.stringify(maxTileCacheSize);
   const escapedTerrainSourceId = JSON.stringify(MAPBOX_3D_TERRAIN_SOURCE_ID);
 
   return `<!DOCTYPE html>
@@ -2759,6 +2762,8 @@ function makeMapHtml(
       var fallbackStyleUrls = ${escapedFallbackStyleUrls};
       var initialInteractive = ${escapedInitialInteractive};
       var compactTileCacheSize = ${escapedCompactTileCacheSize};
+      var mapPixelRatio = Math.min(window.devicePixelRatio || 1, compactTileCacheSize ? 0.75 : 1);
+      var maxTileCacheSize = ${escapedMaxTileCacheSize};
       var terrainSourceId = ${escapedTerrainSourceId};
       var activeStyleUrl = ${escapedInitialStyleUrl};
       var activeMapStyleKey = null;
@@ -7254,15 +7259,18 @@ function makeMapHtml(
           keyboard: false,
           touchZoomRotate: initialInteractive,
           doubleClickZoom: initialInteractive,
+          pixelRatio: mapPixelRatio,
           antialias: false,
           preserveDrawingBuffer: false,
           failIfMajorPerformanceCaveat: false,
           performanceMetricsCollection: false,
-          fadeDuration: 0
+          fadeDuration: 0,
+          renderWorldCopies: false,
+          trackResize: false,
+          refreshExpiredTiles: false,
+          crossSourceCollisions: false,
+          maxTileCacheSize: maxTileCacheSize
         };
-        if (compactTileCacheSize) {
-          mapOptions.maxTileCacheSize = compactTileCacheSize;
-        }
         map = new mapboxgl.Map(mapOptions);
         mapSourceRegistry = createMapSourceRegistry();
         mapLayerRegistry = createMapLayerRegistry();
@@ -8006,10 +8014,9 @@ const MapRenderer = React.memo(function MapRenderer({
             MAP_STYLE_FALLBACK_CHAIN,
             webViewInstanceKey,
             surfaceMode,
-            interactive !== false,
           )
         : '',
-    [shouldLoadMap, mapboxToken, bootStyleUrl, webViewInstanceKey, surfaceMode, interactive],
+    [shouldLoadMap, mapboxToken, bootStyleUrl, webViewInstanceKey, surfaceMode],
   );
   const htmlHash = useMemo(() => stableStringify({
     shouldLoadMap,
@@ -8892,7 +8899,7 @@ const MapRenderer = React.memo(function MapRenderer({
           scrollEnabled={false}
           overScrollMode="never"
           bounces={false}
-          androidLayerType="hardware"
+          androidLayerType={interactive === false ? 'none' : 'hardware'}
           mixedContentMode="always"
           thirdPartyCookiesEnabled
           allowFileAccess

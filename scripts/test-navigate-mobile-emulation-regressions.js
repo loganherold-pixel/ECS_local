@@ -11,6 +11,7 @@ function read(relativePath) {
 }
 
 const navigateSource = read('app/(tabs)/navigate.tsx');
+const mapRendererSource = read('components/navigate/MapRenderer.tsx');
 const roadNavigationSource = read('lib/useRoadNavigation.ts');
 const commandDockSource = read('components/CommandDock.tsx');
 const packageJson = JSON.parse(read('package.json'));
@@ -59,6 +60,10 @@ assert.ok(
   navigateSource.includes('IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS'),
   'Navigate mobile search should define a separate keyboard-settled commit delay for Android input frames.',
 );
+assert.ok(
+  navigateSource.includes('IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS'),
+  'Navigate mobile search should define a short draft-query commit delay before waking provider-backed search.',
+);
 const commitDelayMatch = navigateSource.match(/const IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS = ([0-9]+);/);
 assert.ok(commitDelayMatch, 'Navigate mobile search commit delay should be a named numeric constant.');
 assert.ok(
@@ -70,6 +75,29 @@ assert.ok(keyboardCommitDelayMatch, 'Keyboard-active search commit delay should 
 assert.ok(
   Number(keyboardCommitDelayMatch[1]) >= 420,
   `Keyboard-active search commits should wait through the Android keyboard transition; found ${keyboardCommitDelayMatch[1]}ms.`,
+);
+const queryCommitDelayMatch = navigateSource.match(/const IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS = ([0-9]+);/);
+assert.ok(queryCommitDelayMatch, 'Navigate mobile search draft-query commit delay should be a named numeric constant.');
+assert.ok(
+  Number(queryCommitDelayMatch[1]) >= 120,
+  `Keyboard-active query commits should wait out same-frame key bursts; found ${queryCommitDelayMatch[1]}ms.`,
+);
+assert.ok(
+  navigateSource.includes('idleDestinationSearchDraftQuery') &&
+    navigateSource.includes('setIdleDestinationSearchDraftQuery') &&
+    navigateSource.includes('idleDestinationSearchQueryCommitTimerRef'),
+  'Navigate mobile search should keep TextInput draft state separate from provider-backed roadNavigation.query.',
+);
+assert.ok(
+  navigateSource.includes('setRoadNavigationQuery(idleDestinationSearchDraftQuery);') &&
+    navigateSource.includes('IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS'),
+  'Navigate mobile search should debounce provider query commits while typing with the keyboard active.',
+);
+assert.ok(
+  navigateSource.includes('const idleDestinationSearchQuerySettled =') &&
+    navigateSource.includes('idleDestinationSearchQuerySettled &&') &&
+    navigateSource.includes('QUERY | {idleDestinationSearchDraftQuery.trim()}'),
+  'Navigate mobile search should render immediate draft query copy while deferring stale/no-match result transitions until provider query settles.',
 );
 assert.ok(
   navigateSource.includes('idleDestinationSearchCommitTimerRef') &&
@@ -151,6 +179,58 @@ const mapRendererMemoDeps = navigateSource.slice(mapRendererMemoDepsStart, mapRe
 assert.ok(
   !mapRendererMemoDeps.includes('keyboardHeight') && !mapRendererMemoDeps.includes('roadNavigation'),
   'MapRenderer memo dependencies should exclude keyboardHeight and roadNavigation search state.',
+);
+const mapRendererHtmlMemoStart = mapRendererSource.indexOf('const html = useMemo(');
+assert.ok(mapRendererHtmlMemoStart >= 0, 'MapRenderer should memoize the WebView HTML source.');
+const mapRendererHtmlMemoDepsStart = mapRendererSource.indexOf('), [', mapRendererHtmlMemoStart);
+const mapRendererHtmlMemoDepsEnd = mapRendererSource.indexOf(']);', mapRendererHtmlMemoDepsStart);
+assert.ok(
+  mapRendererHtmlMemoDepsStart > mapRendererHtmlMemoStart &&
+    mapRendererHtmlMemoDepsEnd > mapRendererHtmlMemoDepsStart,
+  'MapRenderer HTML memo dependencies should be statically readable.',
+);
+const mapRendererHtmlMemoDeps = mapRendererSource.slice(mapRendererHtmlMemoDepsStart, mapRendererHtmlMemoDepsEnd);
+assert.ok(
+  !mapRendererHtmlMemoDeps.includes('interactive'),
+  'MapRenderer should not rebuild the Android WebView HTML when destination search only toggles map interactivity.',
+);
+assert.ok(
+  !mapRendererSource.includes('interactive !== false,\n          )'),
+  'MapRenderer should not pass the live interactive prop into makeMapHtml.',
+);
+assert.ok(
+  mapRendererSource.includes('interactive: props.interactive !== false') &&
+    mapRendererSource.includes('function setMapInteractionEnabled(enabled)') &&
+    mapRendererSource.includes('setMapInteractionEnabled(payload.interactive !== false);'),
+  'MapRenderer should keep interactivity on the dynamic-state bridge instead of the WebView HTML source.',
+);
+assert.ok(
+  mapRendererSource.includes("androidLayerType={interactive === false ? 'none' : 'hardware'}"),
+  'MapRenderer should lower Android WebView layer pressure while destination search freezes map interaction.',
+);
+assert.ok(
+  mapRendererSource.includes('var mapPixelRatio = Math.min(window.devicePixelRatio || 1') &&
+    mapRendererSource.includes('compactTileCacheSize ? 0.75 : 1') &&
+    mapRendererSource.includes('pixelRatio: mapPixelRatio'),
+  'MapRenderer should cap Mapbox WebView pixel ratio to reduce Android canvas/GPU pressure.',
+);
+assert.ok(
+  navigateSource.includes('surfaceMode="compact"') &&
+    navigateSource.includes('style={destinationSearchMapFrozen ? styles.mapRendererFrozen : undefined}') &&
+    navigateSource.includes('mapRendererFrozen:') &&
+    navigateSource.includes("display: 'none'"),
+  'Navigate should use the compact MapRenderer surface and suspend WebView drawing while destination search owns the foreground.',
+);
+assert.ok(
+  mapRendererSource.includes('FULL_MAP_MAX_TILE_CACHE_SIZE') &&
+    mapRendererSource.includes('COMPACT_MAP_MAX_TILE_CACHE_SIZE') &&
+    mapRendererSource.includes('var maxTileCacheSize =') &&
+    mapRendererSource.includes('maxTileCacheSize: maxTileCacheSize') &&
+    mapRendererSource.includes('renderWorldCopies: false') &&
+    mapRendererSource.includes('trackResize: false') &&
+    mapRendererSource.includes('refreshExpiredTiles: false') &&
+    mapRendererSource.includes('crossSourceCollisions: false'),
+  'MapRenderer should use lean Mapbox GL options to reduce idle WebView redraw and tile/cache pressure on mobile.',
 );
 
 assert.ok(

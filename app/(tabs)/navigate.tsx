@@ -1954,6 +1954,7 @@ const COMPASS_MOVEMENT_SPEED_MPH = 1.5;
 const ACTIVE_GUIDANCE_AUTO_MINIMIZE_MS = 2500;
 const IDLE_DESTINATION_SEARCH_RENDER_LIMIT = 5;
 const IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS = 260;
+const IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS = 160;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS = 460;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT = 780;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_RESULTS_MAX_HEIGHT = 168;
@@ -4878,6 +4879,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     enabled: true,
     liveServicesEnabled: liveNavigateServicesEnabled,
   });
+  const roadNavigationQuery = roadNavigation.query;
+  const setRoadNavigationQuery = roadNavigation.setQuery;
+  const [idleDestinationSearchDraftQuery, setIdleDestinationSearchDraftQuery] =
+    useState(roadNavigationQuery);
+  const idleDestinationSearchQueryCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rehydrateRoadActiveGuidance = roadNavigation.rehydrateActiveGuidance;
   useFocusEffect(
     useCallback(() => {
@@ -14164,9 +14170,10 @@ const handleCreateRun = useCallback(() => {
     campScoutAreaMode === 'idle' &&
     !roadNavigation.session.destination;
   const destinationSearchInputActive = destinationSearchInputFocused || keyboardHeight > 0;
+  const idleDestinationSearchDraftTrimmedQuery = idleDestinationSearchDraftQuery.trim();
   const destinationSearchMapFrozen =
     idleDestinationSearchVisible &&
-    (destinationSearchInputActive || roadNavigation.query.trim().length > 0 || recentSearchesVisible);
+    (destinationSearchInputActive || idleDestinationSearchDraftTrimmedQuery.length > 0 || recentSearchesVisible);
   const floatingToolsVisible = mapOverlayStartupReady && !destinationSearchMapFrozen;
   const campLayerControlsAvailable =
     canUseCommunityCampsiteLayers ||
@@ -14200,6 +14207,53 @@ const handleCreateRun = useCallback(() => {
     if (idleDestinationSearchVisible || !destinationSearchInputFocused) return;
     setDestinationSearchInputFocused(false);
   }, [destinationSearchInputFocused, idleDestinationSearchVisible]);
+  useEffect(() => {
+    if (destinationSearchInputActive) return;
+    setIdleDestinationSearchDraftQuery((current) =>
+      current === roadNavigationQuery ? current : roadNavigationQuery,
+    );
+  }, [destinationSearchInputActive, roadNavigationQuery]);
+  useEffect(() => {
+    if (idleDestinationSearchQueryCommitTimerRef.current) {
+      clearTimeout(idleDestinationSearchQueryCommitTimerRef.current);
+      idleDestinationSearchQueryCommitTimerRef.current = null;
+    }
+
+    if (!idleDestinationSearchVisible || idleDestinationSearchDraftQuery === roadNavigationQuery) {
+      return undefined;
+    }
+
+    const shouldCommitImmediately =
+      !destinationSearchInputActive ||
+      idleDestinationSearchDraftTrimmedQuery.length < 2 ||
+      searchOperationalState.disabled;
+    const delayMs = shouldCommitImmediately ? 0 : IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS;
+
+    if (delayMs === 0) {
+      setRoadNavigationQuery(idleDestinationSearchDraftQuery);
+      return undefined;
+    }
+
+    idleDestinationSearchQueryCommitTimerRef.current = setTimeout(() => {
+      idleDestinationSearchQueryCommitTimerRef.current = null;
+      setRoadNavigationQuery(idleDestinationSearchDraftQuery);
+    }, delayMs);
+
+    return () => {
+      if (idleDestinationSearchQueryCommitTimerRef.current) {
+        clearTimeout(idleDestinationSearchQueryCommitTimerRef.current);
+        idleDestinationSearchQueryCommitTimerRef.current = null;
+      }
+    };
+  }, [
+    destinationSearchInputActive,
+    idleDestinationSearchDraftQuery,
+    idleDestinationSearchDraftTrimmedQuery.length,
+    idleDestinationSearchVisible,
+    roadNavigationQuery,
+    searchOperationalState.disabled,
+    setRoadNavigationQuery,
+  ]);
   const pinModeBannerBottom = COMPASS_BOTTOM + COMPASS_SIZE + OVERLAY_GAP;
   const lowerMapOverlayStackBottom = Math.max(
     routeBuilderControlBottomOffset,
@@ -20155,6 +20209,20 @@ const handleRecentSearchSelection = useCallback((suggestion: RoadNavSearchSugges
   handleRoadOverlaySelectSuggestion(suggestion);
 }, [handleRoadOverlaySelectSuggestion]);
 
+const handleIdleDestinationSearchChangeText = useCallback((value: string) => {
+  setIdleDestinationSearchDraftQuery(value);
+}, []);
+
+const handleIdleDestinationSearchClear = useCallback(() => {
+  if (idleDestinationSearchQueryCommitTimerRef.current) {
+    clearTimeout(idleDestinationSearchQueryCommitTimerRef.current);
+    idleDestinationSearchQueryCommitTimerRef.current = null;
+  }
+  setIdleDestinationSearchDraftQuery('');
+  setDeferredIdleDestinationSearchSuggestions([]);
+  setRoadNavigationQuery('');
+}, [setRoadNavigationQuery]);
+
 useEffect(() => {
   if (idleDestinationSearchCommitTimerRef.current) {
     clearTimeout(idleDestinationSearchCommitTimerRef.current);
@@ -20163,7 +20231,7 @@ useEffect(() => {
 
   const shouldCommitImmediately =
     !destinationSearchInputActive ||
-    roadNavigation.query.trim().length < 2 ||
+    roadNavigationQuery.trim().length < 2 ||
     !!roadNavigation.searchError ||
     searchOperationalState.disabled;
   const delayMs = shouldCommitImmediately
@@ -20189,15 +20257,19 @@ useEffect(() => {
 }, [
   keyboardHeight,
   destinationSearchInputActive,
-  roadNavigation.query,
+  roadNavigationQuery,
   roadNavigation.searchError,
   roadNavigation.suggestions,
   searchOperationalState.disabled,
 ]);
 
-const idleDestinationSearchHasQuery = roadNavigation.query.trim().length > 0;
+const idleDestinationSearchProviderTrimmedQuery = roadNavigationQuery.trim();
+const idleDestinationSearchQuerySettled =
+  idleDestinationSearchDraftTrimmedQuery === idleDestinationSearchProviderTrimmedQuery;
+const idleDestinationSearchHasQuery = idleDestinationSearchDraftTrimmedQuery.length > 0;
 const idleDestinationSearchNoMatchesVisible =
   idleDestinationSearchHasQuery &&
+  idleDestinationSearchQuerySettled &&
   !roadNavigation.searchLoading &&
   !roadNavigation.searchError &&
   roadNavigation.suggestions.length === 0 &&
@@ -20528,6 +20600,8 @@ const mapRendererElement = useMemo(() => (
     dispersedCampingEligibility={dispersedCampingEligibilityLayer}
     establishedCampsites={establishedCampsitesLayer}
     campsiteSearchPolygon={campsiteSearchPolygonPayload}
+    surfaceMode="compact"
+    style={destinationSearchMapFrozen ? styles.mapRendererFrozen : undefined}
   />
 ), [
   activeHealth?.overall,
@@ -21023,8 +21097,8 @@ const stableMapSurface = useMemo(() => {
                 ]}
               >
                 <ECSSearchField
-                  value={roadNavigation.query}
-                  onChangeText={roadNavigation.setQuery}
+                  value={idleDestinationSearchDraftQuery}
+                  onChangeText={handleIdleDestinationSearchChangeText}
                   placeholder={
                     searchOperationalState.disabled
                       ? navigateOperationalState.mode === 'offline_partial_map'
@@ -21036,7 +21110,7 @@ const stableMapSurface = useMemo(() => {
                   loading={idleDestinationSearchLoadingVisible}
                   onClear={
                     idleDestinationSearchHasQuery
-                      ? () => roadNavigation.setQuery('')
+                      ? handleIdleDestinationSearchClear
                       : undefined
                   }
                   style={[
@@ -21079,7 +21153,7 @@ const stableMapSurface = useMemo(() => {
                 numberOfLines={1}
                 testID="navigate-destination-search-query-state"
               >
-                QUERY | {roadNavigation.query.trim()}
+                QUERY | {idleDestinationSearchDraftQuery.trim()}
               </Text>
             ) : searchOperationalState.detail ? (
               <Text style={styles.idleDestinationSearchOperationalText} numberOfLines={1}>
@@ -22175,6 +22249,9 @@ const stableMapSurface = useMemo(() => {
 }, [
   hasToken,
   destinationSearchInputActive,
+  handleIdleDestinationSearchChangeText,
+  handleIdleDestinationSearchClear,
+  idleDestinationSearchDraftQuery,
   mapRendererElement,
   followUser,
   destinationSearchMapFrozen,
@@ -25555,6 +25632,9 @@ mapModalLayer: {
   position: 'relative',
   marginTop: 0,
   overflow: 'hidden',
+},
+  mapRendererFrozen: {
+  display: 'none',
 },
   mapFullscreen: {
   position: 'absolute',
