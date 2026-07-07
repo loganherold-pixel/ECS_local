@@ -466,6 +466,7 @@ export type MapRendererProps = {
   } | null;
   surfaceMode?: 'full' | 'compact';
   standbyMapDisabled?: boolean;
+  standbyWakeDisabled?: boolean;
   style?: any;
 };
 
@@ -7999,6 +8000,7 @@ const MapRenderer = React.memo(function MapRenderer({
   campsiteSearchPolygon = null,
   surfaceMode = 'full',
   standbyMapDisabled = false,
+  standbyWakeDisabled = false,
   style,
 }: MapRendererProps) {
   const webViewRef = useRef<WebView>(null);
@@ -8077,10 +8079,10 @@ const MapRenderer = React.memo(function MapRenderer({
   const renderLiveWebView = shouldLoadMap && !standbyMapActive && motionPriority !== 'cold' && !webRendererCrashBlocked;
 
   useEffect(() => {
-    if (!standbyMapEligible && standbyWakeRequested) {
+    if ((standbyWakeDisabled || !standbyMapEligible) && standbyWakeRequested) {
       setStandbyWakeRequested(false);
     }
-  }, [standbyMapEligible, standbyWakeRequested]);
+  }, [standbyMapEligible, standbyWakeDisabled, standbyWakeRequested]);
 
   useEffect(() => {
     onReadyStateChange?.(
@@ -8361,12 +8363,13 @@ const MapRenderer = React.memo(function MapRenderer({
     [mapboxToken, payload.center, payload.styleUrl, payload.zoom],
   );
   const handleStandbyWake = useCallback(() => {
+    if (standbyWakeDisabled) return;
     renderProcessGoneCountRef.current = 0;
     setWebRendererCrashBlocked(false);
     setWebBootTimedOut(false);
     setWebBootIssue(null);
     setStandbyWakeRequested(true);
-  }, []);
+  }, [standbyWakeDisabled]);
 
   useEffect(() => {
     if (!standbyMapActive && motionPriority !== 'cold') return;
@@ -9056,9 +9059,15 @@ const MapRenderer = React.memo(function MapRenderer({
         <Pressable
           style={styles.standbyWakeLayer}
           onPress={handleStandbyWake}
+          disabled={standbyWakeDisabled}
           accessibilityRole="button"
-          accessibilityLabel="Activate map"
-          accessibilityHint="Loads the interactive map surface for panning, route planning, and pin placement."
+          accessibilityLabel={standbyWakeDisabled ? "Map standby" : "Activate map"}
+          accessibilityHint={
+            standbyWakeDisabled
+              ? "Map interaction is paused while search is open."
+              : "Loads the interactive map surface for panning, route planning, and pin placement."
+          }
+          accessibilityState={{ disabled: standbyWakeDisabled }}
         >
           {standbyStaticMapUrl ? (
             <Image

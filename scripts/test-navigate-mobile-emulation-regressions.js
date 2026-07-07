@@ -254,8 +254,16 @@ assert.ok(
 assert.ok(
   mapRendererSource.includes('standbyWakeLayer') &&
     mapRendererSource.includes('setStandbyWakeRequested(true)') &&
-    mapRendererSource.includes('accessibilityLabel="Activate map"'),
+    mapRendererSource.includes('accessibilityLabel={standbyWakeDisabled ? "Map standby" : "Activate map"}'),
   'Static standby maps should expose a full-area wake target for user map interaction.',
+);
+assert.ok(
+  mapRendererSource.includes('standbyWakeDisabled?: boolean;') &&
+    mapRendererSource.includes('standbyWakeDisabled = false') &&
+    mapRendererSource.includes('if (standbyWakeDisabled) return;') &&
+    mapRendererSource.includes('disabled={standbyWakeDisabled}') &&
+    mapRendererSource.includes('accessibilityState={{ disabled: standbyWakeDisabled }}'),
+  'Static standby maps should support disabling the live-WebView wake target during parked mobile search surfaces.',
 );
 assert.ok(
   mapRendererSource.includes('var mapPixelRatio = Math.min(window.devicePixelRatio || 1') &&
@@ -273,6 +281,10 @@ assert.ok(
 assert.ok(
   !navigateSource.includes('standbyMapDisabled={idleDestinationSearchVisible && !destinationSearchMapFrozen}'),
   'Idle destination search should not force a live WebView under the parked search panel.',
+);
+assert.ok(
+  navigateSource.includes('standbyWakeDisabled={idleDestinationSearchVisible && !destinationSearchMapFrozen}'),
+  'Parked idle destination search should keep the standby map visually useful without letting map-background taps wake the live WebView.',
 );
 assert.ok(
   mapRendererSource.includes('standbyMapDisabled?: boolean;') &&

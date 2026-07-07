@@ -20601,6 +20601,7 @@ const mapRendererElement = useMemo(() => (
     establishedCampsites={establishedCampsitesLayer}
     campsiteSearchPolygon={campsiteSearchPolygonPayload}
     surfaceMode="compact"
+    standbyWakeDisabled={idleDestinationSearchVisible && !destinationSearchMapFrozen}
     style={destinationSearchMapFrozen ? styles.mapRendererFrozen : undefined}
   />
 ), [
@@ -20609,6 +20610,7 @@ const mapRendererElement = useMemo(() => (
   campsiteSearchPolygonPayload,
   combinedCampMarkers,
   destinationSearchMapFrozen,
+  idleDestinationSearchVisible,
   displayedRouteColor,
   displayedRouteLineKey,
   displayedRoutePoints,
