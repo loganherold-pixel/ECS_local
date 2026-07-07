@@ -4,6 +4,8 @@ import {
   Text,
   StyleSheet,
   ActivityIndicator,
+  Image,
+  Pressable,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 
@@ -76,6 +78,8 @@ const MAP_CONSTRUCTOR_RETRY_BASE_MS = 650;
 const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
 const FULL_MAP_MAX_TILE_CACHE_SIZE = 96;
 const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 32;
+const STANDBY_STATIC_MAP_WIDTH = 720;
+const STANDBY_STATIC_MAP_HEIGHT = 1280;
 const MAX_KNOWN_CAMPSITE_SOURCE_MARKERS = 40;
 const MAX_ROUTE_RENDER_POINTS = 2400;
 const MAX_PROGRESS_ROUTE_RENDER_POINTS = 2400;
@@ -959,6 +963,47 @@ function stableStringify(value: unknown) {
   } catch {
     return '';
   }
+}
+
+function resolveMapboxStaticStylePath(styleUrl?: string | null) {
+  if (!styleUrl) return null;
+  const mapboxStylePrefix = 'mapbox://styles/';
+  if (styleUrl.startsWith(mapboxStylePrefix)) {
+    const stylePath = styleUrl.slice(mapboxStylePrefix.length).split(/[?#]/)[0];
+    return stylePath.includes('/') ? stylePath : null;
+  }
+
+  const match = styleUrl.match(/\/styles\/v1\/([^/?#]+\/[^/?#]+)/);
+  return match?.[1] ?? null;
+}
+
+function buildMapboxStaticImageUrl(input: {
+  styleUrl?: string | null;
+  center?: [number, number] | null;
+  zoom?: number | null;
+  token?: string | null;
+}) {
+  const token = typeof input.token === 'string' ? input.token.trim() : '';
+  const center = input.center;
+  if (!token || !Array.isArray(center) || center.length < 2) return null;
+
+  const stylePath = resolveMapboxStaticStylePath(input.styleUrl);
+  if (!stylePath) return null;
+
+  const lng = Number(center[0]);
+  const lat = Number(center[1]);
+  const zoom = clamp(Number(input.zoom ?? DEFAULT_ZOOM), 2, 16);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat) || !Number.isFinite(zoom)) return null;
+
+  const camera = [
+    roundToDecimals(lng, 5),
+    roundToDecimals(lat, 5),
+    roundToDecimals(zoom, 2),
+    0,
+    0,
+  ].join(',');
+
+  return `https://api.mapbox.com/styles/v1/${stylePath}/static/${camera}/${STANDBY_STATIC_MAP_WIDTH}x${STANDBY_STATIC_MAP_HEIGHT}?access_token=${encodeURIComponent(token)}`;
 }
 
 function roundToDecimals(value: number, decimals: number) {
@@ -7984,10 +8029,59 @@ const MapRenderer = React.memo(function MapRenderer({
 
   const shouldLoadMap = !!hasToken && !!mapboxToken;
   const isCompactSurface = surfaceMode === 'compact';
+  const androidLayerType = motionPriority === 'hot' && interactive !== false ? 'hardware' : 'none';
+  const [standbyWakeRequested, setStandbyWakeRequested] = useState(false);
+  const standbyMapHasOperationalOverlay =
+    points.length > 0 ||
+    progressPoints.length > 0 ||
+    waypoints.length > 0 ||
+    segments.length > 0 ||
+    bailoutMarkers.length > 0 ||
+    pinMarkers.length > 0 ||
+    trailSegments.length > 0 ||
+    speedSegments.length > 0 ||
+    campsites.length > 0 ||
+    tiltAlerts.length > 0 ||
+    campsiteMarkers.length > 0 ||
+    campIntelMarkers.length > 0 ||
+    campEndpointMarkers.length > 0 ||
+    campScoutMarkers.length > 0 ||
+    tiltAlertMarkers.length > 0 ||
+    routeBuilderActive ||
+    routeBuilderSegments.length > 0 ||
+    routeBuilderAnchors.length > 0 ||
+    trailActive ||
+    !!replayMarker ||
+    !!showCrosshair ||
+    !!routeProfileFocus ||
+    !!mvumOverlay?.enabled ||
+    !!stitchedRoutePreview ||
+    !!remoteOverlay?.enabled ||
+    !!dispersedCampingEligibility?.enabled ||
+    !!dispersedRouteBuild?.enabled ||
+    !!establishedCampsites?.enabled ||
+    !!campsiteSearchPolygon?.coordinates?.length;
+  const standbyMapEligible =
+    shouldLoadMap &&
+    isCompactSurface &&
+    motionPriority === 'warm' &&
+    interactive !== false &&
+    !standbyMapHasOperationalOverlay;
+  const standbyMapActive = standbyMapEligible && !standbyWakeRequested;
+  const renderLiveWebView = shouldLoadMap && !standbyMapActive && motionPriority !== 'cold';
 
   useEffect(() => {
-    onReadyStateChange?.(shouldLoadMap && (webReady || hasEverReachedReadyRef.current));
-  }, [onReadyStateChange, shouldLoadMap, webReady]);
+    if (!standbyMapEligible && standbyWakeRequested) {
+      setStandbyWakeRequested(false);
+    }
+  }, [standbyMapEligible, standbyWakeRequested]);
+
+  useEffect(() => {
+    onReadyStateChange?.(
+      shouldLoadMap &&
+        (standbyMapActive || motionPriority === 'cold' || webReady || hasEverReachedReadyRef.current),
+    );
+  }, [motionPriority, onReadyStateChange, shouldLoadMap, standbyMapActive, webReady]);
 
   const initialStyleUrl = useMemo(
     () => getMapStyleUrl(mapStyle || DEFAULT_MAP_STYLE),
@@ -8214,6 +8308,26 @@ const MapRenderer = React.memo(function MapRenderer({
 
   const payloadHash = useMemo(() => buildMapOverlayPayloadHash(payload), [payload]);
   const dynamicPayloadHash = useMemo(() => stableStringify(dynamicPayload), [dynamicPayload]);
+  const standbyStaticMapUrl = useMemo(
+    () =>
+      buildMapboxStaticImageUrl({
+        styleUrl: payload.styleUrl,
+        center: payload.center,
+        zoom: payload.zoom,
+        token: mapboxToken,
+      }),
+    [mapboxToken, payload.center, payload.styleUrl, payload.zoom],
+  );
+  const handleStandbyWake = useCallback(() => {
+    setStandbyWakeRequested(true);
+  }, []);
+
+  useEffect(() => {
+    if (!standbyMapActive && motionPriority !== 'cold') return;
+    setWebReady(false);
+    clearPendingMapMessages();
+  }, [clearPendingMapMessages, motionPriority, standbyMapActive]);
+
   const fallbackMarkers = useMemo(
     () => [
       ...(payload.waypoints || []).map((marker) => ({ ...marker, color: '#F2C24D', type: 'waypoint' })),
@@ -8241,6 +8355,7 @@ const MapRenderer = React.memo(function MapRenderer({
     [dynamicPayload.userLocation, fallbackMarkers.length, fallbackSegments, payload.progressRouteCoords.length, payload.routeCoords.length],
   );
   const fallbackVisible =
+    !standbyMapActive &&
     hasFallbackGeometry &&
     (!shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current)));
   const dispersedCampingEligibilityRef = useRef(dispersedCampingEligibility);
@@ -8887,7 +9002,29 @@ const MapRenderer = React.memo(function MapRenderer({
 
   return (
     <View style={[styles.container, isCompactSurface && styles.compactContainer, style]}>
-      {shouldLoadMap ? (
+      {standbyMapActive ? (
+        <Pressable
+          style={styles.standbyWakeLayer}
+          onPress={handleStandbyWake}
+          accessibilityRole="button"
+          accessibilityLabel="Activate map"
+          accessibilityHint="Loads the interactive map surface for panning, route planning, and pin placement."
+        >
+          {standbyStaticMapUrl ? (
+            <Image
+              source={{ uri: standbyStaticMapUrl }}
+              resizeMode="cover"
+              style={styles.standbyMapImage}
+            />
+          ) : (
+            <View style={styles.standbyMapFallback}>
+              <Text style={styles.standbyMapFallbackText}>Map standby</Text>
+            </View>
+          )}
+        </Pressable>
+      ) : null}
+
+      {renderLiveWebView ? (
         <WebView
           key={webViewKey}
           ref={webViewRef}
@@ -8899,7 +9036,7 @@ const MapRenderer = React.memo(function MapRenderer({
           scrollEnabled={false}
           overScrollMode="never"
           bounces={false}
-          androidLayerType={interactive === false ? 'none' : 'hardware'}
+          androidLayerType={androidLayerType}
           mixedContentMode="always"
           thirdPartyCookiesEnabled
           allowFileAccess
@@ -8970,7 +9107,7 @@ const MapRenderer = React.memo(function MapRenderer({
           }}
           style={styles.webview}
         />
-      ) : (
+      ) : !standbyMapActive ? (
         <View style={[styles.placeholder, fallbackVisible && styles.transparentPlaceholder]}>
           <Text style={styles.placeholderTitle}>Map unavailable</Text>
           <Text style={styles.placeholderText}>
@@ -8982,7 +9119,7 @@ const MapRenderer = React.memo(function MapRenderer({
             <Text style={styles.placeholderHint}>Use your existing retry control to reinitialize the map surface.</Text>
           )}
         </View>
-      )}
+      ) : null}
 
       {fallbackVisible ? (
         <MapFallbackSurface
@@ -9039,6 +9176,28 @@ const styles = StyleSheet.create({
   webview: {
     flex: 1,
     backgroundColor: 'transparent',
+  },
+  standbyWakeLayer: {
+    flex: 1,
+    backgroundColor: TACTICAL.bg,
+  },
+  standbyMapImage: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
+  standbyMapFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TACTICAL.bg,
+  },
+  standbyMapFallbackText: {
+    color: TACTICAL.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
   },
   placeholder: {
     flex: 1,

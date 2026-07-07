@@ -4748,7 +4748,6 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const [tiltAlertDetailCluster, setTiltAlertDetailCluster] = useState<any>(null);
   const [weatherAlertDetailVisible, setWeatherAlertDetailVisible] = useState(false);
   const [routeWeatherDetailVisible, setRouteWeatherDetailVisible] = useState(false);
-  const [compassPowerSaveActive, setCompassPowerSaveActive] = useState(false);
   const lastKnownHeadingRef = useRef<number | null>(null);
   const [showTiltAlertZones, setShowTiltAlertZones] = useState(false);
   const [showRemotenessOverlay, setShowRemotenessOverlay] = useState(false);
@@ -5131,6 +5130,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     roadNavigation.uiMode === 'arrived' ||
     trailNavigation.uiMode === 'active' ||
     trailNavigation.uiMode === 'arrived';
+  const compassPowerSaveActive = !isFocused || !activeNavigationRunning;
 
   const currentGpsHeadingDeg = gps.position?.headingDeg ?? null;
   const vehicleHeadingHook = useVehicleHeading({

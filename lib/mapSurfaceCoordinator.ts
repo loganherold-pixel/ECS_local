@@ -38,6 +38,15 @@ export function resolveMapSurfaceMotionState(input: MapSurfaceMotionInput): MapS
   }
 
   if (input.surface === 'navigate') {
+    if (!input.hasActiveGuidance) {
+      return {
+        motionPriority: 'warm',
+        allowLiveLocation: false,
+        allowCameraFollow: false,
+        allowDynamicCamera: false,
+      };
+    }
+
     return {
       motionPriority: 'hot',
       allowLiveLocation: true,

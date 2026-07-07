@@ -183,6 +183,16 @@ const hotNavigate = coordinator.resolveMapSurfaceMotionState({
 assert.strictEqual(hotNavigate.motionPriority, 'hot');
 assert.strictEqual(hotNavigate.allowCameraFollow, true);
 
+const idleNavigate = coordinator.resolveMapSurfaceMotionState({
+  surface: 'navigate',
+  isFocused: true,
+  hasActiveGuidance: false,
+});
+assert.strictEqual(idleNavigate.motionPriority, 'warm');
+assert.strictEqual(idleNavigate.allowLiveLocation, false);
+assert.strictEqual(idleNavigate.allowCameraFollow, false);
+assert.strictEqual(idleNavigate.allowDynamicCamera, false);
+
 const pausedDashboard = coordinator.resolveMapSurfaceMotionState({
   surface: 'dashboard',
   isFocused: false,

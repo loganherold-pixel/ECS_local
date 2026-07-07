@@ -12,6 +12,7 @@ function read(relativePath) {
 
 const navigateSource = read('app/(tabs)/navigate.tsx');
 const mapRendererSource = read('components/navigate/MapRenderer.tsx');
+const compassRoseSource = read('components/navigate/CompassRose.tsx');
 const roadNavigationSource = read('lib/useRoadNavigation.ts');
 const commandDockSource = read('components/CommandDock.tsx');
 const packageJson = JSON.parse(read('package.json'));
@@ -205,8 +206,28 @@ assert.ok(
   'MapRenderer should keep interactivity on the dynamic-state bridge instead of the WebView HTML source.',
 );
 assert.ok(
-  mapRendererSource.includes("androidLayerType={interactive === false ? 'none' : 'hardware'}"),
-  'MapRenderer should lower Android WebView layer pressure while destination search freezes map interaction.',
+  mapRendererSource.includes('const androidLayerType = motionPriority ===') &&
+    mapRendererSource.includes("motionPriority === 'hot' && interactive !== false ? 'hardware' : 'none'") &&
+    mapRendererSource.includes('androidLayerType={androidLayerType}'),
+  'MapRenderer should reserve Android hardware WebView layers for hot active-guidance motion and lower layer pressure for warm/cold idle or search surfaces.',
+);
+assert.ok(
+    mapRendererSource.includes('function buildMapboxStaticImageUrl') &&
+    mapRendererSource.includes("motionPriority === 'warm'") &&
+    mapRendererSource.includes('!standbyMapHasOperationalOverlay') &&
+    mapRendererSource.includes("const renderLiveWebView = shouldLoadMap && !standbyMapActive && motionPriority !== 'cold';"),
+  'MapRenderer should place no-overlay warm idle maps into a static standby instead of keeping the live WebView renderer hot.',
+);
+assert.ok(
+  mapRendererSource.includes("motionPriority === 'cold'") &&
+    mapRendererSource.includes("standbyMapActive || motionPriority === 'cold' || webReady"),
+  'Cold frozen map states should still report ready without mounting a live WebView during foreground search.',
+);
+assert.ok(
+  mapRendererSource.includes('standbyWakeLayer') &&
+    mapRendererSource.includes('setStandbyWakeRequested(true)') &&
+    mapRendererSource.includes('accessibilityLabel="Activate map"'),
+  'Static standby maps should expose a full-area wake target for user map interaction.',
 );
 assert.ok(
   mapRendererSource.includes('var mapPixelRatio = Math.min(window.devicePixelRatio || 1') &&
@@ -220,6 +241,27 @@ assert.ok(
     navigateSource.includes('mapRendererFrozen:') &&
     navigateSource.includes("display: 'none'"),
   'Navigate should use the compact MapRenderer surface and suspend WebView drawing while destination search owns the foreground.',
+);
+assert.ok(
+  navigateSource.includes('const compassPowerSaveActive = !isFocused || !activeNavigationRunning;') &&
+    navigateSource.includes('enabled: !compassPowerSaveActive') &&
+    !navigateSource.includes('setCompassPowerSaveActive'),
+  'Idle or unfocused Navigate should power-save vehicle heading work instead of running the 20 Hz compass loop on the idle map.',
+);
+assert.ok(
+  compassRoseSource.includes('if (!visible || paused || isStationaryLocked) return;') &&
+    compassRoseSource.includes('}, [externalHeading, isStationaryLocked, paused, visible]);'),
+  'CompassRose should not subscribe to native magnetometer updates while hidden, paused, or stationary-locked.',
+);
+assert.ok(
+  compassRoseSource.includes('if (!visible || paused || isStationaryLocked || !followUser) return;') &&
+    compassRoseSource.includes('}, [externalHeading, followUser, isStationaryLocked, paused, visible]);'),
+  'CompassRose should not keep web GPS heading watches alive while hidden, paused, or stationary-locked.',
+);
+assert.ok(
+  compassRoseSource.includes('if (!visible || paused || isStationaryLocked) {') &&
+    compassRoseSource.includes('rotateAnim.stopAnimation();'),
+  'CompassRose should freeze rotation animation work while hidden, paused, or stationary-locked.',
 );
 assert.ok(
   mapRendererSource.includes('FULL_MAP_MAX_TILE_CACHE_SIZE') &&

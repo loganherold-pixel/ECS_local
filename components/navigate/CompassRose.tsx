@@ -168,6 +168,7 @@ const CompassRose = React.memo(function CompassRose({
   useEffect(() => {
     if (Platform.OS === 'web') return;
     if (externalHeading != null) return;
+    if (!visible || paused || isStationaryLocked) return;
 
     let subscription: any = null;
 
@@ -201,13 +202,13 @@ const CompassRose = React.memo(function CompassRose({
         } catch {}
       }
     };
-  }, [externalHeading]);
+  }, [externalHeading, isStationaryLocked, paused, visible]);
 
   // ── GPS heading (web fallback) — only if no external heading ──
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     if (externalHeading != null) return;
-    if (!followUser) return;
+    if (!visible || paused || isStationaryLocked || !followUser) return;
     if (typeof navigator === 'undefined' || !navigator.geolocation) return;
 
     const watchId = navigator.geolocation.watchPosition(
@@ -225,12 +226,16 @@ const CompassRose = React.memo(function CompassRose({
     return () => {
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [followUser, externalHeading]);
+  }, [externalHeading, followUser, isStationaryLocked, paused, visible]);
 
   const effectiveHeading = externalHeading != null ? externalHeading : internalHeading;
 
   // ── Smooth rotation animation ─────────────────────────────
   useEffect(() => {
+    if (!visible || paused || isStationaryLocked) {
+      rotateAnim.stopAnimation();
+      return;
+    }
     if (effectiveHeading == null) return;
 
     const target = -effectiveHeading;
@@ -250,7 +255,7 @@ const CompassRose = React.memo(function CompassRose({
     }).start();
 
     prevHeadingRef.current = smoothTarget;
-  }, [effectiveHeading, rotateAnim]);
+  }, [effectiveHeading, isStationaryLocked, paused, rotateAnim, visible]);
 
   const dialRotation = rotateAnim.interpolate({
     inputRange: [-720, 720],
