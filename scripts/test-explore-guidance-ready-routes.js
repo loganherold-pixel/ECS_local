@@ -115,13 +115,11 @@ assert(
   'Discover should not keep a looser local guidance-ready geometry gate that can admit preview-only split route geometry.',
 );
 assert(
-  !discover.includes('routes are hidden because') &&
-    !discover.includes('were hidden because active-guidance geometry was unavailable') &&
-    !discover.includes('geometry was not ready for active guidance') &&
-    !discover.includes('ECS will not save, stitch, or navigate those routes from Explore') &&
-    !discover.includes('exploreWizardHiddenNotice') &&
-    !discover.includes('exploreWizardHiddenText'),
-  'Explore should keep hidden/not-ready route diagnostics out of user-facing Guidance Ready copy and containers.',
+  discover.includes('showGuidanceReadyBlockedNotice') &&
+    discover.includes('exploreGuidanceReadyBlockedReasonText') &&
+    discover.includes('Routes Need Guidance Geometry') &&
+    discover.includes('No routes were converted into guidance, saved, or navigated from this lane.'),
+  'Explore should expose a compact, truthful blocked state when routes exist but none pass guidance-ready gates.',
 );
 assert(
   !discover.includes('visibleTrailPacks\n        .map((trailPack) => trailPackToExpeditionOpportunity(trailPack))') &&
@@ -258,6 +256,29 @@ assert.strictEqual(
   unselectedInventory.readyCount,
   0,
   'The selected ready count should remain zero until a refinement bucket is active.',
+);
+
+const blockedRangeInventory = buildExploreGuidanceReadyInventory({
+  trailPacks: [previewOnlyRoute, shortRoute, privateRoute],
+  selectedRefinement: null,
+});
+assert.strictEqual(
+  blockedRangeInventory.totalReadyCount,
+  0,
+  'Range-only inventory should report zero ready routes when every loaded route fails a production guidance gate.',
+);
+assert.strictEqual(
+  blockedRangeInventory.rangeHiddenTotal,
+  3,
+  'Range-only inventory should retain non-ready blocker evidence before a refinement is selected.',
+);
+assert(
+  blockedRangeInventory.rangeHiddenReasons.some((entry) => entry.reason === 'Active guidance requires continuous route geometry.'),
+  'Range-only blocked evidence should include guidance geometry blockers without exposing raw provider payloads.',
+);
+assert(
+  blockedRangeInventory.rangeHiddenReasons.every((entry) => !String(entry.reason).includes('coordinates')),
+  'Range-only blocked evidence should remain safe for handoff copy and avoid raw coordinate/provider payload details.',
 );
 
 const performanceRoutes = Array.from({ length: 18 }, (_, index) => makeRoute(`perf-ready-${index + 1}`));

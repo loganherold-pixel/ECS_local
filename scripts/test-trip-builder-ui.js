@@ -19,6 +19,7 @@ function assertIncludes(source, needle, label) {
 
 const screen = read('app/explore-trip-builder.tsx');
 const discover = read('app/(tabs)/discover.tsx');
+const rootLayout = read('app/_layout.tsx');
 const registry = read('lib/explore/exploreFeatureRegistry.ts');
 const itinerarySummary = read('lib/tripBuilder/tripItinerarySummary.ts');
 const itineraryReview = read('lib/tripBuilder/tripItineraryReview.ts');
@@ -304,6 +305,13 @@ assertIncludes(discover, 'clearTripBuilderRouteHandoff();', 'Explore top-level T
 assertIncludes(discover, "router.push('/explore-trip-builder')", 'Explore Trip Builder tab should open the real Trip Builder route picker directly.');
 assert(!discover.includes('testID="explore-open-trip-builder"'), 'Explore should not render a redundant Open Trip Builder staging page.');
 assertIncludes(discover, 'testID="explore-tripbuilder-wizard-surface"', 'Explore should render the direct route-first TripBuilder wizard surface.');
+assertIncludes(discover, 'const handleOpenExploreTripBuilderFromHero = useCallback(() => {', 'Explore TripBuilder hero should use a dedicated press handler.');
+assertIncludes(discover, 'accessibilityLabel="Open Explore Trip Builder"', 'Explore TripBuilder hero should expose a mobile accessibility label.');
+assertIncludes(discover, 'accessibilityRole="button"', 'Explore TripBuilder hero should be announced as a tappable control.');
+assert(
+  /<TouchableOpacity[\s\S]*?testID="explore-tripbuilder-wizard-surface"[\s\S]*?onPress=\{handleOpenExploreTripBuilderFromHero\}/.test(discover),
+  'Explore TripBuilder hero should be a tappable surface that opens the real Trip Builder route picker.',
+);
 assert(!discover.includes('testID="explore-primary-tab-control"'), 'Explore should not render the legacy primary tab control.');
 assertIncludes(discover, 'ExploreTripBuilderWizardRouteCard', 'Explore should expose Build Trip directly on guidance-ready route cards.');
 assertIncludes(discover, 'handleBuildTripFromExploreWizardCandidate', 'Explore wizard cards should save and route into Trip Builder.');
@@ -313,6 +321,8 @@ assertIncludes(discover, 'handleBuildTripFromRoute(selectedOpportunity)', 'Selec
 assertIncludes(discover, 'stageTripBuilderItineraryHandoff(op);', 'Selected route analysis should prepare a Trip Builder itinerary draft');
 assertIncludes(discover, 'handleBuildTripFromRoute(aiPreviewRoute)', 'AI route details entry');
 assertIncludes(discover, 'handleBuildTripFromRoute(route);', 'AI route card entry');
+assertIncludes(rootLayout, 'name="explore-trip-builder"', 'Root protected stack should register the direct Trip Builder route for mobile handoff.');
+assertIncludes(rootLayout, 'name="explore-offline-prep-pack"', 'Root protected stack should register the Explore Offline Prep route for sibling planning handoff.');
 
 assert(!screen.includes('ExpeditionReadinessCard'), 'Trip Builder UI must not duplicate the readiness card component.');
 assert(!screen.includes('ExploreReadinessSummary'), 'Trip Builder UI must not duplicate route readiness summary UI.');

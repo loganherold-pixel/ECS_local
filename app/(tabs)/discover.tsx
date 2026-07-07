@@ -3808,6 +3808,26 @@ function DiscoverScreenInner() {
     liveTrailPackCatalogSnapshot.status === 'idle' ||
     liveTrailPackCatalogSnapshot.status === 'loading';
   const showTrailPackBlockingLoading = showTrailPackSectionLoading && visibleRouteCatalogSummaries.length === 0;
+  const exploreGuidanceReadyBlockedReasons = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          exploreGuidanceReadyInventory.rangeHiddenReasons
+            .map((entry) => String(entry.reason ?? '').trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 2),
+    [exploreGuidanceReadyInventory.rangeHiddenReasons],
+  );
+  const exploreGuidanceReadyBlockedReasonText =
+    exploreGuidanceReadyBlockedReasons.length > 0
+      ? `Primary blocker: ${exploreGuidanceReadyBlockedReasons.join(' / ')}`
+      : 'Primary blocker: guidance geometry or production data is missing.';
+  const showGuidanceReadyBlockedNotice =
+    !showInitialLoading &&
+    !showSectionLoading &&
+    radiusFilteredOpportunities.length > 0 &&
+    exploreGuidanceReadyInventory.totalReadyCount === 0;
 
   useEffect(() => {
     if (__DEV__ !== true) return;
@@ -4213,6 +4233,23 @@ function DiscoverScreenInner() {
       selectedExploreRefinementLabel,
     ],
   );
+
+  const handleOpenExploreTripBuilderFromHero = useCallback(() => {
+    hapticMicro();
+    saveExplorePlanningRouteContext({
+      routes: publicSuggestedTrailheadRoutes as any,
+      radiusMiles: activeDistanceRadius,
+      refinementLabel: selectedExploreRefinementLabel,
+      source: 'trip_builder_tab',
+    });
+    clearTripBuilderRouteHandoff();
+    router.push('/explore-trip-builder');
+  }, [
+    activeDistanceRadius,
+    publicSuggestedTrailheadRoutes,
+    router,
+    selectedExploreRefinementLabel,
+  ]);
 
   useEffect(() => {
     if (activeExplorePrimaryTab === 'suggested_routes') return;
@@ -4708,7 +4745,15 @@ function DiscoverScreenInner() {
         <View style={s.explorerBody}>
         <ScrollView style={s.scrollArea} contentContainerStyle={[s.scrollContent, contentFrameStyle]} showsVerticalScrollIndicator={false}>
 
-          <View style={s.exploreWizardHero} testID="explore-tripbuilder-wizard-surface">
+          <TouchableOpacity
+            style={s.exploreWizardHero}
+            testID="explore-tripbuilder-wizard-surface"
+            activeOpacity={0.84}
+            onPress={handleOpenExploreTripBuilderFromHero}
+            accessibilityRole="button"
+            accessibilityLabel="Open Explore Trip Builder"
+            accessibilityHint="Open Trip Builder to choose a guidance-ready route."
+          >
             <View style={s.exploreWizardHeroIcon}>
               <Ionicons name="trail-sign-outline" size={18} color={TACTICAL.amber} />
             </View>
@@ -4719,7 +4764,7 @@ function DiscoverScreenInner() {
                 Preview, save, build a trip, or start navigation from verified route geometry only.
               </Text>
             </View>
-          </View>
+          </TouchableOpacity>
 
           {activeExplorePrimaryTab === 'suggested_routes' ? (
             <>
@@ -4764,6 +4809,16 @@ function DiscoverScreenInner() {
                   </Text>
                 </View>
               </View>
+
+              {showGuidanceReadyBlockedNotice ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-blocked-notice">
+                  <Ionicons name="alert-circle-outline" size={15} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    <Text style={s.inlineSectionNoticeStrong}>Routes Need Guidance Geometry. </Text>
+                    ECS found routes in this radius, but none are ready for active guidance yet. No routes were converted into guidance, saved, or navigated from this lane. {exploreGuidanceReadyBlockedReasonText}
+                  </Text>
+                </View>
+              ) : null}
 
             </View>
           )}
@@ -6871,6 +6926,10 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: TACTICAL.textMuted,
     lineHeight: 14,
+  },
+  inlineSectionNoticeStrong: {
+    color: TACTICAL.text,
+    fontWeight: '900',
   },
   hiddenGemPagerBtn: {
     flexDirection: 'row',

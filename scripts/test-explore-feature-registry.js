@@ -28,6 +28,8 @@ const placeholderSource = fs.readFileSync(
 const tripBuilderSource = fs.readFileSync(path.join(root, 'app', 'explore-trip-builder.tsx'), 'utf8');
 const offlinePrepSource = fs.readFileSync(path.join(root, 'app', 'explore-offline-prep-pack.tsx'), 'utf8');
 const layoutSource = fs.readFileSync(path.join(root, 'app', '_layout.tsx'), 'utf8');
+const routeManifestSource = fs.readFileSync(path.join(root, 'lib', 'routeManifest.ts'), 'utf8');
+const authResolverSource = fs.readFileSync(path.join(root, 'lib', 'auth', 'distributionEntryResolver.ts'), 'utf8');
 const enrichedCardSource = fs.readFileSync(path.join(root, 'components', 'discover', 'EnrichedRouteCard.tsx'), 'utf8');
 const filterSource = fs.readFileSync(path.join(root, 'components', 'discover', 'DistanceRadiusFilter.tsx'), 'utf8');
 const packageSource = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
@@ -137,8 +139,9 @@ assert.deepStrictEqual(
 );
 
 assertIncludes(discoverSource, 'getVisibleExploreFeatures', 'Explore tab should consume the visible three-tab feature registry.');
-assertIncludes(discoverSource, 'testID="explore-primary-tab-control"', 'Explore tab should render the segmented primary tab control.');
-assertIncludes(discoverSource, 'ECSSegmentedControl', 'Explore tab should use the existing ECS segmented tab control.');
+assertNotIncludes(discoverSource, 'testID="explore-primary-tab-control"', 'Explore tab should not restore the legacy segmented primary tab control.');
+assertIncludes(discoverSource, 'testID="explore-tripbuilder-wizard-surface"', 'Explore tab should expose the direct route-first Trip Builder hero.');
+assertIncludes(discoverSource, 'accessibilityLabel="Open Explore Trip Builder"', 'Explore Trip Builder hero should be a mobile-accessible button.');
 assertIncludes(discoverSource, "case 'suggested_routes':", 'Suggested Routes tab should keep routing to existing suggestions.');
 assertNotIncludes(discoverSource, "case 'route_filters':", 'Route Filters should no longer be a primary Explore tab action.');
 assertIncludes(discoverSource, 'activeExplorePrimaryTab === \'suggested_routes\'', 'Suggested Routes should be the face-page tab.');
@@ -192,8 +195,13 @@ assertIncludes(offlinePrepSource, 'testID="offline-prep-manifest"', 'Offline Pre
 assertIncludes(offlinePrepSource, 'Downloads are marked ready only when confirmed by ECS infrastructure.', 'Offline Prep Pack should keep unavailable downloads honest.');
 assertIncludes(placeholderSource, 'registered as a placeholder', 'Placeholder screens should not claim unfinished functionality.');
 assertIncludes(placeholderSource, 'Route suggestions and filters remain available', 'Placeholder screens should preserve current Explore behavior.');
-assertIncludes(layoutSource, "normalized === '/explore-trip-builder'", 'Trip Builder should restore to the Explore shell route.');
-assertIncludes(layoutSource, "normalized === '/explore-offline-prep-pack'", 'Offline Prep Pack should restore to the Explore shell route.');
+assertIncludes(layoutSource, 'name="explore-trip-builder"', 'Root stack should register Trip Builder for direct mobile handoff.');
+assertIncludes(layoutSource, 'name="explore-offline-prep-pack"', 'Root stack should register Offline Prep Pack for direct mobile handoff.');
+assertIncludes(routeManifestSource, "path: '/explore-trip-builder'", 'Trip Builder should be represented in the route manifest.');
+assertIncludes(routeManifestSource, "path: '/explore-offline-prep-pack'", 'Offline Prep Pack should be represented in the route manifest.');
+assertIncludes(routeManifestSource, "restorableShellRoute: '/discover'", 'Explore planning routes should restore through the Explore shell route.');
+assertIncludes(authResolverSource, "currentPath === '/explore-trip-builder'", 'Trip Builder should remain reachable during pre-setup Explore use.');
+assertIncludes(authResolverSource, "currentPath === '/explore-offline-prep-pack'", 'Offline Prep Pack should remain reachable during pre-setup Explore use.');
 
 const combinedNewSurface = [
   registry.getExploreFeatureRegistry().map((feature) => `${feature.title} ${feature.description}`).join(' '),

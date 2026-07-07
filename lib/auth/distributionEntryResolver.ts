@@ -33,6 +33,8 @@ function isPrimaryShellRoute(path: string | null | undefined): boolean {
     path === '/dashboard' ||
     path === '/discover' ||
     path === '/explore' ||
+    path === '/explore-trip-builder' ||
+    path === '/explore-offline-prep-pack' ||
     path === '/alert' ||
     path === '/safety' ||
     path === '/vehicle-config' ||
@@ -147,6 +149,8 @@ export function resolveDistributionEntryState(
       currentPath === '/navigate' ||
       currentPath === '/discover' ||
       currentPath === '/explore' ||
+      currentPath === '/explore-trip-builder' ||
+      currentPath === '/explore-offline-prep-pack' ||
       currentPath === '/alert' ||
       currentPath === '/safety' ||
       currentPath === '/vehicle-config' ||

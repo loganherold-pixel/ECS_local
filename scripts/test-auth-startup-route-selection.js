@@ -276,6 +276,58 @@ assert.strictEqual(
 
 assert.strictEqual(
   resolve({
+    currentPath: '/explore-trip-builder',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: false,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Explore Trip Builder should remain reachable from Explore before vehicle setup is complete.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/explore-trip-builder',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: true,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Explore Trip Builder should remain reachable during vehicle recovery when opened from Explore.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/explore-offline-prep-pack',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: false,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Explore Offline Prep should remain reachable from Explore before vehicle setup is complete.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/explore-offline-prep-pack',
+    authenticated: true,
+    setupComplete: false,
+    setupRecoveryRequired: true,
+    isAuthScreen: false,
+    isProtectedScreen: false,
+  }).redirectTarget,
+  null,
+  'Explore Offline Prep should remain reachable during vehicle recovery when opened from Explore.',
+);
+
+assert.strictEqual(
+  resolve({
     currentPath: '/',
     authenticated: true,
     setupComplete: false,

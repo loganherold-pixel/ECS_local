@@ -35,6 +35,9 @@ export type ExploreGuidanceReadyInventory = {
   hiddenTotal: number;
   hiddenBySource: Record<ExploreWizardRouteSourceKind, number>;
   hiddenReasons: ExploreWizardHiddenRoute[];
+  rangeHiddenTotal: number;
+  rangeHiddenBySource: Record<ExploreWizardRouteSourceKind, number>;
+  rangeHiddenReasons: ExploreWizardHiddenRoute[];
 };
 
 const SOURCE_ORDER: Array<{
@@ -344,15 +347,22 @@ export function buildExploreGuidanceReadyInventory(
   const candidateSet = selectedRefinement
     ? buildForRefinement(input, selectedRefinement, getEligibility)
     : emptyCandidateSet();
+  const totalReadyCount = countEligibleRoutesForRefinement(input, null, getEligibility);
+  const rangeHiddenCandidateSet = totalReadyCount === 0
+    ? buildForRefinement(input, null, getEligibility)
+    : emptyCandidateSet();
 
   return {
     candidateSet,
     readyCount: candidateSet.candidates.length,
-    totalReadyCount: countEligibleRoutesForRefinement(input, null, getEligibility),
+    totalReadyCount,
     refinementCounts,
     sourceCounts: sourceCounts(candidateSet),
     hiddenTotal: candidateSet.hiddenTotal,
     hiddenBySource: candidateSet.hiddenBySource,
     hiddenReasons: candidateSet.hiddenReasons,
+    rangeHiddenTotal: rangeHiddenCandidateSet.hiddenTotal,
+    rangeHiddenBySource: rangeHiddenCandidateSet.hiddenBySource,
+    rangeHiddenReasons: rangeHiddenCandidateSet.hiddenReasons,
   };
 }

@@ -1941,6 +1941,20 @@ function AuthGate() {
                 }}
               />
               <Stack.Screen
+                name="explore-trip-builder"
+                options={{
+                  animation: 'fade_from_bottom',
+                  animationDuration: MOTION.modalSlide,
+                }}
+              />
+              <Stack.Screen
+                name="explore-offline-prep-pack"
+                options={{
+                  animation: 'fade_from_bottom',
+                  animationDuration: MOTION.modalSlide,
+                }}
+              />
+              <Stack.Screen
                 name="expedition-archive"
                 options={{
                   animation: 'fade_from_bottom',
