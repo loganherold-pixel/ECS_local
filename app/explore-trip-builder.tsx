@@ -3708,6 +3708,7 @@ export default function ExploreTripBuilderScreen() {
   const [activeTripActivating, setActiveTripActivating] = useState(false);
   const [activeTripActivationError, setActiveTripActivationError] = useState<string | null>(null);
   const roadSearchSessionTokenRef = useRef(createRoadSearchSessionToken());
+  const latestSelectedPlanningRouteRef = useRef<ExpeditionOpportunity | null>(null);
   const smartResupplyFuelOptionsRef = useRef<SmartResupplyPoi[]>([]);
   const smartResupplySupplyOptionsRef = useRef<SmartResupplyPoi[]>([]);
   const smartResupplyFuelRequestRef = useRef(0);
@@ -3823,6 +3824,9 @@ export default function ExploreTripBuilderScreen() {
     () => routes.find((route) => String(route.id) === selectedRouteId) ?? null,
     [routes, selectedRouteId],
   );
+  useEffect(() => {
+    latestSelectedPlanningRouteRef.current = selectedRoute;
+  }, [selectedRoute]);
   const selectedRouteRemoteEntryProgressRatio = useMemo(
     () => remoteEntryProgressRatioForResupply(selectedRoute as unknown as TripBuilderRouteInput | null),
     [selectedRoute],
@@ -4679,15 +4683,7 @@ export default function ExploreTripBuilderScreen() {
   const selectPlanningRoute = (routeId: string) => {
     hapticMicro();
     const routeForContext = routes.find((route) => String(route.id) === routeId) ?? null;
-    if (routeForContext) {
-      void routeContextOrchestrator.prefetchForTrailSelection({
-        trail: routeForContext as unknown as TripBuilderRouteInput & { id: string },
-        origin: liveRouteContextOrigin,
-        selectedSupplyMode: routeContextSupplyModeForTripBuilder(smartResupplyPreference),
-        featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
-        providerRegistry: routeContextProviderRegistry,
-      }).catch(() => {});
-    }
+    latestSelectedPlanningRouteRef.current = routeForContext;
     setSelectedRouteId(routeId);
     setTripSetupStarted(false);
     setPreparedTripRoutePreview(null);
@@ -4715,6 +4711,15 @@ export default function ExploreTripBuilderScreen() {
       itinerarySaved: false,
       itineraryEditSession: null,
     };
+    if (routeForContext) {
+      void routeContextOrchestrator.prefetchForTrailSelection({
+        trail: routeForContext as unknown as TripBuilderRouteInput & { id: string },
+        origin: liveRouteContextOrigin,
+        selectedSupplyMode: routeContextSupplyModeForTripBuilder(smartResupplyPreference),
+        featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
+        providerRegistry: routeContextProviderRegistry,
+      }).catch(() => {});
+    }
   };
 
   const handleImportRouteFile = async () => {
@@ -4756,6 +4761,7 @@ export default function ExploreTripBuilderScreen() {
         featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
         providerRegistry: routeContextProviderRegistry,
       }).catch(() => {});
+      latestSelectedPlanningRouteRef.current = importedRoute as unknown as ExpeditionOpportunity;
       setRoutes((current) => {
         const routeMap = new Map<string, TripBuilderRouteInput>();
         upsertExplorePlanningRoute(routeMap, importedRoute as unknown as TripBuilderRouteInput);
@@ -4798,9 +4804,13 @@ export default function ExploreTripBuilderScreen() {
   };
 
   const handleOpenTripBuilderSetup = () => {
-    if (!selectedRoute) return;
+    const routeForSetup = selectedRoute ?? latestSelectedPlanningRouteRef.current;
+    if (!routeForSetup) return;
     hapticMicro();
-    setPreparedTripRoutePreview(buildPreparedTripRoutePreview(selectedRoute));
+    if (String(routeForSetup.id) !== selectedRouteId) {
+      setSelectedRouteId(String(routeForSetup.id));
+    }
+    setPreparedTripRoutePreview(buildPreparedTripRoutePreview(routeForSetup));
     setTripSetupStarted(true);
     setError(null);
   };
@@ -5599,6 +5609,9 @@ export default function ExploreTripBuilderScreen() {
                       <Text style={styles.planningQuestionText}>
                         Drop optional reference camp pins along this route, or skip camp planning for this trip.
                       </Text>
+                      <Text style={styles.smartResupplyPickerHint} testID="trip-builder-camp-reference-hint">
+                        Camp pins are reference-only and will not change the guidance route.
+                      </Text>
                       <View style={styles.planningChoiceRow}>
                         <TouchableOpacity
                           style={[
@@ -5677,28 +5690,26 @@ export default function ExploreTripBuilderScreen() {
                             </View>
                           ))}
                         </View>
-                      ) : (
-                        <Text style={styles.smartResupplyPickerHint}>
-                          Camp pins are reference-only and will not change the guidance route.
-                        </Text>
-                      )}
+                      ) : null}
                     </View>
                   </View>
 
                     </ScrollView>
 
-                    <TouchableOpacity
-                      style={[styles.primaryButton, (!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady) && styles.primaryButtonDisabled]}
-                      activeOpacity={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady ? 1 : 0.84}
-                      disabled={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady}
-                      onPress={handleGenerate}
-                      accessibilityRole="button"
-                      accessibilityLabel="Build Trip Plan"
-                      testID="trip-builder-generate"
-                    >
-                      {generating ? <ActivityIndicator size="small" color="#081014" /> : null}
-                      <Text style={styles.primaryButtonText}>Build Trip Plan</Text>
-                    </TouchableOpacity>
+                    <View style={styles.tripSetupFooter}>
+                      <TouchableOpacity
+                        style={[styles.primaryButton, (!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady) && styles.primaryButtonDisabled]}
+                        activeOpacity={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady ? 1 : 0.84}
+                        disabled={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady}
+                        onPress={handleGenerate}
+                        accessibilityRole="button"
+                        accessibilityLabel="Build Trip Plan"
+                        testID="trip-builder-generate"
+                      >
+                        {generating ? <ActivityIndicator size="small" color="#081014" /> : null}
+                        <Text style={styles.primaryButtonText}>Build Trip Plan</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 ) : null}
 
@@ -6202,8 +6213,9 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
   },
-  tripSetupScroller: { flex: 1, minHeight: 0 },
+  tripSetupScroller: { flex: 1, minHeight: 0, overflow: 'hidden' },
   tripSetupContent: { gap: 7, paddingBottom: TRIP_SETUP_BUILD_BUTTON_CLEARANCE },
+  tripSetupFooter: { flexShrink: 0, paddingTop: 7 },
   tripSetupDefaults: {
     flexDirection: 'row',
     gap: 8,

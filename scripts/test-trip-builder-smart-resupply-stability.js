@@ -99,6 +99,35 @@ assertIncludes(
 );
 assertIncludes(
   screen,
+  'tripSetupScroller: { flex: 1, minHeight: 0, overflow: \'hidden\' }',
+  'Trip Setup scroll viewport should clip mobile content before the footer instead of painting controls under Build Trip Plan.',
+);
+assertIncludes(
+  screen,
+  'style={styles.tripSetupFooter}',
+  'Build Trip Plan should live in a dedicated non-scrolling footer so setup content and footer bounds stay separate on mobile.',
+);
+assertIncludes(
+  screen,
+  'tripSetupFooter: { flexShrink: 0',
+  'Trip Setup footer should not consume the scroll viewport or overlap lower camp controls.',
+);
+assertIncludes(
+  screen,
+  'testID="trip-builder-camp-reference-hint"',
+  'Camp reference-only copy should be visible in the Camp Plan section before the footer area on mobile.',
+);
+{
+  const campPlanStart = screen.indexOf('testID="trip-builder-camp-plan"');
+  const campPlanBlock = screen.slice(campPlanStart, screen.indexOf('{campPlanPins.length > 0 ?', campPlanStart));
+  assert(
+    campPlanBlock.indexOf('testID="trip-builder-camp-reference-hint"') > -1 &&
+      campPlanBlock.indexOf('testID="trip-builder-camp-reference-hint"') < campPlanBlock.indexOf('styles.planningChoiceRow'),
+    'Camp reference-only copy should render before the camp action row so it is not clipped behind the setup footer.',
+  );
+}
+assertIncludes(
+  screen,
   'mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current)',
   'Fuel picker should merge new discoveries into the current list instead of replacing it',
 );

@@ -163,9 +163,24 @@ assertIncludes(screen, 'routeStartCoordinateForTrip', 'Trip Builder should resol
 assertIncludes(screen, 'routeEndCoordinateForTrip', 'Trip Builder should resolve route end coordinates for bailout and map planning.');
 assertIncludes(screen, 'const selectedTrailheadResupplyAnchorCoordinate = selectedRouteStartCoordinate', 'Trip Builder should keep the trailhead endpoint available as the final Smart Resupply fallback.');
 assertIncludes(screen, 'PreparedTripRoutePreview', 'Trip Builder should prepare a route preview context when setup opens.');
-assertIncludes(screen, 'setPreparedTripRoutePreview(buildPreparedTripRoutePreview(selectedRoute))', 'Open Trip Builder should lock the selected route start/end preview coordinates.');
 assertIncludes(screen, 'preparedRoutePreviewMatches(preparedTripRoutePreview, selectedRoute)', 'Trip Builder should keep live setup searches tied to the prepared selected route.');
 assertIncludes(screen, 'tripSetupStarted &&', 'Live Trip Builder searches should wait until the user opens setup for the selected route.');
+assertIncludes(screen, 'latestSelectedPlanningRouteRef', 'Trip Builder should keep the latest tapped route outside rendered state for immediate mobile open taps.');
+assertIncludes(screen, 'latestSelectedPlanningRouteRef.current = routeForContext;', 'Route selection should synchronously publish the tapped route before async prefetch work.');
+assertIncludes(screen, 'const routeForSetup = selectedRoute ?? latestSelectedPlanningRouteRef.current;', 'Open Trip Builder should use the latest tapped route if React has not rendered selectedRoute yet.');
+assertIncludes(screen, 'buildPreparedTripRoutePreview(routeForSetup)', 'Open Trip Builder should prepare geometry from the route actually used for setup.');
+{
+  const selectRouteStart = screen.indexOf('const selectPlanningRoute = (routeId: string) => {');
+  const selectRouteEnd = screen.indexOf('const handleImportRouteFile = async () => {');
+  const selectRouteBlock = screen.slice(selectRouteStart, selectRouteEnd);
+  assert(
+    selectRouteBlock.indexOf('setSelectedRouteId(routeId);') > -1 &&
+      selectRouteBlock.indexOf('routeContextOrchestrator.prefetchForTrailSelection') > -1 &&
+      selectRouteBlock.indexOf('setSelectedRouteId(routeId);') <
+        selectRouteBlock.indexOf('routeContextOrchestrator.prefetchForTrailSelection'),
+    'Route selection should commit visible selected route state before starting Route Context prefetch.',
+  );
+}
 assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_LIMIT', 'Trip Builder should request enough nearby resupply candidates before ranking the closest five.');
 assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const', 'Trip Builder should search the full approach corridor with a wide fallback radius before accepting resupply options.');
 assertIncludes(screen, 'SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES = 10', 'Trip Builder should prefer fuel and supplies within a practical approach-route buffer.');
