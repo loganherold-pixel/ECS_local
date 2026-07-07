@@ -20343,6 +20343,10 @@ const idleDestinationSearchResultsMaxHeight = Math.max(
 );
 
 const recentSearchCount = recentSearches.length;
+const visibleRecentSearches = useMemo(
+  () => recentSearches.slice(0, idleDestinationSearchRenderLimit),
+  [idleDestinationSearchRenderLimit, recentSearches],
+);
 
 const recentSearchesTitle = recentSearchCount > 0
   ? `RECENT SEARCHES - ${recentSearchCount}`
@@ -20522,7 +20526,7 @@ const idleDestinationSearchOverlay = useMemo(() => {
                 nestedScrollEnabled
                 keyboardShouldPersistTaps="handled"
               >
-                {recentSearches.map((suggestion) => (
+                {visibleRecentSearches.map((suggestion) => (
                   <TouchableOpacity
                     key={`recent-${suggestion.id}`}
                     style={[
@@ -20603,6 +20607,7 @@ const idleDestinationSearchOverlay = useMemo(() => {
   searchOperationalState.tone,
   setRoadNavigationQuery,
   toggleRecentSearches,
+  visibleRecentSearches,
   visibleIdleDestinationSearchSuggestions,
   deferredIdleDestinationSearchSuggestions.length,
   roadNavigationSurfaceTopOffset,
@@ -20876,7 +20881,7 @@ const mapRendererElement = useMemo(() => (
     establishedCampsites={establishedCampsitesLayer}
     campsiteSearchPolygon={campsiteSearchPolygonPayload}
     surfaceMode="compact"
-    standbyWakeDisabled={idleDestinationSearchVisible && !destinationSearchMapFrozen}
+    standbyWakeDisabled={idleDestinationSearchVisible}
   />
 ), [
   activeHealth?.overall,

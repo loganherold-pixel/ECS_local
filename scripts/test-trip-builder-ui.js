@@ -236,6 +236,17 @@ assert(!screen.includes('bailoutPlanPointsFromRouteContext(routeContextSnapshot)
 assert(!screen.includes('buildBailoutSearchAnchors(params.routePoints)'), 'Trip Builder should not run bailout search anchors.');
 assert(!screen.includes("filter((point) => point.source !== 'mapbox_search')"), 'Trip Builder should not rank bailout choices from generic map results.');
 assertIncludes(screen, 'tripSetupScroller', 'Trip Builder setup inputs should remain usable on smaller screens.');
+assertIncludes(screen, "import { useFocusEffect } from '@react-navigation/native';", 'Trip Builder hardware Back handling should be registered through the focused screen lifecycle.');
+assertIncludes(screen, 'useFocusEffect(', 'Trip Builder hardware Back handling should have screen-focus priority over stack navigation.');
+assertIncludes(screen, "BackHandler.addEventListener('hardwareBackPress'", 'Trip Builder should intercept Android hardware Back while picker overlays are open.');
+assertIncludes(screen, 'if (bailoutPickerVisible) {', 'Trip Builder hardware Back should close the bailout picker before leaving the screen.');
+assertIncludes(screen, 'if (campPickerVisible) {', 'Trip Builder hardware Back should close the camp picker before leaving the screen.');
+assertIncludes(screen, 'if (planMapScope) {', 'Trip Builder hardware Back should close scoped trip map overlays before leaving the screen.');
+assertIncludes(screen, 'closeTripPlanOverlay();', 'Trip Builder hardware Back should dismiss the generated plan overlay through the explicit close path.');
+assertIncludes(screen, 'const tripSetupHasSavedReferencePins = bailoutPlanPins.length > 0 || campPlanPins.length > 0;', 'Trip Builder setup should detect saved reference pins for mobile scroll clearance.');
+assertIncludes(screen, 'contentContainerStyle={tripSetupContentStyle}', 'Trip Builder setup ScrollView should use saved-pin-aware content clearance.');
+assertIncludes(screen, 'tripSetupScrollerRef.current?.scrollToEnd({ animated: true });', 'Trip Builder setup should reveal the next camp/build controls after a saved reference pin expands the form.');
+assertIncludes(screen, 'tripSetupContentWithSavedPins', 'Trip Builder setup should add extra bottom clearance when saved bailout or camp pins expand the form.');
 assertIncludes(screen, 'testID="trip-builder-results"', 'Trip Builder results view');
 assertIncludes(screen, 'TripPlanMapOverlay', 'Trip Builder results should expose a trip map overlay.');
 assertIncludes(screen, 'testID="trip-builder-map-overlay"', 'Trip Builder map overlay test hook');

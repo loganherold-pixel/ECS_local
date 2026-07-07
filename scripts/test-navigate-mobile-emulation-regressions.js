@@ -139,6 +139,12 @@ assert.ok(
   'Visible Navigate search suggestions should be sliced from the deferred mobile list.',
 );
 assert.ok(
+  navigateSource.includes('const visibleRecentSearches = useMemo(') &&
+    navigateSource.includes('recentSearches.slice(0, idleDestinationSearchRenderLimit)') &&
+    navigateSource.includes('visibleRecentSearches.map((suggestion) => ('),
+  'Visible Navigate recent-search rows should share the keyboard-active row budget instead of rendering every saved row during focus.',
+);
+assert.ok(
   navigateSource.includes('destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT : IDLE_DESTINATION_SEARCH_RENDER_LIMIT'),
   'Keyboard-active destination search should use the smaller render budget before expanding after the keyboard path settles.',
 );
@@ -332,8 +338,8 @@ assert.ok(
   'Idle destination search should not force a live WebView under the parked search panel.',
 );
 assert.ok(
-  navigateSource.includes('standbyWakeDisabled={idleDestinationSearchVisible && !destinationSearchMapFrozen}'),
-  'Parked idle destination search should keep the standby map visually useful without letting map-background taps wake the live WebView.',
+  navigateSource.includes('standbyWakeDisabled={idleDestinationSearchVisible}'),
+  'Parked idle destination search should keep the standby map visually useful without letting search-background taps wake the live WebView.',
 );
 assert.ok(
   mapRendererSource.includes('standbyMapDisabled?: boolean;') &&

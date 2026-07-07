@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   FlatList,
   InteractionManager,
   ScrollView,
@@ -12,6 +13,7 @@ import {
   type ListRenderItemInfo,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
 
@@ -343,6 +345,7 @@ const SMART_RESUPPLY_SUPPLY_QUERY = 'grocery store supermarket supplies';
 const SMART_RESUPPLY_OPTION_LIMIT = 5;
 const SMART_RESUPPLY_OPTION_LIST_HEIGHT = 56;
 const TRIP_SETUP_BUILD_BUTTON_CLEARANCE = 108;
+const TRIP_SETUP_SAVED_PIN_SCROLL_CLEARANCE = 84;
 const SMART_RESUPPLY_SEARCH_LIMIT = 20;
 const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const;
 const SMART_RESUPPLY_SEARCH_MAX_ANCHORS = 4;
@@ -3796,6 +3799,8 @@ export default function ExploreTripBuilderScreen() {
   const smartResupplySupplyRequestRef = useRef(0);
   const smartResupplyFuelSearchSignatureRef = useRef<string | null>(null);
   const smartResupplySupplySearchSignatureRef = useRef<string | null>(null);
+  const tripSetupScrollerRef = useRef<React.ElementRef<typeof ScrollView> | null>(null);
+  const tripSetupReferencePinCountsRef = useRef({ bailout: 0, camp: 0 });
   const tripType = DEFAULT_TRIP_BUILDER_TRIP_TYPE;
   const groupType = DEFAULT_TRIP_BUILDER_GROUP_TYPE;
   const priorities = DEFAULT_TRIP_BUILDER_PRIORITIES;
@@ -3830,6 +3835,55 @@ export default function ExploreTripBuilderScreen() {
     setSmartResupplySupplyOptions(nextOptions);
     setSelectedSmartSupply((current) => refreshSelectedSmartResupplyOption(current, nextOptions));
   }, []);
+
+  const closeTripPlanOverlay = useCallback(() => {
+    setPlanMapScope(null);
+    setPlanModalVisible(false);
+    lastTripBuilderPlanState = {
+      selectedRouteId,
+      plan,
+      visible: false,
+      itinerarySaved,
+      itineraryEditSession: savedTripItineraryEditSession,
+    };
+  }, [itinerarySaved, plan, savedTripItineraryEditSession, selectedRouteId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (bailoutPickerVisible) {
+          setBailoutPickerVisible(false);
+          return true;
+        }
+        if (campPickerVisible) {
+          setCampPickerVisible(false);
+          return true;
+        }
+        if (planMapScope) {
+          setPlanMapScope(null);
+          return true;
+        }
+        if (insertState) {
+          setInsertState(null);
+          return true;
+        }
+        if (planModalVisible) {
+          closeTripPlanOverlay();
+          return true;
+        }
+        return false;
+      });
+
+      return () => subscription.remove();
+    }, [
+      bailoutPickerVisible,
+      campPickerVisible,
+      closeTripPlanOverlay,
+      insertState,
+      planMapScope,
+      planModalVisible,
+    ]),
+  );
 
   useEffect(() => {
     if (itinerarySearchToken) return;
@@ -4391,6 +4445,41 @@ export default function ExploreTripBuilderScreen() {
   );
   const bailoutPlanReady = bailoutPlanPreference === 'no' || !!selectedBailoutPoint || bailoutPlanPins.length > 0;
   const campPlanReady = campPlanPreference === 'skip' || campPlanPins.length > 0;
+  const tripSetupHasSavedReferencePins = bailoutPlanPins.length > 0 || campPlanPins.length > 0;
+  const tripSetupContentStyle = useMemo(
+    () => [
+      styles.tripSetupContent,
+      tripSetupHasSavedReferencePins && styles.tripSetupContentWithSavedPins,
+    ],
+    [tripSetupHasSavedReferencePins],
+  );
+
+  useEffect(() => {
+    const previousCounts = tripSetupReferencePinCountsRef.current;
+    const nextCounts = {
+      bailout: bailoutPlanPins.length,
+      camp: campPlanPins.length,
+    };
+    tripSetupReferencePinCountsRef.current = nextCounts;
+
+    const referencePinAdded =
+      nextCounts.bailout > previousCounts.bailout ||
+      nextCounts.camp > previousCounts.camp;
+
+    if (!tripSetupStarted || !referencePinAdded) {
+      return undefined;
+    }
+
+    const revealTask = InteractionManager.runAfterInteractions(() => {
+      requestAnimationFrame(() => {
+        tripSetupScrollerRef.current?.scrollToEnd({ animated: true });
+      });
+    });
+
+    return () => {
+      revealTask.cancel?.();
+    };
+  }, [bailoutPlanPins.length, campPlanPins.length, tripSetupStarted]);
 
   useEffect(() => {
     if (!itineraryEditMode || !insertState || itinerarySearchToken) return;
@@ -5479,8 +5568,9 @@ export default function ExploreTripBuilderScreen() {
                     </View>
 
                     <ScrollView
+                      ref={tripSetupScrollerRef}
                       style={styles.tripSetupScroller}
-                      contentContainerStyle={styles.tripSetupContent}
+                      contentContainerStyle={tripSetupContentStyle}
                       nestedScrollEnabled
                       showsVerticalScrollIndicator={false}
                     >
@@ -5858,17 +5948,7 @@ export default function ExploreTripBuilderScreen() {
                 <TouchableOpacity
                   style={styles.modalCloseButton}
                   activeOpacity={0.82}
-                  onPress={() => {
-                    setPlanMapScope(null);
-                    setPlanModalVisible(false);
-                    lastTripBuilderPlanState = {
-                      selectedRouteId,
-                      plan,
-                      visible: false,
-                      itinerarySaved,
-                      itineraryEditSession: savedTripItineraryEditSession,
-                    };
-                  }}
+                  onPress={closeTripPlanOverlay}
                   accessibilityRole="button"
                   accessibilityLabel="Close Trip Plan"
                   testID="trip-builder-results-close"
@@ -6337,6 +6417,9 @@ const styles = StyleSheet.create({
   },
   tripSetupScroller: { flex: 1, minHeight: 0, overflow: 'hidden' },
   tripSetupContent: { gap: 7, paddingBottom: TRIP_SETUP_BUILD_BUTTON_CLEARANCE },
+  tripSetupContentWithSavedPins: {
+    paddingBottom: TRIP_SETUP_BUILD_BUTTON_CLEARANCE + TRIP_SETUP_SAVED_PIN_SCROLL_CLEARANCE,
+  },
   tripSetupFooter: { flexShrink: 0, paddingTop: 7 },
   tripSetupDefaults: {
     flexDirection: 'row',
