@@ -34,6 +34,8 @@ assertIncludes(screen, 'activeTab="trip_builder"', 'Trip Builder should mark the
 assertIncludes(screen, 'loadTripBuilderRouteHandoff', 'Trip Builder route handoff');
 assertIncludes(screen, 'loadExplorePlanningRouteContext', 'Trip Builder should consume active Explorer filter route context.');
 assertIncludes(screen, 'loadOpportunitiesWithCompatibility(null)', 'Trip Builder route selection');
+assertIncludes(screen, 'InteractionManager.runAfterInteractions', 'Trip Builder route selection should defer route loading until after the screen transition frame.');
+assertIncludes(screen, 'routeLoadTask.cancel?.();', 'Trip Builder deferred route loading should cancel cleanly on route changes or unmount.');
 assert(!screen.includes('testID="trip-builder-selected-route"'), 'Trip Builder should not render a redundant selected-route summary after route selection.');
 assertIncludes(screen, 'Choose Route', 'Trip Builder should present ECS and imported route choices before setup.');
 assertIncludes(screen, 'ECS OR IMPORTED', 'Trip Builder route picker should distinguish ECS and imported routes.');
@@ -149,6 +151,28 @@ assert(!/import\s*\{[\s\S]*\bModal\b[\s\S]*\}\s*from\s*'react-native'/.test(scre
 assertIncludes(screen, 'styles.planOverlayBackdrop', 'Trip Builder plan overlay should keep the ECS background visible instead of flashing a white native modal surface.');
 assertIncludes(screen, 'styles.bodyFrame', 'Trip Builder plan overlay should stay inside the Explore body so the lower ECS banner remains visible.');
 assertIncludes(screen, 'routeListScroller', 'Trip Builder route selector should be independently scrollable.');
+[
+  'FlatList<ExpeditionOpportunity>',
+  'TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT',
+  'TRIP_BUILDER_ROUTE_LIST_BATCH_SIZE',
+  'TRIP_BUILDER_ROUTE_LIST_WINDOW_SIZE',
+  'TRIP_BUILDER_ROUTE_LIST_BATCHING_PERIOD_MS',
+  'RouteSelectionCard = React.memo',
+  'tripBuilderRouteKeyExtractor',
+  'renderTripBuilderRouteOption',
+  'getTripBuilderRouteItemLayout',
+  'initialNumToRender={TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT}',
+  'maxToRenderPerBatch={TRIP_BUILDER_ROUTE_LIST_BATCH_SIZE}',
+  'windowSize={TRIP_BUILDER_ROUTE_LIST_WINDOW_SIZE}',
+  'updateCellsBatchingPeriod={TRIP_BUILDER_ROUTE_LIST_BATCHING_PERIOD_MS}',
+  'removeClippedSubviews',
+].forEach((needle) => {
+  assertIncludes(screen, needle, `Trip Builder route selector should use virtualized mobile rendering: ${needle}`);
+});
+assert(
+  !screen.includes('routes.map((route) => ('),
+  'Trip Builder route selector should not eagerly render every route row in the route picker.',
+);
 assertIncludes(screen, 'routes.length} FILTERED ROUTE', 'Trip Builder route selector should display the actual filtered route count.');
 assertIncludes(screen, 'const [tripSetupStarted, setTripSetupStarted] = useState(false)', 'Trip Builder should keep route-picker setup closed for top-level Trip Builder entry.');
 assertIncludes(screen, "params.setup === '1'", 'Trip Builder should recognize direct Explore Build Trip handoffs.');
@@ -170,8 +194,9 @@ assertIncludes(screen, 'latestSelectedPlanningRouteRef.current = routeForContext
 assertIncludes(screen, 'const routeForSetup = selectedRoute ?? latestSelectedPlanningRouteRef.current;', 'Open Trip Builder should use the latest tapped route if React has not rendered selectedRoute yet.');
 assertIncludes(screen, 'buildPreparedTripRoutePreview(routeForSetup)', 'Open Trip Builder should prepare geometry from the route actually used for setup.');
 {
-  const selectRouteStart = screen.indexOf('const selectPlanningRoute = (routeId: string) => {');
+  const selectRouteStart = screen.indexOf('const selectPlanningRoute = useCallback((routeId: string) => {');
   const selectRouteEnd = screen.indexOf('const handleImportRouteFile = async () => {');
+  assert(selectRouteStart > -1 && selectRouteEnd > selectRouteStart, 'Route selection source block should be discoverable.');
   const selectRouteBlock = screen.slice(selectRouteStart, selectRouteEnd);
   assert(
     selectRouteBlock.indexOf('setSelectedRouteId(routeId);') > -1 &&

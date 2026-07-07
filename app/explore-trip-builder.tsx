@@ -1,12 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
+  InteractionManager,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
+  type ListRenderItemInfo,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -157,6 +160,11 @@ const TRIP_TYPE_OPTIONS: { value: TripType; label: string }[] = [
 const DEFAULT_TRIP_BUILDER_TRIP_TYPE: TripType = 'day_trip';
 const DEFAULT_TRIP_BUILDER_GROUP_TYPE: GroupType = 'solo';
 const DEFAULT_TRIP_BUILDER_PRIORITIES: TripPriority[] = ['low_risk'];
+const TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT = 6;
+const TRIP_BUILDER_ROUTE_LIST_BATCH_SIZE = 4;
+const TRIP_BUILDER_ROUTE_LIST_WINDOW_SIZE = 5;
+const TRIP_BUILDER_ROUTE_LIST_BATCHING_PERIOD_MS = 50;
+const TRIP_BUILDER_ROUTE_ROW_HEIGHT = 58;
 
 function routeContextSupplyModeForTripBuilder(
   preference: TripBuilderInput['smartResupplyPreference'],
@@ -860,21 +868,40 @@ function routeToCampCandidates(route: ExpeditionOpportunity | null): CampCandida
   }));
 }
 
-function RouteSelectionCard({
+const tripBuilderRouteKeyExtractor = (route: ExpeditionOpportunity) => String(route.id);
+
+function getTripBuilderRouteItemLayout(
+  _data: ArrayLike<ExpeditionOpportunity> | null | undefined,
+  index: number,
+) {
+  return {
+    length: TRIP_BUILDER_ROUTE_ROW_HEIGHT,
+    offset: TRIP_BUILDER_ROUTE_ROW_HEIGHT * index,
+    index,
+  };
+}
+
+function TripBuilderRouteListSeparator() {
+  return <View style={styles.routeListSeparator} />;
+}
+
+const RouteSelectionCard = React.memo(function RouteSelectionCard({
   route,
   selected,
   onPress,
 }: {
   route: ExpeditionOpportunity;
   selected: boolean;
-  onPress: () => void;
+  onPress: (routeId: string) => void;
 }) {
   const routeAuthority = classifyExploreRouteAuthority(route);
+  const routeId = String(route.id);
+  const handlePress = useCallback(() => onPress(routeId), [onPress, routeId]);
   return (
     <TouchableOpacity
       style={[styles.routeOption, selected && styles.routeOptionSelected]}
       activeOpacity={0.82}
-      onPress={onPress}
+      onPress={handlePress}
       accessibilityRole="button"
       accessibilityLabel={`Select ${route.name}`}
       testID={`trip-builder-route-option-${route.id}`}
@@ -893,7 +920,7 @@ function RouteSelectionCard({
       </View>
     </TouchableOpacity>
   );
-}
+});
 
 function OptionChip({
   label,
@@ -3721,7 +3748,13 @@ export default function ExploreTripBuilderScreen() {
   const tripType = DEFAULT_TRIP_BUILDER_TRIP_TYPE;
   const groupType = DEFAULT_TRIP_BUILDER_GROUP_TYPE;
   const priorities = DEFAULT_TRIP_BUILDER_PRIORITIES;
-  const tripBuilderGps = useThrottledGPS({ enabled: true, highAccuracy: true });
+  const tripBuilderNeedsLivePosition =
+    tripSetupStarted ||
+    planModalVisible ||
+    bailoutPickerVisible ||
+    campPickerVisible ||
+    itineraryEditMode;
+  const tripBuilderGps = useThrottledGPS({ enabled: tripBuilderNeedsLivePosition, highAccuracy: true });
   const liveTripBuilderUserLocation = useMemo(
     () => tripBuilderCoordinateFromGpsPosition(tripBuilderGps.rawGPS.position ?? tripBuilderGps.position),
     [tripBuilderGps.position, tripBuilderGps.rawGPS.position],
@@ -3767,60 +3800,69 @@ export default function ExploreTripBuilderScreen() {
   }, [smartResupplySupplyOptions]);
 
   useEffect(() => {
-    try {
-      const handoff = loadTripBuilderRouteHandoff();
-      const exploreContext = loadExplorePlanningRouteContext();
-      const suggestedRoutes = (exploreContext?.routes?.length
-        ? exploreContext.routes
-        : loadOpportunitiesWithCompatibility(null).opportunities
-      ) as ExpeditionOpportunity[];
-      const handoffDraftItinerary = handoff?.draftItinerary ?? null;
-      const handoffRoute = handoff?.route
-        ? {
-            ...handoff.route,
-            itinerary: handoffDraftItinerary ?? handoff.route.itinerary ?? null,
-            itineraryConfidence: handoffDraftItinerary?.confidence ?? handoff.route.itineraryConfidence,
-          } as unknown as ExpeditionOpportunity
-        : undefined;
-      const routeMap = new Map<string, TripBuilderRouteInput>();
-      if (handoffRoute?.id) upsertExplorePlanningRoute(routeMap, handoffRoute as unknown as TripBuilderRouteInput);
-      suggestedRoutes.forEach((route) => upsertExplorePlanningRoute(routeMap, route as unknown as TripBuilderRouteInput));
-      const nextRoutes = Array.from(routeMap.values());
-      setRoutes(nextRoutes as unknown as ExpeditionOpportunity[]);
-      const requestedRouteId = params.routeId ? String(params.routeId) : null;
-      const shouldAutoOpenTripSetup = Boolean(requestedRouteId && params.setup === '1');
-      const restoredRouteId = lastTripBuilderPlanState.visible ? lastTripBuilderPlanState.selectedRouteId : null;
-      const selectedRouteIdForState = requestedRouteId ?? restoredRouteId ?? (handoffRoute?.id ? String(handoffRoute.id) : null);
-      setSelectedRouteId(selectedRouteIdForState);
-      if (
-        lastTripBuilderPlanState.visible &&
-        lastTripBuilderPlanState.plan &&
-        (!requestedRouteId || requestedRouteId === lastTripBuilderPlanState.selectedRouteId)
-      ) {
-        setPlan(lastTripBuilderPlanState.plan);
-        setPlanModalVisible(true);
-        setTripSetupStarted(true);
-        const restoredRoute =
-          nextRoutes.find((route) => String(route.id) === String(lastTripBuilderPlanState.selectedRouteId)) ??
-          handoffRoute ??
-          null;
-        setPreparedTripRoutePreview(buildPreparedTripRoutePreview(restoredRoute as ExpeditionOpportunity | null));
-        setItinerarySaved(lastTripBuilderPlanState.itinerarySaved);
-        setSavedTripItineraryEditSession(lastTripBuilderPlanState.itineraryEditSession);
-      } else {
-        const autoSetupRoute = shouldAutoOpenTripSetup
-          ? nextRoutes.find((route) => String(route.id) === String(selectedRouteIdForState)) ?? handoffRoute ?? null
-          : null;
-        setTripSetupStarted(shouldAutoOpenTripSetup);
-        setPreparedTripRoutePreview(shouldAutoOpenTripSetup ? buildPreparedTripRoutePreview(autoSetupRoute as ExpeditionOpportunity | null) : null);
-        setSavedTripItineraryEditSession(null);
+    let cancelled = false;
+    setLoading(true);
+    const routeLoadTask = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) return;
+      try {
+        const handoff = loadTripBuilderRouteHandoff();
+        const exploreContext = loadExplorePlanningRouteContext();
+        const suggestedRoutes = (exploreContext?.routes?.length
+          ? exploreContext.routes
+          : loadOpportunitiesWithCompatibility(null).opportunities
+        ) as ExpeditionOpportunity[];
+        const handoffDraftItinerary = handoff?.draftItinerary ?? null;
+        const handoffRoute = handoff?.route
+          ? {
+              ...handoff.route,
+              itinerary: handoffDraftItinerary ?? handoff.route.itinerary ?? null,
+              itineraryConfidence: handoffDraftItinerary?.confidence ?? handoff.route.itineraryConfidence,
+            } as unknown as ExpeditionOpportunity
+          : undefined;
+        const routeMap = new Map<string, TripBuilderRouteInput>();
+        if (handoffRoute?.id) upsertExplorePlanningRoute(routeMap, handoffRoute as unknown as TripBuilderRouteInput);
+        suggestedRoutes.forEach((route) => upsertExplorePlanningRoute(routeMap, route as unknown as TripBuilderRouteInput));
+        const nextRoutes = Array.from(routeMap.values());
+        setRoutes(nextRoutes as unknown as ExpeditionOpportunity[]);
+        const requestedRouteId = params.routeId ? String(params.routeId) : null;
+        const shouldAutoOpenTripSetup = Boolean(requestedRouteId && params.setup === '1');
+        const restoredRouteId = lastTripBuilderPlanState.visible ? lastTripBuilderPlanState.selectedRouteId : null;
+        const selectedRouteIdForState = requestedRouteId ?? restoredRouteId ?? (handoffRoute?.id ? String(handoffRoute.id) : null);
+        setSelectedRouteId(selectedRouteIdForState);
+        if (
+          lastTripBuilderPlanState.visible &&
+          lastTripBuilderPlanState.plan &&
+          (!requestedRouteId || requestedRouteId === lastTripBuilderPlanState.selectedRouteId)
+        ) {
+          setPlan(lastTripBuilderPlanState.plan);
+          setPlanModalVisible(true);
+          setTripSetupStarted(true);
+          const restoredRoute =
+            nextRoutes.find((route) => String(route.id) === String(lastTripBuilderPlanState.selectedRouteId)) ??
+            handoffRoute ??
+            null;
+          setPreparedTripRoutePreview(buildPreparedTripRoutePreview(restoredRoute as ExpeditionOpportunity | null));
+          setItinerarySaved(lastTripBuilderPlanState.itinerarySaved);
+          setSavedTripItineraryEditSession(lastTripBuilderPlanState.itineraryEditSession);
+        } else {
+          const autoSetupRoute = shouldAutoOpenTripSetup
+            ? nextRoutes.find((route) => String(route.id) === String(selectedRouteIdForState)) ?? handoffRoute ?? null
+            : null;
+          setTripSetupStarted(shouldAutoOpenTripSetup);
+          setPreparedTripRoutePreview(shouldAutoOpenTripSetup ? buildPreparedTripRoutePreview(autoSetupRoute as ExpeditionOpportunity | null) : null);
+          setSavedTripItineraryEditSession(null);
+        }
+        setError(null);
+      } catch {
+        if (!cancelled) setError('Trip Builder could not load route options.');
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setError(null);
-    } catch {
-      setError('Trip Builder could not load route options.');
-    } finally {
-      setLoading(false);
-    }
+    });
+    return () => {
+      cancelled = true;
+      routeLoadTask.cancel?.();
+    };
   }, [params.routeId, params.setup]);
 
   const selectedRoute = useMemo(
@@ -3845,6 +3887,10 @@ export default function ExploreTripBuilderScreen() {
 
   useEffect(() => {
     if (!selectedRoute) {
+      setRouteContextSnapshot(null);
+      return;
+    }
+    if (!tripSetupStarted && !planModalVisible) {
       setRouteContextSnapshot(null);
       return;
     }
@@ -3879,7 +3925,15 @@ export default function ExploreTripBuilderScreen() {
     return () => {
       cancelled = true;
     };
-  }, [liveRouteContextOrigin, routeContextProviderRegistry, selectedRoute, selectedRouteContextSupplySelection, smartResupplyPreference]);
+  }, [
+    liveRouteContextOrigin,
+    planModalVisible,
+    routeContextProviderRegistry,
+    selectedRoute,
+    selectedRouteContextSupplySelection,
+    smartResupplyPreference,
+    tripSetupStarted,
+  ]);
 
   const selectedRouteStartCoordinate = useMemo(() => {
     if (!selectedRoute) return null;
@@ -4683,7 +4737,7 @@ export default function ExploreTripBuilderScreen() {
     });
   };
 
-  const selectPlanningRoute = (routeId: string) => {
+  const selectPlanningRoute = useCallback((routeId: string) => {
     hapticMicro();
     const routeForContext = routes.find((route) => String(route.id) === routeId) ?? null;
     latestSelectedPlanningRouteRef.current = routeForContext;
@@ -4723,7 +4777,7 @@ export default function ExploreTripBuilderScreen() {
         providerRegistry: routeContextProviderRegistry,
       }).catch(() => {});
     }
-  };
+  }, [liveRouteContextOrigin, routeContextProviderRegistry, routes, smartResupplyPreference]);
 
   const handleImportRouteFile = async () => {
     if (routeImportState.status === 'loading') return;
@@ -4817,6 +4871,17 @@ export default function ExploreTripBuilderScreen() {
     setTripSetupStarted(true);
     setError(null);
   };
+
+  const renderTripBuilderRouteOption = useCallback(
+    ({ item }: ListRenderItemInfo<ExpeditionOpportunity>) => (
+      <RouteSelectionCard
+        route={item}
+        selected={String(item.id) === selectedRouteId}
+        onPress={selectPlanningRoute}
+      />
+    ),
+    [selectPlanningRoute, selectedRouteId],
+  );
 
   const handleSkipCampPlan = () => {
     hapticMicro();
@@ -5322,21 +5387,23 @@ export default function ExploreTripBuilderScreen() {
                         {routeImportState.message}
                       </Text>
                     ) : null}
-                    <ScrollView
+                    <FlatList<ExpeditionOpportunity>
+                      data={routes}
+                      keyExtractor={tripBuilderRouteKeyExtractor}
+                      renderItem={renderTripBuilderRouteOption}
                       style={styles.routeListScroller}
                       contentContainerStyle={styles.routeList}
+                      ItemSeparatorComponent={TripBuilderRouteListSeparator}
+                      initialNumToRender={TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT}
+                      maxToRenderPerBatch={TRIP_BUILDER_ROUTE_LIST_BATCH_SIZE}
+                      windowSize={TRIP_BUILDER_ROUTE_LIST_WINDOW_SIZE}
+                      updateCellsBatchingPeriod={TRIP_BUILDER_ROUTE_LIST_BATCHING_PERIOD_MS}
+                      getItemLayout={getTripBuilderRouteItemLayout}
+                      removeClippedSubviews
                       nestedScrollEnabled
+                      keyboardShouldPersistTaps="handled"
                       showsVerticalScrollIndicator={routes.length > 4}
-                    >
-                      {routes.map((route) => (
-                        <RouteSelectionCard
-                          key={route.id}
-                          route={route}
-                          selected={String(route.id) === selectedRouteId}
-                          onPress={() => selectPlanningRoute(String(route.id))}
-                        />
-                      ))}
-                    </ScrollView>
+                    />
                     <TouchableOpacity
                       style={[styles.primaryButton, !selectedRoute && styles.primaryButtonDisabled]}
                       activeOpacity={selectedRoute ? 0.84 : 1}
@@ -6309,8 +6376,10 @@ const styles = StyleSheet.create({
   },
   importErrorText: { color: '#EF5350' },
   routeListScroller: { flex: 1, minHeight: 76 },
-  routeList: { gap: 6 },
+  routeList: { paddingBottom: 2 },
+  routeListSeparator: { height: 6 },
   routeOption: {
+    height: TRIP_BUILDER_ROUTE_ROW_HEIGHT - 6,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,

@@ -17,8 +17,13 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'const tripBuilderGps = useThrottledGPS({ enabled: true, highAccuracy: true });',
-  'Trip Builder should acquire a shared high-accuracy GPS fix while planning',
+  'const tripBuilderNeedsLivePosition =',
+  'Trip Builder should expose an explicit live-position gate for route-picker performance',
+);
+assertIncludes(
+  screen,
+  'const tripBuilderGps = useThrottledGPS({ enabled: tripBuilderNeedsLivePosition, highAccuracy: true });',
+  'Trip Builder should acquire a shared high-accuracy GPS fix only while planning needs position',
 );
 assertIncludes(
   screen,
@@ -29,6 +34,11 @@ assertIncludes(
   screen,
   'const liveTripBuilderUserLocation = useMemo',
   'Trip Builder should normalize live GPS into a TripItinerary userStart coordinate',
+);
+assertIncludes(
+  screen,
+  'if (!tripSetupStarted && !planModalVisible) {',
+  'Trip Builder should not churn Route Context lookups while the route picker is idle',
 );
 assertIncludes(
   screen,
