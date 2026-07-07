@@ -166,6 +166,61 @@ assertIncludes(
   'rankApproachResupplyOptions',
   'Smart resupply refreshes should run all candidates through the shared approach-aware ranker',
 );
+assertIncludes(
+  screen,
+  'const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 8000;',
+  'Smart resupply lookup should have a bounded wall-clock budget so setup does not spin for many seconds.',
+);
+assertIncludes(
+  screen,
+  'const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 6;',
+  'Smart resupply lookup should cap repeated Search Box suggest calls across approach anchors.',
+);
+assertIncludes(
+  screen,
+  'const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = 5;',
+  'Smart resupply lookup should cap Search Box retrieve calls after suggest returns candidates.',
+);
+assertIncludes(
+  screen,
+  'Live pre-trail POI lookup is taking too long; itinerary continuity is preserved with manual verification.',
+  'Smart resupply timeout copy should be truthful and preserve manual verification rather than inventing stops.',
+);
+assertIncludes(
+  screen,
+  'if (suggestRequestCount >= SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET) break searchLoop;',
+  'Smart resupply suggest loop should stop before it burns repeated Mapbox sessions.',
+);
+assertIncludes(
+  screen,
+  'if (retrieveRequestCount >= SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET) break;',
+  'Smart resupply retrieve loop should stop before it burns repeated Mapbox sessions.',
+);
+assertIncludes(
+  screen,
+  'forwardGeocodeFallback: false',
+  'Smart resupply background lookup should not invoke forward-geocode fallback for every approach anchor.',
+);
+assertIncludes(
+  screen,
+  'retrieveTimeoutMs: SMART_RESUPPLY_RETRIEVE_TIMEOUT_MS',
+  'Smart resupply retrieves should use a shorter timeout than interactive destination selection.',
+);
+assertIncludes(
+  screen,
+  'function smartResupplyAnchorSearchOrder',
+  'Smart resupply lookup should make fallback radius anchor ordering explicit.',
+);
+assertIncludes(
+  screen,
+  'if (radiusTierIndex === 0) return ordered;',
+  'Smart resupply lookup should still cover the sampled approach corridor on the first tight-radius pass.',
+);
+assertIncludes(
+  screen,
+  'return rightProgress - leftProgress || left - right;',
+  'Smart resupply fallback radius passes should prioritize remote-entry and trailhead-side anchors before home-side anchors.',
+);
 assert(
   !screen.includes("if (option.fallbackState === 'trailhead_only') return true;"),
   'Trailhead-only Smart Resupply fallbacks with known huge off-approach distances should not bypass the route-deviation cap.',

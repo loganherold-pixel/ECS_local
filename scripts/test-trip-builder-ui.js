@@ -219,7 +219,11 @@ assertIncludes(screen, 'liveApproachRoutePoints', 'RouteContext fuel candidates 
 assertIncludes(screen, 'selectedPreTrailSupplyAnchorCoordinate', 'RouteContext grocery candidates should be measured with the selected refuel fallback anchor.');
 assertIncludes(screen, 'selectedRouteRemoteEntryProgressRatio', 'RouteContext resupply candidates should use the selected route remote-entry boundary.');
 assertIncludes(screen, 'buildApproachResupplySearchAnchors', 'Trip Builder should sample approach-route search anchors for Smart Resupply.');
-assertIncludes(screen, 'maxAnchors: 7', 'Trip Builder Smart Resupply should keep enough anchors to cover the home-side approach corridor and trailhead fallback.');
+assertIncludes(screen, 'const SMART_RESUPPLY_SEARCH_MAX_ANCHORS = 4', 'Trip Builder Smart Resupply should keep a bounded anchor sample so mobile lookup work cannot run away.');
+assertIncludes(screen, 'maxAnchors: SMART_RESUPPLY_SEARCH_MAX_ANCHORS', 'Trip Builder Smart Resupply should use the bounded approach-anchor budget when searching live POIs.');
+assertIncludes(screen, 'SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 8000', 'Trip Builder Smart Resupply should settle slow provider work instead of leaving setup stuck in a loading state.');
+assertIncludes(screen, 'SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET', 'Trip Builder Smart Resupply should cap Search Box suggest cycles during setup.');
+assertIncludes(screen, 'SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET', 'Trip Builder Smart Resupply should cap Search Box retrieve cycles during setup.');
 assertIncludes(screen, 'rankApproachResupplyOptions', 'Trip Builder should rank Smart Resupply options with approach-route context.');
 assertIncludes(screen, 'isSmartResupplyOptionRouteAware', 'RouteContext resupply candidates should also be capped by approach-route readiness.');
 assertIncludes(screen, '(left.approachScore ?? Number.NEGATIVE_INFINITY)', 'Fuel and supply options should be ranked by approach score before title tie breakers.');

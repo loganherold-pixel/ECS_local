@@ -311,6 +311,7 @@ export async function searchRoadDestinations(params: {
     north: number;
   } | null;
   limit?: number;
+  forwardGeocodeFallback?: boolean;
 }): Promise<RoadNavSearchSuggestion[]> {
   const trimmed = params.query.trim();
   if (!trimmed) return [];
@@ -383,6 +384,10 @@ export async function searchRoadDestinations(params: {
     });
   }
 
+  if (params.forwardGeocodeFallback === false) {
+    return [];
+  }
+
   const geocodeUrl = new URL(`${FORWARD_GEOCODE_URL}/${encodeURIComponent(trimmed)}.json`);
   geocodeUrl.searchParams.set('access_token', params.accessToken);
   geocodeUrl.searchParams.set('autocomplete', 'true');
@@ -426,6 +431,7 @@ export async function resolveRoadDestination(params: {
   sessionToken: string;
   suggestion: RoadNavSearchSuggestion;
   billingContext?: MapboxSearchBillingContext | null;
+  retrieveTimeoutMs?: number;
 }): Promise<RoadNavDestination> {
   const requestSignature = params.billingContext?.requestSignature ?? String(params.suggestion.mapboxId ?? params.suggestion.id);
   const billingContext = {
@@ -465,7 +471,7 @@ export async function resolveRoadDestination(params: {
 
       const retrieved = await fetchJsonWithTimeout<{ features?: any[] }>(
         retrieveUrl.toString(),
-        7000,
+        params.retrieveTimeoutMs ?? 7000,
       );
       const destination = normalizeDestination(
         retrieved?.features?.[0],

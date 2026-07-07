@@ -67,6 +67,7 @@ import {
   routeContextToTripBuilderItineraryContext,
   routeWithRouteContext,
   type ApproachResupplyCandidate,
+  type ApproachResupplySearchAnchor,
   type CampCandidate,
   type GroupType,
   type TimeWindow,
@@ -344,6 +345,13 @@ const SMART_RESUPPLY_OPTION_LIST_HEIGHT = 56;
 const TRIP_SETUP_BUILD_BUTTON_CLEARANCE = 108;
 const SMART_RESUPPLY_SEARCH_LIMIT = 20;
 const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const;
+const SMART_RESUPPLY_SEARCH_MAX_ANCHORS = 4;
+const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 8000;
+const SMART_RESUPPLY_RETRIEVE_TIMEOUT_MS = 2200;
+const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 6;
+const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = 5;
+const SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE =
+  'Live pre-trail POI lookup is taking too long; itinerary continuity is preserved with manual verification.';
 const SMART_RESUPPLY_PREFERRED_ROUTE_BUFFER_MILES = 10;
 const SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES = 20;
 const SMART_RESUPPLY_APPROACH_SIGNATURE_MAX_POINTS = 6;
@@ -2774,6 +2782,30 @@ function appendBailoutStopsToPlan(plan: TripPlan, points: BailoutPlanPoint[]): T
   return points.reduce((nextPlan, point) => appendBailoutStopToPlan(nextPlan, point), plan);
 }
 
+function smartResupplyLookupTimedOut(startedAtMs: number): boolean {
+  return Date.now() - startedAtMs >= SMART_RESUPPLY_LOOKUP_TIMEOUT_MS;
+}
+
+function assertSmartResupplyLookupBudget(startedAtMs: number): void {
+  if (smartResupplyLookupTimedOut(startedAtMs)) {
+    throw new Error(SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE);
+  }
+}
+
+function smartResupplyAnchorSearchOrder(
+  anchors: ApproachResupplySearchAnchor[],
+  radiusTierIndex: number,
+): number[] {
+  const ordered = anchors.map((_, index) => index);
+  if (radiusTierIndex === 0) return ordered;
+
+  return ordered.sort((left, right) => {
+    const leftProgress = anchors[left]?.progressRatio ?? (anchors[left]?.basis === 'trailhead_fallback' ? 1 : 0);
+    const rightProgress = anchors[right]?.progressRatio ?? (anchors[right]?.basis === 'trailhead_fallback' ? 1 : 0);
+    return rightProgress - leftProgress || left - right;
+  });
+}
+
 async function loadSmartResupplyOptions(params: {
   accessToken: string;
   sessionToken: string;
@@ -2785,12 +2817,13 @@ async function loadSmartResupplyOptions(params: {
   fallbackAnchor?: TripMapCoordinate | null;
   remoteEntryProgressRatio?: number | null;
 }): Promise<SmartResupplyPoi[]> {
+  const lookupStartedAt = Date.now();
   const searchAnchors = buildApproachResupplySearchAnchors({
     trailhead: params.routeStart,
     approachRoute: params.approachRoute,
     fallbackAnchor: params.fallbackAnchor ?? params.routeStart,
     remoteEntryProgressRatio: params.remoteEntryProgressRatio,
-    maxAnchors: 7,
+    maxAnchors: SMART_RESUPPLY_SEARCH_MAX_ANCHORS,
   });
   const suggestionMap = new Map<string, RoadNavSearchSuggestion>();
   const collectSuggestions = (suggestions: RoadNavSearchSuggestion[]) => {
@@ -2801,7 +2834,10 @@ async function loadSmartResupplyOptions(params: {
   };
   const minimumAnchorCoverageCount = searchAnchors.length;
   const coveredAnchorKeys = new Set<number>();
+  let suggestRequestCount = 0;
+  let retrieveRequestCount = 0;
   const collectSearchPass = async (anchor: TripMapCoordinate, anchorIndex: number, bbox?: SmartResupplySearchBounds) => {
+    assertSmartResupplyLookupBudget(lookupStartedAt);
     const suggestions = await searchRoadDestinations({
       accessToken: params.accessToken,
       query: params.query,
@@ -2809,6 +2845,7 @@ async function loadSmartResupplyOptions(params: {
       proximity: { lat: anchor.latitude, lng: anchor.longitude },
       bbox,
       limit: SMART_RESUPPLY_SEARCH_LIMIT,
+      forwardGeocodeFallback: false,
       billingContext: {
         flow: 'trip_builder_smart_resupply',
         surface: 'Trip Builder',
@@ -2819,12 +2856,19 @@ async function loadSmartResupplyOptions(params: {
     collectSuggestions(suggestions);
   };
 
-  for (const radiusMiles of SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES) {
-    for (let anchorIndex = 0; anchorIndex < searchAnchors.length; anchorIndex += 1) {
+  searchLoop:
+  for (let radiusTierIndex = 0; radiusTierIndex < SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES.length; radiusTierIndex += 1) {
+    const radiusMiles = SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES[radiusTierIndex];
+    for (const anchorIndex of smartResupplyAnchorSearchOrder(searchAnchors, radiusTierIndex)) {
+      if (suggestRequestCount >= SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET) break searchLoop;
       const anchor = searchAnchors[anchorIndex];
       try {
+        suggestRequestCount += 1;
         await collectSearchPass(anchor.coordinate, anchorIndex, smartResupplySearchBounds(anchor.coordinate, radiusMiles));
       } catch {}
+      if (smartResupplyLookupTimedOut(lookupStartedAt) && suggestionMap.size === 0) {
+        throw new Error(SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE);
+      }
     }
     if (
       suggestionMap.size >= SMART_RESUPPLY_OPTION_LIMIT * 3 &&
@@ -2838,11 +2882,18 @@ async function loadSmartResupplyOptions(params: {
   const seen = new Set<string>();
   const fallbackAnchor = params.fallbackAnchor ?? params.routeStart;
   for (const suggestion of suggestionMap.values()) {
+    if (retrieveRequestCount >= SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET) break;
+    if (smartResupplyLookupTimedOut(lookupStartedAt)) {
+      if (options.length === 0) throw new Error(SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE);
+      break;
+    }
     try {
+      retrieveRequestCount += 1;
       const destination = await resolveRoadDestination({
         accessToken: params.accessToken,
         sessionToken: params.sessionToken,
         suggestion,
+        retrieveTimeoutMs: SMART_RESUPPLY_RETRIEVE_TIMEOUT_MS,
         billingContext: {
           flow: 'trip_builder_smart_resupply',
           surface: 'Trip Builder',
