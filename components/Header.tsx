@@ -251,6 +251,7 @@ export default function Header({ title, onAuthPress, connectionAccessory, guidan
     [topBannerVariant],
   );
   const guidanceOverrideActive = Boolean(guidance?.title || guidance?.eyebrow || guidance?.detail);
+  const showBriefBannerInHeader = Boolean(displayBriefBanner && !bannerSubject);
 
   useEffect(() => {
     const nextKey = [
@@ -415,7 +416,7 @@ export default function Header({ title, onAuthPress, connectionAccessory, guidan
     return 'SYNC NOW';
   }, [bannerStatus.processingActive, bannerStatus.processingLabel, isOnline, syncStatus]);
   const controlSlotWidth = ECS_TOP_SHELL_CONTROL_SLOT_WIDTH;
-  const useBannerTitleLayout = Boolean(bannerSubject || displayBriefBanner);
+  const useBannerTitleLayout = Boolean(bannerSubject || showBriefBannerInHeader);
   const leftControlSlotWidth = useBannerTitleLayout
     ? ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH
     : controlSlotWidth;
@@ -630,10 +631,10 @@ export default function Header({ title, onAuthPress, connectionAccessory, guidan
           style={[styles.centerContent, { paddingHorizontal: centerContentPadding }]}
           pointerEvents="none"
         >
-          {bannerSubject || displayBriefBanner ? (
+          {bannerSubject || showBriefBannerInHeader ? (
             <View style={styles.bannerTitleStack}>
               {bannerSubject ? (
-                <Animated.View style={[styles.bannerDefaultCopy, { opacity: briefDefaultOpacity }]}>
+                <Animated.View style={[styles.bannerDefaultCopy, showBriefBannerInHeader ? { opacity: briefDefaultOpacity } : null]}>
                   <Text
                     style={styles.bannerTitle}
                     numberOfLines={1}
@@ -644,7 +645,7 @@ export default function Header({ title, onAuthPress, connectionAccessory, guidan
                   </Text>
                 </Animated.View>
               ) : null}
-              {displayBriefBanner ? (
+              {showBriefBannerInHeader && displayBriefBanner ? (
                 <Animated.View
                   style={[
                     styles.briefBannerCopy,

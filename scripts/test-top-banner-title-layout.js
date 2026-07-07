@@ -272,6 +272,26 @@ assertIncludes(
 );
 assertIncludes(
   header,
+  'const showBriefBannerInHeader = Boolean(displayBriefBanner && !bannerSubject);',
+  'Shared tab headers should keep Fleet/Navigate/Explore/Dispatch titles authoritative when transient ECS intelligence copy is present.',
+);
+assertIncludes(
+  header,
+  'bannerSubject || showBriefBannerInHeader',
+  'Shared tab headers should only let brief copy occupy the title lane when there is no named tab subject.',
+);
+assertIncludes(
+  header,
+  'showBriefBannerInHeader ? { opacity: briefDefaultOpacity } : null',
+  'Named tab subjects should not fade out when hidden transient brief copy is present.',
+);
+assertNotIncludes(
+  header,
+  'bannerSubject || displayBriefBanner',
+  'Transient brief copy must not replace the centered native tab subject on mobile headers.',
+);
+assertIncludes(
+  header,
   "android: 'sans-serif-condensed'",
   'Shared tab banner titles should use a polished condensed system title font.',
 );

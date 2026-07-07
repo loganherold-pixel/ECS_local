@@ -80,8 +80,8 @@ assert.ok(
 const queryCommitDelayMatch = navigateSource.match(/const IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS = ([0-9]+);/);
 assert.ok(queryCommitDelayMatch, 'Navigate mobile search draft-query commit delay should be a named numeric constant.');
 assert.ok(
-  Number(queryCommitDelayMatch[1]) >= 120,
-  `Keyboard-active query commits should wait out same-frame key bursts; found ${queryCommitDelayMatch[1]}ms.`,
+  Number(queryCommitDelayMatch[1]) >= 260,
+  `Keyboard-active query commits should wait past Android keyboard/input burst work before waking provider search; found ${queryCommitDelayMatch[1]}ms.`,
 );
 assert.ok(
   navigateSource.includes('idleDestinationSearchDraftQuery') &&
@@ -109,6 +109,20 @@ assert.ok(
 assert.ok(
   navigateSource.includes('destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS : 0'),
   'Navigate mobile search should use the keyboard-settled delay while the input/keyboard path is active.',
+);
+const suggestionCommitEffectStart = navigateSource.indexOf('useEffect(() => {\n  if (idleDestinationSearchCommitTimerRef.current)');
+assert.ok(suggestionCommitEffectStart >= 0, 'Navigate suggestion commit effect should remain statically readable.');
+const suggestionCommitDepsStart = navigateSource.indexOf('}, [', suggestionCommitEffectStart);
+const suggestionCommitDepsEnd = navigateSource.indexOf(']);', suggestionCommitDepsStart);
+assert.ok(
+  suggestionCommitDepsStart > suggestionCommitEffectStart &&
+    suggestionCommitDepsEnd > suggestionCommitDepsStart,
+  'Navigate suggestion commit effect dependencies should remain statically readable.',
+);
+const suggestionCommitDeps = navigateSource.slice(suggestionCommitDepsStart, suggestionCommitDepsEnd);
+assert.ok(
+  !suggestionCommitDeps.includes('keyboardHeight'),
+  'Navigate search should not restart deferred suggestion commits for every keyboard-height animation frame.',
 );
 assert.ok(
   navigateSource.includes('deferredIdleDestinationSearchSuggestions.slice(0, idleDestinationSearchRenderLimit)'),
