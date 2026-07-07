@@ -166,5 +166,14 @@ assertIncludes(
   'rankApproachResupplyOptions',
   'Smart resupply refreshes should run all candidates through the shared approach-aware ranker',
 );
+assert(
+  !screen.includes("if (option.fallbackState === 'trailhead_only') return true;"),
+  'Trailhead-only Smart Resupply fallbacks with known huge off-approach distances should not bypass the route-deviation cap.',
+);
+assertIncludes(
+  screen,
+  'if (option.routeDeviationMiles != null) {',
+  'Smart Resupply route-awareness filtering should inspect known route deviation before accepting fallback candidates.',
+);
 
 console.log('Trip Builder smart resupply stability checks passed.');

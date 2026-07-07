@@ -120,6 +120,7 @@ import {
   searchRoadDestinations,
   type RoadNavSearchSuggestion,
 } from '../lib/mapboxRoadNavigation';
+import { isLiveSmartResupplyPoiCandidate } from '../lib/tripBuilder/liveSmartResupplyPoiFilter';
 import type { GPSPosition } from '../lib/useGPSLocation';
 import { useThrottledGPS } from '../lib/useThrottledGPS';
 import {
@@ -2156,6 +2157,7 @@ function smartResupplyPoiFromDestination(
   };
   if (!isValidMapCoordinate(coordinate)) return null;
   const text = smartResupplySearchText(suggestion, destination);
+  if (!isLiveSmartResupplyPoiCandidate({ category, suggestion, destination })) return null;
   return {
     id: String(destination.id || suggestion.id),
     title: destination.title || suggestion.title,
@@ -2457,9 +2459,10 @@ function smartResupplySearchSignature(
 }
 
 function isSmartResupplyOptionRouteAware(option: SmartResupplyPoi): boolean {
-  if (option.fallbackState === 'trailhead_only') return true;
-  if (option.routeDeviationMiles == null) return true;
-  return option.routeDeviationMiles <= SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES;
+  if (option.routeDeviationMiles != null) {
+    return option.routeDeviationMiles <= SMART_RESUPPLY_MAX_ROUTE_DEVIATION_MILES;
+  }
+  return true;
 }
 
 function compareSmartResupplyOptionsByApproach(left: SmartResupplyPoi, right: SmartResupplyPoi): number {
