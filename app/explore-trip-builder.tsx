@@ -4195,6 +4195,7 @@ export default function ExploreTripBuilderScreen() {
   );
   const preTrailDraftStatusMessage = useMemo(() => {
     if (smartResupplyPreference === 'no') return null;
+    if (smartResupplyLoading != null) return null;
     const missingAnchor = preTrailDraftResolution.bucketSummaries.some((summary) => summary.status === 'missing_anchor');
     if (missingAnchor) return 'Trailhead start is unavailable, so ECS cannot rank pre-trail fuel or supply stops.';
     const providerUnavailable = preTrailDraftResolution.bucketSummaries.some((summary) => summary.status === 'provider_unavailable');
@@ -4204,7 +4205,7 @@ export default function ExploreTripBuilderScreen() {
     const noResults = preTrailDraftResolution.bucketSummaries.some((summary) => summary.status === 'no_results');
     if (noResults) return 'No usable pre-trail POI candidates were returned. Verify fuel and supplies manually.';
     return null;
-  }, [preTrailDraftResolution, preTrailStopCandidatesForDraft, smartResupplyPreference]);
+  }, [preTrailDraftResolution, preTrailStopCandidatesForDraft, smartResupplyLoading, smartResupplyPreference]);
 
   const selectedTripItinerary = useMemo<TripItinerary | null>(() => {
     if (!selectedRoute) return null;

@@ -72,6 +72,8 @@ assertIncludes(screen, 'hasFuelAndGrocerySupport', 'Trip Builder should mark one
 assertIncludes(screen, 'testID="trip-builder-smart-resupply-picker"', 'Trip Builder should render a fuel selection list after smart resupply is enabled.');
 assertIncludes(screen, 'Last Fuel Before Trail Entry', 'Trip Builder should label the pre-trail fuel picker around the approach route.');
 assertIncludes(screen, 'ECS ranks fuel along your GPS-to-trailhead approach first, then uses trailhead-only fallback if GPS routing is unavailable.', 'Trip Builder should explain approach-aware resupply ranking.');
+assertIncludes(screen, 'if (smartResupplyLoading != null) return null;', 'Trip Builder should not show provider-unavailable pre-trail status while live resupply lookup is still loading.');
+assertIncludes(screen, 'preTrailStopCandidatesForDraft, smartResupplyLoading, smartResupplyPreference', 'Trip Builder pre-trail status copy should update when smart resupply loading settles.');
 assert(!screen.includes('Fuel Near Trailhead'), 'Trip Builder should not label fuel as simple trailhead-nearest lookup.');
 assert(!screen.includes('ECS uses the trailhead as ground zero for pre-trail fuel.'), 'Trip Builder should not describe the trailhead as the resupply ground zero.');
 assertIncludes(screen, 'PICK 1 OF UP TO 5', 'Trip Builder should constrain route-start fuel choices to a compact list.');
