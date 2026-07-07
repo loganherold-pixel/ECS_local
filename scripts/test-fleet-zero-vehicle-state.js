@@ -102,7 +102,37 @@ includes(
 includes(
   fleet,
   'firstRunVccSetupOpenedRef',
-  'Fleet zero-vehicle first arrival should open the current VCC setup path once.',
+  'Fleet zero-vehicle assist should still track whether the current VCC setup path has opened.',
+);
+includes(
+  fleet,
+  'const ZERO_VEHICLE_VCC_SETUP_AUTO_OPEN_DELAY_MS =',
+  'Fleet zero-vehicle setup assist should use a named dwell delay instead of opening over cold-start QA immediately.',
+);
+includes(
+  fleet,
+  'const zeroVehicleVccSetupAutoOpenArmedRef = useRef(false);',
+  'Fleet should arm zero-vehicle setup assist on first cold-start visit without opening the modal immediately.',
+);
+includes(
+  fleet,
+  'const zeroVehicleVccSetupAutoOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);',
+  'Fleet should keep a cancellable timer for delayed zero-vehicle setup assist.',
+);
+includes(
+  fleet,
+  'if (!zeroVehicleVccSetupAutoOpenArmedRef.current) {',
+  'First zero-vehicle Fleet focus should arm the assist instead of covering the launch screen.',
+);
+includes(
+  fleet,
+  'zeroVehicleVccSetupAutoOpenTimerRef.current = setTimeout(() => {',
+  'Follow-up zero-vehicle Fleet focus should schedule setup assist after a short dwell.',
+);
+includes(
+  fleet,
+  'clearZeroVehicleVccSetupAutoOpenTimer();',
+  'Delayed zero-vehicle setup assist should be cancelled when Fleet loses focus or state changes.',
 );
 includes(
   fleet,
@@ -151,7 +181,7 @@ includes(
 );
 includes(
   fleet,
-  'if (!isFleetFocused || loading || authLoading || vehicles.length > 0 || profileModalVisible) return;',
+  'if (!isFleetFocused || loading || authLoading || vehicles.length > 0 || profileModalVisible) {',
   'Fleet zero-vehicle auto-open should be gated to the active Fleet route.',
 );
 includes(

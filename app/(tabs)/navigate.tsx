@@ -1953,7 +1953,10 @@ const COMPASS_MOVEMENT_DISTANCE_M = 4;
 const COMPASS_MOVEMENT_SPEED_MPH = 1.5;
 const ACTIVE_GUIDANCE_AUTO_MINIMIZE_MS = 2500;
 const IDLE_DESTINATION_SEARCH_RENDER_LIMIT = 5;
-const IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS = 120;
+const IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS = 260;
+const IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS = 460;
+const IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT = 780;
+const IDLE_DESTINATION_SEARCH_KEYBOARD_RESULTS_MAX_HEIGHT = 168;
 const CAMP_LAYER_ROUTE_MAP_RESULT_LIMIT = 64;
 const ESTABLISHED_CAMPGROUNDS_FETCH_DEBOUNCE_MS = 180;
 const ESTABLISHED_CAMPGROUNDS_PREFETCH_PADDING_RATIO = 0.5;
@@ -4275,7 +4278,16 @@ const [recentSearches, setRecentSearches] = useState<RoadNavSearchSuggestion[]>(
 const [recentSearchesVisible, setRecentSearchesVisible] = useState(false);
 const [deferredIdleDestinationSearchSuggestions, setDeferredIdleDestinationSearchSuggestions] =
   useState<RoadNavSearchSuggestion[]>([]);
+const [destinationSearchInputFocused, setDestinationSearchInputFocused] = useState(false);
 const idleDestinationSearchCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+const handleIdleDestinationSearchFocus = useCallback(() => {
+  setDestinationSearchInputFocused(true);
+}, []);
+
+const handleIdleDestinationSearchBlur = useCallback(() => {
+  setDestinationSearchInputFocused(false);
+}, []);
 
 const latestGpsMapLocation = useMemo(() => {
   const position = gps.rawGPS.position ?? gps.position;
@@ -14151,9 +14163,10 @@ const handleCreateRun = useCallback(() => {
     !routeBuilderActive &&
     campScoutAreaMode === 'idle' &&
     !roadNavigation.session.destination;
+  const destinationSearchInputActive = destinationSearchInputFocused || keyboardHeight > 0;
   const destinationSearchMapFrozen =
     idleDestinationSearchVisible &&
-    (keyboardHeight > 0 || roadNavigation.query.trim().length > 0 || recentSearchesVisible);
+    (destinationSearchInputActive || roadNavigation.query.trim().length > 0 || recentSearchesVisible);
   const floatingToolsVisible = mapOverlayStartupReady && !destinationSearchMapFrozen;
   const campLayerControlsAvailable =
     canUseCommunityCampsiteLayers ||
@@ -14183,6 +14196,10 @@ const handleCreateRun = useCallback(() => {
     !selectedCampIntelId &&
     !selectedCampScoutCandidateId &&
     !selectedCampOpsEndpointId;
+  useEffect(() => {
+    if (idleDestinationSearchVisible || !destinationSearchInputFocused) return;
+    setDestinationSearchInputFocused(false);
+  }, [destinationSearchInputFocused, idleDestinationSearchVisible]);
   const pinModeBannerBottom = COMPASS_BOTTOM + COMPASS_SIZE + OVERLAY_GAP;
   const lowerMapOverlayStackBottom = Math.max(
     routeBuilderControlBottomOffset,
@@ -20145,13 +20162,13 @@ useEffect(() => {
   }
 
   const shouldCommitImmediately =
-    keyboardHeight <= 0 ||
+    !destinationSearchInputActive ||
     roadNavigation.query.trim().length < 2 ||
     !!roadNavigation.searchError ||
     searchOperationalState.disabled;
   const delayMs = shouldCommitImmediately
     ? 0
-    : keyboardHeight > 0 ? IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS : 0;
+    : destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS : 0;
 
   if (delayMs === 0) {
     setDeferredIdleDestinationSearchSuggestions(roadNavigation.suggestions);
@@ -20171,6 +20188,7 @@ useEffect(() => {
   };
 }, [
   keyboardHeight,
+  destinationSearchInputActive,
   roadNavigation.query,
   roadNavigation.searchError,
   roadNavigation.suggestions,
@@ -20186,11 +20204,13 @@ const idleDestinationSearchNoMatchesVisible =
   deferredIdleDestinationSearchSuggestions.length === 0 &&
   !searchOperationalState.disabled;
 const idleDestinationSearchRenderLimit =
-  keyboardHeight > 0 ? 3 : IDLE_DESTINATION_SEARCH_RENDER_LIMIT;
+  destinationSearchInputActive ? 3 : IDLE_DESTINATION_SEARCH_RENDER_LIMIT;
 const visibleIdleDestinationSearchSuggestions = useMemo(
   () => deferredIdleDestinationSearchSuggestions.slice(0, idleDestinationSearchRenderLimit),
   [deferredIdleDestinationSearchSuggestions, idleDestinationSearchRenderLimit],
 );
+const idleDestinationSearchLoadingVisible =
+  roadNavigation.searchLoading && !destinationSearchInputActive;
 const idleDestinationSearchResultsLabel =
   visibleIdleDestinationSearchSuggestions.length < deferredIdleDestinationSearchSuggestions.length
     ? `RESULTS | ${visibleIdleDestinationSearchSuggestions.length} OF ${deferredIdleDestinationSearchSuggestions.length}`
@@ -20203,6 +20223,8 @@ const idleDestinationSearchBottomClearance =
   keyboardHeight > 0
     ? Math.max(routeSurfaceBottomOffset, keyboardHeight + PAGE_FRAME_BOTTOM_GAP)
     : routeSurfaceBottomOffset;
+const destinationSearchMapOccluderBottom =
+  destinationSearchInputActive ? routeSurfaceBottomOffset : idleDestinationSearchBottomClearance;
 const idleDestinationSearchMaxHeight = Math.max(
   136,
   adaptive.windowHeight -
@@ -20210,9 +20232,24 @@ const idleDestinationSearchMaxHeight = Math.max(
     idleDestinationSearchBottomClearance -
     PAGE_FRAME_BOTTOM_GAP,
 );
+const idleDestinationSearchPanelMaxHeight = destinationSearchInputActive
+  ? Math.min(
+      idleDestinationSearchMaxHeight,
+      Math.max(
+        300,
+        Math.min(
+          IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT,
+          Math.round(adaptive.windowHeight * 0.48),
+        ),
+      ),
+    )
+  : idleDestinationSearchMaxHeight;
 const idleDestinationSearchResultsMaxHeight = Math.max(
   72,
-  Math.min(190, idleDestinationSearchMaxHeight - 132),
+  Math.min(
+    destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_RESULTS_MAX_HEIGHT : 190,
+    idleDestinationSearchPanelMaxHeight - 132,
+  ),
 );
 
 const gpsStatusOverlayBottomOffset = LOWER_DOCK_EXCLUSION + PAGE_FRAME_BOTTOM_GAP + 12;
@@ -20355,6 +20392,14 @@ const mapTiltAlertMarkers = useMemo<React.ComponentProps<typeof MapRenderer>['ti
   [showTiltAlertZones, tiltAlertMarkers],
 );
 
+const campsiteSearchPolygonPayload = useMemo(
+  () => ({
+    coordinates: campsiteDrawingPoints,
+    closed: campsiteDrawingClosed,
+  }),
+  [campsiteDrawingClosed, campsiteDrawingPoints],
+);
+
 const compassContainerStyle = useMemo(
   () => ({ bottom: COMPASS_BOTTOM, right: COMPASS_RIGHT }),
   [COMPASS_BOTTOM, COMPASS_RIGHT],
@@ -20385,6 +20430,178 @@ const navigateMapMotion = useMemo(() => {
     allowDynamicCamera: false,
   };
 }, [destinationSearchMapFrozen, isFocused, routeLifecycleState.phase]);
+
+const mapRendererUserLocation = destinationSearchMapFrozen
+  ? null
+  : (mapDisplayUserLocation ?? safeUserLocation);
+const mapRendererShowUserLocation = !destinationSearchMapFrozen &&
+  navigateMapMotion.allowLiveLocation &&
+  !!mapRendererUserLocation;
+const mapRendererFollowUser =
+  !destinationSearchMapFrozen &&
+  navigateMapMotion.allowCameraFollow &&
+  followUser;
+const mapRendererVehicleHeading = destinationSearchMapFrozen || !navigateMapMotion.allowLiveLocation
+  ? null
+  : compassDisplayHeading;
+const mapRendererCameraMode = destinationSearchMapFrozen ? undefined : mapCameraMode;
+const mapRendererCameraCommand = destinationSearchMapFrozen ? null : mapCameraCommand;
+const mapRendererCameraCommandTrigger = destinationSearchMapFrozen ? 0 : mapCameraCommandTrigger;
+const mapRendererFollowReplay = !destinationSearchMapFrozen && isReplayActive && replayPlaying;
+
+const mapRendererElement = useMemo(() => (
+  <MapRenderer
+    key={`navigate-map-${mapSurfaceRevision}`}
+    points={displayedRoutePoints}
+    progressPoints={displayedRouteProgressPoints}
+    waypoints={displayedRouteWaypoints}
+    healthLevel={activeHealth?.overall || 'green'}
+    routeColor={displayedRouteColor}
+    progressColor={displayedRouteProgressColor}
+    routeRenderMode={displayedRouteRenderMode}
+    routeLineKey={displayedRouteLineKey}
+    showTrailEntryEndpointMarker={showTrailEntryEndpointMarker}
+    mapStyle={mapStyle}
+    mapboxToken={mapToken || ''}
+    showUserLocation={mapRendererShowUserLocation}
+    followUser={mapRendererFollowUser}
+    userLocation={mapRendererUserLocation}
+    motionPriority={navigateMapMotion.motionPriority}
+    interactive={!destinationSearchMapFrozen}
+    segments={mapSegmentFeatures}
+    bailoutMarkers={bailoutMarkers}
+    pinMarkers={mapPinMarkers}
+    showCrosshair={showCrosshair}
+    onLongPress={handleLongPress}
+    onBailoutTap={handleBailoutMarkerTap}
+    onPinTap={handlePinTap}
+    onSegmentTap={handleMapSegmentTap}
+    onCampIntelTap={handleCampIntelTap}
+    onCampScoutTap={handleCampScoutTap}
+    onCampEndpointTap={handleCampScoutTap}
+    onMapTap={handleDirectMapTapForPin}
+    onDispersedCampingRegionTap={handleDispersedCampingRegionTap}
+    dispersedRouteBuild={dispersedRouteBuildState}
+    onDispersedRouteLegTap={handleDispersedRouteLegTap}
+    onEstablishedCampsiteTap={handleEstablishedCampsiteTap}
+    onMapCenterReply={handleMapCenterReply}
+    onMapBoundsReply={handleMapBoundsReply}
+    requestBoundsTrigger={requestBoundsTrigger}
+    trailSegments={displayedTrailSegments}
+    trailActive={
+      trailStatus === 'recording' ||
+      displayedTrailSegments.length > 0 ||
+      trailNavigationActive ||
+      pendingHybridTrailTransition
+    }
+    replayMarker={replayMarkerPos}
+    followReplay={mapRendererFollowReplay}
+    speedSegments={speedBucketSegments}
+    trailStyle={trailStyle}
+    onTiltAlertTap={handleTiltAlertTap}
+    onUserDrag={handleUserDrag}
+    onRoadClassification={handleRoadClassification}
+    vehicleHeading={mapRendererVehicleHeading}
+    isLoading={mapLoading}
+    hasToken={hasToken}
+    onReadyStateChange={setMapSurfaceReady}
+    onRetry={handleMapRetry}
+    campIntelMarkers={combinedCampMarkers}
+    campEndpointMarkers={sharedCampPinMapMarkers}
+    tiltAlertMarkers={mapTiltAlertMarkers}
+    cameraMode={mapRendererCameraMode}
+    cameraCommand={mapRendererCameraCommand}
+    cameraCommandTrigger={mapRendererCameraCommandTrigger}
+    routeBuilderActive={routeBuilderActive}
+    routeBuilderMode="anchor_trace"
+    routeBuilderSegments={routeBuilderSegments}
+    routeBuilderAnchors={routeBuilderDraft.anchors}
+    routeBuilderColor={routeBuilderActiveExtensionMode ? ACTIVE_GUIDANCE_EXTENSION_COLOR : ROUTE_BUILDER_DEFAULT_COLOR}
+    routeProfileFocus={routeProfileFocusPayload}
+    selectedRouteGeometrySegmentIds={selectedRouteGeometrySegmentIds}
+    onRouteBuilderUpdate={handleRouteBuilderUpdate}
+    onRouteBuilderGestureStateChange={handleRouteBuilderGestureStateChange}
+    onMapLifecycleMetrics={handleMapLifecycleMetrics}
+    remoteOverlay={remotenessMapOverlay}
+    mvumOverlay={navigateMvumMapOverlay}
+    stitchedRoutePreview={navigateMvumStitchedRoutePreview}
+    dispersedCampingEligibility={dispersedCampingEligibilityLayer}
+    establishedCampsites={establishedCampsitesLayer}
+    campsiteSearchPolygon={campsiteSearchPolygonPayload}
+  />
+), [
+  activeHealth?.overall,
+  bailoutMarkers,
+  campsiteSearchPolygonPayload,
+  combinedCampMarkers,
+  destinationSearchMapFrozen,
+  displayedRouteColor,
+  displayedRouteLineKey,
+  displayedRoutePoints,
+  displayedRouteProgressColor,
+  displayedRouteProgressPoints,
+  displayedRouteRenderMode,
+  displayedRouteWaypoints,
+  displayedTrailSegments,
+  dispersedCampingEligibilityLayer,
+  dispersedRouteBuildState,
+  establishedCampsitesLayer,
+  handleBailoutMarkerTap,
+  handleCampIntelTap,
+  handleCampScoutTap,
+  handleDirectMapTapForPin,
+  handleDispersedCampingRegionTap,
+  handleDispersedRouteLegTap,
+  handleEstablishedCampsiteTap,
+  handleLongPress,
+  handleMapBoundsReply,
+  handleMapCenterReply,
+  handleMapLifecycleMetrics,
+  handleMapRetry,
+  handleMapSegmentTap,
+  handlePinTap,
+  handleRoadClassification,
+  handleRouteBuilderGestureStateChange,
+  handleRouteBuilderUpdate,
+  handleTiltAlertTap,
+  handleUserDrag,
+  hasToken,
+  mapLoading,
+  mapPinMarkers,
+  mapSegmentFeatures,
+  mapStyle,
+  mapSurfaceRevision,
+  mapTiltAlertMarkers,
+  mapToken,
+  mapRendererCameraCommand,
+  mapRendererCameraCommandTrigger,
+  mapRendererCameraMode,
+  mapRendererFollowReplay,
+  mapRendererFollowUser,
+  mapRendererShowUserLocation,
+  mapRendererUserLocation,
+  mapRendererVehicleHeading,
+  navigateMapMotion.motionPriority,
+  navigateMvumMapOverlay,
+  navigateMvumStitchedRoutePreview,
+  pendingHybridTrailTransition,
+  remotenessMapOverlay,
+  replayMarkerPos,
+  requestBoundsTrigger,
+  routeBuilderActive,
+  routeBuilderActiveExtensionMode,
+  routeBuilderDraft.anchors,
+  routeBuilderSegments,
+  routeProfileFocusPayload,
+  selectedRouteGeometrySegmentIds,
+  sharedCampPinMapMarkers,
+  showCrosshair,
+  showTrailEntryEndpointMarker,
+  speedBucketSegments,
+  trailNavigationActive,
+  trailStatus,
+  trailStyle,
+]);
 
 
 
@@ -20655,88 +20872,7 @@ const stableMapSurface = useMemo(() => {
 
   return (
     <View style={{ flex: 1 }}>
-      <MapRenderer
-        key={`navigate-map-${mapSurfaceRevision}`}
-        points={displayedRoutePoints}
-        progressPoints={displayedRouteProgressPoints}
-        waypoints={displayedRouteWaypoints}
-        healthLevel={activeHealth?.overall || 'green'}
-        routeColor={displayedRouteColor}
-        progressColor={displayedRouteProgressColor}
-        routeRenderMode={displayedRouteRenderMode}
-        routeLineKey={displayedRouteLineKey}
-        showTrailEntryEndpointMarker={showTrailEntryEndpointMarker}
-        mapStyle={mapStyle}
-        mapboxToken={mapToken || ''}
-        showUserLocation={navigateMapMotion.allowLiveLocation && !!(mapDisplayUserLocation ?? safeUserLocation)}
-        followUser={navigateMapMotion.allowCameraFollow && followUser}
-        userLocation={mapDisplayUserLocation ?? safeUserLocation}
-        motionPriority={navigateMapMotion.motionPriority}
-        interactive={!destinationSearchMapFrozen}
-        segments={mapSegmentFeatures}
-        bailoutMarkers={bailoutMarkers}
-        pinMarkers={mapPinMarkers}
-        showCrosshair={showCrosshair}
-        onLongPress={handleLongPress}
-        onBailoutTap={handleBailoutMarkerTap}
-        onPinTap={handlePinTap}
-        onSegmentTap={handleMapSegmentTap}
-        onCampIntelTap={handleCampIntelTap}
-        onCampScoutTap={handleCampScoutTap}
-        onCampEndpointTap={handleCampScoutTap}
-        onMapTap={handleDirectMapTapForPin}
-        onDispersedCampingRegionTap={handleDispersedCampingRegionTap}
-        dispersedRouteBuild={dispersedRouteBuildState}
-        onDispersedRouteLegTap={handleDispersedRouteLegTap}
-        onEstablishedCampsiteTap={handleEstablishedCampsiteTap}
-        onMapCenterReply={handleMapCenterReply}
-        onMapBoundsReply={handleMapBoundsReply}
-        requestBoundsTrigger={requestBoundsTrigger}
-        trailSegments={displayedTrailSegments}
-        trailActive={
-          trailStatus === 'recording' ||
-          displayedTrailSegments.length > 0 ||
-          trailNavigationActive ||
-          pendingHybridTrailTransition
-        }
-        replayMarker={replayMarkerPos}
-        followReplay={isReplayActive && replayPlaying}
-        speedSegments={speedBucketSegments}
-        trailStyle={trailStyle}
-        onTiltAlertTap={handleTiltAlertTap}
-        onUserDrag={handleUserDrag}
-        onRoadClassification={handleRoadClassification}
-        vehicleHeading={navigateMapMotion.allowLiveLocation ? compassDisplayHeading : null}
-        isLoading={mapLoading}
-        hasToken={hasToken}
-        onReadyStateChange={setMapSurfaceReady}
-        onRetry={handleMapRetry}
-        campIntelMarkers={combinedCampMarkers}
-        campEndpointMarkers={sharedCampPinMapMarkers}
-        tiltAlertMarkers={mapTiltAlertMarkers}
-        cameraMode={destinationSearchMapFrozen ? undefined : mapCameraMode}
-        cameraCommand={mapCameraCommand}
-        cameraCommandTrigger={mapCameraCommandTrigger}
-        routeBuilderActive={routeBuilderActive}
-        routeBuilderMode="anchor_trace"
-        routeBuilderSegments={routeBuilderSegments}
-        routeBuilderAnchors={routeBuilderDraft.anchors}
-        routeBuilderColor={routeBuilderActiveExtensionMode ? ACTIVE_GUIDANCE_EXTENSION_COLOR : ROUTE_BUILDER_DEFAULT_COLOR}
-        routeProfileFocus={routeProfileFocusPayload}
-        selectedRouteGeometrySegmentIds={selectedRouteGeometrySegmentIds}
-        onRouteBuilderUpdate={handleRouteBuilderUpdate}
-        onRouteBuilderGestureStateChange={handleRouteBuilderGestureStateChange}
-        onMapLifecycleMetrics={handleMapLifecycleMetrics}
-        remoteOverlay={remotenessMapOverlay}
-        mvumOverlay={navigateMvumMapOverlay}
-        stitchedRoutePreview={navigateMvumStitchedRoutePreview}
-        dispersedCampingEligibility={dispersedCampingEligibilityLayer}
-        establishedCampsites={establishedCampsitesLayer}
-        campsiteSearchPolygon={{
-          coordinates: campsiteDrawingPoints,
-          closed: campsiteDrawingClosed,
-        }}
-      />
+      {mapRendererElement}
 
       {destinationSearchMapFrozen ? (
         <View
@@ -20745,7 +20881,7 @@ const stableMapSurface = useMemo(() => {
             styles.destinationSearchMapOccluder,
             {
               top: roadNavigationSurfaceTopOffset,
-              bottom: idleDestinationSearchBottomClearance,
+              bottom: destinationSearchMapOccluderBottom,
             },
           ]}
         />
@@ -20857,8 +20993,8 @@ const stableMapSurface = useMemo(() => {
           <View
             style={[
               styles.idleDestinationSearchShell,
-              keyboardHeight > 0 && styles.idleDestinationSearchShellKeyboardActive,
-              { maxHeight: idleDestinationSearchMaxHeight },
+              destinationSearchInputActive && styles.idleDestinationSearchShellKeyboardActive,
+              { maxHeight: idleDestinationSearchPanelMaxHeight },
             ]}
           >
             <View style={styles.idleDestinationSearchHeader}>
@@ -20883,7 +21019,7 @@ const stableMapSurface = useMemo(() => {
               <View
                 style={[
                   styles.idleDestinationSearchFieldShell,
-                  keyboardHeight > 0 && styles.idleDestinationSearchFieldShellKeyboardActive,
+                  destinationSearchInputActive && styles.idleDestinationSearchFieldShellKeyboardActive,
                 ]}
               >
                 <ECSSearchField
@@ -20897,7 +21033,7 @@ const stableMapSurface = useMemo(() => {
                       : 'Enter address, town, trailhead, or place'
                   }
                   disabled={searchOperationalState.disabled}
-                  loading={roadNavigation.searchLoading}
+                  loading={idleDestinationSearchLoadingVisible}
                   onClear={
                     idleDestinationSearchHasQuery
                       ? () => roadNavigation.setQuery('')
@@ -20905,11 +21041,13 @@ const stableMapSurface = useMemo(() => {
                   }
                   style={[
                     styles.idleDestinationSearchField,
-                    keyboardHeight > 0 && styles.idleDestinationSearchFieldKeyboardActive,
+                    destinationSearchInputActive && styles.idleDestinationSearchFieldKeyboardActive,
                   ]}
                   inputProps={{
                     autoCapitalize: 'words',
                     autoCorrect: false,
+                    onFocus: handleIdleDestinationSearchFocus,
+                    onBlur: handleIdleDestinationSearchBlur,
                     returnKeyType: 'search',
                     testID: 'navigate-destination-search-input',
                     accessibilityLabel: 'Search address or place',
@@ -20976,7 +21114,7 @@ const stableMapSurface = useMemo(() => {
                       key={suggestion.id}
                       style={[
                         styles.idleDestinationSearchSuggestionItem,
-                        keyboardHeight > 0 && styles.idleDestinationSearchSuggestionItemKeyboardActive,
+                        destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
                       ]}
                       onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}
                       activeOpacity={0.82}
@@ -21013,7 +21151,7 @@ const stableMapSurface = useMemo(() => {
                         key={`recent-${suggestion.id}`}
                         style={[
                           styles.idleDestinationSearchSuggestionItem,
-                          keyboardHeight > 0 && styles.idleDestinationSearchSuggestionItemKeyboardActive,
+                          destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
                         ]}
                         onPress={() => handleRecentSearchSelection(suggestion)}
                         activeOpacity={0.82}
@@ -22036,77 +22174,25 @@ const stableMapSurface = useMemo(() => {
   );
 }, [
   hasToken,
-  mapSurfaceRevision,
-  displayedRoutePoints,
-  displayedRouteProgressPoints,
-  displayedRouteWaypoints,
-  activeHealth?.overall,
-  displayedRouteColor,
-  displayedRouteProgressColor,
-  displayedRouteRenderMode,
-  displayedRouteLineKey,
-  mapStyle,
-  mapToken,
-  mapDisplayUserLocation,
-  safeUserLocation,
+  destinationSearchInputActive,
+  mapRendererElement,
   followUser,
   destinationSearchMapFrozen,
-  keyboardHeight,
-  navigateMapMotion.allowCameraFollow,
-  navigateMapMotion.allowLiveLocation,
-  navigateMapMotion.motionPriority,
-  mapCameraMode,
-  mapSegmentFeatures,
-  bailoutMarkers,
-  mapPinMarkers,
-  showCrosshair,
-  handleLongPress,
   handleLongPressAddWaypoint,
   handleLongPressDrawRoute,
   handleLongPressInfo,
   handleLongPressNavigateHere,
   longPressContext,
   longPressInfoExpanded,
-  handleBailoutMarkerTap,
-  handlePinTap,
-  handleMapSegmentTap,
-  handleCampIntelTap,
-  handleCampScoutTap,
-  handleDirectMapTapForPin,
-  handleDispersedCampingRegionTap,
-  dispersedRouteBuildState,
-  handleDispersedRouteLegTap,
-  handleEstablishedCampsiteTap,
-  handleMapCenterReply,
-  handleMapBoundsReply,
-  requestBoundsTrigger,
   activeReadinessMinimized,
-  displayedTrailSegments,
-  trailStatus,
   navigateTrailAssessmentActive,
   pendingStartReviewReasons,
-  replayMarkerPos,
-  isReplayActive,
-  replayPlaying,
-  speedBucketSegments,
-  trailStyle,
-  handleTiltAlertTap,
-  handleUserDrag,
-  handleRoadClassification,
-  handleMapLifecycleMetrics,
-  handleRouteBuilderGestureStateChange,
-  handleRouteBuilderUpdate,
-  remotenessMapOverlay,
-  navigateMvumMapOverlay,
-  navigateMvumStitchedRoutePreview,
   mvumOverlayEnabled,
   toggleMvumOverlay,
   dispersedCampingEligibilityLayer,
   dispersedCampingError,
   dispersedCampingRegions.length,
   establishedCampsitesLayer,
-  campsiteDrawingPoints,
-  campsiteDrawingClosed,
   campsiteDrawControlsVisible,
   campsitePolygonLocateMessage,
   clearCampsiteDrawing,
@@ -22117,17 +22203,9 @@ const stableMapSurface = useMemo(() => {
   campsiteDrawingCanFinish,
   campsiteDrawingCanScan,
   campsiteDrawingCanUndo,
-  compassDisplayHeading,
-  mapLoading,
-  handleMapRetry,
-  combinedCampMarkers,
-  sharedCampPinMapMarkers,
-  mapTiltAlertMarkers,
   handleRoadOverlayToggleSteps,
   handleRoadOverlaySelectSuggestion,
   activeGuidanceLandscapeWidth,
-  showTrailEntryEndpointMarker,
-  idleDestinationSearchBottomClearance,
   navigateLandscapeExpanded,
   handleRoadOverlayStartNavigation,
   handleRoadOverlayEndNavigation,
@@ -22237,8 +22315,6 @@ const stableMapSurface = useMemo(() => {
   handleRouteCatalogStartHybridGuidance,
   handleRouteCatalogBuildRouteFromTrail,
   handleRouteCatalogAddOrStitchSegment,
-    mapCameraCommand,
-    mapCameraCommandTrigger,
     selectedCampIntelComparison,
   weatherAlerts,
   routeCorridorWeather,
@@ -22262,14 +22338,10 @@ const stableMapSurface = useMemo(() => {
   activeReadinessAccessory,
   navigationActiveContext,
   activeGuidanceOfflineDownloadBusy,
-  trailNavigationActive,
   routeBuilderActive,
-  routeBuilderActiveExtensionMode,
   selectedRouteGeometrySegmentIds,
-  routeBuilderSegments,
   routeBuilderDraft.anchors,
   routeProfileFocus,
-  routeProfileFocusPayload,
   routeProfileScrubberAvailable,
   routeProfileScrubRatio,
   handleRouteProfileScrub,
@@ -22326,6 +22398,7 @@ const stableMapSurface = useMemo(() => {
   handleRecenter,
   handleRouteOverview,
   floatingToolsVisible,
+  compassDisplayHeading,
   compassOverlayVisible,
   vehicleHeadingHook.accuracy,
   vehicleHeadingHook.needsRecalibration,
@@ -22344,13 +22417,16 @@ const stableMapSurface = useMemo(() => {
   TOOLS_TRIGGER_SIZE,
   operationalWeather.refresh,
   operationalWeather.snapshot,
-  pendingHybridTrailTransition,
   handleRecentSearchSelection,
+  handleIdleDestinationSearchBlur,
+  handleIdleDestinationSearchFocus,
   idleDestinationSearchHasQuery,
+  idleDestinationSearchLoadingVisible,
   idleDestinationSearchNoMatchesVisible,
+  destinationSearchMapOccluderBottom,
   idleDestinationSearchResultsLabel,
   idleDestinationSearchVisible,
-  idleDestinationSearchMaxHeight,
+  idleDestinationSearchPanelMaxHeight,
   idleDestinationSearchResultsMaxHeight,
   navigateOperationalState.mode,
   recentSearches,

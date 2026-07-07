@@ -35,7 +35,7 @@ const migrationTest = read('scripts', 'test-fleet-legacy-state-migration.js');
 const addVehicleHandler = between(
   fleet,
   'const handleAddVehicle = useCallback(() => {',
-  '}, [closeFleetDetailFlows]);',
+  '}, [clearZeroVehicleVccSetupAutoOpenTimer, closeFleetDetailFlows]);',
   'Fleet Add Vehicle handler',
 );
 
@@ -98,7 +98,12 @@ includes(
 includes(
   fleet,
   'firstRunVccSetupOpenedRef',
-  'First Fleet arrival with no vehicles should open the current VCC setup path once.',
+  'Fleet should still track whether the current first-vehicle setup path has opened.',
+);
+includes(
+  fleet,
+  'zeroVehicleVccSetupAutoOpenArmedRef',
+  'First Fleet cold-start with no vehicles should show the command surface before setup assist can cover the screen.',
 );
 const visibleEmptyState = between(
   fleet,

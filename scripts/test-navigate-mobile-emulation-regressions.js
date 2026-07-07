@@ -56,14 +56,30 @@ assert.ok(
   'Navigate mobile search should define a short keyboard-visible commit delay for suggestion rows.',
 );
 assert.ok(
+  navigateSource.includes('IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS'),
+  'Navigate mobile search should define a separate keyboard-settled commit delay for Android input frames.',
+);
+const commitDelayMatch = navigateSource.match(/const IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS = ([0-9]+);/);
+assert.ok(commitDelayMatch, 'Navigate mobile search commit delay should be a named numeric constant.');
+assert.ok(
+  Number(commitDelayMatch[1]) >= 240,
+  `Keyboard-visible search suggestions should wait until Android keyboard transition work settles; found ${commitDelayMatch[1]}ms.`,
+);
+const keyboardCommitDelayMatch = navigateSource.match(/const IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS = ([0-9]+);/);
+assert.ok(keyboardCommitDelayMatch, 'Keyboard-active search commit delay should be a named numeric constant.');
+assert.ok(
+  Number(keyboardCommitDelayMatch[1]) >= 420,
+  `Keyboard-active search commits should wait through the Android keyboard transition; found ${keyboardCommitDelayMatch[1]}ms.`,
+);
+assert.ok(
   navigateSource.includes('idleDestinationSearchCommitTimerRef') &&
     navigateSource.includes('deferredIdleDestinationSearchSuggestions') &&
     navigateSource.includes('setDeferredIdleDestinationSearchSuggestions'),
   'Navigate mobile search should defer suggestion row commits outside the raw RoadNavigation hook state.',
 );
 assert.ok(
-  navigateSource.includes('keyboardHeight > 0 ? IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS : 0'),
-  'Navigate mobile search should only delay visible suggestion commits while the keyboard is on screen.',
+  navigateSource.includes('destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS : 0'),
+  'Navigate mobile search should use the keyboard-settled delay while the input/keyboard path is active.',
 );
 assert.ok(
   navigateSource.includes('deferredIdleDestinationSearchSuggestions.slice(0, idleDestinationSearchRenderLimit)'),
@@ -76,27 +92,65 @@ assert.ok(
 );
 assert.ok(
   navigateSource.includes('const destinationSearchMapFrozen =') &&
+    navigateSource.includes('destinationSearchInputFocused') &&
+    navigateSource.includes('destinationSearchInputActive') &&
     navigateSource.includes("motionPriority: 'cold'") &&
     navigateSource.includes('allowLiveLocation: false') &&
     navigateSource.includes('allowDynamicCamera: false'),
-  'Navigate should freeze live map motion while mobile destination search owns the keyboard/results surface.',
+  'Navigate should freeze live map motion from input focus, before Android reports keyboard height.',
 );
 assert.ok(
   navigateSource.includes('interactive={!destinationSearchMapFrozen}') &&
-    navigateSource.includes('cameraMode={destinationSearchMapFrozen ? undefined : mapCameraMode}'),
+    navigateSource.includes('cameraMode={mapRendererCameraMode}') &&
+    navigateSource.includes('cameraCommand={mapRendererCameraCommand}'),
   'MapRenderer should stop map interaction and dynamic camera work during active destination search input.',
 );
 assert.ok(
-  navigateSource.includes('destinationSearchMapOccluder') &&
+  navigateSource.includes('const mapRendererUserLocation = destinationSearchMapFrozen') &&
+    navigateSource.includes('const mapRendererShowUserLocation = !destinationSearchMapFrozen') &&
+    navigateSource.includes('const mapRendererVehicleHeading = destinationSearchMapFrozen') &&
+    navigateSource.includes('userLocation={mapRendererUserLocation}') &&
+    navigateSource.includes('vehicleHeading={mapRendererVehicleHeading}'),
+  'MapRenderer should receive null/stable live-location props while destination search freezes the map.',
+);
+assert.ok(
+    navigateSource.includes('destinationSearchMapOccluder') &&
     navigateSource.includes('floatingToolsVisible = mapOverlayStartupReady && !destinationSearchMapFrozen') &&
     navigateSource.includes('!destinationSearchMapFrozen') &&
-    navigateSource.includes('bottom: idleDestinationSearchBottomClearance'),
+    navigateSource.includes('bottom: destinationSearchMapOccluderBottom'),
   'Keyboard-visible destination search should occlude the WebView map and suppress floating controls behind the foreground search surface.',
 );
 assert.ok(
   navigateSource.includes('idleDestinationSearchShellKeyboardActive') &&
-    navigateSource.includes('keyboardHeight > 0 && styles.idleDestinationSearchShellKeyboardActive'),
-  'Keyboard-visible destination search should use the cheaper mobile shell style instead of shadowed translucent redraws.',
+    navigateSource.includes('destinationSearchInputActive && styles.idleDestinationSearchShellKeyboardActive'),
+  'Focused/keyboard-active destination search should use the cheaper mobile shell style instead of shadowed translucent redraws.',
+);
+assert.ok(
+  navigateSource.includes('IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT') &&
+    navigateSource.includes('idleDestinationSearchPanelMaxHeight') &&
+    navigateSource.includes('destinationSearchInputActive ?'),
+  'Keyboard-active destination search should use a compact fixed max-height path instead of resizing the full surface around keyboardHeight.',
+);
+assert.ok(
+  navigateSource.includes('const idleDestinationSearchLoadingVisible =') &&
+    navigateSource.includes('roadNavigation.searchLoading && !destinationSearchInputActive') &&
+    navigateSource.includes('loading={idleDestinationSearchLoadingVisible}'),
+  'Navigate search should not animate the loading spinner during the hot keyboard/input transition.',
+);
+assert.ok(
+  navigateSource.includes('const campsiteSearchPolygonPayload = useMemo(') &&
+    !navigateSource.includes('campsiteSearchPolygon={{'),
+  'MapRenderer should receive a memoized campsite search polygon payload instead of a fresh object on every search keystroke.',
+);
+const mapRendererMemoStart = navigateSource.indexOf('const mapRendererElement = useMemo(() => (');
+assert.ok(mapRendererMemoStart >= 0, 'Navigate should isolate MapRenderer in its own memoized element.');
+const mapRendererMemoDepsStart = navigateSource.indexOf('), [', mapRendererMemoStart);
+const mapRendererMemoDepsEnd = navigateSource.indexOf(']);', mapRendererMemoDepsStart);
+assert.ok(mapRendererMemoDepsStart > mapRendererMemoStart && mapRendererMemoDepsEnd > mapRendererMemoDepsStart);
+const mapRendererMemoDeps = navigateSource.slice(mapRendererMemoDepsStart, mapRendererMemoDepsEnd);
+assert.ok(
+  !mapRendererMemoDeps.includes('keyboardHeight') && !mapRendererMemoDeps.includes('roadNavigation'),
+  'MapRenderer memo dependencies should exclude keyboardHeight and roadNavigation search state.',
 );
 
 assert.ok(

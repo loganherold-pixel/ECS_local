@@ -153,6 +153,7 @@ import { useECSPowerTelemetryReadings } from '../../src/telemetry/useECSTelemetr
 
 
 const TAG = '[FLEET]';
+const ZERO_VEHICLE_VCC_SETUP_AUTO_OPEN_DELAY_MS = 900;
 let zeroVehicleVccSetupAutoOpenedThisSession = false;
 let zeroVehicleVccSetupDismissedThisSession = false;
 
@@ -1562,9 +1563,19 @@ function FleetScreenInner() {
 
   const mountedRef = useRef(true);
   const firstRunVccSetupOpenedRef = useRef(false);
+  const zeroVehicleVccSetupAutoOpenArmedRef = useRef(false);
+  const zeroVehicleVccSetupAutoOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const vehicleCarouselRef = useRef<FlatList<any> | null>(null);
   const visibleFleetVehicleIdRef = useRef<string | null>(visibleFleetVehicleId);
+  const clearZeroVehicleVccSetupAutoOpenTimer = useCallback(() => {
+    if (!zeroVehicleVccSetupAutoOpenTimerRef.current) return;
+    clearTimeout(zeroVehicleVccSetupAutoOpenTimerRef.current);
+    zeroVehicleVccSetupAutoOpenTimerRef.current = null;
+  }, []);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => () => {
+    clearZeroVehicleVccSetupAutoOpenTimer();
+  }, [clearZeroVehicleVccSetupAutoOpenTimer]);
   useEffect(() => {
     visibleFleetVehicleIdRef.current = visibleFleetVehicleId;
   }, [visibleFleetVehicleId]);
@@ -1730,11 +1741,13 @@ function FleetScreenInner() {
 
   const handleAddVehicle = useCallback(() => {
     hapticMicro();
+    clearZeroVehicleVccSetupAutoOpenTimer();
+    zeroVehicleVccSetupAutoOpenArmedRef.current = true;
     zeroVehicleVccSetupDismissedThisSession = false;
     closeFleetDetailFlows();
     setProfileModalVehicle(null);
     setProfileModalVisible(true);
-  }, [closeFleetDetailFlows]);
+  }, [clearZeroVehicleVccSetupAutoOpenTimer, closeFleetDetailFlows]);
 
   const handleOpenVehicleProfile = useCallback((v: Vehicle) => {
     if (!vehicles.some((vehicle) => vehicle.id === v.id)) {
@@ -1753,9 +1766,10 @@ function FleetScreenInner() {
     if (vehicles.length === 0 && !profileModalVehicle) {
       zeroVehicleVccSetupDismissedThisSession = true;
     }
+    clearZeroVehicleVccSetupAutoOpenTimer();
     setProfileModalVisible(false);
     setProfileModalVehicle(null);
-  }, [profileModalVehicle, vehicles.length]);
+  }, [clearZeroVehicleVccSetupAutoOpenTimer, profileModalVehicle, vehicles.length]);
 
   const handleVehicleProfileSaved = useCallback(() => {
     fetchVehicles();
@@ -2522,17 +2536,37 @@ function FleetScreenInner() {
   ]);
 
   useEffect(() => {
-    if (!isFleetFocused || loading || authLoading || vehicles.length > 0 || profileModalVisible) return;
+    if (!isFleetFocused || loading || authLoading || vehicles.length > 0 || profileModalVisible) {
+      clearZeroVehicleVccSetupAutoOpenTimer();
+      return;
+    }
     if (firstRunVccSetupOpenedRef.current) return;
     if (zeroVehicleVccSetupAutoOpenedThisSession || zeroVehicleVccSetupDismissedThisSession) return;
+    if (!zeroVehicleVccSetupAutoOpenArmedRef.current) {
+      zeroVehicleVccSetupAutoOpenArmedRef.current = true;
+      clearZeroVehicleVccSetupAutoOpenTimer();
+      return;
+    }
+    if (zeroVehicleVccSetupAutoOpenTimerRef.current) return;
 
-    firstRunVccSetupOpenedRef.current = true;
-    zeroVehicleVccSetupAutoOpenedThisSession = true;
-    closeFleetDetailFlows();
-    setProfileModalVehicle(null);
-    setProfileModalVisible(true);
+    zeroVehicleVccSetupAutoOpenTimerRef.current = setTimeout(() => {
+      zeroVehicleVccSetupAutoOpenTimerRef.current = null;
+      if (!mountedRef.current) return;
+      if (zeroVehicleVccSetupAutoOpenedThisSession || zeroVehicleVccSetupDismissedThisSession) return;
+
+      firstRunVccSetupOpenedRef.current = true;
+      zeroVehicleVccSetupAutoOpenedThisSession = true;
+      closeFleetDetailFlows();
+      setProfileModalVehicle(null);
+      setProfileModalVisible(true);
+    }, ZERO_VEHICLE_VCC_SETUP_AUTO_OPEN_DELAY_MS);
+
+    return () => {
+      clearZeroVehicleVccSetupAutoOpenTimer();
+    };
   }, [
     authLoading,
+    clearZeroVehicleVccSetupAutoOpenTimer,
     closeFleetDetailFlows,
     isFleetFocused,
     loading,

@@ -34,6 +34,8 @@ function loadTypeScriptModule(relativePath) {
 const modalShellSource = read('components/ECSModalShell.tsx');
 const exploreRoutePreviewSource = read('components/discover/ExploreRoutePreviewModal.tsx');
 const navigateSource = read('app/(tabs)/navigate.tsx');
+const appConfig = JSON.parse(read('app.json'));
+const androidManifestSource = read('android/app/src/main/AndroidManifest.xml');
 const { resolveMobileOverlayBounds } = loadTypeScriptModule('lib/ui/mobileOverlayBounds.ts');
 
 function assertBoundsFit(result, label) {
@@ -128,14 +130,25 @@ assert.ok(
     navigateSource.includes("Keyboard.addListener('keyboardDidHide'"),
   'Navigate mobile map search must track keyboard visibility on iOS and Android.',
 );
+assert.strictEqual(
+  appConfig.expo.android.softwareKeyboardLayoutMode,
+  'pan',
+  'Android should pan focused inputs instead of resizing the full map/WebView tree during keyboard transitions.',
+);
+assert.ok(
+  androidManifestSource.includes('android:windowSoftInputMode="adjustPan"'),
+  'Checked-in Android manifest should match Expo keyboard pan mode for release emulator builds.',
+);
 assert.ok(
   navigateSource.includes('idleDestinationSearchMaxHeight') &&
+    navigateSource.includes('idleDestinationSearchPanelMaxHeight') &&
+    navigateSource.includes('IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT') &&
     navigateSource.includes('idleDestinationSearchResultsMaxHeight') &&
     navigateSource.includes('idleDestinationSearchRenderLimit') &&
-    navigateSource.includes('keyboardHeight > 0 ? 3 : IDLE_DESTINATION_SEARCH_RENDER_LIMIT') &&
+    navigateSource.includes('destinationSearchInputActive ? 3 : IDLE_DESTINATION_SEARCH_RENDER_LIMIT') &&
     navigateSource.includes('styles.idleDestinationSearchShell') &&
-    navigateSource.includes('keyboardHeight > 0 && styles.idleDestinationSearchShellKeyboardActive') &&
-    navigateSource.includes('{ maxHeight: idleDestinationSearchMaxHeight }') &&
+    navigateSource.includes('destinationSearchInputActive && styles.idleDestinationSearchShellKeyboardActive') &&
+    navigateSource.includes('{ maxHeight: idleDestinationSearchPanelMaxHeight }') &&
     navigateSource.includes('style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}'),
   'Navigate destination search must bound its shell and result scrollers so mobile content stays reachable above keyboard/bottom controls.',
 );
