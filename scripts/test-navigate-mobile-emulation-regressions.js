@@ -12,6 +12,7 @@ function read(relativePath) {
 
 const navigateSource = read('app/(tabs)/navigate.tsx');
 const mapRendererSource = read('components/navigate/MapRenderer.tsx');
+const mapFallbackSurfaceSource = read('components/navigate/MapFallbackSurface.tsx');
 const compassRoseSource = read('components/navigate/CompassRose.tsx');
 const roadNavigationSource = read('lib/useRoadNavigation.ts');
 const commandDockSource = read('components/CommandDock.tsx');
@@ -90,8 +91,14 @@ assert.ok(
 const keyboardRenderLimitMatch = navigateSource.match(/const IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT = ([0-9]+);/);
 assert.ok(keyboardRenderLimitMatch, 'Keyboard-active search render limit should be a named numeric constant.');
 assert.ok(
-  Number(keyboardRenderLimitMatch[1]) <= 2,
-  `Keyboard-active search should render at most two suggestion rows during the hot input path; found ${keyboardRenderLimitMatch[1]}.`,
+  Number(keyboardRenderLimitMatch[1]) <= 1,
+  `Keyboard-active search should render at most one suggestion row during the hot input path; found ${keyboardRenderLimitMatch[1]}.`,
+);
+assert.ok(
+  navigateSource.includes("TOP MATCH | 1 OF ${deferredIdleDestinationSearchSuggestions.length}") &&
+    navigateSource.includes('idleDestinationSearchResultsStatic') &&
+    navigateSource.includes('destinationSearchInputActive ? (\n              <View style={[styles.idleDestinationSearchResultsStatic'),
+  'Keyboard-active destination search should show a fixed top-match container instead of mounting a nested ScrollView during IME layout.',
 );
 assert.ok(
   navigateSource.includes('idleDestinationSearchDraftQuery') &&
@@ -297,7 +304,9 @@ assert.ok(
     mapRendererSource.includes('function buildMapboxStaticImageUrl') &&
     mapRendererSource.includes("motionPriority === 'warm'") &&
     mapRendererSource.includes('!standbyMapHasOperationalOverlay') &&
-    mapRendererSource.includes("const renderLiveWebView = shouldLoadMap && !standbyMapActive && motionPriority !== 'cold' && !webRendererCrashBlocked;"),
+    mapRendererSource.includes('const renderLiveWebView =') &&
+    mapRendererSource.includes("motionPriority !== 'cold'") &&
+    mapRendererSource.includes('!webRendererCrashBlocked'),
   'MapRenderer should place no-overlay warm idle maps into a static standby instead of keeping the live WebView renderer hot.',
 );
 assert.ok(
@@ -340,6 +349,29 @@ assert.ok(
 assert.ok(
   navigateSource.includes('standbyWakeDisabled={idleDestinationSearchVisible}'),
   'Parked idle destination search should keep the standby map visually useful without letting search-background taps wake the live WebView.',
+);
+assert.ok(
+  navigateSource.includes('NAVIGATE_ROAD_PREVIEW_MAX_VISUAL_POINTS') &&
+    navigateSource.includes('simplifyNavigateRoadPreviewPoints') &&
+    navigateSource.includes('const previewRoadRouteLinePoints = useMemo('),
+  'Navigate road destination previews should cap visual route geometry before sending it through the inactive map/render pipeline.',
+);
+assert.ok(
+  navigateSource.includes('routeLifecycleState.phase !== \'navigating\'') &&
+    navigateSource.includes('activeRoadRouteLinePoints.length > NAVIGATE_ROAD_PREVIEW_MAX_VISUAL_POINTS') &&
+    navigateSource.includes('return previewRoadRouteLinePoints;'),
+  'Inactive road previews should use the capped route line while active guidance keeps full route geometry.',
+);
+assert.ok(
+  navigateSource.includes('NAVIGATE_ROAD_PREVIEW_DETAIL_SETTLE_MS') &&
+    navigateSource.includes('roadPreviewDetailsSettled') &&
+    navigateSource.includes('roadPreviewDetailSettleTimerRef'),
+  'Navigate route preview should explicitly defer heavy detail blocks after destination-result selection.',
+);
+assert.ok(
+  navigateSource.includes('roadPreviewDetailsSettled\n          ? buildStagedActiveGuidanceRouteOptions') &&
+    navigateSource.includes('readinessStack: roadPreviewDetailsSettled ? navigationStartReadinessStack : null'),
+  'Road preview route options and readiness rows should wait for the short settle window instead of rendering in the same burst as route selection.',
 );
 assert.ok(
   mapRendererSource.includes('standbyMapDisabled?: boolean;') &&
@@ -387,6 +419,28 @@ assert.ok(
     mapRendererSource.includes('refreshExpiredTiles: false') &&
     mapRendererSource.includes('crossSourceCollisions: false'),
   'MapRenderer should use lean Mapbox GL options to reduce idle WebView redraw and tile/cache pressure on mobile.',
+);
+assert.ok(
+  mapRendererSource.includes('compactRoutePreviewStandbyEligible') &&
+    mapRendererSource.includes('standbyMapEligible || compactRoutePreviewStandbyEligible') &&
+    mapRendererSource.includes("routeRenderMode === 'preview'") &&
+    mapRendererSource.includes("motionPriority === 'warm'") &&
+    mapRendererSource.includes('transparentBackground={standbyMapActive && compactRoutePreviewStandbyEligible}'),
+  'Compact warm route previews should stay on the static standby map and draw the native fallback route first without affecting hot active guidance.',
+);
+assert.ok(
+  mapFallbackSurfaceSource.includes('const drawBackdrop = !transparentBackground;') &&
+    mapFallbackSurfaceSource.includes('{drawBackdrop ? (') &&
+    !mapFallbackSurfaceSource.includes("fill={transparentBackground ? 'rgba(5,9,13,0.68)' : '#05090D'}"),
+  'Transparent native fallback overlays should not repaint a muted full-screen tactical backdrop over static route previews.',
+);
+assert.ok(
+  mapRendererSource.includes('!routeBuilderActive') &&
+    mapRendererSource.includes('routeBuilderSegments.length === 0') &&
+    mapRendererSource.includes('routeBuilderAnchors.length === 0') &&
+    mapRendererSource.includes('!showCrosshair') &&
+    mapRendererSource.includes('!campsiteSearchPolygon?.coordinates?.length'),
+  'Compact WebView wake deferral must stay scoped away from route-builder and map-editing interactions.',
 );
 
 assert.ok(

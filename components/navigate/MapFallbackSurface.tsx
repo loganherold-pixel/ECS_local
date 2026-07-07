@@ -205,6 +205,7 @@ export default function MapFallbackSurface({
   }
 
   const project = makeProjector(bounds, width, height);
+  const drawBackdrop = !transparentBackground;
 
   return (
     <Pressable
@@ -218,35 +219,33 @@ export default function MapFallbackSurface({
       ]}
     >
       <Svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-        <Rect
-          x="0"
-          y="0"
-          width={width}
-          height={height}
-          fill={transparentBackground ? 'rgba(5,9,13,0.68)' : '#05090D'}
-        />
-        {Array.from({ length: 7 }).map((_, index) => (
-          <Line
-            key={`grid-v-${index}`}
-            x1={(width / 6) * index}
-            x2={(width / 6) * index}
-            y1="0"
-            y2={height}
-            stroke="rgba(242,194,77,0.055)"
-            strokeWidth="1"
-          />
-        ))}
-        {Array.from({ length: 9 }).map((_, index) => (
-          <Line
-            key={`grid-h-${index}`}
-            x1="0"
-            x2={width}
-            y1={(height / 8) * index}
-            y2={(height / 8) * index}
-            stroke="rgba(242,194,77,0.045)"
-            strokeWidth="1"
-          />
-        ))}
+        {drawBackdrop ? (
+          <>
+            <Rect x="0" y="0" width={width} height={height} fill="#05090D" />
+            {Array.from({ length: 7 }).map((_, index) => (
+              <Line
+                key={`grid-v-${index}`}
+                x1={(width / 6) * index}
+                x2={(width / 6) * index}
+                y1="0"
+                y2={height}
+                stroke="rgba(242,194,77,0.055)"
+                strokeWidth="1"
+              />
+            ))}
+            {Array.from({ length: 9 }).map((_, index) => (
+              <Line
+                key={`grid-h-${index}`}
+                x1="0"
+                x2={width}
+                y1={(height / 8) * index}
+                y2={(height / 8) * index}
+                stroke="rgba(242,194,77,0.045)"
+                strokeWidth="1"
+              />
+            ))}
+          </>
+        ) : null}
         {segmentLines.map((segment, index) => (
           <Polyline
             key={`segment-${index}`}

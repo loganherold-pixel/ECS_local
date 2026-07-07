@@ -1953,15 +1953,59 @@ const COMPASS_MOVEMENT_DISTANCE_M = 4;
 const COMPASS_MOVEMENT_SPEED_MPH = 1.5;
 const ACTIVE_GUIDANCE_AUTO_MINIMIZE_MS = 2500;
 const IDLE_DESTINATION_SEARCH_RENDER_LIMIT = 5;
-const IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT = 2;
+const IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT = 1;
 const IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS = 260;
-const IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS = 280;
-const IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS = 460;
+const IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS = 340;
+const IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS = 620;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT = 780;
-const IDLE_DESTINATION_SEARCH_KEYBOARD_RESULTS_MAX_HEIGHT = 168;
+const IDLE_DESTINATION_SEARCH_KEYBOARD_RESULTS_MAX_HEIGHT = 92;
+const NAVIGATE_ROAD_PREVIEW_MAX_VISUAL_POINTS = 96;
+const NAVIGATE_ROAD_PREVIEW_DETAIL_SETTLE_MS = 360;
 const HIDDEN_ROAD_NAVIGATION_SEARCH_QUERY = '';
 const EMPTY_ROAD_NAVIGATION_SEARCH_SUGGESTIONS: RoadNavSearchSuggestion[] =
   Object.freeze([]) as unknown as RoadNavSearchSuggestion[];
+
+function sameNavigateRoadPreviewPoint(left: { lat: number; lng: number }, right: { lat: number; lng: number }) {
+  return Math.abs(left.lat - right.lat) < 0.0000001 && Math.abs(left.lng - right.lng) < 0.0000001;
+}
+
+function simplifyNavigateRoadPreviewPoints<T extends { lat: number; lng: number }>(
+  points: T[],
+  maxPoints = NAVIGATE_ROAD_PREVIEW_MAX_VISUAL_POINTS,
+): T[] {
+  const validPoints = points.filter((point) =>
+    Number.isFinite(point.lat) &&
+    Number.isFinite(point.lng) &&
+    Math.abs(point.lat) <= 90 &&
+    Math.abs(point.lng) <= 180,
+  );
+  const cappedMaxPoints = Math.max(2, Math.round(maxPoints));
+  if (validPoints.length <= cappedMaxPoints) return validPoints.slice();
+
+  const simplified: T[] = [];
+  const lastIndex = validPoints.length - 1;
+  const step = lastIndex / (cappedMaxPoints - 1);
+
+  for (let index = 0; index < cappedMaxPoints; index += 1) {
+    const sourceIndex = index === cappedMaxPoints - 1 ? lastIndex : Math.round(index * step);
+    const point = validPoints[sourceIndex];
+    if (!point) continue;
+    if (simplified.length === 0 || !sameNavigateRoadPreviewPoint(simplified[simplified.length - 1], point)) {
+      simplified.push(point);
+    }
+  }
+
+  const first = validPoints[0];
+  const last = validPoints[lastIndex];
+  if (simplified.length === 0 || !sameNavigateRoadPreviewPoint(simplified[0], first)) {
+    simplified.unshift(first);
+  }
+  if (!sameNavigateRoadPreviewPoint(simplified[simplified.length - 1], last)) {
+    simplified.push(last);
+  }
+
+  return simplified.slice(0, cappedMaxPoints - 1).concat(last);
+}
 const noopHiddenRoadNavigationSearchQuery = (_value: string) => {};
 const noopHiddenRoadNavigationSearchSuggestion = (_suggestion: RoadNavSearchSuggestion) => {};
 const CAMP_LAYER_ROUTE_MAP_RESULT_LIMIT = 64;
@@ -4905,6 +4949,12 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const roadStepListExpanded = roadNavigation.stepListExpanded;
   const setRoadStepListExpanded = roadNavigation.setStepListExpanded;
   const roadPreviewLoading = roadNavigation.previewLoading;
+  const [roadPreviewDetailsSettled, setRoadPreviewDetailsSettled] = useState(true);
+  const roadPreviewDetailSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const roadPreviewRouteId = roadSession.route?.id ?? null;
+  const roadPreviewDestinationId = roadSession.destination?.id ?? null;
+  const roadPreviewHasRoute = !!roadSession.route;
+  const roadPreviewHasDestination = !!roadSession.destination;
   const selectRoadRouteAlternative = roadNavigation.selectRouteAlternative;
   const selectRoadSuggestion = roadNavigation.selectSuggestion;
 
@@ -4913,6 +4963,44 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     if (raw?.campsiteApproach) return;
     setCampsiteFinalAccess(null);
   }, [roadSession.destination?.id, roadSession.destination?.raw]);
+
+  useEffect(() => {
+    if (roadPreviewDetailSettleTimerRef.current) {
+      clearTimeout(roadPreviewDetailSettleTimerRef.current);
+      roadPreviewDetailSettleTimerRef.current = null;
+    }
+
+    const shouldSettleRoadPreviewDetails =
+      roadSession.status === 'route_preview' &&
+      roadPreviewHasRoute &&
+      roadPreviewHasDestination &&
+      !roadPreviewLoading;
+
+    if (!shouldSettleRoadPreviewDetails) {
+      setRoadPreviewDetailsSettled(true);
+      return;
+    }
+
+    setRoadPreviewDetailsSettled(false);
+    roadPreviewDetailSettleTimerRef.current = setTimeout(() => {
+      setRoadPreviewDetailsSettled(true);
+      roadPreviewDetailSettleTimerRef.current = null;
+    }, NAVIGATE_ROAD_PREVIEW_DETAIL_SETTLE_MS);
+
+    return () => {
+      if (roadPreviewDetailSettleTimerRef.current) {
+        clearTimeout(roadPreviewDetailSettleTimerRef.current);
+        roadPreviewDetailSettleTimerRef.current = null;
+      }
+    };
+  }, [
+    roadPreviewDestinationId,
+    roadPreviewHasDestination,
+    roadPreviewHasRoute,
+    roadPreviewLoading,
+    roadPreviewRouteId,
+    roadSession.status,
+  ]);
 
   const [exploreNavigationPayload, setExploreNavigationPayload] =
     useState<NavigationHandoffPayload | null>(null);
@@ -11591,6 +11679,10 @@ const handleCreateRun = useCallback(() => {
       })),
     [activeRoadRouteLineSync.geometry],
   );
+  const previewRoadRouteLinePoints = useMemo(
+    () => simplifyNavigateRoadPreviewPoints(activeRoadRouteLinePoints),
+    [activeRoadRouteLinePoints],
+  );
   const roadNavigationRouteLineRequired =
     roadNavigation.session.status === 'navigation_active' ||
     roadNavigation.session.status === 'rerouting' ||
@@ -12397,6 +12489,12 @@ const handleCreateRun = useCallback(() => {
     ) {
       return trailNavigation.session.payload.trailGeometry;
     }
+    if (
+      routeLifecycleState.phase !== 'navigating' &&
+      activeRoadRouteLinePoints.length > NAVIGATE_ROAD_PREVIEW_MAX_VISUAL_POINTS
+    ) {
+      return previewRoadRouteLinePoints;
+    }
     if (activeRoadRouteLinePoints.length > 1) return activeRoadRouteLinePoints;
     if (roadNavigationRouteLineRequired) return [];
     if (explorePreviewMode) return [];
@@ -12407,7 +12505,9 @@ const handleCreateRun = useCallback(() => {
     fullRouteGuidanceModel.routePoints,
     fullRouteGuidanceModel.status,
     pendingHybridTrailTransition,
+    previewRoadRouteLinePoints,
     roadNavigationRouteLineRequired,
+    routeLifecycleState.phase,
     trailNavigation.session.payload,
     trailNavigationActive,
     validatedRunPoints,
@@ -12418,6 +12518,9 @@ const handleCreateRun = useCallback(() => {
     if (!roadRouteLineKey || displayedRoutePoints.length < 2) return null;
     if (displayedRoutePoints === activeRoadRouteLinePoints) {
       return roadRouteLineKey;
+    }
+    if (displayedRoutePoints === previewRoadRouteLinePoints) {
+      return `road-preview:${roadRouteLineKey}:${previewRoadRouteLinePoints.length}`;
     }
     if (
       fullRouteGuidanceModel.status !== 'unavailable' &&
@@ -12432,6 +12535,7 @@ const handleCreateRun = useCallback(() => {
     displayedRoutePoints,
     fullRouteGuidanceModel.routePoints,
     fullRouteGuidanceModel.status,
+    previewRoadRouteLinePoints,
   ]);
 
   const navigateRouteProfileCoordinates = useMemo(
@@ -15070,13 +15174,15 @@ const handleTopToolboxLayout = useCallback(
           { label: 'TIME', value: formatNavDuration(route?.durationS ?? null) },
           { label: 'ETA', value: formatNavEta(roadPreviewEtaIso) },
         ],
-        alternateRoutes: buildStagedActiveGuidanceRouteOptions({
-          routes: roadNavigation.session.routeAlternatives,
-          selectedRouteId: route?.id ?? null,
-          formatDistance: formatNavMeters,
-          formatDuration: formatNavDuration,
-          formatEta: formatNavEta,
-        }),
+        alternateRoutes: roadPreviewDetailsSettled
+          ? buildStagedActiveGuidanceRouteOptions({
+              routes: roadNavigation.session.routeAlternatives,
+              selectedRouteId: route?.id ?? null,
+              formatDistance: formatNavMeters,
+              formatDuration: formatNavDuration,
+              formatEta: formatNavEta,
+            })
+          : [],
         statusText: roadNavigation.previewLoading
           ? 'Preparing road route'
           : (previewOperationalStatus ??
@@ -15094,7 +15200,7 @@ const handleTopToolboxLayout = useCallback(
         overviewLabel: 'Route Preview',
         dismissLabel: 'Not Yet',
         arrivalMessage: 'Visual guidance complete.',
-        readinessStack: navigationStartReadinessStack,
+        readinessStack: roadPreviewDetailsSettled ? navigationStartReadinessStack : null,
         routeConfidenceSummary: navigateRouteConfidenceSummary,
       };
     }
@@ -15164,13 +15270,15 @@ const handleTopToolboxLayout = useCallback(
           { label: 'ETA', value: formatNavEta(roadPreviewEtaIso) },
           { label: 'TRAIL', value: trailLengthText },
         ],
-        alternateRoutes: buildStagedActiveGuidanceRouteOptions({
-          routes: roadNavigation.session.routeAlternatives,
-          selectedRouteId: route?.id ?? null,
-          formatDistance: formatNavMeters,
-          formatDuration: formatNavDuration,
-          formatEta: formatNavEta,
-        }),
+        alternateRoutes: roadPreviewDetailsSettled
+          ? buildStagedActiveGuidanceRouteOptions({
+              routes: roadNavigation.session.routeAlternatives,
+              selectedRouteId: route?.id ?? null,
+              formatDistance: formatNavMeters,
+              formatDuration: formatNavDuration,
+              formatEta: formatNavEta,
+            })
+          : [],
         statusText:
           activeGuidanceUnavailableReason ??
           (roadNavigation.previewLoading
@@ -15192,7 +15300,7 @@ const handleTopToolboxLayout = useCallback(
         overviewLabel: 'Route Preview',
         dismissLabel: 'Not Yet',
         arrivalMessage: 'Road approach complete. Trail preview remains loaded.',
-        readinessStack: navigationStartReadinessStack,
+        readinessStack: roadPreviewDetailsSettled ? navigationStartReadinessStack : null,
         routeConfidenceSummary: navigateRouteConfidenceSummary,
       };
     }
@@ -15209,13 +15317,15 @@ const handleTopToolboxLayout = useCallback(
         { label: 'TIME', value: formatNavDuration(route?.durationS ?? null) },
         { label: 'ETA', value: formatNavEta(roadPreviewEtaIso) },
       ],
-      alternateRoutes: buildStagedActiveGuidanceRouteOptions({
-        routes: roadNavigation.session.routeAlternatives,
-        selectedRouteId: route?.id ?? null,
-        formatDistance: formatNavMeters,
-        formatDuration: formatNavDuration,
-        formatEta: formatNavEta,
-      }),
+      alternateRoutes: roadPreviewDetailsSettled
+        ? buildStagedActiveGuidanceRouteOptions({
+            routes: roadNavigation.session.routeAlternatives,
+            selectedRouteId: route?.id ?? null,
+            formatDistance: formatNavMeters,
+            formatDuration: formatNavDuration,
+            formatEta: formatNavEta,
+          })
+        : [],
       statusText:
         roadNavigation.previewLoading
           ? 'Preparing road route'
@@ -15234,7 +15344,7 @@ const handleTopToolboxLayout = useCallback(
       overviewLabel: 'Route Preview',
       dismissLabel: 'Not Yet',
       arrivalMessage: 'Visual guidance complete.',
-      readinessStack: navigationStartReadinessStack,
+      readinessStack: roadPreviewDetailsSettled ? navigationStartReadinessStack : null,
       routeConfidenceSummary: navigateRouteConfidenceSummary,
     };
   }, [
@@ -15252,6 +15362,7 @@ const handleTopToolboxLayout = useCallback(
     roadNavigation.session.routeAlternatives,
     roadNavigation.session.routeStatusLabel,
     roadNavigation.uiMode,
+    roadPreviewDetailsSettled,
     roadPreviewEtaIso,
     navigateOperationalState.hasRouteSupport,
     navigateOperationalState.liveRoutingAvailable,
@@ -20294,7 +20405,9 @@ const idleDestinationSearchOperationalTextVisible =
 const idleDestinationSearchLoadingVisible =
   roadNavigation.searchLoading && !destinationSearchInputActive;
 const idleDestinationSearchResultsLabel =
-  visibleIdleDestinationSearchSuggestions.length < deferredIdleDestinationSearchSuggestions.length
+  destinationSearchInputActive && deferredIdleDestinationSearchSuggestions.length > 0
+    ? `TOP MATCH | 1 OF ${deferredIdleDestinationSearchSuggestions.length}`
+    : visibleIdleDestinationSearchSuggestions.length < deferredIdleDestinationSearchSuggestions.length
     ? `RESULTS | ${visibleIdleDestinationSearchSuggestions.length} OF ${deferredIdleDestinationSearchSuggestions.length}`
     : `RESULTS | ${deferredIdleDestinationSearchSuggestions.length}`;
 const recentSearchesSectionVisible =
@@ -20357,6 +20470,58 @@ const recentSearchesEmptyMessage =
 
 const idleDestinationSearchOverlay = useMemo(() => {
   if (!idleDestinationSearchVisible) return null;
+
+  const suggestionRows = visibleIdleDestinationSearchSuggestions.map((suggestion) => (
+    <TouchableOpacity
+      key={suggestion.id}
+      style={[
+        styles.idleDestinationSearchSuggestionItem,
+        destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
+      ]}
+      onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}
+      activeOpacity={0.82}
+    >
+      <Ionicons name="location-outline" size={15} color={TACTICAL.amber} />
+      <View style={styles.idleDestinationSearchSuggestionTextWrap}>
+        <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
+          {suggestion.title}
+        </Text>
+        {suggestion.subtitle ? (
+          <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
+            {suggestion.subtitle}
+          </Text>
+        ) : null}
+      </View>
+      {!destinationSearchInputActive ? (
+        <Ionicons name="chevron-forward" size={14} color={TACTICAL.textMuted} />
+      ) : null}
+    </TouchableOpacity>
+  ));
+
+  const recentSearchRows = visibleRecentSearches.map((suggestion) => (
+    <TouchableOpacity
+      key={`recent-${suggestion.id}`}
+      style={[
+        styles.idleDestinationSearchSuggestionItem,
+        destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
+      ]}
+      onPress={() => handleRecentSearchSelection(suggestion)}
+      activeOpacity={0.82}
+    >
+      <Ionicons name="time-outline" size={15} color={TACTICAL.amber} />
+      <View style={styles.idleDestinationSearchSuggestionTextWrap}>
+        <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
+          {suggestion.title}
+        </Text>
+        <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
+          {suggestion.subtitle ?? 'Saved destination'}
+        </Text>
+      </View>
+      {!destinationSearchInputActive ? (
+        <Ionicons name="navigate-outline" size={14} color={TACTICAL.textMuted} />
+      ) : null}
+    </TouchableOpacity>
+  ));
 
   return (
     <View
@@ -20484,36 +20649,19 @@ const idleDestinationSearchOverlay = useMemo(() => {
             <Text style={styles.idleDestinationSearchSectionTitle}>
               {idleDestinationSearchResultsLabel}
             </Text>
-            <ScrollView
-              style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
-              nestedScrollEnabled
-              keyboardShouldPersistTaps="handled"
-            >
-              {visibleIdleDestinationSearchSuggestions.map((suggestion) => (
-                <TouchableOpacity
-                  key={suggestion.id}
-                  style={[
-                    styles.idleDestinationSearchSuggestionItem,
-                    destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
-                  ]}
-                  onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}
-                  activeOpacity={0.82}
-                >
-                  <Ionicons name="location-outline" size={15} color={TACTICAL.amber} />
-                  <View style={styles.idleDestinationSearchSuggestionTextWrap}>
-                    <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
-                      {suggestion.title}
-                    </Text>
-                    {suggestion.subtitle ? (
-                      <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
-                        {suggestion.subtitle}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <Ionicons name="chevron-forward" size={14} color={TACTICAL.textMuted} />
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+            {destinationSearchInputActive ? (
+              <View style={[styles.idleDestinationSearchResultsStatic, { maxHeight: idleDestinationSearchResultsMaxHeight }]}>
+                {suggestionRows}
+              </View>
+            ) : (
+              <ScrollView
+                style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
+                {suggestionRows}
+              </ScrollView>
+            )}
           </View>
         ) : null}
 
@@ -20521,34 +20669,19 @@ const idleDestinationSearchOverlay = useMemo(() => {
           <View style={styles.idleDestinationSearchResultsBlock}>
             <Text style={styles.idleDestinationSearchSectionTitle}>{recentSearchesTitle}</Text>
             {recentSearches.length > 0 ? (
-              <ScrollView
-                style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
-                nestedScrollEnabled
-                keyboardShouldPersistTaps="handled"
-              >
-                {visibleRecentSearches.map((suggestion) => (
-                  <TouchableOpacity
-                    key={`recent-${suggestion.id}`}
-                    style={[
-                      styles.idleDestinationSearchSuggestionItem,
-                      destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
-                    ]}
-                    onPress={() => handleRecentSearchSelection(suggestion)}
-                    activeOpacity={0.82}
-                  >
-                    <Ionicons name="time-outline" size={15} color={TACTICAL.amber} />
-                    <View style={styles.idleDestinationSearchSuggestionTextWrap}>
-                      <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
-                        {suggestion.title}
-                      </Text>
-                      <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
-                        {suggestion.subtitle ?? 'Saved destination'}
-                      </Text>
-                    </View>
-                    <Ionicons name="navigate-outline" size={14} color={TACTICAL.textMuted} />
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+              destinationSearchInputActive ? (
+                <View style={[styles.idleDestinationSearchResultsStatic, { maxHeight: idleDestinationSearchResultsMaxHeight }]}>
+                  {recentSearchRows}
+                </View>
+              ) : (
+                <ScrollView
+                  style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
+                  nestedScrollEnabled
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {recentSearchRows}
+                </ScrollView>
+              )
             ) : (
               <ECSResultsEmptyState
                 title="No recent searches"
@@ -26999,6 +27132,10 @@ idleDestinationSearchSectionTitle: {
 
 idleDestinationSearchResultsScroll: {
   maxHeight: 190,
+},
+
+idleDestinationSearchResultsStatic: {
+  overflow: 'hidden',
 },
 
 idleDestinationSearchSuggestionItem: {

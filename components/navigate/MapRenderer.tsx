@@ -8075,14 +8075,35 @@ const MapRenderer = React.memo(function MapRenderer({
     interactive !== false &&
     !standbyMapDisabled &&
     !standbyMapHasOperationalOverlay;
-  const standbyMapActive = standbyMapEligible && !standbyWakeRequested;
-  const renderLiveWebView = shouldLoadMap && !standbyMapActive && motionPriority !== 'cold' && !webRendererCrashBlocked;
+  const compactRoutePreviewStandbyEligible =
+    shouldLoadMap &&
+    isCompactSurface &&
+    motionPriority === 'warm' &&
+    interactive !== false &&
+    routeRenderMode === 'preview' &&
+    points.length > 1 &&
+    !webReady &&
+    !hasEverReachedReadyRef.current &&
+    !webRendererCrashBlocked &&
+    !standbyMapDisabled &&
+    !routeBuilderActive &&
+    routeBuilderSegments.length === 0 &&
+    routeBuilderAnchors.length === 0 &&
+    !showCrosshair &&
+    !dispersedRouteBuild?.enabled &&
+    !establishedCampsites?.enabled &&
+    !campsiteSearchPolygon?.coordinates?.length;
+  const standbyMapActive =
+    (standbyMapEligible || compactRoutePreviewStandbyEligible) && !standbyWakeRequested;
 
   useEffect(() => {
-    if ((standbyWakeDisabled || !standbyMapEligible) && standbyWakeRequested) {
+    if (
+      (standbyWakeDisabled || (!standbyMapEligible && !compactRoutePreviewStandbyEligible)) &&
+      standbyWakeRequested
+    ) {
       setStandbyWakeRequested(false);
     }
-  }, [standbyMapEligible, standbyWakeDisabled, standbyWakeRequested]);
+  }, [compactRoutePreviewStandbyEligible, standbyMapEligible, standbyWakeDisabled, standbyWakeRequested]);
 
   useEffect(() => {
     onReadyStateChange?.(
@@ -8404,9 +8425,17 @@ const MapRenderer = React.memo(function MapRenderer({
     [dynamicPayload.userLocation, fallbackMarkers.length, fallbackSegments, payload.progressRouteCoords.length, payload.routeCoords.length],
   );
   const fallbackVisible =
-    !standbyMapActive &&
     hasFallbackGeometry &&
-    (!shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current)));
+    (
+      (standbyMapActive && compactRoutePreviewStandbyEligible) ||
+      (!standbyMapActive &&
+        (!shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current))))
+    );
+  const renderLiveWebView =
+    shouldLoadMap &&
+    !standbyMapActive &&
+    motionPriority !== 'cold' &&
+    !webRendererCrashBlocked;
   const dispersedCampingEligibilityRef = useRef(dispersedCampingEligibility);
   dispersedCampingEligibilityRef.current = dispersedCampingEligibility;
   const dispersedRouteBuildRef = useRef(dispersedRouteBuild);
@@ -9187,6 +9216,7 @@ const MapRenderer = React.memo(function MapRenderer({
           userLocation={dynamicPayload.userLocation}
           bootIssue={webBootIssue}
           compact={isCompactSurface}
+          transparentBackground={standbyMapActive && compactRoutePreviewStandbyEligible}
         />
       ) : null}
 
