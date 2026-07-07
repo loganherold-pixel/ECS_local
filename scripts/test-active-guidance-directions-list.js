@@ -38,6 +38,14 @@ const overlaySource = fs.readFileSync(
   'utf8',
 );
 
+function readStyleBlock(styleName, nextStyleName) {
+  const start = overlaySource.indexOf(`${styleName}: {`);
+  assert(start >= 0, `${styleName} style should exist.`);
+  const end = overlaySource.indexOf(`${nextStyleName}: {`, start);
+  assert(end > start, `${styleName} style should remain statically readable.`);
+  return overlaySource.slice(start, end);
+}
+
 assert.strictEqual(typeof buildActiveGuidanceDirectionList, 'function');
 assert.strictEqual(typeof buildFallbackActiveDirectionList, 'function');
 assert.strictEqual(typeof formatActiveDirectionDistance, 'function');
@@ -298,6 +306,23 @@ assert(
     overlaySource.includes('maxHeight: 168') &&
     overlaySource.includes('paddingBottom: 8'),
   'Active directions dropdown should reserve enough internal height and bottom padding so lower rows are reachable instead of clipped on mobile.',
+);
+const activeDirectionsDropdownStyle = readStyleBlock(
+  'activeDirectionsDropdown',
+  'activeDirectionsHeaderRow',
+);
+const activeDirectionsScrollStyle = readStyleBlock(
+  'activeDirectionsScroll',
+  'activeDirectionsScrollContent',
+);
+assert(
+  activeDirectionsDropdownStyle.includes('flexShrink: 1') &&
+    activeDirectionsDropdownStyle.includes('minHeight: 0'),
+  'Active directions dropdown should be explicitly shrinkable so expanded guidance stays bounded on small mobile screens.',
+);
+assert(
+  activeDirectionsScrollStyle.includes('minHeight: 0'),
+  'Active directions scroll region should be explicitly shrinkable so expanded guidance stays bounded on small mobile screens.',
 );
 
 console.log('Active guidance directions list regression passed.');

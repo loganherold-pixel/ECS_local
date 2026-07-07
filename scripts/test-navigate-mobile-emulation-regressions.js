@@ -195,6 +195,12 @@ assert.ok(
   'Navigate search should not animate the loading spinner during the hot keyboard/input transition.',
 );
 assert.ok(
+  navigateSource.includes('const idleDestinationSearchOperationalTextVisible =') &&
+    navigateSource.includes('!destinationSearchInputActive && idleDestinationSearchHasQuery') &&
+    navigateSource.includes('{idleDestinationSearchOperationalTextVisible ? ('),
+  'Navigate search should avoid dynamic query-copy text layout while Android keyboard/input frames are hot.',
+);
+assert.ok(
   navigateSource.includes('const campsiteSearchPolygonPayload = useMemo(') &&
     !navigateSource.includes('campsiteSearchPolygon={{'),
   'MapRenderer should receive a memoized campsite search polygon payload instead of a fresh object on every search keystroke.',
@@ -208,6 +214,48 @@ const mapRendererMemoDeps = navigateSource.slice(mapRendererMemoDepsStart, mapRe
 assert.ok(
   !mapRendererMemoDeps.includes('keyboardHeight') && !mapRendererMemoDeps.includes('roadNavigation'),
   'MapRenderer memo dependencies should exclude keyboardHeight and roadNavigation search state.',
+);
+assert.ok(
+  navigateSource.includes('const idleDestinationSearchOverlay = useMemo(() => {') &&
+    navigateSource.includes('{stableMapSurface}\n        {idleDestinationSearchOverlay}'),
+  'Parked destination search should render through its own memoized overlay outside the broad map-surface memo.',
+);
+const stableMapSurfaceStart = navigateSource.indexOf('const stableMapSurface = useMemo(() => {');
+assert.ok(stableMapSurfaceStart >= 0, 'Navigate should keep the broad map surface memo readable.');
+const stableMapSurfaceDepsStart = navigateSource.indexOf('}, [\n  hasToken,', stableMapSurfaceStart);
+const stableMapSurfaceDepsEnd = navigateSource.indexOf(']);', stableMapSurfaceDepsStart);
+assert.ok(
+  stableMapSurfaceDepsStart > stableMapSurfaceStart &&
+    stableMapSurfaceDepsEnd > stableMapSurfaceDepsStart,
+  'Navigate broad map-surface memo dependencies should remain statically readable.',
+);
+const stableMapSurfaceDeps = navigateSource.slice(stableMapSurfaceDepsStart, stableMapSurfaceDepsEnd);
+[
+  'idleDestinationSearchDraftQuery',
+  'visibleIdleDestinationSearchSuggestions',
+  'deferredIdleDestinationSearchSuggestions',
+  'recentSearches',
+  'recentSearchesVisible',
+  'idleDestinationSearchResultsLabel',
+  'idleDestinationSearchPanelMaxHeight',
+  'idleDestinationSearchResultsMaxHeight',
+  'idleDestinationSearchHasQuery',
+  'roadNavigation,',
+].forEach((hotDependency) => {
+  assert.ok(
+    !stableMapSurfaceDeps.includes(hotDependency),
+    `Broad Navigate map surface should not rebuild from hot parked-search dependency: ${hotDependency}.`,
+  );
+});
+assert.ok(
+  navigateSource.includes('const HIDDEN_ROAD_NAVIGATION_SEARCH_QUERY = \'\'') &&
+    navigateSource.includes('const EMPTY_ROAD_NAVIGATION_SEARCH_SUGGESTIONS: RoadNavSearchSuggestion[] =') &&
+    navigateSource.includes('Object.freeze([]) as unknown as RoadNavSearchSuggestion[];') &&
+    navigateSource.includes('query={HIDDEN_ROAD_NAVIGATION_SEARCH_QUERY}') &&
+    navigateSource.includes('suggestions={EMPTY_ROAD_NAVIGATION_SEARCH_SUGGESTIONS}') &&
+    navigateSource.includes('searchLoading={false}') &&
+    navigateSource.includes('searchError={null}'),
+  'Hidden RoadNavigationOverlay search props should be stable so parked typing does not invalidate active/preview overlay rendering.',
 );
 const mapRendererHtmlMemoStart = mapRendererSource.indexOf('const html = useMemo(');
 assert.ok(mapRendererHtmlMemoStart >= 0, 'MapRenderer should memoize the WebView HTML source.');
@@ -273,10 +321,11 @@ assert.ok(
 );
 assert.ok(
   navigateSource.includes('surfaceMode="compact"') &&
-    navigateSource.includes('style={destinationSearchMapFrozen ? styles.mapRendererFrozen : undefined}') &&
-    navigateSource.includes('mapRendererFrozen:') &&
-    navigateSource.includes("display: 'none'"),
-  'Navigate should keep the compact map in lightweight standby while idle search is parked, then suspend drawing while destination search owns the foreground.',
+    navigateSource.includes('destinationSearchMapOccluder') &&
+    navigateSource.includes('interactive={!destinationSearchMapFrozen}') &&
+    !navigateSource.includes('style={destinationSearchMapFrozen ? styles.mapRendererFrozen : undefined}') &&
+    !navigateSource.includes('mapRendererFrozen:'),
+  'Navigate should keep the compact map in lightweight standby during parked search and pause interaction through the occluder without display-none layout churn.',
 );
 assert.ok(
   !navigateSource.includes('standbyMapDisabled={idleDestinationSearchVisible && !destinationSearchMapFrozen}'),

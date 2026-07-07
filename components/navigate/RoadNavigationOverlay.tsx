@@ -1810,6 +1810,8 @@ const styles = StyleSheet.create({
   activeDirectionsDropdown: {
     width: '100%',
     maxHeight: 226,
+    minHeight: 0,
+    flexShrink: 1,
     marginTop: 4,
     borderRadius: 10,
     borderWidth: 1,
@@ -1850,6 +1852,7 @@ const styles = StyleSheet.create({
   },
   activeDirectionsScroll: {
     maxHeight: 168,
+    minHeight: 0,
   },
   activeDirectionsScrollContent: {
     paddingVertical: 3,

@@ -1959,6 +1959,11 @@ const IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS = 280;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS = 460;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT = 780;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_RESULTS_MAX_HEIGHT = 168;
+const HIDDEN_ROAD_NAVIGATION_SEARCH_QUERY = '';
+const EMPTY_ROAD_NAVIGATION_SEARCH_SUGGESTIONS: RoadNavSearchSuggestion[] =
+  Object.freeze([]) as unknown as RoadNavSearchSuggestion[];
+const noopHiddenRoadNavigationSearchQuery = (_value: string) => {};
+const noopHiddenRoadNavigationSearchSuggestion = (_suggestion: RoadNavSearchSuggestion) => {};
 const CAMP_LAYER_ROUTE_MAP_RESULT_LIMIT = 64;
 const ESTABLISHED_CAMPGROUNDS_FETCH_DEBOUNCE_MS = 180;
 const ESTABLISHED_CAMPGROUNDS_PREFETCH_PADDING_RATIO = 0.5;
@@ -4881,6 +4886,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   });
   const roadNavigationQuery = roadNavigation.query;
   const setRoadNavigationQuery = roadNavigation.setQuery;
+  const roadNavigationSearchError = roadNavigation.searchError;
   const [idleDestinationSearchDraftQuery, setIdleDestinationSearchDraftQuery] =
     useState(roadNavigationQuery);
   const idleDestinationSearchQueryCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -4898,6 +4904,8 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const roadSession = roadNavigation.session;
   const roadStepListExpanded = roadNavigation.stepListExpanded;
   const setRoadStepListExpanded = roadNavigation.setStepListExpanded;
+  const roadPreviewLoading = roadNavigation.previewLoading;
+  const selectRoadRouteAlternative = roadNavigation.selectRouteAlternative;
   const selectRoadSuggestion = roadNavigation.selectSuggestion;
 
   useEffect(() => {
@@ -20281,6 +20289,8 @@ const visibleIdleDestinationSearchSuggestions = useMemo(
   () => deferredIdleDestinationSearchSuggestions.slice(0, idleDestinationSearchRenderLimit),
   [deferredIdleDestinationSearchSuggestions, idleDestinationSearchRenderLimit],
 );
+const idleDestinationSearchOperationalTextVisible =
+  !destinationSearchInputActive && idleDestinationSearchHasQuery;
 const idleDestinationSearchLoadingVisible =
   roadNavigation.searchLoading && !destinationSearchInputActive;
 const idleDestinationSearchResultsLabel =
@@ -20304,16 +20314,24 @@ const idleDestinationSearchMaxHeight = Math.max(
     idleDestinationSearchBottomClearance -
     PAGE_FRAME_BOTTOM_GAP,
 );
+const idleDestinationSearchKeyboardPanelMaxHeight = Math.max(
+  300,
+  Math.min(
+    IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT,
+    Math.round(adaptive.windowHeight * 0.48),
+  ),
+);
+const idleDestinationSearchKeyboardAvailableHeight = Math.max(
+  136,
+  adaptive.windowHeight -
+    roadNavigationSurfaceTopOffset -
+    routeSurfaceBottomOffset -
+    PAGE_FRAME_BOTTOM_GAP,
+);
 const idleDestinationSearchPanelMaxHeight = destinationSearchInputActive
   ? Math.min(
-      idleDestinationSearchMaxHeight,
-      Math.max(
-        300,
-        Math.min(
-          IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT,
-          Math.round(adaptive.windowHeight * 0.48),
-        ),
-      ),
+      idleDestinationSearchKeyboardAvailableHeight,
+      idleDestinationSearchKeyboardPanelMaxHeight,
     )
   : idleDestinationSearchMaxHeight;
 const idleDestinationSearchResultsMaxHeight = Math.max(
@@ -20321,16 +20339,6 @@ const idleDestinationSearchResultsMaxHeight = Math.max(
   Math.min(
     destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_RESULTS_MAX_HEIGHT : 190,
     idleDestinationSearchPanelMaxHeight - 132,
-  ),
-);
-
-const gpsStatusOverlayBottomOffset = LOWER_DOCK_EXCLUSION + PAGE_FRAME_BOTTOM_GAP + 12;
-
-const gpsStatusOverlayMaxWidth = Math.max(
-  adaptive.isExpanded ? 232 : 196,
-  Math.min(
-    adaptive.isExpanded ? 332 : 296,
-    TOP_LEFT_STATUS_MAX_WIDTH - (adaptive.isExpanded ? 20 : 18),
   ),
 );
 
@@ -20342,6 +20350,273 @@ const recentSearchesTitle = recentSearchCount > 0
 
 const recentSearchesEmptyMessage =
   'Search for an address, place, or trail and it will appear here for fast relaunch.';
+
+const idleDestinationSearchOverlay = useMemo(() => {
+  if (!idleDestinationSearchVisible) return null;
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.idleDestinationSearchWrap,
+        {
+          top: roadNavigationSurfaceTopOffset,
+          left: DESTINATION_SEARCH_HORIZONTAL_INSET,
+          right: DESTINATION_SEARCH_HORIZONTAL_INSET,
+        },
+      ]}
+    >
+      <View
+        style={[
+          styles.idleDestinationSearchShell,
+          destinationSearchInputActive && styles.idleDestinationSearchShellKeyboardActive,
+          { maxHeight: idleDestinationSearchPanelMaxHeight },
+        ]}
+      >
+        <View style={styles.idleDestinationSearchHeader}>
+          <View style={styles.idleDestinationSearchTitleRow}>
+            <Ionicons name="search-outline" size={14} color={TACTICAL.amber} />
+            <Text style={styles.idleDestinationSearchTitle}>SEARCH ADDRESS OR PLACE</Text>
+          </View>
+          <ECSBadge
+            label={searchOperationalState.label ?? 'SEARCH READY'}
+            tone={
+              searchOperationalState.tone === 'live'
+                ? 'live'
+                : searchOperationalState.tone === 'unavailable'
+                  ? 'unavailable'
+                  : 'warning'
+            }
+            compact
+          />
+        </View>
+
+        <View style={styles.idleDestinationSearchFieldRow}>
+          <View
+            style={[
+              styles.idleDestinationSearchFieldShell,
+              destinationSearchInputActive && styles.idleDestinationSearchFieldShellKeyboardActive,
+            ]}
+          >
+            <ECSSearchField
+              value={idleDestinationSearchDraftQuery}
+              onChangeText={handleIdleDestinationSearchChangeText}
+              placeholder={
+                searchOperationalState.disabled
+                  ? navigateOperationalState.mode === 'offline_partial_map'
+                    ? 'Search unavailable with cached maps only'
+                    : 'Search unavailable offline'
+                  : 'Enter address, town, trailhead, or place'
+              }
+              disabled={searchOperationalState.disabled}
+              loading={idleDestinationSearchLoadingVisible}
+              onClear={
+                idleDestinationSearchHasQuery
+                  ? handleIdleDestinationSearchClear
+                  : undefined
+              }
+              style={[
+                styles.idleDestinationSearchField,
+                destinationSearchInputActive && styles.idleDestinationSearchFieldKeyboardActive,
+              ]}
+              inputProps={{
+                autoCapitalize: 'words',
+                autoCorrect: false,
+                onFocus: handleIdleDestinationSearchFocus,
+                onBlur: handleIdleDestinationSearchBlur,
+                returnKeyType: 'search',
+                testID: 'navigate-destination-search-input',
+                accessibilityLabel: 'Search address or place',
+                accessibilityHint: 'Search for a destination to build a road navigation route.',
+              }}
+            />
+          </View>
+          <TouchableOpacity
+            style={[
+              styles.idleDestinationSearchRecentButton,
+              recentSearchesVisible && styles.idleDestinationSearchRecentButtonActive,
+            ]}
+            onPress={toggleRecentSearches}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel="Toggle recent destination searches"
+          >
+            <Ionicons
+              name="time-outline"
+              size={17}
+              color={recentSearchesVisible ? '#091014' : TACTICAL.amber}
+            />
+          </TouchableOpacity>
+        </View>
+
+        {idleDestinationSearchOperationalTextVisible ? (
+          <Text
+            style={styles.idleDestinationSearchOperationalText}
+            numberOfLines={1}
+            testID="navigate-destination-search-query-state"
+          >
+            QUERY | {idleDestinationSearchDraftQuery.trim()}
+          </Text>
+        ) : !destinationSearchInputActive && searchOperationalState.detail ? (
+          <Text style={styles.idleDestinationSearchOperationalText} numberOfLines={1}>
+            {searchOperationalState.detail}
+          </Text>
+        ) : null}
+
+        {roadNavigationSearchError && deferredIdleDestinationSearchSuggestions.length === 0 ? (
+          <View style={styles.idleDestinationSearchResultsBlock}>
+            <ECSResultsEmptyState
+              title={searchOperationalState.disabled ? 'Search Unavailable Offline' : 'Search Paused'}
+              message={searchOperationalState.detail ?? roadNavigationSearchError}
+              actionLabel="Clear Search"
+              onAction={() => setRoadNavigationQuery('')}
+              variant="compact"
+            />
+          </View>
+        ) : null}
+
+        {deferredIdleDestinationSearchSuggestions.length > 0 ? (
+          <View style={styles.idleDestinationSearchResultsBlock}>
+            <Text style={styles.idleDestinationSearchSectionTitle}>
+              {idleDestinationSearchResultsLabel}
+            </Text>
+            <ScrollView
+              style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+            >
+              {visibleIdleDestinationSearchSuggestions.map((suggestion) => (
+                <TouchableOpacity
+                  key={suggestion.id}
+                  style={[
+                    styles.idleDestinationSearchSuggestionItem,
+                    destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
+                  ]}
+                  onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}
+                  activeOpacity={0.82}
+                >
+                  <Ionicons name="location-outline" size={15} color={TACTICAL.amber} />
+                  <View style={styles.idleDestinationSearchSuggestionTextWrap}>
+                    <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
+                      {suggestion.title}
+                    </Text>
+                    {suggestion.subtitle ? (
+                      <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
+                        {suggestion.subtitle}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Ionicons name="chevron-forward" size={14} color={TACTICAL.textMuted} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
+        {recentSearchesSectionVisible ? (
+          <View style={styles.idleDestinationSearchResultsBlock}>
+            <Text style={styles.idleDestinationSearchSectionTitle}>{recentSearchesTitle}</Text>
+            {recentSearches.length > 0 ? (
+              <ScrollView
+                style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
+                {recentSearches.map((suggestion) => (
+                  <TouchableOpacity
+                    key={`recent-${suggestion.id}`}
+                    style={[
+                      styles.idleDestinationSearchSuggestionItem,
+                      destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
+                    ]}
+                    onPress={() => handleRecentSearchSelection(suggestion)}
+                    activeOpacity={0.82}
+                  >
+                    <Ionicons name="time-outline" size={15} color={TACTICAL.amber} />
+                    <View style={styles.idleDestinationSearchSuggestionTextWrap}>
+                      <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
+                        {suggestion.title}
+                      </Text>
+                      <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
+                        {suggestion.subtitle ?? 'Saved destination'}
+                      </Text>
+                    </View>
+                    <Ionicons name="navigate-outline" size={14} color={TACTICAL.textMuted} />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              <ECSResultsEmptyState
+                title="No recent searches"
+                message={recentSearchesEmptyMessage}
+                actionLabel="Search Live"
+                onAction={() => setRoadNavigationQuery('')}
+                variant="compact"
+              />
+            )}
+          </View>
+        ) : null}
+
+        {idleDestinationSearchNoMatchesVisible ? (
+          <View style={styles.idleDestinationSearchResultsBlock}>
+            <Text style={styles.idleDestinationSearchSectionTitle}>SEARCH</Text>
+            <ECSResultsEmptyState
+              title="No Search Matches"
+              message="Try a broader place name or a nearby town."
+              actionLabel="Clear Search"
+              onAction={() => setRoadNavigationQuery('')}
+              variant="compact"
+            />
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}, [
+  DESTINATION_SEARCH_HORIZONTAL_INSET,
+  destinationSearchInputActive,
+  handleIdleDestinationSearchBlur,
+  handleIdleDestinationSearchChangeText,
+  handleIdleDestinationSearchClear,
+  handleIdleDestinationSearchFocus,
+  handleRecentSearchSelection,
+  handleRoadOverlaySelectSuggestion,
+  idleDestinationSearchDraftQuery,
+  idleDestinationSearchHasQuery,
+  idleDestinationSearchLoadingVisible,
+  idleDestinationSearchNoMatchesVisible,
+  idleDestinationSearchOperationalTextVisible,
+  idleDestinationSearchPanelMaxHeight,
+  idleDestinationSearchResultsLabel,
+  idleDestinationSearchResultsMaxHeight,
+  idleDestinationSearchVisible,
+  navigateOperationalState.mode,
+  recentSearches,
+  recentSearchesEmptyMessage,
+  recentSearchesSectionVisible,
+  recentSearchesTitle,
+  recentSearchesVisible,
+  roadNavigationSearchError,
+  searchOperationalState.detail,
+  searchOperationalState.disabled,
+  searchOperationalState.label,
+  searchOperationalState.tone,
+  setRoadNavigationQuery,
+  toggleRecentSearches,
+  visibleIdleDestinationSearchSuggestions,
+  deferredIdleDestinationSearchSuggestions.length,
+  roadNavigationSurfaceTopOffset,
+]);
+
+const gpsStatusOverlayBottomOffset = LOWER_DOCK_EXCLUSION + PAGE_FRAME_BOTTOM_GAP + 12;
+
+const gpsStatusOverlayMaxWidth = Math.max(
+  adaptive.isExpanded ? 232 : 196,
+  Math.min(
+    adaptive.isExpanded ? 332 : 296,
+    TOP_LEFT_STATUS_MAX_WIDTH - (adaptive.isExpanded ? 20 : 18),
+  ),
+);
 
 const handleRoadOverlayStartNavigation = useCallback(() => {
   if (activeGuidanceUnavailableReason) {
@@ -20602,7 +20877,6 @@ const mapRendererElement = useMemo(() => (
     campsiteSearchPolygon={campsiteSearchPolygonPayload}
     surfaceMode="compact"
     standbyWakeDisabled={idleDestinationSearchVisible && !destinationSearchMapFrozen}
-    style={destinationSearchMapFrozen ? styles.mapRendererFrozen : undefined}
   />
 ), [
   activeHealth?.overall,
@@ -21054,225 +21328,6 @@ const stableMapSurface = useMemo(() => {
         </View>
       ) : null}
 
-      {idleDestinationSearchVisible ? (
-        <View
-          pointerEvents="box-none"
-          style={[
-            styles.idleDestinationSearchWrap,
-            {
-              top: roadNavigationSurfaceTopOffset,
-              left: DESTINATION_SEARCH_HORIZONTAL_INSET,
-              right: DESTINATION_SEARCH_HORIZONTAL_INSET,
-            },
-          ]}
-        >
-          <View
-            style={[
-              styles.idleDestinationSearchShell,
-              destinationSearchInputActive && styles.idleDestinationSearchShellKeyboardActive,
-              { maxHeight: idleDestinationSearchPanelMaxHeight },
-            ]}
-          >
-            <View style={styles.idleDestinationSearchHeader}>
-              <View style={styles.idleDestinationSearchTitleRow}>
-                <Ionicons name="search-outline" size={14} color={TACTICAL.amber} />
-                <Text style={styles.idleDestinationSearchTitle}>SEARCH ADDRESS OR PLACE</Text>
-              </View>
-              <ECSBadge
-                label={searchOperationalState.label ?? 'SEARCH READY'}
-                tone={
-                  searchOperationalState.tone === 'live'
-                    ? 'live'
-                    : searchOperationalState.tone === 'unavailable'
-                      ? 'unavailable'
-                      : 'warning'
-                }
-                compact
-              />
-            </View>
-
-            <View style={styles.idleDestinationSearchFieldRow}>
-              <View
-                style={[
-                  styles.idleDestinationSearchFieldShell,
-                  destinationSearchInputActive && styles.idleDestinationSearchFieldShellKeyboardActive,
-                ]}
-              >
-                <ECSSearchField
-                  value={idleDestinationSearchDraftQuery}
-                  onChangeText={handleIdleDestinationSearchChangeText}
-                  placeholder={
-                    searchOperationalState.disabled
-                      ? navigateOperationalState.mode === 'offline_partial_map'
-                        ? 'Search unavailable with cached maps only'
-                        : 'Search unavailable offline'
-                      : 'Enter address, town, trailhead, or place'
-                  }
-                  disabled={searchOperationalState.disabled}
-                  loading={idleDestinationSearchLoadingVisible}
-                  onClear={
-                    idleDestinationSearchHasQuery
-                      ? handleIdleDestinationSearchClear
-                      : undefined
-                  }
-                  style={[
-                    styles.idleDestinationSearchField,
-                    destinationSearchInputActive && styles.idleDestinationSearchFieldKeyboardActive,
-                  ]}
-                  inputProps={{
-                    autoCapitalize: 'words',
-                    autoCorrect: false,
-                    onFocus: handleIdleDestinationSearchFocus,
-                    onBlur: handleIdleDestinationSearchBlur,
-                    returnKeyType: 'search',
-                    testID: 'navigate-destination-search-input',
-                    accessibilityLabel: 'Search address or place',
-                    accessibilityHint: 'Search for a destination to build a road navigation route.',
-                  }}
-                />
-              </View>
-              <TouchableOpacity
-                style={[
-                  styles.idleDestinationSearchRecentButton,
-                  recentSearchesVisible && styles.idleDestinationSearchRecentButtonActive,
-                ]}
-                onPress={toggleRecentSearches}
-                activeOpacity={0.82}
-                accessibilityRole="button"
-                accessibilityLabel="Toggle recent destination searches"
-              >
-                <Ionicons
-                  name="time-outline"
-                  size={17}
-                  color={recentSearchesVisible ? '#091014' : TACTICAL.amber}
-                />
-              </TouchableOpacity>
-            </View>
-
-            {idleDestinationSearchHasQuery ? (
-              <Text
-                style={styles.idleDestinationSearchOperationalText}
-                numberOfLines={1}
-                testID="navigate-destination-search-query-state"
-              >
-                QUERY | {idleDestinationSearchDraftQuery.trim()}
-              </Text>
-            ) : searchOperationalState.detail ? (
-              <Text style={styles.idleDestinationSearchOperationalText} numberOfLines={1}>
-                {searchOperationalState.detail}
-              </Text>
-            ) : null}
-
-            {roadNavigation.searchError && deferredIdleDestinationSearchSuggestions.length === 0 ? (
-              <View style={styles.idleDestinationSearchResultsBlock}>
-                <ECSResultsEmptyState
-                  title={searchOperationalState.disabled ? 'Search Unavailable Offline' : 'Search Paused'}
-                  message={searchOperationalState.detail ?? roadNavigation.searchError}
-                  actionLabel="Clear Search"
-                  onAction={() => roadNavigation.setQuery('')}
-                  variant="compact"
-                />
-              </View>
-            ) : null}
-
-            {deferredIdleDestinationSearchSuggestions.length > 0 ? (
-              <View style={styles.idleDestinationSearchResultsBlock}>
-                <Text style={styles.idleDestinationSearchSectionTitle}>
-                  {idleDestinationSearchResultsLabel}
-                </Text>
-                <ScrollView
-                  style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
-                  nestedScrollEnabled
-                  keyboardShouldPersistTaps="handled"
-                >
-                  {visibleIdleDestinationSearchSuggestions.map((suggestion) => (
-                    <TouchableOpacity
-                      key={suggestion.id}
-                      style={[
-                        styles.idleDestinationSearchSuggestionItem,
-                        destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
-                      ]}
-                      onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}
-                      activeOpacity={0.82}
-                    >
-                      <Ionicons name="location-outline" size={15} color={TACTICAL.amber} />
-                      <View style={styles.idleDestinationSearchSuggestionTextWrap}>
-                        <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
-                          {suggestion.title}
-                        </Text>
-                        {suggestion.subtitle ? (
-                          <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
-                            {suggestion.subtitle}
-                          </Text>
-                        ) : null}
-                      </View>
-                      <Ionicons name="chevron-forward" size={14} color={TACTICAL.textMuted} />
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            ) : null}
-
-            {recentSearchesSectionVisible ? (
-              <View style={styles.idleDestinationSearchResultsBlock}>
-                <Text style={styles.idleDestinationSearchSectionTitle}>{recentSearchesTitle}</Text>
-                {recentSearches.length > 0 ? (
-                  <ScrollView
-                    style={[styles.idleDestinationSearchResultsScroll, { maxHeight: idleDestinationSearchResultsMaxHeight }]}
-                    nestedScrollEnabled
-                    keyboardShouldPersistTaps="handled"
-                  >
-                    {recentSearches.map((suggestion) => (
-                      <TouchableOpacity
-                        key={`recent-${suggestion.id}`}
-                        style={[
-                          styles.idleDestinationSearchSuggestionItem,
-                          destinationSearchInputActive && styles.idleDestinationSearchSuggestionItemKeyboardActive,
-                        ]}
-                        onPress={() => handleRecentSearchSelection(suggestion)}
-                        activeOpacity={0.82}
-                      >
-                        <Ionicons name="time-outline" size={15} color={TACTICAL.amber} />
-                        <View style={styles.idleDestinationSearchSuggestionTextWrap}>
-                          <Text style={styles.idleDestinationSearchSuggestionTitle} numberOfLines={1}>
-                            {suggestion.title}
-                          </Text>
-                          <Text style={styles.idleDestinationSearchSuggestionSubtitle} numberOfLines={1}>
-                            {suggestion.subtitle ?? 'Saved destination'}
-                          </Text>
-                        </View>
-                        <Ionicons name="navigate-outline" size={14} color={TACTICAL.textMuted} />
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                ) : (
-                  <ECSResultsEmptyState
-                    title="No recent searches"
-                    message={recentSearchesEmptyMessage}
-                    actionLabel="Search Live"
-                    onAction={() => roadNavigation.setQuery('')}
-                    variant="compact"
-                  />
-                )}
-              </View>
-            ) : null}
-
-            {idleDestinationSearchNoMatchesVisible ? (
-              <View style={styles.idleDestinationSearchResultsBlock}>
-                <Text style={styles.idleDestinationSearchSectionTitle}>SEARCH</Text>
-                <ECSResultsEmptyState
-                  title="No Search Matches"
-                  message="Try a broader place name or a nearby town."
-                  actionLabel="Clear Search"
-                  onAction={() => roadNavigation.setQuery('')}
-                  variant="compact"
-                />
-              </View>
-            ) : null}
-          </View>
-        </View>
-      ) : null}
-
       {!hideWeatherTopOverlays && (
         <WeatherAlertMapOverlay
           alerts={weatherAlerts.alerts}
@@ -21323,20 +21378,20 @@ const stableMapSurface = useMemo(() => {
         bottomCardRightInset={routeBottomRightInset}
         stepListRightInset={routeBottomRightInset}
         stepListBottomOffset={routeStepDrawerBottomOffset}
-        query={roadNavigation.query}
-        onChangeQuery={roadNavigation.setQuery}
-        suggestions={roadNavigation.suggestions}
-        searchLoading={roadNavigation.searchLoading}
-        searchError={roadNavigation.searchError}
-        searchDisabled={searchOperationalState.disabled}
-        searchOperationalLabel={searchOperationalState.label}
-        searchOperationalDetail={searchOperationalState.detail}
-        searchOperationalTone={searchOperationalState.tone}
-        session={roadNavigation.session}
-        previewLoading={roadNavigation.previewLoading}
-        stepListExpanded={roadNavigation.stepListExpanded}
+        query={HIDDEN_ROAD_NAVIGATION_SEARCH_QUERY}
+        onChangeQuery={noopHiddenRoadNavigationSearchQuery}
+        suggestions={EMPTY_ROAD_NAVIGATION_SEARCH_SUGGESTIONS}
+        searchLoading={false}
+        searchError={null}
+        searchDisabled={false}
+        searchOperationalLabel={null}
+        searchOperationalDetail={null}
+        searchOperationalTone={undefined}
+        session={roadSession}
+        previewLoading={roadPreviewLoading}
+        stepListExpanded={roadStepListExpanded}
         onToggleSteps={handleRoadOverlayToggleSteps}
-        onSelectSuggestion={handleRoadOverlaySelectSuggestion}
+        onSelectSuggestion={noopHiddenRoadNavigationSearchSuggestion}
         onStartNavigation={handleRoadOverlayStartNavigation}
         onEndNavigation={handleRoadOverlayEndNavigation}
         onClearDestination={handleRoadOverlayClearDestination}
@@ -21354,7 +21409,7 @@ const stableMapSurface = useMemo(() => {
         onRouteOverview={handleRouteOverview}
         onOpenCommandBrief={handleOpenCommandBriefFromNavigate}
         onPrimaryPreviewAction={handleRoadOverlayStartNavigation}
-        onSelectRouteAlternative={roadNavigation.selectRouteAlternative}
+        onSelectRouteAlternative={selectRoadRouteAlternative}
         onPrepareOffline={handlePrepareOfflineFromRoadPreview}
         offlineDownloadInProgress={activeGuidanceOfflineDownloadBusy}
         previewAccessory={previewReadinessAccessory}
@@ -22250,10 +22305,6 @@ const stableMapSurface = useMemo(() => {
   );
 }, [
   hasToken,
-  destinationSearchInputActive,
-  handleIdleDestinationSearchChangeText,
-  handleIdleDestinationSearchClear,
-  idleDestinationSearchDraftQuery,
   mapRendererElement,
   followUser,
   destinationSearchMapFrozen,
@@ -22283,7 +22334,6 @@ const stableMapSurface = useMemo(() => {
   campsiteDrawingCanScan,
   campsiteDrawingCanUndo,
   handleRoadOverlayToggleSteps,
-  handleRoadOverlaySelectSuggestion,
   activeGuidanceLandscapeWidth,
   navigateLandscapeExpanded,
   handleRoadOverlayStartNavigation,
@@ -22337,7 +22387,6 @@ const stableMapSurface = useMemo(() => {
   OVERLAY_EDGE,
   PAGE_FRAME_BOTTOM_GAP,
   PAGE_FRAME_TOP_GAP,
-  DESTINATION_SEARCH_HORIZONTAL_INSET,
   adaptive.windowHeight,
   adaptive.windowWidth,
   campsiteDetailTopOffset,
@@ -22401,10 +22450,6 @@ const stableMapSurface = useMemo(() => {
   hideWeatherTopOverlays,
   openRouteWeatherDetail,
   openWeatherAlertDetail,
-  searchOperationalState.detail,
-  searchOperationalState.disabled,
-  searchOperationalState.label,
-  searchOperationalState.tone,
   navigationOverlayMode,
   startDecisionVisible,
   currentExpeditionReadiness,
@@ -22496,26 +22541,11 @@ const stableMapSurface = useMemo(() => {
   TOOLS_TRIGGER_SIZE,
   operationalWeather.refresh,
   operationalWeather.snapshot,
-  handleRecentSearchSelection,
-  handleIdleDestinationSearchBlur,
-  handleIdleDestinationSearchFocus,
-  idleDestinationSearchHasQuery,
-  idleDestinationSearchLoadingVisible,
-  idleDestinationSearchNoMatchesVisible,
   destinationSearchMapOccluderBottom,
-  idleDestinationSearchResultsLabel,
-  idleDestinationSearchVisible,
-  idleDestinationSearchPanelMaxHeight,
-  idleDestinationSearchResultsMaxHeight,
-  navigateOperationalState.mode,
-  recentSearches,
-  recentSearchesSectionVisible,
-  recentSearchesTitle,
-  recentSearchesVisible,
-  deferredIdleDestinationSearchSuggestions.length,
-  roadNavigation,
-  toggleRecentSearches,
-  visibleIdleDestinationSearchSuggestions,
+  roadPreviewLoading,
+  roadSession,
+  roadStepListExpanded,
+  selectRoadRouteAlternative,
   weatherLocation?.lat,
   weatherLocation?.lng,
   visibleMissionBrief,
@@ -23108,6 +23138,7 @@ const stableMapSurface = useMemo(() => {
 
         {/* MapRenderer */}
 {stableMapSurface}
+        {idleDestinationSearchOverlay}
 
 
 {/* FLOATING MAP OVERLAYS */}
@@ -25634,9 +25665,6 @@ mapModalLayer: {
   position: 'relative',
   marginTop: 0,
   overflow: 'hidden',
-},
-  mapRendererFrozen: {
-  display: 'none',
 },
   mapFullscreen: {
   position: 'absolute',
