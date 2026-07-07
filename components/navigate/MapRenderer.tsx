@@ -467,6 +467,7 @@ export type MapRendererProps = {
   surfaceMode?: 'full' | 'compact';
   standbyMapDisabled?: boolean;
   standbyWakeDisabled?: boolean;
+  standbyStaticMapDisabled?: boolean;
   style?: any;
 };
 
@@ -8001,6 +8002,7 @@ const MapRenderer = React.memo(function MapRenderer({
   surfaceMode = 'full',
   standbyMapDisabled = false,
   standbyWakeDisabled = false,
+  standbyStaticMapDisabled = false,
   style,
 }: MapRendererProps) {
   const webViewRef = useRef<WebView>(null);
@@ -8373,15 +8375,22 @@ const MapRenderer = React.memo(function MapRenderer({
 
   const payloadHash = useMemo(() => buildMapOverlayPayloadHash(payload), [payload]);
   const dynamicPayloadHash = useMemo(() => stableStringify(dynamicPayload), [dynamicPayload]);
+  const standbyShouldUseStaticMapImage =
+    !standbyStaticMapDisabled &&
+    standbyMapActive &&
+    standbyMapEligible &&
+    !compactRoutePreviewStandbyEligible;
   const standbyStaticMapUrl = useMemo(
-    () =>
-      buildMapboxStaticImageUrl({
+    () => {
+      if (!standbyShouldUseStaticMapImage) return null;
+      return buildMapboxStaticImageUrl({
         styleUrl: payload.styleUrl,
         center: payload.center,
         zoom: payload.zoom,
         token: mapboxToken,
-      }),
-    [mapboxToken, payload.center, payload.styleUrl, payload.zoom],
+      });
+    },
+    [mapboxToken, payload.center, payload.styleUrl, payload.zoom, standbyShouldUseStaticMapImage],
   );
   const handleStandbyWake = useCallback(() => {
     if (standbyWakeDisabled) return;
@@ -8436,6 +8445,8 @@ const MapRenderer = React.memo(function MapRenderer({
     !standbyMapActive &&
     motionPriority !== 'cold' &&
     !webRendererCrashBlocked;
+  const shouldRenderFallbackSurface = fallbackVisible && motionPriority !== 'cold';
+  const shouldRenderPlaceholder = !standbyMapActive && motionPriority !== 'cold';
   const dispersedCampingEligibilityRef = useRef(dispersedCampingEligibility);
   dispersedCampingEligibilityRef.current = dispersedCampingEligibility;
   const dispersedRouteBuildRef = useRef(dispersedRouteBuild);
@@ -8676,7 +8687,13 @@ const MapRenderer = React.memo(function MapRenderer({
   );
 
   useEffect(() => {
-    if (!shouldLoadMap) return;
+    if (!renderLiveWebView) {
+      clearFailSafeTimer();
+      clearHardFailureTimer();
+      failSafeArmedInstanceKeyRef.current = null;
+      startupSettledRef.current = false;
+      return;
+    }
     if (startupSettledRef.current) return;
     if (definitiveReadyInstanceKeyRef.current === webViewInstanceKey) return;
     if (failSafeArmedInstanceKeyRef.current === webViewInstanceKey) return;
@@ -8696,7 +8713,14 @@ const MapRenderer = React.memo(function MapRenderer({
       clearFailSafeTimer();
       clearHardFailureTimer();
     };
-  }, [armFailSafeTimer, armHardFailureTimer, clearFailSafeTimer, clearHardFailureTimer, shouldLoadMap, webViewInstanceKey]);
+  }, [
+    armFailSafeTimer,
+    armHardFailureTimer,
+    clearFailSafeTimer,
+    clearHardFailureTimer,
+    renderLiveWebView,
+    webViewInstanceKey,
+  ]);
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
@@ -9080,7 +9104,11 @@ const MapRenderer = React.memo(function MapRenderer({
     scheduleConstructorRetry,
   ]);
 
-  const showBootOverlay = !isCompactSurface && !webReady && shouldLoadMap && !hasEverReachedReadyRef.current;
+  const showBootOverlay =
+    renderLiveWebView &&
+    !isCompactSurface &&
+    !webReady &&
+    !hasEverReachedReadyRef.current;
 
   return (
     <View style={[styles.container, isCompactSurface && styles.compactContainer, style]}>
@@ -9193,8 +9221,8 @@ const MapRenderer = React.memo(function MapRenderer({
           }}
           style={styles.webview}
         />
-      ) : !standbyMapActive ? (
-        <View style={[styles.placeholder, fallbackVisible && styles.transparentPlaceholder]}>
+      ) : shouldRenderPlaceholder ? (
+        <View style={[styles.placeholder, shouldRenderFallbackSurface && styles.transparentPlaceholder]}>
           <Text style={styles.placeholderTitle}>Map unavailable</Text>
           <Text style={styles.placeholderText}>
             {!hasToken || !mapboxToken
@@ -9207,7 +9235,7 @@ const MapRenderer = React.memo(function MapRenderer({
         </View>
       ) : null}
 
-      {fallbackVisible ? (
+      {shouldRenderFallbackSurface ? (
         <MapFallbackSurface
           routeCoords={payload.routeCoords}
           progressRouteCoords={payload.progressRouteCoords}
@@ -9220,7 +9248,7 @@ const MapRenderer = React.memo(function MapRenderer({
         />
       ) : null}
 
-      {showBootOverlay && !fallbackVisible && (
+      {showBootOverlay && !shouldRenderFallbackSurface && (
         <View style={styles.loadingOverlay}>
           {!webBootTimedOut ? (
             <>

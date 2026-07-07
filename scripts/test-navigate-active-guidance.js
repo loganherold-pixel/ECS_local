@@ -282,10 +282,11 @@ assert(
   'MapRenderer should give Android WebView a stable Mapbox base URL and surface boot/http failures for blank-map diagnosis.',
 );
 assert(
-  mapRenderer.includes('const WEBVIEW_HARD_FAILURE_TIMEOUT_MS = 90000;') &&
+    mapRenderer.includes('const WEBVIEW_HARD_FAILURE_TIMEOUT_MS = 90000;') &&
     mapRenderer.includes('const hardFailureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);') &&
     mapRenderer.includes('const hasEverReachedReadyRef = useRef(false);') &&
-    mapRenderer.includes('onReadyStateChange?.(shouldLoadMap && (webReady || hasEverReachedReadyRef.current));') &&
+    mapRenderer.includes('onReadyStateChange?.(') &&
+    mapRenderer.includes("standbyMapActive || motionPriority === 'cold' || webReady || hasEverReachedReadyRef.current") &&
     mapRenderer.includes('setWebBootIssue(phase === \'bootstrap_progress\' ? \'map_load_timeout\' : \'webview_startup_timeout\');') &&
     !mapRenderer.includes('Auto-recovery remount after cold-start timeout') &&
     !mapRenderer.includes('WEBVIEW_AUTO_RECOVERY_LIMIT'),
@@ -314,7 +315,7 @@ assert(
     mapRenderer.includes('<MapFallbackSurface') &&
     !mapRenderer.includes("'ECS fallback map'") &&
     !mapRenderer.includes("'Offline map fallback'") &&
-    mapRenderer.includes('{showBootOverlay && !fallbackVisible && ('),
+    mapRenderer.includes('{showBootOverlay && !shouldRenderFallbackSurface && ('),
   'MapRenderer should provide a native route fallback surface when Mapbox/WebView cannot initialize without exposing fallback status copy.',
 );
 assert(
@@ -333,7 +334,7 @@ assert(
 
 const fallbackSurface = read('components/navigate/MapFallbackSurface.tsx');
 assert(
-  fallbackSurface.includes("import Svg, { Circle, Line, Polyline, Rect } from 'react-native-svg';") &&
+  fallbackSurface.includes("import Svg, { Circle, Line, Polyline, Rect, Text as SvgText } from 'react-native-svg';") &&
     fallbackSurface.includes('function buildBounds(') &&
     fallbackSurface.includes('function makeProjector(') &&
     fallbackSurface.includes('routeCoords?: LngLat[];') &&

@@ -21015,6 +21015,7 @@ const mapRendererElement = useMemo(() => (
     campsiteSearchPolygon={campsiteSearchPolygonPayload}
     surfaceMode="compact"
     standbyWakeDisabled={idleDestinationSearchVisible}
+    standbyStaticMapDisabled={true}
   />
 ), [
   activeHealth?.overall,

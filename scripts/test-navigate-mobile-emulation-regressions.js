@@ -315,6 +315,25 @@ assert.ok(
   'Cold frozen map states should still report ready without mounting a live WebView during foreground search.',
 );
 assert.ok(
+    mapRendererSource.includes('if (!renderLiveWebView) {') &&
+    mapRendererSource.includes('failSafeArmedInstanceKeyRef.current = null;') &&
+    mapRendererSource.includes('startupSettledRef.current = false;') &&
+    !mapRendererSource.includes('if (!shouldLoadMap) return;\n    if (startupSettledRef.current) return;') &&
+    mapRendererSource.includes('}, [') &&
+    mapRendererSource.includes('renderLiveWebView,') &&
+    mapRendererSource.includes('webViewInstanceKey,'),
+  'MapRenderer must only arm WebView bootstrap timers while the live WebView is intentionally rendered, then clear them during standby/cold states.',
+);
+assert.ok(
+  mapRendererSource.includes('const shouldRenderFallbackSurface = fallbackVisible && motionPriority !== \'cold\';') &&
+    mapRendererSource.includes('const shouldRenderPlaceholder = !standbyMapActive && motionPriority !== \'cold\';') &&
+    mapRendererSource.includes('const showBootOverlay =') &&
+    mapRendererSource.includes('renderLiveWebView &&') &&
+    mapRendererSource.includes('{shouldRenderFallbackSurface ? (') &&
+    mapRendererSource.includes('{showBootOverlay && !shouldRenderFallbackSurface && ('),
+  'MapRenderer should avoid drawing fallback, placeholder, or boot overlays for cold hidden/search map surfaces.',
+);
+assert.ok(
   mapRendererSource.includes('standbyWakeLayer') &&
     mapRendererSource.includes('setStandbyWakeRequested(true)') &&
     mapRendererSource.includes('accessibilityLabel={standbyWakeDisabled ? "Map standby" : "Activate map"}'),
@@ -327,6 +346,13 @@ assert.ok(
     mapRendererSource.includes('disabled={standbyWakeDisabled}') &&
     mapRendererSource.includes('accessibilityState={{ disabled: standbyWakeDisabled }}'),
   'Static standby maps should support disabling the live-WebView wake target during parked mobile search surfaces.',
+);
+assert.ok(
+  mapRendererSource.includes('standbyStaticMapDisabled?: boolean;') &&
+    mapRendererSource.includes('standbyStaticMapDisabled = false') &&
+    mapRendererSource.includes('!standbyStaticMapDisabled &&') &&
+    navigateSource.includes('standbyStaticMapDisabled={true}'),
+  'Navigate should be able to keep the standby wake surface without loading a full-screen remote static map bitmap during tab cycling.',
 );
 assert.ok(
   mapRendererSource.includes('var mapPixelRatio = Math.min(window.devicePixelRatio || 1') &&
@@ -427,6 +453,14 @@ assert.ok(
     mapRendererSource.includes("motionPriority === 'warm'") &&
     mapRendererSource.includes('transparentBackground={standbyMapActive && compactRoutePreviewStandbyEligible}'),
   'Compact warm route previews should stay on the static standby map and draw the native fallback route first without affecting hot active guidance.',
+);
+assert.ok(
+  mapRendererSource.includes('const standbyShouldUseStaticMapImage =') &&
+    mapRendererSource.includes('standbyMapActive &&') &&
+    mapRendererSource.includes('standbyMapEligible &&') &&
+    mapRendererSource.includes('!compactRoutePreviewStandbyEligible') &&
+    mapRendererSource.includes('if (!standbyShouldUseStaticMapImage) return null;'),
+  'Compact route-preview standby should avoid loading a remote static map bitmap while the native route fallback is already drawing the preview.',
 );
 assert.ok(
   mapFallbackSurfaceSource.includes('const drawBackdrop = !transparentBackground;') &&
