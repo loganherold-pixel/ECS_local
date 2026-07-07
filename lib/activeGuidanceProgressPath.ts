@@ -120,12 +120,19 @@ export function resolveActiveGuidanceDisplayLocation(input: ActiveGuidanceProgre
   if (!liveLocation) return null;
   if (!input.active) return liveLocation;
 
-  const routePoints = normalizeCoordinateList(input.routePoints);
-  const projection = projectPointToRoute(liveLocation, routePoints);
   const maxSnapDistanceM =
     typeof input.maxSnapDistanceM === 'number' && Number.isFinite(input.maxSnapDistanceM)
       ? Math.max(0, input.maxSnapDistanceM)
       : DEFAULT_ACTIVE_GUIDANCE_SNAP_DISTANCE_M;
+
+  const progressPoints = normalizeCoordinateList(input.progressPoints);
+  const progressProjection = projectPointToRoute(liveLocation, progressPoints);
+  if (progressProjection && progressProjection.distanceM <= maxSnapDistanceM) {
+    return progressProjection.point;
+  }
+
+  const routePoints = normalizeCoordinateList(input.routePoints);
+  const projection = projectPointToRoute(liveLocation, routePoints);
   return projection && projection.distanceM <= maxSnapDistanceM
     ? projection.point
     : liveLocation;

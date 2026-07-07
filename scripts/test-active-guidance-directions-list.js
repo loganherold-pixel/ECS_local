@@ -280,9 +280,10 @@ assert.strictEqual(formatActiveDirectionDistance(1609.344 * 6.2), '6.2 mi');
 assert(
   overlaySource.includes('buildVersionedActiveGuidanceDirectionList') &&
     overlaySource.includes('activeGuidance: session.activeGuidance') &&
-    overlaySource.includes('progress: session.activeGuidanceProgress') &&
-    overlaySource.includes('status: session.status'),
-  'RoadNavigationOverlay should build dropdown rows from the versioned active guidance state and EcsActiveGuidanceProgress.',
+    overlaySource.includes('progress: activeGuidanceProgressRef.current') &&
+    overlaySource.includes('status: session.status') &&
+    overlaySource.includes('activeGuidanceProgressRenderKey'),
+  'RoadNavigationOverlay should build dropdown rows from the versioned active guidance state using the compact EcsActiveGuidanceProgress render key.',
 );
 assert(
   overlaySource.includes('activeDirectionsRowCurrent') &&

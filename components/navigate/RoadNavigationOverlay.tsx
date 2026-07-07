@@ -180,6 +180,55 @@ function formatRouteVersionToken(routeVersion: string | null | undefined): strin
   return compact ? `RV ${compact}` : null;
 }
 
+function bucketMeters(value: number | null | undefined, bucketSizeMeters: number): string {
+  if (value == null || !Number.isFinite(value)) return 'na';
+  return String(Math.round(value / bucketSizeMeters));
+}
+
+function activeGuidanceStepKey(step?: {
+  id?: string | null;
+  globalStepIndex?: number | null;
+  stepIndex?: number | null;
+  instruction?: string | null;
+  maneuverType?: string | null;
+  maneuverModifier?: string | null;
+  displayRoadName?: string | null;
+} | null): string {
+  if (!step) return 'none';
+  return [
+    step.id ?? 'no-id',
+    step.globalStepIndex ?? step.stepIndex ?? 'no-index',
+    step.maneuverType ?? 'no-type',
+    step.maneuverModifier ?? 'no-modifier',
+    step.displayRoadName ?? 'no-road',
+    step.instruction ?? 'no-instruction',
+  ].join(':');
+}
+
+function buildActiveGuidanceProgressRenderKey(
+  progress: RoadNavigationSessionState['activeGuidanceProgress'],
+): string {
+  if (!progress) return 'none';
+  return [
+    progress.routeId,
+    progress.routeVersion ?? 'no-version',
+    progress.rerouteGeneration,
+    progress.currentLegIndex,
+    progress.currentStepIndex,
+    bucketMeters(progress.distanceToNextManeuverMeters, 5),
+    bucketMeters(progress.distanceRemainingOnCurrentStepMeters, 5),
+    progress.offRouteStatus,
+    progress.offRouteCandidate ? 'off-candidate' : 'on-route',
+    progress.offRouteUpdateCount,
+    progress.confidence,
+    activeGuidanceStepKey(progress.currentStep),
+    activeGuidanceStepKey(progress.nextStep),
+    activeGuidanceStepKey(progress.followingStep),
+    progress.pendingStepJumpIndex ?? 'no-jump',
+    progress.pendingStepJumpCount ?? 0,
+  ].join('|');
+}
+
 function getManeuverIcon(instruction: string | null): React.ComponentProps<typeof Ionicons>['name'] {
   const lower = String(instruction ?? '').toLowerCase();
   if (lower.includes('u-turn')) return 'refresh';
@@ -923,6 +972,8 @@ function ActiveNavigationCard({
   const [directionsExpanded, setDirectionsExpanded] = useState(false);
   const isRerouting = !activeContext && (session.status === 'rerouting' || session.isOffRoute);
   const roadManeuverEligible = activeContext?.showSteps !== false && !!(session.activeGuidance ?? session.route);
+  const activeGuidanceProgressRef = React.useRef(session.activeGuidanceProgress);
+  activeGuidanceProgressRef.current = session.activeGuidanceProgress;
   const activeGuidanceRoute = useMemo(
     () =>
       session.activeGuidance
@@ -930,15 +981,21 @@ function ActiveNavigationCard({
         : session.route?.guidance ?? null,
     [session.activeGuidance, session.route?.guidance],
   );
+  const activeGuidanceProgressRenderKey = buildActiveGuidanceProgressRenderKey(
+    session.activeGuidanceProgress,
+  );
   const roadDirectionsList = useMemo(
-    () => buildVersionedActiveGuidanceDirectionList({
-      activeGuidance: session.activeGuidance,
-      progress: session.activeGuidanceProgress,
-      status: session.status,
-    }),
+    () => {
+      void activeGuidanceProgressRenderKey;
+      return buildVersionedActiveGuidanceDirectionList({
+        activeGuidance: session.activeGuidance,
+        progress: activeGuidanceProgressRef.current,
+        status: session.status,
+      });
+    },
     [
       session.activeGuidance,
-      session.activeGuidanceProgress,
+      activeGuidanceProgressRenderKey,
       session.status,
     ],
   );
@@ -982,6 +1039,7 @@ function ActiveNavigationCard({
     !!activeGuidanceVersionLabel ||
     !!activeGuidanceRefreshLabel;
   const maneuverDisplay = useMemo(() => {
+    void activeGuidanceProgressRenderKey;
     if (!roadManeuverEligible) return null;
     return buildActiveGuidanceManeuverDisplay({
       guidanceMode:
@@ -989,7 +1047,7 @@ function ActiveNavigationCard({
         session.route?.guidanceMode ??
         'unavailable',
       route: activeGuidanceRoute,
-      progress: session.activeGuidanceProgress,
+      progress: activeGuidanceProgressRef.current,
       status: session.status,
       routeStatusLabel:
         refreshedStatusLabelActive && !refreshedDirectionsVisible
@@ -998,10 +1056,10 @@ function ActiveNavigationCard({
     });
   }, [
     activeGuidanceRoute,
+    activeGuidanceProgressRenderKey,
     roadManeuverEligible,
     refreshedDirectionsVisible,
     refreshedStatusLabelActive,
-    session.activeGuidanceProgress,
     session.route?.guidanceMode,
     session.routeStatusLabel,
     session.status,

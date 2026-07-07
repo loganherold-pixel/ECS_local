@@ -123,6 +123,20 @@ assert.strictEqual(rightTurnDisplay.primaryText, 'In 0.4 mi, turn right onto For
 assert.strictEqual(rightTurnDisplay.roadName, 'Foresthill Road');
 assert.strictEqual(rightTurnDisplay.followingText, 'Then bear left onto Canyon Way');
 
+const refreshedRouteTurnDisplay = buildActiveGuidanceManeuverDisplay({
+  guidanceMode: 'turn_by_turn',
+  route: guidanceRoute(),
+  progress: baseProgress,
+  routeStatusLabel: 'Route updated',
+});
+assert.strictEqual(refreshedRouteTurnDisplay.mode, 'turn_by_turn');
+assert.strictEqual(
+  refreshedRouteTurnDisplay.primaryText,
+  'In 0.4 mi, turn right onto Foresthill Road',
+  'A successful route refresh should show the live next maneuver when progress is available, not a generic refresh banner.',
+);
+assert.strictEqual(refreshedRouteTurnDisplay.eyebrow, 'NEXT TURN');
+
 const unnamedBearLeftDisplay = buildActiveGuidanceManeuverDisplay({
   guidanceMode: 'turn_by_turn',
   route: guidanceRoute(),

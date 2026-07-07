@@ -107,6 +107,25 @@ assertCoord(
   'Near-route GPS should display snapped to the route spine during active guidance',
 );
 
+const progressLineDisplayLocation = resolveActiveGuidanceDisplayLocation({
+  active: true,
+  routePoints: [
+    coord(38.78, -121.2),
+    coord(38.79, -121.2),
+    coord(38.79, -121.2001),
+    coord(38.78, -121.2001),
+  ],
+  progressPoints: [coord(38.78, -121.2), coord(38.7858, -121.2)],
+  currentLocation: { lat: 38.7858, lng: -121.20007 },
+  maxSnapDistanceM: 45,
+});
+
+assertCoord(
+  progressLineDisplayLocation,
+  { lat: 38.7858, lng: -121.2 },
+  'On-route GPS should display centered on the visible yellow guidance/progress line when that line is available',
+);
+
 const offRouteDisplayLocation = resolveActiveGuidanceDisplayLocation({
   active: true,
   routePoints: [routeStart, routeMid, routeEnd],
@@ -131,6 +150,12 @@ assertCoord(
   inactiveDisplayLocation,
   { lat: 38.786, lng: -121.2002 },
   'Inactive map displays should not snap the user dot to route geometry',
+);
+
+const navigateSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8');
+assert(
+  navigateSource.includes('progressPoints: displayedRouteProgressPoints'),
+  'Navigate map display GPS resolver should use displayedRouteProgressPoints so the blue pin is anchored to the yellow guidance line.',
 );
 
 console.log('[active-guidance-live-gps-progress] passed');

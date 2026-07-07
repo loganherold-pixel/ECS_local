@@ -245,7 +245,7 @@ export function buildActiveGuidanceManeuverDisplay(
       guidanceAvailable: false,
     };
   }
-  if (routeStatus.includes('rejoined') || routeStatus.includes('updated')) {
+  if (!input.progress && (routeStatus.includes('rejoined') || routeStatus.includes('updated'))) {
     return {
       mode: 'updated',
       iconName: 'checkmark-circle-outline',

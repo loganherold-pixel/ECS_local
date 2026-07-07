@@ -12,6 +12,7 @@ function read(relativePath) {
 
 const scheduler = read('lib/shellInteractionScheduler.ts');
 const mapRenderer = read('components/navigate/MapRenderer.tsx');
+const roadNavigationOverlay = read('components/navigate/RoadNavigationOverlay.tsx');
 
 assert.ok(
   scheduler.includes('DEFAULT_SHELL_INTERACTION_MAX_WAIT_MS'),
@@ -65,9 +66,24 @@ assert.ok(
   'MapRenderer must replace same-frame hot bridge messages by type and merge overlay patches without dropping families.',
 );
 assert.ok(
+  mapRenderer.includes('buildMapBridgeBatchMessage(messages') &&
+    mapRenderer.includes("type: 'bridgeBatch'") &&
+    mapRenderer.includes("if (msg.type === 'bridgeBatch')") &&
+    mapRenderer.includes('buildMapBridgeBatchMessage(messages)'),
+  'MapRenderer must inject same-frame hot bridge messages as one ordered batch to reduce WebView bridge churn.',
+);
+assert.ok(
   mapRenderer.includes('pendingMapMessagesRef.current.clear();') &&
     mapRenderer.includes('pendingMapMessageFrameCancelRef.current?.();'),
   'MapRenderer must clear pending bridge messages when the map resets or unmounts.',
+);
+
+assert.ok(
+  roadNavigationOverlay.includes('function buildActiveGuidanceProgressRenderKey') &&
+    roadNavigationOverlay.includes('const activeGuidanceProgressRef = React.useRef(session.activeGuidanceProgress);') &&
+    roadNavigationOverlay.includes('activeGuidanceProgressRef.current') &&
+    roadNavigationOverlay.includes('activeGuidanceProgressRenderKey'),
+  'RoadNavigationOverlay must memoize active guidance directions from a compact progress key instead of full progress-object identity.',
 );
 
 console.log('ECS responsive interaction budget checks passed.');

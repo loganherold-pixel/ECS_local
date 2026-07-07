@@ -80,6 +80,10 @@ const MAX_ROUTE_RENDER_POINTS = 2400;
 const MAX_PROGRESS_ROUTE_RENDER_POINTS = 2400;
 const ROUTE_RENDER_TURN_DELTA_DEGREES = 8;
 const CAMERA_EPSILON = 0.00005;
+const DYNAMIC_COORDINATE_DECIMALS = 5;
+const DYNAMIC_HEADING_DECIMALS = 0;
+const PROGRESS_ROUTE_HASH_COORDINATE_DECIMALS = 4;
+const PROGRESS_ROUTE_HASH_STRIDE = 64;
 const DEBUG_MAP_RENDERER =
   ((globalThis as typeof globalThis & { __ECS_DEBUG_MAP_RENDERER__?: boolean })
     .__ECS_DEBUG_MAP_RENDERER__ === true);
@@ -956,6 +960,26 @@ function stableStringify(value: unknown) {
   }
 }
 
+function roundToDecimals(value: number, decimals: number) {
+  if (!Number.isFinite(value)) return value;
+  return Number(value.toFixed(decimals));
+}
+
+function quantizeCoordinateForMapState(
+  value?: { latitude: number; longitude: number } | null,
+) {
+  if (!value) return null;
+  return {
+    latitude: roundToDecimals(value.latitude, DYNAMIC_COORDINATE_DECIMALS),
+    longitude: roundToDecimals(value.longitude, DYNAMIC_COORDINATE_DECIMALS),
+  };
+}
+
+function quantizeHeadingForMapState(value?: number | null) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return roundToDecimals(value, DYNAMIC_HEADING_DECIMALS);
+}
+
 function normalizeDebugDetails(details?: unknown): Record<string, any> | undefined {
   if (details == null) return undefined;
   if (typeof details === 'object' && !Array.isArray(details)) {
@@ -1314,9 +1338,38 @@ function pickPayloadFields(payload: WebMapPayload, fields: (keyof WebMapPayload)
   }, {} as Partial<WebMapPayload>);
 }
 
+function summarizeProgressRouteCoordsForHash(coords?: [number, number][] | null) {
+  if (!Array.isArray(coords) || coords.length === 0) return [];
+
+  const anchors = coords
+    .map((coord, index) => {
+      if (
+        index !== 0 &&
+        index !== coords.length - 1 &&
+        index % PROGRESS_ROUTE_HASH_STRIDE !== 0
+      ) {
+        return null;
+      }
+
+      return [
+        roundToDecimals(coord[0], PROGRESS_ROUTE_HASH_COORDINATE_DECIMALS),
+        roundToDecimals(coord[1], PROGRESS_ROUTE_HASH_COORDINATE_DECIMALS),
+      ];
+    })
+    .filter((coord): coord is [number, number] => Array.isArray(coord));
+
+  return {
+    count: coords.length,
+    anchors,
+  };
+}
+
 export function buildMapOverlayPayloadHashes(payload: WebMapPayload) {
   const style = pickPayloadFields(payload, MAP_OVERLAY_STYLE_FIELDS);
   const route = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.route);
+  route.progressRouteCoords = summarizeProgressRouteCoordsForHash(
+    payload.progressRouteCoords,
+  ) as never;
   const markers = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.markers);
   const routeBuilder = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.routeBuilder);
   const campSearch = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.campSearch);
@@ -1508,6 +1561,16 @@ function mergeMapOverlayPatchMessages(existingMessage: unknown, message: unknown
   return {
     type: 'overlayPatch',
     payload: mergeMapOverlayPayloadPatches(existing.payload, next.payload),
+  };
+}
+
+export function buildMapBridgeBatchMessage(messages: unknown[]) {
+  const compactMessages = messages.filter(Boolean);
+  if (compactMessages.length === 0) return null;
+  if (compactMessages.length === 1) return compactMessages[0];
+  return {
+    type: 'bridgeBatch',
+    messages: compactMessages,
   };
 }
 
@@ -1826,14 +1889,14 @@ export function buildDynamicPayload(props: Pick<
   | 'routeBuilderActive'
   | 'routeBuilderMode'
 >): WebMapDynamicPayload {
-  const replay = normalizeLatLng(props.replayMarker as LatLng | null);
-  const user = normalizeLatLng(props.userLocation ?? null);
+  const replay = quantizeCoordinateForMapState(normalizeLatLng(props.replayMarker as LatLng | null));
+  const user = quantizeCoordinateForMapState(normalizeLatLng(props.userLocation ?? null));
   const motionPriority: MapMotionPriority = props.motionPriority ?? 'hot';
   const liveMotionEnabled = motionPriority !== 'cold';
-  const vehicleHeading = resolveViewportMarkerHeadingDeg({
+  const vehicleHeading = quantizeHeadingForMapState(resolveViewportMarkerHeadingDeg({
     headingDeg: props.vehicleHeading,
     mapBearingDeg: 0,
-  });
+  }));
 
   return {
     replayMarker: replay,
@@ -7695,15 +7758,16 @@ function makeMapHtml(
         }
       });
 
-      window.addEventListener('message', function(e) {
-        var msg;
-        try {
-          msg = JSON.parse(e.data);
-        } catch (err) {
+      function handleMapBridgeMessage(msg) {
+        if (!msg || !msg.type) return;
+
+        if (msg.type === 'bridgeBatch') {
+          var batchedMessages = Array.isArray(msg.messages) ? msg.messages : [];
+          for (var bridgeIndex = 0; bridgeIndex < batchedMessages.length; bridgeIndex += 1) {
+            handleMapBridgeMessage(batchedMessages[bridgeIndex]);
+          }
           return;
         }
-
-        if (!msg || !msg.type) return;
 
         if (msg.type === 'bootstrap' || msg.type === 'update') {
           pendingPayload = msg.payload || null;
@@ -7755,6 +7819,17 @@ function makeMapHtml(
           sendBounds();
           return;
         }
+      }
+
+      window.addEventListener('message', function(e) {
+        var msg;
+        try {
+          msg = JSON.parse(e.data);
+        } catch (err) {
+          return;
+        }
+
+        handleMapBridgeMessage(msg);
       });
 
       init();
@@ -8310,7 +8385,8 @@ const MapRenderer = React.memo(function MapRenderer({
     const messages = Array.from(pendingMapMessagesRef.current.values());
     pendingMapMessagesRef.current.clear();
     pendingMapMessageFrameCancelRef.current = null;
-    messages.forEach((message) => safeInject(message));
+    const batchMessage = buildMapBridgeBatchMessage(messages);
+    if (batchMessage) safeInject(batchMessage);
   }, [safeInject]);
 
   const postToMap = useCallback((message: unknown) => {

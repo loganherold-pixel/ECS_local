@@ -66,6 +66,8 @@ require.extensions['.ts'] = compileTypescript;
 require.extensions['.tsx'] = compileTypescript;
 
 const {
+  buildDynamicPayload,
+  buildMapBridgeBatchMessage,
   buildMapOverlayPayloadPatch,
   buildMapOverlayPayloadHash,
   buildWebPayload,
@@ -182,6 +184,107 @@ assert.strictEqual(
   buildMapOverlayPayloadHash(activeRoute),
   buildMapOverlayPayloadHash(movedUserRoute),
   'GPS/user-location updates should not resend the full route overlay payload.',
+);
+
+const activeProgressRoute = buildWebPayload({
+  mapboxToken: 'token',
+  routeRenderMode: 'active',
+  points: [
+    { lat: 39.1, lng: -120.1 },
+    { lat: 39.2, lng: -120.2 },
+  ],
+  progressPoints: [
+    { lat: 39.1, lng: -120.1 },
+    { lat: 39.10001, lng: -120.10001 },
+  ],
+});
+const smallProgressNudgeRoute = buildWebPayload({
+  mapboxToken: 'token',
+  routeRenderMode: 'active',
+  points: [
+    { lat: 39.1, lng: -120.1 },
+    { lat: 39.2, lng: -120.2 },
+  ],
+  progressPoints: [
+    { lat: 39.1, lng: -120.1 },
+    { lat: 39.10004, lng: -120.10004 },
+  ],
+});
+assert.strictEqual(
+  buildMapOverlayPayloadHash(activeProgressRoute),
+  buildMapOverlayPayloadHash(smallProgressNudgeRoute),
+  'Sub-threshold active progress-line movement should not resend route-family geometry over the WebView bridge.',
+);
+const meaningfulProgressRoute = buildWebPayload({
+  mapboxToken: 'token',
+  routeRenderMode: 'active',
+  points: [
+    { lat: 39.1, lng: -120.1 },
+    { lat: 39.2, lng: -120.2 },
+  ],
+  progressPoints: [
+    { lat: 39.1, lng: -120.1 },
+    { lat: 39.1002, lng: -120.1002 },
+  ],
+});
+assert.notStrictEqual(
+  buildMapOverlayPayloadHash(activeProgressRoute),
+  buildMapOverlayPayloadHash(meaningfulProgressRoute),
+  'Meaningful active progress-line movement should still update the progress geometry.',
+);
+
+const dynamicPayload = buildDynamicPayload({
+  userLocation: { lat: 39.100001, lng: -120.100001 },
+  showUserLocation: true,
+  vehicleHeading: 90.2,
+  motionPriority: 'hot',
+  cameraMode: 'follow_user',
+});
+const dynamicPayloadJitter = buildDynamicPayload({
+  userLocation: { lat: 39.100004, lng: -120.100004 },
+  showUserLocation: true,
+  vehicleHeading: 90.4,
+  motionPriority: 'hot',
+  cameraMode: 'follow_user',
+});
+assert.deepStrictEqual(
+  dynamicPayload,
+  dynamicPayloadJitter,
+  'Sub-meter GPS and sub-degree heading jitter should not create a new dynamicState bridge payload.',
+);
+const dynamicPayloadMoved = buildDynamicPayload({
+  userLocation: { lat: 39.10008, lng: -120.10008 },
+  showUserLocation: true,
+  vehicleHeading: 94,
+  motionPriority: 'hot',
+  cameraMode: 'follow_user',
+});
+assert.notDeepStrictEqual(
+  dynamicPayload,
+  dynamicPayloadMoved,
+  'Meaningful GPS or heading movement should still update the dynamic map state.',
+);
+
+assert.deepStrictEqual(
+  buildMapBridgeBatchMessage([{ type: 'dynamicState', payload: dynamicPayload }]),
+  { type: 'dynamicState', payload: dynamicPayload },
+  'Single hot bridge messages should inject without a wrapper.',
+);
+assert.deepStrictEqual(
+  buildMapBridgeBatchMessage([
+    { type: 'overlayPatch', payload: { patchFamilies: ['presentation'], showCrosshair: true } },
+    { type: 'dynamicState', payload: dynamicPayloadMoved },
+    { type: 'cameraCommand', payload: { mode: 'follow_user', center: dynamicPayloadMoved.userLocation } },
+  ]),
+  {
+    type: 'bridgeBatch',
+    messages: [
+      { type: 'overlayPatch', payload: { patchFamilies: ['presentation'], showCrosshair: true } },
+      { type: 'dynamicState', payload: dynamicPayloadMoved },
+      { type: 'cameraCommand', payload: { mode: 'follow_user', center: dynamicPayloadMoved.userLocation } },
+    ],
+  },
+  'Same-frame hot bridge work should batch into one WebView injection while preserving message order.',
 );
 
 const changedRoute = buildWebPayload({

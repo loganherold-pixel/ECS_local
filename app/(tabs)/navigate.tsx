@@ -12487,57 +12487,6 @@ const handleCreateRun = useCallback(() => {
     );
   }, [routeProfileScrubTrackHeight]);
 
-  const mapDisplayUserLocation = useMemo(
-    () =>
-      resolveActiveGuidanceDisplayLocation({
-        active: routeLifecycleState.phase === 'navigating',
-        routePoints: displayedRoutePoints,
-        currentLocation: safeUserLocation,
-      }),
-    [displayedRoutePoints, routeLifecycleState.phase, safeUserLocation],
-  );
-
-  const routeAheadDisplayHeading = useMemo(() => {
-    const headingLocation = mapDisplayUserLocation ?? safeUserLocation;
-    if (!headingLocation || routeLifecycleState.phase !== 'navigating') return null;
-    return resolveRouteAheadBearingDeg(
-      {
-        latitude: headingLocation.lat,
-        longitude: headingLocation.lng,
-      },
-      displayedRoutePoints,
-    );
-  }, [displayedRoutePoints, mapDisplayUserLocation, routeLifecycleState.phase, safeUserLocation]);
-
-  const compassDisplayHeading = useMemo(() => {
-    const resolved = resolveVehicleGuidanceHeading({
-      hasActiveGuidance: routeLifecycleState.phase === 'navigating',
-      routeAheadHeadingDeg: routeAheadDisplayHeading,
-      courseOverGroundDeg: currentGpsHeadingDeg,
-      gpsHeadingDeg: currentGpsHeadingDeg,
-      compassHeadingDeg: vehicleHeadingHook.heading,
-      fallbackHeadingDeg: lastKnownHeadingRef.current,
-      speedMph: gps.position?.speedMph ?? null,
-    });
-    return resolved.headingDeg ?? lastKnownHeadingRef.current;
-  }, [
-    currentGpsHeadingDeg,
-    gps.position?.speedMph,
-    routeAheadDisplayHeading,
-    routeLifecycleState.phase,
-    vehicleHeadingHook.heading,
-  ]);
-
-  useEffect(() => {
-    if (compassDisplayHeading != null) {
-      lastKnownHeadingRef.current = compassDisplayHeading;
-      return;
-    }
-    if (currentGpsHeadingDeg != null && currentGpsHeadingDeg >= 0) {
-      lastKnownHeadingRef.current = currentGpsHeadingDeg;
-    }
-  }, [compassDisplayHeading, currentGpsHeadingDeg]);
-
   const displayedRouteWaypoints = useMemo(() => {
     if (trailNavigationMarkers.length > 0) {
       return [...explorePreviewWaypoints, ...trailNavigationMarkers];
@@ -12675,6 +12624,63 @@ const handleCreateRun = useCallback(() => {
     trailNavigation.session.progressGeometry,
     trailNavigation.session.payload?.tripMode,
   ]);
+
+  const mapDisplayUserLocation = useMemo(
+    () =>
+      resolveActiveGuidanceDisplayLocation({
+        active: routeLifecycleState.phase === 'navigating',
+        routePoints: displayedRoutePoints,
+        progressPoints: displayedRouteProgressPoints,
+        currentLocation: safeUserLocation,
+      }),
+    [
+      displayedRoutePoints,
+      displayedRouteProgressPoints,
+      routeLifecycleState.phase,
+      safeUserLocation,
+    ],
+  );
+
+  const routeAheadDisplayHeading = useMemo(() => {
+    const headingLocation = mapDisplayUserLocation ?? safeUserLocation;
+    if (!headingLocation || routeLifecycleState.phase !== 'navigating') return null;
+    return resolveRouteAheadBearingDeg(
+      {
+        latitude: headingLocation.lat,
+        longitude: headingLocation.lng,
+      },
+      displayedRoutePoints,
+    );
+  }, [displayedRoutePoints, mapDisplayUserLocation, routeLifecycleState.phase, safeUserLocation]);
+
+  const compassDisplayHeading = useMemo(() => {
+    const resolved = resolveVehicleGuidanceHeading({
+      hasActiveGuidance: routeLifecycleState.phase === 'navigating',
+      routeAheadHeadingDeg: routeAheadDisplayHeading,
+      courseOverGroundDeg: currentGpsHeadingDeg,
+      gpsHeadingDeg: currentGpsHeadingDeg,
+      compassHeadingDeg: vehicleHeadingHook.heading,
+      fallbackHeadingDeg: lastKnownHeadingRef.current,
+      speedMph: gps.position?.speedMph ?? null,
+    });
+    return resolved.headingDeg ?? lastKnownHeadingRef.current;
+  }, [
+    currentGpsHeadingDeg,
+    gps.position?.speedMph,
+    routeAheadDisplayHeading,
+    routeLifecycleState.phase,
+    vehicleHeadingHook.heading,
+  ]);
+
+  useEffect(() => {
+    if (compassDisplayHeading != null) {
+      lastKnownHeadingRef.current = compassDisplayHeading;
+      return;
+    }
+    if (currentGpsHeadingDeg != null && currentGpsHeadingDeg >= 0) {
+      lastKnownHeadingRef.current = currentGpsHeadingDeg;
+    }
+  }, [compassDisplayHeading, currentGpsHeadingDeg]);
 
   const displayedRouteColor = useMemo(() => {
     if (trailNavigationActive || pendingHybridTrailTransition) return '#C49A2C';
