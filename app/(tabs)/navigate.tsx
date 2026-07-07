@@ -1953,6 +1953,7 @@ const COMPASS_MOVEMENT_DISTANCE_M = 4;
 const COMPASS_MOVEMENT_SPEED_MPH = 1.5;
 const ACTIVE_GUIDANCE_AUTO_MINIMIZE_MS = 2500;
 const IDLE_DESTINATION_SEARCH_RENDER_LIMIT = 5;
+const IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS = 120;
 const CAMP_LAYER_ROUTE_MAP_RESULT_LIMIT = 64;
 const ESTABLISHED_CAMPGROUNDS_FETCH_DEBOUNCE_MS = 180;
 const ESTABLISHED_CAMPGROUNDS_PREFETCH_PADDING_RATIO = 0.5;
@@ -3627,7 +3628,7 @@ const FLOATING_CONTROLS_BOTTOM = commandDockHeight + 4;
 
 const COMPASS_SIZE = 68;
 const COMPASS_RIGHT = OVERLAY_EDGE;
-const COMPASS_DOCK_CLEARANCE = 6;
+const COMPASS_DOCK_CLEARANCE = adaptive.isExpanded ? 14 : 16;
 const COMPASS_CORNER_GAP = adaptive.isExpanded ? 14 : 12;
 const COMPASS_BOTTOM = commandDockHeight + COMPASS_DOCK_CLEARANCE;
 const ACTIVE_GUIDANCE_RIGHT_INSET = COMPASS_SIZE + COMPASS_RIGHT + COMPASS_CORNER_GAP;
@@ -3658,7 +3659,8 @@ const MAP_POPUP_WIDTH = Math.min(
 const TOOLS_POPUP_WIDTH = Math.min(MAP_POPUP_WIDTH, adaptive.isExpanded ? 420 : 348);
 const TOP_RIGHT_UTILITY_WIDTH = adaptive.isExpanded ? 156 : 140;
 const TOOLS_TRIGGER_SIZE = 40;
-const TOOLS_TRIGGER_BOTTOM = COMPASS_BOTTOM + COMPASS_SIZE + 20;
+const RIGHT_RAIL_COMPASS_CLEARANCE = adaptive.isExpanded ? 34 : 38;
+const TOOLS_TRIGGER_BOTTOM = COMPASS_BOTTOM + COMPASS_SIZE + RIGHT_RAIL_COMPASS_CLEARANCE;
 const TOOLS_TRIGGER_RIGHT = COMPASS_RIGHT + Math.max(0, (COMPASS_SIZE - TOOLS_TRIGGER_SIZE) / 2);
 const communityCampsitesEnabled = isCommunityCampsitesFeatureEnabled(
   DEFAULT_COMMUNITY_CAMPSITES_ROLLOUT_CONFIG,
@@ -4271,6 +4273,9 @@ const [userHasManuallyMovedMap, setUserHasManuallyMovedMap] = useState(false);
 const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
 const [recentSearches, setRecentSearches] = useState<RoadNavSearchSuggestion[]>([]);
 const [recentSearchesVisible, setRecentSearchesVisible] = useState(false);
+const [deferredIdleDestinationSearchSuggestions, setDeferredIdleDestinationSearchSuggestions] =
+  useState<RoadNavSearchSuggestion[]>([]);
+const idleDestinationSearchCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 const latestGpsMapLocation = useMemo(() => {
   const position = gps.rawGPS.position ?? gps.position;
@@ -14146,7 +14151,10 @@ const handleCreateRun = useCallback(() => {
     !routeBuilderActive &&
     campScoutAreaMode === 'idle' &&
     !roadNavigation.session.destination;
-  const floatingToolsVisible = mapOverlayStartupReady;
+  const destinationSearchMapFrozen =
+    idleDestinationSearchVisible &&
+    (keyboardHeight > 0 || roadNavigation.query.trim().length > 0 || recentSearchesVisible);
+  const floatingToolsVisible = mapOverlayStartupReady && !destinationSearchMapFrozen;
   const campLayerControlsAvailable =
     canUseCommunityCampsiteLayers ||
     dispersedCampingEligibilityLayerAvailable ||
@@ -14169,6 +14177,7 @@ const handleCreateRun = useCallback(() => {
   });
   const compassOverlayVisible =
     mapOverlayStartupReady &&
+    !destinationSearchMapFrozen &&
     !activeTopPopup &&
     !pinDropMode &&
     !selectedCampIntelId &&
@@ -20129,23 +20138,63 @@ const handleRecentSearchSelection = useCallback((suggestion: RoadNavSearchSugges
   handleRoadOverlaySelectSuggestion(suggestion);
 }, [handleRoadOverlaySelectSuggestion]);
 
+useEffect(() => {
+  if (idleDestinationSearchCommitTimerRef.current) {
+    clearTimeout(idleDestinationSearchCommitTimerRef.current);
+    idleDestinationSearchCommitTimerRef.current = null;
+  }
+
+  const shouldCommitImmediately =
+    keyboardHeight <= 0 ||
+    roadNavigation.query.trim().length < 2 ||
+    !!roadNavigation.searchError ||
+    searchOperationalState.disabled;
+  const delayMs = shouldCommitImmediately
+    ? 0
+    : keyboardHeight > 0 ? IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS : 0;
+
+  if (delayMs === 0) {
+    setDeferredIdleDestinationSearchSuggestions(roadNavigation.suggestions);
+    return undefined;
+  }
+
+  idleDestinationSearchCommitTimerRef.current = setTimeout(() => {
+    idleDestinationSearchCommitTimerRef.current = null;
+    setDeferredIdleDestinationSearchSuggestions(roadNavigation.suggestions);
+  }, delayMs);
+
+  return () => {
+    if (idleDestinationSearchCommitTimerRef.current) {
+      clearTimeout(idleDestinationSearchCommitTimerRef.current);
+      idleDestinationSearchCommitTimerRef.current = null;
+    }
+  };
+}, [
+  keyboardHeight,
+  roadNavigation.query,
+  roadNavigation.searchError,
+  roadNavigation.suggestions,
+  searchOperationalState.disabled,
+]);
+
 const idleDestinationSearchHasQuery = roadNavigation.query.trim().length > 0;
 const idleDestinationSearchNoMatchesVisible =
   idleDestinationSearchHasQuery &&
   !roadNavigation.searchLoading &&
   !roadNavigation.searchError &&
   roadNavigation.suggestions.length === 0 &&
+  deferredIdleDestinationSearchSuggestions.length === 0 &&
   !searchOperationalState.disabled;
 const idleDestinationSearchRenderLimit =
   keyboardHeight > 0 ? 3 : IDLE_DESTINATION_SEARCH_RENDER_LIMIT;
 const visibleIdleDestinationSearchSuggestions = useMemo(
-  () => roadNavigation.suggestions.slice(0, idleDestinationSearchRenderLimit),
-  [idleDestinationSearchRenderLimit, roadNavigation.suggestions],
+  () => deferredIdleDestinationSearchSuggestions.slice(0, idleDestinationSearchRenderLimit),
+  [deferredIdleDestinationSearchSuggestions, idleDestinationSearchRenderLimit],
 );
 const idleDestinationSearchResultsLabel =
-  visibleIdleDestinationSearchSuggestions.length < roadNavigation.suggestions.length
-    ? `RESULTS | ${visibleIdleDestinationSearchSuggestions.length} OF ${roadNavigation.suggestions.length}`
-    : `RESULTS | ${roadNavigation.suggestions.length}`;
+  visibleIdleDestinationSearchSuggestions.length < deferredIdleDestinationSearchSuggestions.length
+    ? `RESULTS | ${visibleIdleDestinationSearchSuggestions.length} OF ${deferredIdleDestinationSearchSuggestions.length}`
+    : `RESULTS | ${deferredIdleDestinationSearchSuggestions.length}`;
 const recentSearchesSectionVisible =
   recentSearchesVisible &&
   !idleDestinationSearchHasQuery &&
@@ -20319,11 +20368,23 @@ const mapCameraMode = useMemo<React.ComponentProps<typeof MapRenderer>['cameraMo
   return followUser ? 'follow_user' : 'free_pan';
 }, [followUser, isReplayActive, replayPlaying]);
 
-const navigateMapMotion = useMemo(() => resolveMapSurfaceMotionState({
-  surface: 'navigate',
-  isFocused,
-  hasActiveGuidance: routeLifecycleState.phase === 'navigating',
-}), [isFocused, routeLifecycleState.phase]);
+const navigateMapMotion = useMemo(() => {
+  const motion = resolveMapSurfaceMotionState({
+    surface: 'navigate',
+    isFocused,
+    hasActiveGuidance: routeLifecycleState.phase === 'navigating',
+  });
+
+  if (!destinationSearchMapFrozen) return motion;
+
+  return {
+    ...motion,
+    motionPriority: 'cold' as const,
+    allowLiveLocation: false,
+    allowCameraFollow: false,
+    allowDynamicCamera: false,
+  };
+}, [destinationSearchMapFrozen, isFocused, routeLifecycleState.phase]);
 
 
 
@@ -20607,11 +20668,11 @@ const stableMapSurface = useMemo(() => {
         showTrailEntryEndpointMarker={showTrailEntryEndpointMarker}
         mapStyle={mapStyle}
         mapboxToken={mapToken || ''}
-        showUserLocation={!!(mapDisplayUserLocation ?? safeUserLocation)}
-        followUser={followUser}
+        showUserLocation={navigateMapMotion.allowLiveLocation && !!(mapDisplayUserLocation ?? safeUserLocation)}
+        followUser={navigateMapMotion.allowCameraFollow && followUser}
         userLocation={mapDisplayUserLocation ?? safeUserLocation}
         motionPriority={navigateMapMotion.motionPriority}
-        interactive
+        interactive={!destinationSearchMapFrozen}
         segments={mapSegmentFeatures}
         bailoutMarkers={bailoutMarkers}
         pinMarkers={mapPinMarkers}
@@ -20645,7 +20706,7 @@ const stableMapSurface = useMemo(() => {
         onTiltAlertTap={handleTiltAlertTap}
         onUserDrag={handleUserDrag}
         onRoadClassification={handleRoadClassification}
-        vehicleHeading={compassDisplayHeading}
+        vehicleHeading={navigateMapMotion.allowLiveLocation ? compassDisplayHeading : null}
         isLoading={mapLoading}
         hasToken={hasToken}
         onReadyStateChange={setMapSurfaceReady}
@@ -20653,7 +20714,7 @@ const stableMapSurface = useMemo(() => {
         campIntelMarkers={combinedCampMarkers}
         campEndpointMarkers={sharedCampPinMapMarkers}
         tiltAlertMarkers={mapTiltAlertMarkers}
-        cameraMode={mapCameraMode}
+        cameraMode={destinationSearchMapFrozen ? undefined : mapCameraMode}
         cameraCommand={mapCameraCommand}
         cameraCommandTrigger={mapCameraCommandTrigger}
         routeBuilderActive={routeBuilderActive}
@@ -20676,6 +20737,19 @@ const stableMapSurface = useMemo(() => {
           closed: campsiteDrawingClosed,
         }}
       />
+
+      {destinationSearchMapFrozen ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.destinationSearchMapOccluder,
+            {
+              top: roadNavigationSurfaceTopOffset,
+              bottom: idleDestinationSearchBottomClearance,
+            },
+          ]}
+        />
+      ) : null}
 
       {longPressContext ? (
         <View
@@ -20780,7 +20854,13 @@ const stableMapSurface = useMemo(() => {
             },
           ]}
         >
-          <View style={[styles.idleDestinationSearchShell, { maxHeight: idleDestinationSearchMaxHeight }]}>
+          <View
+            style={[
+              styles.idleDestinationSearchShell,
+              keyboardHeight > 0 && styles.idleDestinationSearchShellKeyboardActive,
+              { maxHeight: idleDestinationSearchMaxHeight },
+            ]}
+          >
             <View style={styles.idleDestinationSearchHeader}>
               <View style={styles.idleDestinationSearchTitleRow}>
                 <Ionicons name="search-outline" size={14} color={TACTICAL.amber} />
@@ -20800,7 +20880,12 @@ const stableMapSurface = useMemo(() => {
             </View>
 
             <View style={styles.idleDestinationSearchFieldRow}>
-              <View style={styles.idleDestinationSearchFieldShell}>
+              <View
+                style={[
+                  styles.idleDestinationSearchFieldShell,
+                  keyboardHeight > 0 && styles.idleDestinationSearchFieldShellKeyboardActive,
+                ]}
+              >
                 <ECSSearchField
                   value={roadNavigation.query}
                   onChangeText={roadNavigation.setQuery}
@@ -20818,7 +20903,10 @@ const stableMapSurface = useMemo(() => {
                       ? () => roadNavigation.setQuery('')
                       : undefined
                   }
-                  style={styles.idleDestinationSearchField}
+                  style={[
+                    styles.idleDestinationSearchField,
+                    keyboardHeight > 0 && styles.idleDestinationSearchFieldKeyboardActive,
+                  ]}
                   inputProps={{
                     autoCapitalize: 'words',
                     autoCorrect: false,
@@ -20861,7 +20949,7 @@ const stableMapSurface = useMemo(() => {
               </Text>
             ) : null}
 
-            {roadNavigation.searchError && roadNavigation.suggestions.length === 0 ? (
+            {roadNavigation.searchError && deferredIdleDestinationSearchSuggestions.length === 0 ? (
               <View style={styles.idleDestinationSearchResultsBlock}>
                 <ECSResultsEmptyState
                   title={searchOperationalState.disabled ? 'Search Unavailable Offline' : 'Search Paused'}
@@ -20873,7 +20961,7 @@ const stableMapSurface = useMemo(() => {
               </View>
             ) : null}
 
-            {roadNavigation.suggestions.length > 0 ? (
+            {deferredIdleDestinationSearchSuggestions.length > 0 ? (
               <View style={styles.idleDestinationSearchResultsBlock}>
                 <Text style={styles.idleDestinationSearchSectionTitle}>
                   {idleDestinationSearchResultsLabel}
@@ -20886,7 +20974,10 @@ const stableMapSurface = useMemo(() => {
                   {visibleIdleDestinationSearchSuggestions.map((suggestion) => (
                     <TouchableOpacity
                       key={suggestion.id}
-                      style={styles.idleDestinationSearchSuggestionItem}
+                      style={[
+                        styles.idleDestinationSearchSuggestionItem,
+                        keyboardHeight > 0 && styles.idleDestinationSearchSuggestionItemKeyboardActive,
+                      ]}
                       onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}
                       activeOpacity={0.82}
                     >
@@ -20920,7 +21011,10 @@ const stableMapSurface = useMemo(() => {
                     {recentSearches.map((suggestion) => (
                       <TouchableOpacity
                         key={`recent-${suggestion.id}`}
-                        style={styles.idleDestinationSearchSuggestionItem}
+                        style={[
+                          styles.idleDestinationSearchSuggestionItem,
+                          keyboardHeight > 0 && styles.idleDestinationSearchSuggestionItemKeyboardActive,
+                        ]}
                         onPress={() => handleRecentSearchSelection(suggestion)}
                         activeOpacity={0.82}
                       >
@@ -21595,15 +21689,20 @@ const stableMapSurface = useMemo(() => {
                   !showRemotenessOverlay &&
                     !remotenessOverlayAvailable &&
                     styles.quickActionsTriggerDisabled,
+                  !showRemotenessOverlay &&
+                    !remotenessOverlayAvailable &&
+                    styles.quickActionsTriggerUnavailable,
                 ]}
                 onPress={toggleRemotenessOverlay}
                 activeOpacity={0.85}
                 hitSlop={EDGE_CONTROL_HIT_SLOP}
+                testID="navigate-remoteness-overlay-toggle"
                 accessibilityRole="switch"
                 accessibilityState={{
                   checked: showRemotenessOverlay,
                   disabled: !showRemotenessOverlay && !remotenessOverlayAvailable,
                 }}
+                accessibilityValue={{ text: !remotenessOverlayAvailable && !showRemotenessOverlay ? 'unavailable' : showRemotenessOverlay ? 'on' : 'off' }}
                 accessibilityLabel="Remoteness map overlay"
                 accessibilityHint="Toggles cell service and remoteness guidance over the active route corridor."
               >
@@ -21618,6 +21717,9 @@ const stableMapSurface = useMemo(() => {
                         : TACTICAL.textMuted
                   }
                 />
+                {!showRemotenessOverlay && !remotenessOverlayAvailable ? (
+                  <View pointerEvents="none" style={styles.quickActionsUnavailableSlash} />
+                ) : null}
               </TouchableOpacity>
             </View>
 
@@ -21948,6 +22050,10 @@ const stableMapSurface = useMemo(() => {
   mapDisplayUserLocation,
   safeUserLocation,
   followUser,
+  destinationSearchMapFrozen,
+  keyboardHeight,
+  navigateMapMotion.allowCameraFollow,
+  navigateMapMotion.allowLiveLocation,
   navigateMapMotion.motionPriority,
   mapCameraMode,
   mapSegmentFeatures,
@@ -22021,6 +22127,7 @@ const stableMapSurface = useMemo(() => {
   handleRoadOverlaySelectSuggestion,
   activeGuidanceLandscapeWidth,
   showTrailEntryEndpointMarker,
+  idleDestinationSearchBottomClearance,
   navigateLandscapeExpanded,
   handleRoadOverlayStartNavigation,
   handleRoadOverlayEndNavigation,
@@ -22250,6 +22357,7 @@ const stableMapSurface = useMemo(() => {
   recentSearchesSectionVisible,
   recentSearchesTitle,
   recentSearchesVisible,
+  deferredIdleDestinationSearchSuggestions.length,
   roadNavigation,
   toggleRecentSearches,
   visibleIdleDestinationSearchSuggestions,
@@ -25979,6 +26087,20 @@ quickActionsTriggerDisabled: {
   opacity: 0.45,
 },
 
+quickActionsTriggerUnavailable: {
+  borderColor: 'rgba(214,208,190,0.26)',
+  backgroundColor: 'rgba(18,22,26,0.92)',
+},
+
+quickActionsUnavailableSlash: {
+  position: 'absolute',
+  width: 24,
+  height: 2,
+  borderRadius: 1,
+  backgroundColor: 'rgba(214,208,190,0.62)',
+  transform: [{ rotate: '-38deg' }],
+},
+
 routeBuilderTrigger: {
   borderColor: 'rgba(101,240,212,0.42)',
   backgroundColor: 'rgba(8,18,20,0.94)',
@@ -26563,6 +26685,15 @@ idleDestinationSearchWrap: {
   alignItems: 'center',
 },
 
+destinationSearchMapOccluder: {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  backgroundColor: '#080C0F',
+  zIndex: 58,
+  elevation: 58,
+},
+
 idleDestinationSearchShell: {
   width: '100%',
   maxWidth: 720,
@@ -26577,6 +26708,14 @@ idleDestinationSearchShell: {
   shadowOpacity: 0.28,
   shadowRadius: 12,
   elevation: 8,
+},
+
+idleDestinationSearchShellKeyboardActive: {
+  backgroundColor: '#080C0F',
+  shadowOffset: { width: 0, height: 0 },
+  shadowOpacity: 0,
+  shadowRadius: 0,
+  elevation: 2,
 },
 
 idleDestinationSearchHeader: {
@@ -26615,11 +26754,19 @@ idleDestinationSearchFieldShell: {
   padding: 2,
 },
 
+idleDestinationSearchFieldShellKeyboardActive: {
+  backgroundColor: '#12181D',
+},
+
 idleDestinationSearchField: {
   minHeight: 44,
   borderRadius: 8,
   borderColor: 'rgba(255,220,140,0.16)',
   backgroundColor: 'rgba(9,12,14,0.88)',
+},
+
+idleDestinationSearchFieldKeyboardActive: {
+  backgroundColor: '#090C0E',
 },
 
 idleDestinationSearchRecentButton: {
@@ -26675,6 +26822,10 @@ idleDestinationSearchSuggestionItem: {
   alignItems: 'center',
   gap: 9,
   marginBottom: 6,
+},
+
+idleDestinationSearchSuggestionItemKeyboardActive: {
+  backgroundColor: '#0C1014',
 },
 
 idleDestinationSearchSuggestionTextWrap: {

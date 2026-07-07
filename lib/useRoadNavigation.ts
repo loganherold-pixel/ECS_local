@@ -52,6 +52,7 @@ import {
 import { resolveRoadNavigationProgress } from './roadNavigationProgress';
 
 const SEARCH_DEBOUNCE_MS = 180;
+const SEARCH_PROXIMITY_REBUCKET_METERS = 120;
 const ARRIVAL_DISTANCE_M = 200;
 const APPROACH_DISTANCE_M = 180;
 const LOW_CONFIDENCE_DISTANCE_M = 26;
@@ -214,6 +215,25 @@ function randomSessionId(): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function degreesToRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function distanceBetweenRoadNavigationCoordinatesMeters(
+  a: Pick<RoadNavCoordinate, 'lat' | 'lng'>,
+  b: Pick<RoadNavCoordinate, 'lat' | 'lng'>,
+): number {
+  const earthRadiusMeters = 6371008.8;
+  const lat1 = degreesToRadians(a.lat);
+  const lat2 = degreesToRadians(b.lat);
+  const dLat = degreesToRadians(b.lat - a.lat);
+  const dLng = degreesToRadians(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 function getAccuracyPadMeters(location: RoadNavigationLocation | null): number {
@@ -619,6 +639,7 @@ export function useRoadNavigation(params: {
   const [stepListExpanded, setStepListExpanded] = useState(false);
   const [session, setSession] = useState<RoadNavigationSessionState>(createEmptySession);
   const sessionRef = useRef(session);
+  const searchProximityRef = useRef<RoadNavigationLocation | null>(null);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -643,6 +664,32 @@ export function useRoadNavigation(params: {
     snapshot: null,
     lastPersistedAtMs: null,
   });
+
+  const searchProximity = useMemo(() => {
+    const lat = currentLocation?.lat;
+    const lng = currentLocation?.lng;
+    if (
+      !currentLocation ||
+      typeof lat !== 'number' ||
+      typeof lng !== 'number' ||
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng)
+    ) {
+      searchProximityRef.current = null;
+      return null;
+    }
+
+    const previous = searchProximityRef.current;
+    if (
+      !previous ||
+      distanceBetweenRoadNavigationCoordinatesMeters(previous, currentLocation) >=
+        SEARCH_PROXIMITY_REBUCKET_METERS
+    ) {
+      searchProximityRef.current = currentLocation;
+    }
+
+    return searchProximityRef.current;
+  }, [currentLocation?.lat, currentLocation?.lng]);
 
   const clearSearchUi = useCallback(() => {
     searchRequestIdRef.current += 1;
@@ -1090,13 +1137,13 @@ export function useRoadNavigation(params: {
     if (trimmed.length < 2) {
       setSearchLoading(false);
       setSearchError(null);
-      setSuggestions([]);
+      setSuggestions((current) => (current.length > 0 ? [] : current));
       return;
     }
 
     if (!accessToken || !liveServicesEnabled) {
       setSearchLoading(false);
-      setSuggestions([]);
+      setSuggestions((current) => (current.length > 0 ? [] : current));
       setSearchError(
         liveServicesEnabled ? 'Search unavailable' : 'Search unavailable offline',
       );
@@ -1105,15 +1152,17 @@ export function useRoadNavigation(params: {
 
     const requestId = searchRequestIdRef.current + 1;
     searchRequestIdRef.current = requestId;
-    setSearchLoading(true);
     setSearchError(null);
 
     const timer = setTimeout(() => {
+      if (searchRequestIdRef.current !== requestId) return;
+      setSearchLoading(true);
+
       void searchRoadDestinations({
         accessToken,
         query: trimmed,
         sessionToken: sessionTokenRef.current,
-        proximity: currentLocation,
+        proximity: searchProximity,
         billingContext: {
           flow: 'navigate_destination_search',
           surface: 'Navigate',
@@ -1129,7 +1178,7 @@ export function useRoadNavigation(params: {
         })
         .catch((error: unknown) => {
           if (searchRequestIdRef.current !== requestId) return;
-          setSuggestions([]);
+          setSuggestions((current) => (current.length > 0 ? [] : current));
           setSearchError(
             error instanceof Error ? error.message : 'Search unavailable',
           );
@@ -1142,7 +1191,7 @@ export function useRoadNavigation(params: {
     }, SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [accessToken, currentLocation, enabled, liveServicesEnabled, query]);
+  }, [accessToken, enabled, liveServicesEnabled, query, searchProximity]);
 
   const selectSuggestion = useCallback(
     async (suggestion: RoadNavSearchSuggestion) => {

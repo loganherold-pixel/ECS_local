@@ -90,7 +90,7 @@ const SHIELD_ICON_SIZE = 70;
 
 // ── Outer badge sizing ───────────────────────────────────────
 const OUTER_BADGE_SIZE_ACTIVE = 70;
-const OUTER_DOCK_ITEM_VERTICAL_OFFSET = 6;
+const OUTER_DOCK_ITEM_VERTICAL_OFFSET = 3;
 const OUTER_BADGE_TO_LABEL_OFFSET = -4;
 const BOTTOM_BANNER_BACKGROUND_DROP_OFFSET = 3;
 

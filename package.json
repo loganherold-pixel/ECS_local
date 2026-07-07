@@ -128,6 +128,7 @@
     "test:ecs-guidance-overland-synthetic": "node ./scripts/test-ecs-guidance-overland-synthetic.js",
     "test:hybrid-guidance-start-selection": "node ./scripts/test-hybrid-guidance-start-selection.js",
     "test:gps-permission-preflight": "node ./scripts/test-gps-permission-preflight.js",
+    "test:navigate-mobile-emulation-regressions": "node ./scripts/test-navigate-mobile-emulation-regressions.js",
     "test:gps-watch-sharing": "node ./scripts/test-gps-watch-sharing.js",
     "test:terrain-risk-command-module": "node ./scripts/test-terrain-risk-command-module.js",
     "test:terrain-risk-reference-events": "node ./scripts/test-terrain-risk-reference-events.js",
