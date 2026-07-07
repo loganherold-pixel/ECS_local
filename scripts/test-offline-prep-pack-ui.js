@@ -49,6 +49,8 @@ assertIncludes(screen, 'Not set', 'Offline Prep optional unset state');
 assertIncludes(screen, 'testID="offline-prep-unavailable-state"', 'Offline Prep unavailable recovery');
 assertIncludes(screen, 'testID="offline-prep-failed-state"', 'Offline Prep failed state');
 assertIncludes(screen, 'testID="offline-prep-prepare"', 'Offline Prep prepare action');
+assertIncludes(screen, 'OFFLINE_PREP_ACTION_BOTTOM_CLEARANCE', 'Offline Prep detail should reserve mobile bottom clearance for final actions and confirmations.');
+assertIncludes(screen, 'paddingBottom: OFFLINE_PREP_ACTION_BOTTOM_CLEARANCE', 'Offline Prep scroll content should let prepare/share/confirmation controls scroll above the ECS dock.');
 assertIncludes(screen, 'exportExploreTripManifestPdf', 'Offline Prep should export printable/shareable manifests from the reviewed manifest.');
 assertIncludes(screen, 'testID="offline-prep-printable-manifest"', 'Offline Prep should expose a printable/shareable manifest action.');
 assertIncludes(screen, 'Print / Share Manifest', 'Offline Prep manifest export action should use field-facing copy.');

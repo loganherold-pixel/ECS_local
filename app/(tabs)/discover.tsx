@@ -4758,7 +4758,7 @@ function DiscoverScreenInner() {
               <Ionicons name="trail-sign-outline" size={18} color={TACTICAL.amber} />
             </View>
             <View style={s.exploreWizardHeroCopy}>
-              <Text style={s.exploreWizardEyebrow}>EXPLORE TRIPBUILDER</Text>
+              <Text style={s.exploreWizardEyebrow}>EXPLORE TRIP BUILDER</Text>
               <Text style={s.exploreWizardTitle}>Pick a guidance-ready route</Text>
               <Text style={s.exploreWizardText}>
                 Preview, save, build a trip, or start navigation from verified route geometry only.

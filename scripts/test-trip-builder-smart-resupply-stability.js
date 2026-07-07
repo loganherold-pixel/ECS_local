@@ -75,6 +75,11 @@ assertIncludes(
 );
 assertIncludes(
   screen,
+  'const SMART_RESUPPLY_OPTION_LIST_HEIGHT = 56;',
+  'Loaded Smart Resupply candidates should use a compact nested viewport so Camp Plan controls stay reachable above the setup footer on mobile.',
+);
+assertIncludes(
+  screen,
   'smartResupplyLoading === \'supplies\' && smartResupplySupplyOptions.length === 0',
   'Supply picker should only show blocking loading state before options exist',
 );

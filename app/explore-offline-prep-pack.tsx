@@ -91,6 +91,8 @@ import type {
 } from '../lib/tripBuilder';
 import { exportExploreTripManifestPdf } from '../lib/explore/exploreTripManifestExport';
 
+const OFFLINE_PREP_ACTION_BOTTOM_CLEARANCE = 184;
+
 function routeId(route: TripBuilderRouteInput): string {
   return String(route.id ?? route.name ?? route.title ?? 'selected-route');
 }
@@ -1842,7 +1844,7 @@ export default function ExploreOfflinePrepPackScreen() {
 const styles = StyleSheet.create({
   safeContainer: { flex: 1 },
   scrollArea: { flex: 1 },
-  scrollContent: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 24, gap: 12 },
+  scrollContent: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: OFFLINE_PREP_ACTION_BOTTOM_CLEARANCE, gap: 12 },
   heroCard: {
     flexDirection: 'row',
     gap: 12,

@@ -324,6 +324,8 @@ assertIncludes(discover, 'clearTripBuilderRouteHandoff();', 'Explore top-level T
 assertIncludes(discover, "router.push('/explore-trip-builder')", 'Explore Trip Builder tab should open the real Trip Builder route picker directly.');
 assert(!discover.includes('testID="explore-open-trip-builder"'), 'Explore should not render a redundant Open Trip Builder staging page.');
 assertIncludes(discover, 'testID="explore-tripbuilder-wizard-surface"', 'Explore should render the direct route-first TripBuilder wizard surface.');
+assertIncludes(discover, 'EXPLORE TRIP BUILDER', 'Explore Trip Builder hero eyebrow should render readable spaced copy on mobile.');
+assert(!discover.includes('EXPLORE TRIPBUILDER'), 'Explore Trip Builder hero eyebrow should not use compressed compound copy.');
 assertIncludes(discover, 'const handleOpenExploreTripBuilderFromHero = useCallback(() => {', 'Explore TripBuilder hero should use a dedicated press handler.');
 assertIncludes(discover, 'accessibilityLabel="Open Explore Trip Builder"', 'Explore TripBuilder hero should expose a mobile accessibility label.');
 assertIncludes(discover, 'accessibilityRole="button"', 'Explore TripBuilder hero should be announced as a tappable control.');
