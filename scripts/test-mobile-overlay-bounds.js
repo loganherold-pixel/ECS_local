@@ -145,7 +145,8 @@ assert.ok(
     navigateSource.includes('IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT') &&
     navigateSource.includes('idleDestinationSearchResultsMaxHeight') &&
     navigateSource.includes('idleDestinationSearchRenderLimit') &&
-    navigateSource.includes('destinationSearchInputActive ? 3 : IDLE_DESTINATION_SEARCH_RENDER_LIMIT') &&
+    navigateSource.includes('IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT') &&
+    navigateSource.includes('destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT : IDLE_DESTINATION_SEARCH_RENDER_LIMIT') &&
     navigateSource.includes('styles.idleDestinationSearchShell') &&
     navigateSource.includes('destinationSearchInputActive && styles.idleDestinationSearchShellKeyboardActive') &&
     navigateSource.includes('{ maxHeight: idleDestinationSearchPanelMaxHeight }') &&

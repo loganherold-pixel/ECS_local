@@ -73,6 +73,7 @@ const WEBVIEW_ORIGIN_WHITELIST = ['*'];
 const WEBVIEW_FAILSAFE_TIMEOUT_MS = 30000;
 const WEBVIEW_PROGRESS_FAILSAFE_TIMEOUT_MS = 45000;
 const WEBVIEW_HARD_FAILURE_TIMEOUT_MS = 90000;
+const WEBVIEW_RENDER_PROCESS_RETRY_LIMIT = 1;
 const MAP_CONSTRUCTOR_RETRY_LIMIT = 3;
 const MAP_CONSTRUCTOR_RETRY_BASE_MS = 650;
 const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
@@ -464,6 +465,7 @@ export type MapRendererProps = {
     closed: boolean;
   } | null;
   surfaceMode?: 'full' | 'compact';
+  standbyMapDisabled?: boolean;
   style?: any;
 };
 
@@ -7996,12 +7998,14 @@ const MapRenderer = React.memo(function MapRenderer({
   onEstablishedCampsiteTap,
   campsiteSearchPolygon = null,
   surfaceMode = 'full',
+  standbyMapDisabled = false,
   style,
 }: MapRendererProps) {
   const webViewRef = useRef<WebView>(null);
   const [webReady, setWebReady] = useState(false);
   const [webBootTimedOut, setWebBootTimedOut] = useState(false);
   const [webBootIssue, setWebBootIssue] = useState<string | null>(null);
+  const [webRendererCrashBlocked, setWebRendererCrashBlocked] = useState(false);
   const [webViewInstanceKey, setWebViewInstanceKey] = useState(0);
   const bootstrapSentRef = useRef(false);
   const lastPayloadHashRef = useRef('');
@@ -8017,6 +8021,7 @@ const MapRenderer = React.memo(function MapRenderer({
   const lastLegacyFollowHashRef = useRef('');
   const previousHtmlHashRef = useRef<string>('');
   const activeWebViewInstanceKeyRef = useRef(0);
+  const renderProcessGoneCountRef = useRef(0);
   const activeFailSafeInstanceKeyRef = useRef<number | null>(null);
   const failSafeArmedInstanceKeyRef = useRef<number | null>(null);
   const bootstrapAcknowledgedInstanceKeyRef = useRef<number | null>(null);
@@ -8066,9 +8071,10 @@ const MapRenderer = React.memo(function MapRenderer({
     isCompactSurface &&
     motionPriority === 'warm' &&
     interactive !== false &&
+    !standbyMapDisabled &&
     !standbyMapHasOperationalOverlay;
   const standbyMapActive = standbyMapEligible && !standbyWakeRequested;
-  const renderLiveWebView = shouldLoadMap && !standbyMapActive && motionPriority !== 'cold';
+  const renderLiveWebView = shouldLoadMap && !standbyMapActive && motionPriority !== 'cold' && !webRendererCrashBlocked;
 
   useEffect(() => {
     if (!standbyMapEligible && standbyWakeRequested) {
@@ -8162,10 +8168,14 @@ const MapRenderer = React.memo(function MapRenderer({
     pendingMapMessageFrameCancelRef.current = null;
   }, []);
 
-  const resetRuntimeState = useCallback(() => {
+  const resetRuntimeState = useCallback((options?: { preserveRendererCrashCount?: boolean }) => {
     setWebReady(false);
     setWebBootTimedOut(false);
     setWebBootIssue(null);
+    setWebRendererCrashBlocked(false);
+    if (!options?.preserveRendererCrashCount) {
+      renderProcessGoneCountRef.current = 0;
+    }
     hasEverReachedReadyRef.current = false;
     bootstrapSentRef.current = false;
     lastPayloadHashRef.current = '';
@@ -8193,14 +8203,46 @@ const MapRenderer = React.memo(function MapRenderer({
     clearPendingMapMessages,
   ]);
 
-  const remountWebView = useCallback((reason: string) => {
+  const remountWebView = useCallback((reason: string, options?: { preserveRendererCrashCount?: boolean }) => {
     debugLog('[MapRenderer] Remounting WebView', {
       reason,
       instanceKey: activeWebViewInstanceKeyRef.current,
     });
-    resetRuntimeState();
+    resetRuntimeState(options);
     setWebViewInstanceKey((value) => value + 1);
   }, [resetRuntimeState]);
+
+  const handleWebViewProcessGone = useCallback((reason: string) => {
+    const nextCrashCount = renderProcessGoneCountRef.current + 1;
+    renderProcessGoneCountRef.current = nextCrashCount;
+    console.warn('[MapRenderer] WebView render process ended', {
+      reason,
+      nextCrashCount,
+      retryLimit: WEBVIEW_RENDER_PROCESS_RETRY_LIMIT,
+    });
+
+    if (nextCrashCount <= WEBVIEW_RENDER_PROCESS_RETRY_LIMIT) {
+      remountWebView(reason, { preserveRendererCrashCount: true });
+      return;
+    }
+
+    clearFailSafeTimer();
+    clearHardFailureTimer();
+    clearCompactRetryTimer();
+    clearConstructorRetryTimer();
+    clearPendingMapMessages();
+    setWebReady(false);
+    setWebBootTimedOut(true);
+    setWebBootIssue('webview_renderer_gone');
+    setWebRendererCrashBlocked(true);
+  }, [
+    clearCompactRetryTimer,
+    clearConstructorRetryTimer,
+    clearFailSafeTimer,
+    clearHardFailureTimer,
+    clearPendingMapMessages,
+    remountWebView,
+  ]);
 
   const payload = useMemo<WebMapPayload>(
     () =>
@@ -8319,6 +8361,10 @@ const MapRenderer = React.memo(function MapRenderer({
     [mapboxToken, payload.center, payload.styleUrl, payload.zoom],
   );
   const handleStandbyWake = useCallback(() => {
+    renderProcessGoneCountRef.current = 0;
+    setWebRendererCrashBlocked(false);
+    setWebBootTimedOut(false);
+    setWebBootIssue(null);
     setStandbyWakeRequested(true);
   }, []);
 
@@ -8870,6 +8916,8 @@ const MapRenderer = React.memo(function MapRenderer({
             failSafeArmedInstanceKeyRef.current = null;
             startupSettledRef.current = true;
             hasEverReachedReadyRef.current = true;
+            renderProcessGoneCountRef.current = 0;
+            setWebRendererCrashBlocked(false);
             setWebBootTimedOut(false);
             setWebBootIssue(null);
             setWebReady(true);
@@ -8885,6 +8933,8 @@ const MapRenderer = React.memo(function MapRenderer({
         hasEverReachedReadyRef.current = true;
         compactRetryCountRef.current = 0;
         constructorRetryCountRef.current = 0;
+        renderProcessGoneCountRef.current = 0;
+        setWebRendererCrashBlocked(false);
         setWebBootTimedOut(false);
         setWebBootIssue(null);
         setWebReady(true);
@@ -9098,12 +9148,10 @@ const MapRenderer = React.memo(function MapRenderer({
             );
           }}
           onRenderProcessGone={() => {
-            console.warn('[MapRenderer] WebView crashed → remount');
-            remountWebView('render_process_gone');
+            handleWebViewProcessGone('render_process_gone');
           }}
           onContentProcessDidTerminate={() => {
-            console.warn('[MapRenderer] iOS WebView terminated → remount');
-            remountWebView('content_process_terminated');
+            handleWebViewProcessGone('content_process_terminated');
           }}
           style={styles.webview}
         />

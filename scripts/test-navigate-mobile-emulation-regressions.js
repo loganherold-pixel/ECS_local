@@ -62,6 +62,10 @@ assert.ok(
   'Navigate mobile search should define a separate keyboard-settled commit delay for Android input frames.',
 );
 assert.ok(
+  navigateSource.includes('IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT'),
+  'Navigate mobile search should define a smaller keyboard-active render limit for suggestion rows.',
+);
+assert.ok(
   navigateSource.includes('IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS'),
   'Navigate mobile search should define a short draft-query commit delay before waking provider-backed search.',
 );
@@ -82,6 +86,12 @@ assert.ok(queryCommitDelayMatch, 'Navigate mobile search draft-query commit dela
 assert.ok(
   Number(queryCommitDelayMatch[1]) >= 260,
   `Keyboard-active query commits should wait past Android keyboard/input burst work before waking provider search; found ${queryCommitDelayMatch[1]}ms.`,
+);
+const keyboardRenderLimitMatch = navigateSource.match(/const IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT = ([0-9]+);/);
+assert.ok(keyboardRenderLimitMatch, 'Keyboard-active search render limit should be a named numeric constant.');
+assert.ok(
+  Number(keyboardRenderLimitMatch[1]) <= 2,
+  `Keyboard-active search should render at most two suggestion rows during the hot input path; found ${keyboardRenderLimitMatch[1]}.`,
 );
 assert.ok(
   navigateSource.includes('idleDestinationSearchDraftQuery') &&
@@ -127,6 +137,10 @@ assert.ok(
 assert.ok(
   navigateSource.includes('deferredIdleDestinationSearchSuggestions.slice(0, idleDestinationSearchRenderLimit)'),
   'Visible Navigate search suggestions should be sliced from the deferred mobile list.',
+);
+assert.ok(
+  navigateSource.includes('destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT : IDLE_DESTINATION_SEARCH_RENDER_LIMIT'),
+  'Keyboard-active destination search should use the smaller render budget before expanding after the keyboard path settles.',
 );
 assert.ok(
   navigateSource.includes('deferredIdleDestinationSearchSuggestions.length > 0') &&
@@ -229,7 +243,7 @@ assert.ok(
     mapRendererSource.includes('function buildMapboxStaticImageUrl') &&
     mapRendererSource.includes("motionPriority === 'warm'") &&
     mapRendererSource.includes('!standbyMapHasOperationalOverlay') &&
-    mapRendererSource.includes("const renderLiveWebView = shouldLoadMap && !standbyMapActive && motionPriority !== 'cold';"),
+    mapRendererSource.includes("const renderLiveWebView = shouldLoadMap && !standbyMapActive && motionPriority !== 'cold' && !webRendererCrashBlocked;"),
   'MapRenderer should place no-overlay warm idle maps into a static standby instead of keeping the live WebView renderer hot.',
 );
 assert.ok(
@@ -254,7 +268,26 @@ assert.ok(
     navigateSource.includes('style={destinationSearchMapFrozen ? styles.mapRendererFrozen : undefined}') &&
     navigateSource.includes('mapRendererFrozen:') &&
     navigateSource.includes("display: 'none'"),
-  'Navigate should use the compact MapRenderer surface and suspend WebView drawing while destination search owns the foreground.',
+  'Navigate should keep the compact map in lightweight standby while idle search is parked, then suspend drawing while destination search owns the foreground.',
+);
+assert.ok(
+  !navigateSource.includes('standbyMapDisabled={idleDestinationSearchVisible && !destinationSearchMapFrozen}'),
+  'Idle destination search should not force a live WebView under the parked search panel.',
+);
+assert.ok(
+  mapRendererSource.includes('standbyMapDisabled?: boolean;') &&
+    mapRendererSource.includes('standbyMapDisabled = false') &&
+    mapRendererSource.includes('!standbyMapDisabled'),
+  'MapRenderer should keep an explicit escape hatch for flows that must wake the live compact map.',
+);
+assert.ok(
+  mapRendererSource.includes('WEBVIEW_RENDER_PROCESS_RETRY_LIMIT') &&
+    mapRendererSource.includes('renderProcessGoneCountRef') &&
+    mapRendererSource.includes('webRendererCrashBlocked') &&
+    mapRendererSource.includes('setWebRendererCrashBlocked(true)') &&
+    mapRendererSource.includes("setWebBootIssue('webview_renderer_gone')") &&
+    mapRendererSource.includes('renderProcessGoneCountRef.current = 0'),
+  'MapRenderer should bound WebView renderer crash remounts and expose a stable fallback instead of looping on Android.',
 );
 assert.ok(
   navigateSource.includes('const compassPowerSaveActive = !isFocused || !activeNavigationRunning;') &&

@@ -1953,6 +1953,7 @@ const COMPASS_MOVEMENT_DISTANCE_M = 4;
 const COMPASS_MOVEMENT_SPEED_MPH = 1.5;
 const ACTIVE_GUIDANCE_AUTO_MINIMIZE_MS = 2500;
 const IDLE_DESTINATION_SEARCH_RENDER_LIMIT = 5;
+const IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT = 2;
 const IDLE_DESTINATION_SEARCH_COMMIT_DELAY_MS = 260;
 const IDLE_DESTINATION_SEARCH_QUERY_COMMIT_DELAY_MS = 280;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS = 460;
@@ -20275,7 +20276,7 @@ const idleDestinationSearchNoMatchesVisible =
   deferredIdleDestinationSearchSuggestions.length === 0 &&
   !searchOperationalState.disabled;
 const idleDestinationSearchRenderLimit =
-  destinationSearchInputActive ? 3 : IDLE_DESTINATION_SEARCH_RENDER_LIMIT;
+  destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT : IDLE_DESTINATION_SEARCH_RENDER_LIMIT;
 const visibleIdleDestinationSearchSuggestions = useMemo(
   () => deferredIdleDestinationSearchSuggestions.slice(0, idleDestinationSearchRenderLimit),
   [deferredIdleDestinationSearchSuggestions, idleDestinationSearchRenderLimit],
