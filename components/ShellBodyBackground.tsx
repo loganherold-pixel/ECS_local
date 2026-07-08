@@ -1,5 +1,5 @@
 import React from 'react';
-import { ImageBackground, StyleSheet, View } from 'react-native';
+import { ImageBackground, Platform, StyleSheet, View } from 'react-native';
 import { BODY_BG } from '../lib/chromeAssets';
 import { useTheme } from '../context/ThemeContext';
 import { resolveShellChromeTheme } from '../lib/ui/shellChromeTheme';
@@ -28,6 +28,8 @@ export default function ShellBodyBackground({
       <ImageBackground
         source={BODY_BG}
         resizeMode="cover"
+        resizeMethod={Platform.OS === 'android' ? 'resize' : 'auto'}
+        fadeDuration={0}
         imageStyle={styles.image}
         style={styles.imageFrame}
       >

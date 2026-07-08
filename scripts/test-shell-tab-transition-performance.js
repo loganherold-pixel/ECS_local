@@ -9,6 +9,8 @@ function read(...parts) {
 }
 
 const commandDock = read('components', 'CommandDock.tsx');
+const ecsGlobalBanner = read('components', 'ECSGlobalBanner.tsx');
+const shellBodyBackground = read('components', 'ShellBodyBackground.tsx');
 const dashboard = read('app', '(tabs)', 'dashboard.tsx');
 const navigate = read('app', '(tabs)', 'navigate.tsx');
 const schedulerPath = path.join(root, 'lib', 'shellInteractionScheduler.ts');
@@ -42,6 +44,16 @@ assert(
   commandDock.includes('const effectivePathname = pendingRoute ?? pathname') &&
     commandDock.includes('isPrimaryTabActiveForPath(item.tabId, effectivePathname)'),
   'CommandDock active-state styling should use the canonical route manifest and pending route so the dock responds immediately.',
+);
+
+assert(
+  ecsGlobalBanner.includes("resizeMethod={Platform.OS === 'android' ? 'resize' : 'auto'}") &&
+    ecsGlobalBanner.includes('fadeDuration={0}') &&
+    shellBodyBackground.includes("resizeMethod={Platform.OS === 'android' ? 'resize' : 'auto'}") &&
+    shellBodyBackground.includes('fadeDuration={0}') &&
+    commandDock.includes('cachePolicy="memory-disk"') &&
+    commandDock.includes('priority="high"'),
+  'Shared shell imagery should use Android resize/no-fade hints and cached dock badges to avoid bitmap upload spikes during tab changes.',
 );
 
 assert(

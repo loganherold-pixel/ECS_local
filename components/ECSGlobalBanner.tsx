@@ -89,6 +89,8 @@ export function ECSGlobalBanner({
       <ImageBackground
         source={source}
         resizeMode={resolvedResizeMode}
+        resizeMethod={Platform.OS === 'android' ? 'resize' : 'auto'}
+        fadeDuration={0}
         style={styles.imageFill}
         imageStyle={styles.image}
       />

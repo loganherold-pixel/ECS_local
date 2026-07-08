@@ -293,6 +293,8 @@ function DockButton({
             source={item.badge}
             style={styles.badgeImage}
             contentFit="contain"
+            cachePolicy="memory-disk"
+            priority="high"
             transition={0}
           />
         </Animated.View>
@@ -424,6 +426,8 @@ function ShieldCenterButton({
               source={DOCK_BADGES.dashboard}
               style={styles.shieldImage}
               contentFit="contain"
+              cachePolicy="memory-disk"
+              priority="high"
               transition={0}
             />
           </View>

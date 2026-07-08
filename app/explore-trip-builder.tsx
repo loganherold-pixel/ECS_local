@@ -167,6 +167,7 @@ const TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT = 6;
 const TRIP_BUILDER_ROUTE_LIST_BATCH_SIZE = 4;
 const TRIP_BUILDER_ROUTE_LIST_WINDOW_SIZE = 5;
 const TRIP_BUILDER_ROUTE_LIST_BATCHING_PERIOD_MS = 50;
+const TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT = TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT;
 const TRIP_BUILDER_ROUTE_ROW_HEIGHT = 58;
 
 function routeContextSupplyModeForTripBuilder(
@@ -913,8 +914,10 @@ const RouteSelectionCard = React.memo(function RouteSelectionCard({
       style={[styles.routeOption, selected && styles.routeOptionSelected]}
       activeOpacity={0.82}
       onPress={handlePress}
+      hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
       accessibilityRole="button"
       accessibilityLabel={`Select ${route.name}`}
+      accessibilityState={{ selected }}
       testID={`trip-builder-route-option-${route.id}`}
     >
       <View style={styles.routeOptionIcon}>
@@ -3974,6 +3977,11 @@ export default function ExploreTripBuilderScreen() {
     () => routes.find((route) => String(route.id) === selectedRouteId) ?? null,
     [routes, selectedRouteId],
   );
+  const directRoutePickerRoutes = useMemo(
+    () => (routes.length <= TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT ? routes : []),
+    [routes],
+  );
+  const useDirectRoutePicker = directRoutePickerRoutes.length > 0;
   useEffect(() => {
     latestSelectedPlanningRouteRef.current = selectedRoute;
   }, [selectedRoute]);
@@ -5528,23 +5536,42 @@ export default function ExploreTripBuilderScreen() {
                         {routeImportState.message}
                       </Text>
                     ) : null}
-                    <FlatList<ExpeditionOpportunity>
-                      data={routes}
-                      keyExtractor={tripBuilderRouteKeyExtractor}
-                      renderItem={renderTripBuilderRouteOption}
-                      style={styles.routeListScroller}
-                      contentContainerStyle={styles.routeList}
-                      ItemSeparatorComponent={TripBuilderRouteListSeparator}
-                      initialNumToRender={TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT}
-                      maxToRenderPerBatch={TRIP_BUILDER_ROUTE_LIST_BATCH_SIZE}
-                      windowSize={TRIP_BUILDER_ROUTE_LIST_WINDOW_SIZE}
-                      updateCellsBatchingPeriod={TRIP_BUILDER_ROUTE_LIST_BATCHING_PERIOD_MS}
-                      getItemLayout={getTripBuilderRouteItemLayout}
-                      removeClippedSubviews
-                      nestedScrollEnabled
-                      keyboardShouldPersistTaps="handled"
-                      showsVerticalScrollIndicator={routes.length > 4}
-                    />
+                    {useDirectRoutePicker ? (
+                      <View
+                        style={[styles.routeListScroller, styles.routeListDirectStack]}
+                        testID="trip-builder-route-list-direct"
+                      >
+                        {directRoutePickerRoutes.map((route, index) => (
+                          <React.Fragment key={String(route.id)}>
+                            {index > 0 ? <TripBuilderRouteListSeparator /> : null}
+                            <RouteSelectionCard
+                              route={route}
+                              selected={String(route.id) === selectedRouteId}
+                              onPress={selectPlanningRoute}
+                            />
+                          </React.Fragment>
+                        ))}
+                      </View>
+                    ) : (
+                      <FlatList<ExpeditionOpportunity>
+                        data={routes}
+                        keyExtractor={tripBuilderRouteKeyExtractor}
+                        renderItem={renderTripBuilderRouteOption}
+                        style={styles.routeListScroller}
+                        contentContainerStyle={styles.routeList}
+                        ItemSeparatorComponent={TripBuilderRouteListSeparator}
+                        initialNumToRender={TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT}
+                        maxToRenderPerBatch={TRIP_BUILDER_ROUTE_LIST_BATCH_SIZE}
+                        windowSize={TRIP_BUILDER_ROUTE_LIST_WINDOW_SIZE}
+                        updateCellsBatchingPeriod={TRIP_BUILDER_ROUTE_LIST_BATCHING_PERIOD_MS}
+                        getItemLayout={getTripBuilderRouteItemLayout}
+                        removeClippedSubviews
+                        nestedScrollEnabled
+                        keyboardShouldPersistTaps="handled"
+                        showsVerticalScrollIndicator={routes.length > 4}
+                        testID="trip-builder-route-list-virtualized"
+                      />
+                    )}
                     <TouchableOpacity
                       style={[styles.primaryButton, !selectedRoute && styles.primaryButtonDisabled]}
                       activeOpacity={selectedRoute ? 0.84 : 1}
@@ -6512,6 +6539,7 @@ const styles = StyleSheet.create({
   importErrorText: { color: '#EF5350' },
   routeListScroller: { flex: 1, minHeight: 76 },
   routeList: { paddingBottom: 2 },
+  routeListDirectStack: { justifyContent: 'flex-start' },
   routeListSeparator: { height: 6 },
   routeOption: {
     height: TRIP_BUILDER_ROUTE_ROW_HEIGHT - 6,

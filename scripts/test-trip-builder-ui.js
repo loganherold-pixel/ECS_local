@@ -154,6 +154,14 @@ assertIncludes(screen, 'styles.planOverlayBackdrop', 'Trip Builder plan overlay 
 assertIncludes(screen, 'styles.bodyFrame', 'Trip Builder plan overlay should stay inside the Explore body so the lower ECS banner remains visible.');
 assertIncludes(screen, 'routeListScroller', 'Trip Builder route selector should be independently scrollable.');
 [
+  'TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT = TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT',
+  'directRoutePickerRoutes',
+  'routes.length <= TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT ? routes : []',
+  'useDirectRoutePicker',
+  'testID="trip-builder-route-list-direct"',
+  'directRoutePickerRoutes.map((route, index) => (',
+  'accessibilityState={{ selected }}',
+  'hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}',
   'FlatList<ExpeditionOpportunity>',
   'TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT',
   'TRIP_BUILDER_ROUTE_LIST_BATCH_SIZE',
@@ -168,12 +176,13 @@ assertIncludes(screen, 'routeListScroller', 'Trip Builder route selector should 
   'windowSize={TRIP_BUILDER_ROUTE_LIST_WINDOW_SIZE}',
   'updateCellsBatchingPeriod={TRIP_BUILDER_ROUTE_LIST_BATCHING_PERIOD_MS}',
   'removeClippedSubviews',
+  'testID="trip-builder-route-list-virtualized"',
 ].forEach((needle) => {
-  assertIncludes(screen, needle, `Trip Builder route selector should use virtualized mobile rendering: ${needle}`);
+  assertIncludes(screen, needle, `Trip Builder route selector should use direct small-list taps and virtualized overflow rendering: ${needle}`);
 });
 assert(
-  !screen.includes('routes.map((route) => ('),
-  'Trip Builder route selector should not eagerly render every route row in the route picker.',
+  !screen.includes('routes.map((route) => (') && !screen.includes('routes.map((route, index) => ('),
+  'Trip Builder route selector should not eagerly render every route row without the small-list direct guard.',
 );
 assertIncludes(screen, 'routes.length} FILTERED ROUTE', 'Trip Builder route selector should display the actual filtered route count.');
 assertIncludes(screen, 'const [tripSetupStarted, setTripSetupStarted] = useState(false)', 'Trip Builder should keep route-picker setup closed for top-level Trip Builder entry.');
