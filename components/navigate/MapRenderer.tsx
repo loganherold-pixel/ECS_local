@@ -84,6 +84,8 @@ const STANDBY_STATIC_MAP_HEIGHT = 1280;
 const MAX_KNOWN_CAMPSITE_SOURCE_MARKERS = 40;
 const MAX_ROUTE_RENDER_POINTS = 2400;
 const MAX_PROGRESS_ROUTE_RENDER_POINTS = 2400;
+const MAX_COMPACT_ACTIVE_ROUTE_RENDER_POINTS = 512;
+const MAX_COMPACT_ACTIVE_PROGRESS_RENDER_POINTS = 512;
 const ROUTE_RENDER_TURN_DELTA_DEGREES = 8;
 const CAMERA_EPSILON = 0.00005;
 const DYNAMIC_COORDINATE_DECIMALS = 5;
@@ -1627,8 +1629,15 @@ export function buildMapBridgeBatchMessage(messages: unknown[]) {
 export function buildWebPayload(props: MapRendererProps): WebMapPayload {
   const routeCoordsRaw = normalizePointList(props.points);
   const progressCoordsRaw = normalizePointList(props.progressPoints);
-  const routeCoords = preserveRouteGeometryForRendering(routeCoordsRaw, MAX_ROUTE_RENDER_POINTS);
-  const progressRouteCoords = preserveRouteGeometryForRendering(progressCoordsRaw, MAX_PROGRESS_ROUTE_RENDER_POINTS);
+  const compactActiveRoute = props.surfaceMode === 'compact' && props.routeRenderMode === 'active';
+  const routeRenderPointBudget = compactActiveRoute
+    ? MAX_COMPACT_ACTIVE_ROUTE_RENDER_POINTS
+    : MAX_ROUTE_RENDER_POINTS;
+  const progressRenderPointBudget = compactActiveRoute
+    ? MAX_COMPACT_ACTIVE_PROGRESS_RENDER_POINTS
+    : MAX_PROGRESS_ROUTE_RENDER_POINTS;
+  const routeCoords = preserveRouteGeometryForRendering(routeCoordsRaw, routeRenderPointBudget);
+  const progressRouteCoords = preserveRouteGeometryForRendering(progressCoordsRaw, progressRenderPointBudget);
 
   const routePointsForBounds = routeCoordsRaw.map(([lng, lat]) => ({ lat, lng }));
 
@@ -8312,6 +8321,7 @@ const MapRenderer = React.memo(function MapRenderer({
         mvumOverlay,
         stitchedRoutePreview,
         campsiteSearchPolygon,
+        surfaceMode,
       }),
     [
       points,
@@ -8354,6 +8364,7 @@ const MapRenderer = React.memo(function MapRenderer({
       mvumOverlay,
       stitchedRoutePreview,
       campsiteSearchPolygon,
+      surfaceMode,
     ],
   );
 

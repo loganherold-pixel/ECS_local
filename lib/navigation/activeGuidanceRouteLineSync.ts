@@ -31,6 +31,8 @@ export interface BuildActiveGuidanceRouteLineSyncInput {
   routeStatusLabel?: string | null;
 }
 
+const ACTIVE_GUIDANCE_ROUTE_FINGERPRINT_MAX_POINTS = 256;
+
 function isValidRouteCoordinate(point: EcsGuidanceCoordinate | null | undefined): point is EcsGuidanceCoordinate {
   return (
     !!point &&
@@ -84,20 +86,48 @@ function normalizeGeometry(
   return geometry;
 }
 
-function hashString(value: string): string {
-  let hash = 5381;
+function updateHashString(hash: number, value: string): number {
+  let nextHash = hash;
   for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
+    nextHash = ((nextHash << 5) + nextHash) ^ value.charCodeAt(index);
+  }
+  return nextHash;
+}
+
+function selectGeometryFingerprintCoordinates(
+  geometry: readonly EcsGuidanceCoordinate[],
+): EcsGuidanceCoordinate[] {
+  if (geometry.length <= ACTIVE_GUIDANCE_ROUTE_FINGERPRINT_MAX_POINTS) return geometry.slice();
+
+  const lastIndex = geometry.length - 1;
+  const selected = new Set<number>([0, lastIndex]);
+  const step = lastIndex / Math.max(ACTIVE_GUIDANCE_ROUTE_FINGERPRINT_MAX_POINTS - 1, 1);
+
+  for (let slot = 1; slot < ACTIVE_GUIDANCE_ROUTE_FINGERPRINT_MAX_POINTS - 1; slot += 1) {
+    selected.add(Math.round(slot * step));
+  }
+
+  return Array.from(selected)
+    .sort((left, right) => left - right)
+    .map((index) => geometry[index])
+    .filter(isValidRouteCoordinate);
+}
+
+function hashGeometryFingerprintCoordinates(geometry: readonly EcsGuidanceCoordinate[]): string {
+  let hash = 5381;
+  for (const point of geometry) {
+    hash = updateHashString(hash, point.lng.toFixed(5));
+    hash = updateHashString(hash, ',');
+    hash = updateHashString(hash, point.lat.toFixed(5));
+    hash = updateHashString(hash, '|');
   }
   return (hash >>> 0).toString(36);
 }
 
 function geometryFingerprint(geometry: readonly EcsGuidanceCoordinate[]): string {
   if (geometry.length < 2) return 'empty';
-  const serialized = geometry
-    .map((point) => `${point.lng.toFixed(5)},${point.lat.toFixed(5)}`)
-    .join('|');
-  return `${geometry.length}-${hashString(serialized)}`;
+  const fingerprintCoordinates = selectGeometryFingerprintCoordinates(geometry);
+  return `${geometry.length}-${fingerprintCoordinates.length}-${hashGeometryFingerprintCoordinates(fingerprintCoordinates)}`;
 }
 
 function cleanLabel(value: string | null | undefined): string | null {

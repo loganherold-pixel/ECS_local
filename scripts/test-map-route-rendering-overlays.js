@@ -186,6 +186,36 @@ assert.strictEqual(
   'GPS/user-location updates should not resend the full route overlay payload.',
 );
 
+const longActiveRoutePoints = Array.from({ length: 5000 }, (_, index) => ({
+  lat: 39.1 + index * 0.00004,
+  lng: -120.1 + Math.sin(index / 18) * 0.004 + index * 0.00003,
+}));
+const longActiveCompactRoute = buildWebPayload({
+  mapboxToken: 'token',
+  surfaceMode: 'compact',
+  routeRenderMode: 'active',
+  points: longActiveRoutePoints,
+  userLocation: longActiveRoutePoints[0],
+  showUserLocation: true,
+});
+assert.ok(
+  longActiveCompactRoute.routeCoords.length <= 512,
+  'Compact active guidance should send a bounded route line to the WebView for long road routes.',
+);
+assert.deepStrictEqual(
+  longActiveCompactRoute.routeCoords[0],
+  [longActiveRoutePoints[0].lng, longActiveRoutePoints[0].lat],
+  'Bounded compact active guidance route rendering should preserve the route start.',
+);
+assert.deepStrictEqual(
+  longActiveCompactRoute.routeCoords[longActiveCompactRoute.routeCoords.length - 1],
+  [
+    longActiveRoutePoints[longActiveRoutePoints.length - 1].lng,
+    longActiveRoutePoints[longActiveRoutePoints.length - 1].lat,
+  ],
+  'Bounded compact active guidance route rendering should preserve the route end.',
+);
+
 const activeProgressRoute = buildWebPayload({
   mapboxToken: 'token',
   routeRenderMode: 'active',

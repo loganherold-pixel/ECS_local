@@ -254,6 +254,17 @@ assert.deepStrictEqual(
 const mapRendererSource = fs.readFileSync(path.join(root, 'components', 'navigate', 'MapRenderer.tsx'), 'utf8');
 const navigateSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8');
 const directionsSource = fs.readFileSync(path.join(root, 'lib', 'activeGuidanceDirections.ts'), 'utf8');
+const routeLineSyncSource = fs.readFileSync(
+  path.join(root, 'lib', 'navigation', 'activeGuidanceRouteLineSync.ts'),
+  'utf8',
+);
+
+assert(
+  routeLineSyncSource.includes('ACTIVE_GUIDANCE_ROUTE_FINGERPRINT_MAX_POINTS') &&
+    routeLineSyncSource.includes('selectGeometryFingerprintCoordinates') &&
+    !routeLineSyncSource.includes(".map((point) => `${point.lng.toFixed(5)},${point.lat.toFixed(5)}`)"),
+  'Active guidance route-line fingerprinting should sample long geometries instead of serializing every coordinate on the Navigate render path.',
+);
 
 assert(
   mapRendererSource.includes('routeLineKey?: string | null') &&

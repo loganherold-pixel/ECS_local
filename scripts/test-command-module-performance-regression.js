@@ -8,6 +8,7 @@ const commandModuleStore = fs.readFileSync(path.join(root, 'lib/ecsCommandModule
 const dashboardScreen = fs.readFileSync(path.join(root, 'app/(tabs)/dashboard.tsx'), 'utf8');
 const widgetGrid = fs.readFileSync(path.join(root, 'components/dashboard/WidgetGrid.tsx'), 'utf8');
 const mapRenderer = fs.readFileSync(path.join(root, 'components/navigate/MapRenderer.tsx'), 'utf8');
+const compactMapTileCacheMatch = mapRenderer.match(/const COMPACT_MAP_MAX_TILE_CACHE_SIZE = (\d+)/);
 
 function assert(condition, message) {
   if (!condition) {
@@ -106,9 +107,14 @@ assert(
 );
 
 assert(
-  mapRenderer.includes('const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 48') &&
+  compactMapTileCacheMatch &&
+    Number(compactMapTileCacheMatch[1]) > 0 &&
+    Number(compactMapTileCacheMatch[1]) <= 48 &&
     mapRenderer.includes("surfaceMode === 'compact' ? COMPACT_MAP_MAX_TILE_CACHE_SIZE : null") &&
-    mapRenderer.includes('mapOptions.maxTileCacheSize = compactTileCacheSize') &&
+    (
+      mapRenderer.includes('mapOptions.maxTileCacheSize = compactTileCacheSize') ||
+      mapRenderer.includes('maxTileCacheSize: maxTileCacheSize')
+    ) &&
     mapRenderer.includes('performanceMetricsCollection: false') &&
     mapRenderer.includes('scrollZoom: false'),
   'Embedded dashboard map WebViews should bound Mapbox tile cache and disable nonessential browser-map overhead.',

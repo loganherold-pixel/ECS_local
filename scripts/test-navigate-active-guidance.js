@@ -321,15 +321,20 @@ assert(
 assert(
   mapRenderer.includes('const MAX_ROUTE_RENDER_POINTS = 2400;') &&
     mapRenderer.includes('const MAX_PROGRESS_ROUTE_RENDER_POINTS = 2400;') &&
+    mapRenderer.includes('const MAX_COMPACT_ACTIVE_ROUTE_RENDER_POINTS = 512;') &&
+    mapRenderer.includes('const MAX_COMPACT_ACTIVE_PROGRESS_RENDER_POINTS = 512;') &&
     mapRenderer.includes('function preserveRouteGeometryForRendering(') &&
-    mapRenderer.includes('preserveRouteGeometryForRendering(routeCoordsRaw, MAX_ROUTE_RENDER_POINTS)') &&
-    mapRenderer.includes('preserveRouteGeometryForRendering(progressCoordsRaw, MAX_PROGRESS_ROUTE_RENDER_POINTS)') &&
+    mapRenderer.includes("const compactActiveRoute = props.surfaceMode === 'compact' && props.routeRenderMode === 'active';") &&
+    mapRenderer.includes('const routeRenderPointBudget = compactActiveRoute') &&
+    mapRenderer.includes('const progressRenderPointBudget = compactActiveRoute') &&
+    mapRenderer.includes('preserveRouteGeometryForRendering(routeCoordsRaw, routeRenderPointBudget)') &&
+    mapRenderer.includes('preserveRouteGeometryForRendering(progressCoordsRaw, progressRenderPointBudget)') &&
     mapRenderer.includes('ROUTE_RENDER_TURN_DELTA_DEGREES') &&
     !mapRenderer.includes('routeCoordsRaw.length > 600') &&
     !mapRenderer.includes('progressCoordsRaw.length > 600') &&
     !mapRenderer.includes('Math.ceil(routeCoordsRaw.length / 600') &&
     !mapRenderer.includes('Math.ceil(progressCoordsRaw.length / 600'),
-  'MapRenderer should preserve high-density snapped route geometry instead of index-sampling active guidance lines off road/trail curves.',
+  'MapRenderer should preserve turn-aware route geometry while bounding compact active guidance payloads before they cross the WebView bridge.',
 );
 
 const fallbackSurface = read('components/navigate/MapFallbackSurface.tsx');
