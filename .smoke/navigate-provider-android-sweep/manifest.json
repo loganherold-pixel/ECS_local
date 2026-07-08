@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "navigate-provider-android-sweep/v1",
+  "generatedAt": "2026-07-08T07:47:19.040Z",
+  "evidenceId": "navigate-provider-android-sweep-20260708074719",
+  "evidenceSource": "existing_android_partial",
+  "status": "blocked_missing_provider_evidence",
+  "productionAccepted": false,
+  "manifestPath": ".smoke\\navigate-provider-android-sweep\\manifest.json",
+  "existingAndroidEvidenceMode": "partial_local_android_reference",
+  "providerBackedCandidateEvidence": {
+    "status": "blocked_missing_real_provider_summary",
+    "artifactPath": null,
+    "providerSources": [],
+    "candidateCounts": {
+      "providerBacked": 0,
+      "visiblePins": 0,
+      "actionVerified": 0
+    },
+    "routeContext": {
+      "activeRouteLineVisible": false,
+      "providerCandidatesAnchoredToRoute": false,
+      "routeLineSource": "missing"
+    },
+    "actions": {
+      "navigateHere": false,
+      "saveCamp": false,
+      "reportUnusable": false,
+      "dismiss": false
+    },
+    "redaction": {
+      "rawProviderPayloadsExcluded": false,
+      "precisePrivateCoordinatesExcluded": false,
+      "secretsExcluded": false
+    },
+    "summarySource": "missing",
+    "sourceSummaryValidation": {
+      "parsed": false,
+      "blockers": [
+        "provider_candidate_summary_missing"
+      ]
+    }
+  },
+  "androidArtifacts": {
+    "candidatePinsActions": [
+      ".smoke\\campops-android-qa\\candidate-viewport-entry.png",
+      ".smoke\\campops-android-qa\\candidate-viewport-navigate-here-action.png",
+      ".smoke\\campops-android-qa\\candidate-viewport-save-camp-action.png",
+      ".smoke\\campops-android-qa\\candidate-viewport-report-unusable-action.png",
+      ".smoke\\campops-android-qa\\phone-candidate-viewport-popup-actions.png"
+    ],
+    "activeRouteLineContext": [
+      ".smoke\\navigate-deep\\04-start-guidance.png",
+      ".smoke\\navigate-deep\\08-minimized-guidance.png",
+      ".smoke\\navigate-deep\\09-active-readiness-reopen.png"
+    ],
+    "searchFreezeStandby": [],
+    "logs": [
+      ".smoke\\campops-android-qa\\candidate-viewport-actions-logcat.txt",
+      ".smoke\\navigate-deep\\final-navigate-log-errors.txt"
+    ]
+  },
+  "runtimeAssertions": {
+    "providerBackedCandidatePinsVisible": false,
+    "candidateActionsCaptured": false,
+    "activeRouteLineContextCaptured": false,
+    "searchFreezeStandbyCovered": false
+  },
+  "codeRegressionCoverage": {
+    "staticContractTest": "scripts\\test-navigate-mobile-emulation-regressions.js",
+    "evidenceValidationTest": "scripts\\test-navigate-provider-android-evidence.mjs",
+    "protectedFiles": [
+      "app\\(tabs)\\navigate.tsx",
+      "components\\navigate\\MapRenderer.tsx",
+      "lib\\useRoadNavigation.ts"
+    ],
+    "protectedBehaviors": [
+      "provider-backed candidate pins and actions must be backed by a sanitized real-provider summary",
+      "active route-line context must be captured with provider candidates visible or explicitly blocked",
+      "mobile destination search freeze/standby must have runtime artifact evidence plus static regression coverage"
+    ]
+  },
+  "blockers": [
+    "provider_candidate_summary_missing",
+    "android_sweep_source_not_real_provider_backed",
+    "mobile_search_freeze_standby_runtime_artifact_missing",
+    "provider_backed_candidate_pins_not_verified",
+    "candidate_actions_not_verified",
+    "active_route_line_context_not_verified",
+    "search_freeze_standby_not_verified"
+  ],
+  "notClaimed": [
+    "production acceptance",
+    "owner acceptance",
+    "provider influence approval",
+    "raw provider payload review",
+    "precise private coordinate capture",
+    "fresh live availability or legal/access authority beyond summarized provider evidence",
+    "provider-backed Android acceptance"
+  ],
+  "notes": [
+    "This manifest is a handoff artifact for Android QA. It does not approve provider influence or production rollout.",
+    "Existing Navigate/CampOps Android smoke artifacts may be referenced as partial local evidence, but they do not satisfy provider-backed validation without a real sanitized provider summary."
+  ]
+}

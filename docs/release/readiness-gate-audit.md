@@ -1,6 +1,6 @@
 # ECS Release Readiness Gate Audit
 
-Date: 2026-07-06
+Date: 2026-07-08
 
 ## Publish Status
 
@@ -29,6 +29,7 @@ This is not public release approval. The executable gates and QA checkoff record
 | `npm run gate:dashboard-production` | Passed with portrait-lock policy evidence | Dashboard widget registry, responsive grid, source-labeled widget states, command-center fallback, top-banner brief integration, and Convoy removal from Dashboard checks pass. `.smoke/dashboard-production-evidence.json` now records Android widget/source-state evidence, command-center selector evidence, production-owner acceptance, and the current Android portrait-lock policy instead of fabricating phone-landscape Dashboard evidence. |
 | `npm run gate:campops-live-readiness:json` | Passed for internal beta; restricted closed-field posture | CampOps implementation and guardrails pass, with provider/source influence held to shadow-only where real provider evidence is not accepted. |
 | `npm run gate:provider-readiness` | Shadow-only acceptable; not approved for influence | The command passes for the current no-influence restricted packet, but provider readiness remains blocked for production influence until real upstream target-region/category evidence is accepted. |
+| `npm run gate:navigate-provider-android-evidence` | Blocked by real provider-backed Android evidence | The Navigate provider sweep harness and blocked manifest path exist at `.smoke/navigate-provider-android-sweep/manifest.json`, but the strict gate must fail until a real sanitized provider summary, Android candidate pin/action captures, active route-line context, search freeze/standby runtime evidence, and logcat slice are supplied. |
 | `npm run gate:privacy-storage` | Approved for guarded closed-field only | Private/local guarded closed-field posture is approved. Broad real trip/debrief rollout remains blocked until encryption-backed storage, durable provider/source caches, telemetry sinks, community publishing, and public-safe export workflows receive separate approval. |
 | `npm run gate:release-approval-overrides` | Passed | Forced AI assist, telemetry, and community publishing enablement fail closed unless exact approval evidence exists. This gate is included in `npm run gate:pre-closed-field-test`. |
 | `npm run gate:closed-field-test-risk-acceptance` | Expired / retired | Historical risk acceptance expired on 2026-06-16. It preserves prior scope/signoff evidence, but no longer waives evidence gates or authorizes new restricted runs. |
@@ -46,6 +47,8 @@ This is not public release approval. The executable gates and QA checkoff record
 | `npm run test:explore-trail-packs-production` | Passed | Explore Trail Packs production regression verifies approved-only discovery, confidence blockers, moderation suppression, permission-certified pending submissions, guarded Navigate handoff, truthful UI states, accepted visual/handoff evidence, and remaining moderation/privacy/owner blockers. |
 | `npm run test:fleet-production` | Passed | Fleet production regression verifies source confidence tiers, payload math, no-photo UI contract, build/loadout zones, active vehicle propagation, readiness/source labeling, Android/profile evidence manifest completeness, and production-owner acceptance. |
 | `npm run test:dashboard-production` | Passed | Dashboard production regression verifies widget registry/grid safeguards, source-state labels, command-center fallback and Convoy removal, top-banner brief integration, detail shell wiring, command-center evidence, portrait-lock rotation policy evidence, and production-owner acceptance. |
+| `npm run test:navigate-provider-android-evidence` | Passed | Navigate provider Android evidence regression verifies the manifest only passes with sanitized real-provider summaries, Android candidate/action captures, active route-line context, search freeze/standby evidence, and no raw provider payloads, secrets, or precise coordinates. |
+| `npm run test:navigate-mobile-emulation-regressions` | Passed | Navigate mobile emulation regression protects the current destination-search freeze/standby path, MapRenderer standby behavior, and active guidance overlay contracts while device performance evidence remains separately required. |
 | `npm run test:pre-closed-field-gate` | Passed | Aggregate pre-closed-field gate coverage verifies `release-approval-overrides` runs in evidence and risk-acceptance modes and is not waived by risk acceptance. |
 | `npm run test:release-approval-overrides` | Passed | Current repo blocks forced AI assist, telemetry, and community publishing enablement unless exact approval evidence exists. |
 | `npx tsc --noEmit --pretty false` | Passed | Direct TypeScript check passed in the current readiness lane. |
@@ -68,7 +71,7 @@ This is not public release approval. The executable gates and QA checkoff record
 - Fleet production now has local Android Fleet profile/setup visual evidence, native build metadata, source/confidence/offline evidence, production-owner acceptance, and accepted regression/preload evidence recorded in `.smoke/fleet-production-evidence.json`. Product, engineering, QA, privacy, and support reviews remain pending for release governance, and the manifest keeps the non-device/non-real-scale-ticket caveats explicit.
 - Dashboard production rollout now has local Android widget visual, live/stale/unavailable source-label, command-center selector, production-owner acceptance, and portrait-lock orientation-policy evidence recorded in `.smoke/dashboard-production-evidence.json`. Role-specific product, engineering, QA, design, privacy, and support reviews remain pending for release governance.
 - Curated production evidence manifests for Dashboard, Explore Trail Packs, and Fleet are tracked under narrow `.gitignore` exceptions; raw `.smoke` screenshots, XML, logs, and generated readiness-result files remain ignored local evidence.
-- Provider-backed Navigate candidate pins/actions and active route-line plus provider-candidate context still need real provider-backed validation before broad rollout.
+- Provider-backed Navigate candidate pins/actions, active route-line plus provider-candidate context, and mobile destination-search freeze/standby runtime evidence now have a repeatable harness and blocked manifest at `.smoke/navigate-provider-android-sweep/manifest.json`; broad rollout remains blocked until the strict gate passes with real sanitized provider-backed Android evidence.
 - Provider influence is not approved beyond accepted shadow-only evidence scope.
 - Broad privacy/storage rollout is not approved for real trip/debrief field data.
 - AI assist, telemetry, and community publishing remain disabled unless separately approved.
@@ -101,7 +104,7 @@ That expired acceptance does not waive public release requirements, provider inf
 
 ## Required Follow-Up
 
-1. Re-run Android/device QA with real provider-backed Navigate candidate pins/actions and active route context.
+1. Re-run Android/device QA with `npm run evidence:navigate-provider-android -- --provider-summary=<sanitized-summary.json> ... --real`, then pass `npm run gate:navigate-provider-android-evidence` with real provider-backed candidate pins/actions, active route context, search freeze/standby runtime evidence, and redacted logs.
 2. Run real provider shadow validation for the target region/category before provider influence.
 3. Record provider-specific coverage, freshness, unknown, stale, and conflict rates from real data.
 4. Complete broad privacy/storage owner approval before real trip/debrief field-data rollout.

@@ -38,6 +38,43 @@ Both devices were unlocked, awake, connected over ADB, and using the same debug/
 | Hardware telemetry fallback | Pass with field caveat | Dashboard showed OBD2 offline / vehicle disconnected and power monitor fallback without crash. No live OBD2, EcoFlow, or Mopeka hardware session was run in this sweep; hardware trust remains gated by field qualification. |
 | Product state safety | Pass | Device B post-cleanup diagnostic showed no active convoy, no participant id, live sharing inactive, clean baseline, setup ready. No raw evidence was added to git. |
 
+## Navigate Provider Android Sweep
+
+Added 2026-07-08 on `codex/post-closed-beta-feature-cycle`.
+
+Purpose: close the remaining Navigate validation gap with a repeatable Android evidence path for provider-backed candidate pins/actions, active route-line context, and the current destination-search freeze/standby behavior.
+
+Tracked manifest path: `.smoke/navigate-provider-android-sweep/manifest.json`
+
+Raw screenshots, XML, logs, gfxinfo, Perfetto traces, and sanitized provider summary inputs remain local unless intentionally summarized into the manifest. Do not commit raw provider payloads, provider secrets, precise private coordinates, raw UI XML containing private trip data, or unsanitized logcat.
+
+Required setup:
+
+- Seed the emulator/device location near the route/provider cell: `npm run qa:android:seed-location -- --lat=<rounded latitude> --lng=<rounded longitude>`.
+- Confirm the app is signed into the QA account and the Navigate tab is visible.
+- Capture a sanitized provider summary JSON from ECS-owned provider-backed records only. It must use `source: "real_provider_sanitized_summary"`, summarized provider/source counts, freshness states, candidate/action counts, active route-line context booleans, and redaction confirmations. It must not include raw provider payloads, provider record ids, secrets, or precise coordinates.
+
+Required Android captures:
+
+- Provider-backed candidate pins visible on Navigate with active route context.
+- Candidate actions exercised: Navigate Here, Save Camp, Report Unusable, and Dismiss.
+- Active route-line context visible while provider candidates remain anchored to the route or explicitly blocked.
+- Destination search focus/open/typing standby capture that shows the map freeze/standby path did not wake unnecessary live map work. Attach gfxinfo or Perfetto when available.
+- Logcat slice for the same run with fatal/redbox/provider-secret patterns absent.
+
+Command sequence:
+
+- `npm run test:navigate-provider-android-evidence`
+- `npm run test:navigate-mobile-emulation-regressions`
+- `npm run evidence:navigate-provider-android -- --provider-summary=<sanitized-summary.json> --candidate-pin-screenshot=<pins.png> --candidate-pin-screenshot=<actions.png> --active-route-line-screenshot=<route-line.png> --search-freeze-artifact=<gfxinfo-or-perfetto.txt> --log=<logcat.txt> --real`
+- `npm run gate:navigate-provider-android-evidence`
+
+Truth rules:
+
+- Running `npm run evidence:navigate-provider-android` without a real sanitized provider summary writes a blocked manifest from the existing `.smoke/navigate-deep` and `.smoke/campops-android-qa` references. That is useful handoff context, not provider-backed acceptance.
+- The strict gate must fail until real provider-backed candidate evidence, Android action captures, active route-line context, search freeze/standby runtime evidence, and logs are all present.
+- The manifest never claims production acceptance, provider influence approval, owner acceptance, live legal/access authority, fresh availability, raw provider payload review, or precise private coordinate capture.
+
 ## Commands
 
 All requested commands passed:

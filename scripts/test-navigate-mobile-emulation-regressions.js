@@ -16,6 +16,10 @@ const mapFallbackSurfaceSource = read('components/navigate/MapFallbackSurface.ts
 const compassRoseSource = read('components/navigate/CompassRose.tsx');
 const roadNavigationSource = read('lib/useRoadNavigation.ts');
 const commandDockSource = read('components/CommandDock.tsx');
+const navigateProviderEvidenceTestSource = read('scripts/test-navigate-provider-android-evidence.mjs');
+const navigateProviderEvidenceRunnerSource = read('scripts/run-navigate-provider-android-evidence.mjs');
+const androidDeviceSweepSource = read('docs/qa/android-beta-device-sweep.md');
+const releaseReadinessAuditSource = read('docs/release/readiness-gate-audit.md');
 const packageJson = JSON.parse(read('package.json'));
 
 assert.ok(
@@ -503,6 +507,52 @@ assert.ok(
 assert.ok(
   packageJson.scripts['test:navigate-mobile-emulation-regressions'],
   'package.json should expose the focused Navigate mobile emulation regression test.',
+);
+assert.ok(
+  packageJson.scripts['test:navigate-provider-android-evidence'] &&
+    packageJson.scripts['evidence:navigate-provider-android'] &&
+    packageJson.scripts['gate:navigate-provider-android-evidence'],
+  'package.json should expose focused Navigate provider-backed Android evidence test, manifest, and strict gate commands.',
+);
+[
+  'provider-summary',
+  'candidate-pin-screenshot',
+  'active-route-line-screenshot',
+  'search-freeze-artifact',
+  '--strict',
+].forEach((fragment) => {
+  assert.ok(
+    navigateProviderEvidenceRunnerSource.includes(fragment),
+    `Navigate provider Android evidence runner should support operator artifact flag: ${fragment}`,
+  );
+});
+[
+  'real_provider_sanitized_summary',
+  'provider_summary_contains_raw_payload_or_secret',
+  'provider_summary_contains_precise_coordinates',
+  'candidate_actions_incomplete',
+].forEach((fragment) => {
+  assert.ok(
+    navigateProviderEvidenceTestSource.includes(fragment),
+    `Navigate provider Android evidence regression should cover truthful provider evidence guard: ${fragment}`,
+  );
+});
+[
+  'Navigate Provider Android Sweep',
+  '.smoke/navigate-provider-android-sweep/manifest.json',
+  'search freeze/standby',
+  'Do not commit raw provider payloads',
+].forEach((fragment) => {
+  assert.ok(
+    androidDeviceSweepSource.includes(fragment),
+    `Android device sweep runbook should document Navigate provider evidence requirement: ${fragment}`,
+  );
+});
+assert.ok(
+  releaseReadinessAuditSource.includes('gate:navigate-provider-android-evidence') &&
+    releaseReadinessAuditSource.includes('.smoke/navigate-provider-android-sweep/manifest.json') &&
+    releaseReadinessAuditSource.includes('broad rollout remains blocked'),
+  'Release audit should tie the remaining Navigate validation gap to the strict provider-backed Android evidence gate.',
 );
 
 console.log('Navigate mobile emulation regression checks passed.');

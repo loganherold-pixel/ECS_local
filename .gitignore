@@ -71,6 +71,8 @@ qa-evidence/
 !.smoke/established-campgrounds-production-evidence.json
 !.smoke/fleet-production-evidence.json
 !.smoke/offline-navigation-production-evidence.json
+!.smoke/navigate-provider-android-sweep/
+!.smoke/navigate-provider-android-sweep/manifest.json
 .expo-export-check/
 .expo-runtime/
 .eas-spawn-tmp/
