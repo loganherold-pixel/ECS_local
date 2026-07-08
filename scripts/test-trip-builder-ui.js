@@ -200,8 +200,20 @@ assertIncludes(screen, 'const selectedTrailheadResupplyAnchorCoordinate = select
 assertIncludes(screen, 'PreparedTripRoutePreview', 'Trip Builder should prepare a route preview context when setup opens.');
 assertIncludes(screen, 'preparedRoutePreviewMatches(preparedTripRoutePreview, selectedRoute)', 'Trip Builder should keep live setup searches tied to the prepared selected route.');
 assertIncludes(screen, 'tripSetupStarted &&', 'Live Trip Builder searches should wait until the user opens setup for the selected route.');
+assertIncludes(screen, "import { runAfterShellInteractions, type ShellInteractionTask } from '../lib/shellInteractionScheduler';", 'Trip Builder should use the shared shell interaction scheduler for non-urgent live lookup work.');
+assertIncludes(screen, 'TRIP_BUILDER_BACKGROUND_LOOKUP_DELAY_MS', 'Trip Builder should give route/setup UI a short settle window before live provider lookups.');
+assertIncludes(screen, 'function scheduleTripBuilderBackgroundLookup(', 'Trip Builder should centralize cancellable post-interaction provider lookup scheduling.');
+assertIncludes(screen, 'const routeContextPrefetchTask = scheduleTripBuilderBackgroundLookup(() => {', 'Trip Builder setup should defer Route Context prefetch until after the setup transition settles.');
+assertIncludes(screen, 'routeContextPrefetchTask.cancel();', 'Trip Builder setup Route Context prefetch should cancel cleanly.');
+assertIncludes(screen, 'const fuelLookupTask = scheduleTripBuilderBackgroundLookup(() => {', 'Trip Builder fuel lookup should defer Mapbox/provider work until after setup renders.');
+assertIncludes(screen, 'fuelLookupTask.cancel();', 'Trip Builder fuel lookup should cancel cleanly when setup state changes.');
+assertIncludes(screen, 'const supplyLookupTask = scheduleTripBuilderBackgroundLookup(() => {', 'Trip Builder grocery lookup should defer Mapbox/provider work until after setup renders.');
+assertIncludes(screen, 'supplyLookupTask.cancel();', 'Trip Builder grocery lookup should cancel cleanly when setup state changes.');
+assertIncludes(screen, 'styles.smartResupplyStaticLoaderDot', 'Trip Builder Smart Resupply loading rows should use a static marker instead of an animated spinner during setup entry.');
+assert(!/smartResupplyLoading === 'fuel'[\s\S]{0,360}<ActivityIndicator/.test(screen), 'Trip Builder fuel lookup loading row should not mount an animated ActivityIndicator during setup entry.');
+assert(!/smartResupplyLoading === 'supplies'[\s\S]{0,360}<ActivityIndicator/.test(screen), 'Trip Builder supply lookup loading row should not mount an animated ActivityIndicator during setup entry.');
 assertIncludes(screen, 'latestSelectedPlanningRouteRef', 'Trip Builder should keep the latest tapped route outside rendered state for immediate mobile open taps.');
-assertIncludes(screen, 'latestSelectedPlanningRouteRef.current = routeForContext;', 'Route selection should synchronously publish the tapped route before async prefetch work.');
+assertIncludes(screen, 'latestSelectedPlanningRouteRef.current = routeForContext;', 'Route selection should synchronously publish the tapped route for immediate mobile open taps.');
 assertIncludes(screen, 'const routeForSetup = selectedRoute ?? latestSelectedPlanningRouteRef.current;', 'Open Trip Builder should use the latest tapped route if React has not rendered selectedRoute yet.');
 assertIncludes(screen, 'buildPreparedTripRoutePreview(routeForSetup)', 'Open Trip Builder should prepare geometry from the route actually used for setup.');
 {
@@ -211,10 +223,8 @@ assertIncludes(screen, 'buildPreparedTripRoutePreview(routeForSetup)', 'Open Tri
   const selectRouteBlock = screen.slice(selectRouteStart, selectRouteEnd);
   assert(
     selectRouteBlock.indexOf('setSelectedRouteId(routeId);') > -1 &&
-      selectRouteBlock.indexOf('routeContextOrchestrator.prefetchForTrailSelection') > -1 &&
-      selectRouteBlock.indexOf('setSelectedRouteId(routeId);') <
-        selectRouteBlock.indexOf('routeContextOrchestrator.prefetchForTrailSelection'),
-    'Route selection should commit visible selected route state before starting Route Context prefetch.',
+      !selectRouteBlock.includes('routeContextOrchestrator.prefetchForTrailSelection'),
+    'Route selection should commit visible selected route state without starting Route Context prefetch.',
   );
 }
 assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_LIMIT', 'Trip Builder should request enough nearby resupply candidates before ranking the closest five.');

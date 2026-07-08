@@ -41,6 +41,7 @@ import {
 } from '../lib/readiness/exploreRouteReadiness';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { hapticMicro } from '../lib/haptics';
+import { runAfterShellInteractions, type ShellInteractionTask } from '../lib/shellInteractionScheduler';
 import { recordBadgeIdentitySafeSignal } from '../lib/expedition/expeditionBadgeStore';
 import {
   buildTripItineraryFromSuggestedRoute,
@@ -169,6 +170,15 @@ const TRIP_BUILDER_ROUTE_LIST_WINDOW_SIZE = 5;
 const TRIP_BUILDER_ROUTE_LIST_BATCHING_PERIOD_MS = 50;
 const TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT = TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT;
 const TRIP_BUILDER_ROUTE_ROW_HEIGHT = 58;
+const TRIP_BUILDER_BACKGROUND_LOOKUP_DELAY_MS = 220;
+const TRIP_BUILDER_BACKGROUND_LOOKUP_MAX_WAIT_MS = 700;
+
+function scheduleTripBuilderBackgroundLookup(callback: () => void): ShellInteractionTask {
+  return runAfterShellInteractions(callback, {
+    delayMs: TRIP_BUILDER_BACKGROUND_LOOKUP_DELAY_MS,
+    maxWaitMs: TRIP_BUILDER_BACKGROUND_LOOKUP_MAX_WAIT_MS,
+  });
+}
 
 function routeContextSupplyModeForTripBuilder(
   preference: TripBuilderInput['smartResupplyPreference'],
@@ -4021,22 +4031,25 @@ export default function ExploreTripBuilderScreen() {
     });
     setRouteContextSnapshot(cachedRouteContext);
     let cancelled = false;
-    void routeContextOrchestrator.prefetchForTrailSelection({
-      trail,
-      origin: liveRouteContextOrigin,
-      selectedSupplyMode,
-      selectedRefuelCandidateId: selectedRouteContextSupplySelection.selectedRefuelCandidateId,
-      selectedResupplyCandidateId: selectedRouteContextSupplySelection.selectedResupplyCandidateId,
-      selectedSupplyCandidateIds: selectedRouteContextSupplySelection.selectedSupplyCandidateIds,
-      featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
-      providerRegistry: routeContextProviderRegistry,
-    })
-      .then((context) => {
-        if (!cancelled) setRouteContextSnapshot(context);
+    const routeContextPrefetchTask = scheduleTripBuilderBackgroundLookup(() => {
+      void routeContextOrchestrator.prefetchForTrailSelection({
+        trail,
+        origin: liveRouteContextOrigin,
+        selectedSupplyMode,
+        selectedRefuelCandidateId: selectedRouteContextSupplySelection.selectedRefuelCandidateId,
+        selectedResupplyCandidateId: selectedRouteContextSupplySelection.selectedResupplyCandidateId,
+        selectedSupplyCandidateIds: selectedRouteContextSupplySelection.selectedSupplyCandidateIds,
+        featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
+        providerRegistry: routeContextProviderRegistry,
       })
-      .catch(() => {});
+        .then((context) => {
+          if (!cancelled) setRouteContextSnapshot(context);
+        })
+        .catch(() => {});
+    });
     return () => {
       cancelled = true;
+      routeContextPrefetchTask.cancel();
     };
   }, [
     liveRouteContextOrigin,
@@ -4633,45 +4646,48 @@ export default function ExploreTripBuilderScreen() {
       return 'fuel';
     });
     setSmartResupplyError(null);
-    void (async () => {
-      try {
-        const token = itinerarySearchToken ?? await getMapboxToken();
-        if (!token) {
-          if (routeContextFuelOptions.length > 0) return;
-          throw new Error('Map search unavailable until Mapbox token is ready.');
+    const fuelLookupTask = scheduleTripBuilderBackgroundLookup(() => {
+      void (async () => {
+        try {
+          const token = itinerarySearchToken ?? await getMapboxToken();
+          if (!token) {
+            if (routeContextFuelOptions.length > 0) return;
+            throw new Error('Map search unavailable until Mapbox token is ready.');
+          }
+          if (!itinerarySearchToken) setItinerarySearchToken(token);
+          const options = await loadSmartResupplyOptions({
+            accessToken: token,
+            sessionToken: roadSearchSessionTokenRef.current,
+            query: SMART_RESUPPLY_FUEL_QUERY,
+            category: 'fuel',
+            routeStart: selectedTrailheadResupplyAnchorCoordinate,
+            approachRoute: liveApproachRoutePoints,
+            origin: liveTripBuilderUserLocation,
+            remoteEntryProgressRatio: selectedRouteRemoteEntryProgressRatio,
+          });
+          if (cancelled || requestId !== smartResupplyFuelRequestRef.current) return;
+          const mergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current);
+          commitSmartResupplyFuelOptions(mergedOptions);
+          if (mergedOptions.length === 0) {
+            setSmartResupplyError('Map search returned no usable fuel candidates along the GPS-to-trailhead approach. Try again, or select No and verify manually before departure.');
+          }
+        } catch (searchError) {
+          if (!cancelled && requestId === smartResupplyFuelRequestRef.current) {
+            const fallbackOptions = mergeSmartResupplyOptions(routeContextFuelOptions, [], smartResupplyFuelOptionsRef.current);
+            commitSmartResupplyFuelOptions(fallbackOptions);
+            setSmartResupplyError(searchError instanceof Error ? searchError.message : 'Fuel search unavailable.');
+          }
+        } finally {
+          if (!cancelled && requestId === smartResupplyFuelRequestRef.current) {
+            setSmartResupplyLoading((current) => current === 'fuel' ? null : current);
+          }
         }
-        if (!itinerarySearchToken) setItinerarySearchToken(token);
-        const options = await loadSmartResupplyOptions({
-          accessToken: token,
-          sessionToken: roadSearchSessionTokenRef.current,
-          query: SMART_RESUPPLY_FUEL_QUERY,
-          category: 'fuel',
-          routeStart: selectedTrailheadResupplyAnchorCoordinate,
-          approachRoute: liveApproachRoutePoints,
-          origin: liveTripBuilderUserLocation,
-          remoteEntryProgressRatio: selectedRouteRemoteEntryProgressRatio,
-        });
-        if (cancelled || requestId !== smartResupplyFuelRequestRef.current) return;
-        const mergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current);
-        commitSmartResupplyFuelOptions(mergedOptions);
-        if (mergedOptions.length === 0) {
-          setSmartResupplyError('Map search returned no usable fuel candidates along the GPS-to-trailhead approach. Try again, or select No and verify manually before departure.');
-        }
-      } catch (searchError) {
-        if (!cancelled && requestId === smartResupplyFuelRequestRef.current) {
-          const fallbackOptions = mergeSmartResupplyOptions(routeContextFuelOptions, [], smartResupplyFuelOptionsRef.current);
-          commitSmartResupplyFuelOptions(fallbackOptions);
-          setSmartResupplyError(searchError instanceof Error ? searchError.message : 'Fuel search unavailable.');
-        }
-      } finally {
-        if (!cancelled && requestId === smartResupplyFuelRequestRef.current) {
-          setSmartResupplyLoading((current) => current === 'fuel' ? null : current);
-        }
-      }
-    })();
+      })();
+    });
 
     return () => {
       cancelled = true;
+      fuelLookupTask.cancel();
     };
   }, [
     commitSmartResupplyFuelOptions,
@@ -4728,46 +4744,49 @@ export default function ExploreTripBuilderScreen() {
       return 'supplies';
     });
     setSmartResupplyError(null);
-    void (async () => {
-      try {
-        const token = itinerarySearchToken ?? await getMapboxToken();
-        if (!token) {
-          if (routeContextSupplyOptions.length > 0) return;
-          throw new Error('Map search unavailable until Mapbox token is ready.');
+    const supplyLookupTask = scheduleTripBuilderBackgroundLookup(() => {
+      void (async () => {
+        try {
+          const token = itinerarySearchToken ?? await getMapboxToken();
+          if (!token) {
+            if (routeContextSupplyOptions.length > 0) return;
+            throw new Error('Map search unavailable until Mapbox token is ready.');
+          }
+          if (!itinerarySearchToken) setItinerarySearchToken(token);
+          const options = await loadSmartResupplyOptions({
+            accessToken: token,
+            sessionToken: roadSearchSessionTokenRef.current,
+            query: SMART_RESUPPLY_SUPPLY_QUERY,
+            category: 'food_supplies',
+            routeStart: selectedTrailheadResupplyAnchorCoordinate ?? selectedPreTrailSupplyAnchorCoordinate,
+            approachRoute: liveApproachRoutePoints,
+            origin: liveTripBuilderUserLocation,
+            fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate,
+            remoteEntryProgressRatio: selectedRouteRemoteEntryProgressRatio,
+          });
+          if (cancelled || requestId !== smartResupplySupplyRequestRef.current) return;
+          const mergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current);
+          commitSmartResupplySupplyOptions(mergedOptions);
+          if (mergedOptions.length === 0) {
+            setSmartResupplyError('Map search returned no usable grocery or supply candidates along the GPS-to-trailhead approach. Try again, or verify manually before departure.');
+          }
+        } catch (searchError) {
+          if (!cancelled && requestId === smartResupplySupplyRequestRef.current) {
+            const fallbackOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, [], smartResupplySupplyOptionsRef.current);
+            commitSmartResupplySupplyOptions(fallbackOptions);
+            setSmartResupplyError(searchError instanceof Error ? searchError.message : 'Supply search unavailable.');
+          }
+        } finally {
+          if (!cancelled && requestId === smartResupplySupplyRequestRef.current) {
+            setSmartResupplyLoading((current) => current === 'supplies' ? null : current);
+          }
         }
-        if (!itinerarySearchToken) setItinerarySearchToken(token);
-        const options = await loadSmartResupplyOptions({
-          accessToken: token,
-          sessionToken: roadSearchSessionTokenRef.current,
-          query: SMART_RESUPPLY_SUPPLY_QUERY,
-          category: 'food_supplies',
-          routeStart: selectedTrailheadResupplyAnchorCoordinate ?? selectedPreTrailSupplyAnchorCoordinate,
-          approachRoute: liveApproachRoutePoints,
-          origin: liveTripBuilderUserLocation,
-          fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate,
-          remoteEntryProgressRatio: selectedRouteRemoteEntryProgressRatio,
-        });
-        if (cancelled || requestId !== smartResupplySupplyRequestRef.current) return;
-        const mergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current);
-        commitSmartResupplySupplyOptions(mergedOptions);
-        if (mergedOptions.length === 0) {
-          setSmartResupplyError('Map search returned no usable grocery or supply candidates along the GPS-to-trailhead approach. Try again, or verify manually before departure.');
-        }
-      } catch (searchError) {
-        if (!cancelled && requestId === smartResupplySupplyRequestRef.current) {
-          const fallbackOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, [], smartResupplySupplyOptionsRef.current);
-          commitSmartResupplySupplyOptions(fallbackOptions);
-          setSmartResupplyError(searchError instanceof Error ? searchError.message : 'Supply search unavailable.');
-        }
-      } finally {
-        if (!cancelled && requestId === smartResupplySupplyRequestRef.current) {
-          setSmartResupplyLoading((current) => current === 'supplies' ? null : current);
-        }
-      }
-    })();
+      })();
+    });
 
     return () => {
       cancelled = true;
+      supplyLookupTask.cancel();
     };
   }, [
     commitSmartResupplySupplyOptions,
@@ -4917,16 +4936,7 @@ export default function ExploreTripBuilderScreen() {
       itinerarySaved: false,
       itineraryEditSession: null,
     };
-    if (routeForContext) {
-      void routeContextOrchestrator.prefetchForTrailSelection({
-        trail: routeForContext as unknown as TripBuilderRouteInput & { id: string },
-        origin: liveRouteContextOrigin,
-        selectedSupplyMode: routeContextSupplyModeForTripBuilder(smartResupplyPreference),
-        featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
-        providerRegistry: routeContextProviderRegistry,
-      }).catch(() => {});
-    }
-  }, [liveRouteContextOrigin, routeContextProviderRegistry, routes, smartResupplyPreference]);
+  }, [routes]);
 
   const handleImportRouteFile = async () => {
     if (routeImportState.status === 'loading') return;
@@ -4960,13 +4970,6 @@ export default function ExploreTripBuilderScreen() {
       }
 
       const importedRoute = buildTripBuilderImportedRoute(fileName, content);
-      void routeContextOrchestrator.prefetchForTrailSelection({
-        trail: importedRoute as unknown as TripBuilderRouteInput & { id: string },
-        origin: liveRouteContextOrigin,
-        selectedSupplyMode: routeContextSupplyModeForTripBuilder(smartResupplyPreference),
-        featureFlags: TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS,
-        providerRegistry: routeContextProviderRegistry,
-      }).catch(() => {});
       latestSelectedPlanningRouteRef.current = importedRoute as unknown as ExpeditionOpportunity;
       setRoutes((current) => {
         const routeMap = new Map<string, TripBuilderRouteInput>();
@@ -5663,7 +5666,7 @@ export default function ExploreTripBuilderScreen() {
                           </Text>
                           {smartResupplyLoading === 'fuel' && smartResupplyFuelOptions.length === 0 ? (
                             <View style={styles.smartResupplyLoadingRow}>
-                              <ActivityIndicator size="small" color={TACTICAL.amber} />
+                              <View style={styles.smartResupplyStaticLoaderDot} />
                               <Text style={styles.smartResupplyPickerHint}>Finding fuel options...</Text>
                             </View>
                           ) : null}
@@ -5706,7 +5709,7 @@ export default function ExploreTripBuilderScreen() {
                               </Text>
                               {smartResupplyLoading === 'supplies' && smartResupplySupplyOptions.length === 0 ? (
                                 <View style={styles.smartResupplyLoadingRow}>
-                                  <ActivityIndicator size="small" color={TACTICAL.amber} />
+                                  <View style={styles.smartResupplyStaticLoaderDot} />
                                   <Text style={styles.smartResupplyPickerHint}>Finding grocery and supply options...</Text>
                                 </View>
                               ) : null}
@@ -6718,6 +6721,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
+  },
+  smartResupplyStaticLoaderDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '70',
+    backgroundColor: TACTICAL.amber + '24',
   },
   smartResupplyOptionScroll: {
     height: SMART_RESUPPLY_OPTION_LIST_HEIGHT,
