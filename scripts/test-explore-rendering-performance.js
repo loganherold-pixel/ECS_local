@@ -234,6 +234,9 @@ assert(firstVisibleWork.estimatedInitialCardRenderCount <= 12);
   'let opportunityLoadTask: ShellInteractionTask | null = runAfterShellInteractions(() => {',
   "delayMs: EXPLORE_ROUTE_DISCOVERY_BATCH_DELAY_MS",
   'cancelShellInteractionTask(opportunityLoadTask);',
+  'let routeCatalogRefreshTask: ShellInteractionTask | null = runAfterShellInteractions(() => {',
+  'void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria).then((nextSnapshot) => {',
+  'cancelShellInteractionTask(routeCatalogRefreshTask);',
   "ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android'",
   "backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel",
   'FlatList',
@@ -249,6 +252,13 @@ assert(firstVisibleWork.estimatedInitialCardRenderCount <= 12);
   'updateCellsBatchingPeriod={EXPLORE_ROUTE_CARD_BATCHING_PERIOD_MS}',
   'removeClippedSubviews',
   'ListFooterComponent={exploreWizardRouteListFooter}',
+  'const EMPTY_HIDDEN_GEM_BASELINE_STATE',
+  'const EMPTY_POPULAR_TRAILS_STATE',
+  'const EMPTY_EXPLORE_MAP_PREVIEW_ROUTE_SETS',
+  'if (!exploreRefinement) return [] as EnrichedDiscoveryRoute[];',
+  'if (!exploreRefinement) return EMPTY_POPULAR_TRAILS_STATE;',
+  'if (!exploreRefinement) {\n        return EMPTY_HIDDEN_GEM_BASELINE_STATE;\n      }',
+  'if (!exploreRefinement) return EMPTY_EXPLORE_MAP_PREVIEW_ROUTE_SETS;',
 ].forEach((needle) => {
   assert(discoverSource.includes(needle), `Explore route list should use virtualized rendering wiring: ${needle}.`);
 });

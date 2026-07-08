@@ -305,6 +305,52 @@ const EXPLORE_MAP_HANDOFF_MAX_ROUTES = 60;
 const EXPLORE_SECTION_CARD_VIEWPORT_HEIGHT = 368;
 const ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android';
 const HIDDEN_GEM_AI_TIMEOUT_MS = 4500;
+const EMPTY_POPULAR_TRAILS_STATE = {
+  routes: [] as PopularTrailEnrichedRoute[],
+  rankedRoutes: [] as PopularTrailRouteWithMetadata[],
+  routeMetadataById: new Map<string, PopularTrailRouteWithMetadata>(),
+  error: null as string | null,
+};
+const EMPTY_HIDDEN_GEM_PIPELINE_DIAGNOSTICS = {
+  rawCandidateCount: 0,
+  dedupedCandidateCount: 0,
+  radiusMatchedCount: 0,
+  tripTypeMatchedCount: 0,
+  hiddenGemEligibilityCount: 0,
+  popularTrailSuppressedCount: 0,
+  qualityThresholdRejectedCount: 0,
+  validationRejectedCount: 0,
+  recoveryCandidateCount: 0,
+  fallbackCandidateCount: 0,
+  finalBaselineEligibleCount: 0,
+  unknownPopularityCount: 0,
+  healthyThreshold: 0,
+  minimumAcceptableThreshold: 0,
+  fallbackStage: 0,
+  fallbackMode: 'strict',
+  effectiveRadiusMiles: 0,
+  criteriaExpanded: false,
+  uiNotice: null,
+} satisfies HiddenGemPipelineDiagnostics;
+const EMPTY_HIDDEN_GEM_BASELINE_STATE = {
+  eligibleItems: [] as HiddenGemResult[],
+  evaluatedCandidates: [] as HiddenGemResult[],
+  pipelineDiagnostics: EMPTY_HIDDEN_GEM_PIPELINE_DIAGNOSTICS,
+  error: null as string | null,
+};
+const EMPTY_EXPLORE_MAP_PREVIEW_ROUTE_SETS = {
+  hiddenGemRoutes: [] as ExpeditionOpportunity[],
+  trailPackRoutes: [] as ExpeditionOpportunity[],
+  favoriteRoutes: [] as ExpeditionOpportunity[],
+  ecsRouteIdeaRoutes: [] as ExpeditionOpportunity[],
+  counts: {
+    hiddenGems: 0,
+    trailPacks: 0,
+    favorites: 0,
+    ecsIdeas: 0,
+    total: 0,
+  },
+};
 
 const DISCOVER_LOCATION_REFRESH_THRESHOLD_MI = 5;
 const TOKEN_STOP_WORDS = new Set([
@@ -1397,24 +1443,33 @@ function DiscoverScreenInner() {
 
   useEffect(() => {
     if (!routeCatalogHasSearchArea) return;
-    const routeCatalogPerformanceRun = explorePerformanceRunRef.current;
-    const startedAtMs = getExplorePerformanceNow();
-    void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria).then((nextSnapshot) => {
-      const endedAtMs = getExplorePerformanceNow();
-      recordExplorePerformancePhase(routeCatalogPerformanceRun, 'route_catalog_query', {
-        startedAtMs,
-        endedAtMs,
-        metadata: {
-          status: nextSnapshot.status,
-          source: nextSnapshot.source,
-          searchMeta: nextSnapshot.searchMeta,
-          error: nextSnapshot.error,
-        },
+    let routeCatalogRefreshTask: ShellInteractionTask | null = runAfterShellInteractions(() => {
+      const routeCatalogPerformanceRun = explorePerformanceRunRef.current;
+      const startedAtMs = getExplorePerformanceNow();
+      void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria).then((nextSnapshot) => {
+        const endedAtMs = getExplorePerformanceNow();
+        recordExplorePerformancePhase(routeCatalogPerformanceRun, 'route_catalog_query', {
+          startedAtMs,
+          endedAtMs,
+          metadata: {
+            status: nextSnapshot.status,
+            source: nextSnapshot.source,
+            searchMeta: nextSnapshot.searchMeta,
+            error: nextSnapshot.error,
+          },
+        });
+        recordExplorePerformanceCount(routeCatalogPerformanceRun, {
+          routesEvaluated: nextSnapshot.searchMeta?.candidateCount ?? nextSnapshot.trailPacks.length,
+        });
       });
-      recordExplorePerformanceCount(routeCatalogPerformanceRun, {
-        routesEvaluated: nextSnapshot.searchMeta?.candidateCount ?? nextSnapshot.trailPacks.length,
-      });
+    }, {
+      delayMs: EXPLORE_ROUTE_DISCOVERY_BATCH_DELAY_MS,
+      maxWaitMs: 480,
     });
+    return () => {
+      cancelShellInteractionTask(routeCatalogRefreshTask);
+      routeCatalogRefreshTask = null;
+    };
   }, [routeCatalogHasSearchArea, routeCatalogSearchCriteria]);
 
   // ── Unified drivable trail feed ───────────────────────────
@@ -2419,18 +2474,20 @@ function DiscoverScreenInner() {
   );
 
   const enrichedKnown = useMemo<EnrichedDiscoveryRoute[]>(() => {
+    if (!exploreRefinement) return [] as EnrichedDiscoveryRoute[];
     if (refinedCanonicalRoutes.length === 0) return [];
     return enrichKnownRoutes(refinedCanonicalRoutes, vehicleProfile, compatResults);
-  }, [refinedCanonicalRoutes, vehicleProfile, compatResults]);
+  }, [exploreRefinement, refinedCanonicalRoutes, vehicleProfile, compatResults]);
 
   const enrichedKnownMap = useMemo(
     () => new Map(enrichedKnown.map((route) => [route.id, route])),
     [enrichedKnown],
   );
   const enrichedHiddenGemSourceRoutes = useMemo<EnrichedDiscoveryRoute[]>(() => {
+    if (!exploreRefinement) return [] as EnrichedDiscoveryRoute[];
     if (refinedCanonicalRoutes.length === 0) return [];
     return enrichKnownRoutes(refinedCanonicalRoutes, vehicleProfile, compatResults);
-  }, [refinedCanonicalRoutes, vehicleProfile, compatResults]);
+  }, [exploreRefinement, refinedCanonicalRoutes, vehicleProfile, compatResults]);
 
   const enrichedHiddenGemSourceMap = useMemo(
     () => new Map(enrichedHiddenGemSourceRoutes.map((route) => [route.id, route])),
@@ -2439,13 +2496,9 @@ function DiscoverScreenInner() {
 
   const popularTrailsState = useMemo(() => {
     try {
+      if (!exploreRefinement) return EMPTY_POPULAR_TRAILS_STATE;
       if (refinedCanonicalRoutes.length === 0) {
-        return {
-          routes: [] as PopularTrailEnrichedRoute[],
-          rankedRoutes: [] as PopularTrailRouteWithMetadata[],
-          routeMetadataById: new Map<string, PopularTrailRouteWithMetadata>(),
-          error: null as string | null,
-        };
+        return EMPTY_POPULAR_TRAILS_STATE;
       }
 
       const rankedRoutes = getPopularTrailRecommendations(
@@ -2492,6 +2545,7 @@ function DiscoverScreenInner() {
       };
     }
   }, [
+    exploreRefinement,
     refinedCanonicalRoutes,
     compatResults,
     distanceRadius,
@@ -2509,6 +2563,9 @@ function DiscoverScreenInner() {
 
   const hiddenGemBaselineState = useMemo(() => {
     try {
+      if (!exploreRefinement) {
+        return EMPTY_HIDDEN_GEM_BASELINE_STATE;
+      }
       const recommendationSet = getHiddenGemRecommendations(
         refinedCanonicalRoutes,
         compatResults,
@@ -2558,6 +2615,7 @@ function DiscoverScreenInner() {
       };
     }
   }, [
+    exploreRefinement,
     refinedCanonicalRoutes,
     compatResults,
     distanceRadius,
@@ -2871,6 +2929,7 @@ function DiscoverScreenInner() {
   );
 
   const exploreMapPreviewRouteSets = useMemo(() => {
+    if (!exploreRefinement) return EMPTY_EXPLORE_MAP_PREVIEW_ROUTE_SETS;
     const startedAtMs = getExplorePerformanceNow();
     const hiddenGemRoutes = hiddenGemExploreOrchestration.items
       .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
@@ -2925,6 +2984,7 @@ function DiscoverScreenInner() {
       },
     };
   }, [
+    exploreRefinement,
     explorePerformanceRun,
     favoritesSnapshot.favorites,
     hiddenGemExploreOrchestration.items,

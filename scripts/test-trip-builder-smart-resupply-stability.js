@@ -230,5 +230,45 @@ assertIncludes(
   'if (option.routeDeviationMiles != null) {',
   'Smart Resupply route-awareness filtering should inspect known route deviation before accepting fallback candidates.',
 );
+assertIncludes(
+  screen,
+  'const TRIP_BUILDER_RESULT_INITIAL_RENDER_COUNT = 2;',
+  'Trip Plan result sheet should avoid rendering the heavy confidence panel in the same native batch as the header cards.',
+);
+assertIncludes(
+  screen,
+  'const TRIP_BUILDER_RESULT_BATCH_SIZE = 1;',
+  'Trip Plan result sheet should render one additional section per batch to reduce Android draw-command spikes while scrolling.',
+);
+assertIncludes(
+  screen,
+  'const TRIP_BUILDER_RESULT_WINDOW_SIZE = 3;',
+  'Trip Plan result sheet should keep a small Android window so offscreen confidence/review sections do not stay mounted under the dock.',
+);
+assertIncludes(
+  screen,
+  'const TRIP_BUILDER_RESULT_BATCHING_PERIOD_MS = 80;',
+  'Trip Plan result sheet should space section batches enough for the UI thread to recover between draw passes.',
+);
+assertIncludes(
+  screen,
+  'const tripBuilderResultModalContainerStyle = useMemo',
+  'Trip Plan result sheet should reserve dock-aware viewport space before content reaches the fixed CommandDock.',
+);
+assertIncludes(
+  screen,
+  'paddingBottom: bottomClearance',
+  'Trip Plan modal viewport should end above the CommandDock instead of relying only on scroll content padding.',
+);
+assertIncludes(
+  screen,
+  'style={[styles.modalContainer, tripBuilderResultModalContainerStyle]}',
+  'Trip Plan modal container should apply the dock-aware viewport padding on mobile.',
+);
+assertIncludes(
+  screen,
+  '{!planModalVisible ? (\n                      <View style={styles.tripSetupFooter}>',
+  'Trip Setup footer should unmount while the Trip Plan overlay is visible so it cannot paint behind the mobile result sheet.',
+);
 
 console.log('Trip Builder smart resupply stability checks passed.');

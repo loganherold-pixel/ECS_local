@@ -173,10 +173,10 @@ const TRIP_BUILDER_ROUTE_ROW_HEIGHT = 58;
 const TRIP_BUILDER_BACKGROUND_LOOKUP_DELAY_MS = 220;
 const TRIP_BUILDER_BACKGROUND_LOOKUP_MAX_WAIT_MS = 700;
 const TRIP_BUILDER_RESULT_BOTTOM_CLEARANCE = 232;
-const TRIP_BUILDER_RESULT_INITIAL_RENDER_COUNT = 3;
-const TRIP_BUILDER_RESULT_BATCH_SIZE = 2;
-const TRIP_BUILDER_RESULT_WINDOW_SIZE = 5;
-const TRIP_BUILDER_RESULT_BATCHING_PERIOD_MS = 40;
+const TRIP_BUILDER_RESULT_INITIAL_RENDER_COUNT = 2;
+const TRIP_BUILDER_RESULT_BATCH_SIZE = 1;
+const TRIP_BUILDER_RESULT_WINDOW_SIZE = 3;
+const TRIP_BUILDER_RESULT_BATCHING_PERIOD_MS = 80;
 const TRIP_BUILDER_ITINERARY_REVIEW_ITEM_PREVIEW_COUNT = 4;
 
 function scheduleTripBuilderBackgroundLookup(callback: () => void): ShellInteractionTask {
@@ -4509,6 +4509,12 @@ export default function ExploreTripBuilderScreen() {
     }),
     [bottomClearance],
   );
+  const tripBuilderResultModalContainerStyle = useMemo(
+    () => ({
+      paddingBottom: bottomClearance,
+    }),
+    [bottomClearance],
+  );
 
   useEffect(() => {
     const previousCounts = tripSetupReferencePinCountsRef.current;
@@ -6328,20 +6334,22 @@ export default function ExploreTripBuilderScreen() {
 
                     </ScrollView>
 
-                    <View style={styles.tripSetupFooter}>
-                      <TouchableOpacity
-                        style={[styles.primaryButton, (!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady) && styles.primaryButtonDisabled]}
-                        activeOpacity={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady ? 1 : 0.84}
-                        disabled={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady}
-                        onPress={handleGenerate}
-                        accessibilityRole="button"
-                        accessibilityLabel="Build Trip Plan"
-                        testID="trip-builder-generate"
-                      >
-                        {generating ? <ActivityIndicator size="small" color="#081014" /> : null}
-                        <Text style={styles.primaryButtonText}>Build Trip Plan</Text>
-                      </TouchableOpacity>
-                    </View>
+                    {!planModalVisible ? (
+                      <View style={styles.tripSetupFooter}>
+                        <TouchableOpacity
+                          style={[styles.primaryButton, (!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady) && styles.primaryButtonDisabled]}
+                          activeOpacity={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady ? 1 : 0.84}
+                          disabled={!selectedRoute || generating || !smartResupplyReady || !bailoutPlanReady || !campPlanReady}
+                          onPress={handleGenerate}
+                          accessibilityRole="button"
+                          accessibilityLabel="Build Trip Plan"
+                          testID="trip-builder-generate"
+                        >
+                          {generating ? <ActivityIndicator size="small" color="#081014" /> : null}
+                          <Text style={styles.primaryButtonText}>Build Trip Plan</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
                   </View>
                 ) : null}
 
@@ -6359,7 +6367,7 @@ export default function ExploreTripBuilderScreen() {
           {plan && planModalVisible ? (
             <View style={styles.planOverlay} testID="trip-builder-plan-overlay">
               <View pointerEvents="none" style={styles.planOverlayBackdrop} />
-              <View style={styles.modalContainer}>
+              <View style={[styles.modalContainer, tripBuilderResultModalContainerStyle]}>
               <View style={styles.modalHeader}>
                 <View style={styles.modalHeaderCopy}>
                   <Text style={styles.eyebrow}>TRIP BUILDER</Text>
