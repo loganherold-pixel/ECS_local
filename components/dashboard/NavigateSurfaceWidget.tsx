@@ -601,6 +601,7 @@ export default function NavigateSurfaceWidget({ data: _data, options }: Props) {
     routePoints,
     progressPoints,
   } = useNavigateSurfaceState(options);
+  const miniMapMotionPriority: MapMotionPriority = motionPriority === 'hot' ? 'warm' : motionPriority;
 
   return (
     <View style={styles.surface}>
@@ -614,7 +615,7 @@ export default function NavigateSurfaceWidget({ data: _data, options }: Props) {
         headingDeg={routeSession.headingDeg}
         cameraMode={cameraMode}
         cameraCommand={activeGuidanceCameraCommand}
-        motionPriority={motionPriority}
+        motionPriority={miniMapMotionPriority}
         routeSession={routeSession}
         routeRenderMode={routeSession.lifecycle === 'active' ? 'active' : routeSession.lifecycle === 'preview' ? 'preview' : 'idle'}
         surfaceMode="compact"
@@ -914,6 +915,7 @@ function NavigateMiniMap({
         routeColor="#C48A2C"
         progressColor="#F7D67A"
         surfaceMode={surfaceMode}
+        standbyWakeDisabled={guidanceVariant !== 'command3d'}
         style={resolvedMapStyle}
       />
 

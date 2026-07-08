@@ -141,13 +141,22 @@ assert(navigateSurface.includes("const DEFAULT_COMMAND_3D_MAP_VIEW: Command3DMap
 assert(navigateSurface.includes("createPersistedKeyValueCache('ecs_dashboard_map_preferences')"), 'Dashboard command map should persist the user-selected presentation.');
 assert(navigateSurface.includes('command3DMapViewPreference.waitForHydration()'), 'Dashboard command map should restore persisted native map presentation after hydration.');
 assert(mapRenderer.includes('styleUrl: getMapStyleUrl(props.mapStyle || DEFAULT_MAP_STYLE)'), 'MapRenderer payload should include the selected map style so TAC/DAY/SAT changes reach the WebView.');
-assert(mapRenderer.includes("ensureLineLayer('route-halo-layer', 'route-source'"), 'Active guidance route lines need a contrast halo so the path remains visible on DAY and SAT map views.');
+assert(
+  mapRenderer.includes('mapLayerRegistry.ensure(ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID') &&
+    mapRenderer.includes('routeLineLayerDefinition(ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID, ACTIVE_GUIDANCE_ROUTE_SOURCE_ID') &&
+    mapRenderer.includes("'rgba(8,14,18,0.88)'"),
+  'Active guidance route lines need a contrast halo so the path remains visible on DAY and SAT map views.',
+);
 assert(
   mapRenderer.includes('function promoteRouteGuidanceLayers()') &&
-    mapRenderer.indexOf("'route-halo-layer'") < mapRenderer.indexOf("'route-layer'"),
+    mapRenderer.indexOf('ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID') < mapRenderer.indexOf('ACTIVE_GUIDANCE_ROUTE_LAYER_ID'),
   'Route halo must be promoted with the route layer after style or overlay changes.',
 );
-assert(mapRenderer.includes("map.setPaintProperty('route-halo-layer', 'line-width'"), 'Route halo styling should update with active/preview render mode changes.');
+assert(
+  mapRenderer.includes('[ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID, 10.5, 0.72]') &&
+    mapRenderer.includes("map.setPaintProperty(layerConfig[0], 'line-width'"),
+  'Route halo styling should update with active/preview render mode changes.',
+);
 assert(navigateSurface.includes('const [followLocked, setFollowLocked] = useState(true);'), '3D follow map must start locked to live GPS follow.');
 assert(navigateSurface.includes('if (!selected || !cameraCenter || !followLocked) return null;'), 'Manual map interaction must suspend automatic follow camera commands.');
 assert(navigateSurface.includes('shouldFollowUser={followLocked && !!cameraCenter}'), 'Manual map interaction must also suppress legacy follow-user fallback camera movement.');

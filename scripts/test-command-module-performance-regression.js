@@ -128,6 +128,18 @@ assert(
 );
 
 assert(
+  navigateSurfaceWidget.includes("const miniMapMotionPriority: MapMotionPriority = motionPriority === 'hot' ? 'warm' : motionPriority;") &&
+    navigateSurfaceWidget.includes('motionPriority={miniMapMotionPriority}') &&
+    navigateSurfaceWidget.includes("standbyWakeDisabled={guidanceVariant !== 'command3d'}") &&
+    mapRenderer.includes('const compactRouteGeometryStandbyEligible =') &&
+    mapRenderer.includes("routeRenderMode === 'active'") &&
+    mapRenderer.includes('interactive === false') &&
+    mapRenderer.includes('standbyMapEligible || compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible') &&
+    mapRenderer.includes('standbyMapActive && (compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible)'),
+  'Read-only dashboard active guidance maps should render route standby instead of mounting a second live WebView during Navigate handoff.',
+);
+
+assert(
   dashboardScreen.includes('const normalizedAssignedWidgets = useMemo(') &&
     dashboardScreen.includes('assignedWidgets={normalizedAssignedWidgets}') &&
     dashboardScreen.includes('const assignedWidgets = useMemo(() => slots.map(s => s.widgetType), [slots]);'),

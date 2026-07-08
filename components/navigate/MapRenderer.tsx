@@ -8104,17 +8104,49 @@ const MapRenderer = React.memo(function MapRenderer({
     !dispersedRouteBuild?.enabled &&
     !establishedCampsites?.enabled &&
     !campsiteSearchPolygon?.coordinates?.length;
+  const compactRouteGeometryStandbyEligible =
+    shouldLoadMap &&
+    isCompactSurface &&
+    motionPriority === 'warm' &&
+    interactive === false &&
+    (
+      routeRenderMode === 'preview' ||
+      routeRenderMode === 'active' ||
+      routeRenderMode === 'selected' ||
+      routeRenderMode === 'completed'
+    ) &&
+    points.length > 1 &&
+    !webReady &&
+    !hasEverReachedReadyRef.current &&
+    !webRendererCrashBlocked &&
+    !standbyMapDisabled &&
+    !routeBuilderActive &&
+    routeBuilderSegments.length === 0 &&
+    routeBuilderAnchors.length === 0 &&
+    !showCrosshair &&
+    !dispersedRouteBuild?.enabled &&
+    !establishedCampsites?.enabled &&
+    !campsiteSearchPolygon?.coordinates?.length;
   const standbyMapActive =
-    (standbyMapEligible || compactRoutePreviewStandbyEligible) && !standbyWakeRequested;
+    (standbyMapEligible || compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible) && !standbyWakeRequested;
 
   useEffect(() => {
     if (
-      (standbyWakeDisabled || (!standbyMapEligible && !compactRoutePreviewStandbyEligible)) &&
+      (
+        standbyWakeDisabled ||
+        (!standbyMapEligible && !compactRoutePreviewStandbyEligible && !compactRouteGeometryStandbyEligible)
+      ) &&
       standbyWakeRequested
     ) {
       setStandbyWakeRequested(false);
     }
-  }, [compactRoutePreviewStandbyEligible, standbyMapEligible, standbyWakeDisabled, standbyWakeRequested]);
+  }, [
+    compactRouteGeometryStandbyEligible,
+    compactRoutePreviewStandbyEligible,
+    standbyMapEligible,
+    standbyWakeDisabled,
+    standbyWakeRequested,
+  ]);
 
   useEffect(() => {
     onReadyStateChange?.(
@@ -8447,7 +8479,7 @@ const MapRenderer = React.memo(function MapRenderer({
   const fallbackVisible =
     hasFallbackGeometry &&
     (
-      (standbyMapActive && compactRoutePreviewStandbyEligible) ||
+      (standbyMapActive && (compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible)) ||
       (!standbyMapActive &&
         (!shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current))))
     );
