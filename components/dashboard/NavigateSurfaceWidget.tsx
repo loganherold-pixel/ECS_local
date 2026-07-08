@@ -32,6 +32,7 @@ const COMMAND_3D_FREE_DRIVE_ZOOM = 16.2;
 const COMMAND_3D_FOLLOW_PITCH = 70;
 const COMMAND_3D_ACTIVE_FOLLOW_OFFSET: [number, number] = [0, 72];
 const COMMAND_3D_FREE_DRIVE_OFFSET: [number, number] = [0, 56];
+const COMMAND_3D_LIVE_MAP_DEFER_MS = 2400;
 const COMMAND_3D_MAP_VIEW_STORAGE_KEY = 'ecs_dashboard_command_3d_map_view';
 
 type RouteRenderMode = 'idle' | 'preview' | 'active' | 'completed' | 'selected';
@@ -78,6 +79,28 @@ function isCommand3DMapViewKey(value: string | null | undefined): value is Comma
 function readPersistedCommand3DMapView(): Command3DMapViewKey {
   const stored = command3DMapViewPreference.get(COMMAND_3D_MAP_VIEW_STORAGE_KEY);
   return isCommand3DMapViewKey(stored) ? stored : DEFAULT_COMMAND_3D_MAP_VIEW;
+}
+
+function useDeferredCommandMapLiveMode(selected: boolean): boolean {
+  const [liveMapReady, setLiveMapReady] = useState(false);
+
+  useEffect(() => {
+    if (!selected) {
+      setLiveMapReady(false);
+      return undefined;
+    }
+
+    setLiveMapReady(false);
+    const timer = setTimeout(() => {
+      setLiveMapReady(true);
+    }, COMMAND_3D_LIVE_MAP_DEFER_MS);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [selected]);
+
+  return selected && liveMapReady;
 }
 
 function formatRemainingDistance(meters: number | null): string | null {
@@ -668,6 +691,7 @@ export function Mini3DFollowMap({
   options?: WidgetRenderOptions;
   selected?: boolean;
 }) {
+  const commandMapLiveReady = useDeferredCommandMapLiveMode(selected);
   const {
     mapToken,
     routeSession,
@@ -801,6 +825,15 @@ export function Mini3DFollowMap({
     : routePoints.length > 1
       ? 'route_overview'
       : undefined;
+  const commandMapMotionState = resolveMapSurfaceMotionState({
+    surface: 'dashboard',
+    isFocused: selected,
+    selected,
+    hasActiveGuidance,
+  });
+  const commandMapMotionPriority: MapMotionPriority = commandMapLiveReady
+    ? commandMapMotionState.motionPriority
+    : 'warm';
 
   return (
     <View style={styles.commandMapSurface}>
@@ -812,19 +845,16 @@ export function Mini3DFollowMap({
         shouldFollowUser={followLocked && !!cameraCenter}
         gpsLocation={displayGpsLocation}
         headingDeg={cameraBearing}
-        cameraMode={cameraMode}
-        cameraCommand={cameraCommand}
+        cameraMode={commandMapLiveReady ? cameraMode : undefined}
+        cameraCommand={commandMapLiveReady ? cameraCommand : null}
         cameraCommandTrigger={recenterRequestId}
-        motionPriority={resolveMapSurfaceMotionState({
-          surface: 'dashboard',
-          isFocused: selected,
-          selected,
-          hasActiveGuidance,
-        }).motionPriority}
+        motionPriority={commandMapMotionPriority}
         routeSession={routeSession}
         routeRenderMode={routeRenderMode}
         mapStyleKey={activeMapView.mapStyle}
         guidanceVariant="command3d"
+        mapInteractive={commandMapLiveReady}
+        liveMapEnabled={commandMapLiveReady}
         onRecenter={handleRecenter}
         onUserDrag={handleUserDrag}
         frameStyle={styles.commandMapFrame}
@@ -862,6 +892,8 @@ function NavigateMiniMap({
   routeRenderMode = 'idle',
   mapStyleKey = 'ecs',
   guidanceVariant = 'standard',
+  mapInteractive = guidanceVariant === 'command3d',
+  liveMapEnabled = true,
   surfaceMode = 'full',
   onRecenter,
   onUserDrag,
@@ -883,6 +915,8 @@ function NavigateMiniMap({
   routeRenderMode?: RouteRenderMode;
   mapStyleKey?: MapStyleKey;
   guidanceVariant?: 'standard' | 'command3d';
+  mapInteractive?: boolean;
+  liveMapEnabled?: boolean;
   surfaceMode?: 'full' | 'compact';
   onRecenter?: () => void;
   onUserDrag?: () => void;
@@ -904,7 +938,8 @@ function NavigateMiniMap({
         userLocation={gpsLocation}
         vehicleHeading={headingDeg}
         motionPriority={motionPriority}
-        interactive={guidanceVariant === 'command3d'}
+        interactive={mapInteractive}
+        liveMapDisabled={!liveMapEnabled}
         isLoading={!mapToken}
         hasToken={!!mapToken}
         cameraMode={cameraMode}
@@ -915,7 +950,7 @@ function NavigateMiniMap({
         routeColor="#C48A2C"
         progressColor="#F7D67A"
         surfaceMode={surfaceMode}
-        standbyWakeDisabled={guidanceVariant !== 'command3d'}
+        standbyWakeDisabled={guidanceVariant !== 'command3d' || !mapInteractive}
         style={resolvedMapStyle}
       />
 

@@ -330,7 +330,7 @@ assert.ok(
 );
 assert.ok(
   mapRendererSource.includes('const shouldRenderFallbackSurface = fallbackVisible && motionPriority !== \'cold\';') &&
-    mapRendererSource.includes('const shouldRenderPlaceholder = !standbyMapActive && motionPriority !== \'cold\';') &&
+    mapRendererSource.includes('const shouldRenderPlaceholder = !liveMapDisabled && !standbyMapActive && motionPriority !== \'cold\';') &&
     mapRendererSource.includes('const showBootOverlay =') &&
     mapRendererSource.includes('renderLiveWebView &&') &&
     mapRendererSource.includes('{shouldRenderFallbackSurface ? (') &&

@@ -130,13 +130,27 @@ assert(
 assert(
   navigateSurfaceWidget.includes("const miniMapMotionPriority: MapMotionPriority = motionPriority === 'hot' ? 'warm' : motionPriority;") &&
     navigateSurfaceWidget.includes('motionPriority={miniMapMotionPriority}') &&
-    navigateSurfaceWidget.includes("standbyWakeDisabled={guidanceVariant !== 'command3d'}") &&
+    navigateSurfaceWidget.includes("standbyWakeDisabled={guidanceVariant !== 'command3d' || !mapInteractive}") &&
     mapRenderer.includes('const compactRouteGeometryStandbyEligible =') &&
     mapRenderer.includes("routeRenderMode === 'active'") &&
     mapRenderer.includes('interactive === false') &&
     mapRenderer.includes('standbyMapEligible || compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible') &&
     mapRenderer.includes('standbyMapActive && (compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible)'),
   'Read-only dashboard active guidance maps should render route standby instead of mounting a second live WebView during Navigate handoff.',
+);
+
+assert(
+  navigateSurfaceWidget.includes('const COMMAND_3D_LIVE_MAP_DEFER_MS =') &&
+    navigateSurfaceWidget.includes('function useDeferredCommandMapLiveMode(selected: boolean)') &&
+    navigateSurfaceWidget.includes('const commandMapLiveReady = useDeferredCommandMapLiveMode(selected);') &&
+    navigateSurfaceWidget.includes('mapInteractive={commandMapLiveReady}') &&
+    navigateSurfaceWidget.includes('liveMapEnabled={commandMapLiveReady}') &&
+    navigateSurfaceWidget.includes("standbyWakeDisabled={guidanceVariant !== 'command3d' || !mapInteractive}") &&
+    mapRenderer.includes('liveMapDisabled?: boolean;') &&
+    mapRenderer.includes('liveMapDisabled = false') &&
+    mapRenderer.includes('!liveMapDisabled') &&
+    mapRenderer.includes('liveMapDisabled || !shouldLoadMap'),
+  'Selected dashboard 3D command map should defer live WebView activation briefly so dashboard startup and Navigate handoff can settle first.',
 );
 
 assert(

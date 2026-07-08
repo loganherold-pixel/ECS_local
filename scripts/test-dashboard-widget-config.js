@@ -1232,7 +1232,8 @@ assert.ok(
     navigateSurfaceSource.includes('accessibilityLabel="Reset map to current location"') &&
     navigateSurfaceSource.includes('setRecenterRequestId((value) => value + 1)') &&
     navigateSurfaceSource.includes('cameraCommandTrigger={recenterRequestId}') &&
-    navigateSurfaceSource.includes("interactive={guidanceVariant === 'command3d'}") &&
+    navigateSurfaceSource.includes("mapInteractive = guidanceVariant === 'command3d'") &&
+    navigateSurfaceSource.includes('interactive={mapInteractive}') &&
     navigateSurfaceSource.includes('styles.compassButton'),
   'Navigation Command 3D map must include a bottom-right compass rose button that triggers recenter/follow camera reset while preserving 3D map gestures.',
 );

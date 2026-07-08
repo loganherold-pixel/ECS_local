@@ -387,6 +387,7 @@ export type MapRendererProps = {
   showTrailEntryEndpointMarker?: boolean;
   mapStyle?: MapStyleKey;
   mapboxToken: string;
+  liveMapDisabled?: boolean;
   showUserLocation?: boolean;
   followUser?: boolean;
   userLocation?: LatLng | null;
@@ -7944,6 +7945,7 @@ const MapRenderer = React.memo(function MapRenderer({
   showTrailEntryEndpointMarker = false,
   mapStyle = DEFAULT_MAP_STYLE,
   mapboxToken,
+  liveMapDisabled = false,
   showUserLocation = false,
   followUser = false,
   userLocation = null,
@@ -8481,15 +8483,16 @@ const MapRenderer = React.memo(function MapRenderer({
     (
       (standbyMapActive && (compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible)) ||
       (!standbyMapActive &&
-        (!shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current))))
+        (liveMapDisabled || !shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current))))
     );
   const renderLiveWebView =
     shouldLoadMap &&
+    !liveMapDisabled &&
     !standbyMapActive &&
     motionPriority !== 'cold' &&
     !webRendererCrashBlocked;
   const shouldRenderFallbackSurface = fallbackVisible && motionPriority !== 'cold';
-  const shouldRenderPlaceholder = !standbyMapActive && motionPriority !== 'cold';
+  const shouldRenderPlaceholder = !liveMapDisabled && !standbyMapActive && motionPriority !== 'cold';
   const dispersedCampingEligibilityRef = useRef(dispersedCampingEligibility);
   dispersedCampingEligibilityRef.current = dispersedCampingEligibility;
   const dispersedRouteBuildRef = useRef(dispersedRouteBuild);
