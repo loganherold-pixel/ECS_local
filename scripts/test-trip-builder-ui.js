@@ -160,6 +160,14 @@ assert(
   /<ScrollView[\s\S]*?testID="trip-builder-results"[\s\S]*?removeClippedSubviews/.test(screen),
   'Trip Builder result ScrollView should clip offscreen review content on Android instead of drawing the full generated plan behind the dock.',
 );
+const resultScrollSource = screen.match(/<ScrollView[\s\S]*?testID="trip-builder-results"[\s\S]*?<\/ScrollView>/)?.[0] ?? '';
+assert(resultScrollSource, 'Trip Builder result ScrollView source should be inspectable.');
+assertIncludes(resultScrollSource, 'styles.resultHeaderCard', 'Trip Builder result ScrollView should keep the plan header as a bounded direct child.');
+assertIncludes(screen, 'backgroundColor: ECS.bgPanel', 'Trip Builder result ScrollView should provide an opaque modal surface behind clipped section children.');
+assert(
+  !resultScrollSource.includes('<View style={styles.sectionCard}>'),
+  'Trip Builder result ScrollView should not wrap the entire generated plan in one giant direct child; Android clipping needs bounded section children.',
+);
 assertIncludes(screen, 'routeListScroller', 'Trip Builder route selector should be independently scrollable.');
 [
   'TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT = TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT',

@@ -6002,7 +6002,7 @@ export default function ExploreTripBuilderScreen() {
                   testID="trip-builder-results"
                   removeClippedSubviews
                 >
-                  <View style={styles.sectionCard}>
+                  <View style={[styles.sectionCard, styles.resultHeaderCard]}>
                     <View style={styles.sectionHeader}>
                       <Text style={styles.sectionTitle}>{plan.route.name}</Text>
                       <Text style={styles.sectionMeta}>PLAN</Text>
@@ -6013,6 +6013,7 @@ export default function ExploreTripBuilderScreen() {
                       <Metric label="Trip Type" value={tripTypeLabel(plan.tripType)} />
                       <Metric label="Readiness" value={plan.readinessReference?.status?.toUpperCase() ?? 'Data unavailable'} />
                     </View>
+                  </View>
 
                     <ResultBlock title="Camp Check">
                       <Text style={styles.resultText}>
@@ -6233,7 +6234,6 @@ export default function ExploreTripBuilderScreen() {
                       <Ionicons name="download-outline" size={14} color="#081014" />
                       <Text style={styles.offlineButtonText}>Prepare Offline Pack</Text>
                     </TouchableOpacity>
-                  </View>
                 </ScrollView>
               ) : null}
             </View>
@@ -6448,6 +6448,9 @@ const styles = StyleSheet.create({
   routeSectionCard: {
     flex: 1,
     minHeight: 0,
+  },
+  resultHeaderCard: {
+    flexShrink: 0,
   },
   tripSetupCard: {
     flex: 1,
@@ -7051,9 +7054,11 @@ const styles = StyleSheet.create({
   metricLabel: { color: TACTICAL.textMuted, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
   metricValue: { color: TACTICAL.text, fontSize: 12, fontWeight: '900' },
   resultBlock: {
-    borderTopWidth: 1,
-    borderTopColor: ECS.stroke,
-    paddingTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgPanel,
+    padding: 9,
     gap: 7,
   },
   resultBlockHeader: {
@@ -7974,8 +7979,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalScroll: { flex: 1, minHeight: 0, overflow: 'hidden' },
+  modalScroll: {
+    flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
+    borderRadius: 12,
+    backgroundColor: ECS.bgPanel,
+  },
   modalContent: {
+    gap: 7,
     paddingBottom: 20,
   },
   tripMapOverlay: {
