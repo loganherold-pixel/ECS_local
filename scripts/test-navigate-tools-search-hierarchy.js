@@ -55,19 +55,22 @@ assert(
 );
 
 assert(
-  source.includes('value={roadNavigation.query}') &&
-    source.includes('onChangeText={roadNavigation.setQuery}') &&
-    source.includes('loading={roadNavigation.searchLoading}') &&
+  source.includes('value={idleDestinationSearchDraftQuery}') &&
+    source.includes('onChangeText={handleIdleDestinationSearchChangeText}') &&
+    source.includes('loading={idleDestinationSearchLoadingVisible}') &&
+    source.includes('const idleDestinationSearchLoadingVisible =\n  roadNavigation.searchLoading && !destinationSearchInputActive;') &&
     source.includes("testID: 'navigate-destination-search-input'") &&
     source.includes('testID="navigate-destination-search-query-state"') &&
     source.includes("returnKeyType: 'search'") &&
     source.includes('const IDLE_DESTINATION_SEARCH_RENDER_LIMIT = 5;') &&
+    source.includes('const IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT = 1;') &&
     source.includes('const visibleIdleDestinationSearchSuggestions = useMemo(') &&
-    source.includes('.slice(0, IDLE_DESTINATION_SEARCH_RENDER_LIMIT)') &&
+    source.includes('destinationSearchInputActive ? IDLE_DESTINATION_SEARCH_KEYBOARD_RENDER_LIMIT : IDLE_DESTINATION_SEARCH_RENDER_LIMIT') &&
+    source.includes('.slice(0, idleDestinationSearchRenderLimit)') &&
     source.includes('idleDestinationSearchResultsLabel') &&
     source.includes('visibleIdleDestinationSearchSuggestions.map((suggestion) =>') &&
     source.includes('onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}'),
-  'Idle destination search should preserve query wiring while rendering a compact bounded result window on mobile.',
+  'Idle destination search should preserve draft-query typing, hidden focused spinner, and compact bounded result windows on mobile.',
 );
 
 assert(

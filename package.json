@@ -113,6 +113,7 @@
     "test:power-provider-boundary": "node ./scripts/test-power-provider-boundary.js",
     "test:command-center-frame": "node ./scripts/test-command-center-frame.js",
     "test:command-center-registry": "node ./scripts/test-command-center-registry.js",
+    "test:shell-tab-transition-performance": "node ./scripts/test-shell-tab-transition-performance.js",
     "test:dashboard-route-progress": "node ./scripts/test-dashboard-route-progress-active-navigation.js",
     "test:dashboard-navigation-3d-follow-camera": "node ./scripts/test-dashboard-navigation-3d-follow-camera.js",
     "test:route-progress-minimap": "node ./scripts/test-route-progress-minimap.js",

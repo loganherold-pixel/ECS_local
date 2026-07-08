@@ -22280,6 +22280,8 @@ const stableMapSurface = useMemo(() => {
               },
             ]}
             pointerEvents="box-none"
+            accessibilityLabel="Draw area to search for campsites"
+            accessibilityHint="Tap the map to add area points, then finish and scan for campsite candidates."
           >
             <View style={styles.campsiteAreaActionBar}>
               <TouchableOpacity

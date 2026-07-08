@@ -219,7 +219,7 @@ export default function MapFallbackSurface({
   }
 
   const project = makeProjector(bounds, width, height);
-  const drawBackdrop = !transparentBackground;
+  const drawGrid = !transparentBackground;
 
   return (
     <Pressable
@@ -233,9 +233,9 @@ export default function MapFallbackSurface({
       ]}
     >
       <Svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-        {drawBackdrop ? (
+        <Rect x="0" y="0" width={width} height={height} fill={transparentBackground ? 'rgba(5,9,13,0.68)' : '#05090D'} />
+        {drawGrid ? (
           <>
-            <Rect x="0" y="0" width={width} height={height} fill="#05090D" />
             {Array.from({ length: 7 }).map((_, index) => (
               <Line
                 key={`grid-v-${index}`}

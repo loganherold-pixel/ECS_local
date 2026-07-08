@@ -602,10 +602,10 @@ assert.ok(
   'Compact route-preview standby should avoid loading a remote static map bitmap while the native route fallback is already drawing the preview.',
 );
 assert.ok(
-  mapFallbackSurfaceSource.includes('const drawBackdrop = !transparentBackground;') &&
-    mapFallbackSurfaceSource.includes('{drawBackdrop ? (') &&
-    !mapFallbackSurfaceSource.includes("fill={transparentBackground ? 'rgba(5,9,13,0.68)' : '#05090D'}"),
-  'Transparent native fallback overlays should not repaint a muted full-screen tactical backdrop over static route previews.',
+  mapFallbackSurfaceSource.includes('const drawGrid = !transparentBackground;') &&
+    mapFallbackSurfaceSource.includes("fill={transparentBackground ? 'rgba(5,9,13,0.68)' : '#05090D'}") &&
+    mapFallbackSurfaceSource.includes('{drawGrid ? ('),
+  'Transparent native fallback overlays should use one dim rect for route readability while skipping the heavier tactical grid.',
 );
 assert.ok(
   mapRendererSource.includes('!routeBuilderActive') &&
