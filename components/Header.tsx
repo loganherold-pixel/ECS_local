@@ -56,6 +56,7 @@ interface HeaderProps {
   title?: string;
   onAuthPress?: () => void;
   connectionAccessory?: React.ReactNode;
+  deferBannerImage?: boolean;
   guidance?: {
     eyebrow?: string;
     title: string;
@@ -82,7 +83,14 @@ function resolveHeaderBannerSubject(
   }
 }
 
-export default function Header({ title, onAuthPress, connectionAccessory, guidance, commandContext }: HeaderProps) {
+export default function Header({
+  title,
+  onAuthPress,
+  connectionAccessory,
+  deferBannerImage = false,
+  guidance,
+  commandContext,
+}: HeaderProps) {
   const router = useRouter();
   const {
     user,
@@ -593,6 +601,7 @@ export default function Header({ title, onAuthPress, connectionAccessory, guidan
       <TopBannerBackground
         variant={topBannerVariant}
         resizeMode={useBannerTitleLayout ? 'cover' : undefined}
+        deferImage={deferBannerImage}
         verticalOffset={useBannerTitleLayout ? topBannerLayout.bannerOffset : 0}
         overscan={useBannerTitleLayout ? topBannerLayout.bannerOverscan : 0}
       />

@@ -138,7 +138,7 @@ assert.equal(synthetic.structurallyValid, true, 'Synthetic fixture should satisf
 assert.equal(synthetic.productionEligible, false, 'Synthetic evidence must never unblock production.');
 assert.ok(synthetic.blockers.includes('android_evidence_source_not_real'), 'Synthetic evidence should be blocked by source type.');
 
-const realAccepted = validateOfflineFailureDrillAndroidEvidenceManifest(validManifest(tempRoot, {
+const realWithPlaceholderRuntimeArtifacts = validateOfflineFailureDrillAndroidEvidenceManifest(validManifest(tempRoot, {
   evidenceSource: 'real',
   resultSummary: {
     capabilityCount: 8,
@@ -146,8 +146,16 @@ const realAccepted = validateOfflineFailureDrillAndroidEvidenceManifest(validMan
     productionReadiness: 'accepted',
   },
 }), validationOptions);
-assert.equal(realAccepted.structurallyValid, true, 'Real-shaped manifest should be structurally valid.');
-assert.equal(realAccepted.productionEligible, true, 'Real accepted evidence with artifacts should be production eligible.');
+assert.equal(
+  realWithPlaceholderRuntimeArtifacts.structurallyValid,
+  false,
+  'Real evidence must validate runtime no-network assertions from artifact JSON, not placeholder files.',
+);
+assert.equal(realWithPlaceholderRuntimeArtifacts.productionEligible, false);
+assert.ok(
+  realWithPlaceholderRuntimeArtifacts.failedRules.includes('offlineAssertionsPath.runtime_assertion_json_required'),
+  'Real evidence should fail when offline assertions do not contain app-exported no-network data.',
+);
 
 const noOwner = validateOfflineFailureDrillAndroidEvidenceManifest(validManifest(tempRoot, {
   evidenceSource: 'real',

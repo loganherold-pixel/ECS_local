@@ -38,6 +38,7 @@ export function resolveTopBannerVariant(title?: string | null): TopBannerVariant
 type TopBannerBackgroundProps = {
   variant?: TopBannerVariant;
   resizeMode?: ImageResizeMode;
+  deferImage?: boolean;
   verticalOffset?: number;
   overscan?: number;
   style?: StyleProp<ViewStyle>;
@@ -46,6 +47,7 @@ type TopBannerBackgroundProps = {
 export default function TopBannerBackground({
   variant = 'default',
   resizeMode,
+  deferImage = false,
   verticalOffset = 0,
   overscan = 0,
   style,
@@ -58,6 +60,7 @@ export default function TopBannerBackground({
       source={source}
       placement="top"
       resizeMode={resizeMode}
+      deferImage={deferImage}
       style={[
         styles.background,
         {

@@ -736,6 +736,31 @@ assert.ok(
 );
 assert.strictEqual(profile.calculateConfirmedPayloadRemaining(ramProfileDraft), 2448);
 
+const starterRamIdentityDraft = {
+  ...profile.createEmptyFleetVehicleProfileDraft(),
+  nickname: 'Trail Lead',
+  year: '2024',
+  make: 'RAM',
+  model: '2500',
+  engine: 'Cummins',
+  drivetrain: '4x4',
+  cab: 'Crew Cab',
+  bed: 'Short Bed',
+};
+assert.strictEqual(starterRamIdentityDraft.baseNetWeight, '');
+assert.strictEqual(starterRamIdentityDraft.gvwr, '');
+const starterRamConfirmationDraft = profile.resolveFleetVehicleProfileConfirmationDraft(starterRamIdentityDraft);
+assert.strictEqual(starterRamConfirmationDraft.baseNetWeight, '7742');
+assert.strictEqual(starterRamConfirmationDraft.gvwr, '10190');
+assert.strictEqual(profile.validateFleetVehicleProfileDraft(starterRamConfirmationDraft).length, 0);
+assert.strictEqual(profile.calculateConfirmedPayloadRemaining(starterRamConfirmationDraft), 2448);
+const incompleteStarterDraft = profile.resolveFleetVehicleProfileConfirmationDraft({
+  ...profile.createEmptyFleetVehicleProfileDraft(),
+  nickname: 'Trail Lead',
+});
+assert.strictEqual(incompleteStarterDraft.baseNetWeight, '');
+assert.strictEqual(incompleteStarterDraft.gvwr, '');
+
 assert.deepStrictEqual(
   profile.resolveFleetVehicleProfilePrefillOptions(profile.createEmptyFleetVehicleProfileDraft()),
   [],

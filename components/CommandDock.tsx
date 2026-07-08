@@ -167,17 +167,17 @@ function getOuterSlotHorizontalPadding(
 }
 
 // ── Outer dock button using local badge images ───────────────
-function DockButton({
+const DockButton = React.memo(function DockButton({
   item,
   isActive,
-  onPress,
+  onNavigate,
   maxWidth,
   labelMuted,
   labelActive,
 }: {
   item: DockItem;
   isActive: boolean;
-  onPress: () => void;
+  onNavigate: (route: string) => void;
   maxWidth: number;
   labelMuted: string;
   labelActive: string;
@@ -254,8 +254,8 @@ function DockButton({
 
   const handlePress = useCallback(() => {
     hapticMicro();
-    onPress();
-  }, [onPress]);
+    onNavigate(item.route);
+  }, [item.route, onNavigate]);
 
   if (!item.badge) return null;
 
@@ -326,10 +326,10 @@ function DockButton({
       </Animated.View>
     </Pressable>
   );
-}
+});
 
 // ── Center shield button ─────────────────────────────────────
-function ShieldCenterButton({
+const ShieldCenterButton = React.memo(function ShieldCenterButton({
   isActive,
   onTap,
   onLongPress,
@@ -436,7 +436,7 @@ function ShieldCenterButton({
       </Pressable>
     </View>
   );
-}
+});
 
 // ── Radial center glow overlay ───────────────────────────────
 
@@ -455,6 +455,8 @@ export default function CommandDock() {
   const quickActionsNavLockUntilRef = useRef(0);
   const [dashboardChrome, setDashboardChrome] = useState(getDashboardChromeState());
   const [showFirstLaunchHint, setShowFirstLaunchHint] = useState(false);
+  const pathnameRef = useRef(pathname);
+  const quickActionsVisibleRef = useRef(quickActionsVisible);
   const firstLaunchHintOpacity = useRef(new Animated.Value(0)).current;
   const firstLaunchHintScale = useRef(new Animated.Value(0.96)).current;
   const firstLaunchHintRunningRef = useRef(false);
@@ -492,19 +494,29 @@ export default function CommandDock() {
     [effectivePathname]
   );
 
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+
+  useEffect(() => {
+    quickActionsVisibleRef.current = quickActionsVisible;
+  }, [quickActionsVisible]);
+
   const handleNavigate = useCallback(
     (route: string) => {
-      if (quickActionsVisible || Date.now() < quickActionsNavLockUntilRef.current) {
+      const currentPathname = pathnameRef.current;
+      const currentQuickActionsVisible = quickActionsVisibleRef.current;
+      if (currentQuickActionsVisible || Date.now() < quickActionsNavLockUntilRef.current) {
         if (__DEV__) {
           console.log('[FIELD_UTILITIES] dock_navigation_ignored_quick_actions_active', {
             route,
-            pathname,
-            quickActionsVisible,
+            pathname: currentPathname,
+            quickActionsVisible: currentQuickActionsVisible,
           });
         }
         return;
       }
-      if (pathname === route || pendingRouteRef.current === route) return;
+      if (currentPathname === route || pendingRouteRef.current === route) return;
       hideDashboardDockReveal();
       pendingRouteRef.current = route;
       setPendingRoute(route);
@@ -514,7 +526,7 @@ export default function CommandDock() {
         router.navigate(route as any);
       });
     },
-    [pathname, quickActionsVisible, router]
+    [router]
   );
 
   const openQuickActions = useCallback(() => {
@@ -599,6 +611,14 @@ export default function CommandDock() {
     firstLaunchHintOpacity.setValue(0);
     firstLaunchHintScale.setValue(0.96);
   }, [firstLaunchHintOpacity, firstLaunchHintScale]);
+  const handleDashboardTap = useCallback(() => {
+    dismissFirstLaunchHint();
+    handleNavigate(dashboardDockItem.route);
+  }, [dashboardDockItem.route, dismissFirstLaunchHint, handleNavigate]);
+  const handleDashboardLongPress = useCallback(() => {
+    dismissFirstLaunchHint();
+    openQuickActions();
+  }, [dismissFirstLaunchHint, openQuickActions]);
 
   useEffect(() => {
     if (isHidden) {
@@ -809,14 +829,8 @@ export default function CommandDock() {
                   isActive={isItemActive(dashboardDockItem)}
                   hintOpacity={showFirstLaunchHint ? firstLaunchHintOpacity : undefined}
                   hintScale={showFirstLaunchHint ? firstLaunchHintScale : undefined}
-                  onTap={() => {
-                    dismissFirstLaunchHint();
-                    handleNavigate(dashboardDockItem.route);
-                  }}
-                  onLongPress={() => {
-                    dismissFirstLaunchHint();
-                    openQuickActions();
-                  }}
+                  onTap={handleDashboardTap}
+                  onLongPress={handleDashboardLongPress}
                   slotWidth={centerSlotWidth}
                   verticalDrop={centerDashboardButtonDrop}
                 />
@@ -824,7 +838,7 @@ export default function CommandDock() {
                 <DockButton
                   item={item}
                   isActive={isItemActive(item)}
-                  onPress={() => handleNavigate(item.route)}
+                  onNavigate={handleNavigate}
                   maxWidth={outerItemMaxWidth}
                   labelMuted={shellChrome.dockLabelMuted}
                   labelActive={shellChrome.dockLabelActive}

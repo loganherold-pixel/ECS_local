@@ -74,6 +74,13 @@ export interface OfflineFailureDrillRuntimeNetworkEvidence {
   notes: string[];
 }
 
+export interface OfflineFailureDrillRuntimeNoNetworkAssertions extends OfflineFailureDrillRuntimeNetworkEvidence {
+  systemNetworkDisabled: boolean;
+  assertionSource: 'app_runtime_export' | 'fixture_harness' | 'operator_supplied' | 'unknown';
+  offlineAssertionsPath?: string;
+  captureBundlePath?: string;
+}
+
 export interface OfflineFailureDrillAndroidEvidenceManifest {
   evidenceId: string;
   evidenceKind: 'android_no_network_device' | 'android_no_network_emulator';
@@ -99,6 +106,7 @@ export interface OfflineFailureDrillAndroidEvidenceManifest {
     runtimeNetworkProbe: 'offline' | 'online' | 'unavailable' | 'unknown';
     notes: string[];
   };
+  runtimeNoNetworkAssertions?: OfflineFailureDrillRuntimeNoNetworkAssertions;
   cacheFixtureProfile: OfflineFailureDrillCacheFixtureProfile;
   cacheManifestPath: string;
   drillResultPath: string;
@@ -141,6 +149,8 @@ export interface OfflineFailureDrillAndroidEvidenceManifest {
 export interface OfflineFailureDrillEvidenceValidationOptions {
   rootDir?: string;
   artifactExists?: (artifactPath: string) => boolean;
+  artifactRead?: (artifactPath: string) => string | null | undefined;
+  artifactSize?: (artifactPath: string) => number | null | undefined;
 }
 
 export interface OfflineFailureDrillEvidenceValidationResult {
@@ -233,6 +243,56 @@ function pushMissingArtifact(
   }
 }
 
+function validateArtifactNonEmpty(
+  failedRules: string[],
+  field: string,
+  filePath: unknown,
+  options: OfflineFailureDrillEvidenceValidationOptions,
+) {
+  const size = options.artifactSize;
+  if (!size) return;
+  const resolved = resolveArtifactPath(filePath, options.rootDir);
+  if (!resolved) return;
+  const byteLength = size(resolved);
+  if (typeof byteLength === 'number' && byteLength <= 0) {
+    failedRules.push(`${field}.artifact_empty`);
+  }
+}
+
+function readArtifactJson(
+  failedRules: string[],
+  field: string,
+  filePath: unknown,
+  options: OfflineFailureDrillEvidenceValidationOptions,
+): Record<string, any> | null {
+  const resolved = resolveArtifactPath(filePath, options.rootDir);
+  if (!resolved) {
+    failedRules.push(`${field}.path_required`);
+    return null;
+  }
+  const read = options.artifactRead;
+  if (!read) {
+    failedRules.push(`${field}.artifact_reader_required`);
+    return null;
+  }
+  try {
+    const body = read(resolved);
+    if (!nonEmptyString(body)) {
+      failedRules.push(`${field}.artifact_empty`);
+      return null;
+    }
+    const parsed = JSON.parse(body);
+    if (!isRecord(parsed)) {
+      failedRules.push(`${field}.json_object_required`);
+      return null;
+    }
+    return parsed;
+  } catch {
+    failedRules.push(`${field}.json_parse_failed`);
+    return null;
+  }
+}
+
 function validateBooleanTrue(value: unknown, failedRules: string[], rule: string) {
   if (value !== true) failedRules.push(rule);
 }
@@ -315,6 +375,151 @@ export function validateOfflineFailureDrillAndroidEvidenceManifest(
     manifest.logPaths.forEach((filePath: unknown, index: number) => {
       pushMissingArtifact(missingArtifacts, failedRules, `logPaths.${index}`, filePath, options);
     });
+  }
+
+  validateArtifactNonEmpty(failedRules, 'cacheManifestPath', manifest.cacheManifestPath, options);
+  validateArtifactNonEmpty(failedRules, 'drillResultPath', manifest.drillResultPath, options);
+  validateArtifactNonEmpty(failedRules, 'offlineAssertionsPath', manifest.offlineAssertionsPath, options);
+  validateArtifactNonEmpty(failedRules, 'readinessMetadataPath', manifest.readinessMetadataPath, options);
+  if (nonEmptyString(manifest.captureBundlePath)) {
+    validateArtifactNonEmpty(failedRules, 'captureBundlePath', manifest.captureBundlePath, options);
+  }
+  if (Array.isArray(manifest.screenshotPaths)) {
+    manifest.screenshotPaths.forEach((filePath: unknown, index: number) => {
+      validateArtifactNonEmpty(failedRules, `screenshotPaths.${index}`, filePath, options);
+    });
+  }
+  if (Array.isArray(manifest.logPaths)) {
+    manifest.logPaths.forEach((filePath: unknown, index: number) => {
+      validateArtifactNonEmpty(failedRules, `logPaths.${index}`, filePath, options);
+    });
+  }
+
+  const runtimeNoNetworkAssertions = isRecord(manifest.runtimeNoNetworkAssertions)
+    ? manifest.runtimeNoNetworkAssertions
+    : null;
+  if (evidenceSource === 'real') {
+    if (!runtimeNoNetworkAssertions) {
+      failedRules.push('runtimeNoNetworkAssertions_required_for_real_evidence');
+    } else {
+      if (runtimeNoNetworkAssertions.assertionSource !== 'app_runtime_export') {
+        failedRules.push('runtimeNoNetworkAssertions.assertionSource_app_runtime_export_required');
+      }
+      validateBooleanTrue(
+        runtimeNoNetworkAssertions.appObservedOffline,
+        failedRules,
+        'runtimeNoNetworkAssertions.appObservedOffline_true_required',
+      );
+      validateBooleanTrue(
+        runtimeNoNetworkAssertions.systemNetworkDisabled,
+        failedRules,
+        'runtimeNoNetworkAssertions.systemNetworkDisabled_true_required',
+      );
+      if (runtimeNoNetworkAssertions.runtimeNetworkProbe !== 'offline') {
+        failedRules.push('runtimeNoNetworkAssertions.runtimeNetworkProbe_offline_required');
+      }
+      if (!['unreachable', 'not_checked_due_to_offline'].includes(String(runtimeNoNetworkAssertions.providerReachability))) {
+        failedRules.push('runtimeNoNetworkAssertions.providerReachability_unreachable_required');
+      }
+    }
+
+    if (!nonEmptyString(manifest.captureBundlePath)) {
+      failedRules.push('captureBundlePath.required_for_real_evidence');
+    }
+
+    const cacheManifest = readArtifactJson(failedRules, 'cacheManifestPath', manifest.cacheManifestPath, options);
+    if (cacheManifest && !Array.isArray(cacheManifest.inputs)) {
+      failedRules.push('cacheManifestPath.inputs_array_required');
+    }
+
+    const drillResult = readArtifactJson(failedRules, 'drillResultPath', manifest.drillResultPath, options);
+    if (drillResult) {
+      validateBooleanTrue(drillResult.localOnly, failedRules, 'drillResultPath.localOnly_true_required');
+      const drillRuntime = isRecord(drillResult.runtimeNetworkEvidence) ? drillResult.runtimeNetworkEvidence : null;
+      if (!drillRuntime || drillRuntime.runtimeNetworkProbe !== 'offline' || drillRuntime.appObservedOffline !== true) {
+        failedRules.push('drillResultPath.runtimeNetworkEvidence_offline_required');
+      }
+    }
+
+    const offlineAssertions = readArtifactJson(failedRules, 'offlineAssertionsPath', manifest.offlineAssertionsPath, options);
+    if (!offlineAssertions) {
+      failedRules.push('offlineAssertionsPath.runtime_assertion_json_required');
+    } else {
+      if (offlineAssertions.source !== 'app_runtime_export') {
+        failedRules.push('offlineAssertionsPath.source_app_runtime_export_required');
+      }
+      validateBooleanTrue(
+        offlineAssertions.appObservedOffline,
+        failedRules,
+        'offlineAssertionsPath.appObservedOffline_true_required',
+      );
+      validateBooleanTrue(
+        offlineAssertions.systemNetworkDisabled,
+        failedRules,
+        'offlineAssertionsPath.systemNetworkDisabled_true_required',
+      );
+      if (offlineAssertions.runtimeNetworkProbe !== 'offline') {
+        failedRules.push('offlineAssertionsPath.runtimeNetworkProbe_offline_required');
+      }
+      if (!['unreachable', 'not_checked_due_to_offline'].includes(String(offlineAssertions.providerReachability))) {
+        failedRules.push('offlineAssertionsPath.providerReachability_unreachable_required');
+      }
+      if (
+        offlineAssertions.appObservedOffline !== networkState.appObservedOffline ||
+        offlineAssertions.systemNetworkDisabled !== networkState.systemNetworkDisabled ||
+        offlineAssertions.runtimeNetworkProbe !== networkState.runtimeNetworkProbe
+      ) {
+        failedRules.push('offlineAssertionsPath.networkState_mismatch');
+      }
+      if (
+        runtimeNoNetworkAssertions &&
+        (
+          offlineAssertions.appObservedOffline !== runtimeNoNetworkAssertions.appObservedOffline ||
+          offlineAssertions.systemNetworkDisabled !== runtimeNoNetworkAssertions.systemNetworkDisabled ||
+          offlineAssertions.runtimeNetworkProbe !== runtimeNoNetworkAssertions.runtimeNetworkProbe ||
+          offlineAssertions.providerReachability !== runtimeNoNetworkAssertions.providerReachability
+        )
+      ) {
+        failedRules.push('offlineAssertionsPath.runtimeNoNetworkAssertions_mismatch');
+      }
+    }
+
+    const readinessMetadata = readArtifactJson(failedRules, 'readinessMetadataPath', manifest.readinessMetadataPath, options);
+    if (readinessMetadata && !booleanValue(readinessMetadata.captured)) {
+      failedRules.push('readinessMetadataPath.captured_boolean_required');
+    }
+
+    const captureBundle = nonEmptyString(manifest.captureBundlePath)
+      ? readArtifactJson(failedRules, 'captureBundlePath', manifest.captureBundlePath, options)
+      : null;
+    if (captureBundle) {
+      if (captureBundle.source !== 'app_runtime_export') {
+        failedRules.push('captureBundlePath.source_app_runtime_export_required');
+      }
+      if (captureBundle.evidenceSource !== 'real') {
+        failedRules.push('captureBundlePath.evidenceSource_real_required');
+      }
+      const bundlePlatform = isRecord(captureBundle.platform) ? captureBundle.platform : null;
+      if (!bundlePlatform || bundlePlatform.os !== 'android') {
+        failedRules.push('captureBundlePath.platform_os_android_required');
+      }
+      const bundleAssertions = isRecord(captureBundle.offlineAssertions)
+        ? captureBundle.offlineAssertions
+        : null;
+      if (!bundleAssertions) {
+        failedRules.push('captureBundlePath.offlineAssertions_required');
+      } else if (offlineAssertions) {
+        if (
+          bundleAssertions.appObservedOffline !== offlineAssertions.appObservedOffline ||
+          bundleAssertions.systemNetworkDisabled !== offlineAssertions.systemNetworkDisabled ||
+          bundleAssertions.runtimeNetworkProbe !== offlineAssertions.runtimeNetworkProbe ||
+          bundleAssertions.providerReachability !== offlineAssertions.providerReachability ||
+          bundleAssertions.source !== offlineAssertions.source
+        ) {
+          failedRules.push('captureBundlePath.offlineAssertions_mismatch');
+        }
+      }
+    }
   }
 
   const remote = isRecord(manifest.remoteAttemptSummary) ? manifest.remoteAttemptSummary : {};

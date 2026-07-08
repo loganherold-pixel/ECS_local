@@ -610,6 +610,37 @@ export function applyFleetProfilePrefillOption(
   };
 }
 
+export function hasFleetVehicleProfileIdentityForSuggestedSpecs(
+  draft: FleetVehicleProfileDraft,
+): boolean {
+  return (
+    parseFleetProfileNumber(draft.year) != null &&
+    draft.make.trim().length > 0 &&
+    draft.model.trim().length > 0
+  );
+}
+
+export function resolveFleetVehicleProfileConfirmationDraft(
+  draft: FleetVehicleProfileDraft,
+): FleetVehicleProfileDraft {
+  if (!hasFleetVehicleProfileIdentityForSuggestedSpecs(draft)) {
+    return draft;
+  }
+
+  const suggestion = resolveFleetVehicleProfileSuggestion(draft);
+  return {
+    ...draft,
+    baseNetWeight:
+      parseFleetProfileNumber(draft.baseNetWeight) == null && suggestion.baseNetWeight
+        ? String(Math.round(suggestion.baseNetWeight.lbs))
+        : draft.baseNetWeight,
+    gvwr:
+      parseFleetProfileNumber(draft.gvwr) == null && suggestion.gvwr
+        ? String(Math.round(suggestion.gvwr.lbs))
+        : draft.gvwr,
+  };
+}
+
 export function validateFleetVehicleProfileDraft(draft: FleetVehicleProfileDraft): string[] {
   const errors: string[] = [];
   const year = parseFleetProfileNumber(draft.year);

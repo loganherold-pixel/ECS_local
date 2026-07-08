@@ -41,6 +41,7 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
 const widgetRenderersSource = read('components/dashboard/WidgetRenderers.tsx');
 const commandModuleSource = read('components/dashboard/TerrainRiskCommandModule.tsx');
 const sideProfileSource = read('components/dashboard/TerrainRiskSideProfile.tsx');
+const terrainRiskWidgetSource = read('components/dashboard/TerrainRiskWidget.tsx');
 const navigateSource = read('app/(tabs)/navigate.tsx');
 const navigateRunSource = read('app/navigate-run.tsx');
 const packageJson = require(path.join(root, 'package.json'));
@@ -89,6 +90,13 @@ assert(!widgetRenderersSource.includes('terrainRiskBottomReadoutOverlay'), 'Comp
 assert(!/commandPanelHeaderStatus[\s\S]{0,160}ROUTE TERRAIN RISK/.test(widgetRenderersSource), 'Compact Terrain Risk header readout should not cover the route profile chart.');
 assert(widgetRenderersSource.includes('sampleRouteElevationFromMapboxTerrainContours'), 'Active guidance terrain risk must sample elevation before falling back to GPS altitude.');
 assert(widgetRenderersSource.includes('Mapbox terrain contour estimate'), 'Sampled route terrain must disclose the Mapbox contour estimate source.');
+assert(!terrainRiskWidgetSource.includes('setInterval('), 'Terrain Risk default widget must not wake JS on a simulated interval.');
+assert(
+  widgetRenderersSource.includes('terrainRiskSampleSourcePointsRef') &&
+    widgetRenderersSource.includes('terrainRiskSampleSourcePointsRef.current = rawTerrainRiskRoutePoints') &&
+    widgetRenderersSource.includes('}, [terrainRiskNeedsElevationSampling, terrainRiskSamplingSignature]);'),
+  'Terrain Risk elevation sampling should key requests by stable route signature instead of route point reference churn.',
+);
 assert(!widgetRenderersSource.includes('NO ACTIVE ROUTE'), 'Terrain Risk widget must not repeat no-active-route copy in the top-right header.');
 assert(widgetRenderersSource.includes("title={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel)} | ${terrainRiskRoute.overallRiskScore}` : 'No active route'}"), 'Route Terrain Risk inline panel must summarize risk score or standby state.');
 assert(widgetRenderersSource.includes("detail={terrainRiskRoute ? terrainRiskRoute.sourceLabel : 'Start guidance to view terrain risk'}"), 'Route Terrain Risk inline panel must keep data source or guidance-start copy visible.');
@@ -176,6 +184,10 @@ assert(
 );
 assert(sideProfileSource.includes('completedDistanceMiles?: number | null'), 'Terrain Risk side profile should accept route progress for the live GPS marker.');
 assert(sideProfileSource.includes('buildCurrentRouteMarkerPoint'), 'Terrain Risk side profile should interpolate the current GPS marker on the elevation line.');
+assert(
+  /const chart = useMemo\([\s\S]*\}, \[profile, totalDistanceMiles, unit\]\);/.test(sideProfileSource),
+  'Terrain Risk side profile should keep static SVG chart memoization independent from moving route progress.',
+);
 assert(sideProfileSource.includes('Current GPS position'), 'Terrain Risk side profile should label the moving GPS marker for assistive tech.');
 assert(sideProfileSource.includes('PanResponder'), 'Terrain Risk side profile should expose a drag probe for expanded elevation reads.');
 assert(sideProfileSource.includes('function buildElevationProbePoint'), 'Terrain Risk side profile should derive the dragged elevation readout from route data.');

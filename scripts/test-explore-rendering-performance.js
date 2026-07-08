@@ -255,6 +255,25 @@ assert(firstVisibleWork.estimatedInitialCardRenderCount <= 12);
   'const EMPTY_HIDDEN_GEM_BASELINE_STATE',
   'const EMPTY_POPULAR_TRAILS_STATE',
   'const EMPTY_EXPLORE_MAP_PREVIEW_ROUTE_SETS',
+  'const EXPLORE_ENTRY_CHROME_DELAY_MS',
+  'const EXPLORE_ENTRY_HEAVY_CHROME_DELAY_MS',
+  'const [exploreEntryChromeReady, setExploreEntryChromeReady] = useState(false);',
+  'const [exploreEntryHeavyChromeReady, setExploreEntryHeavyChromeReady] = useState(false);',
+  'setExploreEntryChromeReady(false);',
+  'setExploreEntryHeavyChromeReady(false);',
+  'setExploreEntryChromeReady(true);',
+  'setExploreEntryHeavyChromeReady(true);',
+  'exploreEntryChromeTask.cancel();',
+  'exploreEntryHeavyChromeTask.cancel();',
+  '<Header title="Explore" deferBannerImage={!exploreEntryHeavyChromeReady} />',
+  'deferControls={!exploreEntryHeavyChromeReady}',
+  "explorePlanningContextPill: {",
+  "backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : 'rgba(255,255,255,0.025)'",
+  "explorePlanningRouteOption: {",
+  "backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : 'rgba(255,255,255,0.025)'",
+  "backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}0E`",
+  '{exploreEntryChromeReady ? (',
+  's.footerDeferredPlaceholder',
   'if (!exploreRefinement) return [] as EnrichedDiscoveryRoute[];',
   'if (!exploreRefinement) return EMPTY_POPULAR_TRAILS_STATE;',
   'if (!exploreRefinement) {\n        return EMPTY_HIDDEN_GEM_BASELINE_STATE;\n      }',
@@ -272,6 +291,10 @@ assert(
 );
 assert(
   distanceRadiusFilterSource.includes("ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android'") &&
+    distanceRadiusFilterSource.includes('deferControls?: boolean;') &&
+    distanceRadiusFilterSource.includes('deferControls = false,') &&
+    distanceRadiusFilterSource.includes('deferControls ? (') &&
+    distanceRadiusFilterSource.includes('s.deferredControlPlaceholder') &&
     distanceRadiusFilterSource.includes('backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel') &&
     distanceRadiusFilterSource.includes('backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev') &&
     distanceRadiusFilterSource.includes('refinementChipDisabled: {') &&

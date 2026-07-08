@@ -29,7 +29,9 @@ import {
   applyFleetProfilePrefillOption,
   calculateConfirmedPayloadRemaining,
   createEmptyFleetVehicleProfileDraft,
+  hasFleetVehicleProfileIdentityForSuggestedSpecs,
   parseFleetProfileNumber,
+  resolveFleetVehicleProfileConfirmationDraft,
   resolveFleetVehicleProfileFieldPlaceholder,
   resolveFleetVehicleProfilePrefillOptions,
   resolveFleetVehicleProfileSuggestion,
@@ -341,8 +343,26 @@ export default function FleetVehicleProfileModal({
 
   const suggestion = useMemo(() => resolveFleetVehicleProfileSuggestion(draft), [draft]);
   const prefillOptions = useMemo(() => resolveFleetVehicleProfilePrefillOptions(draft), [draft]);
-  const validationErrors = useMemo(() => validateFleetVehicleProfileDraft(draft), [draft]);
-  const payloadRemaining = useMemo(() => calculateConfirmedPayloadRemaining(draft), [draft]);
+  const identityReadyForSuggestedSpecs = useMemo(
+    () => hasFleetVehicleProfileIdentityForSuggestedSpecs(draft),
+    [draft],
+  );
+  const confirmationDraft = useMemo(
+    () => resolveFleetVehicleProfileConfirmationDraft(draft),
+    [draft],
+  );
+  const validationErrors = useMemo(() => validateFleetVehicleProfileDraft(confirmationDraft), [confirmationDraft]);
+  const payloadRemaining = useMemo(() => calculateConfirmedPayloadRemaining(confirmationDraft), [confirmationDraft]);
+  const firstValidationError = validationErrors[0] ?? null;
+  const displayedBaseNetWeight =
+    parseFleetProfileNumber(draft.baseNetWeight) ??
+    (identityReadyForSuggestedSpecs ? suggestion.baseNetWeight?.lbs ?? null : null);
+  const displayedGvwr =
+    parseFleetProfileNumber(draft.gvwr) ??
+    (identityReadyForSuggestedSpecs ? suggestion.gvwr?.lbs ?? null : null);
+  const canApplySuggestedSpecs =
+    identityReadyForSuggestedSpecs &&
+    Boolean(suggestion.baseNetWeight || suggestion.gvwr);
   const suggestedFuelTankCapacityGal = suggestion.oemReference?.specs.fuel_tank_capacity_gal ?? null;
   const suggestedWaterCapacityGal = vehicle?.water_capacity_gal ?? null;
   const suggestedTurningRadiusFt = suggestion.oemReference?.specs.turning_diameter_ft
@@ -441,49 +461,50 @@ export default function FleetVehicleProfileModal({
   }, [onClose]);
 
   const saveVehicleProfileDraft = useCallback(async (): Promise<SaveVehicleProfileResult> => {
-    const errors = validateFleetVehicleProfileDraft(draft);
+    const resolvedDraft = resolveFleetVehicleProfileConfirmationDraft(draft);
+    const errors = validateFleetVehicleProfileDraft(resolvedDraft);
     if (errors.length > 0) {
       return { vehicle: null, created: false, errors };
     }
 
-    const year = parseFleetProfileNumber(draft.year);
+    const year = parseFleetProfileNumber(resolvedDraft.year);
     const oemReference = suggestion.oemReference;
     const oemSpecs = oemReference?.specs ?? null;
-    const resolvedVehicleType = oemReference?.vehicleType ?? draft.vehicleType ?? 'vehicle';
-    const baseWeight = parseFleetProfileNumber(draft.baseNetWeight) ?? suggestion.baseNetWeight?.lbs ?? 0;
-    const gvwr = parseFleetProfileNumber(draft.gvwr) ?? suggestion.gvwr?.lbs ?? 0;
+    const resolvedVehicleType = oemReference?.vehicleType ?? resolvedDraft.vehicleType ?? 'vehicle';
+    const baseWeight = parseFleetProfileNumber(resolvedDraft.baseNetWeight) ?? suggestion.baseNetWeight?.lbs ?? 0;
+    const gvwr = parseFleetProfileNumber(resolvedDraft.gvwr) ?? suggestion.gvwr?.lbs ?? 0;
     const fuelType: FuelType =
-      draft.engine.toLowerCase().includes('cummins') || draft.engine.toLowerCase().includes('diesel')
+      resolvedDraft.engine.toLowerCase().includes('cummins') || resolvedDraft.engine.toLowerCase().includes('diesel')
         || oemSpecs?.fuel_type === 'diesel'
         ? 'diesel'
         : 'gas';
     const roundedSuggestedBase = suggestion.baseNetWeight ? Math.round(suggestion.baseNetWeight.lbs) : null;
     const roundedSuggestedGvwr = suggestion.gvwr ? Math.round(suggestion.gvwr.lbs) : null;
     const baseWeightIsManual =
-      parseFleetProfileNumber(draft.baseNetWeight) != null &&
+      parseFleetProfileNumber(resolvedDraft.baseNetWeight) != null &&
       (roundedSuggestedBase == null || Math.round(baseWeight) !== roundedSuggestedBase);
     const gvwrIsManual =
-      parseFleetProfileNumber(draft.gvwr) != null &&
+      parseFleetProfileNumber(resolvedDraft.gvwr) != null &&
       (roundedSuggestedGvwr == null || Math.round(gvwr) !== roundedSuggestedGvwr);
     const resolvedBaseWeightSource = baseWeightIsManual ? 'user_estimate' : suggestion.baseNetWeight?.source ?? 'user_estimate';
     const resolvedGvwrSource = gvwrIsManual ? 'user_estimate' : suggestion.gvwr?.source ?? 'user_estimate';
     const resolvedBaseWeightConfidence = baseWeightIsManual ? 62 : suggestion.baseNetWeight?.confidence ?? 62;
     const resolvedGvwrConfidence = gvwrIsManual ? 62 : suggestion.gvwr?.confidence ?? 62;
-    const resolvedAxleRatio = draft.gearingConfirmed ? draft.axleRatio.trim() || oemReference?.axleRatio || null : null;
-    const resolvedGearingLabel = draft.gearingConfirmed
-      ? draft.gearingLabel.trim() || oemReference?.gearingLabel || oemReference?.axleRatio || null
+    const resolvedAxleRatio = resolvedDraft.gearingConfirmed ? resolvedDraft.axleRatio.trim() || oemReference?.axleRatio || null : null;
+    const resolvedGearingLabel = resolvedDraft.gearingConfirmed
+      ? resolvedDraft.gearingLabel.trim() || oemReference?.gearingLabel || oemReference?.axleRatio || null
       : null;
-    const resolvedGearingConfidence = draft.gearingConfirmed
-      ? parseFleetProfileNumber(draft.gearingConfidence) ?? oemReference?.gearingConfidence ?? null
+    const resolvedGearingConfidence = resolvedDraft.gearingConfirmed
+      ? parseFleetProfileNumber(resolvedDraft.gearingConfidence) ?? oemReference?.gearingConfidence ?? null
       : null;
     const wizardConfig = {
       vehicle_type: resolvedVehicleType,
-      trim: draft.trim.trim(),
-      engine: draft.engine.trim(),
-      drivetrain: draft.drivetrain.trim(),
-      cab: draft.cab.trim(),
-      bed: draft.bed.trim(),
-      bed_length: draft.bed.trim(),
+      trim: resolvedDraft.trim.trim(),
+      engine: resolvedDraft.engine.trim(),
+      drivetrain: resolvedDraft.drivetrain.trim(),
+      cab: resolvedDraft.cab.trim(),
+      bed: resolvedDraft.bed.trim(),
+      bed_length: resolvedDraft.bed.trim(),
       weight_source: resolvedBaseWeightSource,
       weight_confidence: resolvedBaseWeightConfidence,
       gvwr_source: resolvedGvwrSource,
@@ -493,16 +514,16 @@ export default function FleetVehicleProfileModal({
       oem_reference_status: suggestion.oemMatchStatus,
       oem_reference_confidence: oemReference?.confidence ?? null,
       oem_match_level: oemReference?.matchLevel ?? 'model',
-      axle_ratio: draft.axleRatio.trim() || oemReference?.axleRatio || null,
-      gearing_label: draft.gearingLabel.trim() || oemReference?.gearingLabel || oemReference?.axleRatio || null,
-      gearing_confidence: parseFleetProfileNumber(draft.gearingConfidence) ?? oemReference?.gearingConfidence ?? null,
-      gearing_requires_confirmation: Boolean(oemReference?.gearingRequiresConfirmation ?? draft.gearingLabel.trim()),
-      gearing_confirmed: draft.gearingConfirmed,
+      axle_ratio: resolvedDraft.axleRatio.trim() || oemReference?.axleRatio || null,
+      gearing_label: resolvedDraft.gearingLabel.trim() || oemReference?.gearingLabel || oemReference?.axleRatio || null,
+      gearing_confidence: parseFleetProfileNumber(resolvedDraft.gearingConfidence) ?? oemReference?.gearingConfidence ?? null,
+      gearing_requires_confirmation: Boolean(oemReference?.gearingRequiresConfirmation ?? resolvedDraft.gearingLabel.trim()),
+      gearing_confirmed: resolvedDraft.gearingConfirmed,
     };
     const identity = {
-      name: draft.nickname.trim(),
-      make: draft.make.trim() || undefined,
-      model: draft.model.trim() || undefined,
+      name: resolvedDraft.nickname.trim(),
+      make: resolvedDraft.make.trim() || undefined,
+      model: resolvedDraft.model.trim() || undefined,
       year,
     };
     const created = !vehicle;
@@ -539,10 +560,10 @@ export default function FleetVehicleProfileModal({
       gvwr_confidence: resolvedGvwrConfidence,
       fuel_tank_capacity_gal: resolvedFuelTankCapacityGal ?? 0,
       fuel_type: fuelType,
-      front_base_weight_lb: parseFleetProfileNumber(draft.frontBaseWeight) ?? undefined,
-      rear_base_weight_lb: parseFleetProfileNumber(draft.rearBaseWeight) ?? undefined,
-      front_gawr_lb: parseFleetProfileNumber(draft.frontGawr) ?? undefined,
-      rear_gawr_lb: parseFleetProfileNumber(draft.rearGawr) ?? undefined,
+      front_base_weight_lb: parseFleetProfileNumber(resolvedDraft.frontBaseWeight) ?? undefined,
+      rear_base_weight_lb: parseFleetProfileNumber(resolvedDraft.rearBaseWeight) ?? undefined,
+      front_gawr_lb: parseFleetProfileNumber(resolvedDraft.frontGawr) ?? undefined,
+      rear_gawr_lb: parseFleetProfileNumber(resolvedDraft.rearGawr) ?? undefined,
       payload_capacity_lb: oemSpecs?.payload_capacity_lb ?? (gvwr > 0 && baseWeight > 0 ? gvwr - baseWeight : null),
       ground_clearance_inches: oemSpecs?.ground_clearance_inches ?? vehicleSpecStore.get(savedVehicle.id)?.ground_clearance_inches,
       wheelbase_in: oemSpecs?.wheelbase_in ?? vehicleSpecStore.get(savedVehicle.id)?.wheelbase_in,
@@ -558,16 +579,16 @@ export default function FleetVehicleProfileModal({
       axle_ratio: resolvedAxleRatio,
       gearing_label: resolvedGearingLabel,
       gearing_confidence: resolvedGearingConfidence,
-      gearing_confirmed: draft.gearingConfirmed,
+      gearing_confirmed: resolvedDraft.gearingConfirmed,
       oem_reference_id: oemReference?.id ?? null,
       oem_reference_label: oemReference?.label ?? null,
       oem_reference_confidence: oemReference?.confidence ?? null,
       oem_reference_notes: oemReference?.notes ?? null,
-      trim: draft.trim.trim(),
-      engine: draft.engine.trim(),
-      drivetrain: draft.drivetrain.trim(),
-      cab: draft.cab.trim(),
-      bed_length: draft.bed.trim(),
+      trim: resolvedDraft.trim.trim(),
+      engine: resolvedDraft.engine.trim(),
+      drivetrain: resolvedDraft.drivetrain.trim(),
+      cab: resolvedDraft.cab.trim(),
+      bed_length: resolvedDraft.bed.trim(),
     } as any);
 
     const persisted = await vehicleStore.update(savedVehicle.id, {
@@ -578,10 +599,10 @@ export default function FleetVehicleProfileModal({
       fuel_tank_capacity_gal: resolvedFuelTankCapacityGal,
       water_capacity_gal: resolvedWaterCapacityGal,
       fuel_type: fuelType,
-      front_base_weight_lb: parseFleetProfileNumber(draft.frontBaseWeight),
-      rear_base_weight_lb: parseFleetProfileNumber(draft.rearBaseWeight),
-      front_gawr_lb: parseFleetProfileNumber(draft.frontGawr),
-      rear_gawr_lb: parseFleetProfileNumber(draft.rearGawr),
+      front_base_weight_lb: parseFleetProfileNumber(resolvedDraft.frontBaseWeight),
+      rear_base_weight_lb: parseFleetProfileNumber(resolvedDraft.rearBaseWeight),
+      front_gawr_lb: parseFleetProfileNumber(resolvedDraft.frontGawr),
+      rear_gawr_lb: parseFleetProfileNumber(resolvedDraft.rearGawr),
       ground_clearance_inches: oemSpecs?.ground_clearance_inches ?? (savedVehicle as any).ground_clearance_inches ?? null,
       wheelbase_in: oemSpecs?.wheelbase_in ?? (savedVehicle as any).wheelbase_in ?? null,
       overall_length_in: oemSpecs?.overall_length_in ?? (savedVehicle as any).overall_length_in ?? null,
@@ -596,7 +617,7 @@ export default function FleetVehicleProfileModal({
       axle_ratio: resolvedAxleRatio,
       gearing_label: resolvedGearingLabel,
       gearing_confidence: resolvedGearingConfidence,
-      gearing_confirmed: draft.gearingConfirmed,
+      gearing_confirmed: resolvedDraft.gearingConfirmed,
     } as any, userId);
 
     if (created) {
@@ -741,17 +762,24 @@ export default function FleetVehicleProfileModal({
         dismissOnBackdrop={false}
         allowSwipeDismiss={false}
         footer={
-          <ECSOverlayFooter>
-            <ECSButton label="Cancel" variant="tertiary" size="medium" onPress={handleClose} grow />
-            <ECSButton
-              label={saving ? 'Saving...' : 'Confirm Specs'}
-              icon="checkmark-circle-outline"
-              variant="primary"
-              size="medium"
-              onPress={handleSave}
-              disabled={saving || validationErrors.length > 0}
-              grow
-            />
+          <ECSOverlayFooter style={styles.profileFooter}>
+            {firstValidationError ? (
+              <Text style={styles.footerErrorText} numberOfLines={2}>
+                {firstValidationError}
+              </Text>
+            ) : null}
+            <View style={styles.footerActions}>
+              <ECSButton label="Cancel" variant="tertiary" size="medium" onPress={handleClose} grow />
+              <ECSButton
+                label={saving ? 'Saving...' : 'Confirm Specs'}
+                icon="checkmark-circle-outline"
+                variant="primary"
+                size="medium"
+                onPress={handleSave}
+                disabled={saving || validationErrors.length > 0}
+                grow
+              />
+            </View>
           </ECSOverlayFooter>
         }
       >
@@ -799,20 +827,36 @@ export default function FleetVehicleProfileModal({
             <View style={styles.confirmHeader}>
               <View style={styles.confirmHeaderCopy}>
                 <Text style={styles.title}>Confirm specs</Text>
-                <Text style={styles.copy}>{suggestion.confidenceExplanation}</Text>
+                <Text style={styles.copy}>
+                  {identityReadyForSuggestedSpecs
+                    ? suggestion.confidenceExplanation
+                    : 'Enter nickname, year, make, and model before ECS applies a class or OEM estimate.'}
+                </Text>
               </View>
-              <ECSBadge label={`${suggestion.baseNetWeight?.confidence ?? 0}% CONF`} tone={suggestion.baseNetWeight ? 'ready' : 'warning'} compact />
+              <ECSBadge
+                label={identityReadyForSuggestedSpecs ? `${suggestion.baseNetWeight?.confidence ?? 0}% CONF` : 'ID REQ'}
+                tone={identityReadyForSuggestedSpecs && suggestion.baseNetWeight ? 'ready' : 'warning'}
+                compact
+              />
             </View>
             <View style={styles.specGrid}>
               <View style={styles.specTile}>
                 <Text style={styles.fieldLabel}>BASE NET / EMPTY</Text>
-                <Text style={styles.specValue}>{formatLbs(parseFleetProfileNumber(draft.baseNetWeight) ?? suggestion.baseNetWeight?.lbs)}</Text>
-                <Text style={styles.oemSpecMeta}>{suggestion.baseNetWeight?.sourceLabel ?? suggestion.baseNetWeight?.source ?? 'Missing source'}</Text>
+                <Text style={styles.specValue}>{formatLbs(displayedBaseNetWeight)}</Text>
+                <Text style={styles.oemSpecMeta}>
+                  {identityReadyForSuggestedSpecs
+                    ? suggestion.baseNetWeight?.sourceLabel ?? suggestion.baseNetWeight?.source ?? 'Missing source'
+                    : 'Enter year/make/model'}
+                </Text>
               </View>
               <View style={styles.specTile}>
                 <Text style={styles.fieldLabel}>GVWR</Text>
-                <Text style={styles.specValue}>{formatLbs(parseFleetProfileNumber(draft.gvwr) ?? suggestion.gvwr?.lbs)}</Text>
-                <Text style={styles.oemSpecMeta}>{suggestion.gvwr?.sourceLabel ?? suggestion.gvwr?.source ?? 'Missing source'}</Text>
+                <Text style={styles.specValue}>{formatLbs(displayedGvwr)}</Text>
+                <Text style={styles.oemSpecMeta}>
+                  {identityReadyForSuggestedSpecs
+                    ? suggestion.gvwr?.sourceLabel ?? suggestion.gvwr?.source ?? 'Missing source'
+                    : 'Enter year/make/model'}
+                </Text>
               </View>
               <View style={styles.specTile}>
                 <Text style={styles.fieldLabel}>PAYLOAD REMAINING</Text>
@@ -898,7 +942,15 @@ export default function FleetVehicleProfileModal({
               </View>
             )}
             <View style={styles.confirmActions}>
-              <ECSButton label="Use ECS Estimate" icon="flash-outline" variant="secondary" size="compact" onPress={applySuggestedSpecs} grow />
+              <ECSButton
+                label="Use ECS Estimate"
+                icon="flash-outline"
+                variant="secondary"
+                size="compact"
+                onPress={applySuggestedSpecs}
+                disabled={!canApplySuggestedSpecs}
+                grow
+              />
               <ECSButton label="Advanced Specs" icon="options-outline" variant="tertiary" size="compact" onPress={openAdvancedSpecs} grow />
             </View>
             {validationErrors.length > 0 ? (
@@ -1031,6 +1083,18 @@ const styles = StyleSheet.create({
   },
   profileSheetContent: {
     paddingBottom: 28,
+  },
+  profileFooter: {
+    flexDirection: 'column',
+    gap: 8,
+  },
+  footerActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  footerErrorText: {
+    ...ECS_TEXT.helper,
+    color: TACTICAL.danger,
   },
   guidedCard: {
     gap: 12,

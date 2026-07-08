@@ -80,6 +80,26 @@ assertIncludes(
 );
 assertIncludes(
   screen,
+  'const SmartResupplyOptionCard = React.memo',
+  'Smart Resupply option rows should be memoized so refreshes only redraw changed rows.',
+);
+assertIncludes(
+  screen,
+  'onSelect: (option: SmartResupplyPoi) => void;',
+  'Smart Resupply option rows should receive stable selection handlers instead of parent-created per-row closures.',
+);
+assertIncludes(
+  screen,
+  'onSelect={handleSelectSmartFuel}',
+  'Fuel Smart Resupply rows should reuse the stable fuel selection callback.',
+);
+assertIncludes(
+  screen,
+  'onSelect={handleSelectSmartSupply}',
+  'Supply Smart Resupply rows should reuse the stable supply selection callback.',
+);
+assertIncludes(
+  screen,
   'smartResupplyLoading === \'supplies\' && smartResupplySupplyOptions.length === 0',
   'Supply picker should only show blocking loading state before options exist',
 );
@@ -121,6 +141,41 @@ assertIncludes(
   screen,
   'testID="trip-builder-camp-reference-hint"',
   'Camp reference-only copy should be visible in the Camp Plan section before the footer area on mobile.',
+);
+assertIncludes(
+  screen,
+  'const TRIP_SETUP_DEFERRED_GROUP_DELAY_MS',
+  'Trip Setup should stage lower planning groups after the setup transition frame.',
+);
+assertIncludes(
+  screen,
+  'const [tripSetupDeferredGroupsReady, setTripSetupDeferredGroupsReady] = useState(false);',
+  'Trip Setup should track when deferred planning groups are safe to mount.',
+);
+assertIncludes(
+  screen,
+  'const tripSetupDeferredGroupsTask = runAfterShellInteractions(() => {',
+  'Trip Setup lower planning groups should mount after shell interactions, not in the open-setup tap frame.',
+);
+assertIncludes(
+  screen,
+  'setTripSetupDeferredGroupsReady(true);',
+  'Trip Setup deferred groups should become visible after the staged mount task.',
+);
+assertIncludes(
+  screen,
+  'tripSetupDeferredGroupsTask.cancel();',
+  'Trip Setup deferred group mount should be cancellable when the route/setup state changes.',
+);
+assertIncludes(
+  screen,
+  '{tripSetupDeferredGroupsReady ? (',
+  'Trip Setup bailout and camp groups should be gated behind deferred readiness.',
+);
+assertIncludes(
+  screen,
+  'testID="trip-builder-setup-deferred-groups-placeholder"',
+  'Trip Setup should reserve bounded scroll space while lower planning groups are deferred.',
 );
 {
   const campPlanStart = screen.indexOf('testID="trip-builder-camp-plan"');

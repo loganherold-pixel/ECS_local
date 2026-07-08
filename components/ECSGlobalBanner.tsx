@@ -22,6 +22,7 @@ type ECSGlobalBannerProps = {
   source: ImageSourcePropType;
   placement: 'top' | 'bottom';
   resizeMode?: ImageResizeMode;
+  deferImage?: boolean;
   style?: StyleProp<ViewStyle>;
   children?: React.ReactNode;
 };
@@ -74,6 +75,7 @@ export function ECSGlobalBanner({
   source,
   placement,
   resizeMode,
+  deferImage = false,
   style,
   children,
 }: ECSGlobalBannerProps) {
@@ -97,15 +99,17 @@ export function ECSGlobalBanner({
         style,
       ]}
     >
-      <Image
-        source={source}
-        contentFit={contentFit}
-        cachePolicy="memory-disk"
-        priority={placement === 'top' ? 'high' : 'normal'}
-        transition={0}
-        recyclingKey={`ecs-global-banner-${placement}-${String(source)}`}
-        style={styles.imageFill}
-      />
+      {deferImage ? null : (
+        <Image
+          source={source}
+          contentFit={contentFit}
+          cachePolicy="memory-disk"
+          priority={placement === 'top' ? 'high' : 'normal'}
+          transition={0}
+          recyclingKey={`ecs-global-banner-${placement}-${String(source)}`}
+          style={styles.imageFill}
+        />
+      )}
       {children ? <View style={styles.overlay}>{children}</View> : null}
     </View>
   );

@@ -305,6 +305,10 @@ const EXPLORE_MAP_HANDOFF_MAX_ROUTES = 60;
 const EXPLORE_SECTION_CARD_VIEWPORT_HEIGHT = 368;
 const ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android';
 const HIDDEN_GEM_AI_TIMEOUT_MS = 4500;
+const EXPLORE_ENTRY_CHROME_DELAY_MS = 160;
+const EXPLORE_ENTRY_CHROME_MAX_WAIT_MS = 420;
+const EXPLORE_ENTRY_HEAVY_CHROME_DELAY_MS = 520;
+const EXPLORE_ENTRY_HEAVY_CHROME_MAX_WAIT_MS = 960;
 const EMPTY_POPULAR_TRAILS_STATE = {
   routes: [] as PopularTrailEnrichedRoute[],
   rankedRoutes: [] as PopularTrailRouteWithMetadata[],
@@ -940,6 +944,8 @@ function DiscoverScreenInner() {
   const [explorePlanningSelectedRouteId, setExplorePlanningSelectedRouteId] = useState<string | null>(null);
   const [exploreWizardSourceFilter, setExploreWizardSourceFilter] = useState<ExploreWizardRouteSourceKind | 'all'>('all');
   const [exploreWizardSaveNotice, setExploreWizardSaveNotice] = useState<string | null>(null);
+  const [exploreEntryChromeReady, setExploreEntryChromeReady] = useState(false);
+  const [exploreEntryHeavyChromeReady, setExploreEntryHeavyChromeReady] = useState(false);
   const [localRouteAssetRevision, setLocalRouteAssetRevision] = useState(0);
 
   // ── User location state ───────────────────────────────────
@@ -1156,6 +1162,34 @@ function DiscoverScreenInner() {
 
     return () => clearTimeout(timeoutId);
   }, [aiEnabled, aiLoading]);
+
+  useEffect(() => {
+    setExploreEntryChromeReady(false);
+    setExploreEntryHeavyChromeReady(false);
+    if (!isFocused) return undefined;
+
+    const exploreEntryChromeTask = runAfterShellInteractions(() => {
+      if (mountedRef.current) {
+        setExploreEntryChromeReady(true);
+      }
+    }, {
+      delayMs: EXPLORE_ENTRY_CHROME_DELAY_MS,
+      maxWaitMs: EXPLORE_ENTRY_CHROME_MAX_WAIT_MS,
+    });
+    const exploreEntryHeavyChromeTask = runAfterShellInteractions(() => {
+      if (mountedRef.current) {
+        setExploreEntryHeavyChromeReady(true);
+      }
+    }, {
+      delayMs: EXPLORE_ENTRY_HEAVY_CHROME_DELAY_MS,
+      maxWaitMs: EXPLORE_ENTRY_HEAVY_CHROME_MAX_WAIT_MS,
+    });
+
+    return () => {
+      exploreEntryChromeTask.cancel();
+      exploreEntryHeavyChromeTask.cancel();
+    };
+  }, [isFocused]);
 
   // ── Phase 13: Continue Exploring recommendations ───────────
   const applyExplorerLocationFix = useCallback((latitude: number, longitude: number) => {
@@ -4882,7 +4916,7 @@ function DiscoverScreenInner() {
   return (
     <TopoBackground>
       <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
-        <Header title="Explore" />
+        <Header title="Explore" deferBannerImage={!exploreEntryHeavyChromeReady} />
 
         <View style={s.explorerBody}>
         <ScrollView style={s.scrollArea} contentContainerStyle={[s.scrollContent, contentFrameStyle]} showsVerticalScrollIndicator={false}>
@@ -4922,6 +4956,7 @@ function DiscoverScreenInner() {
                 selectedRefinement={exploreRefinement}
                 refinementCounts={exploreGuidanceReadyInventory.refinementCounts}
                 onChangeRefinement={handleExploreRefinementChange}
+                deferControls={!exploreEntryHeavyChromeReady}
                 isLoading={isLoading}
               />
 
@@ -5917,11 +5952,15 @@ function DiscoverScreenInner() {
         )}
         </View>
 
-          <View style={[s.footer, contentFrameStyle]}>
-            <Text style={s.footerText}>
-            {`EXPEDITION COMMAND SYSTEM | ${totalRouteCount} ROUTE${totalRouteCount !== 1 ? 'S' : ''} | ${distanceRadiusFooterLabel}${selectedExploreRefinementLabel ? ` | ${selectedExploreRefinementLabel.toUpperCase()}` : ''} | ${hiddenGemPage.eligibleCount} PICKS | ${trailPackPage.eligibleCount} TRAIL PACK${trailPackPage.eligibleCount === 1 ? '' : 'S'} | ALL DRIVABLE TRAILS${refinedAIRoutes.length > 0 ? ` | ${refinedAIRoutes.length} ECS` : ''}`}
-            </Text>
-          </View>
+          {exploreEntryChromeReady ? (
+            <View style={[s.footer, contentFrameStyle]}>
+              <Text style={s.footerText}>
+              {`EXPEDITION COMMAND SYSTEM | ${totalRouteCount} ROUTE${totalRouteCount !== 1 ? 'S' : ''} | ${distanceRadiusFooterLabel}${selectedExploreRefinementLabel ? ` | ${selectedExploreRefinementLabel.toUpperCase()}` : ''} | ${hiddenGemPage.eligibleCount} PICKS | ${trailPackPage.eligibleCount} TRAIL PACK${trailPackPage.eligibleCount === 1 ? '' : 'S'} | ALL DRIVABLE TRAILS${refinedAIRoutes.length > 0 ? ` | ${refinedAIRoutes.length} ECS` : ''}`}
+              </Text>
+            </View>
+          ) : (
+            <View style={[s.footerDeferredPlaceholder, contentFrameStyle]} />
+          )}
 
         <ExpeditionAnalysisModal
           visible={analysisVisible}
@@ -6439,7 +6478,7 @@ const s = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : 'rgba(255,255,255,0.025)',
     paddingHorizontal: 8,
     paddingVertical: 5,
   },
@@ -6463,12 +6502,12 @@ const s = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: ECS.stroke,
-    backgroundColor: 'rgba(255,255,255,0.025)',
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : 'rgba(255,255,255,0.025)',
     padding: 9,
   },
   explorePlanningRouteOptionSelected: {
     borderColor: `${TACTICAL.amber}50`,
-    backgroundColor: `${TACTICAL.amber}0E`,
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}0E`,
   },
   explorePlanningRouteCopy: {
     flex: 1,
@@ -8326,6 +8365,10 @@ const s = StyleSheet.create({
     borderTopWidth: GOLD_RAIL.subsectionWidth,
     borderTopColor: GOLD_RAIL.subsection,
     backgroundColor: 'rgba(11, 15, 18, 0.98)',
+  },
+  footerDeferredPlaceholder: {
+    minHeight: 38,
+    backgroundColor: 'transparent',
   },
   footerText: {
     fontSize: 9,

@@ -69,10 +69,15 @@ includes(gridSource, 'gpsTimestampMs,', 'Widget grid render options should pass 
 includes(dashboardSource, 'gpsTimestampMs={gps.position?.timestamp ?? null}', 'Dashboard should pass GPS timestamp into widgets.');
 includes(dashboardSource, 'gpsAccuracyM={gps.position?.accuracyM ?? null}', 'Dashboard should pass GPS accuracy into widgets.');
 
+notIncludes(
+  terrainRiskSource,
+  'setInterval(',
+  'Terrain Risk default data should not wake JS on a simulated refresh interval.',
+);
 includes(
   terrainRiskSource,
-  'current.riskScore === result.riskScore',
-  'Terrain Risk simulated refresh should avoid identical state writes.',
+  'return useMemo(buildDefaultTerrainRiskAssessment, []);',
+  'Terrain Risk compact state should memoize the default fallback assessment.',
 );
 includes(
   terrainRiskSource,

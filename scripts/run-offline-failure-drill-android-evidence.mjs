@@ -58,6 +58,39 @@ function writeJson(filePath, value) {
   return filePath;
 }
 
+function artifactSize(filePath) {
+  try {
+    return fs.statSync(filePath).size;
+  } catch {
+    return null;
+  }
+}
+
+function readArtifact(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSystemNetworkAssertion(bundle, systemNetworkDisabled) {
+  if (!systemNetworkDisabled) return bundle;
+  const offlineAssertions = bundle.offlineAssertions ?? {};
+  if (offlineAssertions.systemNetworkDisabled === true) return bundle;
+  return {
+    ...bundle,
+    offlineAssertions: {
+      ...offlineAssertions,
+      systemNetworkDisabled: true,
+      notes: [
+        ...(Array.isArray(offlineAssertions.notes) ? offlineAssertions.notes : []),
+        'System network disabled confirmation was supplied by the Android evidence harness.',
+      ],
+    },
+  };
+}
+
 function print(lines) {
   process.stdout.write(`${lines.join('\n')}\n`);
 }
@@ -100,7 +133,7 @@ async function main() {
   } = loadTsModule(path.join(root, 'lib', 'offlineFailureDrillEvidenceCapture.ts'));
 
   const fixture = readJson(fixturePath);
-  const bundle = captureBundleInputPath
+  const sourceBundle = captureBundleInputPath
     ? readJson(captureBundleInputPath)
     : buildOfflineFailureDrillEvidenceCaptureBundle({
       captureId: argValue('evidence-id', `offline-failure-drill-${profile}-${Date.now()}`),
@@ -131,6 +164,7 @@ async function main() {
         'Do not fabricate Android evidence; fixture harness output remains blocked until real Android artifacts are supplied.',
       ],
     });
+  const bundle = normalizeSystemNetworkAssertion(sourceBundle, hasArg('system-network-disabled'));
 
   const payloads = buildOfflineFailureDrillCaptureArtifactPayloads(bundle, { artifactDir: outDir });
   writeJson(captureBundleArtifactPath, JSON.parse(payloads.captureBundle.body));
@@ -201,6 +235,8 @@ async function main() {
   const validation = validateOfflineFailureDrillAndroidEvidenceManifest(manifest, {
     rootDir: root,
     artifactExists: fs.existsSync,
+    artifactRead: readArtifact,
+    artifactSize,
   });
 
   print([

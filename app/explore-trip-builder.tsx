@@ -177,6 +177,8 @@ const TRIP_BUILDER_RESULT_INITIAL_RENDER_COUNT = 2;
 const TRIP_BUILDER_RESULT_BATCH_SIZE = 1;
 const TRIP_BUILDER_RESULT_WINDOW_SIZE = 3;
 const TRIP_BUILDER_RESULT_BATCHING_PERIOD_MS = 80;
+const TRIP_SETUP_DEFERRED_GROUP_DELAY_MS = 180;
+const TRIP_SETUP_DEFERRED_GROUP_MAX_WAIT_MS = 520;
 const TRIP_BUILDER_ITINERARY_REVIEW_ITEM_PREVIEW_COUNT = 4;
 
 function scheduleTripBuilderBackgroundLookup(callback: () => void): ShellInteractionTask {
@@ -1019,22 +1021,26 @@ function StopRow({ stop, index }: { stop: TripPlanStop; index: number }) {
   );
 }
 
-function SmartResupplyOptionCard({
+const SmartResupplyOptionCard = React.memo(function SmartResupplyOptionCard({
   option,
   selected,
   markerLabel,
-  onPress,
+  onSelect,
 }: {
   option: SmartResupplyPoi;
   selected: boolean;
   markerLabel: string;
-  onPress: () => void;
+  onSelect: (option: SmartResupplyPoi) => void;
 }) {
+  const handlePress = useCallback(() => {
+    onSelect(option);
+  }, [onSelect, option]);
+
   return (
     <TouchableOpacity
       style={[styles.smartResupplyOption, selected && styles.smartResupplyOptionSelected]}
       activeOpacity={0.82}
-      onPress={onPress}
+      onPress={handlePress}
       accessibilityRole="button"
       accessibilityLabel={`Select ${option.title}`}
       accessibilityState={{ selected }}
@@ -1074,7 +1080,7 @@ function SmartResupplyOptionCard({
       <Ionicons name={selected ? 'checkmark-circle' : 'chevron-forward'} size={15} color={selected ? TACTICAL.amber : TACTICAL.textMuted} />
     </TouchableOpacity>
   );
-}
+});
 
 function ItineraryAddSlot({
   index,
@@ -3796,6 +3802,7 @@ export default function ExploreTripBuilderScreen() {
   const [routes, setRoutes] = useState<ExpeditionOpportunity[]>([]);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [tripSetupStarted, setTripSetupStarted] = useState(false);
+  const [tripSetupDeferredGroupsReady, setTripSetupDeferredGroupsReady] = useState(false);
   const [preparedTripRoutePreview, setPreparedTripRoutePreview] = useState<PreparedTripRoutePreview | null>(null);
   const [smartResupplyPreference, setSmartResupplyPreference] = useState<SmartResupplyPreference>('fuel_only');
   const [bailoutPlanPreference, setBailoutPlanPreference] = useState<BailoutPlanPreference>('no');
@@ -4517,6 +4524,22 @@ export default function ExploreTripBuilderScreen() {
   );
 
   useEffect(() => {
+    setTripSetupDeferredGroupsReady(false);
+    if (!tripSetupStarted || !selectedRouteId || planModalVisible) return undefined;
+
+    const tripSetupDeferredGroupsTask = runAfterShellInteractions(() => {
+      setTripSetupDeferredGroupsReady(true);
+    }, {
+      delayMs: TRIP_SETUP_DEFERRED_GROUP_DELAY_MS,
+      maxWaitMs: TRIP_SETUP_DEFERRED_GROUP_MAX_WAIT_MS,
+    });
+
+    return () => {
+      tripSetupDeferredGroupsTask.cancel();
+    };
+  }, [planModalVisible, selectedRouteId, tripSetupStarted]);
+
+  useEffect(() => {
     const previousCounts = tripSetupReferencePinCountsRef.current;
     const nextCounts = {
       bailout: bailoutPlanPins.length,
@@ -4868,18 +4891,18 @@ export default function ExploreTripBuilderScreen() {
     setSmartResupplyError(null);
   };
 
-  const handleSelectSmartFuel = (option: SmartResupplyPoi) => {
+  const handleSelectSmartFuel = useCallback((option: SmartResupplyPoi) => {
     hapticMicro();
     setSelectedSmartFuel(option);
     setSelectedSmartSupply(null);
     setSmartResupplyError(null);
-  };
+  }, []);
 
-  const handleSelectSmartSupply = (option: SmartResupplyPoi) => {
+  const handleSelectSmartSupply = useCallback((option: SmartResupplyPoi) => {
     hapticMicro();
     setSelectedSmartSupply(option);
     setSmartResupplyError(null);
-  };
+  }, []);
 
   const handleBailoutPlanPreference = (preference: BailoutPlanPreference) => {
     hapticMicro();
@@ -6079,7 +6102,7 @@ export default function ExploreTripBuilderScreen() {
                                   option={option}
                                   selected={selectedSmartFuel ? smartResupplyOptionStableKey(selectedSmartFuel) === smartResupplyOptionStableKey(option) : false}
                                   markerLabel="A"
-                                  onPress={() => handleSelectSmartFuel(option)}
+                                  onSelect={handleSelectSmartFuel}
                                 />
                               ))}
                             </ScrollView>
@@ -6122,7 +6145,7 @@ export default function ExploreTripBuilderScreen() {
                                       option={option}
                                       selected={selectedSmartSupply ? smartResupplyOptionStableKey(selectedSmartSupply) === smartResupplyOptionStableKey(option) : false}
                                       markerLabel="B"
-                                      onPress={() => handleSelectSmartSupply(option)}
+                                      onSelect={handleSelectSmartSupply}
                                     />
                                   ))}
                                 </ScrollView>
@@ -6140,97 +6163,190 @@ export default function ExploreTripBuilderScreen() {
                       ) : null}
                     </View>
 
-                    <View style={styles.planningQuestion}>
-                      <Text style={styles.groupLabel}>Bailout Plan</Text>
-                      <Text style={styles.planningQuestionText}>
-                        Drop optional reference bailout pins along this route, or skip bailout planning for this trip.
-                      </Text>
-                      <View style={styles.planningChoiceRow}>
-                        {BAILOUT_PLAN_OPTIONS.map((option) => (
-                          <TouchableOpacity
-                            key={option.value}
-                            style={[
-                              styles.planningChoice,
-                              styles.planningChoiceHalf,
-                              bailoutPlanPreference === option.value && styles.planningChoiceSelected,
-                            ]}
-                            activeOpacity={0.82}
-                            onPress={option.value === 'yes' ? handleOpenBailoutPicker : handleSkipBailoutPlan}
-                            accessibilityRole="button"
-                            accessibilityState={{ selected: bailoutPlanPreference === option.value }}
-                            testID={`trip-builder-bailout-plan-${option.value}`}
-                          >
-                            <Text
-                              style={[
-                                styles.planningChoiceLabel,
-                                bailoutPlanPreference === option.value && styles.planningChoiceLabelSelected,
-                              ]}
-                            >
-                              {option.label}
-                            </Text>
-                            <Text
-                              style={[
-                                styles.planningChoiceDetail,
-                                bailoutPlanPreference === option.value && styles.planningChoiceDetailSelected,
-                              ]}
-                              numberOfLines={2}
-                            >
-                              {bailoutPlanOptionDetail(option.value, bailoutPlanPins.length, !!selectedBailoutPoint)}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                      {bailoutPlanPreference === 'yes' ? (
-                        <View style={styles.bailoutSummaryCard} testID="trip-builder-bailout-summary">
-                          <View style={styles.bailoutSummaryHeader}>
-                            <View style={styles.bailoutSummaryCopy}>
-                              <Text style={styles.bailoutSummaryTitle}>
-                                {selectedBailoutPoint
-                                  ? selectedBailoutPoint.title
-                                  : bailoutPlanPins.length > 0
-                                    ? `${bailoutPlanPins.length} bailout reference pin${bailoutPlanPins.length === 1 ? '' : 's'}`
-                                    : 'Bailout reference pins'}
-                              </Text>
-                              <Text style={styles.bailoutSummaryMeta} numberOfLines={2}>
-                                {selectedBailoutPoint
-                                  ? selectedBailoutPoint.subtitle ?? 'Emergency bailout reference point selected.'
-                                  : bailoutPlanPins.length > 0
-                                    ? 'Operator-marked bailout reference pins are saved. Verify legal access, drivability, and current conditions before relying on them.'
-                                    : 'Open the map to drop operator-selected reference bailout pins along the route.'}
-                              </Text>
+                    {tripSetupDeferredGroupsReady ? (
+                      <>
+                        <View style={styles.planningQuestion}>
+                          <Text style={styles.groupLabel}>Bailout Plan</Text>
+                          <Text style={styles.planningQuestionText}>
+                            Drop optional reference bailout pins along this route, or skip bailout planning for this trip.
+                          </Text>
+                          <View style={styles.planningChoiceRow}>
+                            {BAILOUT_PLAN_OPTIONS.map((option) => (
+                              <TouchableOpacity
+                                key={option.value}
+                                style={[
+                                  styles.planningChoice,
+                                  styles.planningChoiceHalf,
+                                  bailoutPlanPreference === option.value && styles.planningChoiceSelected,
+                                ]}
+                                activeOpacity={0.82}
+                                onPress={option.value === 'yes' ? handleOpenBailoutPicker : handleSkipBailoutPlan}
+                                accessibilityRole="button"
+                                accessibilityState={{ selected: bailoutPlanPreference === option.value }}
+                                testID={`trip-builder-bailout-plan-${option.value}`}
+                              >
+                                <Text
+                                  style={[
+                                    styles.planningChoiceLabel,
+                                    bailoutPlanPreference === option.value && styles.planningChoiceLabelSelected,
+                                  ]}
+                                >
+                                  {option.label}
+                                </Text>
+                                <Text
+                                  style={[
+                                    styles.planningChoiceDetail,
+                                    bailoutPlanPreference === option.value && styles.planningChoiceDetailSelected,
+                                  ]}
+                                  numberOfLines={2}
+                                >
+                                  {bailoutPlanOptionDetail(option.value, bailoutPlanPins.length, !!selectedBailoutPoint)}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                          {bailoutPlanPreference === 'yes' ? (
+                            <View style={styles.bailoutSummaryCard} testID="trip-builder-bailout-summary">
+                              <View style={styles.bailoutSummaryHeader}>
+                                <View style={styles.bailoutSummaryCopy}>
+                                  <Text style={styles.bailoutSummaryTitle}>
+                                    {selectedBailoutPoint
+                                      ? selectedBailoutPoint.title
+                                      : bailoutPlanPins.length > 0
+                                        ? `${bailoutPlanPins.length} bailout reference pin${bailoutPlanPins.length === 1 ? '' : 's'}`
+                                        : 'Bailout reference pins'}
+                                  </Text>
+                                  <Text style={styles.bailoutSummaryMeta} numberOfLines={2}>
+                                    {selectedBailoutPoint
+                                      ? selectedBailoutPoint.subtitle ?? 'Emergency bailout reference point selected.'
+                                      : bailoutPlanPins.length > 0
+                                        ? 'Operator-marked bailout reference pins are saved. Verify legal access, drivability, and current conditions before relying on them.'
+                                        : 'Open the map to drop operator-selected reference bailout pins along the route.'}
+                                  </Text>
+                                </View>
+                                <TouchableOpacity
+                                  style={styles.bailoutOpenButton}
+                                  activeOpacity={0.82}
+                                  onPress={handleOpenBailoutPicker}
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Open bailout picker"
+                                  testID="trip-builder-open-bailout-picker"
+                                >
+                                  <Ionicons name="map-outline" size={12} color={TACTICAL.amber} />
+                                  <Text style={styles.bailoutOpenButtonText}>{selectedBailoutPoint || bailoutPlanPins.length > 0 ? 'Change' : 'Open Map'}</Text>
+                                </TouchableOpacity>
+                              </View>
+                              {bailoutPlanPins.length > 0 ? (
+                                <View style={styles.campPinList} testID="trip-builder-bailout-pin-list">
+                                  {bailoutPlanPins.map((pin, index) => (
+                                    <View key={pin.id} style={styles.campPinRow}>
+                                      <View style={styles.campPinIcon}>
+                                        <Ionicons name="exit-outline" size={12} color={TACTICAL.amber} />
+                                      </View>
+                                      <View style={styles.campPinCopy}>
+                                        <Text style={styles.campPinTitle}>{pin.title}</Text>
+                                        <Text style={styles.campPinMeta} numberOfLines={1}>
+                                          Operator-marked bailout reference pin. Legal access, drivability, and current conditions are unknown.
+                                        </Text>
+                                      </View>
+                                      <TouchableOpacity
+                                        style={styles.campPinRemove}
+                                        activeOpacity={0.82}
+                                        onPress={() => handleRemoveBailoutPin(pin.id)}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`Remove bailout pin ${index + 1}`}
+                                        testID={`trip-builder-remove-bailout-pin-${pin.id}`}
+                                      >
+                                        <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+                                      </TouchableOpacity>
+                                    </View>
+                                  ))}
+                                </View>
+                              ) : null}
                             </View>
+                          ) : null}
+                        </View>
+
+                        <View style={styles.planningQuestion} testID="trip-builder-camp-plan">
+                          <Text style={styles.groupLabel}>Camp Plan</Text>
+                          <Text style={styles.planningQuestionText}>
+                            Drop optional reference camp pins along this route, or skip camp planning for this trip.
+                          </Text>
+                          <Text style={styles.smartResupplyPickerHint} testID="trip-builder-camp-reference-hint">
+                            Camp pins are reference-only and will not change the guidance route.
+                          </Text>
+                          <View style={styles.planningChoiceRow}>
                             <TouchableOpacity
-                              style={styles.bailoutOpenButton}
+                              style={[
+                                styles.planningChoice,
+                                styles.planningChoiceHalf,
+                                campPlanPreference === 'skip' && styles.planningChoiceSelected,
+                              ]}
                               activeOpacity={0.82}
-                              onPress={handleOpenBailoutPicker}
+                              onPress={handleSkipCampPlan}
                               accessibilityRole="button"
-                              accessibilityLabel="Open bailout picker"
-                              testID="trip-builder-open-bailout-picker"
+                              accessibilityState={{ selected: campPlanPreference === 'skip' }}
+                              testID="trip-builder-camp-skip"
                             >
-                              <Ionicons name="map-outline" size={12} color={TACTICAL.amber} />
-                              <Text style={styles.bailoutOpenButtonText}>{selectedBailoutPoint || bailoutPlanPins.length > 0 ? 'Change' : 'Open Map'}</Text>
+                              <Text style={[
+                                styles.planningChoiceLabel,
+                                campPlanPreference === 'skip' && styles.planningChoiceLabelSelected,
+                              ]}>
+                                Skip
+                              </Text>
+                              <Text style={[
+                                styles.planningChoiceDetail,
+                                campPlanPreference === 'skip' && styles.planningChoiceDetailSelected,
+                              ]} numberOfLines={2}>
+                                {campPlanOptionDetail('skip', campPlanPins.length)}
+                              </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[
+                                styles.planningChoice,
+                                styles.planningChoiceHalf,
+                                campPlanPreference === 'pins' && styles.planningChoiceSelected,
+                              ]}
+                              activeOpacity={0.82}
+                              onPress={handleOpenCampPicker}
+                              accessibilityRole="button"
+                              accessibilityState={{ selected: campPlanPreference === 'pins' }}
+                              testID="trip-builder-open-camp-picker"
+                            >
+                              <Text style={[
+                                styles.planningChoiceLabel,
+                                campPlanPreference === 'pins' && styles.planningChoiceLabelSelected,
+                              ]}>
+                                Open Map
+                              </Text>
+                              <Text style={[
+                                styles.planningChoiceDetail,
+                                campPlanPreference === 'pins' && styles.planningChoiceDetailSelected,
+                              ]} numberOfLines={2}>
+                                {campPlanOptionDetail('pins', campPlanPins.length)}
+                              </Text>
                             </TouchableOpacity>
                           </View>
-                          {bailoutPlanPins.length > 0 ? (
-                            <View style={styles.campPinList} testID="trip-builder-bailout-pin-list">
-                              {bailoutPlanPins.map((pin, index) => (
+                          {campPlanPins.length > 0 ? (
+                            <View style={styles.campPinList} testID="trip-builder-camp-pin-list">
+                              {campPlanPins.map((pin, index) => (
                                 <View key={pin.id} style={styles.campPinRow}>
                                   <View style={styles.campPinIcon}>
-                                    <Ionicons name="exit-outline" size={12} color={TACTICAL.amber} />
+                                    <Ionicons name="bonfire-outline" size={12} color={TACTICAL.amber} />
                                   </View>
                                   <View style={styles.campPinCopy}>
                                     <Text style={styles.campPinTitle}>{pin.title}</Text>
                                     <Text style={styles.campPinMeta} numberOfLines={1}>
-                                      Operator-marked bailout reference pin. Legal access, drivability, and current conditions are unknown.
+                                      Operator-marked potential camp. Legal access, land use, fire restrictions, and posted rules are unknown.
                                     </Text>
                                   </View>
                                   <TouchableOpacity
                                     style={styles.campPinRemove}
                                     activeOpacity={0.82}
-                                    onPress={() => handleRemoveBailoutPin(pin.id)}
+                                    onPress={() => handleRemoveCampPin(pin.id)}
                                     accessibilityRole="button"
-                                    accessibilityLabel={`Remove bailout pin ${index + 1}`}
-                                    testID={`trip-builder-remove-bailout-pin-${pin.id}`}
+                                    accessibilityLabel={`Remove camp pin ${index + 1}`}
+                                    testID={`trip-builder-remove-camp-pin-${pin.id}`}
                                   >
                                     <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
                                   </TouchableOpacity>
@@ -6239,97 +6355,13 @@ export default function ExploreTripBuilderScreen() {
                             </View>
                           ) : null}
                         </View>
-                      ) : null}
-                    </View>
-
-                    <View style={styles.planningQuestion} testID="trip-builder-camp-plan">
-                      <Text style={styles.groupLabel}>Camp Plan</Text>
-                      <Text style={styles.planningQuestionText}>
-                        Drop optional reference camp pins along this route, or skip camp planning for this trip.
-                      </Text>
-                      <Text style={styles.smartResupplyPickerHint} testID="trip-builder-camp-reference-hint">
-                        Camp pins are reference-only and will not change the guidance route.
-                      </Text>
-                      <View style={styles.planningChoiceRow}>
-                        <TouchableOpacity
-                          style={[
-                            styles.planningChoice,
-                            styles.planningChoiceHalf,
-                            campPlanPreference === 'skip' && styles.planningChoiceSelected,
-                          ]}
-                          activeOpacity={0.82}
-                          onPress={handleSkipCampPlan}
-                          accessibilityRole="button"
-                          accessibilityState={{ selected: campPlanPreference === 'skip' }}
-                          testID="trip-builder-camp-skip"
-                        >
-                          <Text style={[
-                            styles.planningChoiceLabel,
-                            campPlanPreference === 'skip' && styles.planningChoiceLabelSelected,
-                          ]}>
-                            Skip
-                          </Text>
-                          <Text style={[
-                            styles.planningChoiceDetail,
-                            campPlanPreference === 'skip' && styles.planningChoiceDetailSelected,
-                          ]} numberOfLines={2}>
-                            {campPlanOptionDetail('skip', campPlanPins.length)}
-                          </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[
-                            styles.planningChoice,
-                            styles.planningChoiceHalf,
-                            campPlanPreference === 'pins' && styles.planningChoiceSelected,
-                          ]}
-                          activeOpacity={0.82}
-                          onPress={handleOpenCampPicker}
-                          accessibilityRole="button"
-                          accessibilityState={{ selected: campPlanPreference === 'pins' }}
-                          testID="trip-builder-open-camp-picker"
-                        >
-                          <Text style={[
-                            styles.planningChoiceLabel,
-                            campPlanPreference === 'pins' && styles.planningChoiceLabelSelected,
-                          ]}>
-                            Open Map
-                          </Text>
-                          <Text style={[
-                            styles.planningChoiceDetail,
-                            campPlanPreference === 'pins' && styles.planningChoiceDetailSelected,
-                          ]} numberOfLines={2}>
-                            {campPlanOptionDetail('pins', campPlanPins.length)}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                      {campPlanPins.length > 0 ? (
-                        <View style={styles.campPinList} testID="trip-builder-camp-pin-list">
-                          {campPlanPins.map((pin, index) => (
-                            <View key={pin.id} style={styles.campPinRow}>
-                              <View style={styles.campPinIcon}>
-                                <Ionicons name="bonfire-outline" size={12} color={TACTICAL.amber} />
-                              </View>
-                              <View style={styles.campPinCopy}>
-                                <Text style={styles.campPinTitle}>{pin.title}</Text>
-                                <Text style={styles.campPinMeta} numberOfLines={1}>
-                                  Operator-marked potential camp. Legal access, land use, fire restrictions, and posted rules are unknown.
-                                </Text>
-                              </View>
-                              <TouchableOpacity
-                                style={styles.campPinRemove}
-                                activeOpacity={0.82}
-                                onPress={() => handleRemoveCampPin(pin.id)}
-                                accessibilityRole="button"
-                                accessibilityLabel={`Remove camp pin ${index + 1}`}
-                                testID={`trip-builder-remove-camp-pin-${pin.id}`}
-                              >
-                                <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
-                              </TouchableOpacity>
-                            </View>
-                          ))}
-                        </View>
-                      ) : null}
-                    </View>
+                      </>
+                    ) : (
+                      <View
+                        style={styles.tripSetupDeferredGroupsPlaceholder}
+                        testID="trip-builder-setup-deferred-groups-placeholder"
+                      />
+                    )}
                   </View>
 
                     </ScrollView>
@@ -6811,6 +6843,13 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(255,255,255,0.07)',
     paddingTop: 7,
     gap: 8,
+  },
+  tripSetupDeferredGroupsPlaceholder: {
+    minHeight: 116,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.012)',
   },
   planningQuestion: {
     gap: 5,

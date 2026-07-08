@@ -11,6 +11,7 @@ function read(...parts) {
 const commandDock = read('components', 'CommandDock.tsx');
 const ecsGlobalBanner = read('components', 'ECSGlobalBanner.tsx');
 const shellBodyBackground = read('components', 'ShellBodyBackground.tsx');
+const appLayout = read('app', '_layout.tsx');
 const explorePlanningTabs = read('components', 'discover', 'ExplorePlanningTabs.tsx');
 const dashboard = read('app', '(tabs)', 'dashboard.tsx');
 const navigate = read('app', '(tabs)', 'navigate.tsx');
@@ -48,6 +49,14 @@ assert(
     commandDock.includes('isPrimaryTabActiveForPath(item.tabId, effectivePathname)'),
   'CommandDock active-state styling should use the canonical route manifest and pending route so the dock responds immediately.',
 );
+assert(
+  commandDock.includes('const DockButton = React.memo') &&
+    commandDock.includes('const ShieldCenterButton = React.memo') &&
+    commandDock.includes('const pathnameRef = useRef(pathname);') &&
+    commandDock.includes('const quickActionsVisibleRef = useRef(quickActionsVisible);') &&
+    commandDock.includes('onNavigate={handleNavigate}'),
+  'CommandDock image-heavy buttons should be memoized and use stable navigation handlers so unrelated dock items do not redraw during tab transitions.',
+);
 
 assert(
   ecsGlobalBanner.includes("import { Image } from 'expo-image';") &&
@@ -55,12 +64,31 @@ assert(
     ecsGlobalBanner.includes('transition={0}') &&
     ecsGlobalBanner.includes('recyclingKey={`ecs-global-banner-${placement}-${String(source)}`}') &&
     shellBodyBackground.includes("import { Image } from 'expo-image';") &&
+    shellBodyBackground.includes('BODY_BG_MOBILE') &&
+    shellBodyBackground.includes('deferImage?: boolean;') &&
+    shellBodyBackground.includes('useLightweightImage?: boolean;') &&
+    shellBodyBackground.includes('deferImage ? (') &&
+    shellBodyBackground.includes('backgroundColor: colors.bgElevated') &&
     shellBodyBackground.includes('cachePolicy="memory-disk"') &&
     shellBodyBackground.includes('transition={0}') &&
-    shellBodyBackground.includes('recyclingKey="ecs-shell-body-background"') &&
+    shellBodyBackground.includes("'ecs-shell-body-background-mobile'") &&
+    shellBodyBackground.includes("'ecs-shell-body-background'") &&
     commandDock.includes('cachePolicy="memory-disk"') &&
     commandDock.includes('priority="high"'),
   'Shared shell imagery should use cached no-transition expo-image surfaces and cached dock badges to avoid bitmap upload spikes during tab changes.',
+);
+
+assert(
+  appLayout.includes('EXPLORE_ENTRY_SHELL_BACKGROUND_DELAY_MS') &&
+    appLayout.includes('EXPLORE_ENTRY_SHELL_BACKGROUND_MAX_WAIT_MS') &&
+    appLayout.includes('const [deferSharedShellBackgroundImage, setDeferSharedShellBackgroundImage] = useState(false);') &&
+    appLayout.includes("normalizedPathname === '/discover'") &&
+    appLayout.includes("normalizedPathname === '/explore-trip-builder'") &&
+    appLayout.includes('setDeferSharedShellBackgroundImage(true);') &&
+    appLayout.includes('runAfterShellInteractions(') &&
+    appLayout.includes('deferImage={deferSharedShellBackgroundImage}') &&
+    appLayout.includes('useLightweightImage={shouldDeferExploreShellBackgroundImage}'),
+  'Android Explore entry should defer shared shell body artwork during the first transition budget window.',
 );
 
 assert(

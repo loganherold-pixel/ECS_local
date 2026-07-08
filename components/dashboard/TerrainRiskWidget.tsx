@@ -17,7 +17,7 @@
  *   - accelerometer (roll/pitch)
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
@@ -48,42 +48,19 @@ import type { TerrainProfile } from '../../lib/terrainProfile';
 // SHARED HOOKS & DATA
 // ═══════════════════════════════════════════════════════════
 
-function useTerrainRiskData(): TerrainRiskAssessment {
-  const [assessment, setAssessment] = useState<TerrainRiskAssessment>(() => {
-    const profile = buildVehicleCapabilityProfile({});
-    return computeTerrainRiskAssessment({
-      vehicleProfile: profile,
-      terrainProfile: DEFAULT_TERRAIN_PROFILE,
-      rollDeg: 0,
-      pitchDeg: 0,
-      hasSensorData: false,
-    });
+function buildDefaultTerrainRiskAssessment(): TerrainRiskAssessment {
+  const profile = buildVehicleCapabilityProfile({});
+  return computeTerrainRiskAssessment({
+    vehicleProfile: profile,
+    terrainProfile: DEFAULT_TERRAIN_PROFILE,
+    rollDeg: 0,
+    pitchDeg: 0,
+    hasSensorData: false,
   });
+}
 
-  // Recompute periodically (simulated — in production, driven by store subscriptions)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const profile = buildVehicleCapabilityProfile({});
-      const result = computeTerrainRiskAssessment({
-        vehicleProfile: profile,
-        terrainProfile: DEFAULT_TERRAIN_PROFILE,
-        rollDeg: 0,
-        pitchDeg: 0,
-        hasSensorData: false,
-      });
-      setAssessment((current) => (
-        current.riskScore === result.riskScore &&
-        current.riskLevel === result.riskLevel &&
-        current.descriptor === result.descriptor
-          ? current
-          : result
-      ));
-    }, 15000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  return assessment;
+function useTerrainRiskData(): TerrainRiskAssessment {
+  return useMemo(buildDefaultTerrainRiskAssessment, []);
 }
 
 // ═══════════════════════════════════════════════════════════

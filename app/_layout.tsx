@@ -91,6 +91,10 @@ import {
   normalizeECSRoutePath,
   toExpoRouterShellTarget as toManifestExpoRouterShellTarget,
 } from '../lib/routeManifest';
+import {
+  runAfterShellInteractions,
+  type ShellInteractionTask,
+} from '../lib/shellInteractionScheduler';
 
 if (typeof globalThis.fetch === 'undefined') {
   // @ts-ignore
@@ -138,6 +142,8 @@ const STARTUP_VISUAL_PALETTE = {
 const INITIAL_URL_RESOLUTION_TIMEOUT_MS = 1500;
 const MIN_LOADING_MS = 3000;
 const POST_AUTH_HANDOFF_ROUTE_TIMEOUT_MS = 6500;
+const EXPLORE_ENTRY_SHELL_BACKGROUND_DELAY_MS = 820;
+const EXPLORE_ENTRY_SHELL_BACKGROUND_MAX_WAIT_MS = 1280;
 const STARTUP_ROUTE_READINESS_TIMEOUT_MS = 8000;
 const DASHBOARD_SHELL_READINESS_TIMEOUT_MS = 5000;
 const STARTUP_LOADING_STALL_DIAGNOSTIC_MS = 12000;
@@ -306,6 +312,7 @@ function AuthGate() {
   const [requestedEntryRoute, setRequestedEntryRoute] = useState<string | null>(null);
   const [initialEntryRouteResolved, setInitialEntryRouteResolved] = useState(false);
   const [startupRecoveryVisible, setStartupRecoveryVisible] = useState(false);
+  const [deferSharedShellBackgroundImage, setDeferSharedShellBackgroundImage] = useState(false);
   const [accessActionBusy, setAccessActionBusy] = useState<
     'refresh_access' | 'restore_purchases' | 'manage_subscription' | 'start_subscription' | 'sign_out' | null
   >(null);
@@ -337,6 +344,37 @@ function AuthGate() {
     [colors.bgCard, colors.bgElevated, colors.border, palette.amber, palette.bg, palette.text, palette.textMuted, themeReady],
   );
   const normalizedPathname = useMemo(() => normalizeRoutePath(pathname), [pathname]);
+  const shouldDeferExploreShellBackgroundImage =
+    Platform.OS === 'android' &&
+    (
+      normalizedPathname === '/discover' ||
+      normalizedPathname === '/explore' ||
+      normalizedPathname === '/explore-trip-builder'
+    );
+
+  useEffect(() => {
+    let releaseTask: ShellInteractionTask | null = null;
+
+    if (!shouldDeferExploreShellBackgroundImage) {
+      setDeferSharedShellBackgroundImage(false);
+      return () => undefined;
+    }
+
+    setDeferSharedShellBackgroundImage(true);
+    releaseTask = runAfterShellInteractions(
+      () => {
+        setDeferSharedShellBackgroundImage(false);
+      },
+      {
+        delayMs: EXPLORE_ENTRY_SHELL_BACKGROUND_DELAY_MS,
+        maxWaitMs: EXPLORE_ENTRY_SHELL_BACKGROUND_MAX_WAIT_MS,
+      },
+    );
+
+    return () => {
+      releaseTask?.cancel();
+    };
+  }, [normalizedPathname, shouldDeferExploreShellBackgroundImage]);
   const persistedOfflineMode = startupRouteHydrated
     ? offlineModeCache.get(OFFLINE_MODE_KEY) === 'true'
     : false;
@@ -1773,6 +1811,8 @@ function AuthGate() {
         <ShellBodyBackground
           topInset={shellBodyTopInset}
           bottomInset={shellBodyBottomInset}
+          deferImage={deferSharedShellBackgroundImage}
+          useLightweightImage={shouldDeferExploreShellBackgroundImage}
         />
       ) : null}
 

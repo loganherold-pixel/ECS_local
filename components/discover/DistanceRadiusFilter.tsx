@@ -43,6 +43,7 @@ interface DistanceRadiusFilterProps {
   selectedRefinement: ExploreRefinementFilter | null;
   refinementCounts: Record<ExploreRefinementFilter, number>;
   onChangeRefinement: (refinement: ExploreRefinementFilter | null) => void;
+  deferControls?: boolean;
   /** Whether results are currently loading/refreshing */
   isLoading?: boolean;
 }
@@ -57,6 +58,7 @@ export default function DistanceRadiusFilter({
   selectedRefinement,
   refinementCounts,
   onChangeRefinement,
+  deferControls = false,
   isLoading = false,
 }: DistanceRadiusFilterProps) {
   const { width } = useWindowDimensions();
@@ -104,91 +106,100 @@ export default function DistanceRadiusFilter({
         </View>
       </View>
 
-      {/* Segmented control */}
-      <Text style={s.filterGroupLabel}>RANGE</Text>
-      <View style={[s.segmentedRow, compact && s.segmentedRowCompact]}>
-        {DISTANCE_RADIUS_OPTIONS.map((radius) => {
-          const isActive = radius === selectedRadius;
-          return (
-            <TouchableOpacity
-              key={radius}
-              style={[
-                s.segment,
-                compact && s.segmentCompact,
-                isActive && s.segmentActive,
-              ]}
-              activeOpacity={0.75}
-              onPress={() => {
-                hapticMicro();
-                onChangeRadius(isActive ? null : radius);
-              }}
-            >
-              <Text
-                style={[
-                  s.segmentText,
-                  isActive && s.segmentTextActive,
-                ]}
-              >
-                {radius}
-              </Text>
-              <Text
-                style={[
-                  s.segmentUnit,
-                  isActive && s.segmentUnitActive,
-                ]}
-              >
-                MI
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      {deferControls ? (
+        <View
+          style={s.deferredControlPlaceholder}
+          testID="explore-filter-deferred-controls-placeholder"
+        />
+      ) : (
+        <>
+          {/* Segmented control */}
+          <Text style={s.filterGroupLabel}>RANGE</Text>
+          <View style={[s.segmentedRow, compact && s.segmentedRowCompact]}>
+            {DISTANCE_RADIUS_OPTIONS.map((radius) => {
+              const isActive = radius === selectedRadius;
+              return (
+                <TouchableOpacity
+                  key={radius}
+                  style={[
+                    s.segment,
+                    compact && s.segmentCompact,
+                    isActive && s.segmentActive,
+                  ]}
+                  activeOpacity={0.75}
+                  onPress={() => {
+                    hapticMicro();
+                    onChangeRadius(isActive ? null : radius);
+                  }}
+                >
+                  <Text
+                    style={[
+                      s.segmentText,
+                      isActive && s.segmentTextActive,
+                    ]}
+                  >
+                    {radius}
+                  </Text>
+                  <Text
+                    style={[
+                      s.segmentUnit,
+                      isActive && s.segmentUnitActive,
+                    ]}
+                  >
+                    MI
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
-      <Text style={s.filterGroupLabel}>REFINE</Text>
-      <View style={[s.refinementRow, compact && s.segmentedRowCompact]}>
-        {EXPLORE_REFINEMENT_OPTIONS.map((option) => {
-          const isActive = option.key === selectedRefinement;
-          const matchCount = refinementCounts[option.key] ?? 0;
-          const disabled = !isActive && matchCount === 0;
-          return (
-            <TouchableOpacity
-              key={option.key}
-              style={[
-                s.refinementChip,
-                compact && s.refinementChipCompact,
-                isActive && s.segmentActive,
-                disabled && s.refinementChipDisabled,
-              ]}
-              activeOpacity={disabled ? 1 : 0.75}
-              disabled={disabled}
-              accessibilityRole="button"
-              accessibilityState={{ selected: isActive, disabled }}
-              onPress={() => {
-                onChangeRefinement(isActive ? null : option.key);
-              }}
-            >
-              <Text
-                style={[
-                  s.refinementChipText,
-                  isActive && s.segmentTextActive,
-                  disabled && s.refinementChipTextDisabled,
-                ]}
-              >
-                {option.label}
-              </Text>
-              <Text
-                style={[
-                  s.refinementChipCount,
-                  isActive && s.segmentUnitActive,
-                  disabled && s.refinementChipTextDisabled,
-                ]}
-              >
-                {matchCount}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+          <Text style={s.filterGroupLabel}>REFINE</Text>
+          <View style={[s.refinementRow, compact && s.segmentedRowCompact]}>
+            {EXPLORE_REFINEMENT_OPTIONS.map((option) => {
+              const isActive = option.key === selectedRefinement;
+              const matchCount = refinementCounts[option.key] ?? 0;
+              const disabled = !isActive && matchCount === 0;
+              return (
+                <TouchableOpacity
+                  key={option.key}
+                  style={[
+                    s.refinementChip,
+                    compact && s.refinementChipCompact,
+                    isActive && s.segmentActive,
+                    disabled && s.refinementChipDisabled,
+                  ]}
+                  activeOpacity={disabled ? 1 : 0.75}
+                  disabled={disabled}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: isActive, disabled }}
+                  onPress={() => {
+                    onChangeRefinement(isActive ? null : option.key);
+                  }}
+                >
+                  <Text
+                    style={[
+                      s.refinementChipText,
+                      isActive && s.segmentTextActive,
+                      disabled && s.refinementChipTextDisabled,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                  <Text
+                    style={[
+                      s.refinementChipCount,
+                      isActive && s.segmentUnitActive,
+                      disabled && s.refinementChipTextDisabled,
+                    ]}
+                  >
+                    {matchCount}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </>
+      )}
 
     </ECSSliderField>
   );
@@ -211,6 +222,13 @@ const s = StyleSheet.create({
   filterContentSurface: {
     borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}2E`,
     backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : `${TACTICAL.amber}12`,
+  },
+  deferredControlPlaceholder: {
+    minHeight: 122,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.stroke : `${TACTICAL.amber}1F`,
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}08`,
   },
 
   // ── Header ────────────────────────────────────────────

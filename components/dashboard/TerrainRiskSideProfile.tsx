@@ -482,11 +482,8 @@ export default function TerrainRiskSideProfile({
       point.riskScore > peak.riskScore ? point : peak, points[0]);
     const highRiskSegments = segments.filter((segment) => segment.riskLevel === 'high');
     const referencePoints = points.filter(isTerrainProfileReferencePoint);
-    const currentPositionPoint = buildCurrentRouteMarkerPoint(points, totalDistanceMiles, completedDistanceMiles);
-
     return {
       areaPath,
-      currentPositionPoint,
       highRiskSegments,
       linePath,
       peakPoint,
@@ -496,7 +493,12 @@ export default function TerrainRiskSideProfile({
       xTicks,
       yTicks,
     };
-  }, [completedDistanceMiles, profile, totalDistanceMiles, unit]);
+  }, [profile, totalDistanceMiles, unit]);
+
+  const currentPositionPoint = useMemo(
+    () => chart ? buildCurrentRouteMarkerPoint(chart.points, totalDistanceMiles, completedDistanceMiles) : null,
+    [chart, completedDistanceMiles, totalDistanceMiles],
+  );
 
   const selectedProbePoint = useMemo(
     () => chart
@@ -700,22 +702,22 @@ export default function TerrainRiskSideProfile({
           />
         ))}
 
-        {chart.currentPositionPoint ? (
+        {currentPositionPoint ? (
           <G
             accessible
             accessibilityLabel="Current GPS position on terrain profile"
             accessibilityRole="image"
           >
             <Path
-              d={buildCurrentPositionMarkerPath(chart.currentPositionPoint)}
+              d={buildCurrentPositionMarkerPath(currentPositionPoint)}
               fill={TACTICAL.amber}
               stroke="rgba(3,6,8,0.94)"
               strokeWidth={1.2}
               opacity={0.98}
             />
             <Circle
-              cx={chart.currentPositionPoint.x}
-              cy={chart.currentPositionPoint.y}
+              cx={currentPositionPoint.x}
+              cy={currentPositionPoint.y}
               r={2.4}
               fill="#FFFFFF"
               opacity={0.92}

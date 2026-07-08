@@ -6384,10 +6384,14 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     () => terrainElevationRouteSignature(routeProgress?.activeRouteId ?? terrainRiskProfileRoute?.id ?? null, rawTerrainRiskRoutePoints),
     [rawTerrainRiskRoutePoints, routeProgress?.activeRouteId, terrainRiskProfileRoute?.id],
   );
+  const terrainRiskSampleSourcePointsRef = useRef(rawTerrainRiskRoutePoints);
   const terrainRiskNeedsElevationSampling = routeNeedsTerrainElevationSampling(
     terrainRiskHasLiveGuidance,
     rawTerrainRiskRoutePoints,
   );
+  useEffect(() => {
+    terrainRiskSampleSourcePointsRef.current = rawTerrainRiskRoutePoints;
+  }, [rawTerrainRiskRoutePoints, terrainRiskSamplingSignature]);
   useEffect(() => {
     if (!terrainRiskNeedsElevationSampling) {
       setSampledTerrainRiskRoutePoints(null);
@@ -6399,6 +6403,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
 
     const abortController = new AbortController();
     const requestSignature = terrainRiskSamplingSignature;
+    const routePointsForSampling = terrainRiskSampleSourcePointsRef.current;
     setTerrainRiskSamplingPendingSignature(requestSignature);
     setTerrainRiskSamplingFallbackSignature((current) => (
       current === requestSignature ? null : current
@@ -6415,7 +6420,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
           return;
         }
         const sampledPoints = await sampleRouteElevationFromMapboxTerrainContours({
-          routePoints: rawTerrainRiskRoutePoints,
+          routePoints: routePointsForSampling,
           accessToken: token,
           signal: abortController.signal,
         });
@@ -6440,7 +6445,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     return () => {
       abortController.abort();
     };
-  }, [rawTerrainRiskRoutePoints, terrainRiskNeedsElevationSampling, terrainRiskSamplingSignature]);
+  }, [terrainRiskNeedsElevationSampling, terrainRiskSamplingSignature]);
   const terrainRiskSampledElevationReady = Boolean(
     sampledTerrainRiskRoutePoints &&
     sampledTerrainRiskSignature === terrainRiskSamplingSignature,
