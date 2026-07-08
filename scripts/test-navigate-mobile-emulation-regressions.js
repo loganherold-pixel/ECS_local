@@ -14,9 +14,11 @@ const navigateSource = read('app/(tabs)/navigate.tsx');
 const mapRendererSource = read('components/navigate/MapRenderer.tsx');
 const mapFallbackSurfaceSource = read('components/navigate/MapFallbackSurface.tsx');
 const compassRoseSource = read('components/navigate/CompassRose.tsx');
+const supabaseSource = read('lib/supabase.ts');
 const fullMapTileCacheMatch = mapRendererSource.match(/const FULL_MAP_MAX_TILE_CACHE_SIZE = (\d+)/);
 const compactMapTileCacheMatch = mapRendererSource.match(/const COMPACT_MAP_MAX_TILE_CACHE_SIZE = (\d+)/);
 const fullMapPixelRatioMatch = mapRendererSource.match(/const FULL_MAP_PIXEL_RATIO_CAP = ([0-9.]+)/);
+const compactMapPixelRatioMatch = mapRendererSource.match(/const COMPACT_MAP_PIXEL_RATIO_CAP = ([0-9.]+)/);
 const bootstrapTimeoutBranchMatch = mapRendererSource.match(
   /if \(payload\?\.reason === 'bootstrap_timeout'\) \{([\s\S]*?)\n        \}\n\n        clearFailSafeTimer/,
 );
@@ -396,13 +398,19 @@ assert.ok(
   'Parked idle destination search should keep the standby map visually useful without letting search-background taps wake the live WebView.',
 );
 assert.ok(
-  navigateSource.includes('const activeRerouteWithoutMapGeometry =') &&
+  navigateSource.includes('const activeRerouteMapStandby =') &&
+    navigateSource.includes("Platform.OS === 'android'") &&
     navigateSource.includes("roadSession.status === 'rerouting'") &&
     navigateSource.includes("roadSession.routeConfidenceState === 'rerouting'") &&
-    navigateSource.includes('displayedRoutePoints.length < 2') &&
-    navigateSource.includes('fallbackRoutePointsForMap.length < 2') &&
-    navigateSource.includes('liveMapDisabled={activeRerouteWithoutMapGeometry}'),
-  'Navigate should keep the live WebView disabled during geometryless active reroutes and rely on the native fallback surface instead.',
+    navigateSource.includes('liveMapDisabled={activeRerouteMapStandby}') &&
+    !navigateSource.includes('activeRerouteWithoutMapGeometry'),
+  'Navigate should keep the live WebView disabled during Android active reroutes and rely on the native fallback surface instead.',
+);
+assert.ok(
+  navigateSource.includes('const mapStartupOverlayVisible =') &&
+    navigateSource.includes('!activeRerouteMapStandby') &&
+    navigateSource.includes('{mapStartupOverlayVisible && ('),
+  'Navigate should not cover Android active-reroute native standby with the generic map startup overlay.',
 );
 assert.ok(
   navigateSource.includes('NAVIGATE_ROAD_PREVIEW_MAX_VISUAL_POINTS') &&
@@ -479,10 +487,14 @@ assert.ok(
     Number(fullMapTileCacheMatch[1]) > 0 &&
     Number(fullMapTileCacheMatch[1]) <= 16 &&
     compactMapTileCacheMatch &&
+    Number(compactMapTileCacheMatch[1]) <= 12 &&
     Number(compactMapTileCacheMatch[1]) <= Number(fullMapTileCacheMatch[1]) &&
     fullMapPixelRatioMatch &&
     Number(fullMapPixelRatioMatch[1]) > 0 &&
     Number(fullMapPixelRatioMatch[1]) <= 0.5 &&
+    compactMapPixelRatioMatch &&
+    Number(compactMapPixelRatioMatch[1]) <= Number(fullMapPixelRatioMatch[1]) &&
+    Number(compactMapPixelRatioMatch[1]) <= 0.5 &&
     mapRendererSource.includes('FULL_MAP_PIXEL_RATIO_CAP') &&
     mapRendererSource.includes('COMPACT_MAP_PIXEL_RATIO_CAP') &&
     mapRendererSource.includes('var mapPixelRatioCap =') &&
@@ -491,12 +503,23 @@ assert.ok(
 );
 assert.ok(
   mapRendererSource.includes('function scheduleMapResizePump(reason)') &&
+    mapRendererSource.includes("var shouldResize = reason === 'constructor' || reason === 'load' || before !== lastResizeSignature;") &&
+    mapRendererSource.includes('if (!shouldResize) return;') &&
+    mapRendererSource.includes('resizePumpRemainingTicks = Math.max(resizePumpRemainingTicks, 4);') &&
+    !mapRendererSource.includes('resizePumpRemainingTicks = Math.max(resizePumpRemainingTicks, 8);') &&
     mapRendererSource.includes("scheduleMapResizePump('constructor')") &&
     mapRendererSource.includes("scheduleMapResizePump('load')") &&
     mapRendererSource.includes("scheduleMapResizePump('style_load')") &&
     mapRendererSource.includes("resizeMapIfNeeded('payload_apply')") &&
     mapRendererSource.includes("window.addEventListener('resize'"),
   'MapRenderer should run a bounded resize pump so Android WebView maps recover from first-layout canvas sizing races.',
+);
+assert.ok(
+  supabaseSource.includes('function shouldWarnMissingSupabaseConfig()') &&
+    supabaseSource.includes('ECS_SUPABASE_SILENCE_CONFIG_WARNING') &&
+    supabaseSource.includes("npm_lifecycle_event?.startsWith('test:')") &&
+    supabaseSource.includes('if (shouldWarnMissingSupabaseConfig())'),
+  'Supabase config warnings should remain visible in the app while staying quiet during automated npm test smoke runs.',
 );
 assert.ok(
   bootstrapTimeoutBranchMatch &&
@@ -552,6 +575,15 @@ assert.ok(
 assert.ok(
   mapFallbackSurfaceSource.includes("showStatusLabel && statusLabel ? statusLabel : 'Map ready'"),
   'MapFallbackSurface should surface explicit pending/fallback status copy even when it has no drawable route bounds yet.',
+);
+assert.ok(
+  mapFallbackSurfaceSource.includes('const hasDrawableLineGeometry =') &&
+    mapFallbackSurfaceSource.includes('const pendingGeometryStatus =') &&
+    mapFallbackSurfaceSource.includes("statusLabel === 'Route geometry pending'") &&
+    mapFallbackSurfaceSource.includes('!hasDrawableLineGeometry') &&
+    mapFallbackSurfaceSource.includes('if (!bounds || pendingGeometryStatus)') &&
+    mapFallbackSurfaceSource.includes('Guidance is holding current position while route geometry updates.'),
+  'MapFallbackSurface should keep route-geometry-pending copy visible when it can draw only current position or markers.',
 );
 assert.ok(
   mapRendererSource.includes('compactRoutePreviewStandbyEligible') &&

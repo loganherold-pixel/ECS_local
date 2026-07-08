@@ -78,9 +78,9 @@ const MAP_CONSTRUCTOR_RETRY_LIMIT = 3;
 const MAP_CONSTRUCTOR_RETRY_BASE_MS = 650;
 const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
 const FULL_MAP_MAX_TILE_CACHE_SIZE = 16;
-const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 16;
+const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 12;
 const FULL_MAP_PIXEL_RATIO_CAP = 0.5;
-const COMPACT_MAP_PIXEL_RATIO_CAP = 0.75;
+const COMPACT_MAP_PIXEL_RATIO_CAP = 0.5;
 const STANDBY_STATIC_MAP_WIDTH = 720;
 const STANDBY_STATIC_MAP_HEIGHT = 1280;
 const MAX_KNOWN_CAMPSITE_SOURCE_MARKERS = 40;
@@ -2892,6 +2892,8 @@ function makeMapHtml(
         if (!map) return;
         try {
           var before = mapContainerSizeSignature();
+          var shouldResize = reason === 'constructor' || reason === 'load' || before !== lastResizeSignature;
+          if (!shouldResize) return;
           map.resize();
           var after = mapContainerSizeSignature();
           if (after !== lastResizeSignature) {
@@ -2908,7 +2910,7 @@ function makeMapHtml(
       }
 
       function scheduleMapResizePump(reason) {
-        resizePumpRemainingTicks = Math.max(resizePumpRemainingTicks, 8);
+        resizePumpRemainingTicks = Math.max(resizePumpRemainingTicks, 4);
         if (resizePumpTimer) return;
 
         function tick() {

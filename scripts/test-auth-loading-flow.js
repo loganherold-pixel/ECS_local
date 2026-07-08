@@ -67,8 +67,8 @@ assertNotIncludes(
 
 assertIncludes(
   layoutSource,
-  'const MIN_LOADING_MS = 3000;',
-  'Auth loading should enforce the 3 second minimum display duration.',
+  'const MIN_LOADING_MS = 1200;',
+  'Auth loading should keep the handoff visible without adding multiple seconds to cold launch.',
 );
 assertNotIncludes(
   layoutSource,
@@ -112,17 +112,17 @@ assertIncludes(
 );
 assertIncludes(
   appContextSource,
-  'const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 8000;',
-  'Required startup readiness should have a bounded fallback so root loading cannot hang forever.',
+  'const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 3000;',
+  'Required startup readiness should fall back quickly enough that storage stalls do not create long cold launches.',
 );
 assertIncludes(
   appContextSource,
-  'const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 10000;',
+  'const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 6000;',
   'Auth restore should have a bounded fallback so session checks cannot hang root loading forever.',
 );
 assertIncludes(
   appContextSource,
-  'const STARTUP_PROVIDER_SESSION_TIMEOUT_MS = 4500;',
+  'const STARTUP_PROVIDER_SESSION_TIMEOUT_MS = 2500;',
   'Supabase startup session restore should have a shorter provider-call timeout before the outer loading watchdog fires.',
 );
 assertIncludes(
@@ -212,17 +212,17 @@ assertIncludes(
 );
 assertIncludes(
   layoutSource,
-  'const STARTUP_ROUTE_READINESS_TIMEOUT_MS = 8000;',
-  'AuthGate route readiness should have a bounded fallback.',
+  'const STARTUP_ROUTE_READINESS_TIMEOUT_MS = 3000;',
+  'AuthGate route readiness should have a bounded fallback that does not stack into a long cold-launch wait.',
 );
 assertIncludes(
   layoutSource,
-  'const DASHBOARD_SHELL_READINESS_TIMEOUT_MS = 5000;',
+  'const DASHBOARD_SHELL_READINESS_TIMEOUT_MS = 2200;',
   'Dashboard shell hydration should not block post-auth routing indefinitely.',
 );
 assertIncludes(
   layoutSource,
-  'const STARTUP_LOADING_STALL_DIAGNOSTIC_MS = 12000;',
+  'const STARTUP_LOADING_STALL_DIAGNOSTIC_MS = 6000;',
   'AuthGate should report a startup stall before users can sit in loading indefinitely.',
 );
 assertIncludes(

@@ -72,6 +72,18 @@ function shouldWarnEdgeFunction(signature: string): boolean {
   return true;
 }
 
+function shouldWarnMissingSupabaseConfig(): boolean {
+  if (process.env.ECS_SUPABASE_SILENCE_CONFIG_WARNING === "1") {
+    return false;
+  }
+
+  if (process.env.NODE_ENV === "test" || process.env.npm_lifecycle_event?.startsWith('test:')) {
+    return false;
+  }
+
+  return true;
+}
+
 function createUnavailableInvokeResult(functionName: string) {
   const error = {
     message: `Edge Function ${functionName} is not deployed in the current ECS backend`,
@@ -132,10 +144,12 @@ function createSafeClient(): SupabaseClient {
     return wrapFunctionsInvoke(client);
   }
 
-  console.warn(
-    "[Supabase] Missing required environment variables; cloud-backed ECS features are unavailable",
-    { missing: missingSupabaseEnv }
-  );
+  if (shouldWarnMissingSupabaseConfig()) {
+    console.warn(
+      "[Supabase] Missing required environment variables; cloud-backed ECS features are unavailable",
+      { missing: missingSupabaseEnv }
+    );
+  }
 
   const noopError = {
     message: "Supabase not configured",

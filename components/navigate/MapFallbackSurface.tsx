@@ -169,6 +169,12 @@ export default function MapFallbackSurface({
       ),
     [markerPoints, progressLine, routeLine, segmentLines, userPoint],
   );
+  const hasDrawableLineGeometry =
+    routeLine.length > 1 || progressLine.length > 1 || segmentLines.length > 0;
+  const pendingGeometryStatus =
+    showStatusLabel &&
+    statusLabel === 'Route geometry pending' &&
+    !hasDrawableLineGeometry;
   const width = 360;
   const height = compact ? 150 : 640;
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
@@ -188,7 +194,7 @@ export default function MapFallbackSurface({
     [bounds, height, interactive, onMapTap, surfaceSize.height, surfaceSize.width, width],
   );
 
-  if (!bounds) {
+  if (!bounds || pendingGeometryStatus) {
     return (
       <View
         pointerEvents="none"
@@ -198,9 +204,15 @@ export default function MapFallbackSurface({
           compact && styles.compactEmpty,
         ]}
       >
-        <Text style={styles.emptyTitle}>{showStatusLabel && statusLabel ? statusLabel : 'Map ready'}</Text>
+        <Text style={styles.emptyTitle}>
+          {pendingGeometryStatus ? 'Route geometry pending' : showStatusLabel && statusLabel ? statusLabel : 'Map ready'}
+        </Text>
         <Text style={styles.emptyText}>
-          {showStatusLabel && bootIssue ? bootIssue : 'Route geometry is not available yet.'}
+          {pendingGeometryStatus
+            ? 'Guidance is holding current position while route geometry updates.'
+            : showStatusLabel && bootIssue
+              ? bootIssue
+              : 'Route geometry is not available yet.'}
         </Text>
       </View>
     );
@@ -370,6 +382,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#05090D',
     paddingHorizontal: 24,
+    zIndex: 4,
+    elevation: 4,
   },
   compactEmpty: {
     paddingHorizontal: 12,

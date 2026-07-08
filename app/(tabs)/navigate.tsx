@@ -21012,11 +21012,11 @@ const mapRendererCameraMode = destinationSearchMapFrozen ? undefined : mapCamera
 const mapRendererCameraCommand = destinationSearchMapFrozen ? null : mapCameraCommand;
 const mapRendererCameraCommandTrigger = destinationSearchMapFrozen ? 0 : mapCameraCommandTrigger;
 const mapRendererFollowReplay = !destinationSearchMapFrozen && isReplayActive && replayPlaying;
-const activeRerouteWithoutMapGeometry =
+const activeRerouteMapStandby =
+  Platform.OS === 'android' &&
   routeLifecycleState.phase === 'navigating' &&
-  (roadSession.status === 'rerouting' || roadSession.routeConfidenceState === 'rerouting') &&
-  displayedRoutePoints.length < 2 &&
-  fallbackRoutePointsForMap.length < 2;
+  (roadSession.status === 'rerouting' || roadSession.routeConfidenceState === 'rerouting');
+const mapStartupOverlayVisible = !mapOverlayStartupReady && !activeRerouteMapStandby;
 
 const mapRendererElement = useMemo(() => (
   <MapRenderer
@@ -21037,7 +21037,7 @@ const mapRendererElement = useMemo(() => (
     followUser={mapRendererFollowUser}
     userLocation={mapRendererUserLocation}
     motionPriority={navigateMapMotion.motionPriority}
-    liveMapDisabled={activeRerouteWithoutMapGeometry}
+    liveMapDisabled={activeRerouteMapStandby}
     interactive={!destinationSearchMapFrozen}
     segments={mapSegmentFeatures}
     bailoutMarkers={bailoutMarkers}
@@ -21104,7 +21104,7 @@ const mapRendererElement = useMemo(() => (
     standbyStaticMapDisabled={true}
   />
 ), [
-  activeRerouteWithoutMapGeometry,
+  activeRerouteMapStandby,
   activeHealth?.overall,
   bailoutMarkers,
   campsiteSearchPolygonPayload,
@@ -23288,7 +23288,7 @@ const stableMapSurface = useMemo(() => {
           />
         ) : null}
         {/* Loading overlay */}
-        {!mapOverlayStartupReady && (
+        {mapStartupOverlayVisible && (
           <View
             style={[
               styles.mapLoadingOverlay,

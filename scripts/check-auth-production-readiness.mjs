@@ -88,12 +88,12 @@ export function buildAuthProductionReadinessResult(options = {}) {
       'Startup/auth loading has bounded fallbacks, route readiness timeouts, and dev diagnostics instead of indefinite loading.',
       index.includes("import LoadingTransitionVideo from '../components/LoadingTransitionVideo';") &&
         index.includes('return <LoadingTransitionVideo />;') &&
-        layout.includes('const MIN_LOADING_MS = 3000;') &&
-        layout.includes('const STARTUP_ROUTE_READINESS_TIMEOUT_MS = 8000;') &&
-        layout.includes('const DASHBOARD_SHELL_READINESS_TIMEOUT_MS = 5000;') &&
+        layout.includes('const MIN_LOADING_MS = 1200;') &&
+        layout.includes('const STARTUP_ROUTE_READINESS_TIMEOUT_MS = 3000;') &&
+        layout.includes('const DASHBOARD_SHELL_READINESS_TIMEOUT_MS = 2200;') &&
         layout.includes('STARTUP DIAGNOSTICS') &&
-        appContext.includes('const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 8000;') &&
-        appContext.includes('const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 10000;') &&
+        appContext.includes('const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 3000;') &&
+        appContext.includes('const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 6000;') &&
         appContext.includes('startupAuthInitializationStartedRef') &&
         appContext.includes("markStartupPhase('auth_restore_start'") &&
         appContext.includes("markStartupPhase('auth_restore_done'") &&

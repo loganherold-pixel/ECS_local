@@ -48,7 +48,7 @@ for (const label of ['Recommended Camp', 'Backup Camp', 'Emergency Camp']) {
   assert(panel.includes(label), `Missing CampOps card label: ${label}`);
 }
 
-for (const label of ['Recommended', 'Backup', 'Emergency stop', 'Fallback only', 'Not recommended', 'Unknown confidence']) {
+for (const label of ['Recommended', 'Backup', 'Emergency stop', 'Emergency only', 'Not recommended', 'Unknown confidence']) {
   assert(panel.includes(label), `Missing conservative recommendation language: ${label}`);
 }
 

@@ -168,10 +168,10 @@ const OFFLINE_MODE_KEY = 'ecs_offline_mode';
 const SHELL_ROUTE_KEY = 'last_shell_route_v1';
 const offlineModeCache = createPersistedKeyValueCache('ecs_runtime_flags');
 const shellRouteCache = createPersistedKeyValueCache('ecs_shell_state');
-const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 8000;
-const STARTUP_OPTIONAL_READINESS_TIMEOUT_MS = 6000;
-const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 10000;
-const STARTUP_PROVIDER_SESSION_TIMEOUT_MS = 4500;
+const STARTUP_REQUIRED_READINESS_TIMEOUT_MS = 3000;
+const STARTUP_OPTIONAL_READINESS_TIMEOUT_MS = 2500;
+const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 6000;
+const STARTUP_PROVIDER_SESSION_TIMEOUT_MS = 2500;
 const SIGN_IN_REQUEST_TIMEOUT_MS = 10000;
 
 interface StartupHydrationResult {
