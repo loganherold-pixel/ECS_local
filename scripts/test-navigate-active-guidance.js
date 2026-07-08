@@ -278,10 +278,9 @@ assert(
 
 assert(
   mapRenderer.includes("if (payload?.reason === 'bootstrap_timeout')") &&
-    mapRenderer.includes("debugLog('[MapRenderer] Provisional bootstrap timeout received; showing initialized map shell'") &&
-    mapRenderer.includes('hasEverReachedReadyRef.current = true;') &&
-    mapRenderer.includes('setWebReady(true);'),
-  'MapRenderer should show the initialized WebView map shell once the Mapbox constructor is alive instead of blocking behind a late load event.',
+    mapRenderer.includes("debugLog('[MapRenderer] Provisional bootstrap timeout received; waiting for definitive map load'") &&
+    !mapRenderer.includes("debugLog('[MapRenderer] Provisional bootstrap timeout received; showing initialized map shell'"),
+  'MapRenderer should keep the native route fallback visible after provisional bootstrap until Mapbox fires a definitive load event.',
 );
 assert(
   mapRenderer.includes("baseUrl: 'https://api.mapbox.com/'") &&

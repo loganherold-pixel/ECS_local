@@ -77,8 +77,10 @@ const WEBVIEW_RENDER_PROCESS_RETRY_LIMIT = 1;
 const MAP_CONSTRUCTOR_RETRY_LIMIT = 3;
 const MAP_CONSTRUCTOR_RETRY_BASE_MS = 650;
 const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
-const FULL_MAP_MAX_TILE_CACHE_SIZE = 96;
+const FULL_MAP_MAX_TILE_CACHE_SIZE = 32;
 const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 32;
+const FULL_MAP_PIXEL_RATIO_CAP = 0.75;
+const COMPACT_MAP_PIXEL_RATIO_CAP = 0.75;
 const STANDBY_STATIC_MAP_WIDTH = 720;
 const STANDBY_STATIC_MAP_HEIGHT = 1280;
 const MAX_KNOWN_CAMPSITE_SOURCE_MARKERS = 40;
@@ -378,6 +380,8 @@ export type CameraCommand = {
 export type MapRendererProps = {
   points?: RoutePoint[];
   progressPoints?: RoutePoint[];
+  fallbackRoutePoints?: RoutePoint[];
+  fallbackProgressPoints?: RoutePoint[];
   waypoints?: Waypoint[];
   healthLevel?: 'green' | 'yellow' | 'red' | string;
   routeColor?: string;
@@ -1989,8 +1993,10 @@ function makeMapHtml(
   const escapedInitialInteractive = JSON.stringify(initialInteractive);
   const compactTileCacheSize = surfaceMode === 'compact' ? COMPACT_MAP_MAX_TILE_CACHE_SIZE : null;
   const maxTileCacheSize = compactTileCacheSize ?? FULL_MAP_MAX_TILE_CACHE_SIZE;
+  const mapPixelRatioCap = surfaceMode === 'compact' ? COMPACT_MAP_PIXEL_RATIO_CAP : FULL_MAP_PIXEL_RATIO_CAP;
   const escapedCompactTileCacheSize = JSON.stringify(compactTileCacheSize);
   const escapedMaxTileCacheSize = JSON.stringify(maxTileCacheSize);
+  const escapedMapPixelRatioCap = JSON.stringify(mapPixelRatioCap);
   const escapedTerrainSourceId = JSON.stringify(MAPBOX_3D_TERRAIN_SOURCE_ID);
 
   return `<!DOCTYPE html>
@@ -2817,11 +2823,15 @@ function makeMapHtml(
       var mvumOverlaySourceSignature = null;
       var styleReplayTimer = null;
       var bootstrapReadyTimer = null;
+      var resizePumpTimer = null;
+      var resizePumpRemainingTicks = 0;
+      var lastResizeSignature = '';
       var requestedStyleUrl = ${escapedInitialStyleUrl};
       var fallbackStyleUrls = ${escapedFallbackStyleUrls};
       var initialInteractive = ${escapedInitialInteractive};
       var compactTileCacheSize = ${escapedCompactTileCacheSize};
-      var mapPixelRatio = Math.min(window.devicePixelRatio || 1, compactTileCacheSize ? 0.75 : 1);
+      var mapPixelRatioCap = ${escapedMapPixelRatioCap};
+      var mapPixelRatio = Math.min(window.devicePixelRatio || 1, mapPixelRatioCap);
       var maxTileCacheSize = ${escapedMaxTileCacheSize};
       var terrainSourceId = ${escapedTerrainSourceId};
       var activeStyleUrl = ${escapedInitialStyleUrl};
@@ -2862,6 +2872,60 @@ function makeMapHtml(
           sendLog(message);
         }
       }
+
+      function mapContainerSizeSignature() {
+        try {
+          var element = document.getElementById('map');
+          if (!element) return 'missing';
+          return [
+            element.clientWidth || 0,
+            element.clientHeight || 0,
+            window.innerWidth || 0,
+            window.innerHeight || 0
+          ].join('x');
+        } catch (e) {
+          return 'unknown';
+        }
+      }
+
+      function resizeMapIfNeeded(reason) {
+        if (!map) return;
+        try {
+          var before = mapContainerSizeSignature();
+          map.resize();
+          var after = mapContainerSizeSignature();
+          if (after !== lastResizeSignature) {
+            sendMapLifecycleDiagnostic('[MapRenderer] map resize', {
+              reason: reason || 'unknown',
+              before: before,
+              after: after
+            });
+            lastResizeSignature = after;
+          }
+        } catch (e) {
+          sendLog('map resize failed: ' + String(e && e.message ? e.message : e));
+        }
+      }
+
+      function scheduleMapResizePump(reason) {
+        resizePumpRemainingTicks = Math.max(resizePumpRemainingTicks, 8);
+        if (resizePumpTimer) return;
+
+        function tick() {
+          resizePumpTimer = null;
+          resizeMapIfNeeded(reason);
+          resizePumpRemainingTicks -= 1;
+          if (resizePumpRemainingTicks > 0) {
+            resizePumpTimer = setTimeout(tick, resizePumpRemainingTicks > 4 ? 80 : 180);
+          }
+        }
+
+        resizePumpTimer = setTimeout(tick, 0);
+      }
+
+      window.addEventListener('resize', function() {
+        scheduleMapResizePump('window_resize');
+      });
 
       function mapLifecycleKeyCount(record) {
         return Object.keys(record || {}).length;
@@ -7283,6 +7347,7 @@ function makeMapHtml(
           return;
         }
 
+        resizeMapIfNeeded('payload_apply');
         reinitializeStyleArtifacts();
         applyRouteBuilderPayload(payload);
         applyRouteOverlayPayload(payload);
@@ -7334,6 +7399,7 @@ function makeMapHtml(
         mapSourceRegistry = createMapSourceRegistry();
         mapLayerRegistry = createMapLayerRegistry();
         mapListenerRegistry = createMapListenerRegistry();
+        scheduleMapResizePump('constructor');
       } catch (err) {
         var constructorMessage = String(err && err.message ? err.message : err);
         sendLog('Map constructor failed: ' + constructorMessage);
@@ -7347,6 +7413,7 @@ function makeMapHtml(
 
         mapListenerRegistry.attach('load', null, function() {
           sendLog('map load event fired');
+          scheduleMapResizePump('load');
           replayPendingPayloadAfterStyleChange('load', 0);
 
           if (bootstrapReadyTimer) {
@@ -7359,10 +7426,12 @@ function makeMapHtml(
         }, 'map:load');
 
         mapListenerRegistry.attach('style.load', null, function() {
+          scheduleMapResizePump('style_load');
           replayPendingPayloadAfterStyleChange('style_load', 0);
         }, 'map:style_load');
 
         mapListenerRegistry.attach('styledata', null, function() {
+          scheduleMapResizePump('styledata');
           replayPendingPayloadAfterStyleChange('styledata', 0);
         }, 'map:styledata');
 
@@ -7936,6 +8005,8 @@ function sameLatLng(a?: { latitude: number; longitude: number } | null, b?: { la
 const MapRenderer = React.memo(function MapRenderer({
   points = [],
   progressPoints = [],
+  fallbackRoutePoints = [],
+  fallbackProgressPoints = [],
   waypoints = [],
   healthLevel = 'green',
   routeColor,
@@ -8469,18 +8540,43 @@ const MapRenderer = React.memo(function MapRenderer({
     ],
     [payload.segments, payload.speedSegments, payload.trailSegments],
   );
+  const fallbackRouteCoords = useMemo(
+    () =>
+      payload.routeCoords.length > 1
+        ? payload.routeCoords
+        : normalizePointList(fallbackRoutePoints),
+    [fallbackRoutePoints, payload.routeCoords],
+  );
+  const fallbackProgressRouteCoords = useMemo(
+    () =>
+      payload.progressRouteCoords.length > 1
+        ? payload.progressRouteCoords
+        : normalizePointList(fallbackProgressPoints),
+    [fallbackProgressPoints, payload.progressRouteCoords],
+  );
   const hasFallbackGeometry = useMemo(
     () =>
-      payload.routeCoords.length > 1 ||
-      payload.progressRouteCoords.length > 1 ||
+      fallbackRouteCoords.length > 1 ||
+      fallbackProgressRouteCoords.length > 1 ||
       fallbackSegments.some((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1) ||
       fallbackMarkers.length > 0 ||
       !!dynamicPayload.userLocation,
-    [dynamicPayload.userLocation, fallbackMarkers.length, fallbackSegments, payload.progressRouteCoords.length, payload.routeCoords.length],
+    [dynamicPayload.userLocation, fallbackMarkers.length, fallbackProgressRouteCoords.length, fallbackRouteCoords.length, fallbackSegments],
   );
+  const routeContinuityFallbackVisible =
+    isCompactSurface &&
+    !standbyMapActive &&
+    !liveMapDisabled &&
+    shouldLoadMap &&
+    webReady &&
+    motionPriority !== 'cold' &&
+    (routeRenderMode === 'active' || routeRenderMode === 'completed') &&
+    payload.routeCoords.length < 2 &&
+    fallbackRouteCoords.length > 1;
   const fallbackVisible =
     hasFallbackGeometry &&
     (
+      routeContinuityFallbackVisible ||
       (standbyMapActive && (compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible)) ||
       (!standbyMapActive &&
         (liveMapDisabled || !shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current))))
@@ -9007,22 +9103,15 @@ const MapRenderer = React.memo(function MapRenderer({
         }
 
         if (payload?.reason === 'bootstrap_timeout') {
-          debugLog('[MapRenderer] Provisional bootstrap timeout received; showing initialized map shell');
+          debugLog('[MapRenderer] Provisional bootstrap timeout received; waiting for definitive map load');
           if (
             bootstrapAcknowledgedInstanceKeyRef.current !== activeWebViewInstanceKeyRef.current &&
             definitiveReadyInstanceKeyRef.current !== activeWebViewInstanceKeyRef.current
           ) {
             bootstrapAcknowledgedInstanceKeyRef.current = activeWebViewInstanceKeyRef.current;
-            clearFailSafeTimer();
-            clearHardFailureTimer();
-            failSafeArmedInstanceKeyRef.current = null;
-            startupSettledRef.current = true;
-            hasEverReachedReadyRef.current = true;
-            renderProcessGoneCountRef.current = 0;
             setWebRendererCrashBlocked(false);
             setWebBootTimedOut(false);
             setWebBootIssue(null);
-            setWebReady(true);
           }
           return;
         }
@@ -9283,8 +9372,8 @@ const MapRenderer = React.memo(function MapRenderer({
 
       {shouldRenderFallbackSurface ? (
         <MapFallbackSurface
-          routeCoords={payload.routeCoords}
-          progressRouteCoords={payload.progressRouteCoords}
+          routeCoords={fallbackRouteCoords}
+          progressRouteCoords={fallbackProgressRouteCoords}
           segments={fallbackSegments}
           markers={fallbackMarkers}
           userLocation={dynamicPayload.userLocation}

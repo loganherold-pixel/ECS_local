@@ -14,6 +14,12 @@ const navigateSource = read('app/(tabs)/navigate.tsx');
 const mapRendererSource = read('components/navigate/MapRenderer.tsx');
 const mapFallbackSurfaceSource = read('components/navigate/MapFallbackSurface.tsx');
 const compassRoseSource = read('components/navigate/CompassRose.tsx');
+const fullMapTileCacheMatch = mapRendererSource.match(/const FULL_MAP_MAX_TILE_CACHE_SIZE = (\d+)/);
+const compactMapTileCacheMatch = mapRendererSource.match(/const COMPACT_MAP_MAX_TILE_CACHE_SIZE = (\d+)/);
+const fullMapPixelRatioMatch = mapRendererSource.match(/const FULL_MAP_PIXEL_RATIO_CAP = ([0-9.]+)/);
+const bootstrapTimeoutBranchMatch = mapRendererSource.match(
+  /if \(payload\?\.reason === 'bootstrap_timeout'\) \{([\s\S]*?)\n        \}\n\n        clearFailSafeTimer/,
+);
 const roadNavigationSource = read('lib/useRoadNavigation.ts');
 const commandDockSource = read('components/CommandDock.tsx');
 const navigateProviderEvidenceTestSource = read('scripts/test-navigate-provider-android-evidence.mjs');
@@ -359,8 +365,11 @@ assert.ok(
   'Navigate should be able to keep the standby wake surface without loading a full-screen remote static map bitmap during tab cycling.',
 );
 assert.ok(
-  mapRendererSource.includes('var mapPixelRatio = Math.min(window.devicePixelRatio || 1') &&
-    mapRendererSource.includes('compactTileCacheSize ? 0.75 : 1') &&
+  mapRendererSource.includes('const FULL_MAP_PIXEL_RATIO_CAP =') &&
+    mapRendererSource.includes('const COMPACT_MAP_PIXEL_RATIO_CAP =') &&
+    mapRendererSource.includes("surfaceMode === 'compact' ? COMPACT_MAP_PIXEL_RATIO_CAP : FULL_MAP_PIXEL_RATIO_CAP") &&
+    mapRendererSource.includes('var mapPixelRatioCap =') &&
+    mapRendererSource.includes('var mapPixelRatio = Math.min(window.devicePixelRatio || 1, mapPixelRatioCap);') &&
     mapRendererSource.includes('pixelRatio: mapPixelRatio'),
   'MapRenderer should cap Mapbox WebView pixel ratio to reduce Android canvas/GPU pressure.',
 );
@@ -449,6 +458,54 @@ assert.ok(
     mapRendererSource.includes('refreshExpiredTiles: false') &&
     mapRendererSource.includes('crossSourceCollisions: false'),
   'MapRenderer should use lean Mapbox GL options to reduce idle WebView redraw and tile/cache pressure on mobile.',
+);
+assert.ok(
+  fullMapTileCacheMatch &&
+    Number(fullMapTileCacheMatch[1]) > 0 &&
+    Number(fullMapTileCacheMatch[1]) <= 32 &&
+    compactMapTileCacheMatch &&
+    Number(compactMapTileCacheMatch[1]) <= Number(fullMapTileCacheMatch[1]) &&
+    fullMapPixelRatioMatch &&
+    Number(fullMapPixelRatioMatch[1]) > 0 &&
+    Number(fullMapPixelRatioMatch[1]) <= 0.75 &&
+    mapRendererSource.includes('FULL_MAP_PIXEL_RATIO_CAP') &&
+    mapRendererSource.includes('COMPACT_MAP_PIXEL_RATIO_CAP') &&
+    mapRendererSource.includes('var mapPixelRatioCap =') &&
+    mapRendererSource.includes('var mapPixelRatio = Math.min(window.devicePixelRatio || 1, mapPixelRatioCap);'),
+  'Full-screen active guidance maps should cap tile cache and pixel ratio to reduce Android WebView tile-memory pressure during dashboard handoff.',
+);
+assert.ok(
+  mapRendererSource.includes('function scheduleMapResizePump(reason)') &&
+    mapRendererSource.includes("scheduleMapResizePump('constructor')") &&
+    mapRendererSource.includes("scheduleMapResizePump('load')") &&
+    mapRendererSource.includes("scheduleMapResizePump('style_load')") &&
+    mapRendererSource.includes("resizeMapIfNeeded('payload_apply')") &&
+    mapRendererSource.includes("window.addEventListener('resize'"),
+  'MapRenderer should run a bounded resize pump so Android WebView maps recover from first-layout canvas sizing races.',
+);
+assert.ok(
+  bootstrapTimeoutBranchMatch &&
+    bootstrapTimeoutBranchMatch[1].includes('waiting for definitive map load') &&
+    !bootstrapTimeoutBranchMatch[1].includes('setWebReady(true);') &&
+    !bootstrapTimeoutBranchMatch[1].includes('hasEverReachedReadyRef.current = true;'),
+  'MapRenderer should keep first-paint fallback visible after provisional bootstrap timeout until the Mapbox load event is definitive.',
+);
+assert.ok(
+  mapRendererSource.includes('fallbackRoutePoints?: RoutePoint[];') &&
+    mapRendererSource.includes('fallbackProgressPoints?: RoutePoint[];') &&
+    mapRendererSource.includes('const fallbackRouteCoords = useMemo(') &&
+    mapRendererSource.includes('normalizePointList(fallbackRoutePoints)') &&
+    mapRendererSource.includes('routeCoords={fallbackRouteCoords}') &&
+    mapRendererSource.includes('const routeContinuityFallbackVisible =') &&
+    mapRendererSource.includes('payload.routeCoords.length < 2') &&
+    navigateSource.includes('const fallbackRoutePointsForMap = useMemo(') &&
+    navigateSource.includes('const roadNavigationStoredRouteFallbackPoints = useMemo<RoadNavCoordinate[]>') &&
+    navigateSource.includes('const lastActiveRoadRouteLinePointsRef = useRef<RoadNavCoordinate[]>([])') &&
+    navigateSource.includes('lastActiveRoadRouteLinePointsRef.current.length > 1') &&
+    navigateSource.includes('roadNavigationStoredRouteFallbackPoints.length > 1') &&
+    navigateSource.includes("routeLifecycleState.phase === 'navigating' && validatedRunPoints.length > 1") &&
+    navigateSource.includes('fallbackRoutePoints={fallbackRoutePointsForMap}'),
+  'Navigate active guidance should provide native-fallback-only route continuity while rerouting so first paint does not collapse to a blank WebView.',
 );
 assert.ok(
   mapRendererSource.includes('compactRoutePreviewStandbyEligible') &&

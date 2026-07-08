@@ -11728,6 +11728,25 @@ const handleCreateRun = useCallback(() => {
     roadNavigation.session.status === 'navigation_active' ||
     roadNavigation.session.status === 'rerouting' ||
     roadNavigation.session.status === 'arrived';
+  const roadNavigationStoredRouteFallbackPoints = useMemo<RoadNavCoordinate[]>(() => {
+    if (!roadNavigationRouteLineRequired) return [];
+    const activeGuidanceGeometry = safeArray(roadNavigation.session.activeGuidance?.geometry)
+      .filter((point): point is RoadNavCoordinate => isRoadNavCoordinate(point));
+    if (activeGuidanceGeometry.length > 1) return activeGuidanceGeometry;
+
+    return safeArray(roadNavigation.session.route?.geometry)
+      .filter((point): point is RoadNavCoordinate => isRoadNavCoordinate(point));
+  }, [
+    roadNavigation.session.activeGuidance?.geometry,
+    roadNavigation.session.route?.geometry,
+    roadNavigationRouteLineRequired,
+  ]);
+  const lastActiveRoadRouteLinePointsRef = useRef<RoadNavCoordinate[]>([]);
+  if (activeRoadRouteLinePoints.length > 1) {
+    lastActiveRoadRouteLinePointsRef.current = activeRoadRouteLinePoints;
+  } else if (!roadNavigationRouteLineRequired) {
+    lastActiveRoadRouteLinePointsRef.current = [];
+  }
 
   const roadRouteProgressPoints = useMemo(
     () =>
@@ -12551,6 +12570,25 @@ const handleCreateRun = useCallback(() => {
     routeLifecycleState.phase,
     trailNavigation.session.payload,
     trailNavigationActive,
+    validatedRunPoints,
+  ]);
+
+  const fallbackRoutePointsForMap = useMemo(() => {
+    if (displayedRoutePoints.length > 1) return displayedRoutePoints;
+    if (routeLifecycleState.phase === 'navigating' && lastActiveRoadRouteLinePointsRef.current.length > 1) {
+      return lastActiveRoadRouteLinePointsRef.current;
+    }
+    if (routeLifecycleState.phase === 'navigating' && roadNavigationStoredRouteFallbackPoints.length > 1) {
+      return roadNavigationStoredRouteFallbackPoints;
+    }
+    if (routeLifecycleState.phase === 'navigating' && validatedRunPoints.length > 1) {
+      return validatedRunPoints;
+    }
+    return displayedRoutePoints;
+  }, [
+    displayedRoutePoints,
+    roadNavigationStoredRouteFallbackPoints,
+    routeLifecycleState.phase,
     validatedRunPoints,
   ]);
 
@@ -20980,6 +21018,7 @@ const mapRendererElement = useMemo(() => (
     key={`navigate-map-${mapSurfaceRevision}`}
     points={displayedRoutePoints}
     progressPoints={displayedRouteProgressPoints}
+    fallbackRoutePoints={fallbackRoutePointsForMap}
     waypoints={displayedRouteWaypoints}
     healthLevel={activeHealth?.overall || 'green'}
     routeColor={displayedRouteColor}
@@ -21072,6 +21111,7 @@ const mapRendererElement = useMemo(() => (
   displayedRouteProgressPoints,
   displayedRouteRenderMode,
   displayedRouteWaypoints,
+  fallbackRoutePointsForMap,
   displayedTrailSegments,
   dispersedCampingEligibilityLayer,
   dispersedRouteBuildState,

@@ -32,7 +32,7 @@ const COMMAND_3D_FREE_DRIVE_ZOOM = 16.2;
 const COMMAND_3D_FOLLOW_PITCH = 70;
 const COMMAND_3D_ACTIVE_FOLLOW_OFFSET: [number, number] = [0, 72];
 const COMMAND_3D_FREE_DRIVE_OFFSET: [number, number] = [0, 56];
-const COMMAND_3D_LIVE_MAP_DEFER_MS = 2400;
+const COMMAND_3D_LIVE_MAP_DEFER_MS = 90000;
 const COMMAND_3D_MAP_VIEW_STORAGE_KEY = 'ecs_dashboard_command_3d_map_view';
 
 type RouteRenderMode = 'idle' | 'preview' | 'active' | 'completed' | 'selected';

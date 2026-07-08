@@ -302,6 +302,14 @@ assert(
   'Navigate should not fall back to stale preview/run geometry when an active guidance route line is unavailable.',
 );
 assert(
+  navigateSource.includes('lastActiveRoadRouteLinePointsRef') &&
+    navigateSource.includes('roadNavigationStoredRouteFallbackPoints') &&
+    navigateSource.includes('fallbackRoutePoints={fallbackRoutePointsForMap}') &&
+    mapRendererSource.includes('routeContinuityFallbackVisible') &&
+    mapRendererSource.includes('payload.routeCoords.length < 2'),
+  'Navigate may use cached active route geometry only for the native fallback continuity layer while the authoritative route line remains version-gated.',
+);
+assert(
   navigateSource.includes('previousActiveRoadRouteLineKeyRef') &&
     navigateSource.includes('followUser') &&
     navigateSource.includes('active_guidance_reroute_refit'),

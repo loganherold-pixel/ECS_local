@@ -140,7 +140,7 @@ assert(
 );
 
 assert(
-  navigateSurfaceWidget.includes('const COMMAND_3D_LIVE_MAP_DEFER_MS =') &&
+  navigateSurfaceWidget.includes('const COMMAND_3D_LIVE_MAP_DEFER_MS = 90000;') &&
     navigateSurfaceWidget.includes('function useDeferredCommandMapLiveMode(selected: boolean)') &&
     navigateSurfaceWidget.includes('const commandMapLiveReady = useDeferredCommandMapLiveMode(selected);') &&
     navigateSurfaceWidget.includes('mapInteractive={commandMapLiveReady}') &&
@@ -150,7 +150,7 @@ assert(
     mapRenderer.includes('liveMapDisabled = false') &&
     mapRenderer.includes('!liveMapDisabled') &&
     mapRenderer.includes('liveMapDisabled || !shouldLoadMap'),
-  'Selected dashboard 3D command map should defer live WebView activation briefly so dashboard startup and Navigate handoff can settle first.',
+  'Selected dashboard 3D command map should defer live WebView activation long enough for dashboard startup and Navigate handoff to settle first.',
 );
 
 assert(
