@@ -26,6 +26,12 @@ const {
   ROAD_GUIDANCE_STEP_SNAP_DISTANCE_M,
 } = loadTsModule(path.join('lib', 'roadNavigationProgress.ts'));
 
+function assertCoord(actual, expected, message) {
+  assert(actual, `${message}: missing coordinate`);
+  assert.strictEqual(Number(actual.lat.toFixed(6)), Number(expected.lat.toFixed(6)), `${message}: latitude`);
+  assert.strictEqual(Number(actual.lng.toFixed(6)), Number(expected.lng.toFixed(6)), `${message}: longitude`);
+}
+
 const origin = { lat: 38.7807, lng: -121.2076 };
 const sierraTurn = { lat: 38.7816, lng: -121.2076 };
 const rocklinTurn = { lat: 38.7816, lng: -121.2063 };
@@ -161,6 +167,49 @@ assert.strictEqual(
 assert(
   ROAD_GUIDANCE_STEP_SNAP_DISTANCE_M >= 25 && ROAD_GUIDANCE_STEP_SNAP_DISTANCE_M <= 45,
   'Step geometry snap tolerance should be tight enough for roads but wide enough for mobile GPS drift.',
+);
+
+const longRouteGeometry = Array.from({ length: 5000 }, (_, index) => ({
+  lat: 38.78 + index * 0.00002,
+  lng: -121.2 + Math.sin(index / 12) * 0.002 + index * 0.000015,
+}));
+const longRoute = {
+  ...route,
+  id: 'long-active-guidance-route',
+  geometry: longRouteGeometry,
+  distanceM: 120000,
+  durationS: 7200,
+  steps: [
+    {
+      ...route.steps[0],
+      id: 'long-route-step',
+      startDistanceM: 0,
+      endDistanceM: 120000,
+      distanceM: 120000,
+      geometry: longRouteGeometry,
+      location: longRouteGeometry[0],
+    },
+  ],
+};
+const longRouteProgress = resolveRoadNavigationProgress(longRoute, {
+  location: longRouteGeometry[4200],
+  previousStepIndex: 0,
+  previousRemainingDistanceM: 24000,
+  lockForwardProgress: true,
+});
+assert(
+  longRouteProgress.progressGeometry.length <= 512,
+  `Long active guidance progress geometry should be bounded before session equality checks, got ${longRouteProgress.progressGeometry.length}.`,
+);
+assert.deepStrictEqual(
+  longRouteProgress.progressGeometry[0],
+  longRouteGeometry[0],
+  'Bounded active guidance progress should preserve the route start.',
+);
+assertCoord(
+  longRouteProgress.progressGeometry[longRouteProgress.progressGeometry.length - 1],
+  longRouteGeometry[4200],
+  'Bounded active guidance progress should preserve the current projected progress endpoint.',
 );
 
 console.log('Road navigation turn progress regression passed.');

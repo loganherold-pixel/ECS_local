@@ -124,6 +124,15 @@ assert(
   'Navigate popups should reserve the Active Guidance band instead of covering it during active navigation.',
 );
 assert(
+  navigate.includes('const activeGuidanceRouteLineIdentity =') &&
+    navigate.includes('roadNavigation.session.activeGuidance?.routeVersion ??') &&
+    navigate.includes('roadNavigation.session.activeGuidance?.rerouteGeneration ??') &&
+    navigate.includes('roadNavigation.session.activeGuidance?.routeId ??') &&
+    navigate.includes('roadNavigation.session.activeGuidance?.geometry') &&
+    navigate.includes('activeGuidanceRouteLineIdentity'),
+  'Navigate should derive the active road route line from stable route identity fields so GPS progress snapshots do not remap the full route geometry.',
+);
+assert(
   navigate.includes('const ACTIVE_GUIDANCE_ENDPOINT_HINT_MS = 3600;') &&
     navigate.includes('type ActiveGuidanceEndpointHint =') &&
     navigate.includes('const [activeGuidanceEndpointHint, setActiveGuidanceEndpointHint] = useState<ActiveGuidanceEndpointHint | null>(null);') &&

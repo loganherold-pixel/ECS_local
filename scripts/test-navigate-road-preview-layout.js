@@ -54,6 +54,10 @@ assertIncludes(
   'styles.previewStickyActionRow',
   'Road Preview actions should use a sticky action row outside the scroller so Start Guidance is visible on mobile.',
 );
+assertIncludes(
+  'styles.previewCardScrollGuard',
+  'Road Preview scroll body should reserve vertical space above sticky actions so readiness rows are not clipped on mobile.',
+);
 {
   const cardStart = source.indexOf('<ECSCard variant="primary" style={[styles.bottomCard, styles.previewBottomCard]}>');
   const cardEnd = source.indexOf('</ECSCard>', cardStart);
@@ -63,6 +67,12 @@ assertIncludes(
     cardBlock.indexOf('</ScrollView>') >= 0 &&
       cardBlock.indexOf('styles.previewStickyActionRow') > cardBlock.indexOf('</ScrollView>'),
     'Road Preview Start Guidance actions should render after the scroll body, not at the bottom of hidden scroll content.',
+  );
+  assert.ok(
+    cardBlock.includes('contentContainerStyle={styles.previewCardScrollContent}') &&
+      cardBlock.includes('<View style={styles.previewCardScrollGuard} />') &&
+      cardBlock.indexOf('<View style={styles.previewCardScrollGuard} />') < cardBlock.indexOf('</ScrollView>'),
+    'Road Preview scroll content should include an explicit bottom guard before the sticky action row.',
   );
 }
 assertIncludes(
@@ -114,6 +124,27 @@ const previewBottomCard = extractStyleBlock('previewBottomCard');
 assert.ok(
   /zIndex:\s*93/.test(previewBottomCard) && /elevation:\s*93/.test(previewBottomCard),
   'Road Preview card should keep controls above camping overlays and clickable.',
+);
+assert.ok(
+  /maxHeight:\s*'100%'/.test(previewBottomCard) &&
+    /overflow:\s*'hidden'/.test(previewBottomCard),
+  'Road Preview card should clip internally only after the scroll body has a bottom guard.',
+);
+const previewCardScroll = extractStyleBlock('previewCardScroll');
+assert.ok(
+  /flexGrow:\s*0/.test(previewCardScroll) &&
+    /minHeight:\s*0/.test(previewCardScroll),
+  'Road Preview scroll body should shrink inside constrained mobile cards instead of sliding under sticky actions.',
+);
+const previewCardScrollContent = extractStyleBlock('previewCardScrollContent');
+assert.ok(
+  /paddingBottom:\s*16/.test(previewCardScrollContent),
+  'Road Preview scroll content should preserve readable spacing before the sticky action guard.',
+);
+const previewCardScrollGuard = extractStyleBlock('previewCardScrollGuard');
+assert.ok(
+  /height:\s*76/.test(previewCardScrollGuard),
+  'Road Preview scroll guard should reserve enough room for wrapped sticky actions on phone screens.',
 );
 
 const activeGuidanceWrap = extractStyleBlock('activeGuidanceWrap');

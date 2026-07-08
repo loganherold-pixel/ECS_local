@@ -11615,20 +11615,61 @@ const handleCreateRun = useCallback(() => {
     [roadNavigation.session.route?.geometry],
   );
 
+  const activeGuidanceRouteLineIdentity = useMemo(
+    () => [
+      roadNavigation.session.activeGuidance?.routeVersion ??
+        roadNavigation.session.route?.guidance?.routeVersion ??
+        'no-route-version',
+      roadNavigation.session.activeGuidance?.routeId ??
+        roadNavigation.session.route?.guidance?.id ??
+        roadNavigation.session.route?.id ??
+        'no-route-id',
+      roadNavigation.session.activeGuidance?.rerouteGeneration ??
+        roadNavigation.session.route?.guidance?.rerouteGeneration ??
+        roadNavigation.session.rerouteCount ??
+        'no-generation',
+      roadNavigation.session.activeGuidance?.geometry?.length ??
+        roadNavigation.session.route?.guidance?.geometry?.length ??
+        roadNavigation.session.route?.geometry?.length ??
+        0,
+    ].join(':'),
+    [
+      roadNavigation.session.activeGuidance?.geometry?.length,
+      roadNavigation.session.activeGuidance?.rerouteGeneration,
+      roadNavigation.session.activeGuidance?.routeId,
+      roadNavigation.session.activeGuidance?.routeVersion,
+      roadNavigation.session.rerouteCount,
+      roadNavigation.session.route?.geometry?.length,
+      roadNavigation.session.route?.guidance?.geometry?.length,
+      roadNavigation.session.route?.guidance?.id,
+      roadNavigation.session.route?.guidance?.rerouteGeneration,
+      roadNavigation.session.route?.guidance?.routeVersion,
+      roadNavigation.session.route?.id,
+    ],
+  );
+  const activeGuidanceRouteLineStateRef = useRef(roadNavigation.session.activeGuidance);
+  const activeGuidanceRouteLineIdentityRef = useRef<string | null>(null);
+  if (activeGuidanceRouteLineIdentityRef.current !== activeGuidanceRouteLineIdentity) {
+    activeGuidanceRouteLineIdentityRef.current = activeGuidanceRouteLineIdentity;
+    activeGuidanceRouteLineStateRef.current = roadNavigation.session.activeGuidance;
+  }
+
   const activeRoadGuidanceRoute = useMemo(
     () => {
+      void activeGuidanceRouteLineIdentity;
+      const activeGuidanceForRouteLine = activeGuidanceRouteLineStateRef.current;
       if (
         (roadNavigation.session.status === 'navigation_active' ||
           roadNavigation.session.status === 'rerouting' ||
           roadNavigation.session.status === 'arrived') &&
-        roadNavigation.session.activeGuidance
+        activeGuidanceForRouteLine
       ) {
-        return buildActiveGuidanceRouteFromState(roadNavigation.session.activeGuidance);
+        return buildActiveGuidanceRouteFromState(activeGuidanceForRouteLine);
       }
       return roadNavigation.session.route?.guidance ?? null;
     },
     [
-      roadNavigation.session.activeGuidance,
+      activeGuidanceRouteLineIdentity,
       roadNavigation.session.route?.guidance,
       roadNavigation.session.status,
     ],

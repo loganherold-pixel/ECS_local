@@ -1,6 +1,7 @@
 import type { RoadNavCoordinate, RoadNavRoute } from './mapboxRoadNavigation';
 
 export const ROAD_GUIDANCE_STEP_SNAP_DISTANCE_M = 35;
+export const ROAD_NAVIGATION_MAX_PROGRESS_GEOMETRY_POINTS = 512;
 const ROAD_GUIDANCE_PROGRESS_REGRESSION_TOLERANCE_M = 18;
 
 type GeometryProgress = {
@@ -187,6 +188,23 @@ function buildProgressCoordsAtDistance(
   }
 
   return points.slice();
+}
+
+function boundProgressGeometry(points: RoadNavCoordinate[]): RoadNavCoordinate[] {
+  if (points.length <= ROAD_NAVIGATION_MAX_PROGRESS_GEOMETRY_POINTS) return points;
+
+  const lastIndex = points.length - 1;
+  const selectedIndexes = new Set<number>([0, lastIndex]);
+  const step = lastIndex / Math.max(ROAD_NAVIGATION_MAX_PROGRESS_GEOMETRY_POINTS - 1, 1);
+
+  for (let slot = 1; slot < ROAD_NAVIGATION_MAX_PROGRESS_GEOMETRY_POINTS - 1; slot += 1) {
+    selectedIndexes.add(Math.round(slot * step));
+  }
+
+  return Array.from(selectedIndexes)
+    .sort((left, right) => left - right)
+    .map((index) => points[index])
+    .filter((point): point is RoadNavCoordinate => !!point);
 }
 
 function findStepIndexForDistance(steps: RoadNavRoute['steps'], traveledDistanceM: number): number {
@@ -389,6 +407,7 @@ export function resolveRoadNavigationProgress(
     (lockForwardProgress && previousProgressDistanceM != null)
       ? buildProgressCoordsAtDistance(routeGeometry, cumulativeDistances, resolvedGeometryDistanceM)
       : projected.progressCoords;
+  const boundedProgressGeometry = boundProgressGeometry(progressGeometry);
   const offRouteDistanceM = nearestStepProgress
     ? Math.min(projected.offRouteDistanceM, nearestStepProgress.offRouteDistanceM)
     : projected.offRouteDistanceM;
@@ -400,6 +419,6 @@ export function resolveRoadNavigationProgress(
     remainingDistanceM: Math.max(routeDistanceM - resolvedTraveledDistanceM, 0),
     offRouteDistanceM,
     distanceToDestinationM: projected.distanceToDestinationM,
-    progressGeometry,
+    progressGeometry: boundedProgressGeometry,
   };
 }

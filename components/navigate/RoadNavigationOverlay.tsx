@@ -889,6 +889,7 @@ function PreviewCard({
               </Text>
             </TouchableOpacity>
           ) : null}
+          <View style={styles.previewCardScrollGuard} />
         </ScrollView>
         <ECSActionRow compact wrap style={[styles.actionRow, styles.previewActionRow, styles.previewStickyActionRow]}>
           <ECSButton
@@ -2296,15 +2297,21 @@ const styles = StyleSheet.create({
     maxHeight: '100%',
     minHeight: 0,
     flexShrink: 1,
+    overflow: 'hidden',
     zIndex: 93,
     elevation: 93,
   },
   previewCardScroll: {
     width: '100%',
+    flexGrow: 0,
     flexShrink: 1,
+    minHeight: 0,
   },
   previewCardScrollContent: {
-    paddingBottom: 8,
+    paddingBottom: 16,
+  },
+  previewCardScrollGuard: {
+    height: 76,
   },
   bottomDrawerWrap: {
     position: 'absolute',
