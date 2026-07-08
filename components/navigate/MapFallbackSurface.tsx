@@ -198,8 +198,10 @@ export default function MapFallbackSurface({
           compact && styles.compactEmpty,
         ]}
       >
-        <Text style={styles.emptyTitle}>Map ready</Text>
-        <Text style={styles.emptyText}>Route geometry is not available yet.</Text>
+        <Text style={styles.emptyTitle}>{showStatusLabel && statusLabel ? statusLabel : 'Map ready'}</Text>
+        <Text style={styles.emptyText}>
+          {showStatusLabel && bootIssue ? bootIssue : 'Route geometry is not available yet.'}
+        </Text>
       </View>
     );
   }

@@ -20,6 +20,12 @@ const fullMapPixelRatioMatch = mapRendererSource.match(/const FULL_MAP_PIXEL_RAT
 const bootstrapTimeoutBranchMatch = mapRendererSource.match(
   /if \(payload\?\.reason === 'bootstrap_timeout'\) \{([\s\S]*?)\n        \}\n\n        clearFailSafeTimer/,
 );
+const routeContinuityFallbackBlockMatch = mapRendererSource.match(
+  /const routeContinuityFallbackVisible =([\s\S]*?);\n  const fallbackVisible =/,
+);
+const webViewLoadStartBlockMatch = mapRendererSource.match(
+  /onLoadStart=\{\(\) => \{([\s\S]*?)\n          \}\}/,
+);
 const roadNavigationSource = read('lib/useRoadNavigation.ts');
 const commandDockSource = read('components/CommandDock.tsx');
 const navigateProviderEvidenceTestSource = read('scripts/test-navigate-provider-android-evidence.mjs');
@@ -390,6 +396,15 @@ assert.ok(
   'Parked idle destination search should keep the standby map visually useful without letting search-background taps wake the live WebView.',
 );
 assert.ok(
+  navigateSource.includes('const activeRerouteWithoutMapGeometry =') &&
+    navigateSource.includes("roadSession.status === 'rerouting'") &&
+    navigateSource.includes("roadSession.routeConfidenceState === 'rerouting'") &&
+    navigateSource.includes('displayedRoutePoints.length < 2') &&
+    navigateSource.includes('fallbackRoutePointsForMap.length < 2') &&
+    navigateSource.includes('liveMapDisabled={activeRerouteWithoutMapGeometry}'),
+  'Navigate should keep the live WebView disabled during geometryless active reroutes and rely on the native fallback surface instead.',
+);
+assert.ok(
   navigateSource.includes('NAVIGATE_ROAD_PREVIEW_MAX_VISUAL_POINTS') &&
     navigateSource.includes('simplifyNavigateRoadPreviewPoints') &&
     navigateSource.includes('const previewRoadRouteLinePoints = useMemo('),
@@ -462,12 +477,12 @@ assert.ok(
 assert.ok(
   fullMapTileCacheMatch &&
     Number(fullMapTileCacheMatch[1]) > 0 &&
-    Number(fullMapTileCacheMatch[1]) <= 32 &&
+    Number(fullMapTileCacheMatch[1]) <= 16 &&
     compactMapTileCacheMatch &&
     Number(compactMapTileCacheMatch[1]) <= Number(fullMapTileCacheMatch[1]) &&
     fullMapPixelRatioMatch &&
     Number(fullMapPixelRatioMatch[1]) > 0 &&
-    Number(fullMapPixelRatioMatch[1]) <= 0.75 &&
+    Number(fullMapPixelRatioMatch[1]) <= 0.5 &&
     mapRendererSource.includes('FULL_MAP_PIXEL_RATIO_CAP') &&
     mapRendererSource.includes('COMPACT_MAP_PIXEL_RATIO_CAP') &&
     mapRendererSource.includes('var mapPixelRatioCap =') &&
@@ -506,6 +521,37 @@ assert.ok(
     navigateSource.includes("routeLifecycleState.phase === 'navigating' && validatedRunPoints.length > 1") &&
     navigateSource.includes('fallbackRoutePoints={fallbackRoutePointsForMap}'),
   'Navigate active guidance should provide native-fallback-only route continuity while rerouting so first paint does not collapse to a blank WebView.',
+);
+assert.ok(
+  routeContinuityFallbackBlockMatch &&
+    !routeContinuityFallbackBlockMatch[1].includes('isCompactSurface') &&
+    !routeContinuityFallbackBlockMatch[1].includes('webReady &&') &&
+    routeContinuityFallbackBlockMatch[1].includes('!webReady') &&
+    routeContinuityFallbackBlockMatch[1].includes('!hasEverReachedReadyRef.current'),
+  'Full Navigate active guidance should keep native fallback route geometry visible while the WebView is still booting, not only after compact WebView readiness.',
+);
+assert.ok(
+  webViewLoadStartBlockMatch &&
+    webViewLoadStartBlockMatch[1].includes('resetWebDocumentLoadState();') &&
+    mapRendererSource.includes('hasEverReachedReadyRef.current = false;') &&
+    mapRendererSource.includes('bootstrapSentRef.current = false;') &&
+    mapRendererSource.includes("lastPayloadHashRef.current = '';") &&
+    !webViewLoadStartBlockMatch[1].includes('if (!hasEverReachedReadyRef.current)'),
+  'Navigate WebView reloads should clear the previous ready/bootstrap latch so tab reselects redraw the native route fallback and resend the full route payload.',
+);
+assert.ok(
+  mapRendererSource.includes('const routeGeometryPendingFallbackVisible =') &&
+    mapRendererSource.includes('liveMapDisabled &&') &&
+    mapRendererSource.includes('routeGeometryPendingFallbackVisible ||') &&
+    mapRendererSource.includes('const fallbackStatusLabel =') &&
+    mapRendererSource.includes("'Route geometry pending'") &&
+    mapRendererSource.includes('showStatusLabel={!!fallbackStatusLabel}') &&
+    mapRendererSource.includes('statusLabel={fallbackStatusLabel}'),
+  'MapRenderer should present an explicit native fallback status while geometryless reroutes keep the live map disabled.',
+);
+assert.ok(
+  mapFallbackSurfaceSource.includes("showStatusLabel && statusLabel ? statusLabel : 'Map ready'"),
+  'MapFallbackSurface should surface explicit pending/fallback status copy even when it has no drawable route bounds yet.',
 );
 assert.ok(
   mapRendererSource.includes('compactRoutePreviewStandbyEligible') &&

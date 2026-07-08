@@ -21012,6 +21012,11 @@ const mapRendererCameraMode = destinationSearchMapFrozen ? undefined : mapCamera
 const mapRendererCameraCommand = destinationSearchMapFrozen ? null : mapCameraCommand;
 const mapRendererCameraCommandTrigger = destinationSearchMapFrozen ? 0 : mapCameraCommandTrigger;
 const mapRendererFollowReplay = !destinationSearchMapFrozen && isReplayActive && replayPlaying;
+const activeRerouteWithoutMapGeometry =
+  routeLifecycleState.phase === 'navigating' &&
+  (roadSession.status === 'rerouting' || roadSession.routeConfidenceState === 'rerouting') &&
+  displayedRoutePoints.length < 2 &&
+  fallbackRoutePointsForMap.length < 2;
 
 const mapRendererElement = useMemo(() => (
   <MapRenderer
@@ -21032,6 +21037,7 @@ const mapRendererElement = useMemo(() => (
     followUser={mapRendererFollowUser}
     userLocation={mapRendererUserLocation}
     motionPriority={navigateMapMotion.motionPriority}
+    liveMapDisabled={activeRerouteWithoutMapGeometry}
     interactive={!destinationSearchMapFrozen}
     segments={mapSegmentFeatures}
     bailoutMarkers={bailoutMarkers}
@@ -21098,6 +21104,7 @@ const mapRendererElement = useMemo(() => (
     standbyStaticMapDisabled={true}
   />
 ), [
+  activeRerouteWithoutMapGeometry,
   activeHealth?.overall,
   bailoutMarkers,
   campsiteSearchPolygonPayload,

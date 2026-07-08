@@ -77,9 +77,9 @@ const WEBVIEW_RENDER_PROCESS_RETRY_LIMIT = 1;
 const MAP_CONSTRUCTOR_RETRY_LIMIT = 3;
 const MAP_CONSTRUCTOR_RETRY_BASE_MS = 650;
 const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
-const FULL_MAP_MAX_TILE_CACHE_SIZE = 32;
-const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 32;
-const FULL_MAP_PIXEL_RATIO_CAP = 0.75;
+const FULL_MAP_MAX_TILE_CACHE_SIZE = 16;
+const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 16;
+const FULL_MAP_PIXEL_RATIO_CAP = 0.5;
 const COMPACT_MAP_PIXEL_RATIO_CAP = 0.75;
 const STANDBY_STATIC_MAP_WIDTH = 720;
 const STANDBY_STATIC_MAP_HEIGHT = 1280;
@@ -8342,6 +8342,25 @@ const MapRenderer = React.memo(function MapRenderer({
     clearPendingMapMessages,
   ]);
 
+  const resetWebDocumentLoadState = useCallback(() => {
+    setWebReady(false);
+    setWebBootTimedOut(false);
+    setWebBootIssue(null);
+    hasEverReachedReadyRef.current = false;
+    bootstrapSentRef.current = false;
+    lastPayloadHashRef.current = '';
+    lastPayloadRef.current = null;
+    lastDynamicPayloadHashRef.current = '';
+    lastCameraCommandHashRef.current = '';
+    lastLegacyFollowHashRef.current = '';
+    hasHandledInitialCenterTriggerRef.current = false;
+    hasHandledInitialBoundsTriggerRef.current = false;
+    bootstrapAcknowledgedInstanceKeyRef.current = null;
+    startupSettledRef.current = false;
+    definitiveReadyInstanceKeyRef.current = null;
+    clearPendingMapMessages();
+  }, [clearPendingMapMessages]);
+
   const remountWebView = useCallback((reason: string, options?: { preserveRendererCrashCount?: boolean }) => {
     debugLog('[MapRenderer] Remounting WebView', {
       reason,
@@ -8564,19 +8583,30 @@ const MapRenderer = React.memo(function MapRenderer({
     [dynamicPayload.userLocation, fallbackMarkers.length, fallbackProgressRouteCoords.length, fallbackRouteCoords.length, fallbackSegments],
   );
   const routeContinuityFallbackVisible =
-    isCompactSurface &&
     !standbyMapActive &&
     !liveMapDisabled &&
     shouldLoadMap &&
-    webReady &&
     motionPriority !== 'cold' &&
     (routeRenderMode === 'active' || routeRenderMode === 'completed') &&
-    payload.routeCoords.length < 2 &&
-    fallbackRouteCoords.length > 1;
+    fallbackRouteCoords.length > 1 &&
+    (
+      !webReady ||
+      !hasEverReachedReadyRef.current ||
+      webBootTimedOut ||
+      !!webBootIssue ||
+      payload.routeCoords.length < 2
+    );
+  const routeGeometryPendingFallbackVisible =
+    !standbyMapActive &&
+    liveMapDisabled &&
+    shouldLoadMap &&
+    motionPriority !== 'cold' &&
+    (routeRenderMode === 'active' || routeRenderMode === 'completed');
   const fallbackVisible =
-    hasFallbackGeometry &&
+    (hasFallbackGeometry || routeGeometryPendingFallbackVisible) &&
     (
       routeContinuityFallbackVisible ||
+      routeGeometryPendingFallbackVisible ||
       (standbyMapActive && (compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible)) ||
       (!standbyMapActive &&
         (liveMapDisabled || !shouldLoadMap || (!webReady && (webBootTimedOut || !!webBootIssue || !hasEverReachedReadyRef.current))))
@@ -8589,6 +8619,11 @@ const MapRenderer = React.memo(function MapRenderer({
     !webRendererCrashBlocked;
   const shouldRenderFallbackSurface = fallbackVisible && motionPriority !== 'cold';
   const shouldRenderPlaceholder = !liveMapDisabled && !standbyMapActive && motionPriority !== 'cold';
+  const fallbackStatusLabel = routeGeometryPendingFallbackVisible
+    ? 'Route geometry pending'
+    : routeContinuityFallbackVisible || webBootIssue || webBootTimedOut || webRendererCrashBlocked
+      ? 'Map fallback active'
+      : null;
   const dispersedCampingEligibilityRef = useRef(dispersedCampingEligibility);
   dispersedCampingEligibilityRef.current = dispersedCampingEligibility;
   const dispersedRouteBuildRef = useRef(dispersedRouteBuild);
@@ -9303,14 +9338,17 @@ const MapRenderer = React.memo(function MapRenderer({
               startupSettled: startupSettledRef.current,
               definitivelyReady: isDefinitivelyReady,
               readyLatched: hasEverReachedReadyRef.current,
+              bootstrapSent: bootstrapSentRef.current,
             });
+            const shouldResetDocumentLoadState =
+              isFirstLoadForInstance ||
+              isDefinitivelyReady ||
+              webReady ||
+              hasEverReachedReadyRef.current ||
+              bootstrapSentRef.current;
             loadStartedInstanceKeyRef.current = webViewInstanceKey;
-            if (!startupSettledRef.current && !isDefinitivelyReady && isFirstLoadForInstance) {
-              if (!hasEverReachedReadyRef.current) {
-                setWebReady(false);
-              }
-              setWebBootTimedOut(false);
-              setWebBootIssue(null);
+            if (shouldResetDocumentLoadState) {
+              resetWebDocumentLoadState();
             }
             activeFailSafeInstanceKeyRef.current = webViewInstanceKey;
           }}
@@ -9379,6 +9417,8 @@ const MapRenderer = React.memo(function MapRenderer({
           userLocation={dynamicPayload.userLocation}
           bootIssue={webBootIssue}
           compact={isCompactSurface}
+          showStatusLabel={!!fallbackStatusLabel}
+          statusLabel={fallbackStatusLabel}
           transparentBackground={standbyMapActive && compactRoutePreviewStandbyEligible}
         />
       ) : null}
