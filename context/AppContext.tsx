@@ -1036,8 +1036,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     syncProcessorsInitRef.current = true;
 
     try {
-      initializeSyncProcessors();
-      console.log('[ECS] Sync action processors initialized');
+      const syncProcessorsStarted = initializeSyncProcessors();
+      if (syncProcessorsStarted) {
+        console.log('[ECS] Sync action processors initialized');
+      }
 
       // ── Startup purge: clean up any poisoned actions in the queue ──
       const sentinelPurged = syncActionQueue.purgeLocalSentinelActions();
@@ -1063,8 +1065,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // ── Start loadout reconciliation sync queue auto-processing ──
       // This queue handles retrying failed cloud syncs for loadout weight/count
       // updates. It runs independently of the main sync action queue.
-      loadoutSyncQueue.startAutoProcess();
-      console.log('[ECS] Loadout reconciliation sync queue auto-process started');
+      const loadoutAutoProcessStarted = loadoutSyncQueue.startAutoProcess();
+      if (loadoutAutoProcessStarted) {
+        console.log('[ECS] Loadout reconciliation sync queue auto-process started');
+      }
 
       // If there are pending loadout sync entries, process them now
       if (loadoutSyncQueue.pendingCount > 0 && connectivity.isOnline()) {
@@ -1078,10 +1082,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.error('[ECS] Failed to initialize sync action processors:', err);
     }
 
-    return () => {
-      syncActionQueue.stopAutoProcess();
-      loadoutSyncQueue.stopAutoProcess();
-    };
+    // Sync queue processors are process-level listeners. Avoid stopping them
+    // during transient provider remounts; explicit sign-out cleanup owns shutdown.
+    return undefined;
   }, [dbReady]);
 
 
@@ -1676,6 +1679,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    if (!startupStateHydrated || authLoading) {
+      return;
+    }
+
     if (user) {
       // Clear offline mode once authenticated connectivity has returned.
       if (offlineMode && connectivity.isOnline()) {
@@ -1731,7 +1738,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelAutoSync();
     };
-  }, [offlineMode, refreshActiveTrip, refreshDirtyCount, refreshTrips, runBootstrap, user]);
+  }, [authLoading, offlineMode, refreshActiveTrip, refreshDirtyCount, refreshTrips, runBootstrap, startupStateHydrated, user]);
 
 
   // ============================================================

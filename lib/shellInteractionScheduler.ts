@@ -10,6 +10,8 @@ type ShellInteractionOptions = {
 };
 
 const DEFAULT_SHELL_INTERACTION_MAX_WAIT_MS = 120;
+const SHELL_ROUTE_NAVIGATION_DELAY_MS = 32;
+const SHELL_ROUTE_NAVIGATION_MAX_WAIT_MS = 160;
 
 function scheduleFrame(callback: () => void): ShellInteractionTask {
   if (typeof requestAnimationFrame === 'function') {
@@ -94,5 +96,8 @@ export function runAfterShellInteractions(
 }
 
 export function deferShellRouteNavigation(callback: () => void): ShellInteractionTask {
-  return scheduleFrame(callback);
+  return runAfterShellInteractions(callback, {
+    delayMs: SHELL_ROUTE_NAVIGATION_DELAY_MS,
+    maxWaitMs: SHELL_ROUTE_NAVIGATION_MAX_WAIT_MS,
+  });
 }

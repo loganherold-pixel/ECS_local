@@ -26,7 +26,9 @@ assert(
 
 assert(
   scheduler.includes('deferShellRouteNavigation') &&
-    scheduler.includes('cancelShellInteractionTask'),
+    scheduler.includes('cancelShellInteractionTask') &&
+    scheduler.includes('SHELL_ROUTE_NAVIGATION_DELAY_MS') &&
+    scheduler.includes('return runAfterShellInteractions(callback, {'),
   'Shell interaction scheduler must expose cancellable route-navigation deferral helpers.',
 );
 

@@ -46,6 +46,15 @@ const topBannerAssets = [
 ];
 const namedTopBannerAssets = topBannerAssets.filter((assetName) => assetName !== 'Expedition-Command_Banner.png');
 const bottomBannerAsset = 'ECS_Bottom_Banner.png';
+const exploreTopBannerAsset = 'Explore_Banner.png';
+const shellBodyAsset = path.join('assets', 'chrome', 'backgrounds', 'body-bg.png');
+const navIconAssets = [
+  { assetName: 'fleet-badge.png', maxWidth: 256, maxHeight: 256 },
+  { assetName: 'navigate-badge.png', maxWidth: 256, maxHeight: 256 },
+  { assetName: 'discover-badge.png', maxWidth: 256, maxHeight: 256 },
+  { assetName: 'alert-badge.png', maxWidth: 256, maxHeight: 256 },
+  { assetName: 'ecs-center.png', maxWidth: 384, maxHeight: 384 },
+];
 const viewportCases = [
   { label: 'phone portrait', width: 390, height: 844 },
   { label: 'phone landscape', width: 844, height: 390 },
@@ -95,11 +104,39 @@ function assertThreeToOneBanner(relativePath) {
   );
 }
 
+function assertMobileDecodeSizedTopBanner(relativePath) {
+  const size = readPngSize(relativePath);
+  assert.ok(
+    size.width <= 1024 && size.height <= 342,
+    `${relativePath} should stay mobile decode sized for Android header transitions.`,
+  );
+}
+
 function assertWideBottomBanner(relativePath) {
   const size = readPngSize(relativePath);
   assert.ok(
     size.width / size.height >= 3,
     `${relativePath} should remain a wide bottom-dock banner asset.`,
+  );
+  assert.ok(
+    size.width <= 1080 && size.height <= 300,
+    `${relativePath} should stay mobile decode sized for Android dock transitions.`,
+  );
+}
+
+function assertMobileDecodeSizedNavIcon(relativePath, maxWidth, maxHeight) {
+  const size = readPngSize(relativePath);
+  assert.ok(
+    size.width <= maxWidth && size.height <= maxHeight,
+    `${relativePath} should stay mobile decode sized for the bottom dock.`,
+  );
+}
+
+function assertMobileDecodeSizedShellBody(relativePath) {
+  const size = readPngSize(relativePath);
+  assert.ok(
+    size.width <= 768 && size.height <= 1152,
+    `${relativePath} should stay mobile decode sized so shared shell tab switches do not upload a full-screen background in the tap frame.`,
   );
 }
 
@@ -110,8 +147,20 @@ topBannerAssets.forEach((assetName) => {
     `${assetName} should be registered as a production top-banner asset.`,
   );
   assertThreeToOneBanner(path.join('assets', 'chrome', 'banners', assetName));
+  assertMobileDecodeSizedTopBanner(path.join('assets', 'chrome', 'banners', assetName));
 });
+{
+  const size = readPngSize(path.join('assets', 'chrome', 'banners', exploreTopBannerAsset));
+  assert.ok(
+    size.width <= 720 && size.height <= 240,
+    'Explore_Banner.png should stay below the tighter Android Explore tab-switch decode budget.',
+  );
+}
 assertWideBottomBanner(path.join('assets', 'chrome', 'banners', bottomBannerAsset));
+assertMobileDecodeSizedShellBody(shellBodyAsset);
+navIconAssets.forEach(({ assetName, maxWidth, maxHeight }) => {
+  assertMobileDecodeSizedNavIcon(path.join('assets', 'ecs', 'nav', assetName), maxWidth, maxHeight);
+});
 
 viewportCases.forEach(({ label }) => {
   assertIncludes(

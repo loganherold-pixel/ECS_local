@@ -12,7 +12,7 @@
 // ============================================================
 
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, useWindowDimensions } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, ECS } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
@@ -26,6 +26,8 @@ import {
   EXPLORE_REFINEMENT_OPTIONS,
   type ExploreRefinementFilter,
 } from '../../lib/explore/exploreRefinementFilter';
+
+const ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android';
 
 interface DistanceRadiusFilterProps {
   selectedRadius: DistanceRadius | null;
@@ -197,18 +199,18 @@ export default function DistanceRadiusFilter({
 // ============================================================
 const s = StyleSheet.create({
   container: {
-    backgroundColor: `${TACTICAL.amber}12`,
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}12`,
     borderRadius: ECS.radius,
     borderWidth: 1,
-    borderColor: `${TACTICAL.amber}2E`,
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}2E`,
     paddingHorizontal: 8,
     paddingVertical: 7,
     marginBottom: 6,
     gap: 5,
   },
   filterContentSurface: {
-    borderColor: `${TACTICAL.amber}2E`,
-    backgroundColor: `${TACTICAL.amber}12`,
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}2E`,
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : `${TACTICAL.amber}12`,
   },
 
   // ── Header ────────────────────────────────────────────
@@ -319,15 +321,15 @@ const s = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 7,
     borderWidth: 1,
-    borderColor: `${TACTICAL.amber}24`,
-    backgroundColor: `${TACTICAL.amber}08`,
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}24`,
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}08`,
   },
   segmentCompact: {
     paddingVertical: 5,
   },
   segmentActive: {
     borderColor: TACTICAL.amber + '50',
-    backgroundColor: TACTICAL.amber + '14',
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : TACTICAL.amber + '14',
   },
   segmentText: {
     fontSize: 11,
@@ -344,11 +346,9 @@ const s = StyleSheet.create({
     fontWeight: '700',
     color: TACTICAL.textMuted,
     letterSpacing: 1,
-    opacity: 0.6,
   },
   segmentUnitActive: {
     color: TACTICAL.amber,
-    opacity: 0.8,
   },
 
   // ── Filter Status ─────────────────────────────────────
@@ -368,8 +368,8 @@ const s = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 7,
     borderWidth: 1,
-    borderColor: `${TACTICAL.amber}24`,
-    backgroundColor: `${TACTICAL.amber}08`,
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}24`,
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}08`,
   },
   refinementChipCompact: {
     minWidth: '48%',
@@ -377,7 +377,8 @@ const s = StyleSheet.create({
     paddingVertical: 5,
   },
   refinementChipDisabled: {
-    opacity: 0.45,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgPanel,
   },
   refinementChipText: {
     flexShrink: 1,
@@ -390,7 +391,6 @@ const s = StyleSheet.create({
     fontWeight: '800',
     fontFamily: 'Courier',
     color: TACTICAL.textMuted,
-    opacity: 0.75,
   },
   refinementChipTextDisabled: {
     color: TACTICAL.textMuted,

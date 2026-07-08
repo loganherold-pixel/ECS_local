@@ -242,8 +242,8 @@ class LoadoutSyncQueue {
    * Start monitoring connectivity for auto-processing.
    * When the device comes back online, pending entries are retried.
    */
-  startAutoProcess(): void {
-    if (this._connectivityUnsub) return;
+  startAutoProcess(): boolean {
+    if (this._connectivityUnsub) return false;
 
     this._connectivityUnsub = connectivity.onStatusChange((status, wasOffline) => {
       if (status === 'online' && wasOffline && this.pendingCount > 0) {
@@ -256,6 +256,8 @@ class LoadoutSyncQueue {
     if (connectivity.isOnline() && this.pendingCount > 0) {
       this._scheduleProcess(1500);
     }
+
+    return true;
   }
 
   /**

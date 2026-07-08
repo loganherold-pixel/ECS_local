@@ -647,8 +647,8 @@ class SyncActionQueue {
   // ── Auto-Process on Connectivity ────────────────────────────
 
   /** Start monitoring connectivity for auto-processing */
-  startAutoProcess(): void {
-    if (this._connectivityUnsub) return;
+  startAutoProcess(): boolean {
+    if (this._connectivityUnsub) return false;
 
     this._connectivityUnsub = connectivity.onStatusChange((status, wasOffline) => {
       if (status === 'online' && wasOffline && this.pendingCount > 0) {
@@ -661,6 +661,8 @@ class SyncActionQueue {
     if (connectivity.isOnline() && this.pendingCount > 0) {
       this._scheduleProcess(1000);
     }
+
+    return true;
   }
 
   /** Stop auto-processing */

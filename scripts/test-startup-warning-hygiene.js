@@ -14,6 +14,10 @@ function assert(condition, message) {
 const androidAutoBridgeSource = read('lib/androidAutoBridge.ts');
 const loadMapSource = read('app/(tabs)/loadmap.tsx');
 const fetchVehicleZonesSource = read('lib/fetchVehicleZones.ts');
+const appContextSource = read('context/AppContext.tsx');
+const syncProcessorsSource = read('lib/syncProcessors.ts');
+const syncActionQueueSource = read('lib/syncActionQueue.ts');
+const loadoutSyncQueueSource = read('lib/loadoutSyncQueue.ts');
 
 assert(
   androidAutoBridgeSource.includes("ecsLog.debug(\n    'SYSTEM',\n    reason === 'not_android'") ||
@@ -53,6 +57,40 @@ assert(
   fetchVehicleZonesSource.includes('resolveVehicleContainerZones') &&
     fetchVehicleZonesSource.includes('readFleetBuildLoadoutState'),
   'fetchVehicleZones should derive zone data from existing accessory/build-loadout state before falling back empty.'
+);
+
+assert(
+  syncProcessorsSource.includes('let syncProcessorsInitialized = false') &&
+    syncProcessorsSource.includes('if (syncProcessorsInitialized) return false;') &&
+    syncProcessorsSource.includes('syncProcessorsInitialized = true;') &&
+    syncProcessorsSource.includes('return true;'),
+  'Sync processor registration should be idempotent across repeated native startup/provider mounts.'
+);
+
+assert(
+  syncActionQueueSource.includes('startAutoProcess(): boolean') &&
+    syncActionQueueSource.includes('if (this._connectivityUnsub) return false;') &&
+    syncActionQueueSource.includes('return true;'),
+  'Sync action queue auto-process startup should report whether it actually installed a listener.'
+);
+
+assert(
+  loadoutSyncQueueSource.includes('startAutoProcess(): boolean') &&
+    loadoutSyncQueueSource.includes('if (this._connectivityUnsub) return false;') &&
+    loadoutSyncQueueSource.includes('return true;'),
+  'Loadout sync queue auto-process startup should report whether it actually installed a listener.'
+);
+
+assert(
+  appContextSource.includes('const syncProcessorsStarted = initializeSyncProcessors();') &&
+    appContextSource.includes('if (syncProcessorsStarted) {') &&
+    appContextSource.includes('Sync queue processors are process-level listeners') &&
+    !appContextSource.includes('return () => {\n      shutdownSyncProcessors();') &&
+    !appContextSource.includes('return () => {\r\n      shutdownSyncProcessors();') &&
+    appContextSource.includes('if (!startupStateHydrated || authLoading)') &&
+    appContextSource.includes('const loadoutAutoProcessStarted = loadoutSyncQueue.startAutoProcess();') &&
+    appContextSource.includes('if (loadoutAutoProcessStarted) {'),
+  'App startup should avoid duplicate sync/loadout auto-process logs when queues were already active.'
 );
 
 console.log('Startup warning hygiene checks passed.');

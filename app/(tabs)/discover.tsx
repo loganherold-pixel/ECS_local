@@ -26,6 +26,7 @@ import {
   useWindowDimensions,
   Image,
   Alert,
+  Platform,
   type ListRenderItemInfo,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -239,6 +240,11 @@ import {
 import { saveExploreRouteForPlanning } from '../../lib/explore/exploreRoutePlanningSave';
 import { routeStore } from '../../lib/routeStore';
 import { runStore } from '../../lib/runStore';
+import {
+  cancelShellInteractionTask,
+  runAfterShellInteractions,
+  type ShellInteractionTask,
+} from '../../lib/shellInteractionScheduler';
 
 const TAG = '[EXPLORE]';
 void ROUTE_CATALOG_COVERAGE_AREAS;
@@ -297,6 +303,7 @@ const TRAIL_PACK_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
 const AI_ROUTE_IDEA_PAGE_SIZE = EXPLORE_CATEGORY_PAGE_SIZE;
 const EXPLORE_MAP_HANDOFF_MAX_ROUTES = 60;
 const EXPLORE_SECTION_CARD_VIEWPORT_HEIGHT = 368;
+const ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android';
 const HIDDEN_GEM_AI_TIMEOUT_MS = 4500;
 
 const DISCOVER_LOCATION_REFRESH_THRESHOLD_MI = 5;
@@ -863,14 +870,7 @@ function DiscoverScreenInner() {
   const isFocused = useIsFocused();
   const { width: windowWidth } = useWindowDimensions();
   const adaptive = useAdaptiveLayout();
-  const [opportunities, setOpportunities] = useState<ExpeditionOpportunity[]>(() =>
-    computeDistancesFromUser(
-      loadExpeditionOpportunities(),
-      DEFAULT_USER_LOCATION.latitude,
-      DEFAULT_USER_LOCATION.longitude,
-      'default_location',
-    ),
-  );
+  const [opportunities, setOpportunities] = useState<ExpeditionOpportunity[]>([]);
   const [compatResults, setCompatResults] = useState<Map<string, CompatibilityResult>>(new Map());
   const [vehicleProfile, setVehicleProfile] = useState<VehicleProfile | null>(null);
   const [activeVehicleId, setActiveVehicleId] = useState<string | null>(vehicleSetupStore.getActiveVehicleId());
@@ -1162,66 +1162,73 @@ function DiscoverScreenInner() {
     };
   }, [refreshRigContext]);
 
-  // Load opportunities with compatibility as soon as Discover mounts.
+  // Load opportunities with compatibility after the shell tab switch settles.
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
-      if (mountedRef.current && !cancelled) {
-        setIsLoading((current) => (current ? current : true));
-        setDiscoverRouteSourceFailureReason(null);
-      }
-
-      try {
-        let vehicleRecord: any = null;
-        const vid = activeVehicleId;
-        if (vid) {
-          try {
-            const result = await vehicleStore.getAll();
-            const vehicles = Array.isArray(result?.vehicles) ? result.vehicles : [];
-            vehicleRecord = vehicles.find((v: any) => v.id === vid) || null;
-          } catch {}
-        }
-
-        const { opportunities: ops, results, profile } = loadOpportunitiesWithCompatibility(
-          vehicleRecord, userLat, userLng,
-        );
-
+    let opportunityLoadTask: ShellInteractionTask | null = runAfterShellInteractions(() => {
+      void (async () => {
         if (mountedRef.current && !cancelled) {
-          setOpportunities(ops);
-          setCompatResults(results);
-          setVehicleProfile(profile);
-          setDiscoverRouteSourceMode(hasGPSFix ? 'seed_catalog_live_gps' : 'seed_catalog_default_location');
-          setDiscoverSourceHydrated(true);
+          setIsLoading((current) => (current ? current : true));
           setDiscoverRouteSourceFailureReason(null);
-          setIsLoading((current) => (current ? false : current));
         }
-      } catch (err) {
-        console.warn(TAG, 'Failed to load with compatibility, falling back:', err);
-        const ops = computeDistancesFromUser(
-          loadExpeditionOpportunities(),
-          userLat,
-          userLng,
-          hasGPSFix ? 'live_gps' : 'default_location',
-        );
-        if (mountedRef.current && !cancelled) {
-          setOpportunities(ops);
-          setCompatResults(new Map());
-          setVehicleProfile(null);
-          setDiscoverRouteSourceMode(
-            hasGPSFix ? 'seed_catalog_fallback_live_gps' : 'seed_catalog_fallback_default_location',
+
+        try {
+          let vehicleRecord: any = null;
+          const vid = activeVehicleId;
+          if (vid) {
+            try {
+              const result = await vehicleStore.getAll();
+              const vehicles = Array.isArray(result?.vehicles) ? result.vehicles : [];
+              vehicleRecord = vehicles.find((v: any) => v.id === vid) || null;
+            } catch {}
+          }
+
+          const { opportunities: ops, results, profile } = loadOpportunitiesWithCompatibility(
+            vehicleRecord, userLat, userLng,
           );
-          setDiscoverSourceHydrated(true);
-          setDiscoverRouteSourceFailureReason(
-            err instanceof Error ? err.message : 'compatibility_pipeline_failed',
+
+          if (mountedRef.current && !cancelled) {
+            setOpportunities(ops);
+            setCompatResults(results);
+            setVehicleProfile(profile);
+            setDiscoverRouteSourceMode(hasGPSFix ? 'seed_catalog_live_gps' : 'seed_catalog_default_location');
+            setDiscoverSourceHydrated(true);
+            setDiscoverRouteSourceFailureReason(null);
+            setIsLoading((current) => (current ? false : current));
+          }
+        } catch (err) {
+          console.warn(TAG, 'Failed to load with compatibility, falling back:', err);
+          const ops = computeDistancesFromUser(
+            loadExpeditionOpportunities(),
+            userLat,
+            userLng,
+            hasGPSFix ? 'live_gps' : 'default_location',
           );
-          setIsLoading((current) => (current ? false : current));
+          if (mountedRef.current && !cancelled) {
+            setOpportunities(ops);
+            setCompatResults(new Map());
+            setVehicleProfile(null);
+            setDiscoverRouteSourceMode(
+              hasGPSFix ? 'seed_catalog_fallback_live_gps' : 'seed_catalog_fallback_default_location',
+            );
+            setDiscoverSourceHydrated(true);
+            setDiscoverRouteSourceFailureReason(
+              err instanceof Error ? err.message : 'compatibility_pipeline_failed',
+            );
+            setIsLoading((current) => (current ? false : current));
+          }
         }
-      }
-    })();
+      })();
+    }, {
+      delayMs: EXPLORE_ROUTE_DISCOVERY_BATCH_DELAY_MS,
+      maxWaitMs: 180,
+    });
 
     return () => {
       cancelled = true;
+      cancelShellInteractionTask(opportunityLoadTask);
+      opportunityLoadTask = null;
     };
   }, [userLat, userLng, activeVehicleId, rigContextRevision, hasGPSFix]);
 
@@ -6218,8 +6225,8 @@ const s = StyleSheet.create({
     gap: 10,
     borderRadius: ECS.radius,
     borderWidth: 1,
-    borderColor: TACTICAL.amber + '28',
-    backgroundColor: 'rgba(10,14,17,0.78)',
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : TACTICAL.amber + '28',
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : 'rgba(10,14,17,0.78)',
     padding: 11,
     marginBottom: 8,
   },
@@ -6228,8 +6235,8 @@ const s = StyleSheet.create({
     height: 38,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: TACTICAL.amber + '35',
-    backgroundColor: TACTICAL.amber + '0D',
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : TACTICAL.amber + '35',
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : TACTICAL.amber + '0D',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -6262,8 +6269,8 @@ const s = StyleSheet.create({
     gap: 10,
     borderRadius: ECS.radius,
     borderWidth: 1,
-    borderColor: TACTICAL.amber + '22',
-    backgroundColor: 'rgba(10,14,17,0.74)',
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : TACTICAL.amber + '22',
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : 'rgba(10,14,17,0.74)',
     paddingHorizontal: 10,
     paddingVertical: 9,
   },
@@ -6297,8 +6304,8 @@ const s = StyleSheet.create({
     minWidth: 54,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: TACTICAL.amber + '35',
-    backgroundColor: TACTICAL.amber + '0D',
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : TACTICAL.amber + '35',
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : TACTICAL.amber + '0D',
     alignItems: 'center',
     paddingHorizontal: 8,
     paddingVertical: 7,
@@ -6991,8 +6998,8 @@ const s = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: TACTICAL.amber + '25',
-    backgroundColor: TACTICAL.amber + '0D',
+    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : TACTICAL.amber + '25',
+    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : TACTICAL.amber + '0D',
     marginBottom: 4,
   },
   inlineSectionNoticeText: {

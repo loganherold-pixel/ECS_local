@@ -28,6 +28,10 @@ const wizardCardSource = fs.readFileSync(
   'utf8',
 );
 const trailPackCardSource = fs.readFileSync(path.join(root, 'components', 'discover', 'TrailPackCard.tsx'), 'utf8');
+const distanceRadiusFilterSource = fs.readFileSync(
+  path.join(root, 'components', 'discover', 'DistanceRadiusFilter.tsx'),
+  'utf8',
+);
 const overlaySource = fs.readFileSync(path.join(root, 'lib', 'navigateExploreRoutesOverlay.ts'), 'utf8');
 const qaDocPath = path.join(root, 'docs', 'explore-rendering-performance-android-qa.md');
 const imageResolverPath = path.join(root, 'lib', 'explore', 'routeImageResolver.ts');
@@ -222,6 +226,16 @@ assert.strictEqual(firstVisibleWork.fullGeometryRequiredForInitialCards, false);
 assert(firstVisibleWork.estimatedInitialCardRenderCount <= 12);
 
 [
+  "from '../../lib/shellInteractionScheduler';",
+  'cancelShellInteractionTask,',
+  'runAfterShellInteractions,',
+  'type ShellInteractionTask,',
+  'const [opportunities, setOpportunities] = useState<ExpeditionOpportunity[]>([]);',
+  'let opportunityLoadTask: ShellInteractionTask | null = runAfterShellInteractions(() => {',
+  "delayMs: EXPLORE_ROUTE_DISCOVERY_BATCH_DELAY_MS",
+  'cancelShellInteractionTask(opportunityLoadTask);',
+  "ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android'",
+  "backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel",
   'FlatList',
   'EXPLORE_ROUTE_CARD_INITIAL_RENDER_COUNT',
   'EXPLORE_ROUTE_CARD_BATCH_SIZE',
@@ -241,6 +255,19 @@ assert(firstVisibleWork.estimatedInitialCardRenderCount <= 12);
 assert(
   !discoverSource.includes('visibleExploreWizardCardCandidates.map((candidate) => ('),
   'Guidance-ready Explore cards should not be eagerly mapped in the page ScrollView.',
+);
+assert(
+  !discoverSource.includes('useState<ExpeditionOpportunity[]>(() =>\n    computeDistancesFromUser(\n      loadExpeditionOpportunities()'),
+  'Explore should not synchronously validate and distance-enrich seed opportunities in the initial render path.',
+);
+assert(
+  distanceRadiusFilterSource.includes("ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android'") &&
+    distanceRadiusFilterSource.includes('backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel') &&
+    distanceRadiusFilterSource.includes('backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev') &&
+    distanceRadiusFilterSource.includes('refinementChipDisabled: {') &&
+    !distanceRadiusFilterSource.includes('refinementChipDisabled: {\n    opacity') &&
+    !distanceRadiusFilterSource.includes('refinementChipDisabled: {\r\n    opacity'),
+  'Explore mobile filter surfaces should avoid opacity-based disabled chips and translucent first-viewport Android panels.',
 );
 
 [

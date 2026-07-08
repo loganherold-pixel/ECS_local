@@ -262,9 +262,14 @@ const OTHER_TYPES: SyncActionType[] = [
   'vehicle_config_change', 'user_settings_change', 'generic_sync',
 ];
 
+let syncProcessorsInitialized = false;
+
 // ── Register all processors ───────────────────────────────
 
-export function initializeSyncProcessors(): void {
+export function initializeSyncProcessors(): boolean {
+  if (syncProcessorsInitialized) return false;
+  syncProcessorsInitialized = true;
+
   const expeditionProcessor = createProcessor('expedition');
   for (const type of EXPEDITION_TYPES) {
     syncActionQueue.registerProcessor(type, expeditionProcessor);
@@ -309,5 +314,11 @@ export function initializeSyncProcessors(): void {
   syncActionQueue.startAutoProcess();
 
   console.log('[SyncProcessors] All processors registered and auto-process started');
+  return true;
+}
+
+export function shutdownSyncProcessors(): void {
+  syncActionQueue.stopAutoProcess();
+  syncProcessorsInitialized = false;
 }
 

@@ -102,6 +102,22 @@ const generatedPathBlockList = [
   rootDirBlock('.qa'),
 ];
 
+function stripMetroMultipartProgressForAndroidDebug(req) {
+  const url = String(req.url || '');
+  const accept = String(req.headers?.accept || '');
+
+  if (
+    url.includes('.bundle') &&
+    url.includes('platform=android') &&
+    accept.includes('multipart/mixed')
+  ) {
+    // Android debug clients on this Windows workstation have intermittently
+    // failed to parse Metro's multipart progress stream. The JS bundle itself
+    // is valid, so request the same bundle without progress framing.
+    req.headers.accept = 'application/javascript';
+  }
+}
+
 if (process.platform === 'win32') {
   config.maxWorkers = 1;
   config.stickyWorkers = false;
@@ -126,6 +142,22 @@ config.resolver.assetExts = Array.from(
 config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
   '@supabase/node-fetch': path.resolve(__dirname, 'shims', 'node-fetch.js'),
+};
+
+const existingEnhanceMiddleware = config.server?.enhanceMiddleware;
+config.server = {
+  ...config.server,
+};
+config.server.enhanceMiddleware = (middleware, server) => {
+  const enhancedMiddleware =
+    typeof existingEnhanceMiddleware === 'function'
+      ? existingEnhanceMiddleware(middleware, server)
+      : middleware;
+
+  return (req, res, next) => {
+    stripMetroMultipartProgressForAndroidDebug(req);
+    return enhancedMiddleware(req, res, next);
+  };
 };
 
 module.exports = config;
