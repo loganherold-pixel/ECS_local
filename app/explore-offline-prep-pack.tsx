@@ -19,6 +19,7 @@ import { ECS, TACTICAL } from '../lib/theme';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { getMapboxToken } from '../lib/mapConfig';
 import { hapticMicro } from '../lib/haptics';
+import { runAfterShellInteractions, type ShellInteractionTask } from '../lib/shellInteractionScheduler';
 import { parseGeoFile, getPrimaryRouteCoordinates } from '../lib/gpxParser';
 import { loadOpportunitiesWithCompatibility } from '../lib/discoverEngine';
 import { buildProfileFromSpecs } from '../lib/rigCompatibilityEngine';
@@ -853,6 +854,7 @@ export default function ExploreOfflinePrepPackScreen() {
   const weatherResolveAttemptedRef = useRef<Set<string>>(new Set());
   const importingRouteRef = useRef(false);
   const autoImportOpenedRef = useRef(false);
+  const routeLoadTaskRef = useRef<ShellInteractionTask | null>(null);
 
   useEffect(() => {
     const refreshSyncState = () => {
@@ -861,8 +863,12 @@ export default function ExploreOfflinePrepPackScreen() {
     };
     const unsubscribeSync = offlineTileSyncCoordinator.subscribe(refreshSyncState);
     const unsubscribeTileCache = tileCacheStore.subscribe(refreshSyncState);
-    refreshSyncState();
+    const initialSyncTask = runAfterShellInteractions(refreshSyncState, {
+      delayMs: 120,
+      maxWaitMs: 800,
+    });
     return () => {
+      initialSyncTask.cancel();
       unsubscribeSync();
       unsubscribeTileCache();
     };
@@ -870,42 +876,51 @@ export default function ExploreOfflinePrepPackScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      try {
-        const handoff = loadOfflinePrepPackHandoff();
-        const exploreContext = loadExplorePlanningRouteContext();
-        const suggestedRoutes = (exploreContext?.routes?.length
-          ? exploreContext.routes
-          : loadOpportunitiesWithCompatibility(null).opportunities
-        ).slice(0, 8) as unknown as TripBuilderRouteInput[];
-        const cachedRoutes = await listOfflineCachedRoutes().catch(() => []);
-        if (cancelled) return;
-        const routeMap = new Map<string, TripBuilderRouteInput>();
-        if (handoff?.input?.route) upsertExplorePlanningRoute(routeMap, handoff.input.route);
-        cachedRoutes.forEach((cachedRoute) => upsertExplorePlanningRoute(routeMap, offlineCachedRouteToTripBuilderInput(cachedRoute)));
-        suggestedRoutes.forEach((route) => upsertExplorePlanningRoute(routeMap, route));
-        const nextRoutes = Array.from(routeMap.values());
-        setRoutes(nextRoutes);
-        setHandoffInput(handoff?.input ?? null);
-        const requestedRouteId = params.routeId ? String(params.routeId) : null;
-        const requestedRoute = requestedRouteId
-          ? nextRoutes.find((route) => routeId(route) === requestedRouteId)
-          : null;
-        const handoffRouteId = handoff?.input?.route ? routeId(handoff.input.route) : null;
-        const nextSelectedRouteId = requestedRoute
-          ? routeId(requestedRoute)
-          : handoffRouteId;
-        setSelectedRouteId(nextSelectedRouteId);
-        setRouteListVisible(!nextSelectedRouteId || params.action === 'import');
-        setError(null);
-      } catch {
-        if (!cancelled) setError('Offline Prep Pack could not load route options.');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+    setLoading(true);
+    routeLoadTaskRef.current?.cancel();
+    routeLoadTaskRef.current = runAfterShellInteractions(() => {
+      void (async () => {
+        try {
+          const handoff = loadOfflinePrepPackHandoff();
+          const exploreContext = loadExplorePlanningRouteContext();
+          const suggestedRoutes = (exploreContext?.routes?.length
+            ? exploreContext.routes
+            : loadOpportunitiesWithCompatibility(null).opportunities
+          ).slice(0, 8) as unknown as TripBuilderRouteInput[];
+          const cachedRoutes = await listOfflineCachedRoutes().catch(() => []);
+          if (cancelled) return;
+          const routeMap = new Map<string, TripBuilderRouteInput>();
+          if (handoff?.input?.route) upsertExplorePlanningRoute(routeMap, handoff.input.route);
+          cachedRoutes.forEach((cachedRoute) => upsertExplorePlanningRoute(routeMap, offlineCachedRouteToTripBuilderInput(cachedRoute)));
+          suggestedRoutes.forEach((route) => upsertExplorePlanningRoute(routeMap, route));
+          const nextRoutes = Array.from(routeMap.values());
+          setRoutes(nextRoutes);
+          setHandoffInput(handoff?.input ?? null);
+          const requestedRouteId = params.routeId ? String(params.routeId) : null;
+          const requestedRoute = requestedRouteId
+            ? nextRoutes.find((route) => routeId(route) === requestedRouteId)
+            : null;
+          const handoffRouteId = handoff?.input?.route ? routeId(handoff.input.route) : null;
+          const nextSelectedRouteId = requestedRoute
+            ? routeId(requestedRoute)
+            : handoffRouteId;
+          setSelectedRouteId(nextSelectedRouteId);
+          setRouteListVisible(!nextSelectedRouteId || params.action === 'import');
+          setError(null);
+        } catch {
+          if (!cancelled) setError('Offline Prep Pack could not load route options.');
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      })();
+    }, {
+      delayMs: 120,
+      maxWaitMs: 700,
+    });
     return () => {
       cancelled = true;
+      routeLoadTaskRef.current?.cancel();
+      routeLoadTaskRef.current = null;
     };
   }, [params.action, params.routeId]);
 
@@ -971,28 +986,34 @@ export default function ExploreOfflinePrepPackScreen() {
     geometryResolveAttemptedRef.current.add(attemptKey);
 
     let cancelled = false;
-    setGeometryResolving(true);
-    getMapboxToken()
-      .then((token) => hydrateOfflinePrepRouteGeometry(selectedInput, { accessToken: token }))
-      .then((hydratedInput) => {
-        if (cancelled) return;
-        const hydratedPoints = getOfflinePrepRouteCoordinates(hydratedInput.route);
-        if (hydratedPoints.length <= points.length) return;
-        setHandoffInput(hydratedInput);
-        setManifest(buildOfflinePrepPackManifest(hydratedInput));
-        setActionMessage('Route geometry refreshed for offline prep from the selected route endpoints.');
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setActionMessage('Offline Prep is using the best available route line. Full route geometry can refresh when Mapbox route data is available.');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setGeometryResolving(false);
-      });
+    const geometryRefreshTask = runAfterShellInteractions(() => {
+      setGeometryResolving(true);
+      getMapboxToken()
+        .then((token) => hydrateOfflinePrepRouteGeometry(selectedInput, { accessToken: token }))
+        .then((hydratedInput) => {
+          if (cancelled) return;
+          const hydratedPoints = getOfflinePrepRouteCoordinates(hydratedInput.route);
+          if (hydratedPoints.length <= points.length) return;
+          setHandoffInput(hydratedInput);
+          setManifest(buildOfflinePrepPackManifest(hydratedInput));
+          setActionMessage('Route geometry refreshed for offline prep from the selected route endpoints.');
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setActionMessage('Offline Prep is using the best available route line. Full route geometry can refresh when Mapbox route data is available.');
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setGeometryResolving(false);
+        });
+    }, {
+      delayMs: 180,
+      maxWaitMs: 900,
+    });
 
     return () => {
       cancelled = true;
+      geometryRefreshTask.cancel();
     };
   }, [geometryResolving, selectedInput]);
 
@@ -1007,34 +1028,40 @@ export default function ExploreOfflinePrepPackScreen() {
     weatherResolveAttemptedRef.current.add(attemptKey);
 
     let cancelled = false;
-    setWeatherResolving(true);
-    fetchSharedWeatherForCoordinates(weatherCoordinates, 'imperial', false, 'route_segment')
-      .then((weather) => {
-        if (cancelled) return;
-        const weatherSnapshot = buildOfflinePrepWeatherSnapshot(
-          selectedInput.route,
-          weatherCoordinates,
-          weather,
-          weatherSampleSelection,
-        );
-        if (!weatherSnapshot) return;
-        setWeatherSnapshotsByRouteId((current) => ({
-          ...current,
-          [selectedRouteKey]: weatherSnapshot,
-        }));
-        setActionMessage('Weather snapshot refreshed for the selected route.');
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setActionMessage('Weather snapshot is still unavailable. ECS will retry when route weather is reachable.');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setWeatherResolving(false);
-      });
+    const weatherRefreshTask = runAfterShellInteractions(() => {
+      setWeatherResolving(true);
+      fetchSharedWeatherForCoordinates(weatherCoordinates, 'imperial', false, 'route_segment')
+        .then((weather) => {
+          if (cancelled) return;
+          const weatherSnapshot = buildOfflinePrepWeatherSnapshot(
+            selectedInput.route,
+            weatherCoordinates,
+            weather,
+            weatherSampleSelection,
+          );
+          if (!weatherSnapshot) return;
+          setWeatherSnapshotsByRouteId((current) => ({
+            ...current,
+            [selectedRouteKey]: weatherSnapshot,
+          }));
+          setActionMessage('Weather snapshot refreshed for the selected route.');
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setActionMessage('Weather snapshot is still unavailable. ECS will retry when route weather is reachable.');
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setWeatherResolving(false);
+        });
+    }, {
+      delayMs: 220,
+      maxWaitMs: 1000,
+    });
 
     return () => {
       cancelled = true;
+      weatherRefreshTask.cancel();
     };
   }, [selectedInput, weatherResolving]);
 

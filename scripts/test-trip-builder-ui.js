@@ -157,16 +157,22 @@ assertIncludes(screen, 'const tripBuilderResultModalContentStyle = useMemo(', 'T
 assertIncludes(screen, 'paddingBottom: TRIP_BUILDER_RESULT_BOTTOM_CLEARANCE + bottomClearance', 'Trip Builder result content should include the active shell bottom clearance.');
 assertIncludes(screen, 'contentContainerStyle={[styles.modalContent, tripBuilderResultModalContentStyle]}', 'Trip Builder result ScrollView should use shell-aware content padding.');
 assert(
-  /<ScrollView[\s\S]*?testID="trip-builder-results"[\s\S]*?removeClippedSubviews/.test(screen),
-  'Trip Builder result ScrollView should clip offscreen review content on Android instead of drawing the full generated plan behind the dock.',
+  /<FlatList<TripBuilderResultSectionKey>[\s\S]*?testID="trip-builder-results"[\s\S]*?removeClippedSubviews/.test(screen),
+  'Trip Builder result list should virtualize offscreen review content on Android instead of drawing the full generated plan behind the dock.',
 );
-const resultScrollSource = screen.match(/<ScrollView[\s\S]*?testID="trip-builder-results"[\s\S]*?<\/ScrollView>/)?.[0] ?? '';
-assert(resultScrollSource, 'Trip Builder result ScrollView source should be inspectable.');
-assertIncludes(resultScrollSource, 'styles.resultHeaderCard', 'Trip Builder result ScrollView should keep the plan header as a bounded direct child.');
-assertIncludes(screen, 'backgroundColor: ECS.bgPanel', 'Trip Builder result ScrollView should provide an opaque modal surface behind clipped section children.');
+const resultScrollSource = screen.match(/<FlatList<TripBuilderResultSectionKey>[\s\S]*?testID="trip-builder-results"[\s\S]*?\/>/)?.[0] ?? '';
+assert(resultScrollSource, 'Trip Builder result FlatList source should be inspectable.');
+assertIncludes(screen, 'TRIP_BUILDER_RESULT_INITIAL_RENDER_COUNT', 'Trip Builder result list should bound initial rendered sections.');
+assertIncludes(screen, 'TRIP_BUILDER_RESULT_BATCH_SIZE', 'Trip Builder result list should batch lower review sections.');
+assertIncludes(screen, 'TRIP_BUILDER_RESULT_WINDOW_SIZE', 'Trip Builder result list should use a compact Android render window.');
+assertIncludes(resultScrollSource, 'renderItem={renderTripBuilderResultSection}', 'Trip Builder result list should render bounded section items.');
+assertIncludes(resultScrollSource, 'initialNumToRender={TRIP_BUILDER_RESULT_INITIAL_RENDER_COUNT}', 'Trip Builder result list should avoid mounting all review sections in the open frame.');
+assertIncludes(resultScrollSource, 'maxToRenderPerBatch={TRIP_BUILDER_RESULT_BATCH_SIZE}', 'Trip Builder result list should batch subsequent sections.');
+assertIncludes(resultScrollSource, 'windowSize={TRIP_BUILDER_RESULT_WINDOW_SIZE}', 'Trip Builder result list should keep a compact viewport window.');
+assertIncludes(screen, 'backgroundColor: ECS.bgPanel', 'Trip Builder result list should provide an opaque modal surface behind clipped section children.');
 assert(
   !resultScrollSource.includes('<View style={styles.sectionCard}>'),
-  'Trip Builder result ScrollView should not wrap the entire generated plan in one giant direct child; Android clipping needs bounded section children.',
+  'Trip Builder result list should not wrap the entire generated plan in one giant direct child; Android clipping needs bounded section children.',
 );
 assertIncludes(screen, 'routeListScroller', 'Trip Builder route selector should be independently scrollable.');
 [

@@ -173,6 +173,10 @@ const TRIP_BUILDER_ROUTE_ROW_HEIGHT = 58;
 const TRIP_BUILDER_BACKGROUND_LOOKUP_DELAY_MS = 220;
 const TRIP_BUILDER_BACKGROUND_LOOKUP_MAX_WAIT_MS = 700;
 const TRIP_BUILDER_RESULT_BOTTOM_CLEARANCE = 232;
+const TRIP_BUILDER_RESULT_INITIAL_RENDER_COUNT = 3;
+const TRIP_BUILDER_RESULT_BATCH_SIZE = 2;
+const TRIP_BUILDER_RESULT_WINDOW_SIZE = 5;
+const TRIP_BUILDER_RESULT_BATCHING_PERIOD_MS = 40;
 
 function scheduleTripBuilderBackgroundLookup(callback: () => void): ShellInteractionTask {
   return runAfterShellInteractions(callback, {
@@ -217,6 +221,16 @@ const PRIORITY_OPTIONS: { value: TripPriority; label: string; icon: string }[] =
 ];
 
 type TripPlanMapScope = 'itinerary' | 'camps' | 'exits' | 'resupply';
+type TripBuilderResultSectionKey =
+  | 'plan_summary'
+  | 'camp_check'
+  | 'itinerary'
+  | 'camp_candidates'
+  | 'exit_access'
+  | 'smart_resupply'
+  | 'ecs_notes'
+  | 'items_to_verify'
+  | 'offline_cta';
 
 type TripMapCoordinate = {
   latitude: number;
@@ -4898,7 +4912,7 @@ export default function ExploreTripBuilderScreen() {
     setSelectedBailoutPoint((current) => current && operatorPinIds.has(current.id) ? null : current);
   };
 
-  const cycleResupplyOverride = (category: ResupplyCategory) => {
+  const cycleResupplyOverride = useCallback((category: ResupplyCategory) => {
     if (!RESUPPLY_OVERRIDE_CATEGORIES.has(category)) return;
     hapticMicro();
     setResupplyOverrides((current) => {
@@ -4910,7 +4924,7 @@ export default function ExploreTripBuilderScreen() {
           : 'unknown';
       return { ...current, [category]: next };
     });
-  };
+  }, []);
 
   const selectPlanningRoute = useCallback((routeId: string) => {
     hapticMicro();
@@ -5190,7 +5204,7 @@ export default function ExploreTripBuilderScreen() {
     }
   };
 
-  const handleStartItineraryEdit = () => {
+  const handleStartItineraryEdit = useCallback(() => {
     if (!plan) return;
     hapticMicro();
     setDraftItineraryStops(plan.suggestedStops);
@@ -5205,9 +5219,9 @@ export default function ExploreTripBuilderScreen() {
     setItinerarySearchSuggestions([]);
     setItinerarySearchError(null);
     setItineraryEditMode(true);
-  };
+  }, [plan, savedTripItineraryEditSession, selectedTripItinerary]);
 
-  const handleCancelItineraryEdit = () => {
+  const handleCancelItineraryEdit = useCallback(() => {
     hapticMicro();
     setDraftItineraryStops([]);
     setDraftTripItineraryEditSession(null);
@@ -5215,9 +5229,9 @@ export default function ExploreTripBuilderScreen() {
     setItinerarySearchSuggestions([]);
     setItinerarySearchError(null);
     setItineraryEditMode(false);
-  };
+  }, []);
 
-  const handleSaveItineraryEdit = () => {
+  const handleSaveItineraryEdit = useCallback(() => {
     if (!plan) return;
     hapticMicro();
     const nextPlan = updateTripPlanStops(plan, draftItineraryStops);
@@ -5238,44 +5252,44 @@ export default function ExploreTripBuilderScreen() {
       itinerarySaved: true,
       itineraryEditSession: nextTripItineraryEditSession,
     };
-  };
+  }, [draftItineraryStops, draftTripItineraryEditSession, plan, planModalVisible, selectedRouteId]);
 
-  const handleAcceptItineraryReviewItem = (itemId: string) => {
+  const handleAcceptItineraryReviewItem = useCallback((itemId: string) => {
     hapticMicro();
     setDraftTripItineraryEditSession((current) => (
       current ? acceptTripItineraryEditItem(current, itemId) : current
     ));
-  };
+  }, []);
 
-  const handleDismissItineraryReviewItem = (itemId: string) => {
+  const handleDismissItineraryReviewItem = useCallback((itemId: string) => {
     hapticMicro();
     setDraftTripItineraryEditSession((current) => (
       current ? dismissTripItineraryEditItem(current, itemId) : current
     ));
-  };
+  }, []);
 
-  const handleMoveItineraryReviewStop = (itemId: string, direction: -1 | 1) => {
+  const handleMoveItineraryReviewStop = useCallback((itemId: string, direction: -1 | 1) => {
     hapticMicro();
     setDraftTripItineraryEditSession((current) => (
       current ? reorderTripItineraryStop(current, itemId, direction) : current
     ));
-  };
+  }, []);
 
-  const handleAddUserItineraryStop = () => {
+  const handleAddUserItineraryStop = useCallback(() => {
     hapticMicro();
     setDraftTripItineraryEditSession((current) => (
       current ? addUserItineraryStop(current) : current
     ));
-  };
+  }, []);
 
-  const handleAddUserTrailWaypoint = () => {
+  const handleAddUserTrailWaypoint = useCallback(() => {
     hapticMicro();
     setDraftTripItineraryEditSession((current) => (
       current ? addUserTrailWaypoint(current) : current
     ));
-  };
+  }, []);
 
-  const handleMoveDraftStop = (index: number, direction: -1 | 1) => {
+  const handleMoveDraftStop = useCallback((index: number, direction: -1 | 1) => {
     setDraftItineraryStops((current) => {
       const nextIndex = index + direction;
       if (nextIndex < 0 || nextIndex >= current.length) return current;
@@ -5284,31 +5298,31 @@ export default function ExploreTripBuilderScreen() {
       next.splice(nextIndex, 0, item);
       return renumberTripPlanStops(next);
     });
-  };
+  }, []);
 
-  const handleDeleteDraftStop = (index: number) => {
+  const handleDeleteDraftStop = useCallback((index: number) => {
     setDraftItineraryStops((current) => renumberTripPlanStops(current.filter((_, itemIndex) => itemIndex !== index)));
-  };
+  }, []);
 
-  const handleToggleItineraryBailout = (index: number) => {
+  const handleToggleItineraryBailout = useCallback((index: number) => {
     hapticMicro();
     setDraftItineraryStops((current) => renumberTripPlanStops(current.map((stop, itemIndex) => (
       itemIndex === index ? toggleItineraryStopBailout(stop) : stop
     ))));
-  };
+  }, []);
 
-  const handleOpenInsertSlot = (index: number) => {
+  const handleOpenInsertSlot = useCallback((index: number) => {
     hapticMicro();
     setInsertState({ index, query: '' });
     setItinerarySearchSuggestions([]);
     setItinerarySearchError(null);
-  };
+  }, []);
 
-  const handleItinerarySearchQuery = (query: string) => {
+  const handleItinerarySearchQuery = useCallback((query: string) => {
     setInsertState((current) => current ? { ...current, query } : current);
-  };
+  }, []);
 
-  const handleSelectItinerarySuggestion = async (suggestion: RoadNavSearchSuggestion) => {
+  const handleSelectItinerarySuggestion = useCallback(async (suggestion: RoadNavSearchSuggestion) => {
     if (!plan || !insertState) return;
     hapticMicro();
     const token = itinerarySearchToken || await getMapboxToken();
@@ -5359,9 +5373,9 @@ export default function ExploreTripBuilderScreen() {
     } finally {
       setItinerarySearchLoading(false);
     }
-  };
+  }, [insertState, itinerarySearchToken, plan]);
 
-  const handleActivateTrip = async () => {
+  const handleActivateTrip = useCallback(async () => {
     const itineraryForActiveTrip = editableTripItinerary ?? selectedTripItinerary;
     if (!plan || !selectedRoute || !itineraryForActiveTrip) {
       setActiveTripActivationError('Build or preview an itinerary before activating Active Trip Mode.');
@@ -5402,9 +5416,18 @@ export default function ExploreTripBuilderScreen() {
     } finally {
       setActiveTripActivating(false);
     }
-  };
+  }, [
+    editableTripItinerary,
+    liveTripBuilderUserLocation,
+    plan,
+    router,
+    selectedRoute,
+    selectedTripItinerary,
+    tripConfidenceSummary,
+    vehicleProfile,
+  ]);
 
-  const handlePrepareOfflinePack = () => {
+  const handlePrepareOfflinePack = useCallback(() => {
     if (selectedRoute && plan) {
       const route = routeForOfflinePrep(
         selectedRoute as unknown as TripBuilderRouteInput,
@@ -5431,12 +5454,332 @@ export default function ExploreTripBuilderScreen() {
     }
     hapticMicro();
     router.push('/explore-offline-prep-pack');
-  };
+  }, [
+    editableTripItinerary,
+    plan,
+    readinessReference,
+    router,
+    selectedPreparedRoutePoints,
+    selectedRoute,
+    selectedTripItinerary,
+    vehicleProfile,
+  ]);
 
-  const openPlanMap = (scope: TripPlanMapScope) => {
+  const openPlanMap = useCallback((scope: TripPlanMapScope) => {
     hapticMicro();
     setPlanMapScope(scope);
-  };
+  }, []);
+
+  const tripBuilderResultSectionKeys = useMemo<TripBuilderResultSectionKey[]>(() => {
+    if (!plan) return [];
+    const sections: TripBuilderResultSectionKey[] = [
+      'plan_summary',
+      'camp_check',
+      'itinerary',
+      'camp_candidates',
+      'exit_access',
+    ];
+    if (plan.smartResupplyPlan) {
+      sections.push('smart_resupply');
+    }
+    sections.push('ecs_notes', 'items_to_verify', 'offline_cta');
+    return sections;
+  }, [plan]);
+
+  const tripBuilderResultKeyExtractor = useCallback((item: TripBuilderResultSectionKey) => item, []);
+
+  const renderTripBuilderResultSection = useCallback(({ item }: ListRenderItemInfo<TripBuilderResultSectionKey>) => {
+    if (!plan) return null;
+    switch (item) {
+      case 'plan_summary':
+        return (
+          <View style={[styles.sectionCard, styles.resultHeaderCard]}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>{plan.route.name}</Text>
+              <Text style={styles.sectionMeta}>PLAN</Text>
+            </View>
+            <View style={styles.metricGrid}>
+              <Metric label="Distance" value={formatMiles(plan.estimate.totalDistanceMiles)} />
+              <Metric label="Drive Time" value={formatHours(plan.estimate.driveTimeHours)} />
+              <Metric label="Trip Type" value={tripTypeLabel(plan.tripType)} />
+              <Metric label="Readiness" value={plan.readinessReference?.status?.toUpperCase() ?? 'Data unavailable'} />
+            </View>
+          </View>
+        );
+      case 'camp_check':
+        return (
+          <ResultBlock title="Camp Check">
+            <Text style={styles.resultText}>
+              {plan.primaryCampCandidate
+                ? campCandidateLine(plan.primaryCampCandidate)
+                : 'No known camp source detected. Verify before departure.'}
+            </Text>
+            {plan.primaryCampCandidate?.notes?.[0] ? (
+              <Text style={styles.resultSubtext}>{plan.primaryCampCandidate.notes[0]}</Text>
+            ) : null}
+          </ResultBlock>
+        );
+      case 'itinerary':
+        return (
+          <ResultBlock
+            title={itinerarySaved ? 'Confidence-Built Itinerary' : 'Suggested Itinerary'}
+            onMapPress={tripPlanMapAvailability.itinerary ? () => openPlanMap('itinerary') : undefined}
+            onEditPress={itineraryEditMode ? undefined : handleStartItineraryEdit}
+          >
+            <TripConfidenceSummaryPanel summary={tripConfidenceSummary} />
+            <ItinerarySummaryPanel summary={itinerarySummary} />
+            <View style={styles.activeTripActionCard}>
+              <View style={styles.activeTripActionCopy}>
+                <Text style={styles.activeTripActionTitle}>Active Trip Snapshot</Text>
+                <Text style={styles.activeTripActionText} numberOfLines={2}>
+                  Start a local, read-only operational trip from this itinerary and keep current warnings visible.
+                </Text>
+                {activeTripActivationError ? (
+                  <Text style={styles.activeTripActionError}>{activeTripActivationError}</Text>
+                ) : null}
+              </View>
+              <TouchableOpacity
+                style={[styles.activeTripButton, activeTripActivating && styles.activeTripButtonDisabled]}
+                activeOpacity={activeTripActivating ? 1 : 0.84}
+                disabled={activeTripActivating}
+                onPress={handleActivateTrip}
+                accessibilityRole="button"
+                accessibilityLabel="Activate Trip"
+                testID="trip-builder-activate-trip"
+              >
+                {activeTripActivating ? (
+                  <ActivityIndicator size="small" color="#081014" />
+                ) : (
+                  <Ionicons name="navigate-circle-outline" size={14} color="#081014" />
+                )}
+                <Text style={styles.activeTripButtonText}>
+                  {activeTripActivating ? 'Starting' : 'Activate Trip'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <ItineraryReviewPanel
+              review={itineraryReview}
+              editing={itineraryEditMode}
+              editSession={draftTripItineraryEditSession}
+              onAcceptItem={handleAcceptItineraryReviewItem}
+              onDismissItem={handleDismissItineraryReviewItem}
+              onMoveStopItem={handleMoveItineraryReviewStop}
+              onAddUserStop={handleAddUserItineraryStop}
+              onAddUserWaypoint={handleAddUserTrailWaypoint}
+            />
+            {itineraryEditMode ? (
+              <View style={styles.itineraryEditor} testID="trip-builder-itinerary-editor">
+                <View style={styles.itineraryEditToolbar}>
+                  <Text style={styles.itineraryEditHint}>
+                    Reorder stops, remove extras, mark emergency bailouts, or add resupply, camp, waypoint, or address stops from Mapbox search.
+                  </Text>
+                  <View style={styles.itineraryEditButtons}>
+                    <TouchableOpacity
+                      style={styles.itineraryCancelButton}
+                      activeOpacity={0.82}
+                      onPress={handleCancelItineraryEdit}
+                      accessibilityRole="button"
+                      accessibilityLabel="Cancel itinerary edits"
+                      testID="trip-builder-cancel-itinerary"
+                    >
+                      <Text style={styles.itineraryCancelButtonText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.itinerarySaveButton}
+                      activeOpacity={0.84}
+                      onPress={handleSaveItineraryEdit}
+                      accessibilityRole="button"
+                      accessibilityLabel="Save confidence-built itinerary"
+                      testID="trip-builder-save-itinerary"
+                    >
+                      <Text style={styles.itinerarySaveButtonText}>Save</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {draftItineraryStops.map((stop, index) => (
+                  <React.Fragment key={stop.id}>
+                    <ItineraryAddSlot
+                      index={index}
+                      active={insertState?.index === index}
+                      onPress={() => handleOpenInsertSlot(index)}
+                    />
+                    {insertState?.index === index ? (
+                      <ItinerarySearchPanel
+                        value={insertState.query}
+                        loading={itinerarySearchLoading}
+                        error={itinerarySearchError}
+                        suggestions={itinerarySearchSuggestions}
+                        onChangeText={handleItinerarySearchQuery}
+                        onSelectSuggestion={handleSelectItinerarySuggestion}
+                        onCancel={() => setInsertState(null)}
+                      />
+                    ) : null}
+                    <EditableStopRow
+                      stop={stop}
+                      index={index}
+                      count={draftItineraryStops.length}
+                      onMoveUp={() => handleMoveDraftStop(index, -1)}
+                      onMoveDown={() => handleMoveDraftStop(index, 1)}
+                      onDelete={() => handleDeleteDraftStop(index)}
+                      onToggleBailout={() => handleToggleItineraryBailout(index)}
+                    />
+                  </React.Fragment>
+                ))}
+                <ItineraryAddSlot
+                  index={draftItineraryStops.length}
+                  active={insertState?.index === draftItineraryStops.length}
+                  onPress={() => handleOpenInsertSlot(draftItineraryStops.length)}
+                />
+                {insertState?.index === draftItineraryStops.length ? (
+                  <ItinerarySearchPanel
+                    value={insertState.query}
+                    loading={itinerarySearchLoading}
+                    error={itinerarySearchError}
+                    suggestions={itinerarySearchSuggestions}
+                    onChangeText={handleItinerarySearchQuery}
+                    onSelectSuggestion={handleSelectItinerarySuggestion}
+                    onCancel={() => setInsertState(null)}
+                  />
+                ) : null}
+              </View>
+            ) : (
+              plan.suggestedStops.map((stop, index) => <StopRow key={stop.id} stop={stop} index={index} />)
+            )}
+          </ResultBlock>
+        );
+      case 'camp_candidates':
+        return (
+          <ResultBlock
+            title="Camp Candidates"
+            onMapPress={tripPlanMapAvailability.camps ? () => openPlanMap('camps') : undefined}
+          >
+            <Text style={styles.resultText}>Primary: {campCandidateLine(plan.primaryCampCandidate)}</Text>
+            <Text style={styles.resultText}>Backup: {campCandidateLine(plan.backupCampCandidate)}</Text>
+            {campReferenceStopsFromPlan(plan).map((stop, index) => (
+              <Text key={stop.id} style={styles.resultSubtext}>
+                Operator {index + 1}: {stop.title} - reference pin only; verify access, land use, fire restrictions, and posted rules.
+              </Text>
+            ))}
+          </ResultBlock>
+        );
+      case 'exit_access':
+        return (
+          <ResultBlock
+            title="Exit Access"
+            onMapPress={tripPlanMapAvailability.exits ? () => openPlanMap('exits') : undefined}
+          >
+            <Text style={styles.resultText}>{exitPointLine(plan.primaryExitPoint)}</Text>
+            {plan.primaryExitPoint?.notes?.[0] ? (
+              <Text style={styles.resultSubtext}>{plan.primaryExitPoint.notes[0]}</Text>
+            ) : null}
+          </ResultBlock>
+        );
+      case 'smart_resupply':
+        if (!plan.smartResupplyPlan) return null;
+        return (
+          <ResultBlock
+            title="Smart Resupply Plan"
+            onMapPress={tripPlanMapAvailability.resupply ? () => openPlanMap('resupply') : undefined}
+          >
+            <View testID="trip-builder-smart-resupply-plan" style={styles.resupplyList}>
+              <Text style={styles.resultText}>
+                Check fuel, water, supply, repair, medical, and exit access before departure.
+              </Text>
+              <View style={styles.resupplySummaryRow}>
+                <Text style={styles.resupplySummaryText}>
+                  Overall: {statusLabel(displaySmartResupplyOverall(plan.smartResupplyPlan, resupplyOverrides))}
+                </Text>
+                <Text style={styles.resupplySourceText} numberOfLines={1}>
+                  {plan.smartResupplyPlan.sourceSummary.join(' | ')}
+                </Text>
+              </View>
+              {resupplyRows(plan.smartResupplyPlan).map((item) => (
+                <ResupplyRow
+                  key={item.category}
+                  plan={item}
+                  override={resupplyOverrides[item.category]}
+                  onPress={RESUPPLY_OVERRIDE_CATEGORIES.has(item.category) ? () => cycleResupplyOverride(item.category) : undefined}
+                />
+              ))}
+            </View>
+          </ResultBlock>
+        );
+      case 'ecs_notes':
+        return (
+          <ResultBlock title="ECS Notes">
+            {plan.notes.length === 0 ? (
+              <Text style={styles.resultText}>No additional notes.</Text>
+            ) : (
+              plan.notes.map((note) => <Text key={note.id} style={styles.resultText}>- {note.message}</Text>)
+            )}
+          </ResultBlock>
+        );
+      case 'items_to_verify':
+        return (
+          <ResultBlock title="Items to Verify">
+            {plan.warnings.length === 0 ? (
+              <Text style={styles.resultText}>No additional verification items from available data.</Text>
+            ) : (
+              plan.warnings.map((warning) => (
+                <Text key={warning.id} style={styles.warningText}>- {warning.message}</Text>
+              ))
+            )}
+          </ResultBlock>
+        );
+      case 'offline_cta':
+        return (
+          <TouchableOpacity
+            style={styles.offlineButton}
+            activeOpacity={0.84}
+            onPress={handlePrepareOfflinePack}
+            accessibilityRole="button"
+            accessibilityLabel="Prepare Offline Pack"
+            testID="trip-builder-prepare-offline-pack"
+          >
+            <Ionicons name="download-outline" size={14} color="#081014" />
+            <Text style={styles.offlineButtonText}>Prepare Offline Pack</Text>
+          </TouchableOpacity>
+        );
+      default:
+        return null;
+    }
+  }, [
+    activeTripActivating,
+    activeTripActivationError,
+    cycleResupplyOverride,
+    draftItineraryStops,
+    draftTripItineraryEditSession,
+    handleAcceptItineraryReviewItem,
+    handleActivateTrip,
+    handleAddUserItineraryStop,
+    handleAddUserTrailWaypoint,
+    handleCancelItineraryEdit,
+    handleDeleteDraftStop,
+    handleDismissItineraryReviewItem,
+    handleItinerarySearchQuery,
+    handleMoveDraftStop,
+    handleMoveItineraryReviewStop,
+    handleOpenInsertSlot,
+    handlePrepareOfflinePack,
+    handleSaveItineraryEdit,
+    handleSelectItinerarySuggestion,
+    handleStartItineraryEdit,
+    handleToggleItineraryBailout,
+    insertState,
+    itineraryEditMode,
+    itineraryReview,
+    itinerarySaved,
+    itinerarySearchError,
+    itinerarySearchLoading,
+    itinerarySearchSuggestions,
+    itinerarySummary,
+    openPlanMap,
+    plan,
+    resupplyOverrides,
+    tripConfidenceSummary,
+    tripPlanMapAvailability,
+  ]);
 
   const handleBackToSuggestedRoutes = () => {
     clearTripBuilderRouteHandoff();
@@ -5995,246 +6338,20 @@ export default function ExploreTripBuilderScreen() {
               </View>
 
               {plan ? (
-                <ScrollView
+                <FlatList<TripBuilderResultSectionKey>
                   style={styles.modalScroll}
                   contentContainerStyle={[styles.modalContent, tripBuilderResultModalContentStyle]}
+                  data={tripBuilderResultSectionKeys}
+                  keyExtractor={tripBuilderResultKeyExtractor}
+                  renderItem={renderTripBuilderResultSection}
                   showsVerticalScrollIndicator={false}
                   testID="trip-builder-results"
                   removeClippedSubviews
-                >
-                  <View style={[styles.sectionCard, styles.resultHeaderCard]}>
-                    <View style={styles.sectionHeader}>
-                      <Text style={styles.sectionTitle}>{plan.route.name}</Text>
-                      <Text style={styles.sectionMeta}>PLAN</Text>
-                    </View>
-                    <View style={styles.metricGrid}>
-                      <Metric label="Distance" value={formatMiles(plan.estimate.totalDistanceMiles)} />
-                      <Metric label="Drive Time" value={formatHours(plan.estimate.driveTimeHours)} />
-                      <Metric label="Trip Type" value={tripTypeLabel(plan.tripType)} />
-                      <Metric label="Readiness" value={plan.readinessReference?.status?.toUpperCase() ?? 'Data unavailable'} />
-                    </View>
-                  </View>
-
-                    <ResultBlock title="Camp Check">
-                      <Text style={styles.resultText}>
-                        {plan.primaryCampCandidate
-                          ? campCandidateLine(plan.primaryCampCandidate)
-                          : 'No known camp source detected. Verify before departure.'}
-                      </Text>
-                      {plan.primaryCampCandidate?.notes?.[0] ? (
-                        <Text style={styles.resultSubtext}>{plan.primaryCampCandidate.notes[0]}</Text>
-                      ) : null}
-                    </ResultBlock>
-
-                    <ResultBlock
-                      title={itinerarySaved ? 'Confidence-Built Itinerary' : 'Suggested Itinerary'}
-                      onMapPress={tripPlanMapAvailability.itinerary ? () => openPlanMap('itinerary') : undefined}
-                      onEditPress={itineraryEditMode ? undefined : handleStartItineraryEdit}
-                    >
-                      <TripConfidenceSummaryPanel summary={tripConfidenceSummary} />
-                      <ItinerarySummaryPanel summary={itinerarySummary} />
-                      <View style={styles.activeTripActionCard}>
-                        <View style={styles.activeTripActionCopy}>
-                          <Text style={styles.activeTripActionTitle}>Active Trip Snapshot</Text>
-                          <Text style={styles.activeTripActionText} numberOfLines={2}>
-                            Start a local, read-only operational trip from this itinerary and keep current warnings visible.
-                          </Text>
-                          {activeTripActivationError ? (
-                            <Text style={styles.activeTripActionError}>{activeTripActivationError}</Text>
-                          ) : null}
-                        </View>
-                        <TouchableOpacity
-                          style={[styles.activeTripButton, activeTripActivating && styles.activeTripButtonDisabled]}
-                          activeOpacity={activeTripActivating ? 1 : 0.84}
-                          disabled={activeTripActivating}
-                          onPress={handleActivateTrip}
-                          accessibilityRole="button"
-                          accessibilityLabel="Activate Trip"
-                          testID="trip-builder-activate-trip"
-                        >
-                          {activeTripActivating ? (
-                            <ActivityIndicator size="small" color="#081014" />
-                          ) : (
-                            <Ionicons name="navigate-circle-outline" size={14} color="#081014" />
-                          )}
-                          <Text style={styles.activeTripButtonText}>
-                            {activeTripActivating ? 'Starting' : 'Activate Trip'}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                      <ItineraryReviewPanel
-                        review={itineraryReview}
-                        editing={itineraryEditMode}
-                        editSession={draftTripItineraryEditSession}
-                        onAcceptItem={handleAcceptItineraryReviewItem}
-                        onDismissItem={handleDismissItineraryReviewItem}
-                        onMoveStopItem={handleMoveItineraryReviewStop}
-                        onAddUserStop={handleAddUserItineraryStop}
-                        onAddUserWaypoint={handleAddUserTrailWaypoint}
-                      />
-                      {itineraryEditMode ? (
-                        <View style={styles.itineraryEditor} testID="trip-builder-itinerary-editor">
-                          <View style={styles.itineraryEditToolbar}>
-                            <Text style={styles.itineraryEditHint}>
-                              Reorder stops, remove extras, mark emergency bailouts, or add resupply, camp, waypoint, or address stops from Mapbox search.
-                            </Text>
-                            <View style={styles.itineraryEditButtons}>
-                              <TouchableOpacity
-                                style={styles.itineraryCancelButton}
-                                activeOpacity={0.82}
-                                onPress={handleCancelItineraryEdit}
-                                accessibilityRole="button"
-                                accessibilityLabel="Cancel itinerary edits"
-                                testID="trip-builder-cancel-itinerary"
-                              >
-                                <Text style={styles.itineraryCancelButtonText}>Cancel</Text>
-                              </TouchableOpacity>
-                              <TouchableOpacity
-                                style={styles.itinerarySaveButton}
-                                activeOpacity={0.84}
-                                onPress={handleSaveItineraryEdit}
-                                accessibilityRole="button"
-                                accessibilityLabel="Save confidence-built itinerary"
-                                testID="trip-builder-save-itinerary"
-                              >
-                                <Text style={styles.itinerarySaveButtonText}>Save</Text>
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-
-                          {draftItineraryStops.map((stop, index) => (
-                            <React.Fragment key={stop.id}>
-                              <ItineraryAddSlot
-                                index={index}
-                                active={insertState?.index === index}
-                                onPress={() => handleOpenInsertSlot(index)}
-                              />
-                              {insertState?.index === index ? (
-                                <ItinerarySearchPanel
-                                  value={insertState.query}
-                                  loading={itinerarySearchLoading}
-                                  error={itinerarySearchError}
-                                  suggestions={itinerarySearchSuggestions}
-                                  onChangeText={handleItinerarySearchQuery}
-                                  onSelectSuggestion={handleSelectItinerarySuggestion}
-                                  onCancel={() => setInsertState(null)}
-                                />
-                              ) : null}
-                              <EditableStopRow
-                                stop={stop}
-                                index={index}
-                                count={draftItineraryStops.length}
-                                onMoveUp={() => handleMoveDraftStop(index, -1)}
-                                onMoveDown={() => handleMoveDraftStop(index, 1)}
-                                onDelete={() => handleDeleteDraftStop(index)}
-                                onToggleBailout={() => handleToggleItineraryBailout(index)}
-                              />
-                            </React.Fragment>
-                          ))}
-                          <ItineraryAddSlot
-                            index={draftItineraryStops.length}
-                            active={insertState?.index === draftItineraryStops.length}
-                            onPress={() => handleOpenInsertSlot(draftItineraryStops.length)}
-                          />
-                          {insertState?.index === draftItineraryStops.length ? (
-                            <ItinerarySearchPanel
-                              value={insertState.query}
-                              loading={itinerarySearchLoading}
-                              error={itinerarySearchError}
-                              suggestions={itinerarySearchSuggestions}
-                              onChangeText={handleItinerarySearchQuery}
-                              onSelectSuggestion={handleSelectItinerarySuggestion}
-                              onCancel={() => setInsertState(null)}
-                            />
-                          ) : null}
-                        </View>
-                      ) : (
-                        plan.suggestedStops.map((stop, index) => <StopRow key={stop.id} stop={stop} index={index} />)
-                      )}
-                    </ResultBlock>
-
-                    <ResultBlock
-                      title="Camp Candidates"
-                      onMapPress={tripPlanMapAvailability.camps ? () => openPlanMap('camps') : undefined}
-                    >
-                      <Text style={styles.resultText}>Primary: {campCandidateLine(plan.primaryCampCandidate)}</Text>
-                      <Text style={styles.resultText}>Backup: {campCandidateLine(plan.backupCampCandidate)}</Text>
-                      {campReferenceStopsFromPlan(plan).map((stop, index) => (
-                        <Text key={stop.id} style={styles.resultSubtext}>
-                          Operator {index + 1}: {stop.title} - reference pin only; verify access, land use, fire restrictions, and posted rules.
-                        </Text>
-                      ))}
-                    </ResultBlock>
-
-                    <ResultBlock
-                      title="Exit Access"
-                      onMapPress={tripPlanMapAvailability.exits ? () => openPlanMap('exits') : undefined}
-                    >
-                      <Text style={styles.resultText}>{exitPointLine(plan.primaryExitPoint)}</Text>
-                      {plan.primaryExitPoint?.notes?.[0] ? (
-                        <Text style={styles.resultSubtext}>{plan.primaryExitPoint.notes[0]}</Text>
-                      ) : null}
-                    </ResultBlock>
-
-                    {plan.smartResupplyPlan ? (
-                      <ResultBlock
-                        title="Smart Resupply Plan"
-                        onMapPress={tripPlanMapAvailability.resupply ? () => openPlanMap('resupply') : undefined}
-                      >
-                        <View testID="trip-builder-smart-resupply-plan" style={styles.resupplyList}>
-                          <Text style={styles.resultText}>
-                            Check fuel, water, supply, repair, medical, and exit access before departure.
-                          </Text>
-                          <View style={styles.resupplySummaryRow}>
-                            <Text style={styles.resupplySummaryText}>
-                              Overall: {statusLabel(displaySmartResupplyOverall(plan.smartResupplyPlan, resupplyOverrides))}
-                            </Text>
-                            <Text style={styles.resupplySourceText} numberOfLines={1}>
-                              {plan.smartResupplyPlan.sourceSummary.join(' | ')}
-                            </Text>
-                          </View>
-                          {resupplyRows(plan.smartResupplyPlan).map((item) => (
-                            <ResupplyRow
-                              key={item.category}
-                              plan={item}
-                              override={resupplyOverrides[item.category]}
-                              onPress={RESUPPLY_OVERRIDE_CATEGORIES.has(item.category) ? () => cycleResupplyOverride(item.category) : undefined}
-                            />
-                          ))}
-                        </View>
-                      </ResultBlock>
-                    ) : null}
-
-                    <ResultBlock title="ECS Notes">
-                      {plan.notes.length === 0 ? (
-                        <Text style={styles.resultText}>No additional notes.</Text>
-                      ) : (
-                        plan.notes.map((note) => <Text key={note.id} style={styles.resultText}>- {note.message}</Text>)
-                      )}
-                    </ResultBlock>
-
-                    <ResultBlock title="Items to Verify">
-                      {plan.warnings.length === 0 ? (
-                        <Text style={styles.resultText}>No additional verification items from available data.</Text>
-                      ) : (
-                        plan.warnings.map((warning) => (
-                          <Text key={warning.id} style={styles.warningText}>- {warning.message}</Text>
-                        ))
-                      )}
-                    </ResultBlock>
-
-                    <TouchableOpacity
-                      style={styles.offlineButton}
-                      activeOpacity={0.84}
-                      onPress={handlePrepareOfflinePack}
-                      accessibilityRole="button"
-                      accessibilityLabel="Prepare Offline Pack"
-                      testID="trip-builder-prepare-offline-pack"
-                    >
-                      <Ionicons name="download-outline" size={14} color="#081014" />
-                      <Text style={styles.offlineButtonText}>Prepare Offline Pack</Text>
-                    </TouchableOpacity>
-                </ScrollView>
+                  initialNumToRender={TRIP_BUILDER_RESULT_INITIAL_RENDER_COUNT}
+                  maxToRenderPerBatch={TRIP_BUILDER_RESULT_BATCH_SIZE}
+                  windowSize={TRIP_BUILDER_RESULT_WINDOW_SIZE}
+                  updateCellsBatchingPeriod={TRIP_BUILDER_RESULT_BATCHING_PERIOD_MS}
+                />
               ) : null}
             </View>
             <TripPlanMapOverlay

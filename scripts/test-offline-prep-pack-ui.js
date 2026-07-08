@@ -34,6 +34,13 @@ assertIncludes(screen, 'testID="offline-prep-route-list"', 'Offline Prep should 
 assertIncludes(screen, 'testID="offline-prep-back-to-route-list"', 'Offline Prep selected route view should expose a top-right back control.');
 assertIncludes(screen, 'handleReturnToOfflinePrepRouteList', 'Offline Prep back control should clear the selected manifest view instead of leaving the screen.');
 assertIncludes(screen, 'testID="offline-prep-import-route-file"', 'Offline Prep route list should put route-file import above suggested trailheads.');
+assertIncludes(screen, "import { runAfterShellInteractions, type ShellInteractionTask } from '../lib/shellInteractionScheduler';", 'Offline Prep should use the shell interaction scheduler for non-urgent mount work.');
+assertIncludes(screen, 'const routeLoadTaskRef = useRef<ShellInteractionTask | null>(null);', 'Offline Prep should keep route hydration cancellable during tab transitions.');
+assertIncludes(screen, 'routeLoadTaskRef.current = runAfterShellInteractions(() => {', 'Offline Prep should defer route-cache hydration until after the shell transition.');
+assertIncludes(screen, 'routeLoadTaskRef.current?.cancel();', 'Offline Prep should cancel deferred route hydration when the tab changes or unmounts.');
+assertIncludes(screen, 'const initialSyncTask = runAfterShellInteractions(refreshSyncState', 'Offline Prep should defer initial sync state reads during tab mount.');
+assertIncludes(screen, 'const geometryRefreshTask = runAfterShellInteractions(() => {', 'Offline Prep should defer route geometry hydration until the tab settles.');
+assertIncludes(screen, 'const weatherRefreshTask = runAfterShellInteractions(() => {', 'Offline Prep should defer weather hydration until the tab settles.');
 assertIncludes(screen, "import * as DocumentPicker from 'expo-document-picker';", 'Offline Prep route import should keep the file picker in the main bundle.');
 assertIncludes(screen, 'handleOfflinePrepImportRouteFile', 'Offline Prep should wire the route file picker directly from the route list.');
 assertIncludes(screen, 'parseGeoFile', 'Offline Prep should parse imported GPX/KML route files.');
