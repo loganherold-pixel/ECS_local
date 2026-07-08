@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  ScrollView,
+  FlatList,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
+  type ListRenderItemInfo,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -93,6 +94,30 @@ import type {
 import { exportExploreTripManifestPdf } from '../lib/explore/exploreTripManifestExport';
 
 const OFFLINE_PREP_ACTION_BOTTOM_CLEARANCE = 184;
+const OFFLINE_PREP_INITIAL_RENDER_COUNT = 5;
+const OFFLINE_PREP_BATCH_SIZE = 4;
+const OFFLINE_PREP_WINDOW_SIZE = 5;
+const OFFLINE_PREP_BATCHING_PERIOD_MS = 45;
+
+type OfflinePrepContentRow =
+  | { type: 'hero' }
+  | { type: 'loading' }
+  | { type: 'empty' }
+  | { type: 'route_list' }
+  | { type: 'manifest_header' }
+  | { type: 'route_catalog_source_check' }
+  | { type: 'map_queue' }
+  | { type: 'manifest_item'; item: OfflinePrepPackItem }
+  | { type: 'manifest_errors' }
+  | { type: 'manifest_prepare' }
+  | { type: 'manifest_export' }
+  | { type: 'partial_confirm' }
+  | { type: 'prepare_result' }
+  | { type: 'error' };
+
+function offlinePrepContentRowKey(row: OfflinePrepContentRow): string {
+  return row.type === 'manifest_item' ? `manifest-item-${row.item.id}` : row.type;
+}
 
 function routeId(route: TripBuilderRouteInput): string {
   return String(route.id ?? route.name ?? route.title ?? 'selected-route');
@@ -1508,18 +1533,55 @@ export default function ExploreOfflinePrepPackScreen() {
   };
 
   const showRouteList = routes.length > 0 && (routeListVisible || !selectedRouteId);
+  const offlinePrepContentRows = useMemo<OfflinePrepContentRow[]>(() => {
+    const rows: OfflinePrepContentRow[] = [{ type: 'hero' }];
 
-  return (
-    <TopoBackground>
-      <View style={[styles.safeContainer, { paddingBottom: bottomClearance }]}>
-        <Header title="Explore" />
-        <ExplorePlanningTabs activeTab="offline_prep_pack" />
-        <ScrollView
-          style={styles.scrollArea}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          testID="offline-prep-pack-screen"
-        >
+    if (loading) {
+      rows.push({ type: 'loading' });
+      return rows;
+    }
+
+    if (routes.length === 0) {
+      rows.push({ type: 'empty' });
+      return rows;
+    }
+
+    if (showRouteList) {
+      rows.push({ type: 'route_list' });
+      return rows;
+    }
+
+    if (manifest) {
+      rows.push({ type: 'manifest_header' });
+      if (showRouteCatalogSourceCheck) rows.push({ type: 'route_catalog_source_check' });
+      if (mapQueueState) rows.push({ type: 'map_queue' });
+      manifest.items.forEach((item) => rows.push({ type: 'manifest_item', item }));
+      if (manifest.errors.length > 0) rows.push({ type: 'manifest_errors' });
+      rows.push({ type: 'manifest_prepare' }, { type: 'manifest_export' });
+      if (prepareConfirmVisible) rows.push({ type: 'partial_confirm' });
+      if (prepareAttempted || actionMessage) rows.push({ type: 'prepare_result' });
+      return rows;
+    }
+
+    if (error) rows.push({ type: 'error' });
+    return rows;
+  }, [
+    actionMessage,
+    error,
+    loading,
+    manifest,
+    mapQueueState,
+    prepareAttempted,
+    prepareConfirmVisible,
+    routes.length,
+    showRouteCatalogSourceCheck,
+    showRouteList,
+  ]);
+
+  const renderOfflinePrepContentRow = ({ item: row }: ListRenderItemInfo<OfflinePrepContentRow>) => {
+    switch (row.type) {
+      case 'hero':
+        return (
           <View style={styles.heroCard}>
             <View style={styles.heroIcon}>
               <Ionicons name="download-outline" size={18} color={TACTICAL.amber} />
@@ -1532,337 +1594,378 @@ export default function ExploreOfflinePrepPackScreen() {
               </Text>
             </View>
           </View>
-
-          {loading ? (
-            <View style={styles.stateCard}>
-              <ActivityIndicator color={TACTICAL.amber} />
-              <Text style={styles.stateText}>Loading route options...</Text>
-            </View>
-          ) : routes.length === 0 ? (
-            <View style={styles.stateCard} testID="offline-prep-empty-state">
-              <Ionicons name="map-outline" size={20} color={TACTICAL.textMuted} />
-              <Text style={styles.stateTitle}>No routes ready for offline prep</Text>
-              <Text style={styles.stateText}>Import a route file or open Suggested Trailheads, then select a route to prepare an Offline Prep Pack.</Text>
-              <TouchableOpacity
-                style={styles.importRouteCard}
-                activeOpacity={0.84}
-                onPress={handleOfflinePrepImportRouteFile}
-                disabled={routeImportState.status === 'loading'}
-                accessibilityRole="button"
-                accessibilityLabel="Import GPX or route file for Offline Prep"
-                testID="offline-prep-import-route-file"
-              >
-                <View style={styles.importRouteIcon}>
-                  <Ionicons name="document-attach-outline" size={16} color={TACTICAL.amber} />
-                </View>
-                <View style={styles.routeOptionCopy}>
-                  <Text style={styles.routeOptionTitle}>Import GPX / Route File</Text>
-                  <Text style={styles.routeOptionMeta}>Use a GPX, KML, or route export from this device.</Text>
-                </View>
-                {routeImportState.status === 'loading' ? (
-                  <ActivityIndicator size="small" color={TACTICAL.amber} />
-                ) : (
-                  <Ionicons name="chevron-forward" size={15} color={TACTICAL.textMuted} />
-                )}
-              </TouchableOpacity>
-              {routeImportState.message ? (
-                <Text style={[styles.importStatusText, routeImportState.status === 'error' ? styles.importErrorText : null]}>
-                  {routeImportState.message}
-                </Text>
-              ) : null}
-              <TouchableOpacity style={styles.primaryButton} onPress={handleBackToSuggestedRoutes} accessibilityRole="button">
-                <Text style={styles.primaryButtonText}>Suggested Trailheads</Text>
-              </TouchableOpacity>
-            </View>
-          ) : showRouteList ? (
-            <View style={styles.routeListCard} testID="offline-prep-route-list">
-              <View style={styles.sectionHeader}>
-                <View style={styles.sectionHeaderCopy}>
-                  <Text style={styles.sectionTitle}>Choose Offline Prep Route</Text>
-                  <Text style={styles.stateTextLeft}>Import a route file or select one of the current Suggested Trailheads.</Text>
-                </View>
-                <Text style={styles.sectionMeta}>{routes.length} ROUTES</Text>
+        );
+      case 'loading':
+        return (
+          <View style={styles.stateCard}>
+            <ActivityIndicator color={TACTICAL.amber} />
+            <Text style={styles.stateText}>Loading route options...</Text>
+          </View>
+        );
+      case 'empty':
+        return (
+          <View style={styles.stateCard} testID="offline-prep-empty-state">
+            <Ionicons name="map-outline" size={20} color={TACTICAL.textMuted} />
+            <Text style={styles.stateTitle}>No routes ready for offline prep</Text>
+            <Text style={styles.stateText}>Import a route file or open Suggested Trailheads, then select a route to prepare an Offline Prep Pack.</Text>
+            <TouchableOpacity
+              style={styles.importRouteCard}
+              activeOpacity={0.84}
+              onPress={handleOfflinePrepImportRouteFile}
+              disabled={routeImportState.status === 'loading'}
+              accessibilityRole="button"
+              accessibilityLabel="Import GPX or route file for Offline Prep"
+              testID="offline-prep-import-route-file"
+            >
+              <View style={styles.importRouteIcon}>
+                <Ionicons name="document-attach-outline" size={16} color={TACTICAL.amber} />
               </View>
-
-              <TouchableOpacity
-                style={styles.importRouteCard}
-                activeOpacity={0.84}
-                onPress={handleOfflinePrepImportRouteFile}
-                disabled={routeImportState.status === 'loading'}
-                accessibilityRole="button"
-                accessibilityLabel="Import GPX or route file for Offline Prep"
-                testID="offline-prep-import-route-file"
-              >
-                <View style={styles.importRouteIcon}>
-                  <Ionicons name="document-attach-outline" size={16} color={TACTICAL.amber} />
-                </View>
-                <View style={styles.routeOptionCopy}>
-                  <Text style={styles.routeOptionTitle}>Import GPX / Route File</Text>
-                  <Text style={styles.routeOptionMeta}>Use a GPX, KML, or route export from this device.</Text>
-                </View>
-                {routeImportState.status === 'loading' ? (
-                  <ActivityIndicator size="small" color={TACTICAL.amber} />
-                ) : (
-                  <Ionicons name="chevron-forward" size={15} color={TACTICAL.textMuted} />
-                )}
-              </TouchableOpacity>
-
-              {routeImportState.message ? (
-                <Text style={[styles.importStatusText, routeImportState.status === 'error' ? styles.importErrorText : null]}>
-                  {routeImportState.message}
-                </Text>
-              ) : null}
-
-              <View style={styles.routeOptionList}>
-                {routes.map((route) => (
-                  <TouchableOpacity
-                    key={routeId(route)}
-                    style={styles.routeOption}
-                    activeOpacity={0.82}
-                    onPress={() => handleSelectOfflinePrepRoute(route)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Prepare ${routeName(route)} for offline use`}
-                    testID={`offline-prep-route-option-${routeId(route)}`}
-                  >
-                    <Ionicons name="map-outline" size={15} color={TACTICAL.textMuted} />
-                    <View style={styles.routeOptionCopy}>
-                      <Text style={styles.routeOptionTitle} numberOfLines={1}>{routeName(route)}</Text>
-                      <Text style={styles.routeOptionMeta} numberOfLines={1}>
-                        {(route.region as string | null) ?? 'Suggested trailhead'} | {routeDistance(route) != null ? `${Math.round(routeDistance(route) as number)} mi` : 'Distance unknown'}
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={15} color={TACTICAL.textMuted} />
-                  </TouchableOpacity>
-                ))}
+              <View style={styles.routeOptionCopy}>
+                <Text style={styles.routeOptionTitle}>Import GPX / Route File</Text>
+                <Text style={styles.routeOptionMeta}>Use a GPX, KML, or route export from this device.</Text>
               </View>
+              {routeImportState.status === 'loading' ? (
+                <ActivityIndicator size="small" color={TACTICAL.amber} />
+              ) : (
+                <Ionicons name="chevron-forward" size={15} color={TACTICAL.textMuted} />
+              )}
+            </TouchableOpacity>
+            {routeImportState.message ? (
+              <Text style={[styles.importStatusText, routeImportState.status === 'error' ? styles.importErrorText : null]}>
+                {routeImportState.message}
+              </Text>
+            ) : null}
+            <TouchableOpacity style={styles.primaryButton} onPress={handleBackToSuggestedRoutes} accessibilityRole="button">
+              <Text style={styles.primaryButtonText}>Suggested Trailheads</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      case 'route_list':
+        return (
+          <View style={styles.routeListCard} testID="offline-prep-route-list">
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionHeaderCopy}>
+                <Text style={styles.sectionTitle}>Choose Offline Prep Route</Text>
+                <Text style={styles.stateTextLeft}>Import a route file or select one of the current Suggested Trailheads.</Text>
+              </View>
+              <Text style={styles.sectionMeta}>{routes.length} ROUTES</Text>
             </View>
-          ) : (
-            <>
-              {manifest ? (
-                <View style={styles.sectionCard} testID="offline-prep-manifest">
-                  <View style={styles.sectionHeader}>
-                    <View style={styles.sectionHeaderCopy}>
-                      <Text style={styles.sectionTitle}>{stateCopy.title}</Text>
-                      <Text style={[styles.sectionMeta, { color: statusColor(manifest.progress.status) }]}>
-                        {progressStatusLabel(manifest.progress.status)}
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.backToListButton}
-                      activeOpacity={0.82}
-                      onPress={handleReturnToOfflinePrepRouteList}
-                      accessibilityRole="button"
-                      accessibilityLabel="Back to Offline Prep route list"
-                      testID="offline-prep-back-to-route-list"
+
+            <TouchableOpacity
+              style={styles.importRouteCard}
+              activeOpacity={0.84}
+              onPress={handleOfflinePrepImportRouteFile}
+              disabled={routeImportState.status === 'loading'}
+              accessibilityRole="button"
+              accessibilityLabel="Import GPX or route file for Offline Prep"
+              testID="offline-prep-import-route-file"
+            >
+              <View style={styles.importRouteIcon}>
+                <Ionicons name="document-attach-outline" size={16} color={TACTICAL.amber} />
+              </View>
+              <View style={styles.routeOptionCopy}>
+                <Text style={styles.routeOptionTitle}>Import GPX / Route File</Text>
+                <Text style={styles.routeOptionMeta}>Use a GPX, KML, or route export from this device.</Text>
+              </View>
+              {routeImportState.status === 'loading' ? (
+                <ActivityIndicator size="small" color={TACTICAL.amber} />
+              ) : (
+                <Ionicons name="chevron-forward" size={15} color={TACTICAL.textMuted} />
+              )}
+            </TouchableOpacity>
+
+            {routeImportState.message ? (
+              <Text style={[styles.importStatusText, routeImportState.status === 'error' ? styles.importErrorText : null]}>
+                {routeImportState.message}
+              </Text>
+            ) : null}
+
+            <View style={styles.routeOptionList}>
+              {routes.map((route) => (
+                <TouchableOpacity
+                  key={routeId(route)}
+                  style={styles.routeOption}
+                  activeOpacity={0.82}
+                  onPress={() => handleSelectOfflinePrepRoute(route)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Prepare ${routeName(route)} for offline use`}
+                  testID={`offline-prep-route-option-${routeId(route)}`}
+                >
+                  <Ionicons name="map-outline" size={15} color={TACTICAL.textMuted} />
+                  <View style={styles.routeOptionCopy}>
+                    <Text style={styles.routeOptionTitle} numberOfLines={1}>{routeName(route)}</Text>
+                    <Text style={styles.routeOptionMeta} numberOfLines={1}>
+                      {(route.region as string | null) ?? 'Suggested trailhead'} | {routeDistance(route) != null ? `${Math.round(routeDistance(route) as number)} mi` : 'Distance unknown'}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={15} color={TACTICAL.textMuted} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        );
+      case 'manifest_header':
+        if (!manifest) return null;
+        return (
+          <View style={styles.sectionCard} testID="offline-prep-manifest">
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionHeaderCopy}>
+                <Text style={styles.sectionTitle}>{stateCopy.title}</Text>
+                <Text style={[styles.sectionMeta, { color: statusColor(manifest.progress.status) }]}>
+                  {progressStatusLabel(manifest.progress.status)}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.backToListButton}
+                activeOpacity={0.82}
+                onPress={handleReturnToOfflinePrepRouteList}
+                accessibilityRole="button"
+                accessibilityLabel="Back to Offline Prep route list"
+                testID="offline-prep-back-to-route-list"
+              >
+                <Ionicons name="arrow-back" size={13} color={TACTICAL.amber} />
+                <Text style={styles.backToListText}>Back</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.stateTextLeft}>
+              {geometryResolving ? 'Refreshing route geometry for offline prep...' : stateCopy.message}
+            </Text>
+            <View style={styles.progressTrack} accessibilityLabel={`Offline Prep Pack ${manifest.progress.percent} percent ready`}>
+              <View style={[styles.progressFill, { width: `${manifest.progress.percent}%` }]} />
+            </View>
+            <Text style={styles.progressMeta}>
+              {manifest.progress.readyItems}/{manifest.progress.totalItems} ready | {manifest.progress.unavailableItems} unavailable | {manifest.progress.failedItems} need review
+            </Text>
+          </View>
+        );
+      case 'route_catalog_source_check':
+        return (
+          <View style={styles.sectionCard}>
+            <View style={styles.sourceCheckBlock} testID="offline-prep-route-catalog-source-check">
+              <View style={styles.sourceCheckHeader}>
+                <View style={styles.sourceCheckTitleRow}>
+                  <Ionicons name="shield-checkmark-outline" size={12} color={TACTICAL.amber} />
+                  <Text style={styles.sourceCheckTitle}>Route Catalog Source Check</Text>
+                </View>
+                {routeCatalogOfflineCache ? (
+                  <Text style={styles.sourceCheckStatus}>
+                    {routeCatalogOfflineCache.cacheable ? 'CACHEABLE' : 'REVIEW'}
+                  </Text>
+                ) : null}
+              </View>
+              {routeCatalogOfflineCache ? (
+                <>
+                  <View style={styles.sourceCheckRow}>
+                    <View style={styles.sourceCheckDot} />
+                    <Text style={styles.sourceCheckText}>
+                      CACHE STATUS | {routeCatalogOfflineCache.cacheable ? 'Cacheable' : 'Unavailable'} | Last verified {formatCatalogTimestamp(routeCatalogOfflineCache.lastVerifiedAt)}
+                    </Text>
+                  </View>
+                  <View style={styles.sourceCheckRow}>
+                    <View style={styles.sourceCheckDot} />
+                    <Text style={styles.sourceCheckText}>
+                      STALE AFTER | {formatCatalogTimestamp(routeCatalogOfflineCache.staleAt)}
+                    </Text>
+                  </View>
+                </>
+              ) : null}
+              {routeCatalogSourceRows.map((sourceRow) => (
+                <View key={`route-catalog-source-${sourceRow}`} style={styles.sourceCheckRow}>
+                  <View style={styles.sourceCheckDot} />
+                  <Text style={styles.sourceCheckText}>{sourceRow}</Text>
+                </View>
+              ))}
+              {routeCatalogAttributionRows.map((sourceRow) => (
+                <View key={`route-catalog-attribution-${sourceRow}`} style={styles.sourceCheckRow}>
+                  <View style={styles.sourceCheckDot} />
+                  <Text style={styles.sourceCheckText}>{sourceRow}</Text>
+                </View>
+              ))}
+              {routeCatalogCurrentCondition ? (
+                <>
+                  <View style={styles.sourceCheckRow} testID="offline-prep-route-catalog-current-condition">
+                    <View
+                      style={[
+                        styles.sourceCheckDot,
+                        routeCatalogCurrentCondition.status === 'blocked' || routeCatalogCurrentCondition.status === 'watch'
+                          ? styles.sourceCheckWarningDot
+                          : null,
+                      ]}
+                    />
+                    <Text style={styles.sourceCheckText}>
+                      CURRENT CONDITION | {routeCatalogCurrentCondition.label} | Open {routeCatalogCurrentCondition.currentlyOpenStatus.replace(/_/g, ' ')} | Passability {routeCatalogCurrentCondition.passabilityStatus.replace(/_/g, ' ')}
+                    </Text>
+                  </View>
+                  {[...routeCatalogCurrentCondition.blockers, ...routeCatalogCurrentCondition.warnings].slice(0, 3).map((warning) => (
+                    <View
+                      key={`route-catalog-current-condition-warning-${warning}`}
+                      style={styles.sourceCheckRow}
+                      testID="offline-prep-route-catalog-current-condition"
                     >
-                      <Ionicons name="arrow-back" size={13} color={TACTICAL.amber} />
-                      <Text style={styles.backToListText}>Back</Text>
-                    </TouchableOpacity>
-                  </View>
-                  <Text style={styles.stateTextLeft}>
-                    {geometryResolving ? 'Refreshing route geometry for offline prep...' : stateCopy.message}
-                  </Text>
-                  <View style={styles.progressTrack} accessibilityLabel={`Offline Prep Pack ${manifest.progress.percent} percent ready`}>
-                    <View style={[styles.progressFill, { width: `${manifest.progress.percent}%` }]} />
-                  </View>
-                  <Text style={styles.progressMeta}>
-                    {manifest.progress.readyItems}/{manifest.progress.totalItems} ready | {manifest.progress.unavailableItems} unavailable | {manifest.progress.failedItems} need review
-                  </Text>
-
-                  {showRouteCatalogSourceCheck ? (
-                    <View style={styles.sourceCheckBlock} testID="offline-prep-route-catalog-source-check">
-                      <View style={styles.sourceCheckHeader}>
-                        <View style={styles.sourceCheckTitleRow}>
-                          <Ionicons name="shield-checkmark-outline" size={12} color={TACTICAL.amber} />
-                          <Text style={styles.sourceCheckTitle}>Route Catalog Source Check</Text>
-                        </View>
-                        {routeCatalogOfflineCache ? (
-                          <Text style={styles.sourceCheckStatus}>
-                            {routeCatalogOfflineCache.cacheable ? 'CACHEABLE' : 'REVIEW'}
-                          </Text>
-                        ) : null}
-                      </View>
-                      {routeCatalogOfflineCache ? (
-                        <>
-                          <View style={styles.sourceCheckRow}>
-                            <View style={styles.sourceCheckDot} />
-                            <Text style={styles.sourceCheckText}>
-                              CACHE STATUS | {routeCatalogOfflineCache.cacheable ? 'Cacheable' : 'Unavailable'} | Last verified {formatCatalogTimestamp(routeCatalogOfflineCache.lastVerifiedAt)}
-                            </Text>
-                          </View>
-                          <View style={styles.sourceCheckRow}>
-                            <View style={styles.sourceCheckDot} />
-                            <Text style={styles.sourceCheckText}>
-                              STALE AFTER | {formatCatalogTimestamp(routeCatalogOfflineCache.staleAt)}
-                            </Text>
-                          </View>
-                        </>
-                      ) : null}
-                      {routeCatalogSourceRows.map((row) => (
-                        <View key={`route-catalog-source-${row}`} style={styles.sourceCheckRow}>
-                          <View style={styles.sourceCheckDot} />
-                          <Text style={styles.sourceCheckText}>{row}</Text>
-                        </View>
-                      ))}
-                      {routeCatalogAttributionRows.map((row) => (
-                        <View key={`route-catalog-attribution-${row}`} style={styles.sourceCheckRow}>
-                          <View style={styles.sourceCheckDot} />
-                          <Text style={styles.sourceCheckText}>{row}</Text>
-                        </View>
-                      ))}
-                      {routeCatalogCurrentCondition ? (
-                        <>
-                          <View style={styles.sourceCheckRow} testID="offline-prep-route-catalog-current-condition">
-                            <View
-                              style={[
-                                styles.sourceCheckDot,
-                                routeCatalogCurrentCondition.status === 'blocked' || routeCatalogCurrentCondition.status === 'watch'
-                                  ? styles.sourceCheckWarningDot
-                                  : null,
-                              ]}
-                            />
-                            <Text style={styles.sourceCheckText}>
-                              CURRENT CONDITION | {routeCatalogCurrentCondition.label} | Open {routeCatalogCurrentCondition.currentlyOpenStatus.replace(/_/g, ' ')} | Passability {routeCatalogCurrentCondition.passabilityStatus.replace(/_/g, ' ')}
-                            </Text>
-                          </View>
-                          {[...routeCatalogCurrentCondition.blockers, ...routeCatalogCurrentCondition.warnings].slice(0, 3).map((warning) => (
-                            <View
-                              key={`route-catalog-current-condition-warning-${warning}`}
-                              style={styles.sourceCheckRow}
-                              testID="offline-prep-route-catalog-current-condition"
-                            >
-                              <View style={[styles.sourceCheckDot, styles.sourceCheckWarningDot]} />
-                              <Text style={styles.sourceCheckText}>CURRENT CONDITION | {warning}</Text>
-                            </View>
-                          ))}
-                        </>
-                      ) : null}
-                      {routeCatalogFreshnessWarnings.length > 0 ? (
-                        routeCatalogFreshnessWarnings.map((warning) => (
-                          <View
-                            key={`route-catalog-freshness-warning-${warning}`}
-                            style={styles.sourceCheckRow}
-                            testID="offline-prep-route-catalog-freshness-warning"
-                          >
-                            <View style={[styles.sourceCheckDot, styles.sourceCheckWarningDot]} />
-                            <Text style={styles.sourceCheckText}>FRESHNESS WARNING | {warning}</Text>
-                          </View>
-                        ))
-                      ) : (
-                        <View style={styles.sourceCheckRow} testID="offline-prep-route-catalog-freshness-warning">
-                          <View style={styles.sourceCheckDot} />
-                          <Text style={styles.sourceCheckText}>FRESHNESS WARNING | none reported by catalog detail</Text>
-                        </View>
-                      )}
+                      <View style={[styles.sourceCheckDot, styles.sourceCheckWarningDot]} />
+                      <Text style={styles.sourceCheckText}>CURRENT CONDITION | {warning}</Text>
                     </View>
-                  ) : null}
-
-                  <MapPrepQueueCard state={mapQueueState} retrying={mapRetrying} onRetry={handleRetry} />
-
-                  <View style={styles.itemList}>
-                    {manifest.items.map((item) => <PrepItemRow key={item.id} item={item} />)}
-                  </View>
-
-                  {manifest.errors.length > 0 ? (
-                    <View style={styles.errorList} testID="offline-prep-unavailable-state">
-                      <Text style={styles.resultTitle}>Unavailable Items</Text>
-                      {manifest.errors.slice(0, 4).map((entry) => (
-                        <Text key={entry.id} style={styles.errorText}>- {entry.message}</Text>
-                      ))}
-                      <TouchableOpacity
-                        style={styles.retryButton}
-                        activeOpacity={0.84}
-                        onPress={handleRetry}
-                        accessibilityRole="button"
-                        accessibilityLabel="Retry Offline Prep Pack manifest"
-                        testID="offline-prep-retry"
-                      >
-                        <Ionicons name="refresh-outline" size={13} color={TACTICAL.amber} />
-                        <Text style={styles.retryButtonText}>Retry Manifest</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ) : null}
-
-                  <TouchableOpacity
-                    style={[styles.primaryButton, (!manifest || prepareSaving) && styles.primaryButtonDisabled]}
-                    activeOpacity={manifest && !prepareSaving ? 0.84 : 1}
-                    disabled={!manifest || prepareSaving}
-                    onPress={handlePrepare}
-                    accessibilityRole="button"
-                    accessibilityLabel="Prepare Offline Pack"
-                    testID="offline-prep-prepare"
-                  >
-                    {prepareSaving ? <ActivityIndicator size="small" color="#081014" /> : <Ionicons name="download-outline" size={14} color="#081014" />}
-                    <Text style={styles.primaryButtonText}>{prepareSaving ? 'Preparing...' : 'Prepare Offline Pack'}</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.secondaryButton, (!manifest || manifestExporting) && styles.secondaryButtonDisabled]}
-                    activeOpacity={manifest && !manifestExporting ? 0.84 : 1}
-                    disabled={!manifest || manifestExporting}
-                    onPress={() => {
-                      void handleExportPrintableManifest();
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Print or share Offline Prep manifest"
-                    testID="offline-prep-printable-manifest"
-                  >
-                    {manifestExporting ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : <Ionicons name="print-outline" size={14} color={TACTICAL.amber} />}
-                    <Text style={styles.secondaryButtonText}>{manifestExporting ? 'Generating...' : 'Print / Share Manifest'}</Text>
-                  </TouchableOpacity>
-
-                  {prepareConfirmVisible ? (
-                    <View style={styles.confirmCard} testID="offline-prep-partial-confirm">
-                      <Ionicons name="information-circle-outline" size={14} color={TACTICAL.amber} />
-                      <View style={styles.confirmCopy}>
-                        <Text style={styles.confirmTitle}>Continue with available route essentials?</Text>
-                        <Text style={styles.confirmText}>
-                          Some route essentials are ready. Items without a known source stay marked below and will not block the pack.
-                        </Text>
-                        <View style={styles.confirmActions}>
-                          <TouchableOpacity
-                            style={styles.confirmSecondaryButton}
-                            activeOpacity={0.82}
-                            onPress={() => setPrepareConfirmVisible(false)}
-                            accessibilityRole="button"
-                            accessibilityLabel="Review Offline Prep items"
-                            testID="offline-prep-review-items"
-                          >
-                            <Text style={styles.confirmSecondaryText}>Review</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.confirmPrimaryButton}
-                            activeOpacity={0.84}
-                            onPress={() => {
-                              void prepareOfflinePack();
-                            }}
-                            accessibilityRole="button"
-                            accessibilityLabel="Continue preparing Offline Prep Pack"
-                            testID="offline-prep-continue-partial"
-                          >
-                            <Text style={styles.confirmPrimaryText}>Continue</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    </View>
-                  ) : null}
-
-                  {prepareAttempted || actionMessage ? (
-                    <View style={styles.noticeCard} testID="offline-prep-prepare-result">
-                      <Ionicons name={manifest.progress.status === 'failed' ? 'alert-circle-outline' : 'information-circle-outline'} size={13} color={statusColor(manifest.progress.status)} />
-                      <Text style={styles.noticeText}>{actionMessage ?? stateCopy.message}</Text>
-                    </View>
-                  ) : null}
-                </View>
-              ) : error ? (
-                <View style={styles.errorCard} testID="offline-prep-failed-state">
-                  <Ionicons name="warning-outline" size={14} color="#EF5350" />
-                  <Text style={styles.errorText}>{error}</Text>
-                </View>
+                  ))}
+                </>
               ) : null}
-            </>
-          )}
-        </ScrollView>
+              {routeCatalogFreshnessWarnings.length > 0 ? (
+                routeCatalogFreshnessWarnings.map((warning) => (
+                  <View
+                    key={`route-catalog-freshness-warning-${warning}`}
+                    style={styles.sourceCheckRow}
+                    testID="offline-prep-route-catalog-freshness-warning"
+                  >
+                    <View style={[styles.sourceCheckDot, styles.sourceCheckWarningDot]} />
+                    <Text style={styles.sourceCheckText}>FRESHNESS WARNING | {warning}</Text>
+                  </View>
+                ))
+              ) : (
+                <View style={styles.sourceCheckRow} testID="offline-prep-route-catalog-freshness-warning">
+                  <View style={styles.sourceCheckDot} />
+                  <Text style={styles.sourceCheckText}>FRESHNESS WARNING | none reported by catalog detail</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        );
+      case 'map_queue':
+        return (
+          <View style={styles.sectionCard}>
+            <MapPrepQueueCard state={mapQueueState} retrying={mapRetrying} onRetry={handleRetry} />
+          </View>
+        );
+      case 'manifest_item':
+        return <PrepItemRow item={row.item} />;
+      case 'manifest_errors':
+        if (!manifest) return null;
+        return (
+          <View style={styles.errorList} testID="offline-prep-unavailable-state">
+            <Text style={styles.resultTitle}>Unavailable Items</Text>
+            {manifest.errors.slice(0, 4).map((entry) => (
+              <Text key={entry.id} style={styles.errorText}>- {entry.message}</Text>
+            ))}
+            <TouchableOpacity
+              style={styles.retryButton}
+              activeOpacity={0.84}
+              onPress={handleRetry}
+              accessibilityRole="button"
+              accessibilityLabel="Retry Offline Prep Pack manifest"
+              testID="offline-prep-retry"
+            >
+              <Ionicons name="refresh-outline" size={13} color={TACTICAL.amber} />
+              <Text style={styles.retryButtonText}>Retry Manifest</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      case 'manifest_prepare':
+        return (
+          <TouchableOpacity
+            style={[styles.primaryButton, (!manifest || prepareSaving) && styles.primaryButtonDisabled]}
+            activeOpacity={manifest && !prepareSaving ? 0.84 : 1}
+            disabled={!manifest || prepareSaving}
+            onPress={handlePrepare}
+            accessibilityRole="button"
+            accessibilityLabel="Prepare Offline Pack"
+            testID="offline-prep-prepare"
+          >
+            {prepareSaving ? <ActivityIndicator size="small" color="#081014" /> : <Ionicons name="download-outline" size={14} color="#081014" />}
+            <Text style={styles.primaryButtonText}>{prepareSaving ? 'Preparing...' : 'Prepare Offline Pack'}</Text>
+          </TouchableOpacity>
+        );
+      case 'manifest_export':
+        return (
+          <TouchableOpacity
+            style={[styles.secondaryButton, (!manifest || manifestExporting) && styles.secondaryButtonDisabled]}
+            activeOpacity={manifest && !manifestExporting ? 0.84 : 1}
+            disabled={!manifest || manifestExporting}
+            onPress={() => {
+              void handleExportPrintableManifest();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Print or share Offline Prep manifest"
+            testID="offline-prep-printable-manifest"
+          >
+            {manifestExporting ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : <Ionicons name="print-outline" size={14} color={TACTICAL.amber} />}
+            <Text style={styles.secondaryButtonText}>{manifestExporting ? 'Generating...' : 'Print / Share Manifest'}</Text>
+          </TouchableOpacity>
+        );
+      case 'partial_confirm':
+        return (
+          <View style={styles.confirmCard} testID="offline-prep-partial-confirm">
+            <Ionicons name="information-circle-outline" size={14} color={TACTICAL.amber} />
+            <View style={styles.confirmCopy}>
+              <Text style={styles.confirmTitle}>Continue with available route essentials?</Text>
+              <Text style={styles.confirmText}>
+                Some route essentials are ready. Items without a known source stay marked below and will not block the pack.
+              </Text>
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  style={styles.confirmSecondaryButton}
+                  activeOpacity={0.82}
+                  onPress={() => setPrepareConfirmVisible(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Review Offline Prep items"
+                  testID="offline-prep-review-items"
+                >
+                  <Text style={styles.confirmSecondaryText}>Review</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.confirmPrimaryButton}
+                  activeOpacity={0.84}
+                  onPress={() => {
+                    void prepareOfflinePack();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Continue preparing Offline Prep Pack"
+                  testID="offline-prep-continue-partial"
+                >
+                  <Text style={styles.confirmPrimaryText}>Continue</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        );
+      case 'prepare_result':
+        if (!manifest) return null;
+        return (
+          <View style={styles.noticeCard} testID="offline-prep-prepare-result">
+            <Ionicons name={manifest.progress.status === 'failed' ? 'alert-circle-outline' : 'information-circle-outline'} size={13} color={statusColor(manifest.progress.status)} />
+            <Text style={styles.noticeText}>{actionMessage ?? stateCopy.message}</Text>
+          </View>
+        );
+      case 'error':
+        return error ? (
+          <View style={styles.errorCard} testID="offline-prep-failed-state">
+            <Ionicons name="warning-outline" size={14} color="#EF5350" />
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        ) : null;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <TopoBackground>
+      <View style={[styles.safeContainer, { paddingBottom: bottomClearance }]}>
+        <Header title="Explore" />
+        <ExplorePlanningTabs activeTab="offline_prep_pack" />
+        <View style={styles.scrollArea} testID="offline-prep-pack-screen">
+          <FlatList<OfflinePrepContentRow>
+            data={offlinePrepContentRows}
+            keyExtractor={offlinePrepContentRowKey}
+            renderItem={renderOfflinePrepContentRow}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            initialNumToRender={OFFLINE_PREP_INITIAL_RENDER_COUNT}
+            maxToRenderPerBatch={OFFLINE_PREP_BATCH_SIZE}
+            windowSize={OFFLINE_PREP_WINDOW_SIZE}
+            updateCellsBatchingPeriod={OFFLINE_PREP_BATCHING_PERIOD_MS}
+            removeClippedSubviews
+            keyboardShouldPersistTaps="handled"
+            testID="offline-prep-content-list"
+          />
+        </View>
       </View>
     </TopoBackground>
   );

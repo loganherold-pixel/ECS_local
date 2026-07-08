@@ -170,6 +170,14 @@ assertIncludes(resultScrollSource, 'initialNumToRender={TRIP_BUILDER_RESULT_INIT
 assertIncludes(resultScrollSource, 'maxToRenderPerBatch={TRIP_BUILDER_RESULT_BATCH_SIZE}', 'Trip Builder result list should batch subsequent sections.');
 assertIncludes(resultScrollSource, 'windowSize={TRIP_BUILDER_RESULT_WINDOW_SIZE}', 'Trip Builder result list should keep a compact viewport window.');
 assertIncludes(screen, 'backgroundColor: ECS.bgPanel', 'Trip Builder result list should provide an opaque modal surface behind clipped section children.');
+assertIncludes(screen, "type TripBuilderResultSectionKey =", 'Trip Builder result sections should stay explicit and virtualized.');
+assertIncludes(screen, "| 'itinerary_confidence'", 'Trip Builder should render itinerary confidence as its own result section.');
+assertIncludes(screen, "| 'itinerary_summary'", 'Trip Builder should render itinerary summary as its own result section.');
+assertIncludes(screen, "| 'active_trip'", 'Trip Builder should render Active Trip setup as its own result section.');
+assertIncludes(screen, "| 'itinerary_review'", 'Trip Builder should render the heavy itinerary review as its own result section.');
+assertIncludes(screen, 'TRIP_BUILDER_ITINERARY_REVIEW_ITEM_PREVIEW_COUNT', 'Trip Builder itinerary review should cap rows mounted per phase before user edits.');
+assertIncludes(screen, 'const visibleItems = phase.items.slice(0, TRIP_BUILDER_ITINERARY_REVIEW_ITEM_PREVIEW_COUNT);', 'Trip Builder itinerary review should not mount every phase item during result scrolling.');
+assertIncludes(screen, 'trip-builder-review-hidden-count', 'Trip Builder itinerary review should disclose hidden lower-priority rows instead of silently dropping them.');
 assert(
   !resultScrollSource.includes('<View style={styles.sectionCard}>'),
   'Trip Builder result list should not wrap the entire generated plan in one giant direct child; Android clipping needs bounded section children.',

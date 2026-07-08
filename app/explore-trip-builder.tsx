@@ -177,6 +177,7 @@ const TRIP_BUILDER_RESULT_INITIAL_RENDER_COUNT = 3;
 const TRIP_BUILDER_RESULT_BATCH_SIZE = 2;
 const TRIP_BUILDER_RESULT_WINDOW_SIZE = 5;
 const TRIP_BUILDER_RESULT_BATCHING_PERIOD_MS = 40;
+const TRIP_BUILDER_ITINERARY_REVIEW_ITEM_PREVIEW_COUNT = 4;
 
 function scheduleTripBuilderBackgroundLookup(callback: () => void): ShellInteractionTask {
   return runAfterShellInteractions(callback, {
@@ -224,7 +225,12 @@ type TripPlanMapScope = 'itinerary' | 'camps' | 'exits' | 'resupply';
 type TripBuilderResultSectionKey =
   | 'plan_summary'
   | 'camp_check'
-  | 'itinerary'
+  | 'itinerary_confidence'
+  | 'itinerary_summary'
+  | 'active_trip'
+  | 'itinerary_review'
+  | 'itinerary_editor'
+  | 'suggested_stops'
   | 'camp_candidates'
   | 'exit_access'
   | 'smart_resupply'
@@ -1645,6 +1651,9 @@ function ItineraryReviewPanel({
       <View style={styles.itineraryReviewPhaseList}>
         {review.phases.map((phase, index) => {
           const color = itineraryReviewAvailabilityColor(phase.availability);
+          const visibleItems = phase.items.slice(0, TRIP_BUILDER_ITINERARY_REVIEW_ITEM_PREVIEW_COUNT);
+          const renderedItems = editing && phase.editable ? phase.items : visibleItems;
+          const hiddenItemCount = Math.max(0, phase.items.length - renderedItems.length);
           const addAction =
             editing && phase.key === 'pre_trail_resupply'
               ? onAddUserStop
@@ -1689,7 +1698,7 @@ function ItineraryReviewPanel({
               ) : null}
               {phase.items.length > 0 ? (
                 <View style={styles.itineraryReviewItemList}>
-                  {(editing && phase.editable ? phase.items : phase.items.slice(0, 4)).map((item) => {
+                  {renderedItems.map((item) => {
                     const itemStatus = itineraryEditItemStatus(editSession, item.id);
                     const itemEditable = editing && phase.editable;
                     return (
@@ -1759,6 +1768,11 @@ function ItineraryReviewPanel({
                       </View>
                     );
                   })}
+                  {hiddenItemCount > 0 ? (
+                    <Text style={styles.itineraryReviewHiddenCount} testID="trip-builder-review-hidden-count">
+                      {hiddenItemCount} additional item{hiddenItemCount === 1 ? '' : 's'} preserved in the itinerary data. Use Edit to review every stop.
+                    </Text>
+                  ) : null}
                 </View>
               ) : null}
               {phase.warnings.slice(0, 2).map((warning) => (
@@ -5475,7 +5489,11 @@ export default function ExploreTripBuilderScreen() {
     const sections: TripBuilderResultSectionKey[] = [
       'plan_summary',
       'camp_check',
-      'itinerary',
+      'itinerary_confidence',
+      'itinerary_summary',
+      'active_trip',
+      'itinerary_review',
+      itineraryEditMode ? 'itinerary_editor' : 'suggested_stops',
       'camp_candidates',
       'exit_access',
     ];
@@ -5484,7 +5502,7 @@ export default function ExploreTripBuilderScreen() {
     }
     sections.push('ecs_notes', 'items_to_verify', 'offline_cta');
     return sections;
-  }, [plan]);
+  }, [itineraryEditMode, plan]);
 
   const tripBuilderResultKeyExtractor = useCallback((item: TripBuilderResultSectionKey) => item, []);
 
@@ -5519,7 +5537,7 @@ export default function ExploreTripBuilderScreen() {
             ) : null}
           </ResultBlock>
         );
-      case 'itinerary':
+      case 'itinerary_confidence':
         return (
           <ResultBlock
             title={itinerarySaved ? 'Confidence-Built Itinerary' : 'Suggested Itinerary'}
@@ -5527,7 +5545,17 @@ export default function ExploreTripBuilderScreen() {
             onEditPress={itineraryEditMode ? undefined : handleStartItineraryEdit}
           >
             <TripConfidenceSummaryPanel summary={tripConfidenceSummary} />
+          </ResultBlock>
+        );
+      case 'itinerary_summary':
+        return (
+          <ResultBlock title="Itinerary Sequence">
             <ItinerarySummaryPanel summary={itinerarySummary} />
+          </ResultBlock>
+        );
+      case 'active_trip':
+        return (
+          <ResultBlock title="Active Trip Snapshot">
             <View style={styles.activeTripActionCard}>
               <View style={styles.activeTripActionCopy}>
                 <Text style={styles.activeTripActionTitle}>Active Trip Snapshot</Text>
@@ -5557,6 +5585,11 @@ export default function ExploreTripBuilderScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
+          </ResultBlock>
+        );
+      case 'itinerary_review':
+        return (
+          <ResultBlock title="Confidence-Built Itinerary Review">
             <ItineraryReviewPanel
               review={itineraryReview}
               editing={itineraryEditMode}
@@ -5567,85 +5600,92 @@ export default function ExploreTripBuilderScreen() {
               onAddUserStop={handleAddUserItineraryStop}
               onAddUserWaypoint={handleAddUserTrailWaypoint}
             />
-            {itineraryEditMode ? (
-              <View style={styles.itineraryEditor} testID="trip-builder-itinerary-editor">
-                <View style={styles.itineraryEditToolbar}>
-                  <Text style={styles.itineraryEditHint}>
-                    Reorder stops, remove extras, mark emergency bailouts, or add resupply, camp, waypoint, or address stops from Mapbox search.
-                  </Text>
-                  <View style={styles.itineraryEditButtons}>
-                    <TouchableOpacity
-                      style={styles.itineraryCancelButton}
-                      activeOpacity={0.82}
-                      onPress={handleCancelItineraryEdit}
-                      accessibilityRole="button"
-                      accessibilityLabel="Cancel itinerary edits"
-                      testID="trip-builder-cancel-itinerary"
-                    >
-                      <Text style={styles.itineraryCancelButtonText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.itinerarySaveButton}
-                      activeOpacity={0.84}
-                      onPress={handleSaveItineraryEdit}
-                      accessibilityRole="button"
-                      accessibilityLabel="Save confidence-built itinerary"
-                      testID="trip-builder-save-itinerary"
-                    >
-                      <Text style={styles.itinerarySaveButtonText}>Save</Text>
-                    </TouchableOpacity>
-                  </View>
+          </ResultBlock>
+        );
+      case 'itinerary_editor':
+        return (
+          <ResultBlock title="Edit Itinerary">
+            <View style={styles.itineraryEditor} testID="trip-builder-itinerary-editor">
+              <View style={styles.itineraryEditToolbar}>
+                <Text style={styles.itineraryEditHint}>
+                  Reorder stops, remove extras, mark emergency bailouts, or add resupply, camp, waypoint, or address stops from Mapbox search.
+                </Text>
+                <View style={styles.itineraryEditButtons}>
+                  <TouchableOpacity
+                    style={styles.itineraryCancelButton}
+                    activeOpacity={0.82}
+                    onPress={handleCancelItineraryEdit}
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel itinerary edits"
+                    testID="trip-builder-cancel-itinerary"
+                  >
+                    <Text style={styles.itineraryCancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.itinerarySaveButton}
+                    activeOpacity={0.84}
+                    onPress={handleSaveItineraryEdit}
+                    accessibilityRole="button"
+                    accessibilityLabel="Save confidence-built itinerary"
+                    testID="trip-builder-save-itinerary"
+                  >
+                    <Text style={styles.itinerarySaveButtonText}>Save</Text>
+                  </TouchableOpacity>
                 </View>
-
-                {draftItineraryStops.map((stop, index) => (
-                  <React.Fragment key={stop.id}>
-                    <ItineraryAddSlot
-                      index={index}
-                      active={insertState?.index === index}
-                      onPress={() => handleOpenInsertSlot(index)}
-                    />
-                    {insertState?.index === index ? (
-                      <ItinerarySearchPanel
-                        value={insertState.query}
-                        loading={itinerarySearchLoading}
-                        error={itinerarySearchError}
-                        suggestions={itinerarySearchSuggestions}
-                        onChangeText={handleItinerarySearchQuery}
-                        onSelectSuggestion={handleSelectItinerarySuggestion}
-                        onCancel={() => setInsertState(null)}
-                      />
-                    ) : null}
-                    <EditableStopRow
-                      stop={stop}
-                      index={index}
-                      count={draftItineraryStops.length}
-                      onMoveUp={() => handleMoveDraftStop(index, -1)}
-                      onMoveDown={() => handleMoveDraftStop(index, 1)}
-                      onDelete={() => handleDeleteDraftStop(index)}
-                      onToggleBailout={() => handleToggleItineraryBailout(index)}
-                    />
-                  </React.Fragment>
-                ))}
-                <ItineraryAddSlot
-                  index={draftItineraryStops.length}
-                  active={insertState?.index === draftItineraryStops.length}
-                  onPress={() => handleOpenInsertSlot(draftItineraryStops.length)}
-                />
-                {insertState?.index === draftItineraryStops.length ? (
-                  <ItinerarySearchPanel
-                    value={insertState.query}
-                    loading={itinerarySearchLoading}
-                    error={itinerarySearchError}
-                    suggestions={itinerarySearchSuggestions}
-                    onChangeText={handleItinerarySearchQuery}
-                    onSelectSuggestion={handleSelectItinerarySuggestion}
-                    onCancel={() => setInsertState(null)}
-                  />
-                ) : null}
               </View>
-            ) : (
-              plan.suggestedStops.map((stop, index) => <StopRow key={stop.id} stop={stop} index={index} />)
-            )}
+
+              {draftItineraryStops.map((stop, index) => (
+                <React.Fragment key={stop.id}>
+                  <ItineraryAddSlot
+                    index={index}
+                    active={insertState?.index === index}
+                    onPress={() => handleOpenInsertSlot(index)}
+                  />
+                  {insertState?.index === index ? (
+                    <ItinerarySearchPanel
+                      value={insertState.query}
+                      loading={itinerarySearchLoading}
+                      error={itinerarySearchError}
+                      suggestions={itinerarySearchSuggestions}
+                      onChangeText={handleItinerarySearchQuery}
+                      onSelectSuggestion={handleSelectItinerarySuggestion}
+                      onCancel={() => setInsertState(null)}
+                    />
+                  ) : null}
+                  <EditableStopRow
+                    stop={stop}
+                    index={index}
+                    count={draftItineraryStops.length}
+                    onMoveUp={() => handleMoveDraftStop(index, -1)}
+                    onMoveDown={() => handleMoveDraftStop(index, 1)}
+                    onDelete={() => handleDeleteDraftStop(index)}
+                    onToggleBailout={() => handleToggleItineraryBailout(index)}
+                  />
+                </React.Fragment>
+              ))}
+              <ItineraryAddSlot
+                index={draftItineraryStops.length}
+                active={insertState?.index === draftItineraryStops.length}
+                onPress={() => handleOpenInsertSlot(draftItineraryStops.length)}
+              />
+              {insertState?.index === draftItineraryStops.length ? (
+                <ItinerarySearchPanel
+                  value={insertState.query}
+                  loading={itinerarySearchLoading}
+                  error={itinerarySearchError}
+                  suggestions={itinerarySearchSuggestions}
+                  onChangeText={handleItinerarySearchQuery}
+                  onSelectSuggestion={handleSelectItinerarySuggestion}
+                  onCancel={() => setInsertState(null)}
+                />
+              ) : null}
+            </View>
+          </ResultBlock>
+        );
+      case 'suggested_stops':
+        return (
+          <ResultBlock title="Suggested Stops">
+            {plan.suggestedStops.map((stop, index) => <StopRow key={stop.id} stop={stop} index={index} />)}
           </ResultBlock>
         );
       case 'camp_candidates':
@@ -7673,6 +7713,12 @@ const styles = StyleSheet.create({
   itineraryReviewItemList: {
     paddingLeft: 31,
     gap: 4,
+  },
+  itineraryReviewHiddenCount: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '800',
   },
   itineraryReviewItem: {
     minHeight: 28,
