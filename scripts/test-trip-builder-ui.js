@@ -152,6 +152,14 @@ assert(!screen.includes('presentationStyle="fullScreen"'), 'Trip Builder plan ov
 assert(!/import\s*\{[\s\S]*\bModal\b[\s\S]*\}\s*from\s*'react-native'/.test(screen), 'Trip Builder should not import the React Native Modal for generated plan results.');
 assertIncludes(screen, 'styles.planOverlayBackdrop', 'Trip Builder plan overlay should keep the ECS background visible instead of flashing a white native modal surface.');
 assertIncludes(screen, 'styles.bodyFrame', 'Trip Builder plan overlay should stay inside the Explore body so the lower ECS banner remains visible.');
+assertIncludes(screen, 'TRIP_BUILDER_RESULT_BOTTOM_CLEARANCE', 'Trip Builder generated plan results should reserve explicit mobile shell clearance.');
+assertIncludes(screen, 'const tripBuilderResultModalContentStyle = useMemo(', 'Trip Builder generated plan results should memoize shell-aware modal content padding.');
+assertIncludes(screen, 'paddingBottom: TRIP_BUILDER_RESULT_BOTTOM_CLEARANCE + bottomClearance', 'Trip Builder result content should include the active shell bottom clearance.');
+assertIncludes(screen, 'contentContainerStyle={[styles.modalContent, tripBuilderResultModalContentStyle]}', 'Trip Builder result ScrollView should use shell-aware content padding.');
+assert(
+  /<ScrollView[\s\S]*?testID="trip-builder-results"[\s\S]*?removeClippedSubviews/.test(screen),
+  'Trip Builder result ScrollView should clip offscreen review content on Android instead of drawing the full generated plan behind the dock.',
+);
 assertIncludes(screen, 'routeListScroller', 'Trip Builder route selector should be independently scrollable.');
 [
   'TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT = TRIP_BUILDER_ROUTE_LIST_INITIAL_RENDER_COUNT',

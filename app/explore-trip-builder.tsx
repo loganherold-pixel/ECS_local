@@ -172,6 +172,7 @@ const TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT = TRIP_BUILDER_ROUTE_LIST_INITIAL_R
 const TRIP_BUILDER_ROUTE_ROW_HEIGHT = 58;
 const TRIP_BUILDER_BACKGROUND_LOOKUP_DELAY_MS = 220;
 const TRIP_BUILDER_BACKGROUND_LOOKUP_MAX_WAIT_MS = 700;
+const TRIP_BUILDER_RESULT_BOTTOM_CLEARANCE = 232;
 
 function scheduleTripBuilderBackgroundLookup(callback: () => void): ShellInteractionTask {
   return runAfterShellInteractions(callback, {
@@ -4474,6 +4475,12 @@ export default function ExploreTripBuilderScreen() {
     ],
     [tripSetupHasSavedReferencePins],
   );
+  const tripBuilderResultModalContentStyle = useMemo(
+    () => ({
+      paddingBottom: TRIP_BUILDER_RESULT_BOTTOM_CLEARANCE + bottomClearance,
+    }),
+    [bottomClearance],
+  );
 
   useEffect(() => {
     const previousCounts = tripSetupReferencePinCountsRef.current;
@@ -5990,9 +5997,10 @@ export default function ExploreTripBuilderScreen() {
               {plan ? (
                 <ScrollView
                   style={styles.modalScroll}
-                  contentContainerStyle={styles.modalContent}
+                  contentContainerStyle={[styles.modalContent, tripBuilderResultModalContentStyle]}
                   showsVerticalScrollIndicator={false}
                   testID="trip-builder-results"
+                  removeClippedSubviews
                 >
                   <View style={styles.sectionCard}>
                     <View style={styles.sectionHeader}>
@@ -7923,6 +7931,8 @@ const styles = StyleSheet.create({
   stopNote: { color: TACTICAL.textMuted, fontSize: 9, lineHeight: 13, marginTop: 2 },
   modalContainer: {
     flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
     paddingHorizontal: 14,
     paddingTop: 14,
   },
@@ -7964,7 +7974,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalScroll: { flex: 1 },
+  modalScroll: { flex: 1, minHeight: 0, overflow: 'hidden' },
   modalContent: {
     paddingBottom: 20,
   },

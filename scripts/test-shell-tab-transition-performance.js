@@ -11,6 +11,7 @@ function read(...parts) {
 const commandDock = read('components', 'CommandDock.tsx');
 const ecsGlobalBanner = read('components', 'ECSGlobalBanner.tsx');
 const shellBodyBackground = read('components', 'ShellBodyBackground.tsx');
+const explorePlanningTabs = read('components', 'discover', 'ExplorePlanningTabs.tsx');
 const dashboard = read('app', '(tabs)', 'dashboard.tsx');
 const navigate = read('app', '(tabs)', 'navigate.tsx');
 const schedulerPath = path.join(root, 'lib', 'shellInteractionScheduler.ts');
@@ -47,13 +48,27 @@ assert(
 );
 
 assert(
-  ecsGlobalBanner.includes("resizeMethod={Platform.OS === 'android' ? 'resize' : 'auto'}") &&
-    ecsGlobalBanner.includes('fadeDuration={0}') &&
-    shellBodyBackground.includes("resizeMethod={Platform.OS === 'android' ? 'resize' : 'auto'}") &&
-    shellBodyBackground.includes('fadeDuration={0}') &&
+  ecsGlobalBanner.includes("import { Image } from 'expo-image';") &&
+    ecsGlobalBanner.includes('cachePolicy="memory-disk"') &&
+    ecsGlobalBanner.includes('transition={0}') &&
+    ecsGlobalBanner.includes('recyclingKey={`ecs-global-banner-${placement}-${String(source)}`}') &&
+    shellBodyBackground.includes("import { Image } from 'expo-image';") &&
+    shellBodyBackground.includes('cachePolicy="memory-disk"') &&
+    shellBodyBackground.includes('transition={0}') &&
+    shellBodyBackground.includes('recyclingKey="ecs-shell-body-background"') &&
     commandDock.includes('cachePolicy="memory-disk"') &&
     commandDock.includes('priority="high"'),
-  'Shared shell imagery should use Android resize/no-fade hints and cached dock badges to avoid bitmap upload spikes during tab changes.',
+  'Shared shell imagery should use cached no-transition expo-image surfaces and cached dock badges to avoid bitmap upload spikes during tab changes.',
+);
+
+assert(
+  explorePlanningTabs.includes("import { deferShellRouteNavigation, type ShellInteractionTask } from '../../lib/shellInteractionScheduler';") &&
+    explorePlanningTabs.includes('const pendingNavigationTaskRef = useRef<ShellInteractionTask | null>(null);') &&
+    explorePlanningTabs.includes('const [pendingTab, setPendingTab] = useState<ExplorePlanningTab | null>(null);') &&
+    explorePlanningTabs.includes('const displayTab = pendingTab ?? activeTab;') &&
+    explorePlanningTabs.includes('pendingNavigationTaskRef.current = deferShellRouteNavigation(() => {') &&
+    explorePlanningTabs.includes('value={displayTab}'),
+  'Explore planning tabs should optimistically select the pressed tab and defer sibling route mounting out of the tap frame.',
 );
 
 assert(

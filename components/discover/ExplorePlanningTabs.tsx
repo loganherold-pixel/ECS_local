@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
 import { ECSSegmentedControl } from '../ECSChip';
+import { deferShellRouteNavigation, type ShellInteractionTask } from '../../lib/shellInteractionScheduler';
 
 type ExplorePlanningTab = 'suggested_routes' | 'trip_builder' | 'offline_prep_pack';
 
@@ -12,29 +13,62 @@ const EXPLORE_PLANNING_TAB_OPTIONS = [
   { key: 'offline_prep_pack', label: 'Offline Prep', icon: 'download-outline' as const },
 ];
 
+const EXPLORE_PLANNING_TAB_ROUTES: Record<ExplorePlanningTab, string> = {
+  suggested_routes: '/discover',
+  trip_builder: '/explore-trip-builder',
+  offline_prep_pack: '/explore-offline-prep-pack',
+};
+
+function isExplorePlanningTab(key: string): key is ExplorePlanningTab {
+  return key in EXPLORE_PLANNING_TAB_ROUTES;
+}
+
 export function ExplorePlanningTabs({ activeTab }: { activeTab: ExplorePlanningTab }) {
   const router = useRouter();
+  const pendingNavigationTaskRef = useRef<ShellInteractionTask | null>(null);
+  const [pendingTab, setPendingTab] = useState<ExplorePlanningTab | null>(null);
+  const displayTab = pendingTab ?? activeTab;
 
-  const handleChange = (key: string) => {
-    if (key === activeTab) return;
-    if (key === 'suggested_routes') {
-      router.push('/discover');
+  useEffect(() => {
+    if (pendingTab === activeTab) {
+      setPendingTab(null);
+    }
+  }, [activeTab, pendingTab]);
+
+  useEffect(() => {
+    return () => {
+      pendingNavigationTaskRef.current?.cancel();
+      pendingNavigationTaskRef.current = null;
+    };
+  }, []);
+
+  const handleChange = useCallback((key: string) => {
+    if (!isExplorePlanningTab(key)) return;
+
+    if (key === activeTab) {
+      pendingNavigationTaskRef.current?.cancel();
+      pendingNavigationTaskRef.current = null;
+      setPendingTab(null);
       return;
     }
-    if (key === 'trip_builder') {
-      router.push('/explore-trip-builder');
+
+    if (key === pendingTab) {
       return;
     }
-    if (key === 'offline_prep_pack') {
-      router.push('/explore-offline-prep-pack');
-    }
-  };
+
+    pendingNavigationTaskRef.current?.cancel();
+    setPendingTab(key);
+    pendingNavigationTaskRef.current = deferShellRouteNavigation(() => {
+      pendingNavigationTaskRef.current = null;
+      router.push(EXPLORE_PLANNING_TAB_ROUTES[key] as any);
+    });
+  }, [activeTab, pendingTab, router]);
 
   return (
     <View style={styles.container} testID="explore-planning-tabs">
       <ECSSegmentedControl
         options={EXPLORE_PLANNING_TAB_OPTIONS}
-        value={activeTab}
+        value={displayTab}
         onChange={handleChange}
       />
     </View>

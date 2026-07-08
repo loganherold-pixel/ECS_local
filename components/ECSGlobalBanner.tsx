@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  ImageBackground,
   type ImageResizeMode,
   Platform,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useTheme } from '../context/ThemeContext';
 import { resolveEcsPopupSurfaceTheme } from '../lib/theme';
 
@@ -28,6 +28,17 @@ type ECSGlobalBannerProps = {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function resolveEcsBannerContentFit(
+  resizeMode: ImageResizeMode | undefined,
+  placement: ECSGlobalBannerProps['placement'],
+): 'cover' | 'contain' | 'fill' | 'none' {
+  const mode = resizeMode ?? (placement === 'top' ? 'contain' : 'cover');
+  if (mode === 'stretch') return 'fill';
+  if (mode === 'center') return 'none';
+  if (mode === 'contain') return 'contain';
+  return 'cover';
 }
 
 export function resolveEcsTopBannerHeight(width: number, height: number): number {
@@ -67,7 +78,7 @@ export function ECSGlobalBanner({
   children,
 }: ECSGlobalBannerProps) {
   const { effectiveTheme } = useTheme();
-  const resolvedResizeMode = resizeMode ?? (placement === 'top' ? 'contain' : 'cover');
+  const contentFit = resolveEcsBannerContentFit(resizeMode, placement);
   const surfaceTheme = resolveEcsPopupSurfaceTheme(effectiveTheme);
   const bannerBackground =
     effectiveTheme === 'light'
@@ -86,13 +97,14 @@ export function ECSGlobalBanner({
         style,
       ]}
     >
-      <ImageBackground
+      <Image
         source={source}
-        resizeMode={resolvedResizeMode}
-        resizeMethod={Platform.OS === 'android' ? 'resize' : 'auto'}
-        fadeDuration={0}
+        contentFit={contentFit}
+        cachePolicy="memory-disk"
+        priority={placement === 'top' ? 'high' : 'normal'}
+        transition={0}
+        recyclingKey={`ecs-global-banner-${placement}-${String(source)}`}
         style={styles.imageFill}
-        imageStyle={styles.image}
       />
       {children ? <View style={styles.overlay}>{children}</View> : null}
     </View>
@@ -121,8 +133,6 @@ const styles = StyleSheet.create({
   },
   imageFill: {
     ...StyleSheet.absoluteFillObject,
-  },
-  image: {
     width: '100%',
     height: '100%',
   },

@@ -1,5 +1,6 @@
 import React from 'react';
-import { ImageBackground, Platform, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
 import { BODY_BG } from '../lib/chromeAssets';
 import { useTheme } from '../context/ThemeContext';
 import { resolveShellChromeTheme } from '../lib/ui/shellChromeTheme';
@@ -25,16 +26,16 @@ export default function ShellBodyBackground({
         },
       ]}
     >
-      <ImageBackground
+      <Image
         source={BODY_BG}
-        resizeMode="cover"
-        resizeMethod={Platform.OS === 'android' ? 'resize' : 'auto'}
-        fadeDuration={0}
-        imageStyle={styles.image}
+        contentFit="cover"
+        cachePolicy="memory-disk"
+        priority="high"
+        transition={0}
+        recyclingKey="ecs-shell-body-background"
         style={styles.imageFrame}
-      >
-        <View style={[styles.scrim, { backgroundColor: shellChrome.bodyScrim }]} />
-      </ImageBackground>
+      />
+      <View style={[styles.scrim, { backgroundColor: shellChrome.bodyScrim }]} />
     </View>
   );
 }
@@ -47,11 +48,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   imageFrame: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
-  },
-  image: {
+    ...StyleSheet.absoluteFillObject,
     width: '100%',
     height: '100%',
   },
