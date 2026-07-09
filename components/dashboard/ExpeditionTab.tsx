@@ -14,7 +14,6 @@ import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { fsGetInfo } from '../../lib/fsCompat';
 import ExpeditionReplayDebriefPanel from './ExpeditionReplayDebriefPanel';
-import ExpeditionRecapMap from './ExpeditionRecapMap';
 import ExpeditionNotableMomentsTimeline from './ExpeditionNotableMomentsTimeline';
 import {
   BadgeGrid,
@@ -65,6 +64,8 @@ type ExpeditionTabProps = {
   gpsLocation?: IncidentCoordinate | null;
   gpsElevationFt?: number | null;
 };
+
+const ExpeditionRecapMap = React.lazy(() => import('./ExpeditionRecapMap'));
 
 type ExpeditionHubStats = {
   totalExpeditions: number;
@@ -534,14 +535,16 @@ function ExpeditionDetailView({
           <DetailMetric label="Elevation Gain" value={formatNullableElevation(trip.totalElevationGainFt)} />
         </View>
 
-        <ExpeditionRecapMap
-          routeGeometry={trip.routeGeometry}
-          routeBounds={trip.recap?.routeSummary.routeBounds ?? trip.routeBounds}
-          startCoordinate={trip.startCoordinate}
-          endCoordinate={trip.endCoordinate}
-          recap={trip.recap}
-          tripStartedAt={trip.startedAt}
-        />
+        <React.Suspense fallback={null}>
+          <ExpeditionRecapMap
+            routeGeometry={trip.routeGeometry}
+            routeBounds={trip.recap?.routeSummary.routeBounds ?? trip.routeBounds}
+            startCoordinate={trip.startCoordinate}
+            endCoordinate={trip.endCoordinate}
+            recap={trip.recap}
+            tripStartedAt={trip.startedAt}
+          />
+        </React.Suspense>
 
         <ExpeditionNotableMomentsTimeline
           recap={trip.recap}

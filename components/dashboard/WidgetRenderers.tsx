@@ -152,7 +152,7 @@ import {
   normalizePowerTelemetrySummary,
   useUnifiedPowerDevices,
 } from './PowerSystemWidget';
-import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap';
+import { buildRouteProgressFeatureFromPoints, type RouteProgressFeature } from './routeProgressMiniMapModel';
 import { PowerSystemDetailView } from './PowerSystemDetail';
 import { useReducedMotion, useStableAnimatedValue } from '../../lib/ecsAnimations';
 import {
@@ -382,6 +382,8 @@ const VEHICLE_PROFILE_BALANCED_SCRIM = 'rgba(2, 5, 7, 0.38)';
 const POWER_MANAGEMENT_BACKGROUND = require('../../assets/power/Power_Management_Background.png');
 const ROUTE_PROGRESS_PLACEHOLDER = require('../../assets/dashboard/route-progress-placeholder.png');
 const TERRAIN_RISK_BACKGROUND = require('../../assets/dashboard/terrain-risk-background.png');
+
+const RouteProgressMiniMap = React.lazy(() => import('./RouteProgressMiniMap'));
 
 function areAttitudeVehicleContextsEqual(
   left?: WidgetData['activeVehicleContext'],
@@ -2394,7 +2396,7 @@ type CommandRouteVisualData = {
   isOffline: boolean;
   hasGeometry: boolean;
   progressPercent: number;
-  routeGeoJson: ReturnType<typeof buildRouteProgressFeatureFromPoints> | null;
+  routeGeoJson: RouteProgressFeature | null;
   currentLocation: { latitude: number; longitude: number } | null;
   originLocation: { latitude: number; longitude: number } | null;
   destinationLocation: { latitude: number; longitude: number } | null;
@@ -10945,25 +10947,27 @@ function ProgressWidget({ data: _data, options }: { data: WidgetData; options?: 
     null;
 
   return (
-    <RouteProgressMiniMap
-      isGuidanceActive={Boolean(progressSummary?.isActive)}
-      routeGeoJson={buildRouteProgressFeatureFromPoints(miniMapRoutePoints)}
-      currentLocation={miniMapCurrentLocation}
-      progressPercent={progressSummary?.progressPercent ?? null}
-      destinationLocation={
-        progressSummary?.destinationLocation ??
-        miniMapRoutePoints[miniMapRoutePoints.length - 1] ??
-        null
-      }
-      originLocation={progressSummary?.originLocation ?? miniMapRoutePoints[0] ?? null}
-      remainingDistanceText={progressSummary?.remainingMilesText ?? null}
-      etaText={progressSummary?.etaLabel ?? null}
-      statusText={progressSummary?.stateLabel ?? null}
-      ecsGold={TACTICAL.amber}
-      inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}
-      testID="dashboard-route-progress-mini-map"
-      style={progS.routeProgressMiniMap}
-    />
+    <React.Suspense fallback={null}>
+      <RouteProgressMiniMap
+        isGuidanceActive={Boolean(progressSummary?.isActive)}
+        routeGeoJson={buildRouteProgressFeatureFromPoints(miniMapRoutePoints)}
+        currentLocation={miniMapCurrentLocation}
+        progressPercent={progressSummary?.progressPercent ?? null}
+        destinationLocation={
+          progressSummary?.destinationLocation ??
+          miniMapRoutePoints[miniMapRoutePoints.length - 1] ??
+          null
+        }
+        originLocation={progressSummary?.originLocation ?? miniMapRoutePoints[0] ?? null}
+        remainingDistanceText={progressSummary?.remainingMilesText ?? null}
+        etaText={progressSummary?.etaLabel ?? null}
+        statusText={progressSummary?.stateLabel ?? null}
+        ecsGold={TACTICAL.amber}
+        inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}
+        testID="dashboard-route-progress-mini-map"
+        style={progS.routeProgressMiniMap}
+      />
+    </React.Suspense>
   );
 }
 
@@ -13610,22 +13614,24 @@ function AttitudeCommandTerrainRiskPreview({
 function AttitudeCommandRouteProgressMapVisual({ route }: { route?: CommandRouteVisualData }) {
   return (
     <View pointerEvents="none" style={attitudeCommandS.routeGlyphLayer}>
-      <RouteProgressMiniMap
-        isGuidanceActive={Boolean(route?.active)}
-        routeGeoJson={route?.routeGeoJson ?? null}
-        currentLocation={route?.currentLocation ?? null}
-        progressPercent={route?.progressPercent ?? null}
-        destinationLocation={route?.destinationLocation ?? null}
-        originLocation={route?.originLocation ?? null}
-        remainingDistanceText={route?.remaining ?? null}
-        etaText={route?.eta ?? null}
-        statusText={route?.active ? 'Guidance active' : null}
-        ecsGold={TACTICAL.amber}
-        borderRadius={12}
-        inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}
-        testID="attitude-command-route-progress-mini-map"
-        style={attitudeCommandS.routeProgressMiniMap}
-      />
+      <React.Suspense fallback={null}>
+        <RouteProgressMiniMap
+          isGuidanceActive={Boolean(route?.active)}
+          routeGeoJson={route?.routeGeoJson ?? null}
+          currentLocation={route?.currentLocation ?? null}
+          progressPercent={route?.progressPercent ?? null}
+          destinationLocation={route?.destinationLocation ?? null}
+          originLocation={route?.originLocation ?? null}
+          remainingDistanceText={route?.remaining ?? null}
+          etaText={route?.eta ?? null}
+          statusText={route?.active ? 'Guidance active' : null}
+          ecsGold={TACTICAL.amber}
+          borderRadius={12}
+          inactivePlaceholderSource={ROUTE_PROGRESS_PLACEHOLDER}
+          testID="attitude-command-route-progress-mini-map"
+          style={attitudeCommandS.routeProgressMiniMap}
+        />
+      </React.Suspense>
     </View>
   );
 }

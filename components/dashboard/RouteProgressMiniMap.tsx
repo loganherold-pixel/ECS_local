@@ -22,12 +22,12 @@ import {
   getRouteCameraBearing,
   getRouteBounds,
   normalizeRouteFeature,
-  pointsToLineStringFeature,
   projectLocationToRouteProgress,
   splitRouteAtProgress,
   type MiniMapCoordinate,
   type MiniMapRouteInput,
 } from './routeGeometryUtils';
+import { type RouteProgressFeature } from './routeProgressMiniMapModel';
 
 export const ROUTE_PROGRESS_MINI_MAP_STYLE_URL =
   'mapbox://styles/mapbox/dark-v11';
@@ -40,7 +40,7 @@ const ROUTE_PROGRESS_3D_MAX_ZOOM = 13.6;
 
 export type RouteProgressMiniMapProps = {
   isGuidanceActive: boolean;
-  routeGeoJson?: MiniMapRouteInput | null;
+  routeGeoJson?: RouteProgressFeature | MiniMapRouteInput | null;
   currentLocation?: MiniMapCoordinate | null;
   progressPercent?: number | null;
   destinationLocation?: MiniMapCoordinate | null;
@@ -693,10 +693,6 @@ export default function RouteProgressMiniMap({
       ) : null}
     </View>
   );
-}
-
-export function buildRouteProgressFeatureFromPoints(points: MiniMapCoordinate[]) {
-  return pointsToLineStringFeature(points);
 }
 
 const styles = StyleSheet.create({

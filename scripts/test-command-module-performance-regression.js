@@ -7,8 +7,11 @@ const navigateSurfaceWidget = fs.readFileSync(path.join(root, 'components/dashbo
 const commandModuleStore = fs.readFileSync(path.join(root, 'lib/ecsCommandModuleStore.ts'), 'utf8');
 const dashboardScreen = fs.readFileSync(path.join(root, 'app/(tabs)/dashboard.tsx'), 'utf8');
 const widgetGrid = fs.readFileSync(path.join(root, 'components/dashboard/WidgetGrid.tsx'), 'utf8');
+const expeditionTab = fs.readFileSync(path.join(root, 'components/dashboard/ExpeditionTab.tsx'), 'utf8');
 const mapFallbackSurface = fs.readFileSync(path.join(root, 'components/navigate/MapFallbackSurface.tsx'), 'utf8');
 const mapRenderer = fs.readFileSync(path.join(root, 'components/navigate/MapRenderer.tsx'), 'utf8');
+const routeProgressMiniMap = fs.readFileSync(path.join(root, 'components/dashboard/RouteProgressMiniMap.tsx'), 'utf8');
+const routeProgressMiniMapModel = fs.readFileSync(path.join(root, 'components/dashboard/routeProgressMiniMapModel.ts'), 'utf8');
 const compactMapTileCacheMatch = mapRenderer.match(/const COMPACT_MAP_MAX_TILE_CACHE_SIZE = (\d+)/);
 
 function assert(condition, message) {
@@ -171,6 +174,26 @@ assert(
     mapRenderer.includes('const fallbackOnlyProgressRouteCoords = useMemo(') &&
     mapRenderer.includes('liveMapDisabled && fallbackOnlyProgressRouteCoords.length > 1'),
   'Selected dashboard 3D command map should defer live WebView activation long enough for dashboard startup and Navigate handoff to settle first.',
+);
+
+assert(
+  !widgetRenderers.includes("import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap';") &&
+    widgetRenderers.includes("import { buildRouteProgressFeatureFromPoints, type RouteProgressFeature } from './routeProgressMiniMapModel';") &&
+    widgetRenderers.includes("const RouteProgressMiniMap = React.lazy(() => import('./RouteProgressMiniMap'));") &&
+    widgetRenderers.includes('<React.Suspense fallback={null}>') &&
+    routeProgressMiniMap.includes("import { type RouteProgressFeature } from './routeProgressMiniMapModel';") &&
+    !routeProgressMiniMap.includes('export function buildRouteProgressFeatureFromPoints') &&
+    routeProgressMiniMapModel.includes('export type RouteProgressFeature = ReturnType<typeof pointsToLineStringFeature>;') &&
+    routeProgressMiniMapModel.includes('export function buildRouteProgressFeatureFromPoints(points: MiniMapCoordinate[]): RouteProgressFeature'),
+  'Dashboard route progress mini maps must lazy-load the WebView component and keep route geometry helpers in a lightweight model module.',
+);
+
+assert(
+  !expeditionTab.includes("import ExpeditionRecapMap from './ExpeditionRecapMap';") &&
+    expeditionTab.includes("const ExpeditionRecapMap = React.lazy(() => import('./ExpeditionRecapMap'));") &&
+    expeditionTab.includes('<React.Suspense fallback={null}>') &&
+    expeditionTab.indexOf('<ExpeditionRecapMap') < expeditionTab.indexOf('<ExpeditionNotableMomentsTimeline'),
+  'Dashboard Expedition Hub should lazy-load the WebView recap map only when a completed trip detail is opened.',
 );
 
 assert(

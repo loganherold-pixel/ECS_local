@@ -15,7 +15,9 @@ function notIncludes(source, fragment, message) {
   assert.ok(!source.includes(fragment), message);
 }
 
-includes(tabSource, "import ExpeditionRecapMap from './ExpeditionRecapMap'", 'Expedition detail should import the recap map component.');
+notIncludes(tabSource, "import ExpeditionRecapMap from './ExpeditionRecapMap'", 'Dashboard startup should not eagerly import the WebView recap map component.');
+includes(tabSource, "const ExpeditionRecapMap = React.lazy(() => import('./ExpeditionRecapMap'));", 'Expedition detail should lazy-load the recap map component.');
+includes(tabSource, '<React.Suspense fallback={null}>', 'Expedition detail should keep recap map loading isolated behind Suspense.');
 includes(tabSource, '<ExpeditionRecapMap', 'Expedition detail should render a recap map section.');
 includes(tabSource, 'routeGeometry={trip.routeGeometry}', 'Recap map should receive stored route geometry from getTripById().');
 includes(tabSource, 'routeBounds={trip.recap?.routeSummary.routeBounds ?? trip.routeBounds}', 'Recap map should prefer recap bounds and fall back to trip bounds.');

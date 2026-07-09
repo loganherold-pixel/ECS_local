@@ -18,6 +18,7 @@ function notIncludes(source, fragment, message) {
 
 const widgetSource = read('components/dashboard/WidgetRenderers.tsx');
 const miniMapSource = read('components/dashboard/RouteProgressMiniMap.tsx');
+const miniMapModelSource = read('components/dashboard/routeProgressMiniMapModel.ts');
 const fallbackSurfaceSource = read('components/navigate/MapFallbackSurface.tsx');
 const geometrySource = read('components/dashboard/routeGeometryUtils.ts');
 const activeRouteProgressSource = read('lib/activeRouteProgress.ts');
@@ -124,7 +125,11 @@ includes(geometrySource, 'getRouteCameraBearing', 'Route geometry utilities shou
 includes(geometrySource, 'getRouteBounds', 'Route geometry utilities should calculate fit bounds.');
 includes(geometrySource, 'getCurrentPointOnRoute', 'Route geometry utilities should expose current point by progress.');
 
-includes(widgetSource, "import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap'", 'Dashboard should import RouteProgressMiniMap.');
+notIncludes(widgetSource, "import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap'", 'Dashboard should not eagerly import the WebView-backed RouteProgressMiniMap.');
+includes(widgetSource, "import { buildRouteProgressFeatureFromPoints, type RouteProgressFeature } from './routeProgressMiniMapModel';", 'Dashboard should import route progress geometry helpers from the lightweight model.');
+includes(widgetSource, "const RouteProgressMiniMap = React.lazy(() => import('./RouteProgressMiniMap'));", 'Dashboard should lazy-load the WebView-backed RouteProgressMiniMap.');
+includes(widgetSource, '<React.Suspense fallback={null}>', 'Dashboard route progress mini-map should be isolated behind Suspense.');
+includes(miniMapModelSource, 'export function buildRouteProgressFeatureFromPoints', 'Route progress mini-map model should expose the geometry helper without loading WebView.');
 includes(widgetSource, "require('../../assets/dashboard/route-progress-placeholder.png')", 'Dashboard should use the dark topographical placeholder asset.');
 includes(widgetSource, '<RouteProgressMiniMap', 'Route Progress visual should mount RouteProgressMiniMap.');
 includes(widgetSource, 'routeGeoJson={buildRouteProgressFeatureFromPoints(miniMapRoutePoints)}', 'Route Progress mini-map should receive real route geometry.');
