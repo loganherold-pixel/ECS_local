@@ -8,6 +8,7 @@ const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
 const dashboard = read('app', '(tabs)', 'dashboard.tsx');
 const readout = read('components', 'dashboard', 'ECSIntelligenceReadout.tsx');
 const intelligenceBar = read('components', 'dashboard', 'ExpeditionIntelligenceBar.tsx');
+const widgetRenderers = read('components', 'dashboard', 'WidgetRenderers.tsx');
 const widgetGrid = read('components', 'dashboard', 'WidgetGrid.tsx');
 const commandDock = read('components', 'CommandDock.tsx');
 const dashboardChromeStore = read('lib', 'dashboardChromeStore.ts');
@@ -165,6 +166,15 @@ assert.ok(
   'Readout should keep text crisp while animating new copy into place and supporting an empty standby state.',
 );
 assert.ok(
+  readout.includes("import { useReducedMotion } from '../../lib/ecsAnimations';") &&
+    readout.includes('const COMMAND_LIVE_PULSE_ITERATIONS = 2;') &&
+    readout.includes('const COMMAND_STANDBY_PULSE_ITERATIONS = 1;') &&
+    readout.includes('const reducedMotion = useReducedMotion();') &&
+    readout.includes('{ iterations: commandLive ? COMMAND_LIVE_PULSE_ITERATIONS : COMMAND_STANDBY_PULSE_ITERATIONS }') &&
+    readout.includes('[commandLive, modelKey, pulseOpacity, reducedMotion]'),
+  'Readout live-dot pulse should be bounded, reduced-motion-aware, and rerun only when command state or displayed copy changes.',
+);
+assert.ok(
   readout.includes('autoClearTokenRef') &&
     readout.includes('contentOpacity.setValue(1)') &&
     readout.includes('contentTranslateX.setValue(0)') &&
@@ -234,6 +244,15 @@ assert.ok(
 assert.ok(
   readout.includes(".filter(([source]) => source !== 'camp')"),
   'Readout should not headline missing camp freshness as an ECS Intelligence key concern.',
+);
+assert.ok(
+  widgetRenderers.includes('function compactCommandSunlightDisplayValue') &&
+    widgetRenderers.includes('function compactCommandSunlightDisplayLabel') &&
+    widgetRenderers.includes('compactCommandSunlightDisplayLabel(sunlightVisual?.countdownLabel') &&
+    widgetRenderers.includes('compactCommandSunlightDisplayValue(title)') &&
+    widgetRenderers.includes('compactCommandSunlightDisplayValue(sunlightVisual?.sunrise)') &&
+    widgetRenderers.includes('compactCommandSunlightDisplayValue(sunlightVisual?.sunset)'),
+  'Compact sunlight dashboard panel should shorten unavailable fallback copy so no-GPS state does not clip in the tile.',
 );
 assert.ok(
   !/title:\s*['"]AI['"]/.test(readout) && !/>\s*AI\s*</.test(readout),

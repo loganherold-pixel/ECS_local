@@ -179,6 +179,48 @@ export default function MapFallbackSurface({
     !hasDrawableLineGeometry;
   const width = 360;
   const height = compact ? 150 : 640;
+  const project = useMemo(
+    () => (bounds ? makeProjector(bounds, width, height) : null),
+    [bounds, height, width],
+  );
+  const projectedSegmentLines = useMemo(
+    () =>
+      project
+        ? segmentLines.map((segment, index) => ({
+            key: `segment-${index}`,
+            color: segment.color,
+            points: lineToSvgPoints(segment.coordinates, project),
+          }))
+        : [],
+    [project, segmentLines],
+  );
+  const projectedRouteLine = useMemo(
+    () => (project && routeLine.length > 1 ? lineToSvgPoints(routeLine, project) : ''),
+    [project, routeLine],
+  );
+  const projectedProgressLine = useMemo(
+    () => (project && progressLine.length > 1 ? lineToSvgPoints(progressLine, project) : ''),
+    [progressLine, project],
+  );
+  const projectedMarkerPoints = useMemo(
+    () =>
+      project
+        ? markerPoints.map(({ marker, point }, index) => {
+            const [x, y] = project(point as LngLat);
+            return {
+              key: `marker-${index}`,
+              marker,
+              x,
+              y,
+            };
+          })
+        : [],
+    [markerPoints, project],
+  );
+  const projectedUserPoint = useMemo(
+    () => (project && userPoint ? project(userPoint) : null),
+    [project, userPoint],
+  );
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
     const nextWidth = event.nativeEvent.layout.width;
     const nextHeight = event.nativeEvent.layout.height;
@@ -196,7 +238,7 @@ export default function MapFallbackSurface({
     [bounds, height, interactive, onMapTap, surfaceSize.height, surfaceSize.width, width],
   );
 
-  if (!bounds || pendingGeometryStatus) {
+  if (!bounds || !project || pendingGeometryStatus) {
     return (
       <View
         pointerEvents="none"
@@ -220,7 +262,6 @@ export default function MapFallbackSurface({
     );
   }
 
-  const project = makeProjector(bounds, width, height);
   const drawGrid = !transparentBackground && !reducedDetail;
 
   return (
@@ -262,10 +303,10 @@ export default function MapFallbackSurface({
             ))}
           </>
         ) : null}
-        {segmentLines.map((segment, index) => (
+        {projectedSegmentLines.map((segment) => (
           <Polyline
-            key={`segment-${index}`}
-            points={lineToSvgPoints(segment.coordinates, project)}
+            key={segment.key}
+            points={segment.points}
             fill="none"
             stroke={segment.color}
             strokeOpacity="0.42"
@@ -274,9 +315,9 @@ export default function MapFallbackSurface({
             strokeLinejoin="round"
           />
         ))}
-        {!reducedDetail && routeLine.length > 1 ? (
+        {!reducedDetail && projectedRouteLine ? (
           <Polyline
-            points={lineToSvgPoints(routeLine, project)}
+            points={projectedRouteLine}
             fill="none"
             stroke={routeHaloColor}
             strokeWidth={compact ? 12 : 16}
@@ -284,9 +325,9 @@ export default function MapFallbackSurface({
             strokeLinejoin="round"
           />
         ) : null}
-        {routeLine.length > 1 ? (
+        {projectedRouteLine ? (
           <Polyline
-            points={lineToSvgPoints(routeLine, project)}
+            points={projectedRouteLine}
             fill="none"
             stroke={routeColor}
             strokeWidth={compact ? 4 : 5}
@@ -294,9 +335,9 @@ export default function MapFallbackSurface({
             strokeLinejoin="round"
           />
         ) : null}
-        {progressLine.length > 1 ? (
+        {projectedProgressLine ? (
           <Polyline
-            points={lineToSvgPoints(progressLine, project)}
+            points={projectedProgressLine}
             fill="none"
             stroke={TACTICAL.amber}
             strokeWidth={compact ? 5 : 7}
@@ -304,10 +345,9 @@ export default function MapFallbackSurface({
             strokeLinejoin="round"
           />
         ) : null}
-        {markerPoints.map(({ marker, point }, index) => {
-          const [x, y] = project(point as LngLat);
+        {projectedMarkerPoints.map(({ key, marker, x, y }) => {
           return (
-            <React.Fragment key={`marker-${index}`}>
+            <React.Fragment key={key}>
               <Circle
                 cx={x}
                 cy={y}
@@ -331,19 +371,19 @@ export default function MapFallbackSurface({
             </React.Fragment>
           );
         })}
-        {userPoint ? (
+        {projectedUserPoint ? (
           <>
             <Circle
-              cx={project(userPoint)[0]}
-              cy={project(userPoint)[1]}
+              cx={projectedUserPoint[0]}
+              cy={projectedUserPoint[1]}
               r={compact ? 9 : 12}
               fill="rgba(101,212,255,0.14)"
               stroke="rgba(255,255,255,0.76)"
               strokeWidth="2"
             />
             <Circle
-              cx={project(userPoint)[0]}
-              cy={project(userPoint)[1]}
+              cx={projectedUserPoint[0]}
+              cy={projectedUserPoint[1]}
               r={compact ? 4 : 5.5}
               fill="#65D4FF"
               stroke="#05090D"

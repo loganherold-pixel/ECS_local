@@ -7,6 +7,7 @@ const navigateSurfaceWidget = fs.readFileSync(path.join(root, 'components/dashbo
 const commandModuleStore = fs.readFileSync(path.join(root, 'lib/ecsCommandModuleStore.ts'), 'utf8');
 const dashboardScreen = fs.readFileSync(path.join(root, 'app/(tabs)/dashboard.tsx'), 'utf8');
 const widgetGrid = fs.readFileSync(path.join(root, 'components/dashboard/WidgetGrid.tsx'), 'utf8');
+const mapFallbackSurface = fs.readFileSync(path.join(root, 'components/navigate/MapFallbackSurface.tsx'), 'utf8');
 const mapRenderer = fs.readFileSync(path.join(root, 'components/navigate/MapRenderer.tsx'), 'utf8');
 const compactMapTileCacheMatch = mapRenderer.match(/const COMPACT_MAP_MAX_TILE_CACHE_SIZE = (\d+)/);
 
@@ -161,6 +162,19 @@ assert(
     mapRenderer.includes('const fallbackOnlyProgressRouteCoords = useMemo(') &&
     mapRenderer.includes('liveMapDisabled && fallbackOnlyProgressRouteCoords.length > 1'),
   'Selected dashboard 3D command map should defer live WebView activation long enough for dashboard startup and Navigate handoff to settle first.',
+);
+
+assert(
+  mapFallbackSurface.includes('const project = useMemo(') &&
+    mapFallbackSurface.includes('makeProjector(bounds, width, height)') &&
+    mapFallbackSurface.includes('const projectedSegmentLines = useMemo(') &&
+    mapFallbackSurface.includes('const projectedRouteLine = useMemo(') &&
+    mapFallbackSurface.includes('const projectedProgressLine = useMemo(') &&
+    mapFallbackSurface.includes('const projectedMarkerPoints = useMemo(') &&
+    mapFallbackSurface.includes('const projectedUserPoint = useMemo(') &&
+    !mapFallbackSurface.includes('points={lineToSvgPoints(routeLine, project)}') &&
+    !mapFallbackSurface.includes('cx={project(userPoint)[0]}'),
+  'Fallback route map should memoize projected SVG geometry instead of recomputing paths and marker coordinates during dashboard reroute standby frames.',
 );
 
 assert(

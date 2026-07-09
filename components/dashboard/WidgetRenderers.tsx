@@ -3209,6 +3209,21 @@ function formatCommandUvIndex(value: number | null): string {
   return `UV ${Math.max(0, Math.round(value))}`;
 }
 
+function compactCommandSunlightDisplayValue(value: string | null | undefined): string {
+  const normalized = String(value ?? '').trim();
+  if (!normalized || /unavailable|unknown/i.test(normalized)) {
+    return '--';
+  }
+  return normalized;
+}
+
+function compactCommandSunlightDisplayLabel(value: string | null | undefined): string {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return 'DAYLIGHT';
+  if (/unavailable|unknown/i.test(normalized)) return 'SUNLIGHT';
+  return normalized;
+}
+
 function getSunlightBackgroundType(input: unknown): SunlightBackgroundType {
   if (!input || typeof input !== 'object') return 'daylight';
   const record = input as Record<string, unknown>;
@@ -3932,6 +3947,24 @@ function AttitudeCommandPanel({
   const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;
   const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);
   const usesTransparentCompactSurface = !expanded && usesTextureBleedPanel;
+  const sunlightCountdownLabel = usesTransparentCompactSurface
+    ? compactCommandSunlightDisplayLabel(sunlightVisual?.countdownLabel)
+    : sunlightVisual?.countdownLabel ?? 'Daylight remaining';
+  const sunlightTitle = usesTransparentCompactSurface
+    ? compactCommandSunlightDisplayValue(title)
+    : title;
+  const sunlightPhase = usesTransparentCompactSurface
+    ? compactCommandSunlightDisplayValue(sunlightVisual?.phase)
+    : sunlightVisual?.phase ?? 'Sun position unknown';
+  const sunlightGlare = usesTransparentCompactSurface
+    ? compactCommandSunlightDisplayValue(sunlightVisual?.glare)
+    : sunlightVisual?.glare ?? 'Glare unknown';
+  const sunlightSunrise = usesTransparentCompactSurface
+    ? compactCommandSunlightDisplayValue(sunlightVisual?.sunrise)
+    : sunlightVisual?.sunrise ?? '--';
+  const sunlightSunset = usesTransparentCompactSurface
+    ? compactCommandSunlightDisplayValue(sunlightVisual?.sunset)
+    : sunlightVisual?.sunset ?? '--';
   const content = (
     <ECSInstrumentPanel
       title={undefined}
@@ -4046,7 +4079,7 @@ function AttitudeCommandPanel({
           <View pointerEvents="none" style={attitudeCommandS.sunlightBottomReadout}>
             <View style={attitudeCommandS.sunlightRemainingBlock}>
               <Text style={[attitudeCommandS.sunlightBottomLabel, usesTransparentCompactSurface && attitudeCommandS.sunlightBottomLabelCompact]} numberOfLines={1}>
-                {sunlightVisual?.countdownLabel ?? 'Daylight remaining'}
+                {sunlightCountdownLabel}
               </Text>
               <Text
                 style={[
@@ -4059,23 +4092,23 @@ function AttitudeCommandPanel({
                 adjustsFontSizeToFit
                 minimumFontScale={0.68}
               >
-                {title}
+                {sunlightTitle}
               </Text>
               <View style={attitudeCommandS.sunlightFieldMetaRow}>
                 <Text style={[attitudeCommandS.sunlightFieldMetaText, usesTransparentCompactSurface && attitudeCommandS.sunlightFieldMetaTextCompact]} numberOfLines={1}>
-                  {sunlightVisual?.phase ?? 'Sun position unknown'}
+                  {sunlightPhase}
                 </Text>
                 <Text style={[attitudeCommandS.sunlightFieldMetaText, usesTransparentCompactSurface && attitudeCommandS.sunlightFieldMetaTextCompact, attitudeCommandS.sunlightFieldMetaTextRight]} numberOfLines={1}>
-                  {sunlightVisual?.glare ?? 'Glare unknown'}
+                  {sunlightGlare}
                 </Text>
               </View>
             </View>
             <View style={attitudeCommandS.sunlightRiseSetStack}>
               <Text style={[attitudeCommandS.sunlightRiseSetText, usesTransparentCompactSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
-                RISE {sunlightVisual?.sunrise ?? '--'}
+                RISE {sunlightSunrise}
               </Text>
               <Text style={[attitudeCommandS.sunlightRiseSetText, usesTransparentCompactSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
-                SET {sunlightVisual?.sunset ?? '--'}
+                SET {sunlightSunset}
               </Text>
               <Text style={[attitudeCommandS.sunlightRiseSetText, usesTransparentCompactSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
                 {sunlightVisual?.uvIndex ?? 'UV --'}

@@ -14,6 +14,10 @@ import {
 import type { ExpeditionReadinessAssessment } from '../../lib/readiness/expeditionReadinessTypes';
 import { TACTICAL, GOLD_RAIL } from '../../lib/theme';
 import { useTheme } from '../../context/ThemeContext';
+import { useReducedMotion } from '../../lib/ecsAnimations';
+
+const COMMAND_LIVE_PULSE_ITERATIONS = 2;
+const COMMAND_STANDBY_PULSE_ITERATIONS = 1;
 
 type ECSIntelligenceReadoutProps = {
   hasRouteContext: boolean;
@@ -212,6 +216,7 @@ export default function ECSIntelligenceReadout({
   isActiveExpedition,
 }: ECSIntelligenceReadoutProps) {
   const { palette, colors } = useTheme();
+  const reducedMotion = useReducedMotion();
   const assessment = useCurrentExpeditionReadiness();
   const readinessState = useExpeditionReadinessState();
   const decision = useReadinessDecision();
@@ -303,6 +308,13 @@ export default function ECSIntelligenceReadout({
   const surfaceAccentColor = displayedModel.toneColor;
 
   useEffect(() => {
+    pulseOpacity.stopAnimation();
+    if (reducedMotion) {
+      pulseOpacity.setValue(commandLive ? 0.72 : 0.42);
+      return undefined;
+    }
+
+    pulseOpacity.setValue(commandLive ? 0.48 : 0.42);
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseOpacity, {
@@ -318,10 +330,18 @@ export default function ECSIntelligenceReadout({
           useNativeDriver: true,
         }),
       ]),
+      { iterations: commandLive ? COMMAND_LIVE_PULSE_ITERATIONS : COMMAND_STANDBY_PULSE_ITERATIONS },
     );
-    loop.start();
-    return () => loop.stop();
-  }, [commandLive, pulseOpacity]);
+    loop.start(({ finished }) => {
+      if (finished) {
+        pulseOpacity.setValue(commandLive ? 0.72 : 0.42);
+      }
+    });
+    return () => {
+      loop.stop();
+      pulseOpacity.stopAnimation();
+    };
+  }, [commandLive, modelKey, pulseOpacity, reducedMotion]);
 
   useEffect(() => {
     autoClearTokenRef.current += 1;

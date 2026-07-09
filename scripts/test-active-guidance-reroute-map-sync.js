@@ -316,7 +316,8 @@ assert(
     mapFallbackSurfaceSource.includes('reducedDetail?: boolean') &&
     mapFallbackSurfaceSource.includes('reducedDetail = false') &&
     mapFallbackSurfaceSource.includes('const drawGrid = !transparentBackground && !reducedDetail;') &&
-    mapFallbackSurfaceSource.includes('{!reducedDetail && routeLine.length > 1 ? (') &&
+    mapFallbackSurfaceSource.includes('const projectedRouteLine = useMemo(') &&
+    mapFallbackSurfaceSource.includes('{!reducedDetail && projectedRouteLine ? (') &&
     mapRendererSource.includes('routeContinuityFallbackVisible') &&
     mapRendererSource.includes('payload.routeCoords.length < 2'),
   'Navigate may use cached and capped active route geometry only for the native fallback continuity layer while the authoritative route line remains version-gated.',

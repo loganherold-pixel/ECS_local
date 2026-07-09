@@ -581,7 +581,7 @@ assert.ok(
     mapFallbackSurfaceSource.includes('const pendingGeometryStatus =') &&
     mapFallbackSurfaceSource.includes("statusLabel === 'Route geometry pending'") &&
     mapFallbackSurfaceSource.includes('!hasDrawableLineGeometry') &&
-    mapFallbackSurfaceSource.includes('if (!bounds || pendingGeometryStatus)') &&
+    mapFallbackSurfaceSource.includes('if (!bounds || !project || pendingGeometryStatus)') &&
     mapFallbackSurfaceSource.includes('Guidance is holding current position while route geometry updates.'),
   'MapFallbackSurface should keep route-geometry-pending copy visible when it can draw only current position or markers.',
 );
