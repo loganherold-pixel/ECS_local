@@ -1960,6 +1960,7 @@ const IDLE_DESTINATION_SEARCH_KEYBOARD_COMMIT_DELAY_MS = 620;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_MAX_HEIGHT = 780;
 const IDLE_DESTINATION_SEARCH_KEYBOARD_RESULTS_MAX_HEIGHT = 92;
 const NAVIGATE_ROAD_PREVIEW_MAX_VISUAL_POINTS = 96;
+const NAVIGATE_ACTIVE_FALLBACK_MAX_VISUAL_POINTS = 72;
 const NAVIGATE_ROAD_PREVIEW_DETAIL_SETTLE_MS = 360;
 const HIDDEN_ROAD_NAVIGATION_SEARCH_QUERY = '';
 const EMPTY_ROAD_NAVIGATION_SEARCH_SUGGESTIONS: RoadNavSearchSuggestion[] =
@@ -2005,6 +2006,12 @@ function simplifyNavigateRoadPreviewPoints<T extends { lat: number; lng: number 
   }
 
   return simplified.slice(0, cappedMaxPoints - 1).concat(last);
+}
+
+function simplifyNavigateFallbackRoutePoints<T extends { lat: number; lng: number }>(points: T[]): T[] {
+  return points.length > NAVIGATE_ACTIVE_FALLBACK_MAX_VISUAL_POINTS
+    ? simplifyNavigateRoadPreviewPoints(points, NAVIGATE_ACTIVE_FALLBACK_MAX_VISUAL_POINTS)
+    : points;
 }
 const noopHiddenRoadNavigationSearchQuery = (_value: string) => {};
 const noopHiddenRoadNavigationSearchSuggestion = (_suggestion: RoadNavSearchSuggestion) => {};
@@ -12572,20 +12579,25 @@ const handleCreateRun = useCallback(() => {
     trailNavigationActive,
     validatedRunPoints,
   ]);
+  const activeFallbackRouteLinePoints = useMemo(
+    () => simplifyNavigateFallbackRoutePoints(displayedRoutePoints),
+    [displayedRoutePoints],
+  );
 
   const fallbackRoutePointsForMap = useMemo(() => {
-    if (displayedRoutePoints.length > 1) return displayedRoutePoints;
+    if (displayedRoutePoints.length > 1) return activeFallbackRouteLinePoints;
     if (routeLifecycleState.phase === 'navigating' && lastActiveRoadRouteLinePointsRef.current.length > 1) {
-      return lastActiveRoadRouteLinePointsRef.current;
+      return simplifyNavigateFallbackRoutePoints(lastActiveRoadRouteLinePointsRef.current);
     }
     if (routeLifecycleState.phase === 'navigating' && roadNavigationStoredRouteFallbackPoints.length > 1) {
-      return roadNavigationStoredRouteFallbackPoints;
+      return simplifyNavigateFallbackRoutePoints(roadNavigationStoredRouteFallbackPoints);
     }
     if (routeLifecycleState.phase === 'navigating' && validatedRunPoints.length > 1) {
-      return validatedRunPoints;
+      return simplifyNavigateFallbackRoutePoints(validatedRunPoints);
     }
     return displayedRoutePoints;
   }, [
+    activeFallbackRouteLinePoints,
     displayedRoutePoints,
     roadNavigationStoredRouteFallbackPoints,
     routeLifecycleState.phase,

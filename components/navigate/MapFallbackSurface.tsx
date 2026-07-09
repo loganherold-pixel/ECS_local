@@ -39,6 +39,7 @@ export type MapFallbackSurfaceProps = {
   showStatusLabel?: boolean;
   statusLabel?: string | null;
   transparentBackground?: boolean;
+  reducedDetail?: boolean;
   interactive?: boolean;
   onMapTap?: (coordinate: { latitude: number; longitude: number }) => void;
   routeColor?: string;
@@ -137,6 +138,7 @@ export default function MapFallbackSurface({
   showStatusLabel = false,
   statusLabel = null,
   transparentBackground = false,
+  reducedDetail = false,
   userLocation,
   interactive = false,
   onMapTap,
@@ -219,7 +221,7 @@ export default function MapFallbackSurface({
   }
 
   const project = makeProjector(bounds, width, height);
-  const drawGrid = !transparentBackground;
+  const drawGrid = !transparentBackground && !reducedDetail;
 
   return (
     <Pressable
@@ -272,25 +274,25 @@ export default function MapFallbackSurface({
             strokeLinejoin="round"
           />
         ))}
+        {!reducedDetail && routeLine.length > 1 ? (
+          <Polyline
+            points={lineToSvgPoints(routeLine, project)}
+            fill="none"
+            stroke={routeHaloColor}
+            strokeWidth={compact ? 12 : 16}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : null}
         {routeLine.length > 1 ? (
-          <>
-            <Polyline
-              points={lineToSvgPoints(routeLine, project)}
-              fill="none"
-              stroke={routeHaloColor}
-              strokeWidth={compact ? 12 : 16}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <Polyline
-              points={lineToSvgPoints(routeLine, project)}
-              fill="none"
-              stroke={routeColor}
-              strokeWidth={compact ? 4 : 5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </>
+          <Polyline
+            points={lineToSvgPoints(routeLine, project)}
+            fill="none"
+            stroke={routeColor}
+            strokeWidth={compact ? 4 : 5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         ) : null}
         {progressLine.length > 1 ? (
           <Polyline

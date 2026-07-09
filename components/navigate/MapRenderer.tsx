@@ -8561,12 +8561,20 @@ const MapRenderer = React.memo(function MapRenderer({
     ],
     [payload.segments, payload.speedSegments, payload.trailSegments],
   );
+  const fallbackOnlyRouteCoords = useMemo(
+    () => normalizePointList(fallbackRoutePoints),
+    [fallbackRoutePoints],
+  );
   const fallbackRouteCoords = useMemo(
-    () =>
-      payload.routeCoords.length > 1
+    () => {
+      if (liveMapDisabled && fallbackOnlyRouteCoords.length > 1) {
+        return fallbackOnlyRouteCoords;
+      }
+      return payload.routeCoords.length > 1
         ? payload.routeCoords
-        : normalizePointList(fallbackRoutePoints),
-    [fallbackRoutePoints, payload.routeCoords],
+        : fallbackOnlyRouteCoords;
+    },
+    [fallbackOnlyRouteCoords, liveMapDisabled, payload.routeCoords],
   );
   const fallbackProgressRouteCoords = useMemo(
     () =>
@@ -9422,6 +9430,7 @@ const MapRenderer = React.memo(function MapRenderer({
           showStatusLabel={!!fallbackStatusLabel}
           statusLabel={fallbackStatusLabel}
           transparentBackground={standbyMapActive && compactRoutePreviewStandbyEligible}
+          reducedDetail={liveMapDisabled || routeGeometryPendingFallbackVisible}
         />
       ) : null}
 

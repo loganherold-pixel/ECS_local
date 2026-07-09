@@ -252,6 +252,7 @@ assert.deepStrictEqual(
 );
 
 const mapRendererSource = fs.readFileSync(path.join(root, 'components', 'navigate', 'MapRenderer.tsx'), 'utf8');
+const mapFallbackSurfaceSource = fs.readFileSync(path.join(root, 'components', 'navigate', 'MapFallbackSurface.tsx'), 'utf8');
 const navigateSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8');
 const directionsSource = fs.readFileSync(path.join(root, 'lib', 'activeGuidanceDirections.ts'), 'utf8');
 const routeLineSyncSource = fs.readFileSync(
@@ -304,10 +305,21 @@ assert(
 assert(
   navigateSource.includes('lastActiveRoadRouteLinePointsRef') &&
     navigateSource.includes('roadNavigationStoredRouteFallbackPoints') &&
+    navigateSource.includes('NAVIGATE_ACTIVE_FALLBACK_MAX_VISUAL_POINTS') &&
+    navigateSource.includes('const activeFallbackRouteLinePoints = useMemo(') &&
+    navigateSource.includes('simplifyNavigateFallbackRoutePoints(displayedRoutePoints)') &&
     navigateSource.includes('fallbackRoutePoints={fallbackRoutePointsForMap}') &&
+    mapRendererSource.includes('const fallbackOnlyRouteCoords = useMemo(') &&
+    mapRendererSource.includes('liveMapDisabled && fallbackOnlyRouteCoords.length > 1') &&
+    mapRendererSource.includes('return fallbackOnlyRouteCoords;') &&
+    mapRendererSource.includes('reducedDetail={liveMapDisabled || routeGeometryPendingFallbackVisible}') &&
+    mapFallbackSurfaceSource.includes('reducedDetail?: boolean') &&
+    mapFallbackSurfaceSource.includes('reducedDetail = false') &&
+    mapFallbackSurfaceSource.includes('const drawGrid = !transparentBackground && !reducedDetail;') &&
+    mapFallbackSurfaceSource.includes('{!reducedDetail && routeLine.length > 1 ? (') &&
     mapRendererSource.includes('routeContinuityFallbackVisible') &&
     mapRendererSource.includes('payload.routeCoords.length < 2'),
-  'Navigate may use cached active route geometry only for the native fallback continuity layer while the authoritative route line remains version-gated.',
+  'Navigate may use cached and capped active route geometry only for the native fallback continuity layer while the authoritative route line remains version-gated.',
 );
 assert(
   navigateSource.includes('previousActiveRoadRouteLineKeyRef') &&
