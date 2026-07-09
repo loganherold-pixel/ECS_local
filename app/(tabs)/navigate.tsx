@@ -656,7 +656,11 @@ import {
 import { useThrottledGPS, type ThrottledGPSOutput } from '../../lib/useThrottledGPS';
 import { resolveMapSurfaceMotionState } from '../../lib/mapSurfaceCoordinator';
 import { resolveRouteAheadBearingDeg } from '../../lib/dashboardNavigationChaseCamera';
-import { resolveVehicleGuidanceHeading } from '../../lib/mapMotion';
+import {
+  resolveGpsMapDisplaySample,
+  resolveVehicleGuidanceHeading,
+  type MapMotionGpsSample,
+} from '../../lib/mapMotion';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
 import {
   formatWeatherAlertLine,
@@ -2100,6 +2104,23 @@ const toSafeMapLocation = (coord: any): { lat: number; lng: number } | null => {
   if (safe.latitude < -90 || safe.latitude > 90) return null;
   if (safe.longitude < -180 || safe.longitude > 180) return null;
   return { lat: safe.latitude, lng: safe.longitude };
+};
+
+const toMapMotionGpsSample = (coord: any): MapMotionGpsSample | null => {
+  const safe = toSafeCoordinate(coord);
+  if (!safe) return null;
+  if (safe.latitude < -90 || safe.latitude > 90) return null;
+  if (safe.longitude < -180 || safe.longitude > 180) return null;
+  const timestamp = Number(coord?.timestamp);
+  return {
+    latitude: safe.latitude,
+    longitude: safe.longitude,
+    altitudeFt: typeof coord?.altitudeFt === 'number' && Number.isFinite(coord.altitudeFt) ? coord.altitudeFt : null,
+    speedMph: typeof coord?.speedMph === 'number' && Number.isFinite(coord.speedMph) ? coord.speedMph : null,
+    headingDeg: typeof coord?.headingDeg === 'number' && Number.isFinite(coord.headingDeg) ? coord.headingDeg : null,
+    accuracyM: typeof coord?.accuracyM === 'number' && Number.isFinite(coord.accuracyM) ? coord.accuracyM : null,
+    timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+  };
 };
 
 function toNavigateWeatherCoordinate(
@@ -4329,9 +4350,11 @@ useEffect(() => {
   };
 }, []);
 
-const [followUser, setFollowUser] = useState(false);
+const [followUser, setFollowUser] = useState(true);
 const [userHasManuallyMovedMap, setUserHasManuallyMovedMap] = useState(false);
 const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+const [mapDisplayGpsSample, setMapDisplayGpsSample] = useState<MapMotionGpsSample | null>(null);
+const mapDisplayGpsSampleRef = useRef<MapMotionGpsSample | null>(null);
 const [recentSearches, setRecentSearches] = useState<RoadNavSearchSuggestion[]>([]);
 const [recentSearchesVisible, setRecentSearchesVisible] = useState(false);
 const [deferredIdleDestinationSearchSuggestions, setDeferredIdleDestinationSearchSuggestions] =
@@ -4353,6 +4376,30 @@ const latestGpsMapLocation = useMemo(() => {
   if (!hasFix || !position) return null;
   return toSafeMapLocation(position);
 }, [gps.hasFix, gps.position, gps.rawGPS.hasFix, gps.rawGPS.position]);
+
+const mapDisplayGpsInput = useMemo(() => {
+  if (!gps.hasFix || !gps.position) return null;
+  return toMapMotionGpsSample(gps.position);
+}, [gps.hasFix, gps.position]);
+
+useEffect(() => {
+  if (!mapDisplayGpsInput) {
+    if (gps.permissionDenied) {
+      mapDisplayGpsSampleRef.current = null;
+      setMapDisplayGpsSample(null);
+    }
+    return;
+  }
+
+  const decision = resolveGpsMapDisplaySample(
+    mapDisplayGpsSampleRef.current,
+    mapDisplayGpsInput,
+  );
+  if (!decision.sample || decision.sample === mapDisplayGpsSampleRef.current) return;
+
+  mapDisplayGpsSampleRef.current = decision.sample;
+  setMapDisplayGpsSample(decision.sample);
+}, [gps.permissionDenied, mapDisplayGpsInput]);
 
 useEffect(() => {
   if (!latestGpsMapLocation) {
@@ -8178,6 +8225,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       : null;
   }, [latestGpsMapLocation, userLocation]);
 
+  const stableGpsMapLocation = useMemo(() => {
+    const coordinate = toSafeMapLocation(mapDisplayGpsSample);
+    return coordinate ? { lat: coordinate.lat, lng: coordinate.lng } : null;
+  }, [mapDisplayGpsSample]);
+
   const clearRoadDestination = roadNavigation.clearDestination;
   const previewRoadDestination = roadNavigation.previewDestination;
   const previewRoadRoute = roadNavigation.previewRoute;
@@ -8187,17 +8239,18 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const enableFollowLock = useCallback((_: string, options?: { force?: boolean; zoom?: number }) => {
     setFollowUser(true);
     setUserHasManuallyMovedMap(false);
-    if (userLocation) {
+    const followCenter = stableGpsMapLocation ?? safeUserLocation ?? userLocation;
+    if (followCenter) {
       queueMapCameraCommand({
         mode: 'follow_user',
-        center: { latitude: userLocation.lat, longitude: userLocation.lng },
+        center: { latitude: followCenter.lat, longitude: followCenter.lng },
         zoom: options?.zoom ?? mapZoom,
         durationMs: 450,
         animate: true,
         reason: 'follow_lock',
       }, { force: options?.force });
     }
-  }, [mapZoom, queueMapCameraCommand, userLocation]);
+  }, [mapZoom, queueMapCameraCommand, safeUserLocation, stableGpsMapLocation, userLocation]);
   const handleRecenter = useCallback(() => {
     enableFollowLock('recenter', { force: true });
   }, [enableFollowLock]);
@@ -12858,18 +12911,18 @@ const handleCreateRun = useCallback(() => {
         active: routeLifecycleState.phase === 'navigating',
         routePoints: displayedRoutePoints,
         progressPoints: displayedRouteProgressPoints,
-        currentLocation: safeUserLocation,
+        currentLocation: stableGpsMapLocation,
       }),
     [
       displayedRoutePoints,
       displayedRouteProgressPoints,
       routeLifecycleState.phase,
-      safeUserLocation,
+      stableGpsMapLocation,
     ],
   );
 
   const routeAheadDisplayHeading = useMemo(() => {
-    const headingLocation = mapDisplayUserLocation ?? safeUserLocation;
+    const headingLocation = mapDisplayUserLocation ?? stableGpsMapLocation;
     if (!headingLocation || routeLifecycleState.phase !== 'navigating') return null;
     return resolveRouteAheadBearingDeg(
       {
@@ -12878,7 +12931,7 @@ const handleCreateRun = useCallback(() => {
       },
       displayedRoutePoints,
     );
-  }, [displayedRoutePoints, mapDisplayUserLocation, routeLifecycleState.phase, safeUserLocation]);
+  }, [displayedRoutePoints, mapDisplayUserLocation, routeLifecycleState.phase, stableGpsMapLocation]);
 
   const compassDisplayHeading = useMemo(() => {
     const resolved = resolveVehicleGuidanceHeading({
@@ -21009,7 +21062,7 @@ const navigateMapMotion = useMemo(() => {
 
 const mapRendererUserLocation = destinationSearchMapFrozen
   ? null
-  : (mapDisplayUserLocation ?? safeUserLocation);
+  : (mapDisplayUserLocation ?? stableGpsMapLocation);
 const mapRendererShowUserLocation = !destinationSearchMapFrozen &&
   navigateMapMotion.allowLiveLocation &&
   !!mapRendererUserLocation;

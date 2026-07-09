@@ -41,8 +41,8 @@ export function resolveMapSurfaceMotionState(input: MapSurfaceMotionInput): MapS
     if (!input.hasActiveGuidance) {
       return {
         motionPriority: 'warm',
-        allowLiveLocation: false,
-        allowCameraFollow: false,
+        allowLiveLocation: true,
+        allowCameraFollow: true,
         allowDynamicCamera: false,
       };
     }

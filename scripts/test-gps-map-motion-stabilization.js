@@ -175,6 +175,42 @@ assert(smoothed.latitude > baseSample.latitude && smoothed.latitude < 39.001);
 assert(smoothed.longitude < baseSample.longitude && smoothed.longitude > -104.001);
 assert.strictEqual(smoothed.altitudeFt, 5050);
 
+const firstDisplaySample = motion.resolveGpsMapDisplaySample(null, baseSample);
+assert.strictEqual(firstDisplaySample.accepted, true, 'The display pin should accept the first valid GPS sample.');
+assert.deepStrictEqual(firstDisplaySample.sample, baseSample);
+
+const jitterDisplaySample = motion.resolveGpsMapDisplaySample(baseSample, {
+  ...baseSample,
+  latitude: 39.000001,
+  longitude: -104.000001,
+  timestamp: 2000,
+});
+assert.strictEqual(jitterDisplaySample.accepted, false, 'The display pin should reject jitter before it reaches Mapbox.');
+assert.strictEqual(jitterDisplaySample.reason, 'jitter');
+assert.deepStrictEqual(jitterDisplaySample.sample, baseSample, 'Rejected display samples should hold the last stable pin coordinate.');
+
+const poorDisplaySample = motion.resolveGpsMapDisplaySample(baseSample, {
+  ...baseSample,
+  latitude: 39.0005,
+  accuracyM: 120,
+  timestamp: 2000,
+});
+assert.strictEqual(poorDisplaySample.accepted, false, 'Poor-accuracy GPS should not move the visible display pin.');
+assert.strictEqual(poorDisplaySample.reason, 'poor_accuracy');
+assert.deepStrictEqual(poorDisplaySample.sample, baseSample);
+
+const smoothedDisplaySample = motion.resolveGpsMapDisplaySample(baseSample, {
+  ...baseSample,
+  latitude: 39.001,
+  longitude: -104.001,
+  altitudeFt: 5100,
+  timestamp: 3000,
+}, { smoothingRatio: 0.5 });
+assert.strictEqual(smoothedDisplaySample.accepted, true, 'Material GPS movement should update the display pin.');
+assert(smoothedDisplaySample.sample.latitude > baseSample.latitude && smoothedDisplaySample.sample.latitude < 39.001);
+assert(smoothedDisplaySample.sample.longitude < baseSample.longitude && smoothedDisplaySample.sample.longitude > -104.001);
+assert.strictEqual(smoothedDisplaySample.sample.altitudeFt, 5050);
+
 const hotNavigate = coordinator.resolveMapSurfaceMotionState({
   surface: 'navigate',
   isFocused: true,
@@ -189,8 +225,8 @@ const idleNavigate = coordinator.resolveMapSurfaceMotionState({
   hasActiveGuidance: false,
 });
 assert.strictEqual(idleNavigate.motionPriority, 'warm');
-assert.strictEqual(idleNavigate.allowLiveLocation, false);
-assert.strictEqual(idleNavigate.allowCameraFollow, false);
+assert.strictEqual(idleNavigate.allowLiveLocation, true, 'Idle Navigate should still render the live GPS pin.');
+assert.strictEqual(idleNavigate.allowCameraFollow, true, 'Idle Navigate should allow the map to follow the GPS pin until the user pans.');
 assert.strictEqual(idleNavigate.allowDynamicCamera, false);
 
 const pausedDashboard = coordinator.resolveMapSurfaceMotionState({
@@ -250,8 +286,9 @@ assert(
 assert(
   mapRendererSource.includes('var currentLngLat = userMarker.getLngLat();') &&
     mapRendererSource.includes('start = { latitude: currentLngLat.lat, longitude: currentLngLat.lng };') &&
-    mapRendererSource.includes('var duration = 950;'),
-  'MapRenderer should continue GPS marker interpolation from the current rendered marker position.',
+    mapRendererSource.includes('USER_MARKER_ANIMATION_MS') &&
+    !mapRendererSource.includes('var duration = 950;'),
+  'MapRenderer should continue GPS marker interpolation from the current rendered marker position without a near-1Hz animation window.',
 );
 
 console.log('GPS and Mapbox motion stabilization checks passed.');

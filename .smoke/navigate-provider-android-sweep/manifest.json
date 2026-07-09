@@ -1,11 +1,11 @@
 {
   "schemaVersion": "navigate-provider-android-sweep/v1",
-  "generatedAt": "2026-07-08T07:47:19.040Z",
-  "evidenceId": "navigate-provider-android-sweep-20260708074719",
+  "generatedAt": "2026-07-09T13:55:03.860Z",
+  "evidenceId": "navigate-provider-android-sweep-20260709135503",
   "evidenceSource": "existing_android_partial",
   "status": "blocked_missing_provider_evidence",
   "productionAccepted": false,
-  "manifestPath": ".smoke\\navigate-provider-android-sweep\\manifest.json",
+  "manifestPath": ".smoke/navigate-provider-android-sweep/manifest.json",
   "existingAndroidEvidenceMode": "partial_local_android_reference",
   "providerBackedCandidateEvidence": {
     "status": "blocked_missing_real_provider_summary",
@@ -42,22 +42,160 @@
   },
   "androidArtifacts": {
     "candidatePinsActions": [
-      ".smoke\\campops-android-qa\\candidate-viewport-entry.png",
-      ".smoke\\campops-android-qa\\candidate-viewport-navigate-here-action.png",
-      ".smoke\\campops-android-qa\\candidate-viewport-save-camp-action.png",
-      ".smoke\\campops-android-qa\\candidate-viewport-report-unusable-action.png",
-      ".smoke\\campops-android-qa\\phone-candidate-viewport-popup-actions.png"
+      ".smoke/campops-android-qa/candidate-viewport-entry.png",
+      ".smoke/campops-android-qa/candidate-viewport-navigate-here-action.png",
+      ".smoke/campops-android-qa/candidate-viewport-save-camp-action.png",
+      ".smoke/campops-android-qa/candidate-viewport-report-unusable-action.png",
+      ".smoke/campops-android-qa/phone-candidate-viewport-popup-actions.png"
     ],
     "activeRouteLineContext": [
-      ".smoke\\navigate-deep\\04-start-guidance.png",
-      ".smoke\\navigate-deep\\08-minimized-guidance.png",
-      ".smoke\\navigate-deep\\09-active-readiness-reopen.png"
+      ".smoke/navigate-deep/04-start-guidance.png",
+      ".smoke/navigate-deep/08-minimized-guidance.png",
+      ".smoke/navigate-deep/09-active-readiness-reopen.png"
     ],
     "searchFreezeStandby": [],
     "logs": [
-      ".smoke\\campops-android-qa\\candidate-viewport-actions-logcat.txt",
-      ".smoke\\navigate-deep\\final-navigate-log-errors.txt"
+      ".smoke/campops-android-qa/candidate-viewport-actions-logcat.txt",
+      ".smoke/navigate-deep/final-navigate-log-errors.txt"
     ]
+  },
+  "androidArtifactEvidence": {
+    "candidatePinsActions": [
+      {
+        "path": ".smoke/campops-android-qa/candidate-viewport-entry.png",
+        "role": "candidate_pin_visible",
+        "source": "existing_reference",
+        "verified": false
+      },
+      {
+        "path": ".smoke/campops-android-qa/candidate-viewport-navigate-here-action.png",
+        "role": "navigate_here_action",
+        "source": "existing_reference",
+        "verified": false
+      },
+      {
+        "path": ".smoke/campops-android-qa/candidate-viewport-save-camp-action.png",
+        "role": "save_camp_action",
+        "source": "existing_reference",
+        "verified": false
+      },
+      {
+        "path": ".smoke/campops-android-qa/candidate-viewport-report-unusable-action.png",
+        "role": "report_unusable_action",
+        "source": "existing_reference",
+        "verified": false
+      },
+      {
+        "path": ".smoke/campops-android-qa/phone-candidate-viewport-popup-actions.png",
+        "role": "dismiss_action",
+        "source": "existing_reference",
+        "verified": false
+      }
+    ],
+    "activeRouteLineContext": [
+      {
+        "path": ".smoke/navigate-deep/04-start-guidance.png",
+        "role": "active_route_line_with_provider_candidates",
+        "source": "existing_reference",
+        "verified": false
+      },
+      {
+        "path": ".smoke/navigate-deep/08-minimized-guidance.png",
+        "role": "active_route_line_with_provider_candidates",
+        "source": "existing_reference",
+        "verified": false
+      },
+      {
+        "path": ".smoke/navigate-deep/09-active-readiness-reopen.png",
+        "role": "active_route_line_with_provider_candidates",
+        "source": "existing_reference",
+        "verified": false
+      }
+    ],
+    "searchFreezeStandby": [],
+    "logs": [
+      {
+        "path": ".smoke/campops-android-qa/candidate-viewport-actions-logcat.txt",
+        "role": "logcat_slice",
+        "source": "existing_reference",
+        "verified": false
+      },
+      {
+        "path": ".smoke/navigate-deep/final-navigate-log-errors.txt",
+        "role": "logcat_slice",
+        "source": "existing_reference",
+        "verified": false
+      }
+    ]
+  },
+  "androidArtifactValidation": {
+    "candidatePinsActions": {
+      "status": "blocked",
+      "requiredRoles": [
+        "candidate_pin_visible",
+        "navigate_here_action",
+        "save_camp_action",
+        "report_unusable_action",
+        "dismiss_action"
+      ],
+      "coveredRoles": [],
+      "missingRoles": [
+        "candidate_pin_visible",
+        "navigate_here_action",
+        "save_camp_action",
+        "report_unusable_action",
+        "dismiss_action"
+      ],
+      "missingArtifacts": [],
+      "blockers": [
+        "candidate_pin_action_same_run_artifacts_missing"
+      ]
+    },
+    "activeRouteLineContext": {
+      "status": "blocked",
+      "requiredRoles": [
+        "active_route_line_with_provider_candidates"
+      ],
+      "coveredRoles": [],
+      "missingRoles": [
+        "active_route_line_with_provider_candidates"
+      ],
+      "missingArtifacts": [],
+      "blockers": [
+        "active_route_line_same_run_artifact_missing"
+      ]
+    },
+    "searchFreezeStandby": {
+      "status": "blocked",
+      "requiredRoles": [
+        "search_freeze_standby_runtime"
+      ],
+      "coveredRoles": [],
+      "missingRoles": [
+        "search_freeze_standby_runtime"
+      ],
+      "missingArtifacts": [],
+      "hasVerifiedRuntime": false,
+      "blockers": [
+        "search_freeze_standby_artifact_missing"
+      ]
+    },
+    "logs": {
+      "status": "blocked",
+      "requiredRoles": [
+        "logcat_slice"
+      ],
+      "coveredRoles": [],
+      "missingRoles": [
+        "logcat_slice"
+      ],
+      "missingArtifacts": [],
+      "fatalOrRedboxDetected": false,
+      "secretOrRawDetected": false,
+      "blockers": [
+        "navigate_android_logcat_same_run_artifact_missing"
+      ]
+    }
   },
   "runtimeAssertions": {
     "providerBackedCandidatePinsVisible": false,
@@ -66,12 +204,12 @@
     "searchFreezeStandbyCovered": false
   },
   "codeRegressionCoverage": {
-    "staticContractTest": "scripts\\test-navigate-mobile-emulation-regressions.js",
-    "evidenceValidationTest": "scripts\\test-navigate-provider-android-evidence.mjs",
+    "staticContractTest": "scripts/test-navigate-mobile-emulation-regressions.js",
+    "evidenceValidationTest": "scripts/test-navigate-provider-android-evidence.mjs",
     "protectedFiles": [
-      "app\\(tabs)\\navigate.tsx",
-      "components\\navigate\\MapRenderer.tsx",
-      "lib\\useRoadNavigation.ts"
+      "app/(tabs)/navigate.tsx",
+      "components/navigate/MapRenderer.tsx",
+      "lib/useRoadNavigation.ts"
     ],
     "protectedBehaviors": [
       "provider-backed candidate pins and actions must be backed by a sanitized real-provider summary",
@@ -82,7 +220,10 @@
   "blockers": [
     "provider_candidate_summary_missing",
     "android_sweep_source_not_real_provider_backed",
-    "mobile_search_freeze_standby_runtime_artifact_missing",
+    "candidate_pin_action_same_run_artifacts_missing",
+    "active_route_line_same_run_artifact_missing",
+    "search_freeze_standby_artifact_missing",
+    "navigate_android_logcat_same_run_artifact_missing",
     "provider_backed_candidate_pins_not_verified",
     "candidate_actions_not_verified",
     "active_route_line_context_not_verified",
@@ -100,5 +241,17 @@
   "notes": [
     "This manifest is a handoff artifact for Android QA. It does not approve provider influence or production rollout.",
     "Existing Navigate/CampOps Android smoke artifacts may be referenced as partial local evidence, but they do not satisfy provider-backed validation without a real sanitized provider summary."
+  ],
+  "blockerMessages": [
+    "Provider summary missing: pass --provider-summary=<sanitized-summary.json> from a real Android provider sweep.",
+    "Evidence source is not real_provider_backed Android evidence: run with --real or --evidence-source=real_android_provider_sweep.",
+    "Candidate pin/action artifacts are only old local references; attach same-run Android captures through the sanitized summary or CLI flags.",
+    "Active route-line artifacts are only old local references; attach same-run route-line context from the provider-backed Android sweep.",
+    "Search freeze/standby runtime artifact missing: include gfxinfo, Perfetto, or sanitized text evidence for the destination search standby path.",
+    "Logcat artifacts are only old local references; attach a same-run redacted logcat_slice from the provider-backed Android sweep.",
+    "Provider-backed candidate pins are not verified by both sanitized summary counts and Android candidate-pin artifacts.",
+    "Candidate actions are not verified by both sanitized summary action flags and Android action artifacts.",
+    "Active route-line context is not verified by both sanitized summary context and Android route-line artifacts.",
+    "Search freeze/standby is not verified by runtime artifact evidence."
   ]
 }

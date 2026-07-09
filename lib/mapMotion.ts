@@ -50,11 +50,24 @@ export type GpsSampleMotionDecision = {
   impliedSpeedMph: number | null;
 };
 
+export type GpsMapDisplaySampleOptions = GpsSampleMotionOptions & {
+  smoothingRatio?: number;
+};
+
+export type GpsMapDisplaySampleDecision = {
+  sample: MapMotionGpsSample | null;
+  accepted: boolean;
+  reason: MapMotionSampleRejectReason;
+  distanceM: number | null;
+  impliedSpeedMph: number | null;
+};
+
 const EARTH_RADIUS_M = 6371008.8;
 const MPS_TO_MPH = 2.2369362920544;
 const DEFAULT_MAX_ACCURACY_M = 75;
 const DEFAULT_MAX_TELEPORT_SPEED_MPH = 180;
 const DEFAULT_JITTER_DISTANCE_M = 2.5;
+const DEFAULT_GPS_MAP_DISPLAY_SMOOTHING_RATIO = 0.65;
 const MOVING_SPEED_MPH = 3;
 
 function toRadians(value: number): number {
@@ -232,5 +245,34 @@ export function smoothGpsSample(
     headingDeg: next.headingDeg ?? previous.headingDeg ?? null,
     accuracyM: next.accuracyM ?? previous.accuracyM ?? null,
     timestamp: Math.round(mix(previous.timestamp, next.timestamp)),
+  };
+}
+
+export function resolveGpsMapDisplaySample(
+  previous: MapMotionGpsSample | null | undefined,
+  next: MapMotionGpsSample | null | undefined,
+  options: GpsMapDisplaySampleOptions = {},
+): GpsMapDisplaySampleDecision {
+  const decision = classifyGpsSampleForMotion(previous, next, options);
+  if (!decision.accepted || !next) {
+    return {
+      sample: previous ?? null,
+      accepted: false,
+      reason: decision.reason,
+      distanceM: decision.distanceM,
+      impliedSpeedMph: decision.impliedSpeedMph,
+    };
+  }
+
+  const sample = previous
+    ? smoothGpsSample(previous, next, options.smoothingRatio ?? DEFAULT_GPS_MAP_DISPLAY_SMOOTHING_RATIO)
+    : next;
+
+  return {
+    sample,
+    accepted: true,
+    reason: 'accepted',
+    distanceM: decision.distanceM,
+    impliedSpeedMph: decision.impliedSpeedMph,
   };
 }

@@ -202,6 +202,29 @@ assert.ok(
   'MapRenderer should receive null/stable live-location props while destination search freezes the map.',
 );
 assert.ok(
+  navigateSource.includes('const [followUser, setFollowUser] = useState(true);'),
+  'Navigate should default to GPS follow so the location pin tracks the user until the map is manually panned.',
+);
+assert.ok(
+  navigateSource.includes('const mapDisplayGpsInput = useMemo(') &&
+    navigateSource.includes('resolveGpsMapDisplaySample') &&
+    navigateSource.includes('const stableGpsMapLocation = useMemo('),
+  'Navigate should derive the rendered GPS pin from the throttled, stabilized display lane.',
+);
+assert.ok(
+  (() => {
+    const start = navigateSource.indexOf('const mapDisplayGpsInput = useMemo(');
+    const end = navigateSource.indexOf('useEffect(() => {\n  if (!mapDisplayGpsInput)', start);
+    return start >= 0 && end > start && !navigateSource.slice(start, end).includes('rawGPS');
+  })(),
+  'Navigate should not feed raw GPS directly into the render-facing map pin path.',
+);
+assert.ok(
+  navigateSource.includes('const mapRendererUserLocation = destinationSearchMapFrozen') &&
+    navigateSource.includes(': (mapDisplayUserLocation ?? stableGpsMapLocation);'),
+  'MapRenderer should receive the route-snapped or stabilized display GPS coordinate, not raw GPS fallback churn.',
+);
+assert.ok(
     navigateSource.includes('destinationSearchMapOccluder') &&
     navigateSource.includes('floatingToolsVisible = mapOverlayStartupReady && !destinationSearchMapFrozen') &&
     navigateSource.includes('!destinationSearchMapFrozen') &&
@@ -322,10 +345,11 @@ assert.ok(
     mapRendererSource.includes('function buildMapboxStaticImageUrl') &&
     mapRendererSource.includes("motionPriority === 'warm'") &&
     mapRendererSource.includes('!standbyMapHasOperationalOverlay') &&
+    mapRendererSource.includes('!standbyMapHasLiveLocation') &&
     mapRendererSource.includes('const renderLiveWebView =') &&
     mapRendererSource.includes("motionPriority !== 'cold'") &&
     mapRendererSource.includes('!webRendererCrashBlocked'),
-  'MapRenderer should place no-overlay warm idle maps into a static standby instead of keeping the live WebView renderer hot.',
+  'MapRenderer should place no-overlay warm idle maps into standby, but keep a live surface when the GPS display pin is visible.',
 );
 assert.ok(
   mapRendererSource.includes("motionPriority === 'cold'") &&
@@ -666,6 +690,10 @@ assert.ok(
   'provider_summary_contains_raw_payload_or_secret',
   'provider_summary_contains_precise_coordinates',
   'candidate_actions_incomplete',
+  'candidate_pin_action_same_run_artifacts_missing',
+  'active_route_line_same_run_artifact_missing',
+  'navigate_android_logcat_same_run_artifact_missing',
+  'search_freeze_standby_artifact_unverified',
 ].forEach((fragment) => {
   assert.ok(
     navigateProviderEvidenceTestSource.includes(fragment),
@@ -676,6 +704,9 @@ assert.ok(
   'Navigate Provider Android Sweep',
   '.smoke/navigate-provider-android-sweep/manifest.json',
   'search freeze/standby',
+  'androidArtifacts',
+  'candidate_pin_visible',
+  'logcat_slice',
   'Do not commit raw provider payloads',
 ].forEach((fragment) => {
   assert.ok(
@@ -686,6 +717,7 @@ assert.ok(
 assert.ok(
   releaseReadinessAuditSource.includes('gate:navigate-provider-android-evidence') &&
     releaseReadinessAuditSource.includes('.smoke/navigate-provider-android-sweep/manifest.json') &&
+    releaseReadinessAuditSource.includes('old local references cannot satisfy the strict gate') &&
     releaseReadinessAuditSource.includes('broad rollout remains blocked'),
   'Release audit should tie the remaining Navigate validation gap to the strict provider-backed Android evidence gate.',
 );

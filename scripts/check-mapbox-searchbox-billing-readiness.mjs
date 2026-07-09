@@ -25,6 +25,8 @@ const tripBuilderSource = read('app/explore-trip-builder.tsx');
 const routeContextSource = read('lib/tripBuilder/mapboxRouteContextAdapters.ts');
 const navigateSource = read('lib/useRoadNavigation.ts');
 const regressionSource = read('scripts/test-mapbox-searchbox-session-reuse.js');
+const costReportRegressionSource = read('scripts/test-mapbox-searchbox-billing-report.js');
+const costReportSource = read('scripts/report-mapbox-searchbox-billing.js');
 const smokeSource = read('scripts/smoke-app.mjs');
 
 const checks = [
@@ -32,9 +34,24 @@ const checks = [
     'Shared billing event sink',
     has(guardSource, 'recordMapboxSearchBillingEvent') &&
       has(guardSource, 'analyzeMapboxSearchBillingEvents') &&
-      has(guardSource, 'formatMapboxSearchBillingReadinessReport'),
-    'The shared guard can capture, analyze, and format Mapbox Search Box billing risk.',
-    'Keep the event sink and readiness formatter in lib/mapboxSearchBillingGuard.ts.',
+      has(guardSource, 'formatMapboxSearchBillingReadinessReport') &&
+      has(guardSource, 'buildMapboxSearchBillingCostReport') &&
+      has(guardSource, 'formatMapboxSearchBillingCostReport'),
+    'The shared guard can capture, analyze, format billing risk, and build per-flow cost reports.',
+    'Keep the event sink, readiness formatter, and cost-report builder in lib/mapboxSearchBillingGuard.ts.',
+  ),
+  check(
+    'Real ECS flow cost attribution',
+    [
+      'navigate_destination_search',
+      'trip_builder_itinerary_search',
+      'trip_builder_route_context_places',
+      'trip_builder_smart_resupply',
+      'Forward geocode fallback is reported separately from Search Box sessions',
+      'Coordinate reuse is counted as zero additional Mapbox search cost',
+    ].every((token) => has(guardSource, token)),
+    'The cost report attributes Search Box sessions, fallback geocoding, and coordinate reuse to named Navigate and Trip Builder flows.',
+    'Keep MAPBOX_SEARCH_BILLING_FLOW_METADATA and fallback/coordinate notes in the shared billing guard.',
   ),
   check(
     'Search Box suggest instrumentation',
@@ -74,12 +91,26 @@ const checks = [
     'Keep risky fixture assertions in scripts/test-mapbox-searchbox-session-reuse.js.',
   ),
   check(
+    'Per-flow cost report command',
+    packageJson.scripts?.['report:mapbox-searchbox-billing'] === 'node scripts/report-mapbox-searchbox-billing.js' &&
+      packageJson.scripts?.['test:mapbox-searchbox-billing-report'] === 'node ./scripts/test-mapbox-searchbox-billing-report.js' &&
+      has(costReportSource, 'buildMapboxSearchBillingCostReport') &&
+      has(costReportSource, '--events=<billing-events.json>') &&
+      has(costReportSource, 'searchbox-session-unit-cost') &&
+      has(costReportSource, 'max-searchbox-sessions-per-flow') &&
+      has(costReportRegressionSource, 'Estimated total: USD 0\\.2020') &&
+      has(costReportRegressionSource, 'unlabeled_mapbox_search'),
+    'A rerunnable per-flow billing report script exists and has focused cost/risk regression coverage.',
+    'Keep report:mapbox-searchbox-billing wired to scripts/report-mapbox-searchbox-billing.js and covered by test:mapbox-searchbox-billing-report.',
+  ),
+  check(
     'Pre-ship command exposure',
     packageJson.scripts?.['gate:mapbox-searchbox-billing'] === 'node scripts/check-mapbox-searchbox-billing-readiness.mjs' &&
       packageJson.scripts?.['test:mapbox-searchbox-session-reuse'] === 'node ./scripts/test-mapbox-searchbox-session-reuse.js' &&
+      packageJson.scripts?.['test:mapbox-searchbox-billing-report'] === 'node ./scripts/test-mapbox-searchbox-billing-report.js' &&
       has(smokeSource, 'mapbox-searchbox-session-reuse'),
-    'The billing readiness gate and regression are exposed through package scripts/smoke.',
-    'Expose gate:mapbox-searchbox-billing and keep smoke-app running test-mapbox-searchbox-session-reuse.js.',
+    'The billing readiness gate and regressions are exposed through package scripts/smoke.',
+    'Expose gate:mapbox-searchbox-billing and keep focused billing regressions in package scripts.',
   ),
 ];
 

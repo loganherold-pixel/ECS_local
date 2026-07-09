@@ -2841,6 +2841,7 @@ function makeMapHtml(
       var lastAppliedStyleUrl = activeStyleUrl;
       var activeCameraMode = null;
       var lastCameraCommandKey = '';
+      var USER_MARKER_ANIMATION_MS = 650;
       var campLayerStateVersion = 0;
       var dispersedCampingEligibilityState = { enabled: false, geojson: null, version: 0, appliedVersion: 0 };
       var dispersedCampingLayerHandlersAttached = false;
@@ -5994,7 +5995,7 @@ function makeMapHtml(
           }
         } catch (e) {}
         var end = { latitude: loc.latitude, longitude: loc.longitude };
-        var duration = 950;
+        var duration = USER_MARKER_ANIMATION_MS;
         var startedAt = Date.now();
         cancelUserMarkerAnimation();
 
@@ -8154,12 +8155,14 @@ const MapRenderer = React.memo(function MapRenderer({
     !!dispersedRouteBuild?.enabled ||
     !!establishedCampsites?.enabled ||
     !!campsiteSearchPolygon?.coordinates?.length;
+  const standbyMapHasLiveLocation = !!showUserLocation && !!normalizeLatLng(userLocation);
   const standbyMapEligible =
     shouldLoadMap &&
     isCompactSurface &&
     motionPriority === 'warm' &&
     interactive !== false &&
     !standbyMapDisabled &&
+    !standbyMapHasLiveLocation &&
     !standbyMapHasOperationalOverlay;
   const compactRoutePreviewStandbyEligible =
     shouldLoadMap &&

@@ -52,7 +52,52 @@ Required setup:
 
 - Seed the emulator/device location near the route/provider cell: `npm run qa:android:seed-location -- --lat=<rounded latitude> --lng=<rounded longitude>`.
 - Confirm the app is signed into the QA account and the Navigate tab is visible.
-- Capture a sanitized provider summary JSON from ECS-owned provider-backed records only. It must use `source: "real_provider_sanitized_summary"`, summarized provider/source counts, freshness states, candidate/action counts, active route-line context booleans, and redaction confirmations. It must not include raw provider payloads, provider record ids, secrets, or precise coordinates.
+- Capture a sanitized provider summary JSON from ECS-owned provider-backed records only. It must use `source: "real_provider_sanitized_summary"`, summarized provider/source counts, freshness states, candidate/action counts, active route-line context booleans, redaction confirmations, and an `androidArtifacts` block with same-run artifact paths/roles. It must not include raw provider payloads, provider record ids, secrets, or precise coordinates.
+
+Preferred sanitized summary artifact shape:
+
+```json
+{
+  "source": "real_provider_sanitized_summary",
+  "candidateCounts": { "providerBacked": 4, "visiblePins": 3, "actionVerified": 4 },
+  "routeContext": {
+    "activeRouteLineVisible": true,
+    "providerCandidatesAnchoredToRoute": true,
+    "routeLineSource": "android_capture"
+  },
+  "actions": {
+    "navigateHere": true,
+    "saveCamp": true,
+    "reportUnusable": true,
+    "dismiss": true
+  },
+  "redaction": {
+    "rawProviderPayloadsExcluded": true,
+    "precisePrivateCoordinatesExcluded": true,
+    "secretsExcluded": true
+  },
+  "androidArtifacts": {
+    "candidatePinsActions": [
+      { "role": "candidate_pin_visible", "path": "captures/candidate-pin-visible.png" },
+      { "role": "navigate_here_action", "path": "captures/navigate-here.png" },
+      { "role": "save_camp_action", "path": "captures/save-camp.png" },
+      { "role": "report_unusable_action", "path": "captures/report-unusable.png" },
+      { "role": "dismiss_action", "path": "captures/dismiss.png" }
+    ],
+    "activeRouteLineContext": [
+      { "role": "active_route_line_with_provider_candidates", "path": "captures/active-route-line.png" }
+    ],
+    "searchFreezeStandby": [
+      { "role": "search_freeze_standby_runtime", "path": "perf/search-freeze-standby.txt" }
+    ],
+    "logs": [
+      { "role": "logcat_slice", "path": "logs/logcat.txt" }
+    ]
+  }
+}
+```
+
+The search freeze/standby runtime artifact should include sanitized markers such as `destinationSearchMapFrozen=true` plus `standbyMapActive=true` or `liveWebViewWake=false`. The logcat slice must be from the same Android sweep and redacted before use.
 
 Required Android captures:
 
@@ -66,13 +111,16 @@ Command sequence:
 
 - `npm run test:navigate-provider-android-evidence`
 - `npm run test:navigate-mobile-emulation-regressions`
-- `npm run evidence:navigate-provider-android -- --provider-summary=<sanitized-summary.json> --candidate-pin-screenshot=<pins.png> --candidate-pin-screenshot=<actions.png> --active-route-line-screenshot=<route-line.png> --search-freeze-artifact=<gfxinfo-or-perfetto.txt> --log=<logcat.txt> --real`
+- `npm run evidence:navigate-provider-android -- --provider-summary=<sanitized-summary.json> --real`
 - `npm run gate:navigate-provider-android-evidence`
+
+Fallback CLI artifact flags remain available when the sanitized summary cannot carry `androidArtifacts`. Use role-prefixed values so the strict gate can validate coverage, for example `--candidate-pin-screenshot=candidate_pin_visible:<pins.png>`, `--candidate-pin-screenshot=navigate_here_action:<navigate-here.png>`, `--active-route-line-screenshot=active_route_line_with_provider_candidates:<route-line.png>`, `--search-freeze-artifact=search_freeze_standby_runtime:<gfxinfo-or-summary.txt>`, and `--log=logcat_slice:<logcat.txt>`.
 
 Truth rules:
 
 - Running `npm run evidence:navigate-provider-android` without a real sanitized provider summary writes a blocked manifest from the existing `.smoke/navigate-deep` and `.smoke/campops-android-qa` references. That is useful handoff context, not provider-backed acceptance.
-- The strict gate must fail until real provider-backed candidate evidence, Android action captures, active route-line context, search freeze/standby runtime evidence, and logs are all present.
+- Old local references are tagged as reference-only and cannot satisfy the strict gate. Same-run Android candidate/action captures, active route-line context, search freeze/standby runtime evidence, and redacted `logcat_slice` evidence must come from the sanitized provider summary or explicit CLI flags.
+- The strict gate must fail until real provider-backed candidate evidence, Android action captures, active route-line context, search freeze/standby runtime evidence, and logcat are all present and validated.
 - The manifest never claims production acceptance, provider influence approval, owner acceptance, live legal/access authority, fresh availability, raw provider payload review, or precise private coordinate capture.
 
 ## Commands

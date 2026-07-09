@@ -8,6 +8,7 @@ import {
   buildNavigateProviderAndroidEvidenceManifest,
   validateNavigateProviderAndroidEvidenceManifest,
 } from './lib/navigate-provider-android-evidence.mjs';
+import { runNavigateProviderAndroidEvidenceCli } from './run-navigate-provider-android-evidence.mjs';
 
 function writeArtifact(filePath, body = 'artifact') {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -54,6 +55,33 @@ function providerSummary(overrides = {}) {
   };
 }
 
+function validArtifactPaths(tempRoot) {
+  return {
+    candidatePinScreenshots: [
+      writeArtifact(path.join(tempRoot, 'candidate-pin-visible.png'), 'png'),
+      writeArtifact(path.join(tempRoot, 'candidate-navigate-here-action.png'), 'png'),
+      writeArtifact(path.join(tempRoot, 'candidate-save-camp-action.png'), 'png'),
+      writeArtifact(path.join(tempRoot, 'candidate-report-unusable-action.png'), 'png'),
+      writeArtifact(path.join(tempRoot, 'candidate-dismiss-action.png'), 'png'),
+    ],
+    activeRouteLineScreenshots: [
+      writeArtifact(path.join(tempRoot, 'active-route-provider-candidates.png'), 'png'),
+    ],
+    searchFreezeArtifacts: [
+      writeArtifact(
+        path.join(tempRoot, 'search-freeze-standby-gfxinfo.txt'),
+        'destinationSearchMapFrozen=true\nstandbyMapActive=true\nliveWebViewWake=false\n',
+      ),
+    ],
+    logs: [
+      writeArtifact(
+        path.join(tempRoot, 'navigate-provider-sweep-logcat.txt'),
+        'I/ECS: navigate provider sweep completed\nI/ECS: no raw provider payloads emitted\n',
+      ),
+    ],
+  };
+}
+
 function validArtifacts(tempRoot) {
   const providerSummaryPath = writeArtifact(
     path.join(tempRoot, 'provider-summary.json'),
@@ -61,18 +89,77 @@ function validArtifacts(tempRoot) {
   );
   return {
     providerSummaryPath,
-    candidatePinScreenshots: [
-      writeArtifact(path.join(tempRoot, 'candidate-pins.png'), 'png'),
-      writeArtifact(path.join(tempRoot, 'candidate-actions.png'), 'png'),
-    ],
-    activeRouteLineScreenshots: [
-      writeArtifact(path.join(tempRoot, 'active-route-line.png'), 'png'),
-    ],
-    searchFreezeArtifacts: [
-      writeArtifact(path.join(tempRoot, 'search-freeze-gfxinfo.txt'), 'gfxinfo'),
-    ],
-    logs: [writeArtifact(path.join(tempRoot, 'navigate-provider-sweep.log'), 'log')],
+    ...validArtifactPaths(tempRoot),
   };
+}
+
+function summaryArtifact(relativePath, role) {
+  return { path: relativePath, role };
+}
+
+function writePushButtonProviderSummary(tempRoot, overrides = {}) {
+  const evidenceRoot = path.join(tempRoot, 'android-sweep');
+  const candidateArtifacts = [
+    summaryArtifact('captures/candidate-pin-visible.png', 'candidate_pin_visible'),
+    summaryArtifact('captures/candidate-navigate-here-action.png', 'navigate_here_action'),
+    summaryArtifact('captures/candidate-save-camp-action.png', 'save_camp_action'),
+    summaryArtifact('captures/candidate-report-unusable-action.png', 'report_unusable_action'),
+    summaryArtifact('captures/candidate-dismiss-action.png', 'dismiss_action'),
+  ];
+  const activeRouteLineArtifacts = [
+    summaryArtifact('captures/active-route-provider-candidates.png', 'active_route_line_with_provider_candidates'),
+  ];
+  const searchFreezeArtifacts = [
+    summaryArtifact('perf/search-freeze-standby.txt', 'search_freeze_standby_runtime'),
+  ];
+  const logs = [summaryArtifact('logs/logcat.txt', 'logcat_slice')];
+
+  for (const item of [
+    ...candidateArtifacts,
+    ...activeRouteLineArtifacts,
+  ]) {
+    writeArtifact(path.join(evidenceRoot, item.path), 'png');
+  }
+  writeArtifact(
+    path.join(evidenceRoot, searchFreezeArtifacts[0].path),
+    'destinationSearchMapFrozen=true\nstandbyMapActive=true\nliveWebViewWake=false\n',
+  );
+  writeArtifact(
+    path.join(evidenceRoot, logs[0].path),
+    'I/ECS: Navigate provider-backed Android sweep complete\nI/ECS: logcat redacted\n',
+  );
+
+  return writeArtifact(
+    path.join(evidenceRoot, 'provider-summary.json'),
+    JSON.stringify(
+      providerSummary({
+        androidArtifacts: {
+          candidatePinsActions: candidateArtifacts,
+          activeRouteLineContext: activeRouteLineArtifacts,
+          searchFreezeStandby: searchFreezeArtifacts,
+          logs,
+        },
+        ...overrides,
+      }),
+      null,
+      2,
+    ),
+  );
+}
+
+function writeDefaultReferenceArtifacts(tempRoot) {
+  [
+    '.smoke/campops-android-qa/candidate-viewport-entry.png',
+    '.smoke/campops-android-qa/candidate-viewport-navigate-here-action.png',
+    '.smoke/campops-android-qa/candidate-viewport-save-camp-action.png',
+    '.smoke/campops-android-qa/candidate-viewport-report-unusable-action.png',
+    '.smoke/campops-android-qa/phone-candidate-viewport-popup-actions.png',
+    '.smoke/navigate-deep/04-start-guidance.png',
+    '.smoke/navigate-deep/08-minimized-guidance.png',
+    '.smoke/navigate-deep/09-active-readiness-reopen.png',
+    '.smoke/campops-android-qa/candidate-viewport-actions-logcat.txt',
+    '.smoke/navigate-deep/final-navigate-log-errors.txt',
+  ].forEach((relativePath) => writeArtifact(path.join(tempRoot, relativePath), 'reference artifact'));
 }
 
 test('Navigate provider Android evidence validates sanitized provider-backed candidate/action and active-route context', () => {
@@ -104,6 +191,114 @@ test('Navigate provider Android evidence validates sanitized provider-backed can
   const serialized = JSON.stringify(manifest);
   assert.doesNotMatch(serialized, /raw_json|provider_record_id|must-not-appear|api[_-]?key/i);
   assert.doesNotMatch(serialized, /"latitude"|"longitude"|"lat"|"lng"/i);
+});
+
+test('Navigate provider Android evidence ingests artifact paths and roles from sanitized provider summaries', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ecs-navigate-provider-push-button-'));
+  const providerSummaryPath = writePushButtonProviderSummary(tempRoot);
+  const manifest = buildNavigateProviderAndroidEvidenceManifest({
+    rootDir: tempRoot,
+    generatedAt: '2026-07-08T18:10:00.000Z',
+    evidenceSource: 'real_android_provider_sweep',
+    providerSummaryPath,
+  });
+  const validation = validateNavigateProviderAndroidEvidenceManifest(manifest, {
+    rootDir: tempRoot,
+    artifactExists: fs.existsSync,
+    artifactRead: (filePath) => fs.readFileSync(filePath, 'utf8'),
+  });
+
+  assert.equal(manifest.status, 'ready_for_handoff_review');
+  assert.equal(manifest.androidArtifacts.candidatePinsActions.length, 5);
+  assert.equal(manifest.androidArtifacts.searchFreezeStandby.length, 1);
+  assert.deepEqual(manifest.androidArtifactValidation.candidatePinsActions.missingRoles, []);
+  assert.equal(manifest.androidArtifactValidation.searchFreezeStandby.status, 'verified');
+  assert.equal(manifest.androidArtifactValidation.logs.status, 'verified');
+  assert.equal(validation.repeatableSweepReady, true);
+  assert.deepEqual(validation.blockers, []);
+});
+
+test('Navigate provider Android evidence reports precise blockers for incomplete Android artifact lanes', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ecs-navigate-provider-artifact-blockers-'));
+  const providerSummaryPath = writePushButtonProviderSummary(tempRoot, {
+    androidArtifacts: {
+      candidatePinsActions: [
+        summaryArtifact('captures/candidate-pin-visible.png', 'candidate_pin_visible'),
+        summaryArtifact('captures/candidate-navigate-here-action.png', 'navigate_here_action'),
+      ],
+      activeRouteLineContext: [],
+      searchFreezeStandby: [
+        summaryArtifact('perf/search-freeze-standby.txt', 'search_freeze_standby_runtime'),
+      ],
+      logs: [summaryArtifact('logs/logcat.txt', 'logcat_slice')],
+    },
+  });
+  fs.writeFileSync(
+    path.join(tempRoot, 'android-sweep', 'perf', 'search-freeze-standby.txt'),
+    'gfxinfo captured without map freeze markers\n',
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(tempRoot, 'android-sweep', 'logs', 'logcat.txt'),
+    'E AndroidRuntime: FATAL EXCEPTION: main\nAuthorization: Bearer should-not-ship\n',
+    'utf8',
+  );
+
+  const manifest = buildNavigateProviderAndroidEvidenceManifest({
+    rootDir: tempRoot,
+    generatedAt: '2026-07-08T18:10:00.000Z',
+    evidenceSource: 'real_android_provider_sweep',
+    providerSummaryPath,
+  });
+  const validation = validateNavigateProviderAndroidEvidenceManifest(manifest, {
+    rootDir: tempRoot,
+    artifactExists: fs.existsSync,
+    artifactRead: (filePath) => fs.readFileSync(filePath, 'utf8'),
+  });
+
+  assert.equal(validation.repeatableSweepReady, false);
+  assert.ok(validation.blockers.includes('candidate_pin_action_artifact_roles_incomplete'));
+  assert.ok(validation.blockers.includes('active_route_line_context_artifact_missing'));
+  assert.ok(validation.blockers.includes('search_freeze_standby_artifact_unverified'));
+  assert.ok(validation.blockers.includes('navigate_android_logcat_contains_fatal_or_redbox'));
+  assert.ok(validation.blockers.includes('navigate_android_logcat_contains_secret_or_raw_payload'));
+  assert.match(
+    validation.blockerMessages.join('\n'),
+    /Candidate pin\/action artifacts missing roles: save_camp_action, report_unusable_action, dismiss_action/,
+  );
+  assert.match(validation.blockerMessages.join('\n'), /Logcat artifact contains fatal\/redbox markers/);
+});
+
+test('Navigate provider Android evidence does not accept old reference artifacts for a real provider sweep', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ecs-navigate-provider-reference-blocked-'));
+  writeDefaultReferenceArtifacts(tempRoot);
+  const providerSummaryPath = writePushButtonProviderSummary(tempRoot, {
+    androidArtifacts: {
+      searchFreezeStandby: [
+        summaryArtifact('perf/search-freeze-standby.txt', 'search_freeze_standby_runtime'),
+      ],
+    },
+  });
+
+  const manifest = buildNavigateProviderAndroidEvidenceManifest({
+    rootDir: tempRoot,
+    generatedAt: '2026-07-08T18:10:00.000Z',
+    evidenceSource: 'real_android_provider_sweep',
+    providerSummaryPath,
+  });
+  const validation = validateNavigateProviderAndroidEvidenceManifest(manifest, {
+    rootDir: tempRoot,
+    artifactExists: fs.existsSync,
+    artifactRead: (filePath) => fs.readFileSync(filePath, 'utf8'),
+  });
+
+  assert.equal(validation.repeatableSweepReady, false);
+  assert.ok(validation.blockers.includes('candidate_pin_action_same_run_artifacts_missing'));
+  assert.ok(validation.blockers.includes('active_route_line_same_run_artifact_missing'));
+  assert.ok(validation.blockers.includes('navigate_android_logcat_same_run_artifact_missing'));
+  assert.equal(manifest.androidArtifactValidation.candidatePinsActions.status, 'blocked');
+  assert.equal(manifest.androidArtifactValidation.activeRouteLineContext.status, 'blocked');
+  assert.equal(manifest.androidArtifactValidation.logs.status, 'blocked');
 });
 
 test('Navigate provider Android evidence blocks fixture-only or missing real provider summaries', () => {
@@ -164,4 +359,26 @@ test('Navigate provider Android evidence rejects raw payloads, precise coordinat
   assert.ok(validation.blockers.includes('provider_summary_contains_raw_payload_or_secret'));
   assert.ok(validation.blockers.includes('provider_summary_contains_precise_coordinates'));
   assert.ok(validation.blockers.includes('candidate_actions_incomplete'));
+});
+
+test('Navigate provider Android evidence CLI prints actionable strict-gate blocker messages', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ecs-navigate-provider-cli-blockers-'));
+  const manifestPath = path.join(tempRoot, 'manifest.json');
+  let output = '';
+
+  const exitCode = runNavigateProviderAndroidEvidenceCli({
+    args: ['--strict', `--out=${manifestPath}`, '--evidence-source=existing_android_partial'],
+    rootDir: tempRoot,
+    stdout: {
+      write(chunk) {
+        output += chunk;
+      },
+    },
+  });
+
+  assert.equal(exitCode, 1);
+  assert.match(output, /Navigate provider Android evidence: BLOCKED/);
+  assert.match(output, /Provider summary missing: pass --provider-summary=<sanitized-summary\.json>/);
+  assert.match(output, /Search freeze\/standby runtime artifact missing/);
+  assert.match(output, /Logcat artifact missing/);
 });

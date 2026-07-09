@@ -37,10 +37,10 @@ function readArtifact(filePath) {
   }
 }
 
-function formatResult(manifest, validation, outputPath) {
+function formatResult(manifest, validation, outputPath, rootDir = root) {
   const lines = [
     `Navigate provider Android evidence: ${validation.repeatableSweepReady ? 'READY FOR HANDOFF REVIEW' : 'BLOCKED'}`,
-    `Manifest: ${path.relative(root, outputPath)}`,
+    `Manifest: ${path.relative(rootDir, outputPath)}`,
     `Evidence source: ${manifest.evidenceSource}`,
     `Provider candidate evidence: ${manifest.providerBackedCandidateEvidence.status}`,
     `Candidate/action artifacts: ${manifest.androidArtifacts.candidatePinsActions.length}`,
@@ -51,6 +51,9 @@ function formatResult(manifest, validation, outputPath) {
 
   if (validation.blockers.length > 0) {
     lines.push('', 'Blockers:');
+    const blockerLines = validation.blockerMessages?.length ? validation.blockerMessages : validation.blockers;
+    for (const blocker of blockerLines) lines.push(`- ${blocker}`);
+    lines.push('', 'Blocker codes:');
     for (const blocker of validation.blockers) lines.push(`- ${blocker}`);
   }
 
@@ -74,10 +77,11 @@ function formatResult(manifest, validation, outputPath) {
 export function runNavigateProviderAndroidEvidenceCli(options = {}) {
   const args = options.args ?? process.argv.slice(2);
   const stdout = options.stdout ?? process.stdout;
+  const rootDir = options.rootDir ?? root;
   const jsonOnly = hasFlag(args, 'json');
   const strict = args.includes(STRICT_FLAG);
   const output = valueFor(args, 'out', DEFAULT_NAVIGATE_PROVIDER_ANDROID_MANIFEST);
-  const manifestPath = path.isAbsolute(output) ? output : path.join(root, output);
+  const manifestPath = path.isAbsolute(output) ? output : path.join(rootDir, output);
   const providerSummaryPath = valueFor(args, 'provider-summary');
   const evidenceSource = valueFor(
     args,
@@ -86,7 +90,7 @@ export function runNavigateProviderAndroidEvidenceCli(options = {}) {
   );
 
   const manifest = buildNavigateProviderAndroidEvidenceManifest({
-    rootDir: root,
+    rootDir,
     manifestPath,
     evidenceSource,
     providerSummaryPath,
@@ -94,17 +98,18 @@ export function runNavigateProviderAndroidEvidenceCli(options = {}) {
     activeRouteLineScreenshots: valuesFor(args, 'active-route-line-screenshot'),
     searchFreezeArtifacts: valuesFor(args, 'search-freeze-artifact'),
     logs: valuesFor(args, 'log'),
+    artifactRead: readArtifact,
   });
 
-  const outputPath = writeNavigateProviderAndroidEvidenceManifest(manifest, { rootDir: root });
+  const outputPath = writeNavigateProviderAndroidEvidenceManifest(manifest, { rootDir });
   const validation = validateNavigateProviderAndroidEvidenceManifest(manifest, {
-    rootDir: root,
+    rootDir,
     artifactExists: fs.existsSync,
     artifactRead: readArtifact,
   });
 
   if (jsonOnly) stdout.write(`${JSON.stringify({ manifest, validation }, null, 2)}\n`);
-  else stdout.write(formatResult(manifest, validation, outputPath));
+  else stdout.write(formatResult(manifest, validation, outputPath, rootDir));
 
   return strict && !validation.repeatableSweepReady ? 1 : 0;
 }
