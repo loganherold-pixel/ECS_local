@@ -33,6 +33,7 @@ const COMMAND_3D_FOLLOW_PITCH = 70;
 const COMMAND_3D_ACTIVE_FOLLOW_OFFSET: [number, number] = [0, 72];
 const COMMAND_3D_FREE_DRIVE_OFFSET: [number, number] = [0, 56];
 const COMMAND_3D_LIVE_MAP_DEFER_MS = 90000;
+const DASHBOARD_COMMAND_FALLBACK_MAX_VISUAL_POINTS = 72;
 const COMMAND_3D_MAP_VIEW_STORAGE_KEY = 'ecs_dashboard_command_3d_map_view';
 
 type RouteRenderMode = 'idle' | 'preview' | 'active' | 'completed' | 'selected';
@@ -79,6 +80,26 @@ function isCommand3DMapViewKey(value: string | null | undefined): value is Comma
 function readPersistedCommand3DMapView(): Command3DMapViewKey {
   const stored = command3DMapViewPreference.get(COMMAND_3D_MAP_VIEW_STORAGE_KEY);
   return isCommand3DMapViewKey(stored) ? stored : DEFAULT_COMMAND_3D_MAP_VIEW;
+}
+
+function simplifyDashboardCommandFallbackRoutePoints<T extends { lat: number; lng: number }>(points: T[]): T[] {
+  if (points.length <= DASHBOARD_COMMAND_FALLBACK_MAX_VISUAL_POINTS) return points;
+  const lastIndex = points.length - 1;
+  const step = lastIndex / (DASHBOARD_COMMAND_FALLBACK_MAX_VISUAL_POINTS - 1);
+  const sampled: T[] = [];
+
+  for (let i = 0; i < DASHBOARD_COMMAND_FALLBACK_MAX_VISUAL_POINTS; i += 1) {
+    const index = i === DASHBOARD_COMMAND_FALLBACK_MAX_VISUAL_POINTS - 1
+      ? lastIndex
+      : Math.round(i * step);
+    const point = points[index];
+    const previous = sampled[sampled.length - 1];
+    if (point && (!previous || previous.lat !== point.lat || previous.lng !== point.lng)) {
+      sampled.push(point);
+    }
+  }
+
+  return sampled;
 }
 
 function useDeferredCommandMapLiveMode(selected: boolean): boolean {
@@ -691,7 +712,7 @@ export function Mini3DFollowMap({
   options?: WidgetRenderOptions;
   selected?: boolean;
 }) {
-  const commandMapLiveReady = useDeferredCommandMapLiveMode(selected);
+  const commandMapLiveDeferredReady = useDeferredCommandMapLiveMode(selected);
   const {
     mapToken,
     routeSession,
@@ -706,6 +727,8 @@ export function Mini3DFollowMap({
   const [followLocked, setFollowLocked] = useState(true);
   const [mapViewKey, setMapViewKey] = useState<Command3DMapViewKey>(() => readPersistedCommand3DMapView());
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const commandMapRerouteStandby = routeSession.isRerouting || routeSession.routeStatusKind === 'rerouting';
+  const commandMapLiveReady = commandMapLiveDeferredReady && !commandMapRerouteStandby;
   const liveGpsBearing = normalizeBearingDeg(options?.gpsHeadingDeg);
   const routeSessionBearing = normalizeBearingDeg(routeSession.headingDeg);
   const activeMapView = useMemo(
@@ -925,12 +948,22 @@ function NavigateMiniMap({
 }) {
   const guidance = buildGuidanceLines(routeSession);
   const resolvedMapStyle = useMemo(() => [styles.mapRenderer, mapStyle], [mapStyle]);
+  const fallbackRoutePoints = useMemo(
+    () => simplifyDashboardCommandFallbackRoutePoints(routePoints),
+    [routePoints],
+  );
+  const fallbackProgressPoints = useMemo(
+    () => simplifyDashboardCommandFallbackRoutePoints(progressPoints),
+    [progressPoints],
+  );
 
   return (
     <View style={[styles.mapFrame, frameStyle]}>
       <MapRenderer
         points={routePoints}
         progressPoints={progressPoints}
+        fallbackRoutePoints={liveMapEnabled ? [] : fallbackRoutePoints}
+        fallbackProgressPoints={liveMapEnabled ? [] : fallbackProgressPoints}
         mapStyle={mapStyleKey}
         mapboxToken={mapToken || ''}
         showUserLocation={showUserLocation}

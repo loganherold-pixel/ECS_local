@@ -8565,6 +8565,10 @@ const MapRenderer = React.memo(function MapRenderer({
     () => normalizePointList(fallbackRoutePoints),
     [fallbackRoutePoints],
   );
+  const fallbackOnlyProgressRouteCoords = useMemo(
+    () => normalizePointList(fallbackProgressPoints),
+    [fallbackProgressPoints],
+  );
   const fallbackRouteCoords = useMemo(
     () => {
       if (liveMapDisabled && fallbackOnlyRouteCoords.length > 1) {
@@ -8577,11 +8581,15 @@ const MapRenderer = React.memo(function MapRenderer({
     [fallbackOnlyRouteCoords, liveMapDisabled, payload.routeCoords],
   );
   const fallbackProgressRouteCoords = useMemo(
-    () =>
-      payload.progressRouteCoords.length > 1
+    () => {
+      if (liveMapDisabled && fallbackOnlyProgressRouteCoords.length > 1) {
+        return fallbackOnlyProgressRouteCoords;
+      }
+      return payload.progressRouteCoords.length > 1
         ? payload.progressRouteCoords
-        : normalizePointList(fallbackProgressPoints),
-    [fallbackProgressPoints, payload.progressRouteCoords],
+        : fallbackOnlyProgressRouteCoords;
+    },
+    [fallbackOnlyProgressRouteCoords, liveMapDisabled, payload.progressRouteCoords],
   );
   const hasFallbackGeometry = useMemo(
     () =>

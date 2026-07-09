@@ -141,15 +141,25 @@ assert(
 
 assert(
   navigateSurfaceWidget.includes('const COMMAND_3D_LIVE_MAP_DEFER_MS = 90000;') &&
+    navigateSurfaceWidget.includes('const DASHBOARD_COMMAND_FALLBACK_MAX_VISUAL_POINTS = 72;') &&
+    navigateSurfaceWidget.includes('function simplifyDashboardCommandFallbackRoutePoints') &&
     navigateSurfaceWidget.includes('function useDeferredCommandMapLiveMode(selected: boolean)') &&
-    navigateSurfaceWidget.includes('const commandMapLiveReady = useDeferredCommandMapLiveMode(selected);') &&
+    navigateSurfaceWidget.includes('const commandMapLiveDeferredReady = useDeferredCommandMapLiveMode(selected);') &&
+    navigateSurfaceWidget.includes('const commandMapRerouteStandby = routeSession.isRerouting || routeSession.routeStatusKind === \'rerouting\';') &&
+    navigateSurfaceWidget.includes('const commandMapLiveReady = commandMapLiveDeferredReady && !commandMapRerouteStandby;') &&
+    navigateSurfaceWidget.includes('const fallbackRoutePoints = useMemo(') &&
+    navigateSurfaceWidget.includes('const fallbackProgressPoints = useMemo(') &&
+    navigateSurfaceWidget.includes('fallbackRoutePoints={liveMapEnabled ? [] : fallbackRoutePoints}') &&
+    navigateSurfaceWidget.includes('fallbackProgressPoints={liveMapEnabled ? [] : fallbackProgressPoints}') &&
     navigateSurfaceWidget.includes('mapInteractive={commandMapLiveReady}') &&
     navigateSurfaceWidget.includes('liveMapEnabled={commandMapLiveReady}') &&
     navigateSurfaceWidget.includes("standbyWakeDisabled={guidanceVariant !== 'command3d' || !mapInteractive}") &&
     mapRenderer.includes('liveMapDisabled?: boolean;') &&
     mapRenderer.includes('liveMapDisabled = false') &&
     mapRenderer.includes('!liveMapDisabled') &&
-    mapRenderer.includes('liveMapDisabled || !shouldLoadMap'),
+    mapRenderer.includes('liveMapDisabled || !shouldLoadMap') &&
+    mapRenderer.includes('const fallbackOnlyProgressRouteCoords = useMemo(') &&
+    mapRenderer.includes('liveMapDisabled && fallbackOnlyProgressRouteCoords.length > 1'),
   'Selected dashboard 3D command map should defer live WebView activation long enough for dashboard startup and Navigate handoff to settle first.',
 );
 
