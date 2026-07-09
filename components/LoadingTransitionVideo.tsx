@@ -14,6 +14,8 @@ const STARTUP_LOADING_VIDEO_ENABLED = Platform.OS !== 'android';
 export default function LoadingTransitionVideo() {
   const [videoFailed, setVideoFailed] = useState(!STARTUP_LOADING_VIDEO_ENABLED);
   const [videoReady, setVideoReady] = useState(false);
+  const animatedFallbackVisible = STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);
+  const staticFallbackVisible = !STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);
 
   return (
     <View style={styles.screen}>
@@ -26,9 +28,14 @@ export default function LoadingTransitionVideo() {
         />
       ) : null}
       <View pointerEvents="none" style={styles.tint} />
-      {!videoReady || videoFailed ? (
+      {animatedFallbackVisible ? (
         <View pointerEvents="none" style={styles.loadingFallback}>
           <ActivityIndicator size="small" color={TACTICAL.amber} />
+        </View>
+      ) : null}
+      {staticFallbackVisible ? (
+        <View pointerEvents="none" style={styles.staticLoadingFallback}>
+          <View style={styles.staticLoadingGlyph} />
         </View>
       ) : null}
       <View pointerEvents="none" style={styles.legalOverlay}>
@@ -163,6 +170,19 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  staticLoadingFallback: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  staticLoadingGlyph: {
+    width: 16,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: TACTICAL.amber,
+    opacity: 0.9,
+    transform: [{ rotate: '-28deg' }],
   },
   legalOverlay: {
     position: 'absolute',

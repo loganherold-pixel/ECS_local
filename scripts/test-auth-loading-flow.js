@@ -448,5 +448,25 @@ assertIncludes(
   'clearInterval(cycleTimer);',
   'The loading video cycle timer should be cleaned up on unmount.',
 );
+assertIncludes(
+  videoSource,
+  'const animatedFallbackVisible = STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);',
+  'Animated loading fallback should be limited to platforms where the transition video is enabled.',
+);
+assertIncludes(
+  videoSource,
+  'const staticFallbackVisible = !STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);',
+  'Android loading fallback should use a static indicator so cold-start waits do not continuously repaint.',
+);
+assertIncludes(
+  videoSource,
+  '{animatedFallbackVisible ? (',
+  'The ActivityIndicator should be gated behind the animated fallback flag.',
+);
+assertIncludes(
+  videoSource,
+  '{staticFallbackVisible ? (',
+  'The Android fallback should render a static visual marker instead of an ActivityIndicator.',
+);
 
 console.log('Auth loading flow regression checks passed.');

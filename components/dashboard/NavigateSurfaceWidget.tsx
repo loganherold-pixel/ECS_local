@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
-import MapRenderer from '../navigate/MapRenderer';
 import type { CameraCommand, CameraMode } from '../navigate/MapRenderer';
+import MapFallbackSurface from '../navigate/MapFallbackSurface';
 import { TACTICAL } from '../../lib/theme';
 import { getMapboxToken, getMapboxTokenSync, type MapStyleKey } from '../../lib/mapConfig';
 import { createPersistedKeyValueCache } from '../../lib/keyValuePersistence';
@@ -35,6 +35,7 @@ const COMMAND_3D_FREE_DRIVE_OFFSET: [number, number] = [0, 56];
 const COMMAND_3D_LIVE_MAP_DEFER_MS = 90000;
 const DASHBOARD_COMMAND_FALLBACK_MAX_VISUAL_POINTS = 72;
 const COMMAND_3D_MAP_VIEW_STORAGE_KEY = 'ecs_dashboard_command_3d_map_view';
+const MapRenderer = React.lazy(() => import('../navigate/MapRenderer'));
 
 type RouteRenderMode = 'idle' | 'preview' | 'active' | 'completed' | 'selected';
 type NextTurnStripTone = 'active' | 'warning';
@@ -100,6 +101,10 @@ function simplifyDashboardCommandFallbackRoutePoints<T extends { lat: number; ln
   }
 
   return sampled;
+}
+
+function toFallbackRouteCoords(points: { lat: number; lng: number }[]): [number, number][] {
+  return points.map((point) => [point.lng, point.lat]);
 }
 
 function useDeferredCommandMapLiveMode(selected: boolean): boolean {
@@ -956,36 +961,57 @@ function NavigateMiniMap({
     () => simplifyDashboardCommandFallbackRoutePoints(progressPoints),
     [progressPoints],
   );
+  const fallbackRouteCoords = useMemo(() => toFallbackRouteCoords(fallbackRoutePoints), [fallbackRoutePoints]);
+  const fallbackProgressCoords = useMemo(
+    () => toFallbackRouteCoords(fallbackProgressPoints),
+    [fallbackProgressPoints],
+  );
+  const fallbackMapSurface = (
+    <MapFallbackSurface
+      routeCoords={fallbackRouteCoords}
+      progressRouteCoords={fallbackProgressCoords}
+      userLocation={gpsLocation}
+      compact={surfaceMode === 'compact'}
+      transparentBackground={guidanceVariant === 'command3d'}
+      reducedDetail={!liveMapEnabled}
+      routeColor="#C48A2C"
+      routeHaloColor="rgba(196, 138, 44, 0.22)"
+    />
+  );
 
   return (
     <View style={[styles.mapFrame, frameStyle]}>
-      <MapRenderer
-        points={routePoints}
-        progressPoints={progressPoints}
-        fallbackRoutePoints={liveMapEnabled ? [] : fallbackRoutePoints}
-        fallbackProgressPoints={liveMapEnabled ? [] : fallbackProgressPoints}
-        mapStyle={mapStyleKey}
-        mapboxToken={mapToken || ''}
-        showUserLocation={showUserLocation}
-        followUser={shouldFollowUser && !cameraCommand}
-        userLocation={gpsLocation}
-        vehicleHeading={headingDeg}
-        motionPriority={motionPriority}
-        interactive={mapInteractive}
-        liveMapDisabled={!liveMapEnabled}
-        isLoading={!mapToken}
-        hasToken={!!mapToken}
-        cameraMode={cameraMode}
-        cameraCommand={cameraCommand ?? null}
-        cameraCommandTrigger={cameraCommandTrigger}
-        onUserDrag={onUserDrag}
-        routeRenderMode={routeRenderMode}
-        routeColor="#C48A2C"
-        progressColor="#F7D67A"
-        surfaceMode={surfaceMode}
-        standbyWakeDisabled={guidanceVariant !== 'command3d' || !mapInteractive}
-        style={resolvedMapStyle}
-      />
+      {liveMapEnabled ? (
+        <React.Suspense fallback={fallbackMapSurface}>
+          <MapRenderer
+            points={routePoints}
+            progressPoints={progressPoints}
+            fallbackRoutePoints={liveMapEnabled ? [] : fallbackRoutePoints}
+            fallbackProgressPoints={liveMapEnabled ? [] : fallbackProgressPoints}
+            mapStyle={mapStyleKey}
+            mapboxToken={mapToken || ''}
+            showUserLocation={showUserLocation}
+            followUser={shouldFollowUser && !cameraCommand}
+            userLocation={gpsLocation}
+            vehicleHeading={headingDeg}
+            motionPriority={motionPriority}
+            interactive={mapInteractive}
+            liveMapDisabled={!liveMapEnabled}
+            isLoading={!mapToken}
+            hasToken={!!mapToken}
+            cameraMode={cameraMode}
+            cameraCommand={cameraCommand ?? null}
+            cameraCommandTrigger={cameraCommandTrigger}
+            onUserDrag={onUserDrag}
+            routeRenderMode={routeRenderMode}
+            routeColor="#C48A2C"
+            progressColor="#F7D67A"
+            surfaceMode={surfaceMode}
+            standbyWakeDisabled={guidanceVariant !== 'command3d' || !mapInteractive}
+            style={resolvedMapStyle}
+          />
+        </React.Suspense>
+      ) : fallbackMapSurface}
 
       {!mapToken ? (
         <View style={styles.loadingOverlay}>

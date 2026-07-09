@@ -142,12 +142,21 @@ assert(
 
 assert(
   navigateSurfaceWidget.includes('const COMMAND_3D_LIVE_MAP_DEFER_MS = 90000;') &&
+    !navigateSurfaceWidget.includes("import MapRenderer from '../navigate/MapRenderer';") &&
+    navigateSurfaceWidget.includes("import MapFallbackSurface from '../navigate/MapFallbackSurface';") &&
+    navigateSurfaceWidget.includes("const MapRenderer = React.lazy(() => import('../navigate/MapRenderer'));") &&
     navigateSurfaceWidget.includes('const DASHBOARD_COMMAND_FALLBACK_MAX_VISUAL_POINTS = 72;') &&
     navigateSurfaceWidget.includes('function simplifyDashboardCommandFallbackRoutePoints') &&
     navigateSurfaceWidget.includes('function useDeferredCommandMapLiveMode(selected: boolean)') &&
     navigateSurfaceWidget.includes('const commandMapLiveDeferredReady = useDeferredCommandMapLiveMode(selected);') &&
     navigateSurfaceWidget.includes('const commandMapRerouteStandby = routeSession.isRerouting || routeSession.routeStatusKind === \'rerouting\';') &&
     navigateSurfaceWidget.includes('const commandMapLiveReady = commandMapLiveDeferredReady && !commandMapRerouteStandby;') &&
+    navigateSurfaceWidget.includes('const fallbackMapSurface = (') &&
+    navigateSurfaceWidget.includes('{liveMapEnabled ? (') &&
+    navigateSurfaceWidget.includes('<React.Suspense fallback={fallbackMapSurface}>') &&
+    navigateSurfaceWidget.includes('<MapFallbackSurface') &&
+    navigateSurfaceWidget.includes('routeCoords={fallbackRouteCoords}') &&
+    navigateSurfaceWidget.includes('progressRouteCoords={fallbackProgressCoords}') &&
     navigateSurfaceWidget.includes('const fallbackRoutePoints = useMemo(') &&
     navigateSurfaceWidget.includes('const fallbackProgressPoints = useMemo(') &&
     navigateSurfaceWidget.includes('fallbackRoutePoints={liveMapEnabled ? [] : fallbackRoutePoints}') &&
