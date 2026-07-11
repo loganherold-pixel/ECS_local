@@ -199,6 +199,36 @@ assert.strictEqual(poorDisplaySample.accepted, false, 'Poor-accuracy GPS should 
 assert.strictEqual(poorDisplaySample.reason, 'poor_accuracy');
 assert.deepStrictEqual(poorDisplaySample.sample, baseSample);
 
+const emulatorJumpSample = {
+  ...baseSample,
+  latitude: 39.02,
+  longitude: -104.02,
+  timestamp: 2000,
+};
+const defaultTeleportDisplaySample = motion.resolveGpsMapDisplaySample(baseSample, emulatorJumpSample);
+assert.strictEqual(
+  defaultTeleportDisplaySample.accepted,
+  false,
+  'The display pin should still reject teleport-class jumps by default.',
+);
+assert.strictEqual(defaultTeleportDisplaySample.reason, 'teleport');
+assert.deepStrictEqual(defaultTeleportDisplaySample.sample, baseSample);
+
+const providerCorrectionDisplaySample = motion.resolveGpsMapDisplaySample(baseSample, emulatorJumpSample, {
+  allowTeleport: true,
+});
+assert.strictEqual(
+  providerCorrectionDisplaySample.accepted,
+  true,
+  'Emulator/manual provider corrections should be able to move the display pin when explicitly allowed.',
+);
+assert.strictEqual(providerCorrectionDisplaySample.reason, 'accepted');
+assert.deepStrictEqual(
+  providerCorrectionDisplaySample.sample,
+  emulatorJumpSample,
+  'Explicitly accepted provider corrections should move directly to the fresh coordinate instead of smoothing across a huge jump.',
+);
+
 const smoothedDisplaySample = motion.resolveGpsMapDisplaySample(baseSample, {
   ...baseSample,
   latitude: 39.001,

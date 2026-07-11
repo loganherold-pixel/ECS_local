@@ -4378,9 +4378,11 @@ const latestGpsMapLocation = useMemo(() => {
 }, [gps.hasFix, gps.position, gps.rawGPS.hasFix, gps.rawGPS.position]);
 
 const mapDisplayGpsInput = useMemo(() => {
-  if (!gps.hasFix || !gps.position) return null;
-  return toMapMotionGpsSample(gps.position);
-}, [gps.hasFix, gps.position]);
+  const position = gps.rawGPS.position ?? gps.position;
+  const hasFix = gps.rawGPS.hasFix || gps.hasFix;
+  if (!hasFix || !position) return null;
+  return toMapMotionGpsSample(position);
+}, [gps.hasFix, gps.position, gps.rawGPS.hasFix, gps.rawGPS.position]);
 
 useEffect(() => {
   if (!mapDisplayGpsInput) {
@@ -4394,6 +4396,7 @@ useEffect(() => {
   const decision = resolveGpsMapDisplaySample(
     mapDisplayGpsSampleRef.current,
     mapDisplayGpsInput,
+    { allowTeleport: true },
   );
   if (!decision.sample || decision.sample === mapDisplayGpsSampleRef.current) return;
 

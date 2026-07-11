@@ -52,6 +52,7 @@ export type GpsSampleMotionDecision = {
 
 export type GpsMapDisplaySampleOptions = GpsSampleMotionOptions & {
   smoothingRatio?: number;
+  allowTeleport?: boolean;
 };
 
 export type GpsMapDisplaySampleDecision = {
@@ -254,6 +255,16 @@ export function resolveGpsMapDisplaySample(
   options: GpsMapDisplaySampleOptions = {},
 ): GpsMapDisplaySampleDecision {
   const decision = classifyGpsSampleForMotion(previous, next, options);
+  if (!decision.accepted && decision.reason === 'teleport' && options.allowTeleport && isValidSample(next)) {
+    return {
+      sample: next,
+      accepted: true,
+      reason: 'accepted',
+      distanceM: decision.distanceM,
+      impliedSpeedMph: decision.impliedSpeedMph,
+    };
+  }
+
   if (!decision.accepted || !next) {
     return {
       sample: previous ?? null,

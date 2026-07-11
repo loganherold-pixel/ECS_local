@@ -209,15 +209,27 @@ assert.ok(
   navigateSource.includes('const mapDisplayGpsInput = useMemo(') &&
     navigateSource.includes('resolveGpsMapDisplaySample') &&
     navigateSource.includes('const stableGpsMapLocation = useMemo('),
-  'Navigate should derive the rendered GPS pin from the throttled, stabilized display lane.',
+  'Navigate should derive the rendered GPS pin from the provider-aware, stabilized display lane.',
 );
 assert.ok(
   (() => {
     const start = navigateSource.indexOf('const mapDisplayGpsInput = useMemo(');
     const end = navigateSource.indexOf('useEffect(() => {\n  if (!mapDisplayGpsInput)', start);
-    return start >= 0 && end > start && !navigateSource.slice(start, end).includes('rawGPS');
+    const block = start >= 0 && end > start ? navigateSource.slice(start, end) : '';
+    return (
+      block.includes('const position = gps.rawGPS.position ?? gps.position;') &&
+      block.includes('const hasFix = gps.rawGPS.hasFix || gps.hasFix;') &&
+      block.includes('return toMapMotionGpsSample(position);') &&
+      block.includes('gps.rawGPS.hasFix') &&
+      block.includes('gps.rawGPS.position')
+    );
   })(),
-  'Navigate should not feed raw GPS directly into the render-facing map pin path.',
+  'Navigate should prefer raw provider GPS fixes before passing them through the render-facing stabilization lane.',
+);
+assert.ok(
+  navigateSource.includes('allowTeleport: true') &&
+    navigateSource.includes('resolveGpsMapDisplaySample('),
+  'Navigate display GPS should explicitly allow provider/emulator correction jumps to move the visible pin.',
 );
 assert.ok(
   navigateSource.includes('const mapRendererUserLocation = destinationSearchMapFrozen') &&
