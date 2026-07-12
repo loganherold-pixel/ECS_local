@@ -1000,7 +1000,7 @@ export default function BluPowerSourcesScreen() {
                 <Text style={[styles.heroEyebrow, { color: palette.textMuted }]}>BLUESTACK UNIFIED SCANNER</Text>
                 <Text style={[styles.heroTitle, { color: palette.text }]}>{connections.globalSummaryLabel}</Text>
                 <Text style={[styles.heroBody, { color: palette.textMuted }]}>
-                  Scan for approved OBD2, power, propane, and water monitor connections. Cloud/API power devices stay selectable when native Bluetooth is unavailable, while consumer Bluetooth noise stays hidden.
+                  Scan for approved OBD2, power, propane, and water monitor connections while consumer Bluetooth noise stays hidden.
                 </Text>
               </View>
             </View>
@@ -1022,27 +1022,6 @@ export default function BluPowerSourcesScreen() {
                 label="Selected"
                 value={connections.bluestackSummary.selectedCount}
                 color={palette.amber}
-                mutedColor={palette.textMuted}
-              />
-            </View>
-
-            <View style={styles.heroStatsRow}>
-              <SummaryStat
-                label="Cloud/API"
-                value={connections.bluestackSummary.cloudApiCount}
-                color={TACTICAL.info}
-                mutedColor={palette.textMuted}
-              />
-              <SummaryStat
-                label="Parser Pend"
-                value={connections.bluestackSummary.parserPendingCount}
-                color={TACTICAL.warning}
-                mutedColor={palette.textMuted}
-              />
-              <SummaryStat
-                label="Native Build"
-                value={connections.bluestackSummary.nativeBuildRequiredCount}
-                color={palette.text}
                 mutedColor={palette.textMuted}
               />
             </View>

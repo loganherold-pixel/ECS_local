@@ -9,7 +9,7 @@ EcoFlow support is hybrid at the scanner level. Cloud/API remains the most compl
 | Path | Current status | Live telemetry source |
 | --- | --- | --- |
 | EcoFlow Cloud/API | Implemented through `lib/ecoflowCloudConnection.ts`, `src/power/cloud/providers/EcoFlowCloudProvider.ts`, and `supabase/functions/ecoflow/index.ts` | EcoFlow quota/status data fetched server-side through Supabase |
-| EcoFlow local BLE | Device discovery, native connection, readable characteristic polling, and conservative text/structured payload decoding are present through `lib/livePowerBleProviders.ts` and `src/power/drivers/vendors/EcoFlowDriver.ts` | Live only when decoded SOC/watts/voltage/current/runtime/temperature fields are received |
+| EcoFlow local BLE | Unified discovery, native connection, authenticated session negotiation, notification capture, and conservative model decoding are present through `lib/livePowerBleProviders.ts`, `lib/ecoflowBleSessionProbe.ts`, and `src/power/drivers/vendors/EcoFlowDriver.ts` | Live only when decoded SOC/watts/voltage/current/runtime/temperature fields are received |
 | Hybrid cloud + BLE | Discovery records can preserve nearby BLE evidence while routing telemetry to cloud when a cloud source exists | Cloud-capable records prefer cloud; pure BLE can attempt native decoding |
 | Mock/stub data | Not used for live EcoFlow telemetry | Mock data must remain dev-only and visibly non-live |
 
@@ -17,12 +17,13 @@ EcoFlow credentials stay server-side in the Supabase Edge Function. Mobile code 
 
 ## Why A Local EcoFlow Connect May Still Show No Live Data
 
-Glacier can advertise over BLE and ECS can attach to the native BLE transport. A local BLE session can still fail telemetry setup when the device does not expose readable decoded fields ECS can parse:
+EcoFlow devices can advertise over BLE and ECS can attach to the native transport. A local BLE session can still fail telemetry setup when the device does not produce decoded fields ECS can trust:
 
-- no confirmed Glacier service/characteristic map is promoted to release behavior,
-- no validated EcoFlow write/auth handshake is sent,
-- no notification subscription is started for encrypted/proprietary telemetry,
+- the model exposes an unsupported service/characteristic layout,
+- account-bound BLE authorization is rejected or unavailable,
+- the device does not emit notifications before the capture window closes,
 - readable characteristics do not contain text/JSON/key-value EcoFlow metrics,
+- decrypted packets do not match a validated model decoder,
 - the parser refuses to fabricate SOC, watts, voltage, current, runtime, or temperature from unknown binary payloads.
 
 The local BLE path now routes through the native power adapter. If no decoded fields arrive, the shared BLE telemetry lifecycle reports telemetry setup failure rather than marking the device live:
@@ -115,7 +116,9 @@ Telemetry is not marked live unless decoded numeric EcoFlow values exist.
 
 ## Local BLE Current Status
 
-Local BLE EcoFlow rows now use the same native power provider path as other BLU power brands. The parser can promote readable structured/text telemetry into live BLU fields, including SOC, input/output watts, solar watts, runtime, temperature, voltage, current, capacity, cycles, and health. It deliberately does not infer values from unknown binary packets.
+Local BLE EcoFlow rows now use the same native power provider path as other BLU power brands. Protocol-capable devices negotiate their encrypted session by default using an ephemeral private key generated with `expo-crypto`; account-bound auth payloads still come from the server-side EcoFlow Edge Function. Set `EXPO_PUBLIC_ECS_ECOFLOW_BLE_DYNAMIC_SESSION_PROBE=0` only as an emergency field-test opt-out.
+
+The parser can promote readable structured/text telemetry and validated decrypted packets into live BLU fields, including SOC, input/output watts, solar watts, runtime, temperature, voltage, current, capacity, cycles, and health. It deliberately does not infer values from unknown binary packets.
 
 ## Fast Replay Workflow
 
@@ -137,9 +140,8 @@ The replay capture intentionally omits raw manufacturer data, provider secrets, 
 The next field pass should add, with evidence:
 
 - model-specific service UUIDs,
-- writable control/auth characteristic,
-- notification characteristic,
-- handshake command encoding,
+- model-specific writable and notification characteristic evidence,
+- account-auth acceptance or explicit rejection evidence,
 - binary telemetry packet decoder when a model requires encrypted/proprietary frames,
 - keepalive and disconnect cleanup,
 - tests proving no mock data is promoted as live.

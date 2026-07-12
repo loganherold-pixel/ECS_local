@@ -29,6 +29,9 @@ function loadTsModule(filePath, extraRequire = {}) {
 const keyData = loadTsModule(path.join(root, 'lib', 'ecoflowBleKeyData.ts'));
 const probeModule = loadTsModule(path.join(root, 'lib', 'ecoflowBleSessionProbe.ts'), {
   './ecoflowBleKeyData': keyData,
+  'expo-crypto': {
+    getRandomBytes: (length) => Uint8Array.from({ length }, (_, index) => index + 1),
+  },
 });
 
 const fixtureSession = {
@@ -44,6 +47,19 @@ const fixtureSession = {
     },
   ],
 };
+
+assert.strictEqual(
+  probeModule.isEcoFlowBleDynamicSessionProbeEnabled(),
+  true,
+  'EcoFlow protocol-capable BLE devices should negotiate a session without a hidden build flag',
+);
+global.__ECS_ECOFLOW_BLE_DYNAMIC_SESSION_PROBE = false;
+assert.strictEqual(
+  probeModule.isEcoFlowBleDynamicSessionProbeEnabled(),
+  false,
+  'EcoFlow BLE session negotiation must retain an explicit emergency opt-out',
+);
+delete global.__ECS_ECOFLOW_BLE_DYNAMIC_SESSION_PROBE;
 const privateKeyBytes = Array.from(Buffer.from(fixtureSession.privateKeyBase64, 'base64'));
 
 const publicKeyNotify =

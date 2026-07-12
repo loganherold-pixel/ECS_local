@@ -149,7 +149,7 @@ export function useOBD2Scanner(): OBD2ScannerHookResult {
   const status = obd2Adapter.getStatus();
 
   const startScan = useCallback(async (durationMs?: number) => {
-    await obd2Adapter.startScan(durationMs, 'user_open_tools');
+    await obd2Adapter.startScan(durationMs, 'user_manual_scan');
   }, []);
 
   const stopScan = useCallback(async (reason?: string) => {

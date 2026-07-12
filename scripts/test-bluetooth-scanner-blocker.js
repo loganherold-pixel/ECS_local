@@ -267,12 +267,12 @@ assert(
   unified.includes("discoverEcoFlowDevicesForUnifiedScanner") &&
     unified.includes("from './ecoflowUnifiedScannerDiscovery';") &&
     unified.includes('const ecoFlowDiscovery = discoverEcoFlowDevicesForUnifiedScanner()') &&
-    unified.includes("const ecoFlowBleDiscovery = nativeBluetoothUnsupported") &&
-    unified.includes("ecsProviderRegistry.getProvider('ecoflow')") &&
-    unified.includes('power_ble_discovery_start') &&
+    !unified.includes('const ecoFlowBleDiscovery =') &&
+    !unified.includes('power_ble_discovery_start') &&
+    unified.includes('routedPowerDiscoveries') &&
     unified.includes('setDiscoveredPowerDevices((current) =>') &&
-    unified.includes('Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, ecoFlowBleDiscovery, classicDiscovery])'),
-  'manual scanner flow must run EcoFlow API/native BLE discovery in parallel with BLE and bridge results into the unified device list',
+    unified.includes('Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, classicDiscovery])'),
+  'manual scanner flow must use one native BLE scan for EcoFlow and OBD2 while cloud discovery remains parallel',
 );
 assert(
   unified.includes('discoverClassicBluetoothDevicesForUnifiedScanner') &&
@@ -302,8 +302,8 @@ assert(
     unified.includes('const nativeBleScanWindow = bleScan.then(async () => {') &&
     unified.includes('await sleep(UNIFIED_BLUETOOTH_SCAN_DURATION_MS);') &&
     unified.includes("await stopScan('unified_scan_window_complete');") &&
-    unified.includes('Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, ecoFlowBleDiscovery, classicDiscovery])') &&
-    !unified.includes('Promise.allSettled([bleScan, ecoFlowDiscovery, ecoFlowBleDiscovery, classicDiscovery])'),
+    unified.includes('Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, classicDiscovery])') &&
+    !unified.includes('Promise.allSettled([bleScan, ecoFlowDiscovery, classicDiscovery])'),
   'manual scanner completion must wait for the native BLE discovery window so first-tap scans return all currently advertising devices',
 );
 const scannerState = read('lib/scannerDeviceListState.ts');

@@ -15,6 +15,7 @@ import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { fsGetInfo } from '../../lib/fsCompat';
 import ExpeditionReplayDebriefPanel from './ExpeditionReplayDebriefPanel';
 import ExpeditionNotableMomentsTimeline from './ExpeditionNotableMomentsTimeline';
+import { TripLearningSummaryCard } from '../expedition/TripLearningSummaryCard';
 import {
   BadgeGrid,
   BadgeMilestoneList,
@@ -550,6 +551,8 @@ function ExpeditionDetailView({
           recap={trip.recap}
           tripStartedAt={trip.startedAt}
         />
+
+        <TripLearningSummaryCard trip={trip} />
 
         {expeditionReplayDebriefEnabled ? (
           <ExpeditionReplayDebriefPanel

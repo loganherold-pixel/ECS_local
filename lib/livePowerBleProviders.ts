@@ -231,6 +231,21 @@ function createProvider(
         raw: device,
       }));
     },
+    rememberDiscoveredDevice: (device: EcsDiscoveredDevice) => {
+      const raw = device.raw && typeof device.raw === 'object'
+        ? device.raw as Record<string, unknown>
+        : {};
+      adapter.rememberDiscoveredDevice({
+        id: device.id,
+        name: device.name,
+        model: device.model,
+        rssi: Number.isFinite(device.rssi) ? device.rssi : -90,
+        serviceUUIDs: Array.isArray(raw.serviceUUIDs)
+          ? raw.serviceUUIDs.filter((uuid): uuid is string => typeof uuid === 'string')
+          : undefined,
+        manufacturerData: typeof raw.manufacturerData === 'string' ? raw.manufacturerData : null,
+      });
+    },
     getConnectedDevices: () => adapter.getState().connectedDevices,
     getRegisteredDevices: () => bluDeviceRegistry.getByProvider(providerId),
     getLatestReadings: (): EcsNormalizedReading[] => {

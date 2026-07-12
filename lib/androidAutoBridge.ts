@@ -25,7 +25,12 @@
  *   - Falls back gracefully when NativeModule is unavailable (web/iOS)
  *   - Does NOT modify the mobile ECS dashboard
  */
-import { Platform, NativeModules } from 'react-native';
+import {
+  AppState,
+  Platform,
+  NativeModules,
+  type AppStateStatus,
+} from 'react-native';
 import { vehicleDisplayStore } from './vehicleDisplayStore';
 import { vehicleDisplayModeEngine } from './vehicleDisplayModeEngine';
 import { breadcrumbTracker } from './breadcrumbTracker';
@@ -105,16 +110,22 @@ function getNativeModule(): ECSAndroidAutoNative | null {
 let _isRunning = false;
 let _dataPushTimer: ReturnType<typeof setInterval> | null = null;
 let _actionPollTimer: ReturnType<typeof setInterval> | null = null;
+let _connectionProbeTimer: ReturnType<typeof setInterval> | null = null;
 let _storeUnsubscribe: (() => void) | null = null;
 let _modeEngineUnsubscribe: (() => void) | null = null;
+let _appStateSubscription: { remove: () => void } | null = null;
+let _appState: AppStateStatus = AppState.currentState;
 let _isConnected = false;
 let _lastPushTimestamp = 0;
-let _wasConnected = false;
 let _lastInactiveLogKey: string | null = null;
 
-// Push intervals
-const DATA_PUSH_INTERVAL_MS = 2_000;   // Push data every 2 seconds
-const ACTION_POLL_INTERVAL_MS = 1_000;  // Poll actions every 1 second
+// Connected displays get responsive actions and a low-frequency state heartbeat.
+// Disconnected devices only check the inexpensive native connection flag.
+const DATA_PUSH_INTERVAL_MS = 10_000;
+const ACTION_POLL_INTERVAL_MS = 1_000;
+const CONNECTED_PROBE_INTERVAL_MS = 10_000;
+const DISCONNECTED_PROBE_INTERVAL_MS = 15_000;
+const BACKGROUND_DISCONNECTED_PROBE_INTERVAL_MS = 60_000;
 
 // Listeners
 type Listener = () => void;
@@ -153,6 +164,61 @@ function _logInactive(reason: 'not_android' | 'missing_native_module'): void {
   );
 }
 
+function _isAppForeground(): boolean {
+  return _appState !== 'background' && _appState !== 'inactive';
+}
+
+function _clearRuntimeTimers(): void {
+  if (_dataPushTimer) {
+    clearInterval(_dataPushTimer);
+    _dataPushTimer = null;
+  }
+  if (_actionPollTimer) {
+    clearInterval(_actionPollTimer);
+    _actionPollTimer = null;
+  }
+  if (_connectionProbeTimer) {
+    clearInterval(_connectionProbeTimer);
+    _connectionProbeTimer = null;
+  }
+}
+
+function _reconcileRuntimeTimers(): void {
+  _clearRuntimeTimers();
+  if (!_isRunning) return;
+
+  if (_isConnected) {
+    _dataPushTimer = setInterval(() => {
+      _pushData().catch(() => {});
+    }, DATA_PUSH_INTERVAL_MS);
+    _actionPollTimer = setInterval(() => {
+      _pollActions().catch(() => {});
+    }, ACTION_POLL_INTERVAL_MS);
+    _connectionProbeTimer = setInterval(() => {
+      _checkConnection().catch(() => {});
+    }, CONNECTED_PROBE_INTERVAL_MS);
+    return;
+  }
+
+  const probeInterval = _isAppForeground()
+    ? DISCONNECTED_PROBE_INTERVAL_MS
+    : BACKGROUND_DISCONNECTED_PROBE_INTERVAL_MS;
+  _connectionProbeTimer = setInterval(() => {
+    _checkConnection().catch(() => {});
+  }, probeInterval);
+}
+
+function _handleAppStateChange(nextState: AppStateStatus): void {
+  if (_appState === nextState) return;
+  _appState = nextState;
+
+  // A connected vehicle display remains live when the phone UI backgrounds.
+  // Only the disconnected connection probe needs a lower background cadence.
+  if (_isRunning && !_isConnected) {
+    _reconcileRuntimeTimers();
+  }
+}
+
 // ── Data Push ───────────────────────────────────────────────
 
 /**
@@ -160,6 +226,7 @@ function _logInactive(reason: 'not_android' | 'missing_native_module'): void {
  * Pushes all four screen data blobs plus mode and indicators.
  */
 async function _pushData(): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
   const native = getNativeModule();
   if (!native) return;
 
@@ -274,6 +341,7 @@ function _buildActionsData(mode: VehicleDisplayMode): Record<string, unknown> {
  * Push map data specifically (called on map data changes).
  */
 async function _pushMapData(mapData: VehicleMapData): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
   const native = getNativeModule();
   if (!native) return;
 
@@ -288,6 +356,7 @@ async function _pushMapData(mapData: VehicleMapData): Promise<void> {
  * Push weather data specifically.
  */
 async function _pushWeatherData(weatherData: VehicleWeatherData): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
   const native = getNativeModule();
   if (!native) return;
 
@@ -302,6 +371,7 @@ async function _pushWeatherData(weatherData: VehicleWeatherData): Promise<void> 
  * Push display mode change to native layer.
  */
 async function _pushMode(mode: VehicleDisplayMode): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
   const native = getNativeModule();
   if (!native) return;
 
@@ -320,6 +390,7 @@ async function _pushMode(mode: VehicleDisplayMode): Promise<void> {
  * When an action is found, dispatch it through the VehicleCompanionManager.
  */
 async function _pollActions(): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
   const native = getNativeModule();
   if (!native) return;
 
@@ -362,11 +433,13 @@ async function _pollActions(): Promise<void> {
  * Notifies the VehicleCompanionManager on connection state changes.
  */
 async function _checkConnection(): Promise<boolean> {
+  if (!_isRunning) return false;
   const native = getNativeModule();
   if (!native) return false;
 
   try {
     const connected = await native.isConnected();
+    if (!_isRunning) return false;
     if (connected !== _isConnected) {
       _isConnected = connected;
       vehicleDisplayStore.setConnected(connected);
@@ -380,7 +453,13 @@ async function _checkConnection(): Promise<boolean> {
         console.log('[AndroidAutoBridge] Android Auto disconnected — companion manager notified');
       }
 
+      _reconcileRuntimeTimers();
       _notify();
+
+      if (connected) {
+        _pushData().catch(() => {});
+        _pushMode(vehicleDisplayModeEngine.getCurrentMode()).catch(() => {});
+      }
     }
     return connected;
   } catch {
@@ -395,7 +474,7 @@ async function _checkConnection(): Promise<boolean> {
  * Pushes updated data to the native Android Auto layer.
  */
 function _onStoreChange(): void {
-  if (!_isRunning) return;
+  if (!_isRunning || !_isConnected) return;
 
   // Debounce: don't push more than once per second
   const now = Date.now();
@@ -409,7 +488,7 @@ function _onStoreChange(): void {
  * Pushes mode updates to the native Android Auto layer.
  */
 function _onModeChange(): void {
-  if (!_isRunning) return;
+  if (!_isRunning || !_isConnected) return;
 
   const mode = vehicleDisplayModeEngine.getCurrentMode();
   _pushMode(mode).catch(() => {});
@@ -467,28 +546,18 @@ export const androidAutoBridge = {
     }
 
     _isRunning = true;
+    _isConnected = false;
+    _appState = AppState.currentState;
     console.log('[AndroidAutoBridge] Starting Android Auto bridge');
-
-    // Initial connection check
-    _checkConnection().catch(() => {});
-
-    // Initial data push
-    _pushData().catch(() => {});
 
     // Subscribe to store changes
     _storeUnsubscribe = vehicleDisplayStore.subscribe(_onStoreChange);
     _modeEngineUnsubscribe = vehicleDisplayModeEngine.subscribe(_onModeChange);
+    _appStateSubscription = AppState.addEventListener('change', _handleAppStateChange);
 
-    // Start periodic data push
-    _dataPushTimer = setInterval(() => {
-      _pushData().catch(() => {});
-      _checkConnection().catch(() => {});
-    }, DATA_PUSH_INTERVAL_MS);
-
-    // Start periodic action polling
-    _actionPollTimer = setInterval(() => {
-      _pollActions().catch(() => {});
-    }, ACTION_POLL_INTERVAL_MS);
+    // Stay inexpensive until a native vehicle-display session is confirmed.
+    _reconcileRuntimeTimers();
+    _checkConnection().catch(() => {});
   },
 
   /**
@@ -501,15 +570,11 @@ export const androidAutoBridge = {
     _isRunning = false;
 
     console.log('[AndroidAutoBridge] Stopping Android Auto bridge');
+    _clearRuntimeTimers();
 
-    if (_dataPushTimer) {
-      clearInterval(_dataPushTimer);
-      _dataPushTimer = null;
-    }
-
-    if (_actionPollTimer) {
-      clearInterval(_actionPollTimer);
-      _actionPollTimer = null;
+    if (_appStateSubscription) {
+      _appStateSubscription.remove();
+      _appStateSubscription = null;
     }
 
     if (_storeUnsubscribe) {
@@ -521,6 +586,9 @@ export const androidAutoBridge = {
       _modeEngineUnsubscribe();
       _modeEngineUnsubscribe = null;
     }
+
+    _isConnected = false;
+    vehicleDisplayStore.setConnected(false);
   },
 
   /**
@@ -541,6 +609,7 @@ export const androidAutoBridge = {
     heading: number,
     speedMph: number
   ): Promise<void> {
+    if (!_isRunning || !_isConnected) return;
     const native = getNativeModule();
     if (!native) return;
 
@@ -559,6 +628,7 @@ export const androidAutoBridge = {
     hasActiveRoute: boolean,
     hasExpeditionTrack: boolean
   ): Promise<void> {
+    if (!_isRunning || !_isConnected) return;
     const native = getNativeModule();
     if (!native) return;
 
@@ -582,6 +652,7 @@ export const androidAutoBridge = {
    * Called when action availability changes.
    */
   async pushActions(mode: VehicleDisplayMode): Promise<void> {
+    if (!_isRunning || !_isConnected) return;
     const native = getNativeModule();
     if (!native) return;
 
@@ -604,6 +675,8 @@ export const androidAutoBridge = {
     try {
       await native.clearAll();
       _isConnected = false;
+      vehicleDisplayStore.setConnected(false);
+      _reconcileRuntimeTimers();
       _notify();
     } catch (err) {
       console.warn('[AndroidAutoBridge] Clear failed:', err);

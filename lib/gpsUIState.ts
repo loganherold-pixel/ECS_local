@@ -23,7 +23,7 @@
  *   - Position updates: at most 1/sec
  *   - Speed/heading updates: at most 1/sec
  *   - No stale drift: latest value always applied on tick
- *   - Clean shutdown: `stop()` clears interval
+ *   - No idle wakeups: a trailing timer exists only while raw data is pending
  */
 
 import type { GPSPosition, GPSLocationOutput } from './useGPSLocation';
@@ -80,8 +80,9 @@ class GPSUIStateStore {
   private latestRaw: GPSLocationOutput | null = null;
   private dirty = false;
 
-  // Throttle timer
-  private intervalId: ReturnType<typeof setInterval> | null = null;
+  // Demand-driven trailing timer. Unlike a permanent interval, this creates no
+  // JavaScript wakeups when GPS is idle or suspended by the app lifecycle.
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private refCount = 0; // Number of active consumers
 
   // ── Public API ─────────────────────────────────────────
@@ -112,22 +113,19 @@ class GPSUIStateStore {
     // so the UI doesn't show stale "UNAVAILABLE" on mount
     if (this.state.lastEmitTs === 0) {
       this.applyLatest();
+      return;
     }
+
+    this.scheduleFlush();
   }
 
   /**
-   * Start the throttle timer. Called when a consumer mounts.
-   * Uses ref-counting so multiple consumers share one timer.
+   * Enable throttled delivery for a consumer.
+   * Uses ref-counting so multiple consumers share one pending timer.
    */
   start(): void {
     this.refCount++;
-    if (this.intervalId != null) return; // Already running
-
-    this.intervalId = setInterval(() => {
-      if (this.dirty) {
-        this.applyLatest();
-      }
-    }, THROTTLE_INTERVAL_MS);
+    this.scheduleFlush();
   }
 
   /**
@@ -138,18 +136,18 @@ class GPSUIStateStore {
     this.refCount = Math.max(0, this.refCount - 1);
     if (this.refCount > 0) return; // Other consumers still active
 
-    if (this.intervalId != null) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
+    if (this.flushTimer != null) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
     }
   }
 
   /** Force-stop regardless of ref count (cleanup) */
   forceStop(): void {
     this.refCount = 0;
-    if (this.intervalId != null) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
+    if (this.flushTimer != null) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
     }
   }
 
@@ -164,7 +162,7 @@ class GPSUIStateStore {
 
   /** Whether the throttle timer is running */
   isRunning(): boolean {
-    return this.intervalId != null;
+    return this.refCount > 0;
   }
 
   // ── Internal ───────────────────────────────────────────
@@ -194,6 +192,20 @@ class GPSUIStateStore {
     } else {
       this.dirty = false;
     }
+  }
+
+  private scheduleFlush(): void {
+    if (this.refCount <= 0 || !this.dirty || this.flushTimer != null) return;
+
+    const elapsedMs = Date.now() - this.state.lastEmitTs;
+    const delayMs = Math.max(0, THROTTLE_INTERVAL_MS - elapsedMs);
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      if (this.dirty) {
+        this.applyLatest();
+      }
+      this.scheduleFlush();
+    }, delayMs);
   }
 
   private hasChanged(next: GPSUIState): boolean {

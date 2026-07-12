@@ -138,6 +138,7 @@ let _lastAltitudeFt: number | null = null;
 let _pointsRecorded = 0;
 let _lastDistanceMilestone = 0;
 let _lastElevationMilestone = 0;
+let _tripLearningQueue: Promise<void> = Promise.resolve();
 
 // Listeners
 type Listener = () => void;
@@ -147,6 +148,15 @@ function _notify(): void {
   for (const fn of _listeners) {
     try { fn(); } catch {}
   }
+}
+
+function queueTripLearningWork(work: () => Promise<unknown>): void {
+  _tripLearningQueue = _tripLearningQueue
+    .catch(() => undefined)
+    .then(async () => {
+      await work();
+    })
+    .catch(() => undefined);
 }
 
 // ── Config Management ────────────────────────────────────────
@@ -242,15 +252,35 @@ function collectResourceSnapshot(distanceMi: number): ResourceSnapshot {
     }
   } catch {}
 
-  // Try to read OBD telemetry
+  // Try to read OBD telemetry with the existing normalized source contract.
   try {
-    const { VehicleTelemetryStore } = require('../src/vehicle-telemetry/VehicleTelemetryStore');
-    const obdState = VehicleTelemetryStore?.getState?.();
-    if (obdState?.connected && obdState?.latestData) {
-      const data = obdState.latestData;
-      if (data.coolantTemp != null) snapshot.coolantTempF = Math.round(data.coolantTemp * 9 / 5 + 32);
+    const telemetryModule = require('../src/vehicle-telemetry/VehicleTelemetryStore');
+    const telemetryStore = telemetryModule?.vehicleTelemetryStore ?? telemetryModule?.VehicleTelemetryStore;
+    const data = telemetryStore?.getTelemetrySnapshot?.();
+    if (data) {
+      if (data.coolantTempF != null) snapshot.coolantTempF = data.coolantTempF;
       if (data.rpm != null) snapshot.engineRpm = data.rpm;
       if (data.batteryVoltage != null) snapshot.batteryVoltage = data.batteryVoltage;
+      if (data.isLive && data.confidence === 'high' && data.updatedAt) {
+        const sourceTruth = {
+          id: `trip-recorder:${data.deviceId ?? 'vehicle'}:${data.updatedAt}`,
+          origin: 'live' as const,
+          authority: data.sourceLabel ?? 'Vehicle telemetry',
+          provider: data.source ?? null,
+          observedAt: data.updatedAt,
+          fetchedAt: null,
+          expiresAt: null,
+          confidence: 'high' as const,
+          coverage: 'complete' as const,
+          availability: 'usable' as const,
+          conflict: false,
+          warningCodes: [] as string[],
+        };
+        snapshot.sourceTruth = {
+          ...(snapshot.coolantTempF != null ? { coolantTempF: sourceTruth } : {}),
+          ...(snapshot.batteryVoltage != null ? { batteryVoltage: sourceTruth } : {}),
+        };
+      }
     }
   } catch {}
 
@@ -724,6 +754,15 @@ export const tripRecorderEngine = {
     // Persist
     persistActiveTrip();
 
+    const learningTrip = { ..._activeTrip };
+    queueTripLearningWork(async () => {
+      const [{ captureTripLearningDepartureForecast }, { resourceForecastEngine }] = await Promise.all([
+        import('./tripLearning/tripLearningAdapters'),
+        import('./resourceForecastEngine'),
+      ]);
+      await captureTripLearningDepartureForecast(learningTrip, resourceForecastEngine.getCurrent());
+    });
+
     console.log(TAG, `Recording started: ${tripId} — ${defaultName}`);
     _notify();
     return _activeTrip;
@@ -836,6 +875,11 @@ export const tripRecorderEngine = {
     saveTripLog(trips);
 
     const completedTrip = { ..._activeTrip };
+
+    queueTripLearningWork(async () => {
+      const { processTripRecorderOutcomeForLearning } = await import('./tripLearning/tripLearningAdapters');
+      await processTripRecorderOutcomeForLearning(completedTrip);
+    });
 
     // Clear active trip
     _recordingState = 'idle';

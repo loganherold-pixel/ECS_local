@@ -709,6 +709,7 @@ import {
 } from '../../lib/offlineTileSyncCoordinator';
 
 import { useThrottledGPS, type ThrottledGPSOutput } from '../../lib/useThrottledGPS';
+import { sharedGPSLocationStore } from '../../lib/sharedGPSLocation';
 import { resolveMapSurfaceMotionState } from '../../lib/mapSurfaceCoordinator';
 import { resolveRouteAheadBearingDeg } from '../../lib/dashboardNavigationChaseCamera';
 import {
@@ -4288,7 +4289,7 @@ function buildRouteConfidenceInputFromPreview(args: {
   const gpsCenteredRef = useRef(false);
   const gps = useThrottledGPS({
     enabled: isFocused,
-    highAccuracy: true,
+    highAccuracy: false,
     maxRetries: 5,
     retryIntervalMs: 3000,
   }) ?? EMPTY_THROTTLED_GPS;
@@ -4388,7 +4389,7 @@ function buildRouteConfidenceInputFromPreview(args: {
   }, [expeditionRuntime.state, refreshNavigateActiveConvoyContext]);
 
   useEffect(() => {
-    if (expeditionRuntime.state !== 'active' || !activeConvoyContext?.convoyId) {
+    if (!isFocused || expeditionRuntime.state !== 'active' || !activeConvoyContext?.convoyId) {
       return undefined;
     }
 
@@ -4402,10 +4403,10 @@ function buildRouteConfidenceInputFromPreview(args: {
     return () => {
       cancelled = true;
     };
-  }, [activeConvoyContext?.convoyId, expeditionRuntime.state]);
+  }, [activeConvoyContext?.convoyId, expeditionRuntime.state, isFocused]);
 
   useEffect(() => {
-    if (expeditionRuntime.state !== 'active' || !activeConvoyContext?.convoyId) {
+    if (!isFocused || expeditionRuntime.state !== 'active' || !activeConvoyContext?.convoyId) {
       return undefined;
     }
 
@@ -4416,7 +4417,7 @@ function buildRouteConfidenceInputFromPreview(args: {
     return () => {
       clearInterval(timer);
     };
-  }, [activeConvoyContext?.convoyId, expeditionRuntime.state]);
+  }, [activeConvoyContext?.convoyId, expeditionRuntime.state, isFocused]);
 
   useEffect(() => {
     if (expeditionRuntime.state === 'active' && activeConvoyContext?.convoyId) {
@@ -4597,7 +4598,7 @@ const weatherLocation = useMemo(
   [gps.hasFix, gps.position?.latitude, gps.position?.longitude],
 );
 const operationalWeather = useOperationalWeather({
-  enabled: true,
+  enabled: isFocused,
   gps: {
     lat: gps.position?.latitude ?? null,
     lng: gps.position?.longitude ?? null,
@@ -4645,7 +4646,7 @@ const toolsCurrentForecastSummary = useMemo(() => {
     sourceLabel: sourceLabel || 'Current-location weather unavailable',
   };
 }, [operationalWeather.snapshot]);
-useRemoteWeatherRouteWatcher({ enabled: true });
+useRemoteWeatherRouteWatcher({ enabled: isFocused });
 
 
 const tokenRetryCountRef = useRef(0);
@@ -5472,6 +5473,15 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     roadNavigation.uiMode === 'arrived' ||
     trailNavigation.uiMode === 'active' ||
     trailNavigation.uiMode === 'arrived';
+  useEffect(() => {
+    if (!isFocused || !activeNavigationRunning) return undefined;
+    return sharedGPSLocationStore.acquire({
+      enabled: true,
+      highAccuracy: true,
+      maxRetries: 5,
+      retryIntervalMs: 3000,
+    });
+  }, [activeNavigationRunning, isFocused]);
   const compassPowerSaveActive = !isFocused || !activeNavigationRunning;
 
   const currentGpsHeadingDeg = gps.position?.headingDeg ?? null;

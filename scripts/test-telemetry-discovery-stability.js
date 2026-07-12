@@ -26,6 +26,7 @@ for (const status of [
   assert(control.includes(`| '${status}'`) || control.includes(`'${status}'`), `Telemetry source status must include ${status}`);
 }
 assert(control.includes('TELEMETRY_SCAN_THROTTLE_MS'), 'Telemetry discovery must define a scan throttle window');
+assert(control.includes("| 'user_manual_scan'"), 'Telemetry discovery must distinguish an explicit user scan from automatic scan triggers');
 assert(control.includes('normalizeTelemetryScanDurationMs'), 'Telemetry discovery must clamp scan duration');
 assert(control.includes('mapObdStateToTelemetrySourceStatus'), 'Telemetry discovery must centralize OBD source status mapping');
 assert(control.includes(": 'not_configured'"), 'Idle unconfigured telemetry must map to not_configured');
@@ -39,6 +40,10 @@ assert(adapter.includes('lastScanFinishedAt: number | null'), 'OBD adapter statu
 assert(adapter.includes('lastScanTrigger: TelemetryScanTrigger | null'), 'OBD adapter status must expose lastScanTrigger');
 assert(adapter.includes("trigger: TelemetryScanTrigger = 'user_open_tools'"), 'OBD scans must default to user-opened tools');
 assert(adapter.includes('isTelemetryScanThrottleActive'), 'OBD scans must be throttled');
+assert(
+  adapter.includes("trigger !== 'user_manual_scan'"),
+  'A deliberate scanner-button press must bypass the post-scan cooldown',
+);
 assert(adapter.includes("reason: 'scan_throttled'"), 'Throttled scans must be represented as a quiet diagnostic');
 assert(adapter.includes('finishScanLifecycle'), 'OBD scan lifecycle must be finalized on early failures');
 assert(adapter.includes('if (this.isDestroyed || this.scanSessionId !== scanSessionId'), 'OBD scan callbacks must ignore stale/unmounted sessions');
@@ -60,12 +65,21 @@ assert(bridge.includes('if (!this.debug) return;'), 'Telemetry adapter bridge ro
 const scannerHook = read('src/vehicle-telemetry/useOBD2Scanner.ts');
 assert(scannerHook.includes('sourceStatus: TelemetrySourceStatus'), 'OBD scanner hook must expose sourceStatus');
 assert(scannerHook.includes('mountedRef.current'), 'OBD scanner hook must guard state updates after unmount');
-assert(scannerHook.includes("obd2Adapter.startScan(durationMs, 'user_open_tools')"), 'Hook startScan must mark scans as user-opened');
+assert(scannerHook.includes("obd2Adapter.startScan(durationMs, 'user_manual_scan')"), 'Hook startScan must mark scans as an explicit user request');
 
 const unified = read('lib/useUnifiedDeviceConnections.ts');
 assert(unified.includes('const rescan = useCallback(async () => {'), 'Unified device connection panel must keep manual rescan entry point');
 assert(unified.includes('SCANNER_SCAN_WINDOW_DEBOUNCE_MS'), 'Unified device connection panel must debounce manual scan windows');
 assert(unified.includes('scanInFlightRef.current'), 'Unified device connection panel must suppress overlapping scans');
+assert(
+  !unified.includes("const ecoFlowBleDiscovery =") &&
+    !unified.includes("provider.discoverDevices();"),
+  'Unified scanning must use one native BLE scan instead of a competing EcoFlow scan',
+);
+assert(
+  unified.includes('Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, classicDiscovery])'),
+  'Unified scanning may run cloud and classic checks beside one native BLE scan',
+);
 assert(unified.includes('mountedRef.current') && unified.includes("obd2Adapter.stopScan('unified_panel_unmount')"), 'Unified scanner must cancel OBD scanning on panel unmount');
 assert(!/useEffect\s*\(\s*\(\)\s*=>\s*\{[\s\S]{0,240}startScan\(/.test(unified), 'Unified scanner must not start scanning from a mount/render effect');
 

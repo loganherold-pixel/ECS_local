@@ -42,6 +42,9 @@ const vehicleTelemetryWidget = read('components/dashboard/VehicleTelemetryWidget
 const ecoFlowCloudDevicesScreen = read('app/power/devices.tsx');
 const powerDiscovery = read('src/features/power/services/powerDiscoveryService.ts');
 const powerScanner = read('src/features/power/components/PowerDeviceScanner.tsx');
+const nativeBleAdapter = read('lib/createNativeBleBluAdapter.ts');
+const livePowerBleProviders = read('lib/livePowerBleProviders.ts');
+const powerBrandAdapters = read('lib/powerBrandConnectionAdapters.ts');
 const appConfig = JSON.parse(read('app.json'));
 const androidManifest = read('android/app/src/main/AndroidManifest.xml');
 const blePermissions = read('src/power/ble/BlePermissions.ts');
@@ -94,6 +97,18 @@ assert(
     hook.includes('createBluestackScannerSummary') &&
     hook.includes('releaseAccessoryDevices'),
   'unified hook must expose normalized scanner devices, snapshot, Bluestack summary, and utility sensors',
+);
+assert(
+  !hook.includes('const ecoFlowBleDiscovery =') &&
+    !hook.includes('provider.discoverDevices();') &&
+    hook.includes('Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, classicDiscovery])'),
+  'The manual Bluestack action must run one authoritative native BLE scan while cloud discovery remains independent',
+);
+assert(
+  nativeBleAdapter.includes('rememberDiscoveredDevice(device: NativeBleDiscoveredDevice)') &&
+    livePowerBleProviders.includes('rememberDiscoveredDevice: (device: EcsDiscoveredDevice)') &&
+    powerBrandAdapters.includes('provider.rememberDiscoveredDevice?.({'),
+  'Unified scan metadata must be handed to the selected native power provider without a second scan',
 );
 assert(
   contract.includes('bluestack: BluestackDeviceIdentity') &&
@@ -235,6 +250,18 @@ assert(
     !deviceConnectionsScreen.includes('SectionFilterButton') &&
     !deviceConnectionsScreen.includes('label="Known"'),
   'Device Connections screen must show connected, remembered, and unified available Bluestack rows without failed production containers',
+);
+const scannerHeroStart = deviceConnectionsScreen.indexOf('styles.heroStatsRow');
+const scannerHeroEnd = deviceConnectionsScreen.indexOf('{connections.isDegraded', scannerHeroStart);
+const scannerHeroBlock = deviceConnectionsScreen.slice(scannerHeroStart, scannerHeroEnd);
+assert(
+  scannerHeroBlock.includes('label="Available"') &&
+    scannerHeroBlock.includes('label="Live"') &&
+    scannerHeroBlock.includes('label="Selected"') &&
+    !scannerHeroBlock.includes('label="Cloud/API"') &&
+    !scannerHeroBlock.includes('label="Parser Pend"') &&
+    !scannerHeroBlock.includes('label="Native Build"'),
+  'Bluestack active summary must show only Available, Live, and Selected',
 );
 assert(
   deviceConnectionsScreen.includes('Scan results are limited to approved ECS device pipelines') &&

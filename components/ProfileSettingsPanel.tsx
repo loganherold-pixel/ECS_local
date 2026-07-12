@@ -20,6 +20,7 @@ import type { ECSOperatorTrustMode } from '../lib/ai/operatorTrustTypes';
 import { AUTH_COPY } from '../lib/auth/authCopy';
 import type { ECSTopBannerTone } from '../lib/ui/topBannerTypes';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
+import { TripLearningPreferenceControl } from './expedition/TripLearningPreferenceControl';
 
 type ThemeChoice = 'dark' | 'light' | 'dynamic';
 
@@ -446,6 +447,8 @@ export default function ProfileSettingsPanel({
                 })}
               </View>
             </View>
+
+            <TripLearningPreferenceControl />
 
             {endActionLabel && onEndAction ? (
               <View style={styles.section}>

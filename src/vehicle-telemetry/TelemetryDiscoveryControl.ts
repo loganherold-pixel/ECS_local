@@ -15,6 +15,7 @@ export type TelemetrySourceStatus =
 
 export type TelemetryScanTrigger =
   | 'user_open_tools'
+  | 'user_manual_scan'
   | 'manual_reconnect'
   | 'auto_connect_startup'
   | 'controlled_retry';

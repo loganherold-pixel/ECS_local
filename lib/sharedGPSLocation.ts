@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { ecsLog } from './ecsLogger';
 import { ensureForegroundLocationPermission } from './locationPermissions';
 import type { GPSLocationOptions, GPSLocationOutput, GPSPosition } from './useGPSLocation';
 
 const M_TO_FT = 3.28084;
 const MPS_TO_MPH = 2.23694;
-const DISTANCE_INTERVAL_M = 1;
-const TIME_INTERVAL_MS = 1000;
+const HIGH_ACCURACY_DISTANCE_INTERVAL_M = 3;
+const HIGH_ACCURACY_TIME_INTERVAL_MS = 1_500;
+const BALANCED_DISTANCE_INTERVAL_M = 20;
+const BALANCED_TIME_INTERVAL_MS = 10_000;
 
 type Listener = () => void;
 
@@ -79,6 +81,8 @@ class SharedGPSLocationStore {
   private subscriptionRef: any = null;
   private watchIdRef: number | null = null;
   private retryTimerRef: ReturnType<typeof setTimeout> | null = null;
+  private appStateSubscription: { remove: () => void } | null = null;
+  private appState: AppStateStatus = AppState.currentState;
   private activeHighAccuracy: boolean | null = null;
   private startGeneration = 0;
   private retryCount = 0;
@@ -101,11 +105,15 @@ class SharedGPSLocationStore {
 
   acquire(options: GPSLocationOptions): () => void {
     const id = this.nextSubscriberId++;
+    this.ensureAppStateSubscription();
     this.subscribers.set(id, normalizeOptions(options));
     this.reconcileWatchers();
     return () => {
       this.subscribers.delete(id);
       this.reconcileWatchers();
+      if (this.subscribers.size === 0) {
+        this.removeAppStateSubscription();
+      }
     };
   }
 
@@ -186,7 +194,30 @@ class SharedGPSLocationStore {
     });
   }
 
+  private isAppForeground(): boolean {
+    return this.appState !== 'background' && this.appState !== 'inactive';
+  }
+
+  private ensureAppStateSubscription(): void {
+    if (this.appStateSubscription) return;
+    this.appState = AppState.currentState;
+    this.appStateSubscription = AppState.addEventListener('change', this.handleAppStateChange);
+  }
+
+  private removeAppStateSubscription(): void {
+    if (!this.appStateSubscription) return;
+    this.appStateSubscription.remove();
+    this.appStateSubscription = null;
+  }
+
+  private handleAppStateChange = (nextState: AppStateStatus): void => {
+    if (this.appState === nextState) return;
+    this.appState = nextState;
+    this.reconcileWatchers();
+  };
+
   private resolveActiveOptions(): SubscriberOptions | null {
+    if (!this.isAppForeground()) return null;
     const active = Array.from(this.subscribers.values()).filter((options) => options.enabled);
     if (active.length === 0) return null;
     return {
@@ -242,6 +273,7 @@ class SharedGPSLocationStore {
   }
 
   private scheduleRetry(options: SubscriberOptions, generation: number): void {
+    if (generation !== this.startGeneration || !this.resolveActiveOptions()) return;
     if (this.retryCount >= (options.maxRetries ?? 5)) {
       this.setState({
         isWatching: false,
@@ -303,6 +335,12 @@ class SharedGPSLocationStore {
       const accuracy = options.highAccuracy
         ? Location.Accuracy.BestForNavigation
         : Location.Accuracy.Balanced;
+      const distanceInterval = options.highAccuracy
+        ? HIGH_ACCURACY_DISTANCE_INTERVAL_M
+        : BALANCED_DISTANCE_INTERVAL_M;
+      const timeInterval = options.highAccuracy
+        ? HIGH_ACCURACY_TIME_INTERVAL_MS
+        : BALANCED_TIME_INTERVAL_MS;
 
       try {
         const initial = await Location.getCurrentPositionAsync({ accuracy });
@@ -318,8 +356,8 @@ class SharedGPSLocationStore {
       this.subscriptionRef = await Location.watchPositionAsync(
         {
           accuracy,
-          distanceInterval: DISTANCE_INTERVAL_M,
-          timeInterval: TIME_INTERVAL_MS,
+          distanceInterval,
+          timeInterval,
           mayShowUserSettingsDialog: true,
         },
         (loc) => {

@@ -1,5 +1,6 @@
 import { ec as EC, curves } from 'elliptic';
 import CryptoJS from 'crypto-js';
+import { getRandomBytes } from 'expo-crypto';
 
 import { ECOFLOW_BLE_KEY_DATA_BASE64 } from './ecoflowBleKeyData';
 
@@ -98,7 +99,7 @@ const ECOFLOW_BLE_ACCOUNT_AUTH_STATUS_LABELS: Record<number, string> = {
   0x07: 'maximum_devices_error',
 };
 
-function boolFromEnv(globalName: string, envNames: string[]): boolean {
+function boolFromEnv(globalName: string, envNames: string[], defaultValue = false): boolean {
   let raw: unknown = null;
   try {
     raw = (globalThis as Record<string, unknown>)[globalName];
@@ -106,14 +107,16 @@ function boolFromEnv(globalName: string, envNames: string[]): boolean {
   try {
     for (const envName of envNames) raw = raw ?? process.env?.[envName];
   } catch {}
-  return raw === true || raw === '1' || raw === 'true';
+  if (raw === true || raw === '1' || raw === 'true') return true;
+  if (raw === false || raw === '0' || raw === 'false') return false;
+  return defaultValue;
 }
 
 export function isEcoFlowBleDynamicSessionProbeEnabled(): boolean {
   return boolFromEnv('__ECS_ECOFLOW_BLE_DYNAMIC_SESSION_PROBE', [
     'EXPO_PUBLIC_ECS_ECOFLOW_BLE_DYNAMIC_SESSION_PROBE',
     'ECS_ECOFLOW_BLE_DYNAMIC_SESSION_PROBE',
-  ]);
+  ], true);
 }
 
 function stringFromEnv(globalName: string, envNames: string[]): string | null {
@@ -170,6 +173,10 @@ export function inferEcoFlowBlePacketVersionFromHints(hints: Array<string | null
 }
 
 function getSecureRandomBytes(length: number): number[] {
+  try {
+    return Array.from(getRandomBytes(length));
+  } catch {}
+
   const cryptoLike = (globalThis as { crypto?: { getRandomValues?: (array: Uint8Array) => Uint8Array } }).crypto;
   if (cryptoLike?.getRandomValues) {
     const bytes = new Uint8Array(length);

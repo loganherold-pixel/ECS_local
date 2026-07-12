@@ -2487,7 +2487,7 @@ export default function DispatchCadCommandCenter() {
   ]);
 
   useEffect(() => {
-    if (!recoveryCadSharingEnabled || !recoveryCadBackendContext || offlineMode || !isOnline) {
+    if (!isDispatchFocused || !recoveryCadSharingEnabled || !recoveryCadBackendContext || offlineMode || !isOnline) {
       return undefined;
     }
 
@@ -2532,6 +2532,7 @@ export default function DispatchCadCommandCenter() {
     commandIdentity,
     currentExpedition,
     activeConvoyControl,
+    isDispatchFocused,
     isOnline,
     offlineMode,
     persistDispatchCadEventLocally,

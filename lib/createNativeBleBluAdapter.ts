@@ -790,6 +790,31 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
       return this.scanPromise;
     }
 
+    rememberDiscoveredDevice(device: NativeBleDiscoveredDevice): void {
+      const id = String(device.id ?? '').trim();
+      if (!id) return;
+
+      const existing = this.discoveredDevices.find((candidate) => candidate.id === id);
+      const next: NativeBleDiscoveredDevice = {
+        ...existing,
+        ...device,
+        id,
+        name: String(device.name ?? existing?.name ?? `${config.displayName} Device`).trim() || `${config.displayName} Device`,
+        rssi: Number.isFinite(device.rssi) ? device.rssi : existing?.rssi ?? -90,
+        serviceUUIDs: Array.from(new Set([
+          ...(existing?.serviceUUIDs ?? []),
+          ...(device.serviceUUIDs ?? []),
+        ])),
+        manufacturerData: device.manufacturerData ?? existing?.manufacturerData ?? null,
+      };
+
+      this.discoveredDevices = [
+        ...this.discoveredDevices.filter((candidate) => candidate.id !== id),
+        next,
+      ].sort((left, right) => right.rssi - left.rssi);
+      this.notify();
+    }
+
     private async runScanForDevices(): Promise<NativeBleDiscoveredDevice[]> {
       if (Platform.OS === 'web') {
         bluLog(getBluVendorPrefix(config.provider), 'native_ble_scan_blocked', {
@@ -1556,7 +1581,7 @@ export function createNativeBleBluAdapter(config: NativeBleAdapterConfig) {
               providerName: config.displayName,
               phase: 'notification_capture',
               protocolStatus: protocolSupport.protocolStatus,
-              message: 'Set EXPO_PUBLIC_ECS_ECOFLOW_BLE_PROBE_PRIVATE_KEY_BASE64 before starting Expo to negotiate local EcoFlow BLE telemetry without replay capture.',
+              message: 'EcoFlow BLE session negotiation was explicitly disabled for this build.',
             },
             30_000,
           );

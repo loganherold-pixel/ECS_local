@@ -29,7 +29,7 @@
  *   connectivity.startMonitoring()
  *   connectivity.stopMonitoring()
  */
-import { Platform } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { ecsLog } from './ecsLogger';
 
 export type ConnectivityStatus = 'online' | 'offline' | 'reconnecting';
@@ -105,6 +105,8 @@ class ConnectivityMonitor {
   private _listeners: Set<StatusListener> = new Set();
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
   private _onlineCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private _appStateSubscription: { remove: () => void } | null = null;
+  private _appState: AppStateStatus = AppState.currentState;
   private _initialized = false;
   private _monitoringStarted = false;
   private _lastOnlineAt: string | null = null;
@@ -379,6 +381,8 @@ class ConnectivityMonitor {
     if (this._monitoringStarted) return;
     this._monitoringStarted = true;
     this._initialized = false;
+    this._appState = AppState.currentState;
+    this._appStateSubscription = AppState.addEventListener('change', this._handleAppStateChange);
 
     // Initial network type detection
     this._detectNetworkType();
@@ -407,12 +411,12 @@ class ConnectivityMonitor {
       }
     }
 
-    // Start offline polling (checks more frequently when offline)
-    this._startPolling();
-
-    // Initial reconciliation happens after listeners are attached so every
-    // downstream consumer sees the same first authoritative state.
-    void this._checkConnectivity();
+    if (this._isAppForeground()) {
+      // Initial reconciliation happens after listeners are attached so every
+      // downstream consumer sees the same first authoritative state.
+      this._startPolling();
+      void this._checkConnectivity();
+    }
   }
 
   /** Stop monitoring connectivity */
@@ -435,6 +439,10 @@ class ConnectivityMonitor {
 
     this._stopPolling();
     this._stopOnlineCheck();
+    if (this._appStateSubscription) {
+      this._appStateSubscription.remove();
+      this._appStateSubscription = null;
+    }
   }
 
   /** Force a connectivity check (useful after user action) */
@@ -450,7 +458,9 @@ class ConnectivityMonitor {
     if (this._initialized && this._status !== 'online' && !this._checkInFlight) {
       this._updateStatus('reconnecting');
     }
-    this._checkConnectivity();
+    if (this._isAppForeground()) {
+      this._checkConnectivity();
+    }
   };
 
   private _handleOfflineEvent = (): void => {
@@ -477,8 +487,34 @@ class ConnectivityMonitor {
         previousType: prevType,
       });
       // Trigger a full connectivity check to update reachability
-      this._checkConnectivity();
+      if (this._isAppForeground()) {
+        this._checkConnectivity();
+      }
     }
+  };
+
+  private _isAppForeground(): boolean {
+    return this._appState !== 'background' && this._appState !== 'inactive';
+  }
+
+  private _handleAppStateChange = (nextState: AppStateStatus): void => {
+    if (this._appState === nextState) return;
+    this._appState = nextState;
+
+    if (!this._isAppForeground()) {
+      this._stopPolling();
+      this._stopOnlineCheck();
+      return;
+    }
+
+    if (!this._monitoringStarted) return;
+    this._detectNetworkType();
+    if (this._status === 'online') {
+      this._startOnlineCheck();
+    } else {
+      this._startPolling();
+    }
+    void this._checkConnectivity();
   };
 
   private _updateStatus(newStatus: ConnectivityStatus): void {
@@ -539,6 +575,9 @@ class ConnectivityMonitor {
   }
 
   private _checkConnectivity(): Promise<boolean> {
+    if (!this._isAppForeground()) {
+      return Promise.resolve(this._status === 'online');
+    }
     if (this._checkInFlight) {
       return this._checkInFlight;
     }
@@ -674,6 +713,7 @@ class ConnectivityMonitor {
 
   private _startPolling(): void {
     this._stopPolling();
+    if (!this._monitoringStarted || !this._isAppForeground()) return;
     this._pollTimer = setInterval(() => {
       if (this._status === 'offline' || this._status === 'reconnecting') {
         this._checkConnectivity();
@@ -690,6 +730,7 @@ class ConnectivityMonitor {
 
   private _startOnlineCheck(): void {
     this._stopOnlineCheck();
+    if (!this._monitoringStarted || !this._isAppForeground()) return;
     this._onlineCheckTimer = setInterval(() => {
       this._checkConnectivity();
     }, Platform.OS === 'web' ? ONLINE_CHECK_INTERVAL_MS_WEB : ONLINE_CHECK_INTERVAL_MS_NATIVE);

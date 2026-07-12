@@ -646,6 +646,10 @@ type DiscoveredPowerDeviceLike = Partial<EcsDiscoveredDevice> & {
   category?: string | null;
   displayName?: string | null;
   sourceIds?: Partial<Record<UnifiedDiscoverySource, string>> | null;
+  serviceUUIDs?: string[] | null;
+  manufacturerData?: string | null;
+  serviceData?: Record<string, string> | null;
+  localName?: string | null;
 };
 
 type UnifiedDiscoveredPowerDevice = Omit<EcsDiscoveredDevice, 'provider'> & {
@@ -663,6 +667,10 @@ type UnifiedDiscoveredPowerDevice = Omit<EcsDiscoveredDevice, 'provider'> & {
   category?: string;
   displayName?: string;
   sourceIds?: Partial<Record<UnifiedDiscoverySource, string>>;
+  serviceUUIDs?: string[];
+  manufacturerData?: string | null;
+  serviceData?: Record<string, string>;
+  localName?: string | null;
 };
 
 function isTransientConnectError(error: string | null | undefined, errorCode?: string | null): boolean {
@@ -946,6 +954,25 @@ function normalizeDiscoveredPowerDevice(
     (raw?.sourceIds && typeof raw.sourceIds === 'object'
       ? raw.sourceIds as Partial<Record<UnifiedDiscoverySource, string>>
       : undefined);
+  const serviceUUIDs = Array.isArray(device.serviceUUIDs)
+    ? device.serviceUUIDs.filter((uuid): uuid is string => typeof uuid === 'string' && uuid.length > 0)
+    : Array.isArray(raw?.serviceUUIDs)
+      ? raw.serviceUUIDs.filter((uuid): uuid is string => typeof uuid === 'string' && uuid.length > 0)
+      : undefined;
+  const manufacturerData =
+    typeof device.manufacturerData === 'string'
+      ? device.manufacturerData
+      : typeof raw?.manufacturerData === 'string'
+        ? raw.manufacturerData
+        : null;
+  const serviceData = device.serviceData && typeof device.serviceData === 'object'
+    ? device.serviceData
+    : raw?.serviceData && typeof raw.serviceData === 'object'
+      ? raw.serviceData as Record<string, string>
+      : undefined;
+  const localName =
+    normalizeUiLabel(device.localName) ??
+    normalizeUiLabel(raw?.localName as string | null | undefined);
   const sources = source ? [source] : undefined;
   const displayName = normalizeUiLabel(device.displayName) ?? name;
   const brand = normalizeUiLabel(device.brand) ?? getProviderDisplayName(provider);
@@ -999,6 +1026,10 @@ function normalizeDiscoveredPowerDevice(
     brand,
     category: normalizeUiLabel(device.category) ?? productType ?? getPowerCategoryLabel(productType),
     sourceIds,
+    serviceUUIDs,
+    manufacturerData,
+    serviceData,
+    localName,
     isOnline: typeof device.isOnline === 'boolean'
       ? device.isOnline
       : typeof raw?.isOnline === 'boolean'
@@ -2364,6 +2395,10 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           sourceIds: {
             ble: entry.device.id,
           },
+          serviceUUIDs: entry.device.serviceUUIDs,
+          manufacturerData: entry.device.manufacturerData,
+          serviceData: entry.device.serviceData,
+          localName: entry.device.name,
           raw: entry.device,
         },
       )),
@@ -2540,7 +2575,6 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       }
       return;
     }
-    lastScanRequestAtRef.current = now;
 
     if (scanInFlightRef.current || isRefreshing || batchBusy) {
       if (DEBUG_DEVICE_CONNECTIONS) {
@@ -2551,6 +2585,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       }
       return;
     }
+    lastScanRequestAtRef.current = now;
 
     scanInFlightRef.current = true;
     const scanSessionId = activeScanSessionRef.current + 1;
@@ -2939,114 +2974,6 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           }
           // EcoFlow cloud discovery logs its own edge-function error and must not block BLE.
         });
-      const ecoFlowBleDiscovery = nativeBluetoothUnsupported
-        ? Promise.resolve()
-        : Promise.resolve().then(async () => {
-            if (!isCurrentScanSession()) return;
-            const provider = ecsProviderRegistry.getProvider('ecoflow');
-            if (!provider || provider.transportType !== 'ble') {
-              bluLog('[BLU_SCAN]', 'power_ble_discovery_skipped', {
-                scanId: scanSessionId,
-                vendor: 'ecoflow',
-                phase: 'power_ble_discovery',
-                reason: provider ? 'provider_not_ble' : 'provider_not_registered',
-              });
-              return;
-            }
-
-            bluLog('[BLU_SCAN]', 'power_ble_discovery_start', {
-              scanId: scanSessionId,
-              vendor: 'ecoflow',
-              phase: 'power_ble_discovery',
-              durationMs: UNIFIED_BLUETOOTH_SCAN_DURATION_MS,
-            });
-
-            try {
-              const devices = await provider.discoverDevices();
-              if (!isCurrentScanSession()) return;
-              const normalized = devices
-                .map((device) => normalizeDiscoveredPowerDevice(device.provider, {
-                  ...device,
-                  source: 'ble',
-                  connectionType: 'ble',
-                  requiresNativeBluetooth: true,
-                  connectableViaCloud: false,
-                  sourceIds: { ble: device.id },
-                  raw: device.raw ?? device,
-                }))
-                .filter((device): device is UnifiedDiscoveredPowerDevice => Boolean(device));
-
-              bluLog('[BLU_SCAN]', 'power_ble_discovery_completed', {
-                scanId: scanSessionId,
-                vendor: 'ecoflow',
-                phase: 'power_ble_discovery',
-                deviceCount: normalized.length,
-                rawCount: devices.length,
-              });
-              recordUnifiedScanCounts(devices.length, normalized.length);
-              for (const device of normalized) {
-                bluLogThrottled('[BLU_SCAN]', `ecoflow-ble:${device.id}`, 'power_ble_device_discovered', buildBluDiscoveryLogDetails({
-                  id: device.id,
-                  name: device.name,
-                  localName: String((device.raw as any)?.localName ?? device.name),
-                  manufacturerDataPresent: Boolean((device.raw as any)?.manufacturerData),
-                  serviceUUIDs: Array.isArray((device.raw as any)?.serviceUUIDs) ? (device.raw as any).serviceUUIDs : [],
-                  rssi: device.rssi,
-                  classifiedVendor: 'ecoflow',
-                  classifiedType: device.productType ?? device.category ?? 'power_device',
-                  confidence: inferBluClassificationConfidence({
-                    supportLevel: 'verified',
-                    connectionType: 'ble',
-                    source: 'ble',
-                    providerId: 'ecoflow',
-                  }),
-                }), 10_000);
-              }
-
-              setDiscoveredPowerDevices((current) => {
-                const result = upsertDiscoveredPowerDeviceList(current, normalized, 'ecoflow_ble_success');
-                return result.devices;
-              });
-              setScannerClock(Date.now());
-              setSourceStatuses((current) => updateDiscoverySourceStatus(
-                current,
-                'ble',
-                'success',
-                Math.max(bleAcceptedDeviceCount, normalized.length),
-                normalized.length > 0
-                  ? 'BLE discovery returned EcoFlow devices.'
-                  : 'BLE scan completed. No EcoFlow advertisements matched yet.',
-                {
-                  rawCount: Math.max(bleRawDevicesSeenCount, devices.length),
-                  normalizedCount: Math.max(bleAcceptedDeviceCount, normalized.length),
-                  addedCount: normalized.length,
-                },
-              ));
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error ?? 'EcoFlow BLE discovery failed.');
-              bluLog('[BLU_SCAN]', 'power_ble_discovery_failed', {
-                scanId: scanSessionId,
-                vendor: 'ecoflow',
-                phase: 'power_ble_discovery',
-                errorCode: isNativeBluetoothRuntimeUnsupported(message) ? 'runtime_unsupported' : 'scan_failed',
-                message,
-              });
-              if (!isCurrentScanSession()) return;
-              setSourceStatuses((current) => updateDiscoverySourceStatus(
-                current,
-                'ble',
-                isNativeBluetoothRuntimeUnsupported(message) ? 'unsupported' : 'failed',
-                0,
-                message,
-                {
-                  rawCount: bleRawDevicesSeenCount,
-                  normalizedCount: bleAcceptedDeviceCount,
-                  addedCount: 0,
-                  failedReason: message,
-                },
-              ));
-            }
-          });
       const nativeBleScanWindow = bleScan.then(async () => {
         if (nativeBluetoothUnsupported || !nativeBleScanStarted) return;
         await sleep(UNIFIED_BLUETOOTH_SCAN_DURATION_MS);
@@ -3084,7 +3011,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             devices: [],
             reason: 'classic_bluetooth_source_error',
           }));
-      const [, , , classicResult] = await Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, ecoFlowBleDiscovery, classicDiscovery]);
+      const [, , classicResult] = await Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, classicDiscovery]);
 
       if (isCurrentScanSession()) {
         if (
@@ -3603,6 +3530,10 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         signalStrength,
         affectsMultipleDevices: false,
         connectionType: discoveredDevice?.connectionType ?? null,
+        serviceUuids: discoveredDevice?.serviceUUIDs,
+        manufacturerData: discoveredDevice?.manufacturerData ?? null,
+        serviceData: discoveredDevice?.serviceData,
+        localName: discoveredDevice?.localName ?? null,
         sourceIds: discoveredDevice?.sourceIds,
         requiresNativeBluetooth: discoveredDevice?.requiresNativeBluetooth ?? true,
         connectableViaCloud: discoveredDevice?.connectableViaCloud ?? false,
@@ -4461,6 +4392,8 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
                   model: device.subtype,
                   connectionType: 'ble',
                   signalStrength: device.signalStrength,
+                  serviceUuids: device.serviceUuids,
+                  manufacturerData: device.manufacturerData,
                 });
                 const localResult = localAdapter
                   ? await localAdapter.connect({
@@ -4470,6 +4403,8 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
                       model: device.subtype,
                       connectionType: 'ble',
                       signalStrength: device.signalStrength,
+                      serviceUuids: device.serviceUuids,
+                      manufacturerData: device.manufacturerData,
                     })
                   : null;
 
@@ -4584,6 +4519,8 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
           model: device.subtype,
           connectionType: getBluConnectionMode(device),
           signalStrength: device.signalStrength,
+          serviceUuids: device.serviceUuids,
+          manufacturerData: device.manufacturerData,
         });
 
         if (!adapter) {
@@ -4646,6 +4583,8 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
             model: device.subtype,
             connectionType: getBluConnectionMode(device),
             signalStrength: device.signalStrength,
+            serviceUuids: device.serviceUuids,
+            manufacturerData: device.manufacturerData,
           });
           if (result.success) {
             break;

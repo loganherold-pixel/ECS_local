@@ -357,6 +357,9 @@ export interface IEcsPowerProvider {
   /** Scan for available devices (BLE scan, cloud device list, etc.) */
   discoverDevices(): Promise<EcsDiscoveredDevice[]>;
 
+  /** Cache a discovery reported by the unified scanner without starting another radio scan. */
+  rememberDiscoveredDevice?(device: EcsDiscoveredDevice): void;
+
   /** Get currently connected devices */
   getConnectedDevices(): BluDevice[];
 

@@ -16,7 +16,7 @@
  *   - Auto-refresh on signal recovery
  *   - Enhanced persistence on app background
  *   - Smooth recovery from offline → online transitions
- *   - Battery-conscious polling (reduced in background)
+ *   - Battery-conscious polling (suspended in background)
  *
  * Phase 3C — Offline Cache Awareness:
  *   - offline_cache provider activated
@@ -74,10 +74,6 @@ const STATE_DEBOUNCE_MS = 3_000;
 /** Phase 3D: How often to check for stale data (ms) */
 const STALE_CHECK_INTERVAL_MS = 30_000;
 
-/** Phase 3D: Reduced poll interval when app is in background */
-const BACKGROUND_POLL_INTERVAL_MS = 60_000;
-
-
 // ── Internal State ───────────────────────────────────────
 
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -108,7 +104,6 @@ let _staleCheckTimer: ReturnType<typeof setInterval> | null = null;
 // Phase 3D: AppState tracking
 let _appStateSubscription: { remove: () => void } | null = null;
 let _isInBackground = false;
-let _backgroundPollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Phase 3D: Last known good summary (for grace window)
 let _lastKnownGoodSummary: ConnectivitySummary | null = null;
@@ -687,9 +682,13 @@ function _checkStale(): void {
 // PHASE 3D: APP STATE HANDLING
 //
 // Handles transitions between foreground and background:
-//   - Background: Persist state, reduce polling frequency
+//   - Background: Persist state and suspend polling
 //   - Foreground: Restore polling, force immediate update
 // ══════════════════════════════════════════════════════════
+
+function _isAppForeground(state: AppStateStatus = AppState.currentState): boolean {
+  return state !== 'background' && state !== 'inactive';
+}
 
 function _handleAppStateChange(nextAppState: AppStateStatus): void {
   try {
@@ -698,19 +697,14 @@ function _handleAppStateChange(nextAppState: AppStateStatus): void {
       _isInBackground = false;
       logConnectivityDebug('App resumed — refreshing connectivity');
 
-      // Stop background polling
-      if (_backgroundPollTimer) {
-        clearInterval(_backgroundPollTimer);
-        _backgroundPollTimer = null;
-      }
-
       // Restart normal polling
       _startNormalPolling();
+      _startStaleChecking();
 
       // Force immediate update
       _update();
 
-    } else if (nextAppState === 'background' && !_isInBackground) {
+    } else if (!_isAppForeground(nextAppState) && !_isInBackground) {
       // ── Going to background ──
       _isInBackground = true;
       logConnectivityDebug('App backgrounded — persisting state');
@@ -720,11 +714,7 @@ function _handleAppStateChange(nextAppState: AppStateStatus): void {
 
       // Stop normal polling
       _stopNormalPolling();
-
-      // Start reduced background polling
-      _backgroundPollTimer = setInterval(() => {
-        _update();
-      }, BACKGROUND_POLL_INTERVAL_MS);
+      _stopStaleChecking();
     }
   } catch (e) {
     logConnectivityWarn('AppState handler error (non-fatal)', {
@@ -738,6 +728,7 @@ function _handleAppStateChange(nextAppState: AppStateStatus): void {
 
 function _startNormalPolling(): void {
   _stopNormalPolling();
+  if (_isInBackground || !_isAppForeground()) return;
   _pollTimer = setInterval(() => {
     _update();
   }, DEVICE_NETWORK_POLL_INTERVAL_MS);
@@ -747,6 +738,21 @@ function _stopNormalPolling(): void {
   if (_pollTimer) {
     clearInterval(_pollTimer);
     _pollTimer = null;
+  }
+}
+
+function _startStaleChecking(): void {
+  _stopStaleChecking();
+  if (_isInBackground || !_isAppForeground()) return;
+  _staleCheckTimer = setInterval(() => {
+    _checkStale();
+  }, STALE_CHECK_INTERVAL_MS);
+}
+
+function _stopStaleChecking(): void {
+  if (_staleCheckTimer) {
+    clearInterval(_staleCheckTimer);
+    _staleCheckTimer = null;
   }
 }
 
@@ -790,6 +796,7 @@ export const connectivityIntelService = {
 
     logConnectivityDebug('Starting monitoring (Phase 3D — with persistence & recovery)...');
     connectivityIntelStore.setMonitoring(true);
+    _isInBackground = !_isAppForeground();
 
     // Ensure connectivity monitor is running
     connectivity.startMonitoring();
@@ -834,16 +841,11 @@ export const connectivityIntelService = {
       });
     }
 
-    // Phase 3D: Start stale detection timer
-    _staleCheckTimer = setInterval(() => {
-      _checkStale();
-    }, STALE_CHECK_INTERVAL_MS);
-
-    // Initial update
-    _update();
-
-    // Start normal polling
-    _startNormalPolling();
+    if (!_isInBackground) {
+      _startStaleChecking();
+      _update();
+      _startNormalPolling();
+    }
   },
 
   /**
@@ -860,12 +862,6 @@ export const connectivityIntelService = {
 
     // Clean up normal polling
     _stopNormalPolling();
-
-    // Clean up background polling
-    if (_backgroundPollTimer) {
-      clearInterval(_backgroundPollTimer);
-      _backgroundPollTimer = null;
-    }
 
     // Clean up connectivity subscription
     if (_connectivityUnsub) {
@@ -886,10 +882,7 @@ export const connectivityIntelService = {
     }
 
     // Phase 3D: Clean up stale detection timer
-    if (_staleCheckTimer) {
-      clearInterval(_staleCheckTimer);
-      _staleCheckTimer = null;
-    }
+    _stopStaleChecking();
 
     connectivityIntelStore.setMonitoring(false);
   },

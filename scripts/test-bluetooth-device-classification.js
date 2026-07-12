@@ -49,6 +49,25 @@ const { routeBluetoothDevice } = loadTypeScriptModule('lib/bluetoothDeviceRoutin
 const {
   isReleaseScannerBluetoothRoute,
 } = loadTypeScriptModule('lib/bluetoothDeviceRouting.ts');
+const {
+  isLikelyOBDAdvertisement,
+} = loadTypeScriptModule('src/vehicle-telemetry/OBD2AdvertisementClassifier.ts');
+
+assert.strictEqual(
+  isLikelyOBDAdvertisement('Mopeka Pro Sensor', ['0000ffe0-0000-1000-8000-00805f9b34fb']),
+  false,
+  'Mopeka must not be classified as OBD2 only because it exposes a generic UART service',
+);
+assert.strictEqual(
+  isLikelyOBDAdvertisement('VPeak BLE OBD2', ['0000ffe0-0000-1000-8000-00805f9b34fb']),
+  true,
+  'VPeak/Veepeak names must remain discoverable when the adapter uses generic UART transport',
+);
+assert.strictEqual(
+  isLikelyOBDAdvertisement('', ['e7810a71-73ae-499d-8c15-faa9aef0c3f2']),
+  true,
+  'The Veepeak-specific BLE service must identify unnamed adapters',
+);
 
 for (const brandId of [
   'ecoflow',

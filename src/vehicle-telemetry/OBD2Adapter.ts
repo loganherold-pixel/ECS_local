@@ -53,6 +53,7 @@ import {
   type TelemetryScanTrigger,
   type TelemetrySourceStatus,
 } from './TelemetryDiscoveryControl';
+import { isLikelyOBDAdvertisement } from './OBD2AdvertisementClassifier';
 import { ecsLog } from '../../lib/ecsLogger';
 import {
   classifyBluetoothDiagnosticSource,
@@ -195,20 +196,6 @@ function logObd2Warn(message: string, details?: Record<string, unknown>): void {
 function isBluTimeoutMessage(message: string | null | undefined): boolean {
   return /timeout|timed out|no live|no data|did not receive|stall|unavailable/i.test(String(message ?? ''));
 }
-
-// ═══════════════════════════════════════════════════════════
-// OBD-II DEVICE NAME PATTERNS
-// ═══════════════════════════════════════════════════════════
-
-const OBD2_NAME_PATTERNS: RegExp[] = [
-  /obd/i, /elm\s*327/i, /elm327/i, /v[\-\s]*link/i, /vee\s*peak/i, /veepeak/i, /ve\s*peak/i, /v\s*peak/i, /\bvpake\b/i,
-  /bafx/i, /scan\s*tool/i, /carista/i, /obd\s*link/i, /vgate/i,
-  /konnwei/i, /fixd/i, /blue\s*driver/i, /torque/i, /le\s*link/i,
-  /viecar/i, /thinkcar/i, /autel/i, /icar/i, /launch/i,
-  /ancel/i, /foxwell/i, /innova/i, /autophix/i, /xtool/i,
-  /obd\s*check/i, /\bvp\s*11\b/i, /\bvp11\b/i, /ios\s*v[\-\s]*link/i, /android\s*v[\-\s]*link/i,
-  /car\s*scanner/i, /panlong/i, /micro\s*mechanic/i,
-];
 
 // Common ELM327 BLE adapters, including VeePeak BLE/OBDCheck BLE, often expose a
 // generic UART service instead of an OBD-branded service. These are discovery and
@@ -681,6 +668,7 @@ class OBD2Adapter {
 
     if (
       trigger !== 'controlled_retry' &&
+      trigger !== 'user_manual_scan' &&
       isTelemetryScanThrottleActive(now, this.lastScanFinishedAt, TELEMETRY_SCAN_THROTTLE_MS)
     ) {
       logBtScanDebug('scan_button_pressed', {
@@ -1447,19 +1435,7 @@ class OBD2Adapter {
   }
 
   private isLikelyOBDDevice(name: string, serviceUUIDs?: string[]): boolean {
-    const hasObdName = OBD2_NAME_PATTERNS.some((pattern) => pattern.test(name));
-    if (hasObdName) return true;
-
-    if (serviceUUIDs && serviceUUIDs.length > 0) {
-      for (const uuid of serviceUUIDs) {
-        const lower = uuid.toLowerCase();
-        if (OBD2_SERVICE_UUIDS.some(obd => lower.includes(obd.toLowerCase()))) {
-          return true;
-        }
-      }
-    }
-
-    return false;
+    return isLikelyOBDAdvertisement(name, serviceUUIDs);
   }
 
   private normalizeScanName(name: unknown): string | null {

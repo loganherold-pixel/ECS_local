@@ -1,3 +1,5 @@
+import type { SourceTruthRef } from './sourceTruth';
+
 /**
  * ═══════════════════════════════════════════════════════════
  * ECS TRIP RECORDER — TYPE DEFINITIONS
@@ -116,6 +118,8 @@ export interface ResourceSnapshot {
   engineRpm: number | null;
   /** OBD battery voltage */
   batteryVoltage: number | null;
+  /** Per-metric provenance retained only for qualified aggregate learning. */
+  sourceTruth?: Partial<Record<'coolantTempF' | 'batteryVoltage', SourceTruthRef>>;
 }
 
 // ── Route Point (simplified breadcrumb) ──────────────────────

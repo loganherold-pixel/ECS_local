@@ -91,6 +91,7 @@ assert(widget.includes('Connected — telemetry not yet decoded'), 'vehicle tele
 assert(!widget.includes("scanner.isConnected && vt.hasData) {\n    return { label: 'TELEMETRY LIVE'"), 'widget must not mark generic hasData as live');
 
 const adapter = read('src/vehicle-telemetry/OBD2Adapter.ts');
+const advertisementClassifier = read('src/vehicle-telemetry/OBD2AdvertisementClassifier.ts');
 for (const marker of [
   '[OBD_SCAN]',
   '[OBD_CONNECT]',
@@ -120,13 +121,15 @@ assert(
   'connected OBD2 devices must become the primary telemetry source so live readings are not ignored',
 );
 assert(
-  adapter.includes('/vee\\s*peak/i') && adapter.includes('/veepeak/i') && adapter.includes('/v\\s*peak/i'),
+  advertisementClassifier.includes('/vee\\s*peak/i') &&
+    advertisementClassifier.includes('/veepeak/i') &&
+    advertisementClassifier.includes('/v\\s*peak/i'),
   'OBD adapter must support V Peak and Veepeak naming variants',
 );
 assert(
-  adapter.includes('/obd\\s*check/i') &&
-    adapter.includes('/\\bvpake\\b/i') &&
-    adapter.includes('/\\bvp\\s*11\\b/i') &&
+  advertisementClassifier.includes('/obd\\s*check/i') &&
+    advertisementClassifier.includes('/\\bvpake\\b/i') &&
+    advertisementClassifier.includes('/\\bvp\\s*11\\b/i') &&
     adapter.includes('0000ffe0-0000-1000-8000-00805f9b34fb') &&
     adapter.includes('6e400001-b5a3-f393-e0a9-e50e24dcca9e') &&
     adapter.includes('6e400002-b5a3-f393-e0a9-e50e24dcca9e') &&

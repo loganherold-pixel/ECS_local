@@ -382,7 +382,6 @@ const unknownBleAdvisories = buildPowerBriefAdvisories({
 assert.strictEqual(unknownBleAdvisories.length, 0, 'unknown/device-detected BLE noise must not enter ECS Brief');
 
 const widgetSource = read('components/dashboard/PowerSystemWidget.tsx');
-const riveAdapterSource = read('lib/powerModuleRiveTelemetry.ts');
 const detailSource = read('components/dashboard/PowerSystemDetail.tsx');
 const centralTelemetryTypesSource = read('src/types/telemetry.ts');
 const telemetrySourceStateSource = read('lib/telemetrySourceState.ts');
@@ -409,12 +408,12 @@ assert.ok(widgetSource.includes('sourceState: TelemetrySourceState;'), 'power wi
 assert.ok(widgetSource.includes('resolveTelemetrySourceState'), 'power widget should use shared telemetry source-state labels');
 assert.ok(telemetrySourceStateSource.includes('TELEMETRY_LIVE_MAX_AGE_MS'), 'shared source-state helper should define live freshness threshold');
 assert.ok(
-  riveAdapterSource.includes('export function adaptPowerTelemetryForRive') &&
-    widgetSource.includes('inputWatts={riveTelemetry.inputWatts}') &&
-    widgetSource.includes('outputWatts={riveTelemetry.outputWatts}'),
+  widgetSource.includes("if (value == null || !Number.isFinite(value)) return '--';") &&
+    widgetSource.includes("value={formatPowerTelemetryWatts(visibleInputWatts, 'input')}") &&
+    widgetSource.includes("value={formatPowerTelemetryWatts(visibleOutputWatts, 'output')}"),
   'widget should render unknown/stale watts as dashes',
 );
-assert.ok(widgetSource.includes("summary.batteryPercent == null ? 'battery unavailable'"), 'widget should render unknown battery percent as unavailable instead of zero');
+assert.ok(widgetSource.includes("visibleBatteryPercent == null ? 'reserve unavailable'"), 'widget should render unknown battery percent as unavailable instead of zero');
 assert.ok(
   widgetSource.includes('const canAnimateFlow = hasLiveTelemetry || hasConfidentManualEstimate;') &&
     widgetSource.includes('canAnimateFlow,'),

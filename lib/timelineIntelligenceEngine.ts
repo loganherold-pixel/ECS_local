@@ -18,7 +18,7 @@
 //   - Subscriber pattern for UI updates
 // ============================================================
 
-import { Platform } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { supabase, isSupabaseConfigured } from './supabase';
 import { expeditionStateStore, type ExpeditionState, type ExpeditionRecord } from './expeditionStateStore';
 import { gpsDistanceTracker } from './gpsDistanceTracker';
@@ -147,7 +147,34 @@ let _isInRemoteZone = false;         // Currently in remote zone
 let _lastRemotenessTier: RemotenessTier = 'NEAR CIVILIZATION';
 let _batteryWarningLogged = false;   // Only log once per expedition
 let _expeditionUnsubscribe: (() => void) | null = null;
+let _appStateSubscription: { remove: () => void } | null = null;
 let _currentExpeditionId: string | null = null;
+
+function isAppForeground(state: AppStateStatus = AppState.currentState): boolean {
+  return state !== 'background' && state !== 'inactive';
+}
+
+function stopMonitorTimer(): void {
+  if (!_monitorTimer) return;
+  clearInterval(_monitorTimer);
+  _monitorTimer = null;
+}
+
+function startMonitorTimer(): void {
+  if (!_isMonitoring || !_currentExpeditionId || _monitorTimer || !isAppForeground()) return;
+  _monitorTimer = setInterval(monitorTick, MONITOR_INTERVAL_MS);
+}
+
+function handleAppStateChange(nextState: AppStateStatus): void {
+  if (!isAppForeground(nextState)) {
+    stopMonitorTimer();
+    return;
+  }
+  if (_isMonitoring && _currentExpeditionId) {
+    monitorTick();
+    startMonitorTimer();
+  }
+}
 
 // ── Local Storage ────────────────────────────────────────────
 
@@ -503,9 +530,7 @@ export const timelineIntelligenceEngine = {
    */
   start(expeditionId: string): void {
     if (_isMonitoring && _currentExpeditionId === expeditionId) {
-      if (!_monitorTimer) {
-        _monitorTimer = setInterval(monitorTick, MONITOR_INTERVAL_MS);
-      }
+      startMonitorTimer();
       return;
     }
 
@@ -534,7 +559,7 @@ export const timelineIntelligenceEngine = {
     );
 
     // Start periodic monitoring
-    _monitorTimer = setInterval(monitorTick, MONITOR_INTERVAL_MS);
+    startMonitorTimer();
 
     console.log(TAG, `Monitoring started for expedition ${expeditionId}`);
   },
@@ -545,10 +570,7 @@ export const timelineIntelligenceEngine = {
   stop(): void {
     if (!_isMonitoring && !_monitorTimer) return;
 
-    if (_monitorTimer) {
-      clearInterval(_monitorTimer);
-      _monitorTimer = null;
-    }
+    stopMonitorTimer();
     _isMonitoring = false;
     console.log(TAG, 'Monitoring stopped');
   },
@@ -702,9 +724,7 @@ export const timelineIntelligenceEngine = {
       if (_isMonitoring && _currentExpeditionId === expeditionId && _monitorTimer) return;
       _currentExpeditionId = expeditionId;
       _isMonitoring = true;
-      if (!_monitorTimer) {
-        _monitorTimer = setInterval(monitorTick, MONITOR_INTERVAL_MS);
-      }
+      startMonitorTimer();
     };
 
     // Subscribe to expedition state changes
@@ -731,6 +751,9 @@ export const timelineIntelligenceEngine = {
     });
 
     _expeditionUnsubscribe = unsubscribe;
+    if (!_appStateSubscription) {
+      _appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
+    }
 
     // Check if there's already an active expedition
     const currentState = expeditionStateStore.getState();
@@ -749,6 +772,10 @@ export const timelineIntelligenceEngine = {
       if (_expeditionUnsubscribe) {
         _expeditionUnsubscribe();
         _expeditionUnsubscribe = null;
+      }
+      if (_appStateSubscription) {
+        _appStateSubscription.remove();
+        _appStateSubscription = null;
       }
       this.stop();
     };

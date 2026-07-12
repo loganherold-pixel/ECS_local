@@ -693,6 +693,9 @@ function queueCompletedTripPostProcessing(record: ExpeditionTripRecord): void {
     await import('./expeditionPersonalRecordStore')
       .then(({ evaluatePersonalRecordsForCompletedTrip }) => evaluatePersonalRecordsForCompletedTrip(record.id))
       .catch(() => null);
+    await import('../tripLearning/tripLearningAdapters')
+      .then(({ processCompletedExpeditionTripForLearning }) => processCompletedExpeditionTripForLearning(record))
+      .catch(() => null);
   })();
 }
 

@@ -45,6 +45,8 @@ export interface PowerBrandAdapterDevice {
   model?: string | null;
   connectionType?: string | null;
   signalStrength?: number | null;
+  serviceUuids?: string[] | null;
+  manufacturerData?: string | null;
 }
 
 export interface PowerBrandAdvertisement {
@@ -409,6 +411,19 @@ class RegisteredProviderPowerAdapter implements PowerBrandConnectionAdapter {
         errorCode: 'PROVIDER_UNAVAILABLE',
       };
     }
+
+    provider.rememberDiscoveredDevice?.({
+      id: device.rawId,
+      name: device.name,
+      model: device.model ?? device.name,
+      provider: this.providerId,
+      rssi: device.signalStrength ?? -90,
+      discoveredAt: Date.now(),
+      raw: {
+        serviceUUIDs: device.serviceUuids ?? [],
+        manufacturerData: device.manufacturerData ?? null,
+      },
+    });
 
     const connection: PowerBrandProviderConnection = {
       providerId: this.providerId,

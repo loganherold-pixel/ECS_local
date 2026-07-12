@@ -72,13 +72,13 @@ assert(
   'Device Connections summary must surface real native BLE diagnostics and raw seen counts',
 );
 assert(
-  hook.includes('let scanRawDevicesSeenCount = bleRawDevicesSeenCount') &&
+    hook.includes('let scanRawDevicesSeenCount = bleRawDevicesSeenCount') &&
     hook.includes('const recordUnifiedScanCounts = (rawCount: number, acceptedCount: number = rawCount)') &&
     hook.includes('recordUnifiedScanCounts(devices.length, devices.length)') &&
-    hook.includes('recordUnifiedScanCounts(devices.length, normalized.length)') &&
+    hook.includes('recordUnifiedScanCounts(latestCounts.raw, latestCounts.accepted)') &&
     hook.includes('rawDevicesSeenCount: scanRawDevicesSeenCount') &&
     hook.includes('acceptedDevicesCount: scanAcceptedDevicesCount'),
-  'unified scan finished diagnostics must include EcoFlow API/BLE source counts instead of reporting zero from stale BLE closure state',
+  'unified scan finished diagnostics must combine EcoFlow API counts with the authoritative native BLE callback counts',
 );
 assert(
   hook.includes("ecsLog.debug('TELEMETRY', '[DEVICE_CONNECTIONS] scan_idle'") &&
