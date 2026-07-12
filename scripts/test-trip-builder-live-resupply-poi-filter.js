@@ -47,11 +47,21 @@ assert.strictEqual(
   true,
   'Actual fuel-stop POIs should remain eligible.',
 );
+assert.strictEqual(
+  candidate('fuel', 'Remote Service Plaza', 'Approach corridor', { feature_type: 'poi', poi_category_ids: ['gas_station'] }),
+  true,
+  'Mapbox underscore-separated gas-station category ids should normalize into an eligible fuel POI signal.',
+);
 
 assert.strictEqual(
   candidate('food_supplies', 'City Market', 'Gunnison, Colorado', { poi_category: ['grocery', 'supermarket'] }),
   true,
   'Actual grocery/supply POIs should remain eligible.',
+);
+assert.strictEqual(
+  candidate('food_supplies', 'Approach Provisions', 'Nearest town', { feature_type: 'poi', poi_category_ids: ['grocery_store'] }),
+  true,
+  'Mapbox underscore-separated grocery category ids should normalize into an eligible supply POI signal.',
 );
 
 assert.strictEqual(
@@ -64,6 +74,13 @@ const screen = fs.readFileSync(path.join(root, 'app', 'explore-trip-builder.tsx'
 assert.ok(
   screen.includes('isLiveSmartResupplyPoiCandidate({ category, suggestion, destination })'),
   'Trip Builder live resupply conversion should call the live POI filter before creating candidate stops.',
+);
+assert.ok(
+  screen.includes("const SMART_RESUPPLY_FUEL_QUERY = 'gas station'") &&
+    screen.includes("const SMART_RESUPPLY_SUPPLY_QUERY = 'market'") &&
+    screen.includes('forwardGeocodeFallback: allowForwardGeocodeFallback') &&
+    screen.includes('}).slice(0, 1);'),
+  'Trip Builder should use provider-native POI queries and spend expanded-radius requests only near trail entry.',
 );
 
 console.log('Trip Builder live resupply POI filter checks passed.');

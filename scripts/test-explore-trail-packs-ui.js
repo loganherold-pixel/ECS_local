@@ -9,7 +9,7 @@ function read(relativePath) {
 }
 
 const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
-const card = read(path.join('components', 'discover', 'TrailPackCard.tsx'));
+const card = read(path.join('components', 'discover', 'RouteCatalogSummaryCard.tsx'));
 const feedbackPanel = read(path.join('components', 'trailPacks', 'TrailPackFeedbackPanel.tsx'));
 const previewPanel = read(path.join('components', 'trailPacks', 'TrailPackPreviewModal.tsx'));
 const offlinePrepPack = read(path.join('app', 'explore-offline-prep-pack.tsx'));
@@ -34,15 +34,16 @@ assert(
   'Explore TripBuilder wizard should expose source chips for Trail Packs, Hidden Gems, ECS Ideas, Saved/Built, and Imported/Stitched routes',
 );
 assert(
-  discover.includes('saveExploreRouteForPlanning(candidate)') &&
+  discover.includes('saveExploreRouteForPlanning(hydratedCandidate)') &&
+    discover.includes('requireFullCatalogDetail: true') &&
     discover.includes('handleStartExploreWizardCandidate') &&
     discover.includes('autoStartNavigation: true') &&
     discover.includes('handleBuildTripFromExploreWizardCandidate'),
-  'Explore TripBuilder route cards should wire Save, Start, and Build Trip through the existing planning/navigation flows',
+  'Explore TripBuilder route cards should wire Save, Start, and Build Trip through full-detail planning/navigation flows',
 );
 assert(
-  discover.includes("import TrailPackCard from '../../components/discover/TrailPackCard'"),
-  'Explore should render Trail Packs through the dedicated card component',
+  discover.includes("import RouteCatalogSummaryCard from '../../components/discover/RouteCatalogSummaryCard'"),
+  'Explore should render catalog routes through the lightweight summary card component',
 );
 assert(
   discover.includes("'trailPacks'"),
@@ -53,8 +54,8 @@ assert(
   'Trail Packs should appear as a dedicated Explore category tile',
 );
 assert(
-  discover.includes('case \'trailPacks\'') && discover.includes('<TrailPackCard'),
-  'Trail Packs should render in their own category panel',
+  discover.includes('case \'trailPacks\'') && discover.includes('<RouteCatalogSummaryCard'),
+  'Trail Packs should render summary-first records in their own category panel',
 );
 assert(
   discover.includes('queryTrailPackDiscoveryIndexCached(routeDiscoveryIndex') &&
@@ -115,7 +116,8 @@ assert(
 assert(
   discover.includes('TrailPackPreviewModal') &&
     discover.includes('submitTrailPackFeedback') &&
-    discover.includes("handleTrailPackFeedback(trailPack.id, 'saved')"),
+    discover.includes("handleTrailPackFeedback(routeId, 'saved')") &&
+    discover.includes("handleTrailPackFeedback(trailPackPreview.id, 'saved')"),
   'Trail Pack detail/save flows should capture structured feedback without cluttering cards',
 );
 assert(
@@ -135,10 +137,10 @@ assert(
   'Trail Packs should render loading, no-location, low-confidence, and empty states',
 );
 assert(
-  discover.includes('This Trail Pack is under ECS review and is not visible to other users.') &&
+  discover.includes('under ECS review and not public Suggested Trailheads yet.') &&
     discover.includes('trailPackSubmissionStore') &&
     discover.includes('includeOwnDrafts: ownerTrailPackIds.length > 0'),
-  'Owner-visible pending Trail Packs should use explicit review warning language',
+  'Pending and curation Trail Packs should remain local/review-only with explicit non-public language',
 );
 const hiddenGemPanelCase = discover.split("case 'hiddenGems':")[1]?.split("case 'trailPacks':")[0] ?? '';
 assert(
@@ -146,23 +148,19 @@ assert(
   'Trail Packs should not be mixed into Hidden Gems logic',
 );
 assert(
-  card.includes('ECS confidence') &&
+  card.includes('SourceTruthInspectorTrigger') &&
+    card.includes('ROUTE SUMMARY') &&
     card.includes('PREVIEW') &&
-    card.includes('START') &&
-    card.includes('star-outline'),
-  'Trail Pack cards should show ECS confidence plus Preview, Start Guidance, and Save actions',
+    card.includes('NAVIGATE') &&
+    card.includes('bookmark-outline'),
+  'Route catalog summary cards should show source truth plus Preview, Navigate, and Save actions',
 );
 assert(
-  card.includes('disabled={!canStartGuidance}') &&
-    card.includes('Route geometry is unavailable for this Trail Pack.'),
-  'Trail Pack card should disable Start Guidance when geometry is missing',
-);
-assert(
-  card.includes('getTrailPackGuidanceReadiness') &&
-    card.includes('Active guidance ready') &&
-    card.includes('Preview only') &&
-    card.includes('guidanceReadiness.description'),
-  'Trail Pack cards should surface active-guidance readiness before users tap Navigate',
+  card.includes('onPreview(summary.routeId)') &&
+    card.includes('onStartGuidance(summary.routeId)') &&
+    card.includes('onSave(summary.routeId)') &&
+    !card.includes('MapRenderer'),
+  'Summary cards should defer geometry/detail loading to actions and avoid mounting map work in the Explore list',
 );
 assert(
   previewPanel.includes('getTrailPackGuidanceReadiness') &&

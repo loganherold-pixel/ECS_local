@@ -36,7 +36,8 @@ function searchableText(values: LiveSmartResupplyPoiLike[]): string {
     ])
     .filter(Boolean)
     .join(' ')
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ');
 }
 
 function titleLooksLikeStreet(values: LiveSmartResupplyPoiLike[]): boolean {

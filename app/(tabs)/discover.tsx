@@ -146,6 +146,7 @@ import {
 } from '../../lib/explore/trailPacks';
 import { trailPackToOfflinePrepCatalogInput } from '../../lib/explore/trailPackOfflineCache';
 import {
+  createLiveTrailPackCatalogRefreshKey,
   fetchRouteCatalogTrailPackDetail,
   liveTrailPackCatalogStore,
   refreshLiveTrailPackCatalog,
@@ -940,6 +941,7 @@ function DiscoverScreenInner() {
     initialExploreFilterStateRef.current.radiusMiles,
   );
   const [exploreRefinement, setExploreRefinement] = useState<ExploreRefinementFilter | null>(null);
+  const [routeCatalogPreviewGeometryRequested, setRouteCatalogPreviewGeometryRequested] = useState(false);
   const [activeExplorePrimaryTab, setActiveExplorePrimaryTab] = useState<ExplorePrimaryTab>('suggested_routes');
   const [explorePlanningSelectedRouteId, setExplorePlanningSelectedRouteId] = useState<string | null>(null);
   const [exploreWizardSourceFilter, setExploreWizardSourceFilter] = useState<ExploreWizardRouteSourceKind | 'all'>('all');
@@ -1382,6 +1384,9 @@ function DiscoverScreenInner() {
         : {};
       return {
         ...routeCatalogLocationCriteria,
+        // Keep entry summary-only. The first trip refinement opts into the
+        // server-bounded preview geometry needed to populate route cards.
+        includePreviewGeometry: routeCatalogPreviewGeometryRequested,
         vehicleClass: vehicleProfile?.vehicleType ?? null,
         availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
         availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal,
@@ -1394,12 +1399,17 @@ function DiscoverScreenInner() {
       routeCatalogEffectiveSearchArea?.key,
       routeCatalogEffectiveSearchArea?.source,
       routeCatalogHasSearchArea,
+      routeCatalogPreviewGeometryRequested,
       stableRouteCatalogSearchCoordinate.latitude,
       stableRouteCatalogSearchCoordinate.longitude,
       vehicleProfile?.fuel_range_miles,
       vehicleProfile?.water_capacity_gal,
       vehicleProfile?.vehicleType,
     ],
+  );
+  const routeCatalogSearchRefreshKey = useMemo(
+    () => createLiveTrailPackCatalogRefreshKey(routeCatalogSearchCriteria),
+    [routeCatalogSearchCriteria],
   );
   const explorePerformanceSearchKey = useMemo(
     () => [
@@ -1880,7 +1890,10 @@ function DiscoverScreenInner() {
   }, [tripBuilderHandoffUserLocation]);
 
   const hydrateRouteCatalogOpportunityForHandoff = useCallback(
-    async (route: ExpeditionOpportunity): Promise<ExpeditionOpportunity> => {
+    async (
+      route: ExpeditionOpportunity,
+      options: { requireFullCatalogDetail?: boolean } = {},
+    ): Promise<ExpeditionOpportunity> => {
       const routeRecord = route as ExpeditionOpportunity & { routeMetadata?: Record<string, unknown> };
       const routeMetadata = routeRecord.routeMetadata ?? {};
       const trailPackId = typeof routeMetadata.trailPackId === 'string'
@@ -1910,11 +1923,14 @@ function DiscoverScreenInner() {
           },
         } as ExpeditionOpportunity;
       } catch (error) {
+        const detailError = error instanceof Error
+          ? error
+          : new Error('Verified route detail unavailable.');
         reportRecoverableFailure({
           severity: 'low',
           issueTitle: 'Route catalog detail hydration unavailable',
           ecsArea: 'explore',
-          message: error instanceof Error ? error.message : 'Verified route detail unavailable.',
+          message: detailError.message,
           signature: `route_catalog_detail_handoff_hydration_unavailable:${trailPackId}`,
           metadata: {
             trailPackId,
@@ -1923,6 +1939,7 @@ function DiscoverScreenInner() {
             source: 'route_catalog',
           },
         });
+        if (options.requireFullCatalogDetail) throw detailError;
         return route;
       }
     },
@@ -1982,6 +1999,9 @@ function DiscoverScreenInner() {
 
   const handleExploreRefinementChange = useCallback((refinement: ExploreRefinementFilter | null) => {
     hapticMicro();
+    if (refinement != null) {
+      setRouteCatalogPreviewGeometryRequested(true);
+    }
     setExploreRefinement(refinement);
     setHiddenGemPageIndex(0);
     setTrailPackPageIndex(0);
@@ -2418,18 +2438,41 @@ function DiscoverScreenInner() {
     [handleAIPreview, handlePreviewTrailPack, handleSelectOpportunity, publicDiscoverableTrailPacks],
   );
 
+  const hydrateExploreWizardCandidateForPlanning = useCallback(
+    async (candidate: ExploreWizardRouteCandidate): Promise<ExploreWizardRouteCandidate> => {
+      const routeForPlanning = await hydrateRouteCatalogOpportunityForHandoff(candidate.route, {
+        requireFullCatalogDetail: true,
+      });
+      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForPlanning);
+      if (!payload || unavailableReason) {
+        throw new Error(unavailableReason ?? 'Verified route detail is not ready for planning.');
+      }
+      return {
+        ...candidate,
+        route: routeForPlanning,
+        navigationPayload: payload,
+        title: payload.title || candidate.title,
+        subtitle: payload.subtitle ?? candidate.subtitle,
+        guidanceReady: true,
+        unavailableReason: null,
+      };
+    },
+    [hydrateRouteCatalogOpportunityForHandoff],
+  );
+
   const handleSaveExploreWizardCandidate = useCallback(
     async (candidate: ExploreWizardRouteCandidate) => {
       hapticMicro();
       setExploreWizardSaveNotice(null);
       try {
-        const result = await saveExploreRouteForPlanning(candidate);
+        const hydratedCandidate = await hydrateExploreWizardCandidateForPlanning(candidate);
+        const result = await saveExploreRouteForPlanning(hydratedCandidate);
         setFavoritesSnapshot(getExploreFavoritesSnapshot());
         setLocalRouteAssetRevision((current) => current + 1);
         setExploreWizardSaveNotice(
           result.createdRoute
-            ? `${candidate.title} saved as a favorite and stitch-ready route asset.`
-            : `${candidate.title} is already saved and stitch-ready.`,
+            ? `${hydratedCandidate.title} saved as a favorite and stitch-ready route asset.`
+            : `${hydratedCandidate.title} is already saved and stitch-ready.`,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Explore route could not be saved.';
@@ -2448,15 +2491,17 @@ function DiscoverScreenInner() {
         Alert.alert('Save unavailable', message);
       }
     },
-    [],
+    [hydrateExploreWizardCandidateForPlanning],
   );
 
   const handleBuildTripFromExploreWizardCandidate = useCallback(
     async (candidate: ExploreWizardRouteCandidate) => {
       try {
-        await saveExploreRouteForPlanning(candidate);
+        const hydratedCandidate = await hydrateExploreWizardCandidateForPlanning(candidate);
+        await saveExploreRouteForPlanning(hydratedCandidate);
         setFavoritesSnapshot(getExploreFavoritesSnapshot());
         setLocalRouteAssetRevision((current) => current + 1);
+        await handleBuildTripFromRoute(hydratedCandidate.route);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Explore route could not be saved before TripBuilder.';
         reportRecoverableFailure({
@@ -2471,10 +2516,10 @@ function DiscoverScreenInner() {
             sourceKind: candidate.sourceKind,
           },
         });
+        Alert.alert('Build unavailable', message);
       }
-      handleBuildTripFromRoute(candidate.route);
     },
-    [handleBuildTripFromRoute],
+    [handleBuildTripFromRoute, hydrateExploreWizardCandidateForPlanning],
   );
 
   const handleStartExploreWizardCandidate = useCallback(
@@ -3408,10 +3453,6 @@ function DiscoverScreenInner() {
 
   const totalRouteCount = refinedCanonicalRoutes.length + refinedAIRoutes.length;
   const hasDiscoveryOverrides = distanceRadius !== DEFAULT_DISTANCE_RADIUS || exploreRefinement != null;
-  const showRefinementEmptyState =
-    exploreRefinement != null &&
-    radiusFilteredOpportunities.length > 0 &&
-    refinedCanonicalRoutes.length === 0;
   const favoriteTrails = favoritesSnapshot.favorites;
   const favoritePlans = favoritesSnapshot.plans;
   const filteredExploreRouteIds = useMemo(() => {
@@ -3609,6 +3650,21 @@ function DiscoverScreenInner() {
   const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet;
   const exploreWizardSourceCounts = exploreGuidanceReadyInventory.sourceCounts;
   const hasSelectedExploreRefinement = exploreRefinement != null;
+  const routeCatalogPreviewGeometryReady =
+    routeCatalogPreviewGeometryRequested &&
+    liveTrailPackCatalogSnapshot.status === 'ready' &&
+    liveTrailPackCatalogSnapshot.refreshKey === routeCatalogSearchRefreshKey;
+  const showGuidanceReadyGeometryLoading =
+    hasSelectedExploreRefinement &&
+    routeCatalogHasSearchArea &&
+    routeCatalogPreviewGeometryRequested &&
+    !routeCatalogPreviewGeometryReady &&
+    liveTrailPackCatalogSnapshot.status !== 'error';
+  const showRefinementEmptyState =
+    hasSelectedExploreRefinement &&
+    !showGuidanceReadyGeometryLoading &&
+    exploreGuidanceReadyInventory.totalReadyCount > 0 &&
+    exploreGuidanceReadyInventory.readyCount === 0;
   const showGuidanceReadyRefinementPrompt =
     !hasSelectedExploreRefinement && exploreGuidanceReadyInventory.totalReadyCount > 0;
   const visibleExploreWizardCandidates = useMemo(
@@ -3981,9 +4037,15 @@ function DiscoverScreenInner() {
   const showSectionLoading = isLoading && (hasLoadedExplorer || opportunities.length > 0);
   const showTrailPackSectionLoading =
     showSectionLoading ||
-    liveTrailPackCatalogSnapshot.status === 'idle' ||
-    liveTrailPackCatalogSnapshot.status === 'loading';
+    (routeCatalogHasSearchArea && (
+      liveTrailPackCatalogSnapshot.status === 'idle' ||
+      liveTrailPackCatalogSnapshot.status === 'loading'
+    ));
   const showTrailPackBlockingLoading = showTrailPackSectionLoading && visibleRouteCatalogSummaries.length === 0;
+  const hasExploreRangeRouteData =
+    radiusFilteredOpportunities.length > 0 ||
+    liveTrailPackCatalogSnapshot.trailPacks.length > 0 ||
+    routeCatalogRuntimeContract.summaries.length > 0;
   const exploreGuidanceReadyBlockedReasons = useMemo(
     () =>
       Array.from(
@@ -4002,7 +4064,9 @@ function DiscoverScreenInner() {
   const showGuidanceReadyBlockedNotice =
     !showInitialLoading &&
     !showSectionLoading &&
-    radiusFilteredOpportunities.length > 0 &&
+    routeCatalogPreviewGeometryRequested &&
+    !showGuidanceReadyGeometryLoading &&
+    hasExploreRangeRouteData &&
     exploreGuidanceReadyInventory.totalReadyCount === 0;
 
   useEffect(() => {
@@ -4944,7 +5008,7 @@ function DiscoverScreenInner() {
 
           {activeExplorePrimaryTab === 'suggested_routes' ? (
             <>
-          {(!showInitialLoading && (opportunities.length > 0 || showSectionLoading)) && (
+          {(!showInitialLoading && (hasExploreRangeRouteData || showSectionLoading || showTrailPackSectionLoading)) && (
             <View style={s.discoveryControlsWrap}>
               <DistanceRadiusFilter
                 selectedRadius={distanceRadius}
@@ -4964,7 +5028,9 @@ function DiscoverScreenInner() {
                 <View style={s.exploreWizardStatusCopy}>
                   <Text style={s.exploreWizardStatusTitle}>Guidance Ready Routes</Text>
                   <Text style={s.exploreWizardStatusText}>
-                    {hasSelectedExploreRefinement
+                    {showGuidanceReadyGeometryLoading
+                      ? `Loading bounded route preview geometry for ${exploreFilterNarrative}. Full route detail remains deferred until you preview, save, build, or start a route.`
+                      : hasSelectedExploreRefinement
                       ? `Guidance Ready Routes are source-backed routes with usable stitched geometry, visible confidence, and data state labels. ${exploreGuidanceReadyInventory.readyCount} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start.`
                       : `Select a refinement bucket to populate Guidance Ready route cards. The counts above show guidance-ready routes inside ${distanceRadiusNarrative}, without changing the range results when you switch buckets.`}
                   </Text>
@@ -4978,11 +5044,15 @@ function DiscoverScreenInner() {
                   ) : null}
                 </View>
                 <View style={s.exploreWizardCountPlate}>
-                  <Text style={s.exploreWizardCountValue}>
-                    {hasSelectedExploreRefinement ? exploreGuidanceReadyInventory.readyCount : exploreGuidanceReadyInventory.totalReadyCount}
-                  </Text>
+                  {showGuidanceReadyGeometryLoading ? (
+                    <ActivityIndicator size="small" color={TACTICAL.amber} />
+                  ) : (
+                    <Text style={s.exploreWizardCountValue}>
+                      {hasSelectedExploreRefinement ? exploreGuidanceReadyInventory.readyCount : exploreGuidanceReadyInventory.totalReadyCount}
+                    </Text>
+                  )}
                   <Text style={s.exploreWizardCountLabel}>
-                    {hasSelectedExploreRefinement ? 'READY' : 'IN RANGE'}
+                    {showGuidanceReadyGeometryLoading ? 'LOADING' : hasSelectedExploreRefinement ? 'READY' : 'IN RANGE'}
                   </Text>
                 </View>
               </View>
@@ -5021,7 +5091,7 @@ function DiscoverScreenInner() {
             </>
           )}
 
-          {!showInitialLoading && !showSectionLoading && radiusFilteredOpportunities.length === 0 && (
+          {!showInitialLoading && !showSectionLoading && !showTrailPackSectionLoading && !hasExploreRangeRouteData && (
             <ECSResultsEmptyState
               style={s.emptyRadius}
               title={ECS_STATE_COPY.explore.noRoutesInRadius.title}
@@ -5194,7 +5264,7 @@ function DiscoverScreenInner() {
             </View>
           )}
 
-          {(!showInitialLoading && hasSelectedExploreRefinement && !showRefinementEmptyState && (radiusFilteredOpportunities.length > 0 || showSectionLoading)) && (
+          {(!showInitialLoading && hasSelectedExploreRefinement && !showRefinementEmptyState && (hasExploreRangeRouteData || showGuidanceReadyGeometryLoading || showSectionLoading)) && (
             <View style={s.exploreWizardRouteSurface}>
               <View style={s.exploreWizardFilterRow}>
                 {EXPLORE_WIZARD_SOURCE_FILTERS.map((filter) => {
@@ -5224,7 +5294,15 @@ function DiscoverScreenInner() {
                 })}
               </View>
 
-              {visibleExploreWizardCandidates.length === 0 ? (
+              {showGuidanceReadyGeometryLoading ? (
+                <ECSTransientNotice
+                  kind="loading"
+                  label="Loading Verified Route Previews..."
+                  message="ECS is fetching simplified source geometry for the current range."
+                  compact
+                  style={s.exploreWizardEmpty}
+                />
+              ) : visibleExploreWizardCandidates.length === 0 ? (
                 <ECSResultsEmptyState
                   style={s.exploreWizardEmpty}
                   title="No Guidance-Ready Routes"

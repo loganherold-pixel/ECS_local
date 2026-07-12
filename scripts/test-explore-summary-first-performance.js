@@ -121,6 +121,19 @@ assert(
     !discover.includes('route-geometry-segments'),
   'Explore must not mount Navigate MVUM overlay logic or initialize MVUM sources.',
 );
+assert(
+  discover.includes('const [routeCatalogPreviewGeometryRequested, setRouteCatalogPreviewGeometryRequested] = useState(false)') &&
+    discover.includes('includePreviewGeometry: routeCatalogPreviewGeometryRequested') &&
+    discover.includes('if (refinement != null)') &&
+    discover.includes('setRouteCatalogPreviewGeometryRequested(true)'),
+  'Explore should preserve summary-first entry and request bounded preview geometry only after trip refinement begins.',
+);
+assert(
+  discover.includes('showGuidanceReadyGeometryLoading') &&
+    discover.includes('Loading Verified Route Previews...') &&
+    discover.includes('Full route detail remains deferred until you preview, save, build, or start a route.'),
+  'Explore should expose the lazy preview refresh without treating the in-flight summary records as missing geometry.',
+);
 
 const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
 assert.strictEqual(

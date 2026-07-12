@@ -9,6 +9,7 @@ export * from './bailoutRouteConfidenceResolver';
 export * from './bailoutCandidateQuality';
 export * from './tripItineraryMapboxAdapter';
 export * from './tripItinerarySummary';
+export * from './tripBuilderRouteOptions';
 export * from './tripItineraryReview';
 export * from './tripConfidenceSummary';
 export * from './tripItineraryEditSession';

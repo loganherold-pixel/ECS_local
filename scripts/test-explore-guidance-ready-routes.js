@@ -122,6 +122,19 @@ assert(
   'Explore should expose a compact, truthful blocked state when routes exist but none pass guidance-ready gates.',
 );
 assert(
+  discover.includes('routeCatalogPreviewGeometryRequested') &&
+    discover.includes('includePreviewGeometry: routeCatalogPreviewGeometryRequested') &&
+    discover.includes('showGuidanceReadyGeometryLoading') &&
+    discover.includes('routeCatalogSearchRefreshKey'),
+  'Explore should lazily request and track source-backed preview geometry before evaluating a selected refinement.',
+);
+assert(
+  discover.includes('requireFullCatalogDetail: true') &&
+    discover.includes('saveExploreRouteForPlanning(hydratedCandidate)') &&
+    discover.includes('handleBuildTripFromRoute(hydratedCandidate.route)'),
+  'Save and TripBuilder actions must hydrate full catalog detail instead of persisting simplified search previews.',
+);
+assert(
   !discover.includes('visibleTrailPacks\n        .map((trailPack) => trailPackToExpeditionOpportunity(trailPack))') &&
     !discover.includes('visibleAIRoutes\n          .filter(routePassesExploreMapLength)'),
   'TripBuilder ready counts must not be built from page-sized visible Trail Pack or AI route windows.',

@@ -24,7 +24,10 @@ const filterSource = fs.readFileSync(path.join(root, 'components', 'discover', '
 const helperSource = fs.readFileSync(path.join(root, 'lib', 'explore', 'exploreRefinementFilter.ts'), 'utf8');
 const routeCatalogSearchCriteriaBlock = discoverSource
   .split('const routeCatalogSearchCriteria = useMemo')[1]
-  ?.split('useEffect(() => {')[0] ?? '';
+  ?.split('const explorePerformanceSearchKey')[0] ?? '';
+const refinementChangeBlock = discoverSource
+  .split('const handleExploreRefinementChange = useCallback')[1]
+  ?.split('const handleResetDiscoveryFilters')[0] ?? '';
 const guidanceReadyInventoryBlock = discoverSource
   .split('const exploreGuidanceReadyInventory = useMemo')[1]
   ?.split('const exploreWizardCandidateSet')[0] ?? '';
@@ -184,10 +187,17 @@ assert.ok(
 assert.ok(
   !discoverSource.includes('routeCatalogRefinementCriteria') &&
     !routeCatalogSearchCriteriaBlock.includes('exploreRefinement') &&
+    routeCatalogSearchCriteriaBlock.includes('includePreviewGeometry: routeCatalogPreviewGeometryRequested') &&
     !routeCatalogSearchCriteriaBlock.includes('minRemotenessScore') &&
     !routeCatalogSearchCriteriaBlock.includes('maxDurationMinutes') &&
     !routeCatalogSearchCriteriaBlock.includes('minDurationMinutes'),
-  'Changing Explore refinements should stay local and must not trigger a live route-catalog refetch.',
+  'Explore refinement details should stay local while the catalog criteria uses only the sticky preview-geometry opt-in.',
+);
+assert.ok(
+  refinementChangeBlock.includes('if (refinement != null)') &&
+    refinementChangeBlock.includes('setRouteCatalogPreviewGeometryRequested(true)') &&
+    !refinementChangeBlock.includes('setRouteCatalogPreviewGeometryRequested(false)'),
+  'The first non-null refinement should opt into route previews once, while later bucket changes remain local.',
 );
 assert.ok(
   aiFetchBlock.includes('canonicalRadiusFilteredRoutes.map((route) => route.name)') &&
@@ -220,12 +230,12 @@ assert.ok(
 );
 assert.ok(
   filterSource.includes('contentStyle={s.filterContentSurface}') &&
-    filterSource.includes('backgroundColor: `${TACTICAL.amber}12`') &&
-    filterSource.includes('borderColor: `${TACTICAL.amber}2E`') &&
+    filterSource.includes('backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : `${TACTICAL.amber}12`') &&
+    filterSource.includes('borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}2E`') &&
     filterSource.includes('color: TACTICAL.goldMedium') &&
     filterSource.includes('segmentActive') &&
-    filterSource.includes("TACTICAL.amber + '14'"),
-  'The Explorer Filters panel should match the Fleet readiness command gold translucent surface while preserving active amber chips.',
+    filterSource.includes("backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : TACTICAL.amber + '14'"),
+  'The Explorer Filters panel should preserve its gold translucent treatment and Android-optimized active chips.',
 );
 assert.ok(
   helperSource.includes('Remoteness') &&

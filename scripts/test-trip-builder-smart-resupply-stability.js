@@ -228,8 +228,8 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 6;',
-  'Smart resupply lookup should cap repeated Search Box suggest calls across approach anchors.',
+  'const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 7;',
+  'Smart resupply lookup should cap corridor coverage plus one expanded trail-entry search per radius tier.',
 );
 assertIncludes(
   screen,
@@ -253,8 +253,8 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'forwardGeocodeFallback: false',
-  'Smart resupply background lookup should not invoke forward-geocode fallback for every approach anchor.',
+  'forwardGeocodeFallback: allowForwardGeocodeFallback',
+  'Smart resupply background lookup should reserve forward geocoding for the final expanded-radius pass.',
 );
 assertIncludes(
   screen,
@@ -275,6 +275,11 @@ assertIncludes(
   screen,
   'return rightProgress - leftProgress || left - right;',
   'Smart resupply fallback radius passes should prioritize remote-entry and trailhead-side anchors before home-side anchors.',
+);
+assertIncludes(
+  screen,
+  '}).slice(0, 1);',
+  'Expanded-radius passes should query only the highest-priority trail-entry-side anchor to bound Mapbox traffic.',
 );
 assert(
   !screen.includes("if (option.fallbackState === 'trailhead_only') return true;"),

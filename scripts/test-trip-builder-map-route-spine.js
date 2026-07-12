@@ -36,8 +36,8 @@ assert.ok(
   'Reference camp and bailout pins must remain explicitly unconnected from route guidance.',
 );
 assert.ok(
-  screen.includes('markers={[...suggestedCampMarkers, ...campMarkers]}') &&
-    screen.includes('markers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}'),
+  screen.includes('pinMarkers={[...suggestedCampMarkers, ...campMarkers]}') &&
+    screen.includes('pinMarkers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}'),
   'Camp and bailout picker pins must render as marker overlays, not route path points.',
 );
 assert.ok(
@@ -50,7 +50,7 @@ assert.ok(
 );
 assert.ok(
   screen.includes('routeCoords={pickerRouteCoords}'),
-  'Camp and bailout picker maps should render simplified route preview coordinates instead of the full route payload.',
+  'Camp and bailout picker degraded surfaces should retain simplified route coordinates instead of the full route payload.',
 );
 assert.ok(
   screen.includes('TRIP_BUILDER_PICKER_MAP_HEIGHT'),
@@ -61,8 +61,15 @@ assert.ok(
   'Trip Builder picker map frame should keep a bounded mobile viewport.',
 );
 assert.ok(
-  (screen.match(/<MapFallbackSurface/g) ?? []).length >= 2,
-  'Camp and bailout picker maps should use the lightweight reference surface instead of mounting WebView.',
+  (screen.match(/<MapRenderer/g) ?? []).length >= 3 &&
+    screen.includes("buildTripRoutePreviewCameraCommand(pickerRoutePoints, 'camp_picker')") &&
+    screen.includes("buildTripRoutePreviewCameraCommand(pickerRoutePoints, 'bailout_picker')"),
+  'Camp and bailout pickers should mount interactive maps with route-fit camera framing.',
+);
+assert.ok(
+  (screen.match(/<MapFallbackSurface/g) ?? []).length >= 2 &&
+    (screen.match(/statusLabel="Offline reference"/g) ?? []).length >= 2,
+  'Camp and bailout pickers should retain the lightweight route line only as a truthful offline/token fallback.',
 );
 assert.ok(
   !screen.includes('TripBuilderPickerMapStyleSwitch') &&

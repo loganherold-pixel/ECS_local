@@ -32,7 +32,7 @@ import {
   getMapboxToken,
   getMapboxTokenSync,
 } from '../lib/mapConfig';
-import { loadOpportunitiesWithCompatibility, type ExpeditionOpportunity } from '../lib/discoverEngine';
+import type { ExpeditionOpportunity } from '../lib/discoverEngine';
 import { buildProfileFromSpecs } from '../lib/rigCompatibilityEngine';
 import { extractExploreRouteCampMarkers } from '../lib/exploreRouteCampHandoff';
 import {
@@ -61,6 +61,7 @@ import {
   getTripConfidenceSummary,
   isUsableRouteContext,
   loadTripBuilderRouteHandoff,
+  mergeRealTripBuilderRouteOptions,
   reorderTripItineraryStop,
   rankApproachResupplyOptions,
   resolvePreTrailStops,
@@ -108,6 +109,14 @@ import {
   type TripConfidenceSummaryViewModel,
   type TripBuilderSuggestedEstablishedCampPin,
 } from '../lib/tripBuilder';
+import {
+  importedRouteToExploreWizardRoute,
+  runToExploreWizardRoute,
+} from '../lib/explore/exploreTripBuilderWizard';
+import { liveTrailPackCatalogStore } from '../lib/explore/liveTrailPackCatalog';
+import { trailPackToExpeditionOpportunity } from '../lib/explore/trailPacks';
+import { routeStore } from '../lib/routeStore';
+import { runStore } from '../lib/runStore';
 import {
   getOfflinePrepRouteCoordinates,
   saveOfflinePrepPackHandoff,
@@ -374,8 +383,8 @@ const BAILOUT_PLAN_OPTIONS: { value: BailoutPlanPreference; label: string }[] = 
 ];
 const TRIP_BUILDER_PICKER_MAP_HEIGHT = 300;
 const TRIP_BUILDER_PICKER_ROUTE_PREVIEW_MAX_POINTS = 96;
-const SMART_RESUPPLY_FUEL_QUERY = 'gas station fuel diesel';
-const SMART_RESUPPLY_SUPPLY_QUERY = 'grocery store supermarket supplies';
+const SMART_RESUPPLY_FUEL_QUERY = 'gas station';
+const SMART_RESUPPLY_SUPPLY_QUERY = 'market';
 const SMART_RESUPPLY_OPTION_LIMIT = 5;
 const SMART_RESUPPLY_OPTION_LIST_HEIGHT = 56;
 const TRIP_SETUP_BUILD_BUTTON_CLEARANCE = 108;
@@ -385,7 +394,7 @@ const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const;
 const SMART_RESUPPLY_SEARCH_MAX_ANCHORS = 4;
 const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 8000;
 const SMART_RESUPPLY_RETRIEVE_TIMEOUT_MS = 2200;
-const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 6;
+const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 7;
 const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = 5;
 const SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE =
   'Live pre-trail POI lookup is taking too long; itinerary continuity is preserved with manual verification.';
@@ -2854,7 +2863,7 @@ function smartResupplyAnchorSearchOrder(
     const leftProgress = anchors[left]?.progressRatio ?? (anchors[left]?.basis === 'trailhead_fallback' ? 1 : 0);
     const rightProgress = anchors[right]?.progressRatio ?? (anchors[right]?.basis === 'trailhead_fallback' ? 1 : 0);
     return rightProgress - leftProgress || left - right;
-  });
+  }).slice(0, 1);
 }
 
 async function loadSmartResupplyOptions(params: {
@@ -2887,7 +2896,12 @@ async function loadSmartResupplyOptions(params: {
   const coveredAnchorKeys = new Set<number>();
   let suggestRequestCount = 0;
   let retrieveRequestCount = 0;
-  const collectSearchPass = async (anchor: TripMapCoordinate, anchorIndex: number, bbox?: SmartResupplySearchBounds) => {
+  const collectSearchPass = async (
+    anchor: TripMapCoordinate,
+    anchorIndex: number,
+    bbox?: SmartResupplySearchBounds,
+    allowForwardGeocodeFallback = false,
+  ) => {
     assertSmartResupplyLookupBudget(lookupStartedAt);
     const suggestions = await searchRoadDestinations({
       accessToken: params.accessToken,
@@ -2896,7 +2910,7 @@ async function loadSmartResupplyOptions(params: {
       proximity: { lat: anchor.latitude, lng: anchor.longitude },
       bbox,
       limit: SMART_RESUPPLY_SEARCH_LIMIT,
-      forwardGeocodeFallback: false,
+      forwardGeocodeFallback: allowForwardGeocodeFallback,
       billingContext: {
         flow: 'trip_builder_smart_resupply',
         surface: 'Trip Builder',
@@ -2915,7 +2929,12 @@ async function loadSmartResupplyOptions(params: {
       const anchor = searchAnchors[anchorIndex];
       try {
         suggestRequestCount += 1;
-        await collectSearchPass(anchor.coordinate, anchorIndex, smartResupplySearchBounds(anchor.coordinate, radiusMiles));
+        await collectSearchPass(
+          anchor.coordinate,
+          anchorIndex,
+          smartResupplySearchBounds(anchor.coordinate, radiusMiles),
+          radiusTierIndex === SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES.length - 1,
+        );
       } catch {}
       if (smartResupplyLookupTimedOut(lookupStartedAt) && suggestionMap.size === 0) {
         throw new Error(SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE);
@@ -3434,6 +3453,8 @@ function CampPlanPickerOverlay({
   visible,
   route,
   routePreviewPoints,
+  mapboxToken,
+  userLocation,
   pins,
   suggestedEstablishedCampPins,
   onDropPin,
@@ -3444,6 +3465,8 @@ function CampPlanPickerOverlay({
   visible: boolean;
   route: TripBuilderRouteInput | null;
   routePreviewPoints: TripMapCoordinate[];
+  mapboxToken: string | null;
+  userLocation: TripMapCoordinate | null;
   pins: CampPlanPin[];
   suggestedEstablishedCampPins: TripBuilderSuggestedEstablishedCampPin[];
   onDropPin: (coordinate: TripMapCoordinate) => void;
@@ -3459,6 +3482,10 @@ function CampPlanPickerOverlay({
   const pickerRoutePoints = useMemo(() => simplifyTripBuilderPickerRoutePoints(routePoints), [routePoints]);
   const pickerRouteCoords = useMemo(
     () => pickerRoutePoints.map((point) => [point.longitude, point.latitude] as [number, number]),
+    [pickerRoutePoints],
+  );
+  const pickerCameraCommand = useMemo(
+    () => buildTripRoutePreviewCameraCommand(pickerRoutePoints, 'camp_picker'),
     [pickerRoutePoints],
   );
   const campMarkers = pins.map((pin, index): TripPlanMapMarker => ({
@@ -3510,17 +3537,38 @@ function CampPlanPickerOverlay({
         </View>
         <View style={styles.bailoutPickerMapFrame}>
           {pickerRoutePoints.length > 0 ? (
-            <MapFallbackSurface
-              routeCoords={pickerRouteCoords}
-              markers={[...suggestedCampMarkers, ...campMarkers]}
-              compact
-              interactive
-              onMapTap={(coordinate) => onDropPin(coordinate)}
-              routeColor={TACTICAL.amber}
-              routeHaloColor="rgba(8,14,18,0.62)"
-              showStatusLabel
-              statusLabel="Reference preview"
-            />
+            mapboxToken ? (
+              <MapRenderer
+                points={pickerRoutePoints}
+                pinMarkers={[...suggestedCampMarkers, ...campMarkers]}
+                routeColor={TACTICAL.amber}
+                mapStyle={DEFAULT_MAP_STYLE}
+                mapboxToken={mapboxToken}
+                hasToken
+                surfaceMode="compact"
+                motionPriority="warm"
+                interactive
+                showUserLocation={!!userLocation}
+                userLocation={userLocation}
+                followUser={false}
+                cameraMode="route_overview"
+                cameraCommand={pickerCameraCommand}
+                onMapTap={(coordinate) => onDropPin(coordinate)}
+                style={styles.tripMapSurface}
+              />
+            ) : (
+              <MapFallbackSurface
+                routeCoords={pickerRouteCoords}
+                markers={[...suggestedCampMarkers, ...campMarkers]}
+                compact
+                interactive
+                onMapTap={(coordinate) => onDropPin(coordinate)}
+                routeColor={TACTICAL.amber}
+                routeHaloColor="rgba(8,14,18,0.62)"
+                showStatusLabel
+                statusLabel="Offline reference"
+              />
+            )
           ) : (
             <View style={styles.tripMapFallback}>
               <Ionicons name="map-outline" size={24} color={TACTICAL.textMuted} />
@@ -3609,6 +3657,8 @@ function BailoutPlanPickerOverlay({
   visible,
   route,
   routePreviewPoints,
+  mapboxToken,
+  userLocation,
   pins,
   selectedPoint,
   onDropPoint,
@@ -3619,6 +3669,8 @@ function BailoutPlanPickerOverlay({
   visible: boolean;
   route: TripBuilderRouteInput | null;
   routePreviewPoints: TripMapCoordinate[];
+  mapboxToken: string | null;
+  userLocation: TripMapCoordinate | null;
   pins: BailoutPlanPoint[];
   selectedPoint: BailoutPlanPoint | null;
   onDropPoint: (coordinate: TripMapCoordinate) => void;
@@ -3634,6 +3686,10 @@ function BailoutPlanPickerOverlay({
   const pickerRoutePoints = useMemo(() => simplifyTripBuilderPickerRoutePoints(routePoints), [routePoints]);
   const pickerRouteCoords = useMemo(
     () => pickerRoutePoints.map((point) => [point.longitude, point.latitude] as [number, number]),
+    [pickerRoutePoints],
+  );
+  const pickerCameraCommand = useMemo(
+    () => buildTripRoutePreviewCameraCommand(pickerRoutePoints, 'bailout_picker'),
     [pickerRoutePoints],
   );
   const routeEndpointMarkers = useMemo(() => {
@@ -3711,17 +3767,38 @@ function BailoutPlanPickerOverlay({
         </View>
         <View style={styles.bailoutPickerMapFrame}>
           {pickerRoutePoints.length > 0 ? (
-            <MapFallbackSurface
-              routeCoords={pickerRouteCoords}
-              markers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}
-              compact
-              interactive
-              onMapTap={(coordinate) => onDropPoint(coordinate)}
-              routeColor={TACTICAL.amber}
-              routeHaloColor="rgba(8,14,18,0.62)"
-              showStatusLabel
-              statusLabel="Reference preview"
-            />
+            mapboxToken ? (
+              <MapRenderer
+                points={pickerRoutePoints}
+                pinMarkers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}
+                routeColor={TACTICAL.amber}
+                mapStyle={DEFAULT_MAP_STYLE}
+                mapboxToken={mapboxToken}
+                hasToken
+                surfaceMode="compact"
+                motionPriority="warm"
+                interactive
+                showUserLocation={!!userLocation}
+                userLocation={userLocation}
+                followUser={false}
+                cameraMode="route_overview"
+                cameraCommand={pickerCameraCommand}
+                onMapTap={(coordinate) => onDropPoint(coordinate)}
+                style={styles.tripMapSurface}
+              />
+            ) : (
+              <MapFallbackSurface
+                routeCoords={pickerRouteCoords}
+                markers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}
+                compact
+                interactive
+                onMapTap={(coordinate) => onDropPoint(coordinate)}
+                routeColor={TACTICAL.amber}
+                routeHaloColor="rgba(8,14,18,0.62)"
+                showStatusLabel
+                statusLabel="Offline reference"
+              />
+            )
           ) : (
             <View style={styles.tripMapFallback}>
               <Ionicons name="map-outline" size={24} color={TACTICAL.textMuted} />
@@ -3961,10 +4038,7 @@ export default function ExploreTripBuilderScreen() {
       try {
         const handoff = loadTripBuilderRouteHandoff();
         const exploreContext = loadExplorePlanningRouteContext();
-        const suggestedRoutes = (exploreContext?.routes?.length
-          ? exploreContext.routes
-          : loadOpportunitiesWithCompatibility(null).opportunities
-        ) as ExpeditionOpportunity[];
+        const suggestedRoutes = (exploreContext?.routes ?? []) as unknown as ExpeditionOpportunity[];
         const handoffDraftItinerary = handoff?.draftItinerary ?? null;
         const handoffRoute = handoff?.route
           ? {
@@ -3973,10 +4047,28 @@ export default function ExploreTripBuilderScreen() {
               itineraryConfidence: handoffDraftItinerary?.confidence ?? handoff.route.itineraryConfidence,
             } as unknown as ExpeditionOpportunity
           : undefined;
-        const routeMap = new Map<string, TripBuilderRouteInput>();
-        if (handoffRoute?.id) upsertExplorePlanningRoute(routeMap, handoffRoute as unknown as TripBuilderRouteInput);
-        suggestedRoutes.forEach((route) => upsertExplorePlanningRoute(routeMap, route as unknown as TripBuilderRouteInput));
-        const nextRoutes = Array.from(routeMap.values());
+        const localRouteAssets = routeStore.getAll();
+        const linkedRunIds = new Set(
+          localRouteAssets
+            .map((route) => route.linked_run_id)
+            .filter((runId): runId is string => typeof runId === 'string' && runId.length > 0),
+        );
+        const localRoutes = localRouteAssets
+          .map(importedRouteToExploreWizardRoute)
+          .filter((route): route is ExpeditionOpportunity => !!route);
+        const savedRunRoutes = runStore.getAll()
+          .filter((run) => !linkedRunIds.has(run.id))
+          .map(runToExploreWizardRoute)
+          .filter((route): route is ExpeditionOpportunity => !!route);
+        const liveCatalogRoutes = liveTrailPackCatalogStore.getSnapshot().trailPacks
+          .map((trailPack) => trailPackToExpeditionOpportunity(trailPack) as ExpeditionOpportunity);
+        const nextRoutes = mergeRealTripBuilderRouteOptions([
+          handoffRoute ? [handoffRoute] : [],
+          suggestedRoutes,
+          localRoutes,
+          savedRunRoutes,
+          liveCatalogRoutes,
+        ]);
         setRoutes(nextRoutes as unknown as ExpeditionOpportunity[]);
         const requestedRouteId = params.routeId ? String(params.routeId) : null;
         const shouldAutoOpenTripSetup = Boolean(requestedRouteId && params.setup === '1');
@@ -4307,13 +4399,7 @@ export default function ExploreTripBuilderScreen() {
       (
         preTrailStopCandidatesForDraft != null ||
         routeContextPreTrailCandidateCount > 0 ||
-        (
-          itinerarySearchToken &&
-          (
-            smartResupplyError?.startsWith('No fuel options') ||
-            smartResupplyError?.startsWith('No grocery')
-          )
-        )
+        !!itinerarySearchToken
       ),
   );
 
@@ -4733,7 +4819,7 @@ export default function ExploreTripBuilderScreen() {
           const mergedOptions = mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current);
           commitSmartResupplyFuelOptions(mergedOptions);
           if (mergedOptions.length === 0) {
-            setSmartResupplyError('Map search returned no usable fuel candidates along the GPS-to-trailhead approach. Try again, or select No and verify manually before departure.');
+            setSmartResupplyError('No verified fuel POIs were found along the current approach corridor or expanded trailhead search. Try again, widen the route context in Explore, or verify fuel manually before departure.');
           }
         } catch (searchError) {
           if (!cancelled && requestId === smartResupplyFuelRequestRef.current) {
@@ -4832,7 +4918,7 @@ export default function ExploreTripBuilderScreen() {
           const mergedOptions = mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current);
           commitSmartResupplySupplyOptions(mergedOptions);
           if (mergedOptions.length === 0) {
-            setSmartResupplyError('Map search returned no usable grocery or supply candidates along the GPS-to-trailhead approach. Try again, or verify manually before departure.');
+            setSmartResupplyError('No verified grocery or supply POIs were found along the current approach corridor or expanded trailhead search. Try again or verify supplies manually before departure.');
           }
         } catch (searchError) {
           if (!cancelled && requestId === smartResupplySupplyRequestRef.current) {
@@ -5928,7 +6014,7 @@ export default function ExploreTripBuilderScreen() {
                       </Text>
                     </View>
                     <Text style={styles.routePickerHint}>
-                      ECS OR IMPORTED: Select one of the current Suggested Trailheads filters or import a route file, then open Trip Builder to start setup.
+                      SOURCE-BACKED OR IMPORTED: Select a reviewed Suggested Trailhead, saved route asset, or imported route file to start setup.
                     </Text>
                     <TouchableOpacity
                       style={[styles.importRouteCard, routeImportState.status === 'loading' && styles.primaryButtonDisabled]}
@@ -6449,6 +6535,8 @@ export default function ExploreTripBuilderScreen() {
             visible={bailoutPickerVisible}
             route={selectedRoute as unknown as TripBuilderRouteInput | null}
             routePreviewPoints={selectedPreparedRoutePoints}
+            mapboxToken={itinerarySearchToken}
+            userLocation={liveTripBuilderUserLocation}
             pins={bailoutPlanPins}
             selectedPoint={selectedBailoutPoint}
             onDropPoint={handleDropBailoutPoint}
@@ -6460,6 +6548,8 @@ export default function ExploreTripBuilderScreen() {
             visible={campPickerVisible}
             route={selectedRoute as unknown as TripBuilderRouteInput | null}
             routePreviewPoints={selectedPreparedRoutePoints}
+            mapboxToken={itinerarySearchToken}
+            userLocation={liveTripBuilderUserLocation}
             pins={campPlanPins}
             suggestedEstablishedCampPins={suggestedEstablishedCampPins}
             onDropPin={handleDropCampPin}
