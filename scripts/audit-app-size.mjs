@@ -113,6 +113,7 @@ export function walkFiles(repoRoot, options = {}) {
         fullPath,
         path: relPath(root, fullPath),
         bytes: stat.size,
+        modifiedAtMs: stat.mtimeMs,
         extension: path.extname(entry.name).toLowerCase() || '[none]',
       });
     }
@@ -248,11 +249,11 @@ function androidArtifacts(files) {
   return {
     apks: files
       .filter((file) => file.extension === '.apk')
-      .map(({ path: filePath, bytes }) => ({ path: filePath, bytes }))
+      .map(({ path: filePath, bytes, modifiedAtMs }) => ({ path: filePath, bytes, modifiedAtMs }))
       .sort((left, right) => right.bytes - left.bytes),
     aabs: files
       .filter((file) => file.extension === '.aab')
-      .map(({ path: filePath, bytes }) => ({ path: filePath, bytes }))
+      .map(({ path: filePath, bytes, modifiedAtMs }) => ({ path: filePath, bytes, modifiedAtMs }))
       .sort((left, right) => right.bytes - left.bytes),
   };
 }

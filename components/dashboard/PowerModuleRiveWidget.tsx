@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo } from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import {
   Alignment,
   Fit,
@@ -42,10 +42,21 @@ function activeWatts(value: unknown): boolean {
 }
 
 function getBundledRiveSrc(): string {
-  const resolved = Image.resolveAssetSource(BLU_POWER_MODULE_ASSET);
-  return typeof resolved?.uri === 'string' && resolved.uri.trim()
-    ? resolved.uri
-    : PUBLIC_RIVE_SRC;
+  if (typeof BLU_POWER_MODULE_ASSET === 'string' && BLU_POWER_MODULE_ASSET.trim()) {
+    return BLU_POWER_MODULE_ASSET;
+  }
+
+  if (
+    BLU_POWER_MODULE_ASSET &&
+    typeof BLU_POWER_MODULE_ASSET === 'object' &&
+    'uri' in BLU_POWER_MODULE_ASSET &&
+    typeof BLU_POWER_MODULE_ASSET.uri === 'string' &&
+    BLU_POWER_MODULE_ASSET.uri.trim()
+  ) {
+    return BLU_POWER_MODULE_ASSET.uri;
+  }
+
+  return PUBLIC_RIVE_SRC;
 }
 
 export default function PowerModuleRiveWidget({

@@ -110,6 +110,15 @@ const OVERLAY_PRESETS: Record<ECSOverlayClass, OverlayPreset> = {
 };
 
 const BASE_SIDE_CLEARANCE = 12;
+const MODAL_SHELL_SHADOW: ViewStyle = Platform.select<ViewStyle>({
+  web: { boxShadow: '0px 10px 18px rgba(0,0,0,0.35)' } as ViewStyle,
+  default: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+  },
+})!;
 
 export interface ECSModalShellProps {
   visible: boolean;
@@ -486,9 +495,8 @@ export default function ECSModalShell({
 
   const shell = resolvedKeyboardAware ? (
     <KeyboardAvoidingView
-      style={styles.keyboardWrap}
+      style={[styles.keyboardWrap, { pointerEvents: 'box-none' }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      pointerEvents="box-none"
     >
       {shellContent}
     </KeyboardAvoidingView>
@@ -510,9 +518,9 @@ export default function ECSModalShell({
             paddingHorizontal: overlayBounds.sideClearance,
             paddingTop: overlayBounds.topClearance,
             paddingBottom: overlayBounds.bottomClearance,
+            pointerEvents: 'box-none',
           },
         ]}
-        pointerEvents="box-none"
       >
         {shell}
       </View>
@@ -537,10 +545,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(196,138,44,0.28)',
     backgroundColor: 'rgba(8,12,15,0.985)',
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.35,
-    shadowRadius: 18,
+    ...MODAL_SHELL_SHADOW,
     elevation: 20,
   },
   sheetShell: {

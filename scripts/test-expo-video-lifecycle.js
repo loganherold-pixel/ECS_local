@@ -73,6 +73,8 @@ assert(
 assert(
   loadingTransition.includes('const LOADING_FALLBACK') &&
     loadingTransition.includes('<Image source={LOADING_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />') &&
+    loadingTransition.includes('<View style={styles.webFallback} />') &&
+    loadingTransition.includes("Platform.OS === 'web'") &&
     loadingTransition.includes('flex: 1') &&
     loadingTransition.includes("backgroundColor: '#040608'") &&
     loadingTransition.includes('videoFailed') &&
@@ -80,6 +82,15 @@ assert(
     loadingTransition.includes('onFirstFrameRender') &&
     loadingTransition.includes('<ActivityIndicator size="small" color={TACTICAL.amber} />'),
   'LoadingTransitionVideo should show a branded non-gray fallback while media loads or fails.',
+);
+assert(
+  loadingTransition.includes('const handleReady = useCallback') &&
+    loadingTransition.includes('const handleFailed = useCallback') &&
+    loadingTransition.includes("width: '100%'") &&
+    loadingTransition.includes("height: '100%'") &&
+    !loadingTransition.includes('width: undefined') &&
+    !loadingTransition.includes('height: undefined'),
+  'LoadingTransitionVideo should keep callbacks and web fallback dimensions stable during auth handoffs.',
 );
 assert(
   loginBackground.includes('if (!isMountedRef.current || hasSignalled.current) return;'),

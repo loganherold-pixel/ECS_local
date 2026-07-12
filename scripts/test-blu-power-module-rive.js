@@ -54,7 +54,10 @@ assert(
 assert(
   webComponentSource.includes("require('../../assets/power/blu_power_module.riv')") &&
     webComponentSource.includes("const PUBLIC_RIVE_SRC = '/rive/blu_power_module.riv'") &&
-    webComponentSource.includes('Image.resolveAssetSource(BLU_POWER_MODULE_ASSET)') &&
+    webComponentSource.includes("typeof BLU_POWER_MODULE_ASSET === 'string'") &&
+    webComponentSource.includes("'uri' in BLU_POWER_MODULE_ASSET") &&
+    webComponentSource.includes('return PUBLIC_RIVE_SRC') &&
+    !webComponentSource.includes('Image.resolveAssetSource(BLU_POWER_MODULE_ASSET)') &&
     webComponentSource.includes('src: riveSrc') &&
     webComponentSource.includes('autoplay: shouldAnimate') &&
     webComponentSource.includes('shouldAnimateBluPowerModuleRuntime({ hasEcsData, batteryPercent, inputWatts, outputWatts })') &&
@@ -64,7 +67,7 @@ assert(
     webComponentSource.includes('onLoadError: () => setLoadFailed(true)') &&
     webComponentSource.includes('<BluPowerModuleFallback') &&
     webComponentSource.includes("testID ? `${testID}-loading-fallback` : undefined"),
-  'Web BLU power module must resolve the bundled .riv asset first, keep public/rive as a fallback path, and render a visible fallback while loading or after Rive load failure.',
+  'Web BLU power module must resolve Metro asset shapes without React Native Image APIs, keep public/rive as a fallback path, and render a visible fallback while loading or after Rive load failure.',
 );
 
 assert(

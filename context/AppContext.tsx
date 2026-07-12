@@ -131,6 +131,7 @@ import {
   canReuseOperatorInfoSnapshot,
   resolveCachedOperatorAccessSnapshot,
 } from '../lib/auth/offlineAccessPolicy';
+import { shouldClearOfflineModeForAuthCleanup } from '../lib/auth/offlineModeClearPolicy';
 import { offlineCredentialStore } from '../lib/auth/offlineCredentialStore';
 import type { ECSAccessResolution } from '../lib/auth/entitlementTypes';
 import { connectivity, type ConnectivityStatus } from "../lib/connectivity";
@@ -860,16 +861,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ── Offline mode actions ────────────────────────────────────
   const enterOfflineMode = useCallback(() => {
-    if (offlineMode) return;
-    setOfflineMode(true);
     setPersistedOfflineMode(true);
-  }, [offlineMode]);
+    setOfflineMode(true);
+  }, []);
 
   const exitOfflineMode = useCallback(() => {
-    if (!offlineMode) return;
-    setOfflineMode(false);
     setPersistedOfflineMode(false);
-  }, [offlineMode]);
+    setOfflineMode(false);
+  }, []);
 
   // ── Initialize IndexedDB + migrate from localStorage + hydrate dashboard ────
   useEffect(() => {
@@ -1269,7 +1268,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           connectivity.isOnline() ? AUTH_COPY.session.expired : AUTH_COPY.session.reconnect
         );
         setStartupSessionRestored(false);
-        clearAuthenticatedRuntimeState();
+        clearAuthenticatedRuntimeState({
+          clearOfflineMode: shouldClearOfflineModeForAuthCleanup({
+            reason: 'session_expired',
+            persistedOfflineMode: getPersistedOfflineMode(),
+          }),
+        });
         supabase.auth.signOut().catch(() => {});
         setAuthLoading(false);
         return;
@@ -1294,7 +1298,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           },
         });
         setStartupSessionRestored(false);
-        clearAuthenticatedRuntimeState();
+        clearAuthenticatedRuntimeState({
+          clearOfflineMode: shouldClearOfflineModeForAuthCleanup({
+            reason: 'startup_signed_out',
+            persistedOfflineMode: getPersistedOfflineMode(),
+          }),
+        });
         void clearPersistedSupabaseAuthState();
         setAuthLoading(false);
       } else {
@@ -1413,7 +1422,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           },
         });
         setStartupSessionRestored(false);
-        clearAuthenticatedRuntimeState();
+        clearAuthenticatedRuntimeState({
+          clearOfflineMode: shouldClearOfflineModeForAuthCleanup({
+            reason: 'startup_signed_out',
+            persistedOfflineMode: getPersistedOfflineMode(),
+          }),
+        });
         void clearPersistedSupabaseAuthState();
         setAuthLoading(false);
         return;
@@ -1463,7 +1477,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStartupSessionRestored(false);
       clearAuthenticatedRuntimeState({
         clearSession: !(!connectivity.isOnline() && hasPersistentSession),
-        clearOfflineMode: connectivity.isOnline(),
+        clearOfflineMode: shouldClearOfflineModeForAuthCleanup({
+          reason: 'session_restore_failure',
+          persistedOfflineMode: getPersistedOfflineMode(),
+        }),
       });
       setAuthLoading(false);
     });
@@ -1553,7 +1570,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         clearAuthenticatedRuntimeState({
           clearSession: event === 'SIGNED_OUT',
-          clearOfflineMode: true,
+          clearOfflineMode: shouldClearOfflineModeForAuthCleanup({
+            reason: event === 'INITIAL_SESSION' ? 'initial_provider_session' : 'provider_signed_out',
+            persistedOfflineMode: getPersistedOfflineMode(),
+          }),
         });
       }
     });

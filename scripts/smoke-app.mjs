@@ -63,11 +63,6 @@ function summarizeSpawnError(error) {
   return message;
 }
 
-function isSpawnBlocked(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /spawn\s+(EPERM|EINVAL)/i.test(message);
-}
-
 function childEnv() {
   return {
     ...process.env,
@@ -119,7 +114,7 @@ async function runCommandStage(name, command, commandArgs, timeoutMs) {
       });
     } catch (error) {
       finish(
-        isSpawnBlocked(error) ? 'skipped' : 'failed',
+        'failed',
         null,
         summarizeSpawnError(error),
       );
@@ -134,7 +129,7 @@ async function runCommandStage(name, command, commandArgs, timeoutMs) {
     });
     child.on('error', (error) => {
       finish(
-        isSpawnBlocked(error) ? 'skipped' : 'failed',
+        'failed',
         null,
         summarizeSpawnError(error),
       );
@@ -302,8 +297,13 @@ export async function buildSmokeResult() {
       if (packageJson.scripts.lint.trim() === 'expo lint' && fs.existsSync(inspected.expoBin)) {
         stages.push(await runCommandStage('lint', process.execPath, [inspected.expoCli, 'lint'], STAGE_TIMEOUTS.lint));
       } else {
-        const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-        stages.push(await runCommandStage('lint', npmCmd, ['run', '--silent', 'lint'], STAGE_TIMEOUTS.lint));
+        const npmCli = npmCliPath();
+        if (fs.existsSync(npmCli)) {
+          stages.push(await runCommandStage('lint', process.execPath, [npmCli, 'run', '--silent', 'lint'], STAGE_TIMEOUTS.lint));
+        } else {
+          const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+          stages.push(await runCommandStage('lint', npmCmd, ['run', '--silent', 'lint'], STAGE_TIMEOUTS.lint));
+        }
       }
     } else {
       stages.push(createStage('lint', 'skipped', 'No lint script found in package.json.', Date.now()));
@@ -325,7 +325,7 @@ export async function buildSmokeResult() {
     stages.push(createStage('expo-export', 'skipped', 'Bundle export skipped. Pass --bundle to enable.', Date.now()));
   }
 
-  const passed = stages.every((stage) => stage.status === 'passed' || stage.status === 'skipped');
+  const passed = stages.every((stage) => smokeStagePasses(stage, { bundleRequested: bundle }));
   const result = {
     passed,
     checkedAt: new Date().toISOString(),
@@ -338,6 +338,11 @@ export async function buildSmokeResult() {
     notes,
   };
   return result;
+}
+
+export function smokeStagePasses(stage, { bundleRequested = false } = {}) {
+  if (stage?.status === 'passed') return true;
+  return stage?.status === 'skipped' && stage?.name === 'expo-export' && !bundleRequested;
 }
 
 export function writeSmokeResult(result) {

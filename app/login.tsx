@@ -95,7 +95,6 @@ export default function LoginScreen() {
     authNotice,
     consumeAuthNotice,
     enterOfflineMode,
-    offlineMode,
     showToast,
   } = useApp();
   const reducedMotion = useReducedMotion();
@@ -131,7 +130,7 @@ export default function LoginScreen() {
   const [statusTone, setStatusTone] = useState<MessageTone>('neutral');
   const [offlineCredentialStatus, setOfflineCredentialStatus] =
     useState<OfflineCredentialStatusSnapshot | null>(null);
-  const [pendingFreeDestination, setPendingFreeDestination] = useState<unknown | null>(null);
+  const [devSmokeSeedReady, setDevSmokeSeedReady] = useState(false);
   const loginCtaRenderedRef = useRef(false);
   const loginSubmitInFlightRef = useRef(false);
 
@@ -286,9 +285,10 @@ export default function LoginScreen() {
     setShowPassword(false);
     setPassword('');
     clearStatus();
+    setStatusMessage('Opening local ECS...');
+    setStatusTone('neutral');
     const { hasConfiguredVehicle, localVehicleCount, activeVehicleId, setupVehicleId } =
       resolveConfiguredVehiclePresence();
-    const setupComplete = setupStore.isComplete();
     const needsFreshGuestSetup = !hasConfiguredVehicle;
 
     if (needsFreshGuestSetup) {
@@ -296,30 +296,20 @@ export default function LoginScreen() {
       vehicleSetupStore.clearActiveVehicleId();
     }
 
-    const destination =
-      hasConfiguredVehicle && setupComplete
-        ? '/dashboard'
-        : { pathname: '/setup', params: { mode: 'guest-entry' } };
-    logAuthDev('[Auth] Free entry route decision', {
-      destination,
+    logAuthDev('[Auth] Free entry requested', {
       hasConfiguredVehicle,
       localVehicleCount,
       activeVehicleId,
       setupVehicleId,
-      setupComplete,
       needsFreshGuestSetup,
     });
+    setStatusMessage(needsFreshGuestSetup ? 'Opening local vehicle setup...' : 'Opening local ECS dashboard...');
     enterOfflineMode();
-    if (needsFreshGuestSetup) {
-      setPendingFreeDestination(destination);
-    }
-  }, [clearStatus, enterOfflineMode]);
 
-  useEffect(() => {
-    if (!offlineMode || !pendingFreeDestination) return;
-    router.replace(pendingFreeDestination as any);
-    setPendingFreeDestination(null);
-  }, [offlineMode, pendingFreeDestination, router]);
+    if (devSmokeSeedReady && Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.location.replace('/dashboard');
+    }
+  }, [clearStatus, devSmokeSeedReady, enterOfflineMode]);
 
   const handleViewPro = useCallback(() => {
     Keyboard.dismiss();
@@ -369,16 +359,15 @@ export default function LoginScreen() {
 
     if (result.success) {
       showToast(result.totalItems > 0 ? `Loaded smoke seed (${result.totalItems} local items)` : 'Smoke seed loaded');
-      setStatusMessage('Smoke local profile loaded for Fleet, Navigate, Dispatch, and readiness QA.');
+      setDevSmokeSeedReady(true);
+      setStatusMessage('Smoke profile loaded. Continue with Free to open the seeded ECS dashboard.');
       setStatusTone('success');
-      setPendingFreeDestination('/dashboard');
-      enterOfflineMode();
       return;
     }
 
     setStatusMessage(result.error || 'Unable to load smoke seed right now.');
     setStatusTone('error');
-  }, [clearStatus, enterOfflineMode, showToast]);
+  }, [clearStatus, showToast]);
 
   const handleOpenAuthInfo = useCallback((sheet: 'terms' | 'privacy' | 'support') => {
     Keyboard.dismiss();
@@ -529,7 +518,7 @@ export default function LoginScreen() {
   return (
     <View style={styles.heroScreen}>
       <LoginHeroBackground />
-      <View pointerEvents="none" style={styles.heroGlobalTint} />
+      <View style={[styles.heroGlobalTint, { pointerEvents: 'none' }]} />
       <StatusBar style="light" />
       <View style={styles.heroContentLayer}>
         <View

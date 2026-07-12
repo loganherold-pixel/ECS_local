@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = process.cwd();
+const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const loginSource = fs.readFileSync(path.join(root, 'app', 'login.tsx'), 'utf8');
 const localDataSource = fs.readFileSync(path.join(root, 'lib', 'localDataExport.ts'), 'utf8');
 const vehicleStoreSource = fs.readFileSync(path.join(root, 'lib', 'vehicleStore.ts'), 'utf8');
@@ -63,6 +64,12 @@ function expectedItemCounts(data) {
   };
 }
 
+assert.equal(
+  packageJson.scripts?.['test:local-data-import-export'],
+  'node ./scripts/test-local-data-import-export.js',
+  'Local data import/export should remain directly runnable through the package test surface.',
+);
+
 assert.ok(
   loginSource.includes('exportLocalData') &&
     loginSource.includes('importLocalData') &&
@@ -97,8 +104,12 @@ assert.ok(
     loginSource.includes('isDevSmokeSeedEnabled') &&
     loginSource.includes('__DEV__') &&
     loginSource.includes('Load smoke seed') &&
-    loginSource.includes('onDevSmokeSeed'),
-  'Login should expose the smoke local-data seed only through a development-gated harness.',
+    loginSource.includes('onDevSmokeSeed') &&
+    loginSource.includes('Smoke profile loaded. Continue with Free to open the seeded ECS dashboard.') &&
+    loginSource.includes('setDevSmokeSeedReady(true)') &&
+    loginSource.includes("devSmokeSeedReady && Platform.OS === 'web'") &&
+    loginSource.includes("window.location.replace('/dashboard')"),
+  'Login should expose a development-only smoke seed that completes before the normal guest handoff.',
 );
 
 assert.ok(

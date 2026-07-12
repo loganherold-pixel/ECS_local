@@ -186,7 +186,7 @@ export default function CampScoutIntelCard({
     (activeCandidate ? String(Math.round(activeCandidate.confidenceScore)) : 'Needs verification');
 
   return (
-    <Animated.View pointerEvents="box-none" style={[styles.layer, { opacity }]}>
+    <Animated.View style={[styles.layer, { opacity, pointerEvents: 'box-none' }]}>
       <Animated.View
         style={[
           styles.shell,
@@ -196,11 +196,11 @@ export default function CampScoutIntelCard({
             left: 12,
             right: 12,
             maxWidth: maxWidth ?? undefined,
+            pointerEvents: 'box-none',
           },
         ]}
-        pointerEvents="box-none"
       >
-        <View style={styles.card} pointerEvents="auto">
+        <View style={[styles.card, { pointerEvents: 'auto' }]}>
           <View style={styles.header}>
             <View style={styles.headerTextWrap}>
               <Text style={styles.eyebrow}>{isCampOps ? 'CAMP INTEL' : 'CAMP ENDPOINTS'}</Text>
@@ -476,7 +476,7 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '100%',
-    maxHeight: 340,
+    maxHeight: '100%',
     minHeight: 0,
     borderRadius: 14,
     borderWidth: 1,
@@ -707,7 +707,7 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(255,255,255,0.08)',
   },
   primaryAction: {
-    minHeight: 34,
+    minHeight: 44,
     minWidth: 96,
     flexBasis: '30%',
     flexGrow: 1,
@@ -720,11 +720,11 @@ const styles = StyleSheet.create({
   primaryActionText: {
     ...TYPO.U2,
     color: '#091014',
-    fontSize: 8,
+    fontSize: 9,
     letterSpacing: 0.9,
   },
   secondaryAction: {
-    minHeight: 34,
+    minHeight: 44,
     minWidth: 96,
     flexBasis: '30%',
     flexGrow: 1,
@@ -739,7 +739,7 @@ const styles = StyleSheet.create({
   secondaryActionText: {
     ...TYPO.U2,
     color: TACTICAL.amber,
-    fontSize: 8,
+    fontSize: 9,
     letterSpacing: 0.9,
   },
   actionDisabled: {

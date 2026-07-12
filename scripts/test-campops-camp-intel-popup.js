@@ -188,10 +188,11 @@ assert(
   'CampOps popup actions should stay tappable and fit labels on small screens.',
 );
 assert(
-  popupSource.includes('maxHeight: 340') &&
+  popupSource.includes("maxHeight: '100%'") &&
     popupSource.includes('paddingVertical: 9') &&
-    popupSource.includes('minHeight: 34'),
-  'CampOps popup should stay compact instead of running up the map screen.',
+    popupSource.includes('minHeight: 44') &&
+    !popupSource.includes('maxHeight: 340'),
+  'CampOps popup should use the available map body while preserving mobile-sized actions.',
 );
 assert(
   navigateSource.includes('selectedCampOpsIntel') &&

@@ -19,7 +19,7 @@ async function main() {
 
   [
     'dispatch_internal_beta_gate_green',
-    'convoy_panel_map_surface_present',
+    'navigate_owned_convoy_overlay_present',
     'convoy_live_sharing_controls_present',
     'dashboard_convoy_widget_removed',
     'emergency_ping_truthful_and_local',

@@ -273,6 +273,55 @@ function normalizeRequestedEntryRouteFromUrl(url: string | null | undefined): st
   }
 }
 
+const FADE_SCREEN_OPTIONS = {
+  animation: 'fade' as const,
+  animationDuration: MOTION.screenTransition,
+};
+const MODAL_SCREEN_OPTIONS = {
+  animation: 'fade_from_bottom' as const,
+  animationDuration: MOTION.modalSlide,
+};
+
+const ECSRootNavigationStack = React.memo(function ECSRootNavigationStack({
+  screenOptions,
+}: {
+  screenOptions: React.ComponentProps<typeof Stack>['screenOptions'];
+}) {
+  return (
+    <Stack screenOptions={screenOptions}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="login" />
+      <Stack.Screen name="initialize" />
+      <Stack.Screen name="create-access-key" />
+      <Stack.Screen name="auth-info" />
+      <Stack.Screen name="pro" />
+      <Stack.Screen name="join-expedition" />
+      <Stack.Screen name="expedition-channel/join/[code]" />
+      <Stack.Screen name="setup" options={FADE_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-detail" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-wizard" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-command" options={FADE_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-checklist" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-log" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-route-mgr" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="navigate-run" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="navigate-offline" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="navigate-bailouts" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="weight-dashboard" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-livelog" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-dispatch" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="convoy-command" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="active-trip" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="explore-trip-builder" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="explore-offline-prep-pack" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-archive" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="power" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="vehicle-display" options={FADE_SCREEN_OPTIONS} />
+    </Stack>
+  );
+});
+
 /**
  * AuthGate — centralized auth guard
  */
@@ -822,6 +871,10 @@ function AuthGate() {
         entryResolution.kind,
       ].join(':')
     : null;
+  const commitResolvedNavigation = useCallback((target: string) => {
+    const resolvedTarget = toExpoRouterShellTarget(target) as any;
+    router.replace(resolvedTarget);
+  }, [router]);
 
   useEffect(() => {
     if (startupGatePending) return;
@@ -981,9 +1034,9 @@ function AuthGate() {
       headerShown: false,
       animation: 'fade' as const,
       animationDuration: MOTION.screenTransition,
-      contentStyle: { backgroundColor: inPreAuthTree ? visualPalette.bg : 'transparent' },
+      contentStyle: { backgroundColor: 'transparent' },
     }),
-    [inPreAuthTree, visualPalette.bg],
+    [],
   );
 
   useEffect(() => {
@@ -1043,7 +1096,13 @@ function AuthGate() {
       postAuthRedirectHoldingScreenActive
     );
   useEffect(() => {
-    postAuthLoadingNavigationRef.current = null;
+    const destinationSettled = !inAuthScreen && !effectivePendingRedirect;
+    if (!hasShellIdentity || destinationSettled) {
+      postAuthLoadingNavigationRef.current = null;
+    }
+  }, [effectivePendingRedirect, hasShellIdentity, inAuthScreen]);
+
+  useEffect(() => {
     setMinimumLoadingElapsed(false);
 
     if (!postAuthLoadingGateKey && !postAuthRedirectHoldingScreenActive) return;
@@ -1069,7 +1128,7 @@ function AuthGate() {
         dashboardReady,
         minimumLoadingElapsed,
       });
-      router.replace(toExpoRouterShellTarget(postAuthLoadingTarget) as any);
+      commitResolvedNavigation(postAuthLoadingTarget);
     }, POST_AUTH_HANDOFF_ROUTE_TIMEOUT_MS);
 
     return () => {
@@ -1077,11 +1136,11 @@ function AuthGate() {
     };
   }, [
     dashboardReady,
+    commitResolvedNavigation,
     minimumLoadingElapsed,
     normalizedPathname,
     postAuthLoadingTarget,
     postAuthRedirectHoldingScreenActive,
-    router,
   ]);
 
   const handleAccessAction = useCallback(
@@ -1509,7 +1568,7 @@ function AuthGate() {
             }
           }
         }
-        router.replace(toExpoRouterShellTarget(target) as any);
+        commitResolvedNavigation(target);
       };
       void run();
     };
@@ -1536,9 +1595,9 @@ function AuthGate() {
       return;
     }
   }, [
+    commitResolvedNavigation,
     effectivePendingRedirect,
     redirectTarget,
-    router,
     isLoading,
     dashboardReady,
     suppressRedirect,
@@ -1852,176 +1911,13 @@ function AuthGate() {
         </View>
       )}
 
-      {inPreAuthTree ? (
-        <Stack screenOptions={stackScreenOptions}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="login" />
-          <Stack.Screen name="initialize" />
-          <Stack.Screen name="create-access-key" />
-          <Stack.Screen name="auth-info" />
-          <Stack.Screen name="pro" />
-          <Stack.Screen name="join-expedition" />
-          <Stack.Screen name="expedition-channel/join/[code]" />
-          <Stack.Screen
-            name="setup"
-            options={{
-              animation: 'fade',
-              animationDuration: MOTION.screenTransition,
-            }}
-          />
-        </Stack>
-      ) : (
-        <ViewerSettingsProvider>
-          <WizardStateProvider>
-            <Stack screenOptions={stackScreenOptions}>
-              <Stack.Screen name="index" />
-              <Stack.Screen
-                name="setup"
-                options={{
-                  animation: 'fade',
-                  animationDuration: MOTION.screenTransition,
-                }}
-              />
-              <Stack.Screen
-                name="expedition-detail"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="expedition-wizard"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="expedition-command"
-                options={{
-                  animation: 'fade',
-                  animationDuration: MOTION.screenTransition,
-                }}
-              />
-              <Stack.Screen
-                name="expedition-checklist"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="expedition-log"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="expedition-route-mgr"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="navigate-run"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="navigate-offline"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="navigate-bailouts"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="weight-dashboard"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="expedition-livelog"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="expedition-dispatch"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="convoy-command"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="active-trip"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="explore-trip-builder"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="explore-offline-prep-pack"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="expedition-archive"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen
-                name="power"
-                options={{
-                  animation: 'fade_from_bottom',
-                  animationDuration: MOTION.modalSlide,
-                }}
-              />
-              <Stack.Screen
-                name="vehicle-display"
-                options={{
-                  animation: 'fade',
-                  animationDuration: MOTION.screenTransition,
-                }}
-              />
-            </Stack>
+      <ViewerSettingsProvider>
+        <WizardStateProvider>
+          <ECSRootNavigationStack screenOptions={stackScreenOptions} />
 
-            {showCommandDock ? <CommandDock /> : null}
-          </WizardStateProvider>
-        </ViewerSettingsProvider>
-      )}
+          {showCommandDock ? <CommandDock /> : null}
+        </WizardStateProvider>
+      </ViewerSettingsProvider>
     </View>
   );
 }

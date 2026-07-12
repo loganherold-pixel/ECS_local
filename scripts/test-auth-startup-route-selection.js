@@ -7,6 +7,8 @@ const ts = require('typescript');
 const root = path.join(__dirname, '..');
 const sourcePath = path.join(root, 'lib', 'auth', 'distributionEntryResolver.ts');
 const source = fs.readFileSync(sourcePath, 'utf8');
+const loginSource = fs.readFileSync(path.join(root, 'app', 'login.tsx'), 'utf8');
+const layoutSource = fs.readFileSync(path.join(root, 'app', '_layout.tsx'), 'utf8');
 const output = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.CommonJS,
@@ -146,6 +148,65 @@ assert.strictEqual(
   '/dashboard',
   'Guest offline users found on /login should route directly to /dashboard.',
 );
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/login',
+    guestOfflineAccess: true,
+    offlineMode: true,
+    setupComplete: false,
+    isAuthScreen: true,
+    isLoginScreen: true,
+  }).redirectTarget,
+  '/setup?mode=guest-entry',
+  'Fresh guest entry should preserve guest setup mode while AuthGate performs the single redirect.',
+);
+
+assert.strictEqual(
+  resolve({
+    currentPath: '/',
+    guestOfflineAccess: true,
+    offlineMode: true,
+    setupComplete: false,
+    isAuthScreen: true,
+  }).redirectTarget,
+  '/setup?mode=guest-entry',
+  'Restoring a fresh guest at the root should preserve the guest setup route.',
+);
+
+assert.ok(
+  loginSource.includes("logAuthDev('[Auth] Free entry requested'") &&
+    loginSource.includes('enterOfflineMode();') &&
+    !loginSource.includes('pendingFreeDestination') &&
+    !loginSource.includes('router.replace(pendingFreeDestination'),
+  'Login should request offline entry once and leave route replacement to the centralized AuthGate.',
+);
+
+assert.equal(
+  (layoutSource.match(/<Stack screenOptions=/g) ?? []).length,
+  1,
+  'Auth and shell routes should share one navigator so entry-state changes cannot replace navigation state mid-handoff.',
+);
+assert.ok(
+  layoutSource.includes('const ECSRootNavigationStack = React.memo') &&
+    layoutSource.includes('<ECSRootNavigationStack screenOptions={stackScreenOptions} />') &&
+    layoutSource.includes("contentStyle: { backgroundColor: 'transparent' }") &&
+    !layoutSource.includes("contentStyle: { backgroundColor: inPreAuthTree"),
+  'The root route registry should be isolated from unrelated AuthGate and store rerenders.',
+);
+assert.ok(
+  layoutSource.includes('const commitResolvedNavigation = useCallback') &&
+    layoutSource.includes('router.replace(resolvedTarget);') &&
+    !layoutSource.includes('router.navigate(resolvedTarget);') &&
+    layoutSource.includes('router.replace(resolvedTarget);'),
+  'Auth-to-shell handoffs should avoid nested-route replace loops while guard corrections retain replacement semantics.',
+);
+for (const routeName of ['login', 'setup', '(tabs)']) {
+  assert.ok(
+    new RegExp(`<Stack\\.Screen\\s+name="${routeName.replace(/[()]/g, '\\$&')}"`).test(layoutSource),
+    `The canonical root navigator should register ${routeName}.`,
+  );
+}
 
 assert.strictEqual(
   resolve({

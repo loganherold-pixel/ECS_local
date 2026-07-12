@@ -18,3 +18,16 @@ test('web bundle smoke export gets a longer timeout than native exports', () => 
     'web export should have extra headroom for Expo web bundling cold starts',
   );
 });
+
+test('required smoke stages fail closed when execution is skipped', () => {
+  assert.equal(smokeApp.smokeStagePasses({ name: 'lint', status: 'skipped' }), false);
+  assert.equal(smokeApp.smokeStagePasses({ name: 'typecheck', status: 'skipped' }), false);
+  assert.equal(smokeApp.smokeStagePasses({ name: 'lint', status: 'failed' }), false);
+  assert.equal(smokeApp.smokeStagePasses({ name: 'lint', status: 'passed' }), true);
+});
+
+test('only an unrequested bundle export may be skipped', () => {
+  const stage = { name: 'expo-export', status: 'skipped' };
+  assert.equal(smokeApp.smokeStagePasses(stage, { bundleRequested: false }), true);
+  assert.equal(smokeApp.smokeStagePasses(stage, { bundleRequested: true }), false);
+});

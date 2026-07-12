@@ -103,6 +103,39 @@ function baseBundle(overrides = {}) {
   assert.ok(thresholdResult.blockers.some((item) => item.includes('APK exceeds hard budget')));
   assert.ok(thresholdResult.warnings.some((item) => item.includes('Expo export exceeds warning budget')));
 
+  const canonicalArtifactResult = budgetModule.evaluateAppSizeBudget({
+    auditReport: baseAudit({
+      androidArtifacts: {
+        apks: [
+          { path: 'artifacts/older-larger.apk', bytes: 120_000, modifiedAtMs: 200 },
+          {
+            path: 'android/app/build/outputs/apk/release/app-release.apk',
+            bytes: 90_000,
+            modifiedAtMs: 100,
+          },
+        ],
+        aabs: [],
+      },
+    }),
+    bundleReport: baseBundle(),
+    budgetConfig: {
+      requireProductionArtifact: true,
+      maxApkBytes: 100_000,
+      warnApkBytes: 95_000,
+      maxLargestAssetBytes: 10_000,
+      warnLargestAssetBytes: 8_000,
+      maxExpoExportBytes: 100_000,
+      warnExpoExportBytes: 80_000,
+      maxProductionAssetsBytes: 100_000,
+      warnProductionAssetsBytes: 80_000,
+      maxOfflineStarterBytes: 100_000,
+      warnOfflineStarterBytes: 80_000,
+    },
+  });
+  assert.strictEqual(canonicalArtifactResult.measured.apkPath, 'android/app/build/outputs/apk/release/app-release.apk');
+  assert.strictEqual(canonicalArtifactResult.measured.apkBytes, 90_000);
+  assert.strictEqual(canonicalArtifactResult.status, 'passed');
+
   const unavailableResult = budgetModule.evaluateAppSizeBudget({
     auditReport: baseAudit({
       androidArtifacts: { apks: [], aabs: [] },

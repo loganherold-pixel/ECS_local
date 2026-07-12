@@ -47,6 +47,7 @@ function isPrimaryShellRoute(path: string | null | undefined): boolean {
 function resolveAuthenticatedShellTarget(params: {
   setupComplete: boolean;
   setupRecoveryRequired?: boolean;
+  guestSetupMode?: boolean;
   restorableShellRoute: string | null;
   requestedEntryRoute?: string | null;
   allowRequestedEntryRoute?: boolean;
@@ -59,6 +60,7 @@ function resolveAuthenticatedShellTarget(params: {
   const {
     setupComplete,
     setupRecoveryRequired = false,
+    guestSetupMode = false,
     restorableShellRoute,
     requestedEntryRoute = null,
     allowRequestedEntryRoute = false,
@@ -75,7 +77,7 @@ function resolveAuthenticatedShellTarget(params: {
 
   if (!setupComplete) {
     return {
-      target: setupRecoveryRequired ? '/fleet' : '/setup',
+      target: setupRecoveryRequired ? '/fleet' : guestSetupMode ? '/setup?mode=guest-entry' : '/setup',
       destinationSource: setupRecoveryRequired ? 'vehicle_recovery' : 'setup',
       routeRestoreRejected: false,
     };
@@ -161,6 +163,7 @@ export function resolveDistributionEntryState(
   const rememberedShellTarget = resolveAuthenticatedShellTarget({
     setupComplete,
     setupRecoveryRequired,
+    guestSetupMode: guestOfflineAccess,
     restorableShellRoute,
     requestedEntryRoute,
     allowRequestedEntryRoute: true,
@@ -169,6 +172,7 @@ export function resolveDistributionEntryState(
   const freshAuthShellTarget = resolveAuthenticatedShellTarget({
     setupComplete,
     setupRecoveryRequired,
+    guestSetupMode: guestOfflineAccess,
     restorableShellRoute,
     allowRouteRestore: false,
   });

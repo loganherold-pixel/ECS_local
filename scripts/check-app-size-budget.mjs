@@ -47,6 +47,22 @@ function largest(items = []) {
   }, null);
 }
 
+function currentProductionArtifact(items = []) {
+  const canonical = items.filter((item) => (
+    /android\/app\/build\/outputs\/(?:apk|bundle)\/release\//.test(item.path ?? '')
+  ));
+  const candidates = canonical.length > 0 ? canonical : items;
+  return candidates.reduce((selected, item) => {
+    if (!selected) return item;
+    const selectedModifiedAt = Number(selected.modifiedAtMs ?? 0);
+    const itemModifiedAt = Number(item.modifiedAtMs ?? 0);
+    if (itemModifiedAt !== selectedModifiedAt) {
+      return itemModifiedAt > selectedModifiedAt ? item : selected;
+    }
+    return Number(item.bytes ?? 0) > Number(selected.bytes ?? 0) ? item : selected;
+  }, null);
+}
+
 function addThresholdResult(args) {
   const {
     blockers,
@@ -69,8 +85,8 @@ function addThresholdResult(args) {
 }
 
 function measuredSizes(auditReport) {
-  const apk = largest(auditReport.androidArtifacts?.apks ?? []);
-  const aab = largest(auditReport.androidArtifacts?.aabs ?? []);
+  const apk = currentProductionArtifact(auditReport.androidArtifacts?.apks ?? []);
+  const aab = currentProductionArtifact(auditReport.androidArtifacts?.aabs ?? []);
   const largestAssetCandidates = [
     ...(auditReport.largestAssets ?? []),
     ...(auditReport.assetOptimization?.candidates ?? []).map((item) => ({

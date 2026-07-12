@@ -2,6 +2,19 @@
 
 Generated from `npm run audit:app-size`, `npm run audit:bundle-inclusions`, and `npm run gate:app-size` on 2026-06-13.
 
+## 2026-07-12 Smoke-Fix Measurement Update
+
+This follow-up compressed the two startup/login videos, applied lossless PNG optimization to five large runtime images, and rebuilt both the Expo export and native release APK. Representative video frames were visually inspected; optimized PNGs were verified against their original decoded RGBA hashes.
+
+| Metric | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Auth/login MP4 assets | 46.36 MiB | 2.13 MiB | -44.23 MiB (-95.4%) |
+| Production Android export | 239.53 MiB | 194.03 MiB | -45.50 MiB (-19.0%) |
+| Universal release APK | 428.20 MiB | 383.79 MiB | -44.41 MiB (-10.4%) |
+| Production bundled assets | 264.03 MiB | 224.15 MiB | -39.88 MiB (-15.1%) |
+
+`npm run gate:app-size` now passes with warning status. The APK is 16.21 MiB below the 400 MiB hard ceiling, while the 350 MiB APK warning and 180 MiB bundled-asset warning remain active. A production AAB and delivered install-size measurement are still required before changing ABI or native shrink settings.
+
 ## Baseline Measurements
 
 | Area | Size | Notes |

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, Platform, StyleSheet, Text, TouchableOpacity, View, type TextStyle } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from './SafeIcon';
@@ -36,6 +36,17 @@ import TopBannerBackground, { resolveTopBannerVariant } from './TopBannerBackgro
 import { useEcsTopBannerHeight } from './ECSGlobalBanner';
 import { useEcsBriefTopBannerMessage } from '../lib/useEcsBriefTopBannerMessage';
 import { openUnifiedBluetoothCommand } from '../lib/bluetoothCommandNavigation';
+
+function platformTextShadow(color: string, radius: number): TextStyle {
+  if (Platform.OS === 'web') {
+    return { textShadow: `0px 1px ${radius}px ${color}` } as TextStyle;
+  }
+  return {
+    textShadowColor: color,
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: radius,
+  };
+}
 
 const HEADER = {
   bar: '#1E2125',
@@ -624,7 +635,7 @@ export default function Header({
           ]}
         >
           <View style={styles.connectionStack}>
-            <View style={styles.connectionWordmark} pointerEvents="none">
+            <View style={[styles.connectionWordmark, { pointerEvents: 'none' }]}>
               <View style={[styles.connectionDot, { backgroundColor: connectionTone }]} />
               <Text style={[styles.connectionText, { color: connectionTone }]}>{connectionLabel}</Text>
             </View>
@@ -637,8 +648,7 @@ export default function Header({
         </View>
 
         <View
-          style={[styles.centerContent, { paddingHorizontal: centerContentPadding }]}
-          pointerEvents="none"
+          style={[styles.centerContent, { paddingHorizontal: centerContentPadding, pointerEvents: 'none' }]}
         >
           {bannerSubject || showBriefBannerInHeader ? (
             <View style={styles.bannerTitleStack}>
@@ -818,8 +828,7 @@ export default function Header({
         </View>
       </TacticalPopupShell>
       <View
-        pointerEvents="none"
-        style={[styles.goldRailLine, { backgroundColor: shellChrome.goldRail }]}
+        style={[styles.goldRailLine, { backgroundColor: shellChrome.goldRail, pointerEvents: 'none' }]}
       />
     </View>
   );
@@ -956,9 +965,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'uppercase',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0,0,0,0.7)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    ...platformTextShadow('rgba(0,0,0,0.7)', 2),
   },
   briefBannerDetail: {
     maxWidth: '100%',
@@ -970,9 +977,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.18,
     textAlign: 'center',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0,0,0,0.76)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    ...platformTextShadow('rgba(0,0,0,0.76)', 2),
   },
   bannerTitle: {
     maxWidth: '100%',
@@ -989,9 +994,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'uppercase',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0,0,0,0.82)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    ...platformTextShadow('rgba(0,0,0,0.82)', 4),
   },
   product: {
     ...TYPO.T1,
@@ -1002,9 +1005,7 @@ const styles = StyleSheet.create({
     color: HEADER.productText,
     textAlign: 'center',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0, 0, 0, 0.34)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    ...platformTextShadow('rgba(0, 0, 0, 0.34)', 3),
   },
   statusPill: {
     width: 30,

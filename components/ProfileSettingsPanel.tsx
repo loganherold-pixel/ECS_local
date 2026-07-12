@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,6 +9,7 @@ import {
   TouchableOpacity,
   View,
   useWindowDimensions,
+  type ViewStyle,
 } from 'react-native';
 import { SafeIcon as Ionicons } from './SafeIcon';
 import ECSShellTexture from './ECSShellTexture';
@@ -23,6 +25,18 @@ import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
 import { TripLearningPreferenceControl } from './expedition/TripLearningPreferenceControl';
 
 type ThemeChoice = 'dark' | 'light' | 'dynamic';
+
+const PROFILE_PANEL_SHADOW: ViewStyle = Platform.select<ViewStyle>({
+  web: { boxShadow: '0px 10px 24px rgba(0,0,0,0.28)' } as ViewStyle,
+  ios: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.28,
+    shadowRadius: 24,
+  },
+  android: { elevation: 18 },
+  default: {},
+}) ?? {};
 
 interface ProfileSettingsPanelProps {
   visible: boolean;
@@ -503,11 +517,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.28,
-    shadowRadius: 24,
-    elevation: 18,
+    ...PROFILE_PANEL_SHADOW,
   },
   panelCap: {
     position: 'absolute',

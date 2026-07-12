@@ -322,8 +322,8 @@ assertIncludes(
 );
 assertIncludes(
   distributionEntrySource,
-  "target: setupRecoveryRequired ? '/fleet' : '/setup'",
-  'Incomplete account setup should resolve to setup, while vehicle recovery resolves to Fleet.',
+  "target: setupRecoveryRequired ? '/fleet' : guestSetupMode ? '/setup?mode=guest-entry' : '/setup'",
+  'Incomplete setup should preserve explicit guest entry while vehicle recovery resolves to Fleet.',
 );
 assertIncludes(
   distributionEntrySource,
@@ -343,7 +343,7 @@ assertIncludes(
 
 const timerEffect = blockBetween(
   layoutSource,
-  'useEffect(() => {\n    postAuthLoadingNavigationRef.current = null;\n    setMinimumLoadingElapsed(false);',
+  'useEffect(() => {\n    setMinimumLoadingElapsed(false);',
   'const handleAccessAction = useCallback(',
 );
 assertIncludes(
@@ -355,6 +355,11 @@ assertIncludes(
   timerEffect,
   'clearTimeout(minimumLoadingTimer);',
   'The loading timer should be cleaned up on unmount or gate changes.',
+);
+assertIncludes(
+  layoutSource,
+  'const destinationSettled = !inAuthScreen && !effectivePendingRedirect;',
+  'Post-auth single-flight navigation should reset only after the destination settles.',
 );
 
 const redirectEffect = blockBetween(
@@ -409,8 +414,8 @@ assertIncludes(
 );
 assertIncludes(
   redirectEffect,
-  'router.replace(toExpoRouterShellTarget(target) as any);',
-  'AuthGate should use route replacement for the final dashboard transition.',
+  'commitResolvedNavigation(target);',
+  'AuthGate should route final shell transitions through the auth-aware single-flight helper.',
 );
 assertIncludes(
   routeManifestSource,

@@ -8,6 +8,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  type TextStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -64,6 +65,17 @@ const DHDR = {
   iconActive: '#C9A24C',
   expeditionGold: '#D4A017',
 };
+
+function platformTextShadow(color: string, radius: number): TextStyle {
+  if (Platform.OS === 'web') {
+    return { textShadow: `0px 1px ${radius}px ${color}` } as TextStyle;
+  }
+  return {
+    textShadowColor: color,
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: radius,
+  };
+}
 
 type ShellStatusPillTone = 'neutral' | 'active' | 'sync' | 'degraded';
 
@@ -1003,9 +1015,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'uppercase',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0,0,0,0.7)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    ...platformTextShadow('rgba(0,0,0,0.7)', 2),
   },
   briefBannerDetail: {
     maxWidth: '100%',
@@ -1017,9 +1027,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.18,
     textAlign: 'center',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0,0,0,0.76)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    ...platformTextShadow('rgba(0,0,0,0.76)', 2),
   },
   bannerTitle: {
     maxWidth: '100%',
@@ -1036,9 +1044,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'uppercase',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0,0,0,0.82)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    ...platformTextShadow('rgba(0,0,0,0.82)', 4),
   },
   bannerMotto: {
     maxWidth: '100%',
@@ -1056,9 +1062,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'uppercase',
     includeFontPadding: false,
-    textShadowColor: 'rgba(0,0,0,0.68)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    ...platformTextShadow('rgba(0,0,0,0.68)', 2),
   },
   shellTitle: {
     fontSize: 15,

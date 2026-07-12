@@ -18,6 +18,8 @@ const appContextSource = read('context/AppContext.tsx');
 const syncProcessorsSource = read('lib/syncProcessors.ts');
 const syncActionQueueSource = read('lib/syncActionQueue.ts');
 const loadoutSyncQueueSource = read('lib/loadoutSyncQueue.ts');
+const dashboardHeaderSource = read('components/dashboard/DashboardHeader.tsx');
+const profileSettingsPanelSource = read('components/ProfileSettingsPanel.tsx');
 
 assert(
   androidAutoBridgeSource.includes("ecsLog.debug(\n    'SYSTEM',\n    reason === 'not_android'") ||
@@ -91,6 +93,19 @@ assert(
     appContextSource.includes('const loadoutAutoProcessStarted = loadoutSyncQueue.startAutoProcess();') &&
     appContextSource.includes('if (loadoutAutoProcessStarted) {'),
   'App startup should avoid duplicate sync/loadout auto-process logs when queues were already active.'
+);
+
+assert(
+  dashboardHeaderSource.includes('function platformTextShadow') &&
+    dashboardHeaderSource.includes("...platformTextShadow('rgba(0,0,0,0.82)', 4)"),
+  'Dashboard banner shadows should use the platform text-shadow adapter to avoid React Native Web deprecation noise.'
+);
+
+assert(
+  profileSettingsPanelSource.includes('const PROFILE_PANEL_SHADOW') &&
+    profileSettingsPanelSource.includes("boxShadow: '0px 10px 24px rgba(0,0,0,0.28)'") &&
+    profileSettingsPanelSource.includes('...PROFILE_PANEL_SHADOW'),
+  'Profile panel shadows should use web boxShadow while preserving platform-native shadows.'
 );
 
 console.log('Startup warning hygiene checks passed.');

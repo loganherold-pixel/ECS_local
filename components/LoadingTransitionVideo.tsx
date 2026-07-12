@@ -14,31 +14,41 @@ const STARTUP_LOADING_VIDEO_ENABLED = Platform.OS !== 'android';
 export default function LoadingTransitionVideo() {
   const [videoFailed, setVideoFailed] = useState(!STARTUP_LOADING_VIDEO_ENABLED);
   const [videoReady, setVideoReady] = useState(false);
+  const handleReady = useCallback(() => {
+    setVideoReady((current) => current || true);
+  }, []);
+  const handleFailed = useCallback(() => {
+    setVideoFailed((current) => current || true);
+  }, []);
   const animatedFallbackVisible = STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);
   const staticFallbackVisible = !STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);
 
   return (
     <View style={styles.screen}>
       <StatusBar style="light" />
-      <Image source={LOADING_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />
+      {Platform.OS === 'web' ? (
+        <View style={styles.webFallback} />
+      ) : (
+        <Image source={LOADING_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />
+      )}
       {STARTUP_LOADING_VIDEO_ENABLED ? (
         <LoadingTransitionVideoLayer
-          onReady={() => setVideoReady((current) => current || true)}
-          onFailed={() => setVideoFailed((current) => current || true)}
+          onReady={handleReady}
+          onFailed={handleFailed}
         />
       ) : null}
-      <View pointerEvents="none" style={styles.tint} />
+      <View style={[styles.tint, { pointerEvents: 'none' }]} />
       {animatedFallbackVisible ? (
-        <View pointerEvents="none" style={styles.loadingFallback}>
+        <View style={[styles.loadingFallback, { pointerEvents: 'none' }]}>
           <ActivityIndicator size="small" color={TACTICAL.amber} />
         </View>
       ) : null}
       {staticFallbackVisible ? (
-        <View pointerEvents="none" style={styles.staticLoadingFallback}>
+        <View style={[styles.staticLoadingFallback, { pointerEvents: 'none' }]}>
           <View style={styles.staticLoadingGlyph} />
         </View>
       ) : null}
-      <View pointerEvents="none" style={styles.legalOverlay}>
+      <View style={[styles.legalOverlay, { pointerEvents: 'none' }]}>
         <LegalFooter variant="minimal" />
       </View>
     </View>
@@ -151,10 +161,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#040608',
   },
   fallbackImage: {
-    ...StyleSheet.absoluteFillObject,
-    width: undefined,
-    height: undefined,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
     opacity: 0.74,
+  },
+  webFallback: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#040608',
   },
   media: {
     ...StyleSheet.absoluteFillObject,
