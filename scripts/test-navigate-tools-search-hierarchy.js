@@ -105,9 +105,9 @@ assert(
 );
 
 assert(
-  source.includes('const [campLayerMenuOpen, setCampLayerMenuOpen] = useState(false);') &&
+    source.includes('const [campLayerMenuOpen, setCampLayerMenuOpen] = useState(false);') &&
     source.includes('const toggleCampLayerMenu = useCallback') &&
-    source.includes('styles.campLayerMenuPanel') &&
+    source.includes('styles.campLayerMenuPopupContent') &&
     source.includes('testID="navigate-camp-layer-menu-toggle"') &&
     source.includes('testID="navigate-camp-layer-menu-panel"') &&
     source.includes('accessibilityLabel="Camp map layers"') &&
@@ -150,23 +150,23 @@ assert(
 );
 
 assert(
-  !toolsPopupSource.includes('<ScrollView') &&
-    !toolsPopupSource.includes('styles.mapPopupScroll') &&
-    !toolsPopupSource.includes('styles.toolsPopupScrollContent') &&
+  toolsPopupSource.includes('<ScrollView') &&
+    toolsPopupSource.includes('style={styles.toolsPopupScroll}') &&
+    toolsPopupSource.includes('contentContainerStyle={styles.toolsPopupContent}') &&
+    toolsPopupSource.includes('keyboardShouldPersistTaps="handled"') &&
     toolsPopupSource.includes('styles.toolsFixedContent'),
-  'Main Tools popup should be a fixed command panel, not a scroll-owned drawer.',
+  'Main Tools popup should be scroll-owned so lower Community Contributions actions remain reachable on mobile.',
 );
 
 assert(
-  toolsPopupSource.includes("snapToContent: true") &&
-    toolsPopupSource.includes("placement: 'bottomRight'") &&
-    !toolsPopupSource.includes("fullBody: true") &&
+  toolsPopupSource.includes("placement: 'center'") &&
+    toolsPopupSource.includes("fullBody: false") &&
+    !toolsPopupSource.includes("snapToContent: true") &&
     source.includes('snapToContent?: boolean') &&
     source.includes("placement?: 'right' | 'center' | 'bottomRight'") &&
-    source.includes('styles.mapPopupShellSnapToContent') &&
-    source.includes('bottom: TOOLS_TRIGGER_BOTTOM + TOOLS_TRIGGER_SIZE + 8') &&
-    source.includes('right: TOOLS_TRIGGER_RIGHT'),
-  'Main Tools popup should snap to content height and anchor next to the bottom-right Tools trigger instead of floating at map center.',
+    source.includes('styles.mapPopupCloseButton') &&
+    source.includes("accessibilityLabel={`Close ${title.toLowerCase()} popup`}"),
+  'Main Tools popup should be centered in the map body with the shared top-right close button.',
 );
 
 assert(
@@ -183,9 +183,10 @@ assert(
 
 assert(
   source.includes('toolsPopupContent: {\n  alignSelf:') &&
+    source.includes('toolsPopupScroll: {\n  flex: 1') &&
     !source.includes('toolsPopupContent: {\n  flex: 1') &&
     !source.includes('toolsFixedContent: {\n  flex: 1'),
-  'Tools popup content should not stretch with flex: 1, which creates dead space below the final section.',
+  'Tools popup should put flex on the ScrollView while keeping the command content naturally sized.',
 );
 
 const toolsSectionTitles = Array.from(

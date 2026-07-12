@@ -190,7 +190,6 @@ import {
 } from '../../lib/map/dispersedCampingRouteSearch';
 import { resolveDispersedCampingRegionPanelLayout } from '../../lib/navigation/dispersedCampingOverlayLayout';
 import {
-  resolveCampLayerMenuLayout,
   resolveCampLayerMenuToggles,
 } from '../../lib/navigation/campLayerMenuPresentation';
 import {
@@ -1950,6 +1949,7 @@ const NAV_OVERLAY_Z = {
   utility: 110,
   contextual: 120,
   modal: 160,
+  popupStackBase: 220,
 } as const;
 
 const DEFAULT_TRAIL_STATS: TrailStats = {
@@ -3362,6 +3362,12 @@ function segmentPayloadToLongPressFeature(
     confidence: payload.routeGeometryConfidence ?? payload.confidence ?? null,
     dataState: payload.routeGeometryDataState ?? payload.dataState ?? null,
     coordinates: coordinates.length >= 2 ? coordinates : null,
+    connectedSegments: Array.isArray(payload.connectedSegments)
+      ? payload.connectedSegments
+          .slice(0, 96)
+          .map((segment: any) => segmentPayloadToLongPressFeature({ ...segment, connectedSegments: null }))
+          .filter((segment: NavigateLongPressRouteableFeature | null): segment is NavigateLongPressRouteableFeature => !!segment)
+      : null,
     warnings,
   };
 }
@@ -3410,6 +3416,25 @@ function routeableFeatureToNavigateTraceableSegment(
     coordinates,
     warnings: feature?.warnings ?? null,
   };
+}
+
+function routeableFeatureToNavigateTraceableSegments(
+  feature: NavigateLongPressRouteableFeature | null | undefined,
+): NavigateRouteTraceableSegment[] {
+  const candidates = [feature, ...(feature?.connectedSegments ?? [])];
+  const seen = new Set<string>();
+  const segments: NavigateRouteTraceableSegment[] = [];
+  candidates.forEach((candidate) => {
+    const segment = routeableFeatureToNavigateTraceableSegment(candidate);
+    if (!segment) return;
+    const first = segment.coordinates[0];
+    const last = segment.coordinates[segment.coordinates.length - 1];
+    const signature = `${segment.id}:${first.latitude.toFixed(6)},${first.longitude.toFixed(6)}:${last.latitude.toFixed(6)},${last.longitude.toFixed(6)}:${segment.coordinates.length}`;
+    if (seen.has(signature)) return;
+    seen.add(signature);
+    segments.push(segment);
+  });
+  return segments;
 }
 
 function toNavigateRouteCoordinate(
@@ -3583,6 +3608,30 @@ type NavigateToolsChildPopup =
   | 'recommendCampsite'
   | 'recommendRoute';
 
+type NavigateSurfaceLayerId =
+  | 'mapSelection'
+  | 'mapPointActions'
+  | 'campLayers'
+  | 'tools'
+  | 'topPopup'
+  | 'dispatchSelection';
+
+function raiseNavigateSurfaceLayer(
+  stack: NavigateSurfaceLayerId[],
+  layer: NavigateSurfaceLayerId,
+): NavigateSurfaceLayerId[] {
+  if (stack[stack.length - 1] === layer) return stack;
+  return [...stack.filter((item) => item !== layer), layer];
+}
+
+function removeNavigateSurfaceLayer(
+  stack: NavigateSurfaceLayerId[],
+  layer: NavigateSurfaceLayerId,
+): NavigateSurfaceLayerId[] {
+  if (!stack.includes(layer)) return stack;
+  return stack.filter((item) => item !== layer);
+}
+
 function isToolsChildPopup(popup: NavigateTopPopup): popup is NavigateToolsChildPopup {
   return (
     popup === 'importRoute' ||
@@ -3655,6 +3704,20 @@ const MAP_TOP_ANCHOR = expandedTopOffset;
 // top edge controls should hug the map border, not the safe-area/header stack
 const TOP_MAP_CONTROLS_OFFSET = 6;
 const [activeTopPopup, setActiveTopPopup] = useState<NavigateTopPopup>(null);
+const [topPopupHistory, setTopPopupHistory] =
+  useState<Exclude<NavigateTopPopup, null>[]>([]);
+const [navigateSurfaceLayerStack, setNavigateSurfaceLayerStack] =
+  useState<NavigateSurfaceLayerId[]>([]);
+const raiseNavigateLayer = useCallback((layer: NavigateSurfaceLayerId) => {
+  setNavigateSurfaceLayerStack((current) => raiseNavigateSurfaceLayer(current, layer));
+}, []);
+const removeNavigateLayer = useCallback((layer: NavigateSurfaceLayerId) => {
+  setNavigateSurfaceLayerStack((current) => removeNavigateSurfaceLayer(current, layer));
+}, []);
+const getNavigateLayerZIndex = useCallback((layer: NavigateSurfaceLayerId) => {
+  const index = navigateSurfaceLayerStack.indexOf(layer);
+  return index < 0 ? 0 : NAV_OVERLAY_Z.popupStackBase + index * 4;
+}, [navigateSurfaceLayerStack]);
 const [pendingOfflineRoutePackageFlowId, setPendingOfflineRoutePackageFlowId] = useState<string | null>(null);
 const [trailPackSubmissionRoute, setTrailPackSubmissionRoute] =
   useState<ECSTrailPackSubmissionRouteInput | null>(null);
@@ -3738,8 +3801,9 @@ const ACTIVE_GUIDANCE_TOP = effectiveMapExpanded
 const FLOATING_CONTROLS_BOTTOM = commandDockHeight + 4;
 
 const COMPASS_SIZE = 68;
-const COMPASS_RIGHT = OVERLAY_EDGE;
-const COMPASS_DOCK_CLEARANCE = adaptive.isExpanded ? 14 : 16;
+const BOTTOM_RIGHT_CONTROL_INSET = Math.max(6, Math.floor(OVERLAY_EDGE * 0.55));
+const COMPASS_RIGHT = BOTTOM_RIGHT_CONTROL_INSET;
+const COMPASS_DOCK_CLEARANCE = adaptive.isExpanded ? 8 : 8;
 const COMPASS_CORNER_GAP = adaptive.isExpanded ? 14 : 12;
 const COMPASS_BOTTOM = commandDockHeight + COMPASS_DOCK_CLEARANCE;
 const ACTIVE_GUIDANCE_RIGHT_INSET = COMPASS_SIZE + COMPASS_RIGHT + COMPASS_CORNER_GAP;
@@ -3768,11 +3832,15 @@ const MAP_POPUP_WIDTH = Math.min(
   adaptive.navigate.popupWidth ?? (adaptive.isExpanded ? 420 : 360),
 );
 const TOOLS_POPUP_WIDTH = Math.min(MAP_POPUP_WIDTH, adaptive.isExpanded ? 420 : 348);
+const CAMP_LAYER_POPUP_WIDTH = Math.min(
+  adaptive.windowWidth - OVERLAY_EDGE * 2,
+  adaptive.isExpanded ? 560 : 372,
+);
 const TOP_RIGHT_UTILITY_WIDTH = adaptive.isExpanded ? 156 : 140;
 const TOOLS_TRIGGER_SIZE = 40;
-const RIGHT_RAIL_COMPASS_CLEARANCE = adaptive.isExpanded ? 34 : 38;
+const RIGHT_RAIL_COMPASS_CLEARANCE = adaptive.isExpanded ? 12 : 12;
 const TOOLS_TRIGGER_BOTTOM = COMPASS_BOTTOM + COMPASS_SIZE + RIGHT_RAIL_COMPASS_CLEARANCE;
-const TOOLS_TRIGGER_RIGHT = COMPASS_RIGHT + Math.max(0, (COMPASS_SIZE - TOOLS_TRIGGER_SIZE) / 2);
+const TOOLS_TRIGGER_RIGHT = BOTTOM_RIGHT_CONTROL_INSET;
 const communityCampsitesEnabled = isCommunityCampsitesFeatureEnabled(
   DEFAULT_COMMUNITY_CAMPSITES_ROLLOUT_CONFIG,
   'communityCampsitesEnabled',
@@ -3814,108 +3882,6 @@ const PIN_LIST_TOP = MAP_TOP_CONTROL_ROW + FLOATING_PILL_HEIGHT + OVERLAY_GAP;
 // so the route badge only needs a small offset inside the map.
 const collapsedTopChromeHeight =
   headerHeight + actionBarHeight + storageBannerHeight;
-
-const renderMapPopup = (
-  visible: boolean,
-  title: string,
-  icon: React.ComponentProps<typeof Ionicons>['name'],
-  onClose: () => void,
-  children: React.ReactNode,
-  popupWidth: number = MAP_POPUP_WIDTH,
-  options?: {
-    placement?: 'right' | 'center' | 'bottomRight';
-    backdropTint?: string;
-    fullBody?: boolean;
-    showBackdrop?: boolean;
-    snapToContent?: boolean;
-  },
-) => {
-  if (!visible) return null;
-
-  const snapToContent = options?.snapToContent === true;
-  const fullBody = snapToContent ? false : options?.fullBody !== false;
-  const centeredLeft = Math.max(
-    OVERLAY_EDGE,
-    Math.round((adaptive.windowWidth - popupWidth) / 2),
-  );
-  const activeGuidancePopupTopOffset =
-    navigationOverlayMode === 'active' ? activeGuidanceToastTopOffset : null;
-  const popupTop = fullBody
-    ? activeGuidancePopupTopOffset ?? PAGE_FRAME_TOP_GAP
-    : activeGuidancePopupTopOffset ?? MAP_POPUP_TOP;
-  const popupBottom = MAP_POPUP_BOTTOM;
-  const popupMaxHeight =
-    options?.placement === 'bottomRight'
-      ? Math.max(
-          260,
-          adaptive.windowHeight -
-            PAGE_FRAME_TOP_GAP -
-            (TOOLS_TRIGGER_BOTTOM + TOOLS_TRIGGER_SIZE + 8),
-        )
-      : Math.max(260, adaptive.windowHeight - popupTop - popupBottom);
-
-  return (
-    <View style={styles.mapPopupLayer} pointerEvents="box-none">
-      {options?.showBackdrop === false ? null : (
-        <TouchableOpacity
-          style={[
-            styles.mapPopupBackdrop,
-            {
-              top: popupTop,
-              bottom: popupBottom,
-              backgroundColor: options?.backdropTint ?? 'rgba(0,0,0,0.30)',
-            },
-          ]}
-          activeOpacity={1}
-          onPress={onClose}
-        />
-      )}
-
-      <View
-        style={[
-          styles.mapPopupShell,
-          snapToContent && styles.mapPopupShellSnapToContent,
-          fullBody
-            ? {
-                top: popupTop,
-                bottom: popupBottom,
-                left: OVERLAY_EDGE,
-                right: OVERLAY_EDGE,
-                width: undefined,
-              }
-            : options?.placement === 'bottomRight'
-              ? {
-                  bottom: TOOLS_TRIGGER_BOTTOM + TOOLS_TRIGGER_SIZE + 8,
-                  right: TOOLS_TRIGGER_RIGHT,
-                  maxHeight: popupMaxHeight,
-                  width: popupWidth,
-                }
-            : {
-                top: popupTop,
-                bottom: snapToContent ? undefined : popupBottom,
-                maxHeight: snapToContent ? popupMaxHeight : undefined,
-                right: options?.placement === 'center' ? undefined : OVERLAY_EDGE,
-                width: popupWidth,
-                left: options?.placement === 'center' ? centeredLeft : undefined,
-              },
-        ]}
-      >
-        <View style={[styles.mapPopupHeader, snapToContent && styles.mapPopupHeaderSnapToContent]}>
-          <View style={styles.mapPopupTitleRow}>
-            <Ionicons name={icon} size={16} color={TACTICAL.amber} />
-            <Text style={styles.mapPopupTitle}>{title}</Text>
-          </View>
-
-          <TouchableOpacity onPress={onClose} activeOpacity={0.8} hitSlop={CLOSE_CONTROL_HIT_SLOP}>
-            <Ionicons name="close" size={18} color={TACTICAL.textMuted} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={[styles.mapPopupBody, snapToContent && styles.mapPopupBodySnapToContent]}>{children}</View>
-      </View>
-    </View>
-  );
-};
 
 function buildNavigationPayloadFromRun(
   run: ECSRun,
@@ -4821,6 +4787,7 @@ const queueMapCameraCommand = useCallback((
   const [routeBuilderDrawing, setRouteBuilderDrawing] = useState(false);
   const [routeBuilderSegments, setRouteBuilderSegments] = useState<RouteBuilderSegmentData[]>([]);
   const [routeBuilderDraft, setRouteBuilderDraft] = useState<NavigateRouteDraft>(() => createNavigateRouteDraft());
+  const routeBuilderDraftRef = useRef<NavigateRouteDraft>(routeBuilderDraft);
   const [routeBuilderActiveExtensionMode, setRouteBuilderActiveExtensionMode] = useState(false);
   const [routeBuilderSnapSource, setRouteBuilderSnapSource] = useState<string | null>(null);
   const [routeBuilderSnapStatus, setRouteBuilderSnapStatus] = useState<RouteBuilderSegmentData['snapStatus']>(null);
@@ -8401,13 +8368,15 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   }, []);
 
   const openTopPopup = useCallback((popup: Exclude<NavigateTopPopup, null>) => {
-    closeNavigateDetailSurfaces();
-    setCampLayerMenuOpen(false);
-    if (popup !== 'tools') {
-      setToolsMenuOpen(false);
+    if (activeTopPopup && activeTopPopup !== popup) {
+      setTopPopupHistory((current) => [
+        ...current.filter((item) => item !== activeTopPopup && item !== popup),
+        activeTopPopup,
+      ]);
     }
+    raiseNavigateLayer('topPopup');
     setActiveTopPopup(popup);
-  }, [closeNavigateDetailSurfaces]);
+  }, [activeTopPopup, raiseNavigateLayer]);
 
   useEffect(() => {
     if (!isFocused) return undefined;
@@ -8581,25 +8550,31 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     });
   }, []);
 
-  const toggleTopPopup = useCallback((popup: Exclude<NavigateTopPopup, null>) => {
-    closeNavigateDetailSurfaces();
-    if (popup !== 'tools') {
-      setToolsMenuOpen(false);
-    }
-    setActiveTopPopup((prev) => (prev === popup ? null : popup));
-  }, [closeNavigateDetailSurfaces]);
-
   const closeTopPopup = useCallback((popup?: Exclude<NavigateTopPopup, null>) => {
-    if (!popup) {
-      closeNavigateDetailSurfaces();
-      setToolsMenuOpen(false);
-      setActiveTopPopup(null);
+    if (popup && activeTopPopup !== popup) return;
+    if (!popup) closeNavigateDetailSurfaces();
+
+    const previousPopup = topPopupHistory[topPopupHistory.length - 1] ?? null;
+    setTopPopupHistory((current) => current.slice(0, -1));
+    setActiveTopPopup(previousPopup);
+    if (previousPopup) raiseNavigateLayer('topPopup');
+    else if (!trailExportVisible) removeNavigateLayer('topPopup');
+  }, [
+    activeTopPopup,
+    closeNavigateDetailSurfaces,
+    raiseNavigateLayer,
+    removeNavigateLayer,
+    topPopupHistory,
+    trailExportVisible,
+  ]);
+
+  const toggleTopPopup = useCallback((popup: Exclude<NavigateTopPopup, null>) => {
+    if (activeTopPopup === popup) {
+      closeTopPopup(popup);
       return;
     }
-    setActiveTopPopup((prev) => {
-      return prev === popup ? null : prev;
-    });
-  }, [closeNavigateDetailSurfaces]);
+    openTopPopup(popup);
+  }, [activeTopPopup, closeTopPopup, openTopPopup]);
 
   const closeTiltAlertDetail = useCallback(() => {
     setTiltAlertDetailVisible(false);
@@ -8608,18 +8583,16 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   }, []);
 
   const openWeatherAlertDetail = useCallback(() => {
-    closeTopPopup();
     setWeatherAlertDetailVisible(true);
-  }, [closeTopPopup]);
+  }, []);
 
   const closeWeatherAlertDetail = useCallback(() => {
     setWeatherAlertDetailVisible(false);
   }, []);
 
   const openRouteWeatherDetail = useCallback(() => {
-    closeTopPopup();
     setRouteWeatherDetailVisible(true);
-  }, [closeTopPopup]);
+  }, []);
 
   const closeRouteWeatherDetail = useCallback(() => {
     setRouteWeatherDetailVisible(false);
@@ -9338,6 +9311,7 @@ const handleQuickPinDrop = useCallback(() => {
 const applyRouteBuilderDraft = useCallback((nextDraft: NavigateRouteDraft) => {
   const nextSegments = buildRouteBuilderSegmentsFromDraft(nextDraft) as unknown as RouteBuilderSegmentData[];
   const lastLeg = nextDraft.legs[nextDraft.legs.length - 1] ?? null;
+  routeBuilderDraftRef.current = nextDraft;
   setRouteBuilderDraft(nextDraft);
   setRouteBuilderSegments(nextSegments);
   setRouteBuilderDrawing(false);
@@ -9367,18 +9341,20 @@ const handleRouteBuilderAnchorTap = useCallback((
   setShowCrosshair(false);
   setFollowUser(false);
   setUserHasManuallyMovedMap(true);
-  const routeableSegment = routeableFeatureToNavigateTraceableSegment(routeableFeature);
+  const [routeableSegment = null, ...connectedSegments] =
+    routeableFeatureToNavigateTraceableSegments(routeableFeature);
+  const currentDraft = routeBuilderDraftRef.current;
   const result = activeNavigationRunning || routeBuilderActiveExtensionMode
-    ? addActiveGuidanceExtensionAnchor(routeBuilderDraft, {
+    ? addActiveGuidanceExtensionAnchor(currentDraft, {
         activeRouteEnd: activeGuidanceRouteEndRef.current,
         coordinate,
         routeableSegment,
-        availableSegments: routeBuilderTraceableSegmentsRef.current,
+        availableSegments: [...connectedSegments, ...routeBuilderTraceableSegmentsRef.current],
       })
-    : addAnchorToDraft(routeBuilderDraft, {
+    : addAnchorToDraft(currentDraft, {
     coordinate,
     routeableSegment,
-    availableSegments: routeBuilderTraceableSegmentsRef.current,
+    availableSegments: [...connectedSegments, ...routeBuilderTraceableSegmentsRef.current],
   });
   const seededFromActiveGuidanceEnd =
     'seededFromActiveGuidanceEnd' in result && result.seededFromActiveGuidanceEnd === true;
@@ -9386,14 +9362,14 @@ const handleRouteBuilderAnchorTap = useCallback((
     setRouteBuilderActiveExtensionMode(true);
   }
   applyRouteBuilderDraft(result.draft);
-}, [activeNavigationRunning, applyRouteBuilderDraft, closeTopPopup, routeBuilderActiveExtensionMode, routeBuilderDraft]);
+}, [activeNavigationRunning, applyRouteBuilderDraft, closeTopPopup, routeBuilderActiveExtensionMode]);
 
   const handleLongPress = useCallback((coord: { latitude?: number; longitude?: number; routeableFeature?: any }) => {
   if (!Number.isFinite(coord.latitude) || !Number.isFinite(coord.longitude)) return;
   const latitude = Number(coord.latitude);
   const longitude = Number(coord.longitude);
   hapticCommand();
-  closeTopPopup();
+  raiseNavigateLayer('mapPointActions');
   setPinDropMode(false);
   setShowCrosshair(false);
   setEditingPin(null);
@@ -9407,7 +9383,7 @@ const handleRouteBuilderAnchorTap = useCallback((
     hasGpsFix: !!safeUserLocation,
     canBuildRoute: !activeNavigationRunning || activeGuidanceRouteExtensionAvailable,
   }));
-}, [activeNavigationRunning, closeTopPopup, safeUserLocation]);
+}, [activeNavigationRunning, raiseNavigateLayer, safeUserLocation]);
 
 const handleLongPressDrawRoute = useCallback(() => {
   if (!longPressContext || !longPressContext.actions.draw_route.enabled) return;
@@ -9492,6 +9468,21 @@ const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) => {
   }, ACTIVE_GUIDANCE_ENDPOINT_HINT_MS);
 }, [activeGuidanceEndpointHintOpacity]);
 
+const clearNavigateMapSelection = useCallback(() => {
+  setCampIntelComparisonVisible(false);
+  setSelectedDroppedPinId(null);
+  setSelectedCampIntelId(null);
+  setSelectedCampScoutCandidateId(null);
+  setSelectedCampOpsEndpointId(null);
+  setSelectedCommunityCampSiteId(null);
+  setSelectedScopedCampsite(null);
+  setSelectedGroupCampsiteShareId(null);
+  setSelectedDispersedCampingRegion(null);
+  setSelectedEstablishedCampsite(null);
+  setSelectedExploreRouteSegmentId(null);
+  setSelectedRouteCatalogViewportFeatureId(null);
+}, []);
+
   const handlePinTap = useCallback((pinPayload: any) => {
   hapticMicro();
 
@@ -9509,8 +9500,8 @@ const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) => {
     if (roadStepListExpanded) {
       setRoadStepListExpanded(false);
     }
-    closeTopPopup();
-    setSelectedExploreRouteSegmentId(null);
+    raiseNavigateLayer('mapSelection');
+    clearNavigateMapSelection();
     setSelectedRouteCatalogViewportFeatureId(routeId);
     return;
   }
@@ -9519,8 +9510,8 @@ const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) => {
     if (roadStepListExpanded) {
       setRoadStepListExpanded(false);
     }
-    closeTopPopup();
-    setSelectedDroppedPinId(null);
+    raiseNavigateLayer('mapSelection');
+    clearNavigateMapSelection();
     setSelectedCampIntelId(typeof pinPayload?.id === 'string' ? pinPayload.id : null);
     return;
   }
@@ -9536,29 +9527,21 @@ const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) => {
 
   const pin = pinStore.getById(pinId);
   if (pin) {
-    closeTopPopup();
-    setCampIntelComparisonVisible(false);
-    setSelectedCampIntelId(null);
-    setSelectedCampScoutCandidateId(null);
-    setSelectedCampOpsEndpointId(null);
-    setSelectedCommunityCampSiteId(null);
-    setSelectedScopedCampsite(null);
-    setSelectedGroupCampsiteShareId(null);
-    setSelectedDispersedCampingRegion(null);
-    setSelectedEstablishedCampsite(null);
+    raiseNavigateLayer('mapSelection');
+    clearNavigateMapSelection();
     setEditingPin(null);
     setDropCoords(null);
     setSelectedDroppedPinId(pin.id);
   }
-}, [closeTopPopup, roadStepListExpanded, setRoadStepListExpanded, showActiveGuidanceEndpointHint]);
+}, [clearNavigateMapSelection, raiseNavigateLayer, roadStepListExpanded, setRoadStepListExpanded, showActiveGuidanceEndpointHint]);
 
   const handleCampIntelTap = useCallback((payload: any) => {
     hapticMicro();
     if (roadStepListExpanded) {
       setRoadStepListExpanded(false);
     }
-    closeTopPopup();
-    setSelectedDroppedPinId(null);
+    raiseNavigateLayer('mapSelection');
+    clearNavigateMapSelection();
     if (payload?.markerKind === 'community_campsite' || payload?.communityCampSiteId) {
       setCampIntelComparisonVisible(false);
       setSelectedCampIntelId(null);
@@ -9608,21 +9591,15 @@ const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) => {
     setSelectedGroupCampsiteShareId(null);
     setCampIntelComparisonVisible(false);
     setSelectedCampIntelId(typeof payload?.id === 'string' ? payload.id : null);
-  }, [closeTopPopup, roadStepListExpanded, setRoadStepListExpanded, setSelectedCampIntelId]);
+  }, [clearNavigateMapSelection, raiseNavigateLayer, roadStepListExpanded, setRoadStepListExpanded, setSelectedCampIntelId]);
 
   const handleCampScoutTap = useCallback((payload: any) => {
     hapticMicro();
     if (roadStepListExpanded) {
       setRoadStepListExpanded(false);
     }
-    closeTopPopup();
-    setCampIntelComparisonVisible(false);
-    setSelectedCampIntelId(null);
-    setSelectedCommunityCampSiteId(null);
-    setSelectedScopedCampsite(null);
-    setSelectedGroupCampsiteShareId(null);
-    setSelectedDispersedCampingRegion(null);
-    setSelectedEstablishedCampsite(null);
+    raiseNavigateLayer('mapSelection');
+    clearNavigateMapSelection();
     if (isCampOpsMapPinPayload(payload)) {
       const endpointId = payload.campOpsCandidateId;
       setSelectedCampScoutCandidateId(null);
@@ -9632,7 +9609,7 @@ const showActiveGuidanceEndpointHint = useCallback((pinPayload: any) => {
     }
     setSelectedCampOpsEndpointId(null);
     setSelectedCampScoutCandidateId(typeof payload?.id === 'string' ? payload.id : null);
-  }, [closeTopPopup, roadStepListExpanded, setRoadStepListExpanded, showToast]);
+  }, [clearNavigateMapSelection, raiseNavigateLayer, roadStepListExpanded, setRoadStepListExpanded, showToast]);
 
   const handleCampIntelDismiss = useCallback(() => {
     hapticMicro();
@@ -14515,6 +14492,137 @@ const handleCreateRun = useCallback(() => {
       ? activeGuidanceToastTopOffset
       : 0;
   const routeStepDrawerBottomOffset = routeSurfaceBottomOffset + routeSurfaceHeight + OVERLAY_GAP;
+  const renderMapPopup = useCallback((
+    visible: boolean,
+    title: string,
+    icon: React.ComponentProps<typeof Ionicons>['name'],
+    onClose: () => void,
+    children: React.ReactNode,
+    popupWidth: number = MAP_POPUP_WIDTH,
+    options?: {
+      placement?: 'right' | 'center' | 'bottomRight';
+      backdropTint?: string;
+      fullBody?: boolean;
+      showBackdrop?: boolean;
+      snapToContent?: boolean;
+      layerId?: NavigateSurfaceLayerId;
+    },
+  ) => {
+    if (!visible) return null;
+
+    const layerId = options?.layerId ?? 'topPopup';
+    const layerZIndex = getNavigateLayerZIndex(layerId);
+    const snapToContent = options?.snapToContent === true;
+    const fullBody = snapToContent ? false : options?.fullBody !== false;
+    const centeredLeft = Math.max(
+      OVERLAY_EDGE,
+      Math.round((adaptive.windowWidth - popupWidth) / 2),
+    );
+    const activeGuidancePopupTopOffset =
+      navigationOverlayMode === 'active' ? activeGuidanceToastTopOffset : null;
+    const popupTop = fullBody
+      ? activeGuidancePopupTopOffset ?? PAGE_FRAME_TOP_GAP
+      : activeGuidancePopupTopOffset ?? MAP_POPUP_TOP;
+    const popupBottom = MAP_POPUP_BOTTOM;
+    const popupMaxHeight =
+      options?.placement === 'bottomRight'
+        ? Math.max(
+            260,
+            adaptive.windowHeight -
+              PAGE_FRAME_TOP_GAP -
+              (TOOLS_TRIGGER_BOTTOM + TOOLS_TRIGGER_SIZE + 8),
+          )
+        : Math.max(260, adaptive.windowHeight - popupTop - popupBottom);
+
+    return (
+      <View
+        style={[
+          styles.mapPopupLayer,
+          layerZIndex > 0 ? { zIndex: layerZIndex, elevation: layerZIndex } : null,
+        ]}
+        pointerEvents="box-none"
+      >
+        {options?.showBackdrop === false ? null : (
+          <TouchableOpacity
+            style={[
+              styles.mapPopupBackdrop,
+              {
+                top: popupTop,
+                bottom: popupBottom,
+                backgroundColor: options?.backdropTint ?? 'rgba(0,0,0,0.30)',
+              },
+            ]}
+            activeOpacity={1}
+            onPress={onClose}
+          />
+        )}
+
+        <View
+          style={[
+            styles.mapPopupShell,
+            snapToContent && styles.mapPopupShellSnapToContent,
+            fullBody
+              ? {
+                  top: popupTop,
+                  bottom: popupBottom,
+                  left: OVERLAY_EDGE,
+                  right: OVERLAY_EDGE,
+                  width: undefined,
+                }
+              : options?.placement === 'bottomRight'
+                ? {
+                    bottom: TOOLS_TRIGGER_BOTTOM + TOOLS_TRIGGER_SIZE + 8,
+                    right: TOOLS_TRIGGER_RIGHT,
+                    maxHeight: popupMaxHeight,
+                    width: popupWidth,
+                  }
+              : {
+                  top: popupTop,
+                  bottom: snapToContent ? undefined : popupBottom,
+                  maxHeight: snapToContent ? popupMaxHeight : undefined,
+                  right: options?.placement === 'center' ? undefined : OVERLAY_EDGE,
+                  width: popupWidth,
+                  left: options?.placement === 'center' ? centeredLeft : undefined,
+                },
+          ]}
+        >
+          <View style={[styles.mapPopupHeader, snapToContent && styles.mapPopupHeaderSnapToContent]}>
+            <View style={styles.mapPopupTitleRow}>
+              <Ionicons name={icon} size={16} color={TACTICAL.amber} />
+              <Text style={styles.mapPopupTitle}>{title}</Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.mapPopupCloseButton}
+              onPress={onClose}
+              activeOpacity={0.8}
+              hitSlop={CLOSE_CONTROL_HIT_SLOP}
+              accessibilityRole="button"
+              accessibilityLabel={`Close ${title.toLowerCase()} popup`}
+            >
+              <Ionicons name="close" size={18} color={TACTICAL.textMuted} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={[styles.mapPopupBody, snapToContent && styles.mapPopupBodySnapToContent]}>{children}</View>
+        </View>
+      </View>
+    );
+  }, [
+    OVERLAY_EDGE,
+    adaptive.windowHeight,
+    adaptive.windowWidth,
+    activeGuidanceToastTopOffset,
+    getNavigateLayerZIndex,
+    MAP_POPUP_BOTTOM,
+    MAP_POPUP_TOP,
+    MAP_POPUP_WIDTH,
+    navigationOverlayMode,
+    PAGE_FRAME_TOP_GAP,
+    TOOLS_TRIGGER_BOTTOM,
+    TOOLS_TRIGGER_RIGHT,
+    TOOLS_TRIGGER_SIZE,
+  ]);
   const navigateMajorPanelVisible =
     !!activeTopPopup ||
     tiltAlertDetailVisible ||
@@ -14560,17 +14668,6 @@ const handleCreateRun = useCallback(() => {
     dispersedCampingEligibilityEnabled ||
     establishedCampsitesEnabled ||
     (canUseCommunityCampsiteLayers && Object.values(campsiteLayerVisibility).some(Boolean));
-  const campLayerMenuLayout = resolveCampLayerMenuLayout({
-    mapHeight: Math.max(
-      0,
-      adaptive.safeHeight - headerHeight - storageBannerHeight - actionBarHeight,
-    ),
-    viewportWidth: adaptive.windowWidth,
-    topInset: PAGE_FRAME_TOP_GAP,
-    bottomOffset: TOOLS_TRIGGER_BOTTOM,
-    overlayEdge: OVERLAY_EDGE,
-    triggerSize: TOOLS_TRIGGER_SIZE,
-  });
   const compassOverlayVisible =
     mapOverlayStartupReady &&
     !destinationSearchMapFrozen &&
@@ -14869,12 +14966,11 @@ const handleTopToolboxLayout = useCallback(
 
   useEffect(() => {
     if (!selectedCampIntelId) return;
-    if (navigateMajorPanelVisible || roadStepListExpanded || !campIntelVisible) {
+    if (roadStepListExpanded || !campIntelVisible) {
       setSelectedCampIntelId(null);
     }
   }, [
     campIntelVisible,
-    navigateMajorPanelVisible,
     roadStepListExpanded,
     selectedCampIntelId,
   ]);
@@ -14895,6 +14991,59 @@ const handleTopToolboxLayout = useCallback(
     navigationOverlayMode,
     roadStepListExpanded,
     setRoadStepListExpanded,
+  ]);
+
+  const dismissLatestNavigateSurfaceLayer = useCallback(() => {
+    const latestLayer = navigateSurfaceLayerStack[navigateSurfaceLayerStack.length - 1];
+    if (!latestLayer) return false;
+
+    if (latestLayer === 'topPopup') {
+      if (activeTopPopup) closeTopPopup(activeTopPopup);
+      else removeNavigateLayer('topPopup');
+      return true;
+    }
+    if (latestLayer === 'tools') {
+      setToolsMenuOpen(false);
+      removeNavigateLayer('tools');
+      return true;
+    }
+    if (latestLayer === 'campLayers') {
+      setCampLayerMenuOpen(false);
+      removeNavigateLayer('campLayers');
+      return true;
+    }
+    if (latestLayer === 'dispatchSelection') {
+      setSelectedConvoyMemberId(null);
+      setSelectedDispatchPingEventId(null);
+      removeNavigateLayer('dispatchSelection');
+      return true;
+    }
+    if (latestLayer === 'mapPointActions') {
+      setLongPressContext(null);
+      setLongPressInfoExpanded(false);
+      removeNavigateLayer('mapPointActions');
+      return true;
+    }
+
+    setCampIntelComparisonVisible(false);
+    setSelectedDroppedPinId(null);
+    setSelectedCampIntelId(null);
+    setSelectedCampScoutCandidateId(null);
+    setSelectedCampOpsEndpointId(null);
+    setSelectedCommunityCampSiteId(null);
+    setSelectedScopedCampsite(null);
+    setSelectedGroupCampsiteShareId(null);
+    setSelectedDispersedCampingRegion(null);
+    setSelectedEstablishedCampsite(null);
+    setSelectedExploreRouteSegmentId(null);
+    setSelectedRouteCatalogViewportFeatureId(null);
+    removeNavigateLayer('mapSelection');
+    return true;
+  }, [
+    activeTopPopup,
+    closeTopPopup,
+    navigateSurfaceLayerStack,
+    removeNavigateLayer,
   ]);
 
   useFocusEffect(
@@ -14928,10 +15077,7 @@ const handleTopToolboxLayout = useCallback(
           closeTiltAlertDetail();
           return true;
         }
-        if (activeTopPopup) {
-          closeTopPopup();
-          return true;
-        }
+        if (dismissLatestNavigateSurfaceLayer()) return true;
         if (selectedExploreRouteSegmentId) {
           setSelectedExploreRouteSegmentId(null);
           return true;
@@ -14970,13 +15116,12 @@ const handleTopToolboxLayout = useCallback(
         subscription.remove();
       };
     }, [
-      activeTopPopup,
       authVisible,
       closeRouteWeatherDetail,
       closeTiltAlertDetail,
-      closeTopPopup,
       closeWeatherAlertDetail,
       collapseMap,
+      dismissLatestNavigateSurfaceLayer,
       exportModalVisible,
       mapExpanded,
       pinDropMode,
@@ -16629,7 +16774,8 @@ useEffect(() => {
   const handleTrailExport = useCallback(() => {
     closeTopPopup();
     setTrailExportVisible(true);
-  }, [closeTopPopup]);
+    raiseNavigateLayer('topPopup');
+  }, [closeTopPopup, raiseNavigateLayer]);
 
   const handleTrailExportAction = useCallback((format: 'gpx' | 'json' | 'coords' | 'pdf') => {
     let content = '';
@@ -16876,8 +17022,7 @@ const mapTrailActive = useMemo(
 
 const replayOverlayTop = MAP_TOP_CONTROL_ROW + FLOATING_PILL_HEIGHT + OVERLAY_GAP;
 const showInlineIntelPanel = false;
-const toolsChildPanelVisible = toolsMenuOpen && isToolsChildPopup(activeTopPopup);
-const toolsPopupVisible = mapOverlayStartupReady && toolsMenuOpen && !toolsChildPanelVisible;
+const toolsPopupVisible = mapOverlayStartupReady && toolsMenuOpen;
 useEffect(() => {
   if (roadNavigation.query.trim().length > 0 && recentSearchesVisible) {
     setRecentSearchesVisible(false);
@@ -17644,11 +17789,10 @@ const handleOpenOfflineCache = useCallback(() => {
 }, [openTopPopup]);
 
 const openToolsChildPopup = useCallback((popup: NavigateToolsChildPopup) => {
-  closeNavigateDetailSurfaces();
-  setCampLayerMenuOpen(false);
   setToolsMenuOpen(true);
-  setActiveTopPopup(popup);
-}, [closeNavigateDetailSurfaces]);
+  raiseNavigateLayer('tools');
+  openTopPopup(popup);
+}, [openTopPopup, raiseNavigateLayer]);
 
 const handleOpenCampScoutIntro = useCallback(() => {
   setRequestBoundsTrigger((prev) => prev + 1);
@@ -17730,32 +17874,33 @@ const toggleToolsPopup = useCallback(() => {
   hapticMicro();
   if (toolsMenuOpen) {
     setToolsMenuOpen(false);
-    setActiveTopPopup((prev) => (isToolsChildPopup(prev) ? null : prev));
+    removeNavigateLayer('tools');
     return;
   }
-  closeNavigateDetailSurfaces();
-  setCampLayerMenuOpen(false);
-  setActiveTopPopup(null);
   setToolsMenuOpen(true);
-}, [closeNavigateDetailSurfaces, toolsMenuOpen]);
+  raiseNavigateLayer('tools');
+}, [raiseNavigateLayer, removeNavigateLayer, toolsMenuOpen]);
 
 const closeToolsPopup = useCallback(() => {
   setToolsMenuOpen(false);
-  setActiveTopPopup((prev) => (isToolsChildPopup(prev) || prev === 'tools' ? null : prev));
-}, []);
+  removeNavigateLayer('tools');
+  if (isToolsChildPopup(activeTopPopup)) {
+    setActiveTopPopup(null);
+    setTopPopupHistory([]);
+    removeNavigateLayer('topPopup');
+  }
+}, [activeTopPopup, removeNavigateLayer]);
 
 const toggleCampLayerMenu = useCallback(() => {
   hapticMicro();
-  setCampLayerMenuOpen((current) => {
-    const next = !current;
-    if (next) {
-      closeNavigateDetailSurfaces();
-      setToolsMenuOpen(false);
-      setActiveTopPopup((prev) => (isToolsChildPopup(prev) ? null : prev));
-    }
-    return next;
-  });
-}, [closeNavigateDetailSurfaces]);
+  if (campLayerMenuOpen) {
+    setCampLayerMenuOpen(false);
+    removeNavigateLayer('campLayers');
+    return;
+  }
+  setCampLayerMenuOpen(true);
+  raiseNavigateLayer('campLayers');
+}, [campLayerMenuOpen, raiseNavigateLayer, removeNavigateLayer]);
 
 const routeBuilderPointCount = useMemo(
   () =>
@@ -17944,6 +18089,13 @@ const queueRouteBuilderFinalSnap = useCallback((segment: RouteBuilderSegmentData
   if (rawLine.length < 2) return;
   if (segment.buildSource?.kind === 'dispersed_route_leg') return;
   if (segment.snapProvider === 'ecs_route_geometry' && isVerifiedRouteBuilderSegment(segment as FinalizableRouteBuilderSegment)) return;
+  if (
+    segment.buildSource?.kind === 'rendered_routeable_geometry' &&
+    segment.snapProvider === 'rendered_features' &&
+    isVerifiedRouteBuilderSegment(segment as FinalizableRouteBuilderSegment)
+  ) {
+    return;
+  }
   if (segment.snapStatus === 'network_pending' || segment.snapStatus === 'blocked') return;
   if (segment.snapProvider === 'mapbox_map_matching') return;
 
@@ -18327,7 +18479,9 @@ const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boole
   setRouteBuilderSnapStatus(null);
   setRouteBuilderSnapMessage(null);
   setRouteBuilderSegments([]);
-  setRouteBuilderDraft(createNavigateRouteDraft());
+  const emptyDraft = createNavigateRouteDraft();
+  routeBuilderDraftRef.current = emptyDraft;
+  setRouteBuilderDraft(emptyDraft);
   setRouteBuilderActiveExtensionMode(false);
   setRouteBuilderSaveVisible(false);
   setRouteBuilderSaveName('');
@@ -19569,8 +19723,10 @@ const toggleRemotenessOverlay = useCallback(() => {
     }
 
     hapticMicro();
+    raiseNavigateLayer('mapSelection');
+    clearNavigateMapSelection();
     setSelectedExploreRouteSegmentId(String(match.id));
-  }, [exploreRouteOverlaySegments, showToast]);
+  }, [clearNavigateMapSelection, exploreRouteOverlaySegments, raiseNavigateLayer, showToast]);
 
   const handleRouteGeometrySegmentTap = useCallback((segment: SegmentSelectionPayload) => {
     if (segment?.kind !== 'route_geometry_segment' || segment.id == null) return;
@@ -19588,8 +19744,8 @@ const toggleRemotenessOverlay = useCallback(() => {
       if (roadStepListExpanded) {
         setRoadStepListExpanded(false);
       }
-      closeTopPopup();
-      setSelectedExploreRouteSegmentId(null);
+      raiseNavigateLayer('mapSelection');
+      clearNavigateMapSelection();
       setSelectedRouteCatalogViewportFeatureId(catalogRouteId);
       showToast('ECS CATALOG ROUTE SELECTED');
       return;
@@ -19662,7 +19818,8 @@ const toggleRemotenessOverlay = useCallback(() => {
     );
   }, [
     closeNavigateDetailSurfaces,
-    closeTopPopup,
+    clearNavigateMapSelection,
+    raiseNavigateLayer,
     pendingHybridTrailTransition,
     roadNavigationActive,
     roadStepListExpanded,
@@ -20261,15 +20418,11 @@ const toggleRemotenessOverlay = useCallback(() => {
       if (campScoutDrawingSuppressesDispersedRegionSheet) {
         return;
       }
-      setSelectedDroppedPinId(null);
-      setSelectedCampIntelId(null);
-      setCampIntelComparisonVisible(false);
-      setSelectedEstablishedCampsite(null);
-      setSelectedCampScoutCandidateId(null);
-      setSelectedCampOpsEndpointId(null);
+      raiseNavigateLayer('mapSelection');
+      clearNavigateMapSelection();
       setSelectedDispersedCampingRegion(payload);
     },
-    [campScoutDrawingSuppressesDispersedRegionSheet],
+    [campScoutDrawingSuppressesDispersedRegionSheet, clearNavigateMapSelection, raiseNavigateLayer],
   );
 
   const closeDispersedCampingRegionSheet = useCallback(() => {
@@ -20277,14 +20430,10 @@ const toggleRemotenessOverlay = useCallback(() => {
   }, []);
 
   const handleEstablishedCampsiteTap = useCallback((payload: EstablishedCampsite) => {
-    setSelectedDroppedPinId(null);
-    setSelectedCampIntelId(null);
-    setCampIntelComparisonVisible(false);
-    setSelectedDispersedCampingRegion(null);
-    setSelectedCampScoutCandidateId(null);
-    setSelectedCampOpsEndpointId(null);
+    raiseNavigateLayer('mapSelection');
+    clearNavigateMapSelection();
     setSelectedEstablishedCampsite(payload);
-  }, []);
+  }, [clearNavigateMapSelection, raiseNavigateLayer]);
 
   const handleActiveGuidanceLayout = useCallback((height: number) => {
     if (!Number.isFinite(height) || height <= 0) return;
@@ -20302,14 +20451,18 @@ const toggleRemotenessOverlay = useCallback(() => {
   const handleEstablishedCampsiteSummarySelect = useCallback(
     (campsite: RouteNearbyEstablishedCampsite) => {
       hapticMicro();
+      raiseNavigateLayer('mapSelection');
+      clearNavigateMapSelection();
       setSelectedEstablishedCampsite(campsite);
     },
-    [],
+    [clearNavigateMapSelection, raiseNavigateLayer],
   );
 
   const handleEstablishedCampsiteViewOnMap = useCallback(
     (campsite: RouteNearbyEstablishedCampsite) => {
       hapticMicro();
+      raiseNavigateLayer('mapSelection');
+      clearNavigateMapSelection();
       setSelectedEstablishedCampsite(campsite);
       queueMapCameraCommand(
         {
@@ -20324,7 +20477,7 @@ const toggleRemotenessOverlay = useCallback(() => {
         { force: true },
       );
     },
-    [queueMapCameraCommand],
+    [clearNavigateMapSelection, queueMapCameraCommand, raiseNavigateLayer],
   );
 
   const handleEstablishedCampsiteNavigate = useCallback(
@@ -21247,6 +21400,72 @@ const selectedDispatchPingEvent = useMemo(
     : null,
   [dispatchEvents, selectedDispatchPingEventId],
 );
+const navigateMapSelectionVisible = !!(
+  selectedDroppedPin ||
+  selectedCampIntel ||
+  selectedCampScoutCandidate ||
+  selectedCampOpsIntel ||
+  selectedCommunityCampSite ||
+  selectedScopedCampsite ||
+  selectedGroupCampsiteItem ||
+  selectedDispersedCampingRegionLive ||
+  selectedEstablishedCampsite ||
+  selectedExploreRouteSegmentId ||
+  selectedRouteCatalogViewportFeature
+);
+const navigateDispatchSelectionVisible = !!(
+  selectedConvoyMarker || selectedDispatchPingMarker
+);
+
+useEffect(() => {
+  if (toolsMenuOpen) raiseNavigateLayer('tools');
+  else removeNavigateLayer('tools');
+}, [raiseNavigateLayer, removeNavigateLayer, toolsMenuOpen]);
+
+useEffect(() => {
+  if (campLayerMenuOpen) raiseNavigateLayer('campLayers');
+  else removeNavigateLayer('campLayers');
+}, [campLayerMenuOpen, raiseNavigateLayer, removeNavigateLayer]);
+
+useEffect(() => {
+  if (activeTopPopup || trailExportVisible) raiseNavigateLayer('topPopup');
+  else removeNavigateLayer('topPopup');
+}, [activeTopPopup, raiseNavigateLayer, removeNavigateLayer, trailExportVisible]);
+
+useEffect(() => {
+  if (activeTopPopup) return;
+  setTopPopupHistory((current) => (current.length > 0 ? [] : current));
+}, [activeTopPopup]);
+
+useEffect(() => {
+  if (navigateMapSelectionVisible) raiseNavigateLayer('mapSelection');
+  else removeNavigateLayer('mapSelection');
+}, [navigateMapSelectionVisible, raiseNavigateLayer, removeNavigateLayer]);
+
+useEffect(() => {
+  if (longPressContext) raiseNavigateLayer('mapPointActions');
+  else removeNavigateLayer('mapPointActions');
+}, [longPressContext, raiseNavigateLayer, removeNavigateLayer]);
+
+useEffect(() => {
+  if (navigateDispatchSelectionVisible) raiseNavigateLayer('dispatchSelection');
+  else removeNavigateLayer('dispatchSelection');
+}, [navigateDispatchSelectionVisible, raiseNavigateLayer, removeNavigateLayer]);
+
+const mapSelectionLayerZIndex = getNavigateLayerZIndex('mapSelection');
+const mapPointActionsLayerZIndex = getNavigateLayerZIndex('mapPointActions');
+const campLayersLayerZIndex = getNavigateLayerZIndex('campLayers');
+const stableMapSurfaceLayerZIndex = Math.max(
+  navigateMapSelectionVisible ? mapSelectionLayerZIndex : 0,
+  longPressContext ? mapPointActionsLayerZIndex : 0,
+  campLayerMenuOpen ? campLayersLayerZIndex : 0,
+);
+const dispatchSelectionLayerZIndex = getNavigateLayerZIndex('dispatchSelection');
+const mapOverlayLayerZIndex = Math.max(
+  toolsMenuOpen ? getNavigateLayerZIndex('tools') : 0,
+  activeTopPopup || trailExportVisible ? getNavigateLayerZIndex('topPopup') : 0,
+  navigateDispatchSelectionVisible ? dispatchSelectionLayerZIndex : 0,
+);
 
 useEffect(() => {
   if (selectedConvoyMemberId && !navigateConvoyMarkers.some((marker) => marker.memberId === selectedConvoyMemberId)) {
@@ -21262,6 +21481,7 @@ useEffect(() => {
 
 const handleNavigateConvoyMemberTap = useCallback((marker: ConvoyMapOverlayMarker) => {
   hapticMicro();
+  raiseNavigateLayer('dispatchSelection');
   setSelectedConvoyMemberId(marker.memberId);
   setSelectedDispatchPingEventId(null);
   fitMapToCoordinatePreview(
@@ -21269,10 +21489,11 @@ const handleNavigateConvoyMemberTap = useCallback((marker: ConvoyMapOverlayMarke
     72,
     'navigate_convoy_member_focus',
   );
-}, [fitMapToCoordinatePreview]);
+}, [fitMapToCoordinatePreview, raiseNavigateLayer]);
 
 const handleNavigateDispatchPingTap = useCallback((marker: DispatchPingMapMarker) => {
   hapticMicro();
+  raiseNavigateLayer('dispatchSelection');
   setSelectedDispatchPingEventId(marker.eventId);
   setSelectedConvoyMemberId(null);
   fitMapToCoordinatePreview(
@@ -21280,7 +21501,7 @@ const handleNavigateDispatchPingTap = useCallback((marker: DispatchPingMapMarker
     76,
     'navigate_dispatch_ping_focus',
   );
-}, [fitMapToCoordinatePreview]);
+}, [fitMapToCoordinatePreview, raiseNavigateLayer]);
 
 const handleRouteToSelectedDispatchPing = useCallback(async () => {
   const event = selectedDispatchPingEvent;
@@ -21498,43 +21719,14 @@ const stableMapSurface = useMemo(() => {
     );
   }
 
-  const campLayerMenuPanel = campLayerControlsAvailable && campLayerMenuOpen ? (
-    <View
-      style={[
-        styles.campLayerMenuPanel,
-        {
-          width: campLayerMenuLayout.width,
-          maxWidth: campLayerMenuLayout.maxWidth,
-          maxHeight: campLayerMenuLayout.maxHeight,
-        },
-      ]}
-      testID="navigate-camp-layer-menu-panel"
-      accessible
-      accessibilityLabel="Camp layer menu"
-    >
-      <View style={styles.campLayerMenuHeader}>
-        <View style={styles.campLayerMenuTitleRow}>
-          <Ionicons name="bonfire-outline" size={14} color={TACTICAL.amber} />
-          <Text style={styles.campLayerMenuTitle}>Camp Layers</Text>
-        </View>
-        <TouchableOpacity
-          style={styles.campLayerMenuCloseButton}
-          onPress={() => setCampLayerMenuOpen(false)}
-          activeOpacity={0.78}
-          hitSlop={CLOSE_CONTROL_HIT_SLOP}
-          accessibilityRole="button"
-          accessibilityLabel="Close camp layer menu"
-        >
-          <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
-        </TouchableOpacity>
-      </View>
-
+  const campLayerMenuContent = campLayerControlsAvailable && campLayerMenuOpen ? (
       <ScrollView
         style={styles.campLayerMenuScroll}
         contentContainerStyle={styles.campLayerMenuScrollContent}
         nestedScrollEnabled
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        testID="navigate-camp-layer-menu-panel"
       >
         {canUseCommunityCampsiteLayers ? (
           <>
@@ -21725,7 +21917,6 @@ const stableMapSurface = useMemo(() => {
           ) : null}
         </View>
       </ScrollView>
-    </View>
   ) : null;
 
   const endpointHintScreenCoordinate = activeGuidanceEndpointHint?.screenCoordinate ?? null;
@@ -21751,7 +21942,14 @@ const stableMapSurface = useMemo(() => {
     : activeGuidanceToastTopOffset;
 
   return (
-    <View style={{ flex: 1 }}>
+    <View
+      style={[
+        styles.stableMapSurface,
+        stableMapSurfaceLayerZIndex > 0
+          ? { zIndex: stableMapSurfaceLayerZIndex, elevation: stableMapSurfaceLayerZIndex }
+          : null,
+      ]}
+    >
       {mapRendererElement}
 
       {destinationSearchMapFrozen ? (
@@ -21771,6 +21969,9 @@ const stableMapSurface = useMemo(() => {
         <View
           style={[
             styles.longPressActionMenu,
+            mapPointActionsLayerZIndex > 0
+              ? { zIndex: mapPointActionsLayerZIndex, elevation: mapPointActionsLayerZIndex }
+              : null,
             {
               left: OVERLAY_EDGE,
               right: OVERLAY_EDGE,
@@ -21999,6 +22200,15 @@ const stableMapSurface = useMemo(() => {
         </Animated.View>
       ) : null}
 
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.mapSelectionLayer,
+          mapSelectionLayerZIndex > 0
+            ? { zIndex: mapSelectionLayerZIndex, elevation: mapSelectionLayerZIndex }
+            : null,
+        ]}
+      >
       <CampIntelDetailCard
         visible={campIntelVisible && !!selectedCampIntel}
         site={selectedCampIntel}
@@ -22281,6 +22491,7 @@ const stableMapSurface = useMemo(() => {
           </View>
         </View>
       ) : null}
+      </View>
 
       {showInlineIntelPanel && (
         <View style={styles.intelPanel}>
@@ -22338,6 +22549,9 @@ const stableMapSurface = useMemo(() => {
           styles.mapFloatingControlsLayer,
           selectedCampIntelId && styles.mapFloatingControlsLayerPersistent,
           (selectedCampScoutCandidateId || selectedCampOpsEndpointId) && styles.mapFloatingControlsLayerPersistent,
+          campLayerMenuOpen && campLayersLayerZIndex > 0
+            ? { zIndex: campLayersLayerZIndex, elevation: campLayersLayerZIndex }
+            : null,
         ]}
         pointerEvents="box-none"
       >
@@ -22524,7 +22738,6 @@ const stableMapSurface = useMemo(() => {
 
             {campLayerControlsAvailable ? (
               <View style={styles.campLayerMenuAnchorSlot} pointerEvents="box-none">
-                {campLayerMenuPanel}
                 <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
                   <TouchableOpacity
                     style={[
@@ -22820,6 +23033,18 @@ const stableMapSurface = useMemo(() => {
           </View>
         ) : null}
 
+        {renderMapPopup(
+          campLayerControlsAvailable && campLayerMenuOpen,
+          'CAMP LAYERS',
+          'bonfire-outline',
+          () => setCampLayerMenuOpen(false),
+          <View style={styles.campLayerMenuPopupContent}>
+            {campLayerMenuContent}
+          </View>,
+          CAMP_LAYER_POPUP_WIDTH,
+          { placement: 'center', backdropTint: 'transparent', fullBody: false, layerId: 'campLayers' }
+        )}
+
         <CompassRose
           heading={compassDisplayHeading != null ? compassDisplayHeading : undefined}
           followUser={followUser}
@@ -22837,6 +23062,7 @@ const stableMapSurface = useMemo(() => {
   );
 }, [
   hasToken,
+  renderMapPopup,
   mapRendererElement,
   followUser,
   destinationSearchMapFrozen,
@@ -22923,9 +23149,6 @@ const stableMapSurface = useMemo(() => {
   adaptive.windowWidth,
   campsiteDetailTopOffset,
   campLayerDetailBottomOffset,
-  campLayerMenuLayout.maxHeight,
-  campLayerMenuLayout.maxWidth,
-  campLayerMenuLayout.width,
   dispersedCampingRegionSheetLayout.bottomOffset,
   dispersedCampingRegionSheetLayout.cardAlignSelf,
   dispersedCampingRegionSheetLayout.left,
@@ -23026,6 +23249,7 @@ const stableMapSurface = useMemo(() => {
   remotenessOverlayAvailable,
   toggleRemotenessOverlay,
   campLayerMenuOpen,
+  campLayersLayerZIndex,
   campLayerControlsAvailable,
   campLayerControlActive,
   campsiteLayerVisibility,
@@ -23061,6 +23285,9 @@ const stableMapSurface = useMemo(() => {
   vehicleHeadingHook.isStationaryLocked,
   vehicleHeadingHook.source,
   compassPowerSaveActive,
+  mapSelectionLayerZIndex,
+  mapPointActionsLayerZIndex,
+  stableMapSurfaceLayerZIndex,
   roadNavigationSurfaceTopOffset,
   routeSurfaceBottomOffset,
   routeBuilderControlBottomOffset,
@@ -23068,6 +23295,7 @@ const stableMapSurface = useMemo(() => {
   activeGuidanceEndpointHintOpacity,
   activeGuidanceToastTopOffset,
   routeStepDrawerBottomOffset,
+  CAMP_LAYER_POPUP_WIDTH,
   TOOLS_TRIGGER_BOTTOM,
   TOOLS_TRIGGER_RIGHT,
   TOOLS_TRIGGER_SIZE,
@@ -23674,7 +23902,15 @@ const stableMapSurface = useMemo(() => {
 
 
 {/* FLOATING MAP OVERLAYS */}
-<View pointerEvents="box-none" style={styles.mapOverlayLayer}>
+<View
+  pointerEvents="box-none"
+  style={[
+    styles.mapOverlayLayer,
+    mapOverlayLayerZIndex > 0
+      ? { zIndex: mapOverlayLayerZIndex, elevation: mapOverlayLayerZIndex }
+      : null,
+  ]}
+>
   {isReplayActive && isMapUIReady && (
     <View
       style={[
@@ -23749,6 +23985,9 @@ const stableMapSurface = useMemo(() => {
       pointerEvents="box-none"
       style={[
         styles.dispatchMapOverlayCardWrap,
+        dispatchSelectionLayerZIndex > 0
+          ? { zIndex: dispatchSelectionLayerZIndex, elevation: dispatchSelectionLayerZIndex }
+          : null,
         {
           top: MAP_TOP_CONTROL_ROW + 54,
           right: OVERLAY_EDGE,
@@ -24113,7 +24352,13 @@ const stableMapSurface = useMemo(() => {
     'TOOLS',
     'options-outline',
     closeToolsPopup,
-    <View style={styles.toolsPopupContent}>
+    <ScrollView
+      style={styles.toolsPopupScroll}
+      contentContainerStyle={styles.toolsPopupContent}
+      nestedScrollEnabled
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
       <View style={styles.toolsFixedContent}>
         <View style={styles.toolsMapPresentationBlock}>
           <Text style={styles.toolsUtilitySectionLabel}>MAP PRESENTATION</Text>
@@ -24330,16 +24575,16 @@ const stableMapSurface = useMemo(() => {
           </View>
         </NavigateToolSection>
       </View>
-    </View>,
+    </ScrollView>,
     TOOLS_POPUP_WIDTH,
-    { placement: 'bottomRight', backdropTint: 'transparent', snapToContent: true }
+    { placement: 'center', backdropTint: 'transparent', fullBody: false, layerId: 'tools' }
   )}
 
   {campopsManualAreaReviewEnabled ? renderMapPopup(
     campScoutIntroVisible,
     'CAMP ENDPOINTS',
     'shapes-outline',
-    closeToolsPopup,
+    () => closeTopPopup('campScout'),
     <ScrollView
       style={styles.mapPopupScroll}
       contentContainerStyle={styles.mapPopupScrollContent}
@@ -24475,7 +24720,7 @@ const stableMapSurface = useMemo(() => {
           style={styles.secondaryButton}
           onPress={() => {
             hapticMicro();
-            closeToolsPopup();
+            closeTopPopup('campScout');
           }}
           activeOpacity={0.86}
           accessibilityRole="button"
@@ -26446,6 +26691,16 @@ mapModalLayer: {
   pointerEvents: 'box-none',
 },
 
+stableMapSurface: {
+  flex: 1,
+  position: 'relative',
+},
+
+mapSelectionLayer: {
+  ...StyleSheet.absoluteFillObject,
+  pointerEvents: 'box-none',
+},
+
   // -- Map Container (fills remaining space) -----------------
   mapContainer: {
   flex: 1,
@@ -26905,57 +27160,14 @@ rightFloatingRail: {
   gap: 6,
 },
 
-campLayerMenuPanel: {
-  borderRadius: 12,
-  borderWidth: 1,
-  borderColor: 'rgba(196,138,44,0.28)',
-  backgroundColor: 'rgba(8,12,15,0.96)',
-  paddingHorizontal: 8,
-  paddingVertical: 8,
-  gap: 6,
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 8 },
-  shadowOpacity: 0.34,
-  shadowRadius: 16,
-  elevation: 14,
-  overflow: 'hidden',
+campLayerMenuPopupContent: {
+  flex: 1,
+  backgroundColor: 'rgba(7,12,16,0.96)',
 },
 
 campLayerMenuAnchorSlot: {
   alignItems: 'flex-end',
   gap: 6,
-},
-
-campLayerMenuHeader: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 10,
-},
-
-campLayerMenuTitleRow: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 7,
-  minWidth: 0,
-},
-
-campLayerMenuTitle: {
-  ...TYPO.U2,
-  color: TACTICAL.amber,
-  fontSize: 9,
-  letterSpacing: 1.2,
-},
-
-campLayerMenuCloseButton: {
-  width: 26,
-  height: 26,
-  borderRadius: 13,
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderWidth: 1,
-  borderColor: 'rgba(255,255,255,0.08)',
-  backgroundColor: 'rgba(255,255,255,0.035)',
 },
 
 campLayerMenuToggle: {
@@ -26965,12 +27177,14 @@ campLayerMenuToggle: {
 },
 
 campLayerMenuScroll: {
-  flexShrink: 1,
+  flex: 1,
 },
 
 campLayerMenuScrollContent: {
   gap: 6,
-  paddingBottom: 2,
+  paddingHorizontal: 12,
+  paddingTop: 12,
+  paddingBottom: 18,
 },
 
 campLayerMenuNotes: {
@@ -27828,6 +28042,11 @@ idleDestinationSearchSuggestionSubtitle: {
 
 toolsPopupContent: {
   alignSelf: 'stretch',
+  flexGrow: 1,
+},
+
+toolsPopupScroll: {
+  flex: 1,
 },
 
 toolsFixedContent: {
@@ -28730,6 +28949,17 @@ mapPopupHeaderSnapToContent: {
   minHeight: 42,
   paddingHorizontal: 12,
   backgroundColor: 'rgba(10,15,18,0.98)',
+},
+
+mapPopupCloseButton: {
+  width: 34,
+  height: 34,
+  borderRadius: 17,
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.08)',
+  backgroundColor: 'rgba(255,255,255,0.035)',
 },
 
 mapPopupTitleRow: {

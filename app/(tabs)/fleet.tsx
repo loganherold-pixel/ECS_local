@@ -2885,7 +2885,13 @@ function FleetScreenInner() {
       <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
         <Header title="Fleet Center" commandContext={fleetHeaderCommandContext} />
 
-        <View style={[s.fleetMainBody, fleetFrameStyle]}>
+        <ScrollView
+          style={[s.fleetMainBody, fleetFrameStyle]}
+          contentContainerStyle={s.fleetMainBodyContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+        >
           <FleetCommandSurface state={fleetCommandState} />
           <FleetOverviewHeader
             onAddVehicle={handleAddVehicle}
@@ -2915,49 +2921,78 @@ function FleetScreenInner() {
               {fleetCardModels.length > 1 ? (
                 <Text style={s.swipeHint}>Swipe for other fleet vehicles</Text>
               ) : null}
-              <FlatList
-                ref={vehicleCarouselRef}
-                data={fleetCardModels}
-                keyExtractor={(model) => model.vehicle.id}
-                renderItem={({ item: model }) => (
-                  <View style={[s.carouselPage, { width: Math.max(carouselWidth, 1) }]}>
+              {fleetCardModels.length === 1 ? (
+                <View style={s.fleetCardSinglePage}>
+                  {fleetCardModels[0] ? (
                     <FleetPremiumVehicleCard
-                      model={model}
-                      isActive={model.vehicle.id === activeVehicleId}
+                      model={fleetCardModels[0]}
+                      isActive={fleetCardModels[0].vehicle.id === activeVehicleId}
                       isOnline={isOnline}
                       offlineMode={offlineMode}
                       openPanel={null}
-                      onProfile={() => handleOpenVehicleProfile(model.vehicle)}
-                      onLoadout={() => handleOpenBuildLoadoutModal(model.vehicle)}
-                      onWeightSummary={() => handleOpenWeightSummaryModal(model.vehicle)}
-                      onDelete={() => handleDeleteVehicle(model.vehicle)}
+                      onProfile={() => handleOpenVehicleProfile(fleetCardModels[0].vehicle)}
+                      onLoadout={() => handleOpenBuildLoadoutModal(fleetCardModels[0].vehicle)}
+                      onWeightSummary={() => handleOpenWeightSummaryModal(fleetCardModels[0].vehicle)}
+                      onDelete={() => handleDeleteVehicle(fleetCardModels[0].vehicle)}
                       onChecklistSave={handleChecklistSave}
-                      onMarkReady={() => handleMarkVehicleReady(model.vehicle.id)}
+                      onMarkReady={() => handleMarkVehicleReady(fleetCardModels[0].vehicle.id)}
                       onReadinessPress={() => {
                         setVehicleConfidenceNoticeVehicleId(null);
-                        setVehicleReadinessNoticeVehicleId(model.vehicle.id);
+                        setVehicleReadinessNoticeVehicleId(fleetCardModels[0].vehicle.id);
                       }}
                       onConfidencePress={() => {
                         setVehicleReadinessNoticeVehicleId(null);
-                        setVehicleConfidenceNoticeVehicleId(model.vehicle.id);
+                        setVehicleConfidenceNoticeVehicleId(fleetCardModels[0].vehicle.id);
                       }}
                     />
-                  </View>
-                )}
-                horizontal
-                pagingEnabled
-                showsHorizontalScrollIndicator={false}
-                bounces={false}
-                onMomentumScrollEnd={handleVehicleCarouselMomentumEnd}
-                extraData={`${activeVehicleId}:${loadoutRefreshKey}:${supportDataRevision}:${carouselWidth}`}
-                style={s.vehicleCarousel}
-                contentContainerStyle={s.vehicleCarouselContent}
-                getItemLayout={(_, index) => ({
-                  length: Math.max(carouselWidth, 1),
-                  offset: Math.max(carouselWidth, 1) * index,
-                  index,
-                })}
-              />
+                  ) : null}
+                </View>
+              ) : (
+                <FlatList
+                  ref={vehicleCarouselRef}
+                  data={fleetCardModels}
+                  keyExtractor={(model) => model.vehicle.id}
+                  renderItem={({ item: model }) => (
+                    <View style={[s.fleetCardCarouselPage, { width: Math.max(carouselWidth, 1) }]}>
+                      <FleetPremiumVehicleCard
+                        model={model}
+                        isActive={model.vehicle.id === activeVehicleId}
+                        isOnline={isOnline}
+                        offlineMode={offlineMode}
+                        openPanel={null}
+                        onProfile={() => handleOpenVehicleProfile(model.vehicle)}
+                        onLoadout={() => handleOpenBuildLoadoutModal(model.vehicle)}
+                        onWeightSummary={() => handleOpenWeightSummaryModal(model.vehicle)}
+                        onDelete={() => handleDeleteVehicle(model.vehicle)}
+                        onChecklistSave={handleChecklistSave}
+                        onMarkReady={() => handleMarkVehicleReady(model.vehicle.id)}
+                        onReadinessPress={() => {
+                          setVehicleConfidenceNoticeVehicleId(null);
+                          setVehicleReadinessNoticeVehicleId(model.vehicle.id);
+                        }}
+                        onConfidencePress={() => {
+                          setVehicleReadinessNoticeVehicleId(null);
+                          setVehicleConfidenceNoticeVehicleId(model.vehicle.id);
+                        }}
+                      />
+                    </View>
+                  )}
+                  horizontal
+                  pagingEnabled
+                  nestedScrollEnabled
+                  showsHorizontalScrollIndicator={false}
+                  bounces={false}
+                  onMomentumScrollEnd={handleVehicleCarouselMomentumEnd}
+                  extraData={`${activeVehicleId}:${loadoutRefreshKey}:${supportDataRevision}:${carouselWidth}`}
+                  style={s.vehicleCarouselNatural}
+                  contentContainerStyle={s.vehicleCarouselContent}
+                  getItemLayout={(_, index) => ({
+                    length: Math.max(carouselWidth, 1),
+                    offset: Math.max(carouselWidth, 1) * index,
+                    index,
+                  })}
+                />
+              )}
               {fleetCardModels.length > 1 ? (
                 <View style={s.carouselDots} pointerEvents="none">
                   {fleetCardModels.map((model, index) => (
@@ -2973,7 +3008,7 @@ function FleetScreenInner() {
               ) : null}
             </View>
           )}
-        </View>
+        </ScrollView>
 
         {/* Scrollable vehicle list — flex: 1 fills space between header and bottom actions */}
         <View style={[fleetFrameStyle, s.hiddenPanel]}>
@@ -3564,13 +3599,20 @@ const s = StyleSheet.create({
   fleetMainBody: {
     flex: 1,
     minHeight: 0,
+  },
+  fleetMainBodyContent: {
+    flexGrow: 1,
     paddingTop: 8,
-    paddingBottom: 8,
+    paddingBottom: 16,
     gap: 10,
   },
   fleetCardViewport: {
-    flex: 1,
     minHeight: 0,
+    width: '100%',
+  },
+  fleetCardSinglePage: {
+    width: '100%',
+    paddingBottom: 2,
   },
   weightSummaryModalBody: {
     flex: 1,
@@ -3997,11 +4039,20 @@ const s = StyleSheet.create({
     flex: 1,
     minHeight: 0,
   },
+  vehicleCarouselNatural: {
+    flexGrow: 0,
+    width: '100%',
+    minHeight: 0,
+  },
   vehicleCarouselContent: {
     alignItems: 'stretch',
   },
   carouselPage: {
     flex: 1,
+    paddingHorizontal: 0,
+    justifyContent: 'flex-start',
+  },
+  fleetCardCarouselPage: {
     paddingHorizontal: 0,
     justifyContent: 'flex-start',
   },

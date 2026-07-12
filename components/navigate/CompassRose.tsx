@@ -268,8 +268,9 @@ const CompassRose = React.memo(function CompassRose({
   const displayDeg = hasHeading ? effectiveHeading : null;
   const displayCardinal = hasHeading ? getCardinal(effectiveHeading!) : '—';
   const displaySource = source === 'gps' ? 'GPS' : source === 'compass' ? 'MAG' : 'NO FIX';
-  const recenterHintLabel = paused ? 'POWER SAVE' : isStationaryLocked ? 'LOCKED' : 'TAP TO CENTER';
-  const persistentRecenterHint = paused || isStationaryLocked;
+  const recenterHintLabel = isStationaryLocked ? 'LOCKED' : 'TAP TO CENTER';
+  const showRecenterHint = !paused && (isStationaryLocked || tapHintVisible);
+  const persistentRecenterHint = isStationaryLocked;
 
   const accuracyColor = getAccuracyColor(accuracy);
 
@@ -373,32 +374,36 @@ const CompassRose = React.memo(function CompassRose({
           <View style={[styles.headingQualityAccent, { backgroundColor: accuracyColor }]} />
         ) : null}
 
-        <View style={styles.headingSourceBadge}>
-          <Text style={[styles.headingSourceText, { color: accuracyColor }]}>
-            {paused ? 'PAUSED' : displaySource}
-          </Text>
-        </View>
+        {!paused ? (
+          <View style={styles.headingSourceBadge}>
+            <Text style={[styles.headingSourceText, { color: accuracyColor }]}>
+              {displaySource}
+            </Text>
+          </View>
+        ) : null}
       </Wrapper>
 
-      {persistentRecenterHint ? (
-        <View
-          pointerEvents="none"
-          accessible={false}
-          importantForAccessibility="no"
-          style={styles.recenterHint}
-        >
-          <Text style={styles.recenterHintText}>{recenterHintLabel}</Text>
-        </View>
-      ) : (
-        <Animated.View
-          pointerEvents="none"
-          accessible={false}
-          importantForAccessibility="no"
-          style={[styles.recenterHint, { opacity: hintFadeAnim }]}
-        >
-          <Text style={styles.recenterHintText}>{recenterHintLabel}</Text>
-        </Animated.View>
-      )}
+      {showRecenterHint ? (
+        persistentRecenterHint ? (
+          <View
+            pointerEvents="none"
+            accessible={false}
+            importantForAccessibility="no"
+            style={styles.recenterHint}
+          >
+            <Text style={styles.recenterHintText}>{recenterHintLabel}</Text>
+          </View>
+        ) : (
+          <Animated.View
+            pointerEvents="none"
+            accessible={false}
+            importantForAccessibility="no"
+            style={[styles.recenterHint, { opacity: hintFadeAnim }]}
+          >
+            <Text style={styles.recenterHintText}>{recenterHintLabel}</Text>
+          </Animated.View>
+        )
+      ) : null}
     </Animated.View>
   );
 });
@@ -413,7 +418,7 @@ const styles = StyleSheet.create({
     bottom: 56,
     right: 14,
     width: COMPASS_SIZE,
-    height: COMPASS_SIZE + 32,
+    height: COMPASS_SIZE,
     overflow: 'visible',
     zIndex: 28,
   },

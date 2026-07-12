@@ -49,6 +49,16 @@ assert(
 );
 
 assert(
+  fleetScreen.includes('contentContainerStyle={s.fleetMainBodyContent}') &&
+    fleetScreen.includes('keyboardShouldPersistTaps="handled"') &&
+    fleetScreen.includes('fleetMainBodyContent: {\n    flexGrow: 1') &&
+    fleetScreen.includes('fleetCardModels.length === 1 ? (') &&
+    fleetScreen.includes('style={s.fleetCardSinglePage}') &&
+    fleetScreen.includes('style={s.vehicleCarouselNatural}'),
+  'Fleet mobile vehicle card area should scroll vertically and render a single vehicle card at natural height so bottom actions remain reachable.',
+);
+
+assert(
   !fleetScreen.includes('vehicle staged') &&
     !fleetScreen.includes('vehicles staged') &&
     !fleetScreen.includes('ECS scoring trust') &&

@@ -25,16 +25,16 @@ function assertIncludes(source, tokens, message) {
 assertIncludes(
   navigateSource,
   [
-    'value={roadNavigation.query}',
-    'onChangeText={roadNavigation.setQuery}',
-    'loading={roadNavigation.searchLoading}',
+    'value={idleDestinationSearchDraftQuery}',
+    'onChangeText={handleIdleDestinationSearchChangeText}',
+    'loading={idleDestinationSearchLoadingVisible}',
     'disabled={searchOperationalState.disabled}',
     'onClear={',
     "returnKeyType: 'search'",
     "accessibilityLabel: 'Search address or place'",
     "accessibilityHint: 'Search for a destination to build a road navigation route.'",
   ],
-  'Tools popup search field should remain wired to the road navigation query and mobile keyboard behavior.',
+  'Map-level destination search should remain wired to road navigation and mobile keyboard behavior.',
 );
 
 assertIncludes(
@@ -44,7 +44,7 @@ assertIncludes(
     'onPress={() => handleRoadOverlaySelectSuggestion(suggestion)}',
     'handleRecentSearchSelection(suggestion)',
   ],
-  'Tools popup search and recent result rows should still select road navigation suggestions.',
+  'Map-level search and recent result rows should still select road navigation suggestions.',
 );
 
 assertIncludes(
@@ -59,7 +59,7 @@ assertIncludes(
     'selectRoadSuggestion(suggestion);',
     'closeToolsPopup();',
   ],
-  'Selecting a tools popup search result should preserve the same route-building handoff.',
+  'Selecting a map-level search result should preserve the same route-building handoff.',
 );
 
 assertIncludes(
@@ -85,10 +85,11 @@ assertIncludes(
   navigateSource,
   [
     '<RoadNavigationOverlay',
-    'query={roadNavigation.query}',
-    'onChangeQuery={roadNavigation.setQuery}',
-    'suggestions={roadNavigation.suggestions}',
-    'onSelectSuggestion={handleRoadOverlaySelectSuggestion}',
+    'query={HIDDEN_ROAD_NAVIGATION_SEARCH_QUERY}',
+    'onChangeQuery={noopHiddenRoadNavigationSearchQuery}',
+    'suggestions={EMPTY_ROAD_NAVIGATION_SEARCH_SUGGESTIONS}',
+    'onSelectSuggestion={noopHiddenRoadNavigationSearchSuggestion}',
+    'showSearchSurface={false}',
     'onStartNavigation={handleRoadOverlayStartNavigation}',
     'onPrimaryPreviewAction={handleRoadOverlayStartNavigation}',
     'onRouteOverview={handleRouteOverview}',
@@ -96,7 +97,7 @@ assertIncludes(
     'buildRouteGuidanceReadinessViewModel({',
     'deriveOfflineReadiness({',
   ],
-  'Road preview should still receive route actions and readiness/offline context after search selection.',
+  'Road preview should keep route actions and readiness/offline context while search remains map-owned.',
 );
 
 assertIncludes(

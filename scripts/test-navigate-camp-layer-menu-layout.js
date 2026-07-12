@@ -95,9 +95,9 @@ assert.strictEqual(compactLayout.maxWidth, 520 - 24);
 
 const navigateSource = fs.readFileSync(path.join(root, 'app/(tabs)/navigate.tsx'), 'utf8');
 assert(
-  navigateSource.includes('resolveCampLayerMenuLayout') &&
+  !navigateSource.includes('resolveCampLayerMenuLayout') &&
     navigateSource.includes('resolveCampLayerMenuToggles'),
-  'Navigate should use the shared camp-layer menu presentation resolver.',
+  'Navigate should use the shared camp-layer visibility resolver while popup sizing is owned by the map-body popup shell.',
 );
 assert(
   navigateSource.includes('operatorInfo') &&
@@ -110,14 +110,21 @@ assert(
     navigateSource.includes('styles.campLayerMenuScrollContent'),
   'Camp layer menu content should scroll inside a bounded panel instead of falling off the map body.',
 );
+const campLayerPopupTitle = navigateSource.indexOf("'CAMP LAYERS'");
+const campLayerPopupStart = navigateSource.lastIndexOf('renderMapPopup(', campLayerPopupTitle);
+const campLayerPopupEnd = navigateSource.indexOf('<CompassRose', campLayerPopupStart);
 assert(
-  navigateSource.includes('styles.campLayerMenuAnchorSlot') &&
-    navigateSource.includes('const campLayerMenuPanel = campLayerControlsAvailable && campLayerMenuOpen ? (') &&
-    navigateSource.indexOf('style={styles.campLayerMenuAnchorSlot}') <
-      navigateSource.indexOf('{campLayerMenuPanel}') &&
-    navigateSource.indexOf('{campLayerMenuPanel}') <
-      navigateSource.indexOf('accessibilityLabel="Camp map layers"'),
-  'Camp layer menu should render in the right-side tool rail immediately above its button so it reads as expanding from the trigger.',
+  campLayerPopupStart >= 0 && campLayerPopupEnd > campLayerPopupStart,
+  'Navigate should render a dedicated Camp Layers popup inside the map surface before the compass overlay.',
+);
+const campLayerPopupSource = navigateSource.slice(campLayerPopupStart, campLayerPopupEnd);
+assert(
+  navigateSource.includes('const campLayerMenuContent = campLayerControlsAvailable && campLayerMenuOpen ? (') &&
+    campLayerPopupSource.includes('campLayerControlsAvailable && campLayerMenuOpen,') &&
+    campLayerPopupSource.includes('styles.campLayerMenuPopupContent') &&
+    campLayerPopupSource.includes('CAMP_LAYER_POPUP_WIDTH') &&
+    campLayerPopupSource.includes("{ placement: 'center', backdropTint: 'transparent', fullBody: false, layerId: 'campLayers' }"),
+  'Camp layer menu should render as a larger centered map-body popup instead of expanding from the right-side rail trigger.',
 );
 assert(
   !/dispersedCampingToggleTitle\} numberOfLines=\{[12]\}/.test(navigateSource) &&

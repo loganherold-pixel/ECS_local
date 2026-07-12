@@ -36,8 +36,23 @@ includes(
 );
 includes(
   navigate,
-  'addActiveGuidanceExtensionAnchor(routeBuilderDraft, {',
+  'addActiveGuidanceExtensionAnchor(currentDraft, {',
   'Draw Route during active guidance should seed the builder from the active route end.',
+);
+includes(
+  navigate,
+  'const currentDraft = routeBuilderDraftRef.current;',
+  'Rapid map taps should append to the latest synchronous anchor draft instead of a stale render closure.',
+);
+includes(
+  navigate,
+  'routeableFeatureToNavigateTraceableSegments(routeableFeature)',
+  'Navigate should pass connected rendered road and trail features into pin-to-pin tracing.',
+);
+includes(
+  navigate,
+  "segment.buildSource?.kind === 'rendered_routeable_geometry'",
+  'Verified pin-built road/trail legs should remain mounted instead of entering a driving rematch cycle.',
 );
 includes(
   navigate,
@@ -96,9 +111,13 @@ excludes(navigate, "showToast('NO LOADED TRAIL GEOMETRY BETWEEN POINTS')", 'Rout
 includes(mapRenderer, "routeBuilderMode?: 'freehand' | 'anchor_trace'", 'MapRenderer should expose an explicit route builder mode.');
 includes(mapRenderer, 'routeBuilderAnchors?: RouteBuilderAnchorMarker[]', 'MapRenderer should accept anchor markers.');
 includes(mapRenderer, 'routeProfileFocus?: RouteProfileFocusPayload | null', 'MapRenderer should accept route profile focus metadata.');
-includes(mapRenderer, 'routeableFeature: buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat)', 'Long-press payload should include routeable feature context.');
+includes(mapRenderer, 'var routeableFeature = buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat);', 'Route-builder taps should resolve routeable feature context before dispatch.');
+includes(mapRenderer, 'routeableFeature: routeableFeature', 'Route-builder tap payloads should include the resolved routeable feature context.');
+includes(mapRenderer, 'routeBuilderLastAnchorTapCoordinate', 'Rapid taps should retain the latest anchor inside the map runtime while React state catches up.');
 includes(mapRenderer, 'coordinates: routeablePayloadLineForFeatureAtPoint', 'Long-press and route-builder taps should include compact routeable feature geometry.');
 includes(mapRenderer, 'buildRenderedRouteableLongPressPayloadAtPoint', 'Long-press should resolve visible rendered roads/trails when ECS overlay geometry is not present.');
+includes(mapRenderer, 'buildRenderedRouteableTraceNetworkAtPoint', 'Route-builder taps should capture the connected visible road/trail network between anchors.');
+includes(mapRenderer, 'payload.connectedSegments = connectedSegments', 'Route-builder tap payloads should carry connected geometry into the pure route model.');
 includes(mapRenderer, "kind: 'rendered_routeable_feature'", 'Rendered road/trail long-press payload should be marked routeable for Navigate Here.');
 includes(mapRenderer, 'isRouteBuilderRouteableFeature(feature)', 'Rendered road/trail long-press fallback should reuse route-builder routeability rules.');
 includes(mapRenderer, 'map.queryRenderedFeatures([', 'Rendered road/trail long-press fallback should inspect nearby rendered map features.');
@@ -120,6 +139,7 @@ includes(mapRenderer, 'map.unproject(point)', 'Touch long-press should convert s
 includes(mapRenderer, "send('longPress'", 'Touch long-press should dispatch the same longPress payload as contextmenu.');
 includes(mapRenderer, 'longPressSuppressClickUntil', 'Touch long-press should suppress the follow-up click after opening the menu.');
 includes(mapRenderer, "if (routeBuilderMode === 'anchor_trace') return false;", 'Anchor-trace mode should disable freehand pointer drawing.');
+includes(mapRenderer, "if (!routeBuilderActive || routeBuilderMode === 'anchor_trace') return;", 'Anchor-trace mode should not emit stale freehand segment updates over pin-built legs.');
 includes(mapRenderer, "if (routeBuilderMode === 'anchor_trace')", 'Anchor-trace mode should alter click handling.');
 includes(mapRenderer, 'route-profile-focus-source', 'MapRenderer should render the profile focus point.');
 includes(mapRenderer, "provisional: isRouteBuilderSegmentProvisional(segment)", 'MapRenderer should flag unverified route-builder extension segments as provisional.');

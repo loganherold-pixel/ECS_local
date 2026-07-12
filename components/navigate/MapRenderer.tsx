@@ -3428,6 +3428,7 @@ function makeMapHtml(
       var routeBuilderColor = '#65F0D4';
       var routeBuilderDraftSegments = [];
       var routeBuilderAnchors = [];
+      var routeBuilderLastAnchorTapCoordinate = null;
       var routeBuilderRawTraceSegments = [];
       var routeBuilderPointerId = null;
       var routeBuilderIsDrawing = false;
@@ -5458,7 +5459,7 @@ function makeMapHtml(
       }
 
       function sendRouteBuilderUpdate(force) {
-        if (!routeBuilderActive) return;
+        if (!routeBuilderActive || routeBuilderMode === 'anchor_trace') return;
         var now = Date.now();
         if (!force && now - routeBuilderLastSentAt < ROUTE_BUILDER_SEND_INTERVAL_MS) return;
         routeBuilderLastSentAt = now;
@@ -7221,6 +7222,7 @@ function makeMapHtml(
 
       function clearRouteBuilderDraftRuntime() {
         routeBuilderDraftSegments = [];
+        routeBuilderLastAnchorTapCoordinate = null;
         routeBuilderPointerId = null;
         routeBuilderSuppressClickUntil = Date.now() + 650;
         routeBuilderActiveSegmentId = null;
@@ -7484,6 +7486,9 @@ function makeMapHtml(
         routeBuilderMode = payload.routeBuilderMode || 'freehand';
         routeBuilderColor = payload.routeBuilderColor || routeBuilderColor || '#65F0D4';
         routeBuilderAnchors = payload.routeBuilderAnchors || [];
+        routeBuilderLastAnchorTapCoordinate = routeBuilderAnchors.length
+          ? routeBuilderAnchorCoordinate(routeBuilderAnchors[routeBuilderAnchors.length - 1])
+          : null;
         if (!routeBuilderIsDrawing) {
           routeBuilderRawTraceSegments = [];
           routeBuilderActiveRawSegmentId = null;
@@ -7734,6 +7739,94 @@ function makeMapHtml(
           }, 90);
         }, 'map:moveend');
 
+        function routeBuilderAnchorCoordinate(anchor) {
+          var coordinate = anchor && anchor.coordinate ? anchor.coordinate : null;
+          var latitude = coordinate ? Number(coordinate.latitude != null ? coordinate.latitude : coordinate.lat) : NaN;
+          var longitude = coordinate ? Number(coordinate.longitude != null ? coordinate.longitude : coordinate.lng) : NaN;
+          return isFinite(latitude) && isFinite(longitude)
+            ? { latitude: latitude, longitude: longitude }
+            : null;
+        }
+
+        function buildRenderedRouteableTraceNetworkAtPoint(point) {
+          if (!routeBuilderActive || !map || !point) return [];
+          try {
+            var previousAnchor = routeBuilderAnchors && routeBuilderAnchors.length
+              ? routeBuilderAnchors[routeBuilderAnchors.length - 1]
+              : null;
+            var previousCoordinate = routeBuilderLastAnchorTapCoordinate || routeBuilderAnchorCoordinate(previousAnchor);
+            var previousPoint = previousCoordinate
+              ? map.project([previousCoordinate.longitude, previousCoordinate.latitude])
+              : point;
+            var canvas = map.getCanvas ? map.getCanvas() : null;
+            var canvasWidth = canvas ? Number(canvas.clientWidth || canvas.width) : 0;
+            var canvasHeight = canvas ? Number(canvas.clientHeight || canvas.height) : 0;
+            var span = Math.sqrt(
+              Math.pow(point.x - previousPoint.x, 2) + Math.pow(point.y - previousPoint.y, 2)
+            );
+            var padding = previousCoordinate ? Math.max(52, Math.min(132, span * 0.2)) : 160;
+            var minX = Math.min(point.x, previousPoint.x) - padding;
+            var minY = Math.min(point.y, previousPoint.y) - padding;
+            var maxX = Math.max(point.x, previousPoint.x) + padding;
+            var maxY = Math.max(point.y, previousPoint.y) + padding;
+            if (canvasWidth > 0) {
+              minX = Math.max(0, minX);
+              maxX = Math.min(canvasWidth, maxX);
+            }
+            if (canvasHeight > 0) {
+              minY = Math.max(0, minY);
+              maxY = Math.min(canvasHeight, maxY);
+            }
+
+            var features = map.queryRenderedFeatures([[minX, minY], [maxX, maxY]]) || [];
+            var network = [];
+            var seen = {};
+            var pointCount = 0;
+            for (var featureIndex = 0; featureIndex < Math.min(features.length, 900); featureIndex += 1) {
+              var feature = features[featureIndex];
+              if (!isRouteBuilderRouteableFeature(feature)) continue;
+              var lines = extractFeatureLineCoordinates(feature);
+              var snapSource = classifyRouteBuilderSnapSource(feature);
+              var sourceLabel = snapSource === 'trail'
+                ? 'Visible trail geometry'
+                : snapSource === 'road'
+                  ? 'Visible road geometry'
+                  : 'Visible routeable geometry';
+              var label = sourceLabelForDispersedRouteFeature(feature);
+              for (var lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+                var coordinates = compactRouteablePayloadLine(normalizeLngLatLine(lines[lineIndex] || []));
+                if (coordinates.length < 2) continue;
+                var first = coordinates[0];
+                var middle = coordinates[Math.floor(coordinates.length / 2)];
+                var last = coordinates[coordinates.length - 1];
+                var forwardKey = [first, middle, last]
+                  .map(function(coord) { return coord[0].toFixed(6) + ',' + coord[1].toFixed(6); })
+                  .join(':');
+                var reverseKey = [last, middle, first]
+                  .map(function(coord) { return coord[0].toFixed(6) + ',' + coord[1].toFixed(6); })
+                  .join(':');
+                var geometryKey = (forwardKey < reverseKey ? forwardKey : reverseKey) + ':' + coordinates.length;
+                if (seen[geometryKey]) continue;
+                if (network.length >= 72 || pointCount + coordinates.length > 9000) return network;
+                seen[geometryKey] = true;
+                pointCount += coordinates.length;
+                network.push({
+                  kind: 'rendered_routeable_feature',
+                  id: 'trace-network:' + geometryKey,
+                  name: label,
+                  sourceLabel: sourceLabel,
+                  confidence: 'map_rendered',
+                  dataState: 'live',
+                  coordinates: coordinates
+                });
+              }
+            }
+            return network;
+          } catch (err) {
+            return [];
+          }
+        }
+
         function buildRenderedRouteableLongPressPayloadAtPoint(point, lngLat) {
           if (!map || !point || !lngLat) return null;
           try {
@@ -7772,11 +7865,16 @@ function makeMapHtml(
         }
 
         function buildRouteableFeaturePayloadAtPoint(point, lngLat) {
+          var connectedSegments = buildRenderedRouteableTraceNetworkAtPoint(point);
+          function withConnectedSegments(payload) {
+            if (payload && connectedSegments.length) payload.connectedSegments = connectedSegments;
+            return payload;
+          }
           try {
             var routeGeometryFeature = findRouteGeometrySegmentFeatureAtPoint(point);
             var routeGeometryProps = routeGeometryFeature && routeGeometryFeature.properties ? routeGeometryFeature.properties : {};
             if (routeGeometryFeature && routeGeometryProps.kind === 'route_geometry_segment') {
-              return {
+              return withConnectedSegments({
                 kind: routeGeometryProps.kind || null,
                 id: routeGeometryFeature.id || null,
                 name: routeGeometryProps.name || null,
@@ -7790,7 +7888,7 @@ function makeMapHtml(
                 coordinates: routeablePayloadLineForFeatureAtPoint(routeGeometryFeature, point),
                 latitude: lngLat.lat,
                 longitude: lngLat.lng
-              };
+              });
             }
           } catch (err) {}
           try {
@@ -7798,7 +7896,7 @@ function makeMapHtml(
             for (var i = 0; i < segmentFeatures.length; i += 1) {
               var props = segmentFeatures[i] && segmentFeatures[i].properties ? segmentFeatures[i].properties : {};
               if (props.kind === 'explore_route') {
-                return {
+                return withConnectedSegments({
                   kind: props.kind || null,
                   id: segmentFeatures[i].id || null,
                   name: props.name || null,
@@ -7808,11 +7906,11 @@ function makeMapHtml(
                   coordinates: routeablePayloadLineForFeatureAtPoint(segmentFeatures[i], point),
                   latitude: lngLat.lat,
                   longitude: lngLat.lng
-                };
+                });
               }
             }
           } catch (err) {}
-          return buildRenderedRouteableLongPressPayloadAtPoint(point, lngLat);
+          return withConnectedSegments(buildRenderedRouteableLongPressPayloadAtPoint(point, lngLat));
         }
 
         function sendLongPressPayload(point, lngLat) {
@@ -8018,10 +8116,15 @@ function makeMapHtml(
           if (routeBuilderActive && Date.now() < routeBuilderSuppressClickUntil) return;
           if (Date.now() < dispersedCampingMapTapSuppressUntil) return;
           if (routeBuilderMode === 'anchor_trace') {
+            var routeableFeature = buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat);
+            routeBuilderLastAnchorTapCoordinate = {
+              latitude: e.lngLat.lat,
+              longitude: e.lngLat.lng
+            };
             send('mapTap', {
               latitude: e.lngLat.lat,
               longitude: e.lngLat.lng,
-              routeableFeature: buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat)
+              routeableFeature: routeableFeature
             });
             return;
           }
@@ -9523,10 +9626,12 @@ const MapRenderer = React.memo(function MapRenderer({
         return;
 
       case 'routeBuilderUpdate':
+        if (routeBuilderMode === 'anchor_trace') return;
         onRouteBuilderUpdate?.(payload);
         return;
 
       case 'routeBuilderGesture':
+        if (routeBuilderMode === 'anchor_trace') return;
         onRouteBuilderGestureStateChange?.(payload);
         return;
 
@@ -9565,6 +9670,7 @@ const MapRenderer = React.memo(function MapRenderer({
     onConvoyMemberTap,
     onDispatchPingTap,
     onUserDrag,
+    routeBuilderMode,
     onRouteBuilderUpdate,
     onRouteBuilderGestureStateChange,
     onRoadClassification,

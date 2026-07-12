@@ -76,6 +76,10 @@ const EARTH_RADIUS_MI = 3958.8;
 const DEFAULT_TRACE_MATCH_THRESHOLD_MI = 0.35;
 const MILES_PER_LATITUDE_DEGREE = 69.0;
 const COORDINATE_EPSILON = 0.0000005;
+const TRACE_NETWORK_JOIN_THRESHOLD_MI = 0.012;
+const TRACE_NETWORK_MAX_SEGMENTS = 96;
+const TRACE_NETWORK_MAX_POINTS = 12000;
+const TRACE_NETWORK_MAX_ATTACHMENTS = 8;
 
 function toRadians(value: number): number {
   return (value * Math.PI) / 180;
@@ -257,11 +261,297 @@ function normalizeTraceableSegments(
   return normalized;
 }
 
+type TraceGraphEdge = {
+  to: number;
+  weight: number;
+  coordinates: NavigateRouteCoordinate[];
+  segmentIndex: number | null;
+};
+
+type TraceGraphNode = {
+  coordinate: NavigateRouteCoordinate;
+  segmentIndex: number | null;
+  edges: TraceGraphEdge[];
+};
+
+type TraceNetworkPath = {
+  coordinates: NavigateRouteCoordinate[];
+  segments: NavigateRouteTraceableSegment[];
+};
+
+function addTraceGraphEdge(
+  nodes: TraceGraphNode[],
+  from: number,
+  to: number,
+  coordinates: NavigateRouteCoordinate[],
+  segmentIndex: number | null,
+  weight = distanceMiles(coordinates[0], coordinates[coordinates.length - 1]),
+): void {
+  if (!nodes[from] || !nodes[to] || coordinates.length < 2) return;
+  nodes[from].edges.push({
+    to,
+    weight: Math.max(0.000001, weight),
+    coordinates,
+    segmentIndex,
+  });
+}
+
+function addBidirectionalTraceGraphEdge(
+  nodes: TraceGraphNode[],
+  from: number,
+  to: number,
+  coordinates: NavigateRouteCoordinate[],
+  segmentIndex: number | null,
+): void {
+  const weight = distanceMiles(coordinates[0], coordinates[coordinates.length - 1]);
+  addTraceGraphEdge(nodes, from, to, coordinates, segmentIndex, weight);
+  addTraceGraphEdge(nodes, to, from, [...coordinates].reverse(), segmentIndex, weight);
+}
+
+function pushTraceHeap(
+  heap: Array<{ node: number; distance: number }>,
+  item: { node: number; distance: number },
+): void {
+  heap.push(item);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (heap[parent].distance <= item.distance) break;
+    heap[index] = heap[parent];
+    index = parent;
+  }
+  heap[index] = item;
+}
+
+function popTraceHeap(
+  heap: Array<{ node: number; distance: number }>,
+): { node: number; distance: number } | null {
+  if (heap.length === 0) return null;
+  const first = heap[0];
+  const last = heap.pop();
+  if (heap.length === 0 || !last) return first;
+
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    const right = left + 1;
+    if (left >= heap.length) break;
+    const smaller = right < heap.length && heap[right].distance < heap[left].distance ? right : left;
+    if (heap[smaller].distance >= last.distance) break;
+    heap[index] = heap[smaller];
+    index = smaller;
+  }
+  heap[index] = last;
+  return first;
+}
+
+function weakestTraceConfidence(
+  segments: NavigateRouteTraceableSegment[],
+): 'high' | 'medium' | 'low' | 'unknown' {
+  const rank = { unknown: 0, low: 1, medium: 2, high: 3 } as const;
+  return segments.reduce<'high' | 'medium' | 'low' | 'unknown'>((weakest, segment) => {
+    const confidence = cleanConfidence(segment.confidence);
+    return rank[confidence] < rank[weakest] ? confidence : weakest;
+  }, 'high');
+}
+
+function traceConnectedNetwork(
+  from: NavigateRouteAnchor,
+  to: NavigateRouteAnchor,
+  allSegments: NavigateRouteTraceableSegment[],
+): TraceNetworkPath | null {
+  const segments: NavigateRouteTraceableSegment[] = [];
+  let pointCount = 0;
+  for (const segment of allSegments) {
+    if (segments.length >= TRACE_NETWORK_MAX_SEGMENTS) break;
+    if (pointCount + segment.coordinates.length > TRACE_NETWORK_MAX_POINTS) continue;
+    segments.push(segment);
+    pointCount += segment.coordinates.length;
+  }
+  if (segments.length < 2) return null;
+
+  const nodes: TraceGraphNode[] = [];
+  const segmentNodeIds: number[][] = [];
+  segments.forEach((segment, segmentIndex) => {
+    const nodeIds = segment.coordinates.map((coordinate) => {
+      const nodeId = nodes.length;
+      nodes.push({ coordinate, segmentIndex, edges: [] });
+      return nodeId;
+    });
+    segmentNodeIds.push(nodeIds);
+    for (let index = 1; index < nodeIds.length; index += 1) {
+      addBidirectionalTraceGraphEdge(
+        nodes,
+        nodeIds[index - 1],
+        nodeIds[index],
+        [segment.coordinates[index - 1], segment.coordinates[index]],
+        segmentIndex,
+      );
+    }
+  });
+
+  const referenceLatitude = (from.coordinate.latitude + to.coordinate.latitude) / 2;
+  const longitudeScale = Math.max(0.000001, Math.cos(toRadians(referenceLatitude))) * MILES_PER_LATITUDE_DEGREE;
+  const buckets = new Map<string, number[]>();
+  const bucketKey = (coordinate: NavigateRouteCoordinate) => {
+    const x = Math.floor((coordinate.longitude * longitudeScale) / TRACE_NETWORK_JOIN_THRESHOLD_MI);
+    const y = Math.floor(
+      (coordinate.latitude * MILES_PER_LATITUDE_DEGREE) / TRACE_NETWORK_JOIN_THRESHOLD_MI,
+    );
+    return { x, y, key: `${x}:${y}` };
+  };
+
+  nodes.forEach((node, nodeId) => {
+    const bucket = bucketKey(node.coordinate);
+    const nearby: Array<{ nodeId: number; distance: number }> = [];
+    for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+      for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
+        for (const candidateId of buckets.get(`${bucket.x + xOffset}:${bucket.y + yOffset}`) ?? []) {
+          const candidate = nodes[candidateId];
+          if (candidate.segmentIndex === node.segmentIndex) continue;
+          const distance = distanceMiles(candidate.coordinate, node.coordinate);
+          if (distance <= TRACE_NETWORK_JOIN_THRESHOLD_MI) {
+            nearby.push({ nodeId: candidateId, distance });
+          }
+        }
+      }
+    }
+    nearby
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, TRACE_NETWORK_MAX_ATTACHMENTS)
+      .forEach((candidate) => {
+        addBidirectionalTraceGraphEdge(
+          nodes,
+          candidate.nodeId,
+          nodeId,
+          [nodes[candidate.nodeId].coordinate, node.coordinate],
+          null,
+        );
+      });
+    buckets.set(bucket.key, [...(buckets.get(bucket.key) ?? []), nodeId]);
+  });
+
+  const projectionCandidates = (
+    coordinate: NavigateRouteCoordinate,
+    preferredSegmentId: string | null | undefined,
+  ) => {
+    const candidates = segments
+      .map((segment, segmentIndex) => ({
+        segmentIndex,
+        projection: nearestProjectedPointOnLine(segment.coordinates, coordinate),
+      }))
+      .filter(
+        (candidate): candidate is { segmentIndex: number; projection: ProjectedPoint } =>
+          !!candidate.projection &&
+          candidate.projection.distanceMiles <= DEFAULT_TRACE_MATCH_THRESHOLD_MI,
+      )
+      .sort((a, b) => a.projection.distanceMiles - b.projection.distanceMiles);
+    const preferredCandidates = preferredSegmentId
+      ? candidates.filter((candidate) => segments[candidate.segmentIndex].id === preferredSegmentId)
+      : [];
+    return (preferredCandidates.length > 0 ? preferredCandidates : candidates).slice(
+      0,
+      TRACE_NETWORK_MAX_ATTACHMENTS,
+    );
+  };
+
+  const startCandidates = projectionCandidates(from.coordinate, from.routeableSegment?.id);
+  const endCandidates = projectionCandidates(to.coordinate, to.routeableSegment?.id);
+  if (startCandidates.length === 0 || endCandidates.length === 0) return null;
+
+  const startNodeId = nodes.length;
+  nodes.push({ coordinate: from.coordinate, segmentIndex: null, edges: [] });
+  const endNodeId = nodes.length;
+  nodes.push({ coordinate: to.coordinate, segmentIndex: null, edges: [] });
+
+  startCandidates.forEach(({ segmentIndex, projection }) => {
+    const segment = segments[segmentIndex];
+    const endpointIndexes = [projection.segmentIndex, projection.segmentIndex + 1];
+    endpointIndexes.forEach((endpointIndex) => {
+      const endpointNodeId = segmentNodeIds[segmentIndex][endpointIndex];
+      const endpoint = segment.coordinates[endpointIndex];
+      if (endpointNodeId == null || !endpoint) return;
+      const snapPenalty = projection.distanceMiles * 4;
+      addTraceGraphEdge(
+        nodes,
+        startNodeId,
+        endpointNodeId,
+        [projection.coordinate, endpoint],
+        segmentIndex,
+        snapPenalty + distanceMiles(projection.coordinate, endpoint),
+      );
+    });
+  });
+
+  endCandidates.forEach(({ segmentIndex, projection }) => {
+    const segment = segments[segmentIndex];
+    const endpointIndexes = [projection.segmentIndex, projection.segmentIndex + 1];
+    endpointIndexes.forEach((endpointIndex) => {
+      const endpointNodeId = segmentNodeIds[segmentIndex][endpointIndex];
+      const endpoint = segment.coordinates[endpointIndex];
+      if (endpointNodeId == null || !endpoint) return;
+      const snapPenalty = projection.distanceMiles * 4;
+      addTraceGraphEdge(
+        nodes,
+        endpointNodeId,
+        endNodeId,
+        [endpoint, projection.coordinate],
+        segmentIndex,
+        snapPenalty + distanceMiles(endpoint, projection.coordinate),
+      );
+    });
+  });
+
+  const distances = Array(nodes.length).fill(Infinity) as number[];
+  const previousNode = Array(nodes.length).fill(-1) as number[];
+  const previousEdge = Array(nodes.length).fill(null) as Array<TraceGraphEdge | null>;
+  const heap: Array<{ node: number; distance: number }> = [];
+  distances[startNodeId] = 0;
+  pushTraceHeap(heap, { node: startNodeId, distance: 0 });
+
+  while (heap.length > 0) {
+    const current = popTraceHeap(heap);
+    if (!current) break;
+    if (current.distance !== distances[current.node]) continue;
+    if (current.node === endNodeId) break;
+    for (const edge of nodes[current.node].edges) {
+      const distance = current.distance + edge.weight;
+      if (distance >= distances[edge.to]) continue;
+      distances[edge.to] = distance;
+      previousNode[edge.to] = current.node;
+      previousEdge[edge.to] = edge;
+      pushTraceHeap(heap, { node: edge.to, distance });
+    }
+  }
+
+  if (!Number.isFinite(distances[endNodeId])) return null;
+  const pathEdges: TraceGraphEdge[] = [];
+  let nodeId = endNodeId;
+  while (nodeId !== startNodeId) {
+    const edge = previousEdge[nodeId];
+    const previous = previousNode[nodeId];
+    if (!edge || previous < 0) return null;
+    pathEdges.push(edge);
+    nodeId = previous;
+  }
+  pathEdges.reverse();
+
+  const coordinates = dedupeLine(pathEdges.flatMap((edge) => edge.coordinates));
+  if (coordinates.length < 2) return null;
+  const usedSegmentIndexes = new Set<number>();
+  pathEdges.forEach((edge) => {
+    if (edge.segmentIndex != null) usedSegmentIndexes.add(edge.segmentIndex);
+  });
+  const usedSegments = [...usedSegmentIndexes].map((index) => segments[index]).filter(Boolean);
+  return usedSegments.length > 0 ? { coordinates, segments: usedSegments } : null;
+}
+
 function traceLeg(
   from: NavigateRouteAnchor,
   to: NavigateRouteAnchor,
   segments: NavigateRouteTraceableSegment[],
 ): NavigateRouteLeg {
+  const normalizedSegments = normalizeTraceableSegments(segments);
   let best:
     | {
         segment: NavigateRouteTraceableSegment;
@@ -272,7 +562,7 @@ function traceLeg(
       }
     | null = null;
 
-  for (const segment of normalizeTraceableSegments(segments)) {
+  for (const segment of normalizedSegments) {
     const line = segment.coordinates;
     if (line.length < 2) continue;
     const start = nearestProjectedPointOnLine(line, from.coordinate);
@@ -290,6 +580,7 @@ function traceLeg(
     }
   }
 
+  let directLeg: NavigateRouteLeg | null = null;
   if (best) {
     const snappedLine = extractProjectedLine(best.line, best.start, best.end);
     const provider = cleanTraceProvider(best.segment.provider);
@@ -298,7 +589,7 @@ function traceLeg(
       best.segment.name ??
       (provider === 'rendered_features' ? 'Visible routeable geometry' : null);
 
-    return {
+    directLeg = {
       id: `leg-${from.label}-${to.label}`,
       fromAnchorId: from.id,
       toAnchorId: to.id,
@@ -314,6 +605,59 @@ function traceLeg(
       unavailableReason: null,
     };
   }
+
+  const anchorsReferenceDifferentSegments =
+    !!from.routeableSegment?.id &&
+    !!to.routeableSegment?.id &&
+    from.routeableSegment.id !== to.routeableSegment.id;
+  if (directLeg && !anchorsReferenceDifferentSegments) return directLeg;
+
+  const connectedPath = traceConnectedNetwork(from, to, normalizedSegments);
+  if (connectedPath) {
+    const providers = connectedPath.segments.map((segment) => cleanTraceProvider(segment.provider));
+    const provider = providers.includes('rendered_features')
+      ? 'rendered_features'
+      : providers.includes('mapbox_map_matching')
+        ? 'mapbox_map_matching'
+        : 'ecs_route_geometry';
+    const sourceLabels = Array.from(
+      new Set(
+        connectedPath.segments
+          .map((segment) => segment.sourceLabel ?? segment.name ?? null)
+          .filter((label): label is string => !!label),
+      ),
+    );
+    const dataStates = Array.from(
+      new Set(connectedPath.segments.map((segment) => segment.dataState ?? null)),
+    );
+    const warnings = Array.from(
+      new Set(connectedPath.segments.flatMap((segment) => segment.warnings ?? [])),
+    );
+
+    return {
+      id: `leg-${from.label}-${to.label}`,
+      fromAnchorId: from.id,
+      toAnchorId: to.id,
+      coordinates: connectedPath.coordinates,
+      provider,
+      status: 'snapped',
+      confidence: weakestTraceConfidence(connectedPath.segments),
+      source: provider,
+      sourceSegmentId:
+        connectedPath.segments.length === 1 ? connectedPath.segments[0].id : null,
+      sourceLabel:
+        sourceLabels.length === 1
+          ? sourceLabels[0]
+          : provider === 'rendered_features'
+            ? 'Connected visible road or trail geometry'
+            : 'Connected ECS route geometry',
+      dataState: dataStates.length === 1 ? dataStates[0] : 'mixed',
+      warnings,
+      unavailableReason: null,
+    };
+  }
+
+  if (directLeg) return directLeg;
 
   return {
     id: `leg-${from.label}-${to.label}`,

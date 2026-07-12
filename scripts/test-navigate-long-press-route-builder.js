@@ -177,6 +177,109 @@ assert.strictEqual(
   'Rendered routeable line traces should become save/start-capable planning geometry.',
 );
 
+const connectedRenderedSegments = [
+  {
+    id: 'rendered-road-west',
+    name: 'Split Forest Road',
+    sourceLabel: 'Visible road geometry',
+    confidence: 'medium',
+    dataState: 'live',
+    provider: 'rendered_features',
+    coordinates: [
+      { latitude: 38, longitude: -110 },
+      { latitude: 38, longitude: -109.99 },
+    ],
+  },
+  {
+    id: 'rendered-road-center',
+    name: 'Split Forest Road',
+    sourceLabel: 'Visible road geometry',
+    confidence: 'medium',
+    dataState: 'live',
+    provider: 'rendered_features',
+    coordinates: [
+      { latitude: 38, longitude: -109.99 },
+      { latitude: 38, longitude: -109.98 },
+    ],
+  },
+  {
+    id: 'rendered-road-east',
+    name: 'Split Forest Road',
+    sourceLabel: 'Visible road geometry',
+    confidence: 'medium',
+    dataState: 'live',
+    provider: 'rendered_features',
+    coordinates: [
+      { latitude: 38, longitude: -109.98 },
+      { latitude: 38, longitude: -109.97 },
+    ],
+  },
+];
+let connectedDraft = builder.createNavigateRouteDraft();
+connectedDraft = builder.addAnchorToDraft(connectedDraft, {
+  coordinate: { latitude: 38.00004, longitude: -109.998 },
+  routeableSegment: connectedRenderedSegments[0],
+  availableSegments: connectedRenderedSegments,
+}).draft;
+connectedDraft = builder.addAnchorToDraft(connectedDraft, {
+  coordinate: { latitude: 37.99996, longitude: -109.972 },
+  routeableSegment: connectedRenderedSegments[2],
+  availableSegments: connectedRenderedSegments,
+}).draft;
+assert.strictEqual(
+  connectedDraft.legs[0].status,
+  'snapped',
+  'Pins on adjacent rendered road features should trace through their connected geometry.',
+);
+assert.strictEqual(
+  connectedDraft.legs[0].provider,
+  'rendered_features',
+  'A connected rendered road path should preserve its visible-geometry provider.',
+);
+assert(
+  connectedDraft.legs[0].coordinates.some((point) => Math.abs(point.longitude + 109.99) < 0.000001) &&
+    connectedDraft.legs[0].coordinates.some((point) => Math.abs(point.longitude + 109.98) < 0.000001),
+  'The snapped leg should include both feature junctions instead of drawing a straight fallback.',
+);
+const connectedSavable = builder.buildRouteBuilderSegmentsFromDraft(connectedDraft);
+assert.strictEqual(connectedSavable.length, 1, 'A connected multi-feature leg should remain one stable rendered segment.');
+assert.strictEqual(connectedSavable[0].snapProvider, 'rendered_features');
+assert.strictEqual(connectedSavable[0].snapStatus, 'snapped');
+
+const closeSplitSegments = [
+  {
+    ...connectedRenderedSegments[0],
+    id: 'close-split-west',
+    coordinates: [
+      { latitude: 38, longitude: -110 },
+      { latitude: 38, longitude: -109.997 },
+    ],
+  },
+  {
+    ...connectedRenderedSegments[1],
+    id: 'close-split-east',
+    coordinates: [
+      { latitude: 38, longitude: -109.997 },
+      { latitude: 38, longitude: -109.994 },
+    ],
+  },
+];
+let closeSplitDraft = builder.createNavigateRouteDraft();
+closeSplitDraft = builder.addAnchorToDraft(closeSplitDraft, {
+  coordinate: { latitude: 38, longitude: -109.9995 },
+  routeableSegment: closeSplitSegments[0],
+  availableSegments: closeSplitSegments,
+}).draft;
+closeSplitDraft = builder.addAnchorToDraft(closeSplitDraft, {
+  coordinate: { latitude: 38, longitude: -109.9945 },
+  routeableSegment: closeSplitSegments[1],
+  availableSegments: closeSplitSegments,
+}).draft;
+assert(
+  closeSplitDraft.legs[0].coordinates.some((point) => Math.abs(point.longitude + 109.9945) < 0.000001),
+  'Different tapped feature IDs should prefer the connected path instead of truncating to a nearby first feature.',
+);
+
 const activeGuidanceEnd = { latitude: 38.0040, longitude: -110.0040 };
 const futureSegment = {
   id: 'future-trail-spine',
