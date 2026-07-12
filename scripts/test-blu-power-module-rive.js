@@ -174,10 +174,12 @@ assert(
 );
 
 assert(
-  widgetRenderers.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);') &&
+  widgetRenderers.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isPowerPanel);') &&
     widgetRenderers.includes('usesTextureBleedPanel && attitudeCommandS.textureBleedCommandPanelSurface') &&
+    widgetRenderers.includes('<AttitudeCommandPowerManagementVisual power={power} />') &&
+    widgetRenderers.includes('resolveAttitudeCommandPowerExpansionGeometry') &&
     !powerCommandPanelBlock.includes('showPowerDetailBackdrop'),
-  'Power Monitor command panel must avoid the decorative Power Management background image and scrim.',
+  'Power Monitor must keep compact transparency while restoring the existing Power Management artwork in its larger expanded panel.',
 );
 
 assert(

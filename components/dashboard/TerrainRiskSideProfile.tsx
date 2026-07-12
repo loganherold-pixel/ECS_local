@@ -122,6 +122,7 @@ const CONTOUR_PATHS = [
   'M 30 126 C 93 109 139 133 191 117 S 270 107 330 123',
 ];
 const TERRAIN_REFERENCE_MARKER_HIT_SLOP = { top: 8, right: 8, bottom: 8, left: 8 };
+const TERRAIN_REFERENCE_MARKER_HALF_SIZE = 20;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -563,7 +564,12 @@ export default function TerrainRiskSideProfile({
           current?.width === width && current?.height === height ? current : { width, height });
       }}
     >
-      <Svg width="100%" height="100%" viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}>
+      <Svg
+        width="100%"
+        height="100%"
+        viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
+        preserveAspectRatio={interactive ? 'none' : 'xMidYMid meet'}
+      >
         <Defs>
           <LinearGradient id="terrain-risk-area" x1="0" y1="0" x2="0" y2="1">
             <Stop offset="0" stopColor={TACTICAL.amber} stopOpacity="0.22" />
@@ -931,8 +937,20 @@ export default function TerrainRiskSideProfile({
             style={[
               styles.terrainRiskReferenceButton,
               {
-                left: toViewBoxPercent(point.x, VIEWBOX_WIDTH),
-                top: toViewBoxPercent(point.y, VIEWBOX_HEIGHT),
+                left: chartLayout
+                  ? clampNumber(
+                      (point.x / VIEWBOX_WIDTH) * chartLayout.width,
+                      TERRAIN_REFERENCE_MARKER_HALF_SIZE,
+                      chartLayout.width - TERRAIN_REFERENCE_MARKER_HALF_SIZE,
+                    )
+                  : toViewBoxPercent(point.x, VIEWBOX_WIDTH),
+                top: chartLayout
+                  ? clampNumber(
+                      (point.y / VIEWBOX_HEIGHT) * chartLayout.height,
+                      TERRAIN_REFERENCE_MARKER_HALF_SIZE,
+                      chartLayout.height - TERRAIN_REFERENCE_MARKER_HALF_SIZE,
+                    )
+                  : toViewBoxPercent(point.y, VIEWBOX_HEIGHT),
               },
             ]}
           />
@@ -969,11 +987,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     zIndex: 12,
     elevation: 12,
-    width: 32,
-    height: 32,
-    marginLeft: -16,
-    marginTop: -16,
-    borderRadius: 16,
+    width: 40,
+    height: 40,
+    marginLeft: -20,
+    marginTop: -20,
+    borderRadius: 20,
     backgroundColor: 'transparent',
   },
   elevationProbeTouchLayer: {

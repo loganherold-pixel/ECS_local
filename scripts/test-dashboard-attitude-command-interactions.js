@@ -137,7 +137,7 @@ for (const weatherField of [
   'Precipitation',
   'Visibility',
   'Current position forecast',
-  'Route forecast',
+  'Route position forecast',
   'Weather source',
   'Freshness',
 ]) {
@@ -150,6 +150,7 @@ for (const weatherField of [
 {
   const commandPanelBlock = widgetRenderers.match(/function AttitudeCommandPanel\([\s\S]*?\n}\n\nfunction AttitudeCommandDetailRow/)?.[0] ?? '';
   const weatherDetailBlock = widgetRenderers.match(/function AttitudeCommandWeatherDetail\([\s\S]*?\n}\n\nfunction vehicleCommandDetailTone/)?.[0] ?? '';
+  const weatherForecastCardBlock = widgetRenderers.match(/function AttitudeCommandWeatherForecastCard\([\s\S]*?\n}\n\nfunction AttitudeCommandWeatherDetail/)?.[0] ?? '';
   const weatherRenderBlock = widgetRenderers.match(/case 'weather':[\s\S]*?case 'vehicle':/)?.[0] ?? '';
   assert(
       weatherRenderBlock.includes('!(expanded && detailMode) ? (') &&
@@ -159,16 +160,26 @@ for (const weatherField of [
       weatherDetailBlock.includes('weatherCurrentMetricsGrid') &&
       weatherDetailBlock.includes('weatherForecastDeck') &&
       weatherDetailBlock.includes('AttitudeCommandWeatherForecastCard') &&
+      weatherDetailBlock.includes('<ScrollView') &&
+      weatherDetailBlock.includes('weatherDetailScrollContent') &&
+      weatherDetailBlock.includes('showsVerticalScrollIndicator') &&
+      weatherDetailBlock.includes('persistentScrollbar') &&
       widgetRenderers.includes('weatherPanelContentDetailOnly') &&
       widgetRenderers.includes('weatherForecastCard') &&
       weatherDetailBlock.includes('getAttitudeRouteWeatherForecastRows(routeWeather)') &&
-      weatherDetailBlock.includes('routeForecastRows.length > 0 ? (') &&
+      weatherDetailBlock.includes('routeForecastRows.length > 0 ? routeForecastRows.map') &&
+      weatherDetailBlock.includes('routeForecastEmptyMessage') &&
+      weatherDetailBlock.includes('Start route guidance to load route-position forecast') &&
+      weatherForecastCardBlock.includes('style={[attitudeCommandS.weatherForecastValue') &&
+      !weatherForecastCardBlock.includes('numberOfLines={2}') &&
+      widgetRenderers.includes('resolveAttitudeCommandWeatherExpansionGeometry') &&
+      widgetRenderers.includes("activePanel?.panel === 'weather'") &&
       !weatherDetailBlock.includes('weatherSourcePill') &&
       !weatherDetailBlock.includes('weatherSourcePillText') &&
       !weatherDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
       !weatherDetailBlock.includes('</AttitudeCommandDetailScroll>') &&
       !weatherDetailBlock.includes('No active route geometry. ECS is showing current-position weather only.'),
-    'Weather expanded detail must suppress compact metric chrome, omit the top-right freshness pill, and fit a fixed non-scrolling forecast layout.',
+    'Weather expanded detail must suppress compact metric chrome, use the larger Weather geometry, and keep complete current/route forecasts inside a bounded scroll surface.',
   );
 }
 
@@ -221,8 +232,12 @@ for (const vehicleField of [
       !vehicleDetailBlock.includes('ECS is showing profile safe fallbacks') &&
       widgetRenderers.includes('vehiclePanelContentDetailOnly') &&
       widgetRenderers.includes('vehicleLiveTelemetryBody') &&
+      widgetRenderers.includes('resolveAttitudeCommandVehicleExpansionGeometry') &&
+      widgetRenderers.includes("activePanel?.panel === 'vehicle'") &&
+      commandPanelBlock.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isPowerPanel);') &&
+      widgetRenderers.includes('<AttitudeCommandVehicleProfileBackgroundVisual vehicle={vehicle} />') &&
       widgetRenderers.includes('height: 54'),
-    'Vehicle expanded detail must keep live telemetry and the roll monitor in a reserved, non-overlapping fixed layout.',
+    'Vehicle expanded detail must use the larger active-vehicle backdrop while keeping telemetry and the roll monitor in a reserved, non-overlapping fixed layout.',
   );
 }
 
@@ -231,10 +246,17 @@ assert(
     widgetRenderers.includes('const markersInteractive = expanded;') &&
     widgetRenderers.includes("pointerEvents={markersInteractive ? 'box-none' : 'none'}") &&
     widgetRenderers.includes('interactive={markersInteractive}') &&
+    widgetRenderers.includes('resolveAttitudeCommandTerrainExpansionGeometry') &&
+    widgetRenderers.includes("activePanel?.panel === 'route'") &&
+    widgetRenderers.includes('terrainRiskPreviewCompactViewport') &&
+    !widgetRenderers.includes('terrainRiskPreviewActiveRestored') &&
     widgetRenderers.includes('expanded && detailMode && selectedReferenceEvent') &&
     terrainSideProfile.includes('testID="terrainRiskReferenceMarker"') &&
-    terrainSideProfile.includes('r={interactive ? 12 : 0}'),
-  'Terrain reference markers must become interactive on the expanded surface while the explanation readout remains in detail mode.',
+    terrainSideProfile.includes('r={interactive ? 12 : 0}') &&
+    terrainSideProfile.includes("preserveAspectRatio={interactive ? 'none' : 'xMidYMid meet'}") &&
+    terrainSideProfile.includes('width: 40') &&
+    terrainSideProfile.includes('height: 40'),
+  'Terrain graph must stay clipped in compact mode and expose a larger, aligned interactive surface in expanded detail mode.',
 );
 
 const powerDetailBlock = widgetRenderers.match(/function AttitudeCommandPowerDeviceDetail\([\s\S]*?\n}\n\nfunction PowerCommandModule/)?.[0] ?? '';
@@ -274,7 +296,7 @@ assert(
 assert(
   powerCommandPanelBlock.includes('expanded && detailMode && isPowerPanel && attitudeCommandS.powerPanelContentDetailOnly') &&
     powerCommandPanelBlock.includes('const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;') &&
-    powerCommandPanelBlock.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);') &&
+    powerCommandPanelBlock.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isPowerPanel);') &&
     !powerCommandPanelBlock.includes('const showPowerDetailBackdrop =') &&
     powerCommandPanelBlock.includes('background={shouldRenderPanelVisual ? (') &&
     !powerCommandPanelBlock.includes('suppressPowerDetailBackground') &&
@@ -302,26 +324,34 @@ assert(
     widgetRenderers.includes('const POWER_MONITOR_SOURCE_SCROLL_THRESHOLD = 1;') &&
     powerDetailBlock.includes('nestedScrollEnabled') &&
     powerDetailBlock.includes('contentContainerStyle={attitudeCommandS.powerMonitorSourceRowsContent}') &&
+    powerDetailBlock.includes('style={attitudeCommandS.powerMonitorSourceTableMeta} numberOfLines={2}') &&
     widgetRenderers.includes('resolvePowerMonitorDeviceNetWatts(device)') &&
     widgetRenderers.includes('powerMonitorNetPositive') &&
     widgetRenderers.includes('powerMonitorNetNegative') &&
     widgetRenderers.includes('powerMonitorSourceRowsScroll') &&
     widgetRenderers.includes('powerMonitorSourceRowsContent') &&
+    widgetRenderers.includes("flexDirection: 'column'") &&
+    widgetRenderers.includes('resolveAttitudeCommandPowerExpansionGeometry') &&
+    widgetRenderers.includes("activePanel?.panel === 'power'") &&
+    widgetRenderers.includes('<AttitudeCommandPowerManagementVisual power={power} />') &&
+    widgetRenderers.includes('testID="attitude-command-power-management-background"') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailScroll>') &&
     !powerDetailBlock.includes('<AttitudeCommandDetailRow'),
-  'Expanded Power Monitor must hide compact widget details, use the transparent texture-bleed shell, and keep current power sources in a bounded nested scroll table when multiple active sources exist.',
+  'Expanded Power Monitor must hide compact details, use the larger restored-artwork surface, and keep current power sources in a bounded nested scroll table when multiple active sources exist.',
 );
 
 assert(
   !powerCommandPanelBlock.includes('showPowerDetailBackdrop') &&
     powerCommandPanelBlock.includes('usesTextureBleedPanel && attitudeCommandS.textureBleedCommandPanelSurface') &&
+    powerManagementVisualBlock.includes('source={POWER_MANAGEMENT_BACKGROUND}') &&
+    powerManagementVisualBlock.includes('attitudeCommandS.powerManagementBackgroundScrim') &&
     !powerManagementVisualBlock.includes('powerSolarSourceBlock') &&
     !powerManagementVisualBlock.includes('powerColumnLeft') &&
     !powerManagementVisualBlock.includes('powerColumnRight') &&
     !powerManagementVisualBlock.includes('SOLAR SOURCE') &&
     !powerManagementVisualBlock.includes('INPUT') &&
     !powerManagementVisualBlock.includes('OUTPUT'),
-  'Expanded Power Monitor must avoid decorative power art while keeping duplicate corner solar/input/output readouts removed.',
+  'Expanded Power Monitor must restore the clean Power Management artwork without restoring duplicate corner solar/input/output readouts.',
 );
 
 console.log('[dashboard-attitude-command-interactions] tap-to-expand interaction contract passed');

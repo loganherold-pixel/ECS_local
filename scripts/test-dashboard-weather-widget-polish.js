@@ -115,7 +115,7 @@ assertIncludes(
 );
 assertIncludes(
   widgetRenderers,
-  'const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);',
+  'const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isPowerPanel);',
   'Weather panel should preserve compact transparency while allowing expanded semantic condition imagery.',
 );
 assertIncludes(

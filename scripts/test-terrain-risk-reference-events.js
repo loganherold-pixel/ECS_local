@@ -160,8 +160,9 @@ assert(
     sideProfileSource.includes('function buildElevationProbePoint') &&
     sideProfileSource.includes('selectedProbePoint') &&
     sideProfileSource.includes('testID="terrainRiskElevationProbe"') &&
-    sideProfileSource.includes('Elevation probe'),
-  'Expanded TerrainRiskSideProfile should let users drag the route profile and read the live elevation in feet.',
+    sideProfileSource.includes('Elevation probe') &&
+    sideProfileSource.includes("preserveAspectRatio={interactive ? 'none' : 'xMidYMid meet'}"),
+  'Expanded TerrainRiskSideProfile should fill its touch surface, let users drag the route profile, and read the live elevation in feet.',
 );
 assert(
   sideProfileSource.includes('left: 24') &&
@@ -181,7 +182,11 @@ assert(
     sideProfileSource.includes('hitSlop={TERRAIN_REFERENCE_MARKER_HIT_SLOP}') &&
     sideProfileSource.includes('accessibilityRole="button"') &&
     sideProfileSource.includes('accessibilityLabel={formatReferenceMarkerAccessibilityLabel(referenceEvent, point)}') &&
-    sideProfileSource.includes('elevation: 12'),
+    sideProfileSource.includes('elevation: 12') &&
+    sideProfileSource.includes('width: 40') &&
+    sideProfileSource.includes('height: 40') &&
+    sideProfileSource.includes('chartLayout.width - TERRAIN_REFERENCE_MARKER_HALF_SIZE') &&
+    sideProfileSource.includes('chartLayout.height - TERRAIN_REFERENCE_MARKER_HALF_SIZE'),
   'Expanded Terrain Risk pressure points should expose Android-friendly button touch targets and labels.',
 );
 assert(

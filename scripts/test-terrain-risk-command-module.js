@@ -82,6 +82,16 @@ assert(widgetRenderersSource.includes("ImageBackground") && widgetRenderersSourc
 assert(widgetRenderersSource.includes('resizeMode="cover"') && widgetRenderersSource.includes('terrainRiskBackgroundImageInner'), 'Terrain Risk background image must cover the full container without exposed image edges.');
 assert(!widgetRenderersSource.includes('ROUTE GUIDANCE TERRAIN RISK'), 'Terrain Risk widget must not duplicate the Route Terrain Risk label inside the chart.');
 assert(widgetRenderersSource.includes('terrainRiskPreviewActive'), 'Active Terrain Risk preview must let the graph use the full route panel surface.');
+assert(widgetRenderersSource.includes('terrainRiskPreviewCompactViewport'), 'Compact active Terrain Risk must use a bounded graph viewport.');
+assert(widgetRenderersSource.includes('expanded ? attitudeCommandS.terrainRiskPreviewExpanded : null'), 'Expanded Terrain Risk must add its opaque graph surface only while open.');
+assert(/terrainRiskPreviewExpanded: \{[\s\S]*?backgroundColor: '#020507'[\s\S]*?\n  \},/.test(widgetRenderersSource), 'Expanded Terrain Risk must prevent Navigation Command content from bleeding through the graph.');
+assert(!widgetRenderersSource.includes('terrainRiskPreviewActiveRestored'), 'Compact active Terrain Risk must not restore negative graph offsets.');
+assert(
+  /routePanelContent: \{[\s\S]*?overflow: 'hidden'[\s\S]*?\n  \},/.test(widgetRenderersSource) &&
+    /terrainRiskPreview: \{[\s\S]*?overflow: 'hidden'[\s\S]*?\n  \},/.test(widgetRenderersSource) &&
+    /terrainRiskChartFrameActive: \{[\s\S]*?overflow: 'hidden'[\s\S]*?\n  \},/.test(widgetRenderersSource),
+  'Compact Terrain Risk graph must be clipped at every containing viewport.',
+);
 assert(widgetRenderersSource.includes('transparentBackground'), 'Compact Terrain Risk chart must render with a transparent chart background.');
 assert(widgetRenderersSource.includes("headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}"), 'Route Terrain Risk should keep the data-source label in the top-right header lane.');
 assert(widgetRenderersSource.includes("headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}"), 'Route Terrain Risk should keep the score in the top-right header lane.');
@@ -106,6 +116,8 @@ assert(
 );
 assert(widgetRenderersSource.includes("accessibilityLabel={expanded ? 'Route terrain risk expanded' : 'Expand route terrain risk'}"), 'Route Terrain Risk tap target must describe the expanded/detail state.');
 assert(widgetRenderersSource.includes('renderCommandPanel(activePanel.panel, true, expandedPanelMode)'), 'Route Terrain Risk must use the shared inline expansion path instead of opening a popup.');
+assert(widgetRenderersSource.includes('resolveAttitudeCommandTerrainExpansionGeometry'), 'Route Terrain Risk must use a larger dedicated expanded geometry.');
+assert(widgetRenderersSource.includes("activePanel?.panel === 'route'"), 'Route Terrain Risk must select its dedicated expanded geometry when opened.');
 assert(!widgetRenderersSource.includes("const compactRouteFocusPanel = activePanel === 'route'"), 'Route Terrain Risk must not use the old compact bottom-sheet branch.');
 assert(!widgetRenderersSource.includes('compactRouteFocusContent'), 'Route Terrain Risk must not use compact bottom-sheet content padding.');
 assert(
@@ -158,6 +170,9 @@ assert(sideProfileSource.includes('High risk route sections are highlighted'), '
 assert(sideProfileSource.includes('transparentBackground = false'), 'Terrain Risk chart should keep opaque detail rendering by default.');
 assert(sideProfileSource.includes('!transparentBackground ?'), 'Terrain Risk chart should be able to suppress the opaque SVG background.');
 assert(sideProfileSource.includes('shellTransparent'), 'Terrain Risk chart needs a transparent shell style for compact route panels.');
+assert(sideProfileSource.includes("preserveAspectRatio={interactive ? 'none' : 'xMidYMid meet'}"), 'Expanded Terrain Risk chart must fill its interactive touch surface while compact rendering preserves its aspect ratio.');
+assert(sideProfileSource.includes('width: 40') && sideProfileSource.includes('height: 40'), 'Expanded Terrain Risk reference locations should expose larger touch targets.');
+assert(sideProfileSource.includes('chartLayout.width - TERRAIN_REFERENCE_MARKER_HALF_SIZE') && sideProfileSource.includes('chartLayout.height - TERRAIN_REFERENCE_MARKER_HALF_SIZE'), 'Expanded Terrain Risk touch targets must be clamped inside the graph viewport.');
 assert(sideProfileSource.includes('left: 24'), 'Terrain Risk chart should preserve a compact readable left elevation-label lane.');
 assert(sideProfileSource.includes('right: 16'), 'Terrain Risk chart should reserve a right-side lane so the final distance/unit labels are not clipped.');
 assert(sideProfileSource.includes('top: 8') && sideProfileSource.includes('bottom: 24'), 'Terrain Risk chart should keep top markers and bottom axis labels inside the viewBox.');

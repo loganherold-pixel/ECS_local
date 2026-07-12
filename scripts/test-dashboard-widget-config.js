@@ -464,11 +464,22 @@ assert.ok(
     widgetRenderersSource.includes('setActivePanel({ panel, mode });') &&
     widgetRenderersSource.includes('const closeFocusPanel = useCallback(() => {') &&
     widgetRenderersSource.includes('resolveAttitudeCommandExpansionGeometry') &&
+    widgetRenderersSource.includes('resolveAttitudeCommandSunlightExpansionGeometry') &&
+    widgetRenderersSource.includes('resolveAttitudeCommandWeatherExpansionGeometry') &&
+    widgetRenderersSource.includes('resolveAttitudeCommandVehicleExpansionGeometry') &&
+    widgetRenderersSource.includes('resolveAttitudeCommandTerrainExpansionGeometry') &&
+    widgetRenderersSource.includes('resolveAttitudeCommandPowerExpansionGeometry') &&
+    widgetRenderersSource.includes("activePanel?.panel === 'sunlight'") &&
+    widgetRenderersSource.includes("activePanel?.panel === 'weather'") &&
+    widgetRenderersSource.includes("activePanel?.panel === 'vehicle'") &&
+    widgetRenderersSource.includes("activePanel?.panel === 'route'") &&
+    widgetRenderersSource.includes("activePanel?.panel === 'power'") &&
+    widgetRenderersSource.includes('activeExpansionGeometry.aspectRatio') &&
     widgetRenderersSource.includes('expandedPanelLayer') &&
     widgetRenderersSource.includes('renderCommandPanel(activePanel.panel, true, expandedPanelMode)') &&
     widgetRenderersSource.includes('accessibilityLabel="Close expanded widget"'),
-    'Attitude Command surrounding panels must open an inline detail panel over the Navigation Command surface with an explicit close action.',
-);
+    'Attitude Command surrounding panels must open an inline detail panel over the Navigation Command surface, enlarge Sunlight, Weather, Vehicle, Terrain, and Power specifically, and retain an explicit close action.',
+  );
 assert.ok(
   !widgetRenderersSource.includes('<TacticalPopupShell') &&
     !widgetRenderersSource.includes('title={activeFocusConfig.title}'),

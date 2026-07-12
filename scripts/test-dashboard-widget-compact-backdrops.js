@@ -27,8 +27,8 @@ assertIncludes(
 );
 
 assertIncludes(
-  'const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);',
-  'Expanded sunlight and weather panels may mount semantic background imagery while compact panels remain transparent.',
+  'const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isPowerPanel);',
+  'Expanded sunlight, weather, vehicle, and Power panels may mount semantic background imagery while compact panels remain transparent.',
 );
 
 assertNotIncludes(
@@ -43,7 +43,7 @@ assertNotIncludes(
 
 assertNotIncludes(
   'const showPowerDetailBackdrop =',
-  'Power Monitor must no longer enable an expanded image backdrop.',
+  'Power Monitor expanded artwork should use the shared panel visual gate instead of a one-off backdrop flag.',
 );
 
 assertIncludes(
@@ -92,18 +92,57 @@ assertIncludes(
 );
 
 assertIncludes(
-  "{sunlightVisual?.uvIndex ?? 'UV --'}",
-  'Sunlight compact mode should surface UV status without relying on an image backdrop.',
+  "{ label: 'UV', value: sunlightUv },",
+  'Sunlight compact mode should surface UV status in the equal-width timing strip.',
 );
 
 assertIncludes(
-  "{sunlightVisual?.phase ?? 'Sun position unknown'}",
+  'style={attitudeCommandS.sunlightCompactMetaValue}',
+  'Sunlight compact status values should receive a full-width, auto-fitting text treatment.',
+);
+
+assertIncludes(
+  '{sunlightPhase}',
   'Sunlight compact mode should surface the current sun phase.',
 );
 
 assertIncludes(
-  "{sunlightVisual?.glare ?? 'Glare unknown'}",
+  '{sunlightGlare}',
   'Sunlight compact mode should surface glare risk in the compact readout.',
+);
+
+assertIncludes(
+  "if (/unavailable/i.test(normalized)) return 'UNAVAILABLE';",
+  'Unavailable sunlight data should remain explicit instead of appearing blank.',
+);
+
+assertIncludes(
+  "return 'UNKNOWN';",
+  'Unknown sunlight data should remain explicit instead of collapsing to dash placeholders.',
+);
+
+assertIncludes(
+  "if (/unavailable|unknown/i.test(normalized)) return 'STATUS';",
+  'The compact no-data row should use a concise status label instead of repeating the Sunlight title.',
+);
+
+const sunlightCompactReadoutBlock = extractStyleBlock(source, 'sunlightCompactReadout');
+const sunlightCompactMetaRowBlock = extractStyleBlock(source, 'sunlightCompactMetaRow');
+const sunlightCompactTimingCellBlock = extractStyleBlock(source, 'sunlightCompactTimingCell');
+assert.ok(
+  sunlightCompactReadoutBlock.includes('minWidth: 0') &&
+    sunlightCompactReadoutBlock.includes("justifyContent: 'space-between'"),
+  'Compact sunlight content must stay bounded and distribute its rows within the tile.',
+);
+assert.ok(
+  sunlightCompactMetaRowBlock.includes("flexDirection: 'row'") &&
+    sunlightCompactMetaRowBlock.includes('minWidth: 0'),
+  'Compact sunlight phase and glare must use bounded full-width rows.',
+);
+assert.ok(
+  sunlightCompactTimingCellBlock.includes('flex: 1') &&
+    sunlightCompactTimingCellBlock.includes('minWidth: 0'),
+  'Compact sunlight rise, set, and UV cells must divide the available width evenly.',
 );
 
 const textureBleedSurfaceBlock = extractStyleBlock(source, 'textureBleedCommandPanelSurface');

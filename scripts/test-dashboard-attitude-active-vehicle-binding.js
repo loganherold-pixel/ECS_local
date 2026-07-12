@@ -131,9 +131,14 @@ assert.ok(
   renderersSource.includes('VEHICLE_PROFILE_IMAGE_KEY_BY_ATTITUDE_KEY') &&
     renderersSource.includes('function getVehicleProfileImageKeyFromAttitudeKey(vehicleKey: VehicleAttitudeKey): VehicleProfileImageKey') &&
     renderersSource.includes('imageKey: getVehicleProfileImageKeyFromAttitudeKey(attitudeVehicleId)') &&
+    renderersSource.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isPowerPanel);') &&
+    renderersSource.includes('targetKey = vehicle?.imageKey ?? \'generic_suv\'') &&
+    renderersSource.includes('VEHICLE_PROFILE_IMAGES[currentKey] ?? VEHICLE_PROFILE_IMAGES.generic_suv') &&
+    renderersSource.includes('<AttitudeCommandVehicleProfileBackgroundVisual vehicle={vehicle} />') &&
+    renderersSource.includes('testID={`attitude-command-vehicle-background-${currentKey}`}') &&
     !renderersSource.includes('imageKey: getVehicleProfileImageKey(vehicleImageProfileInput)') &&
     !renderersSource.includes('function getAttitudeVehicleImageProfileInput'),
-  'Dashboard Vehicle Profile imagery should derive from the same resolved active vehicle key as the Attitude Monitor image.',
+  'Dashboard expanded Vehicle Profile background should derive and render the same resolved active vehicle key as the Attitude Monitor image.',
 );
 assert.ok(
   renderersSource.includes("VehicleAttitudeStage from '../../src/features/attitude/components/VehicleAttitudeStage'") &&

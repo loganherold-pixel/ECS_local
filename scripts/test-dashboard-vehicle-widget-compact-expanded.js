@@ -12,26 +12,46 @@ function includes(needle, message) {
 
 const vehicleRenderBlock = source.match(/case 'vehicle':[\s\S]*?case 'route':/)?.[0] ?? '';
 const vehicleDetailBlock = source.match(/function VehicleCommandExpandedView\([\s\S]*?\n}\n\nfunction VehicleCommandRollZeroButton/)?.[0] ?? '';
+const vehicleZeroButtonBlock = source.match(/function VehicleCommandRollZeroButton\([\s\S]*?\n}\n\nfunction VehicleCommandCompactMetric/)?.[0] ?? '';
+const compactZeroButtonBlock = source.match(/vehicleRollZeroButtonCompact:\s*\{[\s\S]*?\n\s*\},/)?.[0] ?? '';
+const vehicleGlyphLayerBlock = source.match(/vehicleGlyphLayer:\s*\{[\s\S]*?\n\s*\},/)?.[0] ?? '';
 const panelVisualBlock = source.match(/function AttitudeCommandPanelVisual\([\s\S]*?\n}\n\nfunction HwyCellCoverageWidget/)?.[0] ?? '';
 
 assert.ok(
   source.includes('const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;') &&
-    source.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);') &&
+    source.includes('const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isPowerPanel);') &&
     !source.includes('const showDecorativeBackdrop ='),
-  'Vehicle profile should stay outside the expanded semantic background gate.',
+  'Vehicle profile should join the expanded semantic background gate while compact cards stay transparent.',
 );
 assert.ok(
   !panelVisualBlock.includes("if (icon === 'car-sport-outline')") &&
-    !panelVisualBlock.includes('<AttitudeCommandVehicleProfileBackgroundVisual vehicle={vehicle} />'),
-  'Expanded vehicle panel must not mount active fleet vehicle profile artwork as a background layer.',
+    panelVisualBlock.includes('vehicle,') &&
+    panelVisualBlock.includes('<AttitudeCommandVehicleProfileBackgroundVisual vehicle={vehicle} />') &&
+    source.includes('targetKey = vehicle?.imageKey ?? \'generic_suv\'') &&
+    source.includes('testID={`attitude-command-vehicle-background-${currentKey}`}') &&
+    vehicleGlyphLayerBlock.includes("backgroundColor: '#020507'") &&
+    vehicleGlyphLayerBlock.includes('opacity: 1'),
+  'Expanded vehicle panel must mount the typed active Fleet vehicle profile artwork as its background layer.',
 );
 
 assert.ok(
   vehicleRenderBlock.includes('<VehicleCommandRollZeroButton') &&
-    source.includes('vehicleRollZeroButtonCompact: {') &&
-    source.includes('top: 0') &&
-    source.includes('left: 0'),
-  'Compact vehicle panel must keep the zero-roll button available in the top-left control slot.',
+    vehicleZeroButtonBlock.includes('ZERO') &&
+    !vehicleZeroButtonBlock.includes('0°') &&
+    compactZeroButtonBlock.includes('right: 0') &&
+    compactZeroButtonBlock.includes("bottom: '47%'") &&
+    compactZeroButtonBlock.includes('minWidth: 38') &&
+    compactZeroButtonBlock.includes('height: 18') &&
+    !compactZeroButtonBlock.includes('top:') &&
+    !compactZeroButtonBlock.includes('left:'),
+  'Compact vehicle panel must show a bounded ZERO pill above the right-side LEVEL readout.',
+);
+
+assert.ok(
+  source.includes('resolveAttitudeCommandVehicleExpansionGeometry') &&
+    source.includes("activePanel?.panel === 'vehicle'") &&
+    source.includes('imageKey: getVehicleProfileImageKeyFromAttitudeKey(attitudeVehicleId)'),
+  'Expanded vehicle panel must use the larger geometry and the same active Fleet vehicle resolver as the attitude stage.',
 );
 
 assert.ok(

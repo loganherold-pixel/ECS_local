@@ -7,6 +7,9 @@ const widgetSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 
 const widgetRenderersSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'), 'utf8');
 const detailSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemDetail.tsx'), 'utf8');
 
+const powerSourceTableHeaderStyle = widgetRenderersSource.match(/powerMonitorSourceTableHeader:\s*\{[\s\S]*?\n\s*\},/)?.[0] ?? '';
+const powerSourceTableMetaStyle = widgetRenderersSource.match(/powerMonitorSourceTableMeta:\s*\{[\s\S]*?\n\s*\},/)?.[0] ?? '';
+
 function includes(source, fragment, message) {
   assert.ok(source.includes(fragment), message);
 }
@@ -170,13 +173,41 @@ notIncludes(
 );
 includes(
   widgetRenderersSource,
-  'const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);',
-  'Power module panel should use the shared transparent texture-bleed surface instead of a decorative background.',
+  'const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isPowerPanel);',
+  'Power module panel should restore its background only while expanded.',
+);
+includes(
+  widgetRenderersSource,
+  '<AttitudeCommandPowerManagementVisual power={power} />',
+  'Expanded Power Monitor should render the bundled Power Management artwork behind telemetry.',
+);
+includes(
+  widgetRenderersSource,
+  'resolveAttitudeCommandPowerExpansionGeometry',
+  'Expanded Power Monitor should use its larger dedicated geometry.',
+);
+includes(
+  widgetRenderersSource,
+  "activePanel?.panel === 'power'",
+  'Power expansion should select the larger geometry only for the Power Monitor.',
+);
+includes(
+  widgetRenderersSource,
+  'testID="attitude-command-power-management-background"',
+  'Expanded Power Management artwork should expose a stable mobile verification target.',
+);
+assert.ok(
+  powerSourceTableHeaderStyle.includes("flexDirection: 'column'") &&
+    powerSourceTableHeaderStyle.includes("alignItems: 'stretch'") &&
+    powerSourceTableMetaStyle.includes('flexShrink: 1') &&
+    powerSourceTableMetaStyle.includes("textAlign: 'left'") &&
+    widgetRenderersSource.includes('style={attitudeCommandS.powerMonitorSourceTableMeta} numberOfLines={2}'),
+  'Expanded Power source-table title and telemetry state should stack without truncating or leaving the panel.',
 );
 includes(
   widgetRenderersSource,
   'usesTextureBleedPanel && attitudeCommandS.textureBleedCommandPanelSurface',
-  'Power module panel should share the transparent command surface with the surrounding widgets.',
+  'Compact Power Monitor should retain the shared transparent command surface.',
 );
 
 console.log('Dashboard power systems live/refresh checks passed.');

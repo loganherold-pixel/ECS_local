@@ -3213,16 +3213,15 @@ function formatCommandUvIndex(value: number | null): string {
 
 function compactCommandSunlightDisplayValue(value: string | null | undefined): string {
   const normalized = String(value ?? '').trim();
-  if (!normalized || /unavailable|unknown/i.test(normalized)) {
-    return '--';
-  }
+  if (/unavailable/i.test(normalized)) return 'UNAVAILABLE';
+  if (!normalized || normalized === '--' || /^uv\s*--$/i.test(normalized) || /unknown/i.test(normalized)) return 'UNKNOWN';
   return normalized;
 }
 
 function compactCommandSunlightDisplayLabel(value: string | null | undefined): string {
   const normalized = String(value ?? '').trim();
   if (!normalized) return 'DAYLIGHT';
-  if (/unavailable|unknown/i.test(normalized)) return 'SUNLIGHT';
+  if (/unavailable|unknown/i.test(normalized)) return 'STATUS';
   return normalized;
 }
 
@@ -3947,7 +3946,7 @@ function AttitudeCommandPanel({
           : null;
   const suppressCompactPanelChrome = expanded && detailMode;
   const usesTextureBleedPanel = isSunlightPanel || isWeatherPanel || isVehiclePanel || isRoutePanel || isPowerPanel;
-  const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel);
+  const shouldRenderPanelVisual = expanded && (isSunlightPanel || isWeatherPanel || isVehiclePanel || isPowerPanel);
   const usesTransparentCompactSurface = !expanded && usesTextureBleedPanel;
   const sunlightCountdownLabel = usesTransparentCompactSurface
     ? compactCommandSunlightDisplayLabel(sunlightVisual?.countdownLabel)
@@ -3967,6 +3966,9 @@ function AttitudeCommandPanel({
   const sunlightSunset = usesTransparentCompactSurface
     ? compactCommandSunlightDisplayValue(sunlightVisual?.sunset)
     : sunlightVisual?.sunset ?? '--';
+  const sunlightUv = usesTransparentCompactSurface
+    ? compactCommandSunlightDisplayValue(sunlightVisual?.uvIndex.replace(/^UV\s*/i, ''))
+    : sunlightVisual?.uvIndex ?? 'UV --';
   const content = (
     <ECSInstrumentPanel
       title={undefined}
@@ -4078,45 +4080,112 @@ function AttitudeCommandPanel({
         detailMode && attitudeCommandS.panelContentDetailMode,
       ]}>
         {isSunlightPanel && !suppressCompactPanelChrome ? (
-          <View pointerEvents="none" style={attitudeCommandS.sunlightBottomReadout}>
-            <View style={attitudeCommandS.sunlightRemainingBlock}>
-              <Text style={[attitudeCommandS.sunlightBottomLabel, usesTransparentCompactSurface && attitudeCommandS.sunlightBottomLabelCompact]} numberOfLines={1}>
-                {sunlightCountdownLabel}
-              </Text>
-              <Text
-                style={[
-                  attitudeCommandS.sunlightTimeReadout,
-                  { color: 'rgba(247, 201, 104, 0.9)' },
-                  usesTransparentCompactSurface && attitudeCommandS.sunlightTimeReadoutCompact,
-                  expanded && attitudeCommandS.sunlightTimeReadoutExpanded,
-                ]}
-                numberOfLines={2}
-                adjustsFontSizeToFit
-                minimumFontScale={0.68}
-              >
-                {sunlightTitle}
-              </Text>
-              <View style={attitudeCommandS.sunlightFieldMetaRow}>
-                <Text style={[attitudeCommandS.sunlightFieldMetaText, usesTransparentCompactSurface && attitudeCommandS.sunlightFieldMetaTextCompact]} numberOfLines={1}>
-                  {sunlightPhase}
+          usesTransparentCompactSurface ? (
+            <View pointerEvents="none" style={attitudeCommandS.sunlightCompactReadout}>
+              <View style={attitudeCommandS.sunlightCompactPrimaryRow}>
+                <Text
+                  style={attitudeCommandS.sunlightCompactPrimaryLabel}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.7}
+                >
+                  {sunlightCountdownLabel}
                 </Text>
-                <Text style={[attitudeCommandS.sunlightFieldMetaText, usesTransparentCompactSurface && attitudeCommandS.sunlightFieldMetaTextCompact, attitudeCommandS.sunlightFieldMetaTextRight]} numberOfLines={1}>
-                  {sunlightGlare}
+                <Text
+                  style={attitudeCommandS.sunlightCompactPrimaryValue}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.58}
+                >
+                  {sunlightTitle}
+                </Text>
+              </View>
+
+              <View style={attitudeCommandS.sunlightCompactMetaStack}>
+                <View style={attitudeCommandS.sunlightCompactMetaRow}>
+                  <Text style={attitudeCommandS.sunlightCompactMetaLabel}>PHASE</Text>
+                  <Text
+                    style={attitudeCommandS.sunlightCompactMetaValue}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.58}
+                  >
+                    {sunlightPhase}
+                  </Text>
+                </View>
+                <View style={attitudeCommandS.sunlightCompactMetaRow}>
+                  <Text style={attitudeCommandS.sunlightCompactMetaLabel}>GLARE</Text>
+                  <Text
+                    style={attitudeCommandS.sunlightCompactMetaValue}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.58}
+                  >
+                    {sunlightGlare}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={attitudeCommandS.sunlightCompactTimingRow}>
+                {[
+                  { label: 'RISE', value: sunlightSunrise },
+                  { label: 'SET', value: sunlightSunset },
+                  { label: 'UV', value: sunlightUv },
+                ].map((metric) => (
+                  <View key={metric.label} style={attitudeCommandS.sunlightCompactTimingCell}>
+                    <Text style={attitudeCommandS.sunlightCompactTimingLabel}>{metric.label}</Text>
+                    <Text
+                      style={attitudeCommandS.sunlightCompactTimingValue}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.52}
+                    >
+                      {metric.value}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : (
+            <View pointerEvents="none" style={attitudeCommandS.sunlightBottomReadout}>
+              <View style={attitudeCommandS.sunlightRemainingBlock}>
+                <Text style={attitudeCommandS.sunlightBottomLabel} numberOfLines={1}>
+                  {sunlightCountdownLabel}
+                </Text>
+                <Text
+                  style={[
+                    attitudeCommandS.sunlightTimeReadout,
+                    { color: 'rgba(247, 201, 104, 0.9)' },
+                    expanded && attitudeCommandS.sunlightTimeReadoutExpanded,
+                  ]}
+                  numberOfLines={2}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.68}
+                >
+                  {sunlightTitle}
+                </Text>
+                <View style={attitudeCommandS.sunlightFieldMetaRow}>
+                  <Text style={attitudeCommandS.sunlightFieldMetaText} numberOfLines={1}>
+                    {sunlightPhase}
+                  </Text>
+                  <Text style={[attitudeCommandS.sunlightFieldMetaText, attitudeCommandS.sunlightFieldMetaTextRight]} numberOfLines={1}>
+                    {sunlightGlare}
+                  </Text>
+                </View>
+              </View>
+              <View style={attitudeCommandS.sunlightRiseSetStack}>
+                <Text style={attitudeCommandS.sunlightRiseSetText} numberOfLines={1}>
+                  RISE {sunlightSunrise}
+                </Text>
+                <Text style={attitudeCommandS.sunlightRiseSetText} numberOfLines={1}>
+                  SET {sunlightSunset}
+                </Text>
+                <Text style={attitudeCommandS.sunlightRiseSetText} numberOfLines={1}>
+                  {sunlightUv}
                 </Text>
               </View>
             </View>
-            <View style={attitudeCommandS.sunlightRiseSetStack}>
-              <Text style={[attitudeCommandS.sunlightRiseSetText, usesTransparentCompactSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
-                RISE {sunlightSunrise}
-              </Text>
-              <Text style={[attitudeCommandS.sunlightRiseSetText, usesTransparentCompactSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
-                SET {sunlightSunset}
-              </Text>
-              <Text style={[attitudeCommandS.sunlightRiseSetText, usesTransparentCompactSurface && attitudeCommandS.sunlightRiseSetTextCompact]} numberOfLines={1}>
-                {sunlightVisual?.uvIndex ?? 'UV --'}
-              </Text>
-            </View>
-          </View>
+          )
         ) : !suppressCompactPanelChrome && !isVehiclePanel && !isPowerPanel && !isRoutePanel ? (
           <Text
             style={[
@@ -4420,9 +4489,9 @@ function AttitudeCommandWeatherMetric({
       </Text>
       <Text
         style={[attitudeCommandS.weatherMetricCardValue, featured && attitudeCommandS.weatherMetricCardValueFeatured, { color: getWidgetToneColor(tone) }]}
-        numberOfLines={featured ? 1 : 2}
-        adjustsFontSizeToFit
-        minimumFontScale={0.68}
+        numberOfLines={featured ? 1 : undefined}
+        adjustsFontSizeToFit={featured}
+        minimumFontScale={featured ? 0.68 : undefined}
       >
         {value}
       </Text>
@@ -4444,7 +4513,7 @@ function AttitudeCommandWeatherForecastCard({
       <Text style={attitudeCommandS.weatherForecastDay} numberOfLines={1}>
         {formatAttitudeForecastCardLabel(label)}
       </Text>
-      <Text style={[attitudeCommandS.weatherForecastValue, { color: getWidgetToneColor(tone) }]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.72}>
+      <Text style={[attitudeCommandS.weatherForecastValue, { color: getWidgetToneColor(tone) }]}>
         {value}
       </Text>
     </View>
@@ -4471,90 +4540,117 @@ function AttitudeCommandWeatherDetail({
   const precipitationLine = formatAttitudeWeatherPrecipitation(snapshot);
   const visibilityLine = formatAttitudeWeatherVisibility(snapshot.current.visibility);
   const conditionLine = formatCompactWeatherCondition(snapshot.current.description ?? snapshot.current.condition);
+  const routeForecastMeta = routeForecastRows.length > 0
+    ? routeWeather.source ?? 'Route'
+    : routeWeather.loading
+      ? 'Loading'
+      : routeWeather.hasRoute
+        ? 'Unavailable'
+        : 'No route';
+  const routeForecastEmptyMessage = routeWeather.loading
+    ? 'Loading forecast for route positions'
+    : routeWeather.hasRoute
+      ? 'Route-position forecast unavailable from current source'
+      : 'Start route guidance to load route-position forecast';
   return (
     <View style={attitudeCommandS.weatherFixedDetailSurface}>
-      {!weatherAvailable ? (
-        <AttitudeCommandUnavailableNotice message={resolveAttitudeWeatherNotice(snapshot, weatherAvailable) ?? 'Weather unavailable.'} />
-      ) : null}
-      <View style={attitudeCommandS.weatherDetailHeader}>
-        <View style={attitudeCommandS.weatherDetailHeaderCopy}>
-          <Text style={attitudeCommandS.weatherDetailEyebrow} numberOfLines={1}>
-            CURRENT POSITION
-          </Text>
-          <Text style={attitudeCommandS.weatherDetailTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>
-            {conditionLine}
-          </Text>
+      <ScrollView
+        style={attitudeCommandS.weatherDetailScroll}
+        contentContainerStyle={attitudeCommandS.weatherDetailScrollContent}
+        showsVerticalScrollIndicator
+        persistentScrollbar
+        nestedScrollEnabled
+        bounces={false}
+        accessibilityLabel="Expanded current and route position weather forecasts"
+      >
+        {!weatherAvailable ? (
+          <AttitudeCommandUnavailableNotice message={resolveAttitudeWeatherNotice(snapshot, weatherAvailable) ?? 'Weather unavailable.'} />
+        ) : null}
+        <View style={attitudeCommandS.weatherDetailHeader}>
+          <View style={attitudeCommandS.weatherDetailHeaderCopy}>
+            <Text style={attitudeCommandS.weatherDetailEyebrow} numberOfLines={1}>
+              CURRENT POSITION
+            </Text>
+            <Text style={attitudeCommandS.weatherDetailTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>
+              {conditionLine}
+            </Text>
+          </View>
         </View>
-      </View>
 
-      <View style={attitudeCommandS.weatherCurrentMetricsBand}>
-        <AttitudeCommandWeatherMetric
-          label="Current temperature"
-          value={formatWeatherDegrees(getCurrentWeatherTemperatureF(snapshot))}
-          tone={weatherAvailable ? 'good' : 'unavailable'}
-          featured
-        />
-        <View style={attitudeCommandS.weatherCurrentMetricsGrid}>
-          <AttitudeCommandWeatherMetric label="Wind" value={windLine} tone={windLine.includes('unavailable') ? 'unavailable' : 'neutral'} />
-          <AttitudeCommandWeatherMetric label="Feels like" value={formatCommandWeatherFeelsLike(snapshot.current.feelsLike)} tone={snapshot.current.feelsLike != null ? 'neutral' : 'unavailable'} />
-          <AttitudeCommandWeatherMetric label="Precipitation" value={precipitationLine} tone={precipitationLine.includes('unavailable') ? 'unavailable' : 'neutral'} />
-          <AttitudeCommandWeatherMetric label="Visibility" value={visibilityLine} tone={snapshot.current.visibility != null ? 'neutral' : 'unavailable'} />
+        <View style={attitudeCommandS.weatherCurrentMetricsBand}>
+          <AttitudeCommandWeatherMetric
+            label="Current temperature"
+            value={formatWeatherDegrees(getCurrentWeatherTemperatureF(snapshot))}
+            tone={weatherAvailable ? 'good' : 'unavailable'}
+            featured
+          />
+          <View style={attitudeCommandS.weatherCurrentMetricsGrid}>
+            <AttitudeCommandWeatherMetric label="Wind" value={windLine} tone={windLine.includes('unavailable') ? 'unavailable' : 'neutral'} />
+            <AttitudeCommandWeatherMetric label="Feels like" value={formatCommandWeatherFeelsLike(snapshot.current.feelsLike)} tone={snapshot.current.feelsLike != null ? 'neutral' : 'unavailable'} />
+            <AttitudeCommandWeatherMetric label="Precipitation" value={precipitationLine} tone={precipitationLine.includes('unavailable') ? 'unavailable' : 'neutral'} />
+            <AttitudeCommandWeatherMetric label="Visibility" value={visibilityLine} tone={snapshot.current.visibility != null ? 'neutral' : 'unavailable'} />
+          </View>
         </View>
-      </View>
 
-      <View style={attitudeCommandS.weatherForecastSection}>
-        <View style={attitudeCommandS.weatherForecastHeader}>
-          <Text style={attitudeCommandS.weatherForecastSectionTitle} numberOfLines={1}>
-            Current position forecast
-          </Text>
-          <Text style={attitudeCommandS.weatherForecastSectionMeta} numberOfLines={1}>
-            3 day
-          </Text>
-        </View>
-        <View style={attitudeCommandS.weatherForecastDeck}>
-          {currentForecastRows.length > 0 ? currentForecastRows.map((row) => (
-            <AttitudeCommandWeatherForecastCard key={row.rowKey} label={row.label} value={row.value} />
-          )) : (
-            <View style={attitudeCommandS.weatherForecastUnavailableCard}>
-              <Text style={attitudeCommandS.weatherForecastValue} numberOfLines={2}>
-                Forecast unavailable from current source
-              </Text>
-            </View>
-          )}
-        </View>
-      </View>
-
-      {routeForecastRows.length > 0 ? (
         <View style={attitudeCommandS.weatherForecastSection}>
           <View style={attitudeCommandS.weatherForecastHeader}>
             <Text style={attitudeCommandS.weatherForecastSectionTitle} numberOfLines={1}>
-              Route forecast
+              Current position forecast
             </Text>
             <Text style={attitudeCommandS.weatherForecastSectionMeta} numberOfLines={1}>
-              {routeWeather.source ?? 'Route'}
+              3 day
             </Text>
           </View>
           <View style={attitudeCommandS.weatherForecastDeck}>
-            {routeForecastRows.map((row) => (
-              <AttitudeCommandWeatherForecastCard key={row.rowKey} label={row.label} value={row.value} tone={routeWeather.source === 'cache_stale' ? 'attention' : 'neutral'} />
-            ))}
+            {currentForecastRows.length > 0 ? currentForecastRows.map((row) => (
+              <AttitudeCommandWeatherForecastCard key={row.rowKey} label={row.label} value={row.value} />
+            )) : (
+              <View style={attitudeCommandS.weatherForecastUnavailableCard}>
+                <Text style={attitudeCommandS.weatherForecastValue}>
+                  Forecast unavailable from current source
+                </Text>
+              </View>
+            )}
           </View>
         </View>
-      ) : null}
+
+        <View style={attitudeCommandS.weatherForecastSection}>
+          <View style={attitudeCommandS.weatherForecastHeader}>
+            <Text style={attitudeCommandS.weatherForecastSectionTitle} numberOfLines={1}>
+              Route position forecast
+            </Text>
+            <Text style={attitudeCommandS.weatherForecastSectionMeta} numberOfLines={1}>
+              {routeForecastMeta}
+            </Text>
+          </View>
+          <View style={attitudeCommandS.weatherForecastDeck}>
+            {routeForecastRows.length > 0 ? routeForecastRows.map((row) => (
+              <AttitudeCommandWeatherForecastCard key={row.rowKey} label={row.label} value={row.value} tone={routeWeather.source === 'cache_stale' ? 'attention' : 'neutral'} />
+            )) : (
+              <View style={attitudeCommandS.weatherForecastUnavailableCard}>
+                <Text style={attitudeCommandS.weatherForecastValue}>
+                  {routeForecastEmptyMessage}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {snapshot.alerts.length > 0 ? (
+          <Text style={[attitudeCommandS.weatherAlertLine, { color: getWidgetToneColor('attention') }]}>
+            {alertLine}
+          </Text>
+        ) : null}
+      </ScrollView>
 
       <View style={attitudeCommandS.weatherDetailFooter}>
-        <Text style={attitudeCommandS.weatherDetailFooterText} numberOfLines={1}>
+        <Text style={attitudeCommandS.weatherDetailFooterText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.72}>
           Weather source: {sourceLabel}
         </Text>
-        <Text style={[attitudeCommandS.weatherDetailFooterText, attitudeCommandS.weatherDetailFooterRight]} numberOfLines={1}>
+        <Text style={[attitudeCommandS.weatherDetailFooterText, attitudeCommandS.weatherDetailFooterRight]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.72}>
           Freshness: {freshness}
         </Text>
       </View>
-      {snapshot.alerts.length > 0 ? (
-        <Text style={[attitudeCommandS.weatherAlertLine, { color: getWidgetToneColor('attention') }]} numberOfLines={1}>
-          {alertLine}
-        </Text>
-      ) : null}
     </View>
   );
 }
@@ -4850,7 +4946,7 @@ function VehicleCommandRollZeroButton({
       testID={expanded ? 'vehicle-roll-zero-expanded' : 'vehicle-roll-zero-compact'}
     >
       <Text style={attitudeCommandS.vehicleRollZeroButtonText} numberOfLines={1}>
-        0°
+        ZERO
       </Text>
     </TouchableOpacity>
   );
@@ -5834,7 +5930,7 @@ function AttitudeCommandPowerDeviceDetail({
           <Text style={attitudeCommandS.powerMonitorSourceTableTitle} numberOfLines={1}>
             Current power sources
           </Text>
-          <Text style={attitudeCommandS.powerMonitorSourceTableMeta} numberOfLines={1}>
+          <Text style={attitudeCommandS.powerMonitorSourceTableMeta} numberOfLines={2}>
             {activeDevices.length} active | {sourceState}
           </Text>
         </View>
@@ -6787,6 +6883,17 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     ECS_COMMAND_MODULE_REGISTRY[selectedCommandModule] ?? ECS_COMMAND_MODULE_REGISTRY.follow3d!;
   const selectedCommandCenterMode = commandModuleToCenterMode(selectedCommandModule);
   const expansionGeometry = resolveAttitudeCommandExpansionGeometry(commandLayout.viewportClass);
+  const activeExpansionGeometry = activePanel?.panel === 'sunlight'
+    ? resolveAttitudeCommandSunlightExpansionGeometry(commandLayout.viewportClass)
+    : activePanel?.panel === 'weather'
+      ? resolveAttitudeCommandWeatherExpansionGeometry(commandLayout.viewportClass)
+      : activePanel?.panel === 'vehicle'
+        ? resolveAttitudeCommandVehicleExpansionGeometry(commandLayout.viewportClass)
+        : activePanel?.panel === 'route'
+          ? resolveAttitudeCommandTerrainExpansionGeometry(commandLayout.viewportClass)
+          : activePanel?.panel === 'power'
+            ? resolveAttitudeCommandPowerExpansionGeometry(commandLayout.viewportClass)
+      : expansionGeometry;
   const expandedPanelMode = activePanel?.mode ?? 'detail';
   const renderCommandPanel = (panel: AttitudeCommandFocusPanel, expanded = false, mode: AttitudeCommandFocusMode = 'summary') => {
     const detailMode = mode === 'detail';
@@ -7104,15 +7211,15 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
               style={[
                 attitudeCommandS.expandedPanelLayer,
                 {
-                  paddingHorizontal: expansionGeometry.insetHorizontal,
-                  paddingVertical: expansionGeometry.insetVertical,
+                  paddingHorizontal: activeExpansionGeometry.insetHorizontal,
+                  paddingVertical: activeExpansionGeometry.insetVertical,
                 },
               ]}
             >
               <Animated.View
                 style={[
                   attitudeCommandS.expandedPanelCard,
-                  { aspectRatio: expansionGeometry.aspectRatio },
+                  { aspectRatio: activeExpansionGeometry.aspectRatio },
                 ]}
               >
                 {renderCommandPanel(activePanel.panel, true, expandedPanelMode)}
@@ -7341,9 +7448,10 @@ const attitudeCommandS = StyleSheet.create({
     position: 'absolute',
     zIndex: 13,
     elevation: 13,
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    minWidth: 42,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 8,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -7355,23 +7463,28 @@ const attitudeCommandS = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
   },
   vehicleRollZeroButtonCompact: {
-    top: 0,
-    left: 0,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    right: 0,
+    bottom: '47%',
+    minWidth: 38,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 6,
   },
   vehicleRollZeroButtonExpanded: {
     top: 8,
     right: 40,
+    minWidth: 48,
+    height: 24,
+    borderRadius: 12,
+    paddingHorizontal: 10,
   },
   vehicleRollZeroButtonDisabled: {
     opacity: 0.45,
   },
   vehicleRollZeroButtonText: {
     color: TACTICAL.text,
-    fontSize: 8.4,
-    lineHeight: 10,
+    fontSize: 7.6,
+    lineHeight: 9,
     fontWeight: '900',
     letterSpacing: 0,
     includeFontPadding: false,
@@ -8301,6 +8414,8 @@ const attitudeCommandS = StyleSheet.create({
     minHeight: 0,
     justifyContent: 'flex-start',
     paddingBottom: 30,
+    borderRadius: 8,
+    overflow: 'hidden',
   },
   routePanelContentExpanded: {
     paddingBottom: 36,
@@ -8331,16 +8446,114 @@ const attitudeCommandS = StyleSheet.create({
     textShadowRadius: 6,
     textShadowOffset: { width: 0, height: 1 },
   },
-  sunlightTimeReadoutCompact: {
-    color: '#FFE4A6',
-    fontSize: 10.2,
-    lineHeight: 12,
-    fontWeight: '900',
-  },
   sunlightTimeReadoutExpanded: {
     fontSize: 16,
     lineHeight: 18,
     fontWeight: '900',
+  },
+  sunlightCompactReadout: {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    alignSelf: 'stretch',
+    justifyContent: 'space-between',
+    gap: 2,
+  },
+  sunlightCompactPrimaryRow: {
+    minWidth: 0,
+    minHeight: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  sunlightCompactPrimaryLabel: {
+    flex: 1,
+    minWidth: 0,
+    color: 'rgba(255, 246, 220, 0.82)',
+    fontSize: 5.8,
+    lineHeight: 7,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+  },
+  sunlightCompactPrimaryValue: {
+    flexShrink: 1,
+    maxWidth: '56%',
+    color: '#FFE4A6',
+    fontSize: 9.2,
+    lineHeight: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'right',
+    includeFontPadding: false,
+  },
+  sunlightCompactMetaStack: {
+    minWidth: 0,
+    gap: 0,
+  },
+  sunlightCompactMetaRow: {
+    minWidth: 0,
+    minHeight: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  sunlightCompactMetaLabel: {
+    width: 28,
+    flexShrink: 0,
+    color: 'rgba(255, 246, 220, 0.62)',
+    fontSize: 5.2,
+    lineHeight: 7,
+    fontWeight: '900',
+    letterSpacing: 0,
+    includeFontPadding: false,
+  },
+  sunlightCompactMetaValue: {
+    flex: 1,
+    minWidth: 0,
+    color: 'rgba(255, 246, 220, 0.96)',
+    fontSize: 6.2,
+    lineHeight: 8,
+    fontWeight: '800',
+    letterSpacing: 0,
+    textAlign: 'right',
+    textTransform: 'uppercase',
+    includeFontPadding: false,
+  },
+  sunlightCompactTimingRow: {
+    minWidth: 0,
+    minHeight: 15,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 2,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255, 228, 166, 0.24)',
+    paddingTop: 2,
+  },
+  sunlightCompactTimingCell: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sunlightCompactTimingLabel: {
+    color: 'rgba(255, 246, 220, 0.58)',
+    fontSize: 4.8,
+    lineHeight: 6,
+    fontWeight: '900',
+    letterSpacing: 0,
+    includeFontPadding: false,
+  },
+  sunlightCompactTimingValue: {
+    width: '100%',
+    color: 'rgba(255, 246, 220, 0.96)',
+    fontSize: 6.2,
+    lineHeight: 7,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   sunlightBottomReadout: {
     alignSelf: 'stretch',
@@ -8368,11 +8581,6 @@ const attitudeCommandS = StyleSheet.create({
     textShadowRadius: 4,
     textShadowOffset: { width: 0, height: 1 },
   },
-  sunlightBottomLabelCompact: {
-    color: 'rgba(255, 246, 220, 0.84)',
-    fontSize: 6.8,
-    lineHeight: 8,
-  },
   sunlightFieldMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -8389,11 +8597,6 @@ const attitudeCommandS = StyleSheet.create({
     letterSpacing: 0.25,
     textTransform: 'uppercase',
     includeFontPadding: false,
-  },
-  sunlightFieldMetaTextCompact: {
-    color: 'rgba(255, 246, 220, 0.94)',
-    fontSize: 6.6,
-    lineHeight: 8,
   },
   sunlightFieldMetaTextRight: {
     textAlign: 'right',
@@ -8416,11 +8619,6 @@ const attitudeCommandS = StyleSheet.create({
     textShadowRadius: 5,
     textShadowOffset: { width: 0, height: 1 },
     textAlign: 'right',
-  },
-  sunlightRiseSetTextCompact: {
-    color: 'rgba(255, 246, 220, 0.94)',
-    fontSize: 7.6,
-    lineHeight: 9,
   },
   sunGlyphLayer: {
     position: 'absolute',
@@ -8531,7 +8729,8 @@ const attitudeCommandS = StyleSheet.create({
     bottom: 0,
     borderRadius: 12,
     overflow: 'hidden',
-    opacity: 0.96,
+    backgroundColor: '#020507',
+    opacity: 1,
   },
   vehicleProfileBackgroundImage: {
     position: 'absolute',
@@ -8795,6 +8994,8 @@ const attitudeCommandS = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 5,
     gap: 4,
+    borderRadius: 8,
+    overflow: 'hidden',
   },
   terrainRiskPreviewActive: {
     paddingHorizontal: 0,
@@ -8802,11 +9003,18 @@ const attitudeCommandS = StyleSheet.create({
     paddingBottom: 0,
     gap: 0,
   },
-  terrainRiskPreviewActiveRestored: {
-    left: -22,
-    right: -22,
-    top: -22,
-    bottom: -2,
+  terrainRiskPreviewExpanded: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(242, 194, 77, 0.24)',
+    backgroundColor: '#020507',
+  },
+  terrainRiskPreviewCompactViewport: {
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    overflow: 'hidden',
   },
   terrainRiskPreviewHeader: {
     minHeight: 11,
@@ -8859,6 +9067,7 @@ const attitudeCommandS = StyleSheet.create({
     borderWidth: 0,
     borderRadius: 10,
     backgroundColor: 'transparent',
+    overflow: 'hidden',
   },
   terrainRiskReferenceBriefButton: {
     position: 'absolute',
@@ -8964,10 +9173,10 @@ const attitudeCommandS = StyleSheet.create({
     top: 0,
     bottom: 0,
     zIndex: 0,
-    opacity: 0.88,
+    opacity: 1,
     overflow: 'hidden',
     borderRadius: 12,
-    backgroundColor: 'rgba(1, 7, 10, 0.52)',
+    backgroundColor: '#020507',
   },
   powerManagementBackground: {
     position: 'absolute',
@@ -9327,6 +9536,17 @@ const attitudeCommandS = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     gap: 4,
+    overflow: 'hidden',
+  },
+  weatherDetailScroll: {
+    alignSelf: 'stretch',
+    flex: 1,
+    minHeight: 0,
+  },
+  weatherDetailScrollContent: {
+    gap: 5,
+    paddingRight: 2,
+    paddingBottom: 5,
   },
   weatherDetailHeader: {
     minHeight: 24,
@@ -9334,6 +9554,7 @@ const attitudeCommandS = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+    paddingRight: 38,
   },
   weatherDetailHeaderCopy: {
     flex: 1,
@@ -9353,7 +9574,8 @@ const attitudeCommandS = StyleSheet.create({
     fontWeight: '900',
   },
   weatherCurrentMetricsBand: {
-    minHeight: 52,
+    minHeight: 60,
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'stretch',
     gap: 5,
@@ -9369,7 +9591,7 @@ const attitudeCommandS = StyleSheet.create({
   weatherMetricCard: {
     width: '47%',
     minWidth: 0,
-    minHeight: 24,
+    minHeight: 28,
     flexGrow: 1,
     justifyContent: 'center',
     borderWidth: 1,
@@ -9383,7 +9605,7 @@ const attitudeCommandS = StyleSheet.create({
   weatherMetricCardFeatured: {
     width: undefined,
     flex: 0.86,
-    minHeight: 52,
+    minHeight: 60,
     borderColor: 'rgba(247, 201, 104, 0.26)',
     backgroundColor: 'rgba(3, 7, 10, 0.68)',
     paddingHorizontal: 8,
@@ -9408,9 +9630,9 @@ const attitudeCommandS = StyleSheet.create({
     lineHeight: 21,
   },
   weatherForecastSection: {
-    flexShrink: 1,
+    flexShrink: 0,
     minHeight: 0,
-    gap: 3,
+    gap: 4,
   },
   weatherForecastHeader: {
     minHeight: 10,
@@ -9441,7 +9663,7 @@ const attitudeCommandS = StyleSheet.create({
     textAlign: 'right',
   },
   weatherForecastDeck: {
-    minHeight: 32,
+    minHeight: 46,
     flexDirection: 'row',
     alignItems: 'stretch',
     gap: 4,
@@ -9449,8 +9671,8 @@ const attitudeCommandS = StyleSheet.create({
   weatherForecastCard: {
     flex: 1,
     minWidth: 0,
-    minHeight: 32,
-    justifyContent: 'center',
+    minHeight: 46,
+    justifyContent: 'flex-start',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
     borderRadius: 7,
@@ -9461,7 +9683,7 @@ const attitudeCommandS = StyleSheet.create({
   },
   weatherForecastUnavailableCard: {
     flex: 1,
-    minHeight: 32,
+    minHeight: 46,
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
@@ -9480,12 +9702,13 @@ const attitudeCommandS = StyleSheet.create({
   },
   weatherForecastValue: {
     color: TACTICAL.text,
-    fontSize: 8.4,
-    lineHeight: 10,
+    fontSize: 8.6,
+    lineHeight: 11,
     fontWeight: '900',
   },
   weatherDetailFooter: {
     minHeight: 16,
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -9632,11 +9855,11 @@ const attitudeCommandS = StyleSheet.create({
   },
   powerMonitorSourceTableHeader: {
     flexShrink: 0,
-    minHeight: 28,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
+    minHeight: 38,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    gap: 1,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(245, 199, 73, 0.12)',
     paddingHorizontal: 9,
@@ -9654,13 +9877,15 @@ const attitudeCommandS = StyleSheet.create({
     textTransform: 'uppercase',
   },
   powerMonitorSourceTableMeta: {
-    flexShrink: 0,
+    alignSelf: 'stretch',
+    flexShrink: 1,
     color: 'rgba(230,237,243,0.58)',
     fontSize: 7.2,
     lineHeight: 9,
     fontWeight: '900',
     letterSpacing: 0.25,
     textTransform: 'uppercase',
+    textAlign: 'left',
   },
   powerMonitorSourceRows: {
     flex: 1,
@@ -13368,7 +13593,11 @@ function AttitudeCommandVehicleProfileBackgroundVisual({
   const previousSource = previousKey ? VEHICLE_PROFILE_IMAGES[previousKey] : null;
 
   return (
-    <View pointerEvents="none" style={attitudeCommandS.vehicleGlyphLayer}>
+    <View
+      pointerEvents="none"
+      style={attitudeCommandS.vehicleGlyphLayer}
+      testID={`attitude-command-vehicle-background-${currentKey}`}
+    >
       {previousSource ? (
         <Image
           source={previousSource}
@@ -13400,6 +13629,76 @@ function resolveAttitudeCommandExpansionGeometry(
     case 'phone_portrait':
     default:
       return { aspectRatio: 1.55, insetHorizontal: 10, insetVertical: 14 };
+  }
+}
+
+function resolveAttitudeCommandSunlightExpansionGeometry(
+  viewportClass: DashboardWidgetViewportClass,
+): AttitudeCommandExpansionGeometry {
+  switch (viewportClass) {
+    case 'landscape_wide':
+      return { aspectRatio: 2.85, insetHorizontal: 6, insetVertical: 12 };
+    case 'tablet_portrait':
+      return { aspectRatio: 2.05, insetHorizontal: 6, insetVertical: 10 };
+    case 'phone_portrait':
+    default:
+      return { aspectRatio: 1.32, insetHorizontal: 4, insetVertical: 5 };
+  }
+}
+
+function resolveAttitudeCommandWeatherExpansionGeometry(
+  viewportClass: DashboardWidgetViewportClass,
+): AttitudeCommandExpansionGeometry {
+  switch (viewportClass) {
+    case 'landscape_wide':
+      return { aspectRatio: 2.85, insetHorizontal: 6, insetVertical: 12 };
+    case 'tablet_portrait':
+      return { aspectRatio: 2.05, insetHorizontal: 6, insetVertical: 10 };
+    case 'phone_portrait':
+    default:
+      return { aspectRatio: 1.32, insetHorizontal: 4, insetVertical: 5 };
+  }
+}
+
+function resolveAttitudeCommandVehicleExpansionGeometry(
+  viewportClass: DashboardWidgetViewportClass,
+): AttitudeCommandExpansionGeometry {
+  switch (viewportClass) {
+    case 'landscape_wide':
+      return { aspectRatio: 2.85, insetHorizontal: 6, insetVertical: 12 };
+    case 'tablet_portrait':
+      return { aspectRatio: 2.05, insetHorizontal: 6, insetVertical: 10 };
+    case 'phone_portrait':
+    default:
+      return { aspectRatio: 1.32, insetHorizontal: 4, insetVertical: 5 };
+  }
+}
+
+function resolveAttitudeCommandTerrainExpansionGeometry(
+  viewportClass: DashboardWidgetViewportClass,
+): AttitudeCommandExpansionGeometry {
+  switch (viewportClass) {
+    case 'landscape_wide':
+      return { aspectRatio: 2.85, insetHorizontal: 6, insetVertical: 12 };
+    case 'tablet_portrait':
+      return { aspectRatio: 2.05, insetHorizontal: 6, insetVertical: 10 };
+    case 'phone_portrait':
+    default:
+      return { aspectRatio: 1.32, insetHorizontal: 4, insetVertical: 5 };
+  }
+}
+
+function resolveAttitudeCommandPowerExpansionGeometry(
+  viewportClass: DashboardWidgetViewportClass,
+): AttitudeCommandExpansionGeometry {
+  switch (viewportClass) {
+    case 'landscape_wide':
+      return { aspectRatio: 2.85, insetHorizontal: 6, insetVertical: 12 };
+    case 'tablet_portrait':
+      return { aspectRatio: 2.05, insetHorizontal: 6, insetVertical: 10 };
+    case 'phone_portrait':
+    default:
+      return { aspectRatio: 1.32, insetHorizontal: 4, insetVertical: 5 };
   }
 }
 
@@ -13525,7 +13824,8 @@ function AttitudeCommandTerrainRiskPreview({
       style={[
         attitudeCommandS.terrainRiskPreview,
         route ? attitudeCommandS.terrainRiskPreviewActive : null,
-        route && !expanded ? attitudeCommandS.terrainRiskPreviewActiveRestored : null,
+        expanded ? attitudeCommandS.terrainRiskPreviewExpanded : null,
+        route && !expanded ? attitudeCommandS.terrainRiskPreviewCompactViewport : null,
       ]}
     >
       {!route && terrainRisk.active ? (
@@ -13640,7 +13940,11 @@ function AttitudeCommandPowerManagementVisual(_props: {
   power?: CommandPowerVisualData;
 }) {
   return (
-    <View pointerEvents="none" style={attitudeCommandS.powerGlyphLayer}>
+    <View
+      pointerEvents="none"
+      style={attitudeCommandS.powerGlyphLayer}
+      testID="attitude-command-power-management-background"
+    >
       <Image
         source={POWER_MANAGEMENT_BACKGROUND}
         resizeMode="cover"
@@ -13670,7 +13974,9 @@ function AttitudeCommandPanelVisual({
   icon,
   sunlight,
   weather,
+  vehicle,
   route,
+  power,
 }: {
   icon?: string;
   color: string;
@@ -13687,6 +13993,14 @@ function AttitudeCommandPanelVisual({
 
   if (weather) {
     return <AttitudeCommandWeatherBackgroundVisual weather={weather} />;
+  }
+
+  if (vehicle) {
+    return <AttitudeCommandVehicleProfileBackgroundVisual vehicle={vehicle} />;
+  }
+
+  if (power) {
+    return <AttitudeCommandPowerManagementVisual power={power} />;
   }
 
   if (icon === 'navigate-outline') {

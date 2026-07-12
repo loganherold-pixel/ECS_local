@@ -46,10 +46,12 @@ includes('raw.fuel_rate', 'Vehicle Profile range calculation must support OBD2 f
 includes('fuelGallons * telemetryMpg', 'Vehicle Profile range must calculate miles to empty from remaining gallons and telemetry MPG.');
 
 notIncludes('vehicleCommandStatusChip', 'Compact Vehicle Profile should not render the old OBD2/live status pill.');
-includes('vehicleCommandVoltageCorner', 'Top-right compact voltage corner must exist.');
-includes('vehicleCommandCoolantCorner', 'Top-left compact coolant corner must exist.');
-includes('vehicleCommandLoadCorner', 'Bottom-right compact engine-load corner must exist.');
-includes('vehicleCommandRangeCorner', 'Bottom-left compact range/fuel corner must exist.');
+includes('vehicleCommandTelemetryStrip', 'Compact Vehicle Profile must keep OBD2 values in its bounded top telemetry strip.');
+includes('VehicleCommandCompactMetric', 'Compact Vehicle Profile must render its OBD2 values through bounded metric cells.');
+notIncludes('vehicleCommandVoltageCorner', 'Compact voltage must not return to an absolute corner overlay.');
+notIncludes('vehicleCommandCoolantCorner', 'Compact coolant temperature must not return to an absolute corner overlay.');
+notIncludes('vehicleCommandLoadCorner', 'Compact engine load must not return to an absolute corner overlay.');
+notIncludes('vehicleCommandRangeCorner', 'Compact range and fuel must not return to an absolute corner overlay.');
 includes("import VehicleProfileRollAttitudeStrip from './VehicleProfileRollAttitudeStrip';", 'Vehicle Profile must import the centered roll attitude strip.');
 includes('<VehicleProfileRollAttitudeStrip', 'Vehicle Profile must render the centered roll attitude strip.');
 includes('rollDeg={commandVehicleRollDeg}', 'Vehicle Profile roll strip must use the roll-zero-adjusted vehicle roll value.');
@@ -59,7 +61,7 @@ notIncludes('VEHICLE_PROFILE_BRIGHTNESS_WASH', 'Vehicle Profile should not apply
 notIncludes('vehicleProfileBrightnessWash', 'Vehicle Profile should not render a dedicated brightness wash above the image.');
 includes('VEHICLE_PROFILE_BALANCED_SCRIM', 'Vehicle Profile should use a balanced scrim instead of a heavy dark overlay.');
 includes('vehicleVisual.hasObd2CommandTelemetry', 'Compact card must gate sensor values behind live OBD2 telemetry.');
-includes('{vehicleVisual.obd2OfflineCorner}', 'Compact card must explain absent sensor values as OBD2 offline.');
+notIncludes('{vehicleVisual.obd2OfflineCorner}', 'Compact card should hide the sensor strip instead of adding an overlapping OBD2-offline corner label.');
 includes('{vehicleVisual.coolantTempCorner}', 'Compact card must render coolant temperature from vehicleVisual.');
 includes('{vehicleVisual.voltageCorner}', 'Compact card must render voltage from vehicleVisual.');
 includes('{vehicleVisual.engineLoadCorner}', 'Compact card must render engine load from vehicleVisual.');
@@ -81,16 +83,24 @@ includes('setVehicleRollZeroOffsetDeg(commandStageRollDeg);', 'Vehicle Profile z
 includes('VehicleCommandRollZeroButton', 'Vehicle Profile must render a reusable zero-roll button.');
 includes('vehicleRollZeroButtonCompact', 'Regular Vehicle Profile widget must position the zero button away from live OBD2 corner readouts.');
 includes('vehicleRollZeroButtonExpanded', 'Expanded Vehicle Profile widget must place the zero button beside the close control.');
+includes('resolveAttitudeCommandVehicleExpansionGeometry', 'Expanded Vehicle Profile must use its larger panel geometry.');
+includes('<AttitudeCommandVehicleProfileBackgroundVisual vehicle={vehicle} />', 'Expanded Vehicle Profile must render the active Fleet vehicle artwork.');
 includes('height: 112', 'Expanded Vehicle Profile roll meter dock should be large enough to read at a glance.');
 includes("accessibilityLabel=\"Zero vehicle roll indicator\"", 'Vehicle Profile zero button must be accessible.');
 includes('event.stopPropagation();', 'Vehicle Profile zero button must stop the compact card press from opening expanded detail.');
 includes('activePanel?.panel === \'vehicle\'', 'Expanded zero button must only show for the Vehicle Profile panel.');
 
 const compactZeroButtonBlock = widgetRenderers.match(/vehicleRollZeroButtonCompact:\s*\{[\s\S]*?\n\s*\},/)?.[0] ?? '';
+const zeroButtonComponentBlock = widgetRenderers.match(/function VehicleCommandRollZeroButton\([\s\S]*?\n}\n\nfunction VehicleCommandCompactMetric/)?.[0] ?? '';
 assert.ok(compactZeroButtonBlock, 'Compact vehicle roll-zero style block should be discoverable.');
-assert.ok(compactZeroButtonBlock.includes('top: 0'), 'Compact Vehicle Profile zero button should sit on the top edge.');
-assert.ok(compactZeroButtonBlock.includes('left: 0'), 'Compact Vehicle Profile zero button should sit in the top-left corner.');
-assert.ok(!compactZeroButtonBlock.includes('right:'), 'Compact Vehicle Profile zero button should not anchor to the right rail.');
+assert.ok(zeroButtonComponentBlock.includes('ZERO'), 'Vehicle Profile zero control should read ZERO.');
+assert.ok(!zeroButtonComponentBlock.includes('0°'), 'Vehicle Profile zero control should not use a degree readout.');
+assert.ok(compactZeroButtonBlock.includes('right: 0'), 'Compact Vehicle Profile zero pill should align with the right-side LEVEL status.');
+assert.ok(compactZeroButtonBlock.includes("bottom: '47%'"), 'Compact Vehicle Profile zero pill should sit immediately above the roll dock.');
+assert.ok(compactZeroButtonBlock.includes('minWidth: 38'), 'Compact Vehicle Profile zero pill should reserve enough width for its label.');
+assert.ok(compactZeroButtonBlock.includes('height: 18'), 'Compact Vehicle Profile zero pill should remain compact inside the widget.');
+assert.ok(!compactZeroButtonBlock.includes('top:'), 'Compact Vehicle Profile zero pill should no longer occupy the top edge.');
+assert.ok(!compactZeroButtonBlock.includes('left:'), 'Compact Vehicle Profile zero pill should no longer occupy the left rail.');
 
 for (const rowLabel of [
   'RPM',
