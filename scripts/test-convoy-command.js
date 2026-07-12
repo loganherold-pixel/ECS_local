@@ -223,6 +223,9 @@ assert(
 
 const dispatchPanelSource = readSource('components/dispatch/DispatchConvoyCommandPanel.tsx');
 const dispatchCommandCenterSource = readSource('components/dispatch/DispatchCadCommandCenter.tsx');
+const navigateSource = readSource('app/(tabs)/navigate.tsx');
+const mapRendererSource = readSource('components/navigate/MapRenderer.tsx');
+const convoyOverlayModelSource = readSource('lib/convoy/convoyMapOverlayModel.ts');
 const convoyCredentialsSource = readSource('app/convoy-command.tsx');
 assert(
   !dispatchPanelSource.includes('ECSConvoyCommandPanelRive') &&
@@ -231,21 +234,26 @@ assert(
   'Dispatch Convoy Command should no longer render the Rive surface.',
 );
 assert(
-  dispatchPanelSource.includes('ConvoyCommandMap') &&
+  !dispatchPanelSource.includes('ConvoyCommandMap') &&
     dispatchPanelSource.includes('useConvoyTrackingStore') &&
-    dispatchPanelSource.includes('fallbackVehiclesFromCommandData') &&
-    dispatchPanelSource.includes('localVehicleFromRouteSession') &&
-    dispatchPanelSource.includes('routeCoordinates={routeCoordinates}') &&
-    dispatchPanelSource.includes('showMapWhenEmpty') &&
+    dispatchPanelSource.includes('fallbackVehiclesFromSharedCommandData') &&
+    dispatchPanelSource.includes('localVehicleFromSharedRouteSession') &&
+    dispatchPanelSource.includes('ConvoySignalSurface') &&
+    dispatchPanelSource.includes("presentation?: 'full' | 'feed' | 'signals' | 'summary'") &&
     dispatchPanelSource.includes('Start live sharing') &&
     dispatchPanelSource.includes('Stop live sharing') &&
     dispatchPanelSource.includes('Live Sharing Active') &&
-    dispatchPanelSource.includes('Open active GPS ping tactical map') &&
-    dispatchPanelSource.includes('Tap for tactical map and active guidance route') &&
+    dispatchPanelSource.includes('Open active GPS ping') &&
+    dispatchPanelSource.includes('Map visibility moved to Navigate.') &&
     dispatchPanelSource.includes('useEmergencyPulse') &&
     dispatchPanelSource.includes('Alert.alert') &&
-    dispatchPanelSource.includes('Stop live sharing?'),
-  'Dispatch Convoy Command should render the map/fallback surface and expose live sharing and active GPS ping controls.',
+    dispatchPanelSource.includes('Stop live sharing?') &&
+    navigateSource.includes('convoyMarkers={navigateConvoyMarkers}') &&
+    navigateSource.includes('dispatchPingMarkers={navigateDispatchPingMarkers}') &&
+    mapRendererSource.includes('convoyMarkers?: ConvoyMapOverlayMarker[]') &&
+    mapRendererSource.includes('dispatchPingMarkers?: DispatchPingMapMarker[]') &&
+    convoyOverlayModelSource.includes('fallbackVehiclesFromCommandData'),
+  'Dispatch Convoy Command should expose live sharing and active GPS ping controls while Navigate owns the map overlays.',
 );
 assert(
   dispatchPanelSource.includes('const refreshLiveSharingControls = useCallback') &&
@@ -265,9 +273,10 @@ assert(
   dispatchPanelSource.includes('styles.commandSummary') &&
     dispatchPanelSource.includes('function LegendMetric') &&
     dispatchPanelSource.includes('function LegendFact') &&
+    dispatchPanelSource.includes('function SignalMetric') &&
     !dispatchPanelSource.includes('styles.riveLayer') &&
     !dispatchPanelSource.includes('styles.mapLegend'),
-  'Dispatch Convoy Command should keep live map information in a compact summary instead of overlaying the map.',
+  'Dispatch Convoy Command should keep live signal information in compact summary and signal panels instead of overlaying a map.',
 );
 assert(
   dispatchPanelSource.includes("presentation?: 'full' | 'feed'") &&
@@ -303,7 +312,7 @@ assert(
     dispatchCommandCenterSource.includes('showEmergencyOverlay={false}') &&
     dispatchCommandCenterSource.includes('await loadConvoyLifecycleControl()') &&
     dispatchCommandCenterSource.includes('convoyLifecycleRevision={convoyLifecycleRevision}') &&
-    dispatchCommandCenterSource.includes("presentation={isLandscapeDispatch ? 'map' : 'feed'}"),
+    dispatchCommandCenterSource.includes("presentation={isLandscapeDispatch ? 'signals' : 'feed'}"),
   'Dispatch CAD screen should remove the redundant setup/team card and command-surface banner while keeping compact header actions, convoy lifecycle controls, emergency ping wiring, SYNC DISPATCH reconciliation, and the larger Convoy Command surface.',
 );
 assert(
@@ -339,9 +348,9 @@ assert(
   dispatchPanelSource.includes('formatConvoyDistanceMiles') &&
     dispatchPanelSource.includes('selectConvoyCommandPanelViewModel') &&
     dispatchPanelSource.includes('useConvoyCommandData') &&
-    dispatchPanelSource.includes('buildActiveConvoyPanelViewModel') &&
+    dispatchPanelSource.includes('buildSharedActiveConvoyPanelViewModel') &&
     dispatchPanelSource.includes('activeConvoyRawMemberCount') &&
-    dispatchPanelSource.includes('widestLiveVehicleGapMiles'),
+    convoyOverlayModelSource.includes('widestLiveVehicleGapMiles'),
   'Dispatch Convoy Command should use existing selectors while preferring active convoy roster and live tracking metrics',
 );
 assert(
@@ -382,4 +391,4 @@ assert(
   'Dashboard command center registry should no longer expose Convoy Command as a widget category',
 );
 
-console.log('[convoy-command] normalization, Dispatch map/fallback, emergency ping, and dashboard removal checks passed');
+console.log('[convoy-command] normalization, Navigate overlay, emergency ping, and dashboard removal checks passed');

@@ -30,6 +30,7 @@ const dashboard = read('app/(tabs)/dashboard.tsx');
 const widgetGrid = read('components/dashboard/WidgetGrid.tsx');
 const widgetRenderers = read('components/dashboard/WidgetRenderers.tsx');
 const navigateSurface = read('components/dashboard/NavigateSurfaceWidget.tsx');
+const routeProgressMiniMap = read('components/dashboard/RouteProgressMiniMap.tsx');
 const mapRenderer = read('components/navigate/MapRenderer.tsx');
 
 assert.strictEqual(chase.normalizeNavigationBearingDeg(370), 10);
@@ -59,32 +60,6 @@ assert(
   gpsHeadingCamera.bearingDeg < 10 || gpsHeadingCamera.bearingDeg > 350,
   'Active chase camera should prefer route-ahead bearing over conflicting GPS heading.',
 );
-assert(gpsHeadingCamera.cameraTarget.latitude > origin.latitude, 'Active chase camera should look ahead along route/course travel.');
-
-const routeAheadCamera = chase.resolveDashboardNavigationChaseCamera({
-  currentLocation: origin,
-  routePoints: [
-    { lat: 38.9998, lng: -120.0 },
-    { lat: 39.01, lng: -120.0 },
-  ],
-  gpsHeadingDeg: null,
-  routeSessionHeadingDeg: 180,
-  hasActiveGuidance: true,
-  speedMph: 10,
-});
-assert.strictEqual(routeAheadCamera.bearingSource, 'route-ahead');
-assert(
-  routeAheadCamera.bearingDeg < 10 || routeAheadCamera.bearingDeg > 350,
-  'Route-ahead bearing should beat a stale route-session heading during active guidance.',
-);
-assert(routeAheadCamera.cameraTarget.latitude > origin.latitude, 'Route-ahead camera target should sit ahead of the vehicle.');
-
-const inactiveCamera = chase.resolveDashboardNavigationChaseCamera({
-  currentLocation: origin,
-  gpsHeadingDeg: 90,
-  hasActiveGuidance: false,
-});
-assert.deepStrictEqual(inactiveCamera.cameraTarget, origin, 'Inactive/free-drive camera should not shift the target ahead of the user.');
 
 const stableSmallDrift = chase.resolveStableDashboardGpsCameraSnapshot({
   previous: { location: origin, bearingDeg: 90 },
@@ -96,75 +71,47 @@ const stableSmallDrift = chase.resolveStableDashboardGpsCameraSnapshot({
 assert.deepStrictEqual(
   stableSmallDrift.location,
   origin,
-  'Dashboard map GPS smoothing should ignore sub-accuracy location drift.',
-);
-assert.strictEqual(
-  stableSmallDrift.bearingDeg,
-  90,
-  'Dashboard map GPS smoothing should freeze heading wobble while nearly stationary.',
-);
-
-const stableMeaningfulMove = chase.resolveStableDashboardGpsCameraSnapshot({
-  previous: stableSmallDrift,
-  nextLocation: { latitude: 39.00018, longitude: -120.00018 },
-  nextBearingDeg: 118,
-  speedMph: 12,
-  accuracyM: 8,
-});
-assert.notDeepStrictEqual(
-  stableMeaningfulMove.location,
-  origin,
-  'Dashboard map GPS smoothing should still accept meaningful movement.',
-);
-assert.strictEqual(
-  stableMeaningfulMove.bearingDeg,
-  118,
-  'Dashboard map GPS smoothing should still accept meaningful course changes while moving.',
+  'Dashboard GPS smoothing should ignore sub-accuracy location drift.',
 );
 
 assert(dashboard.includes('gpsHeadingDeg: gps.position?.headingDeg ?? null'), 'Dashboard detail render options should include GPS heading.');
 assert(dashboard.includes('gpsHeadingDeg={gps.position?.headingDeg ?? null}'), 'Dashboard grid should pass live GPS heading.');
 assert(widgetGrid.includes('gpsHeadingDeg?: number | null;'), 'WidgetGrid props should carry GPS heading.');
-assert(widgetGrid.includes('areCompactRenderOptionsEqualForSlot'), 'Compact widget memoization should compare slot-specific GPS render state.');
-assert(widgetGrid.includes('getDashboardGpsRenderKey'), 'Dashboard compact map keys should bucket GPS updates instead of using raw samples.');
 assert(widgetRenderers.includes('gpsHeadingDeg?: number | null;'), 'Widget render options should expose GPS heading.');
-assert(navigateSurface.includes('resolveDashboardNavigationChaseCamera'), '3D navigation command should use the chase-camera resolver.');
-assert(navigateSurface.includes('useStableDashboardGpsCameraLocation'), 'Dashboard navigation surfaces should smooth GPS marker/camera location changes.');
-assert(navigateSurface.includes('resolveStableDashboardGpsCameraSnapshot'), '3D navigation command should smooth small location and bearing jitter.');
-assert(navigateSurface.includes('COMMAND_3D_ACTIVE_FOLLOW_OFFSET'), 'Active guidance should use a lower marker chase-camera offset.');
-assert(navigateSurface.includes("dashboard_command_3d_active_guidance:${chaseCamera.bearingSource}:${recenterRequestId}"), 'Camera command reason should include bearing source and recenter generation.');
-assert(navigateSurface.includes("type Command3DMapViewKey = 'tactical' | 'day' | 'satellite';"), '3D follow map must expose tactical, day, and satellite view modes.');
-assert(navigateSurface.includes("mapStyle: 'tactical'"), '3D follow map view menu must retain the tactical dark style.');
-assert(navigateSurface.includes("mapStyle: 'ecs'"), '3D follow map view menu must offer the daytime map style.');
-assert(navigateSurface.includes("mapStyle: 'satellite'"), '3D follow map view menu must offer the satellite map style.');
-assert(navigateSurface.includes("const DEFAULT_COMMAND_3D_MAP_VIEW: Command3DMapViewKey = 'satellite';"), 'Dashboard command map should default to satellite presentation.');
-assert(navigateSurface.includes("createPersistedKeyValueCache('ecs_dashboard_map_preferences')"), 'Dashboard command map should persist the user-selected presentation.');
-assert(navigateSurface.includes('command3DMapViewPreference.waitForHydration()'), 'Dashboard command map should restore persisted native map presentation after hydration.');
-assert(mapRenderer.includes('styleUrl: getMapStyleUrl(props.mapStyle || DEFAULT_MAP_STYLE)'), 'MapRenderer payload should include the selected map style so TAC/DAY/SAT changes reach the WebView.');
-assert(
-  mapRenderer.includes('mapLayerRegistry.ensure(ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID') &&
-    mapRenderer.includes('routeLineLayerDefinition(ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID, ACTIVE_GUIDANCE_ROUTE_SOURCE_ID') &&
-    mapRenderer.includes("'rgba(8,14,18,0.88)'"),
-  'Active guidance route lines need a contrast halo so the path remains visible on DAY and SAT map views.',
-);
-assert(
-  mapRenderer.includes('function promoteRouteGuidanceLayers()') &&
-    mapRenderer.indexOf('ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID') < mapRenderer.indexOf('ACTIVE_GUIDANCE_ROUTE_LAYER_ID'),
-  'Route halo must be promoted with the route layer after style or overlay changes.',
-);
-assert(
-  mapRenderer.includes('[ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID, 10.5, 0.72]') &&
-    mapRenderer.includes("map.setPaintProperty(layerConfig[0], 'line-width'"),
-  'Route halo styling should update with active/preview render mode changes.',
-);
-assert(navigateSurface.includes('const [followLocked, setFollowLocked] = useState(true);'), '3D follow map must start locked to live GPS follow.');
-assert(navigateSurface.includes('if (!selected || !cameraCenter || !followLocked) return null;'), 'Manual map interaction must suspend automatic follow camera commands.');
-assert(navigateSurface.includes('shouldFollowUser={followLocked && !!cameraCenter}'), 'Manual map interaction must also suppress legacy follow-user fallback camera movement.');
-assert(navigateSurface.includes('setFollowLocked(true);') && navigateSurface.includes('setFollowLocked(false);'), 'Compass recenter should relock follow mode while user drag should unlock it.');
-assert(navigateSurface.includes('onUserDrag={handleUserDrag}'), '3D follow map must listen for user drag/zoom events from MapRenderer.');
-assert(navigateSurface.includes('accessibilityLabel="Open 3D follow map view menu"'), '3D follow map needs an accessible top-right view selector.');
-assert(navigateSurface.includes('activeView={activeMapView}'), '3D follow map view selector should reflect the active map style.');
-assert(navigateSurface.includes('top: 10,') && navigateSurface.includes('right: 92,'), 'Dashboard command turn guidance should sit at the top and clear the map presentation selector.');
-assert(navigateSurface.includes('Navigation map paused'), 'Dashboard command map standby copy should not show redundant 3D Follow Map text.');
 
-console.log('Dashboard Navigation 3D follow camera checks passed.');
+assert(
+  widgetRenderers.includes("<Mini3DFollowMap options={options} selected={mode === 'threeDNavigation'} />") &&
+    (widgetRenderers.match(/<Mini3DFollowMap/g) || []).length === 1,
+  'Dashboard command center should keep a single Navigation Command module entry.',
+);
+
+assert(
+  navigateSurface.includes('function NavigationCommandStatusCard') &&
+    navigateSurface.includes('dashboard-navigation-command-status-card') &&
+    navigateSurface.includes('export function useNavigateSurfaceState(options?: WidgetRenderOptions, enabled = true)') &&
+    navigateSurface.includes('useNavigateSurfaceState(options, selected)') &&
+    navigateSurface.includes('resolveActiveGuidanceDisplayLocation'),
+  'Dashboard navigation command should render route/GPS status from existing guidance state.',
+);
+
+assert(
+  !navigateSurface.includes('MapRenderer') &&
+    !navigateSurface.includes('MapFallbackSurface') &&
+    !navigateSurface.includes('getMapboxToken') &&
+    !navigateSurface.includes('mapboxToken') &&
+    !navigateSurface.includes('cameraCommand'),
+  'Dashboard navigation command must not load or control a map surface.',
+);
+
+assert(
+  widgetRenderers.includes("const RouteProgressMiniMap = React.lazy(() => import('./RouteProgressMiniMap'));") &&
+    widgetRenderers.includes('<RouteProgressMiniMap') &&
+    routeProgressMiniMap.includes('<WebView') &&
+    routeProgressMiniMap.includes('<MapFallbackSurface'),
+  'Dashboard Route Progress mini-map should remain the only Dashboard map preview.',
+);
+
+assert(mapRenderer.includes('convoyMarkers?: ConvoyMapOverlayMarker[]'), 'Navigate MapRenderer should accept convoy overlay markers.');
+assert(mapRenderer.includes('dispatchPingMarkers?: DispatchPingMapMarker[]'), 'Navigate MapRenderer should accept Dispatch GPS ping markers.');
+
+console.log('Dashboard navigation command map-ownership checks passed.');

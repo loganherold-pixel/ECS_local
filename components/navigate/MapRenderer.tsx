@@ -64,6 +64,8 @@ import {
 } from '../../src/features/navigate/mvum';
 import type { RemoteMapOverlayPayload } from '../../lib/remote/mapOverlay';
 import type { MapLifecycleSnapshot } from '../../lib/performance/exploreNavigateSeparationInstrumentation';
+import type { ConvoyMapOverlayMarker } from '../../lib/convoy/convoyMapOverlayModel';
+import type { DispatchPingMapMarker } from '../../lib/dispatchRecoveryMapModel';
 import {
   resolveViewportMarkerHeadingDeg,
 } from '../../lib/mapMotion';
@@ -438,6 +440,10 @@ export type MapRendererProps = {
   onCampEndpointTap?: (camp: any) => void;
   campScoutMarkers?: CampScoutMapMarkerPayload[];
   onCampScoutTap?: (camp: any) => void;
+  convoyMarkers?: ConvoyMapOverlayMarker[];
+  dispatchPingMarkers?: DispatchPingMapMarker[];
+  onConvoyMemberTap?: (member: ConvoyMapOverlayMarker) => void;
+  onDispatchPingTap?: (marker: DispatchPingMapMarker) => void;
   tiltAlertMarkers?: MarkerLike[];
   cameraMode?: CameraMode;
   cameraCommand?: CameraCommand | null;
@@ -620,6 +626,8 @@ type WebMapPayload = {
     badges?: { label: string; tone: CampIntelTone }[];
   }[];
   campScoutPins: CampScoutMapMarkerPayload[];
+  convoyMarkers: ConvoyMapOverlayMarker[];
+  dispatchPingMarkers: DispatchPingMapMarker[];
   tiltAlerts: {
     id: string;
     latitude: number;
@@ -1376,7 +1384,7 @@ const MAP_OVERLAY_PATCH_FIELDS: Record<MapOverlayPatchFamily, (keyof WebMapPaylo
     'mvumOverlay',
     'stitchedRoutePreview',
   ],
-  markers: ['waypoints', 'bailouts', 'pins', 'campsites', 'campScoutPins', 'tiltAlerts'],
+  markers: ['waypoints', 'bailouts', 'pins', 'campsites', 'campScoutPins', 'convoyMarkers', 'dispatchPingMarkers', 'tiltAlerts'],
   routeBuilder: [
     'routeBuilderMode',
     'routeBuilderColor',
@@ -1861,6 +1869,12 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
       ...(props.campEndpointMarkers ?? []),
       ...(props.campScoutMarkers ?? []),
     ]),
+    convoyMarkers: (props.convoyMarkers ?? []).filter((marker) => (
+      isValidCoord(marker.latitude, marker.longitude)
+    )),
+    dispatchPingMarkers: (props.dispatchPingMarkers ?? []).filter((marker) => (
+      isValidCoord(marker.latitude, marker.longitude)
+    )),
     tiltAlerts: tiltAlertInput
       .filter((m) => {
         const lat =
@@ -2084,6 +2098,95 @@ function makeMapHtml(
         0 0 14px rgba(255, 215, 0, 0.55);
     }
     .marker-bailout { background: #E14B4B; }
+    .marker-convoy {
+      position: relative;
+      min-width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      border: 2px solid rgba(5,9,13,0.92);
+      background: #65D4FF;
+      color: #05090D;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 8px;
+      line-height: 9px;
+      font-weight: 900;
+      letter-spacing: 0;
+      padding: 0 4px;
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.62),
+        0 6px 16px rgba(0,0,0,0.46);
+    }
+    .marker-convoy::after {
+      content: attr(data-status);
+      position: absolute;
+      top: 25px;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: 72px;
+      border-radius: 999px;
+      border: 1px solid rgba(5,9,13,0.8);
+      background: rgba(5,9,13,0.86);
+      color: rgba(230,237,243,0.9);
+      font-size: 7px;
+      line-height: 9px;
+      font-weight: 900;
+      letter-spacing: 0.4px;
+      padding: 2px 5px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .marker-convoy-selected::after,
+    .marker-convoy-emergency::after,
+    .marker-convoy-stale::after,
+    .marker-convoy-offline::after {
+      opacity: 1;
+    }
+    .marker-convoy-selected {
+      box-shadow:
+        0 0 0 2px rgba(242,194,77,0.9),
+        0 0 20px rgba(242,194,77,0.42),
+        0 8px 18px rgba(0,0,0,0.46);
+    }
+    .marker-convoy-emergency {
+      background: #E24D4D;
+      color: #FFF8E8;
+      box-shadow:
+        0 0 0 2px rgba(255,248,232,0.72),
+        0 0 18px rgba(226,77,77,0.52);
+    }
+    .marker-convoy-stale,
+    .marker-convoy-offline {
+      background: #F2C24D;
+      color: #05090D;
+    }
+    .marker-dispatch-ping {
+      position: relative;
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      border: 2px solid rgba(255,248,232,0.94);
+      background: #E24D4D;
+      color: #FFF8E8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      line-height: 20px;
+      font-weight: 900;
+      box-shadow:
+        0 0 0 4px rgba(226,77,77,0.18),
+        0 0 22px rgba(226,77,77,0.62),
+        0 8px 18px rgba(0,0,0,0.48);
+    }
+    .marker-dispatch-ping-selected {
+      box-shadow:
+        0 0 0 5px rgba(242,194,77,0.22),
+        0 0 24px rgba(242,194,77,0.56),
+        0 8px 18px rgba(0,0,0,0.48);
+    }
     .marker-camp {
       width: 26px;
       height: 26px;
@@ -3267,6 +3370,16 @@ function makeMapHtml(
               item && item.pinFamily,
               item && item.campOpsRole,
               item && item.campOpsCandidateId,
+              item && item.memberId,
+              item && item.callsign,
+              item && item.role,
+              item && item.roleLabel,
+              item && item.status,
+              item && item.statusLabel,
+              item && item.sourceLabel,
+              item && item.lastUpdatedLabel,
+              item && item.eventId,
+              item && item.severity,
               item && item.type,
               item && item.color
             ];
@@ -3281,6 +3394,8 @@ function makeMapHtml(
         bailouts: '',
         campsites: '',
         campScoutPins: '',
+        convoyMarkers: '',
+        dispatchPingMarkers: '',
         tiltAlerts: '',
         pins: ''
       };
@@ -3297,6 +3412,8 @@ function makeMapHtml(
       var pinMarkers = [];
       var campsiteMarkers = [];
       var campScoutMarkers = [];
+      var convoyMarkers = [];
+      var dispatchPingMarkers = [];
       var tiltMarkers = [];
       var userMarker = null;
       var userMarkerAnimationFrame = null;
@@ -5887,6 +6004,128 @@ function makeMapHtml(
         return el;
       }
 
+      function convoyMarkerClass(item) {
+        return [
+          'marker-convoy',
+          item && item.selected ? 'marker-convoy-selected' : '',
+          item && item.isEmergency ? 'marker-convoy-emergency' : '',
+          item && item.isStale ? 'marker-convoy-stale' : '',
+          item && item.isOffline ? 'marker-convoy-offline' : ''
+        ].filter(Boolean).join(' ');
+      }
+
+      function createConvoyMarkerElement(item) {
+        var el = document.createElement('div');
+        el.className = convoyMarkerClass(item);
+        el.textContent = String((item && (item.isEmergency ? '!' : item.isCurrentUser ? 'YOU' : item.callsign)) || '?').slice(0, 4).toUpperCase();
+        el.setAttribute('data-status', String((item && item.statusLabel) || ''));
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute(
+          'aria-label',
+          String(
+            ((item && item.displayName) || 'Convoy member') +
+            ', ' +
+            ((item && item.roleLabel) || 'member') +
+            ', ' +
+            ((item && item.statusLabel) || 'status unknown')
+          )
+        );
+        return el;
+      }
+
+      function replaceConvoyMarkers(list, items) {
+        safeRemoveMarkers(list);
+        list.length = 0;
+        (items || []).forEach(function(item) {
+          if (
+            !item ||
+            typeof item.latitude !== 'number' ||
+            typeof item.longitude !== 'number' ||
+            !Number.isFinite(item.latitude) ||
+            !Number.isFinite(item.longitude)
+          ) {
+            return;
+          }
+          var el = createConvoyMarkerElement(item);
+          var activate = function(ev) {
+            try {
+              if (ev && ev.stopPropagation) ev.stopPropagation();
+            } catch (e) {}
+            send('pinTap', Object.assign({ kind: 'convoyMember' }, item));
+          };
+          el.addEventListener('click', activate);
+          el.addEventListener('keydown', function(ev) {
+            if (!ev || (ev.key !== 'Enter' && ev.key !== ' ')) return;
+            try {
+              if (ev.preventDefault) ev.preventDefault();
+            } catch (e) {}
+            activate(ev);
+          });
+          var marker = new mapboxgl.Marker({
+            element: el,
+            anchor: 'center',
+            offset: [0, 0],
+            pitchAlignment: 'viewport',
+            rotationAlignment: 'viewport',
+          })
+            .setLngLat([item.longitude, item.latitude])
+            .addTo(map);
+          list.push(marker);
+        });
+      }
+
+      function createDispatchPingMarkerElement(item) {
+        var el = document.createElement('div');
+        el.className = 'marker-dispatch-ping' + (item && item.selected ? ' marker-dispatch-ping-selected' : '');
+        el.textContent = '!';
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('aria-label', String((item && item.title) || 'Active GPS ping'));
+        return el;
+      }
+
+      function replaceDispatchPingMarkers(list, items) {
+        safeRemoveMarkers(list);
+        list.length = 0;
+        (items || []).forEach(function(item) {
+          if (
+            !item ||
+            typeof item.latitude !== 'number' ||
+            typeof item.longitude !== 'number' ||
+            !Number.isFinite(item.latitude) ||
+            !Number.isFinite(item.longitude)
+          ) {
+            return;
+          }
+          var el = createDispatchPingMarkerElement(item);
+          var activate = function(ev) {
+            try {
+              if (ev && ev.stopPropagation) ev.stopPropagation();
+            } catch (e) {}
+            send('pinTap', Object.assign({ kind: 'dispatchPing' }, item));
+          };
+          el.addEventListener('click', activate);
+          el.addEventListener('keydown', function(ev) {
+            if (!ev || (ev.key !== 'Enter' && ev.key !== ' ')) return;
+            try {
+              if (ev.preventDefault) ev.preventDefault();
+            } catch (e) {}
+            activate(ev);
+          });
+          var marker = new mapboxgl.Marker({
+            element: el,
+            anchor: 'center',
+            offset: [0, 0],
+            pitchAlignment: 'viewport',
+            rotationAlignment: 'viewport',
+          })
+            .setLngLat([item.longitude, item.latitude])
+            .addTo(map);
+          list.push(marker);
+        });
+      }
+
       function replaceCampScoutMarkers(list, items) {
         safeRemoveMarkers(list);
         list.length = 0;
@@ -7280,6 +7519,12 @@ function makeMapHtml(
           updateCampScoutPinLayer(payload.campScoutPins || []);
           replaceCampScoutMarkers(campScoutMarkers, payload.campScoutPins || []);
         }
+        if (markerPayloadChanged('convoyMarkers', payload.convoyMarkers || [])) {
+          replaceConvoyMarkers(convoyMarkers, payload.convoyMarkers || []);
+        }
+        if (markerPayloadChanged('dispatchPingMarkers', payload.dispatchPingMarkers || [])) {
+          replaceDispatchPingMarkers(dispatchPingMarkers, payload.dispatchPingMarkers || []);
+        }
         if (markerPayloadChanged('tiltAlerts', payload.tiltAlerts || [])) {
           replaceMarkers(tiltMarkers, payload.tiltAlerts || [], 'marker-dot marker-tilt', 'tiltAlert');
         }
@@ -8062,6 +8307,10 @@ const MapRenderer = React.memo(function MapRenderer({
   onCampEndpointTap,
   campScoutMarkers = [],
   onCampScoutTap,
+  convoyMarkers = [],
+  dispatchPingMarkers = [],
+  onConvoyMemberTap,
+  onDispatchPingTap,
   tiltAlertMarkers = [],
   cameraMode,
   cameraCommand = null,
@@ -8140,6 +8389,8 @@ const MapRenderer = React.memo(function MapRenderer({
     campIntelMarkers.length > 0 ||
     campEndpointMarkers.length > 0 ||
     campScoutMarkers.length > 0 ||
+    convoyMarkers.length > 0 ||
+    dispatchPingMarkers.length > 0 ||
     tiltAlertMarkers.length > 0 ||
     routeBuilderActive ||
     routeBuilderSegments.length > 0 ||
@@ -8439,6 +8690,8 @@ const MapRenderer = React.memo(function MapRenderer({
         campIntelMarkers,
         campEndpointMarkers,
         campScoutMarkers,
+        convoyMarkers,
+        dispatchPingMarkers,
         tiltAlertMarkers,
         routeBuilderActive,
         routeBuilderMode,
@@ -8482,6 +8735,8 @@ const MapRenderer = React.memo(function MapRenderer({
       campIntelMarkers,
       campEndpointMarkers,
       campScoutMarkers,
+      convoyMarkers,
+      dispatchPingMarkers,
       tiltAlertMarkers,
       routeBuilderActive,
       routeBuilderMode,
@@ -8553,8 +8808,20 @@ const MapRenderer = React.memo(function MapRenderer({
       ...(payload.bailouts || []).map((marker) => ({ ...marker, color: '#FFCF5A', type: 'bailout' })),
       ...(payload.pins || []),
       ...(payload.campScoutPins || []).map((marker) => ({ ...marker, color: '#5EE1A0', type: 'camp' })),
+      ...(payload.convoyMarkers || []).map((marker) => ({
+        ...marker,
+        color: marker.isEmergency ? '#E24D4D' : marker.isStale || marker.isOffline ? '#F2C24D' : '#65D4FF',
+        type: 'convoy',
+        mapChar: marker.isEmergency ? '!' : marker.isCurrentUser ? 'YOU' : marker.callsign.slice(0, 2),
+      })),
+      ...(payload.dispatchPingMarkers || []).map((marker) => ({
+        ...marker,
+        color: '#E24D4D',
+        type: 'dispatchPing',
+        mapChar: '!',
+      })),
     ],
-    [payload.bailouts, payload.campScoutPins, payload.pins, payload.waypoints],
+    [payload.bailouts, payload.campScoutPins, payload.convoyMarkers, payload.dispatchPingMarkers, payload.pins, payload.waypoints],
   );
   const fallbackSegments = useMemo(
     () => [
@@ -9232,6 +9499,14 @@ const MapRenderer = React.memo(function MapRenderer({
           }
           return;
         }
+        if (payload?.kind === 'convoyMember') {
+          onConvoyMemberTap?.(payload);
+          return;
+        }
+        if (payload?.kind === 'dispatchPing') {
+          onDispatchPingTap?.(payload);
+          return;
+        }
         onPinTap?.(payload);
         return;
 
@@ -9287,6 +9562,8 @@ const MapRenderer = React.memo(function MapRenderer({
     onCampIntelTap,
     onCampEndpointTap,
     onCampScoutTap,
+    onConvoyMemberTap,
+    onDispatchPingTap,
     onUserDrag,
     onRouteBuilderUpdate,
     onRouteBuilderGestureStateChange,

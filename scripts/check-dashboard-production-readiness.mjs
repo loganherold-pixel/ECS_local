@@ -132,7 +132,7 @@ export function buildDashboardProductionReadinessResult(options = {}) {
     ),
     check(
       'dashboard_command_center_is_available_without_convoy_widget_menu',
-      'Dashboard command center hosts only the Attitude and 3D Navigation command menu modes while fixed dashboard widgets remain outside the selector.',
+      'Dashboard command center hosts only the Attitude and Navigation command menu modes while fixed dashboard widgets remain outside the selector.',
       widgetRenderers.includes('CommandCenterHost') &&
         widgetRenderers.includes('isCommandCenterModuleId(selectedCommandModule)') &&
         widgetRenderers.includes('commandCenterHostSelected') &&
@@ -160,7 +160,7 @@ export function buildDashboardProductionReadinessResult(options = {}) {
         relPath(root, paths.commandHost),
         relPath(root, paths.commandSelector),
       ],
-      ['Capture Android command-center switching evidence for Attitude, 3D Nav, unavailable fallback, and Dispatch-owned Convoy.'],
+      ['Capture Android command-center switching evidence for Attitude, Navigation Command, unavailable fallback, and Navigate-owned convoy overlay.'],
     ),
     check(
       'dashboard_header_brief_and_detail_surfaces_use_shared_shells',
@@ -233,7 +233,7 @@ export function buildDashboardProductionReadinessResult(options = {}) {
     notes: [
       'This gate separates Dashboard widget implementation readiness from Android visual, source-state, rotation, and owner-decision evidence.',
       'Dashboard widgets must keep stale, cached, manual, disconnected, unavailable, and no-route states visible instead of presenting fake live data.',
-      'Convoy Command belongs in Dispatch; Dashboard command center menu should retain only Attitude and 3D Nav modes.',
+      'Convoy Command belongs in Dispatch controls and Navigate overlays; Dashboard command center menu should retain only Attitude and Navigation modes.',
       'Android production currently declares portrait orientation; landscape evidence must be explicit if that policy changes.',
     ],
   };

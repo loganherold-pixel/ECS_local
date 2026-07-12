@@ -249,11 +249,12 @@ async function main() {
     'Convoy Command should no longer render the Rive panel surface.',
   );
   assert.ok(
-    dispatchConvoyCommandSource.includes('ConvoyCommandMap') &&
-      dispatchConvoyCommandSource.includes('fallbackVehiclesFromCommandData') &&
+    !dispatchConvoyCommandSource.includes('ConvoyCommandMap') &&
+      dispatchConvoyCommandSource.includes('ConvoySignalSurface') &&
+      dispatchConvoyCommandSource.includes('fallbackVehiclesFromSharedCommandData') &&
       dispatchConvoyCommandSource.includes('Start live sharing') &&
       dispatchConvoyCommandSource.includes('Stop live sharing'),
-    'Convoy Command map/fallback and explicit live sharing controls should be reachable.',
+    'Convoy Command signal panel and explicit live sharing controls should be reachable without a Dispatch map.',
   );
   assert.ok(
     convoyCommandDataSource.includes('valueOf(member.lastKnownLocation)') &&

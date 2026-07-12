@@ -59,10 +59,10 @@ assert.strictEqual(
 
 assert(
   commandStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n  'attitude',\n];"),
-  'Selectable ECS command modules should be limited to 3D Nav Command and Attitude Command.',
+  'Selectable ECS command modules should be limited to Navigation Command and Attitude Command.',
 );
-assert(commandStoreSource.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'follow3d';"), '3D Nav Command must be the default dashboard command module.');
-assert(commandStoreSource.includes("label: '3D Nav Command'"), '3D Nav Command registry label is missing.');
+assert(commandStoreSource.includes("const DEFAULT_ECS_COMMAND_MODULE: ECSCommandModuleId = 'follow3d';"), 'Navigation Command must be the default dashboard command module.');
+assert(commandStoreSource.includes("label: 'Navigation Command'"), 'Navigation Command registry label is missing.');
 assert(!commandStoreSource.includes("id: 'terrainRisk'"), 'Terrain Risk must not remain selectable in the command module registry.');
 assert(!commandStoreSource.includes("label: 'Terrain Risk'"), 'Terrain Risk must not remain selectable in the command module registry.');
 

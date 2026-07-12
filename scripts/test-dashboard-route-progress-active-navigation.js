@@ -286,7 +286,7 @@ assert(
     widgetSource.includes("externalRenderers={{") &&
     widgetSource.includes("threeDNavigation: ({ mode }) => (") &&
     widgetSource.includes("{renderCommandPanel('route')}"),
-  'Command Module host should mount the current 3D follow map shell with the Route Terrain Risk panel instead of the retired route-command placeholder.',
+  'Command Module host should mount the current Navigation Command shell with the Route Terrain Risk panel instead of the retired route-command placeholder.',
 );
 includes(
   widgetSource,

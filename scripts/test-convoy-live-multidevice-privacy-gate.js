@@ -42,12 +42,19 @@ const {
   buildConvoyParticipant,
 } = require(path.join(root, 'lib', 'convoy', 'convoyParticipantModel.ts'));
 
+const {
+  buildConvoyMapOverlayModel,
+} = require(path.join(root, 'lib', 'convoy', 'convoyMapOverlayModel.ts'));
+
 const doc = readRequired('docs/qa/convoy-live-multidevice-privacy-gate.md');
 const membershipSource = read('lib/convoy/convoyMembershipService.ts');
 const realtimeSource = read('lib/convoy/convoyRealtimeService.ts');
 const publisherSource = read('lib/convoy/convoyLocationPublisher.ts');
 const trackingStoreSource = read('stores/convoyTrackingStore.ts');
 const dispatchPanelSource = read('components/dispatch/DispatchConvoyCommandPanel.tsx');
+const navigateSource = read('app/(tabs)/navigate.tsx');
+const mapRendererSource = read('components/navigate/MapRenderer.tsx');
+const convoyOverlayModelSource = read('lib/convoy/convoyMapOverlayModel.ts');
 const participantModelSource = read('lib/convoy/convoyParticipantModel.ts');
 const fixtureSource = read('lib/convoy/convoyParticipantQaFixtures.ts');
 const fixtureRouteSource = read('app/dev/convoy-participant-qa.tsx');
@@ -203,6 +210,113 @@ assert.strictEqual(contract.privacyScope, 'active_convoy_members_only');
 assert.strictEqual(contract.inviteAuthority.contract, 'active_unexpired_unrevoked_non_demo_invite_required');
 assert.strictEqual(contract.badgeIdentity.title, null);
 
+const overlay = buildConvoyMapOverlayModel({
+  convoyId: 'convoy-a',
+  currentUserMemberId: 'member-self',
+  connectionStatus: 'connected',
+  selectedMemberId: 'member-stale',
+  includeCurrentUser: false,
+  members: [
+    {
+      memberId: 'member-self',
+      callsign: 'SELF',
+      displayName: 'SELF',
+      expeditionBadgeTitle: null,
+      role: 'lead',
+      latitude: 38.1,
+      longitude: -121.1,
+      accuracyMeters: 5,
+      headingDegrees: 10,
+      speedMps: 3,
+      movementStatus: 'moving',
+      capturedAt: freshTime,
+      updatedAt: freshTime,
+      isStale: false,
+      staleness: 'fresh',
+      staleReason: null,
+    },
+    {
+      memberId: 'member-stale',
+      callsign: 'TAIL',
+      displayName: 'TAIL',
+      expeditionBadgeTitle: null,
+      role: 'sweep',
+      latitude: 38.2,
+      longitude: -121.2,
+      accuracyMeters: 8,
+      headingDegrees: null,
+      speedMps: null,
+      movementStatus: 'unknown',
+      capturedAt: staleTime,
+      updatedAt: staleTime,
+      isStale: true,
+      staleness: 'stale',
+      staleReason: 'Location is older than the live threshold.',
+    },
+    {
+      memberId: 'member-offline',
+      callsign: 'OFF',
+      displayName: 'OFF',
+      expeditionBadgeTitle: null,
+      role: 'member',
+      latitude: 38.3,
+      longitude: -121.3,
+      accuracyMeters: null,
+      headingDegrees: null,
+      speedMps: null,
+      movementStatus: 'offline',
+      capturedAt: staleTime,
+      updatedAt: staleTime,
+      isStale: false,
+      staleness: 'fresh',
+      staleReason: null,
+    },
+    {
+      memberId: 'member-invalid',
+      callsign: 'BAD',
+      displayName: 'BAD',
+      expeditionBadgeTitle: null,
+      role: 'member',
+      latitude: Number.NaN,
+      longitude: -121.4,
+      accuracyMeters: null,
+      headingDegrees: null,
+      speedMps: null,
+      movementStatus: 'moving',
+      capturedAt: freshTime,
+      updatedAt: freshTime,
+      isStale: false,
+      staleness: 'fresh',
+      staleReason: null,
+    },
+  ],
+});
+assert.deepStrictEqual(
+  overlay.markers.map((marker) => marker.memberId),
+  ['member-stale', 'member-offline'],
+  'Navigate convoy overlay should filter invalid rows and avoid duplicating the current user while the GPS puck is visible.',
+);
+assert.strictEqual(overlay.markers[0].isStale, true);
+assert.strictEqual(overlay.markers[0].selected, true);
+assert.strictEqual(overlay.markers[1].isOffline, true);
+
+assert.ok(
+  navigateSource.includes('members: navigateConvoyOverlayEnabled ? convoyTrackingSnapshot.members : []') &&
+    !navigateSource.includes('fallbackVehiclesFromSharedCommandData') &&
+    !navigateSource.includes('fallbackVehiclesFromCommandData') &&
+    navigateSource.includes("expeditionRuntime.state === 'active'") &&
+    navigateSource.includes('convoyTrackingSnapshot.convoyId === activeConvoyContext.convoyId') &&
+    navigateSource.includes('includeCurrentUser: !mapRendererShowUserLocation'),
+  'Navigate convoy overlay must use only opt-in convoy_member_locations snapshot rows during active expeditions.',
+);
+assert.ok(
+  mapRendererSource.includes('convoyMarkers?: ConvoyMapOverlayMarker[]') &&
+    mapRendererSource.includes('dispatchPingMarkers?: DispatchPingMapMarker[]') &&
+    mapRendererSource.includes("payload?.kind === 'convoyMember'") &&
+    mapRendererSource.includes("payload?.kind === 'dispatchPing'"),
+  'MapRenderer must expose dedicated convoy and Dispatch ping overlay props and taps.',
+);
+
 assert.strictEqual(isProductionConvoyInviteAuthority({
   inviteId: 'invite-live',
   convoyId: 'convoy-live',
@@ -269,8 +383,9 @@ assert.ok(
   'Dispatch convoy panel should periodically recompute stale rows while an active convoy is visible.',
 );
 assert.ok(
-  dispatchPanelSource.includes("params.trackingConnectionStatus === 'connected' && reportingCount > 0"),
-  'Dispatch convoy panel must only label telemetry live when at least one member is fresh/reporting.',
+  dispatchPanelSource.includes('buildSharedActiveConvoyPanelViewModel') &&
+    convoyOverlayModelSource.includes("params.trackingConnectionStatus === 'connected' && reportingCount > 0"),
+  'Shared convoy panel model must only label telemetry live when at least one member is fresh/reporting.',
 );
 
 assert.ok(fixtureSource.includes('typeof __DEV__') && fixtureSource.includes("nodeEnv === 'test'"), 'Fixture harness must be dev/test guarded.');

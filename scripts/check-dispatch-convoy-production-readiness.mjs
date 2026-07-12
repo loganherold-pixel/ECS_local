@@ -65,8 +65,10 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
     readinessDoc: path.join(root, READINESS_DOC_RELATIVE_PATH),
     dispatchPanel: path.join(root, 'components', 'dispatch', 'DispatchConvoyCommandPanel.tsx'),
     dispatchCommandCenter: path.join(root, 'components', 'dispatch', 'DispatchCadCommandCenter.tsx'),
-    convoyMap: path.join(root, 'components', 'convoy', 'ConvoyCommandMap.tsx'),
-    convoyMapFallback: path.join(root, 'components', 'convoy', 'ConvoyMapFallback.tsx'),
+    navigateTab: path.join(root, 'app', '(tabs)', 'navigate.tsx'),
+    mapRenderer: path.join(root, 'components', 'navigate', 'MapRenderer.tsx'),
+    convoyOverlayModel: path.join(root, 'lib', 'convoy', 'convoyMapOverlayModel.ts'),
+    dispatchRecoveryMapModel: path.join(root, 'lib', 'dispatchRecoveryMapModel.ts'),
     rolloutConfig: path.join(root, 'lib', 'dispatchRolloutConfig.ts'),
     commandRegistry: path.join(root, 'components', 'dashboard', 'commandCenter', 'commandCenterRegistry.ts'),
     commandStore: path.join(root, 'lib', 'ecsCommandModuleStore.ts'),
@@ -85,8 +87,10 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
   const readinessDoc = readIfExists(paths.readinessDoc);
   const dispatchPanelSource = readIfExists(paths.dispatchPanel);
   const dispatchCommandSource = readIfExists(paths.dispatchCommandCenter);
-  const convoyMapSource = readIfExists(paths.convoyMap);
-  const convoyMapFallbackSource = readIfExists(paths.convoyMapFallback);
+  const navigateSource = readIfExists(paths.navigateTab);
+  const mapRendererSource = readIfExists(paths.mapRenderer);
+  const convoyOverlayModelSource = readIfExists(paths.convoyOverlayModel);
+  const dispatchRecoveryMapModelSource = readIfExists(paths.dispatchRecoveryMapModel);
   const rolloutSource = readIfExists(paths.rolloutConfig);
   const registrySource = readIfExists(paths.commandRegistry);
   const storeSource = readIfExists(paths.commandStore);
@@ -100,19 +104,35 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
       ['Run npm run gate:dispatch-internal-beta and clear all blockers before production review.'],
     ),
     check(
-      'convoy_panel_map_surface_present',
-      'Convoy Command uses the live-ready Mapbox surface with tactical fallback.',
-      /ConvoyCommandMap/.test(dispatchPanelSource) &&
+      'navigate_owned_convoy_overlay_present',
+      'Dispatch Convoy uses a non-map signal panel while Navigate owns live convoy and GPS ping map overlays.',
+      !/ConvoyCommandMap/.test(dispatchPanelSource) &&
+        /ConvoySignalSurface/.test(dispatchPanelSource) &&
+        /presentation\?: 'full' \| 'feed' \| 'signals' \| 'summary'/.test(dispatchPanelSource) &&
+        /presentation=\{isLandscapeDispatch \? 'signals' : 'feed'\}/.test(dispatchCommandSource) &&
         !/ECSConvoyCommandPanelRive/.test(dispatchPanelSource) &&
         !fs.existsSync(paths.oldPanelRiveWrapper) &&
         !fs.existsSync(paths.oldPanelNativeRiveWrapper) &&
         !fs.existsSync(paths.oldPanelRiveAsset) &&
         !fs.existsSync(paths.oldPanelPublicRiveAsset) &&
-        /loadRnMapboxModule/.test(convoyMapSource) &&
-        /ConvoyMapFallback/.test(convoyMapSource) &&
-        /No live convoy locations yet\./.test(convoyMapSource),
-      [relPath(root, paths.dispatchPanel), relPath(root, paths.convoyMap), relPath(root, paths.convoyMapFallback)],
-      ['Keep Dispatch Convoy Command on ConvoyCommandMap with a clear fallback when Mapbox/live tracking is unavailable.'],
+        /buildConvoyMapOverlayModel/.test(navigateSource) &&
+        /convoyMarkers=\{navigateConvoyMarkers\}/.test(navigateSource) &&
+        /dispatchPingMarkers=\{navigateDispatchPingMarkers\}/.test(navigateSource) &&
+        /expeditionRuntime\.state === 'active'/.test(navigateSource) &&
+        /includeCurrentUser: !mapRendererShowUserLocation/.test(navigateSource) &&
+        /convoyMarkers\?: ConvoyMapOverlayMarker\[\]/.test(mapRendererSource) &&
+        /dispatchPingMarkers\?: DispatchPingMapMarker\[\]/.test(mapRendererSource) &&
+        /buildConvoyMapOverlayModel/.test(convoyOverlayModelSource) &&
+        /buildDispatchPingMapMarkers/.test(dispatchRecoveryMapModelSource),
+      [
+        relPath(root, paths.dispatchPanel),
+        relPath(root, paths.dispatchCommandCenter),
+        relPath(root, paths.navigateTab),
+        relPath(root, paths.mapRenderer),
+        relPath(root, paths.convoyOverlayModel),
+        relPath(root, paths.dispatchRecoveryMapModel),
+      ],
+      ['Keep convoy and active GPS ping map rendering on Navigate, with Dispatch limited to controls, roster, signal status, and emergency actions.'],
     ),
     check(
       'convoy_live_sharing_controls_present',
@@ -172,7 +192,7 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
       'Android device visual QA evidence exists for the Dispatch Convoy panel.',
       requireEvidenceValue(evidence, 'androidDispatchConvoyVisualQaPassed'),
       [relPath(root, paths.evidence)],
-      ['Capture phone/tablet Android screenshots for Dispatch Convoy panel, portrait/landscape, no banner/dock overlap, map/fallback visible, emergency button visible.'],
+      ['Capture phone/tablet Android screenshots for Dispatch Convoy panel, portrait/landscape, no banner/dock overlap, signal panel visible, emergency button visible, and Navigate convoy overlay visible.'],
     ),
     check(
       'emergency_coordinate_ping_e2e_evidence_present',

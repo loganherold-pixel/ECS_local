@@ -416,13 +416,13 @@ assert.ok(
   const commandModuleStoreSource = readSource('lib', 'ecsCommandModuleStore.ts');
   assert.ok(
     commandModuleStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n  'attitude',\n];") &&
-      commandModuleStoreSource.includes("label: '3D Nav Command'") &&
+      commandModuleStoreSource.includes("label: 'Navigation Command'") &&
       commandModuleStoreSource.includes("subtitle: ''") &&
       commandModuleStoreSource.includes("label: 'Attitude Command'") &&
       commandModuleStoreSource.includes("subtitle: 'Fleet Vehicle Profile'") &&
       !commandModuleStoreSource.includes("label: 'Terrain Risk'") &&
       !commandModuleStoreSource.includes("subtitle: 'Side Profile Analysis'"),
-    'Center module registry must expose only the stable 3D Nav Command and Attitude Command modes.',
+    'Center module registry must expose only the stable Navigation Command and Attitude Command modes.',
   );
   assert.ok(
     !widgetRenderersSource.includes('Replace widget') &&
@@ -438,13 +438,13 @@ assert.ok(
       widgetRenderersSource.includes("threeDNavigation: ({ mode }) => (") &&
       widgetRenderersSource.includes('<Mini3DFollowMap') &&
       !widgetRenderersSource.includes('<TerrainRiskCommandModule'),
-    'Stable shell center window must render the command-center attitude stage and 3D follow map without restoring Terrain Risk as a center module.',
+    'Stable shell center window must render the command-center attitude stage and Navigation Command without restoring Terrain Risk as a center module.',
   );
   assert.ok(
     !widgetRenderersSource.includes('{selectedCommandModuleDefinition.title}') &&
       widgetRenderersSource.includes("selectedCommandCenterMode !== 'threeDNavigation' ? (") &&
       widgetRenderersSource.includes('{selectedCommandModuleDefinition.subtitle}'),
-    'Navigation Command face should hide both the redundant NAVIGATION COMMAND title and the 3D Follow Map subtitle over the map.',
+    'Navigation Command face should hide the redundant NAVIGATION COMMAND title inside the center shell.',
   );
 }
 assert.ok(
@@ -466,7 +466,7 @@ assert.ok(
     widgetRenderersSource.includes('expandedPanelLayer') &&
     widgetRenderersSource.includes('renderCommandPanel(activePanel.panel, true, expandedPanelMode)') &&
     widgetRenderersSource.includes('accessibilityLabel="Close expanded widget"'),
-  'Attitude Command surrounding panels must open an inline detail panel over the 3D follow map with an explicit close action.',
+    'Attitude Command surrounding panels must open an inline detail panel over the Navigation Command surface with an explicit close action.',
 );
 assert.ok(
   !widgetRenderersSource.includes('<TacticalPopupShell') &&
@@ -1191,27 +1191,24 @@ assert.ok(
 );
 
 assert.ok(
-  navigateSurfaceSource.includes('<MapRenderer') &&
-    navigateSurfaceSource.includes('points={routePoints}') &&
-    navigateSurfaceSource.includes('progressPoints={progressPoints}') &&
-    navigateSurfaceSource.includes('style={resolvedMapStyle}'),
-  'Navigate Surface must render the live MapRenderer inside the widget.',
-);
-assert.ok(
-  navigateSurfaceSource.includes('...StyleSheet.absoluteFillObject') &&
-    navigateSurfaceSource.includes('guidanceContainer'),
-  'Navigate Surface map must absolute-fill under a dedicated guidance container.',
-);
-assert.ok(
-  navigateSurfaceSource.includes('bottom: 8') &&
-    navigateSurfaceSource.includes("backgroundColor: 'rgba(4,6,8,0.82)'"),
-  'Navigate Surface guidance must be anchored as a compact readable bottom rail.',
+  !navigateSurfaceSource.includes('MapRenderer') &&
+    !navigateSurfaceSource.includes('MapFallbackSurface') &&
+    !navigateSurfaceSource.includes('getMapboxToken') &&
+    navigateSurfaceSource.includes('function NavigationCommandStatusCard') &&
+    navigateSurfaceSource.includes('dashboard-navigation-command-status-card'),
+  'Navigate Surface must render a non-map navigation command status card.',
 );
 assert.ok(
   navigateSurfaceSource.includes('formatRemainingDistance') &&
     navigateSurfaceSource.includes('formatRemainingDuration') &&
-    navigateSurfaceSource.includes('formatEta'),
-  'Navigate Surface guidance must include live distance, duration, and ETA fields when available.',
+    navigateSurfaceSource.includes('formatEta') &&
+    navigateSurfaceSource.includes('resolveActiveGuidanceDisplayLocation'),
+  'Navigate Surface guidance must include live distance, duration, ETA, and active-guidance display location fields when available.',
+);
+assert.ok(
+  widgetRenderersSource.includes("const RouteProgressMiniMap = React.lazy(() => import('./RouteProgressMiniMap'));") &&
+    widgetRenderersSource.includes('<RouteProgressMiniMap'),
+  'Route Progress mini-map must remain available as the Dashboard map preview.',
 );
 assert.ok(
   !navigateSurfaceSource.includes('WidgetCompactRow') &&
@@ -1228,22 +1225,19 @@ assert.ok(
   'Navigate Surface contracted mode must not be excluded from full-bleed map rendering.',
 );
 assert.ok(
-  navigateSurfaceSource.includes('function CompassRoseButton') &&
-    navigateSurfaceSource.includes('accessibilityLabel="Reset map to current location"') &&
-    navigateSurfaceSource.includes('setRecenterRequestId((value) => value + 1)') &&
-    navigateSurfaceSource.includes('cameraCommandTrigger={recenterRequestId}') &&
-    navigateSurfaceSource.includes("mapInteractive = guidanceVariant === 'command3d'") &&
-    navigateSurfaceSource.includes('interactive={mapInteractive}') &&
-    navigateSurfaceSource.includes('styles.compassButton'),
-  'Navigation Command 3D map must include a bottom-right compass rose button that triggers recenter/follow camera reset while preserving 3D map gestures.',
+  !navigateSurfaceSource.includes('function CompassRoseButton') &&
+    !navigateSurfaceSource.includes('cameraCommandTrigger') &&
+    !navigateSurfaceSource.includes('interactive={mapInteractive}') &&
+    !navigateSurfaceSource.includes('styles.compassButton'),
+  'Navigation Command must not retain Dashboard map gesture or camera controls.',
 );
 assert.ok(
-  navigateSurfaceSource.includes('right: 92') &&
-    navigateSurfaceSource.includes('top: 10') &&
-    navigateSurfaceSource.includes("backgroundColor: 'rgba(2,4,6,0.94)'") &&
-    navigateSurfaceSource.includes('<NextTurnStrip snapshot={routeSession} />') &&
-    navigateSurfaceSource.includes('<CompassRoseButton headingDeg={headingDeg} onPress={onRecenter} />'),
-  'Navigation Command turn-by-turn guidance must sit at the top of the map and reserve space for the map presentation control.',
+  navigateSurfaceSource.includes('nextTurnRow') &&
+    navigateSurfaceSource.includes('nextTurnInstruction') &&
+    navigateSurfaceSource.includes('progressTrack') &&
+    navigateSurfaceSource.includes('metricGrid') &&
+    navigateSurfaceSource.includes('MetricTile'),
+  'Navigation Command turn-by-turn guidance must render inside the non-map status card with progress and metric tiles.',
 );
 assert.ok(
   !widgetRenderersSource.includes("selectedCommandModule !== 'follow3d' && selectedCommandModule !== 'terrainRisk' && !commandCenterFrameSelected ? (") &&

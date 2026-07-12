@@ -42,12 +42,12 @@ export const ECS_COMMAND_MODULE_REGISTRY: Partial<Record<ECSCommandModuleId, ECS
   },
   follow3d: {
     id: 'follow3d',
-    label: '3D Nav Command',
+    label: 'Navigation Command',
     title: 'NAVIGATION COMMAND',
     subtitle: '',
     icon: 'map-outline',
     statusLabel: 'NAV',
-    description: 'Centralized 3D follow map inside the fixed command shell.',
+    description: 'Centralized navigation command status inside the fixed command shell.',
   },
 };
 

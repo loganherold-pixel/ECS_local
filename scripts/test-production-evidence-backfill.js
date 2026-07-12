@@ -176,7 +176,7 @@ function seedArtifacts(root) {
   writeArtifactPair(
     root,
     path.join('.smoke', 'dashboard-longpress-deep', 'controlled-center-module-longpress'),
-    'ECS COMMAND MODULE Change Center Module ATTITUDE COMMAND Selected NAVIGATION COMMAND Centralized 3D follow map SELECT',
+    'ECS COMMAND MODULE Change Center Module ATTITUDE COMMAND Selected NAVIGATION COMMAND Centralized navigation command status SELECT',
   );
   writeJson(path.join(root, '.smoke', 'android-tablet', 'smoke-summary.json'), {
     device: 'SM-X230',

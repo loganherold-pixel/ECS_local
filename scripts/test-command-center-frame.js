@@ -81,7 +81,7 @@ const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
 
 [
   'ATTITUDE',
-  'NAV 3D',
+  'NAV',
   'modeButtonSelected',
   'TACTICAL.amber',
   'TACTICAL.textMuted',
@@ -122,14 +122,14 @@ assert.ok(
 
 assert.ok(
   /'follow3d',\s*'attitude'/.test(commandStoreSource) &&
-    commandStoreSource.includes("label: '3D Nav Command'") &&
+    commandStoreSource.includes("label: 'Navigation Command'") &&
     commandStoreSource.includes("label: 'Attitude Command'") &&
     !commandStoreSource.includes("label: 'Terrain Risk'") &&
     !commandStoreSource.includes('Recovery / Hazard Compass') &&
     !commandStoreSource.includes('Trail Decision Command') &&
     !commandStoreSource.includes('Camp Scout Command') &&
     !commandStoreSource.includes('Expedition Readiness Command'),
-  'Command module store should expose only Attitude Command and 3D Nav Command in the command module selector.',
+  'Command module store should expose only Attitude Command and Navigation Command in the command module selector.',
 );
 
 assert.ok(

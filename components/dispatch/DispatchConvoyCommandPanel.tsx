@@ -1,11 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Alert, Animated, Easing, Platform, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 
-import { ConvoyCommandMap } from '../convoy/ConvoyCommandMap';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, TYPO } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
-import type { ConvoyMapVehicle, ConvoyMovementStatus, ConvoyRealtimeConnectionStatus } from '../../lib/convoy/convoyRealtimeService';
+import type { ConvoyMapVehicle, ConvoyRealtimeConnectionStatus } from '../../lib/convoy/convoyRealtimeService';
+import {
+  buildActiveConvoyPanelViewModel as buildSharedActiveConvoyPanelViewModel,
+  fallbackVehiclesFromCommandData as fallbackVehiclesFromSharedCommandData,
+  localVehicleFromRouteSession as localVehicleFromSharedRouteSession,
+  localVehicleFromUserLocation as localVehicleFromSharedUserLocation,
+  type DispatchConvoyUserLocation,
+} from '../../lib/convoy/convoyMapOverlayModel';
 import {
   convoyMembershipService,
   type ActiveConvoyContext,
@@ -20,11 +26,10 @@ import {
   formatConvoyDistanceMiles,
   selectConvoyCommandPanelViewModel,
 } from '../../lib/convoy/convoyCommandSelectors';
-import type { ConvoyCommandPanelViewModel, ConvoyMemberSummaryRole } from '../../lib/convoy/convoyCommandTypes';
+import type { ConvoyCommandPanelViewModel } from '../../lib/convoy/convoyCommandTypes';
 import type { DispatchEvent } from '../../lib/dispatchLiveEvents';
-import type { ConvoyCommandData, ConvoyMember } from '../../lib/navigation/convoyCommandData';
 import { useConvoyCommandData } from '../dashboard/commandCenter/useConvoyCommandData';
-import { navigateRouteSessionStore, type NavigateRouteSessionSnapshot } from '../../lib/navigateRouteSessionStore';
+import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
 import {
   refreshConvoyTrackingStaleness,
   stopConvoyLocationSubscription,
@@ -45,22 +50,10 @@ type DispatchConvoyCommandPanelProps = {
   emergencyButtonTone?: string;
   onEmergencyPing: () => void;
   onOpenEmergencyEvent: (event: DispatchEvent) => void;
-  presentation?: 'full' | 'feed' | 'map' | 'summary';
-  cameraResetKey?: string | number;
-  advisoryFocusCoordinate?: DispatchConvoyUserLocation | null;
-  advisoryFocusKey?: string | number;
+  presentation?: 'full' | 'feed' | 'signals' | 'summary';
   showEmergencyOverlay?: boolean;
   convoyLifecycleRevision?: number;
   testID?: string;
-};
-
-type DispatchConvoyUserLocation = {
-  latitude: number;
-  longitude: number;
-  accuracyMeters?: number | null;
-  headingDegrees?: number | null;
-  speedMps?: number | null;
-  timestamp?: string | number | null;
 };
 
 const CONVOY_TRACKING_STALENESS_REFRESH_MS = 30_000;
@@ -91,37 +84,6 @@ function getEmergencyLocationLabel(event: DispatchEvent): string {
     ? ` +/- ${Math.round(accuracy)}m`
     : '';
   return `${event.location.latitude.toFixed(5)}, ${event.location.longitude.toFixed(5)}${accuracyLabel}`;
-}
-
-function distanceMilesBetweenConvoyVehicles(left: ConvoyMapVehicle, right: ConvoyMapVehicle): number {
-  const toRadians = (value: number) => (value * Math.PI) / 180;
-  const earthRadiusMiles = 3958.8;
-  const dLat = toRadians(right.latitude - left.latitude);
-  const dLon = toRadians(right.longitude - left.longitude);
-  const lat1 = toRadians(left.latitude);
-  const lat2 = toRadians(right.latitude);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  return earthRadiusMiles * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function widestLiveVehicleGapMiles(members: ConvoyMapVehicle[]): number | null {
-  if (members.length < 2) return null;
-  let widest = 0;
-  for (let leftIndex = 0; leftIndex < members.length - 1; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < members.length; rightIndex += 1) {
-      widest = Math.max(widest, distanceMilesBetweenConvoyVehicles(members[leftIndex], members[rightIndex]));
-    }
-  }
-  return widest;
-}
-
-function roleForActiveConvoySummary(role: ConvoyMapVehicle['role'], isCurrentUser: boolean): ConvoyMemberSummaryRole {
-  if (isCurrentUser) return 'you';
-  if (role === 'lead') return 'lead';
-  if (role === 'sweep') return 'tail';
-  return 'member';
 }
 
 function useEmergencyPulse(active: boolean) {
@@ -159,58 +121,6 @@ function useEmergencyPulse(active: boolean) {
   return opacity;
 }
 
-function movementStatusFromCommandMember(member: ConvoyMember): ConvoyMovementStatus {
-  switch (member.status) {
-    case 'emergency':
-      return 'needs_assistance';
-    case 'delayed':
-      return 'delayed';
-    case 'offline':
-      return 'offline';
-    case 'stopped':
-      return 'stopped';
-    case 'checkedIn':
-    case 'online':
-      return 'moving';
-    case 'unknown':
-    default:
-      return 'unknown';
-  }
-}
-
-function roleFromCommandMember(member: ConvoyMember): ConvoyMapVehicle['role'] {
-  if (member.role === 'lead' || member.role === 'sweep') return member.role;
-  if (member.role === 'recovery' || member.role === 'medic') return 'support';
-  return 'member';
-}
-
-function fallbackVehiclesFromCommandData(commandData: ConvoyCommandData): ConvoyMapVehicle[] {
-  return commandData.members.flatMap((member) => {
-    if (!member.coordinates) return [];
-    const timestamp = (member.lastPingAt ?? member.lastCheckInAt ?? commandData.lastUpdatedAt ?? new Date()).toISOString();
-    const isStale = member.status === 'offline' || member.status === 'unknown';
-    const role = roleFromCommandMember(member);
-    return [{
-      memberId: member.id,
-      callsign: member.displayName,
-      displayName: member.displayName,
-      expeditionBadgeTitle: null,
-      role,
-      latitude: member.coordinates.latitude,
-      longitude: member.coordinates.longitude,
-      accuracyMeters: null,
-      headingDegrees: null,
-      speedMps: null,
-      movementStatus: movementStatusFromCommandMember(member),
-      capturedAt: timestamp,
-      updatedAt: timestamp,
-      isStale,
-      staleness: isStale ? 'stale' : 'fresh',
-      staleReason: isStale ? 'Using last known convoy assessment location.' : null,
-    } satisfies ConvoyMapVehicle];
-  });
-}
-
 function formatTrackingStatus(state: ConvoyLocationSharingState | null): string {
   if (!state) return 'Tracking: disabled';
   switch (state.status) {
@@ -244,125 +154,6 @@ function useNavigateRouteSessionSnapshot() {
   );
 }
 
-function localVehicleFromRouteSession(
-  routeSession: NavigateRouteSessionSnapshot,
-  activeContext: ActiveConvoyContext | null,
-): ConvoyMapVehicle | null {
-  const location = routeSession.currentLocation;
-  if (!location) return null;
-  const timestamp = routeSession.updatedAt ?? new Date().toISOString();
-  return {
-    memberId: activeContext?.memberId ?? 'local-user',
-    callsign: activeContext?.callsign ?? 'YOU',
-    displayName: activeContext?.callsign ?? 'YOU',
-    expeditionBadgeTitle: activeContext?.expeditionBadgeTitle ?? null,
-    role: activeContext?.role ?? 'member',
-    latitude: location.latitude,
-    longitude: location.longitude,
-    accuracyMeters: null,
-    headingDegrees: routeSession.headingDeg,
-    speedMps: null,
-    movementStatus: routeSession.lifecycle === 'active' ? 'moving' : 'unknown',
-    capturedAt: timestamp,
-    updatedAt: timestamp,
-    isStale: false,
-    staleness: 'fresh',
-    staleReason: null,
-  };
-}
-
-function localVehicleFromUserLocation(
-  location: DispatchConvoyUserLocation | null | undefined,
-  activeContext: ActiveConvoyContext | null,
-): ConvoyMapVehicle | null {
-  if (!location) return null;
-  if (!Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) return null;
-  const timestamp = typeof location.timestamp === 'number'
-    ? new Date(location.timestamp).toISOString()
-    : typeof location.timestamp === 'string'
-      ? location.timestamp
-      : new Date().toISOString();
-  return {
-    memberId: activeContext?.memberId ?? 'local-user',
-    callsign: activeContext?.callsign ?? 'YOU',
-    displayName: activeContext?.callsign ?? 'YOU',
-    expeditionBadgeTitle: activeContext?.expeditionBadgeTitle ?? null,
-    role: activeContext?.role ?? 'member',
-    latitude: location.latitude,
-    longitude: location.longitude,
-    accuracyMeters: location.accuracyMeters ?? null,
-    headingDegrees: location.headingDegrees ?? null,
-    speedMps: location.speedMps ?? null,
-    movementStatus: 'moving',
-    capturedAt: timestamp,
-    updatedAt: timestamp,
-    isStale: false,
-    staleness: 'fresh',
-    staleReason: null,
-  };
-}
-
-function buildActiveConvoyPanelViewModel(params: {
-  baseViewModel: ConvoyCommandPanelViewModel;
-  activeContext: ActiveConvoyContext | null;
-  mapMembers: ConvoyMapVehicle[];
-  rawMemberCount: number;
-  trackingLastUpdated: string | null;
-  trackingConnectionStatus: ConvoyRealtimeConnectionStatus;
-}): ConvoyCommandPanelViewModel {
-  if (!params.activeContext?.convoyId) return params.baseViewModel;
-
-  const vehicleCount = Math.max(
-    params.rawMemberCount,
-    params.mapMembers.length,
-    params.activeContext.memberId ? 1 : 0,
-  );
-  const reportingCount = params.mapMembers.filter((member) => (
-    !member.isStale && member.movementStatus !== 'offline'
-  )).length;
-  const members = params.mapMembers.length > 0
-    ? params.mapMembers.map((member) => ({
-        id: member.memberId,
-        displayName: member.callsign,
-        role: roleForActiveConvoySummary(member.role, member.memberId === params.activeContext?.memberId),
-        distanceFromUserMiles: null,
-        lastSeenAt: member.updatedAt ?? member.capturedAt,
-        isReporting: !member.isStale && member.movementStatus !== 'offline',
-        isStale: member.isStale || member.movementStatus === 'offline',
-        isLostSignal: member.movementStatus === 'offline',
-      }))
-    : [{
-        id: params.activeContext.memberId,
-        displayName: params.activeContext.callsign || 'YOU',
-        role: roleForActiveConvoySummary(params.activeContext.role, true),
-        distanceFromUserMiles: null,
-        lastSeenAt: params.activeContext.storedAt,
-        isReporting: false,
-        isStale: true,
-        isLostSignal: false,
-      }];
-  const widestGapMiles = widestLiveVehicleGapMiles(params.mapMembers);
-  const hasLiveTracking = params.trackingConnectionStatus === 'connected' && reportingCount > 0;
-  const hasStale = members.some((member) => member.isStale);
-
-  return {
-    ...params.baseViewModel,
-    visualState: hasLiveTracking ? 'live' : hasStale ? 'partial' : 'estimated',
-    statusLabel: hasLiveTracking ? 'LIVE' : hasStale ? 'PARTIAL' : 'ESTIMATED',
-    groupName: params.baseViewModel.groupName === 'No Active Convoy' ? 'Active Convoy' : params.baseViewModel.groupName,
-    vehicleCount,
-    reportingCount,
-    widestGapMiles,
-    regroupSuggested: widestGapMiles != null && widestGapMiles > 1,
-    lostUnitIndex: members.findIndex((member) => member.isLostSignal),
-    cautionLevel: widestGapMiles != null && widestGapMiles > 1 ? 1 : 0,
-    alertText: null,
-    members,
-    isUsingLiveData: hasLiveTracking,
-    updatedAt: params.trackingLastUpdated ?? params.baseViewModel.updatedAt ?? params.activeContext.storedAt,
-  };
-}
-
 export default function DispatchConvoyCommandPanel({
   connectionLabel,
   teamStatusLabel,
@@ -377,9 +168,6 @@ export default function DispatchConvoyCommandPanel({
   onEmergencyPing,
   onOpenEmergencyEvent,
   presentation = 'full',
-  cameraResetKey,
-  advisoryFocusCoordinate,
-  advisoryFocusKey,
   showEmergencyOverlay,
   convoyLifecycleRevision = 0,
   testID = 'dispatch-convoy-command-panel',
@@ -399,7 +187,7 @@ export default function DispatchConvoyCommandPanel({
     () => selectConvoyCommandPanelViewModel({ commandData }),
     [commandData],
   );
-  const fallbackMapMembers = useMemo(() => fallbackVehiclesFromCommandData(commandData), [commandData]);
+  const fallbackMapMembers = useMemo(() => fallbackVehiclesFromSharedCommandData(commandData), [commandData]);
   const hasActiveConvoy = Boolean(activeContext?.convoyId);
   const liveMapMembers = useMemo(
     () => hasActiveConvoy && trackingSnapshot.convoyId === activeContext?.convoyId
@@ -408,20 +196,14 @@ export default function DispatchConvoyCommandPanel({
     [activeContext?.convoyId, hasActiveConvoy, trackingSnapshot.convoyId, trackingSnapshot.members],
   );
   const routeSessionLocalMapMember = useMemo(
-    () => localVehicleFromRouteSession(routeSession, activeContext),
+    () => localVehicleFromSharedRouteSession(routeSession, activeContext),
     [activeContext, routeSession],
   );
   const gpsLocalMapMember = useMemo(
-    () => localVehicleFromUserLocation(userLocation, activeContext),
+    () => localVehicleFromSharedUserLocation(userLocation, activeContext),
     [activeContext, userLocation],
   );
   const localMapMember = routeSessionLocalMapMember ?? gpsLocalMapMember;
-  const routeCoordinates = useMemo(
-    () => hasActiveConvoy && routeSession.lifecycle !== 'inactive'
-      ? routeSession.routePoints.map((point) => [point.lng, point.lat] as [number, number])
-      : [],
-    [hasActiveConvoy, routeSession.lifecycle, routeSession.routePoints],
-  );
   const mapMembers = useMemo(
     () => !hasActiveConvoy
       ? localMapMember
@@ -447,7 +229,7 @@ export default function DispatchConvoyCommandPanel({
       ? trackingSnapshot.rawMembers.filter((member) => !member.revoked_at).length
       : 0;
   const panelViewModel = useMemo(
-    () => buildActiveConvoyPanelViewModel({
+    () => buildSharedActiveConvoyPanelViewModel({
       baseViewModel: viewModel,
       activeContext,
       mapMembers,
@@ -480,7 +262,7 @@ export default function DispatchConvoyCommandPanel({
         : 'No active convoy. Live convoy tracking is not being simulated.';
   const primaryEmergencyEvent = emergencyEvents[0] ?? null;
   const isFeedPresentation = presentation === 'feed';
-  const isMapOnlyPresentation = presentation === 'map';
+  const isSignalOnlyPresentation = presentation === 'signals';
   const isSummaryOnlyPresentation = presentation === 'summary';
   const summaryCompact = isCompact || isFeedPresentation || isSummaryOnlyPresentation;
   const shouldPulseEmergencyCount = emergencyAlertActive ?? emergencyEvents.length > 0;
@@ -488,10 +270,10 @@ export default function DispatchConvoyCommandPanel({
   const resolvedEmergencyButtonLabel = emergencyButtonLabel ?? (emergencySubmitting ? 'GETTING GPS' : 'PING GPS');
   const resolvedEmergencyButtonTone = emergencyButtonTone ?? TACTICAL.danger;
   const shouldShowIntegratedEmergencyFeed =
-    !isMapOnlyPresentation &&
+    !isSignalOnlyPresentation &&
     (!isSummaryOnlyPresentation || emergencyEvents.length > 0);
   const shouldShowEmergencyOverlay =
-    showEmergencyOverlay ?? (!isFeedPresentation && !isMapOnlyPresentation && !isSummaryOnlyPresentation);
+    showEmergencyOverlay ?? (!isFeedPresentation && !isSignalOnlyPresentation && !isSummaryOnlyPresentation);
   const visibleTrackingNote =
     trackingNote ??
     (!hasActiveConvoy ? sharingState?.lastStopReason : null) ??
@@ -646,32 +428,26 @@ export default function DispatchConvoyCommandPanel({
       testID={testID}
       style={[
         styles.shell,
-        isFeedPresentation || isMapOnlyPresentation || isSummaryOnlyPresentation ? styles.feedShell : null,
+        isFeedPresentation || isSignalOnlyPresentation || isSummaryOnlyPresentation ? styles.feedShell : null,
         isSummaryOnlyPresentation ? styles.summaryOnlyShell : null,
       ]}
     >
       {!isSummaryOnlyPresentation ? (
-      <View style={[styles.panelStage, isFeedPresentation || isMapOnlyPresentation ? styles.feedPanelStage : null]}>
+      <View style={[styles.panelStage, isFeedPresentation || isSignalOnlyPresentation ? styles.feedPanelStage : null]}>
         {hasActiveConvoy ? (
-          <ConvoyCommandMap
-            convoyId={activeContext?.convoyId ?? null}
+          <ConvoySignalSurface
+            compact={isFeedPresentation || isSignalOnlyPresentation}
+            panelViewModel={panelViewModel}
             members={mapMembers}
-            currentUserMemberId={activeContext?.memberId ?? (localMapMember ? 'local-user' : null)}
             connectionStatus={mapConnectionStatus}
             selectedMemberId={selectedMemberId}
-            onSelectMember={(member) => setSelectedMemberId(member.memberId)}
-            routeCoordinates={routeCoordinates}
-            cameraResetKey={cameraResetKey}
-            advisoryFocusCoordinate={advisoryFocusCoordinate}
-            advisoryFocusKey={advisoryFocusKey}
-            followUserWhenEmpty={!hasActiveConvoy}
-            showMapWhenEmpty
-            showStatusSummary={false}
-            compact={isFeedPresentation || isMapOnlyPresentation}
+            onSelectMemberId={setSelectedMemberId}
+            emergencyEvents={emergencyEvents}
+            onOpenEmergencyEvent={onOpenEmergencyEvent}
           />
         ) : (
           <InactiveConvoySurface
-            compact={isFeedPresentation || isMapOnlyPresentation}
+            compact={isFeedPresentation || isSignalOnlyPresentation}
             connectionLabel={connectionLabel}
             hasActiveTeam={hasActiveTeam}
             teamStatusLabel={teamStatusLabel}
@@ -680,7 +456,7 @@ export default function DispatchConvoyCommandPanel({
       </View>
       ) : null}
 
-      {!isMapOnlyPresentation ? (
+      {!isSignalOnlyPresentation ? (
       <View
         style={[
           styles.commandSummary,
@@ -834,8 +610,8 @@ export default function DispatchConvoyCommandPanel({
                   isFeedPresentation || isSummaryOnlyPresentation ? styles.emergencyInlineEventRowCompact : null,
                 ]}
                 accessibilityRole="button"
-                accessibilityLabel="Open active GPS ping tactical map"
-                accessibilityHint="Tap for tactical map and active guidance route"
+                accessibilityLabel="Open active GPS ping detail"
+                accessibilityHint="Tap for ping detail and Navigate route handoff"
                 activeOpacity={0.8}
                 onPress={() => onOpenEmergencyEvent(primaryEmergencyEvent)}
               >
@@ -991,6 +767,158 @@ function InactiveConvoySurface({
           </View>
         </View>
       </View>
+    </View>
+  );
+}
+
+function ConvoySignalSurface({
+  compact,
+  panelViewModel,
+  members,
+  connectionStatus,
+  selectedMemberId,
+  onSelectMemberId,
+  emergencyEvents,
+  onOpenEmergencyEvent,
+}: {
+  compact: boolean;
+  panelViewModel: ConvoyCommandPanelViewModel;
+  members: ConvoyMapVehicle[];
+  connectionStatus: ConvoyRealtimeConnectionStatus;
+  selectedMemberId: string | null;
+  onSelectMemberId: (memberId: string) => void;
+  emergencyEvents: DispatchEvent[];
+  onOpenEmergencyEvent: (event: DispatchEvent) => void;
+}) {
+  const primaryEmergencyEvent = emergencyEvents[0] ?? null;
+  const visibleMembers = members.length > 0 ? members.slice(0, compact ? 4 : 6) : [];
+  const activeCount = members.filter((member) => !member.isStale && member.movementStatus !== 'offline').length;
+  const staleCount = members.filter((member) => member.isStale || member.movementStatus === 'offline').length;
+  const assistCount = members.filter((member) => member.movementStatus === 'needs_assistance').length;
+
+  return (
+    <View style={[styles.signalSurface, compact ? styles.signalSurfaceCompact : null]}>
+      <View pointerEvents="none" style={styles.inactiveGridLayer}>
+        {[0, 1, 2, 3, 4].map((line) => (
+          <View
+            key={`signal-h-${line}`}
+            style={[styles.inactiveGridLine, styles.inactiveGridLineHorizontal, { top: `${16 + line * 17}%` }]}
+          />
+        ))}
+        {[0, 1, 2, 3, 4, 5].map((line) => (
+          <View
+            key={`signal-v-${line}`}
+            style={[styles.inactiveGridLine, styles.inactiveGridLineVertical, { left: `${10 + line * 16}%` }]}
+          />
+        ))}
+        <View style={styles.signalSweepLine} />
+      </View>
+
+      <View style={styles.signalHeaderRow}>
+        <View style={styles.signalTitleBlock}>
+          <Text style={[styles.signalEyebrow, compact ? styles.signalEyebrowCompact : null]}>
+            DISPATCH SIGNALS
+          </Text>
+          <Text style={[styles.signalTitle, compact ? styles.signalTitleCompact : null]} numberOfLines={1}>
+            {panelViewModel.groupName}
+          </Text>
+        </View>
+        <View style={[styles.signalStatusPill, connectionStatus === 'connected' ? styles.signalStatusPillLive : null]}>
+          <Text style={styles.signalStatusPillText} numberOfLines={1}>
+            {connectionStatus === 'connected' ? 'LIVE' : connectionStatus.toUpperCase()}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.signalMetricRow}>
+        <SignalMetric label="Reporting" value={`${activeCount}/${Math.max(panelViewModel.vehicleCount, members.length)}`} compact={compact} />
+        <SignalMetric label="Stale" value={`${staleCount}`} compact={compact} caution={staleCount > 0} />
+        <SignalMetric label="Assist" value={`${assistCount}`} compact={compact} caution={assistCount > 0} />
+        <SignalMetric label="Gap" value={formatConvoyDistanceMiles(panelViewModel.widestGapMiles) ?? '--'} compact={compact} caution={panelViewModel.regroupSuggested} />
+      </View>
+
+      <View style={styles.signalMemberList}>
+        {visibleMembers.length > 0 ? visibleMembers.map((member) => {
+          const selected = selectedMemberId === member.memberId;
+          const tone =
+            member.movementStatus === 'needs_assistance'
+              ? TACTICAL.danger
+              : member.movementStatus === 'offline' || member.isStale
+                ? TACTICAL.amber
+                : TACTICAL.text;
+          return (
+            <TouchableOpacity
+              key={member.memberId}
+              style={[styles.signalMemberRow, selected ? styles.signalMemberRowSelected : null]}
+              accessibilityRole="button"
+              accessibilityLabel={`Select ${member.callsign}`}
+              activeOpacity={0.76}
+              onPress={() => onSelectMemberId(member.memberId)}
+            >
+              <View style={[styles.signalMemberDot, { backgroundColor: tone }]} />
+              <Text style={styles.signalMemberName} numberOfLines={1}>
+                {member.callsign}
+              </Text>
+              <Text style={styles.signalMemberStatus} numberOfLines={1}>
+                {member.isStale ? 'STALE' : member.movementStatus.toUpperCase()}
+              </Text>
+            </TouchableOpacity>
+          );
+        }) : (
+          <View style={styles.signalEmptyState}>
+            <Text style={styles.signalEmptyTitle}>Waiting for shared GPS</Text>
+            <Text style={styles.signalEmptyBody} numberOfLines={2}>
+              Consenting members appear on Navigate during an active expedition.
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {primaryEmergencyEvent ? (
+        <TouchableOpacity
+          style={styles.signalEmergencyRow}
+          accessibilityRole="button"
+          accessibilityLabel="Open active GPS ping"
+          activeOpacity={0.78}
+          onPress={() => onOpenEmergencyEvent(primaryEmergencyEvent)}
+        >
+          <Ionicons name="alert-circle-outline" size={compact ? 13 : 15} color={TACTICAL.danger} />
+          <View style={styles.signalEmergencyCopy}>
+            <Text style={styles.signalEmergencyTitle} numberOfLines={1}>
+              Active GPS Ping
+            </Text>
+            <Text style={styles.signalEmergencyMeta} numberOfLines={1}>
+              {formatEmergencyEventTime(primaryEmergencyEvent)} / {getEmergencyLocationLabel(primaryEmergencyEvent)}
+            </Text>
+          </View>
+          <Ionicons name="navigate-outline" size={compact ? 13 : 15} color={TACTICAL.amber} />
+        </TouchableOpacity>
+      ) : (
+        <Text style={styles.signalFooterText} numberOfLines={1}>
+          Map visibility moved to Navigate.
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function SignalMetric({
+  label,
+  value,
+  compact,
+  caution = false,
+}: {
+  label: string;
+  value: string;
+  compact: boolean;
+  caution?: boolean;
+}) {
+  return (
+    <View style={[styles.signalMetric, compact ? styles.signalMetricCompact : null]}>
+      <Text style={styles.signalMetricLabel}>{label}</Text>
+      <Text style={[styles.signalMetricValue, caution ? styles.signalMetricValueCaution : null]} numberOfLines={1}>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -1212,6 +1140,211 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '900',
     marginTop: 2,
+  },
+  signalSurface: {
+    flex: 1,
+    minHeight: 0,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.amber}38`,
+    backgroundColor: ECS_SURFACE.background.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 10,
+    overflow: 'hidden',
+  },
+  signalSurfaceCompact: {
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  signalSweepLine: {
+    position: 'absolute',
+    left: '-14%',
+    top: '46%',
+    width: '128%',
+    height: 1,
+    backgroundColor: 'rgba(196,138,44,0.18)',
+    transform: [{ rotate: '-16deg' }],
+  },
+  signalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  signalTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  signalEyebrow: {
+    ...TYPO.U2,
+    color: `${TACTICAL.amber}CC`,
+    fontSize: 8,
+    letterSpacing: 1.1,
+  },
+  signalEyebrowCompact: {
+    fontSize: 6.8,
+    letterSpacing: 0.7,
+  },
+  signalTitle: {
+    color: TACTICAL.text,
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  signalTitleCompact: {
+    fontSize: 15,
+    lineHeight: 18,
+  },
+  signalStatusPill: {
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.default,
+    borderRadius: 8,
+    backgroundColor: ECS_SURFACE.background.compact,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  signalStatusPillLive: {
+    borderColor: 'rgba(73,209,122,0.52)',
+    backgroundColor: 'rgba(73,209,122,0.09)',
+  },
+  signalStatusPillText: {
+    color: TACTICAL.text,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+  },
+  signalMetricRow: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  signalMetric: {
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 8,
+    backgroundColor: ECS_SURFACE.background.compact,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  signalMetricCompact: {
+    paddingHorizontal: 5,
+    paddingVertical: 5,
+  },
+  signalMetricLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  signalMetricValue: {
+    color: TACTICAL.text,
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  signalMetricValueCaution: {
+    color: TACTICAL.amber,
+  },
+  signalMemberList: {
+    flex: 1,
+    minHeight: 0,
+    gap: 5,
+  },
+  signalMemberRow: {
+    minHeight: 28,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 7,
+    backgroundColor: 'rgba(5,9,13,0.68)',
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  signalMemberRowSelected: {
+    borderColor: `${TACTICAL.amber}88`,
+    backgroundColor: `${TACTICAL.amber}14`,
+  },
+  signalMemberDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+  },
+  signalMemberName: {
+    flex: 1,
+    minWidth: 0,
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  signalMemberStatus: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  signalEmptyState: {
+    flex: 1,
+    minHeight: 72,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 8,
+    backgroundColor: 'rgba(5,9,13,0.62)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    gap: 4,
+  },
+  signalEmptyTitle: {
+    color: TACTICAL.text,
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  signalEmptyBody: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  signalEmergencyRow: {
+    minHeight: 36,
+    borderWidth: 1,
+    borderColor: `${TACTICAL.danger}66`,
+    borderRadius: 8,
+    backgroundColor: 'rgba(226,77,77,0.1)',
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  signalEmergencyCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  signalEmergencyTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  signalEmergencyMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+    marginTop: 1,
+  },
+  signalFooterText: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+    textAlign: 'center',
   },
   commandSummary: {
     borderWidth: 1,

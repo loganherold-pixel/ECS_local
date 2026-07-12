@@ -77,6 +77,21 @@ import {
   saveNavigationHandoffPayload,
   type NavigationHandoffPayload,
 } from '../../lib/navigationHandoffStore';
+import {
+  buildDispatchAdvisoryCoordinateNavigationPayload as buildSharedDispatchAdvisoryCoordinateNavigationPayload,
+  buildRecoveryAssistNavigationPayload as buildSharedRecoveryAssistNavigationPayload,
+  formatRecoveryAccuracyLabel as formatSharedRecoveryAccuracyLabel,
+  formatRecoveryLocationTimestamp as formatSharedRecoveryLocationTimestamp,
+  getRecoveryCoordinateText as getSharedRecoveryCoordinateText,
+  getRecoveryCriticalDisplayCopy as getSharedRecoveryCriticalDisplayCopy,
+  getRecoveryCriticalLocationLabel as getSharedRecoveryCriticalLocationLabel,
+  getRecoveryHazardTypeLabel as getSharedRecoveryHazardTypeLabel,
+  getRecoveryLocationSourceLabel as getSharedRecoveryLocationSourceLabel,
+  isRecoveryAssistanceCadEvent as isSharedRecoveryAssistanceCadEvent,
+  isRecoveryCriticalDispatchEvent,
+  isValidDispatchMapCoordinate,
+  type DispatchMapCoordinate,
+} from '../../lib/dispatchRecoveryMapModel';
 import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
 import {
   hideDashboardDockReveal,
@@ -406,10 +421,7 @@ const THREAT_ACTION_LABELS: Record<ThreatActionId, string> = {
   request_assist: 'Request Assist',
 };
 
-type ThreatCoordinate = {
-  latitude: number;
-  longitude: number;
-};
+type ThreatCoordinate = DispatchMapCoordinate;
 
 type RecoveryAssistGpsFix = ThreatCoordinate & {
   timestamp: number;
@@ -553,33 +565,11 @@ function isThreatDrilldownEvent(event: DispatchEvent): boolean {
 }
 
 function isRecoveryCriticalEvent(event: DispatchEvent): boolean {
-  if (event.source === 'user_report') {
-    return false;
-  }
-
-  return (
-    event.status === 'recovery_critical' ||
-    event.priority === 'Recovery Critical' ||
-    event.category === 'recovery_assist' ||
-    event.category === 'hazard_recovery'
-  ) && event.severity === 'critical';
+  return isRecoveryCriticalDispatchEvent(event);
 }
 
 function isRecoveryAssistanceCadEvent(event: DispatchEvent): boolean {
-  const normalizedTitle = event.title.trim().toLowerCase();
-  const normalizedPriority = String(event.priority ?? '').trim().toLowerCase();
-  const normalizedStatus = String(event.status ?? '').trim().toLowerCase();
-
-  return (
-    event.type === 'recovery' ||
-    event.category === 'recovery_assist' ||
-    event.hazardType === 'recovery' ||
-    normalizedStatus === 'recovery_critical' ||
-    normalizedPriority === 'recovery critical' ||
-    normalizedTitle.includes('recovery assist') ||
-    normalizedTitle.includes('recovery request') ||
-    normalizedTitle.includes('recovery info')
-  );
+  return isSharedRecoveryAssistanceCadEvent(event);
 }
 
 function isProtectedCadEvent(event: DispatchEvent): boolean {
@@ -638,11 +628,7 @@ function isPersistableLocalDispatchEvent(event: DispatchEvent): boolean {
 }
 
 function getRecoveryCriticalDisplayCopy(event: DispatchEvent): string {
-  if (isRecoveryCriticalEvent(event)) {
-    return 'Recovery Assist Requested from Current GPS Position';
-  }
-
-  return event.message;
+  return getSharedRecoveryCriticalDisplayCopy(event);
 }
 
 function getRecoveryCriticalLocationLabel(event: DispatchEvent): string | null {
@@ -702,194 +688,38 @@ function getRecoveryCriticalSummary(event: DispatchEvent): string {
 }
 
 function formatRecoveryLocationTimestamp(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return null;
-  return new Date(parsed).toLocaleString('en-US', {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatSharedRecoveryLocationTimestamp(value);
 }
 
 function getRecoveryLocationAccuracyText(event: DispatchEvent): string | null {
-  const accuracy = event.location?.accuracyMeters;
-  if (typeof accuracy !== 'number' || !Number.isFinite(accuracy)) {
-    return null;
-  }
-
-  return `+/- ${Math.round(accuracy)}m`;
+  return formatSharedRecoveryAccuracyLabel(event.location?.accuracyMeters);
 }
 
 function getRecoveryHazardTypeLabel(event: DispatchEvent): string | null {
-  switch (event.hazardType) {
-    case 'weather':
-      return 'Weather';
-    case 'terrain':
-      return 'Terrain';
-    case 'trail_blockage':
-      return 'Trail Blockage';
-    case 'water_crossing':
-      return 'Water Crossing';
-    case 'recovery':
-      return 'Recovery';
-    case 'visibility':
-      return 'Visibility';
-    case 'other':
-      return 'Other';
-    default:
-      return null;
-  }
+  return getSharedRecoveryHazardTypeLabel(event);
 }
 
 function getRecoveryLocationSourceLabel(event: DispatchEvent): string {
-  switch (event.location?.source) {
-    case 'current_gps':
-      return 'Current GPS';
-    case 'last_known_gps':
-      return 'Last-known GPS';
-    default:
-      return 'GPS source unavailable';
-  }
+  return getSharedRecoveryLocationSourceLabel(event);
 }
 
 function getRecoveryCoordinateText(event: DispatchEvent): string | null {
-  if (!isValidCoordinate(event.location)) {
-    return null;
-  }
-
-  return `${event.location.latitude.toFixed(5)}, ${event.location.longitude.toFixed(5)}`;
+  return getSharedRecoveryCoordinateText(event);
 }
 
 function buildRecoveryAssistNavigationPayload(event: DispatchEvent): NavigationHandoffPayload {
-  if (!isRecoveryAssistanceCadEvent(event)) {
-    throw new Error('Recovery request location unavailable.');
-  }
-
-  if (!isValidCoordinate(event.location)) {
-    throw new Error('Recovery request location unavailable.');
-  }
-
-  const coordinate = {
-    lat: event.location.latitude,
-    lng: event.location.longitude,
-  };
-  const hazardType = getRecoveryHazardTypeLabel(event);
-  const displayCopy = getRecoveryCriticalDisplayCopy(event);
-  const title = event.title?.trim() || 'Active GPS Ping';
-
-  return {
-    id: `dispatch-recovery-${event.id}-${Date.now()}`,
-    source: 'dispatch',
-    type: 'place',
-    title,
-    subtitle: displayCopy,
-    coordinate,
-    trailheadCoordinate: null,
-    roadDestinationCoordinate: coordinate,
-    trailGeometry: [],
-    trailLengthMiles: null,
-    trailCategory: hazardType,
-    tripMode: 'road',
-    routeSource: 'dispatch_recovery',
-    requiresOnlineRouting: true,
-    trailWaypoints: [],
-    trailDecisionPoints: [],
-    routeMetadata: {
-      navigationMode: 'recovery_assist',
-      recoveryAssist: true,
-      activePing: true,
-      recoveryAssistEventId: event.id,
-      dispatchEventId: event.id,
-      cadReferenceId: event.cadReferenceId ?? null,
-      hazardType: event.hazardType ?? null,
-      severity: 'recovery_critical',
-      locationAccuracyMeters: event.location.accuracyMeters ?? null,
-      locationTimestamp: event.location.timestamp ?? null,
-      overrideActiveNavigation: true,
-      autoStartNavigation: true,
-    },
-    landmarkMetadata: null,
-    raw: {
-      source: 'dispatch_cad',
-      eventId: event.id,
-      title: event.title,
-      hazardType: event.hazardType ?? null,
-      severity: event.severity,
-      status: event.status ?? null,
-      category: event.category ?? null,
-      coordinate,
-      accuracyMeters: event.location.accuracyMeters ?? null,
-      locationTimestamp: event.location.timestamp ?? null,
-    },
-    createdAt: new Date().toISOString(),
-  };
+  return buildSharedRecoveryAssistNavigationPayload(event);
 }
 
 function buildDispatchAdvisoryCoordinateNavigationPayload(
   coordinate: DispatchAdvisoryCoordinate,
   event: DispatchEvent | null,
 ): NavigationHandoffPayload {
-  const roadCoordinate = {
-    lat: coordinate.latitude,
-    lng: coordinate.longitude,
-  };
-  const title = event?.title?.trim() || 'Dispatch Advisory GPS';
-  const subtitle = event?.message?.split('\n').map((line) => line.trim()).find(Boolean) ?? 'ECS advisory coordinate';
-
-  return {
-    id: `dispatch-advisory-coordinate-${event?.id ?? 'gps'}-${Date.now()}`,
-    source: 'dispatch',
-    type: 'place',
-    title,
-    subtitle,
-    coordinate: roadCoordinate,
-    trailheadCoordinate: null,
-    roadDestinationCoordinate: roadCoordinate,
-    trailGeometry: [],
-    trailLengthMiles: null,
-    trailCategory: 'Dispatch advisory',
-    tripMode: 'road',
-    routeSource: 'dispatch_recovery',
-    requiresOnlineRouting: true,
-    trailWaypoints: [],
-    trailDecisionPoints: [],
-    routeMetadata: {
-      navigationMode: 'dispatch_advisory_coordinate',
-      dispatchAdvisoryCoordinate: true,
-      dispatchEventId: event?.id ?? null,
-      sourceLabel: 'Dispatch advisory GPS',
-    },
-    landmarkMetadata: {
-      kind: 'dispatch_advisory_coordinate',
-      source: 'dispatch_advisory',
-    },
-    raw: {
-      source: 'dispatch_advisory',
-      eventId: event?.id ?? null,
-      title: event?.title ?? null,
-      severity: event?.severity ?? null,
-      coordinate: roadCoordinate,
-    },
-    createdAt: new Date().toISOString(),
-  };
+  return buildSharedDispatchAdvisoryCoordinateNavigationPayload(coordinate, event);
 }
 
 function isValidCoordinate(value: unknown): value is ThreatCoordinate {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-
-  const candidate = value as ThreatCoordinate;
-  return (
-    Number.isFinite(candidate.latitude) &&
-    Number.isFinite(candidate.longitude) &&
-    candidate.latitude >= -90 &&
-    candidate.latitude <= 90 &&
-    candidate.longitude >= -180 &&
-    candidate.longitude <= 180
-  );
+  return isValidDispatchMapCoordinate(value);
 }
 
 function validateRecoveryGpsFix(fix: RecoveryAssistGpsFix | null): RecoveryAssistGpsFix {
@@ -2187,9 +2017,6 @@ export default function DispatchCadCommandCenter() {
   const [activeConvoyControl, setActiveConvoyControl] = useState<ConvoyLifecycleControlState | null>(null);
   const [convoyLifecycleBusy, setConvoyLifecycleBusy] = useState(false);
   const [convoyLifecycleRevision, setConvoyLifecycleRevision] = useState(0);
-  const [mapCameraResetKey, setMapCameraResetKey] = useState(0);
-  const [dispatchConvoyMapFocusCoordinate, setDispatchConvoyMapFocusCoordinate] = useState<ThreatCoordinate | null>(null);
-  const [dispatchConvoyMapFocusKey, setDispatchConvoyMapFocusKey] = useState(0);
   const [pulsingAdvisoryId, setPulsingAdvisoryId] = useState<string | null>(null);
   const [teamSnapshot, setTeamSnapshot] = useState<TeamStoreSnapshot>(() => teamStore.getSnapshot());
   const [dispatchProfile, setDispatchProfile] = useState<DispatchProfileSnapshot>(() => dispatchProfileStore.getSnapshot());
@@ -2210,7 +2037,6 @@ export default function DispatchCadCommandCenter() {
   const recoveryCadLastRetryAtRef = useRef<Record<string, number>>({});
   const recoveryPingAlertedIdsRef = useRef<Set<string>>(new Set());
   const advisoryPulseSeenIdsRef = useRef<Set<string>>(new Set());
-  const wasDispatchFocusedRef = useRef(isDispatchFocused);
 
   useEffect(() => {
     setDashboardExpanded(isLandscapeDispatch);
@@ -2223,13 +2049,6 @@ export default function DispatchCadCommandCenter() {
     setDashboardExpanded(false);
     hideDashboardDockReveal();
   }, []);
-
-  useEffect(() => {
-    if (isDispatchFocused && !wasDispatchFocusedRef.current) {
-      setMapCameraResetKey((current) => current + 1);
-    }
-    wasDispatchFocusedRef.current = isDispatchFocused;
-  }, [isDispatchFocused]);
 
   const queuedCount = queueSize + dirtyCount;
   const activeTeamId = teamSnapshot.activeTeam?.id ?? null;
@@ -2283,7 +2102,6 @@ export default function DispatchCadCommandCenter() {
         if (!mounted) return;
         setActiveConvoyControl(nextControl);
         setConvoyLifecycleRevision((current) => current + 1);
-        setMapCameraResetKey((current) => current + 1);
       });
       return () => {
         mounted = false;
@@ -2850,14 +2668,6 @@ export default function DispatchCadCommandCenter() {
       return;
     }
 
-    if (activeConvoyControl?.convoyId) {
-      setDispatchConvoyMapFocusCoordinate(coordinate);
-      setDispatchConvoyMapFocusKey((current) => current + 1);
-      setMapCameraResetKey((current) => current + 1);
-      showToast?.('Convoy map centered on ECS advisory GPS.');
-      return;
-    }
-
     try {
       const payload = buildDispatchAdvisoryCoordinateNavigationPayload(coordinate, advisory);
       await saveNavigationHandoffPayload(payload);
@@ -2880,7 +2690,7 @@ export default function DispatchCadCommandCenter() {
     } catch (error) {
       showToast?.(error instanceof Error ? error.message : 'Advisory GPS route unavailable.');
     }
-  }, [activeConvoyControl?.convoyId, advisory, router, showToast]);
+  }, [advisory, router, showToast]);
 
   useEffect(() => {
     const signature = `${visibleEvents.length}:${createLiveDispatchEventListFingerprint(visibleEvents)}`;
@@ -3996,10 +3806,7 @@ export default function DispatchCadCommandCenter() {
           emergencyButtonTone={emergencyPingButtonTone}
           onEmergencyPing={handleEmergencyPingButtonPress}
           onOpenEmergencyEvent={handleOpenEmergencyPing}
-          presentation={isLandscapeDispatch ? 'map' : 'feed'}
-          cameraResetKey={mapCameraResetKey}
-          advisoryFocusCoordinate={dispatchConvoyMapFocusCoordinate}
-          advisoryFocusKey={dispatchConvoyMapFocusKey}
+          presentation={isLandscapeDispatch ? 'signals' : 'feed'}
           showEmergencyOverlay={false}
           convoyLifecycleRevision={convoyLifecycleRevision}
           testID="dispatch-convoy-command-feed-panel"

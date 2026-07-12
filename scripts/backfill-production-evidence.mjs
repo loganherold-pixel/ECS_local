@@ -339,8 +339,8 @@ function buildDashboardEvidence(options) {
         status: commandSwitching ? 'captured' : 'partial_attitude_only_or_missing_3d_nav_switching',
         references: commandRefs,
         notes: commandSwitching
-          ? 'Device captures show the Dashboard command module control, selected Attitude Command, and selectable Navigation Command / 3D follow map option.'
-          : 'Existing captures do not yet prove Attitude and 3D Navigation command switching on Android.',
+          ? 'Device captures show the Dashboard command module control, selected Attitude Command, and selectable Navigation Command status option.'
+          : 'Existing captures do not yet prove Attitude and Navigation Command switching on Android.',
       },
       sourceLabels: {
         status: sourceLabels ? 'captured' : 'partial_or_missing',

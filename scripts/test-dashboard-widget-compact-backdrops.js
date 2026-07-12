@@ -128,18 +128,18 @@ const navigationStageBlock = extractStyleBlock(source, 'attitudeStageNavigationC
 assert.ok(
   navigationStageBlock.includes("backgroundColor: 'transparent'") &&
     navigationStageBlock.includes("borderColor: 'transparent'"),
-  '3D follow map stage container must be transparent behind the Mapbox surface.',
+  'Navigation Command stage container must be transparent behind the status surface.',
 );
 
-const commandMapSurfaceBlock = extractStyleBlock(navigateSurfaceSource, 'commandMapSurface');
+const commandMapSurfaceBlock = extractStyleBlock(navigateSurfaceSource, 'commandContainer');
 assert.ok(
   commandMapSurfaceBlock.includes("backgroundColor: 'transparent'"),
-  'Mini 3D follow map container must not add an opaque background behind Mapbox.',
+  'Navigation Command container must not add an opaque background.',
 );
 
 assertIncludes(
   "selectedCommandCenterMode !== 'threeDNavigation' ? (",
-  'The 3D follow map must not render the center subtitle/title over the Mapbox surface.',
+  'The Navigation Command must not render the center subtitle/title over the command surface.',
 );
 
 console.log('Dashboard compact backdrop contract passed.');

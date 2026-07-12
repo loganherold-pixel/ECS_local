@@ -87,6 +87,26 @@ import { expeditionLaunchHandoffStore } from '../../lib/expeditionLaunchHandoffS
 import { expeditionStateStore } from '../../lib/expeditionStateStore';
 import { recordBriefCadEntry } from '../../lib/briefCadLogStore';
 import {
+  convoyMembershipService,
+  type ActiveConvoyContext,
+} from '../../lib/convoy/convoyMembershipService';
+import {
+  buildConvoyMapOverlayModel,
+  type ConvoyMapOverlayMarker,
+} from '../../lib/convoy/convoyMapOverlayModel';
+import {
+  refreshConvoyTrackingStaleness,
+  subscribeToConvoyLocations,
+  useConvoyTrackingStore,
+} from '../../stores/convoyTrackingStore';
+import { dispatchEventStore } from '../../lib/dispatchEventStore';
+import {
+  buildDispatchPingMapMarkers,
+  buildRecoveryAssistNavigationPayload,
+  type DispatchPingMapMarker,
+} from '../../lib/dispatchRecoveryMapModel';
+import type { DispatchEvent } from '../../lib/dispatchLiveEvents';
+import {
   getExploreFavoritesSnapshot,
   hydrateExploreFavoritesStore,
   removeFavoriteTrailBySourceId,
@@ -3666,6 +3686,15 @@ const [preflightRunId, setPreflightRunId] = useState<string | null>(null);
 const [preflightPayload, setPreflightPayload] = useState<NavigationHandoffPayload | null>(null);
 const [preflightLaunchConfirmVisible, setPreflightLaunchConfirmVisible] = useState(false);
 const [expeditionSessionRevision, setExpeditionSessionRevision] = useState(0);
+const convoyTrackingSnapshot = useConvoyTrackingStore();
+const [activeConvoyContext, setActiveConvoyContext] = useState<ActiveConvoyContext | null>(null);
+const [dispatchEvents, setDispatchEvents] = useState<DispatchEvent[]>(() => dispatchEventStore.getSnapshot());
+const [selectedConvoyMemberId, setSelectedConvoyMemberId] = useState<string | null>(null);
+const [selectedDispatchPingEventId, setSelectedDispatchPingEventId] = useState<string | null>(null);
+const [expeditionRuntime, setExpeditionRuntime] = useState(() => ({
+  state: expeditionStateStore.getState(),
+  record: expeditionStateStore.getCurrentExpedition(),
+}));
 
 // -- ECS UI State -----------------------------
 const [mapStyleMode, setMapStyleMode] = useState<NavigateMapStyleMode>(() => cachedMapStyleModePreference ?? 'day');
@@ -4262,9 +4291,96 @@ function buildRouteConfidenceInputFromPreview(args: {
     };
   }, [activeGuidanceEndpointHintOpacity]);
 
-  useEffect(() => expeditionStateStore.subscribe(() => {
+  const refreshNavigateActiveConvoyContext = useCallback(async () => {
+    try {
+      const context = await convoyMembershipService.getActiveConvoyContext();
+      if (mountedRef.current) {
+        setActiveConvoyContext(context);
+      }
+    } catch (error) {
+      console.warn('[Navigate] Active convoy context refresh failed', error);
+      if (mountedRef.current) {
+        setActiveConvoyContext(null);
+      }
+    }
+  }, []);
+
+  useEffect(() => expeditionStateStore.subscribe((state, record) => {
     setExpeditionSessionRevision((revision) => revision + 1);
+    setExpeditionRuntime({ state, record });
   }), []);
+
+  useEffect(() => dispatchEventStore.subscribe((events) => {
+    setDispatchEvents(events);
+  }), []);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void convoyMembershipService.getActiveConvoyContext()
+        .then((context) => {
+          if (!cancelled && mountedRef.current) {
+            setActiveConvoyContext(context);
+          }
+        })
+        .catch((error) => {
+          console.warn('[Navigate] Active convoy context focus refresh failed', error);
+          if (!cancelled && mountedRef.current) {
+            setActiveConvoyContext(null);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }, []),
+  );
+
+  useEffect(() => {
+    if (expeditionRuntime.state !== 'active') {
+      return;
+    }
+    void refreshNavigateActiveConvoyContext();
+  }, [expeditionRuntime.state, refreshNavigateActiveConvoyContext]);
+
+  useEffect(() => {
+    if (expeditionRuntime.state !== 'active' || !activeConvoyContext?.convoyId) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    void subscribeToConvoyLocations(activeConvoyContext.convoyId).catch((error) => {
+      if (!cancelled) {
+        console.warn('[Navigate] Convoy location subscription failed', error);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConvoyContext?.convoyId, expeditionRuntime.state]);
+
+  useEffect(() => {
+    if (expeditionRuntime.state !== 'active' || !activeConvoyContext?.convoyId) {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      refreshConvoyTrackingStaleness();
+    }, 30_000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [activeConvoyContext?.convoyId, expeditionRuntime.state]);
+
+  useEffect(() => {
+    if (expeditionRuntime.state === 'active' && activeConvoyContext?.convoyId) {
+      return;
+    }
+    setSelectedConvoyMemberId(null);
+    setSelectedDispatchPingEventId(null);
+  }, [activeConvoyContext?.convoyId, expeditionRuntime.state]);
 
 
 
@@ -21080,6 +21196,117 @@ const mapRendererCameraMode = destinationSearchMapFrozen ? undefined : mapCamera
 const mapRendererCameraCommand = destinationSearchMapFrozen ? null : mapCameraCommand;
 const mapRendererCameraCommandTrigger = destinationSearchMapFrozen ? 0 : mapCameraCommandTrigger;
 const mapRendererFollowReplay = !destinationSearchMapFrozen && isReplayActive && replayPlaying;
+const navigateConvoyOverlayEnabled =
+  expeditionRuntime.state === 'active' &&
+  !!activeConvoyContext?.convoyId &&
+  convoyTrackingSnapshot.convoyId === activeConvoyContext.convoyId;
+const navigateConvoyOverlay = useMemo(
+  () => buildConvoyMapOverlayModel({
+    members: navigateConvoyOverlayEnabled ? convoyTrackingSnapshot.members : [],
+    convoyId: activeConvoyContext?.convoyId ?? null,
+    currentUserMemberId: activeConvoyContext?.memberId ?? null,
+    connectionStatus: convoyTrackingSnapshot.connectionStatus,
+    selectedMemberId: selectedConvoyMemberId,
+    includeCurrentUser: !mapRendererShowUserLocation,
+  }),
+  [
+    activeConvoyContext?.convoyId,
+    activeConvoyContext?.memberId,
+    convoyTrackingSnapshot.connectionStatus,
+    convoyTrackingSnapshot.members,
+    mapRendererShowUserLocation,
+    navigateConvoyOverlayEnabled,
+    selectedConvoyMemberId,
+  ],
+);
+const navigateConvoyMarkers = navigateConvoyOverlay.markers;
+const navigateDispatchPingMarkers = useMemo(
+  () => expeditionRuntime.state === 'active'
+    ? buildDispatchPingMapMarkers({
+        events: dispatchEvents,
+        selectedEventId: selectedDispatchPingEventId,
+      })
+    : [],
+  [dispatchEvents, expeditionRuntime.state, selectedDispatchPingEventId],
+);
+const selectedConvoyMarker = useMemo(
+  () => selectedConvoyMemberId
+    ? navigateConvoyMarkers.find((marker) => marker.memberId === selectedConvoyMemberId) ?? null
+    : null,
+  [navigateConvoyMarkers, selectedConvoyMemberId],
+);
+const selectedDispatchPingMarker = useMemo(
+  () => selectedDispatchPingEventId
+    ? navigateDispatchPingMarkers.find((marker) => marker.eventId === selectedDispatchPingEventId) ?? null
+    : null,
+  [navigateDispatchPingMarkers, selectedDispatchPingEventId],
+);
+const selectedDispatchPingEvent = useMemo(
+  () => selectedDispatchPingEventId
+    ? dispatchEvents.find((event) => event.id === selectedDispatchPingEventId) ?? null
+    : null,
+  [dispatchEvents, selectedDispatchPingEventId],
+);
+
+useEffect(() => {
+  if (selectedConvoyMemberId && !navigateConvoyMarkers.some((marker) => marker.memberId === selectedConvoyMemberId)) {
+    setSelectedConvoyMemberId(null);
+  }
+}, [navigateConvoyMarkers, selectedConvoyMemberId]);
+
+useEffect(() => {
+  if (selectedDispatchPingEventId && !navigateDispatchPingMarkers.some((marker) => marker.eventId === selectedDispatchPingEventId)) {
+    setSelectedDispatchPingEventId(null);
+  }
+}, [navigateDispatchPingMarkers, selectedDispatchPingEventId]);
+
+const handleNavigateConvoyMemberTap = useCallback((marker: ConvoyMapOverlayMarker) => {
+  hapticMicro();
+  setSelectedConvoyMemberId(marker.memberId);
+  setSelectedDispatchPingEventId(null);
+  fitMapToCoordinatePreview(
+    { lat: marker.latitude, lng: marker.longitude },
+    72,
+    'navigate_convoy_member_focus',
+  );
+}, [fitMapToCoordinatePreview]);
+
+const handleNavigateDispatchPingTap = useCallback((marker: DispatchPingMapMarker) => {
+  hapticMicro();
+  setSelectedDispatchPingEventId(marker.eventId);
+  setSelectedConvoyMemberId(null);
+  fitMapToCoordinatePreview(
+    { lat: marker.latitude, lng: marker.longitude },
+    76,
+    'navigate_dispatch_ping_focus',
+  );
+}, [fitMapToCoordinatePreview]);
+
+const handleRouteToSelectedDispatchPing = useCallback(async () => {
+  const event = selectedDispatchPingEvent;
+  if (!event) {
+    showToast('RECOVERY REQUEST LOCATION UNAVAILABLE');
+    return;
+  }
+
+  try {
+    hapticCommand();
+    const payload = buildRecoveryAssistNavigationPayload(event);
+    pendingAutoStartRouteIdRef.current = payload.id;
+    setFollowUser(true);
+    await applyExploreNavigationPayload(payload);
+    showToast('RECOVERY ASSIST ROUTE STAGED');
+  } catch (error) {
+    const message = error instanceof Error && error.message.trim()
+      ? error.message
+      : 'Recovery request location unavailable.';
+    showToast(message.toUpperCase());
+  }
+}, [
+  applyExploreNavigationPayload,
+  selectedDispatchPingEvent,
+  showToast,
+]);
 const activeRerouteMapStandby =
   Platform.OS === 'android' &&
   routeLifecycleState.phase === 'navigating' &&
@@ -21148,6 +21375,10 @@ const mapRendererElement = useMemo(() => (
     campIntelMarkers={combinedCampMarkers}
     campEndpointMarkers={sharedCampPinMapMarkers}
     tiltAlertMarkers={mapTiltAlertMarkers}
+    convoyMarkers={navigateConvoyMarkers}
+    dispatchPingMarkers={navigateDispatchPingMarkers}
+    onConvoyMemberTap={handleNavigateConvoyMemberTap}
+    onDispatchPingTap={handleNavigateDispatchPingTap}
     cameraMode={mapRendererCameraMode}
     cameraCommand={mapRendererCameraCommand}
     cameraCommandTrigger={mapRendererCameraCommandTrigger}
@@ -21204,6 +21435,8 @@ const mapRendererElement = useMemo(() => (
   handleMapLifecycleMetrics,
   handleMapRetry,
   handleMapSegmentTap,
+  handleNavigateConvoyMemberTap,
+  handleNavigateDispatchPingTap,
   handlePinTap,
   handleRoadClassification,
   handleRouteBuilderGestureStateChange,
@@ -21226,6 +21459,8 @@ const mapRendererElement = useMemo(() => (
   mapRendererShowUserLocation,
   mapRendererUserLocation,
   mapRendererVehicleHeading,
+  navigateConvoyMarkers,
+  navigateDispatchPingMarkers,
   navigateMapMotion.motionPriority,
   navigateMvumMapOverlay,
   navigateMvumStitchedRoutePreview,
@@ -23507,6 +23742,123 @@ const stableMapSurface = useMemo(() => {
         {campOpsRouteLifecycleNotice}
       </Text>
     </Animated.View>
+  ) : null}
+
+  {(selectedConvoyMarker || selectedDispatchPingMarker) && isMapUIReady ? (
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.dispatchMapOverlayCardWrap,
+        {
+          top: MAP_TOP_CONTROL_ROW + 54,
+          right: OVERLAY_EDGE,
+          left: adaptive.isExpanded ? undefined : OVERLAY_EDGE,
+          maxWidth: adaptive.isExpanded ? 348 : undefined,
+        },
+      ]}
+    >
+      {selectedConvoyMarker ? (
+        <View
+          style={[
+            styles.dispatchMapOverlayCard,
+            selectedConvoyMarker.isEmergency && styles.dispatchMapOverlayCardEmergency,
+          ]}
+          testID="navigate-convoy-member-overlay-card"
+        >
+          <View style={styles.dispatchMapOverlayHeader}>
+            <View style={styles.dispatchMapOverlayTitleWrap}>
+              <Text style={styles.dispatchMapOverlayEyebrow}>CONVOY GPS</Text>
+              <Text style={styles.dispatchMapOverlayTitle} numberOfLines={1}>
+                {selectedConvoyMarker.callsign || selectedConvoyMarker.displayName}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.dispatchMapOverlayCloseButton}
+              onPress={() => setSelectedConvoyMemberId(null)}
+              activeOpacity={0.78}
+              hitSlop={CLOSE_CONTROL_HIT_SLOP}
+              accessibilityRole="button"
+              accessibilityLabel="Close convoy member detail"
+            >
+              <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.dispatchMapOverlayStatusRow}>
+            <Text style={styles.dispatchMapOverlayStatusPill}>
+              {selectedConvoyMarker.roleLabel}
+            </Text>
+            <Text
+              style={[
+                styles.dispatchMapOverlayStatusPill,
+                selectedConvoyMarker.isEmergency
+                  ? styles.dispatchMapOverlayStatusDanger
+                  : (selectedConvoyMarker.isStale || selectedConvoyMarker.isOffline || selectedConvoyMarker.isDelayed)
+                    ? styles.dispatchMapOverlayStatusCaution
+                    : styles.dispatchMapOverlayStatusLive,
+              ]}
+            >
+              {selectedConvoyMarker.statusLabel}
+            </Text>
+          </View>
+          <Text style={styles.dispatchMapOverlayMeta} numberOfLines={2}>
+            {selectedConvoyMarker.displayName}
+          </Text>
+          <Text style={styles.dispatchMapOverlayMeta} numberOfLines={2}>
+            {selectedConvoyMarker.sourceLabel} | {selectedConvoyMarker.lastUpdatedLabel}
+          </Text>
+          {selectedConvoyMarker.staleReason ? (
+            <Text style={styles.dispatchMapOverlayWarning} numberOfLines={2}>
+              {selectedConvoyMarker.staleReason}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+
+      {selectedDispatchPingMarker ? (
+        <View
+          style={[styles.dispatchMapOverlayCard, styles.dispatchMapOverlayCardEmergency]}
+          testID="navigate-dispatch-ping-overlay-card"
+        >
+          <View style={styles.dispatchMapOverlayHeader}>
+            <View style={styles.dispatchMapOverlayTitleWrap}>
+              <Text style={styles.dispatchMapOverlayEyebrow}>ACTIVE GPS PING</Text>
+              <Text style={styles.dispatchMapOverlayTitle} numberOfLines={1}>
+                {selectedDispatchPingMarker.title}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.dispatchMapOverlayCloseButton}
+              onPress={() => setSelectedDispatchPingEventId(null)}
+              activeOpacity={0.78}
+              hitSlop={CLOSE_CONTROL_HIT_SLOP}
+              accessibilityRole="button"
+              accessibilityLabel="Close GPS ping detail"
+            >
+              <Ionicons name="close" size={14} color={TACTICAL.textMuted} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.dispatchMapOverlayMeta} numberOfLines={2}>
+            {selectedDispatchPingMarker.subtitle}
+          </Text>
+          <Text style={styles.dispatchMapOverlayMeta} numberOfLines={2}>
+            {selectedDispatchPingMarker.sourceLabel} | {selectedDispatchPingMarker.timestampLabel}
+            {selectedDispatchPingMarker.accuracyLabel ? ` | ${selectedDispatchPingMarker.accuracyLabel}` : ''}
+          </Text>
+          <View style={styles.dispatchMapOverlayActions}>
+            <TouchableOpacity
+              style={styles.dispatchMapOverlayRouteButton}
+              onPress={handleRouteToSelectedDispatchPing}
+              activeOpacity={0.84}
+              accessibilityRole="button"
+              accessibilityLabel="Route to active GPS ping"
+            >
+              <Ionicons name="navigate-outline" size={13} color="#081014" />
+              <Text style={styles.dispatchMapOverlayRouteButtonText}>ROUTE TO PING</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+    </View>
   ) : null}
 
   <EstablishedCampsitesRouteSummary
@@ -25842,6 +26194,147 @@ mapTopOverlayLayer: {
   zIndex: NAV_OVERLAY_Z.topStatus,
   elevation: NAV_OVERLAY_Z.topStatus,
   pointerEvents: 'box-none',
+},
+
+dispatchMapOverlayCardWrap: {
+  position: 'absolute',
+  zIndex: NAV_OVERLAY_Z.contextual + 3,
+  elevation: NAV_OVERLAY_Z.contextual + 3,
+  gap: 8,
+  pointerEvents: 'box-none',
+},
+
+dispatchMapOverlayCard: {
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: 'rgba(101,212,255,0.28)',
+  backgroundColor: 'rgba(8,12,15,0.95)',
+  paddingHorizontal: 11,
+  paddingVertical: 10,
+  gap: 7,
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 10 },
+  shadowOpacity: 0.30,
+  shadowRadius: 16,
+},
+
+dispatchMapOverlayCardEmergency: {
+  borderColor: 'rgba(239,83,80,0.42)',
+  backgroundColor: 'rgba(18,8,8,0.96)',
+},
+
+dispatchMapOverlayHeader: {
+  flexDirection: 'row',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 10,
+},
+
+dispatchMapOverlayTitleWrap: {
+  flex: 1,
+  minWidth: 0,
+},
+
+dispatchMapOverlayEyebrow: {
+  ...TYPO.U2,
+  color: TACTICAL.amber,
+  fontSize: 8,
+  letterSpacing: 1,
+},
+
+dispatchMapOverlayTitle: {
+  ...TYPO.T3,
+  color: TACTICAL.text,
+  fontSize: 14,
+  lineHeight: 18,
+  marginTop: 2,
+},
+
+dispatchMapOverlayCloseButton: {
+  width: 28,
+  height: 28,
+  borderRadius: 14,
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.08)',
+  backgroundColor: 'rgba(255,255,255,0.035)',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+dispatchMapOverlayStatusRow: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  gap: 6,
+},
+
+dispatchMapOverlayStatusPill: {
+  ...TYPO.U2,
+  color: TACTICAL.text,
+  fontSize: 8,
+  letterSpacing: 0.8,
+  borderRadius: 7,
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.10)',
+  backgroundColor: 'rgba(255,255,255,0.05)',
+  paddingHorizontal: 7,
+  paddingVertical: 4,
+  overflow: 'hidden',
+},
+
+dispatchMapOverlayStatusLive: {
+  color: '#66BB6A',
+  borderColor: 'rgba(102,187,106,0.32)',
+  backgroundColor: 'rgba(102,187,106,0.10)',
+},
+
+dispatchMapOverlayStatusCaution: {
+  color: TACTICAL.amber,
+  borderColor: 'rgba(242,194,77,0.34)',
+  backgroundColor: 'rgba(242,194,77,0.10)',
+},
+
+dispatchMapOverlayStatusDanger: {
+  color: '#EF5350',
+  borderColor: 'rgba(239,83,80,0.38)',
+  backgroundColor: 'rgba(239,83,80,0.12)',
+},
+
+dispatchMapOverlayMeta: {
+  ...TYPO.B2,
+  color: TACTICAL.textMuted,
+  fontSize: 10,
+  lineHeight: 14,
+},
+
+dispatchMapOverlayWarning: {
+  ...TYPO.B2,
+  color: TACTICAL.amber,
+  fontSize: 10,
+  lineHeight: 14,
+},
+
+dispatchMapOverlayActions: {
+  flexDirection: 'row',
+  justifyContent: 'flex-end',
+  gap: 8,
+},
+
+dispatchMapOverlayRouteButton: {
+  minHeight: 32,
+  borderRadius: 8,
+  backgroundColor: TACTICAL.amber,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  paddingHorizontal: 10,
+},
+
+dispatchMapOverlayRouteButtonText: {
+  ...TYPO.U2,
+  color: '#081014',
+  fontSize: 8,
+  letterSpacing: 0.8,
 },
 
 mapFloatingControlsLayer: {

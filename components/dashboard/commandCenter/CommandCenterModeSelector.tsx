@@ -16,7 +16,7 @@ type Props = {
 function getModeLabel(mode: CommandCenterMode): string {
   switch (mode) {
     case 'threeDNavigation':
-      return 'NAV 3D';
+      return 'NAV';
     case 'attitude':
     default:
       return 'ATTITUDE';

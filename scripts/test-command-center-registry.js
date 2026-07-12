@@ -5,7 +5,9 @@ const Module = require('module');
 const ts = require('typescript');
 
 const repoRoot = path.resolve(__dirname, '..');
-const commandStoreSource = fs.readFileSync(path.join(repoRoot, 'lib/ecsCommandModuleStore.ts'), 'utf8');
+const commandStoreSource = fs
+  .readFileSync(path.join(repoRoot, 'lib/ecsCommandModuleStore.ts'), 'utf8')
+  .replace(/\r\n/g, '\n');
 
 function loadTsModule(relativePath, mocks = {}) {
   const filename = path.join(repoRoot, relativePath);
@@ -90,8 +92,9 @@ assert(commandStoreSource.includes('normalizeECSCommandModuleId(stored)'));
 assert(commandStoreSource.includes("if (value === 'convoyCommand' || value === 'convoy-command') return null;"));
 assert(
   commandStoreSource.includes("export const ECS_COMMAND_MODULE_ORDER: ECSCommandModuleId[] = [\n  'follow3d',\n  'attitude',\n];"),
-  'Command module selector should expose Attitude and 3D Nav Command.',
+  'Command module selector should expose Attitude and Navigation Command.',
 );
+assert(commandStoreSource.includes("label: 'Navigation Command'"));
 for (const retiredLabel of [
   'Terrain Risk',
   'Recovery / Hazard Compass',

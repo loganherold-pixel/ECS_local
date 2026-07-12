@@ -34,9 +34,9 @@ export const COMMAND_CENTER_WIDGET_REGISTRY: Partial<Record<CommandCenterWidgetI
   },
   threeDNavigation: {
     id: 'threeDNavigation',
-    label: '3D Navigation Command',
-    shortLabel: '3D Nav',
-    description: '3D route-follow command surface for active or previewed guidance.',
+    label: 'Navigation Command',
+    shortLabel: 'Nav',
+    description: 'Navigation command status surface for active or previewed guidance.',
     iconName: 'navigate-outline',
     defaultAvailability: 'partial',
     requiredCapabilities: ['navigationRoute'],

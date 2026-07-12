@@ -542,20 +542,18 @@ assert.ok(convoyPanelSource.includes('InactiveConvoySurface'), 'Dispatch convoy 
 assert.ok(convoyPanelSource.includes('No Active Convoy'), 'Inactive convoy state should explicitly tell the user no convoy is active.');
 assert.ok(
   convoyPanelSource.includes('hasActiveConvoy ?') &&
-    convoyPanelSource.includes('<ConvoyCommandMap') &&
+    convoyPanelSource.includes('<ConvoySignalSurface') &&
     convoyPanelSource.includes('<InactiveConvoySurface'),
-  'Dispatch convoy panel should preserve the active map and only swap to standby presentation when no convoy is active.',
+  'Dispatch convoy panel should preserve active signal status and only swap to standby presentation when no convoy is active.',
 );
 assert.ok(commandCenterSource.includes('tokenizeDispatchAdvisoryCoordinateLinks'), 'Dispatch advisory banner should tokenize GPS coordinates into linkable spans.');
 assert.ok(commandCenterSource.includes('handleDispatchAdvisoryCoordinatePress'), 'Dispatch advisory coordinate links should have a click handler.');
-assert.ok(commandCenterSource.includes('setDispatchConvoyMapFocusCoordinate'), 'Dispatch advisory coordinate links should focus the Dispatch convoy map when active.');
-assert.ok(commandCenterSource.includes('saveNavigationHandoffPayload(payload)'), 'Dispatch advisory coordinate fallback should stage a Navigate handoff.');
+assert.ok(!commandCenterSource.includes('setDispatchConvoyMapFocusCoordinate'), 'Dispatch advisory coordinate links should not focus a Dispatch convoy map.');
+assert.ok(commandCenterSource.includes('saveNavigationHandoffPayload(payload)'), 'Dispatch advisory coordinate links should stage a Navigate handoff.');
 assert.ok(commandCenterSource.includes('accessibilityRole="link"'), 'Dispatch advisory GPS coordinate should render as an accessible link.');
 assert.ok(commandCenterSource.includes('advisoryCoordinateLink'), 'Dispatch advisory GPS coordinate should use a distinct underline/link style.');
 assert.ok(!/numberOfLines=\{isLandscapeDispatch \? 2 : 3\}>\{advisory\.message\}/.test(commandCenterSource), 'Dispatch advisory should not truncate the third line with a hard numberOfLines cap.');
-assert.ok(convoyPanelSource.includes('advisoryFocusCoordinate'), 'Dispatch convoy panel should accept advisory map focus coordinates.');
-assert.ok(convoyMapSource.includes('advisoryFocusCoordinate'), 'Convoy command map should accept advisory map focus coordinates.');
-assert.ok(convoyMapSource.includes('convoy-advisory-focus-source'), 'Convoy command map should render the advisory focus marker source.');
+assert.ok(!convoyPanelSource.includes('advisoryFocusCoordinate'), 'Dispatch convoy panel should not accept advisory map focus coordinates.');
 assert.ok(convoyPanelSource.includes('shouldShowIntegratedEmergencyFeed'), 'Emergency pings should be integrated into the Dispatch Convoy Command container.');
 assert.ok(convoyPanelSource.includes('styles.emergencyInlineRail'), 'Emergency pings should use a compact inline rail instead of a separate bottom panel.');
 assert.ok(!convoyPanelSource.includes('{shouldShowEmergencyFeed ? ('), 'Emergency pings should no longer render as a separate bottom block.');

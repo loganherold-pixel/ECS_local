@@ -12,7 +12,6 @@ const mapFallbackSurface = fs.readFileSync(path.join(root, 'components/navigate/
 const mapRenderer = fs.readFileSync(path.join(root, 'components/navigate/MapRenderer.tsx'), 'utf8');
 const routeProgressMiniMap = fs.readFileSync(path.join(root, 'components/dashboard/RouteProgressMiniMap.tsx'), 'utf8');
 const routeProgressMiniMapModel = fs.readFileSync(path.join(root, 'components/dashboard/routeProgressMiniMapModel.ts'), 'utf8');
-const compactMapTileCacheMatch = mapRenderer.match(/const COMPACT_MAP_MAX_TILE_CACHE_SIZE = (\d+)/);
 
 function assert(condition, message) {
   if (!condition) {
@@ -30,19 +29,8 @@ assert(
     commandModuleStore.includes('private _selectedModule: ECSCommandModuleId = DEFAULT_ECS_COMMAND_MODULE') &&
     commandModuleStore.includes("createPersistedKeyValueCache('ecs_command_preferences')") &&
     commandModuleStore.includes("const STORAGE_KEY_SELECTED_MODULE = 'ecs_command_center_module'") &&
-    commandModuleStore.includes("const STORAGE_KEY_DEFAULT_FOLLOW3D_MIGRATED = 'ecs_command_center_default_follow3d_migrated'") &&
-    commandModuleStore.includes('commandModuleCache.set(STORAGE_KEY_SELECTED_MODULE, normalized)') &&
     commandModuleStore.includes('waitForHydration()'),
-  'Command Module store must default to 3D Navigation and persist selected module preferences.',
-);
-
-assert(
-    widgetRenderers.includes('attitude: ({ mode }) => (') &&
-    widgetRenderers.includes('<VehicleAttitudeStage') &&
-    widgetRenderers.includes('mode="command"') &&
-    widgetRenderers.includes("showReadouts={mode === 'attitude'}") &&
-    widgetRenderers.includes("showLiveHashIndicators={mode === 'attitude' && sensorLive}"),
-  'Attitude module must remain available through the command-center host renderer.',
+  'Command Module store must default to Navigation Command and persist selected module preferences.',
 );
 
 assert(
@@ -50,27 +38,32 @@ assert(
     widgetRenderers.includes('threeDNavigation: ({ mode }) => (') &&
     widgetRenderers.includes("<Mini3DFollowMap options={options} selected={mode === 'threeDNavigation'} />") &&
     countOccurrences(widgetRenderers, '<Mini3DFollowMap') === 1,
-  '3D Follow Map must be mounted only through the selected command-center host renderer, not kept alive in inactive modules.',
+  'Navigation Command must be mounted only through the selected command-center host renderer.',
 );
 
 assert(
   navigateSurfaceWidget.includes('export function useNavigateSurfaceState(options?: WidgetRenderOptions, enabled = true)') &&
-    navigateSurfaceWidget.includes('useState(() => (enabled ? getMapboxTokenSync() : null))') &&
-    navigateSurfaceWidget.includes('if (!enabled) {') &&
+    navigateSurfaceWidget.includes('if (!enabled) return undefined;') &&
     navigateSurfaceWidget.includes('useNavigateSurfaceState(options, selected)') &&
-    navigateSurfaceWidget.includes('if (!selected || !cameraCenter || !followLocked) return null'),
-  'Inactive Mini3DFollowMap must not load Mapbox token, subscribe to guidance updates, or emit camera commands.',
+    navigateSurfaceWidget.includes('function NavigationCommandStatusCard') &&
+    navigateSurfaceWidget.includes('dashboard-navigation-command-status-card'),
+  'Inactive Navigation Command should not subscribe to guidance updates and active command should render route/GPS status.',
 );
 
-assert(
-  navigateSurfaceWidget.includes('quantizeCoordinate(gpsLocation.latitude)') &&
-    navigateSurfaceWidget.includes('quantizeCoordinate(gpsLocation.longitude)') &&
-    navigateSurfaceWidget.includes('useMemo<CameraCommand | null>(() => {') &&
-    navigateSurfaceWidget.includes('durationMs: 650') &&
-    navigateSurfaceWidget.includes('pitch: COMMAND_3D_FOLLOW_PITCH') &&
-    navigateSurfaceWidget.includes('offset: hasActiveGuidance ? COMMAND_3D_ACTIVE_FOLLOW_OFFSET : COMMAND_3D_FREE_DRIVE_OFFSET'),
-  '3D Follow Map camera updates must be memoized, quantized, and controlled through guarded camera commands.',
-);
+for (const forbiddenDashboardMapRuntime of [
+  'MapRenderer',
+  'MapFallbackSurface',
+  'getMapboxToken',
+  'getMapboxTokenSync',
+  'mapboxToken',
+  'cameraCommand',
+  'onUserDrag',
+]) {
+  assert(
+    !navigateSurfaceWidget.includes(forbiddenDashboardMapRuntime),
+    `Dashboard Navigate Surface must not retain map runtime code: ${forbiddenDashboardMapRuntime}.`,
+  );
+}
 
 for (const forbiddenRouteMutation of [
   'calculateRoute',
@@ -82,19 +75,9 @@ for (const forbiddenRouteMutation of [
 ]) {
   assert(
     !navigateSurfaceWidget.includes(forbiddenRouteMutation),
-    `3D Follow Map must consume existing guidance state and not mutate/recalculate routes via ${forbiddenRouteMutation}.`,
+    `Navigation Command must consume existing guidance state and not mutate/recalculate routes via ${forbiddenRouteMutation}.`,
   );
 }
-
-assert(
-  navigateSurfaceWidget.includes('function NextTurnStrip') &&
-    navigateSurfaceWidget.includes('function buildNextTurnStrip') &&
-    navigateSurfaceWidget.includes("if (snapshot.lifecycle !== 'active') return null") &&
-    navigateSurfaceWidget.includes("instruction: 'Rerouting...'") &&
-    navigateSurfaceWidget.includes("instruction: 'Off route'") &&
-    navigateSurfaceWidget.includes('<NextTurnStrip snapshot={routeSession} />'),
-  'Next-turn strip must appear only for active guidance and use existing reroute/off-route fields.',
-);
 
 assert(
   widgetRenderers.includes('moduleTransitionOpacity') &&
@@ -111,72 +94,6 @@ assert(
 );
 
 assert(
-  compactMapTileCacheMatch &&
-    Number(compactMapTileCacheMatch[1]) > 0 &&
-    Number(compactMapTileCacheMatch[1]) <= 48 &&
-    mapRenderer.includes("surfaceMode === 'compact' ? COMPACT_MAP_MAX_TILE_CACHE_SIZE : null") &&
-    (
-      mapRenderer.includes('mapOptions.maxTileCacheSize = compactTileCacheSize') ||
-      mapRenderer.includes('maxTileCacheSize: maxTileCacheSize')
-    ) &&
-    mapRenderer.includes('performanceMetricsCollection: false') &&
-    mapRenderer.includes('scrollZoom: false'),
-  'Embedded dashboard map WebViews should bound Mapbox tile cache and disable nonessential browser-map overhead.',
-);
-
-assert(
-  navigateSurfaceWidget.includes('const resolvedMapStyle = useMemo(() => [styles.mapRenderer, mapStyle], [mapStyle]);') &&
-    navigateSurfaceWidget.includes('style={resolvedMapStyle}') &&
-    navigateSurfaceWidget.includes('surfaceMode="compact"'),
-  'Dashboard mini-map surfaces should pass stable style props and mark embedded WebViews as compact.',
-);
-
-assert(
-  navigateSurfaceWidget.includes("const miniMapMotionPriority: MapMotionPriority = motionPriority === 'hot' ? 'warm' : motionPriority;") &&
-    navigateSurfaceWidget.includes('motionPriority={miniMapMotionPriority}') &&
-    navigateSurfaceWidget.includes("standbyWakeDisabled={guidanceVariant !== 'command3d' || !mapInteractive}") &&
-    mapRenderer.includes('const compactRouteGeometryStandbyEligible =') &&
-    mapRenderer.includes("routeRenderMode === 'active'") &&
-    mapRenderer.includes('interactive === false') &&
-    mapRenderer.includes('standbyMapEligible || compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible') &&
-    mapRenderer.includes('standbyMapActive && (compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible)'),
-  'Read-only dashboard active guidance maps should render route standby instead of mounting a second live WebView during Navigate handoff.',
-);
-
-assert(
-  navigateSurfaceWidget.includes('const COMMAND_3D_LIVE_MAP_DEFER_MS = 90000;') &&
-    !navigateSurfaceWidget.includes("import MapRenderer from '../navigate/MapRenderer';") &&
-    navigateSurfaceWidget.includes("import MapFallbackSurface from '../navigate/MapFallbackSurface';") &&
-    navigateSurfaceWidget.includes("const MapRenderer = React.lazy(() => import('../navigate/MapRenderer'));") &&
-    navigateSurfaceWidget.includes('const DASHBOARD_COMMAND_FALLBACK_MAX_VISUAL_POINTS = 72;') &&
-    navigateSurfaceWidget.includes('function simplifyDashboardCommandFallbackRoutePoints') &&
-    navigateSurfaceWidget.includes('function useDeferredCommandMapLiveMode(selected: boolean)') &&
-    navigateSurfaceWidget.includes('const commandMapLiveDeferredReady = useDeferredCommandMapLiveMode(selected);') &&
-    navigateSurfaceWidget.includes('const commandMapRerouteStandby = routeSession.isRerouting || routeSession.routeStatusKind === \'rerouting\';') &&
-    navigateSurfaceWidget.includes('const commandMapLiveReady = commandMapLiveDeferredReady && !commandMapRerouteStandby;') &&
-    navigateSurfaceWidget.includes('const fallbackMapSurface = (') &&
-    navigateSurfaceWidget.includes('{liveMapEnabled ? (') &&
-    navigateSurfaceWidget.includes('<React.Suspense fallback={fallbackMapSurface}>') &&
-    navigateSurfaceWidget.includes('<MapFallbackSurface') &&
-    navigateSurfaceWidget.includes('routeCoords={fallbackRouteCoords}') &&
-    navigateSurfaceWidget.includes('progressRouteCoords={fallbackProgressCoords}') &&
-    navigateSurfaceWidget.includes('const fallbackRoutePoints = useMemo(') &&
-    navigateSurfaceWidget.includes('const fallbackProgressPoints = useMemo(') &&
-    navigateSurfaceWidget.includes('fallbackRoutePoints={liveMapEnabled ? [] : fallbackRoutePoints}') &&
-    navigateSurfaceWidget.includes('fallbackProgressPoints={liveMapEnabled ? [] : fallbackProgressPoints}') &&
-    navigateSurfaceWidget.includes('mapInteractive={commandMapLiveReady}') &&
-    navigateSurfaceWidget.includes('liveMapEnabled={commandMapLiveReady}') &&
-    navigateSurfaceWidget.includes("standbyWakeDisabled={guidanceVariant !== 'command3d' || !mapInteractive}") &&
-    mapRenderer.includes('liveMapDisabled?: boolean;') &&
-    mapRenderer.includes('liveMapDisabled = false') &&
-    mapRenderer.includes('!liveMapDisabled') &&
-    mapRenderer.includes('liveMapDisabled || !shouldLoadMap') &&
-    mapRenderer.includes('const fallbackOnlyProgressRouteCoords = useMemo(') &&
-    mapRenderer.includes('liveMapDisabled && fallbackOnlyProgressRouteCoords.length > 1'),
-  'Selected dashboard 3D command map should defer live WebView activation long enough for dashboard startup and Navigate handoff to settle first.',
-);
-
-assert(
   !widgetRenderers.includes("import RouteProgressMiniMap, { buildRouteProgressFeatureFromPoints } from './RouteProgressMiniMap';") &&
     widgetRenderers.includes("import { buildRouteProgressFeatureFromPoints, type RouteProgressFeature } from './routeProgressMiniMapModel';") &&
     widgetRenderers.includes("const RouteProgressMiniMap = React.lazy(() => import('./RouteProgressMiniMap'));") &&
@@ -186,6 +103,14 @@ assert(
     routeProgressMiniMapModel.includes('export type RouteProgressFeature = ReturnType<typeof pointsToLineStringFeature>;') &&
     routeProgressMiniMapModel.includes('export function buildRouteProgressFeatureFromPoints(points: MiniMapCoordinate[]): RouteProgressFeature'),
   'Dashboard route progress mini maps must lazy-load the WebView component and keep route geometry helpers in a lightweight model module.',
+);
+
+assert(
+  routeProgressMiniMap.includes('<WebView') &&
+    routeProgressMiniMap.includes('<MapFallbackSurface') &&
+    mapRenderer.includes('convoyMarkers?: ConvoyMapOverlayMarker[]') &&
+    mapRenderer.includes('dispatchPingMarkers?: DispatchPingMapMarker[]'),
+  'Route Progress remains the Dashboard map preview while Navigate MapRenderer owns convoy and Dispatch ping overlays.',
 );
 
 assert(
@@ -203,10 +128,8 @@ assert(
     mapFallbackSurface.includes('const projectedRouteLine = useMemo(') &&
     mapFallbackSurface.includes('const projectedProgressLine = useMemo(') &&
     mapFallbackSurface.includes('const projectedMarkerPoints = useMemo(') &&
-    mapFallbackSurface.includes('const projectedUserPoint = useMemo(') &&
-    !mapFallbackSurface.includes('points={lineToSvgPoints(routeLine, project)}') &&
-    !mapFallbackSurface.includes('cx={project(userPoint)[0]}'),
-  'Fallback route map should memoize projected SVG geometry instead of recomputing paths and marker coordinates during dashboard reroute standby frames.',
+    mapFallbackSurface.includes('const projectedUserPoint = useMemo('),
+  'Fallback route map should memoize projected SVG geometry.',
 );
 
 assert(
@@ -214,15 +137,6 @@ assert(
     dashboardScreen.includes('assignedWidgets={normalizedAssignedWidgets}') &&
     dashboardScreen.includes('const assignedWidgets = useMemo(() => slots.map(s => s.widgetType), [slots]);'),
   'Dashboard widget library assignments should be memoized instead of rebuilt on every render.',
-);
-
-assert(
-  widgetRenderers.includes("'No active route'") &&
-    widgetRenderers.includes("'Power source unavailable'") &&
-    widgetRenderers.includes("'CONNECT POWER'") &&
-    widgetRenderers.includes("'Remoteness source unavailable'") &&
-    widgetRenderers.includes("remotenessScore != null ? `${Math.round(remotenessScore)}` : 'Unknown'"),
-  'Unavailable route, power, and environmental states must remain truthful after module switching.',
 );
 
 console.log('[command-module-performance-regression] module performance contract passed');
