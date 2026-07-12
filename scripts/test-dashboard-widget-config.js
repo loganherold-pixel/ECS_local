@@ -15,6 +15,7 @@ const registryPath = path.join(__dirname, '..', 'lib', 'widgetRegistry.ts');
 const source = readSource('lib', 'widgetRegistry.ts');
 const navigateSurfaceSource = readSource('components', 'dashboard', 'NavigateSurfaceWidget.tsx');
 const widgetGridSource = readSource('components', 'dashboard', 'WidgetGrid.tsx');
+const widgetChromeSource = readSource('components', 'dashboard', 'WidgetChrome.tsx');
 const dashboardStoreSource = readSource('lib', 'dashboardStore.ts');
 const widgetLibrarySource = readSource('components', 'dashboard', 'WidgetLibrary.tsx');
 const widgetRenderersSource = readSource('components', 'dashboard', 'WidgetRenderers.tsx');
@@ -673,6 +674,24 @@ assert.ok(
     !widgetGridSource.includes('WIDGET_CONTAINER_BACKGROUND') &&
     !widgetGridSource.includes('<WidgetContainerBackground />'),
   'Dashboard widget parent container must be fully transparent with no image or panel fill behind sunlight, weather, vehicle, terrain, or power widgets.',
+);
+for (const [label, styleBlock] of [
+  ['widget plate', readStyleBlock(widgetGridSource, 'widgetPlate')],
+  ['instrument widget plate', readStyleBlock(widgetGridSource, 'widgetPlateInstrument')],
+  ['highway widget plate', readStyleBlock(widgetGridSource, 'widgetPlateHighway')],
+  ['empty widget slot', readStyleBlock(widgetGridSource, 'emptySlot')],
+  ['shared instrument panel', readStyleBlock(widgetChromeSource, 'instrumentPanel')],
+]) {
+  assert.ok(
+    styleBlock.includes("backgroundColor: 'transparent'"),
+    `Dashboard ${label} should expose the main body texture through a transparent background.`,
+  );
+}
+assert.ok(
+  widgetGridSource.includes("hierarchyStyle && !isHighway && !layoutMode && !isLight && {\n          backgroundColor: 'transparent'") &&
+    widgetGridSource.includes("isLight ? { backgroundColor: 'transparent', borderColor: palette.border } : null") &&
+    widgetGridSource.includes('viewerOverrides?.panelBgOverride ? { backgroundColor: viewerOverrides.panelBgOverride } : null'),
+  'Dashboard hierarchy and light-theme defaults should remain transparent while explicit viewer background overrides remain available.',
 );
 const expeditionPlaceholderIndex = dashboardSource.indexOf('showExpeditionPlaceholderTab && !layoutMode');
 const expeditionTabIndex = dashboardSource.indexOf('<ExpeditionTab');

@@ -66,6 +66,12 @@ assert(
   'Navigate should present MVUM/segment availability copy instead of implying Explore catalog loading.',
 );
 assert(
+  navigate.includes('ECS catalog route service is disabled in this build.') &&
+    navigate.includes("routeGeometryViewportUiState.status === 'empty'") &&
+    navigate.includes('No ECS catalog routes in this map view. Pan or zoom to inspect nearby trails.'),
+  'Navigate should reserve the empty-catalog message for a completed empty fetch and identify disabled builds explicitly.',
+);
+assert(
   navigate.includes('routeGeometryViewportSelectedSegmentsRef') &&
     navigate.includes('mergeRouteGeometryViewportSegmentsWithSelected') &&
     navigate.includes('selectedRouteGeometrySegmentIds'),

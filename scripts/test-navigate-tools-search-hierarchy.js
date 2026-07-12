@@ -45,6 +45,18 @@ assert(
 );
 
 assert(
+  source.includes('const mvumRouteStitchInProgress =') &&
+    source.includes('selectedMvumSegmentIds.length > 0') &&
+    source.includes("mvumStitchStatus !== 'ready' || !mvumStitchedRouteDraft?.geometry") &&
+    source.includes('const navigateRouteCompositionActive =') &&
+    source.includes('routeBuilderActive ||') &&
+    source.includes('stitchModalVisible ||') &&
+    source.includes('stitchSaving ||') &&
+    source.includes('!navigateRouteCompositionActive'),
+  'Navigate should hide destination search throughout route building and stitching, then restore it after cancel or a completed build.',
+);
+
+assert(
   source.includes('styles.idleDestinationSearchWrap') &&
     source.includes('styles.idleDestinationSearchShell') &&
     source.includes('styles.idleDestinationSearchFieldShell') &&

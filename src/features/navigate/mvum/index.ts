@@ -23,6 +23,7 @@ export const MVUM_OVERLAY_SELECTED_LAYER_ID = 'navigate-mvum-selected-layer';
 export const MVUM_OVERLAY_MIN_ZOOM = ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM;
 export const MVUM_OVERLAY_SOURCE_LAYER = 'mvum_segments';
 export const MVUM_OVERLAY_CACHE_NAMESPACE = 'navigate.mvum.viewport';
+export const MVUM_VIEWPORT_CACHE_TTL_MS = 5 * 60 * 1000;
 export const NAVIGATE_STITCHED_ROUTE_SOURCE_ID = 'navigate-stitched-route-source';
 export const NAVIGATE_STITCHED_ROUTE_LAYER_ID = 'navigate-stitched-route-layer';
 export const NAVIGATE_STITCHED_ROUTE_HALO_LAYER_ID = 'navigate-stitched-route-halo-layer';
@@ -40,6 +41,11 @@ export type NavigateMvumViewportFetchPlan =
   | { status: 'offline' }
   | { status: 'missing_bbox' }
   | { status: 'fetch_viewport'; bbox: RouteGeometryViewportBbox; cacheKey: string };
+
+export type NavigateMvumViewportCacheEntry = {
+  result: RouteGeometryViewportResult;
+  cachedAtMs: number;
+};
 
 export type NavigateMvumMapOverlayPayload = {
   enabled: boolean;
@@ -149,6 +155,36 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+export function createNavigateMvumViewportCacheEntry(
+  result: RouteGeometryViewportResult,
+  cachedAtMs = Date.now(),
+): NavigateMvumViewportCacheEntry | null {
+  if (result.degraded || result.segments.length === 0 || !Number.isFinite(cachedAtMs)) {
+    return null;
+  }
+  return { result, cachedAtMs };
+}
+
+export function readNavigateMvumViewportCacheEntry(
+  value: unknown,
+  nowMs = Date.now(),
+): RouteGeometryViewportResult | null {
+  const entry = readRecord(value);
+  const cachedAtMs = finiteNumber(entry?.cachedAtMs);
+  const result = entry?.result as RouteGeometryViewportResult | undefined;
+  if (
+    cachedAtMs == null ||
+    !result ||
+    !Array.isArray(result.segments) ||
+    result.degraded ||
+    result.segments.length === 0
+  ) {
+    return null;
+  }
+  const checkedAtMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+  return checkedAtMs - cachedAtMs < MVUM_VIEWPORT_CACHE_TTL_MS ? result : null;
 }
 
 function uniqueCleanIds(ids: readonly unknown[]): string[] {

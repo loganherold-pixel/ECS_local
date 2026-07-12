@@ -54,6 +54,7 @@ export function buildDashboardProductionReadinessResult(options = {}) {
     dashboard: path.join(root, 'app', '(tabs)', 'dashboard.tsx'),
     dashboardHeader: path.join(root, 'components', 'dashboard', 'DashboardHeader.tsx'),
     widgetGrid: path.join(root, 'components', 'dashboard', 'WidgetGrid.tsx'),
+    widgetChrome: path.join(root, 'components', 'dashboard', 'WidgetChrome.tsx'),
     widgetRenderers: path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'),
     vehicleTelemetryWidget: path.join(root, 'components', 'dashboard', 'VehicleTelemetryWidget.tsx'),
     widgetRegistry: path.join(root, 'lib', 'widgetRegistry.ts'),
@@ -70,6 +71,7 @@ export function buildDashboardProductionReadinessResult(options = {}) {
   const dashboard = normalize(readIfExists(paths.dashboard));
   const dashboardHeader = normalize(readIfExists(paths.dashboardHeader));
   const widgetGrid = normalize(readIfExists(paths.widgetGrid));
+  const widgetChrome = normalize(readIfExists(paths.widgetChrome));
   const widgetRenderers = normalize(readIfExists(paths.widgetRenderers));
   const vehicleTelemetryWidget = normalize(readIfExists(paths.vehicleTelemetryWidget));
   const widgetRegistry = normalize(readIfExists(paths.widgetRegistry));
@@ -98,10 +100,16 @@ export function buildDashboardProductionReadinessResult(options = {}) {
         widgetGrid.includes('enableLegacyAndroidLayoutAnimation') &&
         widgetGrid.includes('dashboardWidgetParentTransparent') &&
         widgetGrid.includes("backgroundColor: 'transparent'") &&
+        widgetGrid.includes("widgetPlate: {") &&
+        widgetGrid.includes("widgetPlateInstrument: {") &&
+        widgetGrid.includes("widgetPlateHighway: {") &&
+        widgetGrid.includes("hierarchyStyle && !isHighway && !layoutMode && !isLight && {\n          backgroundColor: 'transparent'") &&
+        widgetChrome.includes("instrumentPanel: {") &&
+        widgetChrome.includes("backgroundColor: 'transparent'") &&
         !widgetGrid.includes('WidgetContainerBackground') &&
         !widgetGrid.includes('WIDGET_CONTAINER_BACKGROUND') &&
         widgetGrid.includes('layoutMode'),
-      [relPath(root, paths.widgetRegistry), relPath(root, paths.widgetGrid)],
+      [relPath(root, paths.widgetRegistry), relPath(root, paths.widgetGrid), relPath(root, paths.widgetChrome)],
       ['Capture Android phone/tablet portrait and landscape evidence for Dashboard widget grid, resize, replace, and error fallback states.'],
     ),
     check(

@@ -297,15 +297,18 @@ import {
   buildNavigateMvumMapOverlay,
   buildNavigateMvumStitchedRoutePreview,
   buildMvumStitchedRouteDraft,
+  createNavigateMvumViewportCacheEntry,
   createNavigateMvumSelectionStore,
   createNavigateMvumOverlayState,
   mvumSegmentsToSummaries,
   planNavigateMvumViewportFetch,
+  readNavigateMvumViewportCacheEntry,
   resolveNavigateMvumVectorSourceLayer,
   resolveNavigateMvumVectorTileUrl,
   toggleMvumSelectedSegmentId,
   MVUM_OVERLAY_MIN_ZOOM,
   type MvumCanonicalSegment,
+  type NavigateMvumViewportCacheEntry,
 } from '../../src/features/navigate/mvum';
 import {
   fetchNavigateMvumCanonicalSegments,
@@ -4990,7 +4993,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   );
   const mvumViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mvumViewportFetchRequestIdRef = useRef(0);
-  const mvumViewportCacheRef = useRef(new Map<string, RouteGeometryViewportResult>());
+  const mvumViewportCacheRef = useRef(new Map<string, NavigateMvumViewportCacheEntry>());
   const routeGeometryViewportFetchCoordinatorRef = useRef(new RouteGeometryViewportFetchCoordinator());
   const routeGeometryViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeGeometryViewportCacheRef = useRef(new Map<string, RouteGeometryViewportResult>());
@@ -5742,14 +5745,18 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       return;
     }
 
-    const cached = mvumViewportCacheRef.current.get(plan.cacheKey);
+    const cachedEntry = mvumViewportCacheRef.current.get(plan.cacheKey);
+    const cached = readNavigateMvumViewportCacheEntry(cachedEntry);
+    if (cachedEntry && !cached) {
+      mvumViewportCacheRef.current.delete(plan.cacheKey);
+    }
     if (cached) {
       clearMvumFetchTimer();
       setMvumViewportResult(cached);
       setMvumViewportUiState((current) => ({
         ...current,
         enabled: true,
-        status: cached.segments.length > 0 ? 'ready' : 'empty',
+        status: 'ready',
         errorMessage: null,
         featureCount: cached.segments.length,
         cappedCount: cached.cappedCount,
@@ -5798,7 +5805,12 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             ...result,
             cacheKey: plan.cacheKey,
           };
-          mvumViewportCacheRef.current.set(plan.cacheKey, resultForCache);
+          const cacheEntry = createNavigateMvumViewportCacheEntry(resultForCache);
+          if (cacheEntry) {
+            mvumViewportCacheRef.current.set(plan.cacheKey, cacheEntry);
+          } else {
+            mvumViewportCacheRef.current.delete(plan.cacheKey);
+          }
           setMvumViewportResult(resultForCache);
           setMvumViewportUiState((current) => ({
             ...current,
@@ -5817,7 +5829,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             cappedCount: resultForCache.cappedCount,
             skippedMissingGeometryCount: resultForCache.skippedMissingGeometryCount,
             skippedClosedCount: resultForCache.skippedClosedCount,
-            dataState: 'live',
+            dataState: resultForCache.degraded ? 'unknown' : 'live',
             lastAttemptedBbox: plan.bbox,
             lastAttemptedCacheKey: plan.cacheKey,
             lastSuccessfulBbox: plan.bbox,
@@ -13882,6 +13894,9 @@ const handleCreateRun = useCallback(() => {
     [routeGeometryOverlaySegments],
   );
   const routeGeometryViewportLegendMessage = useMemo(() => {
+    if (!routeGeometryViewportOverlayEnabled) {
+      return 'ECS catalog route service is disabled in this build.';
+    }
     if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
       return 'Zoom to 10+ to show ECS catalog routes.';
     }
@@ -13894,8 +13909,17 @@ const handleCreateRun = useCallback(() => {
     if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'error') {
       return routeGeometryViewportUiState.errorMessage ?? 'ECS catalog routes unavailable.';
     }
-    if (routeGeometryOverlayBuild.segments.length === 0) {
+    if (routeGeometryViewportUiState.status === 'idle') {
+      return 'Preparing ECS catalog routes for this map view.';
+    }
+    if (
+      routeGeometryViewportUiState.status === 'empty' &&
+      routeGeometryOverlayBuild.segments.length === 0
+    ) {
       return 'No ECS catalog routes in this map view. Pan or zoom to inspect nearby trails.';
+    }
+    if (routeGeometryOverlayBuild.segments.length === 0) {
+      return 'Loading ECS catalog routes for this map view.';
     }
     const dataStateCopy =
       routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.dataState === 'cached'
@@ -13925,6 +13949,9 @@ const handleCreateRun = useCallback(() => {
     if (!mvumViewportZoomReady) {
       return `Zoom to ${MVUM_OVERLAY_MIN_ZOOM}+ to show MVUM trail segments.`;
     }
+    if (mvumViewportUiState.status === 'idle') {
+      return 'Preparing MVUM trail segments for this map view.';
+    }
     if (mvumViewportUiState.status === 'loading') {
       return 'Loading MVUM trail segments for this map view.';
     }
@@ -13937,7 +13964,10 @@ const handleCreateRun = useCallback(() => {
     if (mvumViewportResult?.segments.length) {
       return `${mvumViewportResult.segments.length} MVUM trail segment${mvumViewportResult.segments.length === 1 ? '' : 's'} visible.`;
     }
-    return 'No MVUM trail segments visible in this map view yet.';
+    if (mvumViewportUiState.status === 'empty') {
+      return 'No MVUM trail segments in this map view. Pan or zoom to inspect nearby forest roads.';
+    }
+    return 'Preparing MVUM trail segments for this map view.';
   }, [
     mvumOverlayEnabled,
     mvumViewportResult?.segments.length,
@@ -14640,6 +14670,15 @@ const handleCreateRun = useCallback(() => {
     !selectedCampScoutCandidateId &&
     !selectedCampOpsEndpointId &&
     !roadStepListExpanded;
+  const mvumRouteStitchInProgress =
+    mvumOverlayEnabled &&
+    selectedMvumSegmentIds.length > 0 &&
+    (mvumStitchStatus !== 'ready' || !mvumStitchedRouteDraft?.geometry);
+  const navigateRouteCompositionActive =
+    routeBuilderActive ||
+    stitchModalVisible ||
+    stitchSaving ||
+    mvumRouteStitchInProgress;
   const idleDestinationSearchVisible =
     mapOverlayStartupReady &&
     (navigationOverlayMode === 'idle' || navigationOverlayMode === 'search') &&
@@ -14650,7 +14689,7 @@ const handleCreateRun = useCallback(() => {
     !selectedCampScoutCandidateId &&
     !selectedCampOpsEndpointId &&
     !roadStepListExpanded &&
-    !routeBuilderActive &&
+    !navigateRouteCompositionActive &&
     campScoutAreaMode === 'idle' &&
     !roadNavigation.session.destination;
   const destinationSearchInputActive = destinationSearchInputFocused || keyboardHeight > 0;

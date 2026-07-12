@@ -9,17 +9,40 @@ function read(relativePath) {
 }
 
 const migrationPath = path.join('supabase', 'migrations', '038_route_geometry_viewport_segments.sql');
+const verifiedRoutesFixMigrationPath = path.join(
+  'supabase',
+  'migrations',
+  '20260712095835_fix_route_geometry_viewport_verified_routes.sql',
+);
+const permissionsMigrationPath = path.join(
+  'supabase',
+  'migrations',
+  '20260712100348_harden_route_geometry_viewport_rpc_permissions.sql',
+);
 const functionPath = path.join('supabase', 'functions', 'route-geometry-segments', 'index.ts');
 const supabasePath = path.join('lib', 'supabase.ts');
 const envExamplePath = '.env.example';
+const easConfigPath = 'eas.json';
 
 assert(fs.existsSync(path.join(root, migrationPath)), 'Route geometry viewport migration should exist.');
+assert(
+  fs.existsSync(path.join(root, verifiedRoutesFixMigrationPath)),
+  'Verified-route viewport compatibility migration should exist.',
+);
+assert(
+  fs.existsSync(path.join(root, permissionsMigrationPath)),
+  'Route geometry viewport RPC permission hardening migration should exist.',
+);
 assert(fs.existsSync(path.join(root, functionPath)), 'route-geometry-segments Edge Function should exist.');
 
-const migration = read(migrationPath);
+const initialMigration = read(migrationPath);
+const verifiedRoutesFixMigration = read(verifiedRoutesFixMigrationPath);
+const permissionsMigration = read(permissionsMigrationPath);
+const migration = `${initialMigration}\n${verifiedRoutesFixMigration}\n${permissionsMigration}`;
 const edgeFunction = read(functionPath);
 const supabaseClient = read(supabasePath);
 const envExample = read(envExamplePath);
+const easConfig = JSON.parse(read(easConfigPath));
 
 assert(
   migration.includes('search_route_geometry_segments_for_viewport') &&
@@ -40,8 +63,23 @@ assert(
   'Viewport migration should add route_segment_sources.last_verified_at before the RPC reads it.',
 );
 assert(
+  verifiedRoutesFixMigration.includes('public.verified_routes') &&
+    verifiedRoutesFixMigration.includes('verified_routes_route_geometry_viewport_idx') &&
+    verifiedRoutesFixMigration.includes('ST_GeomFromGeoJSON(vr.route_geometry::text)') &&
+    verifiedRoutesFixMigration.includes("vr.review_status = 'approved'") &&
+    verifiedRoutesFixMigration.includes('vr.active_closure_count = 0') &&
+    verifiedRoutesFixMigration.includes("'verified_routes'::text as catalog_origin") &&
+    verifiedRoutesFixMigration.includes('public.verified_route_sources') &&
+    verifiedRoutesFixMigration.includes('join public.route_sources') &&
+    verifiedRoutesFixMigration.includes('union all') &&
+    verifiedRoutesFixMigration.includes('select * from route_segment_candidates') &&
+    verifiedRoutesFixMigration.includes('select * from verified_route_candidates'),
+  'Viewport RPC should merge the populated verified-route catalog with route_segments, source labels, and safety filters.',
+);
+assert(
   migration.includes('grant execute on function public.search_route_geometry_segments_for_viewport') &&
     migration.includes('to service_role') &&
+    permissionsMigration.includes('from public, anon, authenticated') &&
     !migration.includes('to anon') &&
     !migration.includes('to authenticated'),
   'Viewport RPC should be callable by service_role only.',
@@ -50,7 +88,7 @@ assert(
 for (const required of [
   'ECS_SERVICE_ROLE_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
-  'route_segments',
+  'verified_routes',
   'routeGeometryUnavailableResponse',
   'degraded: true',
   'unavailableReason',
@@ -86,8 +124,16 @@ assert(
   'Supabase client allowlist should include the route-geometry-segments Edge Function.',
 );
 assert(
-  envExample.includes('EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY=false'),
-  '.env.example should document the route geometry viewport overlay feature flag as default-off.',
+  envExample.includes('EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY=true') &&
+    envExample.includes('emergency rollout kill switch'),
+  '.env.example should enable the deployed route geometry viewport service while preserving an emergency kill switch.',
 );
+for (const profile of ['preview', 'fieldtest', 'campops-preview', 'production']) {
+  assert.strictEqual(
+    easConfig.build?.[profile]?.env?.EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY,
+    'true',
+    `${profile} EAS builds should explicitly enable the deployed route geometry viewport service.`,
+  );
+}
 
 console.log('Route geometry viewport server contract checks passed.');

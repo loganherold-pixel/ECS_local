@@ -18,7 +18,8 @@
       "env": {
         "EXPO_NO_TELEMETRY": "1",
         "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
-        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true"
+        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true",
+        "EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY": "true"
       }
     },
     "fieldtest": {
@@ -34,7 +35,8 @@
         "EXPO_PUBLIC_ECS_FIELD_TEST_BUILD": "true",
         "EXPO_PUBLIC_ECS_BUILD_PROFILE": "fieldtest",
         "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
-        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true"
+        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true",
+        "EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY": "true"
       }
     },
     "campops-preview": {
@@ -47,7 +49,8 @@
       "env": {
         "EXPO_NO_TELEMETRY": "1",
         "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
-        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true"
+        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true",
+        "EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY": "true"
       }
     },
     "production": {
@@ -57,7 +60,8 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_NO_TELEMETRY": "1"
+        "EXPO_NO_TELEMETRY": "1",
+        "EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY": "true"
       }
     }
   },

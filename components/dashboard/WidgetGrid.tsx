@@ -266,17 +266,6 @@ function isFixedTwoByTwoDashboardMode(
   );
 }
 
-function withPanelAlpha(color: string, alphaHex: string): string {
-  if (color.startsWith('#') && color.length === 7) {
-    return `${color}${alphaHex}`;
-  }
-  if (color.startsWith('#') && color.length === 9) {
-    return `${color.slice(0, 7)}${alphaHex}`;
-  }
-  return color;
-}
-
-
 // ── Highway Precision Placement ───────────────────────────
 function computeHighwayPlacements(
   slots: WidgetSlot[],
@@ -1278,7 +1267,7 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
         <View style={[
           styles.widgetPlate,
           layoutMode && styles.widgetPlateLayout,
-          isLight ? { backgroundColor: palette.panel, borderColor: palette.border } : null,
+          isLight ? { backgroundColor: 'transparent', borderColor: palette.border } : null,
           viewerOverrides?.panelBgOverride ? { backgroundColor: viewerOverrides.panelBgOverride } : null,
           viewerOverrides?.borderColorOverride ? { borderColor: viewerOverrides.borderColorOverride } : null,
         ]}>
@@ -1397,11 +1386,11 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
         isHighway && styles.widgetPlateHighway,
         // Phase 9: Attitude Monitor gets instrument cluster border (now subsumed by hierarchy)
         isAttitudeMonitor && !isLight && styles.widgetPlateInstrument,
-        // Phase 11: Instrument Hierarchy — tier-specific panel bg, border, shadow
+        // Phase 11: Instrument Hierarchy — tier-specific border and shadow
         // Applied AFTER base styles so hierarchy overrides take precedence.
-        // Primary: darker bg + gold border; Secondary: standard; Support: lighter bg + softer border
+        // Keep the body texture visible while hierarchy remains clear through edge treatment.
         hierarchyStyle && !isHighway && !layoutMode && !isLight && {
-          backgroundColor: withPanelAlpha(hierarchyStyle.panelBg, 'D8'),
+          backgroundColor: 'transparent',
           borderColor: hierarchyStyle.borderColor,
           borderWidth: hierarchyStyle.borderWidth,
           shadowOpacity: hierarchyStyle.shadowOpacity,
@@ -1409,7 +1398,7 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
         },
         layoutMode && styles.widgetPlateLayout,
         isDropTarget && styles.widgetPlateDropTarget,
-        isLight ? { backgroundColor: palette.panel, borderColor: palette.border } : null,
+        isLight ? { backgroundColor: 'transparent', borderColor: palette.border } : null,
         viewerOverrides?.panelBgOverride ? { backgroundColor: viewerOverrides.panelBgOverride } : null,
         viewerOverrides?.borderColorOverride ? { borderColor: viewerOverrides.borderColorOverride } : null,
       ]}>
@@ -2513,7 +2502,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: DENSITY.borderDefault,
     borderColor: 'rgba(196,138,44,0.14)',
-    backgroundColor: 'rgba(255,255,255,0.02)',
+    backgroundColor: 'transparent',
     justifyContent: 'space-between',
     paddingHorizontal: 14,
     paddingVertical: 14,
@@ -2521,7 +2510,7 @@ const styles = StyleSheet.create({
   emptySlotHighway: {
     borderRadius: HWY_BORDER_RADIUS,
     borderColor: 'rgba(196,138,44,0.12)',
-    backgroundColor: 'rgba(255,255,255,0.018)',
+    backgroundColor: 'transparent',
   },
   emptySlotLayout: {
     borderColor: TACTICAL.accent + 'C0',
@@ -2611,7 +2600,7 @@ const styles = StyleSheet.create({
   widgetPlate: {
     flex: 1,
     borderRadius: 16,
-    backgroundColor: withPanelAlpha(DEPTH_PANELS[2].backgroundColor, 'D8'),
+    backgroundColor: 'transparent',
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.18)',
     overflow: 'hidden',
@@ -2648,7 +2637,7 @@ const styles = StyleSheet.create({
   widgetPlateInstrument: {
     borderWidth: 1,
     borderColor: GOLD_RAIL.instrument,
-    backgroundColor: withPanelAlpha(DEPTH_PANELS[3].backgroundColor, 'DD'),
+    backgroundColor: 'transparent',
     // Depth Level 3 — primary instrument elevation
     shadowOpacity: DEPTH_SHADOWS[3].shadowOpacity,
     shadowRadius: DEPTH_SHADOWS[3].shadowRadius,
@@ -2659,7 +2648,7 @@ const styles = StyleSheet.create({
 
   widgetPlateHighway: {
     borderRadius: 16,
-    backgroundColor: withPanelAlpha(DEPTH_PANELS[1].backgroundColor, 'D0'),
+    backgroundColor: 'transparent',
     borderColor: 'rgba(196,138,44,0.14)',
     // Highway uses slightly reduced depth
     shadowOpacity: DEPTH_SHADOWS[1].shadowOpacity,

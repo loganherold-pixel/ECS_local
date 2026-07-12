@@ -9,7 +9,7 @@ const corsHeaders = {
   'Content-Type': 'application/json',
 };
 
-const ROUTE_SEGMENTS_SOURCE_TABLE = 'route_segments';
+const ROUTE_GEOMETRY_CATALOG_SOURCE = 'verified_routes';
 const MIN_ZOOM = 10;
 const DEFAULT_LIMIT = 240;
 const MAX_LIMIT = 500;
@@ -27,7 +27,7 @@ function routeGeometryUnavailableResponse(reason: string): Response {
     ok: true,
     segments: [],
     meta: {
-      source: ROUTE_SEGMENTS_SOURCE_TABLE,
+      source: ROUTE_GEOMETRY_CATALOG_SOURCE,
       bboxFilterApplied: true,
       degraded: true,
       unavailableReason: reason,
@@ -227,7 +227,7 @@ serve(async (req) => {
         ok: true,
         segments: [],
         meta: {
-          source: ROUTE_SEGMENTS_SOURCE_TABLE,
+          source: ROUTE_GEOMETRY_CATALOG_SOURCE,
           bboxFilterApplied: true,
           zoomTooLow: true,
           minZoom: MIN_ZOOM,
@@ -264,7 +264,7 @@ serve(async (req) => {
       ok: true,
       segments,
       meta: {
-        source: ROUTE_SEGMENTS_SOURCE_TABLE,
+        source: ROUTE_GEOMETRY_CATALOG_SOURCE,
         bboxFilterApplied: true,
         zoomTooLow: false,
         minZoom: MIN_ZOOM,
