@@ -94,6 +94,10 @@ function eventSemanticSignature(event: DispatchEvent): string {
     syncState: normalizeText(event.syncState),
     routeSegmentId: normalizeText(event.routeSegmentId),
     requiresMapDrilldown: event.requiresMapDrilldown ?? null,
+    coordinationType: normalizeText(event.coordinationType),
+    requiresAcknowledgment: event.requiresAcknowledgment ?? null,
+    proposalFingerprint: normalizeText(event.proposalFingerprint),
+    proposalCandidateId: normalizeText(event.proposalCandidateId),
   });
 }
 

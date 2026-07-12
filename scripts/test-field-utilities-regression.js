@@ -99,8 +99,13 @@ const badgeImages = protocolBlocks.map((block) => {
 // Dashboard long-press Quick Actions / Protocols entry.
 assertIncludes(
   commandDockSource,
-  'onLongPress={() => {\n                    dismissFirstLaunchHint();\n                    openQuickActions();\n                  }}',
+  'const handleDashboardLongPress = useCallback(() => {\n    dismissFirstLaunchHint();\n    openQuickActions();',
   'Dashboard long-press should open Field Utilities / Quick Actions.',
+);
+assertIncludes(
+  commandDockSource,
+  'onLongPress={handleDashboardLongPress}',
+  'The Dashboard center button should use the dedicated Field Utilities long-press handler.',
 );
 assertIncludes(
   commandDockSource,
@@ -114,7 +119,7 @@ assertIncludes(
 );
 assertIncludes(
   commandDockSource,
-  'quickActionsVisible || Date.now() < quickActionsNavLockUntilRef.current',
+  'currentQuickActionsVisible || Date.now() < quickActionsNavLockUntilRef.current',
   'CommandDock should ignore tab navigation while Field Utilities is open or during the gesture lock window.',
 );
 assertIncludes(
@@ -519,13 +524,38 @@ assertIncludes(
 );
 assertIncludes(
   quickActionsSource,
-  '<IncidentRecoveryPanel',
-  'Field Utilities main page should include the live Incident & Recovery panel.',
+  "const incidentRecoveryTile: QuickActionTile = {",
+  'Field Utilities main page should define a compact Incident & Recovery launcher.',
 );
 assertIncludes(
   quickActionsSource,
+  "onPress: () => openFieldUtilityAction('incidentRecovery')",
+  'The compact Incident & Recovery launcher should open its focused child screen.',
+);
+assertIncludes(
+  quickActionsSource,
+  'const compactUtilityTiles = [incidentRecoveryTile, documentationTile];',
+  'Incident & Recovery and Documentation should share the compact lower launcher stack.',
+);
+assertIncludes(
+  quickActionsSource,
+  'const renderIncidentRecoveryPanel = () => (',
+  'The Incident & Recovery child screen should retain the complete workflow panel.',
+);
+assertIncludes(
+  quickActionsSource,
+  "case 'incidentRecovery':\n        return renderIncidentRecoveryPanel();",
+  'Field Utilities should route the compact launcher to the complete Incident & Recovery child screen.',
+);
+assertIncludes(
+  quickActionsSource,
+  'modalStackBehavior="allow-stack"',
+  'Incident & Recovery workflow modals should remain stackable above Field Utilities.',
+);
+assertNotIncludes(
+  quickActionsSource,
   'styles.incidentRecoveryUtilitySlot',
-  'Incident & Recovery should occupy the open main-page space above Documentation.',
+  'The fixed 260px Incident & Recovery block should no longer compress the six image actions.',
 );
 assertIncludes(
   quickActionsSource,
@@ -631,13 +661,28 @@ assertIncludes(
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'quickActionTileScrim'),
-  "backgroundColor: 'rgba(0,0,0,0.62)'",
-  'Available Actions image scrim should be strong enough to avoid washed-out text.',
+  "backgroundColor: 'rgba(0,0,0,0.28)'",
+  'Available Actions image scrim should keep text readable while revealing more of each background graphic.',
 );
 assertIncludes(
-  styleBlock(quickActionsSource, 'incidentRecoveryUtilityPanel'),
-  "backgroundColor: 'transparent'",
-  'Field Utilities Incident & Recovery panel should be transparent inside the long-press popup.',
+  quickActionsSource,
+  'styles.quickActionTileTopRow',
+  'Available Actions should place their icon and availability state above the larger image field.',
+);
+assertIncludes(
+  quickActionsSource,
+  'numberOfLines={2}',
+  'Available Actions subtitles should remain readable without compact-device truncation.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'quickActionTileCopy'),
+  "backgroundColor: 'rgba(0,0,0,0.48)'",
+  'Available Actions should localize the strong text scrim behind copy instead of obscuring the entire image.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'incidentRecoveryDetailPanel'),
+  "width: '100%'",
+  'The focused Incident & Recovery panel should fill the child screen width.',
 );
 assertIncludes(
   quickActionsSource,
@@ -683,8 +728,8 @@ assertIncludes(
 );
 assertIncludes(
   quickActionsSource,
-  'fieldUtilityContainerSurface(documentationTile.color)',
-  'Documentation should use the same low-opacity container treatment as the protocol tiles without changing its color.',
+  'fieldUtilityContainerSurface(item.color)',
+  'The compact Incident & Recovery and Documentation launchers should share the low-opacity tactical container treatment.',
 );
 assertNotIncludes(
   quickActionsSource,
@@ -728,28 +773,28 @@ assertIncludes(
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'quickActionTile'),
-  'paddingVertical: 4',
-  'Available Actions tiles should be shorter so Incident & Recovery has enough vertical room.',
+  'paddingVertical: 9',
+  'Available Actions tiles should use the reclaimed Incident & Recovery space for larger touch targets.',
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'quickActionTile'),
-  'gap: 5',
-  'Available Actions tiles should tighten their internal spacing to prevent clipping pressure.',
+  'gap: 7',
+  'Available Actions tiles should give their larger icon and copy enough internal spacing.',
 );
 assertIncludes(
-  styleBlock(quickActionsSource, 'documentationTile'),
-  'minHeight: 46',
-  'Documentation should be compact enough to leave the Incident & Recovery panel visible.',
+  styleBlock(quickActionsSource, 'compactUtilityTile'),
+  'minHeight: 50',
+  'Incident & Recovery and Documentation should share a compact, readable launcher height.',
 );
 assertIncludes(
-  styleBlock(quickActionsSource, 'incidentRecoveryUtilitySlot'),
-  'height: 260',
-  'Incident & Recovery should reserve expanded height for its compact live controls.',
+  styleBlock(quickActionsSource, 'quickActionTileLabel'),
+  'fontSize: 11.5',
+  'Larger Available Actions should use a more legible title size on compact devices.',
 );
 assertIncludes(
-  styleBlock(quickActionsSource, 'incidentRecoveryUtilitySlot'),
-  'flexGrow: 0',
-  'Incident & Recovery should sit just above Documentation without consuming the action-grid space.',
+  styleBlock(quickActionsSource, 'quickActionTileIconWrap'),
+  'width: 34',
+  'Larger Available Actions should present their graphics and icons at a clearer size.',
 );
 assertNotIncludes(
   quickActionsSource,

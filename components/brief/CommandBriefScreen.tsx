@@ -39,17 +39,12 @@ import {
   type ExpeditionTripIntent,
 } from '../../lib/readiness/expeditionReadinessTypes';
 import {
-  buildDepartureDeltaBrief,
-  DEFAULT_DEPARTURE_DELTA_AUDIT_SCHEMA_VERSION,
+  buildOperationalSnapshotFromDepartureAudit,
+  buildOperationalSnapshotFromReadiness,
   scoreExpeditionWeakPoints,
   expeditionReadinessStore,
   buildReadinessVehicleInputFromFleetState,
   isDepartureDeltaBriefFeatureEnabled,
-  type DeltaItem,
-  type DepartureDeltaBriefPosture,
-  type DepartureDeltaBriefResult,
-  type DepartureDeltaComparableField,
-  type DepartureDeltaCurrentContext,
   type ExpeditionReadinessSnapshot,
   type ExpeditionReadinessCampCandidateInput,
   type ExpeditionReadinessVehicleInput,
@@ -94,6 +89,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
 import { useConvoyCommandData } from '../dashboard/commandCenter';
+import { OperationalDeltaBriefCard } from './OperationalDeltaBriefCard';
 
 type CommandBriefScreenProps = {
   embedded?: boolean;
@@ -680,312 +676,6 @@ function CampDecisionClockBriefModule({
       ) : null}
     </View>
   );
-}
-
-function deltaPostureFromAssessment(assessment: ExpeditionReadinessAssessment | null): DepartureDeltaBriefPosture {
-  if (assessment?.status === 'ready') return 'go';
-  if (assessment?.status === 'caution') return 'caution';
-  return 'hold';
-}
-
-function deltaPostureTone(
-  posture: DepartureDeltaBriefPosture,
-): React.ComponentProps<typeof ECSBadge>['tone'] {
-  if (posture === 'go') return 'ready';
-  if (posture === 'caution') return 'warning';
-  return 'unavailable';
-}
-
-function deltaItemTone(item: DeltaItem): React.ComponentProps<typeof ECSBadge>['tone'] {
-  if (item.severity === 'critical' || item.severity === 'unavailable') return 'unavailable';
-  if (item.severity === 'caution' || item.severity === 'watch') return 'warning';
-  return 'info';
-}
-
-function formatDeltaTimestamp(value: string | null | undefined): string {
-  if (!value) return 'time unavailable';
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return 'time unavailable';
-  return new Date(parsed).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-function formatDeltaValue(value: unknown, unit?: string | null): string {
-  const display = value == null || value === '' ? 'unavailable' : String(value);
-  return unit ? `${display} ${unit}` : display;
-}
-
-function DeltaEvidenceLine({ item }: { item: DeltaItem }) {
-  return (
-    <ECSText variant="helper" style={styles.departureDeltaBriefEvidence} numberOfLines={2}>
-      Previous: {formatDeltaValue(item.evidence.previous.value, item.evidence.previous.unit)} at {formatDeltaTimestamp(item.evidence.previous.observedAt)} / Current: {formatDeltaValue(item.evidence.current.value, item.evidence.current.unit)} at {formatDeltaTimestamp(item.evidence.current.observedAt)}
-    </ECSText>
-  );
-}
-
-function DepartureDeltaBriefSection({
-  title,
-  items,
-  emptyCopy,
-}: {
-  title: string;
-  items: DeltaItem[];
-  emptyCopy: string;
-}) {
-  return (
-    <View style={styles.departureDeltaBriefSection}>
-      <View style={styles.departureDeltaBriefSectionHeader}>
-        <ECSText variant="chip" style={styles.departureDeltaBriefSectionTitle} numberOfLines={1}>
-          {title}
-        </ECSText>
-        <ECSBadge label={String(items.length)} tone={items.length > 0 ? 'warning' : 'info'} compact />
-      </View>
-      {items.length > 0 ? (
-        <View style={styles.departureDeltaBriefItems}>
-          {items.slice(0, 3).map((item) => (
-            <View key={item.id} style={styles.departureDeltaBriefItem}>
-              <View style={styles.departureDeltaBriefItemHeader}>
-                <ECSText variant="body" style={styles.departureDeltaBriefItemTitle} numberOfLines={1}>
-                  {item.label}
-                </ECSText>
-                <ECSBadge
-                  label={item.direction ? item.direction : item.kind.replace(/_/g, ' ')}
-                  tone={deltaItemTone(item)}
-                  compact
-                />
-              </View>
-              <ECSText variant="helper" style={styles.departureDeltaBriefItemSummary} numberOfLines={2}>
-                {item.summary}
-              </ECSText>
-              <DeltaEvidenceLine item={item} />
-            </View>
-          ))}
-        </View>
-      ) : (
-        <ECSText variant="helper" style={styles.departureDeltaBriefEmpty} numberOfLines={2}>
-          {emptyCopy}
-        </ECSText>
-      )}
-    </View>
-  );
-}
-
-function DepartureDeltaBriefPanel({ result }: { result: DepartureDeltaBriefResult }) {
-  const postureCopy = result.posture.changed && result.posture.previous
-    ? `Changed from ${result.posture.previous} to ${result.posture.current}.`
-    : `Current posture: ${result.posture.current}.`;
-  const departureDeltaBriefUnavailableCopy = result.auditComparison.status !== 'comparable'
-    ? result.auditComparison.warnings[0] ?? `Departure audit comparison unavailable: ${result.auditComparison.status}.`
-    : 'No comparable previous departure audit available.';
-
-  return (
-    <View style={styles.departureDeltaBriefCard}>
-      <View style={styles.sectionHeader}>
-        <View style={styles.departureDeltaBriefTitleBlock}>
-          <ECSText variant="cardTitle" style={styles.sectionTitle}>
-            Departure Delta Brief
-          </ECSText>
-          <ECSText variant="helper" style={styles.departureDeltaBriefSubtitle} numberOfLines={2}>
-            What changed since last check?
-          </ECSText>
-        </View>
-        <ECSBadge label="Feature flagged" tone="info" compact />
-      </View>
-
-      {!result.hasComparablePreviousAudit ? (
-        <ECSText variant="helper" style={styles.departureDeltaBriefEmptyState} numberOfLines={3}>
-          {departureDeltaBriefUnavailableCopy}
-        </ECSText>
-      ) : (
-        <View style={styles.departureDeltaBriefGrid}>
-          <DepartureDeltaBriefSection
-            title="New blockers"
-            items={result.sections.newBlockers}
-            emptyCopy="No new blockers from comparable timestamped evidence."
-          />
-          <DepartureDeltaBriefSection
-            title="Resolved blockers"
-            items={result.sections.resolvedBlockers}
-            emptyCopy="No resolved blockers from comparable timestamped evidence."
-          />
-          <DepartureDeltaBriefSection
-            title="Stale inputs"
-            items={result.sections.staleInputs}
-            emptyCopy="No stale delta inputs detected."
-          />
-          <DepartureDeltaBriefSection
-            title="Changed vehicle/loadout values"
-            items={result.sections.changedVehicleLoadoutValues}
-            emptyCopy="No comparable vehicle/loadout value changes."
-          />
-          <DepartureDeltaBriefSection
-            title="Offline package regressions"
-            items={result.sections.offlinePackageRegressions}
-            emptyCopy="No offline package regressions."
-          />
-          <DepartureDeltaBriefSection
-            title="Camp confidence changes"
-            items={result.sections.campConfidenceChanges}
-            emptyCopy="No comparable camp confidence changes."
-          />
-          <View style={styles.departureDeltaBriefSection}>
-            <View style={styles.departureDeltaBriefSectionHeader}>
-              <ECSText variant="chip" style={styles.departureDeltaBriefSectionTitle} numberOfLines={1}>
-                Updated posture
-              </ECSText>
-              <ECSBadge label={result.posture.current} tone={deltaPostureTone(result.posture.current)} compact />
-            </View>
-            <ECSText variant="helper" style={styles.departureDeltaBriefItemSummary} numberOfLines={2}>
-              {postureCopy}
-            </ECSText>
-            {result.posture.evidence ? (
-              <ECSText variant="helper" style={styles.departureDeltaBriefEvidence} numberOfLines={2}>
-                Previous at {formatDeltaTimestamp(result.posture.evidence.previous.observedAt)} / Current at {formatDeltaTimestamp(result.posture.evidence.current.observedAt)}
-              </ECSText>
-            ) : null}
-          </View>
-        </View>
-      )}
-    </View>
-  );
-}
-
-function deltaField(
-  fieldId: string,
-  label: string,
-  value: string | number | boolean | null | undefined,
-  observedAt: string | null | undefined,
-  source: string | null | undefined,
-  unit?: string | null,
-  sourceType?: DepartureDeltaComparableField['sourceType'] | null,
-): DepartureDeltaComparableField | null {
-  if (value == null) return null;
-  return {
-    fieldId,
-    label,
-    value,
-    observedAt: observedAt ?? null,
-    source: source ?? null,
-    unit: unit ?? null,
-    sourceType: sourceType ?? null,
-  };
-}
-
-function buildVehicleLoadoutDeltaValues(vehicle: ExpeditionReadinessVehicleInput | null): DepartureDeltaComparableField[] {
-  if (!vehicle) return [];
-  const vehicleId = vehicle.vehicleId ?? 'active';
-  return [
-    deltaField(`vehicle:${vehicleId}:operatingWeightLbs`, 'Operating weight', vehicle.operatingWeightLbs, vehicle.updatedAt, vehicle.source, 'lb', 'fleet_state'),
-    deltaField(`vehicle:${vehicleId}:payloadRemainingLbs`, 'Payload remaining', vehicle.payloadRemainingLbs, vehicle.updatedAt, vehicle.source, 'lb', 'fleet_state'),
-    deltaField(`vehicle:${vehicleId}:gvwrUsagePct`, 'GVWR usage', vehicle.gvwrUsagePct, vehicle.updatedAt, vehicle.source, 'percent', 'fleet_state'),
-    deltaField(`loadout:${vehicleId}:activeLoadoutWeightLbs`, 'Active loadout', vehicle.activeLoadoutWeightLbs, vehicle.updatedAt, vehicle.source, 'lb', 'fleet_state'),
-    deltaField(`loadout:${vehicleId}:accessoryLoadoutWeightLbs`, 'Accessory loadout', vehicle.accessoryLoadoutWeightLbs, vehicle.updatedAt, vehicle.source, 'lb', 'fleet_state'),
-  ].filter((item): item is DepartureDeltaComparableField => Boolean(item));
-}
-
-function buildDepartureDeltaCurrentContext({
-  assessment,
-  input,
-  activeVehicle,
-  routeSession,
-  activeTripId,
-  activeRouteId,
-}: {
-  assessment: ExpeditionReadinessAssessment | null;
-  input: ExpeditionReadinessInput;
-  activeVehicle: ExpeditionReadinessVehicleInput | null;
-  routeSession: ReturnType<typeof useRouteSessionSnapshot>;
-  activeTripId?: string | null;
-  activeRouteId?: string | null;
-}): DepartureDeltaCurrentContext {
-  const currentAt = assessment?.updatedAt ?? input.capturedAt ?? routeSession.updatedAt ?? new Date().toISOString();
-  const offline = input.offline ?? null;
-  const packageStatus = offline?.packageStatus ?? 'unknown';
-  const campCandidate = input.campCandidates?.[0] ?? null;
-  const currentRouteId = input.route?.routeId ?? routeSession.routeId ?? activeRouteId ?? null;
-  const currentVehicleId = activeVehicle?.vehicleId ?? null;
-  const currentLoadoutId = currentVehicleId ? `loadout:${currentVehicleId}` : null;
-  const campConfidence =
-    campCandidate?.legalAccessConfidence === 'high' || campCandidate?.legalAccessConfidence === 'medium' || campCandidate?.legalAccessConfidence === 'low'
-      ? campCandidate.legalAccessConfidence
-      : 'unknown';
-
-  return {
-    domainIdentity: {
-      tripId: activeTripId ?? null,
-      expeditionId: activeTripId ?? null,
-      routeId: currentRouteId,
-      vehicleId: currentVehicleId,
-      loadoutId: currentLoadoutId,
-      dispatchRosterId: 'command-brief-dispatch-roster',
-      auditSchemaVersion: DEFAULT_DEPARTURE_DELTA_AUDIT_SCHEMA_VERSION,
-      createdAt: currentAt,
-    },
-    readiness: {
-      posture: deltaPostureFromAssessment(assessment),
-      observedAt: assessment?.updatedAt ?? currentAt,
-      source: 'readiness_engine',
-      sourceType: 'readiness_engine',
-      blockers: (assessment?.blockers ?? []).map((blocker) => ({
-        id: blocker.id,
-        label: blocker.label,
-        severity: blocker.severity,
-        observedAt: assessment?.updatedAt ?? currentAt,
-        source: 'readiness_engine',
-        sourceType: 'readiness_engine',
-        detail: blocker.detail,
-      })),
-    },
-    activeVehicle,
-    vehicleLoadoutValues: buildVehicleLoadoutDeltaValues(activeVehicle),
-    routeState: deltaField(
-      'route:active:state',
-      'Route state',
-      routeSession.lifecycle,
-      routeSession.updatedAt ?? input.route?.updatedAt ?? currentAt,
-      input.route?.source ?? 'live',
-      undefined,
-      'route_state',
-    ),
-    weatherFreshness: {
-      status: input.weather?.isStale ? 'stale' : input.weather?.updatedAt ? 'fresh' : 'missing',
-      observedAt: input.weather?.updatedAt ?? null,
-      source: input.weather?.source ?? null,
-      sourceType: 'weather_state',
-    },
-    offlinePackage: {
-      packageId: currentRouteId ? `offline:${currentRouteId}` : null,
-      packageStatus,
-      coverage: packageStatus === 'ready' ? 'complete' : packageStatus === 'partial' ? 'partial' : packageStatus === 'missing' ? 'missing' : 'unknown',
-      freshness: offline?.isStale || offline?.currentRoutePackageFresh === false ? 'stale' : offline?.updatedAt ? 'fresh' : 'missing',
-      routeMatch: offline?.routeDownloaded === true && offline?.mapTilesCachedForRoute === true,
-      cacheCompletenessPct: packageStatus === 'ready' ? 100 : packageStatus === 'partial' ? 50 : packageStatus === 'missing' ? 0 : null,
-      observedAt: offline?.updatedAt ?? null,
-      source: offline?.source ?? null,
-      sourceType: 'offline_package',
-    },
-    campEndpointConfidence: campCandidate
-      ? {
-          endpointId: campCandidate.candidateId ?? campCandidate.id ?? null,
-          confidence: campConfidence,
-          confidenceScale: 'low_medium_high',
-          observedAt: campCandidate.updatedAt ?? null,
-          source: campCandidate.source ?? null,
-          sourceType: 'camp_endpoint',
-        }
-      : null,
-    dispatchRoster: {
-      rosterId: 'command-brief-dispatch-roster',
-      status: 'missing',
-      observedAt: null,
-      source: 'missing',
-      sourceType: 'dispatch_roster',
-    },
-    margins: {
-      fuel: deltaField('margin:fuel', 'Fuel margin', input.fuel?.rangeRemainingMiles ?? input.fuel?.fuelPercent ?? null, input.fuel?.updatedAt ?? null, input.fuel?.source ?? null, undefined, 'resource_margin'),
-      water: deltaField('margin:water', 'Water margin', activeVehicle?.waterCapacityGal ?? null, activeVehicle?.updatedAt ?? null, activeVehicle?.source ?? null, 'gal', 'resource_margin'),
-      power: deltaField('margin:power', 'Power margin', input.power?.batteryPercent ?? input.power?.runtimeHoursRemaining ?? null, input.power?.updatedAt ?? null, input.power?.source ?? null, undefined, 'resource_margin'),
-    },
-  };
 }
 
 function weakPointFact(
@@ -1917,38 +1607,26 @@ export default function CommandBriefScreen({
   const departureDeltaBriefEnabled = isDepartureDeltaBriefFeatureEnabled({
     departureDeltaBrief: readinessState.inputPatch.departureDeltaBriefFeatureEnabled ?? null,
   });
-  const departureDeltaCurrentContext = useMemo(
-    () => buildDepartureDeltaCurrentContext({
-      assessment,
-      input: readinessState.inputPatch,
-      activeVehicle: activeVehicleReadiness,
-      routeSession,
-      activeTripId: readinessState.activeTripId,
-      activeRouteId: readinessState.activeRouteId,
-    }),
-    [
-      activeVehicleReadiness,
-      assessment,
-      readinessState.activeRouteId,
-      readinessState.activeTripId,
-      readinessState.inputPatch,
-      routeSession,
-    ],
-  );
-  const departureDeltaBrief = useMemo(
-    () => buildDepartureDeltaBrief({
-      featureFlags: { departureDeltaBrief: departureDeltaBriefEnabled },
-      previousAudit: readinessState.inputPatch.previousDepartureAudit ?? null,
-      current: departureDeltaCurrentContext,
-      now: assessment?.updatedAt ?? readinessState.lastAssessmentAt,
-    }),
-    [
-      assessment?.updatedAt,
-      departureDeltaBriefEnabled,
-      departureDeltaCurrentContext,
-      readinessState.inputPatch.previousDepartureAudit,
-      readinessState.lastAssessmentAt,
-    ],
+  const operationalDeltaResolvedInput = expeditionReadinessStore.getResolvedInput();
+  const operationalDeltaSnapshot = buildOperationalSnapshotFromReadiness({
+    assessment,
+    input: {
+      ...operationalDeltaResolvedInput,
+      readinessMode: readinessState.readinessMode,
+    },
+    routeSession,
+    activeVehicle: activeVehicleReadiness,
+    convoy: convoyCommandData,
+    expeditionId: readinessState.activeTripId,
+    routeId: readinessState.activeRouteId ?? routeSession.routeId,
+    capturedAt: assessment?.updatedAt ?? readinessState.lastAssessmentAt ?? routeSession.updatedAt,
+    label: 'Current operational state',
+  });
+  const legacyOperationalDepartureBaseline = useMemo(
+    () => buildOperationalSnapshotFromDepartureAudit(
+      readinessState.inputPatch.previousDepartureAudit ?? null,
+    ),
+    [readinessState.inputPatch.previousDepartureAudit],
   );
   const missingCategories = assessment
     ? EXPEDITION_READINESS_CATEGORY_IDS.filter((id) => !categoryMap.has(id))
@@ -1984,6 +1662,7 @@ export default function CommandBriefScreen({
           source={assessment?.tripIntentSource ?? readinessState.tripIntentSource}
           onChange={handleTripIntentChange}
           compact
+          fitAllIntents
           style={commandBriefFleetSurfaceStyle}
           intentChipStyle={commandBriefFleetSurfaceStyle}
         />
@@ -2010,7 +1689,13 @@ export default function CommandBriefScreen({
         <View style={styles.sectionStack}>
           {/* Camp Decision Clock disabled: runtime feature flag keeps continue/divert guidance out of the user-facing section stack. */}
           {campDecisionClockEnabled ? <CampDecisionClockBriefModule decision={campDecisionClock} /> : null}
-          {departureDeltaBriefEnabled ? <DepartureDeltaBriefPanel result={departureDeltaBrief} /> : null}
+          {departureDeltaBriefEnabled ? (
+            <OperationalDeltaBriefCard
+              currentSnapshot={operationalDeltaSnapshot}
+              legacyDepartureBaseline={legacyOperationalDepartureBaseline}
+              onFeedback={showToast}
+            />
+          ) : null}
           {hasRoute ? <WeakPointAnalyzerPanel assessment={weakPointAssessment} /> : null}
 
           <View style={[styles.decisionCard, commandBriefFleetSurfaceStyle]}>
@@ -2300,81 +1985,6 @@ const styles = StyleSheet.create({
   },
   campDecisionClockWarningText: {
     flex: 1,
-    color: ECS.muted,
-    lineHeight: 15,
-  } as TextStyle,
-  departureDeltaBriefCard: {
-    padding: 14,
-    gap: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: ECS_SURFACE.border.selected,
-    backgroundColor: ECS_SURFACE.background.selected,
-  },
-  departureDeltaBriefTitleBlock: {
-    flex: 1,
-    minWidth: 0,
-    gap: 3,
-  },
-  departureDeltaBriefSubtitle: {
-    color: ECS.muted,
-    lineHeight: 15,
-  } as TextStyle,
-  departureDeltaBriefEmptyState: {
-    color: ECS.muted,
-    lineHeight: 17,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-  } as TextStyle,
-  departureDeltaBriefGrid: {
-    gap: 8,
-  },
-  departureDeltaBriefSection: {
-    gap: 7,
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: ECS_SURFACE.border.selected,
-    backgroundColor: ECS_SURFACE.background.selected,
-  },
-  departureDeltaBriefSectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  departureDeltaBriefSectionTitle: {
-    flex: 1,
-    minWidth: 0,
-    color: ECS.text,
-  } as TextStyle,
-  departureDeltaBriefItems: {
-    gap: 8,
-  },
-  departureDeltaBriefItem: {
-    gap: 4,
-  },
-  departureDeltaBriefItemHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  departureDeltaBriefItemTitle: {
-    flex: 1,
-    minWidth: 0,
-    color: ECS.text,
-    lineHeight: 17,
-  } as TextStyle,
-  departureDeltaBriefItemSummary: {
-    color: ECS.muted,
-    lineHeight: 15,
-  } as TextStyle,
-  departureDeltaBriefEvidence: {
-    color: ECS.muted,
-    lineHeight: 15,
-  } as TextStyle,
-  departureDeltaBriefEmpty: {
     color: ECS.muted,
     lineHeight: 15,
   } as TextStyle,

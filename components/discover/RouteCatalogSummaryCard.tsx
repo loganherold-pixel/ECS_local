@@ -2,9 +2,10 @@ import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECSCard } from '../ECSSurface';
-import { ECSBadge } from '../ECSStatus';
+import { SourceTruthInspectorTrigger } from '../source-truth';
 import { ECS, TACTICAL } from '../../lib/theme';
 import type { RouteCatalogSummary } from '../../lib/routeDataContracts';
+import { buildRouteCatalogSourceTruthBinding } from '../../lib/sourceTruthAdapters';
 
 type RouteCatalogSummaryCardProps = {
   summary: RouteCatalogSummary;
@@ -74,6 +75,7 @@ export default function RouteCatalogSummaryCard({
     summary.popularityScore != null ? `${Math.round(summary.popularityScore)} activity` : null,
     updatedAt,
   ].filter(Boolean).join(' | ');
+  const sourceTruthBinding = buildRouteCatalogSourceTruthBinding(summary);
 
   return (
     <ECSCard variant="primary" style={[s.card, compactPreview && s.cardCompact]}>
@@ -84,11 +86,14 @@ export default function RouteCatalogSummaryCard({
             <Text style={s.eyebrow}>ROUTE SUMMARY</Text>
             <Text style={s.title} numberOfLines={2}>{summary.title}</Text>
           </View>
-          <ECSBadge
+          <SourceTruthInspectorTrigger
+            source={sourceTruthBinding.ref}
+            policyKey={sourceTruthBinding.policyKey}
+            dependencies={sourceTruthBinding.dependencies}
             label={formatSource(summary.sourceType)}
-            tone={summary.sourceType === 'official' ? 'live' : summary.sourceType === 'preview' ? 'warning' : 'category'}
-            icon="trail-sign-outline"
-            compact
+            badgeTone={summary.sourceType === 'preview' ? 'warning' : 'category'}
+            badgeIcon="trail-sign-outline"
+            testID={`route-source-truth-${summary.routeId}`}
           />
         </View>
         {metaLine ? <Text style={s.metaText}>{metaLine}</Text> : null}

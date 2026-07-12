@@ -1,4 +1,5 @@
 import type { ECSPin } from '../components/navigate/PinTypes';
+import { bailoutStore, type BailoutPoint } from './bailoutStore';
 import { pinStore } from './pinStore';
 import { routeStore, type ImportedRoute, type RouteSegment, type RouteWaypoint } from './routeStore';
 import type {
@@ -26,10 +27,22 @@ export function getDispatchContextTypeLabel(type: DispatchLinkedContextType): st
       return 'Waypoint';
     case 'route_segment':
       return 'Route Segment';
+    case 'route':
+      return 'Route';
+    case 'camp':
+      return 'Camp';
+    case 'rally':
+      return 'Rally Point';
+    case 'bailout':
+      return 'Bailout Point';
+    case 'incident':
+      return 'Incident';
     case 'resource':
       return 'Resource';
     case 'vehicle':
       return 'Vehicle';
+    case 'member':
+      return 'Member';
     case 'power':
       return 'Power';
     case 'manual':
@@ -206,11 +219,25 @@ export function collectDispatchLinkedContextsFromStores(): DispatchLinkedContext
 
   try {
     const activeRoute = routeStore.getActive();
-    if (activeRoute) {
-      contexts.push(...dispatchContextsFromRoute(activeRoute));
+    const recentRoutes = routeStore.getAll();
+    const routes = [
+      ...(activeRoute ? [activeRoute] : []),
+      ...recentRoutes.filter((route) => route.id !== activeRoute?.id),
+    ].slice(0, 4);
+    for (const route of routes) {
+      contexts.push(dispatchContextFromRoute(route));
+      if (route.id === activeRoute?.id) {
+        contexts.push(...dispatchRouteDetailContexts(route));
+      }
     }
   } catch {
     // Safe adapter: route context is optional for this Dispatch pass.
+  }
+
+  try {
+    contexts.push(...bailoutStore.getAll().slice(0, 8).map(dispatchContextFromBailoutPoint));
+  } catch {
+    // Safe adapter: locally stored bailout context is optional.
   }
 
   return contexts;
@@ -223,6 +250,22 @@ export function dispatchContextFromPin(pin: ECSPin): DispatchLinkedContext {
     title: pin.title,
     subtitle: `${pin.category} / ${pin.type}`,
     coordinates: { latitude: pin.lat, longitude: pin.lng },
+    observedAt: pin.created_at,
+    sourceTruthPolicyKey: 'manual_user_state',
+    sourceTruth: {
+      id: `pin-source-${pin.id}`,
+      origin: 'manual',
+      authority: 'ECS User',
+      provider: 'pinStore',
+      observedAt: pin.created_at,
+      fetchedAt: null,
+      expiresAt: null,
+      confidence: 'medium',
+      coverage: 'complete',
+      availability: 'usable',
+      conflict: false,
+      warningCodes: ['manual_source'],
+    },
     metadata: {
       source: 'pinStore',
       pinId: pin.id,
@@ -245,9 +288,13 @@ export function dispatchContextFromWaypoint(
     title: waypoint.name || `Waypoint ${index + 1}`,
     subtitle: route.name,
     coordinates: { latitude: waypoint.lat, longitude: waypoint.lon },
+    observedAt: waypoint.time ?? route.updated_at,
+    sourceTruthPolicyKey: 'offline_map_route_package',
+    sourceTruth: getRouteSourceTruth(route, waypoint.time ?? route.updated_at),
     metadata: {
       source: 'routeStore',
       routeId: route.id,
+      waypointIndex: index,
       waypointType: waypoint.waypointType ?? null,
       elevation: waypoint.ele,
       time: waypoint.time,
@@ -270,6 +317,9 @@ export function dispatchContextFromRouteSegment(
       ? { latitude: firstPoint.lat, longitude: firstPoint.lon }
       : undefined,
     routeSegmentId: `${route.id}:${index}`,
+    observedAt: route.updated_at,
+    sourceTruthPolicyKey: 'offline_map_route_package',
+    sourceTruth: getRouteSourceTruth(route, route.updated_at),
     metadata: {
       source: 'routeStore',
       routeId: route.id,
@@ -279,7 +329,71 @@ export function dispatchContextFromRouteSegment(
   };
 }
 
-function dispatchContextsFromRoute(route: ImportedRoute): DispatchLinkedContext[] {
+export function dispatchContextFromRoute(route: ImportedRoute): DispatchLinkedContext {
+  const firstWaypoint = route.waypoints[0];
+  const firstPoint = route.segments[0]?.points[0];
+  return {
+    id: `route-${route.id}`,
+    type: 'route',
+    title: route.name,
+    subtitle: `${route.total_distance_miles.toFixed(1)} mi / ${route.is_active ? 'Active' : 'Saved'}`,
+    coordinates: firstWaypoint
+      ? { latitude: firstWaypoint.lat, longitude: firstWaypoint.lon }
+      : firstPoint
+        ? { latitude: firstPoint.lat, longitude: firstPoint.lon }
+        : undefined,
+    observedAt: route.updated_at,
+    sourceTruthPolicyKey: 'offline_map_route_package',
+    sourceTruth: getRouteSourceTruth(route, route.updated_at),
+    metadata: {
+      source: 'routeStore',
+      routeId: route.id,
+      activeRoute: route.is_active,
+      sourceFormat: route.source_format,
+      syncStatus: route.sync_status,
+    },
+  };
+}
+
+export function dispatchContextFromBailoutPoint(point: BailoutPoint): DispatchLinkedContext {
+  const type: DispatchLinkedContextType = point.type === 'camp'
+    ? 'camp'
+    : point.type === 'staging'
+      ? 'rally'
+      : ['fuel', 'water', 'supplies', 'repair', 'hospital', 'town', 'ranger'].includes(point.type)
+        ? 'resource'
+        : 'bailout';
+  return {
+    id: `bailout-${point.id}`,
+    type,
+    title: point.title,
+    subtitle: point.type.replace(/_/g, ' '),
+    coordinates: { latitude: point.lat, longitude: point.lng },
+    observedAt: point.created_at,
+    sourceTruthPolicyKey: 'manual_user_state',
+    sourceTruth: {
+      id: `bailout-source-${point.id}`,
+      origin: 'manual',
+      authority: 'ECS User',
+      provider: 'bailoutStore',
+      observedAt: point.created_at,
+      fetchedAt: null,
+      expiresAt: null,
+      confidence: 'medium',
+      coverage: 'complete',
+      availability: 'usable',
+      conflict: false,
+      warningCodes: ['manual_source'],
+    },
+    metadata: {
+      source: 'bailoutStore',
+      bailoutId: point.id,
+      bailoutType: point.type,
+    },
+  };
+}
+
+function dispatchRouteDetailContexts(route: ImportedRoute): DispatchLinkedContext[] {
   return [
     ...route.waypoints.slice(0, 6).map((waypoint, index) =>
       dispatchContextFromWaypoint(waypoint, route, index),
@@ -288,4 +402,22 @@ function dispatchContextsFromRoute(route: ImportedRoute): DispatchLinkedContext[
       dispatchContextFromRouteSegment(segment, route, index),
     ),
   ];
+}
+
+function getRouteSourceTruth(route: ImportedRoute, observedAt: string | null) {
+  const origin = route.source_format === 'custom' ? 'manual' as const : 'cached' as const;
+  return {
+    id: `route-source-${route.id}`,
+    origin,
+    authority: route.source_app ?? 'ECS Route Store',
+    provider: route.source_app,
+    observedAt,
+    fetchedAt: route.updated_at,
+    expiresAt: null,
+    confidence: route.sync_status === 'synced' ? 'high' as const : 'medium' as const,
+    coverage: 'complete' as const,
+    availability: 'usable' as const,
+    conflict: false,
+    warningCodes: origin === 'cached' ? ['origin_cached', 'offline_route_package'] : ['manual_source'],
+  };
 }

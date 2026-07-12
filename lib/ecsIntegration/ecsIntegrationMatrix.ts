@@ -7,7 +7,8 @@ export type ECSIntegrationFeatureId =
   | 'recovery_packet_builder'
   | 'expedition_replay_debrief'
   | 'offline_failure_drill'
-  | 'loadout_consequence_preview';
+  | 'loadout_consequence_preview'
+  | 'route_change_impact_preview';
 
 export type ECSIntegrationSurface =
   | 'command_brief'
@@ -60,6 +61,7 @@ export const ECS_INTEGRATION_FEATURE_IDS: ECSIntegrationFeatureId[] = [
   'expedition_replay_debrief',
   'offline_failure_drill',
   'loadout_consequence_preview',
+  'route_change_impact_preview',
 ];
 
 export const ECS_INTEGRATION_MATRIX: ECSIntegrationMatrixEntry[] = [
@@ -105,8 +107,14 @@ export const ECS_INTEGRATION_MATRIX: ECSIntegrationMatrixEntry[] = [
   },
   {
     featureId: 'departure_delta_brief',
-    ownerSystem: 'ECS Readiness',
-    sourceOfTruthSystems: ['Deterministic readiness engine', 'Previous departure audit snapshot'],
+    ownerSystem: 'ECS Operational Delta / Readiness',
+    sourceOfTruthSystems: [
+      'Deterministic Operational Delta engine',
+      'ECS Source Truth policies',
+      'Deterministic readiness engine',
+      'Previous departure audit snapshot',
+      'Local operational baseline store',
+    ],
     consumedInputs: [
       'previous departure audit',
       'current readiness posture',
@@ -118,6 +126,10 @@ export const ECS_INTEGRATION_MATRIX: ECSIntegrationMatrixEntry[] = [
       'camp confidence',
       'dispatch roster',
       'resource margins',
+      'departure baseline',
+      'last-stop baseline',
+      'last-acknowledgment baseline',
+      'source freshness, origin, availability, coverage, confidence, and conflict state',
     ],
     emittedOutputs: [
       'newBlockers',
@@ -127,6 +139,10 @@ export const ECS_INTEGRATION_MATRIX: ECSIntegrationMatrixEntry[] = [
       'offlinePackageRegressions',
       'campConfidenceChanges',
       'updatedPosture',
+      'stable delta fingerprints',
+      'worsened and improved conditions',
+      'newly stale and restored sources',
+      'material, neutral, and unknown changes',
     ],
     surfaces: ['command_brief'],
     commandBriefRelationship: 'compact_panel',
@@ -134,11 +150,19 @@ export const ECS_INTEGRATION_MATRIX: ECSIntegrationMatrixEntry[] = [
     featureFlagConvention: 'runtime_flag_fail_closed',
     readinessLabel: 'feature_flagged',
     failureMode: 'unavailable',
-    requiredEvidence: ['timestamped previous audit', 'comparable current readiness result', 'domain identity match'],
+    requiredEvidence: [
+      'timestamped baseline snapshot',
+      'comparable current readiness result',
+      'domain identity match',
+      'source-truth metadata',
+      'centralized domain noise threshold',
+    ],
     mustNotDo: [
       'Must not claim changed or resolved items without comparable previous/current timestamps.',
       'Must not let AI alter deterministic blocker or posture ownership.',
       'Must not compare camp confidence across different endpoint identities or scales.',
+      'Must not let AI add, remove, reorder, or reinterpret deterministic operational deltas.',
+      'Must not persist precise convoy coordinates, provider secrets, or raw provider payloads.',
     ],
   },
   {
@@ -369,6 +393,60 @@ export const ECS_INTEGRATION_MATRIX: ECSIntegrationMatrixEntry[] = [
       'Must not create go/no-go readiness labels.',
       'Must not let stale proposed preview mirror persist after cancel, commit, or context switch.',
       'Must not mutate loadout from review-only suggestions.',
+    ],
+  },
+  {
+    featureId: 'route_change_impact_preview',
+    ownerSystem: 'Route Impact / Navigate',
+    sourceOfTruthSystems: [
+      'Deterministic Route Impact comparator',
+      'Navigate route session',
+      'verified route-builder geometry',
+      'ECS Source Truth policies',
+      'local offline route and tile packages',
+      'Fleet vehicle profile',
+      'Weather corridor',
+      'CampOps',
+      'Convoy tracking',
+    ],
+    consumedInputs: [
+      'baseline and candidate route geometry',
+      'distance, duration, and arrival estimates',
+      'vehicle fuel profile',
+      'camp endpoint evidence',
+      'weather corridor evidence',
+      'offline package coverage',
+      'bailout and resupply evidence',
+      'convoy ETA evidence',
+      'source freshness, confidence, coverage, availability, and conflicts',
+    ],
+    emittedOutputs: [
+      'route impact fingerprint',
+      'per-category direction and materiality',
+      'required unknown categories',
+      'deterministic overall outcome',
+      'source-truth comparison',
+      'no-mutation preview model',
+    ],
+    surfaces: ['navigate'],
+    commandBriefRelationship: 'none',
+    featureFlag: 'EXPO_PUBLIC_ECS_ROUTE_CHANGE_IMPACT_PREVIEW',
+    featureFlagConvention: 'current_user_facing_extension_explicit_false_disables',
+    readinessLabel: 'current_user_facing_extension',
+    failureMode: 'source_limited',
+    requiredEvidence: [
+      'candidate geometry fingerprint',
+      'matching route endpoints or explicit mismatch state',
+      'per-domain source truth',
+      'active-guidance no-mutation evidence',
+      'Android phone and landscape UI evidence',
+    ],
+    mustNotDo: [
+      'Must not label a candidate safer while required safety evidence is unknown.',
+      'Must not merge legal/access confidence with closure or current-condition confidence.',
+      'Must not fetch providers during comparison or accept a route automatically.',
+      'Must not replace active guidance without the existing explicit confirmation.',
+      'Must not let AI create, remove, or override deterministic impacts.',
     ],
   },
 ];

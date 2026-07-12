@@ -33,6 +33,8 @@ import {
   DIFFICULTY_META,
   routeAnalysisEngine,
 } from '../../lib/routeAnalysisEngine';
+import type { VehicleRouteConstraintEnvelopeResult } from '../../lib/vehicleRouteConstraintEnvelope';
+import { VehicleRouteConstraintEnvelope } from './VehicleRouteConstraintEnvelope';
 
 
 interface RouteAnalysisPanelProps {
@@ -41,6 +43,7 @@ interface RouteAnalysisPanelProps {
   onClose?: () => void;
   /** When true, shows a loading indicator instead of empty state */
   loading?: boolean;
+  constraintEnvelope?: VehicleRouteConstraintEnvelopeResult | null;
 }
 
 // ── Elevation Profile Mini-Chart ─────────────────────────────
@@ -255,6 +258,7 @@ export default function RouteAnalysisPanel({
   visible,
   onClose,
   loading,
+  constraintEnvelope,
 }: RouteAnalysisPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const [showSegments, setShowSegments] = useState(false);
@@ -397,6 +401,10 @@ export default function RouteAnalysisPanel({
       <Text style={styles.truthNote} numberOfLines={2}>
         ECS-estimated from route geometry. Access, weather, closures, and field conditions need current verification.
       </Text>
+
+      {constraintEnvelope ? (
+        <VehicleRouteConstraintEnvelope envelope={constraintEnvelope} />
+      ) : null}
 
       {/* Primary stats grid */}
       <View style={styles.statsGrid}>

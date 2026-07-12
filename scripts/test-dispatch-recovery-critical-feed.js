@@ -4,6 +4,10 @@ const path = require('path');
 
 const sourcePath = path.join(process.cwd(), 'components/dispatch/DispatchCadCommandCenter.tsx');
 const source = fs.readFileSync(sourcePath, 'utf8');
+const recoveryMapSource = fs.readFileSync(
+  path.join(process.cwd(), 'lib/dispatchRecoveryMapModel.ts'),
+  'utf8',
+);
 const panelSource = fs.readFileSync(
   path.join(process.cwd(), 'components/dispatch/DispatchConvoyCommandPanel.tsx'),
   'utf8',
@@ -25,22 +29,22 @@ assert.match(
   'Dispatch feed should classify routine CAD items that can be cleared locally.',
 );
 assert.match(
-  source,
+  recoveryMapSource,
   /event\.status === 'recovery_critical'/,
   'Recovery-critical detector should include recovery_critical status.',
 );
 assert.match(
-  source,
+  recoveryMapSource,
   /event\.category === 'recovery_assist'/,
   'Recovery-critical detector should include recovery_assist category.',
 );
 assert.match(
-  source,
+  recoveryMapSource,
   /event\.category === 'hazard_recovery'/,
   'Recovery-critical detector should include hazard_recovery category.',
 );
 assert.match(
-  source,
+  recoveryMapSource,
   /Recovery Assist Requested from Current GPS Position/,
   'Recovery-critical feed should show the requested display copy.',
 );
@@ -66,8 +70,8 @@ assert.match(
 );
 assert.match(
   source,
-  /presentation=\{isLandscapeDispatch \? 'map' : 'feed'\}/,
-  'Running CAD feed surface should host the Convoy Command surface in feed mode.',
+  /presentation=\{isLandscapeDispatch \? 'signals' : 'feed'\}/,
+  'Running CAD feed surface should host the Convoy Command surface in feed or landscape signals mode.',
 );
 assert.doesNotMatch(
   source,
@@ -125,7 +129,7 @@ assert.match(
   'Recovery map intelligence navigation button should use the existing recovery assist navigation handler.',
 );
 assert.match(
-  source,
+  recoveryMapSource,
   /throw new Error\('Recovery request location unavailable\.'\)/,
   'Recovery navigation should fail clearly when recovery coordinates are missing or invalid.',
 );

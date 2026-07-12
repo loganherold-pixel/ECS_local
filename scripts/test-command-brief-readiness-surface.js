@@ -1,9 +1,12 @@
+/* eslint-disable no-undef */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
 const commandBrief = fs.readFileSync(path.join(root, 'components', 'brief', 'CommandBriefScreen.tsx'), 'utf8');
+const operationalDeltaBrief = fs.readFileSync(path.join(root, 'components', 'brief', 'OperationalDeltaBriefCard.tsx'), 'utf8');
+const tripIntentSelector = fs.readFileSync(path.join(root, 'components', 'readiness', 'TripIntentSelector.tsx'), 'utf8');
 const dashboard = fs.readFileSync(path.join(root, 'app', '(tabs)', 'dashboard.tsx'), 'utf8');
 const packageSource = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
 
@@ -35,7 +38,6 @@ function blockBetween(source, startFragment, endFragment) {
   'Vehicle Fit',
   'CampOps / Camp Legality Confidence',
   'Camp Decision Clock',
-  'Departure Delta Brief',
   'Weak Point Analyzer',
   'What breaks first?',
   'Internal beta / restricted field-test',
@@ -47,18 +49,6 @@ function blockBetween(source, startFragment, endFragment) {
   'Provenance / trace:',
   'Deterministic ECS ranking. Advisory only.',
   'Advisory only.',
-  'What changed since last check?',
-  'No comparable previous departure audit available.',
-  'auditComparison',
-  'departureDeltaBriefUnavailableCopy',
-  "result.auditComparison.status !== 'comparable'",
-  'New blockers',
-  'Resolved blockers',
-  'Stale inputs',
-  'Changed vehicle/loadout values',
-  'Offline package regressions',
-  'Camp confidence changes',
-  'Updated posture',
   'Continue to planned camp until:',
   'After that, divert to backup endpoint',
   'Divert to backup endpoint now.',
@@ -89,7 +79,7 @@ function blockBetween(source, startFragment, endFragment) {
   "AppState.addEventListener('change'",
   'useFocusEffect',
   'departureDeltaBriefEnabled',
-  'buildDepartureDeltaBrief',
+  'buildOperationalSnapshotFromReadiness',
   'isDepartureDeltaBriefFeatureEnabled',
   'scoreExpeditionWeakPoints',
   'buildExpeditionReadinessSnapshotForWeakPoints',
@@ -131,6 +121,21 @@ function blockBetween(source, startFragment, endFragment) {
   assertIncludes(commandBrief, fragment, `Command Brief boxes should match the active Fleet vehicle card surface: ${fragment}`);
 });
 
+assertIncludes(
+  commandBrief,
+  'fitAllIntents',
+  'Command Brief should keep every trip-intent button visible without horizontal scrolling.',
+);
+[
+  'fitAllIntents ? (',
+  '<View style={[styles.intentRow, styles.intentRowFitAll]}>',
+  "flexWrap: 'wrap'",
+  "flexBasis: '47%'",
+  'numberOfLines={fitAllIntents ? 2 : 1}',
+].forEach((fragment) => {
+  assertIncludes(tripIntentSelector, fragment, `Trip intent fit-all layout should include: ${fragment}`);
+});
+
 [
   'campCandidateRow',
   'ctaButton',
@@ -141,8 +146,6 @@ function blockBetween(source, startFragment, endFragment) {
   'recoveryPrepList',
   'campDecisionClockCard',
   'campDecisionClockLine',
-  'departureDeltaBriefCard',
-  'departureDeltaBriefSection',
   'weakPointAnalyzerCard',
   'weakPointAnalyzerRow',
   'actionRow',
@@ -246,14 +249,28 @@ assertIncludes(
 );
 assertIncludes(
   commandBrief,
-  'departureDeltaBriefEnabled ? <DepartureDeltaBriefPanel result={departureDeltaBrief} /> : null',
-  'Command Brief should render the Departure Delta Brief panel only behind the feature flag.',
+  'departureDeltaBriefEnabled ? (',
+  'Command Brief should render the Operational Delta Brief card only behind the existing feature flag.',
 );
 assertIncludes(
   commandBrief,
-  'result.auditComparison.warnings[0]',
-  'Command Brief should surface compact audit-comparison stale/unavailable reasons without raw debug metadata.',
+  '<OperationalDeltaBriefCard',
+  'Command Brief should render the reusable Operational Delta Brief card.',
 );
+[
+  'WHAT CHANGED',
+  'No saved baseline for this route or expedition',
+  'SourceTruthInspectorTrigger',
+  'buildOperationalDeltaResult',
+  'Mark Last Stop',
+  'Acknowledge',
+].forEach((fragment) => {
+  assertIncludes(
+    operationalDeltaBrief,
+    fragment,
+    `Operational Delta Brief should include the grounded compact workflow: ${fragment}`,
+  );
+});
 assertIncludes(
   commandBrief,
   '<WeakPointAnalyzerPanel assessment={weakPointAssessment} />',

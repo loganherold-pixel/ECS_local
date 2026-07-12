@@ -27,15 +27,31 @@ It returns:
 - structured `decisionPoint`, when route/progress data is sufficient
 - resolved delay scenario and context
 
-## Feature Flag
+## Feature Flags And Navigate Rollout
 
-The flow is disabled unless `campopsRecommendationsEnabled` is enabled through the existing CampOps rollout config or direct input.
+The deterministic flow is disabled unless `campopsEndpointRecommendationEnabled` is enabled through the existing CampOps rollout config or direct input. Decision-point output additionally requires `campopsDecisionPointsEnabled`.
+
+The first Navigate UI uses `getCampOpsSafeEndpointRolloutConfig`. It keeps the existing CampOps default-off posture and only enables the endpoint and decision-point flags when the existing internal-beta rollout gate is active. When that gate is off, the `END DAY SAFELY` Navigate Tools action is not rendered and no endpoint computation is exposed.
 
 When disabled:
 
 - no endpoint is recommended
 - no production search behavior changes
 - `decisionSummary.status` is `disabled`
+
+## Navigate Decision Mode
+
+Navigate Tools exposes the first user-facing decision mode without adding a tab or changing the Navigate layout. The sheet supports no delay, 30-minute, 1-hour, 2-hour, and bounded custom-delay scenarios plus a before-sunset control.
+
+Implementation boundaries:
+
+- `lib/campops/campOpsSafeEndpointDecisionMode.ts` is the pure adapter and presentation-model layer. It normalizes active route progress, vehicle/resources, convoy state, power, candidate evidence, weather source state, and connectivity before invoking `findCampOpsSafeEndPoint`.
+- `components/navigate/SafeEndpointDecisionSheet.tsx` renders the compact ECS sheet and Source Truth inspectors.
+- `app/(tabs)/navigate.tsx` only supplies existing store snapshots and orchestrates map preview or guarded route staging.
+
+Map preview is read-only and does not replace the active route, camp, expedition, or convoy plan. Route staging uses the existing active-guidance replacement confirmation before ending guidance or replacing the staged preview. It does not start navigation automatically and it does not notify Dispatch or convoy members.
+
+The view model preserves manual, cached, stale, missing, estimated, and inferred input labels. Route-wide weather freshness is shown to the user but is not applied to candidate scoring unless CampOps already has candidate-linked weather evidence. Missing route geometry or progress produces an explicit no-decision-point reason instead of an invented turnoff.
 
 ## Delay Support
 
@@ -113,3 +129,11 @@ Decision deadlines prefer the latest practical turnoff time when distance and re
 If the planned camp moves after sunset or beyond the configured safe-arrival window and late-arrival risk is high, hard gates can reject or downgrade it. CampOps should then prefer a safer accessible endpoint where one exists.
 
 The flow never uses AI to compute this recommendation. AI may summarize the decision point, but it must not override CampOps hard gates, confidence, continue/divert options, stale-source warnings, or endpoint roles.
+
+## Verification
+
+- `npm run test:campops-safe-endpoint-decision-mode`
+- `npm run test:navigate-safe-endpoint-decision-ui`
+- `npm run test:campops-two-hour-delay`
+- `npm run test:campops-readiness`
+- `npm run test:active-guidance-replacement-guard`

@@ -6,11 +6,13 @@ const dispatchPath = path.join(process.cwd(), 'components/dispatch/DispatchCadCo
 const navigatePath = path.join(process.cwd(), 'app/(tabs)/navigate.tsx');
 const handoffPath = path.join(process.cwd(), 'lib/navigationHandoffStore.ts');
 const roadPath = path.join(process.cwd(), 'lib/mapboxRoadNavigation.ts');
+const recoveryMapPath = path.join(process.cwd(), 'lib/dispatchRecoveryMapModel.ts');
 
 const dispatchSource = fs.readFileSync(dispatchPath, 'utf8');
 const navigateSource = fs.readFileSync(navigatePath, 'utf8');
 const handoffSource = fs.readFileSync(handoffPath, 'utf8');
 const roadSource = fs.readFileSync(roadPath, 'utf8');
+const recoveryMapSource = fs.readFileSync(recoveryMapPath, 'utf8');
 
 assert.match(
   handoffSource,
@@ -34,23 +36,23 @@ assert.match(
 );
 
 assert.match(
-  dispatchSource,
-  /function buildRecoveryAssistNavigationPayload\(event: DispatchEvent\): NavigationHandoffPayload/,
-  'Dispatch should build a typed recovery assist navigation payload.',
+  recoveryMapSource,
+  /export function buildRecoveryAssistNavigationPayload\(event: DispatchEvent\): NavigationHandoffPayload/,
+  'The recovery map model should build a typed recovery assist navigation payload.',
 );
 assert.match(
-  dispatchSource,
+  recoveryMapSource,
   /source: 'dispatch'[\s\S]*routeSource: 'dispatch_recovery'[\s\S]*navigationMode: 'recovery_assist'/,
   'Recovery assist payload should carry dispatch source, dispatch_recovery route source, and recovery_assist mode.',
 );
 assert.match(
-  dispatchSource,
+  recoveryMapSource,
   /recoveryAssistEventId: event\.id[\s\S]*dispatchEventId: event\.id/,
   'Recovery assist payload should include the CAD event id in metadata.',
 );
 assert.match(
-  dispatchSource,
-  /if \(!isValidCoordinate\(event\.location\)\) \{[\s\S]*Recovery request location unavailable/,
+  recoveryMapSource,
+  /if \(!isValidDispatchMapCoordinate\(event\.location\)\) \{[\s\S]*Recovery request location unavailable/,
   'Navigate Assist should fail clearly when CAD event coordinates are missing.',
 );
 assert.match(

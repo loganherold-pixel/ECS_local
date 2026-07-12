@@ -438,11 +438,11 @@ assertIncludes(
   'Navigate Route should return to the map after starting navigation.',
 );
 
-// GPX and cached GPX routes must use stored geometry, not online routing.
+// GPX and cached GPX routes retain stored geometry while allowing connected guidance enrichment.
 const payloadBuilder = blockBetween(
   navigateSource,
   'function buildNavigationPayloadFromRun(',
-  'function buildStitchedRunImport',
+  'function buildNavigationPayloadFromRoadRoute',
 );
 assertIncludes(payloadBuilder, "? 'cached_gpx'", 'Cached GPX routes should be source-aware.');
 assertIncludes(payloadBuilder, "? 'gpx'", 'Imported GPX routes should be source-aware.');
@@ -450,7 +450,7 @@ assertIncludes(payloadBuilder, 'const usesStoredRouteGeometry = routeSource ==='
 assertIncludes(
   payloadBuilder,
   'requiresOnlineRouting: usesStoredRouteGeometry ? false : isCustomRoute',
-  'GPX route navigation payloads must not require online routing.',
+  'GPX route navigation payloads must remain usable without online routing.',
 );
 assertIncludes(payloadBuilder, 'trailGeometry,', 'Navigation payload should carry stored GPX geometry.');
 assertIncludes(payloadBuilder, "geometrySource: usesStoredRouteGeometry ? 'stored_gpx_geometry'", 'GPX payload metadata should identify stored geometry.');
@@ -462,7 +462,13 @@ const applyPayload = blockBetween(
 );
 assertIncludes(applyPayload, 'stampedPayload.requiresOnlineRouting === false', 'Offline GPX navigation should branch on stored geometry.');
 assertIncludes(applyPayload, 'await clearRoadDestination();', 'Stored GPX navigation should avoid road-route preview state.');
-assertIncludes(applyPayload, 'usesStoredRouteGeometry || !roadDestination || tripMode ===', 'Stored GPX navigation should skip online road routing.');
+assertIncludes(
+  applyPayload,
+  'const storedGeometryOnly = usesStoredRouteGeometry && !liveNavigateServicesEnabled;',
+  'Stored GPX geometry should only force local handling when live guidance is unavailable.',
+);
+assertIncludes(applyPayload, 'storedGeometryOnly || !roadDestination || tripMode ===', 'Offline GPX navigation should skip online road routing.');
+assertIncludes(applyPayload, 'resolveImportedRouteGuidance({', 'Connected GPX routes should request trace-aware maneuver guidance.');
 assertIncludes(applyPayload, 'fitMapToCoordinatePreview', 'Stored GPX navigation should display the route line from local geometry.');
 const trailPreviewEffect = blockBetween(
   navigateSource,
@@ -476,7 +482,7 @@ assertIncludes(
 );
 assertIncludes(
   navigateSource,
-  'coordinates: exploreNavigationPayload.trailGeometry.map((point) => [',
+  '? [exploreNavigationPayload.trailGeometry]',
   'Route line should be displayed from cached/imported GPX geometry.',
 );
 
@@ -539,12 +545,12 @@ assertIncludes(
 );
 assertIncludes(
   navigateSource,
-  'showUserLocation={!!safeUserLocation}',
+  'showUserLocation={mapRendererShowUserLocation}',
   'MapRenderer should receive user-dot visibility when location is available.',
 );
 assertIncludes(
   navigateSource,
-  'userLocation={safeUserLocation}',
+  'userLocation={mapRendererUserLocation}',
   'MapRenderer should receive user location during passive and active navigation.',
 );
 assertIncludes(

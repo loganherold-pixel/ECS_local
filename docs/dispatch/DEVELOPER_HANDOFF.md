@@ -1,6 +1,6 @@
 # ECS Dispatch Developer Handoff
 
-Last updated: 2026-04-24
+Last updated: 2026-07-12
 
 ## Purpose
 
@@ -46,6 +46,7 @@ Domain and service code lives in `lib/`:
 - `lib/dispatchPermissionAdapter.ts`
 - `lib/dispatchNotificationAdapter.ts`
 - `lib/dispatchContextAdapter.ts`
+- `lib/dispatchNavigateContextHandoff.ts`
 - `lib/dispatchTimelineLogAdapter.ts`
 - `lib/dispatchAuditAdapter.ts`
 - `lib/dispatchCheckInAdapter.ts`
@@ -275,6 +276,12 @@ The UI should disable or block unauthorized actions before writes occur.
 Linked context helpers live in:
 
 - `lib/dispatchContextAdapter.ts`
+- `lib/dispatchNavigateContextHandoff.ts`
+
+`dispatchContextAdapter` discovers and formats local context. `dispatchNavigateContextHandoff`
+owns validation, permission checks, local target resolution, dedupe, Source Truth preservation,
+and the one-shot Navigate handoff. Dispatch UI components must call this adapter instead of
+writing to pin, route, bailout, vehicle, navigation-flow, or handoff stores directly.
 
 Supported context types:
 
@@ -282,12 +289,32 @@ Supported context types:
 - pin
 - waypoint
 - route segment
+- active or saved route
+- camp
+- rally point
+- bailout point
+- incident or recovery location
 - resource
 - vehicle
+- member
 - power
 - manual
 
 Context records are embedded into pings, queue items, assist flows, and timeline events. Do not assume every context has coordinates. Treat coordinates as sensitive and permission controlled.
+
+Handoff behavior:
+
+- `mapContextIntegration` is the rollout gate.
+- Generic context requires `view_dispatch`; another member's location also requires `view_member_location`.
+- Restricted coordinates are rejected before handoff or navigation-flow persistence.
+- Local pin, route, waypoint, route-segment, bailout, and vehicle references are resolved from their canonical stores. Deleted references fail closed.
+- The payload uses `routeSource: 'dispatch_context'`, `dispatchContextOnly: true`, no road destination, no route geometry, and no raw source payload.
+- Navigate consumes this payload before normal route-preview handling, optionally focuses the authorized coordinate, and renders `DispatchContextHandoffCard`.
+- Context preview never creates a pin, replaces the active route, clears route-session state, or starts guidance.
+- The return route is restricted to Dispatch routes and preserves the originating event, queue item, ping, or timeline identifier.
+- Manual and non-mappable context can open as a detail card. Mappable context with no valid coordinate fails with explicit unavailable copy.
+- Source Truth is re-evaluated on receipt so cached, manual, stale, unavailable, conflict, confidence, and coverage states remain visible.
+- Only bounded labels, IDs, source truth, and status fields cross the handoff. Provider payloads, credentials, auth data, and restricted coordinates must never be included.
 
 ## Timeline And Log Integration
 
@@ -314,6 +341,8 @@ Existing bounded scripts:
 
 - `node ./scripts/test-dispatch-helpers.js`
 - `node ./scripts/test-dispatch-scenarios.js`
+- `npm run test:dispatch-context-handoff`
+- `npm run test:dispatch-context-handoff-ui`
 
 Common validation:
 

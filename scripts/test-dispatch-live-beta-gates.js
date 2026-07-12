@@ -39,6 +39,7 @@ const {
 
 for (const feature of [
   'teamPositionSharing',
+  'convoyRegroupPlanner',
   'agencyDataIngestion',
   'externalDispatchIntegration',
   'publicHazardPublishing',
@@ -66,6 +67,7 @@ for (const feature of [
 for (const requiredSource of [
   'resolveDispatchRolloutConfig()',
   "isDispatchFeatureEnabled(dispatchRollout, 'teamPositionSharing')",
+  "isDispatchFeatureEnabled(dispatchRollout, 'convoyRegroupPlanner')",
   "isDispatchFeatureEnabled(dispatchRollout, 'agencyDataIngestion')",
   "isDispatchFeatureEnabled(dispatchRollout, 'externalDispatchIntegration')",
   "isDispatchFeatureEnabled(dispatchRollout, 'publicHazardPublishing')",

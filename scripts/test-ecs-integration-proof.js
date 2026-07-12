@@ -47,6 +47,7 @@ const debrief = loadTs('lib/debrief/expeditionDebriefRecord.ts');
 const offline = loadTs('lib/offlineFailureDrillService.ts');
 const loadout = loadTs('lib/fleet/loadoutConsequencePreview.ts');
 const fleet = loadTs('lib/fleet/fleetPremiumDomain.ts');
+const routeImpact = loadTs('lib/routeImpact/routeChangeImpactConfig.ts');
 
 const {
   ECS_INTEGRATION_FEATURE_IDS,
@@ -72,6 +73,7 @@ const requiredFeatureIds = [
   'expedition_replay_debrief',
   'offline_failure_drill',
   'loadout_consequence_preview',
+  'route_change_impact_preview',
 ];
 
 const forbiddenCopyPhrases = [
@@ -502,6 +504,14 @@ check('Feature flags hide, show, or document existing beta gate conventions', ()
       on: preview.availability !== 'unavailable',
       defaultClosed: null,
       convention: 'current_user_facing_extension_no_runtime_flag_helper',
+    });
+
+    checks.push({
+      featureId: 'route_change_impact_preview',
+      off: routeImpact.isRouteChangeImpactPreviewEnabled({ routeChangeImpactPreviewEnabled: false }),
+      on: routeImpact.isRouteChangeImpactPreviewEnabled({ routeChangeImpactPreviewEnabled: true }),
+      defaultClosed: null,
+      convention: 'current_user_facing_extension_explicit_false_disables',
     });
 
     const ladder = convoy.buildConvoyStalenessLadder(fixtures.happy_path_integrated.convoy);

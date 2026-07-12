@@ -410,6 +410,19 @@ export function getCampOpsRoutePinsRolloutConfig(): Partial<CampOpsRecommendatio
   };
 }
 
+export function getCampOpsSafeEndpointRolloutConfig(): Partial<CampOpsRecommendationRolloutConfig> {
+  if (!isCampOpsInternalBetaFeatureEnabled()) return {};
+  return {
+    ...getCampOpsRoutePinsRolloutConfig(),
+    campopsEndpointRecommendationEnabled: true,
+    campopsDecisionPointsEnabled: true,
+  };
+}
+
+export function isCampOpsSafeEndpointDecisionModeEnabled(): boolean {
+  return getCampOpsFeatureState(getCampOpsSafeEndpointRolloutConfig()).endpointRecommendationEnabled;
+}
+
 export type CampOpsRecommendationConfig = {
   minimumPrimaryScore: number;
   minimumOverallScore: number;

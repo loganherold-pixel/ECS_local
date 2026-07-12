@@ -15,6 +15,7 @@ export type DispatchRolloutFeature =
   | 'mapContextIntegration'
   | 'expeditionLogIntegration'
   | 'teamPositionSharing'
+  | 'convoyRegroupPlanner'
   | 'agencyDataIngestion'
   | 'externalDispatchIntegration'
   | 'publicHazardPublishing'
@@ -41,6 +42,7 @@ export const DEFAULT_DISPATCH_ROLLOUT_CONFIG: DispatchRolloutConfig = {
   mapContextIntegration: true,
   expeditionLogIntegration: false,
   teamPositionSharing: false,
+  convoyRegroupPlanner: false,
   agencyDataIngestion: false,
   externalDispatchIntegration: false,
   publicHazardPublishing: false,
@@ -66,6 +68,7 @@ const DISPATCH_ROLLOUT_DISABLED_COPY: Record<DispatchRolloutFeature, string> = {
   mapContextIntegration: 'Map context integration is paused for this rollout.',
   expeditionLogIntegration: 'Expedition log integration is paused for this rollout.',
   teamPositionSharing: 'Team position sharing is disabled for internal beta until privacy and device QA gates pass.',
+  convoyRegroupPlanner: 'Convoy Regroup Planner is disabled until position-sharing privacy and multi-device QA gates pass.',
   agencyDataIngestion: 'Agency data ingestion is disabled for internal beta. No live agency feed is connected.',
   externalDispatchIntegration: 'External Dispatch integration is disabled. Reports stay local/internal unless explicitly enabled.',
   publicHazardPublishing: 'Public/community hazard publishing is disabled. User reports are not published externally.',

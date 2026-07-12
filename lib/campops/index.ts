@@ -20,6 +20,7 @@ export * from './campOpsSearchIntegration';
 export * from './campOpsRouteEndpoints';
 export * from './campOpsAiAssist';
 export * from './campOpsSafeEndpoint';
+export * from './campOpsSafeEndpointDecisionMode';
 export * from './campDecisionClock';
 export * from './campOpsDebrief';
 export * from './campOpsInternalBetaFeedback';

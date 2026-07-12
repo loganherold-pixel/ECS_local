@@ -42,6 +42,7 @@ export type MapFallbackSurfaceProps = {
   reducedDetail?: boolean;
   interactive?: boolean;
   onMapTap?: (coordinate: { latitude: number; longitude: number }) => void;
+  onUserLocationTap?: (payload: { screenCoordinate?: { x: number; y: number } | null }) => void;
   routeColor?: string;
   routeHaloColor?: string;
 };
@@ -142,6 +143,7 @@ export default function MapFallbackSurface({
   userLocation,
   interactive = false,
   onMapTap,
+  onUserLocationTap,
   routeColor = 'rgba(95,209,255,0.88)',
   routeHaloColor = 'rgba(95,209,255,0.2)',
 }: MapFallbackSurfaceProps) {
@@ -230,12 +232,44 @@ export default function MapFallbackSurface({
   }, []);
   const handlePress = useCallback(
     (event: GestureResponderEvent) => {
-      if (!interactive || !onMapTap || !bounds) return;
-      const x = (event.nativeEvent.locationX / Math.max(1, surfaceSize.width)) * width;
-      const y = (event.nativeEvent.locationY / Math.max(1, surfaceSize.height)) * height;
+      if (!bounds) return;
+      const nativeX = event.nativeEvent.locationX;
+      const nativeY = event.nativeEvent.locationY;
+      const x = (nativeX / Math.max(1, surfaceSize.width)) * width;
+      const y = (nativeY / Math.max(1, surfaceSize.height)) * height;
+      const userTapRadius = compact ? 22 : 28;
+      const projectedUserScreenPoint = projectedUserPoint
+        ? {
+            x: (projectedUserPoint[0] / width) * surfaceSize.width,
+            y: (projectedUserPoint[1] / height) * surfaceSize.height,
+          }
+        : null;
+      if (
+        onUserLocationTap &&
+        projectedUserScreenPoint &&
+        Math.hypot(
+          nativeX - projectedUserScreenPoint.x,
+          nativeY - projectedUserScreenPoint.y,
+        ) <= userTapRadius
+      ) {
+        onUserLocationTap({ screenCoordinate: { x: nativeX, y: nativeY } });
+        return;
+      }
+      if (!interactive || !onMapTap) return;
       onMapTap(coordinateFromProjectedPoint(bounds, width, height, x, y));
     },
-    [bounds, height, interactive, onMapTap, surfaceSize.height, surfaceSize.width, width],
+    [
+      bounds,
+      compact,
+      height,
+      interactive,
+      onMapTap,
+      onUserLocationTap,
+      projectedUserPoint,
+      surfaceSize.height,
+      surfaceSize.width,
+      width,
+    ],
   );
 
   if (!bounds || !project || pendingGeometryStatus) {
@@ -266,8 +300,8 @@ export default function MapFallbackSurface({
 
   return (
     <Pressable
-      pointerEvents={interactive ? 'auto' : 'none'}
-      disabled={!interactive}
+      pointerEvents={interactive || !!onUserLocationTap ? 'auto' : 'none'}
+      disabled={!interactive && !onUserLocationTap}
       onLayout={handleLayout}
       onPress={handlePress}
       style={[

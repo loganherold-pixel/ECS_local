@@ -4,7 +4,7 @@
 // Calculates how compatible a given expedition opportunity is
 // with the user's configured vehicle.
 //
-// Score: 0–100 weighted composite (6 factors)
+// Score: 0–100 weighted composite (5 factors)
 //   terrainMatch        30%
 //   fuelRangeCoverage   25%
 //   vehicleCapability   20%
@@ -106,7 +106,7 @@ export interface CompatibilityFactors {
 
 export type DifficultyRating = 'EASY' | 'MODERATE' | 'HARD' | 'EXTREME';
 
-// ── Weights (6-factor model) ────────────────────────────────
+// ── Weights (5-factor model) ────────────────────────────────
 const W_TERRAIN    = 0.30;
 const W_FUEL       = 0.25;
 const W_CAPABILITY = 0.20;

@@ -33,6 +33,7 @@ export type NavigationRouteSource =
   | 'drawn'
   | 'saved'
   | 'search'
+  | 'dispatch_context'
   | 'dispatch_advisory'
   | 'dispatch_recovery';
 

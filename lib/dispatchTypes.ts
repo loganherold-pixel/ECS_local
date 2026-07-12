@@ -1,3 +1,5 @@
+import type { SourceTruthPolicyKey, SourceTruthRef } from './sourceTruth';
+
 // ============================================================
 // ECS DISPATCH FEED — TYPE DEFINITIONS
 // ============================================================
@@ -139,8 +141,14 @@ export type DispatchLinkedContextType =
   | 'pin'
   | 'waypoint'
   | 'route_segment'
+  | 'route'
+  | 'camp'
+  | 'rally'
+  | 'bailout'
+  | 'incident'
   | 'resource'
   | 'vehicle'
+  | 'member'
   | 'power'
   | 'manual';
 
@@ -243,6 +251,11 @@ export interface DispatchLinkedContext {
   subtitle?: string;
   coordinates?: DispatchCoordinates;
   routeSegmentId?: string;
+  sourceTruth?: SourceTruthRef;
+  sourceTruthPolicyKey?: SourceTruthPolicyKey;
+  observedAt?: string;
+  stale?: boolean;
+  restricted?: boolean;
   metadata?: Record<string, unknown>;
 }
 

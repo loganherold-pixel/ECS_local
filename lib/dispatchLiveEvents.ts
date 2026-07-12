@@ -46,6 +46,8 @@ export type DispatchEventSyncState =
   | 'failed'
   | 'received';
 
+export type DispatchCoordinationType = 'rally';
+
 export type DispatchActorIdentity = {
   userId?: string;
   displayName: string;
@@ -96,6 +98,10 @@ export type DispatchEvent = {
   syncState?: DispatchEventSyncState;
   routeSegmentId?: string;
   requiresMapDrilldown?: boolean;
+  coordinationType?: DispatchCoordinationType;
+  requiresAcknowledgment?: boolean;
+  proposalFingerprint?: string;
+  proposalCandidateId?: string;
 };
 
 type DispatchEventValidationResult =
@@ -114,6 +120,7 @@ const EVENT_TYPES: DispatchEventType[] = [
   'assistance',
   'recovery',
 ];
+const COORDINATION_TYPES: DispatchCoordinationType[] = ['rally'];
 
 const EVENT_SEVERITIES: DispatchEventSeverity[] = ['info', 'watch', 'warning', 'critical'];
 
@@ -265,6 +272,12 @@ function normalizeEventSyncState(value: unknown): DispatchEventSyncState | undef
     : undefined;
 }
 
+function normalizeCoordinationType(value: unknown): DispatchCoordinationType | undefined {
+  return typeof value === 'string' && COORDINATION_TYPES.includes(value as DispatchCoordinationType)
+    ? value as DispatchCoordinationType
+    : undefined;
+}
+
 function normalizeFirstString(...values: unknown[]): string | undefined {
   for (const value of values) {
     const text = normalizeString(value);
@@ -381,6 +394,9 @@ export function validateDispatchEvent(raw: unknown): DispatchEventValidationResu
   const sessionId = normalizeFirstString(raw.sessionId, raw.session_id, raw.expeditionId, raw.expedition_id);
   const channelId = normalizeFirstString(raw.channelId, raw.channel_id);
   const syncState = normalizeEventSyncState(raw.syncState ?? raw.deliveryState);
+  const coordinationType = normalizeCoordinationType(raw.coordinationType);
+  const proposalFingerprint = normalizeString(raw.proposalFingerprint)?.slice(0, 120);
+  const proposalCandidateId = normalizeString(raw.proposalCandidateId)?.slice(0, 160);
 
   return {
     ok: true,
@@ -416,6 +432,12 @@ export function validateDispatchEvent(raw: unknown): DispatchEventValidationResu
       requiresMapDrilldown: typeof raw.requiresMapDrilldown === 'boolean'
         ? raw.requiresMapDrilldown
         : undefined,
+      coordinationType,
+      requiresAcknowledgment: typeof raw.requiresAcknowledgment === 'boolean'
+        ? raw.requiresAcknowledgment
+        : undefined,
+      proposalFingerprint,
+      proposalCandidateId,
     },
   };
 }

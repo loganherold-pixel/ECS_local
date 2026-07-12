@@ -10,6 +10,7 @@ const READINESS_DOC_RELATIVE_PATH = path.join('docs', 'release', 'dispatch-convo
 
 const SENSITIVE_DEFAULT_OFF_FEATURES = [
   'teamPositionSharing',
+  'convoyRegroupPlanner',
   'agencyDataIngestion',
   'externalDispatchIntegration',
   'publicHazardPublishing',
@@ -185,7 +186,7 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
         new RegExp(`${feature}:\\s*false`).test(rolloutSource),
       ),
       [relPath(root, paths.rolloutConfig)],
-      ['Keep position sharing, public publishing, agency ingestion, SOS transmission, demo data, and live radio integrations default-off until approved.'],
+      ['Keep position sharing, regroup planning, public publishing, agency ingestion, SOS transmission, demo data, and live radio integrations default-off until approved.'],
     ),
     check(
       'android_dispatch_convoy_visual_evidence_present',

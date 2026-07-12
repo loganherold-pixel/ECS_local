@@ -38,6 +38,9 @@ import {
 import { buildReadinessVehicleInputFromFleetState } from './fleetReadinessAdapter';
 import { buildRecoveryReadinessInput } from './recoveryReadinessAdapter';
 import { buildPowerReadinessInput } from './powerReadinessAdapter';
+import { isDepartureDeltaBriefFeatureEnabled } from './departureDeltaBrief';
+import { buildOperationalSnapshotFromReadiness } from './operationalDeltaAdapter';
+import { operationalDeltaBriefStore } from './operationalDeltaStore';
 import type {
   ExpeditionReadinessAssessment,
   ExpeditionReadinessFreshnessRecord,
@@ -900,6 +903,10 @@ export const expeditionReadinessStore = {
     return state;
   },
 
+  getResolvedInput(): ExpeditionReadinessInput {
+    return applyFreshnessWindows(mergeInput(buildSourceInput(), state.inputPatch));
+  },
+
   recomputeReadiness(options: ReadinessRecomputeOptions = {}): ExpeditionReadinessAssessment {
     if (options.immediate === false) {
       scheduleRecompute(options);
@@ -990,6 +997,9 @@ export const expeditionReadinessStore = {
       state.activeTripId ??
       (activeRouteId ? `trip:${activeRouteId}:${Date.now()}` : `trip:${Date.now()}`);
 
+    const departureAssessment = state.currentAssessment ?? recomputeNow();
+    const departureInput = applyFreshnessWindows(mergeInput(buildSourceInput(), state.inputPatch));
+
     state = {
       ...state,
       activeRouteId,
@@ -999,6 +1009,28 @@ export const expeditionReadinessStore = {
     lastAlertAtByTrigger = {};
     globalLastAlertAt = null;
     lastInputSignature = null;
+    if (isDepartureDeltaBriefFeatureEnabled({
+      departureDeltaBrief: state.inputPatch.departureDeltaBriefFeatureEnabled ?? null,
+    })) {
+      const departureSnapshot = buildOperationalSnapshotFromReadiness({
+        assessment: departureAssessment,
+        input: {
+          ...departureInput,
+          readinessMode: 'active',
+        },
+        routeSession,
+        activeVehicle: departureInput.activeVehicle ?? null,
+        expeditionId: activeTripId,
+        routeId: activeRouteId,
+        capturedAt: departureAssessment.updatedAt,
+        baselineKind: 'departure',
+        label: 'Departure',
+      });
+      void operationalDeltaBriefStore.captureBaseline('departure', departureSnapshot, {
+        overwrite: false,
+        select: true,
+      });
+    }
     return recomputeNow();
   },
 

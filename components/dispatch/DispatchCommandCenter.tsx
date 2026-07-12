@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'expo-router';
 import {
   ScrollView,
   StyleSheet,
@@ -17,6 +18,7 @@ import DispatchTeamPingComposer, {
 import DispatchQueueSection from './DispatchQueueSection';
 import DispatchTeamRosterSection from './DispatchTeamRosterSection';
 import DispatchTimelineSection from './DispatchTimelineSection';
+import { dispatchNavigateContextAdapter } from '../../lib/dispatchNavigateContextHandoff';
 import { buildDispatchAuditEvent } from '../../lib/dispatchAuditAdapter';
 import {
   getDispatchContextActions,
@@ -158,6 +160,7 @@ function upsertById<T extends { id: string }>(items: T[], nextItem: T): T[] {
 }
 
 export default function DispatchCommandCenter() {
+  const router = useRouter();
   const {
     isOnline,
     offlineMode,
@@ -684,6 +687,34 @@ export default function DispatchCommandCenter() {
       message: contextAction.message,
     });
   }, [openComposer, rollout.mapContextIntegration, showToast]);
+
+  const openLinkedContextInNavigate = useCallback(async (
+    context: DispatchLinkedContext,
+    sourceEntityId: string,
+    returnParam: 'dispatchQueueItemId' | 'dispatchPingId' | 'dispatchTimelineEventId',
+  ) => {
+    const result = await dispatchNavigateContextAdapter.open({
+      context,
+      dispatchEventId: sourceEntityId,
+      sourceEntityId,
+      expeditionId: activeExpedition.id,
+      permissions: permissionSnapshot,
+      currentMemberId: currentDispatchMemberId,
+      returnRoute: `/alert?${returnParam}=${encodeURIComponent(sourceEntityId)}`,
+      rolloutEnabled: rollout.mapContextIntegration,
+    });
+    showToast(result.message);
+    if (result.status === 'staged') {
+      router.push('/navigate' as any);
+    }
+  }, [
+    activeExpedition.id,
+    currentDispatchMemberId,
+    permissionSnapshot,
+    rollout.mapContextIntegration,
+    router,
+    showToast,
+  ]);
 
   const openStaleCheckInComposer = useCallback(() => {
     if (!rollout.automatedCheckIns) {
@@ -1593,6 +1624,11 @@ export default function DispatchCommandCenter() {
             permissions={queuePermissions}
             smartSuggestionsEnabled={rollout.smartSuggestions}
             onPingItem={(item) => openComposer(createQueueFollowUpSeed(item))}
+            onViewContext={(item) => void openLinkedContextInNavigate(
+              item.linkedContext,
+              item.id,
+              'dispatchQueueItemId',
+            )}
             onContextPing={openContextComposer}
             onAssignItem={handleAssignQueueItem}
             onMarkInProgress={handleMarkInProgress}
@@ -1615,6 +1651,15 @@ export default function DispatchCommandCenter() {
             currentMemberId={currentDispatchMemberId}
             syncSnapshot={syncSnapshot}
             onContextPing={openContextComposer}
+            onViewContext={(ping) => {
+              if (ping.linkedContext) {
+                void openLinkedContextInNavigate(
+                  ping.linkedContext,
+                  ping.id,
+                  'dispatchPingId',
+                );
+              }
+            }}
             timelineCount={timelineEvents.length}
             onRetryPing={handleRetryPingDelivery}
             onCancelPing={handleCancelPingDelivery}
@@ -1631,6 +1676,15 @@ export default function DispatchCommandCenter() {
           events={timelineEvents}
           permissions={timelinePermissions}
           onRetryEvent={timelinePermissions.canModifyTimeline ? handleRetryTimelineDelivery : undefined}
+          onViewContext={(event) => {
+            if (event.linkedContext) {
+              void openLinkedContextInNavigate(
+                event.linkedContext,
+                event.id,
+                'dispatchTimelineEventId',
+              );
+            }
+          }}
         />
         <DispatchTeamRosterSection
           members={teamMembers}
@@ -1915,6 +1969,7 @@ function DispatchRecentPings({
   currentMemberId,
   syncSnapshot,
   onContextPing,
+  onViewContext,
   timelineCount,
   onRetryPing,
   onCancelPing,
@@ -1925,6 +1980,7 @@ function DispatchRecentPings({
   currentMemberId: string;
   syncSnapshot: DispatchSyncSnapshot;
   onContextPing: (context: DispatchLinkedContext, action?: DispatchContextAction) => void;
+  onViewContext: (ping: DispatchPing) => void;
   timelineCount: number;
   onRetryPing: (ping: DispatchPing) => void;
   onCancelPing: (ping: DispatchPing) => void;
@@ -2064,6 +2120,7 @@ function DispatchRecentPings({
                   <ContextActionStrip
                     context={ping.linkedContext}
                     onContextPing={onContextPing}
+                    onViewContext={() => onViewContext(ping)}
                   />
                 ) : null}
               </View>
@@ -2179,9 +2236,11 @@ function DispatchDiagnosticsPanel({ snapshot }: { snapshot: DispatchDiagnosticsS
 function ContextActionStrip({
   context,
   onContextPing,
+  onViewContext,
 }: {
   context: DispatchLinkedContext;
   onContextPing: (context: DispatchLinkedContext, action?: DispatchContextAction) => void;
+  onViewContext?: () => void;
 }) {
   const actions = getDispatchContextActions(context).slice(0, 3);
 
@@ -2194,6 +2253,17 @@ function ContextActionStrip({
         </Text>
       </View>
       <View style={styles.contextActionRow}>
+        {onViewContext ? (
+          <TouchableOpacity
+            style={styles.contextActionPill}
+            onPress={onViewContext}
+            activeOpacity={0.76}
+            accessibilityRole="button"
+            accessibilityLabel={`View ${context.title} in Navigate`}
+          >
+            <Text style={styles.contextActionText}>View Context</Text>
+          </TouchableOpacity>
+        ) : null}
         {actions.map((action) => (
           <TouchableOpacity
             key={action.id}
@@ -2692,11 +2762,22 @@ function getContextIcon(type: DispatchLinkedContext['type']): IconName {
     case 'waypoint':
       return 'flag-outline';
     case 'route_segment':
+    case 'route':
       return 'git-branch-outline';
+    case 'camp':
+      return 'bonfire-outline';
+    case 'rally':
+      return 'flag-outline';
+    case 'bailout':
+      return 'exit-outline';
+    case 'incident':
+      return 'warning-outline';
     case 'resource':
       return 'cube-outline';
     case 'vehicle':
       return 'car-outline';
+    case 'member':
+      return 'people-outline';
     case 'power':
       return 'battery-charging-outline';
     case 'manual':

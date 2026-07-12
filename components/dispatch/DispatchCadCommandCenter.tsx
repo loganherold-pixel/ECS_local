@@ -16,12 +16,13 @@ import {
   type ListRenderItem,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 
 import ECSModalShell from '../ECSModalShell';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import LandscapeShellControls from '../LandscapeShellControls';
+import { SourceTruthInspectorTrigger } from '../source-truth';
 import DispatchConvoyCommandPanel from './DispatchConvoyCommandPanel';
 import { useApp } from '../../context/AppContext';
 import {
@@ -41,6 +42,12 @@ import {
 import { createDispatchEventDetailPresentation } from '../../lib/dispatchEventDetailPresentation';
 import { createDispatchCoordinateFingerprint } from '../../lib/dispatchEventDedupe';
 import { dispatchEventStore } from '../../lib/dispatchEventStore';
+import {
+  dispatchLinkedContextFromLiveEvent,
+  dispatchNavigateContextAdapter,
+} from '../../lib/dispatchNavigateContextHandoff';
+import { resolveDispatchPermissions } from '../../lib/dispatchPermissionAdapter';
+import type { DispatchTeamMember } from '../../lib/dispatchTypes';
 import { playDispatchRecoveryPingAlert } from '../../lib/dispatchRecoveryPingAlert';
 import {
   buildLiveDispatchEvents,
@@ -104,6 +111,11 @@ import {
   type ActiveConvoyContext,
   type ConvoyListItem,
 } from '../../lib/convoy/convoyMembershipService';
+import type { ConvoyRegroupProposal } from '../../lib/convoy/convoyRegroupPlanner';
+import {
+  createConvoyRegroupDispatchContext,
+  type ConvoyRegroupRallyDraft,
+} from '../../lib/convoy/convoyRegroupPlannerAdapter';
 import { stopConvoyLocationSubscription } from '../../stores/convoyTrackingStore';
 import {
   recordExpeditionChannelApprovalRequiredChanged,
@@ -136,6 +148,7 @@ import {
 } from '../../lib/dispatchPersistenceAdapter';
 import { replayQueuedDispatchActions } from '../../lib/dispatchOfflineReplayAdapter';
 import {
+  getDispatchRolloutDisabledCopy,
   isDispatchFeatureEnabled,
   resolveDispatchRolloutConfig,
   type DispatchRolloutFeature,
@@ -147,6 +160,7 @@ import {
 
 const DISPATCH_ROLLOUT_NOTICE_LABELS: Partial<Record<DispatchRolloutFeature, string>> = {
   teamPositionSharing: 'team sharing',
+  convoyRegroupPlanner: 'convoy regroup planning',
   agencyDataIngestion: 'agency feeds',
   externalDispatchIntegration: 'external dispatch',
   publicHazardPublishing: 'public publishing',
@@ -259,6 +273,7 @@ type CommandFormState = {
   resourceStatus: 'OK' | 'Caution' | 'Low' | 'Critical';
   message: string;
   note: string;
+  regroupDraft: ConvoyRegroupRallyDraft | null;
 };
 
 type DispatchCommandIdentity = {
@@ -910,6 +925,7 @@ function getDefaultCommandForm(): CommandFormState {
     resourceStatus: 'OK',
     message: '',
     note: '',
+    regroupDraft: null,
   };
 }
 
@@ -1420,7 +1436,7 @@ function eventTypeFromCommand(command: DispatchCommandType, form: CommandFormSta
   }
 
   if (command === 'rally') {
-    return 'route';
+    return form.regroupDraft ? 'team_ping' : 'route';
   }
 
   if (command === 'hazard') {
@@ -1486,6 +1502,8 @@ function createCommandDedupeKey(
     form.severity,
     form.resourceType,
     form.resourceStatus,
+    form.requireAcknowledgment ? 'ack-required' : 'ack-optional',
+    form.regroupDraft?.proposalFingerprint ?? 'no-regroup-proposal',
     normalizeDedupeText(form.message),
     normalizeDedupeText(form.note),
   ].join('|');
@@ -1571,6 +1589,7 @@ function createEventFromCommand({
       createdBy: actor,
       rig: identity.rig,
       requiresMapDrilldown: false,
+      requiresAcknowledgment: form.requireAcknowledgment,
     });
   }
 
@@ -1591,6 +1610,7 @@ function createEventFromCommand({
   }
 
   if (command === 'rally') {
+    const regroupDraft = form.regroupDraft;
     return normalizeDispatchEvent({
       id,
       timestamp: now,
@@ -1602,7 +1622,18 @@ function createEventFromCommand({
       dedupeKey,
       createdBy: actor,
       rig: identity.rig,
-      requiresMapDrilldown: form.rallyLocation !== 'manual note',
+      location: regroupDraft
+        ? {
+            latitude: regroupDraft.coordinate.latitude,
+            longitude: regroupDraft.coordinate.longitude,
+            timestamp: regroupDraft.sourceTruth.observedAt ?? now,
+          }
+        : undefined,
+      requiresMapDrilldown: Boolean(regroupDraft) || form.rallyLocation !== 'manual note',
+      coordinationType: regroupDraft ? 'rally' : undefined,
+      requiresAcknowledgment: form.requireAcknowledgment,
+      proposalFingerprint: regroupDraft?.proposalFingerprint,
+      proposalCandidateId: regroupDraft?.candidateId,
     });
   }
 
@@ -1951,6 +1982,10 @@ function resolveConvoyLifecycleControl(
 
 export default function DispatchCadCommandCenter() {
   const router = useRouter();
+  const routeParams = useLocalSearchParams<{ dispatchEventId?: string | string[] }>();
+  const requestedDispatchEventId = Array.isArray(routeParams.dispatchEventId)
+    ? routeParams.dispatchEventId[0] ?? null
+    : routeParams.dispatchEventId ?? null;
   const isDispatchFocused = useIsFocused();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const isLandscapeDispatch = windowWidth > windowHeight;
@@ -2034,6 +2069,7 @@ export default function DispatchCadCommandCenter() {
   const submittedEventActionKeysRef = useRef<Set<string>>(new Set());
   const realtimeSessionRef = useRef<DispatchRealtimeSession | null>(null);
   const recoveryCadPublishInFlightRef = useRef<Set<string>>(new Set());
+  const restoredDispatchEventIdRef = useRef<string | null>(null);
   const recoveryCadLastRetryAtRef = useRef<Record<string, number>>({});
   const recoveryPingAlertedIdsRef = useRef<Set<string>>(new Set());
   const advisoryPulseSeenIdsRef = useRef<Set<string>>(new Set());
@@ -2293,7 +2329,55 @@ export default function DispatchCadCommandCenter() {
     [commandIdentity.callsign, commandIdentity.displayName, commandIdentity.email, commandIdentity.userId],
   );
   const dispatchRollout = useMemo(() => resolveDispatchRolloutConfig(), []);
+  const dispatchPermissionSnapshot = useMemo(() => {
+    const teamMember = teamSnapshot.members.find((member) => (
+      !!commandIdentity.userId && member.userId === commandIdentity.userId
+    ));
+    const isConvoyMember = !!commandIdentity.userId && Boolean(
+      activeConvoyControl?.memberUserIds.includes(commandIdentity.userId),
+    );
+    const currentMember: DispatchTeamMember | null = teamMember || isConvoyMember
+      ? {
+          id: teamMember?.id ?? commandIdentity.userId ?? 'convoy-member',
+          displayName: commandIdentity.displayName,
+          callSign: commandIdentity.callsign ?? commandIdentity.displayName,
+          role:
+            teamMember?.role === 'owner' ||
+            teamMember?.role === 'admin' ||
+            activeConvoyControl?.isLeader
+              ? 'owner'
+              : 'member',
+          status: 'connected',
+          lastSeenAt: teamSnapshot.updatedAt ?? new Date(0).toISOString(),
+          syncState: 'sent',
+        }
+      : null;
+    return resolveDispatchPermissions({
+      activeExpeditionStatus: currentExpedition?.state ?? null,
+      currentMember,
+      operatorInfo,
+      soloMode: !teamSnapshot.activeTeam && !activeConvoyControl?.convoyId,
+    });
+  }, [
+    activeConvoyControl?.convoyId,
+    activeConvoyControl?.isLeader,
+    activeConvoyControl?.memberUserIds,
+    commandIdentity.callsign,
+    commandIdentity.displayName,
+    commandIdentity.userId,
+    currentExpedition?.state,
+    operatorInfo,
+    teamSnapshot.activeTeam,
+    teamSnapshot.members,
+    teamSnapshot.updatedAt,
+  ]);
   const teamPositionSharingEnabled = isDispatchFeatureEnabled(dispatchRollout, 'teamPositionSharing');
+  const convoyRegroupPlannerEnabled = isDispatchFeatureEnabled(dispatchRollout, 'convoyRegroupPlanner');
+  const regroupPlannerPermission = dispatchPermissionSnapshot.can('plan_convoy_regroup');
+  const memberLocationPermission = dispatchPermissionSnapshot.can('view_member_location');
+  const createRallyPingPermission = dispatchPermissionSnapshot.can('send_team_wide_ping');
+  const canPlanConvoyRegroup = regroupPlannerPermission.allowed && memberLocationPermission.allowed;
+  const regroupPlannerPermissionReason = regroupPlannerPermission.reason ?? memberLocationPermission.reason ?? null;
   const externalDispatchIntegrationEnabled = isDispatchFeatureEnabled(dispatchRollout, 'externalDispatchIntegration');
   const publicHazardPublishingEnabled = isDispatchFeatureEnabled(dispatchRollout, 'publicHazardPublishing');
   const automatedSosTransmissionEnabled = isDispatchFeatureEnabled(dispatchRollout, 'automatedSosTransmission');
@@ -2314,6 +2398,9 @@ export default function DispatchCadCommandCenter() {
     const disabledFeatures: DispatchRolloutFeature[] = [];
     if (!teamPositionSharingEnabled) {
       disabledFeatures.push('teamPositionSharing');
+    }
+    if (!convoyRegroupPlannerEnabled) {
+      disabledFeatures.push('convoyRegroupPlanner');
     }
     if (!agencyDataIngestionEnabled) {
       disabledFeatures.push('agencyDataIngestion');
@@ -2344,6 +2431,7 @@ export default function DispatchCadCommandCenter() {
   }, [
     agencyDataIngestionEnabled,
     automatedSosTransmissionEnabled,
+    convoyRegroupPlannerEnabled,
     externalDispatchIntegrationEnabled,
     liveRadioNetworkIntegrationsEnabled,
     publicHazardPublishingEnabled,
@@ -2580,6 +2668,17 @@ export default function DispatchCadCommandCenter() {
       }
     });
   }, [emergencyCoordinatePingEvents]);
+  useEffect(() => {
+    if (
+      !requestedDispatchEventId ||
+      restoredDispatchEventIdRef.current === requestedDispatchEventId ||
+      !events.some((event) => event.id === requestedDispatchEventId)
+    ) {
+      return;
+    }
+    restoredDispatchEventIdRef.current = requestedDispatchEventId;
+    setSelectedEventId(requestedDispatchEventId);
+  }, [events, requestedDispatchEventId]);
   const selectedEvent = useMemo(
     () => events.find((event) => event.id === selectedEventId) ?? null,
     [events, selectedEventId],
@@ -2662,35 +2761,60 @@ export default function DispatchCadCommandCenter() {
     inputRange: [0.48, 1],
     outputRange: [0.75, 1.18],
   });
+  const openDispatchEventContext = useCallback(async (
+    event: DispatchEvent,
+    coordinateOverride?: DispatchMapCoordinate,
+  ) => {
+    const baseContext = dispatchLinkedContextFromLiveEvent(event);
+    const context = coordinateOverride
+      ? {
+          ...baseContext,
+          type: baseContext.type === 'manual' ? 'incident' as const : baseContext.type,
+          coordinates: {
+            latitude: coordinateOverride.latitude,
+            longitude: coordinateOverride.longitude,
+          },
+          sourceTruthPolicyKey: baseContext.type === 'manual'
+            ? 'condition_closure_advisory' as const
+            : baseContext.sourceTruthPolicyKey,
+        }
+      : baseContext;
+    const result = await dispatchNavigateContextAdapter.open({
+      context,
+      dispatchEventId: event.id,
+      sourceEntityId: event.id,
+      expeditionId: localDispatchPersistenceId,
+      permissions: dispatchPermissionSnapshot,
+      currentMemberId: commandIdentity.userId,
+      returnRoute: `/alert?dispatchEventId=${encodeURIComponent(event.id)}`,
+      rolloutEnabled: dispatchRollout.mapContextIntegration,
+    });
+    showToast?.(result.message);
+    if (result.status === 'staged') {
+      setSelectedEventId(null);
+      setDrilldownEventId(null);
+      router.push('/navigate' as any);
+    }
+  }, [
+    commandIdentity.userId,
+    dispatchPermissionSnapshot,
+    dispatchRollout.mapContextIntegration,
+    localDispatchPersistenceId,
+    router,
+    showToast,
+  ]);
+
   const handleDispatchAdvisoryCoordinatePress = useCallback(async (coordinate: DispatchAdvisoryCoordinate) => {
     if (!isValidCoordinate(coordinate)) {
       showToast?.('Advisory GPS coordinate unavailable.');
       return;
     }
-
-    try {
-      const payload = buildDispatchAdvisoryCoordinateNavigationPayload(coordinate, advisory);
-      await saveNavigationHandoffPayload(payload);
-      await stageNavigationFlow({
-        source: 'alert',
-        target: 'navigate',
-        intent: 'route_preview',
-        label: 'Dispatch Advisory GPS',
-        message: 'Advisory coordinate ready on Navigate.',
-        context: {
-          routeId: payload.id,
-          dispatchAdvisoryCoordinate: true,
-          dispatchEventId: advisory?.id ?? null,
-        },
-      });
-      showToast?.('Opening advisory GPS in Navigate.');
-      setTimeout(() => {
-        router.push('/navigate' as any);
-      }, 0);
-    } catch (error) {
-      showToast?.(error instanceof Error ? error.message : 'Advisory GPS route unavailable.');
+    if (!advisory) {
+      showToast?.('Advisory context unavailable.');
+      return;
     }
-  }, [advisory, router, showToast]);
+    await openDispatchEventContext(advisory, coordinate);
+  }, [advisory, openDispatchEventContext, showToast]);
 
   useEffect(() => {
     const signature = `${visibleEvents.length}:${createLiveDispatchEventListFingerprint(visibleEvents)}`;
@@ -2931,6 +3055,87 @@ export default function DispatchCadCommandCenter() {
     setActiveCommand(command);
   }, []);
 
+  const handlePreviewConvoyRegroupProposal = useCallback(async (
+    proposal: ConvoyRegroupProposal,
+  ) => {
+    const plannerPermission = dispatchPermissionSnapshot.can('plan_convoy_regroup');
+    const locationPermission = dispatchPermissionSnapshot.can('view_member_location');
+    if (!convoyRegroupPlannerEnabled || !teamPositionSharingEnabled) {
+      showToast?.(getDispatchRolloutDisabledCopy(
+        !convoyRegroupPlannerEnabled ? 'convoyRegroupPlanner' : 'teamPositionSharing',
+      ));
+      return;
+    }
+    if (!plannerPermission.allowed || !locationPermission.allowed) {
+      showToast?.(plannerPermission.reason ?? locationPermission.reason ?? dispatchPermissionSnapshot.disabledReason);
+      return;
+    }
+    if (!dispatchRollout.mapContextIntegration) {
+      showToast?.(getDispatchRolloutDisabledCopy('mapContextIntegration'));
+      return;
+    }
+    const result = await dispatchNavigateContextAdapter.open({
+      context: createConvoyRegroupDispatchContext(proposal),
+      dispatchEventId: proposal.fingerprint,
+      sourceEntityId: proposal.candidate.candidate.id,
+      expeditionId: localDispatchPersistenceId,
+      permissions: dispatchPermissionSnapshot,
+      currentMemberId: commandIdentity.userId,
+      returnRoute: '/alert',
+      rolloutEnabled: convoyRegroupPlannerEnabled && dispatchRollout.mapContextIntegration,
+    });
+    showToast?.(result.message);
+    if (result.status === 'staged') {
+      router.push('/navigate' as any);
+    }
+  }, [
+    commandIdentity.userId,
+    convoyRegroupPlannerEnabled,
+    dispatchPermissionSnapshot,
+    dispatchRollout.mapContextIntegration,
+    localDispatchPersistenceId,
+    router,
+    showToast,
+    teamPositionSharingEnabled,
+  ]);
+
+  const handleCreateConvoyRegroupRallyDraft = useCallback((draft: ConvoyRegroupRallyDraft) => {
+    const plannerPermission = dispatchPermissionSnapshot.can('plan_convoy_regroup');
+    const locationPermission = dispatchPermissionSnapshot.can('view_member_location');
+    const sendPermission = dispatchPermissionSnapshot.can('send_team_wide_ping');
+    if (!convoyRegroupPlannerEnabled || !teamPositionSharingEnabled) {
+      showToast?.(getDispatchRolloutDisabledCopy(
+        !convoyRegroupPlannerEnabled ? 'convoyRegroupPlanner' : 'teamPositionSharing',
+      ));
+      return;
+    }
+    if (!plannerPermission.allowed || !locationPermission.allowed || !sendPermission.allowed) {
+      showToast?.(
+        plannerPermission.reason ??
+        locationPermission.reason ??
+        sendPermission.reason ??
+        dispatchPermissionSnapshot.disabledReason,
+      );
+      return;
+    }
+    setCommandForm({
+      ...getDefaultCommandForm(),
+      priority: draft.priority,
+      requireAcknowledgment: draft.requireAcknowledgment,
+      rallyLocation: draft.rallyLocation,
+      message: draft.message,
+      regroupDraft: draft,
+    });
+    setCommandError(null);
+    setActiveCommand('rally');
+    showToast?.('Rally draft opened. Nothing has been sent.');
+  }, [
+    convoyRegroupPlannerEnabled,
+    dispatchPermissionSnapshot,
+    showToast,
+    teamPositionSharingEnabled,
+  ]);
+
   const forceProfileSetup = dispatchProfileHydrated && !isDispatchProfileComplete(
     dispatchProfile,
     dispatchProfileCompletenessContext,
@@ -3051,6 +3256,26 @@ export default function DispatchCadCommandCenter() {
       setCommandError(validationMessage);
       return;
     }
+    if (activeCommand === 'rally' && commandForm.regroupDraft) {
+      const plannerPermission = dispatchPermissionSnapshot.can('plan_convoy_regroup');
+      const locationPermission = dispatchPermissionSnapshot.can('view_member_location');
+      const sendPermission = dispatchPermissionSnapshot.can('send_team_wide_ping');
+      if (!convoyRegroupPlannerEnabled || !teamPositionSharingEnabled) {
+        setCommandError(getDispatchRolloutDisabledCopy(
+          !convoyRegroupPlannerEnabled ? 'convoyRegroupPlanner' : 'teamPositionSharing',
+        ));
+        return;
+      }
+      if (!plannerPermission.allowed || !locationPermission.allowed || !sendPermission.allowed) {
+        setCommandError(
+          plannerPermission.reason ??
+          locationPermission.reason ??
+          sendPermission.reason ??
+          dispatchPermissionSnapshot.disabledReason,
+        );
+        return;
+      }
+    }
 
     commandSubmittingRef.current = true;
     setCommandSubmitting(true);
@@ -3096,12 +3321,15 @@ export default function DispatchCadCommandCenter() {
     appendEvent,
     commandForm,
     commandIdentity,
+    convoyRegroupPlannerEnabled,
     currentExpedition,
+    dispatchPermissionSnapshot,
     isOnline,
     offlineMode,
     queuedCount,
     showToast,
     teamSnapshot,
+    teamPositionSharingEnabled,
   ]);
 
   const handleEventAction = useCallback((event: DispatchEvent, actionId: EventActionId) => {
@@ -3779,6 +4007,19 @@ export default function DispatchCadCommandCenter() {
                 presentation="summary"
                 showEmergencyOverlay={false}
                 convoyLifecycleRevision={convoyLifecycleRevision}
+                regroupPlannerEnabled={convoyRegroupPlannerEnabled}
+                positionSharingRolloutEnabled={teamPositionSharingEnabled}
+                regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
+                regroupPlannerPermissionReason={regroupPlannerPermissionReason}
+                canPreviewRegroupOnMap={dispatchRollout.mapContextIntegration && canPlanConvoyRegroup}
+                previewRegroupUnavailableReason={dispatchRollout.mapContextIntegration
+                  ? regroupPlannerPermissionReason
+                  : getDispatchRolloutDisabledCopy('mapContextIntegration')}
+                canCreateRallyPing={createRallyPingPermission.allowed}
+                rallyPingUnavailableReason={createRallyPingPermission.reason}
+                expeditionId={localDispatchPersistenceId}
+                onPreviewRegroupProposal={(proposal) => void handlePreviewConvoyRegroupProposal(proposal)}
+                onCreateRegroupRallyDraft={handleCreateConvoyRegroupRallyDraft}
                 testID="dispatch-convoy-command-landscape-summary"
               />
             </View>
@@ -3792,7 +4033,7 @@ export default function DispatchCadCommandCenter() {
         </>
       )}
 
-      <View style={[styles.feedPanel, isLandscapeDispatch ? styles.feedPanelLandscapeMap : null]}>
+      <View style={[styles.feedPanel, isLandscapeDispatch ? styles.feedPanelLandscapeSignal : null]}>
         <DispatchConvoyCommandPanel
           connectionLabel={connectionState.label}
           teamStatusLabel={dispatchTeamStatusLabel}
@@ -3809,6 +4050,19 @@ export default function DispatchCadCommandCenter() {
           presentation={isLandscapeDispatch ? 'signals' : 'feed'}
           showEmergencyOverlay={false}
           convoyLifecycleRevision={convoyLifecycleRevision}
+          regroupPlannerEnabled={convoyRegroupPlannerEnabled && !isLandscapeDispatch}
+          positionSharingRolloutEnabled={teamPositionSharingEnabled}
+          regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
+          regroupPlannerPermissionReason={regroupPlannerPermissionReason}
+          canPreviewRegroupOnMap={dispatchRollout.mapContextIntegration && canPlanConvoyRegroup}
+          previewRegroupUnavailableReason={dispatchRollout.mapContextIntegration
+            ? regroupPlannerPermissionReason
+            : getDispatchRolloutDisabledCopy('mapContextIntegration')}
+          canCreateRallyPing={createRallyPingPermission.allowed}
+          rallyPingUnavailableReason={createRallyPingPermission.reason}
+          expeditionId={localDispatchPersistenceId}
+          onPreviewRegroupProposal={(proposal) => void handlePreviewConvoyRegroupProposal(proposal)}
+          onCreateRegroupRallyDraft={handleCreateConvoyRegroupRallyDraft}
           testID="dispatch-convoy-command-feed-panel"
         />
       </View>
@@ -3817,12 +4071,14 @@ export default function DispatchCadCommandCenter() {
         event={selectedEvent}
         meta={selectedEventMeta}
         navigatingAssistEventId={navigatingAssistEventId}
+        contextNavigationEnabled={dispatchRollout.mapContextIntegration}
         onClose={() => setSelectedEventId(null)}
         onAction={handleEventAction}
         onOpenDrilldown={(event) => {
           setSelectedEventId(null);
           setDrilldownEventId(event.id);
         }}
+        onViewContext={(event) => void openDispatchEventContext(event)}
         onNavigateAssist={handleNavigateAssist}
       />
       <ThreatDrilldownModal
@@ -4141,17 +4397,21 @@ function EventDetailModal({
   event,
   meta,
   navigatingAssistEventId,
+  contextNavigationEnabled,
   onClose,
   onAction,
   onOpenDrilldown,
+  onViewContext,
   onNavigateAssist,
 }: {
   event: DispatchEvent | null;
   meta: EventUiMeta | null;
   navigatingAssistEventId: string | null;
+  contextNavigationEnabled: boolean;
   onClose: () => void;
   onAction: (event: DispatchEvent, actionId: EventActionId) => void;
   onOpenDrilldown: (event: DispatchEvent) => void;
+  onViewContext: (event: DispatchEvent) => void;
   onNavigateAssist: (event: DispatchEvent) => void;
 }) {
   const actions = event && meta ? getEventActions(event, meta) : [];
@@ -4200,6 +4460,16 @@ function EventDetailModal({
             />
             {senderLabel ? (
               <ModalMetaItem label="Sent By" value={senderLabel} />
+            ) : null}
+            {contextNavigationEnabled ? (
+              <TouchableOpacity
+                style={[styles.detailActionButton, styles.mapActionButton]}
+                accessibilityRole="button"
+                accessibilityLabel="View active GPS ping context in Navigate"
+                onPress={() => onViewContext(event)}
+              >
+                <Text style={styles.detailActionText}>View Context</Text>
+              </TouchableOpacity>
             ) : null}
           </View>
 
@@ -4365,6 +4635,17 @@ function EventDetailModal({
           <View style={styles.actionsPanel}>
             <Text style={styles.modalSectionLabel}>Available Actions</Text>
             <View style={styles.actionGrid}>
+              {contextNavigationEnabled ? (
+                <TouchableOpacity
+                  style={[styles.detailActionButton, styles.mapActionButton]}
+                  accessibilityRole="button"
+                  accessibilityLabel="View Dispatch context in Navigate"
+                  onPress={() => onViewContext(event)}
+                >
+                  <Ionicons name="map-outline" size={14} color={TACTICAL.amber} />
+                  <Text style={styles.detailActionText}>View Context</Text>
+                </TouchableOpacity>
+              ) : null}
               {showDrilldown ? (
                 <TouchableOpacity
                   style={[styles.detailActionButton, styles.mapActionButton]}
@@ -4919,12 +5200,30 @@ function DispatchCommandModal({
 
         {command === 'rally' ? (
           <>
-            <OptionGroup
-              label="Rally Location"
-              options={LINKED_CONTEXT_OPTIONS}
-              value={form.rallyLocation}
-              onSelect={(value) => updateForm('rallyLocation', value)}
-            />
+            <Text style={styles.safetyCopy}>ECS team coordination only. Submitting this form does not reroute convoy members.</Text>
+            {form.regroupDraft ? (
+              <View style={styles.regroupDraftContext} testID="convoy-regroup-rally-draft-context">
+                <View style={styles.regroupDraftCopy}>
+                  <Text style={styles.regroupDraftLabel}>PROPOSED REGROUP POINT</Text>
+                  <Text style={styles.regroupDraftTitle} numberOfLines={2}>{form.regroupDraft.candidateTitle}</Text>
+                  <Text style={styles.regroupDraftMeta}>Deterministic proposal / operator verification required</Text>
+                </View>
+                <SourceTruthInspectorTrigger
+                  source={form.regroupDraft.sourceTruth}
+                  policyKey={form.regroupDraft.sourceTruthPolicyKey}
+                  dependencies={['Candidate identity and location attached to this Rally draft.']}
+                  label={`${form.regroupDraft.sourceTruth.origin.toUpperCase()} SOURCE`}
+                  testID="convoy-regroup-rally-draft-source"
+                />
+              </View>
+            ) : (
+              <OptionGroup
+                label="Rally Location"
+                options={LINKED_CONTEXT_OPTIONS}
+                value={form.rallyLocation}
+                onSelect={(value) => updateForm('rallyLocation', value)}
+              />
+            )}
             <OptionGroup
               label="Priority"
               options={PRIORITY_OPTIONS}
@@ -4936,6 +5235,15 @@ function DispatchCommandModal({
               value={form.message}
               onChangeText={(value) => updateForm('message', value)}
             />
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Require Acknowledgment</Text>
+              <Switch
+                value={form.requireAcknowledgment}
+                onValueChange={(value) => updateForm('requireAcknowledgment', value)}
+                trackColor={{ false: TACTICAL.border, true: ECS.accentSoft }}
+                thumbColor={form.requireAcknowledgment ? TACTICAL.amber : TACTICAL.textMuted}
+              />
+            </View>
           </>
         ) : null}
 
@@ -6646,13 +6954,9 @@ const styles = StyleSheet.create({
   feedPanel: {
     flex: 1,
     minHeight: 0,
-    borderWidth: 1,
-    borderColor: ECS_SURFACE.border.default,
     backgroundColor: 'transparent',
-    borderRadius: 9,
-    overflow: 'hidden',
   },
-  feedPanelLandscapeMap: {
+  feedPanelLandscapeSignal: {
     flex: 1,
     minHeight: 0,
     marginTop: 3,
@@ -8006,6 +8310,41 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     lineHeight: 17,
+  },
+  regroupDraftContext: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.selected,
+    borderRadius: 8,
+    backgroundColor: ECS_SURFACE.background.selected,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  regroupDraftCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  regroupDraftLabel: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  regroupDraftTitle: {
+    color: TACTICAL.text,
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  regroupDraftMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '700',
+    lineHeight: 13,
+    marginTop: 2,
   },
   recoveryCriticalNotice: {
     minHeight: 42,

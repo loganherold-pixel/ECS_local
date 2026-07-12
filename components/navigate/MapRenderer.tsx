@@ -357,6 +357,10 @@ type RoadClassificationReply = {
   source?: string;
 };
 
+export type UserLocationTapPayload = {
+  screenCoordinate?: { x: number; y: number } | null;
+};
+
 export type CameraMode = 'follow_user' | 'free_pan' | 'route_overview' | 'replay' | 'pin_focus';
 
 export type CameraCommand = {
@@ -419,6 +423,7 @@ export type MapRendererProps = {
   trailStyle?: 'normal' | 'heat' | 'stealth' | string;
   onTiltAlertTap?: (payload: any) => void;
   onUserDrag?: () => void;
+  onUserLocationTap?: (payload: UserLocationTapPayload) => void;
   onRoadClassification?: (payload: RoadClassificationReply) => void;
   onMapLifecycleMetrics?: (payload: {
     label: string;
@@ -674,6 +679,7 @@ type WebMapDynamicPayload = {
   replayMarker: { latitude: number; longitude: number } | null;
   userLocation: { latitude: number; longitude: number } | null;
   showUserLocation: boolean;
+  userLocationTapEnabled: boolean;
   vehicleHeading: number | null;
   motionPriority: MapMotionPriority;
   cameraMode: CameraMode | null;
@@ -1960,6 +1966,7 @@ export function buildDynamicPayload(props: Pick<
   | 'replayMarker'
   | 'userLocation'
   | 'showUserLocation'
+  | 'onUserLocationTap'
   | 'vehicleHeading'
   | 'motionPriority'
   | 'cameraMode'
@@ -1980,6 +1987,7 @@ export function buildDynamicPayload(props: Pick<
     replayMarker: replay,
     userLocation: user,
     showUserLocation: liveMotionEnabled && !!props.showUserLocation && !!user,
+    userLocationTapEnabled: typeof props.onUserLocationTap === 'function',
     vehicleHeading:
       liveMotionEnabled && typeof vehicleHeading === 'number' && Number.isFinite(vehicleHeading)
         ? vehicleHeading
@@ -2616,7 +2624,13 @@ function makeMapHtml(
       height: 34px;
       background: transparent;
       z-index: 1000;
-      pointer-events: none;
+      pointer-events: auto;
+      cursor: pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .marker-user:focus-visible .marker-user-core {
+      box-shadow: 0 0 0 3px rgba(247,200,92,0.4), 0 0 12px rgba(77,163,255,0.52);
     }
     .marker-user-shell {
       position: relative;
@@ -3518,6 +3532,10 @@ function makeMapHtml(
         el.className = className;
 
         if (className === 'marker-user') {
+          el.setAttribute('role', 'button');
+          el.setAttribute('tabindex', '0');
+          el.setAttribute('aria-label', 'Show my active convoy identity');
+
           var shell = document.createElement('div');
           shell.className = 'marker-user-shell';
 
@@ -3543,6 +3561,23 @@ function makeMapHtml(
             rotor.style.transform = 'rotate(' + rotation + 'deg)';
             rotor.style.transformOrigin = 'center center';
           }
+
+          var activateUserMarker = function(ev) {
+            try {
+              if (ev && ev.stopPropagation) ev.stopPropagation();
+            } catch (e) {}
+            send('userLocationTap', {
+              screenCoordinate: markerClickScreenCoordinate(ev, el)
+            });
+          };
+          el.addEventListener('click', activateUserMarker);
+          el.addEventListener('keydown', function(ev) {
+            if (!ev || (ev.key !== 'Enter' && ev.key !== ' ')) return;
+            try {
+              if (ev.preventDefault) ev.preventDefault();
+            } catch (e) {}
+            activateUserMarker(ev);
+          });
         } else if (typeof rotation === 'number') {
           el.style.transform = 'rotate(' + rotation + 'deg)';
           el.style.transformOrigin = 'center center';
@@ -6053,7 +6088,10 @@ function makeMapHtml(
             try {
               if (ev && ev.stopPropagation) ev.stopPropagation();
             } catch (e) {}
-            send('pinTap', Object.assign({ kind: 'convoyMember' }, item));
+            send('pinTap', Object.assign({
+              kind: 'convoyMember',
+              screenCoordinate: markerClickScreenCoordinate(ev, el)
+            }, item));
           };
           el.addEventListener('click', activate);
           el.addEventListener('keydown', function(ev) {
@@ -6203,6 +6241,17 @@ function makeMapHtml(
         } catch (e) {}
       }
 
+      function applyUserMarkerInteractivity(enabled) {
+        if (!userMarker) return;
+        try {
+          var el = userMarker.getElement();
+          if (!el) return;
+          el.style.pointerEvents = enabled ? 'auto' : 'none';
+          el.setAttribute('tabindex', enabled ? '0' : '-1');
+          el.setAttribute('aria-hidden', enabled ? 'false' : 'true');
+        } catch (e) {}
+      }
+
       function cancelUserMarkerAnimation() {
         if (userMarkerAnimationFrame != null) {
           try { cancelAnimationFrame(userMarkerAnimationFrame); } catch (e) {}
@@ -6260,7 +6309,7 @@ function makeMapHtml(
         userMarkerAnimationFrame = requestAnimationFrame(step);
       }
 
-      function setUserLocation(loc, show, heading) {
+      function setUserLocation(loc, show, heading, tapEnabled) {
         if (
           !show ||
           !loc ||
@@ -6288,6 +6337,7 @@ function makeMapHtml(
         } else {
           animateUserMarkerTo(loc, userMarkerHeading);
         }
+        applyUserMarkerInteractivity(!!tapEnabled);
       }
 
       function setReplayMarker(loc) {
@@ -7377,7 +7427,12 @@ function makeMapHtml(
         if (routeBuilderActive && routeBuilderIsDrawing) {
           setRouteBuilderDragPanEnabled(false);
         }
-        setUserLocation(payload.userLocation || null, !!payload.showUserLocation, payload.vehicleHeading);
+        setUserLocation(
+          payload.userLocation || null,
+          !!payload.showUserLocation,
+          payload.vehicleHeading,
+          !!payload.userLocationTapEnabled
+        );
         setReplayMarker(payload.replayMarker || null);
         activeCameraMode = payload.cameraMode || activeCameraMode;
       }
@@ -8393,6 +8448,7 @@ const MapRenderer = React.memo(function MapRenderer({
   trailStyle = 'normal',
   onTiltAlertTap,
   onUserDrag,
+  onUserLocationTap,
   onRoadClassification,
   onMapLifecycleMetrics,
   vehicleHeading = null,
@@ -8867,8 +8923,9 @@ const MapRenderer = React.memo(function MapRenderer({
         interactive,
         routeBuilderActive,
         routeBuilderMode,
+        onUserLocationTap,
       }),
-    [replayMarker, userLocation, showUserLocation, vehicleHeading, motionPriority, cameraMode, interactive, routeBuilderActive, routeBuilderMode],
+    [replayMarker, userLocation, showUserLocation, vehicleHeading, motionPriority, cameraMode, interactive, routeBuilderActive, routeBuilderMode, onUserLocationTap],
   );
 
   const payloadHash = useMemo(() => buildMapOverlayPayloadHash(payload), [payload]);
@@ -9625,6 +9682,10 @@ const MapRenderer = React.memo(function MapRenderer({
         onUserDrag?.();
         return;
 
+      case 'userLocationTap':
+        onUserLocationTap?.(payload ?? {});
+        return;
+
       case 'routeBuilderUpdate':
         if (routeBuilderMode === 'anchor_trace') return;
         onRouteBuilderUpdate?.(payload);
@@ -9670,6 +9731,7 @@ const MapRenderer = React.memo(function MapRenderer({
     onConvoyMemberTap,
     onDispatchPingTap,
     onUserDrag,
+    onUserLocationTap,
     routeBuilderMode,
     onRouteBuilderUpdate,
     onRouteBuilderGestureStateChange,
@@ -9819,6 +9881,7 @@ const MapRenderer = React.memo(function MapRenderer({
           segments={fallbackSegments}
           markers={fallbackMarkers}
           userLocation={dynamicPayload.userLocation}
+          onUserLocationTap={onUserLocationTap}
           bootIssue={webBootIssue}
           compact={isCompactSurface}
           showStatusLabel={!!fallbackStatusLabel}

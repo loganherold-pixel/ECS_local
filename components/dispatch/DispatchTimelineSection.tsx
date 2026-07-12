@@ -21,9 +21,15 @@ interface DispatchTimelineSectionProps {
   events: DispatchTimelineEvent[];
   permissions: DispatchTimelinePermissionSet;
   onRetryEvent?: (event: DispatchTimelineEvent) => void;
+  onViewContext?: (event: DispatchTimelineEvent) => void;
 }
 
-export default function DispatchTimelineSection({ events, permissions, onRetryEvent }: DispatchTimelineSectionProps) {
+export default function DispatchTimelineSection({
+  events,
+  permissions,
+  onRetryEvent,
+  onViewContext,
+}: DispatchTimelineSectionProps) {
   const visibleEvents = useMemo(
     () => getRecentDispatchTimelineEvents(events, 8),
     [events],
@@ -59,6 +65,7 @@ export default function DispatchTimelineSection({ events, permissions, onRetryEv
               event={event}
               isLast={index === visibleEvents.length - 1}
               onRetryEvent={onRetryEvent}
+              onViewContext={onViewContext}
             />
           ))}
         </View>
@@ -71,10 +78,12 @@ const TimelineCard = React.memo(function TimelineCard({
   event,
   isLast,
   onRetryEvent,
+  onViewContext,
 }: {
   event: DispatchTimelineEvent;
   isLast: boolean;
   onRetryEvent?: (event: DispatchTimelineEvent) => void;
+  onViewContext?: (event: DispatchTimelineEvent) => void;
 }) {
   const meta = getTimelinePresentation(event.type, event.priority);
 
@@ -110,12 +119,20 @@ const TimelineCard = React.memo(function TimelineCard({
         </View>
 
         {event.linkedContext ? (
-          <View style={styles.contextRow}>
+          <TouchableOpacity
+            style={styles.contextRow}
+            onPress={onViewContext ? () => onViewContext(event) : undefined}
+            disabled={!onViewContext}
+            activeOpacity={0.76}
+            accessibilityRole={onViewContext ? 'button' : undefined}
+            accessibilityLabel={onViewContext ? `View ${event.linkedContext.title} in Navigate` : undefined}
+          >
             <Ionicons name="map-outline" size={11} color={TACTICAL.amber} />
             <Text style={styles.contextText}>
               {getDispatchContextTypeLabel(event.linkedContext.type)} / {event.linkedContext.title}
             </Text>
-          </View>
+            {onViewContext ? <Text style={styles.contextText}>View Context</Text> : null}
+          </TouchableOpacity>
         ) : null}
 
         {event.conflictState && event.conflictState !== 'none' ? (

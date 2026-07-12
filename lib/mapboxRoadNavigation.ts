@@ -151,6 +151,14 @@ const SEARCHBOX_RETRIEVE_URL = 'https://api.mapbox.com/search/searchbox/v1/retri
 const FORWARD_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places';
 const DIRECTIONS_PROFILE = 'driving-traffic';
 const DIRECTIONS_URL = `https://api.mapbox.com/directions/v5/mapbox/${DIRECTIONS_PROFILE}`;
+const MAP_MATCHING_PROFILE = 'driving';
+const MAP_MATCHING_URL = `https://api.mapbox.com/matching/v5/mapbox/${MAP_MATCHING_PROFILE}`;
+const MAP_MATCHING_MAX_COORDINATES = 100;
+const IMPORTED_TRACE_MATCH_RADIUS_M = 35;
+const IMPORTED_TRACE_MIN_MATCH_CONFIDENCE = 0.45;
+const IMPORTED_TRACE_ENDPOINT_TOLERANCE_M = 120;
+const IMPORTED_TRACE_MIN_DISTANCE_RATIO = 0.5;
+const IMPORTED_TRACE_MAX_DISTANCE_RATIO = 2.5;
 const SEARCHBOX_SUGGEST_TIMEOUT_MS = 2000;
 const FORWARD_GEOCODE_TIMEOUT_MS = 2500;
 const SEARCHBOX_SUGGEST_LIMIT = 5;
@@ -813,12 +821,82 @@ export function buildRoadRouteFromCachedGeometry(params: {
   };
 }
 
+function normalizeRoadNavGeometry(geometry: RoadNavCoordinate[]): RoadNavCoordinate[] {
+  const normalized: RoadNavCoordinate[] = [];
+  geometry.forEach((point) => {
+    const next = toCoordinate(point);
+    if (!next) return;
+    const previous = normalized[normalized.length - 1];
+    if (previous && distanceMeters(previous, next) <= 1) return;
+    normalized.push(next);
+  });
+  return normalized;
+}
+
+export function sampleImportedTraceForMapMatching(
+  geometry: RoadNavCoordinate[],
+  maxCoordinates = MAP_MATCHING_MAX_COORDINATES,
+): RoadNavCoordinate[] {
+  const normalized = normalizeRoadNavGeometry(geometry);
+  const limit = Math.max(2, Math.min(MAP_MATCHING_MAX_COORDINATES, Math.floor(maxCoordinates)));
+  if (normalized.length <= limit) return normalized;
+
+  const sampled: RoadNavCoordinate[] = [];
+  for (let index = 0; index < limit; index += 1) {
+    const sourceIndex = Math.round((index * (normalized.length - 1)) / (limit - 1));
+    const point = normalized[sourceIndex];
+    const previous = sampled[sampled.length - 1];
+    if (!previous || distanceMeters(previous, point) > 1) sampled.push(point);
+  }
+
+  const finalPoint = normalized[normalized.length - 1];
+  if (sampled.length > 0 && distanceMeters(sampled[sampled.length - 1], finalPoint) > 1) {
+    sampled[sampled.length - 1] = finalPoint;
+  }
+  return sampled;
+}
+
+export function buildImportedTraceMapMatchingRequest(params: {
+  accessToken: string;
+  geometry: RoadNavCoordinate[];
+  radiusM?: number;
+}): string | null {
+  const geometry = sampleImportedTraceForMapMatching(params.geometry);
+  if (geometry.length < 2) return null;
+
+  const radiusM = Math.max(
+    1,
+    Math.min(50, Number(params.radiusM ?? IMPORTED_TRACE_MATCH_RADIUS_M)),
+  );
+  const coordinates = geometry.map((point) => `${point.lng},${point.lat}`).join(';');
+  const url = new URL(`${MAP_MATCHING_URL}/${coordinates}.json`);
+  url.searchParams.set('access_token', params.accessToken);
+  url.searchParams.set('geometries', 'geojson');
+  url.searchParams.set('overview', 'full');
+  url.searchParams.set('steps', 'true');
+  url.searchParams.set('banner_instructions', 'true');
+  url.searchParams.set('voice_instructions', 'true');
+  url.searchParams.set('voice_units', 'imperial');
+  url.searchParams.set('roundabout_exits', 'true');
+  url.searchParams.set('language', 'en');
+  url.searchParams.set('tidy', 'true');
+  url.searchParams.set('radiuses', geometry.map(() => String(radiusM)).join(';'));
+  url.searchParams.set('waypoints', `0;${geometry.length - 1}`);
+  return url.toString();
+}
+
 function normalizeMapboxRoadRoute(
   route: any,
   params: {
     origin: RoadNavCoordinate;
     destination: RoadNavDestination;
     rerouteGeneration?: number | null;
+    provider?: string;
+    profile?: string;
+    guidanceSource?: EcsGuidanceRouteSource;
+    alternativesRequested?: boolean;
+    routeIdPrefix?: string;
+    providerMetadata?: Record<string, unknown>;
   },
   routeIndex = 0,
 ): RoadNavRoute | null {
@@ -929,19 +1007,20 @@ function normalizeMapboxRoadRoute(
         } as any)))
       : null;
 
-  const routeId = randomId('road-route');
+  const routeId = randomId(params.routeIdPrefix ?? 'road-route');
   const createdAt = new Date().toISOString();
   const routeUuid = normalizeMapboxRouteUuid(route);
   const providerMetadata: RoadNavProviderMetadata = {
-    provider: 'mapbox_directions',
-    profile: DIRECTIONS_PROFILE,
+    ...params.providerMetadata,
+    provider: params.provider ?? 'mapbox_directions',
+    profile: params.profile ?? DIRECTIONS_PROFILE,
     routeUuid: routeUuid ?? routeId,
     routeIndex,
-    alternativesRequested: true,
+    alternativesRequested: params.alternativesRequested ?? true,
   };
   const guidance = normalizeMapboxDirectionsRouteToEcsGuidanceRoute(route, {
     id: routeId,
-    source: 'mapbox_directions',
+    source: params.guidanceSource ?? 'mapbox_directions',
     destinationName: params.destination.title,
     createdAt,
     rerouteGeneration: params.rerouteGeneration ?? 0,
@@ -991,6 +1070,91 @@ function normalizeMapboxRoadRoute(
 
   logRoadNavigationRouteDebug(normalizedRoute, totalResponseStepCount);
   return normalizedRoute;
+}
+
+type MapboxMapMatchingResponse = {
+  code?: string;
+  message?: string;
+  matchings?: Array<Record<string, any>>;
+};
+
+export async function fetchImportedTraceRoadRoute(params: {
+  accessToken: string;
+  origin: RoadNavCoordinate;
+  destination: RoadNavDestination;
+  geometry: RoadNavCoordinate[];
+  radiusM?: number;
+  timeoutMs?: number;
+}): Promise<RoadNavRoute | null> {
+  const sampledGeometry = sampleImportedTraceForMapMatching(params.geometry);
+  const request = buildImportedTraceMapMatchingRequest({
+    accessToken: params.accessToken,
+    geometry: sampledGeometry,
+    radiusM: params.radiusM,
+  });
+  if (!request) return null;
+
+  const data = await fetchJsonWithTimeout<MapboxMapMatchingResponse>(
+    request,
+    params.timeoutMs ?? 10000,
+  );
+  if (data?.code && data.code !== 'Ok') return null;
+
+  const matchings = Array.isArray(data?.matchings) ? data.matchings : [];
+  if (matchings.length !== 1) return null;
+  const matching = matchings[0];
+  const confidence = finiteNumber(matching?.confidence);
+  if (confidence != null && confidence < IMPORTED_TRACE_MIN_MATCH_CONFIDENCE) return null;
+
+  const route = normalizeMapboxRoadRoute(
+    matching,
+    {
+      origin: params.origin,
+      destination: params.destination,
+      provider: 'mapbox_map_matching',
+      profile: MAP_MATCHING_PROFILE,
+      guidanceSource: 'imported_trace',
+      alternativesRequested: false,
+      routeIdPrefix: 'imported-trace-route',
+      providerMetadata: {
+        mapMatchingConfidence: confidence,
+        sourceTracePointCount: params.geometry.length,
+        sampledTracePointCount: sampledGeometry.length,
+      },
+    },
+    0,
+  );
+  if (!route || route.guidanceMode !== 'turn_by_turn' || route.guidance.steps.length < 2) {
+    return null;
+  }
+
+  const sampledStart = sampledGeometry[0];
+  const sampledEnd = sampledGeometry[sampledGeometry.length - 1];
+  const matchedStart = route.geometry[0];
+  const matchedEnd = route.geometry[route.geometry.length - 1];
+  if (
+    !sampledStart ||
+    !sampledEnd ||
+    !matchedStart ||
+    !matchedEnd ||
+    distanceMeters(sampledStart, matchedStart) > IMPORTED_TRACE_ENDPOINT_TOLERANCE_M ||
+    distanceMeters(sampledEnd, matchedEnd) > IMPORTED_TRACE_ENDPOINT_TOLERANCE_M
+  ) {
+    return null;
+  }
+
+  const sourceDistanceM = sumGeometryDistanceMeters(sampledGeometry);
+  if (sourceDistanceM > 0 && route.distanceM > 0) {
+    const distanceRatio = route.distanceM / sourceDistanceM;
+    if (
+      distanceRatio < IMPORTED_TRACE_MIN_DISTANCE_RATIO ||
+      distanceRatio > IMPORTED_TRACE_MAX_DISTANCE_RATIO
+    ) {
+      return null;
+    }
+  }
+
+  return route;
 }
 
 function reindexRoadRouteOption(route: RoadNavRoute, routeIndex: number): RoadNavRoute {

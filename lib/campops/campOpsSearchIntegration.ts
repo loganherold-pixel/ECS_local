@@ -76,6 +76,12 @@ export type CampOpsSearchIntegrationOptions = {
 
 type CampOpsSearchPayload = NonNullable<CampsiteCandidateResult['campOps']>;
 
+export type CampOpsSearchInputs = {
+  context: CampSearchContext;
+  candidates: CampCandidate[];
+  enrichmentsByCandidateId: Record<string, CampCandidateEnrichment>;
+};
+
 const CURRENT_TIME_FALLBACK = '1970-01-01T00:00:00.000Z';
 
 function finiteNumber(value: unknown): number | null {
@@ -341,11 +347,7 @@ function buildCampOpsInputs(
   options: CampOpsSearchIntegrationOptions,
   featureState: CampOpsFeatureState,
   sourceOverride?: Parameters<typeof campOpsCandidateFromGeneratedCandidate>[1],
-): {
-  context: CampSearchContext;
-  candidates: CampCandidate[];
-  enrichmentsByCandidateId: Record<string, CampCandidateEnrichment>;
-} {
+): CampOpsSearchInputs {
   const context = buildContext(result, options);
   const source = sourceOverride ?? (options.source === 'polygon' ? 'draw_area_candidate' : 'route_candidate');
   const candidates = result.candidates.map((candidate) => campOpsCandidateFromGeneratedCandidate(candidate, source));
@@ -371,6 +373,19 @@ function buildCampOpsInputs(
 
 function resolveSearchFeatureState(options: CampOpsSearchIntegrationOptions): CampOpsFeatureState {
   return getCampOpsFeatureState(options.rolloutConfig ?? {});
+}
+
+/**
+ * Reuses the canonical CampOps search normalization without generating a
+ * recommendation set. Decision surfaces can add current route/progress state
+ * before invoking their deterministic engine.
+ */
+export function buildCampOpsSearchInputs(
+  result: CampsiteCandidateResult,
+  options: CampOpsSearchIntegrationOptions,
+  sourceOverride?: Parameters<typeof campOpsCandidateFromGeneratedCandidate>[1],
+): CampOpsSearchInputs {
+  return buildCampOpsInputs(result, options, resolveSearchFeatureState(options), sourceOverride);
 }
 
 function stripSourceTransparency(set: CampRecommendationSet): CampRecommendationSet {

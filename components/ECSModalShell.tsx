@@ -364,6 +364,8 @@ export default function ECSModalShell({
               onPress={onBack}
               activeOpacity={0.8}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
             >
               <Ionicons name="arrow-back" size={iconGlyphSize} color={palette.textMuted} />
             </TouchableOpacity>
@@ -388,7 +390,11 @@ export default function ECSModalShell({
             {eyebrow ? (
               <Text style={[styles.eyebrow, { fontSize: adaptive.overlay.eyebrowSize, color: palette.textMuted }]}>{eyebrow}</Text>
             ) : null}
-            <Text style={[styles.title, { fontSize: adaptive.overlay.titleSize, color: palette.amber }, titleStyle]} numberOfLines={1}>
+            <Text
+              style={[styles.title, { fontSize: adaptive.overlay.titleSize, color: palette.amber }, titleStyle]}
+              numberOfLines={1}
+              accessibilityRole="header"
+            >
               {title}
             </Text>
             {subtitle ? (
@@ -415,6 +421,8 @@ export default function ECSModalShell({
             onPress={requestClose}
             activeOpacity={0.8}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={`Close ${title}`}
           >
             <Ionicons name="close" size={actionGlyphSize} color={palette.textMuted} />
           </TouchableOpacity>

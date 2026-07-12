@@ -37,7 +37,9 @@ import CurrentConditionsCard from './CurrentConditionsCard';
 import ForecastTimeline from './ForecastTimeline';
 import WeatherAlerts from './WeatherAlerts';
 import TrailConditionsCard from './TrailConditionsCard';
+import { SourceTruthInspectorTrigger } from '../source-truth';
 import { ecsLog } from '../../lib/ecsLogger';
+import { buildWeatherSourceTruthBinding } from '../../lib/sourceTruthAdapters';
 
 type WeatherTab = 'current' | 'forecast' | 'trail';
 type WeatherDataSource = 'live' | 'cache_fresh' | 'cache_stale' | 'fallback' | null;
@@ -677,6 +679,41 @@ export default function WeatherIntelPanel({
 
   const isFallback = effectiveDataSource === 'fallback';
   const isStale = effectiveDataSource === 'cache_stale' || effectiveStatusKind === 'stale';
+  const effectiveFetchedAt = injectedWeatherActive
+    ? weatherSnapshot?.fetchedAt ?? lastGoodWeatherRef.current?.fetchedAt ?? null
+    : fetchedAt ?? lastGoodWeatherRef.current?.fetchedAt ?? null;
+  const effectiveRetrievedAt = injectedWeatherActive
+    ? weatherSnapshot?.status.cachedAt ?? weatherSnapshot?.cache.cachedAt ?? lastGoodWeatherRef.current?.cachedAt ?? null
+    : cachedAt ?? lastGoodWeatherRef.current?.cachedAt ?? null;
+  const weatherSourceTruthBinding = useMemo(() => buildWeatherSourceTruthBinding({
+    id: 'weather-intelligence-panel',
+    source: weatherDetailSource,
+    provider: weatherSnapshot?.provider.name ?? 'ECS Weather Pipeline',
+    observedAt: effectiveFetchedAt,
+    retrievedAt: effectiveRetrievedAt,
+    available: weatherDetailHasTemp || weatherDetailForecastCount > 0,
+    stale: isStale,
+    hasCurrentConditions: weatherDetailHasTemp,
+    hasForecast: weatherDetailForecastCount > 0,
+    locationStale: weatherSnapshot?.location.stale === true,
+    providerLimited: Boolean(effectiveError) ||
+      effectiveStatusKind === 'provider_error' ||
+      effectiveStatusKind === 'network-blocked' ||
+      effectiveStatusKind === 'error',
+    policyKey: tab === 'forecast' ? 'weather_forecast' : 'weather_observation',
+  }), [
+    effectiveError,
+    effectiveFetchedAt,
+    effectiveRetrievedAt,
+    effectiveStatusKind,
+    isStale,
+    tab,
+    weatherDetailForecastCount,
+    weatherDetailHasTemp,
+    weatherDetailSource,
+    weatherSnapshot?.location.stale,
+    weatherSnapshot?.provider.name,
+  ]);
   const trailSourceLabel = effectiveDataSource === 'live'
     ? 'Derived from live weather'
     : effectiveDataSource === 'cache_fresh'
@@ -1313,6 +1350,24 @@ export default function WeatherIntelPanel({
           )}
 
           <View style={[styles.footer, styles.footerActionsOnly, frameless ? styles.footerFrameless : null]}>
+            <SourceTruthInspectorTrigger
+              source={weatherSourceTruthBinding.ref}
+              policyKey={weatherSourceTruthBinding.policyKey}
+              dependencies={weatherSourceTruthBinding.dependencies}
+              action={{
+                kind: 'refresh',
+                onPress: () => handleFetch(true),
+                disabled: effectiveLoading || !isOnline || effectiveStatusKind === 'permission-blocked',
+                unavailableReason: effectiveStatusKind === 'permission-blocked'
+                  ? 'Location permission is required before weather can refresh.'
+                  : !isOnline
+                    ? 'Connect to refresh weather. Saved source details remain available offline.'
+                    : effectiveLoading
+                      ? 'Weather refresh is already in progress.'
+                      : null,
+              }}
+              testID="weather-source-truth-trigger"
+            />
             <TouchableOpacity
               style={[
                 styles.refreshBtn,
@@ -1739,6 +1794,7 @@ const styles = StyleSheet.create({
   },
   footerActionsOnly: {
     justifyContent: 'flex-end',
+    gap: 8,
   },
   footerFrameless: {
     paddingHorizontal: 0,

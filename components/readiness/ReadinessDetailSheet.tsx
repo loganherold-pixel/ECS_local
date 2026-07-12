@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import TacticalPopupShell from '../TacticalPopupShell';
 import { ECSText } from '../ECSText';
 import { ECSBadge, ECSIcon } from '../ECSStatus';
+import { SourceTruthInspectorTrigger } from '../source-truth';
 import type {
   ExpeditionReadinessAssessment,
   ExpeditionReadinessCategory,
@@ -13,6 +14,7 @@ import type {
 } from '../../lib/readiness/expeditionReadinessTypes';
 import { useExpeditionReadinessState } from '../../lib/readiness';
 import { getTripIntentLabel } from '../../lib/readiness/expeditionReadinessCalibration';
+import { buildReadinessAssessmentSourceTruthBinding } from '../../lib/sourceTruthAdapters';
 import { getShellBottomClearance, getShellHeaderTopPadding } from '../../lib/shellLayout';
 import { ECS } from '../../lib/theme';
 import { ReadinessConcernList } from './ReadinessConcernList';
@@ -133,6 +135,7 @@ export function ReadinessDetailSheet({
   }, [assessment, fallbackPrevious, initialCategoryId, selectedCategoryId]);
 
   if (!assessment || !model) return null;
+  const assessmentSourceTruth = buildReadinessAssessmentSourceTruthBinding(assessment);
 
   return (
     <TacticalPopupShell
@@ -160,7 +163,15 @@ export function ReadinessDetailSheet({
               {cleanReadinessCopy(assessment.explanation)}
             </ECSText>
             <View style={styles.badgeRow}>
-              <ECSBadge label={`Confidence ${assessment.confidence}`} tone={assessment.confidence === 'high' ? 'ready' : assessment.confidence === 'medium' ? 'warning' : 'unavailable'} compact />
+              <SourceTruthInspectorTrigger
+                source={assessmentSourceTruth.ref}
+                policyKey={assessmentSourceTruth.policyKey}
+                dependencies={assessmentSourceTruth.dependencies}
+                label={`Confidence ${assessment.confidence}`}
+                badgeTone={assessment.confidence === 'high' ? 'ready' : assessment.confidence === 'medium' ? 'warning' : 'unavailable'}
+                badgeIcon="information-circle-outline"
+                testID="readiness-assessment-source-truth"
+              />
               <ECSBadge label={`Intent ${getTripIntentLabel(assessment.tripIntent)}`} tone={assessment.tripIntentSource === 'selected' ? 'ready' : assessment.tripIntentSource === 'ecs_inferred' ? 'warning' : 'info'} compact />
               {assessment.tripIntentSource === 'ecs_inferred' ? (
                 <ECSBadge label="ECS-inferred" tone="warning" compact />

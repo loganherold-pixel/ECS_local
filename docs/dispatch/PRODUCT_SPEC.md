@@ -131,10 +131,10 @@ Implemented behavior:
 - Queue cards render title, detail, priority, status, assignment target, linked context, created/updated time, acknowledgment progress, delivery state, escalation state, conflict state, and suggested next action.
 - Queue sorting prioritizes active critical items, escalations, pending responses, high priority, then recency, while resolved/cancelled items fall behind active work.
 - Filters include All, Awaiting Response, Assigned, Escalated, and Resolved.
-- Local actions support ping follow-up, assign, mark in progress, mark resolved, escalate, view context placeholder, retry delivery, and cancel queued delivery when permitted.
+- Local actions support ping follow-up, assign, mark in progress, mark resolved, escalate, View Context, retry delivery, and cancel queued delivery when permitted.
 - Mark resolved does not delete the item.
 - Escalation creates visible queue state changes and timeline entries.
-- View Context is currently a safe placeholder unless an existing map navigation path is explicitly wired.
+- View Context opens a permission-checked, context-only Navigate handoff. It does not replace the active route or active guidance.
 
 ## 7. Assignments
 
@@ -248,7 +248,7 @@ Current limitation:
 
 ## 13. Linked Map Context
 
-Dispatch supports linked context for expedition, pin, waypoint, route segment, resource, vehicle, power, and manual references.
+Dispatch supports linked context for expedition, pin, waypoint, route segment, active or saved route, camp, rally point, bailout point, incident or recovery location, resource, vehicle, member, power, and manual references.
 
 Implemented behavior:
 
@@ -256,7 +256,10 @@ Implemented behavior:
 - Queue and ping cards display linked context type and title.
 - Team Ping and Assist Request composers allow selecting context.
 - Context actions exist for pins, waypoints, route segments, resources, vehicles, and power.
-- View Context is safe placeholder behavior unless an existing navigation path is explicitly wired.
+- Queue, ping, timeline, and CAD event View Context actions use `dispatchNavigateContextHandoff`.
+- The adapter validates local references, checks generic and member-location permissions, deduplicates rapid actions, preserves Source Truth and stale state, and stages a detail target for Navigate.
+- Navigate shows the linked context and a return-to-Dispatch action. It may focus an authorized coordinate, but does not create a pin, stage a route, replace active guidance, or auto-start navigation.
+- Manual context without coordinates opens as detail-only. Missing or deleted mappable targets return explicit unavailable copy.
 
 Privacy:
 
@@ -397,7 +400,7 @@ Current known limitations:
 - Dispatch persistence is local-first. Dedicated backend Dispatch tables/schema are not implemented in this repo.
 - Notifications are policy/toast based and disabled by rollout default.
 - Expedition log integration is gated off by default.
-- View Context is a placeholder unless map navigation wiring is explicitly added.
+- Android map-camera framing and return-route behavior still require device evidence across phone and landscape layouts.
 - Call/message actions in the roster are placeholders.
 - Automated escalation timers are not enabled by default. Escalation suggestions and manual escalation exist.
 - Multi-client realtime is adapter-backed and scenario tested, but not covered by a two-device automated test.

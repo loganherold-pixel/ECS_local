@@ -35,6 +35,7 @@ export type DispatchPermissionAction =
   | 'cancel_queue_item'
   | 'view_member_location'
   | 'view_member_contact'
+  | 'plan_convoy_regroup'
   | 'broadcast_hazard'
   | 'modify_timeline'
   | 'manage_role_group_targeting';
@@ -71,6 +72,7 @@ export interface DispatchQueuePermissionSet {
   canEscalate: boolean;
   canCancel: boolean;
   canViewContext: boolean;
+  canViewMemberLocation: boolean;
   disabledReason: string;
   locationRestrictedReason: string;
 }
@@ -142,7 +144,8 @@ export function getQueuePermissionSet(
     canResolve: snapshot.can('resolve_queue_item').allowed,
     canEscalate: snapshot.can('escalate_queue_item').allowed,
     canCancel: snapshot.can('cancel_queue_item').allowed,
-    canViewContext: snapshot.can('view_member_location').allowed,
+    canViewContext: snapshot.can('view_dispatch').allowed,
+    canViewMemberLocation: snapshot.can('view_member_location').allowed,
     disabledReason: snapshot.disabledReason,
     locationRestrictedReason: DISPATCH_LOCATION_RESTRICTED_COPY,
   };
@@ -347,6 +350,8 @@ function canMemberPerformAction(action: DispatchPermissionAction): DispatchPermi
       return denied('You do not have permission to view Dispatch audit history.');
     case 'view_member_location':
       return denied(DISPATCH_LOCATION_RESTRICTED_COPY);
+    case 'plan_convoy_regroup':
+      return denied('Convoy regroup planning requires expedition lead or Dispatch admin access.');
     case 'view_member_contact':
       return denied(DISPATCH_CONTACT_RESTRICTED_COPY);
     case 'send_team_wide_ping':
@@ -372,6 +377,8 @@ function canViewerPerformAction(action: DispatchPermissionAction): DispatchPermi
       return allowedWithSafety(action);
     case 'view_member_location':
       return denied(DISPATCH_LOCATION_RESTRICTED_COPY);
+    case 'plan_convoy_regroup':
+      return denied('Convoy regroup planning requires expedition lead or Dispatch admin access.');
     case 'view_member_contact':
       return denied(DISPATCH_CONTACT_RESTRICTED_COPY);
     case 'view_audit_history':

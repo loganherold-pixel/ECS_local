@@ -38,10 +38,25 @@ import type {
   EcsSummaryMap,
   EcsFreshness,
 } from './ecsSyncTypes';
+import type {
+  SourceTruthAssessment,
+  SourceTruthPolicyKey,
+  FreshnessPolicyOverride,
+} from './sourceTruth';
 import { ECS_CHANNEL_PRIORITY } from './ecsSyncTypes';
 import { ecsLog } from './ecsLogger';
+import {
+  assessEcsSummarySourceTruth,
+  mapSourceTruthFreshnessToEcsFreshness,
+} from './sourceTruth';
 
 const TAG = '[ECS-BUS]';
+
+type EcsBusSourceTruthOptions = {
+  policyKey?: SourceTruthPolicyKey | null;
+  policyOverride?: FreshnessPolicyOverride | null;
+  now?: number | Date | string | null;
+};
 
 function debugBus(message: string, details?: Record<string, unknown>): void {
   ecsLog.debug('SYSTEM', message, details);
@@ -395,6 +410,64 @@ export const ecsBus = {
     if (age < 60_000) return 'recent';
     if (age < STALE_THRESHOLD_MS) return 'stale';
     return 'unavailable';
+  },
+
+  /**
+   * Evaluate a channel through the canonical source-truth policy layer.
+   * Existing callers should continue using getChannelFreshness() until they
+   * intentionally migrate to domain-specific policy keys.
+   */
+  getChannelSourceTruth(
+    channel: EcsChannel,
+    options: EcsBusSourceTruthOptions = {},
+  ): SourceTruthAssessment {
+    const cached = (_summaryCache as any)[channel] as EcsSummaryBase | null | undefined;
+    if (cached) {
+      return assessEcsSummarySourceTruth(cached, {
+        id: channel,
+        policyKey: options.policyKey ?? cached.sourceTruthPolicyKey ?? 'default',
+        policyOverride: options.policyOverride,
+        now: options.now,
+      });
+    }
+
+    const ts = _lastPublishTimestamp[channel];
+    if (!ts) {
+      return assessEcsSummarySourceTruth(null, {
+        id: channel,
+        policyKey: options.policyKey ?? 'default',
+        policyOverride: options.policyOverride,
+        now: options.now,
+      });
+    }
+
+    return assessEcsSummarySourceTruth(
+      {
+        updated_at: new Date(ts).toISOString(),
+        freshness: 'live',
+        available: true,
+        sourceTruthPolicyKey: options.policyKey ?? 'default',
+      },
+      {
+        id: channel,
+        policyKey: options.policyKey ?? 'default',
+        policyOverride: options.policyOverride,
+        now: options.now,
+      },
+    );
+  },
+
+  /**
+   * Get ECS freshness using source-truth policies. This is opt-in so the
+   * legacy channel freshness behavior remains stable for existing consumers.
+   */
+  getChannelFreshnessWithPolicy(
+    channel: EcsChannel,
+    options: EcsBusSourceTruthOptions = {},
+  ): EcsFreshness {
+    return mapSourceTruthFreshnessToEcsFreshness(
+      ecsBus.getChannelSourceTruth(channel, options).freshness,
+    );
   },
 
   /**

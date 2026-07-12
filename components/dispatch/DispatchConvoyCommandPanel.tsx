@@ -27,6 +27,16 @@ import {
   selectConvoyCommandPanelViewModel,
 } from '../../lib/convoy/convoyCommandSelectors';
 import type { ConvoyCommandPanelViewModel } from '../../lib/convoy/convoyCommandTypes';
+import type {
+  ConvoyRegroupPlannerResult,
+  ConvoyRegroupProposal,
+} from '../../lib/convoy/convoyRegroupPlanner';
+import {
+  createConvoyRegroupRallyDraft,
+  readConvoyRegroupLocalContext,
+  selectConvoyRegroupPlannerResult,
+  type ConvoyRegroupRallyDraft,
+} from '../../lib/convoy/convoyRegroupPlannerAdapter';
 import type { DispatchEvent } from '../../lib/dispatchLiveEvents';
 import { useConvoyCommandData } from '../dashboard/commandCenter/useConvoyCommandData';
 import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
@@ -36,6 +46,7 @@ import {
   subscribeToConvoyLocations,
   useConvoyTrackingStore,
 } from '../../stores/convoyTrackingStore';
+import ConvoyRegroupPlannerSheet from './ConvoyRegroupPlannerSheet';
 
 type DispatchConvoyCommandPanelProps = {
   connectionLabel: string;
@@ -53,6 +64,17 @@ type DispatchConvoyCommandPanelProps = {
   presentation?: 'full' | 'feed' | 'signals' | 'summary';
   showEmergencyOverlay?: boolean;
   convoyLifecycleRevision?: number;
+  regroupPlannerEnabled?: boolean;
+  positionSharingRolloutEnabled?: boolean;
+  regroupPlannerPermissionAllowed?: boolean;
+  regroupPlannerPermissionReason?: string | null;
+  canPreviewRegroupOnMap?: boolean;
+  previewRegroupUnavailableReason?: string | null;
+  canCreateRallyPing?: boolean;
+  rallyPingUnavailableReason?: string | null;
+  expeditionId?: string | null;
+  onPreviewRegroupProposal?: (proposal: ConvoyRegroupProposal) => void;
+  onCreateRegroupRallyDraft?: (draft: ConvoyRegroupRallyDraft) => void;
   testID?: string;
 };
 
@@ -170,6 +192,17 @@ export default function DispatchConvoyCommandPanel({
   presentation = 'full',
   showEmergencyOverlay,
   convoyLifecycleRevision = 0,
+  regroupPlannerEnabled = false,
+  positionSharingRolloutEnabled = false,
+  regroupPlannerPermissionAllowed = false,
+  regroupPlannerPermissionReason,
+  canPreviewRegroupOnMap = false,
+  previewRegroupUnavailableReason,
+  canCreateRallyPing = false,
+  rallyPingUnavailableReason,
+  expeditionId,
+  onPreviewRegroupProposal,
+  onCreateRegroupRallyDraft,
   testID = 'dispatch-convoy-command-panel',
 }: DispatchConvoyCommandPanelProps) {
   const { width: windowWidth } = useWindowDimensions();
@@ -182,6 +215,7 @@ export default function DispatchConvoyCommandPanel({
   const sharingBusyRef = useRef(false);
   const [trackingNote, setTrackingNote] = useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [regroupPlannerVisible, setRegroupPlannerVisible] = useState(false);
   const isCompact = windowWidth < 820;
   const viewModel = useMemo(
     () => selectConvoyCommandPanelViewModel({ commandData }),
@@ -228,6 +262,53 @@ export default function DispatchConvoyCommandPanel({
     hasActiveConvoy && trackingSnapshot.convoyId === activeContext?.convoyId
       ? trackingSnapshot.rawMembers.filter((member) => !member.revoked_at).length
       : 0;
+  const regroupLocalContextRefreshKey = [
+    convoyLifecycleRevision,
+    routeSession.updatedAt ?? 'route-unset',
+    trackingSnapshot.lastUpdated ?? 'tracking-unset',
+  ].join(':');
+  const regroupLocalContext = useMemo(() => {
+    void regroupLocalContextRefreshKey;
+    if (
+      !regroupPlannerEnabled ||
+      !positionSharingRolloutEnabled ||
+      !regroupPlannerPermissionAllowed ||
+      !routeSession.routeId
+    ) {
+      return null;
+    }
+    return readConvoyRegroupLocalContext({ routeId: routeSession.routeId });
+  }, [
+    positionSharingRolloutEnabled,
+    regroupLocalContextRefreshKey,
+    regroupPlannerEnabled,
+    regroupPlannerPermissionAllowed,
+    routeSession.routeId,
+  ]);
+  const regroupPlannerResult = useMemo(
+    () => selectConvoyRegroupPlannerResult({
+      enabled: regroupPlannerEnabled,
+      positionSharingEnabled: positionSharingRolloutEnabled,
+      memberLocationPermissionAllowed: regroupPlannerPermissionAllowed,
+      activeConvoyId: activeContext?.convoyId,
+      routeSession,
+      trackingConnectionStatus: mapConnectionStatus,
+      members: liveMapMembers,
+      localContext: regroupLocalContext,
+      expeditionId,
+    }),
+    [
+      activeContext?.convoyId,
+      expeditionId,
+      liveMapMembers,
+      mapConnectionStatus,
+      positionSharingRolloutEnabled,
+      regroupLocalContext,
+      regroupPlannerEnabled,
+      regroupPlannerPermissionAllowed,
+      routeSession,
+    ],
+  );
   const panelViewModel = useMemo(
     () => buildSharedActiveConvoyPanelViewModel({
       baseViewModel: viewModel,
@@ -423,6 +504,20 @@ export default function DispatchConvoyCommandPanel({
     );
   }
 
+  function handlePreviewRegroupProposal() {
+    const proposal = regroupPlannerResult.proposal;
+    if (!proposal || !canPreviewRegroupOnMap || !onPreviewRegroupProposal) return;
+    setRegroupPlannerVisible(false);
+    onPreviewRegroupProposal(proposal);
+  }
+
+  function handleCreateRegroupRallyPing() {
+    const proposal = regroupPlannerResult.proposal;
+    if (!proposal || !canCreateRallyPing || !onCreateRegroupRallyDraft) return;
+    setRegroupPlannerVisible(false);
+    onCreateRegroupRallyDraft(createConvoyRegroupRallyDraft(proposal));
+  }
+
   return (
     <View
       testID={testID}
@@ -438,7 +533,7 @@ export default function DispatchConvoyCommandPanel({
           <ConvoySignalSurface
             compact={isFeedPresentation || isSignalOnlyPresentation}
             panelViewModel={panelViewModel}
-            members={mapMembers}
+            members={liveMapMembers}
             connectionStatus={mapConnectionStatus}
             selectedMemberId={selectedMemberId}
             onSelectMemberId={setSelectedMemberId}
@@ -569,12 +664,39 @@ export default function DispatchConvoyCommandPanel({
           />
           <LegendMetric
             label="Regroup"
-            value={panelViewModel.regroupSuggested ? 'Advised' : 'Standby'}
+            value={regroupPlannerEnabled
+              ? getRegroupPlannerMetricValue(regroupPlannerResult)
+              : panelViewModel.regroupSuggested ? 'Advised' : 'Standby'}
             compact={summaryCompact}
             expanded={isSummaryOnlyPresentation}
-            caution={panelViewModel.regroupSuggested}
+            caution={regroupPlannerEnabled
+              ? regroupPlannerResult.posture === 'watch' || regroupPlannerResult.posture === 'dispersed'
+              : panelViewModel.regroupSuggested}
           />
         </View>
+
+        {regroupPlannerEnabled ? (
+          <TouchableOpacity
+            testID="dispatch-convoy-regroup-action"
+            style={styles.regroupAction}
+            accessibilityRole="button"
+            accessibilityLabel={`Open Convoy Regroup Planner. ${getRegroupPlannerActionCopy(regroupPlannerResult)}.`}
+            accessibilityHint="Reviews a deterministic proposal without sending a message or changing guidance."
+            activeOpacity={0.78}
+            onPress={() => setRegroupPlannerVisible(true)}
+          >
+            <View style={styles.regroupActionIcon}>
+              <Ionicons name="git-merge-outline" size={15} color={TACTICAL.amber} />
+            </View>
+            <View style={styles.regroupActionCopy}>
+              <Text style={styles.regroupActionTitle}>REGROUP</Text>
+              <Text style={styles.regroupActionSubtitle} numberOfLines={1}>
+                {getRegroupPlannerActionCopy(regroupPlannerResult)}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward-outline" size={15} color={TACTICAL.textMuted} />
+          </TouchableOpacity>
+        ) : null}
 
         {shouldShowIntegratedEmergencyFeed ? (
           <View
@@ -703,8 +825,36 @@ export default function DispatchConvoyCommandPanel({
         ) : null}
       </View>
       ) : null}
+      {regroupPlannerEnabled ? (
+        <ConvoyRegroupPlannerSheet
+          visible={regroupPlannerVisible}
+          result={regroupPlannerResult}
+          canPreviewMap={canPreviewRegroupOnMap}
+          canCreateRallyPing={canCreateRallyPing}
+          previewUnavailableReason={previewRegroupUnavailableReason}
+          rallyUnavailableReason={rallyPingUnavailableReason ?? regroupPlannerPermissionReason}
+          onClose={() => setRegroupPlannerVisible(false)}
+          onPreviewMap={handlePreviewRegroupProposal}
+          onCreateRallyPing={handleCreateRegroupRallyPing}
+        />
+      ) : null}
     </View>
   );
+}
+
+function getRegroupPlannerActionCopy(result: ConvoyRegroupPlannerResult): string {
+  if (result.status === 'proposal') return 'Review proposal';
+  if (result.status === 'not_needed') return 'Within thresholds';
+  if (result.status === 'restricted') return 'Location restricted';
+  if (result.status === 'unavailable') return 'Inputs unavailable';
+  return 'Planner disabled';
+}
+
+function getRegroupPlannerMetricValue(result: ConvoyRegroupPlannerResult): string {
+  if (result.status === 'proposal') return 'Proposal';
+  if (result.status === 'not_needed') return 'Standby';
+  if (result.status === 'restricted') return 'Restricted';
+  return 'Unknown';
 }
 
 function InactiveConvoySurface({
@@ -795,29 +945,50 @@ function ConvoySignalSurface({
   const activeCount = members.filter((member) => !member.isStale && member.movementStatus !== 'offline').length;
   const staleCount = members.filter((member) => member.isStale || member.movementStatus === 'offline').length;
   const assistCount = members.filter((member) => member.movementStatus === 'needs_assistance').length;
+  const totalCount = Math.max(panelViewModel.vehicleCount, members.length);
+  const missingReportCount = Math.max(0, totalCount - members.length);
+  const reportWatchCount = staleCount + missingReportCount;
+  const signalState = assistCount > 0
+    ? {
+        label: 'ASSISTANCE REQUIRED',
+        detail: `${assistCount} member${assistCount === 1 ? '' : 's'} flagged for immediate review.`,
+        icon: 'alert-circle-outline' as const,
+        tone: TACTICAL.danger,
+      }
+    : connectionStatus !== 'connected'
+      ? {
+          label: 'LINK DEGRADED',
+          detail: 'Showing the latest received reports while the convoy link reconnects.',
+          icon: 'cloud-offline-outline' as const,
+          tone: TACTICAL.amber,
+        }
+      : members.length === 0
+        ? {
+            label: 'AWAITING REPORTS',
+            detail: 'No consenting live GPS reports have been received yet.',
+            icon: 'radio-outline' as const,
+            tone: TACTICAL.amber,
+          }
+      : reportWatchCount > 0
+        ? {
+            label: 'SIGNAL WATCH',
+            detail: `${reportWatchCount} member${reportWatchCount === 1 ? '' : 's'} need a fresh GPS report.`,
+            icon: 'time-outline' as const,
+            tone: TACTICAL.amber,
+          }
+        : {
+            label: 'FORMATION NOMINAL',
+            detail: `${activeCount}/${totalCount} consenting member${totalCount === 1 ? '' : 's'} reporting live.`,
+            icon: 'shield-checkmark-outline' as const,
+            tone: '#49D17A',
+          };
 
   return (
     <View style={[styles.signalSurface, compact ? styles.signalSurfaceCompact : null]}>
-      <View pointerEvents="none" style={styles.inactiveGridLayer}>
-        {[0, 1, 2, 3, 4].map((line) => (
-          <View
-            key={`signal-h-${line}`}
-            style={[styles.inactiveGridLine, styles.inactiveGridLineHorizontal, { top: `${16 + line * 17}%` }]}
-          />
-        ))}
-        {[0, 1, 2, 3, 4, 5].map((line) => (
-          <View
-            key={`signal-v-${line}`}
-            style={[styles.inactiveGridLine, styles.inactiveGridLineVertical, { left: `${10 + line * 16}%` }]}
-          />
-        ))}
-        <View style={styles.signalSweepLine} />
-      </View>
-
       <View style={styles.signalHeaderRow}>
         <View style={styles.signalTitleBlock}>
           <Text style={[styles.signalEyebrow, compact ? styles.signalEyebrowCompact : null]}>
-            DISPATCH SIGNALS
+            ACTIVE CONVOY
           </Text>
           <Text style={[styles.signalTitle, compact ? styles.signalTitleCompact : null]} numberOfLines={1}>
             {panelViewModel.groupName}
@@ -830,11 +1001,35 @@ function ConvoySignalSurface({
         </View>
       </View>
 
+      <View style={[styles.signalOperationalStrip, { borderLeftColor: signalState.tone }]}>
+        <View
+          style={[
+            styles.signalOperationalIcon,
+            { borderColor: `${signalState.tone}66`, backgroundColor: `${signalState.tone}14` },
+          ]}
+        >
+          <Ionicons name={signalState.icon} size={compact ? 14 : 17} color={signalState.tone} />
+        </View>
+        <View style={styles.signalOperationalCopy}>
+          <Text style={[styles.signalOperationalLabel, { color: signalState.tone }]} numberOfLines={1}>
+            {signalState.label}
+          </Text>
+          <Text style={styles.signalOperationalDetail} numberOfLines={compact ? 1 : 2}>
+            {signalState.detail}
+          </Text>
+        </View>
+      </View>
+
       <View style={styles.signalMetricRow}>
-        <SignalMetric label="Reporting" value={`${activeCount}/${Math.max(panelViewModel.vehicleCount, members.length)}`} compact={compact} />
+        <SignalMetric label="Reporting" value={`${activeCount}/${totalCount}`} compact={compact} />
         <SignalMetric label="Stale" value={`${staleCount}`} compact={compact} caution={staleCount > 0} />
         <SignalMetric label="Assist" value={`${assistCount}`} compact={compact} caution={assistCount > 0} />
         <SignalMetric label="Gap" value={formatConvoyDistanceMiles(panelViewModel.widestGapMiles) ?? '--'} compact={compact} caution={panelViewModel.regroupSuggested} />
+      </View>
+
+      <View style={styles.signalRosterHeader}>
+        <Text style={styles.signalRosterLabel}>ROSTER TELEMETRY</Text>
+        <Text style={styles.signalRosterCount}>{visibleMembers.length} SHOWN</Text>
       </View>
 
       <View style={styles.signalMemberList}>
@@ -856,9 +1051,15 @@ function ConvoySignalSurface({
               onPress={() => onSelectMemberId(member.memberId)}
             >
               <View style={[styles.signalMemberDot, { backgroundColor: tone }]} />
-              <Text style={styles.signalMemberName} numberOfLines={1}>
-                {member.callsign}
-              </Text>
+              <View style={styles.signalMemberCopy}>
+                <Text style={styles.signalMemberName} numberOfLines={1}>
+                  {member.callsign}
+                </Text>
+                <Text style={styles.signalMemberRole} numberOfLines={1}>
+                  {member.role.toUpperCase()}
+                  {member.displayName && member.displayName !== member.callsign ? ` / ${member.displayName}` : ''}
+                </Text>
+              </View>
               <Text style={styles.signalMemberStatus} numberOfLines={1}>
                 {member.isStale ? 'STALE' : member.movementStatus.toUpperCase()}
               </Text>
@@ -894,9 +1095,12 @@ function ConvoySignalSurface({
           <Ionicons name="navigate-outline" size={compact ? 13 : 15} color={TACTICAL.amber} />
         </TouchableOpacity>
       ) : (
-        <Text style={styles.signalFooterText} numberOfLines={1}>
-          Map visibility moved to Navigate.
-        </Text>
+        <View style={styles.signalPrivacyRow}>
+          <Ionicons name="lock-closed-outline" size={11} color={TACTICAL.textMuted} />
+          <Text style={styles.signalFooterText} numberOfLines={1}>
+            Roster reflects consent-based GPS reports only.
+          </Text>
+        </View>
       )}
     </View>
   );
@@ -981,21 +1185,17 @@ const styles = StyleSheet.create({
   },
   panelStage: {
     width: '100%',
-    aspectRatio: 1060 / 704,
-    minHeight: 320,
     alignSelf: 'center',
     position: 'relative',
-    overflow: 'hidden',
-    backgroundColor: ECS_SURFACE.background.compact,
+    backgroundColor: 'transparent',
   },
   feedPanelStage: {
-    flex: 1,
-    minHeight: 210,
-    aspectRatio: undefined,
+    flex: 0,
+    minHeight: 0,
   },
   inactiveConvoySurface: {
     flex: 1,
-    minHeight: 0,
+    minHeight: 220,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -1006,6 +1206,7 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
   },
   inactiveConvoySurfaceCompact: {
+    minHeight: 150,
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
@@ -1142,10 +1343,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   signalSurface: {
-    flex: 1,
-    minHeight: 0,
     borderWidth: 1,
     borderColor: `${TACTICAL.amber}38`,
+    borderRadius: 8,
     backgroundColor: ECS_SURFACE.background.primary,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -1156,15 +1356,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 8,
     gap: 6,
-  },
-  signalSweepLine: {
-    position: 'absolute',
-    left: '-14%',
-    top: '46%',
-    width: '128%',
-    height: 1,
-    backgroundColor: 'rgba(196,138,44,0.18)',
-    transform: [{ rotate: '-16deg' }],
   },
   signalHeaderRow: {
     flexDirection: 'row',
@@ -1180,11 +1371,11 @@ const styles = StyleSheet.create({
     ...TYPO.U2,
     color: `${TACTICAL.amber}CC`,
     fontSize: 8,
-    letterSpacing: 1.1,
+    letterSpacing: 0,
   },
   signalEyebrowCompact: {
     fontSize: 6.8,
-    letterSpacing: 0.7,
+    letterSpacing: 0,
   },
   signalTitle: {
     color: TACTICAL.text,
@@ -1213,19 +1404,59 @@ const styles = StyleSheet.create({
     color: TACTICAL.text,
     fontSize: 8,
     fontWeight: '900',
-    letterSpacing: 0.7,
+    letterSpacing: 0,
+  },
+  signalOperationalStrip: {
+    minHeight: 44,
+    borderLeftWidth: 3,
+    borderRadius: 6,
+    backgroundColor: 'rgba(5,9,13,0.72)',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  signalOperationalIcon: {
+    width: 28,
+    height: 28,
+    borderWidth: 1,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  signalOperationalCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  signalOperationalLabel: {
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  signalOperationalDetail: {
+    color: TACTICAL.textMuted,
+    fontSize: 8.5,
+    lineHeight: 11,
+    fontWeight: '700',
+    marginTop: 2,
   },
   signalMetricRow: {
     flexDirection: 'row',
-    gap: 7,
+    gap: 0,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 6,
+    backgroundColor: ECS_SURFACE.background.compact,
+    overflow: 'hidden',
   },
   signalMetric: {
     flex: 1,
     minWidth: 0,
-    borderWidth: 1,
+    borderRightWidth: 1,
     borderColor: ECS_SURFACE.border.quiet,
-    borderRadius: 8,
-    backgroundColor: ECS_SURFACE.background.compact,
+    backgroundColor: 'transparent',
     paddingHorizontal: 8,
     paddingVertical: 7,
   },
@@ -1237,7 +1468,7 @@ const styles = StyleSheet.create({
     color: TACTICAL.textMuted,
     fontSize: 7,
     fontWeight: '900',
-    letterSpacing: 0.6,
+    letterSpacing: 0,
     textTransform: 'uppercase',
   },
   signalMetricValue: {
@@ -1249,9 +1480,25 @@ const styles = StyleSheet.create({
   signalMetricValueCaution: {
     color: TACTICAL.amber,
   },
+  signalRosterHeader: {
+    minHeight: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  signalRosterLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  signalRosterCount: {
+    color: `${TACTICAL.amber}CC`,
+    fontSize: 7,
+    fontWeight: '900',
+  },
   signalMemberList: {
-    flex: 1,
-    minHeight: 0,
     gap: 5,
   },
   signalMemberRow: {
@@ -1275,17 +1522,26 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   signalMemberName: {
-    flex: 1,
-    minWidth: 0,
     color: TACTICAL.text,
     fontSize: 10,
     fontWeight: '900',
+  },
+  signalMemberCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  signalMemberRole: {
+    color: TACTICAL.textMuted,
+    fontSize: 6.5,
+    lineHeight: 8,
+    fontWeight: '800',
+    marginTop: 1,
   },
   signalMemberStatus: {
     color: TACTICAL.textMuted,
     fontSize: 7,
     fontWeight: '900',
-    letterSpacing: 0.6,
+    letterSpacing: 0,
   },
   signalEmptyState: {
     flex: 1,
@@ -1339,12 +1595,21 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   signalFooterText: {
+    flex: 1,
+    minWidth: 0,
     color: TACTICAL.textMuted,
     fontSize: 8,
     fontWeight: '900',
-    letterSpacing: 0.7,
+    letterSpacing: 0,
     textTransform: 'uppercase',
-    textAlign: 'center',
+  },
+  signalPrivacyRow: {
+    minHeight: 22,
+    paddingHorizontal: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
   },
   commandSummary: {
     borderWidth: 1,
@@ -1423,6 +1688,43 @@ const styles = StyleSheet.create({
   },
   legendMetricExpanded: {
     minHeight: 0,
+  },
+  regroupAction: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.selected,
+    borderRadius: 7,
+    backgroundColor: ECS_SURFACE.background.selected,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  regroupActionIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.strong,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: ECS_SURFACE.background.compact,
+  },
+  regroupActionCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  regroupActionTitle: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 9,
+  },
+  regroupActionSubtitle: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
   },
   emergencyInlineRail: {
     borderTopWidth: 1,

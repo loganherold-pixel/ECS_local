@@ -45,6 +45,7 @@ interface DispatchQueueSectionProps {
   syncSnapshot: DispatchSyncSnapshot;
   permissions: DispatchQueuePermissionSet;
   onPingItem: (item: DispatchQueueItem) => void;
+  onViewContext: (item: DispatchQueueItem) => void;
   onContextPing: (context: DispatchLinkedContext, action?: DispatchContextAction) => void;
   onAssignItem: (item: DispatchQueueItem) => void;
   onMarkInProgress: (item: DispatchQueueItem) => void;
@@ -70,6 +71,7 @@ export default function DispatchQueueSection({
   syncSnapshot,
   permissions,
   onPingItem,
+  onViewContext,
   onContextPing,
   onAssignItem,
   onMarkInProgress,
@@ -88,8 +90,8 @@ export default function DispatchQueueSection({
     return sortOperationalQueue(items).filter((item) => matchesFilter(item, activeFilter));
   }, [activeFilter, items]);
 
-  const handleViewContext = useCallback((queueItem: DispatchQueueItem) => {
-    setContextNotice(`Context placeholder: ${queueItem.linkedContext.title}`);
+  const handlePlaceholderAction = useCallback((queueItem: DispatchQueueItem, action: DispatchContextAction) => {
+    setContextNotice(`${action.label}: ${queueItem.linkedContext.title}`);
   }, []);
 
   return (
@@ -155,7 +157,8 @@ export default function DispatchQueueSection({
                 onEscalateItem={onEscalateItem}
                 onRetryDelivery={onRetryDelivery}
                 onCancelDelivery={onCancelDelivery}
-                onViewContext={handleViewContext}
+                onViewContext={onViewContext}
+                onPlaceholderAction={handlePlaceholderAction}
               />
             );
           })}
@@ -183,6 +186,7 @@ const DispatchQueueCard = React.memo(function DispatchQueueCard({
   onRetryDelivery,
   onCancelDelivery,
   onViewContext,
+  onPlaceholderAction,
 }: {
   item: DispatchQueueItem;
   ping?: DispatchPing;
@@ -201,6 +205,7 @@ const DispatchQueueCard = React.memo(function DispatchQueueCard({
   onRetryDelivery: (item: DispatchQueueItem) => void;
   onCancelDelivery: (item: DispatchQueueItem) => void;
   onViewContext: (item: DispatchQueueItem) => void;
+  onPlaceholderAction: (item: DispatchQueueItem, action: DispatchContextAction) => void;
 }) {
   const priorityTone = getPriorityTone(item.priority);
   const recommendation = getEscalationRecommendation({
@@ -216,10 +221,10 @@ const DispatchQueueCard = React.memo(function DispatchQueueCard({
           queueItem: item,
           members,
           pings,
-          canViewLocation: permissions.canViewContext,
+          canViewLocation: permissions.canViewMemberLocation,
         }).slice(0, 4)
         : [],
-    [item, members, permissions.canViewContext, pings, smartSuggestionsEnabled],
+    [item, members, permissions.canViewMemberLocation, pings, smartSuggestionsEnabled],
   );
   const ackProgress = ping
     ? `${ping.acknowledgedByMemberIds?.length ?? 0}/${ping.targetMemberIds.length} ack`
@@ -306,13 +311,7 @@ const DispatchQueueCard = React.memo(function DispatchQueueCard({
         <ContextActionStrip
           context={item.linkedContext}
           onContextPing={onContextPing}
-          onPlaceholder={(action) => onViewContext({
-            ...item,
-            linkedContext: {
-              ...item.linkedContext,
-              title: `${item.linkedContext.title} / ${action.label}`,
-            },
-          })}
+          onPlaceholder={(action) => onPlaceholderAction(item, action)}
         />
 
         <View style={styles.actionGrid}>
@@ -353,7 +352,7 @@ const DispatchQueueCard = React.memo(function DispatchQueueCard({
             onPress={() => onEscalateItem(item)}
           />
           <QueueAction
-            label="Context"
+            label="View Context"
             icon="map-outline"
             disabled={!permissions.canViewContext}
             disabledReason={permissions.disabledReason}
@@ -621,11 +620,22 @@ function getContextIcon(type: DispatchLinkedContext['type']): IconName {
     case 'waypoint':
       return 'flag-outline';
     case 'route_segment':
+    case 'route':
       return 'git-branch-outline';
+    case 'camp':
+      return 'bonfire-outline';
+    case 'rally':
+      return 'flag-outline';
+    case 'bailout':
+      return 'exit-outline';
+    case 'incident':
+      return 'warning-outline';
     case 'resource':
       return 'cube-outline';
     case 'vehicle':
       return 'car-outline';
+    case 'member':
+      return 'people-outline';
     case 'power':
       return 'battery-charging-outline';
     case 'manual':

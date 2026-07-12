@@ -51,6 +51,7 @@ import type { WeatherCoordinate } from '../lib/weatherTypes';
 
 type FieldUtilitiesView =
   | 'menu'
+  | 'incidentRecovery'
   | 'quickNote'
   | 'emergencyComms'
   | 'intel'
@@ -290,6 +291,7 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
   const fixedStaticActive = mainPanelStaticActive || protocolStaticActive || commsStaticActive;
   const gpsBackedUtilityActive =
     activeView === 'menu' ||
+    activeView === 'incidentRecovery' ||
     activeView === 'emergencyComms' ||
     activeView === 'intel';
   const protocolCompactMode = viewportHeight < 760;
@@ -757,7 +759,19 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     availabilityLabel: 'AVAILABLE',
   };
 
+  const incidentRecoveryTile: QuickActionTile = {
+    key: 'incident-recovery',
+    label: 'Incident & Recovery',
+    subtitle: 'Report, assess, coordinate, and resolve',
+    icon: 'shield-half-outline',
+    color: TACTICAL.danger,
+    onPress: () => openFieldUtilityAction('incidentRecovery'),
+    disabled: false,
+    availabilityLabel: 'OPEN',
+  };
+
   const fieldUtilityActionColumns = [tileItems.slice(0, 3), tileItems.slice(3, 6)];
+  const compactUtilityTiles = [incidentRecoveryTile, documentationTile];
 
   const renderQuickActionTile = (item: QuickActionTile) => {
     const tileBackground = FIELD_UTILITY_ACTION_BACKGROUNDS[item.key];
@@ -788,8 +802,15 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         </ImageBackground>
         <View style={styles.quickActionTileContent}>
           <View style={[styles.quickActionTileAccent, { backgroundColor: item.disabled ? ECS.muted : item.color }]} />
-          <View style={[styles.tileIconWrap, fieldUtilityIconSurface(item.color)]}>
-            <Ionicons name={item.icon as any} size={16} color={item.disabled ? ECS.muted : item.color} />
+          <View style={styles.quickActionTileTopRow}>
+            <View style={[styles.tileIconWrap, styles.quickActionTileIconWrap, fieldUtilityIconSurface(item.color)]}>
+              <Ionicons name={item.icon as any} size={19} color={item.disabled ? ECS.muted : item.color} />
+            </View>
+            <View style={[styles.tileStateBadge, styles.quickActionTileBadge, item.disabled && styles.tileStateBadgeDisabled]}>
+              <Text style={[styles.tileStateText, styles.quickActionTileStateText, item.disabled && styles.tileStateTextDisabled]}>
+                {item.availabilityLabel ?? (item.disabled ? 'UNAVAILABLE' : 'AVAILABLE')}
+              </Text>
+            </View>
           </View>
           <View style={styles.quickActionTileCopy}>
             <Text
@@ -800,19 +821,41 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
             >
               {item.label}
             </Text>
-            <Text style={[styles.tileSubLabel, styles.quickActionTileSubLabel, item.disabled && styles.tileSubLabelDisabled]} numberOfLines={1}>
+            <Text style={[styles.tileSubLabel, styles.quickActionTileSubLabel, item.disabled && styles.tileSubLabelDisabled]} numberOfLines={2}>
               {item.subtitle}
-            </Text>
-          </View>
-          <View style={[styles.tileStateBadge, styles.quickActionTileBadge, item.disabled && styles.tileStateBadgeDisabled]}>
-            <Text style={[styles.tileStateText, styles.quickActionTileStateText, item.disabled && styles.tileStateTextDisabled]}>
-              {item.availabilityLabel ?? (item.disabled ? 'UNAVAILABLE' : 'AVAILABLE')}
             </Text>
           </View>
         </View>
       </TouchableOpacity>
     );
   };
+
+  const renderCompactUtilityTile = (item: QuickActionTile) => (
+    <TouchableOpacity
+      key={item.key}
+      style={[styles.tile, styles.compactUtilityTile, fieldUtilityContainerSurface(item.color)]}
+      onPress={item.onPress}
+      activeOpacity={0.78}
+      disabled={item.disabled || busy}
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${item.label}`}
+    >
+      <View style={[styles.tileIconWrap, fieldUtilityIconSurface(item.color)]}>
+        <Ionicons name={item.icon as any} size={18} color={item.color} />
+      </View>
+      <View style={styles.compactUtilityTileCopy}>
+        <Text style={styles.compactUtilityTileLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82}>
+          {item.label}
+        </Text>
+        <Text style={styles.compactUtilityTileSubLabel} numberOfLines={1}>
+          {item.subtitle}
+        </Text>
+      </View>
+      <View style={styles.tileStateBadge}>
+        <Text style={styles.tileStateText}>{item.availabilityLabel}</Text>
+      </View>
+    </TouchableOpacity>
+  );
 
   const renderMainPanel = () => (
     <View style={styles.mainPanel}>
@@ -834,36 +877,9 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
         </View>
       </View>
 
-      <View style={styles.incidentRecoveryUtilitySlot}>
-        <IncidentRecoveryPanel
-          compact
-          modalStackBehavior="allow-stack"
-          style={styles.incidentRecoveryUtilityPanel}
-          onOpenPlaceholder={() => undefined}
-          expeditionId={incidentRecoveryExpeditionId}
-          routeLabel={incidentRecoveryRouteLabel}
-          ecsOnline={isOnline}
-          gpsLocation={incidentRecoveryGpsLocation}
-        />
+      <View style={styles.compactUtilityTileStack}>
+        {compactUtilityTiles.map(renderCompactUtilityTile)}
       </View>
-      <TouchableOpacity
-        key={documentationTile.key}
-        style={[styles.tile, styles.documentationTile, fieldUtilityContainerSurface(documentationTile.color)]}
-        onPress={documentationTile.onPress}
-        activeOpacity={0.78}
-        disabled={busy}
-      >
-        <View style={[styles.tileIconWrap, fieldUtilityIconSurface(documentationTile.color)]}>
-          <Ionicons name={documentationTile.icon as any} size={18} color={documentationTile.color} />
-        </View>
-        <View style={styles.documentationTileCopy}>
-          <Text style={styles.tileLabel} numberOfLines={1}>{documentationTile.label}</Text>
-          <Text style={styles.tileSubLabel} numberOfLines={1}>{documentationTile.subtitle}</Text>
-        </View>
-        <View style={styles.tileStateBadge}>
-          <Text style={styles.tileStateText}>{documentationTile.availabilityLabel}</Text>
-        </View>
-      </TouchableOpacity>
     </View>
   );
 
@@ -871,6 +887,24 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
     <View style={styles.panelIntro}>
       <Text style={styles.panelTitle}>{title}</Text>
       <Text style={styles.panelSubtitle}>{subtitle}</Text>
+    </View>
+  );
+
+  const renderIncidentRecoveryPanel = () => (
+    <View style={[styles.panelBody, styles.incidentRecoveryPanelBody]}>
+      {renderPanelIntro(
+        'Incident & Recovery',
+        'Report incidents, run safety checks, build ECS assessments, coordinate recovery, and complete debriefs.',
+      )}
+      <IncidentRecoveryPanel
+        modalStackBehavior="allow-stack"
+        style={styles.incidentRecoveryDetailPanel}
+        onOpenPlaceholder={() => undefined}
+        expeditionId={incidentRecoveryExpeditionId}
+        routeLabel={incidentRecoveryRouteLabel}
+        ecsOnline={isOnline}
+        gpsLocation={incidentRecoveryGpsLocation}
+      />
     </View>
   );
 
@@ -1251,6 +1285,8 @@ export default function QuickActionsSheet({ visible, onClose, returnTarget = 'da
 
   const panelContent = (() => {
     switch (activeView) {
+      case 'incidentRecovery':
+        return renderIncidentRecoveryPanel();
       case 'quickNote':
         return renderNotePanel();
       case 'intel':
@@ -1518,9 +1554,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 7,
     overflow: 'hidden',
     position: 'relative',
   },
@@ -1531,47 +1567,62 @@ const styles = StyleSheet.create({
   },
   quickActionTileBackgroundImage: {
     borderRadius: 11,
-    opacity: 0.72,
+    opacity: 1,
   },
   quickActionTileScrim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.62)',
+    backgroundColor: 'rgba(0,0,0,0.28)',
   },
   quickActionTileVignette: {
     ...StyleSheet.absoluteFillObject,
     borderRadius: 11,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.04)',
-    backgroundColor: 'rgba(0,0,0,0.16)',
+    backgroundColor: 'rgba(0,0,0,0.04)',
   },
   quickActionTileContent: {
     flex: 1,
     minWidth: 0,
     minHeight: '100%',
     position: 'relative',
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'column',
+    alignItems: 'stretch',
     justifyContent: 'space-between',
-    gap: 5,
+    gap: 10,
+    paddingLeft: 8,
     zIndex: 2,
   },
   quickActionTileAccent: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
     width: 3,
-    alignSelf: 'stretch',
     borderRadius: 999,
     opacity: 0.85,
   },
+  quickActionTileTopRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
   quickActionTileCopy: {
-    flex: 1,
+    width: '100%',
     minWidth: 0,
     justifyContent: 'center',
     alignItems: 'flex-start',
-    gap: 2,
+    gap: 3,
+    borderRadius: 7,
+    backgroundColor: 'rgba(0,0,0,0.48)',
+    paddingHorizontal: 7,
+    paddingVertical: 6,
   },
   quickActionTileLabel: {
     textAlign: 'left',
-    fontSize: 9.6,
-    lineHeight: 12,
+    fontSize: 11.5,
+    lineHeight: 14,
     letterSpacing: 0.35,
     color: '#FFF7E2',
     textShadowColor: 'rgba(0,0,0,0.75)',
@@ -1581,8 +1632,8 @@ const styles = StyleSheet.create({
   quickActionTileSubLabel: {
     minHeight: 0,
     textAlign: 'left',
-    fontSize: 7.4,
-    lineHeight: 9,
+    fontSize: 9,
+    lineHeight: 12,
     letterSpacing: 0.2,
     color: 'rgba(255,247,226,0.82)',
     textShadowColor: 'rgba(0,0,0,0.72)',
@@ -1591,11 +1642,11 @@ const styles = StyleSheet.create({
   },
   quickActionTileBadge: {
     marginTop: 0,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
   quickActionTileStateText: {
-    fontSize: 5.8,
+    fontSize: 6.4,
     letterSpacing: 0.7,
     textShadowColor: 'rgba(0,0,0,0.72)',
     textShadowOffset: { width: 0, height: 1 },
@@ -1616,20 +1667,45 @@ const styles = StyleSheet.create({
     borderColor: `${TACTICAL.danger}3D`,
     backgroundColor: `${TACTICAL.danger}10`,
   },
-  documentationTile: {
+  compactUtilityTileStack: {
     width: '100%',
-    minHeight: 46,
-    flexDirection: 'row',
-    gap: 7,
-    marginTop: 0,
-    paddingHorizontal: 7,
-    paddingVertical: 5,
+    gap: 6,
   },
-  documentationTileCopy: {
-    flex: 1,
+  compactUtilityTile: {
+    width: '100%',
+    minHeight: 50,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 9,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  compactUtilityTileCopy: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'flex-start',
     justifyContent: 'center',
-    gap: 3,
+    gap: 2,
+  },
+  compactUtilityTileLabel: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  compactUtilityTileSubLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 7.5,
+    lineHeight: 9,
+    fontWeight: '700',
+    letterSpacing: 0.25,
+  },
+  quickActionTileIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
   },
   tileIconWrap: {
     width: 30,
@@ -1681,18 +1757,11 @@ const styles = StyleSheet.create({
     color: TACTICAL.amber,
     letterSpacing: 1.1,
   },
-  incidentRecoveryUtilitySlot: {
-    width: '100%',
-    height: 260,
-    flexGrow: 0,
-    flexShrink: 0,
-    minWidth: 0,
-    justifyContent: 'flex-start',
+  incidentRecoveryPanelBody: {
+    gap: 10,
   },
-  incidentRecoveryUtilityPanel: {
-    flex: 1,
-    justifyContent: 'space-between',
-    backgroundColor: 'transparent',
+  incidentRecoveryDetailPanel: {
+    width: '100%',
   },
   tileStateTextDisabled: {
     color: ECS.muted,

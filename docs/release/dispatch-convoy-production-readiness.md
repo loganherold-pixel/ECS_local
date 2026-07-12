@@ -18,7 +18,8 @@ Dispatch/Convoy Command is the first production-readiness lane. Convoy Command n
 - Emergency Coordinate Ping is wired to the local Recovery Assist GPS flow.
 - Emergency Coordinate Ping E2E device evidence is captured for GPS allowed, GPS denied, event detail, Navigate Assist handoff, and Navigate recovery route readiness.
 - Copy states that ECS does not contact emergency services.
-- Sensitive integrations remain default-off: live team position sharing, agency ingestion, public hazard publishing, automated SOS transmission, live radio/network integrations, and demo data.
+- Sensitive integrations remain default-off: live team position sharing, Convoy Regroup Planner, agency ingestion, public hazard publishing, automated SOS transmission, live radio/network integrations, and demo data.
+- Convoy Regroup Planner is proposal-only. It requires both the planner and team-position rollout gates, expedition lead/admin location permission, fresh/accurate live positions, and explicit operator submission through the existing Rally composer.
 
 ## Remaining Production Tasks
 
@@ -27,6 +28,7 @@ Dispatch/Convoy Command is the first production-readiness lane. Convoy Command n
 | Android Dispatch panel visual QA | Captured | Tablet portrait, phone portrait, phone landscape, and tablet landscape captured on device. Phone portrait text overlap and landscape dock cutoff were fixed during QA. Dev-warning overlays are not production UI. |
 | Emergency Coordinate Ping E2E | Captured | GPS-allowed path created a local Recovery Assist event with coordinate and accuracy. GPS-denied path returned without fake coordinate creation. Event detail, Navigate Assist, readiness prompt, and Navigate recovery route card were captured on device. |
 | Position sharing privacy/product approval | Pending | Explicit acceptance before enabling live team position sharing beyond local/internal beta. |
+| Convoy Regroup Planner field/privacy evidence | Pending | Two-device spread and staleness runs, restricted-member verification, Android phone/landscape visual QA, map-camera handoff evidence, and explicit privacy/product approval before enabling the default-off planner. |
 | Public/external dispatch approval | Pending | Explicit acceptance before enabling agency ingestion, public publishing, automated SOS transmission, or live radio/network integrations. |
 | Production owner decision | Pending | Product, safety, privacy, and engineering owner acceptance after evidence is complete. |
 

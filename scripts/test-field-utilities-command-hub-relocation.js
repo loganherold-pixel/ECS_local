@@ -35,19 +35,21 @@ assert.ok(
 assert.ok(
   quickActions.includes("const documentationTile: QuickActionTile") &&
     quickActions.includes("key: 'documentation'") &&
-    quickActions.includes('styles.documentationTile'),
-  'Documentation should render as a dedicated full-width bottom tile.',
+    quickActions.includes('const compactUtilityTiles = [incidentRecoveryTile, documentationTile];'),
+  'Documentation should render in the shared compact full-width launcher stack.',
 );
 
 assert.ok(
   quickActions.includes("import IncidentRecoveryPanel from './dashboard/IncidentRecoveryPanel';") &&
-    quickActions.includes('styles.incidentRecoveryUtilitySlot') &&
-    quickActions.includes('styles.incidentRecoveryUtilityPanel') &&
+    quickActions.includes("const incidentRecoveryTile: QuickActionTile = {") &&
+    quickActions.includes("onPress: () => openFieldUtilityAction('incidentRecovery')") &&
+    quickActions.includes('styles.compactUtilityTile') &&
+    quickActions.includes('const renderIncidentRecoveryPanel = () => (') &&
     quickActions.includes('<IncidentRecoveryPanel') &&
-    quickActions.includes('compact') &&
     quickActions.includes('modalStackBehavior="allow-stack"') &&
-    quickActions.indexOf('styles.incidentRecoveryUtilitySlot') < quickActions.indexOf('styles.documentationTile'),
-  'Field Utilities should host Incident & Recovery directly above the full-width Documentation tile.',
+    quickActions.includes("case 'incidentRecovery':") &&
+    quickActions.includes('return renderIncidentRecoveryPanel();'),
+  'Field Utilities should open the complete Incident & Recovery workflow from a compact launcher.',
 );
 
 assert.ok(
@@ -60,14 +62,12 @@ assert.ok(
 );
 
 assert.ok(
-  quickActions.includes('incidentRecoveryUtilitySlot: {') &&
-    quickActions.includes('height: 220,') &&
-    quickActions.includes('flexGrow: 0,') &&
-    quickActions.includes('flexShrink: 0,') &&
-    quickActions.includes('incidentRecoveryUtilityPanel: {') &&
-    quickActions.includes('flex: 1,') &&
-    quickActions.includes("justifyContent: 'space-between'"),
-  'Field Utilities should reserve a fixed Incident & Recovery slot directly above Documentation.',
+  quickActions.includes('compactUtilityTileStack: {') &&
+    quickActions.includes('compactUtilityTile: {') &&
+    quickActions.includes('minHeight: 50,') &&
+    !quickActions.includes('incidentRecoveryUtilitySlot: {') &&
+    !quickActions.includes('height: 260,'),
+  'Field Utilities should reclaim the fixed Incident & Recovery slot for larger image action buttons.',
 );
 
 assert.ok(
@@ -75,6 +75,8 @@ assert.ok(
     quickActions.includes('return renderPermitsAccessPanel();') &&
     quickActions.includes("case 'tripSummaries':") &&
     quickActions.includes('return renderTripSummariesPanel();') &&
+    quickActions.includes("case 'incidentRecovery':") &&
+    quickActions.includes('return renderIncidentRecoveryPanel();') &&
     quickActions.includes("case 'documentation':") &&
     quickActions.includes('return renderDocumentationPanel();'),
   'Field Utilities should route the relocated actions to their panels.',

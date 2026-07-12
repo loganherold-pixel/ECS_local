@@ -12,6 +12,7 @@ const RESULT_RELATIVE_PATH = path.join('.smoke', 'dispatch-internal-beta-readine
 
 const SENSITIVE_DEFAULT_OFF_FEATURES = [
   'teamPositionSharing',
+  'convoyRegroupPlanner',
   'agencyDataIngestion',
   'externalDispatchIntegration',
   'publicHazardPublishing',

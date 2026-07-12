@@ -31,6 +31,7 @@ type TripIntentSelectorProps = {
   title?: string;
   compact?: boolean;
   readonly?: boolean;
+  fitAllIntents?: boolean;
   style?: StyleProp<ViewStyle>;
   intentChipStyle?: StyleProp<ViewStyle>;
 };
@@ -44,6 +45,7 @@ export function TripIntentSelector({
   title = 'Trip Intent',
   compact = false,
   readonly = false,
+  fitAllIntents = false,
   style,
   intentChipStyle,
 }: TripIntentSelectorProps) {
@@ -57,6 +59,36 @@ export function TripIntentSelector({
       return;
     }
     expeditionReadinessStore.setTripIntent(intent);
+  };
+  const renderIntent = (intent: ExpeditionTripIntent) => {
+    const selected = intent === activeIntent;
+    return (
+      <Pressable
+        key={intent}
+        accessibilityRole="button"
+        accessibilityState={{ selected }}
+        onPress={() => handleChange(intent)}
+        style={({ pressed }) => [
+          styles.intentChip,
+          fitAllIntents && styles.intentChipFitAll,
+          selected && styles.intentChipSelected,
+          intentChipStyle,
+          pressed && styles.intentChipPressed,
+        ]}
+      >
+        <ECSText
+          variant="chip"
+          style={[
+            styles.intentText,
+            fitAllIntents && styles.intentTextFitAll,
+            selected && styles.intentTextSelected,
+          ] as TextStyle[]}
+          numberOfLines={fitAllIntents ? 2 : 1}
+        >
+          {getTripIntentLabel(intent)}
+        </ECSText>
+      </Pressable>
+    );
   };
 
   return (
@@ -79,37 +111,19 @@ export function TripIntentSelector({
       </View>
 
       {!readonly ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.intentRow}
-        >
-          {SELECTABLE_INTENTS.map((intent) => {
-            const selected = intent === activeIntent;
-            return (
-              <Pressable
-                key={intent}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                onPress={() => handleChange(intent)}
-                style={({ pressed }) => [
-                  styles.intentChip,
-                  selected && styles.intentChipSelected,
-                  intentChipStyle,
-                  pressed && styles.intentChipPressed,
-                ]}
-              >
-                <ECSText
-                  variant="chip"
-                  style={[styles.intentText, selected && styles.intentTextSelected] as TextStyle[]}
-                  numberOfLines={1}
-                >
-                  {getTripIntentLabel(intent)}
-                </ECSText>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        fitAllIntents ? (
+          <View style={[styles.intentRow, styles.intentRowFitAll]}>
+            {SELECTABLE_INTENTS.map(renderIntent)}
+          </View>
+        ) : (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.intentRow}
+          >
+            {SELECTABLE_INTENTS.map(renderIntent)}
+          </ScrollView>
+        )
       ) : null}
     </View>
   );
@@ -152,6 +166,12 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingRight: 2,
   },
+  intentRowFitAll: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    width: '100%',
+    paddingRight: 0,
+  },
   intentChip: {
     minHeight: 28,
     justifyContent: 'center',
@@ -161,6 +181,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: ECS.stroke,
     backgroundColor: ECS.bgPanel,
+  },
+  intentChipFitAll: {
+    flexBasis: '47%',
+    flexGrow: 1,
+    minWidth: 0,
+    minHeight: 36,
+    alignItems: 'center',
+    paddingHorizontal: 6,
   },
   intentChipSelected: {
     borderColor: GOLD_RAIL.section,
@@ -173,6 +201,11 @@ const styles = StyleSheet.create({
     color: ECS.muted,
     fontSize: 8,
     includeFontPadding: false,
+  } as TextStyle,
+  intentTextFitAll: {
+    flexShrink: 1,
+    lineHeight: 11,
+    textAlign: 'center',
   } as TextStyle,
   intentTextSelected: {
     color: ECS.accent,

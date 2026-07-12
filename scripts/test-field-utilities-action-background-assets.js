@@ -95,13 +95,18 @@ assertIncludes(
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'quickActionTileBackgroundImage'),
-  'opacity: 0.72',
-  'Available Actions backgrounds should be muted enough for text to read over supplied images.',
+  'opacity: 1',
+  'Available Actions backgrounds should reveal the supplied imagery clearly inside the larger cards.',
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'quickActionTileScrim'),
-  "backgroundColor: 'rgba(0,0,0,0.62)'",
-  'Available Actions should use a strong readability scrim over full-bleed photos.',
+  "backgroundColor: 'rgba(0,0,0,0.28)'",
+  'Available Actions should balance readable copy with clearer full-bleed imagery.',
+);
+assertIncludes(
+  styleBlock(quickActionsSource, 'quickActionTileCopy'),
+  "backgroundColor: 'rgba(0,0,0,0.48)'",
+  'Available Actions should protect copy locally while leaving the main image field visible.',
 );
 assertIncludes(
   styleBlock(quickActionsSource, 'quickActionTileContent'),

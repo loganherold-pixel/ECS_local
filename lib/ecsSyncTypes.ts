@@ -31,6 +31,8 @@
  *   - Vehicle Profile    → EcsVehicleProfileSummary
  */
 
+import type { SourceTruthPolicyKey, SourceTruthRef } from './sourceTruth';
+
 
 // ── System Channel IDs ───────────────────────────────────
 
@@ -104,6 +106,12 @@ export interface EcsSummaryBase {
   freshness: EcsFreshness;
   /** Whether this system has usable data */
   available: boolean;
+  /** Optional canonical source-truth metadata for migrated consumers */
+  sourceTruth?: SourceTruthRef[];
+  /** Optional policy key used by source-truth-aware consumers */
+  sourceTruthPolicyKey?: SourceTruthPolicyKey;
+  /** Optional warning codes surfaced by source-truth-aware consumers */
+  sourceTruthWarningCodes?: string[];
 }
 
 
