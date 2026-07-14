@@ -30,7 +30,7 @@ Invalid and terminal-state transitions are rejected by `lib/dispatchLifecycle.ts
 
 ## Persistence And Replay
 
-Dispatch persistence schema version 2 adds acknowledgments, assist requests, and explicit offline actions while loading version 1 snapshots without destructive migration.
+Dispatch persistence schema version 4 adds default-off Operational Playbook instances with bounded embedded event history while retaining every version 3 field. Version 3 added Mission Command aggregates and append-only command events. Missing canonical arrays initialize empty, invalid canonical records fail closed, and legacy records remain available for explicit adapter-based migration. Version 1 through version 3 snapshots still load without destructive migration.
 
 Replay is single-flight per expedition, FIFO by creation time, bounded to 100 actions per pass, cancellable, and protected by exponential retry backoff. Interrupted `replaying` actions restore as `queued`. A successful transport changes delivery state to `sent`; it does not mark the operational item resolved.
 
@@ -60,6 +60,10 @@ Active expedition changes clear scoped local views, cancel stale hydration work,
 | Timeline events | 500 |
 | Offline actions | 300 |
 | CAD events | 300 |
+| Mission Commands | 250 |
+| Mission Command events | 750 |
+| Operational Playbook instances | 100 |
+| Operational Playbook events | 250 per instance |
 | Dismissed CAD identities | 600 |
 
 Active records are retained ahead of terminal history within each bound.
@@ -81,6 +85,8 @@ These are CI/development regression measurements, not Android or iOS frame-rate,
 
 Current sensitive defaults remain unchanged:
 
+- Mission Command: off, internal-only
+- Operational Playbooks: use the Mission Command flag; framework only, no production scenario definitions
 - Canonical Dispatch persistence: off
 - Team position sharing: off
 - Convoy Regroup Planner: off

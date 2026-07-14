@@ -1,10 +1,10 @@
 # ECS Dispatch Schema Verification
 
-Last updated: 2026-07-12
+Last updated: 2026-07-14
 
 ## Verdict
 
-Dispatch has a durable local version 2 snapshot and outbox plus an additive canonical Supabase schema. Canonical persistence is implementation-complete for guarded internal verification, but it is not production-approved or production-visible. Local state remains authoritative.
+Dispatch has a durable local version 4 snapshot and outbox plus an additive canonical Supabase schema. Version 3 added local Mission Command aggregates and events. Version 4 adds local Operational Playbook instances and their bounded event history. Neither addition enables a Mission Command or playbook backend table. Canonical persistence is implementation-complete for guarded internal verification, but it is not production-approved or production-visible. Local state remains authoritative.
 
 The canonical path is disabled by default and fails closed unless the feature registry approves it and the mode is explicitly `shadow` or `dual_read`. Hosted RLS, privacy, multi-client, native-device, provider, and owner evidence is still required.
 
@@ -22,6 +22,8 @@ The canonical path is disabled by default and fails closed unless the feature re
 | Idempotency evidence | Local idempotency keys | `dispatch_operation_receipts` | Server-generated, read-only to clients |
 | Offline operations | Local outbox | No server queue table by design | Local-first and durable |
 | Legacy CAD events | Local CAD snapshot plus existing adapter | Existing `dispatch_cad_events` path | Separate compatibility path |
+| Mission Commands | Local snapshot only, default-off | None in this foundation | Internal domain verification only |
+| Operational Playbooks | Local snapshot only, default-off | None in this framework | Internal framework verification only |
 
 Migration: `supabase/migrations/20260713054719_dispatch_canonical_persistence.sql`
 

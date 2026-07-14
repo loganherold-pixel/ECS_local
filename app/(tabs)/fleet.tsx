@@ -144,6 +144,8 @@ import { tiresLiftStore } from '../../lib/tiresLiftStore';
 import { getShellBottomClearance } from '../../lib/shellLayout';
 import { showEcsConfirmDialog } from '../../lib/ecsConfirmDialog';
 import { consumeNavigationFlow, stageNavigationFlow } from '../../lib/ecsNavigationFlow';
+import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
+import { normalizeECSReturnRoute } from '../../lib/routeManifest';
 import { ECS_STATE_COPY, ECS_TOAST_COPY } from '../../lib/ecsStateCopy';
 import { ECS_TEXT, ECS_TEXT_SPACING } from '../../lib/ecsTypographyTokens';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
@@ -163,6 +165,13 @@ const TAG = '[FLEET]';
 const ZERO_VEHICLE_VCC_SETUP_AUTO_OPEN_DELAY_MS = 900;
 let zeroVehicleVccSetupAutoOpenedThisSession = false;
 let zeroVehicleVccSetupDismissedThisSession = false;
+
+function readMissionCommandFleetReturnRoute(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const route = normalizeECSReturnRoute(value, '/fleet');
+  const path = route.split('?', 1)[0];
+  return path === '/alert' || path === '/expedition-dispatch' ? route : null;
+}
 
 function logFleetDev(...args: unknown[]) {
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -1573,6 +1582,7 @@ class FleetErrorBoundary extends Component<EBProps, EBState> {
 function FleetScreenInner() {
   recordECSPerformanceRender('active_vehicle_propagation', 'fleet_screen');
   const router = useRouter();
+  const { returnTo: returnSingleFlight } = useECSNavigation();
   const pathname = usePathname();
   const { user, authLoading, showToast, activeTrip, userSettings, isOnline, offlineMode } = useApp();
   const insets = useSafeAreaInsets();
@@ -1606,6 +1616,7 @@ function FleetScreenInner() {
   const [buildLoadoutModalVehicle, setBuildLoadoutModalVehicle] = useState<Vehicle | null>(null);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [profileModalVehicle, setProfileModalVehicle] = useState<Vehicle | null>(null);
+  const [profileMissionCommandReturnRoute, setProfileMissionCommandReturnRoute] = useState<string | null>(null);
   const [weightSummaryModalVisible, setWeightSummaryModalVisible] = useState(false);
   const [weightSummaryModalVehicle, setWeightSummaryModalVehicle] = useState<Vehicle | null>(null);
   const [vehicleConfidenceNoticeVehicleId, setVehicleConfidenceNoticeVehicleId] = useState<string | null>(null);
@@ -1800,6 +1811,7 @@ function FleetScreenInner() {
     zeroVehicleVccSetupAutoOpenArmedRef.current = true;
     zeroVehicleVccSetupDismissedThisSession = false;
     closeFleetDetailFlows();
+    setProfileMissionCommandReturnRoute(null);
     setProfileModalVehicle(null);
     setProfileModalVisible(true);
   }, [clearZeroVehicleVccSetupAutoOpenTimer, closeFleetDetailFlows]);
@@ -1812,6 +1824,7 @@ function FleetScreenInner() {
     }
     hapticMicro();
     closeFleetDetailFlows();
+    setProfileMissionCommandReturnRoute(null);
     setVisibleFleetVehicleId(v.id);
     setProfileModalVehicle(v);
     setProfileModalVisible(true);
@@ -1824,7 +1837,19 @@ function FleetScreenInner() {
     clearZeroVehicleVccSetupAutoOpenTimer();
     setProfileModalVisible(false);
     setProfileModalVehicle(null);
+    setProfileMissionCommandReturnRoute(null);
   }, [clearZeroVehicleVccSetupAutoOpenTimer, profileModalVehicle, vehicles.length]);
+
+  const handleReturnToMissionCommand = useCallback(() => {
+    const returnRoute = profileMissionCommandReturnRoute;
+    clearZeroVehicleVccSetupAutoOpenTimer();
+    setProfileModalVisible(false);
+    setProfileModalVehicle(null);
+    setProfileMissionCommandReturnRoute(null);
+    if (returnRoute) {
+      returnSingleFlight(returnRoute);
+    }
+  }, [clearZeroVehicleVccSetupAutoOpenTimer, profileMissionCommandReturnRoute, returnSingleFlight]);
 
   const handleVehicleProfileSaved = useCallback(() => {
     fetchVehicles();
@@ -1861,6 +1886,8 @@ function FleetScreenInner() {
           (vehicleId ? vehicles.find((candidate) => candidate.id === vehicleId) : null);
         if (targetVehicle) {
           handleOpenVehicleProfile(targetVehicle);
+          const requestedReturnRoute = readMissionCommandFleetReturnRoute(flow.context?.returnRoute);
+          setProfileMissionCommandReturnRoute(requestedReturnRoute);
         } else {
           handleAddVehicle();
         }
@@ -3446,6 +3473,8 @@ function FleetScreenInner() {
         vehicle={profileModalVehicle}
         userId={user?.id || null}
         onClose={handleCloseVehicleProfile}
+        onReturnToContext={profileMissionCommandReturnRoute ? handleReturnToMissionCommand : undefined}
+        returnToContextLabel="Return to Command"
         onSaved={handleVehicleProfileSaved}
         showToast={showToast}
       />

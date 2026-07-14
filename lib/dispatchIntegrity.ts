@@ -20,6 +20,10 @@ export type DispatchIntegrityEntityType =
   | 'assist_request'
   | 'acknowledgment'
   | 'timeline_event'
+  | 'mission_command'
+  | 'mission_command_event'
+  | 'operational_playbook'
+  | 'operational_playbook_event'
   | 'offline_action'
   | 'notification';
 
@@ -66,6 +70,10 @@ const ENTITY_PREFIX: Record<DispatchIntegrityEntityType, string> = {
   assist_request: 'local-assist',
   acknowledgment: 'local-ack',
   timeline_event: 'local-timeline',
+  mission_command: 'local-mission-command',
+  mission_command_event: 'local-mission-event',
+  operational_playbook: 'local-playbook',
+  operational_playbook_event: 'local-playbook-event',
   offline_action: 'local-offline-action',
   notification: 'local-notification',
 };

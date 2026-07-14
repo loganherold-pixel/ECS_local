@@ -18,10 +18,22 @@ import {
 } from './dispatchIntegrity';
 import { deriveDispatchPingOperationalState } from './dispatchLifecycle';
 import {
+  appendMissionCommandEvent as appendMissionCommandEventRecord,
+  mergeMissionCommandBatch,
+  mergeMissionCommandEventBatch,
+  mergeMissionCommand,
+} from './dispatchMissionCommandDomain';
+import {
+  mergeOperationalPlaybookInstance,
+  mergeOperationalPlaybookInstanceBatch,
+} from './dispatchOperationalPlaybookDomain';
+import {
   normalizeDispatchEvent,
   sortDispatchEvents,
   type DispatchEvent,
 } from './dispatchLiveEvents';
+import type { MissionCommand, MissionCommandEvent } from './dispatchMissionCommandTypes';
+import type { OperationalPlaybookInstance } from './dispatchOperationalPlaybookTypes';
 import type {
   DispatchAcknowledgment,
   DispatchAssignment,
@@ -33,9 +45,11 @@ import type {
 } from './dispatchTypes';
 
 const STORAGE_FILE = 'ecs_dispatch_persistence';
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 4;
 const DISPATCH_CAD_EVENT_PERSISTENCE_LIMIT = 300;
 const persistence = createPersistedKeyValueCache(STORAGE_FILE);
+const persistenceListeners = new Set<(expeditionId: string) => void>();
+const persistenceRevisions = new Map<string, number>();
 
 // This remains the authoritative local store. The guarded canonical backend
 // coordinator mirrors its durable outbox only when the default-off rollout is
@@ -52,6 +66,9 @@ export interface DispatchPersistenceSnapshot {
   timelineEvents: DispatchTimelineEvent[];
   offlineActions: DispatchQueuedOfflineAction[];
   cadEvents: DispatchEvent[];
+  missionCommands: MissionCommand[];
+  missionCommandEvents: MissionCommandEvent[];
+  operationalPlaybooks: OperationalPlaybookInstance[];
   updatedAt: string;
 }
 
@@ -64,6 +81,15 @@ export interface DispatchPersistenceDefaults {
   timelineEvents: DispatchTimelineEvent[];
   offlineActions?: DispatchQueuedOfflineAction[];
   cadEvents?: DispatchEvent[];
+  missionCommands?: MissionCommand[];
+  missionCommandEvents?: MissionCommandEvent[];
+  operationalPlaybooks?: OperationalPlaybookInstance[];
+}
+
+export interface DispatchPersistenceLoadResult {
+  snapshot: DispatchPersistenceSnapshot;
+  status: 'ready' | 'recovered';
+  safeCode: 'dispatch_persistence_ready' | 'dispatch_persistence_corrupt' | 'dispatch_persistence_partial';
 }
 
 function getStorageKey(expeditionId: string): string {
@@ -85,6 +111,9 @@ function createSnapshot(
     timelineEvents: [...defaults.timelineEvents],
     offlineActions: [...(defaults.offlineActions ?? [])],
     cadEvents: [...(defaults.cadEvents ?? [])],
+    missionCommands: [...(defaults.missionCommands ?? [])],
+    missionCommandEvents: [...(defaults.missionCommandEvents ?? [])],
+    operationalPlaybooks: [...(defaults.operationalPlaybooks ?? [])],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -120,32 +149,84 @@ function normalizeSnapshot(
     cadEvents: Array.isArray(candidate.cadEvents)
       ? candidate.cadEvents
       : [...(defaults.cadEvents ?? [])],
+    missionCommands: Array.isArray(candidate.missionCommands)
+      ? candidate.missionCommands
+      : [...(defaults.missionCommands ?? [])],
+    missionCommandEvents: Array.isArray(candidate.missionCommandEvents)
+      ? candidate.missionCommandEvents
+      : [...(defaults.missionCommandEvents ?? [])],
+    operationalPlaybooks: Array.isArray(candidate.operationalPlaybooks)
+      ? candidate.operationalPlaybooks
+      : [...(defaults.operationalPlaybooks ?? [])],
     updatedAt: typeof candidate.updatedAt === 'string'
       ? candidate.updatedAt
       : new Date().toISOString(),
   });
 }
 
+function loadSnapshotResult(
+  expeditionId: string,
+  defaults: DispatchPersistenceDefaults,
+): DispatchPersistenceLoadResult {
+  try {
+    const raw = persistence.get(getStorageKey(expeditionId));
+    if (!raw) {
+      return {
+        snapshot: createSnapshot(expeditionId, defaults),
+        status: 'ready',
+        safeCode: 'dispatch_persistence_ready',
+      };
+    }
+    const parsed = JSON.parse(raw);
+    const snapshot = normalizeSnapshot(expeditionId, parsed, defaults);
+    const candidate = parsed && typeof parsed === 'object'
+      ? parsed as Partial<DispatchPersistenceSnapshot>
+      : null;
+    const invalidMissionCommandCount = Array.isArray(candidate?.missionCommands)
+      ? Math.max(0, candidate.missionCommands.length - snapshot.missionCommands.length)
+      : 0;
+    const invalidMissionEventCount = Array.isArray(candidate?.missionCommandEvents)
+      ? Math.max(0, candidate.missionCommandEvents.length - snapshot.missionCommandEvents.length)
+      : 0;
+    const invalidPlaybookCount = Array.isArray(candidate?.operationalPlaybooks)
+      ? Math.max(0, candidate.operationalPlaybooks.length - snapshot.operationalPlaybooks.length)
+      : 0;
+    const futureSchema = typeof candidate?.version === 'number' && candidate.version > STORAGE_VERSION;
+    const recovered = futureSchema || invalidMissionCommandCount > 0 || invalidMissionEventCount > 0 ||
+      invalidPlaybookCount > 0;
+    return {
+      snapshot,
+      status: recovered ? 'recovered' : 'ready',
+      safeCode: recovered ? 'dispatch_persistence_partial' : 'dispatch_persistence_ready',
+    };
+  } catch {
+    return {
+      snapshot: createSnapshot(expeditionId, defaults),
+      status: 'recovered',
+      safeCode: 'dispatch_persistence_corrupt',
+    };
+  }
+}
+
 function loadSnapshot(
   expeditionId: string,
   defaults: DispatchPersistenceDefaults,
 ): DispatchPersistenceSnapshot {
-  try {
-    const raw = persistence.get(getStorageKey(expeditionId));
-    if (!raw) return createSnapshot(expeditionId, defaults);
-    return normalizeSnapshot(expeditionId, JSON.parse(raw), defaults);
-  } catch {
-    return createSnapshot(expeditionId, defaults);
-  }
+  return loadSnapshotResult(expeditionId, defaults).snapshot;
 }
 
 function saveSnapshot(snapshot: DispatchPersistenceSnapshot): DispatchPersistenceSnapshot {
   const next: DispatchPersistenceSnapshot = dedupeSnapshot({
     ...snapshot,
     version: STORAGE_VERSION,
+    missionCommands: Array.isArray(snapshot.missionCommands) ? snapshot.missionCommands : [],
+    missionCommandEvents: Array.isArray(snapshot.missionCommandEvents) ? snapshot.missionCommandEvents : [],
+    operationalPlaybooks: Array.isArray(snapshot.operationalPlaybooks) ? snapshot.operationalPlaybooks : [],
     updatedAt: new Date().toISOString(),
   });
   persistence.set(getStorageKey(next.expeditionId), JSON.stringify(next));
+  persistenceRevisions.set(next.expeditionId, (persistenceRevisions.get(next.expeditionId) ?? 0) + 1);
+  persistenceListeners.forEach((listener) => listener(next.expeditionId));
   return next;
 }
 
@@ -167,6 +248,9 @@ function dedupeSnapshot(snapshot: DispatchPersistenceSnapshot): DispatchPersiste
     acknowledgments: mergeDispatchAcknowledgmentBatch(snapshot.acknowledgments),
     timelineEvents: mergeDispatchTimelineEventBatch(snapshot.timelineEvents),
     cadEvents: mergeDispatchCadEvents(snapshot.cadEvents),
+    missionCommands: mergeMissionCommandBatch(snapshot.missionCommands ?? []),
+    missionCommandEvents: mergeMissionCommandEventBatch(snapshot.missionCommandEvents ?? []),
+    operationalPlaybooks: mergeOperationalPlaybookInstanceBatch(snapshot.operationalPlaybooks ?? []),
   };
   const mergedOfflineActions = mergeDispatchOfflineActionBatch([
     ...snapshot.offlineActions.map(normalizeOfflineAction),
@@ -337,6 +421,22 @@ export const dispatchPersistenceAdapter = {
     return loadSnapshot(expeditionId, defaults);
   },
 
+  loadResult(
+    expeditionId: string,
+    defaults: DispatchPersistenceDefaults,
+  ): DispatchPersistenceLoadResult {
+    return loadSnapshotResult(expeditionId, defaults);
+  },
+
+  subscribe(listener: (expeditionId: string) => void): () => void {
+    persistenceListeners.add(listener);
+    return () => persistenceListeners.delete(listener);
+  },
+
+  getRevision(expeditionId: string): number {
+    return persistenceRevisions.get(expeditionId) ?? 0;
+  },
+
   save(snapshot: DispatchPersistenceSnapshot): DispatchPersistenceSnapshot {
     return saveSnapshot(snapshot);
   },
@@ -415,6 +515,75 @@ export const dispatchPersistenceAdapter = {
     return updateSnapshot(expeditionId, defaults, (snapshot) => ({
       ...snapshot,
       timelineEvents: mergeDispatchTimelineEvent(snapshot.timelineEvents, event),
+    }));
+  },
+
+  upsertMissionCommand(
+    expeditionId: string,
+    defaults: DispatchPersistenceDefaults,
+    command: MissionCommand,
+  ): DispatchPersistenceSnapshot {
+    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
+      ...snapshot,
+      missionCommands: command.expeditionId === expeditionId
+        ? mergeMissionCommand(snapshot.missionCommands, command)
+        : snapshot.missionCommands,
+    }));
+  },
+
+  appendMissionCommandEvent(
+    expeditionId: string,
+    defaults: DispatchPersistenceDefaults,
+    event: MissionCommandEvent,
+  ): DispatchPersistenceSnapshot {
+    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
+      ...snapshot,
+      missionCommandEvents: event.expeditionId === expeditionId
+        ? appendMissionCommandEventRecord(snapshot.missionCommandEvents, event)
+        : snapshot.missionCommandEvents,
+    }));
+  },
+
+  applyMissionCommandMutation(
+    expeditionId: string,
+    defaults: DispatchPersistenceDefaults,
+    command: MissionCommand,
+    event: MissionCommandEvent | null,
+  ): DispatchPersistenceSnapshot {
+    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
+      ...snapshot,
+      missionCommands: command.expeditionId === expeditionId
+        ? mergeMissionCommand(snapshot.missionCommands, command)
+        : snapshot.missionCommands,
+      missionCommandEvents: event && event.expeditionId === expeditionId
+        ? appendMissionCommandEventRecord(snapshot.missionCommandEvents, event)
+        : snapshot.missionCommandEvents,
+    }));
+  },
+
+  upsertOperationalPlaybook(
+    expeditionId: string,
+    defaults: DispatchPersistenceDefaults,
+    instance: OperationalPlaybookInstance,
+  ): DispatchPersistenceSnapshot {
+    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
+      ...snapshot,
+      operationalPlaybooks: instance.expeditionId === expeditionId
+        ? mergeOperationalPlaybookInstance(snapshot.operationalPlaybooks, instance)
+        : snapshot.operationalPlaybooks,
+    }));
+  },
+
+  applyOperationalPlaybookMutation(
+    expeditionId: string,
+    defaults: DispatchPersistenceDefaults,
+    instance: OperationalPlaybookInstance,
+  ): DispatchPersistenceSnapshot {
+    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
+      ...snapshot,
+      operationalPlaybooks: instance.expeditionId === expeditionId
+        ? mergeOperationalPlaybookInstance(snapshot.operationalPlaybooks, instance)
+        : snapshot.operationalPlaybooks,
     }));
   },
 

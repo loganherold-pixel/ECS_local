@@ -55,6 +55,8 @@ type Props = {
   vehicle: Vehicle | null;
   userId: string | null;
   onClose: () => void;
+  onReturnToContext?: () => void;
+  returnToContextLabel?: string;
   onSaved?: () => void;
   showToast?: (message: string) => void;
 };
@@ -314,6 +316,8 @@ export default function FleetVehicleProfileModal({
   vehicle,
   userId,
   onClose,
+  onReturnToContext,
+  returnToContextLabel = 'Return',
   onSaved,
   showToast,
 }: Props) {
@@ -769,7 +773,14 @@ export default function FleetVehicleProfileModal({
               </Text>
             ) : null}
             <View style={styles.footerActions}>
-              <ECSButton label="Cancel" variant="tertiary" size="medium" onPress={handleClose} grow />
+              <ECSButton
+                label={onReturnToContext ? returnToContextLabel : 'Cancel'}
+                icon={onReturnToContext ? 'arrow-back-outline' : undefined}
+                variant="tertiary"
+                size="medium"
+                onPress={onReturnToContext ?? handleClose}
+                grow
+              />
               <ECSButton
                 label={saving ? 'Saving...' : 'Confirm Specs'}
                 icon="checkmark-circle-outline"

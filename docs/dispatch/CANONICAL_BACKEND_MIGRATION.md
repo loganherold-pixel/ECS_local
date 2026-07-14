@@ -8,7 +8,7 @@ The feature registry classifies `dispatch_canonical_backend` as `restricted_fiel
 
 ## Runtime Flow
 
-1. A permitted Dispatch action is validated and written to the local version 2 snapshot.
+1. A permitted Dispatch action is validated and written to the local version 4 snapshot. Default-off Mission Command and Operational Playbook fields remain local and are not part of this backend migration.
 2. The local adapter creates or updates a durable, idempotent outbox action.
 3. Replay resolves the signed-in actor and recipient aliases against active `convoy_members` rows.
 4. In `shadow` or `dual_read` mode, the typed repository upserts the canonical row through the signed-in Supabase client and RLS.

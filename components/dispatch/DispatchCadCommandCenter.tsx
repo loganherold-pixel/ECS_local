@@ -25,6 +25,18 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 import LandscapeShellControls from '../LandscapeShellControls';
 import { SourceTruthInspectorTrigger } from '../source-truth';
 import DispatchConvoyCommandPanel from './DispatchConvoyCommandPanel';
+import DispatchMissionCommandComposer from './DispatchMissionCommandComposer';
+import DispatchLostCommunicationsPlaybook, {
+  type LostCommunicationsMemberOption,
+} from './DispatchLostCommunicationsPlaybook';
+import DispatchVehicleImmobilizedPlaybook, {
+  type VehicleImmobilizedVehicleOption,
+} from './DispatchVehicleImmobilizedPlaybook';
+import DispatchMissionCommandBoard, {
+  MissionCommandDispatchNavigation,
+  type MissionCommandDispatchView,
+} from './DispatchMissionCommandBoard';
+import ReportIncidentModal from '../dashboard/ReportIncidentModal';
 import { useApp } from '../../context/AppContext';
 import {
   getDispatchEventTypeLabel,
@@ -48,6 +60,10 @@ import {
   dispatchNavigateContextAdapter,
 } from '../../lib/dispatchNavigateContextHandoff';
 import {
+  missionCommandContextAdapter,
+  missionCommandReturnRoute,
+} from '../../lib/dispatchMissionCommandContext';
+import {
   resolveDispatchPermissions,
   type DispatchPermissionAction,
 } from '../../lib/dispatchPermissionAdapter';
@@ -57,10 +73,46 @@ import {
 } from '../../lib/dispatchIntegrity';
 import type {
   DispatchAcknowledgment,
+  DispatchLinkedContext,
   DispatchPriority,
   DispatchTeamMember,
   DispatchTimelineEvent,
 } from '../../lib/dispatchTypes';
+import type { MissionCommand } from '../../lib/dispatchMissionCommandTypes';
+import { projectDispatchSnapshotToMissionCommandState } from '../../lib/dispatchMissionCommandAdapters';
+import {
+  MISSION_COMMAND_COMPOSER_TYPES,
+  buildMissionCommandFromComposer,
+  createMissionCommandComposerForm,
+  legacyDispatchComposerEntryToMissionCommandType,
+  resolveMissionCommandComposerAssignment,
+  seedMissionCommandComposerAssignment,
+  validateMissionCommandFollowUp,
+  type MissionCommandComposerCatalog,
+  type MissionCommandComposerContextOption,
+  type MissionCommandComposerForm,
+  type MissionCommandComposerMode,
+  type MissionCommandPlaybookComposerRequest,
+  type MissionCommandComposerType,
+} from '../../lib/dispatchMissionCommandComposer';
+import {
+  reassignMissionCommand,
+  requestMissionCommandFollowUp,
+} from '../../lib/dispatchMissionCommandDomain';
+import { linkOperationalPlaybookCommand } from '../../lib/dispatchOperationalPlaybookDomain';
+import type {
+  OperationalPlaybookEvent,
+  OperationalPlaybookInstance,
+  OperationalPlaybookRuntimeContext,
+} from '../../lib/dispatchOperationalPlaybookTypes';
+import { buildLostCommunicationsRuntimeInput } from '../../lib/dispatchLostCommunicationsRuntimeAdapter';
+import { buildVehicleImmobilizedRuntimeInput } from '../../lib/dispatchVehicleImmobilizedRuntimeAdapter';
+import { VEHICLE_IMMOBILIZED_INPUT_KEYS } from '../../lib/dispatchVehicleImmobilizedPlaybook';
+import type { SourceTruthRef } from '../../lib/sourceTruth';
+import {
+  incidentRecoveryWorkflowStore,
+  type ReportIncidentInput,
+} from '../../lib/incidentRecoveryWorkflowStore';
 import { playDispatchRecoveryPingAlert } from '../../lib/dispatchRecoveryPingAlert';
 import {
   buildLiveDispatchEvents,
@@ -86,6 +138,7 @@ import {
 } from '../../lib/dispatchProfileStore';
 import { routeStore, type RouteSegment } from '../../lib/routeStore';
 import { vehicleStore } from '../../lib/vehicleStore';
+import { getActiveVehicleState } from '../../lib/fleet/activeVehicleState';
 import {
   getActiveVehicleContext,
   subscribeActiveVehicleState,
@@ -117,6 +170,9 @@ import {
   type DispatchMapCoordinate,
 } from '../../lib/dispatchRecoveryMapModel';
 import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
+import { activeTripModeStore } from '../../lib/activeTripMode';
+import { terrainAnalysisEngine } from '../../lib/terrainAnalysisEngine';
+import { RECOVERY_PROTOCOLS } from '../emergency/RecoveryProtocolData';
 import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 import {
   hideDashboardDockReveal,
@@ -134,7 +190,10 @@ import {
   createConvoyRegroupDispatchContext,
   type ConvoyRegroupRallyDraft,
 } from '../../lib/convoy/convoyRegroupPlannerAdapter';
-import { stopConvoyLocationSubscription } from '../../stores/convoyTrackingStore';
+import {
+  convoyTrackingStore,
+  stopConvoyLocationSubscription,
+} from '../../stores/convoyTrackingStore';
 import {
   recordExpeditionChannelApprovalRequiredChanged,
   recordExpeditionChannelInviteActive,
@@ -2077,10 +2136,24 @@ export default function DispatchCadCommandCenter() {
   const [dispatchLocalHydrated, setDispatchLocalHydrated] = useState(false);
   const router = useRouter();
   const { push: pushSingleFlight } = useECSNavigation();
-  const routeParams = useLocalSearchParams<{ dispatchEventId?: string | string[] }>();
+  const routeParams = useLocalSearchParams<{
+    dispatchEventId?: string | string[];
+    missionCommandId?: string | string[];
+    operationalPlaybook?: string | string[];
+    playbookInstanceId?: string | string[];
+  }>();
   const requestedDispatchEventId = Array.isArray(routeParams.dispatchEventId)
     ? routeParams.dispatchEventId[0] ?? null
     : routeParams.dispatchEventId ?? null;
+  const requestedMissionCommandId = Array.isArray(routeParams.missionCommandId)
+    ? routeParams.missionCommandId[0] ?? null
+    : routeParams.missionCommandId ?? null;
+  const requestedOperationalPlaybook = Array.isArray(routeParams.operationalPlaybook)
+    ? routeParams.operationalPlaybook[0] ?? null
+    : routeParams.operationalPlaybook ?? null;
+  const requestedPlaybookInstanceId = Array.isArray(routeParams.playbookInstanceId)
+    ? routeParams.playbookInstanceId[0] ?? null
+    : routeParams.playbookInstanceId ?? null;
   const isDispatchFocused = useIsFocused();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const isLandscapeDispatch = windowWidth > windowHeight;
@@ -2141,6 +2214,27 @@ export default function DispatchCadCommandCenter() {
   const [commandForm, setCommandForm] = useState<CommandFormState>(() => getDefaultCommandForm());
   const [commandError, setCommandError] = useState<string | null>(null);
   const [commandSubmitting, setCommandSubmitting] = useState(false);
+  const [missionComposerMode, setMissionComposerMode] = useState<MissionCommandComposerMode | null>(null);
+  const [missionComposerForm, setMissionComposerForm] = useState<MissionCommandComposerForm>(() => (
+    createMissionCommandComposerForm({
+      actorId: 'local-dispatch-operator',
+      soloMode: true,
+      draftId: 'mission-command-draft:initial',
+    })
+  ));
+  const [missionComposerCommand, setMissionComposerCommand] = useState<MissionCommand | null>(null);
+  const [missionComposerExtraContext, setMissionComposerExtraContext] = useState<MissionCommandComposerContextOption | null>(null);
+  const [missionComposerSourceTruth, setMissionComposerSourceTruth] = useState<SourceTruthRef[]>([]);
+  const [missionComposerPlaybookLink, setMissionComposerPlaybookLink] = useState<{
+    instanceId: string;
+    proposalId: string;
+  } | null>(null);
+  const [missionComposerError, setMissionComposerError] = useState<string | null>(null);
+  const [missionComposerSubmitting, setMissionComposerSubmitting] = useState(false);
+  const [lostCommunicationsVisible, setLostCommunicationsVisible] = useState(false);
+  const [lostCommunicationsIncidentPrefill, setLostCommunicationsIncidentPrefill] = useState<ReportIncidentInput | null>(null);
+  const [vehicleImmobilizedVisible, setVehicleImmobilizedVisible] = useState(false);
+  const [vehicleImmobilizedIncidentPrefill, setVehicleImmobilizedIncidentPrefill] = useState<ReportIncidentInput | null>(null);
   const [dismissedAdvisoryId, setDismissedAdvisoryId] = useState<string | null>(null);
   const [channelRevision, setChannelRevision] = useState(0);
   const [recoveryAssistSubmitting, setRecoveryAssistSubmitting] = useState(false);
@@ -2159,12 +2253,15 @@ export default function DispatchCadCommandCenter() {
   const [submittingThreatActionKey, setSubmittingThreatActionKey] = useState<string | null>(null);
   const [navigatingAssistEventId, setNavigatingAssistEventId] = useState<string | null>(null);
   const [realtimeStatus, setRealtimeStatus] = useState<DispatchRealtimeStatus>('disabled');
+  const [missionCommandView, setMissionCommandView] = useState<MissionCommandDispatchView>('board');
   const commandSubmittingRef = useRef(false);
+  const missionComposerSubmittingRef = useRef(false);
   const recoveryAssistSubmittingRef = useRef(false);
   const submittedEventActionKeysRef = useRef<Set<string>>(new Set());
   const realtimeSessionRef = useRef<DispatchRealtimeSession | null>(null);
   const recoveryCadPublishInFlightRef = useRef<Set<string>>(new Set());
   const restoredDispatchEventIdRef = useRef<string | null>(null);
+  const restoredOperationalPlaybookRef = useRef<string | null>(null);
   const recoveryCadLastRetryAtRef = useRef<Record<string, number>>({});
   const recoveryPingAlertedIdsRef = useRef<Set<string>>(new Set());
   const advisoryPulseSeenIdsRef = useRef<Set<string>>(new Set());
@@ -2472,9 +2569,21 @@ export default function DispatchCadCommandCenter() {
   ]);
   const teamPositionSharingEnabled = isDispatchFeatureEnabled(dispatchRollout, 'teamPositionSharing');
   const convoyRegroupPlannerEnabled = isDispatchFeatureEnabled(dispatchRollout, 'convoyRegroupPlanner');
+  const missionCommandEnabled = isDispatchFeatureEnabled(dispatchRollout, 'missionCommand');
   const regroupPlannerPermission = dispatchPermissionSnapshot.can('plan_convoy_regroup');
   const memberLocationPermission = dispatchPermissionSnapshot.can('view_member_location');
   const createRallyPingPermission = dispatchPermissionSnapshot.can('send_team_wide_ping');
+  const missionCommandViewPermission = dispatchPermissionSnapshot.can('view_dispatch');
+  const missionCommandManageAllowed = [
+    dispatchPermissionSnapshot.can('assign_member'),
+    dispatchPermissionSnapshot.can('resolve_queue_item'),
+    dispatchPermissionSnapshot.can('modify_timeline'),
+  ].some((permission) => permission.allowed);
+  const missionCommandCreateAllowed = [
+    dispatchPermissionSnapshot.can('send_individual_ping'),
+    dispatchPermissionSnapshot.can('create_assist_request'),
+  ].some((permission) => permission.allowed);
+  const missionCommandAssignAllowed = dispatchPermissionSnapshot.can('assign_member').allowed;
   const canPlanConvoyRegroup = regroupPlannerPermission.allowed && memberLocationPermission.allowed;
   const regroupPlannerPermissionReason = regroupPlannerPermission.reason ?? memberLocationPermission.reason ?? null;
   const externalDispatchIntegrationEnabled = isDispatchFeatureEnabled(dispatchRollout, 'externalDispatchIntegration');
@@ -2531,6 +2640,295 @@ export default function DispatchCadCommandCenter() {
     () => getLocalDispatchPersistenceId(currentExpedition, activeConvoyControl),
     [activeConvoyControl, currentExpedition],
   );
+  const missionCommandActor = useMemo(() => ({
+    id: commandIdentity.userId ?? 'local-dispatch-operator',
+    label: commandIdentity.callsign ?? commandIdentity.displayName,
+  }), [commandIdentity.callsign, commandIdentity.displayName, commandIdentity.userId]);
+  const missionCommandSoloMode = !teamSnapshot.activeTeam && !activeConvoyControl?.convoyId;
+  const missionCommandComposerCatalog = useMemo<MissionCommandComposerCatalog>(() => {
+    void vehicleRevision;
+    const memberById = new Map<string, MissionCommandComposerCatalog['members'][number]>();
+    teamSnapshot.members.forEach((member) => {
+      const isCurrentUser = member.userId === commandIdentity.userId;
+      memberById.set(member.userId, {
+        id: member.userId,
+        label: isCurrentUser
+          ? commandIdentity.callsign ?? commandIdentity.displayName
+          : `${member.role === 'owner' ? 'Lead' : member.role === 'admin' ? 'Admin' : 'Member'} ${member.userId.slice(0, 8)}`,
+        roleId: member.role,
+      });
+    });
+    activeConvoyControl?.memberUserIds.forEach((memberId) => {
+      if (memberById.has(memberId)) return;
+      memberById.set(memberId, {
+        id: memberId,
+        label: memberId === commandIdentity.userId
+          ? commandIdentity.callsign ?? commandIdentity.displayName
+          : `Convoy member ${memberId.slice(0, 8)}`,
+        roleId: memberId === commandIdentity.userId && activeConvoyControl.isLeader ? 'owner' : 'member',
+      });
+    });
+    const members = [...memberById.values()].sort((left, right) => left.label.localeCompare(right.label));
+    const roleMembers = new Map<string, string[]>();
+    members.forEach((member) => {
+      if (!member.roleId) return;
+      roleMembers.set(member.roleId, [...(roleMembers.get(member.roleId) ?? []), member.id]);
+    });
+    const roles = [...roleMembers.entries()].map(([id, memberIds]) => ({
+      id,
+      label: id === 'owner' ? 'Expedition Lead' : id === 'admin' ? 'Dispatch Admin' : 'Expedition Members',
+      memberIds,
+    }));
+    const vehicles = vehicleStore.getLocalSnapshot().map((vehicle) => ({
+      id: vehicle.id,
+      label: getVehicleRigLabel(vehicle) ?? vehicle.name ?? `Vehicle ${vehicle.id.slice(0, 8)}`,
+      memberIds: members
+        .filter((member) => vehicle.owner_user_id && member.id === vehicle.owner_user_id)
+        .map((member) => member.id),
+    }));
+    const teamUnits: MissionCommandComposerCatalog['teamUnits'] = [];
+    if (teamSnapshot.activeTeam && teamSnapshot.members.length > 0) {
+      teamUnits.push({
+        id: `team:${teamSnapshot.activeTeam.id}`,
+        label: teamSnapshot.activeTeam.name,
+        memberIds: teamSnapshot.members.map((member) => member.userId),
+      });
+    }
+    if (activeConvoyControl?.convoyId && activeConvoyControl.memberUserIds.length > 0) {
+      teamUnits.push({
+        id: `convoy:${activeConvoyControl.convoyId}`,
+        label: activeConvoyControl.convoyName,
+        memberIds: activeConvoyControl.memberUserIds,
+      });
+    }
+    const linkedContexts: MissionCommandComposerContextOption[] = [];
+    if (dispatchGps.hasFix && dispatchGps.position) {
+      const observedAt = new Date(dispatchGps.position.timestamp).toISOString();
+      linkedContexts.push({
+        id: 'current-location',
+        label: 'Current Location',
+        context: {
+          id: `current-location:${observedAt}`,
+          type: 'pin',
+          title: 'Current location',
+          subtitle: dispatchGps.position.accuracyM != null
+            ? `Device GPS / accuracy ${Math.round(dispatchGps.position.accuracyM)} m`
+            : 'Device GPS / accuracy unavailable',
+          coordinates: {
+            latitude: dispatchGps.position.latitude,
+            longitude: dispatchGps.position.longitude,
+          },
+          observedAt,
+          sourceTruthPolicyKey: 'convoy_member_location',
+          sourceTruth: {
+            id: `dispatch-device-gps:${observedAt}`,
+            origin: 'live',
+            role: 'primary',
+            policyKey: 'convoy_member_location',
+            authority: 'Device GPS',
+            authorityKind: 'device',
+            observedAt,
+            confidence: dispatchGps.position.accuracyM != null && dispatchGps.position.accuracyM <= 25 ? 'high' : 'medium',
+            coverage: 'complete',
+            availability: 'usable',
+            conflictState: 'none',
+            warningCodes: [],
+          },
+        },
+      });
+    }
+    if (currentExpedition?.routeAssetId) {
+      linkedContexts.push({
+        id: `route:${currentExpedition.routeAssetId}`,
+        label: 'Active Route',
+        context: {
+          id: currentExpedition.routeAssetId,
+          type: 'route',
+          title: currentExpedition.destination || currentExpedition.expeditionName || 'Active expedition route',
+          subtitle: 'Stored expedition route context',
+          observedAt: currentExpedition.startTime,
+          sourceTruthPolicyKey: 'default',
+          stale: false,
+          sourceTruth: {
+            id: `dispatch-route-context:${currentExpedition.routeAssetId}`,
+            origin: 'cached',
+            role: 'primary',
+            policyKey: 'default',
+            authority: 'ECS stored route asset',
+            authorityKind: 'ecs',
+            observedAt: currentExpedition.startTime,
+            confidence: 'medium',
+            coverage: 'partial',
+            availability: 'usable',
+            conflictState: 'none',
+            warningCodes: ['route_context_metadata_partial'],
+          },
+        },
+      });
+    }
+    if (activeVehicle) {
+      linkedContexts.push({
+        id: `vehicle:${activeVehicle.id}`,
+        label: 'Active Vehicle',
+        context: {
+          id: activeVehicle.id,
+          type: 'vehicle',
+          title: getVehicleRigLabel(activeVehicle) ?? activeVehicle.name,
+          sourceTruthPolicyKey: 'manual_user_state',
+        },
+      });
+    }
+    if (missionComposerExtraContext && !linkedContexts.some((context) => context.id === missionComposerExtraContext.id)) {
+      linkedContexts.push(missionComposerExtraContext);
+    }
+    return {
+      members,
+      roles,
+      vehicles,
+      teamUnits,
+      linkedContexts,
+      milestones: [],
+    };
+  }, [
+    activeConvoyControl,
+    activeVehicle,
+    commandIdentity.callsign,
+    commandIdentity.displayName,
+    commandIdentity.userId,
+    currentExpedition,
+    dispatchGps.hasFix,
+    dispatchGps.position,
+    missionComposerExtraContext,
+    teamSnapshot.activeTeam,
+    teamSnapshot.members,
+    vehicleRevision,
+  ]);
+  const lostCommunicationsMembers = useMemo<LostCommunicationsMemberOption[]>(() => (
+    missionCommandComposerCatalog.members
+      .filter((member) => member.id !== missionCommandActor.id)
+      .map((member) => ({ id: member.id, label: member.label, roleId: member.roleId }))
+  ), [missionCommandActor.id, missionCommandComposerCatalog.members]);
+  const lostCommunicationsRuntime = useMemo<OperationalPlaybookRuntimeContext>(() => ({
+    permissions: dispatchPermissionSnapshot,
+    availableCapabilities: new Set([
+      'mission_command',
+      'mission_clock',
+      'linked_context',
+      'assignment',
+      'acknowledgment',
+      'offline_operation',
+    ]),
+    online: isOnline && !offlineMode,
+  }), [dispatchPermissionSnapshot, isOnline, offlineMode]);
+  const createLostCommunicationsInputForMember = useCallback((member: LostCommunicationsMemberOption) => {
+    const persisted = dispatchPersistenceAdapter.load(
+      localDispatchPersistenceId,
+      recoveryCadPersistenceDefaults,
+    );
+    const commandProjection = projectDispatchSnapshotToMissionCommandState(persisted, {
+      expeditionId: localDispatchPersistenceId,
+      creatorLabel: missionCommandActor.label,
+      soloMode: missionCommandSoloMode,
+    });
+    const routeContext = missionCommandComposerCatalog.linkedContexts.find((candidate) => (
+      candidate.context.type === 'route' || candidate.context.type === 'route_segment'
+    ))?.context ?? null;
+    const rallyOrBailoutContext = missionCommandComposerCatalog.linkedContexts.find((candidate) => (
+      candidate.context.type === 'rally' ||
+      candidate.context.type === 'bailout' ||
+      candidate.context.type === 'camp'
+    ))?.context ?? null;
+    return buildLostCommunicationsRuntimeInput({
+      expeditionId: localDispatchPersistenceId,
+      actor: missionCommandActor,
+      member,
+      members: lostCommunicationsMembers,
+      soloMode: missionCommandSoloMode,
+      online: isOnline && !offlineMode,
+      locationPermissionAllowed: memberLocationPermission.allowed,
+      positionSharingEnabled: teamPositionSharingEnabled,
+      convoy: convoyTrackingStore.getSnapshot(),
+      commands: commandProjection.commands,
+      events: commandProjection.events,
+      routeContext,
+      rallyOrBailoutContext,
+      expeditionCommsPlan: currentExpedition?.commsNotes ?? null,
+    });
+  }, [
+    currentExpedition?.commsNotes,
+    isOnline,
+    localDispatchPersistenceId,
+    lostCommunicationsMembers,
+    memberLocationPermission.allowed,
+    missionCommandActor,
+    missionCommandComposerCatalog.linkedContexts,
+    missionCommandSoloMode,
+    offlineMode,
+    recoveryCadPersistenceDefaults,
+    teamPositionSharingEnabled,
+  ]);
+  const vehicleImmobilizedVehicles = useMemo<VehicleImmobilizedVehicleOption[]>(() => (
+    missionCommandComposerCatalog.vehicles.map((vehicle) => ({ id: vehicle.id, label: vehicle.label }))
+  ), [missionCommandComposerCatalog.vehicles]);
+  const createVehicleImmobilizedInputForVehicle = useCallback((
+    vehicle: VehicleImmobilizedVehicleOption,
+    initialStatus: Parameters<typeof buildVehicleImmobilizedRuntimeInput>[0]['initialStatus'],
+  ) => {
+    const vehicleStates = vehicleStore.getLocalSnapshot().map((candidate) => getActiveVehicleState(candidate.id));
+    const affectedVehicleState = vehicleStates.find((candidate) => candidate.identity.vehicleId === vehicle.id)
+      ?? getActiveVehicleState(vehicle.id);
+    const routeContext = missionCommandComposerCatalog.linkedContexts.find((candidate) => (
+      candidate.context.type === 'route'
+    ))?.context ?? null;
+    const routeSegmentContext = missionCommandComposerCatalog.linkedContexts.find((candidate) => (
+      candidate.context.type === 'route_segment'
+    ))?.context ?? null;
+    const bailoutOrCampContext = missionCommandComposerCatalog.linkedContexts.find((candidate) => (
+      candidate.context.type === 'bailout' || candidate.context.type === 'camp'
+    ))?.context ?? null;
+    const currentLocationContext = missionCommandComposerCatalog.linkedContexts.find((candidate) => (
+      candidate.id === 'current-location' || candidate.context.type === 'pin'
+    ))?.context ?? null;
+
+    return buildVehicleImmobilizedRuntimeInput({
+      expeditionId: localDispatchPersistenceId,
+      actor: missionCommandActor,
+      soloMode: missionCommandSoloMode,
+      online: isOnline && !offlineMode,
+      affectedVehicleState,
+      vehicleStates,
+      members: missionCommandComposerCatalog.members,
+      initialStatus,
+      currentMemberId: commandIdentity.userId,
+      currentLocationContext,
+      memberLocationPermissionAllowed: memberLocationPermission.allowed,
+      positionSharingEnabled: teamPositionSharingEnabled,
+      convoy: convoyTrackingStore.getSnapshot(),
+      routeContext,
+      routeSegmentContext,
+      bailoutOrCampContext,
+      terrain: terrainAnalysisEngine.getCurrent(),
+      weather: dispatchWeather.snapshot,
+      campCandidate: activeTripModeStore.get()?.campCandidate ?? null,
+      approvedRecoveryProtocols: RECOVERY_PROTOCOLS.map((protocol) => ({
+        id: protocol.id,
+        title: protocol.title,
+      })),
+      statusReviewMinutes: 30,
+    });
+  }, [
+    commandIdentity.userId,
+    dispatchWeather.snapshot,
+    isOnline,
+    localDispatchPersistenceId,
+    memberLocationPermission.allowed,
+    missionCommandActor,
+    missionCommandComposerCatalog.linkedContexts,
+    missionCommandComposerCatalog.members,
+    missionCommandSoloMode,
+    offlineMode,
+    teamPositionSharingEnabled,
+  ]);
   const dispatchSensitiveGateNotice = useMemo(() => {
     const disabledFeatures: DispatchRolloutFeature[] = [];
     if (!teamPositionSharingEnabled) {
@@ -3005,6 +3403,26 @@ export default function DispatchCadCommandCenter() {
     restoredDispatchEventIdRef.current = requestedDispatchEventId;
     setSelectedEventId(requestedDispatchEventId);
   }, [events, requestedDispatchEventId]);
+  useEffect(() => {
+    if (
+      requestedOperationalPlaybook !== 'lost_communications' &&
+      requestedOperationalPlaybook !== 'vehicle_immobilized'
+    ) {
+      restoredOperationalPlaybookRef.current = null;
+      return;
+    }
+    const restoreKey = `${requestedOperationalPlaybook}:${requestedPlaybookInstanceId ?? 'latest'}`;
+    if (!missionCommandEnabled || restoredOperationalPlaybookRef.current === restoreKey) return;
+    restoredOperationalPlaybookRef.current = restoreKey;
+    setMissionCommandView('board');
+    if (requestedOperationalPlaybook === 'vehicle_immobilized') {
+      setLostCommunicationsVisible(false);
+      setVehicleImmobilizedVisible(true);
+    } else {
+      setVehicleImmobilizedVisible(false);
+      setLostCommunicationsVisible(true);
+    }
+  }, [missionCommandEnabled, requestedOperationalPlaybook, requestedPlaybookInstanceId]);
   const selectedEvent = useMemo(
     () => events.find((event) => event.id === selectedEventId) ?? null,
     [events, selectedEventId],
@@ -3161,6 +3579,54 @@ export default function DispatchCadCommandCenter() {
     pushSingleFlight,
     showToast,
   ]);
+
+  const openMissionCommandContext = useCallback(async (command: MissionCommand) => {
+    if (!command.linkedContext) {
+      showToast?.('This Mission Command has no linked context.');
+      return;
+    }
+    const result = await missionCommandContextAdapter.open({
+      context: command.linkedContext,
+      commandId: command.id,
+      dispatchEventId: command.id,
+      sourceEntityId: command.id,
+      expeditionId: localDispatchPersistenceId,
+      permissions: dispatchPermissionSnapshot,
+      currentMemberId: commandIdentity.userId,
+      returnRoute: missionCommandReturnRoute(command.id),
+      rolloutEnabled: missionCommandEnabled,
+      mapContextEnabled: dispatchRollout.mapContextIntegration,
+    });
+    showToast?.(result.message);
+    if (result.status === 'local_target' && result.destination === 'dispatch_incident') {
+      const targetEvent = events.find((event) => event.id === result.targetId);
+      if (targetEvent) {
+        setSelectedEventId(targetEvent.id);
+      } else {
+        showToast?.('The linked incident is no longer available in Dispatch.');
+      }
+      return;
+    }
+    if (result.status === 'staged' && result.route) {
+      pushSingleFlight(result.route);
+    }
+  }, [
+    commandIdentity.userId,
+    dispatchPermissionSnapshot,
+    dispatchRollout.mapContextIntegration,
+    events,
+    localDispatchPersistenceId,
+    missionCommandEnabled,
+    pushSingleFlight,
+    showToast,
+  ]);
+
+  const inspectMissionCommandContext = useCallback((context: DispatchLinkedContext) => (
+    missionCommandContextAdapter.inspect(context, {
+      permissions: dispatchPermissionSnapshot,
+      currentMemberId: commandIdentity.userId,
+    })
+  ), [commandIdentity.userId, dispatchPermissionSnapshot]);
 
   useEffect(() => {
     const realtimeReady =
@@ -3447,11 +3913,327 @@ export default function DispatchCadCommandCenter() {
     realtimeStatus,
   ]);
 
+  const openMissionCommandComposer = useCallback((
+    type: MissionCommandComposerType = 'general',
+    options?: {
+      formPatch?: Partial<MissionCommandComposerForm>;
+      extraContext?: MissionCommandComposerContextOption | null;
+    },
+  ) => {
+    const form = createMissionCommandComposerForm({
+      actorId: missionCommandActor.id,
+      soloMode: missionCommandSoloMode,
+      members: missionCommandComposerCatalog.members,
+      seedType: type,
+    });
+    const extraContext = options?.extraContext ?? null;
+    setMissionComposerExtraContext(extraContext);
+    setMissionComposerSourceTruth([]);
+    setMissionComposerPlaybookLink(null);
+    setMissionComposerCommand(null);
+    setMissionComposerForm({
+      ...form,
+      ...(extraContext ? { linkedContextId: extraContext.id } : {}),
+      ...options?.formPatch,
+    });
+    setMissionComposerError(null);
+    setMissionComposerMode('create');
+    setMissionCommandView('board');
+  }, [
+    missionCommandActor.id,
+    missionCommandComposerCatalog.members,
+    missionCommandSoloMode,
+  ]);
+
+  const openMissionCommandReassignment = useCallback((command: MissionCommand) => {
+    const permission = dispatchPermissionSnapshot.can('assign_member');
+    if (!permission.allowed) {
+      showToast?.(permission.reason ?? dispatchPermissionSnapshot.disabledReason);
+      return;
+    }
+    const form = createMissionCommandComposerForm({
+      actorId: missionCommandActor.id,
+      soloMode: missionCommandSoloMode,
+      members: missionCommandComposerCatalog.members,
+      seedType: MISSION_COMMAND_COMPOSER_TYPES.includes(command.type as MissionCommandComposerType)
+        ? command.type as MissionCommandComposerType
+        : 'general',
+    });
+    setMissionComposerExtraContext(null);
+    setMissionComposerSourceTruth([]);
+    setMissionComposerPlaybookLink(null);
+    setMissionComposerCommand(command);
+    setMissionComposerForm(seedMissionCommandComposerAssignment(form, command, missionCommandComposerCatalog));
+    setMissionComposerError(null);
+    setMissionComposerMode('reassign');
+  }, [
+    dispatchPermissionSnapshot,
+    missionCommandActor.id,
+    missionCommandComposerCatalog,
+    missionCommandSoloMode,
+    showToast,
+  ]);
+
+  const openMissionCommandFollowUp = useCallback((command: MissionCommand) => {
+    const permission = dispatchPermissionSnapshot.can('modify_timeline');
+    if (!permission.allowed) {
+      showToast?.(permission.reason ?? dispatchPermissionSnapshot.disabledReason);
+      return;
+    }
+    const form = createMissionCommandComposerForm({
+      actorId: missionCommandActor.id,
+      soloMode: missionCommandSoloMode,
+      members: missionCommandComposerCatalog.members,
+      seedType: MISSION_COMMAND_COMPOSER_TYPES.includes(command.type as MissionCommandComposerType)
+        ? command.type as MissionCommandComposerType
+        : 'general',
+    });
+    setMissionComposerExtraContext(null);
+    setMissionComposerSourceTruth([]);
+    setMissionComposerPlaybookLink(null);
+    setMissionComposerCommand(command);
+    setMissionComposerForm({
+      ...form,
+      title: command.title,
+      instructions: '',
+    });
+    setMissionComposerError(null);
+    setMissionComposerMode('follow_up');
+  }, [
+    dispatchPermissionSnapshot,
+    missionCommandActor.id,
+    missionCommandComposerCatalog.members,
+    missionCommandSoloMode,
+    showToast,
+  ]);
+
+  const closeMissionCommandComposer = useCallback(() => {
+    if (missionComposerSubmittingRef.current) return;
+    setMissionComposerMode(null);
+    setMissionComposerCommand(null);
+    setMissionComposerExtraContext(null);
+    setMissionComposerSourceTruth([]);
+    setMissionComposerPlaybookLink(null);
+    setMissionComposerError(null);
+  }, []);
+
+  const openMissionCommandComposerFromPlaybook = useCallback((request: MissionCommandPlaybookComposerRequest) => {
+    setMissionComposerExtraContext(request.extraContext);
+    setMissionComposerSourceTruth(request.sourceTruth);
+    setMissionComposerPlaybookLink({
+      instanceId: request.instanceId,
+      proposalId: request.proposalId,
+    });
+    setMissionComposerCommand(null);
+    setMissionComposerForm(request.form);
+    setMissionComposerError(null);
+    setMissionComposerMode('create');
+    setMissionCommandView('board');
+  }, []);
+
+  const linkMissionCommandToPlaybook = useCallback((command: MissionCommand) => {
+    if (!missionComposerPlaybookLink) return true;
+    const persisted = dispatchPersistenceAdapter.load(
+      localDispatchPersistenceId,
+      recoveryCadPersistenceDefaults,
+    );
+    const instance = persisted.operationalPlaybooks.find((candidate) => (
+      candidate.id === missionComposerPlaybookLink.instanceId
+    ));
+    if (!instance) {
+      showToast?.('Mission Command was created, but the source playbook is unavailable for linking.');
+      return false;
+    }
+    const mutation = linkOperationalPlaybookCommand(instance, {
+      proposalId: missionComposerPlaybookLink.proposalId,
+      command,
+      actor: missionCommandActor,
+      idempotencyKey: `${instance.id}:command:${missionComposerPlaybookLink.proposalId}:${command.id}`,
+    });
+    if (!mutation.ok) {
+      showToast?.(`Mission Command was created; playbook link needs review: ${mutation.reason}`);
+      return false;
+    }
+    if (mutation.changed) {
+      dispatchPersistenceAdapter.applyOperationalPlaybookMutation(
+        localDispatchPersistenceId,
+        recoveryCadPersistenceDefaults,
+        mutation.instance,
+      );
+    }
+    return true;
+  }, [
+    localDispatchPersistenceId,
+    missionCommandActor,
+    missionComposerPlaybookLink,
+    recoveryCadPersistenceDefaults,
+    showToast,
+  ]);
+
+  const submitMissionCommandComposer = useCallback(() => {
+    if (!missionComposerMode || missionComposerSubmittingRef.current) return;
+    missionComposerSubmittingRef.current = true;
+    setMissionComposerSubmitting(true);
+    setMissionComposerError(null);
+    try {
+      if (missionComposerMode === 'create') {
+        const result = buildMissionCommandFromComposer({
+          form: missionComposerForm,
+          expeditionId: localDispatchPersistenceId,
+          actor: missionCommandActor,
+          soloMode: missionCommandSoloMode,
+          catalog: missionCommandComposerCatalog,
+          permissions: dispatchPermissionSnapshot,
+          queueDelivery: !isOnline || offlineMode,
+          sourceTruth: missionComposerSourceTruth,
+        });
+        if (!result.ok) {
+          setMissionComposerError(result.issues[0]?.message ?? 'Mission Command failed validation.');
+          return;
+        }
+        const current = dispatchPersistenceAdapter.load(localDispatchPersistenceId, recoveryCadPersistenceDefaults);
+        const duplicate = current.missionCommands.some((command) => (
+          command.id === result.command.id || command.idempotencyKey === result.command.idempotencyKey
+        ));
+        if (duplicate) {
+          const existing = current.missionCommands.find((command) => (
+            command.id === result.command.id || command.idempotencyKey === result.command.idempotencyKey
+          ));
+          if (existing) linkMissionCommandToPlaybook(existing);
+          showToast?.('Already submitted.');
+          setMissionComposerMode(null);
+          setMissionComposerCommand(null);
+          setMissionComposerExtraContext(null);
+          setMissionComposerSourceTruth([]);
+          setMissionComposerPlaybookLink(null);
+          return;
+        }
+        dispatchPersistenceAdapter.applyMissionCommandMutation(
+          localDispatchPersistenceId,
+          recoveryCadPersistenceDefaults,
+          result.command,
+          result.event,
+        );
+        linkMissionCommandToPlaybook(result.command);
+        showToast?.(result.command.deliveryState === 'queued'
+          ? 'Mission Command queued for delivery.'
+          : 'Mission Command created locally.');
+      } else {
+        if (!missionComposerCommand) {
+          setMissionComposerError('Mission Command is no longer available.');
+          return;
+        }
+        if (missionComposerMode === 'reassign') {
+          const permission = dispatchPermissionSnapshot.can('assign_member');
+          if (!permission.allowed) {
+            setMissionComposerError(permission.reason ?? dispatchPermissionSnapshot.disabledReason);
+            return;
+          }
+          const assignment = resolveMissionCommandComposerAssignment(
+            missionComposerForm,
+            missionCommandComposerCatalog,
+          );
+          if (!assignment.ok) {
+            setMissionComposerError(assignment.issue.message);
+            return;
+          }
+          const mutation = reassignMissionCommand(missionComposerCommand, assignment.target, {
+            actor: missionCommandActor,
+            reasonCode: 'manual_command_reassignment',
+          });
+          if (!mutation.ok) {
+            setMissionComposerError(mutation.reason);
+            return;
+          }
+          if (!mutation.changed) {
+            showToast?.('Mission Command assignment is unchanged.');
+            setMissionComposerMode(null);
+            setMissionComposerCommand(null);
+            setMissionComposerExtraContext(null);
+            return;
+          }
+          dispatchPersistenceAdapter.applyMissionCommandMutation(
+            localDispatchPersistenceId,
+            recoveryCadPersistenceDefaults,
+            mutation.command,
+            mutation.event,
+          );
+          showToast?.('Mission Command reassigned.');
+        } else {
+          const permission = dispatchPermissionSnapshot.can('modify_timeline');
+          if (!permission.allowed) {
+            setMissionComposerError(permission.reason ?? dispatchPermissionSnapshot.disabledReason);
+            return;
+          }
+          const validationMessage = validateMissionCommandFollowUp(missionComposerForm.instructions);
+          if (validationMessage) {
+            setMissionComposerError(validationMessage);
+            return;
+          }
+          const mutation = requestMissionCommandFollowUp(missionComposerCommand, {
+            actor: missionCommandActor,
+            message: missionComposerForm.instructions,
+            requestId: missionComposerForm.draftId,
+          });
+          if (!mutation.ok) {
+            setMissionComposerError(mutation.reason);
+            return;
+          }
+          if (!mutation.changed) {
+            showToast?.('Follow-up was already requested.');
+            setMissionComposerMode(null);
+            setMissionComposerCommand(null);
+            setMissionComposerExtraContext(null);
+            return;
+          }
+          dispatchPersistenceAdapter.applyMissionCommandMutation(
+            localDispatchPersistenceId,
+            recoveryCadPersistenceDefaults,
+            mutation.command,
+            mutation.event,
+          );
+          showToast?.('Mission Command follow-up requested.');
+        }
+      }
+      setMissionComposerMode(null);
+      setMissionComposerCommand(null);
+      setMissionComposerExtraContext(null);
+      setMissionComposerSourceTruth([]);
+      setMissionComposerPlaybookLink(null);
+      setMissionComposerError(null);
+      setMissionCommandView('board');
+    } catch (error) {
+      setMissionComposerError(error instanceof Error ? error.message : 'Mission Command could not be updated.');
+    } finally {
+      missionComposerSubmittingRef.current = false;
+      setMissionComposerSubmitting(false);
+    }
+  }, [
+    dispatchPermissionSnapshot,
+    isOnline,
+    localDispatchPersistenceId,
+    linkMissionCommandToPlaybook,
+    missionCommandActor,
+    missionCommandComposerCatalog,
+    missionCommandSoloMode,
+    missionComposerCommand,
+    missionComposerForm,
+    missionComposerMode,
+    missionComposerSourceTruth,
+    offlineMode,
+    recoveryCadPersistenceDefaults,
+    showToast,
+  ]);
+
   const openCommand = useCallback((command: DispatchCommandType) => {
+    if (missionCommandEnabled) {
+      openMissionCommandComposer(legacyDispatchComposerEntryToMissionCommandType(command));
+      return;
+    }
     setCommandForm(command === 'hazard' ? getHazardRecoveryForm() : getDefaultCommandForm());
     setCommandError(null);
     setActiveCommand(command);
-  }, []);
+  }, [missionCommandEnabled, openMissionCommandComposer]);
 
   const handlePreviewConvoyRegroupProposal = useCallback(async (
     proposal: ConvoyRegroupProposal,
@@ -3516,6 +4298,34 @@ export default function DispatchCadCommandCenter() {
       );
       return;
     }
+    if (missionCommandEnabled) {
+      const contextId = `rally:${draft.proposalFingerprint}`;
+      openMissionCommandComposer('rally', {
+        extraContext: {
+          id: contextId,
+          label: draft.candidateTitle,
+          context: {
+            id: draft.candidateId,
+            type: 'rally',
+            title: draft.candidateTitle,
+            subtitle: 'Convoy regroup proposal',
+            coordinates: { ...draft.coordinate },
+            sourceTruth: draft.sourceTruth,
+            sourceTruthPolicyKey: draft.sourceTruthPolicyKey,
+            observedAt: draft.sourceTruth.observedAt ?? undefined,
+          },
+        },
+        formPatch: {
+          priority: draft.priority,
+          instructions: draft.message,
+          targetKind: 'expedition',
+          acknowledgmentMode: draft.requireAcknowledgment ? 'all' : 'none',
+          linkedContextId: contextId,
+        },
+      });
+      showToast?.('Rally command draft opened. Nothing has been sent.');
+      return;
+    }
     setCommandForm({
       ...getDefaultCommandForm(),
       priority: draft.priority,
@@ -3530,6 +4340,8 @@ export default function DispatchCadCommandCenter() {
   }, [
     convoyRegroupPlannerEnabled,
     dispatchPermissionSnapshot,
+    missionCommandEnabled,
+    openMissionCommandComposer,
     showToast,
     teamPositionSharingEnabled,
   ]);
@@ -3743,6 +4555,31 @@ export default function DispatchCadCommandCenter() {
       return;
     }
 
+    if (
+      missionCommandEnabled &&
+      (actionId === 'request_assist' || actionId === 'broadcast_hazard' || actionId === 'send_follow_up')
+    ) {
+      const linkedContext = dispatchLinkedContextFromLiveEvent(event);
+      const extraContext = linkedContext && !linkedContext.restricted
+        ? { id: `event:${event.id}`, label: linkedContext.title, context: linkedContext }
+        : null;
+      const type: MissionCommandComposerType = actionId === 'request_assist'
+        ? 'assist'
+        : actionId === 'broadcast_hazard'
+          ? 'hazard'
+          : 'general';
+      setSelectedEventId(null);
+      openMissionCommandComposer(type, {
+        extraContext,
+        formPatch: {
+          title: actionId === 'send_follow_up' ? `Follow-Up: ${event.title}` : event.title,
+          instructions: event.message,
+          linkedContextId: extraContext?.id ?? '',
+        },
+      });
+      return;
+    }
+
     const actorMemberId = commandIdentity.userId ?? commandIdentity.callsign ?? commandIdentity.email ?? 'local-operator';
     const now = new Date().toISOString();
     const actionKey = createDispatchIdempotencyKey({
@@ -3867,7 +4704,9 @@ export default function DispatchCadCommandCenter() {
     dispatchPermissionSnapshot,
     isOnline,
     localDispatchPersistenceId,
+    missionCommandEnabled,
     offlineMode,
+    openMissionCommandComposer,
     persistCanonicalReplayEntity,
     persistDispatchCadEventLocally,
     realtimeStatus,
@@ -3959,6 +4798,27 @@ export default function DispatchCadCommandCenter() {
   }, [markEmergencyPingViewed]);
 
   const handleThreatAction = useCallback((event: DispatchEvent, actionId: ThreatActionId) => {
+    if (missionCommandEnabled) {
+      const linkedContext = dispatchLinkedContextFromLiveEvent(event);
+      const extraContext = linkedContext && !linkedContext.restricted
+        ? { id: `threat:${event.id}`, label: linkedContext.title, context: linkedContext }
+        : null;
+      const type: MissionCommandComposerType = actionId === 'request_assist'
+        ? 'assist'
+        : actionId === 'mark_hazard'
+          ? 'hazard'
+          : 'general';
+      setDrilldownEventId(null);
+      openMissionCommandComposer(type, {
+        extraContext,
+        formPatch: {
+          title: event.title,
+          instructions: event.message,
+          linkedContextId: extraContext?.id ?? '',
+        },
+      });
+      return;
+    }
     const actionKey = createTargetActionDedupeKey(actionId, event, commandIdentity);
     if (submittedEventActionKeysRef.current.has(actionKey) || submittingThreatActionKey === actionKey) {
       showToast?.('Already submitted.');
@@ -3980,7 +4840,17 @@ export default function DispatchCadCommandCenter() {
     setSubmittingThreatActionKey(null);
     setDrilldownEventId(null);
     showToast?.(storedEvent ? `${THREAT_ACTION_LABELS[actionId]} created.` : 'Already submitted.');
-  }, [appendEvent, commandIdentity, isOnline, offlineMode, queuedCount, showToast, submittingThreatActionKey]);
+  }, [
+    appendEvent,
+    commandIdentity,
+    isOnline,
+    missionCommandEnabled,
+    offlineMode,
+    openMissionCommandComposer,
+    queuedCount,
+    showToast,
+    submittingThreatActionKey,
+  ]);
 
   const handleNavigateAssist = useCallback(async (event: DispatchEvent) => {
     if (navigatingAssistEventId != null) {
@@ -4377,7 +5247,11 @@ export default function DispatchCadCommandCenter() {
           accessibilityRole="button"
           accessibilityLabel="Create recovery report"
           activeOpacity={0.82}
-          onPress={() => openCommand('hazard')}
+          onPress={() => (
+            missionCommandEnabled
+              ? openMissionCommandComposer('recovery')
+              : openCommand('hazard')
+          )}
         >
           <Ionicons name="warning-outline" size={isLandscapeDispatch ? 12 : 14} color={TACTICAL.amber} />
           <Text
@@ -4505,6 +5379,168 @@ export default function DispatchCadCommandCenter() {
     </View>
   );
 
+  const handleMissionCommandStatusMessage = useCallback((message: string) => {
+    showToast?.(message);
+  }, [showToast]);
+  const handleOpenMissionCommandContext = useCallback((command: MissionCommand) => {
+    void openMissionCommandContext(command);
+  }, [openMissionCommandContext]);
+  const handleOpenLostCommunicationsContext = useCallback((
+    instanceId: string,
+    context: DispatchLinkedContext,
+  ) => {
+    void (async () => {
+      const returnRoute = `/alert?operationalPlaybook=lost_communications&playbookInstanceId=${encodeURIComponent(instanceId)}`;
+      const result = await missionCommandContextAdapter.open({
+        context,
+        commandId: instanceId,
+        dispatchEventId: instanceId,
+        sourceEntityId: context.id,
+        expeditionId: localDispatchPersistenceId,
+        permissions: dispatchPermissionSnapshot,
+        currentMemberId: commandIdentity.userId,
+        returnRoute,
+        rolloutEnabled: missionCommandEnabled,
+        mapContextEnabled: dispatchRollout.mapContextIntegration,
+      });
+      showToast?.(result.message);
+      if (result.status === 'local_target' && result.destination === 'dispatch_incident') {
+        const targetEvent = events.find((event) => event.id === result.targetId);
+        if (targetEvent) setSelectedEventId(targetEvent.id);
+        return;
+      }
+      if (result.status === 'staged' && result.route) {
+        setLostCommunicationsVisible(false);
+        pushSingleFlight(result.route);
+      }
+    })();
+  }, [
+    commandIdentity.userId,
+    dispatchPermissionSnapshot,
+    dispatchRollout.mapContextIntegration,
+    events,
+    localDispatchPersistenceId,
+    missionCommandEnabled,
+    pushSingleFlight,
+    showToast,
+  ]);
+  const handleOpenVehicleImmobilizedContext = useCallback((
+    instanceId: string,
+    context: DispatchLinkedContext,
+  ) => {
+    void (async () => {
+      const returnRoute = `/alert?operationalPlaybook=vehicle_immobilized&playbookInstanceId=${encodeURIComponent(instanceId)}`;
+      const result = await missionCommandContextAdapter.open({
+        context,
+        commandId: instanceId,
+        dispatchEventId: instanceId,
+        sourceEntityId: context.id,
+        expeditionId: localDispatchPersistenceId,
+        permissions: dispatchPermissionSnapshot,
+        currentMemberId: commandIdentity.userId,
+        returnRoute,
+        rolloutEnabled: missionCommandEnabled,
+        mapContextEnabled: dispatchRollout.mapContextIntegration,
+      });
+      showToast?.(result.message);
+      if (result.status === 'local_target' && result.destination === 'dispatch_incident') {
+        const targetEvent = events.find((event) => event.id === result.targetId);
+        if (targetEvent) setSelectedEventId(targetEvent.id);
+        return;
+      }
+      if (result.status === 'staged' && result.route) {
+        setVehicleImmobilizedVisible(false);
+        pushSingleFlight(result.route);
+      }
+    })();
+  }, [
+    commandIdentity.userId,
+    dispatchPermissionSnapshot,
+    dispatchRollout.mapContextIntegration,
+    events,
+    localDispatchPersistenceId,
+    missionCommandEnabled,
+    pushSingleFlight,
+    showToast,
+  ]);
+  const handleVehicleImmobilizedPlaybookEvent = useCallback((
+    event: OperationalPlaybookEvent,
+    instance: OperationalPlaybookInstance,
+  ) => {
+    const idempotencyKey = `operational-playbook:${event.idempotencyKey}`;
+    const vehicleContext = instance.inputSnapshot[VEHICLE_IMMOBILIZED_INPUT_KEYS.affectedVehicleContext]?.linkedContext;
+    dispatchPersistenceAdapter.appendTimelineEvent(
+      localDispatchPersistenceId,
+      recoveryCadPersistenceDefaults,
+      {
+        id: createDispatchEntityId('timeline_event', idempotencyKey),
+        idempotencyKey,
+        version: 1,
+        type: 'log',
+        title: 'Vehicle Immobilized Playbook',
+        detail: event.summary,
+        occurredAt: event.occurredAt,
+        priority: 'normal',
+        memberIds: [event.actor.id],
+        actor: event.actor.label,
+        target: vehicleContext?.title ?? 'Affected vehicle',
+        linkedContext: vehicleContext,
+        deliveryState: 'local',
+        escalationState: 'none',
+      },
+    );
+  }, [localDispatchPersistenceId, recoveryCadPersistenceDefaults]);
+  const handleSubmitLostCommunicationsIncident = useCallback((input: ReportIncidentInput) => {
+    incidentRecoveryWorkflowStore.reportIncident(input);
+    setLostCommunicationsIncidentPrefill(null);
+    showToast?.('Incident recorded for ECS operator coordination. No external service was contacted.');
+  }, [showToast]);
+  const handleSubmitVehicleImmobilizedIncident = useCallback((input: ReportIncidentInput) => {
+    incidentRecoveryWorkflowStore.reportIncident(input);
+    setVehicleImmobilizedIncidentPrefill(null);
+    showToast?.('Incident recorded for ECS operator coordination. No external service was contacted.');
+  }, [showToast]);
+
+  const missionTimelineEvents = useMemo(
+    () => visibleEvents.slice(0, 80),
+    [visibleEvents],
+  );
+
+  const convoyFeedSurface = (
+    <DispatchConvoyCommandPanel
+      connectionLabel={connectionState.label}
+      teamStatusLabel={dispatchTeamStatusLabel}
+      teamMemberCount={dispatchTeamMemberCount}
+      hasActiveTeam={hasDispatchTeamContext}
+      userLocation={dispatchConvoyUserLocation}
+      emergencyEvents={emergencyCoordinatePingEvents}
+      emergencyAlertActive={emergencyPingAttentionActive}
+      emergencySubmitting={recoveryAssistSubmitting}
+      emergencyButtonLabel={emergencyPingButtonMode === 'loading' ? 'GETTING GPS' : emergencyPingButtonLabel.toUpperCase()}
+      emergencyButtonTone={emergencyPingButtonTone}
+      onEmergencyPing={handleEmergencyPingButtonPress}
+      onOpenEmergencyEvent={handleOpenEmergencyPing}
+      presentation={isLandscapeDispatch ? 'signals' : 'feed'}
+      showEmergencyOverlay={false}
+      convoyLifecycleRevision={convoyLifecycleRevision}
+      regroupPlannerEnabled={convoyRegroupPlannerEnabled && !isLandscapeDispatch}
+      positionSharingRolloutEnabled={teamPositionSharingEnabled}
+      memberLocationPermissionAllowed={memberLocationPermission.allowed}
+      regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
+      regroupPlannerPermissionReason={regroupPlannerPermissionReason}
+      canPreviewRegroupOnMap={dispatchRollout.mapContextIntegration && canPlanConvoyRegroup}
+      previewRegroupUnavailableReason={dispatchRollout.mapContextIntegration
+        ? regroupPlannerPermissionReason
+        : getDispatchRolloutDisabledCopy('mapContextIntegration')}
+      canCreateRallyPing={createRallyPingPermission.allowed}
+      rallyPingUnavailableReason={createRallyPingPermission.reason}
+      expeditionId={localDispatchPersistenceId}
+      onPreviewRegroupProposal={(proposal) => void handlePreviewConvoyRegroupProposal(proposal)}
+      onCreateRegroupRallyDraft={handleCreateConvoyRegroupRallyDraft}
+      testID="dispatch-convoy-command-feed-panel"
+    />
+  );
+
   return (
     <View style={[styles.root, isLandscapeDispatch ? styles.rootLandscape : null]}>
       <ECSOperationalAnnouncer event={connectionAnnouncement} />
@@ -4558,39 +5594,84 @@ export default function DispatchCadCommandCenter() {
         </>
       )}
 
-      <View style={[styles.feedPanel, isLandscapeDispatch ? styles.feedPanelLandscapeSignal : null]}>
-        <DispatchConvoyCommandPanel
-          connectionLabel={connectionState.label}
-          teamStatusLabel={dispatchTeamStatusLabel}
-          teamMemberCount={dispatchTeamMemberCount}
-          hasActiveTeam={hasDispatchTeamContext}
-          userLocation={dispatchConvoyUserLocation}
-          emergencyEvents={emergencyCoordinatePingEvents}
-          emergencyAlertActive={emergencyPingAttentionActive}
-          emergencySubmitting={recoveryAssistSubmitting}
-          emergencyButtonLabel={emergencyPingButtonMode === 'loading' ? 'GETTING GPS' : emergencyPingButtonLabel.toUpperCase()}
-          emergencyButtonTone={emergencyPingButtonTone}
-          onEmergencyPing={handleEmergencyPingButtonPress}
-          onOpenEmergencyEvent={handleOpenEmergencyPing}
-          presentation={isLandscapeDispatch ? 'signals' : 'feed'}
-          showEmergencyOverlay={false}
-          convoyLifecycleRevision={convoyLifecycleRevision}
-          regroupPlannerEnabled={convoyRegroupPlannerEnabled && !isLandscapeDispatch}
-          positionSharingRolloutEnabled={teamPositionSharingEnabled}
-          memberLocationPermissionAllowed={memberLocationPermission.allowed}
-          regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
-          regroupPlannerPermissionReason={regroupPlannerPermissionReason}
-          canPreviewRegroupOnMap={dispatchRollout.mapContextIntegration && canPlanConvoyRegroup}
-          previewRegroupUnavailableReason={dispatchRollout.mapContextIntegration
-            ? regroupPlannerPermissionReason
-            : getDispatchRolloutDisabledCopy('mapContextIntegration')}
-          canCreateRallyPing={createRallyPingPermission.allowed}
-          rallyPingUnavailableReason={createRallyPingPermission.reason}
-          expeditionId={localDispatchPersistenceId}
-          onPreviewRegroupProposal={(proposal) => void handlePreviewConvoyRegroupProposal(proposal)}
-          onCreateRegroupRallyDraft={handleCreateConvoyRegroupRallyDraft}
-          testID="dispatch-convoy-command-feed-panel"
+      {missionCommandEnabled ? (
+        <MissionCommandDispatchNavigation
+          activeView={missionCommandView}
+          onChange={setMissionCommandView}
         />
+      ) : null}
+
+      <View style={[
+        styles.feedPanel,
+        isLandscapeDispatch && (!missionCommandEnabled || missionCommandView === 'team')
+          ? styles.feedPanelLandscapeSignal
+          : null,
+      ]}>
+        {!missionCommandEnabled ? convoyFeedSurface : missionCommandView === 'board' ? (
+          <DispatchMissionCommandBoard
+            expeditionId={localDispatchPersistenceId}
+            persistenceDefaults={recoveryCadPersistenceDefaults}
+            hydrated={dispatchLocalHydrated}
+            hasActiveExpedition={Boolean(currentExpedition)}
+            soloMode={!hasDispatchTeamContext}
+            canViewCommands={missionCommandViewPermission.allowed}
+            canCreateCommands={missionCommandCreateAllowed}
+            canManageCommands={missionCommandManageAllowed}
+            canViewLinkedContext={missionCommandViewPermission.allowed}
+            actor={missionCommandActor}
+            isOnline={isOnline}
+            offlineMode={offlineMode}
+            realtimeStatus={realtimeStatus}
+            queuedCount={queuedCount}
+            convoyId={activeConvoyControl?.convoyId ?? null}
+            convoyMemberCount={activeConvoyControl?.memberUserIds.length ?? 0}
+            convoyStatusPermitted={teamPositionSharingEnabled && memberLocationPermission.allowed}
+            requestedCommandId={requestedMissionCommandId}
+            inspectLinkedContext={inspectMissionCommandContext}
+            onViewLinkedContext={handleOpenMissionCommandContext}
+            onCreateCommand={() => openMissionCommandComposer('general')}
+            onOpenLostCommunications={() => {
+              setVehicleImmobilizedVisible(false);
+              setLostCommunicationsVisible(true);
+            }}
+            onOpenVehicleImmobilized={() => {
+              setLostCommunicationsVisible(false);
+              setVehicleImmobilizedVisible(true);
+            }}
+            onReassignCommand={openMissionCommandReassignment}
+            onRequestFollowUp={openMissionCommandFollowUp}
+            onStatusMessage={handleMissionCommandStatusMessage}
+          />
+        ) : missionCommandView === 'team' ? convoyFeedSurface : (
+          <View style={styles.missionTimelinePanel} testID="dispatch-mission-timeline-events">
+            <View style={styles.missionTimelineHeader}>
+              <View style={styles.missionTimelineTitleRow}>
+                <Ionicons name="time-outline" size={14} color={TACTICAL.amber} />
+                <Text style={styles.missionTimelineTitle}>Dispatch Timeline / Events</Text>
+              </View>
+              <Text style={styles.missionTimelineCount}>
+                {visibleEvents.length > missionTimelineEvents.length
+                  ? `${missionTimelineEvents.length} OF ${visibleEvents.length}`
+                  : `${visibleEvents.length} EVENTS`}
+              </Text>
+            </View>
+            <FlatList
+              data={missionTimelineEvents}
+              renderItem={renderEvent}
+              keyExtractor={(event) => event.id}
+              ItemSeparatorComponent={FeedSeparator}
+              ListEmptyComponent={EmptyFeed}
+              scrollEnabled={isLandscapeDispatch || windowHeight >= 820}
+              nestedScrollEnabled
+              initialNumToRender={12}
+              maxToRenderPerBatch={10}
+              windowSize={7}
+              removeClippedSubviews={Platform.OS !== 'web'}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={missionTimelineEvents.length === 0 ? styles.missionTimelineEmpty : undefined}
+            />
+          </View>
+        )}
       </View>
 
       <EventDetailModal
@@ -4623,13 +5704,101 @@ export default function DispatchCadCommandCenter() {
         visible={moreVisible}
         recoveryAssistSubmitting={recoveryAssistSubmitting}
         onClose={() => setMoreVisible(false)}
-        onRecoveryAssist={handleRecoveryAssist}
+        onRecoveryAssist={() => {
+          setMoreVisible(false);
+          if (missionCommandEnabled) {
+            const currentLocation = missionCommandComposerCatalog.linkedContexts.find((context) => (
+              context.id === 'current-location'
+            ));
+            openMissionCommandComposer('recovery', {
+              extraContext: currentLocation ?? null,
+              formPatch: {
+                linkedContextId: currentLocation?.id ?? '',
+                acknowledgmentMode: missionCommandSoloMode ? 'none' : 'all',
+              },
+            });
+          } else {
+            void handleRecoveryAssist();
+          }
+        }}
         onSelect={(command) => {
           setMoreVisible(false);
           openCommand(command);
         }}
       />
-      {activeCommand === 'hazard' ? (
+      <DispatchMissionCommandComposer
+        visible={missionCommandEnabled && missionComposerMode !== null}
+        mode={missionComposerMode ?? 'create'}
+        commandTitle={missionComposerCommand?.title ?? null}
+        form={missionComposerForm}
+        catalog={missionCommandComposerCatalog}
+        soloMode={missionCommandSoloMode}
+        canAssign={missionCommandAssignAllowed}
+        error={missionComposerError}
+        submitting={missionComposerSubmitting}
+        onChange={setMissionComposerForm}
+        onClose={closeMissionCommandComposer}
+        onSubmit={submitMissionCommandComposer}
+      />
+      {missionCommandEnabled && lostCommunicationsVisible ? (
+        <DispatchLostCommunicationsPlaybook
+          enabled={missionCommandEnabled}
+          visible={missionCommandEnabled && lostCommunicationsVisible}
+          requestedInstanceId={requestedPlaybookInstanceId}
+          expeditionId={localDispatchPersistenceId}
+          persistenceDefaults={recoveryCadPersistenceDefaults}
+          actor={missionCommandActor}
+          soloMode={missionCommandSoloMode}
+          members={lostCommunicationsMembers}
+          runtime={lostCommunicationsRuntime}
+          createInputForMember={createLostCommunicationsInputForMember}
+          onClose={() => setLostCommunicationsVisible(false)}
+          onOpenCommandComposer={openMissionCommandComposerFromPlaybook}
+          onOpenContext={handleOpenLostCommunicationsContext}
+          onOpenIncidentReview={setLostCommunicationsIncidentPrefill}
+          onStatusMessage={handleMissionCommandStatusMessage}
+        />
+      ) : null}
+      {missionCommandEnabled && vehicleImmobilizedVisible ? (
+        <DispatchVehicleImmobilizedPlaybook
+          enabled={missionCommandEnabled}
+          visible={missionCommandEnabled && vehicleImmobilizedVisible}
+          requestedInstanceId={requestedPlaybookInstanceId}
+          expeditionId={localDispatchPersistenceId}
+          persistenceDefaults={recoveryCadPersistenceDefaults}
+          actor={missionCommandActor}
+          soloMode={missionCommandSoloMode}
+          vehicles={vehicleImmobilizedVehicles}
+          members={missionCommandComposerCatalog.members}
+          runtime={lostCommunicationsRuntime}
+          createInputForVehicle={createVehicleImmobilizedInputForVehicle}
+          onClose={() => setVehicleImmobilizedVisible(false)}
+          onOpenCommandComposer={openMissionCommandComposerFromPlaybook}
+          onOpenContext={handleOpenVehicleImmobilizedContext}
+          onOpenIncidentReview={setVehicleImmobilizedIncidentPrefill}
+          onPlaybookEvent={handleVehicleImmobilizedPlaybookEvent}
+          onStatusMessage={handleMissionCommandStatusMessage}
+        />
+      ) : null}
+      <ReportIncidentModal
+        visible={missionCommandEnabled && lostCommunicationsIncidentPrefill !== null}
+        onClose={() => setLostCommunicationsIncidentPrefill(null)}
+        onSubmit={handleSubmitLostCommunicationsIncident}
+        stackBehavior="allow-stack"
+        expeditionId={localDispatchPersistenceId}
+        routeLabel={currentExpedition?.destination ?? currentExpedition?.expeditionName}
+        prefill={lostCommunicationsIncidentPrefill}
+      />
+      <ReportIncidentModal
+        visible={missionCommandEnabled && vehicleImmobilizedIncidentPrefill !== null}
+        onClose={() => setVehicleImmobilizedIncidentPrefill(null)}
+        onSubmit={handleSubmitVehicleImmobilizedIncident}
+        stackBehavior="allow-stack"
+        expeditionId={localDispatchPersistenceId}
+        routeLabel={currentExpedition?.destination ?? currentExpedition?.expeditionName}
+        prefill={vehicleImmobilizedIncidentPrefill}
+      />
+      {!missionCommandEnabled && activeCommand === 'hazard' ? (
         <HazardRecoveryCadEventModal
           visible
           form={commandForm}
@@ -4639,7 +5808,7 @@ export default function DispatchCadCommandCenter() {
           onClose={closeCommand}
           onSubmit={submitCommand}
         />
-      ) : (
+      ) : !missionCommandEnabled ? (
         <DispatchCommandModal
           command={activeCommand}
           form={commandForm}
@@ -4649,7 +5818,7 @@ export default function DispatchCadCommandCenter() {
           onClose={closeCommand}
           onSubmit={submitCommand}
         />
-      )}
+      ) : null}
       <DispatchProfilePanel
         visible={profilePanelVisible}
         profile={dispatchProfile}
@@ -7489,6 +8658,47 @@ const styles = StyleSheet.create({
     marginTop: 3,
     marginBottom: 0,
     alignSelf: 'stretch',
+  },
+  missionTimelinePanel: {
+    flex: 1,
+    minHeight: 0,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.quiet,
+    borderRadius: 8,
+    backgroundColor: ECS_SURFACE.background.quiet,
+    overflow: 'hidden',
+  },
+  missionTimelineHeader: {
+    minHeight: 38,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: ECS_SURFACE.border.quiet,
+  },
+  missionTimelineTitleRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  missionTimelineTitle: {
+    flex: 1,
+    color: TACTICAL.text,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  missionTimelineCount: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    textAlign: 'right',
+  },
+  missionTimelineEmpty: {
+    flexGrow: 1,
   },
   feedHeader: {
     minHeight: 32,

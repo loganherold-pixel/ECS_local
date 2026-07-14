@@ -13,6 +13,7 @@ export type DispatchRolloutFeature =
   | 'emergencyPing'
   | 'realtimeSync'
   | 'offlineReplay'
+  | 'missionCommand'
   | 'canonicalBackendPersistence'
   | 'notifications'
   | 'developerDiagnostics'
@@ -43,6 +44,7 @@ export const DEFAULT_DISPATCH_ROLLOUT_CONFIG: DispatchRolloutConfig = {
   emergencyPing: true,
   realtimeSync: true,
   offlineReplay: true,
+  missionCommand: false,
   canonicalBackendPersistence: false,
   notifications: false,
   developerDiagnostics: true,
@@ -70,6 +72,7 @@ const DISPATCH_ROLLOUT_DISABLED_COPY: Record<DispatchRolloutFeature, string> = {
   emergencyPing: 'Emergency Ping is paused for this rollout. Not an emergency services contact.',
   realtimeSync: 'Realtime Dispatch sync is paused for this rollout.',
   offlineReplay: 'Offline Dispatch replay is paused for this rollout.',
+  missionCommand: 'Mission Command is unavailable outside the approved internal rollout.',
   canonicalBackendPersistence: 'Canonical Dispatch persistence is disabled. ECS remains local-first.',
   notifications: 'Dispatch notifications are disabled until notification policy is verified.',
   developerDiagnostics: 'Dispatch developer diagnostics are disabled for this rollout.',
@@ -105,6 +108,10 @@ export function resolveDispatchRolloutConfig(
     'dispatch_canonical_backend',
     visibilityContext,
   ).visible;
+  const missionCommandVisible = resolveECSFeatureVisibility(
+    'dispatch_mission_command',
+    visibilityContext,
+  ).visible;
   const externalIntegrationsVisible = resolveECSFeatureVisibility(
     'dispatch_external_integrations',
     visibilityContext,
@@ -116,6 +123,10 @@ export function resolveDispatchRolloutConfig(
   return {
     ...merged,
     dispatchTabVisibility: merged.dispatchTabVisibility && dispatchVisible,
+    missionCommand:
+      (Object.prototype.hasOwnProperty.call(overrides, 'missionCommand')
+        ? merged.missionCommand
+        : missionCommandVisible) && missionCommandVisible,
     canonicalBackendPersistence:
       (Object.prototype.hasOwnProperty.call(overrides, 'canonicalBackendPersistence')
         ? merged.canonicalBackendPersistence
