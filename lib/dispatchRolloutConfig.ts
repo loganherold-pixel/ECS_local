@@ -82,7 +82,7 @@ const DISPATCH_ROLLOUT_DISABLED_COPY: Record<DispatchRolloutFeature, string> = {
   mapContextIntegration: 'Map context integration is paused for this rollout.',
   expeditionLogIntegration: 'Expedition log integration is paused for this rollout.',
   teamPositionSharing: 'Team position sharing is disabled for internal beta until privacy and device QA gates pass.',
-  convoyRegroupPlanner: 'Convoy Regroup Planner is disabled until position-sharing privacy and multi-device QA gates pass.',
+  convoyRegroupPlanner: 'Smart Rally is disabled until Mission Command, position-sharing privacy, and two-client QA gates pass.',
   agencyDataIngestion: 'Agency data ingestion is disabled for internal beta. No live agency feed is connected.',
   externalDispatchIntegration: 'External Dispatch integration is disabled. Reports stay local/internal unless explicitly enabled.',
   publicHazardPublishing: 'Public/community hazard publishing is disabled. User reports are not published externally.',
@@ -102,6 +102,10 @@ export function resolveDispatchRolloutConfig(
   const dispatchVisible = resolveECSFeatureVisibility('dispatch_tab', visibilityContext).visible;
   const positionSharingVisible = resolveECSFeatureVisibility(
     'dispatch_team_position_sharing',
+    visibilityContext,
+  ).visible;
+  const smartRallyVisible = resolveECSFeatureVisibility(
+    'dispatch_smart_rally',
     visibilityContext,
   ).visible;
   const canonicalBackendVisible = resolveECSFeatureVisibility(
@@ -132,7 +136,8 @@ export function resolveDispatchRolloutConfig(
         ? merged.canonicalBackendPersistence
         : canonicalBackendVisible) && canonicalBackendVisible,
     teamPositionSharing: merged.teamPositionSharing && positionSharingVisible,
-    convoyRegroupPlanner: merged.convoyRegroupPlanner && positionSharingVisible,
+    // Keep the stable rollout key while the authoritative capability is Smart Rally.
+    convoyRegroupPlanner: merged.convoyRegroupPlanner && positionSharingVisible && smartRallyVisible,
     escalationAutomation: merged.escalationAutomation && externalIntegrationsVisible,
     agencyDataIngestion: merged.agencyDataIngestion && externalIntegrationsVisible,
     externalDispatchIntegration: merged.externalDispatchIntegration && externalIntegrationsVisible,

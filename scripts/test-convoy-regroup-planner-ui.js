@@ -9,13 +9,19 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'u
 const panelSource = read('components/dispatch/DispatchConvoyCommandPanel.tsx');
 const sheetSource = read('components/dispatch/ConvoyRegroupPlannerSheet.tsx');
 const commandSource = read('components/dispatch/DispatchCadCommandCenter.tsx');
+const boardSource = read('components/dispatch/DispatchMissionCommandBoard.tsx');
+const featureRegistrySource = read('lib/features/featureVisibilityRegistry.ts');
 const rolloutSource = read('lib/dispatchRolloutConfig.ts');
 const permissionSource = read('lib/dispatchPermissionAdapter.ts');
 const liveEventSource = read('lib/dispatchLiveEvents.ts');
 const handoffSource = read('lib/dispatchNavigateContextHandoff.ts');
 
 assert.match(rolloutSource, /convoyRegroupPlanner:\s*false/);
-assert.match(rolloutSource, /position-sharing privacy and multi-device QA gates pass/);
+assert.match(rolloutSource, /Smart Rally is disabled until Mission Command, position-sharing privacy, and two-client QA gates pass/);
+assert.match(featureRegistrySource, /id: 'dispatch_smart_rally'/);
+assert.match(featureRegistrySource, /defaultEnabled: false/);
+assert.match(featureRegistrySource, /dispatch_position_sharing_privacy/);
+assert.match(featureRegistrySource, /dispatch_multiclient_device_evidence/);
 assert.match(permissionSource, /'plan_convoy_regroup'/);
 assert.match(permissionSource, /requires expedition lead or Dispatch admin access/);
 
@@ -38,10 +44,13 @@ assert.ok(!panelSource.includes('members: mapMembers'), 'fallback/demo map membe
 
 for (const required of [
   'convoy-regroup-planner-sheet',
+  'title="Smart Rally"',
   'Only fresh, accurate, permission-visible live positions are projected',
   'No eligible member positions are available for projection.',
-  'Create Rally Ping',
-  'Preview only.',
+  'Create Rally Command',
+  'Preview in Navigate',
+  'Return to Command Board',
+  'Proposal only.',
   'will not message the convoy',
   'claim this point is safe or legal',
   'SourceTruthInspectorTrigger',
@@ -51,11 +60,23 @@ for (const required of [
 assert.ok(!/\.latitude\.toFixed|\.longitude\.toFixed|coordinate\.lat/.test(sheetSource), 'sheet must not render precise coordinates');
 
 for (const required of [
+  'onOpenSmartRally',
+  'label="Smart Rally"',
+  'accessibilityLabel="Open Smart Rally convoy workflow"',
+]) {
+  assert.ok(boardSource.includes(required), `Mission Command board should include ${required}`);
+}
+
+for (const required of [
   'handlePreviewConvoyRegroupProposal',
   'createConvoyRegroupDispatchContext(proposal)',
   'dispatchNavigateContextAdapter.open',
   "returnRoute: '/alert'",
   'handleCreateConvoyRegroupRallyDraft',
+  'handleOpenSmartRally',
+  "setMissionCommandView('team')",
+  'setSmartRallyOpenRequest((request) => request + 1)',
+  'onReturnToCommandBoard',
   "setActiveCommand('rally')",
   'Rally draft opened. Nothing has been sent.',
   'convoy-regroup-rally-draft-context',

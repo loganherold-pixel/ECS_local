@@ -1,6 +1,7 @@
 import type { ECSPin } from '../../components/navigate/PinTypes';
 import { bailoutStore, type BailoutPoint } from '../bailoutStore';
 import type { DispatchLinkedContext, DispatchLinkedContextType } from '../dispatchTypes';
+import { buildEnvironmentSnapshot } from '../environmentSnapshotService';
 import type { NavigateRouteSessionSnapshot } from '../navigateRouteSessionStore';
 import { pinStore } from '../pinStore';
 import { routeContextOrchestrator } from '../routeContext/routeContextOrchestrator';
@@ -28,11 +29,13 @@ import {
   type ConvoyRegroupCandidateAccess,
   type ConvoyRegroupCandidateInput,
   type ConvoyRegroupCandidateType,
+  type ConvoyRegroupDaylightInput,
   type ConvoyRegroupHazardInput,
   type ConvoyRegroupMemberInput,
   type ConvoyRegroupPlannerResult,
   type ConvoyRegroupProposal,
   type ConvoyRegroupStoppingSuitability,
+  type ConvoyRegroupVehicleConstraints,
 } from './convoyRegroupPlanner';
 
 export interface ConvoyRegroupLocalContext {
@@ -52,6 +55,8 @@ export interface ConvoyRegroupPlannerAdapterInput {
   members: ConvoyMapVehicle[];
   localContext?: ConvoyRegroupLocalContext | null;
   expeditionId?: string | null;
+  daylight?: ConvoyRegroupDaylightInput | null;
+  vehicleConstraints?: ConvoyRegroupVehicleConstraints | null;
   now?: number | string | Date;
 }
 
@@ -200,6 +205,66 @@ function routeAverageSpeedMps(routeSession: NavigateRouteSessionSnapshot): numbe
   return Number.isFinite(speedMph) && speedMph > 2.25 ? speedMph * 0.44704 : null;
 }
 
+function adapterNowMs(value: ConvoyRegroupPlannerAdapterInput['now']): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.getTime();
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
+}
+
+function routeDaylight(
+  routeSession: NavigateRouteSessionSnapshot,
+  now: ConvoyRegroupPlannerAdapterInput['now'],
+): ConvoyRegroupDaylightInput | null {
+  const anchor = routeSession.currentLocation
+    ? {
+        latitude: routeSession.currentLocation.latitude,
+        longitude: routeSession.currentLocation.longitude,
+        accuracyM: routeSession.currentLocation.accuracyM,
+        source: 'gps' as const,
+        updatedAt: routeSession.currentLocation.timestamp ?? routeSession.updatedAt,
+      }
+    : routeSession.routePoints[0]
+      ? {
+          latitude: routeSession.routePoints[0].lat,
+          longitude: routeSession.routePoints[0].lng,
+          source: 'route' as const,
+          updatedAt: routeSession.updatedAt,
+        }
+      : null;
+  if (!anchor) return null;
+  const nowMs = adapterNowMs(now);
+  const environment = buildEnvironmentSnapshot({ coordinate: anchor, nowMs });
+  const sunlight = environment.sunlight;
+  const confidence: SourceTruthConfidence = sunlight.confidence === 'high'
+    ? 'high'
+    : sunlight.confidence === 'medium'
+      ? 'medium'
+      : sunlight.confidence === 'low'
+        ? 'low'
+        : 'unknown';
+  return {
+    status: sunlight.status,
+    sunsetAt: sunlight.sunsetIso,
+    remainingMinutes: sunlight.nextEvent === 'sunset' ? sunlight.remainingMinutes : null,
+    sourceTruth: sourceRef({
+      id: `smart-rally-daylight-${routeSession.routeId ?? 'none'}`,
+      origin: sunlight.source === 'weather_provider' ? 'live' : sunlight.source === 'unavailable' ? 'unavailable' : 'estimated',
+      authority: sunlight.source === 'weather_provider' ? 'Operational Weather Broker' : 'ECS Environment Snapshot',
+      provider: sunlight.source,
+      observedAt: new Date(nowMs).toISOString(),
+      expiresAt: sunlight.nextEventIso,
+      confidence,
+      coverage: sunlight.status === 'unavailable' ? 'unknown' : 'complete',
+      availability: sunlight.status === 'unavailable' ? 'unavailable' : 'usable',
+      warningCodes: environment.warnings,
+    }),
+  };
+}
+
 function routeOrigin(route: ImportedRoute | null): SourceTruthOrigin {
   if (!route) return 'unavailable';
   return route.sync_status === 'synced' ? 'cached' : 'manual';
@@ -241,6 +306,8 @@ function candidateFromRouteWaypoint(
     coordinate: { lat: waypoint.lat, lng: waypoint.lon },
     access: 'unknown',
     stoppingSuitability: 'conditional',
+    vehicleSuitability: 'unknown',
+    trailerSuitability: 'unknown',
     sourceTruth: routeEntitySourceTruth(route),
     sourceTruthPolicyKey: 'offline_map_route_package',
     rationale: ['Explicit waypoint from the active or saved ECS route.'],
@@ -294,7 +361,7 @@ function candidateFromPin(pin: ECSPin): ConvoyRegroupCandidateInput | null {
     ? 'camp'
     : pin.type === 'fuel' || pin.type === 'water'
       ? 'resupply'
-      : 'verified_context';
+      : 'waypoint';
   return {
     id: `pin:${pin.id}`,
     title: sanitizeSourceTruthDisplayText(pin.title, 120) ?? 'Saved ECS waypoint',
@@ -302,6 +369,8 @@ function candidateFromPin(pin: ECSPin): ConvoyRegroupCandidateInput | null {
     coordinate: { lat: pin.lat, lng: pin.lng },
     access: 'unknown',
     stoppingSuitability: 'conditional',
+    vehicleSuitability: 'unknown',
+    trailerSuitability: 'unknown',
     sourceTruth: pinSourceTruth(pin),
     sourceTruthPolicyKey: 'manual_user_state',
     rationale: ['Saved local ECS waypoint.'],
@@ -325,7 +394,6 @@ function hazardFromPin(pin: ECSPin): ConvoyRegroupHazardInput | null {
 function bailoutCandidateType(point: BailoutPoint): ConvoyRegroupCandidateType {
   if (point.type === 'camp') return 'camp';
   if (point.type === 'fuel' || point.type === 'water' || point.type === 'supplies' || point.type === 'town') return 'resupply';
-  if (point.type === 'staging' || point.type === 'pavement') return 'staging';
   return 'bailout';
 }
 
@@ -337,6 +405,8 @@ function candidateFromBailout(point: BailoutPoint): ConvoyRegroupCandidateInput 
     coordinate: { lat: point.lat, lng: point.lng },
     access: 'unknown',
     stoppingSuitability: 'conditional',
+    vehicleSuitability: 'unknown',
+    trailerSuitability: 'unknown',
     sourceTruth: sourceRef({
       id: `bailout-store-${point.id}`,
       origin: 'manual',
@@ -415,6 +485,8 @@ function candidateFromContextCamp(context: RouteContext, candidate: CampCandidat
     coordinate: { lat: candidate.lat, lng: candidate.lng },
     access: access.access,
     stoppingSuitability: access.stopping,
+    vehicleSuitability: 'unknown',
+    trailerSuitability: 'unknown',
     sourceTruth: routeContextSourceTruth({
       context,
       id: candidate.id,
@@ -442,6 +514,12 @@ function candidateFromContextBailout(context: RouteContext, candidate: BailoutCa
     coordinate: { lat: candidate.lat, lng: candidate.lng },
     access,
     stoppingSuitability: candidate.reachableByVehicle === false ? 'unsuitable' : 'conditional',
+    vehicleSuitability: candidate.reachableByVehicle === false
+      ? 'unsuitable'
+      : candidate.reachableByVehicle === true
+        ? 'conditional'
+        : 'unknown',
+    trailerSuitability: 'unknown',
     sourceTruth: routeContextSourceTruth({
       context,
       id: candidate.id,
@@ -469,6 +547,8 @@ function candidateFromContextSupply(context: RouteContext, candidate: SupplyCand
     coordinate: { lat: candidate.lat, lng: candidate.lng },
     access,
     stoppingSuitability: access === 'closed' ? 'unsuitable' : 'conditional',
+    vehicleSuitability: 'unknown',
+    trailerSuitability: 'unknown',
     sourceTruth: routeContextSourceTruth({
       context,
       id: candidate.id,
@@ -576,6 +656,8 @@ export function selectConvoyRegroupPlannerResult(
     members: input.members.map((member) => adaptMember(member, input.trackingConnectionStatus)),
     candidates: candidateContext.candidates,
     hazards: candidateContext.hazards,
+    daylight: input.daylight ?? routeDaylight(input.routeSession, input.now),
+    vehicleConstraints: input.vehicleConstraints ?? null,
     now: input.now,
   });
 }
@@ -626,7 +708,7 @@ export function createConvoyRegroupDispatchContext(
     id: `convoy-regroup-${proposal.fingerprint}`,
     type: linkedContextType(candidate.type),
     title: candidate.title,
-    subtitle: 'Convoy regroup proposal preview. No route or guidance change has been accepted.',
+    subtitle: 'Smart Rally proposal preview. No route or guidance change has been accepted.',
     coordinates: {
       latitude: candidate.coordinate.lat,
       longitude: candidate.coordinate.lng,
@@ -661,7 +743,7 @@ export function createConvoyRegroupRallyDraft(
       longitude: candidate.coordinate.lng,
     },
     message: [
-      `Regroup proposal: ${title}.`,
+      `Smart Rally proposal: ${title}.`,
       `${formatEtaWindow(proposal)}.`,
       'Verify current access and stopping conditions before proceeding.',
       'Acknowledge when en route.',

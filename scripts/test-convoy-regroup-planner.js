@@ -100,6 +100,8 @@ function candidate(id, lng, overrides = {}) {
     coordinate: overrides.coordinate ?? { lat: 39, lng },
     access: overrides.access ?? 'verified_open',
     stoppingSuitability: overrides.stoppingSuitability ?? 'verified',
+    vehicleSuitability: overrides.vehicleSuitability ?? 'verified_suitable',
+    trailerSuitability: overrides.trailerSuitability ?? 'verified_suitable',
     sourceTruth: overrides.sourceTruth ?? source(`candidate-${id}`, {
       origin: overrides.origin ?? 'manual',
       observedAt: overrides.observedAt ?? minutesAgo(3),
@@ -135,6 +137,13 @@ function baseInput(overrides = {}) {
     ],
     candidates: overrides.candidates ?? [candidate('alpha', -119.86)],
     hazards: overrides.hazards ?? [],
+    daylight: overrides.daylight ?? {
+      status: 'daylight',
+      sunsetAt: iso(NOW + 5 * 60 * 60_000),
+      remainingMinutes: 300,
+      sourceTruth: source('daylight-source', { origin: 'estimated', confidence: 'medium' }),
+    },
+    vehicleConstraints: overrides.vehicleConstraints ?? { trailerPresent: false },
     now: NOW,
     ...overrides,
   };
@@ -233,6 +242,8 @@ function run() {
   assert.equal(freshSpread.posture, 'dispersed');
   assert.ok(freshSpread.spreadMeters >= engine.CONVOY_REGROUP_DISPERSED_SPREAD_METERS);
   assert.equal(freshSpread.includedMembers.length, 2);
+  assert.equal(freshSpread.postureSummary.activeMemberCount, 2);
+  assert.equal(freshSpread.postureSummary.staleMemberCount, 0);
   assert.ok(freshSpread.leadToSweepMeters > 0);
   assert.ok(freshSpread.proposal.candidate.etaWindow.latestSeconds >= freshSpread.proposal.candidate.etaWindow.earliestSeconds);
 
@@ -240,11 +251,12 @@ function run() {
     members: [
       member('lead', 'lead', -119.89),
       member('sweep', 'sweep', -119.995, { capturedAt: minutesAgo(20) }),
+      member('support', 'support', -119.98),
     ],
   }));
-  assert.equal(staleSweep.status, 'unavailable');
-  assert.equal(staleSweep.reasonCode, 'insufficient_current_positions');
+  assert.equal(staleSweep.status, 'proposal');
   assert.equal(staleSweep.excludedSummary.staleOrAging, 1);
+  assert.equal(staleSweep.postureSummary.staleMemberCount, 1);
 
   const poorAccuracy = engine.planConvoyRegroup(baseInput({
     members: [
@@ -258,6 +270,7 @@ function run() {
   const restrictedMember = engine.planConvoyRegroup(baseInput({
     members: [
       member('lead', 'lead', -119.89),
+      member('visible-sweep', 'sweep', -119.995),
       member('restricted-secret-id', 'sweep', -119.995, {
         label: 'SECRET CALLSIGN',
         locationVisibility: 'restricted',
@@ -265,8 +278,9 @@ function run() {
     ],
   }));
   const restrictedSerialized = JSON.stringify(restrictedMember);
-  assert.equal(restrictedMember.status, 'restricted');
+  assert.equal(restrictedMember.status, 'proposal');
   assert.equal(restrictedMember.excludedSummary.restricted, 1);
+  assert.equal(restrictedMember.postureSummary.activeMemberCount, 2);
   assert.ok(!restrictedSerialized.includes('restricted-secret-id'));
   assert.ok(!restrictedSerialized.includes('SECRET CALLSIGN'));
   assert.ok(!restrictedSerialized.includes('-119.995'));
@@ -291,6 +305,56 @@ function run() {
   }));
   assert.equal(multipleCandidates.status, 'proposal');
   assert.equal(multipleCandidates.proposal.candidate.candidate.id, 'near');
+  assert.equal(multipleCandidates.alternateCandidate.candidate.id, 'far');
+
+  const assistancePosture = engine.planConvoyRegroup(baseInput({
+    members: [
+      member('lead', 'lead', -119.89, { movementStatus: 'needs_assistance' }),
+      member('sweep', 'sweep', -119.995),
+    ],
+  }));
+  assert.equal(assistancePosture.status, 'proposal');
+  assert.equal(assistancePosture.postureSummary.assistanceMemberCount, 1);
+  assert.ok(assistancePosture.warnings.includes('member_assistance_requested'));
+
+  const nearbyUnverifiedHazard = engine.planConvoyRegroup(baseInput({
+    candidates: [candidate('near-hazard', -119.86)],
+    hazards: [{
+      id: 'reported-hazard',
+      title: 'Member-reported obstruction',
+      coordinate: { lat: 39, lng: -119.8605 },
+      blocking: null,
+      sourceTruth: source('reported-hazard-source', { origin: 'manual' }),
+    }],
+  }));
+  assert.equal(nearbyUnverifiedHazard.status, 'proposal');
+  assert.ok(nearbyUnverifiedHazard.proposal.candidate.warningCodes.includes('candidate_near_unverified_hazard'));
+  assert.notEqual(nearbyUnverifiedHazard.proposal.candidate.posture, 'verified');
+
+  const trailerLimited = engine.planConvoyRegroup(baseInput({
+    candidates: [candidate('trailer-limited', -119.86, { trailerSuitability: 'unsuitable' })],
+    vehicleConstraints: { trailerPresent: true },
+  }));
+  assert.equal(trailerLimited.status, 'unavailable');
+  assert.ok(trailerLimited.candidateEvaluations[0].warningCodes.includes('candidate_trailer_unsuitable'));
+
+  const lowDaylightMargin = engine.planConvoyRegroup(baseInput({
+    daylight: {
+      status: 'near_sunset',
+      sunsetAt: iso(NOW + 10 * 60_000),
+      remainingMinutes: 10,
+      sourceTruth: source('limited-daylight', { origin: 'estimated', confidence: 'medium' }),
+    },
+  }));
+  assert.equal(lowDaylightMargin.status, 'proposal');
+  assert.ok(lowDaylightMargin.proposal.candidate.warningCodes.includes('candidate_arrival_after_sunset'));
+
+  const unsupportedCandidate = engine.planConvoyRegroup(baseInput({
+    candidates: [candidate('legacy-staging', -119.86, { type: 'staging' })],
+  }));
+  assert.equal(unsupportedCandidate.status, 'unavailable');
+  assert.equal(unsupportedCandidate.reasonCode, 'no_known_regroup_candidates');
+  assert.ok(unsupportedCandidate.warnings.includes('unsupported_candidate_types_excluded'));
 
   const afterKnownHazard = engine.planConvoyRegroup(baseInput({
     candidates: [candidate('beyond-blocker', -119.84)],
@@ -338,6 +402,24 @@ function run() {
   }));
   assert.equal(cachedSweep.status, 'unavailable');
   assert.ok(cachedSweep.excludedMembers.some((item) => item.reason === 'non_live_origin'));
+
+  const offlineAdapterResult = adapter.selectConvoyRegroupPlannerResult({
+    enabled: true,
+    positionSharingEnabled: true,
+    memberLocationPermissionAllowed: true,
+    activeConvoyId: 'convoy-1',
+    routeSession: routeSession(),
+    trackingConnectionStatus: 'disconnected',
+    members: [
+      mapVehicle('lead', 'lead', -119.89),
+      mapVehicle('sweep', 'sweep', -119.995),
+    ],
+    localContext: { route: importedRoute(), routeContext: null, pins: [], bailouts: [] },
+    now: NOW,
+  });
+  assert.equal(offlineAdapterResult.status, 'unavailable');
+  assert.equal(offlineAdapterResult.reasonCode, 'insufficient_current_positions');
+  assert.equal(offlineAdapterResult.proposal, null, 'offline last-known positions must not be presented as live');
 
   const adapterResult = adapter.selectConvoyRegroupPlannerResult({
     enabled: true,
@@ -452,7 +534,7 @@ function run() {
   assert.ok(mappedContext.candidates.some((item) => item.type === 'camp'));
   assert.ok(mappedContext.candidates.some((item) => item.type === 'resupply'));
   assert.ok(mappedContext.candidates.some((item) => item.type === 'bailout'));
-  assert.ok(mappedContext.candidates.some((item) => item.type === 'staging'));
+  assert.ok(!mappedContext.candidates.some((item) => item.type === 'staging'));
   assert.ok(!JSON.stringify(mappedContext).includes('TOP-SECRET-DO-NOT-RENDER'));
   const verifiedCamp = mappedContext.candidates.find((item) => item.id === 'route-context-camp:camp-1');
   assert.equal(verifiedCamp.access, 'verified_open');

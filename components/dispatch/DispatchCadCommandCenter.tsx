@@ -185,7 +185,10 @@ import {
   type ActiveConvoyContext,
   type ConvoyListItem,
 } from '../../lib/convoy/convoyMembershipService';
-import type { ConvoyRegroupProposal } from '../../lib/convoy/convoyRegroupPlanner';
+import type {
+  ConvoyRegroupProposal,
+  ConvoyRegroupVehicleConstraints,
+} from '../../lib/convoy/convoyRegroupPlanner';
 import {
   createConvoyRegroupDispatchContext,
   type ConvoyRegroupRallyDraft,
@@ -2235,6 +2238,7 @@ export default function DispatchCadCommandCenter() {
   const [lostCommunicationsIncidentPrefill, setLostCommunicationsIncidentPrefill] = useState<ReportIncidentInput | null>(null);
   const [vehicleImmobilizedVisible, setVehicleImmobilizedVisible] = useState(false);
   const [vehicleImmobilizedIncidentPrefill, setVehicleImmobilizedIncidentPrefill] = useState<ReportIncidentInput | null>(null);
+  const [smartRallyOpenRequest, setSmartRallyOpenRequest] = useState(0);
   const [dismissedAdvisoryId, setDismissedAdvisoryId] = useState<string | null>(null);
   const [channelRevision, setChannelRevision] = useState(0);
   const [recoveryAssistSubmitting, setRecoveryAssistSubmitting] = useState(false);
@@ -2445,13 +2449,23 @@ export default function DispatchCadCommandCenter() {
     return subscribeActiveVehicleState(bumpVehicleRevision);
   }, []);
 
-  const activeVehicle = useMemo(() => {
-    if (vehicleRevision < 0) {
-      return null;
-    }
-
-    return getActiveVehicleContext().vehicle;
+  const activeVehicleContext = useMemo(() => {
+    void vehicleRevision;
+    return getActiveVehicleContext();
   }, [vehicleRevision]);
+  const activeVehicle = activeVehicleContext.vehicle;
+  const smartRallyVehicleConstraints = useMemo<ConvoyRegroupVehicleConstraints>(() => {
+    const explicitTrailer = activeVehicleContext.wizardConfig?.trailerAttached;
+    const contextLabels = [
+      ...activeVehicleContext.accessorySummary.map((item) => item.label),
+      ...activeVehicleContext.loadoutItems.map((item) => item.name),
+    ];
+    const knownTrailerPresent = explicitTrailer === true || contextLabels.some((label) => /\btrailer\b/i.test(label));
+    return {
+      // The active rig can prove that a trailer is present, but it cannot prove that no other convoy rig has one.
+      trailerPresent: knownTrailerPresent ? true : null,
+    };
+  }, [activeVehicleContext]);
   const activeRigLabel = getVehicleRigLabel(activeVehicle);
   const savedRigLabel = dispatchProfile.vehicleLabel?.trim() || null;
   const availableVehicleCount = vehicleStore.getLocalSnapshot().length;
@@ -5500,6 +5514,15 @@ export default function DispatchCadCommandCenter() {
     setVehicleImmobilizedIncidentPrefill(null);
     showToast?.('Incident recorded for ECS operator coordination. No external service was contacted.');
   }, [showToast]);
+  const handleOpenSmartRally = useCallback(() => {
+    setLostCommunicationsVisible(false);
+    setVehicleImmobilizedVisible(false);
+    setMissionCommandView('team');
+    setSmartRallyOpenRequest((request) => request + 1);
+  }, []);
+  const handleReturnToMissionCommandBoard = useCallback(() => {
+    setMissionCommandView('board');
+  }, []);
 
   const missionTimelineEvents = useMemo(
     () => visibleEvents.slice(0, 80),
@@ -5524,6 +5547,7 @@ export default function DispatchCadCommandCenter() {
       showEmergencyOverlay={false}
       convoyLifecycleRevision={convoyLifecycleRevision}
       regroupPlannerEnabled={convoyRegroupPlannerEnabled && !isLandscapeDispatch}
+      regroupPlannerOpenRequest={smartRallyOpenRequest}
       positionSharingRolloutEnabled={teamPositionSharingEnabled}
       memberLocationPermissionAllowed={memberLocationPermission.allowed}
       regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
@@ -5535,8 +5559,10 @@ export default function DispatchCadCommandCenter() {
       canCreateRallyPing={createRallyPingPermission.allowed}
       rallyPingUnavailableReason={createRallyPingPermission.reason}
       expeditionId={localDispatchPersistenceId}
+      vehicleConstraints={smartRallyVehicleConstraints}
       onPreviewRegroupProposal={(proposal) => void handlePreviewConvoyRegroupProposal(proposal)}
       onCreateRegroupRallyDraft={handleCreateConvoyRegroupRallyDraft}
+      onReturnToCommandBoard={missionCommandEnabled ? handleReturnToMissionCommandBoard : undefined}
       testID="dispatch-convoy-command-feed-panel"
     />
   );
@@ -5568,6 +5594,7 @@ export default function DispatchCadCommandCenter() {
                 showEmergencyOverlay={false}
                 convoyLifecycleRevision={convoyLifecycleRevision}
                 regroupPlannerEnabled={convoyRegroupPlannerEnabled}
+                regroupPlannerOpenRequest={smartRallyOpenRequest}
                 positionSharingRolloutEnabled={teamPositionSharingEnabled}
                 memberLocationPermissionAllowed={memberLocationPermission.allowed}
                 regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
@@ -5579,8 +5606,10 @@ export default function DispatchCadCommandCenter() {
                 canCreateRallyPing={createRallyPingPermission.allowed}
                 rallyPingUnavailableReason={createRallyPingPermission.reason}
                 expeditionId={localDispatchPersistenceId}
+                vehicleConstraints={smartRallyVehicleConstraints}
                 onPreviewRegroupProposal={(proposal) => void handlePreviewConvoyRegroupProposal(proposal)}
                 onCreateRegroupRallyDraft={handleCreateConvoyRegroupRallyDraft}
+                onReturnToCommandBoard={missionCommandEnabled ? handleReturnToMissionCommandBoard : undefined}
                 testID="dispatch-convoy-command-landscape-summary"
               />
             </View>
@@ -5638,6 +5667,7 @@ export default function DispatchCadCommandCenter() {
               setLostCommunicationsVisible(false);
               setVehicleImmobilizedVisible(true);
             }}
+            onOpenSmartRally={convoyRegroupPlannerEnabled ? handleOpenSmartRally : undefined}
             onReassignCommand={openMissionCommandReassignment}
             onRequestFollowUp={openMissionCommandFollowUp}
             onStatusMessage={handleMissionCommandStatusMessage}

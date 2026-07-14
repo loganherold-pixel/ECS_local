@@ -101,6 +101,7 @@ export interface DispatchMissionCommandBoardProps {
   onCreateCommand?: () => void;
   onOpenLostCommunications?: () => void;
   onOpenVehicleImmobilized?: () => void;
+  onOpenSmartRally?: () => void;
   onReassignCommand?: (command: MissionCommand) => void;
   onRequestFollowUp?: (command: MissionCommand) => void;
   onStatusMessage?: (message: string) => void;
@@ -208,6 +209,7 @@ function DispatchMissionCommandBoard({
   onCreateCommand,
   onOpenLostCommunications,
   onOpenVehicleImmobilized,
+  onOpenSmartRally,
   onReassignCommand,
   onRequestFollowUp,
   onStatusMessage,
@@ -502,6 +504,7 @@ function DispatchMissionCommandBoard({
         onCreateCommand={onCreateCommand}
         onOpenLostCommunications={onOpenLostCommunications}
         onOpenVehicleImmobilized={onOpenVehicleImmobilized}
+        onOpenSmartRally={onOpenSmartRally}
       />
 
       <DispatchMissionClockPanel
@@ -615,6 +618,7 @@ function MissionCommandBoardHeader({
   onCreateCommand,
   onOpenLostCommunications,
   onOpenVehicleImmobilized,
+  onOpenSmartRally,
 }: {
   summary: ReturnType<typeof buildMissionCommandBoardPresentation>['summary'];
   missionClock: ReturnType<typeof useMissionClockScheduler>;
@@ -623,6 +627,7 @@ function MissionCommandBoardHeader({
   onCreateCommand?: () => void;
   onOpenLostCommunications?: () => void;
   onOpenVehicleImmobilized?: () => void;
+  onOpenSmartRally?: () => void;
 }) {
   return (
     <View
@@ -681,6 +686,16 @@ function MissionCommandBoardHeader({
               size="compact"
               onPress={onOpenVehicleImmobilized}
               accessibilityLabel="Open Vehicle Immobilized operational playbook"
+            />
+          ) : null}
+          {canCreateCommands && onOpenSmartRally ? (
+            <ECSButton
+              label="Smart Rally"
+              icon="git-merge-outline"
+              variant="secondary"
+              size="compact"
+              onPress={onOpenSmartRally}
+              accessibilityLabel="Open Smart Rally convoy workflow"
             />
           ) : null}
         </View>

@@ -30,6 +30,7 @@ import type { ConvoyCommandPanelViewModel } from '../../lib/convoy/convoyCommand
 import type {
   ConvoyRegroupPlannerResult,
   ConvoyRegroupProposal,
+  ConvoyRegroupVehicleConstraints,
 } from '../../lib/convoy/convoyRegroupPlanner';
 import {
   createConvoyRegroupRallyDraft,
@@ -65,6 +66,7 @@ type DispatchConvoyCommandPanelProps = {
   showEmergencyOverlay?: boolean;
   convoyLifecycleRevision?: number;
   regroupPlannerEnabled?: boolean;
+  regroupPlannerOpenRequest?: number;
   positionSharingRolloutEnabled?: boolean;
   memberLocationPermissionAllowed?: boolean;
   regroupPlannerPermissionAllowed?: boolean;
@@ -74,8 +76,10 @@ type DispatchConvoyCommandPanelProps = {
   canCreateRallyPing?: boolean;
   rallyPingUnavailableReason?: string | null;
   expeditionId?: string | null;
+  vehicleConstraints?: ConvoyRegroupVehicleConstraints | null;
   onPreviewRegroupProposal?: (proposal: ConvoyRegroupProposal) => void;
   onCreateRegroupRallyDraft?: (draft: ConvoyRegroupRallyDraft) => void;
+  onReturnToCommandBoard?: () => void;
   testID?: string;
 };
 
@@ -195,6 +199,7 @@ export default function DispatchConvoyCommandPanel({
   showEmergencyOverlay,
   convoyLifecycleRevision = 0,
   regroupPlannerEnabled = false,
+  regroupPlannerOpenRequest = 0,
   positionSharingRolloutEnabled = false,
   memberLocationPermissionAllowed = false,
   regroupPlannerPermissionAllowed = false,
@@ -204,8 +209,10 @@ export default function DispatchConvoyCommandPanel({
   canCreateRallyPing = false,
   rallyPingUnavailableReason,
   expeditionId,
+  vehicleConstraints,
   onPreviewRegroupProposal,
   onCreateRegroupRallyDraft,
+  onReturnToCommandBoard,
   testID = 'dispatch-convoy-command-panel',
 }: DispatchConvoyCommandPanelProps) {
   const { width: windowWidth } = useWindowDimensions();
@@ -316,6 +323,7 @@ export default function DispatchConvoyCommandPanel({
       members: liveMapMembers,
       localContext: regroupLocalContext,
       expeditionId,
+      vehicleConstraints,
     }),
     [
       activeContext?.convoyId,
@@ -327,8 +335,15 @@ export default function DispatchConvoyCommandPanel({
       regroupPlannerEnabled,
       regroupPlannerPermissionAllowed,
       routeSession,
+      vehicleConstraints,
     ],
   );
+
+  useEffect(() => {
+    if (regroupPlannerEnabled && regroupPlannerOpenRequest > 0) {
+      setRegroupPlannerVisible(true);
+    }
+  }, [regroupPlannerEnabled, regroupPlannerOpenRequest]);
   const panelViewModel = useMemo(
     () => buildSharedActiveConvoyPanelViewModel({
       baseViewModel: viewModel,
@@ -557,6 +572,11 @@ export default function DispatchConvoyCommandPanel({
     onCreateRegroupRallyDraft(createConvoyRegroupRallyDraft(proposal));
   }
 
+  function handleReturnToCommandBoard() {
+    setRegroupPlannerVisible(false);
+    onReturnToCommandBoard?.();
+  }
+
   return (
     <View
       testID={testID}
@@ -708,7 +728,7 @@ export default function DispatchConvoyCommandPanel({
             expanded={isSummaryOnlyPresentation}
           />
           <LegendMetric
-            label="Regroup"
+            label="Rally"
             value={regroupPlannerEnabled
               ? getRegroupPlannerMetricValue(regroupPlannerResult)
               : panelViewModel.regroupSuggested ? 'Advised' : 'Standby'}
@@ -725,7 +745,7 @@ export default function DispatchConvoyCommandPanel({
             testID="dispatch-convoy-regroup-action"
             style={styles.regroupAction}
             accessibilityRole="button"
-            accessibilityLabel={`Open Convoy Regroup Planner. ${getRegroupPlannerActionCopy(regroupPlannerResult)}.`}
+            accessibilityLabel={`Open Smart Rally. ${getRegroupPlannerActionCopy(regroupPlannerResult)}.`}
             accessibilityHint="Reviews a deterministic proposal without sending a message or changing guidance."
             activeOpacity={0.78}
             onPress={() => setRegroupPlannerVisible(true)}
@@ -734,7 +754,7 @@ export default function DispatchConvoyCommandPanel({
               <Ionicons name="git-merge-outline" size={15} color={TACTICAL.amber} />
             </View>
             <View style={styles.regroupActionCopy}>
-              <Text style={styles.regroupActionTitle}>REGROUP</Text>
+              <Text style={styles.regroupActionTitle}>SMART RALLY</Text>
               <Text style={styles.regroupActionSubtitle} numberOfLines={1}>
                 {getRegroupPlannerActionCopy(regroupPlannerResult)}
               </Text>
@@ -881,6 +901,7 @@ export default function DispatchConvoyCommandPanel({
           onClose={() => setRegroupPlannerVisible(false)}
           onPreviewMap={handlePreviewRegroupProposal}
           onCreateRallyPing={handleCreateRegroupRallyPing}
+          onReturnToCommandBoard={onReturnToCommandBoard ? handleReturnToCommandBoard : undefined}
         />
       ) : null}
     </View>

@@ -55,6 +55,7 @@ for (const featureId of ['fleet_tab', 'navigate_tab', 'dashboard_tab', 'explore_
 assert.strictEqual(registry.resolveECSFeatureVisibility('explore_trip_builder', context()).visible, true);
 assert.strictEqual(registry.resolveECSFeatureVisibility('explore_offline_prep', context()).visible, true);
 assert.strictEqual(registry.resolveECSFeatureVisibility('dispatch_team_position_sharing', context()).visible, false);
+assert.strictEqual(registry.resolveECSFeatureVisibility('dispatch_smart_rally', context()).visible, false);
 assert.strictEqual(registry.resolveECSFeatureVisibility('ai_assist', context()).visible, false);
 
 const missingContext = registry.resolveECSFeatureVisibility('fleet_tab', {
@@ -163,6 +164,51 @@ const forcedApproved = registry.resolveECSFeatureVisibility(
 );
 assert.strictEqual(forcedApproved.visible, true);
 assert.strictEqual(forcedApproved.productionApproved, false, 'Restricted field-test maturity must not claim production approval.');
+
+const forcedSmartRallyBase = {
+  ...forcedPositionSharingBase,
+  env: {
+    EXPO_PUBLIC_ECS_MISSION_COMMAND: '1',
+    EXPO_PUBLIC_ECS_SMART_RALLY: '1',
+    EXPO_PUBLIC_ECS_TEAM_POSITION_SHARING: '1',
+  },
+};
+const smartRallyWithoutApproval = registry.resolveECSFeatureVisibility(
+  'dispatch_smart_rally',
+  context(forcedSmartRallyBase),
+);
+assert.strictEqual(smartRallyWithoutApproval.visible, false);
+assert.strictEqual(smartRallyWithoutApproval.reason, 'privacy_approval_required');
+
+const smartRallyApproved = registry.resolveECSFeatureVisibility(
+  'dispatch_smart_rally',
+  context({
+    ...forcedSmartRallyBase,
+    privacyApprovals: new Set(['dispatch_position_sharing_privacy']),
+    productionEvidence: new Set([
+      'dispatch_multiclient_device_evidence',
+      'dispatch_position_sharing_owner_acceptance',
+    ]),
+  }),
+);
+assert.strictEqual(smartRallyApproved.visible, true);
+assert.strictEqual(smartRallyApproved.productionApproved, false);
+
+const smartRallyRollout = dispatchRollout.resolveDispatchRolloutConfig({
+  missionCommand: true,
+  teamPositionSharing: true,
+  convoyRegroupPlanner: true,
+}, context({
+  ...forcedSmartRallyBase,
+  privacyApprovals: new Set(['dispatch_position_sharing_privacy']),
+  productionEvidence: new Set([
+    'dispatch_multiclient_device_evidence',
+    'dispatch_position_sharing_owner_acceptance',
+  ]),
+}));
+assert.strictEqual(smartRallyRollout.missionCommand, true);
+assert.strictEqual(smartRallyRollout.teamPositionSharing, true);
+assert.strictEqual(smartRallyRollout.convoyRegroupPlanner, true);
 
 const legacyDispatchForced = dispatchRollout.resolveDispatchRolloutConfig({
   teamPositionSharing: true,

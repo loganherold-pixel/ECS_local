@@ -25,21 +25,13 @@ export interface ConvoyRegroupPlannerSheetProps {
   onClose: () => void;
   onPreviewMap: () => void;
   onCreateRallyPing: () => void;
+  onReturnToCommandBoard?: () => void;
 }
 
 function formatDistance(meters: number | null): string {
   if (meters == null || !Number.isFinite(meters)) return 'Unknown';
   const miles = meters / 1609.344;
   return miles < 0.1 ? `${Math.round(meters)} m` : `${miles.toFixed(1)} mi`;
-}
-
-function formatDuration(seconds: number | null): string {
-  if (seconds == null || !Number.isFinite(seconds)) return 'Unknown';
-  const minutes = Math.max(0, Math.round(seconds / 60));
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
 }
 
 function formatAge(ageMs: number | null | undefined): string {
@@ -99,8 +91,8 @@ function candidatePostureLabel(posture: ConvoyRegroupCandidatePosture): string {
 }
 
 function statusTitle(result: ConvoyRegroupPlannerResult): string {
-  if (result.status === 'proposal') return 'Proposal Ready';
-  if (result.status === 'not_needed') return 'Regroup Not Indicated';
+  if (result.status === 'proposal') return 'Smart Rally Ready';
+  if (result.status === 'not_needed') return 'Rally Not Indicated';
   if (result.status === 'restricted') return 'Location Restricted';
   if (result.status === 'disabled') return 'Planner Disabled';
   return 'Proposal Unavailable';
@@ -142,21 +134,22 @@ export default function ConvoyRegroupPlannerSheet({
   onClose,
   onPreviewMap,
   onCreateRallyPing,
+  onReturnToCommandBoard,
 }: ConvoyRegroupPlannerSheetProps) {
   const proposal = result.proposal;
   const candidate = proposal?.candidate.candidate ?? null;
   const sourceDependencies = useMemo(() => [
     'Convoy spread posture, excluded-position counts, candidate ranking, ETA range, and proposal confidence.',
-    'A Rally ping is created only after the operator opens and submits the existing composer.',
+    'A Rally command is created only after the operator opens and submits the existing composer.',
   ], []);
 
   return (
     <ECSModalShell
       visible={visible}
       onClose={onClose}
-      title="Convoy Regroup"
-      subtitle="Deterministic proposal for operator review"
-      eyebrow="ECS TEAM COORDINATION"
+      title="Smart Rally"
+      subtitle="Deterministic regroup proposal for operator review"
+      eyebrow="MISSION COMMAND"
       icon="people-outline"
       overlayClass="editor"
       stackBehavior="allow-stack"
@@ -171,7 +164,7 @@ export default function ConvoyRegroupPlannerSheet({
       footer={(
         <ECSOverlayFooter>
           <ECSButton
-            label="Preview Map"
+            label="Preview in Navigate"
             icon="map-outline"
             variant="secondary"
             size="medium"
@@ -180,7 +173,7 @@ export default function ConvoyRegroupPlannerSheet({
             grow
           />
           <ECSButton
-            label="Create Rally Ping"
+            label="Create Rally Command"
             icon="radio-outline"
             variant="primary"
             size="medium"
@@ -209,17 +202,19 @@ export default function ConvoyRegroupPlannerSheet({
           </View>
 
           <View style={styles.metricGrid}>
+            <Metric label="Active" value={`${result.postureSummary.activeMemberCount}`} />
+            <Metric label="Stale" value={`${result.postureSummary.staleMemberCount}`} caution={result.postureSummary.staleMemberCount > 0} />
             <Metric label="Route Spread" value={formatDistance(result.spreadMeters)} />
-            <Metric label="Time Spread" value={formatDuration(result.spreadSeconds)} />
+            <Metric label="Lead / Sweep" value={formatDistance(result.leadToSweepMeters)} />
             <Metric label="Off Route" value={`${result.offRouteCount}`} caution={result.offRouteCount > 0} />
-            <Metric label="Excluded" value={`${result.excludedSummary.total}`} caution={result.excludedSummary.total > 0} />
+            <Metric label="Assistance" value={`${result.postureSummary.assistanceMemberCount}`} caution={result.postureSummary.assistanceMemberCount > 0} />
           </View>
         </ECSPanel>
 
         {proposal && candidate ? (
           <ECSPanel variant="secondary" style={styles.panel}>
             <ECSSectionHeader
-              title="Proposed Regroup Point"
+              title="Proposed Rally Point"
               subtitle="Known ECS context only; no stop or roadside coordinate was invented"
               icon="flag-outline"
               badge={(
@@ -250,6 +245,17 @@ export default function ConvoyRegroupPlannerSheet({
               label={`${candidate.sourceTruth.origin.toUpperCase()} SOURCE`}
               testID="convoy-regroup-candidate-source-trigger"
             />
+          </ECSPanel>
+        ) : null}
+
+        {result.alternateCandidate ? (
+          <ECSPanel variant="quiet" style={styles.panel}>
+            <ECSSectionHeader
+              title="Alternate Candidate"
+              subtitle="Next eligible normalized ECS point"
+              icon="swap-horizontal-outline"
+            />
+            <CandidateRow evaluation={result.alternateCandidate} />
           </ECSPanel>
         ) : null}
 
@@ -307,6 +313,24 @@ export default function ConvoyRegroupPlannerSheet({
           </ECSPanel>
         ) : null}
 
+        {result.risksAndUnknowns.length > 0 ? (
+          <ECSPanel variant="warning" style={styles.panel}>
+            <ECSSectionHeader
+              title="Risks and Unknowns"
+              subtitle="Verify before creating or sending a Rally command"
+              icon="warning-outline"
+            />
+            {result.risksAndUnknowns.slice(0, 6).map((risk) => (
+              <View key={risk} style={styles.reasonRow}>
+                <ECSIcon name="alert-circle-outline" tier="compact" tone="warning" />
+                <ECSText variant="body" style={styles.reasonCopy}>
+                  {risk.replace(/_/g, ' ')}
+                </ECSText>
+              </View>
+            ))}
+          </ECSPanel>
+        ) : null}
+
         <ECSPanel variant="quiet" style={styles.panel}>
           <ECSSectionHeader title="Source State" icon="shield-checkmark-outline" />
           <View style={styles.sourceRow}>
@@ -328,13 +352,22 @@ export default function ConvoyRegroupPlannerSheet({
 
         <ECSPanel variant="warning" style={styles.panel}>
           <ECSText variant="body">
-            Preview only. ECS will not message the convoy, replace guidance, reroute a member, escalate an incident, or claim this point is safe or legal. The operator must verify current conditions and explicitly submit any Rally ping.
+            Proposal only. ECS will not message the convoy, replace guidance, reroute a member, escalate an incident, or claim this point is safe or legal. The operator must verify current conditions and explicitly submit any Rally command.
           </ECSText>
           {!canPreviewMap && previewUnavailableReason ? (
             <ECSText variant="helper" style={styles.disabledCopy}>{previewUnavailableReason}</ECSText>
           ) : null}
           {!canCreateRallyPing && rallyUnavailableReason ? (
             <ECSText variant="helper" style={styles.disabledCopy}>{rallyUnavailableReason}</ECSText>
+          ) : null}
+          {onReturnToCommandBoard ? (
+            <ECSButton
+              label="Return to Command Board"
+              icon="return-up-back-outline"
+              variant="tertiary"
+              size="medium"
+              onPress={onReturnToCommandBoard}
+            />
           ) : null}
         </ECSPanel>
       </View>

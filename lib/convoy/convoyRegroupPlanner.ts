@@ -1,4 +1,5 @@
 import {
+  haversineDistanceMeters,
   nearestPointOnRoute,
   normalizeRouteGeometryCoordinates,
   totalRouteDistanceMeters,
@@ -24,6 +25,8 @@ export const CONVOY_REGROUP_WATCH_SPREAD_METERS = 2.5 * 1609.344;
 export const CONVOY_REGROUP_DISPERSED_SPREAD_METERS = 5 * 1609.344;
 export const CONVOY_REGROUP_WATCH_SPREAD_SECONDS = 8 * 60;
 export const CONVOY_REGROUP_DISPERSED_SPREAD_SECONDS = 15 * 60;
+export const SMART_RALLY_HAZARD_CONFLICT_METERS = 500;
+export const SMART_RALLY_DAYLIGHT_CAUTION_MINUTES = 30;
 
 const FUTURE_LOCATION_TOLERANCE_MS = 5_000;
 const MIN_ROUTE_SPEED_MPS = 1;
@@ -45,8 +48,26 @@ export type ConvoyRegroupCandidateType =
   | 'camp'
   | 'resupply'
   | 'bailout'
+  // Legacy values remain readable, but Smart Rally never selects them.
   | 'staging'
   | 'verified_context';
+
+export const SMART_RALLY_ALLOWED_CANDIDATE_TYPES = [
+  'rally',
+  'waypoint',
+  'turnaround',
+  'camp',
+  'resupply',
+  'bailout',
+] as const satisfies readonly ConvoyRegroupCandidateType[];
+
+export type SmartRallyCandidateType = (typeof SMART_RALLY_ALLOWED_CANDIDATE_TYPES)[number];
+
+export type ConvoyRegroupVehicleSuitability =
+  | 'verified_suitable'
+  | 'conditional'
+  | 'unknown'
+  | 'unsuitable';
 
 export type ConvoyRegroupCandidateAccess =
   | 'verified_open'
@@ -110,6 +131,8 @@ export interface ConvoyRegroupCandidateInput {
   coordinate: ConvoyRegroupCoordinate;
   access: ConvoyRegroupCandidateAccess;
   stoppingSuitability: ConvoyRegroupStoppingSuitability;
+  vehicleSuitability?: ConvoyRegroupVehicleSuitability;
+  trailerSuitability?: ConvoyRegroupVehicleSuitability;
   sourceTruth: SourceTruthRef;
   sourceTruthPolicyKey?: SourceTruthPolicyKey;
   rationale?: string[];
@@ -120,6 +143,18 @@ export interface ConvoyRegroupCandidateInput {
     routeId?: string | null;
     index?: number | null;
   };
+}
+
+export interface ConvoyRegroupDaylightInput {
+  status: 'daylight' | 'near_sunset' | 'after_sunset' | 'before_sunrise' | 'unavailable';
+  sunsetAt?: string | null;
+  remainingMinutes?: number | null;
+  sourceTruth: SourceTruthRef;
+}
+
+export interface ConvoyRegroupVehicleConstraints {
+  trailerPresent: boolean | null;
+  sourceTruth?: SourceTruthRef | null;
 }
 
 export interface ConvoyRegroupHazardInput {
@@ -139,6 +174,8 @@ export interface ConvoyRegroupPlannerInput {
   members: ConvoyRegroupMemberInput[];
   candidates: ConvoyRegroupCandidateInput[];
   hazards?: ConvoyRegroupHazardInput[];
+  daylight?: ConvoyRegroupDaylightInput | null;
+  vehicleConstraints?: ConvoyRegroupVehicleConstraints | null;
   now?: number | string | Date;
 }
 
@@ -151,6 +188,7 @@ export interface ConvoyRegroupMemberProjection {
   distanceAlongRouteMeters: number;
   distanceFromRouteMeters: number;
   offRoute: boolean;
+  needsAssistance: boolean;
   sourceTruth: SourceTruthRef;
 }
 
@@ -190,6 +228,17 @@ export interface ConvoyRegroupCandidateEvaluation {
   sourceTruth: SourceTruthRef;
 }
 
+export interface ConvoyRegroupPostureSummary {
+  reportedMemberCount: number;
+  activeMemberCount: number;
+  staleMemberCount: number;
+  assistanceMemberCount: number;
+  offRouteMemberCount: number;
+  routeProgressSpreadMeters: number | null;
+  leadToSweepSpreadMeters: number | null;
+  excludedMemberCount: number;
+}
+
 export interface ConvoyRegroupProposal {
   fingerprint: string;
   candidate: ConvoyRegroupCandidateEvaluation;
@@ -214,14 +263,17 @@ export interface ConvoyRegroupPlannerResult {
   includedMembers: ConvoyRegroupMemberProjection[];
   excludedMembers: ConvoyRegroupExcludedMember[];
   excludedSummary: ConvoyRegroupExcludedSummary;
+  postureSummary: ConvoyRegroupPostureSummary;
   candidateEvaluations: ConvoyRegroupCandidateEvaluation[];
   proposal: ConvoyRegroupProposal | null;
+  alternateCandidate: ConvoyRegroupCandidateEvaluation | null;
   confidence: SourceTruthConfidence;
   sourceTruth: SourceTruthRef;
   inputSources: SourceTruthRef[];
   reasonCode: string | null;
   message: string;
   warnings: string[];
+  risksAndUnknowns: string[];
   automaticActions: [];
   deterministic: true;
 }
@@ -298,6 +350,35 @@ function summarizeExclusions(excluded: ConvoyRegroupExcludedMember[]): ConvoyReg
   };
 }
 
+function isSmartRallyCandidateType(type: ConvoyRegroupCandidateType): type is SmartRallyCandidateType {
+  return (SMART_RALLY_ALLOWED_CANDIDATE_TYPES as readonly ConvoyRegroupCandidateType[]).includes(type);
+}
+
+function buildPostureSummary(args: {
+  reportedMemberCount: number;
+  included?: readonly ConvoyRegroupMemberProjection[];
+  excluded?: readonly ConvoyRegroupExcludedMember[];
+  spreadMeters?: number | null;
+  leadToSweepMeters?: number | null;
+}): ConvoyRegroupPostureSummary {
+  const included = args.included ?? [];
+  const excluded = args.excluded ?? [];
+  return {
+    reportedMemberCount: Math.max(0, args.reportedMemberCount),
+    activeMemberCount: included.length,
+    staleMemberCount: excluded.filter((member) => (
+      member.reason === 'not_current' ||
+      member.reason === 'invalid_timestamp' ||
+      member.reason === 'future_timestamp'
+    )).length,
+    assistanceMemberCount: included.filter((member) => member.needsAssistance).length,
+    offRouteMemberCount: included.filter((member) => member.offRoute).length,
+    routeProgressSpreadMeters: args.spreadMeters ?? null,
+    leadToSweepSpreadMeters: args.leadToSweepMeters ?? null,
+    excludedMemberCount: excluded.length,
+  };
+}
+
 function plannerSourceTruth(args: {
   generatedAt: string;
   observedAt?: string | null;
@@ -333,6 +414,7 @@ function emptyResult(args: {
   warnings?: string[];
   excludedMembers?: ConvoyRegroupExcludedMember[];
   inputSources?: SourceTruthRef[];
+  reportedMemberCount?: number;
 }): ConvoyRegroupPlannerResult {
   const excludedMembers = args.excludedMembers ?? [];
   const warnings = unique([args.reasonCode, ...(args.warnings ?? [])]);
@@ -356,14 +438,20 @@ function emptyResult(args: {
     includedMembers: [],
     excludedMembers,
     excludedSummary: summarizeExclusions(excludedMembers),
+    postureSummary: buildPostureSummary({
+      reportedMemberCount: args.reportedMemberCount ?? 0,
+      excluded: excludedMembers,
+    }),
     candidateEvaluations: [],
     proposal: null,
+    alternateCandidate: null,
     confidence: 'unknown',
     sourceTruth,
     inputSources: (args.inputSources ?? []).map(sanitizeSourceTruthRef),
     reasonCode: args.reasonCode,
     message: args.message,
     warnings,
+    risksAndUnknowns: warnings,
     automaticActions: [],
     deterministic: true,
   };
@@ -462,6 +550,7 @@ function evaluateMembers(
       distanceAlongRouteMeters: projection.distanceAlongRouteMeters,
       distanceFromRouteMeters: projection.distanceMeters,
       offRoute: projection.distanceMeters > offRouteThreshold,
+      needsAssistance: member.movementStatus === 'needs_assistance',
       sourceTruth: sanitizeSourceTruthRef(member.sourceTruth),
     });
   }
@@ -497,7 +586,9 @@ function calculateDispersion(
     ? leadToSweepMeters / speedMps
     : null;
   const offRouteCount = members.filter((member) => member.offRoute).length;
+  const assistanceCount = members.filter((member) => member.needsAssistance).length;
   const dispersed =
+    assistanceCount > 0 ||
     offRouteCount > 0 ||
     spreadMeters >= CONVOY_REGROUP_DISPERSED_SPREAD_METERS ||
     (spreadSeconds != null && spreadSeconds >= CONVOY_REGROUP_DISPERSED_SPREAD_SECONDS) ||
@@ -522,7 +613,7 @@ function projectHazards(
   routeCoordinates: readonly RouteContextCoordinate[],
 ): Array<ConvoyRegroupHazardInput & { routeDistanceMeters: number; distanceFromRouteMeters: number }> {
   return hazards.flatMap((hazard) => {
-    if (!hazard.blocking) return [];
+    if (hazard.blocking === false) return [];
     const projection = nearestPointOnRoute(hazard.coordinate, routeCoordinates);
     if (!projection || projection.distanceMeters > CONVOY_REGROUP_CANDIDATE_CORRIDOR_METERS) return [];
     return [{
@@ -538,10 +629,21 @@ function evaluateCandidate(args: {
   routeCoordinates: readonly RouteContextCoordinate[];
   members: readonly ConvoyRegroupMemberProjection[];
   speedMps: number | null;
-  blockingHazards: ReturnType<typeof projectHazards>;
+  routeHazards: ReturnType<typeof projectHazards>;
+  daylight?: ConvoyRegroupDaylightInput | null;
+  vehicleConstraints?: ConvoyRegroupVehicleConstraints | null;
   nowMs: number;
 }): ConvoyRegroupCandidateEvaluation {
-  const { candidate, routeCoordinates, members, speedMps, blockingHazards, nowMs } = args;
+  const {
+    candidate,
+    routeCoordinates,
+    members,
+    speedMps,
+    routeHazards,
+    daylight,
+    vehicleConstraints,
+    nowMs,
+  } = args;
   const projection = nearestPointOnRoute(candidate.coordinate, routeCoordinates);
   const reasons = [...(candidate.rationale ?? [])];
   const missingInputs: string[] = [];
@@ -593,7 +695,8 @@ function evaluateCandidate(args: {
     warningCodes.push('candidate_stopping_unsuitable');
   }
 
-  const blockingHazard = blockingHazards.find((hazard) => (
+  const blockingHazard = routeHazards.find((hazard) => (
+    hazard.blocking === true &&
     hazard.routeDistanceMeters >= rearmostDistance &&
     hazard.routeDistanceMeters <= projection.distanceAlongRouteMeters
   ));
@@ -602,9 +705,22 @@ function evaluateCandidate(args: {
     reasons.push(`Candidate is beyond the known blocking hazard: ${blockingHazard.title}.`);
     warningCodes.push('candidate_beyond_blocking_hazard');
   }
+  const nearbyHazard = routeHazards.find((hazard) => {
+    const distanceMeters = haversineDistanceMeters(candidate.coordinate, hazard.coordinate);
+    return distanceMeters != null && distanceMeters <= SMART_RALLY_HAZARD_CONFLICT_METERS;
+  });
+  if (nearbyHazard?.blocking === true) {
+    posture = 'unsuitable';
+    reasons.push(`Candidate conflicts with the known blocking hazard: ${nearbyHazard.title}.`);
+    warningCodes.push('candidate_blocking_hazard_conflict');
+  } else if (nearbyHazard) {
+    score -= 20;
+    reasons.push(`A nearby hazard report requires operator verification: ${nearbyHazard.title}.`);
+    warningCodes.push('candidate_near_unverified_hazard');
+  }
 
   if (candidateSource.availability === 'unavailable') {
-    posture = 'unknown';
+    if (posture !== 'unsuitable') posture = 'unknown';
     reasons.push('Candidate source is unavailable.');
     missingInputs.push('candidate_source');
     warningCodes.push('candidate_source_unavailable');
@@ -614,17 +730,55 @@ function evaluateCandidate(args: {
     warningCodes.push('candidate_source_not_current');
   }
 
+  const vehicleSuitability = candidate.vehicleSuitability ?? 'unknown';
+  const trailerSuitability = candidate.trailerSuitability ?? 'unknown';
+  if (vehicleSuitability === 'unsuitable') {
+    posture = 'unsuitable';
+    reasons.push('Known vehicle-fit evidence marks this point unsuitable for the convoy.');
+    warningCodes.push('candidate_vehicle_unsuitable');
+  } else if (vehicleSuitability === 'conditional') {
+    score -= 12;
+    reasons.push('Vehicle fit is conditional and requires operator verification.');
+    warningCodes.push('candidate_vehicle_fit_conditional');
+  } else if (vehicleSuitability === 'unknown') {
+    score -= 5;
+    missingInputs.push('candidate_vehicle_suitability');
+    warningCodes.push('candidate_vehicle_fit_unknown');
+  }
+
+  if (vehicleConstraints?.trailerPresent === true) {
+    if (trailerSuitability === 'unsuitable') {
+      posture = 'unsuitable';
+      reasons.push('Known trailer-fit evidence marks this point unsuitable.');
+      warningCodes.push('candidate_trailer_unsuitable');
+    } else if (trailerSuitability === 'conditional') {
+      score -= 15;
+      reasons.push('Trailer access or turnaround is conditional and requires operator verification.');
+      warningCodes.push('candidate_trailer_fit_conditional');
+    } else if (trailerSuitability === 'unknown') {
+      score -= 10;
+      missingInputs.push('candidate_trailer_suitability');
+      reasons.push('Trailer access and turnaround suitability are unknown.');
+      warningCodes.push('candidate_trailer_fit_unknown');
+    }
+  } else if (vehicleConstraints?.trailerPresent == null) {
+    missingInputs.push('convoy_trailer_state');
+  }
+
   if (posture !== 'unsuitable' && posture !== 'unknown') {
     if (
       candidate.access === 'verified_open' &&
       candidate.stoppingSuitability === 'verified' &&
-      candidateSource.availability === 'usable'
+      candidateSource.availability === 'usable' &&
+      vehicleSuitability === 'verified_suitable' &&
+      (vehicleConstraints?.trailerPresent !== true || trailerSuitability === 'verified_suitable') &&
+      !nearbyHazard
     ) {
       posture = 'verified';
       reasons.push('Known normalized context supports current access and stopping use.');
     } else {
       posture = 'conditional';
-      reasons.push('Access or stopping suitability remains unverified; operator confirmation is required.');
+      reasons.push('Access, stopping, hazard, vehicle, or trailer suitability remains unverified; operator confirmation is required.');
       warningCodes.push('candidate_verification_required');
       score -= 20;
     }
@@ -645,9 +799,55 @@ function evaluateCandidate(args: {
       latestSeconds: Math.max(...arrivalSeconds),
       spreadSeconds: Math.max(...arrivalSeconds) - Math.min(...arrivalSeconds),
     };
+    score -= Math.min(20, etaWindow.spreadSeconds / 300);
+    if (etaWindow.spreadSeconds >= CONVOY_REGROUP_WATCH_SPREAD_SECONDS) {
+      reasons.push('Member arrival spread remains material at this point.');
+      warningCodes.push('candidate_arrival_spread_material');
+    }
   } else {
     missingInputs.push(speedMps ? 'off_route_arrival_estimate' : 'route_speed');
     reasons.push('Arrival window is unknown because route speed or on-route projection is incomplete.');
+  }
+
+  const averageAccuracy = members.reduce((sum, member) => sum + member.accuracyMeters, 0) / members.length;
+  const oldestAgeMs = Math.max(...members.map((member) => member.ageMs));
+  score -= Math.min(8, averageAccuracy / 25);
+  score -= Math.min(8, oldestAgeMs / 60_000);
+
+  if (daylight) {
+    const daylightSource = evaluateSourceTruthRef(daylight.sourceTruth, {
+      policyKey: 'weather_forecast',
+      now: nowMs,
+    });
+    const sunsetMs = Date.parse(String(daylight.sunsetAt ?? ''));
+    const latestArrivalMs = etaWindow ? nowMs + etaWindow.latestSeconds * 1000 : null;
+    if (daylightSource.availability === 'unavailable' || daylight.status === 'unavailable') {
+      missingInputs.push('daylight');
+      warningCodes.push('daylight_unavailable');
+    } else if (daylight.status === 'after_sunset' || daylight.status === 'before_sunrise') {
+      score -= 20;
+      reasons.push('The current daylight state requires low-light verification before regrouping.');
+      warningCodes.push('candidate_low_light_arrival');
+    } else if (latestArrivalMs != null && Number.isFinite(sunsetMs)) {
+      const marginMinutes = (sunsetMs - latestArrivalMs) / 60_000;
+      if (marginMinutes < 0) {
+        score -= 20;
+        reasons.push('The latest projected arrival is after the available sunset estimate.');
+        warningCodes.push('candidate_arrival_after_sunset');
+      } else if (marginMinutes <= SMART_RALLY_DAYLIGHT_CAUTION_MINUTES) {
+        score -= 10;
+        reasons.push('The latest projected arrival has a limited daylight margin.');
+        warningCodes.push('candidate_daylight_margin_limited');
+      }
+    } else if (!etaWindow) {
+      missingInputs.push('candidate_daylight_arrival');
+    }
+    if (daylightSource.freshness === 'stale' || daylightSource.freshness === 'expired') {
+      score -= 8;
+      warningCodes.push('daylight_source_not_current');
+    }
+  } else {
+    missingInputs.push('daylight');
   }
 
   return {
@@ -705,11 +905,13 @@ function proposalConfidence(args: {
   members: readonly ConvoyRegroupMemberProjection[];
   candidate: ConvoyRegroupCandidateEvaluation;
   speedMps: number | null;
+  supportingSources?: readonly SourceTruthRef[];
 }): SourceTruthConfidence {
   const sourceAssessment = assessSourceTruth([
     args.route.sourceTruth,
     ...args.members.map((member) => member.sourceTruth),
     args.candidate.sourceTruth,
+    ...(args.supportingSources ?? []),
   ], { policyKey: 'convoy_member_location' });
   let confidence = minimumConfidence([
     sourceAssessment.confidence,
@@ -724,12 +926,14 @@ function proposalConfidence(args: {
 export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegroupPlannerResult {
   const nowMs = normalizeNow(input.now);
   const generatedAt = new Date(nowMs).toISOString();
+  const reportedMemberCount = input.members.length;
   if (!input.enabled) {
     return emptyResult({
       status: 'disabled',
       generatedAt,
       reasonCode: 'feature_disabled',
-      message: 'Convoy Regroup Planner is disabled for this rollout.',
+      message: 'Smart Rally is disabled for this rollout.',
+      reportedMemberCount,
     });
   }
   if (!input.positionSharingEnabled) {
@@ -737,7 +941,8 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       status: 'restricted',
       generatedAt,
       reasonCode: 'position_sharing_gate_disabled',
-      message: 'Convoy position planning is unavailable until the approved position-sharing gate is enabled.',
+      message: 'Smart Rally is unavailable until the approved position-sharing gate is enabled.',
+      reportedMemberCount,
     });
   }
   if (!input.memberLocationPermissionAllowed) {
@@ -746,6 +951,7 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       generatedAt,
       reasonCode: 'member_location_permission_denied',
       message: 'Member locations are restricted for this operator.',
+      reportedMemberCount,
     });
   }
   if (!String(input.activeConvoyId ?? '').trim()) {
@@ -753,7 +959,8 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       status: 'unavailable',
       generatedAt,
       reasonCode: 'no_active_convoy',
-      message: 'Start or join an active convoy before evaluating regroup posture.',
+      message: 'Start or join an active convoy before evaluating Smart Rally posture.',
+      reportedMemberCount,
     });
   }
   if (!input.route) {
@@ -762,6 +969,7 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       generatedAt,
       reasonCode: 'no_active_route',
       message: 'An active route is required to compare convoy progress.',
+      reportedMemberCount,
     });
   }
 
@@ -774,6 +982,7 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       reasonCode: 'route_geometry_unavailable',
       message: 'Active route geometry is unavailable for reliable convoy projection.',
       inputSources: [input.route.sourceTruth],
+      reportedMemberCount,
     });
   }
   const routeAssessment = evaluateSourceTruthRef(input.route.sourceTruth, {
@@ -788,25 +997,14 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       reasonCode: 'route_source_unavailable',
       message: 'Active route source evidence is unavailable.',
       inputSources: [input.route.sourceTruth],
+      reportedMemberCount,
     });
   }
 
   const memberEvaluation = evaluateMembers(input.members, routeCoordinates, nowMs);
   const excludedSummary = summarizeExclusions(memberEvaluation.excluded);
-  if (excludedSummary.restricted > 0) {
-    return emptyResult({
-      status: 'restricted',
-      generatedAt,
-      routeId: input.route.id,
-      reasonCode: 'restricted_member_locations_present',
-      message: 'A regroup proposal cannot be generated while required member locations are restricted.',
-      excludedMembers: memberEvaluation.excluded,
-      inputSources: [input.route.sourceTruth],
-    });
-  }
   if (memberEvaluation.included.length < 2) {
-    return {
-      ...emptyResult({
+    const unavailable = emptyResult({
         status: 'unavailable',
         generatedAt,
         routeId: input.route.id,
@@ -814,8 +1012,16 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
         message: 'At least two fresh, accurate, live member positions are required.',
         excludedMembers: memberEvaluation.excluded,
         inputSources: [input.route.sourceTruth],
-      }),
+        reportedMemberCount,
+      });
+    return {
+      ...unavailable,
       includedMembers: memberEvaluation.included,
+      postureSummary: buildPostureSummary({
+        reportedMemberCount,
+        included: memberEvaluation.included,
+        excluded: memberEvaluation.excluded,
+      }),
     };
   }
 
@@ -824,13 +1030,30 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
   const inputSources = [
     sanitizeSourceTruthRef(input.route.sourceTruth),
     ...memberEvaluation.included.map((member) => member.sourceTruth),
+    ...(input.daylight ? [sanitizeSourceTruthRef(input.daylight.sourceTruth)] : []),
+    ...(input.vehicleConstraints?.sourceTruth
+      ? [sanitizeSourceTruthRef(input.vehicleConstraints.sourceTruth)]
+      : []),
+    ...(input.hazards ?? []).map((hazard) => sanitizeSourceTruthRef(hazard.sourceTruth)),
   ];
+  const allowedCandidates = input.candidates.filter((candidate) => isSmartRallyCandidateType(candidate.type));
+  const unsupportedCandidateCount = input.candidates.length - allowedCandidates.length;
+  const postureSummary = buildPostureSummary({
+    reportedMemberCount,
+    included: memberEvaluation.included,
+    excluded: memberEvaluation.excluded,
+    spreadMeters: dispersion.spreadMeters,
+    leadToSweepMeters: dispersion.leadToSweepMeters,
+  });
   const baseWarnings = unique([
     routeAssessment.freshness === 'stale' || routeAssessment.freshness === 'expired'
       ? 'route_source_not_current'
       : null,
     excludedSummary.total > 0 ? 'members_excluded' : null,
     dispersion.offRouteCount > 0 ? 'member_off_route' : null,
+    postureSummary.assistanceMemberCount > 0 ? 'member_assistance_requested' : null,
+    excludedSummary.restricted > 0 ? 'restricted_members_excluded' : null,
+    unsupportedCandidateCount > 0 ? 'unsupported_candidate_types_excluded' : null,
     speedMps == null ? 'route_speed_unavailable' : null,
   ]);
 
@@ -858,20 +1081,23 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       includedMembers: memberEvaluation.included,
       excludedMembers: memberEvaluation.excluded,
       excludedSummary,
+      postureSummary,
       candidateEvaluations: [],
       proposal: null,
+      alternateCandidate: null,
       confidence,
       sourceTruth,
       inputSources,
       reasonCode: 'convoy_within_spread_thresholds',
       message: 'Current eligible member positions remain within regroup thresholds.',
       warnings: baseWarnings,
+      risksAndUnknowns: baseWarnings,
       automaticActions: [],
       deterministic: true,
     };
   }
 
-  if (input.candidates.length === 0) {
+  if (allowedCandidates.length === 0) {
     const unavailable = emptyResult({
       status: 'unavailable',
       posture: dispersion.posture,
@@ -882,6 +1108,7 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       warnings: baseWarnings,
       excludedMembers: memberEvaluation.excluded,
       inputSources,
+      reportedMemberCount,
     });
     return {
       ...unavailable,
@@ -891,16 +1118,19 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       leadToSweepSeconds: dispersion.leadToSweepSeconds,
       offRouteCount: dispersion.offRouteCount,
       includedMembers: memberEvaluation.included,
+      postureSummary,
     };
   }
 
-  const blockingHazards = projectHazards(input.hazards ?? [], routeCoordinates);
-  const evaluations = input.candidates.map((candidate) => evaluateCandidate({
+  const routeHazards = projectHazards(input.hazards ?? [], routeCoordinates);
+  const evaluations = allowedCandidates.map((candidate) => evaluateCandidate({
     candidate,
     routeCoordinates,
     members: memberEvaluation.included,
     speedMps,
-    blockingHazards,
+    routeHazards,
+    daylight: input.daylight,
+    vehicleConstraints: input.vehicleConstraints,
     nowMs,
   })).sort((left, right) => {
     const postureRank: Record<ConvoyRegroupCandidatePosture, number> = {
@@ -916,6 +1146,12 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
   const selected = evaluations.find((evaluation) => (
     evaluation.posture === 'verified' || evaluation.posture === 'conditional'
   )) ?? null;
+  const alternateCandidate = selected
+    ? evaluations.find((evaluation) => (
+        evaluation.candidate.id !== selected.candidate.id &&
+        (evaluation.posture === 'verified' || evaluation.posture === 'conditional')
+      )) ?? null
+    : null;
 
   if (!selected) {
     const confidence: SourceTruthConfidence = 'low';
@@ -946,14 +1182,17 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
       includedMembers: memberEvaluation.included,
       excludedMembers: memberEvaluation.excluded,
       excludedSummary,
+      postureSummary,
       candidateEvaluations: evaluations,
       proposal: null,
+      alternateCandidate: null,
       confidence,
       sourceTruth,
       inputSources,
       reasonCode: 'no_suitable_regroup_candidate',
       message: 'Known candidates do not support a regroup proposal with current evidence.',
       warnings,
+      risksAndUnknowns: warnings,
       automaticActions: [],
       deterministic: true,
     };
@@ -964,6 +1203,7 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
     members: memberEvaluation.included,
     candidate: selected,
     speedMps,
+    supportingSources: inputSources.slice(1 + memberEvaluation.included.length),
   });
   const warnings = unique([
     ...baseWarnings,
@@ -982,6 +1222,12 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
   const rationale = unique([
     dispersion.offRouteCount > 0
       ? `${dispersion.offRouteCount} eligible member position${dispersion.offRouteCount === 1 ? ' is' : 's are'} off the reliable route corridor.`
+      : null,
+    postureSummary.assistanceMemberCount > 0
+      ? `${postureSummary.assistanceMemberCount} permission-visible member${postureSummary.assistanceMemberCount === 1 ? ' has' : 's have'} requested assistance.`
+      : null,
+    excludedSummary.total > 0
+      ? `${excludedSummary.total} member position${excludedSummary.total === 1 ? ' was' : 's were'} excluded because it was stale, restricted, inaccurate, or unavailable.`
       : null,
     `Eligible convoy spread is ${(dispersion.spreadMeters / 1609.344).toFixed(1)} miles along the active route.`,
     selected.posture === 'conditional'
@@ -1021,14 +1267,20 @@ export function planConvoyRegroup(input: ConvoyRegroupPlannerInput): ConvoyRegro
     includedMembers: memberEvaluation.included,
     excludedMembers: memberEvaluation.excluded,
     excludedSummary,
+    postureSummary,
     candidateEvaluations: evaluations,
     proposal,
+    alternateCandidate,
     confidence,
     sourceTruth,
     inputSources: [...inputSources, selected.sourceTruth],
     reasonCode: null,
-    message: 'A regroup point proposal is ready for operator review. Nothing has been sent or rerouted.',
+    message: 'A Smart Rally proposal is ready for operator review. Nothing has been sent or rerouted.',
     warnings,
+    risksAndUnknowns: unique([
+      ...selected.warningCodes,
+      ...selected.missingInputs.map((inputName) => `missing_${inputName}`),
+    ]),
     automaticActions: [],
     deterministic: true,
   };
