@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -16,14 +16,17 @@ import {
   ECSSourceBadge,
 } from '../source-truth/SourceTruthIndicators';
 import { SourceTruthInspectorTrigger } from '../source-truth/SourceTruthInspector';
-import type {
-  IncidentRoomCommandPresentation,
-  IncidentRoomPresentation,
-  IncidentRoomTimelinePresentation,
+import {
+  INCIDENT_ROOM_TIMELINE_LIMIT,
+  type IncidentRoomCommandPresentation,
+  type IncidentRoomPresentation,
+  type IncidentRoomTimelinePresentation,
 } from '../../lib/dispatchIncidentRoom';
+import { windowMissionCommandTimeline } from '../../lib/dispatchMissionCommandPresentation';
 import type { IncidentStatus } from '../../lib/types/incidentRecovery';
 import { ECS, TACTICAL } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
+import { recordECSPerformanceRender } from '../../lib/performance/ecsPerformanceDiagnostics';
 
 export interface DispatchIncidentRoomProps {
   visible: boolean;
@@ -40,6 +43,7 @@ export interface DispatchIncidentRoomProps {
 
 const COMMAND_RENDER_LIMIT = 24;
 const PEOPLE_RENDER_LIMIT = 24;
+const INCIDENT_TIMELINE_PAGE_SIZE = 20;
 
 export default function DispatchIncidentRoom({
   visible,
@@ -53,8 +57,18 @@ export default function DispatchIncidentRoom({
   onOpenResolveDebrief,
   testID = 'dispatch-incident-room',
 }: DispatchIncidentRoomProps) {
+  recordECSPerformanceRender('dispatch_ready', 'mission_incident_room');
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
+  const [timelineVisibleCount, setTimelineVisibleCount] = useState(INCIDENT_TIMELINE_PAGE_SIZE);
+  const timelineWindow = useMemo(() => windowMissionCommandTimeline(
+    model?.timeline ?? [],
+    timelineVisibleCount,
+    INCIDENT_ROOM_TIMELINE_LIMIT,
+  ), [model?.timeline, timelineVisibleCount]);
+  useEffect(() => {
+    setTimelineVisibleCount(INCIDENT_TIMELINE_PAGE_SIZE);
+  }, [model?.incidentId]);
   const footer = useMemo(() => (
     <ECSOverlayFooter>
       <ECSButton
@@ -381,9 +395,21 @@ export default function DispatchIncidentRoom({
               <IncidentSection title="Event Timeline" icon="time-outline">
                 {model.timeline.length === 0 ? (
                   <EmptySectionText text="No incident events are recorded." />
-                ) : model.timeline.map((event) => (
+                ) : timelineWindow.items.map((event) => (
                   <TimelineRow key={event.id} event={event} />
                 ))}
+                {timelineWindow.hasMore ? (
+                  <ECSButton
+                    label={`Show More Events (${model.timeline.length - timelineVisibleCount})`}
+                    icon="chevron-down-outline"
+                    variant="tertiary"
+                    size="compact"
+                    onPress={() => setTimelineVisibleCount((current) => (
+                      Math.min(model.timeline.length, current + INCIDENT_TIMELINE_PAGE_SIZE)
+                    ))}
+                    accessibilityHint="Adds the next bounded page of incident timeline events."
+                  />
+                ) : null}
                 {model.timelineTruncated ? (
                   <Text style={styles.boundNotice}>
                     Showing the newest bounded event window. Full historical logs remain in their owning systems.

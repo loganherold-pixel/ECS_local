@@ -484,15 +484,28 @@ export interface DispatchQueuedOfflineAction {
   id: string;
   idempotencyKey: string;
   version?: number;
-  entityType: 'ping' | 'queue_item' | 'assignment' | 'assist_request' | 'acknowledgment' | 'timeline_event';
+  entityType:
+    | 'ping'
+    | 'queue_item'
+    | 'assignment'
+    | 'assist_request'
+    | 'acknowledgment'
+    | 'timeline_event'
+    | 'mission_command'
+    | 'mission_command_event'
+    | 'mission_playbook_instance';
   actionType: string;
   createdAt: string;
   updatedAt?: string;
   replayedAt?: string;
+  cancelledAt?: string;
   nextAttemptAt?: string;
   attemptCount?: number;
   maxAttempts?: number;
   lastError?: string;
+  lastErrorCode?: string;
+  retryability?: 'retryable' | 'non_retryable';
+  dependsOnOperationIds?: string[];
   status: 'queued' | 'replaying' | 'replayed' | 'failed' | 'cancelled';
   sourceEntityId?: string;
 }

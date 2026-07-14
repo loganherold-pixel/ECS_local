@@ -141,8 +141,19 @@ function buildInput(commands, overrides = {}) {
 }
 
 const presentation = loadTsModule('lib', 'dispatchMissionCommandPresentation.ts');
+const interaction = loadTsModule('lib', 'dispatchMissionCommandInteraction.ts');
 const missionAdapters = loadTsModule('lib', 'dispatchMissionCommandAdapters.ts');
 const { dispatchPersistenceAdapter } = loadTsModule('lib', 'dispatchPersistenceAdapter.ts');
+
+const actionFlight = interaction.createMissionCommandActionFlightGuard();
+assert.equal(actionFlight.tryAcquire('command-1:resolve'), true);
+assert.equal(actionFlight.tryAcquire('command-1:resolve'), false, 'A duplicate tap must not acquire the active action.');
+assert.equal(actionFlight.tryAcquire('command-2:cancel'), false, 'Competing command mutations must wait for the active action.');
+assert.equal(actionFlight.release('command-2:cancel'), false, 'A different action cannot release the active flight.');
+assert.equal(actionFlight.release('command-1:resolve'), true);
+assert.equal(actionFlight.tryAcquire('command-2:cancel'), true);
+actionFlight.reset();
+assert.equal(actionFlight.getActiveKey(), null);
 
 const partialAcknowledgment = command('awaiting', {
   type: 'check_in',
@@ -164,6 +175,10 @@ const overdue = command('overdue', {
 });
 const queued = command('queued', {
   deliveryState: 'queued',
+  operationalState: 'in_progress',
+});
+const failedDelivery = command('failed-delivery', {
+  deliveryState: 'failed',
   operationalState: 'in_progress',
 });
 const resolved = [0, 1, 2].map((index) => command(`resolved-${index}`, {
@@ -217,8 +232,49 @@ assert.equal(windowedDecisionSection.hasMore, true);
 const awaitingCard = model.sections.awaitingAcknowledgment.items[0];
 assert.equal(awaitingCard.acknowledgmentLabel, '1 of 2 acknowledged');
 assert.match(awaitingCard.accessibilityLabel, /1 of 2 acknowledged/i);
+assert.match(awaitingCard.accessibilityLabel, /Target Expedition team/i);
+assert.match(awaitingCard.accessibilityLabel, /Normal priority/i);
 assert.equal(model.sections.needsDecision.items.find((item) => item.commandId === 'overdue').deadlineState, 'overdue');
 assert.equal(model.sections.inProgress.items[0].deliveryLabel, 'Queued offline');
+const failedDeliveryModel = presentation.buildMissionCommandBoardPresentation(buildInput([failedDelivery], {
+  connectivity: {
+    online: false,
+    offlineMode: true,
+    realtimeStatus: 'error',
+    queuedCount: 1,
+  },
+}));
+const failedDeliveryCard = [
+  ...failedDeliveryModel.sections.needsDecision.items,
+  ...failedDeliveryModel.sections.awaitingAcknowledgment.items,
+  ...failedDeliveryModel.sections.inProgress.items,
+].find((card) => card.commandId === failedDelivery.id);
+assert.ok(failedDeliveryCard);
+assert.equal(failedDeliveryCard.deliveryLabel, 'Delivery failed');
+assert.equal(failedDeliveryCard.allowedActions[0].id, 'retry_delivery');
+assert.match(failedDeliveryCard.accessibilityLabel, /Delivery failed/);
+
+const longLabel = 'CHECK IN AT THE NORTHERN RIDGELINE TURNAROUND WITH TRAILER SUPPORT';
+const longLabelModel = presentation.buildMissionCommandBoardPresentation(buildInput([command('long-label', {
+  title: longLabel,
+  target: { kind: 'vehicle', vehicleId: 'vehicle-long', label: 'Expedition Support Vehicle With Extended Callsign' },
+})]));
+assert.match(longLabelModel.sections.inProgress.items[0].accessibilityLabel, new RegExp(longLabel));
+assert.match(longLabelModel.sections.inProgress.items[0].accessibilityLabel, /Expedition Support Vehicle With Extended Callsign/);
+
+assert.deepEqual(
+  presentation.resolveMissionCommandBoardLayout({ width: 360, height: 740, fontScale: 1 }),
+  { isLandscape: false, compactHeader: true, outerShellOwnsScrolling: true, dynamicType: false },
+);
+assert.deepEqual(
+  presentation.resolveMissionCommandBoardLayout({ width: 920, height: 430, fontScale: 1 }),
+  { isLandscape: true, compactHeader: false, outerShellOwnsScrolling: false, dynamicType: false },
+);
+assert.equal(
+  presentation.resolveMissionCommandBoardLayout({ width: 600, height: 900, fontScale: 1.6 }).compactHeader,
+  true,
+  'Dynamic type must select the non-compressing header layout even on a wider device.',
+);
 
 const restricted = presentation.buildMissionCommandBoardPresentation(buildInput([command('restricted')], {
   canViewCommands: false,
@@ -417,6 +473,60 @@ for (let iteration = 0; iteration < 40; iteration += 1) {
 const durationMs = performance.now() - start;
 assert.equal(highVolumeModel.visibleCommandCount, 208, 'Only the bounded resolved page should become card models.');
 assert.ok(durationMs < 1500, `High-volume presentation selection took ${durationMs.toFixed(1)}ms.`);
+const largeTimeline = Array.from({ length: 10_000 }, (_, index) => ({ id: `timeline-${index}` }));
+const timelineStartedAt = performance.now();
+let timelineWindow;
+for (let iteration = 0; iteration < 1_000; iteration += 1) {
+  timelineWindow = presentation.windowMissionCommandTimeline(largeTimeline, 20, 80);
+}
+const timelineWindowMs = performance.now() - timelineStartedAt;
+assert.equal(timelineWindow.items.length, 20);
+assert.equal(timelineWindow.totalCount, 10_000);
+assert.equal(timelineWindow.hasMore, true);
+assert.ok(timelineWindowMs < 250, `Large timeline windowing took ${timelineWindowMs.toFixed(1)}ms.`);
+
+const renderBudgetCommands = Array.from({ length: 60 }, (_, index) => command(`render-${index}`, {
+  operationalState: 'in_progress',
+}));
+const selectStableBoard = presentation.createMissionCommandBoardPresentationSelector();
+const firstStableModel = selectStableBoard(buildInput(renderBudgetCommands));
+const clonedStableModel = selectStableBoard(buildInput(renderBudgetCommands.map((item) => ({
+  ...item,
+  creator: { ...item.creator },
+  sourceTruth: item.sourceTruth.map((source) => ({ ...source })),
+}))));
+const firstCards = new Map(firstStableModel.sections.inProgress.items.map((card) => [card.commandId, card]));
+const stableCardInvalidations = clonedStableModel.sections.inProgress.items.filter((card) => (
+  firstCards.get(card.commandId) !== card
+)).length;
+assert.equal(stableCardInvalidations, 0, 'Equivalent persistence projections must not invalidate any command card.');
+
+const acknowledgedCommandId = 'render-17';
+const acknowledgmentUpdated = renderBudgetCommands.map((item) => item.id === acknowledgedCommandId ? {
+  ...item,
+  version: item.version + 1,
+  updatedAt: '2026-07-14T12:01:00.000Z',
+  acknowledgmentPolicy: { mode: 'all', targetMemberIds: ['member-1', 'member-2'] },
+  acknowledgmentState: 'partial',
+  acknowledgments: [{
+    id: 'render-ack-17',
+    idempotencyKey: 'render-ack-17',
+    memberId: 'member-1',
+    response: 'acknowledged',
+    respondedAt: '2026-07-14T12:01:00.000Z',
+  }],
+} : item);
+const acknowledgmentModel = selectStableBoard(buildInput(acknowledgmentUpdated));
+const clonedCards = new Map(clonedStableModel.sections.inProgress.items.map((card) => [card.commandId, card]));
+const acknowledgmentCardInvalidations = acknowledgmentModel.sections.awaitingAcknowledgment.items
+  .concat(acknowledgmentModel.sections.inProgress.items)
+  .filter((card) => clonedCards.get(card.commandId) !== card)
+  .length;
+assert.equal(
+  acknowledgmentCardInvalidations,
+  1,
+  'One acknowledgment update may invalidate only its owning command card.',
+);
 
 const screenSource = read('components', 'dispatch', 'DispatchCadCommandCenter.tsx');
 const boardSource = read('components', 'dispatch', 'DispatchMissionCommandBoard.tsx');
@@ -459,14 +569,46 @@ assert.ok(
     boardSource.includes('mission_command_board_initial_render'),
   'The Board must memoize cards, window open commands, bound resolved history, and record development-only performance evidence.',
 );
+assert.ok(
+  boardSource.includes('MissionCommandClockBoundary') &&
+    (boardSource.match(/useMissionClockScheduler\(/g) ?? []).length === 1 &&
+    boardSource.includes("recordECSPerformanceRender('dispatch_ready', 'mission_command_card')") &&
+    boardSource.includes('ACTION_SINGLE_FLIGHT_HOLD_MS') &&
+    boardSource.includes('COMMAND_EVENT_DETAIL_PAGE_SIZE'),
+  'Clock ticks must remain isolated while card renders, duplicate actions, and history pages stay bounded and observable.',
+);
+assert.ok(
+  screenSource.includes("React.lazy(() => import('./DispatchIncidentRoom'))") &&
+    screenSource.includes("React.lazy(() => import('./DispatchMissionCommandComposer'))") &&
+    screenSource.includes('<React.Suspense') &&
+    !screenSource.includes("import DispatchIncidentRoom from './DispatchIncidentRoom'"),
+  'Hidden Mission Command workspaces must load lazily rather than contributing to initial Dispatch evaluation.',
+);
+assert.ok(
+  screenSource.includes('const renderEvent = useCallback<ListRenderItem<DispatchEvent>>') &&
+    screenSource.includes('const EventRow = React.memo(function EventRow') &&
+    screenSource.includes('initialNumToRender={12}') &&
+    screenSource.includes('windowSize={7}'),
+  'The Dispatch timeline must keep a stable virtualized renderer and memoized event rows.',
+);
 
 console.log(JSON.stringify({
   status: 'passed',
   initialPresentationModelMs: Number(initialModelDurationMs.toFixed(2)),
+  renderInvalidations: {
+    stableProjection: stableCardInvalidations,
+    oneAcknowledgmentUpdate: acknowledgmentCardInvalidations,
+  },
   highVolume: {
     commandCount: highVolumeCommands.length,
     eventCount: highVolumeEvents.length,
     iterations: 40,
     durationMs: Number(durationMs.toFixed(2)),
+  },
+  timelineWindow: {
+    eventCount: largeTimeline.length,
+    iterations: 1_000,
+    durationMs: Number(timelineWindowMs.toFixed(2)),
+    initialRows: timelineWindow.items.length,
   },
 }));

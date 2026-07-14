@@ -11,7 +11,7 @@ Every transmission remains an explicit Command Composer submission. A missed gra
 - `lib/dispatchGuardianCheckInTypes.ts` owns the versioned plan, trigger, response, event, and presentation contracts.
 - `lib/dispatchGuardianCheckInDomain.ts` owns validation, state transitions, idempotency, recurrence, privacy sanitization, no-response decisions, retention, and Mission Clock projection.
 - `lib/dispatchGuardianCheckInAdapter.ts` owns Command Composer, legacy check-in, presentation, deadline, and solo incident adapters.
-- `lib/dispatchPersistenceAdapter.ts` remains the authoritative local Dispatch owner. Schema version 5 adds the bounded `guardianCheckIns` collection without rewriting legacy pings.
+- `lib/dispatchPersistenceAdapter.ts` remains the authoritative local Dispatch owner. Guardian Check-Ins introduced the bounded `guardianCheckIns` collection in schema version 5; schema version 7 preserves it while adding Mission Command and Operational Playbook outbox durability and recovery metadata.
 - `components/dispatch/DispatchGuardianCheckIns.tsx` is a store-thin operational sheet. Mission Command continues to own command delivery and acknowledgment.
 
 ## Trigger Support

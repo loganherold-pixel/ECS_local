@@ -18,6 +18,7 @@ import {
 
 import { ECSButton } from '../ECSButton';
 import ECSModalShell, { ECSOverlayFooter } from '../ECSModalShell';
+import ECSOperationalAnnouncer from '../ECSOperationalAnnouncer';
 import { ECSBadge } from '../ECSStatus';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import {
@@ -40,13 +41,21 @@ import {
 } from '../../lib/dispatchMissionCommandDomain';
 import {
   buildMissionCommandBoardPresentation,
+  createMissionCommandBoardPresentationSelector,
+  resolveMissionCommandBoardLayout,
+  selectMissionCommandClockAnnouncement,
   windowMissionCommandBoardSection,
+  windowMissionCommandTimeline,
   type MissionCommandBoardActionId,
   type MissionCommandBoardActionModel,
   type MissionCommandBoardSectionPresentation,
   type MissionCommandCardPresentation,
 } from '../../lib/dispatchMissionCommandPresentation';
-import { collectMissionClockDeadlines } from '../../lib/dispatchMissionClock';
+import {
+  collectMissionClockDeadlines,
+  type MissionClockDeadlineInput,
+  type MissionClockSnapshot,
+} from '../../lib/dispatchMissionClock';
 import { collectGuardianCheckInDeadlines } from '../../lib/dispatchGuardianCheckInAdapter';
 import { collectOperationalPlaybookDeadlines } from '../../lib/dispatchOperationalPlaybookDomain';
 import { getMissionCommandIncidentId } from '../../lib/dispatchIncidentRoom';
@@ -60,6 +69,7 @@ import {
   getMissionCommandContextPrimaryActionLabel,
   type MissionCommandContextInspection,
 } from '../../lib/dispatchMissionCommandContext';
+import { createMissionCommandActionFlightGuard } from '../../lib/dispatchMissionCommandInteraction';
 import { useMissionClockScheduler } from '../../lib/useMissionClockScheduler';
 import {
   dispatchPersistenceAdapter,
@@ -69,6 +79,8 @@ import type { DispatchRealtimeStatus } from '../../lib/dispatchRealtimeAdapter';
 import { getDispatchContextTypeLabel } from '../../lib/dispatchContextAdapter';
 import {
   incrementECSPerformanceCounter,
+  measureECSPerformanceSync,
+  recordECSPerformanceRender,
   startECSPerformanceSpan,
 } from '../../lib/performance/ecsPerformanceDiagnostics';
 import { convoyTrackingStore } from '../../stores/convoyTrackingStore';
@@ -120,6 +132,8 @@ export interface DispatchMissionCommandBoardProps {
 const RESOLVED_PAGE_SIZE = 12;
 const OPEN_SECTION_WINDOW_SIZE = 24;
 const COMMAND_EVENT_DETAIL_LIMIT = 50;
+const COMMAND_EVENT_DETAIL_PAGE_SIZE = 16;
+const ACTION_SINGLE_FLIGHT_HOLD_MS = 600;
 
 type OpenMissionCommandSectionId = Exclude<MissionCommandBoardSectionPresentation['id'], 'resolved'>;
 
@@ -233,13 +247,18 @@ function DispatchMissionCommandBoard({
   onStatusMessage,
   testID = 'dispatch-mission-command-board',
 }: DispatchMissionCommandBoardProps) {
-  const { width, height } = useWindowDimensions();
-  const isLandscape = width > height;
-  const outerShellOwnsScrolling = !isLandscape && height < 820;
+  recordECSPerformanceRender('dispatch_ready', 'mission_command_board');
+  const { width, height, fontScale } = useWindowDimensions();
+  const layout = resolveMissionCommandBoardLayout({ width, height, fontScale });
+  const { isLandscape, outerShellOwnsScrolling } = layout;
   const [resolvedPage, setResolvedPage] = useState(0);
   const [openSectionLimits, setOpenSectionLimits] = useState(createOpenSectionLimits);
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [selectBoardPresentation] = useState(createMissionCommandBoardPresentationSelector);
+  const [actionFlight] = useState(createMissionCommandActionFlightGuard);
   const handledRequestedCommandIdRef = useRef<string | null>(null);
+  const actionReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [initialRenderSpan] = useState(() => startECSPerformanceSpan(
     'dispatch_ready',
     'mission_command_board_initial_render',
@@ -285,37 +304,40 @@ function DispatchMissionCommandBoard({
     projection.commands,
     soloMode,
   ]);
-  const missionClock = useMissionClockScheduler({
-    expeditionId,
-    deadlines: missionClockDeadlines,
-    enabled: hydrated && (hasActiveExpedition || soloMode) && canViewCommands,
-  });
   const presentationNow = useMemo(() => {
     void expeditionId;
     void persistenceRevision;
     return Date.now();
   }, [expeditionId, persistenceRevision]);
-  const model = useMemo(() => buildMissionCommandBoardPresentation({
-    commands: projection.commands,
-    events: projection.events,
-    now: presentationNow,
-    resolvedPage,
-    resolvedPageSize: RESOLVED_PAGE_SIZE,
-    enabled: true,
-    hasActiveExpedition,
-    soloMode,
-    canViewCommands,
-    canManageCommands,
-    canViewLinkedContext,
-    connectivity: {
-      online: isOnline,
-      offlineMode,
-      realtimeStatus,
-      queuedCount,
+  const model = useMemo(() => measureECSPerformanceSync(
+    'dispatch_ready',
+    'mission_command_board_model',
+    () => selectBoardPresentation({
+      commands: projection.commands,
+      events: projection.events,
+      now: presentationNow,
+      resolvedPage,
+      resolvedPageSize: RESOLVED_PAGE_SIZE,
+      enabled: true,
+      hasActiveExpedition,
+      soloMode,
+      canViewCommands,
+      canManageCommands,
+      canViewLinkedContext,
+      connectivity: {
+        online: isOnline,
+        offlineMode,
+        realtimeStatus,
+        queuedCount,
+      },
+      convoy,
+      persistenceStatus: loadResult.status,
+    }),
+    {
+      commandCount: projection.commands.length,
+      eventCount: projection.events.length,
     },
-    convoy,
-    persistenceStatus: loadResult.status,
-  }), [
+  ), [
     canManageCommands,
     canViewCommands,
     canViewLinkedContext,
@@ -330,6 +352,7 @@ function DispatchMissionCommandBoard({
     queuedCount,
     realtimeStatus,
     resolvedPage,
+    selectBoardPresentation,
     soloMode,
   ]);
   const visibleSections = useMemo(() => ({
@@ -379,8 +402,12 @@ function DispatchMissionCommandBoard({
     setResolvedPage(0);
     setOpenSectionLimits(createOpenSectionLimits());
     setSelectedCommandId(null);
+    actionFlight.reset();
+    setPendingActionKey(null);
+    if (actionReleaseTimerRef.current) clearTimeout(actionReleaseTimerRef.current);
+    actionReleaseTimerRef.current = null;
     handledRequestedCommandIdRef.current = null;
-  }, [expeditionId]);
+  }, [actionFlight, expeditionId]);
 
   useEffect(() => {
     if (!requestedCommandId) {
@@ -412,9 +439,29 @@ function DispatchMissionCommandBoard({
 
   useEffect(() => () => initialRenderSpan.cancel({ unmounted: true }), [initialRenderSpan]);
 
+  useEffect(() => () => {
+    if (actionReleaseTimerRef.current) clearTimeout(actionReleaseTimerRef.current);
+    actionReleaseTimerRef.current = null;
+    actionFlight.reset();
+  }, [actionFlight]);
+
   useEffect(() => {
     incrementECSPerformanceCounter('dispatch_ready', 'mission_command_board_model_updates');
   }, [persistenceRevision, resolvedPage]);
+
+  const releaseActionFlight = useCallback((actionKey: string) => {
+    if (!actionFlight.release(actionKey)) return;
+    if (actionReleaseTimerRef.current) clearTimeout(actionReleaseTimerRef.current);
+    actionReleaseTimerRef.current = null;
+    setPendingActionKey(null);
+  }, [actionFlight]);
+
+  const holdActionFlightThroughTapWindow = useCallback((actionKey: string) => {
+    if (actionReleaseTimerRef.current) clearTimeout(actionReleaseTimerRef.current);
+    actionReleaseTimerRef.current = setTimeout(() => {
+      releaseActionFlight(actionKey);
+    }, ACTION_SINGLE_FLIGHT_HOLD_MS);
+  }, [releaseActionFlight]);
 
   const applyAction = useCallback((actionId: MissionCommandBoardActionId, command: MissionCommand) => {
     const personalAction = command.target.kind === 'solo';
@@ -453,30 +500,46 @@ function DispatchMissionCommandBoard({
       return;
     }
 
+    const actionKey = `${command.id}:${actionId}`;
+    if (!actionFlight.tryAcquire(actionKey)) {
+      onStatusMessage?.('A Mission Command action is already being recorded.');
+      return;
+    }
+    setPendingActionKey(actionKey);
+
     const commit = () => {
-      const result = transitionForBoardAction(actionId, command, actor);
-      if (!result) {
-        onStatusMessage?.('This action is not available for the current command state.');
-        return;
+      try {
+        const result = transitionForBoardAction(actionId, command, actor);
+        if (!result) {
+          onStatusMessage?.('This action is not available for the current command state.');
+          releaseActionFlight(actionKey);
+          return;
+        }
+        if (!result.ok) {
+          onStatusMessage?.(result.reason);
+          releaseActionFlight(actionKey);
+          return;
+        }
+        if (!result.changed) {
+          onStatusMessage?.(personalAction
+            ? 'Personal action is already in that state.'
+            : 'Mission Command is already in that state.');
+          releaseActionFlight(actionKey);
+          return;
+        }
+        dispatchPersistenceAdapter.applyMissionCommandMutation(
+          expeditionId,
+          persistenceDefaults,
+          result.command,
+          result.event,
+        );
+        onCommandMutation?.(result);
+        onStatusMessage?.(`${result.command.title}: ${actionResultLabel(actionId)}.`);
+        holdActionFlightThroughTapWindow(actionKey);
+      } catch {
+        releaseActionFlight(actionKey);
+        onStatusMessage?.('Mission Command could not record that action. Review local storage and retry.');
       }
-      if (!result.ok) {
-        onStatusMessage?.(result.reason);
-        return;
-      }
-      if (!result.changed) {
-        onStatusMessage?.(personalAction
-          ? 'Personal action is already in that state.'
-          : 'Mission Command is already in that state.');
-        return;
-      }
-      dispatchPersistenceAdapter.applyMissionCommandMutation(
-        expeditionId,
-        persistenceDefaults,
-        result.command,
-        result.event,
-      );
-      onCommandMutation?.(result);
-      onStatusMessage?.(`${result.command.title}: ${actionResultLabel(actionId)}.`);
     };
 
     if (actionId === 'cancel') {
@@ -486,15 +549,21 @@ function DispatchMissionCommandBoard({
           ? 'This records a local cancellation. It does not contact, notify, or transmit to anyone.'
           : 'This records an explicit cancellation in the command history. It does not contact or notify emergency services.',
         [
-          { text: personalAction ? 'Keep Action' : 'Keep Command', style: 'cancel' },
+          {
+            text: personalAction ? 'Keep Action' : 'Keep Command',
+            style: 'cancel',
+            onPress: () => releaseActionFlight(actionKey),
+          },
           { text: personalAction ? 'Cancel Action' : 'Cancel Command', style: 'destructive', onPress: commit },
         ],
+        { onDismiss: () => releaseActionFlight(actionKey) },
       );
       return;
     }
     commit();
   }, [
     actor,
+    actionFlight,
     canManageCommands,
     canViewLinkedContext,
     expeditionId,
@@ -504,6 +573,8 @@ function DispatchMissionCommandBoard({
     onRequestFollowUp,
     onViewLinkedContext,
     persistenceDefaults,
+    holdActionFlightThroughTapWindow,
+    releaseActionFlight,
   ]);
 
   const openCommand = useCallback((commandId: string) => {
@@ -529,10 +600,13 @@ function DispatchMissionCommandBoard({
 
   const content = (
     <View style={[styles.content, isLandscape ? styles.contentLandscape : null]}>
-      <MissionCommandBoardHeader
+      <MissionCommandClockBoundary
+        expeditionId={expeditionId}
+        deadlines={missionClockDeadlines}
+        enabled={hydrated && (hasActiveExpedition || soloMode) && canViewCommands}
         summary={model.summary}
-        missionClock={missionClock}
         isLandscape={isLandscape}
+        compactHeader={layout.compactHeader}
         soloMode={soloMode}
         canCreateCommands={canCreateCommands}
         onCreateCommand={onCreateCommand}
@@ -543,10 +617,6 @@ function DispatchMissionCommandBoard({
         onOpenSmartRally={onOpenSmartRally}
         onOpenCommsPlan={onOpenCommsPlan}
         onOpenIncidentRoom={onOpenIncidentRoom}
-      />
-
-      <DispatchMissionClockPanel
-        snapshot={missionClock}
         onOpenCommand={openCommand}
       />
 
@@ -643,6 +713,7 @@ function DispatchMissionCommandBoard({
         onAction={applyAction}
         onOpenIncidentRoom={onOpenIncidentRoomForCommand}
         onPrepareSoloCommandForTeam={onPrepareSoloCommandForTeam}
+        pendingActionKey={pendingActionKey}
       />
     </View>
   );
@@ -650,24 +721,11 @@ function DispatchMissionCommandBoard({
 
 export default React.memo(DispatchMissionCommandBoard);
 
-function MissionCommandBoardHeader({
-  summary,
-  missionClock,
-  isLandscape,
-  soloMode,
-  canCreateCommands,
-  onCreateCommand,
-  onOpenLostCommunications,
-  onOpenVehicleImmobilized,
-  onOpenRouteBlockage,
-  onOpenGuardianCheckIns,
-  onOpenSmartRally,
-  onOpenCommsPlan,
-  onOpenIncidentRoom,
-}: {
+interface MissionCommandBoardHeaderProps {
   summary: ReturnType<typeof buildMissionCommandBoardPresentation>['summary'];
-  missionClock: ReturnType<typeof useMissionClockScheduler>;
+  missionClock: MissionClockSnapshot;
   isLandscape: boolean;
+  compactHeader: boolean;
   soloMode: boolean;
   canCreateCommands: boolean;
   onCreateCommand?: () => void;
@@ -678,10 +736,61 @@ function MissionCommandBoardHeader({
   onOpenSmartRally?: () => void;
   onOpenCommsPlan?: () => void;
   onOpenIncidentRoom?: () => void;
-}) {
+}
+
+type MissionCommandClockBoundaryProps = Omit<MissionCommandBoardHeaderProps, 'missionClock'> & {
+  expeditionId: string;
+  deadlines: MissionClockDeadlineInput[];
+  enabled: boolean;
+  onOpenCommand: (commandId: string) => void;
+};
+
+const MissionCommandClockBoundary = React.memo(function MissionCommandClockBoundary({
+  expeditionId,
+  deadlines,
+  enabled,
+  onOpenCommand,
+  ...headerProps
+}: MissionCommandClockBoundaryProps) {
+  recordECSPerformanceRender('dispatch_ready', 'mission_clock_region');
+  const snapshot = useMissionClockScheduler({ expeditionId, deadlines, enabled });
+  const announcement = useMemo(
+    () => selectMissionCommandClockAnnouncement(snapshot),
+    [snapshot],
+  );
+
+  return (
+    <>
+      <ECSOperationalAnnouncer event={announcement} />
+      <MissionCommandBoardHeader {...headerProps} missionClock={snapshot} />
+      <DispatchMissionClockPanel snapshot={snapshot} onOpenCommand={onOpenCommand} />
+    </>
+  );
+});
+
+function MissionCommandBoardHeader({
+  summary,
+  missionClock,
+  isLandscape,
+  compactHeader,
+  soloMode,
+  canCreateCommands,
+  onCreateCommand,
+  onOpenLostCommunications,
+  onOpenVehicleImmobilized,
+  onOpenRouteBlockage,
+  onOpenGuardianCheckIns,
+  onOpenSmartRally,
+  onOpenCommsPlan,
+  onOpenIncidentRoom,
+}: MissionCommandBoardHeaderProps) {
   return (
     <View
-      style={[styles.header, isLandscape ? styles.headerLandscape : null]}
+      style={[
+        styles.header,
+        isLandscape ? styles.headerLandscape : null,
+        compactHeader ? styles.headerCompact : null,
+      ]}
       accessibilityRole="summary"
       accessibilityLabel={[
         soloMode ? 'Personal Mission Command Board' : 'Mission Command Command Board',
@@ -692,13 +801,13 @@ function MissionCommandBoardHeader({
         summary.connectionLabel,
       ].join('. ')}
     >
-      <View style={styles.headingRow}>
+      <View style={[styles.headingRow, compactHeader ? styles.headingRowCompact : null]}>
         <View style={styles.headingCopy}>
           <Text style={styles.eyebrow}>{soloMode ? 'SOLO OPERATIONS' : 'DISPATCH OPERATIONS'}</Text>
           <Text style={styles.missionTitle}>{soloMode ? 'PERSONAL COMMAND BOARD' : 'COMMAND BOARD'}</Text>
           <Text style={styles.boardTitle}>{soloMode ? 'LOCAL FIELD CONTROL' : 'ACTIVE EXPEDITION CONTROL'}</Text>
         </View>
-        <View style={styles.headerState}>
+        <View style={[styles.headerState, compactHeader ? styles.headerStateCompact : null]}>
           <ECSBadge
             label={summary.connectionLabel}
             tone={summary.connectionLabel.includes('unavailable') || summary.connectionLabel.includes('Offline')
@@ -866,7 +975,9 @@ const MissionCommandCard = React.memo(function MissionCommandCard({
   sourceTruthNow: number;
   onOpenCommand: (commandId: string) => void;
 }) {
+  recordECSPerformanceRender('dispatch_ready', 'mission_command_card');
   const sourcePolicy = card.command.sourceTruth[0]?.policyKey;
+  const deliveryBusy = card.deliveryState === 'sending' || card.deliveryState === 'retrying';
   return (
     <TouchableOpacity
       style={[
@@ -877,6 +988,7 @@ const MissionCommandCard = React.memo(function MissionCommandCard({
       accessibilityRole="button"
       accessibilityLabel={card.accessibilityLabel}
       accessibilityHint="Opens command details, history, source truth, and available actions."
+      accessibilityState={{ busy: deliveryBusy }}
       activeOpacity={0.8}
       onPress={() => onOpenCommand(card.commandId)}
     >
@@ -893,7 +1005,7 @@ const MissionCommandCard = React.memo(function MissionCommandCard({
         </View>
         <Ionicons name="chevron-forward" size={16} color={TACTICAL.textMuted} />
       </View>
-      <Text style={styles.commandTitle} numberOfLines={2}>{card.title}</Text>
+      <Text style={styles.commandTitle}>{card.title}</Text>
       <View style={styles.cardFacts}>
         <CardFact icon="locate-outline" label={card.targetLabel} />
         <CardFact icon="checkmark-done-outline" label={card.acknowledgmentLabel} />
@@ -928,19 +1040,22 @@ const MissionCommandCard = React.memo(function MissionCommandCard({
             card.deliveryState === 'failed' || card.deliveryState === 'queued'
               ? styles.deliveryLabelAttention
               : null,
-          ]} numberOfLines={1}>
+          ]} numberOfLines={2}>
             {card.deliveryLabel}
           </Text>
-          <Text style={styles.updatedLabel} numberOfLines={1}>{card.lastUpdateLabel}</Text>
+          <Text style={styles.updatedLabel} numberOfLines={2}>{card.lastUpdateLabel}</Text>
         </View>
       </View>
       <View style={styles.cardActionRow}>
         <Text style={styles.recommendedLabel}>NEXT</Text>
-        <Text style={styles.recommendedAction} numberOfLines={1}>{card.recommendedActionLabel}</Text>
+        <Text style={styles.recommendedAction} numberOfLines={2}>{card.recommendedActionLabel}</Text>
       </View>
     </TouchableOpacity>
   );
-});
+}, (previous, next) => (
+  previous.card.renderFingerprint === next.card.renderFingerprint
+  && previous.onOpenCommand === next.onOpenCommand
+));
 
 function CardFact({
   icon,
@@ -970,6 +1085,7 @@ function MissionCommandDetailSheet({
   onAction,
   onOpenIncidentRoom,
   onPrepareSoloCommandForTeam,
+  pendingActionKey,
 }: {
   card: MissionCommandCardPresentation | null;
   contextInspection: MissionCommandContextInspection | null;
@@ -979,6 +1095,7 @@ function MissionCommandDetailSheet({
   onAction: (actionId: MissionCommandBoardActionId, command: MissionCommand) => void;
   onOpenIncidentRoom?: (command: MissionCommand) => void;
   onPrepareSoloCommandForTeam?: (command: MissionCommand) => void;
+  pendingActionKey: string | null;
 }) {
   if (!card) return null;
   const command = card.command;
@@ -1019,6 +1136,7 @@ function MissionCommandDetailSheet({
               variant="secondary"
               size="medium"
               onPress={() => onPrepareSoloCommandForTeam(command)}
+              disabled={Boolean(pendingActionKey)}
               accessibilityLabel="Prepare this personal action as a local team command draft"
             />
           ) : null}
@@ -1026,6 +1144,8 @@ function MissionCommandDetailSheet({
             <DetailActionButton
               action={card.allowedActions[0]}
               onPress={() => onAction(card.allowedActions[0].id, command)}
+              loading={pendingActionKey === commandActionKey(command.id, card.allowedActions[0].id)}
+              disabled={Boolean(pendingActionKey) && pendingActionKey !== commandActionKey(command.id, card.allowedActions[0].id)}
               grow
             />
           ) : null}
@@ -1143,18 +1263,7 @@ function MissionCommandDetailSheet({
         </DetailSection>
 
         <DetailSection title="Command History" icon="time-outline">
-          {events.length === 0 ? (
-            <Text style={styles.emptyDetail}>No command events recorded yet.</Text>
-          ) : events.map((event) => (
-            <View key={event.id} style={styles.historyRow}>
-              <View style={styles.historyDot} />
-              <View style={styles.historyCopy}>
-                <Text style={styles.historyTitle}>{formatEventType(event.type)}</Text>
-                <Text style={styles.historySummary}>{event.summary}</Text>
-              </View>
-              <Text style={styles.historyTime}>{formatTimestamp(event.occurredAt)}</Text>
-            </View>
-          ))}
+          <MissionCommandHistory key={command.id} events={events} />
         </DetailSection>
 
         {command.resolution ? (
@@ -1179,6 +1288,8 @@ function MissionCommandDetailSheet({
                       }
                     : action}
                   onPress={() => onAction(action.id, command)}
+                  loading={pendingActionKey === commandActionKey(command.id, action.id)}
+                  disabled={Boolean(pendingActionKey) && pendingActionKey !== commandActionKey(command.id, action.id)}
                 />
               ))}
             </View>
@@ -1190,6 +1301,7 @@ function MissionCommandDetailSheet({
               variant="secondary"
               size="compact"
               onPress={() => onOpenIncidentRoom(command)}
+              disabled={Boolean(pendingActionKey)}
               accessibilityHint={getMissionCommandIncidentId(command)
                 ? 'Opens the canonical Incident and Recovery record linked to this command.'
                 : 'Requests explicit confirmation before creating a canonical Incident and Recovery record.'}
@@ -1247,10 +1359,14 @@ function DetailActionButton({
   action,
   onPress,
   grow = false,
+  loading = false,
+  disabled = false,
 }: {
   action: MissionCommandBoardActionModel;
   onPress: () => void;
   grow?: boolean;
+  loading?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <ECSButton
@@ -1260,8 +1376,53 @@ function DetailActionButton({
       size="medium"
       grow={grow}
       onPress={onPress}
+      loading={loading}
+      disabled={disabled}
     />
   );
+}
+
+function MissionCommandHistory({ events }: { events: MissionCommandEvent[] }) {
+  const [visibleCount, setVisibleCount] = useState(COMMAND_EVENT_DETAIL_PAGE_SIZE);
+  const window = windowMissionCommandTimeline(events, visibleCount, COMMAND_EVENT_DETAIL_LIMIT);
+  if (events.length === 0) {
+    return <Text style={styles.emptyDetail}>No command events recorded yet.</Text>;
+  }
+  return (
+    <View accessibilityRole="list" accessibilityLabel={`${events.length} command history events`}>
+      {window.items.map((event) => (
+        <View
+          key={event.id}
+          style={styles.historyRow}
+          accessible
+          accessibilityLabel={`${formatEventType(event.type)}. ${event.summary}. ${formatTimestamp(event.occurredAt)}.`}
+        >
+          <View style={styles.historyDot} accessibilityElementsHidden />
+          <View style={styles.historyCopy}>
+            <Text style={styles.historyTitle}>{formatEventType(event.type)}</Text>
+            <Text style={styles.historySummary}>{event.summary}</Text>
+          </View>
+          <Text style={styles.historyTime}>{formatTimestamp(event.occurredAt)}</Text>
+        </View>
+      ))}
+      {window.hasMore ? (
+        <ECSButton
+          label={`Show More History (${events.length - visibleCount})`}
+          icon="chevron-down-outline"
+          variant="tertiary"
+          size="compact"
+          onPress={() => setVisibleCount((current) => (
+            Math.min(events.length, current + COMMAND_EVENT_DETAIL_PAGE_SIZE)
+          ))}
+          accessibilityHint="Adds the next bounded page of command history events."
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function commandActionKey(commandId: string, actionId: MissionCommandBoardActionId): string {
+  return `${commandId}:${actionId}`;
 }
 
 function useDispatchPersistenceRevision(expeditionId: string): number {
@@ -1536,11 +1697,18 @@ const styles = StyleSheet.create({
   headerLandscape: {
     paddingVertical: 8,
   },
+  headerCompact: {
+    paddingHorizontal: 10,
+  },
   headingRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  headingRowCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
   },
   headingCopy: {
     flex: 1,
@@ -1571,6 +1739,11 @@ const styles = StyleSheet.create({
     maxWidth: '48%',
     alignItems: 'flex-end',
     gap: 5,
+  },
+  headerStateCompact: {
+    width: '100%',
+    maxWidth: '100%',
+    alignItems: 'stretch',
   },
   convoySummary: {
     color: TACTICAL.textMuted,

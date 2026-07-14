@@ -65,6 +65,15 @@ const TABLES = [
   'dispatch_acknowledgments',
   'dispatch_timeline_events',
   'dispatch_restricted_locations',
+  'dispatch_mission_commands',
+  'dispatch_mission_command_targets',
+  'dispatch_mission_command_acknowledgments',
+  'dispatch_mission_command_events',
+  'dispatch_mission_playbook_instances',
+  'dispatch_mission_playbook_steps',
+  'dispatch_mission_playbook_events',
+  'dispatch_mission_deadlines',
+  'dispatch_mission_incident_links',
 ];
 
 function timestamp(index = 0) {
@@ -89,6 +98,10 @@ function snapshot(overrides = {}) {
     assistRequests: [],
     acknowledgments: [],
     timelineEvents: [],
+    missionCommands: [],
+    missionCommandEvents: [],
+    operationalPlaybooks: [],
+    guardianCheckIns: [],
     offlineActions: [],
     cadEvents: [],
     updatedAt: timestamp(),
@@ -104,6 +117,10 @@ function defaults() {
     assistRequests: [],
     acknowledgments: [],
     timelineEvents: [],
+    missionCommands: [],
+    missionCommandEvents: [],
+    operationalPlaybooks: [],
+    guardianCheckIns: [],
     offlineActions: [],
     cadEvents: [],
   };
@@ -178,8 +195,8 @@ class SharedCanonicalState {
   constructor() {
     this.tables = new Map(TABLES.map((table) => [table, []]));
     this.members = [
-      { id: MEMBER_A, userId: USER_A, callsign: 'LEAD', role: 'lead', revokedAt: null },
-      { id: MEMBER_B, userId: USER_B, callsign: 'TWO', role: 'member', revokedAt: null },
+      { id: MEMBER_A, userId: USER_A, callsign: 'LEAD', role: 'lead', missionCommandAccess: 'inherit', revokedAt: null },
+      { id: MEMBER_B, userId: USER_B, callsign: 'TWO', role: 'member', missionCommandAccess: 'inherit', revokedAt: null },
     ];
     this.revision = 0;
     this.idCounter = 0;
@@ -310,6 +327,19 @@ class InMemoryCanonicalBackend {
       .sort((left, right) => left.server_revision - right.server_revision)
       .slice(0, limit)
       .map((row) => ({ ...row })));
+  }
+
+  async findRowByClientId(table, context, clientId) {
+    if (!this.activeMember()) return failure('permission_denied', 'row-level security denied expedition read');
+    if (context.expeditionId !== EXPEDITION_ID || context.convoyId !== CONVOY_ID) {
+      return failure('scope_mismatch', 'dispatch_scope_mismatch');
+    }
+    const row = this.shared.rows(table).find((candidate) => (
+      candidate.expedition_id === context.expeditionId
+      && candidate.convoy_id === context.convoyId
+      && candidate.client_id === clientId
+    ));
+    return success(row ? { ...row } : null);
   }
 
   subscribe(context, handlers) {
@@ -480,7 +510,11 @@ async function main() {
   assert.strictEqual(realtimeDiagnostics.realtimeNotifications, 100);
   assert.ok(realtimeDiagnostics.coalescedRealtimeNotifications >= 99);
   assert.strictEqual(realtimeHydrations, 1, 'A notification burst should produce one coalesced hydration.');
-  assert.strictEqual(shared.fetchCalls - fetchCallsBefore, 7, 'One hydration should fetch each canonical table once.');
+  assert.strictEqual(
+    shared.fetchCalls - fetchCallsBefore,
+    TABLES.length,
+    'One hydration should fetch each canonical table once.',
+  );
   assert.strictEqual(shared.subscribers.size, 0, 'Unsubscribe must release the realtime listener.');
   assert.strictEqual(realtimeDiagnostics.outstandingJobs, 0);
 

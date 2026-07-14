@@ -189,7 +189,10 @@ async function main() {
   assert.strictEqual(pgtap.evidenceClass, 'behavioral');
   assert.strictEqual(pgtap.evidenceQuality, 'authoritative');
   assert.strictEqual(pgtap.workflowEvidence.resultContract, 'ecs-pgtap-workflow-evidence-v1');
-  assert.strictEqual(pgtap.workflowEvidence.requiredSuiteIds.length, 4);
+  assert.strictEqual(pgtap.workflowEvidence.requiredSuiteIds.length, 5);
+  assert.ok(pgtap.workflowEvidence.requiredSuiteIds.includes(
+    'supabase/tests/database/rls_mission_command_canonical.test.sql',
+  ));
   assert.strictEqual(policy.timingPolicy.baselinePath, 'config/verification-timing-baseline.json');
   assert.ok(policy.timingPolicy.enforceLanes.includes('pr-fast'));
   assert.ok(policy.timingPolicy.enforceLanes.includes('release-candidate'));

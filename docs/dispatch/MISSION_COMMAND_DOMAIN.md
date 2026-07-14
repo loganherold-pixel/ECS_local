@@ -27,9 +27,24 @@ Deterministic application logic owns command eligibility, transitions, deadlines
 - `components/dispatch/DispatchMissionClockPanel.tsx` renders the next-deadline metric, bounded chronological list, and deadline detail sheet from a typed clock snapshot.
 - `components/dispatch/DispatchMissionCommandComposer.tsx` is the single gated creation, reassignment, and follow-up sheet. It receives typed catalogs and callbacks; it does not read stores or decide permissions.
 - `components/dispatch/DispatchOperationalPlaybookRunner.tsx` is a reusable, store-free runner sheet. It emits typed user intents and cannot mutate state, create commands, or transmit commands.
-- `lib/dispatchPersistenceAdapter.ts` remains the authoritative local Dispatch store. Schema version 5 adds `guardianCheckIns` while preserving the version 4 Operational Playbook fields, version 3 Mission Command fields, and all legacy records.
+- `lib/dispatchPersistenceAdapter.ts` remains the authoritative local Dispatch store. Schema version 7 adds durable Operational Playbook outbox actions and conservative recovery of malformed Mission outbox records while preserving all legacy records.
+- `lib/dispatchMissionCommandCanonicalAdapter.ts` maps the local command, event, playbook, deadline, incident-link, and restricted-location contracts into the additive canonical Dispatch schema without exposing restricted coordinates in ordinary rows.
+- `lib/dispatchCanonicalRepository.ts` and `lib/dispatchCanonicalMigrationCoordinator.ts` own the default-off Supabase shadow path. Server reads cannot mutate Mission Command state in this rollout.
 
-No Supabase table or remote write path is added by this foundation.
+## Runtime ownership
+
+- `dispatchMissionCommandRuntime.ts` coordinates hydration, foreground replay, background flush, account or expedition generation changes, and privacy-safe diagnostics. It does not own a second command store.
+- Team command mutations enqueue one stable `mission_command` operation and an ordered `mission_command_event` operation. Repeated writes with the same command version or event identity converge on the same operation IDs.
+- Solo reminders remain `local`; they never enter the realtime outbox and never acquire fabricated sent, delivered, or acknowledged state.
+- Reconciliation is field-specific. Operational state, delivery state, assignments, acknowledgments, deadlines, resolution, and append-only events do not share a generic last-write-wins rule. Valid late acknowledgments are preserved while stale core updates cannot reopen terminal commands.
+- Realtime remains an internal, rollout-gated delivery path. Additive canonical Mission Command tables are available only through the separate default-off shadow flag; local state remains authoritative.
+
+## Retention and diagnostics
+
+- Mission Commands are bounded to 250 and Mission events to 750. Dispatch offline operations remain bounded to 300, with exhausted retry records retained only inside that cap.
+- Runtime diagnostics expose counts, safe codes, timestamps, schema version, realtime status, and subscription count only. Account IDs, expedition IDs, coordinates, traces, command text, and provider payloads are omitted.
+
+Canonical persistence is documented in `docs/dispatch/MISSION_COMMAND_CANONICAL_PERSISTENCE.md`. It extends existing Dispatch membership, ordering, receipt, privacy, and RLS boundaries rather than creating a parallel backend.
 
 ## State Model
 
@@ -98,13 +113,13 @@ Restricted linked context retains the restriction marker but drops coordinates, 
 
 When a command reaches a terminal state through the Command Board, Mission Command may append one redacted `manual_note` to the matching active expedition timeline. The note contains only command ID/type, terminal outcome, bounded summary, occurrence time, and an idempotency key. Expedition mismatch, duplicate handoff, and nonterminal commands produce no write.
 
-The version 4 to version 5 persistence migration is additive, as were the version 3 to version 4 Operational Playbook migration and version 2 to version 3 Mission Command migration:
+The local schema version 7 migration is additive, as were the Guardian Check-In, Operational Playbook, and original Mission Command migrations:
 
 1. Existing pings, queue items, assignments, assists, acknowledgments, timeline, outbox, and CAD records are retained.
 2. Missing Mission Command, Operational Playbook, and Guardian Check-In arrays initialize empty.
 3. Invalid Mission Command, Operational Playbook, or Guardian Check-In records are dropped without deleting valid legacy Dispatch data; the load result reports partial recovery.
 4. Explicit adapters can create canonical aggregates when the rollout is enabled; hydration does not silently duplicate legacy records.
-5. Operational rollback uses `EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND`; this hides the internal UI without rewriting v5 data. A binary rollback to a v4 reader preserves legacy Dispatch fields but does not understand `guardianCheckIns` and may discard that collection on a later write, so it requires a storage backup or acceptance that v5-only plans will be lost.
+5. Operational rollback uses `EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND`; this hides the internal UI without rewriting version 7 data. Backend rollback additionally uses `EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND_BACKEND` and disables canonical modes before running the scoped SQL rollback. An older binary does not understand all Mission outbox metadata, so Mission replay must be disabled before it writes the snapshot.
 
 ## Rollout
 
@@ -117,7 +132,7 @@ Feature ID: `dispatch_mission_command`
 - Kill switch: `EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND`
 - Offline support: full local operation
 - Route registration: none
-- Backend dependency: none; Command Board delivery remains local/queued unless an existing approved Dispatch path confirms delivery
+- Backend dependency: local operation requires none. A separate restricted-field-test feature, `dispatch_mission_command_backend`, may shadow to additive Supabase tables but is default off and cannot influence product reads.
 - Operational Playbook visibility: framework uses this same master flag; no scenario definitions are registered or mounted by this task
 
 The feature registry and Dispatch rollout selector must both approve the capability. Production fails closed even if the enable flag is set. The enabled internal UI keeps compact access to Command Board, Team/Convoy, and Timeline/Events. Production visibility still requires separate privacy, multi-client, Android/iOS, field, and owner verification.

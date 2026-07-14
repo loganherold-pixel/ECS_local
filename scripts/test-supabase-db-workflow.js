@@ -31,7 +31,7 @@ assert(executor.includes("['test', 'db', '--local', ...requiredSuiteIds]"), 'The
 const pgtapCheck = policy.checks.find((check) => check.id === 'supabase-pgtap-rls');
 assert(pgtapCheck?.workflowEvidence, 'pgTAP check must define commit-bound workflow evidence policy.');
 assert.strictEqual(pgtapCheck.workflowEvidence.resultContract, 'ecs-pgtap-workflow-evidence-v1');
-assert.strictEqual(pgtapCheck.workflowEvidence.schemaTestConfigVersion, 'ecs-supabase-rls-v1');
+assert.strictEqual(pgtapCheck.workflowEvidence.schemaTestConfigVersion, 'ecs-supabase-rls-v2');
 assert.deepStrictEqual(
   [...pgtapCheck.workflowEvidence.requiredSuiteIds].sort(),
   fs.readdirSync(path.join(root, 'supabase', 'tests', 'database'))

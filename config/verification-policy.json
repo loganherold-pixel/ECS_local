@@ -2390,7 +2390,7 @@
       "executionEnvironment": "multi_client",
       "workflowEvidence": {
         "resultContract": "ecs-pgtap-workflow-evidence-v1",
-        "schemaTestConfigVersion": "ecs-supabase-rls-v1",
+        "schemaTestConfigVersion": "ecs-supabase-rls-v2",
         "configPaths": [
           "supabase/config.toml"
         ],
@@ -2399,7 +2399,8 @@
           "supabase/tests/database/010-trips-rls.test.sql",
           "supabase/tests/database/020-fleet-rls.test.sql",
           "supabase/tests/database/rls_convoy_tracking.test.sql",
-          "supabase/tests/database/rls_dispatch_canonical.test.sql"
+          "supabase/tests/database/rls_dispatch_canonical.test.sql",
+          "supabase/tests/database/rls_mission_command_canonical.test.sql"
         ],
         "maxAgeMs": 21600000
       }

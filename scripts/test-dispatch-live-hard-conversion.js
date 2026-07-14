@@ -507,8 +507,9 @@ assert.ok(commandCenterSource.includes('Recovery'), 'Dispatch action row should 
 assert.ok(!/>\s*More\s*<\/Text>/.test(commandCenterSource), 'Dispatch action row should not expose a vague More button.');
 assert.ok(
   commandCenterSource.includes('accessibilityLabel="Create recovery report"') &&
-    commandCenterSource.includes("onPress={() => openCommand('hazard')}"),
-  'Recovery action should open the hazard/recovery report panel directly from the header.',
+    commandCenterSource.includes("openMissionCommandComposer('recovery')") &&
+    commandCenterSource.includes("openCommand('hazard')"),
+  'Recovery action should open the Mission Command composer or the feature-off hazard/recovery fallback.',
 );
 assert.ok(commandCenterSource.includes('async function getCurrentPosition'), 'Recovery reports should attempt current GPS before event creation.');
 assert.ok(commandCenterSource.includes('Location.getCurrentPositionAsync'), 'Recovery reports should use native current-position GPS acquisition.');

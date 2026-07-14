@@ -1,5 +1,6 @@
 import { createDispatchEntityId, createDispatchIdempotencyKey } from './dispatchIntegrity';
 import { sanitizeSourceTruthRef } from './sourceTruth';
+import { reconcileMissionCommandRecords } from './dispatchMissionCommandReconciliation';
 import type { DispatchCoordinates, DispatchLinkedContext, DispatchPriority } from './dispatchTypes';
 import {
   MISSION_COMMAND_SCHEMA_VERSION,
@@ -469,11 +470,7 @@ export function mergeMissionCommand(commands: MissionCommand[], incoming: Missio
   if (index < 0) return boundCommands([...commands, normalized]);
 
   const current = commands[index];
-  if (!canApplyIncomingCommand(current, normalized)) return boundCommands(commands);
-  const selected = isIncomingCommandNewer(current, normalized) ? normalized : current;
-  const merged = selected === normalized
-    ? { ...normalized, id: current.id, idempotencyKey: current.idempotencyKey }
-    : selected;
+  const merged = reconcileMissionCommandRecords(current, normalized).command;
   return boundCommands(commands.map((item, itemIndex) => (itemIndex === index ? merged : item)));
 }
 
@@ -793,20 +790,6 @@ function normalizeAcknowledgment(item: MissionCommandAcknowledgment): MissionCom
     message: boundedOptionalText(item.message, 500),
     sourceAcknowledgmentId: boundedOptionalText(item.sourceAcknowledgmentId, 180),
   };
-}
-
-function isIncomingCommandNewer(current: MissionCommand, incoming: MissionCommand): boolean {
-  if (incoming.version !== current.version) return incoming.version > current.version;
-  return compareIso(incoming.updatedAt, current.updatedAt) > 0;
-}
-
-function canApplyIncomingCommand(current: MissionCommand, incoming: MissionCommand): boolean {
-  if (!isIncomingCommandNewer(current, incoming)) return true;
-  const operationalAllowed = current.operationalState === incoming.operationalState ||
-    MISSION_COMMAND_OPERATIONAL_TRANSITIONS[current.operationalState].has(incoming.operationalState);
-  const deliveryAllowed = current.deliveryState === incoming.deliveryState ||
-    MISSION_COMMAND_DELIVERY_TRANSITIONS[current.deliveryState].has(incoming.deliveryState);
-  return operationalAllowed && deliveryAllowed;
 }
 
 function boundCommands(commands: MissionCommand[]): MissionCommand[] {

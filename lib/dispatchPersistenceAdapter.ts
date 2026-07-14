@@ -50,7 +50,8 @@ import type {
 } from './dispatchTypes';
 
 const STORAGE_FILE = 'ecs_dispatch_persistence';
-const STORAGE_VERSION = 5;
+export const DISPATCH_PERSISTENCE_SCHEMA_VERSION = 7 as const;
+const STORAGE_VERSION = DISPATCH_PERSISTENCE_SCHEMA_VERSION;
 const DISPATCH_CAD_EVENT_PERSISTENCE_LIMIT = 300;
 const persistence = createPersistedKeyValueCache(STORAGE_FILE);
 const persistenceListeners = new Set<(expeditionId: string) => void>();
@@ -136,6 +137,32 @@ function normalizeSnapshot(
   }
 
   const candidate = raw as Partial<DispatchPersistenceSnapshot>;
+  const missionCommands = Array.isArray(candidate.missionCommands)
+    ? migrateMissionCommands(candidate.version, candidate.missionCommands)
+    : [...(defaults.missionCommands ?? [])];
+  const missionCommandEvents = Array.isArray(candidate.missionCommandEvents)
+    ? candidate.missionCommandEvents
+    : [...(defaults.missionCommandEvents ?? [])];
+  const operationalPlaybooks = Array.isArray(candidate.operationalPlaybooks)
+    ? candidate.operationalPlaybooks
+    : [...(defaults.operationalPlaybooks ?? [])];
+  const persistedOfflineActions = Array.isArray(candidate.offlineActions)
+    ? candidate.offlineActions.map(normalizeOfflineAction).filter(isPresent)
+    : [...(defaults.offlineActions ?? [])];
+  const offlineActionsNeedRecovery = !Array.isArray(candidate.offlineActions)
+    || persistedOfflineActions.length !== candidate.offlineActions.length;
+  const migratedMissionActions = (
+    typeof candidate.version !== 'number'
+    || candidate.version < STORAGE_VERSION
+    || offlineActionsNeedRecovery
+  )
+    ? deriveMigratedMissionOfflineActions(
+        expeditionId,
+        missionCommands,
+        missionCommandEvents,
+        operationalPlaybooks,
+      )
+    : [];
   return dedupeSnapshot({
     version: STORAGE_VERSION,
     expeditionId,
@@ -151,24 +178,16 @@ function normalizeSnapshot(
     timelineEvents: Array.isArray(candidate.timelineEvents)
       ? candidate.timelineEvents
       : [...defaults.timelineEvents],
-    offlineActions: Array.isArray(candidate.offlineActions)
-      ? candidate.offlineActions.map(normalizeOfflineAction)
-      : [...(defaults.offlineActions ?? [])],
+    offlineActions: [...persistedOfflineActions, ...migratedMissionActions],
     cadEvents: Array.isArray(candidate.cadEvents)
       ? candidate.cadEvents
       : [...(defaults.cadEvents ?? [])],
-    missionCommands: Array.isArray(candidate.missionCommands)
-      ? candidate.missionCommands
-      : [...(defaults.missionCommands ?? [])],
-    missionCommandEvents: Array.isArray(candidate.missionCommandEvents)
-      ? candidate.missionCommandEvents
-      : [...(defaults.missionCommandEvents ?? [])],
+    missionCommands,
+    missionCommandEvents,
     guardianCheckIns: Array.isArray(candidate.guardianCheckIns)
       ? candidate.guardianCheckIns
       : [...(defaults.guardianCheckIns ?? [])],
-    operationalPlaybooks: Array.isArray(candidate.operationalPlaybooks)
-      ? candidate.operationalPlaybooks
-      : [...(defaults.operationalPlaybooks ?? [])],
+    operationalPlaybooks,
     updatedAt: typeof candidate.updatedAt === 'string'
       ? candidate.updatedAt
       : new Date().toISOString(),
@@ -202,13 +221,21 @@ function loadSnapshotResult(
     const invalidGuardianCheckInCount = Array.isArray(candidate?.guardianCheckIns)
       ? Math.max(0, candidate.guardianCheckIns.length - snapshot.guardianCheckIns.length)
       : 0;
+    const invalidOfflineActionCount = Array.isArray(candidate?.offlineActions)
+      ? Math.max(0, candidate.offlineActions.length - snapshot.offlineActions.filter((action) => (
+          candidate.offlineActions?.some((raw) => (
+            raw && typeof raw === 'object' && (raw as Partial<DispatchQueuedOfflineAction>).id === action.id
+          ))
+        )).length)
+      : 0;
     const invalidPlaybookCount = Array.isArray(candidate?.operationalPlaybooks)
       ? Math.max(0, candidate.operationalPlaybooks.length - snapshot.operationalPlaybooks.length)
       : 0;
     const futureSchema = typeof candidate?.version === 'number' && candidate.version > STORAGE_VERSION;
     const recovered = futureSchema || invalidMissionCommandCount > 0 || invalidMissionEventCount > 0 ||
       invalidGuardianCheckInCount > 0 ||
-      invalidPlaybookCount > 0;
+      invalidPlaybookCount > 0 ||
+      invalidOfflineActionCount > 0;
     return {
       snapshot,
       status: recovered ? 'recovered' : 'ready',
@@ -270,7 +297,7 @@ function dedupeSnapshot(snapshot: DispatchPersistenceSnapshot): DispatchPersiste
     operationalPlaybooks: mergeOperationalPlaybookInstanceBatch(snapshot.operationalPlaybooks ?? []),
   };
   const mergedOfflineActions = mergeDispatchOfflineActionBatch([
-    ...snapshot.offlineActions.map(normalizeOfflineAction),
+    ...snapshot.offlineActions.map(normalizeOfflineAction).filter(isPresent),
     ...deriveOfflineActions(normalized),
   ]);
   return {
@@ -291,15 +318,116 @@ function normalizePersistedPing(ping: DispatchPing): DispatchPing {
   };
 }
 
-function normalizeOfflineAction(action: DispatchQueuedOfflineAction): DispatchQueuedOfflineAction {
+function normalizeOfflineAction(action: unknown): DispatchQueuedOfflineAction | null {
+  if (!action || typeof action !== 'object') return null;
+  const candidate = action as Partial<DispatchQueuedOfflineAction>;
+  if (
+    typeof candidate.id !== 'string' || !candidate.id.trim() ||
+    typeof candidate.idempotencyKey !== 'string' || !candidate.idempotencyKey.trim() ||
+    typeof candidate.actionType !== 'string' || !candidate.actionType.trim() ||
+    typeof candidate.createdAt !== 'string' || !Number.isFinite(Date.parse(candidate.createdAt)) ||
+    !isOfflineActionEntityType(candidate.entityType) ||
+    !isOfflineActionStatus(candidate.status)
+  ) {
+    return null;
+  }
+  const status = candidate.status === 'replaying' ? 'queued' : candidate.status;
+  const attempts = Number.isFinite(candidate.attemptCount)
+    ? Math.max(0, Math.floor(candidate.attemptCount as number))
+    : 0;
+  const maxAttempts = Number.isFinite(candidate.maxAttempts)
+    ? Math.max(1, Math.min(10, Math.floor(candidate.maxAttempts as number)))
+    : 5;
+  const version = Number.isFinite(candidate.version)
+    ? Math.max(1, Math.floor(candidate.version as number))
+    : 1;
+  const dependencyIds = Array.isArray(candidate.dependsOnOperationIds)
+    ? candidate.dependsOnOperationIds
+    : [];
   return {
-    ...action,
-    version: action.version ?? 1,
-    status: action.status === 'replaying' ? 'queued' : action.status,
-    updatedAt: action.updatedAt ?? action.createdAt,
-    attemptCount: Math.max(0, action.attemptCount ?? 0),
-    maxAttempts: Math.max(1, Math.min(10, action.maxAttempts ?? 5)),
+    id: candidate.id,
+    idempotencyKey: candidate.idempotencyKey,
+    entityType: candidate.entityType,
+    actionType: candidate.actionType,
+    createdAt: candidate.createdAt,
+    sourceEntityId: typeof candidate.sourceEntityId === 'string' ? candidate.sourceEntityId : undefined,
+    version,
+    status,
+    updatedAt: normalizeIso(candidate.updatedAt) ?? candidate.createdAt,
+    attemptCount: attempts,
+    maxAttempts,
+    retryability: candidate.retryability === 'non_retryable' || attempts >= maxAttempts
+      ? 'non_retryable'
+      : 'retryable',
+    dependsOnOperationIds: [...new Set(dependencyIds)]
+      .filter((operationId) => typeof operationId === 'string' && operationId.length > 0 && operationId !== candidate.id)
+      .sort(),
+    nextAttemptAt: normalizeIso(candidate.nextAttemptAt),
+    replayedAt: normalizeIso(candidate.replayedAt),
+    lastErrorCode: normalizeSafeCode(candidate.lastErrorCode),
+    lastError: normalizeSafeDiagnostic(candidate.lastError),
+    cancelledAt: normalizeIso(candidate.cancelledAt),
   };
+}
+
+function migrateMissionCommands(version: number | undefined, commands: MissionCommand[]): MissionCommand[] {
+  if (typeof version === 'number' && version >= 6) return commands;
+  return commands.map((raw) => {
+    if (!raw || typeof raw !== 'object') return raw;
+    const command = raw as Partial<MissionCommand>;
+    if (command.deliveryState !== 'local' || command.target?.kind === 'solo') return raw;
+    return {
+      ...command,
+      version: Math.max(1, Number(command.version) || 1) + 1,
+      deliveryState: 'queued',
+    } as MissionCommand;
+  });
+}
+
+function deriveMigratedMissionOfflineActions(
+  expeditionId: string,
+  missionCommands: MissionCommand[],
+  missionCommandEvents: MissionCommandEvent[],
+  operationalPlaybooks: OperationalPlaybookInstance[],
+): DispatchQueuedOfflineAction[] {
+  const actions: DispatchQueuedOfflineAction[] = [];
+  const normalizedCommands = mergeMissionCommandBatch(missionCommands);
+  const normalizedEvents = mergeMissionCommandEventBatch(missionCommandEvents);
+  const replayable = (state: string | null | undefined) => (
+    state === 'queued' || state === 'failed' || state === 'retrying'
+  );
+  normalizedCommands
+    .filter((command) => command.target.kind !== 'solo' && replayable(command.deliveryState))
+    .forEach((command) => {
+      const event = normalizedEvents.find((candidate) => (
+        candidate.commandId === command.id && replayable(candidate.deliveryState)
+      )) ?? null;
+      addMissionCommandActions(actions, expeditionId, command, event);
+    });
+  normalizedEvents
+    .filter((event) => replayable(event.deliveryState))
+    .forEach((event) => {
+      const command = normalizedCommands.find((candidate) => candidate.id === event.commandId);
+      if (!command || command.target.kind === 'solo') return;
+      const existing = actions.some((action) => (
+        action.entityType === 'mission_command_event' && action.sourceEntityId === event.id
+      ));
+      if (existing) return;
+      const commandAction = actions.find((action) => (
+        action.entityType === 'mission_command' && action.sourceEntityId === command.id
+      ));
+      addMissionCommandEventAction(
+        actions,
+        expeditionId,
+        command,
+        event,
+        commandAction ? [commandAction.id] : [],
+      );
+    });
+  mergeOperationalPlaybookInstanceBatch(operationalPlaybooks).forEach((instance) => {
+    addOperationalPlaybookAction(actions, expeditionId, instance);
+  });
+  return actions;
 }
 
 function deriveOfflineActions(snapshot: Omit<DispatchPersistenceSnapshot, 'offlineActions'>): DispatchQueuedOfflineAction[] {
@@ -329,12 +457,120 @@ function deriveOfflineActions(snapshot: Omit<DispatchPersistenceSnapshot, 'offli
   return actions;
 }
 
+function addMissionCommandActions(
+  actions: DispatchQueuedOfflineAction[],
+  expeditionId: string,
+  command: MissionCommand,
+  event: MissionCommandEvent | null,
+): DispatchQueuedOfflineAction[] {
+  if (command.target.kind === 'solo' || command.expeditionId !== expeditionId) return actions;
+  const commandAction = createDispatchOfflineAction({
+    expeditionId,
+    entityType: 'mission_command',
+    actionType: `upsert:mission_command:v${command.version}`,
+    sourceEntityId: command.id,
+    sourceIdempotencyKey: command.idempotencyKey,
+    createdAt: command.updatedAt,
+  });
+  const supersededOperationIds = new Set(actions
+    .filter((action) => (
+      action.entityType === 'mission_command' &&
+      action.sourceEntityId === command.id &&
+      action.id !== commandAction.id &&
+      (action.status === 'queued' || action.status === 'replaying' || action.status === 'failed')
+    ))
+    .map((action) => action.id));
+  if (supersededOperationIds.size > 0) {
+    for (let index = actions.length - 1; index >= 0; index -= 1) {
+      if (supersededOperationIds.has(actions[index].id)) actions.splice(index, 1);
+    }
+    for (let index = 0; index < actions.length; index += 1) {
+      const action = actions[index];
+      if (
+        action.entityType !== 'mission_command_event' ||
+        action.status === 'replayed' ||
+        action.status === 'cancelled' ||
+        !action.dependsOnOperationIds?.some((operationId) => supersededOperationIds.has(operationId))
+      ) {
+        continue;
+      }
+      actions[index] = {
+        ...action,
+        version: (action.version ?? 1) + 1,
+        updatedAt: command.updatedAt,
+        dependsOnOperationIds: [...new Set([
+          ...action.dependsOnOperationIds.filter((operationId) => !supersededOperationIds.has(operationId)),
+          commandAction.id,
+        ])].sort(),
+      };
+    }
+  }
+  actions.push(commandAction);
+  if (event && event.expeditionId === expeditionId && event.commandId === command.id) {
+    addMissionCommandEventAction(actions, expeditionId, command, event, [commandAction.id]);
+  }
+  return actions;
+}
+
+function addMissionCommandEventAction(
+  actions: DispatchQueuedOfflineAction[],
+  expeditionId: string,
+  command: MissionCommand,
+  event: MissionCommandEvent,
+  dependsOnOperationIds: string[],
+): void {
+  if (command.target.kind === 'solo' || event.commandId !== command.id) return;
+  actions.push(createDispatchOfflineAction({
+    expeditionId,
+    entityType: 'mission_command_event',
+    actionType: `append:mission_command_event:${event.id}`,
+    sourceEntityId: event.id,
+    sourceIdempotencyKey: event.idempotencyKey,
+    createdAt: event.occurredAt,
+    dependsOnOperationIds,
+  }));
+}
+
+function addOperationalPlaybookAction(
+  actions: DispatchQueuedOfflineAction[],
+  expeditionId: string,
+  instance: OperationalPlaybookInstance,
+): void {
+  if (instance.expeditionId !== expeditionId) return;
+  const next = createDispatchOfflineAction({
+    expeditionId,
+    entityType: 'mission_playbook_instance',
+    actionType: `upsert:mission_playbook_instance:v${instance.version}`,
+    sourceEntityId: instance.id,
+    sourceIdempotencyKey: instance.idempotencyKey,
+    createdAt: instance.updatedAt,
+  });
+  for (let index = actions.length - 1; index >= 0; index -= 1) {
+    const current = actions[index];
+    if (
+      current.entityType === 'mission_playbook_instance'
+      && current.sourceEntityId === instance.id
+      && current.id !== next.id
+      && current.status !== 'replayed'
+      && current.status !== 'cancelled'
+    ) actions.splice(index, 1);
+  }
+  actions.push(next);
+}
+
 function reconcileOfflineActions(
   snapshot: Omit<DispatchPersistenceSnapshot, 'offlineActions'>,
   actions: DispatchQueuedOfflineAction[],
 ): DispatchQueuedOfflineAction[] {
   return actions.map((action) => {
     if (action.status === 'replayed' || action.status === 'cancelled') return action;
+    if (
+      action.entityType === 'mission_command'
+      || action.entityType === 'mission_command_event'
+      || action.entityType === 'mission_playbook_instance'
+    ) {
+      return action;
+    }
     const source = getOfflineActionSource(snapshot, action);
     if (!source) return action;
     if (
@@ -395,6 +631,10 @@ function getOfflineActionSource(
       const source = find(snapshot.timelineEvents);
       return source ? { deliveryState: source.deliveryState ?? 'local', updatedAt: source.occurredAt } : null;
     }
+    case 'mission_command':
+    case 'mission_command_event':
+    case 'mission_playbook_instance':
+      return null;
     default:
       return null;
   }
@@ -429,6 +669,10 @@ function mergeDispatchCadEvents(events: unknown[]): DispatchEvent[] {
 export const dispatchPersistenceAdapter = {
   waitForHydration(): Promise<void> {
     return persistence.waitForHydration();
+  },
+
+  flush(): Promise<void> {
+    return persistence.flush();
   },
 
   load(
@@ -567,15 +811,19 @@ export const dispatchPersistenceAdapter = {
     command: MissionCommand,
     event: MissionCommandEvent | null,
   ): DispatchPersistenceSnapshot {
-    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
-      ...snapshot,
-      missionCommands: command.expeditionId === expeditionId
-        ? mergeMissionCommand(snapshot.missionCommands, command)
-        : snapshot.missionCommands,
-      missionCommandEvents: event && event.expeditionId === expeditionId
-        ? appendMissionCommandEventRecord(snapshot.missionCommandEvents, event)
-        : snapshot.missionCommandEvents,
-    }));
+    return updateSnapshot(expeditionId, defaults, (snapshot) => {
+      if (command.expeditionId !== expeditionId) return snapshot;
+      const offlineActions = [...snapshot.offlineActions];
+      addMissionCommandActions(offlineActions, expeditionId, command, event);
+      return {
+        ...snapshot,
+        missionCommands: mergeMissionCommand(snapshot.missionCommands, command),
+        missionCommandEvents: event && event.expeditionId === expeditionId
+          ? appendMissionCommandEventRecord(snapshot.missionCommandEvents, event)
+          : snapshot.missionCommandEvents,
+        offlineActions: mergeDispatchOfflineActionBatch(offlineActions),
+      };
+    });
   },
 
   upsertGuardianCheckIn(
@@ -598,18 +846,25 @@ export const dispatchPersistenceAdapter = {
     command: MissionCommand,
     event: MissionCommandEvent,
   ): DispatchPersistenceSnapshot {
-    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
-      ...snapshot,
-      guardianCheckIns: plan.expeditionId === expeditionId
-        ? mergeGuardianCheckInPlan(snapshot.guardianCheckIns, plan)
-        : snapshot.guardianCheckIns,
-      missionCommands: command.expeditionId === expeditionId
-        ? mergeMissionCommand(snapshot.missionCommands, command)
-        : snapshot.missionCommands,
-      missionCommandEvents: event.expeditionId === expeditionId
-        ? appendMissionCommandEventRecord(snapshot.missionCommandEvents, event)
-        : snapshot.missionCommandEvents,
-    }));
+    return updateSnapshot(expeditionId, defaults, (snapshot) => {
+      const offlineActions = [...snapshot.offlineActions];
+      if (command.expeditionId === expeditionId) {
+        addMissionCommandActions(offlineActions, expeditionId, command, event);
+      }
+      return {
+        ...snapshot,
+        guardianCheckIns: plan.expeditionId === expeditionId
+          ? mergeGuardianCheckInPlan(snapshot.guardianCheckIns, plan)
+          : snapshot.guardianCheckIns,
+        missionCommands: command.expeditionId === expeditionId
+          ? mergeMissionCommand(snapshot.missionCommands, command)
+          : snapshot.missionCommands,
+        missionCommandEvents: event.expeditionId === expeditionId
+          ? appendMissionCommandEventRecord(snapshot.missionCommandEvents, event)
+          : snapshot.missionCommandEvents,
+        offlineActions: mergeDispatchOfflineActionBatch(offlineActions),
+      };
+    });
   },
 
   upsertOperationalPlaybook(
@@ -617,12 +872,17 @@ export const dispatchPersistenceAdapter = {
     defaults: DispatchPersistenceDefaults,
     instance: OperationalPlaybookInstance,
   ): DispatchPersistenceSnapshot {
-    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
-      ...snapshot,
-      operationalPlaybooks: instance.expeditionId === expeditionId
-        ? mergeOperationalPlaybookInstance(snapshot.operationalPlaybooks, instance)
-        : snapshot.operationalPlaybooks,
-    }));
+    return updateSnapshot(expeditionId, defaults, (snapshot) => {
+      const offlineActions = [...snapshot.offlineActions];
+      addOperationalPlaybookAction(offlineActions, expeditionId, instance);
+      return {
+        ...snapshot,
+        operationalPlaybooks: instance.expeditionId === expeditionId
+          ? mergeOperationalPlaybookInstance(snapshot.operationalPlaybooks, instance)
+          : snapshot.operationalPlaybooks,
+        offlineActions: mergeDispatchOfflineActionBatch(offlineActions),
+      };
+    });
   },
 
   applyOperationalPlaybookMutation(
@@ -630,12 +890,17 @@ export const dispatchPersistenceAdapter = {
     defaults: DispatchPersistenceDefaults,
     instance: OperationalPlaybookInstance,
   ): DispatchPersistenceSnapshot {
-    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
-      ...snapshot,
-      operationalPlaybooks: instance.expeditionId === expeditionId
-        ? mergeOperationalPlaybookInstance(snapshot.operationalPlaybooks, instance)
-        : snapshot.operationalPlaybooks,
-    }));
+    return updateSnapshot(expeditionId, defaults, (snapshot) => {
+      const offlineActions = [...snapshot.offlineActions];
+      addOperationalPlaybookAction(offlineActions, expeditionId, instance);
+      return {
+        ...snapshot,
+        operationalPlaybooks: instance.expeditionId === expeditionId
+          ? mergeOperationalPlaybookInstance(snapshot.operationalPlaybooks, instance)
+          : snapshot.operationalPlaybooks,
+        offlineActions: mergeDispatchOfflineActionBatch(offlineActions),
+      };
+    });
   },
 
   upsertCadEvent(
@@ -687,3 +952,44 @@ export const dispatchPersistenceAdapter = {
     }));
   },
 };
+
+function normalizeSafeCode(value: unknown): string | undefined {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9._-]{0,79}$/.test(normalized) ? normalized : undefined;
+}
+
+function normalizeSafeDiagnostic(value: unknown): string | undefined {
+  const normalized = String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 160);
+  return normalized || undefined;
+}
+
+function normalizeIso(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  return Number.isFinite(Date.parse(value)) ? value : undefined;
+}
+
+function isOfflineActionEntityType(
+  value: unknown,
+): value is DispatchQueuedOfflineAction['entityType'] {
+  return [
+    'ping',
+    'queue_item',
+    'assignment',
+    'assist_request',
+    'acknowledgment',
+    'timeline_event',
+    'mission_command',
+    'mission_command_event',
+    'mission_playbook_instance',
+  ].includes(String(value));
+}
+
+function isOfflineActionStatus(
+  value: unknown,
+): value is DispatchQueuedOfflineAction['status'] {
+  return ['queued', 'replaying', 'replayed', 'failed', 'cancelled'].includes(String(value));
+}
+
+function isPresent<T>(value: T | null | undefined): value is T {
+  return value != null;
+}

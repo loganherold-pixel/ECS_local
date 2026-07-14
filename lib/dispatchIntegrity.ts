@@ -115,6 +115,7 @@ export function createDispatchOfflineAction(input: {
   sourceIdempotencyKey?: string;
   createdAt?: string;
   maxAttempts?: number;
+  dependsOnOperationIds?: string[];
 }): DispatchQueuedOfflineAction {
   const createdAt = input.createdAt ?? new Date().toISOString();
   const idempotencyKey = createDispatchIdempotencyKey({
@@ -123,8 +124,9 @@ export function createDispatchOfflineAction(input: {
     actionType: input.actionType ?? `upsert:${input.entityType}`,
     sourceEntityId: input.sourceIdempotencyKey ?? input.sourceEntityId,
   });
+  const id = createDispatchEntityId('offline_action', idempotencyKey);
   return {
-    id: createDispatchEntityId('offline_action', idempotencyKey),
+    id,
     idempotencyKey,
     version: 1,
     entityType: input.entityType,
@@ -134,6 +136,10 @@ export function createDispatchOfflineAction(input: {
     status: 'queued',
     attemptCount: 0,
     maxAttempts: Math.max(1, Math.min(10, input.maxAttempts ?? 5)),
+    retryability: 'retryable',
+    dependsOnOperationIds: [...new Set(input.dependsOnOperationIds ?? [])]
+      .filter((operationId) => operationId && operationId !== id)
+      .sort(),
     sourceEntityId: input.sourceEntityId,
   };
 }
@@ -535,19 +541,55 @@ function mergeOfflineActionRecord(
   current: DispatchQueuedOfflineAction,
   next: DispatchQueuedOfflineAction,
 ): DispatchQueuedOfflineAction {
-  if (current.status === 'replayed' || current.status === 'cancelled') {
+  const terminal = current.status === 'replayed' || next.status === 'replayed'
+    ? (current.status === 'replayed' ? current : next)
+    : current.status === 'cancelled' || next.status === 'cancelled'
+      ? (current.status === 'cancelled' ? current : next)
+      : null;
+  if (terminal) {
     return {
-      ...current,
+      ...terminal,
       version: Math.max(current.version ?? 0, next.version ?? 0),
       updatedAt: maxIso(current.updatedAt ?? current.createdAt, next.updatedAt ?? next.createdAt),
+      replayedAt: terminal.status === 'replayed'
+        ? maxIso(
+            current.replayedAt ?? terminal.replayedAt ?? terminal.updatedAt ?? terminal.createdAt,
+            next.replayedAt ?? terminal.replayedAt ?? terminal.updatedAt ?? terminal.createdAt,
+          )
+        : undefined,
+      nextAttemptAt: undefined,
     };
   }
 
   const base = pickNewestRecord(current, next);
+  const manualRetryReset = base.status === 'queued' && (base.attemptCount ?? 0) === 0 && (
+    current.status === 'failed' || next.status === 'failed'
+  );
+  if (manualRetryReset) {
+    return {
+      ...base,
+      attemptCount: 0,
+      retryability: 'retryable',
+      nextAttemptAt: undefined,
+      lastError: undefined,
+      lastErrorCode: undefined,
+      dependsOnOperationIds: [...new Set([
+        ...(current.dependsOnOperationIds ?? []),
+        ...(next.dependsOnOperationIds ?? []),
+      ])].sort(),
+    };
+  }
   return {
     ...base,
     attemptCount: Math.max(current.attemptCount ?? 0, next.attemptCount ?? 0),
     maxAttempts: Math.max(current.maxAttempts ?? 0, next.maxAttempts ?? 0) || undefined,
+    dependsOnOperationIds: [...new Set([
+      ...(current.dependsOnOperationIds ?? []),
+      ...(next.dependsOnOperationIds ?? []),
+    ])].sort(),
+    retryability: current.retryability === 'non_retryable' || next.retryability === 'non_retryable'
+      ? 'non_retryable'
+      : 'retryable',
   };
 }
 

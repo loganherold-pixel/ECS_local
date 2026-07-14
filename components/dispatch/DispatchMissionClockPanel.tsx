@@ -54,7 +54,7 @@ export function MissionClockHeaderMetric({
       >
         {clock}
       </Text>
-      {next ? <Text style={styles.clockCommand} numberOfLines={1}>{next.title}</Text> : null}
+      {next ? <Text style={styles.clockCommand} numberOfLines={2}>{next.title}</Text> : null}
     </View>
   );
 }
@@ -171,9 +171,9 @@ function MissionClockDeadlineRow({
         <Text style={styles.deadlineAbsolute}>{formatTimestamp(deadline.dueAt)}</Text>
       </View>
       <View style={styles.deadlineCopy}>
-        <Text style={styles.deadlineTitle} numberOfLines={1}>{deadline.title}</Text>
+        <Text style={styles.deadlineTitle} numberOfLines={2}>{deadline.title}</Text>
         <Text style={styles.deadlineReason} numberOfLines={2}>{deadline.reason}</Text>
-        <Text style={styles.deadlineSource} numberOfLines={1}>{formatMissionClockSource(deadline.source)}</Text>
+        <Text style={styles.deadlineSource} numberOfLines={2}>{formatMissionClockSource(deadline.source)}</Text>
       </View>
       <ECSBadge label={statusLabel} tone={statusTone(deadline.status)} compact />
       <Ionicons name="chevron-forward-outline" size={14} color={TACTICAL.textMuted} />
@@ -401,6 +401,7 @@ const styles = StyleSheet.create({
   panelHeader: {
     minHeight: 30,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
@@ -453,8 +454,9 @@ const styles = StyleSheet.create({
     borderLeftColor: TACTICAL.danger,
   },
   deadlineTimeBlock: {
-    width: 90,
+    flexBasis: 90,
     minWidth: 76,
+    maxWidth: '30%',
   },
   deadlineClock: {
     color: TACTICAL.amber,

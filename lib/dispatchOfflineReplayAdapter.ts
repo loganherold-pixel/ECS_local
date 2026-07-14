@@ -30,6 +30,15 @@ import {
   markDispatchTimelineEventDeliveryResult,
 } from './dispatchSyncAdapter';
 import type { DispatchEvent } from './dispatchLiveEvents';
+import { mergeMissionCommand } from './dispatchMissionCommandDomain';
+import type { MissionCommand, MissionCommandEvent } from './dispatchMissionCommandTypes';
+import type { OperationalPlaybookInstance } from './dispatchOperationalPlaybookTypes';
+
+export type DispatchReplayPublishResult = boolean | {
+  ok: boolean;
+  retryable?: boolean;
+  safeCode?: string;
+};
 
 export interface DispatchReplayResult {
   snapshot: DispatchPersistenceSnapshot;
@@ -37,12 +46,13 @@ export interface DispatchReplayResult {
   replayed: number;
   failed: number;
   cancelled: number;
+  deferred: number;
 }
 
 export interface DispatchReplayInput {
   expeditionId: string;
   defaults: DispatchPersistenceDefaults;
-  publish: (event: DispatchRealtimeEventDraft) => Promise<boolean>;
+  publish: (event: DispatchRealtimeEventDraft) => Promise<DispatchReplayPublishResult>;
   persistCadEvent?: (event: DispatchEvent) => Promise<boolean>;
   persistCanonicalEntity?: (
     entity: DispatchCanonicalEntity,
@@ -51,6 +61,7 @@ export interface DispatchReplayInput {
   signal?: AbortSignal;
   maxActions?: number;
   now?: () => number;
+  entityTypes?: DispatchQueuedOfflineAction['entityType'][];
 }
 
 type PreparedReplayEntity =
@@ -59,9 +70,12 @@ type PreparedReplayEntity =
   | { type: 'assignment'; value: DispatchAssignment; draft: DispatchRealtimeEventDraft }
   | { type: 'assist_request'; value: DispatchAssistRequest; draft: DispatchRealtimeEventDraft }
   | { type: 'acknowledgment'; value: DispatchAcknowledgment; draft: DispatchRealtimeEventDraft }
-  | { type: 'timeline_event'; value: DispatchTimelineEvent; draft: DispatchRealtimeEventDraft };
+  | { type: 'timeline_event'; value: DispatchTimelineEvent; draft: DispatchRealtimeEventDraft }
+  | { type: 'mission_command'; value: MissionCommand; draft: DispatchRealtimeEventDraft }
+  | { type: 'mission_command_event'; value: MissionCommandEvent; draft: DispatchRealtimeEventDraft }
+  | { type: 'mission_playbook_instance'; value: OperationalPlaybookInstance; draft: DispatchRealtimeEventDraft };
 
-function toCanonicalEntity(prepared: PreparedReplayEntity): DispatchCanonicalEntity {
+function toCanonicalEntity(prepared: PreparedReplayEntity): DispatchCanonicalEntity | null {
   switch (prepared.type) {
     case 'ping':
       return { type: prepared.type, value: prepared.value };
@@ -75,12 +89,43 @@ function toCanonicalEntity(prepared: PreparedReplayEntity): DispatchCanonicalEnt
       return { type: prepared.type, value: prepared.value };
     case 'timeline_event':
       return { type: prepared.type, value: prepared.value };
+    case 'mission_command':
+      return { type: prepared.type, value: prepared.value };
+    case 'mission_command_event':
+      return { type: prepared.type, value: prepared.value };
+    case 'mission_playbook_instance':
+      return { type: prepared.type, value: prepared.value };
   }
 }
 
 const DEFAULT_MAX_REPLAY_ACTIONS = 100;
 const MAX_REPLAY_BACKOFF_MS = 5 * 60_000;
 const replayFlights = new Map<string, Promise<DispatchReplayResult>>();
+const missionShadowFlights = new Map<string, Promise<void>>();
+
+function enqueueMissionShadowWrite(
+  expeditionId: string,
+  persist: NonNullable<DispatchReplayInput['persistCanonicalEntity']>,
+  entity: DispatchCanonicalEntity,
+  action: DispatchQueuedOfflineAction,
+): void {
+  const previous = missionShadowFlights.get(expeditionId) ?? Promise.resolve();
+  const flight = previous
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        await persist(entity, action);
+      } catch {
+        // Shadow persistence is diagnostic-only and cannot affect delivery.
+      }
+    });
+  missionShadowFlights.set(expeditionId, flight);
+  void flight.finally(() => {
+    if (missionShadowFlights.get(expeditionId) === flight) {
+      missionShadowFlights.delete(expeditionId);
+    }
+  });
+}
 
 function shouldReplayCadEvent(event: DispatchEvent): boolean {
   return event.syncState === 'queued' || event.syncState === 'failed' || event.syncState === 'sending';
@@ -88,6 +133,7 @@ function shouldReplayCadEvent(event: DispatchEvent): boolean {
 
 function shouldReplayAction(action: DispatchQueuedOfflineAction, nowMs: number): boolean {
   if (action.status !== 'queued' && action.status !== 'failed') return false;
+  if (action.retryability === 'non_retryable') return false;
   if ((action.attemptCount ?? 0) >= (action.maxAttempts ?? 5)) return false;
   const nextAttemptMs = Date.parse(action.nextAttemptAt ?? '');
   return !Number.isFinite(nextAttemptMs) || nextAttemptMs <= nowMs;
@@ -104,14 +150,14 @@ async function publishCadEvent(
     await publish({
       type: 'cad_event_upsert',
       cadEvent: { ...cadEvent, syncState: 'received' },
-    }).catch(() => false);
+    }).then(normalizePublishResult).catch(() => ({ ok: false }));
     return true;
   }
 
   return publish({
     type: 'cad_event_upsert',
     cadEvent: { ...cadEvent, syncState: 'received' },
-  });
+  }).then((result) => normalizePublishResult(result).ok);
 }
 
 export function replayQueuedDispatchActions(input: DispatchReplayInput): Promise<DispatchReplayResult> {
@@ -136,22 +182,49 @@ async function runReplay({
   signal,
   maxActions = DEFAULT_MAX_REPLAY_ACTIONS,
   now = Date.now,
+  entityTypes,
 }: DispatchReplayInput): Promise<DispatchReplayResult> {
   let snapshot = dispatchPersistenceAdapter.load(expeditionId, defaults);
   let attempted = 0;
   let replayed = 0;
   let failed = 0;
   let cancelled = 0;
+  let deferred = 0;
+  const allowedEntityTypes = entityTypes ? new Set(entityTypes) : null;
   const replayLimit = Math.max(1, Math.min(DEFAULT_MAX_REPLAY_ACTIONS, maxActions));
   const candidates = snapshot.offlineActions
+    .filter((action) => (!allowedEntityTypes || allowedEntityTypes.has(action.entityType)))
     .filter((action) => shouldReplayAction(action, now()))
-    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    .sort(compareReplayOrder)
     .slice(0, replayLimit);
 
-  for (const action of candidates) {
+  for (const candidate of candidates) {
     if (signal?.aborted) {
       cancelled += 1;
       break;
+    }
+
+    snapshot = dispatchPersistenceAdapter.load(expeditionId, defaults);
+    const action = snapshot.offlineActions.find((item) => item.id === candidate.id);
+    if (!action || !shouldReplayAction(action, now())) continue;
+
+    const dependencyState = getDependencyState(snapshot.offlineActions, action);
+    if (dependencyState === 'waiting') {
+      deferred += 1;
+      continue;
+    }
+    if (dependencyState === 'blocked') {
+      attempted += 1;
+      failed += 1;
+      snapshot = updateOfflineAction(snapshot, transitionOfflineAction(action, 'failed', {
+        retryability: 'non_retryable',
+        lastErrorCode: 'dispatch_replay_dependency_failed',
+        lastError: 'A required Dispatch operation did not complete.',
+        nextAttemptAt: undefined,
+        updatedAt: new Date(now()).toISOString(),
+      }));
+      snapshot = dispatchPersistenceAdapter.save(snapshot);
+      continue;
     }
 
     const replaying = transitionOfflineAction(action, 'replaying', {
@@ -165,34 +238,72 @@ async function runReplay({
     if (!prepared) {
       attempted += 1;
       failed += 1;
-      snapshot = updateOfflineAction(snapshot, markOfflineActionResult(replaying, false, now(), 'Dispatch replay source is unavailable.'));
+      snapshot = updateOfflineAction(snapshot, markOfflineActionResult(
+        replaying,
+        { ok: false, retryable: false, safeCode: 'dispatch_replay_source_unavailable' },
+        now(),
+        'Dispatch replay source is unavailable.',
+      ));
       snapshot = dispatchPersistenceAdapter.save(snapshot);
       continue;
     }
 
     attempted += 1;
-    let ok = false;
+    let publishResult: Required<Pick<Exclude<DispatchReplayPublishResult, boolean>, 'ok'>> & {
+      retryable?: boolean;
+      safeCode?: string;
+    } = { ok: false, retryable: true, safeCode: 'dispatch_delivery_failed' };
     try {
-      const canonicalStored = persistCanonicalEntity
-        ? await persistCanonicalEntity(toCanonicalEntity(prepared), action)
-        : true;
-      ok = canonicalStored && await publish(prepared.draft);
-    } catch {
-      ok = false;
+      const canonicalEntity = toCanonicalEntity(prepared);
+      const missionShadowWrite = canonicalEntity && (
+        canonicalEntity.type === 'mission_command'
+        || canonicalEntity.type === 'mission_command_event'
+        || canonicalEntity.type === 'mission_playbook_instance'
+      );
+      if (missionShadowWrite) {
+        // Mission canonical persistence is shadow-only. A backend mismatch or
+        // outage must never change local/realtime operational delivery.
+        publishResult = normalizePublishResult(await publish(prepared.draft));
+        if (persistCanonicalEntity) {
+          enqueueMissionShadowWrite(
+            expeditionId,
+            persistCanonicalEntity,
+            canonicalEntity,
+            action,
+          );
+        }
+      } else {
+        const canonicalStored = persistCanonicalEntity && canonicalEntity
+          ? await persistCanonicalEntity(canonicalEntity, action)
+          : true;
+        publishResult = canonicalStored
+          ? normalizePublishResult(await publish(prepared.draft))
+          : { ok: false, retryable: true, safeCode: 'dispatch_canonical_write_failed' };
+      }
+    } catch (error) {
+      publishResult = classifyReplayError(error);
     }
 
-    if (ok) replayed += 1;
+    if (publishResult.ok) replayed += 1;
     else failed += 1;
-    snapshot = applyReplayResult(snapshot, prepared, ok, new Date(now()).toISOString());
+    // A command may change while transport is awaiting a provider. Reconcile
+    // against the latest local snapshot so replay never overwrites that edit.
+    snapshot = dispatchPersistenceAdapter.load(expeditionId, defaults);
+    snapshot = applyReplayResult(snapshot, prepared, publishResult.ok, new Date(now()).toISOString());
     snapshot = updateOfflineAction(
       snapshot,
-      markOfflineActionResult(replaying, ok, now(), ok ? undefined : 'Dispatch delivery failed.'),
+      markOfflineActionResult(
+        replaying,
+        publishResult,
+        now(),
+        publishResult.ok ? undefined : 'Dispatch delivery failed.',
+      ),
     );
     snapshot = dispatchPersistenceAdapter.save(snapshot);
   }
 
   const remainingBudget = Math.max(0, replayLimit - attempted);
-  if (!signal?.aborted && remainingBudget > 0) {
+  if (!allowedEntityTypes && !signal?.aborted && remainingBudget > 0) {
     const nextCadEvents: DispatchEvent[] = [];
     let cadBudget = remainingBudget;
     for (let eventIndex = 0; eventIndex < snapshot.cadEvents.length; eventIndex += 1) {
@@ -221,7 +332,7 @@ async function runReplay({
     });
   }
 
-  return { snapshot, attempted, replayed, failed, cancelled };
+  return { snapshot, attempted, replayed, failed, cancelled, deferred };
 }
 
 function prepareReplayEntity(
@@ -298,6 +409,43 @@ function prepareReplayEntity(
       };
       return { type: 'timeline_event', value, draft: { type: 'timeline_event_added', timelineEvent: value } };
     }
+    case 'mission_command': {
+      const source = find(snapshot.missionCommands);
+      if (!source || source.target.kind === 'solo') return null;
+      const value: MissionCommand = source.deliveryState === 'delivered'
+        ? source
+        : {
+            ...source,
+            deliveryState: 'sent',
+            updatedAt,
+            version: source.version + 1,
+          };
+      return {
+        type: 'mission_command',
+        value,
+        draft: { type: 'mission_command_upsert', missionCommand: value },
+      };
+    }
+    case 'mission_command_event': {
+      const source = find(snapshot.missionCommandEvents);
+      if (!source) return null;
+      const command = snapshot.missionCommands.find((item) => item.id === source.commandId);
+      if (!command || command.target.kind === 'solo') return null;
+      return {
+        type: 'mission_command_event',
+        value: source,
+        draft: { type: 'mission_command_event_added', missionCommandEvent: source },
+      };
+    }
+    case 'mission_playbook_instance': {
+      const source = find(snapshot.operationalPlaybooks);
+      if (!source) return null;
+      return {
+        type: 'mission_playbook_instance',
+        value: source,
+        draft: { type: 'mission_playbook_upsert', missionPlaybook: source },
+      };
+    }
     default:
       return null;
   }
@@ -352,6 +500,21 @@ function applyReplayResult(
           markDispatchTimelineEventDeliveryResult(prepared.value, ok),
         ),
       };
+    case 'mission_command':
+      return {
+        ...snapshot,
+        missionCommands: mergeMissionCommand(snapshot.missionCommands, ok
+          ? prepared.value
+          : {
+              ...prepared.value,
+              deliveryState: prepared.value.deliveryState === 'delivered' ? 'delivered' : 'failed',
+              updatedAt,
+              version: prepared.value.version + 1,
+            }),
+      };
+    case 'mission_command_event':
+    case 'mission_playbook_instance':
+      return snapshot;
   }
 }
 
@@ -372,19 +535,23 @@ function transitionOfflineAction(
 
 function markOfflineActionResult(
   action: DispatchQueuedOfflineAction,
-  ok: boolean,
+  result: { ok: boolean; retryable?: boolean; safeCode?: string },
   nowMs: number,
   error?: string,
 ): DispatchQueuedOfflineAction {
   const attemptCount = (action.attemptCount ?? 0) + 1;
-  const nextAttemptAt = ok
+  const exhausted = attemptCount >= (action.maxAttempts ?? 5);
+  const retryable = !result.ok && result.retryable !== false && !exhausted;
+  const nextAttemptAt = result.ok || !retryable
     ? undefined
     : new Date(nowMs + Math.min(MAX_REPLAY_BACKOFF_MS, 3_000 * (2 ** Math.max(0, attemptCount - 1)))).toISOString();
-  return transitionOfflineAction(action, ok ? 'replayed' : 'failed', {
+  return transitionOfflineAction(action, result.ok ? 'replayed' : 'failed', {
     attemptCount,
     lastError: error,
+    lastErrorCode: result.ok ? undefined : normalizeSafeCode(result.safeCode) ?? 'dispatch_delivery_failed',
+    retryability: result.ok || retryable ? 'retryable' : 'non_retryable',
     nextAttemptAt,
-    replayedAt: ok ? new Date(nowMs).toISOString() : undefined,
+    replayedAt: result.ok ? new Date(nowMs).toISOString() : undefined,
     updatedAt: new Date(nowMs).toISOString(),
   });
 }
@@ -397,4 +564,122 @@ function updateOfflineAction(
     ...snapshot,
     offlineActions: mergeDispatchOfflineAction(snapshot.offlineActions, action),
   };
+}
+
+export function retryDispatchOfflineOperation(
+  expeditionId: string,
+  defaults: DispatchPersistenceDefaults,
+  operationId: string,
+  now = Date.now,
+): DispatchQueuedOfflineAction {
+  const snapshot = dispatchPersistenceAdapter.load(expeditionId, defaults);
+  const current = snapshot.offlineActions.find((action) => action.id === operationId);
+  if (!current || current.status !== 'failed') {
+    throw new Error('Dispatch operation is not available for retry.');
+  }
+  const next = transitionOfflineAction(current, 'queued', {
+    attemptCount: 0,
+    retryability: 'retryable',
+    nextAttemptAt: undefined,
+    lastError: undefined,
+    lastErrorCode: undefined,
+    updatedAt: new Date(now()).toISOString(),
+  });
+  dispatchPersistenceAdapter.save(updateOfflineAction(snapshot, next));
+  return next;
+}
+
+export function cancelDispatchOfflineOperation(
+  expeditionId: string,
+  defaults: DispatchPersistenceDefaults,
+  operationId: string,
+  now = Date.now,
+): DispatchQueuedOfflineAction {
+  const snapshot = dispatchPersistenceAdapter.load(expeditionId, defaults);
+  const current = snapshot.offlineActions.find((action) => action.id === operationId);
+  if (!current || (current.status !== 'queued' && current.status !== 'failed')) {
+    throw new Error('Dispatch operation is not available for cancellation.');
+  }
+  const cancelledAt = new Date(now()).toISOString();
+  const next = transitionOfflineAction(current, 'cancelled', {
+    cancelledAt,
+    updatedAt: cancelledAt,
+    nextAttemptAt: undefined,
+  });
+  dispatchPersistenceAdapter.save(updateOfflineAction(snapshot, next));
+  return next;
+}
+
+function getDependencyState(
+  actions: DispatchQueuedOfflineAction[],
+  action: DispatchQueuedOfflineAction,
+): 'ready' | 'waiting' | 'blocked' {
+  if (!action.dependsOnOperationIds?.length) return 'ready';
+  let waiting = false;
+  for (const operationId of action.dependsOnOperationIds) {
+    const dependency = actions.find((candidate) => candidate.id === operationId);
+    if (!dependency) return 'blocked';
+    if (dependency.status === 'replayed') continue;
+    if (
+      dependency.status === 'cancelled' ||
+      dependency.retryability === 'non_retryable' ||
+      (dependency.attemptCount ?? 0) >= (dependency.maxAttempts ?? 5)
+    ) {
+      return 'blocked';
+    }
+    waiting = true;
+  }
+  return waiting ? 'waiting' : 'ready';
+}
+
+function compareReplayOrder(
+  left: DispatchQueuedOfflineAction,
+  right: DispatchQueuedOfflineAction,
+): number {
+  if (right.dependsOnOperationIds?.includes(left.id)) return -1;
+  if (left.dependsOnOperationIds?.includes(right.id)) return 1;
+  return Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id);
+}
+
+function normalizePublishResult(result: DispatchReplayPublishResult): {
+  ok: boolean;
+  retryable?: boolean;
+  safeCode?: string;
+} {
+  if (typeof result === 'boolean') {
+    return result
+      ? { ok: true }
+      : { ok: false, retryable: true, safeCode: 'dispatch_delivery_failed' };
+  }
+  return {
+    ok: result.ok === true,
+    retryable: result.ok ? undefined : result.retryable !== false,
+    safeCode: normalizeSafeCode(result.safeCode),
+  };
+}
+
+function classifyReplayError(error: unknown): {
+  ok: false;
+  retryable: boolean;
+  safeCode: string;
+} {
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const rawCode = normalizeSafeCode(record.code) ?? normalizeSafeCode(record.name);
+  const nonRetryableCodes = new Set([
+    'permission_denied',
+    'validation_error',
+    'scope_mismatch',
+    'unsupported',
+    'not_authorized',
+  ]);
+  return {
+    ok: false,
+    retryable: !rawCode || !nonRetryableCodes.has(rawCode),
+    safeCode: rawCode ? `dispatch_replay_${rawCode}` : 'dispatch_replay_unexpected',
+  };
+}
+
+function normalizeSafeCode(value: unknown): string | undefined {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9._-]{0,79}$/.test(normalized) ? normalized : undefined;
 }

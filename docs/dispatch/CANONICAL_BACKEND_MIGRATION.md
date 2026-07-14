@@ -8,7 +8,7 @@ The feature registry classifies `dispatch_canonical_backend` as `restricted_fiel
 
 ## Runtime Flow
 
-1. A permitted Dispatch action is validated and written to the local version 4 snapshot. Default-off Mission Command and Operational Playbook fields remain local and are not part of this backend migration.
+1. A permitted Dispatch action is validated and written to the local version 7 snapshot. Default-off Mission Command and Operational Playbook records may use their separate shadow-only extension, but local state remains authoritative.
 2. The local adapter creates or updates a durable, idempotent outbox action.
 3. Replay resolves the signed-in actor and recipient aliases against active `convoy_members` rows.
 4. In `shadow` or `dual_read` mode, the typed repository upserts the canonical row through the signed-in Supabase client and RLS.
@@ -22,6 +22,8 @@ If any canonical write fails, the local action remains queued or failed for boun
 
 Migration: `supabase/migrations/20260713054719_dispatch_canonical_persistence.sql`
 
+Mission extension: `supabase/migrations/20260714195656_mission_command_canonical_persistence.sql`
+
 | Table | Ownership | Mutation model | Retention |
 | --- | --- | --- | --- |
 | `dispatch_pings` | Actor or command role | Versioned, tombstone capable | Completed/cancelled convoy, 90 days by default |
@@ -32,6 +34,8 @@ Migration: `supabase/migrations/20260713054719_dispatch_canonical_persistence.sq
 | `dispatch_timeline_events` | Active actor | Append-only audit history | Completed/cancelled convoy, 90 days by default |
 | `dispatch_restricted_locations` | Source actor; explicitly authorized readers | Append-only restricted record | Completed/cancelled convoy, 90 days by default |
 | `dispatch_operation_receipts` | Server trigger only | Append-only idempotency receipt | Completed/cancelled convoy, 30 days by default |
+
+The Mission extension adds canonical command aggregates, targets, acknowledgments, events, playbook instances/steps/events, absolute deadlines, and incident links. It reuses the receipt, revision, membership, and restricted-location infrastructure above. See `docs/dispatch/MISSION_COMMAND_CANONICAL_PERSISTENCE.md` for the complete table and permission contract.
 
 Every canonical entity has a server UUID, stable client ID, expedition and convoy scope, actor identity, explicit client/server timestamps, a server revision, and an idempotency key. Mutable entities require a monotonically increasing `state_version`. Same-version changes and older versions are rejected; byte-equivalent retries are idempotent.
 

@@ -1,5 +1,6 @@
 import { hydrateCustomPresets, hydrateDashboardState } from '../dashboardStore';
 import { waitForExpeditionStateHydration } from '../expeditionStateStore';
+import { dispatchPersistenceAdapter } from '../dispatchPersistenceAdapter';
 import { sanitizeLegacyVehicleFrameworkState } from '../fleet/legacyVehicleFrameworkStateMigration';
 import { createPersistedKeyValueCache } from '../keyValuePersistence';
 import { loadoutStore } from '../loadoutStore';
@@ -78,6 +79,13 @@ function optionalStartupTasks(timeoutMs: number): ECSStoreHydrationTask[] {
     {
       id: 'active_expedition',
       hydrate: () => waitForExpeditionStateHydration(),
+      timeoutMs,
+      required: false,
+    },
+    {
+      id: 'dispatch_local_runtime',
+      hydrate: () => dispatchPersistenceAdapter.waitForHydration(),
+      dependencies: ['active_expedition'],
       timeoutMs,
       required: false,
     },

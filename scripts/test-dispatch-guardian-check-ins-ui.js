@@ -45,7 +45,14 @@ assert.match(component, /applyGuardianCheckInDecision/);
 assert.match(commandCenter, /visible=\{missionCommandEnabled && guardianCheckInsVisible\}/);
 assert.match(commandCenter, /visible=\{missionCommandEnabled && guardianIncidentPrefill !== null\}/);
 
-assert.match(persistence, /const STORAGE_VERSION = 5/);
+const persistenceSchemaVersion = persistence.match(
+  /DISPATCH_PERSISTENCE_SCHEMA_VERSION = (\d+) as const/,
+);
+assert.ok(persistenceSchemaVersion, 'Dispatch persistence must export a numeric schema version');
+assert.ok(
+  Number(persistenceSchemaVersion[1]) >= 6,
+  'Guardian Check-Ins require Dispatch persistence schema version 6 or newer',
+);
 assert.match(persistence, /guardianCheckIns: GuardianCheckInPlan\[\]/);
 assert.match(persistence, /applyGuardianCheckInDecision/);
 assert.match(rollout, /missionCommand: false/);

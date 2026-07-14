@@ -3,6 +3,20 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createDispatchIdempotencyKey } from './dispatchIntegrity';
 import { deriveDispatchPingOperationalState } from './dispatchLifecycle';
 import { isSupabaseConfigured, supabase } from './supabase';
+import {
+  buildMissionCommandCanonicalPlan,
+  buildMissionCommandEventCanonicalWrite,
+  buildMissionPlaybookCanonicalPlan,
+  isDispatchMissionCanonicalEntity,
+  parseMissionCanonicalSnapshot,
+  canMissionCanonicalMemberParticipate,
+  type DispatchMissionCanonicalEntity,
+  type DispatchMissionCanonicalEntityType,
+  type DispatchMissionCanonicalTable,
+  type MissionCanonicalMember,
+  type MissionCanonicalWrite,
+  type MissionCanonicalWritePlan,
+} from './dispatchMissionCommandCanonicalAdapter';
 import type {
   DispatchAcknowledgment,
   DispatchAssignment,
@@ -13,7 +27,7 @@ import type {
   DispatchTimelineEvent,
 } from './dispatchTypes';
 
-export type DispatchCanonicalEntityType =
+type DispatchLegacyCanonicalEntityType =
   | 'ping'
   | 'queue_item'
   | 'assignment'
@@ -21,7 +35,11 @@ export type DispatchCanonicalEntityType =
   | 'acknowledgment'
   | 'timeline_event';
 
-export type DispatchCanonicalEntity =
+export type DispatchCanonicalEntityType =
+  | DispatchLegacyCanonicalEntityType
+  | DispatchMissionCanonicalEntityType;
+
+type DispatchLegacyCanonicalEntity =
   | { type: 'ping'; value: DispatchPing }
   | { type: 'queue_item'; value: DispatchQueueItem }
   | { type: 'assignment'; value: DispatchAssignment }
@@ -29,7 +47,9 @@ export type DispatchCanonicalEntity =
   | { type: 'acknowledgment'; value: DispatchAcknowledgment }
   | { type: 'timeline_event'; value: DispatchTimelineEvent };
 
-export type DispatchCanonicalTable =
+export type DispatchCanonicalEntity = DispatchLegacyCanonicalEntity | DispatchMissionCanonicalEntity;
+
+type DispatchLegacyCanonicalTable =
   | 'dispatch_pings'
   | 'dispatch_queue_items'
   | 'dispatch_assignments'
@@ -37,6 +57,8 @@ export type DispatchCanonicalTable =
   | 'dispatch_acknowledgments'
   | 'dispatch_timeline_events'
   | 'dispatch_restricted_locations';
+
+export type DispatchCanonicalTable = DispatchLegacyCanonicalTable | DispatchMissionCanonicalTable;
 
 export type DispatchCanonicalErrorCode =
   | 'backend_unavailable'
@@ -60,6 +82,7 @@ export interface DispatchCanonicalMember {
   userId: string;
   callsign: string;
   role: 'lead' | 'sweep' | 'member' | 'support';
+  missionCommandAccess?: 'inherit' | 'command' | 'member' | 'viewer';
   revokedAt?: string | null;
 }
 
@@ -86,6 +109,9 @@ export interface DispatchCanonicalRemoteSnapshot {
   assistRequests: DispatchAssistRequest[];
   acknowledgments: DispatchAcknowledgment[];
   timelineEvents: DispatchTimelineEvent[];
+  missionCommands: import('./dispatchMissionCommandTypes').MissionCommand[];
+  missionCommandEvents: import('./dispatchMissionCommandTypes').MissionCommandEvent[];
+  operationalPlaybooks: import('./dispatchOperationalPlaybookTypes').OperationalPlaybookInstance[];
   tombstones: Partial<Record<DispatchCanonicalEntityType, string[]>>;
   truncatedTables: DispatchCanonicalTable[];
   coverage: 'full' | 'partial';
@@ -113,6 +139,11 @@ export interface DispatchCanonicalBackend {
     context: DispatchCanonicalContext,
     limit: number,
   ): Promise<DispatchCanonicalResult<Record<string, unknown>[]>>;
+  findRowByClientId(
+    table: DispatchCanonicalTable,
+    context: DispatchCanonicalContext,
+    clientId: string,
+  ): Promise<DispatchCanonicalResult<Record<string, unknown> | null>>;
   subscribe(
     context: DispatchCanonicalContext,
     handlers: {
@@ -123,6 +154,7 @@ export interface DispatchCanonicalBackend {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CLIENT_OPERATION_ID_PATTERN = /^[A-Za-z0-9:_-]{1,240}$/;
 const CANONICAL_PULL_LIMIT = 500;
 const REALTIME_TABLES: DispatchCanonicalTable[] = [
   'dispatch_pings',
@@ -131,8 +163,17 @@ const REALTIME_TABLES: DispatchCanonicalTable[] = [
   'dispatch_assist_requests',
   'dispatch_acknowledgments',
   'dispatch_timeline_events',
+  'dispatch_mission_commands',
+  'dispatch_mission_command_targets',
+  'dispatch_mission_command_acknowledgments',
+  'dispatch_mission_command_events',
+  'dispatch_mission_playbook_instances',
+  'dispatch_mission_playbook_steps',
+  'dispatch_mission_playbook_events',
+  'dispatch_mission_deadlines',
+  'dispatch_mission_incident_links',
 ];
-const TABLE_BY_ENTITY: Record<DispatchCanonicalEntityType, DispatchCanonicalTable> = {
+const TABLE_BY_ENTITY: Record<DispatchLegacyCanonicalEntityType, DispatchLegacyCanonicalTable> = {
   ping: 'dispatch_pings',
   queue_item: 'dispatch_queue_items',
   assignment: 'dispatch_assignments',
@@ -160,7 +201,7 @@ const SENSITIVE_PAYLOAD_KEY = /(^|_)(token|secret|password|authorization)($|_)/;
 const QUALIFIED_SECRET_KEY = /(^|_)(api|service_role|provider|access|refresh|client)_(key|token|secret)($|_)/;
 
 type CanonicalWrite = {
-  table: DispatchCanonicalTable;
+  table: DispatchLegacyCanonicalTable;
   row: Record<string, unknown>;
   immutable: boolean;
   location: {
@@ -283,7 +324,7 @@ function resolveMemberIds(
 
 function entityIdempotencyKey(
   context: DispatchCanonicalContext,
-  entity: DispatchCanonicalEntity,
+  entity: DispatchLegacyCanonicalEntity,
 ): string {
   return entity.value.idempotencyKey ?? createDispatchIdempotencyKey({
     expeditionId: context.expeditionId,
@@ -293,7 +334,7 @@ function entityIdempotencyKey(
   });
 }
 
-function getEntityTimes(entity: DispatchCanonicalEntity): DispatchCanonicalResult<{
+function getEntityTimes(entity: DispatchLegacyCanonicalEntity): DispatchCanonicalResult<{
   createdAt: string;
   updatedAt: string;
   observedAt: string;
@@ -315,7 +356,7 @@ function getEntityTimes(entity: DispatchCanonicalEntity): DispatchCanonicalResul
   return { ok: true, data: { createdAt, updatedAt, observedAt: updatedAt } };
 }
 
-function getEntityTargets(entity: DispatchCanonicalEntity): string[] {
+function getEntityTargets(entity: DispatchLegacyCanonicalEntity): string[] {
   switch (entity.type) {
     case 'ping': return entity.value.targetMemberIds;
     case 'queue_item': return entity.value.assignedMemberIds;
@@ -326,13 +367,13 @@ function getEntityTargets(entity: DispatchCanonicalEntity): string[] {
   }
 }
 
-function getEntityContext(entity: DispatchCanonicalEntity): DispatchLinkedContext | undefined {
+function getEntityContext(entity: DispatchLegacyCanonicalEntity): DispatchLinkedContext | undefined {
   return 'linkedContext' in entity.value ? entity.value.linkedContext : undefined;
 }
 
 function buildCanonicalWrite(input: {
   context: DispatchCanonicalContext;
-  entity: DispatchCanonicalEntity;
+  entity: DispatchLegacyCanonicalEntity;
   actorUserId: string;
   actorMemberId: string;
   members: DispatchCanonicalMember[];
@@ -550,6 +591,7 @@ export class DispatchCanonicalRepository {
   async upsertEntity(
     context: DispatchCanonicalContext,
     entity: DispatchCanonicalEntity,
+    clientOperationId?: string,
   ): Promise<DispatchCanonicalResult<DispatchCanonicalRowResult>> {
     if (!context.expeditionId.trim() || !UUID_PATTERN.test(context.convoyId)) {
       return fail('validation_error', 'Canonical Dispatch sync requires an expedition ID and cloud convoy UUID.');
@@ -562,6 +604,25 @@ export class DispatchCanonicalRepository {
       ? { ok: true as const, data: context.actorUserId }
       : await this.backend.getCurrentUserId();
     if (!actorUser.ok) return actorUser;
+
+    if (isDispatchMissionCanonicalEntity(entity)) {
+      const members = await this.backend.listMembers(context.convoyId);
+      if (!members.ok) return members;
+      const actorMember = members.data.find((member) => (
+        !member.revokedAt && member.userId === actorUser.data
+      ));
+      if (!actorMember) {
+        return fail('permission_denied', 'The signed-in user is not an active member of this convoy.');
+      }
+      return this.upsertMissionEntity({
+        context,
+        entity,
+        actorUserId: actorUser.data,
+        actorMember,
+        members: members.data,
+        clientOperationId,
+      });
+    }
 
     const members = entity.type === 'acknowledgment'
       ? await this.backend.getOwnMember(context).then((result) => (
@@ -617,6 +678,179 @@ export class DispatchCanonicalRepository {
     return stored;
   }
 
+  private async upsertMissionEntity(input: {
+    context: DispatchCanonicalContext;
+    entity: DispatchMissionCanonicalEntity;
+    actorUserId: string;
+    actorMember: DispatchCanonicalMember;
+    members: DispatchCanonicalMember[];
+    clientOperationId?: string;
+  }): Promise<DispatchCanonicalResult<DispatchCanonicalRowResult>> {
+    const { context, entity, actorUserId, actorMember, members, clientOperationId } = input;
+    if (entity.value.expeditionId !== context.expeditionId) {
+      return fail('scope_mismatch', 'Mission Command record does not match the active expedition.');
+    }
+
+    if (entity.type === 'mission_command_event') {
+      if (!canMissionCanonicalMemberParticipate(actorMember as MissionCanonicalMember)) {
+        return fail('permission_denied', 'Mission Command viewers are read-only.');
+      }
+      const eventActorId = entity.value.actor.id.toLowerCase();
+      if (![
+        actorMember.id.toLowerCase(),
+        actorMember.userId.toLowerCase(),
+        actorMember.callsign.toLowerCase(),
+      ].includes(eventActorId)) {
+        return fail('permission_denied', 'Mission Command events may only be persisted by their recorded actor.');
+      }
+      const commandRow = await this.backend.findRowByClientId(
+        'dispatch_mission_commands',
+        context,
+        entity.value.commandId,
+      );
+      if (!commandRow.ok) return commandRow;
+      if (!commandRow.data?.id) {
+        return fail('validation_error', 'Mission Command event references a command that is not canonical yet.');
+      }
+      const write = buildMissionCommandEventCanonicalWrite({
+        expeditionId: context.expeditionId,
+        convoyId: context.convoyId,
+        commandId: String(commandRow.data.id),
+        actorUserId,
+        actorMemberId: actorMember.id,
+        event: entity.value,
+        sanitize: redactDispatchCanonicalPayload,
+      });
+      if (!write.ok) return fail(write.code, write.error);
+      return this.storeMissionWrite(write.data, clientOperationId);
+    }
+
+    const planResult = entity.type === 'mission_command'
+      ? buildMissionCommandCanonicalPlan({
+          expeditionId: context.expeditionId,
+          convoyId: context.convoyId,
+          actorUserId,
+          actorMember: actorMember as MissionCanonicalMember,
+          members: members as MissionCanonicalMember[],
+          command: entity.value,
+          sanitize: redactDispatchCanonicalPayload,
+        })
+      : buildMissionPlaybookCanonicalPlan({
+          expeditionId: context.expeditionId,
+          convoyId: context.convoyId,
+          actorUserId,
+          actorMember: actorMember as MissionCanonicalMember,
+          instance: entity.value,
+          sanitize: redactDispatchCanonicalPayload,
+        });
+    if (!planResult.ok) return fail(planResult.code, planResult.error);
+    return this.storeMissionPlan(context, planResult.data, clientOperationId);
+  }
+
+  private async storeMissionPlan(
+    context: DispatchCanonicalContext,
+    plan: MissionCanonicalWritePlan,
+    clientOperationId?: string,
+  ): Promise<DispatchCanonicalResult<DispatchCanonicalRowResult>> {
+    let parent: DispatchCanonicalResult<DispatchCanonicalRowResult>;
+    if (plan.canWriteParent) {
+      parent = await this.storeMissionWrite(plan.parent, clientOperationId);
+      if (!parent.ok) return parent;
+    } else {
+      if (plan.ownAcknowledgmentCount === 0) {
+        return fail('permission_denied', 'This Mission Command record is read-only for the signed-in member.');
+      }
+      const existing = await this.backend.findRowByClientId(
+        plan.parent.table,
+        context,
+        String(plan.parent.row.client_id),
+      );
+      if (!existing.ok) return existing;
+      if (!existing.data?.id) {
+        return fail('validation_error', 'The acknowledged Mission Command is not canonical yet.');
+      }
+      parent = {
+        ok: true,
+        data: {
+          id: String(existing.data.id),
+          serverRevision: Number.isFinite(Number(existing.data.server_revision))
+            ? Number(existing.data.server_revision)
+            : null,
+        },
+      };
+    }
+
+    const childWrites = plan.children(parent.data.id).filter((write) => (
+      plan.canWriteParent || write.table === 'dispatch_mission_command_acknowledgments'
+    ));
+    let lastResult = parent.data;
+    for (const write of childWrites) {
+      const stored = await this.storeMissionWrite(write, clientOperationId);
+      if (!stored.ok) {
+        return fail(
+          stored.code,
+          `Mission Command parent was stored, but a related record failed: ${stored.error}`,
+          true,
+        );
+      }
+      lastResult = stored.data;
+    }
+
+    if (plan.canWriteParent) {
+      const location = plan.restrictedLocation(parent.data.id);
+      if (location) {
+        const storedLocation = await this.backend.upsertRow('dispatch_restricted_locations', {
+          expedition_id: context.expeditionId,
+          convoy_id: context.convoyId,
+          source_kind: location.sourceKind,
+          source_client_id: location.sourceClientId,
+          source_record_id: parent.data.id,
+          actor_user_id: plan.parent.row.actor_user_id,
+          actor_member_id: plan.parent.row.actor_member_id,
+          authorized_member_ids: location.authorizedMemberIds,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy_meters: location.accuracyMeters,
+          observed_at: location.observedAt,
+        }, {
+          conflictColumns: 'expedition_id,source_kind,source_client_id',
+          immutable: true,
+        });
+        if (!storedLocation.ok) {
+          return fail(
+            'partial_write',
+            'Mission Command content was stored, but its restricted location was not. The local outbox will retry.',
+            true,
+          );
+        }
+      }
+    }
+
+    return { ok: true, data: lastResult };
+  }
+
+  private storeMissionWrite(
+    write: MissionCanonicalWrite,
+    clientOperationId?: string,
+  ): Promise<DispatchCanonicalResult<DispatchCanonicalRowResult>> {
+    const fallbackOperationId = String(
+      write.row.client_operation_id
+      ?? write.row.idempotency_key
+      ?? write.row.client_id,
+    );
+    const safeClientOperationId = clientOperationId
+      && CLIENT_OPERATION_ID_PATTERN.test(clientOperationId)
+      ? clientOperationId
+      : fallbackOperationId;
+    return this.backend.upsertRow(write.table, {
+      ...write.row,
+      client_operation_id: safeClientOperationId,
+    }, {
+      conflictColumns: 'expedition_id,idempotency_key',
+      immutable: write.immutable,
+    });
+  }
+
   async pullExpedition(
     context: DispatchCanonicalContext,
   ): Promise<DispatchCanonicalResult<DispatchCanonicalRemoteSnapshot>> {
@@ -632,7 +866,18 @@ export class DispatchCanonicalRepository {
       'dispatch_acknowledgments',
       'dispatch_timeline_events',
       'dispatch_restricted_locations',
+      'dispatch_mission_commands',
+      'dispatch_mission_command_targets',
+      'dispatch_mission_command_acknowledgments',
+      'dispatch_mission_command_events',
+      'dispatch_mission_playbook_instances',
+      'dispatch_mission_playbook_steps',
+      'dispatch_mission_playbook_events',
+      'dispatch_mission_deadlines',
+      'dispatch_mission_incident_links',
     ];
+    const memberResult = await this.backend.listMembers(context.convoyId);
+    if (!memberResult.ok) return memberResult;
     const results = await Promise.all(tables.map((table) => (
       this.backend.fetchRows(table, context, CANONICAL_PULL_LIMIT)
     )));
@@ -640,7 +885,24 @@ export class DispatchCanonicalRepository {
     if (failure && !failure.ok) return failure;
 
     const groups = results.map((result) => result.ok ? result.data : []);
-    const [allPingRows, allQueueRows, allAssignmentRows, allAssistRows, ackRows, timelineRows, locationRows] = groups;
+    const [
+      allPingRows,
+      allQueueRows,
+      allAssignmentRows,
+      allAssistRows,
+      ackRows,
+      timelineRows,
+      locationRows,
+      missionCommandRows,
+      missionTargetRows,
+      missionAcknowledgmentRows,
+      missionEventRows,
+      missionPlaybookRows,
+      missionStepRows,
+      missionPlaybookEventRows,
+      missionDeadlineRows,
+      missionIncidentLinkRows,
+    ] = groups;
     const activeRows = (rows: Record<string, unknown>[]) => rows.filter((row) => !row.deleted_at);
     const pingRows = activeRows(allPingRows);
     const queueRows = activeRows(allQueueRows);
@@ -727,6 +989,22 @@ export class DispatchCanonicalRepository {
       linkedContext: attachLocation(row.linked_context, undefined),
     }));
 
+    const mission = parseMissionCanonicalSnapshot({
+      members: memberResult.data,
+      rows: {
+        dispatch_mission_commands: missionCommandRows,
+        dispatch_mission_command_targets: missionTargetRows,
+        dispatch_mission_command_acknowledgments: missionAcknowledgmentRows,
+        dispatch_mission_command_events: missionEventRows,
+        dispatch_mission_playbook_instances: missionPlaybookRows,
+        dispatch_mission_playbook_steps: missionStepRows,
+        dispatch_mission_playbook_events: missionPlaybookEventRows,
+        dispatch_mission_deadlines: missionDeadlineRows,
+        dispatch_mission_incident_links: missionIncidentLinkRows,
+        dispatch_restricted_locations: locationRows,
+      },
+    });
+
     const truncatedTables = tables.filter((_, index) => groups[index].length >= CANONICAL_PULL_LIMIT);
     return {
       ok: true,
@@ -739,11 +1017,16 @@ export class DispatchCanonicalRepository {
         assistRequests,
         acknowledgments,
         timelineEvents,
+        missionCommands: mission.missionCommands,
+        missionCommandEvents: mission.missionCommandEvents,
+        operationalPlaybooks: mission.operationalPlaybooks,
         tombstones: {
           ping: allPingRows.filter((row) => row.deleted_at).map((row) => String(row.client_id)),
           queue_item: allQueueRows.filter((row) => row.deleted_at).map((row) => String(row.client_id)),
           assignment: allAssignmentRows.filter((row) => row.deleted_at).map((row) => String(row.client_id)),
           assist_request: allAssistRows.filter((row) => row.deleted_at).map((row) => String(row.client_id)),
+          mission_command: mission.tombstones.mission_command,
+          mission_playbook_instance: mission.tombstones.mission_playbook_instance,
         },
         truncatedTables,
         coverage: truncatedTables.length > 0 ? 'partial' : 'full',
@@ -792,10 +1075,18 @@ export function createSupabaseDispatchCanonicalBackend(
     },
 
     async listMembers(convoyId) {
-      const { data, error } = await unsafeClient
+      let { data, error } = await unsafeClient
         .from('convoy_members')
-        .select('id, user_id, callsign, role, revoked_at')
+        .select('id, user_id, callsign, role, mission_command_access, revoked_at')
         .eq('convoy_id', convoyId);
+      if (error && String(error.message ?? '').includes('mission_command_access')) {
+        const fallback = await unsafeClient
+          .from('convoy_members')
+          .select('id, user_id, callsign, role, revoked_at')
+          .eq('convoy_id', convoyId);
+        data = fallback.data;
+        error = fallback.error;
+      }
       if (error) return fail(classifyBackendError(error), error.message);
       return {
         ok: true,
@@ -804,6 +1095,7 @@ export function createSupabaseDispatchCanonicalBackend(
           userId: String(row.user_id),
           callsign: String(row.callsign ?? ''),
           role: row.role,
+          missionCommandAccess: row.mission_command_access ?? 'inherit',
           revokedAt: row.revoked_at ?? null,
         })),
       };
@@ -829,6 +1121,7 @@ export function createSupabaseDispatchCanonicalBackend(
           userId: String(data.user_id),
           callsign: String(data.callsign ?? ''),
           role: data.role,
+          missionCommandAccess: data.mission_command_access ?? 'inherit',
           revokedAt: data.revoked_at ?? null,
         },
       };
@@ -888,6 +1181,18 @@ export function createSupabaseDispatchCanonicalBackend(
       const { data, error } = await query;
       if (error) return fail(classifyBackendError(error), error.message);
       return { ok: true, data: Array.isArray(data) ? data : [] };
+    },
+
+    async findRowByClientId(table, context, clientId) {
+      const { data, error } = await unsafeClient
+        .from(table)
+        .select('*')
+        .eq('expedition_id', context.expeditionId)
+        .eq('convoy_id', context.convoyId)
+        .eq('client_id', clientId)
+        .maybeSingle();
+      if (error) return fail(classifyBackendError(error), error.message);
+      return { ok: true, data: data ? asRecord(data) : null };
     },
 
     subscribe(context, handlers) {

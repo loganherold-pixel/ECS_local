@@ -25,18 +25,9 @@ import { SafeIcon as Ionicons } from '../SafeIcon';
 import LandscapeShellControls from '../LandscapeShellControls';
 import { SourceTruthInspectorTrigger } from '../source-truth';
 import DispatchConvoyCommandPanel from './DispatchConvoyCommandPanel';
-import DispatchMissionCommandComposer from './DispatchMissionCommandComposer';
-import DispatchLostCommunicationsPlaybook, {
-  type LostCommunicationsMemberOption,
-} from './DispatchLostCommunicationsPlaybook';
-import DispatchVehicleImmobilizedPlaybook, {
-  type VehicleImmobilizedVehicleOption,
-} from './DispatchVehicleImmobilizedPlaybook';
-import DispatchRouteBlockagePlaybook, {
-  type RouteBlockageLaunchInput,
-} from './DispatchRouteBlockagePlaybook';
-import DispatchGuardianCheckIns from './DispatchGuardianCheckIns';
-import DispatchIncidentRoom from './DispatchIncidentRoom';
+import type { LostCommunicationsMemberOption } from './DispatchLostCommunicationsPlaybook';
+import type { VehicleImmobilizedVehicleOption } from './DispatchVehicleImmobilizedPlaybook';
+import type { RouteBlockageLaunchInput } from './DispatchRouteBlockagePlaybook';
 import DispatchMissionCommandBoard, {
   MissionCommandDispatchNavigation,
   type MissionCommandDispatchView,
@@ -82,6 +73,7 @@ import type {
   DispatchAcknowledgment,
   DispatchLinkedContext,
   DispatchPriority,
+  DispatchQueuedOfflineAction,
   DispatchTeamMember,
   DispatchTimelineEvent,
 } from '../../lib/dispatchTypes';
@@ -259,6 +251,7 @@ import {
   type DispatchRealtimeSession,
   type DispatchRealtimeStatus,
 } from '../../lib/dispatchRealtimeAdapter';
+import { useDispatchMissionCommandRuntime } from '../../lib/useDispatchMissionCommandRuntime';
 import {
   fetchDispatchCadEventsFromBackend,
   isUuid,
@@ -277,18 +270,29 @@ import {
 } from '../../lib/performance/ecsPerformanceDiagnostics';
 import { replayQueuedDispatchActions } from '../../lib/dispatchOfflineReplayAdapter';
 import { DispatchCanonicalMigrationCoordinator } from '../../lib/dispatchCanonicalMigrationCoordinator';
-import type { DispatchCanonicalEntity } from '../../lib/dispatchCanonicalRepository';
+import {
+  dispatchCanonicalRepository,
+  type DispatchCanonicalEntity,
+} from '../../lib/dispatchCanonicalRepository';
 import {
   getDispatchRolloutDisabledCopy,
   isDispatchFeatureEnabled,
   resolveDispatchRolloutConfig,
   resolveDispatchCanonicalBackendMode,
+  resolveDispatchMissionCanonicalBackendMode,
   type DispatchRolloutFeature,
 } from '../../lib/dispatchRolloutConfig';
 import {
   tokenizeDispatchAdvisoryCoordinateLinks,
   type DispatchAdvisoryCoordinate,
 } from '../../lib/dispatchAdvisoryCoordinateLinks';
+
+const DispatchMissionCommandComposer = React.lazy(() => import('./DispatchMissionCommandComposer'));
+const DispatchLostCommunicationsPlaybook = React.lazy(() => import('./DispatchLostCommunicationsPlaybook'));
+const DispatchVehicleImmobilizedPlaybook = React.lazy(() => import('./DispatchVehicleImmobilizedPlaybook'));
+const DispatchRouteBlockagePlaybook = React.lazy(() => import('./DispatchRouteBlockagePlaybook'));
+const DispatchGuardianCheckIns = React.lazy(() => import('./DispatchGuardianCheckIns'));
+const DispatchIncidentRoom = React.lazy(() => import('./DispatchIncidentRoom'));
 
 const DISPATCH_ROLLOUT_NOTICE_LABELS: Partial<Record<DispatchRolloutFeature, string>> = {
   teamPositionSharing: 'team sharing',
@@ -2596,9 +2600,17 @@ export default function DispatchCadCommandCenter() {
     () => resolveDispatchCanonicalBackendMode(dispatchRollout),
     [dispatchRollout],
   );
+  const missionCanonicalBackendMode = useMemo(
+    () => resolveDispatchMissionCanonicalBackendMode(dispatchRollout),
+    [dispatchRollout],
+  );
   const canonicalMigrationCoordinator = useMemo(
-    () => new DispatchCanonicalMigrationCoordinator(canonicalBackendMode),
-    [canonicalBackendMode],
+    () => new DispatchCanonicalMigrationCoordinator(
+      canonicalBackendMode,
+      dispatchCanonicalRepository,
+      missionCanonicalBackendMode,
+    ),
+    [canonicalBackendMode, missionCanonicalBackendMode],
   );
   const dispatchPermissionSnapshot = useMemo(() => {
     const teamMember = teamSnapshot.members.find((member) => (
@@ -2680,11 +2692,18 @@ export default function DispatchCadCommandCenter() {
     externalDispatchIntegrationEnabled || Boolean(activeConvoyControl?.convoyId)
   );
   const recoveryCadRealtimeExpeditionId = currentExpedition?.cloudSessionId ?? currentExpedition?.id ?? activeConvoyControl?.convoyId ?? null;
+  const missionCommandRealtimeEnabled = Boolean(
+    missionCommandEnabled &&
+    recoveryCadIdentityAuthorized &&
+    recoveryCadRealtimeExpeditionId &&
+    (teamSnapshot.activeTeam || activeConvoyControl),
+  );
+  const dispatchRealtimeEnabled = recoveryCadSharingEnabled || missionCommandRealtimeEnabled;
   const canonicalDispatchContext = useMemo(() => {
     const expeditionId = currentExpedition?.cloudSessionId ?? currentExpedition?.id ?? null;
     const convoyId = activeConvoyControl?.convoyId ?? null;
     if (
-      canonicalBackendMode === 'disabled' ||
+      (canonicalBackendMode === 'disabled' && missionCanonicalBackendMode === 'disabled') ||
       !expeditionId ||
       !convoyId ||
       !isUuid(convoyId) ||
@@ -2700,13 +2719,21 @@ export default function DispatchCadCommandCenter() {
   }, [
     activeConvoyControl?.convoyId,
     canonicalBackendMode,
+    missionCanonicalBackendMode,
     commandIdentity.userId,
     currentExpedition?.cloudSessionId,
     currentExpedition?.id,
   ]);
-  const persistCanonicalReplayEntity = useCallback(async (entity: DispatchCanonicalEntity) => {
+  const persistCanonicalReplayEntity = useCallback(async (
+    entity: DispatchCanonicalEntity,
+    action: DispatchQueuedOfflineAction,
+  ) => {
     if (!canonicalDispatchContext) return false;
-    const result = await canonicalMigrationCoordinator.persistEntity(canonicalDispatchContext, entity);
+    const result = await canonicalMigrationCoordinator.persistEntity(
+      canonicalDispatchContext,
+      entity,
+      action.id,
+    );
     return result.ok;
   }, [canonicalDispatchContext, canonicalMigrationCoordinator]);
   const recoveryCadPersistenceDefaults = useMemo(() => getRecoveryCadPersistenceDefaults(), []);
@@ -2718,6 +2745,51 @@ export default function DispatchCadCommandCenter() {
     () => getLocalDispatchPersistenceId(currentExpedition, activeConvoyControl),
     [activeConvoyControl, currentExpedition],
   );
+  const missionCommandAuthorizedActorIds = useMemo(() => Array.from(new Set([
+    commandIdentity.userId,
+    teamSnapshot.activeTeam?.ownerId,
+    ...teamSnapshot.members
+      .filter((member) => member.teamId === teamSnapshot.activeTeam?.id)
+      .map((member) => member.userId),
+    ...(activeConvoyControl?.memberUserIds ?? []),
+  ].filter((value): value is string => Boolean(value)))), [
+    activeConvoyControl?.memberUserIds,
+    commandIdentity.userId,
+    teamSnapshot.activeTeam?.id,
+    teamSnapshot.activeTeam?.ownerId,
+    teamSnapshot.members,
+  ]);
+  const publishMissionCommandRuntimeEvent = useCallback(async (
+    event: Parameters<DispatchRealtimeSession['publish']>[0],
+  ) => {
+    const session = realtimeSessionRef.current;
+    if (!session || realtimeStatus !== 'connected' || !missionCommandRealtimeEnabled) {
+      return {
+        ok: false,
+        retryable: true,
+        safeCode: 'mission_realtime_unavailable',
+      } as const;
+    }
+    const ok = await session.publish(event);
+    return ok
+      ? { ok: true } as const
+      : { ok: false, retryable: true, safeCode: 'mission_realtime_delivery_failed' } as const;
+  }, [missionCommandRealtimeEnabled, realtimeStatus]);
+  const missionCommandRuntime = useDispatchMissionCommandRuntime({
+    enabled: missionCommandEnabled,
+    accountId: commandIdentity.userId ?? null,
+    expeditionId: localDispatchPersistenceId,
+    defaults: recoveryCadPersistenceDefaults,
+    clientId: realtimeClientId,
+    authorizedActorIds: missionCommandAuthorizedActorIds,
+    online: isOnline && !offlineMode,
+    realtimeStatus: missionCommandRealtimeEnabled ? realtimeStatus : 'disabled',
+    publish: missionCommandRealtimeEnabled ? publishMissionCommandRuntimeEvent : undefined,
+    persistCanonicalEntity: canonicalDispatchContext
+      ? persistCanonicalReplayEntity
+      : undefined,
+  });
+  const applyIncomingMissionCommand = missionCommandRuntime.applyIncoming;
   const subscribeIncidentRoomIncidents = useCallback((listener: () => void) => (
     incidentRoomEnabled ? incidentRecoveryWorkflowStore.subscribe(listener) : () => undefined
   ), [incidentRoomEnabled]);
@@ -3391,6 +3463,10 @@ export default function DispatchCadCommandCenter() {
     void canonicalMigrationCoordinator
       .hydrate(canonicalDispatchContext, getLocalSnapshot())
       .then(applyHydration);
+    void canonicalMigrationCoordinator.migrateLocalMissionSnapshot(
+      canonicalDispatchContext,
+      getLocalSnapshot(),
+    );
     const lease = canonicalMigrationCoordinator.subscribe({
       context: canonicalDispatchContext,
       getLocalSnapshot,
@@ -3471,7 +3547,7 @@ export default function DispatchCadCommandCenter() {
     realtimeSessionRef.current?.close();
     realtimeSessionRef.current = null;
 
-    if (!recoveryCadSharingEnabled || !recoveryCadRealtimeExpeditionId || (!teamSnapshot.activeTeam && !activeConvoyControl)) {
+    if (!dispatchRealtimeEnabled || !recoveryCadRealtimeExpeditionId || (!teamSnapshot.activeTeam && !activeConvoyControl)) {
       setRealtimeStatus('disabled');
       return undefined;
     }
@@ -3481,6 +3557,10 @@ export default function DispatchCadCommandCenter() {
       clientId: realtimeClientId,
       onStatusChange: setRealtimeStatus,
       onEvent: (envelope) => {
+        if (envelope.type === 'mission_command_upsert' || envelope.type === 'mission_command_event_added') {
+          applyIncomingMissionCommand(envelope);
+          return;
+        }
         const authorizedMemberIds = new Set([
           ...teamSnapshot.members.map((member) => member.userId),
           ...(activeConvoyControl?.memberUserIds ?? []),
@@ -3626,7 +3706,8 @@ export default function DispatchCadCommandCenter() {
     recoveryCadPersistenceDefaults,
     realtimeClientId,
     recoveryCadRealtimeExpeditionId,
-    recoveryCadSharingEnabled,
+    dispatchRealtimeEnabled,
+    applyIncomingMissionCommand,
     teamSnapshot,
     teamSnapshot.activeTeam,
   ]);
@@ -3985,7 +4066,7 @@ export default function DispatchCadCommandCenter() {
 
   useEffect(() => {
     const realtimeReady =
-      !recoveryCadSharingEnabled ||
+      !dispatchRealtimeEnabled ||
       !recoveryCadRealtimeExpeditionId ||
       offlineMode ||
       !isOnline ||
@@ -3995,7 +4076,7 @@ export default function DispatchCadCommandCenter() {
     dispatchPerformance.end('completed', {
       realtimeState: realtimeStatus,
       offline: offlineMode || !isOnline,
-      sharingEnabled: recoveryCadSharingEnabled,
+      sharingEnabled: dispatchRealtimeEnabled,
       eventCount: events.length,
     });
   }, [
@@ -4007,7 +4088,7 @@ export default function DispatchCadCommandCenter() {
     offlineMode,
     realtimeStatus,
     recoveryCadRealtimeExpeditionId,
-    recoveryCadSharingEnabled,
+    dispatchRealtimeEnabled,
     teamSnapshot.activeTeam,
   ]);
 
@@ -4188,7 +4269,7 @@ export default function DispatchCadCommandCenter() {
 
     const session = realtimeSessionRef.current;
     const canPublishRealtime = Boolean(
-      session && realtimeStatus === 'connected' && recoveryCadSharingEnabled,
+      session && realtimeStatus === 'connected' && dispatchRealtimeEnabled,
     );
     if ((!canPublishRealtime && !canonicalDispatchContext) || !localDispatchPersistenceId) {
       const retryableRecoveryEvents = events.filter((event) => (
@@ -4210,7 +4291,15 @@ export default function DispatchCadCommandCenter() {
         defaults: recoveryCadPersistenceDefaults,
         publish: (event) => canPublishRealtime && session
           ? session.publish(event)
-          : Promise.resolve(true),
+          : event.type === 'mission_command_upsert'
+              || event.type === 'mission_command_event_added'
+              || event.type === 'mission_playbook_upsert'
+            ? Promise.resolve({
+                ok: false,
+                retryable: true,
+                safeCode: 'mission_realtime_unavailable',
+              } as const)
+            : Promise.resolve(true),
         persistCadEvent: recoveryCadBackendContext
           ? (event) => upsertDispatchCadEventToBackend(event, recoveryCadBackendContext).then((response) => response.ok)
           : undefined,
@@ -4244,7 +4333,7 @@ export default function DispatchCadCommandCenter() {
     realtimeStatus,
     recoveryCadBackendContext,
     recoveryCadPersistenceDefaults,
-    recoveryCadSharingEnabled,
+    dispatchRealtimeEnabled,
     showToast,
   ]);
 
@@ -4726,7 +4815,7 @@ export default function DispatchCadCommandCenter() {
           soloMode: missionCommandSoloMode,
           catalog: missionCommandComposerCatalog,
           permissions: dispatchPermissionSnapshot,
-          queueDelivery: !missionCommandSoloMode && (!isOnline || offlineMode),
+          queueDelivery: !missionCommandSoloMode,
           sourceTruth: missionComposerSourceTruth,
         });
         if (!result.ok) {
@@ -4862,7 +4951,6 @@ export default function DispatchCadCommandCenter() {
     }
   }, [
     dispatchPermissionSnapshot,
-    isOnline,
     localDispatchPersistenceId,
     linkMissionCommandToGuardianCheckIn,
     linkMissionCommandToPlaybook,
@@ -4873,7 +4961,6 @@ export default function DispatchCadCommandCenter() {
     missionComposerForm,
     missionComposerMode,
     missionComposerSourceTruth,
-    offlineMode,
     recoveryCadPersistenceDefaults,
     showToast,
   ]);
@@ -5723,31 +5810,33 @@ export default function DispatchCadCommandCenter() {
     );
   }, [activeConvoyControl, convoyLifecycleBusy, performConvoyLifecycleAction]);
 
-  const renderEvent: ListRenderItem<DispatchEvent> = ({ item }) => (
+  const handleEventRowPress = useCallback((event: DispatchEvent) => {
+    if (isRecoveryCriticalEvent(event)) {
+      handleOpenEmergencyPing(event);
+      return;
+    }
+
+    if (isThreatDrilldownEvent(event)) {
+      if (canOpenThreatDrilldown(event)) {
+        logDispatchCadLifecycle('[DISPATCH] drilldown_open', { id: event.id, type: event.type });
+        setDrilldownEventId(event.id);
+      } else {
+        showToast?.('Threat map unavailable: exact location or route segment required.');
+        setSelectedEventId(event.id);
+      }
+      return;
+    }
+
+    setSelectedEventId(event.id);
+  }, [handleOpenEmergencyPing, showToast]);
+
+  const renderEvent = useCallback<ListRenderItem<DispatchEvent>>(({ item }) => (
     <EventRow
       event={item}
       meta={getEventUiMeta(uiMetaById, item, false)}
-      onPress={(event) => {
-        if (isRecoveryCriticalEvent(event)) {
-          handleOpenEmergencyPing(event);
-          return;
-        }
-
-        if (isThreatDrilldownEvent(event)) {
-          if (canOpenThreatDrilldown(event)) {
-    logDispatchCadLifecycle('[DISPATCH] drilldown_open', { id: event.id, type: event.type });
-            setDrilldownEventId(event.id);
-          } else {
-            showToast?.('Threat map unavailable: exact location or route segment required.');
-            setSelectedEventId(event.id);
-          }
-          return;
-        }
-
-        setSelectedEventId(event.id);
-      }}
+      onPress={handleEventRowPress}
     />
-  );
+  ), [handleEventRowPress, uiMetaById]);
   void dispatchSensitiveGateNotice;
 
   const handleRevealDispatchDock = () => {
@@ -6624,7 +6713,7 @@ export default function DispatchCadCommandCenter() {
           <DispatchMissionCommandBoard
             expeditionId={localDispatchPersistenceId}
             persistenceDefaults={recoveryCadPersistenceDefaults}
-            hydrated={dispatchLocalHydrated}
+            hydrated={dispatchLocalHydrated && missionCommandRuntime.hydrated}
             hasActiveExpedition={Boolean(currentExpedition)}
             soloMode={missionCommandSoloMode}
             canViewCommands={missionCommandViewPermission.allowed}
@@ -6635,7 +6724,7 @@ export default function DispatchCadCommandCenter() {
             isOnline={isOnline}
             offlineMode={offlineMode}
             realtimeStatus={realtimeStatus}
-            queuedCount={queuedCount}
+            queuedCount={queuedCount + missionCommandRuntime.diagnostics.queuedOperationCount}
             convoyId={activeConvoyControl?.convoyId ?? null}
             convoyMemberCount={activeConvoyControl?.memberUserIds.length ?? 0}
             convoyStatusPermitted={teamPositionSharingEnabled && memberLocationPermission.allowed}
@@ -6771,20 +6860,23 @@ export default function DispatchCadCommandCenter() {
           openCommand(command);
         }}
       />
-      <DispatchMissionCommandComposer
-        visible={missionCommandEnabled && missionComposerMode !== null}
-        mode={missionComposerMode ?? 'create'}
-        commandTitle={missionComposerCommand?.title ?? null}
-        form={missionComposerForm}
-        catalog={missionCommandComposerCatalog}
-        soloMode={missionCommandSoloMode}
-        canAssign={missionCommandAssignAllowed}
-        error={missionComposerError}
-        submitting={missionComposerSubmitting}
-        onChange={setMissionComposerForm}
-        onClose={closeMissionCommandComposer}
-        onSubmit={submitMissionCommandComposer}
-      />
+      <React.Suspense fallback={<MissionCommandLazySurfaceFallback />}>
+      {missionCommandEnabled && missionComposerMode !== null ? (
+        <DispatchMissionCommandComposer
+          visible
+          mode={missionComposerMode}
+          commandTitle={missionComposerCommand?.title ?? null}
+          form={missionComposerForm}
+          catalog={missionCommandComposerCatalog}
+          soloMode={missionCommandSoloMode}
+          canAssign={missionCommandAssignAllowed}
+          error={missionComposerError}
+          submitting={missionComposerSubmitting}
+          onChange={setMissionComposerForm}
+          onClose={closeMissionCommandComposer}
+          onSubmit={submitMissionCommandComposer}
+        />
+      ) : null}
       {missionCommandEnabled && lostCommunicationsVisible ? (
         <DispatchLostCommunicationsPlaybook
           enabled={missionCommandEnabled}
@@ -6865,20 +6957,23 @@ export default function DispatchCadCommandCenter() {
           onStatusMessage={handleMissionCommandStatusMessage}
         />
       ) : null}
-      <DispatchIncidentRoom
-        visible={incidentRoomEnabled && selectedIncidentRoomId !== null}
-        model={incidentRoomModel}
-        onClose={() => {
-          setIncidentRoomDebriefVisible(false);
-          setSelectedIncidentRoomId(null);
-        }}
-        onCreateCommand={handleCreateIncidentRoomCommand}
-        onOpenCommand={handleOpenIncidentRoomCommand}
-        onOpenContext={handleOpenIncidentRoomContext}
-        onAssignLead={handleAssignIncidentRoomLead}
-        onTransitionStatus={handleIncidentRoomStatusTransition}
-        onOpenResolveDebrief={() => setIncidentRoomDebriefVisible(true)}
-      />
+      {incidentRoomEnabled && selectedIncidentRoomId !== null ? (
+        <DispatchIncidentRoom
+          visible
+          model={incidentRoomModel}
+          onClose={() => {
+            setIncidentRoomDebriefVisible(false);
+            setSelectedIncidentRoomId(null);
+          }}
+          onCreateCommand={handleCreateIncidentRoomCommand}
+          onOpenCommand={handleOpenIncidentRoomCommand}
+          onOpenContext={handleOpenIncidentRoomContext}
+          onAssignLead={handleAssignIncidentRoomLead}
+          onTransitionStatus={handleIncidentRoomStatusTransition}
+          onOpenResolveDebrief={() => setIncidentRoomDebriefVisible(true)}
+        />
+      ) : null}
+      </React.Suspense>
       <ResolveDebriefModal
         visible={incidentRoomEnabled && incidentRoomDebriefVisible}
         onClose={() => setIncidentRoomDebriefVisible(false)}
@@ -6983,6 +7078,20 @@ export default function DispatchCadCommandCenter() {
           router.push('/join-expedition' as any);
         }}
       />
+    </View>
+  );
+}
+
+function MissionCommandLazySurfaceFallback() {
+  return (
+    <View
+      style={styles.missionLazyFallback}
+      accessibilityRole="progressbar"
+      accessibilityLabel="Opening Mission Command workspace"
+      accessibilityLiveRegion="polite"
+    >
+      <Ionicons name="sync-outline" size={18} color={TACTICAL.amber} />
+      <Text style={styles.missionLazyFallbackText}>Opening Mission Command</Text>
     </View>
   );
 }
@@ -7120,7 +7229,7 @@ function EmptyFeed() {
   );
 }
 
-function EventRow({
+const EventRow = React.memo(function EventRow({
   event,
   meta,
   onPress,
@@ -7129,6 +7238,7 @@ function EventRow({
   meta: EventUiMeta;
   onPress: (event: DispatchEvent) => void;
 }) {
+  recordECSPerformanceRender('dispatch_ready', 'dispatch_timeline_event');
   const tone = SEVERITY_TONE[event.severity];
   const isRecoveryCritical = isRecoveryCriticalEvent(event);
   const stateTone = UI_STATE_TONE[meta.state];
@@ -7212,7 +7322,7 @@ function EventRow({
       </View>
     </TouchableOpacity>
   );
-}
+});
 
 function EventDetailModal({
   event,
@@ -9138,6 +9248,32 @@ const styles = StyleSheet.create({
     paddingTop: 7,
     paddingBottom: 0,
     gap: 3,
+  },
+  missionLazyFallback: {
+    position: 'absolute',
+    left: 18,
+    right: 18,
+    bottom: 24,
+    zIndex: 40,
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: ECS_SURFACE.border.selected,
+    borderRadius: 8,
+    backgroundColor: ECS_SURFACE.background.primary,
+  },
+  missionLazyFallbackText: {
+    flexShrink: 1,
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   landscapeTopRow: {
     flex: 0,

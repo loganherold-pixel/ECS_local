@@ -182,6 +182,11 @@ assertIncludes(
   'The optional startup plan should include active Expedition restoration.',
 );
 assertIncludes(
+  startupHydrationSource,
+  "id: 'dispatch_local_runtime'",
+  'The optional startup plan should warm the durable Dispatch runtime after active Expedition restoration.',
+);
+assertIncludes(
   appContextSource,
   "logStartupDebug('startup shell readiness resolved'",
   'AppProvider should log shell readiness without implying optional IndexedDB is required on native.',

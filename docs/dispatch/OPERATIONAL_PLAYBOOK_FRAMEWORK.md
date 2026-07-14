@@ -23,7 +23,7 @@ A playbook cannot declare an emergency, contact emergency services, transmit ext
 - `dispatchRouteBlockagePlaybook.ts` owns the deterministic Route Blockage definition, separate report/legal/current-condition evidence, outcome gates, guidance-handoff guard, and explicit incident handoff.
 - `dispatchRouteBlockageRuntimeAdapter.ts` projects permitted map context, active route geometry, saved-route comparisons, bailouts, CampOps impact, weather context, and Offline Prep readiness into a point-in-time input without reading stores directly.
 - `DispatchRouteBlockagePlaybook.tsx` coordinates the tested definition with Navigate context, Command Composer, Mission Clock, CampOps review, Offline Prep state, Dispatch timeline, and the explicit Incident form.
-- `dispatchPersistenceAdapter.ts` is the authoritative local owner. Dispatch snapshot version 4 stores a bounded `operationalPlaybooks` array.
+- `dispatchPersistenceAdapter.ts` is the authoritative local owner. The current Dispatch snapshot version 7 stores the bounded `operationalPlaybooks` array introduced in version 4 and its durable outbox operation.
 
 ## State And Steps
 
@@ -46,7 +46,7 @@ The playbook domain never marks a proposal sent, delivered, or acknowledged. Rep
 
 ## Persistence And Offline Operation
 
-Definitions and instances have independent versions. Definition upgrades require an explicit ordered migration for every version step. Persisted instances are reconstructed from allowlisted fields; malformed nested results, proposals, deadlines, events, actors, or restricted contexts fail closed. Version 3 Dispatch snapshots load as version 4 with an empty playbook collection, while all legacy Dispatch and Mission Command records remain intact.
+Definitions and instances have independent versions. Definition upgrades require an explicit ordered migration for every version step. Persisted instances are reconstructed from allowlisted fields; malformed nested results, proposals, deadlines, events, actors, or restricted contexts fail closed. Older Dispatch snapshots load as current version 7 with an empty playbook collection when absent, while all legacy Dispatch and Mission Command records remain intact.
 
 Playbook operation is local and offline-capable. Absolute timestamps are persisted for deadlines and projected into Mission Clock. Completion or cancellation closes active playbook deadlines. Event, result, proposal, deadline, and instance retention is bounded.
 

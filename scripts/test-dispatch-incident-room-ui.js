@@ -22,6 +22,11 @@ assert.match(roomUi, /Communications/);
 assert.match(roomUi, /Event Timeline/);
 assert.match(roomUi, /!model\.permissions\.canView[\s\S]*Incident Room restricted[\s\S]*<IncidentSummary/);
 assert.match(roomUi, /COMMAND_RENDER_LIMIT = 24/);
+assert.match(roomUi, /INCIDENT_TIMELINE_PAGE_SIZE = 20/);
+assert.match(roomUi, /windowMissionCommandTimeline/);
+assert.match(roomUi, /timelineWindow\.items\.map/);
+assert.match(roomUi, /Show More Events/);
+assert.match(roomUi, /recordECSPerformanceRender\('dispatch_ready', 'mission_incident_room'\)/);
 assert.match(domain, /INCIDENT_ROOM_TIMELINE_LIMIT = 80/);
 assert.doesNotMatch(roomUi, /MapRenderer|WebView|full telemetry|publishHazard|contactEmergencyServices|sendSms|placePhoneCall/);
 
@@ -38,6 +43,9 @@ assert.match(cad, /incidentRoomId/);
 assert.match(cad, /!missionCommandViewPermission\.allowed/);
 assert.match(cad, /returnRoute: `\/alert\?incidentRoomId=/);
 assert.match(cad, /actionId: 'open_navigate'/);
+assert.match(cad, /React\.lazy\(\(\) => import\('\.\/DispatchIncidentRoom'\)\)/);
+assert.match(cad, /selectedIncidentRoomId !== null \? \(/);
+assert.doesNotMatch(cad, /import DispatchIncidentRoom from '\.\/DispatchIncidentRoom'/);
 
 assert.match(context, /metadata\.incidentId/);
 assert.match(context, /dependencies\.getIncidentById\(incidentId\)/);

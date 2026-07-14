@@ -2,7 +2,9 @@ import { selectMissionCommandBoard } from './dispatchMissionCommandDomain';
 import {
   buildMissionClockSnapshot,
   evaluateMissionClockDeadline,
+  formatMissionClockCountdown,
   missionClockDeadlineFromCommand,
+  type MissionClockSnapshot,
 } from './dispatchMissionClock';
 import type {
   MissionCommand,
@@ -15,6 +17,7 @@ import type {
 } from './dispatchMissionCommandTypes';
 import { selectSourceTruthStatusPresentation } from './sourceTruthPresentation';
 import type { DispatchPriority } from './dispatchTypes';
+import type { ECSOperationalAnnouncementEvent } from './accessibility/ecsOperationalAccessibility';
 
 export type MissionCommandBoardSectionId = MissionCommandBoardBucket;
 
@@ -50,6 +53,7 @@ export interface MissionCommandBoardActionModel {
 
 export interface MissionCommandCardPresentation {
   key: string;
+  renderFingerprint: string;
   commandId: string;
   bucket: MissionCommandBoardBucket;
   priority: DispatchPriority;
@@ -148,6 +152,19 @@ export interface BuildMissionCommandBoardPresentationInput {
   persistenceStatus: 'ready' | 'recovered';
 }
 
+export interface MissionCommandBoardLayoutPresentation {
+  isLandscape: boolean;
+  compactHeader: boolean;
+  outerShellOwnsScrolling: boolean;
+  dynamicType: boolean;
+}
+
+export interface MissionCommandTimelineWindow<T> {
+  items: readonly T[];
+  totalCount: number;
+  hasMore: boolean;
+}
+
 const DEFAULT_RESOLVED_PAGE_SIZE = 12;
 
 export function buildMissionCommandBoardPresentation(
@@ -240,6 +257,82 @@ export function buildMissionCommandBoardPresentation(
   };
 }
 
+/**
+ * Keeps unchanged card presentation objects stable across board updates. React
+ * cards can then ignore an acknowledgment or delivery change owned by another
+ * command without hiding any changed command state.
+ */
+export function createMissionCommandBoardPresentationSelector(): (
+  input: BuildMissionCommandBoardPresentationInput,
+) => MissionCommandBoardPresentation {
+  let cardCache = new Map<string, MissionCommandCardPresentation>();
+
+  return (input) => {
+    const next = buildMissionCommandBoardPresentation(input);
+    const nextCache = new Map<string, MissionCommandCardPresentation>();
+    const stabilizeSection = (
+      section: MissionCommandBoardSectionPresentation,
+    ): MissionCommandBoardSectionPresentation => ({
+      ...section,
+      items: section.items.map((card) => {
+        const cached = cardCache.get(card.key);
+        const stable = cached?.renderFingerprint === card.renderFingerprint ? cached : card;
+        nextCache.set(card.key, stable);
+        return stable;
+      }),
+    });
+
+    const stable: MissionCommandBoardPresentation = {
+      ...next,
+      sections: {
+        needsDecision: stabilizeSection(next.sections.needsDecision),
+        awaitingAcknowledgment: stabilizeSection(next.sections.awaitingAcknowledgment),
+        inProgress: stabilizeSection(next.sections.inProgress),
+        resolved: stabilizeSection(next.sections.resolved),
+      },
+    };
+    cardCache = nextCache;
+    return stable;
+  };
+}
+
+export function resolveMissionCommandBoardLayout(input: {
+  width: number;
+  height: number;
+  fontScale?: number;
+}): MissionCommandBoardLayoutPresentation {
+  const width = Number.isFinite(input.width) ? Math.max(0, input.width) : 0;
+  const height = Number.isFinite(input.height) ? Math.max(0, input.height) : 0;
+  const fontScale = Number.isFinite(input.fontScale) ? Math.max(0.5, input.fontScale ?? 1) : 1;
+  const isLandscape = width > height;
+  const dynamicType = fontScale >= 1.3;
+  return {
+    isLandscape,
+    compactHeader: width < 480 || dynamicType,
+    outerShellOwnsScrolling: !isLandscape && height < 820,
+    dynamicType,
+  };
+}
+
+/** Selects only a newly material urgent clock state for the shared announcer. */
+export function selectMissionCommandClockAnnouncement(
+  snapshot: MissionClockSnapshot,
+): ECSOperationalAnnouncementEvent | null {
+  const deadline = snapshot.overdue[0]
+    ?? snapshot.active.find((candidate) => (
+      candidate.priority === 'critical'
+      && (candidate.status === 'due' || candidate.status === 'due_soon')
+    ));
+  if (!deadline) return null;
+  const overdue = deadline.status === 'overdue';
+  return {
+    id: `mission-clock:${deadline.id}:${deadline.status}`,
+    kind: 'critical_advisory',
+    subject: overdue ? `${deadline.title} is overdue` : `${deadline.title} requires attention`,
+    detail: `${formatMissionClockCountdown(deadline)}. Open the linked command to review the next explicit action.`,
+  };
+}
+
 export function windowMissionCommandBoardSection(
   section: MissionCommandBoardSectionPresentation,
   visibleLimit: number,
@@ -250,6 +343,21 @@ export function windowMissionCommandBoardSection(
     ...section,
     items,
     hasMore: items.length < section.totalCount,
+  };
+}
+
+export function windowMissionCommandTimeline<T>(
+  items: readonly T[],
+  visibleCount: number,
+  maximumVisible = 200,
+): MissionCommandTimelineWindow<T> {
+  const maximum = clampInteger(maximumVisible, 1, 500, 200);
+  const limit = clampInteger(visibleCount, 1, maximum, 1);
+  const visible = items.slice(0, limit);
+  return {
+    items: visible,
+    totalCount: items.length,
+    hasMore: visible.length < Math.min(items.length, maximum),
   };
 }
 
@@ -290,9 +398,48 @@ export function buildMissionCommandCardPresentation(
   const typeLabel = formatMissionCommandType(command.type);
   const lastUpdateLabel = formatRelativeTime(command.updatedAt, input.nowMs);
   const recommendedActionLabel = allowedActions[0]?.label ?? 'Review details';
+  const accessibilityLabel = [
+    `${priorityLabel} priority`,
+    command.title,
+    typeLabel,
+    operationalLabel,
+    `Target ${targetLabel}`,
+    acknowledgment.label,
+    deadline.label,
+    linkedContextLabel ? `Linked context ${linkedContextLabel}` : null,
+    `${source.originLabel} source`,
+    `${source.freshnessLabel} freshness`,
+    deliveryLabel,
+    `Updated ${lastUpdateLabel}`,
+    input.eventCount ? `${input.eventCount} history events` : null,
+  ].filter(Boolean).join('. ');
+  const renderFingerprint = [
+    command.id,
+    command.version,
+    command.updatedAt,
+    input.bucket,
+    command.instructions,
+    command.assignment?.updatedAt ?? '',
+    command.resolution?.occurredAt ?? '',
+    priorityLabel,
+    typeLabel,
+    operationalLabel,
+    targetLabel,
+    acknowledgment.label,
+    deadline.label,
+    linkedContextLabel ?? '',
+    source.originLabel,
+    source.freshnessLabel,
+    source.confidenceLabel,
+    deliveryLabel,
+    recommendedActionLabel,
+    allowedActions.map((item) => item.id).join(','),
+    accessibilityLabel,
+  ].join('\u001f');
 
   return {
     key: command.id,
+    renderFingerprint,
     commandId: command.id,
     bucket: input.bucket,
     priority: command.priority,
@@ -323,21 +470,7 @@ export function buildMissionCommandCardPresentation(
     allowedActions,
     updatedAt: command.updatedAt,
     lastUpdateLabel,
-    accessibilityLabel: [
-      `${priorityLabel} priority`,
-      command.title,
-      typeLabel,
-      operationalLabel,
-      `Target ${targetLabel}`,
-      acknowledgment.label,
-      deadline.label,
-      linkedContextLabel ? `Linked context ${linkedContextLabel}` : null,
-      `${source.originLabel} source`,
-      `${source.freshnessLabel} freshness`,
-      deliveryLabel,
-      `Updated ${lastUpdateLabel}`,
-      input.eventCount ? `${input.eventCount} history events` : null,
-    ].filter(Boolean).join('. '),
+    accessibilityLabel,
     command,
   };
 }

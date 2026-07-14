@@ -84,6 +84,10 @@ async function testOwnershipRegistry() {
   assert.strictEqual(ownership.getECSStateOwnership('active_vehicle_selection').owner, 'vehicleSetupStore');
   assert.strictEqual(ownership.getECSStateOwnership('sync_outbox').sensitivity, 'private');
   assert.strictEqual(ownership.getECSStateOwnership('runtime_event_bus').persistence, 'memory_only');
+  assert.strictEqual(ownership.getECSStateOwnership('dispatch_runtime').schemaVersion, 7);
+  assert.ok(
+    ownership.getECSStateOwnership('dispatch_runtime').adapters.includes('dispatchMissionCommandRuntime'),
+  );
 }
 
 async function testHydrationCoordinator() {

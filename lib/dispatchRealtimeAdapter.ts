@@ -9,6 +9,8 @@ import type {
   DispatchTimelineEvent,
 } from './dispatchTypes';
 import type { DispatchEvent } from './dispatchLiveEvents';
+import type { MissionCommand, MissionCommandEvent } from './dispatchMissionCommandTypes';
+import type { OperationalPlaybookInstance } from './dispatchOperationalPlaybookTypes';
 
 export type DispatchRealtimeEventType =
   | 'ping_upsert'
@@ -18,7 +20,10 @@ export type DispatchRealtimeEventType =
   | 'acknowledgment_upsert'
   | 'team_member_upsert'
   | 'timeline_event_added'
-  | 'cad_event_upsert';
+  | 'cad_event_upsert'
+  | 'mission_command_upsert'
+  | 'mission_command_event_added'
+  | 'mission_playbook_upsert';
 
 export type DispatchRealtimeStatus = 'disabled' | 'connecting' | 'connected' | 'error' | 'closed';
 
@@ -30,7 +35,10 @@ export type DispatchRealtimeEventDraft =
   | { type: 'acknowledgment_upsert'; acknowledgment: DispatchAcknowledgment }
   | { type: 'team_member_upsert'; teamMember: DispatchTeamMember }
   | { type: 'timeline_event_added'; timelineEvent: DispatchTimelineEvent }
-  | { type: 'cad_event_upsert'; cadEvent: DispatchEvent };
+  | { type: 'cad_event_upsert'; cadEvent: DispatchEvent }
+  | { type: 'mission_command_upsert'; missionCommand: MissionCommand }
+  | { type: 'mission_command_event_added'; missionCommandEvent: MissionCommandEvent }
+  | { type: 'mission_playbook_upsert'; missionPlaybook: OperationalPlaybookInstance };
 
 export type DispatchRealtimeEnvelope = DispatchRealtimeEventDraft & {
   id: string;
@@ -63,7 +71,8 @@ function isDispatchRealtimeEnvelope(value: unknown): value is DispatchRealtimeEn
     typeof event.expeditionId === 'string' &&
     typeof event.originClientId === 'string' &&
     typeof event.occurredAt === 'string' &&
-    typeof event.type === 'string'
+    typeof event.type === 'string' &&
+    DISPATCH_REALTIME_EVENT_TYPES.has(event.type as DispatchRealtimeEventType)
   );
 }
 
@@ -87,7 +96,7 @@ export function createDispatchRealtimeSession({
   let closed = false;
   const channel = supabase.channel(`ecs-dispatch:${expeditionId}`, {
     config: {
-      broadcast: { self: false },
+      broadcast: { self: false, ack: true },
     },
   });
 
@@ -221,7 +230,51 @@ function getRealtimeRecordKey(event: DispatchRealtimeEventDraft): string {
         event.cadEvent.updatedAt ?? event.cadEvent.createdAt,
         event.cadEvent.status ?? 'active',
       ].join(':');
-    default:
-      return `${Date.now()}`;
+    case 'mission_command_upsert':
+      return [
+        event.missionCommand.idempotencyKey,
+        event.missionCommand.version,
+        event.missionCommand.updatedAt,
+        event.missionCommand.operationalState,
+        event.missionCommand.deliveryState,
+      ].join(':');
+    case 'mission_command_event_added':
+      return [
+        event.missionCommandEvent.idempotencyKey,
+        event.missionCommandEvent.occurredAt,
+        event.missionCommandEvent.type,
+      ].join(':');
+    case 'mission_playbook_upsert':
+      return [
+        event.missionPlaybook.idempotencyKey,
+        event.missionPlaybook.version,
+        event.missionPlaybook.updatedAt,
+        event.missionPlaybook.state,
+      ].join(':');
   }
 }
+
+export function isMissionCommandRealtimeEnvelope(
+  event: DispatchRealtimeEnvelope,
+): event is Extract<
+  DispatchRealtimeEnvelope,
+  { type: 'mission_command_upsert' | 'mission_command_event_added' | 'mission_playbook_upsert' }
+> {
+  return event.type === 'mission_command_upsert'
+    || event.type === 'mission_command_event_added'
+    || event.type === 'mission_playbook_upsert';
+}
+
+const DISPATCH_REALTIME_EVENT_TYPES = new Set<DispatchRealtimeEventType>([
+  'ping_upsert',
+  'queue_item_upsert',
+  'assignment_upsert',
+  'assist_request_upsert',
+  'acknowledgment_upsert',
+  'team_member_upsert',
+  'timeline_event_added',
+  'cad_event_upsert',
+  'mission_command_upsert',
+  'mission_command_event_added',
+  'mission_playbook_upsert',
+]);

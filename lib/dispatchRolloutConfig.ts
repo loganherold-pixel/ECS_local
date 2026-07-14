@@ -16,6 +16,7 @@ export type DispatchRolloutFeature =
   | 'missionCommand'
   | 'incidentRoom'
   | 'canonicalBackendPersistence'
+  | 'missionCommandCanonicalPersistence'
   | 'notifications'
   | 'developerDiagnostics'
   | 'smartSuggestions'
@@ -35,6 +36,7 @@ export type DispatchRolloutFeature =
 export type DispatchRolloutConfig = Record<DispatchRolloutFeature, boolean>;
 
 export type DispatchCanonicalBackendMode = 'disabled' | 'shadow' | 'dual_read';
+export type DispatchMissionCanonicalBackendMode = 'disabled' | 'shadow';
 
 export const DEFAULT_DISPATCH_ROLLOUT_CONFIG: DispatchRolloutConfig = {
   dispatchTabVisibility: true,
@@ -48,6 +50,7 @@ export const DEFAULT_DISPATCH_ROLLOUT_CONFIG: DispatchRolloutConfig = {
   missionCommand: false,
   incidentRoom: false,
   canonicalBackendPersistence: false,
+  missionCommandCanonicalPersistence: false,
   notifications: false,
   developerDiagnostics: true,
   smartSuggestions: true,
@@ -77,6 +80,7 @@ const DISPATCH_ROLLOUT_DISABLED_COPY: Record<DispatchRolloutFeature, string> = {
   missionCommand: 'Mission Command is unavailable outside the approved internal rollout.',
   incidentRoom: 'Incident Room is unavailable outside the approved Mission Command rollout.',
   canonicalBackendPersistence: 'Canonical Dispatch persistence is disabled. ECS remains local-first.',
+  missionCommandCanonicalPersistence: 'Mission Command backend shadowing is disabled. Local Mission Command remains authoritative.',
   notifications: 'Dispatch notifications are disabled until notification policy is verified.',
   developerDiagnostics: 'Dispatch developer diagnostics are disabled for this rollout.',
   smartSuggestions: 'Smart Dispatch suggestions are paused for this rollout.',
@@ -115,6 +119,10 @@ export function resolveDispatchRolloutConfig(
     'dispatch_canonical_backend',
     visibilityContext,
   ).visible;
+  const missionCommandBackendVisible = resolveECSFeatureVisibility(
+    'dispatch_mission_command_backend',
+    visibilityContext,
+  ).visible;
   const missionCommandVisible = resolveECSFeatureVisibility(
     'dispatch_mission_command',
     visibilityContext,
@@ -146,6 +154,13 @@ export function resolveDispatchRolloutConfig(
       (Object.prototype.hasOwnProperty.call(overrides, 'canonicalBackendPersistence')
         ? merged.canonicalBackendPersistence
         : canonicalBackendVisible) && canonicalBackendVisible,
+    missionCommandCanonicalPersistence:
+      (Object.prototype.hasOwnProperty.call(overrides, 'missionCommandCanonicalPersistence')
+        ? merged.missionCommandCanonicalPersistence
+        : missionCommandBackendVisible) &&
+      missionCommandVisible &&
+      canonicalBackendVisible &&
+      missionCommandBackendVisible,
     teamPositionSharing: merged.teamPositionSharing && positionSharingVisible,
     // Keep the stable rollout key while the authoritative capability is Smart Rally.
     convoyRegroupPlanner: merged.convoyRegroupPlanner && positionSharingVisible && smartRallyVisible,
@@ -179,4 +194,16 @@ export function resolveDispatchCanonicalBackendMode(
   return requestedMode === 'shadow' || requestedMode === 'dual_read'
     ? requestedMode
     : 'disabled';
+}
+
+export function resolveDispatchMissionCanonicalBackendMode(
+  config: DispatchRolloutConfig = resolveDispatchRolloutConfig(),
+  requestedMode: unknown = process.env.EXPO_PUBLIC_ECS_MISSION_COMMAND_BACKEND_MODE,
+): DispatchMissionCanonicalBackendMode {
+  if (
+    !config.missionCommand
+    || !config.canonicalBackendPersistence
+    || !config.missionCommandCanonicalPersistence
+  ) return 'disabled';
+  return requestedMode === 'shadow' ? 'shadow' : 'disabled';
 }

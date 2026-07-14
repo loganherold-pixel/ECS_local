@@ -331,7 +331,7 @@ const defaults = {
 dispatchPersistenceAdapter.upsertGuardianCheckIn('expedition-guardian', defaults, fixed);
 dispatchPersistenceAdapter.upsertGuardianCheckIn('expedition-guardian', defaults, fixed);
 const restored = dispatchPersistenceAdapter.load('expedition-guardian', defaults);
-assert.equal(restored.version, 5);
+assert.equal(restored.version, 7);
 assert.equal(restored.guardianCheckIns.length, 1);
 assert.equal(restored.guardianCheckIns[0].id, fixed.id);
 
@@ -344,7 +344,7 @@ localStorage.setItem(`dispatch_state_${legacyExpeditionId}`, JSON.stringify({
   missionCommandEvents: [], operationalPlaybooks: [], updatedAt: BASE,
 }));
 const migrated = dispatchPersistenceAdapter.loadResult(legacyExpeditionId, defaults);
-assert.equal(migrated.snapshot.version, 5);
+assert.equal(migrated.snapshot.version, 7);
 assert.deepEqual(migrated.snapshot.guardianCheckIns, []);
 assert.equal(migrated.status, 'ready');
 

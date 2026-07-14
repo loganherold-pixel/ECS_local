@@ -8,6 +8,7 @@ import {
   type DispatchCanonicalResult,
   type DispatchCanonicalSubscription,
 } from './dispatchCanonicalRepository';
+import { isDispatchMissionCanonicalEntity } from './dispatchMissionCommandCanonicalAdapter';
 import {
   mergeDispatchAcknowledgmentBatch,
   mergeDispatchAssignmentBatch,
@@ -18,15 +19,25 @@ import {
 } from './dispatchIntegrity';
 import type { DispatchPersistenceSnapshot } from './dispatchPersistenceAdapter';
 import type { DispatchCanonicalBackendMode } from './dispatchRolloutConfig';
+import type { DispatchMissionCanonicalBackendMode } from './dispatchRolloutConfig';
+import {
+  mergeMissionCommandBatch,
+  mergeMissionCommandEventBatch,
+} from './dispatchMissionCommandDomain';
+import { mergeOperationalPlaybookInstanceBatch } from './dispatchOperationalPlaybookDomain';
 
 export interface DispatchCanonicalMigrationDiagnostics {
   schemaVersion: 1;
   mode: DispatchCanonicalBackendMode;
+  missionMode: DispatchMissionCanonicalBackendMode;
   sourceAuthority: 'local_first';
   outstandingJobs: number;
   writesAttempted: number;
   writesApplied: number;
   writesFailed: number;
+  migrationsAttempted: number;
+  migrationsApplied: number;
+  migrationsFailed: number;
   pullsAttempted: number;
   pullsApplied: number;
   pullsFailed: number;
@@ -46,6 +57,13 @@ export interface DispatchCanonicalHydrationResult {
   applied: boolean;
   shadowDifferenceCount: number;
   serverRevision: number | null;
+}
+
+export interface DispatchCanonicalMigrationResult {
+  attempted: number;
+  applied: number;
+  failed: number;
+  skipped: number;
 }
 
 export interface DispatchCanonicalRealtimeLease {
@@ -74,6 +92,9 @@ function countIdentityDifferences(
     assistRequests: { id: string }[];
     acknowledgments: { id: string }[];
     timelineEvents: { id: string }[];
+    missionCommands: { id: string }[];
+    missionCommandEvents: { id: string }[];
+    operationalPlaybooks: { id: string }[];
     tombstones: Partial<Record<DispatchCanonicalEntityType, string[]>>;
   },
 ): number {
@@ -93,6 +114,9 @@ function countIdentityDifferences(
     difference(local.assistRequests, remote.assistRequests) +
     difference(local.acknowledgments, remote.acknowledgments) +
     difference(local.timelineEvents, remote.timelineEvents) +
+    difference(local.missionCommands, remote.missionCommands ?? []) +
+    difference(local.missionCommandEvents, remote.missionCommandEvents ?? []) +
+    difference(local.operationalPlaybooks, remote.operationalPlaybooks ?? []) +
     Object.values(remote.tombstones).reduce((total, ids) => total + (ids?.length ?? 0), 0)
   );
 }
@@ -106,8 +130,9 @@ function withoutTombstones<T extends { id: string }>(items: T[], ids: string[] |
 export function reconcileCanonicalDispatchSnapshot(
   local: DispatchPersistenceSnapshot,
   remote: DispatchCanonicalRemoteSnapshot,
+  options: { includeMissionCommand?: boolean } = {},
 ): DispatchPersistenceSnapshot {
-  return {
+  const legacy = {
     ...local,
     pings: mergeDispatchPingBatch([
       ...withoutTombstones(local.pings, remote.tombstones.ping),
@@ -135,6 +160,25 @@ export function reconcileCanonicalDispatchSnapshot(
     ]),
     updatedAt: new Date().toISOString(),
   };
+  if (!options.includeMissionCommand) return legacy;
+  return {
+    ...legacy,
+    missionCommands: mergeMissionCommandBatch([
+      ...withoutTombstones(local.missionCommands, remote.tombstones.mission_command),
+      ...(remote.missionCommands ?? []),
+    ]),
+    missionCommandEvents: mergeMissionCommandEventBatch([
+      ...local.missionCommandEvents,
+      ...(remote.missionCommandEvents ?? []),
+    ]),
+    operationalPlaybooks: mergeOperationalPlaybookInstanceBatch([
+      ...withoutTombstones(
+        local.operationalPlaybooks,
+        remote.tombstones.mission_playbook_instance,
+      ),
+      ...(remote.operationalPlaybooks ?? []),
+    ]),
+  };
 }
 
 export function resolveDispatchCanonicalContext(input: {
@@ -156,19 +200,25 @@ export function resolveDispatchCanonicalContext(input: {
 export class DispatchCanonicalMigrationCoordinator {
   private diagnostics: DispatchCanonicalMigrationDiagnostics;
   private readonly pullFlights = new Map<string, Promise<DispatchCanonicalHydrationResult>>();
+  private readonly migrationFlights = new Map<string, Promise<DispatchCanonicalMigrationResult>>();
 
   constructor(
     private readonly mode: DispatchCanonicalBackendMode,
     private readonly repository: DispatchCanonicalRepository = dispatchCanonicalRepository,
+    private readonly missionMode: DispatchMissionCanonicalBackendMode = 'disabled',
   ) {
     this.diagnostics = {
       schemaVersion: 1,
       mode,
+      missionMode,
       sourceAuthority: 'local_first',
       outstandingJobs: 0,
       writesAttempted: 0,
       writesApplied: 0,
       writesFailed: 0,
+      migrationsAttempted: 0,
+      migrationsApplied: 0,
+      migrationsFailed: 0,
       pullsAttempted: 0,
       pullsApplied: 0,
       pullsFailed: 0,
@@ -191,19 +241,26 @@ export class DispatchCanonicalMigrationCoordinator {
   async persistEntity(
     context: DispatchCanonicalContext,
     entity: DispatchCanonicalEntity,
+    clientOperationId?: string,
   ): Promise<DispatchCanonicalResult<{ id: string; serverRevision: number | null }>> {
-    if (this.mode === 'disabled') {
+    const missionEntity = isDispatchMissionCanonicalEntity(entity);
+    if (
+      (missionEntity && this.missionMode === 'disabled')
+      || (!missionEntity && this.mode === 'disabled')
+    ) {
       return {
         ok: false,
         code: 'backend_unavailable',
-        error: 'Canonical Dispatch persistence is disabled. Local Dispatch remains authoritative.',
+        error: missionEntity
+          ? 'Mission Command backend shadowing is disabled. Local Mission Command remains authoritative.'
+          : 'Canonical Dispatch persistence is disabled. Local Dispatch remains authoritative.',
       };
     }
 
     this.diagnostics.writesAttempted += 1;
     this.diagnostics.outstandingJobs += 1;
     try {
-      const result = await this.repository.upsertEntity(context, entity);
+      const result = await this.repository.upsertEntity(context, entity, clientOperationId);
       if (result.ok) {
         this.diagnostics.writesApplied += 1;
         this.diagnostics.lastServerRevision = result.data.serverRevision;
@@ -223,11 +280,28 @@ export class DispatchCanonicalMigrationCoordinator {
     }
   }
 
+  migrateLocalMissionSnapshot(
+    context: DispatchCanonicalContext,
+    local: DispatchPersistenceSnapshot,
+  ): Promise<DispatchCanonicalMigrationResult> {
+    if (this.missionMode === 'disabled') {
+      return Promise.resolve({ attempted: 0, applied: 0, failed: 0, skipped: 0 });
+    }
+    const key = `${context.expeditionId}:${context.convoyId}:mission`;
+    const existing = this.migrationFlights.get(key);
+    if (existing) return existing;
+    const flight = this.runLocalMissionMigration(context, local).finally(() => {
+      if (this.migrationFlights.get(key) === flight) this.migrationFlights.delete(key);
+    });
+    this.migrationFlights.set(key, flight);
+    return flight;
+  }
+
   hydrate(
     context: DispatchCanonicalContext,
     local: DispatchPersistenceSnapshot,
   ): Promise<DispatchCanonicalHydrationResult> {
-    if (this.mode === 'disabled') {
+    if (this.mode === 'disabled' && this.missionMode === 'disabled') {
       return Promise.resolve({
         snapshot: local,
         applied: false,
@@ -252,7 +326,7 @@ export class DispatchCanonicalMigrationCoordinator {
     getLocalSnapshot(): DispatchPersistenceSnapshot;
     onHydrated(result: DispatchCanonicalHydrationResult): void;
   }): DispatchCanonicalRealtimeLease {
-    if (this.mode === 'disabled') return { unsubscribe() {} };
+    if (this.mode === 'disabled' && this.missionMode === 'disabled') return { unsubscribe() {} };
 
     let closed = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -335,7 +409,7 @@ export class DispatchCanonicalMigrationCoordinator {
       this.diagnostics.lastServerRevision = remote.data.serverRevision;
       this.diagnostics.pullsApplied += 1;
       this.markSuccess();
-      if (this.mode === 'shadow') {
+      if (this.mode !== 'dual_read') {
         return {
           snapshot: local,
           applied: false,
@@ -345,7 +419,12 @@ export class DispatchCanonicalMigrationCoordinator {
       }
 
       return {
-        snapshot: reconcileCanonicalDispatchSnapshot(local, remote.data),
+        // Mission Command stays shadow-only in this tranche. A legacy
+        // canonical dual-read may reconcile its own records, but never Mission
+        // command, playbook, deadline, or incident state.
+        snapshot: reconcileCanonicalDispatchSnapshot(local, remote.data, {
+          includeMissionCommand: false,
+        }),
         applied: true,
         shadowDifferenceCount: differences,
         serverRevision: remote.data.serverRevision,
@@ -362,6 +441,46 @@ export class DispatchCanonicalMigrationCoordinator {
     } finally {
       this.diagnostics.outstandingJobs = Math.max(0, this.diagnostics.outstandingJobs - 1);
     }
+  }
+
+  private async runLocalMissionMigration(
+    context: DispatchCanonicalContext,
+    local: DispatchPersistenceSnapshot,
+  ): Promise<DispatchCanonicalMigrationResult> {
+    const eligibleCommandIds = new Set(local.missionCommands
+      .filter((command) => command.target.kind !== 'solo')
+      .map((command) => command.id));
+    const entities: DispatchCanonicalEntity[] = [
+      ...local.missionCommands
+        .filter((command) => eligibleCommandIds.has(command.id))
+        .map((value) => ({ type: 'mission_command' as const, value })),
+      ...local.missionCommandEvents
+        .filter((event) => eligibleCommandIds.has(event.commandId))
+        .map((value) => ({ type: 'mission_command_event' as const, value })),
+      ...local.operationalPlaybooks
+        .map((value) => ({ type: 'mission_playbook_instance' as const, value })),
+    ];
+    const result: DispatchCanonicalMigrationResult = {
+      attempted: 0,
+      applied: 0,
+      failed: 0,
+      skipped: local.missionCommands.length - eligibleCommandIds.size,
+    };
+    for (const entity of entities) {
+      result.attempted += 1;
+      this.diagnostics.migrationsAttempted += 1;
+      const stored = await this.persistEntity(context, entity);
+      if (stored.ok) {
+        result.applied += 1;
+        this.diagnostics.migrationsApplied += 1;
+      } else if (stored.code === 'permission_denied' || stored.code === 'identity_unresolved') {
+        result.skipped += 1;
+      } else {
+        result.failed += 1;
+        this.diagnostics.migrationsFailed += 1;
+      }
+    }
+    return result;
   }
 
   private markSuccess() {

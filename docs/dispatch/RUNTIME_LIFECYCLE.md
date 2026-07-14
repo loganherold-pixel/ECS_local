@@ -30,7 +30,7 @@ Invalid and terminal-state transitions are rejected by `lib/dispatchLifecycle.ts
 
 ## Persistence And Replay
 
-Dispatch persistence schema version 4 adds default-off Operational Playbook instances with bounded embedded event history while retaining every version 3 field. Version 3 added Mission Command aggregates and append-only command events. Missing canonical arrays initialize empty, invalid canonical records fail closed, and legacy records remain available for explicit adapter-based migration. Version 1 through version 3 snapshots still load without destructive migration.
+Operational Playbook instances and bounded embedded event history were introduced in Dispatch persistence schema version 4, while version 3 introduced Mission Command aggregates and append-only command events. The current version 7 keeps those records and adds durable Mission/Playbook outbox recovery. Missing canonical arrays initialize empty, invalid canonical records fail closed, and version 1 through version 6 snapshots still load without destructive migration.
 
 Replay is single-flight per expedition, FIFO by creation time, bounded to 100 actions per pass, cancellable, and protected by exponential retry backoff. Interrupted `replaying` actions restore as `queued`. A successful transport changes delivery state to `sent`; it does not mark the operational item resolved.
 
@@ -80,6 +80,22 @@ Measured on the same Windows development host using deterministic synthetic reco
 | Merge 5,000 CAD events | Not previously measured | 15.369 ms |
 
 These are CI/development regression measurements, not Android or iOS frame-rate, memory, battery, radio, or field-network claims. Real-device profiling is still required for native file hydration, reconnect behavior, background transitions, and sustained multi-client event traffic.
+
+## Mission Command UI Quality Evidence
+
+Measured on the same Windows development host with deterministic synthetic fixtures on 2026-07-14:
+
+| Workflow | Before | After |
+| --- | ---: | ---: |
+| Initial Command Board presentation model | 3.77 ms | 3.25 ms |
+| 250 commands plus 5,000 events, 40 model builds | 65.75 ms | 55.06 ms |
+| 1,000 Mission Clock deadlines, 50 scheduler updates | 44.47 ms | 32.62 ms |
+| 100 realtime merges with the former duplicate diagnostics load | 529.51 ms | 380.03 ms |
+| Expo web initial entry | 16,992,998 bytes | 16,864,171 bytes |
+
+The stable Board selector produced zero card invalidations for an unchanged projection and exactly one invalidation for a single acknowledgment update. Timeline windows initially expose 20 rows; 1,000 window selections over a 10,000-event fixture took 0.48 ms. The Mission Clock retained one scheduler timer across 100 updates. Six heavy Mission panels now load on demand as 122,138 bytes of async web chunks. The bounded 250-command and 750-event serialized retention fixture occupied 608,215 bytes; this is a persistence-size proxy, not a native heap measurement.
+
+Wall-clock timing on a shared development host is noisy. These figures are regression evidence only and do not establish native frame rate, heap retention, screen-reader focus behavior, battery use, or thermal performance. Those claims require Android and iOS profiling with production artifacts.
 
 ## Rollout Boundary
 

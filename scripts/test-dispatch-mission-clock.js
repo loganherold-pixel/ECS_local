@@ -30,6 +30,8 @@ Module._load = function loadWithReactNativeStub(request, parent, isMain) {
 
 const clock = require(path.join(root, 'lib', 'dispatchMissionClock.ts'));
 const clockScheduler = require(path.join(root, 'lib', 'dispatchMissionClockScheduler.ts'));
+const missionPresentation = require(path.join(root, 'lib', 'dispatchMissionCommandPresentation.ts'));
+const operationalAccessibility = require(path.join(root, 'lib', 'accessibility', 'ecsOperationalAccessibility.ts'));
 
 const DUE_AT = '2026-07-14T12:00:00.000Z';
 const DUE_MS = Date.parse(DUE_AT);
@@ -268,6 +270,14 @@ assert.equal(timers.size, 1);
 scheduler.update([deadline('scheduler'), deadline('scheduler-2', { dueAt: '2026-07-14T12:30:00.000Z' })]);
 assert.equal(timers.size, 1, 'Updating deadlines must replace, not stack, the scheduler timer.');
 assert.equal(maximumTimerCount, 1, 'Mission Clock must never own more than one timer.');
+for (let tickIndex = 0; tickIndex < 100; tickIndex += 1) {
+  scheduler.update([deadline('scheduler', {
+    dueAt: new Date(DUE_MS + (tickIndex * 1_000)).toISOString(),
+  })]);
+}
+assert.equal(timers.size, 1, 'Repeated Mission Clock updates must continue replacing one scheduler timer.');
+assert.equal(maximumTimerCount, 1);
+scheduler.update([deadline('scheduler')]);
 scheduler.setForeground(false);
 assert.equal(timers.size, 0, 'Backgrounding must clear the active timer.');
 nowMs = DUE_MS + 1;
@@ -278,6 +288,41 @@ scheduler.stop();
 assert.equal(timers.size, 0);
 assert.equal(scheduler.getDiagnostics().activeTimerCount, 0);
 assert.ok(ticks.length >= 3);
+
+const urgentClock = clock.buildMissionClockSnapshot([
+  deadline('urgent-announcement', {
+    priority: 'critical',
+    dueAt: '2026-07-14T12:01:00.000Z',
+  }),
+], DUE_MS);
+const urgentEvent = missionPresentation.selectMissionCommandClockAnnouncement(urgentClock);
+assert.ok(urgentEvent, 'A newly critical deadline must produce a screen-reader announcement event.');
+assert.match(urgentEvent.subject, /requires attention/i);
+const firstAnnouncement = operationalAccessibility.buildECSOperationalAnnouncement(urgentEvent);
+const repeatedAnnouncement = operationalAccessibility.buildECSOperationalAnnouncement(
+  missionPresentation.selectMissionCommandClockAnnouncement(urgentClock),
+);
+assert.equal(
+  repeatedAnnouncement.fingerprint,
+  firstAnnouncement.fingerprint,
+  'An unchanged urgent deadline must retain one fingerprint so the shared announcer suppresses notification spam.',
+);
+const overdueEvent = missionPresentation.selectMissionCommandClockAnnouncement(
+  clock.buildMissionClockSnapshot([deadline('urgent-announcement', {
+    priority: 'critical',
+    dueAt: '2026-07-14T11:59:00.000Z',
+  })], DUE_MS),
+);
+assert.match(overdueEvent.subject, /overdue/i);
+assert.notEqual(
+  operationalAccessibility.buildECSOperationalAnnouncement(overdueEvent).fingerprint,
+  firstAnnouncement.fingerprint,
+  'The transition into overdue must be announced exactly once as a new state.',
+);
+assert.equal(
+  missionPresentation.selectMissionCommandClockAnnouncement(clock.buildMissionClockSnapshot([], DUE_MS)),
+  null,
+);
 
 const boardSource = fs.readFileSync(path.join(root, 'components', 'dispatch', 'DispatchMissionCommandBoard.tsx'), 'utf8');
 const panelSource = fs.readFileSync(path.join(root, 'components', 'dispatch', 'DispatchMissionClockPanel.tsx'), 'utf8');
@@ -310,6 +355,7 @@ assert.ok(
 console.log(JSON.stringify({
   status: 'passed',
   schedulerMaximumTimerCount: maximumTimerCount,
+  repeatedSchedulerUpdates: 100,
   highVolume: {
     deadlineCount: highVolumeDeadlines.length,
     iterations: 50,

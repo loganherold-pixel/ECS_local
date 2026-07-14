@@ -19,7 +19,14 @@ assert.match(commandTypes, /MissionCommandAcknowledgmentState/);
 assert.match(commandDomain, /transitionMissionCommandOperationalState/);
 assert.match(commandDomain, /createMissionCommandEvent/);
 
-assert.match(persistence, /const STORAGE_VERSION = \d+;/);
+assert.match(
+  persistence,
+  /export const DISPATCH_PERSISTENCE_SCHEMA_VERSION = \d+ as const;/,
+);
+assert.match(
+  persistence,
+  /const STORAGE_VERSION = DISPATCH_PERSISTENCE_SCHEMA_VERSION;/,
+);
 assert.match(persistence, /missionCommands: MissionCommand\[\]/);
 assert.match(persistence, /missionCommandEvents: MissionCommandEvent\[\]/);
 assert.match(persistence, /applyMissionCommandMutation/);

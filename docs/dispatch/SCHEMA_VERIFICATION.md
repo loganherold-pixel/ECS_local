@@ -4,7 +4,7 @@ Last updated: 2026-07-14
 
 ## Verdict
 
-Dispatch has a durable local version 4 snapshot and outbox plus an additive canonical Supabase schema. Version 3 added local Mission Command aggregates and events. Version 4 adds local Operational Playbook instances and their bounded event history. Neither addition enables a Mission Command or playbook backend table. Canonical persistence is implementation-complete for guarded internal verification, but it is not production-approved or production-visible. Local state remains authoritative.
+Dispatch has a durable local version 7 snapshot and outbox plus additive canonical Supabase schemas. Mission Commands, Operational Playbooks, deadlines, incident links, and append-only events now have a guarded canonical shadow representation. Canonical persistence is implementation-complete for guarded internal verification, but it is not production-approved or production-visible. Local state remains authoritative.
 
 The canonical path is disabled by default and fails closed unless the feature registry approves it and the mode is explicitly `shadow` or `dual_read`. Hosted RLS, privacy, multi-client, native-device, provider, and owner evidence is still required.
 
@@ -22,12 +22,16 @@ The canonical path is disabled by default and fails closed unless the feature re
 | Idempotency evidence | Local idempotency keys | `dispatch_operation_receipts` | Server-generated, read-only to clients |
 | Offline operations | Local outbox | No server queue table by design | Local-first and durable |
 | Legacy CAD events | Local CAD snapshot plus existing adapter | Existing `dispatch_cad_events` path | Separate compatibility path |
-| Mission Commands | Local snapshot only, default-off | None in this foundation | Internal domain verification only |
-| Operational Playbooks | Local snapshot only, default-off | None in this framework | Internal framework verification only |
+| Mission Commands | Local snapshot/outbox, default-off UI | `dispatch_mission_commands`, targets, acknowledgments, events | Shadow-only internal verification |
+| Operational Playbooks | Local snapshot/outbox, default-off UI | instances, steps, events, deadlines, incident links | Shadow-only internal verification |
 
 Migration: `supabase/migrations/20260713054719_dispatch_canonical_persistence.sql`
 
+Mission extension: `supabase/migrations/20260714195656_mission_command_canonical_persistence.sql`
+
 Rollback: `supabase/rollback/20260713054719_dispatch_canonical_persistence.sql`
+
+Mission rollback: `supabase/rollback/20260714195656_mission_command_canonical_persistence.sql`
 
 Runtime contract: `lib/dispatchCanonicalRepository.ts`
 
@@ -62,7 +66,7 @@ Every canonical policy checks the exact pair of `convoys.id` and `convoys.expedi
 - Completed/cancelled members retain read-only history, with a seven-day timestamp-bounded exception for a member's own acknowledgment observed before completion.
 - Authenticated clients cannot hard-delete records, forge receipts, or execute retention cleanup.
 
-The pgTAP contract is `supabase/tests/database/rls_dispatch_canonical.test.sql`.
+The required pgTAP contracts are `supabase/tests/database/rls_dispatch_canonical.test.sql` and `supabase/tests/database/rls_mission_command_canonical.test.sql`.
 
 ## Location Boundary
 
@@ -101,6 +105,8 @@ Indexes cover expedition/status/update time, convoy/server revision, actor, assi
 | Readiness gate | `gate:dispatch-convoy-production` |
 
 See `docs/dispatch/CANONICAL_BACKEND_MIGRATION.md` for deployment, rollback, diagnostics, and evidence requirements.
+
+See `docs/dispatch/MISSION_COMMAND_CANONICAL_PERSISTENCE.md` for Mission table ownership, shadow semantics, RLS, partial-write repair, and scoped rollback.
 
 ## Remaining Evidence
 

@@ -31,7 +31,7 @@ The linked-context adapter reuses local route, pin, bailout, Navigate, and Incid
 
 ## Persistence And Rollout
 
-Route Blockage uses Operational Playbook schema version 1 inside Dispatch persistence version 4. It adds no new persisted shape, Supabase table, provider dependency, or migration.
+Route Blockage uses Operational Playbook schema version 1 inside the current Dispatch persistence version 7. It adds no scenario-specific persisted shape, Supabase table, provider dependency, or migration; the generic default-off Playbook shadow tables apply uniformly.
 
 It uses `dispatch_mission_command`:
 
