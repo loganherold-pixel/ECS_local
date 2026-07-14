@@ -6,6 +6,7 @@
 // ============================================================
 
 import type { ExpeditionOpportunity } from './discoverEngine';
+import type { ECSAIRouteIdeaPolicyMetadata } from './ai/aiPolicyBoundary';
 
 // ── AI Route Confidence Levels ───────────────────────────────
 export type AIRouteConfidence = 'high' | 'good' | 'explore';
@@ -35,6 +36,8 @@ export interface AIGeneratedRoute extends ExpeditionOpportunity {
   campSuitability: string;
   /** ISO timestamp when the route was generated */
   generatedAt: string;
+  /** AI ideas are proposals only and cannot be treated as verified guidance geometry. */
+  aiPolicy: ECSAIRouteIdeaPolicyMetadata;
   /** Popularity score (5-80, lower = less known) */
   popularityScore?: number;
 }

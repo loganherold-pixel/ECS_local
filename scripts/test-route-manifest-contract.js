@@ -29,6 +29,7 @@ const {
   ECS_PRIMARY_TAB_MANIFEST,
   ECS_PROTECTED_ROUTE_SCREENS,
   getPrimaryTabForPath,
+  getRouteFeatureRequirement,
   getRestorableShellRouteForPath,
   isProtectedRoutePath,
   isSharedShellBackgroundRoute,
@@ -39,6 +40,23 @@ assert.deepStrictEqual(
   ['fleet', 'navigate', 'dashboard', 'explore', 'dispatch'],
   'Primary bottom tab order must remain Fleet | Navigate | Dashboard | Explore | Dispatch.',
 );
+
+[
+  ['/fleet', 'fleet_tab'],
+  ['/navigate', 'navigate_tab'],
+  ['/dashboard', 'dashboard_tab'],
+  ['/discover', 'explore_tab'],
+  ['/alert', 'dispatch_tab'],
+  ['/explore-trip-builder', 'explore_trip_builder'],
+  ['/explore-offline-prep-pack', 'explore_offline_prep'],
+  ['/convoy-command', 'convoy_command'],
+].forEach(([route, featureId]) => {
+  assert.strictEqual(
+    getRouteFeatureRequirement(route),
+    featureId,
+    `${route} should use the authoritative ${featureId} visibility policy.`,
+  );
+});
 
 assert.deepStrictEqual(
   ECS_PRIMARY_TAB_MANIFEST.map((tab) => tab.route),

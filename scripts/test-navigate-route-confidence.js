@@ -14,6 +14,12 @@ const timelineSource = readSource('lib', 'routeContext', 'routeConfidenceTimelin
 const routeContextTypesSource = readSource('lib', 'routeContext', 'routeContextTypes.ts');
 const routeContextIndexSource = readSource('lib', 'routeContext', 'index.ts');
 const overlaySource = readSource('components', 'navigate', 'RoadNavigationOverlay.tsx');
+const timelinePanelComponentSource = readSource('components', 'navigate', 'RouteConfidenceTimelinePanel.tsx');
+const navigateTimelinePresentationSource = readSource(
+  'lib',
+  'navigation',
+  'navigateRouteConfidenceTimelinePresentation.ts',
+);
 const navigateSource = readSource('app', '(tabs)', 'navigate.tsx');
 const packageSource = readSource('package.json');
 
@@ -168,8 +174,18 @@ assertIncludes(
 );
 assertIncludes(
   navigateSource,
-  "import { buildRouteConfidenceTimeline, isRouteConfidenceTimelineFeatureEnabled, routeConfidenceTimelineItemCopy",
-  'Navigate should import the Route Context timeline contract and safety-copy helper.',
+  "import { buildRouteConfidenceTimeline, isRouteConfidenceTimelineFeatureEnabled, type RouteConfidenceTimelineItem }",
+  'Navigate should import the Route Context timeline builder, feature gate, and callback contract.',
+);
+assertIncludes(
+  navigateSource,
+  "from '../../lib/navigation/navigateRouteConfidenceTimelinePresentation'",
+  'Navigate should compose its pure route-confidence presentation adapter.',
+);
+assertIncludes(
+  timelinePanelComponentSource,
+  'routeConfidenceTimelineItemCopy',
+  'The extracted panel should retain canonical Route Context safety copy.',
 );
 assertIncludes(
   navigateSource,
@@ -177,9 +193,9 @@ assertIncludes(
   'Navigate should keep the Route Confidence Timeline behind a feature flag.',
 );
 assertIncludes(
-  navigateSource,
-  'function routeConfidenceTimelineMatchesRoute(',
-  'Navigate should validate timeline route and geometry identity before rendering spans.',
+  navigateTimelinePresentationSource,
+  'export function routeConfidenceTimelineMatchesRoute(',
+  'The Navigate presentation adapter should validate timeline route and geometry identity.',
 );
 assertIncludes(
   navigateSource,
@@ -207,32 +223,32 @@ assertIncludes(
   'Navigate should render the Route Confidence Timeline only when enabled.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'What certainty changes along this route?',
   'Route Confidence Timeline should explain the non-blocking comprehension layer.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Unknown/low confidence means uncertainty, not confirmed danger.',
   'Navigate copy should separate uncertainty from known risk.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Route confidence timeline unavailable.',
   'Navigate should gracefully fall back when timeline data is unavailable.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Timeline limited by available source data.',
   'Navigate should label partial or source-limited timelines honestly.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Showing notable confidence changes only.',
   'Navigate should not imply full-route confidence for notable-spans-only timelines.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'No notable confidence changes from available sources.',
   'Navigate should avoid implying full-route safety when no notable spans render.',
 );
@@ -242,55 +258,55 @@ assertIncludes(
   'Navigate should link timeline item selection to map-oriented segment detail behavior.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Source: {routeConfidenceTimelineSourceName(selectedItem.primaryDriver.source)}',
   'Expanded route confidence details should expose primary source provenance.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Freshness: {selectedItem.primaryDriver.source.freshness.replace(/_/g, \' \')}',
   'Expanded route confidence details should expose source freshness.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Observed: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.observedAt)}',
   'Expanded route confidence details should expose observed timestamps when available.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Generated: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.generatedAt)}',
   'Expanded route confidence details should expose generated timestamps when available.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Expires: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.expiresAt)}',
   'Expanded route confidence details should expose source expiry when available.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Contributing drivers: {routeConfidenceTimelineDriverSummary(selectedItem)}',
   'Expanded route confidence details should list contributing drivers.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Unknown source',
   'Missing source metadata should fall back to Unknown source, not fake certainty.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Stale/unavailable source metadata present.',
   'Stale or unavailable source details should be visible in segment detail.',
 );
 assertIncludes(
-  navigateSource,
+  timelinePanelComponentSource,
   'Timeline diagnostics do not affect route readiness or route choice.',
   'Navigate should explicitly keep timeline diagnostics explanatory only.',
 );
 
 const timelinePanelSource = sourceSliceBetween(
-  navigateSource,
+  timelinePanelComponentSource,
   'function RouteConfidenceTimelinePanel({',
-  'function formatNavDuration(',
+  'function routeConfidenceTimelineTone(',
   'RouteConfidenceTimelinePanel source should be present.',
 );
 [

@@ -70,6 +70,21 @@ assertIncludes(
 );
 assertIncludes(
   coordinator,
+  'networkAvailable?: boolean;',
+  'Offline sync resume should accept an explicit connectivity preflight.',
+);
+assertIncludes(
+  coordinator,
+  'if (input.networkAvailable === false || !hydrated) return [];',
+  'Offline sync resume must not launch network work before hydration or while offline.',
+);
+assertIncludes(
+  coordinator,
+  'async waitForHydration(): Promise<void>',
+  'Offline sync coordinator should expose durable hydration before startup replay.',
+);
+assertIncludes(
+  coordinator,
   'persistence.set(STORAGE_KEY, JSON.stringify(sorted));',
   'Offline sync coordinator should persist job status/progress snapshots.',
 );
@@ -177,8 +192,18 @@ assertIncludes(
 );
 assertIncludes(
   rootLayout,
-  "offlineTileSyncCoordinator.resumePendingJobs({ syncType: 'route' });",
-  'Root shell should resume queued route syncs on startup and foreground.',
+  'networkAvailable: connectivity.isOnline()',
+  'Root shell should resume queued route syncs only after a connectivity preflight.',
+);
+assertIncludes(
+  rootLayout,
+  'offlineReadinessCoordinator.waitForHydration()',
+  'Root shell should hydrate canonical offline readiness without blocking shell startup.',
+);
+assertIncludes(
+  rootLayout,
+  'tileCacheStore.setProtectionResolver',
+  'Root shell should install active route and expedition storage protection.',
 );
 assertIncludes(
   offlineSyncStatusChip,

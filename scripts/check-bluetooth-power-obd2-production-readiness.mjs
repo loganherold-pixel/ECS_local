@@ -3,12 +3,25 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import {
+  classifyEvidenceCheckOutcome,
+  writeEvidenceCheckResultForLane,
+} from './verification/evidence-result.mjs';
+
 const RESULT_RELATIVE_PATH = path.join('.smoke', 'bluetooth-power-obd2-production-readiness-result.json');
 const EVIDENCE_RELATIVE_PATH = path.join('.smoke', 'bluetooth-power-obd2-production-evidence.json');
 const REAL_DEVICE_PLAN_RELATIVE_PATH = path.join('docs', 'bluetooth-obd2-real-device-e2e.md');
 const SCANNER_AUDIT_RELATIVE_PATH = path.join('docs', 'bluetooth-unified-scanner-audit.md');
 const BLUESTACK_PROVIDER_READINESS_RELATIVE_PATH = path.join('docs', 'bluestack-provider-readiness.md');
 const PRODUCTION_EVIDENCE_DOC_RELATIVE_PATH = path.join('docs', 'release', 'bluetooth-power-obd2-production-evidence.md');
+const DEVICE_LIFECYCLE_DOC_RELATIVE_PATH = path.join('docs', 'device-telemetry-lifecycle.md');
+const EXTERNAL_DEVICE_BLOCKER_IDS = [
+  'android_native_ble_discovery_evidence_present',
+  'power_station_connect_stream_disconnect_evidence_present',
+  'ecoflow_cloud_ble_separation_real_device_evidence_present',
+  'obd2_no_data_and_live_data_evidence_present',
+  'production_owner_decision_accepted',
+];
 
 function relPath(root, filePath) {
   return path.relative(root, filePath).replace(/\\/g, '/');
@@ -86,12 +99,15 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
     scannerAudit: path.join(root, SCANNER_AUDIT_RELATIVE_PATH),
     bluestackProviderReadiness: path.join(root, BLUESTACK_PROVIDER_READINESS_RELATIVE_PATH),
     productionEvidenceDoc: path.join(root, PRODUCTION_EVIDENCE_DOC_RELATIVE_PATH),
+    deviceLifecycleDoc: path.join(root, DEVICE_LIFECYCLE_DOC_RELATIVE_PATH),
     packageJson: path.join(root, 'package.json'),
     appJson: path.join(root, 'app.json'),
     androidManifest: path.join(root, 'android', 'app', 'src', 'main', 'AndroidManifest.xml'),
     deviceConnections: path.join(root, 'app', 'power', 'blu.tsx'),
     unifiedHook: path.join(root, 'lib', 'useUnifiedDeviceConnections.ts'),
     scannerContract: path.join(root, 'lib', 'unifiedScannerContract.ts'),
+    scannerCoordinator: path.join(root, 'lib', 'unifiedScannerCoordinator.ts'),
+    deviceLifecycle: path.join(root, 'lib', 'deviceTelemetryLifecycle.ts'),
     bluestackAdapter: path.join(root, 'lib', 'bluestack', 'bluestackScannerAdapter.ts'),
     bluestackParserRegistry: path.join(root, 'lib', 'bluestack', 'bluestackTelemetryParserRegistry.ts'),
     scannerListState: path.join(root, 'lib', 'scannerDeviceListState.ts'),
@@ -112,12 +128,15 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
   const scannerAudit = readIfExists(paths.scannerAudit);
   const bluestackProviderReadiness = readIfExists(paths.bluestackProviderReadiness);
   const productionEvidenceDoc = readIfExists(paths.productionEvidenceDoc);
+  const deviceLifecycleDoc = readIfExists(paths.deviceLifecycleDoc);
   const packageJson = readIfExists(paths.packageJson);
   const appJsonText = readIfExists(paths.appJson);
   const androidManifest = readIfExists(paths.androidManifest);
   const deviceConnections = readIfExists(paths.deviceConnections);
   const unifiedHook = readIfExists(paths.unifiedHook);
   const scannerContract = readIfExists(paths.scannerContract);
+  const scannerCoordinator = readIfExists(paths.scannerCoordinator);
+  const deviceLifecycle = readIfExists(paths.deviceLifecycle);
   const bluestackAdapter = readIfExists(paths.bluestackAdapter);
   const bluestackParserRegistry = readIfExists(paths.bluestackParserRegistry);
   const scannerListState = readIfExists(paths.scannerListState);
@@ -143,6 +162,27 @@ export function buildBluetoothPowerObd2ProductionReadinessResult(options = {}) {
   const plugins = JSON.stringify(appConfig?.expo?.plugins ?? []);
 
   const checks = [
+    check(
+      'canonical_device_lifecycle_and_scanner_coordinator_present',
+      'Unified device identity, connection lifecycle, source state, bounded scanner ownership, and field blockers are documented and executable.',
+      deviceLifecycle.includes("'authenticating'") &&
+        deviceLifecycle.includes("'last-known'") &&
+        deviceLifecycle.includes('createCanonicalDeviceIdentity') &&
+        deviceLifecycle.includes('normalizeDeviceAdapterError') &&
+        scannerCoordinator.includes("reason: 'already_scanning'") &&
+        scannerCoordinator.includes("reason: 'app_not_active'") &&
+        scannerCoordinator.includes("void this.cancel('timeout', session.id)") &&
+        scannerContract.includes('lifecycleState: DeviceConnectionLifecycleState') &&
+        scannerContract.includes('sourceState: DeviceTelemetrySourceState') &&
+        deviceLifecycleDoc.includes('Production evidence still required'),
+      [
+        relPath(root, paths.deviceLifecycle),
+        relPath(root, paths.scannerCoordinator),
+        relPath(root, paths.scannerContract),
+        relPath(root, paths.deviceLifecycleDoc),
+      ],
+      ['Keep connection presence separate from decoded telemetry truth and retain explicit real-hardware promotion blockers.'],
+    ),
     check(
       'native_ble_build_configuration_present',
       'Native BLE dependency, plugin, Android permissions, and iOS usage strings are configured.',
@@ -414,6 +454,30 @@ async function main() {
   writeBluetoothPowerObd2ProductionReadinessResult(result);
   if (jsonOnly) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else process.stdout.write(formatBluetoothPowerObd2ProductionReadinessResult(result));
+  const outcome = classifyEvidenceCheckOutcome({
+    passed: result.passed,
+    blockerIds: result.blockers,
+    externalBlockerIds: EXTERNAL_DEVICE_BLOCKER_IDS,
+  });
+  const laneExitCode = writeEvidenceCheckResultForLane({
+    checkId: 'device-release-evidence',
+    status: outcome.status,
+    safeCode: outcome.safeCode,
+    blockerIds: outcome.blockerIds,
+    summary: outcome.status === 'passed'
+      ? 'Bluetooth, power, and OBD2 release evidence is complete.'
+      : outcome.status === 'blocked_external'
+        ? 'Bluetooth, power, or OBD2 release evidence remains incomplete.'
+        : 'Bluetooth, power, or OBD2 verification failed an internal contract check.',
+    evidence: result,
+    diagnostics: {
+      artifactId: 'bluetooth-power-obd2-readiness',
+      domainStatus: result.status,
+      resultCount: result.checks.length,
+      failedCount: result.blockers.length,
+    },
+  });
+  if (laneExitCode !== null) return laneExitCode;
   return result.passed ? 0 : 1;
 }
 

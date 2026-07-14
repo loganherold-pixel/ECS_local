@@ -6,13 +6,20 @@ Date: 2026-07-08
 
 ECS is ready for **restricted closed field testing only**.
 
+Feature visibility is now evaluated separately from production approval through
+the typed registry documented in `docs/release/feature-visibility-and-rollout.md`.
+The machine-readable `gate:production-visibility` report may show a beta or
+restricted-field-test feature as available while still marking production
+approval false. Availability must never be interpreted as owner, privacy,
+provider, hardware, or field-evidence acceptance.
+
 This is not public release approval. The executable gates and QA checkoff record now agree that closed-field testing may proceed only under the current restricted readiness gates. The prior risk-acceptance packet expired on 2026-06-16 and is intentionally retired; it must not be used to waive evidence gates. Provider influence, AI assist, telemetry, community publishing, and broad privacy/storage rollout remain disabled or restricted unless separately approved.
 
 ## Gate Results
 
 | Gate | Result | Notes |
 | --- | --- | --- |
-| `npm run test:release-readiness` | Passed | Release diagnostic wiring, checklist sections, risk summary, scenario matrix, selectors, and package script coverage are present. |
+| `npm run test:release-readiness` | Passed | Executable verification policy, all-capability scenario coverage, lane composition, Supabase pgTAP linkage, and code-versus-production-approval separation pass. The former source-string sweep remains available as `test:release-readiness-source-contract`. |
 | `npm run gate:closed-field-test:json` | Passed with restrictions | Gate reports `ready_with_restrictions`. Provider influence remains not approved. AI assist, telemetry, and community publishing remain disabled unless separately approved. |
 | `npm run gate:dispatch-convoy-production` | Blocked by approvals | Dispatch/Convoy code and Android evidence pass, but production remains blocked until position-sharing privacy/product approval and production owner decision are accepted. |
 | `npm run gate:established-campgrounds-production` | Blocked by owner acceptance | Cached endpoint, attribution, freshness, zoom-gated mobile pin/detail/action wiring, runbook coverage, sanitized scheduler/provider-health/sync-run/canonical-row/availability-freshness handoff evidence, and Android visible pin/popup/action evidence for the camp-layer path are recorded. Production remains blocked until owner acceptance; the manifest does not claim live scheduler execution, raw provider payload review, secret values, fresh live availability, or provider-backed Android acceptance. |

@@ -14,15 +14,25 @@
 import { Platform } from 'react-native';
 import { parseGPX, type ImportedRoute, type RouteWaypoint } from './routeStore';
 import type { OfflineRemoteCacheManifest } from './remote/offlineRemoteCache';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
+import {
+  buildGeometryFingerprint,
+  canonicalJourneyEntityId,
+  decideJourneyTransition,
+  mergeJourneyLinkage,
+  routeOriginFromSource,
+  type ECSJourneyLinkage,
+} from './lifecycle/routeTripExpeditionLifecycle';
 
 // ── Storage helpers ─────────────────────────────────────
 const memoryStore: Record<string, string> = {};
+const runPersistence = createPersistedKeyValueCache('ecs_run_store');
 
 function lsGet(key: string): string | null {
   if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
     return localStorage.getItem(key);
   }
-  return memoryStore[key] || null;
+  return memoryStore[key] || runPersistence.get(key) || null;
 }
 
 function lsSet(key: string, value: string): void {
@@ -30,6 +40,10 @@ function lsSet(key: string, value: string): void {
     localStorage.setItem(key, value);
   }
   memoryStore[key] = value;
+  if (Platform.OS !== 'web') {
+    runPersistence.set(key, value);
+    void runPersistence.flush();
+  }
 }
 
 function generateId(): string {
@@ -164,6 +178,7 @@ export interface RunOfflineCacheManifest {
 
 export interface ECSRun {
   id: string;
+  schema_version?: number;
   user_id: string | null;
   title: string;
   source: string;
@@ -175,26 +190,102 @@ export interface ECSRun {
   points: RunPoint[];
   waypoints: RouteWaypoint[];
   offline_cache?: RunOfflineCacheManifest | null;
+  source_route_id?: string | null;
+  source_asset_id?: string | null;
+  source_fingerprint?: string | null;
+  lifecycle?: ECSJourneyLinkage | null;
   is_active: boolean;
 }
 
 // ── Storage keys ────────────────────────────────────────
 const LS_RUNS = 'ecs_local_runs';
+const RUN_STORE_VERSION = 2;
+
+type PersistedRunStore = {
+  version: number;
+  runs: ECSRun[];
+};
+
+type RunStoreListener = () => void;
+const runStoreListeners = new Set<RunStoreListener>();
+
+function notifyRunStoreListeners(): void {
+  runStoreListeners.forEach((listener) => {
+    try { listener(); } catch {}
+  });
+}
 
 function getLocalRuns(): ECSRun[] {
   const raw = lsGet(LS_RUNS);
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed = JSON.parse(raw) as PersistedRunStore | ECSRun[];
+    const runs = Array.isArray(parsed) ? parsed : parsed?.runs;
+    if (!Array.isArray(runs)) return [];
+    return runs
+      .filter((run): run is ECSRun => !!run?.id && Array.isArray(run.points))
+      .map((run) => {
+        const fingerprint = run.source_fingerprint ?? buildGeometryFingerprint(run.points, `run:${run.source ?? 'unknown'}`);
+        return {
+          ...run,
+          schema_version: RUN_STORE_VERSION,
+          source_route_id: run.source_route_id ?? null,
+          source_asset_id: run.source_asset_id ?? null,
+          source_fingerprint: fingerprint,
+          lifecycle: run.lifecycle ?? mergeJourneyLinkage(null, {
+            phase: run.is_active ? 'staged' : 'planned',
+            identity: {
+              routeAssetId: run.source_route_id
+                ? canonicalJourneyEntityId('route_asset', run.source_route_id)
+                : null,
+              recordedRunId: canonicalJourneyEntityId('recorded_run', run.id),
+            },
+            routeProvenance: {
+              origin: routeOriginFromSource(run.source),
+              sourceId: run.source_route_id ?? run.id,
+              sourceType: run.source,
+              sourceLabel: run.source,
+              authority: null,
+              dataState: 'local',
+              geometry: {
+                kind: run.source_route_id ? 'imported_geometry' : 'recorded_trace',
+                fingerprint,
+                sourceId: run.source_route_id ?? run.id,
+                sourceType: run.source,
+                sourceLabel: run.source,
+                sourceFormat: run.source,
+                capturedAt: run.created_at,
+                verified: null,
+                warnings: [],
+              },
+            },
+            activeVehicleId: run.vehicle_id,
+            updatedAt: run.updated_at,
+          }),
+        };
+      });
   } catch {
     return [];
   }
 }
 
 function saveLocalRuns(runs: ECSRun[]): void {
-  lsSet(LS_RUNS, JSON.stringify(runs));
+  lsSet(LS_RUNS, JSON.stringify({
+    version: RUN_STORE_VERSION,
+    runs: runs.map((run) => ({ ...run, schema_version: RUN_STORE_VERSION })),
+  } satisfies PersistedRunStore));
+  notifyRunStoreListeners();
 }
+
+const runStoreHydration = Platform.OS === 'web'
+  ? Promise.resolve()
+  : runPersistence.waitForHydration().then(() => {
+      const persisted = runPersistence.get(LS_RUNS);
+      if (persisted) {
+        memoryStore[LS_RUNS] = persisted;
+        notifyRunStoreListeners();
+      }
+    });
 
 // ── Distance Calculation ────────────────────────────────
 
@@ -640,9 +731,63 @@ function buildRunPointsFromImportedRoute(route: ImportedRoute): RunPoint[] {
   return [];
 }
 
+function buildRunLifecycle(args: {
+  runId: string;
+  source: string;
+  sourceRoute?: ImportedRoute | null;
+  sourceFingerprint: string | null;
+  vehicleId: string | null;
+  createdAt: string;
+}): ECSJourneyLinkage {
+  return mergeJourneyLinkage(args.sourceRoute?.lifecycle, {
+    phase: 'planned',
+    identity: {
+      routeAssetId: args.sourceRoute
+        ? canonicalJourneyEntityId('route_asset', args.sourceRoute.id)
+        : undefined,
+      recordedRunId: canonicalJourneyEntityId('recorded_run', args.runId),
+    },
+    routeProvenance: args.sourceRoute?.lifecycle?.routeProvenance ?? {
+      origin: routeOriginFromSource(args.source),
+      sourceId: args.sourceRoute?.id ?? args.runId,
+      sourceType: args.source,
+      sourceLabel: args.source,
+      authority: null,
+      dataState: 'local',
+      geometry: {
+        kind: args.sourceRoute ? 'imported_geometry' : 'recorded_trace',
+        fingerprint: args.sourceFingerprint,
+        sourceId: args.sourceRoute?.id ?? args.runId,
+        sourceType: args.source,
+        sourceLabel: args.source,
+        sourceFormat: args.source,
+        capturedAt: args.createdAt,
+        verified: null,
+        warnings: [],
+      },
+    },
+    activeVehicleId: args.vehicleId,
+    updatedAt: args.createdAt,
+  });
+}
+
+function findRunByFingerprint(source: string, fingerprint: string | null): ECSRun | null {
+  if (!fingerprint) return null;
+  return getLocalRuns().find((run) => (
+    run.source === source && run.source_fingerprint === fingerprint
+  )) ?? null;
+}
+
 // ── Run Store ───────────────────────────────────────────
 
 export const runStore = {
+  subscribe(listener: RunStoreListener): () => void {
+    runStoreListeners.add(listener);
+    return () => {
+      runStoreListeners.delete(listener);
+    };
+  },
+
   getAll: (): ECSRun[] => {
     return getLocalRuns().sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -666,8 +811,12 @@ export const runStore = {
     sourceApp?: string,
     titleOverride?: string
   ): ECSRun => {
-    const now = nowISO();
     const points = buildRunPointsFromGeoImport(parsed);
+    const resolvedSource = sourceApp || 'import';
+    const sourceFingerprint = buildGeometryFingerprint(points, `run:${resolvedSource}`);
+    const existing = findRunByFingerprint(resolvedSource, sourceFingerprint);
+    if (existing) return existing;
+    const now = nowISO();
     const stats = computeStatsFromPoints(points);
 
     const bs: BuildSnapshot = {
@@ -676,11 +825,13 @@ export const runStore = {
       captured_at: now,
     };
 
+    const runId = generateId();
     const run: ECSRun = {
-      id: generateId(),
+      id: runId,
+      schema_version: RUN_STORE_VERSION,
       user_id: null,
       title: titleOverride || parsed?.name || 'Imported Route',
-      source: sourceApp || 'import',
+      source: resolvedSource,
       created_at: now,
       updated_at: now,
       vehicle_id: bs.vehicle_id,
@@ -688,6 +839,16 @@ export const runStore = {
       stats,
       points,
       waypoints: Array.isArray(parsed?.waypoints) ? parsed.waypoints : [],
+      source_route_id: null,
+      source_asset_id: null,
+      source_fingerprint: sourceFingerprint,
+      lifecycle: buildRunLifecycle({
+        runId,
+        source: resolvedSource,
+        sourceFingerprint,
+        vehicleId: bs.vehicle_id,
+        createdAt: now,
+      }),
       is_active: false,
     };
 
@@ -709,9 +870,12 @@ export const runStore = {
     sourceApp?: string
   ): ECSRun => {
     const parsed: any = parseGPX(gpxContent);
-    const now = nowISO();
-
     const points = buildRunPointsFromParsedGPX(parsed, gpxContent);
+    const resolvedSource = sourceApp || 'gpx';
+    const sourceFingerprint = buildGeometryFingerprint(points, `run:${resolvedSource}`);
+    const existing = findRunByFingerprint(resolvedSource, sourceFingerprint);
+    if (existing) return existing;
+    const now = nowISO();
     const stats = computeStatsFromPoints(points);
 
     const bs: BuildSnapshot = {
@@ -720,11 +884,13 @@ export const runStore = {
       captured_at: now,
     };
 
+    const runId = generateId();
     const run: ECSRun = {
-      id: generateId(),
+      id: runId,
+      schema_version: RUN_STORE_VERSION,
       user_id: null,
       title: parsed?.name || 'Imported Run',
-      source: sourceApp || 'gpx',
+      source: resolvedSource,
       created_at: now,
       updated_at: now,
       vehicle_id: bs.vehicle_id,
@@ -732,6 +898,16 @@ export const runStore = {
       stats,
       points,
       waypoints: Array.isArray(parsed?.waypoints) ? parsed.waypoints : [],
+      source_route_id: null,
+      source_asset_id: null,
+      source_fingerprint: sourceFingerprint,
+      lifecycle: buildRunLifecycle({
+        runId,
+        source: resolvedSource,
+        sourceFingerprint,
+        vehicleId: bs.vehicle_id,
+        createdAt: now,
+      }),
       is_active: false,
     };
 
@@ -753,8 +929,15 @@ export const runStore = {
     route: ImportedRoute,
     buildSnapshot?: Partial<BuildSnapshot>
   ): ECSRun => {
+    const linkedRun = route.linked_run_id
+      ? getLocalRuns().find((run) => run.id === route.linked_run_id)
+      : null;
+    if (linkedRun) return linkedRun;
+    const existingRouteRun = getLocalRuns().find((run) => run.source_route_id === route.id);
+    if (existingRouteRun) return existingRouteRun;
     const now = nowISO();
     const points = buildRunPointsFromImportedRoute(route);
+    const sourceFingerprint = route.source_fingerprint ?? buildGeometryFingerprint(points, `run:${route.source_format}`);
     const stats = computeStatsFromPoints(points);
 
     const bs: BuildSnapshot = {
@@ -763,8 +946,10 @@ export const runStore = {
       captured_at: now,
     };
 
+    const runId = generateId();
     const run: ECSRun = {
-      id: generateId(),
+      id: runId,
+      schema_version: RUN_STORE_VERSION,
       user_id: null,
       title: route.name || 'Imported Route',
       source: route.source_format || 'import',
@@ -775,6 +960,17 @@ export const runStore = {
       stats,
       points,
       waypoints: Array.isArray(route.waypoints) ? route.waypoints : [],
+      source_route_id: route.id,
+      source_asset_id: canonicalJourneyEntityId('route_asset', route.id),
+      source_fingerprint: sourceFingerprint,
+      lifecycle: buildRunLifecycle({
+        runId,
+        source: route.source_format || 'import',
+        sourceRoute: route,
+        sourceFingerprint,
+        vehicleId: bs.vehicle_id,
+        createdAt: now,
+      }),
       is_active: false,
     };
 
@@ -798,6 +994,7 @@ export const runStore = {
     const updated: ECSRun = {
       ...(idx >= 0 ? runs[idx] : run),
       ...run,
+      schema_version: RUN_STORE_VERSION,
       updated_at: nowISO(),
       is_active: idx >= 0 ? runs[idx].is_active : run.is_active,
     };
@@ -816,14 +1013,31 @@ export const runStore = {
     const runs = getLocalRuns();
     for (const r of runs) {
       r.is_active = r.id === runId;
-      if (r.id === runId) r.updated_at = nowISO();
+      const updatedAt = r.id === runId ? nowISO() : r.updated_at;
+      if (r.id === runId) r.updated_at = updatedAt;
+      const currentPhase = r.lifecycle?.phase ?? 'planned';
+      const targetPhase = r.id === runId
+        ? 'staged'
+        : currentPhase === 'staged'
+          ? 'previewing'
+          : currentPhase;
+      if (decideJourneyTransition(currentPhase, targetPhase).accepted) {
+        r.lifecycle = mergeJourneyLinkage(r.lifecycle, { phase: targetPhase, updatedAt });
+      }
     }
     saveLocalRuns(runs);
   },
 
   deactivateAll: (): void => {
     const runs = getLocalRuns();
-    for (const r of runs) r.is_active = false;
+    for (const r of runs) {
+      r.is_active = false;
+      const currentPhase = r.lifecycle?.phase ?? 'planned';
+      const targetPhase = currentPhase === 'staged' ? 'previewing' : currentPhase;
+      if (decideJourneyTransition(currentPhase, targetPhase).accepted) {
+        r.lifecycle = mergeJourneyLinkage(r.lifecycle, { phase: targetPhase, updatedAt: r.updated_at });
+      }
+    }
     saveLocalRuns(runs);
   },
 
@@ -864,3 +1078,7 @@ export const runStore = {
 
   count: (): number => getLocalRuns().length,
 };
+
+export function waitForRunStoreHydration(): Promise<void> {
+  return runStoreHydration;
+}

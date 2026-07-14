@@ -1,5 +1,14 @@
 # Fleet Tactical UI Contract
 
+## Active Vehicle And Render Contract
+
+- Fleet cards may display active state, but they must not own active identity. Selection writes go through `vehicleSetupStore`; local component state is only a subscribed presentation adapter.
+- A repeated selection of the current vehicle is a no-op and must not publish another downstream event.
+- Card models must come from the canonical Fleet selector and remain referentially stable while their vehicle inputs are unchanged.
+- Multi-vehicle card rendering remains windowed horizontally. Memoized cards update for their own model, active state, connectivity state, or open detail state only.
+- Advanced profile, axle, tire/lift, source, and confidence details remain behind existing Fleet sheets and panels. No advanced fields are removed.
+- Offline/local state remains fully usable and visibly labeled. No photo, image, media resolver, or upload field may enter Fleet state or Fleet Fabric.
+
 This contract governs the Fleet premium redesign. It defines which existing ECS tactical surfaces, tokens, shell components, and overlay rules Fleet must inherit before any visible Fleet card redesign happens.
 
 ## Product Intent

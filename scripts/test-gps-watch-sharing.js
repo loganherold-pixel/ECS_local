@@ -25,8 +25,9 @@ assert.ok(
 );
 assert.ok(
   dashboard.includes('const geofenceMonitor = useGeofenceMonitor({') &&
-    dashboard.includes('enabled: useIsFocused() && geofenceEnabled,'),
-  'Dashboard should keep geofence monitoring independently enabled when focused.',
+    dashboard.includes('const isFocused = useIsFocused();') &&
+    dashboard.includes('enabled: isFocused && geofenceEnabled,'),
+  'Dashboard should reuse one focus subscription while keeping geofence monitoring independently enabled.',
 );
 assert.ok(
   sharedGps.includes('private subscribers = new Map') &&

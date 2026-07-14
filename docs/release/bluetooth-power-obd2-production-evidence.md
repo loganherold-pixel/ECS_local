@@ -30,6 +30,8 @@ Bluestack is the canonical ECS device connection surface for power devices, OBD2
 
 ## Evidence Contract
 
+The shared runtime lifecycle, identity, source-state, scanner ownership, resource budgets, and replay safety rules are defined in `docs/device-telemetry-lifecycle.md`. This implementation contract does not change any provider's production approval or replace field evidence.
+
 The production gate expects this evidence file when QA is complete:
 
 `.smoke/bluetooth-power-obd2-production-evidence.json`

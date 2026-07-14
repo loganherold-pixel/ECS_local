@@ -9,6 +9,7 @@ const EVIDENCE_RELATIVE_PATH = path.join('.smoke', 'dispatch-convoy-production-e
 const READINESS_DOC_RELATIVE_PATH = path.join('docs', 'release', 'dispatch-convoy-production-readiness.md');
 
 const SENSITIVE_DEFAULT_OFF_FEATURES = [
+  'canonicalBackendPersistence',
   'teamPositionSharing',
   'convoyRegroupPlanner',
   'agencyDataIngestion',
@@ -71,6 +72,9 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
     convoyOverlayModel: path.join(root, 'lib', 'convoy', 'convoyMapOverlayModel.ts'),
     dispatchRecoveryMapModel: path.join(root, 'lib', 'dispatchRecoveryMapModel.ts'),
     rolloutConfig: path.join(root, 'lib', 'dispatchRolloutConfig.ts'),
+    featureRegistry: path.join(root, 'lib', 'features', 'featureVisibilityRegistry.ts'),
+    canonicalRepository: path.join(root, 'lib', 'dispatchCanonicalRepository.ts'),
+    canonicalMigration: path.join(root, 'supabase', 'migrations', '20260713054719_dispatch_canonical_persistence.sql'),
     commandRegistry: path.join(root, 'components', 'dashboard', 'commandCenter', 'commandCenterRegistry.ts'),
     commandStore: path.join(root, 'lib', 'ecsCommandModuleStore.ts'),
     oldDashboardWidget: path.join(root, 'components', 'dashboard', 'command-center', 'widgets', 'ConvoyCommandWidget.tsx'),
@@ -93,6 +97,9 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
   const convoyOverlayModelSource = readIfExists(paths.convoyOverlayModel);
   const dispatchRecoveryMapModelSource = readIfExists(paths.dispatchRecoveryMapModel);
   const rolloutSource = readIfExists(paths.rolloutConfig);
+  const featureRegistrySource = readIfExists(paths.featureRegistry);
+  const canonicalRepositorySource = readIfExists(paths.canonicalRepository);
+  const canonicalMigrationSource = readIfExists(paths.canonicalMigration);
   const registrySource = readIfExists(paths.commandRegistry);
   const storeSource = readIfExists(paths.commandStore);
 
@@ -186,7 +193,26 @@ export function buildDispatchConvoyProductionReadinessResult(options = {}) {
         new RegExp(`${feature}:\\s*false`).test(rolloutSource),
       ),
       [relPath(root, paths.rolloutConfig)],
-      ['Keep position sharing, regroup planning, public publishing, agency ingestion, SOS transmission, demo data, and live radio integrations default-off until approved.'],
+      ['Keep canonical persistence, position sharing, regroup planning, public publishing, agency ingestion, SOS transmission, demo data, and live radio integrations default-off until approved.'],
+    ),
+    check(
+      'canonical_dispatch_backend_guarded',
+      'Canonical Dispatch persistence is additive, RLS-scoped, and blocked behind explicit evidence-gated rollout.',
+      /canonicalBackendPersistence:\s*false/.test(rolloutSource) &&
+        /requestedMode === 'shadow' \|\| requestedMode === 'dual_read'/.test(rolloutSource) &&
+        /dispatch_canonical_backend/.test(featureRegistrySource) &&
+        /dispatch_canonical_backend_privacy/.test(featureRegistrySource) &&
+        /dispatch_canonical_multiclient_evidence/.test(featureRegistrySource) &&
+        /DispatchCanonicalRepository/.test(canonicalRepositorySource) &&
+        /alter table public\.dispatch_pings enable row level security/i.test(canonicalMigrationSource) &&
+        /dispatch_restricted_locations/i.test(canonicalMigrationSource),
+      [
+        relPath(root, paths.rolloutConfig),
+        relPath(root, paths.featureRegistry),
+        relPath(root, paths.canonicalRepository),
+        relPath(root, paths.canonicalMigration),
+      ],
+      ['Keep canonical persistence disabled until RLS, privacy, two-client, device, and owner evidence is accepted.'],
     ),
     check(
       'android_dispatch_convoy_visual_evidence_present',

@@ -1,3 +1,10 @@
+import type {
+  ECSAIDeterministicSnapshot,
+  ECSAIDeterministicTrace,
+  ECSAIFeatureId,
+} from './aiPolicyBoundary';
+import type { ECSAIProviderStatus, ECSAIProviderUsage } from './aiRequestCoordinator';
+
 export type ExpeditionLifecyclePhase =
   | 'plan'
   | 'prepare'
@@ -224,6 +231,8 @@ export type ExpeditionAgentResponse = {
   dataLimitations: string[];
   safetyNotes: string[];
   doNotDo: string[];
+  /** Added by ECS after validation. Provider-supplied trace values are never authoritative. */
+  trace?: ECSAIDeterministicTrace;
 };
 
 export interface EvidenceItem {
@@ -275,8 +284,17 @@ export type ExpeditionAgentDefinition = {
 export type ExpeditionAgentProviderInput = {
   agent: ExpeditionAgentDefinition;
   prompt: string;
-  context: ExpeditionAgentContextInput;
+  /** Redacted provider context. Raw expedition context must never cross this boundary. */
+  context: unknown;
   contextJson: string;
+  deterministicSnapshot: ECSAIDeterministicSnapshot;
+  signal: AbortSignal;
+  request: {
+    featureId: ECSAIFeatureId;
+    /** Opaque identity derived only from already-redacted provider context. */
+    providerContextFingerprint: string;
+    attempt: number;
+  };
 };
 
 export type ExpeditionAgentProvider = {
@@ -288,6 +306,11 @@ export type ExpeditionAgentRunResult = {
   response: ExpeditionAgentResponse;
   validation: ExpeditionAgentValidationResult;
   source: 'provider' | 'fallback';
+  providerStatus: ECSAIProviderStatus;
+  providerUsage: ECSAIProviderUsage | null;
+  deterministicState: 'available' | 'unavailable';
+  suppressionReasons: string[];
+  trace: ECSAIDeterministicTrace;
 };
 
 export type ExpeditionIntelligenceRunResult = {
@@ -312,7 +335,20 @@ export type ExpeditionAgentValidationIssue = {
     | 'missing_emergency_escalation'
     | 'missing_verification_action'
     | 'missing_high_risk_reassessment'
-    | 'insufficient_data_overconfidence';
+    | 'insufficient_data_overconfidence'
+    | 'status_override'
+    | 'confidence_override'
+    | 'unsupported_evidence'
+    | 'evidence_conflict'
+    | 'hard_warning_suppressed'
+    | 'unsupported_live_claim'
+    | 'unsupported_location_claim'
+    | 'unsupported_weather_claim'
+    | 'unsupported_legal_claim'
+    | 'prohibited_action_selection'
+    | 'prompt_injection'
+    | 'sensitive_output'
+    | 'trace_mismatch';
   severity: 'error' | 'warning';
   message: string;
 };

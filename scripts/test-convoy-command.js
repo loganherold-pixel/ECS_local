@@ -244,7 +244,7 @@ assert(
     dispatchPanelSource.includes('Stop live sharing') &&
     dispatchPanelSource.includes('Live Sharing Active') &&
     dispatchPanelSource.includes('Open active GPS ping') &&
-    dispatchPanelSource.includes('Map visibility moved to Navigate.') &&
+    dispatchPanelSource.includes('Consenting members appear on Navigate during an active expedition.') &&
     dispatchPanelSource.includes('useEmergencyPulse') &&
     dispatchPanelSource.includes('Alert.alert') &&
     dispatchPanelSource.includes('Stop live sharing?') &&
@@ -256,13 +256,13 @@ assert(
   'Dispatch Convoy Command should expose live sharing and active GPS ping controls while Navigate owns the map overlays.',
 );
 assert(
-  dispatchPanelSource.includes('const refreshLiveSharingControls = useCallback') &&
+    dispatchPanelSource.includes('const refreshLiveSharingControls = useCallback') &&
     dispatchPanelSource.includes('sharingBusyRef.current = true') &&
     dispatchPanelSource.includes('sharingBusyRef.current = false') &&
-    dispatchPanelSource.includes('disabled={sharingBusy}') &&
+    dispatchPanelSource.includes('disabled={sharingBusy || (!isSharingLiveLocation && !positionSharingRolloutEnabled)}') &&
     dispatchPanelSource.includes('onPress={handleShareLiveLocationPress}') &&
     !dispatchPanelSource.includes('disabled={!canShareLiveLocation || sharingBusy}'),
-  'Dispatch live sharing control should refresh convoy state on demand and must not get stuck disabled behind stale convoy context.',
+  'Dispatch live sharing should refresh membership on demand, remain stoppable, and fail closed only when rollout policy disables a new share.',
 );
 assert(
   dispatchPanelSource.includes('DISPATCH CONVOY COMMAND') &&
@@ -279,11 +279,11 @@ assert(
   'Dispatch Convoy Command should keep live signal information in compact summary and signal panels instead of overlaying a map.',
 );
 assert(
-  dispatchPanelSource.includes("presentation?: 'full' | 'feed'") &&
+  dispatchPanelSource.includes("presentation?: 'full' | 'feed' | 'signals' | 'summary'") &&
     dispatchPanelSource.includes("presentation = 'full'") &&
     dispatchPanelSource.includes('isFeedPresentation') &&
     dispatchPanelSource.includes('feedPanelStage') &&
-    dispatchPanelSource.includes('flex: 1,\n    minHeight: 210') &&
+    dispatchPanelSource.includes('flex: 0,\n    minHeight: 0') &&
     dispatchPanelSource.includes('legendMetricGridCompact') &&
     dispatchPanelSource.includes('legendMetricCompact') &&
     dispatchPanelSource.includes("label={summaryCompact ? 'Veh' : 'Vehicles'}") &&

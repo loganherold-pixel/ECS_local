@@ -38,11 +38,16 @@ if (!searchClientSource.includes('logFailures?: boolean')) {
   throw new Error('Established campground search client should support suppressing handled failure logs.');
 }
 
-if (!navigateSource.includes('fetchEstablishedCampgroundsForMap({ bbox: request.bbox, logFailures: false })')) {
+if (
+  !navigateSource.includes('fetchEstablishedCampgroundsForMap({') ||
+  !navigateSource.includes('bbox: requestBbox') ||
+  !navigateSource.includes('logFailures: false') ||
+  !navigateSource.includes('signal: request.signal')
+) {
   throw new Error('Navigate should handle established campground fetch failures before noisy camp layer logging.');
 }
 
-if (!navigateSource.includes('readEstablishedCampgroundsOfflineCache(request.cacheKey)')) {
+if (!navigateSource.includes('readEstablishedCampgroundsOfflineCache(requestCacheKey)')) {
   throw new Error('Navigate should try established campground offline cache after online fetch failure.');
 }
 
@@ -71,7 +76,7 @@ if (
 
 if (
   !toggleEstablishedBlock.includes('setEstablishedCampgroundsUiState((current) => setCampLayerEnabled(current, next));') ||
-  !toggleEstablishedBlock.includes('establishedCampgroundsFetchCoordinatorRef.current.cancel();') ||
+  !toggleEstablishedBlock.includes("navigateMapLayerCoordinatorRef.current.cancel('established_campgrounds', 'operator_disabled');") ||
   !toggleEstablishedBlock.includes('setSelectedEstablishedCampsite(null);')
 ) {
   throw new Error('Established campground toggle-off should update UI immediately, cancel pending fetch work, and clear only the selected campsite.');

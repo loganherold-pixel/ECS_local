@@ -1,6 +1,7 @@
 import type { DispatchRealtimeEnvelope } from './dispatchRealtimeAdapter';
 import type {
   DispatchAssignment,
+  DispatchAcknowledgment,
   DispatchAssistRequest,
   DispatchCheckInResponse,
   DispatchConflictState,
@@ -8,6 +9,7 @@ import type {
   DispatchEscalationState,
   DispatchPing,
   DispatchQueueItem,
+  DispatchQueuedOfflineAction,
   DispatchTimelineEvent,
 } from './dispatchTypes';
 
@@ -39,11 +41,23 @@ export interface DispatchEventState {
   pings?: DispatchPing[];
   queueItems?: DispatchQueueItem[];
   assignments?: DispatchAssignment[];
+  assistRequests?: DispatchAssistRequest[];
+  acknowledgments?: DispatchAcknowledgment[];
   timelineEvents?: DispatchTimelineEvent[];
 }
 
 const DUPLICATE_ACTION_WINDOW_MS = 2500;
 const DISPATCH_CONFLICT_NOTICE = 'Dispatch item updated during sync.';
+
+export const DISPATCH_RETENTION_LIMITS = {
+  pings: 250,
+  queueItems: 250,
+  assignments: 500,
+  assistRequests: 250,
+  acknowledgments: 500,
+  timelineEvents: 500,
+  offlineActions: 300,
+} as const;
 
 const ENTITY_PREFIX: Record<DispatchIntegrityEntityType, string> = {
   ping: 'local-ping',
@@ -81,36 +95,113 @@ export function createDispatchEntityId(
   return `${ENTITY_PREFIX[entityType]}-${hashStableValue(idempotencyKey)}`;
 }
 
+export function createDispatchOfflineAction(input: {
+  expeditionId: string;
+  entityType: DispatchQueuedOfflineAction['entityType'];
+  actionType?: string;
+  sourceEntityId: string;
+  sourceIdempotencyKey?: string;
+  createdAt?: string;
+  maxAttempts?: number;
+}): DispatchQueuedOfflineAction {
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  const idempotencyKey = createDispatchIdempotencyKey({
+    expeditionId: input.expeditionId,
+    entityType: 'offline_action',
+    actionType: input.actionType ?? `upsert:${input.entityType}`,
+    sourceEntityId: input.sourceIdempotencyKey ?? input.sourceEntityId,
+  });
+  return {
+    id: createDispatchEntityId('offline_action', idempotencyKey),
+    idempotencyKey,
+    version: 1,
+    entityType: input.entityType,
+    actionType: input.actionType ?? 'upsert',
+    createdAt,
+    updatedAt: createdAt,
+    status: 'queued',
+    attemptCount: 0,
+    maxAttempts: Math.max(1, Math.min(10, input.maxAttempts ?? 5)),
+    sourceEntityId: input.sourceEntityId,
+  };
+}
+
 export function mergeDispatchPing(pings: DispatchPing[], nextPing: DispatchPing): DispatchPing[] {
-  return mergeDispatchRecords(pings, nextPing, mergePingRecord);
+  return boundDispatchPings(mergeDispatchRecords(pings, nextPing, mergePingRecord));
 }
 
 export function mergeDispatchQueueItem(
   items: DispatchQueueItem[],
   nextItem: DispatchQueueItem,
 ): DispatchQueueItem[] {
-  return mergeDispatchRecords(items, nextItem, mergeQueueItemRecord);
+  return boundDispatchQueueItems(mergeDispatchRecords(items, nextItem, mergeQueueItemRecord));
 }
 
 export function mergeDispatchTimelineEvent(
   events: DispatchTimelineEvent[],
   nextEvent: DispatchTimelineEvent,
 ): DispatchTimelineEvent[] {
-  return mergeDispatchRecords(events, nextEvent, mergeTimelineEventRecord);
+  return boundDispatchTimelineEvents(mergeDispatchRecords(events, nextEvent, mergeTimelineEventRecord));
 }
 
 export function mergeDispatchAssignment(
   assignments: DispatchAssignment[],
   nextAssignment: DispatchAssignment,
 ): DispatchAssignment[] {
-  return mergeDispatchRecords(assignments, nextAssignment, mergeAssignmentRecord);
+  return boundDispatchAssignments(mergeDispatchRecords(assignments, nextAssignment, mergeAssignmentRecord));
 }
 
 export function mergeDispatchAssistRequest(
   requests: DispatchAssistRequest[],
   nextRequest: DispatchAssistRequest,
 ): DispatchAssistRequest[] {
-  return mergeDispatchRecords(requests, nextRequest, mergeAssistRequestRecord);
+  return boundDispatchAssistRequests(mergeDispatchRecords(requests, nextRequest, mergeAssistRequestRecord));
+}
+
+export function mergeDispatchAcknowledgment(
+  acknowledgments: DispatchAcknowledgment[],
+  nextAcknowledgment: DispatchAcknowledgment,
+): DispatchAcknowledgment[] {
+  return boundDispatchAcknowledgments(
+    mergeDispatchRecords(acknowledgments, nextAcknowledgment, mergeAcknowledgmentRecord),
+  );
+}
+
+export function mergeDispatchOfflineAction(
+  actions: DispatchQueuedOfflineAction[],
+  nextAction: DispatchQueuedOfflineAction,
+): DispatchQueuedOfflineAction[] {
+  return boundDispatchOfflineActions(
+    mergeDispatchRecords(actions, nextAction, mergeOfflineActionRecord),
+  );
+}
+
+export function mergeDispatchPingBatch(items: DispatchPing[]): DispatchPing[] {
+  return boundDispatchPings(mergeDispatchRecordBatch(items, mergePingRecord));
+}
+
+export function mergeDispatchQueueItemBatch(items: DispatchQueueItem[]): DispatchQueueItem[] {
+  return boundDispatchQueueItems(mergeDispatchRecordBatch(items, mergeQueueItemRecord));
+}
+
+export function mergeDispatchAssignmentBatch(items: DispatchAssignment[]): DispatchAssignment[] {
+  return boundDispatchAssignments(mergeDispatchRecordBatch(items, mergeAssignmentRecord));
+}
+
+export function mergeDispatchAssistRequestBatch(items: DispatchAssistRequest[]): DispatchAssistRequest[] {
+  return boundDispatchAssistRequests(mergeDispatchRecordBatch(items, mergeAssistRequestRecord));
+}
+
+export function mergeDispatchAcknowledgmentBatch(items: DispatchAcknowledgment[]): DispatchAcknowledgment[] {
+  return boundDispatchAcknowledgments(mergeDispatchRecordBatch(items, mergeAcknowledgmentRecord));
+}
+
+export function mergeDispatchTimelineEventBatch(items: DispatchTimelineEvent[]): DispatchTimelineEvent[] {
+  return boundDispatchTimelineEvents(mergeDispatchRecordBatch(items, mergeTimelineEventRecord));
+}
+
+export function mergeDispatchOfflineActionBatch(items: DispatchQueuedOfflineAction[]): DispatchQueuedOfflineAction[] {
+  return boundDispatchOfflineActions(mergeDispatchRecordBatch(items, mergeOfflineActionRecord));
 }
 
 export function getIncomingDispatchConflictNotice(
@@ -129,6 +220,10 @@ export function getIncomingDispatchConflictNotice(
     case 'assignment_upsert': {
       const existing = findSameDispatchRecord(current.assignments ?? [], event.assignment);
       return existing && hasAssignmentConflict(existing, event.assignment) ? DISPATCH_CONFLICT_NOTICE : null;
+    }
+    case 'assist_request_upsert': {
+      const existing = findSameDispatchRecord(current.assistRequests ?? [], event.assistRequest);
+      return existing && hasAssistConflict(existing, event.assistRequest) ? DISPATCH_CONFLICT_NOTICE : null;
     }
     default:
       return null;
@@ -160,6 +255,20 @@ export function shouldApplyIncomingDispatchEvent(
         current.assignments ?? [],
         getRecordTimestamp,
         mergeAssignmentRecord,
+      );
+    case 'assist_request_upsert':
+      return shouldApplyRecordWithMerge(
+        event.assistRequest,
+        current.assistRequests ?? [],
+        getRecordTimestamp,
+        mergeAssistRequestRecord,
+      );
+    case 'acknowledgment_upsert':
+      return shouldApplyRecordWithMerge(
+        event.acknowledgment,
+        current.acknowledgments ?? [],
+        getRecordTimestamp,
+        mergeAcknowledgmentRecord,
       );
     case 'timeline_event_added':
       return shouldApplyRecordWithMerge(
@@ -217,6 +326,45 @@ function mergeDispatchRecords<T extends {
   return items.map((item, itemIndex) =>
     itemIndex === index ? mergeRecord(item, nextItem) : item,
   );
+}
+
+function mergeDispatchRecordBatch<T extends {
+  id: string;
+  idempotencyKey?: string;
+  version?: number;
+}>(
+  items: T[],
+  mergeRecord: (current: T, next: T) => T,
+): T[] {
+  const records: T[] = [];
+  const indexById = new Map<string, number>();
+  const indexByIdempotencyKey = new Map<string, number>();
+
+  for (const item of items) {
+    const index = indexById.get(item.id) ?? (
+      item.idempotencyKey ? indexByIdempotencyKey.get(item.idempotencyKey) : undefined
+    );
+
+    if (index == null) {
+      const nextIndex = records.length;
+      records.push(item);
+      indexById.set(item.id, nextIndex);
+      if (item.idempotencyKey) indexByIdempotencyKey.set(item.idempotencyKey, nextIndex);
+      continue;
+    }
+
+    const current = records[index];
+    const merged = mergeRecord(current, item);
+    records[index] = merged;
+    indexById.set(current.id, index);
+    indexById.set(item.id, index);
+    indexById.set(merged.id, index);
+    if (current.idempotencyKey) indexByIdempotencyKey.set(current.idempotencyKey, index);
+    if (item.idempotencyKey) indexByIdempotencyKey.set(item.idempotencyKey, index);
+    if (merged.idempotencyKey) indexByIdempotencyKey.set(merged.idempotencyKey, index);
+  }
+
+  return records;
 }
 
 function mergePingRecord(current: DispatchPing, next: DispatchPing): DispatchPing {
@@ -356,6 +504,41 @@ function mergeAssistRequestRecord(
   };
 }
 
+function mergeAcknowledgmentRecord(
+  current: DispatchAcknowledgment,
+  next: DispatchAcknowledgment,
+): DispatchAcknowledgment {
+  const base = pickNewestRecord(current, next);
+  return {
+    ...base,
+    acknowledgedAt: maxIso(current.acknowledgedAt, next.acknowledgedAt),
+    updatedAt: maxIso(
+      current.updatedAt ?? current.acknowledgedAt,
+      next.updatedAt ?? next.acknowledgedAt,
+    ),
+  };
+}
+
+function mergeOfflineActionRecord(
+  current: DispatchQueuedOfflineAction,
+  next: DispatchQueuedOfflineAction,
+): DispatchQueuedOfflineAction {
+  if (current.status === 'replayed' || current.status === 'cancelled') {
+    return {
+      ...current,
+      version: Math.max(current.version ?? 0, next.version ?? 0),
+      updatedAt: maxIso(current.updatedAt ?? current.createdAt, next.updatedAt ?? next.createdAt),
+    };
+  }
+
+  const base = pickNewestRecord(current, next);
+  return {
+    ...base,
+    attemptCount: Math.max(current.attemptCount ?? 0, next.attemptCount ?? 0),
+    maxAttempts: Math.max(current.maxAttempts ?? 0, next.maxAttempts ?? 0) || undefined,
+  };
+}
+
 function shouldApplyRecord<T extends {
   id: string;
   idempotencyKey?: string;
@@ -433,8 +616,10 @@ function getRecordTimestamp(item: {
   updatedAt?: string;
   occurredAt?: string;
   assignedAt?: string;
+  acknowledgedAt?: string;
+  replayedAt?: string;
 }): string | undefined {
-  return item.updatedAt ?? item.occurredAt ?? item.assignedAt ?? item.createdAt;
+  return item.updatedAt ?? item.replayedAt ?? item.acknowledgedAt ?? item.occurredAt ?? item.assignedAt ?? item.createdAt;
 }
 
 function pruneRecentActions(
@@ -646,6 +831,8 @@ function getRecordTime(item: {
   updatedAt?: string;
   occurredAt?: string;
   assignedAt?: string;
+  acknowledgedAt?: string;
+  replayedAt?: string;
 }): number {
   const parsed = Date.parse(getRecordTimestamp(item) ?? '');
   return Number.isFinite(parsed) ? parsed : 0;
@@ -657,6 +844,83 @@ function maxIso(left: string | undefined, right: string | undefined): string {
   if (!Number.isFinite(leftTime)) return right ?? new Date().toISOString();
   if (!Number.isFinite(rightTime)) return left ?? new Date().toISOString();
   return leftTime >= rightTime ? left! : right!;
+}
+
+function boundDispatchPings(items: DispatchPing[]): DispatchPing[] {
+  return boundOperationalRecords(
+    items,
+    DISPATCH_RETENTION_LIMITS.pings,
+    (item) => item.status === 'cancelled' || item.status === 'recovered',
+  );
+}
+
+function boundDispatchQueueItems(items: DispatchQueueItem[]): DispatchQueueItem[] {
+  return boundOperationalRecords(
+    items,
+    DISPATCH_RETENTION_LIMITS.queueItems,
+    (item) => item.status === 'resolved' || item.status === 'cancelled',
+  );
+}
+
+function boundDispatchAssignments(items: DispatchAssignment[]): DispatchAssignment[] {
+  return boundOperationalRecords(
+    items,
+    DISPATCH_RETENTION_LIMITS.assignments,
+    (item) => item.status === 'completed' || item.status === 'declined',
+  );
+}
+
+function boundDispatchAssistRequests(items: DispatchAssistRequest[]): DispatchAssistRequest[] {
+  return boundOperationalRecords(
+    items,
+    DISPATCH_RETENTION_LIMITS.assistRequests,
+    (item) => item.status === 'resolved' || item.status === 'cancelled',
+  );
+}
+
+function boundDispatchAcknowledgments(items: DispatchAcknowledgment[]): DispatchAcknowledgment[] {
+  return sortNewestFirst(items).slice(0, DISPATCH_RETENTION_LIMITS.acknowledgments);
+}
+
+function boundDispatchTimelineEvents(items: DispatchTimelineEvent[]): DispatchTimelineEvent[] {
+  return sortNewestFirst(items).slice(0, DISPATCH_RETENTION_LIMITS.timelineEvents);
+}
+
+function boundDispatchOfflineActions(items: DispatchQueuedOfflineAction[]): DispatchQueuedOfflineAction[] {
+  return boundOperationalRecords(
+    items,
+    DISPATCH_RETENTION_LIMITS.offlineActions,
+    (item) => item.status === 'replayed' || item.status === 'cancelled',
+  );
+}
+
+function boundOperationalRecords<T extends {
+  createdAt?: string;
+  updatedAt?: string;
+  occurredAt?: string;
+  assignedAt?: string;
+  acknowledgedAt?: string;
+  replayedAt?: string;
+}>(
+  items: T[],
+  limit: number,
+  isTerminal: (item: T) => boolean,
+): T[] {
+  if (items.length <= limit) return sortNewestFirst(items);
+  const active = sortNewestFirst(items.filter((item) => !isTerminal(item)));
+  const terminal = sortNewestFirst(items.filter(isTerminal));
+  return [...active, ...terminal].slice(0, limit);
+}
+
+function sortNewestFirst<T extends {
+  createdAt?: string;
+  updatedAt?: string;
+  occurredAt?: string;
+  assignedAt?: string;
+  acknowledgedAt?: string;
+  replayedAt?: string;
+}>(items: T[]): T[] {
+  return [...items].sort((left, right) => getRecordTime(right) - getRecordTime(left));
 }
 
 function stripTransientConflictFields<T extends {

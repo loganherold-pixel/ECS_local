@@ -17,6 +17,18 @@ const output = ts.transpileModule(source, {
 }).outputText;
 
 const moduleShim = { exports: {} };
+require.extensions['.ts'] = function compileTypeScript(module, filename) {
+  const moduleSource = fs.readFileSync(filename, 'utf8');
+  const moduleOutput = ts.transpileModule(moduleSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(moduleOutput.outputText, filename);
+};
 const authCopy = {
   AUTH_COPY: {
     session: {
@@ -32,6 +44,12 @@ const authCopy = {
 function localRequire(request) {
   if (request === './authCopy') return authCopy;
   if (request === './entryStateTypes') return {};
+  if (request === '../features/featureVisibilityRegistry') {
+    return require(path.join(root, 'lib', 'features', 'featureVisibilityRegistry.ts'));
+  }
+  if (request === '../routeManifest') {
+    return require(path.join(root, 'lib', 'routeManifest.ts'));
+  }
   return require(request);
 }
 
@@ -196,10 +214,9 @@ assert.ok(
 );
 assert.ok(
   layoutSource.includes('const commitResolvedNavigation = useCallback') &&
-    layoutSource.includes('router.replace(resolvedTarget);') &&
-    !layoutSource.includes('router.navigate(resolvedTarget);') &&
-    layoutSource.includes('router.replace(resolvedTarget);'),
-  'Auth-to-shell handoffs should avoid nested-route replace loops while guard corrections retain replacement semantics.',
+    layoutSource.includes('replaceSingleFlight(target);') &&
+    layoutSource.includes("from '../lib/navigation/useECSNavigation';"),
+  'Auth-to-shell handoffs should use the canonical single-flight replacement boundary.',
 );
 for (const routeName of ['login', 'setup', '(tabs)']) {
   assert.ok(
@@ -253,8 +270,8 @@ assert.strictEqual(
     isAuthScreen: false,
     isProtectedScreen: false,
   }).redirectTarget,
-  null,
-  'Vehicle recovery should not bounce users away from Dashboard after normal shell navigation.',
+  '/fleet',
+  'Dashboard restoration should fail safely to Fleet when the configured vehicle is missing.',
 );
 
 assert.strictEqual(

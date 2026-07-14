@@ -125,8 +125,8 @@ assertIncludes(
 );
 assertIncludes(
   navigateSource,
-  'useRemoteWeatherRouteWatcher({ enabled: true });',
-  'Navigate should mount the watcher without adding UI.',
+  'useRemoteWeatherRouteWatcher({ enabled: isFocused });',
+  'Navigate should mount the watcher without UI and suspend it while Navigate is not focused.',
 );
 assertIncludes(
   packageSource,

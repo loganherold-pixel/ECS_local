@@ -34,6 +34,9 @@ const guidanceReadyInventoryBlock = discoverSource
 const aiFetchBlock = discoverSource
   .split('const handleFetchAIRoutes = useCallback')[1]
   ?.split('// ── Phase 17: Auto-fetch AI routes on tab/radius change')[0] ?? '';
+const aiRequestParamsBlock = discoverSource
+  .split('const aiRouteRequestParams = useMemo<AIRouteRequestParams>')[1]
+  ?.split('// ── Phase 17: Fetch AI routes handler')[0] ?? '';
 
 function route(id, overrides = {}) {
   return {
@@ -146,9 +149,10 @@ assert.ok(
 );
 assert.ok(
   discoverSource.includes('setDistanceRadius(snapshot.radiusMiles)') &&
-    discoverSource.includes('setExploreRefinement(null)') &&
-    !discoverSource.includes('setExploreRefinement(snapshot.refinement)'),
-  'Explore should hydrate the saved range while clearing any saved refinement on tab entry.',
+    discoverSource.includes('setExploreRefinement(snapshot.refinement)') &&
+    discoverSource.includes('setActiveExplorerCategoryPanel(snapshot.activeCategoryPanel)') &&
+    discoverSource.includes('setRouteCatalogPreviewGeometryRequested(true)'),
+  'Explore should restore validated range, refinement, and category filters and request preview geometry when needed.',
 );
 assert.ok(
   discoverSource.includes('applyExploreRefinementFilter(canonicalRadiusFilteredRoutes, exploreRefinement)'),
@@ -200,8 +204,9 @@ assert.ok(
   'The first non-null refinement should opt into route previews once, while later bucket changes remain local.',
 );
 assert.ok(
-  aiFetchBlock.includes('canonicalRadiusFilteredRoutes.map((route) => route.name)') &&
-    !aiFetchBlock.includes('refinedCanonicalRoutes'),
+  aiRequestParamsBlock.includes('canonicalRadiusFilteredRoutes.map((route) => route.name)') &&
+    !aiRequestParamsBlock.includes('refinedCanonicalRoutes') &&
+    aiFetchBlock.includes('aiRouteStore.fetchRoutes(aiRouteRequestParams)'),
   'Changing Explore refinements should not refresh ECS Route Ideas from a different source universe.',
 );
 assert.ok(

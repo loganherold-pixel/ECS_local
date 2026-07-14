@@ -492,6 +492,47 @@ assert.strictEqual(
   'Confirm Comms Plan should route to the emergency comms reference with a Command Brief return target.',
 );
 
+const canonicalBlockedAudit = buildExpeditionReadiness({
+  ...base,
+  offline: {
+    packageStatus: 'partial',
+    canonicalManifestId: 'offline-readiness:test-package',
+    canonicalAudit: {
+      manifestId: 'offline-readiness:test-package',
+      evaluatedAt: now,
+      status: 'blocked',
+      blockers: [{
+        issueId: 'map:partial_coverage',
+        assetId: 'map',
+        kind: 'map_region',
+        severity: 'blocker',
+        code: 'partial_coverage',
+        title: 'Required map regions have partial coverage',
+        explanation: 'Only part of the planned corridor is available offline.',
+        recommendedAction: 'Complete the missing coverage.',
+      }],
+      warnings: [],
+      readyRequiredAssets: 3,
+      totalRequiredAssets: 4,
+      summary: '1 blocker must be resolved before this package is ready.',
+    },
+    mapRegionState: 'partial',
+    weatherSnapshotState: 'expired',
+    weatherSnapshotAvailable: true,
+    isRemoteRoute: true,
+    isOnline: false,
+    source: 'cached',
+    updatedAt: now,
+  },
+});
+const canonicalPackageItem = canonicalBlockedAudit.departureAudit.find((item) => item.itemId === 'offline-map-package');
+assert.strictEqual(canonicalPackageItem?.status, 'caution');
+assert.match(canonicalPackageItem?.summary ?? '', /partial coverage/i);
+const expiredWeatherItem = canonicalBlockedAudit.departureAudit.find((item) => item.itemId === 'weather-snapshot');
+assert.strictEqual(expiredWeatherItem?.status, 'caution');
+assert.match(expiredWeatherItem?.summary ?? '', /expired/i);
+assert.match(expiredWeatherItem?.summary ?? '', /last-known/i);
+
 const commandBrief = read('components', 'brief', 'CommandBriefScreen.tsx');
 const safetyTab = read('app', '(tabs)', 'safety.tsx');
 const editCommsModal = read('components', 'emergency', 'EditCommsModal.tsx');

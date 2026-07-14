@@ -3,6 +3,16 @@ import Constants from 'expo-constants';
 
 import { createPersistedKeyValueCache } from './keyValuePersistence';
 import { supabase, isSupabaseConfigured } from './supabase';
+import { ecsLog } from './ecsLogger';
+import {
+  sanitizeECSDiagnosticText,
+  sanitizeECSDiagnosticValue,
+} from './observability/ecsDiagnosticRedaction';
+import {
+  getECSObservabilityTelemetryGate,
+  hydrateECSObservabilityTelemetryConsent,
+  type ECSObservabilityTelemetryGate,
+} from './observability/ecsObservabilityTelemetryGate';
 import { gpsUIState } from './gpsUIState';
 import { routeStore } from './routeStore';
 import { loadRoadNavigationSession } from './roadNavigationStore';
@@ -71,6 +81,8 @@ const UPLOAD_BATCH_SIZE = 20;
 const memoryThrottleMap = new Map<string, number>();
 let initialized = false;
 let flushInFlight = false;
+let lastSuccessfulUploadAt: string | null = null;
+let lastUploadFailureCode: string | null = null;
 
 function simpleHash(input: string): string {
   let hash = 2166136261;
@@ -142,16 +154,14 @@ function getSessionId(): string {
 
 function sanitizeMessage(message: string | null | undefined): string | null {
   if (!message) return null;
-  return message
-    .replace(/-?\d+\.\d{3,}/g, '<coord>')
-    .replace(/\b[0-9a-f]{8,}\b/gi, '<id>')
+  const sanitized = sanitizeECSDiagnosticText(message, 600)
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 600);
+    .trim();
+  return sanitized || null;
 }
 
 function normalizeSignature(value: string): string {
-  return value
+  return sanitizeECSDiagnosticText(value, 600)
     .toLowerCase()
     .replace(/-?\d+\.\d+/g, ':n')
     .replace(/\b\d+\b/g, ':n')
@@ -284,24 +294,16 @@ function deriveMessage(input: EcsIssueReportInput): string | null {
 }
 
 function serializeError(input: unknown): Record<string, unknown> {
-  if (input instanceof Error) {
-    return {
-      name: input.name,
-      message: sanitizeMessage(input.message),
-      stack: sanitizeMessage(input.stack ?? null),
-    };
+  const sanitized = sanitizeECSDiagnosticValue(input, {
+    maxDepth: 4,
+    maxArrayLength: 12,
+    maxObjectKeys: 20,
+    maxStringLength: 600,
+  });
+  if (sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)) {
+    return sanitized as Record<string, unknown>;
   }
-  if (typeof input === 'string') {
-    return { message: sanitizeMessage(input) };
-  }
-  if (!input || typeof input !== 'object') {
-    return {};
-  }
-  try {
-    return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+  return sanitized == null ? {} : { message: sanitized };
 }
 
 function shouldSuppressEvent(signature: string): boolean {
@@ -320,26 +322,35 @@ async function createIssueEvent(input: EcsIssueReportInput): Promise<EcsFieldFee
   const runtimeContext = await buildRuntimeContext(Boolean(input.fallbackUsed));
   const runtime = getIssueRuntimeSnapshot();
   const message = deriveMessage(input);
-  const signatureBase = input.signature || `${input.eventType}:${input.ecsArea}:${input.issueTitle}:${message ?? ''}`;
+  const signatureBase = sanitizeECSDiagnosticText(
+    input.signature || `${input.eventType}:${input.ecsArea}:${input.issueTitle}:${message ?? ''}`,
+    600,
+  );
   const normalizedSignature = normalizeSignature(signatureBase);
+  const metadata = sanitizeECSDiagnosticValue({
+    ...(input.metadata ?? {}),
+    ...(input.error ? { error: serializeError(input.error) } : {}),
+    path: runtime.currentPath,
+    activeTab: runtime.activeTab,
+  }, {
+    maxDepth: 5,
+    maxArrayLength: 20,
+    maxObjectKeys: 28,
+    maxStringLength: 500,
+  }) as Record<string, unknown>;
 
   return captureFieldFeedbackEvent({
     id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
     occurredAt: new Date().toISOString(),
     eventType: input.eventType,
     severity: input.severity,
-    issueTitle: input.issueTitle.trim(),
+    issueTitle: sanitizeECSDiagnosticText(input.issueTitle, 160),
     issueSignature: signatureBase,
     normalizedSignature,
     ecsArea: input.ecsArea,
     message,
     runtimeContext,
-    metadata: {
-      ...(input.metadata ?? {}),
-      ...(input.error ? { error: serializeError(input.error) } : {}),
-      path: runtime.currentPath,
-      activeTab: runtime.activeTab,
-    },
+    metadata,
     sourceKind: input.eventType === 'field_report' ? 'field_report' : 'runtime',
     hashedUserId: runtime.actor.userId ? simpleHash(runtime.actor.userId) : null,
     hashedSessionId: simpleHash(getSessionId()),
@@ -357,12 +368,45 @@ async function uploadEvents(events: EcsFieldFeedbackEvent[]): Promise<boolean> {
       },
     });
     if (error || data?.ok !== true) {
+      lastUploadFailureCode = 'ISSUE_INTELLIGENCE_UPLOAD_FAILED';
+      ecsLog.captureFailure({
+        kind: 'provider',
+        domain: 'supabase',
+        operation: 'issue_intelligence_upload',
+        code: lastUploadFailureCode,
+        sourceState: 'unavailable',
+        context: {
+          eventCount: events.length,
+          responseCode: data?.code ?? null,
+        },
+      }, error, {
+        category: 'PROVIDER',
+      });
       return false;
     }
+    lastSuccessfulUploadAt = new Date().toISOString();
+    lastUploadFailureCode = null;
     return true;
-  } catch {
+  } catch (error) {
+    lastUploadFailureCode = 'ISSUE_INTELLIGENCE_UPLOAD_FAILED';
+    ecsLog.captureFailure({
+      domain: 'supabase',
+      operation: 'issue_intelligence_upload',
+      code: lastUploadFailureCode,
+      sourceState: 'unavailable',
+      context: { eventCount: events.length },
+    }, error, {
+      category: 'PROVIDER',
+    });
     return false;
   }
+}
+
+function telemetryGateForEvent(event: EcsFieldFeedbackEvent): ECSObservabilityTelemetryGate {
+  return getECSObservabilityTelemetryGate({
+    backendConfigured: isSupabaseConfigured,
+    manualSubmission: event.sourceKind === 'field_report',
+  });
 }
 
 function normalizeRemoteGroup(group: any): EcsIssueGroupSummary {
@@ -431,7 +475,10 @@ function normalizeRemoteSummary(summary: any): EcsIssueAdminSummary {
 export async function initializeEcsIssueIntelligence(): Promise<void> {
   if (initialized) return;
   try {
-    await STORAGE.waitForHydration();
+    await Promise.all([
+      STORAGE.waitForHydration(),
+      hydrateECSObservabilityTelemetryConsent(),
+    ]);
     getSessionId();
   } catch {
     // Ignore hydration failures; the queue falls back to memory-safe behavior.
@@ -450,10 +497,14 @@ export async function flushQueuedIssueEvents(): Promise<void> {
 
     let queue = readQueue();
     while (queue.length > 0) {
-      const batch = queue.slice(0, UPLOAD_BATCH_SIZE);
+      const batch = queue
+        .filter((event) => telemetryGateForEvent(event).enabled)
+        .slice(0, UPLOAD_BATCH_SIZE);
+      if (batch.length === 0) break;
       const ok = await uploadEvents(batch);
       if (!ok) break;
-      queue = queue.slice(batch.length);
+      const uploadedIds = new Set(batch.map((event) => event.id));
+      queue = queue.filter((event) => !uploadedIds.has(event.id));
       writeQueue(queue);
     }
   } finally {
@@ -507,8 +558,16 @@ export function reportDataIntegrityFailure(input: Omit<EcsIssueReportInput, 'eve
   void reportIssue({ ...input, eventType: 'data_integrity_failure' });
 }
 
-export async function submitFieldIssueReport(input: EcsFieldIssueReportInput): Promise<{ ok: boolean; error?: string }> {
+export async function submitFieldIssueReport(input: EcsFieldIssueReportInput): Promise<{
+  ok: boolean;
+  delivery?: 'queued_for_upload' | 'queued_local';
+  error?: string;
+}> {
   try {
+    const gate = getECSObservabilityTelemetryGate({
+      backendConfigured: isSupabaseConfigured,
+      manualSubmission: true,
+    });
     await reportIssue({
       eventType: 'field_report',
       severity: 'medium',
@@ -523,10 +582,57 @@ export async function submitFieldIssueReport(input: EcsFieldIssueReportInput): P
       },
       signature: `field_report:${input.category}:${input.description ?? ''}`,
     });
-    return { ok: true };
-  } catch (error: any) {
-    return { ok: false, error: error?.message || 'Unable to send field report' };
+    return {
+      ok: true,
+      delivery: gate.enabled ? 'queued_for_upload' : 'queued_local',
+    };
+  } catch {
+    return { ok: false, error: 'Unable to queue field report' };
   }
+}
+
+export type ECSIssueIntelligenceDiagnostics = {
+  queueLength: number;
+  queueState: 'empty' | 'local_only' | 'upload_eligible' | 'uploading';
+  flushInFlight: boolean;
+  backendConfigured: boolean;
+  telemetryGate: ECSObservabilityTelemetryGate;
+  lastSuccessfulRefresh: Record<string, string | null>;
+  lastUploadFailureCode: string | null;
+  maxQueueLength: number;
+  dedupeWindowMs: number;
+};
+
+/** Aggregate diagnostics only; queued issue payloads are intentionally excluded. */
+export function getECSIssueIntelligenceDiagnostics(): ECSIssueIntelligenceDiagnostics {
+  const queue = readQueue();
+  const telemetryGate = getECSObservabilityTelemetryGate({
+    backendConfigured: isSupabaseConfigured,
+  });
+  const runtime = getIssueRuntimeSnapshot();
+  const hasEligibleEvent = queue.some((event) => telemetryGateForEvent(event).enabled);
+  return {
+    queueLength: queue.length,
+    queueState: flushInFlight
+      ? 'uploading'
+      : queue.length === 0
+        ? 'empty'
+        : hasEligibleEvent
+          ? 'upload_eligible'
+          : 'local_only',
+    flushInFlight,
+    backendConfigured: isSupabaseConfigured,
+    telemetryGate,
+    lastSuccessfulRefresh: {
+      issueUpload: lastSuccessfulUploadAt,
+      weather: runtime.lastSuccessfulWeatherFetchAt
+        ? new Date(runtime.lastSuccessfulWeatherFetchAt).toISOString()
+        : null,
+    },
+    lastUploadFailureCode,
+    maxQueueLength: MAX_QUEUE_LENGTH,
+    dedupeWindowMs: DEDUPE_WINDOW_MS,
+  };
 }
 
 export async function fetchIssueAdminSummary(): Promise<EcsIssueAdminSummary | null> {

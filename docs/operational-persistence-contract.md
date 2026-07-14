@@ -2,6 +2,12 @@
 
 ECS operational state should use existing storage adapters only. Non-sensitive local continuity uses `createPersistedKeyValueCache`, which writes through `localStorage` on web and a file-backed non-secure snapshot on native. Secrets, provider credentials, auth headers, API tokens, and refresh tokens must not be stored in these operational caches.
 
+The authoritative ownership, hydration, sensitivity, conflict, retention, and
+logout map is defined in `lib/state/stateOwnershipRegistry.ts` and documented in
+`docs/state-management-ownership-and-persistence.md`. New stores must identify an
+owner and register or adapt into that map instead of creating another writer for
+an existing concept.
+
 ## Safe for non-secure local persistence
 
 - `wizardDraftStore`: vehicle wizard draft step, selected answers, draft vehicle id/name, and saved timestamp. This lets an interrupted setup resume after app restart. It must not store account credentials, provider tokens, or sensitive payment/contact data.
@@ -23,6 +29,14 @@ ECS operational state should use existing storage adapters only. Non-sensitive l
 ## Adapter Rules
 
 - Use `createPersistedKeyValueCache` for non-sensitive operational continuity.
+- Classify state as secure, private, ordinary, cache, or ephemeral before choosing a backend.
 - Do not add a new persistence library for these stores.
 - Do not reintroduce native-only memory fallbacks for state that the UI expects to survive restart.
 - Expose `waitForHydration()` and `flush()` on stores whose startup or test behavior depends on persisted native snapshots.
+- Join required startup work through `ECSStoreHydrationCoordinator`; do not add another shell-specific timeout wrapper.
+- Include a schema version and a tested additive migration for new or changed persisted envelopes.
+- Coalesce high-frequency writes and flush only at explicit lifecycle boundaries.
+- Reject older incoming revisions before replacing either clean or dirty local state.
+- Keep conflict resolution domain-specific; do not apply generic last-write-wins to safety or operational state.
+- Scope durable private outbox records and conflict details to a pseudonymous account marker.
+- Diagnostics may report counts, timings, status, and redacted errors only. They must not report stored values or raw payloads.

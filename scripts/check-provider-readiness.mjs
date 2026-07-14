@@ -3,6 +3,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import {
+  classifyEvidenceCheckOutcome,
+  writeEvidenceCheckResultForLane,
+} from './verification/evidence-result.mjs';
+
 const RESULT_RELATIVE_PATH = path.join('.smoke', 'provider-readiness-result.json');
 const REQUIRED_CATEGORIES = [
   'legal/access',
@@ -10,6 +15,15 @@ const REQUIRED_CATEGORIES = [
   'fire restriction',
   'weather',
   'service/resupply',
+];
+const EXTERNAL_PROVIDER_BLOCKER_IDS = [
+  'provider_readiness_reports_missing',
+  'target_region_report_missing',
+  'access_category_policy_not_documented',
+  'provider_categories_not_approved',
+  'real_upstream_provider_evidence_incomplete',
+  'raw_provider_payload_exclusion_not_recorded',
+  'precise_private_coordinate_exclusion_not_recorded',
 ];
 
 function pathsFor(root) {
@@ -390,6 +404,10 @@ export function buildProviderReadinessResult(options = {}) {
     rawPayloadViolations.length === 0 &&
     preciseCoordinateViolations.length === 0 &&
     privacyViolations.length === 0;
+  const evidenceBlockers = Array.from(new Set([
+    ...blockers,
+    ...notApproved.map((category) => `provider_${slug(category)}_not_approved`),
+  ])).sort();
 
   return {
     passed,
@@ -400,6 +418,7 @@ export function buildProviderReadinessResult(options = {}) {
     missingFiles,
     missingRegion,
     blockers,
+    evidenceBlockers,
     status: notApproved.length > 0 ? 'not_approved_for_influence' : 'approved_for_influence',
     shadowOnlyAllowed,
     shadowOnlyPassed: shadowOnlyAllowed,
@@ -476,6 +495,32 @@ export function runProviderReadinessCli(options = {}) {
   writeProviderReadinessResult(result, { rootDir: root });
   if (parsed.jsonOnly) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else stdout.write(formatProviderReadinessResult(result, { rootDir: root }));
+  const outcome = classifyEvidenceCheckOutcome({
+    passed: result.passed,
+    blockerIds: result.evidenceBlockers,
+    externalBlockerIds: [
+      ...EXTERNAL_PROVIDER_BLOCKER_IDS,
+      ...result.notApprovedCategories.map((category) => `provider_${slug(category)}_not_approved`),
+    ],
+  });
+  const laneExitCode = writeEvidenceCheckResultForLane({
+    checkId: 'provider-readiness-evidence',
+    status: outcome.status,
+    safeCode: outcome.safeCode,
+    blockerIds: outcome.blockerIds,
+    summary: outcome.status === 'passed'
+      ? 'Provider readiness evidence is approved for the configured influence scope.'
+      : outcome.status === 'blocked_external'
+        ? 'Provider influence remains blocked pending explicit external evidence or approval.'
+        : 'Provider readiness verification failed an internal policy or privacy check.',
+    evidence: result,
+    diagnostics: {
+      artifactId: 'provider-readiness-result',
+      domainStatus: result.status,
+      shadowOnlyAllowed: result.shadowOnlyAllowed,
+    },
+  });
+  if (laneExitCode !== null) return laneExitCode;
   return result.passed || result.shadowOnlyAllowed ? 0 : 1;
 }
 

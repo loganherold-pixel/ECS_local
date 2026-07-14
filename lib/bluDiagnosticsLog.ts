@@ -1,4 +1,9 @@
 import { BLU_DEBUG_LOG_THROTTLE_MS } from './bluPerformanceConfig';
+import { ecsLog } from './ecsLogger';
+import {
+  sanitizeECSDiagnosticValue,
+  type ECSDiagnosticValue,
+} from './observability/ecsDiagnosticRedaction';
 
 export type BluLogPrefix =
   | '[BLU_SCAN]'
@@ -17,7 +22,7 @@ export type BluLogPrefix =
   | '[BLU_GOALZERO]'
   | '[BLU_OBD2]';
 
-type Jsonish = string | number | boolean | null | Jsonish[] | { [key: string]: Jsonish };
+type Jsonish = ECSDiagnosticValue;
 
 export interface BluDiscoveryLogInput {
   id?: string | null;
@@ -71,11 +76,6 @@ export interface BluTelemetryLogInput {
 
 const SENSITIVE_KEY_PATTERN =
   /token|secret|api[_-]?key|access[_-]?key|refresh|authorization|auth[_-]?header|password|email|signature|headers?/i;
-const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
-const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
-const OPENAI_KEY_PATTERN = /\bsk-[A-Za-z0-9_-]{8,}\b/g;
-const LONG_VALUE_LIMIT = 500;
 const DEFAULT_THROTTLE_MS = BLU_DEBUG_LOG_THROTTLE_MS;
 
 const throttleState = new Map<string, {
@@ -126,37 +126,18 @@ export function isBluDebugEnabled(): boolean {
     isTruthyDebugValue(readProcessEnvValue('EXPO_PUBLIC_ECS_DEBUG_BLU_SCAN'));
 }
 
-function redactString(value: string): string {
-  const redacted = value
-    .replace(EMAIL_PATTERN, '[redacted_email]')
-    .replace(BEARER_PATTERN, 'Bearer [redacted]')
-    .replace(JWT_PATTERN, '[redacted_token]')
-    .replace(OPENAI_KEY_PATTERN, '[redacted_key]');
-
-  if (redacted.length <= LONG_VALUE_LIMIT) return redacted;
-  return `${redacted.slice(0, LONG_VALUE_LIMIT)}...`;
-}
-
 export function sanitizeBluLogValue(value: unknown, keyHint?: string, depth = 0): Jsonish {
-  if (keyHint && SENSITIVE_KEY_PATTERN.test(keyHint)) return '[redacted]';
-  if (value == null) return null;
-  if (typeof value === 'string') return redactString(value);
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'bigint') return value.toString();
-  if (typeof value !== 'object') return String(value);
-  if (depth >= 5) return '[truncated]';
-
-  if (Array.isArray(value)) {
-    return value.slice(0, 50).map((entry) => sanitizeBluLogValue(entry, keyHint, depth + 1));
+  const wrapped = keyHint ? { [keyHint]: value } : value;
+  const sanitized = sanitizeECSDiagnosticValue(wrapped, {
+    maxDepth: Math.max(1, 5 - depth),
+    maxArrayLength: 50,
+    maxObjectKeys: 80,
+    maxStringLength: 500,
+  }) as Jsonish;
+  if (!keyHint || !sanitized || typeof sanitized !== 'object' || Array.isArray(sanitized)) {
+    return sanitized;
   }
-
-  const source = value as Record<string, unknown>;
-  const sanitized: Record<string, Jsonish> = {};
-  for (const key of Object.keys(source).slice(0, 80)) {
-    sanitized[key] = sanitizeBluLogValue(source[key], key, depth + 1);
-  }
-  return sanitized;
+  return (sanitized as Record<string, Jsonish>)[keyHint] ?? null;
 }
 
 function normalizeDetails(details?: Record<string, unknown> | null): Record<string, Jsonish> | undefined {
@@ -169,11 +150,39 @@ function normalizeDetails(details?: Record<string, unknown> | null): Record<stri
 
 function safeConsoleLog(prefix: BluLogPrefix, message: string, details?: Record<string, unknown> | null): void {
   const sanitized = normalizeDetails(details);
-  if (sanitized) {
-    console.log(prefix, message, sanitized);
-  } else {
-    console.log(prefix, message);
+  const lifecyclePrefix = /\[BLU_(CONNECT|HANDSHAKE|TIMEOUT|RECONNECT|DISCONNECT)\]/.test(prefix);
+  const lifecycleMessage = /(connect|disconnect|handshake|stream|timeout|failed|success|ready|no_telemetry)/i.test(message);
+  if (lifecyclePrefix && lifecycleMessage) {
+    const failed = prefix === '[BLU_TIMEOUT]' || /(failed|timeout|error|no_telemetry)/i.test(message);
+    ecsLog.breadcrumb({
+      domain: 'device',
+      operation: prefix.slice(5, -1).toLowerCase(),
+      code: `DEVICE_${prefix.slice(5, -1)}_${message}`,
+      status: failed ? 'degraded' : /(disconnect)/i.test(message) ? 'cancelled' : 'completed',
+      sourceState: failed || /(disconnect)/i.test(message) ? 'unavailable' : 'live',
+      context: sanitized,
+    });
+    if (prefix === '[BLU_TIMEOUT]') {
+      ecsLog.captureFailure({
+        kind: 'native_hardware',
+        domain: 'device',
+        operation: 'connection_timeout',
+        code: 'DEVICE_CONNECTION_TIMEOUT',
+        sourceState: 'unavailable',
+        context: sanitized,
+      }, undefined, {
+        category: 'DEVICE',
+        fingerprint: `${prefix}:${message}`,
+      });
+    }
   }
+  ecsLog.dev('DEVICE', message, sanitized, {
+    tag: prefix,
+    debugFlag: 'ECS_BLU_DEBUG',
+    fingerprint: `${prefix}:${message}`,
+    throttleMs: DEFAULT_THROTTLE_MS,
+    aggregateWindowMs: 10_000,
+  });
 }
 
 export function bluLog(

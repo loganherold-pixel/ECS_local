@@ -142,18 +142,16 @@ import { realtimeSync } from "../lib/realtimeSync";
 import { syncActionQueue } from '../lib/syncActionQueue';
 import { initializeSyncProcessors } from '../lib/syncProcessors';
 import { loadoutSyncQueue } from '../lib/loadoutSyncQueue';
-import { hydrateDashboardState, hydrateCustomPresets, flushDashboardWrites } from '../lib/dashboardStore';
+import { flushDashboardWrites } from '../lib/dashboardStore';
 import { connectivityIntelService } from '../lib/connectivityIntelService';
-import { waitForExpeditionStateHydration } from '../lib/expeditionStateStore';
 import { createPersistedKeyValueCache } from '../lib/keyValuePersistence';
 import { setupStore } from '../lib/setupStore';
 import { vehicleStore } from '../lib/vehicleStore';
-import { vehicleSetupStore } from '../lib/vehicleSetupStore';
-import { loadoutStore } from '../lib/loadoutStore';
-import { vehicleSpecStore } from '../lib/vehicleSpecStore';
-import { tiresLiftStore } from '../lib/tiresLiftStore';
-import { consumablesStore } from '../lib/consumablesStore';
-import { powerSetupStore } from '../lib/powerSetupStore';
+import {
+  hydrateECSOptionalStartupState,
+  hydrateECSRequiredStartupState,
+} from '../lib/state/ecsStartupHydration';
+import { ecsStateTransactionCoordinator } from '../lib/state/stateTransactionCoordinator';
 import {
   getStartupDiagnosticsSnapshot,
   logStartupStall,
@@ -513,31 +511,13 @@ async function ensureStartupHydration(): Promise<StartupHydrationResult> {
   if (!startupHydrationPromise) {
     startupHydrationPromise = (async () => {
       markStartupPhase('stores_hydration_start');
-      const requiredHydrations: Array<[string, Promise<unknown>]> = [
-        ['setupStore', setupStore.waitForHydration()],
-        ['vehicleSetupStore', vehicleSetupStore.waitForHydration()],
-        ['sessionStore', sessionStore.waitForHydration()],
-        ['offlineModeCache', offlineModeCache.waitForHydration()],
-        ['vehicleStore', vehicleStore.waitForHydration()],
-        ['loadoutStore', loadoutStore.waitForHydration()],
-        ['vehicleSpecStore', vehicleSpecStore.waitForHydration()],
-        ['tiresLiftStore', tiresLiftStore.waitForHydration()],
-        ['consumablesStore', consumablesStore.waitForHydration()],
-        ['powerSetupStore', powerSetupStore.waitForHydration()],
-      ];
-      const timedOutRequirements: string[] = [];
-
-      await Promise.all(
-        requiredHydrations.map(async ([label, promise]) => {
-          const result = await withStartupTimeout(
-            label,
-            promise,
-            STARTUP_REQUIRED_READINESS_TIMEOUT_MS,
-            null,
-          );
-          if (result.timedOut) timedOutRequirements.push(label);
-        }),
+      const requiredHydration = await hydrateECSRequiredStartupState(
+        STARTUP_REQUIRED_READINESS_TIMEOUT_MS,
       );
+      const timedOutRequirements = [
+        ...requiredHydration.timedOutTaskIds,
+        ...requiredHydration.failedTaskIds.map((id) => `${id}:failed`),
+      ];
 
       if (!startupStoresLogEmitted) {
         startupStoresLogEmitted = true;
@@ -574,17 +554,8 @@ async function ensureStartupHydration(): Promise<StartupHydrationResult> {
           });
       }
 
-      void withStartupTimeout(
-        'optional dashboard/expedition hydration',
-        Promise.all([
-          hydrateDashboardState(),
-          hydrateCustomPresets(),
-          waitForExpeditionStateHydration(),
-        ]),
-        STARTUP_OPTIONAL_READINESS_TIMEOUT_MS,
-        null,
-      ).then((result) => {
-        if (result.timedOut) return;
+      void hydrateECSOptionalStartupState(STARTUP_OPTIONAL_READINESS_TIMEOUT_MS).then((result) => {
+        if (result.status === 'degraded') return;
         if (!startupDashboardLogEmitted) {
           startupDashboardLogEmitted = true;
           logStartupDebug('Dashboard state hydrated from persistent storage');
@@ -826,7 +797,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     cancelAutoSync();
     realtimeSync.destroy();
-    syncActionQueue.stopAutoProcess();
+    syncActionQueue.unbindActor();
     loadoutSyncQueue.stopAutoProcess();
     void import('../lib/convoy/convoyLocationPublisher')
       .then(({ stopConvoyLocationSharing }) =>
@@ -1704,6 +1675,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     if (user) {
+      syncActionQueue.bindActor(user.id);
       // Clear offline mode once authenticated connectivity has returned.
       if (offlineMode && connectivity.isOnline()) {
         setOfflineMode(false);
@@ -1747,7 +1719,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Stop realtime sync on logout
       realtimeSync.destroy();
       // Stop sync action queue on logout (also handled in signOut, but defensive)
-      syncActionQueue.stopAutoProcess();
+      const offlineActorFingerprint = offlineMode
+        ? sessionStore.getPreferences().lastUserId
+        : null;
+      if (offlineActorFingerprint) {
+        syncActionQueue.bindActorFingerprint(offlineActorFingerprint);
+        syncActionQueue.stopAutoProcess();
+      } else {
+        syncActionQueue.unbindActor();
+      }
       // Stop loadout reconciliation sync queue on logout
       loadoutSyncQueue.stopAutoProcess();
       setSyncStatus("offline");
@@ -2198,52 +2178,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     const userId = user?.id;
     const redactedUserId = redactAuthUserId(userId ?? null);
-    signOutIntentRef.current = true;
-    setSignInPending(false);
-    setStartupSessionRestored(false);
-    setAuthNotice(null);
-    console.log('[Auth] Sign-out start', {
-      userId: redactedUserId,
-      isOnline: connectivity.isOnline(),
-    });
-    recordAuthDiagnostic('auth_logout_started', {
-      entry_mode: 'logout_return',
-      result: 'started',
-      network_state: connectivity.isOnline() ? 'online' : 'offline',
-      access_state: accessState?.accessState ?? (userId ? 'authenticated' : 'signed_out'),
-    });
+    await ecsStateTransactionCoordinator.run({
+      action: 'logout',
+      idempotencyKey: redactedUserId ?? 'signed-out-session',
+      execute: async () => {
+        signOutIntentRef.current = true;
+        setSignInPending(false);
+        setStartupSessionRestored(false);
+        setAuthNotice(null);
+        console.log('[Auth] Sign-out start', {
+          userId: redactedUserId,
+          isOnline: connectivity.isOnline(),
+        });
+        recordAuthDiagnostic('auth_logout_started', {
+          entry_mode: 'logout_return',
+          result: 'started',
+          network_state: connectivity.isOnline() ? 'online' : 'offline',
+          access_state: accessState?.accessState ?? (userId ? 'authenticated' : 'signed_out'),
+        });
 
-    if (userId) {
-      await logLogout(userId).catch(() => {});
-    }
+        if (userId) {
+          await logLogout(userId).catch(() => {});
+        }
 
-    // ── Flush pending dashboard writes before clearing state ──
-    // Ensures any debounced widget layout changes are persisted to disk
-    // before the session is torn down. This guarantees a clean state on
-    // sign-out: the next login (or offline access) will see the user's
-    // last dashboard arrangement.
-    try {
-      await flushDashboardWrites();
-      console.log('[SignOut] Dashboard writes flushed to disk');
-    } catch (e) {
-      console.warn('[SignOut] Dashboard flush failed (non-fatal):', e);
-      // Non-fatal — we still proceed with sign-out even if flush fails.
-      // The debounced write may have already completed, or the data will
-      // be lost (acceptable since the user is explicitly signing out).
-    }
+        // Persist the local dashboard preference before the account boundary closes.
+        try {
+          await flushDashboardWrites();
+          console.log('[SignOut] Dashboard writes flushed to disk');
+        } catch (e) {
+          console.warn('[SignOut] Dashboard flush failed (non-fatal):', e);
+        }
 
-    if (isSupabaseConfigured) await supabase.auth.signOut();
-    await clearPersistedSupabaseAuthState();
-    clearAuthenticatedRuntimeState();
-    console.log('[Auth] Sign-out success', {
-      userId: redactedUserId,
-      isOnline: connectivity.isOnline(),
-    });
-    recordAuthDiagnostic('auth_logout_completed', {
-      entry_mode: 'logout_return',
-      result: 'completed',
-      network_state: connectivity.isOnline() ? 'online' : 'offline',
-      access_state: 'signed_out',
+        if (isSupabaseConfigured) {
+          try {
+            await supabase.auth.signOut();
+          } catch (error) {
+            console.warn('[SignOut] Provider sign-out failed; clearing local auth state.', sanitizeAuthError(
+              error instanceof Error ? error.message : String(error),
+            ));
+          }
+        }
+        await clearPersistedSupabaseAuthState();
+        clearAuthenticatedRuntimeState();
+        console.log('[Auth] Sign-out success', {
+          userId: redactedUserId,
+          isOnline: connectivity.isOnline(),
+        });
+        recordAuthDiagnostic('auth_logout_completed', {
+          entry_mode: 'logout_return',
+          result: 'completed',
+          network_state: connectivity.isOnline() ? 'online' : 'offline',
+          access_state: 'signed_out',
+        });
+      },
     });
   }, [accessState?.accessState, clearAuthenticatedRuntimeState, user]);
 

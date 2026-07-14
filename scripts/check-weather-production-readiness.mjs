@@ -70,6 +70,9 @@ export function buildWeatherProductionReadinessResult(options = {}) {
     evidence: path.join(root, EVIDENCE_RELATIVE_PATH),
     weatherService: path.join(root, 'lib', 'weatherService.ts'),
     weatherBroker: path.join(root, 'lib', 'weatherBroker.ts'),
+    weatherBrokerEnvironment: path.join(root, 'lib', 'weatherBrokerEnvironment.ts'),
+    weatherAdvisoryLedger: path.join(root, 'lib', 'weatherAdvisoryPublicationLedger.ts'),
+    routeWeatherSampler: path.join(root, 'lib', 'ecs5RouteWeatherSampler.ts'),
     weatherStore: path.join(root, 'lib', 'weatherStore.ts'),
     useOperationalWeather: path.join(root, 'lib', 'useOperationalWeather.ts'),
     weatherFreshness: path.join(root, 'lib', 'weatherFreshness.ts'),
@@ -88,6 +91,9 @@ export function buildWeatherProductionReadinessResult(options = {}) {
   const evidence = readJsonIfExists(paths.evidence);
   const weatherService = readIfExists(paths.weatherService);
   const weatherBroker = readIfExists(paths.weatherBroker);
+  const weatherBrokerEnvironment = readIfExists(paths.weatherBrokerEnvironment);
+  const weatherAdvisoryLedger = readIfExists(paths.weatherAdvisoryLedger);
+  const routeWeatherSampler = readIfExists(paths.routeWeatherSampler);
   const weatherStore = readIfExists(paths.weatherStore);
   const useOperationalWeather = readIfExists(paths.useOperationalWeather);
   const weatherFreshness = readIfExists(paths.weatherFreshness);
@@ -135,6 +141,53 @@ export function buildWeatherProductionReadinessResult(options = {}) {
       ['Keep OpenWeather/NWS/provider invocation behind the shared service and central OpenWeather client only.'],
     ),
     check(
+      'normalized_environmental_consumers_use_authoritative_broker',
+      'Normalized observations, forecasts, alerts, AQI, fire evidence, and route hazards use the authoritative environmental broker.',
+      weatherBroker.includes('getOperationalWeatherEnvironmentBroker') &&
+        weatherBrokerEnvironment.includes("| 'observation'") &&
+        weatherBrokerEnvironment.includes("| 'forecast'") &&
+        weatherBrokerEnvironment.includes("| 'alert'") &&
+        weatherBrokerEnvironment.includes("| 'air_quality'") &&
+        weatherBrokerEnvironment.includes("| 'fire_detection'") &&
+        weatherBrokerEnvironment.includes("| 'derived_route_hazard'") &&
+        weatherBrokerEnvironment.includes('const inFlight = new Map') &&
+        weatherBrokerEnvironment.includes('const lastGood = new Map') &&
+        weatherBrokerEnvironment.includes('detectOperationalWeatherConflicts') &&
+        weatherBrokerEnvironment.includes('legalClosureImplied: false') &&
+        routeWeatherSampler.includes('getOperationalWeatherEnvironmentBroker') &&
+        routeWeatherSampler.includes("from './weatherBrokerEnvironment'") &&
+        !routeWeatherSampler.includes('.runAdapter('),
+      [
+        relPath(root, paths.weatherBroker),
+        relPath(root, paths.weatherBrokerEnvironment),
+        relPath(root, paths.routeWeatherSampler),
+      ],
+      ['Keep all normalized environmental provider work behind the broker and preserve source-specific facts.'],
+    ),
+    check(
+      'route_weather_jobs_and_provider_work_are_bounded',
+      'Route-weather jobs cancel stale context and bound sampling, provider calls, cache size, and diagnostics.',
+        routeWeatherSampler.includes('MAX_ROUTE_WEATHER_SAMPLE_POINTS = 12') &&
+        routeWeatherSampler.includes('DEFAULT_ROUTE_WEATHER_PROVIDER_CALL_BUDGET = 24') &&
+        routeWeatherSampler.includes("RouteWeatherSourceState = 'live' | 'cached' | 'stale' | 'mixed' | 'unavailable'") &&
+        routeWeatherSampler.includes('latestObservedAt') &&
+        routeWeatherSampler.includes('maxForecastHorizonMinutes') &&
+        routeWeatherSampler.includes('beginOperationalWeatherRouteJob') &&
+        routeCorridorWeather.includes('beginOperationalWeatherRouteJob') &&
+        routeCorridorWeather.includes('routeJob.isCurrent()') &&
+        routeCorridorWeather.includes('cancelOperationalWeatherRouteJob') &&
+        weatherBrokerEnvironment.includes('DEFAULT_MAX_CACHE_ENTRIES = 64') &&
+        weatherBrokerEnvironment.includes('DEFAULT_MAX_LAST_GOOD_ENTRIES = 128') &&
+        weatherBrokerEnvironment.includes('subscriberNotificationCount') &&
+        weatherBrokerEnvironment.includes('devOnly: true'),
+      [
+        relPath(root, paths.routeWeatherSampler),
+        relPath(root, paths.routeCorridorWeather),
+        relPath(root, paths.weatherBrokerEnvironment),
+      ],
+      ['Keep stale route responses cancelled and enforce sampling/provider/cache limits.'],
+    ),
+    check(
       'freshness_stale_cache_and_permission_states_are_explicit',
       'Weather freshness, stale cache, missing data, and permission-required states are explicit.',
       weatherFreshness.includes('export function getWeatherFreshness') &&
@@ -170,6 +223,9 @@ export function buildWeatherProductionReadinessResult(options = {}) {
       'Dispatch/CAD and ECS Brief weather advisories are deduped and include freshness/source context.',
       weatherBriefPublisher.includes('SHARED_WEATHER_BRIEF_COOLDOWN_MS') &&
         weatherBriefPublisher.includes('publishSharedWeatherBriefAdvisories') &&
+        weatherBriefPublisher.includes('operationalWeatherAdvisoryLedger') &&
+        weatherAdvisoryLedger.includes('createWeatherAdvisoryPublicationLedger') &&
+        weatherAdvisoryLedger.includes('while (records.size > capacity)') &&
         dispatchLiveAggregator.includes('buildWeatherEvents') &&
         dispatchLiveAggregator.includes('dedupeWeatherEvents') &&
         dispatchLiveAggregator.includes('Source freshness: ${freshnessLabel}.') &&
@@ -179,6 +235,7 @@ export function buildWeatherProductionReadinessResult(options = {}) {
         navigate.includes('routeCorridorWeather.lastFetchAt'),
       [
         relPath(root, paths.weatherBriefPublisher),
+        relPath(root, paths.weatherAdvisoryLedger),
         relPath(root, paths.dispatchLiveAggregator),
         relPath(root, paths.navigate),
       ],

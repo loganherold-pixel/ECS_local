@@ -1,6 +1,7 @@
 export const CONVOY_LOCATION_FRESH_UNDER_MS = 5 * 60 * 1000;
 export const CONVOY_LOCATION_WATCH_AFTER_MS = 10 * 60 * 1000;
 export const CONVOY_LOCATION_STALE_AFTER_MS = 15 * 60 * 1000;
+export const CONVOY_LOCATION_MAX_FUTURE_SKEW_MS = 2 * 60 * 1000;
 
 export type ConvoyLocationStaleness = 'fresh' | 'aging' | 'watch' | 'stale';
 
@@ -19,6 +20,14 @@ export function classifyConvoyLocationStaleness(
       staleness: 'stale',
       isStale: true,
       staleReason: 'Location timestamp unavailable.',
+    };
+  }
+
+  if (capturedMs - nowMs > CONVOY_LOCATION_MAX_FUTURE_SKEW_MS) {
+    return {
+      staleness: 'stale',
+      isStale: true,
+      staleReason: 'Location timestamp is ahead of the device clock.',
     };
   }
 

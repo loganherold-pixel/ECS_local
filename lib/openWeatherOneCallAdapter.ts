@@ -60,16 +60,18 @@ export function createOpenWeatherOneCallAdapter(
       const url = buildOpenWeatherOneCallServerUrl(input);
       let lastError: unknown = null;
       for (let attempt = 0; attempt <= policy.retries; attempt += 1) {
+        if (context.signal?.aborted) throw new Error('OpenWeather One Call request cancelled.');
         try {
           return await context.serverFetch({
             url,
             timeoutMs: policy.timeoutMs,
             headers: { Accept: 'application/json' },
+            signal: context.signal,
           });
         } catch (error: any) {
           lastError = error;
-          if (!isRetryableOpenWeatherError(error) || attempt >= policy.retries) break;
-          await delay(policy.retryBackoffMs * (attempt + 1));
+          if (context.signal?.aborted || !isRetryableOpenWeatherError(error) || attempt >= policy.retries) break;
+          await delay(policy.retryBackoffMs * (attempt + 1), context.signal);
         }
       }
       throw lastError instanceof Error ? lastError : new Error('OpenWeather One Call fetch failed.');
@@ -275,8 +277,19 @@ function nullableString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal | null): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error('OpenWeather One Call request cancelled.'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('OpenWeather One Call request cancelled.'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, Math.max(0, ms));
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

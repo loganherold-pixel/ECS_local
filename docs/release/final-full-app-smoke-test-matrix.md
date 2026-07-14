@@ -44,7 +44,7 @@ Status key:
 | 24 | App survives reload | Needs Device | `npm run smoke`, `npm run test:startup-warning-hygiene` | Headless project smoke and startup warning checks pass; actual app reload must be confirmed on Android runtime. |
 | 25 | TypeScript passes | Passed | `npx tsc --noEmit --pretty false` | Direct TypeScript check passes. |
 | 26 | Lint passes | Passed | `npm run lint` | Expo lint passes. |
-| 27 | Release readiness checks run | Restricted | `npm run test:release-readiness`, `npm run gate:closed-field-test:json` | Diagnostic sweep passes, and the closed-field gate reports `ready_with_restrictions`. Provider influence, AI assist, telemetry, community publishing, broad privacy/storage rollout, and public release remain blocked unless separately approved. |
+| 27 | Release readiness checks run | Restricted | `npm run test:release-readiness`, `npm run gate:closed-field-test:json` | Executable verification policy/scenario checks pass, and the closed-field gate reports `ready_with_restrictions`. Code checks do not grant production approval; provider influence, AI assist, telemetry, community publishing, broad privacy/storage rollout, and public release remain separately blocked. |
 
 ## Checks Run
 

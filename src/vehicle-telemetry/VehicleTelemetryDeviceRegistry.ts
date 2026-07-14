@@ -39,6 +39,7 @@ function logVehicleTelemetryRegistryDev(...args: unknown[]) {
 
 /** Devices not seen in 30 days are considered stale */
 const STALE_DEVICE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+export const DEVICE_TOUCH_PERSIST_INTERVAL_MS = 30_000;
 
 function isEcoFlowBleAdvertisementName(value: unknown): boolean {
   return typeof value === 'string' && /\bef[-_][a-z0-9]{4,}\b/i.test(value);
@@ -90,6 +91,8 @@ class VehicleTelemetryDeviceRegistry {
   private primaryDeviceId: string | null = null;
   private listeners: (() => void)[] = [];
   private hydrationPromise: Promise<void>;
+  private touchPersistTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastTouchPersistAt = 0;
 
   constructor() {
     this.restore();
@@ -164,6 +167,10 @@ class VehicleTelemetryDeviceRegistry {
 
   private persist(): void {
     try {
+      if (this.touchPersistTimer) {
+        clearTimeout(this.touchPersistTimer);
+        this.touchPersistTimer = null;
+      }
       sSet(VT_STORAGE_KEYS.DEVICES, JSON.stringify(this.devices));
       if (this.primaryDeviceId) {
         sSet(VT_STORAGE_KEYS.PRIMARY_DEVICE, this.primaryDeviceId);
@@ -171,6 +178,7 @@ class VehicleTelemetryDeviceRegistry {
         sRemove(VT_STORAGE_KEYS.PRIMARY_DEVICE);
       }
       void vehicleTelemetryDevicePersistenceCache.flush();
+      this.lastTouchPersistAt = Date.now();
     } catch (e) {
       console.warn(TAG, 'Failed to persist devices:', e);
     }
@@ -475,7 +483,19 @@ class VehicleTelemetryDeviceRegistry {
     if (!device) return;
 
     device.last_seen = new Date().toISOString();
-    this.persist();
+    const elapsed = Date.now() - this.lastTouchPersistAt;
+    if (elapsed >= DEVICE_TOUCH_PERSIST_INTERVAL_MS) {
+      this.persist();
+      return;
+    }
+    if (!this.touchPersistTimer) {
+      this.touchPersistTimer = setTimeout(() => {
+        this.touchPersistTimer = null;
+        this.persist();
+      }, DEVICE_TOUCH_PERSIST_INTERVAL_MS - elapsed);
+      const timerWithUnref = this.touchPersistTimer as unknown as { unref?: () => void };
+      timerWithUnref.unref?.();
+    }
     // Don't notify for touch-only updates (too frequent)
   }
 
@@ -565,4 +585,3 @@ class VehicleTelemetryDeviceRegistry {
 
 // ── Singleton export ─────────────────────────────────────
 export const vehicleTelemetryDeviceRegistry = new VehicleTelemetryDeviceRegistry();
-

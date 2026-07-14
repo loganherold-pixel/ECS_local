@@ -46,13 +46,23 @@ assertIncludes(
 );
 assertIncludes(
   navigateTab,
-  'const nextDraft = undoLastNavigateRouteAnchor(routeBuilderDraft);',
-  'Undo should remove the latest dropped route anchor.',
+  'const nextHistory = undoNavigateRouteDraftHistory(routeBuilderDraftHistoryRef.current);',
+  'Undo should move the route draft history back one operator edit.',
 );
 assertIncludes(
   navigateTab,
-  'applyRouteBuilderDraft(nextDraft);',
+  'applyRouteBuilderDraft(nextHistory.present, { recordHistory: false });',
   'Undo should rebuild saved route-builder segments from the anchor draft.',
+);
+assertIncludes(
+  navigateTab,
+  'const nextHistory = redoNavigateRouteDraftHistory(routeBuilderDraftHistoryRef.current);',
+  'Redo should restore the latest undone route draft.',
+);
+assertIncludes(
+  navigateTab,
+  'routeBuilderDraftHistoryRef.current = createNavigateRouteDraftHistory(emptyDraft);',
+  'Cancel and reset should clear route builder undo and redo history.',
 );
 assertIncludes(
   navigateTab,

@@ -10,14 +10,19 @@
  * Web uses localStorage. Native uses file-backed non-secure persistence.
  */
 import { createPersistedKeyValueCache } from './keyValuePersistence';
+import { redactAuthUserId } from './auth/authLogRedaction';
 
 const cache = createPersistedKeyValueCache('ecs_session_state');
 
+export const ECS_SESSION_STORE_SCHEMA_VERSION = 2;
+
 const KEYS = {
+  schemaVersion: 'ecs_session_store_schema_version',
   keepSignedIn: 'ecs_keep_signed_in',
   authExpiry: 'ecs_auth_expiry',
-  lastUserId: 'ecs_last_user_id',
-  lastUserEmail: 'ecs_last_user_email',
+  lastUserFingerprint: 'ecs_last_user_fingerprint',
+  legacyLastUserId: 'ecs_last_user_id',
+  legacyLastUserEmail: 'ecs_last_user_email',
   sessionCreatedAt: 'ecs_session_created_at',
 } as const;
 
@@ -25,6 +30,7 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const TRANSIENT_RUNTIME_SESSION_GRACE_MS = 10 * 60 * 1000;
 
 let transientRuntimeSessionUntil = 0;
+let migrationPromise: Promise<void> | null = null;
 
 function getItem(key: string): string | null {
   return cache.get(key);
@@ -38,6 +44,22 @@ function removeItem(key: string): void {
   cache.delete(key);
 }
 
+function migratePersistedSessionState(): Promise<void> {
+  if (migrationPromise) return migrationPromise;
+  migrationPromise = cache.waitForHydration().then(() => {
+    const persistedVersion = Number(getItem(KEYS.schemaVersion)) || 1;
+    const legacyUserId = getItem(KEYS.legacyLastUserId);
+    const fingerprint = getItem(KEYS.lastUserFingerprint) ?? redactAuthUserId(legacyUserId);
+    if (fingerprint) setItem(KEYS.lastUserFingerprint, fingerprint);
+    removeItem(KEYS.legacyLastUserId);
+    removeItem(KEYS.legacyLastUserEmail);
+    if (persistedVersion < ECS_SESSION_STORE_SCHEMA_VERSION) {
+      setItem(KEYS.schemaVersion, String(ECS_SESSION_STORE_SCHEMA_VERSION));
+    }
+  });
+  return migrationPromise;
+}
+
 export interface SessionPreferences {
   keepSignedIn: boolean;
   authExpiry: number | null;
@@ -47,31 +69,36 @@ export interface SessionPreferences {
 }
 
 export const sessionStore = {
-  waitForHydration: (): Promise<void> => cache.waitForHydration(),
+  waitForHydration: (): Promise<void> => migratePersistedSessionState(),
   isHydrated: (): boolean => cache.isHydrated(),
+  getSchemaVersion: (): number => Number(getItem(KEYS.schemaVersion)) || 1,
+  flush: (): Promise<void> => cache.flush(),
 
   getPreferences(): SessionPreferences {
     const keepSignedIn = getItem(KEYS.keepSignedIn) === 'true';
     const expiryRaw = getItem(KEYS.authExpiry);
     const authExpiry = expiryRaw ? parseInt(expiryRaw, 10) : null;
-    const lastUserId = getItem(KEYS.lastUserId);
-    const lastUserEmail = getItem(KEYS.lastUserEmail);
+    const lastUserId = getItem(KEYS.lastUserFingerprint) ?? redactAuthUserId(getItem(KEYS.legacyLastUserId));
     const sessionCreatedAt = getItem(KEYS.sessionCreatedAt);
 
     return {
       keepSignedIn,
       authExpiry: authExpiry && !isNaN(authExpiry) ? authExpiry : null,
       lastUserId,
-      lastUserEmail,
+      lastUserEmail: null,
       sessionCreatedAt,
     };
   },
 
   saveLoginPreferences(keepSignedIn: boolean, userId: string, email: string): void {
     setItem(KEYS.keepSignedIn, keepSignedIn ? 'true' : 'false');
-    setItem(KEYS.lastUserId, userId);
-    setItem(KEYS.lastUserEmail, email);
+    const fingerprint = redactAuthUserId(userId);
+    if (fingerprint) setItem(KEYS.lastUserFingerprint, fingerprint);
+    removeItem(KEYS.legacyLastUserId);
+    removeItem(KEYS.legacyLastUserEmail);
+    setItem(KEYS.schemaVersion, String(ECS_SESSION_STORE_SCHEMA_VERSION));
     setItem(KEYS.sessionCreatedAt, new Date().toISOString());
+    void email;
 
     if (keepSignedIn) {
       transientRuntimeSessionUntil = 0;
@@ -131,8 +158,9 @@ export const sessionStore = {
     transientRuntimeSessionUntil = 0;
     removeItem(KEYS.keepSignedIn);
     removeItem(KEYS.authExpiry);
-    removeItem(KEYS.lastUserId);
-    removeItem(KEYS.lastUserEmail);
+    removeItem(KEYS.lastUserFingerprint);
+    removeItem(KEYS.legacyLastUserId);
+    removeItem(KEYS.legacyLastUserEmail);
     removeItem(KEYS.sessionCreatedAt);
 
     try {

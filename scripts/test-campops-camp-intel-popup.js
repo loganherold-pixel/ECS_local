@@ -150,6 +150,7 @@ assert(
 );
 
 const popupSource = fs.readFileSync(popupPath, 'utf8');
+const viewModelSource = fs.readFileSync(viewModelPath, 'utf8');
 const establishedPopupSource = fs.readFileSync(establishedPopupPath, 'utf8');
 const establishedScoreSource = fs.readFileSync(establishedScorePath, 'utf8');
 const navigateSource = fs.readFileSync(navigatePath, 'utf8');
@@ -188,6 +189,12 @@ assert(
   'CampOps popup actions should stay tappable and fit labels on small screens.',
 );
 assert(
+  popupSource.includes('Decision sources') &&
+    popupSource.includes('activeCampOpsDetail.sourceDetails') &&
+    viewModelSource.includes('buildCampCandidateDecisionDetails'),
+  'Camp Intel should expose separate legal, condition, availability, suitability, and trust decision sources.',
+);
+assert(
   popupSource.includes("maxHeight: '100%'") &&
     popupSource.includes('paddingVertical: 9') &&
     popupSource.includes('minHeight: 44') &&
@@ -206,8 +213,8 @@ assert(
   establishedPopupSource.includes('resolveEstablishedCampgroundScore') &&
     establishedPopupSource.includes('ECS SCORE') &&
     establishedPopupSource.includes('camp confidence') &&
-    establishedScoreSource.includes('live campground status, source confidence, availability freshness, operator data, and provider attribution'),
-  'Established campground popups should explain live-data ECS scoring in layman terms without claiming live availability.',
+    establishedScoreSource.includes('reported campground status, source confidence, availability freshness, operator data, and provider attribution'),
+  'Established campground popups should explain source-aware ECS scoring without implying that cached status is live.',
 );
 
 const sparseEstablishedCampground = {

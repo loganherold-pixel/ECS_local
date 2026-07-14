@@ -33,7 +33,11 @@ const {
   formatSourceTruthAge,
 } = loadTypeScriptModule('lib/sourceTruthPresentation.ts');
 const {
+  buildConvoyLocationSourceTruthBinding,
+  buildEstablishedCampgroundSourceTruthBinding,
+  buildFleetWeightSourceTruthBinding,
   buildReadinessAssessmentSourceTruthBinding,
+  buildRouteCampAccessSourceTruthBinding,
   buildRouteCatalogSourceTruthBinding,
   buildWeatherSourceTruthBinding,
 } = loadTypeScriptModule('lib/sourceTruthAdapters.ts');
@@ -120,6 +124,32 @@ assert.strictEqual(manual.originLabel, 'Manual');
 assert.strictEqual(manual.freshnessLabel, 'Current');
 assert.strictEqual(manual.triggerLabel, 'Manual / Current');
 assert.match(manual.summary, /manual input/i);
+
+const lastGood = buildSourceTruthInspectorModel({
+  sources: [
+    source({
+      id: 'live-weather-expired',
+      origin: 'live',
+      role: 'primary',
+      policyKey: 'weather_observation',
+      observedAt: minutesAgo(180),
+    }),
+    source({
+      id: 'last-good-weather',
+      origin: 'cached',
+      role: 'last_good',
+      policyKey: 'weather_observation',
+      observedAt: minutesAgo(20),
+    }),
+  ],
+  now,
+});
+assert.strictEqual(lastGood.triggerLabel, 'Last known / Live expired');
+assert.strictEqual(lastGood.triggerTone, 'warning');
+assert.strictEqual(lastGood.assessment.facts.usingLastGoodCache, true);
+assert.match(lastGood.summary, /live source is expired/i);
+assert.match(lastGood.summary, /cached rather than live/i);
+assert(lastGood.warnings.some((warning) => warning.code === 'using_last_good_cache'));
 
 const conflict = buildSourceTruthInspectorModel({
   source: source({
@@ -212,6 +242,123 @@ assert.strictEqual(weatherBinding.ref.origin, 'cached');
 assert.strictEqual(weatherBinding.ref.coverage, 'partial');
 assert.strictEqual(weatherBinding.ref.confidence, 'unknown');
 assert.strictEqual(weatherBinding.policyKey, 'weather_observation');
+
+const weatherFallbackBinding = buildWeatherSourceTruthBinding({
+  source: 'cache_fresh',
+  provider: 'ECS Weather Pipeline',
+  observedAt: minutesAgo(5),
+  retrievedAt: now - 2 * 60_000,
+  available: true,
+  hasCurrentConditions: true,
+  hasForecast: true,
+  providerLimited: true,
+});
+assert.strictEqual(weatherFallbackBinding.sources.length, 2);
+assert.strictEqual(weatherFallbackBinding.sources[0].origin, 'live');
+assert.strictEqual(weatherFallbackBinding.sources[0].availability, 'unavailable');
+assert.strictEqual(weatherFallbackBinding.sources[1].role, 'last_good');
+const weatherFallbackModel = buildSourceTruthInspectorModel({
+  source: weatherFallbackBinding.ref,
+  sources: weatherFallbackBinding.sources,
+  now,
+});
+assert.strictEqual(weatherFallbackModel.assessment.facts.usingLastGoodCache, true);
+
+const fleetBinding = buildFleetWeightSourceTruthBinding({
+  vehicleId: 'vehicle-1',
+  vehicleName: 'Trail Truck',
+  updatedAt: minutesAgo(30),
+  weightResult: {
+    baseNetWeight: {
+      lbs: 5100,
+      source: 'scale_ticket',
+      confidence: 98,
+      sourceLabel: 'Certified scale ticket',
+      verifiedAt: minutesAgo(30),
+      verificationId: 'restricted-document-id',
+    },
+    gvwr: {
+      lbs: 7200,
+      source: 'manufacturer_spec',
+      confidence: 92,
+      sourceLabel: 'Manufacturer specification',
+    },
+  },
+});
+assert.strictEqual(fleetBinding.sources[0].origin, 'manual');
+assert.strictEqual(fleetBinding.sources[0].authorityKind, 'verified_document');
+assert.strictEqual(fleetBinding.sources[1].origin, 'cached');
+assert.strictEqual(fleetBinding.sources[1].authorityKind, 'official');
+assert.strictEqual(JSON.stringify(fleetBinding).includes('restricted-document-id'), false);
+
+const routeCampBinding = buildRouteCampAccessSourceTruthBinding({
+  id: 'camp-access-test',
+  authority: 'US Forest Service official order',
+  authorityKind: 'official',
+  provider: 'USFS',
+  legalAccessVerified: true,
+  legalObservedAt: minutesAgo(30),
+  currentConditionsKnown: false,
+  passabilityKnown: false,
+  availabilityKnown: false,
+  confidence: 'high',
+});
+assert.strictEqual(routeCampBinding.sources[0].availability, 'usable');
+assert.strictEqual(routeCampBinding.sources[0].authorityKind, 'official');
+assert.strictEqual(routeCampBinding.sources[1].availability, 'unavailable');
+assert(routeCampBinding.sources[1].warningCodes.includes('current_conditions_unknown'));
+assert(routeCampBinding.sources[2].warningCodes.includes('passability_unknown'));
+assert(routeCampBinding.sources[3].warningCodes.includes('camp_availability_unknown'));
+
+const campgroundBinding = buildEstablishedCampgroundSourceTruthBinding({
+  id: 'camp-1',
+  name: 'Provider Camp',
+  latitude: 39,
+  longitude: -120,
+  facilityType: 'campground',
+  managingAgency: 'National Forest',
+  managingOrg: null,
+  reservationUrl: null,
+  detailUrl: null,
+  status: 'open',
+  availabilityStatus: 'unknown',
+  siteCount: null,
+  siteTypes: null,
+  amenities: null,
+  sourceConfidence: 90,
+  primaryProvider: 'ridb',
+  attribution: 'Recreation provider',
+  lastSyncedAt: minutesAgo(10),
+  lastVerifiedAt: minutesAgo(30),
+  sources: [{
+    providerId: 'ridb',
+    providerRecordId: 'secret-record-id',
+    sourceUrl: 'https://provider.invalid?api_key=secret',
+    rawJson: { apiKey: 'raw-secret' },
+    payloadHash: 'sensitive-hash',
+    firstSeenAt: minutesAgo(60),
+    lastSeenAt: minutesAgo(10),
+  }],
+});
+const campgroundText = JSON.stringify(campgroundBinding);
+for (const forbidden of ['secret-record-id', 'api_key', 'raw-secret', 'sensitive-hash', '39', '-120']) {
+  assert.strictEqual(campgroundText.includes(forbidden), false, `Camp adapter must omit ${forbidden}.`);
+}
+
+const convoyBinding = buildConvoyLocationSourceTruthBinding({
+  memberId: 'member-7',
+  sourceLabel: 'Realtime GPS',
+  observedAt: minutesAgo(12),
+  accuracyMeters: 18,
+  stale: true,
+});
+const convoyModel = buildSourceTruthInspectorModel({
+  sources: convoyBinding.sources,
+  now,
+});
+assert.strictEqual(convoyModel.freshnessLabel, 'Stale');
+assert.strictEqual(convoyModel.confidenceLabel, 'High');
+assert.strictEqual(convoyBinding.ref.authorityKind, 'device');
 
 const routeBinding = buildRouteCatalogSourceTruthBinding({
   routeId: 'route-preview',

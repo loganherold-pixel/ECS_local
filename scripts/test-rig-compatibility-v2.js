@@ -17,7 +17,7 @@ global.__DEV__ = false;
 
 const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
-  if (request === 'react-native') return { Platform: { OS: 'web' } };
+  if (request === 'react-native') return { Platform: { OS: 'web' }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } };
   return originalLoad.call(this, request, parent, isMain);
 };
 

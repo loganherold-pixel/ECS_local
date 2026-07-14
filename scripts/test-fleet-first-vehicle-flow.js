@@ -25,6 +25,7 @@ function between(source, start, end, message) {
 }
 
 const fleet = read('app', '(tabs)', 'fleet.tsx');
+const vehicleStore = read('lib', 'vehicleStore.ts');
 const profileModal = read('components', 'fleet', 'FleetVehicleProfileModal.tsx');
 const buildLoadoutModal = read('components', 'fleet', 'FleetBuildLoadoutModal.tsx');
 const setupRoute = read('app', 'setup.tsx');
@@ -77,12 +78,12 @@ includes(
 );
 includes(
   fleet,
-  '!storedActiveVehicleId && result.vehicles.length === 1',
+  'vehicleSetupStore.reconcileActiveVehicle(',
   'Fleet should detect first vehicle creation after profile save.',
 );
 includes(
   fleet,
-  'vehicleSetupStore.setActiveVehicleId(result.vehicles[0].id);',
+  'autoSelectSingle: true',
   'First created vehicle should become the active vehicle.',
 );
 includes(
@@ -175,8 +176,8 @@ notIncludes(
 
 const premiumCard = between(
   fleet,
-  'function FleetPremiumVehicleCard({',
-  'function LoadoutSummaryMetrics({',
+  'function FleetPremiumVehicleCardComponent({',
+  'const FleetPremiumVehicleCard = React.memo(',
   'Fleet premium vehicle card',
 );
 notIncludes(
@@ -260,7 +261,7 @@ assert.strictEqual(actionButtonCount, 4, 'Vehicle card action footer should have
 
 includes(
   fleet,
-  'onLoadout={() => handleOpenBuildLoadoutModal(model.vehicle)}',
+  'onLoadout={handleOpenBuildLoadoutModal}',
   'Build & Loadout card action should open the current Build & Loadout modal.',
 );
 includes(
@@ -296,12 +297,12 @@ notIncludes(
 
 includes(
   fleet,
-  'onProfile={() => handleOpenVehicleProfile(model.vehicle)}',
+  'onProfile={handleOpenVehicleProfile}',
   'Vehicle Profile card action should open the current profile modal.',
 );
 includes(
   fleet,
-  'onWeightSummary={() => handleOpenWeightSummaryModal(model.vehicle)}',
+  'onWeightSummary={handleOpenWeightSummaryModal}',
   'Weight Summary card action should open the direct Weight Summary modal.',
 );
 includes(
@@ -311,7 +312,7 @@ includes(
 );
 includes(
   fleet,
-  'onDelete={() => handleDeleteVehicle(model.vehicle)}',
+  'onDelete={handleDeleteVehicle}',
   'Delete Vehicle card action should use the current delete confirmation flow.',
 );
 includes(
@@ -326,13 +327,13 @@ includes(
 );
 includes(
   fleet,
-  'setActiveVehicleId(null);',
-  'Deleting the only vehicle should clear local active vehicle state.',
+  'const result = await vehicleStore.delete(v.id, user?.id || null);',
+  'Deleting a vehicle should wait for the authoritative store result before updating local state.',
 );
 includes(
-  fleet,
-  'vehicleSetupStore.clearActiveVehicleId();',
-  'Deleting the only vehicle should clear persisted active vehicle state.',
+  vehicleStore,
+  'vehicleSetupStore.reconcileActiveVehicle(remainingVehicleIds',
+  'Vehicle deletion should reconcile persisted active vehicle state through the canonical selection store.',
 );
 
 includes(

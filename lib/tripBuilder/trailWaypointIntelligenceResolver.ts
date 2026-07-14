@@ -277,13 +277,13 @@ function routeContextCampEndpointRecords(
   const plan = routeContext.campEndpointPlan;
   if (!plan || !Array.isArray(plan.endpointCandidates)) return [];
   const selectedIds = new Set((plan.selectedEndpointIds ?? []).filter(Boolean));
-  const hasSelection = selectedIds.size > 0;
+  // Recommendations remain visible in CampOps, but only an explicit selection may alter a trip plan.
+  if (selectedIds.size === 0) return [];
   return plan.endpointCandidates
     .filter((item) => {
       const candidateId = item.candidate?.id;
       if (!candidateId) return false;
-      if (hasSelection) return selectedIds.has(candidateId);
-      return item.role === 'primary' || item.role === 'backup' || item.role === 'emergency';
+      return selectedIds.has(candidateId);
     })
     .map((item) => {
       const candidate = item.candidate;
@@ -330,7 +330,7 @@ function routeContextCampEndpointRecords(
             exactness: routeEndpoint.exactness,
             windowId: routeEndpoint.windowId,
             nearestSegmentIndex: routeEndpoint.nearestSegmentIndex,
-            selectedByCampOps: hasSelection ? selectedIds.has(candidate.id) : item.role !== 'verify',
+            selectedByCampOps: true,
             dataUsed: {
               source: candidate.source,
               sourceConfidence: candidate.sourceConfidence,

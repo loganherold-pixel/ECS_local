@@ -70,6 +70,14 @@ assert.strictEqual(cache.get(EXPLORE_CATALOG_SUMMARY_CACHE_KEY, 1_050).status, '
 assert.strictEqual(cache.get(EXPLORE_CATALOG_SUMMARY_CACHE_KEY, 1_250).status, 'stale');
 assert.strictEqual(cache.get(EXPLORE_CATALOG_SUMMARY_CACHE_KEY, 1_500).status, 'miss');
 
+const boundedCache = createRouteCatalogSummaryCache({ maxEntries: 2 });
+boundedCache.set('region-a', sampleSummaries, 1_000);
+boundedCache.set('region-b', sampleSummaries, 1_001);
+boundedCache.set('region-c', sampleSummaries, 1_002);
+assert.strictEqual(boundedCache.entries.size, 2, 'Summary cache should retain only its bounded LRU window.');
+assert.strictEqual(boundedCache.get('region-a', 1_003).status, 'miss');
+assert.strictEqual(boundedCache.get('region-c', 1_003).status, 'hit');
+
 const page = paginateRouteCatalogSummaries(sampleSummaries, { pageIndex: 1, pageSize: 10 });
 assert.deepStrictEqual(
   page.items.map((summary) => summary.routeId),

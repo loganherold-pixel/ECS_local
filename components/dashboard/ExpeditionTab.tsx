@@ -18,10 +18,9 @@ import ExpeditionNotableMomentsTimeline from './ExpeditionNotableMomentsTimeline
 import { TripLearningSummaryCard } from '../expedition/TripLearningSummaryCard';
 import {
   BadgeGrid,
-  BadgeMilestoneList,
   BadgeUnlockSummary,
 } from './ExpeditionBadgeVisuals';
-import { ExpeditionIdentityProfileSurface } from './ExpeditionIdentityProfileSurface';
+import { ExpeditionBadgeCatalogView } from './ExpeditionBadgeCatalogView';
 import {
   dismissInsight,
   downloadExpeditionReport,
@@ -51,6 +50,7 @@ import {
   isExpeditionReplayDebriefFeatureEnabled,
 } from '../../lib/debrief/expeditionDebriefRecord';
 import type { IncidentCoordinate } from '../../lib/types/incidentRecovery';
+import { incrementECSPerformanceCounter } from '../../lib/performance/ecsPerformanceDiagnostics';
 
 type ExpeditionTabProps = {
   hasActiveRoute: boolean;
@@ -73,15 +73,6 @@ type ExpeditionHubStats = {
   totalMiles: number;
   highestElevationFt: number;
   totalHours: number;
-};
-
-type BadgeCollectionMode = 'recent' | 'rarity' | 'category';
-
-type BadgeCollectionStats = {
-  totalBadgesEarned: number;
-  rarestBadgeEarned: string;
-  mostRecentUnlock: string;
-  expeditionsWithBadges: number;
 };
 
 type ArchiveLifetimeStats = {
@@ -128,32 +119,53 @@ export default function ExpeditionTab({
   const [selectedTripBadges, setSelectedTripBadges] = useState<ExpeditionBadge[]>([]);
   const [selectedTripRecords, setSelectedTripRecords] = useState<PersonalExpeditionRecord[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [showUnlockedBadgesView, setShowUnlockedBadgesView] = useState(false);
+  const [showBadgeCatalogView, setShowBadgeCatalogView] = useState(false);
   const [showArchiveView, setShowArchiveView] = useState(false);
   const [showReportsView, setShowReportsView] = useState(false);
   const [newBadgeUnlocks, setNewBadgeUnlocks] = useState<ExpeditionBadge[]>([]);
   const materializedGuidanceSignaturesRef = useRef<Set<string>>(new Set());
+  const completedTripsLoadFlightRef = useRef<Promise<void> | null>(null);
+  const mountedRef = useRef(true);
 
-  const loadCompletedTrips = useCallback(async () => {
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
+  const loadCompletedTrips = useCallback((): Promise<void> => {
+    if (completedTripsLoadFlightRef.current) {
+      incrementECSPerformanceCounter('dashboard_stable_grid', 'expedition_hub_hydration_join');
+      return completedTripsLoadFlightRef.current;
+    }
+
     setLoading(true);
-    const trips = await getCompletedTrips().catch(() => []);
-    const [badges, progress, currentInsights, currentRecords, recentReports] = await Promise.all([
-      getUnlockedBadges().catch(() => []),
-      getBadgeProgress().catch(() => []),
-      getCurrentInsights(3).catch(() => []),
-      getCurrentPersonalRecords().catch(() => []),
-      getMostRecentReports(5).catch(() => []),
-    ]);
-    const insights = trips.length > 0 && currentInsights.length === 0
-      ? await refreshExpeditionInsights().catch(() => [])
-      : currentInsights;
-    setCompletedTrips(trips);
-    setUnlockedBadges(badges);
-    setBadgeProgress(progress);
-    setExpeditionInsights(insights.slice(0, 3));
-    setPersonalRecords(currentRecords.slice(0, 4));
-    setExpeditionReports(recentReports);
-    setLoading(false);
+    const flight = (async () => {
+      const trips = await getCompletedTrips().catch(() => []);
+      const [badges, progress, currentInsights, currentRecords, recentReports] = await Promise.all([
+        getUnlockedBadges().catch(() => []),
+        getBadgeProgress().catch(() => []),
+        getCurrentInsights(3).catch(() => []),
+        getCurrentPersonalRecords().catch(() => []),
+        getMostRecentReports(5).catch(() => []),
+      ]);
+      const insights = trips.length > 0 && currentInsights.length === 0
+        ? await refreshExpeditionInsights().catch(() => [])
+        : currentInsights;
+      if (!mountedRef.current) return;
+      setCompletedTrips(trips);
+      setUnlockedBadges(badges);
+      setBadgeProgress(progress);
+      setExpeditionInsights(insights.slice(0, 3));
+      setPersonalRecords(currentRecords.slice(0, 4));
+      setExpeditionReports(recentReports);
+      setLoading(false);
+    })().finally(() => {
+      if (completedTripsLoadFlightRef.current === flight) {
+        completedTripsLoadFlightRef.current = null;
+      }
+    });
+
+    completedTripsLoadFlightRef.current = flight;
+    return flight;
   }, []);
 
   useFocusEffect(
@@ -292,12 +304,12 @@ export default function ExpeditionTab({
     );
   }
 
-  if (showUnlockedBadgesView) {
+  if (showBadgeCatalogView) {
     return (
-      <UnlockedBadgesView
+      <ExpeditionBadgeCatalogView
         badges={unlockedBadges}
         badgeProgress={badgeProgress}
-        onBack={() => setShowUnlockedBadgesView(false)}
+        onBack={() => setShowBadgeCatalogView(false)}
       />
     );
   }
@@ -370,7 +382,7 @@ export default function ExpeditionTab({
           <View style={styles.badgeAchievementNotice}>
             <BadgeUnlockSummary
               badges={newBadgeUnlocks}
-              onOpenCollection={() => setShowUnlockedBadgesView(true)}
+              onOpenCollection={() => setShowBadgeCatalogView(true)}
               limit={4}
               actionLabel="View Badges"
               showAction
@@ -379,7 +391,7 @@ export default function ExpeditionTab({
         ) : hasUnlockedBadges ? (
           <BadgeUnlockSummary
             badges={unlockedBadges}
-            onOpenCollection={() => setShowUnlockedBadgesView(true)}
+            onOpenCollection={() => setShowBadgeCatalogView(true)}
             limit={3}
             actionLabel="Earned Badges"
             showAction={false}
@@ -393,34 +405,30 @@ export default function ExpeditionTab({
 
         <PersonalRecordsPreview records={personalRecords} />
 
-        {hasCompletedTrips || hasUnlockedBadges || hasReports ? (
-          <View style={styles.hubActionRow}>
-            {hasCompletedTrips ? (
-              <HubActionCard
-                icon="library-outline"
-                label="Expedition Archive"
-                onPress={() => setShowArchiveView(true)}
-                accessibilityLabel="Open Expedition Archive"
-              />
-            ) : null}
-            {hasUnlockedBadges ? (
-              <HubActionCard
-                icon="ribbon-outline"
-                label="Earned Badges"
-                onPress={() => setShowUnlockedBadgesView(true)}
-                accessibilityLabel="Open Earned Badges"
-              />
-            ) : null}
-            {hasReports ? (
-              <HubActionCard
-                icon="documents-outline"
-                label="Expedition Reports"
-                onPress={() => setShowReportsView(true)}
-                accessibilityLabel="Open Expedition Reports"
-              />
-            ) : null}
-          </View>
-        ) : null}
+        <View style={styles.hubActionRow}>
+          {hasCompletedTrips ? (
+            <HubActionCard
+              icon="library-outline"
+              label="Expedition Archive"
+              onPress={() => setShowArchiveView(true)}
+              accessibilityLabel="Open Expedition Archive"
+            />
+          ) : null}
+          <HubActionCard
+            icon="ribbon-outline"
+            label="Badge Catalog"
+            onPress={() => setShowBadgeCatalogView(true)}
+            accessibilityLabel="Open Badge Catalog"
+          />
+          {hasReports ? (
+            <HubActionCard
+              icon="documents-outline"
+              label="Expedition Reports"
+              onPress={() => setShowReportsView(true)}
+              accessibilityLabel="Open Expedition Reports"
+            />
+          ) : null}
+        </View>
 
         {detailLoading ? (
           <View style={styles.detailLoadingOverlay} pointerEvents="none">
@@ -970,124 +978,6 @@ function ReportLibraryItem({
   );
 }
 
-function UnlockedBadgesView({
-  badges,
-  badgeProgress,
-  onBack,
-}: {
-  badges: ExpeditionBadge[];
-  badgeProgress: ExpeditionBadge[];
-  onBack: () => void;
-}) {
-  const [mode, setMode] = useState<BadgeCollectionMode>('recent');
-  const unlockedBadges = useMemo(() => badges.filter((badge) => !!badge.unlockedAt), [badges]);
-  const stats = useMemo(() => buildBadgeCollectionStats(unlockedBadges), [unlockedBadges]);
-  const sections = useMemo(() => buildBadgeCollectionSections(unlockedBadges, mode), [unlockedBadges, mode]);
-
-  return (
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.surface}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={onBack}
-          activeOpacity={0.8}
-          accessibilityRole="button"
-          accessibilityLabel="Back to Expedition Hub"
-        >
-          <Ionicons name="chevron-back-outline" size={16} color={TACTICAL.amber} />
-          <Text style={styles.backButtonText}>Expedition Hub</Text>
-        </TouchableOpacity>
-
-        <View style={styles.detailHeader}>
-          <Text style={styles.detailTitle}>Unlocked Badges</Text>
-          <Text style={styles.detailDate}>{unlockedBadges.length} earned</Text>
-        </View>
-
-        <ExpeditionIdentityProfileSurface badges={unlockedBadges} />
-
-        {unlockedBadges.length === 0 ? (
-          <BadgeGrid
-            badges={unlockedBadges}
-            emptyTitle="No badges earned yet."
-            emptySubtext="Complete expeditions to begin earning field accomplishments."
-          />
-        ) : (
-          <>
-            <View style={styles.collectionStatsRow}>
-              <CollectionStatTile label="Total Badges Earned" value={`${stats.totalBadgesEarned}`} />
-              <CollectionStatTile label="Rarest Badge Earned" value={stats.rarestBadgeEarned} />
-              <CollectionStatTile label="Most Recent Unlock" value={stats.mostRecentUnlock} />
-              <CollectionStatTile label="Expeditions With Badges" value={`${stats.expeditionsWithBadges}`} />
-            </View>
-
-            <View style={styles.collectionModeRow}>
-              <CollectionModeButton label="Recent" active={mode === 'recent'} onPress={() => setMode('recent')} />
-              <CollectionModeButton label="Rarity" active={mode === 'rarity'} onPress={() => setMode('rarity')} />
-              <CollectionModeButton label="Category" active={mode === 'category'} onPress={() => setMode('category')} />
-            </View>
-
-            <View style={styles.collectionSections}>
-              {sections.map((section) => (
-                <View key={section.title} style={styles.collectionSection}>
-                  <View style={styles.sectionHeaderCompact}>
-                    <Text style={styles.sectionTitle}>{section.title}</Text>
-                    <Text style={styles.sectionCount}>{section.badges.length}</Text>
-                  </View>
-                  <BadgeGrid badges={section.badges} />
-                </View>
-              ))}
-            </View>
-
-            <BadgeMilestoneList badges={badgeProgress} />
-          </>
-        )}
-
-        {/* TODO Expedition Badges: add badge search once the collection grows beyond compact review. */}
-        {/* TODO Expedition Badges: add badge artwork upgrade and rare badge showcase. */}
-        {/* TODO Expedition Badges: add badge sharing and badge export stamps. */}
-        {/* TODO Expedition Badges: add seasonal badge collections without exposing hidden locked badges. */}
-      </View>
-    </ScrollView>
-  );
-}
-
-function CollectionStatTile({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.collectionStatTile}>
-      <Text style={styles.collectionStatValue} numberOfLines={1}>{value}</Text>
-      <Text style={styles.collectionStatLabel} numberOfLines={2}>{label}</Text>
-    </View>
-  );
-}
-
-function CollectionModeButton({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.collectionModeButton, active && styles.collectionModeButtonActive]}
-      onPress={onPress}
-      activeOpacity={0.82}
-      accessibilityRole="button"
-      accessibilityLabel={`Show badges by ${label}`}
-    >
-      <Text style={[styles.collectionModeButtonText, active && styles.collectionModeButtonTextActive]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
-}
-
 function ExpeditionTripBadgesEarned({
   badges,
   tripTitle,
@@ -1534,74 +1424,6 @@ function timestampForTrip(value: string | null): number {
   if (!value) return Number.MAX_SAFE_INTEGER;
   const parsed = new Date(value).getTime();
   return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
-}
-
-const BADGE_RARITY_RANK: Record<ExpeditionBadge['rarity'], number> = {
-  common: 1,
-  uncommon: 2,
-  rare: 3,
-  epic: 4,
-  legendary: 5,
-  hidden: 6,
-};
-
-function buildBadgeCollectionStats(badges: ExpeditionBadge[]): BadgeCollectionStats {
-  const sortedNewest = [...badges].sort(sortBadgesNewest);
-  const rarest = [...badges].sort((a, b) => {
-    const rankDelta = BADGE_RARITY_RANK[b.rarity] - BADGE_RARITY_RANK[a.rarity];
-    return rankDelta !== 0 ? rankDelta : sortBadgesNewest(a, b);
-  })[0] ?? null;
-  const tripIds = new Set(
-    badges
-      .map((badge) => badge.unlockedTripId)
-      .filter((tripId): tripId is string => typeof tripId === 'string' && tripId.trim().length > 0),
-  );
-  return {
-    totalBadgesEarned: badges.length,
-    rarestBadgeEarned: rarest ? formatRarity(rarest.rarity) : 'None',
-    mostRecentUnlock: sortedNewest[0]?.title ?? 'None',
-    expeditionsWithBadges: tripIds.size,
-  };
-}
-
-function buildBadgeCollectionSections(
-  badges: ExpeditionBadge[],
-  mode: BadgeCollectionMode,
-): { title: string; badges: ExpeditionBadge[] }[] {
-  if (mode === 'recent') {
-    return [{ title: 'Recent', badges: [...badges].sort(sortBadgesNewest) }];
-  }
-  if (mode === 'rarity') {
-    const orderedRarities: ExpeditionBadge['rarity'][] = ['hidden', 'legendary', 'epic', 'rare', 'uncommon', 'common'];
-    return orderedRarities
-      .map((rarity) => ({
-        title: formatRarity(rarity),
-        badges: badges.filter((badge) => badge.rarity === rarity).sort(sortBadgesNewest),
-      }))
-      .filter((section) => section.badges.length > 0);
-  }
-
-  const categories = Array.from(new Set(badges.map((badge) => badge.category))).sort((a, b) =>
-    formatCategory(a).localeCompare(formatCategory(b)),
-  );
-  return categories.map((category) => ({
-    title: formatCategory(category),
-    badges: badges.filter((badge) => badge.category === category).sort(sortBadgesNewest),
-  }));
-}
-
-function sortBadgesNewest(a: ExpeditionBadge, b: ExpeditionBadge): number {
-  return new Date(b.unlockedAt ?? b.updatedAt).getTime() - new Date(a.unlockedAt ?? a.updatedAt).getTime();
-}
-
-function formatRarity(rarity: ExpeditionBadge['rarity']): string {
-  return rarity.charAt(0).toUpperCase() + rarity.slice(1);
-}
-
-function formatCategory(category: string): string {
-  return category
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatCompletedDate(value: string | null): string {
@@ -2218,68 +2040,6 @@ const styles = StyleSheet.create({
     color: TACTICAL.text,
     fontSize: 11,
     fontWeight: '900',
-  },
-  collectionStatsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 7,
-  },
-  collectionStatTile: {
-    flexGrow: 1,
-    flexBasis: '46%',
-    minHeight: 58,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: 'rgba(17,20,24,0.82)',
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    justifyContent: 'center',
-  },
-  collectionStatValue: {
-    color: TACTICAL.amber,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  collectionStatLabel: {
-    marginTop: 4,
-    color: TACTICAL.textMuted,
-    fontSize: 8,
-    fontWeight: '800',
-    lineHeight: 10,
-  },
-  collectionModeRow: {
-    minHeight: 34,
-    flexDirection: 'row',
-    gap: 7,
-  },
-  collectionModeButton: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: GOLD_RAIL.internal,
-    backgroundColor: 'rgba(17,20,24,0.72)',
-    paddingHorizontal: 8,
-  },
-  collectionModeButtonActive: {
-    borderColor: GOLD_RAIL.subsection,
-    backgroundColor: ECS.accentSoft,
-  },
-  collectionModeButtonText: {
-    color: TACTICAL.textMuted,
-    fontSize: 10,
-    fontWeight: '900',
-  },
-  collectionModeButtonTextActive: {
-    color: TACTICAL.amber,
-  },
-  collectionSections: {
-    gap: 10,
-  },
-  collectionSection: {
-    gap: 8,
   },
   archiveStatsGrid: {
     flexDirection: 'row',

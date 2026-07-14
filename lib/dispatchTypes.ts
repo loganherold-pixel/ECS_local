@@ -94,6 +94,7 @@ export type DispatchCheckInSchedule =
 
 export type DispatchDeliveryState =
   | 'draft'
+  | 'local'
   | 'queued'
   | 'sending'
   | 'sent'
@@ -111,6 +112,7 @@ export type DispatchDeliveryState =
 
 export type DispatchReliabilityState =
   | 'live'
+  | 'local'
   | 'queued'
   | 'sending'
   | 'sent'
@@ -124,6 +126,16 @@ export type DispatchReliabilityState =
   | 'unknown';
 
 export type DispatchPingDeliveryStatus = DispatchDeliveryState;
+
+export type DispatchPingOperationalState =
+  | 'draft'
+  | 'open'
+  | 'awaiting_acknowledgment'
+  | 'acknowledged'
+  | 'declined'
+  | 'escalated'
+  | 'resolved'
+  | 'cancelled';
 
 export type DispatchQueueItemStatus =
   | 'new'
@@ -338,6 +350,7 @@ export interface DispatchPing {
   type: DispatchPingType;
   priority: DispatchPriority;
   status: DispatchPingDeliveryStatus;
+  operationalState?: DispatchPingOperationalState;
   message: string;
   createdAt: string;
   updatedAt?: string;
@@ -376,6 +389,7 @@ export interface DispatchAssignment {
   acceptedAt?: string;
   completedAt?: string;
   notes?: string;
+  deliveryState?: DispatchDeliveryState;
   conflictState?: DispatchConflictState;
   conflictReason?: string;
   lastConflictAt?: string;
@@ -445,6 +459,7 @@ export interface DispatchAssistRequest {
   escalationState: DispatchEscalationState;
   sourcePingId?: string;
   queueItemId?: string;
+  deliveryState?: DispatchDeliveryState;
   conflictState?: DispatchConflictState;
   conflictReason?: string;
   lastConflictAt?: string;
@@ -459,17 +474,25 @@ export interface DispatchAcknowledgment {
   memberId: string;
   status: Extract<DispatchPingDeliveryStatus, 'acknowledged' | 'accepted' | 'declined'>;
   acknowledgedAt: string;
+  updatedAt?: string;
   message?: string;
+  deliveryState?: DispatchDeliveryState;
 }
 
 export interface DispatchQueuedOfflineAction {
   id: string;
   idempotencyKey: string;
+  version?: number;
   entityType: 'ping' | 'queue_item' | 'assignment' | 'assist_request' | 'acknowledgment' | 'timeline_event';
   actionType: string;
   createdAt: string;
+  updatedAt?: string;
   replayedAt?: string;
-  status: 'queued' | 'replayed' | 'failed';
+  nextAttemptAt?: string;
+  attemptCount?: number;
+  maxAttempts?: number;
+  lastError?: string;
+  status: 'queued' | 'replaying' | 'replayed' | 'failed' | 'cancelled';
   sourceEntityId?: string;
 }
 
@@ -846,6 +869,7 @@ function mapPingTypeToCadEventType(type: DispatchPingType): DispatchCadEventType
 function mapDeliveryStateToCadStatus(state: DispatchDeliveryState): DispatchCadStatus {
   switch (state) {
     case 'draft':
+    case 'local':
     case 'queued':
     case 'sending':
     case 'retrying':
@@ -952,6 +976,8 @@ export function getPingStatusLabel(status: DispatchPingDeliveryStatus): string {
   switch (status) {
     case 'draft':
       return 'Draft';
+    case 'local':
+      return 'Local only';
     case 'queued':
       return 'Queued for delivery';
     case 'sending':
@@ -1073,6 +1099,8 @@ export function getDispatchReliabilityLabel(state: DispatchReliabilityState): st
   switch (state) {
     case 'live':
       return 'Live';
+    case 'local':
+      return 'Local only';
     case 'queued':
       return 'Queued for delivery';
     case 'sending':

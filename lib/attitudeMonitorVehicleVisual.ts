@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ImageSourcePropType } from 'react-native';
 
-import { getActiveVehicleContext, type ActiveVehicleContext } from './activeVehicleContext';
+import {
+  getActiveVehicleContext,
+  subscribeActiveVehicleState,
+  type ActiveVehicleContext,
+} from './activeVehicleContext';
 import {
   getAttitudeMonitorHeroAssetDefinition,
   getAttitudeMonitorHeroSource as getHeroSourceFromAssets,
@@ -13,9 +17,6 @@ import {
   type VehicleAttitudeKey,
   type VehicleAttitudeProfileInput,
 } from './vehicles/vehicleAttitudeAssets';
-import { vehicleSetupStore } from './vehicleSetupStore';
-import { vehicleSpecStore } from './vehicleSpecStore';
-import { vehicleStore } from './vehicleStore';
 
 export type AttitudeMonitorVehicleVisualFamilyId =
   | 'default-truck'
@@ -456,15 +457,7 @@ export function useActiveAttitudeMonitorVehicleVisual(
 
     sync();
 
-    const unsubscribers = [
-      vehicleSetupStore.subscribe(sync),
-      vehicleSpecStore.subscribe(sync),
-      vehicleStore.subscribe(() => sync()),
-    ];
-
-    return () => {
-      unsubscribers.forEach((unsubscribe) => unsubscribe());
-    };
+    return subscribeActiveVehicleState(sync);
   }, [context]);
 
   return useMemo(

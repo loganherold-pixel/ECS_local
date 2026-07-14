@@ -18,6 +18,7 @@ import {
   isEdgeFunctionUnavailableError,
 } from './supabase';
 import { ecsLog } from './ecsLogger';
+import { buildECSAIRouteIdeaPolicyMetadata } from './ai/aiPolicyBoundary';
 import type {
   AIGeneratedRoute,
   AIRouteState,
@@ -35,6 +36,40 @@ const UNIFIED_DRIVABLE_TRAILS_CATEGORY = 'all-drivable-trails';
 
 // ── Max routes per category ──────────────────────────────────
 const MAX_ROUTES_PER_CATEGORY = 6;
+
+export type AIRouteRequestDiagnostics = {
+  providerRequests: number;
+  deduplicatedRequests: number;
+  supersededRequests: number;
+  staleResponsesIgnored: number;
+};
+
+function stableTextHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function createAIRouteRequestFingerprint(params: AIRouteRequestParams): string {
+  const existingRouteNames = Array.from(new Set(
+    params.existingRouteNames
+      .map((name) => String(name ?? '').trim().toLowerCase())
+      .filter(Boolean),
+  )).sort();
+  return [
+    params.category,
+    Number(params.latitude).toFixed(3),
+    Number(params.longitude).toFixed(3),
+    Math.round(Number(params.radiusMiles)),
+    String(params.vehicleType ?? '').trim().toLowerCase(),
+    String(params.vehicleBuild ?? '').trim().toLowerCase(),
+    Math.max(1, Math.round(Number(params.count))),
+    stableTextHash(existingRouteNames.join('|')),
+  ].join('|');
+}
 
 function debugAIRoutes(message: string, details?: Record<string, unknown>): void {
   ecsLog.debug('DISCOVERY', message, details);
@@ -156,9 +191,39 @@ class AIRouteStoreClass {
   private state: AIRouteState = { ...DEFAULT_STATE };
   private listeners: Set<Listener> = new Set();
   private abortControllers: Map<string, AbortController> = new Map();
-  private inFlightRequests: Map<string, Promise<AIGeneratedRoute[]>> = new Map();
+  private inFlightRequests: Map<string, {
+    fingerprint: string;
+    controller: AbortController;
+    promise: Promise<AIGeneratedRoute[]>;
+  }> = new Map();
+  private lastFetchFingerprintByCategory: Record<string, string> = {};
   private failureCooldownUntilByCategory: Record<string, number> = {};
   private lastFailureSignatureByCategory: Record<string, string> = {};
+  private requestDiagnostics: AIRouteRequestDiagnostics = {
+    providerRequests: 0,
+    deduplicatedRequests: 0,
+    supersededRequests: 0,
+    staleResponsesIgnored: 0,
+  };
+
+  private pruneFailureCooldowns(nowMs = Date.now()): void {
+    const keys = Object.keys(this.failureCooldownUntilByCategory);
+    keys.forEach((key) => {
+      if ((this.failureCooldownUntilByCategory[key] ?? 0) <= nowMs) {
+        delete this.failureCooldownUntilByCategory[key];
+        delete this.lastFailureSignatureByCategory[key];
+      }
+    });
+    const retained = Object.keys(this.failureCooldownUntilByCategory)
+      .sort((a, b) =>
+        (this.failureCooldownUntilByCategory[a] ?? 0) -
+        (this.failureCooldownUntilByCategory[b] ?? 0),
+      );
+    retained.slice(0, Math.max(0, retained.length - 24)).forEach((key) => {
+      delete this.failureCooldownUntilByCategory[key];
+      delete this.lastFailureSignatureByCategory[key];
+    });
+  }
 
   // ── Subscription ─────────────────────────────────────────
   subscribe(listener: Listener): () => void {
@@ -193,10 +258,29 @@ class AIRouteStoreClass {
     return (this.state.routesByCategory[category]?.length || 0) > 0;
   }
 
-  isCacheValid(category: string): boolean {
+  isCacheValid(category: string, params?: AIRouteRequestParams): boolean {
     const lastFetch = this.state.lastFetchByCategory[category];
     if (!lastFetch) return false;
+    if (
+      params &&
+      this.lastFetchFingerprintByCategory[category] !== createAIRouteRequestFingerprint(params)
+    ) {
+      return false;
+    }
     return Date.now() - lastFetch < CACHE_TTL_MS;
+  }
+
+  getRequestDiagnostics(): AIRouteRequestDiagnostics {
+    return { ...this.requestDiagnostics };
+  }
+
+  resetRequestDiagnosticsForTests(): void {
+    this.requestDiagnostics = {
+      providerRequests: 0,
+      deduplicatedRequests: 0,
+      supersededRequests: 0,
+      staleResponsesIgnored: 0,
+    };
   }
 
   // ── Toggle ───────────────────────────────────────────────
@@ -209,22 +293,29 @@ class AIRouteStoreClass {
   async fetchRoutes(params: AIRouteRequestParams): Promise<AIGeneratedRoute[]> {
     const { category } = params;
     const backendCategory = resolveBackendCategory(category, params.radiusMiles);
+    const requestFingerprint = createAIRouteRequestFingerprint(params);
 
     // Check cache
-    if (this.isCacheValid(category) && this.hasRoutes(category)) {
+    if (this.isCacheValid(category, params) && this.hasRoutes(category)) {
       debugAIRoutes('Using cached AI routes', { category });
       return this.getRoutes(category);
     }
 
     const activeRequest = this.inFlightRequests.get(category);
+    if (activeRequest?.fingerprint === requestFingerprint) {
+      this.requestDiagnostics.deduplicatedRequests += 1;
+      return activeRequest.promise;
+    }
     if (activeRequest) {
-      return activeRequest;
+      this.requestDiagnostics.supersededRequests += 1;
+      activeRequest.controller.abort();
     }
 
-    const cooldownUntil = this.failureCooldownUntilByCategory[category] ?? 0;
+    this.pruneFailureCooldowns();
+    const cooldownUntil = this.failureCooldownUntilByCategory[requestFingerprint] ?? 0;
     if (cooldownUntil > Date.now()) {
       const remainingSeconds = Math.max(1, Math.ceil((cooldownUntil - Date.now()) / 1000));
-      const signature = this.lastFailureSignatureByCategory[category] || 'cooldown';
+      const signature = this.lastFailureSignatureByCategory[requestFingerprint] || 'cooldown';
       debugAIRoutes('Skipping AI route fetch during cooldown', {
         category,
         remainingSeconds,
@@ -236,8 +327,9 @@ class AIRouteStoreClass {
     if (!isDeployedEdgeFunction('ai-route-suggestions')) {
       const errorMsg = 'ECS route engine is not deployed in the current backend';
       this.state.errorByCategory[category] = errorMsg;
-      this.failureCooldownUntilByCategory[category] = Date.now() + FAILURE_COOLDOWN_MS;
-      this.lastFailureSignatureByCategory[category] = 'missing_function';
+      this.failureCooldownUntilByCategory[requestFingerprint] = Date.now() + FAILURE_COOLDOWN_MS;
+      this.lastFailureSignatureByCategory[requestFingerprint] = 'missing_function';
+      this.pruneFailureCooldowns();
       this.notify();
       return [];
     }
@@ -257,6 +349,7 @@ class AIRouteStoreClass {
     this.notify();
 
     const requestPromise = (async () => {
+      this.requestDiagnostics.providerRequests += 1;
       debugAIRoutes('Fetching AI routes', {
         category,
         backendCategory,
@@ -276,7 +369,8 @@ class AIRouteStoreClass {
         },
       });
 
-      if (controller.signal.aborted) {
+      if (controller.signal.aborted || this.abortControllers.get(category) !== controller) {
+        this.requestDiagnostics.staleResponsesIgnored += 1;
         debugAIRoutes('AI route request aborted', { category });
         return [];
       }
@@ -312,6 +406,7 @@ class AIRouteStoreClass {
         regionGroup: route.regionGroup,
         imageTag: route.imageTag || 'ecs-suggested',
         isAIGenerated: true as const,
+        aiPolicy: buildECSAIRouteIdeaPolicyMetadata(),
         distanceFromUserMiles:
           typeof route.distanceFromUserMiles === 'number'
             ? route.distanceFromUserMiles
@@ -329,8 +424,9 @@ class AIRouteStoreClass {
       this.state.routesByCategory[category] = enrichedRoutes;
       this.state.loadingByCategory[category] = false;
       this.state.lastFetchByCategory[category] = Date.now();
-      this.failureCooldownUntilByCategory[category] = 0;
-      this.lastFailureSignatureByCategory[category] = '';
+      this.lastFetchFingerprintByCategory[category] = requestFingerprint;
+      this.failureCooldownUntilByCategory[requestFingerprint] = 0;
+      this.lastFailureSignatureByCategory[requestFingerprint] = '';
       this.notify();
 
       debugAIRoutes('AI routes loaded', {
@@ -339,7 +435,10 @@ class AIRouteStoreClass {
       });
       return enrichedRoutes;
     })().catch((err: any) => {
-      if (controller.signal.aborted) return [];
+      if (controller.signal.aborted || this.abortControllers.get(category) !== controller) {
+        this.requestDiagnostics.staleResponsesIgnored += 1;
+        return [];
+      }
 
       const classified = classifyInvokeFailure(err);
       const errorMsg =
@@ -350,8 +449,9 @@ class AIRouteStoreClass {
             : classified.message || 'Unknown ECS route engine error';
 
       const signature = `${classified.kind}:${classified.code ?? 'none'}:${classified.status ?? 'none'}:${classified.message}`;
-      this.failureCooldownUntilByCategory[category] = Date.now() + FAILURE_COOLDOWN_MS;
-      this.lastFailureSignatureByCategory[category] = signature;
+      this.failureCooldownUntilByCategory[requestFingerprint] = Date.now() + FAILURE_COOLDOWN_MS;
+      this.lastFailureSignatureByCategory[requestFingerprint] = signature;
+      this.pruneFailureCooldowns();
 
       console.warn(TAG, `Error fetching AI routes for ${category}:`, {
         kind: classified.kind,
@@ -366,28 +466,47 @@ class AIRouteStoreClass {
 
       return [];
     }).finally(() => {
-      this.abortControllers.delete(category);
-      this.inFlightRequests.delete(category);
+      if (this.abortControllers.get(category) === controller) {
+        this.abortControllers.delete(category);
+      }
+      if (this.inFlightRequests.get(category)?.controller === controller) {
+        this.inFlightRequests.delete(category);
+      }
     });
 
-    this.inFlightRequests.set(category, requestPromise);
+    this.inFlightRequests.set(category, {
+      fingerprint: requestFingerprint,
+      controller,
+      promise: requestPromise,
+    });
     return requestPromise;
   }
 
   // ── Clear cache for a category ───────────────────────────
   clearCategory(category: string) {
+    this.abortControllers.get(category)?.abort();
+    this.abortControllers.delete(category);
+    this.inFlightRequests.delete(category);
     delete this.state.routesByCategory[category];
     delete this.state.lastFetchByCategory[category];
+    delete this.lastFetchFingerprintByCategory[category];
     delete this.state.errorByCategory[category];
+    delete this.state.loadingByCategory[category];
     this.notify();
   }
 
   // ── Clear all caches ─────────────────────────────────────
   clearAll() {
+    this.abortControllers.forEach((controller) => controller.abort());
+    this.abortControllers.clear();
+    this.inFlightRequests.clear();
     this.state.routesByCategory = {};
     this.state.lastFetchByCategory = {};
     this.state.errorByCategory = {};
     this.state.loadingByCategory = {};
+    this.lastFetchFingerprintByCategory = {};
+    this.failureCooldownUntilByCategory = {};
+    this.lastFailureSignatureByCategory = {};
     this.notify();
   }
 

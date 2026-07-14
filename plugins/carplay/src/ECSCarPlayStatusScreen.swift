@@ -58,6 +58,9 @@ class ECSCarPlayStatusScreen {
     private var isManualOverride = false
     private var transitionNoticeMessage: String?
     private var transitionNoticeTimestamp: Double = 0
+    private var dataFreshness = "unavailable"
+    private var dataAvailability = "unavailable"
+    private var dataSourceLabel = "Unavailable"
     
     private var infoTemplate: CPInformationTemplate?
     
@@ -88,6 +91,15 @@ class ECSCarPlayStatusScreen {
             if let systems = statusData["vehicleSystemsSummary"] as? [[String: Any]] {
                 vehicleSystemsCount = systems.count
                 vehicleSystemsNominal = systems.filter { ($0["status"] as? String) == "nominal" }.count
+            }
+            if let safeState = statusData["automotiveSafeState"] as? [String: Any] {
+                dataFreshness = safeState["freshness"] as? String ?? "unavailable"
+                dataAvailability = safeState["availability"] as? String ?? "unavailable"
+                dataSourceLabel = safeState["sourceLabel"] as? String ?? "Unavailable"
+            } else {
+                dataFreshness = "unavailable"
+                dataAvailability = "unavailable"
+                dataSourceLabel = "Unavailable"
             }
         }
         
@@ -144,7 +156,10 @@ class ECSCarPlayStatusScreen {
         let modeTag = displayMode == "expedition_drive" ? "EXP" : "HWY"
         let overrideTag = isManualOverride ? " (Manual)" : ""
         let baseTitle = displayMode == "expedition_drive" ? "EXPEDITION STATUS" : "TRIP STATUS"
-        return "\(baseTitle) \u{2022} \(modeTag)\(overrideTag)"
+        let freshnessTag = dataFreshness == "live" || dataFreshness == "recent"
+            ? ""
+            : " | \(dataFreshness.uppercased())"
+        return "\(baseTitle) \u{2022} \(modeTag)\(overrideTag)\(freshnessTag)"
     }
     
     // MARK: - Items
@@ -187,7 +202,13 @@ class ECSCarPlayStatusScreen {
         items.append(CPInformationItem(title: "Daylight Remaining", detail: dayText))
         
         // Connectivity
-        items.append(CPInformationItem(title: "Connectivity", detail: connectivityForecast.uppercased()))
+        let sourceDetail = dataAvailability == "unavailable"
+            ? "Unavailable"
+            : "\(dataSourceLabel) | \(dataFreshness.uppercased())"
+        items.append(CPInformationItem(
+            title: "Connectivity",
+            detail: "\(connectivityForecast.uppercased()) | \(sourceDetail)"
+        ))
         
         return items
     }
@@ -224,7 +245,10 @@ class ECSCarPlayStatusScreen {
         let sysText = vehicleSystemsCount > 0 ?
             "\(vehicleSystemsNominal) / \(vehicleSystemsCount) nominal" :
             "Vehicle systems unavailable"
-        items.append(CPInformationItem(title: "Vehicle Systems", detail: sysText))
+        let sourceDetail = dataAvailability == "unavailable"
+            ? "Unavailable"
+            : "\(dataSourceLabel) | \(dataFreshness.uppercased())"
+        items.append(CPInformationItem(title: "Vehicle Systems", detail: "\(sysText) | \(sourceDetail)"))
         
         // Weather Risk
         items.append(CPInformationItem(title: "Weather Risk", detail: weatherRisk.uppercased()))

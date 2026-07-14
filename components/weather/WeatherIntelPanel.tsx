@@ -1352,6 +1352,7 @@ export default function WeatherIntelPanel({
           <View style={[styles.footer, styles.footerActionsOnly, frameless ? styles.footerFrameless : null]}>
             <SourceTruthInspectorTrigger
               source={weatherSourceTruthBinding.ref}
+              sources={weatherSourceTruthBinding.sources}
               policyKey={weatherSourceTruthBinding.policyKey}
               dependencies={weatherSourceTruthBinding.dependencies}
               action={{

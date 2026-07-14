@@ -391,11 +391,15 @@ export async function fetchMapboxMapMatchingCandidate(params: {
   coordinates: RouteBuilderCoordinate[];
   radiusM?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<MapboxMapMatchingCandidate | null> {
   const url = buildMapboxMapMatchingRequest(params);
   if (!url) return null;
 
   const controller = new AbortController();
+  const abortFromParent = () => controller.abort();
+  if (params.signal?.aborted) controller.abort();
+  else params.signal?.addEventListener('abort', abortFromParent, { once: true });
   const timer = setTimeout(() => controller.abort(), params.timeoutMs ?? 9000);
   try {
     const response = await fetch(url, {
@@ -407,5 +411,6 @@ export async function fetchMapboxMapMatchingCandidate(params: {
     return mapboxMapMatchingCandidateFromResponse((await response.json()) as MapboxMapMatchingResponse);
   } finally {
     clearTimeout(timer);
+    params.signal?.removeEventListener('abort', abortFromParent);
   }
 }

@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'expo-router';
 import {
   ScrollView,
   StyleSheet,
@@ -18,6 +17,7 @@ import DispatchTeamPingComposer, {
 import DispatchQueueSection from './DispatchQueueSection';
 import DispatchTeamRosterSection from './DispatchTeamRosterSection';
 import DispatchTimelineSection from './DispatchTimelineSection';
+import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 import { dispatchNavigateContextAdapter } from '../../lib/dispatchNavigateContextHandoff';
 import { buildDispatchAuditEvent } from '../../lib/dispatchAuditAdapter';
 import {
@@ -77,13 +77,16 @@ import {
   createDispatchEntityId,
   createDispatchIdempotencyKey,
   getIncomingDispatchConflictNotice,
+  mergeDispatchAcknowledgment,
   mergeDispatchAssignment,
+  mergeDispatchAssistRequest,
   mergeDispatchPing,
   mergeDispatchQueueItem,
   mergeDispatchTimelineEvent,
   rememberDispatchAction,
   shouldApplyIncomingDispatchEvent,
 } from '../../lib/dispatchIntegrity';
+import { transitionDispatchQueueItemStatus } from '../../lib/dispatchLifecycle';
 import {
   canMutateDispatchQueueItem,
   canSubmitAssistRequest,
@@ -119,8 +122,10 @@ import {
   getDispatchPersistenceDefaults,
 } from '../../lib/dispatchServiceAdapters';
 import {
+  type DispatchAcknowledgment,
   type DispatchDeliveryState,
   type DispatchAssignment,
+  type DispatchAssistRequest,
   type DispatchAssistRequestType,
   type DispatchCheckInResponseStatus,
   type DispatchCheckInSchedule,
@@ -160,7 +165,7 @@ function upsertById<T extends { id: string }>(items: T[], nextItem: T): T[] {
 }
 
 export default function DispatchCommandCenter() {
-  const router = useRouter();
+  const { push: pushSingleFlight } = useECSNavigation();
   const {
     isOnline,
     offlineMode,
@@ -172,9 +177,8 @@ export default function DispatchCommandCenter() {
     operatorInfo,
     showToast,
   } = useApp();
-  const activeExpedition = useMemo(
-    () => defaultDispatchAdapters.activeExpedition.getActiveExpedition(),
-    [],
+  const [activeExpedition, setActiveExpedition] = useState(() =>
+    defaultDispatchAdapters.activeExpedition.getActiveExpedition(),
   );
   const rollout = useMemo(() => resolveDispatchRolloutConfig(), []);
   const persistenceDefaults = useMemo(() => getDispatchPersistenceDefaults(), []);
@@ -183,11 +187,11 @@ export default function DispatchCommandCenter() {
     [],
   );
   const realtimeSessionRef = useRef<DispatchRealtimeSession | null>(null);
-  const replayInFlightRef = useRef(false);
   const recentActionKeysRef = useRef(new Map<string, number>());
   const [teamMembers, setTeamMembers] = useState<DispatchTeamMember[]>(() =>
     defaultDispatchAdapters.teamRoster.listTeamMembers(activeExpedition),
   );
+  const [teamRosterExpeditionId, setTeamRosterExpeditionId] = useState<string | null>(null);
   const [teamRosterLoading, setTeamRosterLoading] = useState(false);
   const [assignments, setAssignments] = useState<DispatchAssignment[]>(() =>
     defaultDispatchAdapters.teamRoster.listAssignments(activeExpedition),
@@ -214,9 +218,21 @@ export default function DispatchCommandCenter() {
   const [checkInSchedule, setCheckInSchedule] = useState<DispatchCheckInSchedule>('off');
   const teamMembersRef = useRef(teamMembers);
   const assignmentsRef = useRef(assignments);
+  const assistRequestsRef = useRef<DispatchAssistRequest[]>([]);
+  const acknowledgmentsRef = useRef<DispatchAcknowledgment[]>([]);
   const pingsRef = useRef(pings);
   const queueItemsRef = useRef(queueItems);
   const timelineEventsRef = useRef(timelineEvents);
+
+  useEffect(() => defaultDispatchAdapters.activeExpedition.subscribe((nextExpedition) => {
+    setActiveExpedition((current) => (
+      current.id === nextExpedition.id &&
+      current.status === nextExpedition.status &&
+      current.source === nextExpedition.source
+        ? current
+        : nextExpedition
+    ));
+  }), []);
 
   useEffect(() => {
     teamMembersRef.current = teamMembers;
@@ -241,12 +257,31 @@ export default function DispatchCommandCenter() {
   useEffect(() => {
     let cancelled = false;
 
+    pingsRef.current = [...persistenceDefaults.pings];
+    queueItemsRef.current = [...persistenceDefaults.queueItems];
+    assignmentsRef.current = [...persistenceDefaults.assignments];
+    assistRequestsRef.current = [...(persistenceDefaults.assistRequests ?? [])];
+    acknowledgmentsRef.current = [...(persistenceDefaults.acknowledgments ?? [])];
+    timelineEventsRef.current = [...persistenceDefaults.timelineEvents];
+    setPings(pingsRef.current);
+    setQueueItems(queueItemsRef.current);
+    setAssignments(assignmentsRef.current);
+    setTimelineEvents(timelineEventsRef.current);
+    setLastRealtimeEventAt(null);
+    setLastOfflineReplayAt(null);
+    recentActionKeysRef.current.clear();
+    teamMembersRef.current = [];
+    setTeamMembers([]);
+    setTeamRosterExpeditionId(null);
+
     dispatchPersistenceAdapter.waitForHydration().then(() => {
       if (cancelled) return;
       const snapshot = dispatchPersistenceAdapter.load(activeExpedition.id, persistenceDefaults);
       pingsRef.current = snapshot.pings;
       queueItemsRef.current = snapshot.queueItems;
       assignmentsRef.current = snapshot.assignments;
+      assistRequestsRef.current = snapshot.assistRequests;
+      acknowledgmentsRef.current = snapshot.acknowledgments;
       timelineEventsRef.current = snapshot.timelineEvents;
       setPings(snapshot.pings);
       setQueueItems(snapshot.queueItems);
@@ -266,6 +301,7 @@ export default function DispatchCommandCenter() {
       const fallbackMembers = defaultDispatchAdapters.teamRoster.listTeamMembers(activeExpedition);
       teamMembersRef.current = fallbackMembers;
       setTeamMembers(fallbackMembers);
+      setTeamRosterExpeditionId(activeExpedition.id);
       setTeamRosterLoading(false);
       return () => {
         cancelled = true;
@@ -273,6 +309,7 @@ export default function DispatchCommandCenter() {
     }
 
     setTeamRosterLoading(true);
+    setTeamRosterExpeditionId(null);
     defaultDispatchAdapters.teamRoster.loadTeamMembers(activeExpedition, {
       currentUserId: user?.id ?? null,
       currentUserDisplayName: operatorInfo?.display_name ?? null,
@@ -281,11 +318,13 @@ export default function DispatchCommandCenter() {
       if (!cancelled) {
         teamMembersRef.current = result.members;
         setTeamMembers(result.members);
+        setTeamRosterExpeditionId(activeExpedition.id);
       }
     }).catch(() => {
       if (!cancelled) {
         teamMembersRef.current = [];
         setTeamMembers([]);
+        setTeamRosterExpeditionId(activeExpedition.id);
       }
     }).finally(() => {
       if (!cancelled) {
@@ -305,6 +344,8 @@ export default function DispatchCommandCenter() {
       pings: pingsRef.current,
       queueItems: queueItemsRef.current,
       assignments: assignmentsRef.current,
+      assistRequests: assistRequestsRef.current,
+      acknowledgments: acknowledgmentsRef.current,
       timelineEvents: timelineEventsRef.current,
     };
     const conflictNotice = getIncomingDispatchConflictNotice(event, currentState);
@@ -352,6 +393,20 @@ export default function DispatchCommandCenter() {
         });
         dispatchPersistenceAdapter.upsertAssignment(activeExpedition.id, persistenceDefaults, event.assignment);
         break;
+      case 'assist_request_upsert':
+        assistRequestsRef.current = mergeDispatchAssistRequest(
+          assistRequestsRef.current,
+          event.assistRequest,
+        );
+        dispatchPersistenceAdapter.upsertAssistRequest(activeExpedition.id, persistenceDefaults, event.assistRequest);
+        break;
+      case 'acknowledgment_upsert':
+        acknowledgmentsRef.current = mergeDispatchAcknowledgment(
+          acknowledgmentsRef.current,
+          event.acknowledgment,
+        );
+        dispatchPersistenceAdapter.upsertAcknowledgment(activeExpedition.id, persistenceDefaults, event.acknowledgment);
+        break;
       case 'team_member_upsert':
         setTeamMembers((current) => {
           const next = upsertById(current, event.teamMember);
@@ -373,6 +428,9 @@ export default function DispatchCommandCenter() {
   }, [activeExpedition.id, activeExpedition.source, persistenceDefaults, rollout.notifications, showToast, user?.id]);
 
   useEffect(() => {
+    realtimeSessionRef.current?.close();
+    realtimeSessionRef.current = null;
+
     if (!rollout.realtimeSync) {
       setRealtimeStatus('disabled');
       return undefined;
@@ -383,6 +441,19 @@ export default function DispatchCommandCenter() {
       logDispatchDev('[DISPATCH_REALTIME] realtime_paused_no_active_team', {
         expeditionId: activeExpedition.id,
         reason: 'no_active_team',
+      });
+      return undefined;
+    }
+
+    const hasAuthenticatedMembership = Boolean(
+      teamRosterExpeditionId === activeExpedition.id &&
+      user?.id &&
+      teamMembers.some((member) => member.id === user.id),
+    );
+    if (!hasAuthenticatedMembership) {
+      setRealtimeStatus('disabled');
+      logDispatchDev('[DISPATCH_REALTIME] realtime_paused_no_verified_membership', {
+        expeditionId: activeExpedition.id,
       });
       return undefined;
     }
@@ -401,12 +472,12 @@ export default function DispatchCommandCenter() {
         realtimeSessionRef.current = null;
       }
     };
-  }, [activeExpedition.id, activeExpedition.source, applyRealtimeEvent, realtimeClientId, rollout.realtimeSync]);
+  }, [activeExpedition.id, activeExpedition.source, applyRealtimeEvent, realtimeClientId, rollout.realtimeSync, teamMembers, teamRosterExpeditionId, user?.id]);
 
   const publishRealtimeEvent = useCallback((event: DispatchRealtimeEventDraft): Promise<boolean> => {
-    if (!rollout.realtimeSync) return Promise.resolve(false);
+    if (!rollout.realtimeSync || activeExpedition.source === 'local' || !user?.id) return Promise.resolve(false);
     return realtimeSessionRef.current?.publish(event) ?? Promise.resolve(false);
-  }, [rollout.realtimeSync]);
+  }, [activeExpedition.source, rollout.realtimeSync, user?.id]);
 
   const publishRealtimeEventLater = useCallback((event: DispatchRealtimeEventDraft) => {
     void publishRealtimeEvent(event);
@@ -432,6 +503,16 @@ export default function DispatchCommandCenter() {
       }),
     [connectivityStatus, dirtyCount, isOnline, offlineMode, queueSize, syncStatus],
   );
+  const runtimeDeliveryState: DispatchDeliveryState = activeExpedition.source === 'local'
+    ? 'local'
+    : syncSnapshot.isDeliverable && realtimeStatus === 'connected'
+      ? 'sent'
+      : 'queued';
+  const runtimeReliabilityState = runtimeDeliveryState === 'local'
+    ? 'local' as const
+    : runtimeDeliveryState === 'queued'
+      ? 'queued' as const
+      : syncSnapshot.state;
 
   const metrics = useMemo(() => {
     return calculateDispatchMetrics({
@@ -448,39 +529,47 @@ export default function DispatchCommandCenter() {
 
   const connectionLabel = useMemo(() => {
     if (offlineMode || !isOnline) return 'Offline';
+    if (activeExpedition.source === 'local' || teamMembers.length <= 1) return 'Local';
     if (metrics.failedDeliveries > 0 || metrics.queuedDeliveries > 0 || metrics.retryingDeliveries > 0 || metrics.offlineStaleMembers > 0) return 'Queued';
     return 'Live';
-  }, [isOnline, metrics.failedDeliveries, metrics.offlineStaleMembers, metrics.queuedDeliveries, metrics.retryingDeliveries, offlineMode]);
+  }, [activeExpedition.source, isOnline, metrics.failedDeliveries, metrics.offlineStaleMembers, metrics.queuedDeliveries, metrics.retryingDeliveries, offlineMode, teamMembers.length]);
 
   useEffect(() => {
     if (
       !rollout.offlineReplay ||
       !syncSnapshot.isDeliverable ||
-      realtimeStatus !== 'connected' ||
-      replayInFlightRef.current
+      realtimeStatus !== 'connected'
     ) {
-      return;
+      return undefined;
     }
 
-    replayInFlightRef.current = true;
+    const controller = new AbortController();
+    let cancelled = false;
     replayQueuedDispatchActions({
       expeditionId: activeExpedition.id,
       defaults: persistenceDefaults,
       publish: publishRealtimeEvent,
+      signal: controller.signal,
     }).then((result) => {
+      if (cancelled) return;
       if (result.attempted === 0) return;
       setLastOfflineReplayAt(new Date().toISOString());
       pingsRef.current = result.snapshot.pings;
       queueItemsRef.current = result.snapshot.queueItems;
       assignmentsRef.current = result.snapshot.assignments;
+      assistRequestsRef.current = result.snapshot.assistRequests;
+      acknowledgmentsRef.current = result.snapshot.acknowledgments;
       timelineEventsRef.current = result.snapshot.timelineEvents;
       setPings(result.snapshot.pings);
       setQueueItems(result.snapshot.queueItems);
       setAssignments(result.snapshot.assignments);
       setTimelineEvents(result.snapshot.timelineEvents);
-    }).finally(() => {
-      replayInFlightRef.current = false;
-    });
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [
     activeExpedition.id,
     persistenceDefaults,
@@ -502,8 +591,9 @@ export default function DispatchCommandCenter() {
         currentMember: currentDispatchMember,
         operatorInfo,
         soloMode: activeExpedition.source === 'local' || teamMembers.length <= 1,
+        authenticated: Boolean(user?.id),
       }),
-    [activeExpedition.source, activeExpedition.status, currentDispatchMember, operatorInfo, teamMembers.length],
+    [activeExpedition.source, activeExpedition.status, currentDispatchMember, operatorInfo, teamMembers.length, user?.id],
   );
   const queuePermissions = useMemo(
     () => {
@@ -598,55 +688,11 @@ export default function DispatchCommandCenter() {
   const reportDenied = useCallback((result?: DispatchPermissionResult) => {
     const reason = result?.reason ?? DISPATCH_PERMISSION_DENIED_COPY;
     showToast(reason);
-
-    const occurredAt = new Date().toISOString();
-    const idempotencyKey = createDispatchIdempotencyKey({
+    logDispatchDev('[DISPATCH_PERMISSION] action_blocked', {
       expeditionId: activeExpedition.id,
-      entityType: 'timeline_event',
-      actionType: 'permission_denied_attempt',
-      actorMemberId: currentDispatchMemberId,
-      message: reason,
-      timeBucket: occurredAt.slice(0, 16),
+      reason,
     });
-    const deniedEvent: DispatchTimelineEvent = {
-      id: createDispatchEntityId('timeline_event', idempotencyKey),
-      idempotencyKey,
-      version: 1,
-      type: 'log',
-      title: 'Permission denied attempt',
-      detail: 'A Dispatch action was blocked by expedition permissions.',
-      occurredAt,
-      priority: 'normal',
-      memberIds: [currentDispatchMemberId],
-      actor: currentDispatchMember?.displayName ?? 'Dispatch Operator',
-      target: 'Dispatch controls',
-      auditEvent: buildDispatchAuditEvent({
-        expeditionId: activeExpedition.id,
-        actor: {
-          memberId: currentDispatchMemberId,
-          displayName: currentDispatchMember?.displayName ?? 'Dispatch Operator',
-          role: currentDispatchMember?.role,
-        },
-        timelineEvent: {
-          id: createDispatchEntityId('timeline_event', idempotencyKey),
-          idempotencyKey,
-          version: 1,
-          type: 'log',
-          title: 'Permission denied attempt',
-          detail: 'A Dispatch action was blocked by expedition permissions.',
-          occurredAt,
-          priority: 'normal',
-          memberIds: [currentDispatchMemberId],
-        },
-      }),
-    };
-
-    if (rollout.expeditionLogIntegration) {
-      defaultDispatchAdapters.timeline.stageForExpeditionLog(deniedEvent);
-    }
-    dispatchPersistenceAdapter.appendTimelineEvent(activeExpedition.id, persistenceDefaults, deniedEvent);
-    setTimelineEvents((current) => mergeDispatchTimelineEvent(current, deniedEvent));
-  }, [activeExpedition.id, currentDispatchMember?.displayName, currentDispatchMember?.role, currentDispatchMemberId, persistenceDefaults, rollout.expeditionLogIntegration, showToast]);
+  }, [activeExpedition.id, showToast]);
 
   const openComposer = useCallback((seed?: DispatchPingComposerSeed) => {
     if (!rollout.teamPing) {
@@ -705,14 +751,14 @@ export default function DispatchCommandCenter() {
     });
     showToast(result.message);
     if (result.status === 'staged') {
-      router.push('/navigate' as any);
+      pushSingleFlight('/navigate');
     }
   }, [
     activeExpedition.id,
     currentDispatchMemberId,
     permissionSnapshot,
     rollout.mapContextIntegration,
-    router,
+    pushSingleFlight,
     showToast,
   ]);
 
@@ -735,57 +781,59 @@ export default function DispatchCommandCenter() {
 
   const appendTimelineEvent = useCallback((event: DispatchTimelineEvent | Omit<DispatchTimelineEvent, 'id' | 'occurredAt'>) => {
     const now = new Date().toISOString();
-    setTimelineEvents((current) => {
-      const existingEvent = 'id' in event && 'occurredAt' in event ? event : null;
-      const idempotencyKey = existingEvent?.idempotencyKey ?? createDispatchIdempotencyKey({
-        expeditionId: activeExpedition.id,
-        entityType: 'timeline_event',
-        actionType: event.type,
-        actorMemberId: currentDispatchMemberId,
-        targetMemberIds: event.memberIds,
-        linkedContextId: event.linkedContext?.id,
-        sourceEntityId: event.queueItemId ?? event.pingId,
-        message: `${event.title}:${event.detail}`,
-        priority: event.priority,
-        timeBucket: event.queueItemId ?? event.pingId ? undefined : now.slice(0, 16),
-      });
-      const nextEvent: DispatchTimelineEvent = 'id' in event && 'occurredAt' in event
-        ? {
-          ...event,
-          idempotencyKey,
-          version: event.version ?? 1,
-          deliveryState: event.deliveryState ?? (syncSnapshot.isDeliverable ? event.deliveryState : 'queued'),
-        }
-        : {
-          ...event,
-          id: createDispatchEntityId('timeline_event', idempotencyKey),
-          idempotencyKey,
-          version: 1,
-          occurredAt: now,
-          deliveryState: event.deliveryState ?? (syncSnapshot.isDeliverable ? undefined : 'queued'),
-        };
-      const auditEvent = nextEvent.auditEvent ?? buildDispatchAuditEvent({
-        expeditionId: activeExpedition.id,
-        actor: {
-          memberId: currentDispatchMemberId,
-          displayName: currentDispatchMember?.displayName ?? 'Dispatch Operator',
-          role: currentDispatchMember?.role,
-        },
-        timelineEvent: nextEvent,
-      });
-      const auditedEvent: DispatchTimelineEvent = {
-        ...nextEvent,
-        auditEvent,
-      };
-
-      if (rollout.expeditionLogIntegration) {
-        defaultDispatchAdapters.timeline.stageForExpeditionLog(auditedEvent);
-      }
-      dispatchPersistenceAdapter.appendTimelineEvent(activeExpedition.id, persistenceDefaults, auditedEvent);
-      publishRealtimeEventLater({ type: 'timeline_event_added', timelineEvent: auditedEvent });
-      return mergeDispatchTimelineEvent(current, auditedEvent);
+    const existingEvent = 'id' in event && 'occurredAt' in event ? event : null;
+    const idempotencyKey = existingEvent?.idempotencyKey ?? createDispatchIdempotencyKey({
+      expeditionId: activeExpedition.id,
+      entityType: 'timeline_event',
+      actionType: event.type,
+      actorMemberId: currentDispatchMemberId,
+      targetMemberIds: event.memberIds,
+      linkedContextId: event.linkedContext?.id,
+      sourceEntityId: event.queueItemId ?? event.pingId,
+      message: `${event.title}:${event.detail}`,
+      priority: event.priority,
+      timeBucket: event.queueItemId ?? event.pingId ? undefined : now.slice(0, 16),
     });
-  }, [activeExpedition.id, currentDispatchMember?.displayName, currentDispatchMember?.role, currentDispatchMemberId, persistenceDefaults, publishRealtimeEventLater, rollout.expeditionLogIntegration, syncSnapshot.isDeliverable]);
+    const nextEvent: DispatchTimelineEvent = 'id' in event && 'occurredAt' in event
+      ? {
+        ...event,
+        idempotencyKey,
+        version: event.version ?? 1,
+        deliveryState: event.deliveryState ?? runtimeDeliveryState,
+      }
+      : {
+        ...event,
+        id: createDispatchEntityId('timeline_event', idempotencyKey),
+        idempotencyKey,
+        version: 1,
+        occurredAt: now,
+        deliveryState: event.deliveryState ?? runtimeDeliveryState,
+      };
+    const auditEvent = nextEvent.auditEvent ?? buildDispatchAuditEvent({
+      expeditionId: activeExpedition.id,
+      actor: {
+        memberId: currentDispatchMemberId,
+        displayName: currentDispatchMember?.displayName ?? 'Dispatch Operator',
+        role: currentDispatchMember?.role,
+      },
+      timelineEvent: nextEvent,
+    });
+    const auditedEvent: DispatchTimelineEvent = {
+      ...nextEvent,
+      auditEvent,
+    };
+
+    if (rollout.expeditionLogIntegration) {
+      defaultDispatchAdapters.timeline.stageForExpeditionLog(auditedEvent);
+    }
+    dispatchPersistenceAdapter.appendTimelineEvent(activeExpedition.id, persistenceDefaults, auditedEvent);
+    publishRealtimeEventLater({ type: 'timeline_event_added', timelineEvent: auditedEvent });
+    setTimelineEvents((current) => {
+      const merged = mergeDispatchTimelineEvent(current, auditedEvent);
+      timelineEventsRef.current = merged;
+      return merged;
+    });
+  }, [activeExpedition.id, currentDispatchMember?.displayName, currentDispatchMember?.role, currentDispatchMemberId, persistenceDefaults, publishRealtimeEventLater, rollout.expeditionLogIntegration, runtimeDeliveryState]);
 
   const handleComposerSubmit = useCallback(
     (payload: DispatchPingComposerSubmit) => {
@@ -811,7 +859,7 @@ export default function DispatchCommandCenter() {
         showToast(DISPATCH_EMERGENCY_SAFETY_COPY);
       }
 
-      const deliveryState: DispatchDeliveryState = defaultDispatchAdapters.pings.getInitialDeliveryStatus(syncSnapshot);
+      const deliveryState = runtimeDeliveryState;
       const now = new Date().toISOString();
       const targetMemberIds = resolveRecipientMemberIds(payload, teamMembers);
       if (targetMemberIds.length === 0) {
@@ -861,6 +909,7 @@ export default function DispatchCommandCenter() {
         type: payload.pingType,
         priority: payload.priority,
         status: deliveryState,
+        operationalState: payload.requireAcknowledgment ? 'awaiting_acknowledgment' : 'open',
         message: payload.message,
         createdAt: now,
         updatedAt: now,
@@ -874,7 +923,7 @@ export default function DispatchCommandCenter() {
         checkInType,
         checkInSchedule: isCheckInPing && checkInSchedule !== 'off' ? checkInSchedule : undefined,
         checkInResponses: isCheckInPing ? [] : undefined,
-        reliabilityState: syncSnapshot.state,
+        reliabilityState: runtimeReliabilityState,
       };
 
       const queueIdempotencyKey = createDispatchIdempotencyKey({
@@ -907,7 +956,7 @@ export default function DispatchCommandCenter() {
         dueAt: getResponseDueAt(now, payload.escalationTimer),
         tags: ['team-ping', payload.pingType],
         sourcePingId: pingId,
-        reliabilityState: syncSnapshot.state,
+        reliabilityState: runtimeReliabilityState,
       };
       setQueueItems((current) => mergeDispatchQueueItem(current, nextQueueItem));
 
@@ -950,7 +999,7 @@ export default function DispatchCommandCenter() {
       setComposerVisible(false);
       setComposerSeed(null);
     },
-    [activeExpedition.id, appendTimelineEvent, checkInSchedule, currentDispatchMemberId, fallbackContext, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEventLater, reportDenied, rollout.emergencyPing, rollout.mapContextIntegration, rollout.teamPing, showToast, staleCheckInTargets, syncSnapshot, teamMembers],
+    [activeExpedition.id, appendTimelineEvent, checkInSchedule, currentDispatchMemberId, fallbackContext, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEventLater, reportDenied, rollout.emergencyPing, rollout.mapContextIntegration, rollout.teamPing, runtimeDeliveryState, runtimeReliabilityState, showToast, staleCheckInTargets, teamMembers],
   );
 
   const handleAssistRequestSubmit = useCallback(
@@ -977,7 +1026,7 @@ export default function DispatchCommandCenter() {
         showToast(permission.safetyCopy);
       }
 
-      const deliveryState: DispatchDeliveryState = defaultDispatchAdapters.pings.getInitialDeliveryStatus(syncSnapshot);
+      const deliveryState = runtimeDeliveryState;
       const now = new Date().toISOString();
       const targetMemberIds = resolveRecipientMemberIdsFromSelection(payload, teamMembers);
       if (targetMemberIds.length === 0) {
@@ -1030,6 +1079,7 @@ export default function DispatchCommandCenter() {
         priority: payload.priority,
       });
       const queueItemId = createDispatchEntityId('queue_item', queueIdempotencyKey);
+      const assistRequestId = createDispatchEntityId('assist_request', assistIdempotencyKey);
       const escalationState = getAssistEscalationState(
         payload.priority,
         payload.escalationTimer,
@@ -1046,6 +1096,7 @@ export default function DispatchCommandCenter() {
         type: payload.priority === 'critical' ? 'emergency' : 'assist',
         priority: payload.priority,
         status: deliveryState,
+        operationalState: payload.requireAcknowledgment ? 'awaiting_acknowledgment' : 'open',
         message,
         createdAt: now,
         updatedAt: now,
@@ -1055,7 +1106,7 @@ export default function DispatchCommandCenter() {
         escalationState,
         responseDueAt: dueAt,
         acknowledgedByMemberIds: [],
-        reliabilityState: syncSnapshot.state,
+        reliabilityState: runtimeReliabilityState,
       };
 
       const nextQueueItem: DispatchQueueItem = {
@@ -1076,15 +1127,38 @@ export default function DispatchCommandCenter() {
         dueAt,
         tags: ['assist', payload.assistType, payload.priority === 'critical' ? 'emergency' : 'support'],
         sourcePingId: pingId,
-        reliabilityState: syncSnapshot.state,
+        reliabilityState: runtimeReliabilityState,
+      };
+
+      const nextAssistRequest: DispatchAssistRequest = {
+        id: assistRequestId,
+        idempotencyKey: assistIdempotencyKey,
+        version: 1,
+        assistType: payload.assistType,
+        priority: payload.priority,
+        status: payload.status,
+        createdAt: now,
+        updatedAt: now,
+        createdByMemberId: currentDispatchMemberId,
+        targetMemberIds,
+        linkedContext,
+        message: payload.message,
+        requireAcknowledgment: payload.requireAcknowledgment,
+        escalationState,
+        sourcePingId: pingId,
+        queueItemId,
+        deliveryState,
       };
 
       setPings((current) => mergeDispatchPing(current, nextPing));
       setQueueItems((current) => mergeDispatchQueueItem(current, nextQueueItem));
+      assistRequestsRef.current = mergeDispatchAssistRequest(assistRequestsRef.current, nextAssistRequest);
       dispatchPersistenceAdapter.upsertPing(activeExpedition.id, persistenceDefaults, nextPing);
       dispatchPersistenceAdapter.upsertQueueItem(activeExpedition.id, persistenceDefaults, nextQueueItem);
+      dispatchPersistenceAdapter.upsertAssistRequest(activeExpedition.id, persistenceDefaults, nextAssistRequest);
       publishRealtimeEventLater({ type: 'ping_upsert', ping: nextPing });
       publishRealtimeEventLater({ type: 'queue_item_upsert', queueItem: nextQueueItem });
+      publishRealtimeEventLater({ type: 'assist_request_upsert', assistRequest: nextAssistRequest });
       appendTimelineEvent({
         type: 'assist_request_created',
         title: `${assistLabel} assist request created`,
@@ -1101,19 +1175,30 @@ export default function DispatchCommandCenter() {
       });
       setAssistComposerVisible(false);
     },
-    [activeExpedition.id, appendTimelineEvent, currentDispatchMemberId, fallbackContext, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEventLater, reportDenied, rollout.assistRequest, rollout.emergencyPing, rollout.mapContextIntegration, showToast, syncSnapshot, teamMembers],
+    [activeExpedition.id, appendTimelineEvent, currentDispatchMemberId, fallbackContext, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEventLater, reportDenied, rollout.assistRequest, rollout.emergencyPing, rollout.mapContextIntegration, runtimeDeliveryState, runtimeReliabilityState, showToast, teamMembers],
   );
 
   const updateQueueItem = useCallback((itemId: string, updates: Partial<DispatchQueueItem>) => {
     const updatedAt = new Date().toISOString();
     const existingItem = queueItems.find((item) => item.id === itemId);
+    if (existingItem && updates.status) {
+      const transition = transitionDispatchQueueItemStatus(existingItem.status, updates.status);
+      if (!transition.ok) {
+        showToast(transition.reason);
+        return;
+      }
+    }
     const nextItem = existingItem
       ? {
         ...existingItem,
         ...updates,
         version: (updates.version ?? existingItem.version ?? 1) + 1,
-        deliveryState: updates.deliveryState ?? (syncSnapshot.isDeliverable ? existingItem.deliveryState : 'queued'),
-        reliabilityState: updates.reliabilityState ?? (syncSnapshot.isDeliverable ? existingItem.reliabilityState : 'queued'),
+        deliveryState: updates.deliveryState ?? (
+          runtimeDeliveryState === 'local' ? 'local' : existingItem.deliveryState ?? runtimeDeliveryState
+        ),
+        reliabilityState: updates.reliabilityState ?? (
+          runtimeReliabilityState === 'local' ? 'local' : existingItem.reliabilityState ?? runtimeReliabilityState
+        ),
         updatedAt,
       }
       : null;
@@ -1123,7 +1208,7 @@ export default function DispatchCommandCenter() {
       dispatchPersistenceAdapter.upsertQueueItem(activeExpedition.id, persistenceDefaults, nextItem);
       publishRealtimeEventLater({ type: 'queue_item_upsert', queueItem: nextItem });
     }
-  }, [activeExpedition.id, persistenceDefaults, publishRealtimeEventLater, queueItems, syncSnapshot.isDeliverable]);
+  }, [activeExpedition.id, persistenceDefaults, publishRealtimeEventLater, queueItems, runtimeDeliveryState, runtimeReliabilityState, showToast]);
 
   const handleCheckInResponse = useCallback((ping: DispatchPing, responseStatus: DispatchCheckInResponseStatus) => {
     const permission = permissionSnapshot.can('respond_check_in');
@@ -1143,12 +1228,18 @@ export default function DispatchCommandCenter() {
     }
 
     const respondedAt = new Date().toISOString();
-    const nextPing = applyCheckInResponse({
+    const updatedPing = applyCheckInResponse({
       ping,
       memberId: currentDispatchMemberId,
       responseStatus,
       respondedAt,
     });
+    const nextPing: DispatchPing = {
+      ...updatedPing,
+      operationalState: shouldEscalateCheckInResponse(responseStatus)
+        ? 'escalated'
+        : 'acknowledged',
+    };
     const linkedQueueItem = queueItems.find((item) => item.sourcePingId === ping.id);
     const nextQueueItem = linkedQueueItem
       ? {
@@ -1168,15 +1259,43 @@ export default function DispatchCommandCenter() {
       lastSeenAt: respondedAt,
       syncState: shouldEscalateCheckInResponse(responseStatus) ? 'escalated' as const : 'acknowledged' as const,
     };
+    const acknowledgmentStatus: DispatchAcknowledgment['status'] = responseStatus === 'unavailable'
+      ? 'declined'
+      : responseStatus === 'need_assistance'
+        ? 'accepted'
+        : 'acknowledged';
+    const acknowledgmentIdempotencyKey = createDispatchIdempotencyKey({
+      expeditionId: activeExpedition.id,
+      entityType: 'acknowledgment',
+      actionType: `check-in:${acknowledgmentStatus}`,
+      actorMemberId: currentDispatchMemberId,
+      sourceEntityId: ping.idempotencyKey ?? ping.id,
+    });
+    const acknowledgment: DispatchAcknowledgment = {
+      id: createDispatchEntityId('acknowledgment', acknowledgmentIdempotencyKey),
+      idempotencyKey: acknowledgmentIdempotencyKey,
+      version: 1,
+      pingId: ping.id,
+      queueItemId: linkedQueueItem?.id,
+      memberId: currentDispatchMemberId,
+      status: acknowledgmentStatus,
+      acknowledgedAt: respondedAt,
+      updatedAt: respondedAt,
+      message: getCheckInResponseLabel(responseStatus),
+      deliveryState: runtimeDeliveryState,
+    };
 
     if (shouldEscalateCheckInResponse(responseStatus)) {
       showToast('Check-in response escalated inside ECS. ECS team coordination only.');
     }
 
     setPings((current) => mergeDispatchPing(current, nextPing));
+    acknowledgmentsRef.current = mergeDispatchAcknowledgment(acknowledgmentsRef.current, acknowledgment);
     setTeamMembers((current) => upsertById(current, nextMember));
     dispatchPersistenceAdapter.upsertPing(activeExpedition.id, persistenceDefaults, nextPing);
+    dispatchPersistenceAdapter.upsertAcknowledgment(activeExpedition.id, persistenceDefaults, acknowledgment);
     publishRealtimeEventLater({ type: 'ping_upsert', ping: nextPing });
+    publishRealtimeEventLater({ type: 'acknowledgment_upsert', acknowledgment });
     publishRealtimeEventLater({ type: 'team_member_upsert', teamMember: nextMember });
 
     if (nextQueueItem) {
@@ -1203,6 +1322,7 @@ export default function DispatchCommandCenter() {
     queueItems,
     reportDenied,
     showToast,
+    runtimeDeliveryState,
     teamMembers,
   ]);
 
@@ -1233,6 +1353,7 @@ export default function DispatchCommandCenter() {
       assignedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       notes: 'Assignment staged from Dispatch Queue.',
+      deliveryState: runtimeDeliveryState,
     };
     updateQueueItem(item.id, {
       status: 'assigned',
@@ -1254,7 +1375,7 @@ export default function DispatchCommandCenter() {
       deliveryState: item.deliveryState,
       escalationState: item.escalationState,
     });
-  }, [activeExpedition.id, appendTimelineEvent, currentDispatchMemberId, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEventLater, reportDenied, updateQueueItem]);
+  }, [activeExpedition.id, appendTimelineEvent, currentDispatchMemberId, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEventLater, reportDenied, runtimeDeliveryState, updateQueueItem]);
 
   const handleMarkInProgress = useCallback((item: DispatchQueueItem) => {
     const permission = canMutateDispatchQueueItem(item, 'reassign_queue_item', permissionSnapshot);
@@ -1376,11 +1497,11 @@ export default function DispatchCommandCenter() {
       return;
     }
 
-    const retryingPing = prepareDispatchPingRetry(ping, { isDeliverable: syncSnapshot.isDeliverable });
+    const retryingPing = prepareDispatchPingRetry(ping, { isDeliverable: runtimeDeliveryState === 'sent' });
     setPings((current) => mergeDispatchPing(current, retryingPing));
     dispatchPersistenceAdapter.upsertPing(activeExpedition.id, persistenceDefaults, retryingPing);
 
-    if (!syncSnapshot.isDeliverable) {
+    if (runtimeDeliveryState !== 'sent') {
       showToast('Dispatch ping queued for delivery.');
       return;
     }
@@ -1404,7 +1525,7 @@ export default function DispatchCommandCenter() {
         escalationState: ping.escalationState,
       });
     });
-  }, [activeExpedition.id, appendTimelineEvent, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEvent, publishRealtimeEventLater, reportDenied, showToast, syncSnapshot.isDeliverable]);
+  }, [activeExpedition.id, appendTimelineEvent, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEvent, publishRealtimeEventLater, reportDenied, runtimeDeliveryState, showToast]);
 
   const handleCancelPingDelivery = useCallback((ping: DispatchPing) => {
     const permission = permissionSnapshot.can('send_individual_ping');
@@ -1446,11 +1567,11 @@ export default function DispatchCommandCenter() {
       return;
     }
 
-    const retryingItem = prepareDispatchQueueItemRetry(item, { isDeliverable: syncSnapshot.isDeliverable });
+    const retryingItem = prepareDispatchQueueItemRetry(item, { isDeliverable: runtimeDeliveryState === 'sent' });
     setQueueItems((current) => mergeDispatchQueueItem(current, retryingItem));
     dispatchPersistenceAdapter.upsertQueueItem(activeExpedition.id, persistenceDefaults, retryingItem);
 
-    if (!syncSnapshot.isDeliverable) {
+    if (runtimeDeliveryState !== 'sent') {
       showToast('Dispatch queue update queued for delivery.');
       return;
     }
@@ -1475,7 +1596,7 @@ export default function DispatchCommandCenter() {
         escalationState: item.escalationState,
       });
     });
-  }, [activeExpedition.id, appendTimelineEvent, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEvent, publishRealtimeEventLater, reportDenied, showToast, syncSnapshot.isDeliverable]);
+  }, [activeExpedition.id, appendTimelineEvent, formatTarget, permissionSnapshot, persistenceDefaults, publishRealtimeEvent, publishRealtimeEventLater, reportDenied, runtimeDeliveryState, showToast]);
 
   const handleCancelQueueItemDelivery = useCallback((item: DispatchQueueItem) => {
     const permission = canMutateDispatchQueueItem(item, 'cancel_queue_item', permissionSnapshot);
@@ -1518,11 +1639,11 @@ export default function DispatchCommandCenter() {
       return;
     }
 
-    const retryingEvent = prepareDispatchTimelineEventRetry(event, { isDeliverable: syncSnapshot.isDeliverable });
+    const retryingEvent = prepareDispatchTimelineEventRetry(event, { isDeliverable: runtimeDeliveryState === 'sent' });
     setTimelineEvents((current) => mergeDispatchTimelineEvent(current, retryingEvent));
     dispatchPersistenceAdapter.appendTimelineEvent(activeExpedition.id, persistenceDefaults, retryingEvent);
 
-    if (!syncSnapshot.isDeliverable) {
+    if (runtimeDeliveryState !== 'sent') {
       showToast('Dispatch timeline event queued for delivery.');
       return;
     }
@@ -1533,7 +1654,7 @@ export default function DispatchCommandCenter() {
       dispatchPersistenceAdapter.appendTimelineEvent(activeExpedition.id, persistenceDefaults, resultEvent);
       publishRealtimeEventLater({ type: 'timeline_event_added', timelineEvent: resultEvent });
     });
-  }, [activeExpedition.id, permissionSnapshot, persistenceDefaults, publishRealtimeEvent, publishRealtimeEventLater, reportDenied, showToast, syncSnapshot.isDeliverable]);
+  }, [activeExpedition.id, permissionSnapshot, persistenceDefaults, publishRealtimeEvent, publishRealtimeEventLater, reportDenied, runtimeDeliveryState, showToast]);
 
   if (!rollout.dispatchTabVisibility) {
     return (
@@ -1729,7 +1850,7 @@ function DispatchHeader({
   syncSnapshot,
   teamCount,
 }: {
-  connectionLabel: 'Live' | 'Offline' | 'Queued';
+  connectionLabel: 'Live' | 'Local' | 'Offline' | 'Queued';
   syncSnapshot: DispatchSyncSnapshot;
   teamCount: number;
 }) {
@@ -1738,6 +1859,8 @@ function DispatchHeader({
       ? TACTICAL.danger
       : connectionLabel === 'Queued'
         ? TACTICAL.amber
+        : connectionLabel === 'Local'
+          ? TACTICAL.textMuted
         : '#7F9D7A';
 
   return (
@@ -1751,7 +1874,9 @@ function DispatchHeader({
         </View>
         <View style={[styles.connectionPill, { borderColor: `${connectionTone}66` }]}>
           <View style={[styles.connectionDot, { backgroundColor: connectionTone }]} />
-          <Text style={[styles.connectionText, { color: connectionTone }]}>{connectionLabel}</Text>
+          <Text style={[styles.connectionText, { color: connectionTone }]}>
+            {connectionLabel === 'Local' ? 'Local only' : connectionLabel}
+          </Text>
         </View>
       </View>
 
@@ -1767,7 +1892,9 @@ function DispatchHeader({
           <Text style={styles.metaValueSmall}>{syncSnapshot.label}</Text>
         </View>
         <Text style={styles.headerCopy}>
-          {syncSnapshot.detail}
+          {connectionLabel === 'Local'
+            ? 'Solo/local Dispatch is stored on this device and is not transmitted.'
+            : syncSnapshot.detail}
         </Text>
       </View>
     </View>

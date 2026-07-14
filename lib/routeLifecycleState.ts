@@ -223,3 +223,211 @@ export function normalizeRouteLifecycle(
     shouldRenderGuidance: false,
   });
 }
+
+export type ECSRouteOperationPhase =
+  | 'idle'
+  | 'importing'
+  | 'previewing'
+  | 'editing'
+  | 'staged'
+  | 'active'
+  | 'paused'
+  | 'completed'
+  | 'failed';
+
+export type ECSRouteOperationEvent =
+  | 'begin_import'
+  | 'open_preview'
+  | 'begin_edit'
+  | 'stage'
+  | 'start'
+  | 'pause'
+  | 'resume'
+  | 'complete'
+  | 'fail'
+  | 'cancel'
+  | 'reset';
+
+export interface ECSRouteOperationState {
+  phase: ECSRouteOperationPhase;
+  routeId: string | null;
+  source: ECSRouteLifecycleSource;
+  revision: number;
+  changedAt: number;
+  error: string | null;
+}
+
+export interface ECSRouteOperationTransition {
+  state: ECSRouteOperationState;
+  accepted: boolean;
+  reason: 'transitioned' | 'idempotent' | 'invalid_transition';
+}
+
+export interface ECSRouteOperationAdapterInput {
+  lifecycle: ECSRouteLifecycleState;
+  importing?: boolean;
+  importError?: string | null;
+  hasStagedRoute?: boolean;
+  routeId?: string | null;
+  now?: number;
+}
+
+const ROUTE_OPERATION_TRANSITIONS: Readonly<
+  Record<ECSRouteOperationPhase, Readonly<Partial<Record<ECSRouteOperationEvent, ECSRouteOperationPhase>>>>
+> = {
+  idle: {
+    begin_import: 'importing',
+    open_preview: 'previewing',
+    begin_edit: 'editing',
+    stage: 'staged',
+    start: 'active',
+    fail: 'failed',
+    cancel: 'idle',
+    reset: 'idle',
+  },
+  importing: {
+    begin_import: 'importing',
+    open_preview: 'previewing',
+    stage: 'staged',
+    fail: 'failed',
+    cancel: 'idle',
+    reset: 'idle',
+  },
+  previewing: {
+    open_preview: 'previewing',
+    begin_edit: 'editing',
+    stage: 'staged',
+    start: 'active',
+    fail: 'failed',
+    cancel: 'idle',
+    reset: 'idle',
+  },
+  editing: {
+    begin_edit: 'editing',
+    open_preview: 'previewing',
+    stage: 'staged',
+    start: 'active',
+    fail: 'failed',
+    cancel: 'idle',
+    reset: 'idle',
+  },
+  staged: {
+    open_preview: 'previewing',
+    begin_edit: 'editing',
+    start: 'active',
+    stage: 'staged',
+    fail: 'failed',
+    cancel: 'idle',
+    reset: 'idle',
+  },
+  active: {
+    start: 'active',
+    resume: 'active',
+    pause: 'paused',
+    complete: 'completed',
+    fail: 'failed',
+    cancel: 'idle',
+    reset: 'idle',
+  },
+  paused: {
+    pause: 'paused',
+    resume: 'active',
+    complete: 'completed',
+    fail: 'failed',
+    cancel: 'idle',
+    reset: 'idle',
+  },
+  completed: {
+    begin_import: 'importing',
+    open_preview: 'previewing',
+    begin_edit: 'editing',
+    complete: 'completed',
+    reset: 'idle',
+  },
+  failed: {
+    begin_import: 'importing',
+    open_preview: 'previewing',
+    begin_edit: 'editing',
+    fail: 'failed',
+    cancel: 'idle',
+    reset: 'idle',
+  },
+};
+
+export function createRouteOperationState(
+  overrides: Partial<ECSRouteOperationState> = {},
+): ECSRouteOperationState {
+  return {
+    phase: overrides.phase ?? 'idle',
+    routeId: overrides.routeId ?? null,
+    source: overrides.source ?? 'none',
+    revision: Math.max(0, Math.trunc(overrides.revision ?? 0)),
+    changedAt: overrides.changedAt ?? 0,
+    error: overrides.error ?? null,
+  };
+}
+
+export function transitionRouteOperation(
+  current: ECSRouteOperationState,
+  event: ECSRouteOperationEvent,
+  options: {
+    routeId?: string | null;
+    source?: ECSRouteLifecycleSource;
+    error?: string | null;
+    now?: number;
+  } = {},
+): ECSRouteOperationTransition {
+  const nextPhase = ROUTE_OPERATION_TRANSITIONS[current.phase][event];
+  if (!nextPhase) {
+    return { state: current, accepted: false, reason: 'invalid_transition' };
+  }
+
+  const nextRouteId = options.routeId === undefined ? current.routeId : options.routeId;
+  const nextSource = options.source ?? current.source;
+  const nextError = nextPhase === 'failed' ? options.error ?? current.error ?? 'Route operation failed' : null;
+  if (
+    nextPhase === current.phase &&
+    nextRouteId === current.routeId &&
+    nextSource === current.source &&
+    nextError === current.error
+  ) {
+    return { state: current, accepted: true, reason: 'idempotent' };
+  }
+
+  return {
+    accepted: true,
+    reason: 'transitioned',
+    state: {
+      phase: nextPhase,
+      routeId: nextRouteId,
+      source: nextSource,
+      revision: current.revision + 1,
+      changedAt: options.now ?? Date.now(),
+      error: nextError,
+    },
+  };
+}
+
+export function deriveRouteOperationState(
+  input: ECSRouteOperationAdapterInput,
+): ECSRouteOperationState {
+  let phase: ECSRouteOperationPhase;
+  if (input.importing) phase = 'importing';
+  else if (input.importError) phase = 'failed';
+  else if (input.lifecycle.phase === 'building') phase = 'editing';
+  else if (input.lifecycle.phase === 'preview') phase = 'previewing';
+  else if (input.lifecycle.phase === 'ready' || input.hasStagedRoute) phase = 'staged';
+  else if (input.lifecycle.phase === 'navigating') phase = 'active';
+  else if (input.lifecycle.phase === 'paused') phase = 'paused';
+  else if (input.lifecycle.phase === 'completed') phase = 'completed';
+  else if (input.lifecycle.phase === 'failed') phase = 'failed';
+  else phase = 'idle';
+
+  return createRouteOperationState({
+    phase,
+    routeId: input.routeId ?? null,
+    source: input.lifecycle.source,
+    changedAt: input.now ?? 0,
+    error: input.importError ?? input.lifecycle.error,
+  });
+}

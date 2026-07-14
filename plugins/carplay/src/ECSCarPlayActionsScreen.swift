@@ -16,7 +16,7 @@
  *   - Incident Marker
  *   - Quick Note
  *   - Return to Start
- *   - Emergency Comms
+ *   - Emergency support reminder (non-interactive)
  *
  * Includes:
  *   - Manual mode override control (Auto / Highway / Expedition)
@@ -54,7 +54,6 @@ class ECSCarPlayActionsScreen {
     // System health
     private var hasRoute = false
     private var hasExpedition = false
-    private var hasConnectivity = true
     
     private var listTemplate: CPListTemplate?
     
@@ -96,9 +95,6 @@ class ECSCarPlayActionsScreen {
             }
             if let expedition = health["expedition"] as? [String: Any] {
                 hasExpedition = expedition["available"] as? Bool ?? false
-            }
-            if let conn = health["connectivity"] as? [String: Any] {
-                hasConnectivity = conn["available"] as? Bool ?? true
             }
         }
     }
@@ -318,12 +314,12 @@ class ECSCarPlayActionsScreen {
         }
         items.append(returnItem)
         
-        // Emergency Comms
-        let emergencyItem = CPListItem(text: "Emergency Comms", detailText: hasConnectivity ? "Send emergency signal" : "Limited connectivity")
-        emergencyItem.handler = { [weak self] _, completion in
-            self?.actionHandler?.handleAction(actionType: "emergency_comms", label: "Emergency Comms")
-            completion()
-        }
+        // ECS coordinates the team; it does not contact emergency services.
+        let emergencyItem = CPListItem(
+            text: "Emergency support",
+            detailText: "Use phone or radio. ECS does not contact emergency services."
+        )
+        emergencyItem.isEnabled = false
         items.append(emergencyItem)
         
         return items

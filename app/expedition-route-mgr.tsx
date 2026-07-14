@@ -5,7 +5,8 @@ import {
   Platform, ActivityIndicator, TextInput, Modal,
 } from 'react-native';
 
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import { useFocusEffect } from '@react-navigation/native';
 
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
@@ -58,7 +59,7 @@ export default function ExpeditionRouteMgrScreen() {
   const mountedRef = useRef(true);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
-  const router = useRouter();
+  const { back: goBack } = useECSNavigation();
   const { user, isOnline } = useApp();
   const params = useLocalSearchParams<{ id?: string }>();
   const expeditionId = params.id || '';
@@ -185,7 +186,7 @@ export default function ExpeditionRouteMgrScreen() {
       <View style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
+          <TouchableOpacity onPress={() => goBack()} style={styles.backBtn} activeOpacity={0.7}>
             <Ionicons name="arrow-back" size={20} color={TACTICAL.text} />
           </TouchableOpacity>
           <View style={{ flex: 1 }}>

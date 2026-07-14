@@ -74,12 +74,47 @@ function aiAssistSource(guardrails = true) {
     : "const AI_RULES = ['Be helpful.'];\n";
 }
 
+function centralPolicyBoundarySource() {
+  return [
+    'resolveECSFeatureVisibility();',
+    "const reason = 'rollout_context_missing';",
+    "const prohibited = 'change_deterministic_status';",
+    'function redactECSAIContext() {}',
+    'function inspectECSAIProviderOutput() {}',
+  ].join('\n');
+}
+
+function requestCoordinatorSource() {
+  return [
+    'const inFlight = new Map();',
+    'const controller = new AbortController();',
+    'const DEFAULT_ECS_AI_REQUEST_TIMEOUT_MS = 8000;',
+    'const DEFAULT_ECS_AI_MAX_RETRIES = 1;',
+    'const cacheTtlMs = 300000;',
+    'const suppressionReasons = [];',
+  ].join('\n');
+}
+
+function truthfulnessTestSource() {
+  return [
+    'hallucinated coordinate',
+    'hallucinated weather',
+    'attempted status override',
+    'prompt injection',
+    'timeout',
+    'request_deduplication',
+  ].join('\n');
+}
+
 function writeFixtureRepo(root, options = {}) {
   writeFile(root, 'docs/campops/ai_real_output_review.md', reviewDoc(options.review));
   writeFile(root, 'docs/campops/rollout.md', 'AI assist remains disabled unless exact model/config real-output review is approved.\n');
   writeFile(root, 'docs/campops/closed_field_test_readiness.md', 'campopsAiAssistEnabled=false\n');
   writeFile(root, 'lib/campops/campOpsRecommendationConfig.ts', configSource(options.defaultEnabled, options.approvalGate !== false));
   writeFile(root, 'lib/campops/campOpsAiAssist.ts', aiAssistSource(options.guardrails !== false));
+  writeFile(root, 'lib/ai/aiPolicyBoundary.ts', centralPolicyBoundarySource());
+  writeFile(root, 'lib/ai/aiRequestCoordinator.ts', requestCoordinatorSource());
+  writeFile(root, 'scripts/test-ai-truthfulness-contract.js', truthfulnessTestSource());
 }
 
 test('AI assist disabled passes without real-output approval', () => {

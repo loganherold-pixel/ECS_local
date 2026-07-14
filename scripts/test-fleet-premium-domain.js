@@ -39,7 +39,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 const originalModuleLoad = Module._load;
 Module._load = function patchedModuleLoad(request, parent, isMain) {
   if (request === 'react-native') {
-    return { Platform: { OS: 'web' } };
+    return { Platform: { OS: 'web' }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } };
   }
   return originalModuleLoad.call(this, request, parent, isMain);
 };

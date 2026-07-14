@@ -1,6 +1,8 @@
 # ECS AI Readiness Gate
 
-Last updated: 2026-05-05
+Last updated: 2026-07-13
+
+The canonical provider-execution and truthfulness requirements are defined in `docs/ai-truthfulness-contract.md`. The `ai_assist` rollout remains internal, admin-only, default-off, and fail-closed without privacy approval and exact real-model evidence.
 
 ## Executive Summary
 

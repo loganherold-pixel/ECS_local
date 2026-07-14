@@ -14,6 +14,20 @@
 
 import { isDeployedEdgeFunction, supabase } from './supabase';
 import { Platform } from 'react-native';
+import type { ECSFeatureVisibilityContext } from './features/featureVisibilityRegistry';
+import {
+  createECSAIInputFingerprint,
+  ECS_AI_POLICY_VERSION,
+  inspectECSAIProviderOutput,
+  resolveECSAIExecutionPolicy,
+} from './ai/aiPolicyBoundary';
+import { ecsAIRequestCoordinator } from './ai/aiRequestCoordinator';
+import {
+  evaluateLegacyDebriefAnalysisOwnership,
+  evaluateLegacyTrendSynthesisOwnership,
+  isPolicyValidatedDebriefTrace,
+  stripUnvalidatedAARAI,
+} from './ai/debriefAIContract';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -98,7 +112,22 @@ export interface AIAnalysis {
   model: string;
   event_count: number;
   has_debrief: boolean;
+  ecs_trace?: ECSAIStoreTrace;
 }
+
+export type ECSAIStoreTrace = {
+  policyVersion: typeof ECS_AI_POLICY_VERSION;
+  featureId: 'debrief_synthesis';
+  inputFingerprint: string;
+  deterministicSource: 'debrief_aar' | 'cross_expedition_trends';
+};
+
+export type ECSAIStoreExecutionOptions = {
+  visibilityContext?: ECSFeatureVisibilityContext | null;
+  signal?: AbortSignal | null;
+  timeoutMs?: number;
+  maxRetries?: number;
+};
 
 // ── AAR Report ───────────────────────────────────────────────
 
@@ -149,6 +178,46 @@ function saveCache<T>(key: string, data: Record<string, T>): void {
       localStorage.setItem(key, JSON.stringify(data));
     }
   } catch {}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasBoundedText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 2_000;
+}
+
+function hasBoundedObjectArray(value: unknown, requiredKeys: string[]): boolean {
+  return Array.isArray(value) && value.length <= 50 && value.every(item => {
+    if (!isRecord(item)) return false;
+    return requiredKeys.every(key => hasBoundedText(item[key]));
+  });
+}
+
+function validateAIAnalysis(value: unknown): value is AIAnalysis {
+  if (!isRecord(value)) return false;
+  return (
+    hasBoundedObjectArray(value.pattern_analysis, ['title', 'detail', 'severity']) &&
+    hasBoundedObjectArray(value.risk_trends, ['title', 'detail', 'trend']) &&
+    hasBoundedObjectArray(value.resource_optimization, ['title', 'detail']) &&
+    hasBoundedObjectArray(value.route_improvements, ['title', 'detail']) &&
+    Array.isArray(value.critical_insights) &&
+    value.critical_insights.length <= 50 &&
+    value.critical_insights.every(hasBoundedText) &&
+    typeof value.overall_risk_score === 'number' && Number.isFinite(value.overall_risk_score) &&
+    hasBoundedText(value.expedition_grade) &&
+    hasBoundedText(value.summary) &&
+    hasBoundedText(value.generated_at) &&
+    hasBoundedText(value.model) &&
+    typeof value.event_count === 'number' && Number.isFinite(value.event_count) &&
+    typeof value.has_debrief === 'boolean'
+  );
+}
+
+function isPolicyValidatedAIAnalysis(value: unknown): value is AIAnalysis {
+  if (!validateAIAnalysis(value)) return false;
+  return isPolicyValidatedDebriefTrace(value.ecs_trace, 'debrief_aar');
 }
 
 // ── Store ────────────────────────────────────────────────────
@@ -258,16 +327,17 @@ class DebriefStore {
 
   getAAR(expeditionId: string): AARReport | null {
     const aar = this.aars[expeditionId] || null;
-    // Merge cached AI analysis if available
-    if (aar && !aar.ai_analysis && this.aiAnalyses[expeditionId]) {
-      aar.ai_analysis = this.aiAnalyses[expeditionId];
+    if (aar) {
+      aar.ai_analysis = isPolicyValidatedAIAnalysis(this.aiAnalyses[expeditionId])
+        ? this.aiAnalyses[expeditionId]
+        : null;
     }
     return aar;
   }
 
   async loadAAR(expeditionId: string): Promise<AARReport | null> {
     if (!isDeployedEdgeFunction('expedition-events')) {
-      return this.aars[expeditionId] || null;
+      return this.getAAR(expeditionId);
     }
     try {
       const { data, error } = await supabase.functions.invoke('expedition-events', {
@@ -275,21 +345,15 @@ class DebriefStore {
       });
 
       if (error || !data?.aar) {
-        return this.aars[expeditionId] || null;
+        return this.getAAR(expeditionId);
       }
 
-      // If the server AAR has ai_analysis, cache it separately too
-      if (data.aar.ai_analysis) {
-        this.aiAnalyses[expeditionId] = data.aar.ai_analysis;
-        this.persistAIAnalyses();
-      }
-
-      this.aars[expeditionId] = data.aar;
+      this.aars[expeditionId] = stripUnvalidatedAARAI(data.aar) as unknown as AARReport;
       this.persistAARs();
       this.notify();
-      return data.aar;
+      return this.getAAR(expeditionId);
     } catch {
-      return this.aars[expeditionId] || null;
+      return this.getAAR(expeditionId);
     }
   }
 
@@ -367,7 +431,7 @@ class DebriefStore {
               ? JSON.parse(aarData.risk_summary) : aarData.risk_summary,
             recommendations: typeof aarData.recommendations === 'string'
               ? JSON.parse(aarData.recommendations) : (aarData.recommendations || []),
-            ai_analysis: aarData.ai_analysis || null,
+            ai_analysis: null,
             generated_at: aarData.generated_at || aarData.created_at,
             created_at: aarData.created_at,
             updated_at: aarData.updated_at,
@@ -402,34 +466,96 @@ class DebriefStore {
   // ── AI Analysis ──────────────────────────────────────────
 
   getAIAnalysis(expeditionId: string): AIAnalysis | null {
-    return this.aiAnalyses[expeditionId] || null;
+    const value = this.aiAnalyses[expeditionId];
+    return isPolicyValidatedAIAnalysis(value) ? value : null;
   }
 
   async generateAIAnalysis(
     expeditionId: string,
     onProgress?: (msg: string) => void,
     onFail?: (msg: string) => void,
+    execution: ECSAIStoreExecutionOptions = {},
   ): Promise<AIAnalysis | null> {
+    const policyDecision = resolveECSAIExecutionPolicy('debrief_synthesis', execution.visibilityContext);
+    if (!policyDecision.allowed) {
+      if (onFail) onFail(policyDecision.fallbackCopy);
+      return this.getAIAnalysis(expeditionId);
+    }
     if (!isDeployedEdgeFunction('analyze-expedition')) {
       if (onFail) onFail('ECS analysis unavailable in this backend.');
-      return this.aiAnalyses[expeditionId] || null;
+      return this.getAIAnalysis(expeditionId);
     }
     try {
       if (onProgress) onProgress('Analyzing expedition data...');
-
-      const { data, error } = await supabase.functions.invoke('analyze-expedition', {
-        body: { expedition_id: expeditionId },
+      const inputFingerprint = createECSAIInputFingerprint('debrief_synthesis', {
+        expeditionId,
+        debrief: this.debriefs[expeditionId] ?? null,
+        aar: this.aars[expeditionId]
+          ? {
+              performance_summary: this.aars[expeditionId].performance_summary,
+              risk_summary: this.aars[expeditionId].risk_summary,
+              recommendations: this.aars[expeditionId].recommendations,
+            }
+          : null,
       });
-
-      if (error) {
-        throw new Error(error?.message || 'ECS analysis request failed');
-      }
-
-      // Handle both direct analysis and fallback
-      const analysis: AIAnalysis = data?.analysis;
-
+      const trace: ECSAIStoreTrace = {
+        policyVersion: ECS_AI_POLICY_VERSION,
+        featureId: 'debrief_synthesis',
+        inputFingerprint,
+        deterministicSource: 'debrief_aar',
+      };
+      const outcome = await ecsAIRequestCoordinator.execute<AIAnalysis>({
+        featureId: 'debrief_synthesis',
+        executionDecision: policyDecision,
+        fingerprint: inputFingerprint,
+        signal: execution.signal,
+        timeoutMs: execution.timeoutMs,
+        maxRetries: execution.maxRetries,
+        invoke: async () => {
+          const { data, error } = await supabase.functions.invoke('analyze-expedition', {
+            body: { expedition_id: expeditionId },
+          });
+          if (error) throw error;
+          return {
+            output: data?.analysis ?? null,
+            usage: data?.usage ?? null,
+          };
+        },
+        validate: (value) => {
+          if (!validateAIAnalysis(value)) {
+            return { accepted: false, reasons: ['invalid_output_schema'], classification: 'invalid_output' };
+          }
+          const ownership = evaluateLegacyDebriefAnalysisOwnership(value);
+          if (!ownership.accepted) {
+            return {
+              accepted: false,
+              reasons: ownership.reasons,
+              classification: 'policy_rejected',
+            };
+          }
+          const policyIssues = inspectECSAIProviderOutput('debrief_synthesis', value, {
+            hasLiveSource: false,
+            supportsLegalClaims: false,
+            supportsWeatherClaims: false,
+          });
+          if (policyIssues.length > 0) {
+            return {
+              accepted: false,
+              reasons: policyIssues.map(item => item.code),
+              classification: 'policy_rejected',
+            };
+          }
+          return {
+            accepted: true,
+            value: { ...value, ecs_trace: trace },
+            reasons: [],
+          };
+        },
+      });
+      const analysis = outcome.value;
       if (!analysis) {
-        throw new Error(data?.error || 'No analysis returned');
+        if (onFail) onFail(`AI explanation unavailable; deterministic debrief remains available (${outcome.status}).`);
+        return this.getAIAnalysis(expeditionId);
       }
 
       // Cache locally
@@ -463,7 +589,7 @@ class DebriefStore {
   }
 
   hasAIAnalysis(expeditionId: string): boolean {
-    return !!this.aiAnalyses[expeditionId];
+    return this.getAIAnalysis(expeditionId) != null;
   }
 }
 
@@ -581,6 +707,31 @@ export interface CrossExpeditionAIInsights {
   generated_at: string;
   model: string;
   expeditions_analyzed: number;
+  ecs_trace?: ECSAIStoreTrace;
+}
+
+function validateCrossExpeditionAIInsights(value: unknown): value is CrossExpeditionAIInsights {
+  if (!isRecord(value)) return false;
+  return (
+    hasBoundedObjectArray(value.cross_patterns, ['title', 'detail', 'severity']) &&
+    hasBoundedObjectArray(value.trend_analysis, ['title', 'detail', 'direction', 'metric']) &&
+    hasBoundedObjectArray(value.operational_recommendations, ['title', 'detail', 'priority']) &&
+    hasBoundedObjectArray(value.resource_insights, ['title', 'detail']) &&
+    hasBoundedObjectArray(value.improvement_tracking, ['title', 'detail', 'status']) &&
+    typeof value.fleet_health_score === 'number' && Number.isFinite(value.fleet_health_score) &&
+    hasBoundedText(value.readiness_grade) &&
+    hasBoundedText(value.summary) &&
+    hasBoundedText(value.generated_at) &&
+    hasBoundedText(value.model) &&
+    typeof value.expeditions_analyzed === 'number' && Number.isFinite(value.expeditions_analyzed)
+  );
+}
+
+function isPolicyValidatedCrossExpeditionAIInsights(
+  value: unknown,
+): value is CrossExpeditionAIInsights {
+  if (!validateCrossExpeditionAIInsights(value)) return false;
+  return isPolicyValidatedDebriefTrace(value.ecs_trace, 'cross_expedition_trends');
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -615,7 +766,10 @@ class TrendsStore {
 
   constructor() {
     this.trends = loadSingleCache<CrossExpeditionTrends>(TRENDS_KEY);
-    this.aiInsights = loadSingleCache<CrossExpeditionAIInsights>(TRENDS_AI_KEY);
+    const cachedInsights = loadSingleCache<CrossExpeditionAIInsights>(TRENDS_AI_KEY);
+    this.aiInsights = isPolicyValidatedCrossExpeditionAIInsights(cachedInsights)
+      ? cachedInsights
+      : null;
   }
 
   subscribe(listener: Listener): () => void {
@@ -638,6 +792,7 @@ class TrendsStore {
   async loadTrends(
     includeAI: boolean = false,
     onFail?: (msg: string) => void,
+    execution: ECSAIStoreExecutionOptions = {},
   ): Promise<{ trends: CrossExpeditionTrends | null; ai_insights: CrossExpeditionAIInsights | null }> {
     if (!isDeployedEdgeFunction('cross-expedition-trends')) {
       if (onFail) onFail('Cross-expedition trends unavailable in this ECS backend.');
@@ -645,7 +800,7 @@ class TrendsStore {
     }
     try {
       const { data, error } = await supabase.functions.invoke('cross-expedition-trends', {
-        body: { action: 'aggregate', include_ai: includeAI },
+        body: { action: 'aggregate', include_ai: false },
       });
 
       if (error) {
@@ -657,12 +812,10 @@ class TrendsStore {
         saveSingleCache(TRENDS_KEY, this.trends);
       }
 
-      if (data?.ai_insights) {
-        this.aiInsights = data.ai_insights;
-        saveSingleCache(TRENDS_AI_KEY, this.aiInsights);
-      }
-
       this.notify();
+      if (includeAI) {
+        await this.generateAIInsights(onFail, execution);
+      }
       return { trends: this.trends, ai_insights: this.aiInsights };
     } catch (err: any) {
       console.warn('[TrendsStore] Load failed:', err.message);
@@ -673,28 +826,89 @@ class TrendsStore {
 
   async generateAIInsights(
     onFail?: (msg: string) => void,
+    execution: ECSAIStoreExecutionOptions = {},
   ): Promise<CrossExpeditionAIInsights | null> {
+    const policyDecision = resolveECSAIExecutionPolicy('debrief_synthesis', execution.visibilityContext);
+    if (!policyDecision.allowed) {
+      if (onFail) onFail(policyDecision.fallbackCopy);
+      return this.aiInsights;
+    }
     if (!isDeployedEdgeFunction('cross-expedition-trends')) {
       if (onFail) onFail('ECS trend analysis unavailable in this backend.');
       return this.aiInsights;
     }
     try {
-      const { data, error } = await supabase.functions.invoke('cross-expedition-trends', {
-        body: { action: 'aggregate', include_ai: true },
+      const inputFingerprint = createECSAIInputFingerprint('debrief_synthesis', {
+        deterministicSource: 'cross_expedition_trends',
+        trends: this.trends,
+      });
+      const trace: ECSAIStoreTrace = {
+        policyVersion: ECS_AI_POLICY_VERSION,
+        featureId: 'debrief_synthesis',
+        inputFingerprint,
+        deterministicSource: 'cross_expedition_trends',
+      };
+      let refreshedTrends: CrossExpeditionTrends | null = null;
+      const outcome = await ecsAIRequestCoordinator.execute<CrossExpeditionAIInsights>({
+        featureId: 'debrief_synthesis',
+        executionDecision: policyDecision,
+        fingerprint: inputFingerprint,
+        signal: execution.signal,
+        timeoutMs: execution.timeoutMs,
+        maxRetries: execution.maxRetries,
+        invoke: async () => {
+          const { data, error } = await supabase.functions.invoke('cross-expedition-trends', {
+            body: { action: 'aggregate', include_ai: true },
+          });
+          if (error) throw error;
+          refreshedTrends = data?.trends ?? null;
+          return {
+            output: data?.ai_insights ?? null,
+            usage: data?.usage ?? null,
+          };
+        },
+        validate: (value) => {
+          if (!validateCrossExpeditionAIInsights(value)) {
+            return { accepted: false, reasons: ['invalid_output_schema'], classification: 'invalid_output' };
+          }
+          const ownership = evaluateLegacyTrendSynthesisOwnership(value);
+          if (!ownership.accepted) {
+            return {
+              accepted: false,
+              reasons: ownership.reasons,
+              classification: 'policy_rejected',
+            };
+          }
+          const policyIssues = inspectECSAIProviderOutput('debrief_synthesis', value, {
+            hasLiveSource: false,
+            supportsLegalClaims: false,
+            supportsWeatherClaims: false,
+          });
+          if (policyIssues.length > 0) {
+            return {
+              accepted: false,
+              reasons: policyIssues.map(item => item.code),
+              classification: 'policy_rejected',
+            };
+          }
+          return {
+            accepted: true,
+            value: { ...value, ecs_trace: trace },
+            reasons: [],
+          };
+        },
       });
 
-      if (error) {
-        throw new Error(error?.message || 'ECS trend analysis failed');
-      }
-
-      if (data?.trends) {
-        this.trends = data.trends;
+      if (refreshedTrends) {
+        this.trends = refreshedTrends;
         saveSingleCache(TRENDS_KEY, this.trends);
       }
 
-      if (data?.ai_insights) {
-        this.aiInsights = data.ai_insights;
+      if (outcome.value) {
+        this.aiInsights = outcome.value;
         saveSingleCache(TRENDS_AI_KEY, this.aiInsights);
+      } else if (onFail) {
+        onFail(`AI trend synthesis unavailable; deterministic trends remain available (${outcome.status}).`);
       }
 
       this.notify();

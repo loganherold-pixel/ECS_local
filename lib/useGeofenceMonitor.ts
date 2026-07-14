@@ -49,6 +49,7 @@ import {
 import { vehicleSetupStore } from './vehicleSetupStore';
 import { consumablesStore } from './consumablesStore';
 import { hapticMicro } from './haptics';
+import { incrementECSPerformanceCounter } from './performance/ecsPerformanceDiagnostics';
 
 // ── Constants ──────────────────────────────────────────────
 const MILES_PER_METER = 0.000621371;
@@ -217,21 +218,41 @@ export function useGeofenceMonitor(
           // Get consumables for the expedition record
           const consumables = consumablesStore.get(activeVehicleId);
 
-          // Auto-start expedition
-          expeditionStateStore.beginExpedition({
-            activeVehicleId,
-            vehicleName: vehicleName || 'Vehicle',
-            startFuelLevel: consumables.fuel_percent_current,
-            startWaterLevel: consumables.water_gal_current,
-            latitude: homePositionRef.current.lat,
-            longitude: homePositionRef.current.lng,
+          const previousRecord = expeditionStateStore.getCurrentExpedition();
+          const { proposal } = expeditionStateStore.proposeGeofenceTransition({
+            direction: 'start',
+            vehicleId: activeVehicleId,
+            reason: 'Three consecutive accurate GPS fixes confirmed departure from the home geofence.',
           });
+          const startedRecord = proposal.status === 'pending'
+            ? expeditionStateStore.beginExpedition({
+                idempotencyKey: proposal.idempotencyKey,
+                activeVehicleId,
+                vehicleName: vehicleName || 'Vehicle',
+                startFuelLevel: consumables.fuel_percent_current,
+                startWaterLevel: consumables.water_gal_current,
+                latitude: homePositionRef.current.lat,
+                longitude: homePositionRef.current.lng,
+                transitionCause: 'geofence',
+              })
+            : previousRecord;
 
-          // Haptic feedback — light micro confirmation
-          hapticMicro();
-
-          // Notify parent
-          callbacksRef.current?.onExpeditionStarted?.();
+          const didStart =
+            previousRecord?.state !== 'active' &&
+            previousRecord?.state !== 'paused' &&
+            startedRecord?.state === 'active' &&
+            startedRecord.id !== previousRecord?.id;
+          if (didStart) {
+            expeditionStateStore.resolveGeofenceTransitionProposal(proposal.id, 'accepted');
+            incrementECSPerformanceCounter('dashboard_stable_grid', 'geofence_start_transition');
+            hapticMicro();
+            callbacksRef.current?.onExpeditionStarted?.();
+          } else {
+            if (proposal.status === 'pending') {
+              expeditionStateStore.resolveGeofenceTransitionProposal(proposal.id, 'rejected');
+            }
+            incrementECSPerformanceCounter('dashboard_stable_grid', 'geofence_duplicate_transition_suppressed');
+          }
         }
       } else {
         insideCountRef.current++;
@@ -268,17 +289,39 @@ export function useGeofenceMonitor(
             ? consumablesStore.get(activeVehicleId)
             : null;
 
-          // Auto-end expedition
-          expeditionStateStore.endExpedition({
-            endFuelLevel: consumables?.fuel_percent_current ?? null,
-            endWaterLevel: consumables?.water_gal_current ?? null,
+          const previousRecord = expeditionStateStore.getCurrentExpedition();
+          const proposalVehicleId = activeVehicleId ?? previousRecord?.activeVehicleId ?? 'unknown-vehicle';
+          const { proposal } = expeditionStateStore.proposeGeofenceTransition({
+            direction: 'end',
+            vehicleId: proposalVehicleId,
+            expeditionId: previousRecord?.id ?? null,
+            reason: 'Three consecutive accurate GPS fixes confirmed return to the home geofence.',
           });
+          const completedRecord = proposal.status === 'pending'
+            ? expeditionStateStore.endExpedition({
+                endFuelLevel: consumables?.fuel_percent_current ?? null,
+                endWaterLevel: consumables?.water_gal_current ?? null,
+                transitionCause: 'geofence',
+                idempotencyKey: proposal.idempotencyKey,
+              })
+            : previousRecord;
 
-          // Haptic feedback
-          hapticMicro();
-
-          // Notify parent
-          callbacksRef.current?.onExpeditionEnded?.();
+          const didEnd =
+            Boolean(previousRecord) &&
+            (previousRecord?.state === 'active' || previousRecord?.state === 'paused') &&
+            completedRecord?.id === previousRecord?.id &&
+            completedRecord?.state === 'complete';
+          if (didEnd) {
+            expeditionStateStore.resolveGeofenceTransitionProposal(proposal.id, 'accepted');
+            incrementECSPerformanceCounter('dashboard_stable_grid', 'geofence_end_transition');
+            hapticMicro();
+            callbacksRef.current?.onExpeditionEnded?.();
+          } else {
+            if (proposal.status === 'pending') {
+              expeditionStateStore.resolveGeofenceTransitionProposal(proposal.id, 'rejected');
+            }
+            incrementECSPerformanceCounter('dashboard_stable_grid', 'geofence_duplicate_transition_suppressed');
+          }
 
           // Reset home position for next expedition cycle
           // (will be re-established on next standby + GPS fix)

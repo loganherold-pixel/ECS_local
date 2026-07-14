@@ -29,14 +29,14 @@ const weightPanel = read('components', 'weight-dashboard', 'WeightDashboardPanel
 
 const weightModal = between(
   fleet,
-  '<ECSModalShell\n        visible={weightSummaryModalVisible}',
+  '<ECSModalShell\n        visible={isFleetFocused && weightSummaryModalVisible}',
   '</ECSModalShell>',
   'Weight Summary modal',
 );
 
 includes(
   fleet,
-  'onWeightSummary={() => handleOpenWeightSummaryModal(model.vehicle)}',
+  'onWeightSummary={handleOpenWeightSummaryModal}',
   'Vehicle card Weight Summary action should open the direct modal handler.',
 );
 includes(weightModal, 'maxHeightFraction={0.94}', 'Weight Summary modal should use the current near-full-height ECS shell configuration.');

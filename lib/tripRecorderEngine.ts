@@ -28,6 +28,7 @@
 
 import { Platform } from 'react-native';
 import { ecsLog } from './ecsLogger';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
 import type {
   RecordingState,
   TripEventType,
@@ -46,14 +47,15 @@ const TAG = '[TRIP_RECORDER]';
 // ── Storage Helpers ──────────────────────────────────────────
 
 const mem: Record<string, string> = {};
+const tripRecorderPersistence = createPersistedKeyValueCache('ecs_trip_recorder');
 
 function sGet(key: string): string | null {
   try {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       return localStorage.getItem(key);
     }
-    return mem[key] || null;
-  } catch { return mem[key] || null; }
+    return mem[key] || tripRecorderPersistence.get(key) || null;
+  } catch { return mem[key] || tripRecorderPersistence.get(key) || null; }
 }
 
 function sSet(key: string, value: string): void {
@@ -62,6 +64,7 @@ function sSet(key: string, value: string): void {
       localStorage.setItem(key, value);
     }
     mem[key] = value;
+    if (Platform.OS !== 'web') tripRecorderPersistence.set(key, value);
   } catch { mem[key] = value; }
 }
 
@@ -90,6 +93,15 @@ const KEYS = {
   tripLog: 'ecs_trip_recorder_log',
   config: 'ecs_trip_recorder_config',
 };
+
+const tripRecorderHydration = Platform.OS === 'web'
+  ? Promise.resolve()
+  : tripRecorderPersistence.waitForHydration().then(() => {
+      Object.values(KEYS).forEach((key) => {
+        const value = tripRecorderPersistence.get(key);
+        if (value != null) mem[key] = value;
+      });
+    });
 
 // ── Haversine ────────────────────────────────────────────────
 
@@ -209,6 +221,24 @@ function restoreActiveTrip(): TripRecord | null {
     if (!raw) return null;
     return JSON.parse(raw);
   } catch { return null; }
+}
+
+function applyRestoredActiveTrip(restored: TripRecord): void {
+  if (restored.state !== 'recording' && restored.state !== 'paused') return;
+  _activeTrip = restored;
+  _recordingState = restored.state;
+  _totalDistanceMi = restored.distanceMi;
+  _maxSpeedMph = restored.maxSpeedMph;
+  _maxAltitudeFt = restored.maxAltitudeFt;
+  _minAltitudeFt = restored.minAltitudeFt;
+  _elevationGainFt = restored.elevationGainFt;
+  _elevationLossFt = restored.elevationLossFt;
+  _pointsRecorded = restored.totalPointsRecorded;
+
+  if (_recordingState === 'recording') {
+    _startTimers();
+    _addEvent('trip_resumed', 'Recording resumed after app restart');
+  }
 }
 
 // ── Resource Snapshot Collection ─────────────────────────────
@@ -604,24 +634,21 @@ export const tripRecorderEngine = {
     // Restore active trip if app was closed during recording
     const restored = restoreActiveTrip();
     if (restored && (restored.state === 'recording' || restored.state === 'paused')) {
-      _activeTrip = restored;
-      _recordingState = restored.state;
-      _totalDistanceMi = restored.distanceMi;
-      _maxSpeedMph = restored.maxSpeedMph;
-      _maxAltitudeFt = restored.maxAltitudeFt;
-      _minAltitudeFt = restored.minAltitudeFt;
-      _elevationGainFt = restored.elevationGainFt;
-      _elevationLossFt = restored.elevationLossFt;
-      _pointsRecorded = restored.totalPointsRecorded;
-
-      if (_recordingState === 'recording') {
-        _startTimers();
-        _addEvent('trip_resumed', 'Recording resumed after app restart');
-      }
+      applyRestoredActiveTrip(restored);
 
       ecsLog.debug('SYSTEM', 'Trip recorder restored active trip', {
         state: restored.state,
         tripId: restored.id,
+      });
+    }
+    if (Platform.OS !== 'web' && !restored) {
+      void tripRecorderHydration.then(() => {
+        if (!_initialized || _activeTrip) return;
+        _config = loadConfig();
+        const hydratedTrip = restoreActiveTrip();
+        if (!hydratedTrip) return;
+        applyRestoredActiveTrip(hydratedTrip);
+        _notify();
       });
     }
 
@@ -684,9 +711,11 @@ export const tripRecorderEngine = {
     vehicleId?: string | null;
     vehicleName?: string | null;
     name?: string;
+    replaceActive?: boolean;
   }): TripRecord {
-    // Stop any existing recording first
+    // Repeated starts are idempotent. Replacing a recording must be explicit.
     if (_activeTrip && _recordingState !== 'idle') {
+      if (params?.replaceActive !== true) return { ..._activeTrip };
       tripRecorderEngine.stopRecording();
     }
 
@@ -1206,6 +1235,10 @@ export const tripRecorderEngine = {
     return trip?.resourceSnapshots ?? [];
   },
 };
+
+export function waitForTripRecorderHydration(): Promise<void> {
+  return tripRecorderHydration;
+}
 
 // ── Format Helpers ───────────────────────────────────────────
 

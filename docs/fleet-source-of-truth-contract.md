@@ -14,6 +14,11 @@ local-first and syncs to Supabase when the user and environment are syncable.
 `vehicleSetupStore` owns the selected active vehicle id. It does not own the
 vehicle profile or specs. Treat it as active selection state only.
 
+The persisted selection adapter is schema version 2. It preserves the legacy
+string key, normalizes malformed IDs, makes repeated writes idempotent, emits a
+typed selection reason/revision, and can reconcile a missing or deleted ID
+against the actual vehicle list without introducing another selection store.
+
 UI screens that edit vehicles may call `vehicleStore` and `vehicleSpecStore`
 through existing editor flows. Read-only consumers should prefer selectors
 listed below instead of joining stores themselves.
@@ -54,6 +59,12 @@ Use these helpers for downstream reads:
 `selectFleetVehicleState` and `selectFleetVehicleStateFromRecord` functions are
 the safest way to assemble a vehicle, spec, resource profile, loadout, accessory
 state, operating weight, scoring, and summary in one place.
+
+Canonical selector results are memoized by a stable value fingerprint and
+bounded to 24 vehicles. Consumers must not mutate returned states. Active-state
+subscriptions are also centralized: consumer count does not multiply source
+store subscriptions, unrelated vehicle changes are filtered, and related
+same-tick source changes publish one coalesced event.
 
 `fleetCommandSelectors` owns Fleet command/readiness view models. Use
 `selectFleetCommandState` for the full command state and

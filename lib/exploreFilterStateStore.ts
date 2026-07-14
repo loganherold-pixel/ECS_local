@@ -7,6 +7,7 @@ import type { ExploreRefinementFilter } from './explore/exploreRefinementFilter'
 import { createPersistedKeyValueCache } from './keyValuePersistence';
 
 const STORAGE_KEY = 'ecs_explore_filter_state_v1';
+export const EXPLORE_FILTER_STATE_SCHEMA_VERSION = 2;
 const exploreFilterStateCache = createPersistedKeyValueCache('ecs_explore_filter_state');
 
 export type ExplorerCategoryPanelKey =
@@ -23,6 +24,7 @@ export type ExploreFilterResultSetSummary = {
 };
 
 export type ExploreFilterStateSnapshot = {
+  schemaVersion: typeof EXPLORE_FILTER_STATE_SCHEMA_VERSION;
   radiusMiles: DistanceRadius | null;
   refinement: ExploreRefinementFilter | null;
   activeCategoryPanel: ExplorerCategoryPanelKey | null;
@@ -31,6 +33,7 @@ export type ExploreFilterStateSnapshot = {
 };
 
 const DEFAULT_SNAPSHOT: ExploreFilterStateSnapshot = {
+  schemaVersion: EXPLORE_FILTER_STATE_SCHEMA_VERSION,
   radiusMiles: DEFAULT_DISTANCE_RADIUS,
   refinement: null,
   activeCategoryPanel: null,
@@ -53,6 +56,7 @@ const VALID_CATEGORY_PANELS = new Set<ExplorerCategoryPanelKey>([
 ]);
 
 let snapshot: ExploreFilterStateSnapshot = { ...DEFAULT_SNAPSHOT };
+let writeQueue: Promise<void> = Promise.resolve();
 
 function normalizeRadius(value: unknown): DistanceRadius | null {
   if (value == null) return null;
@@ -91,6 +95,7 @@ function normalizeSnapshot(value: unknown): ExploreFilterStateSnapshot {
       : null;
 
   return {
+    schemaVersion: EXPLORE_FILTER_STATE_SCHEMA_VERSION,
     radiusMiles: normalizeRadius(candidate.radiusMiles),
     refinement,
     activeCategoryPanel,
@@ -106,6 +111,16 @@ async function writeSnapshot(next: ExploreFilterStateSnapshot): Promise<void> {
   await exploreFilterStateCache.waitForHydration();
   exploreFilterStateCache.set(STORAGE_KEY, JSON.stringify(next));
   await exploreFilterStateCache.flush();
+}
+
+function snapshotContentKey(value: ExploreFilterStateSnapshot): string {
+  return JSON.stringify({
+    schemaVersion: value.schemaVersion,
+    radiusMiles: value.radiusMiles,
+    refinement: value.refinement,
+    activeCategoryPanel: value.activeCategoryPanel,
+    resultSetSummary: value.resultSetSummary,
+  });
 }
 
 export function getExploreFilterStateSnapshot(): ExploreFilterStateSnapshot {
@@ -130,13 +145,23 @@ export async function loadExploreFilterStateSnapshot(): Promise<ExploreFilterSta
 }
 
 export async function saveExploreFilterStateSnapshot(
-  partial: Partial<Omit<ExploreFilterStateSnapshot, 'updatedAt'>>,
+  partial: Partial<Omit<ExploreFilterStateSnapshot, 'schemaVersion' | 'updatedAt'>>,
 ): Promise<ExploreFilterStateSnapshot> {
-  snapshot = normalizeSnapshot({
+  const normalized = normalizeSnapshot({
     ...snapshot,
     ...partial,
-    updatedAt: new Date().toISOString(),
+    updatedAt: snapshot.updatedAt,
   });
-  await writeSnapshot(snapshot);
+  if (snapshotContentKey(normalized) === snapshotContentKey(snapshot)) return snapshot;
+
+  snapshot = {
+    ...normalized,
+    updatedAt: new Date().toISOString(),
+  };
+  const nextSnapshot = snapshot;
+  writeQueue = writeQueue
+    .catch(() => {})
+    .then(() => writeSnapshot(nextSnapshot));
+  await writeQueue;
   return snapshot;
 }

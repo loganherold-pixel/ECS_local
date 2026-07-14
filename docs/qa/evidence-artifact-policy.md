@@ -1,6 +1,6 @@
 # ECS QA Evidence Artifact Policy
 
-Last reviewed: 2026-06-09
+Last reviewed: 2026-07-13
 
 ## Current Inventory
 
@@ -14,6 +14,27 @@ Last reviewed: 2026-06-09
 Tracked evidence currently includes 118 PNG screenshots, 124 UI XML dumps, 97 TXT files, 35 log/logcat files, and 7 JSON summaries under `.qa/` and `qa-evidence/`.
 
 ## Policy
+
+### Uploaded verification artifacts
+
+Verification uploads are schema-versioned, structured metadata only. The approved schemas are:
+
+- `ecs.verification-lane-artifact.v4`: lane identity/outcome, executed scenario coverage, production-approval state, bounded check diagnostics, blocker IDs, duration, allowlisted timing comparisons, approved-baseline state, safe provenance, and allowlisted commit/migration-bound pgTAP evidence metadata. Raw TAP output is omitted.
+- `ecs.verification-inventory-artifact.v2`: package/check identities, planned declaration coverage, conservative execution classification, and counts. Raw package commands and target paths are omitted.
+- `ecs.verification-provenance-artifact.v2`: stable command, workspace, and artifact identities plus file count, byte count, SHA-256, and safe CI identity. Raw command text and artifact paths are omitted.
+- `ecs.verification-timings-artifact.v3`: stable package-qualified timing identities and at most 20 successful duration samples. This job-local file is diagnostic only.
+- `ecs-verification-timing-baseline-v1`: reviewed per-check statistics and comparable runtime identity. The checked-in approved baseline is authoritative; scheduled candidates are review-only and cannot update it automatically.
+
+Unstructured summaries are sanitized and bounded before disk writes. Structured diagnostics reject unknown fields. Restricted coordinates, geometry, traces, provider/auth payloads, credentials, contacts, device identifiers, command lines, and private paths are redacted or omitted recursively. Unexpected unserializable values become `[omitted_unserializable]`.
+
+| Audience | Retention | Allowed upload posture |
+| --- | ---: | --- |
+| Pull request | 5 days | Inventory, lane, summary, timings |
+| Scheduled CI | 7 days | Lane, summary, timings, sanitized provenance |
+| Release candidate | 14 days | Lane, summary, timings, sanitized provenance |
+| Restricted field test | 3 days | Lane/summary/timings and digest-only provenance |
+
+These uploaded artifacts are not approved containers for real field data. Raw field screenshots, logs, device captures, provider payloads, routes, and location evidence remain local or in privacy-approved controlled storage. A digest proves artifact identity only; it does not make the underlying artifact upload-safe.
 
 Commit:
 - Concise QA summary markdown under `docs/qa/`.

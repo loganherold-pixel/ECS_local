@@ -16,6 +16,8 @@ const recoveryIncidentAgentPath = path.join(root, 'lib', 'ai', 'recoveryIncident
 const uiModelsPath = path.join(root, 'lib', 'ai', 'expeditionIntelligenceUiModels.ts');
 const uiComponentsPath = path.join(root, 'components', 'ai', 'ExpeditionIntelligenceCards.tsx');
 const agentResponseContractPath = path.join(root, 'lib', 'ai', 'expeditionAgentResponseContract.ts');
+const featureVisibilityRegistryPath = path.join(root, 'lib', 'features', 'featureVisibilityRegistry.ts');
+const aiRequestCoordinatorPath = path.join(root, 'lib', 'ai', 'aiRequestCoordinator.ts');
 
 require.extensions['.ts'] = function compileTs(module, filename) {
   const source = fs.readFileSync(filename, 'utf8');
@@ -46,6 +48,8 @@ const { scoreExpeditionRouteConfidence } = require(routeConfidencePath);
 const { buildExpeditionIntelligenceContext } = require(contextBuilderPath);
 const { summarizeExpeditionEvidenceConfidence } = require(evidenceConfidencePath);
 const { runExpeditionIntelligenceAgents } = require(orchestratorPath);
+const { createRuntimeFeatureVisibilityContext } = require(featureVisibilityRegistryPath);
+const { resetECSAIRequestCoordinatorForTests } = require(aiRequestCoordinatorPath);
 const { RECOVERY_INCIDENT_AGENT_PROMPT } = require(recoveryIncidentAgentPath);
 const {
   buildExpeditionIntelligenceCardModel,
@@ -790,6 +794,43 @@ const intelligenceContext = buildExpeditionIntelligenceContext({
   expeditionId: 'expedition-qa',
   route: staleConflictingCommunityInput,
 });
+const approvedAIVisibilityContext = createRuntimeFeatureVisibilityContext({
+  environment: 'test',
+  env: { EXPO_PUBLIC_ECS_AI_ASSIST: 'true' },
+  online: true,
+  authenticated: true,
+  hasFullAccess: true,
+  isAdmin: true,
+  privacyApprovals: new Set(['ai_assist_model_output_approval']),
+  productionEvidence: new Set(['ai_assist_real_model_execution_evidence']),
+});
+
+function groundedProviderResponse(input, context) {
+  const limitations = [
+    ...input.deterministicSnapshot.missingData.map(label => `${label} is missing.`),
+    ...input.deterministicSnapshot.staleData.map(label => `${label} is stale.`),
+  ];
+  const action = input.deterministicSnapshot.allowedActions[0];
+  return validResponse({
+    agentId: input.agent.id,
+    lifecyclePhase: input.agent.lifecyclePhase,
+    status: input.deterministicSnapshot.status,
+    confidence: input.deterministicSnapshot.confidence,
+    summary: 'This explanation is bounded by the supplied deterministic ECS snapshot.',
+    recommendations: [action],
+    risks: limitations.length > 0 ? limitations : ['No elevated deterministic risk signal was supplied.'],
+    why: ['The response preserves the deterministic ECS status and cited evidence.'],
+    evidence: context.evidence.map(item => ({ ...item })),
+    uncertainty: limitations.length > 0 ? limitations : ['No current data limitations flagged by deterministic ECS state.'],
+    recommendedAction: action,
+    nextActions: [action],
+    escalationRecommended: input.deterministicSnapshot.status === 'critical',
+    escalationReason: input.deterministicSnapshot.status === 'critical'
+      ? 'The deterministic ECS snapshot is critical.'
+      : null,
+    dataLimitations: limitations.length > 0 ? limitations : ['No current data limitations flagged by deterministic ECS state.'],
+  });
+}
 assert.strictEqual(intelligenceContext.lifecyclePhase, 'navigate');
 assert.ok(intelligenceContext.evidence.length > 0, 'Context builder should expose evidence fields.');
 assert.ok(intelligenceContext.missingData.length > 0 || intelligenceContext.staleData.length > 0);
@@ -925,32 +966,25 @@ assert.ok(evidenceConfidence.limitations.length > 0, 'Evidence confidence should
   const providerRun = await runExpeditionIntelligenceAgents({
     context: intelligenceContext,
     agentIds: ['route_risk'],
+    visibilityContext: approvedAIVisibilityContext,
     provider: {
       async generateAgentResponse(input) {
         assert.ok(input.prompt.includes('Route Risk Agent'));
         assert.ok(input.contextJson.includes('route-confidence-legal-status'));
-        return validResponse({
-          agentId: input.agent.id,
-          lifecyclePhase: input.agent.lifecyclePhase,
-          status: 'caution',
-          confidence: 'medium',
-          summary: 'Provider response remains grounded in route evidence.',
-          recommendations: ['Refresh legal/access and community report evidence.'],
-          risks: ['Legal/access signals conflict.'],
-          recommendedAction: 'Refresh legal/access and community report evidence.',
-          nextActions: ['Refresh route evidence.'],
-          escalationRecommended: false,
-          escalationReason: null,
-        });
+        assert.ok(!input.contextJson.includes('expedition-qa'), 'Private expedition identity should be redacted.');
+        assert.strictEqual(input.request.providerContextFingerprint.length > 10, true);
+        return groundedProviderResponse(input, intelligenceContext);
       },
     },
   });
   assert.strictEqual(providerRun.results[0].source, 'provider', 'Valid safe provider response should be accepted.');
-  assert.strictEqual(providerRun.results[0].response.status, 'caution');
+  assert.strictEqual(providerRun.results[0].response.status, providerRun.results[0].trace.deterministicStatus);
 
+  resetECSAIRequestCoordinatorForTests();
   const unsafeProviderRun = await runExpeditionIntelligenceAgents({
     context: intelligenceContext,
     agentIds: ['route_risk'],
+    visibilityContext: approvedAIVisibilityContext,
     provider: {
       async generateAgentResponse(input) {
         return validResponse({

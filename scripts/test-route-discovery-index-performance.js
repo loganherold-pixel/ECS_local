@@ -284,6 +284,13 @@ assert.notDeepStrictEqual(
 );
 
 const discoveryCache = createRouteDiscoveryCache({ ttlMs: 60_000, staleMs: 120_000 });
+const boundedCache = createRouteDiscoveryCache({ maxEntries: 3 });
+for (let index = 0; index < 5; index += 1) {
+  boundedCache.set(`query-${index}`, { id: index }, 1_000 + index);
+}
+assert.strictEqual(boundedCache.entries.size, 3, 'Discovery cache should retain only its bounded LRU window.');
+assert.strictEqual(boundedCache.get('query-0', 1_010).status, 'miss');
+assert.strictEqual(boundedCache.get('query-4', 1_010).status, 'hit');
 const firstCached = queryTrailPackDiscoveryIndexCached(index, {
   coordinate: userNearTahoe,
   radiusMiles: 100,

@@ -11,6 +11,7 @@ type AuthenticatedUser = {
 type ActionBody = {
   action?: string;
   name?: string;
+  expeditionId?: string | null;
   convoyId?: string;
   memberId?: string;
   role?: ConvoyRole;
@@ -324,6 +325,7 @@ async function updateConvoyMemberWithoutIdentityColumns(
 
 async function createConvoy(admin: ReturnType<typeof createAdminClient>, body: ActionBody, user: AuthenticatedUser) {
   const name = sanitizeText(body.name, MAX_CONVOY_NAME_LENGTH);
+  const expeditionId = sanitizeText(body.expeditionId, 160) || null;
   const startsAt = normalizeOptionalIsoDate(body.startsAt);
   const expiresAt = normalizeOptionalIsoDate(body.expiresAt);
   const callsign = sanitizeText(body.leaderCallsign || 'Lead', MAX_CALLSIGN_LENGTH) || 'Lead';
@@ -341,6 +343,7 @@ async function createConvoy(admin: ReturnType<typeof createAdminClient>, body: A
       name,
       leader_user_id: user.id,
       status: 'active',
+      expedition_id: expeditionId,
       starts_at: startsAt,
       expires_at: expiresAt,
     })

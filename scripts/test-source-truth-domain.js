@@ -30,6 +30,7 @@ require.extensions['.ts'] = compileTypeScriptModule;
 
 const {
   SOURCE_TRUTH_FRESHNESS_POLICIES,
+  aggregateSourceTruthEvaluations,
   assessEcsSummarySourceTruth,
   assessSourceTruth,
   evaluateSourceTruthRef,
@@ -48,7 +49,10 @@ function source(overrides = {}) {
   return {
     id: overrides.id ?? 'test-source',
     origin: overrides.origin ?? 'live',
+    role: overrides.role,
+    policyKey: overrides.policyKey,
     authority: overrides.authority ?? null,
+    authorityKind: overrides.authorityKind,
     provider: overrides.provider ?? null,
     observedAt: Object.prototype.hasOwnProperty.call(overrides, 'observedAt')
       ? overrides.observedAt
@@ -58,6 +62,7 @@ function source(overrides = {}) {
     confidence: overrides.confidence ?? 'medium',
     coverage: overrides.coverage ?? 'complete',
     availability: overrides.availability ?? 'usable',
+    conflictState: overrides.conflictState,
     conflict: overrides.conflict ?? false,
     warningCodes: overrides.warningCodes ?? [],
   };
@@ -79,6 +84,13 @@ function source(overrides = {}) {
   assert.ok(SOURCE_TRUTH_FRESHNESS_POLICIES[key], `policy ${key} should be registered`);
 });
 assert.ok(listFreshnessPolicies().length >= 11, 'policy registry should enumerate domain policies');
+
+const telemetryPolicy = SOURCE_TRUTH_FRESHNESS_POLICIES.vehicle_telemetry;
+assert.deepStrictEqual(
+  [telemetryPolicy.liveMs, telemetryPolicy.recentMs, telemetryPolicy.staleMs, telemetryPolicy.expiredMs],
+  [30_000, 60_000, 120_000, 300_000],
+  'canonical telemetry aging should match the domain diagnostics contract',
+);
 
 const defaultPolicy = SOURCE_TRUTH_FRESHNESS_POLICIES.default;
 assert.strictEqual(
@@ -183,6 +195,40 @@ assert.strictEqual(manualRecent.freshness, 'live');
 assert.strictEqual(manualRecent.ref.origin, 'manual', 'manual edit freshness must not become live origin');
 assert.ok(manualRecent.warningCodes.includes('origin_manual'));
 
+const perSourcePolicies = assessSourceTruth([
+  source({
+    id: 'convoy-source-policy',
+    policyKey: 'convoy_member_location',
+    observedAt: minutesAgo(12),
+  }),
+  source({
+    id: 'vehicle-source-policy',
+    origin: 'manual',
+    policyKey: 'vehicle_profile',
+    observedAt: daysAgo(180),
+  }),
+], { now });
+assert.strictEqual(perSourcePolicies.sources[0].policy.key, 'convoy_member_location');
+assert.strictEqual(perSourcePolicies.sources[0].freshness, 'stale');
+assert.strictEqual(perSourcePolicies.sources[1].policy.key, 'vehicle_profile');
+assert.strictEqual(perSourcePolicies.sources[1].freshness, 'recent');
+
+const evaluatedSnapshot = evaluateSourceTruthRef(source({
+  policyKey: 'convoy_member_location',
+  observedAt: minutesAgo(12),
+}), { now });
+const originalNowForAggregation = Date.now;
+Date.now = () => now + 365 * 24 * 60 * 60_000;
+try {
+  assert.strictEqual(
+    aggregateSourceTruthEvaluations([evaluatedSnapshot]).freshness,
+    'stale',
+    'aggregating evaluated evidence must not re-age it against wall-clock time',
+  );
+} finally {
+  Date.now = originalNowForAggregation;
+}
+
 const expiredWeatherCache = evaluateSourceTruthRef(source({
   id: 'weather-last-good-cache',
   origin: 'cached',
@@ -198,6 +244,49 @@ const expiredWeatherCache = evaluateSourceTruthRef(source({
 assert.strictEqual(expiredWeatherCache.freshness, 'expired');
 assert.strictEqual(expiredWeatherCache.availability, 'degraded', 'expired last-good cache should degrade, not vanish');
 assert.ok(expiredWeatherCache.warningCodes.includes('expired_source'));
+
+const expiredLiveWithLastGood = assessSourceTruth([
+  source({
+    id: 'weather-live-expired',
+    origin: 'live',
+    role: 'primary',
+    policyKey: 'weather_observation',
+    observedAt: minutesAgo(180),
+  }),
+  source({
+    id: 'weather-last-good',
+    origin: 'cached',
+    role: 'last_good',
+    policyKey: 'weather_observation',
+    observedAt: minutesAgo(20),
+  }),
+], { now });
+assert.strictEqual(expiredLiveWithLastGood.facts.expiredLiveSource, true);
+assert.strictEqual(expiredLiveWithLastGood.facts.usableLastGoodCache, true);
+assert.strictEqual(expiredLiveWithLastGood.facts.usingLastGoodCache, true);
+assert.strictEqual(expiredLiveWithLastGood.effectiveSource.ref.id, 'weather-last-good');
+assert.strictEqual(expiredLiveWithLastGood.availability, 'degraded');
+assert.ok(expiredLiveWithLastGood.warningCodes.includes('using_last_good_cache'));
+
+const unavailableLiveWithLastGood = assessSourceTruth([
+  source({
+    id: 'weather-live-unavailable',
+    origin: 'live',
+    role: 'primary',
+    policyKey: 'weather_observation',
+    observedAt: null,
+    availability: 'unavailable',
+  }),
+  source({
+    id: 'weather-cache-usable',
+    origin: 'cached',
+    role: 'last_good',
+    policyKey: 'weather_observation',
+    observedAt: minutesAgo(20),
+  }),
+], { now });
+assert.strictEqual(unavailableLiveWithLastGood.facts.unavailableLiveSource, true);
+assert.strictEqual(unavailableLiveWithLastGood.facts.usingLastGoodCache, true);
 
 const staleConvoy = evaluateSourceTruthRef(source({
   id: 'convoy-member-tail',
@@ -225,6 +314,7 @@ const verifiedVehicle = evaluateSourceTruthRef(source({
 assert.strictEqual(verifiedVehicle.freshness, 'recent', 'verified vehicle profiles should age on a long-lived policy');
 assert.strictEqual(verifiedVehicle.confidence, 'high');
 assert.strictEqual(verifiedVehicle.availability, 'usable');
+assert.strictEqual(verifiedVehicle.authorityKind, 'verified_document');
 
 const offlinePackage = evaluateSourceTruthRef(source({
   id: 'offline-route-package',
@@ -254,6 +344,7 @@ const conflict = assessSourceTruth([
   source({
     id: 'community-open',
     origin: 'cached',
+    authority: 'Community contributor',
     confidence: 'low',
     conflict: true,
   }),
@@ -262,9 +353,19 @@ const conflict = assessSourceTruth([
   now,
 });
 assert.strictEqual(conflict.conflict, true);
+assert.strictEqual(conflict.conflictState, 'present');
+assert.strictEqual(conflict.authorityKind, 'mixed');
 assert.strictEqual(conflict.confidence, 'low');
 assert.ok(conflict.warningCodes.includes('conflict_detected'));
 assert.ok(conflict.warningCodes.includes('agency_conflict'));
+
+const resolvedConflict = evaluateSourceTruthRef(source({
+  conflictState: 'resolved',
+  conflict: false,
+}), { policyKey: 'condition_closure_advisory', now });
+assert.strictEqual(resolvedConflict.conflict, false);
+assert.strictEqual(resolvedConflict.conflictState, 'resolved');
+assert.ok(resolvedConflict.warningCodes.includes('conflict_resolved'));
 
 const redacted = sanitizeSourceTruthRef(source({
   id: 'source-with-token',
@@ -275,6 +376,8 @@ const redacted = sanitizeSourceTruthRef(source({
 assert.strictEqual(redacted.provider, '[redacted]');
 assert.strictEqual(redacted.authority, '[redacted]');
 assert.ok(!redacted.warningCodes.join(' ').includes('super-secret'));
+assert.strictEqual('rawProviderResponse' in redacted, false);
+assert.strictEqual('restrictedCoordinates' in redacted, false);
 
 const legacyAssessment = assessEcsSummarySourceTruth({
   updated_at: minutesAgo(1),

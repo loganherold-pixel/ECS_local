@@ -118,10 +118,12 @@ export interface ProviderAdapterContext {
   now?: Date;
   sourceUrl?: string | null;
   rawPayloadRef?: string | null;
+  signal?: AbortSignal | null;
   serverFetch?: (request: {
     url: string;
     timeoutMs: number;
     headers?: Record<string, string>;
+    signal?: AbortSignal | null;
   }) => Promise<unknown>;
 }
 
@@ -170,12 +172,23 @@ export interface ProviderAdapterRegistryOptions {
   cache?: ECS5ObservationCache;
 }
 
+export interface ECS5ObservationCacheOptions {
+  maxEntries?: number;
+}
+
 export class ECS5ObservationCache {
   private records = new Map<string, ObservationCacheRecord>();
+  private readonly maxEntries: number;
+
+  constructor(options: ECS5ObservationCacheOptions = {}) {
+    this.maxEntries = Math.max(1, Math.round(options.maxEntries ?? 128));
+  }
 
   get(key: string, now = new Date()): { record: ObservationCacheRecord; stale: boolean } | null {
     const record = this.records.get(key);
     if (!record) return null;
+    this.records.delete(key);
+    this.records.set(key, record);
     return {
       record,
       stale: Date.parse(record.staleAt ?? record.expiresAt) <= now.getTime(),
@@ -218,7 +231,16 @@ export class ECS5ObservationCache {
       contentHash,
     };
     this.records.set(key, record);
+    while (this.records.size > this.maxEntries) {
+      const oldestKey = this.records.keys().next().value;
+      if (typeof oldestKey !== 'string') break;
+      this.records.delete(oldestKey);
+    }
     return record;
+  }
+
+  get size(): number {
+    return this.records.size;
   }
 
   clear(): void {

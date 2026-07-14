@@ -177,7 +177,12 @@ export default function StorageSettingsPanel({ visible, onClose, showToast }: Pr
     const doClear = async () => {
       setIsClearing(true);
       try {
-        tileCacheStore.clearAll();
+        const cleared = tileCacheStore.clearAll();
+        if (!cleared) {
+          showToast('ACTIVE ROUTE OR EXPEDITION REGIONS ARE PROTECTED');
+          refreshData();
+          return;
+        }
         showToast('ALL CACHED DATA CLEARED');
         refreshData();
       } catch {

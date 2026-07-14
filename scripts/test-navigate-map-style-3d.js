@@ -66,7 +66,7 @@ assert(
 );
 assert(
   mapRenderer.includes('function replayPendingPayloadAfterStyleChange(reason, attempt)') &&
-    mapRenderer.includes("map.on('styledata', function()") &&
+    mapRenderer.includes("mapListenerRegistry.attach('styledata'") &&
     mapRenderer.includes("replayPendingPayloadAfterStyleChange('styledata', 0)") &&
     mapRenderer.includes("replayPendingPayloadAfterStyleChange('set_style', 0)"),
   'MapRenderer should replay active route payloads after Day/Tac/Sat/3D style changes so route lines survive presentation switches.',

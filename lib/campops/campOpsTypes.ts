@@ -1,4 +1,5 @@
 import type { CampsiteRating, CampsiteRatingFactor } from '../campsites/campsiteRatingTypes';
+import type { SourceTruthFreshness, SourceTruthRef } from '../sourceTruth';
 
 export const CAMP_OPS_CONFIDENCE_LEVELS = ['high', 'medium', 'low', 'unknown'] as const;
 export type CampOpsConfidence = (typeof CAMP_OPS_CONFIDENCE_LEVELS)[number];
@@ -14,10 +15,68 @@ export const CAMP_OPS_DATA_SOURCES = [
   'offline_dataset',
   'manual',
   'user_saved',
+  'established_campground',
+  'dispersed_region',
+  'camp_scout',
   'inferred',
   'unknown',
 ] as const;
 export type CampOpsDataSource = (typeof CAMP_OPS_DATA_SOURCES)[number];
+
+export const CAMP_CANDIDATE_CLASSES = [
+  'generated',
+  'established',
+  'dispersed_region',
+  'community',
+  'private',
+  'group',
+  'camp_scout',
+  'imported',
+  'manual',
+  'unknown',
+] as const;
+export type CampCandidateClass = (typeof CAMP_CANDIDATE_CLASSES)[number];
+
+export const CAMP_CANDIDATE_RECOMMENDATION_VISIBILITIES = [
+  'operational',
+  'personal',
+  'research_only',
+  'blocked',
+] as const;
+export type CampCandidateRecommendationVisibility =
+  (typeof CAMP_CANDIDATE_RECOMMENDATION_VISIBILITIES)[number];
+
+export const CAMP_CANDIDATE_AVAILABILITY_STATUSES = [
+  'available',
+  'limited',
+  'unavailable',
+  'closed',
+  'unknown',
+] as const;
+export type CampCandidateAvailabilityStatus =
+  (typeof CAMP_CANDIDATE_AVAILABILITY_STATUSES)[number];
+
+export const CAMP_CANDIDATE_CONDITION_STATUSES = [
+  'clear',
+  'watch',
+  'restricted',
+  'closed',
+  'unknown',
+] as const;
+export type CampCandidateConditionStatus =
+  (typeof CAMP_CANDIDATE_CONDITION_STATUSES)[number];
+
+export const CAMP_CANDIDATE_TRUST_STATUSES = [
+  'verified',
+  'trusted',
+  'approved',
+  'private',
+  'pending',
+  'flagged',
+  'rejected',
+  'unknown',
+] as const;
+export type CampCandidateTrustStatus = (typeof CAMP_CANDIDATE_TRUST_STATUSES)[number];
 
 export const CAMP_OPS_RISK_TOLERANCES = [
   'conservative',
@@ -322,12 +381,77 @@ export type CampSearchContext = {
   routeProgress?: CampOpsRouteProgress | null;
 };
 
+export type CampCandidateEvidenceBase = {
+  confidence: CampOpsConfidence;
+  freshness: SourceTruthFreshness;
+  conflict: boolean;
+  sourceRefs: SourceTruthRef[];
+  notes: string[];
+};
+
+export type CampCandidateLegalAccessEvidence = CampCandidateEvidenceBase & {
+  legalStatus: CampLegalStatus;
+  publicAccessStatus: CampPublicAccessStatus;
+  closureStatus: CampAccessRestrictionStatus;
+  requiresVerification: boolean;
+};
+
+export type CampCandidateCurrentConditionEvidence = CampCandidateEvidenceBase & {
+  status: CampCandidateConditionStatus;
+  summary: string | null;
+};
+
+export type CampCandidateAvailabilityEvidence = CampCandidateEvidenceBase & {
+  status: CampCandidateAvailabilityStatus;
+  usableForDecision: boolean;
+  observedAt: string | null;
+};
+
+export type CampCandidateSuitabilityEvidence = {
+  score: number | null;
+  vehicleFit: CampFitStatus;
+  trailerFit: CampFitStatus;
+  groupCapacity: number | null;
+  confidence: CampOpsConfidence;
+  reasons: string[];
+};
+
+export type CampCandidateCommunityTrustEvidence = {
+  status: CampCandidateTrustStatus;
+  score: number | null;
+  confirmationCount: number;
+  negativeReportCount: number;
+  confidence: CampOpsConfidence;
+  notes: string[];
+};
+
+export type CampCandidateOperationalEvidence = {
+  legalAccess: CampCandidateLegalAccessEvidence;
+  currentCondition: CampCandidateCurrentConditionEvidence;
+  availability: CampCandidateAvailabilityEvidence;
+  suitability: CampCandidateSuitabilityEvidence;
+  communityTrust: CampCandidateCommunityTrustEvidence;
+};
+
+export type CampCandidateProvenance = {
+  canonicalId: string;
+  candidateClass: CampCandidateClass;
+  sourceRecordIds: string[];
+  sourceLabels: string[];
+  attribution: string[];
+};
+
 export type CampCandidate = {
   id: string;
   name: string;
   location: CampOpsGeoPoint;
   source: CampOpsDataSource;
   sourceConfidence: CampOpsConfidence;
+  candidateClass?: CampCandidateClass;
+  canonicalId?: string;
+  recommendationVisibility?: CampCandidateRecommendationVisibility;
+  provenance?: CampCandidateProvenance;
+  evidence?: CampCandidateOperationalEvidence;
   lastVerifiedDate?: string | null;
   poiType?: string | null;
   category?: string | null;
@@ -360,7 +484,16 @@ export type CampCandidate = {
   visibility?: string | null;
   ratingFactors?: CampsiteRatingFactor[];
   existingRef?: {
-    system: 'campsite_candidate' | 'camp_site' | 'camp_site_report' | 'group_share' | 'offline_marker' | 'unknown';
+    system:
+      | 'campsite_candidate'
+      | 'camp_site'
+      | 'camp_site_report'
+      | 'group_share'
+      | 'established_campground'
+      | 'dispersed_region'
+      | 'camp_scout'
+      | 'offline_marker'
+      | 'unknown';
     id: string;
   } | null;
 };
@@ -428,6 +561,9 @@ export type CampCandidateEnrichment = {
   privacyLikelihood: CampLikelihoodLevel;
   occupancyLikelihood: CampLikelihoodLevel;
   lateArrivalRisk: CampImpactLevel;
+  availabilityStatus?: CampCandidateAvailabilityStatus | null;
+  availabilityFreshness?: SourceTruthFreshness | null;
+  availabilityUsableForDecision?: boolean | null;
   dataConfidence: CampOpsConfidence;
   dataLimitations?: string[];
   sourceSignals?: CampOpsSourceSignalSummary[];

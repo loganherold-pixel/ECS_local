@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(17);
+select plan(18);
 
 -- Legacy ECS core trip/waypoint RLS coverage.
 -- Table assumptions come from migrations 001_ecs_core_schema.sql and
@@ -178,6 +178,11 @@ select is(
   pg_temp.ecs_row_count($$update public.trips set status = 'stolen' where id = '21000000-0000-4000-8000-000000000001'$$),
   0,
   'authenticated non-owner cannot update owner trip'
+);
+select isnt(
+  pg_temp.ecs_sqlstate($$insert into public.trips (id, user_id, title) values ('21000000-0000-4000-8000-000000000002', '11000000-0000-4000-8000-000000000001', 'Spoofed Owner Trip')$$),
+  '00000',
+  'authenticated non-owner cannot create a trip under another identity'
 );
 select is(
   pg_temp.ecs_visible_count($$select count(*) from public.waypoints where trip_id = '21000000-0000-4000-8000-000000000001'$$),

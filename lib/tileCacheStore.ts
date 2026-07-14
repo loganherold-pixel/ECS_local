@@ -151,6 +151,8 @@ export type DownloadProgress = {
 
 export type ProgressCallback = (progress: DownloadProgress) => void;
 
+export type TileCacheProtectionResolver = (region: TileCacheRegion) => string | null;
+
 // ── Storage Quota Types ─────────────────────────────────
 
 export interface StorageQuotaConfig {
@@ -1111,6 +1113,7 @@ class TileCacheStore {
   private loaded = false;
   private listeners: Array<() => void> = [];
   private nativeInitialized = false;
+  private protectionResolver: TileCacheProtectionResolver | null = null;
 
   private load(): void {
     if (this.loaded) return;
@@ -1145,6 +1148,20 @@ class TileCacheStore {
     return () => {
       this.listeners = this.listeners.filter(l => l !== fn);
     };
+  }
+
+  setProtectionResolver(resolver: TileCacheProtectionResolver | null): void {
+    this.protectionResolver = resolver;
+  }
+
+  getRegionProtectionReason(regionId: string): string | null {
+    const region = this.getRegion(regionId);
+    if (!region || !this.protectionResolver) return null;
+    try {
+      return this.protectionResolver(region);
+    } catch {
+      return 'Offline asset protection state is unavailable';
+    }
   }
 
   getRegions(): TileCacheRegion[] {
@@ -1231,10 +1248,15 @@ class TileCacheStore {
     return stats;
   }
 
-  clearAll(): void {
+  clearAll(options: { force?: boolean } = {}): boolean {
+    this.load();
+    if (!options.force && this.regions.some((region) => !!this.getRegionProtectionReason(region.id))) {
+      return false;
+    }
     this.regions = [];
     this.save();
     clearAllTiles().catch(() => {});
+    return true;
   }
 
   /** Create a new region from route corridor */
@@ -1361,7 +1383,11 @@ class TileCacheStore {
   }
 
   /** Delete a region and its cached tiles */
-  async deleteRegion(regionId: string): Promise<void> {
+  async deleteRegion(regionId: string, options: { force?: boolean } = {}): Promise<void> {
+    const protectionReason = options.force ? null : this.getRegionProtectionReason(regionId);
+    if (protectionReason) {
+      throw new Error(`Offline map region is protected: ${protectionReason}.`);
+    }
     this.cancelDownload(regionId);
     await deleteTilesForRegion(regionId);
     this.removeRegion(regionId);
@@ -1481,7 +1507,7 @@ class TileCacheStore {
         // Then by last accessed date (oldest first)
         return new Date(a.lastAccessedAt).getTime() - new Date(b.lastAccessedAt).getTime();
       })
-      .filter(r => r.status !== 'downloading') // never purge active downloads
+      .filter(r => r.status !== 'downloading' && !this.getRegionProtectionReason(r.id))
       .map(r => r.id);
 
     return {
@@ -1532,7 +1558,11 @@ class TileCacheStore {
     const config = this.getQuotaConfig();
     const threshold = maxAgeDays ?? config.staleRegionDays;
     const breakdown = this.getRegionBreakdown();
-    const stale = breakdown.filter(r => r.ageDays >= threshold && r.status !== 'downloading');
+    const stale = breakdown.filter(r => (
+      r.ageDays >= threshold &&
+      r.status !== 'downloading' &&
+      !this.getRegionProtectionReason(r.id)
+    ));
 
     let purged = 0;
     let freedMB = 0;
@@ -1589,7 +1619,7 @@ class TileCacheStore {
         if (currentUsedMB <= targetMB) break;
 
         const region = this.getRegion(regionId);
-        if (!region || region.status === 'downloading') continue;
+        if (!region || region.status === 'downloading' || this.getRegionProtectionReason(regionId)) continue;
 
         const regionSize = region.actualSizeMB > 0 ? region.actualSizeMB : region.estimatedSizeMB;
         try {
@@ -2432,6 +2462,17 @@ class TileCacheStore {
         deduplicatedTiles: 0,
         savedMB: 0,
         message: 'Need at least 2 regions to merge',
+      };
+    }
+
+    const protectedRegion = regions.find((region) => !!this.getRegionProtectionReason(region.id));
+    if (protectedRegion) {
+      return {
+        success: false,
+        removedRegionIds: [],
+        deduplicatedTiles: 0,
+        savedMB: 0,
+        message: `Cannot merge protected region "${protectedRegion.name}": ${this.getRegionProtectionReason(protectedRegion.id)}.`,
       };
     }
 

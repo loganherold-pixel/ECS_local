@@ -15,6 +15,7 @@ import type {
   ExpeditionTripRecord,
   ExpeditionTripSourceLabel,
 } from './expeditionTripRecordTypes';
+import { buildCompletionKey } from '../lifecycle/routeTripExpeditionLifecycle';
 
 export type CompletedGuidanceSummaryMaterializerInput = {
   completedExpeditionRecord?: unknown;
@@ -204,8 +205,19 @@ export async function materializeCompletedGuidanceSummary({
   const id = readString(record, ['id', 'tripId', 'routeId', 'activeRouteId', 'guidanceSessionId']);
   if (!id) return { created: false, trip: null, badges: [], reason: 'missing_id' };
 
-  const existing = await expeditionTripRecordStore.getById(id);
-  const beforeBadges = badgeIds(await getBadgesForTrip(id).catch(() => []));
+  const guidanceSessionId = readString(record, ['guidanceSessionId', 'sessionId']);
+  const completionKey = buildCompletionKey({
+    expeditionId: id,
+    guidanceSessionId,
+  });
+  const existing =
+    await expeditionTripRecordStore.getById(id) ??
+    await expeditionTripRecordStore.findByLifecycleIdentity({
+      completionKey,
+      expeditionId: id,
+      guidanceSessionId,
+    });
+  const beforeBadges = badgeIds(await getBadgesForTrip(existing?.id ?? id).catch(() => []));
   if (existing?.status === 'completed') {
     const evaluated = await evaluateBadgesForCompletedTrip(existing.id).catch(() => []);
     const currentTripBadges = await getBadgesForTrip(existing.id).catch(() => evaluated);
@@ -231,12 +243,14 @@ export async function materializeCompletedGuidanceSummary({
     ? existing
     : createNewActiveTripRecord({
         id,
+        completionKey,
+        expeditionId: id,
         title,
         startedAt: startedAtFromDuration(completedAt, durationSeconds),
         startCoordinate: routeGeometry[0] ?? null,
         routeGeometry,
         plannedRouteGeometry: routeGeometry,
-        guidanceSessionId: readString(record, ['guidanceSessionId', 'sessionId']) ?? id,
+        guidanceSessionId: guidanceSessionId ?? id,
         guidanceSource: guidanceSourceFromRecord(record),
         routeId: readString(record, ['routeId', 'activeRouteId']) ?? id,
         routeTitle: title,

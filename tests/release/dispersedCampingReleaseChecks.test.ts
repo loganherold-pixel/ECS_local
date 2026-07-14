@@ -158,7 +158,7 @@ assert.ok(
 
 assert.ok(
   mapRendererSource.includes('getFirstExistingLayerId') &&
-    mapRendererSource.includes("'route-layer'") &&
+    mapRendererSource.includes('ACTIVE_GUIDANCE_ROUTE_LAYER_ID') &&
     mapRendererSource.includes('CAMP_SCOUT_LAYER_ID'),
   'Eligibility layers should stay below route/user/pin overlays.',
 );
@@ -194,7 +194,7 @@ assert.ok(
 assert.ok(
   candidateScoringSource.includes('Math.min(5') &&
     candidateScoringSource.includes('LAND_MANAGER_BLOCKLIST') &&
-    candidateScoringSource.includes("region.closureKnown === true") &&
+    candidateScoringSource.includes("region.closureActive === true") &&
     candidateScoringSource.includes("region.confidence === 'restricted'"),
   'CampOps candidate scoring should cap count and block restricted/private/tribal/closed regions.',
 );

@@ -4,8 +4,23 @@ import {
   getExpeditionAgentDefinition,
   listExpeditionAgentDefinitions,
 } from './expeditionAgentRegistry';
-import { summarizeExpeditionEvidenceConfidence } from './expeditionEvidenceConfidence';
 import { evaluateExpeditionAgentSafety } from './expeditionSafetyPolicy';
+import type { ECSFeatureVisibilityContext } from '../features/featureVisibilityRegistry';
+import {
+  buildExpeditionAIProviderContext,
+  buildExpeditionDeterministicFallbackResponse,
+  buildExpeditionDeterministicSnapshot,
+  buildExpeditionTrace,
+  createExpeditionAIInputFingerprint,
+  featureForExpeditionAgent,
+  validateExpeditionAIProviderOutput,
+} from './expeditionAIContract';
+import { createECSAIInputFingerprint, resolveECSAIExecutionPolicy } from './aiPolicyBoundary';
+import {
+  ecsAIRequestCoordinator,
+  type ECSAIProviderEnvelope,
+  type ECSAIProviderUsage,
+} from './aiRequestCoordinator';
 import type {
   ExpeditionAgentContextInput,
   ExpeditionAgentDefinition,
@@ -13,8 +28,6 @@ import type {
   ExpeditionAgentResponse,
   ExpeditionAgentRunResult,
   ExpeditionIntelligenceAgentId,
-  ExpeditionIntelligenceConfidence,
-  ExpeditionIntelligenceRiskLevel,
   ExpeditionIntelligenceRunResult,
 } from './expeditionIntelligenceTypes';
 
@@ -22,6 +35,10 @@ export type ExpeditionIntelligenceOrchestratorInput = {
   context: ExpeditionAgentContextInput;
   agentIds?: ExpeditionIntelligenceAgentId[];
   provider?: ExpeditionAgentProvider | null;
+  visibilityContext?: ECSFeatureVisibilityContext | null;
+  signal?: AbortSignal | null;
+  timeoutMs?: number;
+  maxRetries?: number;
 };
 
 function safeJsonParse(value: string): unknown {
@@ -37,110 +54,85 @@ function normalizeProviderResponse(value: unknown): unknown {
   return value;
 }
 
-function riskFromContext(context: ExpeditionAgentContextInput): ExpeditionIntelligenceRiskLevel {
-  if (context.incident) return 'critical';
-  if (context.missingData.length > 0) return 'unknown';
-  if (context.staleData.length > 0) return 'watch';
-  return 'normal';
-}
-
-function actionForAgent(agent: ExpeditionAgentDefinition, context: ExpeditionAgentContextInput): string {
-  if (context.incident && agent.id === 'recovery_incident') {
-    return 'Complete stabilization checks and confirm location, communication, and escalation threshold.';
+function normalizeProviderEnvelope(value: unknown): ECSAIProviderEnvelope {
+  const normalized = normalizeProviderResponse(value);
+  if (normalized && typeof normalized === 'object' && !Array.isArray(normalized) && 'output' in normalized) {
+    const envelope = normalized as { output: unknown; usage?: ECSAIProviderUsage | null };
+    return { output: normalizeProviderResponse(envelope.output), usage: envelope.usage ?? null };
   }
-  if (context.missingData.length > 0) {
-    return `Refresh or manually confirm ${context.missingData[0]}.`;
-  }
-  if (context.staleData.length > 0) {
-    return `Refresh stale ${context.staleData[0]}.`;
-  }
-  return `Review ${agent.label} evidence and continue monitoring.`;
-}
-
-function buildFallbackAgentResponse(
-  agent: ExpeditionAgentDefinition,
-  context: ExpeditionAgentContextInput,
-): ExpeditionAgentResponse {
-  const evidenceConfidence = summarizeExpeditionEvidenceConfidence(context.evidence);
-  const status = riskFromContext(context);
-  const confidence: ExpeditionIntelligenceConfidence =
-    status === 'critical' && evidenceConfidence.confidence === 'unknown'
-      ? 'low'
-      : evidenceConfidence.confidence;
-  const limitations = [
-    ...evidenceConfidence.limitations,
-    ...context.missingData.map((item) => `${item} is missing.`),
-    ...context.staleData.map((item) => `${item} is stale.`),
-  ];
-  const recommendedAction = actionForAgent(agent, context);
-  const risks = [
-    status === 'critical' ? 'Incident context requires conservative handling.' : '',
-    context.missingData.length > 0 ? 'Assessment is limited by missing data.' : '',
-    context.staleData.length > 0 ? 'Assessment confidence is reduced by stale data.' : '',
-  ].filter(Boolean);
-
-  return {
-    agentId: agent.id,
-    lifecyclePhase: agent.lifecyclePhase,
-    status,
-    confidence,
-    summary:
-      status === 'normal'
-        ? `${agent.label} has no elevated ECS signal from the available context.`
-        : `${agent.label} is limited by current expedition context.`,
-    recommendations: [recommendedAction],
-    risks: risks.length > 0 ? risks : ['No elevated risk identified from the available evidence.'],
-    why: context.evidence.length > 0
-      ? context.evidence.slice(0, 3).map((item) => `${item.label}: ${item.value ?? 'unknown'}`)
-      : ['No evidence fields were provided to this agent.'],
-    evidence: context.evidence.length > 0
-      ? context.evidence
-      : [{
-          id: 'agent-context',
-          label: 'Agent context',
-          value: 'missing',
-          source: 'unknown',
-          missing: true,
-          confidence: 'unknown',
-        }],
-    uncertainty: limitations.length > 0 ? limitations : ['No current data limitations flagged by ECS.'],
-    recommendedAction,
-    nextActions: [recommendedAction],
-    escalationRecommended: status === 'critical',
-    escalationReason: status === 'critical' ? risks[0] ?? 'Critical expedition context.' : null,
-    dataLimitations: limitations.length > 0 ? limitations : ['No current data limitations flagged by ECS.'],
-    safetyNotes: ['ECS recommendations are advisory and should be verified against field conditions and user judgment.'],
-    doNotDo: [
-      'Do not treat ECS output as proof that a route, campsite, condition, or recovery method is safe.',
-      'Do not replace emergency services, medical professionals, recovery operators, or local authorities.',
-    ],
-  };
+  return { output: normalized, usage: null };
 }
 
 async function runSingleAgent(
   agent: ExpeditionAgentDefinition,
   context: ExpeditionAgentContextInput,
-  provider?: ExpeditionAgentProvider | null,
+  options: Pick<
+    ExpeditionIntelligenceOrchestratorInput,
+    'provider' | 'visibilityContext' | 'signal' | 'timeoutMs' | 'maxRetries'
+  >,
 ): Promise<ExpeditionAgentRunResult> {
-  const contextJson = JSON.stringify(context);
-  const prompt = buildExpeditionAgentRuntimePrompt(agent.id, contextJson);
-  let response = buildFallbackAgentResponse(agent, context);
+  const snapshot = buildExpeditionDeterministicSnapshot(agent, context);
+  const providerContext = buildExpeditionAIProviderContext(context, snapshot);
+  const inputFingerprint = createExpeditionAIInputFingerprint(agent, providerContext.context, context);
+  const providerContextFingerprint = createECSAIInputFingerprint(
+    featureForExpeditionAgent(agent.id),
+    providerContext.context,
+  );
+  const trace = buildExpeditionTrace(snapshot, inputFingerprint);
+  const prompt = buildExpeditionAgentRuntimePrompt(agent.id, providerContext.contextJson);
+  let response = buildExpeditionDeterministicFallbackResponse(agent, context, snapshot, trace);
   let source: ExpeditionAgentRunResult['source'] = 'fallback';
+  let providerStatus: ExpeditionAgentRunResult['providerStatus'] = 'not_requested';
+  let providerUsage: ECSAIProviderUsage | null = null;
+  let suppressionReasons: string[] = [];
 
-  if (provider) {
-    const providerResult = normalizeProviderResponse(await provider.generateAgentResponse({
-      agent,
-      prompt,
-      context,
-      contextJson,
-    }));
-    const validation = validateExpeditionAgentResponse(providerResult);
-    if (validation.valid) {
-      const safety = evaluateExpeditionAgentSafety(providerResult as ExpeditionAgentResponse);
-      if (safety.valid) {
-        response = providerResult as ExpeditionAgentResponse;
-        source = 'provider';
-      }
+  if (options.provider) {
+    const featureId = featureForExpeditionAgent(agent.id);
+    const executionDecision = resolveECSAIExecutionPolicy(featureId, options.visibilityContext);
+    const outcome = await ecsAIRequestCoordinator.execute<ExpeditionAgentResponse>({
+      featureId,
+      executionDecision,
+      fingerprint: inputFingerprint,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+      maxRetries: options.maxRetries,
+      invoke: async (signal, attempt) => normalizeProviderEnvelope(
+        await options.provider!.generateAgentResponse({
+          agent,
+          prompt,
+          context: providerContext.context,
+          contextJson: providerContext.contextJson,
+          deterministicSnapshot: providerContext.context.deterministicSnapshot,
+          signal,
+          request: {
+            featureId,
+            providerContextFingerprint,
+            attempt,
+          },
+        }),
+      ),
+      validate: (output) => {
+        const validation = validateExpeditionAIProviderOutput({
+          value: output,
+          agent,
+          context,
+          snapshot,
+          trace,
+        });
+        return {
+          accepted: validation.accepted,
+          value: validation.response ?? undefined,
+          reasons: validation.issues.map(item => item.code),
+          classification: validation.classification,
+        };
+      },
+    });
+    providerStatus = outcome.status;
+    providerUsage = outcome.usage;
+    suppressionReasons = outcome.suppressionReasons;
+    if (outcome.value) {
+      response = outcome.value;
+      source = 'provider';
     }
   }
 
@@ -154,6 +146,11 @@ async function runSingleAgent(
       issues: [...schemaValidation.issues, ...safetyValidation.issues],
     },
     source,
+    providerStatus,
+    providerUsage,
+    deterministicState: snapshot.deterministicAvailable ? 'available' : 'unavailable',
+    suppressionReasons,
+    trace,
   };
 }
 
@@ -165,7 +162,7 @@ export async function runExpeditionIntelligenceAgents(
   const results: ExpeditionAgentRunResult[] = [];
 
   for (const agent of agents) {
-    results.push(await runSingleAgent(agent, input.context, input.provider));
+    results.push(await runSingleAgent(agent, input.context, input));
   }
 
   return {

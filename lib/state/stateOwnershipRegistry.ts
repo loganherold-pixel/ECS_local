@@ -1,0 +1,563 @@
+export const ECS_STATE_OWNERSHIP_SCHEMA_VERSION = 1 as const;
+
+export type ECSStateSensitivity = 'secure' | 'private' | 'ordinary' | 'cache' | 'ephemeral';
+export type ECSStateLocality = 'local' | 'cloud' | 'hybrid' | 'memory';
+export type ECSStatePersistenceKind =
+  | 'secure_store'
+  | 'nonsecure_key_value'
+  | 'indexed_db'
+  | 'file_and_indexed_db'
+  | 'supabase'
+  | 'hybrid_local_cloud'
+  | 'memory_only';
+export type ECSStateConflictPolicy =
+  | 'reject_older'
+  | 'preserve_local_dirty'
+  | 'server_authoritative'
+  | 'append_only'
+  | 'manual_resolution'
+  | 'local_authoritative'
+  | 'source_priority'
+  | 'ephemeral_latest';
+
+export type ECSStateOwnershipRecord = {
+  id: string;
+  concept: string;
+  owner: string;
+  adapters: readonly string[];
+  locality: ECSStateLocality;
+  persistence: ECSStatePersistenceKind;
+  storageKeys: readonly string[];
+  schemaVersion: string | number | null;
+  hydrationTrigger: string;
+  hydrationDependencies: readonly string[];
+  writeTrigger: string;
+  writeCoalescing: string;
+  subscribers: string;
+  cleanup: string;
+  offlineBehavior: string;
+  migration: string;
+  sensitivity: ECSStateSensitivity;
+  conflictPolicy: ECSStateConflictPolicy;
+  retention: string;
+  transactionBoundary: string | null;
+};
+
+export const ECS_STATE_OWNERSHIP_REGISTRY: readonly ECSStateOwnershipRecord[] = [
+  {
+    id: 'auth_session',
+    concept: 'Authenticated provider session and refresh credentials',
+    owner: 'Supabase Auth client',
+    adapters: ['context/AppContext.tsx', 'lib/supabase.ts'],
+    locality: 'cloud',
+    persistence: 'secure_store',
+    storageKeys: ['Supabase-managed auth storage'],
+    schemaVersion: 'provider-managed',
+    hydrationTrigger: 'AppProvider startup before protected route resolution',
+    hydrationDependencies: ['session_preferences'],
+    writeTrigger: 'Provider sign-in, refresh, and sign-out events',
+    writeCoalescing: 'Provider managed',
+    subscribers: 'AppProvider auth-state subscription',
+    cleanup: 'Provider sign-out plus persisted Supabase auth-state removal',
+    offlineBehavior: 'A validated remembered session may enter explicitly labelled offline mode',
+    migration: 'Provider managed; ECS clears invalid legacy provider state',
+    sensitivity: 'secure',
+    conflictPolicy: 'server_authoritative',
+    retention: 'Until expiry or explicit sign-out',
+    transactionBoundary: 'logout',
+  },
+  {
+    id: 'session_preferences',
+    concept: 'Remember-session preference, expiry, and pseudonymous prior-account marker',
+    owner: 'sessionStore',
+    adapters: ['context/AppContext.tsx', 'app/login.tsx'],
+    locality: 'local',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_session_state'],
+    schemaVersion: 2,
+    hydrationTrigger: 'Required startup hydration',
+    hydrationDependencies: [],
+    writeTrigger: 'Successful sign-in, expiry extension, and logout',
+    writeCoalescing: 'Shared key-value adapter debounce on native',
+    subscribers: 'Read by auth/setup entry selectors; no event subscription',
+    cleanup: 'Clear on explicit logout or invalid non-persistent session',
+    offlineBehavior: 'Contains no credential or raw account identity; supports expiry decisions only',
+    migration: 'Version 2 replaces raw user ID with a pseudonymous fingerprint and removes stored email',
+    sensitivity: 'private',
+    conflictPolicy: 'local_authoritative',
+    retention: 'Until expiry or logout',
+    transactionBoundary: 'logout',
+  },
+  {
+    id: 'setup_progress',
+    concept: 'Initial setup completion, current step, and resource profile',
+    owner: 'setupStore',
+    adapters: ['app/_layout.tsx', 'context/AppContext.tsx'],
+    locality: 'local',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_setup_state'],
+    schemaVersion: 1,
+    hydrationTrigger: 'Required startup hydration before shell route selection',
+    hydrationDependencies: [],
+    writeTrigger: 'Setup flow progress and explicit reset',
+    writeCoalescing: 'Shared key-value adapter debounce on native',
+    subscribers: 'Setup and shell entry surfaces',
+    cleanup: 'Preserved on logout; cleared only by setup reset or incompatible migration',
+    offlineBehavior: 'Fully available',
+    migration: 'Version 1 adopts legacy per-key setup values without discarding them',
+    sensitivity: 'ordinary',
+    conflictPolicy: 'local_authoritative',
+    retention: 'Until setup reset',
+    transactionBoundary: null,
+  },
+  {
+    id: 'active_vehicle_selection',
+    concept: 'Single active Fleet vehicle identity',
+    owner: 'vehicleSetupStore',
+    adapters: ['lib/fleet/activeVehicleState.ts', 'lib/fleet/legacyVehicleFrameworkStateMigration.ts'],
+    locality: 'local',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_vehicle_setup'],
+    schemaVersion: 2,
+    hydrationTrigger: 'Required startup hydration',
+    hydrationDependencies: ['vehicle_records'],
+    writeTrigger: 'Fleet selection, vehicle deletion reconciliation, or setup recovery',
+    writeCoalescing: 'One selection write; downstream derived notifications coalesce per microtask',
+    subscribers: 'Fleet, Dashboard, Navigate, telemetry, readiness, and vehicle display selectors',
+    cleanup: 'Preserved on logout; reconciled if selected vehicle is missing',
+    offlineBehavior: 'Fully available',
+    migration: 'Versioned per-key migration and legacy selection reconciliation',
+    sensitivity: 'ordinary',
+    conflictPolicy: 'local_authoritative',
+    retention: 'Until changed or vehicle deletion',
+    transactionBoundary: 'active_vehicle_switch',
+  },
+  {
+    id: 'vehicle_records',
+    concept: 'Fleet vehicle records and durable local-first vehicle configuration',
+    owner: 'vehicleStore',
+    adapters: ['vehicleSpecStore', 'fleetVehicleStateSelectors', 'activeVehicleState'],
+    locality: 'hybrid',
+    persistence: 'hybrid_local_cloud',
+    storageKeys: ['ecs_local_vehicles', 'public.vehicles'],
+    schemaVersion: 'legacy-record-normalizer',
+    hydrationTrigger: 'Required startup hydration',
+    hydrationDependencies: [],
+    writeTrigger: 'Fleet create/update/delete/import',
+    writeCoalescing: 'Durable local snapshot flush per command; derived scoring is memoized',
+    subscribers: 'Fleet and canonical active-vehicle selector',
+    cleanup: 'Local vehicle assets are preserved on logout; cloud subscriptions are account-scoped',
+    offlineBehavior: 'Local CRUD remains available and later sync is explicit',
+    migration: 'normalizeVehicleRecord provides additive legacy defaults; envelope migration remains follow-up',
+    sensitivity: 'private',
+    conflictPolicy: 'preserve_local_dirty',
+    retention: 'Until user deletion; tombstones retained by cloud policy',
+    transactionBoundary: 'active_vehicle_switch',
+  },
+  {
+    id: 'vehicle_support_state',
+    concept: 'Vehicle specifications, accessories, tires/lift, consumables, and loadouts',
+    owner: 'Fleet support-state boundary, partitioned by vehicle ID and subdomain',
+    adapters: [
+      'vehicleSpecStore',
+      'loadoutStore',
+      'tiresLiftStore',
+      'consumablesStore',
+      'fleetVehicleStateSelectors',
+      'fleetFabricService',
+    ],
+    locality: 'local',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_vehicle_specs', 'ecs_consumables', 'ecs_tires_lift', 'ecs_loadouts'],
+    schemaVersion: 'mixed-versioned-adapters',
+    hydrationTrigger: 'Required startup hydration for active-vehicle readiness',
+    hydrationDependencies: ['vehicle_records'],
+    writeTrigger: 'Fleet editor and telemetry-confirmed resource updates',
+    writeCoalescing: 'Per-store key-value debounce and active-vehicle derived notification batch',
+    subscribers: 'Fleet selectors, readiness, Dashboard, CampOps, and Expedition planning',
+    cleanup: 'Vehicle-scoped records removed when their vehicle is deleted; preserved on logout',
+    offlineBehavior: 'Fully available with source/confidence labels',
+    migration: 'Domain normalizers preserve legacy values; unified envelope version remains follow-up',
+    sensitivity: 'private',
+    conflictPolicy: 'preserve_local_dirty',
+    retention: 'Vehicle lifetime',
+    transactionBoundary: 'active_vehicle_switch',
+  },
+  {
+    id: 'route_assets',
+    concept: 'Imported, built, stitched, and saved route geometry assets',
+    owner: 'routeStore',
+    adapters: ['route lifecycle adapters', 'Trip Builder handoffs', 'Navigate'],
+    locality: 'local',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_route_store'],
+    schemaVersion: 2,
+    hydrationTrigger: 'Lazy before route asset access; required by restored guidance',
+    hydrationDependencies: [],
+    writeTrigger: 'Validated import, builder save, metadata edit, active-route selection',
+    writeCoalescing: 'One envelope write per route command',
+    subscribers: 'Navigate, Dashboard route progress, CampOps, readiness, vehicle display',
+    cleanup: 'User deletion only; active guidance keeps embedded degraded geometry',
+    offlineBehavior: 'Saved geometry remains usable',
+    migration: 'Version 2 envelope accepts legacy arrays and preserves existing IDs',
+    sensitivity: 'private',
+    conflictPolicy: 'reject_older',
+    retention: 'Until user deletion',
+    transactionBoundary: 'route_activation',
+  },
+  {
+    id: 'active_guidance',
+    concept: 'Current restorable Navigate guidance and presentation session',
+    owner: 'navigateRouteSessionStore',
+    adapters: ['activeGuidanceState', 'navigationActiveGuidanceGuard', 'road/trail guidance stores'],
+    locality: 'local',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_navigate_route_session_v1'],
+    schemaVersion: 1,
+    hydrationTrigger: 'Navigate entry and startup restoration when eligible',
+    hydrationDependencies: ['route_assets'],
+    writeTrigger: 'Preview, activation, progress, pause, arrival, or cancellation',
+    writeCoalescing: 'Snapshot writes only after normalized state changes',
+    subscribers: 'Navigate, Dashboard route widgets, CampOps, vehicle display',
+    cleanup: 'Clear on cancellation/arrival; retain bounded snapshot through restart',
+    offlineBehavior: 'Embedded route state continues without provider requests',
+    migration: 'Rejects malformed or expired snapshots and rebuilds from guidance stores',
+    sensitivity: 'private',
+    conflictPolicy: 'local_authoritative',
+    retention: 'Lifecycle-dependent bounded restore window',
+    transactionBoundary: 'route_activation',
+  },
+  {
+    id: 'trip_builder_plan',
+    concept: 'Restart-safe deterministic Trip Builder plan',
+    owner: 'tripBuilderPlanStore',
+    adapters: ['Trip Builder service', 'Offline Prep handoff', 'Expedition wizard'],
+    locality: 'local',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_trip_builder_plan_v1'],
+    schemaVersion: 1,
+    hydrationTrigger: 'Trip Builder entry or lifecycle handoff restoration',
+    hydrationDependencies: ['route_assets', 'active_vehicle_selection'],
+    writeTrigger: 'Plan step completion and explicit plan edits',
+    writeCoalescing: 'One normalized snapshot write per plan command',
+    subscribers: 'Trip Builder and downstream handoff readers',
+    cleanup: 'Clear after explicit cancellation or superseding plan',
+    offlineBehavior: 'Fully available when referenced assets exist',
+    migration: 'Normalizes legacy plan payloads before persistence',
+    sensitivity: 'private',
+    conflictPolicy: 'local_authoritative',
+    retention: 'Current in-progress plan',
+    transactionBoundary: null,
+  },
+  {
+    id: 'offline_readiness',
+    concept: 'Offline Readiness Manifest and resumable package state',
+    owner: 'offlineReadinessCoordinator',
+    adapters: ['offlineTileSyncCoordinator', 'departureAudit'],
+    locality: 'local',
+    persistence: 'file_and_indexed_db',
+    storageKeys: ['ecs_offline_readiness_manifest', 'tile manifests and blobs'],
+    schemaVersion: 1,
+    hydrationTrigger: 'Optional startup service and Offline Prep entry',
+    hydrationDependencies: ['route_assets', 'trip_builder_plan'],
+    writeTrigger: 'Preparation progress, integrity verification, expiration, and reconciliation',
+    writeCoalescing: 'Manifest replacement; provider jobs own bounded progress writes',
+    subscribers: 'Offline Prep, Navigate, readiness, storage settings',
+    cleanup: 'Quota eviction excludes active expedition assets',
+    offlineBehavior: 'Canonical source for departure audit and package use',
+    migration: 'Manifest normalizer migrates legacy package records',
+    sensitivity: 'private',
+    conflictPolicy: 'local_authoritative',
+    retention: '24 manifests plus protected active assets',
+    transactionBoundary: null,
+  },
+  {
+    id: 'planned_expeditions',
+    concept: 'Planned expedition command records, checklists, and field logs',
+    owner: 'expeditionStore',
+    adapters: ['expeditionCommandStore', 'expedition lifecycle adapters'],
+    locality: 'hybrid',
+    persistence: 'hybrid_local_cloud',
+    storageKeys: ['ecs_expedition_command_cache', 'public.ecs_expeditions'],
+    schemaVersion: 'ecs.expedition.lifecycle.v1',
+    hydrationTrigger: 'Expedition surfaces and optional startup restoration',
+    hydrationDependencies: ['route_assets', 'active_vehicle_selection'],
+    writeTrigger: 'Wizard, command/checklist edits, archive commands',
+    writeCoalescing: 'Command-level durable writes and idempotency keys',
+    subscribers: 'Expedition surfaces, readiness, Dispatch adapters',
+    cleanup: 'Cloud subscriptions end on account change; local drafts follow explicit ownership policy',
+    offlineBehavior: 'Local command cache and outbox remain available',
+    migration: 'Canonical lifecycle is embedded additively in legacy records',
+    sensitivity: 'private',
+    conflictPolicy: 'manual_resolution',
+    retention: 'Active/planned plus paginated archive',
+    transactionBoundary: 'expedition_start',
+  },
+  {
+    id: 'active_expedition',
+    concept: 'One live expedition operational state, timeline, and geofence proposals',
+    owner: 'expeditionStateStore',
+    adapters: ['canonical expedition lifecycle', 'trip recorder', 'Dispatch active-expedition adapter'],
+    locality: 'local',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_expedition_state'],
+    schemaVersion: 'legacy-plus-canonical-lifecycle-v1',
+    hydrationTrigger: 'Optional startup restoration before live-service activation',
+    hydrationDependencies: ['planned_expeditions'],
+    writeTrigger: 'Validated lifecycle transition or idempotent geofence proposal',
+    writeCoalescing: 'Transition-level writes; bounded timeline and logs',
+    subscribers: 'Dashboard, Navigate, Dispatch, recorder, timeline engine',
+    cleanup: 'Subscriptions replace on expedition change and stop at completion/logout',
+    offlineBehavior: 'Lifecycle remains operational; cloud effects queue separately',
+    migration: 'Canonical lifecycle adapter preserves legacy standby/active/paused/complete values',
+    sensitivity: 'private',
+    conflictPolicy: 'local_authoritative',
+    retention: 'One current expedition plus bounded log/timeline',
+    transactionBoundary: 'expedition_start',
+  },
+  {
+    id: 'completed_expedition',
+    concept: 'Canonical durable completed outcome used by debrief, reports, badges, and records',
+    owner: 'expeditionTripRecordStore',
+    adapters: ['completion materializer', 'report/badge/insight stores'],
+    locality: 'local',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_expedition_trip_records_v1'],
+    schemaVersion: 2,
+    hydrationTrigger: 'Completion, archive, debrief, or history access',
+    hydrationDependencies: ['active_expedition'],
+    writeTrigger: 'Idempotent completion materialization and post-processing',
+    writeCoalescing: 'Completion-key single-flight and bounded post-processing fingerprints',
+    subscribers: 'Archive, debrief, reports, badges, records, insights',
+    cleanup: 'User-controlled archive deletion; not cleared by live-state reset',
+    offlineBehavior: 'Fully available',
+    migration: 'Version 2 upgrades legacy outcomes while preserving IDs',
+    sensitivity: 'private',
+    conflictPolicy: 'append_only',
+    retention: 'Historical; geometry and notable-event arrays are bounded',
+    transactionBoundary: 'expedition_completion',
+  },
+  {
+    id: 'dashboard_layout',
+    concept: 'Dashboard profile, widget grid, sizes, presets, and manual mode overrides',
+    owner: 'dashboardStore',
+    adapters: ['dashboardPersistence', 'widget registry'],
+    locality: 'local',
+    persistence: 'file_and_indexed_db',
+    storageKeys: ['ecs_dashboard_state', 'ecs_custom_presets'],
+    schemaVersion: 3,
+    hydrationTrigger: 'Optional startup hydration before stable grid presentation',
+    hydrationDependencies: [],
+    writeTrigger: 'Explicit grid/profile/preset commands',
+    writeCoalescing: 'Debounced, fingerprinted writes with explicit background flush',
+    subscribers: 'Dashboard grid and profile selectors',
+    cleanup: 'Preserved on logout as device-local UI preference',
+    offlineBehavior: 'Fully available',
+    migration: 'Executable layout/profile migration to persistence version 3',
+    sensitivity: 'ordinary',
+    conflictPolicy: 'local_authoritative',
+    retention: 'Current layouts and bounded custom presets',
+    transactionBoundary: null,
+  },
+  {
+    id: 'weather_environment',
+    concept: 'Normalized observations, forecasts, alerts, AQI, fire data, and last-good cache',
+    owner: 'operational weather broker',
+    adapters: ['weatherStore', 'weatherBrokerEnvironment', 'provider adapters'],
+    locality: 'hybrid',
+    persistence: 'nonsecure_key_value',
+    storageKeys: ['ecs_weather_cache', 'ecs_weather_environment'],
+    schemaVersion: 1,
+    hydrationTrigger: 'Lazy on first weather consumer; offline snapshot on startup when needed',
+    hydrationDependencies: [],
+    writeTrigger: 'Broker-normalized provider result or last-good promotion',
+    writeCoalescing: 'Request dedupe, route-job cancellation, and bounded cache index',
+    subscribers: 'Dashboard, Navigate, Dispatch, ECS Brief, CampOps',
+    cleanup: 'Provider jobs cancel on route/account/app-state changes',
+    offlineBehavior: 'Last-good snapshots remain visibly stale/cached',
+    migration: 'Broker normalizes legacy cache records; cache envelope unification remains follow-up',
+    sensitivity: 'cache',
+    conflictPolicy: 'source_priority',
+    retention: 'Bounded coordinate/provider cache TTL',
+    transactionBoundary: null,
+  },
+  {
+    id: 'device_telemetry',
+    concept: 'Normalized live power, BLE, OBD2, and vehicle telemetry',
+    owner: 'device-specific telemetry stores with unified lifecycle coordinator',
+    adapters: ['ECSTelemetryStore', 'VehicleTelemetryStore', 'PowerTelemetryManager'],
+    locality: 'memory',
+    persistence: 'memory_only',
+    storageKeys: ['bounded last-known telemetry snapshots only'],
+    schemaVersion: 'device-telemetry-lifecycle-v1',
+    hydrationTrigger: 'Device session restoration after usable shell',
+    hydrationDependencies: ['active_vehicle_selection'],
+    writeTrigger: 'Validated normalized frame',
+    writeCoalescing: 'Source throttles plus 5-second last-known persistence interval where supported',
+    subscribers: 'Narrow Dashboard, Fleet, and vehicle-display selectors',
+    cleanup: 'Disconnect, app background, account change, vehicle change, or provider failure',
+    offlineBehavior: 'BLE/OBD may continue; cloud sources become stale/last-known',
+    migration: 'Persisted last-known snapshots normalize on restore',
+    sensitivity: 'ephemeral',
+    conflictPolicy: 'ephemeral_latest',
+    retention: 'Bounded source buffers and one last-known snapshot',
+    transactionBoundary: null,
+  },
+  {
+    id: 'convoy_locations',
+    concept: 'Opt-in restricted member location stream for the active convoy',
+    owner: 'convoyTrackingStore',
+    adapters: ['convoyRealtimeService', 'convoyMapOverlayModel'],
+    locality: 'cloud',
+    persistence: 'supabase',
+    storageKeys: ['convoy_member_locations'],
+    schemaVersion: 'server-schema-037',
+    hydrationTrigger: 'Active expedition/convoy and permitted Navigate or Dispatch consumer',
+    hydrationDependencies: ['active_expedition'],
+    writeTrigger: 'Explicit sharing opt-in and bounded location publisher',
+    writeCoalescing: 'GPS publishing thresholds and owner-deduped realtime subscription',
+    subscribers: 'Navigate convoy overlay and Dispatch roster/status',
+    cleanup: 'Stop on logout, opt-out, expedition switch, unmount, or app lifecycle policy',
+    offlineBehavior: 'Last known location remains stale; no manual coordinate impersonation',
+    migration: 'Server migration and staleness policy',
+    sensitivity: 'secure',
+    conflictPolicy: 'server_authoritative',
+    retention: 'Server cleanup policy; client snapshot bounded to active convoy',
+    transactionBoundary: null,
+  },
+  {
+    id: 'dispatch_runtime',
+    concept: 'Dispatch pings, queue items, assignments, acknowledgments, and timeline',
+    owner: 'dispatchEventStore and Dispatch lifecycle adapters',
+    adapters: ['dispatchPersistenceAdapter', 'dispatchRealtimeAdapter', 'dispatchCanonicalMigrationCoordinator'],
+    locality: 'hybrid',
+    persistence: 'hybrid_local_cloud',
+    storageKeys: ['ecs_dispatch_persistence', 'canonical Dispatch tables when shadow mode is enabled'],
+    schemaVersion: 2,
+    hydrationTrigger: 'Dispatch entry or active expedition context',
+    hydrationDependencies: ['active_expedition'],
+    writeTrigger: 'Permission-validated lifecycle action',
+    writeCoalescing: 'Stable IDs/idempotency keys and deterministic merge rules',
+    subscribers: 'Dispatch surfaces and Navigate linked-context overlay',
+    cleanup: 'Replace subscription on expedition/account change; retain bounded local continuity',
+    offlineBehavior: 'Local-first actions queue and replay through the same merge rules',
+    migration: 'Canonical Supabase migration remains default-off shadow/dual-read',
+    sensitivity: 'private',
+    conflictPolicy: 'manual_resolution',
+    retention: '300 active events, 600 dismissed IDs, bounded canonical audit retention',
+    transactionBoundary: 'offline_replay',
+  },
+  {
+    id: 'sync_outbox',
+    concept: 'General durable offline cloud-operation outbox',
+    owner: 'syncActionQueue',
+    adapters: ['syncProcessors', 'AppProvider auth lifecycle'],
+    locality: 'local',
+    persistence: 'indexed_db',
+    storageKeys: ['ecs_sync_action_queue', 'sync_actions'],
+    schemaVersion: 'action-v2-account-scoped',
+    hydrationTrigger: 'Module startup then IndexedDB upgrade',
+    hydrationDependencies: ['auth_session'],
+    writeTrigger: 'Explicit local-first cloud command',
+    writeCoalescing: 'Operation fingerprint and idempotency-key dedupe',
+    subscribers: 'Sync queue indicator and AppProvider',
+    cleanup: 'Stop and unbind on logout; preserve account-scoped actions without exposing them to another account',
+    offlineBehavior: 'Ordered priority replay after matching account reconnects',
+    migration: 'Legacy unscoped actions are claimed once by the restored account and fingerprinted without raw account IDs',
+    sensitivity: 'private',
+    conflictPolicy: 'manual_resolution',
+    retention: '200 queued actions and 50 history records',
+    transactionBoundary: 'offline_replay',
+  },
+  {
+    id: 'offline_map_assets',
+    concept: 'Offline map tile blobs, manifests, quota, and protected active assets',
+    owner: 'tileCacheStore and offlineTileSyncCoordinator',
+    adapters: ['offlineReadinessCoordinator', 'Navigate storage surfaces'],
+    locality: 'local',
+    persistence: 'file_and_indexed_db',
+    storageKeys: ['ecs_tile_cache_meta', 'ecs_tile_cache_quota', 'tile blob stores'],
+    schemaVersion: 1,
+    hydrationTrigger: 'Optional startup reconciliation and Navigate/Offline Prep entry',
+    hydrationDependencies: [],
+    writeTrigger: 'Download progress, verification, quota change, or explicit eviction',
+    writeCoalescing: 'Coordinator-owned jobs and manifest writes',
+    subscribers: 'Navigate, Offline Prep, readiness, storage settings',
+    cleanup: 'Quota eviction is blocked for active route/expedition assets',
+    offlineBehavior: 'Primary offline map source',
+    migration: 'Metadata and native manifests normalize on load',
+    sensitivity: 'cache',
+    conflictPolicy: 'local_authoritative',
+    retention: 'Quota-bound with active asset protection',
+    transactionBoundary: null,
+  },
+  {
+    id: 'runtime_event_bus',
+    concept: 'Cross-domain normalized summary publication and derived cascades',
+    owner: 'ecsBus',
+    adapters: ['ecsSyncCoordinator', 'ecsWidgetBridge'],
+    locality: 'memory',
+    persistence: 'memory_only',
+    storageKeys: [],
+    schemaVersion: 'runtime-only',
+    hydrationTrigger: 'Starts after usable shell',
+    hydrationDependencies: [],
+    writeTrigger: 'Normalized owner-store changes only',
+    writeCoalescing: 'Per-channel debounce and source-timestamp stale rejection',
+    subscribers: 'Risk, assistant explanation, widgets, companion projections',
+    cleanup: 'Coordinator stop/reset clears timers and subscriptions',
+    offlineBehavior: 'Publishes local/cached source state without relabelling it live',
+    migration: 'Not persisted',
+    sensitivity: 'ephemeral',
+    conflictPolicy: 'reject_older',
+    retention: 'One summary per channel and bounded counters',
+    transactionBoundary: null,
+  },
+] as const;
+
+export type ECSStateOwnershipValidation = {
+  valid: boolean;
+  errors: string[];
+};
+
+export function validateECSStateOwnershipRegistry(
+  records: readonly ECSStateOwnershipRecord[] = ECS_STATE_OWNERSHIP_REGISTRY,
+): ECSStateOwnershipValidation {
+  const errors: string[] = [];
+  const ids = new Set<string>();
+  const concepts = new Set<string>();
+
+  records.forEach((record) => {
+    if (!record.id.trim()) errors.push('State ownership record has an empty id.');
+    if (ids.has(record.id)) errors.push(`Duplicate state ownership id: ${record.id}.`);
+    ids.add(record.id);
+    if (!record.concept.trim()) errors.push(`State ownership record ${record.id} has no concept.`);
+    if (concepts.has(record.concept)) errors.push(`Duplicate authoritative concept: ${record.concept}.`);
+    concepts.add(record.concept);
+    if (!record.owner.trim()) errors.push(`State ownership record ${record.id} has no owner.`);
+    if (record.persistence !== 'memory_only' && record.storageKeys.length === 0) {
+      errors.push(`Persisted state ${record.id} must identify its storage key or backend.`);
+    }
+    if (record.persistence !== 'memory_only' && record.schemaVersion == null && !record.migration.trim()) {
+      errors.push(`Persisted state ${record.id} must identify a schema version or migration posture.`);
+    }
+    if (record.sensitivity === 'secure' && record.persistence === 'nonsecure_key_value') {
+      errors.push(`Secure state ${record.id} cannot use nonsecure key-value persistence.`);
+    }
+  });
+
+  return { valid: errors.length === 0, errors };
+}
+
+export function getECSStateOwnership(id: string): ECSStateOwnershipRecord | null {
+  return ECS_STATE_OWNERSHIP_REGISTRY.find((record) => record.id === id) ?? null;
+}
+
+export function buildECSStateOwnershipReport() {
+  return {
+    schemaVersion: ECS_STATE_OWNERSHIP_SCHEMA_VERSION,
+    generatedAt: new Date().toISOString(),
+    validation: validateECSStateOwnershipRegistry(),
+    records: ECS_STATE_OWNERSHIP_REGISTRY.map((record) => ({ ...record })),
+  };
+}

@@ -4,6 +4,10 @@ import { evaluateCacheReadiness } from '../offlineCacheAwarenessEngine';
 import { powerSetupStore } from '../powerSetupStore';
 import { routeStore, type ImportedRoute, type RouteWaypoint } from '../routeStore';
 import { tileCacheStore } from '../tileCacheStore';
+import {
+  getOfflineReadinessAsset,
+  offlineReadinessCoordinator,
+} from '../offlinePrepPack';
 import { gpsUIState } from '../gpsUIState';
 import { bailoutStore } from '../bailoutStore';
 import { commsStore } from '../commsStore';
@@ -400,6 +404,67 @@ function buildOfflineInput(
         ? true
         : isRecentIso(weather.updatedAt, WEATHER_SNAPSHOT_AVAILABLE_MINUTES)
       : null;
+    const canonicalManifest = offlineReadinessCoordinator.getLatestForRoute(
+      activeRouteId ?? route?.routeId ?? null,
+    );
+    if (canonicalManifest) {
+      const canonicalAudit = offlineReadinessCoordinator.audit(canonicalManifest.manifestId);
+      const routeGeometry = getOfflineReadinessAsset(canonicalManifest, 'route_geometry');
+      const mapRegion = getOfflineReadinessAsset(canonicalManifest, 'map_region');
+      const campCandidates = getOfflineReadinessAsset(canonicalManifest, 'camp_candidates');
+      const weatherAsset = getOfflineReadinessAsset(canonicalManifest, 'weather_snapshot');
+      const emergencyPacket = getOfflineReadinessAsset(canonicalManifest, 'emergency_recovery_packet');
+      const waypoints = getOfflineReadinessAsset(canonicalManifest, 'waypoints_bailouts');
+      const weatherAssetExpired = !!weatherAsset?.expiresAt && Date.parse(weatherAsset.expiresAt) <= Date.now();
+      const weatherAssetState = weatherAssetExpired ? 'expired' as const : weatherAsset?.status ?? null;
+      const routeReady = routeGeometry?.status === 'ready' || routeGeometry?.status === 'stale';
+      const mapsReady = mapRegion?.status === 'ready' || mapRegion?.status === 'stale';
+      const hasUsableRequiredAsset = canonicalManifest.assets.some((asset) => (
+        asset.required && ['ready', 'stale'].includes(asset.status)
+      ));
+      const packageStatus = canonicalAudit?.status === 'ready' || canonicalAudit?.status === 'caution'
+        ? 'ready' as const
+        : hasUsableRequiredAsset
+          ? 'partial' as const
+          : 'missing' as const;
+      const requiredAssetsFresh = canonicalManifest.assets
+        .filter((asset) => asset.required)
+        .every((asset) => !['stale', 'expired'].includes(asset.status));
+      return {
+        routeDownloaded: routeReady,
+        routeGeometryCached: routeReady,
+        mapsDownloaded: mapsReady,
+        mapTilesCachedForRoute: mapsReady,
+        campIntelDownloaded: campCandidates?.status === 'ready' || campCandidates?.status === 'stale',
+        campCandidatesCached: campCandidates?.status === 'ready' || campCandidates?.status === 'stale',
+        bailoutPointsCached: waypoints?.status === 'ready' || waypoints?.status === 'stale',
+        routeBailoutPointCount: activeRouteId ? routeBailoutCount : bailoutCount,
+        weatherSnapshotAvailable: weatherAsset
+          ? weatherAssetState != null && ['ready', 'stale', 'expired'].includes(weatherAssetState)
+          : weatherSnapshotAvailable,
+        fuelTownRoadReferencesCached: expeditionDataAvailable ? true : null,
+        emergencyDocsAvailable: emergencyPacket?.status === 'ready' || emergencyPacket?.status === 'stale',
+        emergencyPacketAvailable: emergencyPacket?.status === 'ready' || emergencyPacket?.status === 'stale',
+        currentRoutePackageFresh: requiredAssetsFresh,
+        routePackageAgeHours: Number.isFinite(Date.parse(canonicalManifest.updatedAt))
+          ? Math.max(0, (Date.now() - Date.parse(canonicalManifest.updatedAt)) / (60 * 60 * 1000))
+          : null,
+        cachedTileCount: mapRegion?.status === 'ready' ? snapshot.cached_tile_count : 0,
+        cachedRegionCount: mapRegion?.storageRefs.length ?? 0,
+        isRemoteRoute: isRemoteRouteForOffline(route),
+        isOnline: connectivity.isOnline(),
+        packageStatus,
+        canonicalManifestId: canonicalManifest.manifestId,
+        canonicalAudit,
+        routeGeometryState: routeGeometry?.status ?? null,
+        mapRegionState: mapRegion?.status ?? null,
+        weatherSnapshotState: weatherAssetState,
+        emergencyPacketState: emergencyPacket?.status ?? null,
+        source: 'cached' as const,
+        updatedAt: canonicalManifest.updatedAt,
+        isStale: !requiredAssetsFresh,
+      };
+    }
     return {
       routeDownloaded,
       routeGeometryCached,
@@ -854,6 +919,7 @@ function ensureSourceSubscriptions(): void {
     subscribePowerIntelligenceSafe(onSourceChange),
     subscribeSharedOperationalWeather(onSourceChange),
     tileCacheStore.subscribe(onSourceChange),
+    offlineReadinessCoordinator.subscribe(onSourceChange),
     gpsUIState.subscribe(onSourceChange),
     connectivity.onStatusChange(onSourceChange),
     commsStore.subscribe(onSourceChange),

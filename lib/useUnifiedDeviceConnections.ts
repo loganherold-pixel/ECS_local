@@ -8,6 +8,10 @@ import { BLU_SCAN_WINDOW_MS } from './bluPerformanceConfig';
 import { ecsProviderRegistry } from './EcsProviderRegistry';
 import { ecsLog } from './ecsLogger';
 import {
+  incrementECSPerformanceCounter,
+  startECSPerformanceSpan,
+} from './performance/ecsPerformanceDiagnostics';
+import {
   EcoFlowCloudDiscoveryError,
   discoverEcoFlowDevicesForUnifiedScanner,
 } from './ecoflowUnifiedScannerDiscovery';
@@ -130,6 +134,10 @@ import { useOBD2Scanner } from '../src/vehicle-telemetry/useOBD2Scanner';
 import { useVehicleTelemetry } from '../src/vehicle-telemetry/useVehicleTelemetry';
 import type { VehicleTelemetryDevice } from '../src/vehicle-telemetry/VehicleTelemetryTypes';
 import { powerDeviceStore } from '../src/power/devices/PowerDeviceStore';
+import {
+  UnifiedScannerCoordinator,
+  type UnifiedScannerCancelReason,
+} from './unifiedScannerCoordinator';
 
 export type ECSConnectionSection = 'connected' | 'nearby' | 'known' | 'attention';
 export type ECSConnectionScanAreaState =
@@ -2142,9 +2150,19 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
   const deviceOperationRef = useRef<Record<string, number>>({});
   const routeSequenceRef = useRef(0);
   const loggedRoutingRef = useRef<Map<string, string>>(new Map());
-  const scanInFlightRef = useRef(false);
-  const lastScanRequestAtRef = useRef(0);
-  const activeScanSessionRef = useRef(0);
+  const scannerCoordinatorRef = useRef<UnifiedScannerCoordinator | null>(null);
+  if (!scannerCoordinatorRef.current) {
+    scannerCoordinatorRef.current = new UnifiedScannerCoordinator({
+      cooldownMs: SCANNER_SCAN_WINDOW_DEBOUNCE_MS,
+      onCancel: async (reason) => {
+        await obd2Adapter.stopScan(`unified_coordinator_${reason}`);
+        if (mountedRef.current) {
+          setIsRefreshing(false);
+          setManualScanStatus((current) => (current === 'scanning' ? 'completed' : current));
+        }
+      },
+    });
+  }
   const latestBleScanCountsRef = useRef({ raw: 0, accepted: 0 });
   const connectInFlightRef = useRef<Set<string>>(new Set());
   const disconnectInFlightRef = useRef<Set<string>>(new Set());
@@ -2210,9 +2228,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     }
     return () => {
       mountedRef.current = false;
-      activeScanSessionRef.current += 1;
-      scanInFlightRef.current = false;
-      void obd2Adapter.stopScan('unified_panel_unmount');
+      void scannerCoordinatorRef.current?.cancel('unmount');
     };
   }, []);
 
@@ -2565,33 +2581,34 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
   }, [routedAccessoryDiscoveries]);
 
   const rescan = useCallback(async () => {
-    const now = Date.now();
-    if (now - lastScanRequestAtRef.current < SCANNER_SCAN_WINDOW_DEBOUNCE_MS) {
+    if (batchBusy) {
       if (DEBUG_DEVICE_CONNECTIONS) {
         ecsLog.debug('TELEMETRY', '[BT_SCAN] scan_button_pressed', {
           ignored: true,
-          reason: 'debounced_scan_window',
+          reason: 'batch_busy',
         });
       }
       return;
     }
 
-    if (scanInFlightRef.current || isRefreshing || batchBusy) {
+    const scanRequest = await scannerCoordinatorRef.current!.requestSession({
+      appState,
+      durationMs: UNIFIED_BLUETOOTH_SCAN_DURATION_MS,
+    });
+    if (!scanRequest.started) {
       if (DEBUG_DEVICE_CONNECTIONS) {
         ecsLog.debug('TELEMETRY', '[BT_SCAN] scan_button_pressed', {
           ignored: true,
-          reason: scanInFlightRef.current || isRefreshing ? 'scan_pending' : 'batch_busy',
+          reason: scanRequest.reason,
+          detail: scanRequest.detail,
         });
       }
       return;
     }
-    lastScanRequestAtRef.current = now;
 
-    scanInFlightRef.current = true;
-    const scanSessionId = activeScanSessionRef.current + 1;
-    activeScanSessionRef.current = scanSessionId;
+    const scanSessionId = scanRequest.session.id;
     const isCurrentScanSession = () => (
-      mountedRef.current && activeScanSessionRef.current === scanSessionId
+      mountedRef.current && scannerCoordinatorRef.current?.isCurrent(scanSessionId) === true
     );
 
     setInfoMessage(null);
@@ -3073,8 +3090,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         rawDevicesSeenCount: scanRawDevicesSeenCount,
         acceptedDevicesCount: scanAcceptedDevicesCount,
       });
-      if (activeScanSessionRef.current === scanSessionId) {
-        scanInFlightRef.current = false;
+      if (scannerCoordinatorRef.current?.complete(scanSessionId)) {
         if (mountedRef.current) {
           setScannerClock(Date.now());
           setIsRefreshing(false);
@@ -3083,7 +3099,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
       }
     }
 
-  }, [batchBusy, bleAcceptedDeviceCount, bleRawDevicesSeenCount, isRefreshing, startScan, stopScan]);
+  }, [appState, batchBusy, bleAcceptedDeviceCount, bleRawDevicesSeenCount, startScan, stopScan]);
 
   useEffect(() => {
     if (manualScanStatus === 'idle') return;
@@ -3186,7 +3202,6 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
   }, [discoveredPowerDevices, manualScanStatus, obdError]);
 
   const stopScanning = useCallback(async (reason: string = 'manual') => {
-    activeScanSessionRef.current += 1;
     recordBluetoothDiagnosticEvent({
       type: 'scanner_stop',
       source: 'native_ble',
@@ -3196,13 +3211,27 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         state: 'stopped',
       },
     });
-    await stopScan(reason);
-    scanInFlightRef.current = false;
+    const coordinatorReason: UnifiedScannerCancelReason =
+      reason === 'unmount'
+        ? 'unmount'
+        : reason === 'background' || reason === 'app_state_inactive'
+          ? 'background'
+          : 'manual';
+    const cancelled = await scannerCoordinatorRef.current?.cancel(coordinatorReason);
+    if (!cancelled) {
+      await stopScan(reason);
+    }
     if (mountedRef.current) {
       setIsRefreshing(false);
       setManualScanStatus((current) => (current === 'scanning' ? 'completed' : current));
     }
   }, [stopScan]);
+
+  useEffect(() => {
+    if (appState === 'active') return;
+    if (!scannerCoordinatorRef.current?.getActiveSession()) return;
+    void stopScanning('app_state_inactive');
+  }, [appState, stopScanning]);
 
   const setDeviceUiState = useCallback((deviceId: string, phase: DeviceUiPhase, error: string | null = null) => {
     if (!mountedRef.current) return;
@@ -4089,6 +4118,9 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     }
 
     if (connectInFlightRef.current.has(device.id) || busyIds.includes(device.id) || device.isConnecting) {
+      if (source === 'saved_auto_reconnect' || source === 'user_retry') {
+        incrementECSPerformanceCounter('device_reconnect', 'repeated_requests');
+      }
       bluLog('[BLU_CONNECT]', 'connect_ignored_pending', buildBluConnectionAttemptLogDetails({
         deviceId: device.rawId,
         vendor: device.providerId,
@@ -4212,6 +4244,17 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
     setDeviceUiState(device.id, 'connecting', null);
     updateBusy(device.id, true);
     const operationId = beginDeviceOperation(device.id);
+    const reconnectPerformance = source === 'saved_auto_reconnect' || source === 'user_retry'
+      ? startECSPerformanceSpan('device_reconnect', 'connection_attempt_lifecycle', {
+          trackOutstanding: true,
+          metadata: {
+            source,
+            route: routeLabel,
+            provider: device.providerId,
+            discoverable: device.isDiscoverable,
+          },
+        })
+      : null;
 
     try {
       if (obdIsScanning) {
@@ -5037,6 +5080,7 @@ export function useUnifiedDeviceConnections(): UnifiedDeviceConnectionsResult {
         message: `${device.name} is now owned by the ECS telemetry domain.`,
       });
     } finally {
+      reconnectPerformance?.end('completed', { attemptSettled: true });
       connectInFlightRef.current.delete(device.id);
       updateBusy(device.id, false);
     }

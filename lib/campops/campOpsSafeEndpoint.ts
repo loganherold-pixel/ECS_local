@@ -11,22 +11,14 @@ import type {
 import { createEmptyCampRecommendationSet } from './campOpsTypes';
 import type { CampOpsHardGateConfig } from './campOpsHardGateConfig';
 import {
-  evaluateCampHardGateCandidates,
-  type CampHardGateCandidateEvaluation,
-} from './campOpsHardGates';
-import {
   type CampOpsRecommendationConfig,
   type CampOpsRecommendationRolloutConfig,
   getCampOpsFeatureState,
 } from './campOpsRecommendationConfig';
-import { generateCampRecommendationSet } from './campOpsRecommendations';
+import { evaluateCampOpsRecommendations } from './campOpsRecommendationCoordinator';
 import type { CampOpsResourceDebtConfig } from './campOpsResourceDebtConfig';
 import { attachCampResourceDebt } from './campOpsResourceDebt';
 import type { CampOpsScoringConfigOverrides } from './campOpsScoringConfig';
-import {
-  rankCampSuitabilityCandidates,
-  type CampSuitabilityScoreResult,
-} from './campOpsScoring';
 import { emitCampOpsEndpointRecommendationGenerated } from './campOpsTelemetry';
 
 export type CampOpsSafeEndPointDelayPreset =
@@ -275,35 +267,14 @@ function buildRecommendationSet(
   enrichmentsByCandidateId: Record<string, CampCandidateEnrichment | undefined>,
   input: CampOpsFindSafeEndPointInput,
 ): CampRecommendationSet {
-  const hardGateEvaluations = evaluateCampHardGateCandidates({
+  return evaluateCampOpsRecommendations({
     context,
     candidates,
     enrichmentsByCandidateId,
-    config: input.hardGateConfig ?? {},
-  });
-  const hardGateEvaluationsByCandidateId: Record<string, CampHardGateCandidateEvaluation> = {};
-  hardGateEvaluations.forEach((evaluation) => {
-    hardGateEvaluationsByCandidateId[evaluation.candidate.id] = evaluation;
-  });
-  const scores = rankCampSuitabilityCandidates({
-    context,
-    candidates,
-    enrichmentsByCandidateId,
-    hardGateEvaluationsByCandidateId,
-    config: input.scoringConfig ?? {},
-  });
-  const suitabilityScoresByCandidateId: Record<string, CampSuitabilityScoreResult> = {};
-  scores.forEach((score) => {
-    suitabilityScoresByCandidateId[score.candidate.id] = score;
-  });
-  return generateCampRecommendationSet({
-    context,
-    candidates,
-    enrichmentsByCandidateId,
-    hardGateEvaluationsByCandidateId,
-    suitabilityScoresByCandidateId,
-    config: input.recommendationConfig ?? {},
-  });
+    hardGateConfig: input.hardGateConfig ?? {},
+    scoringConfig: input.scoringConfig ?? {},
+    recommendationConfig: input.recommendationConfig ?? {},
+  }).recommendationSet;
 }
 
 function keyRisks(set: CampRecommendationSet): string[] {

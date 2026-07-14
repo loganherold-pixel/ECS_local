@@ -521,6 +521,11 @@ export const vehicleDisplayModeEngine = {
    */
   start(): void {
     if (_isRunning) return;
+    const persistedOverride = vehicleDisplayStore.getModeOverride();
+    _modeOverride = persistedOverride;
+    _autoModeEnabled = persistedOverride === 'auto';
+    _isManualOverride = persistedOverride !== 'auto';
+    _cachedOutput = null;
     _isRunning = true;
     _evaluate();
     _evalTimer = setInterval(_evaluate, EVAL_INTERVAL_MS);

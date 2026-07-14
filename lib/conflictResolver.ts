@@ -375,6 +375,8 @@ function saveConflictsToStorage(conflicts: QueueConflict[]): void {
 class ConflictResolver {
   private _conflicts: QueueConflict[] = [];
   private _listeners = new Set<ConflictChangeListener>();
+  private _actorGuardEnabled = false;
+  private _activeActorFingerprint: string | null = null;
 
   constructor() {
     this._conflicts = loadConflictsFromStorage();
@@ -384,22 +386,58 @@ class ConflictResolver {
 
   /** All detected conflicts */
   get conflicts(): QueueConflict[] {
-    return [...this._conflicts];
+    return this._conflicts.filter((conflict) => this._isConflictVisible(conflict));
   }
 
   /** Only pending (unresolved) conflicts */
   get pendingConflicts(): QueueConflict[] {
-    return this._conflicts.filter(c => c.status === 'pending');
+    return this.conflicts.filter(c => c.status === 'pending');
   }
 
   /** Number of pending conflicts */
   get pendingCount(): number {
-    return this._conflicts.filter(c => c.status === 'pending').length;
+    return this.pendingConflicts.length;
   }
 
   /** Whether there are any pending conflicts blocking replay */
   get hasBlockingConflicts(): boolean {
     return this.pendingCount > 0;
+  }
+
+  bindActorFingerprint(fingerprint: string): void {
+    const normalized = /^user_[a-f0-9]{8}$/i.test(fingerprint.trim())
+      ? fingerprint.trim().toLowerCase()
+      : null;
+    if (!normalized) return;
+    this._actorGuardEnabled = true;
+    this._activeActorFingerprint = normalized;
+
+    const knownActors = new Set(
+      this._conflicts
+        .flatMap((conflict) => [conflict.actionA.actorFingerprint, conflict.actionB.actorFingerprint])
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (knownActors.size === 0 || (knownActors.size === 1 && knownActors.has(normalized))) {
+      let migrated = false;
+      this._conflicts.forEach((conflict) => {
+        if (!conflict.actionA.actorFingerprint) {
+          conflict.actionA.actorFingerprint = normalized;
+          migrated = true;
+        }
+        if (!conflict.actionB.actorFingerprint) {
+          conflict.actionB.actorFingerprint = normalized;
+          migrated = true;
+        }
+      });
+      if (migrated) this._save();
+    }
+    this._notify();
+  }
+
+  unbindActor(): void {
+    this._actorGuardEnabled = true;
+    this._activeActorFingerprint = null;
+    this._notify();
   }
 
   // ── Conflict Detection ──────────────────────────────────────
@@ -444,7 +482,7 @@ class ConflictResolver {
       if (hasDelete) continue; // Delete wins, no conflict to resolve
 
       // Skip if we already have a pending conflict for this entity key
-      const existingConflict = this._conflicts.find(
+      const existingConflict = this.conflicts.find(
         c => c.entityKey === entityKey && c.status === 'pending'
       );
       if (existingConflict) continue;
@@ -455,7 +493,7 @@ class ConflictResolver {
         const actionB = updates[i + 1];
 
         // Already have a conflict for this pair?
-        const pairExists = this._conflicts.some(
+        const pairExists = this.conflicts.some(
           c => c.status === 'pending' &&
                ((c.actionA.id === actionA.id && c.actionB.id === actionB.id) ||
                 (c.actionA.id === actionB.id && c.actionB.id === actionA.id))
@@ -558,7 +596,7 @@ class ConflictResolver {
    * @returns The resolution result, or null if conflict not found
    */
   resolveConflict(conflictId: string): ConflictResolution | null {
-    const conflict = this._conflicts.find(c => c.id === conflictId);
+    const conflict = this.conflicts.find(c => c.id === conflictId);
     if (!conflict || conflict.status !== 'pending') return null;
 
     const mergedPayload = this._buildMergedPayload(conflict);
@@ -592,7 +630,7 @@ class ConflictResolver {
    * Resolve a conflict by keeping only the first (earlier) action.
    */
   resolveKeepFirst(conflictId: string): ConflictResolution | null {
-    const conflict = this._conflicts.find(c => c.id === conflictId);
+    const conflict = this.conflicts.find(c => c.id === conflictId);
     if (!conflict || conflict.status !== 'pending') return null;
 
     conflict.status = 'resolved';
@@ -611,7 +649,7 @@ class ConflictResolver {
    * Resolve a conflict by keeping only the last (later) action.
    */
   resolveKeepLast(conflictId: string): ConflictResolution | null {
-    const conflict = this._conflicts.find(c => c.id === conflictId);
+    const conflict = this.conflicts.find(c => c.id === conflictId);
     if (!conflict || conflict.status !== 'pending') return null;
 
     conflict.status = 'resolved';
@@ -630,7 +668,7 @@ class ConflictResolver {
    * Auto-merge a conflict where fields don't overlap (combine both).
    */
   autoMerge(conflictId: string): ConflictResolution | null {
-    const conflict = this._conflicts.find(c => c.id === conflictId);
+    const conflict = this.conflicts.find(c => c.id === conflictId);
     if (!conflict || conflict.status !== 'pending') return null;
 
     // Set all diffs to keep B (later) by default for auto-merge
@@ -667,7 +705,7 @@ class ConflictResolver {
    * Discard a conflict (keep both actions as-is, replay sequentially).
    */
   discardConflict(conflictId: string): void {
-    const conflict = this._conflicts.find(c => c.id === conflictId);
+    const conflict = this.conflicts.find(c => c.id === conflictId);
     if (!conflict) return;
 
     conflict.status = 'discarded';
@@ -684,7 +722,7 @@ class ConflictResolver {
     resolution: 'a' | 'b' | 'manual',
     manualValue?: any,
   ): void {
-    const conflict = this._conflicts.find(c => c.id === conflictId);
+    const conflict = this.conflicts.find(c => c.id === conflictId);
     if (!conflict) return;
 
     const diff = conflict.diffs.find(d => d.field === fieldName);
@@ -703,7 +741,7 @@ class ConflictResolver {
    * Set all fields in a conflict to the same resolution.
    */
   setAllFieldResolutions(conflictId: string, resolution: 'a' | 'b'): void {
-    const conflict = this._conflicts.find(c => c.id === conflictId);
+    const conflict = this.conflicts.find(c => c.id === conflictId);
     if (!conflict) return;
 
     for (const diff of conflict.diffs) {
@@ -822,6 +860,15 @@ class ConflictResolver {
     }
 
     return merged;
+  }
+
+  private _isConflictVisible(conflict: QueueConflict): boolean {
+    if (!this._actorGuardEnabled) return true;
+    if (!this._activeActorFingerprint) return false;
+    return (
+      conflict.actionA.actorFingerprint === this._activeActorFingerprint &&
+      conflict.actionB.actorFingerprint === this._activeActorFingerprint
+    );
   }
 
   /**

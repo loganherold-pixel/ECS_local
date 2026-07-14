@@ -1,6 +1,7 @@
 import type { NavigateRouteSessionSnapshot } from './navigateRouteSessionStore';
 import { navigateRouteSessionStore } from './navigateRouteSessionStore';
 import type { NavigationHandoffPayload } from './navigationHandoffStore';
+import { decideGuidanceReplacement } from './lifecycle/routeTripExpeditionLifecycle';
 
 export const ACTIVE_GUIDANCE_REPLACEMENT_CONFIRMED_AT =
   'activeGuidanceReplacementConfirmedAt';
@@ -54,9 +55,11 @@ export function shouldProtectActiveGuidanceFromHandoff(
   payload: NavigationHandoffPayload,
   snapshot: NavigateRouteSessionSnapshot | null | undefined,
 ): boolean {
-  return (
-    isActiveGuidanceSnapshot(snapshot) &&
-    !isNavigationHandoffForActiveGuidance(payload, snapshot) &&
-    !hasActiveGuidanceReplacementConfirmation(payload)
-  );
+  if (!isActiveGuidanceSnapshot(snapshot)) return false;
+  return decideGuidanceReplacement({
+    activeRouteId: snapshot.routeId,
+    activeSessionId: snapshot.sessionId,
+    targetRouteId: payload.id,
+    confirmed: hasActiveGuidanceReplacementConfirmation(payload),
+  }).action === 'confirm';
 }

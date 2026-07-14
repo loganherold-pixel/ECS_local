@@ -17,7 +17,7 @@
  * - Async persistence via dashboardPersistence.ts (expo-file-system on native, localStorage on web)
  * - Debounced writes coalesce rapid mutations into single disk writes
  * - hydrateDashboardState() must be called once at app startup to load from disk
- * - On web, localStorage is also written synchronously for backward compat
+ * - Web and native writes share the same bounded debounce and lifecycle flush
  *
  * Hydration Flow:
  * 1. App launches → _cachedState is null → getStorage() returns createDefaultState()
@@ -30,6 +30,7 @@
 import { customWidgetStore } from './customWidgetStore';
 import { reportDataIntegrityFailure, reportRecoverableFailure } from './ecsIssueIntelligence';
 import { ecsLog } from './ecsLogger';
+import { incrementECSPerformanceCounter } from './performance/ecsPerformanceDiagnostics';
 import {
   WIDGET_REGISTRY,
   isDashboardEmpty,
@@ -966,6 +967,10 @@ function createDefaultState(): DashboardState {
  * All writes update this cache AND schedule an async disk write.
  */
 let _cachedState: DashboardState | null = null;
+let _lastSerializedDashboardState: string | null = null;
+let _dashboardHydrationFlight: Promise<DashboardState | null> | null = null;
+let _customPresetsHydrationFlight: Promise<void> | null = null;
+let _customPresetsHydrated = false;
 
 /**
  * Validate and migrate a parsed state object.
@@ -1064,6 +1069,7 @@ function getStorage(): DashboardState {
         const validated = validateAndMigrate(parsed);
         if (validated) {
           _cachedState = validated;
+          _lastSerializedDashboardState = JSON.stringify(validated);
           return validated;
         }
       }
@@ -1089,7 +1095,14 @@ function saveStorage(state: DashboardState): void {
   // Schedule debounced async write to disk (native: expo-file-system, web: localStorage)
   try {
     const serialized = JSON.stringify(state);
-    writeDashboardState(serialized);
+    if (serialized === _lastSerializedDashboardState) {
+      incrementECSPerformanceCounter('dashboard_stable_grid', 'persistence_unchanged_write_skipped');
+      return;
+    }
+    _lastSerializedDashboardState = serialized;
+    void writeDashboardState(serialized).catch((error) => {
+      console.warn('[DashboardStore] Failed to schedule persistence:', error);
+    });
   } catch (e) {
     console.warn('[DashboardStore] Failed to serialize state:', e);
   }
@@ -1107,63 +1120,87 @@ function saveStorage(state: DashboardState): void {
  *
  * @returns The hydrated state, or a default state if no persisted state was found.
  */
-export async function hydrateDashboardState(): Promise<DashboardState | null> {
-  try {
-    const raw = await readDashboardState();
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      const validated = validateAndMigrate(parsed);
-      if (validated) {
-        _cachedState = validated;
-        ecsLog.debug('SHELL', 'Dashboard state hydrated from persistent storage');
-        markHydrated();
-        return validated;
-      }
-    }
-  } catch (e) {
-    console.warn('[DashboardStore] Hydration failed:', e);
-    reportRecoverableFailure({
-      severity: 'medium',
-      issueTitle: 'Dashboard state hydration failed',
-      ecsArea: 'dashboard',
-      error: e,
-      message: e instanceof Error ? e.message : 'Dashboard hydration failed',
-      signature: `dashboard_hydration:${e instanceof Error ? e.message : 'unknown'}`,
-      fallbackUsed: true,
-    });
+export function hydrateDashboardState(): Promise<DashboardState | null> {
+  if (isHydrated()) {
+    return Promise.resolve(_cachedState ?? getStorage());
+  }
+  if (_dashboardHydrationFlight) {
+    incrementECSPerformanceCounter('dashboard_stable_grid', 'hydration_single_flight_join');
+    return _dashboardHydrationFlight;
   }
 
-  // No persisted state found — use defaults
-  // (Don't set _cachedState here; let getStorage() return fresh defaults each time
-  //  until a mutation occurs, which will then cache and persist)
-  ecsLog.debug('SHELL', 'Dashboard state missing persisted storage; using defaults');
-  _cachedState = createDefaultState();
-  markHydrated();
-  return _cachedState;
+  _dashboardHydrationFlight = (async () => {
+    try {
+      const raw = await readDashboardState();
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const validated = validateAndMigrate(parsed);
+        if (validated) {
+          _cachedState = validated;
+          _lastSerializedDashboardState = JSON.stringify(validated);
+          ecsLog.debug('SHELL', 'Dashboard state hydrated from persistent storage');
+          return validated;
+        }
+      }
+    } catch (e) {
+      console.warn('[DashboardStore] Hydration failed:', e);
+      reportRecoverableFailure({
+        severity: 'medium',
+        issueTitle: 'Dashboard state hydration failed',
+        ecsArea: 'dashboard',
+        error: e,
+        message: e instanceof Error ? e.message : 'Dashboard hydration failed',
+        signature: `dashboard_hydration:${e instanceof Error ? e.message : 'unknown'}`,
+        fallbackUsed: true,
+      });
+    }
+
+    ecsLog.debug('SHELL', 'Dashboard state missing persisted storage; using defaults');
+    _cachedState = createDefaultState();
+    _lastSerializedDashboardState = JSON.stringify(_cachedState);
+    return _cachedState;
+  })().finally(() => {
+    markHydrated();
+    _dashboardHydrationFlight = null;
+  });
+
+  return _dashboardHydrationFlight;
 }
 
 /**
  * Hydrate custom presets from persistent storage.
  * Called alongside hydrateDashboardState() during app init.
  */
-export async function hydrateCustomPresets(): Promise<void> {
-  try {
-    const raw = await readCustomPresets();
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
-        const storage = parsed as CustomPresetsStorage;
-        _cachedCustomPresets = storage;
-        // Ensure all profiles exist
-        for (const p of ['expedition', 'vehicle', 'emergency'] as DashboardProfile[]) {
-          if (!Array.isArray(storage[p])) storage[p] = [];
-        }
-        console.log('[DashboardStore] Custom presets hydrated from persistent storage');
-      }
-    }
-  } catch (e) {
-    console.warn('[DashboardStore] Custom presets hydration failed:', e);
+export function hydrateCustomPresets(): Promise<void> {
+  if (_customPresetsHydrated) return Promise.resolve();
+  if (_customPresetsHydrationFlight) {
+    incrementECSPerformanceCounter('dashboard_stable_grid', 'preset_hydration_single_flight_join');
+    return _customPresetsHydrationFlight;
   }
+
+  _customPresetsHydrationFlight = (async () => {
+    try {
+      const raw = await readCustomPresets();
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          const storage = parsed as CustomPresetsStorage;
+          _cachedCustomPresets = storage;
+          for (const p of ['expedition', 'vehicle', 'emergency'] as DashboardProfile[]) {
+            if (!Array.isArray(storage[p])) storage[p] = [];
+          }
+          ecsLog.debug('SHELL', 'Dashboard custom presets hydrated from persistent storage');
+        }
+      }
+    } catch (e) {
+      console.warn('[DashboardStore] Custom presets hydration failed:', e);
+    }
+  })().finally(() => {
+    _customPresetsHydrated = true;
+    _customPresetsHydrationFlight = null;
+  });
+
+  return _customPresetsHydrationFlight;
 }
 
 /**

@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(24);
+select plan(25);
 
 -- ECS fleet/loadout RLS coverage.
 -- Table assumptions come from supabase/migrations/004_ecs_fleet_schema.sql.
@@ -189,6 +189,11 @@ select is(
   pg_temp.ecs_row_count($$update public.vehicles set notes = 'Forbidden' where id = '23000000-0000-4000-8000-000000000001'$$),
   0,
   'authenticated non-owner cannot update owner vehicle'
+);
+select isnt(
+  pg_temp.ecs_sqlstate($$insert into public.vehicles (id, owner_user_id, name, type) values ('23000000-0000-4000-8000-000000000002', '12000000-0000-4000-8000-000000000001', 'Spoofed Owner Rig', 'vehicle')$$),
+  '00000',
+  'authenticated non-owner cannot create a vehicle under another identity'
 );
 select is(
   pg_temp.ecs_visible_count($$select count(*) from public.loadouts where id = '24000000-0000-4000-8000-000000000001'$$),

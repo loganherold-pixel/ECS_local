@@ -77,11 +77,21 @@ assert.strictEqual(
 );
 assert.strictEqual(
   assessDispersedCampingRegionForCandidate(region('closure', 'high', 'BLM', -119.01, 37.1, {
+    closureActive: true,
     closureKnown: true,
     restrictions: ['Known closure signal present'],
   })).accepted,
   false,
   'Known closures should be hard-blocked.',
+);
+assert.strictEqual(
+  assessDispersedCampingRegionForCandidate(region('known-open', 'high', 'BLM', -119.01, 37.1, {
+    closureActive: false,
+    closureKnown: true,
+    restrictions: [],
+  })).accepted,
+  true,
+  'An explicit no-closure signal must not be interpreted as an active closure.',
 );
 
 const unknown = region('unknown', 'verify', 'UNKNOWN', -119.01, 37.16);

@@ -18,6 +18,8 @@ const indexSource = read('lib/expedition/index.ts');
 [
   'export interface ExpeditionReport',
   'tripId',
+  'sourceFingerprint',
+  'privacyMode',
   'generatedAt',
   'title',
   'completedAt',
@@ -264,6 +266,12 @@ async function main() {
   assert(report, 'A completed trip should generate a report.');
   assert.strictEqual(report.tripId, 'report-trip-1');
   assert.strictEqual(report.title, 'Black Mesa Loop');
+  assert.strictEqual(report.privacyMode, 'redacted', 'Shareable reports should redact exact route context by default.');
+  assert.strictEqual(report.routeBounds, null, 'Shareable report metadata should omit exact route bounds.');
+  assert(
+    report.notableMoments.every((moment) => moment.coordinate == null),
+    'Shareable report moments should omit exact coordinates.',
+  );
   assert.strictEqual(report.totalDistanceMiles, 62.4);
   assert.strictEqual(report.exportFormat, 'pdf');
   assert(report.localUri && report.localUri.endsWith('.pdf'), 'Report should use persisted PDF URI when print/file APIs work.');
@@ -296,7 +304,12 @@ async function main() {
   assert(downloadedName && downloadedName.endsWith('.pdf'), 'PDF report download should preserve the report file extension.');
 
   const regenerated = await regenerateExpeditionReport('report-trip-1');
-  assert(regenerated && regenerated.id !== report.id, 'Regeneration should replace the prior report metadata.');
+  assert(regenerated && regenerated.id === report.id, 'Regeneration should keep one deterministic report identity per trip.');
+  assert.strictEqual(
+    regenerated.sourceFingerprint,
+    report.sourceFingerprint,
+    'Unchanged trip inputs should regenerate the same source fingerprint.',
+  );
   assert.strictEqual((await getReportForTrip('report-trip-1')).id, regenerated.id);
 
   assert.strictEqual(await deleteExpeditionReport(regenerated.id), true, 'Deleting a report should remove persisted metadata.');

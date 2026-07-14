@@ -33,6 +33,12 @@ import {
   type SourceTruthPolicyKey,
   type SourceTruthRef,
 } from '../../lib/sourceTruth';
+import {
+  ECSConfidenceBadge,
+  ECSFreshnessBadge,
+  ECSSourceBadge,
+  ECSSourceConflictWarning,
+} from './SourceTruthIndicators';
 
 export type SourceTruthInspectorActionKind = 'refresh' | 'verify' | 'manual_update';
 
@@ -46,6 +52,7 @@ export type SourceTruthInspectorAction = {
 export type SourceTruthInspectorProps = {
   visible: boolean;
   source?: SourceTruthRef | null;
+  sources?: readonly SourceTruthRef[] | null;
   policyKey?: SourceTruthPolicyKey | null;
   policyOverride?: FreshnessPolicyOverride | null;
   dependencies?: readonly string[] | null;
@@ -78,6 +85,7 @@ const ACTION_COPY: Record<SourceTruthInspectorActionKind, {
 export function SourceTruthInspector({
   visible,
   source,
+  sources,
   policyKey,
   policyOverride,
   dependencies,
@@ -89,12 +97,13 @@ export function SourceTruthInspector({
   const model = useMemo(
     () => buildSourceTruthInspectorModel({
       source,
+      sources,
       policyKey,
       policyOverride,
       dependencies,
       now,
     }),
-    [dependencies, now, policyKey, policyOverride, source],
+    [dependencies, now, policyKey, policyOverride, source, sources],
   );
   const actionCopy = action ? ACTION_COPY[action.kind] : null;
   const unavailableReason = sanitizeSourceTruthDisplayText(action?.unavailableReason, 160);
@@ -171,27 +180,22 @@ export function SourceTruthInspector({
             style={styles.summaryPanel}
           >
             <View style={styles.badgeRow}>
-              <ECSBadge
-                label={model.freshnessLabel}
-                tone={model.triggerTone}
-                icon={model.triggerIcon}
-                compact
-              />
-              <ECSBadge label={model.originLabel} tone="category" compact />
-              <ECSBadge
-                label={`${model.confidenceLabel} confidence`}
-                tone={model.confidenceLabel === 'High'
-                  ? 'ready'
-                  : model.confidenceLabel === 'Unknown'
-                    ? 'info'
-                    : 'warning'}
-                compact
-              />
+              <ECSFreshnessBadge source={source} sources={sources} policyKey={policyKey} policyOverride={policyOverride} now={now} />
+              <ECSSourceBadge source={source} sources={sources} policyKey={policyKey} policyOverride={policyOverride} now={now} />
+              <ECSConfidenceBadge source={source} sources={sources} policyKey={policyKey} policyOverride={policyOverride} now={now} />
             </View>
             <ECSText variant="body" style={styles.summaryText}>
               {model.summary}
             </ECSText>
           </ECSPanel>
+          <ECSSourceConflictWarning
+            source={source}
+            sources={sources}
+            policyKey={policyKey}
+            policyOverride={policyOverride}
+            now={now}
+            style={styles.conflictWarning}
+          />
         </View>
 
         <InspectorSection title="Source" icon="finger-print-outline" rows={model.sourceRows} />
@@ -263,6 +267,7 @@ export function SourceTruthInspector({
 
 export function SourceTruthInspectorTrigger({
   source,
+  sources,
   policyKey,
   policyOverride,
   dependencies,
@@ -282,12 +287,13 @@ export function SourceTruthInspectorTrigger({
   const model = useMemo(
     () => buildSourceTruthInspectorModel({
       source,
+      sources,
       policyKey,
       policyOverride,
       dependencies,
       now,
     }),
-    [dependencies, now, policyKey, policyOverride, source],
+    [dependencies, now, policyKey, policyOverride, source, sources],
   );
   const safeLabel = sanitizeSourceTruthDisplayText(label, 48);
   const triggerLabel = safeLabel && safeLabel !== '[redacted]'
@@ -341,6 +347,7 @@ export function SourceTruthInspectorTrigger({
         <SourceTruthInspector
           visible={visible}
           source={source}
+          sources={sources}
           policyKey={policyKey}
           policyOverride={policyOverride}
           dependencies={dependencies}
@@ -401,6 +408,9 @@ const styles = StyleSheet.create({
   summaryText: {
     color: ECS.text,
     lineHeight: 17,
+  },
+  conflictWarning: {
+    marginTop: ECS_SURFACE.gap.group,
   },
   sectionPanel: {
     gap: ECS_SURFACE.gap.group,

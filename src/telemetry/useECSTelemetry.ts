@@ -3,6 +3,7 @@ import { ecsTelemetryStore } from './ECSTelemetryStore';
 import type {
   ECSPowerTelemetryDeviceReading,
   ECSTelemetrySnapshot,
+  ECSTelemetrySourceType,
   ECSUtilitySensorTelemetryReading,
 } from './ECSTelemetryTypes';
 
@@ -12,21 +13,22 @@ export function useECSTelemetrySnapshot(): ECSTelemetrySnapshot {
 
   useEffect(() => ecsTelemetryStore.subscribe(bump), [bump]);
 
-  useEffect(() => {
-    const timer = setInterval(bump, 10_000);
-    return () => clearInterval(timer);
-  }, [bump]);
-
   return ecsTelemetryStore.getSnapshot();
 }
 
+function useECSTelemetrySource(sourceType: ECSTelemetrySourceType): void {
+  const [, setRev] = useState(0);
+  const bump = useCallback(() => setRev((rev) => rev + 1), []);
+  useEffect(() => ecsTelemetryStore.subscribeSource(sourceType, bump), [bump, sourceType]);
+}
+
 export function useECSPowerTelemetryReadings(): ECSPowerTelemetryDeviceReading[] {
-  useECSTelemetrySnapshot();
+  useECSTelemetrySource('power_device');
   return ecsTelemetryStore.getPowerDeviceReadings();
 }
 
 export function useECSUtilitySensorTelemetryReadings(): ECSUtilitySensorTelemetryReading[] {
-  useECSTelemetrySnapshot();
+  useECSTelemetrySource('utility_sensor');
   return ecsTelemetryStore.getUtilitySensorReadings();
 }
 

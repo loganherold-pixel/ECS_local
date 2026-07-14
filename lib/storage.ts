@@ -38,6 +38,7 @@ import type {
 } from "./types";
 import { getAllSlotKeys } from "./theme";
 import { notifyLocalWrite } from "./localWriteBridge";
+import { isIncomingRecordStale } from "./state/domainConflictPolicy";
 
 
 // ============================================================
@@ -248,12 +249,7 @@ export const tripStore = {
       await db.transaction("rw", db.trips, async () => {
         for (const item of items) {
           const existing = await db.trips.get(item.id);
-          if (
-            existing &&
-            existing.dirty === 1 &&
-            new Date(existing.updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(existing, item)) continue;
           await db.trips.put({ ...(item as any), dirty: 0 } as LocalTrip);
         }
       });
@@ -262,11 +258,7 @@ export const tripStore = {
       for (const item of items) {
         const idx = all.findIndex((t) => t.id === item.id);
         if (idx !== -1) {
-          if (
-            (all[idx] as any).dirty &&
-            new Date(all[idx].updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(all[idx] as any, item)) continue;
           all[idx] = { ...item, dirty: false } as any;
         } else {
           all.push({ ...item, dirty: false } as any);
@@ -423,12 +415,7 @@ export const riskScoreStore = {
       await db.transaction("rw", db.risk_scores, async () => {
         for (const item of items) {
           const existing = await db.risk_scores.get(item.id);
-          if (
-            existing &&
-            existing.dirty === 1 &&
-            new Date(existing.updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(existing, item)) continue;
           await db.risk_scores.put({ ...(item as any), dirty: 0 } as LocalRiskScore);
         }
       });
@@ -437,11 +424,7 @@ export const riskScoreStore = {
       for (const item of items) {
         const idx = all.findIndex((r) => r.id === item.id);
         if (idx !== -1) {
-          if (
-            (all[idx] as any).dirty &&
-            new Date(all[idx].updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(all[idx] as any, item)) continue;
           all[idx] = { ...item, dirty: false } as any;
         } else {
           all.push({ ...item, dirty: false } as any);
@@ -655,12 +638,7 @@ export const loadItemStore = {
       await db.transaction("rw", db.load_items, async () => {
         for (const item of items) {
           const existing = await db.load_items.get(item.id);
-          if (
-            existing &&
-            existing.dirty === 1 &&
-            new Date(existing.updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(existing, item)) continue;
           await db.load_items.put({ ...(item as any), dirty: 0 } as LocalLoadItem);
         }
       });
@@ -669,11 +647,7 @@ export const loadItemStore = {
       for (const item of items) {
         const idx = all.findIndex((i) => i.id === item.id);
         if (idx !== -1) {
-          if (
-            (all[idx] as any).dirty &&
-            new Date(all[idx].updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(all[idx] as any, item)) continue;
           all[idx] = { ...item, dirty: false } as any;
         } else {
           all.push({ ...item, dirty: false } as any);
@@ -976,12 +950,7 @@ export const loadMapSlotStore = {
       await db.transaction("rw", db.load_map_slots, async () => {
         for (const item of items) {
           const existing = await db.load_map_slots.get(item.id);
-          if (
-            existing &&
-            existing.dirty === 1 &&
-            new Date(existing.updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(existing, item)) continue;
           await db.load_map_slots.put({ ...(item as any), dirty: 0 } as LocalLoadMapSlot);
         }
       });
@@ -990,11 +959,7 @@ export const loadMapSlotStore = {
       for (const item of items) {
         const idx = all.findIndex((s) => s.id === item.id);
         if (idx !== -1) {
-          if (
-            (all[idx] as any).dirty &&
-            new Date(all[idx].updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(all[idx] as any, item)) continue;
           all[idx] = { ...item, dirty: false } as any;
         } else {
           all.push({ ...item, dirty: false } as any);
@@ -1238,12 +1203,7 @@ export const fuelWaterLogStore = {
       await db.transaction("rw", db.fuel_water_logs, async () => {
         for (const item of items) {
           const existing = await db.fuel_water_logs.get(item.id);
-          if (
-            existing &&
-            existing.dirty === 1 &&
-            new Date(existing.updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(existing, item)) continue;
           await db.fuel_water_logs.put({
             ...(item as any),
             dirty: 0,
@@ -1255,11 +1215,7 @@ export const fuelWaterLogStore = {
       for (const item of items) {
         const idx = all.findIndex((l) => l.id === item.id);
         if (idx !== -1) {
-          if (
-            (all[idx] as any).dirty &&
-            new Date(all[idx].updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(all[idx] as any, item)) continue;
           all[idx] = { ...item, dirty: false } as any;
         } else {
           all.push({ ...item, dirty: false } as any);
@@ -1477,12 +1433,7 @@ export const waypointStore = {
       await db.transaction("rw", db.waypoints, async () => {
         for (const item of items) {
           const existing = await db.waypoints.get(item.id);
-          if (
-            existing &&
-            existing.dirty === 1 &&
-            new Date(existing.updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(existing, item)) continue;
           await db.waypoints.put({ ...(item as any), dirty: 0 } as LocalWaypoint);
         }
       });
@@ -1491,11 +1442,7 @@ export const waypointStore = {
       for (const item of items) {
         const idx = all.findIndex((w) => w.id === item.id);
         if (idx !== -1) {
-          if (
-            (all[idx] as any).dirty &&
-            new Date(all[idx].updated_at) > new Date(item.updated_at)
-          )
-            continue;
+          if (isIncomingRecordStale(all[idx] as any, item)) continue;
           all[idx] = { ...item, dirty: false } as any;
         } else {
           all.push({ ...item, dirty: false } as any);

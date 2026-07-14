@@ -1,0 +1,87 @@
+name: ECS Scheduled Verification
+
+on:
+  schedule:
+    - cron: '15 8 * * *'
+    - cron: '45 9 * * 2,5'
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Verification lane to run
+        required: true
+        default: both
+        type: choice
+        options: [both, full-nightly, provider-scheduled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecs-scheduled-verification-${{ github.event.schedule || inputs.lane || 'manual' }}
+  cancel-in-progress: false
+
+env:
+  CI: '1'
+  EXPO_NO_TELEMETRY: '1'
+  ECS_TEST_NETWORK: disabled
+  ECS_TEST_SEED: ecs-verification-v1
+  TZ: UTC
+
+jobs:
+  nightly:
+    if: github.event.schedule == '15 8 * * *' || inputs.lane == 'full-nightly' || inputs.lane == 'both'
+    name: Full nightly behavioral lane
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run nightly lane and produce a review-only timing candidate
+        run: node scripts/verification/run-verification-lane.mjs --lane full-nightly --timing-baseline config/verification-timing-baseline.json --timing-candidate-output .smoke/verification/timing-baseline-candidate.json --artifact-audience scheduled_ci --output .smoke/verification/full-nightly.json --summary-output .smoke/verification/full-nightly.md --timings-output .smoke/verification/timings.json
+      - name: Record web-export provenance
+        if: always()
+        shell: bash
+        run: if [ -d dist ]; then node scripts/verification/record-artifact-provenance.mjs --artifact dist --command-id expo-web-export --artifact-id web-export --artifact-kind web-export --workspace-id root --artifact-audience scheduled_ci --output .smoke/verification/web-export-provenance.json; fi
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecs-full-nightly-verification
+          path: |
+            .smoke/verification/full-nightly.json
+            .smoke/verification/full-nightly.md
+            .smoke/verification/timings.json
+            .smoke/verification/timing-baseline-candidate.json
+            .smoke/verification/web-export-provenance.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  provider:
+    if: github.event.schedule == '45 9 * * 2,5' || inputs.lane == 'provider-scheduled' || inputs.lane == 'both'
+    name: Provider contracts and shadow posture
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run provider lane without converting blockers into approval
+        run: node scripts/verification/run-verification-lane.mjs --lane provider-scheduled --timing-baseline config/verification-timing-baseline.json --artifact-audience scheduled_ci --allow-blocked-external --output .smoke/verification/provider-scheduled.json --summary-output .smoke/verification/provider-scheduled.md --timings-output .smoke/verification/timings.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecs-provider-verification
+          path: |
+            .smoke/verification/provider-scheduled.json
+            .smoke/verification/provider-scheduled.md
+            .smoke/verification/timings.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7

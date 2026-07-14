@@ -18,18 +18,52 @@ async function main() {
 
   function writeManifest(name, overrides = {}) {
     const artifactDir = path.join(tempRoot, name);
-    const cacheManifestPath = writeArtifact(path.join(artifactDir, 'cache-manifest.json'), '{}');
-    const drillResultPath = writeArtifact(path.join(artifactDir, 'drill-result.json'), '{}');
-    const offlineAssertionsPath = writeArtifact(path.join(artifactDir, 'offline-assertions.json'), '{}');
-    const readinessMetadataPath = writeArtifact(path.join(artifactDir, 'readiness-metadata.json'), '{}');
-    const captureBundlePath = writeArtifact(path.join(artifactDir, 'capture-bundle.json'), '{}');
+    const evidenceSource = overrides.evidenceSource ?? 'synthetic';
+    const offlineAssertions = {
+      source: 'app_runtime_export',
+      appObservedOffline: true,
+      systemNetworkDisabled: true,
+      runtimeNetworkProbe: 'offline',
+      providerReachability: 'not_checked_due_to_offline',
+    };
+    const cacheManifestPath = writeArtifact(
+      path.join(artifactDir, 'cache-manifest.json'),
+      JSON.stringify({ inputs: [] }),
+    );
+    const drillResultPath = writeArtifact(
+      path.join(artifactDir, 'drill-result.json'),
+      JSON.stringify({
+        localOnly: true,
+        runtimeNetworkEvidence: {
+          appObservedOffline: true,
+          runtimeNetworkProbe: 'offline',
+        },
+      }),
+    );
+    const offlineAssertionsPath = writeArtifact(
+      path.join(artifactDir, 'offline-assertions.json'),
+      JSON.stringify(offlineAssertions),
+    );
+    const readinessMetadataPath = writeArtifact(
+      path.join(artifactDir, 'readiness-metadata.json'),
+      JSON.stringify({ captured: true }),
+    );
+    const captureBundlePath = writeArtifact(
+      path.join(artifactDir, 'capture-bundle.json'),
+      JSON.stringify({
+        source: 'app_runtime_export',
+        evidenceSource,
+        platform: { os: 'android' },
+        offlineAssertions,
+      }),
+    );
     const screenshotPath = writeArtifact(path.join(artifactDir, 'screen.png'), 'png');
     const logPath = writeArtifact(path.join(artifactDir, 'run.log'), 'log');
     const manifestPath = path.join(artifactDir, 'manifest.json');
     const manifest = {
       evidenceId: `offline-drill-${name}`,
       evidenceKind: 'android_no_network_emulator',
-      evidenceSource: 'synthetic',
+      evidenceSource,
       generatedAt: '2026-06-13T19:00:00.000Z',
       app: {
         appBuildId: 'test-build',
@@ -49,6 +83,13 @@ async function main() {
         checkedAt: '2026-06-13T19:00:00.000Z',
         runtimeNetworkProbe: 'offline',
         notes: [],
+      },
+      runtimeNoNetworkAssertions: {
+        assertionSource: 'app_runtime_export',
+        appObservedOffline: true,
+        systemNetworkDisabled: true,
+        runtimeNetworkProbe: 'offline',
+        providerReachability: 'not_checked_due_to_offline',
       },
       cacheFixtureProfile: 'available',
       cacheManifestPath,
@@ -203,7 +244,11 @@ async function main() {
       },
     }),
   });
-  assert.equal(acceptedReal.validation.structurallyValid, true);
+  assert.equal(
+    acceptedReal.validation.structurallyValid,
+    true,
+    `Accepted evidence should be structurally valid: ${acceptedReal.validation.failedRules.join(', ')}`,
+  );
   assert.equal(acceptedReal.validation.productionEligible, true);
   assert.equal(acceptedReal.status, 'accepted');
   assert.equal(acceptedReal.passed, true);

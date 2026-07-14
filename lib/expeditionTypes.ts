@@ -2,7 +2,7 @@
 // ECS EXPEDITION COMMAND SYSTEM — TYPE DEFINITIONS
 // ============================================================
 
-export type EcsExpeditionStatus = 'draft' | 'active' | 'completed' | 'archived';
+export type EcsExpeditionStatus = 'draft' | 'active' | 'completed' | 'archived' | 'cancelled';
 export type EcsTerrain = 'mountain' | 'desert' | 'forest' | 'snow' | 'mixed' | 'coastal';
 export type EcsWaypointKind = 'waypoint' | 'camp' | 'fuel' | 'water' | 'hazard' | 'note' | 'incident';
 export type EcsFieldLogType = 'note' | 'marker' | 'incident' | 'resource' | 'maintenance' | 'comms' | 'medical';

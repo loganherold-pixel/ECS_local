@@ -127,6 +127,8 @@ async function callSyncEdgeFunction(action: SyncAction): Promise<SyncActionResul
     body: {
       actions: [{
         id: action.id,
+        idempotencyKey: action.idempotencyKey,
+        sequence: action.sequence,
         type: action.type,
         payload: action.payload,
         priority: action.priority,

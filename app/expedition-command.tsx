@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
@@ -35,10 +36,13 @@ import {
 
 import ExportDataModal from '../components/expedition/ExportDataModal';
 
+import type { CompletionSummary } from '../lib/completionSummary';
 import {
-  generateCompletionSummary,
-  type CompletionSummary,
-} from '../lib/completionSummary';
+  beginExpeditionCompletion,
+  commitExpeditionCompletion,
+  getPendingExpeditionCompletion,
+  undoPendingExpeditionCompletion,
+} from '../lib/expedition/expeditionCompletionService';
 
 import CompletionSummaryCard from '../components/CompletionSummaryCard';
 import ExpeditionStatePill from '../components/ExpeditionStatePill';
@@ -74,6 +78,7 @@ export default function ExpeditionCommandScreen() {
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
   const router = useRouter();
+  const { back: goBack } = useECSNavigation();
   const { user, isOnline, showToast } = useApp();
 
   const params = useLocalSearchParams<{ id?: string }>();
@@ -103,10 +108,7 @@ export default function ExpeditionCommandScreen() {
   // Undo toast state
   const [undoVisible, setUndoVisible] = useState(false);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const completionLogIdRef = useRef<string | null>(null);
   const undoProgressAnim = useRef(new Animated.Value(1)).current;
-  const previousStartAtRef = useRef<string | null>(null);
-  const completionSummaryRef = useRef<CompletionSummary | null>(null);
 
   // Completion summary display (for already-completed expeditions or after undo expires)
   const [displayedSummary, setDisplayedSummary] = useState<CompletionSummary | null>(null);
@@ -205,6 +207,11 @@ export default function ExpeditionCommandScreen() {
   const terrain = useMemo(() => TERRAIN_OPTIONS.find(t => t.value === expedition?.terrain) || null, [expedition?.terrain]);
   const criticalItems = useMemo(() => checklist.filter(i => !i.is_done && (i.priority === 'critical' || i.priority === 'high')), [checklist]);
 
+  const showErrorModal = useCallback((title: string, message: string) => {
+    setErrorModalTitle(title);
+    setErrorModalMessage(message);
+    setErrorModalVisible(true);
+  }, []);
 
 
   // ── Cleanup undo timer on unmount ──────────────────────
@@ -217,75 +224,55 @@ export default function ExpeditionCommandScreen() {
     };
   }, []);
 
-  // ── Called when the 5-second undo window expires ───────
+  // ── Commit the persisted completion after the undo window ──
   const handleUndoExpire = useCallback(async () => {
-    if (!mountedRef.current) return;
-    setUndoVisible(false);
-    setCompleting(false);
-
-    // Generate and persist the completion summary before navigating away
-    const summary = completionSummaryRef.current;
-    if (summary && expeditionId) {
-      try {
-        const existingMeta = expedition?.meta || {};
-        await expeditionStore.update(expeditionId, {
-          meta: { ...existingMeta, completion_summary: summary },
-        } as any);
-        logExpeditionCommandDev('[ExpeditionCommand] Completion summary persisted to meta');
-      } catch (err) {
-        console.warn('[ExpeditionCommand] Failed to persist completion summary:', err);
+    if (!user || !expeditionId) return;
+    if (mountedRef.current) setUndoVisible(false);
+    const result = await commitExpeditionCompletion(expeditionId, user.id);
+    if (!result.ok) {
+      if (mountedRef.current) {
+        setCompleting(false);
+        showErrorModal(
+          'Completion Pending',
+          'ECS preserved the completion transaction locally but could not finalize it yet. Reopen this expedition to retry.',
+        );
       }
+      return;
     }
 
-    completionLogIdRef.current = null;
-    previousStartAtRef.current = null;
-    completionSummaryRef.current = null;
-    router.replace('/fleet' as any);
+    try {
+      if (narrativeEngine.isRunning()) narrativeEngine.stop();
+      await narrativeEngine.syncNow();
+    } catch (error) {
+      console.warn('[ExpeditionCommand] Narrative engine cleanup error (non-blocking):', error);
+    }
 
-  }, [router, expeditionId, expedition]);
+    if (!mountedRef.current) return;
+    setCompleting(false);
+    if (result.record) setExpedition(result.record);
+    if (result.summary) setDisplayedSummary(result.summary);
+    showToast('EXPEDITION COMPLETED');
+    router.replace('/fleet' as any);
+  }, [expeditionId, router, showErrorModal, showToast, user]);
 
 
   // ── Undo: revert expedition back to active ────────────
   const handleUndo = useCallback(async () => {
-    // 1. Cancel the navigation timer
     if (undoTimerRef.current) {
       clearTimeout(undoTimerRef.current);
       undoTimerRef.current = null;
     }
     undoProgressAnim.stopAnimation();
 
-    // 2. Hide the undo toast immediately
     if (mountedRef.current) setUndoVisible(false);
 
     try {
-      // 3. Revert expedition status back to 'active' and remove end_at
-      await expeditionStore.update(expeditionId, {
-        status: 'active',
-        end_at: null,
-      } as any);
-
-      // 4. Delete the auto-generated completion field log
-      if (completionLogIdRef.current) {
-        await fieldLogStore.remove(completionLogIdRef.current);
-      }
-
+      if (!user) throw new Error('User session unavailable.');
+      const result = await undoPendingExpeditionCompletion(expeditionId, user.id);
+      if (!result.ok) throw new Error(result.reason);
       if (!mountedRef.current) return;
-
-      // 5. Refresh local state to reflect the revert
-      const refreshedExp = await expeditionStore.getById(expeditionId);
-      if (refreshedExp && mountedRef.current) {
-        setExpedition(refreshedExp);
-      } else if (expedition && mountedRef.current) {
-        // Fallback: update local state directly
-        setExpedition({ ...expedition, status: 'active', end_at: null } as EcsExpedition);
-      }
-
-      // 6. Remove the completion log from local field logs list
-      if (completionLogIdRef.current) {
-        const removedId = completionLogIdRef.current;
-        setFieldLogs(prev => prev.filter(l => l.id !== removedId));
-      }
-
+      if (result.record) setExpedition(result.record);
+      setDisplayedSummary(null);
       showToast('COMPLETION REVERSED');
     } catch (err: any) {
       console.warn('[ExpeditionCommand] handleUndo error:', err);
@@ -294,19 +281,8 @@ export default function ExpeditionCommandScreen() {
       }
     }
 
-    // 7. Reset refs (clear summary ref too)
-    completionLogIdRef.current = null;
-    previousStartAtRef.current = null;
-    completionSummaryRef.current = null;
     if (mountedRef.current) setCompleting(false);
-  }, [expeditionId, expedition, undoProgressAnim, showToast]);
-
-  // ── Helper to show error modal ────────────────────────
-  const showErrorModal = useCallback((title: string, message: string) => {
-    setErrorModalTitle(title);
-    setErrorModalMessage(message);
-    setErrorModalVisible(true);
-  }, []);
+  }, [expeditionId, undoProgressAnim, showToast, user]);
 
   // ── Open the confirmation modal (replaces Alert.alert) ──
   const handleCompleteExpedition = useCallback(() => {
@@ -370,97 +346,32 @@ export default function ExpeditionCommandScreen() {
     if (mountedRef.current) setCompleting(true);
     logExpeditionCommandDev('[ExpeditionCommand] executeCompletion: starting completion flow');
 
-    const title = expedition.title || 'this expedition';
-    const doneCount = checklist.filter(i => i.is_done).length;
-    const totalCount = checklist.length;
-    const logCount = fieldLogs.length;
-    const currentReadiness = computeReadiness(checklist);
-
     try {
-      // 1. Store the current start_at for potential revert
-      previousStartAtRef.current = expedition.start_at || null;
-
-      // 2. Log a completion field log entry for audit trail
-      const completionLog = await fieldLogStore.create(user.id, {
-        expedition_id: expeditionId,
-        type: 'note',
-        title: 'Expedition Completed',
-        body: `Expedition "${title}" marked as completed. ` +
-          `Final readiness: ${currentReadiness.score}%. ` +
-          `Checklist: ${doneCount}/${totalCount}. ` +
-          `Total field logs: ${logCount + 1}.`,
-      });
-
-      // Store the completion log ID for potential undo
-      if (completionLog) {
-        completionLogIdRef.current = completionLog.id;
-        // Add to local field logs list so it appears in the UI
-        if (mountedRef.current) {
-          setFieldLogs(prev => [completionLog, ...prev]);
-        }
-      }
-
-      // 3. Update the final readiness score
-      await expeditionStore.updateReadiness(expeditionId, user.id);
-
-      // 4. Complete the expedition (sets status='completed', end_at=now — persists to Supabase)
-      const completeResult = await expeditionStore.complete(expedition.id);
-      logExpeditionCommandDev('[ExpeditionCommand] expeditionStore.complete result:', completeResult);
-
-      if (!mountedRef.current) return;
-
-      // 5. Update local expedition state to reflect completion
-      const completedAt = new Date().toISOString();
-      setExpedition(prev => prev ? {
-        ...prev,
-        status: 'completed' as any,
-        end_at: completedAt,
-      } : prev);
-
-      // 6. Stop the Narrative Engine and flush remaining events to server
-      try {
-        if (narrativeEngine.isRunning()) {
-          narrativeEngine.stop(); // stop() calls syncUnsyncedEvents() internally
-          logExpeditionCommandDev('[ExpeditionCommand] Narrative engine stopped');
-        }
-        // Force a final sync of any remaining narrative events
-        await narrativeEngine.syncNow();
-        logExpeditionCommandDev('[ExpeditionCommand] Narrative events synced');
-      } catch (narrativeErr) {
-        console.warn('[ExpeditionCommand] Narrative engine cleanup error (non-blocking):', narrativeErr);
-      }
-
-      // 7. Generate completion summary for persistence
-      const updatedExpedition: EcsExpedition = {
-        ...expedition,
-        status: 'completed' as any,
-        end_at: completedAt,
-      };
-      const summary = generateCompletionSummary(
-        updatedExpedition,
+      const result = await beginExpeditionCompletion({
+        expedition,
+        userId: user.id,
         checklist,
         fieldLogs,
         routes,
         waypoints,
-      );
-      completionSummaryRef.current = summary;
-      logExpeditionCommandDev('[ExpeditionCommand] Completion summary generated');
+        undoWindowMs: 5000,
+      });
+      if (!result.ok || !result.transaction) {
+        throw new Error(result.reason);
+      }
+      if (!mountedRef.current) return;
+      if (result.record) setExpedition(result.record);
+      showToast('EXPEDITION COMPLETION PENDING');
 
-      // 8. Show success toast
-      showToast('EXPEDITION COMPLETED');
-
-      // 9. Show the undo toast banner with 5-second window
       undoProgressAnim.setValue(1);
       setUndoVisible(true);
 
-      // 10. Animate the progress bar from full to empty over 5 seconds
       Animated.timing(undoProgressAnim, {
         toValue: 0,
         duration: 5000,
         useNativeDriver: false,
       }).start();
 
-      // 11. Start the 5-second timer — persist summary + navigate when it expires
       undoTimerRef.current = setTimeout(() => {
         undoTimerRef.current = null;
         handleUndoExpire();
@@ -472,16 +383,47 @@ export default function ExpeditionCommandScreen() {
       console.error('[ExpeditionCommand] executeCompletion error:', err);
       if (!mountedRef.current) return;
       setCompleting(false);
-      completionLogIdRef.current = null;
-      previousStartAtRef.current = null;
-      completionSummaryRef.current = null;
       showErrorModal(
         'Completion Failed',
         `Could not complete the expedition: ${err?.message || 'Unknown error'}. ` +
         'Please check your connection and try again.'
       );
     }
-  }, [expedition, user, expeditionId, checklist, fieldLogs, routes, waypoints, showToast, showErrorModal, handleUndoExpire, undoProgressAnim]);
+  }, [expedition, user, checklist, fieldLogs, routes, waypoints, showToast, showErrorModal, handleUndoExpire, undoProgressAnim]);
+
+  // Restore or finish a completion transaction after app/screen restoration.
+  useEffect(() => {
+    if (!expedition || !user) return;
+    const pending = getPendingExpeditionCompletion(expedition);
+    if (!pending) return;
+    const requestedAtMs = new Date(pending.requestedAt).getTime();
+    const undoUntilMs = new Date(pending.undoUntil).getTime();
+    const totalMs = Math.max(1, undoUntilMs - requestedAtMs);
+    const remainingMs = Math.max(0, undoUntilMs - Date.now());
+    setCompleting(true);
+    if (remainingMs <= 0) {
+      void handleUndoExpire();
+      return;
+    }
+    setUndoVisible(true);
+    undoProgressAnim.setValue(Math.min(1, remainingMs / totalMs));
+    Animated.timing(undoProgressAnim, {
+      toValue: 0,
+      duration: remainingMs,
+      useNativeDriver: false,
+    }).start();
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = setTimeout(() => {
+      undoTimerRef.current = null;
+      void handleUndoExpire();
+    }, remainingMs);
+    return () => {
+      if (undoTimerRef.current) {
+        clearTimeout(undoTimerRef.current);
+        undoTimerRef.current = null;
+      }
+    };
+  }, [expedition, handleUndoExpire, undoProgressAnim, user]);
 
   // ── Confirmation modal derived data ───────────────────
   const confirmationStats = useMemo(() => {
@@ -518,7 +460,7 @@ export default function ExpeditionCommandScreen() {
         <View style={styles.center}>
           <Ionicons name="alert-circle-outline" size={48} color={TACTICAL.danger} />
           <Text style={styles.errorText}>MISSION NOT FOUND</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={() => router.back()}>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => goBack()}>
             <Text style={styles.retryText}>GO BACK</Text>
           </TouchableOpacity>
         </View>
@@ -535,7 +477,7 @@ export default function ExpeditionCommandScreen() {
       <View style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
+          <TouchableOpacity onPress={() => goBack()} style={styles.backBtn} activeOpacity={0.7}>
             <Ionicons name="arrow-back" size={20} color={TACTICAL.text} />
           </TouchableOpacity>
           <View style={{ flex: 1 }}>

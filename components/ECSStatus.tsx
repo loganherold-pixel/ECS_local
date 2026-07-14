@@ -8,18 +8,31 @@ import { ECS_TEXT } from '../lib/ecsTypographyTokens';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
+const ACCESSIBLE_TONE_LABEL: Record<ECSStatusTone, string> = {
+  active: 'Active',
+  ready: 'Ready',
+  live: 'Live',
+  warning: 'Warning',
+  unavailable: 'Unavailable',
+  info: 'Information',
+  category: 'Category',
+  selected: 'Selected',
+};
+
 export function ECSIcon({
   name,
   tier = 'action',
   tone = 'info',
   color,
   style,
+  accessibilityLabel,
 }: {
   name: IconName;
   tier?: ECSIconTier;
   tone?: ECSStatusTone;
   color?: string;
   style?: StyleProp<TextStyle>;
+  accessibilityLabel?: string;
 }) {
   const resolved = ECS_STATUS.tone[tone];
   return (
@@ -28,6 +41,10 @@ export function ECSIcon({
       size={ECS_ICON.size[tier]}
       color={color ?? resolved.icon}
       style={style as any}
+      accessible={Boolean(accessibilityLabel)}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityElementsHidden={!accessibilityLabel}
+      importantForAccessibility={accessibilityLabel ? 'auto' : 'no'}
     />
   );
 }
@@ -36,15 +53,22 @@ export function ECSStatusDot({
   tone = 'info',
   compact = false,
   style,
+  accessibilityLabel,
 }: {
   tone?: ECSStatusTone;
   compact?: boolean;
   style?: StyleProp<ViewStyle>;
+  accessibilityLabel?: string;
 }) {
   const resolved = ECS_STATUS.tone[tone];
   const size = compact ? ECS_STATUS.dot.compactSize : ECS_STATUS.dot.size;
   return (
     <View
+      accessible={Boolean(accessibilityLabel)}
+      accessibilityRole={accessibilityLabel ? 'text' : undefined}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityElementsHidden={!accessibilityLabel}
+      importantForAccessibility={accessibilityLabel ? 'auto' : 'no'}
       style={[
         styles.dot,
         {
@@ -67,6 +91,7 @@ export function ECSBadge({
   style,
   textStyle,
   colorOverride,
+  accessibilityLabel,
 }: {
   label: string;
   tone?: ECSStatusTone;
@@ -75,11 +100,15 @@ export function ECSBadge({
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   colorOverride?: string;
+  accessibilityLabel?: string;
 }) {
   const base = ECS_STATUS.tone[tone];
   const textColor = colorOverride ?? base.text;
   return (
     <View
+      accessible
+      accessibilityRole="text"
+      accessibilityLabel={accessibilityLabel ?? `${ACCESSIBLE_TONE_LABEL[tone]} status: ${label}`}
       style={[
         styles.badge,
         {
@@ -92,7 +121,12 @@ export function ECSBadge({
       ]}
     >
       {icon ? <ECSIcon name={icon} tier={compact ? 'compact' : 'action'} tone={tone} color={textColor} /> : null}
-      <ECSText variant="chip" style={[styles.badgeText, { color: textColor }, textStyle]} numberOfLines={1}>
+      <ECSText
+        variant="chip"
+        style={[styles.badgeText, { color: textColor }, textStyle]}
+        numberOfLines={2}
+        maxFontSizeMultiplier={1.6}
+      >
         {label}
       </ECSText>
     </View>
@@ -109,22 +143,34 @@ export function ECSStateIndicator({
   icon,
   compact = false,
   style,
+  accessibilityLabel,
 }: {
   label: string;
   tone?: ECSStatusTone;
   icon?: IconName;
   compact?: boolean;
   style?: StyleProp<ViewStyle>;
+  accessibilityLabel?: string;
 }) {
   const base = ECS_STATUS.tone[tone];
   return (
-    <View style={[styles.inline, style]}>
+    <View
+      accessible
+      accessibilityRole="text"
+      accessibilityLabel={accessibilityLabel ?? `${ACCESSIBLE_TONE_LABEL[tone]} status: ${label}`}
+      style={[styles.inline, style]}
+    >
       {icon ? (
         <ECSIcon name={icon} tier={compact ? 'compact' : 'action'} tone={tone} />
       ) : (
         <ECSStatusDot tone={tone} compact={compact} />
       )}
-      <ECSText variant="helper" style={[styles.inlineText, { color: base.text }]} numberOfLines={1}>
+      <ECSText
+        variant="helper"
+        style={[styles.inlineText, { color: base.text }]}
+        numberOfLines={2}
+        maxFontSizeMultiplier={1.6}
+      >
         {label}
       </ECSText>
     </View>

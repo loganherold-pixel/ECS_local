@@ -5,8 +5,19 @@ import { fileURLToPath } from 'node:url';
 
 import { buildCampOpsLiveReadinessResult } from './check-campops-live-readiness.mjs';
 import { buildProviderReadinessResult } from './check-provider-readiness.mjs';
+import {
+  classifyEvidenceCheckOutcome,
+  writeEvidenceCheckResultForLane,
+} from './verification/evidence-result.mjs';
 
 const RESULT_RELATIVE_PATH = path.join('.smoke', 'closed-field-test-readiness-result.json');
+const EXTERNAL_CLOSED_FIELD_BLOCKER_IDS = [
+  'closed_field_test_status_blocked',
+  'android_device_qa_incomplete',
+  'provider_readiness_not_approved',
+  'privacy_storage_owner_approval_incomplete',
+  'campops_live_readiness_not_closed_field_ready',
+];
 
 const requiredSections = [
   { label: 'P0 issues', pattern: /\bP0 issues\b/i },
@@ -664,6 +675,33 @@ export function runClosedFieldTestReadinessCli(options = {}) {
     stdout.write(formatClosedFieldTestReadinessResult(result, { rootDir: root }));
   }
 
+  const outcome = classifyEvidenceCheckOutcome({
+    passed: result.passed,
+    blockerIds: [
+      ...result.blockers,
+      ...(result.missingFiles.length > 0 ? ['closed_field_required_files_missing'] : []),
+      ...(result.missingSections.length > 0 ? ['closed_field_required_sections_missing'] : []),
+    ],
+    externalBlockerIds: EXTERNAL_CLOSED_FIELD_BLOCKER_IDS,
+  });
+  const laneExitCode = writeEvidenceCheckResultForLane({
+    checkId: 'closed-field-evidence',
+    status: outcome.status,
+    safeCode: outcome.safeCode,
+    blockerIds: outcome.blockerIds,
+    summary: outcome.status === 'passed'
+      ? 'Closed-field evidence requirements are satisfied for the reported restricted posture.'
+      : outcome.status === 'blocked_external'
+        ? 'Closed-field evidence requirements remain incomplete.'
+        : 'Closed-field verification failed an internal safety or document contract check.',
+    evidence: result,
+    diagnostics: {
+      artifactId: 'closed-field-test-readiness',
+      domainStatus: result.status,
+      failedCount: result.blockers.length,
+    },
+  });
+  if (laneExitCode !== null) return laneExitCode;
   return result.passed ? 0 : 1;
 }
 

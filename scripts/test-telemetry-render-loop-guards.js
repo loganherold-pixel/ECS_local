@@ -35,9 +35,10 @@ assert(scannerHook.includes('if (mountedRef.current)'), 'OBD scanner hook must a
 assert(scannerHook.includes('return () => {') && scannerHook.includes('unsub();'), 'OBD scanner hook must clean up adapter subscriptions');
 
 const unifiedConnections = read('lib/useUnifiedDeviceConnections.ts');
+const scannerCoordinator = read('lib/unifiedScannerCoordinator.ts');
 assert(!/useEffect\s*\(\s*\(\)\s*=>\s*\{[\s\S]{0,260}startScan\(/.test(unifiedConnections), 'Unified device connections must not start provider scans from mount/render effects');
-assert(unifiedConnections.includes('scanInFlightRef.current'), 'Unified device connections must guard overlapping scans with refs');
-assert(unifiedConnections.includes('mountedRef.current') && unifiedConnections.includes("obd2Adapter.stopScan('unified_panel_unmount')"), 'Unified device connections must cancel scans on unmount');
+assert(unifiedConnections.includes('scannerCoordinatorRef.current!.requestSession') && scannerCoordinator.includes("reason: 'already_scanning'"), 'Unified device connections must guard overlapping scans with the shared coordinator');
+assert(unifiedConnections.includes('mountedRef.current') && unifiedConnections.includes("scannerCoordinatorRef.current?.cancel('unmount')"), 'Unified device connections must cancel scans on unmount');
 
 const briefPublisher = read('lib/telemetryBriefPublisher.ts');
 assert(briefPublisher.includes('TELEMETRY_BRIEF_SUPPRESSION_MS = 15 * 60 * 1000'), 'Telemetry Brief publisher must keep 15-minute suppression');

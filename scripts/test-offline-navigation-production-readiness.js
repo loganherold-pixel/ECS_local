@@ -13,6 +13,7 @@ async function main() {
   assert.equal(result.status, 'blocked');
 
   [
+    'canonical_offline_manifest_is_resumable_verified_and_protected',
     'offline_readiness_derives_route_style_layer_and_stale_states',
     'prepare_offline_persists_route_intent_and_starts_route_sync',
     'downloaded_sync_open_restores_offline_route_preview',

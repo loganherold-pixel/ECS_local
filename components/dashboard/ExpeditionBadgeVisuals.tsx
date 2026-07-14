@@ -7,13 +7,16 @@ import {
   Text,
   TouchableOpacity,
   View,
+  type ImageSourcePropType,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import type { ExpeditionBadge as ExpeditionBadgeModel, ExpeditionBadgeRarity } from '../../lib/expedition';
+import { ExpeditionBadgeArtwork } from './ExpeditionBadgeArtwork';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -128,7 +131,11 @@ export function ExpeditionBadge({
       accessibilityRole="button"
       accessibilityLabel={`Open badge ${badge.title}`}
     >
-      <BadgeIcon iconKey={badge.iconKey} rarity={badge.rarity} size={13} />
+      {badge.unlockedAt ? (
+        <ExpeditionBadgeArtwork badgeId={badge.id} title={badge.title} size={32} />
+      ) : (
+        <BadgeIcon iconKey={badge.iconKey} rarity={badge.rarity} size={13} />
+      )}
       <Text style={styles.compactBadgeText} numberOfLines={1}>{badge.title}</Text>
     </TouchableOpacity>
   );
@@ -151,7 +158,11 @@ export function ExpeditionBadgeCard({
       accessibilityLabel={`Open badge ${badge.title}`}
     >
       <BadgeRarityFrame rarity={badge.rarity} style={styles.badgeCard}>
-        <BadgeIcon iconKey={badge.iconKey} rarity={badge.rarity} />
+        {badge.unlockedAt ? (
+          <ExpeditionBadgeArtwork badgeId={badge.id} title={badge.title} size={60} />
+        ) : (
+          <BadgeIcon iconKey={badge.iconKey} rarity={badge.rarity} />
+        )}
         <View style={styles.badgeCardCopy}>
           <View style={styles.badgeCardTopLine}>
             <Text style={styles.badgeTitle} numberOfLines={1}>{badge.title}</Text>
@@ -168,6 +179,62 @@ export function ExpeditionBadgeCard({
     </TouchableOpacity>
   );
 }
+
+export const ExpeditionBadgeCatalogCard = React.memo(function ExpeditionBadgeCatalogCard({
+  badge,
+  isEarned,
+  artwork,
+  onPress,
+}: {
+  badge: ExpeditionBadgeModel;
+  isEarned: boolean;
+  artwork: ImageSourcePropType | null;
+  onPress: () => void;
+}) {
+  const hasKnownProgress = !isEarned && badge.progressCurrent != null && badge.progressTarget != null;
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.84}
+      accessibilityRole="button"
+      accessibilityLabel={`${badge.title}, ${isEarned ? 'achieved' : 'locked'} badge`}
+    >
+      <BadgeRarityFrame rarity={badge.rarity} style={styles.catalogCard}>
+        {isEarned && artwork ? (
+          <ExpeditionBadgeArtwork badgeId={badge.id} title={badge.title} size={64} />
+        ) : (
+          <View style={styles.lockedBadgeIconWrap}>
+            <BadgeIcon iconKey={badge.iconKey} rarity={badge.rarity} size={20} />
+            <View style={styles.lockedBadgeSeal}>
+              <Ionicons name="lock-closed" size={9} color={TACTICAL.textMuted} />
+            </View>
+          </View>
+        )}
+        <View style={styles.badgeCardCopy}>
+          <View style={styles.badgeCardTopLine}>
+            <Text style={styles.badgeTitle} numberOfLines={1}>{badge.title}</Text>
+            <Text style={[styles.badgeRarity, { color: RARITY_STYLES[badge.rarity].accentColor }]}>
+              {formatRarity(badge.rarity)}
+            </Text>
+          </View>
+          <Text style={styles.badgeDescription} numberOfLines={2}>{badge.description}</Text>
+          {hasKnownProgress ? (
+            <ProgressMeter
+              current={badge.progressCurrent ?? 0}
+              target={badge.progressTarget ?? 0}
+              accentColor={RARITY_STYLES[badge.rarity].accentColor}
+            />
+          ) : (
+            <Text style={styles.badgeMeta} numberOfLines={1}>
+              {formatCategory(badge.category)} / {isEarned ? formatUnlockDate(badge.unlockedAt) : 'Locked'}
+            </Text>
+          )}
+        </View>
+      </BadgeRarityFrame>
+    </TouchableOpacity>
+  );
+});
 
 export function BadgeGrid({
   badges,
@@ -293,7 +360,7 @@ export function BadgeUnlockSummary({
             accessibilityRole="button"
             accessibilityLabel={`Open badge achievement ${badge.title}`}
           >
-            <BadgeIcon iconKey={badge.iconKey} rarity={badge.rarity} size={15} />
+            <ExpeditionBadgeArtwork badgeId={badge.id} title={badge.title} size={42} />
             <View style={styles.badgeAchievementCopy}>
               <View style={styles.badgeAchievementTopLine}>
                 <Text style={styles.badgeAchievementTitle} numberOfLines={1}>{badge.title}</Text>
@@ -310,7 +377,6 @@ export function BadgeUnlockSummary({
         ))}
       </Animated.View>
       <BadgeDetailModal badge={selectedBadge} onClose={() => setSelectedBadge(null)} />
-      {/* TODO Expedition Badges: replace iconKey mappings with custom badge SVG/art assets. */}
       {/* TODO Expedition Badges: add a richer badge unlock animation sequence for post-expedition review. */}
       {/* TODO Expedition Badges: stamp earned badges onto PDF expedition reports. */}
       {/* TODO Expedition Badges: link badge location markers to recap maps when unlock coordinates exist. */}
@@ -376,6 +442,7 @@ export function BadgeDetailModal({
   relatedTripTitle?: string | null;
 }) {
   if (!badge) return null;
+  const isEarned = !!badge.unlockedAt;
   return (
     <Modal
       visible
@@ -386,7 +453,11 @@ export function BadgeDetailModal({
       <Pressable style={styles.modalBackdrop} onPress={onClose}>
         <Pressable style={styles.modalSurface}>
           <BadgeRarityFrame rarity={badge.rarity} style={styles.modalBadgeFrame}>
-            <BadgeIcon iconKey={badge.iconKey} rarity={badge.rarity} size={22} />
+            {isEarned ? (
+              <ExpeditionBadgeArtwork badgeId={badge.id} title={badge.title} size={92} />
+            ) : (
+              <BadgeIcon iconKey={badge.iconKey} rarity={badge.rarity} size={22} />
+            )}
             <View style={styles.modalHeaderCopy}>
               <Text style={styles.modalTitle}>{badge.title}</Text>
               <Text style={[styles.modalRarity, { color: RARITY_STYLES[badge.rarity].accentColor }]}>
@@ -395,9 +466,12 @@ export function BadgeDetailModal({
             </View>
           </BadgeRarityFrame>
           <View style={styles.modalDetailRows}>
-            <DetailRow label="Unlocked" value={formatUnlockDate(badge.unlockedAt)} />
-            <DetailRow label="Expedition" value={relatedTripTitle ?? badge.unlockedTripId ?? 'Expedition unavailable'} />
-            {badge.progressTarget != null ? (
+            <DetailRow label="Status" value={isEarned ? 'Achieved' : 'Locked'} />
+            {isEarned ? <DetailRow label="Unlocked" value={formatUnlockDate(badge.unlockedAt)} /> : null}
+            {isEarned ? (
+              <DetailRow label="Expedition" value={relatedTripTitle ?? badge.unlockedTripId ?? 'Expedition unavailable'} />
+            ) : null}
+            {badge.progressTarget != null && (isEarned || badge.progressCurrent != null) ? (
               <DetailRow
                 label="Progress"
                 value={`${Math.round(badge.progressCurrent ?? badge.progressTarget).toLocaleString()} / ${badge.progressTarget.toLocaleString()}`}
@@ -587,12 +661,39 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   badgeCard: {
-    minHeight: 76,
+    minHeight: 80,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     padding: 10,
     paddingLeft: 12,
+  },
+  catalogCard: {
+    minHeight: 88,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    paddingLeft: 12,
+  },
+  lockedBadgeIconWrap: {
+    width: 64,
+    height: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockedBadgeSeal: {
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: GOLD_RAIL.internal,
+    backgroundColor: ECS_SURFACE.background.secondary,
   },
   badgeCardCopy: {
     flex: 1,
@@ -793,7 +894,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   modalBadgeFrame: {
-    minHeight: 76,
+    minHeight: 116,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 11,

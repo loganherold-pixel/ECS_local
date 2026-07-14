@@ -648,8 +648,18 @@ const providerAdaptersOff = campops.withCampOpsSearchPayload(baseResult, {
   sourceSignalsByCandidateId,
 });
 assert.ok(providerAdaptersOff.campOps, 'Recommendations can still run while provider adapters are off.');
+const providerAdaptersOffWithoutSignals = campops.withCampOpsSearchPayload(baseResult, {
+  source: 'route',
+  rolloutConfig: {
+    campopsRecommendationsEnabled: true,
+    campopsProviderAdaptersEnabled: false,
+  },
+  context: integrationContext(),
+});
 assert.ok(
-  !providerAdaptersOff.campOps.recommendationSet.rejectedCandidates.some((item) => item.candidate.id === sourceSignalCandidateId),
+  providerAdaptersOffWithoutSignals.campOps &&
+    JSON.stringify(providerAdaptersOff.campOps.recommendationSet.rejectedCandidates) ===
+      JSON.stringify(providerAdaptersOffWithoutSignals.campOps.recommendationSet.rejectedCandidates),
   'Provider signals should not affect gates when provider adapters are off.',
 );
 assert.strictEqual(

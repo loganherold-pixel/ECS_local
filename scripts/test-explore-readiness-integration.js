@@ -11,7 +11,7 @@ process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANO
 const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
   if (request === 'react-native' || String(request).includes(`${path.sep}react-native${path.sep}`)) {
-    return { Platform: { OS: 'web' } };
+    return { Platform: { OS: 'web' }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } };
   }
   if (request === 'expo-file-system' || request === 'expo-file-system/legacy') {
     return {};

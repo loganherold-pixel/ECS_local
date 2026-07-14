@@ -124,6 +124,7 @@ export interface ConvoyRoster {
 
 export interface CreateConvoyInput {
   name: string;
+  expeditionId?: string | null;
   startsAt?: string | Date | null;
   expiresAt?: string | Date | null;
   leaderCallsign?: string | null;
@@ -188,6 +189,7 @@ export interface ConvoyMembershipBackend {
     name: string;
     leader_user_id: string;
     status: ConvoyStatus;
+    expedition_id: string | null;
     starts_at: string | null;
     expires_at: string | null;
   }): Promise<ConvoyMembershipServiceResult<ConvoyRecord>>;
@@ -300,6 +302,7 @@ function normalizeCreateConvoyFunctionResult(data: CreateConvoyFunctionResult): 
 
 function createLocalPendingConvoyItem({
   callsign,
+  expeditionId,
   expeditionBadgeTitle,
   expiresAt,
   name,
@@ -308,6 +311,7 @@ function createLocalPendingConvoyItem({
   vehicleId,
 }: {
   callsign: string;
+  expeditionId: string | null;
   expeditionBadgeTitle: string | null;
   expiresAt: string | null;
   name: string;
@@ -327,6 +331,7 @@ function createLocalPendingConvoyItem({
       name,
       leader_user_id: userId,
       status: 'active',
+      expedition_id: expeditionId,
       starts_at: startsAt,
       expires_at: expiresAt,
       created_at: nowIso,
@@ -434,6 +439,7 @@ export class ConvoyMembershipService {
     const name = normalizeText(input.name, MAX_CONVOY_NAME_LENGTH);
     if (!name) return toError('validation_error', 'Convoy name is required.');
 
+    const expeditionId = normalizeText(input.expeditionId, 160) || null;
     const startsAt = normalizeOptionalDate(input.startsAt);
     const expiresAt = normalizeOptionalDate(input.expiresAt);
     const callsign = normalizeText(input.leaderCallsign || 'Lead', MAX_CALLSIGN_LENGTH) || 'Lead';
@@ -445,6 +451,7 @@ export class ConvoyMembershipService {
 
     const createViaFunction = await this.backend.invokeMembershipFunction<CreateConvoyFunctionResult>('create_convoy', {
       name,
+      expeditionId,
       leaderCallsign: callsign,
       leaderVehicleId: vehicleId,
       leaderExpeditionBadgeTitle: expeditionBadgeTitle,
@@ -473,6 +480,7 @@ export class ConvoyMembershipService {
     if (isBackendUnavailableResult(createViaFunction)) {
       const localPending = createLocalPendingConvoyItem({
         name,
+        expeditionId,
         userId: user.data.id,
         startsAt,
         expiresAt,
@@ -495,12 +503,14 @@ export class ConvoyMembershipService {
       name,
       leader_user_id: user.data.id,
       status: 'active',
+      expedition_id: expeditionId,
       starts_at: startsAt,
       expires_at: expiresAt,
     });
     if (!convoy.ok && isBackendUnavailableResult(convoy)) {
       const localPending = createLocalPendingConvoyItem({
         name,
+        expeditionId,
         userId: user.data.id,
         startsAt,
         expiresAt,
@@ -531,6 +541,7 @@ export class ConvoyMembershipService {
     if (!membership.ok && isBackendUnavailableResult(membership)) {
       const localPending = createLocalPendingConvoyItem({
         name,
+        expeditionId,
         userId: user.data.id,
         startsAt,
         expiresAt,

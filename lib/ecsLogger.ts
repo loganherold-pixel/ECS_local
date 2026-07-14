@@ -19,6 +19,23 @@
  *   - SYSTEM: General system errors
  */
 
+import {
+  createECSDiagnosticToken,
+  fingerprintECSDiagnosticValue,
+  sanitizeECSDiagnosticText,
+  sanitizeECSDiagnosticValue,
+  type ECSDiagnosticValue,
+} from './observability/ecsDiagnosticRedaction';
+import {
+  createECSErrorDiagnostic,
+  normalizeECSSafeCode,
+  type ECSErrorDiagnostic,
+  type ECSErrorDiagnosticInput,
+  type ECSErrorSeverity,
+  type ECSObservabilityDomain,
+  type ECSObservabilitySourceState,
+} from './observability/ecsErrorContract';
+
 export type EcsLogCategory =
   | 'WIDGET'
   | 'WEIGHT'
@@ -29,6 +46,15 @@ export type EcsLogCategory =
   | 'DEDUPE'
   | 'POWER'
   | 'SHELL'
+  | 'AUTH'
+  | 'SYNC'
+  | 'DISPATCH'
+  | 'EXPEDITION'
+  | 'OFFLINE'
+  | 'DEVICE'
+  | 'REALTIME'
+  | 'PROVIDER'
+  | 'PERSISTENCE'
   | 'CONFIG'
   | 'DISCOVERY'
   | 'ROUTE_CONTEXT'
@@ -39,19 +65,66 @@ export type EcsLogCategory =
 
 export type EcsLogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL';
 export type EcsConsoleVisibility = 'warn' | 'info' | 'debug';
+export type EcsLogDetails = object;
 
-interface EcsLogEntry {
+export interface EcsLogEntry {
   timestamp: string;
   level: EcsLogLevel;
   category: EcsLogCategory;
   message: string;
-  details?: Record<string, any>;
+  details?: Record<string, ECSDiagnosticValue>;
 }
+
+export type ECSBreadcrumbInput = {
+  domain: ECSObservabilityDomain;
+  operation: string;
+  code: string;
+  status?: 'started' | 'completed' | 'failed' | 'cancelled' | 'degraded' | 'info';
+  sourceState?: ECSObservabilitySourceState;
+  correlationId?: string | null;
+  featureFlag?: string | null;
+  context?: Record<string, unknown>;
+  occurredAt?: string;
+};
+
+export type ECSBreadcrumb = {
+  occurredAt: string;
+  domain: string;
+  operation: string;
+  code: string;
+  status: 'started' | 'completed' | 'failed' | 'cancelled' | 'degraded' | 'info';
+  sourceState: ECSObservabilitySourceState;
+  correlationId: string | null;
+  featureFlag: string | null;
+  context: Record<string, ECSDiagnosticValue>;
+};
+
+export type ECSFailureCaptureOptions = {
+  category?: EcsLogCategory;
+  dedupeWindowMs?: number;
+  fingerprint?: string;
+  nowMs?: number;
+};
+
+export type ECSFailureCaptureResult = {
+  diagnostic: ECSErrorDiagnostic;
+  emitted: boolean;
+  suppressedRepeats: number;
+};
 
 // ── In-memory log buffer (last 100 entries) ──────────────
 const LOG_BUFFER_SIZE = 100;
+const BREADCRUMB_BUFFER_SIZE = 80;
+const FAILURE_DEDUPE_LIMIT = 200;
+const DEFAULT_FAILURE_DEDUPE_WINDOW_MS = 30_000;
 const logBuffer: EcsLogEntry[] = [];
+const breadcrumbBuffer: ECSBreadcrumb[] = [];
 const logOnceCache = new Set<string>();
+const failureDedupeState = new Map<string, {
+  lastEmittedAt: number;
+  suppressedCount: number;
+}>();
+let suppressedFailureCount = 0;
 
 // ── Telemetry failure tracking ───────────────────────────
 const failureCounts: Record<string, number> = {};
@@ -63,6 +136,15 @@ const DEBUG_CATEGORY_ALIASES = {
   dedupe: 'DEDUPE',
   telemetry: 'TELEMETRY',
   power: 'POWER',
+  auth: 'AUTH',
+  sync: 'SYNC',
+  dispatch: 'DISPATCH',
+  expedition: 'EXPEDITION',
+  offline: 'OFFLINE',
+  device: 'DEVICE',
+  realtime: 'REALTIME',
+  provider: 'PROVIDER',
+  persistence: 'PERSISTENCE',
   discovery: 'DISCOVERY',
   route_context: 'ROUTE_CONTEXT',
   routeContext: 'ROUTE_CONTEXT',
@@ -77,7 +159,7 @@ const devLogThrottleState = new Map<string, {
   lastEmittedAt: number;
   windowStartedAt: number;
   suppressedCount: number;
-  lastDetails?: Record<string, any>;
+  lastDetails?: Record<string, ECSDiagnosticValue>;
 }>();
 
 function readGlobalValue<T>(key: string): T | undefined {
@@ -144,11 +226,34 @@ function isTruthyDebugValue(value: unknown): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
+function isDevelopmentRuntime(): boolean {
+  return typeof __DEV__ !== 'undefined' && __DEV__ === true;
+}
+
+function isApprovedSupportDiagnosticsEnabled(): boolean {
+  const globalStore = globalThis as unknown as Record<string, unknown>;
+  return (
+    (
+      isTruthyDebugValue(globalStore.__ECS_SUPPORT_DIAGNOSTICS_ENABLED)
+      || isTruthyDebugValue(readProcessEnvValue('ECS_SUPPORT_DIAGNOSTICS_ENABLED'))
+    )
+    && (
+      isTruthyDebugValue(globalStore.__ECS_SUPPORT_DIAGNOSTICS_APPROVED)
+      || isTruthyDebugValue(readProcessEnvValue('ECS_SUPPORT_DIAGNOSTICS_APPROVED'))
+    )
+  );
+}
+
+function canCaptureDetailedDiagnostics(): boolean {
+  return isDevelopmentRuntime() || isApprovedSupportDiagnosticsEnabled();
+}
+
 function getCategoryDebugFlagName(category: EcsLogCategory): string {
   return `ECS_DEBUG_${category}`;
 }
 
 function isExplicitDevDebugEnabled(category: EcsLogCategory, debugFlag?: string): boolean {
+  if (!canCaptureDetailedDiagnostics()) return false;
   const globalStore = globalThis as unknown as Record<string, unknown>;
   const flag = debugFlag || getCategoryDebugFlagName(category);
   const alternateGlobalFlag = flag.startsWith('__') ? flag : `__${flag}`;
@@ -162,6 +267,8 @@ function shouldPrintToConsole(level: EcsLogLevel, category: EcsLogCategory): boo
     return true;
   }
 
+  if (!canCaptureDetailedDiagnostics()) return false;
+
   const visibility = getConfiguredConsoleVisibility();
   if (visibility === 'debug') return true;
   if (level === 'INFO' && visibility === 'info') return true;
@@ -174,8 +281,7 @@ function emitConsole(
   level: EcsLogLevel,
   category: EcsLogCategory,
   message: string,
-  details?: Record<string, any>,
-  error?: unknown,
+  details?: Record<string, ECSDiagnosticValue>,
 ): void {
   if (!shouldPrintToConsole(level, category)) return;
 
@@ -184,7 +290,7 @@ function emitConsole(
     : formatTag(category);
 
   if (level === 'CRITICAL' || level === 'ERROR') {
-    console.error(tag, message, error || '', details || '');
+    console.error(tag, message, details || '');
     return;
   }
 
@@ -199,7 +305,7 @@ function emitConsole(
 function emitDevConsole(
   category: EcsLogCategory,
   message: string,
-  details?: Record<string, any>,
+  details?: Record<string, ECSDiagnosticValue>,
   tag?: string,
 ): void {
   const prefix = tag || formatTag(category);
@@ -207,40 +313,30 @@ function emitDevConsole(
   else console.log(prefix, message);
 }
 
-function sanitizeForFingerprint(value: unknown): unknown {
-  if (value == null) return value;
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (Array.isArray(value)) return value.map(sanitizeForFingerprint);
-  if (typeof value !== 'object') return String(value);
-  return Object.keys(value as Record<string, unknown>)
-    .sort()
-    .reduce<Record<string, unknown>>((acc, key) => {
-      acc[key] = sanitizeForFingerprint((value as Record<string, unknown>)[key]);
-      return acc;
-    }, {});
-}
-
-function stableDetailsFingerprint(details?: Record<string, any>): string {
-  if (!details) return '';
-  try {
-    return JSON.stringify(sanitizeForFingerprint(details));
-  } catch {
-    return 'unserializable';
-  }
+function stableDetailsFingerprint(details?: object): string {
+  return details ? fingerprintECSDiagnosticValue(details) : '';
 }
 
 function createEntry(
   level: EcsLogLevel,
   category: EcsLogCategory,
   message: string,
-  details?: Record<string, any>,
+  details?: EcsLogDetails,
 ): EcsLogEntry {
+  const sanitizedDetails = details
+    ? sanitizeECSDiagnosticValue(details, {
+        maxDepth: 5,
+        maxArrayLength: 20,
+        maxObjectKeys: 28,
+        maxStringLength: 500,
+      }) as Record<string, ECSDiagnosticValue>
+    : undefined;
   return {
     timestamp: new Date().toISOString(),
     level,
     category,
-    message,
-    details,
+    message: sanitizeECSDiagnosticText(message, 500),
+    details: sanitizedDetails,
   };
 }
 
@@ -251,6 +347,60 @@ function pushToBuffer(entry: EcsLogEntry): void {
   }
 }
 
+function pushBreadcrumb(entry: ECSBreadcrumb): void {
+  breadcrumbBuffer.push(entry);
+  if (breadcrumbBuffer.length > BREADCRUMB_BUFFER_SIZE) {
+    breadcrumbBuffer.splice(0, breadcrumbBuffer.length - BREADCRUMB_BUFFER_SIZE);
+  }
+}
+
+function writeEntry(
+  level: EcsLogLevel,
+  category: EcsLogCategory,
+  message: string,
+  details?: EcsLogDetails,
+): EcsLogEntry {
+  const entry = createEntry(level, category, message, details);
+  pushToBuffer(entry);
+  emitConsole(level, category, entry.message, entry.details);
+  return entry;
+}
+
+function pruneFailureDedupeState(): void {
+  if (failureDedupeState.size <= FAILURE_DEDUPE_LIMIT) return;
+  const removeCount = failureDedupeState.size - FAILURE_DEDUPE_LIMIT;
+  const oldest = [...failureDedupeState.entries()]
+    .sort((left, right) => left[1].lastEmittedAt - right[1].lastEmittedAt)
+    .slice(0, removeCount);
+  oldest.forEach(([key]) => failureDedupeState.delete(key));
+}
+
+function categoryForDomain(domain: string): EcsLogCategory {
+  const normalized = domain.toLowerCase();
+  if (normalized.includes('auth')) return 'AUTH';
+  if (normalized.includes('weather')) return 'WEATHER';
+  if (normalized.includes('dispatch')) return 'DISPATCH';
+  if (normalized.includes('expedition')) return 'EXPEDITION';
+  if (normalized.includes('offline')) return 'OFFLINE';
+  if (normalized.includes('realtime')) return 'REALTIME';
+  if (normalized.includes('device') || normalized.includes('telemetry')) return 'DEVICE';
+  if (normalized.includes('persist') || normalized.includes('storage')) return 'PERSISTENCE';
+  if (normalized.includes('provider') || normalized.includes('supabase')) return 'PROVIDER';
+  if (normalized.includes('route')) return 'ROUTE_CONTEXT';
+  if (normalized.includes('map') || normalized.includes('navigate')) return 'MAP';
+  if (normalized.includes('widget') || normalized.includes('dashboard')) return 'WIDGET';
+  if (normalized.includes('sync')) return 'SYNC';
+  return 'SYSTEM';
+}
+
+function logLevelForSeverity(severity: ECSErrorSeverity): EcsLogLevel {
+  if (severity === 'critical') return 'CRITICAL';
+  if (severity === 'error') return 'ERROR';
+  if (severity === 'warning') return 'WARN';
+  if (severity === 'info') return 'INFO';
+  return 'DEBUG';
+}
+
 function formatTag(category: EcsLogCategory): string {
   return `[ECS:${category}]`;
 }
@@ -259,10 +409,9 @@ function formatTag(category: EcsLogCategory): string {
 
 export const ecsLog = {
   /** Log debug diagnostics (suppressed by default) */
-  debug(category: EcsLogCategory, message: string, details?: Record<string, any>): void {
-    const entry = createEntry('DEBUG', category, message, details);
-    pushToBuffer(entry);
-    emitConsole('DEBUG', category, message, details);
+  debug(category: EcsLogCategory, message: string, details?: EcsLogDetails): void {
+    if (!canCaptureDetailedDiagnostics()) return;
+    writeEntry('DEBUG', category, message, details);
   },
 
   /**
@@ -273,7 +422,7 @@ export const ecsLog = {
   dev(
     category: EcsLogCategory,
     message: string,
-    details?: Record<string, any>,
+    details?: EcsLogDetails,
     options?: {
       tag?: string;
       debugFlag?: string;
@@ -285,19 +434,28 @@ export const ecsLog = {
   ): void {
     if (!isExplicitDevDebugEnabled(category, options?.debugFlag)) return;
 
+    const sanitizedDetails = details
+      ? sanitizeECSDiagnosticValue(details, {
+          maxDepth: 5,
+          maxArrayLength: 20,
+          maxObjectKeys: 28,
+          maxStringLength: 500,
+        }) as Record<string, ECSDiagnosticValue>
+      : undefined;
+
     const now = options?.nowMs ?? Date.now();
     const throttleMs = options?.throttleMs ?? 2500;
     const aggregateWindowMs = options?.aggregateWindowMs ?? 10_000;
     const key = [
       category,
       message,
-      options?.fingerprint ?? stableDetailsFingerprint(details),
+      options?.fingerprint ?? stableDetailsFingerprint(sanitizedDetails),
     ].join('::');
     const state = devLogThrottleState.get(key);
 
     if (state && now - state.lastEmittedAt < throttleMs) {
       state.suppressedCount += 1;
-      state.lastDetails = details;
+      state.lastDetails = sanitizedDetails;
       return;
     }
 
@@ -311,81 +469,210 @@ export const ecsLog = {
       );
     }
 
-    const entry = createEntry('DEBUG', category, message, details);
+    const entry = createEntry('DEBUG', category, message, sanitizedDetails);
     pushToBuffer(entry);
-    emitDevConsole(category, message, details, options?.tag);
+    emitDevConsole(category, entry.message, entry.details, options?.tag);
     devLogThrottleState.set(key, {
       lastEmittedAt: now,
       windowStartedAt: state && now - state.windowStartedAt < aggregateWindowMs ? state.windowStartedAt : now,
       suppressedCount: 0,
-      lastDetails: details,
+      lastDetails: sanitizedDetails,
     });
   },
 
   /** Log informational message (not an error) */
-  info(category: EcsLogCategory, message: string, details?: Record<string, any>): void {
-    const entry = createEntry('INFO', category, message, details);
-    pushToBuffer(entry);
-    emitConsole('INFO', category, message, details);
+  info(category: EcsLogCategory, message: string, details?: EcsLogDetails): void {
+    writeEntry('INFO', category, message, details);
   },
 
   /** Log a warning (potential issue, not critical) */
-  warn(category: EcsLogCategory, message: string, details?: Record<string, any>): void {
-    const entry = createEntry('WARN', category, message, details);
-    pushToBuffer(entry);
-    emitConsole('WARN', category, message, details);
+  warn(category: EcsLogCategory, message: string, details?: EcsLogDetails): void {
+    writeEntry('WARN', category, message, details);
   },
 
   /** Log a warning only once for a stable dedupe key. */
-  warnOnce(category: EcsLogCategory, dedupeKey: string, message: string, details?: Record<string, any>): void {
-    const key = `WARN:${category}:${dedupeKey}`;
+  warnOnce(category: EcsLogCategory, dedupeKey: string, message: string, details?: EcsLogDetails): void {
+    const key = `WARN:${category}:${fingerprintECSDiagnosticValue(dedupeKey)}`;
     if (logOnceCache.has(key)) return;
     logOnceCache.add(key);
     ecsLog.warn(category, message, details);
   },
 
   /** Log an error (something failed, but app continues) */
-  error(category: EcsLogCategory, message: string, error?: any, details?: Record<string, any>): void {
-    const entry = createEntry('ERROR', category, message, {
+  error(category: EcsLogCategory, message: string, error?: unknown, details?: EcsLogDetails): void {
+    writeEntry('ERROR', category, message, {
       ...details,
-      errorMessage: error?.message,
-      errorStack: error?.stack?.split('\n').slice(0, 4).join('\n'),
+      ...(error ? { cause: error } : {}),
     });
-    pushToBuffer(entry);
-    emitConsole('ERROR', category, message, details, error);
   },
 
   /** Log a critical error (system-level failure) */
-  critical(category: EcsLogCategory, message: string, error?: any, details?: Record<string, any>): void {
-    const entry = createEntry('CRITICAL', category, message, {
+  critical(category: EcsLogCategory, message: string, error?: unknown, details?: EcsLogDetails): void {
+    writeEntry('CRITICAL', category, message, {
       ...details,
-      errorMessage: error?.message,
-      errorStack: error?.stack?.split('\n').slice(0, 6).join('\n'),
+      ...(error ? { cause: error } : {}),
     });
-    pushToBuffer(entry);
-    emitConsole('CRITICAL', category, message, details, error);
+  },
+
+  /** Capture a typed operational failure with bounded repeat suppression. */
+  captureFailure(
+    input: ECSErrorDiagnosticInput,
+    error?: unknown,
+    options: ECSFailureCaptureOptions = {},
+  ): ECSFailureCaptureResult {
+    const diagnostic = createECSErrorDiagnostic(input, error);
+    const now = options.nowMs ?? Date.now();
+    const dedupeWindowMs = Math.max(0, options.dedupeWindowMs ?? DEFAULT_FAILURE_DEDUPE_WINDOW_MS);
+    const dedupeKey = options.fingerprint
+      ? fingerprintECSDiagnosticValue(options.fingerprint)
+      : [
+          diagnostic.domain,
+          diagnostic.operation,
+          diagnostic.code,
+          diagnostic.requestId ?? '',
+          diagnostic.correlationId ?? '',
+          diagnostic.sourceState,
+        ].join(':');
+    const existing = failureDedupeState.get(dedupeKey);
+
+    if (existing && now - existing.lastEmittedAt < dedupeWindowMs) {
+      existing.suppressedCount += 1;
+      suppressedFailureCount += 1;
+      return {
+        diagnostic,
+        emitted: false,
+        suppressedRepeats: existing.suppressedCount,
+      };
+    }
+
+    const suppressedRepeats = existing?.suppressedCount ?? 0;
+    failureDedupeState.set(dedupeKey, {
+      lastEmittedAt: now,
+      suppressedCount: 0,
+    });
+    pruneFailureDedupeState();
+
+    const level = logLevelForSeverity(diagnostic.severity);
+    const category = options.category ?? categoryForDomain(diagnostic.domain);
+    writeEntry(level, category, `Failure ${diagnostic.code}`, {
+      errorKind: diagnostic.kind,
+      domain: diagnostic.domain,
+      operation: diagnostic.operation,
+      safeCode: diagnostic.code,
+      severity: diagnostic.severity,
+      recoverability: diagnostic.recoverability,
+      retryability: diagnostic.retryability,
+      sourceState: diagnostic.sourceState,
+      requestId: diagnostic.requestId,
+      correlationId: diagnostic.correlationId,
+      featureFlag: diagnostic.featureFlag,
+      redactedContext: diagnostic.context,
+      cause: diagnostic.cause,
+      ...(suppressedRepeats > 0 ? { suppressedRepeats } : {}),
+    });
+
+    return {
+      diagnostic,
+      emitted: true,
+      suppressedRepeats,
+    };
+  },
+
+  /** Record a privacy-safe lifecycle breadcrumb without producing console output. */
+  breadcrumb(input: ECSBreadcrumbInput): void {
+    const domain = sanitizeECSDiagnosticText(input.domain, 72)
+      .toLowerCase()
+      .replace(/[^a-z0-9_.:-]/g, '_');
+    const operation = sanitizeECSDiagnosticText(input.operation, 72)
+      .toLowerCase()
+      .replace(/[^a-z0-9_.:-]/g, '_');
+    const context = sanitizeECSDiagnosticValue(input.context ?? {}, {
+      maxDepth: 4,
+      maxArrayLength: 16,
+      maxObjectKeys: 24,
+      maxStringLength: 320,
+    }) as Record<string, ECSDiagnosticValue>;
+    pushBreadcrumb({
+      occurredAt: input.occurredAt ?? new Date().toISOString(),
+      domain: domain || 'system',
+      operation: operation || 'operation',
+      code: normalizeECSSafeCode(input.code),
+      status: input.status ?? 'info',
+      sourceState: input.sourceState ?? 'unknown',
+      correlationId: createECSDiagnosticToken('correlation', input.correlationId),
+      featureFlag: input.featureFlag
+        ? sanitizeECSDiagnosticText(input.featureFlag, 72).replace(/[^a-z0-9_.:-]/gi, '_').toLowerCase()
+        : null,
+      context,
+    });
+  },
+
+  getRecentBreadcrumbs(count: number = 20): ECSBreadcrumb[] {
+    const limit = Math.max(0, Math.floor(count));
+    if (limit === 0) return [];
+    return breadcrumbBuffer.slice(-limit).map((entry) => ({
+      ...entry,
+      context: { ...entry.context },
+    }));
+  },
+
+  getDiagnostics(): {
+    logEntryCount: number;
+    breadcrumbCount: number;
+    failureDedupeKeyCount: number;
+    suppressedFailureCount: number;
+    detailedDiagnosticsAllowed: boolean;
+    approvedSupportMode: boolean;
+  } {
+    return {
+      logEntryCount: logBuffer.length,
+      breadcrumbCount: breadcrumbBuffer.length,
+      failureDedupeKeyCount: failureDedupeState.size,
+      suppressedFailureCount,
+      detailedDiagnosticsAllowed: canCaptureDetailedDiagnostics(),
+      approvedSupportMode: isApprovedSupportDiagnosticsEnabled(),
+    };
   },
 
   /** Get the last N log entries */
   getRecentLogs(count: number = 20): EcsLogEntry[] {
-    return logBuffer.slice(-count);
+    const limit = Math.max(0, Math.floor(count));
+    if (limit === 0) return [];
+    return logBuffer.slice(-limit).map((entry) => ({
+      ...entry,
+      details: entry.details ? { ...entry.details } : undefined,
+    }));
   },
 
   /** Get logs filtered by category */
   getLogsByCategory(category: EcsLogCategory, count: number = 20): EcsLogEntry[] {
-    return logBuffer.filter(e => e.category === category).slice(-count);
+    const limit = Math.max(0, Math.floor(count));
+    if (limit === 0) return [];
+    return logBuffer
+      .filter(e => e.category === category)
+      .slice(-limit)
+      .map((entry) => ({ ...entry, details: entry.details ? { ...entry.details } : undefined }));
   },
 
   /** Get logs filtered by level */
   getLogsByLevel(level: EcsLogLevel, count: number = 20): EcsLogEntry[] {
-    return logBuffer.filter(e => e.level === level).slice(-count);
+    const limit = Math.max(0, Math.floor(count));
+    if (limit === 0) return [];
+    return logBuffer
+      .filter(e => e.level === level)
+      .slice(-limit)
+      .map((entry) => ({ ...entry, details: entry.details ? { ...entry.details } : undefined }));
   },
 
   /** Clear all logs */
   clear(): void {
     logBuffer.length = 0;
+    breadcrumbBuffer.length = 0;
     logOnceCache.clear();
     devLogThrottleState.clear();
+    failureDedupeState.clear();
+    suppressedFailureCount = 0;
+    Object.keys(failureCounts).forEach((source) => delete failureCounts[source]);
   },
 
   /** Get total log count */
@@ -400,7 +687,21 @@ export const ecsLog = {
     failureCounts[source] = (failureCounts[source] || 0) + 1;
     const count = failureCounts[source];
     if (count >= FAILURE_THRESHOLD) {
-      ecsLog.warn('TELEMETRY', `Source "${source}" failed ${count} times — reverting to placeholder`, { source, count });
+      ecsLog.captureFailure({
+        kind: 'degraded_data',
+        domain: 'telemetry',
+        operation: 'source_read',
+        code: 'TELEMETRY_SOURCE_DEGRADED',
+        sourceState: 'unavailable',
+        context: {
+          sourceId: createECSDiagnosticToken('source', source),
+          consecutiveFailureCount: count,
+          fallback: 'placeholder',
+        },
+      }, undefined, {
+        category: 'TELEMETRY',
+        fingerprint: source,
+      });
     }
     return count;
   },

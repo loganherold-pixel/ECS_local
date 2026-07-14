@@ -68,9 +68,11 @@ assert(scannerHook.includes('mountedRef.current'), 'OBD scanner hook must guard 
 assert(scannerHook.includes("obd2Adapter.startScan(durationMs, 'user_manual_scan')"), 'Hook startScan must mark scans as an explicit user request');
 
 const unified = read('lib/useUnifiedDeviceConnections.ts');
+const scannerCoordinator = read('lib/unifiedScannerCoordinator.ts');
 assert(unified.includes('const rescan = useCallback(async () => {'), 'Unified device connection panel must keep manual rescan entry point');
 assert(unified.includes('SCANNER_SCAN_WINDOW_DEBOUNCE_MS'), 'Unified device connection panel must debounce manual scan windows');
-assert(unified.includes('scanInFlightRef.current'), 'Unified device connection panel must suppress overlapping scans');
+assert(unified.includes('scannerCoordinatorRef.current!.requestSession'), 'Unified device connection panel must route scan starts through the shared coordinator');
+assert(scannerCoordinator.includes("reason: 'already_scanning'"), 'Unified scanner coordinator must suppress overlapping scans');
 assert(
   !unified.includes("const ecoFlowBleDiscovery =") &&
     !unified.includes("provider.discoverDevices();"),
@@ -80,7 +82,7 @@ assert(
   unified.includes('Promise.allSettled([nativeBleScanWindow, ecoFlowDiscovery, classicDiscovery])'),
   'Unified scanning may run cloud and classic checks beside one native BLE scan',
 );
-assert(unified.includes('mountedRef.current') && unified.includes("obd2Adapter.stopScan('unified_panel_unmount')"), 'Unified scanner must cancel OBD scanning on panel unmount');
+assert(unified.includes('mountedRef.current') && unified.includes("scannerCoordinatorRef.current?.cancel('unmount')"), 'Unified scanner must cancel coordinated scanning on panel unmount');
 assert(!/useEffect\s*\(\s*\(\)\s*=>\s*\{[\s\S]{0,240}startScan\(/.test(unified), 'Unified scanner must not start scanning from a mount/render effect');
 
 console.log('Telemetry discovery stability checks passed.');

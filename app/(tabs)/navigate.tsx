@@ -16,8 +16,6 @@
  */
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { parseGeoFile, getPrimaryRouteCoordinates } from '../../lib/gpxParser';
-
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
@@ -35,11 +33,19 @@ import {
   BackHandler,
   Easing,
   Keyboard,
+  AppState,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import LandscapeDockRevealButton from '../../components/LandscapeDockRevealButton';
+import ECSOperationalAnnouncer from '../../components/ECSOperationalAnnouncer';
+import { RouteConfidenceTimelinePanel } from '../../components/navigate/RouteConfidenceTimelinePanel';
 import { hapticMicro, hapticCommand } from '../../lib/haptics';
 import { runtimeSmokeStore } from '../../lib/ai/runtimeSmokeStore';
+import {
+  createRuntimeFeatureVisibilityContext,
+  isECSDevelopmentDiagnosticEnabled,
+  resolveECSFeatureVisibility,
+} from '../../lib/features/featureVisibilityRegistry';
 
 import TabErrorBoundary from '../../components/TabErrorBoundary';
 import ExpeditionAnalysisModal from '../../components/discover/ExpeditionAnalysisModal';
@@ -65,11 +71,12 @@ import {
   runStore,
   computeRunHealth,
   createDefaultBuildSnapshot,
+  waitForRunStoreHydration,
   type ECSRun,
   type BuildSnapshot,
 } from '../../lib/runStore';
 
-import { routeStore, type ImportedRoute } from '../../lib/routeStore';
+import { routeStore, waitForRouteStoreHydration, type ImportedRoute } from '../../lib/routeStore';
 import {
   calculateSavedRouteAssetCounts,
   filterSavedRouteAssets,
@@ -94,8 +101,11 @@ import {
   buildConvoyMapOverlayModel,
   type ConvoyMapOverlayMarker,
 } from '../../lib/convoy/convoyMapOverlayModel';
+import { buildConvoyLocationSourceTruthBinding } from '../../lib/sourceTruthAdapters';
+import { SourceTruthInspectorTrigger } from '../../components/source-truth';
 import {
   refreshConvoyTrackingStaleness,
+  stopConvoyLocationSubscription,
   subscribeToConvoyLocations,
   useConvoyTrackingStore,
 } from '../../stores/convoyTrackingStore';
@@ -106,6 +116,22 @@ import {
 } from '../../lib/dispatchProfileStore';
 import { getCurrentExpeditionIdentityTitle } from '../../lib/expedition/expeditionBadgeStore';
 import { buildNavigateUserIdentityCallout } from '../../lib/navigation/navigateUserIdentityCallout';
+import {
+  buildNavigateRouteConfidenceTimelineOverlays,
+  navigateRouteConfidenceGeometry,
+  navigateTimelineMeasure,
+  routeConfidenceTimelineMatchesRoute,
+  routeConfidenceTimelinePointAtMeasure,
+  routeConfidenceTimelineTimestamp,
+} from '../../lib/navigation/navigateRouteConfidenceTimelinePresentation';
+import {
+  isToolsChildPopup,
+  raiseNavigateSurfaceLayer,
+  removeNavigateSurfaceLayer,
+  type NavigateSurfaceLayerId,
+  type NavigateToolsChildPopup,
+  type NavigateTopPopup,
+} from '../../lib/navigation/navigateSurfaceLayerState';
 import {
   isDispatchContextNavigationPayload,
   parseDispatchContextNavigationPayload,
@@ -146,10 +172,10 @@ import {
   DISPERSED_CAMPING_CACHE_TTL_MS,
 } from '../../lib/map/dispersedCampingMobile';
 import { fetchDispersedCampingEligibilityForMap } from '../../lib/map/dispersedCampingSearchClient';
+import { expandCampLayerFetchBbox } from '../../lib/map/campLayerFetchScheduler';
 import {
-  CampLayerFetchCoordinator,
-  expandCampLayerFetchBbox,
-} from '../../lib/map/campLayerFetchScheduler';
+  NavigateMapLayerCoordinator,
+} from '../../lib/map/navigateMapLayerCoordinator';
 import {
   getCampLayerZoomPrompt,
   isCampLayerZoomEligible,
@@ -272,13 +298,17 @@ import {
   buildRouteFromNearestAnchor,
   clearNavigateRouteDraft,
   createNavigateRouteDraft,
+  createNavigateRouteDraftHistory,
+  recordNavigateRouteDraft,
+  redoNavigateRouteDraftHistory,
   resolveNearestNavigateRouteAnchor,
-  undoLastNavigateRouteAnchor,
+  undoNavigateRouteDraftHistory,
   type NavigateRouteCoordinate,
   type NavigateRouteDraft,
   type NavigateRouteTraceableSegment,
 } from '../../lib/navigatePointRouteBuilder';
 import { resolveNavigateRouteProfileFocus } from '../../lib/navigateRouteProfileScrubber';
+import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 import {
   buildRouteGeometryViewportCacheKey,
   isRouteGeometryViewportZoomEligible,
@@ -286,7 +316,6 @@ import {
   normalizeRouteGeometryViewportBbox,
   resolveNearestRouteGeometryEndpoint,
   routeGeometryViewportSegmentsToOverlaySegments,
-  RouteGeometryViewportFetchCoordinator,
   ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM,
   ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
   ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
@@ -313,24 +342,21 @@ import {
   buildNavigateMvumMapOverlay,
   buildNavigateMvumStitchedRoutePreview,
   buildMvumStitchedRouteDraft,
-  createNavigateMvumViewportCacheEntry,
   createNavigateMvumSelectionStore,
   createNavigateMvumOverlayState,
   mvumSegmentsToSummaries,
   planNavigateMvumViewportFetch,
-  readNavigateMvumViewportCacheEntry,
   resolveNavigateMvumVectorSourceLayer,
   resolveNavigateMvumVectorTileUrl,
   toggleMvumSelectedSegmentId,
   MVUM_OVERLAY_MIN_ZOOM,
   type MvumCanonicalSegment,
-  type NavigateMvumViewportCacheEntry,
 } from '../../src/features/navigate/mvum';
 import {
   fetchNavigateMvumCanonicalSegments,
   fetchNavigateMvumViewportSegments,
 } from '../../src/features/navigate/mvum/client';
-import { buildRouteConfidenceTimeline, isRouteConfidenceTimelineFeatureEnabled, routeConfidenceTimelineItemCopy, type RouteConfidenceTimeline, type RouteConfidenceTimelineItem, type RouteConfidenceTimelineOverlay, type RouteGeometry } from '../../lib/routeContext';
+import { buildRouteConfidenceTimeline, isRouteConfidenceTimelineFeatureEnabled, type RouteConfidenceTimelineItem } from '../../lib/routeContext';
 import {
   clearExploreRoutesMapHandoff,
   consumeExploreRoutesMapHandoff,
@@ -358,8 +384,18 @@ import {
   recordNavigateInitialRender,
   type MapLifecycleSnapshot,
 } from '../../lib/performance/exploreNavigateSeparationInstrumentation';
+import {
+  incrementECSPerformanceCounter,
+  recordECSPerformanceRender,
+  startECSPerformanceSpan,
+  type ECSPerformanceSpanHandle,
+} from '../../lib/performance/ecsPerformanceDiagnostics';
 import { logRouteGeometryLifecycle, validateRouteGeometry } from '../../lib/routeGeometryLifecycle';
-import { normalizeRouteLifecycle } from '../../lib/routeLifecycleState';
+import {
+  deriveRouteOperationState,
+  normalizeRouteLifecycle,
+} from '../../lib/routeLifecycleState';
+import { parseNavigateRouteImport } from '../../lib/navigateRouteImport';
 import { buildFullRouteGuidanceModel } from '../../lib/fullRouteGuidance';
 import { createMigratingNonSecureStorage } from '../../lib/nonSecureStorage';
 import {
@@ -436,7 +472,6 @@ import {
   WeatherAlertMapOverlay,
   WeatherAlertDetailModal,
 } from '../../components/navigate/WeatherAlertLayer';
-import WeatherIntelPanel from '../../components/weather/WeatherIntelPanel';
 
 // -- Route Corridor Weather imports --------------------------
 import {
@@ -495,7 +530,6 @@ import {
   type ECSTrailPackSubmissionRouteInput,
 } from '../../lib/explore/trailPackSubmissions';
 import { routeAnalysisEngine, type RouteIntelligence } from '../../lib/routeAnalysisEngine';
-import { selectVehicleRouteConstraintEnvelope } from '../../lib/vehicleRouteConstraintEnvelopeSelector';
 import {
   buildExploreRoutePreviewCameraCommand,
   getExploreRoutePreviewRoutePoints,
@@ -509,12 +543,14 @@ import {
   type TelemetrySnapshot,
 } from '../../lib/resourceForecastEngine';
 
-import { getActiveVehicleContext, getVehicleContext } from '../../lib/activeVehicleContext';
+import {
+  getActiveVehicleContext,
+  getVehicleContext,
+  subscribeActiveVehicleState,
+} from '../../lib/activeVehicleContext';
 import { consumablesStore } from '../../lib/consumablesStore';
 import { loadoutItemStore, loadoutStore } from '../../lib/loadoutStore';
 import { tiresLiftStore } from '../../lib/tiresLiftStore';
-import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
-import { vehicleStore } from '../../lib/vehicleStore';
 import { vehicleSpecStore } from '../../lib/vehicleSpecStore';
 import { bluPowerAuthority } from '../../lib/BluPowerAuthority';
 
@@ -636,6 +672,12 @@ import {
 } from '../../lib/campScout';
 import { buildDispersedCampingCampScoutCandidates } from '../../lib/campops/campCandidateScoring';
 import {
+  campOpsCandidateFromEstablishedCampsite,
+  campOpsCandidateFromGroupItem,
+  campOpsCandidateFromPublicCampSite,
+  campOpsCandidateFromReport,
+} from '../../lib/campops/campOpsAdapters';
+import {
   buildCampOpsCampEndpointMapPins,
   isCampOpsMapPinPayload,
 } from '../../lib/campops/campOpsMapPins';
@@ -671,10 +713,6 @@ import { useVCDPanelStates } from '../../lib/vcdPanelStateEngine';
 import VCDAdaptivePanel from '../../components/navigate/VCDAdaptivePanel';
 
 // -- Intelligence Panels -------------------------------------
-import RouteAnalysisPanel from '../../components/navigate/RouteAnalysisPanel';
-import ResourceForecastPanel from '../../components/navigate/ResourceForecastPanel';
-import TerrainAnalysisPanel from '../../components/navigate/TerrainAnalysisPanel';
-import ExpeditionForecastPanel from '../../components/dashboard/ExpeditionForecastPanel';
 
 import useECSAIHook from '../../lib/ai/useECSAI';
 import { buildAIContextFromLiveState } from '../../lib/aiContextBuilder';
@@ -684,7 +722,6 @@ import {
   buildNavigateMissionBriefLiveState,
 } from '../../lib/navigateMissionBriefContext';
 import { selectNavigateCommandState } from '../../lib/navigateCommandSelectors';
-import MissionBriefCard from '../../components/dashboard/MissionBriefCard';
 
 import {
   tileCacheStore,
@@ -710,7 +747,11 @@ import {
 
 import { useThrottledGPS, type ThrottledGPSOutput } from '../../lib/useThrottledGPS';
 import { sharedGPSLocationStore } from '../../lib/sharedGPSLocation';
-import { resolveMapSurfaceMotionState } from '../../lib/mapSurfaceCoordinator';
+import {
+  MapCameraCommandCoordinator,
+  resolveMapSurfaceMotionState,
+  type MapCameraCommandKind,
+} from '../../lib/mapSurfaceCoordinator';
 import { resolveRouteAheadBearingDeg } from '../../lib/dashboardNavigationChaseCamera';
 import {
   resolveGpsMapDisplaySample,
@@ -758,6 +799,7 @@ import {
   hasActiveGuidanceReplacementConfirmation,
   isActiveGuidanceSnapshot,
   isNavigationHandoffForActiveGuidance,
+  markNavigationHandoffActiveGuidanceReplacementConfirmed,
   shouldProtectActiveGuidanceFromHandoff,
 } from '../../lib/navigationActiveGuidanceGuard';
 import {
@@ -824,7 +866,10 @@ const CAMPOPS_SAFE_ENDPOINT_ENABLED = isCampOpsSafeEndpointDecisionModeEnabled()
 const CAMPOPS_SAFE_ENDPOINT_ROLLOUT_CONFIG = getCampOpsSafeEndpointRolloutConfig();
 const ROUTE_CHANGE_IMPACT_PREVIEW_ENABLED = isRouteChangeImpactPreviewEnabled();
 const CAMPOPS_MANUAL_AREA_REVIEW_ENABLED =
-  typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_CAMPOPS_MANUAL_AREA_REVIEW === '1';
+  resolveECSFeatureVisibility(
+    'campops_manual_area_review',
+    createRuntimeFeatureVisibilityContext(),
+  ).visible;
 const campopsManualAreaReviewEnabled = CAMPOPS_MANUAL_AREA_REVIEW_ENABLED;
 const CAMPOPS_ROUTE_RESULT_CACHE_LIMIT = 6;
 const CAMP_ENDPOINT_RESEARCH_ONLY_STATUS =
@@ -837,22 +882,18 @@ const NAV_AI_ASSIST_VISIBLE_MS = 7000;
 
 function logNavigateDev(...args: unknown[]) {
   const globalStore = globalThis as typeof globalThis & { __ECS_NAVIGATE_DEBUG__?: boolean };
-  if (
-    typeof __DEV__ !== 'undefined' &&
-    __DEV__ &&
-    (globalStore.__ECS_NAVIGATE_DEBUG__ === true ||
-      (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_NAVIGATE_DEBUG === '1'))
-  ) {
+  if (isECSDevelopmentDiagnosticEnabled(
+    'EXPO_PUBLIC_ECS_NAVIGATE_DEBUG',
+    globalStore.__ECS_NAVIGATE_DEBUG__ === true,
+  )) {
     console.log(...args);
   }
 }
 
 function isCampScoutDebugEnabled(): boolean {
-  return (
-    typeof __DEV__ !== 'undefined' &&
-    __DEV__ &&
-    ((globalThis as typeof globalThis & { __ECS_CAMP_DEBUG__?: boolean }).__ECS_CAMP_DEBUG__ === true ||
-      (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_CAMP_DEBUG === '1'))
+  return isECSDevelopmentDiagnosticEnabled(
+    'EXPO_PUBLIC_ECS_CAMP_DEBUG',
+    (globalThis as typeof globalThis & { __ECS_CAMP_DEBUG__?: boolean }).__ECS_CAMP_DEBUG__ === true,
   );
 }
 
@@ -863,15 +904,11 @@ function logCampScoutDebug(stage: string, payload: Record<string, unknown>) {
 }
 
 function isCampLayerVerboseDebugEnabled(): boolean {
-  return (
-    typeof __DEV__ !== 'undefined' &&
-    __DEV__ &&
-    (((globalThis as typeof globalThis & { __ECS_CAMP_LAYER_DEBUG__?: boolean }).__ECS_CAMP_LAYER_DEBUG__ === true) ||
-      ((globalThis as typeof globalThis & { __ECS_CAMP_DEBUG__?: boolean }).__ECS_CAMP_DEBUG__ === true) ||
-      (typeof process !== 'undefined' &&
-        (process.env.EXPO_PUBLIC_ECS_CAMP_LAYER_DEBUG === '1' ||
-          process.env.EXPO_PUBLIC_ECS_CAMP_DEBUG === '1')))
-  );
+  const globalDebug =
+    (globalThis as typeof globalThis & { __ECS_CAMP_LAYER_DEBUG__?: boolean }).__ECS_CAMP_LAYER_DEBUG__ === true ||
+    (globalThis as typeof globalThis & { __ECS_CAMP_DEBUG__?: boolean }).__ECS_CAMP_DEBUG__ === true;
+  return isECSDevelopmentDiagnosticEnabled('EXPO_PUBLIC_ECS_CAMP_LAYER_DEBUG', globalDebug) ||
+    isECSDevelopmentDiagnosticEnabled('EXPO_PUBLIC_ECS_CAMP_DEBUG', globalDebug);
 }
 
 function isCampLayerFailureDebugStage(stage: string): boolean {
@@ -2263,338 +2300,6 @@ function formatNavMeters(value: number | null | undefined): string {
   return formatNavMiles(value / 1609.344);
 }
 
-function routeConfidenceTimelineConfidenceFromPercent(
-  value: number | null | undefined,
-): RouteConfidenceTimelineOverlay['confidenceLevel'] {
-  if (value == null || !Number.isFinite(value)) return 'unknown';
-  if (value >= 70) return 'high';
-  if (value >= 45) return 'medium';
-  if (value > 0) return 'low';
-  return 'unknown';
-}
-
-function routeConfidenceTimelineTimestamp(value: unknown): string | null {
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    const parsed = Date.parse(trimmed);
-    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : trimmed;
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const millis = value > 0 && value < 100000000000 ? value * 1000 : value;
-    const parsed = new Date(millis);
-    return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
-  }
-  return null;
-}
-
-function routeConfidenceTimelineString(value: unknown): string | null {
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : null;
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  return null;
-}
-
-function routeConfidenceTimelineSource(
-  id: string,
-  label: string,
-  observedAt: unknown,
-  freshness: RouteConfidenceTimelineOverlay['source']['freshness'] = 'fresh',
-): RouteConfidenceTimelineOverlay['source'] {
-  return {
-    id,
-    label,
-    sourceType: 'navigate',
-    observedAt: routeConfidenceTimelineTimestamp(observedAt),
-    freshness,
-  };
-}
-
-function navigateRouteConfidenceGeometry(
-  routePoints: readonly { lat: number; lng: number }[],
-  geometryVersion: string,
-  distanceMeters?: number | null,
-): RouteGeometry | null {
-  const coordinates = routePoints
-    .map((point) => ({
-      lat: Number(point.lat),
-      lng: Number(point.lng),
-    }))
-    .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
-  if (coordinates.length < 2) return null;
-  return {
-    origin: coordinates[0],
-    destination: coordinates[coordinates.length - 1],
-    waypoints: coordinates.slice(1, -1),
-    coordinates,
-    distanceMeters: Number.isFinite(Number(distanceMeters)) ? Number(distanceMeters) : null,
-    durationSeconds: null,
-    bbox: null,
-    corridor: null,
-    segments: [],
-    providerMetadata: {
-      geometryVersion,
-      source: 'navigate_displayed_route',
-    },
-  };
-}
-
-function navigateTimelineMeasure(
-  routePoints: readonly { lat: number; lng: number }[],
-  distanceMeters?: number | null,
-): number {
-  const explicit = Number(distanceMeters);
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
-  return Math.max((routePoints.length - 1) * 1000, 1000);
-}
-
-function buildNavigateRouteConfidenceTimelineOverlays(args: {
-  totalMeasure: number;
-  routeConfidenceSummary: { confidence?: number | null; status?: string | null; summary?: string | null } | null;
-  cacheSnapshot: ReturnType<typeof evaluateCacheReadiness> | null;
-  routeHazardIntel: { headline?: string | null; summaryLine?: string | null } | null;
-  weatherObservedAt?: unknown;
-  weatherSource?: string | null;
-  generatedAt: string;
-}): RouteConfidenceTimelineOverlay[] {
-  const total = Math.max(args.totalMeasure, 1);
-  const overlays: RouteConfidenceTimelineOverlay[] = [];
-  const confidence = Number(args.routeConfidenceSummary?.confidence);
-  if (Number.isFinite(confidence)) {
-    const confidenceLevel = routeConfidenceTimelineConfidenceFromPercent(confidence);
-    overlays.push({
-      id: 'navigate-route-confidence-summary',
-      startMeasure: 0,
-      endMeasure: total,
-      label: confidenceLevel === 'low' || confidenceLevel === 'unknown'
-        ? 'Route confidence uncertainty'
-        : 'Route confidence baseline',
-      confidenceLevel,
-      conditionState: confidenceLevel === 'low' || confidenceLevel === 'unknown' ? 'unknown' : 'normal',
-      driverCategory: 'terrain_weather',
-      source: routeConfidenceTimelineSource('route-confidence-summary', 'Route confidence summary', args.generatedAt),
-      detail: routeConfidenceTimelineString(args.routeConfidenceSummary?.summary),
-    });
-  }
-
-  if (args.cacheSnapshot && !args.cacheSnapshot.cached_route_available) {
-    overlays.push({
-      id: 'navigate-offline-map-gap',
-      startMeasure: total * 0.35,
-      endMeasure: total * 0.62,
-      label: 'Offline map gap',
-      confidenceLevel: args.cacheSnapshot.offline_cache_ready ? 'low' : 'unknown',
-      conditionState: 'unknown',
-      driverCategory: 'offline_coverage',
-      source: routeConfidenceTimelineSource(
-        'offline-cache-readiness',
-        'Offline cache readiness',
-        args.cacheSnapshot.evaluated_at || null,
-        args.cacheSnapshot.offline_cache_ready ? 'fresh' : 'missing',
-      ),
-      detail: 'Offline package coverage is incomplete for this route context.',
-    });
-  }
-
-  if (args.routeHazardIntel) {
-    overlays.push({
-      id: 'navigate-weather-risk',
-      startMeasure: total * 0.55,
-      endMeasure: total * 0.86,
-      label: args.routeHazardIntel.headline ?? 'Weather-exposed corridor',
-      confidenceLevel: args.weatherSource === 'live' ? 'high' : 'medium',
-      conditionState: 'known_risky',
-      driverCategory: 'terrain_weather',
-      source: routeConfidenceTimelineSource(
-        'route-corridor-weather',
-        'Route corridor weather',
-        args.weatherObservedAt ?? args.generatedAt,
-        args.weatherSource === 'cache_stale' ? 'stale' : 'fresh',
-      ),
-      detail: routeConfidenceTimelineString(args.routeHazardIntel.summaryLine),
-    });
-  }
-
-  return overlays;
-}
-
-function routeConfidenceTimelinePointAtMeasure(
-  routePoints: readonly { lat: number; lng: number }[],
-  item: RouteConfidenceTimelineItem,
-  totalMeasure: number,
-): { lat: number; lng: number } | null {
-  if (routePoints.length === 0) return null;
-  const midpoint = (item.startMeasure + item.endMeasure) / 2;
-  const ratio = totalMeasure > 0 ? Math.max(0, Math.min(1, midpoint / totalMeasure)) : 0;
-  const index = Math.max(0, Math.min(routePoints.length - 1, Math.round(ratio * (routePoints.length - 1))));
-  const point = routePoints[index];
-  return point && Number.isFinite(point.lat) && Number.isFinite(point.lng)
-    ? { lat: point.lat, lng: point.lng }
-    : null;
-}
-
-function routeConfidenceTimelineTone(item: RouteConfidenceTimelineItem): string {
-  if (item.conditionState === 'known_risky') return '#EF5350';
-  if (item.confidenceLevel === 'low' || item.confidenceLevel === 'unknown' || item.conditionState === 'unknown') return TACTICAL.amber;
-  if (item.confidenceLevel === 'medium') return '#65D4FF';
-  return '#66BB6A';
-}
-
-function routeConfidenceTimelineMatchesRoute(
-  timeline: RouteConfidenceTimeline | null,
-  selectedRouteId: string | null | undefined,
-  selectedRouteGeometryVersion: string | null | undefined,
-): boolean {
-  if (!timeline) return false;
-  const expectedRouteId = selectedRouteId ?? 'navigate-route';
-  return (
-    timeline.routeId === expectedRouteId &&
-    timeline.geometryVersion === selectedRouteGeometryVersion
-  );
-}
-
-function routeConfidenceTimelineSourceName(
-  source: RouteConfidenceTimelineItem['primaryDriver']['source'] | null | undefined,
-): string {
-  const label = routeConfidenceTimelineString(source?.label) ?? routeConfidenceTimelineString(source?.sourceType);
-  return label ? label.replace(/_/g, ' ') : 'Unknown source';
-}
-
-function routeConfidenceTimelineTimestampLabel(value: string | null | undefined): string {
-  if (!value) return 'unavailable';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-function routeConfidenceTimelineDriverSummary(item: RouteConfidenceTimelineItem): string {
-  const drivers = item.contributingDrivers?.length ? item.contributingDrivers : item.drivers;
-  const labels = Array.from(new Set(
-    drivers
-      .map((driver) => driver.category.replace(/_/g, ' '))
-      .filter(Boolean),
-  ));
-  return labels.length ? labels.join(', ') : 'No contributing drivers';
-}
-
-function routeConfidenceTimelineHasLimitedSource(item: RouteConfidenceTimelineItem): boolean {
-  const sources = item.sources?.length ? item.sources : item.sourceFreshness;
-  return sources.some((source) =>
-    source.freshness === 'stale' ||
-    source.freshness === 'expired' ||
-    source.freshness === 'missing' ||
-    source.freshness === 'unavailable',
-  );
-}
-
-function RouteConfidenceTimelinePanel({
-  timeline,
-  selectedItemId,
-  onSelectItem,
-}: {
-  timeline: RouteConfidenceTimeline | null;
-  selectedItemId: string | null;
-  onSelectItem: (item: RouteConfidenceTimelineItem) => void;
-}) {
-  const selectedItem = timeline?.items.find((item) => item.id === selectedItemId) ?? timeline?.items[0] ?? null;
-  const timelineUnavailable = !timeline || timeline.completeness === 'unavailable';
-  const timelineLimited = timeline?.completeness === 'partial' || timeline?.completeness === 'source_limited';
-  const notableOnly = timeline?.coverageMode === 'notable_spans_only';
-  return (
-    <View style={styles.routeConfidenceTimelinePanel}>
-      <View style={styles.routeConfidenceTimelineHeader}>
-        <View style={styles.routeConfidenceTimelineTitleBlock}>
-          <Text style={styles.intelSectionTitle}>Route Confidence Timeline</Text>
-          <Text style={styles.routeConfidenceTimelineSubtitle}>What certainty changes along this route?</Text>
-        </View>
-        <View style={styles.routeConfidenceTimelineBadge}>
-          <Text style={styles.routeConfidenceTimelineBadgeText}>FEATURE-FLAGGED</Text>
-        </View>
-      </View>
-      <Text style={styles.routeConfidenceTimelineSafetyCopy}>
-        Unknown/low confidence means uncertainty, not confirmed danger.
-      </Text>
-      <Text style={styles.routeConfidenceTimelineSafetyCopy}>
-        Timeline diagnostics do not affect route readiness or route choice.
-      </Text>
-      {timelineLimited ? (
-        <Text style={styles.routeConfidenceTimelineSafetyCopy}>Timeline limited by available source data.</Text>
-      ) : null}
-      {notableOnly ? (
-        <Text style={styles.routeConfidenceTimelineSafetyCopy}>Showing notable confidence changes only.</Text>
-      ) : null}
-      {timeline && timeline.items.length > 0 ? (
-        <>
-          <View style={styles.routeConfidenceTimelineTrack}>
-            {timeline.items.map((item) => {
-              const color = routeConfidenceTimelineTone(item);
-              const selected = item.id === selectedItem?.id;
-              return (
-                <TouchableOpacity
-                  key={item.id}
-                  style={[
-                    styles.routeConfidenceTimelineSpan,
-                    {
-                      flexGrow: Math.max(1, item.endMeasure - item.startMeasure),
-                      borderColor: selected ? color : `${color}55`,
-                      backgroundColor: `${color}${selected ? '44' : '24'}`,
-                    },
-                  ]}
-                  activeOpacity={0.82}
-                  onPress={() => onSelectItem(item)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Route confidence timeline segment ${item.label}`}
-                />
-              );
-            })}
-          </View>
-          {selectedItem ? (
-            <View style={styles.routeConfidenceTimelineDetail}>
-              <Text style={styles.intelPrimaryLine}>{selectedItem.label}</Text>
-              <Text style={styles.intelSecondaryLine}>{routeConfidenceTimelineItemCopy(selectedItem)}</Text>
-              <Text style={styles.intelCalloutText}>
-                {formatNavMeters(selectedItem.startMeasure)} to {formatNavMeters(selectedItem.endMeasure)} - {selectedItem.primaryDriver.category.replace(/_/g, ' ')}
-              </Text>
-              <Text style={styles.intelCalloutText}>
-                Source: {routeConfidenceTimelineSourceName(selectedItem.primaryDriver.source)}
-              </Text>
-              <Text style={styles.intelCalloutText}>
-                Freshness: {selectedItem.primaryDriver.source.freshness.replace(/_/g, ' ')}
-              </Text>
-              <Text style={styles.intelCalloutText}>
-                Observed: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.observedAt)}
-              </Text>
-              <Text style={styles.intelCalloutText}>
-                Generated: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.generatedAt)}
-              </Text>
-              <Text style={styles.intelCalloutText}>
-                Expires: {routeConfidenceTimelineTimestampLabel(selectedItem.primaryDriver.source.expiresAt)}
-              </Text>
-              <Text style={styles.intelCalloutText}>
-                Contributing drivers: {routeConfidenceTimelineDriverSummary(selectedItem)}
-              </Text>
-              {routeConfidenceTimelineHasLimitedSource(selectedItem) ? (
-                <Text style={styles.intelCalloutText}>Stale/unavailable source metadata present.</Text>
-              ) : null}
-              {selectedItem.drivers.slice(0, 3).map((driver) => (
-                <Text key={`${selectedItem.id}:${driver.id}`} style={styles.intelCalloutText}>
-                  {driver.label}: {driver.confidenceLevel} confidence / {driver.conditionState.replace(/_/g, ' ')}
-                </Text>
-              ))}
-            </View>
-          ) : null}
-        </>
-      ) : (
-        <Text style={styles.intelEmptyText}>
-          {timelineUnavailable ? 'Route confidence timeline unavailable.' : 'No notable confidence changes from available sources.'}
-        </Text>
-      )}
-    </View>
-  );
-}
-
 function formatNavDuration(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(seconds)) return '--';
   const rounded = Math.max(Math.round(seconds / 60), 1);
@@ -3412,6 +3117,40 @@ function segmentPayloadToLongPressFeature(
   };
 }
 
+async function confirmActiveGuidanceReplacementForLocalPreview(
+  targetTitle: string,
+  targetRouteId: string | null | undefined,
+): Promise<boolean> {
+  const activeGuidance = navigateRouteSessionStore.getSnapshot();
+  if (!isActiveGuidanceSnapshot(activeGuidance)) return true;
+  if (
+    targetRouteId &&
+    (targetRouteId === activeGuidance.routeId || targetRouteId === activeGuidance.sessionId)
+  ) {
+    return false;
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    Alert.alert(
+      'Active guidance is running',
+      `Previewing "${targetTitle}" will end the current guidance${
+        activeGuidance.routeTitle ? ` for "${activeGuidance.routeTitle}"` : ''
+      }. Current turn-by-turn directions will be cleared. Continue?`,
+      [
+        { text: 'Keep Current', style: 'cancel', onPress: () => finish(false) },
+        { text: 'Preview New Route', style: 'destructive', onPress: () => finish(true) },
+      ],
+      { cancelable: true, onDismiss: () => finish(false) },
+    );
+  });
+}
+
 function payloadLineToNavigateRouteCoordinates(value: unknown): NavigateRouteCoordinate[] {
   if (!Array.isArray(value)) return [];
   const coordinates: NavigateRouteCoordinate[] = [];
@@ -3619,77 +3358,6 @@ function sanitizeVisibleLanguage<T>(value: T, seen: WeakMap<object, unknown> = n
   return value;
 }
 
-type NavigateTopPopup =
-  | 'tools'
-  | 'importRoute'
-  | 'intel'
-  | 'pinDrawer'
-  | 'trail'
-  | 'savedRoutes'
-  | 'preflightPacket'
-  | 'stitch'
-  | 'offlineCache'
-  | 'storageDashboard'
-  | 'pinEditor'
-  | 'campScout'
-  | 'safeEndpoint'
-  | 'recommendCampsite'
-  | 'recommendRoute'
-  | null;
-
-type NavigateToolsChildPopup =
-  | 'importRoute'
-  | 'intel'
-  | 'trail'
-  | 'savedRoutes'
-  | 'preflightPacket'
-  | 'stitch'
-  | 'offlineCache'
-  | 'campScout'
-  | 'safeEndpoint'
-  | 'recommendCampsite'
-  | 'recommendRoute';
-
-type NavigateSurfaceLayerId =
-  | 'mapSelection'
-  | 'mapPointActions'
-  | 'campLayers'
-  | 'tools'
-  | 'topPopup'
-  | 'dispatchSelection';
-
-function raiseNavigateSurfaceLayer(
-  stack: NavigateSurfaceLayerId[],
-  layer: NavigateSurfaceLayerId,
-): NavigateSurfaceLayerId[] {
-  if (stack[stack.length - 1] === layer) return stack;
-  return [...stack.filter((item) => item !== layer), layer];
-}
-
-function removeNavigateSurfaceLayer(
-  stack: NavigateSurfaceLayerId[],
-  layer: NavigateSurfaceLayerId,
-): NavigateSurfaceLayerId[] {
-  if (!stack.includes(layer)) return stack;
-  return stack.filter((item) => item !== layer);
-}
-
-function isToolsChildPopup(popup: NavigateTopPopup): popup is NavigateToolsChildPopup {
-  return (
-    popup === 'importRoute' ||
-    popup === 'intel' ||
-    popup === 'trail' ||
-    popup === 'savedRoutes' ||
-    popup === 'preflightPacket' ||
-    popup === 'stitch' ||
-    popup === 'offlineCache' ||
-    popup === 'campScout' ||
-    popup === 'safeEndpoint' ||
-    popup === 'recommendCampsite' ||
-    popup === 'recommendRoute'
-  );
-}
-
 type RecommendCampsiteSelectedLocation = {
   latitude: number;
   longitude: number;
@@ -3738,10 +3406,12 @@ const SAVED_ROUTE_FILTER_OPTIONS: { key: SavedRouteAssetFilter; label: string }[
 ];
 
 function NavigateScreenInner() {
+  recordECSPerformanceRender('navigate_map_first_meaningful_render', 'navigate_screen');
   const [cameraMode, setCameraMode] = useState<'north' | 'heading' | 'free'>('north');
   const { showToast, user, operatorInfo } = useApp();
   const { feedSpeed, dismissAutoDriving } = useTheme();
   const router = useRouter();
+  const { returnTo: returnSingleFlight } = useECSNavigation();
 const adaptive = useAdaptiveLayout();
 const insets = useSafeAreaInsets();
 const expandedTopOffset = insets.top + 10;
@@ -3783,8 +3453,11 @@ const [userIdentityCalloutAnchor, setUserIdentityCalloutAnchor] = useState<{ x: 
 const userIdentityCalloutOpacity = useRef(new Animated.Value(0)).current;
 const userIdentityCalloutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 const [selectedExploreRouteSegmentId, setSelectedExploreRouteSegmentId] = useState<string | null>(null);
-const [activeVehicleId, setActiveVehicleId] = useState<string | null>(() => vehicleSetupStore.getActiveVehicleId());
+const guidancePerformanceRef = useRef<ECSPerformanceSpanHandle | null>(null);
 const [activeVehicleRevision, setActiveVehicleRevision] = useState(0);
+useEffect(() => subscribeActiveVehicleState(() => {
+  setActiveVehicleRevision((revision) => revision + 1);
+}), []);
 const [stitchSegmentIds, setStitchSegmentIds] = useState<string[]>([]);
 const [stitchName, setStitchName] = useState('Stitched Expedition');
 const [stitchSaving, setStitchSaving] = useState(false);
@@ -4394,7 +4067,7 @@ function buildRouteConfidenceInputFromPreview(args: {
     }
 
     let cancelled = false;
-    void subscribeToConvoyLocations(activeConvoyContext.convoyId).catch((error) => {
+    void subscribeToConvoyLocations(activeConvoyContext.convoyId, 'navigate-convoy-overlay').catch((error) => {
       if (!cancelled) {
         console.warn('[Navigate] Convoy location subscription failed', error);
       }
@@ -4402,6 +4075,7 @@ function buildRouteConfidenceInputFromPreview(args: {
 
     return () => {
       cancelled = true;
+      stopConvoyLocationSubscription('navigate-convoy-overlay');
     };
   }, [activeConvoyContext?.convoyId, expeditionRuntime.state, isFocused]);
 
@@ -4584,19 +4258,6 @@ useEffect(() => {
     return latestGpsMapLocation;
   });
 }, [gps.permissionDenied, latestGpsMapLocation]);
-const weatherLocation = useMemo(
-  () => {
-    const latitude = gps.position?.latitude;
-    const longitude = gps.position?.longitude;
-    return gps.hasFix && latitude != null && longitude != null
-      ? {
-          lat: latitude,
-          lng: longitude,
-        }
-      : null;
-  },
-  [gps.hasFix, gps.position?.latitude, gps.position?.longitude],
-);
 const operationalWeather = useOperationalWeather({
   enabled: isFocused,
   gps: {
@@ -4793,6 +4454,7 @@ const [showCrosshair, setShowCrosshair] = useState(false);
 const [mapCameraCommand, setMapCameraCommand] = useState<MapSurfaceCameraCommand | null>(null);
 const [mapCameraCommandTrigger, setMapCameraCommandTrigger] = useState(0);
 const lastMapCameraCommandSignatureRef = useRef(buildMapCameraCommandSignature(null));
+const mapCameraCommandCoordinatorRef = useRef(new MapCameraCommandCoordinator());
 
 const queueMapCameraCommand = useCallback((
   nextCommand: MapSurfaceCameraCommand,
@@ -4800,7 +4462,29 @@ const queueMapCameraCommand = useCallback((
 ) => {
   const nextSignature = buildMapCameraCommandSignature(nextCommand);
   const shouldForce = options?.force === true;
-  if (!shouldForce && lastMapCameraCommandSignatureRef.current === nextSignature) {
+  const reason = String(nextCommand.reason ?? '').toLowerCase();
+  const kind: MapCameraCommandKind =
+    reason.includes('emergency') || reason.includes('dispatch')
+      ? 'emergency_focus'
+      : nextCommand.mode === 'pin_focus'
+        ? 'selected_context'
+        : nextCommand.mode === 'route_overview'
+          ? 'route_overview'
+          : nextCommand.mode === 'follow_user'
+            ? shouldForce
+              ? 'recenter'
+              : 'follow_user'
+            : 'passive';
+  const decision = mapCameraCommandCoordinatorRef.current.request({
+    signature: nextSignature,
+    kind,
+    force: shouldForce,
+  });
+  if (!decision.accepted) {
+    incrementECSPerformanceCounter(
+      'navigate_map_viewport_interaction',
+      decision.reason === 'duplicate' ? 'duplicate_camera_commands' : 'camera_collisions_avoided',
+    );
     return;
   }
   lastMapCameraCommandSignatureRef.current = nextSignature;
@@ -4867,12 +4551,14 @@ const queueMapCameraCommand = useCallback((
   const [routeBuilderSegments, setRouteBuilderSegments] = useState<RouteBuilderSegmentData[]>([]);
   const [routeBuilderDraft, setRouteBuilderDraft] = useState<NavigateRouteDraft>(() => createNavigateRouteDraft());
   const routeBuilderDraftRef = useRef<NavigateRouteDraft>(routeBuilderDraft);
+  const routeBuilderDraftHistoryRef = useRef(createNavigateRouteDraftHistory(routeBuilderDraft));
   const [routeBuilderActiveExtensionMode, setRouteBuilderActiveExtensionMode] = useState(false);
   const [routeBuilderSnapSource, setRouteBuilderSnapSource] = useState<string | null>(null);
   const [routeBuilderSnapStatus, setRouteBuilderSnapStatus] = useState<RouteBuilderSegmentData['snapStatus']>(null);
   const [routeBuilderSnapMessage, setRouteBuilderSnapMessage] = useState<string | null>(null);
   const routeBuilderSegmentsRef = useRef<RouteBuilderSegmentData[]>([]);
-  const routeBuilderFinalSnapInFlightRef = useRef<Set<string>>(new Set());
+  const routeBuilderFinalSnapInFlightRef = useRef<Map<string, AbortController>>(new Map());
+  const routeBuilderFinalSnapGenerationRef = useRef(0);
   const routeBuilderTraceableSegmentsRef = useRef<NavigateRouteTraceableSegment[]>([]);
   const activeGuidanceRouteEndRef = useRef<NavigateRouteCoordinate | null>(null);
   const activeGuidanceRouteExtensionAvailableRef = useRef(false);
@@ -4979,6 +4665,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const [isImportPending, setIsImportPending] = useState(false);
   const isImportPendingRef = useRef(false);
   const activeImportFileKeyRef = useRef<string | null>(null);
+  const activeRouteImportAbortRef = useRef<AbortController | null>(null);
   const recentImportFileKeysRef = useRef<Map<string, number>>(new Map());
   const [bsVehicleName, setBsVehicleName] = useState('');
   const [bsRange, setBsRange] = useState('');
@@ -5072,11 +4759,17 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     () => createRouteGeometryViewportUiState(false),
   );
   const mvumViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mvumViewportFetchRequestIdRef = useRef(0);
-  const mvumViewportCacheRef = useRef(new Map<string, NavigateMvumViewportCacheEntry>());
-  const routeGeometryViewportFetchCoordinatorRef = useRef(new RouteGeometryViewportFetchCoordinator());
+  const navigateMapLayerCoordinatorRef = useRef(new NavigateMapLayerCoordinator());
   const routeGeometryViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const routeGeometryViewportCacheRef = useRef(new Map<string, RouteGeometryViewportResult>());
+  useEffect(() => () => {
+    activeRouteImportAbortRef.current?.abort();
+    activeRouteImportAbortRef.current = null;
+    routeBuilderFinalSnapGenerationRef.current += 1;
+    for (const controller of routeBuilderFinalSnapInFlightRef.current.values()) controller.abort();
+    routeBuilderFinalSnapInFlightRef.current.clear();
+    navigateMapLayerCoordinatorRef.current.dispose();
+    mapCameraCommandCoordinatorRef.current.reset();
+  }, []);
   const [selectedRouteConfidenceTimelineItemId, setSelectedRouteConfidenceTimelineItemId] = useState<string | null>(null);
   const [aiRouteSnapshotVersion, setAiRouteSnapshotVersion] = useState(0);
   const lastExploreRoutesFitSignatureRef = useRef<string | null>(null);
@@ -5166,6 +4859,29 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       void rehydrateRoadActiveGuidance('screen_focus');
     }, [rehydrateRoadActiveGuidance]),
   );
+  const guidanceForegroundRestoreRef = useRef<Promise<void> | null>(null);
+  useEffect(() => {
+    let previousState = AppState.currentState;
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      const returningToForeground =
+        nextState === 'active' && (previousState === 'background' || previousState === 'inactive');
+      previousState = nextState;
+      if (!returningToForeground || !isFocused || guidanceForegroundRestoreRef.current) return;
+
+      incrementECSPerformanceCounter('route_preview_guidance', 'foreground_restorations');
+      const restore = Promise.all([
+        rehydrateRoadActiveGuidance('app_foreground'),
+        navigateRouteSessionStore.hydrateFromPersistence().then(() => undefined),
+      ]).then(() => undefined);
+      guidanceForegroundRestoreRef.current = restore;
+      void restore.finally(() => {
+        if (guidanceForegroundRestoreRef.current === restore) {
+          guidanceForegroundRestoreRef.current = null;
+        }
+      });
+    });
+    return () => subscription.remove();
+  }, [isFocused, rehydrateRoadActiveGuidance]);
   const [campsiteFinalAccess, setCampsiteFinalAccess] =
     useState<CampsiteFinalAccess | null>(null);
   const roadSession = roadNavigation.session;
@@ -5542,10 +5258,6 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const dispersedCampingError = dispersedCampingUiState.errorMessage ?? null;
   const dispersedCampingEligibilityZoomReady = isCampLayerZoomEligible('dispersed_camping', mapZoom);
   const dispersedCampingZoomPrompt = getCampLayerZoomPrompt('dispersed_camping');
-  const dispersedCampingCacheRef = useRef<
-    Map<string, { expiresAt: number; regions: DispersedCampingRegion[] }>
-  >(new Map());
-  const dispersedCampingFetchCoordinatorRef = useRef(new CampLayerFetchCoordinator());
   const dispersedCampingFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dispersedCampingFailedCacheKeysRef = useRef<Set<string>>(new Set());
   const dispersedCampingRetryBboxRef = useRef<TileBounds | null>(null);
@@ -5563,12 +5275,6 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const establishedCampgroundsError = establishedCampgroundsUiState.errorMessage ?? null;
   const establishedCampsitesZoomReady = isCampLayerZoomEligible('established_campgrounds', mapZoom);
   const establishedCampsitesZoomPrompt = getCampLayerZoomPrompt('established_campgrounds');
-  const establishedCampgroundsCacheRef = useRef<
-    Map<string, { expiresAt: number; campsites: EstablishedCampsite[] }>
-  >(new Map());
-  const establishedCampgroundsFetchCoordinatorRef = useRef(
-    new CampLayerFetchCoordinator({ debounceMs: ESTABLISHED_CAMPGROUNDS_FETCH_DEBOUNCE_MS }),
-  );
   const establishedCampgroundsFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const establishedCampgroundsFailedCacheKeysRef = useRef<Set<string>>(new Set());
   const establishedCampgroundsRetryBboxRef = useRef<TileBounds | null>(null);
@@ -5695,9 +5401,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       clearTimeout(routeGeometryViewportFetchTimerRef.current);
       routeGeometryViewportFetchTimerRef.current = null;
     }
-    dispersedCampingFetchCoordinatorRef.current.cancel();
-    establishedCampgroundsFetchCoordinatorRef.current.cancel();
-    routeGeometryViewportFetchCoordinatorRef.current.cancel();
+    navigateMapLayerCoordinatorRef.current.dispose();
   }, []);
 
   useEffect(() => {
@@ -5759,7 +5463,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         mvumPlanStatus: plan.status,
       });
       clearMvumFetchTimer();
-      mvumViewportFetchRequestIdRef.current += 1;
+      navigateMapLayerCoordinatorRef.current.cancel('mvum', 'disabled');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'mvum', enabled: false, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
+      });
       setMvumViewportResult(null);
       setMvumViewportUiState((current) =>
         current.enabled ? createRouteGeometryViewportUiState(false) : current,
@@ -5777,7 +5484,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         layerIds: ['navigate-mvum-line-layer', 'navigate-mvum-selected-layer'],
       });
       clearMvumFetchTimer();
-      mvumViewportFetchRequestIdRef.current += 1;
+      navigateMapLayerCoordinatorRef.current.cancel('mvum', 'vector_tiles');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'mvum', enabled: true, itemCount: 0, sourceState: 'live', renderPriority: 'high',
+      });
       setMvumViewportResult(null);
       setMvumViewportUiState((current) => ({
         ...current,
@@ -5803,7 +5513,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         layerIds: [],
       });
       clearMvumFetchTimer();
-      mvumViewportFetchRequestIdRef.current += 1;
+      navigateMapLayerCoordinatorRef.current.cancel('mvum', 'zoom_deferred');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'mvum', enabled: true, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
+      });
       setMvumViewportResult(null);
       setMvumViewportUiState((current) => ({
         ...current,
@@ -5829,7 +5542,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         layerIds: [],
       });
       clearMvumFetchTimer();
-      mvumViewportFetchRequestIdRef.current += 1;
+      navigateMapLayerCoordinatorRef.current.cancel('mvum', 'offline');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'mvum', enabled: true, itemCount: 0, sourceState: 'offline', renderPriority: 'high',
+      });
       setMvumViewportResult(null);
       setMvumViewportUiState((current) => ({
         ...current,
@@ -5857,23 +5573,29 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       return;
     }
 
-    const cachedEntry = mvumViewportCacheRef.current.get(plan.cacheKey);
-    const cached = readNavigateMvumViewportCacheEntry(cachedEntry);
-    if (cachedEntry && !cached) {
-      mvumViewportCacheRef.current.delete(plan.cacheKey);
-    }
+    const cached = navigateMapLayerCoordinatorRef.current.readCache<RouteGeometryViewportResult>(
+      'mvum',
+      plan.cacheKey,
+    );
     if (cached) {
       clearMvumFetchTimer();
-      setMvumViewportResult(cached);
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'mvum',
+        enabled: true,
+        itemCount: cached.value.segments.length,
+        sourceState: cached.sourceState,
+        renderPriority: 'high',
+      });
+      setMvumViewportResult(cached.value);
       setMvumViewportUiState((current) => ({
         ...current,
         enabled: true,
         status: 'ready',
         errorMessage: null,
-        featureCount: cached.segments.length,
-        cappedCount: cached.cappedCount,
-        skippedMissingGeometryCount: cached.skippedMissingGeometryCount,
-        skippedClosedCount: cached.skippedClosedCount,
+        featureCount: cached.value.segments.length,
+        cappedCount: cached.value.cappedCount,
+        skippedMissingGeometryCount: cached.value.skippedMissingGeometryCount,
+        skippedClosedCount: cached.value.skippedClosedCount,
         dataState: 'cached',
         lastAttemptedBbox: plan.bbox,
         lastAttemptedCacheKey: plan.cacheKey,
@@ -5883,9 +5605,23 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       return;
     }
 
+    const coordinatorPlan = navigateMapLayerCoordinatorRef.current.plan({
+      layer: 'mvum',
+      enabled: true,
+      zoomEligible: true,
+      online: true,
+      viewportFingerprint: plan.cacheKey,
+      bounds: {
+        west: plan.bbox.minLng,
+        south: plan.bbox.minLat,
+        east: plan.bbox.maxLng,
+        north: plan.bbox.maxLat,
+      },
+      debounceMs: 350,
+      renderPriority: 'high',
+    });
+    if (coordinatorPlan.kind === 'skip') return;
     clearMvumFetchTimer();
-    const requestId = mvumViewportFetchRequestIdRef.current + 1;
-    mvumViewportFetchRequestIdRef.current = requestId;
     recordMvumToggleLoad(exploreNavigateSeparationRunRef.current, {
       startedAtMs: planMeasuredAtMs,
       endedAtMs: Date.now(),
@@ -5905,23 +5641,39 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
     mvumViewportFetchTimerRef.current = setTimeout(() => {
       mvumViewportFetchTimerRef.current = null;
+      const request = navigateMapLayerCoordinatorRef.current.consumeDue('mvum', Date.now());
+      if (!request) return;
+      incrementECSPerformanceCounter('navigate_map_viewport_interaction', 'layer_requests_started');
+      const requestBbox: RouteGeometryViewportBbox = {
+        minLng: request.bounds.west,
+        minLat: request.bounds.south,
+        maxLng: request.bounds.east,
+        maxLat: request.bounds.north,
+      };
       fetchNavigateMvumViewportSegments({
-        bbox: plan.bbox,
+        bbox: requestBbox,
         zoom: mapZoom,
         limit: 240,
         vehicleClass: null,
+        signal: request.signal,
       })
         .then((result) => {
-          if (mvumViewportFetchRequestIdRef.current !== requestId) return;
+          if (!navigateMapLayerCoordinatorRef.current.isCurrent(request)) return;
           const resultForCache = {
             ...result,
-            cacheKey: plan.cacheKey,
+            cacheKey: request.viewportFingerprint,
           };
-          const cacheEntry = createNavigateMvumViewportCacheEntry(resultForCache);
-          if (cacheEntry) {
-            mvumViewportCacheRef.current.set(plan.cacheKey, cacheEntry);
-          } else {
-            mvumViewportCacheRef.current.delete(plan.cacheKey);
+          if (!navigateMapLayerCoordinatorRef.current.complete(request, {
+            itemCount: resultForCache.segments.length,
+            sourceState: resultForCache.degraded ? 'unavailable' : 'live',
+          })) return;
+          if (!resultForCache.degraded && resultForCache.segments.length > 0) {
+            navigateMapLayerCoordinatorRef.current.writeCache({
+              layer: 'mvum',
+              key: request.viewportFingerprint,
+              value: resultForCache,
+              ttlMs: 5 * 60 * 1000,
+            });
           }
           setMvumViewportResult(resultForCache);
           setMvumViewportUiState((current) => ({
@@ -5942,14 +5694,15 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             skippedMissingGeometryCount: resultForCache.skippedMissingGeometryCount,
             skippedClosedCount: resultForCache.skippedClosedCount,
             dataState: resultForCache.degraded ? 'unknown' : 'live',
-            lastAttemptedBbox: plan.bbox,
-            lastAttemptedCacheKey: plan.cacheKey,
-            lastSuccessfulBbox: plan.bbox,
-            lastSuccessfulCacheKey: plan.cacheKey,
+            lastAttemptedBbox: requestBbox,
+            lastAttemptedCacheKey: request.viewportFingerprint,
+            lastSuccessfulBbox: requestBbox,
+            lastSuccessfulCacheKey: request.viewportFingerprint,
           }));
         })
         .catch((error) => {
-          if (mvumViewportFetchRequestIdRef.current !== requestId) return;
+          if (request.signal.aborted) return;
+          if (!navigateMapLayerCoordinatorRef.current.fail(request, error)) return;
           setMvumViewportResult(null);
           setMvumViewportUiState((current) => ({
             ...current,
@@ -5957,11 +5710,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             status: 'error',
             errorMessage: error instanceof Error ? error.message : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
             dataState: 'unknown',
-            lastAttemptedBbox: plan.bbox,
-            lastAttemptedCacheKey: plan.cacheKey,
+            lastAttemptedBbox: requestBbox,
+            lastAttemptedCacheKey: request.viewportFingerprint,
           }));
         });
-    }, 350);
+    }, Math.max(0, coordinatorPlan.dueAt - Date.now()));
   }, [
     mapBounds,
     mapZoom,
@@ -5974,7 +5727,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   useEffect(() => {
     const layerAvailable = routeGeometryOverlayEnabled && routeGeometryViewportOverlayEnabled;
     if (!layerAvailable) {
-      routeGeometryViewportFetchCoordinatorRef.current.cancel();
+      navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'disabled');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'route_geometry', enabled: false, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
+      });
       if (routeGeometryViewportFetchTimerRef.current) {
         clearTimeout(routeGeometryViewportFetchTimerRef.current);
         routeGeometryViewportFetchTimerRef.current = null;
@@ -5989,7 +5745,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     }
 
     if (!routeGeometryViewportZoomReady) {
-      routeGeometryViewportFetchCoordinatorRef.current.cancel();
+      navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'zoom_deferred');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'route_geometry', enabled: true, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
+      });
       if (routeGeometryViewportFetchTimerRef.current) {
         clearTimeout(routeGeometryViewportFetchTimerRef.current);
         routeGeometryViewportFetchTimerRef.current = null;
@@ -6011,7 +5770,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       return;
     }
 
-    const planBbox: RouteGeometryViewportBbox | null = mapBounds
+    const rawBbox: RouteGeometryViewportBbox | null = mapBounds
       ? {
           minLng: mapBounds.minLng,
           minLat: mapBounds.minLat,
@@ -6019,87 +5778,110 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
           maxLat: mapBounds.maxLat,
         }
       : null;
-    const plan = routeGeometryViewportFetchCoordinatorRef.current.plan({
-      bbox: planBbox,
-      zoom: mapZoom,
-      enabled: routeGeometryOverlayEnabled,
-      featureEnabled: routeGeometryViewportOverlayEnabled,
-      online: routeGeometryViewportFetchOnline,
-      now: Date.now(),
+    const normalizedBbox = normalizeRouteGeometryViewportBbox(rawBbox);
+    if (!normalizedBbox) {
+      navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'missing_or_invalid_bbox');
+      setRouteGeometryViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: mapBounds ? 'empty' : 'loading',
+        errorMessage: null,
+      }));
+      if (!mapBounds) setRequestBoundsTrigger((prev) => prev + 1);
+      return;
+    }
+    const cacheKey = buildRouteGeometryViewportCacheKey(normalizedBbox, mapZoom, {
       includeReferenceGeometry: true,
       vehicleClass: null,
     });
-
-    if (plan.type === 'skip') {
-      if (plan.reason === 'offline') {
-        const normalizedBbox = normalizeRouteGeometryViewportBbox(planBbox);
-        const cacheKey = normalizedBbox
-          ? buildRouteGeometryViewportCacheKey(normalizedBbox, mapZoom, {
-              includeReferenceGeometry: true,
-              vehicleClass: null,
-            })
-          : null;
-        const cached = cacheKey ? routeGeometryViewportCacheRef.current.get(cacheKey) : null;
-        if (cached && normalizedBbox && cacheKey) {
+    const cached = navigateMapLayerCoordinatorRef.current.readCache<RouteGeometryViewportResult>(
+      'route_geometry',
+      cacheKey,
+      { allowStale: !routeGeometryViewportFetchOnline },
+    );
+    if (cached && !routeGeometryViewportFetchOnline) {
+      navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'offline_cache');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'route_geometry', enabled: true, itemCount: cached.value.segments.length, sourceState: 'offline', renderPriority: 'high',
+      });
           setRouteCatalogViewportResult(null);
-          setRouteGeometryViewportResult(cached);
+          setRouteGeometryViewportResult(cached.value);
           setRouteGeometryViewportUiState((current) => ({
             ...current,
             enabled: true,
-            status: cached.segments.length > 0 ? 'ready' : 'empty',
+            status: cached.value.segments.length > 0 ? 'ready' : 'empty',
             errorMessage: null,
-            featureCount: cached.segments.length,
-            cappedCount: cached.cappedCount,
-            skippedMissingGeometryCount: cached.skippedMissingGeometryCount,
-            skippedClosedCount: cached.skippedClosedCount,
+            featureCount: cached.value.segments.length,
+            cappedCount: cached.value.cappedCount,
+            skippedMissingGeometryCount: cached.value.skippedMissingGeometryCount,
+            skippedClosedCount: cached.value.skippedClosedCount,
             dataState: 'cached',
             lastAttemptedBbox: normalizedBbox,
             lastAttemptedCacheKey: cacheKey,
             lastSuccessfulBbox: normalizedBbox,
             lastSuccessfulCacheKey: cacheKey,
           }));
-          return;
-        }
-        setRouteCatalogViewportResult(null);
-        setRouteGeometryViewportResult(null);
-        setRouteGeometryViewportUiState((current) => ({
-          ...current,
-          enabled: true,
-          status: 'offline',
-          errorMessage: 'ECS trail segment geometry needs live coverage or a cached viewport.',
-          featureCount: 0,
-          cappedCount: 0,
-          skippedMissingGeometryCount: 0,
-          skippedClosedCount: 0,
-          dataState: 'unknown',
-        }));
-      }
-
-      if (plan.reason === 'missing_bbox') {
-        setRouteGeometryViewportUiState((current) => ({
-          ...current,
-          enabled: true,
-          status: 'loading',
-          errorMessage: null,
-        }));
-        setRequestBoundsTrigger((prev) => prev + 1);
-      } else if (plan.reason === 'invalid_bbox' || plan.reason === 'bbox_too_small') {
-        setRouteCatalogViewportResult(null);
-        setRouteGeometryViewportResult(null);
-        setRouteGeometryViewportUiState((current) => ({
-          ...current,
-          enabled: true,
-          status: 'empty',
-          errorMessage: null,
-          featureCount: 0,
-          cappedCount: 0,
-          skippedMissingGeometryCount: 0,
-          skippedClosedCount: 0,
-          dataState: 'unknown',
-        }));
-      }
       return;
     }
+    if (!routeGeometryViewportFetchOnline) {
+      navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'offline');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'route_geometry', enabled: true, itemCount: 0, sourceState: 'offline', renderPriority: 'high',
+      });
+      setRouteCatalogViewportResult(null);
+      setRouteGeometryViewportResult(null);
+      setRouteGeometryViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: 'offline',
+        errorMessage: 'ECS trail segment geometry needs live coverage or a cached viewport.',
+        featureCount: 0,
+        cappedCount: 0,
+        skippedMissingGeometryCount: 0,
+        skippedClosedCount: 0,
+        dataState: 'unknown',
+      }));
+      return;
+    }
+    if (cached) {
+      navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'cache_hit');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'route_geometry', enabled: true, itemCount: cached.value.segments.length, sourceState: cached.sourceState, renderPriority: 'high',
+      });
+      setRouteGeometryViewportResult(cached.value);
+      setRouteGeometryViewportUiState((current) => ({
+        ...current,
+        enabled: true,
+        status: cached.value.segments.length > 0 ? 'ready' : 'empty',
+        errorMessage: null,
+        featureCount: cached.value.segments.length,
+        cappedCount: cached.value.cappedCount,
+        skippedMissingGeometryCount: cached.value.skippedMissingGeometryCount,
+        skippedClosedCount: cached.value.skippedClosedCount,
+        dataState: 'cached',
+        lastAttemptedBbox: normalizedBbox,
+        lastAttemptedCacheKey: cacheKey,
+        lastSuccessfulBbox: normalizedBbox,
+        lastSuccessfulCacheKey: cacheKey,
+      }));
+      return;
+    }
+    const plan = navigateMapLayerCoordinatorRef.current.plan({
+      layer: 'route_geometry',
+      enabled: true,
+      zoomEligible: true,
+      online: true,
+      viewportFingerprint: cacheKey,
+      bounds: {
+        west: normalizedBbox.minLng,
+        south: normalizedBbox.minLat,
+        east: normalizedBbox.maxLng,
+        north: normalizedBbox.maxLat,
+      },
+      debounceMs: 300,
+      renderPriority: 'high',
+    });
+    if (plan.kind === 'skip') return;
 
     if (routeGeometryViewportFetchTimerRef.current) {
       clearTimeout(routeGeometryViewportFetchTimerRef.current);
@@ -6112,50 +5894,44 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       enabled: true,
       status: 'loading',
       errorMessage: null,
-      lastAttemptedBbox: plan.bbox,
-      lastAttemptedCacheKey: plan.cacheKey,
+      lastAttemptedBbox: normalizedBbox,
+      lastAttemptedCacheKey: cacheKey,
     }));
 
     routeGeometryViewportFetchTimerRef.current = setTimeout(() => {
       routeGeometryViewportFetchTimerRef.current = null;
-      const request = routeGeometryViewportFetchCoordinatorRef.current.consumeDue(Date.now());
+      const request = navigateMapLayerCoordinatorRef.current.consumeDue('route_geometry', Date.now());
       if (!request) return;
-      const cached = routeGeometryViewportCacheRef.current.get(request.cacheKey);
-      if (cached) {
-        if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
-        setRouteCatalogViewportResult(null);
-        setRouteGeometryViewportResult(cached);
-        setRouteGeometryViewportUiState((current) => ({
-          ...current,
-          enabled: true,
-          status: cached.segments.length > 0 ? 'ready' : 'empty',
-          errorMessage: null,
-          featureCount: cached.segments.length,
-          cappedCount: cached.cappedCount,
-          skippedMissingGeometryCount: cached.skippedMissingGeometryCount,
-          skippedClosedCount: cached.skippedClosedCount,
-          dataState: 'cached',
-          lastAttemptedBbox: request.bbox,
-          lastAttemptedCacheKey: request.cacheKey,
-          lastSuccessfulBbox: request.bbox,
-          lastSuccessfulCacheKey: request.cacheKey,
-        }));
-        return;
-      }
+      incrementECSPerformanceCounter('navigate_map_viewport_interaction', 'layer_requests_started');
+      const requestBbox: RouteGeometryViewportBbox = {
+        minLng: request.bounds.west,
+        minLat: request.bounds.south,
+        maxLng: request.bounds.east,
+        maxLat: request.bounds.north,
+      };
 
       fetchRouteGeometryViewportSegments({
-        bbox: request.bbox,
+        bbox: requestBbox,
         zoom: mapZoom,
         includeReferenceGeometry: true,
         vehicleClass: null,
+        signal: request.signal,
       })
         .then((result) => {
-          if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
           const resultForCache = {
             ...result,
-            cacheKey: result.cacheKey ?? request.cacheKey,
+            cacheKey: result.cacheKey ?? request.viewportFingerprint,
           };
-          routeGeometryViewportCacheRef.current.set(request.cacheKey, resultForCache);
+          if (!navigateMapLayerCoordinatorRef.current.complete(request, {
+            itemCount: resultForCache.segments.length,
+            sourceState: resultForCache.degraded ? 'unavailable' : 'live',
+          })) return;
+          navigateMapLayerCoordinatorRef.current.writeCache({
+            layer: 'route_geometry',
+            key: request.viewportFingerprint,
+            value: resultForCache,
+            ttlMs: 5 * 60 * 1000,
+          });
           setRouteCatalogViewportResult(null);
           setRouteGeometryViewportResult(resultForCache);
           setRouteGeometryViewportUiState((current) => ({
@@ -6176,14 +5952,15 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             skippedMissingGeometryCount: resultForCache.skippedMissingGeometryCount,
             skippedClosedCount: resultForCache.skippedClosedCount,
             dataState: 'live',
-            lastAttemptedBbox: request.bbox,
-            lastAttemptedCacheKey: request.cacheKey,
-            lastSuccessfulBbox: request.bbox,
-            lastSuccessfulCacheKey: request.cacheKey,
+            lastAttemptedBbox: requestBbox,
+            lastAttemptedCacheKey: request.viewportFingerprint,
+            lastSuccessfulBbox: requestBbox,
+            lastSuccessfulCacheKey: request.viewportFingerprint,
           }));
         })
         .catch((error) => {
-          if (!routeGeometryViewportFetchCoordinatorRef.current.complete(request)) return;
+          if (request.signal.aborted) return;
+          if (!navigateMapLayerCoordinatorRef.current.fail(request, error)) return;
           setRouteCatalogViewportResult(null);
           setRouteGeometryViewportResult(null);
           setRouteGeometryViewportUiState((current) => ({
@@ -6192,8 +5969,8 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             status: 'error',
             errorMessage: error instanceof Error ? error.message : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
             dataState: 'unknown',
-            lastAttemptedBbox: request.bbox,
-            lastAttemptedCacheKey: request.cacheKey,
+            lastAttemptedBbox: requestBbox,
+            lastAttemptedCacheKey: request.viewportFingerprint,
           }));
         });
     }, Math.max(0, plan.dueAt - now));
@@ -6232,7 +6009,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   useEffect(() => {
     const layerAvailable = dispersedCampingEligibilityEnabled && dispersedCampingEligibilityLayerAvailable;
     if (!layerAvailable) {
-      dispersedCampingFetchCoordinatorRef.current.cancel();
+      navigateMapLayerCoordinatorRef.current.cancel('dispersed_camping', 'disabled');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'dispersed_camping', enabled: false, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
+      });
       if (dispersedCampingFetchTimerRef.current) {
         clearTimeout(dispersedCampingFetchTimerRef.current);
         dispersedCampingFetchTimerRef.current = null;
@@ -6245,7 +6025,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       return;
     }
     if (!dispersedCampingEligibilityZoomReady) {
-      dispersedCampingFetchCoordinatorRef.current.cancel();
+      navigateMapLayerCoordinatorRef.current.cancel('dispersed_camping', 'zoom_deferred');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'dispersed_camping', enabled: true, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
+      });
       if (dispersedCampingFetchTimerRef.current) {
         clearTimeout(dispersedCampingFetchTimerRef.current);
         dispersedCampingFetchTimerRef.current = null;
@@ -6263,82 +6046,100 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
     const planBbox = dispersedCampingRetryBboxRef.current ?? mapBounds;
     dispersedCampingRetryBboxRef.current = null;
-    const plan = dispersedCampingFetchCoordinatorRef.current.plan({
-      layer: 'dispersed_camping',
-      bbox: planBbox,
-      enabled: layerAvailable,
-      online: campLayerFetchOnline,
-      now: Date.now(),
-    });
-    if (plan.type === 'skip') {
-      if (plan.reason === 'offline' || plan.reason === 'invalid_bbox' || plan.reason === 'bbox_too_small') {
-        logCampLayerDebug('frontend_fetch_skipped', {
-          layer: 'dispersed_camping',
-          bbox: sanitizeCampLayerBbox(planBbox),
-          reason: plan.reason,
-          cacheKey: plan.cacheKey ?? null,
-        });
-        if (plan.reason === 'offline') {
-          const lookup = resolveCampLayerOfflineCacheLookup('dispersed_camping', planBbox);
-          if (lookup) {
-            let cancelled = false;
-            void readDispersedCampingOfflineCache(lookup.cacheKey).then((cached) => {
-              if (cancelled) return;
-              if (!cached) {
-                setDispersedCampingUiState(setCampLayerFetchSkipped);
-                return;
-              }
-              logCampLayerDebug('frontend_offline_cache_hit', {
-                layer: 'dispersed_camping',
-                bbox: sanitizeCampLayerBbox(lookup.bbox),
-                cacheKey: lookup.cacheKey,
-                regionCount: cached.regions.length,
-                cachedAt: cached.cachedAt,
-              });
-              dispersedCampingCacheRef.current.set(lookup.cacheKey, {
-                expiresAt: Date.now() + DISPERSED_CAMPING_CACHE_TTL_MS,
-                regions: cached.regions,
-              });
-              setDispersedCampingRegions(cached.regions);
-              setDispersedCampingUiState((current) =>
-                setCampLayerFetchSucceeded(current, {
-                  bbox: lookup.bbox,
-                  cacheKey: lookup.cacheKey,
-                  featureCount: cached.regions.length,
-                }),
-              );
-            });
-            return () => {
-              cancelled = true;
-            };
-          }
-        }
-        setDispersedCampingUiState(setCampLayerFetchSkipped);
-      }
+    const lookup = resolveCampLayerOfflineCacheLookup('dispersed_camping', planBbox);
+    if (!lookup) {
+      navigateMapLayerCoordinatorRef.current.cancel('dispersed_camping', 'invalid_bbox');
+      setDispersedCampingUiState(setCampLayerFetchSkipped);
       return;
     }
+    if (!campLayerFetchOnline) {
+      navigateMapLayerCoordinatorRef.current.cancel('dispersed_camping', 'offline');
+      let cancelled = false;
+      void readDispersedCampingOfflineCache(lookup.cacheKey).then((cached) => {
+        if (cancelled) return;
+        if (!cached) {
+          setDispersedCampingUiState(setCampLayerFetchSkipped);
+          return;
+        }
+        logCampLayerDebug('frontend_offline_cache_hit', {
+          layer: 'dispersed_camping',
+          bbox: sanitizeCampLayerBbox(lookup.bbox),
+          cacheKey: lookup.cacheKey,
+          regionCount: cached.regions.length,
+          cachedAt: cached.cachedAt,
+        });
+        navigateMapLayerCoordinatorRef.current.writeCache({
+          layer: 'dispersed_camping',
+          key: lookup.cacheKey,
+          value: cached.regions,
+          ttlMs: DISPERSED_CAMPING_CACHE_TTL_MS,
+          sourceState: 'cached',
+        });
+        navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+          layer: 'dispersed_camping',
+          enabled: true,
+          itemCount: cached.regions.length,
+          sourceState: 'offline',
+        });
+        setDispersedCampingRegions(cached.regions);
+        setDispersedCampingUiState((current) =>
+          setCampLayerFetchSucceeded(current, {
+            bbox: lookup.bbox,
+            cacheKey: lookup.cacheKey,
+            featureCount: cached.regions.length,
+          }),
+        );
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
 
-    const cached = dispersedCampingCacheRef.current.get(plan.cacheKey);
-    const retryingFailedCacheKey = dispersedCampingFailedCacheKeysRef.current.has(plan.cacheKey);
+    const cached = navigateMapLayerCoordinatorRef.current.readCache<DispersedCampingRegion[]>(
+      'dispersed_camping',
+      lookup.cacheKey,
+    );
+    const retryingFailedCacheKey = dispersedCampingFailedCacheKeysRef.current.has(lookup.cacheKey);
     const now = Date.now();
-    if (cached && cached.expiresAt > now && !retryingFailedCacheKey) {
-      dispersedCampingFetchCoordinatorRef.current.cancel();
+    if (cached && !retryingFailedCacheKey) {
+      navigateMapLayerCoordinatorRef.current.cancel('dispersed_camping', 'cache_hit');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'dispersed_camping', enabled: true, itemCount: cached.value.length, sourceState: cached.sourceState,
+      });
       logCampLayerDebug('frontend_cache_hit', {
         layer: 'dispersed_camping',
-        bbox: sanitizeCampLayerBbox(plan.bbox),
-        cacheKey: plan.cacheKey,
-        regionCount: cached.regions.length,
+        bbox: sanitizeCampLayerBbox(lookup.bbox),
+        cacheKey: lookup.cacheKey,
+        regionCount: cached.value.length,
       });
-      setDispersedCampingRegions(cached.regions);
+      setDispersedCampingRegions(cached.value);
       setDispersedCampingUiState((current) =>
         setCampLayerFetchSucceeded(current, {
-          bbox: plan.bbox,
-          cacheKey: plan.cacheKey,
-          featureCount: cached.regions.length,
+          bbox: lookup.bbox,
+          cacheKey: lookup.cacheKey,
+          featureCount: cached.value.length,
         }),
       );
       return;
     }
+
+    const plan = navigateMapLayerCoordinatorRef.current.plan({
+      layer: 'dispersed_camping',
+      enabled: true,
+      zoomEligible: true,
+      online: true,
+      viewportFingerprint: lookup.cacheKey,
+      bounds: {
+        west: lookup.bbox.minLng,
+        south: lookup.bbox.minLat,
+        east: lookup.bbox.maxLng,
+        north: lookup.bbox.maxLat,
+      },
+      debounceMs: 350,
+      renderPriority: 'normal',
+      now,
+    });
+    if (plan.kind === 'skip') return;
 
     if (dispersedCampingFetchTimerRef.current) {
       clearTimeout(dispersedCampingFetchTimerRef.current);
@@ -6346,35 +6147,47 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     }
     setDispersedCampingUiState((current) =>
       setCampLayerLoading(current, {
-        bbox: plan.bbox,
-        cacheKey: plan.cacheKey,
+        bbox: lookup.bbox,
+        cacheKey: lookup.cacheKey,
       }),
     );
     logCampLayerDebug('frontend_fetch_scheduled', {
       layer: 'dispersed_camping',
-      bbox: sanitizeCampLayerBbox(plan.bbox),
-      cacheKey: plan.cacheKey,
+      bbox: sanitizeCampLayerBbox(lookup.bbox),
+      cacheKey: lookup.cacheKey,
       debounceMs: Math.max(0, plan.dueAt - now),
     });
 
     dispersedCampingFetchTimerRef.current = setTimeout(() => {
       dispersedCampingFetchTimerRef.current = null;
-      const request = dispersedCampingFetchCoordinatorRef.current.consumeDue('dispersed_camping', Date.now());
+      const request = navigateMapLayerCoordinatorRef.current.consumeDue('dispersed_camping', Date.now());
       if (!request) return;
-
-      const freshCached = dispersedCampingCacheRef.current.get(request.cacheKey);
+      incrementECSPerformanceCounter('navigate_map_viewport_interaction', 'layer_requests_started');
+      const requestBbox = {
+        minLng: request.bounds.west,
+        minLat: request.bounds.south,
+        maxLng: request.bounds.east,
+        maxLat: request.bounds.north,
+      };
+      const requestCacheKey = request.viewportFingerprint;
+      const freshCached = navigateMapLayerCoordinatorRef.current.readCache<DispersedCampingRegion[]>(
+        'dispersed_camping',
+        requestCacheKey,
+      );
       if (
         freshCached &&
-        freshCached.expiresAt > Date.now() &&
-        !dispersedCampingFailedCacheKeysRef.current.has(request.cacheKey)
+        !dispersedCampingFailedCacheKeysRef.current.has(requestCacheKey)
       ) {
-        dispersedCampingFetchCoordinatorRef.current.complete(request);
-        setDispersedCampingRegions(freshCached.regions);
+        navigateMapLayerCoordinatorRef.current.complete(request, {
+          itemCount: freshCached.value.length,
+          sourceState: freshCached.sourceState,
+        });
+        setDispersedCampingRegions(freshCached.value);
         setDispersedCampingUiState((current) =>
           setCampLayerFetchSucceeded(current, {
-            bbox: request.bbox,
-            cacheKey: request.cacheKey,
-            featureCount: freshCached.regions.length,
+            bbox: requestBbox,
+            cacheKey: requestCacheKey,
+            featureCount: freshCached.value.length,
           }),
         );
         return;
@@ -6382,39 +6195,39 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
       logCampLayerDebug('frontend_fetch_start', {
         layer: 'dispersed_camping',
-        bbox: sanitizeCampLayerBbox(request.bbox),
-        cacheKey: request.cacheKey,
+        bbox: sanitizeCampLayerBbox(requestBbox),
+        cacheKey: requestCacheKey,
         requestId: request.requestId,
       });
 
-      fetchDispersedCampingEligibilityForMap({ bbox: request.bbox })
+      fetchDispersedCampingEligibilityForMap({ bbox: requestBbox, signal: request.signal })
       .then((response) => {
-        if (!dispersedCampingFetchCoordinatorRef.current.isCurrent(request)) {
+        if (!navigateMapLayerCoordinatorRef.current.isCurrent(request)) {
           logCampLayerDebug('frontend_fetch_stale_ignored', {
             layer: 'dispersed_camping',
-            bbox: sanitizeCampLayerBbox(request.bbox),
-            cacheKey: request.cacheKey,
+            bbox: sanitizeCampLayerBbox(requestBbox),
+            cacheKey: requestCacheKey,
             requestId: request.requestId,
           });
           return;
         }
         if (!response.ok) {
-          if (!dispersedCampingFetchCoordinatorRef.current.complete(request)) return;
+          if (!navigateMapLayerCoordinatorRef.current.fail(request, response.error || 'Dispersed camping eligibility unavailable.')) return;
           logCampLayerDebug('frontend_fetch_error', {
             layer: 'dispersed_camping',
-            bbox: sanitizeCampLayerBbox(request.bbox),
-            cacheKey: request.cacheKey,
+            bbox: sanitizeCampLayerBbox(requestBbox),
+            cacheKey: requestCacheKey,
             requestId: request.requestId,
             error: response.error || 'unknown_error',
           });
-          dispersedCampingFailedCacheKeysRef.current.add(request.cacheKey);
+          dispersedCampingFailedCacheKeysRef.current.add(requestCacheKey);
           setDispersedCampingUiState((current) =>
             setCampLayerFetchFailed(
               current,
               response.error || 'Dispersed camping eligibility unavailable.',
               {
-                bbox: request.bbox,
-                cacheKey: request.cacheKey,
+                bbox: requestBbox,
+                cacheKey: requestCacheKey,
                 diagnostic: response.diagnostic,
               },
             ),
@@ -6424,11 +6237,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
         const regions = Array.isArray(response.regions) ? response.regions : [];
         const geojsonFeatureCount = countGeoJsonFeatures(response.geojson);
-        if (!dispersedCampingFetchCoordinatorRef.current.complete(request)) return;
+        if (!navigateMapLayerCoordinatorRef.current.complete(request, {
+          itemCount: regions.length,
+          sourceState: 'live',
+        })) return;
         logCampLayerDebug(regions.length > 0 || geojsonFeatureCount > 0 ? 'frontend_fetch_success' : 'frontend_fetch_empty', {
           layer: 'dispersed_camping',
-          bbox: sanitizeCampLayerBbox(request.bbox),
-          cacheKey: request.cacheKey,
+          bbox: sanitizeCampLayerBbox(requestBbox),
+          cacheKey: requestCacheKey,
           requestId: request.requestId,
           regionCount: regions.length,
           geojsonFeatureCount,
@@ -6439,34 +6255,37 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             ? null
             : 'backend_returned_no_eligible_regions_or_parser_filtered_all_features',
         });
-        dispersedCampingCacheRef.current.set(request.cacheKey, {
-          expiresAt: Date.now() + DISPERSED_CAMPING_CACHE_TTL_MS,
-          regions,
+        navigateMapLayerCoordinatorRef.current.writeCache({
+          layer: 'dispersed_camping',
+          key: requestCacheKey,
+          value: regions,
+          ttlMs: DISPERSED_CAMPING_CACHE_TTL_MS,
         });
         writeDispersedCampingOfflineCache({
           lookup: {
             layer: 'dispersed_camping',
-            bbox: request.bbox,
-            cacheKey: request.cacheKey,
+            bbox: requestBbox,
+            cacheKey: requestCacheKey,
           },
           regions,
         });
-        dispersedCampingFailedCacheKeysRef.current.delete(request.cacheKey);
+        dispersedCampingFailedCacheKeysRef.current.delete(requestCacheKey);
         setDispersedCampingRegions(regions);
         setDispersedCampingUiState((current) =>
           setCampLayerFetchSucceeded(current, {
-            bbox: request.bbox,
-            cacheKey: request.cacheKey,
+            bbox: requestBbox,
+            cacheKey: requestCacheKey,
             featureCount: regions.length,
           }),
         );
       })
       .catch((error) => {
-        if (!dispersedCampingFetchCoordinatorRef.current.complete(request)) {
+        if (request.signal.aborted) return;
+        if (!navigateMapLayerCoordinatorRef.current.fail(request, error)) {
           logCampLayerDebug('frontend_fetch_stale_ignored', {
             layer: 'dispersed_camping',
-            bbox: sanitizeCampLayerBbox(request.bbox),
-            cacheKey: request.cacheKey,
+            bbox: sanitizeCampLayerBbox(requestBbox),
+            cacheKey: requestCacheKey,
             requestId: request.requestId,
             error: error instanceof Error ? error.message : String(error),
           });
@@ -6474,19 +6293,19 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         }
         logCampLayerDebug('frontend_fetch_exception', {
           layer: 'dispersed_camping',
-          bbox: sanitizeCampLayerBbox(request.bbox),
-          cacheKey: request.cacheKey,
+          bbox: sanitizeCampLayerBbox(requestBbox),
+          cacheKey: requestCacheKey,
           requestId: request.requestId,
           error: error instanceof Error ? error.message : String(error),
         });
-        dispersedCampingFailedCacheKeysRef.current.add(request.cacheKey);
+        dispersedCampingFailedCacheKeysRef.current.add(requestCacheKey);
         setDispersedCampingUiState((current) =>
           setCampLayerFetchFailed(
             current,
             error instanceof Error ? error.message : 'Dispersed camping eligibility unavailable.',
             {
-              bbox: request.bbox,
-              cacheKey: request.cacheKey,
+              bbox: requestBbox,
+              cacheKey: requestCacheKey,
               diagnostic: {
                 layer: 'dispersed_camping',
                 endpoint: DISPERSED_CAMPING_EDGE_FUNCTION,
@@ -6540,7 +6359,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   useEffect(() => {
     const layerAvailable = establishedCampsitesEnabled && establishedCampsitesLayerAvailable;
     if (!layerAvailable) {
-      establishedCampgroundsFetchCoordinatorRef.current.cancel();
+      navigateMapLayerCoordinatorRef.current.cancel('established_campgrounds', 'disabled');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'established_campgrounds', enabled: false, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
+      });
       if (establishedCampgroundsFetchTimerRef.current) {
         clearTimeout(establishedCampgroundsFetchTimerRef.current);
         establishedCampgroundsFetchTimerRef.current = null;
@@ -6551,7 +6373,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       return;
     }
     if (!establishedCampsitesZoomReady) {
-      establishedCampgroundsFetchCoordinatorRef.current.cancel();
+      navigateMapLayerCoordinatorRef.current.cancel('established_campgrounds', 'zoom_deferred');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'established_campgrounds', enabled: true, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
+      });
       if (establishedCampgroundsFetchTimerRef.current) {
         clearTimeout(establishedCampgroundsFetchTimerRef.current);
         establishedCampgroundsFetchTimerRef.current = null;
@@ -6576,84 +6401,93 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
           minPaddingDegrees: ESTABLISHED_CAMPGROUNDS_PREFETCH_MIN_PADDING_DEGREES,
         }) ?? mapBounds;
     establishedCampgroundsRetryBboxRef.current = null;
-    const plan = establishedCampgroundsFetchCoordinatorRef.current.plan({
-      layer: 'established_campgrounds',
-      bbox: planBbox,
-      enabled: layerAvailable,
-      online: campLayerFetchOnline,
-      now: Date.now(),
-    });
-    if (plan.type === 'skip') {
-      if (plan.reason === 'offline' || plan.reason === 'invalid_bbox' || plan.reason === 'bbox_too_small') {
-        logCampLayerDebug('frontend_fetch_skipped', {
-          layer: 'established_campgrounds',
-          bbox: sanitizeCampLayerBbox(visiblePlanBbox),
-          prefetchBbox: sanitizeCampLayerBbox(planBbox),
-          reason: plan.reason,
-          cacheKey: plan.cacheKey ?? null,
-        });
-        if (plan.reason === 'offline') {
-          const lookup = resolveCampLayerOfflineCacheLookup('established_campgrounds', planBbox);
-          if (lookup) {
-            let cancelled = false;
-            void readEstablishedCampgroundsOfflineCache(lookup.cacheKey).then((cached) => {
-              if (cancelled) return;
-              if (!cached) {
-                setEstablishedCampgroundsUiState(setCampLayerFetchSkipped);
-                return;
-              }
-              logCampLayerDebug('frontend_offline_cache_hit', {
-                layer: 'established_campgrounds',
-                bbox: sanitizeCampLayerBbox(lookup.bbox),
-                cacheKey: lookup.cacheKey,
-                campsiteCount: cached.campsites.length,
-                cachedAt: cached.cachedAt,
-              });
-              establishedCampgroundsCacheRef.current.set(lookup.cacheKey, {
-                expiresAt: Date.now() + ESTABLISHED_CAMPGROUNDS_CACHE_TTL_MS,
-                campsites: cached.campsites,
-              });
-              setEstablishedCampgrounds(cached.campsites);
-              setEstablishedCampgroundsUiState((current) =>
-                setCampLayerFetchSucceeded(current, {
-                  bbox: lookup.bbox,
-                  cacheKey: lookup.cacheKey,
-                  featureCount: cached.campsites.length,
-                }),
-              );
-            });
-            return () => {
-              cancelled = true;
-            };
-          }
-        }
-        setEstablishedCampgroundsUiState(setCampLayerFetchSkipped);
-      }
+    const lookup = resolveCampLayerOfflineCacheLookup('established_campgrounds', planBbox);
+    if (!lookup) {
+      navigateMapLayerCoordinatorRef.current.cancel('established_campgrounds', 'invalid_bbox');
+      setEstablishedCampgroundsUiState(setCampLayerFetchSkipped);
       return;
     }
+    if (!campLayerFetchOnline) {
+      navigateMapLayerCoordinatorRef.current.cancel('established_campgrounds', 'offline');
+      let cancelled = false;
+      void readEstablishedCampgroundsOfflineCache(lookup.cacheKey).then((cached) => {
+        if (cancelled) return;
+        if (!cached) {
+          setEstablishedCampgroundsUiState(setCampLayerFetchSkipped);
+          return;
+        }
+        navigateMapLayerCoordinatorRef.current.writeCache({
+          layer: 'established_campgrounds',
+          key: lookup.cacheKey,
+          value: cached.campsites,
+          ttlMs: ESTABLISHED_CAMPGROUNDS_CACHE_TTL_MS,
+          sourceState: 'cached',
+        });
+        navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+          layer: 'established_campgrounds',
+          enabled: true,
+          itemCount: cached.campsites.length,
+          sourceState: 'offline',
+        });
+        setEstablishedCampgrounds(cached.campsites);
+        setEstablishedCampgroundsUiState((current) =>
+          setCampLayerFetchSucceeded(current, {
+            bbox: lookup.bbox,
+            cacheKey: lookup.cacheKey,
+            featureCount: cached.campsites.length,
+          }),
+        );
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
 
-    const cached = establishedCampgroundsCacheRef.current.get(plan.cacheKey);
-    const retryingFailedCacheKey = establishedCampgroundsFailedCacheKeysRef.current.has(plan.cacheKey);
+    const cached = navigateMapLayerCoordinatorRef.current.readCache<EstablishedCampsite[]>(
+      'established_campgrounds',
+      lookup.cacheKey,
+    );
+    const retryingFailedCacheKey = establishedCampgroundsFailedCacheKeysRef.current.has(lookup.cacheKey);
     const now = Date.now();
-    if (cached && cached.expiresAt > now && !retryingFailedCacheKey) {
-      establishedCampgroundsFetchCoordinatorRef.current.cancel();
+    if (cached && !retryingFailedCacheKey) {
+      navigateMapLayerCoordinatorRef.current.cancel('established_campgrounds', 'cache_hit');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'established_campgrounds', enabled: true, itemCount: cached.value.length, sourceState: cached.sourceState,
+      });
       logCampLayerDebug('frontend_cache_hit', {
         layer: 'established_campgrounds',
         visibleBbox: sanitizeCampLayerBbox(visiblePlanBbox),
-        bbox: sanitizeCampLayerBbox(plan.bbox),
-        cacheKey: plan.cacheKey,
-        campsiteCount: cached.campsites.length,
+        bbox: sanitizeCampLayerBbox(lookup.bbox),
+        cacheKey: lookup.cacheKey,
+        campsiteCount: cached.value.length,
       });
-      setEstablishedCampgrounds(cached.campsites);
+      setEstablishedCampgrounds(cached.value);
       setEstablishedCampgroundsUiState((current) =>
         setCampLayerFetchSucceeded(current, {
-          bbox: plan.bbox,
-          cacheKey: plan.cacheKey,
-          featureCount: cached.campsites.length,
+          bbox: lookup.bbox,
+          cacheKey: lookup.cacheKey,
+          featureCount: cached.value.length,
         }),
       );
       return;
     }
+    const plan = navigateMapLayerCoordinatorRef.current.plan({
+      layer: 'established_campgrounds',
+      enabled: true,
+      zoomEligible: true,
+      online: true,
+      viewportFingerprint: lookup.cacheKey,
+      bounds: {
+        west: lookup.bbox.minLng,
+        south: lookup.bbox.minLat,
+        east: lookup.bbox.maxLng,
+        north: lookup.bbox.maxLat,
+      },
+      debounceMs: ESTABLISHED_CAMPGROUNDS_FETCH_DEBOUNCE_MS,
+      renderPriority: 'normal',
+      now,
+    });
+    if (plan.kind === 'skip') return;
 
     if (establishedCampgroundsFetchTimerRef.current) {
       clearTimeout(establishedCampgroundsFetchTimerRef.current);
@@ -6661,108 +6495,111 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     }
     setEstablishedCampgroundsUiState((current) =>
       setCampLayerLoading(current, {
-        bbox: plan.bbox,
-        cacheKey: plan.cacheKey,
+        bbox: lookup.bbox,
+        cacheKey: lookup.cacheKey,
       }),
     );
     logCampLayerDebug('frontend_fetch_scheduled', {
       layer: 'established_campgrounds',
       visibleBbox: sanitizeCampLayerBbox(visiblePlanBbox),
-      bbox: sanitizeCampLayerBbox(plan.bbox),
-      cacheKey: plan.cacheKey,
+      bbox: sanitizeCampLayerBbox(lookup.bbox),
+      cacheKey: lookup.cacheKey,
       debounceMs: Math.max(0, plan.dueAt - now),
     });
 
     establishedCampgroundsFetchTimerRef.current = setTimeout(() => {
       establishedCampgroundsFetchTimerRef.current = null;
-      const request = establishedCampgroundsFetchCoordinatorRef.current.consumeDue('established_campgrounds', Date.now());
+      const request = navigateMapLayerCoordinatorRef.current.consumeDue('established_campgrounds', Date.now());
       if (!request) return;
-
-      const freshCached = establishedCampgroundsCacheRef.current.get(request.cacheKey);
-      if (
-        freshCached &&
-        freshCached.expiresAt > Date.now() &&
-        !establishedCampgroundsFailedCacheKeysRef.current.has(request.cacheKey)
-      ) {
-        establishedCampgroundsFetchCoordinatorRef.current.complete(request);
-        setEstablishedCampgrounds(freshCached.campsites);
-        setEstablishedCampgroundsUiState((current) =>
-          setCampLayerFetchSucceeded(current, {
-            bbox: request.bbox,
-            cacheKey: request.cacheKey,
-            featureCount: freshCached.campsites.length,
-          }),
-        );
-        return;
-      }
+      incrementECSPerformanceCounter('navigate_map_viewport_interaction', 'layer_requests_started');
+      const requestBbox = {
+        minLng: request.bounds.west,
+        minLat: request.bounds.south,
+        maxLng: request.bounds.east,
+        maxLat: request.bounds.north,
+      };
+      const requestCacheKey = request.viewportFingerprint;
 
       logCampLayerDebug('frontend_fetch_start', {
         layer: 'established_campgrounds',
-        bbox: sanitizeCampLayerBbox(request.bbox),
-        cacheKey: request.cacheKey,
+        bbox: sanitizeCampLayerBbox(requestBbox),
+        cacheKey: requestCacheKey,
         requestId: request.requestId,
       });
 
-      fetchEstablishedCampgroundsForMap({ bbox: request.bbox, logFailures: false })
+      fetchEstablishedCampgroundsForMap({
+        bbox: requestBbox,
+        logFailures: false,
+        signal: request.signal,
+      })
       .then(async (response) => {
-        if (!establishedCampgroundsFetchCoordinatorRef.current.isCurrent(request)) {
+        if (!navigateMapLayerCoordinatorRef.current.isCurrent(request)) {
           logCampLayerDebug('frontend_fetch_stale_ignored', {
             layer: 'established_campgrounds',
-            bbox: sanitizeCampLayerBbox(request.bbox),
-            cacheKey: request.cacheKey,
+            bbox: sanitizeCampLayerBbox(requestBbox),
+            cacheKey: requestCacheKey,
             requestId: request.requestId,
           });
           return;
         }
         if (!response.ok) {
-          const cachedFallback = await readEstablishedCampgroundsOfflineCache(request.cacheKey).catch(() => null);
+          const cachedFallback = await readEstablishedCampgroundsOfflineCache(requestCacheKey).catch(() => null);
           if (
             cachedFallback &&
-            establishedCampgroundsFetchCoordinatorRef.current.isCurrent(request)
+            navigateMapLayerCoordinatorRef.current.isCurrent(request)
           ) {
-            if (!establishedCampgroundsFetchCoordinatorRef.current.complete(request)) return;
+            if (!navigateMapLayerCoordinatorRef.current.complete(request, {
+              itemCount: cachedFallback.campsites.length,
+              sourceState: 'cached',
+            })) return;
             logCampLayerDebug('frontend_online_failure_cache_hit', {
               layer: 'established_campgrounds',
-              bbox: sanitizeCampLayerBbox(request.bbox),
-              cacheKey: request.cacheKey,
+              bbox: sanitizeCampLayerBbox(requestBbox),
+              cacheKey: requestCacheKey,
               requestId: request.requestId,
               campsiteCount: cachedFallback.campsites.length,
               cachedAt: cachedFallback.cachedAt,
               error: response.error || 'unknown_error',
               status: response.diagnostic?.status ?? null,
             });
-            establishedCampgroundsCacheRef.current.set(request.cacheKey, {
-              expiresAt: Date.now() + ESTABLISHED_CAMPGROUNDS_CACHE_TTL_MS,
-              campsites: cachedFallback.campsites,
+            navigateMapLayerCoordinatorRef.current.writeCache({
+              layer: 'established_campgrounds',
+              key: requestCacheKey,
+              value: cachedFallback.campsites,
+              ttlMs: ESTABLISHED_CAMPGROUNDS_CACHE_TTL_MS,
+              sourceState: 'cached',
             });
-            establishedCampgroundsFailedCacheKeysRef.current.delete(request.cacheKey);
+            establishedCampgroundsFailedCacheKeysRef.current.delete(requestCacheKey);
             setEstablishedCampgrounds(cachedFallback.campsites);
             setEstablishedCampgroundsUiState((current) =>
               setCampLayerFetchSucceeded(current, {
-                bbox: request.bbox,
-                cacheKey: request.cacheKey,
+                bbox: requestBbox,
+                cacheKey: requestCacheKey,
                 featureCount: cachedFallback.campsites.length,
               }),
             );
             return;
           }
 
-          if (!establishedCampgroundsFetchCoordinatorRef.current.complete(request)) return;
+          if (!navigateMapLayerCoordinatorRef.current.fail(
+            request,
+            response.error || 'Established campground search unavailable.',
+          )) return;
           logCampLayerDebug('frontend_fetch_error', {
             layer: 'established_campgrounds',
-            bbox: sanitizeCampLayerBbox(request.bbox),
-            cacheKey: request.cacheKey,
+            bbox: sanitizeCampLayerBbox(requestBbox),
+            cacheKey: requestCacheKey,
             requestId: request.requestId,
             error: response.error || 'unknown_error',
           });
-          establishedCampgroundsFailedCacheKeysRef.current.add(request.cacheKey);
+          establishedCampgroundsFailedCacheKeysRef.current.add(requestCacheKey);
           setEstablishedCampgroundsUiState((current) =>
             setCampLayerFetchFailed(
               current,
               response.error || 'Established campground search unavailable.',
               {
-                bbox: request.bbox,
-                cacheKey: request.cacheKey,
+                bbox: requestBbox,
+                cacheKey: requestCacheKey,
                 diagnostic: response.diagnostic,
               },
             ),
@@ -6772,11 +6609,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
         const campsites = mapCampgroundSearchRecordsToEstablishedCampsites(response.records);
         const geojsonFeatureCount = countGeoJsonFeatures(response.geojson);
-        if (!establishedCampgroundsFetchCoordinatorRef.current.complete(request)) return;
+        if (!navigateMapLayerCoordinatorRef.current.complete(request, {
+          itemCount: campsites.length,
+          sourceState: 'live',
+        })) return;
         logCampLayerDebug(campsites.length > 0 || geojsonFeatureCount > 0 ? 'frontend_fetch_success' : 'frontend_fetch_empty', {
           layer: 'established_campgrounds',
-          bbox: sanitizeCampLayerBbox(request.bbox),
-          cacheKey: request.cacheKey,
+          bbox: sanitizeCampLayerBbox(requestBbox),
+          cacheKey: requestCacheKey,
           requestId: request.requestId,
           campsiteCount: campsites.length,
           geojsonFeatureCount,
@@ -6787,34 +6627,37 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             ? null
             : 'backend_returned_no_campgrounds_or_parser_filtered_all_records',
         });
-        establishedCampgroundsCacheRef.current.set(request.cacheKey, {
-          expiresAt: Date.now() + ESTABLISHED_CAMPGROUNDS_CACHE_TTL_MS,
-          campsites,
+        navigateMapLayerCoordinatorRef.current.writeCache({
+          layer: 'established_campgrounds',
+          key: requestCacheKey,
+          value: campsites,
+          ttlMs: ESTABLISHED_CAMPGROUNDS_CACHE_TTL_MS,
         });
         writeEstablishedCampgroundsOfflineCache({
           lookup: {
             layer: 'established_campgrounds',
-            bbox: request.bbox,
-            cacheKey: request.cacheKey,
+            bbox: requestBbox,
+            cacheKey: requestCacheKey,
           },
           campsites,
         });
-        establishedCampgroundsFailedCacheKeysRef.current.delete(request.cacheKey);
+        establishedCampgroundsFailedCacheKeysRef.current.delete(requestCacheKey);
         setEstablishedCampgrounds(campsites);
         setEstablishedCampgroundsUiState((current) =>
           setCampLayerFetchSucceeded(current, {
-            bbox: request.bbox,
-            cacheKey: request.cacheKey,
+            bbox: requestBbox,
+            cacheKey: requestCacheKey,
             featureCount: campsites.length,
           }),
         );
       })
       .catch((error) => {
-        if (!establishedCampgroundsFetchCoordinatorRef.current.complete(request)) {
+        if (request.signal.aborted) return;
+        if (!navigateMapLayerCoordinatorRef.current.fail(request, error)) {
           logCampLayerDebug('frontend_fetch_stale_ignored', {
             layer: 'established_campgrounds',
-            bbox: sanitizeCampLayerBbox(request.bbox),
-            cacheKey: request.cacheKey,
+            bbox: sanitizeCampLayerBbox(requestBbox),
+            cacheKey: requestCacheKey,
             requestId: request.requestId,
             error: error instanceof Error ? error.message : String(error),
           });
@@ -6822,19 +6665,19 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         }
         logCampLayerDebug('frontend_fetch_exception', {
           layer: 'established_campgrounds',
-          bbox: sanitizeCampLayerBbox(request.bbox),
-          cacheKey: request.cacheKey,
+          bbox: sanitizeCampLayerBbox(requestBbox),
+          cacheKey: requestCacheKey,
           requestId: request.requestId,
           error: error instanceof Error ? error.message : String(error),
         });
-        establishedCampgroundsFailedCacheKeysRef.current.add(request.cacheKey);
+        establishedCampgroundsFailedCacheKeysRef.current.add(requestCacheKey);
         setEstablishedCampgroundsUiState((current) =>
           setCampLayerFetchFailed(
             current,
             error instanceof Error ? error.message : 'Established campground search unavailable.',
             {
-              bbox: request.bbox,
-              cacheKey: request.cacheKey,
+              bbox: requestBbox,
+              cacheKey: requestCacheKey,
               diagnostic: {
                 layer: 'established_campgrounds',
                 endpoint: ESTABLISHED_CAMPGROUNDS_EDGE_FUNCTION,
@@ -7924,11 +7767,15 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       }
 
       const bufferMiles = context.routeBufferMiles ?? ROUTE_CAMPSITE_BUFFER_MILES;
+      const loadOperationalCampOpsSources = CAMPOPS_SAFE_ENDPOINT_ENABLED;
+      const loadCommunity = campsiteLayerVisibility.community || loadOperationalCampOpsSources;
+      const loadPrivate = campsiteLayerVisibility.private || loadOperationalCampOpsSources;
+      const loadGroup = campsiteLayerVisibility.group || loadOperationalCampOpsSources;
       const signature = JSON.stringify({
         routeSignature,
-        community: campsiteLayerVisibility.community,
-        private: campsiteLayerVisibility.private,
-        group: campsiteLayerVisibility.group,
+        community: loadCommunity,
+        private: loadPrivate,
+        group: loadGroup,
         pending: campsiteLayerVisibility.pending,
         reviewerPending: campsiteLayerVisibility.reviewer_pending,
         bufferMiles: Number(bufferMiles.toFixed(2)),
@@ -7944,12 +7791,12 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         items.filter((item) => campsitePointNearRoute(item, routePoints, bufferMiles));
 
       void Promise.all([
-        campsiteLayerVisibility.community
+        loadCommunity
           ? fetchApprovedCommunityCampsitesForViewport(campsiteRecommendationService, bounds)
               .then((result) => (result.ok ? filterNearRoute(result.data) : []))
               .catch(() => [] as PublicCampSite[])
           : Promise.resolve([] as PublicCampSite[]),
-        campsiteLayerVisibility.private
+        loadPrivate
           ? fetchPrivateCampsitesForViewport(campsiteRecommendationService, bounds)
               .then((result) => (result.ok ? filterNearRoute(result.data) : []))
               .catch(() => [] as CampSiteReportResponse[])
@@ -7964,7 +7811,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
               .then((result) => (result.ok ? filterNearRoute(result.data) : []))
               .catch(() => [] as CampSiteReviewQueueItem[])
           : Promise.resolve([] as CampSiteReviewQueueItem[]),
-        campsiteLayerVisibility.group
+        loadGroup
           ? campSiteGroupSharingService
               .listMyCampSiteGroups()
               .then(async (result) => {
@@ -8605,6 +8452,21 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       unsubscribeTiles();
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      waitForRouteStoreHydration(),
+      waitForRunStoreHydration(),
+    ]).then(() => {
+      if (!cancelled) loadRuns();
+    });
+    const unsubscribeRuns = runStore.subscribe(loadRuns);
+    return () => {
+      cancelled = true;
+      unsubscribeRuns();
+    };
+  }, [loadRuns]);
 
   const activeGuidanceOfflineSyncInProgress = offlineTileSyncSnapshot.activeJobs.some((job) =>
     job.source === 'route-corridor' && job.syncType === 'route'
@@ -9476,9 +9338,15 @@ const handleQuickPinDrop = useCallback(() => {
   showToast('TAP MAP TO DROP PIN');
 }, [closeTopPopup, showToast]);
 
-const applyRouteBuilderDraft = useCallback((nextDraft: NavigateRouteDraft) => {
+const applyRouteBuilderDraft = useCallback((
+  nextDraft: NavigateRouteDraft,
+  options?: { recordHistory?: boolean },
+) => {
   const nextSegments = buildRouteBuilderSegmentsFromDraft(nextDraft) as unknown as RouteBuilderSegmentData[];
   const lastLeg = nextDraft.legs[nextDraft.legs.length - 1] ?? null;
+  routeBuilderDraftHistoryRef.current = options?.recordHistory === false
+    ? { ...routeBuilderDraftHistoryRef.current, present: nextDraft }
+    : recordNavigateRouteDraft(routeBuilderDraftHistoryRef.current, nextDraft);
   routeBuilderDraftRef.current = nextDraft;
   setRouteBuilderDraft(nextDraft);
   setRouteBuilderSegments(nextSegments);
@@ -11122,14 +10990,6 @@ const activeSegmentProfile = useMemo<SegmentRiskProfile | null>(() => {
     return bailoutStore.computeExitPlan(enrichedProfile.segments, activeBailouts);
   }, [enrichedProfile, activeBailouts]);
 
-  const vehicleRouteConstraintEnvelope = useMemo(() => {
-    return selectVehicleRouteConstraintEnvelope({
-      routeIntelligence,
-      vehicleContext: navigateVehicleContext,
-      routeRiskSegments: enrichedProfile?.segments ?? null,
-    });
-  }, [enrichedProfile?.segments, navigateVehicleContext, routeIntelligence]);
-
   const weatherRiskModifier =
   weatherSeveritySummary?.level === 'extreme' ? 3 :
   weatherSeveritySummary?.level === 'warning' ? 2 :
@@ -11203,64 +11063,11 @@ const segmentFeatures = useMemo(() => {
     setSnapshotModalVisible(false);
   }, []);
 
-  const simplifyRouteCoords = useCallback(
-    (coords: [number, number][], maxPoints = 1000): [number, number][] => {
-      if (!Array.isArray(coords) || coords.length <= maxPoints) return coords;
-
-      const step = Math.ceil(coords.length / maxPoints);
-      const simplified = coords.filter(
-        (_, i) => i === 0 || i === coords.length - 1 || i % step === 0
-      );
-
-      return simplified.length > maxPoints
-        ? simplified.slice(0, maxPoints - 1).concat([coords[coords.length - 1]])
-        : simplified;
-    },
-    []
-  );
-
   const validateImportedRouteContent = useCallback(
-  (fileName: string, ext: string, content: string) => {
-    let primaryCoords: [number, number][] = [];
-    let parsed: any = null;
-
-    if (ext === 'geojson' || ext === 'json') {
-      const geo = JSON.parse(content);
-
-      if (geo?.type === 'FeatureCollection' && Array.isArray(geo.features)) {
-        geo.features.forEach((f: any) => {
-          if (f.geometry?.type === 'LineString' && Array.isArray(f.geometry.coordinates)) {
-            primaryCoords.push(...f.geometry.coordinates);
-          }
-
-          if (
-            f.geometry?.type === 'MultiLineString' &&
-            Array.isArray(f.geometry.coordinates)
-          ) {
-            f.geometry.coordinates.forEach((line: any) => {
-              if (Array.isArray(line)) primaryCoords.push(...line);
-            });
-          }
-        });
-      }
-
-      primaryCoords = simplifyRouteCoords(primaryCoords, 1000);
-
-    } else {
-      parsed = parseGeoFile(fileName, content);
-      primaryCoords = simplifyRouteCoords(getPrimaryRouteCoordinates(parsed), 1000);
-    }
-
-    if (primaryCoords.length < 2) {
-      throw new Error('IMPORT FAILED - Route needs at least 2 valid points');
-    }
-
-    return {
-      parsed,
-      primaryCoords,
-    };
+  (fileName: string, content: string, signal?: AbortSignal) => {
+    return parseNavigateRouteImport({ fileName, content, signal });
   },
-  [simplifyRouteCoords]
+  []
 );
 
 const beginRouteImportPending = useCallback((reason: string) => {
@@ -11295,7 +11102,13 @@ const wasRouteFileRecentlyImported = useCallback((fileKey: string) => {
 }, []);
 
 const markRouteFileImported = useCallback((fileKey: string) => {
-  recentImportFileKeysRef.current.set(fileKey, Date.now());
+  const recentKeys = recentImportFileKeysRef.current;
+  recentKeys.set(fileKey, Date.now());
+  while (recentKeys.size > 32) {
+    const oldest = recentKeys.keys().next().value as string | undefined;
+    if (!oldest) break;
+    recentKeys.delete(oldest);
+  }
 }, []);
 
 const handleImmediateImport = useCallback(
@@ -11303,6 +11116,7 @@ const handleImmediateImport = useCallback(
     const fileKey = importFileKey ?? createNavigateImportFileKey(fileName, content);
 
     if (wasRouteFileRecentlyImported(fileKey)) {
+      incrementECSPerformanceCounter('gpx_import_preview', 'duplicate_import_attempts');
       logNavigateDev('[NAVIGATE_IMPORT] import_button_ignored_pending', { reason: 'duplicate_file' });
       setImportFeedback({
         tone: 'info',
@@ -11313,6 +11127,10 @@ const handleImmediateImport = useCallback(
     }
 
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    const importPerformance = startECSPerformanceSpan('gpx_import_preview', 'parse_persist_stage_preview', {
+      trackOutstanding: true,
+      metadata: { format: ext || 'unknown', contentBytes: content.length },
+    });
     setImportFeedback({
       tone: 'info',
       title: 'Importing route file',
@@ -11320,106 +11138,16 @@ const handleImmediateImport = useCallback(
     });
 
     try {
-      const { parsed, primaryCoords } = validateImportedRouteContent(fileName, ext, content);
-
-      let run: ECSRun;
-
-      if (ext === 'geojson' || ext === 'json') {
-        const geo = JSON.parse(content);
-
-        const geoPoints = (primaryCoords ?? [])
-          .map((coord: any, idx: number) => {
-            const lng = Array.isArray(coord) ? Number(coord[0]) : null;
-            const lat = Array.isArray(coord) ? Number(coord[1]) : null;
-            const ele =
-              Array.isArray(coord) && coord.length > 2 && Number.isFinite(Number(coord[2]))
-                ? Number(coord[2])
-                : null;
-
-            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-
-            return {
-              lat,
-              lng,
-              ele_m: ele,
-              time: null,
-              type: 'route' as const,
-            };
-          })
-          .filter(Boolean);
-
-        run = runStore.createFromParsedImport(
-          {
-            name: fileName.replace(/\.[^.]+$/, ''),
-            routePoints: geoPoints,
-            trackPoints: [],
-            primaryCoords: geoPoints,
-            waypoints: [],
-            raw: geo,
-          },
-          undefined,
-          'geojson',
-          fileName.replace(/\.[^.]+$/, '')
-        );
-      } else {
-        const routePoints =
-          parsed?.routes?.flatMap((r: any) =>
-            (r.points ?? []).map((pt: any) => ({
-              lat: pt?.lat,
-              lng: pt?.lon ?? pt?.lng,
-              ele_m: pt?.ele ?? null,
-              time: pt?.time ?? null,
-            }))
-          ) ?? [];
-
-        const trackPoints =
-          parsed?.tracks?.flatMap((t: any) =>
-            (t.segments ?? []).flatMap((s: any) =>
-              (s.points ?? []).map((pt: any) => ({
-                lat: pt?.lat,
-                lng: pt?.lon ?? pt?.lng,
-                ele_m: pt?.ele ?? null,
-                time: pt?.time ?? null,
-              }))
-            )
-          ) ?? [];
-
-        const fallbackPrimary =
-          routePoints.length === 0 && trackPoints.length === 0
-            ? (primaryCoords ?? [])
-                .map((coord: any) => {
-                  const lng = Array.isArray(coord) ? Number(coord[0]) : null;
-                  const lat = Array.isArray(coord) ? Number(coord[1]) : null;
-
-                  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-
-                  return {
-                    lat,
-                    lng,
-                    ele_m: null,
-                    time: null,
-                  };
-                })
-                .filter(Boolean)
-            : [];
-
-        const normalizedParsed = {
-          name: parsed?.name || fileName.replace(/\.[^.]+$/, '') || 'Imported Route',
-          routePoints,
-          trackPoints,
-          primaryCoords: fallbackPrimary,
-          waypoints: parsed?.waypoints ?? [],
-          routes: parsed?.routes ?? [],
-          tracks: parsed?.tracks ?? [],
-        };
-
-        run = runStore.createFromParsedImport(
-          normalizedParsed,
-          undefined,
-          ext,
-          normalizedParsed.name
-        );
-      }
+      activeRouteImportAbortRef.current?.abort();
+      const importController = new AbortController();
+      activeRouteImportAbortRef.current = importController;
+      const imported = validateImportedRouteContent(fileName, content, importController.signal);
+      const run: ECSRun = runStore.createFromParsedImport(
+        imported.parsedForRun,
+        undefined,
+        ext || 'import',
+        imported.name,
+      );
 
       if (!run || (run.points?.length ?? 0) < 2) {
         throw new Error('IMPORT FAILED - Parsed route could not be converted into run points');
@@ -11432,15 +11160,25 @@ const handleImmediateImport = useCallback(
       setImportFeedback({
         tone: 'success',
         title: 'Route imported',
-        detail: `${run.title} (${run.stats.distance_miles.toFixed(1)} mi)`,
+        detail: [
+          `${run.title} (${run.stats.distance_miles.toFixed(1)} mi)`,
+          imported.warnings[0] ?? null,
+        ].filter(Boolean).join(' - '),
       });
       closeTopPopup('importRoute');
       await stageImportedRunPreview(run);
+      importPerformance.end('completed', {
+        pointCount: run.points?.length ?? 0,
+        waypointCount: run.waypoints?.length ?? 0,
+        sourcePointCount: imported.sourcePointCount,
+        elevationState: imported.elevationState,
+      });
 
       showToast(`RUN CREATED: ${run.title} (${run.stats.distance_miles.toFixed(1)} mi)`);
       markRouteFileImported(fileKey);
       return true;
     } catch (err: any) {
+      importPerformance.end('failed', { format: ext || 'unknown' });
       console.error('[Navigate] Immediate import failed:', err);
       const reason = err?.message || 'FAILED TO IMPORT ROUTE';
       logNavigateDev('[NAVIGATE_IMPORT] import_failure', { reason });
@@ -11451,6 +11189,8 @@ const handleImmediateImport = useCallback(
       });
       showToast(err?.message || 'FAILED TO IMPORT ROUTE');
       return false;
+    } finally {
+      activeRouteImportAbortRef.current = null;
     }
   },
   [
@@ -11652,105 +11392,13 @@ const handleCreateRun = useCallback(() => {
 
   try {
     const ext = pendingGpxName.split('.').pop()?.toLowerCase() || '';
-    const { parsed, primaryCoords } = validateImportedRouteContent(
-      pendingGpxName,
-      ext,
-      pendingGpxContent
+    const imported = validateImportedRouteContent(pendingGpxName, pendingGpxContent);
+    const run: ECSRun = runStore.createFromParsedImport(
+      imported.parsedForRun,
+      snapshot,
+      ext || 'import',
+      imported.name,
     );
-
-    let run: ECSRun;
-
-    if (ext === 'geojson' || ext === 'json') {
-      const geoPoints = (primaryCoords ?? [])
-        .map((coord: any) => {
-          const lng = Array.isArray(coord) ? Number(coord[0]) : null;
-          const lat = Array.isArray(coord) ? Number(coord[1]) : null;
-          const ele =
-            Array.isArray(coord) && coord.length > 2 && Number.isFinite(Number(coord[2]))
-              ? Number(coord[2])
-              : null;
-
-          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-
-          return {
-            lat,
-            lng,
-            ele_m: ele,
-            time: null,
-            type: 'route' as const,
-          };
-        })
-        .filter(Boolean);
-
-      run = runStore.createFromParsedImport(
-        {
-          name: pendingGpxName.replace(/\.[^.]+$/, ''),
-          routePoints: geoPoints,
-          trackPoints: [],
-          primaryCoords: geoPoints,
-          waypoints: [],
-        },
-        snapshot,
-        'geojson',
-        pendingGpxName.replace(/\.[^.]+$/, '')
-      );
-    } else {
-      const routePoints =
-        parsed?.routes?.flatMap((r: any) =>
-          (r.points ?? []).map((pt: any) => ({
-            lat: pt?.lat,
-            lng: pt?.lon ?? pt?.lng,
-            ele_m: pt?.ele ?? null,
-            time: pt?.time ?? null,
-          }))
-        ) ?? [];
-
-      const trackPoints =
-        parsed?.tracks?.flatMap((t: any) =>
-          (t.segments ?? []).flatMap((s: any) =>
-            (s.points ?? []).map((pt: any) => ({
-              lat: pt?.lat,
-              lng: pt?.lon ?? pt?.lng,
-              ele_m: pt?.ele ?? null,
-              time: pt?.time ?? null,
-            }))
-          )
-        ) ?? [];
-
-      const fallbackPrimary =
-        routePoints.length === 0 && trackPoints.length === 0
-          ? (primaryCoords ?? [])
-              .map((coord: any) => {
-                const lng = Array.isArray(coord) ? Number(coord[0]) : null;
-                const lat = Array.isArray(coord) ? Number(coord[1]) : null;
-
-                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-
-                return {
-                  lat,
-                  lng,
-                  ele_m: null,
-                  time: null,
-                };
-              })
-              .filter(Boolean)
-          : [];
-
-      run = runStore.createFromParsedImport(
-        {
-          name: parsed?.name || pendingGpxName.replace(/\.[^.]+$/, '') || 'Imported Route',
-          routePoints,
-          trackPoints,
-          primaryCoords: fallbackPrimary,
-          waypoints: parsed?.waypoints ?? [],
-          routes: parsed?.routes ?? [],
-          tracks: parsed?.tracks ?? [],
-        },
-        snapshot,
-        ext,
-        parsed?.name || pendingGpxName.replace(/\.[^.]+$/, '') || 'Imported Route'
-      );
-    }
 
     if (!run || (run.points?.length ?? 0) < 2) {
       throw new Error('FAILED TO PARSE GPX');
@@ -12301,6 +11949,17 @@ const handleCreateRun = useCallback(() => {
     trailNavigation.uiMode,
     trailOnlyPreviewActive,
   ]);
+
+  useEffect(() => {
+    if (navigationOverlayMode !== 'active') return;
+    guidancePerformanceRef.current?.end('completed');
+    guidancePerformanceRef.current = null;
+  }, [navigationOverlayMode]);
+
+  useEffect(() => () => {
+    guidancePerformanceRef.current?.cancel({ unmounted: true });
+    guidancePerformanceRef.current = null;
+  }, []);
   const fullRouteGuidanceModel = useMemo(() => {
     const payload = trailNavigation.session.payload ?? exploreNavigationPayload;
     const shouldBuildFullRoute =
@@ -12403,6 +12062,12 @@ const handleCreateRun = useCallback(() => {
   ]);
 
   const executeStartExpeditionNow = useCallback((mode: 'road' | 'trail', acknowledgedOverride: boolean) => {
+    guidancePerformanceRef.current?.cancel({ superseded: true });
+    guidancePerformanceRef.current = startECSPerformanceSpan(
+      'route_preview_guidance',
+      'preview_to_active_overlay',
+      { trackOutstanding: true, metadata: { mode, acknowledgedOverride } },
+    );
     const assessment = expeditionReadinessStore.recomputeReadiness({
       immediate: true,
       reason: acknowledgedOverride ? 'start_expedition_override' : 'start_expedition',
@@ -12563,7 +12228,6 @@ const handleCreateRun = useCallback(() => {
     transitionTrailFromRoad,
   ]);
 
-  const navigateTrailAssessmentActive = navigationOverlayMode === 'active';
   const roadRouteGeometryValidation = useMemo(
     () => validateRouteGeometry(roadSession.route),
     [roadSession.route],
@@ -13200,6 +12864,37 @@ const handleCreateRun = useCallback(() => {
       stableGpsMapLocation,
     ],
   );
+  const routeOperationState = useMemo(
+    () => deriveRouteOperationState({
+      lifecycle: routeLifecycleState,
+      importing: isImportPending,
+      importError: importFeedback?.tone === 'error' ? importFeedback.detail ?? importFeedback.title : null,
+      hasStagedRoute: !!activeRun && validatedRunPoints.length > 1,
+      routeId: activeRun?.id ?? null,
+    }),
+    [
+      activeRun,
+      importFeedback,
+      isImportPending,
+      routeLifecycleState,
+      validatedRunPoints.length,
+    ],
+  );
+  const routeOperationAnnouncement = routeOperationState.phase === 'active'
+    ? {
+        id: `navigate-route-active:${routeOperationState.routeId ?? 'current-route'}`,
+        kind: 'route_activated' as const,
+        subject: activeRun?.title ?? 'Current route',
+        detail: 'Guidance is active in Navigate.',
+      }
+    : routeOperationState.phase === 'failed'
+      ? {
+          id: `navigate-route-failed:${routeOperationState.routeId ?? 'route'}:${routeOperationState.error ?? 'unknown'}`,
+          kind: 'error' as const,
+          subject: 'Navigate route operation',
+          detail: routeOperationState.error ?? 'The route operation failed.',
+        }
+      : null;
 
   const routeAheadDisplayHeading = useMemo(() => {
     const headingLocation = mapDisplayUserLocation ?? stableGpsMapLocation;
@@ -13920,6 +13615,23 @@ const handleCreateRun = useCallback(() => {
   const exploreRouteOverlaySegments = useMemo(
     () => (exploreRoutesEnabled ? exploreRouteOverlayBuild.segments : []),
     [exploreRouteOverlayBuild.segments, exploreRoutesEnabled],
+  );
+  const campOpsRouteSourceCandidates = useMemo(
+    () => [
+      ...establishedCampsitesRouteNearbyResults.map((site) =>
+        campOpsCandidateFromEstablishedCampsite(site)),
+      ...routeCommunityCampSites.map((site) => campOpsCandidateFromPublicCampSite(site)),
+      ...routePrivateCampsiteReports.map((report) => campOpsCandidateFromReport(report, 'private')),
+      ...routeGroupCampsiteItems
+        .map((item) => campOpsCandidateFromGroupItem(item))
+        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate != null),
+    ],
+    [
+      establishedCampsitesRouteNearbyResults,
+      routeCommunityCampSites,
+      routeGroupCampsiteItems,
+      routePrivateCampsiteReports,
+    ],
   );
   const routeCatalogViewportFeatureCollection = useMemo(
     () => routeCatalogViewportResult?.featureCollection ?? EMPTY_ROUTE_CATALOG_VIEWPORT_FEATURE_COLLECTION,
@@ -14756,10 +14468,16 @@ const handleCreateRun = useCallback(() => {
             ]}
             activeOpacity={1}
             onPress={onClose}
+            accessible={false}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
           />
         )}
 
         <View
+          accessibilityViewIsModal
+          onAccessibilityEscape={onClose}
+          accessibilityLabel={`${title} popup`}
           style={[
             styles.mapPopupShell,
             snapToContent && styles.mapPopupShellSnapToContent,
@@ -14791,7 +14509,14 @@ const handleCreateRun = useCallback(() => {
           <View style={[styles.mapPopupHeader, snapToContent && styles.mapPopupHeaderSnapToContent]}>
             <View style={styles.mapPopupTitleRow}>
               <Ionicons name={icon} size={16} color={TACTICAL.amber} />
-              <Text style={styles.mapPopupTitle}>{title}</Text>
+              <Text
+                style={styles.mapPopupTitle}
+                accessibilityRole="header"
+                numberOfLines={2}
+                maxFontSizeMultiplier={1.6}
+              >
+                {title}
+              </Text>
             </View>
 
             <TouchableOpacity
@@ -14801,6 +14526,7 @@ const handleCreateRun = useCallback(() => {
               hitSlop={CLOSE_CONTROL_HIT_SLOP}
               accessibilityRole="button"
               accessibilityLabel={`Close ${title.toLowerCase()} popup`}
+              accessibilityHint="Returns to the Navigate map"
             >
               <Ionicons name="close" size={18} color={TACTICAL.textMuted} />
             </TouchableOpacity>
@@ -17232,7 +16958,6 @@ const mapTrailActive = useMemo(
 );
 
 const replayOverlayTop = MAP_TOP_CONTROL_ROW + FLOATING_PILL_HEIGHT + OVERLAY_GAP;
-const showInlineIntelPanel = false;
 const toolsPopupVisible = mapOverlayStartupReady && toolsMenuOpen;
 useEffect(() => {
   if (roadNavigation.query.trim().length > 0 && recentSearchesVisible) {
@@ -18147,7 +17872,8 @@ const routeBuilderCanSave =
   !routeBuilderHasPendingSnap &&
   !routeBuilderHasBlockedSnap &&
   canSaveRouteBuilderSegments(routeBuilderSavableSegments as FinalizableRouteBuilderSegment[]);
-const routeBuilderCanUndo = routeBuilderDraft.anchors.length > 0;
+const routeBuilderCanUndo = routeBuilderDraftHistoryRef.current.past.length > 0;
+const routeBuilderCanRedo = routeBuilderDraftHistoryRef.current.future.length > 0;
 const routeBuilderHasRouteGeometrySegments = routeBuilderSavableSegments.some(
   (segment) => segment.buildSource?.kind === 'ecs_route_geometry',
 );
@@ -18317,7 +18043,9 @@ const queueRouteBuilderFinalSnap = useCallback((segment: RouteBuilderSegmentData
 
   const signature = `${segment.id}:${routeBuilderFinalSnapSignature(segment)}:${mapboxAvailable ? 'mapbox' : 'local'}`;
   if (routeBuilderFinalSnapInFlightRef.current.has(signature)) return;
-  routeBuilderFinalSnapInFlightRef.current.add(signature);
+  const controller = new AbortController();
+  const generation = routeBuilderFinalSnapGenerationRef.current;
+  routeBuilderFinalSnapInFlightRef.current.set(signature, controller);
 
   if (mapboxAvailable) {
     setRouteBuilderSegments((current) =>
@@ -18345,12 +18073,26 @@ const queueRouteBuilderFinalSnap = useCallback((segment: RouteBuilderSegmentData
             candidate.id === segment.id &&
             routeBuilderFinalSnapSignature(candidate) === routeBuilderFinalSnapSignature(segment),
         ) ?? segment;
-      const mapboxMatch = mapboxAvailable
-        ? await fetchMapboxMapMatchingCandidate({
-            accessToken: mapToken,
-            coordinates: rawLine,
-          })
-        : null;
+      let mapboxMatch = null;
+      try {
+        mapboxMatch = mapboxAvailable
+          ? await fetchMapboxMapMatchingCandidate({
+              accessToken: mapToken,
+              coordinates: rawLine,
+              signal: controller.signal,
+            })
+          : null;
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        incrementECSPerformanceCounter('route_preview_guidance', 'route_snap_provider_failures');
+      }
+      if (
+        controller.signal.aborted ||
+        generation !== routeBuilderFinalSnapGenerationRef.current ||
+        routeBuilderFinalSnapInFlightRef.current.get(signature) !== controller
+      ) {
+        return;
+      }
       const finalized = finalizeRouteBuilderSegmentSnap({
         segment: latestSegment as FinalizableRouteBuilderSegment,
         mapboxMatch,
@@ -18370,7 +18112,9 @@ const queueRouteBuilderFinalSnap = useCallback((segment: RouteBuilderSegmentData
       setRouteBuilderSnapStatus(finalized.snapStatus ?? null);
       setRouteBuilderSnapMessage(finalized.snapMessage ?? null);
     } finally {
-      routeBuilderFinalSnapInFlightRef.current.delete(signature);
+      if (routeBuilderFinalSnapInFlightRef.current.get(signature) === controller) {
+        routeBuilderFinalSnapInFlightRef.current.delete(signature);
+      }
     }
   })();
 }, [liveNavigateServicesEnabled, mapToken]);
@@ -18692,11 +18436,14 @@ const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boole
   setRouteBuilderSegments([]);
   const emptyDraft = createNavigateRouteDraft();
   routeBuilderDraftRef.current = emptyDraft;
+  routeBuilderDraftHistoryRef.current = createNavigateRouteDraftHistory(emptyDraft);
   setRouteBuilderDraft(emptyDraft);
   setRouteBuilderActiveExtensionMode(false);
   setRouteBuilderSaveVisible(false);
   setRouteBuilderSaveName('');
   setRouteBuilderSaveNote('');
+  routeBuilderFinalSnapGenerationRef.current += 1;
+  for (const controller of routeBuilderFinalSnapInFlightRef.current.values()) controller.abort();
   routeBuilderFinalSnapInFlightRef.current.clear();
   setSelectedDispersedRouteLegIds([]);
   setSelectedRouteGeometrySegmentIds([]);
@@ -18897,6 +18644,15 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
     return null;
   }
 
+  const replacementSnapshot = options?.stage ? navigateRouteSessionStore.getSnapshot() : null;
+  if (isActiveGuidanceSnapshot(replacementSnapshot)) {
+    const canReplaceActiveGuidance = await confirmActiveGuidanceReplacementForLocalPreview(
+      options?.name?.trim() || 'Custom route',
+      null,
+    );
+    if (!canReplaceActiveGuidance) return null;
+  }
+
   try {
     const hasDispersedSegmentBuild = segmentsForSave.some(
       (segment) => segment.buildSource?.kind === 'dispersed_route_leg',
@@ -18949,14 +18705,18 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
     if (options?.stage) {
       routeStore.setActive(savedRoute.id);
       runStore.setActive(savedRun.id);
-      await endTrailNavigation();
-      await clearRoadDestination();
       const previewPayload = buildNavigationPayloadFromRun(savedRun);
       if (previewPayload) {
-        const stagedPayload = applyRouteGeometryPlanningEndpoint(
+        let stagedPayload = applyRouteGeometryPlanningEndpoint(
           previewPayload,
           options.routeGeometryStartEndpoint ?? null,
         );
+        if (isActiveGuidanceSnapshot(replacementSnapshot)) {
+          stagedPayload = markNavigationHandoffActiveGuidanceReplacementConfirmed(
+            stagedPayload,
+            replacementSnapshot,
+          );
+        }
         if (options.autoStart) {
           pendingAutoStartRouteIdRef.current = stagedPayload.id;
           setFollowUser(true);
@@ -18984,8 +18744,6 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
 }, [
   activeRun?.build_snapshot,
   applyExploreNavigationPayload,
-  clearRoadDestination,
-  endTrailNavigation,
   loadRuns,
   resetBuildRouteDraft,
   routeBuilderHasPendingSnap,
@@ -19270,15 +19028,27 @@ const undoLastRouteBuilderSegment = useCallback(() => {
     showToast('NO ROUTE POINT TO UNDO');
     return;
   }
-  const nextDraft = undoLastNavigateRouteAnchor(routeBuilderDraft);
-  applyRouteBuilderDraft(nextDraft);
+  const nextHistory = undoNavigateRouteDraftHistory(routeBuilderDraftHistoryRef.current);
+  routeBuilderDraftHistoryRef.current = nextHistory;
+  applyRouteBuilderDraft(nextHistory.present, { recordHistory: false });
   showToast('LAST ROUTE POINT UNDONE');
 }, [
   applyRouteBuilderDraft,
   routeBuilderCanUndo,
-  routeBuilderDraft,
   showToast,
 ]);
+
+const redoLastRouteBuilderSegment = useCallback(() => {
+  hapticCommand();
+  const nextHistory = redoNavigateRouteDraftHistory(routeBuilderDraftHistoryRef.current);
+  if (nextHistory === routeBuilderDraftHistoryRef.current) {
+    showToast('NO ROUTE POINT TO REDO');
+    return;
+  }
+  routeBuilderDraftHistoryRef.current = nextHistory;
+  applyRouteBuilderDraft(nextHistory.present, { recordHistory: false });
+  showToast('ROUTE POINT RESTORED');
+}, [applyRouteBuilderDraft, showToast]);
 
 const clearRouteBuilderDraft = useCallback(() => {
   hapticCommand();
@@ -19324,41 +19094,7 @@ const ensureSavedRouteAssetRun = useCallback((asset: SavedRouteAsset): ECSRun | 
 }, [activeRun?.build_snapshot, loadRuns, showToast]);
 
 const confirmLocalRoutePreviewCanReplaceActiveGuidance = useCallback(
-  async (targetTitle: string, targetRouteId: string | null | undefined): Promise<boolean> => {
-    const activeGuidance = navigateRouteSessionStore.getSnapshot();
-    if (!isActiveGuidanceSnapshot(activeGuidance)) return true;
-
-    if (
-      targetRouteId &&
-      (targetRouteId === activeGuidance.routeId || targetRouteId === activeGuidance.sessionId)
-    ) {
-      return false;
-    }
-
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (value: boolean) => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-
-      Alert.alert(
-        'Active guidance is running',
-        `Previewing "${targetTitle}" will end the current guidance${
-          activeGuidance.routeTitle ? ` for "${activeGuidance.routeTitle}"` : ''
-        }. Current turn-by-turn directions will be cleared. Continue?`,
-        [
-          { text: 'Keep Current', style: 'cancel', onPress: () => finish(false) },
-          { text: 'Preview New Route', style: 'destructive', onPress: () => finish(true) },
-        ],
-        {
-          cancelable: true,
-          onDismiss: () => finish(false),
-        },
-      );
-    });
-  },
+  confirmActiveGuidanceReplacementForLocalPreview,
   [],
 );
 
@@ -19682,6 +19418,10 @@ const confirmPreflightLaunch = useCallback(() => {
     }
 
     hapticCommand();
+    const preflightSourceRoute = preflightRouteAsset.routeId
+      ? routeStore.getById(preflightRouteAsset.routeId)
+      : null;
+    const preflightLifecycle = preflightSourceRoute?.lifecycle ?? preflightRun?.lifecycle ?? null;
     const existingRecord = expeditionStateStore.getCurrentExpedition();
     const activeOrResumedRecord =
       existingRecord?.state === 'active'
@@ -19689,6 +19429,7 @@ const confirmPreflightLaunch = useCallback(() => {
         : existingRecord?.state === 'paused'
           ? expeditionStateStore.resumeExpedition({ userId: user?.email ?? null }) ?? existingRecord
           : expeditionStateStore.beginExpedition({
+              idempotencyKey: `preflight-launch:${preflightPacket.id}:${vehicleId}`,
               activeVehicleId: vehicleId,
               vehicleName: preflightPacket.readiness.vehicleLabel,
               startFuelLevel: navigateVehicleContext.resourceProfile.currentFuelPercent ?? null,
@@ -19696,6 +19437,12 @@ const confirmPreflightLaunch = useCallback(() => {
               latitude: userLocation?.lat ?? gps.position?.latitude ?? null,
               longitude: userLocation?.lng ?? gps.position?.longitude ?? null,
               userId: user?.email ?? null,
+              routeAssetId: preflightRouteAsset.id,
+              tripPlanId: preflightLifecycle?.identity.tripPlanId ?? null,
+              offlinePackageId: preflightLifecycle?.identity.offlinePackageId ?? null,
+              runId: preflightRun?.id ?? preflightRouteAsset.runId,
+              lifecycle: preflightLifecycle,
+              transitionCause: 'navigate',
             });
 
     if (
@@ -19720,6 +19467,7 @@ const confirmPreflightLaunch = useCallback(() => {
       runId: preflightRun?.id ?? preflightRouteAsset.runId,
       vehicleId,
       vehicleName: preflightPacket.readiness.vehicleLabel,
+      lifecycle: activeOrResumedRecord.lifecycle ?? preflightLifecycle,
     });
 
     setPreflightLaunchConfirmVisible(false);
@@ -20644,7 +20392,7 @@ const toggleRemotenessOverlay = useCallback(() => {
     });
     setDispersedCampingUiState((current) => setCampLayerEnabled(current, next));
     if (!next) {
-      dispersedCampingFetchCoordinatorRef.current.cancel();
+      navigateMapLayerCoordinatorRef.current.cancel('dispersed_camping', 'operator_disabled');
       if (dispersedCampingFetchTimerRef.current) {
         clearTimeout(dispersedCampingFetchTimerRef.current);
         dispersedCampingFetchTimerRef.current = null;
@@ -20671,7 +20419,7 @@ const toggleRemotenessOverlay = useCallback(() => {
     });
     setEstablishedCampgroundsUiState((current) => setCampLayerEnabled(current, next));
     if (!next) {
-      establishedCampgroundsFetchCoordinatorRef.current.cancel();
+      navigateMapLayerCoordinatorRef.current.cancel('established_campgrounds', 'operator_disabled');
       if (establishedCampgroundsFetchTimerRef.current) {
         clearTimeout(establishedCampgroundsFetchTimerRef.current);
         establishedCampgroundsFetchTimerRef.current = null;
@@ -21067,11 +20815,6 @@ const executeAssistSurfaceAction = useCallback((surface: AssistSurface, rule?: A
   openWeatherAlertDetail,
   showToast,
 ]);
-
-const handleAssistActionPress = useCallback((surface: unknown, rule?: unknown | null) => {
-  if (typeof surface !== 'string') return;
-  executeAssistSurfaceAction(surface as AssistSurface, (rule as AutonomousAssistRule | null | undefined) ?? null);
-}, [executeAssistSurfaceAction]);
 
 const handleRoadOverlayToggleSteps = useCallback(() => {
   setRoadStepListExpanded(!roadStepListExpanded);
@@ -21673,7 +21416,7 @@ const navigateMapMotion = useMemo(() => {
   const motion = resolveMapSurfaceMotionState({
     surface: 'navigate',
     isFocused,
-    hasActiveGuidance: routeLifecycleState.phase === 'navigating',
+    hasActiveGuidance: routeOperationState.phase === 'active',
   });
 
   if (!destinationSearchMapFrozen) return motion;
@@ -21685,7 +21428,7 @@ const navigateMapMotion = useMemo(() => {
     allowCameraFollow: false,
     allowDynamicCamera: false,
   };
-}, [destinationSearchMapFrozen, isFocused, routeLifecycleState.phase]);
+}, [destinationSearchMapFrozen, isFocused, routeOperationState.phase]);
 
 const mapRendererUserLocation = destinationSearchMapFrozen
   ? null
@@ -21767,6 +21510,19 @@ const selectedConvoyMarker = useMemo(
     : null,
   [navigateConvoyMarkers, selectedConvoyMemberId],
 );
+const selectedConvoySourceTruth = useMemo(
+  () => selectedConvoyMarker
+    ? buildConvoyLocationSourceTruthBinding({
+        memberId: selectedConvoyMarker.memberId,
+        sourceLabel: selectedConvoyMarker.sourceLabel,
+        observedAt: selectedConvoyMarker.observedAt,
+        accuracyMeters: selectedConvoyMarker.accuracyMeters,
+        stale: selectedConvoyMarker.isStale,
+        offline: selectedConvoyMarker.isOffline,
+      })
+    : null,
+  [selectedConvoyMarker],
+);
 const selectedDispatchPingMarker = useMemo(
   () => selectedDispatchPingEventId
     ? navigateDispatchPingMarkers.find((marker) => marker.eventId === selectedDispatchPingEventId) ?? null
@@ -21779,6 +21535,65 @@ const selectedDispatchPingEvent = useMemo(
     : null,
   [dispatchEvents, selectedDispatchPingEventId],
 );
+useEffect(() => {
+  const weatherKind = operationalWeather.snapshot.status.kind;
+  const weatherSourceState =
+    weatherKind === 'live' || weatherKind === 'ready'
+      ? 'live'
+      : weatherKind === 'cached'
+        ? 'cached'
+        : weatherKind === 'stale'
+          ? 'stale'
+          : weatherKind === 'offline'
+            ? 'offline'
+            : weatherKind === 'unavailable'
+              ? 'unavailable'
+              : 'unknown';
+  const convoySourceState = navigateConvoyMarkers.length === 0
+    ? 'unknown'
+    : navigateConvoyMarkers.some((marker) => marker.isOffline)
+      ? 'offline'
+      : navigateConvoyMarkers.some((marker) => marker.isStale || marker.isDelayed)
+        ? 'stale'
+        : 'live';
+  const coordinator = navigateMapLayerCoordinatorRef.current;
+  coordinator.syncLocalLayer({
+    layer: 'weather',
+    enabled: true,
+    itemCount: operationalWeather.snapshot.alerts?.length ?? 0,
+    sourceState: weatherSourceState,
+    renderPriority: 'low',
+  });
+  coordinator.syncLocalLayer({
+    layer: 'hazards',
+    enabled: showTiltAlertZones,
+    itemCount: tiltAlertMarkers.length,
+    sourceState: tiltAlertMarkers.length > 0 ? 'cached' : 'unknown',
+    renderPriority: 'normal',
+  });
+  coordinator.syncLocalLayer({
+    layer: 'convoy',
+    enabled: navigateConvoyOverlayEnabled,
+    itemCount: navigateConvoyMarkers.length,
+    sourceState: convoySourceState,
+    renderPriority: 'high',
+  });
+  coordinator.syncLocalLayer({
+    layer: 'dispatch_pings',
+    enabled: navigateConvoyOverlayEnabled,
+    itemCount: navigateDispatchPingMarkers.length,
+    sourceState: navigateDispatchPingMarkers.length > 0 ? 'live' : 'unknown',
+    renderPriority: 'critical',
+  });
+}, [
+  navigateConvoyMarkers,
+  navigateConvoyOverlayEnabled,
+  navigateDispatchPingMarkers.length,
+  operationalWeather.snapshot.alerts?.length,
+  operationalWeather.snapshot.status.kind,
+  showTiltAlertZones,
+  tiltAlertMarkers.length,
+]);
 const navigateMapSelectionVisible = !!(
   selectedDroppedPin ||
   selectedCampIntel ||
@@ -22000,6 +21815,7 @@ const mapRendererElement = useMemo(() => (
     followUser={mapRendererFollowUser}
     userLocation={mapRendererUserLocation}
     motionPriority={navigateMapMotion.motionPriority}
+    performanceSurface="navigate"
     liveMapDisabled={activeRerouteMapStandby}
     interactive={!destinationSearchMapFrozen}
     segments={mapSegmentFeatures}
@@ -22969,6 +22785,26 @@ const stableMapSurface = useMemo(() => {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
+                  styles.routeBuilderStatusAction,
+                  !routeBuilderCanRedo && styles.routeBuilderStatusActionDisabled,
+                ]}
+                onPress={redoLastRouteBuilderSegment}
+                disabled={!routeBuilderCanRedo}
+                activeOpacity={0.82}
+                accessibilityRole="button"
+                accessibilityLabel="Redo last Build Route point"
+              >
+                <Text
+                  style={[
+                    styles.routeBuilderStatusActionText,
+                    !routeBuilderCanRedo && styles.routeBuilderStatusActionTextDisabled,
+                  ]}
+                >
+                  REDO
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
                   styles.routeCatalogSelectionAction,
                   (!selectedRouteCatalogViewportFeature.properties.guidanceReady ||
                     !!selectedRouteCatalogViewportBuildUnavailableReason) &&
@@ -23017,61 +22853,6 @@ const stableMapSurface = useMemo(() => {
         </View>
       ) : null}
       </View>
-
-      {showInlineIntelPanel && (
-        <View style={styles.intelPanel}>
-          {surfacedMissionBrief && (
-            <MissionBriefCard
-              brief={visibleMissionBrief}
-              compact
-              onAssistActionPress={handleAssistActionPress}
-            />
-          )}
-
-          {weatherSeveritySummary && (
-            <TouchableOpacity
-              style={[
-                styles.weatherWarningPill,
-                {
-                  borderColor: weatherSeveritySummary.color + '55',
-                  backgroundColor: weatherSeveritySummary.color + '18',
-                },
-              ]}
-              onPress={openRouteWeatherDetail}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="warning-outline" size={13} color={weatherSeveritySummary.color} />
-              <Text
-                style={[
-                  styles.weatherWarningPillText,
-                  { color: weatherSeveritySummary.color },
-                ]}
-              >
-                {weatherSeveritySummary.label}
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          <RouteAnalysisPanel
-            intelligence={routeIntelligence}
-            constraintEnvelope={vehicleRouteConstraintEnvelope}
-            visible
-          />
-          <ResourceForecastPanel forecast={resourceForecast} visible />
-          <TerrainAnalysisPanel intelligence={terrainIntelligence} visible />
-
-          <WeatherIntelPanel
-            latitude={weatherLocation?.lat ?? null}
-            longitude={weatherLocation?.lng ?? null}
-            autoFetch
-            compact
-            units="imperial"
-            weatherSnapshot={operationalWeather.snapshot}
-            onRefreshWeather={operationalWeather.refresh}
-            trailAssessmentActive={navigateTrailAssessmentActive}
-          />
-        </View>
-      )}
 
       <View
         style={[
@@ -23605,7 +23386,6 @@ const stableMapSurface = useMemo(() => {
   longPressContext,
   longPressInfoExpanded,
   activeReadinessMinimized,
-  navigateTrailAssessmentActive,
   pendingStartReviewReasons,
   mvumOverlayEnabled,
   toggleMvumOverlay,
@@ -23768,10 +23548,12 @@ const stableMapSurface = useMemo(() => {
   routeBuilderStartDisabledReason,
   routeBuilderCanPlanGeometry,
   routeBuilderCanUndo,
+  routeBuilderCanRedo,
   finishRouteBuilder,
   routeToRouteBuilder,
   handlePlanRouteBuilderDraft,
   undoLastRouteBuilderSegment,
+  redoLastRouteBuilderSegment,
   clearRouteBuilderDraft,
   cancelRouteBuilder,
   toolsMenuOpen,
@@ -23790,18 +23572,10 @@ const stableMapSurface = useMemo(() => {
   toggleToolsPopup,
   toggleCampLayerMenu,
   handleCampsiteLayerToggle,
-  showInlineIntelPanel,
-  surfacedMissionBrief,
-  handleAssistActionPress,
-  weatherSeveritySummary,
   ACTIVE_GUIDANCE_RIGHT_INSET,
   routeBottomRightInset,
   WEATHER_ALERT_TOP,
   ROUTE_WEATHER_TOP,
-  routeIntelligence,
-  vehicleRouteConstraintEnvelope,
-  resourceForecast,
-  terrainIntelligence,
   mapRouteIndicator,
   routeIndicatorVisible,
   routeIndicatorAnchoredToTopToolbox,
@@ -23832,16 +23606,11 @@ const stableMapSurface = useMemo(() => {
   TOOLS_TRIGGER_BOTTOM,
   TOOLS_TRIGGER_RIGHT,
   TOOLS_TRIGGER_SIZE,
-  operationalWeather.refresh,
-  operationalWeather.snapshot,
   destinationSearchMapOccluderBottom,
   roadPreviewLoading,
   roadSession,
   roadStepListExpanded,
   selectRoadRouteAlternative,
-  weatherLocation?.lat,
-  weatherLocation?.lng,
-  visibleMissionBrief,
   dispersedCampingEligibilityLayerAvailable,
   dispersedCampingEligibilityEnabled,
   dispersedCampingDiagnostic,
@@ -24309,6 +24078,7 @@ const stableMapSurface = useMemo(() => {
 
   return (
   <View style={styles.container}>
+  <ECSOperationalAnnouncer event={routeOperationAnnouncement} announceInitial />
   {/* HEADER */}
   {!effectiveMapExpanded && (
       <View onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
@@ -24536,7 +24306,7 @@ const stableMapSurface = useMemo(() => {
           onReturnToDispatch={() => {
             const returnRoute = dispatchContextHandoffTarget.returnRoute;
             setDispatchContextHandoffTarget(null);
-            router.push(returnRoute as any);
+            returnSingleFlight(returnRoute);
           }}
         />
       ) : null}
@@ -24590,6 +24360,15 @@ const stableMapSurface = useMemo(() => {
           <Text style={styles.dispatchMapOverlayMeta} numberOfLines={2}>
             {selectedConvoyMarker.sourceLabel} | {selectedConvoyMarker.lastUpdatedLabel}
           </Text>
+          {selectedConvoySourceTruth ? (
+            <SourceTruthInspectorTrigger
+              source={selectedConvoySourceTruth.ref}
+              sources={selectedConvoySourceTruth.sources}
+              policyKey={selectedConvoySourceTruth.policyKey}
+              dependencies={selectedConvoySourceTruth.dependencies}
+              label="GPS source"
+            />
+          ) : null}
           {selectedConvoyMarker.staleReason ? (
             <Text style={styles.dispatchMapOverlayWarning} numberOfLines={2}>
               {selectedConvoyMarker.staleReason}
@@ -24919,6 +24698,10 @@ const stableMapSurface = useMemo(() => {
                   ]}
                   onPress={() => handleMapStyleModeChange(key)}
                   activeOpacity={0.85}
+                  hitSlop={{ top: 8, bottom: 8, left: 2, right: 2 }}
+                  accessibilityRole="radio"
+                  accessibilityLabel={`${label} map style`}
+                  accessibilityState={{ checked: isActive }}
                 >
                   <Text
                     style={[
@@ -26392,6 +26175,7 @@ const stableMapSurface = useMemo(() => {
             timeline={validNavigateRouteConfidenceTimeline}
             selectedItemId={selectedRouteConfidenceTimelineItemId}
             onSelectItem={handleRouteConfidenceTimelineItemPress}
+            formatMeasure={formatNavMeters}
           />
         ) : null}
 
@@ -26846,6 +26630,7 @@ const stableMapSurface = useMemo(() => {
     },
     connectivityStatus: navigateConnectivity.status,
     plannedCampId: campsiteCandidates?.campOps?.routeEndpointPlan?.selectedEndpointIds?.[0] ?? null,
+    additionalCandidates: campOpsRouteSourceCandidates,
   }}
   onClose={() => closeTopPopup('safeEndpoint')}
   onReturnToActivePlan={closeToolsPopup}
@@ -30518,81 +30303,6 @@ intelEmptyText: {
   color: TACTICAL.textMuted,
   fontSize: 11,
   lineHeight: 16,
-},
-
-routeConfidenceTimelinePanel: {
-  borderRadius: 16,
-  borderWidth: 1,
-  borderColor: 'rgba(196,138,44,0.14)',
-  backgroundColor: 'rgba(12,16,20,0.9)',
-  paddingHorizontal: 14,
-  paddingVertical: 14,
-  gap: 10,
-},
-
-routeConfidenceTimelineHeader: {
-  flexDirection: 'row',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: 10,
-},
-
-routeConfidenceTimelineTitleBlock: {
-  flex: 1,
-  minWidth: 0,
-  gap: 3,
-},
-
-routeConfidenceTimelineSubtitle: {
-  ...TYPO.B2,
-  color: TACTICAL.textMuted,
-  fontSize: 11,
-  lineHeight: 15,
-},
-
-routeConfidenceTimelineBadge: {
-  borderRadius: 999,
-  borderWidth: 1,
-  borderColor: 'rgba(101,212,255,0.3)',
-  backgroundColor: 'rgba(101,212,255,0.12)',
-  paddingHorizontal: 8,
-  paddingVertical: 5,
-},
-
-routeConfidenceTimelineBadgeText: {
-  ...TYPO.U2,
-  color: '#65D4FF',
-  fontSize: 7.5,
-  letterSpacing: 1,
-},
-
-routeConfidenceTimelineSafetyCopy: {
-  ...TYPO.B2,
-  color: TACTICAL.textMuted,
-  fontSize: 10.5,
-  lineHeight: 15,
-},
-
-routeConfidenceTimelineTrack: {
-  minHeight: 28,
-  flexDirection: 'row',
-  gap: 4,
-},
-
-routeConfidenceTimelineSpan: {
-  minWidth: 18,
-  borderRadius: 8,
-  borderWidth: 1,
-},
-
-routeConfidenceTimelineDetail: {
-  borderRadius: 12,
-  borderWidth: 1,
-  borderColor: 'rgba(255,255,255,0.08)',
-  backgroundColor: 'rgba(0,0,0,0.18)',
-  paddingHorizontal: 10,
-  paddingVertical: 9,
-  gap: 5,
 },
 
 intelSummaryPillRow: {

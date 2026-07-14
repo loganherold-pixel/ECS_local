@@ -6,6 +6,11 @@ import {
   type RouteCoordinate,
 } from '../map/routeGeometryUtils';
 import { normalizeRouteGeometryLineString } from '../routeGeometryLifecycle';
+import {
+  canonicalJourneyEntityId,
+  mergeJourneyLinkage,
+  readJourneyLinkageFromMetadata,
+} from '../lifecycle/routeTripExpeditionLifecycle';
 import type {
   BuildTripPlanArgs,
   CampCandidate,
@@ -440,6 +445,7 @@ function buildRouteSummary(route: TripBuilderRouteInput, routeContext?: TripBuil
   );
   const fallbackConfidence = routeDataConfidence(route, coordinates, distanceMiles);
   const contextTier = routeContextConfidenceTier(routeContext, contextCoordinates.length >= 2 || coordinates.length >= 2);
+  const routeLifecycle = readJourneyLinkageFromMetadata(route.routeMetadata);
 
   return {
     coordinates,
@@ -460,6 +466,8 @@ function buildRouteSummary(route: TripBuilderRouteInput, routeContext?: TripBuil
       routeDataConfidence: confidenceFromRouteContextTier(fallbackConfidence, contextTier),
       routeContextConfidence: routeContext ? contextTier : null,
       routeContextStatus: routeContext?.status ?? null,
+      routeAssetId: routeLifecycle?.identity.routeAssetId ?? null,
+      provenance: routeLifecycle?.routeProvenance ?? null,
     },
   };
 }
@@ -1131,6 +1139,8 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
   const priorities = args.input.priorities ?? [];
   const { summary: routeSummary, coordinates: routeCoordinates } = buildRouteSummary(args.route, args.routeContext);
   const routeId = routeSummary.routeId;
+  const routeLifecycle = readJourneyLinkageFromMetadata(args.route.routeMetadata);
+  const tripPlanId = canonicalJourneyEntityId('trip_plan', routeId);
   const tripDays = plannedDaysForTrip(args.input.tripType, routeSummary.estimatedDays);
   const needsCamping = tripTypeNeedsCamping(args.input.tripType, priorities);
   const routeDerivedCampCandidates = deriveCampCandidatesFromRoute(args.route, routeId);
@@ -1358,7 +1368,7 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
   }
 
   const plan: TripPlan = {
-    id: `trip-plan-${routeId}`,
+    id: tripPlanId,
     generatedAt,
     route: routeSummary,
     tripType: args.input.tripType,
@@ -1383,6 +1393,17 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
     warnings,
     readinessReference: args.readiness ?? null,
     smartResupplyPlan: null,
+    lifecycle: mergeJourneyLinkage(routeLifecycle, {
+      phase: 'planned',
+      identity: { tripPlanId },
+      activeVehicleId: args.vehicleProfile?.id ?? routeLifecycle?.activeVehicleId ?? null,
+      campIds: campsiteCandidates.map((candidate) => candidate.id),
+      waypointIds: normalizedStops
+        .filter((stop) => stop.type === 'waypoint' || stop.type === 'scenic_stop')
+        .map((stop) => stop.id),
+      bailoutIds: exitPoints.map((point) => point.id),
+      updatedAt: generatedAt,
+    }),
   };
 
   return {

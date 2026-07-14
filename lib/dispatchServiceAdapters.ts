@@ -64,6 +64,7 @@ export interface DispatchTeamRosterLoadResult {
 export interface DispatchActiveExpeditionAdapter {
   getActiveExpedition(): DispatchActiveExpeditionContext;
   toLinkedContext(expedition: DispatchActiveExpeditionContext): DispatchLinkedContext;
+  subscribe(listener: (expedition: DispatchActiveExpeditionContext) => void): () => void;
 }
 
 export interface DispatchTeamRosterAdapter {
@@ -269,7 +270,10 @@ export function getDispatchPersistenceDefaults() {
       pings: [],
       queueItems: [],
       assignments: [],
+      assistRequests: [],
+      acknowledgments: [],
       timelineEvents: [],
+      offlineActions: [],
     };
   }
 
@@ -277,7 +281,10 @@ export function getDispatchPersistenceDefaults() {
     pings: [],
     queueItems: [],
     assignments: [],
+    assistRequests: [],
+    acknowledgments: [],
     timelineEvents: [],
+    offlineActions: [],
   };
 }
 
@@ -430,6 +437,11 @@ export function createDefaultDispatchAdapters(
   const activeExpedition: DispatchActiveExpeditionAdapter = {
     getActiveExpedition,
     toLinkedContext: activeExpeditionToLinkedContext,
+    subscribe(listener) {
+      return expeditionStateStore.subscribe(() => {
+        listener(getActiveExpedition());
+      });
+    },
   };
 
   const adapters: DispatchServiceAdapters = {

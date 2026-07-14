@@ -61,6 +61,7 @@ export function buildDispersedCampingRegionFromSource(
     permitRequired: source.permitRequired,
     fireRestrictionKnown,
     seasonalAccessKnown: accessKnown,
+    closureActive: source.knownClosure,
     closureKnown,
   };
 }
@@ -96,6 +97,7 @@ export function toDispersedCampingFeatureCollection(
         permitRequired: region.permitRequired,
         fireRestrictionKnown: region.fireRestrictionKnown,
         seasonalAccessKnown: region.seasonalAccessKnown,
+        closureActive: region.closureActive,
         closureKnown: region.closureKnown,
         routeNearby: routeNearbyRegionIds.has(region.id),
         distanceFromRouteMiles: options.routeDistanceByRegionId?.[region.id],

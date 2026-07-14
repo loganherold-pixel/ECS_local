@@ -118,12 +118,21 @@ function createBackend({ members = makeMembers(), locations = [], available = tr
   return backend;
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 async function main() {
   const {
     ConvoyRealtimeService,
     classifyConvoyLocationStaleness,
     normalizeConvoyLocationSnapshot,
     CONVOY_LOCATION_FRESH_UNDER_MS,
+    CONVOY_LOCATION_MAX_FUTURE_SKEW_MS,
     CONVOY_LOCATION_WATCH_AFTER_MS,
     CONVOY_LOCATION_STALE_AFTER_MS,
   } = require(servicePath);
@@ -171,6 +180,13 @@ async function main() {
   assert.strictEqual(stale.staleness, 'stale', 'after stale threshold should be stale.');
   assert.strictEqual(stale.isStale, true);
 
+  const futureDated = classifyConvoyLocationStaleness(
+    isoOffset(now, CONVOY_LOCATION_MAX_FUTURE_SKEW_MS + 1000),
+    now,
+  );
+  assert.strictEqual(futureDated.staleness, 'stale', 'future-dated fixes beyond clock skew should be stale.');
+  assert.ok(futureDated.staleReason.includes('ahead of the device clock'));
+
   const mapReady = normalizeConvoyLocationSnapshot(makeMembers(), [
     makeLocation('lead-member', { latitude: 39.01, longitude: -120.01 }),
     makeLocation('missing-member', { latitude: 39.99, longitude: -120.99 }),
@@ -191,7 +207,8 @@ async function main() {
   const store = createConvoyTrackingStore(updateService);
   const seenSnapshots = [];
   const unsubscribeStore = store.subscribe(() => seenSnapshots.push(store.getSnapshot()));
-  await store.subscribeToConvoyLocations('convoy-1');
+  await store.subscribeToConvoyLocations('convoy-1', 'dispatch-panel');
+  await store.subscribeToConvoyLocations('convoy-1', 'navigate-overlay');
   assert.strictEqual(store.getSnapshot().members[0].latitude, 38.1);
   assert.strictEqual(store.getSnapshot().connectionStatus, 'connecting');
 
@@ -232,10 +249,58 @@ async function main() {
     'deployment-specific degraded realtime should preserve the supplied backend guidance.',
   );
 
-  store.stopConvoyLocationSubscription();
+  store.stopConvoyLocationSubscription('dispatch-panel');
+  assert.strictEqual(
+    updateBackend.unsubscribed,
+    false,
+    'Releasing Dispatch must not tear down Navigate\'s shared convoy subscription.',
+  );
+  store.stopConvoyLocationSubscription('navigate-overlay');
   assert.strictEqual(updateBackend.unsubscribed, true, 'store cleanup should unsubscribe realtime channel.');
   assert.strictEqual(store.getSnapshot().connectionStatus, 'disconnected');
   unsubscribeStore();
+
+  const convoyA = deferred();
+  const convoyB = deferred();
+  const staleSubscriptions = [];
+  const staleResponseService = {
+    fetchInitialConvoyLocations(convoyId) {
+      return convoyId === 'convoy-a' ? convoyA.promise : convoyB.promise;
+    },
+    subscribeToConvoyLocations(convoyId) {
+      staleSubscriptions.push(convoyId);
+      return { unsubscribe() {} };
+    },
+  };
+  const staleResponseStore = createConvoyTrackingStore(staleResponseService);
+  const convoyAFlight = staleResponseStore.subscribeToConvoyLocations('convoy-a', 'dispatch-panel');
+  const convoyBFlight = staleResponseStore.subscribeToConvoyLocations('convoy-b', 'navigate-overlay');
+  const convoyBMembers = makeMembers().map((member) => ({ ...member, convoy_id: 'convoy-b' }));
+  const convoyBLocations = [
+    { ...makeLocation('lead-member', { latitude: 41.2 }), convoy_id: 'convoy-b' },
+  ];
+  convoyB.resolve({
+    ok: true,
+    data: {
+      members: convoyBMembers,
+      locations: convoyBLocations,
+      snapshot: normalizeConvoyLocationSnapshot(convoyBMembers, convoyBLocations),
+    },
+  });
+  await convoyBFlight;
+  convoyA.resolve({
+    ok: true,
+    data: {
+      members: makeMembers(),
+      locations: [makeLocation('lead-member', { latitude: 30.1 })],
+      snapshot: normalizeConvoyLocationSnapshot(makeMembers(), [makeLocation('lead-member', { latitude: 30.1 })]),
+    },
+  });
+  await convoyAFlight;
+  assert.strictEqual(staleResponseStore.getSnapshot().convoyId, 'convoy-b');
+  assert.strictEqual(staleResponseStore.getSnapshot().members[0].latitude, 41.2);
+  assert.deepStrictEqual(staleSubscriptions, ['convoy-b'], 'Stale convoy fetches must not create a realtime subscription.');
+  staleResponseStore.stopConvoyLocationSubscription();
 
   const source = fs.readFileSync(servicePath, 'utf8');
   assert.ok(

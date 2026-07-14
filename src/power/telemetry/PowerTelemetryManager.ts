@@ -32,7 +32,7 @@ import {
 } from "../types/PowerTelemetry";
 import { ecsTelemetryStore } from "../../telemetry/ECSTelemetryStore";
 import { canonicalPowerTelemetryToEcsTelemetryEvents } from "../../telemetry/telemetryAdapters";
-import { powerSampleBuffer } from "./PowerSampleBuffer";
+import { PowerSampleBuffer, powerSampleBuffer } from "./PowerSampleBuffer";
 import type { PowerSample } from "./PowerSampleBuffer";
 import { detectLoadEvents } from "../detect/loadDetection";
 import { powerEventsStore } from "../detect/powerEventsStore";
@@ -127,6 +127,7 @@ type TelemetryByDeviceSubscriber = (telemetryByDeviceId: Record<string, PowerTel
 // ── Detection interval (Phase 3I-2) ────────────────────────────────────
 const DETECTION_INTERVAL_MS = 10_000; // run detector every 10 s
 const DETECTION_WINDOW_MS = 10 * 60_000; // analyse last 10 min of samples
+export const MAX_POWER_TELEMETRY_DEVICE_BUFFERS = 8;
 export const POWER_TELEMETRY_UI_UPDATE_MS = BLU_TELEMETRY_UI_UPDATE_MS;
 
 // ── Manager class ───────────────────────────────────────────────────────
@@ -142,6 +143,7 @@ class PowerTelemetryManager {
   private deviceSubscribers: Set<TelemetryByDeviceSubscriber> = new Set();
   private notifyTimer: ReturnType<typeof setTimeout> | null = null;
   private lastNotifyAt = 0;
+  private sampleBuffersByDeviceId = new Map<string, PowerSampleBuffer>();
 
   // ── Phase 3I-2: load detection interval ─────────────────────────────
   private detectionTimer: ReturnType<typeof setInterval> | null = null;
@@ -192,6 +194,7 @@ class PowerTelemetryManager {
       }
 
       this.currentByDeviceId.delete(deviceId);
+      this.sampleBuffersByDeviceId.delete(deviceId);
       ecsTelemetryStore.markDeviceUnavailable(
         deviceId,
         'power_device',
@@ -213,6 +216,8 @@ class PowerTelemetryManager {
     const currentDevices = Array.from(this.currentByDeviceId.values());
     this.current = null;
     this.currentByDeviceId.clear();
+    this.sampleBuffersByDeviceId.clear();
+    powerSampleBuffer.clear();
     this.stopDetection();
     for (const telemetry of currentDevices) {
       ecsTelemetryStore.markDeviceUnavailable(
@@ -262,8 +267,22 @@ class PowerTelemetryManager {
     const deviceId = partial.device?.id ?? this.current?.device?.id ?? 'unpaired';
     const currentForDevice = this.currentByDeviceId.get(deviceId) ?? null;
 
+    if (
+      currentForDevice?.source === 'ble' &&
+      currentForDevice.isLive === true &&
+      currentForDevice.flags?.stale !== true &&
+      partial.source === 'cloud'
+    ) {
+      return;
+    }
+
     let merged: PowerTelemetry;
-    if (currentForDevice === null) {
+    const transportChanged = Boolean(
+      currentForDevice &&
+      partial.source &&
+      currentForDevice.source !== partial.source,
+    );
+    if (currentForDevice === null || transportChanged) {
       // First reading — initialise with safe defaults, then merge
       const skeleton: PowerTelemetry = {
         timestamp: Date.now(),
@@ -350,6 +369,15 @@ class PowerTelemetryManager {
     return Object.fromEntries(this.currentByDeviceId.entries());
   }
 
+  getSampleBufferStats(): { deviceCount: number; sampleCountByDeviceId: Record<string, number> } {
+    return {
+      deviceCount: this.sampleBuffersByDeviceId.size,
+      sampleCountByDeviceId: Object.fromEntries(
+        Array.from(this.sampleBuffersByDeviceId.entries()).map(([deviceId, buffer]) => [deviceId, buffer.length]),
+      ),
+    };
+  }
+
   /**
    * Return the connection state from the attached connector, or
    * `"idle"` if no connector is attached.
@@ -384,6 +412,21 @@ class PowerTelemetryManager {
     };
 
     powerSampleBuffer.push(sample);
+    const deviceId = telemetry?.device?.id;
+    if (!deviceId) return;
+    let deviceBuffer = this.sampleBuffersByDeviceId.get(deviceId);
+    if (!deviceBuffer) {
+      if (this.sampleBuffersByDeviceId.size >= MAX_POWER_TELEMETRY_DEVICE_BUFFERS) {
+        const oldestDeviceId = this.sampleBuffersByDeviceId.keys().next().value as string | undefined;
+        if (oldestDeviceId) this.sampleBuffersByDeviceId.delete(oldestDeviceId);
+      }
+      deviceBuffer = new PowerSampleBuffer();
+      this.sampleBuffersByDeviceId.set(deviceId, deviceBuffer);
+    } else {
+      this.sampleBuffersByDeviceId.delete(deviceId);
+      this.sampleBuffersByDeviceId.set(deviceId, deviceBuffer);
+    }
+    deviceBuffer.push(sample);
   }
 
   private notifySubscribers(options: { immediate?: boolean } = {}): void {
@@ -462,11 +505,16 @@ class PowerTelemetryManager {
    * Skips detection entirely if the most recent sample is flagged stale.
    */
   private runDetection(): void {
-    // Guard: skip if latest sample is stale
-    const latest = powerSampleBuffer.latest();
+    const currentDeviceId = this.current?.device?.id;
+    const sampleBuffer = currentDeviceId
+      ? this.sampleBuffersByDeviceId.get(currentDeviceId)
+      : null;
+    // Guard: skip if the active device has no current or usable sample.
+    if (!sampleBuffer) return;
+    const latest = sampleBuffer?.latest();
     if (!latest || latest.stale) return;
 
-    const samples = powerSampleBuffer.getWindow(DETECTION_WINDOW_MS);
+    const samples = sampleBuffer.getWindow(DETECTION_WINDOW_MS);
     if (samples.length < 5) return; // not enough data
 
     try {

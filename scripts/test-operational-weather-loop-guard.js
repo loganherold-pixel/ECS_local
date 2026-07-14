@@ -59,8 +59,10 @@ assertIncludes(
   'const existing = operationalWeatherHookRequests.get(requestKey);\n  if (existing) {',
   'Operational weather should join same-key in-flight requests even for concurrent forced refreshes.',
 );
-assertIncludes(
-  'operationalWeatherHookRequests.set(requestKey, request);\n\n  fetchSharedWeatherForCoordinates(',
+const inFlightRegistrationIndex = source.indexOf('operationalWeatherHookRequests.set(requestKey, request);');
+const sharedWeatherFetchIndex = source.indexOf('fetchSharedWeatherForCoordinates(', inFlightRegistrationIndex);
+assert.ok(
+  inFlightRegistrationIndex >= 0 && sharedWeatherFetchIndex > inFlightRegistrationIndex,
   'Operational weather should register the shared in-flight promise before invoking the shared weather service.',
 );
 assertNotIncludes(

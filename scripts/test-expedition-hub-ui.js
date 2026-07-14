@@ -48,7 +48,7 @@ for (const text of [
   'Max Elevation',
   'Elevation Gain',
   'Elevation Stats',
-  'Unlocked Badges',
+  'Badge Catalog',
   'Badges Earned',
   'No badges earned on this expedition.',
   'Expedition Insights',
@@ -124,7 +124,6 @@ for (const forbidden of [
   'placeholder widget',
   'EXPEDITION_BADGE_DEFINITIONS.map',
   'mystery badge',
-  'Locked Badge',
   'No insights',
   'placeholder insight',
   'Insight Dashboard',
@@ -149,9 +148,10 @@ assert.ok(
 );
 assert.ok(
   dashboard.includes('completedGuidanceRouteSummary') &&
-    dashboard.includes('latestCompletedExpeditionLog ??') &&
-    dashboard.includes('completedExpeditionRecord={completedExpeditionRecord}'),
-  'Dashboard should pass a scoped just-completed Expedition or guidance summary into the Hub and widget render options.',
+    dashboard.includes('selectDashboardExpeditionPresentation({') &&
+    dashboard.includes('latestCompletedLog: latestCompletedExpeditionLog') &&
+    dashboard.includes('completedExpeditionRecord={completedExpeditionSummaryRecord}'),
+  'Dashboard should select a scoped just-completed Expedition or guidance summary without contaminating active state.',
 );
 assert.ok(
   widgetGrid.includes('renderOptions?.expeditionRouteCompleted') &&

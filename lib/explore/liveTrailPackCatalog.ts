@@ -88,6 +88,10 @@ type Listener = () => void;
 const listeners = new Set<Listener>();
 let refreshRequestSequence = 0;
 const pendingRefreshesByKey = new Map<string, Promise<LiveTrailPackCatalogSnapshot>>();
+const ROUTE_CATALOG_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
+const ROUTE_CATALOG_DETAIL_CACHE_MAX_ENTRIES = 24;
+const pendingDetailRequestsByRouteId = new Map<string, Promise<ECSTrailPack>>();
+const routeCatalogDetailCache = new Map<string, { trailPack: ECSTrailPack; storedAtMs: number }>();
 let snapshot: LiveTrailPackCatalogSnapshot = {
   trailPacks: [],
   routeCatalogSummaries: [],
@@ -347,7 +351,7 @@ async function readCachedRouteCatalogSummarySnapshot(
   await routeCatalogSummaryPersistentCache.waitForHydration();
   for (const key of routeCatalogSummaryCacheKeys(criteria)) {
     const cached = parseRouteCatalogSummaryCachePayload(routeCatalogSummaryPersistentCache.get(key));
-    if (!cached) continue;
+    if (!cached || cached.refreshKey !== refreshKey) continue;
     return {
       trailPacks: [],
       routeCatalogSummaries: cached.summaries,
@@ -827,29 +831,69 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
 }
 
 export async function fetchRouteCatalogTrailPackDetail(trailPack: ECSTrailPack | string): Promise<ECSTrailPack> {
-  const routeId = typeof trailPack === 'string' ? trailPack : trailPack.id;
-  const { data, error } = await supabase.functions.invoke('route-catalog-detail', {
-    body: {
-      id: routeId,
-      publicId: routeId,
-      includeGeometry: true,
-      includeAssessment: true,
-      includeOfflineCache: true,
-    },
+  const routeId = String(typeof trailPack === 'string' ? trailPack : trailPack.id).trim();
+  if (!routeId) throw new Error('Verified route detail unavailable.');
+
+  const nowMs = Date.now();
+  const cached = routeCatalogDetailCache.get(routeId);
+  if (cached && nowMs - cached.storedAtMs <= ROUTE_CATALOG_DETAIL_CACHE_TTL_MS) {
+    routeCatalogDetailCache.delete(routeId);
+    routeCatalogDetailCache.set(routeId, cached);
+    return cached.trailPack;
+  }
+  if (cached) routeCatalogDetailCache.delete(routeId);
+
+  const pending = pendingDetailRequestsByRouteId.get(routeId);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const { data, error } = await supabase.functions.invoke('route-catalog-detail', {
+      body: {
+        id: routeId,
+        publicId: routeId,
+        includeGeometry: true,
+        includeAssessment: true,
+        includeOfflineCache: true,
+      },
+    });
+
+    if (error) {
+      throw new Error(error.message || 'Verified route detail unavailable.');
+    }
+
+    const normalized = normalizeRouteCatalogDetailResponse(
+      data,
+      typeof trailPack === 'string' ? undefined : trailPack,
+    );
+    if (!normalized) {
+      throw new Error('Verified route detail unavailable.');
+    }
+
+    routeCatalogDetailCache.delete(routeId);
+    routeCatalogDetailCache.set(routeId, { trailPack: normalized, storedAtMs: Date.now() });
+    while (routeCatalogDetailCache.size > ROUTE_CATALOG_DETAIL_CACHE_MAX_ENTRIES) {
+      const oldestRouteId = routeCatalogDetailCache.keys().next().value;
+      if (typeof oldestRouteId !== 'string') break;
+      routeCatalogDetailCache.delete(oldestRouteId);
+    }
+    return normalized;
+  })().finally(() => {
+    if (pendingDetailRequestsByRouteId.get(routeId) === request) {
+      pendingDetailRequestsByRouteId.delete(routeId);
+    }
   });
 
-  if (error) {
-    throw new Error(error.message || 'Verified route detail unavailable.');
-  }
+  pendingDetailRequestsByRouteId.set(routeId, request);
+  return request;
+}
 
-  const normalized = normalizeRouteCatalogDetailResponse(
-    data,
-    typeof trailPack === 'string' ? undefined : trailPack,
-  );
-  if (!normalized) {
-    throw new Error('Verified route detail unavailable.');
+export function invalidateRouteCatalogTrailPackDetail(routeId?: string | null): void {
+  const normalizedRouteId = String(routeId ?? '').trim();
+  if (normalizedRouteId) {
+    routeCatalogDetailCache.delete(normalizedRouteId);
+    return;
   }
-  return normalized;
+  routeCatalogDetailCache.clear();
 }
 
 async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {

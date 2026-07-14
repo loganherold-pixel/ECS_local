@@ -211,7 +211,12 @@ export default function StorageCleanupSettings({ onToast }: Props) {
       onToast('Type DELETE to confirm');
       return;
     }
-    tileCacheStore.clearAll();
+    const cleared = tileCacheStore.clearAll();
+    if (!cleared) {
+      onToast('Active route or expedition regions are protected and were not cleared');
+      refreshData();
+      return;
+    }
     setShowClearConfirm(false);
     setClearConfirmText('');
     setAnalysisReport(null);

@@ -3,11 +3,25 @@ import {
   type DispatchPersistenceDefaults,
   type DispatchPersistenceSnapshot,
 } from './dispatchPersistenceAdapter';
+import {
+  mergeDispatchAcknowledgment,
+  mergeDispatchAssignment,
+  mergeDispatchAssistRequest,
+  mergeDispatchOfflineAction,
+  mergeDispatchPing,
+  mergeDispatchQueueItem,
+  mergeDispatchTimelineEvent,
+} from './dispatchIntegrity';
+import { transitionDispatchOfflineActionStatus } from './dispatchLifecycle';
 import type { DispatchRealtimeEventDraft } from './dispatchRealtimeAdapter';
+import type { DispatchCanonicalEntity } from './dispatchCanonicalRepository';
 import type {
+  DispatchAcknowledgment,
   DispatchAssignment,
+  DispatchAssistRequest,
   DispatchPing,
   DispatchQueueItem,
+  DispatchQueuedOfflineAction,
   DispatchTimelineEvent,
 } from './dispatchTypes';
 import {
@@ -22,6 +36,7 @@ export interface DispatchReplayResult {
   attempted: number;
   replayed: number;
   failed: number;
+  cancelled: number;
 }
 
 export interface DispatchReplayInput {
@@ -29,70 +44,53 @@ export interface DispatchReplayInput {
   defaults: DispatchPersistenceDefaults;
   publish: (event: DispatchRealtimeEventDraft) => Promise<boolean>;
   persistCadEvent?: (event: DispatchEvent) => Promise<boolean>;
+  persistCanonicalEntity?: (
+    entity: DispatchCanonicalEntity,
+    action: DispatchQueuedOfflineAction,
+  ) => Promise<boolean>;
+  signal?: AbortSignal;
+  maxActions?: number;
+  now?: () => number;
 }
 
-function isLocalDispatchRecord(id: string): boolean {
-  return id.startsWith('local-');
+type PreparedReplayEntity =
+  | { type: 'ping'; value: DispatchPing; draft: DispatchRealtimeEventDraft }
+  | { type: 'queue_item'; value: DispatchQueueItem; draft: DispatchRealtimeEventDraft }
+  | { type: 'assignment'; value: DispatchAssignment; draft: DispatchRealtimeEventDraft }
+  | { type: 'assist_request'; value: DispatchAssistRequest; draft: DispatchRealtimeEventDraft }
+  | { type: 'acknowledgment'; value: DispatchAcknowledgment; draft: DispatchRealtimeEventDraft }
+  | { type: 'timeline_event'; value: DispatchTimelineEvent; draft: DispatchRealtimeEventDraft };
+
+function toCanonicalEntity(prepared: PreparedReplayEntity): DispatchCanonicalEntity {
+  switch (prepared.type) {
+    case 'ping':
+      return { type: prepared.type, value: prepared.value };
+    case 'queue_item':
+      return { type: prepared.type, value: prepared.value };
+    case 'assignment':
+      return { type: prepared.type, value: prepared.value };
+    case 'assist_request':
+      return { type: prepared.type, value: prepared.value };
+    case 'acknowledgment':
+      return { type: prepared.type, value: prepared.value };
+    case 'timeline_event':
+      return { type: prepared.type, value: prepared.value };
+  }
 }
 
-function shouldReplayPing(ping: DispatchPing): boolean {
-  if (!isLocalDispatchRecord(ping.id)) return false;
-  return (
-    ping.status === 'queued' ||
-    ping.status === 'retrying' ||
-    ping.reliabilityState === 'queued' ||
-    ping.reliabilityState === 'failed' ||
-    ping.reliabilityState === 'retrying'
-  );
-}
-
-function shouldReplayQueueItem(item: DispatchQueueItem): boolean {
-  if (!isLocalDispatchRecord(item.id)) return false;
-  return (
-    item.deliveryState === 'queued' ||
-    item.deliveryState === 'retrying' ||
-    item.reliabilityState === 'queued' ||
-    item.reliabilityState === 'failed' ||
-    item.reliabilityState === 'retrying'
-  );
-}
-
-function shouldReplayAssignment(assignment: DispatchAssignment, replayedQueueItemIds: Set<string>): boolean {
-  return isLocalDispatchRecord(assignment.id) && replayedQueueItemIds.has(assignment.queueItemId);
-}
-
-function shouldReplayTimelineEvent(event: DispatchTimelineEvent): boolean {
-  if (!isLocalDispatchRecord(event.id)) return false;
-  return event.deliveryState === 'queued' || event.deliveryState === 'failed' || event.deliveryState === 'retrying';
-}
+const DEFAULT_MAX_REPLAY_ACTIONS = 100;
+const MAX_REPLAY_BACKOFF_MS = 5 * 60_000;
+const replayFlights = new Map<string, Promise<DispatchReplayResult>>();
 
 function shouldReplayCadEvent(event: DispatchEvent): boolean {
   return event.syncState === 'queued' || event.syncState === 'failed' || event.syncState === 'sending';
 }
 
-async function publishPing(ping: DispatchPing, publish: DispatchReplayInput['publish']): Promise<boolean> {
-  return publish({ type: 'ping_upsert', ping });
-}
-
-async function publishQueueItem(
-  queueItem: DispatchQueueItem,
-  publish: DispatchReplayInput['publish'],
-): Promise<boolean> {
-  return publish({ type: 'queue_item_upsert', queueItem });
-}
-
-async function publishAssignment(
-  assignment: DispatchAssignment,
-  publish: DispatchReplayInput['publish'],
-): Promise<boolean> {
-  return publish({ type: 'assignment_upsert', assignment });
-}
-
-async function publishTimelineEvent(
-  timelineEvent: DispatchTimelineEvent,
-  publish: DispatchReplayInput['publish'],
-): Promise<boolean> {
-  return publish({ type: 'timeline_event_added', timelineEvent });
+function shouldReplayAction(action: DispatchQueuedOfflineAction, nowMs: number): boolean {
+  if (action.status !== 'queued' && action.status !== 'failed') return false;
+  if ((action.attemptCount ?? 0) >= (action.maxAttempts ?? 5)) return false;
+  const nextAttemptMs = Date.parse(action.nextAttemptAt ?? '');
+  return !Number.isFinite(nextAttemptMs) || nextAttemptMs <= nowMs;
 }
 
 async function publishCadEvent(
@@ -100,171 +98,303 @@ async function publishCadEvent(
   publish: DispatchReplayInput['publish'],
   persistCadEvent?: DispatchReplayInput['persistCadEvent'],
 ): Promise<boolean> {
-  const durable = persistCadEvent ? await persistCadEvent(cadEvent) : true;
-  const realtime = await publish({
+  if (persistCadEvent) {
+    const durable = await persistCadEvent(cadEvent);
+    if (!durable) return false;
+    await publish({
+      type: 'cad_event_upsert',
+      cadEvent: { ...cadEvent, syncState: 'received' },
+    }).catch(() => false);
+    return true;
+  }
+
+  return publish({
     type: 'cad_event_upsert',
-    cadEvent: {
-      ...cadEvent,
-      syncState: 'received',
-    },
+    cadEvent: { ...cadEvent, syncState: 'received' },
   });
-  return durable && realtime;
 }
 
-export async function replayQueuedDispatchActions({
+export function replayQueuedDispatchActions(input: DispatchReplayInput): Promise<DispatchReplayResult> {
+  const existing = replayFlights.get(input.expeditionId);
+  if (existing) return existing;
+
+  const flight = runReplay(input).finally(() => {
+    if (replayFlights.get(input.expeditionId) === flight) {
+      replayFlights.delete(input.expeditionId);
+    }
+  });
+  replayFlights.set(input.expeditionId, flight);
+  return flight;
+}
+
+async function runReplay({
   expeditionId,
   defaults,
   publish,
   persistCadEvent,
+  persistCanonicalEntity,
+  signal,
+  maxActions = DEFAULT_MAX_REPLAY_ACTIONS,
+  now = Date.now,
 }: DispatchReplayInput): Promise<DispatchReplayResult> {
-  const snapshot = dispatchPersistenceAdapter.load(expeditionId, defaults);
+  let snapshot = dispatchPersistenceAdapter.load(expeditionId, defaults);
   let attempted = 0;
   let replayed = 0;
   let failed = 0;
+  let cancelled = 0;
+  const replayLimit = Math.max(1, Math.min(DEFAULT_MAX_REPLAY_ACTIONS, maxActions));
+  const candidates = snapshot.offlineActions
+    .filter((action) => shouldReplayAction(action, now()))
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    .slice(0, replayLimit);
 
-  const nextPings: DispatchPing[] = [];
-  for (const ping of snapshot.pings) {
-    if (!shouldReplayPing(ping)) {
-      nextPings.push(ping);
+  for (const action of candidates) {
+    if (signal?.aborted) {
+      cancelled += 1;
+      break;
+    }
+
+    const replaying = transitionOfflineAction(action, 'replaying', {
+      updatedAt: new Date(now()).toISOString(),
+      lastError: undefined,
+    });
+    snapshot = updateOfflineAction(snapshot, replaying);
+    snapshot = dispatchPersistenceAdapter.save(snapshot);
+
+    const prepared = prepareReplayEntity(snapshot, action, new Date(now()).toISOString());
+    if (!prepared) {
+      attempted += 1;
+      failed += 1;
+      snapshot = updateOfflineAction(snapshot, markOfflineActionResult(replaying, false, now(), 'Dispatch replay source is unavailable.'));
+      snapshot = dispatchPersistenceAdapter.save(snapshot);
       continue;
     }
 
     attempted += 1;
-    const retryingPing: DispatchPing = {
-      ...ping,
-      status: 'retrying',
-      reliabilityState: 'retrying',
-    };
-    const ok = await publishPing(retryingPing, publish);
-    if (ok) {
-      replayed += 1;
-      nextPings.push(markDispatchPingDeliveryResult(retryingPing, true));
-    } else {
-      failed += 1;
-      nextPings.push(markDispatchPingDeliveryResult(retryingPing, false));
+    let ok = false;
+    try {
+      const canonicalStored = persistCanonicalEntity
+        ? await persistCanonicalEntity(toCanonicalEntity(prepared), action)
+        : true;
+      ok = canonicalStored && await publish(prepared.draft);
+    } catch {
+      ok = false;
     }
+
+    if (ok) replayed += 1;
+    else failed += 1;
+    snapshot = applyReplayResult(snapshot, prepared, ok, new Date(now()).toISOString());
+    snapshot = updateOfflineAction(
+      snapshot,
+      markOfflineActionResult(replaying, ok, now(), ok ? undefined : 'Dispatch delivery failed.'),
+    );
+    snapshot = dispatchPersistenceAdapter.save(snapshot);
   }
 
-  const nextQueueItems: DispatchQueueItem[] = [];
-  const replayedQueueItemIds = new Set<string>();
-  for (const item of snapshot.queueItems) {
-    if (!shouldReplayQueueItem(item)) {
-      nextQueueItems.push(item);
-      continue;
-    }
+  const remainingBudget = Math.max(0, replayLimit - attempted);
+  if (!signal?.aborted && remainingBudget > 0) {
+    const nextCadEvents: DispatchEvent[] = [];
+    let cadBudget = remainingBudget;
+    for (let eventIndex = 0; eventIndex < snapshot.cadEvents.length; eventIndex += 1) {
+      const event = snapshot.cadEvents[eventIndex];
+      if (!shouldReplayCadEvent(event) || cadBudget <= 0) {
+        nextCadEvents.push(event);
+        continue;
+      }
+      if (signal?.aborted) {
+        cancelled += snapshot.cadEvents.length - eventIndex;
+        nextCadEvents.push(...snapshot.cadEvents.slice(eventIndex));
+        break;
+      }
 
-    attempted += 1;
-    const retryingItem: DispatchQueueItem = {
-      ...item,
-      deliveryState: 'retrying',
-      reliabilityState: 'retrying',
-    };
-    const ok = await publishQueueItem(retryingItem, publish);
-    if (ok) {
-      replayed += 1;
-      replayedQueueItemIds.add(item.id);
-      nextQueueItems.push(markDispatchQueueItemDeliveryResult(retryingItem, true));
-    } else {
-      failed += 1;
-      nextQueueItems.push(markDispatchQueueItemDeliveryResult(retryingItem, false));
+      cadBudget -= 1;
+      attempted += 1;
+      const sendingEvent: DispatchEvent = { ...event, syncState: 'sending' };
+      const ok = await publishCadEvent(sendingEvent, publish, persistCadEvent).catch(() => false);
+      if (ok) replayed += 1;
+      else failed += 1;
+      nextCadEvents.push({ ...sendingEvent, syncState: ok ? 'sent' : 'failed' });
     }
+    snapshot = dispatchPersistenceAdapter.save({
+      ...snapshot,
+      cadEvents: nextCadEvents,
+    });
   }
 
-  const nextAssignments: DispatchAssignment[] = [];
-  for (const assignment of snapshot.assignments) {
-    if (!shouldReplayAssignment(assignment, replayedQueueItemIds)) {
-      nextAssignments.push(assignment);
-      continue;
-    }
+  return { snapshot, attempted, replayed, failed, cancelled };
+}
 
-    attempted += 1;
-    const ok = await publishAssignment(assignment, publish);
-    if (ok) {
-      replayed += 1;
-    } else {
-      failed += 1;
+function prepareReplayEntity(
+  snapshot: DispatchPersistenceSnapshot,
+  action: DispatchQueuedOfflineAction,
+  updatedAt: string,
+): PreparedReplayEntity | null {
+  const find = <T extends { id: string }>(items: T[]) => items.find((item) => item.id === action.sourceEntityId);
+  switch (action.entityType) {
+    case 'ping': {
+      const source = find(snapshot.pings);
+      if (!source) return null;
+      const value: DispatchPing = {
+        ...source,
+        status: 'sent',
+        reliabilityState: 'sent',
+        updatedAt,
+        version: (source.version ?? 1) + 1,
+      };
+      return { type: 'ping', value, draft: { type: 'ping_upsert', ping: value } };
     }
-    nextAssignments.push(assignment);
+    case 'queue_item': {
+      const source = find(snapshot.queueItems);
+      if (!source) return null;
+      const value: DispatchQueueItem = {
+        ...source,
+        deliveryState: 'sent',
+        reliabilityState: 'sent',
+        updatedAt,
+        version: (source.version ?? 1) + 1,
+      };
+      return { type: 'queue_item', value, draft: { type: 'queue_item_upsert', queueItem: value } };
+    }
+    case 'assignment': {
+      const source = find(snapshot.assignments);
+      if (!source) return null;
+      const value: DispatchAssignment = {
+        ...source,
+        deliveryState: 'sent',
+        updatedAt,
+        version: (source.version ?? 1) + 1,
+      };
+      return { type: 'assignment', value, draft: { type: 'assignment_upsert', assignment: value } };
+    }
+    case 'assist_request': {
+      const source = find(snapshot.assistRequests);
+      if (!source) return null;
+      const value: DispatchAssistRequest = {
+        ...source,
+        deliveryState: 'sent',
+        updatedAt,
+        version: (source.version ?? 1) + 1,
+      };
+      return { type: 'assist_request', value, draft: { type: 'assist_request_upsert', assistRequest: value } };
+    }
+    case 'acknowledgment': {
+      const source = find(snapshot.acknowledgments);
+      if (!source) return null;
+      const value: DispatchAcknowledgment = {
+        ...source,
+        deliveryState: 'sent',
+        updatedAt,
+        version: (source.version ?? 1) + 1,
+      };
+      return { type: 'acknowledgment', value, draft: { type: 'acknowledgment_upsert', acknowledgment: value } };
+    }
+    case 'timeline_event': {
+      const source = find(snapshot.timelineEvents);
+      if (!source) return null;
+      const value: DispatchTimelineEvent = {
+        ...source,
+        deliveryState: 'sent',
+        version: (source.version ?? 1) + 1,
+      };
+      return { type: 'timeline_event', value, draft: { type: 'timeline_event_added', timelineEvent: value } };
+    }
+    default:
+      return null;
   }
+}
 
-  const nextTimelineEvents: DispatchTimelineEvent[] = [];
-  for (const event of snapshot.timelineEvents) {
-    if (!shouldReplayTimelineEvent(event)) {
-      nextTimelineEvents.push(event);
-      continue;
-    }
-
-    attempted += 1;
-    const relatedQueueItem = event.queueItemId
-      ? nextQueueItems.find((item) => item.id === event.queueItemId)
-      : undefined;
-    const retryingEvent: DispatchTimelineEvent = {
-      ...event,
-      deliveryState: 'retrying',
-      conflictState:
-        relatedQueueItem?.status === 'resolved' && event.type !== 'queue_resolved'
-          ? 'updated_during_sync'
-          : event.conflictState,
-      conflictReason:
-        relatedQueueItem?.status === 'resolved' && event.type !== 'queue_resolved'
-          ? 'Timeline event replayed after the related queue item was already resolved.'
-          : event.conflictReason,
-      lastConflictAt:
-        relatedQueueItem?.status === 'resolved' && event.type !== 'queue_resolved'
-          ? new Date().toISOString()
-          : event.lastConflictAt,
-    };
-    const ok = await publishTimelineEvent(retryingEvent, publish);
-    if (ok) {
-      replayed += 1;
-      nextTimelineEvents.push(markDispatchTimelineEventDeliveryResult(retryingEvent, true));
-    } else {
-      failed += 1;
-      nextTimelineEvents.push(markDispatchTimelineEventDeliveryResult(retryingEvent, false));
-    }
+function applyReplayResult(
+  snapshot: DispatchPersistenceSnapshot,
+  prepared: PreparedReplayEntity,
+  ok: boolean,
+  updatedAt: string,
+): DispatchPersistenceSnapshot {
+  switch (prepared.type) {
+    case 'ping':
+      return { ...snapshot, pings: mergeDispatchPing(snapshot.pings, markDispatchPingDeliveryResult(prepared.value, ok, updatedAt)) };
+    case 'queue_item':
+      return { ...snapshot, queueItems: mergeDispatchQueueItem(snapshot.queueItems, markDispatchQueueItemDeliveryResult(prepared.value, ok, updatedAt)) };
+    case 'assignment':
+      return {
+        ...snapshot,
+        assignments: mergeDispatchAssignment(snapshot.assignments, {
+          ...prepared.value,
+          deliveryState: ok ? 'sent' : 'failed',
+          updatedAt,
+          version: (prepared.value.version ?? 1) + 1,
+        }),
+      };
+    case 'assist_request':
+      return {
+        ...snapshot,
+        assistRequests: mergeDispatchAssistRequest(snapshot.assistRequests, {
+          ...prepared.value,
+          deliveryState: ok ? 'sent' : 'failed',
+          updatedAt,
+          version: (prepared.value.version ?? 1) + 1,
+        }),
+      };
+    case 'acknowledgment':
+      return {
+        ...snapshot,
+        acknowledgments: mergeDispatchAcknowledgment(snapshot.acknowledgments, {
+          ...prepared.value,
+          deliveryState: ok ? 'sent' : 'failed',
+          updatedAt,
+          version: (prepared.value.version ?? 1) + 1,
+        }),
+      };
+    case 'timeline_event':
+      return {
+        ...snapshot,
+        timelineEvents: mergeDispatchTimelineEvent(
+          snapshot.timelineEvents,
+          markDispatchTimelineEventDeliveryResult(prepared.value, ok),
+        ),
+      };
   }
+}
 
-  const nextCadEvents: DispatchEvent[] = [];
-  for (const event of snapshot.cadEvents) {
-    if (!shouldReplayCadEvent(event)) {
-      nextCadEvents.push(event);
-      continue;
-    }
-
-    attempted += 1;
-    const retryingEvent: DispatchEvent = {
-      ...event,
-      syncState: 'sending',
-    };
-    const ok = await publishCadEvent(retryingEvent, publish, persistCadEvent);
-    if (ok) {
-      replayed += 1;
-      nextCadEvents.push({
-        ...retryingEvent,
-        syncState: 'sent',
-      });
-    } else {
-      failed += 1;
-      nextCadEvents.push({
-        ...retryingEvent,
-        syncState: 'failed',
-      });
-    }
-  }
-
-  const nextSnapshot = dispatchPersistenceAdapter.save({
-    ...snapshot,
-    pings: nextPings,
-    queueItems: nextQueueItems,
-    assignments: nextAssignments,
-    timelineEvents: nextTimelineEvents,
-    cadEvents: nextCadEvents,
-  });
-
+function transitionOfflineAction(
+  action: DispatchQueuedOfflineAction,
+  status: DispatchQueuedOfflineAction['status'],
+  patch: Partial<DispatchQueuedOfflineAction> = {},
+): DispatchQueuedOfflineAction {
+  const transition = transitionDispatchOfflineActionStatus(action.status, status);
+  if (!transition.ok) return action;
   return {
-    snapshot: nextSnapshot,
-    attempted,
-    replayed,
-    failed,
+    ...action,
+    ...patch,
+    status: transition.state,
+    version: (action.version ?? 1) + 1,
+  };
+}
+
+function markOfflineActionResult(
+  action: DispatchQueuedOfflineAction,
+  ok: boolean,
+  nowMs: number,
+  error?: string,
+): DispatchQueuedOfflineAction {
+  const attemptCount = (action.attemptCount ?? 0) + 1;
+  const nextAttemptAt = ok
+    ? undefined
+    : new Date(nowMs + Math.min(MAX_REPLAY_BACKOFF_MS, 3_000 * (2 ** Math.max(0, attemptCount - 1)))).toISOString();
+  return transitionOfflineAction(action, ok ? 'replayed' : 'failed', {
+    attemptCount,
+    lastError: error,
+    nextAttemptAt,
+    replayedAt: ok ? new Date(nowMs).toISOString() : undefined,
+    updatedAt: new Date(nowMs).toISOString(),
+  });
+}
+
+function updateOfflineAction(
+  snapshot: DispatchPersistenceSnapshot,
+  action: DispatchQueuedOfflineAction,
+): DispatchPersistenceSnapshot {
+  return {
+    ...snapshot,
+    offlineActions: mergeDispatchOfflineAction(snapshot.offlineActions, action),
   };
 }

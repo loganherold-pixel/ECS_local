@@ -8,6 +8,14 @@ import {
   type BluestackParserDecisionAction,
   type BluestackParserVerificationStatus,
 } from './bluestack';
+import {
+  createCanonicalDeviceIdentity,
+  resolveDeviceTelemetrySourceState,
+  type CanonicalDeviceIdentity,
+  type DeviceConnectionLifecycleState,
+  type DeviceTelemetrySourceState,
+  type DeviceTransport,
+} from './deviceTelemetryLifecycle';
 
 export type UnifiedScannerDeviceCategory =
   | 'power_device'
@@ -43,6 +51,7 @@ export type UnifiedScannerTransport =
   | 'ble'
   | 'classic_bluetooth'
   | 'cloud'
+  | 'hybrid'
   | 'unknown';
 
 export type UnifiedScannerConnectionState =
@@ -87,12 +96,16 @@ export interface UnifiedScannerAdvertisedIdentifiers {
 export interface UnifiedScannerDevice {
   id: string;
   rawId: string;
+  identity: CanonicalDeviceIdentity;
   name: string;
   category: UnifiedScannerDeviceCategory;
   provider: UnifiedScannerProvider;
   transport: UnifiedScannerTransport;
   connectionState: UnifiedScannerConnectionState;
+  lifecycleState: DeviceConnectionLifecycleState;
   telemetryState: UnifiedScannerTelemetryState;
+  sourceState: DeviceTelemetrySourceState;
+  sourceAgeMs: number | null;
   bluestackLane: BluestackConnectionLane;
   bluestackStatusLabel: string;
   bluestackStatusDetail: string;
@@ -107,6 +120,35 @@ export interface UnifiedScannerDevice {
   error: string | null;
   errorSource: UnifiedScannerErrorSource | null;
   sourceModel: ECSDeviceConnectionModel;
+}
+
+function mapScannerTransport(transport: UnifiedScannerTransport): DeviceTransport {
+  return transport;
+}
+
+function mapTelemetryTransport(device: ECSDeviceConnectionModel): DeviceTransport | null {
+  if (device.telemetrySource === 'provider_cloud') return 'cloud';
+  if (device.telemetrySource === 'ble_live') return 'ble';
+  return null;
+}
+
+function normalizeLifecycleState(
+  device: ECSDeviceConnectionModel,
+  transport: UnifiedScannerTransport,
+): DeviceConnectionLifecycleState {
+  if (!device.isSupported || device.supportLevel === 'ui_only' || device.status === 'unsupported') return 'unsupported';
+  if (device.actionKind === 'disconnecting' || device.status === 'disconnecting') return 'disconnecting';
+  if (device.isLive) return 'streaming';
+  if (device.ecoflowPhase === 'handshaking') return 'authenticating';
+  if (device.ecoflowPhase === 'timeout' || device.ecoflowPhase === 'failed' || device.status === 'failed') return 'failed';
+  if (device.status === 'stale') return 'degraded';
+  if (device.isConnecting) return 'connecting';
+  if (device.isConnected || device.ecoflowPhase === 'connected' || device.ecoflowPhase === 'awaitingTelemetry') return 'connected';
+  if (device.isDiscoverable) {
+    return device.actionKind === 'connect' || device.actionKind === 'retry' ? 'eligible' : 'discovered';
+  }
+  if (transport === 'cloud' && device.connectableViaCloud) return 'eligible';
+  return 'disconnected';
 }
 
 export interface UnifiedScannerSnapshot {
@@ -143,7 +185,8 @@ function normalizeProvider(providerId: string | null | undefined): UnifiedScanne
 function normalizeTransport(value: string | null | undefined): UnifiedScannerTransport {
   const normalized = String(value ?? '').toLowerCase();
   if (normalized === 'api' || normalized === 'cloud' || normalized === 'provider_cloud') return 'cloud';
-  if (normalized === 'ble' || normalized === 'hybrid') return 'ble';
+  if (normalized === 'hybrid') return 'hybrid';
+  if (normalized === 'ble') return 'ble';
   if (normalized === 'classic_bluetooth') return 'classic_bluetooth';
   return 'unknown';
 }
@@ -301,16 +344,41 @@ export function normalizeUnifiedScannerDevice(device: ECSDeviceConnectionModel):
     .filter((badge) => /^service:/i.test(badge))
     .map((badge) => badge.replace(/^service:/i, '').trim())
     .filter(Boolean);
+  const identity = createCanonicalDeviceIdentity({
+    providerId: device.providerId,
+    category: device.deviceCategory,
+    displayName: device.name,
+    model: device.subtype,
+    telemetryDeviceId: device.kind === 'telemetry' ? device.rawId : null,
+    sourceIds: {
+      ...(device.sourceIds ?? {}),
+      [transport]: device.rawId,
+    },
+  });
+  const lifecycleState = normalizeLifecycleState(device, transport);
+  const sourceState = resolveDeviceTelemetrySourceState({
+    lifecycle: lifecycleState,
+    transport: mapScannerTransport(transport),
+    telemetryTransport: mapTelemetryTransport(device),
+    hasDecodedData: device.telemetryFields.length > 0,
+    lastSampleAt: device.lastTelemetryAt,
+    cached: device.telemetrySource === 'cache',
+    unsupported: device.telemetryUnsupported || lifecycleState === 'unsupported',
+  });
 
   return {
     id: device.id,
     rawId: device.rawId,
+    identity,
     name: device.name,
     category: normalizeCategory(device),
     provider: normalizeProvider(device.providerId),
     transport,
     connectionState: normalizeConnectionState(device, transport),
+    lifecycleState,
     telemetryState: normalizeTelemetryState(device, policy.lane),
+    sourceState: sourceState.state,
+    sourceAgeMs: sourceState.ageMs,
     bluestackLane: policy.lane,
     bluestackStatusLabel: policy.statusLabel,
     bluestackStatusDetail: policy.statusDetail,

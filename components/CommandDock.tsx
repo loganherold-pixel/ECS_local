@@ -28,7 +28,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { useRouter, usePathname } from 'expo-router';
+import { usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import QuickActionsSheet from './QuickActionsSheet';
@@ -58,7 +58,12 @@ import {
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
 import { BOTTOM_BANNER_BG } from '../lib/chromeAssets';
 import { resolveShellChromeTheme } from '../lib/ui/shellChromeTheme';
-import { resolveDispatchRolloutConfig } from '../lib/dispatchRolloutConfig';
+import {
+  createRuntimeFeatureVisibilityContext,
+  type ECSFeatureId,
+} from '../lib/features/featureVisibilityRegistry';
+import { selectVisibleECSPrimaryTabs } from '../lib/navigation/ecsRoutePolicy';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import {
   ECSGlobalBanner,
   getEcsBottomSafePadding,
@@ -75,6 +80,10 @@ import {
   type ECSDockKey,
   type ECSPrimaryTabId,
 } from '../lib/routeManifest';
+import {
+  startECSPerformanceSpan,
+  type ECSPerformanceSpanHandle,
+} from '../lib/performance/ecsPerformanceDiagnostics';
 
 // ── ECS Dock Palette ─────────────────────────────────────────
 const DOCK = {
@@ -119,6 +128,7 @@ interface DockItem {
   route: string;
   badge?: number;
   iconOffsetY?: number;
+  featureRequirement: ECSFeatureId;
 }
 
 type DockItemKey = DockItem['key'];
@@ -129,6 +139,7 @@ const DOCK_ITEMS: DockItem[] = ECS_PRIMARY_TAB_MANIFEST.map((tab) => ({
   label: tab.dockLabel,
   route: tab.route,
   badge: DOCK_BADGES[tab.dockKey],
+  featureRequirement: tab.featureRequirement,
   iconOffsetY: tab.id === 'explore' ? 3.25 : tab.id === 'dispatch' ? 3.75 : undefined,
 }));
 
@@ -442,7 +453,7 @@ const ShieldCenterButton = React.memo(function ShieldCenterButton({
 
 // ── Main dock ────────────────────────────────────────────────
 export default function CommandDock() {
-  const router = useRouter();
+  const { navigate: navigateSingleFlight } = useECSNavigation();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
@@ -452,6 +463,7 @@ export default function CommandDock() {
   const [pendingRoute, setPendingRoute] = useState<string | null>(null);
   const pendingRouteRef = useRef<string | null>(null);
   const routeNavigationTaskRef = useRef<ShellInteractionTask | null>(null);
+  const routeNavigationPerformanceRef = useRef<ECSPerformanceSpanHandle | null>(null);
   const quickActionsNavLockUntilRef = useRef(0);
   const [dashboardChrome, setDashboardChrome] = useState(getDashboardChromeState());
   const [showFirstLaunchHint, setShowFirstLaunchHint] = useState(false);
@@ -518,15 +530,25 @@ export default function CommandDock() {
       }
       if (currentPathname === route || pendingRouteRef.current === route) return;
       hideDashboardDockReveal();
+      routeNavigationPerformanceRef.current?.cancel({ superseded: true });
+      routeNavigationPerformanceRef.current = startECSPerformanceSpan(
+        'primary_tab_switch',
+        'command_dock_navigation',
+        { trackOutstanding: true, metadata: { targetTab: getPrimaryTabForPath(route)?.id ?? 'unknown' } },
+      );
       pendingRouteRef.current = route;
       setPendingRoute(route);
       cancelShellInteractionTask(routeNavigationTaskRef.current);
       routeNavigationTaskRef.current = deferShellRouteNavigation(() => {
         if (pendingRouteRef.current !== route) return;
-        router.navigate(route as any);
+        const attempt = navigateSingleFlight(route);
+        if (!attempt.accepted) {
+          pendingRouteRef.current = null;
+          setPendingRoute(null);
+        }
       });
     },
-    [router]
+    [navigateSingleFlight]
   );
 
   const openQuickActions = useCallback(() => {
@@ -556,10 +578,16 @@ export default function CommandDock() {
   const dockHorizontalPadding = adaptive.shell.dockHorizontalPadding;
   const outerItemMaxWidth = adaptive.isTablet ? 148 : adaptive.isLargePhone ? 136 : ECS_COMMAND_DOCK_OUTER_ITEM_MAX_WIDTH;
   const centerSlotWidth = adaptive.isTablet ? 140 : adaptive.isLargePhone ? 132 : ECS_COMMAND_DOCK_CENTER_SLOT_WIDTH;
-  const dispatchRollout = useMemo(() => resolveDispatchRolloutConfig(), []);
+  const featureVisibilityContext = useMemo(
+    () => createRuntimeFeatureVisibilityContext(),
+    [],
+  );
   const visibleDockItems = useMemo(
-    () => DOCK_ITEMS.filter((item) => item.tabId !== 'dispatch' || dispatchRollout.dispatchTabVisibility),
-    [dispatchRollout.dispatchTabVisibility],
+    () => {
+      const visibleTabs = new Set(selectVisibleECSPrimaryTabs(featureVisibilityContext).map((tab) => tab.id));
+      return DOCK_ITEMS.filter((item) => visibleTabs.has(item.tabId));
+    },
+    [featureVisibilityContext],
   );
   const dashboardDockItem = useMemo(
     () => visibleDockItems.find((item) => item.key === 'dashboard') ?? DOCK_ITEMS[2],
@@ -579,6 +607,10 @@ export default function CommandDock() {
   useEffect(() => {
     if (!pendingRoute) return;
     if (pathname === pendingRoute || pathname.includes(pendingRoute)) {
+      routeNavigationPerformanceRef.current?.end('completed', {
+        targetTab: getPrimaryTabForPath(pendingRoute)?.id ?? 'unknown',
+      });
+      routeNavigationPerformanceRef.current = null;
       pendingRouteRef.current = null;
       setPendingRoute(null);
       cancelShellInteractionTask(routeNavigationTaskRef.current);
@@ -590,6 +622,8 @@ export default function CommandDock() {
     return () => {
       cancelShellInteractionTask(routeNavigationTaskRef.current);
       routeNavigationTaskRef.current = null;
+      routeNavigationPerformanceRef.current?.cancel({ unmounted: true });
+      routeNavigationPerformanceRef.current = null;
       pendingRouteRef.current = null;
     };
   }, []);

@@ -36,6 +36,12 @@ export type NavigateRouteDraft = {
   legs: NavigateRouteLeg[];
 };
 
+export type NavigateRouteDraftHistory = {
+  past: NavigateRouteDraft[];
+  present: NavigateRouteDraft;
+  future: NavigateRouteDraft[];
+};
+
 export type NavigateRouteTraceableSegment = {
   id: string;
   name?: string | null;
@@ -692,6 +698,48 @@ function flattenLegCoordinates(legs: NavigateRouteLeg[]): NavigateRouteCoordinat
 
 export function createNavigateRouteDraft(): NavigateRouteDraft {
   return { anchors: [], legs: [] };
+}
+
+export function createNavigateRouteDraftHistory(
+  present = createNavigateRouteDraft(),
+): NavigateRouteDraftHistory {
+  return { past: [], present, future: [] };
+}
+
+export function recordNavigateRouteDraft(
+  history: NavigateRouteDraftHistory,
+  next: NavigateRouteDraft,
+): NavigateRouteDraftHistory {
+  if (next === history.present) return history;
+  return {
+    past: [...history.past, history.present].slice(-100),
+    present: next,
+    future: [],
+  };
+}
+
+export function undoNavigateRouteDraftHistory(
+  history: NavigateRouteDraftHistory,
+): NavigateRouteDraftHistory {
+  const previous = history.past[history.past.length - 1];
+  if (!previous) return history;
+  return {
+    past: history.past.slice(0, -1),
+    present: previous,
+    future: [history.present, ...history.future].slice(0, 100),
+  };
+}
+
+export function redoNavigateRouteDraftHistory(
+  history: NavigateRouteDraftHistory,
+): NavigateRouteDraftHistory {
+  const next = history.future[0];
+  if (!next) return history;
+  return {
+    past: [...history.past, history.present].slice(-100),
+    present: next,
+    future: history.future.slice(1),
+  };
 }
 
 export function addAnchorToDraft(

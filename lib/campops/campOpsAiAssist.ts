@@ -12,6 +12,10 @@ import {
   type CampOpsRecommendationRolloutConfig,
 } from './campOpsRecommendationConfig';
 import { emitCampOpsAiSummaryGenerated } from './campOpsTelemetry';
+import {
+  inspectECSAIProviderOutput,
+  redactECSAIContext,
+} from '../ai/aiPolicyBoundary';
 
 export type CampOpsAiAssistMode = 'planning' | 'field';
 
@@ -699,6 +703,13 @@ export function buildCampOpsAiAssistPayload({
 
 export function buildCampOpsAiAssistPrompt(input: CampOpsAiAssistPromptInput): string {
   const payload = buildCampOpsAiAssistPayload(input);
+  const providerPayload = redactECSAIContext({
+    ...payload,
+    contextSummary: {
+      ...payload.contextSummary,
+      id: '[redacted_private_identifier]',
+    },
+  }).value;
   const modeInstruction =
     payload.mode === 'field'
       ? 'Field mode: keep the headline, primary summary, risks, and actions short, conservative, and directly usable.'
@@ -712,7 +723,7 @@ export function buildCampOpsAiAssistPrompt(input: CampOpsAiAssistPromptInput): s
     'Return only valid JSON matching this schema:',
     JSON.stringify(CAMP_OPS_AI_ASSIST_OUTPUT_SCHEMA),
     'CampOps source-of-truth payload:',
-    JSON.stringify(payload),
+    JSON.stringify(providerPayload),
   ].join('\n');
 }
 
@@ -1246,27 +1257,25 @@ export function parseCampOpsAiAssistOutput(
   const sourceEnforced = enforceSourceTransparency(operationalSanitized.output, input.recommendationSet);
   const enforced = enforceCampOpsTruth(sourceEnforced.output, input.recommendationSet);
   const finalSanitized = sanitizeOverconfidentOutput(enforced.output);
+  const policyIssues = inspectECSAIProviderOutput('campops_explanation', finalSanitized.output, {
+    hasLiveSource: true,
+    supportsWeatherClaims: true,
+    supportsLegalClaims: true,
+  }).map(item => item.message);
+  const allIssues = [
+    ...issues,
+    ...sanitized.issues,
+    ...legalConfidenceSanitized.issues,
+    ...legalSanitized.issues,
+    ...operationalSanitized.issues,
+    ...sourceEnforced.issues,
+    ...enforced.issues,
+    ...finalSanitized.issues,
+    ...policyIssues,
+  ];
   return {
-    output: finalSanitized.output,
-    valid: [
-      ...issues,
-      ...sanitized.issues,
-      ...legalConfidenceSanitized.issues,
-      ...legalSanitized.issues,
-      ...operationalSanitized.issues,
-      ...sourceEnforced.issues,
-      ...enforced.issues,
-      ...finalSanitized.issues,
-    ].length === 0,
-    issues: [
-      ...issues,
-      ...sanitized.issues,
-      ...legalConfidenceSanitized.issues,
-      ...legalSanitized.issues,
-      ...operationalSanitized.issues,
-      ...sourceEnforced.issues,
-      ...enforced.issues,
-      ...finalSanitized.issues,
-    ],
+    output: policyIssues.length > 0 ? fallback : finalSanitized.output,
+    valid: allIssues.length === 0,
+    issues: unique(allIssues),
   };
 }

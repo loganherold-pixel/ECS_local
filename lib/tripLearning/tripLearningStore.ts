@@ -563,4 +563,3 @@ export function createTripLearningStore(
 }
 
 export const tripLearningStore = createTripLearningStore(new LocalTripLearningStorage());
-

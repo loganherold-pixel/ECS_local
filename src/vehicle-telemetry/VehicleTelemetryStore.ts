@@ -37,6 +37,7 @@ import { vehicleTelemetryDeviceRegistry } from './VehicleTelemetryDeviceRegistry
 import { ecsLog } from '../../lib/ecsLogger';
 import { ecsTelemetryStore } from '../telemetry/ECSTelemetryStore';
 import { vehicleTelemetryToEcsTelemetryEvents } from '../telemetry/telemetryAdapters';
+import { createPersistedKeyValueCache } from '../../lib/keyValuePersistence';
 
 // ── Phase 15: Stability Guards ──────────────────────────────
 import {
@@ -57,6 +58,8 @@ let _lastRetryAt = 0;
 const FRESH_WINDOW_MS = 30_000;     // 30 seconds
 const GRACE_WINDOW_MS = 90_000;     // 90 seconds
 const LAST_KNOWN_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const VEHICLE_TELEMETRY_PERSIST_INTERVAL_MS = 5_000;
+export const VEHICLE_TELEMETRY_UI_UPDATE_MS = 750;
 
 type StoreListener = () => void;
 
@@ -308,15 +311,16 @@ function cancelRetries(): void {
 
 // ── Storage helpers ─────────────────────────────────────────
 const mem: Record<string, string> = {};
+const vehicleTelemetrySnapshotPersistence = createPersistedKeyValueCache('ecs_vehicle_telemetry_snapshot');
 
 function sGet(key: string): string | null {
   try {
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       return localStorage.getItem(key);
     }
-    return mem[key] || null;
+    return vehicleTelemetrySnapshotPersistence.get(key) ?? mem[key] ?? null;
   } catch {
-    return mem[key] || null;
+    return vehicleTelemetrySnapshotPersistence.get(key) ?? mem[key] ?? null;
   }
 }
 
@@ -326,8 +330,12 @@ function sSet(key: string, value: string): void {
       localStorage.setItem(key, value);
     }
     mem[key] = value;
+    vehicleTelemetrySnapshotPersistence.set(key, value);
+    void vehicleTelemetrySnapshotPersistence.flush();
   } catch {
     mem[key] = value;
+    vehicleTelemetrySnapshotPersistence.set(key, value);
+    void vehicleTelemetrySnapshotPersistence.flush();
   }
 }
 
@@ -337,8 +345,12 @@ function sRemove(key: string): void {
       localStorage.removeItem(key);
     }
     delete mem[key];
+    vehicleTelemetrySnapshotPersistence.delete(key);
+    void vehicleTelemetrySnapshotPersistence.flush();
   } catch {
     delete mem[key];
+    vehicleTelemetrySnapshotPersistence.delete(key);
+    void vehicleTelemetrySnapshotPersistence.flush();
   }
 }
 
@@ -381,10 +393,15 @@ class VehicleTelemetryStore {
   private snapshot: VehicleTelemetrySnapshot = { ...EMPTY_VEHICLE_TELEMETRY_SNAPSHOT };
   private snapshotSignature = buildVehicleTelemetrySnapshotSignature(this.snapshot);
   private listeners: StoreListener[] = [];
+  private throttledListeners = new Set<StoreListener>();
+  private throttledNotifyTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastThrottledNotifyAt = 0;
   private initialized = false;
 
   private isReconnecting = false;
   private staleTransitionTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastPersistAt = 0;
 
   private attachedService: TelemetryServiceLike | null = null;
   private serviceUnsubscribers: (() => void)[] = [];
@@ -394,6 +411,14 @@ class VehicleTelemetryStore {
 
   constructor() {
     this.restoreLastKnown();
+    void vehicleTelemetrySnapshotPersistence.waitForHydration().then(() => {
+      this.restoreLastKnown();
+      this.notify();
+    }).catch((error) => {
+      ecsLog.warn('TELEMETRY', `${TAG} Failed to hydrate persisted telemetry`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   // ── Persistence ─────────────────────────────────────────
@@ -414,6 +439,11 @@ class VehicleTelemetryStore {
           return;
         }
         const timestamp = Number(parsed?.timestamp ?? 0);
+        const currentTimestamp = Number(this.latestTelemetry?.timestamp ?? 0);
+        if (currentTimestamp > 0 && currentTimestamp >= timestamp) {
+          this.initialized = true;
+          return;
+        }
         const age = Date.now() - timestamp;
 
         if (timestamp > 0 && age < LAST_KNOWN_MAX_AGE_MS) {
@@ -440,9 +470,26 @@ class VehicleTelemetryStore {
   }
 
   private persistLatest(): void {
+    const elapsed = Date.now() - this.lastPersistAt;
+    if (elapsed < VEHICLE_TELEMETRY_PERSIST_INTERVAL_MS) {
+      if (!this.persistTimer) {
+        this.persistTimer = setTimeout(() => {
+          this.persistTimer = null;
+          this.writePersistedLatest();
+        }, VEHICLE_TELEMETRY_PERSIST_INTERVAL_MS - elapsed);
+        const timerWithUnref = this.persistTimer as unknown as { unref?: () => void };
+        timerWithUnref.unref?.();
+      }
+      return;
+    }
+    this.writePersistedLatest();
+  }
+
+  private writePersistedLatest(): void {
     try {
       if (Number(this.latestTelemetry?.timestamp ?? 0) > 0) {
         sSet(VT_STORAGE_KEYS.LAST_TELEMETRY, JSON.stringify(this.latestTelemetry));
+        this.lastPersistAt = Date.now();
       }
     } catch (error) {
       ecsLog.warn('TELEMETRY', `${TAG} Failed to persist telemetry`, {
@@ -768,6 +815,26 @@ class VehicleTelemetryStore {
         fn();
       } catch {}
     });
+    const elapsed = Date.now() - this.lastThrottledNotifyAt;
+    if (elapsed >= VEHICLE_TELEMETRY_UI_UPDATE_MS) {
+      this.flushThrottledListeners();
+    } else if (!this.throttledNotifyTimer && this.throttledListeners.size > 0) {
+      this.throttledNotifyTimer = setTimeout(() => {
+        this.throttledNotifyTimer = null;
+        this.flushThrottledListeners();
+      }, VEHICLE_TELEMETRY_UI_UPDATE_MS - elapsed);
+      const timerWithUnref = this.throttledNotifyTimer as unknown as { unref?: () => void };
+      timerWithUnref.unref?.();
+    }
+  }
+
+  private flushThrottledListeners(): void {
+    this.lastThrottledNotifyAt = Date.now();
+    for (const listener of this.throttledListeners) {
+      try {
+        listener();
+      } catch {}
+    }
   }
 
   // ── Stale Transition Timer ──────────────────────────────
@@ -801,6 +868,17 @@ class VehicleTelemetryStore {
     this.listeners.push(fn);
     return () => {
       this.listeners = this.listeners.filter(l => l !== fn);
+    };
+  }
+
+  subscribeThrottled(fn: StoreListener): () => void {
+    this.throttledListeners.add(fn);
+    return () => {
+      this.throttledListeners.delete(fn);
+      if (this.throttledListeners.size === 0 && this.throttledNotifyTimer) {
+        clearTimeout(this.throttledNotifyTimer);
+        this.throttledNotifyTimer = null;
+      }
     };
   }
 
@@ -1159,6 +1237,10 @@ class VehicleTelemetryStore {
     this.lastConnectionState = 'disconnected';
     this.lastLoggedSnapshotSource = null;
     this.cancelStaleTransition();
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
     cancelRetries();
     sRemove(VT_STORAGE_KEYS.LAST_TELEMETRY);
     ecsLog.debug('TELEMETRY', `${TAG} Store cleared`);

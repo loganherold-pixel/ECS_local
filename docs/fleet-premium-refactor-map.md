@@ -1,5 +1,16 @@
 # Fleet Premium Refactor Map
 
+## Canonical Runtime Hardening
+
+- `vehicleSetupStore` is the sole owner of the active vehicle ID. Its schema-v2 adapter trims legacy IDs, publishes typed/idempotent selection events, and reconciles missing selections against the persisted Fleet.
+- `activeVehicleState` is the shared propagation boundary. Any number of consumers share seven underlying source subscriptions; active-vehicle source cascades are filtered and coalesced before publication.
+- `fleetVehicleStateSelectors` memoizes at most 24 canonical vehicle states by stable value fingerprint. Unchanged inputs return the same state identity; changed specs, loadout, resources, accessories, or profile data invalidate naturally.
+- Fleet Fabric source generation has an independent bounded 24-vehicle cache and never includes photo or image fields.
+- Fleet vehicle cards are memoized by canonical model identity. An active switch makes the previous and next active cards eligible to render without invalidating every unchanged card.
+- Deleting the vehicle used by an active or paused expedition fails closed. A successful active-vehicle deletion reconciles selection to a remaining vehicle through `vehicleSetupStore`.
+
+Deterministic CI evidence is produced by `npm run test:fleet-canonical-runtime`. Android/iOS render time, frame rate, memory, persistence durability, and hardware propagation still require device profiling.
+
 Discovery document for the ECS Fleet premium refactor. This pass is inventory only: no Fleet product behavior, UI, routing, data, or service code was changed.
 
 ## App Framework, Router, State, API, And Tests

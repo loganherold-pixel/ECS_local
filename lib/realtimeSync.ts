@@ -104,6 +104,21 @@ const REALTIME_WARNING_THROTTLE_MS = 30000;
 
 function debugRealtime(message: string, details?: Record<string, unknown>): void {
   ecsLog.debug('SYSTEM', message, details);
+  const event = message.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (
+    /^realtime_(subscribe_started|subscribed|reconnect_success|initial_subscribe_failed|channel_failure|auth_session_failure|permanent_auth_failure|subscribe_timeout|retry_scheduled|retry_started|paused_offline|degraded|cleanup|sync_stopped)$/.test(event)
+  ) {
+    const failed = /(failed|failure|timeout|degraded|permanent)/.test(event);
+    const cancelled = /(cleanup|stopped)/.test(event);
+    ecsLog.breadcrumb({
+      domain: 'realtime',
+      operation: 'subscription_lifecycle',
+      code: `REALTIME_${event}`,
+      status: failed ? 'failed' : cancelled ? 'cancelled' : /(started|scheduled)/.test(event) ? 'started' : 'completed',
+      sourceState: failed ? 'unavailable' : event.includes('paused_offline') ? 'cached' : 'live',
+      context: details,
+    });
+  }
 }
 
 function summarizeRealtimeError(error: unknown): Record<string, unknown> | undefined {
@@ -263,6 +278,9 @@ class RealtimeSyncManager {
       status: this._status,
       lastFailureReason: this._lastFailureReason,
       retryAttempt: this._retryAttempt,
+      changeListenerCount: this._changeListeners.size,
+      statusListenerCount: this._statusListeners.size,
+      mergeQueueDepth: this._mergeQueue.length,
     };
   }
 
@@ -564,7 +582,17 @@ class RealtimeSyncManager {
     const oldRow = payload?.old || null;
 
     if (!newRow && eventType !== 'DELETE') {
-      console.warn('[RealtimeSync] No new row in payload for', table);
+      ecsLog.captureFailure({
+        kind: 'validation',
+        domain: 'realtime',
+        operation: 'receive_change',
+        code: 'REALTIME_CHANGE_ROW_MISSING',
+        sourceState: 'partial',
+        context: { table, eventType },
+      }, undefined, {
+        category: 'REALTIME',
+        fingerprint: `${table}:${eventType}`,
+      });
       return;
     }
 
@@ -622,7 +650,18 @@ class RealtimeSyncManager {
         try {
           await this._mergeRemoteRow(item.table, item.payload, item.eventType, item.eventId);
         } catch (err) {
-          console.error(`[RealtimeSync] Merge error for ${item.table}:`, err);
+          ecsLog.captureFailure({
+            kind: 'realtime',
+            domain: 'realtime',
+            operation: 'merge_remote_row',
+            code: 'REALTIME_ROW_MERGE_FAILED',
+            sourceState: 'partial',
+            correlationId: item.eventId,
+            context: { table: item.table, eventType: item.eventType },
+          }, err, {
+            category: 'REALTIME',
+            fingerprint: item.table,
+          });
         }
       }
     } finally {
@@ -678,9 +717,19 @@ class RealtimeSyncManager {
           this._totalConflictsDetected += conflicts.length;
           this._markEventConflict(eventId);
 
-          console.warn(
-            `[RealtimeSync] Conflict detected in ${table} for record ${remoteRow.id}`
-          );
+          ecsLog.breadcrumb({
+            domain: 'realtime',
+            operation: 'merge_remote_row',
+            code: 'REALTIME_CONFLICT_DETECTED',
+            status: 'degraded',
+            sourceState: 'conflicted',
+            correlationId: eventId,
+            context: {
+              table,
+              recordId: remoteRow.id,
+              conflictCount: conflicts.length,
+            },
+          });
           return;
         }
 
@@ -694,13 +743,35 @@ class RealtimeSyncManager {
       await store.bulkUpsert([remoteRow] as any);
       this._totalRowsMerged++;
     } catch (err) {
-      console.error(`[RealtimeSync] Error checking/merging ${table}:`, err);
+      ecsLog.captureFailure({
+        kind: 'realtime',
+        domain: 'realtime',
+        operation: 'merge_remote_row',
+        code: 'REALTIME_CONFLICT_CHECK_FAILED',
+        sourceState: 'partial',
+        correlationId: eventId,
+        context: { table, recordId: remoteRow.id },
+      }, err, {
+        category: 'REALTIME',
+        fingerprint: table,
+      });
 
       try {
         await store.bulkUpsert([remoteRow]);
         this._totalRowsMerged++;
       } catch (fallbackErr) {
-        console.error(`[RealtimeSync] Fallback merge failed for ${table}:`, fallbackErr);
+        ecsLog.captureFailure({
+          kind: 'persistence',
+          domain: 'realtime',
+          operation: 'fallback_merge_remote_row',
+          code: 'REALTIME_FALLBACK_MERGE_FAILED',
+          sourceState: 'unavailable',
+          correlationId: eventId,
+          context: { table, recordId: remoteRow.id },
+        }, fallbackErr, {
+          category: 'REALTIME',
+          fingerprint: table,
+        });
       }
     }
   }
@@ -1058,9 +1129,31 @@ class RealtimeSyncManager {
 
     const suppressed = state?.suppressed ?? 0;
     this._warningLogState.set(reason, { lastAt: now, suppressed: 0 });
-    console.warn('[RealtimeSync]', message, {
-      ...details,
-      ...(suppressed > 0 ? { suppressedRepeats: suppressed } : {}),
+    const kind = reason === 'subscription_timeout'
+      ? 'timeout'
+      : reason === 'network_offline'
+        ? 'network'
+        : reason === 'supabase_unconfigured'
+          ? 'configuration'
+          : reason.startsWith('auth_')
+            ? 'permission'
+            : 'realtime';
+    ecsLog.captureFailure({
+      kind,
+      domain: 'realtime',
+      operation: 'subscription_lifecycle',
+      code: `REALTIME_${reason}`,
+      sourceState: reason === 'network_offline' ? 'cached' : 'unavailable',
+      context: {
+        diagnosticMessage: message,
+        ...details,
+        ...(suppressed > 0 ? { suppressedRepeats: suppressed } : {}),
+      },
+    }, undefined, {
+      category: 'REALTIME',
+      fingerprint: reason,
+      dedupeWindowMs: 0,
+      nowMs: now,
     });
   }
 

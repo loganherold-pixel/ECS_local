@@ -93,7 +93,9 @@ assert(
     fleetScreen.includes('FleetConfidenceNoticeModal') &&
     fleetScreen.includes('scoreEyebrow="VEHICLE CONFIDENCE"') &&
     fleetScreen.includes('title="Vehicle Confidence"') &&
-    fleetScreen.includes('setVehicleConfidenceNoticeVehicleId(model.vehicle.id)') &&
+    fleetScreen.includes('const handleVehicleConfidencePress = useCallback((vehicleId: string) => {') &&
+    fleetScreen.includes('setVehicleConfidenceNoticeVehicleId(vehicleId)') &&
+    fleetScreen.includes('onConfidencePress={handleVehicleConfidencePress}') &&
     fleetScreen.includes('selectedVehicleConfidenceNotice') &&
     fleetScreen.includes('accessibilityHint={`Opens the confidence explanation for ${vehicle.name}.`}') &&
     fleetScreen.includes('scrollable') &&
@@ -116,7 +118,9 @@ assert(
     fleetScreen.includes('vehicleReadinessNoticeVehicleId') &&
     fleetScreen.includes('selectedVehicleReadinessNotice') &&
     fleetScreen.includes('onReadinessPress') &&
-    fleetScreen.includes('setVehicleReadinessNoticeVehicleId(model.vehicle.id)') &&
+    fleetScreen.includes('const handleVehicleReadinessPress = useCallback((vehicleId: string) => {') &&
+    fleetScreen.includes('setVehicleReadinessNoticeVehicleId(vehicleId)') &&
+    fleetScreen.includes('onReadinessPress={handleVehicleReadinessPress}') &&
     fleetScreen.includes('accessibilityHint={`Opens the readiness explanation for ${vehicle.name}.`}') &&
     fleetScreen.includes('title="Vehicle Readiness"') &&
     fleetScreen.includes('scoreEyebrow="VEHICLE READINESS"') &&

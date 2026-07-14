@@ -24,6 +24,7 @@ async function main() {
     'dashboard_convoy_widget_removed',
     'emergency_ping_truthful_and_local',
     'sensitive_dispatch_integrations_default_off',
+    'canonical_dispatch_backend_guarded',
     'android_dispatch_convoy_visual_evidence_present',
     'emergency_coordinate_ping_e2e_evidence_present',
   ].forEach((id) => {

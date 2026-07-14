@@ -8,7 +8,7 @@ import {
   View,
   type ListRenderItemInfo,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
 
@@ -16,11 +16,17 @@ import Header from '../components/Header';
 import { ExplorePlanningTabs } from '../components/discover/ExplorePlanningTabs';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import TopoBackground from '../components/TopoBackground';
+import ECSOperationalAnnouncer from '../components/ECSOperationalAnnouncer';
 import { ECS, TACTICAL } from '../lib/theme';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { getMapboxToken } from '../lib/mapConfig';
 import { hapticMicro } from '../lib/haptics';
 import { runAfterShellInteractions, type ShellInteractionTask } from '../lib/shellInteractionScheduler';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
+import {
+  recordECSPerformanceRender,
+  startECSPerformanceSpan,
+} from '../lib/performance/ecsPerformanceDiagnostics';
 import { parseGeoFile, getPrimaryRouteCoordinates } from '../lib/gpxParser';
 import { loadOpportunitiesWithCompatibility } from '../lib/discoverEngine';
 import { buildProfileFromSpecs } from '../lib/rigCompatibilityEngine';
@@ -36,7 +42,8 @@ import {
   getOfflinePrepPackRouteCoordinates,
   getOfflinePrepRouteCoordinates,
   hydrateOfflinePrepRouteGeometry,
-  loadOfflinePrepPackHandoff,
+  loadOfflinePrepPackHandoffAsync,
+  offlineReadinessCoordinator,
   resolveOfflinePrepMapQueueState,
   type OfflinePrepCriticalMapSegment,
   type OfflinePrepPackInput,
@@ -45,7 +52,7 @@ import {
   type OfflinePrepPackStatus,
 } from '../lib/offlinePrepPack';
 import {
-  loadExplorePlanningRouteContext,
+  loadExplorePlanningRouteContextAsync,
   saveExplorePlanningRouteContext,
   upsertExplorePlanningRoute,
 } from '../lib/explore/explorePlanningRouteContextStore';
@@ -818,13 +825,27 @@ function MapPrepQueueCard({
     : 'Size pending';
   return (
     <View style={styles.mapQueueCard} testID="offline-prep-map-queue-state">
-      <View style={styles.mapQueueHeader}>
-        <View style={[styles.mapQueueDot, { backgroundColor: tone }]} />
+      <View
+        style={styles.mapQueueHeader}
+        accessible
+        accessibilityRole="text"
+        accessibilityLabel={`Offline map state: ${state.label}`}
+      >
+        <View
+          style={[styles.mapQueueDot, { backgroundColor: tone }]}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        />
         <Text style={[styles.mapQueueLabel, { color: tone }]}>{state.label}</Text>
         <Text style={styles.mapQueueSource}>{state.source === 'sync_job' ? 'SYNC QUEUE' : state.source === 'tile_region' ? 'ROUTE CACHE' : 'MANIFEST'}</Text>
       </View>
       <Text style={styles.mapQueueMessage}>{state.message}</Text>
-      <View style={styles.progressTrack} accessibilityLabel={`Offline map preparation ${state.percent} percent`}>
+      <View
+        style={styles.progressTrack}
+        accessibilityRole="progressbar"
+        accessibilityLabel="Offline map preparation"
+        accessibilityValue={{ min: 0, max: 100, now: state.percent, text: `${state.percent} percent` }}
+      >
         <View style={[styles.progressFill, { width: `${state.percent}%`, backgroundColor: tone }]} />
       </View>
       <Text style={styles.progressMeta}>
@@ -841,6 +862,8 @@ function MapPrepQueueCard({
           disabled={retrying}
           accessibilityRole="button"
           accessibilityLabel="Retry offline map preparation"
+          accessibilityHint="Retries only the failed or incomplete map preparation work"
+          accessibilityState={{ disabled: retrying, busy: retrying }}
           testID="offline-prep-retry-map-download"
         >
           {retrying ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : <Ionicons name="refresh-outline" size={13} color={TACTICAL.amber} />}
@@ -852,7 +875,13 @@ function MapPrepQueueCard({
 }
 
 export default function ExploreOfflinePrepPackScreen() {
-  const router = useRouter();
+  recordECSPerformanceRender('offline_prep_departure_audit', 'offline_prep_screen');
+  const [offlinePrepPerformance] = useState(() => startECSPerformanceSpan(
+    'offline_prep_departure_audit',
+    'package_read_to_manifest_ready',
+    { trackOutstanding: true },
+  ));
+  const { returnTo: returnSingleFlight } = useECSNavigation();
   const params = useLocalSearchParams<{ routeId?: string; action?: string }>();
   const insets = useSafeAreaInsets();
   const bottomClearance = getShellBottomClearance(insets.bottom, 8);
@@ -880,6 +909,24 @@ export default function ExploreOfflinePrepPackScreen() {
   const importingRouteRef = useRef(false);
   const autoImportOpenedRef = useRef(false);
   const routeLoadTaskRef = useRef<ShellInteractionTask | null>(null);
+  const queuedActionCount = actionMessage?.match(/^(\d+)\s/)?.[1];
+  const errorAnnouncement = error
+    ? {
+        id: `offline-prep-error:${error}`,
+        kind: 'error' as const,
+        subject: 'Offline Prep',
+        detail: error,
+      }
+    : null;
+  const queuedActionAnnouncement = actionMessage && /\bqueued\b/i.test(actionMessage)
+    ? {
+        id: `offline-prep-queued:${actionMessage}`,
+        kind: 'offline_action_queued' as const,
+        subject: 'offline map segment',
+        count: queuedActionCount ? Number(queuedActionCount) : undefined,
+        detail: actionMessage,
+      }
+    : null;
 
   useEffect(() => {
     const refreshSyncState = () => {
@@ -906,8 +953,10 @@ export default function ExploreOfflinePrepPackScreen() {
     routeLoadTaskRef.current = runAfterShellInteractions(() => {
       void (async () => {
         try {
-          const handoff = loadOfflinePrepPackHandoff();
-          const exploreContext = loadExplorePlanningRouteContext();
+          const [handoff, exploreContext] = await Promise.all([
+            loadOfflinePrepPackHandoffAsync(),
+            loadExplorePlanningRouteContextAsync(),
+          ]);
           const suggestedRoutes = (exploreContext?.routes?.length
             ? exploreContext.routes
             : loadOpportunitiesWithCompatibility(null).opportunities
@@ -990,6 +1039,17 @@ export default function ExploreOfflinePrepPackScreen() {
       setError('Offline Prep Pack could not build a manifest from the selected route.');
     }
   }, [selectedInput]);
+
+  useEffect(() => {
+    if (loading || (selectedRoute && !manifest && !error)) return;
+    offlinePrepPerformance.end(error ? 'failed' : 'completed', {
+      routeCount: routes.length,
+      manifestAvailable: Boolean(manifest),
+      selectedRouteAvailable: Boolean(selectedRoute),
+    });
+  }, [error, loading, manifest, offlinePrepPerformance, routes.length, selectedRoute]);
+
+  useEffect(() => () => offlinePrepPerformance.cancel({ unmounted: true }), [offlinePrepPerformance]);
 
   useEffect(() => {
     if (!selectedInput) return;
@@ -1255,6 +1315,7 @@ export default function ExploreOfflinePrepPackScreen() {
     region: TileCacheRegion,
     run: ECSRun,
     routeIntent: OfflineRouteIntentMetadata,
+    readinessManifestId: string,
   ) => {
     void offlineTileSyncCoordinator
       .startRegionSync({
@@ -1265,6 +1326,11 @@ export default function ExploreOfflinePrepPackScreen() {
         routeIntent: routeIntent as unknown as Record<string, unknown>,
       })
       .then(async (job) => {
+        offlineReadinessCoordinator.reconcileTileState(
+          offlineTileSyncCoordinator.getSnapshot().jobs,
+          tileCacheStore.getRegions(),
+        );
+        void offlineReadinessCoordinator.flush();
         const tileCacheStatus =
           job.status === 'complete'
             ? 'complete'
@@ -1280,6 +1346,12 @@ export default function ExploreOfflinePrepPackScreen() {
         );
       })
       .catch(async (syncError: unknown) => {
+        offlineReadinessCoordinator.reconcileTileState(
+          offlineTileSyncCoordinator.getSnapshot().jobs,
+          tileCacheStore.getRegions(),
+        );
+        offlineReadinessCoordinator.failPreparation(readinessManifestId, 'tile_sync_failed');
+        void offlineReadinessCoordinator.flush();
         await updateCachedRouteTileStatus(
           run,
           region.id,
@@ -1310,6 +1382,13 @@ export default function ExploreOfflinePrepPackScreen() {
       }
       const routeIntent = buildOfflinePrepRouteIntent(selectedInput, manifest, run, analysis);
       const criticalSegments = criticalOfflineSegmentsFromManifest(manifest);
+      const quotaStatus = tileCacheStore.getQuotaStatus();
+      offlineReadinessCoordinator.beginPreparation(manifest.readinessManifest, {
+        availableBytes: analysis.cacheComplete
+          ? null
+          : Math.round(quotaStatus.availableMB * 1024 * 1024),
+        quotaBytes: Math.round(quotaStatus.config.quotaLimitMB * 1024 * 1024),
+      });
       if (manifestFullRouteMapTooLarge(manifest)) {
         if (criticalSegments.length === 0) {
           throw new Error('Full-route map download is too large, and ECS could not isolate low-signal segment downloads from this route geometry.');
@@ -1381,10 +1460,20 @@ export default function ExploreOfflinePrepPackScreen() {
         });
         setPrepareAttempted(true);
         setActionMessage(`${criticalSegments.length} low-signal map segment${criticalSegments.length === 1 ? '' : 's'} queued. ECS is caching the route sections most likely to lose service instead of the oversized full-route map.`);
+        offlineReadinessCoordinator.attachMapRegions(
+          manifest.readinessManifest.manifestId,
+          regions.map(({ region }) => region),
+        );
+        void offlineReadinessCoordinator.flush();
         regions.forEach(({ region, routeIntent: segmentRouteIntent }) => {
-          startMapSyncForRegion(region, run, segmentRouteIntent);
+          startMapSyncForRegion(region, run, segmentRouteIntent, manifest.readinessManifest.manifestId);
         });
         return;
+      }
+      const quotaCheck = tileCacheStore.checkQuotaBeforeDownload(analysis.estimatedSizeMB);
+      if (!analysis.cacheComplete && !quotaCheck.canProceed) {
+        offlineReadinessCoordinator.failPreparation(manifest.readinessManifest.manifestId, 'low_storage');
+        throw new Error(quotaCheck.message || 'Offline route download exceeds available offline map storage.');
       }
       const existingCompleteRegion = analysis.cacheComplete ? analysis.cachedRegion : null;
       const region = existingCompleteRegion ?? tileCacheStore.createFromRoute(
@@ -1428,10 +1517,21 @@ export default function ExploreOfflinePrepPackScreen() {
       setActionMessage(existingCompleteRegion
         ? `${manifestStateCopy(manifest.progress.status, manifest.progress).message} Offline route package is already cached and saved to Navigate, Offline Cache, and the Offline Prep list.`
         : 'Offline Prep Pack download started. Progress will remain visible above the ECS banner while you move through the app.');
+      offlineReadinessCoordinator.attachMapRegions(manifest.readinessManifest.manifestId, [region]);
+      offlineReadinessCoordinator.reconcileTileState(
+        offlineTileSyncCoordinator.getSnapshot().jobs,
+        tileCacheStore.getRegions(),
+      );
+      void offlineReadinessCoordinator.flush();
       if (!existingCompleteRegion) {
-        startMapSyncForRegion(region, run, routeIntent);
+        startMapSyncForRegion(region, run, routeIntent, manifest.readinessManifest.manifestId);
       }
     } catch (prepareError) {
+      const currentReadiness = offlineReadinessCoordinator.getManifest(manifest.readinessManifest.manifestId);
+      if (!currentReadiness?.preparation.lastErrorCode) {
+        offlineReadinessCoordinator.failPreparation(manifest.readinessManifest.manifestId, 'offline_preparation_failed');
+      }
+      void offlineReadinessCoordinator.flush();
       setPrepareAttempted(true);
       setError(prepareError instanceof Error ? prepareError.message : 'Offline Prep Pack could not be saved.');
       setActionMessage(null);
@@ -1508,7 +1608,14 @@ export default function ExploreOfflinePrepPackScreen() {
             routeIntent: routeIntent as unknown as Record<string, unknown>,
           });
           await updateCachedRouteTileStatus(run, region.id, routeIntent, 'downloading', null);
-          startMapSyncForRegion(region, run, routeIntent);
+          const quotaStatus = tileCacheStore.getQuotaStatus();
+          offlineReadinessCoordinator.beginPreparation(manifest.readinessManifest, {
+            availableBytes: Math.round(quotaStatus.availableMB * 1024 * 1024),
+            quotaBytes: Math.round(quotaStatus.config.quotaLimitMB * 1024 * 1024),
+          });
+          offlineReadinessCoordinator.attachMapRegions(manifest.readinessManifest.manifestId, [region]);
+          void offlineReadinessCoordinator.flush();
+          startMapSyncForRegion(region, run, routeIntent, manifest.readinessManifest.manifestId);
           setPrepareAttempted(true);
           setPrepareConfirmVisible(false);
           setActionMessage('Offline map retry started. Progress is shown here and in the shared ECS sync banner.');
@@ -1529,7 +1636,12 @@ export default function ExploreOfflinePrepPackScreen() {
 
   const handleBackToSuggestedRoutes = () => {
     clearOfflinePrepPackHandoff();
-    router.push('/discover');
+    const routeIdForReturn = selectedRoute ? routeId(selectedRoute) : selectedRouteId;
+    if (handoffInput?.tripPlan && routeIdForReturn) {
+      returnSingleFlight(`/explore-trip-builder?routeId=${encodeURIComponent(routeIdForReturn)}&setup=1`);
+      return;
+    }
+    returnSingleFlight('/discover');
   };
 
   const showRouteList = routes.length > 0 && (routeListVisible || !selectedRouteId);
@@ -1947,6 +2059,8 @@ export default function ExploreOfflinePrepPackScreen() {
 
   return (
     <TopoBackground>
+      <ECSOperationalAnnouncer event={errorAnnouncement} announceInitial />
+      <ECSOperationalAnnouncer event={queuedActionAnnouncement} announceInitial />
       <View style={[styles.safeContainer, { paddingBottom: bottomClearance }]}>
         <Header title="Explore" />
         <ExplorePlanningTabs activeTab="offline_prep_pack" />

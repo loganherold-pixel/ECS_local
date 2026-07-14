@@ -104,7 +104,7 @@ const {
 
 async function main() {
   const currentSchema = getTripSchemaVersion();
-  assert.strictEqual(currentSchema, 'ecs.expedition.trip.v1');
+  assert.strictEqual(currentSchema, 'ecs.expedition.trip.v2');
   assert.strictEqual(getExpeditionSchemaMigrationHooks().reportSchema, 'ecs.expedition.report.v1');
 
   const missingEverything = normalizeTripRecord({
@@ -123,6 +123,8 @@ async function main() {
   assert.deepStrictEqual(missingEverything.terrainRiskSnapshots, []);
   assert.strictEqual(missingEverything.routeBounds, null);
   assert.strictEqual(missingEverything.recap, null);
+  assert.strictEqual(missingEverything.lifecycle.phase, 'completed');
+  assert(missingEverything.completionKey, 'Legacy completed trips should receive a stable completion key.');
 
   const legacyWithEnoughRecapData = migrateTripRecord({
     id: 'legacy-recap',

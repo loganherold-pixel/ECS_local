@@ -20,7 +20,14 @@ export type FetchEstablishedCampgroundsOptions = {
   bbox: EstablishedCampgroundSearchBbox;
   routeId?: string | null;
   logFailures?: boolean;
+  signal?: AbortSignal;
 };
+
+function createAbortError(): Error {
+  const error = new Error('Request canceled');
+  error.name = 'AbortError';
+  return error;
+}
 
 export type FetchEstablishedCampgroundDetailOptions = {
   id: string;
@@ -69,12 +76,15 @@ export async function fetchEstablishedCampgroundsForMap({
   bbox,
   routeId,
   logFailures = true,
+  signal,
 }: FetchEstablishedCampgroundsOptions): Promise<EstablishedCampgroundsSearchResponse> {
+  if (signal?.aborted) throw createAbortError();
   const body = buildEstablishedCampgroundsSearchRequest(bbox, routeId);
   const cacheKey = buildEstablishedCampgroundsCacheKey(bbox, routeId);
   let result;
   try {
     result = await supabase.functions.invoke(ESTABLISHED_CAMPGROUNDS_EDGE_FUNCTION, { body });
+    if (signal?.aborted) throw createAbortError();
   } catch (invokeError) {
     const diagnostic = buildCampLayerFetchFailureDiagnostic({
       layer: 'established_campgrounds',

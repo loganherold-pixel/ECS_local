@@ -226,15 +226,10 @@ function SetupScreenInner() {
 
     const doDelete = async () => {
       try {
-        setVehicles(prev => prev.filter(veh => veh.id !== v.id));
-        if (isActiveVehicle) {
-          setActiveVehicleId(null);
-          vehicleSetupStore.clearActiveVehicleId();
-        }
-        try { consumablesStore.remove(v.id); } catch {}
-
         const result = await vehicleStore.delete(v.id, user?.id || null);
         if (result.success) {
+          setVehicles(prev => prev.filter(veh => veh.id !== v.id));
+          setActiveVehicleId(vehicleSetupStore.getActiveVehicleId());
           showToast(`Vehicle "${v.name}" deleted`);
         } else {
           showToast(result.error || 'Failed to delete vehicle');

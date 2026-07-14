@@ -27,6 +27,27 @@ import { vehicleTelemetryStore } from './VehicleTelemetryStore';
 import { vehicleTelemetryDeviceRegistry } from './VehicleTelemetryDeviceRegistry';
 import { vehicleTelemetryService } from './VehicleTelemetryService';
 
+const freshnessClockListeners = new Set<() => void>();
+let freshnessClockTimer: ReturnType<typeof setInterval> | null = null;
+
+function subscribeVehicleTelemetryFreshnessClock(listener: () => void): () => void {
+  freshnessClockListeners.add(listener);
+  if (!freshnessClockTimer) {
+    freshnessClockTimer = setInterval(() => {
+      for (const current of freshnessClockListeners) current();
+    }, 10_000);
+    const timerWithUnref = freshnessClockTimer as unknown as { unref?: () => void };
+    timerWithUnref.unref?.();
+  }
+  return () => {
+    freshnessClockListeners.delete(listener);
+    if (freshnessClockListeners.size === 0 && freshnessClockTimer) {
+      clearInterval(freshnessClockTimer);
+      freshnessClockTimer = null;
+    }
+  };
+}
+
 export interface VehicleTelemetryHookResult {
   /** Current telemetry summary */
   summary: VehicleTelemetrySummary;
@@ -135,7 +156,7 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
   // Subscribe to store, registry, and service changes
   useEffect(() => {
     const unsubs = [
-      vehicleTelemetryStore.subscribe(bump),
+      vehicleTelemetryStore.subscribeThrottled(bump),
       vehicleTelemetryDeviceRegistry.subscribe(bump),
       vehicleTelemetryService.subscribe('state', bump),
     ];
@@ -143,10 +164,7 @@ export function useVehicleTelemetry(): VehicleTelemetryHookResult {
   }, [bump]);
 
   // Freshness timer — update every 10 seconds for grace window tracking
-  useEffect(() => {
-    const timer = setInterval(bump, 10_000);
-    return () => clearInterval(timer);
-  }, [bump]);
+  useEffect(() => subscribeVehicleTelemetryFreshnessClock(bump), [bump]);
 
   const summary = vehicleTelemetryStore.getSummary();
   const ecsState = vehicleTelemetryStore.getECSVehicleTelemetryState();

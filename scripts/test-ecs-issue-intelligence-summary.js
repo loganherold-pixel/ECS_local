@@ -8,6 +8,10 @@ const stabilityPanelSource = fs.readFileSync(
   path.join(root, 'components', 'admin', 'EcsIssueIntelligencePanel.tsx'),
   'utf8',
 );
+const issueEdgeSource = fs.readFileSync(
+  path.join(root, 'supabase', 'functions', 'issue-intelligence', 'index.ts'),
+  'utf8',
+);
 
 require.extensions['.ts'] = function compileTs(module, filename) {
   const source = fs.readFileSync(filename, 'utf8');
@@ -25,6 +29,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 const {
   buildIssueGroupSummary,
   normalizeIssueEventForInsert,
+  sanitizeIssueDiagnosticValue,
 } = require(path.join(root, 'supabase', 'functions', '_shared', 'issueIntelligenceSummary.ts'));
 
 function row(overrides) {
@@ -53,6 +58,8 @@ function row(overrides) {
   };
 }
 
+const originalDateNow = Date.now;
+Date.now = () => Date.parse('2026-06-15T12:00:00.000Z');
 const rows = [
   row({
     received_at: '2026-06-14T10:00:00.000Z',
@@ -131,6 +138,7 @@ const rows = [
 ];
 
 const summary = buildIssueGroupSummary(rows);
+Date.now = originalDateNow;
 assert.strictEqual(summary.latestVersion, '1.0.0');
 assert.strictEqual(summary.groups.length, 5, 'Repeated root-condition variants should collapse while retaining historical groups.');
 assert.strictEqual(summary.activeGroups.length, 4, 'Active group count should exclude quieted historical groups.');
@@ -181,6 +189,44 @@ const normalized = normalizeIssueEventForInsert({
 assert.strictEqual(normalized.metadata.groupingSignature, 'command_state_contradiction:dashboard');
 assert.strictEqual(normalized.metadata.issueFamily, 'command_state_contradiction');
 assert.deepStrictEqual(normalized.metadata.affectedSurfaces, ['dashboard']);
+
+const sensitiveEvent = normalizeIssueEventForInsert({
+  issueTitle: 'Provider failure token=secret-provider-token',
+  issueSignature: 'provider:38.123456,-121.654321',
+  normalizedSignature: 'provider:38.123456,-121.654321',
+  message: 'Failure for operator@example.com Bearer raw-auth-token',
+  runtimeContext: {
+    activeTab: 'navigate',
+    restrictedMemberPosition: { latitude: 38.123456, longitude: -121.654321 },
+  },
+  metadata: {
+    accessToken: 'secret-access-token',
+    providerResponse: { raw: 'unredacted-provider-response' },
+    completeTripTrace: [[38.123456, -121.654321]],
+    rawBlePayload: 'aabbccddeeff00112233445566778899',
+  },
+});
+const sensitiveText = JSON.stringify(sensitiveEvent);
+for (const forbidden of [
+  'secret-provider-token',
+  '38.123456',
+  '-121.654321',
+  'operator@example.com',
+  'raw-auth-token',
+  'secret-access-token',
+  'unredacted-provider-response',
+  'aabbccddeeff00112233445566778899',
+]) {
+  assert.strictEqual(sensitiveText.includes(forbidden), false, `Server normalization must redact ${forbidden}`);
+}
+assert.strictEqual(
+  sanitizeIssueDiagnosticValue({ latitude: 38.123456, longitude: -121.654321 }),
+  '[redacted_location]',
+);
+assert.ok(issueEdgeSource.includes('requireAuthenticatedUser(req)'), 'Issue ingest must require an authenticated session.');
+assert.ok(issueEdgeSource.includes('MAX_INGEST_BATCH_SIZE = 20'), 'Issue ingest must keep upload batches bounded.');
+assert.ok(issueEdgeSource.includes('ISSUE_EVENT_INSERT_FAILED'), 'Issue ingest must return a safe database error code.');
+assert.ok(!issueEdgeSource.includes('error: error.message'), 'The edge function must not return raw provider/database errors.');
 
 assert.ok(stabilityPanelSource.includes('Active Groups'), 'Admin stability panel should label the hero count as active groups.');
 assert.ok(

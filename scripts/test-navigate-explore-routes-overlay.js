@@ -165,7 +165,10 @@ assert(
   discover.includes('saveExploreRoutesMapHandoff') &&
     discover.includes('clearNavigationHandoffPayload') &&
     discover.includes('stageNavigationFlow') &&
-    discover.includes("router.push('/navigate')"),
+    (
+      discover.includes("pushSingleFlight('/navigate')") ||
+      discover.includes("router.push('/navigate')")
+    ),
   'Explorer route map preview must clear stale route handoffs, stage the filtered route handoff, and switch to Navigate.',
 );
 assert(
@@ -257,8 +260,9 @@ assert(
 );
 assert(
   mapRenderer.includes("ensureExploreRouteHaloLayer") &&
-    mapRenderer.includes("'explore-route-halo-layer'") &&
-    mapRenderer.includes("['==', ['get', 'kind'], 'explore_route']") &&
+    mapRenderer.includes("EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID = 'explore-preview-route-halo-layer'") &&
+    mapRenderer.includes("EXPLORE_PREVIEW_ROUTE_SOURCE_ID = 'explore-preview-route-source'") &&
+    mapRenderer.includes("type: 'line'") &&
     mapRenderer.includes('applySegmentLineStyle'),
   'Mapped Explorer trails must render as category-colored route lines with a dedicated halo, not point/diamond markers.',
 );

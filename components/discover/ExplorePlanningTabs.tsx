@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useRouter } from 'expo-router';
 
 import { ECSSegmentedControl } from '../ECSChip';
 import { deferShellRouteNavigation, type ShellInteractionTask } from '../../lib/shellInteractionScheduler';
+import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 
 type ExplorePlanningTab = 'suggested_routes' | 'trip_builder' | 'offline_prep_pack';
 
@@ -24,7 +24,7 @@ function isExplorePlanningTab(key: string): key is ExplorePlanningTab {
 }
 
 export function ExplorePlanningTabs({ activeTab }: { activeTab: ExplorePlanningTab }) {
-  const router = useRouter();
+  const { push: pushSingleFlight } = useECSNavigation();
   const pendingNavigationTaskRef = useRef<ShellInteractionTask | null>(null);
   const [pendingTab, setPendingTab] = useState<ExplorePlanningTab | null>(null);
   const displayTab = pendingTab ?? activeTab;
@@ -60,9 +60,10 @@ export function ExplorePlanningTabs({ activeTab }: { activeTab: ExplorePlanningT
     setPendingTab(key);
     pendingNavigationTaskRef.current = deferShellRouteNavigation(() => {
       pendingNavigationTaskRef.current = null;
-      router.push(EXPLORE_PLANNING_TAB_ROUTES[key] as any);
+      const attempt = pushSingleFlight(EXPLORE_PLANNING_TAB_ROUTES[key]);
+      if (!attempt.accepted) setPendingTab(null);
     });
-  }, [activeTab, pendingTab, router]);
+  }, [activeTab, pendingTab, pushSingleFlight]);
 
   return (
     <View style={styles.container} testID="explore-planning-tabs">

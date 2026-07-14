@@ -4,6 +4,19 @@ const path = require('path');
 const Module = require('module');
 const ts = require('typescript');
 
+require.extensions['.ts'] = function compileTypeScript(module, filename) {
+  const source = fs.readFileSync(filename, 'utf8');
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(output.outputText, filename);
+};
+
 function loadTypeScriptModule(relPath) {
   const fullPath = path.join(process.cwd(), relPath);
   const source = fs.readFileSync(fullPath, 'utf8');
@@ -74,8 +87,8 @@ for (const requiredSource of [
   "isDispatchFeatureEnabled(dispatchRollout, 'automatedSosTransmission')",
   "isDispatchFeatureEnabled(dispatchRollout, 'liveRadioNetworkIntegrations')",
   'dispatchSensitiveGateNotice',
-  '!externalDispatchIntegrationEnabled || !recoveryCadBackendContext',
-  '!externalDispatchIntegrationEnabled || !recoveryCadRealtimeExpeditionId',
+  '!recoveryCadSharingEnabled || !recoveryCadBackendContext',
+  '!recoveryCadSharingEnabled || !recoveryCadRealtimeExpeditionId',
   'teamPositionSharingEnabled || externalDispatchIntegrationEnabled',
   'Recovery report saved locally.',
   'Local ECS Dispatch report only. This does not contact emergency services or publish externally.',
@@ -86,16 +99,17 @@ for (const requiredSource of [
   );
 }
 
-const headerIndex = commandCenterSource.indexOf('<View style={styles.headerStrip}>');
-const topAdvisoryIndex = commandCenterSource.indexOf('{advisory ? (', headerIndex);
-const convoySetupIndex = commandCenterSource.indexOf('<DispatchConvoyTeamSetupCard', topAdvisoryIndex);
-const convoyCommandIndex = commandCenterSource.indexOf('<View style={styles.feedPanel}>', convoySetupIndex);
+const headerIndex = commandCenterSource.indexOf('const headerStrip = (');
+const topAdvisoryIndex = commandCenterSource.indexOf('const advisoryLine = advisory ? (', headerIndex);
+const convoyCommandIndex = commandCenterSource.indexOf(
+  '<View style={[styles.feedPanel, isLandscapeDispatch ? styles.feedPanelLandscapeSignal : null]}>',
+  topAdvisoryIndex,
+);
 assert.ok(
   headerIndex >= 0 &&
     topAdvisoryIndex > headerIndex &&
-    convoySetupIndex > topAdvisoryIndex &&
-    convoyCommandIndex > convoySetupIndex,
-  'Dispatch should render header/status actions, ECS advisory, convoy setup/team, then the enlarged convoy command surface.',
+    convoyCommandIndex > topAdvisoryIndex,
+  'Dispatch should define header/status actions and ECS advisory before the convoy command surface.',
 );
 assert.ok(
   !commandCenterSource.includes('<View style={styles.rolloutNotice}>'),

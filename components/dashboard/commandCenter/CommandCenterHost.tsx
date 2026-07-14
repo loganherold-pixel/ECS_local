@@ -12,6 +12,8 @@ import type {
   CommandCenterMode,
   CommandCenterWidgetComponentProps,
 } from './commandCenterTypes';
+import { ecsLog } from '../../../lib/ecsLogger';
+import { reportRecoverableFailure } from '../../../lib/ecsIssueIntelligence';
 
 type ExternalCommandCenterRenderer = (
   props: CommandCenterWidgetComponentProps,
@@ -60,10 +62,37 @@ class CommandCenterHostErrorBoundary extends React.Component<
     return { hasError: true };
   }
 
-  componentDidCatch(error: unknown) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.warn('[ECS_COMMAND_CENTER] Command widget render failed', error);
-    }
+  componentDidCatch(error: unknown, info: React.ErrorInfo) {
+    const componentStack = info.componentStack?.split('\n').slice(0, 6).join('\n') ?? null;
+    ecsLog.captureFailure({
+      kind: 'unexpected',
+      domain: 'dashboard',
+      operation: 'command_center_render',
+      code: 'COMMAND_CENTER_WIDGET_RENDER_FAILURE',
+      severity: 'error',
+      recoverability: 'user_action',
+      retryability: 'conditional',
+      sourceState: 'unavailable',
+      context: {
+        mode: this.props.mode,
+        componentStack,
+      },
+    }, error, {
+      category: 'WIDGET',
+      fingerprint: this.props.mode,
+    });
+    reportRecoverableFailure({
+      severity: 'medium',
+      issueTitle: 'Command Center widget render failure',
+      ecsArea: 'dashboard',
+      error,
+      signature: `command_center_boundary:${this.props.mode}`,
+      metadata: {
+        mode: this.props.mode,
+        componentStack,
+      },
+      fallbackUsed: true,
+    });
   }
 
   componentDidUpdate(previousProps: HostErrorBoundaryProps) {
@@ -117,9 +146,17 @@ export default function CommandCenterHost({
   }, [mode, onModeChange, resolvedMode]);
 
   if (!definition) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.warn(`[ECS_COMMAND_CENTER] Missing command widget definition for ${resolvedMode}`);
-    }
+    ecsLog.captureFailure({
+      kind: 'configuration',
+      domain: 'dashboard',
+      operation: 'resolve_command_center_widget',
+      code: 'COMMAND_CENTER_WIDGET_DEFINITION_MISSING',
+      sourceState: 'missing',
+      context: { mode: resolvedMode },
+    }, undefined, {
+      category: 'WIDGET',
+      fingerprint: resolvedMode,
+    });
     return null;
   }
 
@@ -162,9 +199,13 @@ export default function CommandCenterHost({
 
   const renderFallback = externalRenderers?.[fallbackMode];
   if (renderFallback) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      console.warn(`[ECS_COMMAND_CENTER] Falling back from ${resolvedMode} to ${fallbackMode}`);
-    }
+    ecsLog.dev('WIDGET', 'command_center_fallback', {
+      resolvedMode,
+      fallbackMode,
+    }, {
+      debugFlag: 'ECS_DEBUG_DASHBOARD',
+      fingerprint: `${resolvedMode}:${fallbackMode}`,
+    });
     return (
       <>
         {renderFallback({

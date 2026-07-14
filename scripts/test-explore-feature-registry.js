@@ -19,6 +19,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 };
 
 const registry = require(path.join(root, 'lib', 'explore', 'exploreFeatureRegistry.ts'));
+const routeManifest = require(path.join(root, 'lib', 'routeManifest.ts'));
 
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
 const placeholderSource = fs.readFileSync(
@@ -145,7 +146,11 @@ assertIncludes(discoverSource, 'accessibilityLabel="Open Explore Trip Builder"',
 assertIncludes(discoverSource, "case 'suggested_routes':", 'Suggested Routes tab should keep routing to existing suggestions.');
 assertNotIncludes(discoverSource, "case 'route_filters':", 'Route Filters should no longer be a primary Explore tab action.');
 assertIncludes(discoverSource, 'activeExplorePrimaryTab === \'suggested_routes\'', 'Suggested Routes should be the face-page tab.');
-assertIncludes(discoverSource, 'router.push(\'/explore-trip-builder\')', 'Trip Builder should open the real planning surface directly.');
+assert(
+  discoverSource.includes("pushSingleFlight('/explore-trip-builder')") ||
+    discoverSource.includes("router.push('/explore-trip-builder')"),
+  'Trip Builder should open the real planning surface directly.',
+);
 assertIncludes(discoverSource, 'testID="explore-offline_prep_pack-tab-panel"', 'Offline Prep should keep its inline planning panel.');
 assertNotIncludes(discoverSource, 'testID="explore-open-trip-builder"', 'Trip Builder should not render a redundant inline staging panel.');
 assertIncludes(discoverSource, 'event: \'explore_feature_selected\'', 'Explore feature selections should log a placeholder analytics-style event.');
@@ -197,11 +202,13 @@ assertIncludes(placeholderSource, 'registered as a placeholder', 'Placeholder sc
 assertIncludes(placeholderSource, 'Route suggestions and filters remain available', 'Placeholder screens should preserve current Explore behavior.');
 assertIncludes(layoutSource, 'name="explore-trip-builder"', 'Root stack should register Trip Builder for direct mobile handoff.');
 assertIncludes(layoutSource, 'name="explore-offline-prep-pack"', 'Root stack should register Offline Prep Pack for direct mobile handoff.');
-assertIncludes(routeManifestSource, "path: '/explore-trip-builder'", 'Trip Builder should be represented in the route manifest.');
-assertIncludes(routeManifestSource, "path: '/explore-offline-prep-pack'", 'Offline Prep Pack should be represented in the route manifest.');
-assertIncludes(routeManifestSource, "restorableShellRoute: '/discover'", 'Explore planning routes should restore through the Explore shell route.');
-assertIncludes(authResolverSource, "currentPath === '/explore-trip-builder'", 'Trip Builder should remain reachable during pre-setup Explore use.');
-assertIncludes(authResolverSource, "currentPath === '/explore-offline-prep-pack'", 'Offline Prep Pack should remain reachable during pre-setup Explore use.');
+assert.strictEqual(routeManifest.getRouteMetadata('/explore-trip-builder')?.parentSurface, 'explore');
+assert.strictEqual(routeManifest.getRouteMetadata('/explore-trip-builder')?.safeReturnRoute, '/discover');
+assert.strictEqual(routeManifest.getRouteMetadata('/explore-offline-prep-pack')?.parentSurface, 'explore');
+assert.strictEqual(routeManifest.getRouteOwnership('/explore-trip-builder')?.restorableShellRoute, '/discover');
+assert.strictEqual(routeManifest.getRouteOwnership('/explore-offline-prep-pack')?.restorableShellRoute, '/discover');
+assertIncludes(authResolverSource, 'getRouteMetadata', 'Pre-setup route access should use canonical route metadata.');
+assertIncludes(authResolverSource, "metadata.setupRequirement === 'none'", 'Setup-optional Explore planning routes should remain reachable before vehicle setup.');
 
 const combinedNewSurface = [
   registry.getExploreFeatureRegistry().map((feature) => `${feature.title} ${feature.description}`).join(' '),

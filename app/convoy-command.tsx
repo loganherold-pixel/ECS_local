@@ -9,7 +9,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import QRCode from 'react-native-qrcode-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,6 +18,7 @@ import { ECSCopyButton } from '../components/ECSCopyButton';
 import { ECSButton } from '../components/ECSButton';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import { useApp } from '../context/AppContext';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import { formatConvoyBackendUserMessage } from '../lib/convoy/convoyBackendReadiness';
 import { formatConvoyInviteCode, normalizeConvoyInviteCodeForSubmit } from '../lib/convoy/convoyInviteCodeFormat';
 import {
@@ -41,6 +41,7 @@ import { ECS_SURFACE } from '../lib/ecsSurfaceTokens';
 import type { Vehicle } from '../lib/types';
 import { vehicleStore } from '../lib/vehicleStore';
 import { getCurrentExpeditionIdentityTitle } from '../lib/expedition/expeditionBadgeStore';
+import { expeditionStateStore } from '../lib/expeditionStateStore';
 
 type Mode = 'leader' | 'join' | 'roster';
 type ExpirationPreset = '2h' | '24h' | '7d';
@@ -138,7 +139,7 @@ function qrReadyPayload(rawCode: string, role: ConvoyRole, expiresAt: string): s
 }
 
 export default function ConvoyCommandCredentialsScreen() {
-  const router = useRouter();
+  const { back: goBack } = useECSNavigation();
   const insets = useSafeAreaInsets();
   const { user } = useApp();
   const [mode, setMode] = useState<Mode>('leader');
@@ -399,8 +400,13 @@ export default function ConvoyCommandCredentialsScreen() {
     setLoading(true);
     setError(null);
     setNotice(null);
+    const expedition = expeditionStateStore.getCurrentExpedition();
     const result = await convoyMembershipService.createConvoy({
       name: convoyName,
+      expeditionId:
+        expedition?.state === 'active' || expedition?.state === 'paused'
+          ? expedition.cloudSessionId ?? expedition.id
+          : null,
       leaderCallsign,
       leaderVehicleId,
       leaderExpeditionBadgeTitle: expeditionIdentityTitle,
@@ -532,7 +538,7 @@ export default function ConvoyCommandCredentialsScreen() {
             style={styles.backButton}
             accessibilityRole="button"
             accessibilityLabel="Back to dispatch"
-            onPress={() => router.back()}
+            onPress={() => goBack()}
             activeOpacity={0.82}
           >
             <Ionicons name="chevron-back-outline" size={15} color={TACTICAL.amber} />

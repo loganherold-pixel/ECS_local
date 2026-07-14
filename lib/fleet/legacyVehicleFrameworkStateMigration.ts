@@ -56,8 +56,11 @@ export async function sanitizeLegacyVehicleFrameworkState(): Promise<void> {
     changed = true;
   }
 
-  if (activeVehicleId && !activeVehicleExists) {
-    vehicleSetupStore.clearActiveVehicleId();
+  if ((activeVehicleId && !activeVehicleExists) || (!activeVehicleId && localVehicles.length === 1)) {
+    vehicleSetupStore.reconcileActiveVehicle(localVehicles.map((vehicle) => vehicle.id), {
+      autoSelectSingle: true,
+      reason: 'legacy_migration',
+    });
     changed = true;
   }
 

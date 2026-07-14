@@ -49,6 +49,7 @@ const listeners = new Set<Listener>();
 const runningPromises = new Map<string, Promise<OfflineTileSyncJob>>();
 let jobs: OfflineTileSyncJob[] = [];
 let loaded = false;
+let hydrated = false;
 
 function nowISO(): string {
   return new Date().toISOString();
@@ -131,6 +132,13 @@ function loadJobs(): void {
     jobs = [];
   }
 }
+
+const hydrationPromise = persistence.waitForHydration().then(() => {
+  loaded = false;
+  loadJobs();
+  hydrated = true;
+  listeners.forEach((listener) => listener());
+});
 
 function persistJobs(): void {
   try {
@@ -295,6 +303,7 @@ export const offlineTileSyncCoordinator = {
     syncType?: OfflineTileSyncType;
     routeIntent?: Record<string, unknown> | null;
   }): Promise<OfflineTileSyncJob> {
+    await hydrationPromise;
     loadJobs();
     const activeExisting = jobs.find(
       (job) => job.regionId === input.regionId && isActiveStatus(job.status),
@@ -332,7 +341,9 @@ export const offlineTileSyncCoordinator = {
   resumePendingJobs(input: {
     source?: OfflineTileSyncSource;
     syncType?: OfflineTileSyncType;
+    networkAvailable?: boolean;
   } = {}): OfflineTileSyncJob[] {
+    if (input.networkAvailable === false || !hydrated) return [];
     loadJobs();
     const resumable = jobs.filter((job) => {
       if (job.status !== 'pending') return false;
@@ -359,5 +370,9 @@ export const offlineTileSyncCoordinator = {
 
   async waitForPersistence(): Promise<void> {
     await persistence.flush();
+  },
+
+  async waitForHydration(): Promise<void> {
+    await hydrationPromise;
   },
 };

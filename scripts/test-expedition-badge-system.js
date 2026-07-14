@@ -15,6 +15,8 @@ const registrySource = read('lib/expedition/expeditionBadgeRegistry.ts');
 const storeSource = read('lib/expedition/expeditionBadgeStore.ts');
 const tripStoreSource = read('lib/expedition/expeditionTripRecordStore.ts');
 const hubSource = read('components/dashboard/ExpeditionTab.tsx');
+const catalogSource = read('lib/expedition/expeditionBadgeCatalog.ts');
+const catalogViewSource = read('components/dashboard/ExpeditionBadgeCatalogView.tsx');
 const indexSource = read('lib/expedition/index.ts');
 
 [
@@ -143,16 +145,18 @@ assert(
 assert(
   hubSource.includes('getUnlockedBadges') &&
     hubSource.includes('getBadgesForTrip') &&
-    hubSource.includes('Unlocked Badges') &&
+    hubSource.includes('ExpeditionBadgeCatalogView') &&
+    hubSource.includes('Badge Catalog') &&
     hubSource.includes('Badges Earned') &&
     hubSource.includes('No badges earned on this expedition.'),
-  'Expedition Hub should render unlocked-only badges and trip-earned badges.',
+  'Expedition Hub should use persisted unlocks for the personalized catalog and trip-earned badges.',
 );
 assert(
   !hubSource.includes('EXPEDITION_BADGE_DEFINITIONS.map') &&
-    !hubSource.toLowerCase().includes('mystery badge') &&
-    !hubSource.includes('Locked Badge'),
-  'Expedition Hub must not expose a complete locked badge catalog.',
+    catalogSource.includes('.filter((definition) => !definition.isHidden || earnedIds.has(definition.id))') &&
+    catalogViewSource.includes('SectionList') &&
+    !hubSource.toLowerCase().includes('mystery badge'),
+  'Badge catalog should remain virtualized and omit locked hidden definitions.',
 );
 
 const memoryStorage = new Map();

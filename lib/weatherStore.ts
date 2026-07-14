@@ -326,12 +326,54 @@ function firstDefined(source: any, paths: string[]): unknown {
 
 function weatherDebugLog(message: string, payload?: Record<string, unknown>) {
   const event = message.replace(/^\[WEATHER\]\s*/, '').trim();
-  if (event.includes('request_failure')) {
-    ecsLog.warn('WEATHER', event, payload);
+  const normalizedEvent = event.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const isFailure = event.includes('request_failure');
+  const isCacheStale = event.includes('cache_stale');
+  const isRequestStart = event.includes('request_start');
+  const isRequestSuccess = event.includes('request_success') || event.includes('request_skipped');
+
+  if (isFailure || isCacheStale || isRequestStart || isRequestSuccess) {
+    ecsLog.breadcrumb({
+      domain: 'weather',
+      operation: 'provider_refresh',
+      code: `WEATHER_${normalizedEvent || 'EVENT'}`,
+      status: isFailure ? 'failed' : isCacheStale ? 'degraded' : isRequestStart ? 'started' : 'completed',
+      sourceState: isFailure
+        ? 'unavailable'
+        : isCacheStale
+          ? 'stale'
+          : event.includes('cache_fresh')
+            ? 'cached'
+            : 'live',
+      context: payload,
+    });
+  }
+  if (isFailure) {
+    ecsLog.captureFailure({
+      kind: 'provider',
+      domain: 'weather',
+      operation: 'provider_refresh',
+      code: 'WEATHER_PROVIDER_REFRESH_FAILED',
+      sourceState: 'unavailable',
+      context: payload,
+    }, undefined, {
+      category: 'WEATHER',
+      fingerprint: normalizedEvent,
+    });
     return;
   }
-  if (event.includes('cache_stale')) {
-    ecsLog.warn('WEATHER', event, payload);
+  if (isCacheStale) {
+    ecsLog.captureFailure({
+      kind: 'degraded_data',
+      domain: 'weather',
+      operation: 'cache_read',
+      code: 'WEATHER_CACHE_STALE',
+      sourceState: 'stale',
+      context: payload,
+    }, undefined, {
+      category: 'WEATHER',
+      fingerprint: normalizedEvent,
+    });
     return;
   }
   if (!WEATHER_DEBUG) return;

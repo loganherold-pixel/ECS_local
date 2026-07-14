@@ -1,5 +1,13 @@
 # ECS Release Logging Hygiene Audit
 
+## 2026-07-13 Observability Foundation
+
+ECS now has a typed error taxonomy, recursive diagnostic redaction, bounded lifecycle breadcrumbs, repeated-failure suppression, a local support snapshot, and a default-off remote telemetry gate. Startup, Supabase, issue intelligence, feature boundaries, weather refresh, vehicle session, BLE, realtime, and offline replay paths use the central logger for the first migration tranche.
+
+The earlier statement that no follow-up candidates remained is no longer treated as a repository-wide conclusion. A current inventory found substantial direct console usage outside this bounded tranche, led by offline persistence, power-provider adapters, AI/assistant paths, and large operational screens. The ranked migration order and rollout requirements are maintained in `docs/observability.md`.
+
+Automatic remote issue upload is not production-enabled by this work. It requires configured transport, privacy approval, and explicit user consent. Manual reports remain explicit user actions and are still privacy-gated.
+
 Date: 2026-05-03
 
 ## Summary

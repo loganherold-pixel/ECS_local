@@ -223,6 +223,26 @@ export function evaluateCampCandidateHardGates({
   const gates: CampHardGateResult[] = [];
   const missingData = new Set(collectBaseMissingData(candidate, enrichment, context));
 
+  if (candidate.recommendationVisibility === 'blocked') {
+    gates.push(
+      buildGate(
+        'rejected',
+        'campops.candidate.blocked',
+        'critical',
+        'This candidate is not approved for operational recommendations.',
+      ),
+    );
+  } else if (candidate.recommendationVisibility === 'research_only') {
+    gates.push(
+      buildGate(
+        'rejected',
+        'campops.candidate.research_only',
+        'watch',
+        'This record is planning reference data and must be verified before it can become a camp endpoint.',
+      ),
+    );
+  }
+
   if (!enrichment) {
     gates.push(
       buildGate(
@@ -282,6 +302,66 @@ export function evaluateCampCandidateHardGates({
       gates.push(
         buildGate('caution', 'campops.access.permit_required', 'caution', 'Access appears to require a permit or permission.'),
       );
+    }
+
+    const conditionFreshness = candidate.evidence?.currentCondition.freshness;
+    if (
+      candidate.evidence?.currentCondition.status === 'clear' &&
+      (conditionFreshness === 'stale' || conditionFreshness === 'expired' || conditionFreshness === 'unavailable')
+    ) {
+      gates.push(
+        buildGate(
+          'unknown',
+          'campops.conditions.not_current',
+          'caution',
+          'A previously clear condition is stale or unavailable and cannot be treated as current.',
+          ['currentConditionFreshness'],
+        ),
+      );
+    }
+
+    if (candidate.source === 'established_campground') {
+      const availabilityStatus = enrichment.availabilityStatus ?? candidate.evidence?.availability.status ?? 'unknown';
+      const availabilityUsable = enrichment.availabilityUsableForDecision === true ||
+        candidate.evidence?.availability.usableForDecision === true;
+      const reservationStatus = stringCondition(candidate, ['reservationStatus']);
+      if (availabilityStatus === 'closed') {
+        gates.push(
+          buildGate('rejected', 'campops.availability.closed', 'critical', 'The campground provider reports this site closed.'),
+        );
+      } else if (availabilityStatus === 'unavailable' && availabilityUsable) {
+        gates.push(
+          buildGate(
+            reservationStatus === 'required' || reservationStatus === 'reservable' ? 'rejected' : 'caution',
+            'campops.availability.unavailable',
+            reservationStatus === 'required' || reservationStatus === 'reservable' ? 'critical' : 'caution',
+            'Fresh provider data reports no current availability.',
+          ),
+        );
+      } else if (availabilityStatus !== 'unknown' && !availabilityUsable) {
+        gates.push(
+          buildGate(
+            'unknown',
+            'campops.availability.not_current',
+            'caution',
+            'Reported campground availability is stale, expired, or unavailable and cannot be treated as current.',
+            ['availabilityFreshness'],
+          ),
+        );
+      } else if (
+        availabilityStatus === 'unknown' &&
+        (reservationStatus === 'required' || reservationStatus === 'reservable')
+      ) {
+        gates.push(
+          buildGate(
+            'unknown',
+            'campops.availability.unknown',
+            'caution',
+            'Current availability is unknown for this reservable campground.',
+            ['availabilityStatus'],
+          ),
+        );
+      }
     }
 
     const publicAccessStatus =

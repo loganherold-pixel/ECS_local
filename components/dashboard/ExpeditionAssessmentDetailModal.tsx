@@ -63,7 +63,14 @@ export default function ExpeditionAssessmentDetailModal({
       {...fullBodyPopupProps}
       contentContainerStyle={styles.content}
       footer={
-        <TouchableOpacity style={styles.closeButton} activeOpacity={0.78} onPress={onClose}>
+        <TouchableOpacity
+          style={styles.closeButton}
+          activeOpacity={0.78}
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel={`Close ${resolvedTitle} assessment`}
+          accessibilityHint="Returns to the Expedition operational overview"
+        >
           <Ionicons name="close-outline" size={15} color={TACTICAL.text} />
           <Text style={styles.closeButtonText}>Close</Text>
         </TouchableOpacity>
@@ -91,7 +98,7 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   closeButton: {
-    minHeight: 38,
+    minHeight: 44,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: GOLD_RAIL.subsection,

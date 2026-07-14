@@ -1,11 +1,14 @@
 import type { ECSStatusTone } from './ecsStatusTokens';
 import {
-  evaluateSourceTruthRef,
+  assessSourceTruth,
   sanitizeSourceTruthDisplayText,
   type FreshnessPolicy,
   type FreshnessPolicyOverride,
   type SourceTruthAvailability,
+  type SourceTruthAssessment,
+  type SourceTruthAuthorityKind,
   type SourceTruthConfidence,
+  type SourceTruthConflictState,
   type SourceTruthCoverage,
   type SourceTruthFreshness,
   type SourceTruthOrigin,
@@ -33,6 +36,8 @@ export type SourceTruthInspectorModel = {
   availabilityLabel: string;
   coverageLabel: string;
   confidenceLabel: string;
+  authorityLabel: string;
+  conflictLabel: string;
   ageLabel: string;
   triggerLabel: string;
   triggerTone: ECSStatusTone;
@@ -51,15 +56,33 @@ export type SourceTruthInspectorModel = {
   dependencies: string[];
   warnings: SourceTruthInspectorWarning[];
   conflict: boolean;
+  assessment: SourceTruthAssessment;
   accessibilityLabel: string;
 };
 
 export type BuildSourceTruthInspectorModelInput = {
   source?: SourceTruthRef | null;
+  sources?: readonly SourceTruthRef[] | null;
   policyKey?: SourceTruthPolicyKey | null;
   policyOverride?: FreshnessPolicyOverride | null;
   dependencies?: readonly string[] | null;
   now?: number | Date | string | null;
+};
+
+export type SourceTruthStatusPresentation = {
+  assessment: SourceTruthAssessment;
+  source: SourceTruthAssessment['effectiveSource'];
+  sourceName: string;
+  freshnessLabel: string;
+  originLabel: string;
+  availabilityLabel: string;
+  coverageLabel: string;
+  confidenceLabel: string;
+  authorityLabel: string;
+  conflictLabel: string;
+  triggerLabel: string;
+  triggerTone: ECSStatusTone;
+  triggerIcon: SourceTruthInspectorModel['triggerIcon'];
 };
 
 const FRESHNESS_LABELS: Record<SourceTruthFreshness, string> = {
@@ -99,6 +122,25 @@ const CONFIDENCE_LABELS: Record<SourceTruthConfidence, string> = {
   unknown: 'Unknown',
 };
 
+const AUTHORITY_LABELS: Record<SourceTruthAuthorityKind, string> = {
+  official: 'Official authority',
+  verified_document: 'Verified document',
+  provider: 'Provider source',
+  device: 'Device source',
+  user: 'User supplied',
+  community: 'Community source',
+  ecs: 'ECS-derived',
+  mixed: 'Mixed authorities',
+  unknown: 'Unknown authority',
+};
+
+const CONFLICT_LABELS: Record<SourceTruthConflictState, string> = {
+  none: 'No known conflict',
+  present: 'Conflicting evidence present',
+  resolved: 'Conflict resolved',
+  unknown: 'Conflict state unknown',
+};
+
 const WARNING_COPY: Record<string, string> = {
   missing_source_truth: 'No canonical source details are available for this result.',
   missing_timestamp: 'The source did not provide a usable observation or retrieval time.',
@@ -114,6 +156,11 @@ const WARNING_COPY: Record<string, string> = {
   stale_source: 'The source is outside its current or recent freshness window.',
   expired_source: 'The source has passed its expiration window.',
   conflict_detected: 'This source conflicts with other available evidence.',
+  conflict_resolved: 'A previously identified source conflict is recorded as resolved.',
+  conflict_state_unknown: 'ECS cannot establish whether available sources conflict.',
+  expired_live_source: 'The live source has expired under its domain freshness policy.',
+  live_source_unavailable: 'The live source is currently unavailable.',
+  using_last_good_cache: 'ECS is using a usable last-known cache while the live source is expired or unavailable.',
   readiness_assessment_inferred: 'The readiness result is a deterministic ECS inference from its listed inputs.',
   readiness_sources_missing: 'One or more readiness inputs are missing.',
   readiness_sources_stale: 'One or more readiness inputs are stale.',
@@ -150,40 +197,31 @@ const EMPTY_SOURCE: SourceTruthRef = {
 export function buildSourceTruthInspectorModel(
   input: BuildSourceTruthInspectorModelInput,
 ): SourceTruthInspectorModel {
-  const evaluation = evaluateSourceTruthRef(input.source ?? EMPTY_SOURCE, {
-    policyKey: input.policyKey,
-    policyOverride: input.policyOverride,
-    now: input.now,
-  });
-  const sourceName = displayIdentity(evaluation.ref.authority)
-    ?? displayIdentity(evaluation.ref.provider)
-    ?? 'Unknown source';
+  const presentation = selectSourceTruthStatusPresentation(input);
+  const { assessment } = presentation;
+  const evaluation = presentation.source ?? assessment.sources[0];
+  if (!evaluation) {
+    throw new Error('Source truth presentation requires an evaluated fallback source.');
+  }
+  const sourceName = presentation.sourceName;
   const providerName = displayIdentity(evaluation.ref.provider);
-  const freshnessLabel = FRESHNESS_LABELS[evaluation.freshness];
-  const originLabel = ORIGIN_LABELS[evaluation.ref.origin];
-  const availabilityLabel = AVAILABILITY_LABELS[evaluation.availability];
-  const coverageLabel = COVERAGE_LABELS[evaluation.coverage];
-  const confidenceLabel = CONFIDENCE_LABELS[evaluation.confidence];
+  const freshnessLabel = presentation.freshnessLabel;
+  const originLabel = presentation.originLabel;
+  const availabilityLabel = presentation.availabilityLabel;
+  const coverageLabel = presentation.coverageLabel;
+  const confidenceLabel = presentation.confidenceLabel;
+  const authorityLabel = presentation.authorityLabel;
+  const conflictLabel = presentation.conflictLabel;
   const ageLabel = formatSourceTruthAge(evaluation.ageMs);
   const dependencies = sanitizeDependencies(input.dependencies);
-  const warningCodes = input.source
-    ? evaluation.warningCodes
-    : uniqueStrings([...evaluation.warningCodes, 'missing_source_truth']);
+  const hasDeclaredSource = Boolean(input.source || input.sources?.length);
+  const warningCodes = hasDeclaredSource
+    ? assessment.warningCodes
+    : uniqueStrings([...assessment.warningCodes, 'missing_source_truth']);
   const warnings = warningCodes.map(buildWarning);
-  const triggerTone = resolveTriggerTone(
-    evaluation.freshness,
-    evaluation.availability,
-    evaluation.conflict,
-  );
-  const triggerIcon = resolveTriggerIcon(
-    evaluation.ref.origin,
-    evaluation.freshness,
-    evaluation.conflict,
-  );
-  const triggerLabel = buildTriggerLabel(
-    evaluation.ref.origin,
-    evaluation.freshness,
-  );
+  const triggerTone = presentation.triggerTone;
+  const triggerIcon = presentation.triggerIcon;
+  const triggerLabel = presentation.triggerLabel;
 
   const sourceRows: SourceTruthInspectorRow[] = [
     { id: 'source', label: 'Source / authority', value: sourceName },
@@ -191,6 +229,10 @@ export function buildSourceTruthInspectorModel(
       ? [{ id: 'provider', label: 'Provider', value: providerName }]
       : []),
     { id: 'origin', label: 'Origin', value: originLabel },
+    { id: 'authority-kind', label: 'Authority type', value: authorityLabel },
+    ...(assessment.sources.length > 1
+      ? [{ id: 'source-count', label: 'Evidence sources', value: String(assessment.sources.length) }]
+      : []),
   ];
 
   const timingRows: SourceTruthInspectorRow[] = [
@@ -228,8 +270,9 @@ export function buildSourceTruthInspectorModel(
     { id: 'availability', label: 'Availability', value: availabilityLabel },
     { id: 'coverage', label: 'Coverage', value: coverageLabel },
     { id: 'confidence', label: 'Confidence', value: confidenceLabel },
-    ...(evaluation.conflict
-      ? [{ id: 'conflict', label: 'Conflict', value: 'Conflicting evidence present' }]
+    { id: 'conflict', label: 'Conflict', value: conflictLabel },
+    ...(assessment.facts.usingLastGoodCache
+      ? [{ id: 'last-good', label: 'Fallback', value: 'Usable last-known cache' }]
       : []),
   ];
 
@@ -237,8 +280,11 @@ export function buildSourceTruthInspectorModel(
     policyLabel: evaluation.policy.label,
     origin: evaluation.ref.origin,
     freshness: evaluation.freshness,
-    availability: evaluation.availability,
-    conflict: evaluation.conflict,
+    availability: assessment.availability,
+    conflict: assessment.conflict,
+    usingLastGoodCache: assessment.facts.usingLastGoodCache,
+    liveSourceExpired: assessment.facts.expiredLiveSource,
+    liveSourceUnavailable: assessment.facts.unavailableLiveSource,
   });
 
   return {
@@ -249,6 +295,8 @@ export function buildSourceTruthInspectorModel(
     availabilityLabel,
     coverageLabel,
     confidenceLabel,
+    authorityLabel,
+    conflictLabel,
     ageLabel,
     triggerLabel,
     triggerTone,
@@ -260,15 +308,61 @@ export function buildSourceTruthInspectorModel(
       ? dependencies
       : ['Decision dependency is unknown.'],
     warnings,
-    conflict: evaluation.conflict,
+    conflict: assessment.conflict,
+    assessment,
     accessibilityLabel: [
       `Source details for ${sourceName}.`,
       `Origin ${originLabel}.`,
       `Freshness ${freshnessLabel}.`,
       `Availability ${availabilityLabel}.`,
       `Confidence ${confidenceLabel}.`,
-      evaluation.conflict ? 'Conflicting evidence is present.' : null,
+      assessment.facts.usingLastGoodCache ? 'A usable last-known cache is being shown because the live source is expired or unavailable.' : null,
+      assessment.conflict ? 'Conflicting evidence is present.' : null,
     ].filter(Boolean).join(' '),
+  };
+}
+
+export function selectSourceTruthStatusPresentation(
+  input: BuildSourceTruthInspectorModelInput,
+): SourceTruthStatusPresentation {
+  const declared = input.sources?.length
+    ? Array.from(input.sources)
+    : input.source
+      ? [input.source]
+      : [EMPTY_SOURCE];
+  const assessment = assessSourceTruth(declared, {
+    policyKey: input.policyKey,
+    policyOverride: input.policyOverride,
+    now: input.now,
+  });
+  const source = assessment.effectiveSource ?? assessment.sources[0] ?? null;
+  const sourceName = displayIdentity(source?.ref.authority)
+    ?? displayIdentity(source?.ref.provider)
+    ?? 'Unknown source';
+  const freshness = source?.freshness ?? assessment.freshness;
+  const origin = source?.ref.origin ?? 'unavailable';
+  const triggerLabel = assessment.facts.usingLastGoodCache
+    ? `Last known / Live ${assessment.facts.expiredLiveSource ? 'expired' : 'unavailable'}`
+    : buildTriggerLabel(origin, freshness);
+
+  return {
+    assessment,
+    source,
+    sourceName,
+    freshnessLabel: FRESHNESS_LABELS[freshness],
+    originLabel: ORIGIN_LABELS[origin],
+    availabilityLabel: AVAILABILITY_LABELS[assessment.availability],
+    coverageLabel: COVERAGE_LABELS[assessment.coverage],
+    confidenceLabel: CONFIDENCE_LABELS[assessment.confidence],
+    authorityLabel: AUTHORITY_LABELS[assessment.authorityKind],
+    conflictLabel: CONFLICT_LABELS[assessment.conflictState],
+    triggerLabel,
+    triggerTone: assessment.facts.usingLastGoodCache
+      ? 'warning'
+      : resolveTriggerTone(freshness, assessment.availability, assessment.conflict),
+    triggerIcon: assessment.facts.usingLastGoodCache
+      ? 'archive-outline'
+      : resolveTriggerIcon(origin, freshness, assessment.conflict),
   };
 }
 
@@ -354,7 +448,18 @@ function buildSummary(input: {
   freshness: SourceTruthFreshness;
   availability: SourceTruthAvailability;
   conflict: boolean;
+  usingLastGoodCache: boolean;
+  liveSourceExpired: boolean;
+  liveSourceUnavailable: boolean;
 }): string {
+  if (input.usingLastGoodCache) {
+    const liveState = input.liveSourceExpired ? 'expired' : input.liveSourceUnavailable ? 'unavailable' : 'not current';
+    return [
+      `The live source is ${liveState}.`,
+      'ECS is showing a usable last-known cache, which remains cached rather than live.',
+      input.conflict ? 'Conflicting evidence is present and remains visible.' : '',
+    ].filter(Boolean).join(' ');
+  }
   const freshness = input.freshness === 'live'
     ? `This source is current under the ${input.policyLabel} policy.`
     : input.freshness === 'recent'

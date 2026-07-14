@@ -77,6 +77,7 @@ Module._load = function load(request, parent, isMain) {
 
 const {
   createLiveTrailPackCatalogRefreshKey,
+  fetchRouteCatalogTrailPackDetail,
   refreshLiveTrailPackCatalog,
   liveTrailPackCatalogStore,
 } = require(path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts'));
@@ -196,6 +197,11 @@ function searchResponse(records, coverageState) {
   assert.match(String(preserved.error), /Transient empty response/);
 
   const differentCriteria = { ...criteria, radiusMiles: 25 };
+  const differentRefreshKey = createLiveTrailPackCatalogRefreshKey(differentCriteria);
+  const differentQuerySnapshots = [];
+  const unsubscribeDifferentQuery = liveTrailPackCatalogStore.subscribe(() => {
+    differentQuerySnapshots.push(liveTrailPackCatalogStore.getSnapshot());
+  });
   responses.push(searchResponse([], {
     state: 'no_verified_routes',
     title: 'No verified routes yet in this area',
@@ -203,10 +209,18 @@ function searchResponse(records, coverageState) {
   }));
 
   const emptyDifferentSearch = await refreshLiveTrailPackCatalog(differentCriteria);
+  unsubscribeDifferentQuery();
   assert.strictEqual(emptyDifferentSearch.status, 'ready');
   assert.strictEqual(emptyDifferentSearch.trailPacks.length, 0);
   assert.strictEqual(emptyDifferentSearch.preservedFromEmptyRefresh, false);
   assert.notStrictEqual(emptyDifferentSearch.refreshKey, refreshKey);
+  assert(
+    !differentQuerySnapshots.some((entry) =>
+      entry.refreshKey === differentRefreshKey &&
+      entry.routeCatalogSummaries.some((summary) => summary.routeId === 'preserved-tahoe-route'),
+    ),
+    'A cached summary from different search criteria must not flash into the active result list.',
+  );
 
   const highLimitCriteria = {
     latitude: 38.78,
@@ -254,6 +268,28 @@ function searchResponse(records, coverageState) {
     'High-limit refresh should publish a quick staged route catalog snapshot before the full refresh completes.',
   );
 
+  let resolveDetailRequest;
+  responses.push(new Promise((resolve) => {
+    resolveDetailRequest = resolve;
+  }));
+  const detailRequestA = fetchRouteCatalogTrailPackDetail('detail-rubicon-route');
+  const detailRequestB = fetchRouteCatalogTrailPackDetail('detail-rubicon-route');
+  assert.strictEqual(
+    invocations.filter((entry) => entry.name === 'route-catalog-detail').length,
+    1,
+    'Concurrent detail actions should share one provider request.',
+  );
+  resolveDetailRequest({ data: { record: routeRecord('detail-rubicon-route') }, error: null });
+  const [detailA, detailB] = await Promise.all([detailRequestA, detailRequestB]);
+  assert.strictEqual(detailA.id, 'detail-rubicon-route');
+  assert.strictEqual(detailB.id, 'detail-rubicon-route');
+  await fetchRouteCatalogTrailPackDetail('detail-rubicon-route');
+  assert.strictEqual(
+    invocations.filter((entry) => entry.name === 'route-catalog-detail').length,
+    1,
+    'A warm bounded detail cache should avoid an immediate duplicate provider request.',
+  );
+
   assert.deepStrictEqual(
     invocations.map((entry) => entry.name),
     [
@@ -262,13 +298,21 @@ function searchResponse(records, coverageState) {
       'route-catalog-search',
       'route-catalog-search',
       'route-catalog-search',
+      'route-catalog-detail',
     ],
   );
   assert.strictEqual(invocations[3].body.limit, 50);
   assert.strictEqual(invocations[3].body.includePreviewGeometry, false);
   assert.strictEqual(invocations[3].body.includeCoverageDiagnostics, false);
   assert.strictEqual(invocations[4].body.limit, 500);
+  assert.strictEqual(invocations[5].body.includeGeometry, true);
 
+  console.log(JSON.stringify({
+    metric: 'explore_route_detail_provider_requests',
+    rapidActions: 2,
+    providerRequests: 1,
+    warmCacheAdditionalRequests: 0,
+  }));
   console.log('Explore live Trail Pack catalog refresh stability checks passed.');
 })().catch((error) => {
   console.error(error);

@@ -58,6 +58,8 @@ import { Platform } from 'react-native';
 import { connectivity } from './connectivity';
 import { idbQueue } from './idbQueue';
 import { conflictResolver } from './conflictResolver';
+import { redactAuthUserId } from './auth/authLogRedaction';
+import { ecsLog } from './ecsLogger';
 import {
   classifyError,
   attemptAuthRefresh,
@@ -129,6 +131,14 @@ export type SyncActionStatus = 'pending' | 'processing' | 'completed' | 'failed'
 export interface SyncAction {
   /** Unique action ID */
   id: string;
+  /** Stable key sent to the backend so retries converge on one operation. */
+  idempotencyKey: string;
+  /** Stable fingerprint used to collapse equivalent outstanding actions. */
+  operationFingerprint: string;
+  /** Monotonic local order retained across app restoration. */
+  sequence: number;
+  /** Pseudonymous account scope. Raw auth identities are never persisted in the outbox. */
+  actorFingerprint: string | null;
   /** Action type for routing to processors */
   type: SyncActionType;
   /** Priority level */
@@ -153,6 +163,12 @@ export interface SyncAction {
   errorCategory?: ErrorCategory;
   /** HTTP status code from the last error (set on failure) */
   lastHttpStatus?: number;
+}
+
+export interface SyncActionEnqueueOptions {
+  idempotencyKey?: string | null;
+  dedupePending?: boolean;
+  dedupeCompleted?: boolean;
 }
 
 
@@ -297,7 +313,20 @@ export interface QueueStats {
   recentActions: SyncAction[];
   /** Whether IndexedDB is being used for persistence */
   persistenceBackend: 'indexeddb' | 'localstorage';
+  actorGuardEnabled: boolean;
+  activeActorBound: boolean;
+  heldForOtherAccounts: number;
 }
+
+export type SyncActionActorIsolationDiagnostics = {
+  actorGuardEnabled: boolean;
+  activeActorBound: boolean;
+  totalActions: number;
+  eligibleActions: number;
+  heldForOtherAccounts: number;
+  legacyUnscopedActions: number;
+  actorGeneration: number;
+};
 
 // ── Listener Types ────────────────────────────────────────────
 
@@ -379,6 +408,64 @@ function generateActionId(): string {
   return `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function stableSyncValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value == null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (Array.isArray(value)) return value.map((entry) => stableSyncValue(entry, seen));
+  if (typeof value !== 'object') return String(value);
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  const source = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  Object.keys(source).sort().forEach((key) => {
+    result[key] = stableSyncValue(source[key], seen);
+  });
+  return result;
+}
+
+function compactHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36).padStart(7, '0');
+}
+
+export function buildSyncActorFingerprint(actorId: string | null | undefined): string | null {
+  return redactAuthUserId(actorId);
+}
+
+export function buildSyncOperationFingerprint(
+  type: SyncActionType,
+  payload: Record<string, any>,
+): string {
+  return `sync-fingerprint:${type}:${compactHash(JSON.stringify(stableSyncValue(payload)))}`;
+}
+
+const SYNC_PRIORITY_ORDER: Record<SyncActionPriority, number> = { critical: 0, normal: 1, low: 2 };
+
+function compareSyncActions(a: SyncAction, b: SyncAction): number {
+  return SYNC_PRIORITY_ORDER[a.priority] - SYNC_PRIORITY_ORDER[b.priority] || a.sequence - b.sequence;
+}
+
+function syncErrorKind(category: ErrorCategory) {
+  switch (category) {
+    case 'network_timeout':
+      return 'network' as const;
+    case 'server_error':
+    case 'rate_limited':
+      return 'provider' as const;
+    case 'auth_expired':
+      return 'permission' as const;
+    case 'client_error':
+    case 'unrecoverable':
+      return 'validation' as const;
+    default:
+      return 'unexpected' as const;
+  }
+}
+
 
 // ── Sync Action Queue Manager ─────────────────────────────────
 
@@ -395,6 +482,10 @@ class SyncActionQueue {
   private _lastError: string | null = null;
   private _processTimer: ReturnType<typeof setTimeout> | null = null;
   private _idbReady = false;
+  private _nextSequence = 1;
+  private _actorGuardEnabled = false;
+  private _activeActorFingerprint: string | null = null;
+  private _actorGeneration = 0;
   /** Prevents concurrent auth refresh attempts across multiple failing actions */
   private _authRefreshInProgress = false;
   /** Whether an auth refresh has already been attempted in this processing cycle */
@@ -418,10 +509,7 @@ class SyncActionQueue {
       // Load from IDB — if it has data, use it as source of truth
       const idbActions = await idbQueue.loadAll<SyncAction>('sync_actions');
       if (idbActions.length > 0) {
-        this._queue = idbActions.map((a: SyncAction) => ({
-          ...a,
-          status: a.status === 'processing' ? 'pending' : a.status,
-        }));
+        this._queue = this._normalizePersistedActions(idbActions, true);
       } else if (this._queue.length > 0) {
         // localStorage had data but IDB didn't — migrate
         await idbQueue.saveAll('sync_actions', this._queue);
@@ -429,7 +517,7 @@ class SyncActionQueue {
 
       const idbHistory = await idbQueue.loadAll<SyncAction>('sync_history');
       if (idbHistory.length > 0) {
-        this._history = idbHistory.slice(-MAX_HISTORY_SIZE);
+        this._history = this._normalizePersistedActions(idbHistory, false).slice(-MAX_HISTORY_SIZE);
       } else if (this._history.length > 0) {
         await idbQueue.saveAll('sync_history', this._history);
       }
@@ -439,15 +527,27 @@ class SyncActionQueue {
         const sentinelPurged = this.purgeLocalSentinelActions();
         const failedPurged = this.purgeFailedUserIdErrors();
         if (sentinelPurged > 0 || failedPurged > 0) {
-          console.log(
-            `[SyncActionQueue] Startup cleanup: ${sentinelPurged} sentinel + ${failedPurged} failed UUID actions removed`
-          );
+          ecsLog.breadcrumb({
+            domain: 'offline_sync',
+            operation: 'hydrate_outbox',
+            code: 'OFFLINE_OUTBOX_STARTUP_CLEANUP',
+            status: 'completed',
+            sourceState: 'cached',
+            context: { sentinelPurged, failedPurged, backend: 'indexeddb' },
+          });
         }
       }
 
       this._notifyListeners();
-    } catch (e) {
-      console.warn('[SyncActionQueue] IDB init failed, using localStorage:', e);
+    } catch (error) {
+      ecsLog.captureFailure({
+        kind: 'persistence',
+        domain: 'offline_sync',
+        operation: 'initialize_outbox_storage',
+        code: 'OFFLINE_OUTBOX_IDB_INIT_FAILED',
+        sourceState: 'cached',
+        context: { fallback: 'localstorage' },
+      }, error, { category: 'PERSISTENCE' });
     }
   }
 
@@ -455,17 +555,20 @@ class SyncActionQueue {
 
   /** Current pending queue */
   get queue(): SyncAction[] {
-    return [...this._queue];
+    return this._queue.filter((action) => this._isActionEligibleForActiveActor(action));
   }
 
   /** Number of pending actions */
   get pendingCount(): number {
-    return this._queue.filter(a => a.status === 'pending' || a.status === 'retrying').length;
+    return this._queue.filter(a => (
+      this._isActionEligibleForActiveActor(a) &&
+      (a.status === 'pending' || a.status === 'retrying')
+    )).length;
   }
 
   /** Number of failed actions */
   get failedCount(): number {
-    return this._queue.filter(a => a.status === 'failed').length;
+    return this._queue.filter(a => this._isActionEligibleForActiveActor(a) && a.status === 'failed').length;
   }
 
   /** Whether the queue is currently processing */
@@ -475,9 +578,10 @@ class SyncActionQueue {
 
   /** Get full queue statistics */
   get stats(): QueueStats {
-    const pending = this._queue.filter(a => a.status === 'pending' || a.status === 'retrying');
-    const failed = this._queue.filter(a => a.status === 'failed');
-    const processing = this._queue.filter(a => a.status === 'processing');
+    const eligible = this._queue.filter((action) => this._isActionEligibleForActiveActor(action));
+    const pending = eligible.filter(a => a.status === 'pending' || a.status === 'retrying');
+    const failed = eligible.filter(a => a.status === 'failed');
+    const processing = eligible.filter(a => a.status === 'processing');
 
     // Build category breakdown
     const pendingByCategory: Record<string, number> = {};
@@ -497,8 +601,82 @@ class SyncActionQueue {
       lastError: this._lastError,
       isOnline: connectivity.isOnline(),
       pendingByCategory,
-      recentActions: [...this._history].reverse().slice(0, 20),
+      recentActions: this._history
+        .filter((action) => this._isActionEligibleForActiveActor(action))
+        .reverse()
+        .slice(0, 20),
       persistenceBackend: this._idbReady && idbQueue.isUsingIDB ? 'indexeddb' : 'localstorage',
+      actorGuardEnabled: this._actorGuardEnabled,
+      activeActorBound: this._activeActorFingerprint != null,
+      heldForOtherAccounts: this._countHeldForOtherAccounts(),
+    };
+  }
+
+  bindActor(actorId: string): void {
+    const fingerprint = buildSyncActorFingerprint(actorId);
+    if (!fingerprint) return;
+    this.bindActorFingerprint(fingerprint);
+  }
+
+  bindActorFingerprint(fingerprint: string | null | undefined): void {
+    const normalized = typeof fingerprint === 'string' && /^user_[a-f0-9]{8}$/i.test(fingerprint.trim())
+      ? fingerprint.trim().toLowerCase()
+      : null;
+    if (!normalized) return;
+    if (this._actorGuardEnabled && this._activeActorFingerprint === normalized) return;
+
+    this.stopAutoProcess();
+    const actorChanged = this._activeActorFingerprint !== normalized;
+    this._actorGuardEnabled = true;
+    this._activeActorFingerprint = normalized;
+    this._actorGeneration += 1;
+    if (actorChanged) {
+      this._totalProcessed = 0;
+      this._totalFailed = 0;
+      this._lastSyncAt = null;
+      this._lastError = null;
+    }
+    conflictResolver.bindActorFingerprint(normalized);
+
+    const knownActors = new Set(
+      [...this._queue, ...this._history]
+        .map((action) => action.actorFingerprint)
+        .filter((value): value is string => Boolean(value)),
+    );
+    let migrated = false;
+    if (knownActors.size === 0 || (knownActors.size === 1 && knownActors.has(normalized))) {
+      [...this._queue, ...this._history].forEach((action) => {
+        if (action.actorFingerprint) return;
+        action.actorFingerprint = normalized;
+        migrated = true;
+      });
+    }
+    if (migrated) {
+      this._saveQueue();
+      this._saveHistory();
+    }
+    this._notifyListeners();
+  }
+
+  unbindActor(): void {
+    this.stopAutoProcess();
+    this._actorGuardEnabled = true;
+    this._activeActorFingerprint = null;
+    this._actorGeneration += 1;
+    conflictResolver.unbindActor();
+    this._notifyListeners();
+  }
+
+  getActorIsolationDiagnostics(): SyncActionActorIsolationDiagnostics {
+    const eligibleActions = this._queue.filter((action) => this._isActionEligibleForActiveActor(action)).length;
+    return {
+      actorGuardEnabled: this._actorGuardEnabled,
+      activeActorBound: this._activeActorFingerprint != null,
+      totalActions: this._queue.length,
+      eligibleActions,
+      heldForOtherAccounts: this._countHeldForOtherAccounts(),
+      legacyUnscopedActions: this._queue.filter((action) => !action.actorFingerprint).length,
+      actorGeneration: this._actorGeneration,
     };
   }
 
@@ -519,7 +697,23 @@ class SyncActionQueue {
     payload: Record<string, any>,
     description: string,
     priority: SyncActionPriority = 'normal',
+    options: SyncActionEnqueueOptions = {},
   ): string {
+    if (this._actorGuardEnabled && !this._activeActorFingerprint) {
+      const skippedId = generateActionId();
+      ecsLog.captureFailure({
+        kind: 'permission',
+        domain: 'offline_sync',
+        operation: 'enqueue_action',
+        code: 'OFFLINE_OUTBOX_ACTOR_SCOPE_MISSING',
+        sourceState: 'unavailable',
+        correlationId: skippedId,
+        context: { actionType: type, localChangePreserved: true },
+      }, undefined, { category: 'SYNC', fingerprint: type });
+      return skippedId;
+    }
+    const actorFingerprint = this._actorGuardEnabled ? this._activeActorFingerprint : null;
+
     // ── Pre-flight guard: reject actions with 'local' sentinel ──
     // This is the first line of defense. If a store accidentally queues
     // an action with owner_user_id='local', we catch it here before it
@@ -528,12 +722,38 @@ class SyncActionQueue {
     const tempAction = { payload } as SyncAction;
     if (actionHasLocalSentinel(tempAction)) {
       const skippedId = generateActionId();
-      console.warn(
-        `[SyncActionQueue] BLOCKED enqueue of ${type} (${skippedId}) — ` +
-        `payload contains 'local' sentinel user ID. ` +
-        `Local changes preserved; cloud sync skipped.`
-      );
+      ecsLog.captureFailure({
+        kind: 'validation',
+        domain: 'offline_sync',
+        operation: 'enqueue_action',
+        code: 'OFFLINE_OUTBOX_LOCAL_SENTINEL_REJECTED',
+        sourceState: 'unavailable',
+        correlationId: skippedId,
+        context: { actionType: type, localChangePreserved: true },
+      }, undefined, { category: 'SYNC', fingerprint: type });
       return skippedId; // Return a valid-looking ID so callers don't break
+    }
+
+    const operationFingerprint = buildSyncOperationFingerprint(type, payload);
+    const explicitIdempotencyKey = typeof options.idempotencyKey === 'string'
+      ? options.idempotencyKey.trim()
+      : '';
+    if (options.dedupePending !== false) {
+      const duplicate = this._queue.find((action) => (
+        action.actorFingerprint === actorFingerprint &&
+        ['pending', 'processing', 'retrying'].includes(action.status) &&
+        (explicitIdempotencyKey
+          ? action.idempotencyKey === explicitIdempotencyKey
+          : action.operationFingerprint === operationFingerprint)
+      ));
+      if (duplicate) return duplicate.id;
+    }
+    if (explicitIdempotencyKey && options.dedupeCompleted !== false) {
+      const completedDuplicate = this._history.find((action) => (
+        action.actorFingerprint === actorFingerprint &&
+        action.idempotencyKey === explicitIdempotencyKey
+      ));
+      if (completedDuplicate) return completedDuplicate.id;
     }
 
     // Enforce queue size limit
@@ -550,8 +770,13 @@ class SyncActionQueue {
       }
     }
 
+    const actionId = generateActionId();
     const action: SyncAction = {
-      id: generateActionId(),
+      id: actionId,
+      idempotencyKey: explicitIdempotencyKey || `ecs-sync:${actionId}`,
+      operationFingerprint,
+      sequence: this._nextSequence++,
+      actorFingerprint,
       type,
       priority,
       payload,
@@ -564,9 +789,8 @@ class SyncActionQueue {
     };
 
     // Insert by priority
-    const priorityOrder: Record<SyncActionPriority, number> = { critical: 0, normal: 1, low: 2 };
     const insertIdx = this._queue.findIndex(
-      a => priorityOrder[a.priority] > priorityOrder[priority]
+      existing => compareSyncActions(action, existing) < 0
     );
 
     if (insertIdx === -1) {
@@ -590,21 +814,25 @@ class SyncActionQueue {
 
   /** Remove a specific action from the queue */
   remove(actionId: string): void {
-    this._queue = this._queue.filter(a => a.id !== actionId);
+    this._queue = this._queue.filter((action) => (
+      action.id !== actionId || !this._isActionEligibleForActiveActor(action)
+    ));
     this._saveQueue();
     this._notifyListeners();
   }
 
   /** Clear all failed actions */
   clearFailed(): void {
-    this._queue = this._queue.filter(a => a.status !== 'failed');
+    this._queue = this._queue.filter((action) => (
+      action.status !== 'failed' || !this._isActionEligibleForActiveActor(action)
+    ));
     this._saveQueue();
     this._notifyListeners();
   }
 
   /** Clear entire queue */
   clearAll(): void {
-    this._queue = [];
+    this._queue = this._queue.filter((action) => !this._isActionEligibleForActiveActor(action));
     this._saveQueue();
     this._notifyListeners();
   }
@@ -612,7 +840,7 @@ class SyncActionQueue {
   /** Retry all failed actions */
   retryFailed(): void {
     for (const action of this._queue) {
-      if (action.status === 'failed') {
+      if (this._isActionEligibleForActiveActor(action) && action.status === 'failed') {
         action.status = 'retrying';
         action.retryCount = 0;
         action.lastError = undefined;
@@ -649,10 +877,18 @@ class SyncActionQueue {
   /** Start monitoring connectivity for auto-processing */
   startAutoProcess(): boolean {
     if (this._connectivityUnsub) return false;
+    if (this._actorGuardEnabled && !this._activeActorFingerprint) return false;
 
     this._connectivityUnsub = connectivity.onStatusChange((status, wasOffline) => {
       if (status === 'online' && wasOffline && this.pendingCount > 0) {
-        console.log('[SyncActionQueue] Back online — processing queued actions...');
+        ecsLog.breadcrumb({
+          domain: 'offline_sync',
+          operation: 'outbox_replay',
+          code: 'OFFLINE_REPLAY_CONNECTIVITY_RESTORED',
+          status: 'started',
+          sourceState: 'live',
+          context: { pendingCount: this.pendingCount },
+        });
         this._scheduleProcess(500); // Small delay to let connection stabilize
       }
     });
@@ -690,27 +926,55 @@ class SyncActionQueue {
       return { processed: 0, failed: 0, remaining: this.pendingCount };
     }
 
+    if (this._actorGuardEnabled && !this._activeActorFingerprint) {
+      return { processed: 0, failed: 0, remaining: 0 };
+    }
+
     this._processing = true;
+    const actorGeneration = this._actorGeneration;
     this._authRefreshedThisCycle = false; // Reset per-cycle auth refresh tracking
     this._notifyListeners();
+    ecsLog.breadcrumb({
+      domain: 'offline_sync',
+      operation: 'outbox_replay',
+      code: 'OFFLINE_REPLAY_STARTED',
+      status: 'started',
+      sourceState: 'live',
+      context: {
+        pendingCount: this.pendingCount,
+        actorGuardEnabled: this._actorGuardEnabled,
+      },
+    });
 
     // Conflicting actions are held back until the user resolves them.
     let conflictingActionIds = new Set<string>();
     try {
-      const newConflicts = conflictResolver.detectConflicts(this._queue);
+      const newConflicts = conflictResolver.detectConflicts(
+        this._queue.filter((action) => this._isActionEligibleForActiveActor(action)),
+      );
       if (newConflicts.length > 0) {
-        console.warn(
-          `[SyncActionQueue] Detected ${newConflicts.length} queue conflict(s) — ` +
-          `holding conflicting actions for user resolution`
-        );
+        ecsLog.breadcrumb({
+          domain: 'offline_sync',
+          operation: 'outbox_replay',
+          code: 'OFFLINE_REPLAY_CONFLICTS_HELD',
+          status: 'degraded',
+          sourceState: 'conflicted',
+          context: { conflictCount: newConflicts.length },
+        });
         // Collect IDs of all actions involved in pending conflicts
         for (const conflict of conflictResolver.pendingConflicts) {
           conflictingActionIds.add(conflict.actionA.id);
           conflictingActionIds.add(conflict.actionB.id);
         }
       }
-    } catch (e) {
-      console.warn('[SyncActionQueue] Conflict detection error (non-fatal):', e);
+    } catch (error) {
+      ecsLog.captureFailure({
+        kind: 'unexpected',
+        domain: 'offline_sync',
+        operation: 'detect_replay_conflicts',
+        code: 'OFFLINE_REPLAY_CONFLICT_DETECTION_FAILED',
+        sourceState: 'partial',
+      }, error, { category: 'SYNC' });
     }
 
     let processed = 0;
@@ -718,12 +982,17 @@ class SyncActionQueue {
 
     // Process in batches — exclude actions involved in unresolved conflicts
     const toProcess = this._queue.filter(
-      a => (a.status === 'pending' || a.status === 'retrying') &&
+      a => this._isActionEligibleForActiveActor(a) &&
+           (a.status === 'pending' || a.status === 'retrying') &&
            !conflictingActionIds.has(a.id)
-    ).slice(0, PROCESS_BATCH_SIZE);
+    ).sort(compareSyncActions).slice(0, PROCESS_BATCH_SIZE);
 
     for (const action of toProcess) {
       if (!connectivity.isOnline()) break;
+      if (
+        actorGeneration !== this._actorGeneration ||
+        !this._isActionEligibleForActiveActor(action)
+      ) break;
 
       const processor = this._processors.get(action.type);
 
@@ -742,6 +1011,14 @@ class SyncActionQueue {
 
       try {
         const success = await processor(action);
+
+        if (
+          actorGeneration !== this._actorGeneration ||
+          !this._isActionEligibleForActiveActor(action)
+        ) {
+          action.status = 'pending';
+          break;
+        }
 
         if (success) {
           action.status = 'completed';
@@ -778,6 +1055,13 @@ class SyncActionQueue {
           }
         }
       } catch (err: any) {
+        if (
+          actorGeneration !== this._actorGeneration ||
+          !this._isActionEligibleForActiveActor(action)
+        ) {
+          action.status = 'pending';
+          break;
+        }
         const errorMsg = err?.message || 'Unknown error';
         action.lastError = errorMsg;
         this._lastError = errorMsg;
@@ -789,19 +1073,40 @@ class SyncActionQueue {
 
         const catLabel = ERROR_CATEGORY_LABELS[classification.category] || classification.category;
 
-        console.warn(
-          `[SyncActionQueue] Error on ${action.id} (${action.type}): ` +
-          `[${catLabel}] ${errorMsg}` +
-          (classification.httpStatus ? ` (HTTP ${classification.httpStatus})` : '') +
-          ` — ${classification.strategy.description}`
-        );
+        ecsLog.captureFailure({
+          kind: syncErrorKind(classification.category),
+          domain: 'offline_sync',
+          operation: 'replay_action',
+          code: `OFFLINE_REPLAY_${classification.category}`,
+          sourceState: 'unavailable',
+          correlationId: action.id,
+          context: {
+            actionType: action.type,
+            errorCategory: classification.category,
+            httpStatus: classification.httpStatus ?? null,
+            retryCount: action.retryCount,
+            maxRetries: classification.strategy.maxRetries,
+          },
+        }, err, {
+          category: 'SYNC',
+          fingerprint: `${action.type}:${classification.category}`,
+        });
 
         // ── Legacy guard: detect local sentinel payloads ──
         // This runs before the classifier's decision as a safety net.
         if (actionHasLocalSentinel(action)) {
-          console.error(
-            `[SyncActionQueue] Payload contains 'local' sentinel — auto-skipping ${action.id}`
-          );
+          ecsLog.captureFailure({
+            kind: 'validation',
+            domain: 'offline_sync',
+            operation: 'replay_action',
+            code: 'OFFLINE_REPLAY_LOCAL_SENTINEL_REJECTED',
+            severity: 'error',
+            recoverability: 'not_recoverable',
+            retryability: 'not_retryable',
+            sourceState: 'unavailable',
+            correlationId: action.id,
+            context: { actionType: action.type },
+          }, undefined, { category: 'SYNC' });
           action.status = 'completed';
           action.lastError = `Auto-skipped: local sentinel in payload`;
           action.errorCategory = 'unrecoverable';
@@ -817,10 +1122,19 @@ class SyncActionQueue {
         if (classification.isPermanent) {
           // ── PERMANENT: client_error (4xx) or unrecoverable ──
           // These errors will never succeed on retry. Skip permanently.
-          console.error(
-            `[SyncActionQueue] PERMANENT SKIP on ${action.id} (${catLabel}): ${errorMsg}. ` +
-            `Local changes preserved; cloud sync abandoned.`
-          );
+          ecsLog.breadcrumb({
+            domain: 'offline_sync',
+            operation: 'replay_action',
+            code: 'OFFLINE_REPLAY_PERMANENT_SKIP',
+            status: 'failed',
+            sourceState: 'unavailable',
+            correlationId: action.id,
+            context: {
+              actionType: action.type,
+              errorCategory: classification.category,
+              localChangePreserved: true,
+            },
+          });
           action.status = 'completed';
           action.lastError = `Skipped [${catLabel}]: ${errorMsg}`;
           this._addToHistory(action);
@@ -842,9 +1156,15 @@ class SyncActionQueue {
 
             if (refreshed) {
               // Token refreshed — retry this action immediately
-              console.log(
-                `[SyncActionQueue] Auth refreshed — retrying ${action.id} immediately`
-              );
+              ecsLog.breadcrumb({
+                domain: 'offline_sync',
+                operation: 'refresh_auth_for_replay',
+                code: 'OFFLINE_REPLAY_AUTH_REFRESHED',
+                status: 'completed',
+                sourceState: 'live',
+                correlationId: action.id,
+                context: { actionType: action.type },
+              });
               action.status = 'retrying';
               action.retryCount++; // Count the attempt
               // Don't schedule a delay — the next iteration of the for-loop
@@ -854,9 +1174,15 @@ class SyncActionQueue {
               continue;
             } else {
               // Refresh failed — mark as failed, user must re-login
-              console.warn(
-                `[SyncActionQueue] Auth refresh failed — failing ${action.id}. User must re-login.`
-              );
+              ecsLog.captureFailure({
+                kind: 'permission',
+                domain: 'offline_sync',
+                operation: 'refresh_auth_for_replay',
+                code: 'OFFLINE_REPLAY_AUTH_REFRESH_FAILED',
+                sourceState: 'unavailable',
+                correlationId: action.id,
+                context: { actionType: action.type },
+              }, undefined, { category: 'SYNC' });
               action.status = 'failed';
               action.lastError = `Auth expired — session refresh failed. Please sign in again.`;
               failed++;
@@ -893,9 +1219,13 @@ class SyncActionQueue {
             this._totalFailed++;
           } else {
             action.status = 'retrying';
-            console.log(
-              `[SyncActionQueue] Rate limited on ${action.id} — backing off ${Math.round(delay / 1000)}s`
-            );
+            ecsLog.dev('SYNC', 'offline_replay_rate_limited', {
+              actionType: action.type,
+              delayMs: delay,
+            }, {
+              debugFlag: 'ECS_DEBUG_SYNC',
+              fingerprint: action.type,
+            });
             this._scheduleProcess(delay);
             // Stop processing this batch — all subsequent requests will likely
             // also be rate limited. Let the backoff timer handle the next batch.
@@ -917,10 +1247,16 @@ class SyncActionQueue {
         } else {
           action.status = 'retrying';
           const delay = classification.suggestedDelayMs;
-          console.log(
-            `[SyncActionQueue] Retrying ${action.id} in ${Math.round(delay / 1000)}s ` +
-            `(${catLabel}, attempt ${action.retryCount}/${effectiveMaxRetries})`
-          );
+          ecsLog.dev('SYNC', 'offline_replay_retry_scheduled', {
+            actionType: action.type,
+            errorCategory: classification.category,
+            retryCount: action.retryCount,
+            maxRetries: effectiveMaxRetries,
+            delayMs: delay,
+          }, {
+            debugFlag: 'ECS_DEBUG_SYNC',
+            fingerprint: `${action.type}:${classification.category}`,
+          });
           this._scheduleProcess(delay);
         }
       }
@@ -942,8 +1278,14 @@ class SyncActionQueue {
     try {
       const currentIds = new Set(this._queue.map(a => a.id));
       conflictResolver.pruneStaleConflicts(currentIds);
-    } catch (e) {
-      console.warn('[SyncActionQueue] Conflict pruning error (non-fatal):', e);
+    } catch (error) {
+      ecsLog.captureFailure({
+        kind: 'unexpected',
+        domain: 'offline_sync',
+        operation: 'prune_replay_conflicts',
+        code: 'OFFLINE_REPLAY_CONFLICT_PRUNE_FAILED',
+        sourceState: 'partial',
+      }, error, { category: 'SYNC' });
     }
 
     this._notifyListeners();
@@ -951,12 +1293,22 @@ class SyncActionQueue {
     // If there are more pending non-conflicting items, schedule another batch
     const remaining = this.pendingCount;
     const nonConflictingRemaining = this._queue.filter(
-      a => (a.status === 'pending' || a.status === 'retrying') &&
+      a => this._isActionEligibleForActiveActor(a) &&
+           (a.status === 'pending' || a.status === 'retrying') &&
            !conflictingActionIds.has(a.id)
     ).length;
     if (nonConflictingRemaining > 0 && connectivity.isOnline()) {
       this._scheduleProcess(200);
     }
+
+    ecsLog.breadcrumb({
+      domain: 'offline_sync',
+      operation: 'outbox_replay',
+      code: 'OFFLINE_REPLAY_COMPLETED',
+      status: failed > 0 ? 'degraded' : 'completed',
+      sourceState: failed > 0 ? 'partial' : 'live',
+      context: { processed, failed, remaining },
+    });
 
     return { processed, failed, remaining };
   }
@@ -966,7 +1318,7 @@ class SyncActionQueue {
 
   /** Full cleanup (logout) */
   destroy(): void {
-    this.stopAutoProcess();
+    this.unbindActor();
     this._processing = false;
     this._totalProcessed = 0;
     this._totalFailed = 0;
@@ -1005,19 +1357,17 @@ class SyncActionQueue {
     const purged = before - this._queue.length;
 
     if (purged > 0) {
-      // Log each purged action for debugging
-      for (const action of poisoned) {
-        console.warn(
-          `[SyncActionQueue] PURGED poisoned action ${action.id} ` +
-          `(type: ${action.type}, status: ${action.status}, ` +
-          `created: ${action.createdAt}) — payload contained 'local' sentinel user ID`
-        );
-      }
-
-      console.warn(
-        `[SyncActionQueue] Startup purge complete: removed ${purged} action(s) ` +
-        `with invalid 'local' user IDs from sync queue`
-      );
+      ecsLog.breadcrumb({
+        domain: 'offline_sync',
+        operation: 'purge_invalid_outbox_actions',
+        code: 'OFFLINE_OUTBOX_LOCAL_SENTINEL_PURGED',
+        status: 'completed',
+        sourceState: 'cached',
+        context: {
+          purgedCount: purged,
+          actionTypes: Array.from(new Set(poisoned.map((action) => action.type))).slice(0, 12),
+        },
+      });
 
       this._saveQueue();
       this._notifyListeners();
@@ -1038,10 +1388,6 @@ class SyncActionQueue {
 
     this._queue = this._queue.filter(action => {
       if (action.status === 'failed' && action.lastError && isUnrecoverableUserIdError(action.lastError)) {
-        console.warn(
-          `[SyncActionQueue] PURGED failed action ${action.id} ` +
-          `(type: ${action.type}): ${action.lastError}`
-        );
         return false;
       }
       return true;
@@ -1050,7 +1396,14 @@ class SyncActionQueue {
     const purged = before - this._queue.length;
 
     if (purged > 0) {
-      console.warn(`[SyncActionQueue] Purged ${purged} failed action(s) with unrecoverable UUID errors`);
+      ecsLog.breadcrumb({
+        domain: 'offline_sync',
+        operation: 'purge_invalid_outbox_actions',
+        code: 'OFFLINE_OUTBOX_INVALID_ID_ACTIONS_PURGED',
+        status: 'completed',
+        sourceState: 'cached',
+        context: { purgedCount: purged },
+      });
       this._saveQueue();
       this._notifyListeners();
     }
@@ -1060,6 +1413,19 @@ class SyncActionQueue {
 
 
   // ── Private Methods ─────────────────────────────────────────
+
+  private _isActionEligibleForActiveActor(action: SyncAction): boolean {
+    if (!this._actorGuardEnabled) return true;
+    if (!this._activeActorFingerprint) return false;
+    return action.actorFingerprint === this._activeActorFingerprint;
+  }
+
+  private _countHeldForOtherAccounts(): number {
+    if (!this._actorGuardEnabled) return 0;
+    return this._queue.filter((action) => (
+      action.actorFingerprint !== this._activeActorFingerprint
+    )).length;
+  }
 
   private _getStatus(): QueueSyncStatus {
     if (this._processing) return 'syncing';
@@ -1086,13 +1452,51 @@ class SyncActionQueue {
     }
   }
 
+  private _normalizePersistedActions(
+    actions: SyncAction[],
+    resetProcessing: boolean,
+  ): SyncAction[] {
+    const normalized = actions.map((action, index): SyncAction => {
+      const createdAtMs = Date.parse(action.createdAt);
+      const fallbackSequence = Number.isFinite(createdAtMs)
+        ? Math.max(1, Math.round(createdAtMs * 1000) + index)
+        : this._nextSequence + index;
+      const sequence = typeof action.sequence === 'number' && Number.isFinite(action.sequence) && action.sequence > 0
+        ? Math.floor(action.sequence)
+        : fallbackSequence;
+      this._nextSequence = Math.max(this._nextSequence, sequence + 1);
+      const operationFingerprint = typeof action.operationFingerprint === 'string' && action.operationFingerprint
+        ? action.operationFingerprint
+        : buildSyncOperationFingerprint(action.type, action.payload ?? {});
+      return {
+        ...action,
+        idempotencyKey: typeof action.idempotencyKey === 'string' && action.idempotencyKey
+          ? action.idempotencyKey
+          : `ecs-sync:${action.id}`,
+        operationFingerprint,
+        sequence,
+        actorFingerprint: typeof action.actorFingerprint === 'string' && /^user_[a-f0-9]{8}$/i.test(action.actorFingerprint)
+          ? action.actorFingerprint.toLowerCase()
+          : null,
+        status: resetProcessing && action.status === 'processing' ? 'pending' : action.status,
+      };
+    });
+    return normalized.sort(resetProcessing ? compareSyncActions : (a, b) => a.sequence - b.sequence);
+  }
+
   private _notifyListeners(): void {
     const stats = this.stats;
     this._listeners.forEach(listener => {
       try {
         listener(stats);
-      } catch (e) {
-        console.warn('[SyncActionQueue] Listener error:', e);
+      } catch (error) {
+        ecsLog.captureFailure({
+          kind: 'unexpected',
+          domain: 'offline_sync',
+          operation: 'notify_outbox_listener',
+          code: 'OFFLINE_OUTBOX_LISTENER_FAILED',
+          sourceState: 'partial',
+        }, error, { category: 'SYNC' });
       }
     });
   }
@@ -1108,15 +1512,18 @@ class SyncActionQueue {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
             // Reset any 'processing' status to 'pending' (app may have crashed)
-            this._queue = parsed.map((a: SyncAction) => ({
-              ...a,
-              status: a.status === 'processing' ? 'pending' : a.status,
-            }));
+            this._queue = this._normalizePersistedActions(parsed as SyncAction[], true);
           }
         }
       }
-    } catch (e) {
-      console.warn('[SyncActionQueue] Failed to load queue:', e);
+    } catch (error) {
+      ecsLog.captureFailure({
+        kind: 'persistence',
+        domain: 'offline_sync',
+        operation: 'load_outbox',
+        code: 'OFFLINE_OUTBOX_LOAD_FAILED',
+        sourceState: 'unavailable',
+      }, error, { category: 'PERSISTENCE' });
       this._queue = [];
     }
 
@@ -1125,9 +1532,14 @@ class SyncActionQueue {
       const sentinelPurged = this.purgeLocalSentinelActions();
       const failedPurged = this.purgeFailedUserIdErrors();
       if (sentinelPurged > 0 || failedPurged > 0) {
-        console.log(
-          `[SyncActionQueue] Startup cleanup (localStorage): ${sentinelPurged} sentinel + ${failedPurged} failed UUID actions removed`
-        );
+        ecsLog.breadcrumb({
+          domain: 'offline_sync',
+          operation: 'hydrate_outbox',
+          code: 'OFFLINE_OUTBOX_STARTUP_CLEANUP',
+          status: 'completed',
+          sourceState: 'cached',
+          context: { sentinelPurged, failedPurged, backend: 'localstorage' },
+        });
       }
     }
   }
@@ -1140,7 +1552,7 @@ class SyncActionQueue {
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
-            this._history = parsed.slice(-MAX_HISTORY_SIZE);
+            this._history = this._normalizePersistedActions(parsed as SyncAction[], false).slice(-MAX_HISTORY_SIZE);
           }
         }
       }
@@ -1156,14 +1568,26 @@ class SyncActionQueue {
       if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
         localStorage.setItem('ecs_sync_action_queue', JSON.stringify(this._queue));
       }
-    } catch (e) {
-      console.warn('[SyncActionQueue] Failed to save queue to localStorage:', e);
+    } catch (error) {
+      ecsLog.captureFailure({
+        kind: 'persistence',
+        domain: 'offline_sync',
+        operation: 'save_outbox',
+        code: 'OFFLINE_OUTBOX_LOCALSTORAGE_WRITE_FAILED',
+        sourceState: 'partial',
+      }, error, { category: 'PERSISTENCE' });
     }
 
     // Also save to IndexedDB (async, durable)
     if (this._idbReady) {
-      idbQueue.saveAll('sync_actions', this._queue).catch((e) => {
-        console.warn('[SyncActionQueue] Failed to save queue to IDB:', e);
+      idbQueue.saveAll('sync_actions', this._queue).catch((error) => {
+        ecsLog.captureFailure({
+          kind: 'persistence',
+          domain: 'offline_sync',
+          operation: 'save_outbox',
+          code: 'OFFLINE_OUTBOX_IDB_WRITE_FAILED',
+          sourceState: 'partial',
+        }, error, { category: 'PERSISTENCE' });
       });
     }
   }
@@ -1175,14 +1599,26 @@ class SyncActionQueue {
       if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
         localStorage.setItem('ecs_sync_action_history', JSON.stringify(this._history));
       }
-    } catch (e) {
-      console.warn('[SyncActionQueue] Failed to save history to localStorage:', e);
+    } catch (error) {
+      ecsLog.captureFailure({
+        kind: 'persistence',
+        domain: 'offline_sync',
+        operation: 'save_outbox_history',
+        code: 'OFFLINE_OUTBOX_HISTORY_LOCALSTORAGE_WRITE_FAILED',
+        sourceState: 'partial',
+      }, error, { category: 'PERSISTENCE' });
     }
 
     // Also save to IndexedDB (async, durable)
     if (this._idbReady) {
-      idbQueue.saveAll('sync_history', this._history).catch((e) => {
-        console.warn('[SyncActionQueue] Failed to save history to IDB:', e);
+      idbQueue.saveAll('sync_history', this._history).catch((error) => {
+        ecsLog.captureFailure({
+          kind: 'persistence',
+          domain: 'offline_sync',
+          operation: 'save_outbox_history',
+          code: 'OFFLINE_OUTBOX_HISTORY_IDB_WRITE_FAILED',
+          sourceState: 'partial',
+        }, error, { category: 'PERSISTENCE' });
       });
     }
   }

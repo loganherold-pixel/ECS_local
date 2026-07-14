@@ -25,7 +25,6 @@ import androidx.car.app.CarContext
 import androidx.car.app.Screen
 import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
-import androidx.car.app.model.CarColor
 import androidx.car.app.model.Pane
 import androidx.car.app.model.PaneTemplate
 import androidx.car.app.model.Row
@@ -43,6 +42,7 @@ class ECSVehicleActionsScreen(carContext: CarContext) : Screen(carContext) {
 
     private val handler = Handler(Looper.getMainLooper())
     private var isActive = true
+    private var lastPayloadSignature: String? = null
 
     // Display mode
     private var displayMode: String = "highway_drive"
@@ -64,8 +64,12 @@ class ECSVehicleActionsScreen(carContext: CarContext) : Screen(carContext) {
     private val refreshRunnable = object : Runnable {
         override fun run() {
             if (!isActive) return
-            readData()
-            invalidate()
+            val nextSignature = payloadSignature()
+            if (nextSignature != lastPayloadSignature) {
+                lastPayloadSignature = nextSignature
+                readData()
+                invalidate()
+            }
             handler.postDelayed(this, REFRESH_INTERVAL_MS)
         }
     }
@@ -77,6 +81,7 @@ class ECSVehicleActionsScreen(carContext: CarContext) : Screen(carContext) {
                     Lifecycle.Event.ON_START -> {
                         if (!isActive) {
                             isActive = true
+                            lastPayloadSignature = null
                             handler.removeCallbacks(refreshRunnable)
                             handler.post(refreshRunnable)
                         }
@@ -93,7 +98,22 @@ class ECSVehicleActionsScreen(carContext: CarContext) : Screen(carContext) {
         )
         handler.postDelayed(refreshRunnable, REFRESH_INTERVAL_MS)
         readData()
+        lastPayloadSignature = payloadSignature()
         Log.i(TAG, "ECSVehicleActionsScreen initialized")
+    }
+
+    private fun payloadSignature(): String {
+        val prefs = carContext.getSharedPreferences(
+            ECSAndroidAutoConstants.PREFS_NAME,
+            android.content.Context.MODE_PRIVATE
+        )
+        return ECSAndroidAutoConstants.payloadSignature(
+            prefs,
+            ECSAndroidAutoConstants.KEY_ACTIONS_DATA,
+            ECSAndroidAutoConstants.KEY_BREADCRUMB_DATA,
+            ECSAndroidAutoConstants.KEY_MODE_STATE,
+            ECSAndroidAutoConstants.KEY_DISPLAY_MODE
+        )
     }
 
     private fun readData() {
@@ -327,11 +347,10 @@ class ECSVehicleActionsScreen(carContext: CarContext) : Screen(carContext) {
                 .build()
         )
 
-        paneBuilder.addAction(
-            Action.Builder()
-                .setTitle("Emergency Comms")
-                .setBackgroundColor(CarColor.createCustom(0xFFC0392B.toInt(), 0xFFC0392B.toInt()))
-                .setOnClickListener { triggerAction("emergency_comms", "Emergency Comms") }
+        paneBuilder.addRow(
+            Row.Builder()
+                .setTitle("Emergency support")
+                .addText("Use phone or radio. ECS does not contact emergency services.")
                 .build()
         )
 

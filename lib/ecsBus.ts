@@ -113,6 +113,9 @@ const _debounceTimers: Partial<Record<EcsChannel, ReturnType<typeof setTimeout>>
 /** Per-channel last publish timestamp (for staleness detection) */
 const _lastPublishTimestamp: Partial<Record<EcsChannel, number>> = {};
 
+/** Per-channel source observation timestamp used to reject stale summaries. */
+const _lastSummaryTimestamp: Partial<Record<EcsChannel, number>> = {};
+
 /** Per-channel last summary cache */
 const _summaryCache: Partial<EcsSummaryMap> = {};
 
@@ -120,6 +123,7 @@ const _summaryCache: Partial<EcsSummaryMap> = {};
 let _propagating = false;
 let _propagationDepth = 0;
 let _propagationSource: string | null = null;
+let _propagationSourceStack: string[] = [];
 
 /** Active propagation ID — used to detect re-entrant calls */
 let _activePropagationId: string | null = null;
@@ -133,6 +137,7 @@ let _suppressedCount = 0;
 let _debounceCount = 0;
 let _circularPreventionCount = 0;
 let _staleRejectionCount = 0;
+let _duplicateSubscriptionCount = 0;
 
 
 // ── ID Generation ────────────────────────────────────────
@@ -173,6 +178,32 @@ function _shouldLogVerbose(): boolean {
 // PUBLISH — Core Bus Operation
 // ══════════════════════════════════════════════════════════
 
+function _acceptSummary(channel: EcsChannel, summary: EcsSummaryBase): boolean {
+  const sourceTimestamp = Date.parse(summary.updated_at);
+  const normalizedTimestamp = Number.isFinite(sourceTimestamp) ? sourceTimestamp : null;
+  const lastSourceTimestamp = _lastSummaryTimestamp[channel];
+
+  if (
+    lastSourceTimestamp != null &&
+    (normalizedTimestamp == null || normalizedTimestamp < lastSourceTimestamp)
+  ) {
+    _staleRejectionCount++;
+    if (_shouldLogVerbose()) {
+      debugBus('Bus stale data rejected', {
+        channel,
+        lastTimestamp: lastSourceTimestamp,
+        summaryTimestamp: normalizedTimestamp,
+      });
+    }
+    return false;
+  }
+
+  (_summaryCache as any)[channel] = summary;
+  if (normalizedTimestamp != null) _lastSummaryTimestamp[channel] = normalizedTimestamp;
+  _lastPublishTimestamp[channel] = Date.now();
+  return true;
+}
+
 /**
  * Publish an update to a channel.
  *
@@ -183,11 +214,16 @@ function _shouldLogVerbose(): boolean {
  * @param source - Identifier of the publishing system (for circular prevention)
  * @param summary - Optional summary data to cache
  */
-function _publishImmediate(channel: EcsChannel, source: string, summary?: EcsSummaryBase): void {
+function _publishImmediate(
+  channel: EcsChannel,
+  source: string,
+  summary?: EcsSummaryBase,
+  summaryAlreadyAccepted = false,
+): void {
   const now = Date.now();
 
   // ── Circular dependency prevention ─────────────────────
-  if (_propagating && _propagationSource === source) {
+  if (_propagating && _propagationSourceStack.includes(source)) {
     _circularPreventionCount++;
     if (_shouldLogVerbose()) {
       debugBus('Bus circular propagation prevented', {
@@ -206,27 +242,8 @@ function _publishImmediate(channel: EcsChannel, source: string, summary?: EcsSum
   }
 
   // ── Timestamp-aware staleness check ────────────────────
-  if (summary) {
-    const lastTs = _lastPublishTimestamp[channel];
-    if (lastTs && summary.updated_at) {
-      const summaryTs = new Date(summary.updated_at).getTime();
-      if (summaryTs < lastTs) {
-        _staleRejectionCount++;
-        if (_shouldLogVerbose()) {
-          debugBus('Bus stale data rejected', {
-            channel,
-            lastTimestamp: lastTs,
-            summaryTimestamp: summaryTs,
-          });
-        }
-        return;
-      }
-    }
-    // Cache the summary
-    (_summaryCache as any)[channel] = summary;
-  }
-
-  _lastPublishTimestamp[channel] = now;
+  if (summary && !summaryAlreadyAccepted && !_acceptSummary(channel, summary)) return;
+  if (!summary) _lastPublishTimestamp[channel] = now;
   _publishCount++;
 
   // ── Build event ────────────────────────────────────────
@@ -241,11 +258,13 @@ function _publishImmediate(channel: EcsChannel, source: string, summary?: EcsSum
   // ── Propagation lock ───────────────────────────────────
   const wasPropagating = _propagating;
   const prevSource = _propagationSource;
+  const prevSourceStack = _propagationSourceStack;
   const prevPropId = _activePropagationId;
   const prevDepth = _propagationDepth;
 
   _propagating = true;
   _propagationSource = source;
+  _propagationSourceStack = [..._propagationSourceStack, source];
   _activePropagationId = propagationId;
   _propagationDepth++;
 
@@ -272,6 +291,7 @@ function _publishImmediate(channel: EcsChannel, source: string, summary?: EcsSum
   // ── Restore propagation state ──────────────────────────
   _propagating = wasPropagating;
   _propagationSource = prevSource;
+  _propagationSourceStack = prevSourceStack;
   _activePropagationId = prevPropId;
   _propagationDepth = prevDepth;
 
@@ -306,21 +326,17 @@ export const ecsBus = {
   publish(channel: EcsChannel, source: string, summary?: EcsSummaryBase): void {
     const debounceMs = CHANNEL_DEBOUNCE_MS[channel] ?? DEFAULT_DEBOUNCE_MS;
 
+    if (summary && !_acceptSummary(channel, summary)) return;
+
     // Clear existing debounce timer for this channel
     if (_debounceTimers[channel]) {
       clearTimeout(_debounceTimers[channel]!);
       _debounceCount++;
     }
 
-    // Cache summary immediately (even before debounce fires)
-    if (summary) {
-      (_summaryCache as any)[channel] = summary;
-      _lastPublishTimestamp[channel] = Date.now();
-    }
-
     _debounceTimers[channel] = setTimeout(() => {
       delete _debounceTimers[channel];
-      _publishImmediate(channel, source, summary);
+      _publishImmediate(channel, source, summary, Boolean(summary));
     }, debounceMs);
   },
 
@@ -351,6 +367,13 @@ export const ecsBus = {
     callback: (event: EcsBusEvent) => void,
     excludeSource?: string,
   ): () => void {
+    if (_subscriptions.some((subscription) => (
+      subscription.channel === channel &&
+      subscription.callback === callback &&
+      subscription.exclude_source === excludeSource
+    ))) {
+      _duplicateSubscriptionCount++;
+    }
     const sub: Subscription = {
       id: _genSubId(),
       channel,
@@ -523,6 +546,7 @@ export const ecsBus = {
     debounce_count: number;
     circular_prevention_count: number;
     stale_rejection_count: number;
+    duplicate_subscription_count: number;
     subscription_count: number;
     pending_debounce_count: number;
     channels_with_data: string[];
@@ -533,6 +557,7 @@ export const ecsBus = {
       debounce_count: _debounceCount,
       circular_prevention_count: _circularPreventionCount,
       stale_rejection_count: _staleRejectionCount,
+      duplicate_subscription_count: _duplicateSubscriptionCount,
       subscription_count: _subscriptions.length,
       pending_debounce_count: Object.keys(_debounceTimers).length,
       channels_with_data: Object.keys(_lastPublishTimestamp),
@@ -587,16 +612,19 @@ export const ecsBus = {
     _subscriptions = [];
     _subIdCounter = 0;
     Object.keys(_lastPublishTimestamp).forEach(k => delete (_lastPublishTimestamp as any)[k]);
+    Object.keys(_lastSummaryTimestamp).forEach(k => delete (_lastSummaryTimestamp as any)[k]);
     Object.keys(_summaryCache).forEach(k => delete (_summaryCache as any)[k]);
     _propagating = false;
     _propagationDepth = 0;
     _propagationSource = null;
+    _propagationSourceStack = [];
     _activePropagationId = null;
     _publishCount = 0;
     _suppressedCount = 0;
     _debounceCount = 0;
     _circularPreventionCount = 0;
     _staleRejectionCount = 0;
+    _duplicateSubscriptionCount = 0;
 
   debugBus('Bus reset');
   },

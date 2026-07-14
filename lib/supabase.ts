@@ -2,6 +2,7 @@
 import { Platform } from "react-native";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { createPersistedKeyValueCache } from "./keyValuePersistence";
+import { ecsLog } from "./ecsLogger";
 
 /**
  * Supabase Client Configuration
@@ -96,9 +97,17 @@ function createUnavailableInvokeResult(functionName: string) {
   };
 
   if (shouldWarnEdgeFunction(`missing:${functionName}`)) {
-    console.warn("[Supabase] Edge function unavailable in current backend:", {
-      functionName,
+    ecsLog.captureFailure({
+      kind: "configuration",
+      domain: "supabase",
+      operation: "invoke_edge_function",
       code: EDGE_FUNCTION_UNAVAILABLE_CODE,
+      sourceState: "unavailable",
+      context: { functionName },
+    }, undefined, {
+      category: "PROVIDER",
+      fingerprint: functionName,
+      dedupeWindowMs: EDGE_FUNCTION_WARNING_COOLDOWN_MS,
     });
   }
 
@@ -145,10 +154,18 @@ function createSafeClient(): SupabaseClient {
   }
 
   if (shouldWarnMissingSupabaseConfig()) {
-    console.warn(
-      "[Supabase] Missing required environment variables; cloud-backed ECS features are unavailable",
-      { missing: missingSupabaseEnv }
-    );
+    ecsLog.captureFailure({
+      kind: "configuration",
+      domain: "supabase",
+      operation: "initialize_client",
+      code: SUPABASE_CONFIG_UNAVAILABLE_CODE,
+      sourceState: "unavailable",
+      context: { missingEnvironmentVariables: missingSupabaseEnv },
+    }, undefined, {
+      category: "CONFIG",
+      fingerprint: SUPABASE_CONFIG_UNAVAILABLE_CODE,
+      dedupeWindowMs: EDGE_FUNCTION_WARNING_COOLDOWN_MS,
+    });
   }
 
   const noopError = {

@@ -14,16 +14,27 @@ import type { RouteWaypointType } from './waypointTypes';
 import type { RouteSegmentSourceMetadata } from './map/dispersedCampingSegmentBuild';
 import { parseKML, type KmlParseResult } from './kmlParser';
 import { parseGeoJSON, type GeoJsonParseResult, type GeoJsonWaypoint, type GeoJsonRoute } from './geojsonParser';
+import { createPersistedKeyValueCache } from './keyValuePersistence';
+import {
+  buildGeometryFingerprint,
+  canonicalJourneyEntityId,
+  decideJourneyTransition,
+  mergeJourneyLinkage,
+  routeOriginFromSource,
+  stableLifecycleHash,
+  type ECSJourneyLinkage,
+} from './lifecycle/routeTripExpeditionLifecycle';
 
 
 // ── Storage helpers ─────────────────────────────────────
 const memoryStore: Record<string, string> = {};
+const routePersistence = createPersistedKeyValueCache('ecs_route_store');
 
 function lsGet(key: string): string | null {
   if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
     return localStorage.getItem(key);
   }
-  return memoryStore[key] || null;
+  return memoryStore[key] || routePersistence.get(key) || null;
 }
 
 function lsSet(key: string, value: string): void {
@@ -31,6 +42,10 @@ function lsSet(key: string, value: string): void {
     localStorage.setItem(key, value);
   }
   memoryStore[key] = value;
+  if (Platform.OS !== 'web') {
+    routePersistence.set(key, value);
+    void routePersistence.flush();
+  }
 }
 
 function generateId(): string {
@@ -79,6 +94,7 @@ export type RouteCategory = 'imported' | 'custom';
 
 export interface ImportedRoute {
   id: string;
+  schema_version?: number;
   user_id: string | null;
   device_id: string;
   name: string;
@@ -90,6 +106,9 @@ export interface ImportedRoute {
   linked_run_id?: string | null;
   external_source_id?: string | null;
   external_source_type?: string | null;
+  source_fingerprint?: string | null;
+  import_idempotency_key?: string | null;
+  lifecycle?: ECSJourneyLinkage | null;
   total_distance_miles: number;
   elevation_gain_ft: number | null;
   waypoint_count: number;
@@ -114,10 +133,17 @@ export type CustomRouteCreateOptions = {
   sourceApp?: string | null;
   externalSourceId?: string | null;
   externalSourceType?: string | null;
+  idempotencyKey?: string | null;
 };
 
 // ── Storage keys ────────────────────────────────────────
 const LS_ROUTES = 'ecs_local_routes';
+const ROUTE_STORE_VERSION = 2;
+
+type PersistedRouteStore = {
+  version: number;
+  routes: ImportedRoute[];
+};
 
 export type RouteStoreListener = () => void;
 
@@ -143,17 +169,72 @@ function subscribeRouteStore(listener: RouteStoreListener): () => void {
 function getLocalRoutes(): ImportedRoute[] {
   const raw = lsGet(LS_ROUTES);
   if (!raw) return [];
-  try { return JSON.parse(raw); } catch { return []; }
+  try {
+    const parsed = JSON.parse(raw) as PersistedRouteStore | ImportedRoute[];
+    const routes = Array.isArray(parsed) ? parsed : parsed?.routes;
+    if (!Array.isArray(routes)) return [];
+    return routes
+      .filter((route): route is ImportedRoute => !!route?.id && Array.isArray(route.segments))
+      .map((route) => ({
+        ...route,
+        schema_version: ROUTE_STORE_VERSION,
+        source_fingerprint:
+          route.source_fingerprint ??
+          buildGeometryFingerprint(route.segments, `route:${route.source_format ?? 'unknown'}`),
+        lifecycle: route.lifecycle ?? mergeJourneyLinkage(null, {
+          phase: route.is_active ? 'staged' : 'planned',
+          identity: {
+            routeAssetId: canonicalJourneyEntityId('route_asset', route.id),
+            recordedRunId: route.linked_run_id
+              ? canonicalJourneyEntityId('recorded_run', route.linked_run_id)
+              : null,
+          },
+          routeProvenance: {
+            origin: routeOriginFromSource(route.external_source_type ?? route.source_app ?? route.source_format),
+            sourceId: route.external_source_id ?? route.id,
+            sourceType: route.external_source_type ?? route.source_format,
+            sourceLabel: route.source_app ?? route.source_format,
+            authority: null,
+            dataState: route.sync_status,
+            geometry: {
+              kind: route.source_format === 'custom' ? 'manual_geometry' : 'imported_geometry',
+              fingerprint: route.source_fingerprint ?? buildGeometryFingerprint(route.segments, `route:${route.source_format}`),
+              sourceId: route.external_source_id ?? route.id,
+              sourceType: route.external_source_type ?? route.source_format,
+              sourceLabel: route.source_app ?? route.source_format,
+              sourceFormat: route.source_format,
+              capturedAt: route.created_at,
+              verified: null,
+              warnings: [],
+            },
+          },
+          updatedAt: route.updated_at,
+        }),
+      }));
+  } catch { return []; }
 }
 
 function saveLocalRoutes(routes: ImportedRoute[]): void {
-  const nextValue = JSON.stringify(routes);
+  const nextValue = JSON.stringify({
+    version: ROUTE_STORE_VERSION,
+    routes: routes.map((route) => ({ ...route, schema_version: ROUTE_STORE_VERSION })),
+  } satisfies PersistedRouteStore);
   const previousValue = lsGet(LS_ROUTES);
   lsSet(LS_ROUTES, nextValue);
   if (previousValue !== nextValue) {
     notifyRouteStoreListeners();
   }
 }
+
+const routeStoreHydration = Platform.OS === 'web'
+  ? Promise.resolve()
+  : routePersistence.waitForHydration().then(() => {
+      const persisted = routePersistence.get(LS_ROUTES);
+      if (persisted) {
+        memoryStore[LS_ROUTES] = persisted;
+        notifyRouteStoreListeners();
+      }
+    });
 
 function isValidLatLon(lat: number, lon: number): boolean {
   return (
@@ -201,6 +282,83 @@ function computeRouteDistanceMiles(segments: RouteSegment[]): number {
     }
   }
   return Math.round(totalDistanceMiles * 100) / 100;
+}
+
+function buildRouteLifecycle(args: {
+  routeId: string;
+  sourceFormat: RouteSourceFormat;
+  sourceApp?: string | null;
+  externalSourceId?: string | null;
+  externalSourceType?: string | null;
+  sourceFingerprint: string | null;
+  syncStatus: LocalSyncStatus;
+  createdAt: string;
+  updatedAt: string;
+}): ECSJourneyLinkage {
+  const origin = routeOriginFromSource(
+    args.externalSourceType ?? args.sourceApp ?? args.sourceFormat,
+  );
+  return mergeJourneyLinkage(null, {
+    phase: 'planned',
+    identity: {
+      discoveryId: args.externalSourceId
+        ? canonicalJourneyEntityId('discovery_route', args.externalSourceId)
+        : null,
+      routeAssetId: canonicalJourneyEntityId('route_asset', args.routeId),
+    },
+    routeProvenance: {
+      origin,
+      sourceId: args.externalSourceId ?? args.routeId,
+      sourceType: args.externalSourceType ?? args.sourceFormat,
+      sourceLabel: args.sourceApp ?? args.sourceFormat,
+      authority: null,
+      dataState: args.syncStatus,
+      geometry: {
+        kind:
+          origin === 'stitched'
+            ? 'stitched_geometry'
+            : args.sourceFormat === 'custom'
+              ? 'manual_geometry'
+              : 'imported_geometry',
+        fingerprint: args.sourceFingerprint,
+        sourceId: args.externalSourceId ?? args.routeId,
+        sourceType: args.externalSourceType ?? args.sourceFormat,
+        sourceLabel: args.sourceApp ?? args.sourceFormat,
+        sourceFormat: args.sourceFormat,
+        capturedAt: args.createdAt,
+        verified: null,
+        warnings: [],
+      },
+    },
+    updatedAt: args.updatedAt,
+  });
+}
+
+function findRouteByCreationIdentity(input: {
+  sourceFormat: RouteSourceFormat;
+  sourceApp?: string | null;
+  externalSourceId?: string | null;
+  idempotencyKey?: string | null;
+  sourceFingerprint?: string | null;
+}): ImportedRoute | null {
+  const idempotencyKey = input.idempotencyKey?.trim() || null;
+  const externalSourceId = input.externalSourceId?.trim() || null;
+  return getLocalRoutes().find((route) => {
+    if (idempotencyKey && route.import_idempotency_key === idempotencyKey) return true;
+    if (
+      externalSourceId &&
+      route.external_source_id === externalSourceId &&
+      route.source_app === (input.sourceApp ?? null)
+    ) {
+      return true;
+    }
+    return Boolean(
+      input.sourceFingerprint &&
+      route.source_format === input.sourceFormat &&
+      route.source_fingerprint === input.sourceFingerprint &&
+      route.source_app === (input.sourceApp ?? null),
+    );
+  }) ?? null;
 }
 
 function nextCustomRouteName(): string {
@@ -410,10 +568,24 @@ export const routeStore = {
       throw new Error('Custom route requires at least two valid points.');
     }
 
+    const sourceFingerprint = buildGeometryFingerprint(segments, 'route:custom');
+    const existing = findRouteByCreationIdentity({
+      sourceFormat: 'custom',
+      sourceApp: options?.sourceApp ?? null,
+      externalSourceId: options?.externalSourceId ?? null,
+      idempotencyKey: options?.idempotencyKey ?? null,
+      sourceFingerprint: options?.idempotencyKey || options?.externalSourceId
+        ? sourceFingerprint
+        : null,
+    });
+    if (existing) return existing;
+
     const now = nowISO();
     const deviceId = getDeviceId();
+    const routeId = generateId();
     const route: ImportedRoute = {
-      id: generateId(),
+      id: routeId,
+      schema_version: ROUTE_STORE_VERSION,
       user_id: null,
       device_id: deviceId,
       name: options?.name?.trim() || nextCustomRouteName(),
@@ -424,6 +596,8 @@ export const routeStore = {
       linked_run_id: null,
       external_source_id: options?.externalSourceId ?? null,
       external_source_type: options?.externalSourceType ?? null,
+      source_fingerprint: sourceFingerprint,
+      import_idempotency_key: options?.idempotencyKey?.trim() || null,
       total_distance_miles: computeRouteDistanceMiles(segments),
       elevation_gain_ft: null,
       waypoint_count: 0,
@@ -434,6 +608,17 @@ export const routeStore = {
       sync_status: 'local',
       created_at: now,
       updated_at: now,
+      lifecycle: buildRouteLifecycle({
+        routeId,
+        sourceFormat: 'custom',
+        sourceApp: options?.sourceApp ?? null,
+        externalSourceId: options?.externalSourceId ?? null,
+        externalSourceType: options?.externalSourceType ?? null,
+        sourceFingerprint,
+        syncStatus: 'local',
+        createdAt: now,
+        updatedAt: now,
+      }),
     };
 
     const routes = getLocalRoutes();
@@ -448,17 +633,30 @@ export const routeStore = {
    */
   importGPX: (gpxContent: string, sourceApp?: string): ImportedRoute => {
     const parsed = parseGPX(gpxContent);
+    const sourceFingerprint =
+      buildGeometryFingerprint(parsed.segments, 'route:gpx') ??
+      `route:gpx:raw:${stableLifecycleHash(gpxContent.trim())}`;
+    const existing = findRouteByCreationIdentity({
+      sourceFormat: 'gpx',
+      sourceApp: sourceApp ?? null,
+      sourceFingerprint,
+    });
+    if (existing) return existing;
     const now = nowISO();
     const deviceId = getDeviceId();
+    const routeId = generateId();
 
     const route: ImportedRoute = {
-      id: generateId(),
+      id: routeId,
+      schema_version: ROUTE_STORE_VERSION,
       user_id: null,
       device_id: deviceId,
       name: parsed.name,
       description: null,
       source_format: 'gpx',
       source_app: sourceApp || null,
+      source_fingerprint: sourceFingerprint,
+      import_idempotency_key: sourceFingerprint,
       total_distance_miles: parsed.totalDistanceMiles,
       elevation_gain_ft: parsed.elevationGainFt,
       waypoint_count: parsed.waypoints.length,
@@ -469,6 +667,15 @@ export const routeStore = {
       sync_status: 'local',
       created_at: now,
       updated_at: now,
+      lifecycle: buildRouteLifecycle({
+        routeId,
+        sourceFormat: 'gpx',
+        sourceApp: sourceApp ?? null,
+        sourceFingerprint,
+        syncStatus: 'local',
+        createdAt: now,
+        updatedAt: now,
+      }),
     };
 
     const routes = getLocalRoutes();
@@ -491,8 +698,6 @@ export const routeStore = {
    */
   importKML: (kmlContent: string, sourceApp?: string): ImportedRoute => {
     const parsed: KmlParseResult = parseKML(kmlContent);
-    const now = nowISO();
-    const deviceId = getDeviceId();
 
     // ── Convert KmlWaypoint[] → RouteWaypoint[] ─────────
     const waypoints: RouteWaypoint[] = parsed.waypoints.map(wp => ({
@@ -514,6 +719,19 @@ export const routeStore = {
         ele: coord.length > 2 && isFinite(coord[2]) ? coord[2] : null,
       })),
     }));
+    const resolvedSourceApp = sourceApp || parsed.source.detectedApp || null;
+    const sourceFingerprint =
+      buildGeometryFingerprint(segments, 'route:kml') ??
+      `route:kml:raw:${stableLifecycleHash(kmlContent.trim())}`;
+    const existing = findRouteByCreationIdentity({
+      sourceFormat: 'kml',
+      sourceApp: resolvedSourceApp,
+      sourceFingerprint,
+    });
+    if (existing) return existing;
+    const now = nowISO();
+    const deviceId = getDeviceId();
+    const routeId = generateId();
 
     // ── Compute total distance and elevation gain ───────
     let totalDistanceMiles = 0;
@@ -539,13 +757,16 @@ export const routeStore = {
       : null;
 
     const route: ImportedRoute = {
-      id: generateId(),
+      id: routeId,
+      schema_version: ROUTE_STORE_VERSION,
       user_id: null,
       device_id: deviceId,
       name: parsed.name || 'Imported KML',
       description: parsed.description || null,
       source_format: 'kml',
-      source_app: sourceApp || parsed.source.detectedApp || null,
+      source_app: resolvedSourceApp,
+      source_fingerprint: sourceFingerprint,
+      import_idempotency_key: sourceFingerprint,
       total_distance_miles: Math.round(totalDistanceMiles * 100) / 100,
       elevation_gain_ft: elevationGainFt,
       waypoint_count: waypoints.length,
@@ -556,6 +777,15 @@ export const routeStore = {
       sync_status: 'local',
       created_at: now,
       updated_at: now,
+      lifecycle: buildRouteLifecycle({
+        routeId,
+        sourceFormat: 'kml',
+        sourceApp: resolvedSourceApp,
+        sourceFingerprint,
+        syncStatus: 'local',
+        createdAt: now,
+        updatedAt: now,
+      }),
     };
 
     const routes = getLocalRoutes();
@@ -580,8 +810,6 @@ export const routeStore = {
    */
   importGeoJSON: (geojsonContent: string, sourceApp?: string): ImportedRoute => {
     const parsed: GeoJsonParseResult = parseGeoJSON(geojsonContent);
-    const now = nowISO();
-    const deviceId = getDeviceId();
 
     // ── Convert GeoJsonWaypoint[] → RouteWaypoint[] ─────
     // Point features become waypoints with ele in meters
@@ -660,6 +888,19 @@ export const routeStore = {
         }
       }
     }
+    const resolvedSourceApp = sourceApp || parsed.source.detectedApp || null;
+    const sourceFingerprint =
+      buildGeometryFingerprint(segments, 'route:geojson') ??
+      `route:geojson:raw:${stableLifecycleHash(geojsonContent.trim())}`;
+    const existing = findRouteByCreationIdentity({
+      sourceFormat: 'geojson',
+      sourceApp: resolvedSourceApp,
+      sourceFingerprint,
+    });
+    if (existing) return existing;
+    const now = nowISO();
+    const deviceId = getDeviceId();
+    const routeId = generateId();
 
     // ── Compute total distance and elevation gain ───────
     let totalDistanceMiles = 0;
@@ -685,13 +926,16 @@ export const routeStore = {
       : null;
 
     const route: ImportedRoute = {
-      id: generateId(),
+      id: routeId,
+      schema_version: ROUTE_STORE_VERSION,
       user_id: null,
       device_id: deviceId,
       name: parsed.name || 'Imported GeoJSON',
       description: parsed.description || null,
       source_format: 'geojson',
-      source_app: sourceApp || parsed.source.detectedApp || null,
+      source_app: resolvedSourceApp,
+      source_fingerprint: sourceFingerprint,
+      import_idempotency_key: sourceFingerprint,
       total_distance_miles: Math.round(totalDistanceMiles * 100) / 100,
       elevation_gain_ft: elevationGainFt,
       waypoint_count: waypoints.length,
@@ -702,6 +946,15 @@ export const routeStore = {
       sync_status: 'local',
       created_at: now,
       updated_at: now,
+      lifecycle: buildRouteLifecycle({
+        routeId,
+        sourceFormat: 'geojson',
+        sourceApp: resolvedSourceApp,
+        sourceFingerprint,
+        syncStatus: 'local',
+        createdAt: now,
+        updatedAt: now,
+      }),
     };
 
     const routes = getLocalRoutes();
@@ -720,7 +973,17 @@ export const routeStore = {
     const routes = getLocalRoutes();
     for (const r of routes) {
       r.is_active = r.id === routeId;
-      if (r.id === routeId) r.updated_at = nowISO();
+      const updatedAt = r.id === routeId ? nowISO() : r.updated_at;
+      if (r.id === routeId) r.updated_at = updatedAt;
+      const currentPhase = r.lifecycle?.phase ?? 'planned';
+      const targetPhase = r.id === routeId
+        ? 'staged'
+        : currentPhase === 'staged'
+          ? 'previewing'
+          : currentPhase;
+      if (decideJourneyTransition(currentPhase, targetPhase).accepted) {
+        r.lifecycle = mergeJourneyLinkage(r.lifecycle, { phase: targetPhase, updatedAt });
+      }
     }
     saveLocalRoutes(routes);
   },
@@ -730,7 +993,14 @@ export const routeStore = {
    */
   deactivateAll: (): void => {
     const routes = getLocalRoutes();
-    for (const r of routes) r.is_active = false;
+    for (const r of routes) {
+      r.is_active = false;
+      const currentPhase = r.lifecycle?.phase ?? 'planned';
+      const targetPhase = currentPhase === 'staged' ? 'previewing' : currentPhase;
+      if (decideJourneyTransition(currentPhase, targetPhase).accepted) {
+        r.lifecycle = mergeJourneyLinkage(r.lifecycle, { phase: targetPhase, updatedAt: r.updated_at });
+      }
+    }
     saveLocalRoutes(routes);
   },
 
@@ -767,6 +1037,12 @@ export const routeStore = {
 
     routes[idx].linked_run_id = runId;
     routes[idx].updated_at = nowISO();
+    routes[idx].lifecycle = mergeJourneyLinkage(routes[idx].lifecycle, {
+      identity: {
+        recordedRunId: canonicalJourneyEntityId('recorded_run', runId),
+      },
+      updatedAt: routes[idx].updated_at,
+    });
     saveLocalRoutes(routes);
     return routes[idx];
   },
@@ -920,5 +1196,9 @@ export const routeStore = {
    */
   count: (): number => getLocalRoutes().length,
 };
+
+export function waitForRouteStoreHydration(): Promise<void> {
+  return routeStoreHydration;
+}
 
 

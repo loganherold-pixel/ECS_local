@@ -14,6 +14,7 @@ export type RouteCatalogSummaryCacheEntry = {
 export type RouteCatalogSummaryCache = {
   ttlMs: number;
   staleMs: number;
+  maxEntries: number;
   entries: Map<string, RouteCatalogSummaryCacheEntry>;
   get: (
     key: string,
@@ -47,27 +48,39 @@ export function exploreCatalogRegionCacheKey(regionId: string): string {
 }
 
 export function createRouteCatalogSummaryCache(
-  options: { ttlMs?: number; staleMs?: number } = {},
+  options: { ttlMs?: number; staleMs?: number; maxEntries?: number } = {},
 ): RouteCatalogSummaryCache {
   const ttlMs = options.ttlMs ?? EXPLORE_CATALOG_SUMMARY_CACHE_TTL_MS;
   const staleMs = options.staleMs ?? EXPLORE_CATALOG_SUMMARY_CACHE_STALE_MS;
+  const maxEntries = Math.max(1, Math.round(options.maxEntries ?? 24));
   const entries = new Map<string, RouteCatalogSummaryCacheEntry>();
 
   return {
     ttlMs,
     staleMs,
+    maxEntries,
     entries,
     get(key, nowMs = Date.now()) {
       const cached = entries.get(key);
       if (!cached) return { status: 'miss', summaries: null };
       const ageMs = Math.max(0, nowMs - cached.storedAtMs);
+      if (ageMs <= ttlMs + staleMs) {
+        entries.delete(key);
+        entries.set(key, cached);
+      }
       if (ageMs <= ttlMs) return { status: 'hit', summaries: [...cached.summaries] };
       if (ageMs <= ttlMs + staleMs) return { status: 'stale', summaries: [...cached.summaries] };
       entries.delete(key);
       return { status: 'miss', summaries: null };
     },
     set(key, summaries, nowMs = Date.now()) {
+      entries.delete(key);
       entries.set(key, { summaries: [...summaries], storedAtMs: nowMs });
+      while (entries.size > maxEntries) {
+        const oldestKey = entries.keys().next().value;
+        if (typeof oldestKey !== 'string') break;
+        entries.delete(oldestKey);
+      }
     },
     clear() {
       entries.clear();

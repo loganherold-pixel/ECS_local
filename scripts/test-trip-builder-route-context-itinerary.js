@@ -22,6 +22,9 @@ const { buildTripPlan } = require(path.join(root, 'lib', 'tripBuilder', 'tripBui
 const {
   routeContextToTripBuilderItineraryContext,
 } = require(path.join(root, 'lib', 'tripBuilder', 'routeContextTripBuilderAdapter.ts'));
+const {
+  resolveTrailWaypoints,
+} = require(path.join(root, 'lib', 'tripBuilder', 'trailWaypointIntelligenceResolver.ts'));
 
 const baseInput = {
   tripType: 'day_trip',
@@ -140,6 +143,34 @@ assert.strictEqual(
   readyInput.campEndpointPlan.endpointCandidates[0].routeEndpoint.routeSide,
   'right',
   'RouteContext adapter should preserve Camp Endpoint plans for Trip Builder itinerary insertion.',
+);
+const trailGeometry = {
+  id: 'context-route',
+  name: 'Context Route',
+  geometry: [
+    { latitude: 38, longitude: -110 },
+    { latitude: 38.1, longitude: -109.9 },
+  ],
+  segments: [],
+};
+const selectedEndpointResolution = resolveTrailWaypoints({
+  trailRoute: trailGeometry,
+  routeContext: { campEndpointPlan: readyInput.campEndpointPlan },
+});
+assert.strictEqual(selectedEndpointResolution.metadata.sourceRecordCount, 1);
+const recommendationOnlyResolution = resolveTrailWaypoints({
+  trailRoute: trailGeometry,
+  routeContext: {
+    campEndpointPlan: {
+      ...readyInput.campEndpointPlan,
+      selectedEndpointIds: [],
+    },
+  },
+});
+assert.strictEqual(
+  recommendationOnlyResolution.metadata.sourceRecordCount,
+  0,
+  'CampOps recommendations must not enter the Trip Builder itinerary until the user explicitly selects one.',
 );
 const readyPlan = buildTripPlan({
   route: sparseRoute,

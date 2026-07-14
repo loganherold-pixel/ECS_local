@@ -9,6 +9,7 @@ import type {
   ECSTelemetrySourceType,
 } from './ECSTelemetryTypes';
 import { recordBluetoothDiagnosticEvent } from '../../lib/bluetoothDiagnostics';
+import { BLU_TELEMETRY_UI_UPDATE_MS } from '../../lib/bluPerformanceConfig';
 
 type StoreListener = () => void;
 
@@ -79,13 +80,43 @@ function shouldRejectProductionMock(event: ECSTelemetryEvent): boolean {
 class ECSTelemetryStore {
   private metrics = new Map<string, ECSTelemetryMetricSnapshot>();
   private listeners = new Set<StoreListener>();
+  private sourceListeners = new Map<ECSTelemetrySourceType, Set<StoreListener>>();
+  private sourceNotifyTimers = new Map<ECSTelemetrySourceType, ReturnType<typeof setTimeout>>();
+  private sourceLastNotifyAt = new Map<ECSTelemetrySourceType, number>();
   private updatedAt: number | null = null;
   private staleTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastStaleTransitionSources = new Set<ECSTelemetrySourceType>();
 
   subscribe(listener: StoreListener): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+    };
+  }
+
+  subscribeSource(sourceType: ECSTelemetrySourceType, listener: StoreListener): () => void {
+    const listeners = this.sourceListeners.get(sourceType) ?? new Set<StoreListener>();
+    listeners.add(listener);
+    this.sourceListeners.set(sourceType, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size > 0) return;
+      this.sourceListeners.delete(sourceType);
+      const timer = this.sourceNotifyTimers.get(sourceType);
+      if (timer) clearTimeout(timer);
+      this.sourceNotifyTimers.delete(sourceType);
+      this.sourceLastNotifyAt.delete(sourceType);
+    };
+  }
+
+  getListenerCounts(): { all: number; bySource: Record<ECSTelemetrySourceType, number> } {
+    return {
+      all: this.listeners.size,
+      bySource: {
+        power_device: this.sourceListeners.get('power_device')?.size ?? 0,
+        obd2: this.sourceListeners.get('obd2')?.size ?? 0,
+        utility_sensor: this.sourceListeners.get('utility_sensor')?.size ?? 0,
+      },
     };
   }
 
@@ -101,6 +132,8 @@ class ECSTelemetryStore {
       timestamp,
       staleAt: event.quality === 'live' ? timestamp + LIVE_MAX_AGE_MS : null,
     };
+
+    if (!this.prepareTransportIngestion(normalized)) return;
 
     const key = metricKey(normalized);
     if (this.shouldKeepExistingMetric(this.metrics.get(key), normalized)) return;
@@ -121,11 +154,12 @@ class ECSTelemetryStore {
       },
     });
     this.scheduleStaleCheck();
-    this.notify();
+    this.notify([normalized.sourceType]);
   }
 
   ingestEvents(events: ECSTelemetryEvent[]): void {
     let changed = false;
+    const changedSources = new Set<ECSTelemetrySourceType>();
     for (const event of events) {
       if (!event.sourceDeviceId || !event.metricKey) continue;
       if (shouldRejectProductionMock(event)) continue;
@@ -137,6 +171,7 @@ class ECSTelemetryStore {
         timestamp,
         staleAt: event.quality === 'live' ? timestamp + LIVE_MAX_AGE_MS : null,
       };
+      if (!this.prepareTransportIngestion(normalized)) continue;
       const key = metricKey(normalized);
       if (this.shouldKeepExistingMetric(this.metrics.get(key), normalized)) continue;
       this.metrics.set(key, normalized);
@@ -155,11 +190,12 @@ class ECSTelemetryStore {
         },
       });
       changed = true;
+      changedSources.add(normalized.sourceType);
     }
     if (!changed) return;
     this.updatedAt = Date.now();
     this.scheduleStaleCheck();
-    this.notify();
+    this.notify(changedSources);
   }
 
   markDeviceUnavailable(
@@ -170,6 +206,7 @@ class ECSTelemetryStore {
   ): void {
     const now = Date.now();
     let changed = false;
+    const changedSources = new Set<ECSTelemetrySourceType>();
     for (const [key, metric] of this.metrics.entries()) {
       if (!sameTelemetryDevice(metric, sourceDeviceId, sourceType, provider)) continue;
       this.metrics.set(key, {
@@ -182,28 +219,33 @@ class ECSTelemetryStore {
         errorMessage: reason,
       });
       changed = true;
+      changedSources.add(metric.sourceType);
     }
     if (!changed) return;
     this.updatedAt = now;
-    this.notify();
+    this.notify(changedSources);
   }
 
   clearDevice(sourceDeviceId: string, sourceType?: ECSTelemetrySourceType, provider?: string | null): void {
     let changed = false;
+    const changedSources = new Set<ECSTelemetrySourceType>();
     for (const [key, metric] of Array.from(this.metrics.entries())) {
       if (!sameTelemetryDevice(metric, sourceDeviceId, sourceType, provider)) continue;
       this.metrics.delete(key);
       changed = true;
+      changedSources.add(metric.sourceType);
     }
     if (!changed) return;
     this.updatedAt = Date.now();
-    this.notify();
+    this.notify(changedSources);
   }
 
   reset(): void {
     this.metrics.clear();
     this.updatedAt = null;
     this.cancelStaleTimer();
+    for (const timer of this.sourceNotifyTimers.values()) clearTimeout(timer);
+    this.sourceNotifyTimers.clear();
     this.notify();
   }
 
@@ -342,6 +384,7 @@ class ECSTelemetryStore {
   private applyStaleTransitions(): boolean {
     const now = Date.now();
     let changed = false;
+    const changedSources = new Set<ECSTelemetrySourceType>();
     for (const [key, metric] of this.metrics.entries()) {
       if (metric.quality !== 'live') continue;
       if (!metric.staleAt || now < metric.staleAt) continue;
@@ -367,9 +410,11 @@ class ECSTelemetryStore {
         },
       });
       changed = true;
+      changedSources.add(metric.sourceType);
     }
     if (changed) {
       this.updatedAt = now;
+      this.lastStaleTransitionSources = changedSources;
       this.scheduleStaleCheck();
     }
     return changed;
@@ -386,7 +431,7 @@ class ECSTelemetryStore {
     if (nextAt == null) return;
     this.staleTimer = setTimeout(() => {
       const changed = this.applyStaleTransitions();
-      if (changed) this.notify();
+      if (changed) this.notify(this.lastStaleTransitionSources);
     }, Math.max(250, nextAt - now + 50));
     const timerWithUnref = this.staleTimer as unknown as { unref?: () => void };
     if (typeof timerWithUnref.unref === 'function') {
@@ -400,8 +445,62 @@ class ECSTelemetryStore {
     this.staleTimer = null;
   }
 
-  private notify(): void {
+  private notify(sourceTypes?: Iterable<ECSTelemetrySourceType>): void {
     for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {}
+    }
+    const types = sourceTypes
+      ? Array.from(new Set(sourceTypes))
+      : Array.from(this.sourceListeners.keys());
+    for (const sourceType of types) {
+      this.scheduleSourceNotify(sourceType);
+    }
+  }
+
+  private prepareTransportIngestion(next: ECSTelemetryMetricSnapshot): boolean {
+    const siblings = Array.from(this.metrics.entries()).filter(([, metric]) => (
+      metric.sourceType === next.sourceType &&
+      metric.provider === next.provider &&
+      metric.sourceDeviceId === next.sourceDeviceId &&
+      metric.transport !== next.transport
+    ));
+    if (siblings.length === 0) return true;
+
+    const hasLiveBle = siblings.some(([, metric]) => metric.transport === 'ble' && metric.quality === 'live');
+    if (next.transport === 'cloud' && hasLiveBle) return false;
+
+    if (next.quality !== 'live') return false;
+
+    if (next.quality === 'live') {
+      for (const [key] of siblings) this.metrics.delete(key);
+    }
+    return true;
+  }
+
+  private scheduleSourceNotify(sourceType: ECSTelemetrySourceType): void {
+    const listeners = this.sourceListeners.get(sourceType);
+    if (!listeners?.size) return;
+    const now = Date.now();
+    const elapsed = now - (this.sourceLastNotifyAt.get(sourceType) ?? 0);
+    if (elapsed >= BLU_TELEMETRY_UI_UPDATE_MS) {
+      this.flushSourceNotify(sourceType);
+      return;
+    }
+    if (this.sourceNotifyTimers.has(sourceType)) return;
+    const timer = setTimeout(() => {
+      this.sourceNotifyTimers.delete(sourceType);
+      this.flushSourceNotify(sourceType);
+    }, BLU_TELEMETRY_UI_UPDATE_MS - elapsed);
+    this.sourceNotifyTimers.set(sourceType, timer);
+    const timerWithUnref = timer as unknown as { unref?: () => void };
+    timerWithUnref.unref?.();
+  }
+
+  private flushSourceNotify(sourceType: ECSTelemetrySourceType): void {
+    this.sourceLastNotifyAt.set(sourceType, Date.now());
+    for (const listener of this.sourceListeners.get(sourceType) ?? []) {
       try {
         listener();
       } catch {}

@@ -104,12 +104,13 @@ assert.ok(
 );
 
 assert.ok(
-  discoverSource.includes('useState<ExpeditionOpportunity[]>(() =>') &&
-    discoverSource.includes('computeDistancesFromUser(') &&
+  discoverSource.includes('useState<ExpeditionOpportunity[]>([])') &&
+    discoverSource.includes('opportunityLoadTask: ShellInteractionTask') &&
+    discoverSource.includes('runAfterShellInteractions(() => {') &&
     discoverSource.includes('loadExpeditionOpportunities(),') &&
     discoverSource.includes("showInitialLoading = isLoading && !hasLoadedExplorer && opportunities.length === 0") &&
     discoverSource.includes('showSectionLoading = isLoading && (hasLoadedExplorer || opportunities.length > 0)'),
-  'Explore should paint seeded route cards immediately and reserve full-screen loading for an actually empty initial route set.',
+  'Explore should defer seed processing until shell interactions settle and reserve full-screen loading for an empty initial route set.',
 );
 
 assert.ok(

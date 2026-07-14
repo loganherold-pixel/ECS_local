@@ -19,7 +19,7 @@
  *   → androidAutoBridge polls → vehicleCompanionManager.handleAction()
  *
  * Architecture:
- *   - Timer-driven data push (2s interval)
+ *   - Bounded, semantic-deduplicated data publication
  *   - Timer-driven action polling (1s interval)
  *   - Subscribes to vehicleDisplayStore for reactive updates
  *   - Falls back gracefully when NativeModule is unavailable (web/iOS)
@@ -37,14 +37,22 @@ import { breadcrumbTracker } from './breadcrumbTracker';
 import { vehicleSessionState } from './vehicleSessionState';
 import { vehicleCompanionManager } from './vehicleCompanionManager';
 import { ecsLog } from './ecsLogger';
+import { resolveAutomotiveFeatureAccess } from './automotive/automotiveFeatureAccess';
+import {
+  automotiveSafeMetadata,
+  buildAutomotiveNativePayload,
+  buildAutomotiveSemanticSignature,
+  reduceAutomotiveConnectionState,
+  shouldPublishAutomotiveLocation,
+  shouldPublishAutomotiveState,
+  type ECSAutomotiveConnectionEvent,
+  type ECSAutomotiveConnectionLifecycle,
+  type ECSAutomotiveLocationSample,
+} from './automotive/automotiveUpdatePolicy';
 import type {
   VehicleDisplayMode,
-  VehicleMapData,
-  VehicleStatusData,
   VehicleWeatherData,
-  VehicleIndicators,
   VehicleActionType,
-  ModeOverrideSetting,
 } from './vehicleDisplayTypes';
 
 
@@ -109,6 +117,7 @@ function getNativeModule(): ECSAndroidAutoNative | null {
 
 let _isRunning = false;
 let _dataPushTimer: ReturnType<typeof setInterval> | null = null;
+let _pendingDataPushTimer: ReturnType<typeof setTimeout> | null = null;
 let _actionPollTimer: ReturnType<typeof setInterval> | null = null;
 let _connectionProbeTimer: ReturnType<typeof setInterval> | null = null;
 let _storeUnsubscribe: (() => void) | null = null;
@@ -116,12 +125,23 @@ let _modeEngineUnsubscribe: (() => void) | null = null;
 let _appStateSubscription: { remove: () => void } | null = null;
 let _appState: AppStateStatus = AppState.currentState;
 let _isConnected = false;
+let _connectionLifecycle: ECSAutomotiveConnectionLifecycle = 'unavailable';
 let _lastPushTimestamp = 0;
 let _lastInactiveLogKey: string | null = null;
+let _lastPayloadSignature: string | null = null;
+let _pushInFlight: Promise<void> | null = null;
+let _dataPushPending = false;
+let _lastLocationSample: ECSAutomotiveLocationSample | null = null;
+let _publishCount = 0;
+let _dedupedPublishCount = 0;
+let _lastActionKey: string | null = null;
 
 // Connected displays get responsive actions and a low-frequency state heartbeat.
 // Disconnected devices only check the inexpensive native connection flag.
-const DATA_PUSH_INTERVAL_MS = 10_000;
+const DATA_PUSH_INTERVAL_MS = 15_000;
+const BACKGROUND_DATA_PUSH_INTERVAL_MS = 30_000;
+const DATA_HEARTBEAT_INTERVAL_MS = 60_000;
+const MINIMUM_DATA_PUSH_INTERVAL_MS = 5_000;
 const ACTION_POLL_INTERVAL_MS = 1_000;
 const CONNECTED_PROBE_INTERVAL_MS = 10_000;
 const DISCONNECTED_PROBE_INTERVAL_MS = 15_000;
@@ -164,6 +184,33 @@ function _logInactive(reason: 'not_android' | 'missing_native_module'): void {
   );
 }
 
+function _setConnectionState(
+  connected: boolean,
+  lifecycle: ECSAutomotiveConnectionLifecycle,
+): void {
+  const connectionChanged = connected !== _isConnected;
+  const lifecycleChanged = lifecycle !== _connectionLifecycle;
+  if (!connectionChanged && !lifecycleChanged) return;
+  _isConnected = connected;
+  _connectionLifecycle = lifecycle;
+  vehicleDisplayStore.setConnected(connected);
+
+  if (connectionChanged) {
+    if (connected) vehicleCompanionManager.onCompanionConnected('android_auto');
+    else vehicleCompanionManager.onCompanionDisconnected();
+  }
+  _reconcileRuntimeTimers();
+  _notify();
+}
+
+function _transitionConnection(event: ECSAutomotiveConnectionEvent): void {
+  const next = reduceAutomotiveConnectionState({
+    connected: _isConnected,
+    lifecycle: _connectionLifecycle,
+  }, event);
+  _setConnectionState(next.connected, next.lifecycle);
+}
+
 function _isAppForeground(): boolean {
   return _appState !== 'background' && _appState !== 'inactive';
 }
@@ -181,6 +228,18 @@ function _clearRuntimeTimers(): void {
     clearInterval(_connectionProbeTimer);
     _connectionProbeTimer = null;
   }
+  if (_pendingDataPushTimer) {
+    clearTimeout(_pendingDataPushTimer);
+    _pendingDataPushTimer = null;
+  }
+}
+
+function _schedulePendingDataPush(delayMs: number): void {
+  if (!_isRunning || !_isConnected || _pendingDataPushTimer) return;
+  _pendingDataPushTimer = setTimeout(() => {
+    _pendingDataPushTimer = null;
+    _pushData().catch(() => {});
+  }, Math.max(0, delayMs));
 }
 
 function _reconcileRuntimeTimers(): void {
@@ -190,7 +249,7 @@ function _reconcileRuntimeTimers(): void {
   if (_isConnected) {
     _dataPushTimer = setInterval(() => {
       _pushData().catch(() => {});
-    }, DATA_PUSH_INTERVAL_MS);
+    }, _isAppForeground() ? DATA_PUSH_INTERVAL_MS : BACKGROUND_DATA_PUSH_INTERVAL_MS);
     _actionPollTimer = setInterval(() => {
       _pollActions().catch(() => {});
     }, ACTION_POLL_INTERVAL_MS);
@@ -212,11 +271,11 @@ function _handleAppStateChange(nextState: AppStateStatus): void {
   if (_appState === nextState) return;
   _appState = nextState;
 
-  // A connected vehicle display remains live when the phone UI backgrounds.
-  // Only the disconnected connection probe needs a lower background cadence.
-  if (_isRunning && !_isConnected) {
+  // The head unit remains supported in background, with a reduced data cadence.
+  if (_isRunning) {
     _reconcileRuntimeTimers();
   }
+  _transitionConnection({ type: 'app_state', foreground: _isAppForeground() });
 }
 
 // ── Data Push ───────────────────────────────────────────────
@@ -225,72 +284,111 @@ function _handleAppStateChange(nextState: AppStateStatus): void {
  * Push the current vehicle display state to the native Android Auto layer.
  * Pushes all four screen data blobs plus mode and indicators.
  */
-async function _pushData(): Promise<void> {
+async function _pushData(force = false): Promise<void> {
   if (!_isRunning || !_isConnected) return;
   const native = getNativeModule();
   if (!native) return;
-
-  try {
-    const state = vehicleDisplayStore.get();
-
-    // Push mode + map data + indicators (full state)
-    const mapDataJson = JSON.stringify(state.mapData);
-    const indicatorsJson = JSON.stringify(state.indicators);
-    await native.pushFullState(state.mode, mapDataJson, indicatorsJson);
-
-    // Push status data
-    const statusDataJson = JSON.stringify(state.statusData);
-    await native.pushStatusData(statusDataJson);
-
-    // Push weather data
-    const weatherDataJson = JSON.stringify(state.weatherData);
-    await native.pushWeatherData(weatherDataJson);
-
-    // Push actions data (action availability context)
-    const actionsData = _buildActionsData(state.mode);
-    await native.pushActionsData(JSON.stringify(actionsData));
-
-    // Push system health
-    try {
-      const healthPayload = vehicleDisplayStore.buildNativeHealthPayload();
-      await native.pushSystemHealth(JSON.stringify(healthPayload));
-    } catch {}
-
-    // Push breadcrumb data if available
-    try {
-      const bcState = breadcrumbTracker.get();
-      if (bcState) {
-        const bcData = {
-          pointCount: bcState.pointCount,
-          isRecording: bcState.isRecording,
-          canReturnToStart: bcState.canReturnToStart,
-          isReturningToStart: bcState.isReturningToStart || false,
-          distanceFromStartMi: bcState.distanceFromStartMi,
-          totalTrailDistanceMi: bcState.totalTrailDistanceMi,
-          elevationGainFt: bcState.elevationGainFt,
-          elevationLossFt: bcState.elevationLossFt,
-          bearingToStartDeg: bcState.bearingToStartDeg,
-        };
-        await native.pushBreadcrumbData(JSON.stringify(bcData));
-      }
-    } catch {}
-
-    // Push route state from session
-    try {
-      const sessionState = vehicleSessionState.get();
-      await native.pushRouteState(
-        sessionState.activeRoute,
-        sessionState.activeVehicleDisplayMode === 'expedition_drive',
-      );
-    } catch {}
-
-    _lastPushTimestamp = Date.now();
-
-    // Record data push in session state
-    vehicleSessionState.recordDataPush();
-  } catch (err) {
-    console.warn('[AndroidAutoBridge] Data push failed:', err);
+  if (_pushInFlight) {
+    _dataPushPending = true;
+    return _pushInFlight;
   }
+
+  const state = vehicleDisplayStore.get();
+  const mapPayload = {
+    ...buildAutomotiveNativePayload(
+      state.mapData,
+      state.automotiveProjection.navigation,
+    ),
+    automotivePositionState: automotiveSafeMetadata(
+      state.automotiveProjection.navigation.position,
+    ),
+  };
+  const statusPayload = {
+    ...state.statusData,
+    automotiveSafeState: automotiveSafeMetadata(state.automotiveProjection.resources),
+  };
+  const weatherPayload = {
+    ...state.weatherData,
+    automotiveSafeState: automotiveSafeMetadata(state.automotiveProjection.weatherHazard),
+  };
+  const actionsData = _buildActionsData(state.mode);
+  const healthPayload = vehicleDisplayStore.buildNativeHealthPayload();
+  const bcState = breadcrumbTracker.get();
+  const breadcrumbPayload = bcState
+    ? {
+        pointCount: bcState.pointCount,
+        isRecording: bcState.isRecording,
+        canReturnToStart: bcState.canReturnToStart,
+        isReturningToStart: bcState.isReturningToStart || false,
+        distanceFromStartMi: bcState.distanceFromStartMi,
+        totalTrailDistanceMi: bcState.totalTrailDistanceMi,
+        elevationGainFt: bcState.elevationGainFt,
+        elevationLossFt: bcState.elevationLossFt,
+        bearingToStartDeg: bcState.bearingToStartDeg,
+      }
+    : null;
+  const sessionState = vehicleSessionState.get();
+  const semanticPayload = {
+    mode: state.mode,
+    mapPayload,
+    indicators: state.indicators,
+    statusPayload,
+    weatherPayload,
+    actionsData,
+    healthPayload,
+    breadcrumbPayload,
+    activeRoute: sessionState.activeRoute,
+    expeditionTrack: sessionState.activeVehicleDisplayMode === 'expedition_drive',
+  };
+  const signature = buildAutomotiveSemanticSignature(semanticPayload);
+  const now = Date.now();
+  if (!shouldPublishAutomotiveState({
+    signature,
+    state: { lastSignature: _lastPayloadSignature, lastPublishedAt: _lastPushTimestamp },
+    nowMs: now,
+    minimumIntervalMs: MINIMUM_DATA_PUSH_INTERVAL_MS,
+    heartbeatIntervalMs: DATA_HEARTBEAT_INTERVAL_MS,
+    force,
+  })) {
+    _dedupedPublishCount += 1;
+    if (signature !== _lastPayloadSignature) {
+      _schedulePendingDataPush(
+        Math.max(0, MINIMUM_DATA_PUSH_INTERVAL_MS - (now - _lastPushTimestamp)),
+      );
+    }
+    return;
+  }
+
+  const push = (async () => {
+    try {
+      await native.pushFullState(state.mode, JSON.stringify(mapPayload), JSON.stringify(state.indicators));
+      await native.pushStatusData(JSON.stringify(statusPayload));
+      await native.pushWeatherData(JSON.stringify(weatherPayload));
+      await native.pushActionsData(JSON.stringify(actionsData));
+      await native.pushSystemHealth(JSON.stringify(healthPayload));
+      if (breadcrumbPayload) await native.pushBreadcrumbData(JSON.stringify(breadcrumbPayload));
+      await native.pushRouteState(semanticPayload.activeRoute, semanticPayload.expeditionTrack);
+
+      _lastPayloadSignature = signature;
+      _lastPushTimestamp = Date.now();
+      _publishCount += 1;
+      vehicleSessionState.recordDataPush();
+      _transitionConnection({ type: 'push_recovered', foreground: _isAppForeground() });
+    } catch (err) {
+      _transitionConnection({ type: 'push_failed' });
+      ecsLog.warn('SYSTEM', '[AndroidAutoBridge] Data push failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      _pushInFlight = null;
+      if (_dataPushPending) {
+        _dataPushPending = false;
+        _schedulePendingDataPush(MINIMUM_DATA_PUSH_INTERVAL_MS);
+      }
+    }
+  })();
+  _pushInFlight = push;
+  return push;
 }
 
 /**
@@ -330,41 +428,12 @@ function _buildActionsData(mode: VehicleDisplayMode): Record<string, unknown> {
       incident_marker: sessionState.activeExpedition,
       quick_note: true,
       return_to_start: bcTrail.canReturnToStart && !bcTrail.isPausedByGps,
-      emergency_comms: sessionState.connectivityStatus !== 'offline',
+      emergency_comms: false,
     };
+    data.emergencySupportCopy = 'Use a phone or radio. ECS does not contact emergency services.';
   }
 
   return data;
-}
-
-/**
- * Push map data specifically (called on map data changes).
- */
-async function _pushMapData(mapData: VehicleMapData): Promise<void> {
-  if (!_isRunning || !_isConnected) return;
-  const native = getNativeModule();
-  if (!native) return;
-
-  try {
-    await native.pushMapData(JSON.stringify(mapData));
-  } catch (err) {
-    console.warn('[AndroidAutoBridge] Map data push failed:', err);
-  }
-}
-
-/**
- * Push weather data specifically.
- */
-async function _pushWeatherData(weatherData: VehicleWeatherData): Promise<void> {
-  if (!_isRunning || !_isConnected) return;
-  const native = getNativeModule();
-  if (!native) return;
-
-  try {
-    await native.pushWeatherData(JSON.stringify(weatherData));
-  } catch (err) {
-    console.warn('[AndroidAutoBridge] Weather data push failed:', err);
-  }
 }
 
 /**
@@ -377,9 +446,11 @@ async function _pushMode(mode: VehicleDisplayMode): Promise<void> {
 
   try {
     await native.setDisplayMode(mode);
-    console.log(`[AndroidAutoBridge] Mode pushed: ${mode}`);
+    ecsLog.debug('SYSTEM', '[AndroidAutoBridge] Mode pushed', { mode });
   } catch (err) {
-    console.warn('[AndroidAutoBridge] Mode push failed:', err);
+    ecsLog.warn('SYSTEM', '[AndroidAutoBridge] Mode push failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -405,10 +476,16 @@ async function _pollActions(): Promise<void> {
       source: string;
       label?: string;
     };
+    const actionTimestamp = Number(action.timestamp);
+    if (!Number.isFinite(actionTimestamp) || Math.abs(Date.now() - actionTimestamp) > 30_000) return;
+    const actionKey = `${action.actionType}:${actionTimestamp}`;
+    if (actionKey === _lastActionKey) return;
+    _lastActionKey = actionKey;
 
-    console.log(
-      `[AndroidAutoBridge] Action received from ${action.source}: ${action.actionType}`
-    );
+    ecsLog.debug('SYSTEM', '[AndroidAutoBridge] Action received', {
+      source: action.source,
+      actionType: action.actionType,
+    });
 
     // Route through the companion manager for synchronized handling
     vehicleCompanionManager.handleAction(
@@ -422,7 +499,9 @@ async function _pollActions(): Promise<void> {
     // Notify listeners about the action
     _notify();
   } catch (err) {
-    console.warn('[AndroidAutoBridge] Action poll failed:', err);
+    ecsLog.warn('SYSTEM', '[AndroidAutoBridge] Action poll failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -435,39 +514,59 @@ async function _pollActions(): Promise<void> {
 async function _checkConnection(): Promise<boolean> {
   if (!_isRunning) return false;
   const native = getNativeModule();
-  if (!native) return false;
+  if (!native) {
+    _transitionConnection({ type: 'native_unavailable' });
+    return false;
+  }
 
   try {
     const connected = await native.isConnected();
     if (!_isRunning) return false;
-    if (connected !== _isConnected) {
-      _isConnected = connected;
-      vehicleDisplayStore.setConnected(connected);
+    const connectionChanged = connected !== _isConnected;
+    _transitionConnection(connected
+      ? { type: 'probe_connected', foreground: _isAppForeground() }
+      : { type: 'probe_disconnected' });
 
-      // Notify companion manager of connection state change
-      if (connected) {
-        vehicleCompanionManager.onCompanionConnected('android_auto');
-        console.log('[AndroidAutoBridge] Android Auto connected — companion manager notified');
-      } else {
-        vehicleCompanionManager.onCompanionDisconnected();
-        console.log('[AndroidAutoBridge] Android Auto disconnected — companion manager notified');
-      }
-
-      _reconcileRuntimeTimers();
-      _notify();
-
-      if (connected) {
-        _pushData().catch(() => {});
-        _pushMode(vehicleDisplayModeEngine.getCurrentMode()).catch(() => {});
-      }
+    if (connected && connectionChanged) {
+      _pushData(true).catch(() => {});
+      _pushMode(vehicleDisplayModeEngine.getCurrentMode()).catch(() => {});
     }
     return connected;
-  } catch {
+  } catch (err) {
+    _transitionConnection({ type: 'probe_failed' });
+    ecsLog.debug('SYSTEM', '[AndroidAutoBridge] Connection probe failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return false;
   }
 }
 
 // ── Store Subscription ──────────────────────────────────────
+
+async function _pushVehicleLocation(
+  lat: number,
+  lon: number,
+  heading: number,
+  speedMph: number,
+): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
+  const native = getNativeModule();
+  if (!native) return;
+  const now = Date.now();
+  const next = { lat, lon, heading, speedMph };
+  if (!shouldPublishAutomotiveLocation({ previous: _lastLocationSample, next, nowMs: now })) {
+    return;
+  }
+
+  try {
+    await native.pushVehicleLocation(lat, lon, heading, speedMph);
+    _lastLocationSample = { ...next, publishedAt: now };
+  } catch (err) {
+    ecsLog.warn('SYSTEM', '[AndroidAutoBridge] Location push failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 /**
  * Handle vehicleDisplayStore state changes.
@@ -475,11 +574,19 @@ async function _checkConnection(): Promise<boolean> {
  */
 function _onStoreChange(): void {
   if (!_isRunning || !_isConnected) return;
-
-  // Debounce: don't push more than once per second
-  const now = Date.now();
-  if (now - _lastPushTimestamp < 1000) return;
-
+  const positionState = vehicleDisplayStore.get().automotiveProjection.navigation.position;
+  if (
+    positionState.value &&
+    positionState.availability !== 'unavailable' &&
+    (positionState.freshness === 'live' || positionState.freshness === 'recent')
+  ) {
+    void _pushVehicleLocation(
+      positionState.value.lat,
+      positionState.value.lon,
+      positionState.value.headingDeg ?? _lastLocationSample?.heading ?? 0,
+      positionState.value.speedMph ?? 0,
+    );
+  }
   _pushData().catch(() => {});
 }
 
@@ -540,23 +647,34 @@ export const androidAutoBridge = {
     }
 
     const native = getNativeModule();
-    if (!native) {
-      _logInactive('missing_native_module');
+    const featureDecision = resolveAutomotiveFeatureAccess('android_auto_bridge', {
+      platform: Platform.OS,
+      androidAutoNativeAvailable: Boolean(native),
+      carPlayNativeAvailable: false,
+    });
+    if (!native || featureDecision.availability !== 'available') {
+      _transitionConnection({ type: 'native_unavailable' });
+      if (!native) _logInactive('missing_native_module');
+      else ecsLog.debug('SYSTEM', '[AndroidAutoBridge] Rollout gate kept bridge inactive', {
+        reason: featureDecision.reason,
+      });
       return;
     }
 
     _isRunning = true;
-    _isConnected = false;
     _appState = AppState.currentState;
-    console.log('[AndroidAutoBridge] Starting Android Auto bridge');
+    _lastPayloadSignature = null;
+    _dataPushPending = false;
+    _lastLocationSample = null;
+    _lastActionKey = null;
 
     // Subscribe to store changes
     _storeUnsubscribe = vehicleDisplayStore.subscribe(_onStoreChange);
     _modeEngineUnsubscribe = vehicleDisplayModeEngine.subscribe(_onModeChange);
     _appStateSubscription = AppState.addEventListener('change', _handleAppStateChange);
+    _transitionConnection({ type: 'start' });
 
     // Stay inexpensive until a native vehicle-display session is confirmed.
-    _reconcileRuntimeTimers();
     _checkConnection().catch(() => {});
   },
 
@@ -568,8 +686,6 @@ export const androidAutoBridge = {
   stop(): void {
     if (!_isRunning) return;
     _isRunning = false;
-
-    console.log('[AndroidAutoBridge] Stopping Android Auto bridge');
     _clearRuntimeTimers();
 
     if (_appStateSubscription) {
@@ -587,8 +703,11 @@ export const androidAutoBridge = {
       _modeEngineUnsubscribe = null;
     }
 
-    _isConnected = false;
-    vehicleDisplayStore.setConnected(false);
+    _transitionConnection({ type: 'stop' });
+    _pushInFlight = null;
+    _dataPushPending = false;
+    _lastLocationSample = null;
+    _lastActionKey = null;
   },
 
   /**
@@ -596,7 +715,7 @@ export const androidAutoBridge = {
    * Useful after significant state changes.
    */
   async forcePush(): Promise<void> {
-    await _pushData();
+    await _pushData(true);
   },
 
   /**
@@ -609,15 +728,7 @@ export const androidAutoBridge = {
     heading: number,
     speedMph: number
   ): Promise<void> {
-    if (!_isRunning || !_isConnected) return;
-    const native = getNativeModule();
-    if (!native) return;
-
-    try {
-      await native.pushVehicleLocation(lat, lon, heading, speedMph);
-    } catch (err) {
-      console.warn('[AndroidAutoBridge] Location push failed:', err);
-    }
+    await _pushVehicleLocation(lat, lon, heading, speedMph);
   },
 
   /**
@@ -625,43 +736,26 @@ export const androidAutoBridge = {
    * Called when routes are loaded/unloaded.
    */
   async pushRouteState(
-    hasActiveRoute: boolean,
-    hasExpeditionTrack: boolean
+    _hasActiveRoute: boolean,
+    _hasExpeditionTrack: boolean
   ): Promise<void> {
-    if (!_isRunning || !_isConnected) return;
-    const native = getNativeModule();
-    if (!native) return;
-
-    try {
-      await native.pushRouteState(hasActiveRoute, hasExpeditionTrack);
-    } catch (err) {
-      console.warn('[AndroidAutoBridge] Route state push failed:', err);
-    }
+    await _pushData();
   },
 
   /**
    * Push weather data to Android Auto.
    * Called when weather data is refreshed.
    */
-  async pushWeather(weatherData: VehicleWeatherData): Promise<void> {
-    await _pushWeatherData(weatherData);
+  async pushWeather(_weatherData: VehicleWeatherData): Promise<void> {
+    await _pushData();
   },
 
   /**
    * Push actions data to Android Auto.
    * Called when action availability changes.
    */
-  async pushActions(mode: VehicleDisplayMode): Promise<void> {
-    if (!_isRunning || !_isConnected) return;
-    const native = getNativeModule();
-    if (!native) return;
-
-    try {
-      const actionsData = _buildActionsData(mode);
-      await native.pushActionsData(JSON.stringify(actionsData));
-    } catch (err) {
-      console.warn('[AndroidAutoBridge] Actions data push failed:', err);
-    }
+  async pushActions(_mode: VehicleDisplayMode): Promise<void> {
+    await _pushData();
   },
 
   /**
@@ -674,12 +768,11 @@ export const androidAutoBridge = {
 
     try {
       await native.clearAll();
-      _isConnected = false;
-      vehicleDisplayStore.setConnected(false);
-      _reconcileRuntimeTimers();
-      _notify();
+      _transitionConnection({ type: 'probe_disconnected' });
     } catch (err) {
-      console.warn('[AndroidAutoBridge] Clear failed:', err);
+      ecsLog.warn('SYSTEM', '[AndroidAutoBridge] Clear failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   },
 
@@ -703,6 +796,9 @@ export const androidAutoBridge = {
     isAvailable: boolean;
     lastPushTimestamp: number;
     platform: string;
+    connectionLifecycle: ECSAutomotiveConnectionLifecycle;
+    publishCount: number;
+    dedupedPublishCount: number;
   } {
     return {
       isRunning: _isRunning,
@@ -710,6 +806,9 @@ export const androidAutoBridge = {
       isAvailable: getNativeModule() !== null,
       lastPushTimestamp: _lastPushTimestamp,
       platform: Platform.OS,
+      connectionLifecycle: _connectionLifecycle,
+      publishCount: _publishCount,
+      dedupedPublishCount: _dedupedPublishCount,
     };
   },
 };

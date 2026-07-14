@@ -4,6 +4,10 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'app/(tabs)/navigate.tsx'), 'utf8');
+const layerStateSource = fs.readFileSync(
+  path.join(root, 'lib/navigation/navigateSurfaceLayerState.ts'),
+  'utf8',
+);
 
 function sliceBetween(start, end) {
   const startIndex = source.indexOf(start);
@@ -13,19 +17,20 @@ function sliceBetween(start, end) {
 }
 
 assert(
-  source.includes("| 'mapSelection'") &&
-    source.includes("| 'mapPointActions'") &&
-    source.includes("| 'campLayers'") &&
-    source.includes("| 'tools'") &&
-    source.includes("| 'topPopup'") &&
-    source.includes("| 'dispatchSelection'"),
+  layerStateSource.includes("| 'mapSelection'") &&
+    layerStateSource.includes("| 'mapPointActions'") &&
+    layerStateSource.includes("| 'campLayers'") &&
+    layerStateSource.includes("| 'tools'") &&
+    layerStateSource.includes("| 'topPopup'") &&
+    layerStateSource.includes("| 'dispatchSelection'"),
   'Navigate should register every interactive map popup family in one surface-layer stack.',
 );
 
 assert(
-  source.includes('return [...stack.filter((item) => item !== layer), layer];') &&
+  source.includes("from '../../lib/navigation/navigateSurfaceLayerState'") &&
+    layerStateSource.includes('return [...stack.filter((item) => item !== layer), layer];') &&
     source.includes('const latestLayer = navigateSurfaceLayerStack[navigateSurfaceLayerStack.length - 1];'),
-  'Opening a Navigate surface should move it to the top, and back dismissal should read the latest layer.',
+  'Navigate should compose pure layer ordering while back dismissal reads the latest screen-owned layer.',
 );
 
 const openTopPopupSource = sliceBetween('const openTopPopup = useCallback', '  useEffect(() => {');

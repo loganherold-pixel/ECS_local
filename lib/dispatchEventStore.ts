@@ -8,6 +8,11 @@ import { createDispatchEventDedupeKey, isDuplicateDispatchEvent } from './dispat
 type DispatchEventListener = (events: DispatchEvent[]) => void;
 
 export const DISPATCH_EVENT_STORE_LIMIT = 300;
+export const DISPATCH_DISMISSED_EVENT_LIMIT = 600;
+
+const IS_DEV_ENV = typeof __DEV__ !== 'undefined'
+  ? __DEV__
+  : typeof process !== 'undefined' && process.env.NODE_ENV !== 'production';
 
 let dispatchEvents: DispatchEvent[] = [];
 const dispatchEventListeners = new Set<DispatchEventListener>();
@@ -127,6 +132,7 @@ function emit(): void {
 }
 
 function logValidatedEvent(event: DispatchEvent): void {
+  if (!IS_DEV_ENV) return;
   console.log('[DISPATCH] event_received');
   console.log('[DISPATCH] event_validated', {
     id: event.id,
@@ -160,17 +166,32 @@ function validateStoreEvent(rawEvent: unknown, options?: { log?: boolean }): Dis
 
 function dedupeDispatchEvents(events: DispatchEvent[]): DispatchEvent[] {
   const accepted: DispatchEvent[] = [];
+  const latestAcceptedByDedupeKey = new Map<string, DispatchEvent>();
   for (const event of sortDispatchEvents(events)) {
-    if (accepted.some((currentEvent) => isDuplicateDispatchEvent(currentEvent, event))) {
-      console.log('[DISPATCH] duplicate_event_suppressed', {
-        id: event.id,
-        dedupeKey: createDispatchEventDedupeKey(event),
-      });
+    const dedupeKey = createDispatchEventDedupeKey(event);
+    const latestAccepted = latestAcceptedByDedupeKey.get(dedupeKey);
+    if (latestAccepted && isDuplicateDispatchEvent(latestAccepted, event)) {
+      if (IS_DEV_ENV) {
+        console.log('[DISPATCH] duplicate_event_suppressed', {
+          id: event.id,
+          dedupeKey,
+        });
+      }
       continue;
     }
     accepted.push(event);
+    latestAcceptedByDedupeKey.set(dedupeKey, event);
   }
   return accepted;
+}
+
+function mergeDispatchEventRecord(current: DispatchEvent, next: DispatchEvent): DispatchEvent {
+  const currentTime = Date.parse(current.updatedAt ?? current.createdAt);
+  const nextTime = Date.parse(next.updatedAt ?? next.createdAt);
+  if (Number.isFinite(currentTime) && Number.isFinite(nextTime) && nextTime < currentTime) {
+    return current;
+  }
+  return next;
 }
 
 function boundDispatchEvents(events: DispatchEvent[]): DispatchEvent[] {
@@ -197,6 +218,8 @@ export const dispatchEventStore = {
   },
 
   replaceEvents(rawEvents: unknown[]): DispatchEvent[] {
+    lastLiveRawEventsRef = null;
+    lastLiveRawEventsSignature = null;
     const nextEvents = boundDispatchEvents(filterDismissedEvents(dedupeDispatchEvents(
       rawEvents
         .map((rawEvent) => validateStoreEvent(rawEvent))
@@ -229,9 +252,16 @@ export const dispatchEventStore = {
       if (isDismissedEvent(event)) return accepted;
 
       const previous = previousById.get(event.id);
-      if (previous && isLiveStoreEvent(previous) && sameSemanticEvent(previous, event)) {
-        accepted.push(previous);
-        return accepted;
+      if (previous && isLiveStoreEvent(previous)) {
+        if (sameSemanticEvent(previous, event)) {
+          accepted.push(previous);
+          return accepted;
+        }
+        const merged = mergeDispatchEventRecord(previous, event);
+        if (merged === previous) {
+          accepted.push(previous);
+          return accepted;
+        }
       }
 
       logValidatedEvent(event);
@@ -265,11 +295,13 @@ export const dispatchEventStore = {
       isDuplicateDispatchEvent(currentEvent, event)
     ));
     if (duplicateEvent) {
-      console.log('[DISPATCH] duplicate_event_suppressed', {
-        id: event.id,
-        duplicateOf: duplicateEvent.id,
-        dedupeKey: createDispatchEventDedupeKey(event),
-      });
+      if (IS_DEV_ENV) {
+        console.log('[DISPATCH] duplicate_event_suppressed', {
+          id: event.id,
+          duplicateOf: duplicateEvent.id,
+          dedupeKey: createDispatchEventDedupeKey(event),
+        });
+      }
       return null;
     }
 
@@ -297,22 +329,29 @@ export const dispatchEventStore = {
         return existingEvent;
       }
 
+      const mergedEvent = mergeDispatchEventRecord(existingEvent, event);
+      if (mergedEvent === existingEvent) {
+        return existingEvent;
+      }
+
       dispatchEvents = boundDispatchEvents(
-        dispatchEvents.map((currentEvent) => (currentEvent.id === event.id ? event : currentEvent)),
+        dispatchEvents.map((currentEvent) => (currentEvent.id === event.id ? mergedEvent : currentEvent)),
       );
       emit();
-      return event;
+      return mergedEvent;
     }
 
     const duplicateEvent = dispatchEvents.find((currentEvent) => (
       isDuplicateDispatchEvent(currentEvent, event)
     ));
     if (duplicateEvent) {
-      console.log('[DISPATCH] duplicate_event_suppressed', {
-        id: event.id,
-        duplicateOf: duplicateEvent.id,
-        dedupeKey: createDispatchEventDedupeKey(event),
-      });
+      if (IS_DEV_ENV) {
+        console.log('[DISPATCH] duplicate_event_suppressed', {
+          id: event.id,
+          duplicateOf: duplicateEvent.id,
+          dedupeKey: createDispatchEventDedupeKey(event),
+        });
+      }
       return null;
     }
 
@@ -326,6 +365,11 @@ export const dispatchEventStore = {
     if (!normalizedId) return false;
 
     dismissedEventIds.add(normalizedId);
+    while (dismissedEventIds.size > DISPATCH_DISMISSED_EVENT_LIMIT) {
+      const oldest = dismissedEventIds.values().next().value;
+      if (typeof oldest !== 'string') break;
+      dismissedEventIds.delete(oldest);
+    }
     const beforeCount = dispatchEvents.length;
     dispatchEvents = dispatchEvents.filter((event) => event.id !== normalizedId);
     const changed = dispatchEvents.length !== beforeCount;

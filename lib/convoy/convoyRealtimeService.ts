@@ -8,6 +8,7 @@ import {
 import { classifyConvoyLocationStaleness, type ConvoyLocationStaleness } from './convoyTrackingThresholds';
 export {
   CONVOY_LOCATION_FRESH_UNDER_MS,
+  CONVOY_LOCATION_MAX_FUTURE_SKEW_MS,
   CONVOY_LOCATION_WATCH_AFTER_MS,
   CONVOY_LOCATION_STALE_AFTER_MS,
   classifyConvoyLocationStaleness,

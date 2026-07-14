@@ -20,6 +20,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
@@ -34,6 +35,7 @@ import { TERRAIN_OPTIONS } from '../lib/expeditionTypes';
 
 const TAG = '[ARCHIVE]';
 const { width: SCREEN_W } = Dimensions.get('window');
+const ARCHIVE_PAGE_SIZE = 30;
 
 // ── Date range presets ──────────────────────────────────────
 type DateRange = 'all' | '30d' | '90d' | '6m' | '1y';
@@ -243,49 +245,94 @@ function ExpeditionCard({
 // ============================================================
 export default function ExpeditionArchiveScreen() {
   const router = useRouter();
+  const { back: goBack } = useECSNavigation();
   const { user, isOnline, showToast } = useApp();
 
   // ── State ──────────────────────────────────────────────────
   const [allExpeditions, setAllExpeditions] = useState<EcsExpedition[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [terrainFilter, setTerrainFilter] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>('all');
   const [showFilters, setShowFilters] = useState(false);
 
   const mountedRef = useRef(true);
+  const requestGenerationRef = useRef(0);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // ── Fetch expeditions ──────────────────────────────────────
-  const fetchExpeditions = useCallback(async () => {
+  const fetchExpeditions = useCallback(async (cursor: string | null = null) => {
     if (!user) {
       if (mountedRef.current) setLoading(false);
       return;
     }
-    if (mountedRef.current) setLoading(true);
+    const isFirstPage = cursor == null;
+    const generation = isFirstPage ? requestGenerationRef.current + 1 : requestGenerationRef.current;
+    if (isFirstPage) requestGenerationRef.current = generation;
+    if (mountedRef.current) {
+      if (isFirstPage) {
+        setLoading(true);
+        setLoadingMore(false);
+      }
+      else setLoadingMore(true);
+    }
 
     try {
-      const data = await expeditionStore.list(user.id);
-      const list = Array.isArray(data) ? data : [];
-      if (mountedRef.current) {
-        setAllExpeditions(list);
+      const datePreset = DATE_RANGES.find((item) => item.key === dateRange);
+      const completedAfter = datePreset?.days
+        ? new Date(Date.now() - datePreset.days * 24 * 60 * 60 * 1000).toISOString()
+        : null;
+      const page = await expeditionStore.listArchivePage(user.id, {
+        cursor,
+        limit: ARCHIVE_PAGE_SIZE,
+        status: statusFilter,
+        terrain: terrainFilter,
+        completedAfter,
+        search: debouncedSearch,
+      });
+      if (mountedRef.current && generation === requestGenerationRef.current) {
+        setAllExpeditions((current) => {
+          if (isFirstPage) return page.records;
+          const byId = new Map(current.map((record) => [record.id, record]));
+          page.records.forEach((record) => byId.set(record.id, record));
+          return Array.from(byId.values());
+        });
+        setNextCursor(page.nextCursor);
+        setHasMore(page.hasMore);
       }
     } catch (e: any) {
       console.warn(TAG, 'fetch error:', e);
-      if (mountedRef.current) {
+      if (mountedRef.current && isFirstPage) {
         setAllExpeditions([]);
       }
     }
 
-    if (mountedRef.current) setLoading(false);
-  }, [user]);
+    if (mountedRef.current && generation === requestGenerationRef.current) {
+      if (isFirstPage) setLoading(false);
+      else setLoadingMore(false);
+    }
+  }, [dateRange, debouncedSearch, statusFilter, terrainFilter, user]);
 
   useFocusEffect(
     useCallback(() => {
       fetchExpeditions();
     }, [fetchExpeditions])
   );
+
+  const loadMore = useCallback(() => {
+    if (!loading && !loadingMore && hasMore && nextCursor) {
+      void fetchExpeditions(nextCursor);
+    }
+  }, [fetchExpeditions, hasMore, loading, loadingMore, nextCursor]);
 
   // ── Filter to completed/archived only ──────────────────────
   const pastExpeditions = useMemo(() => {
@@ -379,8 +426,8 @@ export default function ExpeditionArchiveScreen() {
 
   // ── Handlers ───────────────────────────────────────────────
   const handleBack = useCallback(() => {
-    router.back();
-  }, [router]);
+    goBack();
+  }, [goBack]);
 
   const handleExpeditionPress = useCallback((expedition: EcsExpedition) => {
     router.push({ pathname: '/expedition-detail', params: { id: expedition.id } } as any);
@@ -642,9 +689,15 @@ export default function ExpeditionArchiveScreen() {
             )}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
+            initialNumToRender={10}
+            maxToRenderPerBatch={8}
+            windowSize={7}
+            onEndReached={loadMore}
+            onEndReachedThreshold={0.35}
             ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
             ListFooterComponent={
               <View style={styles.listFooter}>
+                {loadingMore && <ActivityIndicator size="small" color={TACTICAL.amber} />}
                 <Text style={styles.footerText}>
                   {`${filteredExpeditions.length} EXPEDITION${filteredExpeditions.length !== 1 ? 'S' : ''} | ECS ARCHIVE`}
                 </Text>

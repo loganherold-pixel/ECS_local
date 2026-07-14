@@ -46,22 +46,22 @@ includes(
 );
 includes(
   fleet,
-  'storedActiveVehicleId && !reconciledSelection.activeVehicleId',
+  'vehicleSetupStore.reconcileActiveVehicle(',
   'Fleet fetch reconciliation should detect and clear stale active vehicle IDs.',
 );
 includes(
   fleet,
-  'vehicleSetupStore.clearActiveVehicleId();',
+  'reason: storedActiveVehicleId ? \'fleet_reconciliation\' : \'single_vehicle_restore\'',
   'Fleet should clear stale active vehicle context.',
 );
 includes(
   fleet,
-  '!storedActiveVehicleId && result.vehicles.length === 1',
+  'autoSelectSingle: true',
   'Fleet should promote the first created vehicle to active.',
 );
 includes(
   fleet,
-  'vehicleSetupStore.setActiveVehicleId(result.vehicles[0].id);',
+  'reconciledActiveVehicleId',
   'Fleet should set the first created vehicle as active.',
 );
 includes(
@@ -225,12 +225,12 @@ notIncludes(
 );
 includes(
   vehicleSetupStore,
-  'if (read(ACTIVE_VEHICLE_KEY) === vehicleId) return;',
+  'if (previousVehicleId === normalizedNext) return false;',
   'Active vehicle writes should be idempotent.',
 );
 includes(
   vehicleSetupStore,
-  'if (!read(ACTIVE_VEHICLE_KEY)) return;',
+  'return transitionActiveVehicle(null, reason);',
   'Active vehicle clears should be idempotent.',
 );
 

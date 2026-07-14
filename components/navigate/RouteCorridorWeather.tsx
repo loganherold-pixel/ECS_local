@@ -22,6 +22,10 @@ import { TACTICAL, TYPO, GOLD_RAIL } from '../../lib/theme';
 import { hapticWarning, hapticMicro, hapticCommand } from '../../lib/haptics';
 import { fetchSharedWeatherForCoordinates } from '../../lib/weatherService';
 import {
+  beginOperationalWeatherRouteJob,
+  cancelOperationalWeatherRouteJob,
+} from '../../lib/weatherBroker';
+import {
   buildRouteWeatherSnapshot,
   decideRouteWeatherRefresh,
   routeWeatherCoordinateSignature,
@@ -121,6 +125,7 @@ const MAX_SAMPLE_POINTS = 6;
 const REFETCH_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes for route weather
 const APPROACHING_THRESHOLD_MI = 5; // Warn when within 5 miles of hazard
 const ROUTE_WX_KEY = 'ecs_route_corridor_wx_visible';
+let routeWeatherHookSequence = 0;
 
 // ── Hazard Classification ────────────────────────────────────
 
@@ -308,13 +313,22 @@ export function useRouteCorridorWeather(
   const mountedRef = useRef(true);
   const intervalRef = useRef<any>(null);
   const loadingRef = useRef(false);
+  const activeRequestFingerprintRef = useRef<string | null>(null);
+  const routeJobScopeRef = useRef('');
+  if (!routeJobScopeRef.current) {
+    routeJobScopeRef.current = `navigate-route-weather-${++routeWeatherHookSequence}`;
+  }
   const lastRouteIdRef = useRef<string | null>(null);
   const lastSampleSignatureRef = useRef<string | null>(null);
   const routeWeatherSnapshotRef = useRef<EcsRouteWeatherSnapshot | null>(null);
   const seenHazardKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    return () => { mountedRef.current = false; };
+    const routeJobScope = routeJobScopeRef.current;
+    return () => {
+      mountedRef.current = false;
+      cancelOperationalWeatherRouteJob(routeJobScope);
+    };
   }, []);
 
   const hasRoute = !!activeRun && activeRun.points.length >= 2;
@@ -331,7 +345,11 @@ export function useRouteCorridorWeather(
         } catch {}
       }
       if (!next && !forceActive) {
+        cancelOperationalWeatherRouteJob(routeJobScopeRef.current);
+        activeRequestFingerprintRef.current = null;
+        loadingRef.current = false;
         setWeatherPoints([]);
+        setLoading(false);
         setSource(null);
         setError(null);
         routeWeatherSnapshotRef.current = null;
@@ -380,7 +398,7 @@ export function useRouteCorridorWeather(
   ), [routeWeatherSampleSelection]);
 
   const fetchRouteWeather = useCallback(async (reason: RouteWeatherRefreshReason = 'interval') => {
-    if (!intelligenceActive || !routeWeatherSampleSelection || sampledCoords.length < 2 || loadingRef.current) return;
+    if (!intelligenceActive || !routeWeatherSampleSelection || sampledCoords.length < 2) return;
 
     const refreshDecision = decideRouteWeatherRefresh({
       reason,
@@ -398,6 +416,17 @@ export function useRouteCorridorWeather(
       return;
     }
 
+    const requestFingerprint = [
+      activeRun?.id ?? routeWeatherSampleSelection.routeId,
+      sampleSignature,
+    ].join('|');
+    if (loadingRef.current && activeRequestFingerprintRef.current === requestFingerprint) return;
+
+    const routeJob = beginOperationalWeatherRouteJob(
+      routeJobScopeRef.current,
+      requestFingerprint,
+    );
+    activeRequestFingerprintRef.current = requestFingerprint;
     loadingRef.current = true;
     setLoading(true);
     try {
@@ -410,7 +439,7 @@ export function useRouteCorridorWeather(
         'route_segment',
       );
       const result = sharedWeather.result;
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || !routeJob.isCurrent()) return;
 
       setSource(result.source);
       setError(result.error);
@@ -470,14 +499,18 @@ export function useRouteCorridorWeather(
 
       setWeatherPoints(points);
     } catch (err: any) {
-      if (mountedRef.current) {
+      if (mountedRef.current && routeJob.isCurrent()) {
         setError(err?.message || 'Route weather fetch failed');
       }
     } finally {
-      loadingRef.current = false;
-      if (mountedRef.current) setLoading(false);
+      routeJob.finish();
+      if (activeRequestFingerprintRef.current === requestFingerprint) {
+        activeRequestFingerprintRef.current = null;
+        loadingRef.current = false;
+        if (mountedRef.current) setLoading(false);
+      }
     }
-  }, [activeRun?.id, emitToasts, intelligenceActive, routeWeatherSampleSelection, sampledCoords, showToast]);
+  }, [activeRun?.id, emitToasts, intelligenceActive, routeWeatherSampleSelection, sampleSignature, sampledCoords, showToast]);
 
   const refresh = useCallback(() => {
     hapticMicro();
@@ -487,7 +520,13 @@ export function useRouteCorridorWeather(
 
   // Fetch when enabled, route changes, or on mount
   useEffect(() => {
-    if (!intelligenceActive || sampledCoords.length < 2) return;
+    if (!intelligenceActive || sampledCoords.length < 2) {
+      cancelOperationalWeatherRouteJob(routeJobScopeRef.current);
+      activeRequestFingerprintRef.current = null;
+      loadingRef.current = false;
+      setLoading(false);
+      return;
+    }
 
     // Route changed — re-fetch
     const routeId = activeRun?.id || null;

@@ -7,6 +7,7 @@
  */
 
 import type { ECSAutomotiveSurfaceState } from './automotive/automotiveSurfaceTypes';
+import type { ECSAutomotiveSafeProjection } from './automotive/automotiveSafeTypes';
 
 export type VehicleDisplayMode = 'highway_drive' | 'expedition_drive';
 
@@ -101,6 +102,7 @@ export type VehicleDataSource =
   | 'live_telemetry'
   | 'bluetooth'
   | 'gps_live'
+  | 'weather_provider'
   | 'ai_navigation'
   | 'manual'
   | 'cached'
@@ -144,6 +146,8 @@ export interface VehicleNavigationData {
   hazardLabel: string | null;
   offRouteDetected: boolean;
   unavailableReason: string | null;
+  guidanceUpdatedAt?: string | null;
+  positionUpdatedAt?: string | null;
 }
 
 export interface VehicleAttitudeData {
@@ -155,6 +159,7 @@ export interface VehicleAttitudeData {
   supportLabel: string;
   source: VehicleDataSource;
   unavailableReason: string | null;
+  updatedAt?: string | null;
 }
 
 export interface VehicleResourceData {
@@ -176,6 +181,12 @@ export interface VehicleResourceData {
   alternateFluidSource: VehicleDataSource;
   supportLabel: string;
   unavailableReason: string | null;
+  sourceUpdatedAt?: {
+    fuel: string | null;
+    water: string | null;
+    power: string | null;
+    alternateFluid: string | null;
+  };
 }
 
 export interface VehicleWeatherHazardData {
@@ -189,7 +200,11 @@ export interface VehicleWeatherHazardData {
   hazardState: VehicleHazardState;
   routeHazard: string | null;
   source: VehicleDataSource;
+  providerLabel?: string | null;
   unavailableReason: string | null;
+  observedAt?: string | null;
+  fetchedAt?: string | null;
+  expiresAt?: string | null;
 }
 
 export interface VehicleExitPlanData {
@@ -206,7 +221,16 @@ export interface VehicleExitPlanData {
   supportLabel: string;
   source: VehicleDataSource;
   unavailableReason: string | null;
+  updatedAt?: string | null;
 }
+
+export type VehicleAutomotiveSafeProjection = ECSAutomotiveSafeProjection<
+  VehicleNavigationData,
+  VehicleAttitudeData,
+  VehicleResourceData,
+  VehicleWeatherHazardData,
+  VehicleExitPlanData
+>;
 
 export interface VehicleSurfacePresentationSummary {
   availability: VehicleSurfaceAvailability;
@@ -395,6 +419,7 @@ export interface VehicleDisplayState {
   weatherHazardData: VehicleWeatherHazardData;
   exitPlanData: VehicleExitPlanData;
   automotiveSurface: ECSAutomotiveSurfaceState;
+  automotiveProjection: VehicleAutomotiveSafeProjection;
   presentationModel: ECSVehiclePresentationModel;
   mapData: VehicleMapData;
   statusData: VehicleStatusData;
@@ -525,10 +550,10 @@ export const EXPEDITION_ACTIONS: VehicleAction[] = [
   },
   {
     id: 'ex_emergency_comms',
-    label: 'Emergency Comms',
+    label: 'Emergency plan on phone',
     icon: 'radio-outline',
     color: '#C0392B',
-    enabled: true,
+    enabled: false,
     actionType: 'emergency_comms',
   },
 ];

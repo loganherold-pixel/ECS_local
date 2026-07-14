@@ -10,6 +10,8 @@ import {
   StyleSheet,
   TouchableOpacity,
   AppState,
+  BackHandler,
+  NativeModules,
   Platform,
   useWindowDimensions,
   type AppStateStatus,
@@ -34,7 +36,6 @@ import { ecsLog } from '../lib/ecsLogger';
 import {
   flushDashboardWrites,
   isDashboardHydrated,
-  waitForDashboardHydration,
 } from '../lib/dashboardStore';
 import { sessionStore } from '../lib/sessionStore';
 import { setupStore } from '../lib/setupStore';
@@ -45,7 +46,13 @@ import { timelineIntelligenceEngine } from '../lib/timelineIntelligenceEngine';
 import { ecsSyncCoordinator } from '../lib/ecsSyncCoordinator';
 import { ecsOfflineInterlock } from '../lib/ecsOfflineInterlock';
 import { offlineTileSyncCoordinator } from '../lib/offlineTileSyncCoordinator';
-import { androidAutoBridge } from '../lib/androidAutoBridge';
+import { offlineReadinessCoordinator } from '../lib/offlinePrepPack';
+import { connectivity } from '../lib/connectivity';
+import { tileCacheStore } from '../lib/tileCacheStore';
+import { expeditionStateStore } from '../lib/expeditionStateStore';
+import { missionExpeditionStore } from '../lib/missionStore';
+import { routeStore } from '../lib/routeStore';
+import { automotiveRuntimeCoordinator } from '../lib/automotive/automotiveRuntimeCoordinator';
 import {
   flushQueuedIssueEvents,
   initializeEcsIssueIntelligence,
@@ -78,19 +85,40 @@ import {
 } from '../lib/shellLayout';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
 import { stageNavigationFlow } from '../lib/ecsNavigationFlow';
-import { sanitizeLegacyVehicleFrameworkState } from '../lib/fleet/legacyVehicleFrameworkStateMigration';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { createAutomotiveFeatureVisibilityContext } from '../lib/automotive/automotiveFeatureAccess';
+import {
+  hydrateECSOptionalStartupState,
+  hydrateECSRequiredStartupState,
+} from '../lib/state/ecsStartupHydration';
 import {
   getStartupDiagnosticsSnapshot,
   logStartupStall,
   markStartupPhase,
 } from '../lib/startupDiagnostics';
 import {
-  getRestorableShellRouteForPath,
+  getSafeReturnRoute,
+  isECSDeepLinkPathAllowed,
   isProtectedRoutePath,
   isSharedShellBackgroundRoute,
   normalizeECSRoutePath,
-  toExpoRouterShellTarget as toManifestExpoRouterShellTarget,
 } from '../lib/routeManifest';
+import {
+  resolveECSRestorationTarget,
+  resolveECSRoutePolicy,
+  type ECSRoutePolicyContext,
+} from '../lib/navigation/ecsRoutePolicy';
+import {
+  clearECSIntendedRoute,
+  clearLastECSShellRoute,
+  loadECSIntendedRoute,
+  loadLastECSShellRoute,
+  saveECSIntendedRoute,
+  saveLastECSShellRoute,
+  settleECSIntendedRoute,
+  waitForECSShellRouteStateHydration,
+} from '../lib/navigation/ecsShellRouteState';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import {
   runAfterShellInteractions,
   type ShellInteractionTask,
@@ -124,8 +152,6 @@ function isAuthRoutePath(path: string | null | undefined): boolean {
     AUTH_ROUTE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
-const SHELL_ROUTE_KEY = 'last_shell_route_v1';
-const shellRouteCache = createPersistedKeyValueCache('ecs_shell_state');
 const OFFLINE_MODE_KEY = 'ecs_offline_mode';
 const offlineModeCache = createPersistedKeyValueCache('ecs_runtime_flags');
 const SETUP_COMPLETE_KEY = 'ecs_setup_complete';
@@ -148,62 +174,8 @@ const STARTUP_ROUTE_READINESS_TIMEOUT_MS = 3000;
 const DASHBOARD_SHELL_READINESS_TIMEOUT_MS = 2200;
 const STARTUP_LOADING_STALL_DIAGNOSTIC_MS = 6000;
 
-function waitForShellStartupRequirement(
-  label: string,
-  promise: Promise<unknown>,
-  timeoutMs: number,
-): Promise<{ timedOut: boolean }> {
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-
-  const timeoutPromise = new Promise<{ timedOut: boolean }>((resolve) => {
-    timeout = setTimeout(() => {
-      ecsLog.warnOnce(
-        'CONFIG',
-        `startup:${label}:timeout`,
-        '[AuthGate] Startup requirement timed out; continuing with fallback route readiness',
-        { requirement: label, timeoutMs },
-      );
-      resolve({ timedOut: true });
-    }, timeoutMs);
-  });
-
-  return Promise.race([
-    promise
-      .then(() => ({ timedOut: false }))
-      .catch((error) => {
-        ecsLog.warnOnce(
-          'CONFIG',
-          `startup:${label}:failed`,
-          '[AuthGate] Startup requirement failed; continuing with fallback route readiness',
-          { requirement: label, error: error instanceof Error ? error.message : String(error) },
-        );
-        return { timedOut: false };
-      }),
-    timeoutPromise,
-  ]).finally(() => {
-    if (timeout) clearTimeout(timeout);
-  });
-}
-
-function normalizeStoredShellRoute(path: string | null | undefined): string | null {
-  return getRestorableShellRouteForPath(path);
-}
-
-function toRestorableShellRoute(path: string | null | undefined): string | null {
-  return getRestorableShellRouteForPath(path);
-}
-
 function getStoredShellRoute(): string | null {
-  const stored = normalizeStoredShellRoute(shellRouteCache.get(SHELL_ROUTE_KEY));
-  if (!stored) return null;
-
-  const cached = shellRouteCache.get(SHELL_ROUTE_KEY);
-  if (cached !== stored) {
-    shellRouteCache.set(SHELL_ROUTE_KEY, stored);
-    void shellRouteCache.flush();
-  }
-
-  return stored;
+  return loadLastECSShellRoute();
 }
 
 function getPreferredShellRoute(): string {
@@ -211,10 +183,6 @@ function getPreferredShellRoute(): string {
     return '/fleet';
   }
   return getStoredShellRoute() ?? '/dashboard';
-}
-
-function toExpoRouterShellTarget(path: string): string {
-  return toManifestExpoRouterShellTarget(path);
 }
 
 function getPersistedSetupComplete(): boolean {
@@ -262,8 +230,14 @@ function normalizeRequestedEntryRouteFromUrl(url: string | null | undefined): st
     for (const candidate of candidates) {
       if (!candidate) continue;
       const normalized = normalizeRoutePath(candidate.startsWith('/') ? candidate : `/${candidate}`);
-      if (normalized && normalized !== '/' && !looksLikeNetworkHost(normalized.slice(1))) {
-        return normalized;
+      if (
+        normalized &&
+        normalized !== '/' &&
+        !looksLikeNetworkHost(normalized.slice(1)) &&
+        isECSDeepLinkPathAllowed(normalized)
+      ) {
+        const query = fallback.search?.slice(0, 800) ?? '';
+        return `${normalized}${query}`;
       }
     }
 
@@ -278,6 +252,7 @@ const FADE_SCREEN_OPTIONS = {
   animationDuration: MOTION.screenTransition,
 };
 const MODAL_SCREEN_OPTIONS = {
+  presentation: 'modal' as const,
   animation: 'fade_from_bottom' as const,
   animationDuration: MOTION.modalSlide,
 };
@@ -295,6 +270,7 @@ const ECSRootNavigationStack = React.memo(function ECSRootNavigationStack({
       <Stack.Screen name="create-access-key" />
       <Stack.Screen name="auth-info" />
       <Stack.Screen name="pro" />
+      <Stack.Screen name="feature-unavailable" options={MODAL_SCREEN_OPTIONS} />
       <Stack.Screen name="join-expedition" />
       <Stack.Screen name="expedition-channel/join/[code]" />
       <Stack.Screen name="setup" options={FADE_SCREEN_OPTIONS} />
@@ -353,8 +329,13 @@ function AuthGate() {
   const adaptive = useAdaptiveLayout();
   const authLayout = useMemo(() => resolveAuthLayoutMetrics(width, height), [width, height]);
   const pathname = usePathname();
-  const routeParams = useGlobalSearchParams<{ mode?: string; vehicleId?: string }>();
+  const routeParams = useGlobalSearchParams<{
+    mode?: string;
+    vehicleId?: string;
+    returnTo?: string;
+  }>();
   const router = useRouter();
+  const { replace: replaceSingleFlight } = useECSNavigation();
   const [startupRouteHydrated, setStartupRouteHydrated] = useState(false);
   const [dashboardShellHydrated, setDashboardShellHydrated] = useState(() => isDashboardHydrated());
   const [minimumLoadingElapsed, setMinimumLoadingElapsed] = useState(false);
@@ -617,18 +598,7 @@ function AuthGate() {
     if (startupRouteHydrated) return;
     let cancelled = false;
 
-    void waitForShellStartupRequirement(
-      'route state hydration',
-      Promise.all([
-        shellRouteCache.waitForHydration(),
-        offlineModeCache.waitForHydration(),
-        setupStateCache.waitForHydration(),
-        setupStore.waitForHydration(),
-        vehicleStore.waitForHydration(),
-        vehicleSetupStore.waitForHydration(),
-      ]).then(() => sanitizeLegacyVehicleFrameworkState()),
-      STARTUP_ROUTE_READINESS_TIMEOUT_MS,
-    ).then(() => {
+    void hydrateECSRequiredStartupState(STARTUP_ROUTE_READINESS_TIMEOUT_MS).then(() => {
       if (!cancelled) {
         setStartupRouteHydrated(true);
       }
@@ -646,11 +616,7 @@ function AuthGate() {
     }
 
     let cancelled = false;
-    void waitForShellStartupRequirement(
-      'dashboard shell hydration',
-      waitForDashboardHydration(),
-      DASHBOARD_SHELL_READINESS_TIMEOUT_MS,
-    )
+    void hydrateECSOptionalStartupState(DASHBOARD_SHELL_READINESS_TIMEOUT_MS)
       .then(() => {
         if (!cancelled) {
           setDashboardShellHydrated(true);
@@ -664,19 +630,26 @@ function AuthGate() {
 
   useEffect(() => {
     let cancelled = false;
+    let resolved = false;
     const resolutionTimeout = setTimeout(() => {
-      if (!cancelled) {
+      if (!cancelled && !resolved) {
+        resolved = true;
         setInitialEntryRouteResolved(true);
       }
     }, INITIAL_URL_RESOLUTION_TIMEOUT_MS);
 
-    void Linking.getInitialURL()
-      .then((url) => {
-        if (cancelled) return;
-        setRequestedEntryRoute(normalizeRequestedEntryRouteFromUrl(url));
+    void Promise.all([Linking.getInitialURL(), waitForECSShellRouteStateHydration()])
+      .then(([url]) => {
+        if (cancelled || resolved) return;
+        const initialRoute = normalizeRequestedEntryRouteFromUrl(url);
+        const intendedRoute = initialRoute
+          ? saveECSIntendedRoute(initialRoute)
+          : loadECSIntendedRoute();
+        setRequestedEntryRoute(intendedRoute);
       })
       .finally(() => {
-        if (!cancelled) {
+        if (!cancelled && !resolved) {
+          resolved = true;
           clearTimeout(resolutionTimeout);
           setInitialEntryRouteResolved(true);
         }
@@ -737,21 +710,14 @@ function AuthGate() {
 
   useEffect(() => {
     if (!startupRouteHydrated) return;
-    const restorableRoute = toRestorableShellRoute(pathname);
-    if (!restorableRoute) return;
-    if (shellRouteCache.get(SHELL_ROUTE_KEY) === restorableRoute) return;
-
-    shellRouteCache.set(SHELL_ROUTE_KEY, restorableRoute);
-    void shellRouteCache.flush();
+    saveLastECSShellRoute(pathname);
+    settleECSIntendedRoute(pathname);
   }, [pathname, startupRouteHydrated]);
 
   useEffect(() => {
     if (!startupRouteHydrated) return;
     if (hasAuthenticatedUser || guestOfflineAccess || rememberedOfflineAccess) return;
-    if (!shellRouteCache.get(SHELL_ROUTE_KEY)) return;
-
-    shellRouteCache.delete(SHELL_ROUTE_KEY);
-    void shellRouteCache.flush();
+    clearLastECSShellRoute();
   }, [
     guestOfflineAccess,
     hasAuthenticatedUser,
@@ -796,7 +762,55 @@ function AuthGate() {
   const accessCheckPending = entitlementResolving && inAuthScreen;
   const shouldShowAccessGate = false;
   const suppressRedirect = false;
-  const restorableShellRoute = getStoredShellRoute();
+  const featureVisibilityContext = useMemo(
+    () => createAutomotiveFeatureVisibilityContext({
+      platform: Platform.OS,
+      androidAutoNativeAvailable: Boolean(NativeModules.ECSAndroidAuto),
+      carPlayNativeAvailable: Boolean(NativeModules.ECSCarPlay),
+      baseContext: {
+        online: !shellOfflineMode,
+        authenticated: hasAuthenticatedUser,
+        hasFullAccess: accessState?.hasFullAccess === true,
+        isAdmin: accessState?.canAccessAdminSurfaces === true,
+        backends: {
+          supabase: isSupabaseConfigured ? 'available' : 'unavailable',
+        },
+        hardware: {
+          bluetooth: Platform.OS === 'android' || Platform.OS === 'ios' ? 'available' : 'unavailable',
+          gps: Platform.OS === 'android' || Platform.OS === 'ios' ? 'available' : 'unknown',
+        },
+        permissions: {},
+      },
+    }),
+    [
+      accessState?.canAccessAdminSurfaces,
+      accessState?.hasFullAccess,
+      hasAuthenticatedUser,
+      shellOfflineMode,
+    ],
+  );
+  const routePolicyContext = useMemo<ECSRoutePolicyContext>(() => ({
+    authenticated: hasAuthenticatedUser,
+    shellAccessReady: hasAuthenticatedUser || guestOfflineAccess || rememberedOfflineAccess,
+    setupComplete,
+    hasConfiguredVehicle,
+    offline: shellOfflineMode,
+    featureContext: featureVisibilityContext,
+  }), [
+    featureVisibilityContext,
+    guestOfflineAccess,
+    hasAuthenticatedUser,
+    hasConfiguredVehicle,
+    rememberedOfflineAccess,
+    setupComplete,
+    shellOfflineMode,
+  ]);
+  const storedShellRoute = getStoredShellRoute();
+  const restorationDecision = useMemo(
+    () => resolveECSRestorationTarget({ storedPath: storedShellRoute, context: routePolicyContext }),
+    [routePolicyContext, storedShellRoute],
+  );
+  const restorableShellRoute = storedShellRoute ? restorationDecision.targetPath : null;
   const entryResolution = useMemo(
     () =>
       resolveDistributionEntryState({
@@ -844,26 +858,60 @@ function AuthGate() {
       setupNeedsVehicleRecovery,
     ],
   );
-  const redirectTarget = entryResolution.redirectTarget;
+  const entryRedirectTarget = entryResolution.redirectTarget;
+  const featureRouteCandidate = entryRedirectTarget ?? normalizedPathname;
+  const routeEntryIntent = entryResolution.destinationSource === 'requested_entry_route'
+    ? 'deep_link'
+    : entryResolution.destinationSource === 'restored_shell_route'
+      ? 'restore'
+      : 'navigate';
+  const routePolicyDecision = useMemo(
+    () => resolveECSRoutePolicy({
+      path: featureRouteCandidate,
+      intent: routeEntryIntent,
+      context: routePolicyContext,
+    }),
+    [featureRouteCandidate, routeEntryIntent, routePolicyContext],
+  );
+  const featureRouteAccess = routePolicyDecision.featureAccess;
+  const featureUnavailableTarget = routePolicyDecision.reason === 'feature_unavailable' && featureRouteAccess?.featureId
+    ? `/feature-unavailable?feature=${encodeURIComponent(featureRouteAccess.featureId)}&reason=${encodeURIComponent(featureRouteAccess.decision?.reason ?? 'rollout_disabled')}&returnTo=${encodeURIComponent(routePolicyDecision.safeReturnRoute)}`
+    : null;
+  const policyFallbackTarget = !routePolicyDecision.allowed && !featureUnavailableTarget
+    ? routePolicyDecision.targetPath
+    : null;
+  const redirectTarget = featureUnavailableTarget ?? policyFallbackTarget ?? entryRedirectTarget;
   const normalizedRedirectTarget = redirectTarget ? normalizeRoutePath(redirectTarget) : null;
   const redirectTargetIsAuthRoute = isAuthRoutePath(normalizedRedirectTarget);
   const hasShellIdentity = hasAuthenticatedUser || guestOfflineAccess || rememberedOfflineAccess;
+  useEffect(() => {
+    if (!hasShellIdentity) return undefined;
+    return automotiveRuntimeCoordinator.acquire('shell');
+  }, [hasShellIdentity]);
+
+  useEffect(() => {
+    if (!startupSessionRestored || isLoading || hasShellIdentity) return;
+    void automotiveRuntimeCoordinator.clearNativeState();
+  }, [hasShellIdentity, isLoading, startupSessionRestored]);
   const postAuthLoadingTarget =
     hasShellIdentity &&
     entryResolution.shellAccessReady &&
-    normalizedRedirectTarget &&
+    redirectTarget &&
     !redirectTargetIsAuthRoute
-      ? normalizedRedirectTarget
+      ? redirectTarget
       : null;
+  const normalizedPostAuthLoadingTarget = postAuthLoadingTarget
+    ? normalizeRoutePath(postAuthLoadingTarget)
+    : null;
   const postAuthLoadingGateActive = !!postAuthLoadingTarget && normalizedPathname === '/';
   const postAuthRedirectHoldingScreenActive =
     !!postAuthLoadingTarget &&
     (normalizedPathname === '/' || inAuthScreen) &&
-    normalizedPathname !== postAuthLoadingTarget;
+    normalizedPathname !== normalizedPostAuthLoadingTarget;
   const authScreenShellRedirectPending =
     inAuthScreen &&
     !!postAuthLoadingTarget &&
-    normalizedPathname !== postAuthLoadingTarget;
+    normalizedPathname !== normalizedPostAuthLoadingTarget;
   const postAuthLoadingGateKey = postAuthLoadingGateActive
     ? [
         user?.id ?? (rememberedOfflineAccess ? 'remembered_offline' : guestOfflineAccess ? 'guest_offline' : 'shell'),
@@ -872,9 +920,25 @@ function AuthGate() {
       ].join(':')
     : null;
   const commitResolvedNavigation = useCallback((target: string) => {
-    const resolvedTarget = toExpoRouterShellTarget(target) as any;
-    router.replace(resolvedTarget);
-  }, [router]);
+    replaceSingleFlight(target);
+  }, [replaceSingleFlight]);
+
+  useEffect(() => {
+    if (!requestedEntryRoute) return;
+    if (
+      normalizeRoutePath(requestedEntryRoute) === normalizedPathname &&
+      !entryRedirectTarget &&
+      routePolicyDecision.allowed
+    ) {
+      clearECSIntendedRoute();
+      setRequestedEntryRoute(null);
+      return;
+    }
+    if (!routePolicyDecision.allowed && !routePolicyDecision.preserveIntent) {
+      clearECSIntendedRoute();
+      setRequestedEntryRoute(null);
+    }
+  }, [entryRedirectTarget, normalizedPathname, requestedEntryRoute, routePolicyDecision.allowed, routePolicyDecision.preserveIntent]);
 
   useEffect(() => {
     if (startupGatePending) return;
@@ -991,7 +1055,7 @@ function AuthGate() {
     !startupGatePending &&
     !postAuthBootstrapPending &&
     !accessCheckPending &&
-    (postAuthLoadingTarget === '/dashboard' ? dashboardShellHydrated : true);
+    (normalizedPostAuthLoadingTarget === '/dashboard' ? dashboardShellHydrated : true);
   const pendingRedirect = useMemo(() => {
     if (!redirectTarget) return false;
     return normalizedPathname !== normalizedRedirectTarget;
@@ -1022,6 +1086,26 @@ function AuthGate() {
   const showSharedShellBodyBackground =
     !inPreAuthTree &&
     isSharedShellBackgroundRoute(normalizedPathname);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return undefined;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (inPreAuthTree || inAuthScreen || normalizedPathname === '/feature-unavailable') return false;
+      if (router.canGoBack()) return false;
+      const fallback = getSafeReturnRoute(normalizedPathname, firstRouteParam(routeParams.returnTo));
+      replaceSingleFlight(fallback);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [
+    inAuthScreen,
+    inPreAuthTree,
+    normalizedPathname,
+    replaceSingleFlight,
+    routeParams.returnTo,
+    router,
+  ]);
+
   const androidTabletWindow = Platform.OS === 'android' && Math.min(width, height) >= 720;
   const commandDockTabletScale = adaptive.isTablet || androidTabletWindow;
   const shellBodyTopInset = 0;
@@ -2018,7 +2102,10 @@ export default function RootLayout() {
         nextState === 'active'
       ) {
         ecsSyncCoordinator.resume();
-        offlineTileSyncCoordinator.resumePendingJobs({ syncType: 'route' });
+        offlineTileSyncCoordinator.resumePendingJobs({
+          syncType: 'route',
+          networkAvailable: connectivity.isOnline(),
+        });
         void flushQueuedIssueEvents();
       }
 
@@ -2033,7 +2120,63 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    offlineTileSyncCoordinator.resumePendingJobs({ syncType: 'route' });
+    let disposed = false;
+    let readinessHydrated = false;
+
+    const activeExpeditionIds = () => Array.from(new Set([
+      expeditionStateStore.getCurrentExpedition()?.id ?? null,
+      missionExpeditionStore.getActiveId(),
+    ].filter((id): id is string => !!id)));
+    const protectionReason = (regionId: string): string | null => {
+      if (!readinessHydrated) return 'Offline readiness protection is loading';
+      const activeRouteId = routeStore.getActive()?.id ?? null;
+      for (const activeExpeditionId of activeExpeditionIds()) {
+        const reason = offlineReadinessCoordinator.getRegionProtectionReason(regionId, {
+          activeExpeditionId,
+          activeRouteId,
+        });
+        if (reason) return reason;
+      }
+      return offlineReadinessCoordinator.getRegionProtectionReason(regionId, { activeRouteId });
+    };
+    const reconcileReadiness = () => {
+      if (!readinessHydrated || disposed) return;
+      offlineReadinessCoordinator.reconcileTileState(
+        offlineTileSyncCoordinator.getSnapshot().jobs,
+        tileCacheStore.getRegions(),
+      );
+    };
+
+    tileCacheStore.setProtectionResolver((region) => protectionReason(region.id));
+    const unsubscribeTileSync = offlineTileSyncCoordinator.subscribe(reconcileReadiness);
+    const unsubscribeConnectivity = connectivity.onStatusChange((status) => {
+      if (status !== 'online' || AppState.currentState !== 'active') return;
+      offlineTileSyncCoordinator.resumePendingJobs({
+        syncType: 'route',
+        networkAvailable: true,
+      });
+    });
+
+    void Promise.all([
+      offlineTileSyncCoordinator.waitForHydration(),
+      offlineReadinessCoordinator.waitForHydration(),
+    ]).then(() => {
+      if (disposed) return;
+      readinessHydrated = true;
+      offlineReadinessCoordinator.restoreInterruptedPreparations();
+      reconcileReadiness();
+      offlineTileSyncCoordinator.resumePendingJobs({
+        syncType: 'route',
+        networkAvailable: connectivity.isOnline(),
+      });
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribeTileSync();
+      unsubscribeConnectivity();
+      tileCacheStore.setProtectionResolver(null);
+    };
   }, []);
 
   useEffect(() => {
@@ -2044,14 +2187,6 @@ export default function RootLayout() {
 
   useEffect(() => {
     void restoreUnifiedDeviceSessions();
-  }, []);
-
-  useEffect(() => {
-    androidAutoBridge.start();
-    ecsLog.debug('SHELL', '[RootLayout] Android Auto bridge initialized');
-    return () => {
-      androidAutoBridge.stop();
-    };
   }, []);
 
   useEffect(() => {

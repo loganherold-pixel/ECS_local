@@ -118,6 +118,23 @@ export async function writePersisted(key: string, data: string): Promise<void> {
 
 const _pendingWrites: Map<string, { data: string; timer: ReturnType<typeof setTimeout> }> = new Map();
 const DEBOUNCE_MS = 300;
+const _persistenceDiagnostics = {
+  scheduledWrites: 0,
+  coalescedWrites: 0,
+  committedWrites: 0,
+  flushedWrites: 0,
+};
+
+export type DashboardPersistenceDiagnostics = Readonly<typeof _persistenceDiagnostics> & {
+  pendingWrites: number;
+};
+
+export function getDashboardPersistenceDiagnostics(): DashboardPersistenceDiagnostics {
+  return {
+    ..._persistenceDiagnostics,
+    pendingWrites: _pendingWrites.size,
+  };
+}
 
 /**
  * Schedule a debounced write. If another write for the same key arrives
@@ -125,23 +142,18 @@ const DEBOUNCE_MS = 300;
  * replaces it. This prevents disk thrashing during rapid mutations.
  */
 export function scheduleDebouncedWrite(key: string, data: string): void {
+  _persistenceDiagnostics.scheduledWrites += 1;
   const existing = _pendingWrites.get(key);
   if (existing) {
     clearTimeout(existing.timer);
-  }
-
-  // On web, also write to localStorage immediately (it's synchronous and fast)
-  // so that other tabs / same-session reads see the latest data.
-  if (!isNative) {
-    writeWeb(key, data);
+    _persistenceDiagnostics.coalescedWrites += 1;
   }
 
   const timer = setTimeout(() => {
     _pendingWrites.delete(key);
-    if (isNative) {
-      writeNative(key, data).catch(() => {});
-    }
-    // Web already written above synchronously
+    void writePersisted(key, data).then(() => {
+      _persistenceDiagnostics.committedWrites += 1;
+    });
   }, DEBOUNCE_MS);
 
   _pendingWrites.set(key, { data, timer });
@@ -155,7 +167,10 @@ export async function flushPendingWrites(): Promise<void> {
   const promises: Promise<void>[] = [];
   for (const [key, { data, timer }] of _pendingWrites.entries()) {
     clearTimeout(timer);
-    promises.push(writePersisted(key, data));
+    promises.push(writePersisted(key, data).then(() => {
+      _persistenceDiagnostics.committedWrites += 1;
+      _persistenceDiagnostics.flushedWrites += 1;
+    }));
   }
   _pendingWrites.clear();
   await Promise.all(promises);

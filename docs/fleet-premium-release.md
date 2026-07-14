@@ -34,6 +34,28 @@ Fleet remains the ECS vehicle command center under the existing `Fleet` tab labe
 
 ## Test Coverage
 
+- `scripts/test-fleet-canonical-runtime.js`
+  - Zero, single, multiple, repeated, and rapid active-vehicle selection behavior.
+  - One shared seven-source subscription hub regardless of consumer count.
+  - Unrelated vehicle filtering and same-tick source-event coalescing.
+  - Stable selector and Fleet Fabric cache identities with bounded cache sizes.
+  - Near-GVWR, over-GVWR, high-mounted load, missing/invalid weights, and axle contradiction behavior.
+  - Navigate, Explore, and Dispatch propagation wiring.
+  - Memoized Fleet card render policy and no-photo Fleet Fabric output.
+
+### CI Performance Evidence
+
+The deterministic harness records this before/after policy evidence:
+
+| Measure | Before | After |
+| --- | ---: | ---: |
+| Underlying source subscriptions for 3 consumers | 21 | 7 |
+| Calculations for 25 identical selector calls | 25 | 1 |
+| Selector cache hits for 25 identical calls | 0 | 24 |
+| Eligible card renders for a modeled 10-vehicle active switch | 10 | 2 |
+
+These are runtime/identity and component-policy measurements in Node CI. They are not Android/iOS frame-rate, memory, or battery measurements.
+
 - `scripts/test-fleet-premium-domain.js`
   - Vehicle profile defaults.
   - RAM 2500 defaults.

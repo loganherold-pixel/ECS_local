@@ -57,6 +57,8 @@ export function buildAuthProductionReadinessResult(options = {}) {
     authLogRedaction: path.join(root, 'lib', 'auth', 'authLogRedaction.ts'),
     authEmailDelivery: path.join(root, 'docs', 'auth-email-delivery.md'),
     distributionEntryResolver: path.join(root, 'lib', 'auth', 'distributionEntryResolver.ts'),
+    routePolicy: path.join(root, 'lib', 'navigation', 'ecsRoutePolicy.ts'),
+    shellRouteState: path.join(root, 'lib', 'navigation', 'ecsShellRouteState.ts'),
     offlineAccessPolicy: path.join(root, 'lib', 'auth', 'offlineAccessPolicy.ts'),
     subscriptionAccess: path.join(root, 'lib', 'subscriptionAccess.ts'),
     ecsProPurchase: path.join(root, 'lib', 'ecsProPurchase.ts'),
@@ -74,6 +76,8 @@ export function buildAuthProductionReadinessResult(options = {}) {
   const authLogRedaction = readIfExists(paths.authLogRedaction);
   const authEmailDelivery = readIfExists(paths.authEmailDelivery);
   const distributionEntryResolver = readIfExists(paths.distributionEntryResolver);
+  const routePolicy = readIfExists(paths.routePolicy);
+  const shellRouteState = readIfExists(paths.shellRouteState);
   const offlineAccessPolicy = readIfExists(paths.offlineAccessPolicy);
   const subscriptionAccess = readIfExists(paths.subscriptionAccess);
   const ecsProPurchase = readIfExists(paths.ecsProPurchase);
@@ -144,9 +148,18 @@ export function buildAuthProductionReadinessResult(options = {}) {
         distributionEntryResolver.includes('rememberedOfflineAccess') &&
         distributionEntryResolver.includes('guestOfflineAccess') &&
         layout.includes('resolveDistributionEntryState') &&
-        layout.includes('const restorableShellRoute = getStoredShellRoute();') &&
-        layout.includes('toRestorableShellRoute'),
-      [relPath(root, paths.distributionEntryResolver), relPath(root, paths.layout)],
+        layout.includes('resolveECSRestorationTarget') &&
+        layout.includes('loadECSIntendedRoute') &&
+        routePolicy.includes('export function resolveECSRoutePolicy') &&
+        routePolicy.includes('export function resolveECSRestorationTarget') &&
+        shellRouteState.includes('export function loadLastECSShellRoute') &&
+        shellRouteState.includes('export function saveECSIntendedRoute'),
+      [
+        relPath(root, paths.distributionEntryResolver),
+        relPath(root, paths.routePolicy),
+        relPath(root, paths.shellRouteState),
+        relPath(root, paths.layout),
+      ],
       ['Keep startup route selection deterministic and explicit for signed-out, setup, authenticated, guest-offline, and remembered-offline states.'],
     ),
     check(

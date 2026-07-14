@@ -93,6 +93,10 @@ function formatScore(value: number | undefined): string {
   return `${Math.round(value)}/100`;
 }
 
+function humanize(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
 function cautionBadges(candidate: CampScoutCandidate): string[] {
   const badges = [
     candidate.accessConfidence < 65 ? 'Access uncertain' : null,
@@ -372,6 +376,25 @@ export default function CampScoutIntelCard({
                   <Text key={note} style={styles.cautionLine}>
                     {note}
                   </Text>
+                ))}
+              </View>
+            ) : null}
+
+            {activeCampOpsDetail?.sourceDetails.length ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Decision sources</Text>
+                {activeCampOpsDetail.sourceDetails.map((detail) => (
+                  <View key={detail.id}>
+                    <Text style={styles.bodyLine}>
+                      {detail.label}: {detail.value}
+                    </Text>
+                    <Text style={styles.metricDetail}>
+                      {humanize(detail.confidence)} confidence
+                      {detail.freshness ? ` / ${humanize(detail.freshness)}` : ''}
+                      {detail.sourceLabels.length > 0 ? ` / ${detail.sourceLabels.join(', ')}` : ''}
+                    </Text>
+                    {detail.warning ? <Text style={styles.cautionLine}>{detail.warning}</Text> : null}
+                  </View>
                 ))}
               </View>
             ) : null}

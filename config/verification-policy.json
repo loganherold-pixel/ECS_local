@@ -1,0 +1,2676 @@
+{
+  "schemaVersion": 2,
+  "policyVersion": "2026-07-13.4",
+  "globalPathPrefixes": [
+    ".github/workflows/",
+    "config/release-evidence-registry.json",
+    "config/verification-timing-baseline.json",
+    "config/verification-policy.json",
+    "package.json",
+    "scripts/verification/",
+    "scripts/test-verification-system.js",
+    "scripts/test-verification-timing-baseline.mjs",
+    "scripts/test-verification-artifact-sanitizer.mjs",
+    "scripts/test-release-evidence-registry.mjs",
+    "tsconfig.json"
+  ],
+  "timingPolicy": {
+    "schemaVersion": 1,
+    "baselinePath": "config/verification-timing-baseline.json",
+    "maxSamplesPerCheck": 20,
+    "defaultThresholds": {
+      "minimumSamples": 3,
+      "minimumAbsoluteAllowanceMs": 1000,
+      "relativeRegressionPct": 50,
+      "p95Multiplier": 1.25,
+      "improvementPct": 20
+    },
+    "enforceLanes": [
+      "pr-fast",
+      "affected-domain",
+      "release-candidate"
+    ],
+    "requiredBaselineLanes": [
+      "release-candidate"
+    ],
+    "candidateLanes": [
+      "full-nightly"
+    ]
+  },
+  "capabilities": [
+    {
+      "id": "garmin",
+      "label": "Garmin",
+      "pathPrefixes": [
+        "components/garmin/",
+        "docs/garmin",
+        "lib/garmin/",
+        "scripts/check-garmin-inreach-production-readiness.mjs",
+        "supabase/functions/garmin-inreach-telemetry/"
+      ],
+      "highValueScenarios": [
+        "external_release_evidence"
+      ],
+      "evidenceBlockers": [
+        "garmin_pairing",
+        "garmin_data_transfer",
+        "garmin_permissions",
+        "garmin_disconnect",
+        "garmin_offline_behavior"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "external_release_evidence",
+          "requiredEvidenceClasses": [
+            "evidence_only"
+          ],
+          "checkIds": [
+            "release-evidence-registry"
+          ],
+          "enforcedLanes": [],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "fleet",
+      "label": "Fleet",
+      "pathPrefixes": [
+        "app/(tabs)/fleet",
+        "components/fleet/",
+        "lib/fleet",
+        "lib/vehicle",
+        "lib/loadout",
+        "lib/activeVehicle"
+      ],
+      "highValueScenarios": [
+        "active_vehicle_switch",
+        "migration",
+        "stale_data"
+      ],
+      "evidenceBlockers": [
+        "android_multi_vehicle_profile",
+        "verified_weight_source",
+        "production_owner_acceptance"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "active_vehicle_switch",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "fleet-active-vehicle"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "migration",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "fleet-migration"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "stale_data",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "fleet-runtime"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "navigate",
+      "label": "Navigate",
+      "pathPrefixes": [
+        "app/(tabs)/navigate",
+        "components/navigate/",
+        "lib/navigation/",
+        "lib/activeGuidance",
+        "lib/map",
+        "lib/route"
+      ],
+      "highValueScenarios": [
+        "offline_during_active_route",
+        "rapid_repeated_actions",
+        "stale_data"
+      ],
+      "evidenceBlockers": [
+        "android_route_guidance",
+        "provider_backed_map_overlay",
+        "offline_device_run"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "offline_during_active_route",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "navigate-operations"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "rapid_repeated_actions",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "navigate-operations"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "stale_data",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "navigate-operations"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "dashboard",
+      "label": "Dashboard",
+      "pathPrefixes": [
+        "app/(tabs)/dashboard",
+        "components/dashboard/",
+        "components/brief/",
+        "lib/dashboard"
+      ],
+      "highValueScenarios": [
+        "stale_data",
+        "active_vehicle_switch",
+        "rapid_repeated_actions"
+      ],
+      "evidenceBlockers": [
+        "android_widget_source_states",
+        "production_owner_acceptance"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "stale_data",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "dashboard-runtime"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "active_vehicle_switch",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "fleet-active-vehicle"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "rapid_repeated_actions",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "dashboard-runtime"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "explore",
+      "label": "Explore",
+      "pathPrefixes": [
+        "app/(tabs)/discover",
+        "app/explore-",
+        "components/discover/",
+        "components/trailPacks/",
+        "lib/explore",
+        "lib/discovery"
+      ],
+      "highValueScenarios": [
+        "provider_disagreement",
+        "rapid_repeated_actions",
+        "ai_unavailable"
+      ],
+      "evidenceBlockers": [
+        "provider_catalog_coverage",
+        "moderation_approval",
+        "android_handoff"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "provider_disagreement",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "explore-discovery"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "rapid_repeated_actions",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "explore-discovery"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "ai_unavailable",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "explore-ai-lifecycle"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "dispatch",
+      "label": "Dispatch",
+      "pathPrefixes": [
+        "app/(tabs)/alert",
+        "app/expedition-dispatch",
+        "components/dispatch/",
+        "lib/dispatch",
+        "lib/convoy",
+        "lib/realtime"
+      ],
+      "highValueScenarios": [
+        "multi_client_dispatch_ordering",
+        "permission_denial",
+        "rapid_repeated_actions"
+      ],
+      "evidenceBlockers": [
+        "two_client_realtime",
+        "location_privacy_approval",
+        "production_owner_acceptance"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "multi_client_dispatch_ordering",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "supabase-pgtap-rls"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": true,
+          "requiresManualField": false
+        },
+        {
+          "id": "permission_denial",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "dispatch-runtime"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "rapid_repeated_actions",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "dispatch-runtime"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "expedition",
+      "label": "Expedition",
+      "pathPrefixes": [
+        "app/expedition",
+        "components/expedition/",
+        "lib/expedition",
+        "lib/badge",
+        "lib/debrief"
+      ],
+      "highValueScenarios": [
+        "app_restart_mid_transition",
+        "migration",
+        "rapid_repeated_actions"
+      ],
+      "evidenceBlockers": [
+        "android_completion_recovery",
+        "archive_migration",
+        "production_owner_acceptance"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "app_restart_mid_transition",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "expedition-lifecycle"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "migration",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "expedition-lifecycle"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "rapid_repeated_actions",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "expedition-lifecycle"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "campops",
+      "label": "CampOps",
+      "pathPrefixes": [
+        "components/camp",
+        "lib/camp",
+        "supabase/functions/camp"
+      ],
+      "highValueScenarios": [
+        "provider_disagreement",
+        "stale_data",
+        "permission_denial"
+      ],
+      "evidenceBlockers": [
+        "provider_shadow_region",
+        "legal_access_owner_review",
+        "community_privacy_approval"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "provider_disagreement",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "campops-normalization"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "stale_data",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "campops-normalization"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "permission_denial",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "campops-normalization"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "devices-telemetry",
+      "label": "Devices and telemetry",
+      "pathPrefixes": [
+        "app/power/",
+        "components/power/",
+        "lib/blu",
+        "lib/device",
+        "lib/telemetry",
+        "src/power/"
+      ],
+      "highValueScenarios": [
+        "permission_denial",
+        "stale_data",
+        "rapid_repeated_actions"
+      ],
+      "evidenceBlockers": [
+        "real_ble_hardware",
+        "real_obd2_hardware",
+        "android_background_reconnect"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "permission_denial",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "device-lifecycle"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "stale_data",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "device-lifecycle"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "rapid_repeated_actions",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "device-lifecycle"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "weather-fire",
+      "label": "Weather and fire",
+      "pathPrefixes": [
+        "components/weather/",
+        "lib/weather",
+        "lib/remoteWeather",
+        "supabase/functions/weather",
+        "supabase/functions/airnow",
+        "supabase/functions/nasa"
+      ],
+      "highValueScenarios": [
+        "provider_disagreement",
+        "stale_data",
+        "offline_during_active_route"
+      ],
+      "evidenceBlockers": [
+        "real_provider_freshness",
+        "android_offline_weather",
+        "alert_fanout_evidence"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "provider_disagreement",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "weather-broker"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "stale_data",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "weather-broker"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "offline_during_active_route",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "weather-broker"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "offline-recovery",
+      "label": "Offline and recovery",
+      "pathPrefixes": [
+        "app/explore-offline",
+        "app/offline-",
+        "components/offline/",
+        "components/emergency/",
+        "lib/offline",
+        "lib/recovery",
+        "lib/sync"
+      ],
+      "highValueScenarios": [
+        "offline_during_active_route",
+        "cache_corruption",
+        "app_restart_mid_transition"
+      ],
+      "evidenceBlockers": [
+        "android_no_network_drill",
+        "storage_pressure_device",
+        "owner_privacy_approval"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "offline_during_active_route",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "offline-failure-drill"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "cache_corruption",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "offline-manifest"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "app_restart_mid_transition",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "offline-manifest"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "automotive",
+      "label": "Automotive",
+      "pathPrefixes": [
+        "app/vehicle-display",
+        "components/vehicleDisplay/",
+        "lib/automotive",
+        "modules/android-auto",
+        "modules/carplay"
+      ],
+      "highValueScenarios": [
+        "stale_data",
+        "permission_denial",
+        "offline_during_active_route"
+      ],
+      "evidenceBlockers": [
+        "real_head_unit",
+        "native_plugin_readiness",
+        "driver_safety_review"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "stale_data",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "automotive-driver-safe"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "permission_denial",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "automotive-driver-safe"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "offline_during_active_route",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "automotive-driver-safe"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "ai",
+      "label": "AI",
+      "pathPrefixes": [
+        "app/assistant",
+        "lib/ai/",
+        "supabase/functions/ai-"
+      ],
+      "highValueScenarios": [
+        "ai_unavailable",
+        "stale_data",
+        "provider_disagreement"
+      ],
+      "evidenceBlockers": [
+        "privacy_approval",
+        "provider_evaluation",
+        "production_owner_acceptance"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "ai_unavailable",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "ai-truthfulness"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "stale_data",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "ai-truthfulness"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "provider_disagreement",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "ai-truthfulness"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "supabase-rls",
+      "label": "Supabase and RLS",
+      "pathPrefixes": [
+        "supabase/",
+        "lib/supabase",
+        "lib/realtime",
+        "lib/dispatchSupabase"
+      ],
+      "highValueScenarios": [
+        "permission_denial",
+        "multi_client_dispatch_ordering",
+        "migration"
+      ],
+      "evidenceBlockers": [
+        "deployed_migration",
+        "two_identity_rls",
+        "rollback_rehearsal"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "permission_denial",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "supabase-pgtap-rls"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "multi_client_dispatch_ordering",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "supabase-pgtap-rls"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": true,
+          "requiresManualField": false
+        },
+        {
+          "id": "migration",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "supabase-pgtap-rls"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    },
+    {
+      "id": "auth-subscription",
+      "label": "Auth and subscription",
+      "pathPrefixes": [
+        "app/login",
+        "app/setup",
+        "components/Auth",
+        "context/AppContext",
+        "lib/auth",
+        "lib/subscription"
+      ],
+      "highValueScenarios": [
+        "permission_denial",
+        "rapid_repeated_actions",
+        "offline_during_active_route"
+      ],
+      "evidenceBlockers": [
+        "real_auth_provider",
+        "password_recovery",
+        "subscription_provider"
+      ],
+      "scenarioRequirements": [
+        {
+          "id": "permission_denial",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "auth-routing"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "rapid_repeated_actions",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "auth-routing"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        },
+        {
+          "id": "offline_during_active_route",
+          "requiredEvidenceClasses": [
+            "behavioral"
+          ],
+          "checkIds": [
+            "auth-routing"
+          ],
+          "enforcedLanes": [
+            "release-candidate"
+          ],
+          "deterministicCi": true,
+          "requiresLiveProvider": false,
+          "requiresRealDevice": false,
+          "requiresMultiClient": false,
+          "requiresManualField": false
+        }
+      ]
+    }
+  ],
+  "lanes": [
+    {
+      "id": "pr-fast",
+      "label": "Fast pull-request checks",
+      "maxParallel": 4,
+      "timeoutMs": 180000,
+      "budgetMs": 90000,
+      "purpose": "Deterministic code checks with no field-evidence dependency.",
+      "coverageEnforcement": "report"
+    },
+    {
+      "id": "affected-domain",
+      "label": "Affected-domain regression",
+      "maxParallel": 4,
+      "timeoutMs": 240000,
+      "budgetMs": 60000,
+      "purpose": "Behavioral checks selected from changed paths; unknown paths fail wide.",
+      "coverageEnforcement": "report"
+    },
+    {
+      "id": "full-nightly",
+      "label": "Full nightly",
+      "maxParallel": 4,
+      "timeoutMs": 600000,
+      "budgetMs": 2400000,
+      "purpose": "Broad behavioral, migration, offline, performance, and build coverage.",
+      "coverageEnforcement": "report"
+    },
+    {
+      "id": "provider-scheduled",
+      "label": "Provider contract scheduled",
+      "maxParallel": 2,
+      "timeoutMs": 600000,
+      "budgetMs": 1800000,
+      "purpose": "Provider adapter and shadow checks with external evidence kept explicit.",
+      "coverageEnforcement": "report"
+    },
+    {
+      "id": "release-candidate",
+      "label": "Release candidate",
+      "maxParallel": 3,
+      "timeoutMs": 900000,
+      "budgetMs": 5400000,
+      "purpose": "Code, export, policy, and evidence gates. Blocked evidence fails promotion.",
+      "coverageEnforcement": "strict"
+    },
+    {
+      "id": "manual-hardware",
+      "label": "Manual hardware and device evidence",
+      "maxParallel": 1,
+      "timeoutMs": 900000,
+      "budgetMs": 1800000,
+      "purpose": "Validates manifests but never substitutes for real hardware execution.",
+      "coverageEnforcement": "report"
+    }
+  ],
+  "checks": [
+    {
+      "id": "verification-system",
+      "script": "test:verification-system",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "verification-coverage-model",
+      "script": "test:verification-coverage-model",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "unit",
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci",
+      "notes": "Validates conservative planned-versus-executed coverage evaluation; wildcard registration never satisfies product scenarios."
+    },
+    {
+      "id": "verification-workspace-identity",
+      "workspace": "root",
+      "script": "test:verification-workspace-identity",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract",
+        "integration"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral"
+    },
+    {
+      "id": "verification-timing-baseline",
+      "workspace": "root",
+      "script": "test:verification-timing-baseline",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "unit",
+        "contract",
+        "performance"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci",
+      "notes": "Validates approved timing baselines, robust thresholds, package identity isolation, and release fail-closed behavior."
+    },
+    {
+      "id": "verification-lane-outcomes",
+      "script": "test:verification-lane-outcomes",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "verification-evidence-producers",
+      "script": "test:verification-evidence-producers",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract",
+        "integration"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "verification-artifact-sanitizer",
+      "script": "test:verification-artifact-sanitizer",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "unit",
+        "contract",
+        "security/RLS"
+      ],
+      "scenarios": [
+        "permission_denial"
+      ],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "core-typecheck",
+      "script": "typecheck:core",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "web-build-typecheck",
+      "script": "build",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "integration"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "apps/web"
+    },
+    {
+      "id": "web-package-typecheck",
+      "script": "typecheck",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "apps/web"
+    },
+    {
+      "id": "web-tests",
+      "script": "test:run",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "unit",
+        "integration"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "apps/web"
+    },
+    {
+      "id": "expo-config",
+      "script": "test:expo-config",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "mapbox-session-reuse",
+      "script": "test:mapbox-searchbox-session-reuse",
+      "capabilities": [
+        "navigate",
+        "explore"
+      ],
+      "classifications": [
+        "unit",
+        "integration"
+      ],
+      "scenarios": [
+        "rapid_repeated_actions"
+      ],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "verification-readiness",
+      "script": "test:release-readiness",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "release-smoke-workflow",
+      "script": "test:release-smoke-ci-workflow",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "release-readiness-source-contract",
+      "script": "test:release-readiness-source-contract",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "source-contract",
+      "workspace": "root",
+      "evidenceClass": "source_contract",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "lint",
+      "script": "lint",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "expo-export",
+      "script": "build",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "integration"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "runtime-mock-import-guard",
+      "script": "gate:no-runtime-mocks",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "source-contract",
+      "notes": "Static source guard; not runtime behavior evidence.",
+      "workspace": "root",
+      "evidenceClass": "source_contract",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "state-management-foundation",
+      "script": "test:state-management-foundation",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "unit",
+        "migration",
+        "offline"
+      ],
+      "scenarios": [
+        "cache_corruption",
+        "app_restart_mid_transition"
+      ],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "observability-foundation",
+      "script": "test:observability-foundation",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "unit",
+        "security/RLS"
+      ],
+      "scenarios": [
+        "permission_denial"
+      ],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "feature-visibility",
+      "script": "test:feature-visibility-registry",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "unit",
+        "contract"
+      ],
+      "scenarios": [
+        "permission_denial"
+      ],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "shell-routing",
+      "script": "test:shell-routing-hardening",
+      "capabilities": [
+        "navigate",
+        "dashboard",
+        "explore",
+        "dispatch",
+        "auth-subscription"
+      ],
+      "classifications": [
+        "unit",
+        "integration"
+      ],
+      "scenarios": [
+        "rapid_repeated_actions",
+        "offline_during_active_route"
+      ],
+      "lanes": [
+        "pr-fast",
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "source-truth",
+      "script": "test:source-truth-domain",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "unit"
+      ],
+      "scenarios": [
+        "stale_data",
+        "provider_disagreement"
+      ],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "fleet-runtime",
+      "script": "test:fleet-canonical-runtime",
+      "capabilities": [
+        "fleet"
+      ],
+      "classifications": [
+        "unit",
+        "integration"
+      ],
+      "scenarios": [
+        "active_vehicle_switch",
+        "rapid_repeated_actions",
+        "stale_data"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "fleet-active-vehicle",
+      "script": "test:active-vehicle-ecs-integration",
+      "capabilities": [
+        "fleet",
+        "dashboard",
+        "navigate",
+        "expedition"
+      ],
+      "classifications": [
+        "integration"
+      ],
+      "scenarios": [
+        "active_vehicle_switch",
+        "rapid_repeated_actions"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "fleet-migration",
+      "script": "test:fleet-persistence-migration",
+      "capabilities": [
+        "fleet"
+      ],
+      "classifications": [
+        "migration",
+        "offline"
+      ],
+      "scenarios": [
+        "migration",
+        "cache_corruption"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "navigate-operations",
+      "script": "test:navigate-operations-runtime",
+      "capabilities": [
+        "navigate",
+        "offline-recovery"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "offline"
+      ],
+      "scenarios": [
+        "offline_during_active_route",
+        "rapid_repeated_actions",
+        "stale_data"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "route-lifecycle",
+      "script": "test:route-lifecycle-model",
+      "capabilities": [
+        "navigate",
+        "explore",
+        "expedition",
+        "offline-recovery"
+      ],
+      "classifications": [
+        "unit",
+        "migration",
+        "offline"
+      ],
+      "scenarios": [
+        "app_restart_mid_transition",
+        "rapid_repeated_actions"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "guidance-replacement",
+      "script": "test:active-guidance-replacement-guard",
+      "capabilities": [
+        "navigate",
+        "explore"
+      ],
+      "classifications": [
+        "contract"
+      ],
+      "scenarios": [
+        "rapid_repeated_actions"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "source-contract",
+      "workspace": "root",
+      "evidenceClass": "source_contract",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "dashboard-runtime",
+      "script": "test:dashboard-runtime-hardening",
+      "capabilities": [
+        "dashboard"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "performance"
+      ],
+      "scenarios": [
+        "rapid_repeated_actions",
+        "stale_data"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "explore-discovery",
+      "script": "test:explore-unified-discovery",
+      "capabilities": [
+        "explore"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "offline"
+      ],
+      "scenarios": [
+        "provider_disagreement",
+        "rapid_repeated_actions"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "explore-filter-persistence",
+      "script": "test:explore-filter-persistence",
+      "capabilities": [
+        "explore"
+      ],
+      "classifications": [
+        "unit",
+        "migration",
+        "offline"
+      ],
+      "scenarios": [
+        "app_restart_mid_transition"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "explore-ai-lifecycle",
+      "script": "test:explore-ai-request-lifecycle",
+      "capabilities": [
+        "explore",
+        "ai"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "offline"
+      ],
+      "scenarios": [
+        "ai_unavailable",
+        "rapid_repeated_actions"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "dispatch-runtime",
+      "script": "test:dispatch-runtime-hardening",
+      "capabilities": [
+        "dispatch",
+        "offline-recovery"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "offline",
+        "multi-client"
+      ],
+      "scenarios": [
+        "multi_client_dispatch_ordering",
+        "permission_denial",
+        "rapid_repeated_actions"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "dispatch-backend-contract",
+      "script": "test:dispatch-canonical-backend",
+      "capabilities": [
+        "dispatch",
+        "supabase-rls"
+      ],
+      "classifications": [
+        "contract",
+        "multi-client",
+        "security/RLS"
+      ],
+      "scenarios": [
+        "multi_client_dispatch_ordering",
+        "permission_denial"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "hybrid",
+      "workspace": "root"
+    },
+    {
+      "id": "expedition-lifecycle",
+      "script": "test:expedition-canonical-lifecycle",
+      "capabilities": [
+        "expedition",
+        "offline-recovery"
+      ],
+      "classifications": [
+        "unit",
+        "migration",
+        "offline"
+      ],
+      "scenarios": [
+        "app_restart_mid_transition",
+        "migration",
+        "rapid_repeated_actions"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "expedition-badge-artwork",
+      "script": "test:expedition-badge-artwork",
+      "capabilities": [
+        "expedition",
+        "dashboard"
+      ],
+      "classifications": [
+        "unit",
+        "contract",
+        "UI/component"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "campops-normalization",
+      "script": "test:campops-candidate-normalization",
+      "capabilities": [
+        "campops"
+      ],
+      "classifications": [
+        "unit",
+        "provider shadow"
+      ],
+      "scenarios": [
+        "provider_disagreement",
+        "stale_data",
+        "permission_denial"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "provider-scheduled",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "campops-performance",
+      "script": "test:campops-performance",
+      "capabilities": [
+        "campops"
+      ],
+      "classifications": [
+        "performance"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "affected-domain",
+        "full-nightly"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "device-lifecycle",
+      "script": "test:device-telemetry-lifecycle",
+      "capabilities": [
+        "devices-telemetry"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "hardware/device"
+      ],
+      "scenarios": [
+        "permission_denial",
+        "stale_data",
+        "rapid_repeated_actions"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate",
+        "manual-hardware"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "weather-request-dedupe",
+      "script": "test:weather-request-dedupe",
+      "capabilities": [
+        "weather-fire"
+      ],
+      "classifications": [
+        "unit",
+        "performance"
+      ],
+      "scenarios": [
+        "rapid_repeated_actions",
+        "stale_data"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "provider-scheduled",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "weather-broker",
+      "script": "test:operational-weather-environment-broker",
+      "capabilities": [
+        "weather-fire",
+        "navigate",
+        "offline-recovery"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "provider shadow",
+        "offline"
+      ],
+      "scenarios": [
+        "provider_disagreement",
+        "stale_data",
+        "offline_during_active_route"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "provider-scheduled",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "offline-manifest",
+      "script": "test:offline-readiness-manifest",
+      "capabilities": [
+        "offline-recovery",
+        "navigate",
+        "expedition"
+      ],
+      "classifications": [
+        "unit",
+        "offline",
+        "migration"
+      ],
+      "scenarios": [
+        "cache_corruption",
+        "stale_data",
+        "app_restart_mid_transition"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "offline-failure-drill",
+      "script": "test:offline-failure-drill",
+      "capabilities": [
+        "offline-recovery",
+        "navigate",
+        "dispatch"
+      ],
+      "classifications": [
+        "integration",
+        "offline"
+      ],
+      "scenarios": [
+        "offline_during_active_route",
+        "cache_corruption",
+        "permission_denial"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "automotive-driver-safe",
+      "script": "test:automotive-driver-safe",
+      "capabilities": [
+        "automotive",
+        "navigate",
+        "weather-fire",
+        "devices-telemetry"
+      ],
+      "classifications": [
+        "unit",
+        "contract",
+        "hardware/device"
+      ],
+      "scenarios": [
+        "stale_data",
+        "permission_denial",
+        "offline_during_active_route"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate",
+        "manual-hardware"
+      ],
+      "confidence": "hybrid",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "ai-truthfulness",
+      "script": "test:ai-truthfulness-contract",
+      "capabilities": [
+        "ai"
+      ],
+      "classifications": [
+        "unit",
+        "contract",
+        "offline"
+      ],
+      "scenarios": [
+        "ai_unavailable",
+        "stale_data",
+        "provider_disagreement"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "verification-pgtap-release-evidence",
+      "script": "test:verification-pgtap-release-evidence",
+      "capabilities": [
+        "supabase-rls"
+      ],
+      "classifications": [
+        "unit",
+        "contract",
+        "migration",
+        "security/RLS"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "notes": "Exercises commit, migration, suite, and workflow-result binding without substituting for real pgTAP execution.",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "verification-workflow-input-safety",
+      "script": "test:verification-workflow-input-safety",
+      "capabilities": [
+        "supabase-rls",
+        "auth-subscription"
+      ],
+      "classifications": [
+        "unit",
+        "contract",
+        "security/RLS"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "notes": "Rejects direct workflow input interpolation and validates repository-bound artifact paths.",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "supabase-workflow-contract",
+      "script": "test:supabase-db-workflow",
+      "capabilities": [
+        "supabase-rls"
+      ],
+      "classifications": [
+        "contract",
+        "security/RLS"
+      ],
+      "scenarios": [
+        "permission_denial"
+      ],
+      "lanes": [
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "source-contract",
+      "notes": "Checks workflow wiring only; pgTAP execution is a separate workflow check.",
+      "workspace": "root",
+      "evidenceClass": "source_contract",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "supabase-pgtap-rls",
+      "workflow": ".github/workflows/supabase-db-tests.yml",
+      "capabilities": [
+        "supabase-rls",
+        "dispatch",
+        "auth-subscription"
+      ],
+      "classifications": [
+        "integration",
+        "migration",
+        "security/RLS"
+      ],
+      "scenarios": [
+        "permission_denial",
+        "multi_client_dispatch_ordering",
+        "migration"
+      ],
+      "lanes": [],
+      "confidence": "behavioral",
+      "notes": "Runs against local Supabase in CI; no production backend claim.",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "multi_client",
+      "workflowEvidence": {
+        "resultContract": "ecs-pgtap-workflow-evidence-v1",
+        "schemaTestConfigVersion": "ecs-supabase-rls-v1",
+        "configPaths": [
+          "supabase/config.toml"
+        ],
+        "migrationDirectory": "supabase/migrations",
+        "requiredSuiteIds": [
+          "supabase/tests/database/010-trips-rls.test.sql",
+          "supabase/tests/database/020-fleet-rls.test.sql",
+          "supabase/tests/database/rls_convoy_tracking.test.sql",
+          "supabase/tests/database/rls_dispatch_canonical.test.sql"
+        ],
+        "maxAgeMs": 21600000
+      }
+    },
+    {
+      "id": "auth-routing",
+      "script": "test:auth-startup-route-selection",
+      "capabilities": [
+        "auth-subscription"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "offline"
+      ],
+      "scenarios": [
+        "permission_denial",
+        "rapid_repeated_actions",
+        "offline_during_active_route"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci"
+    },
+    {
+      "id": "subscription-contract",
+      "script": "test:subscription-hardening",
+      "capabilities": [
+        "auth-subscription"
+      ],
+      "classifications": [
+        "unit",
+        "security/RLS"
+      ],
+      "scenarios": [
+        "permission_denial",
+        "stale_data"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "provider-shadow-contract",
+      "script": "test:campops-provider-shadow-validation",
+      "capabilities": [
+        "campops",
+        "explore",
+        "weather-fire"
+      ],
+      "classifications": [
+        "provider shadow",
+        "contract"
+      ],
+      "scenarios": [
+        "provider_disagreement",
+        "stale_data"
+      ],
+      "lanes": [
+        "provider-scheduled"
+      ],
+      "confidence": "hybrid",
+      "workspace": "root",
+      "evidenceClass": "provider_shadow",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "provider_shadow"
+    },
+    {
+      "id": "provider-readiness-evidence",
+      "script": "gate:provider-readiness:json",
+      "capabilities": [
+        "campops",
+        "explore",
+        "weather-fire"
+      ],
+      "classifications": [
+        "provider shadow",
+        "evidence-only"
+      ],
+      "scenarios": [
+        "provider_disagreement",
+        "stale_data"
+      ],
+      "lanes": [
+        "provider-scheduled"
+      ],
+      "confidence": "evidence",
+      "productionEvidenceRequired": true,
+      "resultContract": "ecs-evidence-v1",
+      "workspace": "root",
+      "evidenceClass": "evidence_only",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "device-release-evidence",
+      "script": "gate:bluetooth-power-obd2-production:json",
+      "capabilities": [
+        "devices-telemetry"
+      ],
+      "classifications": [
+        "hardware/device",
+        "evidence-only"
+      ],
+      "scenarios": [
+        "permission_denial",
+        "stale_data"
+      ],
+      "lanes": [
+        "manual-hardware"
+      ],
+      "confidence": "evidence",
+      "productionEvidenceRequired": true,
+      "resultContract": "ecs-evidence-v1",
+      "workspace": "root",
+      "evidenceClass": "evidence_only",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "automotive-release-evidence",
+      "script": "gate:automotive-production:json",
+      "capabilities": [
+        "automotive"
+      ],
+      "classifications": [
+        "hardware/device",
+        "evidence-only"
+      ],
+      "scenarios": [
+        "permission_denial",
+        "stale_data"
+      ],
+      "lanes": [
+        "manual-hardware"
+      ],
+      "confidence": "evidence",
+      "productionEvidenceRequired": true,
+      "resultContract": "ecs-evidence-v1",
+      "workspace": "root",
+      "evidenceClass": "evidence_only",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "android-evidence",
+      "script": "gate:android-qa:json",
+      "capabilities": [
+        "fleet",
+        "navigate",
+        "dashboard",
+        "explore",
+        "dispatch",
+        "expedition",
+        "campops",
+        "devices-telemetry",
+        "weather-fire",
+        "offline-recovery",
+        "automotive",
+        "auth-subscription"
+      ],
+      "classifications": [
+        "hardware/device",
+        "evidence-only"
+      ],
+      "scenarios": [
+        "offline_during_active_route",
+        "permission_denial",
+        "stale_data"
+      ],
+      "lanes": [
+        "manual-hardware"
+      ],
+      "confidence": "evidence",
+      "productionEvidenceRequired": true,
+      "resultContract": "ecs-evidence-v1",
+      "workspace": "root",
+      "evidenceClass": "evidence_only",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "privacy-storage-evidence",
+      "script": "gate:privacy-storage:json",
+      "capabilities": [
+        "dispatch",
+        "expedition",
+        "offline-recovery",
+        "ai",
+        "supabase-rls",
+        "auth-subscription"
+      ],
+      "classifications": [
+        "security/RLS",
+        "evidence-only"
+      ],
+      "scenarios": [
+        "permission_denial"
+      ],
+      "lanes": [
+        "manual-hardware"
+      ],
+      "confidence": "evidence",
+      "productionEvidenceRequired": true,
+      "resultContract": "ecs-evidence-v1",
+      "workspace": "root",
+      "evidenceClass": "evidence_only",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "release-evidence-registry",
+      "script": "gate:release-evidence-registry",
+      "capabilities": [
+        "garmin"
+      ],
+      "classifications": [
+        "evidence-only"
+      ],
+      "scenarios": [
+        "external_release_evidence"
+      ],
+      "lanes": [
+        "release-candidate"
+      ],
+      "confidence": "evidence",
+      "productionEvidenceRequired": true,
+      "resultContract": "ecs-evidence-v1",
+      "notes": "Evaluates the authoritative external-evidence registry; declarations alone never resolve requirements.",
+      "workspace": "root",
+      "evidenceClass": "evidence_only",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "release-override-guard",
+      "script": "gate:release-approval-overrides",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract",
+        "security/RLS"
+      ],
+      "scenarios": [
+        "permission_denial"
+      ],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root"
+    },
+    {
+      "id": "production-visibility-report",
+      "script": "gate:production-visibility:json",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "contract",
+        "evidence-only"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "release-candidate"
+      ],
+      "confidence": "evidence",
+      "resultContract": "ecs-evidence-v1",
+      "notes": "Reports visibility state; does not grant production approval.",
+      "workspace": "root",
+      "evidenceClass": "evidence_only",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    },
+    {
+      "id": "closed-field-evidence",
+      "script": "gate:closed-field-test:json",
+      "capabilities": [
+        "*"
+      ],
+      "classifications": [
+        "evidence-only"
+      ],
+      "scenarios": [],
+      "lanes": [
+        "manual-hardware"
+      ],
+      "confidence": "evidence",
+      "productionEvidenceRequired": true,
+      "resultContract": "ecs-evidence-v1",
+      "workspace": "root",
+      "evidenceClass": "evidence_only",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "static"
+    }
+  ]
+}

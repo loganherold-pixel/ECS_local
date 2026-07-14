@@ -9,6 +9,8 @@ import type {
   TripItinerary,
   TripPlan,
 } from '../tripBuilder';
+import type { ECSJourneyLinkage } from '../lifecycle/routeTripExpeditionLifecycle';
+import type { OfflineReadinessManifest } from './offlineReadinessManifest';
 
 export type OfflinePrepPackItemType =
   | 'offline_map'
@@ -111,6 +113,7 @@ export type OfflinePrepCriticalMapSegment = {
 };
 
 export type OfflinePrepPackManifest = {
+  schemaVersion: number;
   id: string;
   generatedAt: string;
   routeId: string;
@@ -119,6 +122,10 @@ export type OfflinePrepPackManifest = {
   items: OfflinePrepPackItem[];
   progress: OfflinePrepPackProgress;
   errors: OfflinePrepPackError[];
+  tripPlanId: string | null;
+  routeAssetId: string | null;
+  lifecycle: ECSJourneyLinkage;
+  readinessManifest: OfflineReadinessManifest;
 };
 
 export type OfflinePrepPack = {

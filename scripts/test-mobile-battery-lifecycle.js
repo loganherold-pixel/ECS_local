@@ -6,6 +6,9 @@ const root = path.resolve(__dirname, '..');
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
 
 const androidAuto = read('lib', 'androidAutoBridge.ts');
+const carPlay = read('lib', 'carPlayBridge.ts');
+const automotiveRuntime = read('lib', 'automotive', 'automotiveRuntimeCoordinator.ts');
+const vehicleDisplayStore = read('lib', 'vehicleDisplayStore.ts');
 const sharedGps = read('lib', 'sharedGPSLocation.ts');
 const gpsUi = read('lib', 'gpsUIState.ts');
 const connectivity = read('lib', 'connectivity.ts');
@@ -30,6 +33,44 @@ assert.strictEqual(
   androidAuto.includes('const DATA_PUSH_INTERVAL_MS = 2_000'),
   false,
   'Android Auto must not retain the old two-second full-state heartbeat.',
+);
+assert.ok(
+  androidAuto.includes('MINIMUM_DATA_PUSH_INTERVAL_MS = 5_000') &&
+    androidAuto.includes('_schedulePendingDataPush'),
+  'Android Auto full-state pushes must align with bounded native refresh cadence and retain trailing changes.',
+);
+assert.ok(
+  carPlay.includes('if (_isConnected) {') &&
+    carPlay.includes('DISCONNECTED_PROBE_INTERVAL_MS') &&
+    carPlay.includes('BACKGROUND_DISCONNECTED_PROBE_INTERVAL_MS') &&
+    carPlay.includes('AppState.addEventListener'),
+  'CarPlay must reserve presentation timers for a confirmed connection and reduce work in background.',
+);
+assert.strictEqual(
+  carPlay.includes('const DATA_PUSH_INTERVAL_MS = 2_000'),
+  false,
+  'CarPlay must not retain the old two-second full-state heartbeat.',
+);
+assert.ok(
+  carPlay.includes('MINIMUM_DATA_PUSH_INTERVAL_MS = 5_000') &&
+    carPlay.includes('_schedulePendingDataPush'),
+  'CarPlay full-state pushes must align with bounded native refresh cadence and retain trailing changes.',
+);
+assert.ok(
+  automotiveRuntime.includes("owners.has('vehicle_display_route')") &&
+    automotiveRuntime.includes('androidAutoBridge.getStatus().isConnected') &&
+    automotiveRuntime.includes('carPlayBridge.getStatus().isConnected') &&
+    automotiveRuntime.includes('async clearNativeState()'),
+  'Automotive sensors and Vehicle Display state must sleep until a route is open or a head unit connects.',
+);
+assert.ok(
+  vehicleDisplayStore.includes('VEHICLE_DISPLAY_UI_HEARTBEAT_MS = 60_000') &&
+    vehicleDisplayStore.includes('shouldPublishAutomotiveState') &&
+    vehicleDisplayStore.includes('AUTOMOTIVE_SUPPORT_MIN_REFRESH_MS = 30_000') &&
+    vehicleDisplayStore.includes('payload === _lastPersistedPayload') &&
+    vehicleDisplayStore.includes("safeRequire('./gpsUIState')?.gpsUIState") &&
+    vehicleDisplayStore.includes('_gpsUIConsumer?.stop?.()'),
+  'Vehicle Display must suppress unchanged render/write churn and bound noncritical support refreshes',
 );
 
 assert.ok(

@@ -47,6 +47,7 @@ const CONFIDENCE_RANK: Record<CampOpsConfidence, number> = {
 };
 
 const SOURCE_RANK: Record<CampOpsDataSource, number> = {
+  established_campground: 6,
   community: 5,
   private: 5,
   group: 5,
@@ -56,7 +57,9 @@ const SOURCE_RANK: Record<CampOpsDataSource, number> = {
   route_candidate: 3,
   route_endpoint_candidate: 3,
   draw_area_candidate: 3,
+  camp_scout: 3,
   offline_dataset: 2,
+  dispersed_region: 1,
   inferred: 1,
   unknown: 0,
 };

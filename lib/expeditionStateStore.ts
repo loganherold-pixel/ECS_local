@@ -38,6 +38,20 @@ import {
   isExpeditionCloudTableUnavailable,
   markExpeditionCloudTableUnavailable,
 } from './expeditionCloudSyncAvailability';
+import {
+  buildCompletionKey,
+  canonicalJourneyEntityId,
+  decideJourneyTransition,
+  mergeJourneyLinkage,
+  type ECSJourneyLinkage,
+} from './lifecycle/routeTripExpeditionLifecycle';
+import {
+  createCanonicalExpeditionLifecycle,
+  createCanonicalExpeditionPlan,
+  normalizeCanonicalExpeditionLifecycle,
+  transitionExpeditionLifecycle,
+  type CanonicalExpeditionLifecycle,
+} from './expedition/expeditionLifecycle';
 
 const TAG = '[EXPEDITION_STATE]';
 
@@ -46,6 +60,7 @@ export type ExpeditionState = 'standby' | 'active' | 'paused' | 'complete';
 
 export interface ExpeditionRecord {
   id: string;
+  idempotencyKey?: string | null;
   state: ExpeditionState;
   activeVehicleId: string;
   vehicleName: string;
@@ -75,6 +90,25 @@ export interface ExpeditionRecord {
   homeLatitude: number | null;
   homeLongitude: number | null;
   cloudSessionId: string | null; // Supabase expedition_sessions.id
+  routeAssetId?: string | null;
+  tripPlanId?: string | null;
+  offlinePackageId?: string | null;
+  runId?: string | null;
+  lifecycle?: ECSJourneyLinkage | null;
+  canonicalLifecycle?: CanonicalExpeditionLifecycle | null;
+}
+
+export interface GeofenceExpeditionTransitionProposal {
+  id: string;
+  idempotencyKey: string;
+  direction: 'start' | 'end';
+  status: 'pending' | 'accepted' | 'rejected';
+  vehicleId: string;
+  expeditionId: string | null;
+  cycleAnchor: string;
+  reason: string;
+  createdAt: string;
+  resolvedAt: string | null;
 }
 
 export interface ExpeditionLogEntry {
@@ -179,6 +213,7 @@ const KEYS = {
   homeGeofence: 'ecs_expedition_home_geofence',
   geofenceRadius: 'ecs_expedition_geofence_radius',
   timelineEvents: 'ecs_expedition_timeline',
+  geofenceProposals: 'ecs_expedition_geofence_proposals',
 };
 
 // ── Default geofence radius (meters) ─────────────────────────
@@ -328,6 +363,47 @@ function appendLocalTimeline(event: TimelineEvent): void {
   });
 }
 
+function runtimeStateToCanonical(state: ExpeditionState): 'active' | 'paused' | 'completed' {
+  if (state === 'paused') return 'paused';
+  if (state === 'complete') return 'completed';
+  return 'active';
+}
+
+function canonicalLifecycleForRuntime(record: ExpeditionRecord): CanonicalExpeditionLifecycle {
+  return normalizeCanonicalExpeditionLifecycle(record.canonicalLifecycle, {
+    expeditionId: record.id,
+    title: record.expeditionName ?? record.vehicleName,
+    activeVehicleId: record.activeVehicleId,
+    routeAssetId: record.routeAssetId ?? null,
+    tripPlanId: record.tripPlanId ?? null,
+    offlinePackageId: record.offlinePackageId ?? null,
+    legacyStatus: runtimeStateToCanonical(record.state),
+    createdAt: record.startTime,
+    updatedAt: record.endTime ?? record.pausedAt ?? record.startTime,
+  });
+}
+
+function getLocalGeofenceProposals(): GeofenceExpeditionTransitionProposal[] {
+  try {
+    const parsed = JSON.parse(sGet(KEYS.geofenceProposals) || '[]');
+    return Array.isArray(parsed)
+      ? parsed
+          .filter((item) => item && typeof item.id === 'string')
+          .slice(-24)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalGeofenceProposals(proposals: GeofenceExpeditionTransitionProposal[]): void {
+  sSet(KEYS.geofenceProposals, JSON.stringify(proposals.slice(-24)));
+}
+
+function safeProposalPart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 72) || 'unknown';
+}
+
 // ============================================================
 // EXPEDITION STATE STORE
 // ============================================================
@@ -364,7 +440,9 @@ export const expeditionStateStore = {
     try {
       const raw = sGet(KEYS.currentExpedition);
       if (!raw) return null;
-      return JSON.parse(raw);
+      const record = JSON.parse(raw) as ExpeditionRecord;
+      record.canonicalLifecycle = canonicalLifecycleForRuntime(record);
+      return record;
     } catch { return null; }
   },
 
@@ -400,6 +478,8 @@ export const expeditionStateStore = {
 
   // ── Begin expedition ───────────────────────────────────
   beginExpedition(params: {
+    expeditionId?: string | null;
+    idempotencyKey?: string | null;
     activeVehicleId: string;
     vehicleName: string;
     expeditionName?: string;
@@ -418,9 +498,74 @@ export const expeditionStateStore = {
     latitude?: number | null;
     longitude?: number | null;
     userId?: string | null;
+    routeAssetId?: string | null;
+    tripPlanId?: string | null;
+    offlinePackageId?: string | null;
+    runId?: string | null;
+    lifecycle?: ECSJourneyLinkage | null;
+    transitionCause?: 'navigate' | 'dispatch' | 'geofence' | 'operator' | 'system';
   }): ExpeditionRecord {
+    const existing = this.getCurrentExpedition();
+    if (existing?.state === 'active' || existing?.state === 'paused') {
+      return existing;
+    }
+    if (
+      existing?.state === 'complete' &&
+      params.idempotencyKey &&
+      existing.idempotencyKey === params.idempotencyKey
+    ) {
+      return existing;
+    }
+    const recordId = params.expeditionId?.trim() || uuid();
+    const startTime = params.startTime ?? new Date().toISOString();
+    const identity = {
+      routeAssetId: params.routeAssetId
+        ? canonicalJourneyEntityId('route_asset', params.routeAssetId)
+        : null,
+      tripPlanId: params.tripPlanId ?? null,
+      offlinePackageId: params.offlinePackageId ?? null,
+      expeditionId: canonicalJourneyEntityId('expedition', recordId),
+      recordedRunId: params.runId
+        ? canonicalJourneyEntityId('recorded_run', params.runId)
+        : null,
+    };
+    const lifecycle = mergeJourneyLinkage(params.lifecycle, {
+      phase: 'active',
+      identity: {
+        ...identity,
+        completedOutcomeId: buildCompletionKey(identity),
+      },
+      activeVehicleId: params.activeVehicleId,
+      updatedAt: startTime,
+    });
+    const canonicalPlan = createCanonicalExpeditionPlan({
+      expeditionId: recordId,
+      title: params.expeditionName ?? params.vehicleName,
+      activeVehicleId: params.activeVehicleId,
+      routeAssetId: params.routeAssetId,
+      tripPlanId: params.tripPlanId,
+      offlinePackageId: params.offlinePackageId,
+      createdAt: startTime,
+      updatedAt: startTime,
+    });
+    const readyLifecycle = createCanonicalExpeditionLifecycle({
+      plan: canonicalPlan,
+      initialState: 'ready',
+      cause: params.transitionCause ?? 'system',
+      occurredAt: startTime,
+      allowDegradedPlanning: true,
+    });
+    const activeLifecycleResult = transitionExpeditionLifecycle(readyLifecycle, 'active', {
+      idempotencyKey: params.idempotencyKey?.trim() || `runtime-begin:${recordId}`,
+      cause: params.transitionCause ?? 'system',
+      actor: params.transitionCause === 'geofence' ? 'geofence' : params.transitionCause === 'operator' ? 'operator' : 'system',
+      reason: 'Live Expedition runtime started.',
+      occurredAt: startTime,
+      allowDegradedPlanning: true,
+    });
     const record: ExpeditionRecord = {
-      id: uuid(),
+      id: recordId,
+      idempotencyKey: params.idempotencyKey?.trim() || null,
       state: 'active',
       activeVehicleId: params.activeVehicleId,
       vehicleName: params.vehicleName,
@@ -434,7 +579,7 @@ export const expeditionStateStore = {
       commsNotes: params.commsNotes,
       privacyMode: params.privacyMode,
       joinMode: params.joinMode,
-      startTime: params.startTime ?? new Date().toISOString(),
+      startTime,
       endTime: null,
       pausedAt: null,
       totalPausedMs: 0,
@@ -450,6 +595,12 @@ export const expeditionStateStore = {
       homeLatitude: params.latitude ?? null,
       homeLongitude: params.longitude ?? null,
       cloudSessionId: null,
+      routeAssetId: params.routeAssetId ?? null,
+      tripPlanId: params.tripPlanId ?? null,
+      offlinePackageId: params.offlinePackageId ?? null,
+      runId: params.runId ?? null,
+      lifecycle,
+      canonicalLifecycle: activeLifecycleResult.lifecycle,
     };
 
 
@@ -499,9 +650,24 @@ export const expeditionStateStore = {
   pauseExpedition(params?: { userId?: string | null }): ExpeditionRecord | null {
     const record = this.getCurrentExpedition();
     if (!record || record.state !== 'active') return null;
+    if (!decideJourneyTransition(record.lifecycle?.phase ?? 'active', 'paused').accepted) return null;
+    const canonical = canonicalLifecycleForRuntime(record);
+    const canonicalResult = transitionExpeditionLifecycle(canonical, 'paused', {
+      idempotencyKey: `runtime-pause:${record.id}:${canonical.revision}`,
+      cause: 'operator',
+      actor: 'operator',
+      reason: 'Operator paused the live Expedition.',
+      allowDegradedPlanning: true,
+    });
+    if (!canonicalResult.decision.accepted) return null;
 
     record.state = 'paused';
     record.pausedAt = new Date().toISOString();
+    record.lifecycle = mergeJourneyLinkage(record.lifecycle, {
+      phase: 'paused',
+      updatedAt: record.pausedAt,
+    });
+    record.canonicalLifecycle = canonicalResult.lifecycle;
 
     sSet(KEYS.currentExpedition, JSON.stringify(record));
 
@@ -524,6 +690,16 @@ export const expeditionStateStore = {
   resumeExpedition(params?: { userId?: string | null }): ExpeditionRecord | null {
     const record = this.getCurrentExpedition();
     if (!record || record.state !== 'paused') return null;
+    if (!decideJourneyTransition(record.lifecycle?.phase ?? 'paused', 'active').accepted) return null;
+    const canonical = canonicalLifecycleForRuntime(record);
+    const canonicalResult = transitionExpeditionLifecycle(canonical, 'active', {
+      idempotencyKey: `runtime-resume:${record.id}:${canonical.revision}`,
+      cause: 'operator',
+      actor: 'operator',
+      reason: 'Operator resumed the live Expedition.',
+      allowDegradedPlanning: true,
+    });
+    if (!canonicalResult.decision.accepted) return null;
 
     // Accumulate paused duration
     if (record.pausedAt) {
@@ -533,6 +709,11 @@ export const expeditionStateStore = {
 
     record.state = 'active';
     record.pausedAt = null;
+    record.lifecycle = mergeJourneyLinkage(record.lifecycle, {
+      phase: 'active',
+      updatedAt: new Date().toISOString(),
+    });
+    record.canonicalLifecycle = canonicalResult.lifecycle;
 
     sSet(KEYS.currentExpedition, JSON.stringify(record));
 
@@ -559,9 +740,12 @@ export const expeditionStateStore = {
     distance?: number | null;
     peakRemoteness?: number | null;
     userId?: string | null;
+    transitionCause?: 'operator' | 'geofence' | 'system';
+    idempotencyKey?: string | null;
   }): ExpeditionRecord | null {
     const record = this.getCurrentExpedition();
     if (!record || (record.state !== 'active' && record.state !== 'paused')) return null;
+    if (!decideJourneyTransition(record.lifecycle?.phase ?? record.state, 'completed').accepted) return null;
 
     // If ending while paused, accumulate final pause duration
     if (record.state === 'paused' && record.pausedAt) {
@@ -570,6 +754,26 @@ export const expeditionStateStore = {
     }
 
     const endTime = new Date().toISOString();
+    const canonical = canonicalLifecycleForRuntime(record);
+    const completionKey = params?.idempotencyKey?.trim() || `runtime-complete:${record.id}:${canonical.revision}`;
+    const completingResult = transitionExpeditionLifecycle(canonical, 'completing', {
+      idempotencyKey: `${completionKey}:begin`,
+      cause: params?.transitionCause ?? 'operator',
+      actor: params?.transitionCause === 'geofence' ? 'geofence' : params?.transitionCause === 'operator' ? 'operator' : 'system',
+      reason: 'Live Expedition completion captured.',
+      occurredAt: endTime,
+      allowDegradedPlanning: true,
+    });
+    if (!completingResult.decision.accepted) return null;
+    const completedResult = transitionExpeditionLifecycle(completingResult.lifecycle, 'completed', {
+      idempotencyKey: `${completionKey}:commit`,
+      cause: params?.transitionCause ?? 'operator',
+      actor: params?.transitionCause === 'geofence' ? 'geofence' : params?.transitionCause === 'operator' ? 'operator' : 'system',
+      reason: 'Live Expedition outcome committed.',
+      occurredAt: endTime,
+      allowDegradedPlanning: true,
+    });
+    if (!completedResult.decision.accepted) return null;
     const startMs = new Date(record.startTime).getTime();
     const endMs = new Date(endTime).getTime();
     // Total wall-clock duration minus accumulated paused time
@@ -585,6 +789,11 @@ export const expeditionStateStore = {
     record.endFuelLevel = params?.endFuelLevel ?? null;
     record.endWaterLevel = params?.endWaterLevel ?? null;
     record.peakRemoteness = params?.peakRemoteness ?? record.peakRemoteness;
+    record.lifecycle = mergeJourneyLinkage(record.lifecycle, {
+      phase: 'completed',
+      updatedAt: endTime,
+    });
+    record.canonicalLifecycle = completedResult.lifecycle;
 
     // Calculate deltas
     if (record.startFuelLevel != null && record.endFuelLevel != null) {
@@ -671,6 +880,74 @@ export const expeditionStateStore = {
 
 
   // ── Geofence ───────────────────────────────────────────
+  getGeofenceTransitionProposals(): GeofenceExpeditionTransitionProposal[] {
+    return getLocalGeofenceProposals();
+  },
+
+  proposeGeofenceTransition(input: {
+    direction: 'start' | 'end';
+    vehicleId: string;
+    expeditionId?: string | null;
+    reason?: string | null;
+  }): { proposal: GeofenceExpeditionTransitionProposal; idempotent: boolean } {
+    const proposals = getLocalGeofenceProposals();
+    const current = this.getCurrentExpedition();
+    const mostRecentAcceptedEnd = [...proposals]
+      .reverse()
+      .find((proposal) => proposal.direction === 'end' && proposal.status === 'accepted');
+    const cycleAnchor = input.direction === 'end'
+      ? input.expeditionId ?? current?.id ?? 'missing-expedition'
+      : mostRecentAcceptedEnd?.id ?? 'initial-cycle';
+    const idempotencyKey = [
+      'geofence',
+      input.direction,
+      safeProposalPart(input.vehicleId),
+      safeProposalPart(cycleAnchor),
+    ].join(':');
+    const existing = proposals.find((proposal) => proposal.idempotencyKey === idempotencyKey);
+    if (existing) return { proposal: existing, idempotent: true };
+    const createdAt = new Date().toISOString();
+    const proposal: GeofenceExpeditionTransitionProposal = {
+      id: `geofence-proposal:${idempotencyKey}`,
+      idempotencyKey,
+      direction: input.direction,
+      status: 'pending',
+      vehicleId: input.vehicleId,
+      expeditionId: input.expeditionId ?? current?.id ?? null,
+      cycleAnchor,
+      reason: input.reason?.trim() || (
+        input.direction === 'start'
+          ? 'Confirmed departure from the home geofence.'
+          : 'Confirmed return to the home geofence.'
+      ),
+      createdAt,
+      resolvedAt: null,
+    };
+    saveLocalGeofenceProposals([...proposals, proposal]);
+    return { proposal, idempotent: false };
+  },
+
+  resolveGeofenceTransitionProposal(
+    proposalId: string,
+    status: 'accepted' | 'rejected',
+  ): GeofenceExpeditionTransitionProposal | null {
+    const proposals = getLocalGeofenceProposals();
+    const existing = proposals.find((proposal) => proposal.id === proposalId);
+    if (!existing) return null;
+    if (existing.status !== 'pending') return existing;
+    const resolved: GeofenceExpeditionTransitionProposal = {
+      ...existing,
+      status,
+      resolvedAt: new Date().toISOString(),
+    };
+    saveLocalGeofenceProposals(proposals.map((proposal) => proposal.id === proposalId ? resolved : proposal));
+    return resolved;
+  },
+
+  clearGeofenceTransitionProposalsForTests(): void {
+    sSet(KEYS.geofenceProposals, JSON.stringify([]));
+  },
+
   setHomeGeofence(lat: number, lng: number): void {
     sSet(KEYS.homeGeofence, JSON.stringify({ lat, lng }));
   },
@@ -757,7 +1034,7 @@ export const expeditionStateStore = {
   },
 
   _addToLog(record: ExpeditionRecord): void {
-    const log = this.getLog();
+    const log = this.getLog().filter((existing) => existing.id !== record.id);
     const entry: ExpeditionLogEntry = {
       id: record.id,
       vehicleId: record.activeVehicleId,

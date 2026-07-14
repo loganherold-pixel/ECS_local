@@ -434,7 +434,7 @@ assertIncludes(
 );
 assertIncludes(
   navigateRouteHandler,
-  'router.back();',
+  'goBack();',
   'Navigate Route should return to the map after starting navigation.',
 );
 
@@ -570,7 +570,7 @@ assertIncludes(
 );
 assertIncludes(
   mapRendererSource,
-  'setUserLocation(payload.userLocation || null, !!payload.showUserLocation',
+  'setUserLocation(\n          payload.userLocation || null,\n          !!payload.showUserLocation,',
   'Dynamic map payload should keep user dot visible during active navigation updates.',
 );
 assertIncludes(cssBlock(mapRendererSource, '.marker-user {'), 'z-index: 1000', 'User dot should render above map layers.');

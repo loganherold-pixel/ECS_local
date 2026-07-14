@@ -1,13 +1,9 @@
-import { getActiveVehicleContext } from './activeVehicleContext';
+import { getActiveVehicleContext, subscribeActiveVehicleState } from './activeVehicleContext';
 import { connectivity } from './connectivity';
 import { connectivityIntelStore } from './connectivityIntelStore';
 import { navigateRouteSessionStore } from './navigateRouteSessionStore';
 import { routeStore } from './routeStore';
 import { teamStore } from './teamStore';
-import { consumablesStore } from './consumablesStore';
-import { loadoutItemStore, loadoutStore } from './loadoutStore';
-import { vehicleSetupStore } from './vehicleSetupStore';
-import { vehicleStore } from './vehicleStore';
 import type {
   IncidentCommunicationStatus,
   IncidentCoordinate,
@@ -274,11 +270,7 @@ export function subscribeIncidentRecoveryContext(listener: Listener): () => void
   add(routeStore.subscribe, notify);
   add(navigateRouteSessionStore.subscribe, notify);
   add(teamStore.subscribe, notify);
-  add(vehicleSetupStore.subscribe, notify);
-  add(vehicleStore.subscribe, notify);
-  add(consumablesStore.subscribe, notify);
-  add(loadoutStore.subscribe, notify);
-  add(loadoutItemStore.subscribe, notify);
+  add(subscribeActiveVehicleState, notify);
   add(connectivityIntelStore.subscribe, notify);
   try {
     unsubscribers.push(connectivity.onStatusChange(() => notify()));

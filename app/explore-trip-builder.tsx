@@ -60,7 +60,9 @@ import {
   getTripItinerarySummary,
   getTripConfidenceSummary,
   isUsableRouteContext,
-  loadTripBuilderRouteHandoff,
+  loadTripBuilderRouteHandoffAsync,
+  loadTripBuilderPlanState,
+  saveTripBuilderPlanState,
   mergeRealTripBuilderRouteOptions,
   reorderTripItineraryStop,
   rankApproachResupplyOptions,
@@ -115,18 +117,19 @@ import {
 } from '../lib/explore/exploreTripBuilderWizard';
 import { liveTrailPackCatalogStore } from '../lib/explore/liveTrailPackCatalog';
 import { trailPackToExpeditionOpportunity } from '../lib/explore/trailPacks';
-import { routeStore } from '../lib/routeStore';
-import { runStore } from '../lib/runStore';
+import { routeStore, waitForRouteStoreHydration } from '../lib/routeStore';
+import { runStore, waitForRunStoreHydration } from '../lib/runStore';
 import {
   getOfflinePrepRouteCoordinates,
   saveOfflinePrepPackHandoff,
 } from '../lib/offlinePrepPack';
 import {
-  loadExplorePlanningRouteContext,
+  loadExplorePlanningRouteContextAsync,
   upsertExplorePlanningRoute,
 } from '../lib/explore/explorePlanningRouteContextStore';
 import { simplifyRouteGeometryForPreview } from '../lib/explore/exploreMapPreviewOptimization';
 import { activeTripModeStore } from '../lib/activeTripMode';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import { loadoutItemStore, loadoutStore } from '../lib/loadoutStore';
 import {
   createRoadSearchSessionToken,
@@ -160,6 +163,11 @@ let lastTripBuilderPlanState: {
   itinerarySaved: false,
   itineraryEditSession: null,
 };
+
+function updateLastTripBuilderPlanState(next: typeof lastTripBuilderPlanState): void {
+  lastTripBuilderPlanState = next;
+  void saveTripBuilderPlanState(next);
+}
 
 const TRIP_TYPE_OPTIONS: { value: TripType; label: string }[] = [
   { value: 'day_trip', label: 'Day Trip' },
@@ -3873,6 +3881,7 @@ function BailoutPlanPickerOverlay({
 
 export default function ExploreTripBuilderScreen() {
   const router = useRouter();
+  const { push: pushSingleFlight, returnTo: returnSingleFlight } = useECSNavigation();
   const params = useLocalSearchParams<{ routeId?: string; setup?: string }>();
   const insets = useSafeAreaInsets();
   const bottomClearance = getShellBottomClearance(insets.bottom, 8);
@@ -3965,13 +3974,13 @@ export default function ExploreTripBuilderScreen() {
   const closeTripPlanOverlay = useCallback(() => {
     setPlanMapScope(null);
     setPlanModalVisible(false);
-    lastTripBuilderPlanState = {
+    updateLastTripBuilderPlanState({
       selectedRouteId,
       plan,
       visible: false,
       itinerarySaved,
       itineraryEditSession: savedTripItineraryEditSession,
-    };
+    });
   }, [itinerarySaved, plan, savedTripItineraryEditSession, selectedRouteId]);
 
   useFocusEffect(
@@ -4035,9 +4044,25 @@ export default function ExploreTripBuilderScreen() {
     setLoading(true);
     const routeLoadTask = InteractionManager.runAfterInteractions(() => {
       if (cancelled) return;
+      void (async () => {
       try {
-        const handoff = loadTripBuilderRouteHandoff();
-        const exploreContext = loadExplorePlanningRouteContext();
+        const [handoff, exploreContext, persistedPlanState] = await Promise.all([
+          loadTripBuilderRouteHandoffAsync(),
+          loadExplorePlanningRouteContextAsync(),
+          loadTripBuilderPlanState(),
+          waitForRouteStoreHydration(),
+          waitForRunStoreHydration(),
+        ]);
+        if (cancelled) return;
+        if (persistedPlanState) {
+          lastTripBuilderPlanState = {
+            selectedRouteId: persistedPlanState.selectedRouteId,
+            plan: persistedPlanState.plan,
+            visible: persistedPlanState.visible,
+            itinerarySaved: persistedPlanState.itinerarySaved,
+            itineraryEditSession: persistedPlanState.itineraryEditSession,
+          };
+        }
         const suggestedRoutes = (exploreContext?.routes ?? []) as unknown as ExpeditionOpportunity[];
         const handoffDraftItinerary = handoff?.draftItinerary ?? null;
         const handoffRoute = handoff?.route
@@ -4104,6 +4129,7 @@ export default function ExploreTripBuilderScreen() {
       } finally {
         if (!cancelled) setLoading(false);
       }
+      })();
     });
     return () => {
       cancelled = true;
@@ -5079,13 +5105,13 @@ export default function ExploreTripBuilderScreen() {
     setCampPickerVisible(false);
     setCampPlanPins([]);
     setResupplyOverrides({});
-    lastTripBuilderPlanState = {
+    updateLastTripBuilderPlanState({
       selectedRouteId: routeId,
       plan: null,
       visible: false,
       itinerarySaved: false,
       itineraryEditSession: null,
-    };
+    });
   }, [routes]);
 
   const handleImportRouteFile = async () => {
@@ -5147,13 +5173,13 @@ export default function ExploreTripBuilderScreen() {
       setCampPlanPins([]);
       setResupplyOverrides({});
       setRouteImportState({ status: 'success', message: `${fileName} ready for Trip Builder.` });
-      lastTripBuilderPlanState = {
+      updateLastTripBuilderPlanState({
         selectedRouteId: importedRoute.id,
         plan: null,
         visible: false,
         itinerarySaved: false,
         itineraryEditSession: null,
-      };
+      });
     } catch (importError) {
       setRouteImportState({
         status: 'error',
@@ -5319,13 +5345,13 @@ export default function ExploreTripBuilderScreen() {
       setInsertState(null);
       setItinerarySaved(false);
       setResupplyOverrides({});
-      lastTripBuilderPlanState = {
+      updateLastTripBuilderPlanState({
         selectedRouteId: String(selectedRoute.id),
         plan: finalizedPlan,
         visible: true,
         itinerarySaved: false,
         itineraryEditSession: null,
-      };
+      });
     } catch {
       setError('Trip Builder could not build a plan from the selected route.');
     } finally {
@@ -5374,13 +5400,13 @@ export default function ExploreTripBuilderScreen() {
     setItinerarySearchError(null);
     setItineraryEditMode(false);
     setItinerarySaved(true);
-    lastTripBuilderPlanState = {
+    updateLastTripBuilderPlanState({
       selectedRouteId,
       plan: nextPlan,
       visible: planModalVisible,
       itinerarySaved: true,
       itineraryEditSession: nextTripItineraryEditSession,
-    };
+    });
   }, [draftItineraryStops, draftTripItineraryEditSession, plan, planModalVisible, selectedRouteId]);
 
   const handleAcceptItineraryReviewItem = useCallback((itemId: string) => {
@@ -5582,12 +5608,12 @@ export default function ExploreTripBuilderScreen() {
       }, 'trip_builder');
     }
     hapticMicro();
-    router.push('/explore-offline-prep-pack');
+    pushSingleFlight('/explore-offline-prep-pack');
   }, [
     editableTripItinerary,
     plan,
     readinessReference,
-    router,
+    pushSingleFlight,
     selectedPreparedRoutePoints,
     selectedRoute,
     selectedTripItinerary,
@@ -5938,7 +5964,7 @@ export default function ExploreTripBuilderScreen() {
 
   const handleBackToSuggestedRoutes = () => {
     clearTripBuilderRouteHandoff();
-    router.push('/discover');
+    returnSingleFlight('/discover');
   };
 
   return (

@@ -437,12 +437,15 @@ const mapRendererSource = read('components/navigate/MapRenderer.tsx');
 });
 
 assert.ok(
-  navigateSource.includes('fetchEstablishedCampgroundsForMap({ bbox: request.bbox, logFailures: false })') &&
+  navigateSource.includes('fetchEstablishedCampgroundsForMap({') &&
+    navigateSource.includes('bbox: requestBbox') &&
+    navigateSource.includes('signal: request.signal') &&
     navigateSource.includes('fetchEstablishedCampgroundDetail({ id: selectedId })') &&
     navigateSource.includes("layer: 'established_campgrounds'") &&
-    navigateSource.includes('CampLayerFetchCoordinator') &&
+    navigateSource.includes('navigateMapLayerCoordinatorRef') &&
+    navigateSource.includes('request.viewportFingerprint') &&
     navigateSource.includes('toEstablishedCampsiteFeatureCollection(establishedCampgroundsForMap)'),
-  'Navigate should schedule ECS-owned campground fetches, refresh tapped campground detail, cache by stable bbox key, and feed MapRenderer GeoJSON.',
+  'Navigate should schedule cancellable ECS-owned campground fetches, refresh tapped campground detail, cache by viewport fingerprint, and feed MapRenderer GeoJSON.',
 );
 assert.ok(
   !navigateSource.includes('setEstablishedCampsitesEnabled((current) => {'),

@@ -7,6 +7,12 @@ import {
   type RouteGeometryViewportResult,
 } from './routeGeometryViewport';
 
+function createAbortError(): Error {
+  const error = new Error('Request canceled');
+  error.name = 'AbortError';
+  return error;
+}
+
 export function isRouteGeometryViewportOverlayFeatureEnabled(): boolean {
   const value =
     typeof process !== 'undefined'
@@ -75,7 +81,9 @@ export async function fetchRouteGeometryViewportSegments(args: {
   limit?: number;
   vehicleClass?: string | null;
   includeReferenceGeometry?: boolean;
+  signal?: AbortSignal;
 }): Promise<RouteGeometryViewportResult> {
+  if (args.signal?.aborted) throw createAbortError();
   let result;
   try {
     result = await supabase.functions.invoke('route-geometry-segments', {
@@ -87,6 +95,7 @@ export async function fetchRouteGeometryViewportSegments(args: {
         includeReferenceGeometry: args.includeReferenceGeometry !== false,
       },
     });
+    if (args.signal?.aborted) throw createAbortError();
   } catch (invokeError) {
     throw new Error(
       friendlyRouteGeometryViewportError(

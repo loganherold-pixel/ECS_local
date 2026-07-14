@@ -6,6 +6,10 @@ import type {
   CampSuitabilityScores,
 } from './campOpsTypes';
 import { normalizeCampOpsScore } from './campOpsTypes';
+import {
+  buildCampCandidateDecisionDetails,
+  type CampCandidateDecisionDetail,
+} from './campOpsCandidateNormalization';
 
 export type CampOpsCampIntelMetric = {
   label: string;
@@ -17,12 +21,13 @@ export type CampOpsCampIntelViewModel = {
   candidateId: string;
   title: string;
   campName: string;
-  statusLabel: 'ECS-Inferred Camp Candidate';
+  statusLabel: string;
   overallScore: string;
   sourceConfidence: string;
   metrics: CampOpsCampIntelMetric[];
   rationale: string;
   uncertaintyNotes: string[];
+  sourceDetails: CampCandidateDecisionDetail[];
   latitude: number;
   longitude: number;
 };
@@ -115,6 +120,28 @@ function candidatePool(recommendationSet: CampRecommendationSet): CampCandidate[
   ].filter((candidate): candidate is CampCandidate => !!candidate);
 }
 
+function candidateStatusLabel(candidate: CampCandidate): string {
+  switch (candidate.candidateClass) {
+    case 'established':
+      return 'Established Campground';
+    case 'community':
+      return candidate.recommendationVisibility === 'blocked' ? 'Community Review Pending' : 'Community Campsite';
+    case 'private':
+    case 'group':
+    case 'manual':
+    case 'imported':
+      return 'Personal Camp Record';
+    case 'dispersed_region':
+      return 'Dispersed Camping Research Area';
+    case 'camp_scout':
+      return candidate.recommendationVisibility === 'research_only' ? 'CampScout Research Candidate' : 'CampScout Candidate';
+    case 'generated':
+    case 'unknown':
+    default:
+      return 'ECS-Inferred Camp Candidate';
+  }
+}
+
 function candidateRationale(
   candidate: CampCandidate,
   scores: CampSuitabilityScores | undefined,
@@ -191,7 +218,7 @@ export function buildCampOpsCampIntelViewModel(
     candidateId: candidate.id,
     title: rank ? `Camp ${rank}` : candidate.name || 'Camp candidate',
     campName: candidate.name || (rank ? `Camp ${rank}` : 'Camp candidate'),
-    statusLabel: 'ECS-Inferred Camp Candidate',
+    statusLabel: candidateStatusLabel(candidate),
     overallScore: formatScore(overallScore),
     sourceConfidence: confidenceLabel(candidate.sourceConfidence),
     metrics: [
@@ -228,6 +255,7 @@ export function buildCampOpsCampIntelViewModel(
     ],
     rationale: candidateRationale(candidate, scores, enrichment, recommendationSet),
     uncertaintyNotes: uncertaintyNotes(candidate, enrichment, recommendationSet),
+    sourceDetails: buildCampCandidateDecisionDetails(candidate, enrichment),
     latitude,
     longitude,
   };

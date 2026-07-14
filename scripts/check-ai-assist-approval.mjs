@@ -24,6 +24,9 @@ function pathsFor(root) {
     readinessPath: path.join(root, 'docs', 'campops', 'closed_field_test_readiness.md'),
     configPath: path.join(root, 'lib', 'campops', 'campOpsRecommendationConfig.ts'),
     aiAssistPath: path.join(root, 'lib', 'campops', 'campOpsAiAssist.ts'),
+    policyBoundaryPath: path.join(root, 'lib', 'ai', 'aiPolicyBoundary.ts'),
+    requestCoordinatorPath: path.join(root, 'lib', 'ai', 'aiRequestCoordinator.ts'),
+    truthfulnessTestPath: path.join(root, 'scripts', 'test-ai-truthfulness-contract.js'),
     smokeDir: path.join(root, '.smoke'),
     resultPath: path.join(root, RESULT_RELATIVE_PATH),
   };
@@ -133,6 +136,32 @@ function detectAiHardGateGuardrails(aiAssistCode) {
     /Unknown legal status must never be narrated as allowed/i.test(aiAssistCode);
 }
 
+function detectCentralPolicyBoundary(source) {
+  return /resolveECSFeatureVisibility/.test(source) &&
+    /rollout_context_missing/.test(source) &&
+    /change_deterministic_status/.test(source) &&
+    /redactECSAIContext/.test(source) &&
+    /inspectECSAIProviderOutput/.test(source);
+}
+
+function detectResourceSafeRequestCoordinator(source) {
+  return /inFlight/.test(source) &&
+    /AbortController/.test(source) &&
+    /DEFAULT_ECS_AI_REQUEST_TIMEOUT_MS/.test(source) &&
+    /DEFAULT_ECS_AI_MAX_RETRIES/.test(source) &&
+    /cacheTtlMs/.test(source) &&
+    /suppressionReasons/.test(source);
+}
+
+function detectTruthfulnessContractSuite(source) {
+  return /hallucinated coordinate/.test(source) &&
+    /hallucinated weather/.test(source) &&
+    /attempted status override/.test(source) &&
+    /prompt injection/.test(source) &&
+    /timeout/.test(source) &&
+    /request_deduplication/.test(source);
+}
+
 function approvalComplete({ status, approvalStatus, activeModelConfig, approvalDate, approver, realModelExecuted, now }) {
   return /^completed?|run|approved$/i.test(status ?? '') &&
     /^approved$/i.test(approvalStatus ?? '') &&
@@ -160,6 +189,9 @@ export function buildAiAssistApprovalResult(options = {}) {
     readinessPath,
     configPath,
     aiAssistPath,
+    policyBoundaryPath,
+    requestCoordinatorPath,
+    truthfulnessTestPath,
   } = pathsFor(root);
 
   const review = readIfExists(reviewPath);
@@ -167,10 +199,16 @@ export function buildAiAssistApprovalResult(options = {}) {
   const readiness = readIfExists(readinessPath);
   const config = readIfExists(configPath);
   const aiAssistCode = readIfExists(aiAssistPath);
+  const policyBoundaryCode = readIfExists(policyBoundaryPath);
+  const requestCoordinatorCode = readIfExists(requestCoordinatorPath);
+  const truthfulnessTestCode = readIfExists(truthfulnessTestPath);
   const missingFiles = [];
   if (!review) missingFiles.push(path.relative(root, reviewPath));
   if (!config) missingFiles.push(path.relative(root, configPath));
   if (!aiAssistCode) missingFiles.push(path.relative(root, aiAssistPath));
+  if (!policyBoundaryCode) missingFiles.push(path.relative(root, policyBoundaryPath));
+  if (!requestCoordinatorCode) missingFiles.push(path.relative(root, requestCoordinatorPath));
+  if (!truthfulnessTestCode) missingFiles.push(path.relative(root, truthfulnessTestPath));
 
   const reviewSection = extractSection(review, 'AI Real-Output Review');
   const missingReviewFields = reviewSection
@@ -213,6 +251,9 @@ export function buildAiAssistApprovalResult(options = {}) {
   const featureFlagDefault = detectFeatureFlagDefault(config);
   const runtimeApprovalGatePresent = detectRuntimeApprovalGate(config);
   const hardGateGuardrailsPresent = detectAiHardGateGuardrails(aiAssistCode);
+  const centralPolicyBoundaryPresent = detectCentralPolicyBoundary(policyBoundaryCode);
+  const resourceSafeRequestCoordinatorPresent = detectResourceSafeRequestCoordinator(requestCoordinatorCode);
+  const truthfulnessContractSuitePresent = detectTruthfulnessContractSuite(truthfulnessTestCode);
   const rawPromptEvidencePresent = detectRawPromptEvidence(review);
   const privateEvidencePresent = detectPrivateEvidence(review);
 
@@ -223,6 +264,9 @@ export function buildAiAssistApprovalResult(options = {}) {
   if (featureFlagDefault !== false) blockers.push('campops_ai_assist_default_not_false');
   if (!runtimeApprovalGatePresent) blockers.push('ai_assist_runtime_approval_gate_missing');
   if (!hardGateGuardrailsPresent) blockers.push('ai_assist_hard_gate_guardrails_missing');
+  if (!centralPolicyBoundaryPresent) blockers.push('ai_central_policy_boundary_missing');
+  if (!resourceSafeRequestCoordinatorPresent) blockers.push('ai_resource_safe_request_coordinator_missing');
+  if (!truthfulnessContractSuitePresent) blockers.push('ai_truthfulness_contract_suite_missing');
   if (rawPromptsExcluded !== true) blockers.push('raw_prompts_not_explicitly_excluded_from_shared_docs');
   if (privateDataExcluded !== true) blockers.push('private_data_not_explicitly_excluded_from_shared_docs');
   if (aiMayOverrideHardGates !== false) blockers.push('ai_hard_gate_override_not_explicitly_forbidden');
@@ -274,6 +318,9 @@ export function buildAiAssistApprovalResult(options = {}) {
       featureFlagDefault,
       runtimeApprovalGatePresent,
       hardGateGuardrailsPresent,
+      centralPolicyBoundaryPresent,
+      resourceSafeRequestCoordinatorPresent,
+      truthfulnessContractSuitePresent,
     },
     evidence: {
       rawPromptEvidencePresent,
@@ -323,6 +370,9 @@ export function formatAiAssistApprovalResult(result, options = {}) {
   lines.push(`- campopsAiAssistEnabled default false: ${result.config.featureFlagDefault === false ? 'yes' : 'no'}`);
   lines.push(`- Runtime approval gate present: ${result.config.runtimeApprovalGatePresent ? 'yes' : 'no'}`);
   lines.push(`- Hard-gate guardrails present: ${result.config.hardGateGuardrailsPresent ? 'yes' : 'no'}`);
+  lines.push(`- Central AI policy boundary present: ${result.config.centralPolicyBoundaryPresent ? 'yes' : 'no'}`);
+  lines.push(`- Resource-safe AI request coordinator present: ${result.config.resourceSafeRequestCoordinatorPresent ? 'yes' : 'no'}`);
+  lines.push(`- Truthfulness contract suite present: ${result.config.truthfulnessContractSuitePresent ? 'yes' : 'no'}`);
   lines.push(`- Raw prompt evidence found: ${result.evidence.rawPromptEvidencePresent ? 'yes' : 'no'}`);
   lines.push(`- Private data evidence found: ${result.evidence.privateEvidencePresent ? 'yes' : 'no'}`);
 

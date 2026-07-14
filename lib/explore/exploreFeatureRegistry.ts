@@ -1,3 +1,10 @@
+import {
+  createRuntimeFeatureVisibilityContext,
+  resolveECSFeatureVisibility,
+  type ECSDeploymentEnvironment,
+  type ECSFeatureId,
+} from '../features/featureVisibilityRegistry';
+
 export type ExploreFeatureId =
   | 'suggested_routes'
   | 'route_filters'
@@ -24,10 +31,12 @@ export type ExploreFeatureDefinition = {
   status: ExploreFeatureStatus;
   featureFlagKey?: ExploreFeatureFlagKey;
   route?: string;
+  centralFeatureId?: ECSFeatureId;
 };
 
 export type ExploreFeatureRegistryOptions = {
   env?: Record<string, string | undefined>;
+  environment?: ECSDeploymentEnvironment;
 };
 
 export const EXPLORE_FEATURE_CATEGORY_STYLES: Record<
@@ -77,6 +86,7 @@ const EXPLORE_FEATURE_DEFINITIONS: Omit<ExploreFeatureDefinition, 'enabled'>[] =
     enabledByDefault: true,
     status: 'live',
     featureFlagKey: 'EXPO_PUBLIC_ECS_EXPLORE_TRIP_BUILDER',
+    centralFeatureId: 'explore_trip_builder',
     route: '/explore-trip-builder',
   },
   {
@@ -89,6 +99,7 @@ const EXPLORE_FEATURE_DEFINITIONS: Omit<ExploreFeatureDefinition, 'enabled'>[] =
     enabledByDefault: true,
     status: 'live',
     featureFlagKey: 'EXPO_PUBLIC_ECS_EXPLORE_OFFLINE_PREP_PACK',
+    centralFeatureId: 'explore_offline_prep',
     route: '/explore-offline-prep-pack',
   },
 ];
@@ -110,9 +121,19 @@ function readFlagValue(value: string | undefined): boolean | null {
 }
 
 export function resolveExploreFeatureEnabled(
-  feature: Pick<ExploreFeatureDefinition, 'enabledByDefault' | 'featureFlagKey'>,
+  feature: Pick<ExploreFeatureDefinition, 'enabledByDefault' | 'featureFlagKey' | 'centralFeatureId'>,
   options: ExploreFeatureRegistryOptions = {},
 ): boolean {
+  if (feature.centralFeatureId) {
+    const context = createRuntimeFeatureVisibilityContext({
+      environment: options.environment ?? 'production',
+      env: options.env ?? getRuntimeEnv(),
+      online: true,
+      authenticated: true,
+      hasFullAccess: true,
+    });
+    return resolveECSFeatureVisibility(feature.centralFeatureId, context).visible;
+  }
   if (!feature.featureFlagKey) return feature.enabledByDefault;
   const env = options.env ?? getRuntimeEnv();
   return readFlagValue(env[feature.featureFlagKey]) ?? feature.enabledByDefault;

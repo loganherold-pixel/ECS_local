@@ -60,6 +60,15 @@ const COMPACT_THRESHOLD = 680;
 const SEGMENTS = ['Vehicle', 'Terrain', 'Systems'] as const;
 type Segment = typeof SEGMENTS[number];
 
+function createWizardExpeditionId(): string {
+  const cryptoRef = typeof crypto !== 'undefined' ? crypto : null;
+  if (cryptoRef?.randomUUID) return cryptoRef.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const random = (Math.random() * 16) | 0;
+    return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+  });
+}
+
 // ── Main Component ───────────────────────────────────────────
 export default function ExpeditionWizardScreen() {
   const mountedRef = useRef(true);
@@ -71,6 +80,7 @@ export default function ExpeditionWizardScreen() {
 
   const { height: windowHeight } = useWindowDimensions();
   const compact = windowHeight < COMPACT_THRESHOLD;
+  const [draftExpeditionId] = useState(() => getWizardDraft()?.expeditionId || createWizardExpeditionId());
 
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -142,6 +152,7 @@ export default function ExpeditionWizardScreen() {
   // ── Auto-save draft ────────────────────────────────────────
   const saveDraft = useCallback(() => {
     setWizardDraft({
+      expeditionId: draftExpeditionId,
       step,
       name,
       destination,
@@ -154,7 +165,7 @@ export default function ExpeditionWizardScreen() {
       systemsData: systemsData as any,
       terrainProfile: terrainProfile as unknown as Record<string, string>,
     });
-  }, [step, name, destination, startDate, endDate, notes, vehicleId, vehicleName, terrain, systemsData, terrainProfile]);
+  }, [draftExpeditionId, step, name, destination, startDate, endDate, notes, vehicleId, vehicleName, terrain, systemsData, terrainProfile]);
 
 
   // Save draft whenever step changes
@@ -271,7 +282,10 @@ export default function ExpeditionWizardScreen() {
 
     try {
       const expTitle = name.trim() || destination.trim();
+      const plannedAt = new Date().toISOString();
       const exp = await expeditionStore.create(user.id, {
+        id: draftExpeditionId,
+        idempotencyKey: `wizard-finalize:${draftExpeditionId}`,
         title: expTitle,
         vehicle_id: vehicleId,
         terrain,
@@ -279,6 +293,25 @@ export default function ExpeditionWizardScreen() {
         distance_from_services_mi: null,
         notes: buildNotesString(),
         status: 'draft',
+        canonicalState: 'planned',
+        sourceTruth: {
+          id: `expedition-wizard:${draftExpeditionId}`,
+          origin: 'manual',
+          role: 'primary',
+          policyKey: 'manual_user_state',
+          authority: 'ECS operator plan',
+          authorityKind: 'user',
+          provider: null,
+          observedAt: plannedAt,
+          fetchedAt: null,
+          expiresAt: null,
+          confidence: vehicleId ? 'medium' : 'low',
+          coverage: vehicleId ? 'partial' : 'unknown',
+          availability: 'usable',
+          conflictState: 'none',
+          conflict: false,
+          warningCodes: vehicleId ? ['route_not_attached'] : ['vehicle_missing', 'route_not_attached'],
+        },
       });
 
       if (!exp) {
@@ -290,12 +323,15 @@ export default function ExpeditionWizardScreen() {
       // Capture loadout snapshot if vehicle selected
       if (vehicleId) {
         try {
-          await snapshotStore.create(user.id, {
-            vehicle_id: vehicleId,
-            expedition_id: exp.id,
-            label: `${expTitle} - Loadout Snapshot`,
-            snapshot: { captured_at: new Date().toISOString(), vehicle_id: vehicleId, vehicle_name: vehicleName },
-          });
+          const existingSnapshot = await snapshotStore.getByExpedition(exp.id);
+          if (!existingSnapshot) {
+            await snapshotStore.create(user.id, {
+              vehicle_id: vehicleId,
+              expedition_id: exp.id,
+              label: `${expTitle} - Loadout Snapshot`,
+              snapshot: { captured_at: new Date().toISOString(), vehicle_id: vehicleId, vehicle_name: vehicleName },
+            });
+          }
         } catch (err) {
           console.warn('[ExpeditionWizard] snapshot error:', err);
         }

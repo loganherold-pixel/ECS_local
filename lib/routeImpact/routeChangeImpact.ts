@@ -1,6 +1,6 @@
 import {
+  aggregateSourceTruthEvaluations,
   evaluateSourceTruthRef,
-  resolveFreshnessPolicy,
   type SourceTruthAssessment,
   type SourceTruthEvaluation,
   type SourceTruthPolicyKey,
@@ -189,9 +189,6 @@ export const ROUTE_IMPACT_CATEGORY_ORDER: readonly RouteImpactCategory[] = [
 
 const CACHE_LIMIT = 32;
 const comparisonCache = new Map<string, RouteImpactResult>();
-
-const FRESHNESS_RANK = { unavailable: 0, expired: 1, stale: 2, recent: 3, live: 4 } as const;
-const CONFIDENCE_RANK = { unknown: 0, low: 1, medium: 2, high: 3 } as const;
 
 function parseNow(value: CompareRoutePlansInput['now']): number {
   if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : Date.now();
@@ -382,47 +379,7 @@ function aggregateSourceEvaluations(
     seen.add(key);
     return true;
   });
-  const policy = resolveFreshnessPolicy('default');
-  if (sources.length === 0) {
-    return {
-      sources,
-      policy,
-      freshness: 'unavailable',
-      availability: 'unavailable',
-      confidence: 'unknown',
-      coverage: 'unknown',
-      conflict: false,
-      warningCodes: ['missing_source_truth'],
-    };
-  }
-  const freshness = sources.reduce((weakest, source) =>
-    FRESHNESS_RANK[source.freshness] < FRESHNESS_RANK[weakest]
-      ? source.freshness
-      : weakest, sources[0].freshness);
-  const confidence = sources.reduce((weakest, source) =>
-    CONFIDENCE_RANK[source.confidence] < CONFIDENCE_RANK[weakest]
-      ? source.confidence
-      : weakest, sources[0].confidence);
-  const availability = sources.some((source) => source.availability === 'unavailable')
-    ? 'unavailable'
-    : sources.some((source) => source.availability === 'degraded')
-      ? 'degraded'
-      : 'usable';
-  const coverage = sources.some((source) => source.coverage === 'unknown')
-    ? 'unknown'
-    : sources.some((source) => source.coverage === 'partial')
-      ? 'partial'
-      : 'complete';
-  return {
-    sources,
-    policy,
-    freshness,
-    availability,
-    confidence,
-    coverage,
-    conflict: sources.some((source) => source.conflict),
-    warningCodes: dedupe(sources.flatMap((source) => source.warningCodes)),
-  };
+  return aggregateSourceTruthEvaluations(sources);
 }
 
 function sourceQualityCategory(

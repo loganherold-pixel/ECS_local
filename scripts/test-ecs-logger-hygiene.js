@@ -4,8 +4,9 @@ const path = require('path');
 const Module = require('module');
 const ts = require('typescript');
 
-function loadTypeScriptModule(relPath) {
-  const fullPath = path.join(process.cwd(), relPath);
+global.__DEV__ = true;
+
+require.extensions['.ts'] = function compileTypeScript(module, fullPath) {
   const source = fs.readFileSync(fullPath, 'utf8');
   const output = ts.transpileModule(source, {
     compilerOptions: {
@@ -15,14 +16,10 @@ function loadTypeScriptModule(relPath) {
     },
     fileName: fullPath,
   });
-  const mod = new Module(fullPath, module);
-  mod.filename = fullPath;
-  mod.paths = Module._nodeModulePaths(path.dirname(fullPath));
-  mod._compile(output.outputText, fullPath);
-  return mod.exports;
-}
+  module._compile(output.outputText, fullPath);
+};
 
-const { ecsLog } = loadTypeScriptModule('lib/ecsLogger.ts');
+const { ecsLog } = require(path.join(process.cwd(), 'lib', 'ecsLogger.ts'));
 
 function captureConsole(callback) {
   const originalLog = console.log;

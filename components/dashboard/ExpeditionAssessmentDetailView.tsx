@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import ECSOperationalAnnouncer from '../ECSOperationalAnnouncer';
 import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import type {
   AssessmentCategory,
@@ -123,9 +124,27 @@ export default function ExpeditionAssessmentDetailView({
   const vehiclesSummary = category === 'vehicles' && assessment
     ? buildVehiclesSystemSummary(assessment)
     : null;
+  const operationalAnnouncement = assessment?.status === 'critical'
+    ? {
+        id: `assessment-critical:${category ?? 'unknown'}:${assessment.lastUpdated ?? 'unknown'}`,
+        kind: 'critical_advisory' as const,
+        subject: `${resolvedCategory} assessment`,
+        detail: assessment.escalationReason ?? assessment.why?.[0],
+      }
+    : stale
+      ? {
+          id: `assessment-stale:${category ?? 'unknown'}:${assessment?.lastUpdated ?? 'unknown'}`,
+          kind: 'stale_data' as const,
+          subject: `${resolvedCategory} assessment`,
+          detail: assessment?.lastUpdated
+            ? `Last updated ${formatTime(assessment.lastUpdated)}.`
+            : 'Last update time is unavailable.',
+        }
+      : null;
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ECSOperationalAnnouncer event={operationalAnnouncement} announceInitial />
       <View style={styles.headerCard}>
         <View style={styles.headerTopRow}>
           <View style={styles.categoryWrap}>
@@ -135,7 +154,11 @@ export default function ExpeditionAssessmentDetailView({
           <View style={[
             styles.statusBadge,
             { borderColor: tone.borderColor, backgroundColor: tone.backgroundColor },
-          ]}>
+          ]}
+          accessible
+          accessibilityRole="text"
+          accessibilityLabel={`${resolvedCategory} status: ${tone.label}`}
+          >
             <Text style={[styles.statusBadgeText, { color: tone.color }]}>{tone.label}</Text>
           </View>
         </View>
@@ -164,6 +187,8 @@ export default function ExpeditionAssessmentDetailView({
             onPress={onRefresh}
             accessibilityRole="button"
             accessibilityLabel="Refresh Expedition assessment"
+            accessibilityHint="Refreshes the visible deterministic source data"
+            hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
           >
             <Ionicons name="refresh-outline" size={14} color={TACTICAL.text} />
             <Text style={styles.refreshButtonText}>Refresh assessment</Text>
@@ -188,6 +213,8 @@ export default function ExpeditionAssessmentDetailView({
             onPress={onOpenIncidentRecovery}
             accessibilityRole="button"
             accessibilityLabel="Open Incident & Recovery"
+            accessibilityHint="Opens the incident and recovery workflow"
+            hitSlop={{ top: 7, bottom: 7, left: 7, right: 7 }}
           >
             <Text style={styles.escalationButtonText}>Incident & Recovery</Text>
           </TouchableOpacity>

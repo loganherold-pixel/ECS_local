@@ -1,5 +1,6 @@
 import type { RemoteWeatherBriefEvent, RemoteWeatherHazardType } from '../ai/ecsBriefTypes';
 import { recordRemoteWeatherBriefEvent } from '../briefCadLogStore';
+import { operationalWeatherAdvisoryLedger } from '../weatherAdvisoryPublicationLedger';
 import type { RemoteWeatherHazardOutput } from './remoteWeatherHazardEngine';
 
 export const REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS = 15 * 60 * 1000;
@@ -27,25 +28,6 @@ export type RemoteWeatherBriefPublishResult = {
     | 'severity_escalation'
     | 'meaningful_change';
   event?: RemoteWeatherBriefEvent;
-};
-
-type PublishedRemoteWeatherEvent = {
-  key: string;
-  type: RemoteWeatherHazardType;
-  routeId: string;
-  segmentId: string;
-  severity: RemoteWeatherHazardOutput['severity'];
-  messageFingerprint: string;
-  createdAt: number;
-};
-
-const publishedEvents = new Map<string, PublishedRemoteWeatherEvent>();
-
-const SEVERITY_RANK: Record<RemoteWeatherHazardOutput['severity'], number> = {
-  info: 0,
-  watch: 1,
-  warning: 2,
-  critical: 3,
 };
 
 const TITLE_BY_TYPE: Record<RemoteWeatherHazardType, string> = {
@@ -81,10 +63,6 @@ function routeScopeKey(input: Pick<RemoteWeatherBriefPublisherInput, 'hazard' | 
   ].join('|');
 }
 
-function severityScopeKey(input: Pick<RemoteWeatherBriefPublisherInput, 'hazard' | 'routeId' | 'segmentId'>): string {
-  return `${routeScopeKey(input)}|${input.hazard.severity}`;
-}
-
 function messageFingerprint(input: RemoteWeatherBriefPublisherInput): string {
   return [
     normalizeText(input.hazard.message),
@@ -95,58 +73,20 @@ function messageFingerprint(input: RemoteWeatherBriefPublisherInput): string {
   ].filter(Boolean).join('|');
 }
 
-function pruneExpired(now: number): void {
-  for (const [key, event] of publishedEvents) {
-    if (now - event.createdAt > REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS) {
-      publishedEvents.delete(key);
-    }
-  }
-}
-
-function findRecentSameRouteEvent(input: RemoteWeatherBriefPublisherInput, now: number): PublishedRemoteWeatherEvent | null {
-  const key = routeScopeKey(input);
-  let newest: PublishedRemoteWeatherEvent | null = null;
-
-  for (const event of publishedEvents.values()) {
-    if (event.key !== key) continue;
-    if (now - event.createdAt > REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS) continue;
-    if (!newest || event.createdAt > newest.createdAt) {
-      newest = event;
-    }
-  }
-
-  return newest;
-}
-
 function shouldEmitRemoteWeatherBriefEvent(
   input: RemoteWeatherBriefPublisherInput,
   now: number,
 ): RemoteWeatherBriefPublishResult['reason'] {
   if (!input.hazard.shouldEmit) return 'not_applicable';
-  if (input.userGenerated) return 'emitted';
-
-  pruneExpired(now);
-  const sameRouteEvent = findRecentSameRouteEvent(input, now);
-  if (!sameRouteEvent) return 'emitted';
-
-  const nextSeverityRank = SEVERITY_RANK[input.hazard.severity];
-  const lastSeverityRank = SEVERITY_RANK[sameRouteEvent.severity];
-  if (nextSeverityRank > lastSeverityRank) return 'severity_escalation';
-
-  const existingSeverityEvent = publishedEvents.get(severityScopeKey(input));
-  const nextFingerprint = messageFingerprint(input);
-  if (
-    existingSeverityEvent &&
-    now - existingSeverityEvent.createdAt <= REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS
-  ) {
-    return existingSeverityEvent.messageFingerprint === nextFingerprint
-      ? 'duplicate_suppressed'
-      : 'meaningful_change';
-  }
-
-  return sameRouteEvent.messageFingerprint === nextFingerprint
-    ? 'duplicate_suppressed'
-    : 'meaningful_change';
+  return operationalWeatherAdvisoryLedger.evaluate({
+    namespace: 'remote-weather-brief',
+    scopeKey: routeScopeKey(input),
+    severity: input.hazard.severity,
+    fingerprint: messageFingerprint(input),
+    publishedAt: now,
+    dedupeWindowMs: REMOTE_WEATHER_BRIEF_DEDUPE_WINDOW_MS,
+    bypassDedupe: input.userGenerated,
+  });
 }
 
 function formatDistance(value: number | undefined): string | null {
@@ -211,20 +151,9 @@ export function publishRemoteWeatherBriefEvent(
   const event = buildEvent(input, now);
   recordRemoteWeatherBriefEvent(event);
 
-  const record: PublishedRemoteWeatherEvent = {
-    key: routeScopeKey(input),
-    type: input.hazard.type,
-    routeId: cleanKey(input.routeId, 'no_route'),
-    segmentId: cleanKey(input.segmentId, 'no_segment'),
-    severity: input.hazard.severity,
-    messageFingerprint: messageFingerprint(input),
-    createdAt: now,
-  };
-  publishedEvents.set(severityScopeKey(input), record);
-
   return { emitted: true, reason, event };
 }
 
 export function resetRemoteWeatherBriefPublisherForTests(): void {
-  publishedEvents.clear();
+  operationalWeatherAdvisoryLedger.clear('remote-weather-brief');
 }

@@ -835,7 +835,7 @@ export function createFleetWeightValue(
     allowNegative?: boolean;
   } = {},
 ): FleetWeightValue {
-  const numeric = typeof lbs === 'number' && !Number.isNaN(lbs) ? lbs : 0;
+  const numeric = typeof lbs === 'number' && Number.isFinite(lbs) ? lbs : 0;
   const weight = options.allowNegative ? numeric : Math.max(0, numeric);
   return {
     lbs: roundLbs(weight),
@@ -1328,6 +1328,7 @@ function copyForWeightConfidence(level: FleetWeightConfidenceLevel): Pick<FleetW
 }
 
 function buildWeightValidationFlags(input: {
+  vehicle: FleetVehicle;
   baseNetWeight: FleetWeightValue;
   gvwr: FleetWeightValue | null;
   payloadRemaining: FleetWeightValue | null;
@@ -1336,10 +1337,10 @@ function buildWeightValidationFlags(input: {
 }): FleetWeightValidationFlag[] {
   const flags: FleetWeightValidationFlag[] = [];
   if (input.baseNetWeight.lbs <= 0) {
-    flags.push({ id: 'missing-base-weight', severity: 'warning', message: 'Base/curb weight is missing.' });
+    flags.push({ id: 'missing-base-weight', severity: 'warning', message: 'Base/curb weight is missing or invalid.' });
   }
   if (!input.gvwr || input.gvwr.lbs <= 0) {
-    flags.push({ id: 'missing-gvwr', severity: 'warning', message: 'GVWR is missing.' });
+    flags.push({ id: 'missing-gvwr', severity: 'warning', message: 'GVWR is missing or invalid.' });
   }
   if (input.gvwr && input.baseNetWeight.lbs > 0 && input.gvwr.lbs <= input.baseNetWeight.lbs) {
     flags.push({ id: 'gvwr-not-above-base-weight', severity: 'critical', message: 'GVWR must be above base/curb weight.' });
@@ -1363,6 +1364,30 @@ function buildWeightValidationFlags(input: {
   }
   if (input.operatingWeight.lbs <= 0) {
     flags.push({ id: 'operating-weight-unavailable', severity: 'warning', message: 'Operating weight could not be computed.' });
+  }
+  const frontBaseWeight = input.vehicle.buildProfile.frontBaseWeight?.lbs ?? null;
+  const rearBaseWeight = input.vehicle.buildProfile.rearBaseWeight?.lbs ?? null;
+  if (frontBaseWeight != null && rearBaseWeight != null && input.baseNetWeight.lbs > 0) {
+    const axleSum = frontBaseWeight + rearBaseWeight;
+    const tolerance = Math.max(50, input.baseNetWeight.lbs * 0.05);
+    if (Math.abs(axleSum - input.baseNetWeight.lbs) > tolerance) {
+      flags.push({
+        id: 'base-axle-weight-conflict',
+        severity: 'critical',
+        message: 'Front and rear base axle weights conflict with the saved base/curb weight.',
+      });
+    }
+  }
+  const frontGawr = input.vehicle.buildProfile.frontGawr?.lbs ?? null;
+  const rearGawr = input.vehicle.buildProfile.rearGawr?.lbs ?? null;
+  if (frontBaseWeight != null && frontGawr != null && frontBaseWeight > frontGawr) {
+    flags.push({ id: 'front-axle-over-rating-at-base', severity: 'critical', message: 'Front base axle weight exceeds the saved front GAWR.' });
+  }
+  if (rearBaseWeight != null && rearGawr != null && rearBaseWeight > rearGawr) {
+    flags.push({ id: 'rear-axle-over-rating-at-base', severity: 'critical', message: 'Rear base axle weight exceeds the saved rear GAWR.' });
+  }
+  if (input.gvwr && frontGawr != null && rearGawr != null && frontGawr + rearGawr < input.gvwr.lbs) {
+    flags.push({ id: 'combined-gawr-below-gvwr', severity: 'warning', message: 'Combined axle ratings are below the saved GVWR; verify the profile values.' });
   }
   return flags;
 }
@@ -1543,6 +1568,7 @@ export function calculateFleetWeightResult(
     confidenceInputs.reduce((sum, value) => sum + value, 0) / Math.max(1, confidenceInputs.length),
   );
   const validationFlags = buildWeightValidationFlags({
+    vehicle,
     baseNetWeight,
     gvwr,
     payloadRemaining,
@@ -1870,7 +1896,9 @@ export function adaptLegacyLoadoutItemToFleetLoadoutItem(
   vehicleId: string,
 ): FleetLoadoutItem {
   const source = mapLegacyWeightSource(legacyItem.weight_source);
-  const quantity = Math.max(1, legacyItem.quantity ?? 1);
+  const quantity = Number.isFinite(legacyItem.quantity)
+    ? Math.max(1, Math.floor(legacyItem.quantity as number))
+    : 1;
   const loadZone = toFleetLoadZone(legacyItem.storage_location, 'rearLow');
   const name = legacyItem.name ?? 'Loadout item';
   return {

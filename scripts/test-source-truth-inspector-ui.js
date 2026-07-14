@@ -6,10 +6,14 @@ const root = path.join(__dirname, '..');
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
 
 const inspector = read('components', 'source-truth', 'SourceTruthInspector.tsx');
+const indicators = read('components', 'source-truth', 'SourceTruthIndicators.tsx');
 const modalShell = read('components', 'ECSModalShell.tsx');
 const readiness = read('components', 'readiness', 'ReadinessDetailSheet.tsx');
 const weather = read('components', 'weather', 'WeatherIntelPanel.tsx');
 const routeCatalog = read('components', 'discover', 'RouteCatalogSummaryCard.tsx');
+const fleet = read('app', '(tabs)', 'fleet.tsx');
+const navigate = read('app', '(tabs)', 'navigate.tsx');
+const campground = read('components', 'navigate', 'EstablishedCampsiteSheet.tsx');
 const adapters = read('lib', 'sourceTruthAdapters.ts');
 const packageJson = JSON.parse(read('package.json'));
 
@@ -73,12 +77,53 @@ for (const forbiddenImport of ['supabase', 'axios', 'weatherService', 'fetch('])
   assert.strictEqual(inspector.includes(forbiddenImport), false, `Inspector must work offline without ${forbiddenImport}.`);
 }
 
+for (const component of [
+  'ECSSourceBadge',
+  'ECSFreshnessBadge',
+  'ECSConfidenceBadge',
+  'ECSSourceConflictWarning',
+]) {
+  assert(indicators.includes(`function ${component}`), `${component} should be reusable across ECS surfaces.`);
+  assert(inspector.includes(component), `Inspector should compose the shared ${component}.`);
+}
+assert(
+  inspector.includes('sources?: readonly SourceTruthRef[] | null') &&
+    inspector.includes('sources={sources}'),
+  'Inspector and trigger should preserve multiple evidence sources through the detail sheet.',
+);
+
 assert(
   readiness.includes("import { SourceTruthInspectorTrigger } from '../source-truth';") &&
     readiness.includes('buildReadinessAssessmentSourceTruthBinding') &&
     readiness.includes('readiness-assessment-source-truth') &&
     readiness.includes('label={`Confidence ${assessment.confidence}`}'),
   'Dashboard readiness confidence should open the shared inspector without changing the readiness decision.',
+);
+assert(
+  weather.includes('sources={weatherSourceTruthBinding.sources}') &&
+    adapters.includes("role: origin === 'cached' ? 'last_good' : 'primary'") &&
+    adapters.includes('liveUnavailableRef'),
+  'Weather should expose live failure and usable cached last-good evidence together.',
+);
+assert(
+  fleet.includes('buildFleetWeightSourceTruthBinding') &&
+    fleet.includes('sourceTruthBinding={selectedVehicleWeightSourceTruth}') &&
+    fleet.includes('label="Weight sources"'),
+  'Fleet confidence should expose canonical weight provenance without changing Fleet scoring.',
+);
+assert(
+  campground.includes('buildEstablishedCampgroundSourceTruthBinding') &&
+    campground.includes('label="Source and conditions"') &&
+    !adapters.includes('.rawJson') &&
+    !adapters.includes('.sourceUrl'),
+  'Established campground detail should separate source conditions without forwarding provider payloads.',
+);
+assert(
+  navigate.includes('buildConvoyLocationSourceTruthBinding') &&
+    navigate.includes('label="GPS source"') &&
+    !adapters.includes('latitude:') &&
+    !adapters.includes('longitude:'),
+  'Navigate convoy detail should expose source freshness without forwarding restricted coordinates.',
 );
 assert(
   weather.includes("import { SourceTruthInspectorTrigger } from '../source-truth';") &&

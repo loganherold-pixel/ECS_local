@@ -45,6 +45,17 @@ export {
 } from './expeditionBadgeRegistry';
 
 export {
+  buildExpeditionBadgeCatalogPresentation,
+  getExpeditionBadgeCatalogEntry,
+  getExpeditionBadgeCatalogForUser,
+} from './expeditionBadgeCatalog';
+
+export type {
+  ExpeditionBadgeCatalogEntry,
+  ExpeditionBadgeCatalogPresentationEntry,
+} from './expeditionBadgeCatalog';
+
+export {
   BADGE_IDENTITY_CATEGORIES,
   BADGE_IDENTITY_DEFERRED_SIGNALS,
   BADGE_IDENTITY_MVP_BADGE_MAPPING,

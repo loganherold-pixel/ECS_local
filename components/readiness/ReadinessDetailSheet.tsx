@@ -165,6 +165,7 @@ export function ReadinessDetailSheet({
             <View style={styles.badgeRow}>
               <SourceTruthInspectorTrigger
                 source={assessmentSourceTruth.ref}
+                sources={assessmentSourceTruth.sources}
                 policyKey={assessmentSourceTruth.policyKey}
                 dependencies={assessmentSourceTruth.dependencies}
                 label={`Confidence ${assessment.confidence}`}

@@ -51,6 +51,8 @@ export interface DispatchPermissionContext {
   currentMember?: DispatchTeamMember | null;
   operatorInfo?: DispatchOperatorPermissionInfo | null;
   soloMode?: boolean;
+  authenticated?: boolean;
+  sharedConvoyMember?: boolean;
 }
 
 export interface DispatchPermissionResult {
@@ -115,14 +117,8 @@ export function resolveCurrentDispatchMember(
   members: DispatchTeamMember[],
   currentUserId?: string | null,
 ): DispatchTeamMember | null {
-  if (!members.length) return null;
-
-  return (
-    members.find((member) => member.id === currentUserId) ??
-    members.find((member) => member.role === 'owner') ??
-    members[0] ??
-    null
-  );
+  if (!members.length || !currentUserId) return null;
+  return members.find((member) => member.id === currentUserId) ?? null;
 }
 
 export function resolveDispatchPermissions(
@@ -317,6 +313,22 @@ function canPerformDispatchAction(
   }
 
   if (context.soloMode) {
+    if (action === 'view_member_location') {
+      return denied(DISPATCH_LOCATION_RESTRICTED_COPY);
+    }
+    if (action === 'view_member_contact') return denied(DISPATCH_CONTACT_RESTRICTED_COPY);
+    if (action === 'plan_convoy_regroup') {
+      return denied('Convoy regroup planning requires an active shared convoy.');
+    }
+    return allowedWithSafety(action);
+  }
+
+  if (context.authenticated === false) {
+    if (action === 'view_dispatch') return allowedWithSafety(action);
+    return denied('Sign in to use Dispatch team actions.');
+  }
+
+  if (action === 'view_member_location' && context.sharedConvoyMember) {
     return allowedWithSafety(action);
   }
 

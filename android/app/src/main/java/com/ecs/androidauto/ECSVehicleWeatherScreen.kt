@@ -23,7 +23,7 @@
  *   - Extends Screen (Android for Cars App Library)
  *   - Uses PaneTemplate for driver-safe info display
  *   - Reads data from SharedPreferences (written by RN bridge)
- *   - Refreshes on a 3-second timer
+ *   - Polls on a bounded timer and invalidates only for changed payloads
  *   - Accessible from all other vehicle screens
  *   - Does NOT modify the mobile ECS dashboard
  */
@@ -48,11 +48,12 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
 
     companion object {
         private const val TAG = "ECSVehicleWeatherScreen"
-        private const val REFRESH_INTERVAL_MS = 3000L
+        private const val REFRESH_INTERVAL_MS = 5000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private var isActive = true
+    private var lastPayloadSignature: String? = null
 
     // Display mode
     private var displayMode: String = "highway_drive"
@@ -77,6 +78,9 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
     private var windExposure: String = "unknown"
     private var temperatureDropForecastF: Double? = null
     private var stormArrivalEstimate: String? = null
+    private var dataFreshness: String = "unavailable"
+    private var dataAvailability: String = "unavailable"
+    private var dataSourceLabel: String = "Unavailable"
 
     /**
      * Periodic refresh runnable.
@@ -84,8 +88,12 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
     private val refreshRunnable = object : Runnable {
         override fun run() {
             if (!isActive) return
-            readWeatherData()
-            invalidate()
+            val nextSignature = payloadSignature()
+            if (nextSignature != lastPayloadSignature) {
+                lastPayloadSignature = nextSignature
+                readWeatherData()
+                invalidate()
+            }
             handler.postDelayed(this, REFRESH_INTERVAL_MS)
         }
     }
@@ -97,6 +105,7 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
                     Lifecycle.Event.ON_START -> {
                         if (!isActive) {
                             isActive = true
+                            lastPayloadSignature = null
                             handler.removeCallbacks(refreshRunnable)
                             handler.post(refreshRunnable)
                         }
@@ -113,7 +122,21 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
         )
         handler.postDelayed(refreshRunnable, REFRESH_INTERVAL_MS)
         readWeatherData()
+        lastPayloadSignature = payloadSignature()
         Log.i(TAG, "ECSVehicleWeatherScreen initialized")
+    }
+
+    private fun payloadSignature(): String {
+        val prefs = carContext.getSharedPreferences(
+            ECSAndroidAutoConstants.PREFS_NAME,
+            android.content.Context.MODE_PRIVATE
+        )
+        return ECSAndroidAutoConstants.payloadSignature(
+            prefs,
+            ECSAndroidAutoConstants.KEY_WEATHER_DATA,
+            ECSAndroidAutoConstants.KEY_SYSTEM_HEALTH,
+            ECSAndroidAutoConstants.KEY_DISPLAY_MODE
+        )
     }
 
     /**
@@ -179,6 +202,10 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
                     json.optDouble("temperatureDropForecastF") else null
                 stormArrivalEstimate = if (json.has("stormArrivalEstimate") && !json.isNull("stormArrivalEstimate"))
                     json.optString("stormArrivalEstimate") else null
+                val safeState = json.optJSONObject("automotiveSafeState")
+                dataFreshness = safeState?.optString("freshness", "unavailable") ?: "unavailable"
+                dataAvailability = safeState?.optString("availability", "unavailable") ?: "unavailable"
+                dataSourceLabel = safeState?.optString("sourceLabel", "Unavailable") ?: "Unavailable"
             }
 
             Log.d(TAG, "Weather data refreshed — mode: $displayMode, temp: ${temperatureF}F")
@@ -192,7 +219,9 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
      */
     override fun onGetTemplate(): Template {
         return try {
-            if (displayMode == "expedition_drive") {
+            if (dataAvailability == "unavailable") {
+                buildUnavailableTemplate()
+            } else if (displayMode == "expedition_drive") {
                 buildExpeditionWeatherTemplate()
             } else {
                 buildHighwayWeatherTemplate()
@@ -215,8 +244,8 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
         val condText = buildConditionSubtext()
         paneBuilder.addRow(
             Row.Builder()
-                .setTitle("Current: $tempText")
-                .addText(condText)
+                .setTitle("${if (dataFreshness == "live" || dataFreshness == "recent") "Current" else "Last known"}: $tempText")
+                .addText("$condText | $dataSourceLabel ${dataFreshness.uppercase()}")
                 .build()
         )
 
@@ -291,8 +320,8 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
         val condText = buildConditionSubtext()
         paneBuilder.addRow(
             Row.Builder()
-                .setTitle("Current: $tempText")
-                .addText(condText)
+                .setTitle("${if (dataFreshness == "live" || dataFreshness == "recent") "Current" else "Last known"}: $tempText")
+                .addText("$condText | $dataSourceLabel ${dataFreshness.uppercase()}")
                 .build()
         )
 
@@ -434,6 +463,23 @@ class ECSVehicleWeatherScreen(carContext: CarContext) : Screen(carContext) {
         return PaneTemplate.Builder(pane)
             .setTitle("ECS WEATHER")
             .setHeaderAction(Action.BACK)
+            .build()
+    }
+
+    private fun buildUnavailableTemplate(): Template {
+        val pane = Pane.Builder()
+            .addRow(
+                Row.Builder()
+                    .setTitle("Weather unavailable")
+                    .addText("No current or last-known weather data is available.")
+                    .build()
+            )
+            .build()
+
+        return PaneTemplate.Builder(pane)
+            .setTitle("ECS WEATHER")
+            .setHeaderAction(Action.BACK)
+            .setActionStrip(buildActionStrip())
             .build()
     }
 

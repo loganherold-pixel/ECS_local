@@ -108,7 +108,7 @@ assertIncludes(
 );
 assertIncludes(
   mapRenderer,
-  'routeBuilderDraftSegments = [];\n        routeBuilderPointerId = null;',
+  'routeBuilderDraftSegments = [];\n        routeBuilderLastAnchorTapCoordinate = null;\n        routeBuilderPointerId = null;',
   'MapRenderer cancellation should drop cached draft geometry and active pointer state.',
 );
 assertIncludes(

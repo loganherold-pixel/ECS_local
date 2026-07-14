@@ -52,9 +52,10 @@ Implemented behavior:
 - Converts the active expedition into a linked Dispatch context for pings, queue items, and timeline events.
 - Preserves solo mode and mock fallback behavior for development and local use.
 
-Current limitation:
+Guarded backend boundary:
 
-- Dedicated Dispatch backend tables are not implemented in this repo. `lib/dispatchPersistenceAdapter.ts` explicitly notes a future live backend mirror once schema exists.
+- Canonical Dispatch tables and a typed repository exist behind the default-off `dispatch_canonical_backend` restricted-field-test feature. Local persistence remains authoritative, and production enablement is blocked pending RLS, privacy, multi-client, device, and owner evidence.
+- Existing cloud convoys without an expedition scope are not silently backfilled or treated as eligible.
 
 ## 4. Team Roster
 
@@ -223,6 +224,7 @@ Implemented behavior:
 Rollout:
 
 - Offline replay defaults enabled in `DEFAULT_DISPATCH_ROLLOUT_CONFIG`.
+- Canonical backend persistence defaults disabled and requires an explicit `shadow` or `dual_read` mode after feature-registry approval.
 
 ## 12. Realtime Sync Behavior
 

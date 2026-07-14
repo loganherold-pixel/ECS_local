@@ -60,6 +60,8 @@ const ACTIONABLE_CAMPOPS_MAP_PIN_SOURCES = new Set<CampOpsDataSource>([
   'gpx',
   'manual',
   'user_saved',
+  'established_campground',
+  'camp_scout',
 ]);
 const RESEARCH_ONLY_CAMPOPS_MAP_PIN_SOURCES = new Set<CampOpsDataSource>([
   'route_candidate',
@@ -67,6 +69,7 @@ const RESEARCH_ONLY_CAMPOPS_MAP_PIN_SOURCES = new Set<CampOpsDataSource>([
   'draw_area_candidate',
   'community',
   'offline_dataset',
+  'dispersed_region',
   'inferred',
   'unknown',
 ]);
@@ -99,6 +102,9 @@ export function isCampOpsActionableMapPinCandidate(
   camp: CampCandidate | null | undefined,
 ): camp is CampCandidate {
   if (!camp) return false;
+  if (camp.recommendationVisibility === 'blocked' || camp.recommendationVisibility === 'research_only') {
+    return false;
+  }
   if (camp.existingRef?.system === 'camp_site') return true;
   return ACTIONABLE_CAMPOPS_MAP_PIN_SOURCES.has(camp.source);
 }
@@ -107,6 +113,8 @@ export function campOpsSourceToSharedCampPinSource(
   source: CampOpsDataSource | null | undefined,
 ): CampOpsSharedCampPinSourceType {
   switch (source) {
+    case 'established_campground':
+      return 'official_mapped';
     case 'community':
       return 'community_suggested';
     case 'private':
@@ -120,7 +128,10 @@ export function campOpsSourceToSharedCampPinSource(
     case 'draw_area_candidate':
     case 'inferred':
     case 'offline_dataset':
+    case 'dispersed_region':
       return 'ecs_inferred';
+    case 'camp_scout':
+      return 'unknown';
     case 'unknown':
     default:
       return 'unknown';

@@ -1,5 +1,6 @@
 import type { ExploreRouteReadinessSummary } from '../readiness/exploreRouteReadiness';
 import type { CampOpsRouteCampEndpointPlan } from '../campops/campOpsTypes';
+import type { ECSJourneyLinkage, ECSRouteProvenance } from '../lifecycle/routeTripExpeditionLifecycle';
 
 export type TripType =
   | 'day_trip'
@@ -618,6 +619,8 @@ export type TripPlanRouteSummary = {
   routeDataConfidence: TripBuilderConfidence;
   routeContextConfidence?: TripBuilderRouteContextConfidenceTier | null;
   routeContextStatus?: string | null;
+  routeAssetId?: string | null;
+  provenance?: ECSRouteProvenance | null;
 };
 
 export type TripPlanStopType =
@@ -853,6 +856,7 @@ export type TripPlan = {
   warnings: TripBuilderWarning[];
   readinessReference: TripBuilderReadinessReference | null;
   smartResupplyPlan: SmartResupplyPlan | null;
+  lifecycle?: ECSJourneyLinkage;
 };
 
 export type BuildTripPlanArgs = {

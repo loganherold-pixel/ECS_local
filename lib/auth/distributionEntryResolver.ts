@@ -4,43 +4,36 @@ import type {
   ECSDistributionEntryResolution,
 } from './entryStateTypes';
 import { AUTH_COPY } from './authCopy';
+import {
+  createRuntimeFeatureVisibilityContext,
+  resolveECSFeatureRouteAccess,
+  resolveECSFeatureVisibility,
+} from '../features/featureVisibilityRegistry';
+import {
+  getRouteMetadata,
+  isECSDeepLinkPathAllowed,
+} from '../routeManifest';
 
 const DEV_CONVOY_RIVE_QA =
-  typeof __DEV__ !== 'undefined' &&
-  __DEV__ &&
-  process.env.EXPO_PUBLIC_ECS_CONVOY_RIVE_QA === '1';
-const DEV_CAMPOPS_VISUAL_QA_ROUTE =
-  typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
-const DEV_CONVOY_IDENTITY_QA_ROUTE =
-  typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
-
-function isDevCampOpsVisualQaRoute(path: string | null | undefined): boolean {
-  return DEV_CAMPOPS_VISUAL_QA_ROUTE && path === '/dev/campops-visual-qa';
-}
-
-function isDevConvoyIdentityQaRoute(path: string | null | undefined): boolean {
-  return DEV_CONVOY_IDENTITY_QA_ROUTE && path === '/dev/convoy-identity-qa';
-}
+  resolveECSFeatureVisibility(
+    'convoy_rive_qa',
+    createRuntimeFeatureVisibilityContext(),
+  ).visible;
 
 function isPublicDevQaRoute(path: string | null | undefined): boolean {
-  return isDevCampOpsVisualQaRoute(path) || isDevConvoyIdentityQaRoute(path);
+  const access = resolveECSFeatureRouteAccess(
+    path,
+    createRuntimeFeatureVisibilityContext(),
+  );
+  return access.featureId === 'developer_qa_surfaces' && access.allowed;
 }
 
 function isPrimaryShellRoute(path: string | null | undefined): boolean {
-  return (
-    path === '/fleet' ||
-    path === '/navigate' ||
-    path === '/dashboard' ||
-    path === '/discover' ||
-    path === '/explore' ||
-    path === '/explore-trip-builder' ||
-    path === '/explore-offline-prep-pack' ||
-    path === '/alert' ||
-    path === '/safety' ||
-    path === '/vehicle-config' ||
-    path === '/route' ||
-    path === '/more' ||
-    path === '/intel'
+  const metadata = getRouteMetadata(path);
+  return Boolean(
+    metadata &&
+    metadata.authRequirement === 'shell' &&
+    metadata.setupRequirement === 'none',
   );
 }
 
@@ -83,7 +76,7 @@ function resolveAuthenticatedShellTarget(params: {
     };
   }
 
-  if (allowRequestedEntryRoute && requestedEntryRoute) {
+  if (allowRequestedEntryRoute && requestedEntryRoute && isECSDeepLinkPathAllowed(requestedEntryRoute)) {
     return {
       target: requestedEntryRoute,
       destinationSource: 'requested_entry_route',
@@ -147,17 +140,7 @@ export function resolveDistributionEntryState(
     shellAccessReady &&
     !setupComplete &&
     !isProtectedScreen &&
-    (currentPath === '/fleet' ||
-      currentPath === '/navigate' ||
-      currentPath === '/discover' ||
-      currentPath === '/explore' ||
-      currentPath === '/explore-trip-builder' ||
-      currentPath === '/explore-offline-prep-pack' ||
-      currentPath === '/alert' ||
-      currentPath === '/safety' ||
-      currentPath === '/vehicle-config' ||
-      currentPath === '/more' ||
-      currentPath === '/intel' ||
+    (isPrimaryShellRoute(currentPath) ||
       isPublicDevQaRoute(currentPath) ||
       (DEV_CONVOY_RIVE_QA && currentPath === '/dashboard'));
   const rememberedShellTarget = resolveAuthenticatedShellTarget({
@@ -169,11 +152,13 @@ export function resolveDistributionEntryState(
     allowRequestedEntryRoute: true,
     allowRouteRestore: true,
   });
-  const freshAuthShellTarget = resolveAuthenticatedShellTarget({
+  const intendedAuthShellTarget = resolveAuthenticatedShellTarget({
     setupComplete,
     setupRecoveryRequired,
     guestSetupMode: guestOfflineAccess,
-    restorableShellRoute,
+    restorableShellRoute: null,
+    requestedEntryRoute,
+    allowRequestedEntryRoute: true,
     allowRouteRestore: false,
   });
 
@@ -339,7 +324,7 @@ export function resolveDistributionEntryState(
 
     return {
       kind: setupComplete && shellAccessReady ? 'authenticated_restore' : 'setup_required',
-      redirectTarget: setupComplete && shellAccessReady ? freshAuthShellTarget.target : null,
+      redirectTarget: setupComplete && shellAccessReady ? intendedAuthShellTarget.target : null,
       loadingLabel,
       loadingDetail,
       bootstrapLabel,
@@ -347,9 +332,9 @@ export function resolveDistributionEntryState(
       shellRestoreEligible,
       routeRestoreEligible,
       destinationSource:
-        setupComplete && shellAccessReady ? freshAuthShellTarget.destinationSource : 'current_route',
+        setupComplete && shellAccessReady ? intendedAuthShellTarget.destinationSource : 'current_route',
       routeRestoreRejected:
-        setupComplete && shellAccessReady ? freshAuthShellTarget.routeRestoreRejected : false,
+        setupComplete && shellAccessReady ? intendedAuthShellTarget.routeRestoreRejected : false,
       requestedRestorableRoute: restorableShellRoute,
     };
   }
@@ -394,7 +379,7 @@ export function resolveDistributionEntryState(
           : 'public_entry',
       redirectTarget:
         authEntryAccessReady
-          ? freshAuthShellTarget.target
+          ? intendedAuthShellTarget.target
           : null,
       loadingLabel,
       loadingDetail,
@@ -404,11 +389,11 @@ export function resolveDistributionEntryState(
       routeRestoreEligible,
       destinationSource:
         authEntryAccessReady
-          ? freshAuthShellTarget.destinationSource
+          ? intendedAuthShellTarget.destinationSource
           : 'current_route',
       routeRestoreRejected:
         authEntryAccessReady
-          ? freshAuthShellTarget.routeRestoreRejected
+          ? intendedAuthShellTarget.routeRestoreRejected
           : false,
       requestedRestorableRoute: restorableShellRoute,
     };

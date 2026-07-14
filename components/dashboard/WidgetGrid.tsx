@@ -73,8 +73,8 @@ import { useViewerSettings } from '../../context/ViewerSettingsContext';
 import { useTheme } from '../../context/ThemeContext';
 import { logWidgetEvent, logLayoutEvent } from '../../lib/viewerSettingsStore';
 import type { ViewerStyleOverrides } from '../../lib/viewerSettingsStore';
-import { consumablesStore } from '../../lib/consumablesStore';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
+import { recordECSPerformanceRender } from '../../lib/performance/ecsPerformanceDiagnostics';
 import {
   DEPTH_SHADOWS,
   DEPTH_PANELS,
@@ -883,37 +883,6 @@ function SizePickerBadge({
   );
 }
 
-function areRenderOptionsEqual(
-  prev?: WidgetRenderOptions,
-  next?: WidgetRenderOptions,
-) {
-  return (
-    prev?.dashboardMode === next?.dashboardMode &&
-    prev?.compact === next?.compact &&
-    prev?.rollDeg === next?.rollDeg &&
-    prev?.pitchDeg === next?.pitchDeg &&
-    prev?.sensorStatus === next?.sensorStatus &&
-    prev?.sampleTimestampMs === next?.sampleTimestampMs &&
-    prev?.isCalibrated === next?.isCalibrated &&
-    prev?.onCalibrate === next?.onCalibrate &&
-    prev?.onResetCalibration === next?.onResetCalibration &&
-    prev?.stabilityData === next?.stabilityData &&
-    prev?.advancedMode === next?.advancedMode &&
-    prev?.viewerOverrides === next?.viewerOverrides &&
-    prev?.gpsLatitude === next?.gpsLatitude &&
-    prev?.gpsLongitude === next?.gpsLongitude &&
-    prev?.gpsHeadingDeg === next?.gpsHeadingDeg &&
-    prev?.gpsSpeedMph === next?.gpsSpeedMph &&
-    prev?.gpsHasFix === next?.gpsHasFix &&
-    prev?.gpsAccuracyM === next?.gpsAccuracyM &&
-    prev?.gpsAltitudeFt === next?.gpsAltitudeFt &&
-    prev?.gpsTimestampMs === next?.gpsTimestampMs &&
-    prev?.isFeatured === next?.isFeatured &&
-    prev?.isCompressedRow === next?.isCompressedRow &&
-    prev?.onOpenCommandBrief === next?.onOpenCommandBrief
-  );
-}
-
 function getLoadItemsSignature(loadItems?: { deleted_at?: string | null; packed?: boolean; weight_lbs?: number | null }[]) {
   if (!loadItems?.length) return '0:0:0';
   let activeCount = 0;
@@ -1036,6 +1005,9 @@ function getCompactWidgetRenderKey(
         telemetry?.engineStatus ?? '',
         data?.powerFreshness ?? '',
         data?.powerProviderLabel ?? '',
+        data?.powerAuthority?.batteryPercent ?? '',
+        data?.powerAuthority?.outputWatts ?? '',
+        data?.powerAuthority?.inputWatts ?? '',
       ].join(':');
     case 'sustainability':
     case 'resource-forecast':
@@ -1048,7 +1020,30 @@ function getCompactWidgetRenderKey(
         data?.aiState?.readiness ?? '',
         data?.aiDashboardView ?? '',
         data?.powerFreshness ?? '',
+        data?.powerAuthority?.batteryPercent ?? '',
+        data?.powerAuthority?.estimatedRuntimeMinutes ?? '',
+        data?.powerAuthority?.outputWatts ?? '',
+        data?.powerAuthority?.inputWatts ?? '',
+        data?.weatherSnapshot?.status?.kind ?? '',
         getLoadItemsSignature(data?.loadItems),
+      ].join(':');
+    case 'expedition-readiness':
+    case 'expedition-status-summary':
+      return [
+        baseTripKey,
+        expeditionRouteKey,
+        activeVehicleContext?.profileSignature ?? '',
+        activeVehicleContext?.activeVehicleId ?? '',
+        data?.aiState?.readiness ?? '',
+        data?.aiState?.topSignal?.title ?? '',
+        data?.dashboardCommandState?.primary?.id ?? '',
+        data?.dashboardCommandState?.compactSummary ?? '',
+        data?.weatherSnapshot?.status?.kind ?? '',
+        data?.powerFreshness ?? '',
+        data?.telemetry?.freshnessLabel ?? '',
+        renderOptions?.expeditionTeamMemberCount ?? '',
+        renderOptions?.expeditionCampCount ?? '',
+        renderOptions?.expeditionEcsOnline ?? '',
       ].join(':');
     case 'status-overview':
     case 'mission-sustainment':
@@ -1093,19 +1088,15 @@ function getCompactWidgetRenderKey(
     case 'hwy-elevation-profile':
       return [
         getWaypointSignature(data?.waypoints),
-        renderOptions?.gpsLatitude ?? '',
-        renderOptions?.gpsLongitude ?? '',
-        renderOptions?.gpsHasFix ?? '',
+        getDashboardGpsRenderKey(renderOptions),
         renderOptions?.gpsAltitudeFt ?? '',
-        renderOptions?.gpsTimestampMs ?? '',
         data?.weatherSnapshot?.status?.kind ?? '',
         data?.weatherSnapshot?.current?.temp ?? '',
         data?.weatherSnapshot?.alerts?.length ?? '',
       ].join(':');
     case 'remoteness':
       return [
-        renderOptions?.gpsHasFix ?? '',
-        renderOptions?.gpsAccuracyM ?? '',
+        getDashboardGpsRenderKey(renderOptions),
         renderOptions?.gpsAltitudeFt ?? '',
       ].join(':');
     default:
@@ -1114,6 +1105,11 @@ function getCompactWidgetRenderKey(
         getLoadItemsSignature(data?.loadItems),
         getWaypointSignature(data?.waypoints),
         data?.syncStatus ?? '',
+        data?.aiState?.readiness ?? '',
+        data?.dashboardCommandState?.compactSummary ?? '',
+        data?.weatherSnapshot?.status?.kind ?? '',
+        data?.powerFreshness ?? '',
+        data?.telemetry?.freshnessLabel ?? '',
       ].join(':');
   }
 }
@@ -1132,10 +1128,26 @@ function areCompactRenderOptionsEqualForSlot(
     previousOptions?.viewerOverrides === nextOptions?.viewerOverrides &&
     previousOptions?.isFeatured === nextOptions?.isFeatured &&
     previousOptions?.isCompressedRow === nextOptions?.isCompressedRow &&
+    previousOptions?.onCalibrate === nextOptions?.onCalibrate &&
+    previousOptions?.onResetCalibration === nextOptions?.onResetCalibration &&
     previousOptions?.onOpenCommandBrief === nextOptions?.onOpenCommandBrief &&
+    previousOptions?.onTerrainRiskReferenceEvent === nextOptions?.onTerrainRiskReferenceEvent &&
     getCompactWidgetRenderKey(widgetType, previousWidgetData, previousOptions) ===
       getCompactWidgetRenderKey(widgetType, nextWidgetData, nextOptions)
   );
+}
+
+function WidgetRenderedContent({
+  widgetType,
+  widgetData,
+  renderOptions,
+}: {
+  widgetType: string;
+  widgetData: WidgetGridProps['widgetData'];
+  renderOptions: WidgetRenderOptions;
+}) {
+  recordECSPerformanceRender('dashboard_stable_grid', `widget_${widgetType}`);
+  return renderWidgetContent(widgetType, widgetData, renderOptions);
 }
 
 // ── Widget Plate Content ──────────────────────────────────
@@ -1357,9 +1369,15 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
     outputRange: [0, isCompact ? -WIDGET_MODE_SETTLE_PX : WIDGET_MODE_SETTLE_PX],
     extrapolate: 'clamp',
   });
-  const renderedContent = slot.widgetType
-    ? renderWidgetContent(slot.widgetType, widgetData, opts)
-    : null;
+  const renderedContent = slot.widgetType ? (
+    <WidgetErrorBoundary widgetType={slot.widgetType} slotIndex={slotIndex}>
+      <WidgetRenderedContent
+        widgetType={slot.widgetType}
+        widgetData={widgetData}
+        renderOptions={opts}
+      />
+    </WidgetErrorBoundary>
+  ) : null;
   currentRenderedContentRef.current = renderedContent;
 
   return (
@@ -1576,33 +1594,25 @@ const WidgetPlateContent = React.memo(function WidgetPlateContent({
     </View>
   );
 }, (prev, next) => {
-  const compactRenderStateEqual =
+  const widgetRenderStateEqual =
     prev.isCompact === next.isCompact &&
-    (
-      !prev.isCompact ||
-      areCompactRenderOptionsEqualForSlot(
-        prev.slot.widgetType ?? undefined,
-        prev.widgetData,
-        prev.renderOptions,
-        next.widgetData,
-        next.renderOptions,
-      )
+    areCompactRenderOptionsEqualForSlot(
+      prev.slot.widgetType ?? undefined,
+      prev.widgetData,
+      prev.renderOptions,
+      next.widgetData,
+      next.renderOptions,
     );
-  const renderOptionsEqual = prev.isCompact
-    ? compactRenderStateEqual
-    : areRenderOptionsEqual(prev.renderOptions, next.renderOptions);
 
   return (
     prev.slot === next.slot &&
     prev.layoutMode === next.layoutMode &&
     prev.isDropTarget === next.isDropTarget &&
     prev.isDragging === next.isDragging &&
-    compactRenderStateEqual &&
-    (!prev.isCompact ? prev.widgetData === next.widgetData : true) &&
+    widgetRenderStateEqual &&
     prev.compact === next.compact &&
     prev.expanded === next.expanded &&
     prev.isCompact === next.isCompact &&
-    renderOptionsEqual &&
     prev.gridLayout === next.gridLayout &&
     prev.onResizeWidget === next.onResizeWidget &&
     prev.slotIndex === next.slotIndex &&
@@ -1695,18 +1705,6 @@ export default function WidgetGrid({
   const hasDominantAttitudeCommandSurface = placementSlots.some(
     (slot) => slot.widgetType === 'attitude-command' && getSlotSize(slot) === '2x2',
   );
-
-  // ── Consumables revision counter (Phase 5: Sustainability single source of truth) ──
-  // Subscribes to consumablesStore so that when Sustainability widget saves
-  // fuel% or water gal, ALL sibling widgets (especially Vehicle Systems)
-  // re-render and pick up the new build_weight / payload_margin values.
-  const [consumablesRev, setConsumablesRev] = useState(0);
-  useEffect(() => {
-    const unsub = consumablesStore.subscribe(() => {
-      setConsumablesRev(v => v + 1);
-    });
-    return unsub;
-  }, []);
 
   // ── Self-measured width (fallback if parent doesn't provide containerWidth) ──
   const [measuredWidth, setMeasuredWidth] = useState(0);

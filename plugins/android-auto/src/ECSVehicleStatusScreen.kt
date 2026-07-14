@@ -25,7 +25,7 @@
  *   - Extends Screen (Android for Cars App Library)
  *   - Uses PaneTemplate for driver-safe info display
  *   - Reads data from SharedPreferences (written by RN bridge)
- *   - Refreshes on a 3-second timer
+ *   - Polls on a bounded timer and invalidates only for changed payloads
  *   - Does NOT modify the mobile ECS dashboard
  */
 package com.ecs.androidauto
@@ -50,11 +50,12 @@ class ECSVehicleStatusScreen(carContext: CarContext) : Screen(carContext) {
 
     companion object {
         private const val TAG = "ECSVehicleStatusScreen"
-        private const val REFRESH_INTERVAL_MS = 3000L
+        private const val REFRESH_INTERVAL_MS = 5000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private var isActive = true
+    private var lastPayloadSignature: String? = null
 
     // Cached display data
     private var displayMode: String = "highway_drive"
@@ -86,6 +87,9 @@ class ECSVehicleStatusScreen(carContext: CarContext) : Screen(carContext) {
     private var isManualOverride: Boolean = false
     private var transitionNoticeMessage: String? = null
     private var transitionNoticeTimestamp: Long = 0
+    private var dataFreshness: String = "unavailable"
+    private var dataAvailability: String = "unavailable"
+    private var dataSourceLabel: String = "Unavailable"
 
     /**
      * Periodic refresh runnable.
@@ -93,10 +97,13 @@ class ECSVehicleStatusScreen(carContext: CarContext) : Screen(carContext) {
     private val refreshRunnable = object : Runnable {
         override fun run() {
             if (!isActive) return
-            readStatusData()
-            readModeState()
-            writeActiveScreen("status")
-            invalidate()
+            val nextSignature = payloadSignature()
+            if (nextSignature != lastPayloadSignature) {
+                lastPayloadSignature = nextSignature
+                readStatusData()
+                readModeState()
+                invalidate()
+            }
             handler.postDelayed(this, REFRESH_INTERVAL_MS)
         }
     }
@@ -108,6 +115,8 @@ class ECSVehicleStatusScreen(carContext: CarContext) : Screen(carContext) {
                     Lifecycle.Event.ON_START -> {
                         if (!isActive) {
                             isActive = true
+                            lastPayloadSignature = null
+                            writeActiveScreen("status")
                             handler.removeCallbacks(refreshRunnable)
                             handler.post(refreshRunnable)
                         }
@@ -125,8 +134,24 @@ class ECSVehicleStatusScreen(carContext: CarContext) : Screen(carContext) {
         handler.postDelayed(refreshRunnable, REFRESH_INTERVAL_MS)
         readStatusData()
         readModeState()
+        lastPayloadSignature = payloadSignature()
         writeActiveScreen("status")
         Log.i(TAG, "ECSVehicleStatusScreen initialized")
+    }
+
+    private fun payloadSignature(): String {
+        val prefs = carContext.getSharedPreferences(
+            ECSAndroidAutoConstants.PREFS_NAME,
+            android.content.Context.MODE_PRIVATE
+        )
+        return ECSAndroidAutoConstants.payloadSignature(
+            prefs,
+            ECSAndroidAutoConstants.KEY_STATUS_DATA,
+            ECSAndroidAutoConstants.KEY_BREADCRUMB_DATA,
+            ECSAndroidAutoConstants.KEY_MODE_STATE,
+            ECSAndroidAutoConstants.KEY_SYSTEM_HEALTH,
+            ECSAndroidAutoConstants.KEY_DISPLAY_MODE
+        )
     }
 
     /**
@@ -176,6 +201,10 @@ class ECSVehicleStatusScreen(carContext: CarContext) : Screen(carContext) {
                     }
                     vehicleSystemsNominal = nominal
                 }
+                val safeState = json.optJSONObject("automotiveSafeState")
+                dataFreshness = safeState?.optString("freshness", "unavailable") ?: "unavailable"
+                dataAvailability = safeState?.optString("availability", "unavailable") ?: "unavailable"
+                dataSourceLabel = safeState?.optString("sourceLabel", "Unavailable") ?: "Unavailable"
             }
 
             // Read breadcrumb data
@@ -252,7 +281,8 @@ class ECSVehicleStatusScreen(carContext: CarContext) : Screen(carContext) {
         val modeTag = if (displayMode == "expedition_drive") "EXP" else "HWY"
         val overrideTag = if (isManualOverride) " (Manual)" else ""
         val baseTitle = if (displayMode == "expedition_drive") "EXPEDITION STATUS" else "TRIP STATUS"
-        return "$baseTitle \u2022 $modeTag$overrideTag"
+        val freshnessTag = if (dataFreshness == "live" || dataFreshness == "recent") "" else " | ${dataFreshness.uppercase()}"
+        return "$baseTitle \u2022 $modeTag$overrideTag$freshnessTag"
     }
 
     /**
@@ -327,7 +357,7 @@ class ECSVehicleStatusScreen(carContext: CarContext) : Screen(carContext) {
         paneBuilder.addRow(
             Row.Builder()
                 .setTitle("Connectivity")
-                .addText(connectivityForecast.uppercase())
+                .addText("${connectivityForecast.uppercase()} | ${if (dataAvailability == "unavailable") "Unavailable" else "$dataSourceLabel ${dataFreshness.uppercase()}"}")
                 .build()
         )
 
@@ -410,7 +440,7 @@ class ECSVehicleStatusScreen(carContext: CarContext) : Screen(carContext) {
         paneBuilder.addRow(
             Row.Builder()
                 .setTitle("Vehicle Systems")
-                .addText(sysText)
+                .addText("$sysText | ${if (dataAvailability == "unavailable") "Unavailable" else "$dataSourceLabel ${dataFreshness.uppercase()}"}")
                 .build()
         )
 

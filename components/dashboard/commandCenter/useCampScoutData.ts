@@ -17,7 +17,10 @@ import {
   navigateRouteSessionStore,
   type NavigateRouteSessionSnapshot,
 } from '../../../lib/navigateRouteSessionStore';
-import type { EstablishedCampsite } from '../../../lib/map/establishedCampsiteTypes';
+import {
+  isEstablishedCampsitesLayerAvailable,
+  type EstablishedCampsite,
+} from '../../../lib/map/establishedCampsiteTypes';
 import { SAMPLE_ESTABLISHED_CAMPSITES } from '../../../lib/map/establishedCampsiteSources';
 import type { ECSPin } from '../../navigate/PinTypes';
 import type { VehicleSessionState } from '../../../lib/vehicleCompanionTypes';
@@ -103,14 +106,6 @@ function establishedToCampCandidate(site: EstablishedCampsite): CampScoutCommand
     isEstimated: true,
     sourceLabel: site.source.replace(/_/g, ' '),
   };
-}
-
-function isEstablishedCandidateSourceEnabled(): boolean {
-  const envValue =
-    typeof process !== 'undefined'
-      ? process.env.EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER
-      : undefined;
-  return envValue === 'true' || envValue === '1';
 }
 
 function usePinSnapshot(enabled: boolean): ECSPin[] {
@@ -255,7 +250,7 @@ export function useCampScoutData(options: UseCampScoutDataOptions = {}): CampSco
 
   const candidates = useMemo<CampScoutCommandCandidateInput[]>(() => {
     const saved = pins.map(pinToCampCandidate).filter((entry): entry is CampScoutCommandCandidateInput => !!entry);
-    const established = isEstablishedCandidateSourceEnabled()
+    const established = isEstablishedCampsitesLayerAvailable()
       ? SAMPLE_ESTABLISHED_CAMPSITES.map(establishedToCampCandidate)
       : [];
     return [...saved, ...established];

@@ -123,6 +123,7 @@ const bundle = buildOfflineFailureDrillEvidenceCaptureBundle({
   captureId: 'capture-test-001',
   capturedAt: now,
   source: 'app_runtime_export',
+  systemNetworkDisabled: true,
   cacheFixtureProfile: 'partial',
   drillResult,
   readinessAssessment: readiness,
@@ -184,6 +185,8 @@ assert.equal(draftManifest.resultSummary.productionReadiness, 'blocked', 'Manife
 const blockedValidation = validateOfflineFailureDrillAndroidEvidenceManifest(draftManifest, {
   rootDir: tempRoot,
   artifactExists: fs.existsSync,
+  artifactRead: (artifactPath) => fs.readFileSync(artifactPath, 'utf8'),
+  artifactSize: (artifactPath) => fs.statSync(artifactPath).size,
 });
 assert.equal(blockedValidation.productionEligible, false, 'Missing screenshots/logs/owner acceptance must keep production blocked.');
 assert.ok(blockedValidation.failedRules.includes('screenshotPaths.at_least_one_required'));
@@ -210,8 +213,14 @@ const acceptedManifest = buildOfflineFailureDrillAndroidManifestFromCapture(bund
 const acceptedValidation = validateOfflineFailureDrillAndroidEvidenceManifest(acceptedManifest, {
   rootDir: tempRoot,
   artifactExists: fs.existsSync,
+  artifactRead: (artifactPath) => fs.readFileSync(artifactPath, 'utf8'),
+  artifactSize: (artifactPath) => fs.statSync(artifactPath).size,
 });
-assert.equal(acceptedValidation.structurallyValid, true, 'Accepted real-shaped manifest should validate structurally.');
+assert.equal(
+  acceptedValidation.structurallyValid,
+  true,
+  `Accepted real-shaped manifest should validate structurally: ${acceptedValidation.failedRules.join(', ')}`,
+);
 assert.equal(acceptedValidation.productionEligible, true, 'Real accepted manifest with required artifacts should be production eligible.');
 
 console.log('offline failure drill evidence capture checks passed');

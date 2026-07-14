@@ -14,6 +14,7 @@ function assert(condition, message) {
 }
 
 const hook = read('lib/useUnifiedDeviceConnections.ts');
+const scannerCoordinator = read('lib/unifiedScannerCoordinator.ts');
 const vtHook = read('src/vehicle-telemetry/useVehicleTelemetry.ts');
 const vtScannerHook = read('src/vehicle-telemetry/useOBD2Scanner.ts');
 const vtService = read('src/vehicle-telemetry/VehicleTelemetryService.ts');
@@ -47,6 +48,15 @@ assert(
     hook.includes('disconnectInFlightRef.current.delete(device.id)') &&
     hook.includes('updateBusy(device.id, false)'),
   'Manual disconnect must enter disconnecting state, stop active scans, and release UI/busy guards in finally.',
+);
+
+assert(
+  hook.includes('scannerCoordinatorRef.current!.requestSession') &&
+    hook.includes("scannerCoordinatorRef.current?.cancel('unmount')") &&
+    hook.includes("void stopScanning('app_state_inactive')") &&
+    scannerCoordinator.includes('active.controller.abort(reason)') &&
+    scannerCoordinator.includes('if (this.active.timeout) clearTimeout(this.active.timeout)'),
+  'Unified scanner coordinator must cancel native work and clean its timeout on background, unmount, and manual stop.',
 );
 
 assert(

@@ -11,6 +11,7 @@ const appContextSource = fs.readFileSync(path.join(root, 'context', 'AppContext.
 const distributionEntrySource = fs.readFileSync(path.join(root, 'lib', 'auth', 'distributionEntryResolver.ts'), 'utf8');
 const authCopySource = fs.readFileSync(path.join(root, 'lib', 'auth', 'authCopy.ts'), 'utf8');
 const routeManifestSource = fs.readFileSync(path.join(root, 'lib', 'routeManifest.ts'), 'utf8');
+const startupHydrationSource = fs.readFileSync(path.join(root, 'lib', 'state', 'ecsStartupHydration.ts'), 'utf8');
 const videoSource = fs.readFileSync(path.join(root, 'components', 'LoadingTransitionVideo.tsx'), 'utf8');
 
 function normalize(source) {
@@ -167,8 +168,18 @@ assertIncludes(
 );
 assertIncludes(
   appContextSource,
-  'void withStartupTimeout(\n        \'optional dashboard/expedition hydration\',',
-  'Dashboard and expedition hydration should continue as optional background startup work.',
+  'void hydrateECSOptionalStartupState(STARTUP_OPTIONAL_READINESS_TIMEOUT_MS)',
+  'Dashboard and expedition hydration should continue through the optional startup coordinator.',
+);
+assertIncludes(
+  startupHydrationSource,
+  "id: 'dashboard_layout'",
+  'The optional startup plan should include Dashboard hydration.',
+);
+assertIncludes(
+  startupHydrationSource,
+  "id: 'active_expedition'",
+  'The optional startup plan should include active Expedition restoration.',
 );
 assertIncludes(
   appContextSource,
@@ -419,7 +430,7 @@ assertIncludes(
 );
 assertIncludes(
   routeManifestSource,
-  "const withoutTrailingSlash = withoutQueryAndHash.length > 1\n    ? withoutQueryAndHash.replace(/\\/+$/, '')\n    : withoutQueryAndHash;",
+  "const withLeadingSlash = withoutQueryAndHash.startsWith('/') ? withoutQueryAndHash : `/${withoutQueryAndHash}`;\n  const withoutTrailingSlash = withLeadingSlash.length > 1 ? withLeadingSlash.replace(/\\/+$/, '') : withLeadingSlash;",
   'Canonical route normalization should remove trailing slashes so /login/ is treated like /login during second-login handoff.',
 );
 

@@ -9,6 +9,7 @@ import {
 } from '../fsCompat';
 import { getBadgesForTrip } from './expeditionBadgeStore';
 import { expeditionTripRecordStore } from './expeditionTripRecordStore';
+import { stableLifecycleHash } from '../lifecycle/routeTripExpeditionLifecycle';
 import type {
   ExpeditionBadge,
   ExpeditionRecapNotableMoment,
@@ -18,7 +19,7 @@ import type {
 } from './expeditionTripRecordTypes';
 
 const STORAGE_KEY = 'ecs_expedition_reports_v1';
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 const REPORT_DIRECTORY = 'expedition-reports/';
 const reportStorage = createMigratingNonSecureStorage('ecs_expedition_reports', {
   logTag: 'ExpeditionReportStore',
@@ -56,12 +57,6 @@ let hydrationPromise: Promise<PersistedExpeditionReports> | null = null;
 
 function nowISO(): string {
   return new Date().toISOString();
-}
-
-function generateId(prefix = 'expedition-report'): string {
-  const cryptoRef = typeof crypto !== 'undefined' ? crypto : null;
-  if (cryptoRef?.randomUUID) return cryptoRef.randomUUID();
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function nullableString(value: unknown): string | null {
@@ -108,6 +103,8 @@ function normalizeReport(raw: unknown): ExpeditionReport | null {
   return {
     id,
     tripId,
+    sourceFingerprint: nullableString(input?.sourceFingerprint) ?? `legacy:${tripId}`,
+    privacyMode: 'redacted',
     generatedAt,
     title: nullableString(input?.title) ?? 'Expedition Report',
     completedAt: nullableString(input?.completedAt),
@@ -588,12 +585,29 @@ export async function generateExpeditionReport(tripId: string): Promise<Expediti
     const trip = await expeditionTripRecordStore.getById(tripId);
     if (!trip || trip.status !== 'completed') return null;
 
-    const generatedAt = nowISO();
     const badgesEarned = await getBadgesForTrip(tripId).catch(() => []);
+    const sourceFingerprint = stableLifecycleHash(JSON.stringify({
+      tripId: trip.id,
+      completionKey: trip.completionKey,
+      updatedAt: trip.updatedAt,
+      badges: badgesEarned
+        .map((badge) => ({ id: badge.id, unlockedAt: badge.unlockedAt, updatedAt: badge.updatedAt }))
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    }));
+    const sourceTimestamps = [
+      trip.updatedAt,
+      trip.completedAt,
+      ...badgesEarned.map((badge) => badge.updatedAt),
+    ]
+      .filter((value): value is string => typeof value === 'string' && Number.isFinite(new Date(value).getTime()))
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+    const generatedAt = sourceTimestamps[0] ?? nowISO();
     const recapMoments = trip.recap?.expeditionEvents.notableMoments ?? [];
     const report: ExpeditionReport = {
-      id: generateId(),
+      id: `expedition-report:${stableLifecycleHash(tripId)}`,
       tripId,
+      sourceFingerprint,
+      privacyMode: 'redacted',
       generatedAt,
       title: trip.title,
       completedAt: trip.completedAt,
@@ -603,9 +617,12 @@ export async function generateExpeditionReport(tripId: string): Promise<Expediti
       elevationGainFt: trip.totalElevationGainFt ?? trip.recap?.journeySummary.elevationGainFt ?? null,
       recapHeadline: trip.recap?.generatedNarrative.headline ?? null,
       recapSummary: trip.recap?.generatedNarrative.summaryParagraph ?? trip.generatedSummary?.text ?? null,
-      notableMoments: getTopNotableMoments(recapMoments, trip.startedAt),
+      notableMoments: getTopNotableMoments(recapMoments, trip.startedAt).map((moment) => ({
+        ...moment,
+        coordinate: null,
+      })),
       badgesEarned,
-      routeBounds: trip.recap?.routeSummary.routeBounds ?? trip.routeBounds,
+      routeBounds: null,
       routeGeometryReference:
         trip.recap?.routeSummary.routeGeometryReference ??
         (trip.routeGeometry.length > 0 ? `trip:${trip.id}:routeGeometry` : null),

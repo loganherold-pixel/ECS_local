@@ -10,6 +10,8 @@
  */
 package com.ecs.androidauto
 
+import android.content.SharedPreferences
+
 object ECSAndroidAutoConstants {
     /** SharedPreferences file name */
     const val PREFS_NAME = "ecs_android_auto"
@@ -92,4 +94,7 @@ object ECSAndroidAutoConstants {
      * Used by all screens to show graceful fallback states.
      */
     const val KEY_SYSTEM_HEALTH = "system_health"
+
+    fun payloadSignature(prefs: SharedPreferences, vararg keys: String): String =
+        keys.joinToString(separator = "|") { key -> prefs.getString(key, "") ?: "" }
 }

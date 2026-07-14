@@ -28,7 +28,7 @@ Evidence/gate:
 | Area | Check | Status | Evidence |
 | --- | --- | --- | --- |
 | Type safety | `npx tsc --noEmit --pretty false` | Passed | Direct TypeScript check completed. |
-| Release diagnostics | `npm run test:release-readiness` | Passed | Release diagnostic wiring, scenario matrix, risk summary, and checklist sections are present. |
+| Release verification | `npm run test:release-readiness` | Passed | Executable capability/scenario coverage and CI lane contracts pass. This code check does not grant production approval. |
 | Dispatch/Convoy internal beta | `npm run gate:dispatch-internal-beta` | Passed | Route, import, feature flag, emergency ping, mock/live, profile setup, location failure, modal, TypeScript, and lint gates pass. |
 | Dispatch/Convoy production | `npm run gate:dispatch-convoy-production` | Blocked for production approvals | Implementation checks pass. Android visual matrix is captured after responsive fixes. GPS-allowed and GPS-denied ping evidence were captured. Event detail, Navigate Assist handoff, readiness prompt, and Navigate recovery route card evidence were captured. Position-sharing approval and owner production decision remain incomplete. |
 | Top/bottom shell layout | `npm run test:top-banner-title-layout` | Passed | Test now verifies the current Slot shell plus CommandDock-owned tab labels. |

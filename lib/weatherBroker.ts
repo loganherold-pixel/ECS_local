@@ -11,6 +11,38 @@ import type {
   WeatherResponse,
   WaypointWeather,
 } from './weatherTypes';
+import {
+  clearOperationalWeatherRouteJobsForTests,
+} from './weatherBrokerEnvironment';
+
+export type {
+  OperationalWeatherAuthority,
+  OperationalWeatherBrokerDiagnostics,
+  OperationalWeatherBrokerPersistedState,
+  OperationalWeatherBrokerRequest,
+  OperationalWeatherBrokerResult,
+  OperationalWeatherCacheState,
+  OperationalWeatherConflict,
+  OperationalWeatherDataKind,
+  OperationalWeatherDatum,
+  OperationalWeatherProviderOutcome,
+  OperationalWeatherProviderStatus,
+  OperationalWeatherRouteJobToken,
+} from './weatherBrokerEnvironment';
+export {
+  buildOperationalWeatherEnvironmentRequestKey,
+  beginOperationalWeatherRouteJob,
+  cancelOperationalWeatherRouteJob,
+  clearOperationalWeatherRouteJobsForTests,
+  createOperationalWeatherEnvironmentBroker,
+  createOperationalWeatherRouteJobCoordinator,
+  detectOperationalWeatherConflicts,
+  getOperationalWeatherEnvironmentBroker,
+  getOperationalWeatherRouteJobDiagnostics,
+  normalizeSourceObservation,
+  OperationalWeatherProviderTimeoutError,
+  OperationalWeatherRequestCancelledError,
+} from './weatherBrokerEnvironment';
 
 export type WeatherBrokerUseCase =
   | 'active_navigation'
@@ -846,4 +878,5 @@ export function getWeatherBrokerBudgetSnapshot() {
 
 export function clearWeatherBrokerForTests(): void {
   defaultWeatherBroker.clear();
+  clearOperationalWeatherRouteJobsForTests();
 }

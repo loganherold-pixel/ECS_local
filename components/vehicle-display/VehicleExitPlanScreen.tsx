@@ -33,7 +33,7 @@ export default function VehicleExitPlanScreen({ data, automotive }: Props) {
       <View style={styles.hero}>
         <Text style={styles.heroLabel}>EXIT PLAN</Text>
         <Text style={styles.heroValue}>
-          {data.nearestBailoutLabel ?? 'No bailout target'}
+          {data.nearestBailoutLabel ?? 'No confirmed exit target'}
         </Text>
         <Text style={styles.heroSub}>
           {exitCommand?.summary ?? data.supportLabel ?? data.unavailableReason ?? 'Exit context unavailable'}
@@ -42,7 +42,7 @@ export default function VehicleExitPlanScreen({ data, automotive }: Props) {
 
       <View style={styles.metrics}>
         <Metric
-          label="Bailout"
+          label="Nearest ref."
           value={
             data.nearestBailoutDistanceMiles != null
               ? `${data.nearestBailoutDistanceMiles} mi`

@@ -18,6 +18,8 @@ import {
 } from '../../lib/map/establishedCampgroundMobile';
 import { buildEstablishedCampgroundDetailRows } from '../../lib/map/establishedCampgroundDetailRows';
 import { resolveEstablishedCampgroundScore } from '../../lib/map/establishedCampgroundScore';
+import { buildEstablishedCampgroundSourceTruthBinding } from '../../lib/sourceTruthAdapters';
+import { SourceTruthInspectorTrigger } from '../source-truth';
 
 type Props = {
   visible: boolean;
@@ -80,6 +82,7 @@ export default function EstablishedCampsiteSheet({
     campsite.lastAvailabilityCheckedAt,
   );
   const scoreSummary = resolveEstablishedCampgroundScore(campsite);
+  const sourceTruthBinding = buildEstablishedCampgroundSourceTruthBinding(campsite);
   const detailRows = buildEstablishedCampgroundDetailRows(campsite);
   const scrollContentStyle = WEB_SCROLL_CONTAINMENT_STYLE
     ? [styles.bodyContent, WEB_SCROLL_CONTAINMENT_STYLE]
@@ -161,6 +164,13 @@ export default function EstablishedCampsiteSheet({
                   Live detail refreshed {formatDate(campsite.liveDetailFetchedAt) ?? 'recently'}.
                 </Text>
               ) : null}
+              <SourceTruthInspectorTrigger
+                source={sourceTruthBinding.ref}
+                sources={sourceTruthBinding.sources}
+                policyKey={sourceTruthBinding.policyKey}
+                dependencies={sourceTruthBinding.dependencies}
+                label="Source and conditions"
+              />
             </View>
 
             <View style={styles.section}>

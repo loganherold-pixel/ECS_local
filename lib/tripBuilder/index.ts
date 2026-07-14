@@ -17,6 +17,7 @@ export * from './trailRouteGeometryResolver';
 export * from './trailheadStartValidation';
 export * from './tripBuilderSuggestedRouteHandoff';
 export * from './tripBuilderRouteHandoffStore';
+export * from './tripBuilderPlanStore';
 export * from './smartResupplyPlanner';
 export * from './routeContextTripBuilderAdapter';
 export * from './mapboxRouteContextAdapters';

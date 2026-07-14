@@ -123,7 +123,7 @@ assertIncludes(handoff, 'clearOfflinePrepPackHandoff', 'Offline Prep handoff cle
 assertIncludes(tripBuilder, 'saveOfflinePrepPackHandoff({', 'Trip Builder Offline Prep CTA handoff');
 assertIncludes(tripBuilder, 'itinerary: itineraryForOfflinePrep', 'Trip Builder Offline Prep CTA should hand off the completed TripItinerary.');
 assertIncludes(tripBuilder, "}, 'trip_builder')", 'Trip Builder Offline Prep CTA source');
-assertIncludes(tripBuilder, "router.push('/explore-offline-prep-pack')", 'Trip Builder Offline Prep navigation');
+assertIncludes(tripBuilder, "pushSingleFlight('/explore-offline-prep-pack')", 'Trip Builder Offline Prep single-flight navigation');
 assertIncludes(tripBuilder, 'testID="trip-builder-prepare-offline-pack"', 'Trip Builder Offline Prep CTA');
 assertIncludes(tripBuilder, "offlinePrepGeometrySource: routePoints.length >= 2", 'Trip Builder Offline Prep handoff should mark selected route preview geometry.');
 assertIncludes(tripBuilder, 'selectedPreparedRoutePoints.length >= 2', 'Trip Builder Offline Prep handoff should use prepared route preview points.');

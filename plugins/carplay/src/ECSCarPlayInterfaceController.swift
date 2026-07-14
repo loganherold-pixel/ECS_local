@@ -9,7 +9,8 @@
  *   - Actions
  *
  * Reads VehicleDisplayMode from UserDefaults to determine content.
- * Refreshes screen data on a 3-second timer.
+ * Polls shared data on a bounded timer and rebuilds templates only when the
+ * semantic payload changes.
  *
  * Architecture:
  *   - Wraps CPInterfaceController
@@ -36,7 +37,8 @@ class ECSCarPlayInterfaceController: NSObject {
     
     /// Refresh timer
     private var refreshTimer: Timer?
-    private let refreshInterval: TimeInterval = 3.0
+    private let refreshInterval: TimeInterval = 5.0
+    private var lastPayloadSignature: String?
     
     /// Current display mode
     private var displayMode: String = "highway_drive"
@@ -92,6 +94,7 @@ class ECSCarPlayInterfaceController: NSObject {
         writeActiveScreen("map")
         
         // Start refresh timer
+        lastPayloadSignature = payloadSignature()
         startRefreshTimer()
     }
     
@@ -105,12 +108,30 @@ class ECSCarPlayInterfaceController: NSObject {
     }
     
     private func refresh() {
+        let nextSignature = payloadSignature()
+        guard nextSignature != lastPayloadSignature else { return }
+        lastPayloadSignature = nextSignature
+
         readDisplayMode()
         
         mapScreen?.refresh(mode: displayMode)
         statusScreen?.refresh(mode: displayMode)
         weatherScreen?.refresh(mode: displayMode)
         actionsScreen?.refresh(mode: displayMode)
+    }
+
+    private func payloadSignature() -> String {
+        let defaults = ECSCarPlayConstants.defaults()
+        return [
+            defaults.string(forKey: ECSCarPlayConstants.keyDisplayMode) ?? "",
+            defaults.string(forKey: ECSCarPlayConstants.keyMapData) ?? "",
+            defaults.string(forKey: ECSCarPlayConstants.keyStatusData) ?? "",
+            defaults.string(forKey: ECSCarPlayConstants.keyWeatherData) ?? "",
+            defaults.string(forKey: ECSCarPlayConstants.keyActionsData) ?? "",
+            defaults.string(forKey: ECSCarPlayConstants.keyModeState) ?? "",
+            defaults.string(forKey: ECSCarPlayConstants.keyBreadcrumbData) ?? "",
+            defaults.string(forKey: ECSCarPlayConstants.keySystemHealth) ?? ""
+        ].joined(separator: "|")
     }
     
     private func readDisplayMode() {
@@ -128,6 +149,7 @@ class ECSCarPlayInterfaceController: NSObject {
     func stop() {
         refreshTimer?.invalidate()
         refreshTimer = nil
+        lastPayloadSignature = nil
         mapScreen = nil
         statusScreen = nil
         weatherScreen = nil

@@ -15,6 +15,10 @@ import {
   deriveExploreLiveConfidence,
   type ExploreLiveConfidence,
 } from './exploreLiveConfidence';
+import {
+  normalizeExploreDiscoveryItems,
+  routeWithExploreDiscoveryProvenance,
+} from './exploreDiscoveryItem';
 
 export type ExploreWizardRouteSourceKind =
   | 'trail_pack'
@@ -263,28 +267,25 @@ export function normalizeExploreWizardRouteCandidates(
   const candidates: ExploreWizardRouteCandidate[] = [];
   const hiddenRoutes: ExploreWizardHiddenRoute[] = [];
   const hiddenBySource = emptyHiddenCounts();
-  const seenCandidateKeys = new Set<string>();
 
-  for (const source of SOURCE_ORDER) {
-    const routes = input[source.key] ?? [];
-    for (const route of routes) {
-      const built = buildCandidate(route, source.sourceKind);
-      if ('reason' in built) {
-        hiddenRoutes.push(built);
-        hiddenBySource[source.sourceKind] += 1;
-        continue;
-      }
+  const discoveryItems = normalizeExploreDiscoveryItems(
+    SOURCE_ORDER.flatMap((source) =>
+      (input[source.key] ?? []).map((route) => ({
+        route,
+        sourceKind: source.sourceKind,
+      })),
+    ),
+  );
 
-      const dedupeKey = String(
-        built.route.routeMetadata?.identityKey ??
-          built.route.id ??
-          built.navigationPayload.id ??
-          built.title,
-      ).toLowerCase();
-      if (seenCandidateKeys.has(dedupeKey)) continue;
-      seenCandidateKeys.add(dedupeKey);
-      candidates.push(built);
+  for (const item of discoveryItems) {
+    const sourceKind = item.primarySource.sourceKind;
+    const built = buildCandidate(routeWithExploreDiscoveryProvenance(item), sourceKind);
+    if ('reason' in built) {
+      hiddenRoutes.push(built);
+      hiddenBySource[sourceKind] += 1;
+      continue;
     }
+    candidates.push(built);
   }
 
   const thumbnailAssignments = getExploreRouteThumbnailAssignments(
@@ -440,7 +441,7 @@ export function getExploreWizardSourceLabel(sourceKind: ExploreWizardRouteSource
     case 'hidden_gem':
       return 'Hidden Gems';
     case 'ecs_idea':
-      return 'ECS Ideas';
+      return 'AI Route Idea';
     case 'saved_built':
       return 'Saved/Built';
     case 'imported_stitched':

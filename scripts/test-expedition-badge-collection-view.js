@@ -9,18 +9,17 @@ function read(relativePath) {
 }
 
 const hubSource = read('components/dashboard/ExpeditionTab.tsx');
+const catalogViewSource = read('components/dashboard/ExpeditionBadgeCatalogView.tsx');
 const visualsSource = read('components/dashboard/ExpeditionBadgeVisuals.tsx');
+const catalogSource = read('lib/expedition/expeditionBadgeCatalog.ts');
 
 [
-  'UnlockedBadgesView',
-  'Unlocked Badges',
-  'Earned Badges',
+  'ExpeditionBadgeCatalogView',
+  'Badge Catalog',
   'getBadgeProgress',
   'badgeProgress',
-  'BadgeMilestoneList',
-  'BadgeCollectionMode',
 ].forEach((snippet) => {
-  assert(hubSource.includes(snippet), `Badge collection view should include ${snippet}.`);
+  assert(hubSource.includes(snippet), `Expedition Hub catalog wiring should include ${snippet}.`);
 });
 
 [
@@ -31,51 +30,44 @@ const visualsSource = read('components/dashboard/ExpeditionBadgeVisuals.tsx');
   'Recent',
   'Rarity',
   'Category',
+  'Earned',
+  'Available',
 ].forEach((label) => {
-  assert(hubSource.includes(label), `Badge collection summary/organization should include ${label}.`);
-});
-
-[
-  'No badges earned yet.',
-  'Complete expeditions to begin earning field accomplishments.',
-].forEach((copy) => {
-  assert(hubSource.includes(copy), `Badge collection empty state should include ${copy}.`);
-});
-
-[
-  'badge search',
-  'badge artwork upgrade',
-  'badge sharing',
-  'badge export stamps',
-  'seasonal badge collections',
-  'rare badge showcase',
-].forEach((todo) => {
-  assert(hubSource.includes(todo), `Badge collection future hook should mention ${todo}.`);
+  assert(catalogViewSource.includes(label), `Badge catalog should include ${label}.`);
 });
 
 assert(
-  visualsSource.includes('export function BadgeMilestoneList') &&
-    visualsSource.includes('!badge.unlockedAt && !badge.isHidden && badge.progressTarget != null') &&
-    visualsSource.includes('Next Known Milestones'),
-  'Next known milestones should use visible progressive locked badges only.',
+  catalogViewSource.includes('SectionList') &&
+    catalogViewSource.includes('initialNumToRender={12}') &&
+    catalogViewSource.includes('maxToRenderPerBatch={12}') &&
+    catalogViewSource.includes('windowSize={7}') &&
+    !catalogViewSource.includes('<ScrollView'),
+  'The 160-plus item badge catalog should use bounded virtualized rendering.',
 );
 
 assert(
-  hubSource.includes('buildBadgeCollectionSections') &&
-    hubSource.includes("mode === 'recent'") &&
-    hubSource.includes("mode === 'rarity'") &&
-    hubSource.includes('formatCategory(category)'),
-  'Badge collection should organize unlocked badges by Recent, Rarity, and Category.',
+  catalogSource.includes('getExpeditionBadgeCatalogForUser') &&
+    catalogSource.includes('const earnedIds = new Set(earnedBadgeIds)') &&
+    catalogSource.includes('.filter((definition) => !definition.isHidden || earnedIds.has(definition.id))') &&
+    catalogSource.includes('artwork: isEarned ? getExpeditionBadgeArtwork(definition.id) : null'),
+  'Catalog selector should deduplicate earned IDs, hide locked hidden definitions, and gate artwork on earned state.',
+);
+
+assert(
+  catalogViewSource.includes('isEarned={entry.isEarned}') &&
+    catalogViewSource.includes('artwork={entry.artwork}') &&
+    catalogViewSource.includes('badgeProgress') &&
+    visualsSource.includes("isEarned ? 'achieved' : 'locked'") &&
+    visualsSource.includes('badge.iconKey'),
+  'Catalog cards should show achieved art while preserving iconKey and known progress for locked visible badges.',
 );
 
 assert(
   !hubSource.includes('EXPEDITION_BADGE_DEFINITIONS.map') &&
-    !visualsSource.includes('EXPEDITION_BADGE_DEFINITIONS.map') &&
-    !hubSource.includes('mystery badge') &&
-    !visualsSource.includes('mystery badge') &&
-    !hubSource.includes('Locked Badge') &&
-    !visualsSource.includes('Locked Badge'),
-  'Badge collection must not expose a locked badge catalog or hidden locked badges.',
+    !catalogViewSource.includes('EXPEDITION_BADGE_DEFINITIONS.map') &&
+    !hubSource.toLowerCase().includes('mystery badge') &&
+    !catalogViewSource.toLowerCase().includes('mystery badge'),
+  'Registry iteration and hidden-state policy should stay in the pure catalog selector.',
 );
 
 for (const forbidden of [
@@ -84,7 +76,7 @@ for (const forbidden of [
   'placeholder badge',
   'Alert.alert',
 ]) {
-  assert(!hubSource.includes(forbidden), `Badge collection should avoid forbidden behavior: ${forbidden}.`);
+  assert(!catalogViewSource.includes(forbidden), `Badge catalog should avoid forbidden behavior: ${forbidden}.`);
   assert(!visualsSource.includes(forbidden), `Badge visuals should avoid forbidden behavior: ${forbidden}.`);
 }
 

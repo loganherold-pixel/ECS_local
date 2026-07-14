@@ -54,6 +54,9 @@ class ECSCarPlayMapScreen {
     private var isManualOverride = false
     private var transitionNoticeMessage: String?
     private var transitionNoticeTimestamp: Double = 0
+    private var dataFreshness = "unavailable"
+    private var dataAvailability = "unavailable"
+    private var dataSourceLabel = "Unavailable"
     
     // System health
     private var gpsAvailable = false
@@ -77,7 +80,7 @@ class ECSCarPlayMapScreen {
         // Read map data
         if let mapData = ECSCarPlayConstants.readJSON(ECSCarPlayConstants.keyMapData) {
             displayMode = mapData["mode"] as? String ?? displayMode
-            hasRoute = mapData["routeLine"] as? Bool ?? false
+            let routeLineAvailable = mapData["routeLine"] as? Bool ?? false
             nextManeuver = mapData["nextManeuver"] as? String
             distanceRemainingMiles = mapData["distanceRemainingMiles"] as? Double
             etaMinutes = mapData["etaMinutes"] as? Int
@@ -85,6 +88,16 @@ class ECSCarPlayMapScreen {
             offRouteDistanceFt = mapData["offRouteDistanceFt"] as? Double
             importedGpxRoute = mapData["importedGpxRoute"] as? Bool ?? false
             offlineMapIndicator = mapData["offlineMapIndicator"] as? Bool ?? false
+            if let safeState = mapData["automotiveSafeState"] as? [String: Any] {
+                dataFreshness = safeState["freshness"] as? String ?? "unavailable"
+                dataAvailability = safeState["availability"] as? String ?? "unavailable"
+                dataSourceLabel = safeState["sourceLabel"] as? String ?? "Unavailable"
+            } else {
+                dataFreshness = "unavailable"
+                dataAvailability = "unavailable"
+                dataSourceLabel = "Unavailable"
+            }
+            hasRoute = routeLineAvailable && dataAvailability != "unavailable"
         }
         
         // Read breadcrumb data
@@ -148,7 +161,10 @@ class ECSCarPlayMapScreen {
         // Mode indicator in leading navigation bar
         let modeLabel = displayMode == "expedition_drive" ? "EXP" : "HWY"
         let manualSuffix = isManualOverride ? " (M)" : ""
-        let modeButton = CPBarButton(title: "\(modeLabel)\(manualSuffix)") { _ in
+        let freshnessSuffix = dataFreshness == "live" || dataFreshness == "recent"
+            ? ""
+            : " \(dataFreshness.uppercased())"
+        let modeButton = CPBarButton(title: "\(modeLabel)\(manualSuffix)\(freshnessSuffix)") { _ in
             // Mode indicator — informational only on map
         }
         
@@ -189,7 +205,19 @@ class ECSCarPlayMapScreen {
                 etaText = eta < 60 ? "\(eta) min" : String(format: "%.1f hrs", Double(eta) / 60.0)
             }
             
-            let infoButton = CPBarButton(title: "\(distText) \(etaText)") { _ in }
+            let compactSourceLabel: String
+            switch dataSourceLabel {
+            case "ECS active guidance":
+                compactSourceLabel = "ECS"
+            case "Device GPS":
+                compactSourceLabel = "GPS"
+            case "Unavailable":
+                compactSourceLabel = ""
+            default:
+                compactSourceLabel = dataFreshness.uppercased()
+            }
+            let sourceText = compactSourceLabel.isEmpty ? "" : " \(compactSourceLabel)"
+            let infoButton = CPBarButton(title: "\(distText) \(etaText)\(sourceText)") { _ in }
             template.trailingNavigationBarButtons = [infoButton]
         } else if !gpsAvailable {
             let fallbackButton = CPBarButton(title: gpsLabel) { _ in }

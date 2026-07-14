@@ -85,9 +85,10 @@ assert(
   'Current-location forecast should render the shared operational weather snapshot state and refresh path.',
 );
 assert(
-  navigate.includes("const navigateTrailAssessmentActive = navigationOverlayMode === 'active'") &&
-    navigate.includes('trailAssessmentActive={navigateTrailAssessmentActive}'),
-  'Navigate weather Trail Conditions should only show active route assessment when guidance is active.',
+  !navigate.includes('<WeatherIntelPanel') &&
+    navigate.includes('<RouteWeatherTimeline') &&
+    navigate.includes('hasRoute={routeCorridorWeather.hasRoute}'),
+  'Navigate should use its route-aware weather timeline without bundling the removed inline weather panel.',
 );
 assert(
   navigate.includes('const hideWeatherTopOverlays =') &&

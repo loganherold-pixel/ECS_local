@@ -522,9 +522,13 @@ export default function OfflineCacheModal({
 
   const handleDelete = useCallback((regionId: string) => {
     const doDelete = async () => {
-      await tileCacheStore.deleteRegion(regionId);
-      showToast('REGION DELETED');
-      refreshData();
+      try {
+        await tileCacheStore.deleteRegion(regionId);
+        showToast('REGION DELETED');
+        refreshData();
+      } catch (deleteError) {
+        showToast(deleteError instanceof Error ? deleteError.message : 'REGION COULD NOT BE DELETED');
+      }
     };
     if (Platform.OS === 'web') { if (confirm('Delete this cached region?')) doDelete(); }
     else { Alert.alert('Delete Region', 'Remove this cached region and all tiles?', [
@@ -535,17 +539,28 @@ export default function OfflineCacheModal({
 
   const handleDeleteDownloadedSync = useCallback((item: DownloadedSyncCard) => {
     const doDelete = async () => {
-      if (item.kind === 'route') {
-        await removeOfflineCachedRoute(item.route.id);
-        if (item.route.offlineTileRegionId) {
-          await tileCacheStore.deleteRegion(item.route.offlineTileRegionId).catch(() => {});
+      try {
+        if (item.kind === 'route') {
+          const protectionReason = item.route.offlineTileRegionId
+            ? tileCacheStore.getRegionProtectionReason(item.route.offlineTileRegionId)
+            : null;
+          if (protectionReason) {
+            showToast(`OFFLINE ROUTE IS PROTECTED: ${protectionReason}`);
+            return;
+          }
+          await removeOfflineCachedRoute(item.route.id);
+          if (item.route.offlineTileRegionId) {
+            await tileCacheStore.deleteRegion(item.route.offlineTileRegionId);
+          }
+          showToast('OFFLINE ROUTE REMOVED');
+        } else {
+          await tileCacheStore.deleteRegion(item.regionItem.id);
+          showToast('DOWNLOADED SYNC REMOVED');
         }
-        showToast('OFFLINE ROUTE REMOVED');
-      } else {
-        await tileCacheStore.deleteRegion(item.regionItem.id);
-        showToast('DOWNLOADED SYNC REMOVED');
+        refreshData();
+      } catch (deleteError) {
+        showToast(deleteError instanceof Error ? deleteError.message : 'DOWNLOADED SYNC COULD NOT BE REMOVED');
       }
-      refreshData();
     };
     if (Platform.OS === 'web') {
       if (confirm('Remove this downloaded sync?')) doDelete();
@@ -585,7 +600,12 @@ export default function OfflineCacheModal({
 
   const handleClearAll = useCallback(() => {
     const doClear = () => {
-      tileCacheStore.clearAll();
+      const cleared = tileCacheStore.clearAll();
+      if (!cleared) {
+        showToast('ACTIVE ROUTE OR EXPEDITION REGIONS ARE PROTECTED');
+        refreshData();
+        return;
+      }
       showToast('ALL CACHED TILES CLEARED');
       refreshData();
     };

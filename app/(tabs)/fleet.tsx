@@ -51,6 +51,7 @@ import { ECSLoadingCard, ECSTransientNotice } from '../../components/ECSLoading'
 import { vehicleStore } from '../../lib/vehicleStore';
 
 import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
+import { recordECSPerformanceRender } from '../../lib/performance/ecsPerformanceDiagnostics';
 import { vehicleSpecStore } from '../../lib/vehicleSpecStore';
 import { consumablesStore } from '../../lib/consumablesStore';
 import { getZoneSummaryPills } from '../../lib/vehicleSystemsIntegration';
@@ -101,6 +102,7 @@ import {
 } from '../../lib/fleet/fleetFabricService';
 import {
   selectFleetVehicleStateFromRecord,
+  type FleetCanonicalVehicleState,
 } from '../../lib/fleet/fleetVehicleStateSelectors';
 import { emitFleetTelemetryEvent } from '../../lib/fleet/fleetTelemetryEvents';
 import {
@@ -148,6 +150,11 @@ import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { ECS_STATUS } from '../../lib/ecsStatusTokens';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
 import { useECSPowerTelemetryReadings } from '../../src/telemetry/useECSTelemetry';
+import { SourceTruthInspectorTrigger } from '../../components/source-truth';
+import {
+  buildFleetWeightSourceTruthBinding,
+  type SourceTruthBinding,
+} from '../../lib/sourceTruthAdapters';
 
 
 
@@ -498,6 +505,13 @@ function buildVehicleAccessorySummary(
   };
 }
 
+const MAX_FLEET_CARD_MODEL_CACHE_SIZE = 24;
+const fleetVehicleCardModelCache = new Map<string, {
+  canonicalState: FleetCanonicalVehicleState;
+  checklistSeason: string | null;
+  model: FleetVehicleCardModel;
+}>();
+
 function buildFleetVehicleCardModel(vehicle: Vehicle): FleetVehicleCardModel {
   const spec = vehicleSpecStore.get(vehicle.id) as any;
   const vehicleAny = vehicle as any;
@@ -507,10 +521,16 @@ function buildFleetVehicleCardModel(vehicle: Vehicle): FleetVehicleCardModel {
   });
   const canonicalState = selectFleetVehicleStateFromRecord({
     vehicle,
+    spec,
     consumables: consumablesStore.get(vehicle.id),
     tiresLift: tiresLiftStore.get(vehicle.id),
     frameworkContainerZones: accessorySummary.containerZones,
   });
+  const checklistSeason = resolveFleetChecklistSeason();
+  const cached = fleetVehicleCardModelCache.get(vehicle.id);
+  if (cached?.canonicalState === canonicalState && cached.checklistSeason === checklistSeason) {
+    return cached.model;
+  }
   const {
     activeLoadout,
     buildLoadoutState,
@@ -526,7 +546,7 @@ function buildFleetVehicleCardModel(vehicle: Vehicle): FleetVehicleCardModel {
   const checklistRecommendations = buildFleetChecklistRecommendations({
     vehicle: fleetVehicle,
     useCases: useCaseChips,
-    season: resolveFleetChecklistSeason(),
+    season: checklistSeason,
     accessoryLabels: [
       ...accessorySummary.containerZones.map((zone) => zone.label),
       ...accessoryInstalls.map((install) => install.name),
@@ -561,7 +581,7 @@ function buildFleetVehicleCardModel(vehicle: Vehicle): FleetVehicleCardModel {
   const verificationStatus = resolveFleetVerificationStatus(weightResult);
   const needsVerification = verificationTargets.length > 0;
 
-  return {
+  const model: FleetVehicleCardModel = {
     vehicle,
     fleetVehicle,
     descriptor,
@@ -583,6 +603,13 @@ function buildFleetVehicleCardModel(vehicle: Vehicle): FleetVehicleCardModel {
     needsVerification,
     activeLoadout,
   };
+  if (!fleetVehicleCardModelCache.has(vehicle.id) && fleetVehicleCardModelCache.size >= MAX_FLEET_CARD_MODEL_CACHE_SIZE) {
+    const oldestVehicleId = fleetVehicleCardModelCache.keys().next().value as string | undefined;
+    if (oldestVehicleId) fleetVehicleCardModelCache.delete(oldestVehicleId);
+  }
+  fleetVehicleCardModelCache.delete(vehicle.id);
+  fleetVehicleCardModelCache.set(vehicle.id, { canonicalState, checklistSeason, model });
+  return model;
 }
 
 function FleetCommandSurface({ state }: { state: FleetCommandState }) {
@@ -763,6 +790,7 @@ function FleetConfidenceNoticeModal({
   subtitle = 'Why ECS assigned this score',
   scoreEyebrow = 'AVERAGE CONFIDENCE',
   improvementTitle = 'To Improve Confidence',
+  sourceTruthBinding = null,
 }: {
   visible: boolean;
   notice: FleetConfidenceNotice;
@@ -771,6 +799,7 @@ function FleetConfidenceNoticeModal({
   subtitle?: string;
   scoreEyebrow?: string;
   improvementTitle?: string;
+  sourceTruthBinding?: SourceTruthBinding | null;
 }) {
   return (
     <ECSModalShell
@@ -816,6 +845,15 @@ function FleetConfidenceNoticeModal({
             tone={notice.score != null && notice.score >= 88 ? 'ready' : 'warning'}
             compact
           />
+          {sourceTruthBinding ? (
+            <SourceTruthInspectorTrigger
+              source={sourceTruthBinding.ref}
+              sources={sourceTruthBinding.sources}
+              policyKey={sourceTruthBinding.policyKey}
+              dependencies={sourceTruthBinding.dependencies}
+              label="Weight sources"
+            />
+          ) : null}
         </View>
 
         <View style={s.confidenceNoticeSection}>
@@ -1172,7 +1210,27 @@ function FleetDetailPanel({
   );
 }
 
-function FleetPremiumVehicleCard({
+type FleetPremiumVehicleCardProps = {
+  model: FleetVehicleCardModel;
+  isActive: boolean;
+  isOnline: boolean;
+  offlineMode: boolean;
+  openPanel: FleetDetailPanelKey | null;
+  onProfile: (vehicle: Vehicle) => void;
+  onLoadout: (vehicle: Vehicle) => void;
+  onWeightSummary: (vehicle: Vehicle) => void;
+  onDelete: (vehicle: Vehicle) => void;
+  onChecklistSave: (
+    vehicle: Vehicle,
+    checklistState: FleetChecklistState,
+    buildLoadoutState?: FleetBuildLoadoutState,
+  ) => Promise<void> | void;
+  onMarkReady: (vehicleId: string) => void;
+  onReadinessPress: (vehicleId: string) => void;
+  onConfidencePress: (vehicleId: string) => void;
+};
+
+function FleetPremiumVehicleCardComponent({
   model,
   isActive,
   isOnline,
@@ -1186,25 +1244,8 @@ function FleetPremiumVehicleCard({
   onMarkReady,
   onReadinessPress,
   onConfidencePress,
-}: {
-  model: FleetVehicleCardModel;
-  isActive: boolean;
-  isOnline: boolean;
-  offlineMode: boolean;
-  openPanel: FleetDetailPanelKey | null;
-  onProfile: () => void;
-  onLoadout: () => void;
-  onWeightSummary: () => void;
-  onDelete: () => void;
-  onChecklistSave: (
-    vehicle: Vehicle,
-    checklistState: FleetChecklistState,
-    buildLoadoutState?: FleetBuildLoadoutState,
-  ) => Promise<void> | void;
-  onMarkReady: () => void;
-  onReadinessPress: () => void;
-  onConfidencePress: () => void;
-}) {
+}: FleetPremiumVehicleCardProps) {
+  recordECSPerformanceRender('active_vehicle_propagation', 'fleet_vehicle_card');
   const { vehicle, weightResult } = model;
   const scoringResult = resolveVisibleFleetScoring(model);
   const connectivity = resolveFleetConnectivityBadge(isOnline, offlineMode);
@@ -1250,7 +1291,7 @@ function FleetPremiumVehicleCard({
             icon="radio-button-on-outline"
             variant="secondary"
             size="compact"
-            onPress={onMarkReady}
+            onPress={() => onMarkReady(vehicle.id)}
             numberOfLines={2}
             style={s.cardStatusButton}
           />
@@ -1260,8 +1301,8 @@ function FleetPremiumVehicleCard({
       <View style={s.premiumMetricGrid}>
         <FleetMetricTile label="Operating" value={formatFleetWeightValue(weightResult.operatingWeight.lbs)} helper="base + build + load" showHelper={false} />
         <FleetMetricTile label="Payload Left" value={formatFleetWeightValue(weightResult.payloadRemaining?.lbs)} helper="GVWR margin" showHelper={false} />
-        <FleetMetricTile label="Readiness" value={formatFleetScore(scoringResult.readinessScore)} helper={scoringResult.riskLevel} showHelper={false} onPress={onReadinessPress} accessibilityHint={`Opens the readiness explanation for ${vehicle.name}.`} />
-        <FleetMetricTile label="Confidence" value={formatFleetPercent(weightResult.confidence)} helper={weightResult.baseNetWeight.source} showHelper={false} onPress={onConfidencePress} accessibilityHint={`Opens the confidence explanation for ${vehicle.name}.`} />
+        <FleetMetricTile label="Readiness" value={formatFleetScore(scoringResult.readinessScore)} helper={scoringResult.riskLevel} showHelper={false} onPress={() => onReadinessPress(vehicle.id)} accessibilityHint={`Opens the readiness explanation for ${vehicle.name}.`} />
+        <FleetMetricTile label="Confidence" value={formatFleetPercent(weightResult.confidence)} helper={weightResult.baseNetWeight.source} showHelper={false} onPress={() => onConfidencePress(vehicle.id)} accessibilityHint={`Opens the confidence explanation for ${vehicle.name}.`} />
       </View>
 
       <ECSPanel variant="quiet" style={s.readinessStrip}>
@@ -1286,12 +1327,12 @@ function FleetPremiumVehicleCard({
 
       <ECSCardFooter style={s.actionSection}>
         <ECSActionRow compact style={s.vehicleCardActionRow}>
-          <ECSButton label="Vehicle Profile" icon="person-outline" variant="secondary" size="compact" onPress={onProfile} numberOfLines={2} grow />
-          <ECSButton label="Build & Loadout" icon="cube-outline" variant="secondary" size="compact" onPress={onLoadout} numberOfLines={2} grow />
+          <ECSButton label="Vehicle Profile" icon="person-outline" variant="secondary" size="compact" onPress={() => onProfile(vehicle)} numberOfLines={2} grow />
+          <ECSButton label="Build & Loadout" icon="cube-outline" variant="secondary" size="compact" onPress={() => onLoadout(vehicle)} numberOfLines={2} grow />
         </ECSActionRow>
         <ECSActionRow compact style={[s.actionRow, s.vehicleCardActionRow]}>
-          <ECSButton label="Weight Summary" icon="speedometer-outline" variant="secondary" size="compact" onPress={onWeightSummary} numberOfLines={2} grow />
-          <ECSButton label="Delete Vehicle" icon="trash-outline" variant="destructive" size="compact" onPress={onDelete} numberOfLines={2} grow />
+          <ECSButton label="Weight Summary" icon="speedometer-outline" variant="secondary" size="compact" onPress={() => onWeightSummary(vehicle)} numberOfLines={2} grow />
+          <ECSButton label="Delete Vehicle" icon="trash-outline" variant="destructive" size="compact" onPress={() => onDelete(vehicle)} numberOfLines={2} grow />
         </ECSActionRow>
       </ECSCardFooter>
 
@@ -1299,14 +1340,33 @@ function FleetPremiumVehicleCard({
         <FleetDetailPanel
           model={model}
           panel={openPanel}
-          onProfile={onProfile}
-          onLoadout={onLoadout}
+          onProfile={() => onProfile(vehicle)}
+          onLoadout={() => onLoadout(vehicle)}
           onChecklistSave={onChecklistSave}
         />
       ) : null}
     </ECSCard>
   );
 }
+
+const FleetPremiumVehicleCard = React.memo(
+  FleetPremiumVehicleCardComponent,
+  (previous, next) => (
+    previous.model === next.model &&
+    previous.isActive === next.isActive &&
+    previous.isOnline === next.isOnline &&
+    previous.offlineMode === next.offlineMode &&
+    previous.openPanel === next.openPanel &&
+    previous.onProfile === next.onProfile &&
+    previous.onLoadout === next.onLoadout &&
+    previous.onWeightSummary === next.onWeightSummary &&
+    previous.onDelete === next.onDelete &&
+    previous.onChecklistSave === next.onChecklistSave &&
+    previous.onMarkReady === next.onMarkReady &&
+    previous.onReadinessPress === next.onReadinessPress &&
+    previous.onConfidencePress === next.onConfidencePress
+  ),
+);
 
 const FLEET_QA_PRELOAD_ACTIONS: Record<FleetQaPreloadStateId, { label: string; icon: React.ComponentProps<typeof ECSButton>['icon'] }> = {
   zero_vehicle: { label: 'Zero Vehicle', icon: 'remove-circle-outline' },
@@ -1511,6 +1571,7 @@ class FleetErrorBoundary extends Component<EBProps, EBState> {
 // MAIN SCREEN
 // ============================================================
 function FleetScreenInner() {
+  recordECSPerformanceRender('active_vehicle_propagation', 'fleet_screen');
   const router = useRouter();
   const pathname = usePathname();
   const { user, authLoading, showToast, activeTrip, userSettings, isOnline, offlineMode } = useApp();
@@ -1604,27 +1665,21 @@ function FleetScreenInner() {
         const result = await vehicleStore.getAll(user?.id || null);
         if (mountedRef.current) {
           const storedActiveVehicleId = vehicleSetupStore.getActiveVehicleId();
+          const reconciledActiveVehicleId = vehicleSetupStore.reconcileActiveVehicle(
+            result.vehicles.map((vehicle) => vehicle.id),
+            {
+              autoSelectSingle: true,
+              reason: storedActiveVehicleId ? 'fleet_reconciliation' : 'single_vehicle_restore',
+            },
+          );
           const reconciledSelection = resolveFleetVehicleSelection(
             result.vehicles,
-            storedActiveVehicleId,
+            reconciledActiveVehicleId,
             visibleFleetVehicleIdRef.current,
           );
 
-          if (storedActiveVehicleId && !reconciledSelection.activeVehicleId) {
-            if (result.vehicles.length === 1) {
-              vehicleSetupStore.setActiveVehicleId(result.vehicles[0].id);
-            } else {
-              vehicleSetupStore.clearActiveVehicleId();
-            }
-          } else if (!storedActiveVehicleId && result.vehicles.length === 1) {
-            vehicleSetupStore.setActiveVehicleId(result.vehicles[0].id);
-          }
-
           setVehicles(result.vehicles);
-          setActiveVehicleId(
-            reconciledSelection.activeVehicleId ??
-              (result.vehicles.length === 1 ? result.vehicles[0].id : null),
-          );
+          setActiveVehicleId(reconciledSelection.activeVehicleId);
           setVisibleFleetVehicleId(reconciledSelection.visibleVehicleId);
           lastFetchRevisionRef.current = vehicleStore.getRevision();
         }
@@ -1923,8 +1978,6 @@ function FleetScreenInner() {
       return;
     }
 
-    const isActiveVehicle = activeVehicleId === v.id;
-
     const doDelete = async () => {
       try {
         const deletedIndex = vehicles.findIndex((vehicle) => vehicle.id === v.id);
@@ -1932,35 +1985,21 @@ function FleetScreenInner() {
         const nextVisibleIndex = Math.max(0, Math.min(deletedIndex, remainingVehicles.length - 1));
         const nextVisibleVehicle = remainingVehicles[nextVisibleIndex] ?? null;
 
-        setVisibleFleetVehicleId(nextVisibleVehicle?.id ?? null);
-        setVehicles(remainingVehicles);
-
-        if (remainingVehicles.length === 0) {
-          setActiveVehicleId(null);
-          vehicleSetupStore.clearActiveVehicleId();
-          setLoadoutModalVisible(false);
-          setLoadoutModalVehicle(null);
-          setBuildLoadoutModalVisible(false);
-          setBuildLoadoutModalVehicle(null);
-          setWeightSummaryModalVisible(false);
-          setWeightSummaryModalVehicle(null);
-          setProfileModalVehicle((currentVehicle) => (
-            currentVehicle?.id === v.id ? null : currentVehicle
-          ));
-        } else if (isActiveVehicle && nextVisibleVehicle) {
-          setActiveVehicleId(nextVisibleVehicle.id);
-          vehicleSetupStore.setActiveVehicleId(nextVisibleVehicle.id);
-        }
-
-        try {
-          consumablesStore.remove(v.id);
-          logFleetDev(TAG, `Removed consumables for vehicle ${v.id}`);
-        } catch (e) {
-          console.warn(TAG, 'Failed to remove consumables:', e);
-        }
-
         const result = await vehicleStore.delete(v.id, user?.id || null);
         if (result.success) {
+          setVisibleFleetVehicleId(nextVisibleVehicle?.id ?? null);
+          setVehicles(remainingVehicles);
+          if (remainingVehicles.length === 0) {
+            setLoadoutModalVisible(false);
+            setLoadoutModalVehicle(null);
+            setBuildLoadoutModalVisible(false);
+            setBuildLoadoutModalVehicle(null);
+            setWeightSummaryModalVisible(false);
+            setWeightSummaryModalVehicle(null);
+            setProfileModalVehicle((currentVehicle) => (
+              currentVehicle?.id === v.id ? null : currentVehicle
+            ));
+          }
           showToast(ECS_TOAST_COPY.vehicleDeleted);
           logFleetDev(TAG, `Deleted vehicle ${v.id} (from: ${result.deletedFrom})`);
         } else {
@@ -1983,7 +2022,7 @@ function FleetScreenInner() {
       destructive: true,
       onConfirm: doDelete,
     });
-  }, [user?.id, activeVehicleId, fetchVehicles, showToast, vehicles]);
+  }, [user?.id, fetchVehicles, showToast, vehicles]);
 
 
   // ── CONFIGURE LOADOUT → Open Fleet Loadout Modal ────────
@@ -2105,6 +2144,16 @@ function FleetScreenInner() {
     }
   }, [router, showToast, vehicles]);
 
+  const handleVehicleReadinessPress = useCallback((vehicleId: string) => {
+    setVehicleConfidenceNoticeVehicleId(null);
+    setVehicleReadinessNoticeVehicleId(vehicleId);
+  }, []);
+
+  const handleVehicleConfidencePress = useCallback((vehicleId: string) => {
+    setVehicleReadinessNoticeVehicleId(null);
+    setVehicleConfidenceNoticeVehicleId(vehicleId);
+  }, []);
+
   const handleFleetQaPreload = useCallback(async (stateId: FleetQaPreloadStateId) => {
     hapticMicro();
     closeFleetDetailFlows();
@@ -2185,9 +2234,7 @@ function FleetScreenInner() {
     }
     hapticMicro();
     vehicleSetupStore.setActiveVehicleId(targetId);
-    setActiveVehicleId(targetId);
     setVisibleFleetVehicleId(targetId);
-    setSupportDataRevision((prev) => prev + 1);
     showToast('Fleet QA active vehicle switched');
   }, [activeVehicleId, showToast, vehicles]);
 
@@ -2463,12 +2510,34 @@ function FleetScreenInner() {
     ),
     [selectedVehicleConfidenceModel],
   );
+  const selectedVehicleWeightSourceTruth = useMemo(
+    () => selectedVehicleConfidenceModel
+      ? buildFleetWeightSourceTruthBinding({
+          vehicleId: selectedVehicleConfidenceModel.vehicle.id,
+          vehicleName: selectedVehicleConfidenceModel.vehicle.name,
+          updatedAt: selectedVehicleConfidenceModel.fleetVehicle.buildProfile.updatedAt,
+          weightResult: selectedVehicleConfidenceModel.weightResult,
+        })
+      : null,
+    [selectedVehicleConfidenceModel],
+  );
   const selectedVehicleReadinessModel = useMemo(
     () => fleetCardModels.find((model) => model.vehicle.id === vehicleReadinessNoticeVehicleId) ?? null,
     [fleetCardModels, vehicleReadinessNoticeVehicleId],
   );
   const selectedVehicleReadinessNotice = useMemo(
     () => buildFleetReadinessNotice(selectedVehicleReadinessModel),
+    [selectedVehicleReadinessModel],
+  );
+  const selectedVehicleReadinessSourceTruth = useMemo(
+    () => selectedVehicleReadinessModel
+      ? buildFleetWeightSourceTruthBinding({
+          vehicleId: selectedVehicleReadinessModel.vehicle.id,
+          vehicleName: selectedVehicleReadinessModel.vehicle.name,
+          updatedAt: selectedVehicleReadinessModel.fleetVehicle.buildProfile.updatedAt,
+          weightResult: selectedVehicleReadinessModel.weightResult,
+        })
+      : null,
     [selectedVehicleReadinessModel],
   );
 
@@ -2930,20 +2999,14 @@ function FleetScreenInner() {
                       isOnline={isOnline}
                       offlineMode={offlineMode}
                       openPanel={null}
-                      onProfile={() => handleOpenVehicleProfile(fleetCardModels[0].vehicle)}
-                      onLoadout={() => handleOpenBuildLoadoutModal(fleetCardModels[0].vehicle)}
-                      onWeightSummary={() => handleOpenWeightSummaryModal(fleetCardModels[0].vehicle)}
-                      onDelete={() => handleDeleteVehicle(fleetCardModels[0].vehicle)}
+                      onProfile={handleOpenVehicleProfile}
+                      onLoadout={handleOpenBuildLoadoutModal}
+                      onWeightSummary={handleOpenWeightSummaryModal}
+                      onDelete={handleDeleteVehicle}
                       onChecklistSave={handleChecklistSave}
-                      onMarkReady={() => handleMarkVehicleReady(fleetCardModels[0].vehicle.id)}
-                      onReadinessPress={() => {
-                        setVehicleConfidenceNoticeVehicleId(null);
-                        setVehicleReadinessNoticeVehicleId(fleetCardModels[0].vehicle.id);
-                      }}
-                      onConfidencePress={() => {
-                        setVehicleReadinessNoticeVehicleId(null);
-                        setVehicleConfidenceNoticeVehicleId(fleetCardModels[0].vehicle.id);
-                      }}
+                      onMarkReady={handleMarkVehicleReady}
+                      onReadinessPress={handleVehicleReadinessPress}
+                      onConfidencePress={handleVehicleConfidencePress}
                     />
                   ) : null}
                 </View>
@@ -2960,20 +3023,14 @@ function FleetScreenInner() {
                         isOnline={isOnline}
                         offlineMode={offlineMode}
                         openPanel={null}
-                        onProfile={() => handleOpenVehicleProfile(model.vehicle)}
-                        onLoadout={() => handleOpenBuildLoadoutModal(model.vehicle)}
-                        onWeightSummary={() => handleOpenWeightSummaryModal(model.vehicle)}
-                        onDelete={() => handleDeleteVehicle(model.vehicle)}
+                        onProfile={handleOpenVehicleProfile}
+                        onLoadout={handleOpenBuildLoadoutModal}
+                        onWeightSummary={handleOpenWeightSummaryModal}
+                        onDelete={handleDeleteVehicle}
                         onChecklistSave={handleChecklistSave}
-                        onMarkReady={() => handleMarkVehicleReady(model.vehicle.id)}
-                        onReadinessPress={() => {
-                          setVehicleConfidenceNoticeVehicleId(null);
-                          setVehicleReadinessNoticeVehicleId(model.vehicle.id);
-                        }}
-                        onConfidencePress={() => {
-                          setVehicleReadinessNoticeVehicleId(null);
-                          setVehicleConfidenceNoticeVehicleId(model.vehicle.id);
-                        }}
+                        onMarkReady={handleMarkVehicleReady}
+                        onReadinessPress={handleVehicleReadinessPress}
+                        onConfidencePress={handleVehicleConfidencePress}
                       />
                     </View>
                   )}
@@ -3408,6 +3465,7 @@ function FleetScreenInner() {
         title="Vehicle Confidence"
         subtitle={selectedVehicleConfidenceModel?.vehicle.name ?? 'Vehicle-specific confidence'}
         scoreEyebrow="VEHICLE CONFIDENCE"
+        sourceTruthBinding={selectedVehicleWeightSourceTruth}
         onClose={() => setVehicleConfidenceNoticeVehicleId(null)}
       />
 
@@ -3418,6 +3476,7 @@ function FleetScreenInner() {
         subtitle={selectedVehicleReadinessModel?.vehicle.name ?? 'Vehicle-specific readiness'}
         scoreEyebrow="VEHICLE READINESS"
         improvementTitle="To Improve Readiness"
+        sourceTruthBinding={selectedVehicleReadinessSourceTruth}
         onClose={() => setVehicleReadinessNoticeVehicleId(null)}
       />
 

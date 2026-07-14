@@ -22,16 +22,12 @@ import {
   type CampOpsHardGateConfig,
 } from './campOpsHardGateConfig';
 import {
-  evaluateCampHardGateCandidates,
-  type CampHardGateCandidateEvaluation,
-} from './campOpsHardGates';
-import {
   type CampOpsFeatureState,
   type CampOpsRecommendationConfig,
   type CampOpsRecommendationRolloutConfig,
   getCampOpsFeatureState,
 } from './campOpsRecommendationConfig';
-import { generateCampRecommendationSet } from './campOpsRecommendations';
+import { evaluateCampOpsRecommendations } from './campOpsRecommendationCoordinator';
 import {
   buildCampOpsRouteEndpointPlan,
   type CampOpsRouteEndpointTripType,
@@ -44,10 +40,6 @@ import {
   type CampOpsSourceProviderBundle,
 } from './campOpsSourceAdapters';
 import type { CampOpsScoringConfigOverrides } from './campOpsScoringConfig';
-import {
-  rankCampSuitabilityCandidates,
-  type CampSuitabilityScoreResult,
-} from './campOpsScoring';
 
 export type CampOpsSearchSource = 'route' | 'polygon';
 
@@ -286,7 +278,7 @@ function buildCandidateEnrichment(
     candidateId: candidate.id,
     legalStatus: legalStatusFromScore(legalAccessScore),
     legalConfidence: confidenceFromScore(legalAccessScore),
-    closureStatus: 'open',
+    closureStatus: 'unknown',
     publicAccessStatus: publicAccessFromLegalScore(legalAccessScore),
     accessDifficulty,
     vehicleFit: fitFromAccessDifficulty(accessDifficulty),
@@ -326,7 +318,7 @@ function buildCandidateEnrichment(
     dataConfidence,
     dataLimitations: [
       'CampOps is using existing generated camp candidate data only.',
-      'Legal, weather, fire, occupancy, and service data may require later dedicated sources.',
+      'Legal access, closures, weather, fire, occupancy, and service data require separate source verification.',
     ],
   };
   const merged = applyCampOpsSourceSignalsToEnrichment({
@@ -407,35 +399,15 @@ export function generateCampOpsSearchPayload(
   const featureState = resolveSearchFeatureState(options);
   if (!featureState.recommendationsEnabled) return null;
   const { context, candidates, enrichmentsByCandidateId } = buildCampOpsInputs(result, options, featureState);
-  const hardGateEvaluations = evaluateCampHardGateCandidates({
+  const evaluation = evaluateCampOpsRecommendations({
     context,
     candidates,
     enrichmentsByCandidateId,
-    config: options.hardGateConfig ?? {},
+    hardGateConfig: options.hardGateConfig ?? {},
+    scoringConfig: options.scoringConfig ?? {},
+    recommendationConfig: options.recommendationConfig ?? {},
   });
-  const hardGateEvaluationsByCandidateId: Record<string, CampHardGateCandidateEvaluation> = {};
-  hardGateEvaluations.forEach((evaluation) => {
-    hardGateEvaluationsByCandidateId[evaluation.candidate.id] = evaluation;
-  });
-  const suitabilityScores = rankCampSuitabilityCandidates({
-    context,
-    candidates,
-    enrichmentsByCandidateId,
-    hardGateEvaluationsByCandidateId,
-    config: options.scoringConfig ?? {},
-  });
-  const suitabilityScoresByCandidateId: Record<string, CampSuitabilityScoreResult> = {};
-  suitabilityScores.forEach((score) => {
-    suitabilityScoresByCandidateId[score.candidate.id] = score;
-  });
-  const recommendationSet = generateCampRecommendationSet({
-    context,
-    candidates,
-    enrichmentsByCandidateId,
-    hardGateEvaluationsByCandidateId,
-    suitabilityScoresByCandidateId,
-    config: options.recommendationConfig ?? {},
-  });
+  const recommendationSet = evaluation.recommendationSet;
   const providerWarnings = featureState.providerAdaptersEnabled ? options.sourceProviderBundle?.warnings ?? [] : [];
   const providerErrors = featureState.providerAdaptersEnabled ? options.sourceProviderBundle?.errors ?? [] : [];
   const exposedRecommendationSet = featureState.sourceTransparencyEnabled

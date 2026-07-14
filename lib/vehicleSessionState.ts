@@ -139,7 +139,44 @@ let _state: VehicleSessionState = createDefaultSessionState();
 let _eventHistory: CompanionSyncEventRecord[] = [];
 const MAX_EVENT_HISTORY = 200;
 
+const VEHICLE_SESSION_LIFECYCLE_BREADCRUMBS: Record<string, {
+  domain: 'route' | 'expedition' | 'device';
+  operation: string;
+  status: 'started' | 'completed' | 'cancelled' | 'degraded';
+  sourceState: 'live' | 'unavailable';
+}> = {
+  expedition_started: {
+    domain: 'expedition', operation: 'transition_active', status: 'started', sourceState: 'live',
+  },
+  expedition_ended: {
+    domain: 'expedition', operation: 'transition_inactive', status: 'completed', sourceState: 'unavailable',
+  },
+  route_activated: {
+    domain: 'route', operation: 'activate_guidance', status: 'started', sourceState: 'live',
+  },
+  route_deactivated: {
+    domain: 'route', operation: 'deactivate_guidance', status: 'cancelled', sourceState: 'unavailable',
+  },
+  companion_connected: {
+    domain: 'device', operation: 'companion_connect', status: 'completed', sourceState: 'live',
+  },
+  companion_reconnected: {
+    domain: 'device', operation: 'companion_reconnect', status: 'completed', sourceState: 'live',
+  },
+  companion_disconnected: {
+    domain: 'device', operation: 'companion_disconnect', status: 'degraded', sourceState: 'unavailable',
+  },
+};
+
 function logVehicleSessionDebug(message: string, details?: Record<string, unknown>): void {
+  const breadcrumb = VEHICLE_SESSION_LIFECYCLE_BREADCRUMBS[message];
+  if (breadcrumb) {
+    ecsLog.breadcrumb({
+      ...breadcrumb,
+      code: `VEHICLE_SESSION_${message}`,
+      context: details,
+    });
+  }
   ecsLog.dev('SYSTEM', message, details, {
     tag: '[VehicleSessionState]',
     debugFlag: 'ECS_DEBUG_VEHICLE_SESSION',

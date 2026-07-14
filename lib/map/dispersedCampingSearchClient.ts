@@ -16,7 +16,14 @@ import {
 
 export type FetchDispersedCampingEligibilityOptions = {
   bbox: DispersedCampingSearchBbox;
+  signal?: AbortSignal;
 };
+
+function createAbortError(): Error {
+  const error = new Error('Request canceled');
+  error.name = 'AbortError';
+  return error;
+}
 
 function getInvokeStatus(result: unknown): { status: number | null; statusText: string | null } {
   if (!result || typeof result !== 'object') return { status: null, statusText: null };
@@ -29,13 +36,16 @@ function getInvokeStatus(result: unknown): { status: number | null; statusText: 
 
 export async function fetchDispersedCampingEligibilityForMap({
   bbox,
+  signal,
 }: FetchDispersedCampingEligibilityOptions): Promise<DispersedCampingSearchResponse> {
+  if (signal?.aborted) throw createAbortError();
   const body = buildDispersedCampingSearchRequest(bbox);
   const normalizedBbox = normalizeDispersedCampingSearchBbox(bbox);
   const cacheKey = buildDispersedCampingCacheKey(bbox);
   let result;
   try {
     result = await supabase.functions.invoke(DISPERSED_CAMPING_EDGE_FUNCTION, { body });
+    if (signal?.aborted) throw createAbortError();
   } catch (invokeError) {
     const diagnostic = buildCampLayerFetchFailureDiagnostic({
       layer: 'dispersed_camping',

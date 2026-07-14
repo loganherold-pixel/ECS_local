@@ -20,6 +20,10 @@ import {
   WEATHER_LOCATION_STALE_DISTANCE_METERS,
   type ResolvedWeatherLocation,
 } from './weatherLocationResolver';
+import {
+  incrementECSPerformanceCounter,
+  startECSPerformanceRequest,
+} from './performance/ecsPerformanceDiagnostics';
 
 interface GPSInput {
   lat?: number | null;
@@ -499,12 +503,14 @@ async function fetchOperationalWeatherForTarget(
 
   const existing = operationalWeatherHookRequests.get(requestKey);
   if (existing) {
+    incrementECSPerformanceCounter('weather_refresh', 'repeated_requests');
     return existing;
   }
 
   if (!forceRefresh) {
     const recent = operationalWeatherRecentResults.get(requestKey);
     if (recent && Date.now() - recent.completedAt < OPERATIONAL_WEATHER_JOIN_GRACE_MS) {
+      incrementECSPerformanceCounter('weather_refresh', 'recent_result_hits');
       return recent.result;
     }
   }
@@ -517,6 +523,12 @@ async function fetchOperationalWeatherForTarget(
   });
 
   operationalWeatherHookRequests.set(requestKey, request);
+  const performanceRequest = startECSPerformanceRequest(
+    'weather_refresh',
+    'operational_weather_provider',
+    requestKey,
+    { sourceType: target.sourceType, forceRefresh },
+  );
 
   fetchSharedWeatherForCoordinates(
     buildTargetCoordinate(target),
@@ -526,6 +538,7 @@ async function fetchOperationalWeatherForTarget(
   )
     .then((result) => {
       const fetchResult = result.result;
+      performanceRequest.end('completed', { sourceState: fetchResult.source });
       operationalWeatherRecentResults.set(requestKey, {
         result: fetchResult,
         completedAt: Date.now(),
@@ -537,6 +550,10 @@ async function fetchOperationalWeatherForTarget(
         }
       }
       return fetchResult;
+    })
+    .catch((error) => {
+      performanceRequest.end('failed');
+      throw error;
     })
     .then(resolveRequest, rejectRequest)
     .finally(() => {

@@ -4,6 +4,7 @@
 
 import React, { Component, type ReactNode } from 'react';
 import {
+  AccessibilityInfo,
   Platform,
   ScrollView,
   StyleSheet,
@@ -13,6 +14,8 @@ import {
 } from 'react-native';
 import { SafeIcon as Ionicons } from './SafeIcon';
 import { reportFatalIssue } from '../lib/ecsIssueIntelligence';
+import { buildECSOperationalAnnouncement } from '../lib/accessibility/ecsOperationalAccessibility';
+import { ecsLog } from '../lib/ecsLogger';
 
 const COLORS = {
   bg: '#0B0F12',
@@ -68,17 +71,25 @@ export default class TabErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     try {
-      const tag = `[${this.props?.tabName || 'TAB'}]`;
-      console.error(tag, 'Error boundary caught:', error?.message ?? 'Unknown error');
-      if (error?.stack) {
-        console.error(tag, 'Stack:', error.stack.split('\n').slice(0, 4).join('\n'));
-      }
-
       const componentStack = info?.componentStack
         ? info.componentStack.split('\n').slice(0, 8).join('\n')
         : null;
 
       this.setState({ errorInfo: componentStack });
+      ecsLog.captureFailure({
+        kind: 'unexpected',
+        domain: mapTabToArea(this.props?.tabName),
+        operation: 'tab_render',
+        code: 'TAB_RENDER_FAILURE',
+        severity: 'error',
+        recoverability: 'user_action',
+        retryability: 'conditional',
+        sourceState: 'unavailable',
+        context: {
+          tabName: this.props?.tabName ?? null,
+          componentStack,
+        },
+      }, error);
 
       reportFatalIssue({
         severity: 'high',
@@ -92,6 +103,16 @@ export default class TabErrorBoundary extends Component<
           componentStack,
         },
       });
+
+      const announcement = buildECSOperationalAnnouncement({
+        id: `tab-render-failure:${this.props?.tabName || 'tab'}`,
+        kind: 'error',
+        subject: `${this.props?.tabName || 'This tab'} screen`,
+        detail: 'Refresh the tab to restore the current view.',
+      });
+      if (Platform.OS === 'ios') {
+        AccessibilityInfo.announceForAccessibility(announcement.message);
+      }
     } catch {
       this.setState({ errorInfo: null });
     }
@@ -110,12 +131,23 @@ export default class TabErrorBoundary extends Component<
     return (
       <View style={styles.container}>
         <View style={styles.content}>
-          <View style={styles.iconWrap}>
+          <View
+            style={styles.iconWrap}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
             <Ionicons name="alert-circle-outline" size={48} color={COLORS.danger} />
           </View>
 
-          <Text style={styles.title}>{this.props.tabName || 'This tab'} needs a refresh</Text>
-          <Text style={styles.message}>
+          <Text
+            style={styles.title}
+            accessibilityRole="header"
+            accessibilityLiveRegion="assertive"
+            maxFontSizeMultiplier={1.8}
+          >
+            {this.props.tabName || 'This tab'} needs a refresh
+          </Text>
+          <Text style={styles.message} maxFontSizeMultiplier={1.8}>
             {'ECS hit a temporary problem while loading this tab. Refresh to restore the current view.'}
           </Text>
 
@@ -123,6 +155,9 @@ export default class TabErrorBoundary extends Component<
             style={styles.retryBtn}
             onPress={this.handleRetry}
             activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={`Refresh ${this.props.tabName || 'current'} tab`}
+            accessibilityHint="Retries this surface without changing operational data"
           >
             <Ionicons name="refresh-outline" size={16} color={COLORS.text} />
             <Text style={styles.retryBtnText}>REFRESH TAB</Text>
@@ -190,6 +225,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 10,
     marginTop: 8,
+    minHeight: 48,
   },
   retryBtnText: {
     fontSize: 12,

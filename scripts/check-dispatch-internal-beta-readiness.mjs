@@ -165,7 +165,25 @@ function loadTypeScriptModule(root, relativePath) {
   const mod = new Module(fullPath);
   mod.filename = fullPath;
   mod.paths = Module._nodeModulePaths(path.dirname(fullPath));
-  mod._compile(output.outputText, fullPath);
+  const previousTypeScriptLoader = Module._extensions['.ts'];
+  Module._extensions['.ts'] = (dependencyModule, dependencyFilename) => {
+    const dependencySource = fs.readFileSync(dependencyFilename, 'utf8');
+    const dependencyOutput = ts.transpileModule(dependencySource, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        esModuleInterop: true,
+      },
+      fileName: dependencyFilename,
+    });
+    dependencyModule._compile(dependencyOutput.outputText, dependencyFilename);
+  };
+  try {
+    mod._compile(output.outputText, fullPath);
+  } finally {
+    if (previousTypeScriptLoader) Module._extensions['.ts'] = previousTypeScriptLoader;
+    else delete Module._extensions['.ts'];
+  }
   return mod.exports;
 }
 

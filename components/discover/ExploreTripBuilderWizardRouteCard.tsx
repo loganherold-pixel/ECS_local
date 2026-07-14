@@ -54,6 +54,7 @@ function ExploreTripBuilderWizardRouteCardComponent({
   deferEnrichment = false,
   onThumbnailLoadDuration,
 }: ExploreTripBuilderWizardRouteCardProps) {
+  const isGeneratedIdea = candidate.sourceKind === 'ecs_idea';
   const imageCacheRef = useRef(createRouteImageMemoryCache());
   const thumbnailLoadStartedAtRef = useRef<number | null>(null);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
@@ -158,8 +159,16 @@ function ExploreTripBuilderWizardRouteCardComponent({
             <View style={styles.badgeRow}>
               {enrichmentReady ? (
                 <>
-                  <View style={styles.sourceBadge}>
-                    <Text style={styles.sourceBadgeText}>{sourceLabel}</Text>
+                  <View style={[styles.sourceBadge, isGeneratedIdea && styles.generatedSourceBadge]}>
+                    {isGeneratedIdea ? (
+                      <Ionicons name="sparkles-outline" size={9} color={TACTICAL.info} />
+                    ) : null}
+                    <Text style={[
+                      styles.sourceBadgeText,
+                      isGeneratedIdea && styles.generatedSourceBadgeText,
+                    ]}>
+                      {sourceLabel}
+                    </Text>
                   </View>
                   <View style={styles.readyBadge}>
                     <Ionicons name="navigate-outline" size={9} color={TACTICAL.amber} />
@@ -292,6 +301,9 @@ const styles = StyleSheet.create({
   },
   sourceBadge: {
     maxWidth: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: `${TACTICAL.amber}44`,
@@ -306,6 +318,13 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.8,
     textTransform: 'uppercase',
+  },
+  generatedSourceBadge: {
+    borderColor: `${TACTICAL.info}66`,
+    backgroundColor: `${TACTICAL.info}12`,
+  },
+  generatedSourceBadgeText: {
+    color: TACTICAL.info,
   },
   readyBadge: {
     flexShrink: 0,

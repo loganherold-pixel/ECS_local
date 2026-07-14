@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "resultContract": "ecs-verification-timing-baseline-v1",
+  "baselineVersion": "2026-07-13.1",
+  "source": "approved_repository",
+  "generatedAt": "2026-07-13T00:00:00.000Z",
+  "parentBaselineVersion": null,
+  "maxSamplesPerCheck": 20,
+  "entries": []
+}

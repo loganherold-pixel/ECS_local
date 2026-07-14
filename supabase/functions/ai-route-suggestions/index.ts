@@ -62,6 +62,13 @@ interface RouteSeed {
 
 interface ResponseRoute extends RouteSeed {
   isAIGenerated: true;
+  aiPolicy: {
+    designation: 'proposal';
+    verificationState: 'unverified';
+    mayStartGuidance: false;
+    requiresInspection: true;
+    policyVersion: 'ecs-ai-policy-v1';
+  };
   confidence: AIRouteConfidence;
   suggestedLabel: AIRouteSuggestedLabel;
   expeditionSummary: string;
@@ -569,6 +576,13 @@ function toResponseRoute(
     ...route,
     hiddenGem: (route.popularityScore ?? 100) <= 20,
     isAIGenerated: true,
+    aiPolicy: {
+      designation: 'proposal',
+      verificationState: 'unverified',
+      mayStartGuidance: false,
+      requiresInspection: true,
+      policyVersion: 'ecs-ai-policy-v1',
+    },
     confidence,
     suggestedLabel: CATEGORY_LABELS[category],
     expeditionSummary: buildSummary(route, category),

@@ -1,6 +1,8 @@
 import { supabase, isSupabaseConfigured } from './supabase';
 import type {
+  DispatchAcknowledgment,
   DispatchAssignment,
+  DispatchAssistRequest,
   DispatchPing,
   DispatchQueueItem,
   DispatchTeamMember,
@@ -12,6 +14,8 @@ export type DispatchRealtimeEventType =
   | 'ping_upsert'
   | 'queue_item_upsert'
   | 'assignment_upsert'
+  | 'assist_request_upsert'
+  | 'acknowledgment_upsert'
   | 'team_member_upsert'
   | 'timeline_event_added'
   | 'cad_event_upsert';
@@ -22,6 +26,8 @@ export type DispatchRealtimeEventDraft =
   | { type: 'ping_upsert'; ping: DispatchPing }
   | { type: 'queue_item_upsert'; queueItem: DispatchQueueItem }
   | { type: 'assignment_upsert'; assignment: DispatchAssignment }
+  | { type: 'assist_request_upsert'; assistRequest: DispatchAssistRequest }
+  | { type: 'acknowledgment_upsert'; acknowledgment: DispatchAcknowledgment }
   | { type: 'team_member_upsert'; teamMember: DispatchTeamMember }
   | { type: 'timeline_event_added'; timelineEvent: DispatchTimelineEvent }
   | { type: 'cad_event_upsert'; cadEvent: DispatchEvent };
@@ -78,6 +84,7 @@ export function createDispatchRealtimeSession({
   }
 
   const seenEventIds = new Set<string>();
+  let closed = false;
   const channel = supabase.channel(`ecs-dispatch:${expeditionId}`, {
     config: {
       broadcast: { self: false },
@@ -98,6 +105,7 @@ export function createDispatchRealtimeSession({
     'broadcast' as any,
     { event: 'dispatch_event' },
     ({ payload }: { payload: unknown }) => {
+      if (closed) return;
       if (!isDispatchRealtimeEnvelope(payload)) return;
       if (payload.expeditionId !== expeditionId) return;
       if (payload.originClientId === clientId) return;
@@ -107,6 +115,7 @@ export function createDispatchRealtimeSession({
   );
 
   channel.subscribe((status: string) => {
+    if (closed) return;
     if (status === 'SUBSCRIBED') {
       onStatusChange?.('connected');
       return;
@@ -126,6 +135,7 @@ export function createDispatchRealtimeSession({
 
   return {
     async publish(event: DispatchRealtimeEventDraft): Promise<boolean> {
+      if (closed) return false;
       const envelope: DispatchRealtimeEnvelope = {
         ...event,
         id: createRealtimeEnvelopeId(event),
@@ -148,6 +158,8 @@ export function createDispatchRealtimeSession({
     },
 
     close(): void {
+      if (closed) return;
+      closed = true;
       seenEventIds.clear();
       try {
         void supabase.removeChannel(channel);
@@ -179,6 +191,20 @@ function getRealtimeRecordKey(event: DispatchRealtimeEventDraft): string {
         event.assignment.version ?? 0,
         event.assignment.updatedAt ?? event.assignment.assignedAt,
         event.assignment.status,
+      ].join(':');
+    case 'assist_request_upsert':
+      return [
+        event.assistRequest.idempotencyKey ?? event.assistRequest.id,
+        event.assistRequest.version ?? 0,
+        event.assistRequest.updatedAt ?? event.assistRequest.createdAt,
+        event.assistRequest.status,
+      ].join(':');
+    case 'acknowledgment_upsert':
+      return [
+        event.acknowledgment.idempotencyKey ?? event.acknowledgment.id,
+        event.acknowledgment.version ?? 0,
+        event.acknowledgment.updatedAt ?? event.acknowledgment.acknowledgedAt,
+        event.acknowledgment.status,
       ].join(':');
     case 'team_member_upsert':
       return [event.teamMember.id, event.teamMember.lastSeenAt, event.teamMember.status].join(':');

@@ -14,6 +14,10 @@ Module._load = function load(request, parent, isMain) {
       Platform: { OS: 'web', select: (options) => options?.web ?? options?.default },
       StyleSheet: { create: (styles) => styles, flatten: (style) => style },
       NativeModules: {},
+      AppState: {
+        currentState: 'active',
+        addEventListener: () => ({ remove: () => undefined }),
+      },
       Dimensions: { get: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }), addEventListener: () => ({ remove: () => undefined }) },
       Appearance: { getColorScheme: () => 'dark', addChangeListener: () => ({ remove: () => undefined }) },
       View: 'View',

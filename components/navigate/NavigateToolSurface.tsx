@@ -43,6 +43,7 @@ type NavigateToolActionCardProps = {
   hideChevron?: boolean;
   badge?: string | null;
   accessibilityLabel?: string;
+  accessibilityHint?: string;
   children?: React.ReactNode;
   style?: StyleProp<ViewStyle>;
 };
@@ -122,6 +123,7 @@ export function NavigateToolActionCard({
   hideChevron = false,
   badge,
   accessibilityLabel,
+  accessibilityHint,
   children,
   style,
 }: NavigateToolActionCardProps) {
@@ -139,7 +141,8 @@ export function NavigateToolActionCard({
       activeOpacity={0.86}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
-      accessibilityState={{ disabled, selected: active }}
+      accessibilityHint={accessibilityHint ?? (subtitle || undefined)}
+      accessibilityState={{ disabled: disabled || !onPress, selected: active }}
     >
       <View style={[styles.actionIcon, compact && styles.actionIconCompact, active && styles.actionIconActive]}>
         <Ionicons name={icon} size={compact ? 14 : 16} color={active ? '#091014' : TACTICAL.amber} />
@@ -148,14 +151,27 @@ export function NavigateToolActionCard({
         <View style={styles.actionTitleRow}>
           <Text
             style={[styles.actionTitle, compact && styles.actionTitleCompact, active && styles.actionTitleActive]}
-            numberOfLines={compact ? 2 : 1}
+            numberOfLines={2}
+            maxFontSizeMultiplier={1.6}
           >
             {title}
           </Text>
-          {badge ? <Text style={[styles.actionBadge, active && styles.actionBadgeActive]}>{badge}</Text> : null}
+          {badge ? (
+            <Text
+              style={[styles.actionBadge, active && styles.actionBadgeActive]}
+              numberOfLines={2}
+              maxFontSizeMultiplier={1.5}
+            >
+              {badge}
+            </Text>
+          ) : null}
         </View>
         {subtitle ? (
-          <Text style={[styles.actionSubtitle, active && styles.actionSubtitleActive]} numberOfLines={2}>
+          <Text
+            style={[styles.actionSubtitle, active && styles.actionSubtitleActive]}
+            numberOfLines={3}
+            maxFontSizeMultiplier={1.6}
+          >
             {subtitle}
           </Text>
         ) : null}

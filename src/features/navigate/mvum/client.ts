@@ -16,6 +16,7 @@ export async function fetchNavigateMvumViewportSegments(args: {
   zoom: number;
   limit?: number;
   vehicleClass?: string | null;
+  signal?: AbortSignal;
 }): Promise<RouteGeometryViewportResult> {
   return fetchRouteGeometryViewportSegments({
     bbox: args.bbox,
@@ -23,6 +24,7 @@ export async function fetchNavigateMvumViewportSegments(args: {
     limit: args.limit,
     vehicleClass: args.vehicleClass ?? null,
     includeReferenceGeometry: true,
+    signal: args.signal,
   });
 }
 

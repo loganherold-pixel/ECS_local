@@ -30,6 +30,7 @@ const registrySource = read('lib/expedition/expeditionBadgeRegistry.ts');
 const storeSource = read('lib/expedition/expeditionBadgeStore.ts');
 const tripStoreSource = read('lib/expedition/expeditionTripRecordStore.ts');
 const hubSource = read('components/dashboard/ExpeditionTab.tsx');
+const catalogViewSource = read('components/dashboard/ExpeditionBadgeCatalogView.tsx');
 const activeTripSource = read('app/active-trip.tsx');
 const packetSource = read('app/offline-incident-packet.tsx');
 const convoyMigrationSource = read('supabase/migrations/030_convoy_member_identity_titles.sql');
@@ -68,11 +69,11 @@ assert(
   'Completed trip post-processing should remain the existing unlock evaluation path.',
 );
 assert(
-  hubSource.includes('UnlockedBadgesView') &&
+  hubSource.includes('ExpeditionBadgeCatalogView') &&
     hubSource.includes('BadgeUnlockSummary') &&
-    hubSource.includes('BadgeMilestoneList') &&
-    hubSource.includes('ExpeditionIdentityProfileSurface'),
-  'Dashboard Expedition Hub should remain the current earned-badge display surface and host the identity profile surface.',
+    catalogViewSource.includes('BadgeMilestoneList') &&
+    catalogViewSource.includes('ExpeditionIdentityProfileSurface'),
+  'Dashboard Expedition Hub should remain the badge entry surface and retain identity and milestone presentation.',
 );
 assert(
   activeTripSource.includes('Camp Viability') &&

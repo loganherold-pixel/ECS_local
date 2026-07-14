@@ -27,7 +27,6 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
 import { TACTICAL, TYPO, DENSITY } from '../lib/theme';
@@ -41,6 +40,7 @@ import {
   type RegionOverlapInfo,
 } from '../lib/tileCacheStore';
 import { connectivity } from '../lib/connectivity';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 
 import StorageDashboard from '../components/offline-maps/StorageDashboard';
 import CachedRegionCard from '../components/offline-maps/CachedRegionCard';
@@ -53,7 +53,7 @@ import Toast from '../components/Toast';
 
 
 export default function OfflinePacksScreen() {
-  const router = useRouter();
+  const { back: goBack } = useECSNavigation();
   const { showToast } = useApp();
 
   const [regions, setRegions] = useState<TileCacheRegion[]>([]);
@@ -223,9 +223,13 @@ export default function OfflinePacksScreen() {
 
   const handleDelete = useCallback((regionId: string) => {
     const doDelete = async () => {
-      await tileCacheStore.deleteRegion(regionId);
-      showToast('Saved region removed.');
-      refreshData();
+      try {
+        await tileCacheStore.deleteRegion(regionId);
+        showToast('Saved region removed.');
+        refreshData();
+      } catch (deleteError) {
+        showToast(deleteError instanceof Error ? deleteError.message : 'Saved region could not be removed.');
+      }
     };
 
     if (Platform.OS === 'web') {
@@ -246,7 +250,12 @@ export default function OfflinePacksScreen() {
 
   const handleClearAll = useCallback(() => {
     const doClear = () => {
-      tileCacheStore.clearAll();
+      const cleared = tileCacheStore.clearAll();
+      if (!cleared) {
+        showToast('Active route or expedition map regions were kept. End the active operation before clearing them.');
+        refreshData();
+        return;
+      }
       setActiveProgress(new Map());
       showToast('All saved map regions were removed.');
       refreshData();
@@ -375,7 +384,7 @@ export default function OfflinePacksScreen() {
     <View style={styles.container}>
       {/* Top bar */}
       <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+        <TouchableOpacity onPress={() => goBack()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={22} color={TACTICAL.text} />
         </TouchableOpacity>
         <View style={styles.topTitleGroup}>

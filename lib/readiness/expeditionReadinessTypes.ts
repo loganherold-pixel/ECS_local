@@ -4,6 +4,10 @@ import type {
 } from './expeditionReadinessPreferences';
 import type { DepartureDeltaPreviousAuditSnapshot } from './departureDeltaBrief';
 import type { CampDecisionClockDecision } from '../campops/campDecisionClock';
+import type {
+  OfflineReadinessAssetStatus,
+  OfflineReadinessAudit,
+} from '../offlinePrepPack/offlineReadinessManifest';
 
 export const EXPEDITION_READINESS_STATUSES = ['ready', 'caution', 'hold'] as const;
 export type ExpeditionReadinessStatus = (typeof EXPEDITION_READINESS_STATUSES)[number];
@@ -364,6 +368,12 @@ export type ExpeditionReadinessOfflineInput = {
   isRemoteRoute?: boolean | null;
   isOnline?: boolean | null;
   packageStatus?: 'ready' | 'partial' | 'missing' | 'unknown' | null;
+  canonicalManifestId?: string | null;
+  canonicalAudit?: OfflineReadinessAudit | null;
+  routeGeometryState?: OfflineReadinessAssetStatus | null;
+  mapRegionState?: OfflineReadinessAssetStatus | null;
+  weatherSnapshotState?: OfflineReadinessAssetStatus | null;
+  emergencyPacketState?: OfflineReadinessAssetStatus | null;
   source?: ExpeditionReadinessSourceKind;
   updatedAt?: string | null;
   isStale?: boolean;

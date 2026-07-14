@@ -20,6 +20,7 @@ import type {
 } from './expeditionReadinessTypes';
 import { EXPEDITION_READINESS_CATEGORY_IDS } from './expeditionReadinessTypes';
 import { buildDepartureAudit } from './departureAudit';
+import { measureECSPerformanceSync } from '../performance/ecsPerformanceDiagnostics';
 import {
   DEFAULT_EXPEDITION_READINESS_WEIGHTS,
   resolveExpeditionReadinessCalibration,
@@ -1988,7 +1989,12 @@ export function buildExpeditionReadiness(input: ExpeditionReadinessInput = {}): 
     ...recommendationsFor(categories, blockers, warnings, input),
     ...preferenceGuardrails.recommendations,
   ].filter((item, index, all) => all.indexOf(item) === index);
-  const departureAudit = buildDepartureAudit(input, categories);
+  const departureAudit = measureECSPerformanceSync(
+    'offline_prep_departure_audit',
+    'deterministic_departure_audit',
+    () => buildDepartureAudit(input, categories),
+    { categoryCount: categories.length },
+  );
   const recoveryBrief = buildRecoveryBrief(input, categories);
   const powerBrief = buildPowerBrief(input, categories);
   const assessment: ExpeditionReadinessAssessment = {

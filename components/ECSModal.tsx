@@ -354,7 +354,11 @@ export default function ECSModal({
       statusBarTranslucent
     >
       {/* Backdrop */}
-      <Animated.View style={[styles.backdrop, { opacity: backdropAnim }]}>
+      <Animated.View
+        style={[styles.backdrop, { opacity: backdropAnim }]}
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      >
         <TouchableWithoutFeedback onPress={handleBackdropPress}>
           <View style={StyleSheet.absoluteFill} />
         </TouchableWithoutFeedback>
@@ -362,6 +366,9 @@ export default function ECSModal({
 
       {/* Animated Content Wrapper */}
       <Animated.View
+        accessibilityViewIsModal
+        onAccessibilityEscape={handleRequestClose}
+        importantForAccessibility="yes"
         style={[
           styles.contentWrapper,
           {

@@ -59,7 +59,11 @@ export default function FieldIssueReportModal({
             setDescription('');
             setScreenshotAttached(false);
             onClose();
-            onToast('Field report sent');
+            onToast(
+              result.delivery === 'queued_for_upload'
+                ? 'Field report queued for secure upload'
+                : 'Field report saved locally; support upload is unavailable',
+            );
           }}
           activeOpacity={0.8}
           disabled={submitting}

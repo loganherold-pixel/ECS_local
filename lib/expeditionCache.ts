@@ -306,6 +306,8 @@ export function getExpeditionDiagnostics(): Record<string, any> {
 // returns the user to their last step with all fields restored.
 
 export interface WizardDraftState {
+  /** Stable client identity retained across finalize retries and app restoration. */
+  expeditionId: string | null;
   step: number;                // 0, 1, or 2
   name: string;                // optional expedition name
   destination: string;         // required destination/area
@@ -322,6 +324,7 @@ export interface WizardDraftState {
 }
 
 const DEFAULT_WIZARD_DRAFT: WizardDraftState = {
+  expeditionId: null,
   step: 0,
   name: '',
   destination: '',

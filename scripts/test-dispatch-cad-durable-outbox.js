@@ -84,7 +84,7 @@ assert.match(
 );
 assert.match(
   replaySource,
-  /syncState: 'failed'/,
+  /syncState: ok \? 'sent' : 'failed'/,
   'Offline replay should keep failed CAD delivery visible for retry.',
 );
 

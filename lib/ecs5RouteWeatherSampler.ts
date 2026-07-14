@@ -1,10 +1,18 @@
 import type {
   ECS5ProviderAdapterRegistry,
+  ProviderAdapterRunContext,
   SourceObservation,
 } from './ecs5ObservationPipeline';
+import {
+  beginOperationalWeatherRouteJob,
+  getOperationalWeatherEnvironmentBroker,
+  OperationalWeatherRequestCancelledError,
+  type OperationalWeatherDatum,
+} from './weatherBrokerEnvironment';
 
 export type RouteWeatherRiskLevel = 'low' | 'moderate' | 'high' | 'severe' | 'unknown';
 export type FireWeatherContext = 'low' | 'elevated' | 'critical' | 'unknown';
+export type RouteWeatherSourceState = 'live' | 'cached' | 'stale' | 'mixed' | 'unavailable';
 
 export interface RouteWeatherCoordinate {
   lat: number;
@@ -23,9 +31,15 @@ export interface RouteWeatherSamplerInput {
   estimatedRouteDurationMinutes?: number | null;
   sampleIntervalMiles?: number;
   maxSamplePoints?: number;
+  maxProviderCalls?: number;
+  maxRouteDistanceMiles?: number;
+  maxForecastHorizonMinutes?: number;
   providerPriorityList?: string[];
   units?: 'imperial' | 'metric' | 'standard';
   fixturePayloadBySample?: (point: RouteWeatherSamplePoint, index: number, providerId: string) => unknown;
+  routeJobScope?: string;
+  signal?: AbortSignal | null;
+  serverFetch?: ProviderAdapterRunContext['serverFetch'];
   now?: Date;
 }
 
@@ -49,7 +63,15 @@ export interface RouteSegmentWeatherRisk {
   blackIceInferred?: boolean;
   confidenceScore: number;
   evidenceObservationIds: string[];
+  sourceState: RouteWeatherSourceState;
+  sourceProviders: string[];
+  latestObservedAt: string | null;
 }
+
+type RouteSegmentWeatherRiskCore = Omit<
+  RouteSegmentWeatherRisk,
+  'sourceState' | 'sourceProviders' | 'latestObservedAt'
+>;
 
 export interface RouteWeatherSamplerResult {
   routeId: string;
@@ -57,61 +79,146 @@ export interface RouteWeatherSamplerResult {
   samplePoints: RouteWeatherSamplePoint[];
   segmentRisks: RouteSegmentWeatherRisk[];
   providerWarnings: string[];
+  cancelled: boolean;
+  diagnostics: {
+    samplePointCount: number;
+    providerCount: number;
+    providerCallBudget: number;
+    providerCallsAttempted: number;
+    providerCallsAvoided: number;
+    cacheHits: number;
+    durationMs: number;
+  };
 }
 
 const EARTH_RADIUS_MI = 3958.8;
+export const MAX_ROUTE_WEATHER_SAMPLE_POINTS = 12;
+export const DEFAULT_ROUTE_WEATHER_PROVIDER_CALL_BUDGET = 24;
+export const DEFAULT_ROUTE_WEATHER_DISTANCE_LIMIT_MILES = 500;
+export const DEFAULT_ROUTE_WEATHER_FORECAST_HORIZON_MINUTES = 72 * 60;
 
 export async function sampleRouteWeatherRisk(
   input: RouteWeatherSamplerInput,
   adapterRegistry: ECS5ProviderAdapterRegistry,
 ): Promise<RouteWeatherSamplerResult> {
+  const startedAt = Date.now();
   const now = input.now ?? new Date();
-  const samplePoints = sampleRouteGeometry(input.geometry, {
-    intervalMiles: input.sampleIntervalMiles ?? 10,
-    maxSamplePoints: input.maxSamplePoints ?? 12,
-  });
   const providerWarnings: string[] = [];
-  const providerPriority = input.providerPriorityList?.length
+  const providerPriority = dedupe(input.providerPriorityList?.length
     ? input.providerPriorityList
-    : ['nws', 'openweather_onecall', 'airnow'];
+    : ['nws', 'openweather_onecall', 'airnow']);
+  const providerCallBudget = clampInteger(
+    input.maxProviderCalls ?? DEFAULT_ROUTE_WEATHER_PROVIDER_CALL_BUDGET,
+    1,
+    120,
+  );
+  const maxSamplesForQuota = Math.max(1, Math.floor(providerCallBudget / Math.max(1, providerPriority.length)));
+  const maxSamplePoints = Math.min(
+    clampInteger(input.maxSamplePoints ?? MAX_ROUTE_WEATHER_SAMPLE_POINTS, 1, MAX_ROUTE_WEATHER_SAMPLE_POINTS),
+    maxSamplesForQuota,
+  );
+  const sampled = sampleRouteGeometry(input.geometry, {
+    intervalMiles: input.sampleIntervalMiles ?? 10,
+    maxSamplePoints,
+  });
+  const samplePoints = boundRouteWeatherSamples(sampled, {
+    maxDistanceMiles: input.maxRouteDistanceMiles ?? DEFAULT_ROUTE_WEATHER_DISTANCE_LIMIT_MILES,
+    maxForecastHorizonMinutes:
+      input.maxForecastHorizonMinutes ?? DEFAULT_ROUTE_WEATHER_FORECAST_HORIZON_MINUTES,
+    estimatedRouteDurationMinutes: input.estimatedRouteDurationMinutes ?? null,
+  });
+  const routeJobScope = input.routeJobScope ?? 'active-route-weather';
+  const routeJob = beginOperationalWeatherRouteJob(
+    routeJobScope,
+    buildRouteWeatherJobFingerprint(input, samplePoints),
+  );
+  const combinedSignal = combineAbortSignals(routeJob.signal, input.signal);
+  const broker = getOperationalWeatherEnvironmentBroker(adapterRegistry);
 
   const segmentRisks: RouteSegmentWeatherRisk[] = [];
-  for (let index = 0; index < samplePoints.length; index += 1) {
-    const point = samplePoints[index];
-    const estimatedArrivalAt = estimateArrivalAt(
-      input.tripStartTime,
-      point.distanceMiles,
-      samplePoints[samplePoints.length - 1]?.distanceMiles ?? 0,
-      input.estimatedRouteDurationMinutes ?? null,
-    );
-    let observations: SourceObservation[] = [];
-    for (const providerId of providerPriority) {
-      const fixturePayload = input.fixturePayloadBySample?.(point, index, providerId);
-      try {
-        const result = await adapterRegistry.runAdapter(providerId, {
-          lat: point.lat,
-          lon: point.lon,
-          units: input.units ?? 'imperial',
-          fixturePayload,
-          timeWindow: estimatedArrivalAt ?? input.tripStartTime,
-        }, {
-          fixtureMode: fixturePayload != null,
+  let providerCallsAttempted = 0;
+  let providerCallsAvoided = 0;
+  let cacheHits = 0;
+  try {
+    for (let index = 0; index < samplePoints.length; index += 1) {
+      if (combinedSignal.signal.aborted || !routeJob.isCurrent()) {
+        return cancelledRouteWeatherResult(
+          input.routeId,
           now,
-        });
-        if (result.warnings.length) providerWarnings.push(...result.warnings);
-        if (result.observations.length > 0) {
-          observations = observations.concat(result.observations);
-        }
-      } catch (error: any) {
-        providerWarnings.push(`${providerId}: ${error?.message ?? 'provider failed'}`);
+          samplePoints,
+          providerPriority,
+          providerCallBudget,
+          startedAt,
+          { providerCallsAttempted, providerCallsAvoided, cacheHits },
+        );
       }
+      const point = samplePoints[index];
+      const estimatedArrivalAt = estimateArrivalAt(
+        input.tripStartTime,
+        point.distanceMiles,
+        samplePoints[samplePoints.length - 1]?.distanceMiles ?? 0,
+        input.estimatedRouteDurationMinutes ?? null,
+      );
+      const fixturePayloadByProvider = Object.fromEntries(providerPriority.map((providerId) => [
+        providerId,
+        input.fixturePayloadBySample?.(point, index, providerId),
+      ]));
+      const brokerResult = await broker.fetch({
+        coordinate: { lat: point.lat, lon: point.lon },
+        providerIds: providerPriority,
+        kinds: ['observation', 'forecast', 'alert', 'air_quality', 'fire_detection'],
+        units: input.units ?? 'imperial',
+        timeWindow: estimatedArrivalAt ?? input.tripStartTime,
+        fixturePayloadByProvider,
+        fixtureMode: input.fixturePayloadBySample != null,
+        requestScope: `${routeJobScope}:${routeJob.fingerprint}`,
+        signal: combinedSignal.signal,
+        now,
+        serverFetch: input.serverFetch,
+      });
+      if (combinedSignal.signal.aborted || !routeJob.isCurrent()) {
+        return cancelledRouteWeatherResult(
+          input.routeId,
+          now,
+          samplePoints,
+          providerPriority,
+          providerCallBudget,
+          startedAt,
+          { providerCallsAttempted, providerCallsAvoided, cacheHits },
+        );
+      }
+      providerWarnings.push(...brokerResult.warnings);
+      providerCallsAttempted += brokerResult.diagnostics.providerCallsAttempted;
+      providerCallsAvoided += brokerResult.diagnostics.providerCallsAvoided;
+      if (brokerResult.cacheHit) cacheHits += 1;
+      segmentRisks.push(buildSegmentWeatherRisk({
+        routeId: input.routeId,
+        point,
+        estimatedArrivalAt,
+        observations: brokerResult.data.map(weatherBrokerDatumToSourceObservation),
+        now,
+      }));
     }
-    segmentRisks.push(buildSegmentWeatherRisk({
-      routeId: input.routeId,
-      point,
-      estimatedArrivalAt,
-      observations,
-    }));
+  } catch (error) {
+    if (
+      error instanceof OperationalWeatherRequestCancelledError ||
+      combinedSignal.signal.aborted ||
+      !routeJob.isCurrent()
+    ) {
+      return cancelledRouteWeatherResult(
+        input.routeId,
+        now,
+        samplePoints,
+        providerPriority,
+        providerCallBudget,
+        startedAt,
+        { providerCallsAttempted, providerCallsAvoided, cacheHits },
+      );
+    }
+    providerWarnings.push(error instanceof Error ? error.message : 'Operational weather broker failed.');
+  } finally {
+    combinedSignal.cleanup();
+    routeJob.finish();
   }
 
   return {
@@ -120,7 +227,166 @@ export async function sampleRouteWeatherRisk(
     samplePoints,
     segmentRisks,
     providerWarnings: dedupe(providerWarnings),
+    cancelled: false,
+    diagnostics: {
+      samplePointCount: samplePoints.length,
+      providerCount: providerPriority.length,
+      providerCallBudget,
+      providerCallsAttempted,
+      providerCallsAvoided,
+      cacheHits,
+      durationMs: Math.max(0, Date.now() - startedAt),
+    },
   };
+}
+
+function boundRouteWeatherSamples(
+  samplePoints: RouteWeatherSamplePoint[],
+  options: {
+    maxDistanceMiles: number;
+    maxForecastHorizonMinutes: number;
+    estimatedRouteDurationMinutes: number | null;
+  },
+): RouteWeatherSamplePoint[] {
+  if (samplePoints.length === 0) return [];
+  const maxDistance = Math.max(1, options.maxDistanceMiles);
+  const maxHorizon = Math.max(60, options.maxForecastHorizonMinutes);
+  const routeDistance = samplePoints[samplePoints.length - 1]?.distanceMiles ?? 0;
+  const bounded = samplePoints.filter((point) => {
+    if (point.distanceMiles > maxDistance) return false;
+    if (!options.estimatedRouteDurationMinutes || routeDistance <= 0) return true;
+    const etaMinutes = (point.distanceMiles / routeDistance) * options.estimatedRouteDurationMinutes;
+    return etaMinutes <= maxHorizon;
+  });
+  return bounded.length > 0 ? bounded : [samplePoints[0]];
+}
+
+function buildRouteWeatherJobFingerprint(
+  input: RouteWeatherSamplerInput,
+  samplePoints: RouteWeatherSamplePoint[],
+): string {
+  const first = samplePoints[0];
+  const last = samplePoints[samplePoints.length - 1];
+  return [
+    input.routeId,
+    input.geometry.length,
+    first ? `${first.lat.toFixed(2)},${first.lon.toFixed(2)}` : 'no-start',
+    last ? `${last.lat.toFixed(2)},${last.lon.toFixed(2)}` : 'no-end',
+    input.tripStartTime,
+    input.estimatedRouteDurationMinutes ?? 'unknown-duration',
+  ].join('|');
+}
+
+function combineAbortSignals(
+  primary: AbortSignal,
+  secondary?: AbortSignal | null,
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const listeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
+  for (const signal of [primary, secondary].filter(Boolean) as AbortSignal[]) {
+    if (signal.aborted) {
+      controller.abort();
+      continue;
+    }
+    const listener = () => controller.abort();
+    signal.addEventListener('abort', listener, { once: true });
+    listeners.push({ signal, listener });
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      for (const entry of listeners) {
+        entry.signal.removeEventListener('abort', entry.listener);
+      }
+    },
+  };
+}
+
+function cancelledRouteWeatherResult(
+  routeId: string,
+  now: Date,
+  samplePoints: RouteWeatherSamplePoint[],
+  providers: string[],
+  providerCallBudget: number,
+  startedAt: number,
+  counters: {
+    providerCallsAttempted: number;
+    providerCallsAvoided: number;
+    cacheHits: number;
+  },
+): RouteWeatherSamplerResult {
+  return {
+    routeId,
+    generatedAt: now.toISOString(),
+    samplePoints: [],
+    segmentRisks: [],
+    providerWarnings: ['Route weather job cancelled because route or location context changed.'],
+    cancelled: true,
+    diagnostics: {
+      samplePointCount: samplePoints.length,
+      providerCount: providers.length,
+      providerCallBudget,
+      providerCallsAttempted: counters.providerCallsAttempted,
+      providerCallsAvoided: counters.providerCallsAvoided,
+      cacheHits: counters.cacheHits,
+      durationMs: Math.max(0, Date.now() - startedAt),
+    },
+  };
+}
+
+function weatherBrokerDatumToSourceObservation(
+  datum: OperationalWeatherDatum,
+): SourceObservation {
+  const normalizedPayload = datum.kind === 'observation'
+    ? { current: datum.payload }
+    : datum.payload;
+  const subjectType: SourceObservation['subjectType'] =
+    datum.kind === 'alert'
+      ? 'weather_alert'
+      : datum.kind === 'air_quality'
+        ? 'smoke_aqi'
+        : datum.kind === 'fire_detection'
+          ? 'active_fire'
+          : 'weather_forecast';
+  return {
+    id: datum.observationId,
+    providerId: datum.providerId,
+    sourceName: datum.sourceName,
+    sourceType: datum.sourceType,
+    subjectType,
+    subjectId: datum.subjectId,
+    geometry: datum.geometry,
+    bbox: null,
+    observedAt: datum.observedAt,
+    publishedAt: datum.observedAt,
+    ingestedAt: datum.retrievedAt,
+    expiresAt: datum.expiresAt,
+    rawPayloadRef: null,
+    normalizedPayload,
+    evidenceUrl: null,
+    contentHash: datum.contentHash,
+    confidenceScore: datum.confidence,
+    confidenceBreakdown: {
+      providerDefault: datum.confidence,
+      freshness: datum.stale ? 35 : 85,
+      sourceAuthority: datum.confidence,
+      completeness: 75,
+      stalePenalty: datum.stale ? 35 : 0,
+    },
+    knownLimitations: datum.knownLimitations,
+    supersedesObservationId: null,
+    offlineCacheEligible: true,
+    cachedAt: datum.cacheState === 'live' ? null : datum.retrievedAt,
+    validUntil: datum.forecastValidUntil ?? datum.expiresAt,
+    staleAt: datum.stale ? datum.retrievedAt : datum.expiresAt,
+    offlineWarning: datum.stale ? 'Broker retained stale environmental data for offline reference.' : null,
+    staleReason: datum.stale ? datum.cacheState : null,
+  };
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 export function sampleRouteGeometry(
@@ -158,9 +424,14 @@ export function buildSegmentWeatherRisk(input: {
   point: RouteWeatherSamplePoint;
   estimatedArrivalAt: string | null;
   observations: SourceObservation[];
+  now?: Date;
 }): RouteSegmentWeatherRisk {
+  const sourceContext = summarizeRouteWeatherSource(input.observations, input.now ?? new Date());
   if (input.observations.length === 0) {
-    return unknownRisk(input, 'Provider weather data unavailable for this sample point.');
+    return withRouteWeatherSource(
+      unknownRisk(input, 'Provider weather data unavailable for this sample point.'),
+      sourceContext,
+    );
   }
 
   const evidenceObservationIds = input.observations.map((observation) => observation.id);
@@ -169,12 +440,15 @@ export function buildSegmentWeatherRisk(input: {
   const smokeAqi = summarizeSmokeAqi(input.observations);
   if (records.length === 0) {
     if (smokeAqi.risk !== 'unknown') {
-      return smokeOnlyRisk(input, smokeAqi, evidenceObservationIds);
+      return withRouteWeatherSource(smokeOnlyRisk(input, smokeAqi, evidenceObservationIds), sourceContext);
     }
     if (alerts.weatherRisk !== 'low' || alerts.fireWeatherContext !== 'low') {
-      return alertOnlyRisk(input, alerts, evidenceObservationIds);
+      return withRouteWeatherSource(alertOnlyRisk(input, alerts, evidenceObservationIds), sourceContext);
     }
-    return unknownRisk(input, 'No usable forecast records for estimated arrival time.');
+    return withRouteWeatherSource(
+      unknownRisk(input, 'No usable forecast records for estimated arrival time.'),
+      sourceContext,
+    );
   }
 
   const metrics = summarizeWeatherMetrics(records);
@@ -227,7 +501,7 @@ export function buildSegmentWeatherRisk(input: {
     input.observations.reduce((sum, observation) => sum + observation.confidenceScore, 0) / input.observations.length,
   );
 
-  return {
+  return withRouteWeatherSource({
     segmentId: `${input.routeId}:weather:${input.point.index}`,
     samplePoint: { lat: input.point.lat, lon: input.point.lon },
     estimatedArrivalAt: input.estimatedArrivalAt,
@@ -247,7 +521,7 @@ export function buildSegmentWeatherRisk(input: {
     ...(blackIceInferred ? { blackIceInferred: true } : {}),
     confidenceScore,
     evidenceObservationIds,
-  };
+  }, sourceContext);
 }
 
 function smokeOnlyRisk(
@@ -258,7 +532,7 @@ function smokeOnlyRisk(
   },
   smokeAqi: ReturnType<typeof summarizeSmokeAqi>,
   evidenceObservationIds: string[],
-): RouteSegmentWeatherRisk {
+): RouteSegmentWeatherRiskCore {
   return {
     segmentId: `${input.routeId}:weather:${input.point.index}`,
     samplePoint: { lat: input.point.lat, lon: input.point.lon },
@@ -289,7 +563,7 @@ function alertOnlyRisk(
   },
   alerts: ReturnType<typeof summarizeWeatherAlerts>,
   evidenceObservationIds: string[],
-): RouteSegmentWeatherRisk {
+): RouteSegmentWeatherRiskCore {
   return {
     segmentId: `${input.routeId}:weather:${input.point.index}`,
     samplePoint: { lat: input.point.lat, lon: input.point.lon },
@@ -524,7 +798,7 @@ function unknownRisk(input: {
   routeId: string;
   point: RouteWeatherSamplePoint;
   estimatedArrivalAt: string | null;
-}, reason: string): RouteSegmentWeatherRisk {
+}, reason: string): RouteSegmentWeatherRiskCore {
   return {
     segmentId: `${input.routeId}:weather:${input.point.index}`,
     samplePoint: { lat: input.point.lat, lon: input.point.lon },
@@ -541,6 +815,73 @@ function unknownRisk(input: {
     fireWeatherContextFromForecast: 'unknown',
     confidenceScore: 0,
     evidenceObservationIds: [],
+  };
+}
+
+function summarizeRouteWeatherSource(
+  observations: SourceObservation[],
+  now: Date,
+): {
+  sourceState: RouteWeatherSourceState;
+  sourceProviders: string[];
+  latestObservedAt: string | null;
+} {
+  if (observations.length === 0) {
+    return { sourceState: 'unavailable', sourceProviders: [], latestObservedAt: null };
+  }
+  const staleCount = observations.filter((observation) => isRouteWeatherObservationStale(observation, now)).length;
+  const cachedCount = observations.filter((observation) =>
+    !isRouteWeatherObservationStale(observation, now) && observation.cachedAt != null).length;
+  const liveCount = observations.length - staleCount - cachedCount;
+  const sourceState: RouteWeatherSourceState = staleCount === observations.length
+    ? 'stale'
+    : staleCount > 0 || cachedCount > 0 && liveCount > 0
+      ? 'mixed'
+      : cachedCount === observations.length
+        ? 'cached'
+        : 'live';
+  const observedTimes = observations
+    .map((observation) => observation.observedAt)
+    .filter((value): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left));
+  return {
+    sourceState,
+    sourceProviders: dedupe(observations.map((observation) => observation.providerId)).sort(),
+    latestObservedAt: observedTimes[0] ?? null,
+  };
+}
+
+function isRouteWeatherObservationStale(observation: SourceObservation, now: Date): boolean {
+  if (observation.staleReason || observation.offlineWarning) return true;
+  const staleAt = observation.staleAt ? Date.parse(observation.staleAt) : Number.NaN;
+  const expiresAt = observation.expiresAt ? Date.parse(observation.expiresAt) : Number.NaN;
+  const boundaries = [staleAt, expiresAt].filter(Number.isFinite);
+  return boundaries.length > 0 && Math.min(...boundaries) <= now.getTime();
+}
+
+function withRouteWeatherSource(
+  risk: RouteSegmentWeatherRiskCore,
+  source: ReturnType<typeof summarizeRouteWeatherSource>,
+): RouteSegmentWeatherRisk {
+  const sourceReason = source.sourceState === 'stale'
+    ? 'Stale or last-good weather reference; verify current conditions before relying on this route risk.'
+    : source.sourceState === 'mixed'
+      ? 'Mixed live, cached, or stale weather sources; verify conflicts and freshness before relying on this route risk.'
+      : source.sourceState === 'cached'
+        ? 'Cached weather reference remains within its provider validity window.'
+        : null;
+  const confidenceCap = source.sourceState === 'stale'
+    ? 50
+    : source.sourceState === 'mixed'
+      ? 70
+      : source.sourceState === 'cached'
+        ? 85
+        : 100;
+  return {
+    ...risk,
+    riskReasons: dedupe([sourceReason, ...risk.riskReasons]),
+    confidenceScore: Math.min(risk.confidenceScore, confidenceCap),
+    ...source,
   };
 }
 

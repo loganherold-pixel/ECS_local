@@ -3,7 +3,32 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import {
+  classifyEvidenceCheckOutcome,
+  writeEvidenceCheckResultForLane,
+} from './verification/evidence-result.mjs';
+
 const RESULT_RELATIVE_PATH = path.join('.smoke', 'privacy-storage-approval-result.json');
+const EXTERNAL_PRIVACY_BLOCKER_IDS = [
+  'privacy_storage_review_missing',
+  'closed_field_test_privacy_storage_approval_section_missing',
+  'approval_required_fields_missing',
+  'privacy_storage_owner_approval_incomplete',
+  'approval_owner_missing',
+  'approval_date_missing',
+  'approved_data_categories_missing',
+  'retention_period_missing',
+  'deletion_path_missing',
+  'storage_location_missing',
+  'encryption_status_missing',
+  'access_controls_missing',
+  'private_debrief_data_owner_approval_incomplete',
+  'privacy_storage_required_terms_missing',
+  'telemetry_posture_missing_or_ambiguous',
+  'raw_provider_payload_storage_not_confirmed_disabled',
+  'raw_ai_prompt_storage_not_confirmed_disabled',
+  'private_coordinates_in_shared_evidence_not_confirmed_disabled',
+];
 const REQUIRED_FIELDS = [
   'Status',
   'Owner',
@@ -271,6 +296,29 @@ export function runPrivacyStorageApprovalCli(options = {}) {
   writePrivacyStorageApprovalResult(result, { rootDir: root });
   if (jsonOnly) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else stdout.write(formatPrivacyStorageApprovalResult(result, { rootDir: root }));
+  const outcome = classifyEvidenceCheckOutcome({
+    passed: result.passed,
+    blockerIds: result.blockers,
+    externalBlockerIds: EXTERNAL_PRIVACY_BLOCKER_IDS,
+  });
+  const laneExitCode = writeEvidenceCheckResultForLane({
+    checkId: 'privacy-storage-evidence',
+    status: outcome.status,
+    safeCode: outcome.safeCode,
+    blockerIds: outcome.blockerIds,
+    summary: outcome.status === 'passed'
+      ? 'Privacy and storage approval evidence is complete.'
+      : outcome.status === 'blocked_external'
+        ? 'Privacy or storage approval evidence remains incomplete.'
+        : 'Privacy or storage verification failed an internal safety posture check.',
+    evidence: result,
+    diagnostics: {
+      artifactId: 'privacy-storage-approval-result',
+      domainStatus: result.status,
+      failedCount: result.blockers.length,
+    },
+  });
+  if (laneExitCode !== null) return laneExitCode;
   return result.passed ? 0 : 1;
 }
 

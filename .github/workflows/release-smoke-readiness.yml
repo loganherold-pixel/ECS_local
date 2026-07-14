@@ -1,68 +1,83 @@
-name: Release Smoke Readiness
+name: ECS Pull Request Verification
 
 on:
   pull_request:
   push:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-smoke-readiness-${{ github.ref }}
+  group: ecs-pr-verification-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CI: '1'
+  EXPO_NO_TELEMETRY: '1'
+  ECS_TEST_NETWORK: disabled
+  ECS_TEST_SEED: ecs-verification-v1
+  TZ: UTC
+
 jobs:
-  release-smoke-readiness:
-    name: Smoke, release readiness, and pre-closed-field gates
+  fast:
+    name: Fast code checks
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    env:
-      CI: '1'
-      EXPO_NO_TELEMETRY: '1'
-      BROWSERSLIST_IGNORE_OLD_DATA: '1'
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run smoke gate
-        run: npm run smoke
-
-      - name: Run release readiness regression
-        run: npm run test:release-readiness
-
-      - name: Block runtime mock imports
-        run: npm run gate:no-runtime-mocks
-
-      - name: Check closed-field readiness
-        run: npm run gate:closed-field-test:json
-
-      - name: Check provider readiness posture
-        run: npm run gate:provider-readiness
-
-      - name: Check release approval overrides
-        run: npm run gate:release-approval-overrides
-
-      - name: Run pre-closed-field gate regression
-        run: npm run test:pre-closed-field-gate
-
-      - name: Run aggregate pre-closed-field gate
-        run: npm run gate:pre-closed-field-test
-
-      - name: Upload smoke result
+      - run: npm ci
+      - name: Inventory verification coverage
+        run: node scripts/verification/verification-inventory.mjs --strict --artifact-audience pull_request --output .smoke/verification/inventory.json
+      - name: Run fast pull-request lane
+        run: node scripts/verification/run-verification-lane.mjs --lane pr-fast --timing-baseline config/verification-timing-baseline.json --artifact-audience pull_request --output .smoke/verification/pr-fast.json --summary-output .smoke/verification/pr-fast.md --timings-output .smoke/verification/timings.json
+      - name: Upload machine-readable verification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-result
-          path: .smoke/smoke-result.json
-          if-no-files-found: ignore
+          name: ecs-pr-fast-verification
+          path: |
+            .smoke/verification/inventory.json
+            .smoke/verification/pr-fast.json
+            .smoke/verification/pr-fast.md
+            .smoke/verification/timings.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 5
+
+  affected-domain:
+    name: Affected-domain regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ECS_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      ECS_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run affected-domain lane
+        run: node scripts/verification/run-verification-lane.mjs --lane affected-domain --timing-baseline config/verification-timing-baseline.json --artifact-audience pull_request --base "$ECS_BASE_SHA" --head "$ECS_HEAD_SHA" --output .smoke/verification/affected-domain.json --summary-output .smoke/verification/affected-domain.md --timings-output .smoke/verification/timings.json
+      - name: Upload affected-domain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecs-affected-domain-verification
+          path: |
+            .smoke/verification/affected-domain.json
+            .smoke/verification/affected-domain.md
+            .smoke/verification/timings.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 5

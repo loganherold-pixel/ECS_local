@@ -29,6 +29,11 @@
  * - Widget status tracking (active, disabled, awaiting_data, unavailable)
  */
 
+import {
+  validateDashboardWidgetContracts,
+  type DashboardWidgetValidationResult,
+} from './dashboard/widgetRegistryValidation';
+
 export type WidgetCategory =
   | 'vehicle'
   | 'mission'
@@ -152,6 +157,7 @@ export interface DashboardCatalogEntry {
   defaultModes: DashboardMode[];
   isDefaultSelectable: boolean;
   fallbackBehavior: string;
+  detailView?: 'widget_detail' | 'command_brief' | 'none';
   pickerEnabled: boolean;
 }
 
@@ -173,6 +179,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: ['expedition'],
     isDefaultSelectable: true,
     fallbackBehavior: 'Shows sensor status and safe placeholder guidance until motion data is available.',
+    detailView: 'widget_detail',
     pickerEnabled: true,
   },
   {
@@ -192,6 +199,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: [],
     isDefaultSelectable: true,
     fallbackBehavior: 'Keeps the attitude surface visible while marking missing weather, route, power, or vehicle data compactly.',
+    detailView: 'none',
     pickerEnabled: true,
   },
   {
@@ -211,6 +219,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: ['highway'],
     isDefaultSelectable: true,
     fallbackBehavior: 'Uses configured vehicle profile data and clearly labels missing live inputs.',
+    detailView: 'widget_detail',
     pickerEnabled: true,
   },
   {
@@ -242,7 +251,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     minimumWidgetSize: '1x1',
     userResizable: false,
     priority: 5,
-    tabEligibility: 'expedition',
+    tabEligibility: 'both',
     supportedModes: ['expedition', 'highway'],
     liveData: true,
     liveSources: ['remoteness forecast', 'offline route cache', 'route context'],
@@ -268,6 +277,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: [],
     isDefaultSelectable: true,
     fallbackBehavior: 'Shows no-active-expedition or limited-confidence states without recalculating readiness in the widget.',
+    detailView: 'command_brief',
     pickerEnabled: true,
   },
   {
@@ -306,6 +316,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: [],
     isDefaultSelectable: true,
     fallbackBehavior: 'Shows a clean no-route state until Navigate stages a destination or route.',
+    detailView: 'widget_detail',
     pickerEnabled: true,
   },
   {
@@ -344,6 +355,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: [],
     isDefaultSelectable: false,
     fallbackBehavior: 'Shows last-known readings and explicit disconnected or stale states when live telemetry drops.',
+    detailView: 'widget_detail',
     pickerEnabled: true,
   },
   {
@@ -401,6 +413,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: [],
     isDefaultSelectable: false,
     fallbackBehavior: 'Shows current elevation context and gracefully degrades when terrain, daylight, or wind data is unavailable.',
+    detailView: 'widget_detail',
     pickerEnabled: true,
   },
   {
@@ -420,6 +433,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     defaultModes: [],
     isDefaultSelectable: false,
     fallbackBehavior: 'Shows a no-active-expedition state instead of treating demo or missing route data as live status.',
+    detailView: 'widget_detail',
     pickerEnabled: true,
   },
 ] as const;
@@ -1809,37 +1823,42 @@ export function validateLayoutWidgets(widgetIds: (string | null)[]): string[] {
  *
  * Stabilization Phase 1: Called once at app startup.
  */
-export function auditWidgetRegistry(): void {
+export function validateDashboardWidgetRegistry(): DashboardWidgetValidationResult {
+  const result = validateDashboardWidgetContracts({
+    registry: WIDGET_REGISTRY,
+    catalog: DASHBOARD_WIDGET_CATALOG,
+    defaultLayouts: DEFAULT_DASHBOARD_LAYOUTS,
+  });
   const curatedIssues = validateCuratedDashboardConfig();
-  for (const issue of curatedIssues) {
-    console.warn(`[WidgetRegistry] ${issue}`);
-  }
+  if (curatedIssues.length === 0) return result;
 
-  const ids = new Set<string>();
-  for (const entry of WIDGET_REGISTRY) {
-    // Check for duplicate IDs
-    if (ids.has(entry.widget_id)) {
-      console.warn(`[WidgetRegistry] Duplicate widget_id: "${entry.widget_id}"`);
-    }
-    ids.add(entry.widget_id);
+  const issues = [
+    ...result.issues,
+    ...curatedIssues.map((message) => ({
+      code: 'invalid_default_layout' as const,
+      widgetId: null,
+      message,
+    })),
+  ];
+  return {
+    ...result,
+    valid: false,
+    issues,
+  };
+}
 
-    // Check render_ready / widget_status consistency
-    if (!entry.render_ready && entry.widget_status !== 'unavailable') {
-      console.warn(
-        `[WidgetRegistry] Widget "${entry.widget_id}" is not render_ready but status is "${entry.widget_status}" — should be "unavailable".`
-      );
+export function auditWidgetRegistry(): DashboardWidgetValidationResult {
+  const result = validateDashboardWidgetRegistry();
+  if (!result.valid) {
+    for (const issue of result.issues) {
+      console.warn(`[WidgetRegistry] ${issue.code}: ${issue.message}`);
     }
-
-    // Check core instruments have render_ready
-    if (entry.core_instrument && !entry.render_ready) {
-      console.warn(
-        `[WidgetRegistry] Core instrument "${entry.widget_id}" is not render_ready — this will break the dashboard.`
-      );
-    }
+  } else if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log(
+      `[WidgetRegistry] Audit complete: ${result.registryCount} registered, ${result.catalogCount} contracted, ${result.pickerCount} selectable.`,
+    );
   }
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    console.log(`[WidgetRegistry] Audit complete: ${WIDGET_REGISTRY.length} widgets, ${ids.size} unique IDs.`);
-  }
+  return result;
 }
 
 

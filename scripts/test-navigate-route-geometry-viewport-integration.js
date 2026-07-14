@@ -8,19 +8,28 @@ const domainPath = path.join(root, 'lib', 'routeGeometryViewport.ts');
 const clientPath = path.join(root, 'lib', 'routeGeometryViewportClient.ts');
 const contractsPath = path.join(root, 'lib', 'routeDataContracts.ts');
 const mapRendererPath = path.join(root, 'components', 'navigate', 'MapRenderer.tsx');
+const layerCoordinatorPath = path.join(root, 'lib', 'map', 'navigateMapLayerCoordinator.ts');
 
 const navigate = fs.readFileSync(navigatePath, 'utf8');
 const domain = fs.existsSync(domainPath) ? fs.readFileSync(domainPath, 'utf8') : '';
 const client = fs.existsSync(clientPath) ? fs.readFileSync(clientPath, 'utf8') : '';
 const contracts = fs.existsSync(contractsPath) ? fs.readFileSync(contractsPath, 'utf8') : '';
 const mapRenderer = fs.existsSync(mapRendererPath) ? fs.readFileSync(mapRendererPath, 'utf8') : '';
+const layerCoordinator = fs.existsSync(layerCoordinatorPath)
+  ? fs.readFileSync(layerCoordinatorPath, 'utf8')
+  : '';
 
 assert(
   domain.includes('ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT = 500') &&
-    domain.includes('RouteGeometryViewportFetchCoordinator') &&
     domain.includes('normalizeRouteGeometryViewportResponse') &&
     domain.includes('routeGeometryViewportSegmentsToOverlaySegments'),
-  'MVUM viewport domain should own segment normalization, debounced fetch coordination, and overlay conversion.',
+  'MVUM viewport domain should own segment normalization and overlay conversion.',
+);
+assert(
+  layerCoordinator.includes('class NavigateMapLayerCoordinator') &&
+    layerCoordinator.includes('maxCacheEntriesPerLayer') &&
+    layerCoordinator.includes('staleResponseCount'),
+  'Navigate layer coordination should own bounded caching, cancellation, and stale response accounting.',
 );
 assert(
   client.includes("functions.invoke('route-geometry-segments'") &&
@@ -43,7 +52,8 @@ assert(
 assert(
   navigate.includes('fetchRouteGeometryViewportSegments') &&
     navigate.includes('routeGeometryViewportResult') &&
-    navigate.includes('routeGeometryViewportCacheRef') &&
+    navigate.includes("readCache<RouteGeometryViewportResult>(") &&
+    navigate.includes("layer: 'route_geometry'") &&
     navigate.includes('routeGeometryViewportSegmentsToOverlaySegments'),
   'Navigate should fetch, cache, and render MVUM viewport segments through the geometry segment runtime path.',
 );

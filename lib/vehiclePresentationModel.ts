@@ -15,6 +15,7 @@ import type {
 
 const VEHICLE_SOURCE_PRIORITY: Record<VehicleDataSource, number> = {
   live_telemetry: 5,
+  weather_provider: 5,
   bluetooth: 4,
   gps_live: 3,
   ai_navigation: 2,

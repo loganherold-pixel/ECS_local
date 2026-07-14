@@ -6,3 +6,10 @@ export {
   type SourceTruthInspectorProps,
   type SourceTruthInspectorTriggerProps,
 } from './SourceTruthInspector';
+export {
+  ECSSourceBadge,
+  ECSFreshnessBadge,
+  ECSConfidenceBadge,
+  ECSSourceConflictWarning,
+  type ECSSourceTruthIndicatorProps,
+} from './SourceTruthIndicators';

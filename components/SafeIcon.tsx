@@ -5,7 +5,7 @@
 // do not crash when the icon module fails to resolve.
 
 import React from 'react';
-import { View } from 'react-native';
+import { View, type ViewProps } from 'react-native';
 
 let IoniconsComponent: any = null;
 
@@ -36,6 +36,10 @@ export interface SafeIconProps {
   size?: number;
   color?: string;
   style?: any;
+  accessible?: boolean;
+  accessibilityLabel?: string;
+  accessibilityElementsHidden?: boolean;
+  importantForAccessibility?: ViewProps['importantForAccessibility'];
 }
 
 const SAFE_ICON_GLYPH_MAP: Record<string, string> =
@@ -43,10 +47,33 @@ const SAFE_ICON_GLYPH_MAP: Record<string, string> =
     ? IoniconsComponent.glyphMap
     : {};
 
-function SafeIconInner({ name, size = 24, color = '#8A8A85', style }: SafeIconProps) {
+function SafeIconInner({
+  name,
+  size = 24,
+  color = '#8A8A85',
+  style,
+  accessible,
+  accessibilityLabel,
+  accessibilityElementsHidden,
+  importantForAccessibility,
+}: SafeIconProps) {
+  const accessibilityProps = {
+    accessible,
+    accessibilityLabel,
+    accessibilityElementsHidden,
+    importantForAccessibility,
+  };
   if (IoniconsComponent) {
     try {
-      return <IoniconsComponent name={name} size={size} color={color} style={style} />;
+      return (
+        <IoniconsComponent
+          name={name}
+          size={size}
+          color={color}
+          style={style}
+          {...accessibilityProps}
+        />
+      );
     } catch {
       // Fall through to placeholder.
     }
@@ -55,6 +82,7 @@ function SafeIconInner({ name, size = 24, color = '#8A8A85', style }: SafeIconPr
   const dim = Math.max(size * 0.45, 6);
   return (
     <View
+      {...accessibilityProps}
       style={[
         {
           width: size,

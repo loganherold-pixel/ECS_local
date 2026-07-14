@@ -1,0 +1,109 @@
+name: ECS Release and Device Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Promotion or manual evidence lane
+        required: true
+        default: release-candidate
+        type: choice
+        options: [release-candidate, manual-hardware]
+      artifact_path:
+        description: Optional repository-relative artifact path to fingerprint
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CI: '1'
+  EXPO_NO_TELEMETRY: '1'
+  ECS_TEST_SEED: ecs-verification-v1
+  ECS_RELEASE_PROVIDER_ENVIRONMENT: ${{ vars.ECS_RELEASE_PROVIDER_ENVIRONMENT }}
+  TZ: UTC
+
+jobs:
+  pgtap-rls:
+    if: inputs.lane == 'release-candidate'
+    uses: ./.github/workflows/supabase-db-tests.yml
+
+  release-candidate:
+    needs: pgtap-rls
+    if: always() && inputs.lane == 'release-candidate'
+    name: Release candidate promotion gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Record supplied artifact provenance
+        if: inputs.artifact_path != ''
+        env:
+          ARTIFACT_PATH: ${{ inputs.artifact_path }}
+        run: |
+          node scripts/verification/record-artifact-provenance.mjs --artifact "$ARTIFACT_PATH" --expected-type file --command-id manual-release-artifact --artifact-id supplied-release-artifact --artifact-kind release-binary --workspace-id root --artifact-audience release_candidate --output .smoke/verification/supplied-artifact-provenance.json
+          echo "ECS_RELEASE_ARTIFACT_PROVENANCE=.smoke/verification/supplied-artifact-provenance.json" >> "$GITHUB_ENV"
+      - name: Materialize pgTAP coverage result
+        env:
+          ECS_PGTAP_JOB_RESULT: ${{ needs.pgtap-rls.result }}
+          ECS_PGTAP_COVERAGE_RESULT: ${{ needs.pgtap-rls.outputs.coverage-result }}
+        run: node scripts/verification/materialize-pgtap-workflow-result.mjs --output .smoke/verification/pgtap-coverage-result.json
+      - name: Run release candidate lane
+        run: node scripts/verification/run-verification-lane.mjs --lane release-candidate --timing-baseline config/verification-timing-baseline.json --workflow-coverage-result .smoke/verification/pgtap-coverage-result.json --artifact-audience release_candidate --output .smoke/verification/release-candidate.json --summary-output .smoke/verification/release-candidate.md --timings-output .smoke/verification/timings.json
+      - name: Record generated export provenance
+        if: always()
+        shell: bash
+        run: if [ -d dist ]; then node scripts/verification/record-artifact-provenance.mjs --artifact dist --command-id release-candidate-lane --artifact-id release-web-export --artifact-kind web-export --workspace-id root --artifact-audience release_candidate --output .smoke/verification/release-export-provenance.json; fi
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecs-release-candidate-verification
+          path: |
+            .smoke/verification/release-candidate.json
+            .smoke/verification/release-candidate.md
+            .smoke/verification/release-evidence-report.json
+            .smoke/verification/timings.json
+            .smoke/verification/pgtap-coverage-result.json
+            .smoke/verification/release-export-provenance.json
+            .smoke/verification/supplied-artifact-provenance.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+  manual-hardware:
+    if: inputs.lane == 'manual-hardware'
+    name: Manual hardware evidence manifest validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Validate manifests while preserving external blockers
+        run: node scripts/verification/run-verification-lane.mjs --lane manual-hardware --artifact-audience restricted_field_test --allow-blocked-external --output .smoke/verification/manual-hardware.json --summary-output .smoke/verification/manual-hardware.md --timings-output .smoke/verification/timings.json
+      - name: Record supplied field artifact provenance
+        if: inputs.artifact_path != ''
+        env:
+          ARTIFACT_PATH: ${{ inputs.artifact_path }}
+        run: node scripts/verification/record-artifact-provenance.mjs --artifact "$ARTIFACT_PATH" --expected-type file --command-id manual-hardware-evidence --artifact-id supplied-field-artifact --artifact-kind field-evidence-digest --workspace-id root --artifact-audience restricted_field_test --output .smoke/verification/manual-hardware-artifact-provenance.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecs-manual-hardware-verification
+          path: |
+            .smoke/verification/manual-hardware.json
+            .smoke/verification/manual-hardware.md
+            .smoke/verification/timings.json
+            .smoke/verification/manual-hardware-artifact-provenance.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 3

@@ -307,6 +307,7 @@ assert(
   'manual scanner completion must wait for the native BLE discovery window so first-tap scans return all currently advertising devices',
 );
 const scannerState = read('lib/scannerDeviceListState.ts');
+const scannerCoordinator = read('lib/unifiedScannerCoordinator.ts');
 assert(
   scannerState.includes('getScannerDeviceStableKey') &&
     scannerState.includes('upsertScannerDeviceList') &&
@@ -319,9 +320,9 @@ assert(
   'scanner device list state must centralize upsert, dedupe, fallback ids, drops, and explicit clear logging',
 );
 assert(
-  unified.includes('scanInFlightRef') &&
-    unified.includes('activeScanSessionRef') &&
-    unified.includes("reason: scanInFlightRef.current || isRefreshing ? 'scan_pending' : 'batch_busy'") &&
+  unified.includes('scannerCoordinatorRef.current!.requestSession') &&
+    scannerCoordinator.includes("reason: 'already_scanning'") &&
+    scannerCoordinator.includes('active.controller.abort(reason)') &&
     unified.includes('isCurrentScanSession()'),
   'manual scanner flow must guard same-frame duplicate taps and ignore stale source callbacks',
 );

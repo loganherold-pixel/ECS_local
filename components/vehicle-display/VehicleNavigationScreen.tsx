@@ -41,8 +41,10 @@ export default function VehicleNavigationScreen({ data, automotive }: Props) {
         <View style={styles.routeCanvas}>
           <View style={styles.gridLineTop} />
           <View style={styles.gridLineBottom} />
-          <View style={styles.routeStroke} />
-          <View style={styles.positionDot} />
+          {data.routeLine ? <View style={styles.routeStroke} /> : null}
+          {data.currentLat != null && data.currentLon != null ? (
+            <View style={styles.positionDot} />
+          ) : null}
         </View>
 
         {primaryCommand ? (

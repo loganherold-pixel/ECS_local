@@ -885,8 +885,34 @@ export const vehicleStore = {
     userId?: string | null
   ): Promise<{ success: boolean; deletedFrom: 'cloud' | 'local' | 'both'; error?: string }> => {
     await ensureVehicleStorageHydrated();
+    const wasActiveVehicle = vehicleSetupStore.getActiveVehicleId() === vehicleId;
+    try {
+      const { expeditionStateStore } = await import('./expeditionStateStore');
+      const activeExpedition = expeditionStateStore.getCurrentExpedition();
+      if (
+        activeExpedition?.activeVehicleId === vehicleId &&
+        (activeExpedition.state === 'active' || activeExpedition.state === 'paused')
+      ) {
+        return {
+          success: false,
+          deletedFrom: 'local',
+          error: 'End or cancel the active expedition before deleting its vehicle.',
+        };
+      }
+    } catch (error) {
+      logVehicleStoreWarn('Could not verify active expedition binding before vehicle deletion', {
+        vehicleId,
+        ...errorDetails(error),
+      });
+      return {
+        success: false,
+        deletedFrom: 'local',
+        error: 'Vehicle binding verification is unavailable. Try again before deleting this vehicle.',
+      };
+    }
     let deletedCloud = false;
     let deletedLocal = false;
+    let remainingVehicleIds: string[] = [];
 
     // ── 1. Cloud deletion (if authenticated with real UUID + Supabase configured) ──
     if (isSyncableUserId(userId) && isSupabaseConfigured) {
@@ -932,6 +958,7 @@ export const vehicleStore = {
       const localVehicles = getLocalVehicles();
       const originalCount = localVehicles.length;
       const filtered = localVehicles.filter(v => v.id !== vehicleId);
+      remainingVehicleIds = filtered.map((vehicle) => vehicle.id);
 
       if (filtered.length < originalCount) {
         saveLocalVehicles(filtered);
@@ -957,9 +984,15 @@ export const vehicleStore = {
     // ── 3. Clean up all related data ────────────────────────────
     cleanupRelatedData(vehicleId);
 
-    if (vehicleSetupStore.getActiveVehicleId() === vehicleId) {
-      vehicleSetupStore.clearActiveVehicleId();
-      logVehicleStoreDebug('Cleared active vehicle context for deleted vehicle', { vehicleId });
+    if (wasActiveVehicle) {
+      const replacementVehicleId = vehicleSetupStore.reconcileActiveVehicle(remainingVehicleIds, {
+        autoSelectFirst: true,
+        reason: 'vehicle_deleted',
+      });
+      logVehicleStoreDebug('Reconciled active vehicle context after deletion', {
+        vehicleId,
+        replacementVehicleId,
+      });
     }
 
     // ── Result ──────────────────────────────────────────────────

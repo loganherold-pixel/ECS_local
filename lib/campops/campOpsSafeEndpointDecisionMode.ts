@@ -28,6 +28,10 @@ import {
   buildCampOpsSearchInputs,
   type CampOpsSearchIntegrationOptions,
 } from './campOpsSearchIntegration';
+import {
+  campOpsEnrichmentFromCandidateEvidence,
+  normalizeCampCandidatePool,
+} from './campOpsCandidateNormalization';
 import type {
   CampCandidate,
   CampCandidateEnrichment,
@@ -80,6 +84,8 @@ export type CampOpsSafeEndpointDecisionContextInput = {
   weather?: CampOpsSafeEndpointWeatherContext | null;
   connectivityStatus?: string | null;
   plannedCampId?: string | null;
+  additionalCandidates?: CampCandidate[] | null;
+  additionalEnrichmentsByCandidateId?: Record<string, CampCandidateEnrichment | undefined> | null;
 };
 
 export type BuildCampOpsSafeEndpointDecisionViewModelInput =
@@ -474,7 +480,7 @@ function routeMatches(
 
 function buildContext(
   input: BuildCampOpsSafeEndpointDecisionViewModelInput,
-  normalized: ReturnType<typeof buildCampOpsSearchInputs>,
+  normalized: Pick<ReturnType<typeof buildCampOpsSearchInputs>, 'context'>,
   nowIso: string,
 ): CampSearchContext {
   const matchingSnapshot = routeMatches(input.navigateRoute, input.routeId, input.candidateResult)
@@ -1043,6 +1049,7 @@ export function buildCampOpsSafeEndpointDecisionViewModel(
   const routeResult = (input.candidateResult?.source ?? input.candidateResult?.analysisSource) === 'route'
     ? input.candidateResult ?? null
     : null;
+  const additionalCandidates = input.additionalCandidates ?? [];
   if (!featureState.endpointRecommendationEnabled) {
     return initialViewModel(input, nowIso, 'disabled', 'Safe Endpoint Decision Mode is disabled for this rollout.', 'Keep the current route and camp plan.', routeResult);
   }
@@ -1055,7 +1062,7 @@ export function buildCampOpsSafeEndpointDecisionViewModel(
   if (!routeResult && input.candidateStatus === 'error') {
     return initialViewModel(input, nowIso, 'unavailable', 'CampOps camp candidates could not be loaded. The current route remains unchanged.', 'Keep the active plan and verify a known legal endpoint manually.', null);
   }
-  if (!routeResult || routeResult.candidates.length === 0 || input.candidateStatus === 'empty') {
+  if ((!routeResult || routeResult.candidates.length === 0 || input.candidateStatus === 'empty') && additionalCandidates.length === 0) {
     return initialViewModel(input, nowIso, 'no_candidates', 'No route-linked CampOps candidates are available for a deterministic endpoint decision.', 'Keep the active plan and verify a known legal endpoint manually.', routeResult);
   }
 
@@ -1064,10 +1071,10 @@ export function buildCampOpsSafeEndpointDecisionViewModel(
     rolloutConfig: input.rolloutConfig ?? {},
     vehicleProfile: buildVehicleProfile(input.vehicleContext),
     context: {
-      id: `campops-safe-endpoint:${input.routeId ?? routeResult.routeIntelligenceId}`,
-      routeId: input.routeId ?? routeResult.routeIntelligenceId,
+      id: `campops-safe-endpoint:${input.routeId ?? routeResult?.routeIntelligenceId ?? input.navigateRoute?.routeId ?? 'route'}`,
+      routeId: input.routeId ?? routeResult?.routeIntelligenceId ?? input.navigateRoute?.routeId ?? null,
       tripId: input.tripId ?? null,
-      plannedCampId: input.plannedCampId ?? routeResult.campOps?.routeEndpointPlan?.selectedEndpointIds?.[0] ?? null,
+      plannedCampId: input.plannedCampId ?? routeResult?.campOps?.routeEndpointPlan?.selectedEndpointIds?.[0] ?? null,
       currentTimeIso: nowIso,
       resourceState: buildResourceState(input.vehicleContext, input.powerSnapshot),
       convoyProfile: buildConvoyProfile(input.convoyContext, input.convoyTracking),
@@ -1075,12 +1082,30 @@ export function buildCampOpsSafeEndpointDecisionViewModel(
       offlineMode: normalizeOfflineMode(input.connectivityStatus),
     },
   };
-  const normalized = buildCampOpsSearchInputs(routeResult, searchOptions);
+  const normalized = routeResult
+    ? buildCampOpsSearchInputs(routeResult, searchOptions)
+    : {
+        context: searchOptions.context as CampSearchContext,
+        candidates: [] as CampCandidate[],
+        enrichmentsByCandidateId: {} as Record<string, CampCandidateEnrichment | undefined>,
+      };
   const context = buildContext(input, normalized, nowIso);
-  const previousSet = routeResult.campOps?.recommendationSet ?? null;
+  const previousSet = routeResult?.campOps?.recommendationSet ?? null;
+  const additionalEnrichments = Object.fromEntries(additionalCandidates.map((candidate) => [
+    candidate.id,
+    input.additionalEnrichmentsByCandidateId?.[candidate.id] ??
+      (candidate.evidence ? campOpsEnrichmentFromCandidateEvidence(candidate) : undefined),
+  ]));
+  const candidatePool = normalizeCampCandidatePool({
+    candidates: [...normalized.candidates, ...additionalCandidates],
+    enrichmentsByCandidateId: {
+      ...normalized.enrichmentsByCandidateId,
+      ...additionalEnrichments,
+    },
+  });
   const enrichmentsByCandidateId: Record<string, CampCandidateEnrichment> = {};
-  normalized.candidates.forEach((candidate) => {
-    const current = normalized.enrichmentsByCandidateId[candidate.id];
+  candidatePool.candidates.forEach((candidate) => {
+    const current = candidatePool.enrichmentsByCandidateId[candidate.id];
     if (!current) return;
     enrichmentsByCandidateId[candidate.id] = mergeEnrichment(
       candidate,
@@ -1094,13 +1119,14 @@ export function buildCampOpsSafeEndpointDecisionViewModel(
     context,
     delayScenario: input.delayScenario,
     beforeSunset: input.beforeSunset,
-    candidates: normalized.candidates,
+    candidates: candidatePool.candidates,
     enrichmentsByCandidateId,
   });
   const set = result.recommendationSet;
-  const recommendedEndpoint = optionViewModel('recommended', result.decisionSummary.recommendedSafeEndpoint, set, result.context, routeResult.analyzedAt);
-  const backupEndpoint = optionViewModel('backup', result.decisionSummary.backupEndpoint, set, result.context, routeResult.analyzedAt);
-  const emergencyEndpoint = optionViewModel('emergency', result.decisionSummary.emergencyEndpoint, set, result.context, routeResult.analyzedAt);
+  const candidateObservedAt = routeResult?.analyzedAt ?? nowIso;
+  const recommendedEndpoint = optionViewModel('recommended', result.decisionSummary.recommendedSafeEndpoint, set, result.context, candidateObservedAt);
+  const backupEndpoint = optionViewModel('backup', result.decisionSummary.backupEndpoint, set, result.context, candidateObservedAt);
+  const emergencyEndpoint = optionViewModel('emergency', result.decisionSummary.emergencyEndpoint, set, result.context, candidateObservedAt);
   const endpoints = [recommendedEndpoint, backupEndpoint, emergencyEndpoint].filter(
     (endpoint): endpoint is CampOpsSafeEndpointOptionViewModel => Boolean(endpoint),
   );
@@ -1132,7 +1158,7 @@ export function buildCampOpsSafeEndpointDecisionViewModel(
     statusLabel,
     statusTone: status === 'recommended' ? 'ready' : status === 'emergency_only' ? 'warning' : 'unavailable',
     summary,
-    routeLabel: safeText(input.routeLabel ?? routeResult.routeName, 'Current route'),
+    routeLabel: safeText(input.routeLabel ?? routeResult?.routeName ?? input.navigateRoute?.routeTitle, 'Current route'),
     delayMinutes: result.decisionSummary.delayEstimateMinutes,
     delayLabel: formatDelay(result.decisionSummary.delayEstimateMinutes),
     beforeSunset: input.beforeSunset,

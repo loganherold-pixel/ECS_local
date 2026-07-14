@@ -40,7 +40,7 @@ assert(
     commandDock.includes('pendingRouteRef') &&
     commandDock.includes('setPendingRoute') &&
     commandDock.includes('deferShellRouteNavigation(() => {') &&
-    commandDock.includes('router.navigate(route as any);'),
+    commandDock.includes('navigateSingleFlight(route);'),
   'CommandDock must optimistically acknowledge tab presses and defer route mounting out of the press frame.',
 );
 

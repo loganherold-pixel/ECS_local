@@ -44,6 +44,7 @@ import {
   type ECSRun,
 } from '../lib/runStore';
 import { navigateRouteSessionStore } from '../lib/navigateRouteSessionStore';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import { getMapboxToken, type MapStyleKey } from '../lib/mapConfig';
 import { connectivity } from '../lib/connectivity';
 import { ensureForegroundLocationPermission } from '../lib/locationPermissions';
@@ -156,6 +157,7 @@ function describeOfflineRouteCache(
 
 export default function NavigateRunDetail() {
   const router = useRouter();
+  const { back: goBack } = useECSNavigation();
   const { showToast } = useApp();
   const params = useLocalSearchParams<{ runId?: string }>();
   const runId = params.runId || '';
@@ -508,7 +510,7 @@ export default function NavigateRunDetail() {
     const doDelete = () => {
       runStore.delete(run.id);
       showToast('RUN DELETED');
-      router.back();
+      goBack();
     };
 
     if (Platform.OS === 'web') {
@@ -521,7 +523,7 @@ export default function NavigateRunDetail() {
         { text: 'Delete', style: 'destructive', onPress: doDelete },
       ]);
     }
-  }, [run, showToast, router]);
+  }, [goBack, run, showToast]);
 
   const handleSetActive = useCallback(() => {
     if (!run) return;
@@ -643,7 +645,7 @@ export default function NavigateRunDetail() {
         updatedAt: new Date().toISOString(),
       });
       showToast('NAVIGATION STARTED. PROCEED TO THE HIGHLIGHTED ROUTE.');
-      router.back();
+      goBack();
     } catch (err: any) {
       const message = String(err?.message || '');
       if (/permission/i.test(message)) {
@@ -657,7 +659,7 @@ export default function NavigateRunDetail() {
   }, [
     mapRunPoints,
     navigationStarting,
-    router,
+    goBack,
     run,
     runDetailGpsPosition,
     showToast,
@@ -686,7 +688,7 @@ export default function NavigateRunDetail() {
     return (
       <View style={styles.container}>
         <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <TouchableOpacity onPress={() => goBack()} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={22} color={TACTICAL.text} />
           </TouchableOpacity>
           <Text style={styles.topTitle}>{isRunLoading ? 'LOADING RUN' : 'RUN NOT FOUND'}</Text>
@@ -704,7 +706,7 @@ export default function NavigateRunDetail() {
               : offlineCacheMessage || 'This run could not be loaded.'}
           </Text>
           {!isRunLoading ? (
-            <TouchableOpacity style={styles.backNavBtn} onPress={() => router.back()}>
+            <TouchableOpacity style={styles.backNavBtn} onPress={() => goBack()}>
               <Text style={styles.backNavBtnText}>BACK TO NAVIGATE</Text>
             </TouchableOpacity>
           ) : null}
@@ -716,7 +718,7 @@ export default function NavigateRunDetail() {
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+        <TouchableOpacity onPress={() => goBack()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={22} color={TACTICAL.text} />
         </TouchableOpacity>
 

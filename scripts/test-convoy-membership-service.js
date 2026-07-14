@@ -146,6 +146,7 @@ async function main() {
   const createService = new ConvoyMembershipService(createBackend);
   const created = await createService.createConvoy({
     name: '  Sierra   Test Convoy  ',
+    expeditionId: 'expedition-cloud-1',
     leaderCallsign: 'Lead Tacoma',
     leaderVehicleId: 'vehicle-1',
     leaderExpeditionBadgeTitle: 'Master Navigator',
@@ -162,6 +163,7 @@ async function main() {
       call[0] === 'invokeMembershipFunction' &&
       call[1] === 'create_convoy' &&
       call[2].name === 'Sierra Test Convoy' &&
+      call[2].expeditionId === 'expedition-cloud-1' &&
       call[2].leaderCallsign === 'Lead Tacoma' &&
       call[2].leaderExpeditionBadgeTitle === 'Master Navigator'
     )),
@@ -188,10 +190,12 @@ async function main() {
   const missingSchemaService = new ConvoyMembershipService(missingSchemaBackend);
   const missingSchemaResult = await missingSchemaService.createConvoy({
     name: 'Schema Check',
+    expeditionId: 'expedition-local-1',
     leaderCallsign: 'Lead',
   });
   assert.strictEqual(missingSchemaResult.ok, true, 'missing convoy schema should create a local pending convoy instead of blocking createConvoy.');
   assert.strictEqual(missingSchemaResult.data.syncState, 'local_pending');
+  assert.strictEqual(missingSchemaResult.data.convoy.expedition_id, 'expedition-local-1');
   assert.ok(
     missingSchemaResult.data.convoy.id.startsWith('local-convoy-') &&
       missingSchemaResult.data.membership.id.startsWith('local-member-'),

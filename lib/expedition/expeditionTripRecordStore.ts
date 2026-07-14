@@ -4,6 +4,13 @@ import {
   type MapMotionGpsSample,
 } from '../mapMotion';
 import { generateExpeditionRecap } from './expeditionRecapEngine';
+import { loadExpeditionLaunchHandoffAsync } from '../expeditionLaunchHandoffStore';
+import {
+  buildCompletionKey,
+  canonicalJourneyEntityId,
+  mergeJourneyLinkage,
+  normalizeJourneyLinkage,
+} from '../lifecycle/routeTripExpeditionLifecycle';
 import type {
   ExpeditionRecap,
   ExpeditionTripBounds,
@@ -24,8 +31,8 @@ import type {
 } from './expeditionTripRecordTypes';
 
 const STORAGE_KEY = 'ecs_expedition_trip_records_v1';
-const STORAGE_VERSION = 1;
-const TRIP_SCHEMA_VERSION = 'ecs.expedition.trip.v1';
+const STORAGE_VERSION = 2;
+const TRIP_SCHEMA_VERSION = 'ecs.expedition.trip.v2';
 const RECAP_SCHEMA_VERSION = 'ecs.expedition.recap.v1';
 const BADGE_UNLOCK_SCHEMA_VERSION = 'ecs.expedition.badge-unlock.v1';
 const INSIGHT_SCHEMA_VERSION = 'ecs.expedition.insight.v1';
@@ -49,6 +56,9 @@ interface PersistedExpeditionTripRecords {
 let hydratedSnapshot: PersistedExpeditionTripRecords | null = null;
 let hydrationPromise: Promise<PersistedExpeditionTripRecords> | null = null;
 let guidanceTrackingQueue: Promise<ExpeditionTripRecord | null> = Promise.resolve(null);
+const completedPostProcessingFlights = new Map<string, Promise<void>>();
+const completedPostProcessingFingerprints = new Set<string>();
+const MAX_POST_PROCESSING_FINGERPRINTS = 200;
 
 export function getTripSchemaVersion(): string {
   return TRIP_SCHEMA_VERSION;
@@ -484,10 +494,49 @@ export function normalizeExpeditionTripRecord(raw: unknown): ExpeditionTripRecor
     routeGeometry[routeGeometry.length - 1] ??
     startCoordinate;
   const elevation = computeElevationStats(routeGeometry);
+  const expeditionId = nullableString(input?.expeditionId);
+  const routeAssetId = nullableString(input?.routeAssetId);
+  const tripPlanId = nullableString(input?.tripPlanId);
+  const offlinePackageId = nullableString(input?.offlinePackageId);
+  const recordedRunId = nullableString(input?.recordedRunId);
+  const guidanceSessionId = nullableString(input?.guidanceSessionId);
+  const completionKey = nullableString(input?.completionKey) ?? buildCompletionKey({
+    expeditionId,
+    guidanceSessionId,
+    completedOutcomeId: id,
+  });
+  const lifecyclePhase = status === 'planned' ? 'planned' : status;
+  const lifecycle = mergeJourneyLinkage(normalizeJourneyLinkage(input?.lifecycle), {
+    phase: lifecyclePhase,
+    identity: {
+      expeditionId: expeditionId ? canonicalJourneyEntityId('expedition', expeditionId) : null,
+      routeAssetId: routeAssetId ? canonicalJourneyEntityId('route_asset', routeAssetId) : null,
+      tripPlanId,
+      offlinePackageId,
+      guidanceSessionId: guidanceSessionId
+        ? canonicalJourneyEntityId('guidance_session', guidanceSessionId)
+        : null,
+      recordedRunId: recordedRunId
+        ? canonicalJourneyEntityId('recorded_run', recordedRunId)
+        : null,
+      completedOutcomeId: completionKey,
+      archiveRecordId: status === 'archived'
+        ? canonicalJourneyEntityId('archive_record', id)
+        : null,
+    },
+    updatedAt,
+  });
 
   const normalized: ExpeditionTripRecord = {
     id,
     schemaVersion: TRIP_SCHEMA_VERSION,
+    completionKey,
+    expeditionId,
+    routeAssetId,
+    tripPlanId,
+    offlinePackageId,
+    recordedRunId,
+    lifecycle,
     userId: nullableString(input?.userId),
     title:
       nullableString(input?.title) ??
@@ -521,7 +570,7 @@ export function normalizeExpeditionTripRecord(raw: unknown): ExpeditionTripRecor
     recap: normalizeExpeditionRecap(input?.recap),
     createdAt,
     updatedAt,
-    guidanceSessionId: nullableString(input?.guidanceSessionId),
+    guidanceSessionId,
     guidanceSource: guidanceSourceFromUnknown(input?.guidanceSource),
     routeId: nullableString(input?.routeId),
     routeTitle: nullableString(input?.routeTitle),
@@ -683,7 +732,12 @@ export async function upgradeTripSchemaIfNeeded(): Promise<{
 
 function queueCompletedTripPostProcessing(record: ExpeditionTripRecord): void {
   if (record.status !== 'completed') return;
-  void (async () => {
+  const fingerprint = [
+    record.completionKey ?? record.id,
+    record.completedAt ?? 'missing-completion-time',
+  ].join('|');
+  if (completedPostProcessingFingerprints.has(fingerprint) || completedPostProcessingFlights.has(fingerprint)) return;
+  const flight = (async () => {
     await import('./expeditionBadgeStore')
       .then(({ evaluateBadgesForCompletedTrip }) => evaluateBadgesForCompletedTrip(record.id))
       .catch(() => null);
@@ -696,20 +750,38 @@ function queueCompletedTripPostProcessing(record: ExpeditionTripRecord): void {
     await import('../tripLearning/tripLearningAdapters')
       .then(({ processCompletedExpeditionTripForLearning }) => processCompletedExpeditionTripForLearning(record))
       .catch(() => null);
-  })();
+  })().then(() => {
+    completedPostProcessingFingerprints.add(fingerprint);
+    if (completedPostProcessingFingerprints.size > MAX_POST_PROCESSING_FINGERPRINTS) {
+      const oldest = completedPostProcessingFingerprints.values().next().value;
+      if (oldest) completedPostProcessingFingerprints.delete(oldest);
+    }
+  }).finally(() => {
+    completedPostProcessingFlights.delete(fingerprint);
+  });
+  completedPostProcessingFlights.set(fingerprint, flight);
 }
 
 function upsertRecord(snapshot: PersistedExpeditionTripRecords, record: ExpeditionTripRecord): PersistedExpeditionTripRecords {
   const normalizedRecord = normalizeExpeditionTripRecord(record) ?? record;
-  const index = snapshot.records.findIndex((item) => item.id === normalizedRecord.id);
+  const index = snapshot.records.findIndex((item) => (
+    item.id === normalizedRecord.id ||
+    Boolean(
+      normalizedRecord.completionKey &&
+      item.completionKey === normalizedRecord.completionKey,
+    )
+  ));
+  const recordToStore = index >= 0 && snapshot.records[index].id !== normalizedRecord.id
+    ? { ...normalizedRecord, id: snapshot.records[index].id }
+    : normalizedRecord;
   const records =
     index >= 0
-      ? snapshot.records.map((item, itemIndex) => (itemIndex === index ? normalizedRecord : item))
-      : [...snapshot.records, normalizedRecord];
+      ? snapshot.records.map((item, itemIndex) => (itemIndex === index ? recordToStore : item))
+      : [...snapshot.records, recordToStore];
   return {
     ...snapshot,
     records,
-    activeTripId: normalizedRecord.status === 'active' ? normalizedRecord.id : snapshot.activeTripId,
+    activeTripId: recordToStore.status === 'active' ? recordToStore.id : snapshot.activeTripId,
   };
 }
 
@@ -740,10 +812,43 @@ export function createNewActiveTripRecord(input: ExpeditionTripCreateInput = {})
   const elevation = computeElevationStats(routeGeometry);
   const title = input.title?.trim() || input.routeTitle?.trim() || 'Expedition Trip';
   const dataSource = input.dataSource ?? defaultSource('navigate_guidance');
+  const baseIdentity = {
+    expeditionId: input.expeditionId
+      ? canonicalJourneyEntityId('expedition', input.expeditionId)
+      : input.lifecycle?.identity.expeditionId ?? null,
+    routeAssetId: input.routeAssetId
+      ? canonicalJourneyEntityId('route_asset', input.routeAssetId)
+      : input.lifecycle?.identity.routeAssetId ?? null,
+    tripPlanId: input.tripPlanId ?? input.lifecycle?.identity.tripPlanId ?? null,
+    offlinePackageId: input.offlinePackageId ?? input.lifecycle?.identity.offlinePackageId ?? null,
+    guidanceSessionId: input.guidanceSessionId
+      ? canonicalJourneyEntityId('guidance_session', input.guidanceSessionId)
+      : input.lifecycle?.identity.guidanceSessionId ?? null,
+    recordedRunId: input.recordedRunId
+      ? canonicalJourneyEntityId('recorded_run', input.recordedRunId)
+      : input.lifecycle?.identity.recordedRunId ?? null,
+  };
+  const completionKey = input.completionKey ?? buildCompletionKey(baseIdentity);
+  const recordId = input.id ?? completionKey ?? generateId('expedition-trip');
+  const lifecycle = mergeJourneyLinkage(input.lifecycle, {
+    phase: 'active',
+    identity: {
+      ...baseIdentity,
+      completedOutcomeId: completionKey,
+    },
+    updatedAt: timestamp,
+  });
 
   return {
-    id: input.id ?? generateId('expedition-trip'),
+    id: recordId,
     schemaVersion: TRIP_SCHEMA_VERSION,
+    completionKey,
+    expeditionId: input.expeditionId ?? null,
+    routeAssetId: input.routeAssetId ?? null,
+    tripPlanId: input.tripPlanId ?? null,
+    offlinePackageId: input.offlinePackageId ?? null,
+    recordedRunId: input.recordedRunId ?? null,
+    lifecycle,
     userId: input.userId ?? null,
     title,
     status: 'active',
@@ -952,6 +1057,11 @@ export function finalizeCompletedTrip(
     ...withCompletionMoment,
     generatedSummary,
     recap,
+    lifecycle: mergeJourneyLinkage(withCompletionMoment.lifecycle, {
+      phase: 'completed',
+      identity: { completedOutcomeId: withCompletionMoment.completionKey },
+      updatedAt: completedAt,
+    }),
     updatedAt: completedAt,
   };
 }
@@ -1070,6 +1180,19 @@ export async function ensureActiveTripRecordForGuidance(
   const source = sourceFromGuidance(snapshot);
   const plannedRouteGeometry = normalizeGeometry(snapshot.routePoints, timestamp);
   const currentCoordinate = coordinateFromGuidance(snapshot);
+  const launchHandoff = await loadExpeditionLaunchHandoffAsync().catch(() => null);
+  const launchMatchesRoute = Boolean(
+    launchHandoff &&
+    snapshot.routeId &&
+    (
+      launchHandoff.routeId === snapshot.routeId ||
+      launchHandoff.runId === snapshot.routeId ||
+      launchHandoff.routeAssetId === snapshot.routeId ||
+      launchHandoff.lifecycle.identity.routeAssetId === snapshot.routeId ||
+      launchHandoff.lifecycle.identity.recordedRunId === canonicalJourneyEntityId('recorded_run', snapshot.routeId)
+    ),
+  );
+  const launchLifecycle = launchMatchesRoute ? launchHandoff?.lifecycle ?? null : null;
 
   if (!active) {
     const routeGeometry = appendGuidanceTraceCoordinate([], currentCoordinate);
@@ -1081,6 +1204,16 @@ export async function ensureActiveTripRecordForGuidance(
       routeGeometry,
       plannedRouteGeometry,
       guidanceSessionId: snapshot.sessionId,
+      completionKey: buildCompletionKey({
+        expeditionId: launchLifecycle?.identity.expeditionId ?? null,
+        guidanceSessionId: snapshot.sessionId,
+      }),
+      expeditionId: launchMatchesRoute ? launchHandoff?.expeditionRecordId ?? null : null,
+      routeAssetId: launchLifecycle?.identity.routeAssetId ?? null,
+      tripPlanId: launchLifecycle?.identity.tripPlanId ?? null,
+      offlinePackageId: launchLifecycle?.identity.offlinePackageId ?? null,
+      recordedRunId: launchMatchesRoute ? launchHandoff?.runId ?? null : null,
+      lifecycle: launchLifecycle,
       guidanceSource: guidanceSource(snapshot),
       routeId: snapshot.routeId,
       routeTitle: snapshot.routeTitle,
@@ -1177,6 +1310,10 @@ export async function cancelActiveTripRecordFromGuidanceEnd(
       recap: null,
       dataUsed: mergeDataUsed(updated.dataUsed, source),
       syncStatus: updated.syncStatus === 'synced' ? 'pending' : updated.syncStatus,
+      lifecycle: mergeJourneyLinkage(updated.lifecycle, {
+        phase: 'cancelled',
+        updatedAt: endedAt,
+      }),
       updatedAt: endedAt,
     },
     {
@@ -1247,6 +1384,22 @@ export const expeditionTripRecordStore = {
     return snapshot.records.find((record) => record.id === id) ?? null;
   },
 
+  async findByLifecycleIdentity(input: {
+    completionKey?: string | null;
+    expeditionId?: string | null;
+    guidanceSessionId?: string | null;
+  }): Promise<ExpeditionTripRecord | null> {
+    const snapshot = await loadSnapshot();
+    const completionKey = input.completionKey?.trim() || null;
+    const expeditionId = input.expeditionId?.trim() || null;
+    const guidanceSessionId = input.guidanceSessionId?.trim() || null;
+    return snapshot.records.find((record) => (
+      Boolean(completionKey && record.completionKey === completionKey) ||
+      Boolean(expeditionId && record.expeditionId === expeditionId) ||
+      Boolean(guidanceSessionId && record.guidanceSessionId === guidanceSessionId)
+    )) ?? null;
+  },
+
   async save(record: ExpeditionTripRecord): Promise<ExpeditionTripRecord> {
     const snapshot = await loadSnapshot();
     const normalized = normalizeExpeditionTripRecord(record) ?? record;
@@ -1281,6 +1434,13 @@ export const expeditionTripRecordStore = {
     const updated: ExpeditionTripRecord = {
       ...existing,
       status: 'archived',
+      lifecycle: mergeJourneyLinkage(existing.lifecycle, {
+        phase: 'archived',
+        identity: {
+          archiveRecordId: canonicalJourneyEntityId('archive_record', existing.id),
+        },
+        updatedAt: nowISO(),
+      }),
       updatedAt: nowISO(),
       syncStatus: existing.syncStatus === 'synced' ? 'pending' : existing.syncStatus,
     };
@@ -1306,6 +1466,8 @@ export const expeditionTripRecordStore = {
   },
 
   async clearAllForTests(): Promise<void> {
+    completedPostProcessingFlights.clear();
+    completedPostProcessingFingerprints.clear();
     const empty = { version: STORAGE_VERSION, records: [], activeTripId: null };
     await saveSnapshot(empty);
   },

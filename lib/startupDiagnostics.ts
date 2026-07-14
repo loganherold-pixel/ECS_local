@@ -1,3 +1,10 @@
+import {
+  incrementECSPerformanceCounter,
+  startECSPerformanceSpan,
+  type ECSPerformanceSpanHandle,
+} from './performance/ecsPerformanceDiagnostics';
+import { ecsLog } from './ecsLogger';
+
 export type StartupPhase =
   | 'stores_hydration_start'
   | 'stores_hydration_done'
@@ -26,9 +33,19 @@ type StartupStallReport = {
   details?: Record<string, unknown>;
 };
 
+const MAX_STARTUP_PHASE_ENTRIES = 80;
 const phaseEntries: StartupPhaseEntry[] = [];
 let currentPhase: StartupPhase | 'not_started' = 'not_started';
 let lastStallSignature: string | null = null;
+let startupTerminalRecorded = false;
+let authHandoffSpan: ECSPerformanceSpanHandle | null = null;
+const coldStartupSpan = startECSPerformanceSpan('cold_startup_shell', 'startup_to_usable_shell', {
+  trackOutstanding: true,
+});
+const warmStartupSpan = startECSPerformanceSpan('warm_startup_restore', 'startup_route_restoration', {
+  trackOutstanding: true,
+});
+let startupEntryKind: string | null = null;
 
 function readStartupDebugValue(key: string): unknown {
   try {
@@ -72,11 +89,57 @@ export function markStartupPhase(
     at: Date.now(),
     details,
   });
+  if (phaseEntries.length > MAX_STARTUP_PHASE_ENTRIES) {
+    phaseEntries.splice(0, phaseEntries.length - MAX_STARTUP_PHASE_ENTRIES);
+  }
+  incrementECSPerformanceCounter('cold_startup_shell', `phase_${phase}`);
+  ecsLog.breadcrumb({
+    domain: 'startup',
+    operation: 'phase_transition',
+    code: `STARTUP_${phase}`,
+    status: phase === 'startup_recovery_fallback' ? 'failed' : 'completed',
+    context: details,
+  });
+
+  if (phase === 'auth_restore_start' && !authHandoffSpan) {
+    authHandoffSpan = startECSPerformanceSpan('auth_setup_handoff', 'auth_restore_to_entry', {
+      trackOutstanding: true,
+    });
+  }
+  if (phase === 'initial_route_chosen' && typeof details?.entryKind === 'string') {
+    startupEntryKind = details.entryKind;
+  }
+  if (
+    !startupTerminalRecorded &&
+    (phase === 'app_rendered_main' || phase === 'app_rendered_sign_in' || phase === 'app_rendered_setup')
+  ) {
+    startupTerminalRecorded = true;
+    const terminal = phase === 'app_rendered_main' ? 'main' : phase === 'app_rendered_setup' ? 'setup' : 'sign_in';
+    coldStartupSpan.end('completed', { terminal, entryKind: startupEntryKind });
+    authHandoffSpan?.end('completed', { terminal, entryKind: startupEntryKind });
+    authHandoffSpan = null;
+    if (startupEntryKind === 'authenticated_restore' || startupEntryKind === 'offline_restore') {
+      warmStartupSpan.end('completed', { terminal, entryKind: startupEntryKind });
+    } else {
+      warmStartupSpan.cancel({ terminal, entryKind: startupEntryKind });
+    }
+  }
+  if (phase === 'startup_recovery_fallback' && !startupTerminalRecorded) {
+    coldStartupSpan.end('failed', { fallback: true });
+    warmStartupSpan.end('failed', { fallback: true });
+    authHandoffSpan?.end('failed', { fallback: true });
+    authHandoffSpan = null;
+  }
 
   if (!isStartupDebugEnabled()) return;
-  console.log('[ECS_STARTUP] phase', {
+  ecsLog.dev('SHELL', 'startup_phase', {
     phase,
     details: details ?? null,
+  }, {
+    tag: '[ECS_STARTUP]',
+    debugFlag: 'ECS_DEBUG_STARTUP',
+    fingerprint: phase,
+    throttleMs: 250,
   });
 }
 
@@ -108,13 +171,21 @@ export function logStartupStall(report: StartupStallReport): void {
     details: report.details ?? null,
   };
 
-  if (isStartupDebugEnabled()) {
-    console.warn('[ECS_STARTUP] loading_stall_detected', payload);
-  } else {
-    console.warn('[ECS_STARTUP] loading_stall_detected', {
-      currentPhase: payload.currentPhase,
-      unresolvedRequiredFlags: payload.unresolvedRequiredFlags,
-      fallback: payload.fallback,
-    });
-  }
+  ecsLog.captureFailure({
+    kind: 'timeout',
+    domain: 'startup',
+    operation: 'loading_stall',
+    code: 'STARTUP_LOADING_STALL',
+    sourceState: 'unavailable',
+    context: isStartupDebugEnabled()
+      ? payload
+      : {
+          currentPhase: payload.currentPhase,
+          unresolvedRequiredFlags: payload.unresolvedRequiredFlags,
+          fallback: payload.fallback,
+        },
+  }, undefined, {
+    category: 'SHELL',
+    fingerprint: signature,
+  });
 }

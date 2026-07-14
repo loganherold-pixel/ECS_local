@@ -67,8 +67,8 @@ assert.match(
 );
 assert.match(
   dispatchSource,
-  /setTimeout\(\(\) => \{[\s\S]*router\.push\('\/navigate' as any\);[\s\S]*\}, 0\)/,
-  'Navigate Assist should transition to the Navigate tab after staging the handoff.',
+  /await stageNavigationFlow\([\s\S]*pushSingleFlight\('\/navigate'\)/,
+  'Navigate Assist should transition through the single-flight shell action after staging the handoff.',
 );
 
 assert.match(

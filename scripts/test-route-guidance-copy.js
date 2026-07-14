@@ -156,6 +156,7 @@ assert.strictEqual(
 const mapboxRoadNavigation = read('lib/mapboxRoadNavigation.ts');
 const activeRouteProgress = read('lib/activeRouteProgress.ts');
 const vehicleDisplayStore = read('lib/vehicleDisplayStore.ts');
+const vehicleDisplayNavigationSelector = read('lib/automotive/vehicleDisplayNavigationSelector.ts');
 
 assert(
   mapboxRoadNavigation.includes('buildHighlightedRouteInstruction(params.destination.title)'),
@@ -174,15 +175,16 @@ assert(
   'Imported active route progress should not blindly read generic route labels as destinations.',
 );
 assert(
-  vehicleDisplayStore.includes('buildContinueRouteInstruction(roadDestination)') &&
-    vehicleDisplayStore.includes('buildProceedRouteInstruction(nextWaypoint.name)') &&
-    vehicleDisplayStore.includes('buildReadyRouteInstruction(roadDestination)'),
-  'Vehicle display navigation copy should share the same guidance-label sanitization helpers.',
+  vehicleDisplayStore.includes('selectVehicleDisplayNavigationData') &&
+    vehicleDisplayNavigationSelector.includes('buildContinueRouteInstruction(roadDestination)') &&
+    vehicleDisplayNavigationSelector.includes('buildReadyRouteInstruction(roadDestination)') &&
+    vehicleDisplayNavigationSelector.includes('session.instruction'),
+  'Vehicle display navigation should consume canonical Navigate instructions and sanitize legacy destination labels.',
 );
 assert(
-  !vehicleDisplayStore.includes('`Continue to ${roadDestination}`') &&
-    !vehicleDisplayStore.includes('`Proceed to ${nextWaypoint.name}`') &&
-    !vehicleDisplayStore.includes('`Ready to ${roadDestination}`'),
+  !vehicleDisplayNavigationSelector.includes('`Continue to ${roadDestination}`') &&
+    !vehicleDisplayNavigationSelector.includes('`Proceed to ${nextWaypoint.name}`') &&
+    !vehicleDisplayNavigationSelector.includes('`Ready to ${roadDestination}`'),
   'Vehicle display navigation copy should not blindly read generic cache labels as destinations.',
 );
 

@@ -1,3 +1,9 @@
+import {
+  createRuntimeFeatureVisibilityContext,
+  resolveECSFeatureVisibility,
+  type ECSFeatureVisibilityContext,
+} from '../features/featureVisibilityRegistry';
+
 export type FleetPremiumReleaseFeature =
   | 'premiumFleetEnabled'
   | 'profileSetupEnabled'
@@ -28,10 +34,22 @@ const FLEET_PREMIUM_DISABLED_COPY: Record<FleetPremiumReleaseFeature, string> = 
 
 export function resolveFleetPremiumReleaseConfig(
   overrides: Partial<FleetPremiumReleaseConfig> = {},
+  visibilityContext: ECSFeatureVisibilityContext = createRuntimeFeatureVisibilityContext(),
 ): FleetPremiumReleaseConfig {
-  return {
+  const merged = {
     ...DEFAULT_FLEET_PREMIUM_RELEASE_CONFIG,
     ...overrides,
+  };
+  const fleetVisible = resolveECSFeatureVisibility('fleet_tab', visibilityContext).visible;
+  const diagnosticsVisible = resolveECSFeatureVisibility('developer_diagnostics', visibilityContext).visible;
+  return {
+    ...merged,
+    premiumFleetEnabled: merged.premiumFleetEnabled && fleetVisible,
+    profileSetupEnabled: merged.profileSetupEnabled && fleetVisible,
+    buildLoadoutEnabled: merged.buildLoadoutEnabled && fleetVisible,
+    checklistEnabled: merged.checklistEnabled && fleetVisible,
+    fabricSyncEnabled: merged.fabricSyncEnabled && fleetVisible,
+    developerDiagnostics: merged.developerDiagnostics && diagnosticsVisible,
   };
 }
 

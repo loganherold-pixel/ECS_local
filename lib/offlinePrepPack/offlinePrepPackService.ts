@@ -35,6 +35,14 @@ import type {
   OfflinePrepPackProgress,
   OfflinePrepPackStatus,
 } from './offlinePrepPackTypes';
+import {
+  canonicalJourneyEntityId,
+  mergeJourneyLinkage,
+  readJourneyLinkageFromMetadata,
+} from '../lifecycle/routeTripExpeditionLifecycle';
+import { buildOfflineReadinessManifest } from './offlineReadinessManifest';
+
+const OFFLINE_PREP_MANIFEST_SCHEMA_VERSION = 2;
 
 type NormalizedPoint = TripBuilderCoordinate;
 
@@ -1344,8 +1352,60 @@ function buildOfflinePrepPackManifestFromItinerary(
 
   const errors = items.map((entry) => entry.error).filter((error): error is OfflinePrepPackError => !!error);
   const progress = buildManifestProgress(items);
+  const sourceLifecycle = readJourneyLinkageFromMetadata(itinerary.metadata);
+  const offlinePackageId = canonicalJourneyEntityId('offline_package', slug(routeKey));
+  const lifecycle = mergeJourneyLinkage(sourceLifecycle, {
+    phase: 'offline_ready',
+    identity: {
+      tripPlanId: sourceLifecycle?.identity.tripPlanId ?? canonicalJourneyEntityId('trip_plan', routeKey),
+      offlinePackageId,
+    },
+    waypointIds: itinerary.waypoints.map((waypoint) => waypoint.id),
+    bailoutIds: itinerary.waypoints
+      .filter((waypoint) => waypoint.type === 'bailout' || waypoint.type === 'exit')
+      .map((waypoint) => waypoint.id),
+    offlineReady: progress.status === 'ready' || progress.status === 'partially_ready',
+    updatedAt: generatedAt,
+  });
+  const readinessManifest = buildOfflineReadinessManifest({
+    packageId: offlinePackageId,
+    routeId: routeKey,
+    routeAssetId: lifecycle.identity.routeAssetId,
+    tripPlanId: lifecycle.identity.tripPlanId,
+    expeditionId: lifecycle.identity.expeditionId,
+    generatedAt,
+    items,
+    contentFingerprints: {
+      route_geometry: {
+        approach: approachPoints,
+        trail: trailPoints,
+        exit: exitPoints,
+        geometryStatus: itinerary.routeGeometryStatus,
+      },
+      map_region: {
+        bounds,
+        cacheKey: offlineMapItem.cacheKey ?? null,
+        routePointCount: routePoints.length,
+      },
+      navigation_assets: {
+        itineraryId: itinerary.id,
+        sourceRouteId: itinerary.sourceRouteId ?? null,
+        trailhead: trailheadCoordinate,
+        trailEnd: trailEndCoordinate,
+      },
+      camp_candidates: itinerary.stops.filter((stop) => stop.type === 'camp_potential'),
+      weather_snapshot: input.weatherSnapshot ?? null,
+      emergency_recovery_packet: emergencyNotes,
+      vehicle_loadout_snapshot: null,
+      waypoints_bailouts: {
+        waypoints: trailWaypoints,
+        bailouts: bailoutWaypoints,
+      },
+    },
+  });
   return {
-    id: `offline-prep-${slug(routeKey)}`,
+    schemaVersion: OFFLINE_PREP_MANIFEST_SCHEMA_VERSION,
+    id: offlinePackageId,
     generatedAt,
     routeId: routeKey,
     routeName: itinerary.title,
@@ -1353,6 +1413,10 @@ function buildOfflinePrepPackManifestFromItinerary(
     items,
     progress,
     errors,
+    tripPlanId: lifecycle.identity.tripPlanId,
+    routeAssetId: lifecycle.identity.routeAssetId,
+    lifecycle,
+    readinessManifest,
   };
 }
 
@@ -1504,8 +1568,62 @@ export function buildOfflinePrepPackManifest(
 
   const errors = items.map((entry) => entry.error).filter((error): error is OfflinePrepPackError => !!error);
   const progress = buildManifestProgress(items);
+  const sourceLifecycle = input.tripPlan?.lifecycle ?? readJourneyLinkageFromMetadata(route.routeMetadata);
+  const offlinePackageId = canonicalJourneyEntityId('offline_package', slug(routeKey));
+  const lifecycle = mergeJourneyLinkage(sourceLifecycle, {
+    phase: 'offline_ready',
+    identity: {
+      tripPlanId: input.tripPlan?.id ?? sourceLifecycle?.identity.tripPlanId ?? canonicalJourneyEntityId('trip_plan', routeKey),
+      offlinePackageId,
+    },
+    activeVehicleId: input.vehicleProfile?.id ?? sourceLifecycle?.activeVehicleId ?? null,
+    campIds: (input.campsiteCandidates ?? []).map((candidate) => candidate.id),
+    waypointIds: input.tripPlan?.suggestedStops
+      .filter((stop) => stop.type === 'waypoint' || stop.type === 'scenic_stop')
+      .map((stop) => stop.id) ?? sourceLifecycle?.waypointIds ?? [],
+    bailoutIds: (input.exitPoints ?? []).map((point) => point.id),
+    offlineReady: progress.status === 'ready' || progress.status === 'partially_ready',
+    updatedAt: generatedAt,
+  });
+  const readinessManifest = buildOfflineReadinessManifest({
+    packageId: offlinePackageId,
+    routeId: routeKey,
+    routeAssetId: lifecycle.identity.routeAssetId,
+    tripPlanId: lifecycle.identity.tripPlanId,
+    expeditionId: lifecycle.identity.expeditionId,
+    generatedAt,
+    items,
+    contentFingerprints: {
+      route_geometry: points,
+      map_region: {
+        bounds,
+        cacheKey: offlineMapItem.cacheKey ?? null,
+        criticalSegments: criticalSegmentsItem?.metadata ?? null,
+      },
+      navigation_assets: {
+        routeId: routeKey,
+        tripPlanId: lifecycle.identity.tripPlanId,
+        routeMetadata: route.routeMetadata ?? null,
+      },
+      camp_candidates: {
+        campsites: input.campsiteCandidates ?? derived.campsites,
+        emergencyPoints: input.emergencyPoints ?? [],
+      },
+      weather_snapshot: weatherSnapshot,
+      emergency_recovery_packet: input.emergencyNotes ?? null,
+      vehicle_loadout_snapshot: {
+        vehicleProfile: input.vehicleProfile ?? null,
+        readiness: input.readiness ?? input.tripPlan?.readinessReference ?? null,
+      },
+      waypoints_bailouts: {
+        waypoints: route.waypoints ?? [],
+        exits: input.exitPoints ?? derived.exits,
+      },
+    },
+  });
   return {
-    id: `offline-prep-${slug(routeKey)}`,
+    schemaVersion: OFFLINE_PREP_MANIFEST_SCHEMA_VERSION,
+    id: offlinePackageId,
     generatedAt,
     routeId: routeKey,
     routeName: routeName(route),
@@ -1513,6 +1631,10 @@ export function buildOfflinePrepPackManifest(
     items,
     progress,
     errors,
+    tripPlanId: lifecycle.identity.tripPlanId,
+    routeAssetId: lifecycle.identity.routeAssetId,
+    lifecycle,
+    readinessManifest,
   };
 }
 

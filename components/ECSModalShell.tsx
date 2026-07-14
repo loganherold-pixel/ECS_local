@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Animated,
+  AccessibilityInfo,
   KeyboardAvoidingView,
   PanResponder,
   Platform,
@@ -9,6 +10,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  findNodeHandle,
   useWindowDimensions,
   type StyleProp,
   type TextStyle,
@@ -196,6 +198,7 @@ export default function ECSModalShell({
   const { palette, colors, effectiveTheme } = useTheme();
   const translateY = useRef(new Animated.Value(0)).current;
   const closingRef = useRef(false);
+  const titleRef = useRef<React.ElementRef<typeof Text>>(null);
   const surfaceTheme = useMemo(() => resolveEcsPopupSurfaceTheme(effectiveTheme), [effectiveTheme]);
 
   const adaptiveMaxWidth =
@@ -274,6 +277,19 @@ export default function ECSModalShell({
     }
   }, [closeGuardKey, visible]);
 
+  useEffect(() => {
+    if (!visible || Platform.OS === 'web') return undefined;
+
+    const focusTimer = setTimeout(() => {
+      const titleNode = findNodeHandle(titleRef.current);
+      if (titleNode != null) {
+        AccessibilityInfo.setAccessibilityFocus(titleNode);
+      }
+    }, 120);
+
+    return () => clearTimeout(focusTimer);
+  }, [title, visible]);
+
   const requestClose = useCallback(() => {
     if (closingRef.current) return;
     closingRef.current = true;
@@ -340,6 +356,8 @@ export default function ECSModalShell({
       {resolvedShowHandle && preset.layout === 'sheet' ? (
         <View
           style={[styles.handleZone, { backgroundColor: surfaceTheme.handleBg }]}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
           {...(panResponder?.panHandlers ?? {})}
         >
           <View style={[styles.handleBar, { backgroundColor: surfaceTheme.handleBar }]} />
@@ -375,12 +393,15 @@ export default function ECSModalShell({
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessibilityRole="button"
               accessibilityLabel="Go back"
+              accessibilityHint={`Returns from ${title}`}
             >
               <Ionicons name="arrow-back" size={iconGlyphSize} color={palette.textMuted} />
             </TouchableOpacity>
           ) : null}
 
           <View
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
             style={[
               styles.iconWrap,
               {
@@ -400,14 +421,20 @@ export default function ECSModalShell({
               <Text style={[styles.eyebrow, { fontSize: adaptive.overlay.eyebrowSize, color: palette.textMuted }]}>{eyebrow}</Text>
             ) : null}
             <Text
+              ref={titleRef}
               style={[styles.title, { fontSize: adaptive.overlay.titleSize, color: palette.amber }, titleStyle]}
-              numberOfLines={1}
+              numberOfLines={2}
+              maxFontSizeMultiplier={1.6}
               accessibilityRole="header"
             >
               {title}
             </Text>
             {subtitle ? (
-              <Text style={[styles.subtitle, { fontSize: adaptive.overlay.subtitleSize, color: colors.textSecondary }]} numberOfLines={2}>
+              <Text
+                style={[styles.subtitle, { fontSize: adaptive.overlay.subtitleSize, color: colors.textSecondary }]}
+                numberOfLines={3}
+                maxFontSizeMultiplier={1.6}
+              >
                 {subtitle}
               </Text>
             ) : null}
@@ -432,6 +459,7 @@ export default function ECSModalShell({
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             accessibilityRole="button"
             accessibilityLabel={`Close ${title}`}
+            accessibilityHint="Dismisses this dialog"
           >
             <Ionicons name="close" size={actionGlyphSize} color={palette.textMuted} />
           </TouchableOpacity>
@@ -454,6 +482,7 @@ export default function ECSModalShell({
           ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           bounces={preset.layout !== 'dialog'}
         >
           {children}

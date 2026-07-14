@@ -30,6 +30,7 @@ import {
   type ManualExpeditionActionId,
 } from '../lib/expedition/manualUpdateActions';
 import { applyLiveConvoyTrackingToAssessmentContext } from '../lib/convoy/convoyAssessmentAdapter';
+import { incrementECSPerformanceCounter } from '../lib/performance/ecsPerformanceDiagnostics';
 
 export type ExpeditionAssessmentContextProvider = () =>
   | ExpeditionContextSnapshot
@@ -166,6 +167,8 @@ const CATEGORY_ORDER: AssessmentCategory[] = [
 let contextProvider: ExpeditionAssessmentContextProvider | null = null;
 let narrativeProvider: ExpeditionAssessmentNarrativeProvider | null = null;
 let lastGoodContext: ExpeditionContextSnapshot | null = null;
+let assessmentRefreshFlight: Promise<ExpeditionAssessmentStoreState> | null = null;
+let assessmentRefreshQueued = false;
 const listeners = new Set<() => void>();
 
 function cloneContext(context: ExpeditionContextSnapshot): ExpeditionContextSnapshot {
@@ -399,7 +402,7 @@ export function getAllAssessments(): ExpeditionAssessment[] {
   return CATEGORY_ORDER.map((category) => state.assessments[category]);
 }
 
-export async function refreshAssessments(): Promise<ExpeditionAssessmentStoreState> {
+async function runAssessmentRefresh(): Promise<ExpeditionAssessmentStoreState> {
   setState({
     ...state,
     loading: true,
@@ -420,6 +423,27 @@ export async function refreshAssessments(): Promise<ExpeditionAssessmentStoreSta
     });
     return getExpeditionAssessmentStoreSnapshot();
   }
+}
+
+export function refreshAssessments(): Promise<ExpeditionAssessmentStoreState> {
+  if (assessmentRefreshFlight) {
+    assessmentRefreshQueued = true;
+    incrementECSPerformanceCounter('dashboard_stable_grid', 'assessment_refresh_single_flight_join');
+    return assessmentRefreshFlight;
+  }
+
+  assessmentRefreshFlight = (async () => {
+    let result = getExpeditionAssessmentStoreSnapshot();
+    do {
+      assessmentRefreshQueued = false;
+      result = await runAssessmentRefresh();
+    } while (assessmentRefreshQueued);
+    return result;
+  })().finally(() => {
+    assessmentRefreshFlight = null;
+  });
+
+  return assessmentRefreshFlight;
 }
 
 export async function updateManualRouteData(input: ManualRouteDataInput): Promise<void> {

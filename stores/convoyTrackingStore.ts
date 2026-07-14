@@ -47,6 +47,10 @@ const initialState: ConvoyTrackingStoreState = {
 export function createConvoyTrackingStore(service: ConvoyRealtimeService = convoyRealtimeService) {
   let state: ConvoyTrackingStoreState = { ...initialState };
   let activeSubscription: ConvoyRealtimeSubscription | null = null;
+  let activeLoadPromise: Promise<ConvoyTrackingStoreState> | null = null;
+  let subscriptionGeneration = 0;
+  let ownerOrder = 0;
+  const ownerRequests = new Map<string, { convoyId: string; order: number }>();
   let currentMembers: ConvoyMemberRow[] = [];
   let currentLocations = new Map<string, ConvoyMemberLocationRow>();
   const listeners = new Set<Listener>();
@@ -82,14 +86,31 @@ export function createConvoyTrackingStore(service: ConvoyRealtimeService = convo
   }
 
   function cleanupSubscription() {
-    if (activeSubscription) {
-      activeSubscription.unsubscribe();
-      activeSubscription = null;
-    }
+    subscriptionGeneration += 1;
+    const subscription = activeSubscription;
+    activeSubscription = null;
+    activeLoadPromise = null;
+    subscription?.unsubscribe();
   }
 
-  async function subscribeToConvoyLocations(convoyId: string): Promise<ConvoyTrackingStoreState> {
+  function getPreferredOwnerRequest(): { convoyId: string; order: number } | null {
+    let preferred: { convoyId: string; order: number } | null = null;
+    ownerRequests.forEach((request) => {
+      if (!preferred || request.order > preferred.order) preferred = request;
+    });
+    return preferred;
+  }
+
+  async function ensureConvoyLocationSubscription(convoyId: string): Promise<ConvoyTrackingStoreState> {
     const normalizedConvoyId = String(convoyId ?? '').trim();
+    if (
+      normalizedConvoyId &&
+      state.convoyId === normalizedConvoyId &&
+      (activeSubscription || activeLoadPromise)
+    ) {
+      return activeLoadPromise ?? state;
+    }
+
     cleanupSubscription();
     currentMembers = [];
     currentLocations = new Map();
@@ -98,6 +119,8 @@ export function createConvoyTrackingStore(service: ConvoyRealtimeService = convo
       setState({ ...initialState, connectionStatus: 'error', error: 'convoyId is required.' });
       return state;
     }
+
+    const generation = subscriptionGeneration;
 
     setState({
       ...state,
@@ -110,48 +133,95 @@ export function createConvoyTrackingStore(service: ConvoyRealtimeService = convo
       error: null,
     });
 
-    const initial = await service.fetchInitialConvoyLocations(normalizedConvoyId);
-    if (!initial.ok) {
-      setState({
-        ...state,
-        connectionStatus: initial.code === 'backend_unavailable' ? 'disconnected' : 'error',
-        loading: false,
-        error: initial.error,
-      });
-      return state;
-    }
-
-    currentMembers = initial.data.members;
-    currentLocations = new Map(initial.data.locations.map((row) => [row.member_id, row]));
-    setState({
-      ...state,
-      ...initial.data.snapshot,
-      rawMembers: [...currentMembers],
-      rawLocations: Array.from(currentLocations.values()),
-      connectionStatus: 'connecting',
-      loading: false,
-      error: null,
-    });
-
-    activeSubscription = service.subscribeToConvoyLocations(normalizedConvoyId, {
-      onChange: applyChange,
-      onStatusChange: (connectionStatus, statusError) => {
+    const loadPromise = (async () => {
+      const initial = await service.fetchInitialConvoyLocations(normalizedConvoyId);
+      if (generation !== subscriptionGeneration || state.convoyId !== normalizedConvoyId) {
+        return state;
+      }
+      if (!initial.ok) {
         setState({
           ...state,
-          connectionStatus,
+          connectionStatus: initial.code === 'backend_unavailable' ? 'disconnected' : 'error',
           loading: false,
-          error:
-            connectionStatus === 'degraded'
-              ? statusError ?? getConvoyBackendReadinessGuidance('realtime_degraded').userMessage
-              : state.error,
+          error: initial.error,
         });
-      },
-    });
+        return state;
+      }
 
-    return state;
+      currentMembers = initial.data.members;
+      currentLocations = new Map(initial.data.locations.map((row) => [row.member_id, row]));
+      setState({
+        ...state,
+        ...initial.data.snapshot,
+        rawMembers: [...currentMembers],
+        rawLocations: Array.from(currentLocations.values()),
+        connectionStatus: 'connecting',
+        loading: false,
+        error: null,
+      });
+
+      activeSubscription = service.subscribeToConvoyLocations(normalizedConvoyId, {
+        onChange: (change) => {
+          if (generation !== subscriptionGeneration || state.convoyId !== normalizedConvoyId) return;
+          applyChange(change);
+        },
+        onStatusChange: (connectionStatus, statusError) => {
+          if (generation !== subscriptionGeneration || state.convoyId !== normalizedConvoyId) return;
+          setState({
+            ...state,
+            connectionStatus,
+            loading: false,
+            error:
+              connectionStatus === 'degraded'
+                ? statusError ?? getConvoyBackendReadinessGuidance('realtime_degraded').userMessage
+                : state.error,
+          });
+        },
+      });
+      return state;
+    })().catch((error) => {
+      if (generation !== subscriptionGeneration || state.convoyId !== normalizedConvoyId) {
+        return state;
+      }
+      const message = error instanceof Error && error.message.trim()
+        ? error.message
+        : 'Convoy location tracking could not be started.';
+      setState({
+        ...state,
+        connectionStatus: 'error',
+        loading: false,
+        error: message,
+      });
+      return state;
+    });
+    activeLoadPromise = loadPromise;
+    return loadPromise.finally(() => {
+      if (activeLoadPromise === loadPromise) activeLoadPromise = null;
+    });
   }
 
-  function stopConvoyLocationSubscription() {
+  async function subscribeToConvoyLocations(
+    convoyId: string,
+    ownerId = 'legacy',
+  ): Promise<ConvoyTrackingStoreState> {
+    const normalizedConvoyId = String(convoyId ?? '').trim();
+    ownerOrder += 1;
+    ownerRequests.set(ownerId, { convoyId: normalizedConvoyId, order: ownerOrder });
+    return ensureConvoyLocationSubscription(normalizedConvoyId);
+  }
+
+  function stopConvoyLocationSubscription(ownerId?: string) {
+    if (ownerId) ownerRequests.delete(ownerId);
+    else ownerRequests.clear();
+
+    const preferred = getPreferredOwnerRequest();
+    if (preferred) {
+      if (preferred.convoyId !== state.convoyId) {
+        void ensureConvoyLocationSubscription(preferred.convoyId);
+      }
+      return;
+    }
+
     cleanupSubscription();
     currentMembers = [];
     currentLocations = new Map();
@@ -189,6 +259,7 @@ export function createConvoyTrackingStore(service: ConvoyRealtimeService = convo
       connectionStatus?: ConvoyRealtimeConnectionStatus;
     }) {
       cleanupSubscription();
+      ownerRequests.clear();
       currentMembers = input.members;
       currentLocations = new Map(input.locations.map((row) => [row.member_id, row]));
       state = {
@@ -205,8 +276,8 @@ export function createConvoyTrackingStore(service: ConvoyRealtimeService = convo
 
 export const convoyTrackingStore = createConvoyTrackingStore();
 
-export function subscribeToConvoyLocations(convoyId: string) {
-  return convoyTrackingStore.subscribeToConvoyLocations(convoyId);
+export function subscribeToConvoyLocations(convoyId: string, ownerId?: string) {
+  return convoyTrackingStore.subscribeToConvoyLocations(convoyId, ownerId);
 }
 
 export function fetchConvoyTrackingSnapshot() {
@@ -222,8 +293,8 @@ export function setConvoyTrackingDataForTest(input: {
   return convoyTrackingStore.setRawTrackingDataForTest(input);
 }
 
-export function stopConvoyLocationSubscription() {
-  return convoyTrackingStore.stopConvoyLocationSubscription();
+export function stopConvoyLocationSubscription(ownerId?: string) {
+  return convoyTrackingStore.stopConvoyLocationSubscription(ownerId);
 }
 
 export function refreshConvoyTrackingStaleness() {

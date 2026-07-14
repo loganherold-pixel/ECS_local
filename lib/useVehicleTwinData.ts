@@ -15,12 +15,7 @@
 import { useState, useEffect } from 'react';
 import { useAccelerometer } from './useAccelerometer';
 import { usePowerTelemetry } from '../src/power/hooks/usePowerTelemetry';
-import { vehicleSetupStore } from './vehicleSetupStore';
-import { vehicleStore } from './vehicleStore';
-import { vehicleSpecStore } from './vehicleSpecStore';
-import { consumablesStore } from './consumablesStore';
-import { tiresLiftStore } from './tiresLiftStore';
-import { loadoutItemStore, loadoutStore } from './loadoutStore';
+import { getActiveVehicleContext, subscribeActiveVehicleState } from './activeVehicleContext';
 import { selectFleetVehicleState } from './fleet/fleetVehicleStateSelectors';
 
 // ── Types ────────────────────────────────────────────────────
@@ -114,54 +109,17 @@ export function useVehicleTwinData(): VehicleTwinData {
 
   // ── Local state ──
   const [vehicleId, setVehicleId] = useState<string | null>(
-    vehicleSetupStore.getActiveVehicleId()
+    getActiveVehicleContext().activeVehicleId
   );
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // ── Subscribe to vehicleSetupStore changes ──
+  // ── Subscribe to canonical active vehicle changes ──
   useEffect(() => {
-    const unsub = vehicleSetupStore.subscribe(() => {
-      const newId = vehicleSetupStore.getActiveVehicleId();
-      setVehicleId(newId);
+    return subscribeActiveVehicleState(() => {
+      setVehicleId(getActiveVehicleContext().activeVehicleId);
+      setRefreshKey((key) => key + 1);
     });
-    return unsub;
   }, []);
-
-  // ── Subscribe to canonical vehicle state changes ──
-  useEffect(() => {
-    const offVehicles = vehicleStore.subscribe((event) => {
-      if (!vehicleId || event.vehicleId === vehicleId) {
-        setRefreshKey((key) => key + 1);
-      }
-    });
-    const offLoadouts = loadoutStore.subscribe((_, updatedVehicleId) => {
-      if (!vehicleId || updatedVehicleId === vehicleId) {
-        setRefreshKey((key) => key + 1);
-      }
-    });
-    const offItems = loadoutItemStore.subscribe(() => {
-      setRefreshKey((key) => key + 1);
-    });
-    const offSpecs = vehicleSpecStore.subscribe(() => {
-      setRefreshKey((key) => key + 1);
-    });
-    const offConsumables = consumablesStore.subscribe(() => {
-      setRefreshKey((key) => key + 1);
-    });
-    const offTiresLift = tiresLiftStore.subscribe((updatedVehicleId) => {
-      if (!vehicleId || updatedVehicleId === vehicleId) {
-        setRefreshKey((key) => key + 1);
-      }
-    });
-    return () => {
-      offVehicles();
-      offLoadouts();
-      offItems();
-      offSpecs();
-      offConsumables();
-      offTiresLift();
-    };
-  }, [vehicleId]);
 
   // ── Compute derived data ──
   void refreshKey;

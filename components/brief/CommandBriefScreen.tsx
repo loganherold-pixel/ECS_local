@@ -16,6 +16,7 @@ import { useFocusEffect } from '@react-navigation/native';
 
 import { ECSText } from '../ECSText';
 import { ECSBadge, ECSIcon } from '../ECSStatus';
+import ECSOperationalAnnouncer from '../ECSOperationalAnnouncer';
 import {
   DepartureAuditChecklist,
   ReadinessCategoryRow,
@@ -1631,9 +1632,30 @@ export default function CommandBriefScreen({
   const missingCategories = assessment
     ? EXPEDITION_READINESS_CATEGORY_IDS.filter((id) => !categoryMap.has(id))
     : EXPEDITION_READINESS_CATEGORY_IDS;
+  const staleSourceCount = assessment
+    ? Object.values(assessment.sourceFreshness).filter((record) => record.isStale).length
+    : 0;
+  const sourceFreshnessAnnouncement = staleSourceCount > 0
+    ? {
+        id: `command-brief-stale:${staleSourceCount}`,
+        kind: 'stale_data' as const,
+        subject: 'Command Brief readiness',
+        detail: getBriefFreshnessCopy(assessment),
+      }
+    : null;
+  const exportErrorAnnouncement = briefExportMessage && /failed|unavailable/i.test(briefExportMessage)
+    ? {
+        id: `command-brief-export:${briefExportMessage}`,
+        kind: 'error' as const,
+        subject: 'Command Brief export',
+        detail: briefExportMessage,
+      }
+    : null;
 
   return (
     <View style={[styles.root, embedded && styles.embeddedRoot, style]}>
+      <ECSOperationalAnnouncer event={sourceFreshnessAnnouncement} announceInitial />
+      <ECSOperationalAnnouncer event={exportErrorAnnouncement} />
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[styles.content, embedded && styles.embeddedContent, contentContainerStyle]}

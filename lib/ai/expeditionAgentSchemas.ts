@@ -13,11 +13,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasText(value: unknown): boolean {
-  return typeof value === 'string' && value.trim().length > 0;
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 2_000;
 }
 
 function hasTextArray(value: unknown): boolean {
-  return Array.isArray(value) && value.every((item) => hasText(item));
+  return Array.isArray(value) && value.length > 0 && value.length <= 24 && value.every((item) => hasText(item));
 }
 
 function issue(
@@ -74,7 +74,7 @@ export function validateExpeditionAgentResponse(
     }
   }
 
-  if (!Array.isArray(candidate.evidence) || candidate.evidence.length === 0) {
+  if (!Array.isArray(candidate.evidence) || candidate.evidence.length === 0 || candidate.evidence.length > 50) {
     issues.push(issue('missing_evidence', 'Agent response must cite evidence fields.'));
   } else {
     candidate.evidence.forEach((field, index) => {
@@ -96,6 +96,23 @@ export function validateExpeditionAgentResponse(
   }
   if (typeof candidate.escalationRecommended !== 'boolean') {
     issues.push(issue('missing_required_field', 'escalationRecommended must be boolean.'));
+  }
+
+  if (candidate.trace !== undefined) {
+    const trace = candidate.trace;
+    if (
+      !trace ||
+      !hasText(trace.policyVersion) ||
+      !hasText(trace.featureId) ||
+      !hasText(trace.snapshotId) ||
+      !hasText(trace.inputFingerprint) ||
+      !hasText(trace.deterministicStatus) ||
+      !hasText(trace.generatedAt) ||
+      !Array.isArray(trace.sourceIds) ||
+      !Array.isArray(trace.warningCodes)
+    ) {
+      issues.push(issue('trace_mismatch', 'ECS deterministic trace is malformed.'));
+    }
   }
 
   return {

@@ -1,6 +1,11 @@
 name: Supabase Database Tests
 
 on:
+  workflow_call:
+    outputs:
+      coverage-result:
+        description: Typed execution result for the registered pgTAP verification check.
+        value: ${{ jobs.pgtap-rls.outputs.coverage-result }}
   pull_request:
   push:
 
@@ -16,10 +21,17 @@ jobs:
     name: pgTAP RLS tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      coverage-result: ${{ steps.database-tests.outputs.result }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
@@ -30,6 +42,26 @@ jobs:
         run: supabase start
         timeout-minutes: 12
 
-      - name: Run database tests
-        run: supabase test db
+      - name: Run required database test suites and record bound evidence
+        id: database-tests
+        continue-on-error: true
+        run: node scripts/verification/run-pgtap-rls-workflow.mjs --commit-sha "$GITHUB_SHA" --github-output "$GITHUB_OUTPUT" --output .smoke/verification/pgtap-workflow-evidence.json
         timeout-minutes: 5
+
+      - name: Upload safe pgTAP evidence envelope
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecs-pgtap-rls-evidence-${{ github.sha }}
+          path: .smoke/verification/pgtap-workflow-evidence.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 7
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop --no-backup
+
+      - name: Enforce pgTAP result
+        if: always() && steps.database-tests.outcome != 'success'
+        run: exit 1

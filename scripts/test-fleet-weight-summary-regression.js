@@ -34,8 +34,8 @@ const operatingWeightDomain = read('lib', 'fleet', 'fleetOperatingWeight.ts');
 
 const fleetMainBody = between(
   fleet,
-  '<View style={[s.fleetMainBody, fleetFrameStyle]}>',
-  '</View>\n\n        {/* Scrollable vehicle list',
+  '<ScrollView\n          style={[s.fleetMainBody, fleetFrameStyle]}',
+  '</ScrollView>\n\n        {/* Scrollable vehicle list',
   'Fleet main body',
 );
 
@@ -82,7 +82,7 @@ includes(
 
 const weightModal = between(
   fleet,
-  '<ECSModalShell\n        visible={weightSummaryModalVisible}',
+  '<ECSModalShell\n        visible={isFleetFocused && weightSummaryModalVisible}',
   '</ECSModalShell>',
   'Weight Summary modal',
 );

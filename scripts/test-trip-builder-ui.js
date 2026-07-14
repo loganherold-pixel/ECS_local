@@ -404,7 +404,7 @@ assertIncludes(screen, 'Medical', 'Trip Builder Smart Resupply medical row');
 assertIncludes(screen, 'Exit Access', 'Trip Builder Smart Resupply exit row');
 assertIncludes(screen, 'testID="trip-builder-empty-state"', 'Trip Builder missing data state');
 assertIncludes(screen, 'No routes ready for planning', 'Trip Builder empty state copy');
-assertIncludes(screen, "router.push('/explore-offline-prep-pack')", 'Offline Prep Pack CTA navigation');
+assertIncludes(screen, "pushSingleFlight('/explore-offline-prep-pack')", 'Offline Prep Pack CTA single-flight navigation');
 assertIncludes(screen, 'testID="trip-builder-prepare-offline-pack"', 'Offline Prep Pack CTA');
 
 const clearPlanCalls = (screen.match(/setPlan\(null\)/g) || []).length;
@@ -418,7 +418,7 @@ assertIncludes(discover, "pathname: '/explore-trip-builder'", 'Explore selected 
 assertIncludes(discover, "params: { routeId: routeForHandoff.id, setup: '1' }", 'Explore route preselection should open Trip Setup directly');
 assertIncludes(discover, "case 'trip_builder':", 'Explore Trip Builder tab option');
 assertIncludes(discover, 'clearTripBuilderRouteHandoff();', 'Explore top-level Trip Builder reset');
-assertIncludes(discover, "router.push('/explore-trip-builder')", 'Explore Trip Builder tab should open the real Trip Builder route picker directly.');
+assertIncludes(discover, "pushSingleFlight('/explore-trip-builder')", 'Explore Trip Builder tab should open the real route picker through single-flight navigation.');
 assert(!discover.includes('testID="explore-open-trip-builder"'), 'Explore should not render a redundant Open Trip Builder staging page.');
 assertIncludes(discover, 'testID="explore-tripbuilder-wizard-surface"', 'Explore should render the direct route-first TripBuilder wizard surface.');
 assertIncludes(discover, 'EXPLORE TRIP BUILDER', 'Explore Trip Builder hero eyebrow should render readable spaced copy on mobile.');

@@ -50,18 +50,27 @@ import { reportLayoutFailure } from './ecsIssueReporter';
 import { createInitialAIOrchestratorMemory, runECSAI } from './ai/aiOrchestrator';
 import { selectAutomotiveCommandSurface } from './automotive/automotiveCommandSelectors';
 import { createDefaultAutomotiveSurfaceState } from './automotive/automotiveSurfaceTypes';
+import { buildVehicleAutomotiveSafeProjection } from './automotive/automotiveSafeProjection';
+import { selectVehicleDisplayNavigationData } from './automotive/vehicleDisplayNavigationSelector';
 import {
-  buildContinueRouteInstruction,
-  buildProceedRouteInstruction,
-  buildReadyRouteInstruction,
-} from './routeGuidanceCopy';
+  buildAutomotiveSemanticSignature,
+  shouldPublishAutomotiveState,
+} from './automotive/automotiveUpdatePolicy';
+import { navigateRouteSessionStore } from './navigateRouteSessionStore';
 
 const STORAGE_KEY = 'ecs_vehicle_display_state';
 const REFRESH_INTERVAL_MS = 5_000;
 const ATTITUDE_UPDATE_INTERVAL_MS = 400;
+const ATTITUDE_DISPLAY_UPDATE_INTERVAL_MS = 1_000;
+const ATTITUDE_DISPLAY_DELTA_DEG = 0.5;
+const ATTITUDE_DISPLAY_HEARTBEAT_MS = 5_000;
+const VEHICLE_DISPLAY_UI_HEARTBEAT_MS = 60_000;
+const AUTOMOTIVE_SUPPORT_MIN_REFRESH_MS = 30_000;
+const AUTOMOTIVE_SUPPORT_HEARTBEAT_MS = 120_000;
 const MAX_SESSION_LOGS = 120;
 
 const mem: Record<string, string> = {};
+let _lastPersistedPayload: string | null = null;
 
 function sGet(key: string): string | null {
   try {
@@ -323,7 +332,18 @@ function createDefaultPresentationModel(
 function createDefaultState(): VehicleDisplayState {
   const mode: VehicleDisplayMode = 'highway_drive';
   const navigationData = createDefaultNavigationData(mode);
+  const attitudeData = createDefaultAttitudeData();
+  const resourceData = createDefaultResourceData();
+  const weatherHazardData = createDefaultWeatherHazardData();
+  const exitPlanData = createDefaultExitPlanData();
   const activeScreen: VehicleDisplayScreen = 'navigation';
+  const automotiveProjection = buildVehicleAutomotiveSafeProjection({
+    navigationData,
+    attitudeData,
+    resourceData,
+    weatherHazardData,
+    exitPlanData,
+  }, 0);
   return {
     mode,
     activeScreen,
@@ -335,11 +355,12 @@ function createDefaultState(): VehicleDisplayState {
     routePhase: 'inactive',
     sessionState: 'idle',
     navigationData,
-    attitudeData: createDefaultAttitudeData(),
-    resourceData: createDefaultResourceData(),
-    weatherHazardData: createDefaultWeatherHazardData(),
-    exitPlanData: createDefaultExitPlanData(),
+    attitudeData,
+    resourceData,
+    weatherHazardData,
+    exitPlanData,
     automotiveSurface: createDefaultAutomotiveSurfaceState(),
+    automotiveProjection,
     presentationModel: createDefaultPresentationModel(activeScreen),
     mapData: navigationData,
     statusData: createDefaultStatusData(mode),
@@ -367,6 +388,7 @@ interface PersistedVehicleDisplayState {
   mode: VehicleDisplayMode;
   activeScreen: VehicleDisplayScreen;
   isManualOverride: boolean;
+  modeOverride: ModeOverrideSetting;
 }
 
 function loadPersistedState(): Partial<PersistedVehicleDisplayState> {
@@ -374,13 +396,23 @@ function loadPersistedState(): Partial<PersistedVehicleDisplayState> {
     const raw = sGet(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Partial<PersistedVehicleDisplayState>;
+    const mode =
+      parsed.mode === 'expedition_drive' || parsed.mode === 'highway_drive'
+        ? parsed.mode
+        : undefined;
+    const modeOverride: ModeOverrideSetting =
+      parsed.modeOverride === 'auto' || parsed.modeOverride === 'highway' || parsed.modeOverride === 'expedition'
+        ? parsed.modeOverride
+        : parsed.isManualOverride
+          ? mode === 'expedition_drive'
+            ? 'expedition'
+            : 'highway'
+          : 'auto';
     return {
-      mode:
-        parsed.mode === 'expedition_drive' || parsed.mode === 'highway_drive'
-          ? parsed.mode
-          : undefined,
+      mode,
       activeScreen: normalizePersistedScreen(parsed.activeScreen),
-      isManualOverride: !!parsed.isManualOverride,
+      isManualOverride: modeOverride !== 'auto',
+      modeOverride,
     };
   } catch {
     return {};
@@ -392,8 +424,12 @@ function persistState(state: VehicleDisplayState): void {
     mode: state.mode,
     activeScreen: state.activeScreen,
     isManualOverride: state.isManualOverride,
+    modeOverride: state.modeOverride,
   };
-  sSet(STORAGE_KEY, JSON.stringify(persisted));
+  const payload = JSON.stringify(persisted);
+  if (payload === _lastPersistedPayload) return;
+  _lastPersistedPayload = payload;
+  sSet(STORAGE_KEY, payload);
 }
 
 function roundMiles(value: number | null | undefined): number | null {
@@ -406,10 +442,12 @@ function roundTenths(value: number | null | undefined): number | null {
   return Math.round(value * 10) / 10;
 }
 
-function formatEtaMinutes(minutes: number | null): string | null {
-  if (minutes == null || !Number.isFinite(minutes)) return null;
-  const future = new Date(Date.now() + minutes * 60_000);
-  return future.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function timestampToIso(value: string | number | null | undefined): string | null {
+  if (value == null) return null;
+  const parsed = typeof value === 'number'
+    ? value < 10_000_000_000 ? value * 1000 : value
+    : Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
 function mapConnectivity(level: string | null | undefined): VehicleIndicators['connectivity'] {
@@ -460,6 +498,8 @@ function sourceLabel(source: VehicleDataSource): string {
       return 'Bluetooth';
     case 'gps_live':
       return 'GPS live';
+    case 'weather_provider':
+      return 'Operational weather provider';
     case 'ai_navigation':
       return 'ECS route intelligence';
     case 'manual':
@@ -486,54 +526,6 @@ function mapDashboardSourceToVehicleDataSource(
     default:
       return 'none';
   }
-}
-
-function applyAutomotiveSurfaceToNavigationData(
-  navigationData: VehicleNavigationData,
-): VehicleNavigationData {
-  const primary = _automotiveSurface.primaryCommand;
-  const secondary = _automotiveSurface.secondaryCommands;
-  const supportLine =
-    secondary[0]?.summary
-    ?? _automotiveSurface.guidance.statusLine
-    ?? navigationData.statusLabel;
-
-  return {
-    ...navigationData,
-    statusLabel:
-      primary?.title
-      ?? _automotiveSurface.guidance.statusLine
-      ?? navigationData.statusLabel,
-    nextManeuver:
-      navigationData.nextManeuver
-      ?? _automotiveSurface.guidance.nextManeuver
-      ?? primary?.summary
-      ?? null,
-    hazardLabel:
-      primary && primary.tone !== 'calm'
-        ? primary.summary
-        : navigationData.hazardLabel
-          ?? (secondary[0] ? supportLine : null),
-  };
-}
-
-function applyAutomotiveSurfaceToStatusData(
-  statusData: VehicleStatusData,
-): VehicleStatusData {
-  const primary = _automotiveSurface.primaryCommand;
-  const secondary = _automotiveSurface.secondaryCommands;
-  return {
-    ...statusData,
-    statusHeadline:
-      primary?.title
-      ?? _automotiveSurface.guidance.routeName
-      ?? statusData.statusHeadline,
-    statusSupport:
-      primary?.summary
-      ?? secondary[0]?.summary
-      ?? _automotiveSurface.guidance.statusLine
-      ?? statusData.statusSupport,
-  };
 }
 
 function applyAutomotiveSurfaceToResourceData(
@@ -610,8 +602,16 @@ function buildSystemHealth(params: {
   const { gps, indicators, navigationData, weatherHazardData, exitPlanData } = params;
   const breadcrumbState = safeRequire('./breadcrumbTracker')?.breadcrumbTracker?.get?.();
   const hasExpedition = Boolean(safeRequire('./missionStore')?.missionExpeditionStore?.getActive?.());
+  const weatherUpdatedAt = weatherHazardData.observedAt ?? weatherHazardData.fetchedAt ?? null;
+  const weatherUpdatedAtMs = weatherUpdatedAt ? Date.parse(weatherUpdatedAt) : NaN;
   const weatherIsStale =
-    weatherHazardData.source === 'cached' || weatherHazardData.status === 'fallback';
+    weatherHazardData.source === 'cached' ||
+    weatherHazardData.status === 'fallback' ||
+    !Number.isFinite(weatherUpdatedAtMs) ||
+    Date.now() - weatherUpdatedAtMs > 10 * 60 * 1000;
+  const routeUpdatedAtMs = navigationData.guidanceUpdatedAt
+    ? Date.parse(navigationData.guidanceUpdatedAt)
+    : NaN;
 
   const gpsSubsystem: VehicleSubsystemStatus = {
     available: Boolean(gps?.hasFix),
@@ -676,7 +676,7 @@ function buildSystemHealth(params: {
           ? 'warning'
           : 'ok',
     detail: weatherHazardData.alertSummary ?? weatherHazardData.unavailableReason ?? null,
-    lastGoodDataAt: Date.now(),
+    lastGoodDataAt: Number.isFinite(weatherUpdatedAtMs) ? weatherUpdatedAtMs : null,
     isStale: weatherIsStale,
     staleSinceMinutes: null,
   };
@@ -710,8 +710,13 @@ function buildSystemHealth(params: {
           ? 'unknown'
           : 'ok',
     detail: navigationData.nextManeuver ?? navigationData.unavailableReason ?? null,
-    lastGoodDataAt: navigationData.routePhase !== 'inactive' ? Date.now() : null,
-    isStale: false,
+    lastGoodDataAt:
+      navigationData.routePhase !== 'inactive' && Number.isFinite(routeUpdatedAtMs)
+        ? routeUpdatedAtMs
+        : null,
+    isStale:
+      navigationData.routePhase !== 'inactive' &&
+      (!Number.isFinite(routeUpdatedAtMs) || Date.now() - routeUpdatedAtMs > 2 * 60 * 1000),
     staleSinceMinutes: null,
   };
 
@@ -869,15 +874,24 @@ let _roadSession: PersistedRoadNavigationSession | null = null;
 let _weatherSnapshot: ECSWeatherSnapshot | null = null;
 let _weatherUnavailableReason: string | null = null;
 let _sharedWeatherUnsubscribe: (() => void) | null = null;
+let _routeSessionUnsubscribe: (() => void) | null = null;
+let _gpsUIUnsubscribe: (() => void) | null = null;
+let _gpsUIConsumer: { stop: () => void } | null = null;
 let _automotiveSurface = createDefaultAutomotiveSurfaceState();
 let _automotiveAIRefreshInFlight = false;
 let _automotiveAIMemory = createInitialAIOrchestratorMemory();
+let _lastAutomotiveSupportInputSignature: string | null = null;
+let _lastAutomotiveSupportAttemptAt = 0;
+let _lastAutomotiveSupportSuccessAt = 0;
 let _attitudeReading = {
   rollDeg: null as number | null,
   pitchDeg: null as number | null,
   available: false,
   active: false,
+  updatedAt: null as number | null,
 };
+let _lastAttitudeDisplayAt = 0;
+let _lastDisplayedAttitude = { rollDeg: null as number | null, pitchDeg: null as number | null };
 let _accelerometerSubscription: { remove?: () => void } | null = null;
 let _manualMapOverrides: Partial<VehicleMapData> = {};
 let _lastLoggedRoutePhase: VehicleRouteSessionState | null = null;
@@ -888,14 +902,35 @@ let _lastPresentationSignature: string | null = null;
 let _lastFallbackSignature: string | null = null;
 let _lastUnavailableSignature: string | null = null;
 let _lastKnownPosition: { lat: number; lon: number; heading: number | null } | null = null;
+let _lastNotifiedStateSignature: string | null = null;
+let _lastNotifiedAt = 0;
 
 const _persisted = loadPersistedState();
 if (_persisted.mode) _state.mode = _persisted.mode;
 if (_persisted.activeScreen) _state.activeScreen = _persisted.activeScreen;
 if (_persisted.isManualOverride != null) _state.isManualOverride = _persisted.isManualOverride;
+if (_persisted.modeOverride) _state.modeOverride = _persisted.modeOverride;
 
-function _notify(): void {
-  _state.lastUpdatedAt = new Date().toISOString();
+function _notify(force = false): void {
+  const { lastUpdatedAt: _rootUpdatedAt, ...semanticState } = _state;
+  const signature = buildAutomotiveSemanticSignature(semanticState);
+  const now = Date.now();
+  if (!shouldPublishAutomotiveState({
+    signature,
+    state: {
+      lastSignature: _lastNotifiedStateSignature,
+      lastPublishedAt: _lastNotifiedAt,
+    },
+    nowMs: now,
+    minimumIntervalMs: 0,
+    heartbeatIntervalMs: VEHICLE_DISPLAY_UI_HEARTBEAT_MS,
+    force,
+  })) {
+    return;
+  }
+  _lastNotifiedStateSignature = signature;
+  _lastNotifiedAt = now;
+  _state.lastUpdatedAt = new Date(now).toISOString();
   persistState(_state);
   for (const fn of _listeners) {
     try {
@@ -982,124 +1017,13 @@ function buildNavigationData(params: {
   remotenessIndex: any | null;
   weatherData: VehicleWeatherHazardData;
 }): VehicleNavigationData {
-  const { mode, gps, activeRoute, roadSession, remotenessIndex, weatherData } = params;
-  const currentLat = gps?.position?.latitude ?? null;
-  const currentLon = gps?.position?.longitude ?? null;
-  const speedMph = gps?.position?.speedMph ?? null;
-  const headingDeg = gps?.position?.headingDeg ?? null;
-  const routeLoaded = !!activeRoute || !!roadSession;
-  const routePreview = roadSession?.status === 'destination_selected' || roadSession?.status === 'route_preview';
-  const wpStore = safeRequire('./waypointProgressStore')?.waypointProgressStore;
-  const totalWaypoints = Array.isArray(activeRoute?.waypoints) ? activeRoute.waypoints.length : 0;
-  const waypointIndex =
-    activeRoute?.id && wpStore?.getIndex ? wpStore.getIndex(activeRoute.id) : 0;
-  const routeCompleted =
-    roadSession?.status === 'arrived' ||
-    (!!activeRoute &&
-      totalWaypoints > 0 &&
-      wpStore?.isComplete?.(activeRoute.id, totalWaypoints));
-
-  let routePhase: VehicleRouteSessionState = 'inactive';
-  if (routeCompleted) {
-    routePhase = 'completed';
-  } else if (roadSession?.status === 'rerouting' || (routeLoaded && !gps?.hasFix)) {
-    routePhase = 'alerting_or_degraded';
-  } else if (roadSession?.status === 'navigation_active') {
-    routePhase = 'route_active';
-  } else if (routePreview || routeLoaded) {
-    routePhase = 'route_selected';
-  }
-
-  const progressPct =
-    totalWaypoints > 1
-      ? Math.max(0, Math.min(100, Math.round((waypointIndex / (totalWaypoints - 1)) * 100)))
-      : routeLoaded
-        ? 0
-        : null;
-  const distanceRemainingMiles =
-    routePhase === 'completed'
-      ? 0
-      : activeRoute?.total_distance_miles && progressPct != null
-        ? Math.max(0, roundTenths(activeRoute.total_distance_miles * (1 - progressPct / 100)) ?? 0)
-        : null;
-  const etaMinutes = routePhase === 'completed' ? 0 : computeEtaMinutes(distanceRemainingMiles, speedMph);
-  const roadDestination = roadSession?.destination?.title ?? null;
-  const nextWaypoint = activeRoute?.waypoints?.[Math.min(waypointIndex, Math.max(totalWaypoints - 1, 0))];
-  const nextManeuver =
-    routePhase === 'completed'
-      ? 'Route complete'
-      : roadDestination && (roadSession?.status === 'navigation_active' || roadSession?.status === 'rerouting')
-        ? buildContinueRouteInstruction(roadDestination)
-        : nextWaypoint?.name
-          ? buildProceedRouteInstruction(nextWaypoint.name)
-          : roadDestination && routePreview
-            ? buildReadyRouteInstruction(roadDestination)
-            : routeLoaded
-              ? 'Continue on highlighted route'
-              : null;
-
-  const nearbyFuelDistance = remotenessIndex?.proximity?.nearestFuelStation?.distanceMi;
-  const nearbyFuelServices =
-    nearbyFuelDistance != null
-      ? [
-          {
-            id: 'nearest-fuel',
-            name: 'Nearest Fuel',
-            type: 'fuel' as const,
-            distanceMiles: Math.max(0, roundTenths(nearbyFuelDistance) ?? nearbyFuelDistance),
-            bearing: '--',
-          },
-        ]
-      : [];
-
-  const offlineReady = Boolean(remotenessIndex?.signals?.cacheReady || remotenessIndex?.signals?.expeditionDataReady);
-  const hazardLabel =
-    routePhase === 'alerting_or_degraded'
-      ? gps?.hasFix
-        ? 'Route degraded'
-        : 'GPS degraded'
-      : weatherData.hazardState === 'warning' || weatherData.hazardState === 'critical'
-        ? weatherData.alertSummary ?? weatherData.routeHazard
-        : null;
-
-  return {
-    mode,
-    routePhase,
-    currentLat,
-    currentLon,
-    headingDeg,
-    speedMph,
-    routeLine: routeLoaded,
-    nextManeuver,
-    distanceRemainingMiles,
-    etaMinutes,
-    nearbyFuelServices,
-    breadcrumbTrail: Boolean(safeRequire('./breadcrumbTracker')?.breadcrumbTracker?.get?.()?.isRecording),
-    importedGpxRoute: activeRoute?.source_format === 'gpx',
-    offRouteAlert: roadSession?.status === 'rerouting',
-    offRouteDistanceFt: roadSession?.status === 'rerouting' ? 300 : null,
-    elevationShading: mode === 'expedition_drive',
-    offlineMapIndicator: offlineReady,
-    offlineMapRegion: offlineReady ? 'OFFLINE READY' : null,
-    routeName: activeRoute?.name ?? roadDestination ?? null,
-    destinationName: roadDestination,
-    statusLabel:
-      routePhase === 'route_active'
-        ? 'Route active'
-        : routePhase === 'route_selected'
-          ? 'Route ready'
-          : routePhase === 'alerting_or_degraded'
-            ? 'Guidance degraded'
-            : routePhase === 'completed'
-              ? 'Route complete'
-              : 'No route staged',
-    progressPct,
-    etaLabel: formatEtaMinutes(etaMinutes),
-    hazardState: routePhase === 'alerting_or_degraded' ? 'warning' : weatherData.hazardState,
-    hazardLabel,
-    offRouteDetected: roadSession?.status === 'rerouting',
-    unavailableReason: routeLoaded ? null : gps?.hasFix ? 'Select a route to begin guidance' : 'GPS required',
-  };
+  return selectVehicleDisplayNavigationData({
+    ...params,
+    routeSession: navigateRouteSessionStore.getSnapshot(),
+    breadcrumbRecording: Boolean(
+      safeRequire('./breadcrumbTracker')?.breadcrumbTracker?.get?.()?.isRecording,
+    ),
+  });
 }
 
 function buildAttitudeData(): VehicleAttitudeData {
@@ -1113,6 +1037,7 @@ function buildAttitudeData(): VehicleAttitudeData {
       supportLabel: 'Waiting for motion sensors',
       source: 'none',
       unavailableReason: 'Motion sensors unavailable',
+      updatedAt: timestampToIso(_attitudeReading.updatedAt),
     };
   }
   const state = deriveAttitudeState(_attitudeReading.rollDeg, _attitudeReading.pitchDeg);
@@ -1125,6 +1050,7 @@ function buildAttitudeData(): VehicleAttitudeData {
     supportLabel: state.supportLabel,
     source: 'live_telemetry',
     unavailableReason: null,
+    updatedAt: timestampToIso(_attitudeReading.updatedAt),
   };
 }
 
@@ -1142,12 +1068,14 @@ function buildResourceData(): VehicleResourceData {
     {
       source: 'live',
       value: telemetryState?.summary?.fuel_level ?? null,
+      updatedAt: telemetryState?.summary?.last_updated ?? null,
       detail: 'OBD fuel telemetry',
     },
     {
       source: 'manual',
       value: consumables?.fuel_percent_current ?? null,
       available: consumables?.fuel_percent_current != null,
+      updatedAt: (consumables as any)?.fuel_updated_at ?? null,
       detail: 'Configured vehicle profile',
     },
   ]);
@@ -1174,6 +1102,7 @@ function buildResourceData(): VehicleResourceData {
       source: 'bluetooth',
       value: powerSnapshot?.batteryPercent ?? bluSummary?.battery_percent ?? null,
       available: Boolean(powerSnapshot?.isConnected || bluSummary?.available),
+      updatedAt: powerSnapshot?.lastUpdatedAt ?? bluSummary?.last_updated ?? null,
       detail: 'Connected power system',
     },
   ]);
@@ -1184,6 +1113,7 @@ function buildResourceData(): VehicleResourceData {
       source: 'bluetooth',
       value: powerSnapshot?.inputWatts ?? bluSummary?.live_input ?? null,
       available: Boolean(powerSnapshot?.isConnected || bluSummary?.available),
+      updatedAt: powerSnapshot?.lastUpdatedAt ?? bluSummary?.last_updated ?? null,
       detail: 'Connected power system',
     },
   ]);
@@ -1192,6 +1122,7 @@ function buildResourceData(): VehicleResourceData {
       source: 'bluetooth',
       value: powerSnapshot?.outputWatts ?? bluSummary?.live_output ?? null,
       available: Boolean(powerSnapshot?.isConnected || bluSummary?.available),
+      updatedAt: powerSnapshot?.lastUpdatedAt ?? bluSummary?.last_updated ?? null,
       detail: 'Connected power system',
     },
   ]);
@@ -1258,6 +1189,12 @@ function buildResourceData(): VehicleResourceData {
           ? 'Manual resource data'
           : 'No vehicle or resource profile available',
     unavailableReason: status === 'unavailable' ? 'No live telemetry or configured data' : null,
+    sourceUpdatedAt: {
+      fuel: timestampToIso(fuelResolution.updatedAt),
+      water: timestampToIso(waterResolution.updatedAt),
+      power: timestampToIso(powerInputResolution.updatedAt ?? powerOutputResolution.updatedAt ?? batteryResolution.updatedAt),
+      alternateFluid: timestampToIso(alternateFluidResolution.updatedAt),
+    },
   };
 }
 
@@ -1321,7 +1258,11 @@ function buildWeatherHazardData(gps: any): VehicleWeatherHazardData {
       hazardState: 'normal',
       routeHazard: null,
       source: 'none',
+      providerLabel: null,
       unavailableReason: gps?.permissionDenied ? 'Location permission required' : 'GPS required',
+      observedAt: null,
+      fetchedAt: null,
+      expiresAt: null,
     };
   }
 
@@ -1342,7 +1283,11 @@ function buildWeatherHazardData(gps: any): VehicleWeatherHazardData {
       hazardState: 'normal',
       routeHazard: null,
       source: 'none',
+      providerLabel: null,
       unavailableReason: _weatherUnavailableReason ?? 'Weather unavailable',
+      observedAt: null,
+      fetchedAt: null,
+      expiresAt: null,
     };
   }
 
@@ -1350,7 +1295,8 @@ function buildWeatherHazardData(gps: any): VehicleWeatherHazardData {
   const source: VehicleDataSource =
     _weatherSnapshot.status.source === 'cache_fresh' || _weatherSnapshot.status.source === 'cache_stale'
       ? 'cached'
-      : 'gps_live';
+      : 'weather_provider';
+  const providerName = _weatherSnapshot.provider.name?.trim() || 'Operational weather provider';
 
   return {
     status: source === 'cached' ? 'fallback' : 'live',
@@ -1366,7 +1312,11 @@ function buildWeatherHazardData(gps: any): VehicleWeatherHazardData {
     hazardState: hazard.state,
     routeHazard: hazard.routeHazard,
     source,
+    providerLabel: source === 'cached' ? `${providerName} cache` : providerName,
     unavailableReason: null,
+    observedAt: _weatherSnapshot.normalized.updatedAt ?? _weatherSnapshot.fetchedAt,
+    fetchedAt: _weatherSnapshot.fetchedAt,
+    expiresAt: null,
   };
 }
 
@@ -1391,6 +1341,7 @@ function buildExitPlanData(params: {
       supportLabel: 'Awaiting location fix',
       source: 'none',
       unavailableReason: gps?.permissionDenied ? 'Location permission required' : 'GPS required',
+      updatedAt: null,
     };
   }
 
@@ -1457,6 +1408,7 @@ function buildExitPlanData(params: {
       'Not enough remoteness data',
     source: hasExitPlanContext ? 'ai_navigation' : 'none',
     unavailableReason: remotenessUnavailableReason,
+    updatedAt: timestampToIso(remotenessIndex?.updatedAt ?? gps?.lastEmitTs ?? null),
   };
 }
 
@@ -1628,27 +1580,29 @@ function _rebuildState(reason: 'tick' | 'async' = 'tick'): void {
     weatherData: weatherHazardData,
   });
   const attitudeData = buildAttitudeData();
-  const resourceData = applyAutomotiveSurfaceToResourceData(buildResourceData());
-  const exitPlanData = applyAutomotiveSurfaceToExitPlanData(buildExitPlanData({
+  const baseResourceData = buildResourceData();
+  const resourceData = applyAutomotiveSurfaceToResourceData(baseResourceData);
+  const baseExitPlanData = buildExitPlanData({
     remotenessIndex: remotenessIndex ?? remotenessLegacy,
-    resourceData,
+    resourceData: baseResourceData,
     gps,
-  }));
+  });
+  const exitPlanData = applyAutomotiveSurfaceToExitPlanData(baseExitPlanData);
   const automotiveWeatherData = applyAutomotiveSurfaceToWeatherHazardData(weatherHazardData);
-  const nextMapData = applyAutomotiveSurfaceToNavigationData({
+  const nextMapData: VehicleNavigationData = {
     ...navigationData,
     ..._manualMapOverrides,
-  });
-  const statusData = applyAutomotiveSurfaceToStatusData(buildStatusData({
+  };
+  const statusData = buildStatusData({
     mode: _state.mode,
     navigationData: nextMapData,
-    weatherHazardData: automotiveWeatherData,
-    exitPlanData,
+    weatherHazardData,
+    exitPlanData: baseExitPlanData,
     attitudeData,
-    resourceData,
+    resourceData: baseResourceData,
     activeRoute,
-  }));
-  const weatherData = buildWeatherData(_state.mode, automotiveWeatherData, _weatherSnapshot);
+  });
+  const weatherData = buildWeatherData(_state.mode, weatherHazardData, _weatherSnapshot);
   const actionTypes = safeRequire('./vehicleDisplayTypes');
   const actions: VehicleAction[] =
     _state.mode === 'highway_drive'
@@ -1670,7 +1624,14 @@ function _rebuildState(reason: 'tick' | 'async' = 'tick'): void {
     indicators,
     navigationData: nextMapData,
     weatherHazardData,
-    exitPlanData,
+    exitPlanData: baseExitPlanData,
+  });
+  const automotiveProjection = buildVehicleAutomotiveSafeProjection({
+    navigationData,
+    attitudeData,
+    resourceData: baseResourceData,
+    weatherHazardData,
+    exitPlanData: baseExitPlanData,
   });
 
   if (gps?.hasFix && gps?.position) {
@@ -1693,6 +1654,7 @@ function _rebuildState(reason: 'tick' | 'async' = 'tick'): void {
     exitPlanData,
     presentationModel: sessionState,
     automotiveSurface: _automotiveSurface,
+    automotiveProjection,
     mapData: nextMapData,
     statusData,
     weatherData,
@@ -1791,7 +1753,36 @@ async function _refreshAutomotiveSurface(
   navigationData: VehicleNavigationData,
 ): Promise<void> {
   if (_automotiveAIRefreshInFlight) return;
+  const now = Date.now();
+  const inputSignature = buildAutomotiveSemanticSignature({
+    routePhase: navigationData.routePhase,
+    routeName: navigationData.routeName,
+    nextManeuver: navigationData.nextManeuver,
+    statusLabel: navigationData.statusLabel,
+    hazardState: navigationData.hazardState,
+    hazardLabel: navigationData.hazardLabel,
+    distanceBucket:
+      navigationData.distanceRemainingMiles == null
+        ? null
+        : Math.floor(navigationData.distanceRemainingMiles * 2) / 2,
+    etaBucket:
+      navigationData.etaMinutes == null
+        ? null
+        : Math.floor(navigationData.etaMinutes / 10) * 10,
+    progressBucket:
+      navigationData.progressPct == null
+        ? null
+        : Math.floor(navigationData.progressPct / 10) * 10,
+  });
+  if (now - _lastAutomotiveSupportAttemptAt < AUTOMOTIVE_SUPPORT_MIN_REFRESH_MS) return;
+  if (
+    inputSignature === _lastAutomotiveSupportInputSignature &&
+    now - _lastAutomotiveSupportSuccessAt < AUTOMOTIVE_SUPPORT_HEARTBEAT_MS
+  ) {
+    return;
+  }
   _automotiveAIRefreshInFlight = true;
+  _lastAutomotiveSupportAttemptAt = now;
 
   try {
     const result = await runECSAI(
@@ -1806,6 +1797,8 @@ async function _refreshAutomotiveSurface(
     );
 
     _automotiveAIMemory = result.memory;
+    _lastAutomotiveSupportInputSignature = inputSignature;
+    _lastAutomotiveSupportSuccessAt = Date.now();
     const nextSurface = selectAutomotiveCommandSurface({
       aiState: result.state,
       navigation: {
@@ -1830,6 +1823,7 @@ async function _refreshAutomotiveSurface(
 }
 
 async function _refreshAsyncSources(gps: any): Promise<void> {
+  if (navigateRouteSessionStore.getSnapshot().lifecycle !== 'inactive') return;
   if (!_roadSessionInFlight) {
     _roadSessionInFlight = true;
     try {
@@ -1867,7 +1861,9 @@ async function _startAttitudeStream(): Promise<void> {
 
       const rollDeg = Math.round((Math.atan2(data.x, Math.sqrt(data.y * data.y + data.z * data.z)) * 180 / Math.PI) * 10) / 10;
       const pitchDeg = Math.round((Math.atan2(-data.z, Math.sqrt(data.x * data.x + data.y * data.y)) * 180 / Math.PI) * 10) / 10;
+      const now = Date.now();
       if (_attitudeReading.rollDeg === rollDeg && _attitudeReading.pitchDeg === pitchDeg && _attitudeReading.active) {
+        _attitudeReading.updatedAt = now;
         return;
       }
 
@@ -1876,12 +1872,31 @@ async function _startAttitudeStream(): Promise<void> {
         pitchDeg,
         available: true,
         active: true,
+        updatedAt: now,
       };
+      const rollDelta = _lastDisplayedAttitude.rollDeg == null
+        ? Number.POSITIVE_INFINITY
+        : Math.abs(rollDeg - _lastDisplayedAttitude.rollDeg);
+      const pitchDelta = _lastDisplayedAttitude.pitchDeg == null
+        ? Number.POSITIVE_INFINITY
+        : Math.abs(pitchDeg - _lastDisplayedAttitude.pitchDeg);
+      const elapsed = now - _lastAttitudeDisplayAt;
+      if (
+        elapsed < ATTITUDE_DISPLAY_UPDATE_INTERVAL_MS ||
+        (rollDelta < ATTITUDE_DISPLAY_DELTA_DEG &&
+          pitchDelta < ATTITUDE_DISPLAY_DELTA_DEG &&
+          elapsed < ATTITUDE_DISPLAY_HEARTBEAT_MS)
+      ) {
+        return;
+      }
+      _lastAttitudeDisplayAt = now;
+      _lastDisplayedAttitude = { rollDeg, pitchDeg };
       _rebuildState('async');
     });
   } catch {
     _attitudeReading.active = false;
     _attitudeReading.available = false;
+    _attitudeReading.updatedAt = null;
     _rebuildState('async');
   }
 }
@@ -2033,9 +2048,21 @@ export const vehicleDisplayStore = {
     if (_isRunning) return;
     _isRunning = true;
     setVehicleDisplayRunning(true);
+    const gpsStore = safeRequire('./gpsUIState')?.gpsUIState;
+    gpsStore?.start?.();
+    _gpsUIConsumer = gpsStore ?? null;
+    _gpsUIUnsubscribe = gpsStore?.subscribe?.(() => {
+      if (_isRunning) _rebuildState('async');
+    }) ?? null;
     _sharedWeatherUnsubscribe = subscribeSharedOperationalWeather(() => {
       _applySharedWeatherState();
       _rebuildState('async');
+    });
+    _routeSessionUnsubscribe = navigateRouteSessionStore.subscribe(() => {
+      _rebuildState('async');
+    });
+    void navigateRouteSessionStore.hydrateFromPersistence().then(() => {
+      if (_isRunning) _rebuildState('async');
     });
     recordSessionEvent('car_session_started', { screen: _state.activeScreen });
     _rebuildState('tick');
@@ -2050,6 +2077,12 @@ export const vehicleDisplayStore = {
     setVehicleDisplayRunning(false);
     _sharedWeatherUnsubscribe?.();
     _sharedWeatherUnsubscribe = null;
+    _routeSessionUnsubscribe?.();
+    _routeSessionUnsubscribe = null;
+    _gpsUIUnsubscribe?.();
+    _gpsUIUnsubscribe = null;
+    _gpsUIConsumer?.stop?.();
+    _gpsUIConsumer = null;
     removeSharedOperationalWeatherConsumer('vehicle_display');
     recordSessionEvent('car_session_ended', { screen: _state.activeScreen });
     if (_refreshTimer) {
@@ -2068,6 +2101,12 @@ export const vehicleDisplayStore = {
     _weatherUnavailableReason = null;
     _sharedWeatherUnsubscribe?.();
     _sharedWeatherUnsubscribe = null;
+    _routeSessionUnsubscribe?.();
+    _routeSessionUnsubscribe = null;
+    _gpsUIUnsubscribe?.();
+    _gpsUIUnsubscribe = null;
+    _gpsUIConsumer?.stop?.();
+    _gpsUIConsumer = null;
     removeSharedOperationalWeatherConsumer('vehicle_display');
     _roadSession = null;
     _sessionLogs = [];
@@ -2082,8 +2121,14 @@ export const vehicleDisplayStore = {
     _automotiveSurface = createDefaultAutomotiveSurfaceState();
     _automotiveAIRefreshInFlight = false;
     _automotiveAIMemory = createInitialAIOrchestratorMemory();
+    _lastAutomotiveSupportInputSignature = null;
+    _lastAutomotiveSupportAttemptAt = 0;
+    _lastAutomotiveSupportSuccessAt = 0;
+    _lastNotifiedStateSignature = null;
+    _lastNotifiedAt = 0;
+    _lastPersistedPayload = null;
     _state = createDefaultState();
-    _notify();
+    _notify(true);
   },
   subscribe(fn: Listener): () => void {
     _listeners.add(fn);

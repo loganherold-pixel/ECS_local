@@ -21,6 +21,7 @@ import {
   DEFAULT_ZOOM,
 } from '../../lib/mapConfig';
 import { ecsLog } from '../../lib/ecsLogger';
+import { isECSDevelopmentDiagnosticEnabled } from '../../lib/features/featureVisibilityRegistry';
 import { TACTICAL } from '../../lib/theme';
 import MapFallbackSurface from './MapFallbackSurface';
 import type { CampIntelMarkerPayload, CampIntelTone } from '../../lib/campIntel/campIntelTypes';
@@ -69,7 +70,12 @@ import type { DispatchPingMapMarker } from '../../lib/dispatchRecoveryMapModel';
 import {
   resolveViewportMarkerHeadingDeg,
 } from '../../lib/mapMotion';
-import type { MapMotionPriority } from '../../lib/mapSurfaceCoordinator';
+import type { MapMotionPriority, MapSurfaceKind } from '../../lib/mapSurfaceCoordinator';
+import {
+  recordECSPerformanceRender,
+  startECSPerformanceSpan,
+  type ECSPerformanceSpanHandle,
+} from '../../lib/performance/ecsPerformanceDiagnostics';
 
 const WEBVIEW_ORIGIN_WHITELIST = ['*'];
 const WEBVIEW_FAILSAFE_TIMEOUT_MS = 30000;
@@ -97,15 +103,22 @@ const DYNAMIC_HEADING_DECIMALS = 0;
 const PROGRESS_ROUTE_HASH_COORDINATE_DECIMALS = 4;
 const PROGRESS_ROUTE_HASH_STRIDE = 64;
 const DEBUG_MAP_RENDERER =
-  ((globalThis as typeof globalThis & { __ECS_DEBUG_MAP_RENDERER__?: boolean })
-    .__ECS_DEBUG_MAP_RENDERER__ === true);
+  isECSDevelopmentDiagnosticEnabled(
+    'EXPO_PUBLIC_ECS_MAP_RENDERER_DEBUG',
+    (globalThis as typeof globalThis & { __ECS_DEBUG_MAP_RENDERER__?: boolean })
+      .__ECS_DEBUG_MAP_RENDERER__ === true,
+  );
 const DEBUG_CAMP_SCOUT_MAP =
   DEBUG_MAP_RENDERER ||
-  ((globalThis as typeof globalThis & { __ECS_CAMP_DEBUG__?: boolean }).__ECS_CAMP_DEBUG__ === true) ||
-  (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_CAMP_DEBUG === '1');
+  isECSDevelopmentDiagnosticEnabled(
+    'EXPO_PUBLIC_ECS_CAMP_DEBUG',
+    (globalThis as typeof globalThis & { __ECS_CAMP_DEBUG__?: boolean }).__ECS_CAMP_DEBUG__ === true,
+  );
 const DEBUG_CAMP_LAYERS =
-  ((globalThis as typeof globalThis & { __ECS_CAMP_LAYER_DEBUG__?: boolean }).__ECS_CAMP_LAYER_DEBUG__ === true) ||
-  (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_CAMP_LAYER_DEBUG === '1') ||
+  isECSDevelopmentDiagnosticEnabled(
+    'EXPO_PUBLIC_ECS_CAMP_LAYER_DEBUG',
+    (globalThis as typeof globalThis & { __ECS_CAMP_LAYER_DEBUG__?: boolean }).__ECS_CAMP_LAYER_DEBUG__ === true,
+  ) ||
   DEBUG_CAMP_SCOUT_MAP;
 const FRAME_COALESCED_MAP_MESSAGE_TYPES = new Set(['dynamicState', 'cameraCommand', 'overlayPatch']);
 const MAPBOX_3D_TERRAIN_SOURCE_ID = 'ecs-navigate-3d-terrain-dem';
@@ -432,6 +445,7 @@ export type MapRendererProps = {
   }) => void;
   vehicleHeading?: number | null;
   motionPriority?: MapMotionPriority;
+  performanceSurface?: MapSurfaceKind;
   isLoading?: boolean;
   hasToken?: boolean;
   onRetry?: () => void | Promise<void>;
@@ -8493,11 +8507,18 @@ const MapRenderer = React.memo(function MapRenderer({
   onEstablishedCampsiteTap,
   campsiteSearchPolygon = null,
   surfaceMode = 'full',
+  performanceSurface,
   standbyMapDisabled = false,
   standbyWakeDisabled = false,
   standbyStaticMapDisabled = false,
   style,
 }: MapRendererProps) {
+  const tracksNavigatePerformance =
+    performanceSurface === 'navigate' || (performanceSurface == null && surfaceMode === 'full');
+  const navigatePerformanceEligible = tracksNavigatePerformance && motionPriority !== 'cold';
+  if (navigatePerformanceEligible) {
+    recordECSPerformanceRender('navigate_map_first_meaningful_render', 'map_renderer');
+  }
   const webViewRef = useRef<WebView>(null);
   const [webReady, setWebReady] = useState(false);
   const [webBootTimedOut, setWebBootTimedOut] = useState(false);
@@ -8528,6 +8549,19 @@ const MapRenderer = React.memo(function MapRenderer({
   const hasEverReachedReadyRef = useRef(false);
   const pendingMapMessagesRef = useRef<Map<string, unknown>>(new Map());
   const pendingMapMessageFrameCancelRef = useRef<(() => void) | null>(null);
+  const mapReadyPerformanceRef = useRef<ECSPerformanceSpanHandle | null>(null);
+  const mapReadyPerformanceSettledRef = useRef(false);
+  const viewportPerformanceRef = useRef<ECSPerformanceSpanHandle | null>(null);
+  const mapReadyPerformanceMetadataRef = useRef({
+    routePointCount: points.length,
+    overlayFamilyCount: [
+      convoyMarkers.length > 0,
+      dispatchPingMarkers.length > 0,
+      campsiteMarkers.length > 0 || campIntelMarkers.length > 0 || campEndpointMarkers.length > 0,
+      Boolean(mvumOverlay?.enabled),
+      Boolean(remoteOverlay?.enabled),
+    ].filter(Boolean).length,
+  });
 
   const shouldLoadMap = !!hasToken && !!mapboxToken;
   const isCompactSurface = surfaceMode === 'compact';
@@ -8617,6 +8651,28 @@ const MapRenderer = React.memo(function MapRenderer({
     !campsiteSearchPolygon?.coordinates?.length;
   const standbyMapActive =
     (standbyMapEligible || compactRoutePreviewStandbyEligible || compactRouteGeometryStandbyEligible) && !standbyWakeRequested;
+
+  useEffect(() => {
+    if (!navigatePerformanceEligible || mapReadyPerformanceSettledRef.current) {
+      return undefined;
+    }
+    mapReadyPerformanceRef.current = startECSPerformanceSpan(
+      'navigate_map_first_meaningful_render',
+      'mapbox_definitive_ready',
+      {
+        trackOutstanding: true,
+        metadata: mapReadyPerformanceMetadataRef.current,
+      },
+    );
+    return () => {
+      viewportPerformanceRef.current?.cancel({ unmounted: true });
+      viewportPerformanceRef.current = null;
+      if (!mapReadyPerformanceSettledRef.current) {
+        mapReadyPerformanceRef.current?.cancel({ unmounted: true });
+        mapReadyPerformanceRef.current = null;
+      }
+    };
+  }, [navigatePerformanceEligible]);
 
   useEffect(() => {
     if (
@@ -8818,8 +8874,21 @@ const MapRenderer = React.memo(function MapRenderer({
   ]);
 
   const payload = useMemo<WebMapPayload>(
-    () =>
-      buildWebPayload({
+    () => {
+      const payloadBuildPerformance = tracksNavigatePerformance
+        ? startECSPerformanceSpan(
+            'navigate_map_viewport_interaction',
+            'route_geometry_payload_build',
+            {
+              metadata: {
+                routePointCount: points.length,
+                segmentCount: segments.length,
+                routeBuilderSegmentCount: routeBuilderSegments.length,
+              },
+            },
+          )
+        : null;
+      const nextPayload = buildWebPayload({
         points,
         progressPoints,
         waypoints,
@@ -8863,7 +8932,12 @@ const MapRenderer = React.memo(function MapRenderer({
         stitchedRoutePreview,
         campsiteSearchPolygon,
         surfaceMode,
-      }),
+      });
+      payloadBuildPerformance?.end('completed', {
+        renderedRoutePointCount: points.length,
+      });
+      return nextPayload;
+    },
     [
       points,
       progressPoints,
@@ -8908,6 +8982,7 @@ const MapRenderer = React.memo(function MapRenderer({
       stitchedRoutePreview,
       campsiteSearchPolygon,
       surfaceMode,
+      tracksNavigatePerformance,
     ],
   );
 
@@ -9582,6 +9657,11 @@ const MapRenderer = React.memo(function MapRenderer({
               ? `${payload.reason}${typeof payload?.detail === 'string' && payload.detail.length > 0 ? `: ${payload.detail.slice(0, 72)}` : ''}`
               : 'map_boot_failed',
           );
+          mapReadyPerformanceRef.current?.end('failed', {
+            reason: typeof payload?.reason === 'string' ? payload.reason : 'map_boot_failed',
+          });
+          mapReadyPerformanceRef.current = null;
+          mapReadyPerformanceSettledRef.current = true;
           return;
         }
 
@@ -9612,6 +9692,11 @@ const MapRenderer = React.memo(function MapRenderer({
         setWebBootTimedOut(false);
         setWebBootIssue(null);
         setWebReady(true);
+        mapReadyPerformanceRef.current?.end('completed', {
+          rendererInstance: activeWebViewInstanceKeyRef.current,
+        });
+        mapReadyPerformanceRef.current = null;
+        mapReadyPerformanceSettledRef.current = true;
         return;
 
       case 'longPress':
@@ -9675,10 +9760,18 @@ const MapRenderer = React.memo(function MapRenderer({
         return;
 
       case 'mapBoundsReply':
+        viewportPerformanceRef.current?.end('completed');
+        viewportPerformanceRef.current = null;
         onMapBoundsReply?.(payload);
         return;
 
       case 'userDrag':
+        viewportPerformanceRef.current?.cancel({ superseded: true });
+        viewportPerformanceRef.current = startECSPerformanceSpan(
+          'navigate_map_viewport_interaction',
+          'gesture_to_viewport_reply',
+          { trackOutstanding: true, metadata: { gesture: payload?.event ?? 'map_move' } },
+        );
         onUserDrag?.();
         return;
 

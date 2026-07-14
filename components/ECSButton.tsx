@@ -6,6 +6,7 @@ import {
   Text,
   TextStyle,
   TouchableOpacity,
+  type AccessibilityState,
   ViewStyle,
 } from 'react-native';
 
@@ -31,6 +32,9 @@ interface ECSButtonProps {
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   accessibilityLabel?: string;
+  accessibilityHint?: string;
+  accessibilityState?: AccessibilityState;
+  selected?: boolean;
   numberOfLines?: number;
 }
 
@@ -42,6 +46,9 @@ interface ECSIconButtonProps {
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
   accessibilityLabel?: string;
+  accessibilityHint?: string;
+  accessibilityState?: AccessibilityState;
+  selected?: boolean;
 }
 
 const SIZE_MAP: Record<ECSButtonSize, { height: number; radius: number; horizontalPadding: number; fontSize: number; letterSpacing: number; iconSize: number }> = {
@@ -89,6 +96,15 @@ function resolveColors(variant: ECSButtonVariant, disabled: boolean) {
   return ECS_BUTTON_COLORS[variant];
 }
 
+function resolveHitSlop(height: number) {
+  const inset = Math.max(0, Math.ceil((44 - height) / 2));
+  return inset > 0 ? { top: inset, bottom: inset, left: inset, right: inset } : undefined;
+}
+
+function formatIconAccessibilityLabel(icon: IconName) {
+  return String(icon).replace(/-outline$/, '').replace(/-/g, ' ');
+}
+
 export function ECSButton({
   label,
   onPress,
@@ -101,7 +117,10 @@ export function ECSButton({
   style,
   textStyle,
   accessibilityLabel,
-  numberOfLines = 1,
+  accessibilityHint,
+  accessibilityState,
+  selected,
+  numberOfLines = 2,
 }: ECSButtonProps) {
   const sizeConfig = SIZE_MAP[size];
   const isDisabled = disabled || loading;
@@ -114,6 +133,14 @@ export function ECSButton({
       disabled={isDisabled}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{
+        ...accessibilityState,
+        disabled: isDisabled,
+        busy: loading,
+        selected: selected ?? accessibilityState?.selected,
+      }}
+      hitSlop={resolveHitSlop(sizeConfig.height)}
       style={[
         styles.base,
         {
@@ -135,6 +162,7 @@ export function ECSButton({
       ) : null}
       <Text
         numberOfLines={numberOfLines}
+        maxFontSizeMultiplier={1.6}
         style={[
           styles.label,
           {
@@ -159,6 +187,9 @@ export function ECSIconButton({
   disabled = false,
   style,
   accessibilityLabel,
+  accessibilityHint,
+  accessibilityState,
+  selected,
 }: ECSIconButtonProps) {
   const sizeConfig = ICON_SIZE_MAP[size];
   const colors = resolveColors(variant, disabled);
@@ -169,7 +200,14 @@ export function ECSIconButton({
       activeOpacity={0.8}
       disabled={disabled}
       accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
+      accessibilityLabel={accessibilityLabel ?? formatIconAccessibilityLabel(icon)}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{
+        ...accessibilityState,
+        disabled,
+        selected: selected ?? accessibilityState?.selected,
+      }}
+      hitSlop={resolveHitSlop(sizeConfig.height)}
       style={[
         styles.iconButton,
         {

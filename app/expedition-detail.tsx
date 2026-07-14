@@ -3,11 +3,12 @@ import {
   View, Text, TouchableOpacity, StyleSheet,
   ActivityIndicator, Platform, ScrollView, Alert,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
 import { supabase } from '../lib/supabase';
 import { TACTICAL } from '../lib/theme';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import { useApp } from '../context/AppContext';
 
 import TopoBackground from '../components/TopoBackground';
@@ -70,7 +71,7 @@ function WidgetCard({ title, icon, children, onPress }: { title: string; icon: s
 }
 
 export default function ExpeditionDetailScreen() {
-  const router = useRouter();
+  const { navigate: navigateSingleFlight } = useECSNavigation();
   const { user } = useApp();
   const params = useLocalSearchParams<{ expeditionId?: string; id?: string }>();
   const expeditionId = useMemo(() => params.expeditionId || params.id || '', [params]);
@@ -280,8 +281,8 @@ export default function ExpeditionDetailScreen() {
 
   const handleOpenVehicleConfig = useCallback(() => {
     if (!expeditionId) return;
-    router.navigate({ pathname: '/(tabs)/vehicle-config', params: { expeditionId } } as any);
-  }, [router, expeditionId]);
+    navigateSingleFlight({ pathname: '/(tabs)/vehicle-config', params: { expeditionId } });
+  }, [navigateSingleFlight, expeditionId]);
 
   // Derived stats — coerce to number to handle string values from DB/cache
   const fuelCapacity = vehicle?.fuel_tank_capacity_gal != null ? Number(vehicle.fuel_tank_capacity_gal) : null;
@@ -313,7 +314,7 @@ export default function ExpeditionDetailScreen() {
             <View style={styles.dot} />
             <Text style={styles.tripTitle}>{expeditionTitle}</Text>
           </View>
-          <TouchableOpacity style={styles.profileBtn} onPress={() => router.push('/settings' as any)} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.profileBtn} onPress={() => navigateSingleFlight('/more')} activeOpacity={0.85}>
             <Ionicons name="person-circle-outline" size={22} color={TACTICAL.textMuted} />
           </TouchableOpacity>
         </View>

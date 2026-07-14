@@ -268,12 +268,18 @@ async function fetchWithRetry(
 ): Promise<unknown> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= policy.retries; attempt += 1) {
+    if (context.signal?.aborted) throw new Error('NWS weather request cancelled.');
     try {
-      return await context.serverFetch!({ url, timeoutMs: policy.timeoutMs, headers });
+      return await context.serverFetch!({
+        url,
+        timeoutMs: policy.timeoutMs,
+        headers,
+        signal: context.signal,
+      });
     } catch (error: any) {
       lastError = error;
-      if (!isRetryableNwsError(error) || attempt >= policy.retries) break;
-      await delay(policy.retryBackoffMs * (attempt + 1));
+      if (context.signal?.aborted || !isRetryableNwsError(error) || attempt >= policy.retries) break;
+      await delay(policy.retryBackoffMs * (attempt + 1), context.signal);
     }
   }
   throw lastError instanceof Error ? lastError : new Error('NWS fetch failed.');
@@ -426,8 +432,19 @@ function isRetryableNwsError(error: unknown): boolean {
     message.includes('502');
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal | null): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error('NWS weather request cancelled.'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('NWS weather request cancelled.'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, Math.max(0, ms));
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function getProcessEnv(): NwsWeatherEnv {

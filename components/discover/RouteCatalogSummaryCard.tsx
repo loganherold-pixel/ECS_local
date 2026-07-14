@@ -1,11 +1,16 @@
-import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { ECSCard } from '../ECSSurface';
 import { SourceTruthInspectorTrigger } from '../source-truth';
 import { ECS, TACTICAL } from '../../lib/theme';
 import type { RouteCatalogSummary } from '../../lib/routeDataContracts';
 import { buildRouteCatalogSourceTruthBinding } from '../../lib/sourceTruthAdapters';
+import {
+  ECS_ROUTE_IMAGE_NEUTRAL_FALLBACK_URI,
+  resolveRouteCardImage,
+  routeCardImageCache,
+} from '../../lib/explore/routeImageResolver';
 
 type RouteCatalogSummaryCardProps = {
   summary: RouteCatalogSummary;
@@ -61,6 +66,7 @@ export default function RouteCatalogSummaryCard({
   onSave,
   compactPreview = false,
 }: RouteCatalogSummaryCardProps) {
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const distance = formatMeters(summary.distanceMeters);
   const duration = formatDuration(summary.estimatedDurationSeconds);
   const updatedAt = formatUpdatedAt(summary.updatedAt);
@@ -76,18 +82,65 @@ export default function RouteCatalogSummaryCard({
     updatedAt,
   ].filter(Boolean).join(' | ');
   const sourceTruthBinding = buildRouteCatalogSourceTruthBinding(summary);
+  const resolvedThumbnail = useMemo(
+    () => resolveRouteCardImage({
+      routeId: summary.routeId,
+      title: summary.title,
+      remoteThumbnailUri: thumbnailFailed ? null : summary.thumbnailUrl,
+      route: {
+        id: summary.routeId,
+        name: summary.title,
+        region: summary.forestName ?? summary.region ?? undefined,
+        imageTag: summary.thumbnailAssetKey ?? undefined,
+        terrainType: summary.difficulty ?? undefined,
+        category: summary.tags.join(' '),
+        startLat: summary.trailheadCoordinate?.latitude,
+        startLng: summary.trailheadCoordinate?.longitude,
+      },
+      imageCache: routeCardImageCache,
+    }),
+    [summary, thumbnailFailed],
+  );
+  const thumbnailUri = resolvedThumbnail.uri === ECS_ROUTE_IMAGE_NEUTRAL_FALLBACK_URI
+    ? null
+    : resolvedThumbnail.uri;
+
+  useEffect(() => {
+    setThumbnailFailed(false);
+  }, [summary.routeId]);
 
   return (
     <ECSCard variant="primary" style={[s.card, compactPreview && s.cardCompact]}>
       <View style={s.accentBar} />
       <View style={s.body}>
         <View style={s.headerRow}>
+          <View style={s.thumbnailFrame}>
+            {thumbnailUri ? (
+              <Image
+                source={{ uri: thumbnailUri }}
+                style={s.thumbnail}
+                resizeMode="cover"
+                accessibilityLabel={`${summary.title} route thumbnail`}
+                accessibilityIgnoresInvertColors
+                onLoad={() => routeCardImageCache.markLoaded(summary.routeId, thumbnailUri)}
+                onError={() => {
+                  routeCardImageCache.markFailed(thumbnailUri);
+                  setThumbnailFailed(true);
+                }}
+              />
+            ) : (
+              <View style={s.thumbnailFallback}>
+                <Ionicons name="trail-sign-outline" size={18} color={TACTICAL.amber} />
+              </View>
+            )}
+          </View>
           <View style={s.titleBlock}>
             <Text style={s.eyebrow}>ROUTE SUMMARY</Text>
             <Text style={s.title} numberOfLines={2}>{summary.title}</Text>
           </View>
           <SourceTruthInspectorTrigger
             source={sourceTruthBinding.ref}
+            sources={sourceTruthBinding.sources}
             policyKey={sourceTruthBinding.policyKey}
             dependencies={sourceTruthBinding.dependencies}
             label={formatSource(summary.sourceType)}
@@ -158,6 +211,25 @@ const s = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 10,
+  },
+  thumbnailFrame: {
+    width: 76,
+    height: 58,
+    flexShrink: 0,
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    overflow: 'hidden',
+  },
+  thumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  thumbnailFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   titleBlock: {
     flex: 1,

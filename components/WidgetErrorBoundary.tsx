@@ -43,10 +43,23 @@ export default class WidgetErrorBoundary extends Component<
     const { widgetType, slotIndex } = this.props;
     const componentStack = info?.componentStack?.split('\n').slice(0, 6).join('\n') ?? null;
 
-    ecsLog.error('WIDGET', `Widget "${widgetType || 'unknown'}" crashed at slot ${slotIndex ?? '?'}`, error, {
-      widgetType,
-      slotIndex,
-      componentStack,
+    ecsLog.captureFailure({
+      kind: 'unexpected',
+      domain: 'widget',
+      operation: 'widget_render',
+      code: 'WIDGET_RENDER_FAILURE',
+      severity: 'error',
+      recoverability: 'user_action',
+      retryability: 'conditional',
+      sourceState: 'unavailable',
+      context: {
+        widgetType,
+        slotIndex,
+        componentStack,
+      },
+    }, error, {
+      category: 'WIDGET',
+      fingerprint: `${widgetType || 'unknown'}:${slotIndex ?? 'unknown'}`,
     });
 
     reportLayoutFailure({

@@ -82,8 +82,116 @@ type IssueGroupSummary = {
   offlineCorrelation: 'high' | 'moderate' | 'low';
 };
 
+const REDACTED = '[redacted]';
+const REDACTED_LOCATION = '[redacted_location]';
+const REDACTED_LOCATION_HISTORY = '[redacted_convoy_location_history]';
+const REDACTED_TRACE = '[redacted_trip_trace]';
+const REDACTED_PROVIDER = '[redacted_provider_payload]';
+const REDACTED_TELEMETRY = '[redacted_telemetry_payload]';
+const SECRET_TEXT_PATTERN = /\b(token|secret|password|api[_-]?key|authorization|credential)\s*(?:=|:|\s)\s*([^\s&#]{6,})/gi;
+const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
+const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/g;
+const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const COORDINATE_PATTERN = /-?\d{1,3}\.\d{4,}/g;
+const LONG_HEX_PATTERN = /\b[0-9a-f]{24,}\b/gi;
+
+function diagnosticKey(key: string): string {
+  return key.replace(/[_\-\s.]/g, '').toLowerCase();
+}
+
+function isSecretDiagnosticKey(key: string): boolean {
+  const normalized = diagnosticKey(key);
+  return normalized.includes('token')
+    || normalized.includes('secret')
+    || normalized.includes('password')
+    || normalized.includes('authorization')
+    || normalized.includes('credential')
+    || normalized.includes('apikey')
+    || normalized.includes('servicerole')
+    || normalized === 'session'
+    || normalized === 'headers'
+    || normalized === 'authpayload';
+}
+
+function diagnosticMarkerForKey(key: string): string | null {
+  const normalized = diagnosticKey(key);
+  if (normalized.includes('locationhistory') || normalized.includes('memberpositions') || normalized.includes('convoypositions')) {
+    return REDACTED_LOCATION_HISTORY;
+  }
+  if (normalized.includes('triptrace') || normalized.includes('routegeometry') || normalized.includes('tripgeometry') || normalized === 'coordinates' || normalized === 'polyline') {
+    return REDACTED_TRACE;
+  }
+  if (normalized.includes('providerresponse') || normalized.includes('rawprovider') || normalized.includes('providerpayload') || normalized === 'rawresponse') {
+    return REDACTED_PROVIDER;
+  }
+  if (normalized.includes('rawble') || normalized.includes('blepayload') || normalized.includes('rawpayload') || normalized.includes('manufacturerdata') || normalized.includes('rawframe')) {
+    return REDACTED_TELEMETRY;
+  }
+  return null;
+}
+
+function hasDiagnosticCoordinates(value: Record<string, unknown>): boolean {
+  const keys = new Set(Object.keys(value).map(diagnosticKey));
+  return (keys.has('latitude') && keys.has('longitude'))
+    || (keys.has('lat') && (keys.has('lon') || keys.has('lng')))
+    || (keys.has('coords') && (keys.has('accuracy') || keys.has('timestamp')));
+}
+
+export function sanitizeIssueDiagnosticText(value: unknown, maxLength = 600): string {
+  const sanitized = String(value ?? '')
+    .replace(BEARER_PATTERN, 'Bearer [redacted]')
+    .replace(JWT_PATTERN, '[redacted_token]')
+    .replace(SECRET_TEXT_PATTERN, (_match, key) => `${key} [redacted]`)
+    .replace(EMAIL_PATTERN, '[redacted_email]')
+    .replace(UUID_PATTERN, '[redacted_id]')
+    .replace(COORDINATE_PATTERN, REDACTED_LOCATION)
+    .replace(LONG_HEX_PATTERN, '[redacted_payload]')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+  return sanitized.length <= maxLength ? sanitized : `${sanitized.slice(0, maxLength)}...`;
+}
+
+export function sanitizeIssueDiagnosticValue(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): Json {
+  if (value == null) return null;
+  if (typeof value === 'string') return sanitizeIssueDiagnosticText(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'boolean') return value;
+  if (depth > 6) return '[truncated]';
+  if (typeof value !== 'object') return sanitizeIssueDiagnosticText(value);
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const result = value.slice(0, 24).map((item) => sanitizeIssueDiagnosticValue(item, depth + 1, seen));
+    if (value.length > 24) result.push('[truncated]');
+    return result;
+  }
+
+  const source = value as Record<string, unknown>;
+  if (hasDiagnosticCoordinates(source)) return REDACTED_LOCATION;
+  const result: Record<string, Json> = {};
+  const entries = Object.entries(source).slice(0, 32);
+  entries.forEach(([key, nested]) => {
+    const safeKey = sanitizeIssueDiagnosticText(key, 80).replace(/[^a-z0-9_.:-]/gi, '_') || 'field';
+    const marker = diagnosticMarkerForKey(key);
+    result[safeKey] = isSecretDiagnosticKey(key)
+      ? nested == null ? null : REDACTED
+      : marker && nested != null
+        ? marker
+        : sanitizeIssueDiagnosticValue(nested, depth + 1, seen);
+  });
+  if (Object.keys(source).length > entries.length) result.__truncated__ = true;
+  return result;
+}
+
 function safeString(value: unknown, fallback = ''): string {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
+  return typeof value === 'string' && value.trim().length > 0
+    ? sanitizeIssueDiagnosticText(value)
+    : fallback;
 }
 
 function cleanText(value: unknown): string {
@@ -92,22 +200,6 @@ function cleanText(value: unknown): string {
 
 function includesAny(text: string, patterns: string[]): boolean {
   return patterns.some((pattern) => text.includes(pattern));
-}
-
-function toJson(value: unknown): Json {
-  if (value === undefined || value === null) return null;
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((item) => toJson(item));
-  if (typeof value === 'object') {
-    const record: Record<string, Json> = {};
-    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-      if (nested !== undefined) record[key] = toJson(nested);
-    }
-    return record;
-  }
-  return String(value);
 }
 
 function compareVersions(a: string, b: string): number {
@@ -130,14 +222,16 @@ function uniqueStrings(values: Array<unknown>): string[] {
 }
 
 function metadataOf(row: IssueEventRow): Record<string, unknown> {
-  return row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
-    ? row.metadata
+  const sanitized = sanitizeIssueDiagnosticValue(row.metadata ?? {});
+  return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
+    ? sanitized as Record<string, unknown>
     : {};
 }
 
 function runtimeOf(row: IssueEventRow): Record<string, unknown> {
-  return row.runtime_context && typeof row.runtime_context === 'object' && !Array.isArray(row.runtime_context)
-    ? row.runtime_context
+  const sanitized = sanitizeIssueDiagnosticValue(row.runtime_context ?? {});
+  return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
+    ? sanitized as Record<string, unknown>
     : {};
 }
 
@@ -557,7 +651,7 @@ function summarizeGroupedRows(groupedRows: Map<string, IssueEventRow[]>, latestV
 }
 
 export function normalizeIssueEventForInsert(event: IssueEvent) {
-  const metadata = {
+  const metadata = sanitizeIssueDiagnosticValue({
     ...(event.metadata ?? {}),
     ...(safeString(event.issueFamily, '') ? { issueFamily: safeString(event.issueFamily, '') } : {}),
     ...(safeString(event.rootConditionKey, '') ? { rootConditionKey: safeString(event.rootConditionKey, '') } : {}),
@@ -566,7 +660,8 @@ export function normalizeIssueEventForInsert(event: IssueEvent) {
     ...(Array.isArray(event.affectedSurfaces) ? { affectedSurfaces: event.affectedSurfaces } : {}),
     ...(safeString(event.providerFamily, '') ? { providerFamily: safeString(event.providerFamily, '') } : {}),
     ...(typeof event.confidenceHint === 'number' && Number.isFinite(event.confidenceHint) ? { confidenceHint: event.confidenceHint } : {}),
-  };
+  }) as Record<string, Json>;
+  const runtimeContext = sanitizeIssueDiagnosticValue(event.runtimeContext ?? {}) as Record<string, Json>;
 
   return {
     occurred_at: safeString(event.occurredAt, new Date().toISOString()),
@@ -583,8 +678,8 @@ export function normalizeIssueEventForInsert(event: IssueEvent) {
     app_version: safeString((event.runtimeContext as Record<string, unknown> | null)?.appVersion, '') || null,
     platform: safeString((event.runtimeContext as Record<string, unknown> | null)?.platform, '') || null,
     environment: safeString((event.runtimeContext as Record<string, unknown> | null)?.environment, '') || null,
-    runtime_context: toJson(event.runtimeContext ?? {}) as Record<string, Json>,
-    metadata: toJson(metadata) as Record<string, Json>,
+    runtime_context: runtimeContext,
+    metadata,
   };
 }
 

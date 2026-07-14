@@ -20,6 +20,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 
 import ECSModalShell from '../ECSModalShell';
+import ECSOperationalAnnouncer from '../ECSOperationalAnnouncer';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import LandscapeShellControls from '../LandscapeShellControls';
 import { SourceTruthInspectorTrigger } from '../source-truth';
@@ -46,8 +47,20 @@ import {
   dispatchLinkedContextFromLiveEvent,
   dispatchNavigateContextAdapter,
 } from '../../lib/dispatchNavigateContextHandoff';
-import { resolveDispatchPermissions } from '../../lib/dispatchPermissionAdapter';
-import type { DispatchTeamMember } from '../../lib/dispatchTypes';
+import {
+  resolveDispatchPermissions,
+  type DispatchPermissionAction,
+} from '../../lib/dispatchPermissionAdapter';
+import {
+  createDispatchEntityId,
+  createDispatchIdempotencyKey,
+} from '../../lib/dispatchIntegrity';
+import type {
+  DispatchAcknowledgment,
+  DispatchPriority,
+  DispatchTeamMember,
+  DispatchTimelineEvent,
+} from '../../lib/dispatchTypes';
 import { playDispatchRecoveryPingAlert } from '../../lib/dispatchRecoveryPingAlert';
 import {
   buildLiveDispatchEvents,
@@ -56,6 +69,7 @@ import {
 import { publishSharedWeatherBriefAdvisories } from '../../lib/weatherBriefPublisher';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
 import { useThrottledGPS } from '../../lib/useThrottledGPS';
+import { isECSDevelopmentDiagnosticEnabled } from '../../lib/features/featureVisibilityRegistry';
 import {
   createDispatchEventFromChannelAction,
   getDispatchChannelSnapshots,
@@ -71,8 +85,11 @@ import {
   type DispatchProfileSnapshot,
 } from '../../lib/dispatchProfileStore';
 import { routeStore, type RouteSegment } from '../../lib/routeStore';
-import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
 import { vehicleStore } from '../../lib/vehicleStore';
+import {
+  getActiveVehicleContext,
+  subscribeActiveVehicleState,
+} from '../../lib/activeVehicleContext';
 import type { Vehicle } from '../../lib/types';
 import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
@@ -100,6 +117,7 @@ import {
   type DispatchMapCoordinate,
 } from '../../lib/dispatchRecoveryMapModel';
 import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
+import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 import {
   hideDashboardDockReveal,
   revealDashboardDock,
@@ -146,11 +164,20 @@ import {
   dispatchPersistenceAdapter,
   type DispatchPersistenceDefaults,
 } from '../../lib/dispatchPersistenceAdapter';
+import {
+  incrementECSPerformanceCounter,
+  recordECSPerformanceRender,
+  registerECSPerformanceSubscription,
+  startECSPerformanceSpan,
+} from '../../lib/performance/ecsPerformanceDiagnostics';
 import { replayQueuedDispatchActions } from '../../lib/dispatchOfflineReplayAdapter';
+import { DispatchCanonicalMigrationCoordinator } from '../../lib/dispatchCanonicalMigrationCoordinator';
+import type { DispatchCanonicalEntity } from '../../lib/dispatchCanonicalRepository';
 import {
   getDispatchRolloutDisabledCopy,
   isDispatchFeatureEnabled,
   resolveDispatchRolloutConfig,
+  resolveDispatchCanonicalBackendMode,
   type DispatchRolloutFeature,
 } from '../../lib/dispatchRolloutConfig';
 import {
@@ -174,10 +201,9 @@ function isDispatchCadDebugEnabled(): boolean {
     ECS_DEBUG_DISPATCH?: boolean;
     __ECS_DEBUG_DISPATCH?: boolean;
   };
-  return (
-    globalStore.ECS_DEBUG_DISPATCH === true ||
-    globalStore.__ECS_DEBUG_DISPATCH === true ||
-    (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ECS_DEBUG_DISPATCH === '1')
+  return isECSDevelopmentDiagnosticEnabled(
+    'EXPO_PUBLIC_ECS_DEBUG_DISPATCH',
+    globalStore.ECS_DEBUG_DISPATCH === true || globalStore.__ECS_DEBUG_DISPATCH === true,
   );
 }
 
@@ -887,10 +913,29 @@ function canOpenThreatDrilldown(event: DispatchEvent): boolean {
 }
 
 function getEventUiMeta(uiMetaById: Record<string, EventUiMeta>, event: DispatchEvent, queued: boolean): EventUiMeta {
+  const persistedState = getPersistedEventUiState(event.status);
   return uiMetaById[event.id] ?? {
-    state: queued ? 'queued' : 'active',
-    notes: [],
+    state: persistedState ?? (queued ? 'queued' : 'active'),
+    notes: [...(event.recoveryNotes ?? [])],
   };
+}
+
+function getPersistedEventUiState(status: string | null | undefined): EventUiState | null {
+  const normalized = String(status ?? '').trim().toLowerCase();
+  switch (normalized) {
+    case 'acknowledged':
+      return 'acknowledged';
+    case 'resolved':
+      return 'resolved';
+    case 'dismissed':
+      return 'dismissed';
+    case 'queued':
+      return 'queued';
+    case 'active':
+      return 'active';
+    default:
+      return null;
+  }
 }
 
 function isActiveLiveDispatchEvent(event: DispatchEvent): boolean {
@@ -1109,7 +1154,10 @@ function getRecoveryCadPersistenceDefaults(): DispatchPersistenceDefaults {
     pings: [],
     queueItems: [],
     assignments: [],
+    assistRequests: [],
+    acknowledgments: [],
     timelineEvents: [],
+    offlineActions: [],
     cadEvents: [],
   };
 }
@@ -1954,6 +2002,45 @@ function applyEventAction(meta: EventUiMeta, actionId: EventActionId): EventUiMe
   };
 }
 
+function getEventActionPermission(actionId: EventActionId): DispatchPermissionAction {
+  switch (actionId) {
+    case 'acknowledge':
+      return 'respond_check_in';
+    case 'add_note':
+    case 'add_update':
+      return 'modify_timeline';
+    case 'send_follow_up':
+      return 'send_individual_ping';
+    case 'mark_resolved':
+      return 'resolve_queue_item';
+    case 'broadcast_hazard':
+      return 'broadcast_hazard';
+    case 'request_assist':
+      return 'create_assist_request';
+    case 'dismiss':
+    default:
+      return 'view_dispatch';
+  }
+}
+
+function getEventActionTimelineType(actionId: EventActionId): DispatchTimelineEvent['type'] {
+  switch (actionId) {
+    case 'acknowledge':
+      return 'ping_acknowledged';
+    case 'mark_resolved':
+      return 'queue_resolved';
+    default:
+      return 'log';
+  }
+}
+
+function getEventActionPriority(event: DispatchEvent): DispatchPriority {
+  if (event.severity === 'critical') return 'critical';
+  if (event.severity === 'warning') return 'high';
+  if (event.severity === 'watch') return 'normal';
+  return 'low';
+}
+
 function resolveConvoyLifecycleControl(
   context: ActiveConvoyContext | null,
   convoys: ConvoyListItem[],
@@ -1981,7 +2068,15 @@ function resolveConvoyLifecycleControl(
 }
 
 export default function DispatchCadCommandCenter() {
+  recordECSPerformanceRender('dispatch_ready', 'dispatch_command_center');
+  const [dispatchPerformance] = useState(() => startECSPerformanceSpan(
+    'dispatch_ready',
+    'hydrate_and_realtime_ready',
+    { trackOutstanding: true },
+  ));
+  const [dispatchLocalHydrated, setDispatchLocalHydrated] = useState(false);
   const router = useRouter();
+  const { push: pushSingleFlight } = useECSNavigation();
   const routeParams = useLocalSearchParams<{ dispatchEventId?: string | string[] }>();
   const requestedDispatchEventId = Array.isArray(routeParams.dispatchEventId)
     ? routeParams.dispatchEventId[0] ?? null
@@ -2250,12 +2345,7 @@ export default function DispatchCadCommandCenter() {
 
   useEffect(() => {
     const bumpVehicleRevision = () => setVehicleRevision((revision) => revision + 1);
-    const unsubscribeSetup = vehicleSetupStore.subscribe(bumpVehicleRevision);
-    const unsubscribeVehicles = vehicleStore.subscribe(bumpVehicleRevision);
-    return () => {
-      unsubscribeSetup();
-      unsubscribeVehicles();
-    };
+    return subscribeActiveVehicleState(bumpVehicleRevision);
   }, []);
 
   const activeVehicle = useMemo(() => {
@@ -2263,8 +2353,7 @@ export default function DispatchCadCommandCenter() {
       return null;
     }
 
-    const activeVehicleId = vehicleSetupStore.getActiveVehicleId();
-    return activeVehicleId ? vehicleStore.getById(activeVehicleId) : null;
+    return getActiveVehicleContext().vehicle;
   }, [vehicleRevision]);
   const activeRigLabel = getVehicleRigLabel(activeVehicle);
   const savedRigLabel = dispatchProfile.vehicleLabel?.trim() || null;
@@ -2329,6 +2418,14 @@ export default function DispatchCadCommandCenter() {
     [commandIdentity.callsign, commandIdentity.displayName, commandIdentity.email, commandIdentity.userId],
   );
   const dispatchRollout = useMemo(() => resolveDispatchRolloutConfig(), []);
+  const canonicalBackendMode = useMemo(
+    () => resolveDispatchCanonicalBackendMode(dispatchRollout),
+    [dispatchRollout],
+  );
+  const canonicalMigrationCoordinator = useMemo(
+    () => new DispatchCanonicalMigrationCoordinator(canonicalBackendMode),
+    [canonicalBackendMode],
+  );
   const dispatchPermissionSnapshot = useMemo(() => {
     const teamMember = teamSnapshot.members.find((member) => (
       !!commandIdentity.userId && member.userId === commandIdentity.userId
@@ -2357,6 +2454,8 @@ export default function DispatchCadCommandCenter() {
       currentMember,
       operatorInfo,
       soloMode: !teamSnapshot.activeTeam && !activeConvoyControl?.convoyId,
+      authenticated: Boolean(commandIdentity.userId),
+      sharedConvoyMember: isConvoyMember,
     });
   }, [
     activeConvoyControl?.convoyId,
@@ -2383,8 +2482,46 @@ export default function DispatchCadCommandCenter() {
   const automatedSosTransmissionEnabled = isDispatchFeatureEnabled(dispatchRollout, 'automatedSosTransmission');
   const liveRadioNetworkIntegrationsEnabled = isDispatchFeatureEnabled(dispatchRollout, 'liveRadioNetworkIntegrations');
   const agencyDataIngestionEnabled = isDispatchFeatureEnabled(dispatchRollout, 'agencyDataIngestion');
-  const recoveryCadSharingEnabled = externalDispatchIntegrationEnabled || Boolean(activeConvoyControl?.convoyId);
+  const recoveryCadIdentityAuthorized = Boolean(
+    commandIdentity.userId && (
+      teamSnapshot.activeTeam?.ownerId === commandIdentity.userId ||
+      teamSnapshot.members.some((member) => member.userId === commandIdentity.userId) ||
+      activeConvoyControl?.memberUserIds.includes(commandIdentity.userId)
+    ),
+  );
+  const recoveryCadSharingEnabled = recoveryCadIdentityAuthorized && (
+    externalDispatchIntegrationEnabled || Boolean(activeConvoyControl?.convoyId)
+  );
   const recoveryCadRealtimeExpeditionId = currentExpedition?.cloudSessionId ?? currentExpedition?.id ?? activeConvoyControl?.convoyId ?? null;
+  const canonicalDispatchContext = useMemo(() => {
+    const expeditionId = currentExpedition?.cloudSessionId ?? currentExpedition?.id ?? null;
+    const convoyId = activeConvoyControl?.convoyId ?? null;
+    if (
+      canonicalBackendMode === 'disabled' ||
+      !expeditionId ||
+      !convoyId ||
+      !isUuid(convoyId) ||
+      !commandIdentity.userId
+    ) {
+      return null;
+    }
+    return {
+      expeditionId,
+      convoyId,
+      actorUserId: commandIdentity.userId,
+    };
+  }, [
+    activeConvoyControl?.convoyId,
+    canonicalBackendMode,
+    commandIdentity.userId,
+    currentExpedition?.cloudSessionId,
+    currentExpedition?.id,
+  ]);
+  const persistCanonicalReplayEntity = useCallback(async (entity: DispatchCanonicalEntity) => {
+    if (!canonicalDispatchContext) return false;
+    const result = await canonicalMigrationCoordinator.persistEntity(canonicalDispatchContext, entity);
+    return result.ok;
+  }, [canonicalDispatchContext, canonicalMigrationCoordinator]);
   const recoveryCadPersistenceDefaults = useMemo(() => getRecoveryCadPersistenceDefaults(), []);
   const recoveryCadBackendContext = useMemo(
     () => getRecoveryCadBackendContext(teamSnapshot, currentExpedition, commandIdentity, activeConvoyControl),
@@ -2455,11 +2592,21 @@ export default function DispatchCadCommandCenter() {
   }, [persistDispatchCadEventLocally]);
 
   useEffect(() => {
+    setUiMetaById({});
+    submittedEventActionKeysRef.current.clear();
+    recoveryCadPublishInFlightRef.current.clear();
+    recoveryCadLastRetryAtRef.current = {};
+    dispatchEventStore.replaceEvents(
+      dispatchEventStore.getSnapshot().filter((event) => !isPersistableLocalDispatchEvent(event)),
+    );
+
     if (!localDispatchPersistenceId) {
+      setDispatchLocalHydrated(true);
       return undefined;
     }
 
     let cancelled = false;
+    setDispatchLocalHydrated(false);
     dispatchPersistenceAdapter.waitForHydration().then(() => {
       if (cancelled) {
         return;
@@ -2472,8 +2619,32 @@ export default function DispatchCadCommandCenter() {
       snapshot.cadEvents
         .filter(isPersistableLocalDispatchEvent)
         .forEach((event) => dispatchEventStore.upsertEvent(event));
+      const restoredMeta: Record<string, EventUiMeta> = {};
+      snapshot.acknowledgments.forEach((acknowledgment) => {
+        restoredMeta[acknowledgment.pingId] = {
+          state: acknowledgment.status === 'acknowledged' ? 'acknowledged' : 'active',
+          notes: [acknowledgment.message ?? `Dispatch response: ${acknowledgment.status}.`],
+        };
+      });
+      snapshot.timelineEvents.forEach((timelineEvent) => {
+        if (timelineEvent.idempotencyKey) {
+          submittedEventActionKeysRef.current.add(timelineEvent.idempotencyKey);
+        }
+        if (!timelineEvent.pingId) return;
+        const current = restoredMeta[timelineEvent.pingId] ?? { state: 'active', notes: [] };
+        restoredMeta[timelineEvent.pingId] = {
+          state: timelineEvent.type === 'queue_resolved' ? 'resolved' : current.state,
+          notes: current.notes.includes(timelineEvent.detail)
+            ? current.notes
+            : [...current.notes, timelineEvent.detail],
+        };
+      });
+      setUiMetaById(restoredMeta);
+      setDispatchLocalHydrated(true);
     }).catch(() => {
       if (!cancelled) {
+        incrementECSPerformanceCounter('dispatch_ready', 'local_hydration_failures');
+        setDispatchLocalHydrated(true);
         console.warn('[DISPATCH] local_cad_store_load_failed');
       }
     });
@@ -2483,6 +2654,53 @@ export default function DispatchCadCommandCenter() {
     };
   }, [
     localDispatchPersistenceId,
+    recoveryCadPersistenceDefaults,
+  ]);
+
+  useEffect(() => {
+    if (
+      !canonicalDispatchContext ||
+      !localDispatchPersistenceId ||
+      !dispatchLocalHydrated ||
+      !isDispatchFocused ||
+      offlineMode ||
+      !isOnline
+    ) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const getLocalSnapshot = () => dispatchPersistenceAdapter.load(
+      localDispatchPersistenceId,
+      recoveryCadPersistenceDefaults,
+    );
+    const applyHydration = (result: Awaited<ReturnType<typeof canonicalMigrationCoordinator.hydrate>>) => {
+      if (cancelled || !result.applied) return;
+      dispatchPersistenceAdapter.save(result.snapshot);
+      setChannelRevision((revision) => revision + 1);
+    };
+
+    void canonicalMigrationCoordinator
+      .hydrate(canonicalDispatchContext, getLocalSnapshot())
+      .then(applyHydration);
+    const lease = canonicalMigrationCoordinator.subscribe({
+      context: canonicalDispatchContext,
+      getLocalSnapshot,
+      onHydrated: applyHydration,
+    });
+
+    return () => {
+      cancelled = true;
+      lease.unsubscribe();
+    };
+  }, [
+    canonicalDispatchContext,
+    canonicalMigrationCoordinator,
+    dispatchLocalHydrated,
+    isDispatchFocused,
+    isOnline,
+    localDispatchPersistenceId,
+    offlineMode,
     recoveryCadPersistenceDefaults,
   ]);
 
@@ -2555,6 +2773,105 @@ export default function DispatchCadCommandCenter() {
       clientId: realtimeClientId,
       onStatusChange: setRealtimeStatus,
       onEvent: (envelope) => {
+        const authorizedMemberIds = new Set([
+          ...teamSnapshot.members.map((member) => member.userId),
+          ...(activeConvoyControl?.memberUserIds ?? []),
+        ]);
+
+        if (envelope.type === 'acknowledgment_upsert') {
+          if (!authorizedMemberIds.has(envelope.acknowledgment.memberId)) {
+            console.warn('[DISPATCH] acknowledgment_blocked reason=unauthorized_member');
+            return;
+          }
+          const acknowledgment: DispatchAcknowledgment = {
+            ...envelope.acknowledgment,
+            deliveryState: 'delivered',
+          };
+          dispatchPersistenceAdapter.upsertAcknowledgment(
+            localDispatchPersistenceId,
+            recoveryCadPersistenceDefaults,
+            acknowledgment,
+          );
+          const targetEvent = dispatchEventStore.getSnapshot().find((event) => event.id === acknowledgment.pingId);
+          if (targetEvent) {
+            const currentState = getPersistedEventUiState(targetEvent.status);
+            const acknowledgmentNote = acknowledgment.message ?? 'Acknowledged by an expedition member.';
+            const nextEvent: DispatchEvent = {
+              ...targetEvent,
+              status: currentState === 'resolved' || currentState === 'dismissed'
+                ? targetEvent.status
+                : 'acknowledged',
+              updatedAt: acknowledgment.updatedAt ?? acknowledgment.acknowledgedAt,
+              recoveryNotes: [
+                ...(targetEvent.recoveryNotes ?? []),
+                ...((targetEvent.recoveryNotes ?? []).includes(acknowledgmentNote) ? [] : [acknowledgmentNote]),
+              ],
+            };
+            dispatchEventStore.upsertEvent(nextEvent);
+            persistDispatchCadEventLocally(nextEvent);
+          }
+          setUiMetaById((current) => {
+            const existing = current[acknowledgment.pingId] ?? { state: 'active', notes: [] };
+            const acknowledgmentNote = acknowledgment.message ?? 'Acknowledged by an expedition member.';
+            return {
+              ...current,
+              [acknowledgment.pingId]: {
+                state: existing.state === 'resolved' || existing.state === 'dismissed'
+                  ? existing.state
+                  : 'acknowledged',
+                notes: [
+                  ...existing.notes,
+                  ...(existing.notes.includes(acknowledgmentNote) ? [] : [acknowledgmentNote]),
+                ],
+              },
+            };
+          });
+          return;
+        }
+
+        if (envelope.type === 'timeline_event_added') {
+          if (!envelope.timelineEvent.memberIds.some((memberId) => authorizedMemberIds.has(memberId))) {
+            console.warn('[DISPATCH] timeline_event_blocked reason=unauthorized_member');
+            return;
+          }
+          dispatchPersistenceAdapter.appendTimelineEvent(
+            localDispatchPersistenceId,
+            recoveryCadPersistenceDefaults,
+            { ...envelope.timelineEvent, deliveryState: 'delivered' },
+          );
+          if (envelope.timelineEvent.type === 'queue_resolved' && envelope.timelineEvent.pingId) {
+            const targetEvent = dispatchEventStore.getSnapshot().find(
+              (event) => event.id === envelope.timelineEvent.pingId,
+            );
+            if (targetEvent) {
+              const nextEvent: DispatchEvent = {
+                ...targetEvent,
+                status: 'resolved',
+                updatedAt: envelope.timelineEvent.occurredAt,
+                recoveryNotes: [
+                  ...(targetEvent.recoveryNotes ?? []),
+                  envelope.timelineEvent.detail,
+                ],
+              };
+              dispatchEventStore.upsertEvent(nextEvent);
+              persistDispatchCadEventLocally(nextEvent);
+            }
+            setUiMetaById((current) => {
+              const existing = current[envelope.timelineEvent.pingId!] ?? { state: 'active', notes: [] };
+              return {
+                ...current,
+                [envelope.timelineEvent.pingId!]: {
+                  state: 'resolved',
+                  notes: existing.notes.includes(envelope.timelineEvent.detail)
+                    ? existing.notes
+                    : [...existing.notes, envelope.timelineEvent.detail],
+                },
+              };
+            });
+          }
+          return;
+        }
+
         if (envelope.type !== 'cad_event_upsert') {
           return;
         }
@@ -2580,10 +2897,16 @@ export default function DispatchCadCommandCenter() {
     });
 
     realtimeSessionRef.current = session;
+    const releasePerformanceSubscription = registerECSPerformanceSubscription(
+      'dispatch_ready',
+      'realtime_session',
+      recoveryCadRealtimeExpeditionId,
+    );
     return () => {
       if (realtimeSessionRef.current === session) {
         realtimeSessionRef.current = null;
       }
+      releasePerformanceSubscription();
       session.close();
     };
   }, [
@@ -2591,6 +2914,8 @@ export default function DispatchCadCommandCenter() {
     currentExpedition,
     activeConvoyControl,
     persistDispatchCadEventLocally,
+    localDispatchPersistenceId,
+    recoveryCadPersistenceDefaults,
     realtimeClientId,
     recoveryCadRealtimeExpeditionId,
     recoveryCadSharingEnabled,
@@ -2692,6 +3017,11 @@ export default function DispatchCadCommandCenter() {
     ? getEventUiMeta(uiMetaById, selectedEvent, false)
     : null;
   const connectionState = getConnectionState({ isOnline, offlineMode, queuedCount });
+  const previousQueuedCountRef = useRef(queuedCount);
+  const queuedCountIncreased = queuedCount > previousQueuedCountRef.current;
+  useEffect(() => {
+    previousQueuedCountRef.current = queuedCount;
+  }, [queuedCount]);
   const teamSyncState = getTeamSyncState({
     isOnline,
     offlineMode,
@@ -2739,6 +3069,33 @@ export default function DispatchCadCommandCenter() {
     [advisory?.message],
   );
   const advisoryIsEmergencyPing = advisory ? isRecoveryCriticalEvent(advisory) : false;
+  const connectionAnnouncement = {
+    id: `dispatch-connectivity:${isOnline && !offlineMode ? 'online' : 'offline'}`,
+    kind: 'connection_changed' as const,
+    subject: 'Dispatch',
+    detail: isOnline && !offlineMode
+      ? 'Network available. Live delivery can resume.'
+      : 'Offline. New actions remain queued for later delivery.',
+  };
+  const queueAnnouncement = queuedCountIncreased && !advisoryIsEmergencyPing
+    ? {
+        id: `dispatch-queue:${queuedCount}`,
+        kind: 'offline_action_queued' as const,
+        subject: 'Dispatch action',
+        count: queuedCount,
+        detail: 'Delivery state is separate from operational state.',
+      }
+    : null;
+  const criticalAdvisoryAnnouncement = advisory && (
+    advisoryIsEmergencyPing || advisory.severity === 'critical'
+  )
+    ? {
+        id: `dispatch-critical:${advisory.id}`,
+        kind: 'critical_advisory' as const,
+        subject: advisory.title,
+        detail: advisory.message,
+      }
+    : null;
   useEffect(() => {
     if (!isDispatchFocused || !advisory || !advisoryIsEmergencyPing) {
       return undefined;
@@ -2794,16 +3151,46 @@ export default function DispatchCadCommandCenter() {
     if (result.status === 'staged') {
       setSelectedEventId(null);
       setDrilldownEventId(null);
-      router.push('/navigate' as any);
+      pushSingleFlight('/navigate');
     }
   }, [
     commandIdentity.userId,
     dispatchPermissionSnapshot,
     dispatchRollout.mapContextIntegration,
     localDispatchPersistenceId,
-    router,
+    pushSingleFlight,
     showToast,
   ]);
+
+  useEffect(() => {
+    const realtimeReady =
+      !recoveryCadSharingEnabled ||
+      !recoveryCadRealtimeExpeditionId ||
+      offlineMode ||
+      !isOnline ||
+      (!teamSnapshot.activeTeam && !activeConvoyControl) ||
+      realtimeStatus === 'connected';
+    if (!dispatchLocalHydrated || !realtimeReady) return;
+    dispatchPerformance.end('completed', {
+      realtimeState: realtimeStatus,
+      offline: offlineMode || !isOnline,
+      sharingEnabled: recoveryCadSharingEnabled,
+      eventCount: events.length,
+    });
+  }, [
+    dispatchLocalHydrated,
+    dispatchPerformance,
+    events.length,
+    activeConvoyControl,
+    isOnline,
+    offlineMode,
+    realtimeStatus,
+    recoveryCadRealtimeExpeditionId,
+    recoveryCadSharingEnabled,
+    teamSnapshot.activeTeam,
+  ]);
+
+  useEffect(() => () => dispatchPerformance.cancel({ unmounted: true }), [dispatchPerformance]);
 
   const handleDispatchAdvisoryCoordinatePress = useCallback(async (coordinate: DispatchAdvisoryCoordinate) => {
     if (!isValidCoordinate(coordinate)) {
@@ -2979,7 +3366,10 @@ export default function DispatchCadCommandCenter() {
     setConvoyLifecycleRevision((current) => current + 1);
 
     const session = realtimeSessionRef.current;
-    if (!session || realtimeStatus !== 'connected' || !recoveryCadSharingEnabled || !localDispatchPersistenceId) {
+    const canPublishRealtime = Boolean(
+      session && realtimeStatus === 'connected' && recoveryCadSharingEnabled,
+    );
+    if ((!canPublishRealtime && !canonicalDispatchContext) || !localDispatchPersistenceId) {
       const retryableRecoveryEvents = events.filter((event) => (
         isRecoveryCriticalEvent(event) &&
         (event.syncState === 'queued' || event.syncState === 'failed' || event.syncState === 'sending')
@@ -2997,9 +3387,14 @@ export default function DispatchCadCommandCenter() {
       const result = await replayQueuedDispatchActions({
         expeditionId: localDispatchPersistenceId,
         defaults: recoveryCadPersistenceDefaults,
-        publish: (event) => session.publish(event),
+        publish: (event) => canPublishRealtime && session
+          ? session.publish(event)
+          : Promise.resolve(true),
         persistCadEvent: recoveryCadBackendContext
           ? (event) => upsertDispatchCadEventToBackend(event, recoveryCadBackendContext).then((response) => response.ok)
+          : undefined,
+        persistCanonicalEntity: canonicalDispatchContext
+          ? persistCanonicalReplayEntity
           : undefined,
       });
 
@@ -3018,10 +3413,12 @@ export default function DispatchCadCommandCenter() {
   }, [
     events,
     activeConvoyControl?.convoyId,
+    canonicalDispatchContext,
     isOnline,
     loadConvoyLifecycleControl,
     localDispatchPersistenceId,
     offlineMode,
+    persistCanonicalReplayEntity,
     publishRecoveryCadEvent,
     realtimeStatus,
     recoveryCadBackendContext,
@@ -3087,7 +3484,7 @@ export default function DispatchCadCommandCenter() {
     });
     showToast?.(result.message);
     if (result.status === 'staged') {
-      router.push('/navigate' as any);
+      pushSingleFlight('/navigate');
     }
   }, [
     commandIdentity.userId,
@@ -3095,7 +3492,7 @@ export default function DispatchCadCommandCenter() {
     dispatchPermissionSnapshot,
     dispatchRollout.mapContextIntegration,
     localDispatchPersistenceId,
-    router,
+    pushSingleFlight,
     showToast,
     teamPositionSharingEnabled,
   ]);
@@ -3340,7 +3737,21 @@ export default function DispatchCadCommandCenter() {
       return;
     }
 
-    const actionKey = `${event.id}:${actionId}:${commandIdentity.userId ?? commandIdentity.callsign ?? commandIdentity.email ?? commandIdentity.displayName}`;
+    const permission = dispatchPermissionSnapshot.can(getEventActionPermission(actionId));
+    if (!permission.allowed) {
+      showToast?.(permission.reason ?? dispatchPermissionSnapshot.disabledReason);
+      return;
+    }
+
+    const actorMemberId = commandIdentity.userId ?? commandIdentity.callsign ?? commandIdentity.email ?? 'local-operator';
+    const now = new Date().toISOString();
+    const actionKey = createDispatchIdempotencyKey({
+      expeditionId: localDispatchPersistenceId,
+      entityType: 'timeline_event',
+      actionType: `cad:${actionId}`,
+      actorMemberId,
+      sourceEntityId: event.id,
+    });
     if (submittedEventActionKeysRef.current.has(actionKey)) {
       showToast?.('Already submitted.');
       setSelectedEventId(null);
@@ -3348,21 +3759,123 @@ export default function DispatchCadCommandCenter() {
     }
     submittedEventActionKeysRef.current.add(actionKey);
 
-    setUiMetaById((currentMeta) => {
-      const meta = getEventUiMeta(currentMeta, event, false);
-      return {
-        ...currentMeta,
-        [event.id]: applyEventAction(meta, actionId),
+    const currentMeta = getEventUiMeta(uiMetaById, event, false);
+    const nextMeta = applyEventAction(currentMeta, actionId);
+    setUiMetaById((current) => ({ ...current, [event.id]: nextMeta }));
+
+    const nextEvent: DispatchEvent = {
+      ...event,
+      status: nextMeta.state,
+      updatedAt: now,
+      recoveryNotes: nextMeta.notes,
+    };
+    dispatchEventStore.upsertEvent(nextEvent);
+    persistDispatchCadEventLocally(nextEvent);
+
+    const isSharedOperationalAction = actionId === 'acknowledge' || actionId === 'mark_resolved';
+    const deliveryState = recoveryCadSharingEnabled && isSharedOperationalAction ? 'queued' : 'local';
+    const actionDetail = nextMeta.notes[nextMeta.notes.length - 1] ?? `${ACTION_LABELS[actionId]} recorded.`;
+    const timelineEvent: DispatchTimelineEvent = {
+      id: createDispatchEntityId('timeline_event', actionKey),
+      idempotencyKey: actionKey,
+      version: 1,
+      type: getEventActionTimelineType(actionId),
+      title: ACTION_LABELS[actionId],
+      detail: actionDetail,
+      occurredAt: now,
+      priority: getEventActionPriority(event),
+      memberIds: [actorMemberId],
+      actor: commandIdentity.displayName,
+      target: event.title,
+      linkedContext: dispatchLinkedContextFromLiveEvent(event) ?? undefined,
+      pingId: event.id,
+      deliveryState,
+      escalationState: 'none',
+    };
+    dispatchPersistenceAdapter.appendTimelineEvent(
+      localDispatchPersistenceId,
+      recoveryCadPersistenceDefaults,
+      timelineEvent,
+    );
+
+    if (actionId === 'acknowledge') {
+      const acknowledgmentKey = createDispatchIdempotencyKey({
+        expeditionId: localDispatchPersistenceId,
+        entityType: 'acknowledgment',
+        actionType: 'acknowledge',
+        actorMemberId,
+        sourceEntityId: event.id,
+      });
+      const acknowledgment: DispatchAcknowledgment = {
+        id: createDispatchEntityId('acknowledgment', acknowledgmentKey),
+        idempotencyKey: acknowledgmentKey,
+        version: 1,
+        pingId: event.id,
+        memberId: actorMemberId,
+        status: 'acknowledged',
+        acknowledgedAt: now,
+        updatedAt: now,
+        message: actionDetail,
+        deliveryState,
       };
-    });
+      dispatchPersistenceAdapter.upsertAcknowledgment(
+        localDispatchPersistenceId,
+        recoveryCadPersistenceDefaults,
+        acknowledgment,
+      );
+    }
+
+    const session = realtimeSessionRef.current;
+    if (
+      deliveryState === 'queued' &&
+      isOnline &&
+      !offlineMode &&
+      (
+        Boolean(canonicalDispatchContext) ||
+        Boolean(session && realtimeStatus === 'connected')
+      )
+    ) {
+      void replayQueuedDispatchActions({
+        expeditionId: localDispatchPersistenceId,
+        defaults: recoveryCadPersistenceDefaults,
+        publish: (draft) => session && realtimeStatus === 'connected'
+          ? session.publish(draft)
+          : Promise.resolve(true),
+        persistCanonicalEntity: canonicalDispatchContext
+          ? persistCanonicalReplayEntity
+          : undefined,
+      }).catch(() => {});
+    }
 
     if (actionId === 'dismiss' && advisory?.id === event.id) {
       setDismissedAdvisoryId(event.id);
     }
 
     setSelectedEventId(null);
-    showToast?.(`${ACTION_LABELS[actionId]} recorded.`);
-  }, [advisory?.id, commandIdentity.callsign, commandIdentity.displayName, commandIdentity.email, commandIdentity.userId, showToast]);
+    showToast?.(
+      deliveryState === 'queued'
+        ? `${ACTION_LABELS[actionId]} recorded. Team sync queued.`
+        : `${ACTION_LABELS[actionId]} recorded locally.`,
+    );
+  }, [
+    advisory?.id,
+    commandIdentity.callsign,
+    commandIdentity.displayName,
+    commandIdentity.email,
+    commandIdentity.userId,
+    canonicalDispatchContext,
+    dispatchPermissionSnapshot,
+    isOnline,
+    localDispatchPersistenceId,
+    offlineMode,
+    persistCanonicalReplayEntity,
+    persistDispatchCadEventLocally,
+    realtimeStatus,
+    recoveryCadPersistenceDefaults,
+    recoveryCadSharingEnabled,
+    showToast,
+    uiMetaById,
+  ]);
 
   const handleClearCadFeed = useCallback(() => {
     const clearableEvents = visibleEvents.filter(isClearableRoutineCadEvent);
@@ -3502,15 +4015,13 @@ export default function DispatchCadCommandCenter() {
         'Cleared locally after active GPS ping navigation started.',
       );
       showToast?.('Active ping route starting.');
-      setTimeout(() => {
-        router.push('/navigate' as any);
-      }, 0);
+      pushSingleFlight('/navigate');
     } catch (error) {
       showToast?.(error instanceof Error ? error.message : 'Recovery assist route unavailable.');
     } finally {
       setNavigatingAssistEventId(null);
     }
-  }, [clearEmergencyPingEvents, navigatingAssistEventId, router, showToast]);
+  }, [clearEmergencyPingEvents, navigatingAssistEventId, pushSingleFlight, showToast]);
 
   const handleRecoveryAssist = useCallback(async () => {
     if (recoveryAssistSubmitting || recoveryAssistSubmittingRef.current) {
@@ -3895,8 +4406,17 @@ export default function DispatchCadCommandCenter() {
             Profile
           </Text>
         </TouchableOpacity>
-        <View style={[styles.connectionPill, isLandscapeDispatch ? styles.connectionPillLandscape : null, { borderColor: `${connectionState.tone}66` }]}>
-          <View style={[styles.connectionDot, isLandscapeDispatch ? styles.connectionDotLandscape : null, { backgroundColor: connectionState.tone }]} />
+        <View
+          style={[styles.connectionPill, isLandscapeDispatch ? styles.connectionPillLandscape : null, { borderColor: `${connectionState.tone}66` }]}
+          accessible
+          accessibilityRole="text"
+          accessibilityLabel={`Dispatch connection: ${connectionState.label}`}
+        >
+          <View
+            style={[styles.connectionDot, isLandscapeDispatch ? styles.connectionDotLandscape : null, { backgroundColor: connectionState.tone }]}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+          />
           <Text
             style={[styles.connectionText, isLandscapeDispatch ? styles.connectionTextLandscape : null]}
             numberOfLines={1}
@@ -3987,6 +4507,9 @@ export default function DispatchCadCommandCenter() {
 
   return (
     <View style={[styles.root, isLandscapeDispatch ? styles.rootLandscape : null]}>
+      <ECSOperationalAnnouncer event={connectionAnnouncement} />
+      <ECSOperationalAnnouncer event={queueAnnouncement} announceInitial />
+      <ECSOperationalAnnouncer event={criticalAdvisoryAnnouncement} announceInitial />
       {isLandscapeDispatch ? (
         <>
           <View style={styles.landscapeTopRow}>
@@ -4010,6 +4533,7 @@ export default function DispatchCadCommandCenter() {
                 convoyLifecycleRevision={convoyLifecycleRevision}
                 regroupPlannerEnabled={convoyRegroupPlannerEnabled}
                 positionSharingRolloutEnabled={teamPositionSharingEnabled}
+                memberLocationPermissionAllowed={memberLocationPermission.allowed}
                 regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
                 regroupPlannerPermissionReason={regroupPlannerPermissionReason}
                 canPreviewRegroupOnMap={dispatchRollout.mapContextIntegration && canPlanConvoyRegroup}
@@ -4053,6 +4577,7 @@ export default function DispatchCadCommandCenter() {
           convoyLifecycleRevision={convoyLifecycleRevision}
           regroupPlannerEnabled={convoyRegroupPlannerEnabled && !isLandscapeDispatch}
           positionSharingRolloutEnabled={teamPositionSharingEnabled}
+          memberLocationPermissionAllowed={memberLocationPermission.allowed}
           regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
           regroupPlannerPermissionReason={regroupPlannerPermissionReason}
           canPreviewRegroupOnMap={dispatchRollout.mapContextIntegration && canPlanConvoyRegroup}
@@ -5731,6 +6256,7 @@ function ExpeditionChannelInvitePanel({
       latitude: typeof latitude === 'number' ? latitude : null,
       longitude: typeof longitude === 'number' ? longitude : null,
       userId: identity.userId ?? null,
+      transitionCause: 'dispatch',
     });
 
     createLocalTeamForExpedition(expeditionName);

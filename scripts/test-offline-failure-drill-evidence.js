@@ -129,6 +129,12 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ecs-offline-drill-eviden
 const validationOptions = {
   rootDir: tempRoot,
   artifactExists: fs.existsSync,
+  artifactRead: (artifactPath) => fs.existsSync(artifactPath)
+    ? fs.readFileSync(artifactPath, 'utf8')
+    : null,
+  artifactSize: (artifactPath) => fs.existsSync(artifactPath)
+    ? fs.statSync(artifactPath).size
+    : null,
 };
 
 const synthetic = validateOfflineFailureDrillAndroidEvidenceManifest(validManifest(tempRoot), {
@@ -153,8 +159,8 @@ assert.equal(
 );
 assert.equal(realWithPlaceholderRuntimeArtifacts.productionEligible, false);
 assert.ok(
-  realWithPlaceholderRuntimeArtifacts.failedRules.includes('offlineAssertionsPath.runtime_assertion_json_required'),
-  'Real evidence should fail when offline assertions do not contain app-exported no-network data.',
+  realWithPlaceholderRuntimeArtifacts.failedRules.includes('offlineAssertionsPath.source_app_runtime_export_required'),
+  'Real evidence should fail when offline assertions are not labeled as app-exported runtime data.',
 );
 
 const noOwner = validateOfflineFailureDrillAndroidEvidenceManifest(validManifest(tempRoot, {

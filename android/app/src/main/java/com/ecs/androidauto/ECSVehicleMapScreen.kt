@@ -64,11 +64,12 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
 
     companion object {
         private const val TAG = "ECSVehicleMapScreen"
-        private const val REFRESH_INTERVAL_MS = 3000L
+        private const val REFRESH_INTERVAL_MS = 5000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private var isActive = true
+    private var lastPayloadSignature: String? = null
 
     // Cached display data
     private var displayMode: String = "highway_drive"
@@ -101,6 +102,9 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
     private var isManualOverride: Boolean = false
     private var transitionNoticeMessage: String? = null
     private var transitionNoticeTimestamp: Long = 0
+    private var dataFreshness: String = "unavailable"
+    private var dataAvailability: String = "unavailable"
+    private var dataSourceLabel: String = "Unavailable"
 
     /**
      * Periodic refresh runnable.
@@ -108,11 +112,14 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
     private val refreshRunnable = object : Runnable {
         override fun run() {
             if (!isActive) return
-            readDisplayData()
-            readBreadcrumbData()
-            readModeState()
-            writeActiveScreen("map")
-            invalidate()
+            val nextSignature = payloadSignature()
+            if (nextSignature != lastPayloadSignature) {
+                lastPayloadSignature = nextSignature
+                readDisplayData()
+                readBreadcrumbData()
+                readModeState()
+                invalidate()
+            }
             handler.postDelayed(this, REFRESH_INTERVAL_MS)
         }
     }
@@ -124,6 +131,8 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
                     Lifecycle.Event.ON_START -> {
                         if (!isActive) {
                             isActive = true
+                            lastPayloadSignature = null
+                            writeActiveScreen("map")
                             handler.removeCallbacks(refreshRunnable)
                             handler.post(refreshRunnable)
                         }
@@ -142,8 +151,24 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
         readDisplayData()
         readBreadcrumbData()
         readModeState()
+        lastPayloadSignature = payloadSignature()
         writeActiveScreen("map")
         Log.i(TAG, "ECSVehicleMapScreen initialized — default vehicle screen")
+    }
+
+    private fun payloadSignature(): String {
+        val prefs = carContext.getSharedPreferences(
+            ECSAndroidAutoConstants.PREFS_NAME,
+            android.content.Context.MODE_PRIVATE
+        )
+        return ECSAndroidAutoConstants.payloadSignature(
+            prefs,
+            ECSAndroidAutoConstants.KEY_MAP_DATA,
+            ECSAndroidAutoConstants.KEY_BREADCRUMB_DATA,
+            ECSAndroidAutoConstants.KEY_MODE_STATE,
+            ECSAndroidAutoConstants.KEY_SYSTEM_HEALTH,
+            ECSAndroidAutoConstants.KEY_DISPLAY_MODE
+        )
     }
 
     /**
@@ -165,7 +190,7 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
                 nextManeuver = json.optString("nextManeuver", null)
                 distanceRemainingMiles = if (json.has("distanceRemainingMiles")) json.optDouble("distanceRemainingMiles") else null
                 etaMinutes = if (json.has("etaMinutes")) json.optInt("etaMinutes") else null
-                hasRoute = json.optBoolean("routeLine", false)
+                val routeLineAvailable = json.optBoolean("routeLine", false)
                 breadcrumbTrail = json.optBoolean("breadcrumbTrail", false)
                 importedGpxRoute = json.optBoolean("importedGpxRoute", false)
                 offRouteAlert = json.optBoolean("offRouteAlert", false)
@@ -174,6 +199,11 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
                 offlineMapIndicator = json.optBoolean("offlineMapIndicator", false)
                 currentLat = if (json.has("currentLat") && !json.isNull("currentLat")) json.optDouble("currentLat") else null
                 currentLon = if (json.has("currentLon") && !json.isNull("currentLon")) json.optDouble("currentLon") else null
+                val safeState = json.optJSONObject("automotiveSafeState")
+                dataFreshness = safeState?.optString("freshness", "unavailable") ?: "unavailable"
+                dataAvailability = safeState?.optString("availability", "unavailable") ?: "unavailable"
+                dataSourceLabel = safeState?.optString("sourceLabel", "Unavailable") ?: "Unavailable"
+                hasRoute = routeLineAvailable && dataAvailability != "unavailable"
             } else {
                 displayMode = prefs.getString(ECSAndroidAutoConstants.KEY_DISPLAY_MODE, "highway_drive") ?: "highway_drive"
             }
@@ -300,7 +330,8 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
         val actionStripBuilder = ActionStrip.Builder()
 
         // Mode indicator as first action (subtle, always visible)
-        val modeLabel = if (isManualOverride) "HWY (Manual)" else "HWY"
+        val freshnessTag = if (dataFreshness == "live" || dataFreshness == "recent") "" else " ${dataFreshness.uppercase()}"
+        val modeLabel = (if (isManualOverride) "HWY (Manual)" else "HWY") + freshnessTag
         actionStripBuilder.addAction(
             Action.Builder()
                 .setTitle(modeLabel)
@@ -357,7 +388,7 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
             val roadInfo = if (hasActiveTransitionNotice()) {
                 transitionNoticeMessage ?: "Route Active"
             } else {
-                "Route Active"
+                "$dataSourceLabel ${dataFreshness.uppercase()}"
             }
             stepBuilder.setRoad(roadInfo)
 
@@ -410,7 +441,8 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
         val actionStripBuilder = ActionStrip.Builder()
 
         // Mode indicator
-        val modeLabel = if (isManualOverride) "EXP (Manual)" else "EXP"
+        val freshnessTag = if (dataFreshness == "live" || dataFreshness == "recent") "" else " ${dataFreshness.uppercase()}"
+        val modeLabel = (if (isManualOverride) "EXP (Manual)" else "EXP") + freshnessTag
         actionStripBuilder.addAction(
             Action.Builder()
                 .setTitle(modeLabel)
@@ -523,6 +555,7 @@ class ECSVehicleMapScreen(carContext: CarContext) : Screen(carContext) {
             parts.add(String.format("%.1f mi", breadcrumbTrailDistanceMi))
         }
 
+        parts.add("$dataSourceLabel ${dataFreshness.uppercase()}")
         return parts.joinToString(" \u2022 ")
     }
 

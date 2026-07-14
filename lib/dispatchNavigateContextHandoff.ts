@@ -18,6 +18,7 @@ import {
 } from './navigationHandoffStore';
 import { pinStore } from './pinStore';
 import { routeStore, type ImportedRoute } from './routeStore';
+import { normalizeECSReturnRoute } from './routeManifest';
 import {
   SOURCE_TRUTH_FRESHNESS_POLICIES,
   evaluateSourceTruthRef,
@@ -431,12 +432,9 @@ export function dispatchLinkedContextFromLiveEvent(
 }
 
 export function normalizeDispatchReturnRoute(value: unknown): string {
-  const route = String(value ?? '').trim();
-  if (route === '/alert' || route.startsWith('/alert?')) return route.slice(0, 500);
-  if (route === '/expedition-dispatch' || route.startsWith('/expedition-dispatch?')) {
-    return route.slice(0, 500);
-  }
-  return DEFAULT_RETURN_ROUTE;
+  const route = normalizeECSReturnRoute(value, DEFAULT_RETURN_ROUTE);
+  const path = route.split('?', 1)[0];
+  return path === '/alert' || path === '/expedition-dispatch' ? route : DEFAULT_RETURN_ROUTE;
 }
 
 function createDispatchNavigateContextTarget(

@@ -37,6 +37,8 @@ import {
   type ECSVehicleClassification,
 } from './vehicleClassification';
 import type { Vehicle } from '../types';
+import { incrementECSPerformanceCounter } from '../performance/ecsPerformanceDiagnostics';
+import { selectFleetVehicleStateFromRecord } from './fleetVehicleStateSelectors';
 
 type ContainerZone = {
   id: string;
@@ -123,6 +125,68 @@ export type FleetFabricSource = {
   generatedAt?: string;
   tacticalUiState?: FleetFabricServicePayload['tacticalUiState'];
 };
+
+export type FleetFabricGenerationDiagnostics = {
+  generations: number;
+  cacheHits: number;
+  evictions: number;
+  cacheSize: number;
+  maxCacheSize: number;
+};
+
+const MAX_FLEET_FABRIC_CACHE_SIZE = 24;
+const fleetFabricCache = new Map<string, { fingerprint: string; payload: FleetFabricServicePayload }>();
+let fleetFabricGenerations = 0;
+let fleetFabricCacheHits = 0;
+let fleetFabricEvictions = 0;
+
+function stableSerializeFabricSource(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'invalid-number';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerializeFabricSource).join(',')}]`;
+  if (typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerializeFabricSource((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(String(value));
+}
+
+function createFleetFabricSourceFingerprint(source: FleetFabricSource): string {
+  const serialized = stableSerializeFabricSource(source);
+  let hash = 2166136261;
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash ^= serialized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function getFleetFabricGenerationDiagnostics(): FleetFabricGenerationDiagnostics {
+  return {
+    generations: fleetFabricGenerations,
+    cacheHits: fleetFabricCacheHits,
+    evictions: fleetFabricEvictions,
+    cacheSize: fleetFabricCache.size,
+    maxCacheSize: MAX_FLEET_FABRIC_CACHE_SIZE,
+  };
+}
+
+export function resetFleetFabricGenerationDiagnosticsForTests(): void {
+  fleetFabricGenerations = 0;
+  fleetFabricCacheHits = 0;
+  fleetFabricEvictions = 0;
+  fleetFabricCache.clear();
+}
+
+export function invalidateFleetFabricCache(vehicleId?: string | null): void {
+  if (vehicleId) fleetFabricCache.delete(vehicleId);
+  else fleetFabricCache.clear();
+}
 
 const FORBIDDEN_FLEET_MEDIA_KEYS = [
   'photo',
@@ -401,26 +465,37 @@ export function generatePremiumFleetFabricPayload(input: {
 
 export function generateFleetFabricPayloadFromSource(source: FleetFabricSource): FleetFabricServicePayload {
   const vehicleAny = source.vehicle as Vehicle & { wizard_config?: Record<string, unknown> | null };
+  const fingerprint = createFleetFabricSourceFingerprint(source);
+  const cached = fleetFabricCache.get(vehicleAny.id);
+  if (cached?.fingerprint === fingerprint) {
+    fleetFabricCacheHits += 1;
+    incrementECSPerformanceCounter('active_vehicle_propagation', 'fleet_fabric_cache_hits');
+    return cached.payload;
+  }
+  fleetFabricGenerations += 1;
+  incrementECSPerformanceCounter('active_vehicle_propagation', 'fleet_fabric_generations');
   const wizardConfig = wizardConfigOf(vehicleAny);
   const useCases = source.useCases ?? [String(wizardConfig.primary_use_case ?? wizardConfig.use_case ?? 'daily')];
-  const fleetVehicle = adaptLegacyVehicleToFleetVehicle({
+  const containerZones = source.containerZones ?? (((vehicleAny as any).containerZones ?? []) as ContainerZone[]);
+  const canonicalState = selectFleetVehicleStateFromRecord({
     vehicle: vehicleAny,
-    specs: source.specs as any,
+    spec: source.specs as any,
     consumables: source.consumables as any,
     tiresLift: source.tiresLift as any,
-    useCases: useCases as any,
+    useCaseChips: useCases,
+    frameworkContainerZones: containerZones as any,
+    activeLoadout: source.activeLoadout as any,
+    legacyLoadoutItems: source.loadoutItems as any,
   });
-  const buildLoadoutState: FleetBuildLoadoutState = readFleetBuildLoadoutState(vehicleAny);
-  const containerZones = source.containerZones ?? (((vehicleAny as any).containerZones ?? []) as ContainerZone[]);
-  const accessories = [
-    ...buildFrameworkAccessoryInstalls(vehicleAny, containerZones),
-    ...toFleetAccessoryInstalls(buildLoadoutState, vehicleAny.id),
-  ];
-  const legacyLoadoutItems = (source.loadoutItems ?? []).map((item) =>
-    adaptLegacyLoadoutItemToFleetLoadoutItem(item as any, vehicleAny.id),
-  );
-  const buildLoadoutItems = toFleetCompartmentLoadoutItems(buildLoadoutState, vehicleAny.id);
-  const allLoadoutItems = [...legacyLoadoutItems, ...buildLoadoutItems];
+  const {
+    activeLoadout,
+    accessories,
+    buildLoadoutState,
+    fleetVehicle,
+    loadoutItems: allLoadoutItems,
+    operatingWeight,
+    scoringResult,
+  } = canonicalState;
   const checklistState = normalizeFleetChecklistState(wizardConfig.fleet_checklist);
   const checklistRecommendations = buildFleetChecklistRecommendations({
     vehicle: fleetVehicle,
@@ -430,16 +505,16 @@ export function generateFleetFabricPayloadFromSource(source: FleetFabricSource):
     state: checklistState,
   });
   const weightVerifications = normalizeFleetWeightVerifications(wizardConfig.fleet_weight_verifications, vehicleAny.id);
-  const weight = calculateFleetWeightResult(fleetVehicle, accessories, allLoadoutItems);
-  const scoring = scoreFleetVehicle(fleetVehicle, weight, []);
-  return generatePremiumFleetFabricPayload({
+  const weight = operatingWeight.weightResult;
+  const scoring = scoringResult;
+  const payload = generatePremiumFleetFabricPayload({
     vehicle: fleetVehicle,
     accessories,
     compartments: buildLoadoutState.compartments.filter((item) => item.status !== 'removed'),
     loadoutItems: allLoadoutItems,
     activeLoadout: {
-      id: source.activeLoadout?.id ?? null,
-      name: source.activeLoadout?.name ?? null,
+      id: activeLoadout?.id ?? source.activeLoadout?.id ?? null,
+      name: activeLoadout?.name ?? source.activeLoadout?.name ?? null,
       presetId: buildLoadoutState.activePreset ?? source.activeLoadout?.preset ?? null,
     },
     checklistState,
@@ -450,6 +525,16 @@ export function generateFleetFabricPayloadFromSource(source: FleetFabricSource):
     generatedAt: source.generatedAt,
     tacticalUiState: source.tacticalUiState,
   });
+  if (!fleetFabricCache.has(vehicleAny.id) && fleetFabricCache.size >= MAX_FLEET_FABRIC_CACHE_SIZE) {
+    const oldestVehicleId = fleetFabricCache.keys().next().value as string | undefined;
+    if (oldestVehicleId) {
+      fleetFabricCache.delete(oldestVehicleId);
+      fleetFabricEvictions += 1;
+    }
+  }
+  fleetFabricCache.delete(vehicleAny.id);
+  fleetFabricCache.set(vehicleAny.id, { fingerprint, payload });
+  return payload;
 }
 
 export function isFleetFabricPayload(value: unknown): value is FleetFabricServicePayload {

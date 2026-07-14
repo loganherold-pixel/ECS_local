@@ -108,11 +108,11 @@ export function resolveEstablishedCampgroundScore(
   const availability = cleanToken(campsite.availabilityStatus);
   const availabilityFresh = isRecent(campsite.lastAvailabilityCheckedAt, FRESH_AVAILABILITY_MS, now);
   if (availability === 'available') {
-    score += availabilityFresh ? 10 : 2;
-    dataBasis.push(availabilityFresh ? 'fresh availability available' : 'stale available signal');
+    score += availabilityFresh ? 10 : 0;
+    dataBasis.push(availabilityFresh ? 'fresh availability available' : 'stale available signal (not current availability)');
   } else if (availability === 'limited') {
-    score += availabilityFresh ? 5 : 1;
-    dataBasis.push(availabilityFresh ? 'fresh limited availability' : 'stale limited signal');
+    score += availabilityFresh ? 5 : 0;
+    dataBasis.push(availabilityFresh ? 'fresh limited availability' : 'stale limited signal (not current availability)');
   } else if (availability === 'unavailable') {
     score -= availabilityFresh ? 14 : 4;
     dataBasis.push(availabilityFresh ? 'fresh unavailable signal' : 'stale unavailable signal');
@@ -186,6 +186,6 @@ export function resolveEstablishedCampgroundScore(
     label,
     dataBasis,
     explanation:
-      `ECS score is ${finalScore}/100. This combines live campground status, source confidence, availability freshness, operator data, and provider attribution. Inputs considered: ${basisCopy}.`,
+      `ECS score is ${finalScore}/100. This combines reported campground status, source confidence, availability freshness, operator data, and provider attribution. Inputs considered: ${basisCopy}.`,
   };
 }

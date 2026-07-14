@@ -390,6 +390,7 @@ const setupSource = read('lib/powerSetupStore.ts');
 const routingSource = read('lib/bluetoothDeviceRouting.ts');
 const adaptersSource = read('lib/powerBrandConnectionAdapters.ts');
 const hookSource = read('lib/useUnifiedDeviceConnections.ts');
+const scannerCoordinatorSource = read('lib/unifiedScannerCoordinator.ts');
 const scannerScreenSource = read('app/power/blu.tsx');
 const bluestackAdapterSource = read('lib/bluestack/bluestackScannerAdapter.ts');
 const legacyDriverRegistrySource = read('src/power/drivers/DriverRegistry.ts');
@@ -458,7 +459,10 @@ assert.ok(
 );
 assert.ok(hookSource.includes('SCANNER_SCAN_WINDOW_DEBOUNCE_MS'), 'scanner hook should debounce scan windows');
 assert.ok(hookSource.includes('DEBUG_DEVICE_CONNECTIONS'), 'scanner source-search logging should be behind explicit debug gating');
-assert.ok(hookSource.includes("reason: 'debounced_scan_window'"), 'scanner should suppress repeated scan button presses');
+assert.ok(
+  scannerCoordinatorSource.includes("reason: 'cooldown'") && scannerCoordinatorSource.includes("reason: 'already_scanning'"),
+  'scanner should suppress overlapping and battery-heavy repeated scan button presses',
+);
 assert.ok(hookSource.includes('requireBrandAllowlistMatch: true'), 'power scanner should require brand allowlist matches by default');
 assert.ok(scannerScreenSource.includes('title="Connected devices"'), 'user-facing scanner should keep connected Bluestack sessions visible for review and disconnect');
 assert.ok(scannerScreenSource.includes('title="Available devices"'), 'user-facing scanner should keep available Bluestack findings in the main scan action area');

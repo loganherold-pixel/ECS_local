@@ -4,6 +4,20 @@ import type {
   AssessmentStatus,
   ExpeditionAssessment,
 } from '../expedition/operationalAssessmentTypes';
+import type { ECSFeatureVisibilityContext } from '../features/featureVisibilityRegistry';
+import {
+  buildECSAIDeterministicTrace,
+  createECSAIInputFingerprint,
+  ECS_AI_POLICY_VERSION,
+  inspectECSAIProviderOutput,
+  redactECSAIContext,
+  resolveECSAIExecutionPolicy,
+  stableECSAIValueHash,
+  type ECSAIDeterministicSnapshot,
+  type ECSAIDeterministicTrace,
+  type ECSAISourceSnapshot,
+} from './aiPolicyBoundary';
+import { ecsAIRequestCoordinator } from './aiRequestCoordinator';
 
 export type ExpeditionAssessmentNarrative = {
   category: AssessmentCategory;
@@ -18,12 +32,38 @@ export type ExpeditionAssessmentNarrative = {
   confidenceExplanation: string;
   dataLimitations: string[];
   source: 'template' | 'ai';
+  trace?: ECSAIDeterministicTrace;
 };
 
+export type ExpeditionAssessmentNarrativeGrounding = Pick<
+  ExpeditionAssessment,
+  | 'category'
+  | 'status'
+  | 'title'
+  | 'summary'
+  | 'why'
+  | 'whatToWatch'
+  | 'recommendedAction'
+  | 'toImproveStatus'
+  | 'confidence'
+  | 'dataUsed'
+  | 'staleDataWarnings'
+  | 'missingDataWarnings'
+  | 'escalationRecommended'
+  | 'escalationReason'
+>;
+
 export type ExpeditionAssessmentNarrativeProviderInput = {
-  assessment: ExpeditionAssessment;
+  assessment: ExpeditionAssessmentNarrativeGrounding;
   prompt: string;
   groundingJson: string;
+  deterministicSnapshot: ECSAIDeterministicSnapshot;
+  signal: AbortSignal;
+  request: {
+    featureId: 'readiness_explanation';
+    providerContextFingerprint: string;
+    attempt: number;
+  };
 };
 
 type RuntimeNarrativeOutput = Omit<Partial<ExpeditionAssessmentNarrative>, 'toImproveStatus' | 'whatToWatch'> & {
@@ -37,6 +77,13 @@ export type ExpeditionAssessmentNarrativeProvider = {
   generateNarrative(
     input: ExpeditionAssessmentNarrativeProviderInput,
   ): Promise<RuntimeNarrativeOutput | string>;
+};
+
+export type ExpeditionAssessmentNarrativeExecutionOptions = {
+  visibilityContext?: ECSFeatureVisibilityContext | null;
+  signal?: AbortSignal | null;
+  timeoutMs?: number;
+  maxRetries?: number;
 };
 
 export const ECS_ASSESSMENT_NARRATIVE_PROMPT = `You are ECS, an Expedition Command System assistant.
@@ -204,8 +251,8 @@ function safeJsonParse(value: string): RuntimeNarrativeOutput | null {
   }
 }
 
-function serializeGrounding(assessment: ExpeditionAssessment): string {
-  return JSON.stringify({
+function narrativeGrounding(assessment: ExpeditionAssessment): ExpeditionAssessmentNarrativeGrounding {
+  return {
     category: assessment.category,
     status: assessment.status,
     title: assessment.title,
@@ -220,7 +267,17 @@ function serializeGrounding(assessment: ExpeditionAssessment): string {
     missingDataWarnings: assessment.missingDataWarnings,
     escalationRecommended: assessment.escalationRecommended,
     escalationReason: assessment.escalationReason,
-  });
+  };
+}
+
+function redactedNarrativeGrounding(
+  assessment: ExpeditionAssessment,
+): ExpeditionAssessmentNarrativeGrounding {
+  return redactECSAIContext(narrativeGrounding(assessment)).value as ExpeditionAssessmentNarrativeGrounding;
+}
+
+function serializeGrounding(assessment: ExpeditionAssessment): string {
+  return JSON.stringify(redactedNarrativeGrounding(assessment));
 }
 
 export function buildExpeditionAssessmentNarrativePrompt(assessment: ExpeditionAssessment): string {
@@ -319,62 +376,196 @@ function normalizeProviderNarrative(
 function mergeProviderWithTemplate(
   assessment: ExpeditionAssessment,
   providerNarrative: Partial<ExpeditionAssessmentNarrative>,
+  trace: ECSAIDeterministicTrace,
 ): ExpeditionAssessmentNarrative {
   const template = buildTemplateExpeditionAssessmentNarrative(assessment);
   return {
     ...template,
-    statusLine: providerNarrative.statusLine || template.statusLine,
     plainLanguageSummary: providerNarrative.plainLanguageSummary || template.plainLanguageSummary,
-    whyEcsThinksThis: providerNarrative.whyEcsThinksThis?.length
-      ? providerNarrative.whyEcsThinksThis
-      : template.whyEcsThinksThis,
-    whatToWatch: providerNarrative.whatToWatch?.length
-      ? providerNarrative.whatToWatch
-      : template.whatToWatch,
-    recommendedAction: providerNarrative.recommendedAction || template.recommendedAction,
-    toImproveStatus: providerNarrative.toImproveStatus?.length
-      ? providerNarrative.toImproveStatus
-      : template.toImproveStatus,
-    confidence: assessment.confidence,
     confidenceExplanation: providerNarrative.confidenceExplanation || template.confidenceExplanation,
-    dataLimitations: providerNarrative.dataLimitations?.length
-      ? providerNarrative.dataLimitations
-      : template.dataLimitations,
     source: 'ai',
+    trace,
   };
+}
+
+function sourceSnapshotForAssessment(
+  assessment: ExpeditionAssessment,
+): ECSAISourceSnapshot[] {
+  return assessment.dataUsed.map((item) => {
+    const origin: ECSAISourceSnapshot['origin'] =
+      item.source === 'cached'
+        ? 'cached'
+        : item.source === 'userManual'
+          ? 'manual'
+          : item.source === 'mock'
+            ? 'simulated'
+            : item.source === 'unknown'
+              ? 'unavailable'
+              : 'live';
+    const missing = item.isMissing === true || item.value == null;
+    return {
+      id: item.id,
+      label: item.label,
+      origin,
+      freshness: missing ? 'unavailable' : item.isStale ? 'stale' : origin === 'live' ? 'recent' : 'recent',
+      availability: missing ? 'unavailable' : item.isStale ? 'degraded' : 'usable',
+      coverage: missing ? 'partial' : 'complete',
+      confidence: item.confidence ?? 'unknown',
+      authority: item.source === 'userManual' ? 'user' : item.source === 'unknown' ? 'unknown' : 'ecs',
+      conflict: 'none',
+      missing,
+      valueFingerprint: stableECSAIValueHash(item.value),
+      warningCodes: [missing ? 'missing_evidence' : '', item.isStale ? 'stale_evidence' : ''].filter(Boolean),
+    };
+  });
+}
+
+function buildAssessmentNarrativeSnapshot(
+  assessment: ExpeditionAssessment,
+): ECSAIDeterministicSnapshot {
+  const sources = sourceSnapshotForAssessment(assessment);
+  const hardWarnings = [
+    ...assessment.missingDataWarnings.map(item => `missing:${item}`),
+    ...assessment.staleDataWarnings.map(item => `stale:${item}`),
+  ];
+  const seed = {
+    policyVersion: ECS_AI_POLICY_VERSION,
+    featureId: 'readiness_explanation' as const,
+    category: assessment.category,
+    status: assessment.status,
+    confidence: assessment.confidence,
+    sources,
+    hardWarnings,
+    allowedActions: [assessment.recommendedAction, ...assessment.toImproveStatus],
+  };
+  return {
+    policyVersion: ECS_AI_POLICY_VERSION,
+    featureId: 'readiness_explanation',
+    snapshotId: `ecs-ai-snapshot:${stableECSAIValueHash(seed)}`,
+    generatedAt: assessment.lastUpdated,
+    deterministicAvailable: sources.some(source => !source.missing && source.availability !== 'unavailable'),
+    status: assessment.status,
+    confidence: assessment.confidence,
+    sources,
+    missingData: [...assessment.missingDataWarnings],
+    staleData: [...assessment.staleDataWarnings],
+    hardWarnings,
+    allowedActions: [assessment.recommendedAction, ...assessment.toImproveStatus],
+  };
+}
+
+function includesDifferentStatus(value: string | undefined, expected: AssessmentStatus): boolean {
+  if (!value) return false;
+  const statuses = value.toLowerCase().match(/\b(normal|watch|caution|critical|unknown)\b/g) ?? [];
+  return statuses.some(status => status !== expected);
+}
+
+function preservesWarnings(value: string[], warnings: string[]): boolean {
+  if (warnings.length === 0) return true;
+  const corpus = compact(value.join(' '));
+  return warnings.every(warning => {
+    const terms = compact(warning).split(' ').filter(term => term.length >= 4);
+    return terms.length === 0 || terms.some(term => corpus.includes(term));
+  });
 }
 
 export async function generateExpeditionAssessmentNarrative(
   assessment: ExpeditionAssessment,
   provider?: ExpeditionAssessmentNarrativeProvider | null,
+  execution: ExpeditionAssessmentNarrativeExecutionOptions = {},
 ): Promise<ExpeditionAssessmentNarrative> {
   const fallback = buildTemplateExpeditionAssessmentNarrative(assessment);
   if (!provider) return fallback;
 
   try {
-    const groundingJson = serializeGrounding(assessment);
-    const providerResult = await provider.generateNarrative({
-      assessment,
-      prompt: ECS_ASSESSMENT_NARRATIVE_PROMPT.replace('{{ASSESSMENT_JSON}}', groundingJson),
-      groundingJson,
+    const policyDecision = resolveECSAIExecutionPolicy('readiness_explanation', execution.visibilityContext);
+    const snapshot = buildAssessmentNarrativeSnapshot(assessment);
+    const providerPayload = redactECSAIContext({
+      assessment: narrativeGrounding(assessment),
+      deterministicSnapshot: snapshot,
+    }).value;
+    const redactedGrounding = providerPayload.assessment as ExpeditionAssessmentNarrativeGrounding;
+    const providerSnapshot = providerPayload.deterministicSnapshot as ECSAIDeterministicSnapshot;
+    const groundingJson = JSON.stringify(redactedGrounding);
+    const inputFingerprint = createECSAIInputFingerprint('readiness_explanation', {
+      snapshot,
+      grounding: redactedGrounding,
+      sourceAssessmentFingerprint: stableECSAIValueHash(narrativeGrounding(assessment)),
     });
-    const normalized = normalizeProviderNarrative(providerResult);
-    if (!normalized) return fallback;
-    const unsupported = unsupportedSensitiveSentences(normalized, assessment);
-    if (unsupported.length > 0) return fallback;
-    return mergeProviderWithTemplate(assessment, normalized);
+    const providerContextFingerprint = createECSAIInputFingerprint('readiness_explanation', providerPayload);
+    const trace = buildECSAIDeterministicTrace(snapshot, inputFingerprint);
+    const outcome = await ecsAIRequestCoordinator.execute<ExpeditionAssessmentNarrative>({
+      featureId: 'readiness_explanation',
+      executionDecision: policyDecision,
+      fingerprint: inputFingerprint,
+      signal: execution.signal,
+      timeoutMs: execution.timeoutMs,
+      maxRetries: execution.maxRetries,
+      invoke: async (signal, attempt) => ({
+        output: await provider.generateNarrative({
+          assessment: redactedGrounding,
+          prompt: ECS_ASSESSMENT_NARRATIVE_PROMPT.replace('{{ASSESSMENT_JSON}}', groundingJson),
+          groundingJson,
+          deterministicSnapshot: providerSnapshot,
+          signal,
+          request: {
+            featureId: 'readiness_explanation',
+            providerContextFingerprint,
+            attempt,
+          },
+        }),
+      }),
+      validate: (value) => {
+        const normalized = normalizeProviderNarrative(value as RuntimeNarrativeOutput | string);
+        if (!normalized || !normalized.plainLanguageSummary) {
+          return { accepted: false, reasons: ['invalid_output_schema'], classification: 'invalid_output' };
+        }
+        const reasons: string[] = [];
+        if (
+          includesDifferentStatus(normalized.statusLine, assessment.status) ||
+          includesDifferentStatus(normalized.plainLanguageSummary, assessment.status)
+        ) reasons.push('status_override');
+        const confidenceClaim = normalized.confidenceExplanation?.toLowerCase()
+          .match(/\bconfidence\s+(?:is|:)\s*(high|medium|low)\b/)?.[1];
+        if (confidenceClaim && confidenceClaim !== assessment.confidence) reasons.push('confidence_override');
+        if (
+          normalized.recommendedAction &&
+          compact(normalized.recommendedAction) !== compact(assessment.recommendedAction)
+        ) reasons.push('prohibited_action_selection');
+        if (!preservesWarnings(normalized.dataLimitations ?? [], [
+          ...assessment.missingDataWarnings,
+          ...assessment.staleDataWarnings,
+        ])) reasons.push('hard_warning_suppressed');
+        if (unsupportedSensitiveSentences(normalized, assessment).length > 0) reasons.push('unsupported_claim');
+        reasons.push(...inspectECSAIProviderOutput('readiness_explanation', normalized, {
+          hasLiveSource: sourcesIncludeUsableLive(snapshot.sources),
+          supportsWeatherClaims: assessment.dataUsed.some(item => /weather/i.test(`${item.id} ${item.label}`) && !item.isMissing && !item.isStale),
+          supportsLegalClaims: assessment.dataUsed.some(item => /legal|access/i.test(`${item.id} ${item.label}`) && !item.isMissing && !item.isStale),
+        }).map(item => item.code));
+        const uniqueReasons = Array.from(new Set(reasons));
+        return uniqueReasons.length > 0
+          ? { accepted: false, reasons: uniqueReasons, classification: 'policy_rejected' as const }
+          : { accepted: true, value: mergeProviderWithTemplate(assessment, normalized, trace), reasons: [] };
+      },
+    });
+    return outcome.value ?? fallback;
   } catch {
     return fallback;
   }
 }
 
+function sourcesIncludeUsableLive(sources: ECSAISourceSnapshot[]): boolean {
+  return sources.some(source => source.origin === 'live' && source.availability === 'usable' && source.freshness === 'live');
+}
+
 export async function generateExpeditionAssessmentNarratives(
   assessments: ExpeditionAssessment[],
   provider?: ExpeditionAssessmentNarrativeProvider | null,
+  execution: ExpeditionAssessmentNarrativeExecutionOptions = {},
 ): Promise<ExpeditionAssessmentNarrative[]> {
   return Promise.all(
     assessments.map((assessment) =>
-      generateExpeditionAssessmentNarrative(assessment, provider),
+      generateExpeditionAssessmentNarrative(assessment, provider, execution),
     ),
   );
 }

@@ -42,7 +42,7 @@ function campCandidate(id, score, legalConfidence = 'high') {
   return {
     id,
     name: `Camp ${id}`,
-    location: { latitude: 39.1, longitude: -105.1 },
+    location: { latitude: 38.54, longitude: -109.57 },
     source: 'route_candidate',
     sourceConfidence: 'high',
     score,

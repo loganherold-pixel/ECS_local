@@ -18,6 +18,20 @@ export type SourceTruthAvailability = 'usable' | 'degraded' | 'unavailable';
 export type SourceTruthConfidence = 'high' | 'medium' | 'low' | 'unknown';
 export type SourceTruthCoverage = 'complete' | 'partial' | 'unknown';
 
+export type SourceTruthAuthorityKind =
+  | 'official'
+  | 'verified_document'
+  | 'provider'
+  | 'device'
+  | 'user'
+  | 'community'
+  | 'ecs'
+  | 'mixed'
+  | 'unknown';
+
+export type SourceTruthConflictState = 'none' | 'present' | 'resolved' | 'unknown';
+export type SourceTruthRole = 'primary' | 'supporting' | 'last_good';
+
 export type SourceTruthPolicyKey =
   | 'default'
   | 'convoy_member_location'
@@ -34,7 +48,10 @@ export type SourceTruthPolicyKey =
 export interface SourceTruthRef {
   id: string;
   origin: SourceTruthOrigin;
+  role?: SourceTruthRole;
+  policyKey?: SourceTruthPolicyKey | null;
   authority?: string | null;
+  authorityKind?: SourceTruthAuthorityKind;
   provider?: string | null;
   observedAt?: string | null;
   fetchedAt?: string | null;
@@ -42,6 +59,8 @@ export interface SourceTruthRef {
   confidence: SourceTruthConfidence;
   coverage?: SourceTruthCoverage;
   availability?: SourceTruthAvailability;
+  conflictState?: SourceTruthConflictState;
+  /** Backward-compatible mirror for legacy consumers. */
   conflict?: boolean;
   warningCodes: string[];
 }
@@ -79,12 +98,21 @@ export interface SourceTruthEvaluation {
   availability: SourceTruthAvailability;
   confidence: SourceTruthConfidence;
   coverage: SourceTruthCoverage;
+  authorityKind: SourceTruthAuthorityKind;
+  conflictState: SourceTruthConflictState;
   conflict: boolean;
   warningCodes: string[];
   observedAtMs: number | null;
   fetchedAtMs: number | null;
   expiresAtMs: number | null;
   ageMs: number | null;
+}
+
+export interface SourceTruthFacts {
+  expiredLiveSource: boolean;
+  unavailableLiveSource: boolean;
+  usableLastGoodCache: boolean;
+  usingLastGoodCache: boolean;
 }
 
 export interface SourceTruthAssessment {
@@ -94,7 +122,11 @@ export interface SourceTruthAssessment {
   availability: SourceTruthAvailability;
   confidence: SourceTruthConfidence;
   coverage: SourceTruthCoverage;
+  authorityKind: SourceTruthAuthorityKind;
+  conflictState: SourceTruthConflictState;
   conflict: boolean;
+  effectiveSource: SourceTruthEvaluation | null;
+  facts: SourceTruthFacts;
   warningCodes: string[];
 }
 
@@ -186,9 +218,9 @@ export const SOURCE_TRUTH_FRESHNESS_POLICIES: Record<SourceTruthPolicyKey, Fresh
     key: 'vehicle_telemetry',
     label: 'Live vehicle telemetry',
     liveMs: 30_000,
-    recentMs: 5 * MINUTE,
-    staleMs: 10 * MINUTE,
-    expiredMs: 30 * MINUTE,
+    recentMs: 60_000,
+    staleMs: 120_000,
+    expiredMs: 300_000,
     missingTimestampFreshness: 'unavailable',
     invalidTimestampFreshness: 'unavailable',
     futureTimestampFreshness: 'unavailable',
@@ -358,19 +390,78 @@ export function normalizeSourceTruthAvailability(value: unknown): SourceTruthAva
   return undefined;
 }
 
+export function normalizeSourceTruthAuthorityKind(
+  value: unknown,
+  context: Pick<SourceTruthRef, 'authority' | 'provider' | 'origin'> = {
+    authority: null,
+    provider: null,
+    origin: 'unavailable',
+  },
+): SourceTruthAuthorityKind {
+  const explicit = String(value ?? '').trim().toLowerCase();
+  if (
+    explicit === 'official' ||
+    explicit === 'verified_document' ||
+    explicit === 'provider' ||
+    explicit === 'device' ||
+    explicit === 'user' ||
+    explicit === 'community' ||
+    explicit === 'ecs' ||
+    explicit === 'mixed' ||
+    explicit === 'unknown'
+  ) {
+    return explicit;
+  }
+
+  const authority = String(context.authority ?? '').trim().toLowerCase();
+  const provider = String(context.provider ?? '').trim().toLowerCase();
+  if (/official|agency|government|manufacturer|oem/.test(authority)) return 'official';
+  if (/verified|scale ticket|inspection|document/.test(authority)) return 'verified_document';
+  if (/device|sensor|obd|bluetooth|gps/.test(`${authority} ${provider}`)) return 'device';
+  if (/community|contributor/.test(authority)) return 'community';
+  if (/user|owner|manual/.test(authority) || context.origin === 'manual') return 'user';
+  if (/\becs\b/.test(authority) || context.origin === 'estimated' || context.origin === 'inferred') return 'ecs';
+  if (provider) return 'provider';
+  return 'unknown';
+}
+
+export function normalizeSourceTruthConflictState(
+  value: unknown,
+  legacyConflict?: boolean,
+): SourceTruthConflictState {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'present' || text === 'conflicted' || text === 'conflict') return 'present';
+  if (text === 'resolved') return 'resolved';
+  if (text === 'unknown') return 'unknown';
+  if (text === 'none' || text === 'clear') return 'none';
+  return legacyConflict === true ? 'present' : 'none';
+}
+
 export function sanitizeSourceTruthRef(ref: SourceTruthRef): SourceTruthRef {
+  const origin = normalizeSourceTruthOrigin(ref.origin);
+  const authority = sanitizeIdentity(ref.authority);
+  const provider = sanitizeIdentity(ref.provider);
+  const conflictState = normalizeSourceTruthConflictState(ref.conflictState, ref.conflict);
   return {
     id: sanitizeIdentity(ref.id) ?? 'source',
-    origin: normalizeSourceTruthOrigin(ref.origin),
-    authority: sanitizeIdentity(ref.authority),
-    provider: sanitizeIdentity(ref.provider),
+    origin,
+    role: normalizeSourceTruthRole(ref.role),
+    policyKey: normalizeSourceTruthPolicyKey(ref.policyKey),
+    authority,
+    authorityKind: normalizeSourceTruthAuthorityKind(ref.authorityKind, {
+      authority,
+      provider,
+      origin,
+    }),
+    provider,
     observedAt: sanitizeTimestamp(ref.observedAt),
     fetchedAt: sanitizeTimestamp(ref.fetchedAt),
     expiresAt: sanitizeTimestamp(ref.expiresAt),
     confidence: normalizeSourceTruthConfidence(ref.confidence),
     coverage: normalizeSourceTruthCoverage(ref.coverage),
     availability: normalizeSourceTruthAvailability(ref.availability),
-    conflict: ref.conflict === true,
+    conflictState,
+    conflict: conflictState === 'present',
     warningCodes: uniqueStrings((ref.warningCodes ?? []).map(sanitizeWarningCode)),
   };
 }
@@ -404,7 +495,7 @@ export function evaluateSourceTruthRef(
   options: SourceTruthPolicyOptions = {},
 ): SourceTruthEvaluation {
   const ref = sanitizeSourceTruthRef(input);
-  const policy = resolveFreshnessPolicy(options.policyKey, options.policyOverride);
+  const policy = resolveFreshnessPolicy(ref.policyKey ?? options.policyKey, options.policyOverride);
   const nowMs = normalizeNow(options.now);
   const observed = parseTimestamp(ref.observedAt);
   const fetched = parseTimestamp(ref.fetchedAt);
@@ -419,7 +510,9 @@ export function evaluateSourceTruthRef(
   if (ref.origin === 'manual') warnings.add('origin_manual');
   if (ref.origin === 'simulated') warnings.add('origin_simulated');
   if (ref.origin === 'unavailable') warnings.add('source_unavailable');
-  if (ref.conflict === true) warnings.add('conflict_detected');
+  if (ref.conflictState === 'present') warnings.add('conflict_detected');
+  if (ref.conflictState === 'resolved') warnings.add('conflict_resolved');
+  if (ref.conflictState === 'unknown') warnings.add('conflict_state_unknown');
 
   let freshness: SourceTruthFreshness;
   let ageMs: number | null = null;
@@ -456,7 +549,9 @@ export function evaluateSourceTruthRef(
     availability,
     confidence: ref.confidence,
     coverage,
-    conflict: ref.conflict === true,
+    authorityKind: ref.authorityKind ?? 'unknown',
+    conflictState: ref.conflictState ?? 'none',
+    conflict: ref.conflictState === 'present',
     warningCodes: uniqueStrings(Array.from(warnings).map(sanitizeWarningCode)),
     observedAtMs: observed.ms,
     fetchedAtMs: fetched.ms,
@@ -469,37 +564,70 @@ export function assessSourceTruth(
   refs: readonly SourceTruthRef[],
   options: SourceTruthPolicyOptions = {},
 ): SourceTruthAssessment {
-  const policy = resolveFreshnessPolicy(options.policyKey, options.policyOverride);
-  const sources = refs.map((ref) => evaluateSourceTruthRef(ref, { ...options, policyKey: policy.key }));
+  const sources = refs.map((ref) => evaluateSourceTruthRef(ref, options));
+  return aggregateSourceTruthEvaluations(sources, {
+    policyKey: options.policyKey ?? refs[0]?.policyKey,
+    policyOverride: options.policyOverride,
+  });
+}
 
-  if (sources.length === 0) {
+export function aggregateSourceTruthEvaluations(
+  sources: readonly SourceTruthEvaluation[],
+  options: Pick<SourceTruthPolicyOptions, 'policyKey' | 'policyOverride'> = {},
+): SourceTruthAssessment {
+  const stableSources = Array.from(sources);
+  const policy = resolveFreshnessPolicy(
+    options.policyKey ?? stableSources[0]?.policy.key,
+    options.policyOverride,
+  );
+  if (stableSources.length === 0) {
     return {
-      sources,
+      sources: stableSources,
       policy,
       freshness: 'unavailable',
       availability: 'unavailable',
       confidence: 'unknown',
       coverage: 'unknown',
+      authorityKind: 'unknown',
+      conflictState: 'none',
       conflict: false,
+      effectiveSource: null,
+      facts: emptySourceTruthFacts(),
       warningCodes: ['missing_source_truth'],
     };
   }
 
-  const availability = aggregateAvailability(sources);
-  const confidence = minimumByRank(sources.map((source) => source.confidence), CONFIDENCE_RANK, 'unknown');
-  const freshness = minimumByRank(sources.map((source) => source.freshness), FRESHNESS_RANK, 'unavailable');
-  const coverage = aggregateCoverage(sources.map((source) => source.coverage));
-  const conflict = sources.some((source) => source.conflict);
+  const availability = aggregateAvailability(stableSources);
+  const confidence = minimumByRank(stableSources.map((source) => source.confidence), CONFIDENCE_RANK, 'unknown');
+  const freshness = minimumByRank(stableSources.map((source) => source.freshness), FRESHNESS_RANK, 'unavailable');
+  const coverage = aggregateCoverage(stableSources.map((source) => source.coverage));
+  const authorityKind = aggregateAuthorityKind(stableSources.map((source) => source.authorityKind));
+  const conflictState = aggregateConflictState(stableSources.map((source) => source.conflictState));
+  const conflict = conflictState === 'present';
+  const facts = buildSourceTruthFacts(stableSources);
+  const effectiveSource = facts.usingLastGoodCache
+    ? stableSources.find((source) => isUsableLastGoodCache(source)) ?? null
+    : stableSources.find((source) => source.availability !== 'unavailable') ?? stableSources[0] ?? null;
+  const warningCodes = uniqueStrings([
+    ...stableSources.flatMap((source) => source.warningCodes),
+    facts.expiredLiveSource ? 'expired_live_source' : null,
+    facts.unavailableLiveSource ? 'live_source_unavailable' : null,
+    facts.usingLastGoodCache ? 'using_last_good_cache' : null,
+  ]);
 
   return {
-    sources,
+    sources: stableSources,
     policy,
     freshness,
     availability,
     confidence,
     coverage,
+    authorityKind,
+    conflictState,
     conflict,
-    warningCodes: uniqueStrings(sources.flatMap((source) => source.warningCodes)),
+    effectiveSource,
+    facts,
+    warningCodes,
   };
 }
 
@@ -554,12 +682,14 @@ function normalizeSummarySources(summary: LegacySummaryLike, id?: string | null)
   return [{
     id: id?.trim() || 'legacy_summary',
     origin: summary.available === false ? 'unavailable' : 'inferred',
+    role: 'primary',
     observedAt: summary.updated_at ?? null,
     fetchedAt: null,
     expiresAt: null,
     confidence: 'unknown',
     coverage: 'unknown',
     availability: summary.available === false ? 'unavailable' : 'usable',
+    conflictState: 'none',
     conflict: false,
     warningCodes: uniqueStrings([
       ...(summary.sourceTruthWarningCodes ?? []),
@@ -603,6 +733,51 @@ function aggregateCoverage(values: SourceTruthCoverage[]): SourceTruthCoverage {
   if (values.every((value) => value === 'complete')) return 'complete';
   if (values.every((value) => value === 'unknown')) return 'unknown';
   return 'partial';
+}
+
+function aggregateAuthorityKind(values: SourceTruthAuthorityKind[]): SourceTruthAuthorityKind {
+  const known = uniqueStrings(values.filter((value) => value !== 'unknown')) as SourceTruthAuthorityKind[];
+  if (known.length === 0) return 'unknown';
+  if (known.length === 1) return known[0] ?? 'unknown';
+  return 'mixed';
+}
+
+function aggregateConflictState(values: SourceTruthConflictState[]): SourceTruthConflictState {
+  if (values.includes('present')) return 'present';
+  if (values.includes('unknown')) return 'unknown';
+  if (values.includes('resolved')) return 'resolved';
+  return 'none';
+}
+
+function buildSourceTruthFacts(sources: SourceTruthEvaluation[]): SourceTruthFacts {
+  const expiredLiveSource = sources.some((source) => (
+    source.ref.origin === 'live' && source.freshness === 'expired'
+  ));
+  const unavailableLiveSource = sources.some((source) => (
+    source.ref.origin === 'live' && source.availability === 'unavailable'
+  ));
+  const usableLastGoodCache = sources.some(isUsableLastGoodCache);
+  return {
+    expiredLiveSource,
+    unavailableLiveSource,
+    usableLastGoodCache,
+    usingLastGoodCache: usableLastGoodCache && (expiredLiveSource || unavailableLiveSource),
+  };
+}
+
+function emptySourceTruthFacts(): SourceTruthFacts {
+  return {
+    expiredLiveSource: false,
+    unavailableLiveSource: false,
+    usableLastGoodCache: false,
+    usingLastGoodCache: false,
+  };
+}
+
+function isUsableLastGoodCache(source: SourceTruthEvaluation): boolean {
+  return source.ref.origin === 'cached' &&
+    source.ref.role === 'last_good' &&
+    source.availability !== 'unavailable';
 }
 
 function minimumByRank<T extends string>(
@@ -661,6 +836,18 @@ function sanitizeWarningCode(value: string | null | undefined): string | null {
   if (!text) return null;
   if (SECRET_PATTERN.test(text)) return 'redacted_sensitive_warning';
   return text.length > 80 ? text.slice(0, 80) : text;
+}
+
+function normalizeSourceTruthRole(value: unknown): SourceTruthRole | undefined {
+  if (value === 'primary' || value === 'supporting' || value === 'last_good') return value;
+  return undefined;
+}
+
+function normalizeSourceTruthPolicyKey(value: unknown): SourceTruthPolicyKey | null {
+  const key = String(value ?? '').trim() as SourceTruthPolicyKey;
+  return Object.prototype.hasOwnProperty.call(SOURCE_TRUTH_FRESHNESS_POLICIES, key)
+    ? key
+    : null;
 }
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {

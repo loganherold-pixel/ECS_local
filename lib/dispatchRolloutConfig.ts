@@ -1,3 +1,9 @@
+import {
+  createRuntimeFeatureVisibilityContext,
+  resolveECSFeatureVisibility,
+  type ECSFeatureVisibilityContext,
+} from './features/featureVisibilityRegistry';
+
 export type DispatchRolloutFeature =
   | 'dispatchTabVisibility'
   | 'liveTeamRoster'
@@ -7,6 +13,7 @@ export type DispatchRolloutFeature =
   | 'emergencyPing'
   | 'realtimeSync'
   | 'offlineReplay'
+  | 'canonicalBackendPersistence'
   | 'notifications'
   | 'developerDiagnostics'
   | 'smartSuggestions'
@@ -25,6 +32,8 @@ export type DispatchRolloutFeature =
 
 export type DispatchRolloutConfig = Record<DispatchRolloutFeature, boolean>;
 
+export type DispatchCanonicalBackendMode = 'disabled' | 'shadow' | 'dual_read';
+
 export const DEFAULT_DISPATCH_ROLLOUT_CONFIG: DispatchRolloutConfig = {
   dispatchTabVisibility: true,
   liveTeamRoster: true,
@@ -34,6 +43,7 @@ export const DEFAULT_DISPATCH_ROLLOUT_CONFIG: DispatchRolloutConfig = {
   emergencyPing: true,
   realtimeSync: true,
   offlineReplay: true,
+  canonicalBackendPersistence: false,
   notifications: false,
   developerDiagnostics: true,
   smartSuggestions: true,
@@ -60,6 +70,7 @@ const DISPATCH_ROLLOUT_DISABLED_COPY: Record<DispatchRolloutFeature, string> = {
   emergencyPing: 'Emergency Ping is paused for this rollout. Not an emergency services contact.',
   realtimeSync: 'Realtime Dispatch sync is paused for this rollout.',
   offlineReplay: 'Offline Dispatch replay is paused for this rollout.',
+  canonicalBackendPersistence: 'Canonical Dispatch persistence is disabled. ECS remains local-first.',
   notifications: 'Dispatch notifications are disabled until notification policy is verified.',
   developerDiagnostics: 'Dispatch developer diagnostics are disabled for this rollout.',
   smartSuggestions: 'Smart Dispatch suggestions are paused for this rollout.',
@@ -79,10 +90,46 @@ const DISPATCH_ROLLOUT_DISABLED_COPY: Record<DispatchRolloutFeature, string> = {
 
 export function resolveDispatchRolloutConfig(
   overrides: Partial<DispatchRolloutConfig> = {},
+  visibilityContext: ECSFeatureVisibilityContext = createRuntimeFeatureVisibilityContext(),
 ): DispatchRolloutConfig {
-  return {
+  const merged = {
     ...DEFAULT_DISPATCH_ROLLOUT_CONFIG,
     ...overrides,
+  };
+  const dispatchVisible = resolveECSFeatureVisibility('dispatch_tab', visibilityContext).visible;
+  const positionSharingVisible = resolveECSFeatureVisibility(
+    'dispatch_team_position_sharing',
+    visibilityContext,
+  ).visible;
+  const canonicalBackendVisible = resolveECSFeatureVisibility(
+    'dispatch_canonical_backend',
+    visibilityContext,
+  ).visible;
+  const externalIntegrationsVisible = resolveECSFeatureVisibility(
+    'dispatch_external_integrations',
+    visibilityContext,
+  ).visible;
+  const developerDiagnosticsVisible = resolveECSFeatureVisibility(
+    'developer_diagnostics',
+    visibilityContext,
+  ).visible;
+  return {
+    ...merged,
+    dispatchTabVisibility: merged.dispatchTabVisibility && dispatchVisible,
+    canonicalBackendPersistence:
+      (Object.prototype.hasOwnProperty.call(overrides, 'canonicalBackendPersistence')
+        ? merged.canonicalBackendPersistence
+        : canonicalBackendVisible) && canonicalBackendVisible,
+    teamPositionSharing: merged.teamPositionSharing && positionSharingVisible,
+    convoyRegroupPlanner: merged.convoyRegroupPlanner && positionSharingVisible,
+    escalationAutomation: merged.escalationAutomation && externalIntegrationsVisible,
+    agencyDataIngestion: merged.agencyDataIngestion && externalIntegrationsVisible,
+    externalDispatchIntegration: merged.externalDispatchIntegration && externalIntegrationsVisible,
+    publicHazardPublishing: merged.publicHazardPublishing && externalIntegrationsVisible,
+    automatedSosTransmission: merged.automatedSosTransmission && externalIntegrationsVisible,
+    liveRadioNetworkIntegrations: merged.liveRadioNetworkIntegrations && externalIntegrationsVisible,
+    developerDiagnostics: merged.developerDiagnostics && developerDiagnosticsVisible,
+    demoData: merged.demoData && developerDiagnosticsVisible,
   };
 }
 
@@ -95,4 +142,14 @@ export function isDispatchFeatureEnabled(
 
 export function getDispatchRolloutDisabledCopy(feature: DispatchRolloutFeature): string {
   return DISPATCH_ROLLOUT_DISABLED_COPY[feature];
+}
+
+export function resolveDispatchCanonicalBackendMode(
+  config: DispatchRolloutConfig = resolveDispatchRolloutConfig(),
+  requestedMode: unknown = process.env.EXPO_PUBLIC_ECS_DISPATCH_CANONICAL_BACKEND_MODE,
+): DispatchCanonicalBackendMode {
+  if (!config.canonicalBackendPersistence) return 'disabled';
+  return requestedMode === 'shadow' || requestedMode === 'dual_read'
+    ? requestedMode
+    : 'disabled';
 }

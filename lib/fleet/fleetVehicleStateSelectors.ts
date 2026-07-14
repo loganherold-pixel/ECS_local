@@ -32,6 +32,7 @@ import {
   buildFleetWeightSummary,
   type FleetWeightSummary,
 } from './fleetWeightSummary';
+import { incrementECSPerformanceCounter } from '../performance/ecsPerformanceDiagnostics';
 
 type VehicleWithFleetExtensions = Vehicle & {
   wizard_config?: Record<string, any> | null;
@@ -78,6 +79,84 @@ export type FleetVehicleStateSelectorInput = {
   frameworkContainerZones?: readonly ContainerZone[] | null;
   useCaseChips?: readonly string[] | null;
 };
+
+export type FleetVehicleStateSelectorDiagnostics = {
+  calculations: number;
+  cacheHits: number;
+  evictions: number;
+  cacheSize: number;
+  maxCacheSize: number;
+};
+
+const MAX_FLEET_VEHICLE_STATE_CACHE_SIZE = 24;
+const fleetVehicleStateCache = new Map<string, {
+  fingerprint: string;
+  state: FleetCanonicalVehicleState;
+}>();
+let fleetVehicleStateCalculations = 0;
+let fleetVehicleStateCacheHits = 0;
+let fleetVehicleStateEvictions = 0;
+
+function stableSerialize(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'invalid-number';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  if (typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerialize((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(String(value));
+}
+
+function hashFingerprint(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function createFleetVehicleStateFingerprint(input: {
+  vehicle: VehicleWithFleetExtensions;
+  spec: VehicleSpec | null;
+  consumables: ConsumablesState;
+  tiresLift: TiresLiftConfig | null;
+  activeLoadout: LocalLoadout | null;
+  legacyLoadoutItems: readonly LocalLoadoutItem[];
+  buildLoadoutState: FleetBuildLoadoutState;
+  frameworkContainerZones: readonly ContainerZone[];
+  useCaseChips: readonly string[];
+}): string {
+  return hashFingerprint(stableSerialize(input));
+}
+
+export function invalidateFleetVehicleStateCache(vehicleId?: string | null): void {
+  if (vehicleId) fleetVehicleStateCache.delete(vehicleId);
+  else fleetVehicleStateCache.clear();
+}
+
+export function getFleetVehicleStateSelectorDiagnostics(): FleetVehicleStateSelectorDiagnostics {
+  return {
+    calculations: fleetVehicleStateCalculations,
+    cacheHits: fleetVehicleStateCacheHits,
+    evictions: fleetVehicleStateEvictions,
+    cacheSize: fleetVehicleStateCache.size,
+    maxCacheSize: MAX_FLEET_VEHICLE_STATE_CACHE_SIZE,
+  };
+}
+
+export function resetFleetVehicleStateSelectorDiagnosticsForTests(): void {
+  fleetVehicleStateCalculations = 0;
+  fleetVehicleStateCacheHits = 0;
+  fleetVehicleStateEvictions = 0;
+  fleetVehicleStateCache.clear();
+}
 
 export const FLEET_CANONICAL_WEIGHT_NAMES: FleetCanonicalWeightNames = {
   baseVehicleWeight: 'baseNetWeight',
@@ -129,6 +208,26 @@ export function selectFleetVehicleStateFromRecord(
   const frameworkContainerZones = [
     ...(input.frameworkContainerZones ?? resolveVehicleContainerZones(vehicle)),
   ];
+  const fingerprint = createFleetVehicleStateFingerprint({
+    vehicle,
+    spec,
+    consumables,
+    tiresLift,
+    activeLoadout,
+    legacyLoadoutItems,
+    buildLoadoutState,
+    frameworkContainerZones,
+    useCaseChips,
+  });
+  const cached = fleetVehicleStateCache.get(vehicle.id);
+  if (cached?.fingerprint === fingerprint) {
+    fleetVehicleStateCacheHits += 1;
+    incrementECSPerformanceCounter('active_vehicle_propagation', 'fleet_selector_cache_hits');
+    return cached.state;
+  }
+
+  fleetVehicleStateCalculations += 1;
+  incrementECSPerformanceCounter('active_vehicle_propagation', 'fleet_selector_calculations');
   const fleetVehicle = adaptLegacyVehicleToFleetVehicle({
     vehicle,
     specs: spec as any,
@@ -145,7 +244,7 @@ export function selectFleetVehicleStateFromRecord(
   const scoringResult = scoreFleetVehicle(fleetVehicle, operatingWeight.weightResult, []);
   const weightSummary = buildFleetWeightSummary(fleetVehicle, operatingWeight.weightResult, scoringResult);
 
-  return {
+  const state: FleetCanonicalVehicleState = {
     vehicle,
     spec,
     consumables,
@@ -164,6 +263,16 @@ export function selectFleetVehicleStateFromRecord(
     weightSummary,
     naming: FLEET_CANONICAL_WEIGHT_NAMES,
   };
+  if (!fleetVehicleStateCache.has(vehicle.id) && fleetVehicleStateCache.size >= MAX_FLEET_VEHICLE_STATE_CACHE_SIZE) {
+    const oldestVehicleId = fleetVehicleStateCache.keys().next().value as string | undefined;
+    if (oldestVehicleId) {
+      fleetVehicleStateCache.delete(oldestVehicleId);
+      fleetVehicleStateEvictions += 1;
+    }
+  }
+  fleetVehicleStateCache.delete(vehicle.id);
+  fleetVehicleStateCache.set(vehicle.id, { fingerprint, state });
+  return state;
 }
 
 export function selectFleetVehicleState(vehicleId: string | null | undefined): FleetCanonicalVehicleState | null {

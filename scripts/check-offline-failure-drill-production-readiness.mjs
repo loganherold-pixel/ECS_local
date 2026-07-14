@@ -112,6 +112,12 @@ export function buildOfflineFailureDrillProductionReadinessResult(options = {}) 
       validation = validateOfflineFailureDrillAndroidEvidenceManifest(evidence, {
         rootDir: root,
         artifactExists: fs.existsSync,
+        artifactRead: (artifactPath) => fs.existsSync(artifactPath)
+          ? fs.readFileSync(artifactPath, 'utf8')
+          : null,
+        artifactSize: (artifactPath) => fs.existsSync(artifactPath)
+          ? fs.statSync(artifactPath).size
+          : null,
       });
     } catch {
       validation = {

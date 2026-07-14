@@ -11,9 +11,8 @@
  *   - Mode toggle (HighwayDrive / ExpeditionDrive)
  *   - Active screen content
  *
- * Phase 8 Integration:
- *   - Starts/stops VehicleCompanionManager for synchronized state
- *   - Starts/stops Android Auto and CarPlay bridges
+ * Runtime integration:
+ *   - Acquires the shared automotive runtime without duplicating bridge ownership
  *   - Displays companion connection status
  *
  * Phase 9 Integration:
@@ -30,7 +29,7 @@
 
  * Architecture:
  *   - Reads from vehicleDisplayStore
- *   - Starts/stops vehicleDisplayStore and vehicleDisplayModeEngine on mount/unmount
+ *   - Uses the shared automotive runtime coordinator for lifecycle ownership
  *   - Does NOT modify the mobile dashboard
  */
 
@@ -48,10 +47,8 @@ import { useRouter } from 'expo-router';
 
 import { vehicleDisplayStore } from '../lib/vehicleDisplayStore';
 import { vehicleDisplayModeEngine } from '../lib/vehicleDisplayModeEngine';
-import { vehicleCompanionManager } from '../lib/vehicleCompanionManager';
 import { vehicleSessionState } from '../lib/vehicleSessionState';
-import { androidAutoBridge } from '../lib/androidAutoBridge';
-import { carPlayBridge } from '../lib/carPlayBridge';
+import { automotiveRuntimeCoordinator } from '../lib/automotive/automotiveRuntimeCoordinator';
 import { offlineExpeditionIntelligence } from '../lib/offlineExpeditionIntelligence';
 import { predictiveExpeditionAwareness } from '../lib/predictiveExpeditionAwareness';
 import { adaptiveExpeditionGuidance } from '../lib/adaptiveExpeditionGuidance';
@@ -76,6 +73,9 @@ import VehicleAttitudeScreen from '../components/vehicle-display/VehicleAttitude
 import VehicleResourceScreen from '../components/vehicle-display/VehicleResourceScreen';
 import VehicleWeatherHazardScreen from '../components/vehicle-display/VehicleWeatherHazardScreen';
 import VehicleExitPlanScreen from '../components/vehicle-display/VehicleExitPlanScreen';
+import AutomotiveSourceRail from '../components/vehicle-display/AutomotiveSourceRail';
+import ECSOperationalAnnouncer from '../components/ECSOperationalAnnouncer';
+import { selectActiveAutomotiveSafeSurface } from '../lib/automotive/automotiveSafeProjection';
 
 export default function VehicleDisplayPage() {
   const router = useRouter();
@@ -88,16 +88,7 @@ export default function VehicleDisplayPage() {
   // Subscribe to store updates and start all vehicle display systems
 
   useEffect(() => {
-    // Start core vehicle display systems
-    vehicleDisplayStore.start();
-    vehicleDisplayModeEngine.start();
-
-    // Start the companion manager (Phase 8)
-    vehicleCompanionManager.start();
-
-    // Start platform-specific bridges
-    androidAutoBridge.start();
-    carPlayBridge.start();
+    const releaseAutomotiveRuntime = automotiveRuntimeCoordinator.acquire('vehicle_display_route');
 
     // Start Offline Expedition Intelligence (Phase 9)
     offlineExpeditionIntelligence.start();
@@ -115,6 +106,7 @@ export default function VehicleDisplayPage() {
     const storeUnsub = vehicleDisplayStore.subscribe(() => {
       setState(vehicleDisplayStore.get());
     });
+    setState(vehicleDisplayStore.get());
 
     // Subscribe to session state for companion connection updates
     const sessionUnsub = vehicleSessionState.subscribe(() => {
@@ -138,16 +130,7 @@ export default function VehicleDisplayPage() {
       offlineExpeditionIntelligence.stop();
 
 
-      // Stop bridges
-      androidAutoBridge.stop();
-      carPlayBridge.stop();
-
-      // Stop companion manager
-      vehicleCompanionManager.stop();
-
-      // Stop core systems
-      vehicleDisplayModeEngine.stop();
-      vehicleDisplayStore.stop();
+      releaseAutomotiveRuntime();
     };
   }, []);
 
@@ -164,12 +147,36 @@ export default function VehicleDisplayPage() {
     if (router.canGoBack()) {
       router.back();
     } else {
-      router.replace('/dashboard');
+      router.replace('/fleet');
     }
   }, [router]);
 
   const modeColor = VEHICLE_DISPLAY_MODE_COLORS[state.mode];
   const autoMode = vehicleDisplayModeEngine.isAutoModeEnabled();
+  const activeSourceState = selectActiveAutomotiveSafeSurface(
+    state.automotiveProjection,
+    state.activeScreen,
+  );
+  const modeLabel = state.mode === 'highway_drive' ? 'Highway drive' : 'Expedition drive';
+  const companionLabel = companionPlatform === 'android_auto'
+    ? 'Android Auto connected.'
+    : companionPlatform === 'carplay'
+      ? 'Apple CarPlay connected.'
+      : 'No automotive companion connected.';
+  const connectionAnnouncement = {
+    id: `vehicle-display-connection:${companionPlatform}`,
+    kind: 'connection_changed' as const,
+    subject: 'Vehicle display',
+    detail: companionLabel,
+  };
+  const routeAnnouncement = state.routePhase === 'route_active'
+    ? {
+        id: `vehicle-display-route:${state.navigationData.routeName ?? 'active-route'}`,
+        kind: 'route_activated' as const,
+        subject: state.navigationData.routeName ?? 'Current route',
+        detail: state.navigationData.statusLabel,
+      }
+    : null;
   let activeScreenContent: React.ReactNode = null;
 
   switch (state.activeScreen) {
@@ -200,18 +207,38 @@ export default function VehicleDisplayPage() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor="#0B0E12" />
+      <ECSOperationalAnnouncer event={connectionAnnouncement} />
+      <ECSOperationalAnnouncer event={routeAnnouncement} />
       <View style={styles.container}>
         {/* Top bar with back button */}
         <View style={styles.topBar}>
-          <TouchableOpacity onPress={handleBack} style={styles.backButton}>
+          <TouchableOpacity
+            onPress={handleBack}
+            style={styles.backButton}
+            accessibilityRole="button"
+            accessibilityLabel="Exit Vehicle Display"
+            accessibilityHint="Returns to the ECS Fleet surface"
+          >
             <Ionicons name="chevron-back" size={22} color="#8B949E" />
           </TouchableOpacity>
 
-          <Text style={styles.topTitle}>VEHICLE DISPLAY</Text>
+          <Text
+            style={styles.topTitle}
+            accessibilityRole="header"
+            numberOfLines={2}
+            adjustsFontSizeToFit
+            maxFontSizeMultiplier={1.4}
+          >
+            VEHICLE DISPLAY
+          </Text>
 
           <TouchableOpacity
             onPress={() => setShowModeSwitch(!showModeSwitch)}
             style={[styles.modeButton, { borderColor: modeColor }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Display mode. ${modeLabel}`}
+            accessibilityHint="Opens the display mode controls"
+            accessibilityState={{ expanded: showModeSwitch }}
           >
             <Ionicons
               name={state.mode === 'highway_drive' ? 'car-outline' : 'compass-outline'}
@@ -237,6 +264,10 @@ export default function VehicleDisplayPage() {
                   vehicleDisplayModeEngine.setMode('highway_drive');
                   setShowModeSwitch(false);
                 }}
+                accessibilityRole="radio"
+                accessibilityLabel="Highway drive mode"
+                accessibilityHint="Uses the highway-focused Vehicle Display layout"
+                accessibilityState={{ checked: state.mode === 'highway_drive' }}
               >
                 <Ionicons name="car-outline" size={20} color={state.mode === 'highway_drive' ? '#5B8DEF' : '#8B949E'} />
                 <Text style={[
@@ -257,6 +288,10 @@ export default function VehicleDisplayPage() {
                   vehicleDisplayModeEngine.setMode('expedition_drive');
                   setShowModeSwitch(false);
                 }}
+                accessibilityRole="radio"
+                accessibilityLabel="Expedition drive mode"
+                accessibilityHint="Uses the field-focused Vehicle Display layout"
+                accessibilityState={{ checked: state.mode === 'expedition_drive' }}
               >
                 <Ionicons name="compass-outline" size={20} color={state.mode === 'expedition_drive' ? '#D4A017' : '#8B949E'} />
                 <Text style={[
@@ -272,6 +307,10 @@ export default function VehicleDisplayPage() {
             <TouchableOpacity
               style={styles.autoModeRow}
               onPress={handleAutoModeToggle}
+              accessibilityRole="switch"
+              accessibilityLabel="Automatically select display mode"
+              accessibilityHint="Lets ECS propose the display mode without changing core app behavior"
+              accessibilityState={{ checked: autoMode }}
             >
               <Ionicons
                 name={autoMode ? 'toggle' : 'toggle-outline'}
@@ -294,6 +333,8 @@ export default function VehicleDisplayPage() {
           statusLabel={state.automotiveSurface.platformStatusLabel}
         />
 
+        <AutomotiveSourceRail state={activeSourceState} />
+
         {/* Active screen content */}
         <View style={styles.screenContent}>{activeScreenContent}</View>
 
@@ -306,6 +347,10 @@ export default function VehicleDisplayPage() {
                 key={screen}
                 style={[styles.tab, isActive && styles.tabActive]}
                 onPress={() => handleScreenChange(screen)}
+                accessibilityRole="tab"
+                accessibilityLabel={`${VEHICLE_SCREEN_LABELS[screen]} Vehicle Display`}
+                accessibilityHint={`Shows ${VEHICLE_SCREEN_LABELS[screen]} information`}
+                accessibilityState={{ selected: isActive }}
               >
                 <Ionicons
                   name={VEHICLE_SCREEN_ICONS[screen] as any}
@@ -315,7 +360,7 @@ export default function VehicleDisplayPage() {
                 <Text style={[
                   styles.tabLabel,
                   isActive && { color: modeColor },
-                ]}>
+                ]} numberOfLines={2} maxFontSizeMultiplier={1.4}>
                   {VEHICLE_SCREEN_LABELS[screen]}
                 </Text>
               </TouchableOpacity>
@@ -345,8 +390,8 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(212,160,23,0.15)',
   },
   backButton: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -359,8 +404,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   modeButton: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: 'center',
@@ -392,6 +437,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 12,
+    minHeight: 48,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#1E232B',
@@ -415,6 +461,7 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     borderTopWidth: 1,
     borderTopColor: 'rgba(255,255,255,0.06)',
+    minHeight: 44,
   },
   autoModeText: {
     fontSize: 11,
@@ -436,6 +483,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     paddingVertical: 10,
+    minHeight: 58,
     position: 'relative',
   },
   tabActive: {},

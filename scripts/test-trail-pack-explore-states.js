@@ -131,11 +131,16 @@ assert.strictEqual(
 );
 
 const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
+const previewModal = read(path.join('components', 'trailPacks', 'TrailPackPreviewModal.tsx'));
 assert(discover.includes('Scanning approved ECS Trail Packs within selected radius…'));
 assert(discover.includes('No live reviewed Trail Packs found within this radius.'));
 assert(discover.includes('Live Trail Packs are not available from reviewed sources yet.'));
 assert(discover.includes('Trail Packs need GPS or an internal search area to filter verified routes by radius.'));
 assert(discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.'));
-assert(discover.includes('This Trail Pack is under ECS review and is not visible to other users.'));
+assert(
+  previewModal.includes('This is your pending route recommendation.') &&
+    previewModal.includes('It is not visible to other users until ECS review approves it.'),
+  'Pending Trail Packs should remain explicitly private until ECS review approves them.',
+);
 
 console.log('Trail Pack Explore state checks passed');

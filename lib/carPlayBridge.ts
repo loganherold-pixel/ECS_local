@@ -19,7 +19,7 @@
  *   → carPlayBridge polls → vehicleCompanionManager.handleAction()
  *
  * Architecture:
- *   - Timer-driven data push (2s interval)
+ *   - Bounded, semantic-deduplicated data publication
  *   - Timer-driven action polling (1s interval)
  *   - Subscribes to vehicleDisplayStore for reactive updates
  *   - Falls back gracefully when NativeModule is unavailable (web/Android)
@@ -27,20 +27,29 @@
  *
  * Mirrors the Android Auto bridge for consistent cross-platform behavior.
  */
-import { Platform, NativeModules } from 'react-native';
+import { AppState, Platform, NativeModules, type AppStateStatus } from 'react-native';
 import { vehicleDisplayStore } from './vehicleDisplayStore';
 import { vehicleDisplayModeEngine } from './vehicleDisplayModeEngine';
 import { breadcrumbTracker } from './breadcrumbTracker';
 import { vehicleSessionState } from './vehicleSessionState';
 import { vehicleCompanionManager } from './vehicleCompanionManager';
+import { ecsLog } from './ecsLogger';
+import { resolveAutomotiveFeatureAccess } from './automotive/automotiveFeatureAccess';
+import {
+  automotiveSafeMetadata,
+  buildAutomotiveNativePayload,
+  buildAutomotiveSemanticSignature,
+  reduceAutomotiveConnectionState,
+  shouldPublishAutomotiveLocation,
+  shouldPublishAutomotiveState,
+  type ECSAutomotiveConnectionEvent,
+  type ECSAutomotiveConnectionLifecycle,
+  type ECSAutomotiveLocationSample,
+} from './automotive/automotiveUpdatePolicy';
 import type {
   VehicleDisplayMode,
-  VehicleMapData,
-  VehicleStatusData,
   VehicleWeatherData,
-  VehicleIndicators,
   VehicleActionType,
-  ModeOverrideSetting,
 } from './vehicleDisplayTypes';
 
 
@@ -106,15 +115,32 @@ function getNativeModule(): ECSCarPlayNative | null {
 
 let _isRunning = false;
 let _dataPushTimer: ReturnType<typeof setInterval> | null = null;
+let _pendingDataPushTimer: ReturnType<typeof setTimeout> | null = null;
 let _actionPollTimer: ReturnType<typeof setInterval> | null = null;
+let _connectionProbeTimer: ReturnType<typeof setInterval> | null = null;
 let _storeUnsubscribe: (() => void) | null = null;
 let _modeEngineUnsubscribe: (() => void) | null = null;
+let _appStateSubscription: { remove: () => void } | null = null;
+let _appState: AppStateStatus = AppState.currentState;
 let _isConnected = false;
+let _connectionLifecycle: ECSAutomotiveConnectionLifecycle = 'unavailable';
 let _lastPushTimestamp = 0;
+let _lastPayloadSignature: string | null = null;
+let _pushInFlight: Promise<void> | null = null;
+let _dataPushPending = false;
+let _lastLocationSample: ECSAutomotiveLocationSample | null = null;
+let _publishCount = 0;
+let _dedupedPublishCount = 0;
+let _lastActionKey: string | null = null;
 
-// Push intervals
-const DATA_PUSH_INTERVAL_MS = 2_000;   // Push data every 2 seconds
-const ACTION_POLL_INTERVAL_MS = 1_000;  // Poll actions every 1 second
+const DATA_PUSH_INTERVAL_MS = 15_000;
+const BACKGROUND_DATA_PUSH_INTERVAL_MS = 30_000;
+const DATA_HEARTBEAT_INTERVAL_MS = 60_000;
+const MINIMUM_DATA_PUSH_INTERVAL_MS = 5_000;
+const ACTION_POLL_INTERVAL_MS = 1_000;
+const CONNECTED_PROBE_INTERVAL_MS = 10_000;
+const DISCONNECTED_PROBE_INTERVAL_MS = 15_000;
+const BACKGROUND_DISCONNECTED_PROBE_INTERVAL_MS = 60_000;
 
 // Listeners
 type Listener = () => void;
@@ -126,90 +152,207 @@ function _notify(): void {
   }
 }
 
+function _isAppForeground(): boolean {
+  return _appState !== 'background' && _appState !== 'inactive';
+}
+
+function _clearRuntimeTimers(): void {
+  if (_dataPushTimer) clearInterval(_dataPushTimer);
+  if (_pendingDataPushTimer) clearTimeout(_pendingDataPushTimer);
+  if (_actionPollTimer) clearInterval(_actionPollTimer);
+  if (_connectionProbeTimer) clearInterval(_connectionProbeTimer);
+  _dataPushTimer = null;
+  _pendingDataPushTimer = null;
+  _actionPollTimer = null;
+  _connectionProbeTimer = null;
+}
+
+function _schedulePendingDataPush(delayMs: number): void {
+  if (!_isRunning || !_isConnected || _pendingDataPushTimer) return;
+  _pendingDataPushTimer = setTimeout(() => {
+    _pendingDataPushTimer = null;
+    _pushData().catch(() => {});
+  }, Math.max(0, delayMs));
+}
+
+function _reconcileRuntimeTimers(): void {
+  _clearRuntimeTimers();
+  if (!_isRunning) return;
+  if (_isConnected) {
+    _dataPushTimer = setInterval(() => {
+      _pushData().catch(() => {});
+    }, _isAppForeground() ? DATA_PUSH_INTERVAL_MS : BACKGROUND_DATA_PUSH_INTERVAL_MS);
+    _actionPollTimer = setInterval(() => {
+      _pollActions().catch(() => {});
+    }, ACTION_POLL_INTERVAL_MS);
+    _connectionProbeTimer = setInterval(() => {
+      _checkConnection().catch(() => {});
+    }, CONNECTED_PROBE_INTERVAL_MS);
+    return;
+  }
+  _connectionProbeTimer = setInterval(() => {
+    _checkConnection().catch(() => {});
+  }, _isAppForeground() ? DISCONNECTED_PROBE_INTERVAL_MS : BACKGROUND_DISCONNECTED_PROBE_INTERVAL_MS);
+}
+
+function _setConnectionState(
+  connected: boolean,
+  lifecycle: ECSAutomotiveConnectionLifecycle,
+): void {
+  const connectionChanged = connected !== _isConnected;
+  const lifecycleChanged = lifecycle !== _connectionLifecycle;
+  if (!connectionChanged && !lifecycleChanged) return;
+  _isConnected = connected;
+  _connectionLifecycle = lifecycle;
+  vehicleDisplayStore.setConnected(connected);
+  if (connectionChanged) {
+    if (connected) vehicleCompanionManager.onCompanionConnected('carplay');
+    else vehicleCompanionManager.onCompanionDisconnected();
+  }
+  _reconcileRuntimeTimers();
+  _notify();
+}
+
+function _transitionConnection(event: ECSAutomotiveConnectionEvent): void {
+  const next = reduceAutomotiveConnectionState({
+    connected: _isConnected,
+    lifecycle: _connectionLifecycle,
+  }, event);
+  _setConnectionState(next.connected, next.lifecycle);
+}
+
+function _handleAppStateChange(nextState: AppStateStatus): void {
+  if (_appState === nextState) return;
+  _appState = nextState;
+  if (_isRunning) _reconcileRuntimeTimers();
+  _transitionConnection({ type: 'app_state', foreground: _isAppForeground() });
+}
+
 // ── Data Push ───────────────────────────────────────────────
 
 /**
  * Push the current vehicle display state to the native CarPlay layer.
  * Pushes all four screen data blobs plus mode, indicators, and system health.
  */
-async function _pushData(): Promise<void> {
+async function _pushData(force = false): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
   const native = getNativeModule();
   if (!native) return;
-
-  try {
-    const state = vehicleDisplayStore.get();
-
-    // Push mode + map data + indicators (full state)
-    const mapDataJson = JSON.stringify(state.mapData);
-    const indicatorsJson = JSON.stringify(state.indicators);
-    await native.pushFullState(state.mode, mapDataJson, indicatorsJson);
-
-    // Push status data
-    const statusDataJson = JSON.stringify(state.statusData);
-    await native.pushStatusData(statusDataJson);
-
-    // Push weather data
-    const weatherDataJson = JSON.stringify(state.weatherData);
-    await native.pushWeatherData(weatherDataJson);
-
-    // Push actions data (action availability context from session state)
-    const actionsData = _buildActionsData(state.mode);
-    await native.pushActionsData(JSON.stringify(actionsData));
-
-    // Push mode state (override, transition notices)
-    const modeEngineOutput = vehicleDisplayModeEngine.get();
-    const modeState = {
-      mode: state.mode,
-      modeOverride: modeEngineOutput.modeOverride,
-      isManualOverride: !modeEngineOutput.autoModeEnabled,
-      inConfirmation: modeEngineOutput.inConfirmation,
-      transitionNotice: modeEngineOutput.transitionNotice ? {
-        message: modeEngineOutput.transitionNotice.message,
-        newMode: modeEngineOutput.transitionNotice.newMode,
-        timestamp: modeEngineOutput.transitionNotice.timestamp,
-      } : null,
-    };
-    await native.pushModeState(JSON.stringify(modeState));
-
-    // Push system health
-    const healthPayload = vehicleDisplayStore.buildNativeHealthPayload();
-    await native.pushSystemHealth(JSON.stringify(healthPayload));
-
-    // Push breadcrumb data if available
-    try {
-      const bcState = breadcrumbTracker.get();
-      if (bcState) {
-        const bcData = {
-          pointCount: bcState.pointCount,
-          isRecording: bcState.isRecording,
-          canReturnToStart: bcState.canReturnToStart,
-          isReturningToStart: bcState.isReturningToStart || false,
-          distanceFromStartMi: bcState.distanceFromStartMi,
-          totalTrailDistanceMi: bcState.totalTrailDistanceMi,
-          elevationGainFt: bcState.elevationGainFt,
-          elevationLossFt: bcState.elevationLossFt,
-          bearingToStartDeg: bcState.bearingToStartDeg,
-        };
-        await native.pushBreadcrumbData(JSON.stringify(bcData));
-      }
-    } catch {}
-
-    // Push route state from session
-    try {
-      const sessionState = vehicleSessionState.get();
-      await native.pushRouteState(
-        sessionState.activeRoute,
-        sessionState.activeVehicleDisplayMode === 'expedition_drive',
-      );
-    } catch {}
-
-    _lastPushTimestamp = Date.now();
-
-    // Record data push in session state
-    vehicleSessionState.recordDataPush();
-  } catch (err) {
-    console.warn('[CarPlayBridge] Data push failed:', err);
+  if (_pushInFlight) {
+    _dataPushPending = true;
+    return _pushInFlight;
   }
+
+  const state = vehicleDisplayStore.get();
+  const mapPayload = {
+    ...buildAutomotiveNativePayload(
+      state.mapData,
+      state.automotiveProjection.navigation,
+    ),
+    automotivePositionState: automotiveSafeMetadata(
+      state.automotiveProjection.navigation.position,
+    ),
+  };
+  const statusPayload = {
+    ...state.statusData,
+    automotiveSafeState: automotiveSafeMetadata(state.automotiveProjection.resources),
+  };
+  const weatherPayload = {
+    ...state.weatherData,
+    automotiveSafeState: automotiveSafeMetadata(state.automotiveProjection.weatherHazard),
+  };
+  const actionsData = _buildActionsData(state.mode);
+  const modeEngineOutput = vehicleDisplayModeEngine.get();
+  const modeState = {
+    mode: state.mode,
+    modeOverride: modeEngineOutput.modeOverride,
+    isManualOverride: !modeEngineOutput.autoModeEnabled,
+    inConfirmation: modeEngineOutput.inConfirmation,
+    transitionNotice: modeEngineOutput.transitionNotice ? {
+      message: modeEngineOutput.transitionNotice.message,
+      newMode: modeEngineOutput.transitionNotice.newMode,
+      timestamp: modeEngineOutput.transitionNotice.timestamp,
+    } : null,
+  };
+  const healthPayload = vehicleDisplayStore.buildNativeHealthPayload();
+  const bcState = breadcrumbTracker.get();
+  const breadcrumbPayload = bcState
+    ? {
+        pointCount: bcState.pointCount,
+        isRecording: bcState.isRecording,
+        canReturnToStart: bcState.canReturnToStart,
+        isReturningToStart: bcState.isReturningToStart || false,
+        distanceFromStartMi: bcState.distanceFromStartMi,
+        totalTrailDistanceMi: bcState.totalTrailDistanceMi,
+        elevationGainFt: bcState.elevationGainFt,
+        elevationLossFt: bcState.elevationLossFt,
+        bearingToStartDeg: bcState.bearingToStartDeg,
+      }
+    : null;
+  const sessionState = vehicleSessionState.get();
+  const semanticPayload = {
+    mode: state.mode,
+    mapPayload,
+    indicators: state.indicators,
+    statusPayload,
+    weatherPayload,
+    actionsData,
+    modeState,
+    healthPayload,
+    breadcrumbPayload,
+    activeRoute: sessionState.activeRoute,
+    expeditionTrack: sessionState.activeVehicleDisplayMode === 'expedition_drive',
+  };
+  const signature = buildAutomotiveSemanticSignature(semanticPayload);
+  const now = Date.now();
+  if (!shouldPublishAutomotiveState({
+    signature,
+    state: { lastSignature: _lastPayloadSignature, lastPublishedAt: _lastPushTimestamp },
+    nowMs: now,
+    minimumIntervalMs: MINIMUM_DATA_PUSH_INTERVAL_MS,
+    heartbeatIntervalMs: DATA_HEARTBEAT_INTERVAL_MS,
+    force,
+  })) {
+    _dedupedPublishCount += 1;
+    if (signature !== _lastPayloadSignature) {
+      _schedulePendingDataPush(
+        Math.max(0, MINIMUM_DATA_PUSH_INTERVAL_MS - (now - _lastPushTimestamp)),
+      );
+    }
+    return;
+  }
+
+  const push = (async () => {
+    try {
+      await native.pushFullState(state.mode, JSON.stringify(mapPayload), JSON.stringify(state.indicators));
+      await native.pushStatusData(JSON.stringify(statusPayload));
+      await native.pushWeatherData(JSON.stringify(weatherPayload));
+      await native.pushActionsData(JSON.stringify(actionsData));
+      await native.pushModeState(JSON.stringify(modeState));
+      await native.pushSystemHealth(JSON.stringify(healthPayload));
+      if (breadcrumbPayload) await native.pushBreadcrumbData(JSON.stringify(breadcrumbPayload));
+      await native.pushRouteState(semanticPayload.activeRoute, semanticPayload.expeditionTrack);
+
+      _lastPayloadSignature = signature;
+      _lastPushTimestamp = Date.now();
+      _publishCount += 1;
+      vehicleSessionState.recordDataPush();
+      _transitionConnection({ type: 'push_recovered', foreground: _isAppForeground() });
+    } catch (err) {
+      _transitionConnection({ type: 'push_failed' });
+      ecsLog.warn('SYSTEM', '[CarPlayBridge] Data push failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      _pushInFlight = null;
+      if (_dataPushPending) {
+        _dataPushPending = false;
+        _schedulePendingDataPush(MINIMUM_DATA_PUSH_INTERVAL_MS);
+      }
+    }
+  })();
+  _pushInFlight = push;
+  return push;
 }
 
 /**
@@ -249,8 +392,9 @@ function _buildActionsData(mode: VehicleDisplayMode): Record<string, unknown> {
       incident_marker: sessionState.activeExpedition,
       quick_note: true,
       return_to_start: bcTrail.canReturnToStart && !bcTrail.isPausedByGps,
-      emergency_comms: sessionState.connectivityStatus !== 'offline',
+      emergency_comms: false,
     };
+    data.emergencySupportCopy = 'Use a phone or radio. ECS does not contact emergency services.';
   }
 
   return data;
@@ -260,14 +404,17 @@ function _buildActionsData(mode: VehicleDisplayMode): Record<string, unknown> {
  * Push display mode change to native layer.
  */
 async function _pushMode(mode: VehicleDisplayMode): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
   const native = getNativeModule();
   if (!native) return;
 
   try {
     await native.setDisplayMode(mode);
-    console.log(`[CarPlayBridge] Mode pushed: ${mode}`);
+    ecsLog.debug('SYSTEM', '[CarPlayBridge] Mode pushed', { mode });
   } catch (err) {
-    console.warn('[CarPlayBridge] Mode push failed:', err);
+    ecsLog.warn('SYSTEM', '[CarPlayBridge] Mode push failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -278,6 +425,7 @@ async function _pushMode(mode: VehicleDisplayMode): Promise<void> {
  * When an action is found, dispatch it through the VehicleCompanionManager.
  */
 async function _pollActions(): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
   const native = getNativeModule();
   if (!native) return;
 
@@ -292,10 +440,16 @@ async function _pollActions(): Promise<void> {
       source: string;
       label?: string;
     };
+    const actionTimestamp = Number(action.timestamp);
+    if (!Number.isFinite(actionTimestamp) || Math.abs(Date.now() - actionTimestamp) > 30_000) return;
+    const actionKey = `${action.actionType}:${actionTimestamp}`;
+    if (actionKey === _lastActionKey) return;
+    _lastActionKey = actionKey;
 
-    console.log(
-      `[CarPlayBridge] Action received from ${action.source}: ${action.actionType}`
-    );
+    ecsLog.debug('SYSTEM', '[CarPlayBridge] Action received', {
+      source: action.source,
+      actionType: action.actionType,
+    });
 
     // Route through the companion manager for synchronized handling
     vehicleCompanionManager.handleAction(
@@ -309,7 +463,9 @@ async function _pollActions(): Promise<void> {
     // Notify listeners about the action
     _notify();
   } catch (err) {
-    console.warn('[CarPlayBridge] Action poll failed:', err);
+    ecsLog.warn('SYSTEM', '[CarPlayBridge] Action poll failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -320,44 +476,79 @@ async function _pollActions(): Promise<void> {
  * Notifies the VehicleCompanionManager on connection state changes.
  */
 async function _checkConnection(): Promise<boolean> {
+  if (!_isRunning) return false;
   const native = getNativeModule();
-  if (!native) return false;
+  if (!native) {
+    _transitionConnection({ type: 'native_unavailable' });
+    return false;
+  }
 
   try {
     const connected = await native.isConnected();
-    if (connected !== _isConnected) {
-      _isConnected = connected;
-      vehicleDisplayStore.setConnected(connected);
-
-      // Notify companion manager of connection state change
-      if (connected) {
-        vehicleCompanionManager.onCompanionConnected('carplay');
-        console.log('[CarPlayBridge] CarPlay connected — companion manager notified');
-      } else {
-        vehicleCompanionManager.onCompanionDisconnected();
-        console.log('[CarPlayBridge] CarPlay disconnected — companion manager notified');
-      }
-
-      _notify();
+    if (!_isRunning) return false;
+    const connectionChanged = connected !== _isConnected;
+    _transitionConnection(connected
+      ? { type: 'probe_connected', foreground: _isAppForeground() }
+      : { type: 'probe_disconnected' });
+    if (connected && connectionChanged) {
+      _pushData(true).catch(() => {});
+      _pushMode(vehicleDisplayModeEngine.getCurrentMode()).catch(() => {});
     }
     return connected;
-  } catch {
+  } catch (err) {
+    _transitionConnection({ type: 'probe_failed' });
+    ecsLog.debug('SYSTEM', '[CarPlayBridge] Connection probe failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return false;
   }
 }
 
 // ── Store Subscription ──────────────────────────────────────
 
+async function _pushVehicleLocation(
+  lat: number,
+  lon: number,
+  heading: number,
+  speedMph: number,
+): Promise<void> {
+  if (!_isRunning || !_isConnected) return;
+  const native = getNativeModule();
+  if (!native) return;
+  const now = Date.now();
+  const next = { lat, lon, heading, speedMph };
+  if (!shouldPublishAutomotiveLocation({ previous: _lastLocationSample, next, nowMs: now })) {
+    return;
+  }
+
+  try {
+    await native.pushVehicleLocation(lat, lon, heading, speedMph);
+    _lastLocationSample = { ...next, publishedAt: now };
+  } catch (err) {
+    ecsLog.warn('SYSTEM', '[CarPlayBridge] Location push failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /**
  * Handle vehicleDisplayStore state changes.
  */
 function _onStoreChange(): void {
-  if (!_isRunning) return;
-
-  // Debounce: don't push more than once per second
-  const now = Date.now();
-  if (now - _lastPushTimestamp < 1000) return;
-
+  if (!_isRunning || !_isConnected) return;
+  const positionState = vehicleDisplayStore.get().automotiveProjection.navigation.position;
+  if (
+    positionState.value &&
+    positionState.availability !== 'unavailable' &&
+    (positionState.freshness === 'live' || positionState.freshness === 'recent')
+  ) {
+    void _pushVehicleLocation(
+      positionState.value.lat,
+      positionState.value.lon,
+      positionState.value.headingDeg ?? _lastLocationSample?.heading ?? 0,
+      positionState.value.speedMph ?? 0,
+    );
+  }
   _pushData().catch(() => {});
 }
 
@@ -365,7 +556,7 @@ function _onStoreChange(): void {
  * Handle mode engine changes.
  */
 function _onModeChange(): void {
-  if (!_isRunning) return;
+  if (!_isRunning || !_isConnected) return;
 
   const mode = vehicleDisplayModeEngine.getCurrentMode();
   _pushMode(mode).catch(() => {});
@@ -412,39 +603,36 @@ export const carPlayBridge = {
   start(): void {
     if (_isRunning) return;
     if (Platform.OS !== 'ios') {
-      console.log('[CarPlayBridge] Not on iOS — bridge inactive');
+      _transitionConnection({ type: 'native_unavailable' });
       return;
     }
 
     const native = getNativeModule();
-    if (!native) {
-      console.log('[CarPlayBridge] NativeModule not available — bridge inactive');
+    const featureDecision = resolveAutomotiveFeatureAccess('carplay_bridge', {
+      platform: Platform.OS,
+      androidAutoNativeAvailable: false,
+      carPlayNativeAvailable: Boolean(native),
+    });
+    if (!native || featureDecision.availability !== 'available') {
+      _transitionConnection({ type: 'native_unavailable' });
+      ecsLog.debug('SYSTEM', '[CarPlayBridge] Rollout gate kept bridge inactive', {
+        reason: native ? featureDecision.reason : 'missing_native_module',
+      });
       return;
     }
 
     _isRunning = true;
-    console.log('[CarPlayBridge] Starting CarPlay bridge');
+    _appState = AppState.currentState;
+    _lastPayloadSignature = null;
+    _dataPushPending = false;
+    _lastLocationSample = null;
+    _lastActionKey = null;
 
-    // Initial connection check
-    _checkConnection().catch(() => {});
-
-    // Initial data push
-    _pushData().catch(() => {});
-
-    // Subscribe to store changes
     _storeUnsubscribe = vehicleDisplayStore.subscribe(_onStoreChange);
     _modeEngineUnsubscribe = vehicleDisplayModeEngine.subscribe(_onModeChange);
-
-    // Start periodic data push
-    _dataPushTimer = setInterval(() => {
-      _pushData().catch(() => {});
-      _checkConnection().catch(() => {});
-    }, DATA_PUSH_INTERVAL_MS);
-
-    // Start periodic action polling
-    _actionPollTimer = setInterval(() => {
-      _pollActions().catch(() => {});
-    }, ACTION_POLL_INTERVAL_MS);
+    _appStateSubscription = AppState.addEventListener('change', _handleAppStateChange);
+    _transitionConnection({ type: 'start' });
+    _checkConnection().catch(() => {});
   },
 
   /**
@@ -453,36 +641,29 @@ export const carPlayBridge = {
   stop(): void {
     if (!_isRunning) return;
     _isRunning = false;
+    _clearRuntimeTimers();
 
-    console.log('[CarPlayBridge] Stopping CarPlay bridge');
+    _appStateSubscription?.remove();
+    _appStateSubscription = null;
 
-    if (_dataPushTimer) {
-      clearInterval(_dataPushTimer);
-      _dataPushTimer = null;
-    }
+    _storeUnsubscribe?.();
+    _storeUnsubscribe = null;
 
-    if (_actionPollTimer) {
-      clearInterval(_actionPollTimer);
-      _actionPollTimer = null;
-    }
+    _modeEngineUnsubscribe?.();
+    _modeEngineUnsubscribe = null;
 
-    if (_storeUnsubscribe) {
-      _storeUnsubscribe();
-      _storeUnsubscribe = null;
-    }
-
-    if (_modeEngineUnsubscribe) {
-      _modeEngineUnsubscribe();
-      _modeEngineUnsubscribe = null;
-    }
-
+    _transitionConnection({ type: 'stop' });
+    _pushInFlight = null;
+    _dataPushPending = false;
+    _lastLocationSample = null;
+    _lastActionKey = null;
   },
 
   /**
    * Force an immediate data push to CarPlay.
    */
   async forcePush(): Promise<void> {
-    await _pushData();
+    await _pushData(true);
   },
 
   /**
@@ -494,60 +675,31 @@ export const carPlayBridge = {
     heading: number,
     speedMph: number
   ): Promise<void> {
-    const native = getNativeModule();
-    if (!native) return;
-
-    try {
-      await native.pushVehicleLocation(lat, lon, heading, speedMph);
-    } catch (err) {
-      console.warn('[CarPlayBridge] Location push failed:', err);
-    }
+    await _pushVehicleLocation(lat, lon, heading, speedMph);
   },
 
   /**
    * Push route state to CarPlay.
    */
   async pushRouteState(
-    hasActiveRoute: boolean,
-    hasExpeditionTrack: boolean
+    _hasActiveRoute: boolean,
+    _hasExpeditionTrack: boolean
   ): Promise<void> {
-    const native = getNativeModule();
-    if (!native) return;
-
-    try {
-      await native.pushRouteState(hasActiveRoute, hasExpeditionTrack);
-    } catch (err) {
-      console.warn('[CarPlayBridge] Route state push failed:', err);
-    }
+    await _pushData();
   },
 
   /**
    * Push weather data to CarPlay.
    */
-  async pushWeather(weatherData: VehicleWeatherData): Promise<void> {
-    const native = getNativeModule();
-    if (!native) return;
-
-    try {
-      await native.pushWeatherData(JSON.stringify(weatherData));
-    } catch (err) {
-      console.warn('[CarPlayBridge] Weather data push failed:', err);
-    }
+  async pushWeather(_weatherData: VehicleWeatherData): Promise<void> {
+    await _pushData();
   },
 
   /**
    * Push actions data to CarPlay.
    */
-  async pushActions(mode: VehicleDisplayMode): Promise<void> {
-    const native = getNativeModule();
-    if (!native) return;
-
-    try {
-      const actionsData = _buildActionsData(mode);
-      await native.pushActionsData(JSON.stringify(actionsData));
-    } catch (err) {
-      console.warn('[CarPlayBridge] Actions data push failed:', err);
-    }
+  async pushActions(_mode: VehicleDisplayMode): Promise<void> {
+    await _pushData();
   },
 
   /**
@@ -559,10 +711,11 @@ export const carPlayBridge = {
 
     try {
       await native.clearAll();
-      _isConnected = false;
-      _notify();
+      _transitionConnection({ type: 'probe_disconnected' });
     } catch (err) {
-      console.warn('[CarPlayBridge] Clear failed:', err);
+      ecsLog.warn('SYSTEM', '[CarPlayBridge] Clear failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   },
 
@@ -585,6 +738,9 @@ export const carPlayBridge = {
     isAvailable: boolean;
     lastPushTimestamp: number;
     platform: string;
+    connectionLifecycle: ECSAutomotiveConnectionLifecycle;
+    publishCount: number;
+    dedupedPublishCount: number;
   } {
     return {
       isRunning: _isRunning,
@@ -592,6 +748,9 @@ export const carPlayBridge = {
       isAvailable: getNativeModule() !== null,
       lastPushTimestamp: _lastPushTimestamp,
       platform: Platform.OS,
+      connectionLifecycle: _connectionLifecycle,
+      publishCount: _publishCount,
+      dedupedPublishCount: _dedupedPublishCount,
     };
   },
 };

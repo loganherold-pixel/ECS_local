@@ -373,7 +373,7 @@ export default function DashboardHeader({
           text: 'End Expedition',
           style: 'destructive',
           onPress: () => {
-            expeditionStateStore.endExpedition();
+            expeditionStateStore.endExpedition({ transitionCause: 'operator' });
             onExpeditionEnded?.();
           },
         },

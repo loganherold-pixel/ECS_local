@@ -42,8 +42,13 @@ includes(
 );
 includes(
   migration,
-  'vehicleSetupStore.clearActiveVehicleId();',
+  'vehicleSetupStore.reconcileActiveVehicle(',
   'Migration should clear only invalid active vehicle ids.',
+);
+includes(
+  migration,
+  "reason: 'legacy_migration'",
+  'Migration should label active-vehicle reconciliation for downstream diagnostics.',
 );
 includes(
   migration,

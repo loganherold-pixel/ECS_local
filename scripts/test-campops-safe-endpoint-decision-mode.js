@@ -246,6 +246,7 @@ result.campOps = {
         candidateId,
         {
           ...enrichment,
+          closureStatus: 'open',
           groupCapacityEstimate: 6,
           groupCapacityConfidence: 'high',
           weatherExposure: 'neutral',
@@ -310,6 +311,52 @@ const noCandidates = build({
 });
 assert.strictEqual(noCandidates.status, 'no_candidates');
 assert.strictEqual(noCandidates.canStageRoute, false);
+
+const providerOnlyCandidate = {
+  id: 'established:provider-only',
+  name: 'Provider Campground',
+  location: { latitude: 39.2, longitude: -121.1 },
+  source: 'established_campground',
+  sourceConfidence: 'high',
+  candidateClass: 'established',
+  recommendationVisibility: 'operational',
+  score: 86,
+};
+const providerOnly = build({
+  candidateResult: null,
+  candidateStatus: 'empty',
+  plannedCampId: null,
+  additionalCandidates: [providerOnlyCandidate],
+  additionalEnrichmentsByCandidateId: {
+    [providerOnlyCandidate.id]: {
+      candidateId: providerOnlyCandidate.id,
+      legalStatus: 'allowed',
+      legalConfidence: 'high',
+      closureStatus: 'open',
+      publicAccessStatus: 'public',
+      accessDifficulty: 'easy',
+      vehicleFit: 'fit',
+      trailerSuitability: 'fit',
+      turnaroundSuitability: 'fit',
+      groupCapacityEstimate: 12,
+      groupCapacityConfidence: 'high',
+      etaIso: '2026-07-13T00:00:00.000Z',
+      routeDistanceToCampMiles: 10,
+      fuelImpact: { value: 90, unit: 'miles', impact: 'positive', confidence: 'high' },
+      waterImpact: { value: 10, unit: 'gallons', impact: 'positive', confidence: 'high' },
+      reliableWaterRefillAvailable: false,
+      weatherExposure: 'neutral',
+      fireRestrictionStatus: 'none_known',
+      privacyLikelihood: 'moderate',
+      occupancyLikelihood: 'low',
+      lateArrivalRisk: 'neutral',
+      dataConfidence: 'high',
+    },
+  },
+});
+assert.notStrictEqual(providerOnly.status, 'no_candidates');
+assert.ok(providerOnly.result, 'Route-linked provider candidates should use the canonical safe-endpoint engine.');
+assert.ok(providerOnly.endpoints.some((endpoint) => endpoint.candidate.id === providerOnlyCandidate.id));
 
 for (const [scenario, expected] of [['delay_30m', 30], ['delay_1h', 60], ['delay_2h', 120]]) {
   const model = build({ delayScenario: scenario });

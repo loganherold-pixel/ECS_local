@@ -49,10 +49,41 @@ function categoryMap(categories: ExpeditionReadinessCategory[]): Map<string, Exp
 function offlinePackageSummary(input: ExpeditionReadinessInput): string {
   const offline = input.offline;
   if (!offline) return 'Offline package state is unavailable.';
+  if (offline.canonicalAudit) {
+    const firstIssue = offline.canonicalAudit.blockers[0] ?? offline.canonicalAudit.warnings[0] ?? null;
+    return firstIssue
+      ? `${offline.canonicalAudit.summary} ${firstIssue.title}: ${firstIssue.explanation}`
+      : offline.canonicalAudit.summary;
+  }
   if (offline.packageStatus === 'ready') return 'Route package is prepared from available cache signals.';
   if (offline.packageStatus === 'partial') return 'Route package is incomplete; review missing offline assets.';
   if (offline.packageStatus === 'missing') return 'No usable route package is available for this expedition.';
   return 'Offline package confidence is limited.';
+}
+
+function weatherSnapshotAudit(input: ExpeditionReadinessInput): {
+  status: ExpeditionDepartureAuditItemStatus;
+  summary: string;
+} {
+  const offline = input.offline;
+  if (offline?.weatherSnapshotState === 'ready') {
+    return { status: 'complete', summary: 'Cached weather snapshot is ready for offline reference.' };
+  }
+  if (offline?.weatherSnapshotState === 'stale') {
+    return { status: 'caution', summary: 'Cached weather is stale last-known data and is not live. Refresh when service is available.' };
+  }
+  if (offline?.weatherSnapshotState === 'expired') {
+    return { status: 'caution', summary: 'Cached weather has expired. It remains visible as last-known reference and must not be treated as current.' };
+  }
+  if (offline?.weatherSnapshotState && ['missing', 'failed', 'corrupt', 'unavailable'].includes(offline.weatherSnapshotState)) {
+    return { status: 'unavailable', summary: 'Weather snapshot is unavailable in this offline package.' };
+  }
+  return {
+    status: statusFromBoolean(offline?.weatherSnapshotAvailable, true),
+    summary: offline?.weatherSnapshotAvailable
+      ? 'Recent live or snapshotted weather is available for this brief.'
+      : 'Weather snapshot cache is unavailable; refresh before departure if service exists.',
+  };
 }
 
 function fuelRangeAuditStatus(
@@ -307,6 +338,7 @@ export function buildDepartureAudit(
   const resolvedTripIntent = resolveExpeditionTripIntent(input).tripIntent;
   const includeCampCandidates = resolvedTripIntent !== 'dayTrip';
   const routeActionDisabledReason = routeRequiredReason(input);
+  const weatherAudit = weatherSnapshotAudit(input);
 
   const auditItems = [
     item(
@@ -330,10 +362,8 @@ export function buildDepartureAudit(
     item(
       'weather-snapshot',
       'Weather snapshot',
-      statusFromBoolean(offline?.weatherSnapshotAvailable, true),
-      offline?.weatherSnapshotAvailable
-        ? 'Recent live or snapshotted weather is available for this brief.'
-        : 'Weather snapshot cache is unavailable; refresh before departure if service exists.',
+      weatherAudit.status,
+      weatherAudit.summary,
       'Refresh Weather',
       null,
     ),

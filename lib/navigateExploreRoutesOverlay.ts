@@ -8,6 +8,11 @@ import { buildExploreNavigationPayload } from './navigationHandoffStore';
 import { getExploreRoutePreviewRoutePoints } from './exploreRoutePreview';
 import type { AIGeneratedRoute } from './aiRouteTypes';
 import { simplifyRouteGeometryForPreview } from './explore/exploreMapPreviewOptimization';
+import {
+  normalizeExploreDiscoveryItems,
+  routeWithExploreDiscoveryProvenance,
+  type ExploreDiscoverySourceKind,
+} from './explore/exploreDiscoveryItem';
 
 export const EXPLORE_ROUTES_AI_CATEGORY = 'all-drivable-trails';
 
@@ -173,12 +178,57 @@ export function buildExploreRouteOverlaySegmentsFromRoutes(args: {
     ...(args.favoriteRoutes ?? []).map((route) => toCandidate(route, 'favorite')),
     ...(args.ecsRouteIdeaRoutes ?? []).map((route) => toCandidate(route, 'ecs_route_idea')),
   ];
+  const sourceKindForCategory = (
+    category: ExploreRouteOverlayCategory,
+  ): ExploreDiscoverySourceKind => {
+    switch (category) {
+      case 'trail_pack': return 'trail_pack';
+      case 'favorite': return 'saved_built';
+      case 'ecs_route_idea': return 'ecs_idea';
+      case 'hidden_gem':
+      case 'popular_trail':
+      default:
+        return 'hidden_gem';
+    }
+  };
+  const categoryForSourceKind = (
+    sourceKind: ExploreDiscoverySourceKind,
+    sourceId: string,
+  ): ExploreRouteOverlayCategory => {
+    const exactCandidate = candidates.find((candidate) =>
+      candidate.route.id === sourceId && sourceKindForCategory(candidate.category) === sourceKind,
+    );
+    if (exactCandidate) return exactCandidate.category;
+    switch (sourceKind) {
+      case 'trail_pack': return 'trail_pack';
+      case 'saved_built':
+      case 'imported_stitched':
+        return 'favorite';
+      case 'ecs_idea': return 'ecs_route_idea';
+      case 'hidden_gem':
+      default:
+        return 'hidden_gem';
+    }
+  };
+  const normalizedCandidates = normalizeExploreDiscoveryItems(
+    candidates.map((candidate) => ({
+      route: candidate.route,
+      sourceKind: sourceKindForCategory(candidate.category),
+    })),
+  ).map<ExploreRouteCandidate>((item) => ({
+    route: routeWithExploreDiscoveryProvenance(item),
+    category: categoryForSourceKind(item.primarySource.sourceKind, item.primarySource.sourceId),
+    compatResult:
+      args.compatibilityResults?.get(item.route.id) ??
+      args.compatibilityResults?.get(item.primarySource.sourceId) ??
+      null,
+  }));
   const seen = new Set<string>();
   const segments: ExploreRouteOverlaySegment[] = [];
   let skippedMissingGeometryCount = 0;
   let cappedCount = 0;
 
-  candidates.forEach((candidate) => {
+  normalizedCandidates.forEach((candidate) => {
     if (segments.length >= maxRenderedRoutes) {
       cappedCount += 1;
       return;
@@ -198,7 +248,7 @@ export function buildExploreRouteOverlaySegmentsFromRoutes(args: {
 
   return {
     segments,
-    candidateCount: candidates.length,
+    candidateCount: normalizedCandidates.length,
     skippedMissingGeometryCount,
     cappedCount,
   };

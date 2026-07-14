@@ -46,8 +46,8 @@ assert.match(
 );
 assert.match(
   storeSource,
-  /if \(existingIndex >= 0\)[\s\S]*currentEvent\.id === event\.id \? event : currentEvent/,
-  'Dispatch event store should replace same-ID events during sync-state updates.',
+  /if \(existingIndex >= 0\)[\s\S]*mergeDispatchEventRecord\(existingEvent, event\)[\s\S]*currentEvent\.id === event\.id \? mergedEvent : currentEvent/,
+  'Dispatch event store should merge same-ID sync updates without allowing stale replacement.',
 );
 
 assert.match(
@@ -82,8 +82,8 @@ assert.match(
 );
 assert.match(
   dispatchSource,
-  /recoveryCadSharingEnabled = externalDispatchIntegrationEnabled \|\| Boolean\(activeConvoyControl\?\.convoyId\)/,
-  'Recovery CAD sharing should stay enabled for active convoys even without external dispatch integration.',
+  /recoveryCadSharingEnabled = recoveryCadIdentityAuthorized &&/,
+  'Recovery CAD sharing should require an authenticated team or convoy member identity.',
 );
 assert.match(
   dispatchSource,

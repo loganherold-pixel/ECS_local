@@ -276,16 +276,18 @@ async function fetchWithRetry(
 ): Promise<unknown> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= policy.retries; attempt += 1) {
+    if (context.signal?.aborted) throw new Error('AirNow request cancelled.');
     try {
       return await context.serverFetch!({
         url,
         timeoutMs: policy.timeoutMs,
         headers: { Accept: 'application/json' },
+        signal: context.signal,
       });
     } catch (error: any) {
       lastError = error;
-      if (!isRetryableAirNowError(error) || attempt >= policy.retries) break;
-      await delay(policy.retryBackoffMs * (attempt + 1));
+      if (context.signal?.aborted || !isRetryableAirNowError(error) || attempt >= policy.retries) break;
+      await delay(policy.retryBackoffMs * (attempt + 1), context.signal);
     }
   }
   throw lastError instanceof Error ? lastError : new Error('AirNow fetch failed.');
@@ -348,8 +350,19 @@ function normalizeAirNowEnvValue(value: unknown): string | null {
   return trimmed.length > 0 && trimmed !== '""' ? trimmed : null;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal | null): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error('AirNow request cancelled.'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('AirNow request cancelled.'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, Math.max(0, ms));
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function getProcessEnv(): AirNowEnv {

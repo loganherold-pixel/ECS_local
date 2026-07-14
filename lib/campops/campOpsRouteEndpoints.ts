@@ -15,15 +15,8 @@ import {
   createEmptyCampRecommendationSet,
   normalizeCampOpsScore,
 } from './campOpsTypes';
-import {
-  evaluateCampHardGateCandidates,
-  type CampHardGateCandidateEvaluation,
-} from './campOpsHardGates';
-import { generateCampRecommendationSet } from './campOpsRecommendations';
-import {
-  rankCampSuitabilityCandidates,
-  type CampSuitabilityScoreResult,
-} from './campOpsScoring';
+import type { CampHardGateCandidateEvaluation } from './campOpsHardGates';
+import { evaluateCampOpsRecommendations } from './campOpsRecommendationCoordinator';
 
 export const CAMP_OPS_ROUTE_ENDPOINT_DEFAULT_SEARCH_CORRIDOR_MILES = 3;
 export const CAMP_OPS_ROUTE_ENDPOINT_PREFERRED_ROUTE_BAND_MILES = 0.5;
@@ -376,41 +369,21 @@ function recommendationForWindow(args: {
   const enrichmentsByCandidateId = Object.fromEntries(
     args.bundles.map((bundle) => [bundle.candidate.id, bundle.enrichment]),
   );
-  const hardGateEvaluations = evaluateCampHardGateCandidates({
+  const evaluation = evaluateCampOpsRecommendations({
     context: args.context,
     candidates,
     enrichmentsByCandidateId,
-    config: {},
+    hardGateConfig: {},
+    scoringConfig: {},
+    recommendationConfig: {},
   });
-  const hardGateEvaluationsByCandidateId: Record<string, CampHardGateCandidateEvaluation> = {};
-  hardGateEvaluations.forEach((evaluation) => {
-    hardGateEvaluationsByCandidateId[evaluation.candidate.id] = evaluation;
-  });
-
-  const suitabilityScores = rankCampSuitabilityCandidates({
-    context: args.context,
-    candidates,
-    enrichmentsByCandidateId,
-    hardGateEvaluationsByCandidateId,
-    config: {},
-  });
-  const suitabilityScoresByCandidateId: Record<string, CampSuitabilityScoreResult> = {};
-  suitabilityScores.forEach((score) => {
-    suitabilityScoresByCandidateId[score.candidate.id] = score;
-  });
-
-  const baseSet = generateCampRecommendationSet({
-    context: args.context,
-    candidates,
-    enrichmentsByCandidateId,
-    hardGateEvaluationsByCandidateId,
-    suitabilityScoresByCandidateId,
-    config: {},
-  });
+  const hardGateEvaluationsByCandidateId = evaluation.hardGateEvaluationsByCandidateId;
+  const normalizedEnrichments = evaluation.enrichmentsByCandidateId;
+  const baseSet = evaluation.recommendationSet;
   const verifiedPrimary = (baseSet.rankedCandidates ?? candidates).find((candidate) =>
     isVerifiedFirstPrimaryCandidate(
       candidate,
-      enrichmentsByCandidateId[candidate.id],
+      normalizedEnrichments[candidate.id],
       hardGateEvaluationsByCandidateId[candidate.id],
     ),
   ) ?? null;

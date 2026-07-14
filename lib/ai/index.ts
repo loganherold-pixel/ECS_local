@@ -5,4 +5,8 @@ export * from './ecsAIEngine';
 export * from './ecsAISuppression';
 export * from './ecsAITypes';
 export * from './ecsAITruth';
+export * from './aiPolicyBoundary';
+export * from './aiRequestCoordinator';
+export * from './expeditionAIContract';
+export * from './debriefAIContract';
 export * from './readinessExplanationGuardrails';

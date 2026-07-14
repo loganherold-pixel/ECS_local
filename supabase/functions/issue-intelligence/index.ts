@@ -14,6 +14,8 @@ type RequestBody = {
   events?: IssueEvent[];
 };
 
+const MAX_INGEST_BATCH_SIZE = 20;
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -70,6 +72,26 @@ async function requireAdmin(req: Request): Promise<{ ok: true } | { ok: false; r
   return { ok: true };
 }
 
+async function requireAuthenticatedUser(req: Request): Promise<{ ok: true } | { ok: false; response: Response }> {
+  const authHeader = req.headers.get('authorization') ?? req.headers.get('Authorization');
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) {
+    return {
+      ok: false,
+      response: jsonResponse({ ok: false, code: 'ISSUE_AUTH_REQUIRED', error: 'Authentication required' }, 401),
+    };
+  }
+
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data.user?.id) {
+    return {
+      ok: false,
+      response: jsonResponse({ ok: false, code: 'ISSUE_AUTH_INVALID', error: 'Unable to validate session' }, 401),
+    };
+  }
+  return { ok: true };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -80,15 +102,28 @@ serve(async (req) => {
     const action = String(body.action ?? '');
 
     if (action === 'ingest_issue_event') {
+      const access = await requireAuthenticatedUser(req);
+      if (!access.ok) return access.response;
       const events = Array.isArray(body.events) ? body.events : [];
       if (!events.length) {
         return jsonResponse({ ok: true, inserted: 0 });
+      }
+      if (events.length > MAX_INGEST_BATCH_SIZE) {
+        return jsonResponse({
+          ok: false,
+          code: 'ISSUE_BATCH_LIMIT_EXCEEDED',
+          error: 'Issue event batch exceeds the supported limit',
+        }, 413);
       }
 
       const normalizedEvents = events.map(normalizeIssueEventForInsert);
       const { error } = await admin.from('ecs_issue_events').insert(normalizedEvents);
       if (error) {
-        return jsonResponse({ ok: false, error: error.message }, 500);
+        return jsonResponse({
+          ok: false,
+          code: 'ISSUE_EVENT_INSERT_FAILED',
+          error: 'Issue event insert failed',
+        }, 500);
       }
       return jsonResponse({ ok: true, inserted: normalizedEvents.length });
     }
@@ -104,7 +139,11 @@ serve(async (req) => {
         .limit(4000);
 
       if (error) {
-        return jsonResponse({ ok: false, error: error.message }, 500);
+        return jsonResponse({
+          ok: false,
+          code: 'ISSUE_SUMMARY_READ_FAILED',
+          error: 'Issue summary read failed',
+        }, 500);
       }
 
       return jsonResponse({
@@ -114,7 +153,11 @@ serve(async (req) => {
     }
 
     return jsonResponse({ ok: false, error: 'Unsupported issue intelligence action' }, 400);
-  } catch (error: any) {
-    return jsonResponse({ ok: false, error: error?.message || 'Unexpected issue intelligence failure' }, 500);
+  } catch {
+    return jsonResponse({
+      ok: false,
+      code: 'ISSUE_INTELLIGENCE_UNEXPECTED',
+      error: 'Unexpected issue intelligence failure',
+    }, 500);
   }
 });

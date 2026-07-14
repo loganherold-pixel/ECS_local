@@ -3,7 +3,25 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import {
+  classifyEvidenceCheckOutcome,
+  writeEvidenceCheckResultForLane,
+} from './verification/evidence-result.mjs';
+
 const RESULT_RELATIVE_PATH = path.join('.smoke', 'android-qa-evidence-result.json');
+const EXTERNAL_ANDROID_EVIDENCE_BLOCKER_IDS = [
+  'mobile_qa_evidence_missing',
+  'android_device_qa_incomplete',
+  'android_qa_required_sections_missing',
+  'android_qa_visual_states_missing',
+  'android_qa_required_fields_missing',
+  'android_qa_required_fields_incomplete',
+  'android_qa_required_scenarios_missing',
+  'android_qa_required_scenarios_incomplete',
+  'android_qa_required_visual_state_results_missing',
+  'android_qa_required_visual_state_results_incomplete',
+  'android_qa_screenshot_or_evidence_references_missing',
+];
 
 const REQUIRED_SECTIONS = [
   { label: 'Environment', pattern: /^##\s+Environment\b/im },
@@ -312,6 +330,29 @@ export function runAndroidQaEvidenceCli(options = {}) {
   writeAndroidQaEvidenceResult(result, { rootDir: root });
   if (jsonOnly) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else stdout.write(formatAndroidQaEvidenceResult(result, { rootDir: root }));
+  const outcome = classifyEvidenceCheckOutcome({
+    passed: result.passed,
+    blockerIds: result.blockers,
+    externalBlockerIds: EXTERNAL_ANDROID_EVIDENCE_BLOCKER_IDS,
+  });
+  const laneExitCode = writeEvidenceCheckResultForLane({
+    checkId: 'android-evidence',
+    status: outcome.status,
+    safeCode: outcome.safeCode,
+    blockerIds: outcome.blockerIds,
+    summary: outcome.status === 'passed'
+      ? 'Android QA evidence is complete.'
+      : outcome.status === 'blocked_external'
+        ? 'Android QA evidence remains incomplete.'
+        : 'Android QA verification found an internally inconsistent or unsafe recommendation.',
+    evidence: result,
+    diagnostics: {
+      artifactId: 'android-qa-evidence-result',
+      domainStatus: result.status,
+      failedCount: result.blockers.length,
+    },
+  });
+  if (laneExitCode !== null) return laneExitCode;
   return result.passed ? 0 : 1;
 }
 

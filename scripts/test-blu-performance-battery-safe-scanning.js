@@ -17,6 +17,7 @@ const config = read('lib/bluPerformanceConfig.ts');
 const telemetryControl = read('src/vehicle-telemetry/TelemetryDiscoveryControl.ts');
 const obd2Adapter = read('src/vehicle-telemetry/OBD2Adapter.ts');
 const unifiedHook = read('lib/useUnifiedDeviceConnections.ts');
+const scannerCoordinator = read('lib/unifiedScannerCoordinator.ts');
 const ecoflowCloud = read('lib/ecoflowCloudConnection.ts');
 const diagnosticsLog = read('lib/bluDiagnosticsLog.ts');
 const powerTelemetryManager = read('src/power/telemetry/PowerTelemetryManager.ts');
@@ -48,12 +49,15 @@ assert(
 
 assert(
   unifiedHook.includes('const UNIFIED_BLUETOOTH_SCAN_DURATION_MS = BLU_SCAN_WINDOW_MS') &&
-    unifiedHook.includes('scanInFlightRef.current') &&
+    unifiedHook.includes('scannerCoordinatorRef.current!.requestSession') &&
     unifiedHook.includes('SCANNER_SCAN_WINDOW_DEBOUNCE_MS') &&
-    unifiedHook.includes("obd2Adapter.stopScan('unified_panel_unmount')") &&
-    unifiedHook.includes("reason: 'debounced_scan_window'") &&
+    unifiedHook.includes("scannerCoordinatorRef.current?.cancel('unmount')") &&
+    scannerCoordinator.includes("reason: 'already_scanning'") &&
+    scannerCoordinator.includes("reason: 'cooldown'") &&
+    scannerCoordinator.includes("reason: 'app_not_active'") &&
+    scannerCoordinator.includes("void this.cancel('timeout', session.id)") &&
     !unifiedHook.includes('const UNIFIED_BLUETOOTH_SCAN_DURATION_MS = 60_000'),
-  'Unified scanner must use the shared 10s scan window and suppress overlapping/manual repeat scans.',
+  'Unified scanner must use the shared bounded coordinator for overlap, cooldown, foreground, timeout, and cleanup.',
 );
 
 assert(

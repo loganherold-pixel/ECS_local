@@ -170,6 +170,7 @@ function featureToRegion(feature: DispersedCampingEligibilityFeatureCollection['
     permitRequired: properties.permitRequired,
     fireRestrictionKnown: properties.fireRestrictionKnown,
     seasonalAccessKnown: properties.seasonalAccessKnown,
+    closureActive: properties.closureActive,
     closureKnown: properties.closureKnown,
   };
 }

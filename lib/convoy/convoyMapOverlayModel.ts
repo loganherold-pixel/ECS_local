@@ -26,6 +26,8 @@ export type ConvoyMapOverlayMarker = {
   status: ConvoyMarkerIdentity['status'];
   statusLabel: string;
   sourceLabel: string;
+  observedAt: string | null;
+  accuracyMeters: number | null;
   lastUpdatedLabel: string;
   ageLabel: string | null;
   staleReason: string | null;
@@ -115,6 +117,8 @@ export function buildConvoyMapOverlayModel(input: {
       status: identity.status,
       statusLabel: identity.statusLabel,
       sourceLabel: participant.sourceLabel,
+      observedAt: member.capturedAt ?? member.updatedAt ?? null,
+      accuracyMeters: member.accuracyMeters,
       lastUpdatedLabel: formatConvoyParticipantLastUpdated(participant),
       ageLabel: identity.ageLabel,
       staleReason: member.staleReason,

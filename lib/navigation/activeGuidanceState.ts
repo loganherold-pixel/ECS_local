@@ -31,6 +31,7 @@ export type ActiveGuidanceRefreshReason =
   | 'reroute'
   | 'manual_refresh'
   | 'screen_focus'
+  | 'app_foreground'
   | 'restored_session';
 
 export interface ActiveGuidanceState {
@@ -226,6 +227,7 @@ export function normalizeActiveGuidanceRefreshReason(
     case 'reroute':
     case 'manual_refresh':
     case 'screen_focus':
+    case 'app_foreground':
     case 'restored_session':
       return reason;
     case 'manual':

@@ -295,11 +295,11 @@ export function migrateSpec(spec: any): VehicleSpec {
 }
 
 // ── Change listeners ────────────────────────────────────
-type Listener = () => void;
+type Listener = (vehicleId?: string) => void;
 const listeners: Set<Listener> = new Set();
 
-function notifyListeners() {
-  listeners.forEach(fn => { try { fn(); } catch {} });
+function notifyListeners(vehicleId?: string) {
+  listeners.forEach(fn => { try { fn(vehicleId); } catch {} });
 }
 
 // ── Public API ──────────────────────────────────────────
@@ -321,7 +321,7 @@ export const vehicleSpecStore = {
     const all = getAllSpecs();
     all[vehicleId] = spec;
     saveAllSpecs(all);
-    notifyListeners();
+    notifyListeners(vehicleId);
   },
 
   /**
@@ -334,7 +334,7 @@ export const vehicleSpecStore = {
       : { gvwr_lb: 0, base_weight_lb: 0, fuel_tank_capacity_gal: 0, fuel_type: 'diesel' as FuelType };
     all[vehicleId] = { ...existing, ...partial };
     saveAllSpecs(all);
-    notifyListeners();
+    notifyListeners(vehicleId);
   },
 
   /**
@@ -344,7 +344,7 @@ export const vehicleSpecStore = {
     const all = getAllSpecs();
     delete all[vehicleId];
     saveAllSpecs(all);
-    notifyListeners();
+    notifyListeners(vehicleId);
   },
 
   /**

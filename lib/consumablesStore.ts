@@ -83,13 +83,13 @@ function saveAllConsumables(data: Record<string, ConsumablesState>): void {
   lsSet(LS_KEY, JSON.stringify(data));
 }
 
-type Listener = () => void;
+type Listener = (vehicleId?: string) => void;
 const listeners: Set<Listener> = new Set();
 
-function notifyListeners() {
+function notifyListeners(vehicleId?: string) {
   listeners.forEach((fn) => {
     try {
-      fn();
+      fn(vehicleId);
     } catch {}
   });
 }
@@ -158,7 +158,7 @@ export const consumablesStore = {
             : null,
     };
     saveAllConsumables(all);
-    notifyListeners();
+    notifyListeners(vehicleId);
   },
 
   setFuelPercent: (
@@ -176,7 +176,7 @@ export const consumablesStore = {
       fuel_source: source,
     };
     saveAllConsumables(all);
-    notifyListeners();
+    notifyListeners(vehicleId);
   },
 
   setFuelGal: (
@@ -200,7 +200,7 @@ export const consumablesStore = {
       fuel_gal_updated_at: Date.now(),
     };
     saveAllConsumables(all);
-    notifyListeners();
+    notifyListeners(vehicleId);
   },
 
   setWaterGal: (
@@ -217,7 +217,7 @@ export const consumablesStore = {
       water_updated_at: Date.now(),
     };
     saveAllConsumables(all);
-    notifyListeners();
+    notifyListeners(vehicleId);
   },
 
   setAlternateFluid: (
@@ -250,7 +250,7 @@ export const consumablesStore = {
       alternate_fluid_updated_at: nextCurrent != null ? Date.now() : null,
     };
     saveAllConsumables(all);
-    notifyListeners();
+    notifyListeners(vehicleId);
   },
 
   computeFuelWeightLb: (vehicleId: string): number => {
@@ -313,7 +313,7 @@ export const consumablesStore = {
     if (vehicleId in all) {
       delete all[vehicleId];
       saveAllConsumables(all);
-      notifyListeners();
+      notifyListeners(vehicleId);
     }
   },
 

@@ -108,7 +108,7 @@ assert.strictEqual(noVehicleVisual.sourceFilename, 'Generic_SUV.png');
 const dashboardSource = read('app/(tabs)/dashboard.tsx');
 assert.ok(
   dashboardSource.includes('const [activeVehicleContextRevision') &&
-    dashboardSource.includes('vehicleSetupStore.subscribe(syncActiveVehicleContext)') &&
+    dashboardSource.includes('subscribeActiveVehicleState(syncActiveVehicleContext)') &&
     dashboardSource.includes('activeVehicleContext,'),
   'Dashboard should subscribe to active Fleet vehicle changes and pass activeVehicleContext into widgetData.',
 );
@@ -157,7 +157,8 @@ assert.ok(
 const fleetSource = read('app/(tabs)/fleet.tsx');
 assert.ok(
   fleetSource.includes('vehicleSetupStore.setActiveVehicleId(vehicleId)') &&
-    fleetSource.includes('vehicleSetupStore.setActiveVehicleId(result.vehicles[0].id)'),
+    fleetSource.includes('vehicleSetupStore.reconcileActiveVehicle(') &&
+    fleetSource.includes('autoSelectSingle: true'),
   'Fleet should write the selected vehicle to vehicleSetupStore instead of a duplicate selected-vehicle source.',
 );
 

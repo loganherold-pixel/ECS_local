@@ -61,6 +61,12 @@ export function buildOfflineNavigationProductionReadinessResult(options = {}) {
     offlineReadiness: path.join(root, 'lib', 'offlineReadinessPresentation.ts'),
     routeCacheService: path.join(root, 'lib', 'offlineRouteCacheService.ts'),
     tileSyncCoordinator: path.join(root, 'lib', 'offlineTileSyncCoordinator.ts'),
+    readinessManifest: path.join(root, 'lib', 'offlinePrepPack', 'offlineReadinessManifest.ts'),
+    readinessCoordinator: path.join(root, 'lib', 'offlinePrepPack', 'offlineReadinessCoordinator.ts'),
+    tileCacheStore: path.join(root, 'lib', 'tileCacheStore.ts'),
+    syncActionQueue: path.join(root, 'lib', 'syncActionQueue.ts'),
+    operationalDrill: path.join(root, 'scripts', 'run-offline-operational-failure-drill.js'),
+    operationalModeDoc: path.join(root, 'docs', 'offline-operational-mode.md'),
     navigate: path.join(root, 'app', '(tabs)', 'navigate.tsx'),
     offlineModal: path.join(root, 'components', 'navigate', 'OfflineCacheModal.tsx'),
     commandBrief: path.join(root, 'components', 'brief', 'CommandBriefScreen.tsx'),
@@ -75,6 +81,12 @@ export function buildOfflineNavigationProductionReadinessResult(options = {}) {
   const offlineReadiness = readIfExists(paths.offlineReadiness);
   const routeCacheService = readIfExists(paths.routeCacheService);
   const tileSyncCoordinator = readIfExists(paths.tileSyncCoordinator);
+  const readinessManifest = readIfExists(paths.readinessManifest);
+  const readinessCoordinator = readIfExists(paths.readinessCoordinator);
+  const tileCacheStore = readIfExists(paths.tileCacheStore);
+  const syncActionQueue = readIfExists(paths.syncActionQueue);
+  const operationalDrill = readIfExists(paths.operationalDrill);
+  const operationalModeDoc = readIfExists(paths.operationalModeDoc);
   const navigate = readIfExists(paths.navigate);
   const offlineModal = readIfExists(paths.offlineModal);
   const commandBrief = readIfExists(paths.commandBrief);
@@ -85,6 +97,33 @@ export function buildOfflineNavigationProductionReadinessResult(options = {}) {
   const offlineHonestyAudit = readIfExists(paths.offlineHonestyAudit);
 
   const checks = [
+    check(
+      'canonical_offline_manifest_is_resumable_verified_and_protected',
+      'Offline Prep uses one canonical, resumable, integrity-aware manifest with protected storage and idempotent replay.',
+      readinessManifest.includes('export interface OfflineReadinessManifest') &&
+        readinessManifest.includes("'route_geometry'") &&
+        readinessManifest.includes("'map_region'") &&
+        readinessManifest.includes("'weather_snapshot'") &&
+        readinessManifest.includes('sha256OfflineAsset') &&
+        readinessManifest.includes('auditOfflineReadinessManifest') &&
+        readinessCoordinator.includes('restoreInterruptedPreparations') &&
+        readinessCoordinator.includes('reconcileTileState') &&
+        tileCacheStore.includes('setProtectionResolver') &&
+        tileCacheStore.includes('getRegionProtectionReason') &&
+        syncActionQueue.includes('idempotencyKey: string;') &&
+        syncActionQueue.includes('sequence: number;') &&
+        operationalDrill.includes("drillId: 'ecs-offline-operational-failure-drill'") &&
+        operationalModeDoc.includes('Provider Restrictions'),
+      [
+        relPath(root, paths.readinessManifest),
+        relPath(root, paths.readinessCoordinator),
+        relPath(root, paths.tileCacheStore),
+        relPath(root, paths.syncActionQueue),
+        relPath(root, paths.operationalDrill),
+        relPath(root, paths.operationalModeDoc),
+      ],
+      ['Keep canonical manifest integrity, resumable preparation, active-asset protection, and ordered idempotent replay intact.'],
+    ),
     check(
       'offline_readiness_derives_route_style_layer_and_stale_states',
       'Offline readiness derives route, style, layer, stale, missing, and cached states without a fake route-pack model.',
@@ -156,7 +195,9 @@ export function buildOfflineNavigationProductionReadinessResult(options = {}) {
         campLayerOfflineCache.includes('writeEstablishedCampgroundsOfflineCache') &&
         campLayerZoom.includes('ESTABLISHED_CAMPSITES_MIN_ZOOM') &&
         campLayerZoom.includes('DISPERSED_CAMPING_ELIGIBILITY_MIN_ZOOM') &&
-        navigate.includes("plan.reason === 'offline'") &&
+        navigate.includes('if (!campLayerFetchOnline)') &&
+        navigate.includes("cancel('dispersed_camping', 'offline')") &&
+        navigate.includes("cancel('established_campgrounds', 'offline')") &&
         navigate.includes('readDispersedCampingOfflineCache') &&
         navigate.includes('readEstablishedCampgroundsOfflineCache') &&
         navigate.includes('cached established campground') &&

@@ -5,6 +5,7 @@ import type { Vehicle } from '../types';
 import { vehicleSetupStore } from '../vehicleSetupStore';
 import { vehicleSpecStore } from '../vehicleSpecStore';
 import { vehicleStore } from '../vehicleStore';
+import { registerECSPerformanceSubscription } from '../performance/ecsPerformanceDiagnostics';
 import type { FleetRiskLevel, FleetWeightConfidenceLevel, FleetWeightSource } from './fleetPremiumDomain';
 import {
   selectFleetVehicleState,
@@ -147,12 +148,36 @@ export type ECSVehicularState = {
   signature: string;
 };
 
+export type ActiveVehicleStateChangeSource =
+  | 'selection'
+  | 'vehicle'
+  | 'spec'
+  | 'consumables'
+  | 'tires_lift'
+  | 'loadout'
+  | 'loadout_item';
+
+export type ActiveVehicleStateChangeEvent = {
+  revision: number;
+  activeVehicleId: string | null;
+  sources: ActiveVehicleStateChangeSource[];
+  affectedVehicleIds: string[];
+};
+
+export type ActiveVehicleSubscriptionDiagnostics = {
+  consumerCount: number;
+  sourceSubscriptionCount: number;
+  publishedRevision: number;
+  pending: boolean;
+};
+
 const RISK_RANK: Record<FleetRiskLevel, number> = {
   clear: 0,
   watch: 1,
   caution: 2,
   critical: 3,
 };
+const derivedActiveVehicleStateCache = new WeakMap<FleetCanonicalVehicleState, Map<string, ECSVehicularState>>();
 
 function roundLbs(value: number | null | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
@@ -310,6 +335,9 @@ export function buildActiveVehicleStateFromFleetState(
   if (!fleetState) {
     return emptyVehicleState(activeVehicleId, activeVehicleId ? 'missing_vehicle' : 'no_active_vehicle');
   }
+  const cacheKey = activeVehicleId ?? 'none';
+  const cached = derivedActiveVehicleStateCache.get(fleetState)?.get(cacheKey);
+  if (cached) return cached;
 
   const { vehicle, fleetVehicle, operatingWeight, resourceProfile } = fleetState;
   const weightResult = operatingWeight.weightResult;
@@ -466,7 +494,7 @@ export function buildActiveVehicleStateFromFleetState(
     ...(weight.isEstimate ? ['Some vehicle intelligence is estimated; verify saved specs for higher confidence.'] : []),
   ]));
 
-  return {
+  const state: ECSVehicularState = {
     schemaVersion: 'ecs.vehicle-state.v1',
     status,
     identity,
@@ -498,6 +526,10 @@ export function buildActiveVehicleStateFromFleetState(
       intelligence,
     }),
   };
+  const stateCache = derivedActiveVehicleStateCache.get(fleetState) ?? new Map<string, ECSVehicularState>();
+  stateCache.set(cacheKey, state);
+  derivedActiveVehicleStateCache.set(fleetState, stateCache);
+  return state;
 }
 
 export function getActiveVehicleState(vehicleId?: string | null): ECSVehicularState {
@@ -521,24 +553,127 @@ export async function waitForActiveVehicleStateHydration(): Promise<void> {
     vehicleSpecStore.waitForHydration(),
     consumablesStore.waitForHydration(),
     tiresLiftStore.waitForHydration(),
+    loadoutStore.waitForHydration(),
   ]);
 }
 
-export function subscribeActiveVehicleState(listener: () => void): () => void {
-  const offSetup = vehicleSetupStore.subscribe(listener);
-  const offVehicles = vehicleStore.subscribe(() => listener());
-  const offSpecs = vehicleSpecStore.subscribe(listener);
-  const offConsumables = consumablesStore.subscribe(listener);
-  const offTiresLift = tiresLiftStore.subscribe(() => listener());
-  const offLoadouts = loadoutStore.subscribe(() => listener());
-  const offLoadoutItems = loadoutItemStore.subscribe(() => listener());
+type ActiveVehicleStateListener = (event: ActiveVehicleStateChangeEvent) => void;
+
+const activeVehicleStateListeners = new Set<ActiveVehicleStateListener>();
+let sourceUnsubscribers: Array<() => void> | null = null;
+let publishedRevision = 0;
+let pendingSources = new Set<ActiveVehicleStateChangeSource>();
+let pendingVehicleIds = new Set<string>();
+let pendingNotification = false;
+let pendingGeneration = 0;
+let nextConsumerId = 1;
+
+function publishActiveVehicleStateChange(
+  sources: Iterable<ActiveVehicleStateChangeSource>,
+  affectedVehicleIds: Iterable<string>,
+): void {
+  if (activeVehicleStateListeners.size === 0) return;
+  publishedRevision += 1;
+  const event: ActiveVehicleStateChangeEvent = {
+    revision: publishedRevision,
+    activeVehicleId: vehicleSetupStore.getActiveVehicleId(),
+    sources: Array.from(new Set(sources)),
+    affectedVehicleIds: Array.from(new Set(affectedVehicleIds)),
+  };
+  activeVehicleStateListeners.forEach((listener) => {
+    try {
+      listener(event);
+    } catch {}
+  });
+}
+
+function cancelPendingActiveVehicleNotification(): void {
+  pendingGeneration += 1;
+  pendingNotification = false;
+  pendingSources.clear();
+  pendingVehicleIds.clear();
+}
+
+function scheduleActiveVehicleStateChange(
+  source: ActiveVehicleStateChangeSource,
+  vehicleId?: string | null,
+): void {
+  const activeVehicleId = vehicleSetupStore.getActiveVehicleId();
+  if (!activeVehicleId) return;
+  if (vehicleId && vehicleId !== activeVehicleId) return;
+  pendingSources.add(source);
+  if (vehicleId) pendingVehicleIds.add(vehicleId);
+  if (pendingNotification) return;
+  pendingNotification = true;
+  const generation = ++pendingGeneration;
+  const flush = () => {
+    if (!pendingNotification || generation !== pendingGeneration) return;
+    const sources = pendingSources;
+    const vehicleIds = pendingVehicleIds;
+    pendingSources = new Set();
+    pendingVehicleIds = new Set();
+    pendingNotification = false;
+    publishActiveVehicleStateChange(sources, vehicleIds);
+  };
+  if (typeof queueMicrotask === 'function') queueMicrotask(flush);
+  else Promise.resolve().then(flush);
+}
+
+function attachActiveVehicleSourceSubscriptions(): void {
+  if (sourceUnsubscribers) return;
+  sourceUnsubscribers = [
+    vehicleSetupStore.subscribe((event) => {
+      if (event.previousVehicleId === event.activeVehicleId) return;
+      cancelPendingActiveVehicleNotification();
+      publishActiveVehicleStateChange(
+        ['selection'],
+        [event.previousVehicleId, event.activeVehicleId].filter((id): id is string => Boolean(id)),
+      );
+    }),
+    vehicleStore.subscribe((event) => scheduleActiveVehicleStateChange('vehicle', event.vehicleId)),
+    vehicleSpecStore.subscribe((vehicleId) => scheduleActiveVehicleStateChange('spec', vehicleId)),
+    consumablesStore.subscribe((vehicleId) => scheduleActiveVehicleStateChange('consumables', vehicleId)),
+    tiresLiftStore.subscribe((vehicleId) => scheduleActiveVehicleStateChange('tires_lift', vehicleId)),
+    loadoutStore.subscribe((_loadoutId, vehicleId) => scheduleActiveVehicleStateChange('loadout', vehicleId)),
+    loadoutItemStore.subscribe((loadoutId) => {
+      const activeVehicleId = vehicleSetupStore.getActiveVehicleId();
+      if (!activeVehicleId) return;
+      const activeLoadout = loadoutStore.getLatestLocalByVehicleIdSync(activeVehicleId);
+      if (activeLoadout?.id === loadoutId) scheduleActiveVehicleStateChange('loadout_item', activeVehicleId);
+    }),
+  ];
+}
+
+function detachActiveVehicleSourceSubscriptions(): void {
+  sourceUnsubscribers?.forEach((unsubscribe) => unsubscribe());
+  sourceUnsubscribers = null;
+  cancelPendingActiveVehicleNotification();
+}
+
+export function getActiveVehicleSubscriptionDiagnostics(): ActiveVehicleSubscriptionDiagnostics {
+  return {
+    consumerCount: activeVehicleStateListeners.size,
+    sourceSubscriptionCount: sourceUnsubscribers?.length ?? 0,
+    publishedRevision,
+    pending: pendingNotification,
+  };
+}
+
+export function subscribeActiveVehicleState(listener: ActiveVehicleStateListener): () => void {
+  activeVehicleStateListeners.add(listener);
+  attachActiveVehicleSourceSubscriptions();
+  const consumerId = nextConsumerId++;
+  const unregisterPerformanceSubscription = registerECSPerformanceSubscription(
+    'active_vehicle_propagation',
+    'active_vehicle_consumer',
+    `consumer-${consumerId}`,
+  );
+  let released = false;
   return () => {
-    offSetup();
-    offVehicles();
-    offSpecs();
-    offConsumables();
-    offTiresLift();
-    offLoadouts();
-    offLoadoutItems();
+    if (released) return;
+    released = true;
+    activeVehicleStateListeners.delete(listener);
+    unregisterPerformanceSubscription();
+    if (activeVehicleStateListeners.size === 0) detachActiveVehicleSourceSubscriptions();
   };
 }

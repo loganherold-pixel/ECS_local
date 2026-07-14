@@ -18,6 +18,39 @@ function assertIncludes(source, fragment, message) {
   assert.ok(source.includes(fragment), message);
 }
 
+function readTrackedQaEvidence() {
+  try {
+    return execFileSync('git', ['ls-files', '.qa', 'qa-evidence'], {
+      cwd: root,
+      encoding: 'utf8',
+    }).trim();
+  } catch (error) {
+    if (error?.code !== 'EPERM') throw error;
+    const index = fs.readFileSync(path.join(root, '.git', 'index'));
+    assert.equal(index.toString('ascii', 0, 4), 'DIRC', 'Git index fallback should read a standard index.');
+    const version = index.readUInt32BE(4);
+    assert.ok(version === 2 || version === 3, `Unsupported Git index version ${version} in test fallback.`);
+    const count = index.readUInt32BE(8);
+    const matches = [];
+    let offset = 12;
+    for (let entryIndex = 0; entryIndex < count; entryIndex += 1) {
+      const entryStart = offset;
+      const flags = index.readUInt16BE(entryStart + 60);
+      const extendedBytes = version === 3 && (flags & 0x4000) !== 0 ? 2 : 0;
+      const pathStart = entryStart + 62 + extendedBytes;
+      const pathEnd = index.indexOf(0, pathStart);
+      assert.ok(pathEnd >= pathStart, 'Git index entry should contain a null-terminated path.');
+      const trackedPath = index.toString('utf8', pathStart, pathEnd).replace(/\\/g, '/');
+      if (trackedPath === '.qa' || trackedPath.startsWith('.qa/') || trackedPath === 'qa-evidence' || trackedPath.startsWith('qa-evidence/')) {
+        matches.push(trackedPath);
+      }
+      const entryLength = pathEnd + 1 - entryStart;
+      offset = entryStart + Math.ceil(entryLength / 8) * 8;
+    }
+    return matches.join('\n');
+  }
+}
+
 require.extensions['.ts'] = function compileTs(module, filename) {
   const source = fs.readFileSync(filename, 'utf8');
   const output = ts.transpileModule(source, {
@@ -47,6 +80,8 @@ const tabBoundary = read('components/TabErrorBoundary.tsx');
 const widgetBoundary = read('components/WidgetErrorBoundary.tsx');
 const rootLayout = read('app/_layout.tsx');
 const distributionResolver = read('lib/auth/distributionEntryResolver.ts');
+const featureVisibilityRegistry = read('lib/features/featureVisibilityRegistry.ts');
+const routeManifest = read('lib/routeManifest.ts');
 const convoyIdentityRoute = read('app/dev/convoy-identity-qa.tsx');
 const convoyFixtureRoute = read('app/dev/convoy-participant-qa.tsx');
 const convoyFixtureSource = read('lib/convoy/convoyParticipantQaFixtures.ts');
@@ -195,7 +230,9 @@ assertIncludes(widgetBoundary, 'reportLayoutFailure', 'Widget error boundary sho
 assertIncludes(rootLayout, 'setGlobalHandler', 'Root layout should install a global runtime error handler.');
 assertIncludes(rootLayout, 'unhandledrejection', 'Root layout should report unhandled promise rejections.');
 
-assertIncludes(distributionResolver, '/dev/convoy-identity-qa', 'Dev identity route should be explicitly gated.');
+assertIncludes(distributionResolver, 'resolveECSFeatureRouteAccess', 'Distribution entry should defer dev route gating to the feature registry.');
+assertIncludes(featureVisibilityRegistry, '/dev/convoy-identity-qa', 'Dev identity route should be registered behind a feature policy.');
+assertIncludes(routeManifest, '/dev/convoy-identity-qa', 'Dev identity route should be represented in the canonical route manifest.');
 assertIncludes(convoyIdentityRoute, 'isConvoyQaIdentityDiagnosticAllowed', 'Convoy identity QA route should use its production guard.');
 assertIncludes(convoyFixtureRoute, 'Redirect', 'Convoy participant fixture route should redirect when unavailable.');
 assertIncludes(convoyFixtureSource, "nodeEnv === 'test'", 'Convoy participant fixture guard should be test aware.');
@@ -203,10 +240,7 @@ assertIncludes(convoyFixtureSource, 'typeof __DEV__', 'Convoy participant fixtur
 
 assertIncludes(gitIgnore, '.qa/', 'Raw QA evidence folder should remain ignored.');
 assertIncludes(gitIgnore, 'qa-evidence/', 'Raw QA evidence fallback folder should remain ignored.');
-const trackedQaEvidence = execFileSync('git', ['ls-files', '.qa', 'qa-evidence'], {
-  cwd: root,
-  encoding: 'utf8',
-}).trim();
+const trackedQaEvidence = readTrackedQaEvidence();
 assert.equal(trackedQaEvidence, '', 'Raw QA evidence folders should not have tracked files.');
 
 for (const requiredDocFragment of [

@@ -106,7 +106,7 @@ class ConnectivityMonitor {
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
   private _onlineCheckTimer: ReturnType<typeof setInterval> | null = null;
   private _appStateSubscription: { remove: () => void } | null = null;
-  private _appState: AppStateStatus = AppState.currentState;
+  private _appState: AppStateStatus = AppState?.currentState ?? 'active';
   private _initialized = false;
   private _monitoringStarted = false;
   private _lastOnlineAt: string | null = null;
@@ -381,8 +381,10 @@ class ConnectivityMonitor {
     if (this._monitoringStarted) return;
     this._monitoringStarted = true;
     this._initialized = false;
-    this._appState = AppState.currentState;
-    this._appStateSubscription = AppState.addEventListener('change', this._handleAppStateChange);
+    this._appState = AppState?.currentState ?? 'active';
+    this._appStateSubscription = AppState?.addEventListener
+      ? AppState.addEventListener('change', this._handleAppStateChange)
+      : null;
 
     // Initial network type detection
     this._detectNetworkType();

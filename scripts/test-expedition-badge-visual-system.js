@@ -63,7 +63,6 @@ const hubSource = read('components/dashboard/ExpeditionTab.tsx');
 });
 
 [
-  'custom badge SVG/art assets',
   'badge unlock animation sequence',
   'stamp earned badges onto PDF expedition reports',
   'badge location markers to recap maps',
@@ -71,6 +70,13 @@ const hubSource = read('components/dashboard/ExpeditionTab.tsx');
 ].forEach((todo) => {
   assert(visualsSource.includes(todo), `Badge visual future hook should mention ${todo}.`);
 });
+
+assert(
+  visualsSource.includes('ExpeditionBadgeArtwork') &&
+    visualsSource.includes('isEarned && artwork') &&
+    visualsSource.includes('badge.iconKey'),
+  'Badge visuals should use achieved artwork only for earned badges and retain iconKey fallback rendering.',
+);
 
 assert(
   visualsSource.includes('badges.filter((badge) => !!badge.unlockedAt)'),

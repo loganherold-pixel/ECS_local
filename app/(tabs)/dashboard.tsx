@@ -80,7 +80,6 @@ import { useAccelerometer } from '../../lib/useAccelerometer';
 import DashboardHeader from '../../components/dashboard/DashboardHeader';
 import WidgetGrid from '../../components/dashboard/WidgetGrid';
 import WidgetLibrary from '../../components/dashboard/WidgetLibrary';
-import WidgetDetailModal from '../../components/dashboard/WidgetDetailModal';
 import WidgetManagePopover from '../../components/dashboard/WidgetManagePopover';
 import CreateCustomWidgetModal from '../../components/dashboard/CreateCustomWidgetModal';
 import GridLayoutPicker from '../../components/dashboard/GridLayoutPicker';
@@ -94,7 +93,6 @@ import AutoModeToggle from '../../components/dashboard/AutoModeToggle';
 import ECSIntelligenceReadout from '../../components/dashboard/ECSIntelligenceReadout';
 import OfflineStateBanner from '../../components/offline/OfflineStateBanner';
 import { CommandBriefScreen } from '../../components/brief';
-import ExpeditionTab from '../../components/dashboard/ExpeditionTab';
 import type { MissionBrief } from '../../lib/missionBriefEngine';
 import { useEcsTopBannerHeight } from '../../components/ECSGlobalBanner';
 
@@ -116,15 +114,12 @@ import {
   type ActiveTripResumeCardModel,
 } from '../../lib/activeTripResumeCard';
 
-import { advisoryStore } from '../../lib/advisoryStore';
-import { isLowValueTelemetryDegradedSummary } from '../../lib/ai/degradedOperationsEngine';
 import { useECSAI } from '../../lib/ai/useECSAI';
 import {
   selectBriefCommandState,
   type BriefCommandState,
 } from '../../lib/ai/briefSelectors';
 import { recordBriefCadEntry } from '../../lib/briefCadLogStore';
-import { resetIntelligence } from '../../lib/assistantIntelligenceEngine';
 import { bluPowerAuthority } from '../../lib/BluPowerAuthority';
 import {
   selectDashboardCommandState,
@@ -166,11 +161,10 @@ import {
   setExpeditionAssessmentContextProvider,
 } from '../../stores/expeditionAssessmentStore';
 import { useConvoyTrackingStore } from '../../stores/convoyTrackingStore';
-import { getActiveVehicleContext } from '../../lib/activeVehicleContext';
+import { getActiveVehicleContext, subscribeActiveVehicleState } from '../../lib/activeVehicleContext';
 import { consumablesStore } from '../../lib/consumablesStore';
 import { loadoutItemStore, loadoutStore } from '../../lib/loadoutStore';
 import { tiresLiftStore } from '../../lib/tiresLiftStore';
-import { vehicleSetupStore } from '../../lib/vehicleSetupStore';
 import { vehicleSpecStore } from '../../lib/vehicleSpecStore';
 import { vehicleStore } from '../../lib/vehicleStore';
 import { useGeofenceMonitor } from '../../lib/useGeofenceMonitor';
@@ -201,8 +195,23 @@ import { openUnifiedBluetoothCommand } from '../../lib/bluetoothCommandNavigatio
 import { runAfterShellInteractions } from '../../lib/shellInteractionScheduler';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
 import { ecsLog } from '../../lib/ecsLogger';
+import {
+  recordECSPerformanceRender,
+  startECSPerformanceSpan,
+} from '../../lib/performance/ecsPerformanceDiagnostics';
+import {
+  buildDashboardAssessmentRefreshKey,
+  selectDashboardExpeditionHubRenderKey,
+  selectDashboardExpeditionPresentation,
+  selectDashboardGeofenceEnabled,
+  selectDashboardWidgetCollectionRenderKey,
+  selectDashboardWidgetRenderKey,
+} from '../../lib/dashboard/dashboardRuntimeSelectors';
 import { EASING, MOTION } from '../../lib/motion';
 import { useStableAnimatedValue } from '../../lib/ecsAnimations';
+
+const ExpeditionTab = React.lazy(() => import('../../components/dashboard/ExpeditionTab'));
+const WidgetDetailModal = React.lazy(() => import('../../components/dashboard/WidgetDetailModal'));
 
 
 
@@ -382,20 +391,6 @@ function pickDashboardLaneDetail(...values: (string | null | undefined)[]): stri
     return condensed;
   }
   return null;
-}
-
-function buildDashboardAdvisoryId(...parts: (string | null | undefined)[]): string {
-  const slug = parts
-    .map((value) =>
-      String(value ?? '')
-        .toLowerCase()
-        .replace(/\becs\b/g, '')
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, ''),
-    )
-    .filter(Boolean)
-    .join(':');
-  return slug ? `ecs-ai:${slug}` : 'ecs-ai:status';
 }
 
 function summarizeMissionBriefLogEntry(
@@ -1235,7 +1230,97 @@ function areDashboardSlotsEquivalent(a: WidgetSlot[], b: WidgetSlot[]): boolean 
   return true;
 }
 
-function DashboardGridZone({
+function dashboardGridZoneRenderOptions(props: DashboardGridZoneProps) {
+  return {
+    dashboardMode: props.dashboardMode,
+    compact: props.gridLayout === '2x3',
+    rollDeg: props.accel.rollDeg,
+    pitchDeg: props.accel.pitchDeg,
+    sensorStatus: props.accel.sensorStatus,
+    sampleTimestampMs: props.accel.lastSampleAtMs,
+    isCalibrated: props.accel.isCalibrated,
+    advancedMode: props.advancedModeEnabled,
+    gpsLatitude: props.gpsLatitude,
+    gpsLongitude: props.gpsLongitude,
+    gpsHeadingDeg: props.gpsHeadingDeg,
+    gpsSpeedMph: props.gpsSpeedMph,
+    gpsHasFix: props.gpsHasFix,
+    gpsAccuracyM: props.gpsAccuracyM,
+    gpsAltitudeFt: props.gpsAltitudeFt,
+    gpsTimestampMs: props.gpsTimestampMs,
+    expeditionHasActiveRoute: props.expeditionHasActiveRoute,
+    expeditionRouteCompleted: props.expeditionRouteCompleted,
+    expeditionRouteLifecycleState: props.expeditionRouteCompleted
+      ? 'completed'
+      : props.expeditionHasActiveRoute
+        ? 'active'
+        : 'idle',
+    expeditionId: props.expeditionId,
+    expeditionRouteLabel: props.expeditionRouteLabel,
+    expeditionTeamMemberCount: props.expeditionTeamMemberCount,
+    expeditionCampCount: props.expeditionCampCount,
+    completedExpeditionRecord: props.completedExpeditionRecord,
+    expeditionEcsOnline: props.expeditionEcsOnline,
+  };
+}
+
+function areDashboardGridZonePropsEqual(
+  previous: DashboardGridZoneProps,
+  next: DashboardGridZoneProps,
+): boolean {
+  if (
+    previous.layoutMode !== next.layoutMode ||
+    previous.palette !== next.palette ||
+    previous.activeTab !== next.activeTab ||
+    previous.allEmpty !== next.allEmpty ||
+    previous.advancedModeEnabled !== next.advancedModeEnabled ||
+    previous.activeProfile !== next.activeProfile ||
+    previous.gridLayout !== next.gridLayout ||
+    previous.dashboardMode !== next.dashboardMode ||
+    previous.widgetContainerHeight !== next.widgetContainerHeight ||
+    previous.widgetContainerWidth !== next.widgetContainerWidth ||
+    previous.layoutSignature !== next.layoutSignature ||
+    previous.tabOpacityAnim !== next.tabOpacityAnim ||
+    previous.tabSlideAnim !== next.tabSlideAnim ||
+    previous.isShortHeight !== next.isShortHeight ||
+    previous.isVeryShortHeight !== next.isVeryShortHeight ||
+    previous.onEnterCustomizeMode !== next.onEnterCustomizeMode ||
+    previous.onExitLayoutMode !== next.onExitLayoutMode ||
+    previous.onEmptySlotPress !== next.onEmptySlotPress ||
+    previous.onWidgetPress !== next.onWidgetPress ||
+    previous.onRemoveWidget !== next.onRemoveWidget ||
+    previous.onSwapSlots !== next.onSwapSlots ||
+    previous.onResizeWidget !== next.onResizeWidget ||
+    previous.onRestoreDefaults !== next.onRestoreDefaults ||
+    previous.onOpenCommandBrief !== next.onOpenCommandBrief ||
+    previous.onTerrainRiskReferenceEvent !== next.onTerrainRiskReferenceEvent ||
+    previous.onContainerLayout !== next.onContainerLayout ||
+    previous.accel.calibrate !== next.accel.calibrate ||
+    previous.accel.resetCalibration !== next.accel.resetCalibration ||
+    !areDashboardSlotsEquivalent(previous.slots, next.slots) ||
+    JSON.stringify(previous.perWidgetAutoCollapse) !== JSON.stringify(next.perWidgetAutoCollapse)
+  ) {
+    return false;
+  }
+
+  if (next.activeTab === 'brief') return true;
+
+  const previousOptions = dashboardGridZoneRenderOptions(previous);
+  const nextOptions = dashboardGridZoneRenderOptions(next);
+  if (next.activeTab === 'expedition') {
+    return (
+      selectDashboardExpeditionHubRenderKey(previousOptions) ===
+      selectDashboardExpeditionHubRenderKey(nextOptions)
+    );
+  }
+
+  return (
+    selectDashboardWidgetCollectionRenderKey(previous.slots, previous.widgetData, previousOptions) ===
+    selectDashboardWidgetCollectionRenderKey(next.slots, next.widgetData, nextOptions)
+  );
+}
+
+const DashboardGridZone = React.memo(function DashboardGridZone({
   layoutMode,
   palette,
   activeTab,
@@ -1283,6 +1368,7 @@ function DashboardGridZone({
   completedExpeditionRecord,
   expeditionEcsOnline,
 }: DashboardGridZoneProps) {
+  recordECSPerformanceRender('dashboard_stable_grid', `dashboard_${activeTab}_zone`);
   const adaptive = useAdaptiveLayout();
   const showLayoutHint = layoutMode;
   const showBriefTab = activeTab === 'brief';
@@ -1325,29 +1411,41 @@ function DashboardGridZone({
               </View>
             </View>
           ) : showExpeditionPlaceholderTab && !layoutMode ? (
-            <ExpeditionTab
-              hasActiveRoute={expeditionHasActiveRoute}
-              teamMemberCount={expeditionTeamMemberCount}
-              campCount={expeditionCampCount}
-              routeCompleted={expeditionRouteCompleted}
-              routeLifecycleState={expeditionRouteCompleted ? 'completed' : expeditionHasActiveRoute ? 'active' : 'idle'}
-              expeditionId={expeditionId}
-              routeLabel={expeditionRouteLabel}
-              completedExpeditionRecord={completedExpeditionRecord}
-              ecsOnline={expeditionEcsOnline}
-              gpsElevationFt={gpsAltitudeFt ?? null}
-              gpsLocation={
-                gpsHasFix && typeof gpsLatitude === 'number' && typeof gpsLongitude === 'number'
-                  ? {
-                      latitude: gpsLatitude,
-                      longitude: gpsLongitude,
-                      accuracyMeters: gpsAccuracyM ?? null,
-                      source: 'gps' as const,
-                      capturedAt: gpsTimestampMs ? new Date(gpsTimestampMs).toISOString() : undefined,
-                    }
-                  : null
-              }
-            />
+            <React.Suspense
+              fallback={(
+                <View style={[styles.emptyStateContainer, { paddingHorizontal: emptyEdgePadding }]}>
+                  <ECSStateMessage
+                    title="Loading Expedition Hub"
+                    message="Restoring locally stored expedition history."
+                    icon="time-outline"
+                  />
+                </View>
+              )}
+            >
+              <ExpeditionTab
+                hasActiveRoute={expeditionHasActiveRoute}
+                teamMemberCount={expeditionTeamMemberCount}
+                campCount={expeditionCampCount}
+                routeCompleted={expeditionRouteCompleted}
+                routeLifecycleState={expeditionRouteCompleted ? 'completed' : expeditionHasActiveRoute ? 'active' : 'idle'}
+                expeditionId={expeditionId}
+                routeLabel={expeditionRouteLabel}
+                completedExpeditionRecord={completedExpeditionRecord}
+                ecsOnline={expeditionEcsOnline}
+                gpsElevationFt={gpsAltitudeFt ?? null}
+                gpsLocation={
+                  gpsHasFix && typeof gpsLatitude === 'number' && typeof gpsLongitude === 'number'
+                    ? {
+                        latitude: gpsLatitude,
+                        longitude: gpsLongitude,
+                        accuracyMeters: gpsAccuracyM ?? null,
+                        source: 'gps' as const,
+                        capturedAt: gpsTimestampMs ? new Date(gpsTimestampMs).toISOString() : undefined,
+                      }
+                    : null
+                }
+              />
+            </React.Suspense>
           ) : allEmpty && !layoutMode ? (
             <View
               style={[
@@ -1467,7 +1565,7 @@ function DashboardGridZone({
       </View>
     </>
   );
-}
+}, areDashboardGridZonePropsEqual);
 
 type DashboardModalLayerProps = {
   libraryVisible: boolean;
@@ -1491,7 +1589,6 @@ type DashboardModalLayerProps = {
   pendingCollision: ResizeCollisionInfo | null;
   pendingResizeWidgetName: string;
   pendingResizeSize: WidgetSize;
-  completedExpeditionRecord: ExpeditionRecord | null;
   onSelectWidget: (type: string) => void;
   onCloseLibrary: () => void;
   onOpenCreateCustom: () => void;
@@ -1514,7 +1611,104 @@ type DashboardModalLayerProps = {
   onCancelResize: () => void;
 };
 
-function DashboardModalLayer({
+function sameDashboardSlot(left: WidgetSlot | null, right: WidgetSlot | null): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return areDashboardSlotsEquivalent([left], [right]);
+}
+
+function areDashboardModalLayerPropsEqual(
+  previous: DashboardModalLayerProps,
+  next: DashboardModalLayerProps,
+): boolean {
+  if (
+    previous.libraryVisible !== next.libraryVisible ||
+    previous.assignedWidgets.map((value) => value ?? '').join('|') !==
+      next.assignedWidgets.map((value) => value ?? '').join('|') ||
+    previous.libraryIntent !== next.libraryIntent ||
+    previous.libraryTargetSlot !== next.libraryTargetSlot ||
+    previous.libraryTargetWidgetType !== next.libraryTargetWidgetType ||
+    previous.gridLayout !== next.gridLayout ||
+    previous.advancedModeEnabled !== next.advancedModeEnabled ||
+    previous.createWidgetVisible !== next.createWidgetVisible ||
+    previous.detailVisible !== next.detailVisible ||
+    !sameDashboardSlot(previous.detailSlot, next.detailSlot) ||
+    previous.manageVisible !== next.manageVisible ||
+    !sameDashboardSlot(previous.manageSlot, next.manageSlot) ||
+    previous.dashboardMode !== next.dashboardMode ||
+    previous.authVisible !== next.authVisible ||
+    previous.collisionModalVisible !== next.collisionModalVisible ||
+    previous.pendingCollision !== next.pendingCollision ||
+    previous.pendingResizeWidgetName !== next.pendingResizeWidgetName ||
+    previous.pendingResizeSize !== next.pendingResizeSize ||
+    previous.onSelectWidget !== next.onSelectWidget ||
+    previous.onCloseLibrary !== next.onCloseLibrary ||
+    previous.onOpenCreateCustom !== next.onOpenCreateCustom ||
+    previous.onSaveCustomWidget !== next.onSaveCustomWidget ||
+    previous.onCloseCreateCustom !== next.onCloseCreateCustom ||
+    previous.onCloseDetail !== next.onCloseDetail ||
+    previous.onReplaceDetailWidget !== next.onReplaceDetailWidget ||
+    previous.onRemoveDetailWidget !== next.onRemoveDetailWidget ||
+    previous.onCloseWidgetManager !== next.onCloseWidgetManager ||
+    previous.onReplaceManagedWidget !== next.onReplaceManagedWidget ||
+    previous.onChangeManagedWidgetSurface !== next.onChangeManagedWidgetSurface ||
+    previous.onRemoveManagedWidget !== next.onRemoveManagedWidget ||
+    previous.onOpenNavigateFromDetail !== next.onOpenNavigateFromDetail ||
+    previous.onOpenFleetFromDetail !== next.onOpenFleetFromDetail ||
+    previous.onRemotenessNavigateFromDetail !== next.onRemotenessNavigateFromDetail ||
+    previous.onOpenCommandBriefFromDetail !== next.onOpenCommandBriefFromDetail ||
+    previous.onTerrainRiskReferenceEvent !== next.onTerrainRiskReferenceEvent ||
+    previous.onCloseAuth !== next.onCloseAuth ||
+    previous.onShrinkAndResize !== next.onShrinkAndResize ||
+    previous.onCancelResize !== next.onCancelResize
+  ) {
+    return false;
+  }
+
+  if (!next.detailVisible || !next.detailSlot?.widgetType) return true;
+  if (!previous.detailSlot?.widgetType) return false;
+
+  const previousOptions = {
+    dashboardMode: previous.dashboardMode,
+    rollDeg: previous.accel.rollDeg,
+    pitchDeg: previous.accel.pitchDeg,
+    sensorStatus: previous.accel.sensorStatus,
+    sampleTimestampMs: previous.accel.lastSampleAtMs,
+    isCalibrated: previous.accel.isCalibrated,
+    advancedMode: previous.advancedModeEnabled,
+    gpsLatitude: previous.gps.position?.latitude,
+    gpsLongitude: previous.gps.position?.longitude,
+    gpsHeadingDeg: previous.gps.position?.headingDeg,
+    gpsSpeedMph: previous.gps.position?.speedMph,
+    gpsAccuracyM: previous.gps.position?.accuracyM,
+    gpsAltitudeFt: previous.gps.position?.altitudeFt,
+    gpsTimestampMs: previous.gps.position?.timestamp,
+    gpsHasFix: previous.gps.hasFix,
+  };
+  const nextOptions = {
+    dashboardMode: next.dashboardMode,
+    rollDeg: next.accel.rollDeg,
+    pitchDeg: next.accel.pitchDeg,
+    sensorStatus: next.accel.sensorStatus,
+    sampleTimestampMs: next.accel.lastSampleAtMs,
+    isCalibrated: next.accel.isCalibrated,
+    advancedMode: next.advancedModeEnabled,
+    gpsLatitude: next.gps.position?.latitude,
+    gpsLongitude: next.gps.position?.longitude,
+    gpsHeadingDeg: next.gps.position?.headingDeg,
+    gpsSpeedMph: next.gps.position?.speedMph,
+    gpsAccuracyM: next.gps.position?.accuracyM,
+    gpsAltitudeFt: next.gps.position?.altitudeFt,
+    gpsTimestampMs: next.gps.position?.timestamp,
+    gpsHasFix: next.gps.hasFix,
+  };
+  return (
+    selectDashboardWidgetRenderKey(previous.detailSlot.widgetType, previous.widgetData, previousOptions) ===
+    selectDashboardWidgetRenderKey(next.detailSlot.widgetType, next.widgetData, nextOptions)
+  );
+}
+
+const DashboardModalLayer = React.memo(function DashboardModalLayer({
   libraryVisible,
   assignedWidgets,
   libraryIntent,
@@ -1536,7 +1730,6 @@ function DashboardModalLayer({
   pendingCollision,
   pendingResizeWidgetName,
   pendingResizeSize,
-  completedExpeditionRecord,
   onSelectWidget,
   onCloseLibrary,
   onOpenCreateCustom,
@@ -1585,39 +1778,43 @@ function DashboardModalLayer({
         onClose={onCloseCreateCustom}
       />
 
-      <WidgetDetailModal
-        visible={detailVisible}
-        slot={detailSlot}
-        widgetData={widgetData}
-        renderOptions={{
-          dashboardMode,
-          rollDeg: accel.rollDeg,
-          pitchDeg: accel.pitchDeg,
-          sensorStatus: accel.sensorStatus,
-          sampleTimestampMs: accel.lastSampleAtMs,
-          isCalibrated: accel.isCalibrated,
-          onCalibrate: accel.calibrate,
-          onResetCalibration: accel.resetCalibration,
-          advancedMode: advancedModeEnabled,
-          gpsLatitude: gps.position?.latitude,
-          gpsLongitude: gps.position?.longitude,
-          gpsHeadingDeg: gps.position?.headingDeg ?? null,
-          gpsSpeedMph: gps.position?.speedMph ?? null,
-          gpsAccuracyM: gps.position?.accuracyM ?? null,
-          gpsAltitudeFt: gps.position?.altitudeFt ?? null,
-          gpsTimestampMs: gps.position?.timestamp ?? null,
-          gpsHasFix: gps.hasFix,
-          onOpenCommandBrief: onOpenCommandBriefFromDetail,
-          onTerrainRiskReferenceEvent,
-        }}
-        onClose={onCloseDetail}
-        onReplace={onReplaceDetailWidget}
-        onRemove={onRemoveDetailWidget}
-        onOpenNavigate={onOpenNavigateFromDetail}
-        onOpenFleet={onOpenFleetFromDetail}
-        onOpenCommandBrief={onOpenCommandBriefFromDetail}
-        onRemotenessNavigateToTarget={onRemotenessNavigateFromDetail}
-      />
+      {detailVisible ? (
+        <React.Suspense fallback={null}>
+          <WidgetDetailModal
+            visible
+            slot={detailSlot}
+            widgetData={widgetData}
+            renderOptions={{
+              dashboardMode,
+              rollDeg: accel.rollDeg,
+              pitchDeg: accel.pitchDeg,
+              sensorStatus: accel.sensorStatus,
+              sampleTimestampMs: accel.lastSampleAtMs,
+              isCalibrated: accel.isCalibrated,
+              onCalibrate: accel.calibrate,
+              onResetCalibration: accel.resetCalibration,
+              advancedMode: advancedModeEnabled,
+              gpsLatitude: gps.position?.latitude,
+              gpsLongitude: gps.position?.longitude,
+              gpsHeadingDeg: gps.position?.headingDeg ?? null,
+              gpsSpeedMph: gps.position?.speedMph ?? null,
+              gpsAccuracyM: gps.position?.accuracyM ?? null,
+              gpsAltitudeFt: gps.position?.altitudeFt ?? null,
+              gpsTimestampMs: gps.position?.timestamp ?? null,
+              gpsHasFix: gps.hasFix,
+              onOpenCommandBrief: onOpenCommandBriefFromDetail,
+              onTerrainRiskReferenceEvent,
+            }}
+            onClose={onCloseDetail}
+            onReplace={onReplaceDetailWidget}
+            onRemove={onRemoveDetailWidget}
+            onOpenNavigate={onOpenNavigateFromDetail}
+            onOpenFleet={onOpenFleetFromDetail}
+            onOpenCommandBrief={onOpenCommandBriefFromDetail}
+            onRemotenessNavigateToTarget={onRemotenessNavigateFromDetail}
+          />
+        </React.Suspense>
+      ) : null}
 
       <WidgetManagePopover
         visible={manageVisible}
@@ -1643,10 +1840,16 @@ function DashboardModalLayer({
 
     </>
   );
-}
+}, areDashboardModalLayerPropsEqual);
 
 
 function DashboardScreenInner() {
+  recordECSPerformanceRender('dashboard_stable_grid', 'dashboard_screen');
+  const [dashboardPerformance] = useState(() => startECSPerformanceSpan(
+    'dashboard_stable_grid',
+    'hydrate_to_usable_grid',
+    { trackOutstanding: true },
+  ));
 
   const router = useRouter();
   const {
@@ -1872,11 +2075,15 @@ function DashboardScreenInner() {
   // Subscribe to expeditionStateStore for real-time state changes.
   // Completion data remains available for the modern Expedition Summary /
   // debrief PDF flow; the deprecated completion popup is never opened.
+  const [expeditionRuntime, setExpeditionRuntime] = useState(() => {
+    const record = expeditionStateStore.getCurrentExpedition();
+    return {
+      state: expeditionStateStore.getState(),
+      record,
+    };
+  });
   const [completedExpeditionRecord, setCompletedExpeditionRecord] = useState<ExpeditionRecord | null>(
-    () => {
-      const record = expeditionStateStore.getCurrentExpedition();
-      return record?.state === 'complete' ? record : null;
-    },
+    () => expeditionRuntime.record?.state === 'complete' ? expeditionRuntime.record : null,
   );
 
   // Track which expedition IDs have already been shown/acknowledged
@@ -1889,6 +2096,14 @@ function DashboardScreenInner() {
 
   useEffect(() => {
     const unsubscribe = expeditionStateStore.subscribe((state, record) => {
+      setExpeditionRuntime((current) => (
+        current.state === state &&
+        current.record?.id === record?.id &&
+        current.record?.state === record?.state &&
+        current.record?.endTime === record?.endTime
+          ? current
+          : { state, record }
+      ));
       setCompletedExpeditionRecord((current) => {
         if (state === 'complete' && record) {
           return current?.id === record.id && current?.endTime === record.endTime ? current : record;
@@ -1929,7 +2144,7 @@ function DashboardScreenInner() {
 
 
   const [geofenceVehicleId, setGeofenceVehicleId] = useState<string | null>(
-    vehicleSetupStore.getActiveVehicleId()
+    getActiveVehicleContext().activeVehicleId
   );
   const [geofenceVehicleName, setGeofenceVehicleName] = useState('Vehicle');
   const [activeVehicleContextRevision, setActiveVehicleContextRevision] = useState(0);
@@ -1950,62 +2165,15 @@ function DashboardScreenInner() {
   const primaryPowerSolarWatts = bluPowerState.solarInputWatts;
 
 
-  // Subscribe to vehicleSetupStore for activeVehicleId changes
-  useEffect(() => {
-    const unsubscribe = vehicleSetupStore.subscribe(() => {
-      setGeofenceVehicleId(vehicleSetupStore.getActiveVehicleId());
-    });
-    return unsubscribe;
-  }, []);
-
   useEffect(() => {
     const syncActiveVehicleContext = () => {
-      setGeofenceVehicleId(vehicleSetupStore.getActiveVehicleId());
+      const context = getActiveVehicleContext();
+      setGeofenceVehicleId(context.activeVehicleId);
+      setGeofenceVehicleName(context.vehicle?.name || 'Vehicle');
+      setActiveVehicleData(context.vehicle);
       setActiveVehicleContextRevision((revision) => revision + 1);
     };
-
-    const bumpIfActiveVehicle = (vehicleId?: string | null) => {
-      const currentActiveVehicleId = vehicleSetupStore.getActiveVehicleId();
-      if (!currentActiveVehicleId) return;
-      if (!vehicleId || vehicleId === currentActiveVehicleId) {
-        setActiveVehicleContextRevision((revision) => revision + 1);
-      }
-    };
-
-    const offVehicleSetup = vehicleSetupStore.subscribe(syncActiveVehicleContext);
-    const offVehicleStore = vehicleStore.subscribe((event) => {
-      bumpIfActiveVehicle(event.vehicleId ?? null);
-    });
-    const offVehicleSpec = vehicleSpecStore.subscribe(() => {
-      bumpIfActiveVehicle(vehicleSetupStore.getActiveVehicleId());
-    });
-    const offConsumables = consumablesStore.subscribe(() => {
-      bumpIfActiveVehicle(vehicleSetupStore.getActiveVehicleId());
-    });
-    const offTiresLift = tiresLiftStore.subscribe((vehicleId) => {
-      bumpIfActiveVehicle(vehicleId);
-    });
-    const offLoadouts = loadoutStore.subscribe((_loadoutId, vehicleId) => {
-      bumpIfActiveVehicle(vehicleId ?? null);
-    });
-    const offLoadoutItems = loadoutItemStore.subscribe((loadoutId) => {
-      const currentActiveVehicleId = vehicleSetupStore.getActiveVehicleId();
-      if (!currentActiveVehicleId) return;
-      const activeLoadout = loadoutStore.getLatestLocalByVehicleIdSync(currentActiveVehicleId);
-      if (!activeLoadout || activeLoadout.id === loadoutId) {
-        setActiveVehicleContextRevision((revision) => revision + 1);
-      }
-    });
-
-    return () => {
-      offVehicleSetup();
-      offVehicleStore();
-      offVehicleSpec();
-      offConsumables();
-      offTiresLift();
-      offLoadouts();
-      offLoadoutItems();
-    };
+    return subscribeActiveVehicleState(syncActiveVehicleContext);
   }, []);
 
   const refreshActiveVehicleData = useCallback(() => {
@@ -2060,16 +2228,6 @@ function DashboardScreenInner() {
     };
   }, [refreshActiveVehicleData]));
 
-  useEffect(() => {
-    const unsubscribe = vehicleStore.subscribe((event) => {
-      if (!geofenceVehicleId) return;
-      if (!event.vehicleId || event.vehicleId === geofenceVehicleId) {
-        refreshActiveVehicleData();
-      }
-    });
-    return unsubscribe;
-  }, [geofenceVehicleId, refreshActiveVehicleData]);
-
   const activeVehicleContext = useMemo(() => {
     void activeVehicleContextRevision;
     return getActiveVehicleContext();
@@ -2116,12 +2274,12 @@ function DashboardScreenInner() {
   }, []);
 
 
+  const isFocused = useIsFocused();
+
   // Determine if geofence monitoring should be active
   const geofenceEnabled = useMemo(() => {
-    if (!geofenceVehicleId) return false;
-    const state = expeditionStateStore.getState();
-    return state === 'standby' || state === 'active';
-  }, [geofenceVehicleId]);
+    return selectDashboardGeofenceEnabled(geofenceVehicleId, expeditionRuntime.state);
+  }, [expeditionRuntime.state, geofenceVehicleId]);
 
 
   // Geofence toast timer ref (for 2-second display)
@@ -2154,11 +2312,11 @@ function DashboardScreenInner() {
 
   // ── Geofence Monitor Hook ─────────────────────────────────
   // Monitors GPS and auto-triggers expedition start/end based
-  // on 400m geofence radius. Haptic feedback is handled inside
+  // on the fixed ECS 200m geofence radius. Haptic feedback is handled inside
   // the hook. Gold underline animation is handled by DashboardHeader
   // subscription to expeditionStateStore.
   const geofenceMonitor = useGeofenceMonitor({
-    enabled: useIsFocused() && geofenceEnabled,
+    enabled: isFocused && geofenceEnabled,
     vehicleName: geofenceVehicleName,
     callbacks: geofenceCallbacks,
   });
@@ -2382,9 +2540,26 @@ function DashboardScreenInner() {
       ? Math.max(liveWidgetContainerHeight, estimatedExpandedWidgetHeight)
       : liveWidgetContainerHeight || estimatedContractedWidgetHeight;
 
+  useEffect(() => {
+    if (!dashboardHydrated || effectiveWidgetContainerWidth <= 0 || effectiveWidgetContainerHeight <= 0) return;
+    dashboardPerformance.end('completed', {
+      slotCount: slots.length,
+      assignedWidgetCount: slots.filter(slot => Boolean(slot.widgetType)).length,
+      orientation: isLandscape ? 'landscape' : 'portrait',
+    });
+  }, [
+    dashboardHydrated,
+    dashboardPerformance,
+    effectiveWidgetContainerHeight,
+    effectiveWidgetContainerWidth,
+    isLandscape,
+    slots,
+  ]);
+
+  useEffect(() => () => dashboardPerformance.cancel({ unmounted: true }), [dashboardPerformance]);
+
 
   // ── Accelerometer ─────────────────────────────────────
-  const isFocused = useIsFocused();
   const attitudeRecalibrationKey = isLandscape ? 'landscape' : 'portrait';
   const accel = useAccelerometer(isFocused, {
     recalibrationKey: attitudeRecalibrationKey,
@@ -2611,9 +2786,16 @@ function DashboardScreenInner() {
   const latestMissionBrief = (aiState?.brief as MissionBrief | null) ?? null;
   const summaryLineLabel = normalizeVisibleEcsCopy(summaryLine);
   const topSignalTitleLabel = normalizeVisibleEcsCopy(topSignalTitle);
-  const currentExpeditionState = expeditionStateStore.getState();
-  const currentExpeditionRecord = expeditionStateStore.getCurrentExpedition();
-  const latestCompletedExpeditionLog = expeditionStateStore.getLog()[0] ?? null;
+  const currentExpeditionState = expeditionRuntime.state;
+  const currentExpeditionRecord = expeditionRuntime.record;
+  const completedExpeditionLogRefreshKey = `${completedExpeditionRecord?.id ?? ''}:${completedExpeditionRecord?.endTime ?? ''}`;
+  const latestCompletedExpeditionLog = useMemo(
+    () => {
+      void completedExpeditionLogRefreshKey;
+      return expeditionStateStore.getLog()[0] ?? null;
+    },
+    [completedExpeditionLogRefreshKey],
+  );
   const gpsAgeMs = gps.position?.timestamp ? Math.max(0, Date.now() - gps.position.timestamp) : null;
   const [hasSharedRouteContext, setHasSharedRouteContext] = useState(false);
   const refreshDashboardRouteContext = useCallback(async () => {
@@ -2680,8 +2862,9 @@ function DashboardScreenInner() {
   const dashboardRouteProgressCompleted =
     Boolean(dashboardRouteProgress?.isComplete) ||
     dashboardRouteProgress?.status === 'completed';
-  const completedGuidanceRouteSummary = dashboardRouteProgressCompleted
-    ? {
+  const completedGuidanceRouteSummary = useMemo(
+    () => dashboardRouteProgressCompleted
+      ? {
         id: String(
           dashboardRouteProgress?.activeRouteId ??
             expeditionId ??
@@ -2703,19 +2886,30 @@ function DashboardScreenInner() {
         durationSeconds: null,
         source: dashboardRouteProgress?.source ?? 'active-route-progress',
         updatedAt: dashboardRouteProgress?.lastUpdated ?? dashboardRouteProgress?.updatedAt ?? null,
-      }
-    : null;
-  const completedExpeditionSummaryRecord =
-    completedExpeditionRecord ??
-    (currentExpeditionRecord?.state === 'complete' ? currentExpeditionRecord : null) ??
-    (currentExpeditionState === 'standby'
-      ? latestCompletedExpeditionLog ?? completedGuidanceRouteSummary
-      : completedGuidanceRouteSummary);
-  const expeditionRouteCompleted =
-    currentExpeditionState === 'complete' ||
-    Boolean(completedExpeditionRecord) ||
-    dashboardRouteProgressCompleted ||
-    (currentExpeditionState === 'standby' && Boolean(latestCompletedExpeditionLog));
+        }
+      : null,
+    [dashboardRouteProgress, dashboardRouteProgressCompleted, expeditionId, gps.position?.altitudeFt],
+  );
+  const expeditionPresentation = useMemo(
+    () => selectDashboardExpeditionPresentation({
+      expeditionState: currentExpeditionState,
+      currentRecord: currentExpeditionRecord,
+      retainedCompletedRecord: completedExpeditionRecord,
+      latestCompletedLog: latestCompletedExpeditionLog,
+      completedGuidanceSummary: completedGuidanceRouteSummary,
+      routeProgressCompleted: dashboardRouteProgressCompleted,
+    }),
+    [
+      completedExpeditionRecord,
+      completedGuidanceRouteSummary,
+      currentExpeditionRecord,
+      currentExpeditionState,
+      dashboardRouteProgressCompleted,
+      latestCompletedExpeditionLog,
+    ],
+  );
+  const completedExpeditionSummaryRecord = expeditionPresentation.completedSummaryRecord;
+  const expeditionRouteCompleted = expeditionPresentation.routeCompleted;
   const dashboardAssessmentContext = useMemo(() => {
     const vehicleRecord: any = activeVehicleContext.vehicle ?? activeVehicleData ?? {};
     const liveFuelLevelPercent =
@@ -2969,6 +3163,10 @@ function DashboardScreenInner() {
     utilitySensorResources.water,
   ]);
   const dashboardAssessmentContextRef = useRef(dashboardAssessmentContext);
+  const dashboardAssessmentRefreshKey = useMemo(
+    () => buildDashboardAssessmentRefreshKey(dashboardAssessmentContext),
+    [dashboardAssessmentContext],
+  );
 
   useEffect(() => {
     dashboardAssessmentContextRef.current = dashboardAssessmentContext;
@@ -2987,7 +3185,7 @@ function DashboardScreenInner() {
       void refreshExpeditionAssessments();
     }, 250);
     return () => clearTimeout(refreshTimer);
-  }, [activeTab, dashboardAssessmentContext]);
+  }, [activeTab, dashboardAssessmentRefreshKey]);
   const dashboardShellBannerStatus = useMemo(
     () =>
       resolveTopBannerPresentation({
@@ -3131,101 +3329,6 @@ function DashboardScreenInner() {
 
     previousMissionBriefLogRef.current = currentEntry;
   }, [briefCommandState, latestMissionBrief]);
-  // Cleanup advisory store and intelligence engine on unmount
-  useEffect(() => {
-    return () => {
-      advisoryStore.clear();
-      resetIntelligence();
-    };
-  }, []);
-
-  // ── ECS AI Advisory Feed ──────────────────────────────
-  // Keeps the rotating ExpeditionIntelligenceBar aware of the
-  // orchestrator output without rebuilding a second AI pipeline.
-  const lastAdvisoryKeyRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    const structuredAdvisory = aiState?.advisories?.[0] ?? null;
-    const advisoryText = condenseDashboardLaneCopy(
-      structuredAdvisory?.message ?? dashboardCommandState.banner?.title ?? summaryLineLabel,
-      88,
-    );
-    if (!aiState || !advisoryText) return;
-    if (
-      isLowValueTelemetryDegradedSummary(advisoryText) ||
-      isLowValueTelemetryDegradedSummary(dashboardCommandState.banner?.detail) ||
-      (
-        dashboardCommandState.primary == null &&
-        isLowValueTelemetryDegradedSummary(summaryLineLabel)
-      )
-    ) {
-      return;
-    }
-
-    const advisoryKey = [
-      aiState.readiness,
-      structuredAdvisory?.suppressKey ?? dashboardCommandState.primary?.id ?? aiState.topSignal?.title ?? '',
-      dashboardCommandState.compactSummary,
-      advisoryText,
-    ].join('|');
-
-    if (lastAdvisoryKeyRef.current === advisoryKey) return;
-    lastAdvisoryKeyRef.current = advisoryKey;
-
-    const icon =
-      structuredAdvisory?.severity === 'critical' || aiState.readiness === 'critical'
-        ? 'warning-outline'
-        : structuredAdvisory?.severity === 'high' ||
-            structuredAdvisory?.severity === 'moderate' ||
-            aiState.readiness === 'elevated'
-          ? 'alert-circle-outline'
-          : 'sparkles-outline';
-    const advisoryId = buildDashboardAdvisoryId(
-      structuredAdvisory?.suppressKey ?? dashboardCommandState.primary?.source,
-      dashboardCommandState.primary?.priority?.level,
-      structuredAdvisory?.title ?? dashboardCommandState.primary?.title,
-      advisoryText,
-    );
-    const structuredPriority =
-      structuredAdvisory?.severity === 'critical'
-        ? 5
-        : structuredAdvisory?.severity === 'high'
-          ? 4
-          : structuredAdvisory?.severity === 'moderate'
-            ? 3
-            : structuredAdvisory?.severity === 'low'
-              ? 2
-              : structuredAdvisory
-                ? 1
-                : null;
-    const advisoryMode =
-      structuredPriority != null
-        ? structuredPriority >= 4
-          ? 'alert'
-          : 'advisory'
-        : dashboardCommandState.primary?.priority?.rank != null &&
-            dashboardCommandState.primary.priority.rank >= 4
-        ? 'alert'
-        : 'advisory';
-
-    advisoryStore.pushContextBatch([
-      {
-        id: advisoryId,
-        text: advisoryText,
-        mode: advisoryMode,
-        priority:
-          structuredPriority ??
-          dashboardCommandState.primary?.priority?.rank ??
-          (aiState.topSignal?.severity === 3 ? 5 : aiState.topSignal?.severity === 2 ? 3 : 2),
-        icon,
-        displayDuration:
-          advisoryMode === 'alert'
-            ? 6200
-            : 7000,
-        interruptible: true,
-      },
-    ]);
-  }, [aiState, dashboardCommandState, summaryLineLabel]);
 
   const closeDashboardTransientOverlays = useCallback(() => {
     setLibraryVisible(false);
@@ -4633,7 +4736,6 @@ function DashboardScreenInner() {
         pendingCollision={pendingCollision}
         pendingResizeWidgetName={pendingResizeWidgetName}
         pendingResizeSize={pendingResizeSize}
-        completedExpeditionRecord={completedExpeditionRecord}
         onSelectWidget={handleWidgetAssign}
         onCloseLibrary={handleCloseLibrary}
         onOpenCreateCustom={handleOpenCreateCustomWidget}

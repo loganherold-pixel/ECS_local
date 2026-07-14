@@ -2,6 +2,11 @@ import type { TripBuilderRouteInput } from './tripBuilder/tripBuilderTypes';
 import type { ImportedRoute, RouteSegment } from './routeStore';
 import type { ECSRun, RunPoint } from './runStore';
 import type { SavedRouteAsset } from './savedRouteAssets';
+import {
+  attachJourneyLinkageToMetadata,
+  canonicalJourneyEntityId,
+  mergeJourneyLinkage,
+} from './lifecycle/routeTripExpeditionLifecycle';
 
 type Coordinate = {
   latitude: number;
@@ -72,6 +77,16 @@ function createRouteTripBuilderInput(
   const startCoordinate = trailGeometry[0] ?? null;
   const endCoordinate = trailGeometry[trailGeometry.length - 1] ?? null;
   const source = route.source_format || asset.kind || 'saved_route';
+  const lifecycle = mergeJourneyLinkage(route.lifecycle, {
+    phase: 'planned',
+    identity: {
+      routeAssetId: canonicalJourneyEntityId('route_asset', route.id),
+      recordedRunId: route.linked_run_id
+        ? canonicalJourneyEntityId('recorded_run', route.linked_run_id)
+        : null,
+    },
+    updatedAt: route.updated_at,
+  });
 
   return {
     id: route.id,
@@ -90,7 +105,7 @@ function createRouteTripBuilderInput(
     routeGeometryStatus: 'trail_available',
     trailGeometry,
     segments: route.segments,
-    routeMetadata: {
+    routeMetadata: attachJourneyLinkageToMetadata({
       sourceApp: route.source_app ?? 'ecs_saved_routes',
       sourceAssetId: asset.id,
       sourceLabel: asset.sourceLabel,
@@ -103,7 +118,7 @@ function createRouteTripBuilderInput(
       linkedRunId: route.linked_run_id ?? null,
       externalSourceId: route.external_source_id ?? null,
       externalSourceType: route.external_source_type ?? null,
-    },
+    }, lifecycle),
   };
 }
 
@@ -118,6 +133,14 @@ function createRunTripBuilderInput(asset: SavedRouteAsset, run: ECSRun): TripBui
   const startCoordinate = trailGeometry[0] ?? null;
   const endCoordinate = trailGeometry[trailGeometry.length - 1] ?? null;
   const distanceMiles = Number.isFinite(run.stats.distance_miles) ? run.stats.distance_miles : null;
+  const lifecycle = mergeJourneyLinkage(run.lifecycle, {
+    phase: 'planned',
+    identity: {
+      recordedRunId: canonicalJourneyEntityId('recorded_run', run.id),
+    },
+    activeVehicleId: run.vehicle_id,
+    updatedAt: run.updated_at,
+  });
 
   return {
     id: run.id,
@@ -144,7 +167,7 @@ function createRunTripBuilderInput(asset: SavedRouteAsset, run: ECSRun): TripBui
         })),
       },
     ],
-    routeMetadata: {
+    routeMetadata: attachJourneyLinkageToMetadata({
       sourceApp: run.source || 'ecs_saved_routes',
       sourceAssetId: asset.id,
       sourceLabel: asset.sourceLabel,
@@ -153,7 +176,7 @@ function createRunTripBuilderInput(asset: SavedRouteAsset, run: ECSRun): TripBui
       savedRouteKind: asset.kind,
       runId: run.id,
       vehicleId: run.vehicle_id ?? null,
-    },
+    }, lifecycle),
   };
 }
 

@@ -10,6 +10,8 @@ import { vehicleSpecStore } from './vehicleSpecStore';
 
 const cache = createPersistedKeyValueCache('ecs_setup_state');
 
+export const ECS_SETUP_STORE_SCHEMA_VERSION = 1;
+const SETUP_SCHEMA_VERSION_KEY = 'ecs_setup_store_schema_version';
 const SETUP_COMPLETE_KEY = 'ecs_setup_complete';
 const SETUP_VEHICLE_ID_KEY = 'ecs_setup_vehicle_id';
 const SETUP_SKIPPED_RESOURCES_KEY = 'ecs_setup_skipped_resources';
@@ -32,6 +34,7 @@ export interface ResourceProfile {
 
 type Listener = () => void;
 const listeners: Set<Listener> = new Set();
+let migrationPromise: Promise<void> | null = null;
 
 function notifyListeners() {
   listeners.forEach((fn) => {
@@ -53,6 +56,17 @@ function remove(key: string): void {
   cache.delete(key);
 }
 
+function migratePersistedSetupState(): Promise<void> {
+  if (migrationPromise) return migrationPromise;
+  migrationPromise = cache.waitForHydration().then(() => {
+    const version = Number(read(SETUP_SCHEMA_VERSION_KEY)) || 0;
+    if (version < ECS_SETUP_STORE_SCHEMA_VERSION) {
+      write(SETUP_SCHEMA_VERSION_KEY, String(ECS_SETUP_STORE_SCHEMA_VERSION));
+    }
+  });
+  return migrationPromise;
+}
+
 function markLegacyVehicleSpecAsComplete(): boolean {
   const firstSpec = vehicleSpecStore.getFirst();
   if (
@@ -69,8 +83,9 @@ function markLegacyVehicleSpecAsComplete(): boolean {
 }
 
 export const setupStore = {
-  waitForHydration: (): Promise<void> => cache.waitForHydration(),
+  waitForHydration: (): Promise<void> => migratePersistedSetupState(),
   isHydrated: (): boolean => cache.isHydrated(),
+  getSchemaVersion: (): number => Number(read(SETUP_SCHEMA_VERSION_KEY)) || 0,
   flush: (): Promise<void> => cache.flush(),
 
   /**

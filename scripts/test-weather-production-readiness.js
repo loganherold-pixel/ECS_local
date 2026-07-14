@@ -14,6 +14,8 @@ async function main() {
 
   [
     'coordinate_first_shared_weather_source_of_truth',
+    'normalized_environmental_consumers_use_authoritative_broker',
+    'route_weather_jobs_and_provider_work_are_bounded',
     'freshness_stale_cache_and_permission_states_are_explicit',
     'operational_weather_dedupes_requests_and_retains_last_good_state',
     'dispatch_and_command_brief_weather_updates_are_deduped_and_freshness_labeled',

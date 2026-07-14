@@ -175,8 +175,8 @@ const discoverSource = fs.readFileSync(discoverPath, 'utf8');
   'createNavigateMvumOverlayState',
   'planNavigateMvumViewportFetch',
   'fetchNavigateMvumViewportSegments',
-  'createNavigateMvumViewportCacheEntry',
-  'readNavigateMvumViewportCacheEntry',
+  'navigateMapLayerCoordinatorRef.current.readCache<RouteGeometryViewportResult>',
+  'navigateMapLayerCoordinatorRef.current.writeCache',
   'toggleMvumOverlay',
   'mvumOverlayEnabled',
   'selectedMvumSegmentIds',
@@ -192,9 +192,9 @@ assert(
   'Navigate should only report an empty MVUM viewport after a completed empty fetch.',
 );
 assert(
-  navigateSource.includes('mvumViewportCacheRef.current.delete(plan.cacheKey)') &&
-    !navigateSource.includes('mvumViewportCacheRef.current.set(plan.cacheKey, resultForCache)'),
-  'Navigate should evict empty/degraded MVUM responses instead of replaying them indefinitely.',
+  navigateSource.includes('!resultForCache.degraded && resultForCache.segments.length > 0') &&
+    navigateSource.includes('navigateMapLayerCoordinatorRef.current.writeCache'),
+  'Navigate should cache only successful non-empty MVUM responses.',
 );
 
 assert(

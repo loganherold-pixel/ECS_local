@@ -8,12 +8,25 @@ import type {
   TripBuilderRouteInput,
   TripItinerary,
 } from './tripBuilderTypes';
+import {
+  attachJourneyLinkageToMetadata,
+  canonicalJourneyEntityId,
+  mergeJourneyLinkage,
+  readJourneyLinkageFromMetadata,
+  type ECSJourneyLinkage,
+} from '../lifecycle/routeTripExpeditionLifecycle';
+
+export const TRIP_BUILDER_HANDOFF_SCHEMA_VERSION = 2;
 
 export type TripBuilderHandoffUserLocationState = 'live' | 'pending' | 'unknown';
 
 export type TripBuilderRouteHandoff = {
+  schemaVersion: number;
+  handoffId: string;
+  idempotencyKey: string;
   route: TripBuilderRouteInput;
   draftItinerary: TripItinerary | null;
+  lifecycle: ECSJourneyLinkage;
   createdAt: string;
   userLocationState: TripBuilderHandoffUserLocationState;
 };
@@ -56,20 +69,23 @@ function routeWithDraftItinerary(
   route: TripBuilderRouteInput,
   draftItinerary: TripItinerary | null,
   locationState: TripBuilderHandoffUserLocationState,
+  lifecycle: ECSJourneyLinkage,
 ): TripBuilderRouteInput {
-  if (!draftItinerary) return route;
-
   const routeMetadata = isRecord(route.routeMetadata) ? route.routeMetadata : {};
   return {
     ...route,
-    itinerary: draftItinerary,
-    itineraryConfidence: draftItinerary.confidence,
-    routeMetadata: {
+    ...(draftItinerary
+      ? {
+          itinerary: draftItinerary,
+          itineraryConfidence: draftItinerary.confidence,
+        }
+      : null),
+    routeMetadata: attachJourneyLinkageToMetadata({
       ...routeMetadata,
-      tripBuilderDraftItineraryId: draftItinerary.id,
-      tripBuilderDraftItineraryStatus: draftItinerary.status ?? 'draft',
+      tripBuilderDraftItineraryId: draftItinerary?.id ?? null,
+      tripBuilderDraftItineraryStatus: draftItinerary?.status ?? 'draft',
       tripBuilderUserStartState: locationState,
-    },
+    }, lifecycle),
   };
 }
 
@@ -80,6 +96,25 @@ export function buildTripBuilderSuggestedRouteHandoff(
   const createdAt = options.createdAt ?? new Date().toISOString();
   const locationState = userLocationState(options.userLocation);
   const suggestedRoute = toSuggestedRoute(route);
+  const sourceId = routeId(route);
+  const routeMetadata = isRecord(route.routeMetadata) ? route.routeMetadata : {};
+  const currentLifecycle = readJourneyLinkageFromMetadata(routeMetadata);
+  const routeAssetId = typeof routeMetadata.sourceAssetId === 'string'
+    ? routeMetadata.sourceAssetId
+    : typeof routeMetadata.importedRouteId === 'string'
+      ? canonicalJourneyEntityId('route_asset', routeMetadata.importedRouteId)
+      : currentLifecycle?.identity.routeAssetId ?? null;
+  const tripPlanId = canonicalJourneyEntityId('trip_plan', sourceId);
+  const lifecycle = mergeJourneyLinkage(currentLifecycle, {
+    phase: 'planned',
+    identity: {
+      discoveryId: currentLifecycle?.identity.discoveryId ?? canonicalJourneyEntityId('discovery_route', sourceId),
+      routeAssetId,
+      tripPlanId,
+    },
+    activeVehicleId: options.vehicleProfile?.id ?? currentLifecycle?.activeVehicleId ?? null,
+    updatedAt: createdAt,
+  });
   const draftItinerary = buildTripItineraryFromSuggestedRoute({
     suggestedRoute,
     userLocation: options.userLocation ?? null,
@@ -91,8 +126,12 @@ export function buildTripBuilderSuggestedRouteHandoff(
   });
 
   return {
-    route: routeWithDraftItinerary(route, draftItinerary, locationState),
+    schemaVersion: TRIP_BUILDER_HANDOFF_SCHEMA_VERSION,
+    handoffId: `trip-builder-handoff:${tripPlanId}`,
+    idempotencyKey: `trip-builder:${sourceId}`,
+    route: routeWithDraftItinerary(route, draftItinerary, locationState, lifecycle),
     draftItinerary,
+    lifecycle,
     createdAt,
     userLocationState: locationState,
   };

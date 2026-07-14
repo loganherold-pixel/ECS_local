@@ -55,9 +55,9 @@ assert(
 
 [
   'Expedition Archive',
-  'Earned Badges',
+  'Badge Catalog',
   'Open Expedition Archive',
-  'Open Earned Badges',
+  'Open Badge Catalog',
   'BadgeDetailModal',
   'dismissInsight',
   'Export Expedition Report',

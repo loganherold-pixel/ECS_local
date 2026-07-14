@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-12T00:00:00.000Z",
+  "notes": "Foundation baseline. Null p95 values are intentional until repeatable release-build device captures are attached.",
+  "workflows": [
+    { "workflowId": "cold_startup_shell", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "warm_startup_restore", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "auth_setup_handoff", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "primary_tab_switch", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "navigate_map_first_meaningful_render", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "navigate_map_viewport_interaction", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "gpx_import_preview", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "route_preview_guidance", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "dashboard_stable_grid", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "explore_results", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "instrumentation_only" },
+    { "workflowId": "dispatch_ready", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "offline_prep_departure_audit", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "instrumentation_only" },
+    { "workflowId": "active_vehicle_propagation", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "instrumentation_only" },
+    { "workflowId": "weather_refresh", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" },
+    { "workflowId": "device_reconnect", "p95Ms": null, "sampleCount": 0, "measuredAt": null, "platform": "unmeasured", "buildKind": "unmeasured", "evidence": "device_required" }
+  ]
+}

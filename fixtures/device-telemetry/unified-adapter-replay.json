@@ -1,0 +1,48 @@
+{
+  "schema": "ecs.device_telemetry.replay",
+  "version": 1,
+  "identity": {
+    "providerId": "generic_obd2",
+    "category": "obd2",
+    "displayName": "VeePeak BLE",
+    "model": "BLE OBD2"
+  },
+  "transport": "ble",
+  "safety": {
+    "providerSecretsIncluded": false,
+    "rawPayloadIncluded": false,
+    "preciseLocationIncluded": false
+  },
+  "samples": [
+    {
+      "observedAt": 1783897200000,
+      "receivedAt": 1783897200500,
+      "lifecycle": "streaming",
+      "decodedFields": ["engine_rpm", "battery_voltage"],
+      "data": {
+        "engine_rpm": 742,
+        "battery_voltage": 13.9
+      }
+    },
+    {
+      "observedAt": 1783897200000,
+      "receivedAt": 1783897270000,
+      "lifecycle": "degraded",
+      "decodedFields": ["engine_rpm", "battery_voltage"],
+      "data": {
+        "engine_rpm": 742,
+        "battery_voltage": 13.9
+      }
+    },
+    {
+      "observedAt": 1783897200000,
+      "receivedAt": 1783897900000,
+      "lifecycle": "disconnected",
+      "decodedFields": ["engine_rpm", "battery_voltage"],
+      "data": {
+        "engine_rpm": 742,
+        "battery_voltage": 13.9
+      }
+    }
+  ]
+}

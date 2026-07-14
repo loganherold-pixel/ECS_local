@@ -17,7 +17,7 @@ import {
   TextInput,
   Alert,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 
 import { TACTICAL, TYPO, DENSITY } from '../lib/theme';
@@ -37,6 +37,7 @@ import {
   type NavigateRouteMapPoint,
 } from '../lib/navigateRouteSessionStore';
 import { expeditionReadinessStore } from '../lib/readiness/expeditionReadinessStore';
+import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import MapRenderer from '../components/navigate/MapRenderer';
 import Toast from '../components/Toast';
 
@@ -136,7 +137,7 @@ function recomputeReadinessAfterBailoutChange() {
 }
 
 export default function NavigateBailouts() {
-  const router = useRouter();
+  const { back: goBack } = useECSNavigation();
   const { showToast } = useApp();
   const params = useLocalSearchParams<{
     runId?: string | string[];
@@ -431,8 +432,8 @@ export default function NavigateBailouts() {
     }
     recomputeReadinessAfterBailoutChange();
     showToast('BAILOUT REVIEW COMPLETE');
-    router.back();
-  }, [activeRouteId, router, showToast]);
+    goBack();
+  }, [activeRouteId, goBack, showToast]);
 
   const selectedDropMeta = getBailoutTypeMeta(selectedDropType);
   const hasRouteGeometry = routeMapPoints.length > 1;
@@ -441,7 +442,7 @@ export default function NavigateBailouts() {
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+        <TouchableOpacity onPress={() => goBack()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={22} color={TACTICAL.text} />
         </TouchableOpacity>
         <View style={styles.topTitleBlock}>

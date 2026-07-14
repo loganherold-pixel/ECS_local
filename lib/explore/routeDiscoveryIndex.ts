@@ -117,6 +117,7 @@ export type RouteDiscoveryCacheEntry<T> = {
 export type RouteDiscoveryCache<T = RouteDiscoveryTrailPackResult> = {
   ttlMs: number;
   staleMs: number;
+  maxEntries: number;
   entries: Map<string, RouteDiscoveryCacheEntry<T>>;
   get: (key: string, nowMs?: number) => { status: 'hit' | 'stale' | 'miss'; result: T | null };
   set: (key: string, result: T, nowMs?: number) => void;
@@ -138,6 +139,7 @@ const DEFAULT_FIRST_BATCH_SIZE = 12;
 const DEFAULT_BATCH_SIZE = 24;
 const DEFAULT_CACHE_TTL_MS = 60_000;
 const DEFAULT_CACHE_STALE_MS = 240_000;
+const DEFAULT_CACHE_MAX_ENTRIES = 24;
 export const ROUTE_DISCOVERY_COORDINATE_BUCKET_DEGREES = 0.05;
 
 function finiteNumber(value: unknown): number | null {
@@ -629,26 +631,38 @@ export function createRouteDiscoveryCacheKey(
 }
 
 export function createRouteDiscoveryCache<T = RouteDiscoveryTrailPackResult>(
-  options: { ttlMs?: number; staleMs?: number } = {},
+  options: { ttlMs?: number; staleMs?: number; maxEntries?: number } = {},
 ): RouteDiscoveryCache<T> {
   const entries = new Map<string, RouteDiscoveryCacheEntry<T>>();
   const ttlMs = options.ttlMs ?? DEFAULT_CACHE_TTL_MS;
   const staleMs = options.staleMs ?? DEFAULT_CACHE_STALE_MS;
+  const maxEntries = Math.max(1, Math.round(options.maxEntries ?? DEFAULT_CACHE_MAX_ENTRIES));
   return {
     ttlMs,
     staleMs,
+    maxEntries,
     entries,
     get(key: string, nowMs = Date.now()) {
       const cached = entries.get(key);
       if (!cached) return { status: 'miss', result: null };
       const ageMs = Math.max(0, nowMs - cached.storedAtMs);
+      if (ageMs <= ttlMs + staleMs) {
+        entries.delete(key);
+        entries.set(key, cached);
+      }
       if (ageMs <= ttlMs) return { status: 'hit', result: cached.result };
       if (ageMs <= ttlMs + staleMs) return { status: 'stale', result: cached.result };
       entries.delete(key);
       return { status: 'miss', result: null };
     },
     set(key: string, result: T, nowMs = Date.now()) {
+      entries.delete(key);
       entries.set(key, { result, storedAtMs: nowMs });
+      while (entries.size > maxEntries) {
+        const oldestKey = entries.keys().next().value;
+        if (typeof oldestKey !== 'string') break;
+        entries.delete(oldestKey);
+      }
     },
     clear() {
       entries.clear();

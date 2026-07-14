@@ -53,6 +53,9 @@ class ECSCarPlayWeatherScreen {
     // System health
     private var weatherAvailable = true
     private var weatherStaleMinutes: Int?
+    private var dataFreshness = "unavailable"
+    private var dataAvailability = "unavailable"
+    private var dataSourceLabel = "Unavailable"
     
     private var infoTemplate: CPInformationTemplate?
     
@@ -95,6 +98,15 @@ class ECSCarPlayWeatherScreen {
                 topAlertTitle = nil
                 topAlertSeverity = nil
             }
+            if let safeState = weatherData["automotiveSafeState"] as? [String: Any] {
+                dataFreshness = safeState["freshness"] as? String ?? "unavailable"
+                dataAvailability = safeState["availability"] as? String ?? "unavailable"
+                dataSourceLabel = safeState["sourceLabel"] as? String ?? "Unavailable"
+            } else {
+                dataFreshness = "unavailable"
+                dataAvailability = "unavailable"
+                dataSourceLabel = "Unavailable"
+            }
         }
         
         // Read system health for weather availability
@@ -136,7 +148,8 @@ class ECSCarPlayWeatherScreen {
     
     private func buildItems() -> [CPInformationItem] {
         // Check if weather data is available
-        let hasData = temperatureF != nil || weatherMain != nil || windSpeedMph != nil
+        let hasData = dataAvailability != "unavailable" &&
+            (temperatureF != nil || weatherMain != nil || windSpeedMph != nil)
         
         if !hasData && !weatherAvailable {
             return buildFallbackItems()
@@ -155,7 +168,11 @@ class ECSCarPlayWeatherScreen {
         // Current Conditions
         let tempText = temperatureF != nil ? "\(Int(temperatureF!.rounded()))°F" : "Temperature unavailable"
         let condSubtext = buildConditionSubtext()
-        items.append(CPInformationItem(title: "Current: \(tempText)", detail: condSubtext))
+        let conditionLabel = dataFreshness == "live" || dataFreshness == "recent" ? "Current" : "Last known"
+        items.append(CPInformationItem(
+            title: "\(conditionLabel): \(tempText)",
+            detail: "\(condSubtext) | \(dataSourceLabel) \(dataFreshness.uppercased())"
+        ))
         
         // Wind
         let windText = windSpeedMph != nil ? "\(Int(windSpeedMph!.rounded())) mph" : "Wind data unavailable"
@@ -190,7 +207,11 @@ class ECSCarPlayWeatherScreen {
         // Current Conditions
         let tempText = temperatureF != nil ? "\(Int(temperatureF!.rounded()))°F" : "Temperature unavailable"
         let condSubtext = buildConditionSubtext()
-        items.append(CPInformationItem(title: "Current: \(tempText)", detail: condSubtext))
+        let conditionLabel = dataFreshness == "live" || dataFreshness == "recent" ? "Current" : "Last known"
+        items.append(CPInformationItem(
+            title: "\(conditionLabel): \(tempText)",
+            detail: "\(condSubtext) | \(dataSourceLabel) \(dataFreshness.uppercased())"
+        ))
         
         // Wind + Exposure
         let windText = windSpeedMph != nil ? "\(Int(windSpeedMph!.rounded())) mph \(windDirection ?? "")" : "Wind data unavailable"

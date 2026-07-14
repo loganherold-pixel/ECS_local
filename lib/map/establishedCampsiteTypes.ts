@@ -1,4 +1,8 @@
 import type { CampLayerFetchFailureDiagnostic } from './campLayerFetchDiagnostics';
+import {
+  createRuntimeFeatureVisibilityContext,
+  resolveECSFeatureVisibility,
+} from '../features/featureVisibilityRegistry';
 
 export type EstablishedCampsiteSource =
   | 'RECREATION_GOV'
@@ -131,13 +135,8 @@ export type EstablishedCampsiteLayerState = {
 export type EstablishedCampsiteSelectionPayload = EstablishedCampsite;
 
 export function isEstablishedCampsitesLayerAvailable(): boolean {
-  const envValue =
-    typeof process !== 'undefined'
-      ? process.env.EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER
-      : undefined;
-  return (
-    envValue === 'true' ||
-    envValue === '1' ||
-    (typeof __DEV__ !== 'undefined' && __DEV__ === true)
-  );
+  return resolveECSFeatureVisibility(
+    'established_campgrounds',
+    createRuntimeFeatureVisibilityContext(),
+  ).visible;
 }

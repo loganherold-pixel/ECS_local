@@ -1,4 +1,8 @@
 import type { CampLayerFetchFailureDiagnostic } from './campLayerFetchDiagnostics';
+import {
+  createRuntimeFeatureVisibilityContext,
+  resolveECSFeatureVisibility,
+} from '../features/featureVisibilityRegistry';
 
 export namespace GeoJSON {
   export type Position = [number, number] | [number, number, number];
@@ -57,6 +61,9 @@ export type DispersedCampingRegion = {
   permitRequired?: boolean;
   fireRestrictionKnown?: boolean;
   seasonalAccessKnown?: boolean;
+  /** Whether the source explicitly reports an active closure. */
+  closureActive?: boolean;
+  /** Whether closure status was present, including an explicit false value. */
   closureKnown?: boolean;
 };
 
@@ -80,6 +87,7 @@ export type DispersedCampingEligibilityProperties = {
   permitRequired?: boolean;
   fireRestrictionKnown?: boolean;
   seasonalAccessKnown?: boolean;
+  closureActive?: boolean;
   closureKnown?: boolean;
   routeNearby?: boolean;
   distanceFromRouteMiles?: number;
@@ -141,13 +149,8 @@ export type DispersedCampingEligibilityLayerState = {
 };
 
 export function isDispersedCampingEligibilityLayerAvailable(): boolean {
-  const envValue =
-    typeof process !== 'undefined'
-      ? process.env.EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER
-      : undefined;
-  return (
-    envValue === 'true' ||
-    envValue === '1' ||
-    (typeof __DEV__ !== 'undefined' && __DEV__ === true)
-  );
+  return resolveECSFeatureVisibility(
+    'dispersed_camping',
+    createRuntimeFeatureVisibilityContext(),
+  ).visible;
 }

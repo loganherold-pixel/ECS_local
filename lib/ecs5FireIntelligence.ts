@@ -100,6 +100,7 @@ export function createNasaFirmsAdapter(provider: ProviderDefinition): ProviderAd
         url: request.url,
         timeoutMs: 10_000,
         headers: { Accept: 'text/csv, application/json' },
+        signal: context.signal,
       });
     },
     normalize(rawPayload: unknown, context: ProviderAdapterContext): SourceObservation[] {
@@ -125,6 +126,7 @@ export function createWfigsAdapter(provider: ProviderDefinition): ProviderAdapte
         url: String(input?.url ?? 'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters/FeatureServer/0/query?where=1%3D1&outFields=*&f=geojson'),
         timeoutMs: 10_000,
         headers: { Accept: 'application/geo+json, application/json' },
+        signal: context.signal,
       });
     },
     normalize(rawPayload: unknown, context: ProviderAdapterContext): SourceObservation[] {
@@ -150,6 +152,7 @@ export function createInciWebAdapter(provider: ProviderDefinition): ProviderAdap
         url: String(input?.url ?? 'https://inciweb.wildfire.gov/feeds/rss.xml'),
         timeoutMs: 10_000,
         headers: { Accept: 'application/json, application/rss+xml, text/xml' },
+        signal: context.signal,
       });
     },
     normalize(rawPayload: unknown, context: ProviderAdapterContext): SourceObservation[] {
@@ -315,29 +318,42 @@ export function evaluateRouteFireIntelligence(input: RouteFireIntelligenceInput)
   const route = input.routeGeometry.filter(validPoint);
   const concerns: string[] = [];
   const evidenceObservationIds: string[] = [];
+  const currentEnvironmentalObservationIds: string[] = [];
   const perimeterIntersections: string[] = [];
   const bailoutImpacts: string[] = [];
   let fireRiskLevel: FireRiskLevel = 'unknown';
   let fireWeatherContext: FireWeatherContextLevel = 'unknown';
   let nearestActiveFireMiles: number | null = null;
   let blockingSafetyIssue = false;
+  let hasCurrentEnvironmentalEvidence = false;
 
   for (const observation of input.observations) {
     if (observation.subjectType === 'active_fire') {
       const point = pointFromObservation(observation);
       const distance = point && route.length ? distancePointToRouteMiles(point, route) : null;
-      if (distance != null) nearestActiveFireMiles = nearestActiveFireMiles == null ? distance : Math.min(nearestActiveFireMiles, distance);
-      const detectionRisk = fireRiskFromDetection(observation, distance, now);
-      fireRiskLevel = maxFireRisk([fireRiskLevel, detectionRisk]);
-      if (detectionRisk === 'high' || detectionRisk === 'critical') {
+      const detection = assessFireDetection(observation, distance, now);
+      if (detection.current) {
+        hasCurrentEnvironmentalEvidence = true;
+        currentEnvironmentalObservationIds.push(observation.id);
+        if (distance != null) nearestActiveFireMiles = nearestActiveFireMiles == null ? distance : Math.min(nearestActiveFireMiles, distance);
+      }
+      fireRiskLevel = maxFireRisk([fireRiskLevel, detection.risk]);
+      if (detection.risk === 'high' || detection.risk === 'critical') {
         evidenceObservationIds.push(observation.id);
         concerns.push(`NASA FIRMS active fire detection ${distance != null ? `${distance.toFixed(1)} mi from route` : 'near route context'} raises fire risk; detection is not a legal closure order.`);
+      } else if (detection.freshnessWarning && (distance == null || distance <= 25)) {
+        concerns.push(detection.freshnessWarning);
       }
     }
 
     if (observation.subjectType === 'fire_perimeter') {
-      const intersects = route.length > 0 && geometryIntersectsRoute(observation.geometry, route);
-      if (intersects) {
+      const current = isObservationCurrent(observation, now, 72, true);
+      const intersects = current && route.length > 0 && geometryIntersectsRoute(observation.geometry, route);
+      if (!current) {
+        concerns.push('Stale fire perimeter data is retained as last-known context and is not treated as a current route closure or blocking condition.');
+      } else if (intersects) {
+        hasCurrentEnvironmentalEvidence = true;
+        currentEnvironmentalObservationIds.push(observation.id);
         evidenceObservationIds.push(observation.id);
         perimeterIntersections.push(observation.subjectId ?? observation.id);
         fireRiskLevel = 'critical';
@@ -349,7 +365,12 @@ export function evaluateRouteFireIntelligence(input: RouteFireIntelligenceInput)
     if (observation.subjectType === 'fire_incident') {
       const point = pointFromObservation(observation);
       const distance = point && route.length ? distancePointToRouteMiles(point, route) : null;
-      if (distance == null || distance <= 25) {
+      const current = isObservationCurrent(observation, now, 72, true);
+      if (!current) {
+        concerns.push('Stale incident context is retained as last-known information and does not establish a current route condition.');
+      } else if (distance == null || distance <= 25) {
+        hasCurrentEnvironmentalEvidence = true;
+        currentEnvironmentalObservationIds.push(observation.id);
         evidenceObservationIds.push(observation.id);
         fireRiskLevel = maxFireRisk([fireRiskLevel, 'moderate']);
         concerns.push('InciWeb incident context nearby adds evidence but is not primary perimeter geometry.');
@@ -359,24 +380,36 @@ export function evaluateRouteFireIntelligence(input: RouteFireIntelligenceInput)
     if (observation.subjectType === 'weather_alert') {
       const payload = observation.normalizedPayload as any;
       const text = `${payload?.event ?? ''} ${payload?.headline ?? ''} ${payload?.description ?? ''}`;
-      if (/red flag|fire weather/i.test(text)) {
+      const current = isObservationCurrent(observation, now, 72, true);
+      if (/red flag|fire weather/i.test(text) && current) {
+        hasCurrentEnvironmentalEvidence = true;
+        currentEnvironmentalObservationIds.push(observation.id);
         evidenceObservationIds.push(observation.id);
         fireWeatherContext = /warning|severe|extreme/i.test(text) ? 'critical' : 'elevated';
         fireRiskLevel = maxFireRisk([fireRiskLevel, 'high']);
         concerns.push('NWS fire weather or red flag alert raises fire_weather_context; this is not an active fire detection.');
+      } else if (/red flag|fire weather/i.test(text) && !current) {
+        concerns.push('Expired fire-weather alert is retained as historical context and is not labeled as current.');
       }
     }
   }
 
   for (const bailout of input.bailoutSegments ?? []) {
     const impacted = input.observations.some((observation) =>
-      (observation.subjectType === 'fire_perimeter' && geometryIntersectsRoute(observation.geometry, bailout.geometry.filter(validPoint))) ||
-      (observation.subjectType === 'active_fire' && pointFromObservation(observation) && distancePointToRouteMiles(pointFromObservation(observation)!, bailout.geometry.filter(validPoint)) <= 10));
+      (observation.subjectType === 'fire_perimeter' &&
+        isObservationCurrent(observation, now, 72, true) &&
+        geometryIntersectsRoute(observation.geometry, bailout.geometry.filter(validPoint))) ||
+      (observation.subjectType === 'active_fire' && pointFromObservation(observation) &&
+        ['moderate', 'high', 'critical'].includes(assessFireDetection(
+          observation,
+          distancePointToRouteMiles(pointFromObservation(observation)!, bailout.geometry.filter(validPoint)),
+          now,
+        ).risk)));
     if (impacted) bailoutImpacts.push(bailout.label ?? bailout.id);
   }
 
-  if (fireRiskLevel === 'unknown' && input.observations.length > 0) fireRiskLevel = 'low';
-  if (fireWeatherContext === 'unknown' && input.observations.length > 0) fireWeatherContext = 'low';
+  if (fireRiskLevel === 'unknown' && hasCurrentEnvironmentalEvidence) fireRiskLevel = 'low';
+  if (fireWeatherContext === 'unknown' && hasCurrentEnvironmentalEvidence) fireWeatherContext = 'low';
 
   return {
     routeId: input.routeId,
@@ -391,7 +424,7 @@ export function evaluateRouteFireIntelligence(input: RouteFireIntelligenceInput)
     nearestActiveFireMiles: nearestActiveFireMiles == null ? null : Number(nearestActiveFireMiles.toFixed(2)),
     perimeterIntersections,
     bailoutImpacts,
-    confidenceScore: confidenceForFireResult(input.observations, evidenceObservationIds),
+    confidenceScore: confidenceForFireResult(input.observations, currentEnvironmentalObservationIds),
   };
 }
 
@@ -404,15 +437,76 @@ export function buildNasaFirmsAreaUrl(input: NasaFirmsRequestInput & { config?: 
   return buildNasaFirmsRequest(config, input).url;
 }
 
-function fireRiskFromDetection(observation: SourceObservation, distanceMiles: number | null, now: Date): FireRiskLevel {
+function assessFireDetection(
+  observation: SourceObservation,
+  distanceMiles: number | null,
+  now: Date,
+): { risk: FireRiskLevel; current: boolean; freshnessWarning: string | null } {
   const payload = observation.normalizedPayload as any;
   const confidence = String(payload?.confidence ?? '').toLowerCase();
   const frp = toNumber(payload?.frp) ?? 0;
-  const ageHours = observation.observedAt ? Math.max(0, (now.getTime() - Date.parse(observation.observedAt)) / 3_600_000) : 24;
-  if (distanceMiles != null && distanceMiles <= 3 && ageHours <= 24) return 'critical';
-  if (distanceMiles != null && distanceMiles <= 10 && (confidence === 'h' || confidence === 'high' || frp >= 20 || ageHours <= 12)) return 'high';
-  if (distanceMiles != null && distanceMiles <= 25) return 'moderate';
-  return 'low';
+  const observedAtMs = observation.observedAt ? Date.parse(observation.observedAt) : Number.NaN;
+  if (!Number.isFinite(observedAtMs)) {
+    return {
+      risk: 'unknown',
+      current: false,
+      freshnessWarning: 'Fire detection time is missing or invalid; ECS cannot present it as current.',
+    };
+  }
+  const futureSkewMs = observedAtMs - now.getTime();
+  if (futureSkewMs > 15 * 60 * 1000) {
+    return {
+      risk: 'unknown',
+      current: false,
+      freshnessWarning: 'Fire detection timestamp is in the future; ECS cannot present it as current.',
+    };
+  }
+  if (!isObservationCurrent(observation, now, 48, false)) {
+    return {
+      risk: 'unknown',
+      current: false,
+      freshnessWarning: 'Stale fire detection is retained as last-known context and is not treated as a current route condition or closure.',
+    };
+  }
+
+  const ageHours = Math.max(0, (now.getTime() - observedAtMs) / 3_600_000);
+  const confidenceScore = Number.isFinite(observation.confidenceScore) ? observation.confidenceScore : 0;
+  const lowConfidence = confidence === 'l' || confidence === 'low' || confidenceScore < 60;
+  let risk: FireRiskLevel = 'low';
+  if (distanceMiles != null && distanceMiles <= 3 && ageHours <= 24) risk = 'critical';
+  else if (
+    distanceMiles != null &&
+    distanceMiles <= 10 &&
+    (confidence === 'h' || confidence === 'high' || frp >= 20 || ageHours <= 12)
+  ) risk = 'high';
+  else if (distanceMiles != null && distanceMiles <= 25) risk = 'moderate';
+
+  if (lowConfidence && (risk === 'critical' || risk === 'high')) risk = 'moderate';
+  return {
+    risk,
+    current: true,
+    freshnessWarning: lowConfidence && risk === 'moderate'
+      ? 'Low-confidence satellite detection is retained as cautionary evidence and cannot independently establish critical route risk or closure.'
+      : null,
+  };
+}
+
+function isObservationCurrent(
+  observation: SourceObservation,
+  now: Date,
+  maxAgeHours: number,
+  allowFutureObservedAt: boolean,
+): boolean {
+  const nowMs = now.getTime();
+  const boundaries = [observation.staleAt, observation.expiresAt, observation.validUntil]
+    .map((value) => typeof value === 'string' ? Date.parse(value) : Number.NaN)
+    .filter(Number.isFinite);
+  if (boundaries.length > 0 && Math.min(...boundaries) <= nowMs) return false;
+
+  const observedAtMs = observation.observedAt ? Date.parse(observation.observedAt) : Number.NaN;
+  if (!Number.isFinite(observedAtMs)) return boundaries.some((boundary) => boundary > nowMs);
+  if (!allowFutureObservedAt && observedAtMs - nowMs > 15 * 60 * 1000) return false;
+  return nowMs - observedAtMs <= Math.max(1, maxAgeHours) * 3_600_000;
 }
 
 function parseFirmsRows(rawPayload: unknown): Array<Record<string, any>> {
@@ -618,9 +712,8 @@ function degToRad(value: number): number {
 
 function confidenceForFireResult(observations: SourceObservation[], evidenceIds: string[]): number {
   const used = observations.filter((observation) => evidenceIds.includes(observation.id));
-  const source = used.length ? used : observations;
-  if (source.length === 0) return 0;
-  return Math.round(source.reduce((sum, observation) => sum + observation.confidenceScore, 0) / source.length);
+  if (used.length === 0) return 0;
+  return Math.round(used.reduce((sum, observation) => sum + observation.confidenceScore, 0) / used.length);
 }
 
 function maxFireRisk(values: FireRiskLevel[]): FireRiskLevel {

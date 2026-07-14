@@ -7,6 +7,8 @@ const root = path.join(__dirname, '..');
 const enginePath = path.join(root, 'lib', 'expedition', 'operationalAssessmentEngine.ts');
 const fixturesPath = path.join(root, 'lib', 'expedition', 'operationalAssessmentFixtures.ts');
 const narrativePath = path.join(root, 'lib', 'ai', 'expeditionAssessmentNarrative.ts');
+const featureVisibilityPath = path.join(root, 'lib', 'features', 'featureVisibilityRegistry.ts');
+const aiRequestCoordinatorPath = path.join(root, 'lib', 'ai', 'aiRequestCoordinator.ts');
 
 require.extensions['.ts'] = function compileTs(module, filename) {
   const source = fs.readFileSync(filename, 'utf8');
@@ -33,6 +35,19 @@ const {
   generateExpeditionAssessmentNarrative,
   generateExpeditionAssessmentNarratives,
 } = require(narrativePath);
+const { createRuntimeFeatureVisibilityContext } = require(featureVisibilityPath);
+const { resetECSAIRequestCoordinatorForTests } = require(aiRequestCoordinatorPath);
+
+const approvedAIVisibilityContext = createRuntimeFeatureVisibilityContext({
+  environment: 'test',
+  env: { EXPO_PUBLIC_ECS_AI_ASSIST: 'true' },
+  online: true,
+  authenticated: true,
+  hasFullAccess: true,
+  isAdmin: true,
+  privacyApprovals: new Set(['ai_assist_model_output_approval']),
+  productionEvidence: new Set(['ai_assist_real_model_execution_evidence']),
+});
 
 async function main() {
   assert.ok(ECS_ASSESSMENT_NARRATIVE_PROMPT.includes('You are ECS, an Expedition Command System assistant.'));
@@ -91,27 +106,32 @@ async function main() {
       assert.ok(!input.prompt.includes('{{ASSESSMENT_JSON}}'));
       assert.ok(input.groundingJson.includes('"dataUsed"'));
       return {
-        statusLine: 'Route Watch. ECS is monitoring the route inputs.',
+        statusLine: `Route ${input.deterministicSnapshot.status}. ECS is monitoring the route inputs.`,
         summary: 'The route needs monitoring based on the provided assessment.',
         whyEcsThinksThis: ['ECS is using only the provided route assessment fields.'],
         whatToWatch: 'Watch the provided daylight and route fields.',
         recommendedAction: input.assessment.recommendedAction,
         toImproveStatus: 'Refresh the missing route inputs.',
         confidenceExplanation: 'Confidence is reduced because route data is stale or missing.',
-        dataLimitations: input.assessment.missingDataWarnings.length
-          ? input.assessment.missingDataWarnings
-          : input.assessment.staleDataWarnings,
+        dataLimitations: [
+          ...input.assessment.missingDataWarnings,
+          ...input.assessment.staleDataWarnings,
+        ],
       };
     },
   };
-  const routeNarrative = await generateExpeditionAssessmentNarrative(missingMap.route, safeProvider);
+  const routeNarrative = await generateExpeditionAssessmentNarrative(missingMap.route, safeProvider, {
+    visibilityContext: approvedAIVisibilityContext,
+  });
   assert.strictEqual(routeNarrative.source, 'ai');
   assert.strictEqual(routeNarrative.confidence, missingMap.route.confidence);
   assert.strictEqual(routeNarrative.plainLanguageSummary, 'The route needs monitoring based on the provided assessment.');
-  assert.deepStrictEqual(routeNarrative.whatToWatch, ['Watch the provided daylight and route fields.']);
-  assert.deepStrictEqual(routeNarrative.toImproveStatus, ['Refresh the missing route inputs.']);
+  assert.deepStrictEqual(routeNarrative.whatToWatch, missingMap.route.whatToWatch);
+  assert.deepStrictEqual(routeNarrative.toImproveStatus, missingMap.route.toImproveStatus);
+  assert.strictEqual(routeNarrative.recommendedAction, missingMap.route.recommendedAction);
   assert.ok(routeNarrative.confidenceExplanation.includes('reduced'));
   assert.ok(routeNarrative.dataLimitations.length > 0);
+  assert.ok(routeNarrative.trace, 'Accepted explanation should be traceable to the deterministic snapshot.');
 
   const hallucinatingProvider = {
     async generateNarrative() {
@@ -127,7 +147,10 @@ async function main() {
       };
     },
   };
-  const guardedNarrative = await generateExpeditionAssessmentNarrative(missingMap.route, hallucinatingProvider);
+  resetECSAIRequestCoordinatorForTests();
+  const guardedNarrative = await generateExpeditionAssessmentNarrative(missingMap.route, hallucinatingProvider, {
+    visibilityContext: approvedAIVisibilityContext,
+  });
   assert.strictEqual(guardedNarrative.source, 'template');
   const guardedText = JSON.stringify(guardedNarrative).toLowerCase();
   assert.ok(!guardedText.includes('999 gallons'));
@@ -139,7 +162,11 @@ async function main() {
       throw new Error('network unavailable');
     },
   };
-  const fallbackNarrative = await generateExpeditionAssessmentNarrative(missingMap.logistics, throwingProvider);
+  resetECSAIRequestCoordinatorForTests();
+  const fallbackNarrative = await generateExpeditionAssessmentNarrative(missingMap.logistics, throwingProvider, {
+    visibilityContext: approvedAIVisibilityContext,
+    maxRetries: 0,
+  });
   assert.strictEqual(fallbackNarrative.source, 'template');
   assert.ok(fallbackNarrative.dataLimitations.length > 0);
 

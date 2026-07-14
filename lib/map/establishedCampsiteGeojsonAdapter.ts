@@ -5,6 +5,19 @@ import type {
 
 export const ESTABLISHED_CAMPGROUND_PIN_DEDUPE_RADIUS_METERS = 200;
 
+export type EstablishedCampsiteMapDedupeDiagnostics = {
+  inputCount: number;
+  validCount: number;
+  clusterCount: number;
+  duplicateCount: number;
+  distanceCheckCount: number;
+};
+
+export type EstablishedCampsiteMapDedupeResult = {
+  campsites: EstablishedCampsite[];
+  diagnostics: EstablishedCampsiteMapDedupeDiagnostics;
+};
+
 function validCoordinate(latitude: number, longitude: number): boolean {
   return (
     Number.isFinite(latitude) &&
@@ -70,10 +83,28 @@ export function dedupeEstablishedCampsitesForMap(
   campsites: EstablishedCampsite[],
   radiusMeters = ESTABLISHED_CAMPGROUND_PIN_DEDUPE_RADIUS_METERS,
 ): EstablishedCampsite[] {
+  return dedupeEstablishedCampsitesForMapWithDiagnostics(campsites, radiusMeters).campsites;
+}
+
+export function dedupeEstablishedCampsitesForMapWithDiagnostics(
+  campsites: EstablishedCampsite[],
+  radiusMeters = ESTABLISHED_CAMPGROUND_PIN_DEDUPE_RADIUS_METERS,
+): EstablishedCampsiteMapDedupeResult {
   const validEntries = campsites
     .map((campsite, index) => ({ campsite, index }))
     .filter(({ campsite }) => validCoordinate(campsite.latitude, campsite.longitude));
-  if (validEntries.length < 2 || radiusMeters <= 0) return campsites;
+  if (validEntries.length < 2 || radiusMeters <= 0) {
+    return {
+      campsites,
+      diagnostics: {
+        inputCount: campsites.length,
+        validCount: validEntries.length,
+        clusterCount: validEntries.length,
+        duplicateCount: 0,
+        distanceCheckCount: 0,
+      },
+    };
+  }
 
   const parent = validEntries.map((_, index) => index);
   const find = (index: number): number => {
@@ -90,13 +121,30 @@ export function dedupeEstablishedCampsitesForMap(
     if (rootA !== rootB) parent[rootB] = rootA;
   };
 
-  for (let outer = 0; outer < validEntries.length; outer += 1) {
-    for (let inner = outer + 1; inner < validEntries.length; inner += 1) {
-      if (distanceMeters(validEntries[outer].campsite, validEntries[inner].campsite) <= radiusMeters) {
-        union(outer, inner);
+  const cellDegrees = Math.max(0.000001, radiusMeters / 111_320);
+  const buckets = new Map<string, number[]>();
+  let distanceCheckCount = 0;
+  validEntries.forEach((entry, index) => {
+    const latBucket = Math.floor(entry.campsite.latitude / cellDegrees);
+    const lngBucket = Math.floor(entry.campsite.longitude / cellDegrees);
+    const longitudeRange = Math.max(
+      1,
+      Math.ceil(1 / Math.max(0.1, Math.cos((entry.campsite.latitude * Math.PI) / 180))),
+    );
+    for (let latDelta = -1; latDelta <= 1; latDelta += 1) {
+      for (let lngDelta = -longitudeRange; lngDelta <= longitudeRange; lngDelta += 1) {
+        const nearby = buckets.get(`${latBucket + latDelta}:${lngBucket + lngDelta}`) ?? [];
+        for (const nearbyIndex of nearby) {
+          distanceCheckCount += 1;
+          if (distanceMeters(entry.campsite, validEntries[nearbyIndex].campsite) <= radiusMeters) {
+            union(index, nearbyIndex);
+          }
+        }
       }
     }
-  }
+    const key = `${latBucket}:${lngBucket}`;
+    buckets.set(key, [...(buckets.get(key) ?? []), index]);
+  });
 
   const grouped = new Map<number, Array<{ campsite: EstablishedCampsite; index: number }>>();
   validEntries.forEach((entry, index) => {
@@ -125,7 +173,16 @@ export function dedupeEstablishedCampsitesForMap(
     });
 
   const invalidEntries = campsites.filter((_, index) => !groupedIndexes.has(index));
-  return [...collapsed, ...invalidEntries];
+  return {
+    campsites: [...collapsed, ...invalidEntries],
+    diagnostics: {
+      inputCount: campsites.length,
+      validCount: validEntries.length,
+      clusterCount: grouped.size,
+      duplicateCount: Math.max(0, validEntries.length - grouped.size),
+      distanceCheckCount,
+    },
+  };
 }
 
 export function toEstablishedCampsiteFeatureCollection(

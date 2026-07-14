@@ -1,3 +1,5 @@
+import type { ECSJourneyLinkage } from '../lifecycle/routeTripExpeditionLifecycle';
+
 export type ExpeditionTripStatus = 'planned' | 'active' | 'completed' | 'cancelled' | 'archived';
 
 export type ExpeditionTripDataQuality = 'live' | 'cached' | 'stale' | 'manual' | 'mock' | 'missing' | 'estimated';
@@ -372,6 +374,8 @@ export type ExpeditionReportExportStatus = 'idle' | 'generating' | 'ready' | 'fa
 export interface ExpeditionReport {
   id: string;
   tripId: string;
+  sourceFingerprint: string;
+  privacyMode: 'redacted';
   generatedAt: string;
   title: string;
   completedAt: string | null;
@@ -394,6 +398,13 @@ export interface ExpeditionReport {
 export interface ExpeditionTripRecord {
   id: string;
   schemaVersion: string;
+  completionKey: string | null;
+  expeditionId?: string | null;
+  routeAssetId?: string | null;
+  tripPlanId?: string | null;
+  offlinePackageId?: string | null;
+  recordedRunId?: string | null;
+  lifecycle?: ECSJourneyLinkage | null;
   userId: string | null;
   title: string;
   status: ExpeditionTripStatus;
@@ -448,6 +459,13 @@ export interface ExpeditionTripSummary {
 
 export interface ExpeditionTripCreateInput {
   id?: string;
+  completionKey?: string | null;
+  expeditionId?: string | null;
+  routeAssetId?: string | null;
+  tripPlanId?: string | null;
+  offlinePackageId?: string | null;
+  recordedRunId?: string | null;
+  lifecycle?: ECSJourneyLinkage | null;
   userId?: string | null;
   title?: string | null;
   startedAt?: string | null;

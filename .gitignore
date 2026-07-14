@@ -6,6 +6,7 @@ apps/web/.next/
 coverage/
 npm-debug.*
 *.log
+*.tsbuildinfo
 __pycache__/
 *.py[cod]
 *.egg-info/

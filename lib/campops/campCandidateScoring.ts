@@ -121,7 +121,7 @@ export function assessDispersedCampingRegionForCandidate(
     };
   }
 
-  if (region.closureKnown === true || includesBlockedRestriction(region)) {
+  if (region.closureActive === true || includesBlockedRestriction(region)) {
     return {
       accepted: false,
       regionId: region.id,
