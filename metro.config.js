@@ -80,6 +80,12 @@ const androidDirBlock = (...segments) =>
       .map((segment) => `[/\\\\]${escapeRegExp(segment)}`)
       .join('')}(?:[/\\\\].*)?$`,
   );
+const projectDirBlock = (...segments) =>
+  new RegExp(
+    `${projectRootPattern}${segments
+      .map((segment) => `[/\\\\]${escapeRegExp(segment)}`)
+      .join('')}(?:[/\\\\].*)?$`,
+  );
 
 const generatedPathBlockList = [
   rootDirBlock('.android-home'),
@@ -100,6 +106,8 @@ const generatedPathBlockList = [
   rootDirBlock('.tmp'),
   rootDirBlock('.metro-tmp'),
   rootDirBlock('.qa'),
+  // production-asset-exclusion:assets/images/recovery-protocols/
+  projectDirBlock('assets', 'images', 'recovery-protocols'),
 ];
 
 function stripMetroMultipartProgressForAndroidDebug(req) {
@@ -135,7 +143,7 @@ config.resolver.blockList = [
 // Ensure Metro can resolve ESM/mjs files
 config.resolver.sourceExts = [...(config.resolver.sourceExts || []), 'mjs'];
 config.resolver.assetExts = Array.from(
-  new Set([...(config.resolver.assetExts || []), 'wav', 'riv']),
+  new Set([...(config.resolver.assetExts || []), 'wav']),
 );
 
 // Add alias for @supabase/node-fetch to prevent dynamic import issues

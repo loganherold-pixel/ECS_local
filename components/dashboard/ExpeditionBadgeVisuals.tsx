@@ -377,7 +377,6 @@ export function BadgeUnlockSummary({
         ))}
       </Animated.View>
       <BadgeDetailModal badge={selectedBadge} onClose={() => setSelectedBadge(null)} />
-      {/* TODO Expedition Badges: add a richer badge unlock animation sequence for post-expedition review. */}
       {/* TODO Expedition Badges: stamp earned badges onto PDF expedition reports. */}
       {/* TODO Expedition Badges: link badge location markers to recap maps when unlock coordinates exist. */}
       {/* TODO Expedition Badges: add seasonal badge themes without exposing locked hidden badges. */}

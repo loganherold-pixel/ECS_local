@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { buildProductionAssetInventory } from './production-asset-inventory.mjs';
+
 const DEFAULT_REPORT_DIR = path.join('artifacts', 'app-size');
 const DEFAULT_EXCLUDED_DIRS = new Set([
   '.git',
@@ -74,8 +76,9 @@ function safeStat(filePath) {
 
 function shouldSkipDir(name, fullPath, options) {
   if (options.includeNodeModules === true && name === 'node_modules') return false;
-  if ((options.skipDirs ?? DEFAULT_EXCLUDED_DIRS).has(name)) return true;
   const rel = relPath(options.repoRoot, fullPath);
+  if (name === 'node_modules' && rel.startsWith('dist/')) return false;
+  if ((options.skipDirs ?? DEFAULT_EXCLUDED_DIRS).has(name)) return true;
   return options.extraSkipRelPaths?.has(rel) ?? false;
 }
 
@@ -423,7 +426,9 @@ export function formatAppSizeAuditMarkdown(report) {
     markdownTable([
       { label: 'Repo scanned', bytes: report.totals.repoBytes },
       { label: 'Production candidate', bytes: report.totals.productionCandidateBytes },
-      { label: 'Assets', bytes: report.totals.assetsBytes },
+      { label: 'Source assets (raw)', bytes: report.totals.assetsBytes },
+      { label: 'Production assets', bytes: report.totals.productionAssetsBytes },
+      { label: 'Guarded production exclusions', bytes: report.totals.excludedProductionAssetsBytes },
       { label: 'Docs/specs', bytes: report.totals.docsBytes },
       { label: 'Fixtures', bytes: report.totals.fixturesBytes },
       { label: 'Artifacts/evidence', bytes: report.totals.artifactsBytes },
@@ -433,6 +438,14 @@ export function formatAppSizeAuditMarkdown(report) {
     ], [
       { key: 'label', label: 'Category' },
       { key: 'bytes', label: 'Size', format: formatBytes },
+    ]),
+    '',
+    '## Production Asset Categories',
+    markdownTable(report.assetInventory.byCategory, [
+      { key: 'category', label: 'Category' },
+      { key: 'fileCount', label: 'Files' },
+      { key: 'productionSizeBytes', label: 'Production Size', format: formatBytes },
+      { key: 'excludedSizeBytes', label: 'Excluded Size', format: formatBytes },
     ]),
     '',
     '## Largest Files',
@@ -472,9 +485,11 @@ function writeReports(repoRoot, report, reportDir = DEFAULT_REPORT_DIR) {
   fs.mkdirSync(outDir, { recursive: true });
   const jsonPath = path.join(outDir, 'app-size-report.json');
   const markdownPath = path.join(outDir, 'app-size-report.md');
+  const inventoryPath = path.join(outDir, 'production-asset-inventory.json');
   fs.writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   fs.writeFileSync(markdownPath, formatAppSizeAuditMarkdown(report));
-  return { jsonPath, markdownPath };
+  fs.writeFileSync(inventoryPath, `${JSON.stringify(report.assetInventory, null, 2)}\n`);
+  return { jsonPath, markdownPath, inventoryPath };
 }
 
 export async function buildAppSizeAuditReport(options = {}) {
@@ -484,6 +499,7 @@ export async function buildAppSizeAuditReport(options = {}) {
     includeNodeModules: options.includeNodeModules === true,
     skipDirs: new Set(options.skipDirs ?? DEFAULT_EXCLUDED_DIRS),
   });
+  const productionAssetInventory = buildProductionAssetInventory({ repoRoot, files });
   const directories = directoryBreakdown(files);
   const assets = assetBreakdown(files);
   const native = nativeLibraries(files);
@@ -510,6 +526,8 @@ export async function buildAppSizeAuditReport(options = {}) {
       repoBytes: sumFiles(files, () => true),
       productionCandidateBytes: sumFiles(files, isProductionCandidate),
       assetsBytes: sumFiles(files, (file) => isStaticAsset(file.path)),
+      productionAssetsBytes: productionAssetInventory.summary.productionAssetBytes,
+      excludedProductionAssetsBytes: productionAssetInventory.summary.excludedAssetBytes,
       docsBytes: sumFiles(files, (file) => isDocs(file.path)),
       fixturesBytes: sumFiles(files, (file) => isFixture(file.path)),
       artifactsBytes: sumFiles(files, (file) => isArtifact(file.path)),
@@ -524,6 +542,7 @@ export async function buildAppSizeAuditReport(options = {}) {
     largestDirectories,
     assetBreakdownByExtension: assets.byExtension,
     assetBreakdownByDirectory: assets.byDirectory,
+    assetInventory: productionAssetInventory,
     mediaBreakdown: mediaBreakdown(files),
     androidArtifacts: android,
     nativeLibrariesByAbi: native.byAbi,

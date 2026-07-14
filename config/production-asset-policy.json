@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "productionExclusions": [
+    {
+      "pathPrefix": "assets/images/recovery-protocols/",
+      "classification": "generated",
+      "reason": "Local recovery-artwork staging copies duplicate the tracked offline runtime protocol assets under assets/images/protocols/recovery.",
+      "easIgnorePattern": "assets/images/recovery-protocols/",
+      "metroBlockMarker": "production-asset-exclusion:assets/images/recovery-protocols/"
+    }
+  ],
+  "offlineRequiredPrefixes": [
+    "assets/field-utilities/",
+    "assets/images/protocols/",
+    "assets/images/safety-protocols/"
+  ],
+  "requiredRuntimePrefixes": [
+    "assets/expedition-badges/",
+    "assets/vehicles/attitude/clean/"
+  ]
+}

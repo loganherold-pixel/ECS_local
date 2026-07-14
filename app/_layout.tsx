@@ -29,6 +29,7 @@ import { WizardStateProvider } from '../context/WizardStateContext';
 import { ViewerSettingsProvider } from '../context/ViewerSettingsContext';
 
 import CommandDock from '../components/CommandDock';
+import { BadgeUnlockQueueProvider } from '../components/badges/BadgeUnlockQueueProvider';
 
 import { MOTION } from '../lib/motion';
 import { ECS } from '../lib/theme';
@@ -291,6 +292,7 @@ const ECSRootNavigationStack = React.memo(function ECSRootNavigationStack({
       <Stack.Screen name="explore-trip-builder" options={MODAL_SCREEN_OPTIONS} />
       <Stack.Screen name="explore-offline-prep-pack" options={MODAL_SCREEN_OPTIONS} />
       <Stack.Screen name="expedition-archive" options={MODAL_SCREEN_OPTIONS} />
+      <Stack.Screen name="expedition-badges" options={MODAL_SCREEN_OPTIONS} />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="power" options={MODAL_SCREEN_OPTIONS} />
       <Stack.Screen name="vehicle-display" options={FADE_SCREEN_OPTIONS} />
@@ -2217,7 +2219,9 @@ export default function RootLayout() {
     <View style={styles.rootStartupFrame}>
       <AppProvider>
         <ThemeProvider>
-          <AuthGate />
+          <BadgeUnlockQueueProvider>
+            <AuthGate />
+          </BadgeUnlockQueueProvider>
         </ThemeProvider>
       </AppProvider>
     </View>

@@ -51,6 +51,9 @@ import type { IncidentCommunicationPacketAudience } from '../../lib/incidentComm
 import type { ExpeditionAssessmentEscalationRequest } from '../../lib/expedition/assessmentEscalation';
 import type { OverlayStackBehavior } from '../../lib/overlayCoordinator';
 import { isRecoveryPacketBuilderFeatureEnabled } from '../../lib/recovery/recoveryPacketBuilder';
+import { badgeUnlockCriticalInteractionStore } from '../../lib/expedition/badgeUnlockSafety';
+import MissionCommandProposalAction from '../mission-command/MissionCommandProposalAction';
+import { createIncidentRecoveryMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
 
 type IncidentActionId =
   | 'report'
@@ -213,7 +216,25 @@ export default function IncidentRecoveryPanel({
   const [recoveryPacketModalVisible, setRecoveryPacketModalVisible] = useState(false);
   const [timelineModalVisible, setTimelineModalVisible] = useState(false);
   const [resolveDebriefModalVisible, setResolveDebriefModalVisible] = useState(false);
+  const criticalIncidentInteractionVisible =
+    reportModalVisible ||
+    safetyModalVisible ||
+    assessmentModalVisible ||
+    packetModalVisible ||
+    recoveryPacketModalVisible ||
+    timelineModalVisible ||
+    resolveDebriefModalVisible;
   const recoveryPacketBuilderEnabled = isRecoveryPacketBuilderFeatureEnabled();
+
+  useEffect(() => {
+    badgeUnlockCriticalInteractionStore.setActive(
+      'incident-recovery-workflow',
+      criticalIncidentInteractionVisible,
+    );
+    return () => {
+      badgeUnlockCriticalInteractionStore.setActive('incident-recovery-workflow', false);
+    };
+  }, [criticalIncidentInteractionVisible]);
   const frameworkState = useSyncExternalStore(
     subscribeExpeditionFrameworkState,
     getExpeditionFrameworkState,
@@ -545,6 +566,61 @@ export default function IncidentRecoveryPanel({
             </View>
           )}
         </View>
+
+        {incidentState.activeIncident ? (
+          <MissionCommandProposalAction
+            label="Open Incident Room"
+            icon="shield-half-outline"
+            requiredFeature="incidentRoom"
+            accessibilityLabel={`Open Mission Command Incident Room for ${incidentState.activeIncident.title}`}
+            buildProposal={() => {
+              const incident = incidentState.activeIncident!;
+              const observedAt = incident.updatedAt ?? incident.reportedAt;
+              const sourceTruth = {
+                id: `incident-recovery:${incident.id}`,
+                origin: 'manual' as const,
+                role: 'primary' as const,
+                policyKey: 'default' as const,
+                authority: 'Incident & Recovery workflow',
+                authorityKind: 'user' as const,
+                provider: null,
+                observedAt,
+                fetchedAt: null,
+                expiresAt: null,
+                confidence: incident.missingCriticalData?.length ? 'low' as const : 'medium' as const,
+                coverage: incident.missingCriticalData?.length ? 'partial' as const : 'complete' as const,
+                availability: incident.missingCriticalData?.length ? 'degraded' as const : 'usable' as const,
+                conflictState: 'none' as const,
+                conflict: false,
+                warningCodes: incident.missingCriticalData?.map((item) => `incident_missing_${item}`) ?? [],
+              };
+              return createIncidentRecoveryMissionCommandProposal({
+                sourceEntityId: incident.id,
+                incidentId: incident.id,
+                expeditionId: incident.expeditionId ?? expeditionId,
+                explicitEscalation: true,
+                title: `Open Incident Room: ${incident.title}`,
+                summary: incident.summary ?? incidentState.nextRecommendedAction ?? 'Review the existing incident record in Mission Command.',
+                sourceTruth: [sourceTruth],
+                linkedContext: {
+                  id: incident.id,
+                  type: 'incident',
+                  title: incident.title,
+                  subtitle: `${getStatusLabel(incident.status)} / ${getSeverityBadge(incident.severity)}`,
+                  sourceTruth,
+                  sourceTruthPolicyKey: 'default',
+                  observedAt,
+                  metadata: { incidentId: incident.id },
+                },
+                action: 'open_incident_room',
+                operatorRequested: true,
+                offline: ecsOnline === false,
+                returnRoute: '/dashboard',
+              });
+            }}
+            grow
+          />
+        ) : null}
 
         <View style={[styles.actionGrid, compact && styles.actionGridCompact]}>
           {incidentActions.map((action) => {

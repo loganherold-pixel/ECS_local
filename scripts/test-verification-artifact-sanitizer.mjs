@@ -105,6 +105,7 @@ const safeDiagnostic = buildVerificationCheckDiagnostic({
   status: 'failed',
   safeCode: 'PROVIDER_CONTRACT_FAILED',
   failureCode: 'process_exit_nonzero',
+  failureClass: 'application_build_failure',
   durationMs: 321,
   workspaceId: 'root',
   packageId: 'test:provider-contract',
@@ -119,6 +120,10 @@ assert.equal(safeDiagnostic.safeCode, 'PROVIDER_CONTRACT_FAILED');
 assert.equal(safeDiagnostic.durationMs, 321);
 assert.equal(safeDiagnostic.packageId, 'test:provider-contract');
 assert.equal(JSON.stringify(safeDiagnostic).includes(secrets.signedUrlSecret), false);
+assert.throws(
+  () => buildVerificationCheckDiagnostic({ ...safeDiagnostic, failureClass: 'unknown_failure' }),
+  /failureClass/i,
+);
 
 assert.throws(
   () => buildVerificationCheckDiagnostic({
@@ -162,6 +167,7 @@ const laneResult = {
     status: safeDiagnostic.status,
     safeCode: safeDiagnostic.safeCode,
     failureCode: safeDiagnostic.failureCode,
+    failureClass: safeDiagnostic.failureClass,
     exitCode: 1,
     signal: null,
     durationMs: safeDiagnostic.durationMs,
@@ -184,6 +190,7 @@ const laneSerialized = serializeVerificationArtifact(laneArtifact);
 assert.equal(laneArtifact.schemaVersion, VERIFICATION_ARTIFACT_SCHEMAS.LANE);
 assert.equal(laneArtifact.coverage.phase, 'executed');
 assert.equal(laneArtifact.checks[0].safeCode, safeDiagnostic.safeCode);
+assert.equal(laneArtifact.checks[0].failureClass, 'application_build_failure');
 assert.equal(laneArtifact.checks[0].durationMs, 321);
 assert.equal('branch' in laneArtifact.provenance, false);
 assert.equal(laneSerialized.includes(secrets.email), false);

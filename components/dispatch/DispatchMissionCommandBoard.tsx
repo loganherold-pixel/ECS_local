@@ -47,7 +47,9 @@ import {
   type MissionCommandCardPresentation,
 } from '../../lib/dispatchMissionCommandPresentation';
 import { collectMissionClockDeadlines } from '../../lib/dispatchMissionClock';
+import { collectGuardianCheckInDeadlines } from '../../lib/dispatchGuardianCheckInAdapter';
 import { collectOperationalPlaybookDeadlines } from '../../lib/dispatchOperationalPlaybookDomain';
+import { getMissionCommandIncidentId } from '../../lib/dispatchIncidentRoom';
 import type {
   MissionCommand,
   MissionCommandActor,
@@ -101,9 +103,16 @@ export interface DispatchMissionCommandBoardProps {
   onCreateCommand?: () => void;
   onOpenLostCommunications?: () => void;
   onOpenVehicleImmobilized?: () => void;
+  onOpenRouteBlockage?: () => void;
+  onOpenGuardianCheckIns?: () => void;
   onOpenSmartRally?: () => void;
+  onOpenCommsPlan?: () => void;
+  onOpenIncidentRoom?: () => void;
+  onOpenIncidentRoomForCommand?: (command: MissionCommand) => void;
+  onPrepareSoloCommandForTeam?: (command: MissionCommand) => void;
   onReassignCommand?: (command: MissionCommand) => void;
   onRequestFollowUp?: (command: MissionCommand) => void;
+  onCommandMutation?: (result: MissionCommandMutationResult) => void;
   onStatusMessage?: (message: string) => void;
   testID?: string;
 }
@@ -124,9 +133,11 @@ function createOpenSectionLimits(): Record<OpenMissionCommandSectionId, number> 
 
 export function MissionCommandDispatchNavigation({
   activeView,
+  soloMode = false,
   onChange,
 }: {
   activeView: MissionCommandDispatchView;
+  soloMode?: boolean;
   onChange: (view: MissionCommandDispatchView) => void;
 }) {
   const items: {
@@ -134,9 +145,9 @@ export function MissionCommandDispatchNavigation({
     label: string;
     icon: React.ComponentProps<typeof Ionicons>['name'];
   }[] = [
-    { id: 'board', label: 'Command Board', icon: 'grid-outline' },
-    { id: 'team', label: 'Team / Convoy', icon: 'people-outline' },
-    { id: 'timeline', label: 'Timeline / Events', icon: 'time-outline' },
+    { id: 'board', label: soloMode ? 'Personal Board' : 'Command Board', icon: 'grid-outline' },
+    { id: 'team', label: soloMode ? 'Local Status' : 'Team / Convoy', icon: soloMode ? 'person-outline' : 'people-outline' },
+    { id: 'timeline', label: soloMode ? 'Personal Log' : 'Timeline / Events', icon: 'time-outline' },
   ];
 
   return (
@@ -209,9 +220,16 @@ function DispatchMissionCommandBoard({
   onCreateCommand,
   onOpenLostCommunications,
   onOpenVehicleImmobilized,
+  onOpenRouteBlockage,
+  onOpenGuardianCheckIns,
   onOpenSmartRally,
+  onOpenCommsPlan,
+  onOpenIncidentRoom,
+  onOpenIncidentRoomForCommand,
+  onPrepareSoloCommandForTeam,
   onReassignCommand,
   onRequestFollowUp,
+  onCommandMutation,
   onStatusMessage,
   testID = 'dispatch-mission-command-board',
 }: DispatchMissionCommandBoardProps) {
@@ -247,26 +265,30 @@ function DispatchMissionCommandBoard({
     [actor.label, expeditionId, loadResult.snapshot, soloMode],
   );
   const missionClockDeadlines = useMemo(() => {
-    if (!hasActiveExpedition || !canViewCommands) return [];
+    if ((!hasActiveExpedition && !soloMode) || !canViewCommands) return [];
     return collectMissionClockDeadlines({
       expeditionId,
       commands: projection.commands,
       offlineActions: loadResult.snapshot.offlineActions,
-      additionalDeadlines: loadResult.snapshot.operationalPlaybooks
-        .flatMap(collectOperationalPlaybookDeadlines),
+      additionalDeadlines: [
+        ...loadResult.snapshot.operationalPlaybooks.flatMap(collectOperationalPlaybookDeadlines),
+        ...collectGuardianCheckInDeadlines(loadResult.snapshot.guardianCheckIns),
+      ],
     });
   }, [
     canViewCommands,
     expeditionId,
     hasActiveExpedition,
     loadResult.snapshot.offlineActions,
+    loadResult.snapshot.guardianCheckIns,
     loadResult.snapshot.operationalPlaybooks,
     projection.commands,
+    soloMode,
   ]);
   const missionClock = useMissionClockScheduler({
     expeditionId,
     deadlines: missionClockDeadlines,
-    enabled: hydrated && hasActiveExpedition && canViewCommands,
+    enabled: hydrated && (hasActiveExpedition || soloMode) && canViewCommands,
   });
   const presentationNow = useMemo(() => {
     void expeditionId;
@@ -395,6 +417,7 @@ function DispatchMissionCommandBoard({
   }, [persistenceRevision, resolvedPage]);
 
   const applyAction = useCallback((actionId: MissionCommandBoardActionId, command: MissionCommand) => {
+    const personalAction = command.target.kind === 'solo';
     if (actionId === 'view_context') {
       if (!canViewLinkedContext || command.linkedContext?.restricted) {
         onStatusMessage?.('Linked command context is restricted.');
@@ -414,7 +437,9 @@ function DispatchMissionCommandBoard({
     }
     if (actionId === 'request_follow_up') {
       if (!canManageCommands) {
-        onStatusMessage?.('You do not have permission to request command follow-up.');
+        onStatusMessage?.(personalAction
+          ? 'You do not have permission to add a personal status note.'
+          : 'You do not have permission to request command follow-up.');
         return;
       }
       setSelectedCommandId(null);
@@ -422,7 +447,9 @@ function DispatchMissionCommandBoard({
       return;
     }
     if (!canManageCommands) {
-      onStatusMessage?.('You do not have permission to update this Mission Command.');
+      onStatusMessage?.(personalAction
+        ? 'You do not have permission to update this personal action.'
+        : 'You do not have permission to update this Mission Command.');
       return;
     }
 
@@ -437,7 +464,9 @@ function DispatchMissionCommandBoard({
         return;
       }
       if (!result.changed) {
-        onStatusMessage?.('Mission Command is already in that state.');
+        onStatusMessage?.(personalAction
+          ? 'Personal action is already in that state.'
+          : 'Mission Command is already in that state.');
         return;
       }
       dispatchPersistenceAdapter.applyMissionCommandMutation(
@@ -446,16 +475,19 @@ function DispatchMissionCommandBoard({
         result.command,
         result.event,
       );
+      onCommandMutation?.(result);
       onStatusMessage?.(`${result.command.title}: ${actionResultLabel(actionId)}.`);
     };
 
     if (actionId === 'cancel') {
       Alert.alert(
-        'Cancel Mission Command?',
-        'This records an explicit cancellation in the command history. It does not contact or notify emergency services.',
+        personalAction ? 'Cancel Personal Action?' : 'Cancel Mission Command?',
+        personalAction
+          ? 'This records a local cancellation. It does not contact, notify, or transmit to anyone.'
+          : 'This records an explicit cancellation in the command history. It does not contact or notify emergency services.',
         [
-          { text: 'Keep Command', style: 'cancel' },
-          { text: 'Cancel Command', style: 'destructive', onPress: commit },
+          { text: personalAction ? 'Keep Action' : 'Keep Command', style: 'cancel' },
+          { text: personalAction ? 'Cancel Action' : 'Cancel Command', style: 'destructive', onPress: commit },
         ],
       );
       return;
@@ -466,6 +498,7 @@ function DispatchMissionCommandBoard({
     canManageCommands,
     canViewLinkedContext,
     expeditionId,
+    onCommandMutation,
     onStatusMessage,
     onReassignCommand,
     onRequestFollowUp,
@@ -500,11 +533,16 @@ function DispatchMissionCommandBoard({
         summary={model.summary}
         missionClock={missionClock}
         isLandscape={isLandscape}
+        soloMode={soloMode}
         canCreateCommands={canCreateCommands}
         onCreateCommand={onCreateCommand}
         onOpenLostCommunications={onOpenLostCommunications}
         onOpenVehicleImmobilized={onOpenVehicleImmobilized}
+        onOpenRouteBlockage={onOpenRouteBlockage}
+        onOpenGuardianCheckIns={onOpenGuardianCheckIns}
         onOpenSmartRally={onOpenSmartRally}
+        onOpenCommsPlan={onOpenCommsPlan}
+        onOpenIncidentRoom={onOpenIncidentRoom}
       />
 
       <DispatchMissionClockPanel
@@ -603,6 +641,8 @@ function DispatchMissionCommandBoard({
         sourceTruthNow={presentationNow}
         onClose={() => setSelectedCommandId(null)}
         onAction={applyAction}
+        onOpenIncidentRoom={onOpenIncidentRoomForCommand}
+        onPrepareSoloCommandForTeam={onPrepareSoloCommandForTeam}
       />
     </View>
   );
@@ -614,29 +654,39 @@ function MissionCommandBoardHeader({
   summary,
   missionClock,
   isLandscape,
+  soloMode,
   canCreateCommands,
   onCreateCommand,
   onOpenLostCommunications,
   onOpenVehicleImmobilized,
+  onOpenRouteBlockage,
+  onOpenGuardianCheckIns,
   onOpenSmartRally,
+  onOpenCommsPlan,
+  onOpenIncidentRoom,
 }: {
   summary: ReturnType<typeof buildMissionCommandBoardPresentation>['summary'];
   missionClock: ReturnType<typeof useMissionClockScheduler>;
   isLandscape: boolean;
+  soloMode: boolean;
   canCreateCommands: boolean;
   onCreateCommand?: () => void;
   onOpenLostCommunications?: () => void;
   onOpenVehicleImmobilized?: () => void;
+  onOpenRouteBlockage?: () => void;
+  onOpenGuardianCheckIns?: () => void;
   onOpenSmartRally?: () => void;
+  onOpenCommsPlan?: () => void;
+  onOpenIncidentRoom?: () => void;
 }) {
   return (
     <View
       style={[styles.header, isLandscape ? styles.headerLandscape : null]}
       accessibilityRole="summary"
       accessibilityLabel={[
-        'Mission Command Command Board',
-        `${summary.openCount} open commands`,
-        `${summary.awaitingAcknowledgmentCount} awaiting acknowledgment`,
+        soloMode ? 'Personal Mission Command Board' : 'Mission Command Command Board',
+        `${summary.openCount} ${soloMode ? 'open personal actions' : 'open commands'}`,
+        `${summary.awaitingAcknowledgmentCount} ${soloMode ? 'check-ins requiring review' : 'awaiting acknowledgment'}`,
         `${summary.decisionRequiredCount} need a decision`,
         summary.convoyLabel,
         summary.connectionLabel,
@@ -644,9 +694,9 @@ function MissionCommandBoardHeader({
     >
       <View style={styles.headingRow}>
         <View style={styles.headingCopy}>
-          <Text style={styles.eyebrow}>DISPATCH OPERATIONS</Text>
-          <Text style={styles.missionTitle}>COMMAND BOARD</Text>
-          <Text style={styles.boardTitle}>ACTIVE EXPEDITION CONTROL</Text>
+          <Text style={styles.eyebrow}>{soloMode ? 'SOLO OPERATIONS' : 'DISPATCH OPERATIONS'}</Text>
+          <Text style={styles.missionTitle}>{soloMode ? 'PERSONAL COMMAND BOARD' : 'COMMAND BOARD'}</Text>
+          <Text style={styles.boardTitle}>{soloMode ? 'LOCAL FIELD CONTROL' : 'ACTIVE EXPEDITION CONTROL'}</Text>
         </View>
         <View style={styles.headerState}>
           <ECSBadge
@@ -660,15 +710,15 @@ function MissionCommandBoardHeader({
           <Text style={styles.convoySummary} numberOfLines={2}>{summary.convoyLabel}</Text>
           {canCreateCommands && onCreateCommand ? (
             <ECSButton
-              label="New Command"
-              icon="add-outline"
+              label={soloMode ? 'New Personal Action' : 'New Command'}
+              icon={soloMode ? 'add-circle-outline' : 'add-outline'}
               variant="primary"
               size="compact"
               onPress={onCreateCommand}
-              accessibilityLabel="Create Mission Command"
+              accessibilityLabel={soloMode ? 'Create personal Mission Command action' : 'Create Mission Command'}
             />
           ) : null}
-          {canCreateCommands && onOpenLostCommunications ? (
+          {!soloMode && canCreateCommands && onOpenLostCommunications ? (
             <ECSButton
               label="Lost Comms"
               icon="radio-outline"
@@ -688,7 +738,27 @@ function MissionCommandBoardHeader({
               accessibilityLabel="Open Vehicle Immobilized operational playbook"
             />
           ) : null}
-          {canCreateCommands && onOpenSmartRally ? (
+          {canCreateCommands && onOpenRouteBlockage ? (
+            <ECSButton
+              label="Route Blockage"
+              icon="trail-sign-outline"
+              variant="secondary"
+              size="compact"
+              onPress={onOpenRouteBlockage}
+              accessibilityLabel="Open Route Blockage operational playbook"
+            />
+          ) : null}
+          {canCreateCommands && onOpenGuardianCheckIns ? (
+            <ECSButton
+              label="Guardian Check-Ins"
+              icon="shield-checkmark-outline"
+              variant="secondary"
+              size="compact"
+              onPress={onOpenGuardianCheckIns}
+              accessibilityLabel="Open Guardian Check-Ins"
+            />
+          ) : null}
+          {!soloMode && canCreateCommands && onOpenSmartRally ? (
             <ECSButton
               label="Smart Rally"
               icon="git-merge-outline"
@@ -698,12 +768,32 @@ function MissionCommandBoardHeader({
               accessibilityLabel="Open Smart Rally convoy workflow"
             />
           ) : null}
+          {soloMode && onOpenCommsPlan ? (
+            <ECSButton
+              label="Comms Plan"
+              icon="radio-outline"
+              variant="secondary"
+              size="compact"
+              onPress={onOpenCommsPlan}
+              accessibilityLabel="Open saved manual communication procedures"
+            />
+          ) : null}
+          {onOpenIncidentRoom ? (
+            <ECSButton
+              label="Incident Room"
+              icon="warning-outline"
+              variant="secondary"
+              size="compact"
+              onPress={onOpenIncidentRoom}
+              accessibilityLabel="Open the active Mission Command Incident Room"
+            />
+          ) : null}
         </View>
       </View>
       <View style={styles.summaryGrid}>
-        <SummaryMetric label="Open" value={summary.openCount} />
-        <SummaryMetric label="Awaiting Ack" value={summary.awaitingAcknowledgmentCount} />
-        <SummaryMetric label="Needs Decision" value={summary.decisionRequiredCount} />
+        <SummaryMetric label={soloMode ? 'Open Actions' : 'Open'} value={summary.openCount} />
+        <SummaryMetric label={soloMode ? 'Check-In Review' : 'Awaiting Ack'} value={summary.awaitingAcknowledgmentCount} />
+        <SummaryMetric label={soloMode ? 'Decisions' : 'Needs Decision'} value={summary.decisionRequiredCount} />
         <MissionClockHeaderMetric snapshot={missionClock} />
       </View>
     </View>
@@ -740,7 +830,7 @@ function MissionCommandBoardSection({
         <Text style={styles.sectionCount}>{section.totalCount}</Text>
       </View>
       {section.items.length === 0 ? (
-        <Text style={styles.sectionEmpty}>No commands in this section.</Text>
+        <Text style={styles.sectionEmpty}>{section.emptyLabel}</Text>
       ) : (
         <View style={styles.cardStack}>
           {section.items.map((card) => (
@@ -878,6 +968,8 @@ function MissionCommandDetailSheet({
   sourceTruthNow,
   onClose,
   onAction,
+  onOpenIncidentRoom,
+  onPrepareSoloCommandForTeam,
 }: {
   card: MissionCommandCardPresentation | null;
   contextInspection: MissionCommandContextInspection | null;
@@ -885,6 +977,8 @@ function MissionCommandDetailSheet({
   sourceTruthNow: number;
   onClose: () => void;
   onAction: (actionId: MissionCommandBoardActionId, command: MissionCommand) => void;
+  onOpenIncidentRoom?: (command: MissionCommand) => void;
+  onPrepareSoloCommandForTeam?: (command: MissionCommand) => void;
 }) {
   if (!card) return null;
   const command = card.command;
@@ -896,7 +990,7 @@ function MissionCommandDetailSheet({
       onClose={onClose}
       title={command.title}
       subtitle={`${card.typeLabel} / ${card.operationalLabel}`}
-      eyebrow="MISSION COMMAND DETAIL"
+      eyebrow={command.target.kind === 'solo' ? 'PERSONAL ACTION DETAIL' : 'MISSION COMMAND DETAIL'}
       icon="clipboard-outline"
       overlayClass="editor"
       stackBehavior="allow-stack"
@@ -918,6 +1012,16 @@ function MissionCommandDetailSheet({
             grow
             onPress={onClose}
           />
+          {command.target.kind === 'solo' && onPrepareSoloCommandForTeam ? (
+            <ECSButton
+              label="Prepare Team Draft"
+              icon="people-outline"
+              variant="secondary"
+              size="medium"
+              onPress={() => onPrepareSoloCommandForTeam(command)}
+              accessibilityLabel="Prepare this personal action as a local team command draft"
+            />
+          ) : null}
           {card.allowedActions[0] ? (
             <DetailActionButton
               action={card.allowedActions[0]}
@@ -945,7 +1049,7 @@ function MissionCommandDetailSheet({
         </DetailSection>
 
         <View style={styles.detailGrid}>
-          <DetailSection title="Participants" icon="people-outline" compact>
+          <DetailSection title={command.target.kind === 'solo' ? 'Local Ownership' : 'Participants'} icon="people-outline" compact>
             <DetailRow label="Created by" value={command.creator.label} />
             <DetailRow label="Target" value={card.targetLabel} />
             <DetailRow label="Acknowledgment" value={card.acknowledgmentLabel} />
@@ -958,7 +1062,7 @@ function MissionCommandDetailSheet({
             ))}
           </DetailSection>
 
-          <DetailSection title="Assignment And Clock" icon="time-outline" compact>
+          <DetailSection title={command.target.kind === 'solo' ? 'Personal Action And Clock' : 'Assignment And Clock'} icon="time-outline" compact>
             <DetailRow label="Assignment" value={card.assignmentLabel ?? 'No named assignee'} />
             <DetailRow label="Deadline" value={card.deadlineLabel} danger={card.deadlineState === 'overdue'} />
             <DetailRow label="Last update" value={formatTimestamp(command.updatedAt)} />
@@ -1079,6 +1183,18 @@ function MissionCommandDetailSheet({
               ))}
             </View>
           )}
+          {onOpenIncidentRoom ? (
+            <ECSButton
+              label={getMissionCommandIncidentId(command) ? 'Open Incident Room' : 'Create Incident Room'}
+              icon="warning-outline"
+              variant="secondary"
+              size="compact"
+              onPress={() => onOpenIncidentRoom(command)}
+              accessibilityHint={getMissionCommandIncidentId(command)
+                ? 'Opens the canonical Incident and Recovery record linked to this command.'
+                : 'Requests explicit confirmation before creating a canonical Incident and Recovery record.'}
+            />
+          ) : null}
           <Text style={styles.safetyCopy}>
             Mission Command coordinates the ECS expedition team only. It does not contact emergency services.
           </Text>

@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { Worker } from 'node:worker_threads';
 
 import {
   EVIDENCE_RESULT_CONTRACT,
@@ -40,6 +40,10 @@ import {
   resolveVerificationTimingBaseline,
   serializeVerificationTimingBaseline,
 } from './verification-timing-baseline.mjs';
+import {
+  VERIFICATION_PROCESS_FAILURE_CLASSES,
+  runVerificationProcess,
+} from './verification-process-runner.mjs';
 import { validateWorkflowArtifactPathInput } from './workflow-input-safety.mjs';
 
 const OUTPUT_LIMIT = 16 * 1024;
@@ -157,6 +161,14 @@ function directNodeInvocation(command, rootDir) {
   return { command: process.execPath, args: [path.resolve(rootDir, match[1]), ...args] };
 }
 
+function resolvePackageExecutable(workingDirectory, specifier) {
+  try {
+    return createRequire(path.join(workingDirectory, 'package.json')).resolve(specifier);
+  } catch {
+    return null;
+  }
+}
+
 export function commandForCheck(check, rootDir) {
   if (check.workflow) return null;
   const workingDirectory = path.resolve(rootDir, check.workingDirectory ?? '.');
@@ -175,12 +187,25 @@ export function commandForCheck(check, rootDir) {
         workingDirectory,
       };
     }
-    const tscMatch = String(packageCommand).match(/^tsc\s+(?<args>.*)$/i);
+    const nextMatch = String(packageCommand).match(/^next\s+(?<args>[^&|;]*)$/i);
+    if (nextMatch) {
+      const nextCli = resolvePackageExecutable(workingDirectory, 'next/dist/bin/next');
+      if (nextCli) {
+        return {
+          command: process.execPath,
+          args: [nextCli, ...(nextMatch.groups?.args ?? '').split(/\s+/).filter(Boolean)],
+          workingDirectory,
+        };
+      }
+    }
+    const tscMatch = String(packageCommand).match(/^tsc\s+(?<args>[^&|;]*)$/i);
     if (tscMatch) {
+      const tscCli = resolvePackageExecutable(workingDirectory, 'typescript/bin/tsc')
+        ?? path.join(rootDir, 'node_modules', 'typescript', 'bin', 'tsc');
       return {
         command: process.execPath,
         args: [
-          path.join(rootDir, 'node_modules', 'typescript', 'bin', 'tsc'),
+          tscCli,
           ...(tscMatch.groups?.args ?? '').split(/\s+/).filter(Boolean),
         ],
         workingDirectory,
@@ -199,70 +224,6 @@ export function commandForCheck(check, rootDir) {
   return null;
 }
 
-function canUseWorker(invocation) {
-  return invocation.command === process.execPath
-    && typeof invocation.args[0] === 'string'
-    && fs.existsSync(invocation.args[0]);
-}
-
-async function executeInWorker(invocation, context) {
-  const started = Date.now();
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let worker;
-    const finish = (status, exitCode, summary, details = {}) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({
-        status,
-        exitCode,
-        signal: details.signal ?? null,
-        failureCode: details.failureCode ?? null,
-        durationMs: Date.now() - started,
-        summary: redactSummary(summary),
-        stdout,
-        stderr,
-      });
-    };
-    const timer = setTimeout(() => {
-      void worker?.terminate();
-      finish('timeout', null, `Timed out after ${context.timeoutMs}ms.`, { failureCode: 'process_timeout' });
-    }, context.timeoutMs);
-    try {
-      worker = new Worker(invocation.args[0], {
-        argv: invocation.args.slice(1),
-        env: context.env,
-        stdout: true,
-        stderr: true,
-      });
-    } catch (error) {
-      finish('failed', null, error instanceof Error ? error.message : String(error), { failureCode: 'process_spawn_error' });
-      return;
-    }
-    worker.stdout?.on('data', (chunk) => {
-      if (stdout.length < OUTPUT_LIMIT) stdout += chunk.toString().slice(0, OUTPUT_LIMIT - stdout.length);
-    });
-    worker.stderr?.on('data', (chunk) => {
-      if (stderr.length < OUTPUT_LIMIT) stderr += chunk.toString().slice(0, OUTPUT_LIMIT - stderr.length);
-    });
-    worker.on('error', (error) => finish(
-      'failed',
-      null,
-      error instanceof Error ? error.message : String(error),
-      { failureCode: 'process_worker_error' },
-    ));
-    worker.on('exit', (code) => finish(
-      code === 0 ? 'passed' : 'failed',
-      code,
-      `${stdout}\n${stderr}`.trim() || `Worker exited with code ${code}.`,
-      { failureCode: code === 0 ? null : 'process_exit_nonzero' },
-    ));
-  });
-}
-
 async function defaultExecutor(check, context) {
   const invocation = commandForCheck(check, context.rootDir);
   if (!invocation) {
@@ -273,68 +234,16 @@ async function defaultExecutor(check, context) {
       summary: `Workflow-only check ${check.workflow} cannot execute inside a command lane.`,
     };
   }
-  if (canUseWorker(invocation)
-    && invocation.workingDirectory === context.rootDir
-    && (process.platform === 'win32' || process.env.ECS_VERIFICATION_USE_WORKERS === '1')) {
-    return executeInWorker(invocation, context);
-  }
-  const started = Date.now();
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let child;
-    const finish = (status, exitCode, summary, details = {}) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({
-        status,
-        exitCode,
-        signal: details.signal ?? null,
-        failureCode: details.failureCode ?? null,
-        durationMs: Date.now() - started,
-        summary: redactSummary(summary),
-        stdout,
-        stderr,
-      });
-    };
-    const timer = setTimeout(() => {
-      child?.kill();
-      finish('timeout', null, `Timed out after ${context.timeoutMs}ms.`, { failureCode: 'process_timeout' });
-    }, context.timeoutMs);
-    try {
-      child = spawn(invocation.command, invocation.args, {
-        cwd: invocation.workingDirectory,
-        env: context.env,
-        windowsHide: true,
-        shell: false,
-      });
-    } catch (error) {
-      finish('failed', null, error instanceof Error ? error.message : String(error), { failureCode: 'process_spawn_error' });
-      return;
-    }
-    child.stdout?.on('data', (chunk) => {
-      if (stdout.length < OUTPUT_LIMIT) stdout += chunk.toString().slice(0, OUTPUT_LIMIT - stdout.length);
-    });
-    child.stderr?.on('data', (chunk) => {
-      if (stderr.length < OUTPUT_LIMIT) stderr += chunk.toString().slice(0, OUTPUT_LIMIT - stderr.length);
-    });
-    child.on('error', (error) => finish(
-      'failed',
-      null,
-      error instanceof Error ? error.message : String(error),
-      { failureCode: 'process_spawn_error' },
-    ));
-    child.on('close', (code, signal) => finish(
-      code === 0 ? 'passed' : 'failed',
-      code,
-      `${stdout}\n${stderr}`.trim() || `Exited with code ${code}.`,
-      {
-        signal,
-        failureCode: signal ? 'process_signal' : code === 0 ? null : 'process_exit_nonzero',
-      },
-    ));
+  return runVerificationProcess({
+    command: invocation.command,
+    args: invocation.args,
+    cwd: invocation.workingDirectory,
+    commandId: check.scriptIdentity ?? check.id,
+  }, {
+    env: context.env,
+    timeoutMs: context.timeoutMs,
+    signal: context.signal,
+    outputLimit: OUTPUT_LIMIT,
   });
 }
 
@@ -434,10 +343,16 @@ function isEvidenceCheck(check) {
   return check.resultContract === EVIDENCE_RESULT_CONTRACT;
 }
 
-function failedClassification(failureCode, summary, evidenceResult = null) {
+function failedClassification(
+  failureCode,
+  summary,
+  evidenceResult = null,
+  failureClass = VERIFICATION_PROCESS_FAILURE_CLASSES.APPLICATION_BUILD_FAILURE,
+) {
   return {
     status: VERIFICATION_OUTCOMES.FAILED,
     failureCode,
+    failureClass,
     summary: redactSummary(summary),
     evidenceResult,
     evidenceBlockers: [],
@@ -478,10 +393,29 @@ function readEvidenceResult(resultFile, checkId) {
 
 function classifyEvidenceCheck(check, processResult, evidenceResultFile) {
   if (processResult.status === 'timeout' || processResult.failureCode === 'process_timeout') {
-    return failedClassification('process_timeout', processResult.summary || 'Evidence process timed out.');
+    return failedClassification(
+      'process_timeout',
+      processResult.summary || 'Evidence process timed out.',
+      null,
+      VERIFICATION_PROCESS_FAILURE_CLASSES.TIMEOUT,
+    );
   }
   if (processResult.signal) {
-    return failedClassification('process_signal', `Evidence process terminated by signal ${processResult.signal}.`);
+    return failedClassification(
+      processResult.failureCode ?? 'process_signal_termination',
+      `Evidence process terminated by signal ${processResult.signal}.`,
+      null,
+      processResult.failureClass ?? VERIFICATION_PROCESS_FAILURE_CLASSES.VERIFICATION_WRAPPER_FAILURE,
+    );
+  }
+  if (processResult.failureClass
+    && processResult.failureClass !== VERIFICATION_PROCESS_FAILURE_CLASSES.APPLICATION_BUILD_FAILURE) {
+    return failedClassification(
+      processResult.failureCode ?? 'process_failed',
+      processResult.summary || 'Evidence process could not execute.',
+      null,
+      processResult.failureClass,
+    );
   }
   if (String(processResult.stderr ?? '').trim()) {
     return failedClassification('evidence_process_stderr', 'Evidence process wrote to stderr.');
@@ -502,6 +436,7 @@ function classifyEvidenceCheck(check, processResult, evidenceResultFile) {
     return {
       status: VERIFICATION_OUTCOMES.PASSED,
       failureCode: null,
+      failureClass: null,
       summary: redactSummary(evidenceResult.summary),
       evidenceResult,
       evidenceBlockers: [],
@@ -519,6 +454,7 @@ function classifyEvidenceCheck(check, processResult, evidenceResultFile) {
     return {
       status: VERIFICATION_OUTCOMES.BLOCKED_EXTERNAL,
       failureCode: null,
+      failureClass: null,
       summary: redactSummary(evidenceResult.summary),
       evidenceResult,
       evidenceBlockers: evidenceResult.blockerIds,
@@ -539,6 +475,7 @@ function classifyOrdinaryCheck(processResult) {
     return {
       status: VERIFICATION_OUTCOMES.PASSED,
       failureCode: null,
+      failureClass: null,
       summary: redactSummary(processResult.summary),
       evidenceResult: null,
       evidenceBlockers: [],
@@ -547,6 +484,8 @@ function classifyOrdinaryCheck(processResult) {
   return failedClassification(
     processResult.failureCode ?? (processResult.signal ? 'process_signal' : 'process_failed'),
     processResult.summary || 'Verification process failed.',
+    null,
+    processResult.failureClass ?? VERIFICATION_PROCESS_FAILURE_CLASSES.APPLICATION_BUILD_FAILURE,
   );
 }
 
@@ -596,6 +535,9 @@ function normalizeWorkflowCoverageResults(policy, values, context) {
       status: validated.status,
       safeCode: validated.safeCode,
       failureCode: validated.status === 'failed' ? validated.safeCode : null,
+      failureClass: validated.status === 'failed'
+        ? VERIFICATION_PROCESS_FAILURE_CLASSES.APPLICATION_BUILD_FAILURE
+        : null,
       exitCode: null,
       signal: null,
       durationMs: validated.durationMs,
@@ -694,6 +636,7 @@ export async function runVerificationLane(options) {
           status: classification.status,
           safeCode: classification.evidenceResult?.safeCode ?? null,
           failureCode: classification.failureCode,
+          failureClass: classification.failureClass,
           exitCode: processResult.exitCode ?? null,
           signal: processResult.signal ?? null,
           durationMs: Number.isFinite(processResult.durationMs) ? processResult.durationMs : 0,
@@ -721,6 +664,7 @@ export async function runVerificationLane(options) {
           status: VERIFICATION_OUTCOMES.FAILED,
           safeCode: null,
           failureCode: 'runner_exception',
+          failureClass: VERIFICATION_PROCESS_FAILURE_CLASSES.VERIFICATION_WRAPPER_FAILURE,
           exitCode: null,
           signal: null,
           durationMs: 0,
@@ -862,12 +806,12 @@ export function formatVerificationLaneSummary(result) {
     '',
     '### Checks',
     '',
-    '| Check | Outcome | Timing | Duration | Allowance | Summary |',
-    '| --- | --- | --- | ---: | ---: | --- |',
+    '| Check | Outcome | Failure class | Timing | Duration | Allowance | Summary |',
+    '| --- | --- | --- | --- | ---: | ---: | --- |',
   );
   for (const check of result.results) {
     const allowance = Number.isFinite(check.timing?.allowanceMs) ? `${check.timing.allowanceMs} ms` : 'n/a';
-    lines.push(`| ${markdownCell(check.checkId)} | ${check.status} | ${check.timing?.status ?? 'incomparable'} | ${check.durationMs} ms | ${allowance} | ${markdownCell(check.summary)} |`);
+    lines.push(`| ${markdownCell(check.checkId)} | ${check.status} | ${check.failureClass ?? 'none'} | ${check.timing?.status ?? 'incomparable'} | ${check.durationMs} ms | ${allowance} | ${markdownCell(check.summary)} |`);
   }
   lines.push('');
   return `${lines.join('\n')}\n`;

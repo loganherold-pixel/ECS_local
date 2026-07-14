@@ -281,5 +281,5 @@ export function getVisibleBadgeDefinitions(): ExpeditionBadgeDefinition[] {
 
 // TODO Expedition Badges: connect iconKey values to a dedicated badge artwork system.
 // TODO Expedition Badges: add deeper hidden Easter egg combinations as more source data lands.
-// TODO Expedition Badges: support progress rings and unlock animation without exposing hidden locked badges.
+// TODO Expedition Badges: support catalog progress rings without exposing hidden locked badges.
 // TODO Expedition Badges: stamp earned badges into future expedition reports and map unlock locations.

@@ -81,6 +81,8 @@ async function main() {
     'verification-timing-baseline',
     'verification-pgtap-release-evidence',
     'verification-workflow-input-safety',
+    'verification-process-runner',
+    'generated-artifact-hygiene',
     'release-smoke-workflow',
     'web-build-typecheck',
     'web-package-typecheck',
@@ -94,6 +96,8 @@ async function main() {
     'root::test:verification-pgtap-release-evidence',
     'root::test:verification-timing-baseline',
     'root::test:verification-workflow-input-safety',
+    'root::test:verification-process-runner',
+    'root::test:generated-artifact-hygiene',
     'apps/web::build',
     'apps/web::typecheck',
     'apps/web::test:run',
@@ -131,6 +135,8 @@ async function main() {
     'root::test:verification-pgtap-release-evidence',
     'root::test:verification-timing-baseline',
     'root::test:verification-workflow-input-safety',
+    'root::test:verification-process-runner',
+    'root::test:generated-artifact-hygiene',
     'apps/web::build',
     'apps/web::typecheck',
     'apps/web::test:run',
@@ -155,6 +161,8 @@ async function main() {
   assert.ok(release.checks.some((check) => check.id === 'verification-pgtap-release-evidence'));
   assert.ok(release.checks.some((check) => check.id === 'verification-workflow-input-safety'));
   assert.ok(release.checks.some((check) => check.id === 'verification-timing-baseline'));
+  assert.ok(release.checks.some((check) => check.id === 'verification-process-runner'));
+  assert.ok(release.checks.some((check) => check.id === 'generated-artifact-hygiene'));
   assert.ok(release.checks
     .filter((check) => check.classifications.includes('evidence-only'))
     .every((check) => check.resultContract === 'ecs-evidence-v1'));

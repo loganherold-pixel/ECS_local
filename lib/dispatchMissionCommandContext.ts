@@ -322,6 +322,9 @@ export function createMissionCommandContextAdapter(
         input.commandId ?? input.dispatchEventId ?? input.sourceEntityId ?? 'source',
         inspection.contextId,
         action.id,
+        action.id === 'open_incident'
+          ? resolveIncidentTarget(input.context, dependencies) ?? 'incident'
+          : 'target',
       ].join(':');
       if (!rememberDispatchAction({ idempotencyKey: actionKey, recentActions, now: dependencies.now() })) {
         return {
@@ -624,7 +627,7 @@ function resolveLocalReference(
     const incidentId = safeId(metadata.incidentId) ??
       (metadata.source === 'incidentRecoveryWorkflowStore' ? safeId(context.id) : null);
     if (incidentId && !dependencies.getIncidentById(incidentId)) return deleted('incident', incidentId);
-    return { state: 'ready', targetId: null, message: null };
+    return { state: 'ready', targetId: incidentId, message: null };
   }
 
   return { state: 'ready', targetId: null, message: null };
@@ -648,12 +651,18 @@ function resolveIncidentTarget(
   const metadata = context.metadata ?? {};
   const eventId = safeId(metadata.dispatchEventId);
   if (eventId && dependencies.getDispatchEventById(eventId)) return eventId;
+  const incidentId = safeId(metadata.incidentId) ?? (
+    metadata.source === 'incidentRecoveryWorkflowStore' ? safeId(context.id) : null
+  );
+  if (incidentId && dependencies.getIncidentById(incidentId)) return incidentId;
   return null;
 }
 
 function readIncidentReference(context: DispatchLinkedContext): string | null {
   const metadata = context.metadata ?? {};
-  return safeId(metadata.dispatchEventId);
+  return safeId(metadata.dispatchEventId) ?? safeId(metadata.incidentId) ?? (
+    metadata.source === 'incidentRecoveryWorkflowStore' ? safeId(context.id) : null
+  );
 }
 
 function resolveVehicleId(context: DispatchLinkedContext): string | null {

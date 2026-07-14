@@ -167,6 +167,26 @@ const soloResult = build(makeForm({ targetKind: 'self', draftId: 'solo-target' }
 assert.equal(soloResult.ok, true);
 assert.equal(soloResult.command.target.kind, 'solo');
 
+const offlineSoloResult = build(makeForm({
+  targetKind: 'self',
+  draftId: 'solo-offline-local-reminder',
+  acknowledgmentMode: 'all',
+}), {
+  soloMode: true,
+  catalog: { ...catalog, members: [] },
+  queueDelivery: true,
+});
+assert.equal(offlineSoloResult.ok, true);
+assert.equal(
+  offlineSoloResult.command.deliveryState,
+  'local',
+  'A self reminder must not enter a delivery queue when no recipient exists.',
+);
+assert.equal(offlineSoloResult.command.acknowledgmentPolicy.mode, 'none');
+assert.equal(offlineSoloResult.command.acknowledgmentState, 'not_required');
+assert.equal(offlineSoloResult.event.type, 'created');
+assert.match(offlineSoloResult.event.summary, /created locally/i);
+
 const assignmentCases = [
   { assignmentKind: 'unassigned', expected: undefined },
   { assignmentKind: 'member', assignmentMemberId: 'member-2', expected: 'member' },
@@ -349,7 +369,7 @@ assert.match(routedDispatch, /missionCommandEnabled[\s\S]*openMissionCommandComp
 assert.match(routedDispatch, /!missionCommandEnabled && activeCommand === 'hazard'/);
 assert.match(routedDispatch, /<DispatchMissionCommandComposer[\s\S]*submitMissionCommandComposer/);
 assert.match(routedDispatch, /request_assist'[\s\S]*broadcast_hazard'[\s\S]*send_follow_up'[\s\S]*openMissionCommandComposer/);
-assert.match(boardUi, /label="New Command"/);
+assert.match(boardUi, /label=\{soloMode \? 'New Personal Action' : 'New Command'\}/);
 assert.match(boardUi, /onReassignCommand/);
 assert.match(boardUi, /onRequestFollowUp/);
 

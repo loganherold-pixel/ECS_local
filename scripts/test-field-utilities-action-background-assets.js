@@ -30,8 +30,8 @@ const expectedAssets = {
   'trip-summaries.png': {
     key: 'trip-summaries',
     label: 'Trip Summaries',
-    bytes: 2248638,
-    sha256: 'ea4f8a1a96f3ac9e171dbcfe88d8e597d00fc67bd687e946cc35bdd2ccfeca80',
+    bytes: 2020684,
+    sha256: 'fbc9a1fd9b40a61d3fc8ca98822744af2e3daa07a7313f45fbc38cdf7534395f',
   },
   'recovery-protocol.png': {
     key: 'recovery-protocol',
@@ -42,8 +42,8 @@ const expectedAssets = {
   'emergency-protocol.png': {
     key: 'protocols',
     label: 'Emergency Protocol',
-    bytes: 2080313,
-    sha256: '7d1eaa896551f7d1f9769e13c93e436dce4374e7ca6960e202b34fa44eaac12b',
+    bytes: 1847250,
+    sha256: '77e141c447b7be8abdeb3be6ca938c765060171a2ffa7621b3a73cb4ca79c6ee',
   },
 };
 

@@ -1,152 +1,22 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
+const source = fs.readFileSync(path.join(root, 'components', 'dashboard', 'PowerSystemWidget.tsx'), 'utf8');
 
-require.extensions['.ts'] = (module, filename) => {
-  const source = fs.readFileSync(filename, 'utf8');
-  const output = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-    },
-    fileName: filename,
-  });
-  module._compile(output.outputText, filename);
-};
+[
+  'export function normalizePowerTelemetrySummary',
+  'normalizePowerTelemetryTruth',
+  'resolveTelemetrySourceState',
+  'sourceTruthLabel',
+  'isTelemetryLive',
+  'isStale',
+].forEach((fragment) => {
+  assert.ok(source.includes(fragment), `Current Power Monitor telemetry normalization should retain ${fragment}.`);
+});
 
-const {
-  resolveBluPowerModuleRuntime,
-} = require(path.join(root, 'lib', 'bluPowerModuleRive.ts'));
-const {
-  adaptPowerTelemetryForRive,
-} = require(path.join(root, 'lib', 'powerModuleRiveTelemetry.ts'));
+assert.ok(!source.includes('adaptPowerTelemetryForRive'), 'Telemetry normalization should not route through a retired Rive adapter.');
+assert.ok(!source.includes('PowerModuleRiveWidget'), 'Telemetry normalization should remain independent of the retired Rive widget.');
 
-function onlineTelemetry(overrides = {}) {
-  return {
-    canDisplayTelemetryValues: true,
-    isStale: false,
-    snapshot: { isStale: false },
-    sourceState: { isStale: false, isUnavailable: false },
-    batteryPercent: 50,
-    inputWatts: 0,
-    outputWatts: 0,
-    ...overrides,
-  };
-}
-
-function runtimeFromTelemetry(telemetry) {
-  return resolveBluPowerModuleRuntime(adaptPowerTelemetryForRive(telemetry));
-}
-
-{
-  const adapted = adaptPowerTelemetryForRive(null);
-  const runtime = resolveBluPowerModuleRuntime(adapted);
-  assert.deepStrictEqual(adapted, {
-    hasEcsData: false,
-    batteryPercent: null,
-    inputWatts: null,
-    outputWatts: null,
-  });
-  assert.strictEqual(runtime.offlinestatusopacity, 100);
-  assert.strictEqual(runtime.batteryPercent, 0);
-  assert.strictEqual(runtime.leftflowopacity, 0);
-  assert.strictEqual(runtime.rightflowopacity, 0);
-}
-
-{
-  const runtime = runtimeFromTelemetry(onlineTelemetry());
-  assert.strictEqual(runtime.offlinestatusopacity, 0);
-  assert.strictEqual(runtime.batteryPercent, 50);
-  assert.strictEqual(runtime.leftflowopacity, 0);
-  assert.strictEqual(runtime.rightflowopacity, 0);
-}
-
-{
-  const runtime = runtimeFromTelemetry(onlineTelemetry({ inputWatts: 2, outputWatts: 0 }));
-  assert.strictEqual(runtime.leftflowopacity, 100);
-  assert.strictEqual(runtime.rightflowopacity, 0);
-}
-
-{
-  const adapted = adaptPowerTelemetryForRive(onlineTelemetry({
-    inputWatts: null,
-    solarWatts: 118,
-    batteryPercent: 100,
-    outputWatts: 0,
-  }));
-  const runtime = resolveBluPowerModuleRuntime(adapted);
-  assert.strictEqual(adapted.batteryPercent, 100);
-  assert.strictEqual(adapted.inputWatts, 118, 'solar-only provider input should still drive inbound power flow');
-  assert.strictEqual(runtime.leftflowopacity, 100);
-  assert.strictEqual(runtime.rightflowopacity, 0);
-}
-
-{
-  const runtime = runtimeFromTelemetry(onlineTelemetry({
-    batteryPercent: 100,
-    inputWatts: 0,
-    solarWatts: 0,
-    outputWatts: 0,
-  }));
-  assert.strictEqual(runtime.batteryPercent, 100);
-  assert.strictEqual(runtime.leftflowopacity, 0);
-  assert.strictEqual(runtime.rightflowopacity, 0);
-}
-
-{
-  const runtime = runtimeFromTelemetry(onlineTelemetry({ inputWatts: 0, outputWatts: 2 }));
-  assert.strictEqual(runtime.leftflowopacity, 0);
-  assert.strictEqual(runtime.rightflowopacity, 100);
-}
-
-{
-  const runtime = runtimeFromTelemetry(onlineTelemetry({ inputWatts: 2, outputWatts: 3 }));
-  assert.strictEqual(runtime.leftflowopacity, 100);
-  assert.strictEqual(runtime.rightflowopacity, 100);
-}
-
-{
-  assert.strictEqual(runtimeFromTelemetry(onlineTelemetry({ batteryPercent: -12 })).batteryPercent, 0);
-  assert.strictEqual(runtimeFromTelemetry(onlineTelemetry({ batteryPercent: 145 })).batteryPercent, 100);
-  assert.strictEqual(runtimeFromTelemetry(onlineTelemetry({ batteryPercent: null })).batteryPercent, 0);
-  assert.strictEqual(runtimeFromTelemetry(onlineTelemetry({ batteryPercent: Number.NaN })).batteryPercent, 0);
-}
-
-{
-  const staleCases = [
-    onlineTelemetry({ isStale: true }),
-    onlineTelemetry({ snapshot: { isStale: true } }),
-    onlineTelemetry({ sourceState: { isStale: true, isUnavailable: false } }),
-    onlineTelemetry({ sourceState: { isStale: false, isUnavailable: true } }),
-    onlineTelemetry({ canDisplayTelemetryValues: false }),
-  ];
-
-  for (const telemetry of staleCases) {
-    const adapted = adaptPowerTelemetryForRive(telemetry);
-    const runtime = resolveBluPowerModuleRuntime(adapted);
-    assert.strictEqual(adapted.hasEcsData, false);
-    assert.strictEqual(runtime.offlinestatusopacity, 100);
-    assert.strictEqual(runtime.leftflowopacity, 0);
-    assert.strictEqual(runtime.rightflowopacity, 0);
-  }
-}
-
-{
-  const adapted = adaptPowerTelemetryForRive(onlineTelemetry({
-    batteryPercent: 88.4,
-    inputWatts: -9,
-    outputWatts: Number.NaN,
-  }));
-  assert.deepStrictEqual(adapted, {
-    hasEcsData: true,
-    batteryPercent: 88,
-    inputWatts: 0,
-    outputWatts: null,
-  });
-}
-
-console.log('Power module Rive normalization checks passed.');
+console.log('Power module native telemetry normalization checks passed.');

@@ -45,6 +45,7 @@ scripts/test-*.js
 scripts/test-*.mjs
 scripts/check-*readiness*.mjs
 scripts/run-offline-failure-drill-android-evidence.mjs
+assets/images/recovery-protocols/
 
 # Native build outputs
 android/.gradle/

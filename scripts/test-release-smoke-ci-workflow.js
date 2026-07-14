@@ -123,6 +123,8 @@ async function main() {
     'root::test:verification-timing-baseline',
     'root::test:verification-pgtap-release-evidence',
     'root::test:verification-workflow-input-safety',
+    'root::test:verification-process-runner',
+    'root::test:generated-artifact-hygiene',
     'apps/web::build',
     'apps/web::typecheck',
     'apps/web::test:run',
@@ -139,6 +141,8 @@ async function main() {
   assert.ok(releasePlan.checks.some((check) => check.id === 'verification-pgtap-release-evidence'));
   assert.ok(releasePlan.checks.some((check) => check.id === 'verification-workflow-input-safety'));
   assert.ok(releasePlan.checks.some((check) => check.id === 'verification-timing-baseline'));
+  assert.ok(releasePlan.checks.some((check) => check.id === 'verification-process-runner'));
+  assert.ok(releasePlan.checks.some((check) => check.id === 'generated-artifact-hygiene'));
   assert.ok(releasePlan.checks.some((check) => check.id === 'release-evidence-registry'));
   for (const legacyEvidenceCheck of [
     'provider-readiness-evidence',

@@ -4,7 +4,7 @@
 
 Operational Playbooks are deterministic guided coordination workflows inside Mission Command. The framework gathers declared context, exposes missing or restricted inputs, records explicit decisions, prepares command proposals, creates absolute Mission Clock deadlines, and retains an audit timeline. It does not add a Dispatch route or top-level tab.
 
-Lost Communications and Vehicle Immobilized are independently verified scenario definitions on the shared framework. Route Blockage and other scenarios remain separate future work.
+Lost Communications, Vehicle Immobilized, and Route Blockage are independently verified scenario definitions on the shared framework. Other scenarios remain separate future work.
 
 A playbook cannot declare an emergency, contact emergency services, transmit externally, choose a route or camp, override a deterministic engine, bypass permissions, expose restricted member coordinates, or execute a command automatically. AI may summarize an already-derived instance; it cannot add, remove, reorder, skip, or complete steps.
 
@@ -20,6 +20,9 @@ A playbook cannot declare an emergency, contact emergency services, transmit ext
 - `dispatchVehicleImmobilizedPlaybook.ts` owns the deterministic Vehicle Immobilized definition, status and evidence selectors, assignment and outcome gates, and explicit incident handoff.
 - `dispatchVehicleImmobilizedRuntimeAdapter.ts` projects Fleet, active-trip, weather, terrain, convoy, route, and permitted location state into a privacy-minimized point-in-time input without reading stores directly.
 - `DispatchVehicleImmobilizedPlaybook.tsx` coordinates the tested definition with the generic runner, existing Command Composer, Mission Clock, linked-context adapter, Dispatch timeline, and Incident form.
+- `dispatchRouteBlockagePlaybook.ts` owns the deterministic Route Blockage definition, separate report/legal/current-condition evidence, outcome gates, guidance-handoff guard, and explicit incident handoff.
+- `dispatchRouteBlockageRuntimeAdapter.ts` projects permitted map context, active route geometry, saved-route comparisons, bailouts, CampOps impact, weather context, and Offline Prep readiness into a point-in-time input without reading stores directly.
+- `DispatchRouteBlockagePlaybook.tsx` coordinates the tested definition with Navigate context, Command Composer, Mission Clock, CampOps review, Offline Prep state, Dispatch timeline, and the explicit Incident form.
 - `dispatchPersistenceAdapter.ts` is the authoritative local owner. Dispatch snapshot version 4 stores a bounded `operationalPlaybooks` array.
 
 ## State And Steps
@@ -57,6 +60,6 @@ Operational Playbooks use the existing `dispatch_mission_command` feature decisi
 - Enable flag: `EXPO_PUBLIC_ECS_MISSION_COMMAND`
 - Kill switch: `EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND`
 - Backend dependency: none
-- Implemented scenario definitions: Lost Communications, Vehicle Immobilized
+- Implemented scenario definitions: Lost Communications, Vehicle Immobilized, Route Blockage
 
 The runner and scenario entry points are mounted only when the existing Mission Command decision is enabled. Mission Command remains internal and default-off.

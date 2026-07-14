@@ -83,6 +83,7 @@ export interface MissionCommandCardPresentation {
 export interface MissionCommandBoardSectionPresentation {
   id: MissionCommandBoardSectionId;
   title: string;
+  emptyLabel: string;
   items: MissionCommandCardPresentation[];
   totalCount: number;
   hasMore: boolean;
@@ -169,37 +170,42 @@ export function buildMissionCommandBoardPresentation(
       nowMs,
       canManageCommands: input.canManageCommands,
       canViewLinkedContext: input.canViewLinkedContext !== false,
+      soloMode: input.soloMode,
       eventCount: eventCounts.get(command.id) ?? 0,
     })
   );
   const sections: MissionCommandBoardPresentation['sections'] = {
     needsDecision: buildSection(
       'needs_decision',
-      'Needs Decision',
+      input.soloMode ? 'Personal Decisions' : 'Needs Decision',
       board.needsDecision,
       board.needsDecision.length,
       buildCard,
+      input.soloMode ? 'No personal decisions need review.' : 'No commands in this section.',
     ),
     awaitingAcknowledgment: buildSection(
       'awaiting_acknowledgment',
-      'Awaiting Acknowledgment',
+      input.soloMode ? 'Check-In Review' : 'Awaiting Acknowledgment',
       board.awaitingAcknowledgment,
       board.awaitingAcknowledgment.length,
       buildCard,
+      input.soloMode ? 'No personal check-ins need review.' : 'No commands in this section.',
     ),
     inProgress: buildSection(
       'in_progress',
-      'In Progress',
+      input.soloMode ? 'Personal Actions' : 'In Progress',
       board.inProgress,
       board.inProgress.length,
       buildCard,
+      input.soloMode ? 'No personal actions are in progress.' : 'No commands in this section.',
     ),
     resolved: buildSection(
       'resolved',
-      'Resolved',
+      input.soloMode ? 'Completed' : 'Resolved',
       board.resolved.slice(0, resolvedVisibleCount),
       board.resolved.length,
       buildCard,
+      input.soloMode ? 'No completed personal actions yet.' : 'No commands in this section.',
     ),
   };
   sections.resolved.hasMore = resolvedVisibleCount < board.resolved.length;
@@ -220,7 +226,7 @@ export function buildMissionCommandBoardPresentation(
       decisionRequiredCount: board.needsDecision.length,
       nextDeadlineAt: nextDeadline?.deadlineAt ?? null,
       nextDeadlineTitle: nextDeadline?.title ?? null,
-      convoyLabel: formatConvoySummary(input.convoy),
+      convoyLabel: formatConvoySummary(input.convoy, input.soloMode),
       connectionLabel: formatConnectionSummary(input.connectivity, input.soloMode),
     },
     sections,
@@ -254,10 +260,12 @@ export function buildMissionCommandCardPresentation(
     nowMs: number;
     canManageCommands: boolean;
     canViewLinkedContext: boolean;
+    soloMode?: boolean;
     eventCount?: number;
   },
 ): MissionCommandCardPresentation {
-  const acknowledgment = formatAcknowledgment(command);
+  const personalAction = command.target.kind === 'solo';
+  const acknowledgment = formatAcknowledgment(command, personalAction);
   const deadline = formatDeadline(command, input.nowMs);
   const contextRestricted = command.linkedContext?.restricted === true;
   const linkedContextLabel = command.linkedContext
@@ -273,6 +281,7 @@ export function buildMissionCommandCardPresentation(
   const allowedActions = selectMissionCommandBoardActions(command, {
     canManageCommands: input.canManageCommands,
     canViewLinkedContext: input.canViewLinkedContext && !contextRestricted,
+    personalAction,
   });
   const deliveryLabel = formatDeliveryState(command.deliveryState);
   const targetLabel = formatMissionCommandTarget(command.target);
@@ -335,29 +344,30 @@ export function buildMissionCommandCardPresentation(
 
 export function selectMissionCommandBoardActions(
   command: MissionCommand,
-  input: { canManageCommands: boolean; canViewLinkedContext: boolean },
+  input: { canManageCommands: boolean; canViewLinkedContext: boolean; personalAction?: boolean },
 ): MissionCommandBoardActionModel[] {
   const actions: MissionCommandBoardActionModel[] = [];
+  const personalAction = input.personalAction === true || command.target.kind === 'solo';
   if (input.canManageCommands) {
     switch (command.operationalState) {
       case 'proposed':
-        actions.push(action('stage', 'Stage Command', 'primary'));
+        actions.push(action('stage', personalAction ? 'Review Personal Action' : 'Stage Command', 'primary'));
         break;
       case 'ready':
-        actions.push(action('activate', 'Activate Command', 'primary'));
+        actions.push(action('activate', personalAction ? 'Start Personal Action' : 'Activate Command', 'primary'));
         break;
       case 'active':
-        actions.push(action('start', 'Mark In Progress', 'primary'));
-        actions.push(action('block', 'Mark Blocked', 'secondary'));
-        actions.push(action('resolve', 'Resolve', 'secondary'));
+        actions.push(action('start', personalAction ? 'Start Personal Action' : 'Mark In Progress', 'primary'));
+        actions.push(action('block', personalAction ? 'Mark Deferred' : 'Mark Blocked', 'secondary'));
+        actions.push(action('resolve', personalAction ? 'Complete' : 'Resolve', 'secondary'));
         break;
       case 'in_progress':
-        actions.push(action('resolve', 'Resolve', 'primary'));
-        actions.push(action('block', 'Mark Blocked', 'secondary'));
+        actions.push(action('resolve', personalAction ? 'Complete' : 'Resolve', 'primary'));
+        actions.push(action('block', personalAction ? 'Mark Deferred' : 'Mark Blocked', 'secondary'));
         break;
       case 'blocked':
-        actions.push(action('resume', 'Resume', 'primary'));
-        actions.push(action('resolve', 'Resolve', 'secondary'));
+        actions.push(action('resume', personalAction ? 'Resume Personal Action' : 'Resume', 'primary'));
+        actions.push(action('resolve', personalAction ? 'Complete' : 'Resolve', 'secondary'));
         break;
       case 'resolved':
       case 'cancelled':
@@ -365,9 +375,9 @@ export function selectMissionCommandBoardActions(
         break;
     }
     if (!isTerminal(command.operationalState)) {
-      actions.push(action('request_follow_up', 'Request Follow-Up', 'secondary'));
-      actions.push(action('reassign', 'Reassign', 'secondary'));
-      actions.push(action('cancel', 'Cancel Command', 'danger'));
+      actions.push(action('request_follow_up', personalAction ? 'Add Status Note' : 'Request Follow-Up', 'secondary'));
+      if (!personalAction) actions.push(action('reassign', 'Reassign', 'secondary'));
+      actions.push(action('cancel', personalAction ? 'Cancel Personal Action' : 'Cancel Command', 'danger'));
     }
     if (command.deliveryState === 'failed') {
       actions.unshift(action('retry_delivery', 'Retry Delivery', 'primary'));
@@ -388,7 +398,7 @@ export function formatMissionCommandTarget(target: MissionCommandTarget): string
       return target.label?.trim() || (target.memberIds.length > 0
         ? `${target.memberIds.length} team members`
         : 'Expedition team');
-    case 'solo': return target.label?.trim() || 'Current user';
+    case 'solo': return target.label?.trim() ? `${target.label.trim()} (you)` : 'You';
   }
 }
 
@@ -421,7 +431,7 @@ export function formatOperationalState(state: MissionCommandOperationalState): s
 
 export function formatDeliveryState(state: MissionCommandDeliveryState): string {
   switch (state) {
-    case 'local': return 'Local only';
+    case 'local': return 'Local device only';
     case 'queued': return 'Queued offline';
     case 'sending': return 'Sending';
     case 'sent': return 'Sent';
@@ -438,10 +448,12 @@ function buildSection(
   commands: MissionCommand[],
   totalCount: number,
   buildCard: (command: MissionCommand, bucket: MissionCommandBoardBucket) => MissionCommandCardPresentation,
+  emptyLabel = 'No commands in this section.',
 ): MissionCommandBoardSectionPresentation {
   return {
     id,
     title,
+    emptyLabel,
     items: commands.map((command) => buildCard(command, id)),
     totalCount,
     hasMore: false,
@@ -470,7 +482,7 @@ function buildNotices(input: BuildMissionCommandBoardPresentationInput): Mission
   if (input.soloMode) {
     notices.push({
       kind: 'solo',
-      label: 'Solo Mission Command is stored on this device and is not transmitted to a team.',
+      label: 'Personal Mission Command is stored on this device. No other person is monitoring or receiving these actions.',
     });
   }
   return notices;
@@ -494,6 +506,15 @@ function selectDegradedState(
       detail: 'Your current expedition role cannot view Mission Command records.',
     };
   }
+  if (input.soloMode) {
+    return {
+      kind: 'solo',
+      title: 'Personal Mission Command',
+      detail: input.hasActiveExpedition
+        ? 'Use local actions, decision reminders, check-ins, and incident records. Nothing is transmitted to another person.'
+        : 'No active expedition is required for local actions, reminders, check-ins, or incident records. Nothing is transmitted to another person.',
+    };
+  }
   if (!input.hasActiveExpedition) {
     return {
       kind: 'no_active_expedition',
@@ -515,13 +536,6 @@ function selectDegradedState(
       detail: 'The board is showing local state. Team delivery and acknowledgments are not currently verified.',
     };
   }
-  if (input.soloMode) {
-    return {
-      kind: 'solo',
-      title: 'Solo Mission Command',
-      detail: 'Commands coordinate your local expedition workflow and are not transmitted externally.',
-    };
-  }
   if (commandCount === 0) {
     return {
       kind: 'empty',
@@ -532,7 +546,11 @@ function selectDegradedState(
   return null;
 }
 
-function formatConvoySummary(input: BuildMissionCommandBoardPresentationInput['convoy']): string {
+function formatConvoySummary(
+  input: BuildMissionCommandBoardPresentationInput['convoy'],
+  soloMode: boolean,
+): string {
+  if (soloMode) return 'Personal workspace';
   if (!input.permitted) return 'Convoy status restricted';
   if (!input.active) return 'No active convoy';
   const count = Math.max(0, Math.floor(input.memberCount));
@@ -547,10 +565,10 @@ function formatConnectionSummary(
   soloMode: boolean,
 ): string {
   const queuedCount = Math.max(0, Math.floor(input.queuedCount));
+  if (soloMode) return !input.online || input.offlineMode ? 'Offline / local only' : 'Local only';
   if (!input.online || input.offlineMode) {
     return queuedCount > 0 ? `Offline / ${queuedCount} queued` : 'Offline / local only';
   }
-  if (soloMode) return queuedCount > 0 ? `Local / ${queuedCount} queued` : 'Local only';
   switch (input.realtimeStatus) {
     case 'connected': return queuedCount > 0 ? `Realtime / ${queuedCount} queued` : 'Realtime connected';
     case 'connecting': return 'Realtime connecting';
@@ -561,13 +579,13 @@ function formatConnectionSummary(
   }
 }
 
-function formatAcknowledgment(command: MissionCommand): {
+function formatAcknowledgment(command: MissionCommand, personalAction = false): {
   label: string;
   complete: number;
   required: number;
 } {
   if (command.acknowledgmentPolicy.mode === 'none') {
-    return { label: 'No acknowledgment required', complete: 0, required: 0 };
+    return { label: personalAction ? 'Local completion' : 'No acknowledgment required', complete: 0, required: 0 };
   }
   const targetCount = new Set(command.acknowledgmentPolicy.targetMemberIds).size;
   const required = command.acknowledgmentPolicy.mode === 'any'

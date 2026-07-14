@@ -21,6 +21,7 @@ const REQUIRED_EASIGNORE_PATTERNS = [
   'dist/',
   '.smoke/',
   'scripts/test-*.js',
+  'assets/images/recovery-protocols/',
 ];
 
 function readText(filePath) {
@@ -121,7 +122,7 @@ function uploadExclusionGaps(patterns) {
     .map((pattern) => ({
       pattern,
       reason: 'production upload exclusion is missing for non-runtime bulk',
-      severity: pattern === 'artifacts/' || pattern === 'dist/' || pattern === '.smoke/' ? 'block' : 'warn',
+      severity: pattern === 'artifacts/' || pattern === 'dist/' || pattern === '.smoke/' || pattern === 'assets/images/recovery-protocols/' ? 'block' : 'warn',
     }));
 }
 

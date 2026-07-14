@@ -8,6 +8,8 @@ Baseline tag: `ecs-working-baseline-2026-06-01`
 
 Purpose: define the ECS source surface, separate clearly active files from cleanup candidates, and keep deletion work small enough to review. This manifest is intentionally conservative. It records the cleanup batches applied after the working baseline and the files intentionally retained.
 
+2026-07-14 correction: the Power Monitor Rive path described in this historical snapshot became unreachable after the native telemetry panel took ownership. Its wrappers, duplicate `.riv` assets, and Rive/Nitro dependencies were retired under the measured production asset reduction. Historical baseline counts below are intentionally unchanged.
+
 ## Cleanup Result
 
 Current tracked files after cleanup: 2568
@@ -89,7 +91,7 @@ Keep these areas as active ECS source unless a later manifest proves a narrower 
 | `fixtures/`, `tests/` | Regression and scenario support. |
 | `scripts/` package/readiness gates | Scripts invoked from `package.json`, smoke, auth regressions, release checks, and domain harnesses. |
 | Runtime assets under `assets/` | Referenced by login, loading, dashboard, Rive, and asset verification flows. |
-| `public/rive/blu_power_module.riv` | Required by `scripts/test-blu-power-module-rive.js` along with the matching asset copy. |
+| Power Monitor Rive path | Retired on 2026-07-14 after production-import and native-dependency verification. |
 | Root config files | Expo, Metro, Babel, TS, ESLint, Jest, Docker, Makefile, Supabase, package, and native build config. |
 | `docs/` release/audit/workflow files | Needed to preserve recent decisions, build provenance, and cleanup evidence. |
 
@@ -107,7 +109,7 @@ These looked tempting because they are large, nested, or separate from the main 
 | `assets/login/intro-login-video.mp4` | Keep. Used by `components/login/LoginHeroBackground.tsx`. |
 | `assets/dashboard/route-progress-placeholder.png` | Keep. Used by dashboard widget rendering/tests. |
 | `assets/dashboard/terrain-risk-background.png` | Keep. Used by dashboard widget rendering/tests. |
-| `assets/power/blu_power_module.riv` and `public/rive/blu_power_module.riv` | Keep. Both are expected by the Rive asset regression script. |
+| `assets/power/blu_power_module.riv` and `public/rive/blu_power_module.riv` | Retired. The regression script now enforces native Power Monitor telemetry and absence of the dead dependency path. |
 | `mock-data-inventory.md` | Keep for now. It documents mocked/stale data surfaces that matter to ECS offline and field-readiness behavior. |
 
 ## First Safe Quarantine Batch

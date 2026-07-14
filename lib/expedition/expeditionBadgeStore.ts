@@ -10,6 +10,8 @@ import {
   EXPEDITION_BADGE_DEFINITIONS,
   getBadgeDefinition,
 } from './expeditionBadgeRegistry';
+import { buildBadgeUnlockEvents } from './badgeUnlockPresentation';
+import { badgeUnlockQueueStore, enqueueBadgeUnlockEvents } from './badgeUnlockQueueStore';
 import {
   expeditionTripRecordStore,
   safelyAppendBadgeIds,
@@ -709,7 +711,10 @@ function upsertBadges(existing: ExpeditionBadge[], additions: ExpeditionBadge[])
   return next.sort(sortNewestBadges);
 }
 
-async function evaluateBadgesForCompletedTripNow(tripId: string): Promise<ExpeditionBadge[]> {
+async function evaluateBadgesForCompletedTripNow(
+  tripId: string,
+  enqueuePresentation: boolean,
+): Promise<ExpeditionBadge[]> {
   try {
     const trip = await expeditionTripRecordStore.getById(tripId);
     if (!trip || trip.status !== 'completed') return [];
@@ -743,6 +748,10 @@ async function evaluateBadgesForCompletedTripNow(tripId: string): Promise<Expedi
       version: STORAGE_VERSION,
       badges: upsertBadges(latestSnapshot.badges, newlyUnlocked),
     });
+    if (enqueuePresentation) {
+      const presentationEvents = buildBadgeUnlockEvents(newlyUnlocked, existingUnlocked);
+      void enqueueBadgeUnlockEvents(presentationEvents).catch(() => undefined);
+    }
 
     const latestTrip = await expeditionTripRecordStore.getById(trip.id);
     if (!latestTrip || latestTrip.status !== 'completed') return newlyUnlocked;
@@ -763,7 +772,15 @@ async function evaluateBadgesForCompletedTripNow(tripId: string): Promise<Expedi
 export async function evaluateBadgesForCompletedTrip(tripId: string): Promise<ExpeditionBadge[]> {
   const evaluation = badgeEvaluationQueue
     .catch(() => [])
-    .then(() => evaluateBadgesForCompletedTripNow(tripId));
+    .then(() => evaluateBadgesForCompletedTripNow(tripId, true));
+  badgeEvaluationQueue = evaluation.catch(() => []);
+  return evaluation;
+}
+
+async function reconcileBadgesForCompletedTrip(tripId: string): Promise<ExpeditionBadge[]> {
+  const evaluation = badgeEvaluationQueue
+    .catch(() => [])
+    .then(() => evaluateBadgesForCompletedTripNow(tripId, false));
   badgeEvaluationQueue = evaluation.catch(() => []);
   return evaluation;
 }
@@ -773,7 +790,7 @@ async function reconcileBadgeUnlocksFromCompletedTrips(): Promise<void> {
   badgeReconciliationPromise = (async () => {
     const completedTrips = await expeditionTripRecordStore.getCompleted();
     for (const trip of completedTrips) {
-      await evaluateBadgesForCompletedTrip(trip.id);
+      await reconcileBadgesForCompletedTrip(trip.id);
     }
   })().finally(() => {
     badgeReconciliationPromise = null;
@@ -822,6 +839,11 @@ export async function recordBadgeIdentitySafeSignal(input: BadgeIdentitySafeSign
       version: STORAGE_VERSION,
       badges: upsertBadges(snapshot.badges, [badge]),
     });
+    const presentationEvents = buildBadgeUnlockEvents(
+      [badge],
+      snapshot.badges.filter((item) => !!item.unlockedAt),
+    );
+    void enqueueBadgeUnlockEvents(presentationEvents).catch(() => undefined);
     return [badge];
   } catch {
     return [];
@@ -905,7 +927,10 @@ export async function hasBadge(badgeId: string): Promise<boolean> {
 export async function clearAllBadgesForTests(): Promise<void> {
   badgeReconciliationPromise = null;
   badgeEvaluationQueue = Promise.resolve([]);
-  await saveSnapshot({ version: STORAGE_VERSION, badges: [] });
+  await Promise.all([
+    saveSnapshot({ version: STORAGE_VERSION, badges: [] }),
+    badgeUnlockQueueStore.clearForTests(),
+  ]);
 }
 
 // TODO Expedition Badges: add full badge evaluation coverage as the 100+ badge library grows.

@@ -19,6 +19,7 @@ export type ECSNavigationFlowIntent =
   | 'vehicle_ready_confirmed'
   | 'route_preview'
   | 'dispatch_context'
+  | 'mission_command_proposal'
   | 'prepare_offline_route_package'
   | 'quick_action'
   | 'navigation_ended'

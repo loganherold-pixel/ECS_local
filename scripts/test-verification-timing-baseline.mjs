@@ -283,7 +283,7 @@ test('an established check regression fails the lane even under the aggregate bu
 
     const summary = formatVerificationLaneSummary(lane);
     assert.match(summary, /1 regressed, 0 provisional, 0 incomparable/);
-    assert.match(summary, /\| root-build \| passed \| regressed \| 180 ms \| 154 ms \|/);
+    assert.match(summary, /\| root-build \| passed \| none \| regressed \| 180 ms \| 154 ms \|/);
   });
 });
 

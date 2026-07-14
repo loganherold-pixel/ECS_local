@@ -231,10 +231,11 @@ async function main() {
       metadata: { source: 'incidentRecoveryWorkflowStore', incidentId: 'incident-1' },
     });
     const workflowInspection = test.adapter.inspect(workflowOnly, { permissions: allowAll });
-    assert.strictEqual(workflowInspection.primaryAction.id, 'inspect');
+    assert.strictEqual(workflowInspection.primaryAction.id, 'open_incident');
     const workflowResult = await open(test.adapter, workflowOnly);
-    assert.strictEqual(workflowResult.status, 'inspected');
-    assert.strictEqual(workflowResult.destination, 'command');
+    assert.strictEqual(workflowResult.status, 'local_target');
+    assert.strictEqual(workflowResult.destination, 'dispatch_incident');
+    assert.strictEqual(workflowResult.targetId, 'incident-1');
   }
 
   {

@@ -2,6 +2,14 @@
 
 Generated from `npm run audit:app-size`, `npm run audit:bundle-inclusions`, and `npm run gate:app-size` on 2026-06-13.
 
+## 2026-07-14 Production Asset Update
+
+Production source assets were reduced from 249.57 MiB to 215.84 MiB while retaining the 225 MiB hard limit. The measured inventory, every removed/excluded/recompressed asset, pixel-equivalence method, and offline preservation contract are documented in `docs/production-asset-size-reduction-2026-07-14.md`.
+
+The inactive Power Monitor Rive implementation and native dependencies were retired because the production widget already uses its native telemetry panel. Six ignored recovery-artwork staging copies are now guarded by EAS and Metro while their tracked offline protocol equivalents remain packaged.
+
+The fresh universal APK is 368.07 MiB, 15.72 MiB smaller than the prior 383.79 MiB artifact. It remains over the 350 MiB warning because the four-ABI APK contains 157.90 MiB of native libraries plus 191.98 MiB of packaged resources; the 400 MiB hard APK limit remains unchanged.
+
 ## 2026-07-12 Smoke-Fix Measurement Update
 
 This follow-up compressed the two startup/login videos, applied lossless PNG optimization to five large runtime images, and rebuilt both the Expo export and native release APK. Representative video frames were visually inspected; optimized PNGs were verified against their original decoded RGBA hashes.

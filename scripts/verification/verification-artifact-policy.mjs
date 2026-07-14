@@ -10,13 +10,20 @@ const {
 } = diagnosticRedactionCore;
 
 export const VERIFICATION_ARTIFACT_SCHEMAS = Object.freeze({
-  LANE: 'ecs.verification-lane-artifact.v4',
+  LANE: 'ecs.verification-lane-artifact.v5',
   INVENTORY: 'ecs.verification-inventory-artifact.v2',
   PROVENANCE: 'ecs.verification-provenance-artifact.v2',
   TIMINGS: 'ecs.verification-timings-artifact.v3',
   RELEASE_EVIDENCE: 'ecs.verification-release-evidence-artifact.v1',
 });
 const LEGACY_TIMINGS_ARTIFACT_SCHEMA = 'ecs.verification-timings-artifact.v2';
+const PROCESS_FAILURE_CLASSES = new Set([
+  'application_build_failure',
+  'verification_wrapper_failure',
+  'environment_process_spawn_restriction',
+  'timeout',
+  'permission_failure',
+]);
 
 export const VERIFICATION_ARTIFACT_AUDIENCES = Object.freeze({
   PULL_REQUEST: 'pull_request',
@@ -25,7 +32,7 @@ export const VERIFICATION_ARTIFACT_AUDIENCES = Object.freeze({
   RELEASE_CANDIDATE: 'release_candidate',
 });
 
-export const VERIFICATION_ARTIFACT_POLICY_VERSION = 3;
+export const VERIFICATION_ARTIFACT_POLICY_VERSION = 4;
 
 const ARTIFACT_POLICIES = Object.freeze({
   [VERIFICATION_ARTIFACT_AUDIENCES.PULL_REQUEST]: Object.freeze({
@@ -55,6 +62,7 @@ const CHECK_FIELDS = new Set([
   'status',
   'safeCode',
   'failureCode',
+  'failureClass',
   'durationMs',
   'workspaceId',
   'packageId',
@@ -300,12 +308,16 @@ export function buildVerificationCheckDiagnostic(input) {
     fail('evidenceDigest must be a SHA-256 digest.');
   }
   if (input.exitCode != null && !Number.isInteger(input.exitCode)) fail('exitCode must be an integer or null.');
+  if (input.failureClass != null && !PROCESS_FAILURE_CLASSES.has(input.failureClass)) {
+    fail('failureClass must use an approved verification process classification.');
+  }
 
   return {
     checkId,
     status: input.status,
     safeCode: optionalIdentifier(input.safeCode, 'safeCode'),
     failureCode: optionalIdentifier(input.failureCode, 'failureCode'),
+    failureClass: optionalIdentifier(input.failureClass, 'failureClass'),
     durationMs: finiteNonnegative(input.durationMs, 'durationMs'),
     workspaceId: requiredIdentifier(input.workspaceId, 'workspaceId'),
     packageId: requiredIdentifier(input.packageId, 'packageId'),
@@ -464,6 +476,7 @@ export function buildVerificationLaneArtifact(result, options = {}) {
     status: check.status,
     safeCode: check.safeCode ?? null,
     failureCode: check.failureCode ?? null,
+    failureClass: check.failureClass ?? null,
     durationMs: Number.isFinite(check.durationMs) ? check.durationMs : 0,
     workspaceId: normalizedIdentifier(check.workspace, workspaceFromPackageKey(check.scriptIdentity)),
     packageId: normalizedIdentifier(check.packageName ?? check.packageScript ?? check.checkId, check.checkId),

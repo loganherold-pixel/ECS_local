@@ -599,6 +599,16 @@ export function createActiveTripModeStore({
 }
 
 let defaultStore: ActiveTripModeStore | null = null;
+const activeTripModeListeners = new Set<() => void>();
+
+function emitActiveTripModeChange() {
+  activeTripModeListeners.forEach((listener) => listener());
+}
+
+export function subscribeActiveTripMode(listener: () => void): () => void {
+  activeTripModeListeners.add(listener);
+  return () => activeTripModeListeners.delete(listener);
+}
 
 function getDefaultStore(): ActiveTripModeStore {
   if (!defaultStore) {
@@ -613,10 +623,14 @@ function getDefaultStore(): ActiveTripModeStore {
 
 export const activeTripModeStore: ActiveTripModeStore = {
   activate(args) {
-    return getDefaultStore().activate(args);
+    const snapshot = getDefaultStore().activate(args);
+    emitActiveTripModeChange();
+    return snapshot;
   },
   save(snapshot) {
-    return getDefaultStore().save(snapshot);
+    const saved = getDefaultStore().save(snapshot);
+    emitActiveTripModeChange();
+    return saved;
   },
   get() {
     return getDefaultStore().get();
@@ -625,10 +639,13 @@ export const activeTripModeStore: ActiveTripModeStore = {
     return getDefaultStore().getRecovered(now);
   },
   stop(now, status) {
-    return getDefaultStore().stop(now, status);
+    const snapshot = getDefaultStore().stop(now, status);
+    emitActiveTripModeChange();
+    return snapshot;
   },
   clear() {
-    return getDefaultStore().clear();
+    getDefaultStore().clear();
+    emitActiveTripModeChange();
   },
   flush() {
     return getDefaultStore().flush();

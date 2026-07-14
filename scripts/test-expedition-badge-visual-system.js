@@ -10,6 +10,8 @@ function read(relativePath) {
 
 const visualsSource = read('components/dashboard/ExpeditionBadgeVisuals.tsx');
 const hubSource = read('components/dashboard/ExpeditionTab.tsx');
+const celebrationSource = read('components/badges/BadgeUnlockCelebration.tsx');
+const hostSource = read('components/badges/BadgeUnlockCelebrationHost.tsx');
 
 [
   'export function ExpeditionBadge',
@@ -63,13 +65,18 @@ const hubSource = read('components/dashboard/ExpeditionTab.tsx');
 });
 
 [
-  'badge unlock animation sequence',
   'stamp earned badges onto PDF expedition reports',
   'badge location markers to recap maps',
   'seasonal badge themes',
 ].forEach((todo) => {
   assert(visualsSource.includes(todo), `Badge visual future hook should mention ${todo}.`);
 });
+
+assert(
+  celebrationSource.includes('getExpeditionBadgeArtwork') &&
+    hostSource.includes('BadgeUnlockCelebration'),
+  'The root badge celebration should use canonical earned artwork and a single reusable host.',
+);
 
 assert(
   visualsSource.includes('ExpeditionBadgeArtwork') &&

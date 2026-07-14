@@ -321,6 +321,7 @@ const EXPEDITION_ROUTES: ECSRouteMetadata[] = [
   nestedRoute({ route: '/expedition-route-mgr', title: 'Expedition Route Manager', parentSurface: 'dashboard', authRequirement: 'authenticated', setupRequirement: 'configured_vehicle', presentation: 'modal', protectedScreenName: 'expedition-route-mgr' }),
   nestedRoute({ route: '/expedition-livelog', title: 'Live Expedition Log', parentSurface: 'dashboard', authRequirement: 'authenticated', setupRequirement: 'configured_vehicle', presentation: 'modal', protectedScreenName: 'expedition-livelog' }),
   nestedRoute({ route: '/expedition-archive', title: 'Expedition Archive', parentSurface: 'dashboard', authRequirement: 'shell', setupRequirement: 'complete', presentation: 'modal' }),
+  nestedRoute({ route: '/expedition-badges', title: 'Expedition Badge Catalog', parentSurface: 'dashboard', authRequirement: 'shell', setupRequirement: 'complete', offlineSupport: 'full', presentation: 'modal' }),
   nestedRoute({
     route: '/expedition-dispatch',
     title: 'Expedition Dispatch',

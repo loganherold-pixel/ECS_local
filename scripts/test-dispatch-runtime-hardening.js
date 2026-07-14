@@ -214,7 +214,7 @@ async function main() {
     updatedAt: timestamp(),
   }));
   const migrated = dispatchPersistenceAdapter.load(migrationExpeditionId, defaults());
-  assert.strictEqual(migrated.version, 4);
+  assert.strictEqual(migrated.version, 5);
   assert.strictEqual(migrated.timelineEvents.length, integrity.DISPATCH_RETENTION_LIMITS.timelineEvents);
   assert.strictEqual(migrated.offlineActions.length, 1, 'Queued legacy records must acquire one durable outbox action.');
 

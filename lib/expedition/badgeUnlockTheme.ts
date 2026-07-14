@@ -1,0 +1,51 @@
+/** Lightweight canonical tokens for Expedition badge rarity treatments. */
+export const ECS_BADGE_RARITY = {
+  common: {
+    highlight: '#E6EDF3',
+    ring: 'rgba(230,237,243,0.58)',
+    aura: 'rgba(230,237,243,0.12)',
+    particleCount: 4,
+    doubleRing: false,
+    radialRays: false,
+  },
+  uncommon: {
+    highlight: '#B98655',
+    ring: 'rgba(185,134,85,0.68)',
+    aura: 'rgba(185,134,85,0.16)',
+    particleCount: 5,
+    doubleRing: false,
+    radialRays: false,
+  },
+  rare: {
+    highlight: '#5AC8FA',
+    ring: 'rgba(90,200,250,0.72)',
+    aura: 'rgba(90,200,250,0.18)',
+    particleCount: 6,
+    doubleRing: false,
+    radialRays: false,
+  },
+  epic: {
+    highlight: '#A977E8',
+    ring: 'rgba(169,119,232,0.76)',
+    aura: 'rgba(169,119,232,0.22)',
+    particleCount: 7,
+    doubleRing: true,
+    radialRays: false,
+  },
+  legendary: {
+    highlight: '#FFD978',
+    ring: 'rgba(255,217,120,0.9)',
+    aura: 'rgba(255,217,120,0.24)',
+    particleCount: 8,
+    doubleRing: true,
+    radialRays: true,
+  },
+  hidden: {
+    highlight: '#E6C777',
+    ring: 'rgba(230,199,119,0.76)',
+    aura: 'rgba(97,76,122,0.3)',
+    particleCount: 6,
+    doubleRing: true,
+    radialRays: false,
+  },
+} as const;

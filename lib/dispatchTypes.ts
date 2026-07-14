@@ -262,6 +262,7 @@ export interface DispatchLinkedContext {
   title: string;
   subtitle?: string;
   coordinates?: DispatchCoordinates;
+  accuracyMeters?: number | null;
   routeSegmentId?: string;
   sourceTruth?: SourceTruthRef;
   sourceTruthPolicyKey?: SourceTruthPolicyKey;

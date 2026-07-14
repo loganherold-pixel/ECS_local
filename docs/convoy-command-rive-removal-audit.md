@@ -15,17 +15,16 @@ Convoy Command no longer owns or renders a Rive surface. The Dispatch Convoy Com
 
 ## Current Rive Usage
 
-Rive dependencies remain required because Power Monitor still uses Rive:
+As of 2026-07-14, ECS has no production Rive consumer. Power Monitor had already moved to its native telemetry panel, so its unreachable wrappers, duplicate `.riv` files, and Rive/Nitro dependencies were retired.
 
-- Power module: `components/dashboard/PowerModuleRiveWidget.tsx`, `components/dashboard/PowerModuleRiveWidget.native.tsx`, `components/dashboard/BluPowerModuleRive.tsx`, `components/dashboard/BluPowerModuleRive.native.tsx`, `lib/bluPowerModuleRive.ts`, `lib/powerModuleRiveTelemetry.ts`, `assets/power/blu_power_module.riv`, and `public/rive/blu_power_module.riv`.
-
-Route Guidance and Attitude Rive wrappers/assets have been retired; those features now use their native Mapbox/minimap or dial implementations.
+Route Guidance and Attitude continue to use their native Mapbox/minimap or dial implementations.
 
 ## Dependency Decision
 
-Keep `@rive-app/react-native` and `@rive-app/react-webgl2` in `package.json` while Power Monitor uses Rive. Removing those packages now would break the Power Monitor module.
+`@rive-app/react-native`, `@rive-app/react-webgl2`, and `react-native-nitro-modules` are no longer direct dependencies. The retirement contract prevents dormant assets or dependencies from returning without an explicit implementation change.
 
-## Future Removal Plan
+## Ongoing Contract
 
-1. Replace or retire the power module Rive widgets and preserve their telemetry fallback behavior.
-2. Re-run all Power Monitor checks, then remove `@rive-app/react-native`, `@rive-app/react-webgl2`, remaining `.riv` assets, and lockfile entries only when Power Monitor no longer uses Rive.
+1. Keep Power Monitor regression tests on the native telemetry presentation and source-state behavior.
+2. Keep Convoy Command regression tests asserting that Dispatch does not import or render retired Convoy Rive wrappers/assets.
+3. Reintroduce a Rive dependency only through a measured, user-visible requirement with Android/iOS size evidence.

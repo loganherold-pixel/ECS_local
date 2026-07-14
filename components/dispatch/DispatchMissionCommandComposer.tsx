@@ -22,6 +22,11 @@ import {
   type MissionCommandComposerTargetKind,
   type MissionCommandComposerType,
 } from '../../lib/dispatchMissionCommandComposer';
+import {
+  SOLO_MISSION_COMMAND_TEMPLATES,
+  applySoloMissionCommandTemplate,
+  type SoloMissionCommandTemplateId,
+} from '../../lib/dispatchMissionCommandSolo';
 import { ECS, TACTICAL } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 
@@ -106,15 +111,15 @@ function DispatchMissionCommandComposer({
   onSubmit,
 }: DispatchMissionCommandComposerProps) {
   const title = mode === 'create'
-    ? 'Create Mission Command'
+    ? soloMode ? 'Create Personal Action' : 'Create Mission Command'
     : mode === 'reassign'
       ? 'Reassign Command'
-      : 'Request Follow-Up';
+      : soloMode ? 'Add Status Note' : 'Request Follow-Up';
   const submitLabel = mode === 'create'
-    ? 'Create Command'
+    ? soloMode ? 'Save Personal Action' : 'Create Command'
     : mode === 'reassign'
       ? 'Save Assignment'
-      : 'Request Follow-Up';
+      : soloMode ? 'Add Status Note' : 'Request Follow-Up';
   const targetKinds = useMemo(() => {
     if (soloMode) return ['self'] as MissionCommandComposerTargetKind[];
     const kinds: MissionCommandComposerTargetKind[] = [];
@@ -143,8 +148,12 @@ function DispatchMissionCommandComposer({
       onClose={onClose}
       title={title}
       eyebrow="MISSION COMMAND"
-      subtitle={commandTitle ?? (mode === 'create' ? 'Structured ECS team coordination' : undefined)}
-      icon={mode === 'create' ? 'add-circle-outline' : mode === 'reassign' ? 'people-outline' : 'return-up-forward-outline'}
+      subtitle={commandTitle ?? (mode === 'create'
+        ? soloMode ? 'Local action, decision reminder, or checklist' : 'Structured ECS team coordination'
+        : undefined)}
+      icon={mode === 'create'
+        ? soloMode ? 'save-outline' : 'add-circle-outline'
+        : mode === 'reassign' ? 'people-outline' : 'return-up-forward-outline'}
       overlayClass="editor"
       stackBehavior="allow-stack"
       maxWidth={860}
@@ -163,7 +172,9 @@ function DispatchMissionCommandComposer({
           />
           <ECSButton
             label={submitLabel}
-            icon={mode === 'create' ? 'send-outline' : mode === 'reassign' ? 'people-outline' : 'return-up-forward-outline'}
+            icon={mode === 'create'
+              ? soloMode ? 'save-outline' : 'send-outline'
+              : mode === 'reassign' ? 'people-outline' : 'create-outline'}
             variant="primary"
             size="medium"
             grow
@@ -177,7 +188,24 @@ function DispatchMissionCommandComposer({
       <View style={styles.content} testID="dispatch-mission-command-composer">
         {mode === 'create' ? (
           <>
-            <ComposerSection label="Command Type" icon="apps-outline">
+            {soloMode ? (
+              <ComposerSection label="Personal Templates" icon="bookmark-outline">
+                <OptionGrid
+                  options={SOLO_MISSION_COMMAND_TEMPLATES.map((template) => ({
+                    id: template.id,
+                    label: template.label,
+                  }))}
+                  selectedId=""
+                  onSelect={(templateId) => onChange(applySoloMissionCommandTemplate(
+                    form,
+                    templateId as SoloMissionCommandTemplateId,
+                  ))}
+                  testIDPrefix="mission-command-solo-template"
+                />
+              </ComposerSection>
+            ) : null}
+
+            <ComposerSection label={soloMode ? 'Action Type' : 'Command Type'} icon="apps-outline">
               <OptionGrid
                 options={MISSION_COMMAND_COMPOSER_TYPES.map((id) => ({ id, label: TYPE_LABELS[id] }))}
                 selectedId={form.type}
@@ -186,29 +214,29 @@ function DispatchMissionCommandComposer({
               />
             </ComposerSection>
 
-            <ComposerSection label="Command" icon="document-text-outline">
+            <ComposerSection label={soloMode ? 'Personal Action' : 'Command'} icon="document-text-outline">
               <FieldLabel label="Title" />
               <TextInput
                 value={form.title}
                 onChangeText={(value) => update('title', value)}
-                placeholder="Command title"
+                placeholder={soloMode ? 'Personal action title' : 'Command title'}
                 placeholderTextColor={TACTICAL.textMuted}
                 maxLength={180}
                 style={styles.input}
-                accessibilityLabel="Mission Command title"
+                accessibilityLabel={soloMode ? 'Personal action title' : 'Mission Command title'}
                 testID="mission-command-title-input"
               />
               <FieldLabel label="Instructions" />
               <TextInput
                 value={form.instructions}
                 onChangeText={(value) => update('instructions', value)}
-                placeholder="Operational instructions"
+                placeholder={soloMode ? 'Local checklist or decision notes' : 'Operational instructions'}
                 placeholderTextColor={TACTICAL.textMuted}
                 maxLength={2_000}
                 multiline
                 textAlignVertical="top"
                 style={[styles.input, styles.messageInput]}
-                accessibilityLabel="Mission Command instructions"
+                accessibilityLabel={soloMode ? 'Personal action details' : 'Mission Command instructions'}
                 testID="mission-command-instructions-input"
               />
               <FieldLabel label="Priority" />
@@ -220,19 +248,25 @@ function DispatchMissionCommandComposer({
               />
             </ComposerSection>
 
-            <ComposerSection label="Target" icon="locate-outline">
-              <OptionGrid
-                options={targetKinds.map((id) => ({ id, label: TARGET_LABELS[id] }))}
-                selectedId={form.targetKind}
-                onSelect={(targetKind) => update('targetKind', targetKind as MissionCommandComposerTargetKind)}
-                testIDPrefix="mission-command-target-kind"
-              />
-              <TargetSelector form={form} catalog={catalog} onChange={onChange} />
+            <ComposerSection label={soloMode ? 'Local Target' : 'Target'} icon="locate-outline">
+              {soloMode ? (
+                <Text style={styles.muted}>You / this device. No recipient delivery or receipt will be created.</Text>
+              ) : (
+                <>
+                  <OptionGrid
+                    options={targetKinds.map((id) => ({ id, label: TARGET_LABELS[id] }))}
+                    selectedId={form.targetKind}
+                    onSelect={(targetKind) => update('targetKind', targetKind as MissionCommandComposerTargetKind)}
+                    testIDPrefix="mission-command-target-kind"
+                  />
+                  <TargetSelector form={form} catalog={catalog} onChange={onChange} />
+                </>
+              )}
             </ComposerSection>
           </>
         ) : null}
 
-        {mode !== 'follow_up' ? (
+        {mode !== 'follow_up' && !soloMode ? (
           <ComposerSection label="Assignment" icon="person-add-outline">
             <OptionGrid
               options={assignmentKinds.map((id) => ({ id, label: ASSIGNMENT_LABELS[id] }))}
@@ -249,35 +283,37 @@ function DispatchMissionCommandComposer({
 
         {mode === 'create' ? (
           <>
-            <ComposerSection label="Acknowledgment" icon="checkmark-done-outline">
-              <OptionGrid
-                options={(Object.keys(ACK_LABELS) as MissionCommandComposerAcknowledgmentMode[])
-                  .map((id) => ({ id, label: ACK_LABELS[id] }))}
-                selectedId={form.acknowledgmentMode}
-                onSelect={(acknowledgmentMode) => update(
-                  'acknowledgmentMode',
-                  acknowledgmentMode as MissionCommandComposerAcknowledgmentMode,
-                )}
-                testIDPrefix="mission-command-ack"
-              />
-              {form.acknowledgmentMode === 'role' ? (
-                <EntityOptions
-                  options={catalog.roles}
-                  selectedIds={[form.acknowledgmentRoleId]}
-                  onToggle={(id) => update('acknowledgmentRoleId', id)}
-                  testIDPrefix="mission-command-ack-role"
+            {!soloMode ? (
+              <ComposerSection label="Acknowledgment" icon="checkmark-done-outline">
+                <OptionGrid
+                  options={(Object.keys(ACK_LABELS) as MissionCommandComposerAcknowledgmentMode[])
+                    .map((id) => ({ id, label: ACK_LABELS[id] }))}
+                  selectedId={form.acknowledgmentMode}
+                  onSelect={(acknowledgmentMode) => update(
+                    'acknowledgmentMode',
+                    acknowledgmentMode as MissionCommandComposerAcknowledgmentMode,
+                  )}
+                  testIDPrefix="mission-command-ack"
                 />
-              ) : null}
-              {form.acknowledgmentMode === 'count' ? (
-                <LabeledInput
-                  label="Required responses"
-                  value={form.acknowledgmentCount}
-                  onChangeText={(value) => update('acknowledgmentCount', value.replace(/[^0-9]/g, ''))}
-                  keyboardType="number-pad"
-                  testID="mission-command-ack-count"
-                />
-              ) : null}
-            </ComposerSection>
+                {form.acknowledgmentMode === 'role' ? (
+                  <EntityOptions
+                    options={catalog.roles}
+                    selectedIds={[form.acknowledgmentRoleId]}
+                    onToggle={(id) => update('acknowledgmentRoleId', id)}
+                    testIDPrefix="mission-command-ack-role"
+                  />
+                ) : null}
+                {form.acknowledgmentMode === 'count' ? (
+                  <LabeledInput
+                    label="Required responses"
+                    value={form.acknowledgmentCount}
+                    onChangeText={(value) => update('acknowledgmentCount', value.replace(/[^0-9]/g, ''))}
+                    keyboardType="number-pad"
+                    testID="mission-command-ack-count"
+                  />
+                ) : null}
+              </ComposerSection>
+            ) : null}
 
             <ComposerSection label="Mission Clock" icon="timer-outline">
               <OptionGrid
@@ -315,18 +351,18 @@ function DispatchMissionCommandComposer({
         ) : null}
 
         {mode === 'follow_up' ? (
-          <ComposerSection label="Follow-Up" icon="return-up-forward-outline">
-            <FieldLabel label="Instructions" />
+          <ComposerSection label={soloMode ? 'Manual Status Log' : 'Follow-Up'} icon="return-up-forward-outline">
+            <FieldLabel label={soloMode ? 'Status note' : 'Instructions'} />
             <TextInput
               value={form.instructions}
               onChangeText={(value) => update('instructions', value)}
-              placeholder="Requested update or next check"
+              placeholder={soloMode ? 'Record a local status update' : 'Requested update or next check'}
               placeholderTextColor={TACTICAL.textMuted}
               maxLength={500}
               multiline
               textAlignVertical="top"
               style={[styles.input, styles.messageInput]}
-              accessibilityLabel="Follow-up instructions"
+              accessibilityLabel={soloMode ? 'Manual status note' : 'Follow-up instructions'}
               testID="mission-command-follow-up-input"
             />
           </ComposerSection>
@@ -342,7 +378,9 @@ function DispatchMissionCommandComposer({
         <View style={styles.safetyNotice} accessibilityRole="summary">
           <Ionicons name="shield-checkmark-outline" size={14} color={TACTICAL.amber} />
           <Text style={styles.safetyText}>
-            ECS team coordination only. This does not contact emergency services or transmit outside approved Dispatch channels.
+            {soloMode
+              ? 'Stored locally on this device. No other person is monitoring these actions, and ECS will not call, message, or contact anyone.'
+              : 'ECS team coordination only. This does not contact emergency services or transmit outside approved Dispatch channels.'}
           </Text>
         </View>
       </View>

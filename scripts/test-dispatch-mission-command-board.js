@@ -249,7 +249,14 @@ const noExpedition = presentation.buildMissionCommandBoardPresentation(buildInpu
   hasActiveExpedition: false,
   soloMode: true,
 }));
-assert.equal(noExpedition.degradedState.kind, 'no_active_expedition');
+assert.equal(noExpedition.degradedState.kind, 'solo');
+assert.match(noExpedition.degradedState.title, /personal mission command/i);
+
+const noTeamExpedition = presentation.buildMissionCommandBoardPresentation(buildInput([], {
+  hasActiveExpedition: false,
+  soloMode: false,
+}));
+assert.equal(noTeamExpedition.degradedState.kind, 'no_active_expedition');
 
 const migrationRecovered = presentation.buildMissionCommandBoardPresentation(buildInput([], {
   persistenceStatus: 'recovered',

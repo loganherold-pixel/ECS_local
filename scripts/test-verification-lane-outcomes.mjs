@@ -18,6 +18,7 @@ import {
   formatVerificationLaneSummary,
   runVerificationLane,
 } from './verification/run-verification-lane.mjs';
+import { VERIFICATION_PROCESS_FAILURE_CLASSES } from './verification/verification-process-runner.mjs';
 import { validateVerificationPolicy } from './verification/verification-policy.mjs';
 
 const NOW = new Date('2026-07-13T12:00:00.000Z');
@@ -305,6 +306,37 @@ test('timeout and signal termination always fail', async () => {
       assert.equal(result.status, 'failed', processFailure.failureCode);
       assert.equal(result.results[0].status, 'failed', processFailure.failureCode);
     }
+  });
+});
+
+test('an environment process-spawn restriction remains an internal lane failure', async () => {
+  await inTempRoot(async (rootDir) => {
+    const result = await runVerificationLane({
+      rootDir,
+      policy: policyFor([ordinaryCheck()]),
+      laneId: 'test-lane',
+      now: NOW,
+      executor: async () => ({
+        status: 'failed',
+        exitCode: null,
+        signal: null,
+        failureCode: 'process_spawn_restricted',
+        failureClass: VERIFICATION_PROCESS_FAILURE_CLASSES.ENVIRONMENT_PROCESS_SPAWN_RESTRICTION,
+        durationMs: 1,
+        stdout: '',
+        stderr: '',
+        summary: 'The environment denied child process creation.',
+      }),
+    });
+
+    assert.equal(result.status, 'failed');
+    assert.equal(result.codeChecksPassed, false);
+    assert.equal(result.results[0].status, 'failed');
+    assert.equal(
+      result.results[0].failureClass,
+      VERIFICATION_PROCESS_FAILURE_CLASSES.ENVIRONMENT_PROCESS_SPAWN_RESTRICTION,
+    );
+    assert.deepEqual(result.externalEvidenceBlockers, []);
   });
 });
 

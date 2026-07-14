@@ -12,6 +12,7 @@ function baseAudit(overrides = {}) {
       repoBytes: 10_000,
       productionCandidateBytes: 6_000,
       assetsBytes: 2_000,
+      productionAssetsBytes: 2_000,
       docsBytes: 500,
       fixturesBytes: 400,
       artifactsBytes: 300,
@@ -81,6 +82,7 @@ function baseBundle(overrides = {}) {
       totals: {
         ...baseAudit().totals,
         assetsBytes: 90_000,
+        productionAssetsBytes: 90_000,
         expoExportBytes: 85_000,
       },
     }),
@@ -184,6 +186,35 @@ function baseBundle(overrides = {}) {
   assert.strictEqual(passWithWarnings.status, 'warning');
   assert.ok(passWithWarnings.warnings.some((item) => item.includes('APK exceeds warning budget')));
   assert.ok(passWithWarnings.warnings.some((item) => item.includes('largest single asset exceeds warning budget')));
+
+  const guardedExclusionResult = budgetModule.evaluateAppSizeBudget({
+    auditReport: baseAudit({
+      totals: {
+        ...baseAudit().totals,
+        assetsBytes: 120_000,
+        productionAssetsBytes: 60_000,
+      },
+    }),
+    bundleReport: baseBundle(),
+    budgetConfig: {
+      requireProductionArtifact: false,
+      maxApkBytes: 100_000,
+      warnApkBytes: 80_000,
+      maxLargestAssetBytes: 10_000,
+      warnLargestAssetBytes: 8_000,
+      maxExpoExportBytes: 100_000,
+      warnExpoExportBytes: 80_000,
+      maxProductionAssetsBytes: 100_000,
+      warnProductionAssetsBytes: 80_000,
+      maxOfflineStarterBytes: 100_000,
+      warnOfflineStarterBytes: 80_000,
+    },
+  });
+  assert.strictEqual(guardedExclusionResult.measured.productionAssetsBytes, 60_000);
+  assert.ok(
+    !guardedExclusionResult.blockers.some((item) => item.includes('production bundled assets')),
+    'Budget evaluation should use guarded production bytes while retaining raw bytes in the audit.',
+  );
 
   console.log('App size budget checks passed.');
 })();

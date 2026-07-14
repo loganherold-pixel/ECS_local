@@ -108,6 +108,27 @@ export type {
 } from './expeditionBadgeStore';
 
 export {
+  BADGE_UNLOCK_EVENT_SCHEMA_VERSION,
+  BADGE_UNLOCK_PRESENTATION_SCHEMA_VERSION,
+  buildBadgeUnlockEvents,
+  getBadgeUnlockPresentationModel,
+  planBadgeUnlockPresentations,
+} from './badgeUnlockPresentation';
+
+export type {
+  BadgeUnlockAnimationPolicy,
+  BadgeUnlockEvent,
+  BadgeUnlockPresentationItem,
+  BadgeUnlockPresentationMode,
+  BadgeUnlockPresentationModel,
+} from './badgeUnlockPresentation';
+
+export {
+  badgeUnlockQueueStore,
+  enqueueBadgeUnlockEvents,
+} from './badgeUnlockQueueStore';
+
+export {
   clearAllInsightsForTests,
   dismissInsight,
   generateInsightsForCompletedTrip,

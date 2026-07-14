@@ -24,6 +24,10 @@ import {
   mergeMissionCommand,
 } from './dispatchMissionCommandDomain';
 import {
+  mergeGuardianCheckInPlan,
+  mergeGuardianCheckInPlanBatch,
+} from './dispatchGuardianCheckInDomain';
+import {
   mergeOperationalPlaybookInstance,
   mergeOperationalPlaybookInstanceBatch,
 } from './dispatchOperationalPlaybookDomain';
@@ -33,6 +37,7 @@ import {
   type DispatchEvent,
 } from './dispatchLiveEvents';
 import type { MissionCommand, MissionCommandEvent } from './dispatchMissionCommandTypes';
+import type { GuardianCheckInPlan } from './dispatchGuardianCheckInTypes';
 import type { OperationalPlaybookInstance } from './dispatchOperationalPlaybookTypes';
 import type {
   DispatchAcknowledgment,
@@ -45,7 +50,7 @@ import type {
 } from './dispatchTypes';
 
 const STORAGE_FILE = 'ecs_dispatch_persistence';
-const STORAGE_VERSION = 4;
+const STORAGE_VERSION = 5;
 const DISPATCH_CAD_EVENT_PERSISTENCE_LIMIT = 300;
 const persistence = createPersistedKeyValueCache(STORAGE_FILE);
 const persistenceListeners = new Set<(expeditionId: string) => void>();
@@ -68,6 +73,7 @@ export interface DispatchPersistenceSnapshot {
   cadEvents: DispatchEvent[];
   missionCommands: MissionCommand[];
   missionCommandEvents: MissionCommandEvent[];
+  guardianCheckIns: GuardianCheckInPlan[];
   operationalPlaybooks: OperationalPlaybookInstance[];
   updatedAt: string;
 }
@@ -83,6 +89,7 @@ export interface DispatchPersistenceDefaults {
   cadEvents?: DispatchEvent[];
   missionCommands?: MissionCommand[];
   missionCommandEvents?: MissionCommandEvent[];
+  guardianCheckIns?: GuardianCheckInPlan[];
   operationalPlaybooks?: OperationalPlaybookInstance[];
 }
 
@@ -113,6 +120,7 @@ function createSnapshot(
     cadEvents: [...(defaults.cadEvents ?? [])],
     missionCommands: [...(defaults.missionCommands ?? [])],
     missionCommandEvents: [...(defaults.missionCommandEvents ?? [])],
+    guardianCheckIns: [...(defaults.guardianCheckIns ?? [])],
     operationalPlaybooks: [...(defaults.operationalPlaybooks ?? [])],
     updatedAt: new Date().toISOString(),
   };
@@ -155,6 +163,9 @@ function normalizeSnapshot(
     missionCommandEvents: Array.isArray(candidate.missionCommandEvents)
       ? candidate.missionCommandEvents
       : [...(defaults.missionCommandEvents ?? [])],
+    guardianCheckIns: Array.isArray(candidate.guardianCheckIns)
+      ? candidate.guardianCheckIns
+      : [...(defaults.guardianCheckIns ?? [])],
     operationalPlaybooks: Array.isArray(candidate.operationalPlaybooks)
       ? candidate.operationalPlaybooks
       : [...(defaults.operationalPlaybooks ?? [])],
@@ -188,11 +199,15 @@ function loadSnapshotResult(
     const invalidMissionEventCount = Array.isArray(candidate?.missionCommandEvents)
       ? Math.max(0, candidate.missionCommandEvents.length - snapshot.missionCommandEvents.length)
       : 0;
+    const invalidGuardianCheckInCount = Array.isArray(candidate?.guardianCheckIns)
+      ? Math.max(0, candidate.guardianCheckIns.length - snapshot.guardianCheckIns.length)
+      : 0;
     const invalidPlaybookCount = Array.isArray(candidate?.operationalPlaybooks)
       ? Math.max(0, candidate.operationalPlaybooks.length - snapshot.operationalPlaybooks.length)
       : 0;
     const futureSchema = typeof candidate?.version === 'number' && candidate.version > STORAGE_VERSION;
     const recovered = futureSchema || invalidMissionCommandCount > 0 || invalidMissionEventCount > 0 ||
+      invalidGuardianCheckInCount > 0 ||
       invalidPlaybookCount > 0;
     return {
       snapshot,
@@ -221,6 +236,7 @@ function saveSnapshot(snapshot: DispatchPersistenceSnapshot): DispatchPersistenc
     version: STORAGE_VERSION,
     missionCommands: Array.isArray(snapshot.missionCommands) ? snapshot.missionCommands : [],
     missionCommandEvents: Array.isArray(snapshot.missionCommandEvents) ? snapshot.missionCommandEvents : [],
+    guardianCheckIns: Array.isArray(snapshot.guardianCheckIns) ? snapshot.guardianCheckIns : [],
     operationalPlaybooks: Array.isArray(snapshot.operationalPlaybooks) ? snapshot.operationalPlaybooks : [],
     updatedAt: new Date().toISOString(),
   });
@@ -250,6 +266,7 @@ function dedupeSnapshot(snapshot: DispatchPersistenceSnapshot): DispatchPersiste
     cadEvents: mergeDispatchCadEvents(snapshot.cadEvents),
     missionCommands: mergeMissionCommandBatch(snapshot.missionCommands ?? []),
     missionCommandEvents: mergeMissionCommandEventBatch(snapshot.missionCommandEvents ?? []),
+    guardianCheckIns: mergeGuardianCheckInPlanBatch(snapshot.guardianCheckIns ?? []),
     operationalPlaybooks: mergeOperationalPlaybookInstanceBatch(snapshot.operationalPlaybooks ?? []),
   };
   const mergedOfflineActions = mergeDispatchOfflineActionBatch([
@@ -556,6 +573,40 @@ export const dispatchPersistenceAdapter = {
         ? mergeMissionCommand(snapshot.missionCommands, command)
         : snapshot.missionCommands,
       missionCommandEvents: event && event.expeditionId === expeditionId
+        ? appendMissionCommandEventRecord(snapshot.missionCommandEvents, event)
+        : snapshot.missionCommandEvents,
+    }));
+  },
+
+  upsertGuardianCheckIn(
+    expeditionId: string,
+    defaults: DispatchPersistenceDefaults,
+    plan: GuardianCheckInPlan,
+  ): DispatchPersistenceSnapshot {
+    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
+      ...snapshot,
+      guardianCheckIns: plan.expeditionId === expeditionId
+        ? mergeGuardianCheckInPlan(snapshot.guardianCheckIns, plan)
+        : snapshot.guardianCheckIns,
+    }));
+  },
+
+  applyGuardianCheckInDecision(
+    expeditionId: string,
+    defaults: DispatchPersistenceDefaults,
+    plan: GuardianCheckInPlan,
+    command: MissionCommand,
+    event: MissionCommandEvent,
+  ): DispatchPersistenceSnapshot {
+    return updateSnapshot(expeditionId, defaults, (snapshot) => ({
+      ...snapshot,
+      guardianCheckIns: plan.expeditionId === expeditionId
+        ? mergeGuardianCheckInPlan(snapshot.guardianCheckIns, plan)
+        : snapshot.guardianCheckIns,
+      missionCommands: command.expeditionId === expeditionId
+        ? mergeMissionCommand(snapshot.missionCommands, command)
+        : snapshot.missionCommands,
+      missionCommandEvents: event.expeditionId === expeditionId
         ? appendMissionCommandEventRecord(snapshot.missionCommandEvents, event)
         : snapshot.missionCommandEvents,
     }));

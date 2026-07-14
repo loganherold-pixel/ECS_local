@@ -659,7 +659,7 @@ const persisted = dispatchPersistenceAdapter.upsertOperationalPlaybook(
   defaults(),
   instance,
 );
-assert.equal(persisted.version, 4);
+assert.equal(persisted.version, 5);
 assert.equal(persisted.operationalPlaybooks.length, 1);
 const restarted = dispatchPersistenceAdapter.load(instance.expeditionId, defaults());
 assert.deepEqual(restarted.operationalPlaybooks, persisted.operationalPlaybooks, 'Restart must restore the durable instance exactly.');
@@ -681,7 +681,7 @@ localStorage.setItem(`dispatch_state_${legacyExpeditionId}`, JSON.stringify({
   updatedAt: BASE_TIME,
 }));
 const migratedSnapshot = dispatchPersistenceAdapter.load(legacyExpeditionId, defaults());
-assert.equal(migratedSnapshot.version, 4);
+assert.equal(migratedSnapshot.version, 5);
 assert.deepEqual(migratedSnapshot.operationalPlaybooks, []);
 
 const corruptExpeditionId = 'expedition-corrupt-playbook';

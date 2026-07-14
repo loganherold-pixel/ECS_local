@@ -45,6 +45,7 @@ import { ECSSkeletonBlock, ECSLoadingSection, ECSTransientNotice } from '../../c
 import TacticalPopupShell from '../../components/TacticalPopupShell';
 import EnrichedRouteCard from '../../components/discover/EnrichedRouteCard';
 import ExpeditionAnalysisModal from '../../components/discover/ExpeditionAnalysisModal';
+import MissionCommandProposalAction from '../../components/mission-command/MissionCommandProposalAction';
 import DistanceRadiusFilter from '../../components/discover/DistanceRadiusFilter';
 import AIRouteCard from '../../components/discover/AIRouteCard';
 import AIRoutePreviewModal from '../../components/discover/AIRoutePreviewModal';
@@ -220,6 +221,7 @@ import {
 import type { RouteCatalogSummary, RouteDetail } from '../../lib/routeDataContracts';
 import { paginateRouteCatalogSummaries } from '../../lib/explore/routeCatalogSummaryCache';
 import { saveExploreRoutesMapHandoff } from '../../lib/exploreRoutesMapHandoff';
+import { createExploreMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
 import {
   getExploreFilterStateSnapshot,
   loadExploreFilterStateSnapshot,
@@ -6222,6 +6224,66 @@ function DiscoverScreenInner() {
                   <Ionicons name="download-outline" size={14} color={TACTICAL.amber} />
                   <Text style={s.offlinePrepFooterText} numberOfLines={2}>PREP{'\n'}OFFLINE</Text>
                 </TouchableOpacity>
+                <MissionCommandProposalAction
+                  label="Coordinate Route"
+                  accessibilityLabel={`Coordinate a route review for ${selectedOpportunity.name} in Mission Command`}
+                  buildProposal={() => {
+                    const sourceTruth = {
+                      id: `explore-route:${selectedOpportunity.id}`,
+                      origin: 'cached' as const,
+                      role: 'primary' as const,
+                      policyKey: 'route_legal_access_evidence' as const,
+                      authority: selectedOpportunity.routeAuthorityLabel ?? 'Explore route catalog',
+                      authorityKind: 'mixed' as const,
+                      provider: selectedOpportunity.routeAuthoritySource ?? null,
+                      observedAt: null,
+                      fetchedAt: null,
+                      expiresAt: null,
+                      confidence: selectedOpportunity.hasTrueTrailGeometry ? 'medium' as const : 'low' as const,
+                      coverage: selectedOpportunity.hasTrueTrailGeometry ? 'complete' as const : 'partial' as const,
+                      availability: selectedOpportunity.hasTrueTrailGeometry ? 'usable' as const : 'degraded' as const,
+                      conflictState: 'none' as const,
+                      conflict: false,
+                      warningCodes: selectedOpportunity.hasTrueTrailGeometry ? [] : ['explore_route_geometry_missing'],
+                    };
+                    return createExploreMissionCommandProposal({
+                      sourceEntityId: selectedOpportunity.id,
+                      sourceSurface: 'explore',
+                      planningAction: 'route_review',
+                      title: `Coordinate route review: ${selectedOpportunity.name}`,
+                      summary: selectedOpportunity.routeAuthorityNotice ?? selectedOpportunity.description,
+                      sourceTruth: [sourceTruth],
+                      linkedContext: {
+                        id: selectedOpportunity.id,
+                        type: 'route',
+                        title: selectedOpportunity.name,
+                        subtitle: `${selectedOpportunity.region} / ${selectedOpportunity.distanceMiles.toFixed(1)} mi`,
+                        sourceTruth,
+                        sourceTruthPolicyKey: 'route_legal_access_evidence',
+                        metadata: {
+                          routeTypeStatus: selectedOpportunity.routeTypeStatus ?? null,
+                          hasTrueTrailGeometry: selectedOpportunity.hasTrueTrailGeometry === true,
+                        },
+                      },
+                      action: 'create_command',
+                      command: {
+                        type: 'route',
+                        priority: selectedOpportunity.hasTrueTrailGeometry ? 'normal' : 'high',
+                        title: `Review ${selectedOpportunity.name}`,
+                        instructions: selectedOpportunity.hasTrueTrailGeometry
+                          ? 'Review the route source, access evidence, preparation milestones, and team coordination before activation.'
+                          : 'Route geometry is incomplete. Resolve the missing route data before using this plan for guidance.',
+                      },
+                      facts: [
+                        { key: 'region', label: 'Region', value: selectedOpportunity.region },
+                        { key: 'route_authority', label: 'Route authority', value: selectedOpportunity.routeAuthorityLabel ?? 'Unknown' },
+                      ],
+                      operatorRequested: true,
+                      returnRoute: '/discover',
+                    });
+                  }}
+                  grow
+                />
               </>
             ) : null
           }

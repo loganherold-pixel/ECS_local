@@ -91,6 +91,8 @@ export const ECS = {
   },
 } as const;
 
+export { ECS_BADGE_RARITY } from './expedition/badgeUnlockTheme';
+
 
 
 // ============================================================

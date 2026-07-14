@@ -44,6 +44,7 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import ECSShellTexture from '../ECSShellTexture';
 import WeatherIntelPanel from '../weather/WeatherIntelPanel';
+import MissionCommandProposalAction from '../mission-command/MissionCommandProposalAction';
 
 import { TACTICAL, ECS } from '../../lib/theme';
 
@@ -79,6 +80,8 @@ import {
   type ActiveRouteProgressSnapshot,
 } from '../../lib/activeRouteProgress';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
+import { createWeatherMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
+import { buildWeatherSourceTruthBinding } from '../../lib/sourceTruthAdapters';
 import {
   formatWeatherAlertLine,
   formatWeatherHeadline,
@@ -13104,6 +13107,9 @@ function HwyForwardWeatherDetailBlock({
       value: (day) => formatForecastDetailLine(day),
     },
   );
+  const materialAlerts = snapshot.alerts.filter(
+    (alert) => alert.severity === 'warning' || alert.severity === 'extreme',
+  );
 
   if (!hasMeaningfulData && snapshot.alerts.length === 0) {
     return (
@@ -13233,6 +13239,69 @@ function HwyForwardWeatherDetailBlock({
       <HwyMetricRow label="LOCATION CONF" value={formatDashboardWeatherLocationConfidence(snapshot)} muted />
       <HwyMetricRow label="ACCURACY" value={snapshot.location.accuracyM != null ? `${Math.round(snapshot.location.accuracyM)} m` : '--'} muted />
       <HwyMetricRow label="STATUS" value={alertLine.toUpperCase()} muted />
+      {materialAlerts.length > 0 ? (
+        <MissionCommandProposalAction
+          label="Coordinate Weather Review"
+          accessibilityLabel={`Coordinate ${materialAlerts[0]?.title ?? 'the active weather warning'} in Mission Command`}
+          buildProposal={() => {
+            const alert = materialAlerts[0]!;
+            const sourceBinding = buildWeatherSourceTruthBinding({
+              id: `weather-alert:${alert.title}:${alert.effective ?? snapshot.fetchedAt ?? 'unknown'}`,
+              source: snapshot.status.source ?? snapshot.provider.source ?? snapshot.sourceType,
+              authority: snapshot.provider.name,
+              provider: snapshot.provider.name,
+              observedAt: alert.effective ?? snapshot.fetchedAt,
+              retrievedAt: snapshot.fetchedAt,
+              expiresAt: alert.expires,
+              available: true,
+              stale: snapshot.status.stale,
+              hasCurrentConditions: Boolean(snapshot.raw || snapshot.current.condition),
+              hasForecast: snapshot.daily.length > 0 || snapshot.hourly.length > 0,
+              locationStale: snapshot.location.stale,
+              providerLimited: snapshot.status.kind === 'error' || snapshot.status.kind === 'unavailable',
+              policyKey: 'weather_observation',
+            });
+            return createWeatherMissionCommandProposal({
+              sourceEntityId: `${alert.title}:${alert.effective ?? alert.expires ?? 'current'}`,
+              hazardKind: alert.type || alert.title,
+              material: true,
+              title: `Coordinate weather review: ${alert.title}`,
+              summary: alert.description || alertLine,
+              sourceTruth: sourceBinding.sources,
+              linkedContext: {
+                id: `weather-alert:${alert.title}:${alert.effective ?? 'current'}`,
+                type: 'manual',
+                title: alert.title,
+                subtitle: `${alert.severity} / ${snapshot.locationName}`,
+                sourceTruth: sourceBinding.ref,
+                sourceTruthPolicyKey: sourceBinding.policyKey,
+                observedAt: alert.effective ?? snapshot.fetchedAt ?? undefined,
+                stale: snapshot.status.stale,
+                metadata: {
+                  alertType: alert.type,
+                  severity: alert.severity,
+                  provider: snapshot.provider.name,
+                },
+              },
+              action: 'create_command',
+              command: {
+                type: 'hazard',
+                priority: alert.severity === 'extreme' ? 'critical' : 'high',
+                title: `Weather review: ${alert.title}`,
+                instructions: 'Review the validated weather alert, check team status, and choose any route or camp action explicitly.',
+              },
+              facts: [
+                { key: 'severity', label: 'Alert severity', value: alert.severity },
+                { key: 'provider', label: 'Weather provider', value: snapshot.provider.name },
+              ],
+              operatorRequested: true,
+              offline: snapshot.status.kind === 'offline',
+              returnRoute: '/dashboard',
+            });
+          }}
+          grow
+        />
+      ) : null}
     </View>
   );
 }

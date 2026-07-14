@@ -66,7 +66,7 @@ The command validates the candidate, requires an explicit new version, converts 
 
 ## Reporting
 
-Lane JSON artifact schema `ecs.verification-lane-artifact.v4` carries baseline status/version/source, regression/provisional/incomparable counts, and an allowlisted comparison for every check. Human summaries show measured duration, allowance, and timing state.
+Lane JSON artifact schema `ecs.verification-lane-artifact.v5` carries baseline status/version/source, regression/provisional/incomparable counts, typed process-failure classification, and an allowlisted comparison for every check. Human summaries show measured duration, allowance, and timing state.
 
 `.smoke/verification/timings.json` remains a bounded job-local diagnostic cache for inventory reporting. Its current schema is `ecs.verification-timings-artifact.v3`, with read compatibility for v2. It is not authoritative for release enforcement and cannot teach a future clean CI job that a slowdown is normal.
 

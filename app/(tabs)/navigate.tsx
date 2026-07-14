@@ -807,6 +807,14 @@ import {
   type ExploreRouteCampMarker,
 } from '../../lib/exploreRouteCampHandoff';
 import { consumeNavigationFlow, type ECSNavigationFlow } from '../../lib/ecsNavigationFlow';
+import {
+  missionCommandProposalHandoffAdapter,
+} from '../../lib/dispatchMissionCommandProposal';
+import { createNavigateMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
+import {
+  isDispatchFeatureEnabled,
+  resolveDispatchRolloutConfig,
+} from '../../lib/dispatchRolloutConfig';
 import { saveTripBuilderRouteHandoff } from '../../lib/tripBuilder/tripBuilderRouteHandoffStore';
 import type { TripBuilderRouteInput } from '../../lib/tripBuilder/tripBuilderTypes';
 import { saveOfflinePrepPackHandoff } from '../../lib/offlinePrepPack';
@@ -864,6 +872,10 @@ const CAMPOPS_ROUTE_PINS_ENABLED = isCampOpsRoutePinsFeatureEnabled();
 const CAMPOPS_ROUTE_PINS_ROLLOUT_CONFIG = getCampOpsRoutePinsRolloutConfig();
 const CAMPOPS_SAFE_ENDPOINT_ENABLED = isCampOpsSafeEndpointDecisionModeEnabled();
 const CAMPOPS_SAFE_ENDPOINT_ROLLOUT_CONFIG = getCampOpsSafeEndpointRolloutConfig();
+const MISSION_COMMAND_ENABLED = isDispatchFeatureEnabled(
+  resolveDispatchRolloutConfig(),
+  'missionCommand',
+);
 const ROUTE_CHANGE_IMPACT_PREVIEW_ENABLED = isRouteChangeImpactPreviewEnabled();
 const CAMPOPS_MANUAL_AREA_REVIEW_ENABLED =
   resolveECSFeatureVisibility(
@@ -17757,6 +17769,83 @@ const handleOpenBuildRoutePlan = useCallback(() => {
   router.push('/explore-trip-builder' as any);
 }, [router]);
 
+const handleOpenRouteMissionCommand = useCallback(async () => {
+  const route = navigateRouteSessionStore.getSnapshot();
+  if (!route.routeId || route.lifecycle === 'inactive') {
+    showToast('STAGE OR START A ROUTE BEFORE OPENING ROUTE COORDINATION');
+    return;
+  }
+  const sourceTruth = {
+    id: `navigate-route-session:${route.routeId}`,
+    origin: 'cached' as const,
+    role: 'primary' as const,
+    policyKey: 'default' as const,
+    authority: 'ECS Navigate route session',
+    authorityKind: 'ecs' as const,
+    provider: route.source,
+    observedAt: route.updatedAt,
+    fetchedAt: null,
+    expiresAt: null,
+    confidence: route.routePoints.length > 1 ? 'medium' as const : 'low' as const,
+    coverage: route.routePoints.length > 1 ? 'complete' as const : 'partial' as const,
+    availability: route.routePoints.length > 1 ? 'usable' as const : 'degraded' as const,
+    conflictState: 'none' as const,
+    conflict: false,
+    warningCodes: route.routePoints.length > 1 ? [] : ['navigate_route_geometry_partial'],
+  };
+  const proposalResult = createNavigateMissionCommandProposal({
+    sourceEntityId: route.routeId,
+    expeditionId: activeExpeditionId,
+    operation: 'route_command',
+    title: `Coordinate route: ${route.routeTitle ?? 'Active route'}`,
+    summary: route.instruction ?? route.statusLabel,
+    sourceTruth: [sourceTruth],
+    linkedContext: {
+      id: route.routeId,
+      type: 'route',
+      title: route.routeTitle ?? 'Active route',
+      subtitle: `${route.lifecycle} / ${route.statusLabel}`,
+      sourceTruth,
+      sourceTruthPolicyKey: 'default',
+      observedAt: route.updatedAt ?? undefined,
+      metadata: {
+        routeSource: route.source,
+        routeLifecycle: route.lifecycle,
+        routeStatusKind: route.routeStatusKind,
+      },
+    },
+    action: 'create_command',
+    command: {
+      type: 'route',
+      priority: route.isOffRoute ? 'high' : 'normal',
+      title: `Review ${route.routeTitle ?? 'active route'}`,
+      instructions: route.isOffRoute
+        ? 'Review the current off-route state and agree on the next route action. Do not replace active guidance without confirmation.'
+        : 'Review the active route context and coordinate the next explicit team action.',
+    },
+    facts: [
+      { key: 'route_lifecycle', label: 'Guidance state', value: route.lifecycle },
+      { key: 'off_route', label: 'Off route', value: route.isOffRoute ? 'Yes' : 'No' },
+    ],
+    operatorRequested: true,
+    offline: navigateConnectivity.status === 'offline',
+    returnRoute: '/navigate',
+  });
+  if (!proposalResult.ok) {
+    showToast(proposalResult.reason.toUpperCase());
+    return;
+  }
+  const stageResult = await missionCommandProposalHandoffAdapter.stage(proposalResult.proposal);
+  if (stageResult.status === 'invalid') {
+    showToast(stageResult.reason.toUpperCase());
+    return;
+  }
+  hapticCommand();
+  setToolsMenuOpen(false);
+  removeNavigateLayer('tools');
+  router.push('/alert' as any);
+}, [activeExpeditionId, navigateConnectivity.status, removeNavigateLayer, router, showToast]);
+
 const getActiveTrailPackSubmissionRoute = useCallback((
   sourceEntryPoint: ECSTrailPackSubmissionRouteInput['sourceEntryPoint'],
 ) => {
@@ -24800,6 +24889,19 @@ const stableMapSurface = useMemo(() => {
               accessibilityLabel="Build route plan in Trip Builder"
               style={styles.toolsDenseActionCard}
             />
+
+            {MISSION_COMMAND_ENABLED ? (
+              <NavigateToolActionCard
+                title="ROUTE COORDINATION"
+                icon="radio-outline"
+                badge="MISSION"
+                compact
+                hideChevron
+                onPress={() => void handleOpenRouteMissionCommand()}
+                accessibilityLabel="Coordinate the active route in Mission Command"
+                style={styles.toolsDenseActionCard}
+              />
+            ) : null}
 
             <NavigateToolActionCard
               title="STITCH ROUTES"

@@ -399,7 +399,7 @@ localStorage.setItem(`dispatch_state_${migrationExpeditionId}`, JSON.stringify({
   updatedAt: CREATED_AT,
 }));
 const migrated = dispatchPersistenceAdapter.load(migrationExpeditionId, defaults());
-assert.strictEqual(migrated.version, 4);
+assert.strictEqual(migrated.version, 5);
 assert.strictEqual(migrated.pings.length, 1, 'Legacy Dispatch records must survive the schema migration.');
 assert.deepStrictEqual(migrated.missionCommands, [], 'Invalid canonical records must fail closed without deleting legacy data.');
 assert.deepStrictEqual(migrated.missionCommandEvents, []);
@@ -426,7 +426,7 @@ assert.strictEqual(eventPersisted.missionCommandEvents.length, 1);
 const corruptExpeditionId = 'mission-command-corrupt';
 localStorage.setItem(`dispatch_state_${corruptExpeditionId}`, '{not-json');
 const corruptFallback = dispatchPersistenceAdapter.load(corruptExpeditionId, defaults());
-assert.strictEqual(corruptFallback.version, 4);
+assert.strictEqual(corruptFallback.version, 5);
 assert.deepStrictEqual(corruptFallback.missionCommands, []);
 assert.deepStrictEqual(corruptFallback.pings, []);
 

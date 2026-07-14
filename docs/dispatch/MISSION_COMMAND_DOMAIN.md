@@ -16,6 +16,10 @@ Deterministic application logic owns command eligibility, transitions, deadlines
 - `lib/dispatchMissionClockScheduler.ts` owns the injectable single-timer controller and material-boundary refresh policy.
 - `lib/useMissionClockScheduler.ts` binds the pure scheduler to React Native app foreground/background state and replaces it when expedition scope changes.
 - `lib/dispatchMissionCommandComposer.ts` owns command-form defaults, legacy-entry mapping, targeting, assignment, acknowledgment, deadline, linked-context validation, permission checks, stable identity, and canonical creation.
+- `lib/dispatchMissionCommandProposal.ts` owns the versioned cross-domain proposal envelope, source-state snapshot, restricted-context sanitization, explicit confirmation/cancellation, stable fingerprint, and existing navigation-flow handoff into Dispatch.
+- `lib/dispatchMissionCommandSourceAdapters.ts` is the thin integration boundary for Dashboard/ECS Brief, Fleet, Navigate, Explore/Trip Builder, CampOps, operational weather, and Incident & Recovery outputs. It accepts validated source results and does not recalculate their conclusions.
+- `lib/dispatchMissionCommandResolutionHandoff.ts` projects a terminal command into one idempotent, allowlisted expedition timeline note. It cannot mutate Fleet, route, camp, weather, or incident state.
+- `lib/dispatchMissionCommandSolo.ts` owns personal-action templates and the explicit, idempotent conversion of a self action into a local team draft without changing command identity or claiming delivery.
 - `lib/dispatchOperationalPlaybookTypes.ts` owns the versioned definition, instance, step, event, proposal, deadline, input, and effect contracts for guided coordination workflows.
 - `lib/dispatchOperationalPlaybookDomain.ts` owns playbook validation, deterministic transitions, explicit command-proposal confirmation, migration, restart normalization, retention, source-state checks, and Mission Clock deadline projection.
 - `lib/dispatchOperationalPlaybookPresentation.ts` owns the memoizable playbook runner model and typed UI intents.
@@ -23,7 +27,7 @@ Deterministic application logic owns command eligibility, transitions, deadlines
 - `components/dispatch/DispatchMissionClockPanel.tsx` renders the next-deadline metric, bounded chronological list, and deadline detail sheet from a typed clock snapshot.
 - `components/dispatch/DispatchMissionCommandComposer.tsx` is the single gated creation, reassignment, and follow-up sheet. It receives typed catalogs and callbacks; it does not read stores or decide permissions.
 - `components/dispatch/DispatchOperationalPlaybookRunner.tsx` is a reusable, store-free runner sheet. It emits typed user intents and cannot mutate state, create commands, or transmit commands.
-- `lib/dispatchPersistenceAdapter.ts` remains the authoritative local Dispatch store. Schema version 4 adds `operationalPlaybooks` while preserving the version 3 Mission Command fields and all legacy records.
+- `lib/dispatchPersistenceAdapter.ts` remains the authoritative local Dispatch store. Schema version 5 adds `guardianCheckIns` while preserving the version 4 Operational Playbook fields, version 3 Mission Command fields, and all legacy records.
 
 No Supabase table or remote write path is added by this foundation.
 
@@ -51,7 +55,7 @@ Acknowledgment policy supports none, any target, every target, a resolved role s
 
 Linked context is accepted only through typed context options. Restricted context is rejected before persistence. The composer copies only the canonical context fields and omits arbitrary metadata. Manual context remains available without coordinates.
 
-One submit creates one command and one initial event in one local persistence update. A draft ID scopes the idempotency key, so repeated taps on the same draft do not duplicate command or event records while a newly opened draft may intentionally create another command. Offline creation records `deliveryState: queued` and a `queued` event. Online local creation records `deliveryState: local`; it is never labeled sent, delivered, or acknowledged without confirmation from a future approved delivery adapter. Starting replay moves a queued command to `sending` with a `replayed` event whose copy explicitly says delivery is not yet confirmed.
+One submit creates one command and one initial event in one local persistence update. A draft ID scopes the idempotency key, so repeated taps on the same draft do not duplicate command or event records while a newly opened draft may intentionally create another command. Offline team creation records `deliveryState: queued` and a `queued` event. A self-targeted action always records `deliveryState: local`, `acknowledgmentState: not_required`, and a `created` event because no recipient or delivery path exists. Online local creation also records `deliveryState: local`; it is never labeled sent, delivered, or acknowledged without confirmation from a future approved delivery adapter. Starting replay moves a queued team command to `sending` with a `replayed` event whose copy explicitly says delivery is not yet confirmed.
 
 Command Board buckets are derived and never persisted:
 
@@ -59,6 +63,14 @@ Command Board buckets are derived and never persisted:
 - **Awaiting Acknowledgment**: pending or partial acknowledgment after higher-priority decision states are considered.
 - **In Progress**: active/in-progress commands without an outstanding decision or acknowledgment.
 - **Resolved**: resolved, cancelled, or expired operational records.
+
+## Solo Operation
+
+When no active team or convoy exists, Mission Command presents a personal board rather than simulating team delivery. Self actions are local reminders, decisions, checklists, check-ins, or manual incident records. The supplied templates cover personal action, camp diversion, fuel/water/power review, weather recheck, route decision, and manual comms-plan review. Mission Clock remains available without an active expedition, and the existing saved comms plan may be opened for manual use. ECS does not call, message, monitor, or contact anyone.
+
+Assignment and acknowledgment controls are not offered for self actions. Guardian Check-Ins retain their explicit local response and no-response workflows. Lost Communications is not offered as a self-directed playbook; Vehicle Immobilized, Route Blockage, Guardian Check-Ins, and existing Incident Room flows remain available where their actual source context permits them. Manual status notes append command events without creating delivery receipts.
+
+If the user later joins a team, an explicit confirmation can prepare the same nonterminal personal command as a team draft. The command ID and source truth are preserved, the target changes to the known expedition roster, delivery remains `local`, and active personal work moves to `blocked` so the operator must review it. Repeating the transition or persistence write does not duplicate the command or audit event. A separate approved action is still required before any delivery state may advance.
 
 ## Mission Clock
 
@@ -76,13 +88,23 @@ Persisted user/team `DispatchEvent` records from the currently routed CAD compos
 
 Restricted linked context retains only safe identifiers, labels, source state, and the restriction marker. Coordinates and arbitrary metadata are removed before the command enters canonical persistence.
 
-The version 3 to version 4 persistence migration is additive, as was the version 2 to version 3 Mission Command migration:
+## Cross-Domain Proposals
+
+Dashboard and ECS Brief identify validated situations; source-domain engines remain authoritative for Fleet readiness, route state, CampOps decisions, weather hazards, offline readiness, and incident truth. A source surface may create a typed `MissionCommandProposal`, but viewing data alone is rejected as `mission_command_proposal_explicit_action_required`. Every proposal carries an originating domain, stable source entity, source-truth references, evaluated freshness/availability/confidence/conflict state, a safe return route, and a content-bound fingerprint.
+
+The existing navigation-flow store stages one proposal for Dispatch. Repeated staging of the same fingerprint is deduplicated. Dispatch reevaluates freshness when it consumes the handoff, shows the origin and source state, and asks the operator to review or cancel. Review may open the current Command Composer, Command Board, supported Operational Playbook, or an existing Incident Room. It does not create, send, acknowledge, reroute, select a camp, or escalate anything. Command creation still occurs only through the existing permission-checked Composer submit path, whose draft identity is derived from the proposal fingerprint.
+
+Restricted linked context retains the restriction marker but drops coordinates, accuracy, member-position fields, and arbitrary provider metadata before staging. Source facts are bounded presentation snapshots, not new ownership of source calculations. Material weather proposals with the same source entity and validated content resolve to the same command identity, preventing duplicate weather commands on repeated taps or restoration.
+
+When a command reaches a terminal state through the Command Board, Mission Command may append one redacted `manual_note` to the matching active expedition timeline. The note contains only command ID/type, terminal outcome, bounded summary, occurrence time, and an idempotency key. Expedition mismatch, duplicate handoff, and nonterminal commands produce no write.
+
+The version 4 to version 5 persistence migration is additive, as were the version 3 to version 4 Operational Playbook migration and version 2 to version 3 Mission Command migration:
 
 1. Existing pings, queue items, assignments, assists, acknowledgments, timeline, outbox, and CAD records are retained.
-2. Missing Mission Command and Operational Playbook arrays initialize empty.
-3. Invalid Mission Command or Operational Playbook records are dropped without deleting valid legacy Dispatch data; the load result reports partial recovery.
+2. Missing Mission Command, Operational Playbook, and Guardian Check-In arrays initialize empty.
+3. Invalid Mission Command, Operational Playbook, or Guardian Check-In records are dropped without deleting valid legacy Dispatch data; the load result reports partial recovery.
 4. Explicit adapters can create canonical aggregates when the rollout is enabled; hydration does not silently duplicate legacy records.
-5. Rolling back to a version 3 reader is non-destructive because the playbook field is additive. Rolling back farther retains the same legacy compatibility caveat documented for Mission Command.
+5. Operational rollback uses `EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND`; this hides the internal UI without rewriting v5 data. A binary rollback to a v4 reader preserves legacy Dispatch fields but does not understand `guardianCheckIns` and may discard that collection on a later write, so it requires a storage backup or acceptance that v5-only plans will be lost.
 
 ## Rollout
 

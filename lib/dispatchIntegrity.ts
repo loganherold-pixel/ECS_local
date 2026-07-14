@@ -22,6 +22,8 @@ export type DispatchIntegrityEntityType =
   | 'timeline_event'
   | 'mission_command'
   | 'mission_command_event'
+  | 'guardian_check_in'
+  | 'guardian_check_in_event'
   | 'operational_playbook'
   | 'operational_playbook_event'
   | 'offline_action'
@@ -72,6 +74,8 @@ const ENTITY_PREFIX: Record<DispatchIntegrityEntityType, string> = {
   timeline_event: 'local-timeline',
   mission_command: 'local-mission-command',
   mission_command_event: 'local-mission-event',
+  guardian_check_in: 'local-guardian-check-in',
+  guardian_check_in_event: 'local-guardian-event',
   operational_playbook: 'local-playbook',
   operational_playbook_event: 'local-playbook-event',
   offline_action: 'local-offline-action',

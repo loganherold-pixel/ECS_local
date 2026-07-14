@@ -59,6 +59,10 @@ export type ReportIncidentInput = {
   notes?: string;
   reportedBy?: string | null;
   assessmentEscalation?: ExpeditionAssessmentEscalationMetadata | null;
+  missionCommandLink?: {
+    commandId: string;
+    idempotencyKey: string;
+  } | null;
 };
 
 export type SafetyChecklistItemKey =
@@ -163,6 +167,14 @@ export type IncidentStatusTransitionInput = {
   status: IncidentStatus;
   reason?: string;
   actor?: string | null;
+};
+
+export type AssignIncidentCommandLeadInput = {
+  incidentId: string;
+  memberId: string;
+  memberLabel: string;
+  actorId: string;
+  actorLabel: string;
 };
 
 export type ClearIncidentInput = {
@@ -580,6 +592,67 @@ function buildIncidentContext(input: ReportIncidentInput): IncidentContext {
       incidentRecoveryContext: input.contextSnapshot ?? null,
       manualLocationDescription: cleanText(input.manualLocationDescription) ?? null,
       assessmentEscalation: input.assessmentEscalation ?? null,
+      missionCommandLink: input.missionCommandLink
+        ? {
+            commandId: cleanText(input.missionCommandLink.commandId),
+            idempotencyKey: cleanText(input.missionCommandLink.idempotencyKey),
+          }
+        : null,
+    },
+  };
+}
+
+function readMissionCommandLink(incident: IncidentContext): {
+  commandId: string | null;
+  idempotencyKey: string | null;
+} | null {
+  const value = incident.metadata?.missionCommandLink;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return {
+    commandId: cleanText(record.commandId) ?? null,
+    idempotencyKey: cleanText(record.idempotencyKey) ?? null,
+  };
+}
+
+function assignIncidentCommandLead(
+  incident: IncidentContext,
+  input: AssignIncidentCommandLeadInput,
+): IncidentContext {
+  const existing = incident.metadata?.missionCommandLead;
+  const existingRecord = existing && typeof existing === 'object' && !Array.isArray(existing)
+    ? existing as Record<string, unknown>
+    : null;
+  if (cleanText(existingRecord?.memberId) === cleanText(input.memberId)) return incident;
+  const now = new Date().toISOString();
+  const memberId = cleanText(input.memberId);
+  const memberLabel = cleanText(input.memberLabel);
+  const actorId = cleanText(input.actorId);
+  const actorLabel = cleanText(input.actorLabel);
+  if (!memberId || !memberLabel || !actorId || !actorLabel) return incident;
+  const event = buildGenericTimelineEvent(incident.id, {
+    incidentId: incident.id,
+    type: 'note',
+    title: 'command lead assigned',
+    summary: `${memberLabel} assigned as Incident Room command lead.`,
+    actor: actorLabel,
+    data: {
+      commandLeadMemberId: memberId,
+      assignedByMemberId: actorId,
+    },
+  });
+  return {
+    ...incident,
+    updatedAt: now,
+    timeline: [...(incident.timeline ?? []), event],
+    metadata: {
+      ...(incident.metadata ?? {}),
+      missionCommandLead: {
+        memberId,
+        label: memberLabel,
+        assignedAt: now,
+        assignedBy: actorId,
+      },
     },
   };
 }
@@ -1234,10 +1307,29 @@ export const incidentRecoveryWorkflowStore = {
   },
 
   reportIncident(input: ReportIncidentInput): IncidentContext {
+    const idempotencyKey = cleanText(input.missionCommandLink?.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = incidents.find((candidate) => (
+        readMissionCommandLink(candidate)?.idempotencyKey === idempotencyKey
+      ));
+      if (existing) return cloneIncident(existing);
+    }
     const incident = buildIncidentContext(input);
     incidents = [incident, ...incidents];
     emit();
     return cloneIncident(incident);
+  },
+
+  assignCommandLead(input: AssignIncidentCommandLeadInput): IncidentContext | null {
+    const target = incidents.find((incident) => incident.id === input.incidentId) ?? null;
+    if (!target) return null;
+    const updatedIncident = assignIncidentCommandLead(target, input);
+    if (updatedIncident === target) return cloneIncident(target);
+    incidents = incidents.map((incident) => (
+      incident.id === target.id ? updatedIncident : incident
+    ));
+    emit();
+    return cloneIncident(updatedIncident);
   },
 
   saveSafetyChecklist(input: SafetyChecklistInput): IncidentContext | null {

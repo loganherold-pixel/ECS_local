@@ -325,7 +325,10 @@ export function buildMissionCommandFromComposer(
 
   const targetResult = resolveMissionCommandComposerTarget(input.form, input.catalog, input.actor, input.soloMode);
   if (!targetResult.ok) issues.push(targetResult.issue);
-  const assignmentResult = resolveMissionCommandComposerAssignment(input.form, input.catalog);
+  const selfTarget = targetResult.ok && targetResult.target.kind === 'solo';
+  const assignmentResult = selfTarget
+    ? { ok: true as const, target: null }
+    : resolveMissionCommandComposerAssignment(input.form, input.catalog);
   if (!assignmentResult.ok) issues.push(assignmentResult.issue);
   const contextResult = resolveMissionCommandComposerContext(input.form, input.catalog);
   if (!contextResult.ok) issues.push(contextResult.issue);
@@ -338,7 +341,7 @@ export function buildMissionCommandFromComposer(
       issues.push({ field: 'permission', message: permission.reason ?? input.permissions.disabledReason });
     }
   }
-  if (assignmentResult.ok && assignmentResult.target) {
+  if (!selfTarget && assignmentResult.ok && assignmentResult.target) {
     const permission = input.permissions.can('assign_member');
     if (!permission.allowed) {
       issues.push({ field: 'permission', message: permission.reason ?? input.permissions.disabledReason });
@@ -348,11 +351,13 @@ export function buildMissionCommandFromComposer(
   if (!targetResult.ok || !assignmentResult.ok || !contextResult.ok || !deadlineResult.ok) {
     return { ok: false, issues: uniqueIssues(issues) };
   }
-  const acknowledgmentResult = resolveAcknowledgmentPolicy(
-    input.form,
-    targetResult.targetMemberIds,
-    input.catalog,
-  );
+  const acknowledgmentResult = selfTarget
+    ? { ok: true as const, policy: { mode: 'none' as const, targetMemberIds: [] } }
+    : resolveAcknowledgmentPolicy(
+        input.form,
+        targetResult.targetMemberIds,
+        input.catalog,
+      );
   if (!acknowledgmentResult.ok) issues.push(acknowledgmentResult.issue);
   if (issues.length > 0 || !acknowledgmentResult.ok) {
     return { ok: false, issues: uniqueIssues(issues) };
@@ -391,7 +396,8 @@ export function buildMissionCommandFromComposer(
         updatedAt: now,
       }
     : undefined;
-  const deliveryState = input.queueDelivery ? 'queued' as const : 'local' as const;
+  const shouldQueueDelivery = input.queueDelivery && !selfTarget;
+  const deliveryState = shouldQueueDelivery ? 'queued' as const : 'local' as const;
   const commandCandidate: MissionCommand = {
     schemaVersion: MISSION_COMMAND_SCHEMA_VERSION,
     version: 1,
@@ -435,16 +441,16 @@ export function buildMissionCommandFromComposer(
   }
   const event = createMissionCommandEvent({
     command,
-    type: input.queueDelivery ? 'queued' : 'created',
+    type: shouldQueueDelivery ? 'queued' : 'created',
     actor: command.creator,
     occurredAt: now,
-    summary: input.queueDelivery
+    summary: shouldQueueDelivery
       ? `${command.title} queued for delivery.`
       : `${command.title} created locally.`,
     idempotencyKey: createDispatchIdempotencyKey({
       expeditionId: command.expeditionId,
       entityType: 'mission_command_event',
-      actionType: input.queueDelivery ? 'initial_queue' : 'create',
+      actionType: shouldQueueDelivery ? 'initial_queue' : 'create',
       actorMemberId: command.creator.id,
       sourceEntityId: command.id,
     }),
@@ -456,6 +462,7 @@ function composerTargetPatch(
   target: MissionCommandTarget,
   soloMode: boolean,
 ): Partial<MissionCommandComposerForm> | null {
+  if (soloMode && target.kind !== 'solo') return null;
   if (target.kind === 'member') return { targetKind: 'member', targetMemberId: target.memberId };
   if (target.kind === 'team') return { targetKind: 'selected_members', selectedMemberIds: [...target.memberIds] };
   if (target.kind === 'role') return { targetKind: 'role', targetRoleId: target.roleId };
@@ -518,6 +525,9 @@ function resolveMissionCommandComposerTarget(
   actor: MissionCommandActor,
   soloMode: boolean,
 ): { ok: true; target: MissionCommandTarget; targetMemberIds: string[] } | { ok: false; issue: MissionCommandComposerIssue } {
+  if (soloMode && form.targetKind !== 'self') {
+    return invalid('targetKind', 'Solo Mission Command supports only self-targeted local actions.');
+  }
   switch (form.targetKind) {
     case 'self':
       return soloMode

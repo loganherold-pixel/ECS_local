@@ -91,6 +91,14 @@ import { useApp } from '../../context/AppContext';
 import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
 import { useConvoyCommandData } from '../dashboard/commandCenter';
 import { OperationalDeltaBriefCard } from './OperationalDeltaBriefCard';
+import MissionCommandProposalAction from '../mission-command/MissionCommandProposalAction';
+import { createDashboardMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
+import type { MissionCommandProposalBuildResult } from '../../lib/dispatchMissionCommandProposal';
+import { buildReadinessAssessmentSourceTruthBinding } from '../../lib/sourceTruthAdapters';
+import {
+  isDispatchFeatureEnabled,
+  resolveDispatchRolloutConfig,
+} from '../../lib/dispatchRolloutConfig';
 
 type CommandBriefScreenProps = {
   embedded?: boolean;
@@ -1115,10 +1123,12 @@ function RecoveryBriefSection({
   assessment,
   category,
   onOpenDispatch,
+  buildMissionCommandProposal,
 }: {
   assessment: ExpeditionReadinessAssessment | null;
   category?: ExpeditionReadinessCategory;
   onOpenDispatch: () => void;
+  buildMissionCommandProposal?: () => MissionCommandProposalBuildResult;
 }) {
   const recovery = assessment?.recoveryBrief;
   const coordinateText = recovery?.currentCoordinates
@@ -1167,7 +1177,16 @@ function RecoveryBriefSection({
           </ECSText>
         ))}
       </View>
-      <CommandBriefActionButton label="Open Dispatch" icon="radio-outline" onPress={onOpenDispatch} />
+      {buildMissionCommandProposal ? (
+        <MissionCommandProposalAction
+          label="Coordinate Recovery"
+          accessibilityLabel="Coordinate this recovery readiness context in Mission Command"
+          buildProposal={buildMissionCommandProposal}
+          grow
+        />
+      ) : (
+        <CommandBriefActionButton label="Open Dispatch" icon="radio-outline" onPress={onOpenDispatch} />
+      )}
     </CollapsibleBriefSection>
   );
 }
@@ -1298,6 +1317,10 @@ export default function CommandBriefScreen({
   const [briefExportAction, setBriefExportAction] = useState<CommandBriefExportAction | null>(null);
   const [briefExportMessage, setBriefExportMessage] = useState<string | null>(null);
   const [evidenceExportAction, setEvidenceExportAction] = useState<OfflineFailureDrillEvidenceExportAction | null>(null);
+  const missionCommandEnabled = useMemo(
+    () => isDispatchFeatureEnabled(resolveDispatchRolloutConfig(), 'missionCommand'),
+    [],
+  );
 
   useEffect(() => {
     void navigateRouteSessionStore.hydrateFromPersistence().then(() => {
@@ -1602,6 +1625,94 @@ export default function CommandBriefScreen({
     [readinessState.inputPatch.campCandidates],
   );
   const campDecisionClock = readinessState.inputPatch.campDecisionClock ?? null;
+  const buildRecoveryMissionCommandProposal = useCallback((): MissionCommandProposalBuildResult => {
+    if (!assessment) {
+      return {
+        ok: false,
+        safeCode: 'mission_command_proposal_readiness_missing',
+        reason: 'Readiness must be assessed before coordinating recovery context.',
+      };
+    }
+    const sourceTruth = buildReadinessAssessmentSourceTruthBinding(assessment).ref;
+    return createDashboardMissionCommandProposal({
+      sourceEntityId: `${readinessState.activeTripId ?? readinessState.activeRouteId ?? 'readiness'}:${assessment.updatedAt}`,
+      expeditionId: readinessState.activeTripId,
+      sourceSurface: 'ecs_brief',
+      situation: assessment.status === 'hold' ? 'offline_readiness_blocker' : 'validated_advisory',
+      title: 'Coordinate recovery readiness',
+      summary: assessment.explanation,
+      sourceTruth: [sourceTruth],
+      action: 'create_command',
+      command: {
+        type: 'recovery',
+        priority: assessment.status === 'hold' ? 'high' : 'normal',
+        title: 'Review recovery readiness',
+        instructions: assessment.recoveryBrief.recommendedPrep[0] ?? assessment.explanation,
+      },
+      facts: [
+        { key: 'readiness_status', label: 'Readiness status', value: assessment.status },
+        { key: 'readiness_confidence', label: 'Readiness confidence', value: assessment.confidence },
+      ],
+      operatorRequested: true,
+      offline: offlineExpeditionModeEngine.isOffline(),
+      returnRoute: '/dashboard',
+    });
+  }, [assessment, readinessState.activeRouteId, readinessState.activeTripId]);
+  const buildReadinessMissionCommandProposal = useCallback((): MissionCommandProposalBuildResult => {
+    if (!assessment) {
+      return {
+        ok: false,
+        safeCode: 'mission_command_proposal_readiness_missing',
+        reason: 'Readiness must be assessed before coordinating an ECS Brief situation.',
+      };
+    }
+    const issue = assessment.blockers[0] ?? assessment.warnings[0] ?? null;
+    const categoryId = issue?.categoryId ?? null;
+    const situation = categoryId === 'vehicle_fit'
+      ? 'vehicle_warning'
+      : categoryId === 'weather_window'
+        ? 'weather_warning'
+        : categoryId === 'offline_preparedness'
+          ? 'offline_readiness_blocker'
+          : categoryId === 'camp_legality_confidence' || categoryId === 'daylight_margin'
+            ? 'camp_deadline'
+            : categoryId === 'fuel_range_margin' || categoryId === 'power_runtime'
+              ? 'resource_warning'
+              : 'validated_advisory';
+    const commandType = situation === 'weather_warning'
+      ? 'hazard'
+      : situation === 'vehicle_warning' || situation === 'resource_warning'
+        ? 'resource'
+        : categoryId === 'route_risk' || situation === 'camp_deadline'
+          ? 'route'
+          : 'general';
+    const sourceTruth = buildReadinessAssessmentSourceTruthBinding(assessment).ref;
+    const issueSummary = issue?.detail ?? assessment.explanation;
+    return createDashboardMissionCommandProposal({
+      sourceEntityId: issue?.id ?? `${readinessState.activeTripId ?? readinessState.activeRouteId ?? 'readiness'}:${assessment.updatedAt}`,
+      expeditionId: readinessState.activeTripId,
+      sourceSurface: 'ecs_brief',
+      situation,
+      title: issue ? `Coordinate ${issue.label}` : 'Open Mission Command',
+      summary: issueSummary,
+      sourceTruth: [sourceTruth],
+      action: issue ? 'create_command' : 'open_mission_command',
+      command: issue ? {
+        type: commandType,
+        priority: issue.severity === 'blocker' ? 'high' : 'normal',
+        title: issue.label,
+        instructions: issue.detail,
+      } : null,
+      facts: [
+        { key: 'readiness_status', label: 'Readiness status', value: assessment.status },
+        { key: 'readiness_confidence', label: 'Readiness confidence', value: assessment.confidence },
+        ...(categoryId ? [{ key: 'category', label: 'Readiness category', value: categoryId }] : []),
+      ],
+      operatorRequested: true,
+      offline: offlineExpeditionModeEngine.isOffline(),
+      returnRoute: '/dashboard',
+    });
+  }, [assessment, readinessState.activeRouteId, readinessState.activeTripId]);
   const campDecisionClockEnabled = isCampDecisionClockFeatureEnabled({
     campDecisionClock: readinessState.inputPatch.campDecisionClockFeatureEnabled ?? null,
   });
@@ -1741,6 +1852,16 @@ export default function CommandBriefScreen({
               />
             </View>
             {assessment ? <ReadinessFreshnessLine assessment={assessment} /> : null}
+            {missionCommandEnabled && assessment ? (
+              <MissionCommandProposalAction
+                label={assessment.blockers.length > 0 || assessment.warnings.length > 0
+                  ? 'Coordinate In Dispatch'
+                  : 'Open Mission Command'}
+                accessibilityLabel="Coordinate this ECS Brief readiness decision in Mission Command"
+                buildProposal={buildReadinessMissionCommandProposal}
+                grow
+              />
+            ) : null}
           </View>
 
           {assessment?.departureAudit?.length ? (
@@ -1798,6 +1919,7 @@ export default function CommandBriefScreen({
                 assessment={assessment}
                 category={categoryMap.get('recovery_bailout_access')}
                 onOpenDispatch={() => pushRoute('/alert')}
+                buildMissionCommandProposal={missionCommandEnabled ? buildRecoveryMissionCommandProposal : undefined}
               />
             ) : section.id === 'fuel-power-range' ? (
               <FuelPowerRangeBriefSection

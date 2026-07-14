@@ -148,6 +148,8 @@ import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 import { normalizeECSReturnRoute } from '../../lib/routeManifest';
 import { ECS_STATE_COPY, ECS_TOAST_COPY } from '../../lib/ecsStateCopy';
 import { ECS_TEXT, ECS_TEXT_SPACING } from '../../lib/ecsTypographyTokens';
+import MissionCommandProposalAction from '../../components/mission-command/MissionCommandProposalAction';
+import { createFleetMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { ECS_STATUS } from '../../lib/ecsStatusTokens';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
@@ -1258,6 +1260,44 @@ function FleetPremiumVehicleCardComponent({
   const { vehicle, weightResult } = model;
   const scoringResult = resolveVisibleFleetScoring(model);
   const connectivity = resolveFleetConnectivityBadge(isOnline, offlineMode);
+  const buildMissionCommandProposal = useCallback(() => {
+    const sourceTruth = buildFleetWeightSourceTruthBinding({
+      vehicleId: vehicle.id,
+      vehicleName: vehicle.name,
+      updatedAt: model.fleetVehicle.buildProfile.updatedAt,
+      weightResult,
+    }).ref;
+    const recoveryItems = model.checklistRecommendations.filter((item) => item.category === 'offroad_recovery');
+    const confirmedRecoveryItems = recoveryItems.filter((item) => item.status === 'have_it').length;
+    const unresolvedRecoveryItems = recoveryItems.filter((item) => item.status === 'need_it' || item.status === 'not_sure').length;
+    return createFleetMissionCommandProposal({
+      sourceEntityId: vehicle.id,
+      title: `Coordinate ${vehicle.name}`,
+      summary: scoringResult.blockingIssues[0] ?? scoringResult.recommendations[0] ?? 'Review the current Fleet readiness snapshot in Mission Command.',
+      sourceTruth: [sourceTruth],
+      action: 'create_command',
+      command: {
+        type: 'resource',
+        priority: scoringResult.riskLevel === 'critical' ? 'high' : 'normal',
+        title: `Review ${vehicle.name} readiness`,
+        instructions: scoringResult.blockingIssues[0] ?? 'Review vehicle readiness, payload state, and recovery equipment before continuing.',
+        target: { kind: 'vehicle', vehicleId: vehicle.id },
+      },
+      snapshot: {
+        vehicleId: vehicle.id,
+        label: vehicle.name,
+        readiness: `${formatFleetScore(scoringResult.readinessScore)} / ${scoringResult.riskLevel}`,
+        payload: weightResult.payloadRemaining
+          ? `${formatFleetWeightValue(weightResult.payloadRemaining.lbs)} remaining`
+          : 'Payload remaining unavailable',
+        recoveryEquipment: `${confirmedRecoveryItems} confirmed / ${unresolvedRecoveryItems} unresolved`,
+        confidence: sourceTruth.confidence,
+      },
+      operatorRequested: true,
+      offline: offlineMode || !isOnline,
+      returnRoute: '/fleet',
+    });
+  }, [isOnline, model, offlineMode, scoringResult, vehicle, weightResult]);
   return (
     <ECSCard variant="primary" selected={isActive} style={s.premiumVehicleCard}>
       <View style={s.premiumCardHeader}>
@@ -1343,6 +1383,14 @@ function FleetPremiumVehicleCardComponent({
           <ECSButton label="Weight Summary" icon="speedometer-outline" variant="secondary" size="compact" onPress={() => onWeightSummary(vehicle)} numberOfLines={2} grow />
           <ECSButton label="Delete Vehicle" icon="trash-outline" variant="destructive" size="compact" onPress={() => onDelete(vehicle)} numberOfLines={2} grow />
         </ECSActionRow>
+        {isActive ? (
+          <MissionCommandProposalAction
+            label="Coordinate Vehicle"
+            accessibilityLabel={`Coordinate ${vehicle.name} in Mission Command`}
+            buildProposal={buildMissionCommandProposal}
+            grow
+          />
+        ) : null}
       </ECSCardFooter>
 
       {openPanel ? (

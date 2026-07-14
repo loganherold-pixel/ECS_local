@@ -21,6 +21,7 @@ import { parseGeoFile, getPrimaryRouteCoordinates } from '../lib/gpxParser';
 import { normalizeCanonicalRouteGeometry } from '../lib/routeGeometryLifecycle';
 import { classifyExploreRouteAuthority } from '../lib/exploreRouteAuthority';
 import Header from '../components/Header';
+import MissionCommandProposalAction from '../components/mission-command/MissionCommandProposalAction';
 import { ExplorePlanningTabs } from '../components/discover/ExplorePlanningTabs';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import TopoBackground from '../components/TopoBackground';
@@ -117,6 +118,7 @@ import {
 } from '../lib/explore/exploreTripBuilderWizard';
 import { liveTrailPackCatalogStore } from '../lib/explore/liveTrailPackCatalog';
 import { trailPackToExpeditionOpportunity } from '../lib/explore/trailPacks';
+import { createExploreMissionCommandProposal } from '../lib/dispatchMissionCommandSourceAdapters';
 import { routeStore, waitForRouteStoreHydration } from '../lib/routeStore';
 import { runStore, waitForRunStoreHydration } from '../lib/runStore';
 import {
@@ -255,6 +257,7 @@ type TripBuilderResultSectionKey =
   | 'smart_resupply'
   | 'ecs_notes'
   | 'items_to_verify'
+  | 'mission_command'
   | 'offline_cta';
 
 type TripMapCoordinate = {
@@ -5641,7 +5644,7 @@ export default function ExploreTripBuilderScreen() {
     if (plan.smartResupplyPlan) {
       sections.push('smart_resupply');
     }
-    sections.push('ecs_notes', 'items_to_verify', 'offline_cta');
+    sections.push('ecs_notes', 'items_to_verify', 'mission_command', 'offline_cta');
     return sections;
   }, [itineraryEditMode, plan]);
 
@@ -5907,6 +5910,68 @@ export default function ExploreTripBuilderScreen() {
               ))
             )}
           </ResultBlock>
+        );
+      case 'mission_command':
+        return (
+          <MissionCommandProposalAction
+            label="Coordinate Route Review"
+            accessibilityLabel={`Coordinate the ${plan.route.name} trip plan in Mission Command`}
+            buildProposal={() => {
+              const sourceTruth = {
+                id: `trip-builder-plan:${plan.id}`,
+                origin: 'cached' as const,
+                role: 'primary' as const,
+                policyKey: 'default' as const,
+                authority: 'ECS Trip Builder',
+                authorityKind: 'ecs' as const,
+                provider: plan.route.source,
+                observedAt: plan.generatedAt,
+                fetchedAt: null,
+                expiresAt: null,
+                confidence: plan.route.routeDataConfidence,
+                coverage: plan.warnings.length > 0 ? 'partial' as const : 'complete' as const,
+                availability: plan.warnings.length > 0 ? 'degraded' as const : 'usable' as const,
+                conflictState: 'none' as const,
+                conflict: false,
+                warningCodes: plan.warnings.slice(0, 12).map((warning) => warning.id),
+              };
+              return createExploreMissionCommandProposal({
+                sourceEntityId: plan.id,
+                sourceSurface: 'trip_builder',
+                planningAction: 'route_review',
+                title: `Coordinate route review: ${plan.route.name}`,
+                summary: plan.warnings[0]?.message ?? 'Review the generated trip plan, route milestones, and preparation tasks before activation.',
+                sourceTruth: [sourceTruth],
+                linkedContext: {
+                  id: plan.route.routeId,
+                  type: 'route',
+                  title: plan.route.name,
+                  subtitle: `${formatMiles(plan.estimate.totalDistanceMiles)} / ${plan.route.routeDataConfidence} confidence`,
+                  sourceTruth,
+                  sourceTruthPolicyKey: 'default',
+                  observedAt: plan.generatedAt,
+                  metadata: {
+                    tripPlanId: plan.id,
+                    routeAssetId: plan.route.routeAssetId ?? null,
+                  },
+                },
+                action: 'create_command',
+                command: {
+                  type: 'route',
+                  priority: plan.warnings.length > 0 ? 'high' : 'normal',
+                  title: `Review ${plan.route.name} plan`,
+                  instructions: plan.warnings[0]?.message ?? 'Review route, check-in, rally, and preparation milestones before departure.',
+                },
+                facts: [
+                  { key: 'plan_id', label: 'Trip plan', value: plan.id },
+                  { key: 'warning_count', label: 'Items to verify', value: String(plan.warnings.length) },
+                ],
+                operatorRequested: true,
+                returnRoute: '/explore-trip-builder',
+              });
+            }}
+            grow
+          />
         );
       case 'offline_cta':
         return (

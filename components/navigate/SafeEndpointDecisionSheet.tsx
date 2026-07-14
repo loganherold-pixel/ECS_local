@@ -17,6 +17,8 @@ import {
 import type { CampOpsSafeEndPointDelayPreset } from '../../lib/campops/campOpsSafeEndpoint';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { ECS, TACTICAL } from '../../lib/theme';
+import MissionCommandProposalAction from '../mission-command/MissionCommandProposalAction';
+import { createCampOpsMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
 
 type DelayControlKey = CampOpsSafeEndPointDelayPreset | 'custom';
 
@@ -339,6 +341,54 @@ export default function SafeEndpointDecisionSheet({
               onPress={() => void onPreviewEndpoint(selectedEndpoint)}
               accessibilityLabel={`Preview ${selectedEndpoint.name} on the map without changing the active plan`}
               style={styles.mapPreviewButton}
+            />
+            <MissionCommandProposalAction
+              label="Coordinate Camp Decision"
+              accessibilityLabel={`Coordinate the CampOps decision for ${selectedEndpoint.name} in Mission Command`}
+              buildProposal={() => createCampOpsMissionCommandProposal({
+                sourceEntityId: selectedEndpoint.candidate.id,
+                expeditionId: decisionContext.tripId,
+                decision: model.plannedCampStatus === 'downgraded' || model.plannedCampStatus === 'rejected'
+                  ? 'camp_diversion_deadline'
+                  : selectedEndpoint.role === 'backup'
+                    ? 'backup_endpoint_review'
+                    : 'camp_decision',
+                authority: 'campops',
+                title: `Coordinate ${selectedEndpoint.roleLabel.toLowerCase()}`,
+                summary: model.summary,
+                sourceTruth: [selectedEndpoint.sourceTruth],
+                linkedContext: {
+                  id: selectedEndpoint.candidate.id,
+                  type: 'camp',
+                  title: selectedEndpoint.name,
+                  subtitle: `${selectedEndpoint.roleLabel} / ${selectedEndpoint.statusLabel}`,
+                  coordinates: selectedEndpoint.candidate.location,
+                  sourceTruth: selectedEndpoint.sourceTruth,
+                  sourceTruthPolicyKey: selectedEndpoint.sourceTruthPolicyKey,
+                  observedAt: selectedEndpoint.sourceTruth.observedAt ?? undefined,
+                  stale: selectedEndpoint.sourceTruth.warningCodes?.some((code) => code.includes('stale')) ?? false,
+                  metadata: {
+                    campOpsRole: selectedEndpoint.role,
+                    routeId: decisionContext.routeId ?? null,
+                  },
+                },
+                action: 'create_command',
+                command: {
+                  type: 'route',
+                  priority: model.plannedCampStatus === 'rejected' ? 'high' : 'normal',
+                  title: `Review camp endpoint: ${selectedEndpoint.name}`,
+                  instructions: model.nextAction,
+                },
+                facts: [
+                  { key: 'endpoint_role', label: 'Endpoint role', value: selectedEndpoint.roleLabel },
+                  { key: 'decision_deadline', label: 'Decision deadline', value: model.decisionPoint.deadlineText },
+                  { key: 'campops_status', label: 'CampOps status', value: model.statusLabel },
+                ],
+                operatorRequested: true,
+                offline: decisionContext.connectivityStatus === 'offline',
+                returnRoute: '/navigate',
+              })}
+              grow
             />
           </ECSPanel>
         ) : null}

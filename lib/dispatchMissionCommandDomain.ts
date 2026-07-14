@@ -259,11 +259,16 @@ export function requestMissionCommandFollowUp(
     requestId?: string;
   },
 ): MissionCommandMutationResult {
+  const personalAction = command.target.kind === 'solo';
   if (isTerminalOperationalState(command.operationalState)) {
-    return invalidMutation(command, 'Resolved, cancelled, or expired Mission Commands cannot request follow-up.');
+    return invalidMutation(command, personalAction
+      ? 'Completed or cancelled personal actions cannot accept status notes.'
+      : 'Resolved, cancelled, or expired Mission Commands cannot request follow-up.');
   }
   const message = boundedText(input.message, 500);
-  if (!message) return invalidMutation(command, 'Follow-up instructions are required.');
+  if (!message) return invalidMutation(command, personalAction
+    ? 'A manual status note is required.'
+    : 'Follow-up instructions are required.');
 
   const occurredAt = normalizeIso(input.occurredAt) ?? new Date().toISOString();
   if (command.updatedAt === occurredAt) {
@@ -292,9 +297,9 @@ export function requestMissionCommandFollowUp(
       type: 'follow_up_requested',
       actor: input.actor,
       occurredAt,
-      summary: `Follow-up requested: ${message}`,
+      summary: personalAction ? `Manual status note: ${message}` : `Follow-up requested: ${message}`,
       idempotencyKey,
-      metadata: { reasonCode: 'manual_follow_up_request' },
+      metadata: { reasonCode: personalAction ? 'manual_status_note' : 'manual_follow_up_request' },
     }),
   };
 }
@@ -550,6 +555,9 @@ export function sanitizeMissionCommandLinkedContext(
     title: boundedText(context.title, 180),
     subtitle: boundedOptionalText(context.subtitle, 240),
     routeSegmentId: boundedOptionalText(context.routeSegmentId, 160),
+    accuracyMeters: Number.isFinite(context.accuracyMeters) && Number(context.accuracyMeters) >= 0
+      ? Number(context.accuracyMeters)
+      : undefined,
     sourceTruth: context.sourceTruth ? sanitizeSourceTruthRef(context.sourceTruth) : undefined,
     sourceTruthPolicyKey: context.sourceTruthPolicyKey,
     observedAt: normalizeIso(context.observedAt),

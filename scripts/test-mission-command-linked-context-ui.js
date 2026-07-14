@@ -24,7 +24,7 @@ assert.match(commandCenter, /mapContextEnabled: dispatchRollout\.mapContextInteg
 assert.match(commandCenter, /pushSingleFlight\(result\.route\)/);
 assert.match(commandCenter, /setSelectedEventId\(targetEvent\.id\)/);
 assert.match(commandCenter, /missionCommandId\?: string \| string\[\]/);
-assert.match(commandCenter, /requestedCommandId=\{requestedMissionCommandId\}/);
+assert.match(commandCenter, /requestedCommandId=\{incidentRoomRequestedCommandId \?\? requestedMissionCommandId\}/);
 assert.match(commandCenter, /inspectLinkedContext=\{inspectMissionCommandContext\}/);
 
 assert.match(commandBoard, /requestedCommandId\?: string \| null/);

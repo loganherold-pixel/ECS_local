@@ -87,7 +87,14 @@ function addThresholdResult(args) {
 function measuredSizes(auditReport) {
   const apk = currentProductionArtifact(auditReport.androidArtifacts?.apks ?? []);
   const aab = currentProductionArtifact(auditReport.androidArtifacts?.aabs ?? []);
-  const largestAssetCandidates = [
+  const inventoryAssets = (auditReport.assetInventory?.assets ?? [])
+    .filter((item) => item.budgetCounted === true && item.productionIncluded === true)
+    .map((item) => ({
+      path: item.filePath,
+      bytes: item.rawSizeBytes,
+      category: 'assets',
+    }));
+  const largestAssetCandidates = inventoryAssets.length > 0 ? inventoryAssets : [
     ...(auditReport.largestAssets ?? []),
     ...(auditReport.assetOptimization?.candidates ?? []).map((item) => ({
       path: item.path,
@@ -103,7 +110,7 @@ function measuredSizes(auditReport) {
     aabBytes: aab?.bytes ?? 0,
     aabPath: aab?.path ?? null,
     expoExportBytes: auditReport.totals?.expoExportBytes ?? 0,
-    productionAssetsBytes: auditReport.totals?.assetsBytes ?? 0,
+    productionAssetsBytes: auditReport.totals?.productionAssetsBytes ?? auditReport.totals?.assetsBytes ?? 0,
     largestAssetBytes: largestAsset?.bytes ?? 0,
     largestAssetPath: largestAsset?.path ?? null,
     offlineStarterBytes: auditReport.totals?.offlineStarterBytes ?? 0,
