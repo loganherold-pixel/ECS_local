@@ -179,12 +179,15 @@ assert.match(
   'Opening an active GPS ping should stop the attention pulse by marking it viewed.',
 );
 
-const renderStart = source.indexOf('const renderEvent: ListRenderItem<DispatchEvent>');
-const renderEnd = source.indexOf('return (', renderStart);
-assert.ok(renderStart >= 0 && renderEnd > renderStart, 'renderEvent should exist before component return.');
-const renderEvent = source.slice(renderStart, renderEnd);
+const eventPressStart = source.indexOf('const handleEventRowPress = useCallback');
+const eventPressEnd = source.indexOf('const renderEvent = useCallback', eventPressStart);
+assert.ok(
+  eventPressStart >= 0 && eventPressEnd > eventPressStart,
+  'The memoized event-row press handler should exist before renderEvent.',
+);
+const eventPressHandler = source.slice(eventPressStart, eventPressEnd);
 assert.match(
-  renderEvent,
+  eventPressHandler,
   /if \(isRecoveryCriticalEvent\(event\)\) \{[\s\S]*handleOpenEmergencyPing\(event\);[\s\S]*return;/,
   'Clicking a recovery-critical feed row should open event detail, mark it viewed, and skip threat drilldown.',
 );

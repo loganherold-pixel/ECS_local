@@ -248,6 +248,7 @@ import {
 } from '../../lib/dispatchInviteDomain';
 import {
   createDispatchRealtimeSession,
+  isMissionCommandRealtimeEnvelope,
   type DispatchRealtimeSession,
   type DispatchRealtimeStatus,
 } from '../../lib/dispatchRealtimeAdapter';
@@ -3557,7 +3558,7 @@ export default function DispatchCadCommandCenter() {
       clientId: realtimeClientId,
       onStatusChange: setRealtimeStatus,
       onEvent: (envelope) => {
-        if (envelope.type === 'mission_command_upsert' || envelope.type === 'mission_command_event_added') {
+        if (isMissionCommandRealtimeEnvelope(envelope)) {
           applyIncomingMissionCommand(envelope);
           return;
         }

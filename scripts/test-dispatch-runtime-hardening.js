@@ -108,6 +108,7 @@ async function main() {
   const lifecycle = load('lib/dispatchLifecycle.ts');
   const integrity = load('lib/dispatchIntegrity.ts');
   const permissions = load('lib/dispatchPermissionAdapter.ts');
+  const { isMissionCommandRealtimeEnvelope } = load('lib/dispatchRealtimeAdapter.ts');
   const { dispatchPersistenceAdapter } = load('lib/dispatchPersistenceAdapter.ts');
   const { replayQueuedDispatchActions } = load('lib/dispatchOfflineReplayAdapter.ts');
   const { dispatchEventStore, DISPATCH_EVENT_STORE_LIMIT } = load('lib/dispatchEventStore.ts');
@@ -133,6 +134,10 @@ async function main() {
     }),
     'awaiting_acknowledgment',
   );
+  assert.strictEqual(isMissionCommandRealtimeEnvelope({ type: 'mission_command_upsert' }), true);
+  assert.strictEqual(isMissionCommandRealtimeEnvelope({ type: 'mission_command_event_added' }), true);
+  assert.strictEqual(isMissionCommandRealtimeEnvelope({ type: 'mission_playbook_upsert' }), true);
+  assert.strictEqual(isMissionCommandRealtimeEnvelope({ type: 'ping_upsert' }), false);
 
   const keyA = integrity.createDispatchIdempotencyKey({
     expeditionId: 'exp-1',
@@ -395,6 +400,10 @@ async function main() {
   assert.ok(permissionIndex >= 0 && mutationIndex > permissionIndex, 'CAD actions must authorize before mutating dedupe or UI state.');
   assert.ok(cadSource.includes('ECS team coordination only. This does not contact emergency services.'));
   assert.ok(cadSource.includes("automatedSosTransmissionEnabled"));
+  assert.ok(
+    cadSource.includes('if (isMissionCommandRealtimeEnvelope(envelope))'),
+    'The Dispatch realtime handler must forward every typed Mission Command envelope, including playbooks.',
+  );
   assert.ok(commandCenterSource.includes("activeExpedition.source === 'local'"));
   assert.ok(commandCenterSource.includes("? 'local'"));
   assert.ok(!/const reportDenied[\s\S]{0,500}dispatchPersistenceAdapter\./.test(commandCenterSource));

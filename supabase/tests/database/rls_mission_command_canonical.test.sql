@@ -254,9 +254,8 @@ select is(
   1,
   'command role can create a deterministic playbook instance'
 );
-select is(
-  pg_temp.ecs_row_count($$insert into public.dispatch_mission_playbook_steps (expedition_id, convoy_id, playbook_instance_id, playbook_client_id, client_id, idempotency_key, actor_user_id, actor_member_id, step_id, step_type, step_state, summary, result, completed_at, client_created_at, client_updated_at, observed_at) values ('mission-expedition-rls', '23000000-0000-4000-8000-000000000001', '53000000-0000-4000-8000-000000000001', 'mission-playbook-1', 'mission-step-1', 'mission-step-key-1', '13000000-0000-4000-8000-000000000001', '33000000-0000-4000-8000-000000000001', 'review-context', 'review_context', 'completed', 'Context reviewed.', '{}', now(), now(), now(), now())$$),
-  1,
+select lives_ok(
+  $$insert into public.dispatch_mission_playbook_steps (expedition_id, convoy_id, playbook_instance_id, playbook_client_id, client_id, idempotency_key, actor_user_id, actor_member_id, step_id, step_type, step_state, result, client_created_at, client_updated_at, observed_at) values ('mission-expedition-rls', '23000000-0000-4000-8000-000000000001', '53000000-0000-4000-8000-000000000001', 'mission-playbook-1', 'mission-step-1', 'mission-step-key-1', '13000000-0000-4000-8000-000000000001', '33000000-0000-4000-8000-000000000001', 'review-context', 'review_context', 'completed', '{}', now(), now(), now())$$,
   'command role can persist a playbook step result'
 );
 select is(
