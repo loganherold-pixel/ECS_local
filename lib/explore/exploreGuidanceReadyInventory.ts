@@ -9,6 +9,8 @@ import {
 } from './exploreRefinementFilter';
 import {
   normalizeExploreWizardRouteCandidates,
+  getExploreRouteDetailState,
+  getExploreTripBuilderEligibility,
   type ExploreWizardCandidateSet,
   type ExploreWizardHiddenRoute,
   type ExploreWizardRouteSourceKind,
@@ -50,6 +52,28 @@ export type ExploreReadyRouteEligibilityResult = {
   exclusionReasons: ExploreGuidanceReadyExclusionReason[];
 };
 
+export type ExploreRouteAvailabilityExclusionCode =
+  | ExploreGuidanceReadyExclusionCode
+  | 'missing_route_identity'
+  | 'missing_route_endpoint';
+
+export type ExploreRouteAvailabilityDecision = {
+  eligible: boolean;
+  reason: string | null;
+  exclusionCodes: ExploreRouteAvailabilityExclusionCode[];
+  exclusionReasons: Array<{
+    code: ExploreRouteAvailabilityExclusionCode;
+    reason: string;
+  }>;
+};
+
+export type ExploreRouteAvailability = {
+  detailState: ReturnType<typeof getExploreRouteDetailState>;
+  discoverability: ExploreRouteAvailabilityDecision;
+  tripBuilder: ExploreRouteAvailabilityDecision;
+  guidance: ExploreReadyRouteEligibilityResult;
+};
+
 export type ExploreGuidanceReadyRouteExclusion = ExploreWizardHiddenRoute & {
   exclusionCodes: ExploreGuidanceReadyExclusionCode[];
   exclusionReasons: ExploreGuidanceReadyExclusionReason[];
@@ -66,6 +90,11 @@ export type ExploreGuidanceReadyInventoryInput = NormalizeExploreWizardCandidate
 
 export type ExploreGuidanceReadyInventory = {
   candidateSet: ExploreGuidanceReadyCandidateSet;
+  discoverableCandidateSet: ExploreGuidanceReadyCandidateSet;
+  discoverableCount: number;
+  totalDiscoverableCount: number;
+  discoverableRefinementCounts: Record<ExploreRefinementFilter, number>;
+  discoverableSourceCounts: Record<ExploreWizardRouteSourceKind | 'all', number>;
   readyCount: number;
   totalReadyCount: number;
   refinementCounts: Record<ExploreRefinementFilter, number>;
@@ -584,14 +613,8 @@ function collectExploreGuidanceReadyExclusions(
   }
 
   if (!hasExploreGuidanceReadyGeometry(route)) {
-    const routeGeometryModes = normalizedTokens(
-      routeRecord.routeGeometryMode,
-      metadata.routeGeometryMode,
-      metadataCatalogVerification.routeGeometryMode,
-      routeCatalogVerification.routeGeometryMode,
-    );
     const hasGeometryInput = routeGeometryFields(route).some((field) => field != null);
-    exclude(!hasGeometryInput || routeGeometryModes.includes('omitted') ? 'missing_geometry' : 'invalid_geometry');
+    exclude(!hasGeometryInput ? 'missing_geometry' : 'invalid_geometry');
   }
   if (textContains(blockerText, /geometry.*(?:impossible|invalid|incomplete|disconnected)/)) {
     exclude('invalid_geometry');
@@ -711,6 +734,47 @@ export function defaultExploreReadyRouteEligibility(
   route: ExpeditionOpportunity,
 ): ExploreReadyRouteEligibilityResult {
   return buildEligibilityResult(collectExploreGuidanceReadyExclusions(route));
+}
+
+function availabilityDecision(
+  reasons: Array<{ code: ExploreRouteAvailabilityExclusionCode; reason: string }>,
+): ExploreRouteAvailabilityDecision {
+  const uniqueReasons = Array.from(
+    new Map(reasons.map((reason) => [reason.code, reason])).values(),
+  );
+  return {
+    eligible: uniqueReasons.length === 0,
+    reason: uniqueReasons[0]?.reason ?? null,
+    exclusionCodes: uniqueReasons.map((reason) => reason.code),
+    exclusionReasons: uniqueReasons,
+  };
+}
+
+export function classifyExploreRouteAvailability(
+  route: ExpeditionOpportunity,
+): ExploreRouteAvailability {
+  const guidance = defaultExploreReadyRouteEligibility(route);
+  const detailState = getExploreRouteDetailState(route, guidance.reason);
+  const discoverabilityReasons = guidance.exclusionReasons.filter(
+    (reason) => !(detailState === 'deferred' && reason.code === 'missing_geometry'),
+  );
+  const tripBuilderEligibility = getExploreTripBuilderEligibility(route);
+  const tripBuilderReasons: Array<{
+    code: ExploreRouteAvailabilityExclusionCode;
+    reason: string;
+  }> = [...discoverabilityReasons];
+  if (!tripBuilderEligibility.eligible && tripBuilderEligibility.code) {
+    tripBuilderReasons.push({
+      code: tripBuilderEligibility.code,
+      reason: tripBuilderEligibility.reason ?? 'Route summary cannot open Trip Builder.',
+    });
+  }
+  return {
+    detailState,
+    discoverability: availabilityDecision(discoverabilityReasons),
+    tripBuilder: availabilityDecision(tripBuilderReasons),
+    guidance,
+  };
 }
 
 function sourceTitle(route: ExpeditionOpportunity): string {
@@ -925,6 +989,7 @@ function buildForRefinement(
   input: ExploreGuidanceReadyInventoryInput,
   refinement: ExploreRefinementFilter | null,
   getEligibility: EligibilityResolver,
+  purpose: 'guidance' | 'discovery' = 'guidance',
 ): ExploreGuidanceReadyCandidateSet {
   const eligibleInput: NormalizeExploreWizardCandidatesInput = {};
   const eligibleRoutes: {
@@ -957,11 +1022,21 @@ function buildForRefinement(
     }
 
     refinedRoutes.forEach((route) => {
-      const eligibility = applySourceAccessRequirement(
+      const guidanceEligibility = applySourceAccessRequirement(
         route,
         source.sourceKind,
         getEligibility(route),
       );
+      const eligibility = purpose === 'discovery'
+        ? buildEligibilityResult(
+            guidanceEligibility.exclusionReasons.filter(
+              (reason) => !(
+                reason.code === 'missing_geometry' &&
+                getExploreRouteDetailState(route, guidanceEligibility.reason) === 'deferred'
+              ),
+            ),
+          )
+        : guidanceEligibility;
       if (eligibility.eligible) {
         eligibleInput[source.key]?.push(route);
         eligibleRoutes.push({ route, sourceKind: source.sourceKind });
@@ -1024,8 +1099,9 @@ function countCanonicalEligibleRoutesForRefinement(
   input: ExploreGuidanceReadyInventoryInput,
   refinement: ExploreRefinementFilter | null,
   getEligibility: EligibilityResolver,
+  purpose: 'guidance' | 'discovery' = 'guidance',
 ): number {
-  return buildForRefinement(input, refinement, getEligibility).candidates.length;
+  return buildForRefinement(input, refinement, getEligibility, purpose).candidates.length;
 }
 
 function sourceCounts(candidateSet: ExploreWizardCandidateSet): Record<ExploreWizardRouteSourceKind | 'all', number> {
@@ -1046,6 +1122,15 @@ export function buildExploreGuidanceReadyInventory(
   const rangeCandidateSet = selectedRefinement == null
     ? candidateSet
     : buildForRefinement(input, null, getEligibility);
+  const discoverableCandidateSet = buildForRefinement(
+    input,
+    selectedRefinement,
+    getEligibility,
+    'discovery',
+  );
+  const rangeDiscoverableCandidateSet = selectedRefinement == null
+    ? discoverableCandidateSet
+    : buildForRefinement(input, null, getEligibility, 'discovery');
   const refinementCounts = EXPLORE_REFINEMENT_OPTIONS.reduce(
     (counts, option) => {
       counts[option.key] = option.key === selectedRefinement
@@ -1061,12 +1146,31 @@ export function buildExploreGuidanceReadyInventory(
     } as Record<ExploreRefinementFilter, number>,
   );
   const totalReadyCount = rangeCandidateSet.candidates.length;
+  const discoverableRefinementCounts = EXPLORE_REFINEMENT_OPTIONS.reduce(
+    (counts, option) => {
+      counts[option.key] = option.key === selectedRefinement
+        ? discoverableCandidateSet.candidates.length
+        : countCanonicalEligibleRoutesForRefinement(input, option.key, getEligibility, 'discovery');
+      return counts;
+    },
+    {
+      remoteness: 0,
+      dayTrip: 0,
+      weekendTrip: 0,
+      expedition: 0,
+    } as Record<ExploreRefinementFilter, number>,
+  );
   const rangeHiddenCandidateSet = totalReadyCount === 0
     ? rangeCandidateSet
     : emptyCandidateSet();
 
   return {
     candidateSet,
+    discoverableCandidateSet,
+    discoverableCount: discoverableCandidateSet.candidates.length,
+    totalDiscoverableCount: rangeDiscoverableCandidateSet.candidates.length,
+    discoverableRefinementCounts,
+    discoverableSourceCounts: sourceCounts(discoverableCandidateSet),
     readyCount: candidateSet.candidates.length,
     totalReadyCount,
     refinementCounts,

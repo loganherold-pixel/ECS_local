@@ -21,6 +21,7 @@ import { parseGeoFile, getPrimaryRouteCoordinates } from '../lib/gpxParser';
 import { normalizeCanonicalRouteGeometry } from '../lib/routeGeometryLifecycle';
 import { classifyExploreRouteAuthority } from '../lib/exploreRouteAuthority';
 import Header from '../components/Header';
+import { ECSAsyncStateMessage } from '../components/ECSStateMessage';
 import MissionCommandProposalAction from '../components/mission-command/MissionCommandProposalAction';
 import { ExplorePlanningTabs } from '../components/discover/ExplorePlanningTabs';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
@@ -113,11 +114,24 @@ import {
   type TripBuilderSuggestedEstablishedCampPin,
 } from '../lib/tripBuilder';
 import {
+  isExploreRouteCatalogDetailDeferred,
   importedRouteToExploreWizardRoute,
   runToExploreWizardRoute,
 } from '../lib/explore/exploreTripBuilderWizard';
 import { liveTrailPackCatalogStore } from '../lib/explore/liveTrailPackCatalog';
+import {
+  getResolvedExploreTripBuilderRouteDetail,
+  resolveExploreTripBuilderRouteDetail,
+} from '../lib/explore/exploreTripBuilderRouteDetail';
 import { trailPackToExpeditionOpportunity } from '../lib/explore/trailPacks';
+import {
+  beginECSAsyncSurfaceRequest,
+  cancelECSAsyncSurfaceRequest,
+  createECSAsyncSurfaceState,
+  settleECSAsyncSurfaceRequest,
+  type ECSAsyncCancellationReason,
+  type ECSAsyncSurfaceState,
+} from '../lib/state/asyncSurfaceState';
 import { createExploreMissionCommandProposal } from '../lib/dispatchMissionCommandSourceAdapters';
 import { routeStore, waitForRouteStoreHydration } from '../lib/routeStore';
 import { runStore, waitForRunStoreHydration } from '../lib/runStore';
@@ -3927,9 +3941,18 @@ export default function ExploreTripBuilderScreen() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedRouteDetailRetryGeneration, setSelectedRouteDetailRetryGeneration] = useState(0);
+  const [selectedRouteDetailState, setSelectedRouteDetailState] = useState<
+    ECSAsyncSurfaceState<ExpeditionOpportunity>
+  >(() => createECSAsyncSurfaceState<ExpeditionOpportunity>({
+    surfaceId: 'trip_builder_selected_route_detail',
+    provider: 'route_catalog_detail',
+  }));
   const [activeTripActivating, setActiveTripActivating] = useState(false);
   const [activeTripActivationError, setActiveTripActivationError] = useState<string | null>(null);
   const roadSearchSessionTokenRef = useRef(createRoadSearchSessionToken());
+  const selectedRouteDetailStateRef = useRef(selectedRouteDetailState);
+  const selectedRouteDetailAbortRef = useRef<AbortController | null>(null);
   const latestSelectedPlanningRouteRef = useRef<ExpeditionOpportunity | null>(null);
   const smartResupplyFuelOptionsRef = useRef<SmartResupplyPoi[]>([]);
   const smartResupplySupplyOptionsRef = useRef<SmartResupplyPoi[]>([]);
@@ -3961,6 +3984,12 @@ export default function ExploreTripBuilderScreen() {
     () => createMapboxRouteContextProviderRegistry(itinerarySearchToken, () => roadSearchSessionTokenRef.current),
     [itinerarySearchToken],
   );
+  const commitSelectedRouteDetailState = useCallback((
+    next: ECSAsyncSurfaceState<ExpeditionOpportunity>,
+  ) => {
+    selectedRouteDetailStateRef.current = next;
+    setSelectedRouteDetailState(next);
+  }, []);
   const commitSmartResupplyFuelOptions = useCallback((incoming: SmartResupplyPoi[]) => {
     const nextOptions = applySmartResupplyOptionRefresh(smartResupplyFuelOptionsRef.current, incoming);
     smartResupplyFuelOptionsRef.current = nextOptions;
@@ -4122,8 +4151,15 @@ export default function ExploreTripBuilderScreen() {
           const autoSetupRoute = shouldAutoOpenTripSetup
             ? nextRoutes.find((route) => String(route.id) === String(selectedRouteIdForState)) ?? handoffRoute ?? null
             : null;
-          setTripSetupStarted(shouldAutoOpenTripSetup);
-          setPreparedTripRoutePreview(shouldAutoOpenTripSetup ? buildPreparedTripRoutePreview(autoSetupRoute as ExpeditionOpportunity | null) : null);
+          const autoSetupRouteNeedsDetail = isExploreRouteCatalogDetailDeferred(
+            autoSetupRoute as ExpeditionOpportunity | null,
+          );
+          setTripSetupStarted(shouldAutoOpenTripSetup && !autoSetupRouteNeedsDetail);
+          setPreparedTripRoutePreview(
+            shouldAutoOpenTripSetup && !autoSetupRouteNeedsDetail
+              ? buildPreparedTripRoutePreview(autoSetupRoute as ExpeditionOpportunity | null)
+              : null,
+          );
           setSavedTripItineraryEditSession(null);
         }
         setError(null);
@@ -4144,11 +4180,156 @@ export default function ExploreTripBuilderScreen() {
     () => routes.find((route) => String(route.id) === selectedRouteId) ?? null,
     [routes, selectedRouteId],
   );
+  useEffect(() => {
+    if (!selectedRoute) return undefined;
+
+    selectedRouteDetailAbortRef.current?.abort('superseded');
+    const catalogSnapshot = liveTrailPackCatalogStore.getSnapshot();
+    const metadata = selectedRoute.routeMetadata && typeof selectedRoute.routeMetadata === 'object'
+      ? selectedRoute.routeMetadata as Record<string, unknown>
+      : {};
+    const trailPackId = typeof metadata.trailPackId === 'string'
+      ? metadata.trailPackId.trim()
+      : '';
+    const sourceVersion = typeof metadata.routeCatalogSourceVersion === 'string'
+      ? metadata.routeCatalogSourceVersion
+      : null;
+    const needsDetail = isExploreRouteCatalogDetailDeferred(selectedRoute);
+    const baseState: ECSAsyncSurfaceState<ExpeditionOpportunity> = {
+      ...selectedRouteDetailStateRef.current,
+      data: selectedRoute,
+      lastGoodData: selectedRoute,
+      source: catalogSnapshot.asyncState.source,
+      freshness: catalogSnapshot.asyncState.freshness,
+      resultCount: 1,
+    };
+    const started = beginECSAsyncSurfaceRequest(baseState, {
+      fingerprintInput: {
+        routeId: selectedRoute.id,
+        trailPackId: trailPackId || null,
+        sourceVersion,
+        retryGeneration: selectedRouteDetailRetryGeneration,
+      },
+      provider: 'route_catalog_detail',
+      preserveData: true,
+      preserveLastGood: true,
+    });
+    const identity = {
+      requestId: started.requestId,
+      generation: started.generation,
+      requestFingerprint: started.requestFingerprint,
+    };
+
+    if (!needsDetail) {
+      const ready = settleECSAsyncSurfaceRequest(started, {
+        ...identity,
+        status: 'ready',
+        source: catalogSnapshot.asyncState.source,
+        freshness: catalogSnapshot.asyncState.freshness,
+        data: selectedRoute,
+        lastGoodData: selectedRoute,
+        resultCount: 1,
+      }).state;
+      commitSelectedRouteDetailState(ready);
+      return undefined;
+    }
+
+    if (!trailPackId) {
+      const invalid = settleECSAsyncSurfaceRequest(started, {
+        ...identity,
+        status: 'error',
+        source: catalogSnapshot.asyncState.source,
+        freshness: catalogSnapshot.asyncState.freshness,
+        data: selectedRoute,
+        lastGoodData: selectedRoute,
+        safeErrorCode: 'ROUTE_CATALOG_DETAIL_IDENTITY_MISSING',
+        retryEligible: false,
+        resultCount: 1,
+      }).state;
+      commitSelectedRouteDetailState(invalid);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    selectedRouteDetailAbortRef.current = controller;
+    commitSelectedRouteDetailState(started);
+    void resolveExploreTripBuilderRouteDetail(selectedRoute, {
+      signal: controller.signal,
+    }).then((result) => {
+      if (controller.signal.aborted || result.status === 'cancelled') return;
+      if (result.status === 'error') {
+        const transition = settleECSAsyncSurfaceRequest(selectedRouteDetailStateRef.current, {
+          ...identity,
+          status: 'error',
+          source: catalogSnapshot.asyncState.source,
+          freshness: catalogSnapshot.asyncState.freshness,
+          data: result.route,
+          lastGoodData: result.route,
+          safeErrorCode: result.safeErrorCode,
+          retryEligible: result.retryEligible,
+          resultCount: 1,
+        });
+        if (transition.applied) commitSelectedRouteDetailState(transition.state);
+        return;
+      }
+      const mergedRoute = result.route;
+      const transition = settleECSAsyncSurfaceRequest(selectedRouteDetailStateRef.current, {
+        ...identity,
+        status: 'ready',
+        source: catalogSnapshot.asyncState.source,
+        freshness: catalogSnapshot.asyncState.freshness,
+        data: mergedRoute,
+        lastGoodData: mergedRoute,
+        resultCount: 1,
+      });
+      if (!transition.applied) return;
+      commitSelectedRouteDetailState(transition.state);
+      latestSelectedPlanningRouteRef.current = mergedRoute;
+      setRoutes((current) => current.map((route) => (
+        String(route.id) === String(selectedRoute.id) ? mergedRoute : route
+      )));
+      if (params.setup === '1' && String(params.routeId ?? '') === String(selectedRoute.id)) {
+        setPreparedTripRoutePreview(buildPreparedTripRoutePreview(mergedRoute));
+        setTripSetupStarted(true);
+      }
+    }).finally(() => {
+      if (selectedRouteDetailAbortRef.current === controller) {
+        selectedRouteDetailAbortRef.current = null;
+      }
+    });
+
+    return () => {
+      controller.abort('superseded');
+      const transition = cancelECSAsyncSurfaceRequest(selectedRouteDetailStateRef.current, {
+        ...identity,
+        reason: 'superseded' as ECSAsyncCancellationReason,
+      });
+      if (transition.applied) selectedRouteDetailStateRef.current = transition.state;
+      if (selectedRouteDetailAbortRef.current === controller) {
+        selectedRouteDetailAbortRef.current = null;
+      }
+    };
+  }, [
+    commitSelectedRouteDetailState,
+    params.routeId,
+    params.setup,
+    selectedRoute,
+    selectedRouteDetailRetryGeneration,
+  ]);
   const directRoutePickerRoutes = useMemo(
     () => (routes.length <= TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT ? routes : []),
     [routes],
   );
   const useDirectRoutePicker = directRoutePickerRoutes.length > 0;
+  const selectedRouteNeedsDetail = !!selectedRoute && isExploreRouteCatalogDetailDeferred(selectedRoute);
+  const resolvedSelectedRouteDetail = getResolvedExploreTripBuilderRouteDetail(
+    selectedRoute,
+    selectedRouteDetailState.status === 'ready' ? selectedRouteDetailState.data : null,
+  );
+  const selectedRouteDetailReady = resolvedSelectedRouteDetail != null;
+  const handleRetrySelectedRouteDetail = useCallback(() => {
+    setSelectedRouteDetailRetryGeneration((generation) => generation + 1);
+  }, []);
   useEffect(() => {
     latestSelectedPlanningRouteRef.current = selectedRoute;
   }, [selectedRoute]);
@@ -5192,8 +5373,9 @@ export default function ExploreTripBuilderScreen() {
   };
 
   const handleOpenTripBuilderSetup = () => {
-    const routeForSetup = selectedRoute ?? latestSelectedPlanningRouteRef.current;
+    const routeForSetup = resolvedSelectedRouteDetail ?? selectedRoute ?? latestSelectedPlanningRouteRef.current;
     if (!routeForSetup) return;
+    if (isExploreRouteCatalogDetailDeferred(routeForSetup) && !selectedRouteDetailReady) return;
     hapticMicro();
     if (String(routeForSetup.id) !== selectedRouteId) {
       setSelectedRouteId(String(routeForSetup.id));
@@ -6107,6 +6289,27 @@ export default function ExploreTripBuilderScreen() {
                     <Text style={styles.routePickerHint}>
                       SOURCE-BACKED OR IMPORTED: Select a reviewed Suggested Trailhead, saved route asset, or imported route file to start setup.
                     </Text>
+                    {selectedRouteNeedsDetail ? (
+                      <ECSAsyncStateMessage
+                        state={selectedRouteDetailState}
+                        subject="selected route detail"
+                        onRetry={handleRetrySelectedRouteDetail}
+                        retryLabel="Retry Route Detail"
+                        compact
+                        align="left"
+                        testID="trip-builder-selected-route-detail-state"
+                        copy={{
+                          loading: {
+                            title: 'Preparing Route in Trip Builder',
+                            message: 'The route summary remains selected while ECS fetches verified canonical geometry.',
+                          },
+                          recoverable_error: {
+                            title: 'Route Detail Unavailable',
+                            message: 'The summary remains available, but this route is not guidance ready and Trip Builder cannot prepare its geometry yet.',
+                          },
+                        }}
+                      />
+                    ) : null}
                     <TouchableOpacity
                       style={[styles.importRouteCard, routeImportState.status === 'loading' && styles.primaryButtonDisabled]}
                       onPress={handleImportRouteFile}
@@ -6172,9 +6375,12 @@ export default function ExploreTripBuilderScreen() {
                       />
                     )}
                     <TouchableOpacity
-                      style={[styles.primaryButton, !selectedRoute && styles.primaryButtonDisabled]}
-                      activeOpacity={selectedRoute ? 0.84 : 1}
-                      disabled={!selectedRoute}
+                      style={[
+                        styles.primaryButton,
+                        (!selectedRoute || !selectedRouteDetailReady) && styles.primaryButtonDisabled,
+                      ]}
+                      activeOpacity={selectedRoute && selectedRouteDetailReady ? 0.84 : 1}
+                      disabled={!selectedRoute || !selectedRouteDetailReady}
                       onPress={handleOpenTripBuilderSetup}
                       accessibilityRole="button"
                       accessibilityLabel="Open Trip Builder"

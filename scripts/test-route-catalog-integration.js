@@ -375,10 +375,10 @@ assert(
 );
 const guidanceInventoryBlock = discover
   .split('const exploreGuidanceReadyInventory = useMemo')[1]
-  ?.split('const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet')[0] ?? '';
+  ?.split('const exploreWizardCandidateSet = exploreGuidanceReadyInventory.discoverableCandidateSet')[0] ?? '';
 const canonicalPlanningBlock = discover
   .split('const canonicalExplorePlanningRoutes = useMemo<ExpeditionOpportunity[]>')[1]
-  ?.split('const exploreWizardSourceCounts = exploreGuidanceReadyInventory.sourceCounts')[0] ?? '';
+  ?.split('const exploreWizardSourceCounts = exploreGuidanceReadyInventory.discoverableSourceCounts')[0] ?? '';
 assert(
   guidanceInventoryBlock.includes('trailPacks: exploreWizardTrailPackSourceRoutes') &&
     guidanceInventoryBlock.includes('hiddenGemRoutes: exploreWizardHiddenGemSourceRoutes') &&
@@ -389,7 +389,7 @@ assert(
     canonicalPlanningBlock.includes('exploreWizardCandidateSet.candidates.map((candidate) => candidate.route)') &&
     discover.includes('routes: canonicalExplorePlanningRoutes as any') &&
     !discover.includes('const publicSuggestedTrailheadRoutes'),
-  'Explore planning/offline routes should use the shared Guidance Ready inventory, including ready favorites, saved routes, and imported route assets.',
+  'Explore planning/offline route discovery should use the shared discoverable inventory while retaining strict guidance readiness separately.',
 );
 assert(
   !discover.includes('ecs_demo_full_route_fixture') &&

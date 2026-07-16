@@ -139,9 +139,10 @@ assert(
     routeCatalog.includes('buildRouteCatalogSourceTruthBinding') &&
     routeCatalog.includes('route-source-truth-') &&
     !routeCatalog.includes("sourceType === 'official' ? 'live'") &&
-    routeCatalog.includes('onPreview(summary.routeId)') &&
-    routeCatalog.includes('onStartGuidance(summary.routeId)'),
-  'Route Catalog source badges should open the inspector while preserving preview and guidance handoffs.',
+    routeCatalog.includes('onOpenTripBuilder(summary.routeId)') &&
+    !routeCatalog.includes('onPreview(summary.routeId)') &&
+    !routeCatalog.includes('onStartGuidance(summary.routeId)'),
+  'Route Catalog source badges should open the inspector while preserving the summary-first Trip Builder handoff.',
 );
 assert(
     adapters.includes("confidence: 'unknown'") &&

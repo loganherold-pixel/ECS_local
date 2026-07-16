@@ -39,6 +39,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 const {
   EXPLORE_GUIDANCE_READY_EXCLUSION_CODES,
   buildExploreGuidanceReadyInventory,
+  classifyExploreRouteAvailability,
   defaultExploreReadyRouteEligibility,
   deriveExploreGuidanceProviderAvailability,
 } = require(path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'));
@@ -78,7 +79,7 @@ function makeRoute(id, overrides = {}) {
 }
 
 assert(
-  discover.includes('Guidance Ready Routes') &&
+  discover.includes('Available Routes') &&
     discover.includes('canonicalExplorePlanningRoutes') &&
     discover.includes('const mapInventory = buildExploreGuidanceReadyInventory') &&
     readyInventory.includes('MIN_DISCOVERY_ROUTE_MILES'),
@@ -107,9 +108,10 @@ assert(
   discover.includes('buildExploreGuidanceReadyInventory') &&
     discover.includes('defaultExploreReadyRouteEligibility') &&
     discover.includes('mapInventory.candidateSet.candidates') &&
-    discover.includes('exploreGuidanceReadyInventory.refinementCounts') &&
+    discover.includes('exploreGuidanceReadyInventory.discoverableCandidateSet') &&
+    discover.includes('exploreGuidanceReadyInventory.discoverableRefinementCounts') &&
     discover.includes('exploreGuidanceReadyInventory.totalReadyCount'),
-  'Discover should drive filter chips, map preview, and Guidance Ready Routes from the shared ready-route eligibility.',
+  'Discover should drive cards from explicit discoverability while retaining strict guidance-ready counts.',
 );
 assert(
   !discover.includes('function hasGuidanceReadyLineGeometry') &&
@@ -119,36 +121,32 @@ assert(
 assert(
     discover.includes('showGuidanceReadyBlockedNotice') &&
     discover.includes('exploreGuidanceReadyBlockedReasonText') &&
-    discover.includes('Routes Need Guidance Geometry') &&
-    discover.includes('No routes were converted into guidance, saved, or navigated from this lane.'),
-  'Explore should expose a compact, truthful blocked state when routes exist but none pass guidance-ready gates.',
+    discover.includes('Routes Blocked from Discovery') &&
+    discover.includes('identity, or supported-format gates'),
+  'Explore should reserve the blocked state for genuine discovery exclusions rather than deferred geometry.',
 );
 assert(
-  discover.includes('routeCatalogPreviewGeometryRequested') &&
-    discover.includes('includePreviewGeometry: routeCatalogPreviewGeometryRequested') &&
-    discover.includes('showGuidanceReadyGeometryLoading') &&
+  discover.includes('includePreviewGeometry: false') &&
+    !discover.includes('routeCatalogPreviewGeometryRequested') &&
     discover.includes('routeCatalogSearchRefreshKey'),
-  'Explore should deliberately request and track source-backed preview geometry independently of refinement selection.',
-);
-assert(
-  discover.includes('showGuidanceReadyGeometryLoading && visibleExploreWizardCandidates.length === 0'),
-  'A background route-preview refresh should keep existing ready, local, or last-good cards visible instead of replacing them with a blocking loader.',
+  'Explore should request summary metadata without list-time route geometry.',
 );
 assert(
   (discover.match(/requireFullCatalogDetail: true/g) ?? []).length >= 3 &&
     discover.includes('saveExploreRouteForPlanning(hydratedCandidate)') &&
-    discover.includes('handleBuildTripFromRoute(hydratedCandidate.route, {') &&
+    discover.includes("if (candidate.detailState === 'deferred')") &&
+    discover.includes("guardGuidanceReadyRouteHandoff(candidate.route, 'trip_builder_candidate')") &&
+    discover.includes("pathname: '/explore-trip-builder'") &&
     discover.includes('Verified route detail could not be loaded. Retry when the route provider is available.'),
-  'Navigate, save, and TripBuilder actions must require full catalog detail instead of accepting simplified search previews.',
+  'Deferred summaries should hand off directly while geometry-ready non-summary routes retain canonical hydrate/save normalization.',
 );
 assert(
   discover.includes('guardHydratedGuidanceReadyHandoff') &&
     discover.includes('guardGuidanceReadyRouteHandoff') &&
     discover.includes("guardHydratedGuidanceReadyHandoff(routeForHandoff, 'navigate')") &&
-    discover.includes("guardHydratedGuidanceReadyHandoff(routeForHandoff, 'trip_builder')") &&
     discover.includes('explore_hydrated_route_not_ready') &&
     discover.includes('defaultExploreReadyRouteEligibility(routeForPlanning)'),
-  'Navigate, TripBuilder, and planning actions must recheck readiness after authoritative detail hydration.',
+  'Navigate and guidance actions must continue to recheck readiness after authoritative detail hydration.',
 );
 assert(
   discover.includes('beginExploreRouteIntentRequest') &&
@@ -265,6 +263,82 @@ const foldedLineRoute = makeRoute('folded-line-route', {
     activeGuidance: { status: 'ready' },
   },
 });
+
+function makeDeferredCatalogRoute(id, overrides = {}) {
+  return makeRoute(`trail-pack:${id}`, {
+    routeGeometry: undefined,
+    routeMetadata: {
+      source: 'trail_pack',
+      trailPackId: id,
+      routeTypeStatus: 'suggested_trailhead',
+      routeGeometryMode: 'omitted',
+      reviewStatus: 'approved',
+      legalAccessStatus: 'verified',
+      catalogVerification: {
+        publicRecommendation: true,
+        blockers: [],
+        warnings: ['Route coordinates omitted from lightweight search.'],
+      },
+    },
+    ...overrides,
+  });
+}
+
+const deferredCatalogRoutes = [
+  makeDeferredCatalogRoute('summary-a'),
+  makeDeferredCatalogRoute('summary-b'),
+  makeDeferredCatalogRoute('summary-c'),
+];
+const deferredAvailability = classifyExploreRouteAvailability(deferredCatalogRoutes[0]);
+assert.strictEqual(deferredAvailability.detailState, 'deferred');
+assert.strictEqual(deferredAvailability.discoverability.eligible, true);
+assert.strictEqual(deferredAvailability.tripBuilder.eligible, true);
+assert.strictEqual(deferredAvailability.guidance.eligible, false);
+assert(
+  deferredAvailability.guidance.exclusionCodes.includes('missing_geometry'),
+  'Deferred summary geometry must remain a typed active-guidance exclusion.',
+);
+
+const genuinelyExcludedSummary = makeDeferredCatalogRoute('moderation-blocked', {
+  routeMetadata: {
+    source: 'trail_pack',
+    trailPackId: 'moderation-blocked',
+    routeGeometryMode: 'omitted',
+    reviewStatus: 'pending_review',
+    legalAccessStatus: 'verified',
+    catalogVerification: {
+      publicRecommendation: false,
+      blockers: ['Route is not approved for public recommendation'],
+    },
+  },
+});
+const summaryFirstInventory = buildExploreGuidanceReadyInventory({
+  trailPacks: [
+    ...deferredCatalogRoutes,
+    makeRoute('ready-alongside-summaries'),
+    genuinelyExcludedSummary,
+  ],
+  selectedRefinement: null,
+});
+assert.strictEqual(
+  summaryFirstInventory.discoverableCandidateSet.candidates.length,
+  4,
+  'Three metadata-only summaries and one geometry-ready route should remain visible.',
+);
+assert.strictEqual(summaryFirstInventory.totalDiscoverableCount, 4);
+assert.strictEqual(summaryFirstInventory.totalReadyCount, 1);
+assert.strictEqual(
+  summaryFirstInventory.discoverableCandidateSet.candidates.filter(
+    (candidate) => candidate.detailState === 'deferred' && !candidate.guidanceReady,
+  ).length,
+  3,
+  'Summary-only cards should be Trip Builder eligible without being mislabeled guidance ready.',
+);
+assert(
+  summaryFirstInventory.exclusions.some((entry) =>
+    entry.id === genuinelyExcludedSummary.id && entry.exclusionCodes.includes('moderation_pending')),
+  'A genuinely moderated record must remain excluded with its typed reason.',
+);
 
 assert.deepStrictEqual(
   EXPLORE_GUIDANCE_READY_EXCLUSION_CODES,
@@ -531,8 +605,25 @@ const topLevelOmittedGeometry = defaultExploreReadyRouteEligibility(makeRoute('t
   },
 }));
 assert(
-  topLevelOmittedGeometry.exclusionCodes.includes('missing_geometry'),
-  'Top-level catalog verification must participate in the geometry-readiness gate.',
+  !topLevelOmittedGeometry.exclusionCodes.includes('missing_geometry') &&
+    topLevelOmittedGeometry.exclusionCodes.includes('invalid_geometry'),
+  'Supplied geometry that conflicts with omitted-mode metadata must be invalid/degraded, not mislabeled as merely missing.',
+);
+const topLevelActuallyMissingGeometry = defaultExploreReadyRouteEligibility(makeRoute('top-level-actually-missing-geometry', {
+  routeGeometry: undefined,
+  routeMetadata: {
+    routeTypeStatus: 'suggested_trailhead',
+    legalAccessStatus: 'verified',
+  },
+  catalogVerification: {
+    publicRecommendation: true,
+    routeGeometryMode: 'omitted',
+    activeGuidance: { status: 'unavailable' },
+  },
+}));
+assert(
+  topLevelActuallyMissingGeometry.exclusionCodes.includes('missing_geometry'),
+  'Top-level catalog verification with no supplied geometry must retain the guidance-readiness exclusion.',
 );
 
 const emptyTopLevelCatalogAlias = defaultExploreReadyRouteEligibility(makeRoute('empty-top-level-catalog-alias', {
@@ -600,8 +691,9 @@ const conflictingGeometryAliases = defaultExploreReadyRouteEligibility(makeRoute
   },
 }));
 assert(
-  conflictingGeometryAliases.exclusionCodes.includes('missing_geometry'),
-  'Full/ready aliases must not override omitted or unavailable authoritative geometry state.',
+  conflictingGeometryAliases.exclusionCodes.includes('invalid_geometry') &&
+    !conflictingGeometryAliases.exclusionCodes.includes('missing_geometry'),
+  'Conflicting geometry aliases with supplied coordinates must be classified invalid rather than missing.',
 );
 
 const topLevelSourceAlias = defaultExploreReadyRouteEligibility(makeRoute('top-level-source-alias', {

@@ -423,15 +423,20 @@ assert.notStrictEqual(fallbackImageEntry.thumbnail.state, 'suppressed_mismatch')
   'RouteCatalogSummaryCard',
   'paginateRouteCatalogSummaries',
   'visibleRouteCatalogSummaries',
-  'handlePreviewRouteCatalogSummary',
-  'handleStartRouteCatalogSummaryGuidance',
-  'fetchRouteCatalogTrailPackDetail(routeId, {',
-  'signal: controller.signal',
-  "cancellationReason: 'superseded'",
-  'sourceVersion: summary.updatedAt',
+  'handleOpenRouteCatalogSummaryTripBuilder',
+  'onOpenTripBuilder={handleOpenRouteCatalogSummaryTripBuilder}',
+  'stageTripBuilderItineraryHandoff(routeForHandoff)',
+  "pathname: '/explore-trip-builder'",
+  'includePreviewGeometry: false',
 ].forEach((needle) => {
   assert(discoverSource.includes(needle), `Explore should use summary-first Trail Pack wiring: ${needle}.`);
 });
+assert(
+  !discoverSource.includes('handlePreviewRouteCatalogSummary') &&
+    !discoverSource.includes('handleStartRouteCatalogSummaryGuidance') &&
+    !discoverSource.includes('sourceVersion: summary.updatedAt'),
+  'Ordinary Explore summary presentation should not fetch route detail or expose geometry-dependent actions.',
+);
 assert(
   !discoverSource.includes('planRouteDiscoveryImagePrefetch'),
   'Explore Trail Pack summaries should not run image prefetch planning during initial render.',

@@ -151,8 +151,8 @@ assert.ok(
   discoverSource.includes('setDistanceRadius(snapshot.radiusMiles)') &&
     discoverSource.includes('setExploreRefinement(snapshot.refinement)') &&
     discoverSource.includes('setActiveExplorerCategoryPanel(snapshot.activeCategoryPanel)') &&
-    discoverSource.includes('setRouteCatalogPreviewGeometryRequested(true)'),
-  'Explore should restore validated range, refinement, and category filters and request preview geometry when needed.',
+    !discoverSource.includes('setRouteCatalogPreviewGeometryRequested'),
+  'Explore should restore validated range, refinement, and category filters without turning list hydration into a detail-geometry request.',
 );
 assert.ok(
   discoverSource.includes('applyExploreRefinementFilter(canonicalRadiusFilteredRoutes, exploreRefinement)'),
@@ -192,17 +192,17 @@ assert.ok(
 assert.ok(
   !discoverSource.includes('routeCatalogRefinementCriteria') &&
     !routeCatalogSearchCriteriaBlock.includes('exploreRefinement') &&
-    routeCatalogSearchCriteriaBlock.includes('includePreviewGeometry: routeCatalogPreviewGeometryRequested') &&
+    routeCatalogSearchCriteriaBlock.includes('includePreviewGeometry: false') &&
     !routeCatalogSearchCriteriaBlock.includes('minRemotenessScore') &&
     !routeCatalogSearchCriteriaBlock.includes('maxDurationMinutes') &&
     !routeCatalogSearchCriteriaBlock.includes('minDurationMinutes'),
-  'Explore refinement details should stay local while the catalog criteria uses only the sticky preview-geometry opt-in.',
+  'Explore refinement details should stay local while catalog list requests remain summary-only.',
 );
 assert.ok(
-  refinementChangeBlock.includes('setRouteCatalogPreviewGeometryRequested(true)') &&
-    !refinementChangeBlock.includes('if (refinement != null)') &&
-    !refinementChangeBlock.includes('setRouteCatalogPreviewGeometryRequested(false)'),
-  'Verified preview geometry should remain requested independently of the optional local refinement.',
+  refinementChangeBlock.includes('setExploreRefinement(refinement)') &&
+    !refinementChangeBlock.includes('PreviewGeometry') &&
+    !refinementChangeBlock.includes('fetchRouteCatalogTrailPackDetail'),
+  'Changing a local refinement should not request detailed route geometry.',
 );
 assert.ok(
   aiRequestParamsBlock.includes('canonicalRadiusFilteredRoutes.map((route) => route.name)') &&
@@ -212,11 +212,11 @@ assert.ok(
 );
 assert.ok(
   discoverSource.includes('const hasSelectedExploreRefinement = exploreRefinement != null') &&
-    discoverSource.includes('const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet;') &&
+    discoverSource.includes('const exploreWizardCandidateSet = exploreGuidanceReadyInventory.discoverableCandidateSet;') &&
     !discoverSource.includes('if (!hasSelectedExploreRefinement) return []') &&
     !discoverSource.includes('showGuidanceReadyRefinementPrompt') &&
     !discoverSource.includes('Select a refinement bucket to populate Guidance Ready route cards.'),
-  'Explore should render all canonical Guidance Ready routes until an optional refinement narrows them.',
+  'Explore should render all discoverable route summaries until an optional refinement narrows them.',
 );
 assert.ok(
   discoverSource.includes('const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);') &&

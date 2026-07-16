@@ -1,4 +1,5 @@
 import type { ExpeditionOpportunity, RegionGroupId } from '../discoverEngine';
+import type { RouteCatalogSummary } from '../routeDataContracts';
 import {
   scoreECSTrailPackConfidence,
   shouldPromoteTrailPackByDefault,
@@ -425,10 +426,14 @@ export function isPublicSuggestedTrailheadTrailPack(
 }
 
 function shouldPromoteCatalogPublicRecommendation(
-  pack: Pick<ECSTrailPack, 'catalogVerification'>,
+  pack: Pick<ECSTrailPack, 'catalogVerification' | 'routeGeometryMode'>,
   confidence: ECSTrailPackConfidence,
 ): boolean {
-  return pack.catalogVerification?.publicRecommendation === true && confidence.blockers.length === 0;
+  if (pack.catalogVerification?.publicRecommendation !== true) return false;
+  const effectiveBlockers = pack.routeGeometryMode === 'omitted'
+    ? confidence.blockers.filter((blocker) => blocker !== 'Route geometry is incomplete')
+    : confidence.blockers;
+  return effectiveBlockers.length === 0;
 }
 
 function routeMetadataRecord(route: { routeMetadata?: Record<string, unknown> } | null | undefined): Record<string, unknown> {
@@ -607,6 +612,7 @@ export function trailPackToExpeditionOpportunity(
       trailPackDataState: pack.dataState ?? null,
       trailPackRouteType: pack.routeType,
       routeGeometryMode: pack.routeGeometryMode ?? null,
+      routeCatalogSourceVersion: pack.updatedAt,
       confidenceScore: pack.confidenceScore,
       searchDistanceMiles: pack.searchDistanceMiles ?? null,
       geometryDistanceMiles: pack.geometryDistanceMiles ?? null,
@@ -626,6 +632,167 @@ export function trailPackToExpeditionOpportunity(
       catalogVerification: pack.catalogVerification,
       routeCatalogOperationalCriteria,
       routeIntelligence: pack.routeIntelligence,
+    },
+  };
+}
+
+export type RouteCatalogSummarySourceState = 'live' | 'cached' | 'stale' | 'offline';
+
+export type RouteCatalogSummaryProjectionOptions = {
+  publicRecommendation: boolean;
+  sourceState?: RouteCatalogSummarySourceState;
+};
+
+function routeCatalogSummarySource(summary: RouteCatalogSummary): ECSTrailPackSource {
+  if (summary.sourceType === 'community') return 'community_reviewed';
+  if (summary.sourceType === 'imported') return 'imported_gpx';
+  if (summary.sourceType === 'preview') return 'needs_review';
+  return 'ecs_validated';
+}
+
+function routeCatalogSummaryDifficulty(summary: RouteCatalogSummary): ECSTrailPackDifficulty {
+  const normalized = String(summary.difficulty ?? '').trim().toLowerCase();
+  return normalized === 'easy' ||
+    normalized === 'moderate' ||
+    normalized === 'technical' ||
+    normalized === 'extreme' ||
+    normalized === 'unknown'
+    ? normalized
+    : 'unknown';
+}
+
+function routeCatalogSummaryAnchor(summary: RouteCatalogSummary): {
+  coordinate: ECSTrailPackCoordinate;
+  kind: 'trailhead' | 'bbox_center';
+} | null {
+  if (summary.trailheadCoordinate) {
+    return { coordinate: summary.trailheadCoordinate, kind: 'trailhead' };
+  }
+  if (summary.bbox) {
+    return {
+      coordinate: {
+        latitude: (summary.bbox.minLat + summary.bbox.maxLat) / 2,
+        longitude: (summary.bbox.minLng + summary.bbox.maxLng) / 2,
+      },
+      kind: 'bbox_center',
+    };
+  }
+  return null;
+}
+
+function routeCatalogSummaryConfidence(summary: RouteCatalogSummary): number {
+  if (summary.sourceType === 'official') return 88;
+  if (summary.sourceType === 'community') return 68;
+  if (summary.sourceType === 'imported') return 62;
+  return 45;
+}
+
+/**
+ * Projects a geometry-free canonical catalog summary into the existing Trail
+ * Pack contract. Public recommendation is supplied by the owning catalog
+ * collection, never inferred from title/source strings on the card.
+ */
+export function routeCatalogSummaryToDeferredTrailPack(
+  summary: RouteCatalogSummary,
+  options: RouteCatalogSummaryProjectionOptions,
+): (ECSTrailPackDiscoveryItem & { routeCatalogSummaryAnchorKind: 'trailhead' | 'bbox_center' }) | null {
+  const anchor = routeCatalogSummaryAnchor(summary);
+  if (!anchor) return null;
+  const confidenceScore = routeCatalogSummaryConfidence(summary);
+  const updatedAt = summary.updatedAt ?? new Date(0).toISOString();
+  const publicRecommendation = options.publicRecommendation && summary.sourceType !== 'preview';
+  const sourceState = options.sourceState ?? 'live';
+  const freshness = sourceState === 'live'
+    ? 'fresh'
+    : sourceState === 'cached'
+      ? 'aging'
+      : 'stale';
+  const blockers = publicRecommendation
+    ? []
+    : ['This summary is not approved by the current public route catalog.'];
+  const geometryWarning = 'Route geometry remains deferred until this route opens in Trip Builder.';
+
+  return {
+    id: summary.routeId,
+    name: summary.title,
+    description: 'Route summary loaded. Trip Builder prepares verified geometry after selection.',
+    source: routeCatalogSummarySource(summary),
+    routeType: 'unknown',
+    centerCoordinate: anchor.coordinate,
+    routeGeometryMode: 'omitted',
+    distanceMiles: summary.distanceMeters != null ? summary.distanceMeters / 1609.344 : undefined,
+    estimatedDurationMinutes:
+      summary.estimatedDurationSeconds != null ? summary.estimatedDurationSeconds / 60 : undefined,
+    difficulty: routeCatalogSummaryDifficulty(summary),
+    confidenceScore,
+    confidenceReasons: ['Route catalog summary. Detail fetch required for geometry and guidance.'],
+    dataState: 'live',
+    lastVerifiedAt: summary.updatedAt ?? undefined,
+    positiveFeedbackCount:
+      summary.communityRating != null ? Math.max(0, Math.round(summary.communityRating * 10)) : undefined,
+    completionCount: summary.popularityScore != null ? Math.round(summary.popularityScore) : undefined,
+    reviewStatus: publicRecommendation ? 'approved' : 'needs_more_data',
+    tags: summary.tags,
+    catalogVerification: {
+      status: publicRecommendation ? 'watch' : 'caution',
+      sourceLabel: 'ECS route catalog summary',
+      publicRecommendation,
+      confidenceScore,
+      warnings: [geometryWarning],
+      blockers,
+      activeGuidance: {
+        status: 'unavailable',
+        topologyResolved: false,
+        sourceSegmentCount: 0,
+        componentCount: 0,
+        branchDetected: false,
+        joinedSegmentGapCount: 0,
+        disjointSegmentGapCount: 0,
+        maxJoinGapMeters: null,
+        maxSegmentGapMeters: null,
+        unavailableReason: geometryWarning,
+      },
+      dataUsed: [{
+        providerId: 'ecs_route_catalog',
+        label: 'ECS route catalog summary',
+        sourceType: summary.sourceType,
+        authority: publicRecommendation ? 'catalog_public_summary' : 'non_public_summary',
+        freshness,
+        lastVerifiedAt: summary.updatedAt ?? undefined,
+      }],
+      lastEvaluatedAt: updatedAt,
+    },
+    createdAt: updatedAt,
+    updatedAt,
+    distanceFromUserMiles: 0,
+    evaluatedConfidence: {
+      score: confidenceScore,
+      band: confidenceScore >= 80 ? 'high' : confidenceScore >= 60 ? 'moderate' : 'low',
+      reasons: ['Summary-only catalog record.'],
+      warnings: [geometryWarning],
+      blockers,
+      lastEvaluatedAt: updatedAt,
+    },
+    routeCatalogSummaryAnchorKind: anchor.kind,
+  };
+}
+
+export function routeCatalogSummaryToDeferredOpportunity(
+  summary: RouteCatalogSummary,
+  options: RouteCatalogSummaryProjectionOptions,
+): ExpeditionOpportunity | null {
+  const pack = routeCatalogSummaryToDeferredTrailPack(summary, options);
+  if (!pack) return null;
+  const route = trailPackToExpeditionOpportunity(pack);
+  return {
+    ...route,
+    routeMetadata: {
+      ...(route.routeMetadata ?? {}),
+      identityKey: `route_catalog:${summary.routeId}`,
+      routeCatalogSummaryAnchorKind: pack.routeCatalogSummaryAnchorKind,
+      routeCatalogSummaryState: 'deferred',
+      routeCatalogSourceVersion: summary.updatedAt,
+      routeCatalogSourceState: options.sourceState ?? 'live',
     },
   };
 }

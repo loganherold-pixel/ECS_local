@@ -65,8 +65,8 @@ assert(
     discover.includes('CHOOSE ROUTE SEARCH AREA') &&
     discover.includes('APPROVED SEARCH AREAS') &&
     discover.includes('routeCatalogSearchAreaPickerVisible ? ROUTE_CATALOG_PRESET_SEARCH_AREAS.map') &&
-    discover.includes('Choose GPS or an approved area before ECS requests verified route geometry.') &&
-    discover.includes('Showing verified routes within') &&
+    discover.includes('Choose GPS or an approved area before ECS requests approved route summaries.') &&
+    discover.includes('Approved route summaries will be evaluated inside') &&
     discover.includes('Loading Trail Source') &&
     discover.includes('Trail Source Unavailable') &&
     discover.includes('Live Route Catalog Unavailable') &&
@@ -150,19 +150,19 @@ assert(
     discover.includes('!routeCatalogHasNonReadyProviderResults') &&
     discover.includes('testID="explore-route-catalog-not-guidance-ready-state"') &&
     discover.includes('testID="explore-guidance-ready-provider-not-ready"') &&
-    discover.includes('Routes found, none guidance-ready') &&
-    discover.includes('remain visible while') &&
-    discover.includes('stay excluded with typed safety and source reasons.'),
-  'A successful provider response containing only excluded routes must render NOT READY diagnostics instead of a false no-routes empty state.',
+    discover.includes('Some Route Records Are Blocked') &&
+    discover.includes('remain blocked from discovery by access, moderation, source, condition, vehicle, identity, invalid-data, or supported-format requirements.'),
+  'A successful provider response containing only legitimately blocked records must render typed blocked diagnostics instead of a false no-routes empty state.',
 );
 
 assert(
   discover.includes('const hasRouteCatalogDiagnosticData =') &&
     discover.includes('const hasRouteCatalogAnyData = hasRouteCatalogRenderableData || hasRouteCatalogDiagnosticData') &&
-    discover.indexOf('after the refresh was cancelled. Retry to obtain a current provider result.') <
-      discover.indexOf('were found, but none currently satisfy all public guidance requirements.') &&
-    discover.indexOf('are available from cached data. Live refresh is degraded') <
-      discover.indexOf('were found, but none currently satisfy all public guidance requirements.'),
+    discover.includes('const routeCatalogCancelledWithData =') &&
+    discover.includes('const routeCatalogStaleWithData =') &&
+    discover.includes('route summary remains') &&
+    discover.includes('visible from last-good data. Source and freshness labels remain visible while live refresh is degraded.') &&
+    discover.includes('Route refresh cancelled. Last-good rows remain visible'),
   'Diagnostic-only last-good data must preserve cancelled/cached/degraded source state instead of being relabeled as a fresh provider result.',
 );
 

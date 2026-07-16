@@ -38,6 +38,18 @@ export type ExploreWizardStep =
 
 export type ExploreWizardResupplyPreference = 'fuel_only' | 'fuel_supplies' | 'none';
 
+export type ExploreRouteDetailState =
+  | 'ready'
+  | 'deferred'
+  | 'invalid'
+  | 'unavailable';
+
+export type ExploreTripBuilderEligibility = {
+  eligible: boolean;
+  reason: string | null;
+  code: 'missing_route_identity' | 'missing_route_endpoint' | null;
+};
+
 export type ExploreWizardRouteCandidate = {
   id: string;
   sourceKind: ExploreWizardRouteSourceKind;
@@ -49,7 +61,12 @@ export type ExploreWizardRouteCandidate = {
   confidence: ExploreLiveConfidence;
   warnings: string[];
   dataUsed: Array<Record<string, unknown>>;
+  discoverable: true;
+  tripBuilderEligible: boolean;
   guidanceReady: boolean;
+  detailState: ExploreRouteDetailState;
+  tripBuilderUnavailableReason: string | null;
+  guidanceUnavailableReason: string | null;
   unavailableReason: string | null;
   savedAssetKey?: string | null;
 };
@@ -165,6 +182,125 @@ function metadataRecord(route: ExpeditionOpportunity): Record<string, unknown> {
   return metadata && typeof metadata === 'object' ? metadata : {};
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function finiteCoordinateValue(value: unknown, limit: number): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && Math.abs(numeric) <= limit ? numeric : null;
+}
+
+function hasStableRouteIdentity(route: ExpeditionOpportunity): boolean {
+  const metadata = metadataRecord(route);
+  return [metadata.trailPackId, metadata.routeCatalogId, metadata.identityKey, route.id]
+    .some((value) => typeof value === 'string' && value.trim().length > 0);
+}
+
+function hasTripBuilderEndpoint(
+  route: ExpeditionOpportunity,
+  navigationPayload?: NavigationHandoffPayload | null,
+): boolean {
+  const routeRecord = route as unknown as Record<string, unknown>;
+  const metadata = metadataRecord(route);
+  if (
+    metadata.routeCatalogSummaryAnchorKind === 'bbox_center' ||
+    metadata.routeCatalogSummaryAnchorKind === 'missing'
+  ) {
+    return false;
+  }
+  const trailhead = record(metadata.trailheadCoordinate ?? routeRecord.trailheadCoordinate);
+  const coordinate = record(navigationPayload?.coordinate);
+  const latitude = finiteCoordinateValue(
+    routeRecord.startLat ?? routeRecord.startLatitude ?? trailhead.latitude ?? coordinate.latitude,
+    90,
+  );
+  const longitude = finiteCoordinateValue(
+    routeRecord.startLng ?? routeRecord.startLongitude ?? trailhead.longitude ?? coordinate.longitude,
+    180,
+  );
+  return latitude != null && longitude != null;
+}
+
+/**
+ * A public catalog search may deliberately omit coordinates for the route line.
+ * That is a deferred detail state, not proof that the route is guidance ready.
+ */
+export function isExploreRouteCatalogDetailDeferred(
+  route: ExpeditionOpportunity | null | undefined,
+): route is ExpeditionOpportunity {
+  if (!route) return false;
+  const metadata = metadataRecord(route);
+  const routeRecord = route as unknown as Record<string, unknown>;
+  const hasSuppliedGeometry = [
+    routeRecord.routeGeometry,
+    routeRecord.route_geometry,
+    routeRecord.trailGeometry,
+    routeRecord.trail_geometry,
+    routeRecord.geometry,
+    metadata.routeGeometry,
+    metadata.route_geometry,
+    metadata.trailGeometry,
+    metadata.trail_geometry,
+    metadata.geometry,
+  ].some((value) => value != null);
+  if (hasSuppliedGeometry) return false;
+  const verification = record(metadata.catalogVerification);
+  const blockers = Array.isArray(verification.blockers) ? verification.blockers : [];
+  const source = String(metadata.source ?? '').trim().toLowerCase();
+  const routeGeometryMode = String(metadata.routeGeometryMode ?? '').trim().toLowerCase();
+  const trailPackId = String(metadata.trailPackId ?? '').trim();
+  return (
+    source === 'trail_pack' &&
+    trailPackId.length > 0 &&
+    routeGeometryMode === 'omitted' &&
+    verification.publicRecommendation === true &&
+    blockers.length === 0
+  );
+}
+
+export function getExploreTripBuilderEligibility(
+  route: ExpeditionOpportunity,
+  navigationPayload?: NavigationHandoffPayload | null,
+): ExploreTripBuilderEligibility {
+  if (!hasStableRouteIdentity(route)) {
+    return {
+      eligible: false,
+      reason: 'This route summary does not have a stable catalog identity.',
+      code: 'missing_route_identity',
+    };
+  }
+  if (!hasTripBuilderEndpoint(route, navigationPayload)) {
+    return {
+      eligible: false,
+      reason: 'This route summary does not include a verified trailhead or endpoint.',
+      code: 'missing_route_endpoint',
+    };
+  }
+  return { eligible: true, reason: null, code: null };
+}
+
+export function getExploreRouteDetailState(
+  route: ExpeditionOpportunity,
+  guidanceUnavailableReason: string | null = null,
+): ExploreRouteDetailState {
+  if (isExploreRouteCatalogDetailDeferred(route)) return 'deferred';
+  if (!guidanceUnavailableReason) return 'ready';
+  const routeRecord = route as unknown as Record<string, unknown>;
+  const metadata = metadataRecord(route);
+  const hasSuppliedGeometry = [
+    routeRecord.routeGeometry,
+    routeRecord.trailGeometry,
+    routeRecord.geometry,
+    metadata.routeGeometry,
+    metadata.trailGeometry,
+    metadata.geometry,
+  ].some((value) => value != null);
+  return hasSuppliedGeometry ? 'invalid' : 'unavailable';
+}
+
 function metadataArray(metadata: Record<string, unknown>, key: string): unknown[] {
   const value = metadata[key];
   return Array.isArray(value) ? value : [];
@@ -223,9 +359,11 @@ function buildCandidate(
     ((route as unknown as { navigationPayload?: NavigationHandoffPayload | null }).navigationPayload) ??
     buildExploreNavigationPayload(route);
   const unavailableReason = getNavigationHandoffActiveGuidanceUnavailableReason(navigationPayload);
+  const detailState = getExploreRouteDetailState(route, unavailableReason);
+  const tripBuilderEligibility = getExploreTripBuilderEligibility(route, navigationPayload);
   const title = navigationPayload.title || route.name || 'Explore route';
   const id = String(route.id || navigationPayload.id || `${sourceKind}:${title}`).trim();
-  if (unavailableReason) {
+  if (unavailableReason && detailState !== 'deferred') {
     return {
       id,
       sourceKind,
@@ -233,7 +371,6 @@ function buildCandidate(
       reason: unavailableReason,
     };
   }
-
   return {
     id,
     sourceKind,
@@ -245,8 +382,13 @@ function buildCandidate(
     confidence: deriveExploreLiveConfidence(route),
     warnings: buildWarnings(route),
     dataUsed: buildDataUsed(route),
-    guidanceReady: true,
-    unavailableReason: null,
+    discoverable: true,
+    tripBuilderEligible: tripBuilderEligibility.eligible,
+    guidanceReady: unavailableReason == null,
+    detailState,
+    tripBuilderUnavailableReason: tripBuilderEligibility.reason,
+    guidanceUnavailableReason: unavailableReason,
+    unavailableReason,
     savedAssetKey: id,
   };
 }

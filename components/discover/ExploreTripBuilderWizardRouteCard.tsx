@@ -171,8 +171,18 @@ function ExploreTripBuilderWizardRouteCardComponent({
                     </Text>
                   </View>
                   <View style={styles.readyBadge}>
-                    <Ionicons name="navigate-outline" size={9} color={TACTICAL.amber} />
-                    <Text style={styles.readyBadgeText}>READY</Text>
+                    <Ionicons
+                      name={candidate.guidanceReady ? 'navigate-outline' : 'construct-outline'}
+                      size={9}
+                      color={TACTICAL.amber}
+                    />
+                    <Text style={styles.readyBadgeText}>
+                      {candidate.guidanceReady
+                        ? 'GUIDANCE READY'
+                        : candidate.tripBuilderEligible
+                          ? 'DETAIL IN TRIP BUILDER'
+                          : 'TRIP BUILDER BLOCKED'}
+                    </Text>
                   </View>
                 </>
               ) : (
@@ -207,48 +217,77 @@ function ExploreTripBuilderWizardRouteCardComponent({
           ) : null}
         </View>
 
-        <View style={styles.actionRow}>
-          <TouchableOpacity
-            style={styles.secondaryAction}
-            activeOpacity={0.82}
-            onPress={onPreview}
-            accessibilityRole="button"
-            accessibilityLabel={`Preview ${candidate.title}`}
-          >
-            <Ionicons name="scan-outline" size={12} color={TACTICAL.text} />
-            <Text style={styles.secondaryActionText}>PREVIEW</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.secondaryAction}
-            activeOpacity={0.82}
-            onPress={onSave}
-            accessibilityRole="button"
-            accessibilityLabel={`Save ${candidate.title}`}
-          >
-            <Ionicons name={isSaved ? 'star' : 'star-outline'} size={12} color={TACTICAL.text} />
-            <Text style={styles.secondaryActionText}>{isSaved ? 'SAVED' : 'SAVE'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.secondaryAction}
-            activeOpacity={0.82}
-            onPress={onBuildTrip}
-            accessibilityRole="button"
-            accessibilityLabel={`Build trip for ${candidate.title}`}
-          >
-            <Ionicons name="git-merge-outline" size={12} color={TACTICAL.text} />
-            <Text style={styles.secondaryActionText}>BUILD TRIP</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.primaryAction}
-            activeOpacity={0.86}
-            onPress={onStart}
-            accessibilityRole="button"
-            accessibilityLabel={`Start navigation for ${candidate.title}`}
-          >
-            <Ionicons name="navigate" size={12} color="#081014" />
-            <Text style={styles.primaryActionText}>START</Text>
-          </TouchableOpacity>
-        </View>
+        {!candidate.guidanceReady ? (
+          <>
+            <Text style={styles.deferredDetailText}>
+              {candidate.tripBuilderEligible
+                ? 'Summary available. Verified route geometry is prepared after you open Trip Builder.'
+                : candidate.tripBuilderUnavailableReason ?? 'This summary cannot open Trip Builder.'}
+            </Text>
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                style={[
+                  styles.primaryAction,
+                  !candidate.tripBuilderEligible && styles.primaryActionDisabled,
+                ]}
+                activeOpacity={0.86}
+                onPress={onBuildTrip}
+                disabled={!candidate.tripBuilderEligible}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${candidate.title} in Trip Builder`}
+                accessibilityHint={candidate.tripBuilderUnavailableReason ?? undefined}
+                accessibilityState={{ disabled: !candidate.tripBuilderEligible }}
+                testID={`explore-open-trip-builder-${candidate.id}`}
+              >
+                <Ionicons name="git-merge-outline" size={12} color="#081014" />
+                <Text style={styles.primaryActionText}>OPEN TRIP BUILDER</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : (
+          <View style={styles.actionRow}>
+            <TouchableOpacity
+              style={styles.secondaryAction}
+              activeOpacity={0.82}
+              onPress={onPreview}
+              accessibilityRole="button"
+              accessibilityLabel={`Preview ${candidate.title}`}
+            >
+              <Ionicons name="scan-outline" size={12} color={TACTICAL.text} />
+              <Text style={styles.secondaryActionText}>PREVIEW</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryAction}
+              activeOpacity={0.82}
+              onPress={onSave}
+              accessibilityRole="button"
+              accessibilityLabel={`Save ${candidate.title}`}
+            >
+              <Ionicons name={isSaved ? 'star' : 'star-outline'} size={12} color={TACTICAL.text} />
+              <Text style={styles.secondaryActionText}>{isSaved ? 'SAVED' : 'SAVE'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryAction}
+              activeOpacity={0.82}
+              onPress={onBuildTrip}
+              accessibilityRole="button"
+              accessibilityLabel={`Build trip for ${candidate.title}`}
+            >
+              <Ionicons name="git-merge-outline" size={12} color={TACTICAL.text} />
+              <Text style={styles.secondaryActionText}>BUILD TRIP</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.primaryAction}
+              activeOpacity={0.86}
+              onPress={onStart}
+              accessibilityRole="button"
+              accessibilityLabel={`Start navigation for ${candidate.title}`}
+            >
+              <Ionicons name="navigate" size={12} color="#081014" />
+              <Text style={styles.primaryActionText}>START</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -344,6 +383,12 @@ const styles = StyleSheet.create({
     lineHeight: 10,
     fontWeight: '900',
     letterSpacing: 0.8,
+  },
+  deferredDetailText: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
   },
   enrichmentSkeleton: {
     width: 96,
@@ -473,6 +518,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 5,
     paddingHorizontal: 8,
+  },
+  primaryActionDisabled: {
+    opacity: 0.48,
   },
   primaryActionText: {
     color: '#081014',

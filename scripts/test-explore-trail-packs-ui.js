@@ -13,16 +13,19 @@ const card = read(path.join('components', 'discover', 'RouteCatalogSummaryCard.t
 const feedbackPanel = read(path.join('components', 'trailPacks', 'TrailPackFeedbackPanel.tsx'));
 const previewPanel = read(path.join('components', 'trailPacks', 'TrailPackPreviewModal.tsx'));
 const offlinePrepPack = read(path.join('app', 'explore-offline-prep-pack.tsx'));
+const tripBuilder = read(path.join('app', 'explore-trip-builder.tsx'));
 const domain = read(path.join('lib', 'explore', 'trailPacks.ts'));
+const selectedRouteDetail = read(path.join('lib', 'explore', 'exploreTripBuilderRouteDetail.ts'));
 
 assert(
   discover.includes('ExploreTripBuilderWizardRouteCard') &&
     discover.includes('testID="explore-tripbuilder-wizard-surface"') &&
     discover.includes('buildExploreGuidanceReadyInventory') &&
+    discover.includes('exploreGuidanceReadyInventory.discoverableCandidateSet') &&
     discover.includes('visibleExploreWizardCardCandidates') &&
     !discover.includes('exploreWizardHiddenNotice') &&
     !discover.includes('ECS will not save, stitch, or navigate those routes from Explore'),
-  'Explore should render the route-first TripBuilder wizard using normalized guidance-ready candidates without user-facing hidden unavailable route warnings',
+  'Explore should render the route-first Trip Builder wizard using normalized discoverable candidates without user-facing hidden unavailable route warnings',
 );
 assert(
   discover.includes('EXPLORE_WIZARD_SOURCE_FILTERS') &&
@@ -70,13 +73,14 @@ assert(
     discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria, {') &&
     discover.includes("cancellationReason: 'unmount'") &&
     discover.includes('limit: EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT') &&
-    discover.includes('includePreviewGeometry: routeCatalogPreviewGeometryRequested') &&
+    discover.includes('includePreviewGeometry: false') &&
+    !discover.includes('routeCatalogPreviewGeometryRequested') &&
     !discover.includes('routeCatalogRefinementCriteria') &&
     discover.includes('applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement)') &&
     discover.includes('availableFuelRangeMiles: vehicleProfile?.fuel_range_miles') &&
     discover.includes('availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal') &&
     !discover.includes('getDefaultECSTrailPacks'),
-  'Explore Trail Packs should use live reviewed catalog content with broad radius search criteria, then apply refinement locally for fast chip changes',
+  'Explore Trail Packs should request live reviewed summary content, then apply refinement locally without list-time detail geometry',
 );
 assert(
   discover.includes('const explorePerformanceRunRef = useRef(explorePerformanceRun);') &&
@@ -119,22 +123,25 @@ assert(
 assert(
   discover.includes('TrailPackPreviewModal') &&
     discover.includes('submitTrailPackFeedback') &&
-    discover.includes("handleTrailPackFeedback(routeId, 'saved')") &&
-    discover.includes("handleTrailPackFeedback(trailPackPreview.id, 'saved')"),
-  'Trail Pack detail/save flows should capture structured feedback without cluttering cards',
+    discover.includes("handleTrailPackFeedback(trailPackPreview.id, 'saved')") &&
+    !card.includes('handleTrailPackFeedback'),
+  'Selected Trail Pack detail/save flows should capture structured feedback without adding list-time card work',
 );
 assert(
-  (discover.match(/sourceVersion: summary\.updatedAt/g) ?? []).length >= 3 &&
-    discover.includes('sourceVersion: routeCatalogSourceVersion') &&
-    discover.includes('routeCatalogSourceVersion: trailPack.updatedAt ?? null'),
-  'Explore preview, navigate, save, and hydrated handoff detail reads should use route plus source-version cache identity.',
+  selectedRouteDetail.includes('sourceVersion,') &&
+    selectedRouteDetail.includes('(options.fetchDetail ?? fetchRouteCatalogTrailPackDetail)(trailPackId, {') &&
+    discover.includes('routeCatalogSourceVersion: trailPack.updatedAt ?? null') &&
+    !discover.includes('sourceVersion: summary.updatedAt'),
+  'Explore list rendering should avoid summary detail reads while selected Trip Builder detail uses route plus source-version cache identity.',
 );
 assert(
-  discover.includes("Alert.alert('Navigation unavailable', message)") &&
-    discover.includes("Alert.alert('Save unavailable', message)") &&
-    discover.includes('Authoritative route detail could not be loaded. Retry when the route provider is available.') &&
-    discover.includes('Authoritative route detail could not be loaded, so this route was not saved.'),
-  'Summary Navigate and Save provider failures should end in safe, user-visible terminal errors instead of logging a silent no-op.',
+  tripBuilder.includes('testID="trip-builder-selected-route-detail-state"') &&
+    tripBuilder.includes("title: 'Route Detail Unavailable'") &&
+    tripBuilder.includes('retryLabel="Retry Route Detail"') &&
+    selectedRouteDetail.includes("| 'ROUTE_CATALOG_DETAIL_UNAVAILABLE'") &&
+    selectedRouteDetail.includes('safeErrorCode: failureCode(error)') &&
+    selectedRouteDetail.includes('route: selectedSummary'),
+  'Selected summary detail failures should preserve the summary and reach a retryable, visible Trip Builder terminal state.',
 );
 assert(
   previewPanel.includes('TrailPackFeedbackPanel') &&
@@ -153,7 +160,7 @@ assert(
   'Trail Packs should render loading, no-location, low-confidence, and empty states',
 );
 assert(
-  discover.includes('do not currently satisfy ECS public guidance requirements') &&
+  discover.includes('remain blocked from discovery by access, moderation, source, condition, vehicle, identity, invalid-data, or supported-format requirements') &&
     discover.includes('testID="explore-route-catalog-not-guidance-ready-state"') &&
     discover.includes('trailPackSubmissionStore') &&
     discover.includes('includeOwnDrafts: ownerTrailPackIds.length > 0'),
@@ -167,17 +174,18 @@ assert(
 assert(
   card.includes('SourceTruthInspectorTrigger') &&
     card.includes('ROUTE SUMMARY') &&
-    card.includes('PREVIEW') &&
-    card.includes('NAVIGATE') &&
-    card.includes('bookmark-outline'),
-  'Route catalog summary cards should show source truth plus Preview, Navigate, and Save actions',
+    card.includes('OPEN TRIP BUILDER') &&
+    !card.includes('PREVIEW') &&
+    !card.includes('NAVIGATE') &&
+    !card.includes('bookmark-outline'),
+  'Route catalog summary cards should show source truth plus one summary-first Trip Builder action',
 );
 assert(
-  card.includes('onPreview(summary.routeId)') &&
-    card.includes('onStartGuidance(summary.routeId)') &&
-    card.includes('onSave(summary.routeId)') &&
+  card.includes('onOpenTripBuilder(summary.routeId)') &&
+    card.includes('tripBuilderDisabledReason') &&
+    card.includes('accessibilityState={{ disabled: !!tripBuilderDisabledReason }}') &&
     !card.includes('MapRenderer'),
-  'Summary cards should defer geometry/detail loading to actions and avoid mounting map work in the Explore list',
+  'Summary cards should defer geometry/detail loading to Trip Builder, expose typed disabled reasons, and avoid mounting map work in the Explore list',
 );
 assert(
   previewPanel.includes('getTrailPackGuidanceReadiness') &&

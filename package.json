@@ -309,6 +309,7 @@
     "test:route-catalog-visibility-diagnostics": "node ./scripts/test-route-catalog-visibility-diagnostics.js",
     "test:route-data-contracts": "node ./scripts/test-route-data-contracts.js",
     "test:explore-summary-first-performance": "node ./scripts/test-explore-summary-first-performance.js",
+    "test:explore-summary-first-route-detail": "node ./scripts/test-explore-summary-first-route-detail.js",
     "test:explore-navigate-separation-performance": "node ./scripts/test-explore-navigate-separation-performance.js",
     "test:navigate-mvum-overlay-separation": "node ./scripts/test-navigate-mvum-overlay-separation.js",
     "test:navigate-async-map-layers": "node ./scripts/test-navigate-async-map-layers.js",

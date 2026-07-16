@@ -277,7 +277,7 @@ assert(firstVisibleWork.estimatedInitialCardRenderCount <= 12);
   'if (!exploreRefinement) return [] as EnrichedDiscoveryRoute[];',
   'if (!exploreRefinement) return EMPTY_POPULAR_TRAILS_STATE;',
   'if (!exploreRefinement) {\n        return EMPTY_HIDDEN_GEM_BASELINE_STATE;\n      }',
-  'const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet;',
+  'const exploreWizardCandidateSet = exploreGuidanceReadyInventory.discoverableCandidateSet;',
 ].forEach((needle) => {
   assert(discoverSource.includes(needle), `Explore route list should use virtualized rendering wiring: ${needle}.`);
 });

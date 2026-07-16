@@ -223,8 +223,14 @@ assert(
 assertIncludes(screen, 'routes.length} FILTERED ROUTE', 'Trip Builder route selector should display the actual filtered route count.');
 assertIncludes(screen, 'const [tripSetupStarted, setTripSetupStarted] = useState(false)', 'Trip Builder should keep route-picker setup closed for top-level Trip Builder entry.');
 assertIncludes(screen, "params.setup === '1'", 'Trip Builder should recognize direct Explore Build Trip handoffs.');
-assertIncludes(screen, 'setTripSetupStarted(shouldAutoOpenTripSetup);', 'Direct Explore Build Trip handoff should open Trip Setup immediately.');
-assertIncludes(screen, 'setPreparedTripRoutePreview(shouldAutoOpenTripSetup ? buildPreparedTripRoutePreview(autoSetupRoute as ExpeditionOpportunity | null) : null);', 'Direct Explore Build Trip handoff should prepare selected route geometry before live setup searches.');
+assertIncludes(screen, 'setTripSetupStarted(shouldAutoOpenTripSetup && !autoSetupRouteNeedsDetail);', 'Direct handoffs with ready geometry should open immediately while deferred summaries wait for selected detail.');
+assertIncludes(screen, 'shouldAutoOpenTripSetup && !autoSetupRouteNeedsDetail', 'Direct Explore handoffs should not open geometry-dependent setup before deferred detail settles.');
+assertIncludes(screen, 'setPreparedTripRoutePreview(buildPreparedTripRoutePreview(mergedRoute));', 'Selected detail completion should prepare canonical geometry before opening setup.');
+assertIncludes(screen, 'setTripSetupStarted(true);', 'Selected detail completion should open the requested Trip Builder setup.');
+assertIncludes(screen, 'testID="trip-builder-selected-route-detail-state"', 'Deferred selected detail should expose a visible async terminal state and retry action.');
+assertIncludes(screen, 'getResolvedExploreTripBuilderRouteDetail(', 'Selected detail readiness should bind to the current route identity.');
+assertIncludes(screen, "selectedRouteDetailState.status === 'ready' ? selectedRouteDetailState.data : null", 'A stale ready state must not enable a newer deferred route.');
+assertIncludes(screen, 'const routeForSetup = resolvedSelectedRouteDetail ?? selectedRoute', 'Trip Builder setup should consume the matching validated detail route.');
 assertIncludes(screen, 'testID="trip-builder-open-setup"', 'Trip Builder should still expose Open Trip Builder for manual route-picker entry.');
 assertIncludes(screen, 'Open Trip Builder', 'Trip Builder should label the manual setup entry action clearly.');
 assert(!screen.includes(').slice(0, 8) as ExpeditionOpportunity[]'), 'Trip Builder should not cap the filtered Suggested Routes context before rendering the route selector.');
@@ -250,7 +256,7 @@ assert(!/smartResupplyLoading === 'fuel'[\s\S]{0,360}<ActivityIndicator/.test(sc
 assert(!/smartResupplyLoading === 'supplies'[\s\S]{0,360}<ActivityIndicator/.test(screen), 'Trip Builder supply lookup loading row should not mount an animated ActivityIndicator during setup entry.');
 assertIncludes(screen, 'latestSelectedPlanningRouteRef', 'Trip Builder should keep the latest tapped route outside rendered state for immediate mobile open taps.');
 assertIncludes(screen, 'latestSelectedPlanningRouteRef.current = routeForContext;', 'Route selection should synchronously publish the tapped route for immediate mobile open taps.');
-assertIncludes(screen, 'const routeForSetup = selectedRoute ?? latestSelectedPlanningRouteRef.current;', 'Open Trip Builder should use the latest tapped route if React has not rendered selectedRoute yet.');
+assertIncludes(screen, 'const routeForSetup = resolvedSelectedRouteDetail ?? selectedRoute ?? latestSelectedPlanningRouteRef.current;', 'Open Trip Builder should prefer matching selected detail, then use the latest tapped route if React has not rendered selectedRoute yet.');
 assertIncludes(screen, 'buildPreparedTripRoutePreview(routeForSetup)', 'Open Trip Builder should prepare geometry from the route actually used for setup.');
 {
   const selectRouteStart = screen.indexOf('const selectPlanningRoute = useCallback((routeId: string) => {');

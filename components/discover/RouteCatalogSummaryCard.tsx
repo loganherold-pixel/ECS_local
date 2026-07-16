@@ -14,10 +14,8 @@ import {
 
 type RouteCatalogSummaryCardProps = {
   summary: RouteCatalogSummary;
-  isSaved?: boolean;
-  onPreview: (routeId: string) => void;
-  onStartGuidance: (routeId: string) => void;
-  onSave: (routeId: string) => void;
+  onOpenTripBuilder: (routeId: string) => void;
+  tripBuilderDisabledReason?: string | null;
   compactPreview?: boolean;
 };
 
@@ -60,10 +58,8 @@ function formatUpdatedAt(updatedAt: string | null): string | null {
 
 export default function RouteCatalogSummaryCard({
   summary,
-  isSaved = false,
-  onPreview,
-  onStartGuidance,
-  onSave,
+  onOpenTripBuilder,
+  tripBuilderDisabledReason = null,
   compactPreview = false,
 }: RouteCatalogSummaryCardProps) {
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
@@ -160,32 +156,22 @@ export default function RouteCatalogSummaryCard({
         ) : null}
         <View style={s.actionRow}>
           <TouchableOpacity
-            style={s.secondaryAction}
-            onPress={() => onPreview(summary.routeId)}
+            style={[s.primaryAction, tripBuilderDisabledReason && s.primaryActionDisabled]}
+            onPress={() => onOpenTripBuilder(summary.routeId)}
+            disabled={!!tripBuilderDisabledReason}
             activeOpacity={0.75}
-            accessibilityLabel={`Preview ${summary.title}`}
+            accessibilityLabel={`Open ${summary.title} in Trip Builder`}
+            accessibilityHint={tripBuilderDisabledReason ?? undefined}
+            accessibilityState={{ disabled: !!tripBuilderDisabledReason }}
+            testID={`route-catalog-open-trip-builder-${summary.routeId}`}
           >
-            <Ionicons name="map-outline" size={13} color={TACTICAL.text} />
-            <Text style={s.secondaryActionText}>PREVIEW</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={s.primaryAction}
-            onPress={() => onStartGuidance(summary.routeId)}
-            activeOpacity={0.75}
-            accessibilityLabel={`Navigate ${summary.title}`}
-          >
-            <Ionicons name="navigate-outline" size={13} color={TACTICAL.bg} />
-            <Text style={s.primaryActionText}>NAVIGATE</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={s.iconAction}
-            onPress={() => onSave(summary.routeId)}
-            activeOpacity={0.75}
-            accessibilityLabel={isSaved ? `Saved ${summary.title}` : `Save ${summary.title}`}
-          >
-            <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={15} color={TACTICAL.amber} />
+            <Ionicons name="git-merge-outline" size={13} color={TACTICAL.bg} />
+            <Text style={s.primaryActionText}>OPEN TRIP BUILDER</Text>
           </TouchableOpacity>
         </View>
+        {tripBuilderDisabledReason ? (
+          <Text style={s.disabledReason}>{tripBuilderDisabledReason}</Text>
+        ) : null}
       </View>
     </ECSCard>
   );
@@ -294,6 +280,9 @@ const s = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
+  primaryActionDisabled: {
+    opacity: 0.48,
+  },
   primaryActionText: {
     color: TACTICAL.bg,
     fontSize: 10,
@@ -325,5 +314,11 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     borderColor: ECS.stroke,
     borderWidth: StyleSheet.hairlineWidth,
+  },
+  disabledReason: {
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
   },
 });

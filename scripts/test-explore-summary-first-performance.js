@@ -8,6 +8,9 @@ const cachePath = path.join(root, 'lib', 'explore', 'routeCatalogSummaryCache.ts
 const liveCatalogPath = path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts');
 const discoverPath = path.join(root, 'app', '(tabs)', 'discover.tsx');
 const summaryCardPath = path.join(root, 'components', 'discover', 'RouteCatalogSummaryCard.tsx');
+const tripBuilderPath = path.join(root, 'app', 'explore-trip-builder.tsx');
+const routeDetailPath = path.join(root, 'lib', 'explore', 'exploreTripBuilderRouteDetail.ts');
+const trailPacksPath = path.join(root, 'lib', 'explore', 'trailPacks.ts');
 const packagePath = path.join(root, 'package.json');
 
 function compileTypescript(module, filename) {
@@ -106,24 +109,43 @@ assert(
 );
 
 const discover = fs.readFileSync(discoverPath, 'utf8');
+const trailPacks = fs.readFileSync(trailPacksPath, 'utf8');
 assert(fs.existsSync(summaryCardPath), 'RouteCatalogSummaryCard should render summary-only route cards.');
 assert(
   discover.includes('RouteCatalogSummaryCard') &&
     discover.includes('visibleRouteCatalogSummaries') &&
-    discover.includes('handlePreviewRouteCatalogSummary') &&
-    discover.includes('handleStartRouteCatalogSummaryGuidance'),
-  'Discover Trail Packs panel should render and act from RouteCatalogSummary records.',
+    discover.includes('handleOpenRouteCatalogSummaryTripBuilder') &&
+    discover.includes('onOpenTripBuilder={handleOpenRouteCatalogSummaryTripBuilder}'),
+  'Discover route summaries should open Trip Builder without hydrating geometry in the list.',
+);
+assert(
+  discover.includes('const routeCatalogSummaryPacks = useMemo') &&
+    discover.includes('routeCatalogSummaryToDeferredTrailPack(summary, {') &&
+    discover.includes('routeCatalogSummaryPacks.forEach((pack) => {') &&
+    discover.includes('liveTrailPackCatalogSnapshot.asyncState.source === \'cached\'') &&
+    trailPacks.includes('routeCatalogSummaryToDeferredOpportunity') &&
+    trailPacks.includes('routeCatalogSummaryAnchorKind'),
+  'Cached summary rows should enter the mounted Trail Pack inventory with explicit source and endpoint semantics.',
 );
 assert(
   !discover.includes('visibleTrailPacks.map((trailPack') &&
     !discover.includes('const trailPackRoute = trailPackToExpeditionOpportunity(trailPack);'),
   'Explore route cards should not render from full Trail Pack detail records.',
 );
+const tripBuilder = fs.readFileSync(tripBuilderPath, 'utf8');
+const routeDetail = fs.readFileSync(routeDetailPath, 'utf8');
 assert(
-  discover.includes('fetchRouteCatalogTrailPackDetail(routeId, {') &&
-    discover.includes('sourceVersion: summary.updatedAt') &&
-    discover.includes('routeId: summary.routeId'),
-  'Preview/Navigate actions should pass routeId plus source version to the detail loader instead of passing hydrated route geometry.',
+  tripBuilder.includes('resolveExploreTripBuilderRouteDetail(selectedRoute, {') &&
+    tripBuilder.includes('trip_builder_selected_route_detail'),
+  'Trip Builder should own the selected-route detail lifecycle.',
+);
+assert(
+  routeDetail.includes('fetchRouteCatalogTrailPackDetail') &&
+    routeDetail.includes('sourceVersion,') &&
+    routeDetail.includes('mergeTripBuilderRouteDetail') &&
+    routeDetail.includes('defaultExploreReadyRouteEligibility') &&
+    routeDetail.includes('ROUTE_CATALOG_DETAIL_REJECTED'),
+  'The selected-route adapter should reuse the canonical detail client, stable-identity merge, and post-fetch safety gates.',
 );
 assert(
   !discover.includes('routeGeometryViewportOverlayEnabled') &&
@@ -131,17 +153,19 @@ assert(
   'Explore must not mount Navigate MVUM overlay logic or initialize MVUM sources.',
 );
 assert(
-  discover.includes('const [routeCatalogPreviewGeometryRequested, setRouteCatalogPreviewGeometryRequested] = useState(true)') &&
-    discover.includes('const EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT = 500') &&
-    discover.includes('includePreviewGeometry: routeCatalogPreviewGeometryRequested') &&
-    discover.includes('setRouteCatalogPreviewGeometryRequested(true)'),
-  'Explore should preserve summary-card rendering while deliberately requesting bounded preview geometry needed for readiness.',
+  discover.includes('const EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT = 50') &&
+    discover.includes('includePreviewGeometry: false') &&
+    !discover.includes('routeCatalogPreviewGeometryRequested') &&
+    !discover.includes('setRouteCatalogPreviewGeometryRequested'),
+  'Ordinary Explore list rendering should request bounded summaries without preview geometry.',
 );
 assert(
-  discover.includes('showGuidanceReadyGeometryLoading') &&
-    discover.includes('Loading Verified Route Previews...') &&
-    discover.includes('Full route detail remains deferred until you preview, save, build, or start a route.'),
-  'Explore should expose the staged preview refresh without treating in-flight summary records as missing geometry.',
+  discover.includes('Available Routes') &&
+    discover.includes('DETAIL DEFERRED') &&
+    discover.includes('exploreGuidanceReadyInventory.discoverableCandidateSet') &&
+    !discover.includes('Routes Found, None Guidance Ready') &&
+    !discover.includes('Loading Verified Route Previews...'),
+  'Explore should present approved summaries as available while preserving deferred detail and guidance-ready terminology.',
 );
 
 const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
