@@ -12,6 +12,7 @@ function read(relativePath) {
 
 const navigateSource = read('app/(tabs)/navigate.tsx');
 const mapRendererSource = read('components/navigate/MapRenderer.tsx');
+const mapSurfaceCoordinatorSource = read('lib/mapSurfaceCoordinator.ts');
 const mapFallbackSurfaceSource = read('components/navigate/MapFallbackSurface.tsx');
 const compassRoseSource = read('components/navigate/CompassRose.tsx');
 const supabaseSource = read('lib/supabase.ts');
@@ -194,12 +195,14 @@ assert.ok(
   'MapRenderer should stop map interaction and dynamic camera work during active destination search input.',
 );
 assert.ok(
-  navigateSource.includes('const mapRendererUserLocation = destinationSearchMapFrozen') &&
+  navigateSource.includes('const rawLocationAccessGranted =') &&
+    navigateSource.includes("gps.rawGPS.permissionState === 'granted' && gps.rawGPS.isAvailable") &&
+    navigateSource.includes('const mapRendererUserLocation = destinationSearchMapFrozen || !rawLocationAccessGranted') &&
     navigateSource.includes('const mapRendererShowUserLocation = !destinationSearchMapFrozen') &&
-    navigateSource.includes('const mapRendererVehicleHeading = destinationSearchMapFrozen') &&
+    navigateSource.includes('destinationSearchMapFrozen || !rawLocationAccessGranted || !navigateMapMotion.allowLiveLocation') &&
     navigateSource.includes('userLocation={mapRendererUserLocation}') &&
     navigateSource.includes('vehicleHeading={mapRendererVehicleHeading}'),
-  'MapRenderer should receive null/stable live-location props while destination search freezes the map.',
+  'MapRenderer should receive live-location props only while permission is granted and destination search is not freezing the map.',
 );
 assert.ok(
   navigateSource.includes('const [followUser, setFollowUser] = useState(true);'),
@@ -217,14 +220,15 @@ assert.ok(
     const end = navigateSource.indexOf('useEffect(() => {\n  if (!mapDisplayGpsInput)', start);
     const block = start >= 0 && end > start ? navigateSource.slice(start, end) : '';
     return (
-      block.includes('const position = gps.rawGPS.position ?? gps.position;') &&
-      block.includes('const hasFix = gps.rawGPS.hasFix || gps.hasFix;') &&
+      block.includes("gps.rawGPS.permissionState !== 'granted' || !gps.rawGPS.isAvailable") &&
+      block.includes('const position = gps.rawGPS.position;') &&
+      block.includes('const hasFix = gps.rawGPS.hasFix;') &&
       block.includes('return toMapMotionGpsSample(position);') &&
       block.includes('gps.rawGPS.hasFix') &&
       block.includes('gps.rawGPS.position')
     );
   })(),
-  'Navigate should prefer raw provider GPS fixes before passing them through the render-facing stabilization lane.',
+  'Navigate should require an authorized raw provider fix before passing it through the render-facing stabilization lane.',
 );
 assert.ok(
   navigateSource.includes('allowTeleport: true') &&
@@ -288,7 +292,7 @@ assert.ok(
 );
 const stableMapSurfaceStart = navigateSource.indexOf('const stableMapSurface = useMemo(() => {');
 assert.ok(stableMapSurfaceStart >= 0, 'Navigate should keep the broad map surface memo readable.');
-const stableMapSurfaceDepsStart = navigateSource.indexOf('}, [\n  hasToken,', stableMapSurfaceStart);
+const stableMapSurfaceDepsStart = navigateSource.indexOf('}, [\n  renderMapPopup,', stableMapSurfaceStart);
 const stableMapSurfaceDepsEnd = navigateSource.indexOf(']);', stableMapSurfaceDepsStart);
 assert.ok(
   stableMapSurfaceDepsStart > stableMapSurfaceStart &&
@@ -355,13 +359,14 @@ assert.ok(
 );
 assert.ok(
     mapRendererSource.includes('function buildMapboxStaticImageUrl') &&
-    mapRendererSource.includes("motionPriority === 'warm'") &&
-    mapRendererSource.includes('!standbyMapHasOperationalOverlay') &&
-    mapRendererSource.includes('!standbyMapHasLiveLocation') &&
+    mapRendererSource.includes('shouldUseMapSurfaceStandby({') &&
+    mapSurfaceCoordinatorSource.includes("input.motionPriority === 'warm'") &&
+    mapSurfaceCoordinatorSource.includes('!input.hasOperationalOverlay') &&
+    mapSurfaceCoordinatorSource.includes('!input.hasLiveLocation') &&
     mapRendererSource.includes('const renderLiveWebView =') &&
     mapRendererSource.includes("motionPriority !== 'cold'") &&
     mapRendererSource.includes('!webRendererCrashBlocked'),
-  'MapRenderer should place no-overlay warm idle maps into standby, but keep a live surface when the GPS display pin is visible.',
+  'MapRenderer should preserve standby for eligible secondary maps while sharing the tested surface policy.',
 );
 assert.ok(
   mapRendererSource.includes("motionPriority === 'cold'") &&
@@ -380,11 +385,11 @@ assert.ok(
 );
 assert.ok(
   mapRendererSource.includes('const shouldRenderFallbackSurface = fallbackVisible && motionPriority !== \'cold\';') &&
-    mapRendererSource.includes('const shouldRenderPlaceholder = !liveMapDisabled && !standbyMapActive && motionPriority !== \'cold\';') &&
+    mapRendererSource.includes('!isLoading && !liveMapDisabled && !standbyMapActive && motionPriority !== \'cold\';') &&
     mapRendererSource.includes('const showBootOverlay =') &&
     mapRendererSource.includes('renderLiveWebView &&') &&
     mapRendererSource.includes('{shouldRenderFallbackSurface ? (') &&
-    mapRendererSource.includes('{showBootOverlay && !shouldRenderFallbackSurface && ('),
+    mapRendererSource.includes('(showBootOverlay || showTerminalBootOverlay)'),
   'MapRenderer should avoid drawing fallback, placeholder, or boot overlays for cold hidden/search map surfaces.',
 );
 assert.ok(
@@ -405,8 +410,8 @@ assert.ok(
   mapRendererSource.includes('standbyStaticMapDisabled?: boolean;') &&
     mapRendererSource.includes('standbyStaticMapDisabled = false') &&
     mapRendererSource.includes('!standbyStaticMapDisabled &&') &&
-    navigateSource.includes('standbyStaticMapDisabled={true}'),
-  'Navigate should be able to keep the standby wake surface without loading a full-screen remote static map bitmap during tab cycling.',
+    navigateSource.includes('standbyMapDisabled={true}'),
+  'Primary Navigate should opt out of standby while secondary compact maps retain static-standby support.',
 );
 assert.ok(
   mapRendererSource.includes('const FULL_MAP_PIXEL_RATIO_CAP =') &&
@@ -419,19 +424,21 @@ assert.ok(
 );
 assert.ok(
   navigateSource.includes('surfaceMode="compact"') &&
+    navigateSource.includes('standbyMapDisabled={true}') &&
     navigateSource.includes('destinationSearchMapOccluder') &&
     navigateSource.includes('interactive={!destinationSearchMapFrozen}') &&
     !navigateSource.includes('style={destinationSearchMapFrozen ? styles.mapRendererFrozen : undefined}') &&
     !navigateSource.includes('mapRendererFrozen:'),
-  'Navigate should keep the compact map in lightweight standby during parked search and pause interaction through the occluder without display-none layout churn.',
+  'Navigate should keep its primary compact base map mounted and pause search-background interaction through the occluder without display-none churn.',
 );
 assert.ok(
   !navigateSource.includes('standbyMapDisabled={idleDestinationSearchVisible && !destinationSearchMapFrozen}'),
   'Idle destination search should not force a live WebView under the parked search panel.',
 );
 assert.ok(
-  navigateSource.includes('standbyWakeDisabled={idleDestinationSearchVisible}'),
-  'Parked idle destination search should keep the standby map visually useful without letting search-background taps wake the live WebView.',
+  !navigateSource.includes('standbyWakeDisabled={idleDestinationSearchVisible}') &&
+    navigateSource.includes('standbyMapDisabled={true}'),
+  'Parked idle destination search must not convert the canonical Navigate base map into a disabled standby wake layer.',
 );
 assert.ok(
   navigateSource.includes('const activeRerouteMapStandby =') &&

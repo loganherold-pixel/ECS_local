@@ -294,7 +294,8 @@ assert(
     mapRenderer.includes('const hardFailureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);') &&
     mapRenderer.includes('const hasEverReachedReadyRef = useRef(false);') &&
     mapRenderer.includes('onReadyStateChange?.(') &&
-    mapRenderer.includes("standbyMapActive || motionPriority === 'cold' || webReady || hasEverReachedReadyRef.current") &&
+    mapRenderer.includes('resolveMapSurfaceInitializationState({') &&
+    mapRenderer.includes('rendererWasReady: hasEverReachedReadyRef.current') &&
     mapRenderer.includes('setWebBootIssue(phase === \'bootstrap_progress\' ? \'map_load_timeout\' : \'webview_startup_timeout\');') &&
     !mapRenderer.includes('Auto-recovery remount after cold-start timeout') &&
     !mapRenderer.includes('WEBVIEW_AUTO_RECOVERY_LIMIT'),
@@ -323,7 +324,7 @@ assert(
     mapRenderer.includes('<MapFallbackSurface') &&
     !mapRenderer.includes("'ECS fallback map'") &&
     !mapRenderer.includes("'Offline map fallback'") &&
-    mapRenderer.includes('{showBootOverlay && !shouldRenderFallbackSurface && ('),
+    mapRenderer.includes('(showBootOverlay || showTerminalBootOverlay)'),
   'MapRenderer should provide a native route fallback surface when Mapbox/WebView cannot initialize without exposing fallback status copy.',
 );
 assert(

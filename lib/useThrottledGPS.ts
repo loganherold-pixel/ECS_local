@@ -37,6 +37,7 @@ import {
 } from './useGPSLocation';
 import { gpsUIState, type GPSUIState } from './gpsUIState';
 import { useSharedGPSLocation } from './sharedGPSLocation';
+import type { ForegroundLocationPermissionState } from './locationPermissions';
 
 // ── Output type (extends GPSLocationOutput with rawGPS) ────
 export interface ThrottledGPSOutput {
@@ -60,6 +61,11 @@ export interface ThrottledGPSOutput {
   retryCount: number;
   /** Whether permission was explicitly denied */
   permissionDenied: boolean;
+  permissionState: ForegroundLocationPermissionState;
+  canAskAgain: boolean | null;
+  permissionRequestPending: boolean;
+  /** Opens the supported native/browser permission flow once per activation. */
+  requestPermission: () => Promise<void>;
   /**
    * Raw (unthrottled) GPS output — use for internal calculations
    * that need every update (distance tracking, waypoint detection)
@@ -103,6 +109,9 @@ export function useThrottledGPS(
     rawGPS.error,
     rawGPS.retryCount,
     rawGPS.permissionDenied,
+    rawGPS.permissionState,
+    rawGPS.canAskAgain,
+    rawGPS.permissionRequestPending,
   ]);
 
   // ── Subscribe to throttled state changes ─────────────
@@ -133,6 +142,10 @@ export function useThrottledGPS(
     refresh: rawGPS.refresh,
     retryCount: throttledState.retryCount,
     permissionDenied: throttledState.permissionDenied,
+    permissionState: throttledState.permissionState,
+    canAskAgain: throttledState.canAskAgain,
+    permissionRequestPending: throttledState.permissionRequestPending,
+    requestPermission: rawGPS.requestPermission ?? (async () => {}),
     rawGPS,
   };
 }

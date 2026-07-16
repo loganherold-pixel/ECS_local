@@ -27,6 +27,7 @@
  */
 
 import type { GPSPosition, GPSLocationOutput } from './useGPSLocation';
+import type { ForegroundLocationPermissionState } from './locationPermissions';
 
 // ── Throttle interval ──────────────────────────────────────
 const THROTTLE_INTERVAL_MS = 1000; // 1 update per second
@@ -51,6 +52,10 @@ export interface GPSUIState {
   retryCount: number;
   /** Whether permission was explicitly denied */
   permissionDenied: boolean;
+  /** Requestable, granted, blocked, restricted, or unavailable permission state. */
+  permissionState: ForegroundLocationPermissionState;
+  canAskAgain: boolean | null;
+  permissionRequestPending: boolean;
   /** Timestamp of last throttled emission */
   lastEmitTs: number;
 }
@@ -66,6 +71,9 @@ const DEFAULT_STATE: GPSUIState = {
   error: null,
   retryCount: 0,
   permissionDenied: false,
+  permissionState: 'unknown',
+  canAskAgain: null,
+  permissionRequestPending: false,
   lastEmitTs: 0,
 };
 
@@ -181,6 +189,9 @@ class GPSUIStateStore {
       error: raw.error,
       retryCount: raw.retryCount,
       permissionDenied: raw.permissionDenied,
+      permissionState: raw.permissionState ?? 'unknown',
+      canAskAgain: raw.canAskAgain ?? null,
+      permissionRequestPending: raw.permissionRequestPending === true,
       lastEmitTs: Date.now(),
     };
 
@@ -220,6 +231,9 @@ class GPSUIStateStore {
     if (prev.error !== next.error) return true;
     if (prev.retryCount !== next.retryCount) return true;
     if (prev.permissionDenied !== next.permissionDenied) return true;
+    if (prev.permissionState !== next.permissionState) return true;
+    if (prev.canAskAgain !== next.canAskAgain) return true;
+    if (prev.permissionRequestPending !== next.permissionRequestPending) return true;
 
     // Position comparison (null checks + value checks)
     if (prev.position == null && next.position != null) return true;

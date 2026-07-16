@@ -24,6 +24,10 @@ import { ECSButton } from '../ECSButton';
 import { TACTICAL, TYPO } from '../../lib/theme';
 import { useReducedMotion } from '../../lib/ecsAnimations';
 import type { GPSLocationOutput } from '../../lib/useGPSLocation';
+import {
+  resolveForegroundLocationPermissionRecoveryAction,
+  type ForegroundLocationPermissionState,
+} from '../../lib/locationPermissions';
 
 interface Props {
   gpsStatus: GPSLocationOutput['gpsStatus'];
@@ -31,8 +35,12 @@ interface Props {
   hasFix: boolean;
   retryCount: number;
   permissionDenied: boolean;
+  permissionState: ForegroundLocationPermissionState;
+  canAskAgain: boolean | null;
+  permissionRequestPending: boolean;
   error: string | null;
   onRetry: () => void;
+  onRequestPermission: () => Promise<void>;
   /** Whether the map has finished loading */
   mapReady: boolean;
   topOffset?: number;
@@ -47,8 +55,12 @@ export default function GPSStatusOverlay({
   hasFix,
   retryCount,
   permissionDenied,
+  permissionState,
+  canAskAgain,
+  permissionRequestPending,
   error,
   onRetry,
+  onRequestPermission,
   mapReady,
   topOffset = 8,
   bottomOffset,
@@ -110,10 +122,10 @@ export default function GPSStatusOverlay({
   }, [hasFix, fadeAnim, dismissed, reducedMotion]);
 
   useEffect(() => {
-    if (hasFix || !dismissed) return;
+    if ((hasFix && permissionState === 'granted') || !dismissed) return;
     fadeAnim.setValue(1);
     setDismissed(false);
-  }, [dismissed, fadeAnim, hasFix]);
+  }, [dismissed, fadeAnim, hasFix, permissionState]);
 
   // Don't render if dismissed or already have fix and animation complete
   if (dismissed) return null;
@@ -121,63 +133,76 @@ export default function GPSStatusOverlay({
   // Don't show overlay until map is ready (map has its own loading overlay)
   if (!mapReady && !permissionDenied) return null;
 
-  // ── Permission Denied State ──────────────────────────
-  if (permissionDenied) {
+  const effectivePermissionState = permissionState === 'unknown' && permissionDenied
+    ? canAskAgain === false
+      ? 'blocked'
+      : 'denied_requestable'
+    : permissionState;
+  const recoveryAction = resolveForegroundLocationPermissionRecoveryAction(
+    effectivePermissionState,
+    Platform.OS === 'web' ? 'web' : 'native',
+  );
+  const permissionRequestable = recoveryAction === 'request_in_app';
+  const permissionBlocked =
+    effectivePermissionState === 'blocked' || effectivePermissionState === 'restricted';
+
+  // ── Permission Recovery State ────────────────────────
+  if (permissionRequestable || permissionBlocked) {
+    const canOpenNativeSettings = recoveryAction === 'open_native_settings';
+    const title = permissionRequestable ? 'LOCATION PERMISSION' : 'LOCATION BLOCKED';
+    const message = permissionRequestable
+      ? 'The map remains available. Allow location to show your position and enable camera follow.'
+      : effectivePermissionState === 'restricted'
+        ? 'The map remains available. Device policy currently restricts location access.'
+        : 'The map remains available. Location access is blocked for ECS.';
+    const overlayPosition =
+      bottomOffset != null
+        ? { bottom: bottomOffset, left: horizontalInset, right: horizontalInset }
+        : { top: topOffset, left: horizontalInset, right: horizontalInset };
+
     return (
       <View
-        style={styles.deniedContainer}
-        accessibilityViewIsModal
+        style={[styles.acquiringOverlay, overlayPosition]}
+        pointerEvents="box-none"
       >
         <View
-          style={styles.deniedCard}
+          style={[styles.acquiringBanner, styles.permissionBanner, { maxWidth }]}
         >
-          <View style={styles.deniedIconWrap}>
-            <Ionicons name="location-outline" size={28} color={TACTICAL.danger} />
-            <View style={styles.deniedSlash} />
-          </View>
+          <Ionicons name="location-outline" size={18} color={TACTICAL.amber} />
+          <View style={styles.acquiringContent}>
           <Text
-            style={styles.deniedTitle}
+            style={styles.permissionTitle}
             accessible
             accessibilityRole="alert"
             accessibilityLiveRegion="assertive"
-            accessibilityLabel="Location permission required. ECS Navigate needs location access. Saved context remains available."
+            accessibilityLabel={`${title}. ${message}`}
           >
-            LOCATION NEEDED
+            {title}
           </Text>
-          <Text style={styles.deniedBody}>
-            ECS Navigate needs location access to center the map, track trails,
-            and keep guidance current.
-          </Text>
-          <Text style={styles.deniedHint}>
-            Enable location in your device settings to use Navigate.
-          </Text>
-          <View style={styles.deniedActions}>
-            <ECSButton
-              label={Platform.OS === 'web' ? 'TRY AGAIN' : 'OPEN SETTINGS'}
-              icon="settings-outline"
-              variant="primary"
-              size="medium"
-              accessibilityLabel={Platform.OS === 'web' ? 'Retry location permission' : 'Open location settings'}
-              accessibilityHint="Location is not requested until this action is activated."
-              onPress={() => {
-                if (Platform.OS === 'ios') {
-                  Linking.openURL('app-settings:');
-                } else if (Platform.OS === 'android') {
-                  Linking.openSettings();
-                } else {
-                  // Web — can't open settings, just retry
-                  onRetry();
-                }
-              }}
-            />
-            <ECSButton
-              label="CONTINUE WITH SAVED CONTEXT"
-              variant="secondary"
-              size="medium"
-              onPress={() => setDismissed(true)}
-              accessibilityHint="Dismisses this prompt without enabling live location."
-            />
+            <Text style={styles.acquiringHint}>{message}</Text>
           </View>
+          <ECSButton
+            label={canOpenNativeSettings ? 'OPEN SETTINGS' : 'RETRY PERMISSION'}
+            icon={canOpenNativeSettings ? 'settings-outline' : 'location-outline'}
+            variant="secondary"
+            size="compact"
+            loading={!canOpenNativeSettings && permissionRequestPending}
+            accessibilityLabel={canOpenNativeSettings ? 'Open location settings' : 'Retry location permission'}
+            accessibilityHint={
+              canOpenNativeSettings
+                ? 'Opens system settings. The map remains usable without location.'
+                : 'Opens the supported system or browser permission request in ECS.'
+            }
+            onPress={() => {
+              if (!canOpenNativeSettings) {
+                void onRequestPermission();
+              } else if (Platform.OS === 'ios') {
+                void Linking.openURL('app-settings:');
+              } else if (Platform.OS === 'android') {
+                void Linking.openSettings();
+              }
+            }}
+          />
         </View>
       </View>
     );
@@ -227,12 +252,12 @@ export default function GPSStatusOverlay({
               <Text style={styles.acquiringHint}>{unavailableMessage}</Text>
             </View>
             <ECSButton
-              label="RETRY"
+              label="CHECK AGAIN"
               variant="secondary"
               size="compact"
               onPress={onRetry}
-              accessibilityLabel="Retry current location"
-              accessibilityHint="Requests a fresh location fix."
+              accessibilityLabel="Check location service again"
+              accessibilityHint="Rechecks location service availability without opening settings."
             />
           </View>
         </View>
@@ -329,107 +354,14 @@ export default function GPSStatusOverlay({
 }
 
 const styles = StyleSheet.create({
-  // ── Permission Denied ─────────────────────────────────
-  deniedContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 50,
-    backgroundColor: 'rgba(11,15,18,0.88)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
+  permissionBanner: {
+    borderColor: 'rgba(196,138,44,0.55)',
   },
-  deniedCard: {
-    backgroundColor: TACTICAL.panel,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: 'rgba(192,57,43,0.4)',
-    padding: 28,
-    maxWidth: 380,
-    width: '100%',
-    alignItems: 'center',
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.5,
-    shadowRadius: 16,
-    elevation: 12,
-  },
-  deniedIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(192,57,43,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(192,57,43,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  deniedSlash: {
-    position: 'absolute',
-    width: 36,
-    height: 2,
-    backgroundColor: TACTICAL.danger,
-    transform: [{ rotate: '45deg' }],
-    opacity: 0.6,
-  },
-  deniedTitle: {
-    ...TYPO.T2,
-    color: TACTICAL.danger,
-    textAlign: 'center',
-    letterSpacing: 4,
-  },
-  deniedBody: {
-    ...TYPO.B2,
-    color: TACTICAL.text,
-    textAlign: 'center',
-    lineHeight: 20,
-    fontSize: 13,
-  },
-  deniedHint: {
-    ...TYPO.B2,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-    fontSize: 11,
-    lineHeight: 17,
-  },
-  deniedActions: {
-    width: '100%',
-    gap: 10,
-    marginTop: 8,
-  },
-  deniedSettingsBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: TACTICAL.amber,
-    paddingVertical: 14,
-    borderRadius: 10,
-  },
-  deniedSettingsBtnText: {
-    ...TYPO.U1,
-    color: '#0B0F12',
-    letterSpacing: 3,
-    fontSize: 12,
-  },
-  deniedDismissBtn: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: TACTICAL.border,
-  },
-  deniedDismissBtnText: {
+  permissionTitle: {
     ...TYPO.U2,
-    color: TACTICAL.textMuted,
+    color: TACTICAL.amber,
     fontSize: 10,
-    letterSpacing: 3,
+    letterSpacing: 1.8,
   },
 
   // ── Acquiring / Locating ──────────────────────────────

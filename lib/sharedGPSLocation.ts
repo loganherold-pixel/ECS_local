@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { ecsLog } from './ecsLogger';
-import { ensureForegroundLocationPermission } from './locationPermissions';
+import {
+  inspectForegroundLocationPermission,
+  requestForegroundLocationPermission,
+  type ForegroundLocationPermissionSnapshot,
+  type ForegroundLocationPermissionState,
+} from './locationPermissions';
 import type { GPSLocationOptions, GPSLocationOutput, GPSPosition } from './useGPSLocation';
 
 const M_TO_FT = 3.28084;
@@ -16,7 +21,13 @@ type Listener = () => void;
 type SubscriberOptions = Required<Pick<GPSLocationOptions, 'enabled' | 'highAccuracy'>> &
   Pick<GPSLocationOptions, 'maxRetries' | 'retryIntervalMs'>;
 
-const DEFAULT_OUTPUT: Omit<GPSLocationOutput, 'refresh'> = {
+type SharedGPSState = Omit<GPSLocationOutput, 'refresh' | 'requestPermission'> & {
+  permissionState: ForegroundLocationPermissionState;
+  canAskAgain: boolean | null;
+  permissionRequestPending: boolean;
+};
+
+const DEFAULT_OUTPUT: SharedGPSState = {
   position: null,
   isAvailable: false,
   hasFix: false,
@@ -26,6 +37,9 @@ const DEFAULT_OUTPUT: Omit<GPSLocationOutput, 'refresh'> = {
   error: null,
   retryCount: 0,
   permissionDenied: false,
+  permissionState: 'unknown',
+  canAskAgain: null,
+  permissionRequestPending: false,
 };
 
 function normalizeOptions(options: GPSLocationOptions): SubscriberOptions {
@@ -74,7 +88,7 @@ function positionsEquivalent(a: GPSPosition | null, b: GPSPosition | null): bool
 }
 
 class SharedGPSLocationStore {
-  private state: Omit<GPSLocationOutput, 'refresh'> = { ...DEFAULT_OUTPUT };
+  private state: SharedGPSState = { ...DEFAULT_OUTPUT };
   private listeners = new Set<Listener>();
   private subscribers = new Map<number, SubscriberOptions>();
   private nextSubscriberId = 1;
@@ -84,8 +98,11 @@ class SharedGPSLocationStore {
   private appStateSubscription: { remove: () => void } | null = null;
   private appState: AppStateStatus = AppState.currentState;
   private activeHighAccuracy: boolean | null = null;
+  private pendingStartHighAccuracy: boolean | null = null;
+  private pendingStartPromise: Promise<void> | null = null;
   private startGeneration = 0;
   private retryCount = 0;
+  private permissionRequestPromise: Promise<void> | null = null;
 
   get(): GPSLocationOutput {
     return {
@@ -93,6 +110,7 @@ class SharedGPSLocationStore {
       refresh: () => {
         void this.refresh();
       },
+      requestPermission: () => this.requestPermission(),
     };
   }
 
@@ -122,6 +140,12 @@ class SharedGPSLocationStore {
     if (!options) return;
 
     try {
+      if (this.state.permissionState !== 'granted') {
+        this.activeHighAccuracy = null;
+        this.reconcileWatchers();
+        return;
+      }
+
       if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
           (pos) => this.applyPosition(parseCoords(pos.coords, pos.timestamp)),
@@ -145,6 +169,108 @@ class SharedGPSLocationStore {
     }
   }
 
+  requestPermission(): Promise<void> {
+    if (this.permissionRequestPromise) return this.permissionRequestPromise;
+
+    const request = this.requestPermissionOnce().finally(() => {
+      if (this.permissionRequestPromise === request) {
+        this.permissionRequestPromise = null;
+        this.setState({ permissionRequestPending: false });
+      }
+    });
+    this.permissionRequestPromise = request;
+    this.setState({ permissionRequestPending: true });
+    return request;
+  }
+
+  private async requestPermissionOnce(): Promise<void> {
+    const options = this.resolveActiveOptions();
+    if (!options) return;
+
+    if (Platform.OS === 'web') {
+      await this.requestWebPermission(options);
+      return;
+    }
+
+    try {
+      const Location = await import('expo-location');
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        this.applyLocationUnavailable('Location services are disabled');
+        return;
+      }
+
+      const current = await inspectForegroundLocationPermission(Location);
+      if (
+        current.state === 'granted' ||
+        current.state === 'blocked' ||
+        current.state === 'restricted' ||
+        current.state === 'unavailable'
+      ) {
+        this.applyPermissionSnapshot(current);
+        if (current.state === 'granted') {
+          this.activeHighAccuracy = null;
+          this.reconcileWatchers();
+        }
+        return;
+      }
+
+      const requested = await requestForegroundLocationPermission(Location);
+      this.applyPermissionSnapshot(requested);
+      if (requested.state === 'granted') {
+        this.activeHighAccuracy = null;
+        this.reconcileWatchers();
+      }
+    } catch (error: any) {
+      ecsLog.warn('GPS', '[GPS SHARED] Permission request failed', {
+        error: error?.message || String(error),
+      });
+      this.applyLocationUnavailable('Native location permission unavailable');
+    }
+  }
+
+  private applyPermissionSnapshot(
+    snapshot: ForegroundLocationPermissionSnapshot,
+  ): void {
+    const permissionDenied =
+      snapshot.state === 'denied_requestable' ||
+      snapshot.state === 'blocked' ||
+      snapshot.state === 'restricted';
+    const error = snapshot.state === 'granted'
+      ? null
+      : snapshot.state === 'requestable' || snapshot.state === 'unknown'
+        ? 'Location permission is required'
+        : snapshot.state === 'denied_requestable'
+          ? 'Location permission denied; permission can be requested again'
+          : snapshot.state === 'blocked'
+            ? 'Location permission is blocked in device settings'
+            : snapshot.state === 'restricted'
+              ? 'Location permission is restricted on this device'
+              : 'Location permission is unavailable';
+
+    this.setState({
+      permissionState: snapshot.state,
+      canAskAgain: snapshot.canAskAgain,
+      permissionDenied,
+      isAvailable: snapshot.state === 'unavailable' ? false : true,
+      isWatching: snapshot.state === 'granted' ? this.state.isWatching : false,
+      position: snapshot.state === 'granted' ? this.state.position : null,
+      error,
+    });
+  }
+
+  private applyLocationUnavailable(message: string): void {
+    this.setState({
+      permissionState: 'unavailable',
+      canAskAgain: null,
+      permissionDenied: false,
+      isAvailable: false,
+      isWatching: false,
+      position: null,
+      error: message,
+    });
+  }
+
   private notify(): void {
     this.listeners.forEach((listener) => {
       try {
@@ -153,19 +279,32 @@ class SharedGPSLocationStore {
     });
   }
 
-  private setState(next: Partial<Omit<GPSLocationOutput, 'refresh'>>): void {
+  private setState(next: Partial<SharedGPSState>): void {
     this.state = { ...this.state, ...next };
     this.state = {
       ...this.state,
-      hasFix: this.state.position != null,
-      fixQuality: resolveFixQuality(this.state.position),
+      hasFix:
+        this.state.permissionState === 'granted' &&
+        this.state.isAvailable &&
+        this.state.position != null,
+      fixQuality:
+        this.state.permissionState === 'granted' && this.state.isAvailable
+          ? resolveFixQuality(this.state.position)
+          : 'NONE',
       gpsStatus: this.resolveStatus(this.state),
     };
     this.notify();
   }
 
-  private resolveStatus(state: Omit<GPSLocationOutput, 'refresh'>): GPSLocationOutput['gpsStatus'] {
-    if (state.permissionDenied) return 'DENIED';
+  private resolveStatus(state: SharedGPSState): GPSLocationOutput['gpsStatus'] {
+    if (
+      state.permissionState === 'requestable' ||
+      state.permissionState === 'denied_requestable' ||
+      state.permissionState === 'blocked' ||
+      state.permissionState === 'restricted'
+    ) {
+      return 'DENIED';
+    }
     if (!state.isAvailable) return 'UNAVAILABLE';
     if (state.error && state.gpsStatus === 'RETRYING') return 'RETRYING';
     if (!state.position) return 'ACQUIRING';
@@ -182,14 +321,14 @@ class SharedGPSLocationStore {
       error: null,
       retryCount: 0,
       permissionDenied: false,
+      permissionState: 'granted',
+      canAskAgain: true,
     });
   }
 
-  private applyError(message: string, permissionDenied = false): void {
+  private applyError(message: string): void {
     this.setState({
       error: message,
-      permissionDenied,
-      isAvailable: permissionDenied ? this.state.isAvailable : this.state.isAvailable,
       retryCount: this.retryCount,
     });
   }
@@ -232,6 +371,8 @@ class SharedGPSLocationStore {
     const options = this.resolveActiveOptions();
     if (!options) {
       this.stopTracking();
+      this.pendingStartPromise = null;
+      this.pendingStartHighAccuracy = null;
       this.setState({
         isWatching: false,
         error: null,
@@ -240,12 +381,22 @@ class SharedGPSLocationStore {
       return;
     }
 
-    if (this.activeHighAccuracy === options.highAccuracy && this.state.isWatching) {
+    if (
+      this.activeHighAccuracy === options.highAccuracy &&
+      (this.state.isWatching || this.pendingStartHighAccuracy === options.highAccuracy)
+    ) {
       return;
     }
 
     this.activeHighAccuracy = options.highAccuracy;
-    void this.startTracking(options);
+    const startPromise = this.startTracking(options);
+    this.pendingStartPromise = startPromise;
+    this.pendingStartHighAccuracy = options.highAccuracy;
+    void startPromise.finally(() => {
+      if (this.pendingStartPromise !== startPromise) return;
+      this.pendingStartPromise = null;
+      this.pendingStartHighAccuracy = null;
+    });
   }
 
   private clearRetryTimer(): void {
@@ -305,7 +456,7 @@ class SharedGPSLocationStore {
 
     try {
       if (Platform.OS === 'web') {
-        this.startWebTracking(options, generation);
+        await this.startWebTracking(options, generation);
         return;
       }
 
@@ -315,20 +466,16 @@ class SharedGPSLocationStore {
       const servicesEnabled = await Location.hasServicesEnabledAsync();
       if (generation !== this.startGeneration) return;
       if (!servicesEnabled) {
-        this.setState({
-          isAvailable: false,
-          isWatching: false,
-          error: 'Location services are disabled',
-        });
+        this.applyLocationUnavailable('Location services are disabled');
         return;
       }
 
       this.setState({ isAvailable: true, error: null });
 
-      const { status } = await ensureForegroundLocationPermission(Location);
+      const permission = await inspectForegroundLocationPermission(Location);
       if (generation !== this.startGeneration) return;
-      if (status !== 'granted') {
-        this.applyError('Location permission denied', true);
+      this.applyPermissionSnapshot(permission);
+      if (permission.state !== 'granted') {
         return;
       }
 
@@ -353,7 +500,7 @@ class SharedGPSLocationStore {
 
       if (generation !== this.startGeneration) return;
 
-      this.subscriptionRef = await Location.watchPositionAsync(
+      const subscription = await Location.watchPositionAsync(
         {
           accuracy,
           distanceInterval,
@@ -365,50 +512,157 @@ class SharedGPSLocationStore {
           this.applyPosition(parseCoords(loc.coords, loc.timestamp));
         },
       );
-      if (generation === this.startGeneration) {
-        this.setState({ isWatching: true, isAvailable: true, error: null });
+      const activeOptions = this.resolveActiveOptions();
+      if (
+        generation !== this.startGeneration ||
+        !activeOptions ||
+        activeOptions.highAccuracy !== options.highAccuracy
+      ) {
+        try {
+          subscription.remove();
+        } catch {}
+        return;
       }
+      if (this.subscriptionRef && this.subscriptionRef !== subscription) {
+        try {
+          this.subscriptionRef.remove();
+        } catch {}
+      }
+      this.subscriptionRef = subscription;
+      this.setState({ isWatching: true, isAvailable: true, error: null });
     } catch (error: any) {
       ecsLog.warn('GPS', '[GPS SHARED] Tracking failed', {
         error: error?.message || String(error),
       });
       if (generation === this.startGeneration) {
         this.setState({
+          permissionState: 'unavailable',
+          canAskAgain: null,
+          permissionDenied: false,
           isAvailable: false,
           isWatching: false,
+          position: null,
           error: 'Native GPS unavailable',
         });
       }
     }
   }
 
-  private startWebTracking(options: SubscriberOptions, generation: number): void {
+  private async inspectWebPermission(): Promise<ForegroundLocationPermissionSnapshot> {
     if (!(typeof navigator !== 'undefined' && navigator.geolocation)) {
-      this.setState({
-        isAvailable: false,
-        isWatching: false,
-        error: 'GPS not available on this device',
-      });
+      return {
+        state: 'unavailable',
+        canAskAgain: null,
+        response: { status: 'unavailable', canAskAgain: false },
+      };
+    }
+
+    try {
+      if (navigator.permissions?.query) {
+        const permission = await navigator.permissions.query({ name: 'geolocation' });
+        if (permission.state === 'granted') {
+          return {
+            state: 'granted',
+            canAskAgain: true,
+            response: { status: 'granted', canAskAgain: true },
+          };
+        }
+        if (permission.state === 'denied') {
+          return {
+            state: 'denied_requestable',
+            canAskAgain: true,
+            response: { status: 'denied', canAskAgain: true },
+          };
+        }
+      }
+    } catch {
+      // Browsers without the Permissions API still support an explicit
+      // geolocation request from the in-app permission action.
+    }
+
+    return {
+      state: 'requestable',
+      canAskAgain: true,
+      response: { status: 'undetermined', canAskAgain: true },
+    };
+  }
+
+  private async requestWebPermission(options: SubscriberOptions): Promise<void> {
+    if (!(typeof navigator !== 'undefined' && navigator.geolocation)) {
+      this.applyLocationUnavailable('GPS not available on this device');
       return;
     }
 
-    this.setState({ isAvailable: true, error: null });
+    await new Promise<void>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          this.applyPermissionSnapshot({
+            state: 'granted',
+            canAskAgain: true,
+            response: { status: 'granted', canAskAgain: true },
+          });
+          this.applyPosition(parseCoords(position.coords, position.timestamp));
+          const activeOptions = this.resolveActiveOptions();
+          if (activeOptions) {
+            this.startWebWatch(activeOptions, this.startGeneration);
+          }
+          resolve();
+        },
+        (error) => {
+          if (error.code === 1) {
+            this.applyPermissionSnapshot({
+              state: 'denied_requestable',
+              canAskAgain: true,
+              response: { status: 'denied', canAskAgain: true },
+            });
+          } else {
+            this.applyError(error?.message || 'GPS temporarily unavailable');
+          }
+          resolve();
+        },
+        { enableHighAccuracy: options.highAccuracy, timeout: 10000, maximumAge: 0 },
+      );
+    });
+  }
+
+  private async startWebTracking(
+    options: SubscriberOptions,
+    generation: number,
+  ): Promise<void> {
+    const permission = await this.inspectWebPermission();
+    if (generation !== this.startGeneration) return;
+    this.applyPermissionSnapshot(permission);
+    if (permission.state !== 'granted') return;
 
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      (position) => {
         if (generation !== this.startGeneration) return;
-        this.applyPosition(parseCoords(pos.coords, pos.timestamp));
+        this.applyPosition(parseCoords(position.coords, position.timestamp));
       },
       (error) => {
         if (generation !== this.startGeneration) return;
         if (error.code === 1) {
-          this.applyError('Location permission denied', true);
+          this.applyPermissionSnapshot({
+            state: 'denied_requestable',
+            canAskAgain: true,
+            response: { status: 'denied', canAskAgain: true },
+          });
         } else {
           this.scheduleRetry(options, generation);
         }
       },
       { enableHighAccuracy: options.highAccuracy, timeout: 10000, maximumAge: 2000 },
     );
+
+    this.startWebWatch(options, generation);
+  }
+
+  private startWebWatch(options: SubscriberOptions, generation: number): void {
+    if (!(typeof navigator !== 'undefined' && navigator.geolocation)) return;
+    if (this.watchIdRef != null) {
+      navigator.geolocation.clearWatch(this.watchIdRef);
+      this.watchIdRef = null;
+    }
 
     this.watchIdRef = navigator.geolocation.watchPosition(
       (pos) => {
@@ -418,7 +672,11 @@ class SharedGPSLocationStore {
       (error) => {
         if (generation !== this.startGeneration) return;
         if (error.code === 1) {
-          this.applyError('Location permission denied', true);
+          this.applyPermissionSnapshot({
+            state: 'denied_requestable',
+            canAskAgain: true,
+            response: { status: 'denied', canAskAgain: true },
+          });
         }
       },
       { enableHighAccuracy: options.highAccuracy, timeout: 15000, maximumAge: 2000 },
@@ -459,9 +717,14 @@ export function useSharedGPSLocation(options: GPSLocationOptions = {}): GPSLocat
   const refresh = useCallback(() => {
     void sharedGPSLocationStore.refresh();
   }, []);
+  const requestPermission = useCallback(
+    () => sharedGPSLocationStore.requestPermission(),
+    [],
+  );
 
   return {
     ...state,
     refresh,
+    requestPermission,
   };
 }

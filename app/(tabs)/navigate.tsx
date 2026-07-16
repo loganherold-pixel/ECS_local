@@ -28,7 +28,6 @@ import {
   Modal,
   TextInput,
   Dimensions,
-  ActivityIndicator,
   Animated,
   BackHandler,
   Easing,
@@ -2336,6 +2335,10 @@ const EMPTY_THROTTLED_GPS: ThrottledGPSOutput = {
   refresh: () => {},
   retryCount: 0,
   permissionDenied: false,
+  permissionState: 'unknown',
+  canAskAgain: null,
+  permissionRequestPending: false,
+  requestPermission: async () => {},
   rawGPS: {
     position: null,
     isAvailable: false,
@@ -2347,6 +2350,10 @@ const EMPTY_THROTTLED_GPS: ThrottledGPSOutput = {
     refresh: () => {},
     retryCount: 0,
     permissionDenied: false,
+    permissionState: 'unknown',
+    canAskAgain: null,
+    permissionRequestPending: false,
+    requestPermission: async () => {},
   },
 };
 
@@ -4307,7 +4314,7 @@ const [mapToken, setMapToken] = useState<string | null>(initialMapTokenRef.curre
 const [mapLoading, setMapLoading] = useState(initialMapTokenRef.current.length === 0);
 const [mapSurfaceReady, setMapSurfaceReady] = useState(false);
 const [mapOverlayStartupReady, setMapOverlayStartupReady] = useState(false);
-const [mapBootState, setMapBootState] = useState<MapRendererBootState>('loading');
+const [mapBootState, setMapBootState] = useState<MapRendererBootState>('initializing');
 const [mapSurfaceRevision, setMapSurfaceRevision] = useState(0);
 const [keyboardHeight, setKeyboardHeight] = useState(0);
 
@@ -4348,7 +4355,9 @@ useEffect(() => {
   const terminalBootState =
     mapBootState === 'degraded'
     || mapBootState === 'disabled'
-    || mapBootState === 'error';
+    || mapBootState === 'unavailable'
+    || mapBootState === 'configuration_error'
+    || mapBootState === 'retryable_error';
   if (mapLoading || (!mapSurfaceReady && !terminalBootState)) {
     setMapOverlayStartupReady(false);
     return undefined;
@@ -4404,22 +4413,34 @@ const handleIdleDestinationSearchBlur = useCallback(() => {
 }, []);
 
 const latestGpsMapLocation = useMemo(() => {
-  const position = gps.rawGPS.position ?? gps.position;
-  const hasFix = gps.rawGPS.hasFix || gps.hasFix;
+  if (gps.rawGPS.permissionState !== 'granted' || !gps.rawGPS.isAvailable) return null;
+  const position = gps.rawGPS.position;
+  const hasFix = gps.rawGPS.hasFix;
   if (!hasFix || !position) return null;
   return toSafeMapLocation(position);
-}, [gps.hasFix, gps.position, gps.rawGPS.hasFix, gps.rawGPS.position]);
+}, [
+  gps.rawGPS.hasFix,
+  gps.rawGPS.isAvailable,
+  gps.rawGPS.permissionState,
+  gps.rawGPS.position,
+]);
 
 const mapDisplayGpsInput = useMemo(() => {
-  const position = gps.rawGPS.position ?? gps.position;
-  const hasFix = gps.rawGPS.hasFix || gps.hasFix;
+  if (gps.rawGPS.permissionState !== 'granted' || !gps.rawGPS.isAvailable) return null;
+  const position = gps.rawGPS.position;
+  const hasFix = gps.rawGPS.hasFix;
   if (!hasFix || !position) return null;
   return toMapMotionGpsSample(position);
-}, [gps.hasFix, gps.position, gps.rawGPS.hasFix, gps.rawGPS.position]);
+}, [
+  gps.rawGPS.hasFix,
+  gps.rawGPS.isAvailable,
+  gps.rawGPS.permissionState,
+  gps.rawGPS.position,
+]);
 
 useEffect(() => {
   if (!mapDisplayGpsInput) {
-    if (gps.permissionDenied) {
+    if (gps.rawGPS.permissionState !== 'granted' || !gps.rawGPS.isAvailable) {
       mapDisplayGpsSampleRef.current = null;
       setMapDisplayGpsSample(null);
     }
@@ -4435,11 +4456,11 @@ useEffect(() => {
 
   mapDisplayGpsSampleRef.current = decision.sample;
   setMapDisplayGpsSample(decision.sample);
-}, [gps.permissionDenied, mapDisplayGpsInput]);
+}, [gps.rawGPS.isAvailable, gps.rawGPS.permissionState, mapDisplayGpsInput]);
 
 useEffect(() => {
   if (!latestGpsMapLocation) {
-    if (gps.permissionDenied) {
+    if (gps.rawGPS.permissionState !== 'granted' || !gps.rawGPS.isAvailable) {
       setUserLocation(null);
     }
     return;
@@ -4455,7 +4476,7 @@ useEffect(() => {
     }
     return latestGpsMapLocation;
   });
-}, [gps.permissionDenied, latestGpsMapLocation]);
+}, [gps.rawGPS.isAvailable, gps.rawGPS.permissionState, latestGpsMapLocation]);
 const operationalWeather = useOperationalWeather({
   enabled: isFocused,
   gps: {
@@ -4564,7 +4585,7 @@ useEffect(() => {
 
 
   const handleMapRetry = useCallback(async () => {
-    setMapBootState('loading');
+    setMapBootState('initializing');
     setMapOverlayStartupReady(false);
     setMapLoading(true);
     setMapSurfaceReady(false);
@@ -5471,12 +5492,13 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   }, [activeNavigationRunning, isFocused]);
   const compassPowerSaveActive = !isFocused || !activeNavigationRunning;
 
-  const currentGpsHeadingDeg = gps.position?.headingDeg ?? null;
+  const currentGpsHeadingDeg = gps.rawGPS.position?.headingDeg ?? null;
   const vehicleHeadingHook = useVehicleHeading({
     enabled: !compassPowerSaveActive,
     gpsHeadingDeg: currentGpsHeadingDeg,
     initialMode: 'upright',
-    speedMph: gps.position?.speedMph ?? null,
+    speedMph: gps.rawGPS.position?.speedMph ?? null,
+    permissionState: gps.rawGPS.permissionState,
   });
 
   const campsiteDrawingId = useMemo(
@@ -9307,9 +9329,16 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     setRouteWeatherDetailVisible(false);
   }, []);
 
+  const refreshGps = gps.refresh;
+  const requestGpsPermission = gps.requestPermission;
   const handleGpsRetry = useCallback(() => {
-    gps.refresh();
-  }, [gps]);
+    refreshGps();
+  }, [refreshGps]);
+
+  const handleGpsPermissionRequest = useCallback(
+    () => requestGpsPermission(),
+    [requestGpsPermission],
+  );
 
   const focusOfflineCacheBounds = useCallback((bounds: TileBounds | null | undefined, message: string) => {
     closeTopPopup('offlineCache');
@@ -22527,17 +22556,22 @@ const navigateMapMotion = useMemo(() => {
   };
 }, [destinationSearchMapFrozen, isFocused, routeOperationState.phase]);
 
-const mapRendererUserLocation = destinationSearchMapFrozen
+const rawLocationAccessGranted =
+  gps.rawGPS.permissionState === 'granted' && gps.rawGPS.isAvailable;
+const mapRendererUserLocation = destinationSearchMapFrozen || !rawLocationAccessGranted
   ? null
   : (mapDisplayUserLocation ?? stableGpsMapLocation);
 const mapRendererShowUserLocation = !destinationSearchMapFrozen &&
+  rawLocationAccessGranted &&
   navigateMapMotion.allowLiveLocation &&
   !!mapRendererUserLocation;
 const mapRendererFollowUser =
   !destinationSearchMapFrozen &&
+  rawLocationAccessGranted &&
   navigateMapMotion.allowCameraFollow &&
   followUser;
-const mapRendererVehicleHeading = destinationSearchMapFrozen || !navigateMapMotion.allowLiveLocation
+const mapRendererVehicleHeading =
+  destinationSearchMapFrozen || !rawLocationAccessGranted || !navigateMapMotion.allowLiveLocation
   ? null
   : compassDisplayHeading;
 const mapRendererCameraMode = destinationSearchMapFrozen ? undefined : mapCameraMode;
@@ -22989,8 +23023,7 @@ const mapRendererElement = useMemo(() => (
     establishedCampsites={establishedCampsitesLayer}
     campsiteSearchPolygon={campsiteSearchPolygonPayload}
     surfaceMode="compact"
-    standbyWakeDisabled={idleDestinationSearchVisible}
-    standbyStaticMapDisabled={true}
+    standbyMapDisabled={true}
   />
 ), [
   activeRerouteMapStandby,
@@ -22999,7 +23032,6 @@ const mapRendererElement = useMemo(() => (
   campsiteSearchPolygonPayload,
   combinedCampMarkers,
   destinationSearchMapFrozen,
-  idleDestinationSearchVisible,
   displayedRouteColor,
   displayedRouteLineKey,
   displayedRoutePoints,
@@ -23084,18 +23116,6 @@ const mapRendererElement = useMemo(() => (
 
 
 const stableMapSurface = useMemo(() => {
-  if (!hasToken) {
-    return (
-      <View style={styles.emptyMap}>
-        <ActivityIndicator size="large" color={TACTICAL.amber} />
-        <Text style={styles.emptyMapTitle}>CONNECTING TO MAP SERVICE</Text>
-        <Text style={styles.emptyMapBody}>
-          Resolving map configuration. This may take a moment on first launch.
-        </Text>
-      </View>
-    );
-  }
-
   const campLayerMenuContent = campLayerControlsAvailable && campLayerMenuOpen ? (
       <ScrollView
         style={styles.campLayerMenuScroll}
@@ -24482,7 +24502,6 @@ const stableMapSurface = useMemo(() => {
     </View>
   );
 }, [
-  hasToken,
   renderMapPopup,
   mapRendererElement,
   navigateUserIdentityCallout,
@@ -25296,13 +25315,17 @@ const stableMapSurface = useMemo(() => {
         {/* GPS Status Overlay - non-blocking, fades when fix acquired */}
         {gpsStatusOverlayVisible && (
           <GPSStatusOverlay
-            gpsStatus={gps.gpsStatus}
-            fixQuality={gps.fixQuality}
-            hasFix={gps.hasFix}
-            retryCount={gps.retryCount}
-            permissionDenied={gps.permissionDenied}
-            error={gps.error}
+            gpsStatus={gps.rawGPS.gpsStatus}
+            fixQuality={gps.rawGPS.fixQuality}
+            hasFix={gps.rawGPS.hasFix}
+            retryCount={gps.rawGPS.retryCount}
+            permissionDenied={gps.rawGPS.permissionDenied}
+            permissionState={gps.rawGPS.permissionState ?? 'unknown'}
+            canAskAgain={gps.rawGPS.canAskAgain ?? null}
+            permissionRequestPending={gps.rawGPS.permissionRequestPending === true}
+            error={gps.rawGPS.error}
             onRetry={handleGpsRetry}
+            onRequestPermission={handleGpsPermissionRequest}
             mapReady={mapOverlayStartupReady}
             bottomOffset={gpsStatusOverlayBottomOffset}
             horizontalInset={OVERLAY_EDGE}

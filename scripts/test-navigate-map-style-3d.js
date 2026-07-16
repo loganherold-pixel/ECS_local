@@ -73,8 +73,9 @@ assert(
 );
 assert(
   mapRenderer.includes('setTimeout(function() { replayPendingPayloadAfterStyleChange(reason, attempt + 1); },') &&
-    mapRenderer.includes('updateRoute(payload.routeCoords || [], payload.routeColor, payload.routeRenderMode, payload.routeLineKey)'),
-  'MapRenderer style replay should retry until style readiness and then restore route-source geometry.',
+    mapRenderer.includes('applyPayload(pendingPayload);') &&
+    mapRenderer.includes('applyRouteOverlayPayload(payload);'),
+  'MapRenderer style replay should retry until style readiness and then restore every current payload source through the canonical payload adapter.',
 );
 assert(
   offlineReadiness.includes('Map style ${current.mapStyle.toUpperCase()} is not cached for this route.'),

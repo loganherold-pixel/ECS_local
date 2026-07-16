@@ -9,6 +9,83 @@ export type MapSurfaceKind =
 
 export type MapMotionPriority = 'hot' | 'warm' | 'cold';
 
+export type MapSurfaceInitializationState =
+  | 'initializing'
+  | 'ready'
+  | 'degraded'
+  | 'disabled'
+  | 'unavailable'
+  | 'configuration_error'
+  | 'retryable_error';
+
+export type MapSurfaceStandbyInput = {
+  hasMapConfiguration: boolean;
+  surfaceMode: 'full' | 'compact';
+  motionPriority: MapMotionPriority;
+  interactive: boolean;
+  standbyDisabled: boolean;
+  hasLiveLocation: boolean;
+  hasOperationalOverlay: boolean;
+};
+
+/**
+ * Shared standby decision for secondary/preview map surfaces. Primary Navigate
+ * opts out through the existing standbyDisabled input so permission or a GPS
+ * fix can never become a prerequisite for mounting its base map.
+ */
+export function shouldUseMapSurfaceStandby(input: MapSurfaceStandbyInput): boolean {
+  return (
+    input.hasMapConfiguration &&
+    input.surfaceMode === 'compact' &&
+    input.motionPriority === 'warm' &&
+    input.interactive &&
+    !input.standbyDisabled &&
+    !input.hasLiveLocation &&
+    !input.hasOperationalOverlay
+  );
+}
+
+export type MapSurfaceInitializationInput = {
+  configurationLoading: boolean;
+  hasMapConfiguration: boolean;
+  liveMapDisabled: boolean;
+  standbyActive: boolean;
+  motionPriority: MapMotionPriority;
+  rendererReady: boolean;
+  rendererWasReady: boolean;
+  rendererFailed: boolean;
+  hasFallbackSurface: boolean;
+  retryAvailable: boolean;
+};
+
+/**
+ * Finite presentation state for map initialization. Every failure input is
+ * terminal; only an active configuration/renderer attempt is initializing.
+ */
+export function resolveMapSurfaceInitializationState(
+  input: MapSurfaceInitializationInput,
+): MapSurfaceInitializationState {
+  if (input.liveMapDisabled) return 'disabled';
+  if (input.configurationLoading) return 'initializing';
+  if (!input.hasMapConfiguration) return 'configuration_error';
+
+  if (input.rendererFailed) {
+    if (input.hasFallbackSurface) return 'degraded';
+    return input.retryAvailable ? 'retryable_error' : 'unavailable';
+  }
+
+  if (
+    input.standbyActive ||
+    input.motionPriority === 'cold' ||
+    input.rendererReady ||
+    input.rendererWasReady
+  ) {
+    return 'ready';
+  }
+
+  return 'initializing';
+}
+
 export type MapSurfaceMotionInput = {
   surface: MapSurfaceKind;
   isFocused?: boolean;

@@ -37,7 +37,10 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
-import { ensureForegroundLocationPermission } from './locationPermissions';
+import {
+  inspectForegroundLocationPermission,
+  type ForegroundLocationPermissionState,
+} from './locationPermissions';
 
 // ── Types ──────────────────────────────────────────────
 export type CompassMode = 'auto' | 'upright' | 'flat';
@@ -79,6 +82,8 @@ export interface VehicleHeadingOptions {
   initialMode?: CompassMode;
   /** Phase 6: Current speed in mph for stationary detection (default: null) */
   speedMph?: number | null;
+  /** Canonical permission state; changes restart or stop native heading observation. */
+  permissionState?: ForegroundLocationPermissionState;
 }
 
 // ── Constants ──────────────────────────────────────────
@@ -233,6 +238,7 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
     smoothingFactor = 0.2,
     initialMode,
     speedMph = null,
+    permissionState,
   } = options;
 
   const [compassMode, setCompassModeState] = useState<CompassMode>(
@@ -325,7 +331,12 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
 
   // ── Compass heading source (expo-location watchHeadingAsync) ──
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || (permissionState != null && permissionState !== 'granted')) {
+      compassHeadingRef.current = null;
+      updateAvailable(false);
+      updateSource('none');
+      return;
+    }
 
     let subscription: any = null;
     let cancelled = false;
@@ -337,12 +348,12 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
         if (cancelled || !mountedRef.current) return;
 
         // Check if heading is available
-        const { status } = await ensureForegroundLocationPermission(Location);
+        const permission = await inspectForegroundLocationPermission(Location);
         if (cancelled || !mountedRef.current) return;
-        if (status !== 'granted') return;
+        if (permission.state !== 'granted') return;
 
         // watchHeadingAsync provides trueHeading and magHeading
-        subscription = await Location.watchHeadingAsync((headingData: any) => {
+        const nextSubscription = await Location.watchHeadingAsync((headingData: any) => {
           if (!mountedRef.current) return;
 
           // Prefer trueHeading (GPS-corrected), fallback to magHeading
@@ -364,6 +375,11 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
             updateSource('compass');
           }
         });
+        if (cancelled || !mountedRef.current) {
+          try { nextSubscription.remove(); } catch {}
+          return;
+        }
+        subscription = nextSubscription;
       } catch {
         // expo-location not available or heading not supported
         // Fall through to GPS heading
@@ -420,7 +436,7 @@ export function useVehicleHeading(options: VehicleHeadingOptions = {}): VehicleH
         orientationListenerRef.current = null;
       }
     };
-  }, [enabled, updateAvailable, updateSource]);
+  }, [enabled, permissionState, updateAvailable, updateSource]);
 
   // ── Screen orientation change listener (for upright mode offset) ──
   useEffect(() => {

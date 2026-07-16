@@ -71,7 +71,13 @@ import type { DispatchPingMapMarker } from '../../lib/dispatchRecoveryMapModel';
 import {
   resolveViewportMarkerHeadingDeg,
 } from '../../lib/mapMotion';
-import type { MapMotionPriority, MapSurfaceKind } from '../../lib/mapSurfaceCoordinator';
+import {
+  resolveMapSurfaceInitializationState,
+  shouldUseMapSurfaceStandby,
+  type MapMotionPriority,
+  type MapSurfaceInitializationState,
+  type MapSurfaceKind,
+} from '../../lib/mapSurfaceCoordinator';
 import type { NavigateRouteGeometryRole } from '../../lib/navigatePointRouteBuilder';
 import {
   recordECSPerformanceRender,
@@ -121,7 +127,7 @@ export type NavigateMapLayerRenderState = {
   completedAt: number;
 };
 
-export type MapRendererBootState = 'loading' | 'ready' | 'degraded' | 'disabled' | 'error';
+export type MapRendererBootState = MapSurfaceInitializationState;
 const COMPACT_MAP_PIXEL_RATIO_CAP = 0.5;
 const STANDBY_STATIC_MAP_WIDTH = 720;
 const STANDBY_STATIC_MAP_HEIGHT = 1280;
@@ -9309,14 +9315,15 @@ const MapRenderer = React.memo(function MapRenderer({
     !!establishedCampsites?.enabled ||
     !!campsiteSearchPolygon?.coordinates?.length;
   const standbyMapHasLiveLocation = !!showUserLocation && !!normalizeLatLng(userLocation);
-  const standbyMapEligible =
-    shouldLoadMap &&
-    isCompactSurface &&
-    motionPriority === 'warm' &&
-    interactive !== false &&
-    !standbyMapDisabled &&
-    !standbyMapHasLiveLocation &&
-    !standbyMapHasOperationalOverlay;
+  const standbyMapEligible = shouldUseMapSurfaceStandby({
+    hasMapConfiguration: shouldLoadMap,
+    surfaceMode,
+    motionPriority,
+    interactive: interactive !== false,
+    standbyDisabled: standbyMapDisabled,
+    hasLiveLocation: standbyMapHasLiveLocation,
+    hasOperationalOverlay: standbyMapHasOperationalOverlay,
+  });
   const compactRoutePreviewStandbyEligible =
     shouldLoadMap &&
     isCompactSurface &&
@@ -9863,25 +9870,31 @@ const MapRenderer = React.memo(function MapRenderer({
     motionPriority !== 'cold' &&
     !webRendererCrashBlocked;
   const shouldRenderFallbackSurface = fallbackVisible && motionPriority !== 'cold';
-  const shouldRenderPlaceholder = !liveMapDisabled && !standbyMapActive && motionPriority !== 'cold';
+  const shouldRenderPlaceholder =
+    !isLoading && !liveMapDisabled && !standbyMapActive && motionPriority !== 'cold';
   const fallbackStatusLabel = routeGeometryPendingFallbackVisible
     ? 'Route geometry pending'
     : routeContinuityFallbackVisible || webBootIssue || webBootTimedOut || webRendererCrashBlocked
       ? 'Map fallback active'
       : null;
   const bootPresentationState = useMemo<MapRendererBootState>(() => {
-    if (!shouldLoadMap || liveMapDisabled) return 'disabled';
-    if (standbyMapActive || motionPriority === 'cold' || webReady || hasEverReachedReadyRef.current) {
-      return 'ready';
-    }
-    if (shouldRenderFallbackSurface && (webBootTimedOut || webRendererCrashBlocked || !!webBootIssue)) {
-      return 'degraded';
-    }
-    if (webBootTimedOut || webRendererCrashBlocked || !!webBootIssue) return 'error';
-    return 'loading';
+    return resolveMapSurfaceInitializationState({
+      configurationLoading: isLoading,
+      hasMapConfiguration: shouldLoadMap,
+      liveMapDisabled,
+      standbyActive: standbyMapActive,
+      motionPriority,
+      rendererReady: webReady,
+      rendererWasReady: hasEverReachedReadyRef.current,
+      rendererFailed: webBootTimedOut || webRendererCrashBlocked || !!webBootIssue,
+      hasFallbackSurface: shouldRenderFallbackSurface,
+      retryAvailable: !!onRetry,
+    });
   }, [
+    isLoading,
     liveMapDisabled,
     motionPriority,
+    onRetry,
     shouldLoadMap,
     shouldRenderFallbackSurface,
     standbyMapActive,
@@ -9922,7 +9935,15 @@ const MapRenderer = React.memo(function MapRenderer({
   }, [resetRuntimeState, shouldLoadMap]);
 
   useEffect(() => {
-    if (!isCompactSurface || !shouldLoadMap || !webBootTimedOut || webReady) return;
+    if (
+      performanceSurface === 'navigate' ||
+      !isCompactSurface ||
+      !shouldLoadMap ||
+      !webBootTimedOut ||
+      webReady
+    ) {
+      return;
+    }
     if (compactRetryCountRef.current >= 2) return;
 
     clearCompactRetryTimer();
@@ -9935,6 +9956,7 @@ const MapRenderer = React.memo(function MapRenderer({
   }, [
     clearCompactRetryTimer,
     isCompactSurface,
+    performanceSurface,
     remountWebView,
     shouldLoadMap,
     webBootTimedOut,
@@ -10550,6 +10572,9 @@ const MapRenderer = React.memo(function MapRenderer({
 
       case 'styleFallbackExhausted':
         debugLog('[MapRenderer] style fallback exhausted', payload);
+        setWebReady(false);
+        setWebBootTimedOut(true);
+        setWebBootIssue('style_fallback_exhausted');
         return;
 
       default:
@@ -10590,6 +10615,10 @@ const MapRenderer = React.memo(function MapRenderer({
     !isCompactSurface &&
     !webReady &&
     !hasEverReachedReadyRef.current;
+  const showTerminalBootOverlay =
+    renderLiveWebView &&
+    !shouldRenderFallbackSurface &&
+    (bootPresentationState === 'retryable_error' || bootPresentationState === 'unavailable');
 
   return (
     <View style={[styles.container, isCompactSurface && styles.compactContainer, style]}>
@@ -10756,9 +10785,9 @@ const MapRenderer = React.memo(function MapRenderer({
           </View>
         ) : null}
 
-      {showBootOverlay && !shouldRenderFallbackSurface && (
+      {(showBootOverlay || showTerminalBootOverlay) && !shouldRenderFallbackSurface && (
         <View style={styles.loadingOverlay}>
-          {!webBootTimedOut && !webBootIssue && !webRendererCrashBlocked ? (
+          {bootPresentationState === 'initializing' ? (
             <>
               <ActivityIndicator size="large" color="#FFD700" />
               <Text style={styles.loadingTitle}>Initializing tactical surface…</Text>
