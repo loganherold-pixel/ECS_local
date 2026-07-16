@@ -701,25 +701,32 @@ async function verifyExploreProviderFailureTruth(harness) {
 }
 
 async function verifyPrimaryDockAction(harness, label, expectedRoute) {
-  harness.navigationCalls.length = 0;
-  harness.setPathname('/settings');
-  const commandDockPath = path.join(root, 'components', 'CommandDock.tsx');
-  delete require.cache[require.resolve(commandDockPath)];
-  const CommandDock = require(commandDockPath).default;
-  const mounted = mountTree(CommandDock());
-  const primaryControl = mounted.find((node) => (
-    node.type === 'Pressable' &&
-    node.props?.accessibilityRole === 'tab' &&
-    String(node.props?.accessibilityLabel ?? '').toLowerCase() === label.toLowerCase()
-  ));
-  assert(primaryControl, `${label} must expose a mounted primary navigation control.`);
-  assert.equal(typeof primaryControl.props.onPress, 'function');
-  primaryControl.props.onPress();
-  assert.deepEqual(
-    harness.navigationCalls,
-    [expectedRoute],
-    `${label} must perform one real navigation mutation, not a placeholder or no-op.`,
-  );
+  const sourcePaths = label.toLowerCase() === 'dashboard'
+    ? ['/fleet', '/navigate', '/discover', '/alert']
+    : ['/settings'];
+
+  for (const sourcePath of sourcePaths) {
+    harness.navigationCalls.length = 0;
+    harness.setPathname(sourcePath);
+    const commandDockPath = path.join(root, 'components', 'CommandDock.tsx');
+    delete require.cache[require.resolve(commandDockPath)];
+    const CommandDock = require(commandDockPath).default;
+    const mounted = mountTree(CommandDock());
+    const primaryControl = mounted.find((node) => (
+      node.type === 'Pressable' &&
+      node.props?.accessibilityRole === 'tab' &&
+      String(node.props?.accessibilityLabel ?? '').toLowerCase() === label.toLowerCase()
+    ));
+    assert(primaryControl, `${label} must expose a mounted primary navigation control.`);
+    assert.equal(typeof primaryControl.props.onPress, 'function');
+    primaryControl.props.onPress();
+    if (label.toLowerCase() === 'dashboard') primaryControl.props.onPress();
+    assert.deepEqual(
+      harness.navigationCalls,
+      [expectedRoute],
+      `${label} from ${sourcePath} must perform one real, deduplicated navigation mutation.`,
+    );
+  }
 }
 
 function failureSafeCode(scenario, timedOut) {

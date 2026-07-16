@@ -261,6 +261,46 @@ assert.strictEqual(
   'Authenticated startup that needs vehicle recovery should route directly to Fleet.',
 );
 
+const dashboardRecoveryRestore = resolve({
+  currentPath: '/',
+  authenticated: true,
+  setupComplete: false,
+  setupRecoveryRequired: true,
+  restorableShellRoute: '/dashboard',
+  isAuthScreen: true,
+});
+assert.strictEqual(
+  dashboardRecoveryRestore.redirectTarget,
+  '/dashboard',
+  'Cold startup must restore a saved Dashboard instead of replacing it with Fleet after vehicle hydration.',
+);
+assert.strictEqual(dashboardRecoveryRestore.destinationSource, 'restored_shell_route');
+assert.strictEqual(dashboardRecoveryRestore.routeRestoreEligible, true);
+
+const incompleteSetupNavigateRestore = resolve({
+  currentPath: '/',
+  authenticated: true,
+  setupComplete: false,
+  setupRecoveryRequired: false,
+  restorableShellRoute: '/navigate',
+  isAuthScreen: true,
+});
+assert.strictEqual(incompleteSetupNavigateRestore.redirectTarget, '/setup');
+assert.strictEqual(incompleteSetupNavigateRestore.destinationSource, 'setup');
+assert.strictEqual(incompleteSetupNavigateRestore.routeRestoreEligible, false);
+
+const vehicleRecoveryNavigateRestore = resolve({
+  currentPath: '/',
+  authenticated: true,
+  setupComplete: false,
+  setupRecoveryRequired: true,
+  restorableShellRoute: '/navigate',
+  isAuthScreen: true,
+});
+assert.strictEqual(vehicleRecoveryNavigateRestore.redirectTarget, '/fleet');
+assert.strictEqual(vehicleRecoveryNavigateRestore.destinationSource, 'vehicle_recovery');
+assert.strictEqual(vehicleRecoveryNavigateRestore.routeRestoreEligible, false);
+
 assert.strictEqual(
   resolve({
     currentPath: '/dashboard',
@@ -270,8 +310,8 @@ assert.strictEqual(
     isAuthScreen: false,
     isProtectedScreen: false,
   }).redirectTarget,
-  '/fleet',
-  'Dashboard restoration should fail safely to Fleet when the configured vehicle is missing.',
+  null,
+  'Vehicle recovery must not bounce an already-mounted Dashboard to Fleet.',
 );
 
 assert.strictEqual(
@@ -451,8 +491,8 @@ assert.strictEqual(
     isAuthScreen: false,
     isProtectedScreen: false,
   }).redirectTarget,
-  '/setup',
-  'Setup-incomplete users without recovery context should not remain on Dashboard.',
+  null,
+  'Missing setup data must remain a Dashboard presentation state after explicit shell navigation.',
 );
 
 assert.strictEqual(

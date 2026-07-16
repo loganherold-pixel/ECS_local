@@ -184,7 +184,7 @@ function primaryRouteMetadata(tab: ECSPrimaryTabManifestEntry): ECSRouteMetadata
     parentSurface: tab.id,
     dockSelection: tab.id,
     authRequirement: 'shell',
-    setupRequirement: tab.id === 'dashboard' ? 'configured_vehicle' : 'none',
+    setupRequirement: 'none',
     featureRequirement: tab.featureRequirement,
     offlineSupport: 'full',
     restoration: 'direct',

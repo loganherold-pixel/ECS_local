@@ -37,6 +37,15 @@ function isPrimaryShellRoute(path: string | null | undefined): boolean {
   );
 }
 
+function isDashboardShellRoute(path: string | null | undefined): boolean {
+  const metadata = getRouteMetadata(path);
+  return Boolean(
+    metadata?.route === '/dashboard' &&
+    metadata.authRequirement === 'shell' &&
+    metadata.setupRequirement === 'none',
+  );
+}
+
 function resolveAuthenticatedShellTarget(params: {
   setupComplete: boolean;
   setupRecoveryRequired?: boolean;
@@ -64,6 +73,19 @@ function resolveAuthenticatedShellTarget(params: {
     return {
       target: requestedEntryRoute!,
       destinationSource: 'requested_entry_route',
+      routeRestoreRejected: false,
+    };
+  }
+
+  if (
+    setupRecoveryRequired &&
+    allowRouteRestore &&
+    restorableShellRoute &&
+    isDashboardShellRoute(restorableShellRoute)
+  ) {
+    return {
+      target: restorableShellRoute,
+      destinationSource: 'restored_shell_route',
       routeRestoreRejected: false,
     };
   }
@@ -127,7 +149,12 @@ export function resolveDistributionEntryState(
   const suspended = accessState?.suspended === true;
   const shellAccessReady = (authenticated || guestOfflineAccess || rememberedOfflineAccess) && !suspended;
   const authEntryAccessReady = (authenticated || guestOfflineAccess || rememberedOfflineAccess) && !suspended;
-  const shellRestoreEligible = shellAccessReady && setupComplete;
+  const hasDashboardRecoveryRestore = Boolean(
+    setupRecoveryRequired &&
+    restorableShellRoute &&
+    isDashboardShellRoute(restorableShellRoute),
+  );
+  const shellRestoreEligible = shellAccessReady && (setupComplete || hasDashboardRecoveryRestore);
   const routeRestoreEligible = shellRestoreEligible && !!restorableShellRoute;
   const allowPreSetupAccountRoute =
     shellAccessReady && !setupComplete && (currentPath === '/more' || currentPath === '/intel');

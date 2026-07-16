@@ -161,8 +161,10 @@ const noVehicleRestore = policy.resolveECSRestorationTarget({
   storedPath: '/dashboard',
   context: routeContext({ setupComplete: false, hasConfiguredVehicle: false }),
 });
-assert.strictEqual(noVehicleRestore.targetPath, '/fleet');
-assert.strictEqual(noVehicleRestore.reason, 'vehicle_required');
+assert.strictEqual(noVehicleRestore.targetPath, '/dashboard');
+assert.strictEqual(noVehicleRestore.reason, 'allowed');
+assert.strictEqual(noVehicleRestore.restored, true);
+assert.strictEqual(noVehicleRestore.fallbackUsed, false);
 
 const safetyPreSetup = policy.resolveECSRoutePolicy({
   path: '/navigate',

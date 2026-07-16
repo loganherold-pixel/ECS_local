@@ -160,6 +160,7 @@
     "test:command-center-registry": "node ./scripts/test-command-center-registry.js",
     "test:shell-tab-transition-performance": "node ./scripts/test-shell-tab-transition-performance.js",
     "test:shell-routing-hardening": "node ./scripts/test-shell-routing-hardening.js",
+    "test:dashboard-tab-navigation-stability": "node ./scripts/test-dashboard-tab-navigation-stability.js",
     "test:dashboard-route-progress": "node ./scripts/test-dashboard-route-progress-active-navigation.js",
     "test:dashboard-navigation-3d-follow-camera": "node ./scripts/test-dashboard-navigation-3d-follow-camera.js",
     "test:route-progress-minimap": "node ./scripts/test-route-progress-minimap.js",
