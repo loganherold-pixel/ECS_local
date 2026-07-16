@@ -201,7 +201,8 @@ assert(
     widgetRenderersSource.includes('referenceEvents={markerReferenceEvents}') &&
     widgetRenderersSource.includes('const markersInteractive = expanded;') &&
     widgetRenderersSource.includes('interactive={markersInteractive}') &&
-    widgetRenderersSource.includes('completedDistanceMiles={terrainRisk.completedDistanceMiles}') &&
+    widgetRenderersSource.includes('completedDistanceMiles={presentation.currentProgressDistanceMiles}') &&
+    widgetRenderersSource.includes('setSelectedReferenceEvent(null)') &&
     widgetRenderersSource.includes('expanded && detailMode && selectedReferenceEvent') &&
     widgetRenderersSource.includes('terrainRiskReferenceBriefButton') &&
     widgetRenderersSource.includes('ECS INTELLIGENCE BRIEF') &&

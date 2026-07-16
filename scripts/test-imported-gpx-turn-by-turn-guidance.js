@@ -202,6 +202,20 @@ async function withMockedFetch(responseBody, callback) {
   assert(offlineResolution, 'An on-trace GPX start should retain geometry guidance offline.');
   assert.strictEqual(offlineResolution.source, 'synthetic_geometry');
   assert(offlineResolution.route.guidance.steps.length >= 2);
+  const nearTraceOrigin = {
+    lat: fixtureGeometry[0].lat + 0.00008,
+    lng: fixtureGeometry[0].lng + 0.00008,
+  };
+  const preparedNearTrace = importedRouteGuidance.prepareImportedTraceGuidanceGeometry({
+    origin: nearTraceOrigin,
+    geometry: fixtureGeometry,
+  });
+  assert(preparedNearTrace, 'A near-trace start should retain stored canonical geometry.');
+  assert.deepStrictEqual(
+    preparedNearTrace.geometry[0],
+    fixtureGeometry[0],
+    'Imported guidance must not prepend raw GPS or a straight GPS-to-trace connector.',
+  );
 
   const farOfflineResolution = await importedRouteGuidance.resolveImportedRouteGuidance({
     payload,

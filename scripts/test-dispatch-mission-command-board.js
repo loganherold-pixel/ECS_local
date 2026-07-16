@@ -442,6 +442,37 @@ dispatchPersistenceAdapter.applyMissionCommandMutation(
 unsubscribePersistence();
 assert.equal(persistenceNotifications, 1, 'An atomic command mutation should publish one narrow persistence update.');
 
+const expeditionSwitchNotifications = [];
+const expeditionOneRevisionBeforeSwitch = dispatchPersistenceAdapter.getRevision('expedition-1');
+const expeditionTwoRevisionBeforeSwitch = dispatchPersistenceAdapter.getRevision('expedition-2');
+const unsubscribeExpeditionSwitch = dispatchPersistenceAdapter.subscribe((expeditionId) => {
+  expeditionSwitchNotifications.push(expeditionId);
+});
+const expeditionTwoCommand = command('expedition-2-command', { expeditionId: 'expedition-2' });
+dispatchPersistenceAdapter.applyMissionCommandMutation(
+  'expedition-2',
+  { pings: [], queueItems: [], assignments: [], timelineEvents: [] },
+  expeditionTwoCommand,
+  null,
+);
+unsubscribeExpeditionSwitch();
+const expeditionOneSnapshot = dispatchPersistenceAdapter.load(
+  'expedition-1',
+  { pings: [], queueItems: [], assignments: [], timelineEvents: [] },
+);
+const expeditionTwoSnapshot = dispatchPersistenceAdapter.load(
+  'expedition-2',
+  { pings: [], queueItems: [], assignments: [], timelineEvents: [] },
+);
+assert.deepEqual(expeditionSwitchNotifications, ['expedition-2']);
+assert.equal(expeditionOneSnapshot.missionCommands.some((item) => item.id === expeditionTwoCommand.id), false);
+assert.equal(expeditionTwoSnapshot.missionCommands.some((item) => item.id === expeditionTwoCommand.id), true);
+assert.equal(dispatchPersistenceAdapter.getRevision('expedition-1'), expeditionOneRevisionBeforeSwitch);
+assert.ok(
+  dispatchPersistenceAdapter.getRevision('expedition-2') > expeditionTwoRevisionBeforeSwitch,
+  'Active-expedition switches must invalidate only the newly active snapshot.',
+);
+
 const highVolumeCommands = Array.from({ length: 250 }, (_, index) => command(`volume-${index}`, {
   operationalState: index % 4 === 0
     ? 'proposed'

@@ -182,7 +182,7 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
         trailPackSubmissionModal.includes('TRAIL_PACK_SUBMISSION_CERTIFICATION_COPY') &&
         navigate.includes('SUBMIT AS TRAIL PACK') &&
         navigate.includes('CREATE TRAIL PACK FROM IMPORT') &&
-        discover.includes('Submit to ECS Trail Packs'),
+        discover.includes('accessibilityLabel={`Submit ${favorite.title} to ECS Trail Packs`}'),
       [
         relPath(root, paths.trailPackSubmissions),
         relPath(root, paths.trailPackSubmissionModal),
@@ -228,12 +228,12 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
       'explore_ui_keeps_truthful_empty_review_and_owner_states',
       'Explore Trail Pack UI shows truthful loading, no-location, low-confidence, empty, owner-pending, confidence, preview/start/save, and issue-feedback states.',
       discover.includes('Scanning approved ECS Trail Packs within selected radius') &&
-        discover.includes('Trail Packs need GPS or an internal search area to filter verified routes by radius.') &&
+        discover.includes('Trail Packs need GPS or an approved search area to filter verified routes by radius.') &&
         !discover.includes('ROUTE CATALOG AREA') &&
         !discover.includes('testID="route-catalog-search-area-control"') &&
         discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.') &&
         discover.includes('No live reviewed Trail Packs found within this radius.') &&
-        discover.includes('Live Trail Packs are not available from reviewed sources yet.') &&
+        discover.includes('Live Trail Packs are temporarily unavailable. No seed or mock Trail Packs are shown here.') &&
         (
           discover.includes('This Trail Pack is under ECS review and is not visible to other users.') ||
           trailPackPreview.includes('This is your pending route recommendation. It is not visible to other users until ECS review approves it.')

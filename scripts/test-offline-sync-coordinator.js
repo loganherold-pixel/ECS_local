@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -80,8 +81,28 @@ assertIncludes(
 );
 assertIncludes(
   coordinator,
-  'async waitForHydration(): Promise<void>',
-  'Offline sync coordinator should expose durable hydration before startup replay.',
+  'waitForHydration(): Promise<void>',
+  'Offline sync coordinator should expose its shared hydration flight before startup replay.',
+);
+assertIncludes(
+  coordinator,
+  'hydrationStatus: OfflineTileSyncHydrationStatus;',
+  'Offline sync snapshots should distinguish restoring, ready, and failed hydration.',
+);
+assertIncludes(
+  coordinator,
+  'sourceState: OfflineTileSyncSourceState;',
+  'Offline sync snapshots should distinguish restored cache from a valid empty result.',
+);
+assertIncludes(
+  offlineSyncStatusChip,
+  "snapshot.hydrationStatus === 'restoring'",
+  'Offline sync UI should render restoration separately from a valid empty sync list.',
+);
+assertIncludes(
+  offlineSyncStatusChip,
+  'Restoring offline sync state',
+  'Offline sync UI should explain what is restoring instead of hiding an ambiguous empty state.',
 );
 assertIncludes(
   coordinator,

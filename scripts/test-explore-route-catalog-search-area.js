@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -9,56 +10,171 @@ function read(relativePath) {
 }
 
 const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
+const liveCatalog = read(path.join('lib', 'explore', 'liveTrailPackCatalog.ts'));
 
 assert(
   discover.includes('ROUTE_CATALOG_PRESET_SEARCH_AREAS') &&
     discover.includes('ROUTE_CATALOG_COVERAGE_AREAS') &&
-    discover.includes('const routeCatalogSearchAreaKey: RouteCatalogPresetSearchAreaKey | null = null') &&
+    discover.includes('useState<RouteCatalogPresetSearchAreaKey | null>(null)') &&
+    discover.includes("useState<'none' | 'gps' | 'preset'>('gps')") &&
+    discover.includes('setRouteCatalogSearchAreaKey') &&
+    discover.includes('setRouteCatalogLocationSelection') &&
     !discover.includes('buildManualRouteCatalogSearchArea') &&
-    !discover.includes('getRouteCatalogCoverageSummary') &&
-    !discover.includes('getRouteCatalogCoverageNotice') &&
-    !discover.includes('routeCatalogManualSearchArea') &&
-    !discover.includes('routeCatalogCoverageSummary') &&
-    !discover.includes('routeCatalogCoverageNotice') &&
-    !discover.includes('routeCatalogSearchAreaModalVisible') &&
-    !discover.includes('setRouteCatalogSearchAreaKey'),
-  'Explore should keep route source search area logic internal without exposing preset or manual catalog selectors.',
+    !discover.includes('routeCatalogManualSearchArea'),
+  'Explore should expose approved preset areas and GPS without accepting unreviewed manual coordinates.',
 );
 
 assert(
-  discover.includes('routeCatalogEffectiveSearchArea') &&
+    discover.includes('routeCatalogEffectiveSearchArea') &&
     discover.includes('routeCatalogHasSearchArea') &&
+    discover.includes("if (routeCatalogLocationSelection === 'preset') return routeCatalogSelectedSearchArea") &&
+    discover.includes("if (routeCatalogLocationSelection !== 'gps' || !hasGPSFix) return null") &&
     discover.includes('routeCatalogSearchCoordinate') &&
     discover.includes('routeCatalogEffectiveSearchArea.latitude') &&
     discover.includes('routeCatalogEffectiveSearchArea.longitude') &&
     discover.includes('radiusMiles: activeDistanceRadius') &&
     discover.includes("locationSource: routeCatalogEffectiveSearchArea?.source ?? 'search_area_required'"),
-  'Route catalog criteria should use the selected search area or live GPS, never the default fallback coordinate.',
+  'Route catalog criteria should use an explicitly approved area or live GPS, never the default fallback coordinate.',
 );
 
 assert(
-    discover.includes('if (!routeCatalogHasSearchArea) return;') &&
-    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
-    discover.includes('routeCatalogHasSearchArea ? discoverableTrailPacks.filter(isPublicSuggestedTrailheadTrailPack) : []') &&
-    discover.includes('Trail Packs need GPS or an internal search area to filter verified routes by radius.'),
-  'Suggested Trailheads should require GPS or an internal search area before showing radius-filtered source results.',
+    discover.includes('if (!routeCatalogHasSearchArea) {') &&
+    discover.includes('setLiveTrailPackCatalogDisabled({') &&
+    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria, {') &&
+    discover.includes("cancellationReason: 'unmount'") &&
+    discover.includes('routeCatalogHasSearchArea && suggestedRoutesFeatureEnabled') &&
+    discover.includes('? discoverableTrailPacks.filter(isPublicSuggestedTrailheadTrailPack)') &&
+    discover.includes('Trail Packs need GPS or an approved search area to filter verified routes by radius.'),
+  'Suggested Trailheads should terminate disabled without an eligible GPS or approved-area search input.',
 );
 
 assert(
-  !discover.includes('testID="route-catalog-search-area-control"') &&
-    !discover.includes('<View style={s.routeCatalogSearchAreaCard}') &&
-    !discover.includes('ROUTE CATALOG AREA') &&
-    !discover.includes('Suggested Trailheads only show verified catalog routes within the selected radius.') &&
-    !discover.includes('Loading Route Catalog') &&
-    !discover.includes('Route Catalog Unavailable') &&
-    !discover.includes('verified catalog routes') &&
-    !discover.includes('current trail catalog') &&
+  (discover.match(/error\.name === 'AbortError'/g) ?? []).length >= 2 &&
+    discover.includes("signature: 'explore_route_catalog_refresh_rejected'") &&
+    discover.includes("signature: 'explore_route_catalog_retry_rejected'") &&
+    discover.includes("safeErrorCode: 'EXPLORE_ROUTE_CATALOG_REFRESH_REJECTED'") &&
+    discover.includes("safeErrorCode: 'EXPLORE_ROUTE_CATALOG_RETRY_REJECTED'") &&
+    discover.includes('.finally(() => {'),
+  'Mounted automatic and manual route-catalog requests should consume expected cancellation rejections and safely diagnose unexpected promise rejection.',
+);
+
+assert(
+  discover.includes('testID="explore-route-search-area-control"') &&
+    discover.includes('testID="explore-route-search-area-picker"') &&
+    discover.includes('ROUTE SEARCH AREA') &&
+    discover.includes('CHOOSE ROUTE SEARCH AREA') &&
+    discover.includes('APPROVED SEARCH AREAS') &&
+    discover.includes('routeCatalogSearchAreaPickerVisible ? ROUTE_CATALOG_PRESET_SEARCH_AREAS.map') &&
+    discover.includes('Choose GPS or an approved area before ECS requests verified route geometry.') &&
     discover.includes('Showing verified routes within') &&
     discover.includes('Loading Trail Source') &&
     discover.includes('Trail Source Unavailable') &&
+    discover.includes('Live Route Catalog Unavailable') &&
+    discover.includes('This provider failure is not an empty search result.') &&
     discover.includes('routeCatalogEffectiveSearchArea') &&
     discover.includes('routeCatalogHasSearchArea'),
-  'Explore should keep route-source search logic available while hiding route catalog controls and copy from the user-visible Explorer surface.',
+  'Explore should make the truthful GPS/approved-area choice actionable on the mounted surface.',
+);
+
+assert(
+  discover.includes('const prepareExploreGuidanceRoutes = useCallback(') &&
+    discover.includes('routeCatalogEffectiveSearchArea.latitude') &&
+    discover.includes('routeCatalogEffectiveSearchArea.longitude') &&
+    discover.includes("const distanceSource = routeCatalogLocationSelection === 'gps' ? 'live_gps' : 'unknown'") &&
+    discover.includes("routeCatalogLocationSelection === 'preset'") &&
+    discover.includes('Distance from approved search area:') &&
+    discover.includes('withinRadius') &&
+    !discover.includes('computeDistancesFromUser(exploreWizardLocalRouteAssets.savedBuiltRoutes, userLat, userLng)') &&
+    !discover.includes('computeDistancesFromUser(exploreWizardLocalRouteAssets.importedStitchedRoutes, userLat, userLng)'),
+  'Guidance-ready saved, imported, favorite, and hidden-gem inputs should use the same approved preset coordinate or an actual GPS fix, never the legacy default coordinate.',
+);
+
+assert(
+  discover.includes("reason: 'feature_disabled'") &&
+    discover.includes("safeErrorCode: 'EXPLORE_SUGGESTED_ROUTES_DISABLED'") &&
+    discover.includes('if (!suggestedRoutesFeatureEnabled) {') &&
+    discover.includes('testID="explore-suggested-routes-disabled"') &&
+    discover.includes('No route provider request was issued.'),
+  'The canonical Suggested Routes rollout state should suppress provider work and render an explicit disabled state.',
+);
+
+assert(
+    discover.includes('const routeCatalogProviderValidEmpty =') &&
+    discover.includes('const routeCatalogValidEmpty =') &&
+    discover.includes('routeCatalogProviderValidEmpty && exploreGuidanceEvaluatedCount === 0') &&
+    discover.includes('const routeCatalogEmptyWithoutGuidance =') &&
+    discover.includes('routeCatalogValidEmpty && exploreGuidanceEvaluatedCount === 0') &&
+    discover.includes('testID="explore-route-catalog-empty-state"') &&
+    discover.includes('testID="explore-guidance-ready-provider-empty-with-exclusions"') &&
+    discover.includes('No Routes in This Area') &&
+    discover.includes("? 'EMPTY'") &&
+    !discover.includes('const showTrailPackSectionLoading =\n    showSectionLoading ||') &&
+    discover.includes('routeCatalogCancelledWithData') &&
+    discover.includes("? 'CANCELLED'") &&
+    discover.includes('testID="explore-guidance-ready-cancelled-notice"'),
+  'Valid empty and cancelled-with-data catalog results should render explicit terminal states without falling through to READY or an indefinite spinner.',
+);
+
+assert(
+  discover.includes('deriveExploreGuidanceProviderAvailability({') &&
+    discover.includes('providerStatus: liveTrailPackCatalogSnapshot.status') &&
+    discover.includes('evaluatedCount: exploreGuidanceEvaluatedCount') &&
+    discover.includes('readyCount: exploreGuidanceReadyCount') &&
+    discover.includes('testID="explore-guidance-ready-provider-unavailable-local-ready"') &&
+    discover.includes('exploreGuidanceEvaluatedCount > 0 ||') &&
+    discover.includes('routeCatalogValidEmpty'),
+  'Provider empty/error state must stay distinct from the overall inventory so eligible saved or imported routes remain rendered.',
+);
+
+assert(
+  discover.includes('const handleLoadNextRouteCatalogPage = useCallback') &&
+    discover.includes('page: nextPage') &&
+    discover.includes('pageSize,') &&
+    discover.includes('activeRequest?.generation !== generation') &&
+    discover.includes('testID="explore-guidance-ready-load-next-provider-page"') &&
+    discover.includes('testID="explore-guidance-ready-pagination-error"') &&
+    discover.includes('testID="explore-guidance-ready-bounded-catalog-notice"') &&
+    discover.includes("liveTrailPackCatalogSnapshot.preservedReason === 'pagination_page_unavailable'") &&
+    liveCatalog.includes('const paginationBaseSnapshot =') &&
+    liveCatalog.includes('mergeLiveTrailPackCatalogPageSnapshots(') &&
+    liveCatalog.includes("'pagination_page_unavailable'") &&
+    !discover.includes('commitLiveTrailPackCatalogPageSnapshot('),
+  'Mounted Explore pagination should delegate atomic page preservation to the shared store, reject stale generations, report bounded counts, and preserve degraded last-good results on failure.',
+);
+
+assert(
+  discover.includes('guidanceDiagnosticTrailPacks') &&
+    discover.includes('guidanceDiagnosticRecords') &&
+    discover.includes('routeCatalogProviderNotReadyCount') &&
+    discover.includes('Math.max(routeCatalogSafeDiagnosticRecords.length, routeCatalogCurationCandidateCount)') &&
+    discover.includes('!routeCatalogHasNonReadyProviderResults') &&
+    discover.includes('testID="explore-route-catalog-not-guidance-ready-state"') &&
+    discover.includes('testID="explore-guidance-ready-provider-not-ready"') &&
+    discover.includes('Routes found, none guidance-ready') &&
+    discover.includes('remain visible while') &&
+    discover.includes('stay excluded with typed safety and source reasons.'),
+  'A successful provider response containing only excluded routes must render NOT READY diagnostics instead of a false no-routes empty state.',
+);
+
+assert(
+  discover.includes('const hasRouteCatalogDiagnosticData =') &&
+    discover.includes('const hasRouteCatalogAnyData = hasRouteCatalogRenderableData || hasRouteCatalogDiagnosticData') &&
+    discover.indexOf('after the refresh was cancelled. Retry to obtain a current provider result.') <
+      discover.indexOf('were found, but none currently satisfy all public guidance requirements.') &&
+    discover.indexOf('are available from cached data. Live refresh is degraded') <
+      discover.indexOf('were found, but none currently satisfy all public guidance requirements.'),
+  'Diagnostic-only last-good data must preserve cancelled/cached/degraded source state instead of being relabeled as a fresh provider result.',
+);
+
+assert(
+  discover.includes("liveTrailPackCatalogSnapshot.source === 'trail_packs_fallback'") &&
+    discover.includes('Showing degraded legacy fallback summaries locally filtered to this area and radius.') &&
+    discover.includes('not authoritative catalog-verified') &&
+    discover.includes("? 'DEGRADED'") &&
+    discover.includes('routeCatalogCachedWithData') &&
+    discover.includes("? 'CACHED'") &&
+    !discover.includes('degraded global legacy fallback'),
+  'Legacy fallback rows should remain degraded and locally scoped without being mislabeled as authoritative verified or cached data.',
 );
 
 console.log('Explore route catalog search-area checks passed');

@@ -437,6 +437,20 @@ export class NavigateMapLayerCoordinator {
     this.enforceCacheBounds(input.layer);
   }
 
+  invalidateCache(layer: NavigateMapLayerId, key?: string): number {
+    if (key) {
+      return this.cache.delete(`${layer}:${key}`) ? 1 : 0;
+    }
+
+    let removed = 0;
+    for (const [cacheKey, entry] of this.cache.entries()) {
+      if (entry.layer !== layer) continue;
+      this.cache.delete(cacheKey);
+      removed += 1;
+    }
+    return removed;
+  }
+
   dispose(): void {
     for (const layer of this.active.keys()) this.cancel(layer, 'dispose');
     this.pending.clear();

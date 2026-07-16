@@ -16,8 +16,16 @@ function loadTsModule(relativePath) {
     },
   }).outputText;
   const mod = { exports: {} };
+  const localRequire = (request) => {
+    if (request.startsWith('.')) {
+      const resolved = path.resolve(path.dirname(filename), request);
+      const candidate = path.extname(resolved) ? resolved : `${resolved}.ts`;
+      if (fs.existsSync(candidate)) return loadTsModule(path.relative(root, candidate));
+    }
+    return require(request);
+  };
   const fn = new Function('exports', 'require', 'module', '__filename', '__dirname', output);
-  fn(mod.exports, require, mod, filename, path.dirname(filename));
+  fn(mod.exports, localRequire, mod, filename, path.dirname(filename));
   return mod.exports;
 }
 
@@ -146,6 +154,11 @@ assert(
     afterFirstTurn.nextInstructionDistanceM < 70,
   `Distance to Rocklin Road should target the next maneuver point, got ${afterFirstTurn.nextInstructionDistanceM}.`,
 );
+assert.deepStrictEqual(
+  afterFirstTurn.progressGeometry[1],
+  sierraTurn,
+  'Completed guidance geometry should preserve the canonical turn vertex instead of cutting a chord.',
+);
 
 const noisyGpsNearIntersection = resolveRoadNavigationProgress(route, {
   location: { lat: 38.78158, lng: -121.20755 },
@@ -210,6 +223,50 @@ assertCoord(
   longRouteProgress.progressGeometry[longRouteProgress.progressGeometry.length - 1],
   longRouteGeometry[4200],
   'Bounded active guidance progress should preserve the current projected progress endpoint.',
+);
+
+const metersPerDegreeLng = 111320 * Math.cos((38 * Math.PI) / 180);
+const metersPerDegreeLat = 111320;
+const metricPoint = (eastM, northM) => ({
+  lat: 38 + northM / metersPerDegreeLat,
+  lng: -121 + eastM / metersPerDegreeLng,
+});
+const parallelGeometry = [
+  metricPoint(0, 0),
+  metricPoint(1000, 0),
+  metricPoint(1000, 20),
+  metricPoint(0, 20),
+];
+const parallelRoute = {
+  ...route,
+  id: 'parallel-road-progress',
+  geometry: parallelGeometry,
+  distanceM: 2020,
+  steps: [{
+    ...route.steps[0],
+    id: 'parallel-road-progress-step',
+    startDistanceM: 0,
+    endDistanceM: 2020,
+    distanceM: 2020,
+    geometry: parallelGeometry,
+    location: parallelGeometry[0],
+  }],
+};
+const parallelNoise = resolveRoadNavigationProgress(parallelRoute, {
+  location: { ...metricPoint(120, 13), accuracyM: 8, headingDeg: 90, speedMph: 27 },
+  previousStepIndex: 0,
+  previousRemainingDistanceM: 1920,
+  lockForwardProgress: true,
+  elapsedMs: 1000,
+});
+assert(
+  parallelNoise.remainingDistanceM > 1800,
+  `Parallel-leg GPS noise must not jump progress to the return leg, got ${parallelNoise.remainingDistanceM}m remaining.`,
+);
+assertCoord(
+  parallelNoise.progressGeometry.at(-1),
+  metricPoint(120, 0),
+  'Visible completed progress should end on the plausible canonical segment.',
 );
 
 console.log('Road navigation turn progress regression passed.');

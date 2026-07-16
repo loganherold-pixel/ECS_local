@@ -662,6 +662,14 @@ assert.ok(
   readinessStoreSource.includes("source: liveFuelPercent != null ? 'live' as const : 'manual' as const"),
   'Readiness store should mark live fuel telemetry as live and saved Fleet fuel as manual reminder data.',
 );
+assert.ok(
+  readinessStoreSource.includes("offlineHydrationStatus !== 'ready'"),
+  'Readiness must preserve restoring/error offline state instead of treating it as a valid empty package result.',
+);
+assert.ok(
+  readinessStoreSource.includes("immediate: hydrationChanged"),
+  'Late offline hydration must trigger an immediate visible readiness recompute.',
+);
 
 readiness.expeditionReadinessStore.clearReadiness();
 const storeAssessment = readiness.expeditionReadinessStore.setReadinessInputPatch(readiness.completeReadyReadinessFixture);

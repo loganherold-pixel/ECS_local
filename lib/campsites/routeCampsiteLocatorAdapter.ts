@@ -25,6 +25,10 @@ export interface RouteCampsiteContext {
   remotenessSnapshot?: RemotenessSnapshot | null;
   routeBufferMiles?: number | null;
   routeMetadata?: Record<string, unknown> | null;
+  /** Authoritative active-rig context consumed by the existing CampOps adapter. */
+  vehicleProfile?: unknown;
+  /** Bounded identity used to invalidate route scans when the active rig changes. */
+  vehicleProfileSignature?: string | null;
 }
 
 function isValidCoordinate(lat: number, lng: number): boolean {
@@ -157,6 +161,7 @@ export function buildRouteCampsiteLocatorInput(
     remotenessSnapshot: context.remotenessSnapshot ?? null,
     routeSourceType: context.sourceType,
     routeMetadata: context.routeMetadata ?? null,
+    vehicleProfile: context.vehicleProfile,
     routeBufferMiles: context.routeBufferMiles ?? null,
   };
 }
@@ -178,6 +183,7 @@ export function buildRouteCampsiteLocatorSignature(
     context.terrainIntelligence?.analyzedAt ?? 'no-terrain-date',
     context.remotenessSnapshot?.tier ?? 'no-tier',
     context.remotenessSnapshot?.score ?? 'no-score',
+    context.vehicleProfileSignature?.trim() || 'no-vehicle-profile',
     context.routeMetadata ? JSON.stringify(context.routeMetadata).slice(0, 500) : 'no-route-metadata',
   ].join('::');
 }

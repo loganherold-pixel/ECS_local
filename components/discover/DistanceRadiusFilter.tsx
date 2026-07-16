@@ -12,7 +12,7 @@
 // ============================================================
 
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL, ECS } from '../../lib/theme';
 import { hapticMicro } from '../../lib/haptics';
@@ -26,8 +26,6 @@ import {
   EXPLORE_REFINEMENT_OPTIONS,
   type ExploreRefinementFilter,
 } from '../../lib/explore/exploreRefinementFilter';
-
-const ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android';
 
 interface DistanceRadiusFilterProps {
   selectedRadius: DistanceRadius | null;
@@ -87,7 +85,13 @@ export default function DistanceRadiusFilter({
         <View style={s.headerLeft}>
           <Ionicons name="locate-outline" size={11} color={TACTICAL.amber} />
           {isLoading && (
-            <ActivityIndicator size="small" color={TACTICAL.amber} style={{ marginLeft: 6 }} />
+            <ActivityIndicator
+              size="small"
+              color={TACTICAL.amber}
+              style={{ marginLeft: 6 }}
+              accessibilityRole="progressbar"
+              accessibilityLabel="Refreshing Explore route filters"
+            />
           )}
         </View>
         <View style={[s.headerRight, compact && s.headerRightCompact]}>
@@ -127,12 +131,18 @@ export default function DistanceRadiusFilter({
                     isActive && s.segmentActive,
                   ]}
                   activeOpacity={0.75}
+                  hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${radius} mile Explore radius`}
+                  accessibilityHint={isActive ? 'Removes the current radius filter.' : `Shows routes within ${radius} miles.`}
+                  accessibilityState={{ selected: isActive }}
                   onPress={() => {
                     hapticMicro();
                     onChangeRadius(isActive ? null : radius);
                   }}
                 >
                   <Text
+                    maxFontSizeMultiplier={1.5}
                     style={[
                       s.segmentText,
                       isActive && s.segmentTextActive,
@@ -141,6 +151,7 @@ export default function DistanceRadiusFilter({
                     {radius}
                   </Text>
                   <Text
+                    maxFontSizeMultiplier={1.5}
                     style={[
                       s.segmentUnit,
                       isActive && s.segmentUnitActive,
@@ -171,12 +182,23 @@ export default function DistanceRadiusFilter({
                   activeOpacity={disabled ? 1 : 0.75}
                   disabled={disabled}
                   accessibilityRole="button"
+                  accessibilityLabel={`${option.label}, ${matchCount} matching routes`}
+                  accessibilityHint={
+                    disabled
+                      ? 'No current routes match this refinement.'
+                      : isActive
+                        ? 'Removes this refinement.'
+                        : 'Applies this route refinement.'
+                  }
                   accessibilityState={{ selected: isActive, disabled }}
+                  hitSlop={{ top: 5, bottom: 5, left: 4, right: 4 }}
                   onPress={() => {
                     onChangeRefinement(isActive ? null : option.key);
                   }}
                 >
                   <Text
+                    maxFontSizeMultiplier={1.5}
+                    numberOfLines={2}
                     style={[
                       s.refinementChipText,
                       isActive && s.segmentTextActive,
@@ -186,6 +208,7 @@ export default function DistanceRadiusFilter({
                     {option.label}
                   </Text>
                   <Text
+                    maxFontSizeMultiplier={1.5}
                     style={[
                       s.refinementChipCount,
                       isActive && s.segmentUnitActive,
@@ -210,25 +233,25 @@ export default function DistanceRadiusFilter({
 // ============================================================
 const s = StyleSheet.create({
   container: {
-    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}12`,
+    backgroundColor: ECS.bgPanel,
     borderRadius: ECS.radius,
     borderWidth: 1,
-    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}2E`,
+    borderColor: ECS.strokeSoft,
     paddingHorizontal: 8,
     paddingVertical: 7,
     marginBottom: 6,
     gap: 5,
   },
   filterContentSurface: {
-    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}2E`,
-    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : `${TACTICAL.amber}12`,
+    borderColor: ECS.strokeSoft,
+    backgroundColor: ECS.bgElev,
   },
   deferredControlPlaceholder: {
     minHeight: 122,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.stroke : `${TACTICAL.amber}1F`,
-    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}08`,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgPanel,
   },
 
   // ── Header ────────────────────────────────────────────
@@ -330,6 +353,7 @@ const s = StyleSheet.create({
     marginTop: 0,
   },
   segment: {
+    minHeight: 32,
     minWidth: '18%',
     flexGrow: 1,
     flexDirection: 'row',
@@ -339,15 +363,15 @@ const s = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 7,
     borderWidth: 1,
-    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}24`,
-    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}08`,
+    borderColor: ECS.strokeSoft,
+    backgroundColor: ECS.bgPanel,
   },
   segmentCompact: {
     paddingVertical: 5,
   },
   segmentActive: {
     borderColor: TACTICAL.amber + '50',
-    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : TACTICAL.amber + '14',
+    backgroundColor: ECS.bgElev,
   },
   segmentText: {
     fontSize: 11,
@@ -376,6 +400,7 @@ const s = StyleSheet.create({
     gap: 4,
   },
   refinementChip: {
+    minHeight: 34,
     minWidth: '46%',
     flexGrow: 1,
     flexDirection: 'row',
@@ -386,8 +411,8 @@ const s = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 7,
     borderWidth: 1,
-    borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}24`,
-    backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel : `${TACTICAL.amber}08`,
+    borderColor: ECS.strokeSoft,
+    backgroundColor: ECS.bgPanel,
   },
   refinementChipCompact: {
     minWidth: '48%',

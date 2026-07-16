@@ -26,6 +26,7 @@ import ThemeToggle from './ThemeToggle';
 import { getTopBannerToneColor, resolveProfileCommandStatus, resolveTopBannerPresentation } from '../lib/ui/topBannerStatusResolver';
 import type { ECSTopBannerCommandContext } from '../lib/ui/topBannerTypes';
 import { useAdaptiveLayout } from '../lib/useAdaptiveLayout';
+import { useReducedMotion } from '../lib/ecsAnimations';
 import { AUTH_COPY } from '../lib/auth/authCopy';
 import { resolveAccountUx } from '../lib/auth/accountUXResolver';
 import TacticalPopupShell from './TacticalPopupShell';
@@ -124,6 +125,7 @@ export default function Header({
   const { appearanceMode, setAppearanceMode, palette, colors, effectiveTheme } = useTheme();
   const insets = useSafeAreaInsets();
   const adaptive = useAdaptiveLayout();
+  const reducedMotion = useReducedMotion();
   const topBannerHeight = useEcsTopBannerHeight();
   const [profilePanelVisible, setProfilePanelVisible] = useState(false);
   const [signOutConfirmVisible, setSignOutConfirmVisible] = useState(false);
@@ -153,7 +155,7 @@ export default function Header({
   }, []);
 
   useEffect(() => {
-    if (!processingActive) {
+    if (!processingActive || reducedMotion) {
       syncSpin.stopAnimation();
       syncSpin.setValue(0);
       return;
@@ -174,14 +176,14 @@ export default function Header({
       syncSpin.stopAnimation();
       syncSpin.setValue(0);
     };
-  }, [processingActive, syncSpin]);
+  }, [processingActive, reducedMotion, syncSpin]);
 
   useEffect(() => {
     if (briefTopBanner) {
       setDisplayBriefBanner(briefTopBanner);
       Animated.timing(briefBannerAnim, {
         toValue: 1,
-        duration: 260,
+        duration: reducedMotion ? 0 : 260,
         useNativeDriver: true,
       }).start();
       return;
@@ -189,14 +191,14 @@ export default function Header({
 
     Animated.timing(briefBannerAnim, {
       toValue: 0,
-      duration: 320,
+      duration: reducedMotion ? 0 : 320,
       useNativeDriver: true,
     }).start(({ finished }) => {
       if (finished) {
         setDisplayBriefBanner(null);
       }
     });
-  }, [briefBannerAnim, briefTopBanner]);
+  }, [briefBannerAnim, briefTopBanner, reducedMotion]);
 
   const hasActiveExpeditionContext = useMemo(
     () => expeditionState === 'active' || Boolean(activeTrip),
@@ -436,11 +438,14 @@ export default function Header({
   }, [bannerStatus.processingActive, bannerStatus.processingLabel, isOnline, syncStatus]);
   const controlSlotWidth = ECS_TOP_SHELL_CONTROL_SLOT_WIDTH;
   const useBannerTitleLayout = Boolean(bannerSubject || showBriefBannerInHeader);
+  const compactBannerSlotWidth = !adaptive.isLandscape && adaptive.safeWidth < 430
+    ? Math.max(104, Math.floor(adaptive.safeWidth * 0.29))
+    : null;
   const leftControlSlotWidth = useBannerTitleLayout
-    ? ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH
+    ? compactBannerSlotWidth ?? ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH
     : controlSlotWidth;
   const rightControlSlotWidth = useBannerTitleLayout
-    ? ECS_TOP_BANNER_TITLE_RIGHT_SLOT_WIDTH
+    ? compactBannerSlotWidth ?? ECS_TOP_BANNER_TITLE_RIGHT_SLOT_WIDTH
     : controlSlotWidth;
   const centerContentPadding = useBannerTitleLayout
     ? ECS_TOP_BANNER_TITLE_CENTER_PADDING
@@ -655,7 +660,15 @@ export default function Header({
               {bannerSubject ? (
                 <Animated.View style={[styles.bannerDefaultCopy, showBriefBannerInHeader ? { opacity: briefDefaultOpacity } : null]}>
                   <Text
-                    style={styles.bannerTitle}
+                    style={[
+                      styles.bannerTitle,
+                      compactBannerSlotWidth != null
+                        ? {
+                            fontSize: adaptive.safeWidth < 360 ? 14 : 16,
+                            lineHeight: adaptive.safeWidth < 360 ? 16 : 18,
+                          }
+                        : null,
+                    ]}
                     numberOfLines={1}
                     adjustsFontSizeToFit
                     minimumFontScale={0.74}

@@ -140,9 +140,23 @@ assert.deepStrictEqual(
 );
 
 assertIncludes(discoverSource, 'getVisibleExploreFeatures', 'Explore tab should consume the visible three-tab feature registry.');
+assertIncludes(discoverSource, 'suggestedRoutesFeatureEnabled', 'Explore should resolve the mounted Suggested Routes rollout from the canonical visible feature registry.');
+assertIncludes(discoverSource, "reason: 'feature_disabled'", 'A disabled Suggested Routes rollout should terminate the provider surface as feature-disabled.');
+assertIncludes(discoverSource, 'testID="explore-suggested-routes-disabled"', 'A disabled Suggested Routes rollout should render an explicit mounted disabled state.');
+assertIncludes(discoverSource, 'if (!suggestedRoutesFeatureEnabled || !routeCatalogHasSearchArea) return;', 'Retry should not issue route-provider work when Suggested Routes is disabled.');
 assertNotIncludes(discoverSource, 'testID="explore-primary-tab-control"', 'Explore tab should not restore the legacy segmented primary tab control.');
 assertIncludes(discoverSource, 'testID="explore-tripbuilder-wizard-surface"', 'Explore tab should expose the direct route-first Trip Builder hero.');
 assertIncludes(discoverSource, 'accessibilityLabel="Open Explore Trip Builder"', 'Explore Trip Builder hero should be a mobile-accessible button.');
+assertIncludes(
+  discoverSource,
+  "handleOpenExploreFeature('trip_builder')",
+  'The Trip Builder hero must use the same canonical feature-gated handler as the registered feature tile.',
+);
+assertIncludes(
+  discoverSource,
+  'testID="explore-tripbuilder-disabled-state"',
+  'A disabled Trip Builder rollout must render an explicit terminal state instead of leaving a no-op hero.',
+);
 assertIncludes(discoverSource, "case 'suggested_routes':", 'Suggested Routes tab should keep routing to existing suggestions.');
 assertNotIncludes(discoverSource, "case 'route_filters':", 'Route Filters should no longer be a primary Explore tab action.');
 assertIncludes(discoverSource, 'activeExplorePrimaryTab === \'suggested_routes\'', 'Suggested Routes should be the face-page tab.');

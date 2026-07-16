@@ -3,6 +3,22 @@ node_modules/
 
 .git/
 
+# Local credentials, signing material, and machine-only configuration
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.npmrc
+.vscode/
+API Weather Sources.txt
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
 # Local Gradle caches/build outputs
 .gradle/
 .gradle-*/
@@ -29,6 +45,7 @@ node_modules/
 .eas-spawn-tmp/
 .smoke/
 apps/web/.next/
+apps/web/*.tsbuildinfo
 artifacts/
 dist/
 coverage/
@@ -40,6 +57,7 @@ metro-cache/
 docs/
 fixtures/
 qa-evidence/
+.qa/
 mock-data-inventory.md
 scripts/test-*.js
 scripts/test-*.mjs
@@ -76,6 +94,14 @@ tmp/
 .cleanup-quarantine/
 .cleanup-safety/
 .ruff_cache/
+.pytest_cache/
+**/.pytest_cache/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.tsbuildinfo
+expo-env.d.ts
+supabase/.temp/
 .codex-*
 npm-debug.log*
 yarn-error.log*

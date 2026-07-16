@@ -54,8 +54,10 @@ assert(
 assert(
   discover.includes('routeCatalogCurationCoverageNotice') &&
     discover.includes('liveTrailPackCatalogSnapshot.searchMeta?.curationCandidateCount') &&
+    discover.includes('liveTrailPackCatalogSnapshot.searchMeta?.anySourceBackedCandidateCount') &&
     discover.includes('source-backed route record') &&
-    discover.includes('under ECS review'),
+    discover.includes('do not currently satisfy ECS public guidance requirements') &&
+    discover.includes('testID="explore-route-catalog-not-guidance-ready-state"'),
   'Explore should surface curation-only route catalog coverage without treating those records as public Suggested Trailheads.',
 );
 

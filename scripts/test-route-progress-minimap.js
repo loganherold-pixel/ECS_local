@@ -1,8 +1,21 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
+
+require.extensions['.ts'] = function compileTs(module, filename) {
+  const output = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(output.outputText, filename);
+};
 
 function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -24,6 +37,10 @@ const geometrySource = read('components/dashboard/routeGeometryUtils.ts');
 const activeRouteProgressSource = read('lib/activeRouteProgress.ts');
 const mapConfigSource = read('lib/mapConfig.ts');
 const packageJson = JSON.parse(read('package.json'));
+const {
+  normalizeRouteFeature,
+  splitRouteAtProgress,
+} = require(path.join(root, 'components', 'dashboard', 'routeGeometryUtils.ts'));
 
 assert.ok(
   fs.existsSync(path.join(root, 'assets/dashboard/route-progress-placeholder.png')),
@@ -87,8 +104,8 @@ includes(
 );
 includes(
   miniMapSource,
-  'explicitProgress != null && (explicitProgress > 0 || inferredProgress == null)',
-  'RouteProgressMiniMap should infer progress from current location when upstream progress is still zero or unavailable.',
+  'explicitProgress ?? inferredProgress ?? 0',
+  'RouteProgressMiniMap should preserve authoritative zero progress and infer only when upstream progress is unavailable.',
 );
 includes(
   miniMapSource,
@@ -133,8 +150,8 @@ includes(miniMapModelSource, 'export function buildRouteProgressFeatureFromPoint
 includes(widgetSource, "require('../../assets/dashboard/route-progress-placeholder.png')", 'Dashboard should use the dark topographical placeholder asset.');
 includes(widgetSource, '<RouteProgressMiniMap', 'Route Progress visual should mount RouteProgressMiniMap.');
 includes(widgetSource, 'routeGeoJson={buildRouteProgressFeatureFromPoints(miniMapRoutePoints)}', 'Route Progress mini-map should receive real route geometry.');
-includes(widgetSource, 'const routeEndpointFallbackPoints = [', 'Route Progress mini-map should fall back to origin/destination when route geometry is sparse.');
-includes(widgetSource, 'routeEndpointFallbackPoints.length > 1', 'Route Progress mini-map should still render a point A to B line when only endpoints are available.');
+notIncludes(widgetSource, 'const routeEndpointFallbackPoints = [', 'Sparse route geometry must not be replaced by a fabricated point A to B line.');
+notIncludes(widgetSource, 'routeEndpointFallbackPoints.length > 1', 'Route Progress must preserve sparse geometry as unavailable/degraded.');
 includes(widgetSource, 'currentLocation={miniMapCurrentLocation}', 'Route Progress mini-map should receive current location.');
 includes(widgetSource, 'progressPercent={progressSummary?.progressPercent ?? null}', 'Route Progress mini-map should receive route progress.');
 includes(widgetSource, 'statusText={progressSummary?.stateLabel ?? null}', 'Route Progress mini-map should keep active guidance status visible.');
@@ -154,6 +171,33 @@ assert.ok(
     !fs.existsSync(path.join(root, 'lib/routeGuidanceProgressRive.ts')) &&
     !fs.existsSync(path.join(root, 'assets/route/guide_progress_map.riv')),
   'Route progress should not keep the retired Rive wrapper, runtime helper, or .riv asset.',
+);
+
+const canonicalTurn = normalizeRouteFeature({
+  type: 'LineString',
+  coordinates: [
+    [-121, 38],
+    [-120.999, 38],
+    [-120.999, 38.001],
+  ],
+});
+const canonicalSplit = splitRouteAtProgress(canonicalTurn, 75);
+assert(canonicalSplit.completedRouteGeoJson, 'Completed canonical mini-map geometry should be present.');
+assert(canonicalSplit.remainingRouteGeoJson, 'Remaining canonical mini-map geometry should be present.');
+assert.deepStrictEqual(
+  canonicalSplit.completedRouteGeoJson.geometry.coordinates[1],
+  [-120.999, 38],
+  'Mini-map completed geometry should preserve the canonical turn vertex.',
+);
+assert.deepStrictEqual(
+  canonicalSplit.completedRouteGeoJson.geometry.coordinates.at(-1),
+  canonicalSplit.remainingRouteGeoJson.geometry.coordinates[0],
+  'Mini-map completed and remaining lines should share the exact canonical split point.',
+);
+assert.strictEqual(
+  normalizeRouteFeature({ type: 'LineString', coordinates: [[-121, 38]] }),
+  null,
+  'Sparse mini-map geometry should remain unavailable instead of fabricating a line.',
 );
 
 includes(activeRouteProgressSource, 'routePoints?: NavigateRouteMapPoint[]', 'Active route progress snapshots should expose route geometry.');

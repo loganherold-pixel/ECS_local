@@ -30,6 +30,8 @@ export interface OpenWeatherInvokeContext {
   requestKey?: string | null;
   env?: OpenWeatherClientEnv;
   nowMs?: number;
+  signal?: AbortSignal;
+  timeoutMs?: number;
   invoke?: (body: Record<string, unknown>) => Promise<OpenWeatherEdgeInvokeResult>;
 }
 
@@ -383,7 +385,11 @@ export async function invokeOpenWeatherOneCallEdgeFunction(
     });
   }
 
-  const invoke = context.invoke ?? ((requestBody: Record<string, unknown>) => supabase.functions.invoke('get-weather', { body: requestBody }));
+  const invoke = context.invoke ?? ((requestBody: Record<string, unknown>) => supabase.functions.invoke('get-weather', {
+    body: requestBody,
+    ...(context.signal ? { signal: context.signal } : {}),
+    ...(context.timeoutMs != null ? { timeout: context.timeoutMs } : {}),
+  }));
   return invoke(body);
 }
 

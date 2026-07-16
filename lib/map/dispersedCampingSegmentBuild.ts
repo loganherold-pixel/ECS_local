@@ -7,6 +7,7 @@ export type RouteSegmentSourceMetadata = {
   kind:
     | 'dispersed_route_leg'
     | 'freehand_trace'
+    | 'operator_draft'
     | 'snapped_trace'
     | 'ecs_route_geometry'
     | 'rendered_routeable_geometry'

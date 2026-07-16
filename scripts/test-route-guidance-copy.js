@@ -181,6 +181,35 @@ assert(
     vehicleDisplayNavigationSelector.includes('session.instruction'),
   'Vehicle display navigation should consume canonical Navigate instructions and sanitize legacy destination labels.',
 );
+
+const sparseCachedRoute = buildRoadRouteFromCachedGeometry({
+  id: 'offline-sync-sparse-route',
+  origin,
+  destination: {
+    id: 'sparse-route',
+    title: 'Sparse Route',
+    subtitle: null,
+    coordinate: destinationCoordinate,
+    sourceType: 'offline_sync_open',
+  },
+  geometry: [origin],
+  createdAt: '2026-06-03T12:00:00.000Z',
+});
+assert.strictEqual(
+  sparseCachedRoute.geometry.length,
+  1,
+  'Sparse cached geometry must not fabricate a raw-origin-to-destination line.',
+);
+assert.deepStrictEqual(
+  {
+    lat: sparseCachedRoute.geometry[0].lat,
+    lng: sparseCachedRoute.geometry[0].lng,
+  },
+  origin,
+  'Sparse cached geometry must preserve the stored canonical coordinate.',
+);
+assert.strictEqual(sparseCachedRoute.guidance.guidanceMode, 'unavailable');
+assert.deepStrictEqual(sparseCachedRoute.steps, []);
 assert(
   !vehicleDisplayNavigationSelector.includes('`Continue to ${roadDestination}`') &&
     !vehicleDisplayNavigationSelector.includes('`Proceed to ${nextWaypoint.name}`') &&

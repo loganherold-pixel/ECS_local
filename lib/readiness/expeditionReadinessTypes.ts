@@ -349,6 +349,7 @@ export type ExpeditionReadinessDaylightInput = {
 };
 
 export type ExpeditionReadinessOfflineInput = {
+  offlineHydrationStatus?: 'restoring' | 'ready' | 'error';
   routeDownloaded?: boolean | null;
   routeGeometryCached?: boolean | null;
   mapsDownloaded?: boolean | null;

@@ -613,8 +613,8 @@ function DashboardTabBar({
               ]}
               onPress={() => onSelectTab(tab.key)}
               activeOpacity={0.7}
-              hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
-              accessibilityRole="button"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="tab"
               accessibilityLabel={tab.label}
               accessibilityState={{ selected: isActive }}
               testID={`dashboard-tab-${tab.key}`}
@@ -2580,6 +2580,7 @@ function DashboardScreenInner() {
     gpsLongitude: gps.position?.longitude ?? null,
     gpsSpeedMph: gps.position?.speedMph ?? null,
     gpsHasFix: gps.hasFix,
+    gpsTimestampMs: gps.position?.timestamp ?? null,
   });
 
   const aiTelemetry = useMemo(() => ({
@@ -2698,6 +2699,34 @@ function DashboardScreenInner() {
     () => ((activeTrip as any)?.points && Array.isArray((activeTrip as any).points) ? (activeTrip as any) : null),
     [activeTrip],
   );
+  const dashboardWeatherRouteCoordinate = useMemo(() => {
+    const routePoints = Array.isArray(dashboardActiveRun?.points) ? dashboardActiveRun.points : [];
+    const firstValidPoint = routePoints.find((point: any) => {
+      const lat = toFiniteNumber(point?.lat ?? point?.latitude);
+      const lng = toFiniteNumber(point?.lng ?? point?.lon ?? point?.longitude);
+      return lat != null && lng != null && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+    });
+    if (!firstValidPoint) return null;
+    return {
+      lat: toFiniteNumber(firstValidPoint.lat ?? firstValidPoint.latitude) as number,
+      lng: toFiniteNumber(firstValidPoint.lng ?? firstValidPoint.lon ?? firstValidPoint.longitude) as number,
+      label: `${String(dashboardActiveRun?.name ?? dashboardActiveRun?.route_name ?? 'Active route')} origin`,
+    };
+  }, [dashboardActiveRun]);
+  const dashboardWeatherLastKnownCoordinate = useMemo(() => {
+    const lat = toFiniteNumber(gps.position?.latitude);
+    const lng = toFiniteNumber(gps.position?.longitude);
+    const timestamp = toFiniteNumber(gps.position?.timestamp);
+    if (lat == null || lng == null || timestamp == null) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    return {
+      lat,
+      lng,
+      label: 'Recent last-known GPS position',
+      accuracyM: gps.position?.accuracyM ?? null,
+      timestamp,
+    };
+  }, [gps.position?.accuracyM, gps.position?.latitude, gps.position?.longitude, gps.position?.timestamp]);
   const dashboardWeatherLocation = useMemo(
     () => (
       gps.hasFix && gps.position?.latitude != null && gps.position?.longitude != null
@@ -2712,7 +2741,9 @@ function DashboardScreenInner() {
   const silentRouteWeatherToast = useCallback((_message: string) => {}, []);
 
   const dashboardWeather = useOperationalWeather({
-    enabled: activeTab !== 'brief',
+    // Command Brief consumes the same authoritative weather snapshot. Keep the
+    // focused Dashboard consumer registered while switching its inner surface.
+    enabled: isFocused,
     gps: {
       lat: gps.position?.latitude ?? null,
       lng: gps.position?.longitude ?? null,
@@ -2720,6 +2751,8 @@ function DashboardScreenInner() {
       permissionDenied: gps.permissionDenied,
       accuracyM: gps.position?.accuracyM ?? null,
     },
+    routeCoordinate: dashboardWeatherRouteCoordinate,
+    lastKnownCoordinate: dashboardWeatherLastKnownCoordinate,
   });
   const dashboardRouteWeather = useRouteCorridorWeather(
     dashboardActiveRun,

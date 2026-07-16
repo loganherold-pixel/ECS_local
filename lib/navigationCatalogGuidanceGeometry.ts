@@ -30,13 +30,73 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function firstOptionalFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (value == null || (typeof value === 'string' && value.trim().length === 0)) continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function appendCoordinateElevation(
+  coordinate: { lat: number; lng: number },
+  source: Record<string, unknown> | unknown[],
+): RoadNavCoordinate {
+  const elevationMeters = Array.isArray(source)
+    ? firstOptionalFiniteNumber(source[2])
+    : firstOptionalFiniteNumber(
+        source.ele,
+        source.ele_m,
+        source.elevationM,
+        source.elevation_m,
+        source.altitudeM,
+        source.altitude_m,
+      );
+  const elevationFeet = Array.isArray(source)
+    ? null
+    : firstOptionalFiniteNumber(
+        source.elevationFeet,
+        source.elevation_ft,
+        source.altitudeFeet,
+        source.altitude_ft,
+      );
+
+  return {
+    ...coordinate,
+    ...(elevationMeters != null ? { ele: elevationMeters, ele_m: elevationMeters } : {}),
+    ...(elevationFeet != null ? { elevationFeet } : {}),
+  };
+}
+
+function mergeCoordinateElevation(
+  coordinate: RoadNavCoordinate,
+  supplemental: RoadNavCoordinate,
+): RoadNavCoordinate {
+  const elevationMeters = firstOptionalFiniteNumber(
+    coordinate.ele,
+    coordinate.ele_m,
+    supplemental.ele,
+    supplemental.ele_m,
+  );
+  const elevationFeet = firstOptionalFiniteNumber(
+    coordinate.elevationFeet,
+    supplemental.elevationFeet,
+  );
+  return {
+    ...coordinate,
+    ...(elevationMeters != null ? { ele: elevationMeters, ele_m: elevationMeters } : {}),
+    ...(elevationFeet != null ? { elevationFeet } : {}),
+  };
+}
+
 function normalizeCoordinate(value: unknown): RoadNavCoordinate | null {
   if (Array.isArray(value) && value.length >= 2) {
     const lng = finiteNumber(value[0]);
     const lat = finiteNumber(value[1]);
     if (lat == null || lng == null) return null;
     if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
-    return { lat, lng };
+    return appendCoordinateElevation({ lat, lng }, value);
   }
 
   const record = readRecord(value);
@@ -47,14 +107,17 @@ function normalizeCoordinate(value: unknown): RoadNavCoordinate | null {
   if (lat == null || lng == null) return null;
   if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
 
-  return { lat, lng };
+  return appendCoordinateElevation({ lat, lng }, record);
 }
 
 function dedupeConsecutive(points: RoadNavCoordinate[]): RoadNavCoordinate[] {
   const deduped: RoadNavCoordinate[] = [];
   points.forEach((point) => {
     const previous = deduped[deduped.length - 1];
-    if (previous && previous.lat === point.lat && previous.lng === point.lng) return;
+    if (previous && previous.lat === point.lat && previous.lng === point.lng) {
+      deduped[deduped.length - 1] = mergeCoordinateElevation(previous, point);
+      return;
+    }
     deduped.push(point);
   });
   return deduped;
@@ -333,8 +396,12 @@ function joinConnectedSegments(
       remaining.delete(match.segmentIndex);
       maxSegmentGapMeters = Math.max(maxSegmentGapMeters ?? 0, match.gapMeters);
       if (match.gapMeters > 1) joinedSegmentGapCount += 1;
-      const startIndex = match.gapMeters <= 1 ? 1 : 0;
-      points.push(...match.line.slice(startIndex));
+      if (match.gapMeters <= 1) {
+        points[points.length - 1] = mergeCoordinateElevation(points[points.length - 1], match.line[0]);
+        points.push(...match.line.slice(1));
+      } else {
+        points.push(...match.line);
+      }
     }
 
     if (!ambiguous && !disconnected && remaining.size === 0) {
@@ -366,8 +433,12 @@ function joinConnectedSegments(
     }
 
     if (gapMeters > 1) joinedSegmentGapCount += 1;
-    const startIndex = gapMeters <= 1 ? 1 : 0;
-    points.push(...nextLine.slice(startIndex));
+    if (gapMeters <= 1) {
+      points[points.length - 1] = mergeCoordinateElevation(points[points.length - 1], nextLine[0]);
+      points.push(...nextLine.slice(1));
+    } else {
+      points.push(...nextLine);
+    }
   }
 
   return {

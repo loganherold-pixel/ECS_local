@@ -177,16 +177,17 @@ assert.ok(
     discoverSource.includes('applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement)') &&
     discoverSource.includes('buildExploreGuidanceReadyInventory({') &&
     discoverSource.includes('trailPacks: exploreWizardTrailPackSourceRoutes') &&
-    discoverSource.includes('hiddenGemRoutes: exploreWizardRangeOnlyHiddenGemSourceRoutes') &&
+    discoverSource.includes('hiddenGemRoutes: exploreWizardHiddenGemSourceRoutes') &&
     discoverSource.includes('ecsRouteIdeas: exploreWizardEcsIdeaSourceRoutes') &&
     discoverSource.includes('selectedRefinement: exploreRefinement') &&
-    discoverSource.includes('const radiusFilteredExploreWizardFavoriteRoutes = useMemo') &&
-    discoverSource.includes('radiusFilteredExploreWizardSavedBuiltRoutes') &&
-    discoverSource.includes('radiusFilteredExploreWizardImportedStitchedRoutes') &&
+    discoverSource.includes('const exploreWizardFavoriteRoutesWithContext = useMemo') &&
+    discoverSource.includes('exploreWizardSavedBuiltRoutesWithContext') &&
+    discoverSource.includes('exploreWizardImportedStitchedRoutesWithContext') &&
+    discoverSource.includes('withinRadius') &&
     !guidanceReadyInventoryBlock.includes('hiddenGemExploreOrchestration') &&
     !guidanceReadyInventoryBlock.includes('filteredFavoriteTrails') &&
     !discoverSource.includes('ecsRouteIdeas: visibleAIRoutes'),
-  'Explore TripBuilder guidance candidates should use range-only ready-route pools instead of active-refinement or page-sized visible route pools.',
+  'Explore TripBuilder guidance candidates should use area/radius-annotated diagnostic pools instead of active-refinement or page-sized visible route pools.',
 );
 assert.ok(
   !discoverSource.includes('routeCatalogRefinementCriteria') &&
@@ -198,10 +199,10 @@ assert.ok(
   'Explore refinement details should stay local while the catalog criteria uses only the sticky preview-geometry opt-in.',
 );
 assert.ok(
-  refinementChangeBlock.includes('if (refinement != null)') &&
-    refinementChangeBlock.includes('setRouteCatalogPreviewGeometryRequested(true)') &&
+  refinementChangeBlock.includes('setRouteCatalogPreviewGeometryRequested(true)') &&
+    !refinementChangeBlock.includes('if (refinement != null)') &&
     !refinementChangeBlock.includes('setRouteCatalogPreviewGeometryRequested(false)'),
-  'The first non-null refinement should opt into route previews once, while later bucket changes remain local.',
+  'Verified preview geometry should remain requested independently of the optional local refinement.',
 );
 assert.ok(
   aiRequestParamsBlock.includes('canonicalRadiusFilteredRoutes.map((route) => route.name)') &&
@@ -211,10 +212,11 @@ assert.ok(
 );
 assert.ok(
   discoverSource.includes('const hasSelectedExploreRefinement = exploreRefinement != null') &&
-    discoverSource.includes('if (!hasSelectedExploreRefinement) return []') &&
-    discoverSource.includes('showGuidanceReadyRefinementPrompt') &&
-    discoverSource.includes('Select a refinement bucket to populate Guidance Ready route cards.'),
-  'Explore should show range refinement counts first and keep Guidance Ready route cards empty until a refinement is selected.',
+    discoverSource.includes('const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet;') &&
+    !discoverSource.includes('if (!hasSelectedExploreRefinement) return []') &&
+    !discoverSource.includes('showGuidanceReadyRefinementPrompt') &&
+    !discoverSource.includes('Select a refinement bucket to populate Guidance Ready route cards.'),
+  'Explore should render all canonical Guidance Ready routes until an optional refinement narrows them.',
 );
 assert.ok(
   discoverSource.includes('const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);') &&
@@ -235,12 +237,13 @@ assert.ok(
 );
 assert.ok(
   filterSource.includes('contentStyle={s.filterContentSurface}') &&
-    filterSource.includes('backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : `${TACTICAL.amber}12`') &&
-    filterSource.includes('borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : `${TACTICAL.amber}2E`') &&
+    filterSource.includes('backgroundColor: ECS.bgElev') &&
+    filterSource.includes('borderColor: ECS.strokeSoft') &&
     filterSource.includes('color: TACTICAL.goldMedium') &&
     filterSource.includes('segmentActive') &&
-    filterSource.includes("backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev : TACTICAL.amber + '14'"),
-  'The Explorer Filters panel should preserve its gold translucent treatment and Android-optimized active chips.',
+    filterSource.includes('minHeight: 32') &&
+    filterSource.includes('accessibilityState={{ selected: isActive, disabled }}'),
+  'The Explore Filters panel should use shared ECS surfaces, preserve selection contrast, and expose accessible chip state.',
 );
 assert.ok(
   helperSource.includes('Remoteness') &&

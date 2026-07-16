@@ -1,7 +1,15 @@
-import { supabase } from './supabase';
+import {
+  EDGE_FUNCTION_UNAVAILABLE_CODE,
+  SUPABASE_CONFIG_UNAVAILABLE_CODE,
+  isDeployedEdgeFunction,
+  isSupabaseConfigured,
+  supabase,
+} from './supabase';
 import {
   ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT,
   ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
+  filterRouteGeometryViewportResultBySourceProviderPrefix,
+  normalizeRouteGeometrySourceProviderPrefix,
   normalizeRouteGeometryViewportResponse,
   type RouteGeometryViewportBbox,
   type RouteGeometryViewportResult,
@@ -11,6 +19,58 @@ function createAbortError(): Error {
   const error = new Error('Request canceled');
   error.name = 'AbortError';
   return error;
+}
+
+export const ROUTE_GEOMETRY_VIEWPORT_REQUEST_TIMEOUT_MS = 12_000;
+
+export class RouteGeometryViewportTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super('ECS trail segment request timed out. Retry or pan the map to refresh.');
+    this.name = 'RouteGeometryViewportTimeoutError';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+export type RouteGeometryViewportProviderAvailability = {
+  available: boolean;
+  safeErrorCode: typeof SUPABASE_CONFIG_UNAVAILABLE_CODE | typeof EDGE_FUNCTION_UNAVAILABLE_CODE | null;
+  reason: 'active' | 'supabase_not_configured' | 'edge_function_unavailable';
+};
+
+export class RouteGeometryViewportProviderUnavailableError extends Error {
+  readonly safeErrorCode: Exclude<RouteGeometryViewportProviderAvailability['safeErrorCode'], null>;
+  readonly reason: Exclude<RouteGeometryViewportProviderAvailability['reason'], 'active'>;
+
+  constructor(availability: RouteGeometryViewportProviderAvailability) {
+    super(ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE);
+    this.name = 'RouteGeometryViewportProviderUnavailableError';
+    this.safeErrorCode = availability.safeErrorCode ?? SUPABASE_CONFIG_UNAVAILABLE_CODE;
+    this.reason = availability.reason === 'active' ? 'supabase_not_configured' : availability.reason;
+  }
+}
+
+export function getRouteGeometryViewportProviderAvailability(): RouteGeometryViewportProviderAvailability {
+  if (!isSupabaseConfigured) {
+    return {
+      available: false,
+      safeErrorCode: SUPABASE_CONFIG_UNAVAILABLE_CODE,
+      reason: 'supabase_not_configured',
+    };
+  }
+  if (!isDeployedEdgeFunction('route-geometry-segments')) {
+    return {
+      available: false,
+      safeErrorCode: EDGE_FUNCTION_UNAVAILABLE_CODE,
+      reason: 'edge_function_unavailable',
+    };
+  }
+  return { available: true, safeErrorCode: null, reason: 'active' };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 export function isRouteGeometryViewportOverlayFeatureEnabled(): boolean {
@@ -81,27 +141,66 @@ export async function fetchRouteGeometryViewportSegments(args: {
   limit?: number;
   vehicleClass?: string | null;
   includeReferenceGeometry?: boolean;
+  sourceProviderPrefix?: string | null;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<RouteGeometryViewportResult> {
   if (args.signal?.aborted) throw createAbortError();
+  const providerAvailability = getRouteGeometryViewportProviderAvailability();
+  if (!providerAvailability.available) {
+    throw new RouteGeometryViewportProviderUnavailableError(providerAvailability);
+  }
+  const sourceProviderPrefix = normalizeRouteGeometrySourceProviderPrefix(args.sourceProviderPrefix);
+  const requestedTimeoutMs = args.timeoutMs ?? ROUTE_GEOMETRY_VIEWPORT_REQUEST_TIMEOUT_MS;
+  const timeoutMs = Number.isFinite(requestedTimeoutMs)
+    ? Math.max(1, Math.trunc(requestedTimeoutMs))
+    : ROUTE_GEOMETRY_VIEWPORT_REQUEST_TIMEOUT_MS;
+  const requestController = new AbortController();
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  let rejectLifecycle: ((reason: Error) => void) | null = null;
+  const lifecyclePromise = new Promise<never>((_resolve, reject) => {
+    rejectLifecycle = reject;
+  });
+  const abortFromCaller = () => {
+    rejectLifecycle?.(createAbortError());
+    requestController.abort();
+  };
+  args.signal?.addEventListener('abort', abortFromCaller, { once: true });
+  timeoutHandle = setTimeout(() => {
+    rejectLifecycle?.(new RouteGeometryViewportTimeoutError(timeoutMs));
+    requestController.abort();
+  }, timeoutMs);
+
   let result;
   try {
-    result = await supabase.functions.invoke('route-geometry-segments', {
-      body: {
-        bbox: args.bbox,
-        zoom: args.zoom,
-        limit: args.limit ?? ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT,
-        vehicleClass: args.vehicleClass ?? null,
-        includeReferenceGeometry: args.includeReferenceGeometry !== false,
-      },
-    });
+    result = await Promise.race([
+      supabase.functions.invoke('route-geometry-segments', {
+        body: {
+          bbox: args.bbox,
+          zoom: args.zoom,
+          limit: args.limit ?? ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT,
+          vehicleClass: args.vehicleClass ?? null,
+          includeReferenceGeometry: args.includeReferenceGeometry !== false,
+          sourceProviderPrefix,
+        },
+        signal: requestController.signal,
+      }),
+      lifecyclePromise,
+    ]);
     if (args.signal?.aborted) throw createAbortError();
   } catch (invokeError) {
+    if (invokeError instanceof RouteGeometryViewportTimeoutError || isAbortError(invokeError)) {
+      throw invokeError;
+    }
     throw new Error(
       friendlyRouteGeometryViewportError(
         invokeError instanceof Error ? invokeError.message : String(invokeError),
       ),
     );
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    args.signal?.removeEventListener('abort', abortFromCaller);
+    rejectLifecycle = null;
   }
 
   const { data, error, response } = result as {
@@ -114,10 +213,13 @@ export async function fetchRouteGeometryViewportSegments(args: {
     const errorBody = data ?? await readRouteGeometryViewportErrorBody(error, response);
     const normalized = normalizeRouteGeometryViewportResponse(errorBody);
     if (normalized.degraded || normalized.userMessage || normalized.unavailableReason) {
-      return normalized;
+      return filterRouteGeometryViewportResultBySourceProviderPrefix(normalized, sourceProviderPrefix);
     }
     throw new Error(friendlyRouteGeometryViewportError(routeGeometryViewportErrorText(errorBody) ?? error.message));
   }
 
-  return normalizeRouteGeometryViewportResponse(data);
+  return filterRouteGeometryViewportResultBySourceProviderPrefix(
+    normalizeRouteGeometryViewportResponse(data),
+    sourceProviderPrefix,
+  );
 }

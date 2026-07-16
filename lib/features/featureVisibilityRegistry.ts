@@ -290,6 +290,7 @@ export const ECS_FEATURE_REGISTRY: readonly ECSFeatureDefinition[] = [
     environment: {
       allowed: ['development', 'test', 'internal'],
       enableFlag: 'EXPO_PUBLIC_ECS_MISSION_COMMAND',
+      developmentDefaultEnabled: true,
     },
     accountRequirement: 'none',
     backendDependencies: [],

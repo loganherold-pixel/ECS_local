@@ -41,10 +41,25 @@ assertIncludes(
   'const resetBuildRouteDraft = useCallback',
   'Build Route draft cleanup should be centralized through a shared reset helper.',
 );
-assertIncludes(
+const resetBuildRouteDraftBlock = blockBetween(
   navigateTab,
-  'setRouteBuilderSnapSource(null);\n  setRouteBuilderSegments([]);',
+  'const resetBuildRouteDraft = useCallback',
+  'const startCampScoutDrawing = useCallback',
+);
+assertIncludes(
+  resetBuildRouteDraftBlock,
+  'setRouteBuilderSnapSource(null);',
+  'Build Route reset should clear the active snap source.',
+);
+assertIncludes(
+  resetBuildRouteDraftBlock,
+  'setRouteBuilderSegments([]);',
   'Build Route reset should clear snap source plus raw/snapped staged segments.',
+);
+assertIncludes(
+  resetBuildRouteDraftBlock,
+  'routeBuilderDraftHistoryRef.current = createNavigateRouteDraftHistory(emptyDraft);',
+  'Build Route reset should clear draft history so a later session cannot restore stale geometry.',
 );
 assertIncludes(
   navigateTab,
@@ -97,9 +112,13 @@ assertIncludes(
   'The draft CLEAR action should remove dropped anchors without leaving Build Route mode.',
 );
 assertIncludes(
-  navigateTab,
-  'setRouteBuilderActive(false);\n    setRouteBuilderDrawing(false);\n    setRouteBuilderSnapSource(null);\n    setRouteBuilderSegments([]);',
-  'Starting Draw Camp Search should fully disconnect the Build Route draft so the two draw modes do not conflict.',
+  blockBetween(
+    navigateTab,
+    'const startCampScoutDrawing = useCallback',
+    'const saveCampsiteDrawing = useCallback',
+  ),
+  'resetBuildRouteDraft({ clearDesignContext: true });',
+  'Starting Draw Camp Search should centrally clear Build Route state and history so the two draw modes do not conflict.',
 );
 assertIncludes(
   mapRenderer,

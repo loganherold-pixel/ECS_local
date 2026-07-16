@@ -58,6 +58,21 @@ const TAG = '[EXPEDITION_STATE]';
 // ── Types ────────────────────────────────────────────────────
 export type ExpeditionState = 'standby' | 'active' | 'paused' | 'complete';
 
+export type ExpeditionRuntimeHydrationStatus = 'restoring' | 'ready' | 'error';
+export type ExpeditionRuntimeSource = 'none' | 'restored' | 'live';
+export type ExpeditionRuntimeFreshness = 'missing' | 'cached' | 'current';
+
+export interface ExpeditionRuntimeSnapshot {
+  state: ExpeditionState;
+  record: ExpeditionRecord | null;
+  activeRecord: ExpeditionRecord | null;
+  hydrationStatus: ExpeditionRuntimeHydrationStatus;
+  source: ExpeditionRuntimeSource;
+  freshness: ExpeditionRuntimeFreshness;
+  revision: number;
+  safeErrorCode: 'expedition_persistence_hydration_failed' | null;
+}
+
 export interface ExpeditionRecord {
   id: string;
   idempotencyKey?: string | null;
@@ -222,6 +237,19 @@ const DEFAULT_GEOFENCE_RADIUS = 200;
 // ── Listeners ────────────────────────────────────────────────
 type StateListener = (state: ExpeditionState, record: ExpeditionRecord | null) => void;
 const listeners: Set<StateListener> = new Set();
+let expeditionPublishedRevision = 0;
+let trackingNotificationPending = false;
+let expeditionRuntimeHydrationStatus: ExpeditionRuntimeHydrationStatus =
+  Platform.OS === 'web' ? 'ready' : 'restoring';
+let expeditionRuntimeSource: ExpeditionRuntimeSource = 'none';
+let expeditionRuntimeSafeErrorCode: ExpeditionRuntimeSnapshot['safeErrorCode'] = null;
+let latestExpeditionProducerEvent = {
+  revision: 0,
+  source: 'none' as 'none' | 'hydration' | 'mutation' | 'tracking',
+  state: 'standby' as ExpeditionState,
+  hasRecord: false,
+  publishedAt: null as string | null,
+};
 
 // ── Timeline Event Listeners ─────────────────────────────────
 type TimelineListener = (event: TimelineEvent) => void;
@@ -229,16 +257,23 @@ const timelineListeners: Set<TimelineListener> = new Set();
 
 async function hydrateNativeState(): Promise<void> {
   if (Platform.OS === 'web') return;
-  await expeditionPersistence.waitForHydration();
-  const keys = Object.values(KEYS);
-  keys.forEach((key) => {
-    const value = expeditionPersistence.get(key);
-    if (value != null) {
-      mem[key] = value;
-    }
-  });
-
   try {
+    await expeditionPersistence.waitForHydration();
+    const keys = Object.values(KEYS);
+    const restoredValues = keys.map((key) => ({
+      key,
+      result: expeditionPersistence.readResult(key),
+    }));
+    if (restoredValues.some(({ result }) => !result.ok && result.hydrationStatus === 'failed')) {
+      expeditionRuntimeHydrationStatus = 'error';
+      expeditionRuntimeSafeErrorCode = 'expedition_persistence_hydration_failed';
+      expeditionStateStore._notify('hydration');
+      return;
+    }
+    restoredValues.forEach(({ key, result }) => {
+      if (result.value != null) mem[key] = result.value;
+    });
+
     const rawCurrent = mem[KEYS.currentExpedition];
     const current = rawCurrent ? JSON.parse(rawCurrent) as ExpeditionRecord : null;
     const hasActiveLifecycle = current?.state === 'active' || current?.state === 'paused';
@@ -248,7 +283,18 @@ async function hydrateNativeState(): Promise<void> {
   } catch {
     sClear(KEYS.currentExpedition);
     sClear(KEYS.homeGeofence);
+    expeditionRuntimeHydrationStatus = 'error';
+    expeditionRuntimeSafeErrorCode = 'expedition_persistence_hydration_failed';
+    expeditionStateStore._notify('hydration');
+    return;
   }
+
+  expeditionRuntimeHydrationStatus = 'ready';
+  expeditionRuntimeSafeErrorCode = null;
+  // Native persistence hydrates after subscribers may already be mounted.
+  // Publish the restored identity so Dispatch and other expedition consumers
+  // do not remain pinned to their pre-hydration local fallback.
+  expeditionStateStore._notify('hydration');
 }
 
 const expeditionStateHydration = hydrateNativeState();
@@ -420,9 +466,22 @@ export const expeditionStateStore = {
     return () => { timelineListeners.delete(listener); };
   },
 
-  _notify(): void {
+  _notify(source: 'hydration' | 'mutation' | 'tracking' = 'mutation'): void {
     const state = this.getState();
     const record = this.getCurrentExpedition();
+    if (source === 'mutation' || source === 'tracking') {
+      expeditionRuntimeSource = 'live';
+    } else if (source === 'hydration' && expeditionRuntimeSource !== 'live') {
+      expeditionRuntimeSource = record ? 'restored' : 'none';
+    }
+    expeditionPublishedRevision += 1;
+    latestExpeditionProducerEvent = {
+      revision: expeditionPublishedRevision,
+      source,
+      state,
+      hasRecord: record != null,
+      publishedAt: new Date().toISOString(),
+    };
     listeners.forEach(fn => {
       try { fn(state, record); } catch (e) { console.error(TAG, 'Listener error:', e); }
     });
@@ -638,6 +697,7 @@ export const expeditionStateStore = {
           current.cloudSessionId = cloudId;
           sSet(KEYS.currentExpedition, JSON.stringify(current));
           console.log(TAG, `Cloud session linked: ${cloudId}`);
+          this._notify();
         }
       }
     }).catch(() => {});
@@ -838,12 +898,28 @@ export const expeditionStateStore = {
     const record = this.getCurrentExpedition();
     if (!record || (record.state !== 'active' && record.state !== 'paused')) return;
 
+    const previousDistance = record.distance;
+    const previousPeakRemoteness = record.peakRemoteness;
     if (params.distance != null) record.distance = params.distance;
     if (params.peakRemoteness != null) {
       record.peakRemoteness = Math.max(record.peakRemoteness ?? 0, params.peakRemoteness);
     }
 
+    if (
+      record.distance === previousDistance &&
+      record.peakRemoteness === previousPeakRemoteness
+    ) return;
+
     sSet(KEYS.currentExpedition, JSON.stringify(record));
+    if (!trackingNotificationPending) {
+      trackingNotificationPending = true;
+      const publish = () => {
+        trackingNotificationPending = false;
+        this._notify('tracking');
+      };
+      if (typeof queueMicrotask === 'function') queueMicrotask(publish);
+      else Promise.resolve().then(publish);
+    }
   },
 
   // ── Force reset to standby ─────────────────────────────
@@ -1091,6 +1167,40 @@ export const expeditionStateStore = {
 
 export function waitForExpeditionStateHydration(): Promise<void> {
   return expeditionStateHydration;
+}
+
+export function selectActiveExpeditionRecord(
+  state: ExpeditionState,
+  record: ExpeditionRecord | null,
+): ExpeditionRecord | null {
+  return state === 'active' || state === 'paused' ? record : null;
+}
+
+export function getExpeditionRuntimeSnapshot(): ExpeditionRuntimeSnapshot {
+  const state = expeditionStateStore.getState();
+  const record = expeditionStateStore.getCurrentExpedition();
+  const source = expeditionRuntimeSource === 'none' && expeditionRuntimeHydrationStatus === 'ready' && record
+    ? 'restored'
+    : expeditionRuntimeSource;
+  return {
+    state,
+    record,
+    activeRecord: selectActiveExpeditionRecord(state, record),
+    hydrationStatus: expeditionRuntimeHydrationStatus,
+    source,
+    freshness: record ? (source === 'restored' ? 'cached' : 'current') : 'missing',
+    revision: expeditionPublishedRevision,
+    safeErrorCode: expeditionRuntimeSafeErrorCode,
+  };
+}
+
+export function getExpeditionStateSubscriptionDiagnostics() {
+  return {
+    consumerCount: listeners.size,
+    publishedRevision: expeditionPublishedRevision,
+    trackingNotificationPending,
+    latestProducerEvent: { ...latestExpeditionProducerEvent },
+  };
 }
 
 // ── Haversine distance (meters) ──────────────────────────────

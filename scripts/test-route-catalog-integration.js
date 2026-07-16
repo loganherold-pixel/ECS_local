@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -197,7 +198,7 @@ assert(
     searchFunction.includes('preview_simplified') &&
     searchFunction.includes('searchSelect(includeGeometry, includePreviewGeometry)') &&
     searchFunction.includes('filterRecordsWithinSearchRadius') &&
-    searchFunction.includes('countRouteCatalogCurationCandidates') &&
+    searchFunction.includes('inspectRouteCatalogCurationCandidates') &&
     searchFunction.includes('attachSourceRecords') &&
     searchFunction.includes(".from('verified_routes')") &&
     !searchFunction.includes(".from('route_catalog_public')") &&
@@ -229,6 +230,15 @@ assert(
     searchFunction.includes(".lte('minimum_fuel_range_miles'"),
   'Route catalog search should honor server-side criteria for distance, duration, route type, difficulty, confidence, remoteness, campability, and resource margins',
 );
+assert(
+  searchFunction.includes("from './providerContract.ts'") &&
+    searchFunction.includes('partitionRestrictedRouteCatalogRecords(conditionAwareRecords)') &&
+    searchFunction.includes('diagnosticRecords,') &&
+    searchFunction.includes('normalizeRouteCatalogPagination(params)') &&
+    searchFunction.includes('sourceMatchedRecords.slice(offset, windowEnd)') &&
+    searchFunction.includes('radiusFiltered.records.slice(offset, windowEnd)'),
+  'Route catalog search should exclude restricted geometry at the Edge boundary and apply bounded stable pagination.',
+);
 
 assert(
   liveCatalog.includes("functions.invoke('route-catalog-search'") &&
@@ -254,7 +264,8 @@ assert(
     liveCatalog.includes('includeCoverageDiagnostics: false') &&
     liveCatalog.includes("expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon']") &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
-    liveCatalog.includes('searchMeta: normalized.searchMeta') &&
+    liveCatalog.includes('const searchMeta: RouteCatalogSearchMeta') &&
+    liveCatalog.includes('clientInvalidRecordCount') &&
     liveCatalog.includes('searchMeta: routeCatalog.searchMeta') &&
     liveCatalog.includes("functions.invoke('route-catalog-detail'") &&
     liveCatalog.includes('normalizeRouteCatalogDetailResponse') &&
@@ -344,7 +355,7 @@ assert(
   discover.includes('No verified routes yet in this area') &&
     discover.includes('liveTrailPackCatalogSnapshot.coverageState') &&
     discover.includes('routeCatalogSearchCriteria') &&
-    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
+    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria, {') &&
     !discover.includes('routeCatalogRefinementCriteria') &&
     discover.includes('applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement)') &&
     discover.includes('availableFuelRangeMiles: vehicleProfile?.fuel_range_miles') &&
@@ -352,7 +363,7 @@ assert(
     discover.includes('vehicleClass: vehicleProfile?.vehicleType') &&
     discover.includes('fetchRouteCatalogTrailPackDetail') &&
     discover.includes('hydrateRouteCatalogOpportunityForHandoff') &&
-    discover.includes('await hydrateRouteCatalogOpportunityForHandoff(route)') &&
+    discover.includes('await hydrateRouteCatalogOpportunityForHandoff(') &&
     discover.includes('stageExploreReadinessPreview(routeForHandoff)') &&
     discover.includes('buildValidatedExploreNavigationPayload(routeForHandoff)') &&
     discover.includes('stageTripBuilderItineraryHandoff(routeForHandoff)') &&
@@ -362,19 +373,23 @@ assert(
     discover.includes('trailPackPreviewRequestRef'),
   'Explore should surface honest partial-coverage copy, broad-search the current radius, refine locally, enrich selected Trail Pack previews, and hydrate route-catalog handoffs through route-catalog-detail',
 );
-const suggestedRoutesBlock = discover
-  .split('const guidanceReadyRouteOptions = useMemo<ExpeditionOpportunity[]>')[1]
-  ?.split('const exploreSuggestedRouteOptions = guidanceReadyRouteOptions')[0] ?? '';
+const guidanceInventoryBlock = discover
+  .split('const exploreGuidanceReadyInventory = useMemo')[1]
+  ?.split('const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet')[0] ?? '';
+const canonicalPlanningBlock = discover
+  .split('const canonicalExplorePlanningRoutes = useMemo<ExpeditionOpportunity[]>')[1]
+  ?.split('const exploreWizardSourceCounts = exploreGuidanceReadyInventory.sourceCounts')[0] ?? '';
 assert(
-  suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.trailPackRoutes') &&
-    suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.hiddenGemRoutes') &&
-    suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.ecsRouteIdeaRoutes') &&
-    suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.favoriteRoutes') &&
-    suggestedRoutesBlock.includes('routePassesExploreMapLength(route)') &&
-    suggestedRoutesBlock.includes('isExploreGuidanceReadyRoute(route)') &&
-    !suggestedRoutesBlock.includes('exploreMapPreviewRouteSets.popularTrailRoutes') &&
-    discover.includes('const exploreSuggestedRouteOptions = guidanceReadyRouteOptions'),
-  'Explore planning/offline routes should use the source-backed Guidance Ready route set with 5+ mile and geometry gates',
+  guidanceInventoryBlock.includes('trailPacks: exploreWizardTrailPackSourceRoutes') &&
+    guidanceInventoryBlock.includes('hiddenGemRoutes: exploreWizardHiddenGemSourceRoutes') &&
+    guidanceInventoryBlock.includes('ecsRouteIdeas: exploreWizardEcsIdeaSourceRoutes') &&
+    guidanceInventoryBlock.includes('...exploreWizardFavoriteRoutesWithContext') &&
+    guidanceInventoryBlock.includes('...exploreWizardSavedBuiltRoutesWithContext') &&
+    guidanceInventoryBlock.includes('savedRouteAssets: exploreWizardImportedStitchedRoutesWithContext') &&
+    canonicalPlanningBlock.includes('exploreWizardCandidateSet.candidates.map((candidate) => candidate.route)') &&
+    discover.includes('routes: canonicalExplorePlanningRoutes as any') &&
+    !discover.includes('const publicSuggestedTrailheadRoutes'),
+  'Explore planning/offline routes should use the shared Guidance Ready inventory, including ready favorites, saved routes, and imported route assets.',
 );
 assert(
   !discover.includes('ecs_demo_full_route_fixture') &&

@@ -82,8 +82,12 @@ assertIncludes(
   'Each operational weather hook should remember its last requested key to suppress rapid duplicate effects.',
 );
 assertIncludes(
-  "setSharedWeatherState(cachedResult, cachedResult.source !== 'cache_fresh', target, freshnessWindowMs);",
-  'Cached hook weather should publish into shared operational weather for Dispatch consumers without treating stale cache as fresh.',
+  'function hydrateActiveSharedWeatherCache(): void',
+  'Cached weather should publish through the shared consumer owner instead of competing hook-local hydration effects.',
+);
+assertIncludes(
+  'setSharedWeatherState(cached, true, target, freshnessWindowMs);',
+  'Hydrated shared cache should remain visible and explicitly loading until its live refresh terminates.',
 );
 assertIncludes(
   'setSharedWeatherState(decision.value, false, target, freshnessWindowMs);',

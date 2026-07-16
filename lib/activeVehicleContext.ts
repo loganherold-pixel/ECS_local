@@ -244,6 +244,19 @@ export function getActiveVehicleContext(): ActiveVehicleContext {
   return getVehicleContext(vehicleSetupStore.getActiveVehicleId());
 }
 
+/**
+ * Resolves the current operational rig first and uses a route/build vehicle only
+ * when Fleet has no active selection. Historical route metadata must not pin
+ * Navigate, CampOps, or readiness consumers to a vehicle that is no longer
+ * active.
+ */
+export function getActiveVehicleContextWithFallback(
+  fallbackVehicleId: string | null | undefined,
+): ActiveVehicleContext {
+  const activeVehicleId = vehicleSetupStore.getActiveVehicleId();
+  return getVehicleContext(activeVehicleId ?? fallbackVehicleId);
+}
+
 export function getActiveVehicle(): VehicleWithExtensions | null {
   return getActiveVehicleContext().vehicle;
 }

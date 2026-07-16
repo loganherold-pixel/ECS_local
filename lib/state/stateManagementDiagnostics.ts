@@ -1,10 +1,14 @@
 import { ecsBus } from '../ecsBus';
 import { ecsSyncCoordinator } from '../ecsSyncCoordinator';
+import { getDispatchPersistenceProjectionDiagnostics } from '../dispatchPersistenceEventProjection';
 import { getActiveVehicleSubscriptionDiagnostics } from '../fleet/activeVehicleState';
+import { getExpeditionStateSubscriptionDiagnostics } from '../expeditionStateStore';
+import { navigateRouteSessionStore } from '../navigateRouteSessionStore';
 import { getPersistedKeyValueDiagnostics } from '../keyValuePersistence';
 import { getECSPerformanceSnapshot } from '../performance/ecsPerformanceDiagnostics';
 import { realtimeSync } from '../realtimeSync';
 import { syncActionQueue } from '../syncActionQueue';
+import { getSharedOperationalWeatherDiagnostics } from '../useOperationalWeather';
 import { ecsStoreHydrationCoordinator } from './storeHydrationCoordinator';
 import { ecsStateTransactionCoordinator } from './stateTransactionCoordinator';
 
@@ -28,6 +32,10 @@ export function getECSStateManagementDiagnostics() {
       eventBusDuplicatesObserved: busMetrics.duplicate_subscription_count,
       syncCoordinator: syncState.subscription_count,
       activeVehicle: getActiveVehicleSubscriptionDiagnostics(),
+      activeExpedition: getExpeditionStateSubscriptionDiagnostics(),
+      dispatchPersistenceProjection: getDispatchPersistenceProjectionDiagnostics(),
+      navigateRouteSession: navigateRouteSessionStore.getDiagnostics(),
+      operationalWeather: getSharedOperationalWeatherDiagnostics(),
       realtimeChangeListeners: realtimeStats.changeListenerCount,
       realtimeStatusListeners: realtimeStats.statusListenerCount,
     },

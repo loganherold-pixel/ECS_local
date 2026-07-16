@@ -59,6 +59,11 @@ type CoordinatorOptions = {
   defaultTimeoutMs?: number;
 };
 
+type HydrationTaskFlight = {
+  generation: number;
+  result: Promise<ECSStoreHydrationTaskResult>;
+};
+
 function sanitizeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? 'Unknown hydration error');
   return message.replace(/[\r\n\t]+/g, ' ').slice(0, 180);
@@ -71,12 +76,13 @@ function safeTaskId(value: string): string {
 export class ECSStoreHydrationCoordinator {
   private readonly now: () => number;
   private readonly defaultTimeoutMs: number;
-  private readonly taskFlights = new Map<string, Promise<ECSStoreHydrationTaskResult>>();
+  private readonly taskFlights = new Map<string, HydrationTaskFlight>();
   private readonly completedTasks = new Map<string, ECSStoreHydrationTaskResult>();
   private readonly planFlights = new Map<string, Promise<ECSStoreHydrationPlanResult>>();
   private readonly diagnostics = new Map<string, ECSStoreHydrationTaskDiagnostic>();
   private readonly listeners = new Set<HydrationListener>();
   private cyclePreventionCount = 0;
+  private nextTaskGeneration = 1;
 
   constructor(options: CoordinatorOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -92,7 +98,9 @@ export class ECSStoreHydrationCoordinator {
     if (existing) return existing;
 
     const flight = this.executePlan(planId, input.tasks).finally(() => {
-      this.planFlights.delete(planId);
+      if (this.planFlights.get(planId) === flight) {
+        this.planFlights.delete(planId);
+      }
       this.notify();
     });
     this.planFlights.set(planId, flight);
@@ -214,21 +222,50 @@ export class ECSStoreHydrationCoordinator {
       const diagnostic = this.ensureDiagnostic(id);
       diagnostic.joinedCalls += 1;
       this.notify();
-      return existing;
+      return existing.result;
     }
 
-    const flight = this.executeTask(task, taskMap, ancestry).finally(() => {
+    const generation = this.nextTaskGeneration++;
+    let underlyingSettled = false;
+    let resultSettled = false;
+    const releaseFlightIfSettled = () => {
+      if (!underlyingSettled || !resultSettled) return;
+      const current = this.taskFlights.get(id);
+      if (current?.generation !== generation) return;
       this.taskFlights.delete(id);
       this.notify();
-    });
-    this.taskFlights.set(id, flight);
-    return flight;
+    };
+    const markUnderlyingSettled = () => {
+      underlyingSettled = true;
+      releaseFlightIfSettled();
+    };
+    const result = this.executeTask(
+      task,
+      taskMap,
+      ancestry,
+      generation,
+      markUnderlyingSettled,
+    );
+    this.taskFlights.set(id, { generation, result });
+    void result.then(
+      () => {
+        resultSettled = true;
+        releaseFlightIfSettled();
+      },
+      () => {
+        resultSettled = true;
+        markUnderlyingSettled();
+      },
+    );
+    return result;
   }
 
   private async executeTask(
     task: ECSStoreHydrationTask,
     taskMap: ReadonlyMap<string, ECSStoreHydrationTask>,
     ancestry: readonly string[],
+    generation: number,
+    markUnderlyingSettled: () => void,
   ): Promise<ECSStoreHydrationTaskResult> {
     const id = safeTaskId(task.id);
     const required = task.required !== false;
@@ -248,6 +285,7 @@ export class ECSStoreHydrationCoordinator {
       const dependencyId = safeTaskId(dependencyIdInput);
       const dependency = taskMap.get(dependencyId);
       if (!dependency) {
+        markUnderlyingSettled();
         return this.completeTask(id, {
           id,
           status: 'failed',
@@ -258,7 +296,19 @@ export class ECSStoreHydrationCoordinator {
         });
       }
       const dependencyResult = await this.runTask(dependency, taskMap, [...ancestry, id]);
+      if (!this.isCurrentTaskGeneration(id, generation)) {
+        markUnderlyingSettled();
+        return {
+          id,
+          status: 'failed',
+          required,
+          durationMs: Math.max(0, this.now() - startedAtMs),
+          error: 'Hydration task generation superseded.',
+          completedAfterTimeout: false,
+        };
+      }
       if (dependencyResult.status !== 'ready' && dependencyResult.required) {
+        markUnderlyingSettled();
         return this.completeTask(id, {
           id,
           status: 'failed',
@@ -266,7 +316,7 @@ export class ECSStoreHydrationCoordinator {
           durationMs: Math.max(0, this.now() - startedAtMs),
           error: `Required hydration dependency ${dependencyId} is ${dependencyResult.status}.`,
           completedAfterTimeout: false,
-        });
+        }, generation);
       }
     }
 
@@ -280,26 +330,20 @@ export class ECSStoreHydrationCoordinator {
 
     const underlying = Promise.resolve().then(task.hydrate);
     underlying.then(() => {
-      if (!timedOut) return;
-      const current = this.ensureDiagnostic(id);
-      current.status = 'ready';
-      current.completedAfterTimeout = true;
-      current.completedAt = new Date().toISOString();
-      current.durationMs = Math.max(0, Math.round((this.now() - startedAtMs) * 10) / 10);
-      current.error = null;
+      if (!timedOut || !this.isCurrentTaskGeneration(id, generation)) return;
       const lateResult: ECSStoreHydrationTaskResult = {
         id,
         status: 'ready',
         required,
-        durationMs: current.durationMs,
+        durationMs: Math.max(0, Math.round((this.now() - startedAtMs) * 10) / 10),
         error: null,
         completedAfterTimeout: true,
       };
-      this.completedTasks.set(id, lateResult);
-      this.notify();
+      this.completeTask(id, lateResult, generation);
     }).catch(() => {
       // The raced result records the failure; this handler prevents an unhandled late rejection.
     });
+    void underlying.then(markUnderlyingSettled, markUnderlyingSettled);
 
     const timeoutResult = new Promise<ECSStoreHydrationTaskResult>((resolve) => {
       timeout = setTimeout(() => {
@@ -318,7 +362,7 @@ export class ECSStoreHydrationCoordinator {
 
     const result = await Promise.race([
       underlying.then<ECSStoreHydrationTaskResult>(() => {
-        span.end('completed');
+        if (!timedOut) span.end('completed');
         return {
           id,
           status: 'ready',
@@ -328,7 +372,7 @@ export class ECSStoreHydrationCoordinator {
           completedAfterTimeout: false,
         };
       }).catch<ECSStoreHydrationTaskResult>((error) => {
-        span.end('failed');
+        if (!timedOut) span.end('failed');
         return {
           id,
           status: 'failed',
@@ -342,7 +386,11 @@ export class ECSStoreHydrationCoordinator {
     ]);
 
     if (timeout) clearTimeout(timeout);
-    return this.completeTask(id, result);
+    return this.completeTask(id, result, generation);
+  }
+
+  private isCurrentTaskGeneration(id: string, generation: number): boolean {
+    return this.taskFlights.get(id)?.generation === generation;
   }
 
   private ensureDiagnostic(id: string): ECSStoreHydrationTaskDiagnostic {
@@ -377,7 +425,14 @@ export class ECSStoreHydrationCoordinator {
     return result;
   }
 
-  private completeTask(id: string, result: ECSStoreHydrationTaskResult): ECSStoreHydrationTaskResult {
+  private completeTask(
+    id: string,
+    result: ECSStoreHydrationTaskResult,
+    generation?: number,
+  ): ECSStoreHydrationTaskResult {
+    if (generation != null && !this.isCurrentTaskGeneration(id, generation)) {
+      return result;
+    }
     const completed = this.finishDiagnostic(id, result);
     this.completedTasks.set(id, completed);
     return completed;

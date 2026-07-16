@@ -9,13 +9,13 @@ function read(...segments) {
 }
 
 const routedDispatch = read('components', 'dispatch', 'DispatchCadCommandCenter.tsx');
-const legacyDispatch = read('components', 'dispatch', 'DispatchCommandCenter.tsx');
+const canonicalEntry = read('components', 'dispatch', 'DispatchCommandCenter.tsx');
 const tabRoute = read('app', '(tabs)', 'alert.tsx');
 
 assert.match(
   tabRoute,
-  /DispatchCadCommandCenter/,
-  'The Dispatch tab must remain routed through DispatchCadCommandCenter.',
+  /DispatchCommandCenter/,
+  'The Dispatch tab must route through the canonical Dispatch entry.',
 );
 assert.match(
   routedDispatch,
@@ -42,15 +42,7 @@ assert.match(
   /<MoreActionsModal[\s\S]*?openCommand\(command\)/,
   'More Actions must keep routing its legacy entries through the shared command opener.',
 );
-assert.match(
-  legacyDispatch,
-  /DispatchTeamPingComposer/,
-  'The non-routed compatibility Dispatch surface still owns the older team ping composer.',
-);
-assert.match(
-  legacyDispatch,
-  /DispatchAssistRequestComposer/,
-  'The non-routed compatibility Dispatch surface still owns the older assist composer.',
-);
+assert.match(canonicalEntry, /export \{ default \} from '\.\/DispatchCadCommandCenter'/);
+assert.doesNotMatch(canonicalEntry, /DispatchTeamPingComposer|DispatchAssistRequestComposer/);
 
 console.log('Dispatch Mission Command composer characterization checks passed.');

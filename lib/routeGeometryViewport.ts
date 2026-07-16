@@ -37,6 +37,8 @@ export type RouteGeometryViewportSegment = {
   sourceKind: Extract<RouteGeometryOverlaySourceKind, 'route_catalog'>;
   sourceId: string;
   sourceLabel: string;
+  /** Canonical provider identifiers retained for source-specific overlays such as MVUM. */
+  sourceProviderIds?: string[];
   dataState: RouteGeometryOverlayDataState;
   confidence: RouteGeometryOverlayConfidence;
   legalityStatus: 'legal_verified' | 'limited_verified' | 'geometry_only' | 'community_unverified';
@@ -53,9 +55,15 @@ export type RouteGeometryViewportResult = {
   candidateCount: number;
   cappedCount: number;
   skippedMissingGeometryCount: number;
+  /** Invalid provider records excluded while retaining any valid geometry in the same response. */
+  invalidFeatureCount?: number;
   skippedClosedCount: number;
   bboxFilterApplied: boolean;
   degraded: boolean;
+  sourceProviderPrefix?: string | null;
+  sourceFilterApplied?: boolean;
+  sourceFilteredCount?: number;
+  unfilteredCandidateCount?: number;
   unavailableReason?: string | null;
   userMessage?: string | null;
   cacheKey?: string | null;
@@ -106,6 +114,40 @@ function finiteNumber(value: unknown): number | null {
 function cleanText(value: unknown, fallback = ''): string {
   const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
   return text || fallback;
+}
+
+export function normalizeRouteGeometrySourceProviderPrefix(value: unknown): string | null {
+  const normalized = cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+  return normalized || null;
+}
+
+function normalizeRouteGeometrySourceProviderIds(raw: RawViewportSegment): string[] {
+  const directIds = readArray(raw.sourceProviderIds ?? raw.source_provider_ids);
+  const sourceRecordIds = readArray(raw.sourceRecords ?? raw.source_records)
+    .map(readRecord)
+    .map((source) => source?.providerId ?? source?.provider_id);
+  return Array.from(
+    new Set(
+      [...directIds, ...sourceRecordIds]
+        .map((value) => cleanText(value))
+        .filter(Boolean),
+    ),
+  );
+}
+
+export function routeGeometryViewportSegmentMatchesSourceProviderPrefix(
+  segment: Pick<RouteGeometryViewportSegment, 'sourceProviderIds'>,
+  sourceProviderPrefix: unknown,
+): boolean {
+  const prefix = normalizeRouteGeometrySourceProviderPrefix(sourceProviderPrefix);
+  if (!prefix) return true;
+  return (segment.sourceProviderIds ?? []).some((providerId) =>
+    normalizeRouteGeometrySourceProviderPrefix(providerId)?.startsWith(prefix) === true,
+  );
 }
 
 function bucketDown(value: number, bucketDegrees: number): number {
@@ -295,21 +337,27 @@ export function isRouteGeometryViewportZoomEligible(zoom: unknown): boolean {
 export function buildRouteGeometryViewportCacheKey(
   bbox: RouteGeometryViewportBbox,
   zoom: number,
-  options: { includeReferenceGeometry?: boolean; vehicleClass?: string | null } = {},
+  options: {
+    includeReferenceGeometry?: boolean;
+    vehicleClass?: string | null;
+    sourceProviderPrefix?: string | null;
+  } = {},
 ): string {
   const zoomBucket = Math.max(ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM, Math.floor(zoom));
   const referencePart = options.includeReferenceGeometry === false ? 'verified' : 'ref';
   const vehicleClass = cleanText(options.vehicleClass).replace(/[^a-z0-9_]+/gi, '_') || 'all_vehicle';
+  const sourceProviderPrefix = normalizeRouteGeometrySourceProviderPrefix(options.sourceProviderPrefix);
   return [
     'route_geometry_segments',
     `z${zoomBucket}`,
     referencePart,
     vehicleClass,
+    sourceProviderPrefix ? `source_${sourceProviderPrefix}` : null,
     bbox.minLng.toFixed(2),
     bbox.minLat.toFixed(2),
     bbox.maxLng.toFixed(2),
     bbox.maxLat.toFixed(2),
-  ].join(':');
+  ].filter((part): part is string => typeof part === 'string').join(':');
 }
 
 export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeometryViewportResult {
@@ -325,11 +373,21 @@ export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeo
   ) || (degraded ? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE : null);
   const segments: RouteGeometryViewportSegment[] = [];
   let skippedMissingGeometryCount = finiteNumber(meta?.skippedMissingGeometryCount ?? meta?.skipped_missing_geometry_count) ?? 0;
+  let invalidFeatureCount = finiteNumber(
+    meta?.invalidFeatureCount ??
+      meta?.invalid_feature_count ??
+      meta?.skippedMissingGeometryCount ??
+      meta?.skipped_missing_geometry_count,
+  ) ?? 0;
   let skippedClosedCount = finiteNumber(meta?.skippedClosedCount ?? meta?.skipped_closed_count) ?? 0;
 
   for (const rawValue of rawSegments) {
     const raw = readRecord(rawValue);
-    if (!raw) continue;
+    if (!raw) {
+      skippedMissingGeometryCount += 1;
+      invalidFeatureCount += 1;
+      continue;
+    }
     if (isClosedOrProhibited(raw)) {
       skippedClosedCount += 1;
       continue;
@@ -337,6 +395,7 @@ export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeo
     const coordinates = normalizeGeometryLine(raw);
     if (coordinates.length < 2) {
       skippedMissingGeometryCount += 1;
+      invalidFeatureCount += 1;
       continue;
     }
     const id = cleanText(raw.id ?? raw.segmentId ?? raw.segment_id, `viewport-${segments.length}`);
@@ -353,6 +412,7 @@ export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeo
       sourceKind: 'route_catalog',
       sourceId: cleanText(raw.sourceId ?? raw.source_id, id),
       sourceLabel,
+      sourceProviderIds: normalizeRouteGeometrySourceProviderIds(raw),
       dataState: normalizeDataState(raw.dataState ?? raw.data_state),
       confidence: normalizeConfidence(raw.confidence ?? raw.confidenceScore ?? raw.confidence_score),
       legalityStatus,
@@ -370,13 +430,53 @@ export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeo
     candidateCount: finiteNumber(meta?.candidateCount ?? meta?.candidate_count) ?? rawSegments.length,
     cappedCount: finiteNumber(meta?.cappedCount ?? meta?.capped_count) ?? 0,
     skippedMissingGeometryCount,
+    invalidFeatureCount,
     skippedClosedCount,
     bboxFilterApplied: Boolean(meta?.bboxFilterApplied ?? meta?.bbox_filter_applied ?? true),
     degraded,
+    sourceProviderPrefix: normalizeRouteGeometrySourceProviderPrefix(
+      meta?.sourceProviderPrefix ?? meta?.source_provider_prefix ?? record?.sourceProviderPrefix ?? record?.source_provider_prefix,
+    ),
+    sourceFilterApplied: Boolean(meta?.sourceFilterApplied ?? meta?.source_filter_applied ?? false),
+    sourceFilteredCount: finiteNumber(meta?.sourceFilteredCount ?? meta?.source_filtered_count) ?? 0,
+    unfilteredCandidateCount:
+      finiteNumber(meta?.unfilteredCandidateCount ?? meta?.unfiltered_candidate_count) ?? rawSegments.length,
     unavailableReason,
     userMessage,
     cacheKey: cleanText(meta?.cacheKey ?? meta?.cache_key) || null,
     fetchedAt: cleanText(meta?.fetchedAt ?? meta?.fetched_at) || null,
+  };
+}
+
+/**
+ * Enforces a provider filter after normalization so older deployed functions that ignore
+ * sourceProviderPrefix cannot leak other catalog sources into source-specific overlays.
+ */
+export function filterRouteGeometryViewportResultBySourceProviderPrefix(
+  result: RouteGeometryViewportResult,
+  sourceProviderPrefix: unknown,
+): RouteGeometryViewportResult {
+  const prefix = normalizeRouteGeometrySourceProviderPrefix(sourceProviderPrefix);
+  if (!prefix) return result;
+
+  const segments = result.segments.filter((segment) =>
+    routeGeometryViewportSegmentMatchesSourceProviderPrefix(segment, prefix),
+  );
+  const clientFilteredCount = result.segments.length - segments.length;
+  const serverAppliedSameFilter =
+    result.sourceFilterApplied === true &&
+    normalizeRouteGeometrySourceProviderPrefix(result.sourceProviderPrefix) === prefix;
+
+  return {
+    ...result,
+    segments,
+    candidateCount: serverAppliedSameFilter ? result.candidateCount : segments.length,
+    sourceProviderPrefix: prefix,
+    sourceFilterApplied: true,
+    sourceFilteredCount: (result.sourceFilteredCount ?? 0) + clientFilteredCount,
+    unfilteredCandidateCount: serverAppliedSameFilter
+      ? (result.unfilteredCandidateCount ?? result.candidateCount)
+      : result.candidateCount,
   };
 }
 

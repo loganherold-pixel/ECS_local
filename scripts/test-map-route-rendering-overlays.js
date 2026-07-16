@@ -49,7 +49,10 @@ Module._load = function patchedLoad(request, parent, isMain) {
 };
 
 function compileTypescript(module, filename) {
-  const source = fs.readFileSync(filename, 'utf8');
+  let source = fs.readFileSync(filename, 'utf8');
+  if (path.resolve(filename) === path.resolve(mapRendererPath)) {
+    source = source.replace('function makeMapHtml(', 'export function makeMapHtml(');
+  }
   const output = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
@@ -71,9 +74,24 @@ const {
   buildMapOverlayPayloadPatch,
   buildMapOverlayPayloadHash,
   buildWebPayload,
+  makeMapHtml,
   mergeMapOverlayPayloadPatches,
   normalizeRenderedCampScoutMarkers,
 } = require(mapRendererPath);
+
+const mapHtml = makeMapHtml(
+  'pk.syntax-test',
+  'mapbox://styles/mapbox/dark-v11',
+  [],
+  1,
+  'navigate',
+);
+const inlineMapScript = mapHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+assert(inlineMapScript, 'MapRenderer should emit its inline Mapbox runtime script.');
+assert.doesNotThrow(
+  () => new Function(inlineMapScript),
+  'The generated Mapbox runtime script must remain syntactically valid.',
+);
 
 const collapsedRoute = buildWebPayload({
   mapboxToken: 'token',
@@ -228,6 +246,11 @@ const activeProgressRoute = buildWebPayload({
     { lat: 39.10001, lng: -120.10001 },
   ],
 });
+assert.deepStrictEqual(
+  activeProgressRoute.progressRouteCoords.at(-1),
+  activeProgressRoute.routeCoords[0],
+  'Mounted MapRenderer completed and remaining guidance sources should meet at one canonical split point.',
+);
 const smallProgressNudgeRoute = buildWebPayload({
   mapboxToken: 'token',
   routeRenderMode: 'active',
@@ -477,6 +500,16 @@ assert(
     mapRendererSource.includes('ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID') &&
     mapRendererSource.includes('promoteRouteGuidanceLayers();'),
   'MapRenderer should re-promote active route guidance layers after camp/search overlay updates.',
+);
+const promotionBlock = mapRendererSource.slice(
+  mapRendererSource.indexOf('function promoteRouteGuidanceLayers()'),
+  mapRendererSource.indexOf('function removeDispersedCampingEligibilityLayer()'),
+);
+assert(
+  promotionBlock.indexOf("'trail-layer'") < promotionBlock.indexOf('ACTIVE_GUIDANCE_ROUTE_LAYER_ID') &&
+    promotionBlock.indexOf('ACTIVE_GUIDANCE_ROUTE_LAYER_ID') <
+      promotionBlock.indexOf('ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID'),
+  'Raw breadcrumb trails should remain below the canonical guidance line, with completed progress above both.',
 );
 assert(
   mapRendererSource.includes('function markerPayloadChanged(key, items)') &&

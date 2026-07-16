@@ -10,6 +10,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 
 import { offlineExpeditionModeEngine } from '../../lib/offlineExpeditionModeEngine';
+import { useReducedMotion } from '../../lib/ecsAnimations';
 
 import {
   CONNECTIVITY_STATE_DISPLAY,
@@ -32,6 +33,7 @@ export default function OfflineStateBanner({
   const [visible, setVisible] = useState(false);
   const slideAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
     const update = () => {
@@ -46,14 +48,14 @@ export default function OfflineStateBanner({
         setVisible(true);
         Animated.timing(slideAnim, {
           toValue: 1,
-          duration: 300,
+          duration: reducedMotion ? 0 : 300,
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }).start();
       } else {
         Animated.timing(slideAnim, {
           toValue: 0,
-          duration: 250,
+          duration: reducedMotion ? 0 : 250,
           easing: Easing.in(Easing.cubic),
           useNativeDriver: true,
         }).start(() => setVisible(false));
@@ -63,10 +65,10 @@ export default function OfflineStateBanner({
     update();
     const unsubscribe = offlineExpeditionModeEngine.subscribe(update);
     return unsubscribe;
-  }, [slideAnim]);
+  }, [reducedMotion, slideAnim]);
 
   useEffect(() => {
-    if (state === 'reconnecting') {
+    if (state === 'reconnecting' && !reducedMotion) {
       const pulse = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, {
@@ -86,7 +88,7 @@ export default function OfflineStateBanner({
     }
 
     pulseAnim.setValue(1);
-  }, [state, pulseAnim]);
+  }, [state, pulseAnim, reducedMotion]);
 
   if (!visible && state === 'online') {
     return null;
@@ -116,6 +118,11 @@ export default function OfflineStateBanner({
     onPress={onPress}
     activeOpacity={0.7}
     disabled={!onPress}
+    accessibilityRole={onPress ? 'button' : undefined}
+    accessibilityLabel={`${display.shortLabel}. ${summary || 'Connectivity state updated.'}`}
+    accessibilityHint={onPress ? 'Opens offline and synchronization details.' : undefined}
+    accessibilityLiveRegion="polite"
+    accessibilityState={{ busy: state === 'reconnecting', disabled: !onPress }}
   >
         <Animated.View style={{ opacity: state === 'reconnecting' ? pulseAnim : 1 }}>
           <Ionicons
@@ -158,6 +165,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   inner: {
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,

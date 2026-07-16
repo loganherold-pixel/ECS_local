@@ -137,16 +137,97 @@ async function testHydrationCoordinator() {
   assert.deepStrictEqual(optionalFailure.failedTaskIds, ['optional_corrupt_store']);
 
   const timeoutCoordinator = new ECSStoreHydrationCoordinator({ defaultTimeoutMs: 50 });
-  const timedOut = await timeoutCoordinator.runPlan({
-    id: 'timeout_safe',
-    tasks: [{ id: 'slow_store', timeoutMs: 50, hydrate: () => wait(75) }],
+  let releaseSlowStore;
+  let slowStoreRuns = 0;
+  const slowStoreReady = new Promise((resolve) => {
+    releaseSlowStore = resolve;
   });
+  const timeoutPlan = {
+    id: 'timeout_safe',
+    tasks: [{
+      id: 'slow_store',
+      timeoutMs: 50,
+      hydrate: async () => {
+        slowStoreRuns += 1;
+        await slowStoreReady;
+      },
+    }],
+  };
+  const timedOut = await timeoutCoordinator.runPlan(timeoutPlan);
   assert.strictEqual(timedOut.status, 'degraded');
   assert.deepStrictEqual(timedOut.timedOutTaskIds, ['slow_store']);
-  await wait(40);
+  const joinedAfterTimeout = await timeoutCoordinator.runPlan(timeoutPlan);
+  assert.deepStrictEqual(joinedAfterTimeout.timedOutTaskIds, ['slow_store']);
+  assert.strictEqual(
+    slowStoreRuns,
+    1,
+    'A timed-out hydration must retain its task flight until the underlying execution settles.',
+  );
+  assert.strictEqual(
+    timeoutCoordinator.getDiagnostics().tasks.find((task) => task.id === 'slow_store').joinedCalls,
+    1,
+  );
+  releaseSlowStore();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
   const lateDiagnostic = timeoutCoordinator.getDiagnostics().tasks.find((task) => task.id === 'slow_store');
   assert.strictEqual(lateDiagnostic.status, 'ready');
   assert.strictEqual(lateDiagnostic.completedAfterTimeout, true);
+
+  const generationCoordinator = new ECSStoreHydrationCoordinator({ defaultTimeoutMs: 50 });
+  let releaseOldGeneration;
+  const oldGenerationReady = new Promise((resolve) => {
+    releaseOldGeneration = resolve;
+  });
+  const oldGenerationResult = await generationCoordinator.runPlan({
+    id: 'old_generation',
+    tasks: [{ id: 'generation_store', timeoutMs: 50, hydrate: () => oldGenerationReady }],
+  });
+  assert.deepStrictEqual(oldGenerationResult.timedOutTaskIds, ['generation_store']);
+
+  generationCoordinator.resetForTests();
+  let releaseNewGeneration;
+  let newGenerationRuns = 0;
+  const newGenerationReady = new Promise((resolve) => {
+    releaseNewGeneration = resolve;
+  });
+  const newGenerationPlan = generationCoordinator.runPlan({
+    id: 'new_generation',
+    tasks: [{
+      id: 'generation_store',
+      timeoutMs: 50,
+      hydrate: async () => {
+        newGenerationRuns += 1;
+        await newGenerationReady;
+      },
+    }],
+  });
+  await Promise.resolve();
+  assert.strictEqual(newGenerationRuns, 1);
+
+  releaseOldGeneration();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  const diagnosticWhileNewGenerationRuns = generationCoordinator
+    .getDiagnostics()
+    .tasks.find((task) => task.id === 'generation_store');
+  assert.strictEqual(
+    diagnosticWhileNewGenerationRuns.status,
+    'running',
+    'A late completion from an invalidated generation must not settle the current generation.',
+  );
+  assert.strictEqual(diagnosticWhileNewGenerationRuns.completedAfterTimeout, false);
+
+  releaseNewGeneration();
+  const newGenerationResult = await newGenerationPlan;
+  assert.strictEqual(newGenerationResult.status, 'ready');
+  const currentGenerationDiagnostic = generationCoordinator
+    .getDiagnostics()
+    .tasks.find((task) => task.id === 'generation_store');
+  assert.strictEqual(currentGenerationDiagnostic.status, 'ready');
+  assert.strictEqual(currentGenerationDiagnostic.completedAfterTimeout, false);
 
   const cycleCoordinator = new ECSStoreHydrationCoordinator();
   const cycle = await cycleCoordinator.runPlan({

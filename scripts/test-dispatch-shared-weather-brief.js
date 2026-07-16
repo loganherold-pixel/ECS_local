@@ -245,7 +245,12 @@ assert.strictEqual(result.emitted > 0, true, 'publisher should allow advisories 
 
 const dispatchCadSource = fs.readFileSync(path.join(root, 'components/dispatch/DispatchCadCommandCenter.tsx'), 'utf8');
 assert(dispatchCadSource.includes('useOperationalWeather'), 'Dispatch CAD should register a shared weather consumer');
-assert(dispatchCadSource.includes('publishSharedWeatherBriefAdvisories(dispatchWeather.snapshot)'), 'Dispatch CAD should publish deduped shared weather brief advisories');
+assert(!dispatchCadSource.includes('publishSharedWeatherBriefAdvisories(dispatchWeather.snapshot)'), 'Dispatch mounting must not own shared weather publication');
+
+const weatherCoordinatorSource = fs.readFileSync(path.join(root, 'lib/weatherBriefPublicationCoordinator.ts'), 'utf8');
+const rootLayoutSource = fs.readFileSync(path.join(root, 'app/_layout.tsx'), 'utf8');
+assert(weatherCoordinatorSource.includes('subscribeSharedOperationalWeather'), 'Shared weather publication should subscribe at the authoritative weather boundary');
+assert(rootLayoutSource.includes('startSharedWeatherBriefPublication()'), 'The application root should own shared weather publication independently of Dispatch mounting');
 
 const dispatchChannelSource = fs.readFileSync(path.join(root, 'lib/dispatchChannelState.ts'), 'utf8');
 assert(dispatchChannelSource.includes('getSharedOperationalWeatherState'), 'Dispatch Intel should read the shared ECS weather snapshot');

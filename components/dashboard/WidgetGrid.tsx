@@ -982,6 +982,18 @@ function getCompactWidgetRenderKey(
 
   switch (widgetType) {
     case 'attitude-monitor':
+      return [
+        renderOptions?.rollDeg ?? '',
+        renderOptions?.pitchDeg ?? '',
+        renderOptions?.sensorStatus ?? '',
+        renderOptions?.sampleTimestampMs ?? '',
+        renderOptions?.isCalibrated ?? '',
+        renderOptions?.advancedMode ?? '',
+        renderOptions?.isFeatured ?? '',
+        renderOptions?.isCompressedRow ?? '',
+        activeVehicleContext?.profileSignature ?? '',
+        activeVehicleContext?.activeVehicleId ?? '',
+      ].join(':');
     case 'attitude-command':
       return [
         renderOptions?.rollDeg ?? '',
@@ -994,6 +1006,14 @@ function getCompactWidgetRenderKey(
         renderOptions?.isCompressedRow ?? '',
         activeVehicleContext?.profileSignature ?? '',
         activeVehicleContext?.activeVehicleId ?? '',
+        getDashboardGpsRenderKey(renderOptions),
+        data?.weatherSnapshot?.status?.kind ?? '',
+        data?.weatherSnapshot?.status?.timestampMs ?? data?.weatherSnapshot?.status?.cachedAt ?? data?.weatherSnapshot?.fetchedAt ?? '',
+        data?.weatherSnapshot?.status?.source ?? data?.weatherSnapshot?.provider?.source ?? '',
+        data?.weatherSnapshot?.current?.temp ?? '',
+        data?.weatherSnapshot?.hourly?.length ?? '',
+        data?.weatherSnapshot?.daily?.length ?? '',
+        data?.weatherSnapshot?.alerts?.length ?? '',
       ].join(':');
     case 'vehicle-systems':
       return [

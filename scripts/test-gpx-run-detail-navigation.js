@@ -498,7 +498,7 @@ assertNotIncludes(
 );
 assertIncludes(
   trailNavigationSource,
-  'geometry: prev.payload.trailGeometry',
+  'geometry: payload.trailGeometry',
   'Cached GPX navigation should track progress against stored GPX geometry.',
 );
 assertIncludes(

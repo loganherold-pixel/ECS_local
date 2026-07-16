@@ -7,6 +7,7 @@ import { tileCacheStore } from '../tileCacheStore';
 import {
   getOfflineReadinessAsset,
   offlineReadinessCoordinator,
+  type OfflineReadinessCoordinatorHydrationStatus,
 } from '../offlinePrepPack';
 import { gpsUIState } from '../gpsUIState';
 import { bailoutStore } from '../bailoutStore';
@@ -75,6 +76,7 @@ export type ExpeditionReadinessStoreState = {
   activeReadinessAlert: ExpeditionReadinessAlert | null;
   readinessAlertHistory: ExpeditionReadinessAlert[];
   readinessPreferences: ExpeditionReadinessPreferences;
+  offlineHydrationStatus: OfflineReadinessCoordinatorHydrationStatus;
 };
 
 type ReadinessRecomputeOptions = {
@@ -118,6 +120,7 @@ let state: ExpeditionReadinessStoreState = {
   activeReadinessAlert: null,
   readinessAlertHistory: [],
   readinessPreferences: expeditionReadinessPreferencesStore.getSnapshot(),
+  offlineHydrationStatus: offlineReadinessCoordinator.getHydrationState().status,
 };
 
 function getPowerIntelligenceSnapshotSafe() {
@@ -389,6 +392,34 @@ function buildOfflineInput(
   weather: ReturnType<typeof buildWeatherInput>,
 ) {
   try {
+    const offlineHydrationStatus = offlineReadinessCoordinator.getHydrationState().status;
+    if (offlineHydrationStatus !== 'ready') {
+      return {
+        offlineHydrationStatus,
+        routeDownloaded: null,
+        routeGeometryCached: null,
+        mapsDownloaded: null,
+        mapTilesCachedForRoute: null,
+        campIntelDownloaded: null,
+        campCandidatesCached: null,
+        bailoutPointsCached: null,
+        routeBailoutPointCount: null,
+        weatherSnapshotAvailable: null,
+        fuelTownRoadReferencesCached: null,
+        emergencyDocsAvailable: null,
+        emergencyPacketAvailable: null,
+        currentRoutePackageFresh: null,
+        routePackageAgeHours: null,
+        cachedTileCount: null,
+        cachedRegionCount: null,
+        isRemoteRoute: isRemoteRouteForOffline(route),
+        isOnline: connectivity.isOnline(),
+        packageStatus: offlineHydrationStatus === 'error' ? 'unknown' as const : null,
+        source: 'unknown' as const,
+        updatedAt: null,
+        isStale: false,
+      };
+    }
     const snapshot = evaluateCacheReadiness();
     const routeBailoutCount = activeRouteId ? bailoutStore.getRunBailouts(activeRouteId).length : 0;
     const bailoutCount = activeRouteId ? routeBailoutCount : bailoutStore.count();
@@ -431,6 +462,7 @@ function buildOfflineInput(
         .filter((asset) => asset.required)
         .every((asset) => !['stale', 'expired'].includes(asset.status));
       return {
+        offlineHydrationStatus,
         routeDownloaded: routeReady,
         routeGeometryCached: routeReady,
         mapsDownloaded: mapsReady,
@@ -466,6 +498,7 @@ function buildOfflineInput(
       };
     }
     return {
+      offlineHydrationStatus,
       routeDownloaded,
       routeGeometryCached,
       mapsDownloaded,
@@ -911,6 +944,18 @@ function scheduleRecompute(options: ReadinessRecomputeOptions = {}): void {
 function ensureSourceSubscriptions(): void {
   if (sourceUnsubscribers.length > 0) return;
   const onSourceChange = () => scheduleRecompute({ reason: 'source_change' });
+  const onOfflineReadinessChange = () => {
+    const nextStatus = offlineReadinessCoordinator.getHydrationState().status;
+    const hydrationChanged = state.offlineHydrationStatus !== nextStatus;
+    if (hydrationChanged) {
+      state = { ...state, offlineHydrationStatus: nextStatus };
+      lastInputSignature = null;
+    }
+    scheduleRecompute({
+      immediate: hydrationChanged,
+      reason: hydrationChanged ? 'offline_hydration_change' : 'offline_readiness_change',
+    });
+  };
   sourceUnsubscribers = [
     subscribeActiveVehicleState(onSourceChange),
     routeStore.subscribe(onSourceChange),
@@ -919,7 +964,7 @@ function ensureSourceSubscriptions(): void {
     subscribePowerIntelligenceSafe(onSourceChange),
     subscribeSharedOperationalWeather(onSourceChange),
     tileCacheStore.subscribe(onSourceChange),
-    offlineReadinessCoordinator.subscribe(onSourceChange),
+    offlineReadinessCoordinator.subscribe(onOfflineReadinessChange),
     gpsUIState.subscribe(onSourceChange),
     connectivity.onStatusChange(onSourceChange),
     commsStore.subscribe(onSourceChange),
@@ -932,6 +977,10 @@ function ensureSourceSubscriptions(): void {
       scheduleRecompute({ reason: 'readiness_preferences_change' });
     }),
   ];
+  state = {
+    ...state,
+    offlineHydrationStatus: offlineReadinessCoordinator.getHydrationState().status,
+  };
   freshnessTimer = setInterval(() => {
     scheduleRecompute({ reason: 'freshness_tick' });
   }, FRESHNESS_TICK_MS);
@@ -966,7 +1015,10 @@ export const expeditionReadinessStore = {
   },
 
   getSnapshot(): ExpeditionReadinessStoreState {
-    return state;
+    const offlineHydrationStatus = offlineReadinessCoordinator.getHydrationState().status;
+    return offlineHydrationStatus === state.offlineHydrationStatus
+      ? state
+      : { ...state, offlineHydrationStatus };
   },
 
   getResolvedInput(): ExpeditionReadinessInput {
@@ -1006,6 +1058,7 @@ export const expeditionReadinessStore = {
       activeReadinessAlert: null,
       readinessAlertHistory: [],
       readinessPreferences: expeditionReadinessPreferencesStore.getSnapshot(),
+      offlineHydrationStatus: offlineReadinessCoordinator.getHydrationState().status,
     };
     notify();
   },

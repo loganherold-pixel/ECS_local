@@ -494,6 +494,13 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/route-catalog-detail/index.ts"
 
+[functions.route-geometry-segments]
+enabled = true
+# Mobile map clients call this public, read-only viewport endpoint with the
+# project publishable key. Service-role catalog reads remain server-side.
+verify_jwt = false
+entrypoint = "./functions/route-geometry-segments/index.ts"
+
 [functions.route-submission-intake]
 enabled = true
 # Private user route suggestions require an authenticated caller.

@@ -28,6 +28,7 @@ const {
   ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
   ROUTE_GEOMETRY_VIEWPORT_WARNING,
   buildRouteGeometryViewportCacheKey,
+  filterRouteGeometryViewportResultBySourceProviderPrefix,
   isRouteGeometryViewportZoomEligible,
   normalizeRouteGeometryViewportBbox,
   normalizeRouteGeometryViewportResponse,
@@ -54,6 +55,15 @@ assert.strictEqual(
   'route_geometry_segments:z10:ref:full_size_4x4:-111.13:38.12:-111.04:38.20',
   'Cache key should include zoom bucket, reference policy, vehicle class, and bbox.',
 );
+assert.strictEqual(
+  buildRouteGeometryViewportCacheKey(normalizedBbox, 10.4, {
+    includeReferenceGeometry: true,
+    vehicleClass: 'full_size_4x4',
+    sourceProviderPrefix: 'USFS MVUM',
+  }),
+  'route_geometry_segments:z10:ref:full_size_4x4:source_usfs_mvum:-111.13:38.12:-111.04:38.20',
+  'Source-specific overlays must not share the all-catalog viewport cache identity.',
+);
 
 const normalized = normalizeRouteGeometryViewportResponse({
   ok: true,
@@ -70,6 +80,7 @@ const normalized = normalizeRouteGeometryViewportResponse({
       publicAccessStatus: 'open',
       warnings: ['Seasonal status requires trip-date review.'],
       attribution: 'USDA Forest Service',
+      source_records: [{ providerId: 'usfs_mvum_colorado' }],
       geometry: {
         type: 'LineString',
         coordinates: [
@@ -88,6 +99,7 @@ const normalized = normalizeRouteGeometryViewportResponse({
       confidence: 'low',
       legalityStatus: 'geometry_only',
       publicAccessStatus: 'unknown',
+      source_records: [{ provider_id: 'usgs_trails' }],
       warnings: [],
       geometry: {
         type: 'LineString',
@@ -134,9 +146,23 @@ const normalized = normalizeRouteGeometryViewportResponse({
 assert.strictEqual(normalized.segments.length, 2, 'Closed and invalid catalog geometry should be filtered out.');
 assert.strictEqual(normalized.skippedClosedCount, 1, 'Closed/prohibited segments should be counted as skipped.');
 assert.strictEqual(normalized.skippedMissingGeometryCount, 1, 'Invalid short geometry should be counted as skipped.');
+assert.strictEqual(normalized.invalidFeatureCount, 1, 'Invalid geometry should be counted independently.');
+assert.deepStrictEqual(normalized.segments[0].sourceProviderIds, ['usfs_mvum_colorado']);
+assert.deepStrictEqual(normalized.segments[1].sourceProviderIds, ['usgs_trails']);
 assert.strictEqual(normalized.segments[1].dataState, 'cached', 'Cached/reference data state should remain visible.');
 assert.strictEqual(normalized.segments[1].confidence, 'low', 'Reference geometry confidence should remain visible.');
 assert.strictEqual(normalized.degraded, false, 'Normal viewport payloads should not be marked degraded.');
+
+const mvumOnly = filterRouteGeometryViewportResultBySourceProviderPrefix(normalized, 'usfs_mvum');
+assert.deepStrictEqual(
+  mvumOnly.segments.map((segment) => segment.id),
+  ['catalog-open'],
+  'Client-side source filtering must protect MVUM while an older Edge Function ignores the filter request.',
+);
+assert.strictEqual(mvumOnly.sourceProviderPrefix, 'usfs_mvum');
+assert.strictEqual(mvumOnly.sourceFilterApplied, true);
+assert.strictEqual(mvumOnly.sourceFilteredCount, 1);
+assert.strictEqual(mvumOnly.unfilteredCandidateCount, 4);
 
 const degraded = normalizeRouteGeometryViewportResponse({
   ok: true,

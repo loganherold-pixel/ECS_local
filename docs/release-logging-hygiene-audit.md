@@ -33,7 +33,7 @@ Low-risk traces now gated behind dev-only logging:
 - `components/dashboard/VehicleTelemetryWidget.tsx`: render signature trace.
 - `components/dashboard/EcsDiagnosticsPanel.tsx`: diagnostics panel-open trace.
 - `components/dispatch/DispatchCadCommandCenter.tsx`: render/team-sync/drilldown traces.
-- `components/dispatch/DispatchCommandCenter.tsx`: realtime paused trace.
+- `components/dispatch/DispatchCadCommandCenter.tsx`: realtime paused trace.
 - `components/expedition/ExpeditionBuilder.tsx`: builder routing/autocomplete success traces.
 - `components/login/VideoBackground.tsx`: fallback video debug traces.
 - `components/vehicle-wizard/LoadoutWizardStep.tsx`: loadout init/link success traces.

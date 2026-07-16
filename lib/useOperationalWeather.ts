@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { buildECSWeatherSnapshot, type ECSWeatherSnapshot, type ECSWeatherSourceType } from './ecsWeather';
 import { resolveWeatherLastGoodUpdate } from './weatherLastGoodState';
 import {
   hasUsableWeatherFetchResult,
+  waitForWeatherCacheHydration,
   type WeatherFetchResult,
 } from './weatherStore';
 import {
@@ -24,6 +26,16 @@ import {
   incrementECSPerformanceCounter,
   startECSPerformanceRequest,
 } from './performance/ecsPerformanceDiagnostics';
+import {
+  beginECSAsyncSurfaceRequest,
+  cancelECSAsyncSurfaceRequest,
+  createECSAsyncSurfaceState,
+  isCurrentECSAsyncSurfaceRequest,
+  settleECSAsyncSurfaceRequest,
+  type ECSAsyncCancellationReason,
+  type ECSAsyncRequestIdentity,
+  type ECSAsyncSurfaceState,
+} from './state/asyncSurfaceState';
 
 interface GPSInput {
   lat?: number | null;
@@ -64,17 +76,76 @@ const DEFAULT_FRESHNESS_WINDOW_MS = 20 * 60 * 1000;
 const DEFAULT_MOVEMENT_THRESHOLD_M = WEATHER_LOCATION_STALE_DISTANCE_METERS;
 const SHARED_DEFAULT_LOCATION_LABEL = 'Current Position';
 const SHARED_NO_CONSUMER_GRACE_MS = 2500;
+const OPERATIONAL_WEATHER_REQUEST_TIMEOUT_MS = 15_000;
+const OPERATIONAL_WEATHER_FAILED_RETRY_COOLDOWN_MS = 30_000;
+
+type OperationalWeatherWaitFailure = 'cancelled' | 'timeout';
+
+export class OperationalWeatherWaitError extends Error {
+  readonly failure: OperationalWeatherWaitFailure;
+
+  constructor(failure: OperationalWeatherWaitFailure) {
+    super(failure === 'timeout' ? 'Operational weather request timed out' : 'Operational weather request cancelled');
+    this.name = 'OperationalWeatherWaitError';
+    this.failure = failure;
+  }
+}
+
+export function waitForOperationalWeatherRequest<T>(
+  request: Promise<T>,
+  options: {
+    signal?: AbortSignal | null;
+    timeoutMs?: number;
+  } = {},
+): Promise<T> {
+  const signal = options.signal ?? null;
+  const timeoutMs = Math.max(1, options.timeoutMs ?? OPERATIONAL_WEATHER_REQUEST_TIMEOUT_MS);
+
+  if (signal?.aborted) {
+    return Promise.reject(new OperationalWeatherWaitError('cancelled'));
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', handleAbort);
+      callback();
+    };
+    const handleAbort = () => {
+      finish(() => reject(new OperationalWeatherWaitError('cancelled')));
+    };
+    const timeout = setTimeout(() => {
+      finish(() => reject(new OperationalWeatherWaitError('timeout')));
+    }, timeoutMs);
+
+    signal?.addEventListener('abort', handleAbort, { once: true });
+    request.then(
+      value => finish(() => resolve(value)),
+      error => finish(() => reject(error)),
+    );
+  });
+}
 
 const sharedWeatherListeners = new Set<() => void>();
 const sharedWeatherConsumers = new Map<string, UseOperationalWeatherOptions>();
 let sharedWeatherLastFetchAt = 0;
-let sharedWeatherRequestId = 0;
 let sharedWeatherRefreshHandler: (() => void) | null = null;
 let sharedWeatherStateSignature = '';
 let sharedWeatherConsumerIdSeed = 0;
 let sharedWeatherNoConsumerClearLogged = false;
 let sharedWeatherLastNoConsumerClearSignature: string | null = null;
 let sharedWeatherNoConsumerCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+let sharedWeatherRequestController: AbortController | null = null;
+let sharedWeatherRequestCancellationReason: ECSAsyncCancellationReason | null = null;
+let sharedWeatherActiveRequestKey: string | null = null;
+let sharedWeatherLastProviderAttemptAt = 0;
+let sharedWeatherLastProviderAttemptKey: string | null = null;
+let sharedWeatherLastProviderAttemptSucceeded = false;
+let sharedWeatherAppStateSubscription: { remove: () => void } | null = null;
+let sharedWeatherPreviousAppState = AppState.currentState;
 let _sharedWeatherLastFetchLocation:
   | { lat: number; lng: number; sourceType: ECSWeatherSourceType }
   | null = null;
@@ -240,12 +311,18 @@ function weatherConsumerSignature(options: UseOperationalWeatherOptions): string
     roundedCoordSignature(gps?.accuracyM),
     roundedCoordSignature(routeCoordinate?.lat),
     roundedCoordSignature(routeCoordinate?.lng),
+    roundedCoordSignature(routeCoordinate?.accuracyM),
+    roundedCoordSignature(routeCoordinate?.timestamp),
     routeCoordinate?.label ?? 'no-route-label',
     roundedCoordSignature(selectedCoordinate?.lat),
     roundedCoordSignature(selectedCoordinate?.lng),
+    roundedCoordSignature(selectedCoordinate?.accuracyM),
+    roundedCoordSignature(selectedCoordinate?.timestamp),
     selectedCoordinate?.label ?? 'no-selected-label',
     roundedCoordSignature(lastKnownCoordinate?.lat),
     roundedCoordSignature(lastKnownCoordinate?.lng),
+    roundedCoordSignature(lastKnownCoordinate?.accuracyM),
+    roundedCoordSignature(lastKnownCoordinate?.timestamp),
     lastKnownCoordinate?.label ?? 'no-last-known-label',
     options.units ?? 'imperial',
     options.freshnessWindowMs ?? DEFAULT_FRESHNESS_WINDOW_MS,
@@ -261,6 +338,12 @@ let sharedWeatherState: {
   result: null,
 };
 let sharedWeatherLastGoodResult: WeatherFetchResult | null = null;
+let sharedWeatherLastTarget = resolveTarget(null, null);
+let sharedWeatherAsyncState: ECSAsyncSurfaceState<WeatherFetchResult> =
+  createECSAsyncSurfaceState<WeatherFetchResult>({
+    surfaceId: 'dashboard_weather',
+    provider: 'openweather',
+  });
 
 function logWeatherRetention(event: string, payload?: Record<string, unknown>): void {
   const details: Record<string, unknown> = {
@@ -329,6 +412,149 @@ function logWeatherDataExpired(params: {
   });
 }
 
+function createOperationalWeatherAbortController(): AbortController | null {
+  return typeof AbortController === 'function' ? new AbortController() : null;
+}
+
+function getOperationalWeatherSafeErrorCode(error: unknown): string {
+  if (error instanceof OperationalWeatherWaitError) {
+    return error.failure === 'timeout' ? 'WEATHER_REQUEST_TIMEOUT' : 'WEATHER_REQUEST_CANCELLED';
+  }
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const normalized = message.toLowerCase();
+  if (normalized.includes('timeout') || normalized.includes('timed out')) {
+    return 'WEATHER_REQUEST_TIMEOUT';
+  }
+  if (normalized.includes('offline') || normalized.includes('network')) {
+    return 'WEATHER_NETWORK_UNAVAILABLE';
+  }
+  if (normalized.includes('abort') || normalized.includes('cancel')) {
+    return 'WEATHER_REQUEST_CANCELLED';
+  }
+  return 'WEATHER_PROVIDER_FAILURE';
+}
+
+function getOperationalWeatherSafeErrorMessage(safeErrorCode: string): string {
+  switch (safeErrorCode) {
+    case 'WEATHER_REQUEST_TIMEOUT':
+      return 'Weather request timed out. Try again.';
+    case 'WEATHER_NETWORK_UNAVAILABLE':
+      return 'Weather network unavailable. Cached conditions are shown when available.';
+    default:
+      return 'Weather provider unavailable. Try again.';
+  }
+}
+
+function createOperationalWeatherFailureResult(
+  units: 'imperial' | 'metric',
+  safeErrorCode: string,
+  incoming?: WeatherFetchResult | null,
+  lastGood: WeatherFetchResult | null = sharedWeatherLastGoodResult,
+): WeatherFetchResult {
+  const safeMessage = getOperationalWeatherSafeErrorMessage(safeErrorCode);
+  if (lastGood && hasUsableWeatherFetchResult(lastGood)) {
+    return {
+      ...lastGood,
+      source: 'cache_stale',
+      error: safeMessage,
+    };
+  }
+  if (incoming) {
+    return {
+      ...incoming,
+      source: 'fallback',
+      error: safeMessage,
+    };
+  }
+  return {
+    data: {
+      results: [],
+      fetched_at: new Date().toISOString(),
+      units,
+    },
+    source: 'fallback',
+    cachedAt: null,
+    error: safeMessage,
+  };
+}
+
+function createSharedWeatherRequestIdentity(): ECSAsyncRequestIdentity {
+  return {
+    requestId: sharedWeatherAsyncState.requestId,
+    generation: sharedWeatherAsyncState.generation,
+    requestFingerprint: sharedWeatherAsyncState.requestFingerprint,
+  };
+}
+
+function settleSharedWeatherRequest(
+  identity: ECSAsyncRequestIdentity,
+  result: WeatherFetchResult,
+  options: {
+    safeErrorCode?: string | null;
+    cancellationReason?: ECSAsyncCancellationReason | null;
+  } = {},
+): boolean {
+  const usable = hasUsableWeatherFetchResult(result);
+  const hasError = Boolean(options.safeErrorCode || result.error);
+  const status = !usable
+    ? 'error'
+    : hasError
+      ? 'degraded'
+      : result.source === 'cache_stale'
+        ? 'stale'
+        : 'ready';
+  const source = result.source === 'live'
+    ? 'live'
+    : result.source === 'cache_fresh' || result.source === 'cache_stale'
+      ? 'cached'
+      : 'unavailable';
+  const freshness = result.source === 'live'
+    ? 'live'
+    : result.source === 'cache_fresh'
+      ? 'recent'
+      : result.source === 'cache_stale'
+        ? 'stale'
+        : 'unavailable';
+  const transition = settleECSAsyncSurfaceRequest(sharedWeatherAsyncState, {
+    ...identity,
+    status,
+    source,
+    freshness,
+    data: usable ? result : null,
+    lastGoodData: usable ? result : sharedWeatherAsyncState.lastGoodData,
+    safeErrorCode: options.safeErrorCode ?? (result.error ? 'WEATHER_PROVIDER_DEGRADED' : null),
+    retryEligible: status !== 'ready',
+    provider: 'openweather',
+    providerStatus: status === 'error' ? 'unavailable' : 'active',
+    cancellationReason: options.cancellationReason ?? null,
+    resultCount: Array.isArray(result.data?.results) ? result.data.results.length : null,
+  });
+  sharedWeatherAsyncState = transition.state;
+  return transition.applied;
+}
+
+function cancelSharedOperationalWeatherRequest(
+  reason: ECSAsyncCancellationReason,
+): boolean {
+  sharedWeatherRequestCancellationReason = reason;
+  const controller = sharedWeatherRequestController;
+  const identity = createSharedWeatherRequestIdentity();
+  const transition = cancelECSAsyncSurfaceRequest(sharedWeatherAsyncState, {
+    ...identity,
+    reason,
+    safeErrorCode: reason === 'timeout' ? 'WEATHER_REQUEST_TIMEOUT' : 'WEATHER_REQUEST_CANCELLED',
+  });
+  sharedWeatherAsyncState = transition.state;
+  if (controller && !controller.signal.aborted) {
+    controller.abort();
+  }
+  if (sharedWeatherRequestController === controller) {
+    sharedWeatherRequestController = null;
+    sharedWeatherActiveRequestKey = null;
+  }
+  return transition.applied;
+}
+
 function notifySharedWeatherListeners(): void {
   for (const listener of sharedWeatherListeners) {
     try {
@@ -343,12 +569,35 @@ function getActiveSharedConsumerCount(): number {
   ).length;
 }
 
+function ensureSharedWeatherAppStateSubscription(): void {
+  if (sharedWeatherAppStateSubscription) return;
+  sharedWeatherPreviousAppState = AppState.currentState;
+  sharedWeatherAppStateSubscription = AppState.addEventListener('change', (nextState) => {
+    const previousState = sharedWeatherPreviousAppState;
+    sharedWeatherPreviousAppState = nextState;
+    if (
+      nextState === 'active' &&
+      previousState !== 'active' &&
+      getActiveSharedConsumerCount() > 0
+    ) {
+      void syncSharedOperationalWeather(false);
+    }
+  });
+}
+
+function removeSharedWeatherAppStateSubscription(): void {
+  sharedWeatherAppStateSubscription?.remove();
+  sharedWeatherAppStateSubscription = null;
+  sharedWeatherPreviousAppState = AppState.currentState;
+}
+
 function setSharedWeatherState(
   result: WeatherFetchResult | null,
   loading: boolean,
   target: ResolvedWeatherTarget,
   freshnessWindowMs = DEFAULT_FRESHNESS_WINDOW_MS,
 ): void {
+  sharedWeatherLastTarget = target;
   const normalizedResult = normalizeOperationalWeatherCacheSource(result, freshnessWindowMs);
   const decision = resolveWeatherLastGoodUpdate(
     normalizedResult,
@@ -395,6 +644,7 @@ function setSharedWeatherState(
 }
 
 function handleNoActiveWeatherConsumers(): void {
+  const cancelledInFlight = cancelSharedOperationalWeatherRequest('unmount');
   const reason = sharedWeatherState.result
     ? 'no_active_consumers_current_retained'
     : 'no_active_consumers_no_current_value';
@@ -419,6 +669,13 @@ function handleNoActiveWeatherConsumers(): void {
       reason,
       source: sharedWeatherState.result.source,
     });
+    if (cancelledInFlight || sharedWeatherState.snapshot.status.loading) {
+      setSharedWeatherState(
+        sharedWeatherState.result,
+        false,
+        sharedWeatherLastTarget,
+      );
+    }
     return;
   }
 
@@ -461,6 +718,7 @@ function scheduleNoConsumerCleanup(): void {
     sharedWeatherNoConsumerCleanupTimer = null;
     if (getActiveSharedConsumerCount() > 0) return;
     sharedWeatherRefreshHandler = null;
+    removeSharedWeatherAppStateSubscription();
     handleNoActiveWeatherConsumers();
   }, SHARED_NO_CONSUMER_GRACE_MS);
 }
@@ -487,18 +745,18 @@ function buildOperationalWeatherRequestKey(
   });
 }
 
-async function fetchOperationalWeatherForTarget(
+function fetchOperationalWeatherForTarget(
   target: ResolvedWeatherTarget,
   units: 'imperial' | 'metric',
   forceRefresh: boolean,
 ): Promise<WeatherFetchResult> {
   if (target.lat == null || target.lng == null) {
-    throw new Error('Weather target missing coordinates');
+    return Promise.reject(new Error('Weather target missing coordinates'));
   }
 
   const requestKey = buildOperationalWeatherRequestKey(target, units, forceRefresh);
   if (!requestKey) {
-    throw new Error('Weather target missing coordinates');
+    return Promise.reject(new Error('Weather target missing coordinates'));
   }
 
   const existing = operationalWeatherHookRequests.get(requestKey);
@@ -511,7 +769,7 @@ async function fetchOperationalWeatherForTarget(
     const recent = operationalWeatherRecentResults.get(requestKey);
     if (recent && Date.now() - recent.completedAt < OPERATIONAL_WEATHER_JOIN_GRACE_MS) {
       incrementECSPerformanceCounter('weather_refresh', 'recent_result_hits');
-      return recent.result;
+      return Promise.resolve(recent.result);
     }
   }
 
@@ -565,11 +823,43 @@ async function fetchOperationalWeatherForTarget(
   return request;
 }
 
+function abandonOperationalWeatherRequest(
+  requestKey: string,
+  request: Promise<WeatherFetchResult>,
+): void {
+  if (operationalWeatherHookRequests.get(requestKey) === request) {
+    operationalWeatherHookRequests.delete(requestKey);
+  }
+}
+
 function getActiveSharedConsumer(): UseOperationalWeatherOptions | null {
-  const activeConsumers = Array.from(sharedWeatherConsumers.values()).filter(
-    consumer => consumer.enabled !== false,
-  );
-  return activeConsumers.length > 0 ? activeConsumers[activeConsumers.length - 1] : null;
+  let selected: UseOperationalWeatherOptions | null = null;
+  let selectedScore = -1;
+
+  for (const consumer of sharedWeatherConsumers.values()) {
+    if (consumer.enabled === false) continue;
+    const target = resolveTarget(
+      consumer.gps,
+      consumer.routeCoordinate,
+      consumer.selectedCoordinate,
+      consumer.lastKnownCoordinate,
+    );
+    const score = target.lat == null || target.lng == null
+      ? 0
+      : target.sourceType === 'current_location'
+        ? 4
+        : target.sourceType === 'route_origin'
+          ? 3
+          : target.sourceType === 'selected_coordinate'
+            ? 2
+            : 1;
+    if (score > selectedScore) {
+      selected = consumer;
+      selectedScore = score;
+    }
+  }
+
+  return selected;
 }
 
 async function syncSharedOperationalWeather(force = false): Promise<void> {
@@ -587,7 +877,15 @@ async function syncSharedOperationalWeather(force = false): Promise<void> {
   );
   const freshnessWindowMs = consumer.freshnessWindowMs ?? DEFAULT_FRESHNESS_WINDOW_MS;
   if (target.lat == null || target.lng == null) {
+    const cancellationReason: ECSAsyncCancellationReason =
+      consumer.gps?.permissionDenied === true ? 'permission_denied' : 'invalid_input';
+    const cancelledInFlight = cancelSharedOperationalWeatherRequest(cancellationReason);
     setSharedWeatherState(sharedWeatherState.result, false, target, freshnessWindowMs);
+    if (cancelledInFlight) {
+      logWeatherRetention('weather_request_cancelled', {
+        reason: cancellationReason,
+      });
+    }
     return;
   }
 
@@ -613,7 +911,15 @@ async function syncSharedOperationalWeather(force = false): Promise<void> {
     });
   }
 
-  if (!force && !locationChanged && !isStale && sharedWeatherState.result) {
+  const hasFreshLiveResult = Boolean(
+    sharedWeatherState.result &&
+    sharedWeatherState.result.source === 'live' &&
+    !sharedWeatherState.result.error &&
+    hasUsableWeatherFetchResult(sharedWeatherState.result) &&
+    !locationChanged &&
+    !isStale,
+  );
+  if (!force && hasFreshLiveResult) {
     setSharedWeatherState(sharedWeatherState.result, false, target, freshnessWindowMs);
     return;
   }
@@ -626,47 +932,176 @@ async function syncSharedOperationalWeather(force = false): Promise<void> {
     freshnessWindowMs,
     now,
   );
-  if (!force && cached?.source === 'cache_fresh') {
-    sharedWeatherLastFetchAt = cached.cachedAt ?? Date.now();
-    _sharedWeatherLastFetchLocation = {
-      lat: target.lat,
-      lng: target.lng,
-      sourceType: target.sourceType,
-    };
-    setSharedWeatherState(cached, false, target, freshnessWindowMs);
+  // Cache hydration is presentation data, not proof that this process completed a
+  // provider refresh. Bypass broker/store cache once so an eligible Dashboard
+  // mount can transition from cached to live.
+  const shouldForceRefresh = force || !hasFreshLiveResult || isStale || cached?.source === 'cache_stale';
+  const requestKey = buildOperationalWeatherRequestKey(target, units, shouldForceRefresh);
+  if (!requestKey) {
+    cancelSharedOperationalWeatherRequest('invalid_input');
+    setSharedWeatherState(sharedWeatherState.result, false, target, freshnessWindowMs);
+    return;
+  }
+  const requestLifecycleKey = `${requestKey}::${weatherTargetSignature(target)}`;
+  if (
+    sharedWeatherAsyncState.status === 'loading' &&
+    sharedWeatherActiveRequestKey === requestLifecycleKey
+  ) {
     return;
   }
 
+  const providerAttemptKey = buildOperationalWeatherRequestKey(target, units, false);
+  if (
+    !force &&
+    !sharedWeatherLastProviderAttemptSucceeded &&
+    providerAttemptKey != null &&
+    providerAttemptKey === sharedWeatherLastProviderAttemptKey &&
+    now - sharedWeatherLastProviderAttemptAt < OPERATIONAL_WEATHER_FAILED_RETRY_COOLDOWN_MS
+  ) {
+    setSharedWeatherState(cached ?? sharedWeatherState.result, false, target, freshnessWindowMs);
+    return;
+  }
+
+  cancelSharedOperationalWeatherRequest('superseded');
+  sharedWeatherAsyncState = beginECSAsyncSurfaceRequest(sharedWeatherAsyncState, {
+    fingerprintInput: {
+      sourceType: target.sourceType,
+      coordinateBucket: `${roundedCoordSignature(target.lat)},${roundedCoordSignature(target.lng)}`,
+      units,
+      forceRefresh: shouldForceRefresh,
+    },
+    provider: 'openweather',
+    providerStatus: 'active',
+    preserveData: true,
+    preserveLastGood: true,
+  });
+  const identity = createSharedWeatherRequestIdentity();
+  const controller = createOperationalWeatherAbortController();
+  sharedWeatherRequestController = controller;
+  sharedWeatherRequestCancellationReason = null;
+  sharedWeatherActiveRequestKey = requestLifecycleKey;
+  sharedWeatherLastProviderAttemptAt = now;
+  sharedWeatherLastProviderAttemptKey = providerAttemptKey;
+  sharedWeatherLastProviderAttemptSucceeded = false;
+
   if (cached) {
     setSharedWeatherState(cached, true, target, freshnessWindowMs);
+  } else if (locationChanged && sharedWeatherState.result && hasUsableWeatherFetchResult(sharedWeatherState.result)) {
+    setSharedWeatherState({ ...sharedWeatherState.result, source: 'cache_stale' }, true, target, freshnessWindowMs);
   } else {
     setSharedWeatherState(sharedWeatherState.result, true, target, freshnessWindowMs);
   }
 
-  const requestId = ++sharedWeatherRequestId;
-  const nextRaw = await fetchOperationalWeatherForTarget(
+  const providerRequest = fetchOperationalWeatherForTarget(
     target,
     units,
-    force || isStale || cached?.source === 'cache_stale',
+    shouldForceRefresh,
   );
-  const next = normalizeOperationalWeatherCacheSource(nextRaw, freshnessWindowMs) ?? nextRaw;
+  try {
+    const nextRaw = await waitForOperationalWeatherRequest(providerRequest, {
+      signal: controller?.signal,
+      timeoutMs: OPERATIONAL_WEATHER_REQUEST_TIMEOUT_MS,
+    });
+    if (!isCurrentECSAsyncSurfaceRequest(sharedWeatherAsyncState, identity)) return;
 
-  if (requestId !== sharedWeatherRequestId) return;
+    const normalized = normalizeOperationalWeatherCacheSource(nextRaw, freshnessWindowMs) ?? nextRaw;
+    const safeErrorCode = normalized.error
+      ? getOperationalWeatherSafeErrorCode(normalized.error)
+      : null;
+    const safeNormalized = safeErrorCode
+      ? { ...normalized, error: getOperationalWeatherSafeErrorMessage(safeErrorCode) }
+      : normalized;
+    const next = hasUsableWeatherFetchResult(safeNormalized)
+      ? safeNormalized
+      : createOperationalWeatherFailureResult(units, safeErrorCode ?? 'WEATHER_PROVIDER_FAILURE', safeNormalized);
 
-  sharedWeatherLastFetchAt = Date.now();
-  _sharedWeatherLastFetchLocation = {
-    lat: target.lat,
-    lng: target.lng,
-    sourceType: target.sourceType,
-  };
-  setSharedWeatherState(next, false, target, freshnessWindowMs);
+    const completedLiveRefresh = Boolean(
+      next.source === 'live' &&
+      !next.error &&
+      hasUsableWeatherFetchResult(next),
+    );
+    sharedWeatherLastProviderAttemptSucceeded = completedLiveRefresh;
+    if (completedLiveRefresh) {
+      sharedWeatherLastFetchAt = Date.now();
+      _sharedWeatherLastFetchLocation = {
+        lat: target.lat,
+        lng: target.lng,
+        sourceType: target.sourceType,
+      };
+    }
+    settleSharedWeatherRequest(identity, next, { safeErrorCode });
+    setSharedWeatherState(next, false, target, freshnessWindowMs);
+  } catch (error) {
+    if (!isCurrentECSAsyncSurfaceRequest(sharedWeatherAsyncState, identity)) return;
+
+    sharedWeatherLastProviderAttemptSucceeded = false;
+    const safeErrorCode = getOperationalWeatherSafeErrorCode(error);
+    const cancellationReason = error instanceof OperationalWeatherWaitError && error.failure === 'timeout'
+      ? 'timeout'
+      : sharedWeatherRequestCancellationReason;
+    if (cancellationReason === 'timeout') {
+      if (controller && !controller.signal.aborted) controller.abort();
+      abandonOperationalWeatherRequest(requestKey, providerRequest);
+    }
+    const failure = createOperationalWeatherFailureResult(units, safeErrorCode);
+    settleSharedWeatherRequest(identity, failure, {
+      safeErrorCode,
+      cancellationReason,
+    });
+    setSharedWeatherState(failure, false, target, freshnessWindowMs);
+    logWeatherRetention('weather_fetch_failed', {
+      safeErrorCode,
+      retainedLastGood: hasUsableWeatherFetchResult(failure),
+    });
+  } finally {
+    if (sharedWeatherRequestController === controller) {
+      sharedWeatherRequestController = null;
+      sharedWeatherRequestCancellationReason = null;
+    }
+    if (sharedWeatherActiveRequestKey === requestLifecycleKey) {
+      sharedWeatherActiveRequestKey = null;
+    }
+    if (isCurrentECSAsyncSurfaceRequest(sharedWeatherAsyncState, identity)) {
+      const failure = createOperationalWeatherFailureResult(units, 'WEATHER_PROVIDER_FAILURE');
+      settleSharedWeatherRequest(identity, failure, {
+        safeErrorCode: 'WEATHER_PROVIDER_FAILURE',
+      });
+      setSharedWeatherState(failure, false, target, freshnessWindowMs);
+    }
+  }
 }
 
 export function getSharedOperationalWeatherState(): {
   snapshot: ECSWeatherSnapshot;
   result: WeatherFetchResult | null;
+  asyncState: ECSAsyncSurfaceState<WeatherFetchResult>;
 } {
-  return sharedWeatherState;
+  return {
+    ...sharedWeatherState,
+    asyncState: sharedWeatherAsyncState,
+  };
+}
+
+/**
+ * Safe shared-weather lifecycle diagnostics. Coordinate values, consumer IDs,
+ * provider payloads, and credentials are deliberately excluded.
+ */
+export function getSharedOperationalWeatherDiagnostics() {
+  return {
+    registeredConsumerCount: sharedWeatherConsumers.size,
+    activeConsumerCount: getActiveSharedConsumerCount(),
+    presentationSubscriberCount: sharedWeatherListeners.size,
+    appStateSubscriptionActive: sharedWeatherAppStateSubscription != null,
+    requestStatus: sharedWeatherAsyncState.status,
+    requestFingerprint: sharedWeatherAsyncState.requestFingerprint,
+    provider: sharedWeatherAsyncState.provider,
+    providerStatus: sharedWeatherAsyncState.providerStatus,
+    sourceState: sharedWeatherAsyncState.source,
+    resultCount: sharedWeatherAsyncState.resultCount,
+    cancellationReason: sharedWeatherAsyncState.cancellationReason,
+    safeErrorCode: sharedWeatherAsyncState.safeErrorCode,
+    lastCompletedAt: sharedWeatherAsyncState.completedAt,
+  };
 }
 
 export function subscribeSharedOperationalWeather(listener: () => void): () => void {
@@ -674,6 +1109,51 @@ export function subscribeSharedOperationalWeather(listener: () => void): () => v
   return () => {
     sharedWeatherListeners.delete(listener);
   };
+}
+
+function hydrateActiveSharedWeatherCache(): void {
+  void waitForWeatherCacheHydration()
+    .then(() => {
+      const consumer = getActiveSharedConsumer();
+      if (!consumer) return;
+      const target = resolveTarget(
+        consumer.gps,
+        consumer.routeCoordinate,
+        consumer.selectedCoordinate,
+        consumer.lastKnownCoordinate,
+      );
+      const freshnessWindowMs = consumer.freshnessWindowMs ?? DEFAULT_FRESHNESS_WINDOW_MS;
+      const movementThresholdM = consumer.movementThresholdM ?? DEFAULT_MOVEMENT_THRESHOLD_M;
+      const currentLiveMatchesTarget = Boolean(
+        sharedWeatherState.result?.source === 'live' &&
+        !sharedWeatherState.result.error &&
+        _sharedWeatherLastFetchLocation &&
+        _sharedWeatherLastFetchLocation.sourceType === target.sourceType &&
+        target.lat != null &&
+        target.lng != null &&
+        haversineMeters(
+          _sharedWeatherLastFetchLocation.lat,
+          _sharedWeatherLastFetchLocation.lng,
+          target.lat,
+          target.lng,
+        ) < movementThresholdM &&
+        Date.now() - sharedWeatherLastFetchAt < freshnessWindowMs,
+      );
+      const cached = normalizeOperationalWeatherCacheSource(
+        getCachedSharedWeatherResult(buildTargetCoordinate(target), consumer.units ?? 'imperial', {
+          allowStale: true,
+        }),
+        freshnessWindowMs,
+      );
+      if (cached && !currentLiveMatchesTarget) {
+        setSharedWeatherState(cached, true, target, freshnessWindowMs);
+      }
+      void syncSharedOperationalWeather(false);
+    })
+    .catch(() => {
+      // Persistence failure must not prevent a live provider attempt.
+      void syncSharedOperationalWeather(false);
+    });
 }
 
 export function setSharedOperationalWeatherConsumer(
@@ -688,6 +1168,8 @@ export function setSharedOperationalWeatherConsumer(
   if (previousSignature === nextSignature) {
     if (previousActiveConsumerCount > 0) {
       cancelNoConsumerCleanup();
+      ensureSharedWeatherAppStateSubscription();
+      void syncSharedOperationalWeather(false);
     }
     return;
   }
@@ -704,6 +1186,7 @@ export function setSharedOperationalWeatherConsumer(
   }
   if (nextActiveConsumerCount > 0) {
     cancelNoConsumerCleanup();
+    ensureSharedWeatherAppStateSubscription();
   }
   if (nextActiveConsumerCount === 0) {
     scheduleNoConsumerCleanup();
@@ -713,32 +1196,7 @@ export function setSharedOperationalWeatherConsumer(
   };
 
   if (nextActiveConsumerCount === 0) return;
-  const target = resolveTarget(
-    options.gps,
-    options.routeCoordinate,
-    options.selectedCoordinate,
-    options.lastKnownCoordinate,
-  );
-  const freshnessWindowMs = options.freshnessWindowMs ?? DEFAULT_FRESHNESS_WINDOW_MS;
-  const cached = normalizeOperationalWeatherCacheSource(
-    getCachedSharedWeatherResult(buildTargetCoordinate(target), options.units ?? 'imperial', {
-      allowStale: true,
-    }),
-    freshnessWindowMs,
-  );
-  if (cached) {
-    setSharedWeatherState(cached, cached.source !== 'cache_fresh', target, freshnessWindowMs);
-    if (cached.source === 'cache_fresh') {
-      sharedWeatherLastFetchAt = cached.cachedAt ?? Date.now();
-      if (target.lat != null && target.lng != null) {
-        _sharedWeatherLastFetchLocation = {
-          lat: target.lat,
-          lng: target.lng,
-          sourceType: target.sourceType,
-        };
-      }
-    }
-  }
+  hydrateActiveSharedWeatherCache();
   void syncSharedOperationalWeather(false);
 }
 
@@ -834,6 +1292,7 @@ export function useOperationalWeather({
       : null,
   );
   const requestIdRef = useRef(0);
+  const requestAbortControllerRef = useRef<AbortController | null>(null);
   const lastFetchAtRef = useRef(0);
   const lastFetchLocationRef = useRef<{ lat: number; lng: number; sourceType: ECSWeatherSourceType } | null>(null);
   const inFlightRequestKeyRef = useRef<string | null>(null);
@@ -858,8 +1317,20 @@ export function useOperationalWeather({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      requestIdRef.current += 1;
+      const controller = requestAbortControllerRef.current;
+      requestAbortControllerRef.current = null;
+      if (controller && !controller.signal.aborted) controller.abort();
     };
   }, []);
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    const controller = requestAbortControllerRef.current;
+    requestAbortControllerRef.current = null;
+    if (controller && !controller.signal.aborted) controller.abort();
+    inFlightRequestKeyRef.current = null;
+  }, [enabled, target.lat, target.lng, target.sourceType, units]);
 
   useEffect(() => subscribeSharedOperationalWeather(() => {
     const shared = getSharedOperationalWeatherState();
@@ -886,6 +1357,8 @@ export function useOperationalWeather({
           lat: routeCoordinate.lat,
           lng: routeCoordinate.lng,
           label: routeCoordinate.label,
+          accuracyM: routeCoordinate.accuracyM,
+          timestamp: routeCoordinate.timestamp,
         }
       : null,
     selectedCoordinate: selectedCoordinate
@@ -893,6 +1366,8 @@ export function useOperationalWeather({
           lat: selectedCoordinate.lat,
           lng: selectedCoordinate.lng,
           label: selectedCoordinate.label,
+          accuracyM: selectedCoordinate.accuracyM,
+          timestamp: selectedCoordinate.timestamp,
         }
       : null,
     lastKnownCoordinate: lastKnownCoordinate
@@ -900,6 +1375,8 @@ export function useOperationalWeather({
           lat: lastKnownCoordinate.lat,
           lng: lastKnownCoordinate.lng,
           label: lastKnownCoordinate.label,
+          accuracyM: lastKnownCoordinate.accuracyM,
+          timestamp: lastKnownCoordinate.timestamp,
         }
       : null,
     units,
@@ -915,12 +1392,18 @@ export function useOperationalWeather({
     gps?.accuracyM,
     movementThresholdM,
     routeCoordinate?.label,
+    routeCoordinate?.accuracyM,
+    routeCoordinate?.timestamp,
     routeCoordinate?.lat,
     routeCoordinate?.lng,
     selectedCoordinate?.label,
+    selectedCoordinate?.accuracyM,
+    selectedCoordinate?.timestamp,
     selectedCoordinate?.lat,
     selectedCoordinate?.lng,
     lastKnownCoordinate?.label,
+    lastKnownCoordinate?.accuracyM,
+    lastKnownCoordinate?.timestamp,
     lastKnownCoordinate?.lat,
     lastKnownCoordinate?.lng,
     units,
@@ -963,15 +1446,6 @@ export function useOperationalWeather({
     }
     if (!resultRef.current) {
       setResultIfChanged(cachedResult);
-    }
-    setSharedWeatherState(cachedResult, cachedResult.source !== 'cache_fresh', target, freshnessWindowMs);
-    if (cachedResult.source === 'cache_fresh') {
-      lastFetchAtRef.current = cached.cachedAt;
-      lastFetchLocationRef.current = {
-        lat: target.lat,
-        lng: target.lng,
-        sourceType: target.sourceType,
-      };
     }
   }, [enabled, freshnessWindowMs, setResultIfChanged, target.label, target.lat, target.lng, target.sourceType, units]);
 
@@ -1017,27 +1491,41 @@ export function useOperationalWeather({
       }
       setResultIfChanged(cached);
       setSharedWeatherState(cached, cached.source !== 'cache_fresh', target, freshnessWindowMs);
-      if (cached.source === 'cache_fresh') {
-        lastFetchAtRef.current = cached.cachedAt ?? Date.now();
-        lastFetchLocationRef.current = {
-          lat: target.lat,
-          lng: target.lng,
-          sourceType: target.sourceType,
-        };
-        return;
-      }
     }
 
     const requestId = ++requestIdRef.current;
+    const previousController = requestAbortControllerRef.current;
+    if (previousController && !previousController.signal.aborted) previousController.abort();
+    const controller = createOperationalWeatherAbortController();
+    requestAbortControllerRef.current = controller;
     inFlightRequestKeyRef.current = requestKey;
     lastRequestedRequestKeyRef.current = requestKey;
     lastRequestedAtRef.current = now;
     setLoading(true);
 
+    const providerRequest = fetchOperationalWeatherForTarget(target, units, shouldForceRefresh);
     try {
-      const nextRaw = await fetchOperationalWeatherForTarget(target, units, shouldForceRefresh);
-      const next = normalizeOperationalWeatherCacheSource(nextRaw, freshnessWindowMs) ?? nextRaw;
+      const nextRaw = await waitForOperationalWeatherRequest(providerRequest, {
+        signal: controller?.signal,
+        timeoutMs: OPERATIONAL_WEATHER_REQUEST_TIMEOUT_MS,
+      });
+      const normalized = normalizeOperationalWeatherCacheSource(nextRaw, freshnessWindowMs) ?? nextRaw;
       if (!mountedRef.current || requestId !== requestIdRef.current) return;
+
+      const safeErrorCode = normalized.error
+        ? getOperationalWeatherSafeErrorCode(normalized.error)
+        : null;
+      const safeNormalized = safeErrorCode
+        ? { ...normalized, error: getOperationalWeatherSafeErrorMessage(safeErrorCode) }
+        : normalized;
+      const next = hasUsableWeatherFetchResult(safeNormalized)
+        ? safeNormalized
+        : createOperationalWeatherFailureResult(
+            units,
+            safeErrorCode ?? 'WEATHER_PROVIDER_FAILURE',
+            safeNormalized,
+            lastGoodResultRef.current,
+          );
 
       const decision = resolveWeatherLastGoodUpdate(
         next,
@@ -1058,13 +1546,41 @@ export function useOperationalWeather({
       }
       setResultIfChanged(decision.value);
       setSharedWeatherState(decision.value, false, target, freshnessWindowMs);
-      lastFetchAtRef.current = Date.now();
-      lastFetchLocationRef.current = {
-        lat: target.lat,
-        lng: target.lng,
-        sourceType: target.sourceType,
-      };
+      if (next.source === 'live' && !next.error && hasUsableWeatherFetchResult(next)) {
+        lastFetchAtRef.current = Date.now();
+        lastFetchLocationRef.current = {
+          lat: target.lat,
+          lng: target.lng,
+          sourceType: target.sourceType,
+        };
+      }
+    } catch (error) {
+      if (!mountedRef.current || requestId !== requestIdRef.current) return;
+      const safeErrorCode = getOperationalWeatherSafeErrorCode(error);
+      if (error instanceof OperationalWeatherWaitError && error.failure === 'timeout') {
+        if (controller && !controller.signal.aborted) controller.abort();
+        abandonOperationalWeatherRequest(requestKey, providerRequest);
+      }
+      const failure = createOperationalWeatherFailureResult(
+        units,
+        safeErrorCode,
+        null,
+        lastGoodResultRef.current,
+      );
+      if (hasUsableWeatherFetchResult(failure)) {
+        lastGoodResultRef.current = failure;
+      }
+      setResultIfChanged(failure);
+      setSharedWeatherState(failure, false, target, freshnessWindowMs);
+      logWeatherRetention('weather_fetch_failed', {
+        scope: 'use_operational_weather',
+        safeErrorCode,
+        retainedLastGood: hasUsableWeatherFetchResult(failure),
+      });
     } finally {
+      if (requestAbortControllerRef.current === controller) {
+        requestAbortControllerRef.current = null;
+      }
       if (inFlightRequestKeyRef.current === requestKey) {
         inFlightRequestKeyRef.current = null;
       }
@@ -1096,8 +1612,11 @@ export function useOperationalWeather({
   );
 
   const refresh = useCallback(() => {
+    if (sharedWeatherRefreshHandler) {
+      sharedWeatherRefreshHandler();
+      return;
+    }
     void runFetch(true);
-    sharedWeatherRefreshHandler?.();
   }, [runFetch]);
 
   const snapshot = useMemo(() => {
@@ -1115,6 +1634,14 @@ export function useOperationalWeather({
       result: effectiveResult,
       loading,
       waitingForGps: target.waitingForGps,
+      permissionBlocked:
+        target.location?.source === 'unavailable' &&
+        String(target.location.unavailableReason ?? '').toLowerCase().includes('permission'),
+      networkBlocked: Boolean(
+        result?.error &&
+        /offline|network/i.test(result.error) &&
+        !hasUsableWeatherFetchResult(effectiveResult),
+      ),
       sourceType: target.sourceType,
       locationFallback: target.label,
       locationResolution: target.location,

@@ -425,7 +425,10 @@ assert.notStrictEqual(fallbackImageEntry.thumbnail.state, 'suppressed_mismatch')
   'visibleRouteCatalogSummaries',
   'handlePreviewRouteCatalogSummary',
   'handleStartRouteCatalogSummaryGuidance',
-  'fetchRouteCatalogTrailPackDetail(routeId)',
+  'fetchRouteCatalogTrailPackDetail(routeId, {',
+  'signal: controller.signal',
+  "cancellationReason: 'superseded'",
+  'sourceVersion: summary.updatedAt',
 ].forEach((needle) => {
   assert(discoverSource.includes(needle), `Explore should use summary-first Trail Pack wiring: ${needle}.`);
 });

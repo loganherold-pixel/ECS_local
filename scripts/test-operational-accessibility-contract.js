@@ -48,6 +48,10 @@ const assessmentSource = read('components', 'dashboard', 'ExpeditionAssessmentDe
 const offlinePrepSource = read('app', 'explore-offline-prep-pack.tsx');
 const vehicleDisplaySource = read('app', 'vehicle-display.tsx');
 const exploreSource = read('app', '(tabs)', 'discover.tsx');
+const asyncStateMessageSource = read('components', 'ECSStateMessage.tsx');
+const chipSource = read('components', 'ECSChip.tsx');
+const dockSource = read('components', 'CommandDock.tsx');
+const headerSource = read('components', 'Header.tsx');
 
 includes(buttonSource, 'accessibilityRole="button"', 'Shared ECS buttons should expose the button role.');
 includes(buttonSource, 'accessibilityLabel={accessibilityLabel ?? label}', 'Text buttons should use visible copy as their accessible name.');
@@ -81,6 +85,7 @@ if (enhanced) {
     'error',
     'connection_changed',
     'route_activated',
+    'status_changed',
     'stale_data',
     'critical_advisory',
     'offline_action_queued',
@@ -122,6 +127,21 @@ if (enhanced) {
   includes(exploreSource, 'accessible={false}', 'Saved route card grouping should keep nested actions reachable.');
   includes(exploreSource, 'style={s.favoriteCardTitle} numberOfLines={2}', 'Long saved route names should wrap without clipping.');
   includes(exploreSource, "style: 'destructive'", 'Explore destructive removal should require confirmation.');
+  includes(asyncStateMessageSource, 'resolveECSAsyncSurfacePresentation', 'Shared async state UI should consume the canonical typed presentation model.');
+  includes(asyncStateMessageSource, 'ECSOperationalAnnouncer', 'Shared async state changes should use the deduping operational announcer.');
+  includes(asyncStateMessageSource, 'presentation.showRetry && onRetry', 'Recoverable shared states should expose a real retry control when a handler exists.');
+  includes(asyncStateMessageSource, 'accessibilityState={busy ? { busy: true } : undefined}', 'Shared loading presentation should expose busy semantics.');
+  includes(chipSource, 'accessibilityRole={accessibilityRole ?? (onPress ? \'button\' : undefined)}', 'Shared chips should expose their provided role.');
+  includes(chipSource, 'selected: selected ?? accessibilityState?.selected', 'Shared chips should expose selected state without color alone.');
+  includes(chipSource, 'hitSlop={resolveHitSlop', 'Compact shared chips should preserve a 44 point effective target.');
+  includes(dockSource, 'accessibilityRole="tab"', 'CommandDock actions should expose tab semantics.');
+  includes(dockSource, 'accessibilityElementsHidden={dockAccessibilityHidden}', 'A visually hidden CommandDock should leave the accessibility tree.');
+  includes(dockSource, 'useReducedMotion()', 'CommandDock motion should honor the shared reduced-motion preference.');
+  includes(dockSource, 'firstLaunchHintDismissTimerRef.current = setTimeout', 'Reduced-motion hint dismissal should retain a cleanup handle.');
+  includes(dockSource, 'clearTimeout(firstLaunchHintDismissTimerRef.current)', 'CommandDock should clean its hint timer on dismissal or unmount.');
+  includes(headerSource, 'const compactBannerSlotWidth = !adaptive.isLandscape && adaptive.safeWidth < 430', 'Compact phone headers should reserve enough center width for full routed surface names.');
+  includes(headerSource, 'compactBannerSlotWidth ?? ECS_TOP_BANNER_TITLE_LEFT_SLOT_WIDTH', 'Header title spacing should preserve the established wide-screen layout outside compact phones.');
+  includes(headerSource, 'fontSize: adaptive.safeWidth < 360 ? 14 : 16', 'Very narrow headers should scale routed surface titles instead of clipping them.');
 
   const critical = buildECSOperationalAnnouncement({
     id: 'critical-1',
@@ -164,6 +184,25 @@ if (enhanced) {
       detail: 'Guidance is active.',
     }).fingerprint,
     'Equivalent deterministic announcements should dedupe to one fingerprint.',
+  );
+
+  const statusChanged = buildECSOperationalAnnouncement({
+    id: 'weather:4:stale',
+    kind: 'status_changed',
+    subject: 'Weather is stale',
+    detail: 'Cached data remains visible.',
+  });
+  assert.strictEqual(statusChanged.priority, 'polite');
+  assert.strictEqual(statusChanged.message, 'Weather is stale. Cached data remains visible.');
+  assert.strictEqual(
+    statusChanged.fingerprint,
+    buildECSOperationalAnnouncement({
+      id: 'weather:4:stale',
+      kind: 'status_changed',
+      subject: '  Weather   is stale ',
+      detail: ' Cached data remains visible. ',
+    }).fingerprint,
+    'Equivalent async surface-state announcements should dedupe to one fingerprint.',
   );
 }
 

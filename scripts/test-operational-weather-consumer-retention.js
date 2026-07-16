@@ -31,7 +31,7 @@ assertIncludes(
   'Registering/remounting an active consumer should cancel pending no-consumer cleanup.',
 );
 assertIncludes(
-  'sharedWeatherRefreshHandler = null;\n    handleNoActiveWeatherConsumers();',
+  'sharedWeatherRefreshHandler = null;\n    removeSharedWeatherAppStateSubscription();\n    handleNoActiveWeatherConsumers();',
   'Shared refresh cleanup should run only after the grace window still has no consumers.',
 );
 assertIncludes(
@@ -69,6 +69,18 @@ assertNotIncludes(
 assertNotIncludes(
   "weather_cleared_explicitly', {\n      scope: 'shared_operational_weather'",
   'Normal shared operational weather consumer cleanup must not log as an explicit clear.',
+);
+assertIncludes(
+  'export function getSharedOperationalWeatherDiagnostics()',
+  'Shared weather should expose safe active-consumer and producer lifecycle diagnostics.',
+);
+assertIncludes(
+  'registeredConsumerCount: sharedWeatherConsumers.size',
+  'Shared weather diagnostics should expose registered consumer count without consumer identity.',
+);
+assertIncludes(
+  'requestFingerprint: sharedWeatherAsyncState.requestFingerprint',
+  'Shared weather diagnostics should expose the safe request fingerprint used for stale-response analysis.',
 );
 
 console.log('Operational weather consumer retention checks passed.');

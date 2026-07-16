@@ -195,6 +195,43 @@ async function run() {
   assert.strictEqual(d1.broker.entries[0].bucketKey, d2.broker.entries[0].bucketKey);
   assert.strictEqual(providerCalls.filter(call => call.dedupe).length, 1, 'in-flight bucket requests should dedupe to one provider call');
 
+  const staleProviderCachedAt = nowMs - 60 * 60 * 1000;
+  const staleProviderError = 'Live provider unavailable; retained last-good weather.';
+  let staleProviderCalls = 0;
+  const staleProviderBroker = createWeatherBroker({
+    bucketSizeDegrees: 0.05,
+    dailyBudget: 10,
+    sessionBudget: 10,
+    nowMs: () => nowMs,
+    providerFetch: async (coords, units) => {
+      staleProviderCalls += 1;
+      return makeWeatherResult(coords, units, staleProviderCachedAt, 'cache_stale', {
+        resultError: staleProviderError,
+      });
+    },
+    cachedFetch: async () => null,
+  });
+  const staleProviderResult = await staleProviderBroker.fetchWeather([
+    { lat: 40.51, lng: -121.51 },
+  ], 'imperial', {
+    useCase: 'active_navigation',
+    sections: ['current'],
+  });
+  assert.strictEqual(staleProviderResult.source, 'cache_stale', 'usable provider fallback must remain cache_stale');
+  assert.strictEqual(staleProviderResult.cachedAt, staleProviderCachedAt, 'broker must preserve the provider cache timestamp');
+  assert.strictEqual(staleProviderResult.error, staleProviderError, 'broker must preserve provider failure context');
+  assert.strictEqual(staleProviderResult.broker.stale, true, 'broker diagnostics must report the retained result as stale');
+
+  const repeatedStaleProviderResult = await staleProviderBroker.fetchWeather([
+    { lat: 40.51, lng: -121.51 },
+  ], 'imperial', {
+    useCase: 'active_navigation',
+    sections: ['current'],
+  });
+  assert.strictEqual(staleProviderCalls, 2, 'degraded cached provider results must not be admitted to the broker live cache');
+  assert.strictEqual(repeatedStaleProviderResult.source, 'cache_stale');
+  assert.strictEqual(repeatedStaleProviderResult.cachedAt, staleProviderCachedAt);
+
   online = false;
   const offlineCached = await broker.fetchWeather([{ lat: 39.124, lng: -120.989 }], 'imperial', {
     useCase: 'active_navigation',

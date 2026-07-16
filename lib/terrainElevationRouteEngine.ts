@@ -60,6 +60,10 @@ export type TerrainElevationRouteAnalysis = {
   maxElevationFeet: number;
   hotSpotCount: number;
   warmSpotCount: number;
+  validPointCount: number;
+  elevationPointCount: number;
+  elevationCoverageRatio: number;
+  elevationCoverage: 'complete' | 'partial';
 };
 
 const EARTH_RADIUS_MI = 3958.8;
@@ -106,7 +110,20 @@ function flattenRoutePoints(
   const segmentPoints = Array.isArray(segments)
     ? segments.flatMap((segment) => segment.points ?? [])
     : [];
-  const sourcePoints = segmentPoints.length >= 2 ? segmentPoints : routePoints ?? [];
+  const directRoutePoints = Array.isArray(routePoints) ? routePoints : [];
+  const countElevationPoints = (points: TerrainElevationRoutePoint[]) => points.reduce(
+    (count, point) => count + (normalizeCoordinate(point) && normalizeTerrainElevationFeet(point) != null ? 1 : 0),
+    0,
+  );
+  const segmentElevationCount = countElevationPoints(segmentPoints);
+  const directElevationCount = countElevationPoints(directRoutePoints);
+  const sourcePoints = directElevationCount >= 2 && directElevationCount >= segmentElevationCount
+    ? directRoutePoints
+    : segmentElevationCount >= 2
+      ? segmentPoints
+      : directRoutePoints.length >= 2
+        ? directRoutePoints
+        : segmentPoints;
   const points: TerrainElevationRoutePoint[] = [];
 
   sourcePoints.forEach((point) => {
@@ -119,6 +136,14 @@ function flattenRoutePoints(
       Math.abs(previousCoordinate.lat - coordinate.lat) < 0.000001 &&
       Math.abs(previousCoordinate.lon - coordinate.lon) < 0.000001
     ) {
+      if (normalizeTerrainElevationFeet(previous) == null && normalizeTerrainElevationFeet(point) != null) {
+        points[points.length - 1] = {
+          ...previous,
+          elevationFeet: point.elevationFeet ?? previous.elevationFeet,
+          ele_m: point.ele_m ?? previous.ele_m,
+          ele: point.ele ?? previous.ele,
+        };
+      }
       return;
     }
     points.push(point);
@@ -132,51 +157,43 @@ function buildSamplesFromElevationBackedPoints(
   totalDistanceMiles?: number | null,
 ): TerrainElevationSample[] {
   const routePoints = points
-    .map((point) => {
-      const coordinate = normalizeCoordinate(point);
-      const elevationFeet = normalizeTerrainElevationFeet(point);
-      if (!coordinate || !isFiniteNumber(elevationFeet)) return null;
-      return { ...coordinate, elevationFeet };
-    })
-    .filter((point): point is { lat: number; lon: number; elevationFeet: number } => !!point);
-
+    .map((point) => ({
+      coordinate: normalizeCoordinate(point),
+      elevationFeet: normalizeTerrainElevationFeet(point),
+    }))
+    .filter((point): point is { coordinate: { lat: number; lon: number }; elevationFeet: number | null } => !!point.coordinate);
   if (routePoints.length < 2) return [];
 
+  const samples: TerrainElevationSample[] = [];
   let cumulativeMiles = 0;
-  const samples: TerrainElevationSample[] = [{
-    lat: routePoints[0].lat,
-    lon: routePoints[0].lon,
-    distanceMiles: 0,
-    elevationFeet: routePoints[0].elevationFeet,
-    source: 'elevation-backed',
-  }];
-
-  for (let index = 1; index < routePoints.length; index += 1) {
-    const previous = routePoints[index - 1];
+  for (let index = 0; index < routePoints.length; index += 1) {
+    if (index > 0) {
+      const previous = routePoints[index - 1].coordinate;
+      const point = routePoints[index].coordinate;
+      const legMiles = haversineTerrainMiles(previous.lat, previous.lon, point.lat, point.lon);
+      cumulativeMiles += Number.isFinite(legMiles) && legMiles < 500 ? Math.max(0, legMiles) : 0;
+    }
     const point = routePoints[index];
-    const legMiles = haversineTerrainMiles(previous.lat, previous.lon, point.lat, point.lon);
-    cumulativeMiles += Number.isFinite(legMiles) && legMiles < 500 ? Math.max(0, legMiles) : 0;
+    if (!isFiniteNumber(point.elevationFeet)) continue;
     samples.push({
-      lat: point.lat,
-      lon: point.lon,
+      lat: point.coordinate.lat,
+      lon: point.coordinate.lon,
       distanceMiles: cumulativeMiles,
       elevationFeet: point.elevationFeet,
       source: 'elevation-backed',
     });
   }
 
-  if (cumulativeMiles <= 0) return [];
+  if (samples.length < 2 || cumulativeMiles <= 0) return [];
 
   const routeDistanceMiles =
     isFiniteNumber(totalDistanceMiles) && totalDistanceMiles > 0
       ? totalDistanceMiles
       : cumulativeMiles;
   const scale = routeDistanceMiles / cumulativeMiles;
-  return samples.map((sample, index) => ({
+  return samples.map((sample) => ({
     ...sample,
-    distanceMiles: index === samples.length - 1
-      ? routeDistanceMiles
-      : Number((sample.distanceMiles * scale).toFixed(3)),
+    distanceMiles: Number((sample.distanceMiles * scale).toFixed(3)),
   }));
 }
 
@@ -237,6 +254,28 @@ function hasUsableElevationBackedSamples(samples: TerrainElevationSample[]): boo
   const hasNonZeroElevation = elevations.some((elevationFeet) => Math.abs(elevationFeet) >= 1);
   const hasElevationRelief = maxElevationFeet - minElevationFeet >= 3;
   return hasNonZeroElevation || hasElevationRelief;
+}
+
+function summarizeElevationCoverage(points: TerrainElevationRoutePoint[]): {
+  validPointCount: number;
+  elevationPointCount: number;
+  elevationCoverageRatio: number;
+  elevationCoverage: 'complete' | 'partial';
+} {
+  let validPointCount = 0;
+  let elevationPointCount = 0;
+  points.forEach((point) => {
+    if (!normalizeCoordinate(point)) return;
+    validPointCount += 1;
+    if (normalizeTerrainElevationFeet(point) != null) elevationPointCount += 1;
+  });
+  const elevationCoverageRatio = validPointCount > 0 ? elevationPointCount / validPointCount : 0;
+  return {
+    validPointCount,
+    elevationPointCount,
+    elevationCoverageRatio,
+    elevationCoverage: elevationCoverageRatio >= 0.95 ? 'complete' : 'partial',
+  };
 }
 
 export function classifyTerrainElevationRisk(score: number): TerrainElevationRiskLevel {
@@ -363,6 +402,7 @@ export function analyzeTerrainElevationRoute(args: {
 }): TerrainElevationRouteAnalysis | null {
   const points = flattenRoutePoints(args.routeSegments, args.routePoints);
   if (points.length < 2) return null;
+  const elevationCoverage = summarizeElevationCoverage(points);
 
   const elevationSamples = buildSamplesFromElevationBackedPoints(points, args.totalDistanceMiles);
   const usableElevationSamples = hasUsableElevationBackedSamples(elevationSamples)
@@ -401,5 +441,6 @@ export function analyzeTerrainElevationRoute(args: {
     maxElevationFeet: Math.round(Math.max(...elevations)),
     hotSpotCount: segments.filter((segment) => segment.thermalBand === 'hot').length,
     warmSpotCount: segments.filter((segment) => segment.thermalBand === 'warm').length,
+    ...elevationCoverage,
   };
 }

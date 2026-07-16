@@ -263,11 +263,29 @@ export function getWeatherBrokerTtlMs(useCase: WeatherBrokerUseCase = 'default')
 }
 
 function hasUsableWaypoint(waypoint: WaypointWeather | null | undefined): boolean {
+  const current = waypoint?.current;
+  const hasUsableCurrent = Boolean(
+    current &&
+    (
+      [
+        current.temp,
+        current.temperature,
+        current.tempF,
+        current.temperatureF,
+        current.feels_like,
+        current.wind_speed,
+        current.wind_gust,
+        current.humidity,
+      ].some(value => typeof value === 'number' && Number.isFinite(value)) ||
+      current.weather_main ||
+      current.weather_description
+    ),
+  );
   return Boolean(
     waypoint &&
     !waypoint.error &&
     (
-      waypoint.current ||
+      hasUsableCurrent ||
       (waypoint.hourly?.length ?? 0) > 0 ||
       (waypoint.daily?.length ?? 0) > 0 ||
       (waypoint.forecast?.length ?? 0) > 0 ||
@@ -493,7 +511,7 @@ export function createWeatherBroker(config: WeatherBrokerConfig = {}) {
       result: {
         ...entry.result,
         source: options.stale ? 'cache_stale' : 'cache_fresh',
-        cachedAt: entry.requestedAtMs,
+        cachedAt: entry.result.cachedAt ?? entry.requestedAtMs,
       },
       requestedAtMs: entry.requestedAtMs,
       expiresAtMs: entry.expiresAtMs,
@@ -590,30 +608,33 @@ export function createWeatherBroker(config: WeatherBrokerConfig = {}) {
       };
     }
 
-    const expiresAtMs = Number.isFinite(ttlMs) ? now + ttlMs : Number.MAX_SAFE_INTEGER;
-    const resultToCache = {
-      ...result,
-      source: hasUsableResult(result) ? 'live' as const : result.source,
-      cachedAt: now,
-    };
-    cache.set(key, {
-      key,
-      bucketKey,
-      normalizedCoordinate: coordinate,
-      result: resultToCache,
-      requestedAtMs: now,
-      expiresAtMs,
-      sections: options.sections,
-      exclude,
-    });
+    const resultIsUsable = hasUsableResult(result);
+    const resultIsLiveSuccess = resultIsUsable && result.source === 'live' && !result.error;
+    const expiresAtMs = resultIsLiveSuccess && Number.isFinite(ttlMs)
+      ? now + ttlMs
+      : resultIsLiveSuccess
+        ? Number.MAX_SAFE_INTEGER
+        : now;
+    if (resultIsLiveSuccess) {
+      cache.set(key, {
+        key,
+        bucketKey,
+        normalizedCoordinate: coordinate,
+        result,
+        requestedAtMs: now,
+        expiresAtMs,
+        sections: options.sections,
+        exclude,
+      });
+    }
 
     return {
       bucketKey,
       normalizedCoordinate: coordinate,
-      result: resultToCache,
+      result,
       requestedAtMs: now,
       expiresAtMs,
-      stale: false,
+      stale: result.source === 'cache_stale',
       cacheHit: false,
       providerCallsAttempted: 1,
       providerCallsAvoided: background ? 0 : 0,
@@ -753,7 +774,9 @@ export function createWeatherBroker(config: WeatherBrokerConfig = {}) {
         errors: outcomes.flatMap((outcome) => outcome.result.data.errors ?? []),
       },
       source,
-      cachedAt: source === 'fallback' ? null : earliestMs(outcomes.map((outcome) => outcome.requestedAtMs)),
+      cachedAt: source === 'fallback'
+        ? null
+        : earliestMs(outcomes.map((outcome) => outcome.result.cachedAt ?? outcome.requestedAtMs)),
       error,
     };
     return attachBrokerSummary(

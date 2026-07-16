@@ -23,6 +23,7 @@ import {
 import { ecsLog } from '../../lib/ecsLogger';
 import { isECSDevelopmentDiagnosticEnabled } from '../../lib/features/featureVisibilityRegistry';
 import { TACTICAL } from '../../lib/theme';
+import { ECSButton } from '../ECSButton';
 import MapFallbackSurface from './MapFallbackSurface';
 import type { CampIntelMarkerPayload, CampIntelTone } from '../../lib/campIntel/campIntelTypes';
 import { hasCampStructurePrivacyBufferConflict } from '../../lib/campsites/campStructurePrivacyBuffer';
@@ -71,11 +72,19 @@ import {
   resolveViewportMarkerHeadingDeg,
 } from '../../lib/mapMotion';
 import type { MapMotionPriority, MapSurfaceKind } from '../../lib/mapSurfaceCoordinator';
+import type { NavigateRouteGeometryRole } from '../../lib/navigatePointRouteBuilder';
 import {
   recordECSPerformanceRender,
   startECSPerformanceSpan,
   type ECSPerformanceSpanHandle,
 } from '../../lib/performance/ecsPerformanceDiagnostics';
+import {
+  buildGuidanceRouteDistanceIndex,
+  findNearestPlausibleRouteProjection,
+  guidanceRouteDistanceMeters,
+  projectGuidanceRouteAtDistance,
+  splitGuidanceRouteAtProjection,
+} from '../../lib/navigation/guidanceRouteProjection';
 
 const WEBVIEW_ORIGIN_WHITELIST = ['*'];
 const WEBVIEW_FAILSAFE_TIMEOUT_MS = 30000;
@@ -88,6 +97,31 @@ const MAPBOX_WEBVIEW_GL_JS_VERSION = 'v2.15.0';
 const FULL_MAP_MAX_TILE_CACHE_SIZE = 16;
 const COMPACT_MAP_MAX_TILE_CACHE_SIZE = 12;
 const FULL_MAP_PIXEL_RATIO_CAP = 0.5;
+
+export const NAVIGATE_ROUTE_GEOMETRY_SOURCE_ID = 'navigate-route-geometry-source';
+export const NAVIGATE_ROUTE_GEOMETRY_HALO_LAYER_ID = 'route-geometry-halo-layer';
+export const NAVIGATE_ROUTE_GEOMETRY_LAYER_ID = 'route-geometry-line-layer';
+export const NAVIGATE_ROUTE_GEOMETRY_SELECTED_LAYER_ID = 'route-geometry-selected-layer';
+
+export type NavigateMapLayerRenderState = {
+  surfaceId: 'navigate_route_geometry' | 'navigate_mvum_segments';
+  requestFingerprint: string | null;
+  requestGeneration: number | null;
+  enabled: boolean;
+  status: 'ready' | 'empty' | 'error' | 'disabled';
+  source: 'geojson' | 'vector' | 'unavailable';
+  sourceId: string;
+  layerIds: string[];
+  featureCount: number;
+  invalidFeatureCount: number;
+  sourcePresent: boolean;
+  layersPresent: boolean;
+  layersVisible: boolean;
+  safeErrorCode: string | null;
+  completedAt: number;
+};
+
+export type MapRendererBootState = 'loading' | 'ready' | 'degraded' | 'disabled' | 'error';
 const COMPACT_MAP_PIXEL_RATIO_CAP = 0.5;
 const STANDBY_STATIC_MAP_WIDTH = 720;
 const STANDBY_STATIC_MAP_HEIGHT = 1280;
@@ -327,6 +361,8 @@ export type RouteBuilderSegmentData = {
   snapMessage?: string | null;
   sourceSegmentId?: string | null;
   buildSource?: RouteSegmentSourceMetadata | null;
+  geometryRole?: Extract<NavigateRouteGeometryRole, 'raw_user_draft' | 'snapped_draft'>;
+  provisional?: boolean;
 };
 
 export type RouteBuilderAnchorMarker = {
@@ -443,6 +479,7 @@ export type MapRendererProps = {
     before: MapLifecycleSnapshot | null;
     after: MapLifecycleSnapshot;
   }) => void;
+  onLayerRenderState?: (payload: NavigateMapLayerRenderState) => void;
   vehicleHeading?: number | null;
   motionPriority?: MapMotionPriority;
   performanceSurface?: MapSurfaceKind;
@@ -450,6 +487,7 @@ export type MapRendererProps = {
   hasToken?: boolean;
   onRetry?: () => void | Promise<void>;
   onReadyStateChange?: (ready: boolean) => void;
+  onBootStateChange?: (state: MapRendererBootState) => void;
   campsites?: MarkerLike[];
   tiltAlerts?: MarkerLike[];
   campsiteMarkers?: MarkerLike[];
@@ -472,6 +510,10 @@ export type MapRendererProps = {
   routeBuilderSegments?: RouteBuilderSegmentData[];
   routeBuilderAnchors?: RouteBuilderAnchorMarker[];
   selectedRouteGeometrySegmentIds?: string[];
+  routeGeometryOverlayEnabled?: boolean;
+  routeGeometryRequestFingerprint?: string | null;
+  routeGeometryRequestGeneration?: number;
+  routeGeometryInvalidFeatureCount?: number;
   routeBuilderColor?: string;
   routeProfileFocus?: RouteProfileFocusPayload | null;
   onRouteBuilderUpdate?: (payload: RouteBuilderUpdatePayload) => void;
@@ -505,6 +547,8 @@ export type MapRendererProps = {
 
 function isRouteBuilderSegmentProvisional(segment: RouteBuilderSegmentData): boolean {
   return (
+    segment.provisional === true ||
+    segment.geometryRole === 'raw_user_draft' ||
     segment.buildSource?.kind === 'active_guidance_extension' &&
     segment.snapProvider !== 'ecs_route_geometry' &&
     segment.snapProvider !== 'mapbox_map_matching'
@@ -542,6 +586,7 @@ type WebMapPayload = {
   routeColor: string;
   progressColor: string;
   routeRenderMode: RouteRenderMode;
+  routeGeometryRole: NavigateRouteGeometryRole | null;
   routeLineKey: string | null;
   bounds: {
     minLng: number;
@@ -565,6 +610,26 @@ type WebMapPayload = {
     routeGeometryConfidence?: string | null;
     routeGeometryWarningsJson?: string | null;
   }[];
+  routeGeometryOverlay: {
+    enabled: boolean;
+    requestFingerprint: string | null;
+    requestGeneration: number;
+    invalidFeatureCount: number;
+    segments: {
+      id: string;
+      coordinates: [number, number][];
+      color: string;
+      kind?: string | null;
+      name?: string | null;
+      category?: string | null;
+      categoryLabel?: string | null;
+      routeGeometrySelected?: boolean;
+      routeGeometrySourceKind?: string | null;
+      routeGeometryDataState?: string | null;
+      routeGeometryConfidence?: string | null;
+      routeGeometryWarningsJson?: string | null;
+    }[];
+  };
   selectedRouteGeometrySegmentIds: string[];
   waypoints: {
     id: string;
@@ -670,6 +735,7 @@ type WebMapPayload = {
     snapMessage?: string | null;
     sourceSegmentId?: string | null;
     buildSource?: RouteSegmentSourceMetadata | null;
+    geometryRole?: Extract<NavigateRouteGeometryRole, 'raw_user_draft' | 'snapped_draft'>;
     provisional?: boolean;
   }[];
   routeBuilderAnchors: RouteBuilderAnchorMarker[];
@@ -702,7 +768,16 @@ type WebMapDynamicPayload = {
   routeBuilderMode: 'freehand' | 'anchor_trace';
 };
 
-type RouteRenderMode = 'idle' | 'preview' | 'active' | 'completed' | 'selected';
+export type RouteRenderMode = 'idle' | 'preview' | 'active' | 'completed' | 'selected';
+
+export function routeGeometryRoleForRenderMode(
+  mode: RouteRenderMode | null | undefined,
+): NavigateRouteGeometryRole | null {
+  if (mode === 'preview') return 'preview_route';
+  if (mode === 'active') return 'active_guidance_route';
+  if (mode === 'completed' || mode === 'selected') return 'finalized_route';
+  return null;
+}
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -1390,11 +1465,13 @@ const MAP_OVERLAY_PATCH_FIELDS: Record<MapOverlayPatchFamily, (keyof WebMapPaylo
     'routeColor',
     'progressColor',
     'routeRenderMode',
+    'routeGeometryRole',
     'routeLineKey',
     'bounds',
     'zoom',
     'center',
     'segments',
+    'routeGeometryOverlay',
     'selectedRouteGeometrySegmentIds',
     'trailSegments',
     'speedSegments',
@@ -1406,6 +1483,7 @@ const MAP_OVERLAY_PATCH_FIELDS: Record<MapOverlayPatchFamily, (keyof WebMapPaylo
   ],
   markers: ['waypoints', 'bailouts', 'pins', 'campsites', 'campScoutPins', 'convoyMarkers', 'dispatchPingMarkers', 'tiltAlerts'],
   routeBuilder: [
+    'routeBuilderActive',
     'routeBuilderMode',
     'routeBuilderColor',
     'routeBuilderSegments',
@@ -1452,6 +1530,9 @@ function summarizeProgressRouteCoordsForHash(coords?: [number, number][] | null)
 export function buildMapOverlayPayloadHashes(payload: WebMapPayload) {
   const style = pickPayloadFields(payload, MAP_OVERLAY_STYLE_FIELDS);
   const route = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.route);
+  if (payload.routeRenderMode === 'active') {
+    route.routeCoords = summarizeProgressRouteCoordsForHash(payload.routeCoords) as never;
+  }
   route.progressRouteCoords = summarizeProgressRouteCoordsForHash(
     payload.progressRouteCoords,
   ) as never;
@@ -1659,9 +1740,71 @@ export function buildMapBridgeBatchMessage(messages: unknown[]) {
   };
 }
 
+export function buildCanonicalGuidanceOverlayGeometry(input: {
+  routeCoords: [number, number][];
+  progressCoords: [number, number][];
+  active: boolean;
+}): {
+  remainingRouteCoords: [number, number][];
+  completedRouteCoords: [number, number][];
+} {
+  if (!input.active || input.routeCoords.length < 2 || input.progressCoords.length < 2) {
+    return {
+      remainingRouteCoords: input.routeCoords,
+      completedRouteCoords: input.active ? [] : input.progressCoords,
+    };
+  }
+
+  const routeIndex = buildGuidanceRouteDistanceIndex(
+    input.routeCoords.map(([lng, lat]) => ({ lat, lng })),
+  );
+  const progressIndex = buildGuidanceRouteDistanceIndex(
+    input.progressCoords.map(([lng, lat]) => ({ lat, lng })),
+  );
+  const routeStart = routeIndex.geometry[0];
+  const progressStart = progressIndex.geometry[0];
+  if (
+    routeIndex.geometry.length < 2 ||
+    progressIndex.geometry.length < 2 ||
+    routeIndex.invalidPointCount > 0 ||
+    progressIndex.invalidPointCount > 0 ||
+    !routeStart ||
+    !progressStart ||
+    guidanceRouteDistanceMeters(routeStart, progressStart) > 5
+  ) {
+    return { remainingRouteCoords: input.routeCoords, completedRouteCoords: [] };
+  }
+
+  const approximateProjection = projectGuidanceRouteAtDistance(
+    routeIndex,
+    Math.min(progressIndex.totalDistanceM, routeIndex.totalDistanceM),
+  );
+  const progressEndpoint = progressIndex.geometry.at(-1);
+  const splitProjection = progressEndpoint
+    ? findNearestPlausibleRouteProjection({
+        position: progressEndpoint,
+        routeIndex,
+        previousProjection: approximateProjection,
+        accuracyM: 1,
+      }) ?? approximateProjection
+    : approximateProjection;
+  const split = splitGuidanceRouteAtProjection(routeIndex.geometry, splitProjection);
+  return {
+    remainingRouteCoords: split.remaining.map((point) => [point.lng, point.lat]),
+    completedRouteCoords: split.completed.map((point) => [point.lng, point.lat]),
+  };
+}
+
 export function buildWebPayload(props: MapRendererProps): WebMapPayload {
   const routeCoordsRaw = normalizePointList(props.points);
   const progressCoordsRaw = normalizePointList(props.progressPoints);
+  const canonicalGuidanceOverlay = buildCanonicalGuidanceOverlayGeometry({
+    routeCoords: routeCoordsRaw,
+    progressCoords: progressCoordsRaw,
+    active: props.routeRenderMode === 'active',
+  });
+  const renderRouteCoordsRaw = canonicalGuidanceOverlay.remainingRouteCoords;
+  const renderProgressCoordsRaw = canonicalGuidanceOverlay.completedRouteCoords;
   const compactActiveRoute = props.surfaceMode === 'compact' && props.routeRenderMode === 'active';
   const routeRenderPointBudget = compactActiveRoute
     ? MAX_COMPACT_ACTIVE_ROUTE_RENDER_POINTS
@@ -1669,8 +1812,8 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
   const progressRenderPointBudget = compactActiveRoute
     ? MAX_COMPACT_ACTIVE_PROGRESS_RENDER_POINTS
     : MAX_PROGRESS_ROUTE_RENDER_POINTS;
-  const routeCoords = preserveRouteGeometryForRendering(routeCoordsRaw, routeRenderPointBudget);
-  const progressRouteCoords = preserveRouteGeometryForRendering(progressCoordsRaw, progressRenderPointBudget);
+  const routeCoords = preserveRouteGeometryForRendering(renderRouteCoordsRaw, routeRenderPointBudget);
+  const progressRouteCoords = preserveRouteGeometryForRendering(renderProgressCoordsRaw, progressRenderPointBudget);
 
   const routePointsForBounds = routeCoordsRaw.map(([lng, lat]) => ({ lat, lng }));
 
@@ -1710,6 +1853,37 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
     ? props.tiltAlerts
     : props.tiltAlertMarkers || [];
 
+  const normalizedSegments = (props.segments || []).map((segment, index) => ({
+    id: toMarkerId('seg', segment.id, index),
+    coordinates: normalizeLineCoordinates(segment.coordinates),
+    color:
+      segment.color ||
+      (segment.health === 'red'
+        ? HEALTH_COLORS.red
+        : segment.health === 'yellow'
+          ? HEALTH_COLORS.yellow
+          : HEALTH_COLORS.green),
+    kind: segment.kind ?? null,
+    name: segment.name ?? null,
+    category: segment.category ?? null,
+    categoryLabel: segment.categoryLabel ?? null,
+    routeGeometrySelected: !!segment.routeGeometrySelected,
+    routeGeometrySourceKind: segment.routeGeometrySourceKind ?? segment.sourceKind ?? null,
+    routeGeometryDataState: segment.routeGeometryDataState ?? segment.dataState ?? null,
+    routeGeometryConfidence: segment.routeGeometryConfidence ?? segment.confidence ?? null,
+    routeGeometryWarningsJson:
+      segment.routeGeometryWarningsJson ??
+      (Array.isArray(segment.warnings) ? JSON.stringify(segment.warnings) : null),
+  }));
+  const routeGeometrySegments = normalizedSegments.filter(
+    (segment) => segment.kind === 'route_geometry_segment',
+  );
+  const sharedSegments = normalizedSegments.filter(
+    (segment) => segment.kind !== 'route_geometry_segment',
+  );
+  const routeGeometryOverlayEnabled =
+    props.routeGeometryOverlayEnabled ?? (routeGeometrySegments.length > 0);
+
   return {
     routeCoords,
     progressRouteCoords,
@@ -1722,34 +1896,24 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
           : pickRouteColor(props.healthLevel)),
     progressColor: props.progressColor || '#F2C24D',
     routeRenderMode: props.routeRenderMode ?? 'selected',
+    routeGeometryRole:
+      routeCoords.length > 1
+        ? routeGeometryRoleForRenderMode(props.routeRenderMode ?? 'selected')
+        : null,
     routeLineKey: props.routeLineKey ?? null,
     bounds,
     zoom,
     center,
-    segments: (props.segments || []).map((segment, index) => ({
-      id: toMarkerId('seg', segment.id, index),
-      coordinates: normalizeLineCoordinates(segment.coordinates),
-      color:
-        segment.color ||
-        (segment.health === 'red'
-          ? HEALTH_COLORS.red
-          : segment.health === 'yellow'
-            ? HEALTH_COLORS.yellow
-            : HEALTH_COLORS.green),
-      kind: segment.kind ?? null,
-      name: segment.name ?? null,
-      category: segment.category ?? null,
-      categoryLabel: segment.categoryLabel ?? null,
-      routeGeometrySelected: !!segment.routeGeometrySelected,
-      routeGeometrySourceKind: segment.routeGeometrySourceKind ?? segment.sourceKind ?? null,
-      routeGeometryDataState: segment.routeGeometryDataState ?? segment.dataState ?? null,
-      routeGeometryConfidence: segment.routeGeometryConfidence ?? segment.confidence ?? null,
-      routeGeometryWarningsJson:
-        segment.routeGeometryWarningsJson ??
-        (Array.isArray(segment.warnings) ? JSON.stringify(segment.warnings) : null),
-    })),
+    segments: sharedSegments,
+    routeGeometryOverlay: {
+      enabled: routeGeometryOverlayEnabled,
+      requestFingerprint: props.routeGeometryRequestFingerprint ?? null,
+      requestGeneration: Math.max(0, Math.trunc(props.routeGeometryRequestGeneration ?? 0)),
+      invalidFeatureCount: Math.max(0, Math.trunc(props.routeGeometryInvalidFeatureCount ?? 0)),
+      segments: routeGeometryOverlayEnabled ? routeGeometrySegments : [],
+    },
     selectedRouteGeometrySegmentIds: (props.selectedRouteGeometrySegmentIds ?? []).map(String),
-    waypoints: normalizeRenderedRouteWaypoints(routeCoords, props.waypoints || [], {
+    waypoints: normalizeRenderedRouteWaypoints(routeCoordsRaw, props.waypoints || [], {
       showTrailEntryEndpointMarker: props.showTrailEntryEndpointMarker === true,
     }),
     bailouts: (props.bailoutMarkers || [])
@@ -1948,6 +2112,9 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
       snapMessage: segment.snapMessage ?? null,
       sourceSegmentId: segment.sourceSegmentId ?? null,
       buildSource: segment.buildSource ?? null,
+      geometryRole:
+        segment.geometryRole ??
+        (segment.snapStatus === 'snapped' ? 'snapped_draft' : 'raw_user_draft'),
       provisional: isRouteBuilderSegmentProvisional(segment),
     })),
     routeBuilderAnchors: (props.routeBuilderAnchors || [])
@@ -1972,6 +2139,41 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
           closed: !!props.campsiteSearchPolygon.closed,
         }
       : null,
+  };
+}
+
+export function buildRouteBuilderFallbackOverlay(
+  payload: Pick<
+    WebMapPayload,
+    | 'routeBuilderActive'
+    | 'routeBuilderAnchors'
+    | 'routeBuilderColor'
+    | 'routeBuilderSegments'
+  >,
+) {
+  if (!payload.routeBuilderActive) {
+    return { markers: [], segments: [] };
+  }
+
+  const color = payload.routeBuilderColor || '#65F0D4';
+  return {
+    markers: (payload.routeBuilderAnchors || [])
+      .filter((anchor) => !anchor.hidden)
+      .map((anchor) => ({
+        id: anchor.id,
+        latitude: anchor.coordinate.latitude,
+        longitude: anchor.coordinate.longitude,
+        color,
+        type: 'routeBuilderAnchor',
+        mapChar: anchor.label,
+      })),
+    segments: (payload.routeBuilderSegments || [])
+      .filter((segment) => segment.coordinates.length > 1)
+      .map((segment) => ({
+        ...segment,
+        color,
+        foreground: true,
+      })),
   };
 }
 
@@ -2724,6 +2926,10 @@ function makeMapHtml(
       var STAGED_ROUTE_OPTION_SOURCE_ID = ${JSON.stringify(STAGED_ROUTE_OPTION_SOURCE_ID)};
       var STAGED_ROUTE_OPTION_HALO_LAYER_ID = ${JSON.stringify(STAGED_ROUTE_OPTION_HALO_LAYER_ID)};
       var STAGED_ROUTE_OPTION_LAYER_ID = ${JSON.stringify(STAGED_ROUTE_OPTION_LAYER_ID)};
+      var ROUTE_GEOMETRY_SOURCE_ID = ${JSON.stringify(NAVIGATE_ROUTE_GEOMETRY_SOURCE_ID)};
+      var ROUTE_GEOMETRY_HALO_LAYER_ID = ${JSON.stringify(NAVIGATE_ROUTE_GEOMETRY_HALO_LAYER_ID)};
+      var ROUTE_GEOMETRY_LAYER_ID = ${JSON.stringify(NAVIGATE_ROUTE_GEOMETRY_LAYER_ID)};
+      var ROUTE_GEOMETRY_SELECTED_LAYER_ID = ${JSON.stringify(NAVIGATE_ROUTE_GEOMETRY_SELECTED_LAYER_ID)};
       var MVUM_OVERLAY_SOURCE_ID = ${JSON.stringify(MVUM_OVERLAY_SOURCE_ID)};
       var MVUM_OVERLAY_HALO_LAYER_ID = ${JSON.stringify(MVUM_OVERLAY_HALO_LAYER_ID)};
       var MVUM_OVERLAY_LAYER_ID = ${JSON.stringify(MVUM_OVERLAY_LAYER_ID)};
@@ -2766,18 +2972,201 @@ function makeMapHtml(
         send('log', msg);
       }
 
+      function safeLayerRequestFingerprint(value) {
+        var normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+        return /^request_[0-9a-f]{8}$/.test(normalized) ? normalized : null;
+      }
+
+      function safeLayerRequestGeneration(value) {
+        var generation = Number(value);
+        return isFinite(generation) && generation >= 0 ? Math.floor(generation) : null;
+      }
+
+      function sendLayerRenderState(surfaceId, input) {
+        var isRouteGeometry = surfaceId === 'navigate_route_geometry';
+        var layerIds = isRouteGeometry
+          ? [ROUTE_GEOMETRY_HALO_LAYER_ID, ROUTE_GEOMETRY_LAYER_ID, ROUTE_GEOMETRY_SELECTED_LAYER_ID]
+          : [MVUM_OVERLAY_HALO_LAYER_ID, MVUM_OVERLAY_LAYER_ID, MVUM_OVERLAY_SELECTED_LAYER_ID];
+        var sourceId = isRouteGeometry ? ROUTE_GEOMETRY_SOURCE_ID : MVUM_OVERLAY_SOURCE_ID;
+        var requestedStatus = input && input.status;
+        var status = requestedStatus === 'ready' || requestedStatus === 'empty' || requestedStatus === 'error'
+          ? requestedStatus
+          : 'disabled';
+        var requestedSource = input && input.source;
+        var source = requestedSource === 'geojson' || requestedSource === 'vector'
+          ? requestedSource
+          : 'unavailable';
+        var featureCount = Number(input && input.featureCount);
+        var invalidFeatureCount = Number(input && input.invalidFeatureCount);
+        var safeErrorCode = input && typeof input.safeErrorCode === 'string'
+          ? input.safeErrorCode.replace(/[^A-Z0-9_]/g, '').slice(0, 48) || null
+          : null;
+
+        send('layerRenderState', {
+          surfaceId: isRouteGeometry ? 'navigate_route_geometry' : 'navigate_mvum_segments',
+          requestFingerprint: safeLayerRequestFingerprint(input && input.requestFingerprint),
+          requestGeneration: safeLayerRequestGeneration(input && input.requestGeneration),
+          enabled: !!(input && input.enabled),
+          status: status,
+          source: source,
+          sourceId: sourceId,
+          layerIds: layerIds,
+          featureCount: isFinite(featureCount) && featureCount > 0 ? Math.floor(featureCount) : 0,
+          invalidFeatureCount: isFinite(invalidFeatureCount) && invalidFeatureCount > 0 ? Math.floor(invalidFeatureCount) : 0,
+          sourcePresent: mapSourceExists(sourceId),
+          layersPresent: layerIds.every(mapLayerExists),
+          layersVisible: layerIds.every(mapLayerVisible),
+          safeErrorCode: safeErrorCode,
+          completedAt: Date.now()
+        });
+      }
+
+      function getLayerRenderVerification(surfaceId) {
+        return surfaceId === 'navigate_route_geometry'
+          ? routeGeometryRenderVerification
+          : mvumRenderVerification;
+      }
+
+      function setLayerRenderVerification(surfaceId, value) {
+        if (surfaceId === 'navigate_route_geometry') {
+          routeGeometryRenderVerification = value;
+        } else {
+          mvumRenderVerification = value;
+        }
+      }
+
+      function cancelLayerRenderVerification(surfaceId) {
+        var current = getLayerRenderVerification(surfaceId);
+        if (current && current.timer) clearTimeout(current.timer);
+        if (current && map) {
+          try {
+            if (current.sourceDataListener) map.off('sourcedata', current.sourceDataListener);
+            if (current.idleListener) map.off('idle', current.idleListener);
+          } catch (e) {}
+        }
+        setLayerRenderVerification(surfaceId, null);
+      }
+
+      function scheduleLayerRenderVerification(surfaceId, input) {
+        cancelLayerRenderVerification(surfaceId);
+        var isRouteGeometry = surfaceId === 'navigate_route_geometry';
+        var sourceId = isRouteGeometry ? ROUTE_GEOMETRY_SOURCE_ID : MVUM_OVERLAY_SOURCE_ID;
+        var layerIds = isRouteGeometry
+          ? [ROUTE_GEOMETRY_HALO_LAYER_ID, ROUTE_GEOMETRY_LAYER_ID, ROUTE_GEOMETRY_SELECTED_LAYER_ID]
+          : [MVUM_OVERLAY_HALO_LAYER_ID, MVUM_OVERLAY_LAYER_ID, MVUM_OVERLAY_SELECTED_LAYER_ID];
+        var verification = {
+          requestFingerprint: safeLayerRequestFingerprint(input && input.requestFingerprint),
+          requestGeneration: safeLayerRequestGeneration(input && input.requestGeneration),
+          startedAt: Date.now(),
+          timer: null,
+          sourceCycleObserved: !(input && input.source === 'vector'),
+          idleCycleObserved: !(input && input.source === 'vector'),
+          sourceDataListener: null,
+          idleListener: null
+        };
+        setLayerRenderVerification(surfaceId, verification);
+
+        if (input && input.source === 'vector' && map) {
+          verification.sourceDataListener = function(event) {
+            if (getLayerRenderVerification(surfaceId) !== verification) return;
+            if (!event || event.sourceId !== sourceId) return;
+            if (event.isSourceLoaded !== true) return;
+            verification.sourceCycleObserved = true;
+          };
+          verification.idleListener = function() {
+            if (getLayerRenderVerification(surfaceId) !== verification) return;
+            try {
+              if (mapSourceExists(sourceId) && map.isSourceLoaded(sourceId)) {
+                verification.sourceCycleObserved = true;
+                verification.idleCycleObserved = true;
+              }
+            } catch (e) {}
+          };
+          try {
+            map.on('sourcedata', verification.sourceDataListener);
+            map.on('idle', verification.idleListener);
+            if (map.triggerRepaint) map.triggerRepaint();
+          } catch (e) {}
+        }
+
+        function finish(status, featureCount, safeErrorCode) {
+          if (getLayerRenderVerification(surfaceId) !== verification) return;
+          cancelLayerRenderVerification(surfaceId);
+          sendLayerRenderState(surfaceId, {
+            requestFingerprint: verification.requestFingerprint,
+            requestGeneration: verification.requestGeneration,
+            enabled: true,
+            status: status,
+            source: input && input.source,
+            featureCount: featureCount,
+            invalidFeatureCount: input && input.invalidFeatureCount,
+            safeErrorCode: safeErrorCode || null
+          });
+        }
+
+        function verify() {
+          if (getLayerRenderVerification(surfaceId) !== verification) return;
+          var elapsed = Date.now() - verification.startedAt;
+          var sourceReady = false;
+          var layersReady = false;
+          try {
+            sourceReady = !!(map && mapSourceExists(sourceId) && map.isSourceLoaded(sourceId));
+            layersReady = layerIds.every(mapLayerExists) && layerIds.every(mapLayerVisible);
+          } catch (e) {
+            sourceReady = false;
+            layersReady = false;
+          }
+
+          if (sourceReady && layersReady) {
+            var featureCount = Math.max(0, Math.floor(Number(input && input.featureCount) || 0));
+            if (input && input.source === 'vector') {
+              try {
+                var vectorOptions = input.vectorSourceLayer
+                  ? { sourceLayer: String(input.vectorSourceLayer) }
+                  : undefined;
+                var vectorFeatures = map.querySourceFeatures(sourceId, vectorOptions) || [];
+                featureCount = vectorFeatures.length;
+              } catch (e) {
+                if (elapsed < LAYER_RENDER_VERIFICATION_TIMEOUT_MS) {
+                  verification.timer = setTimeout(verify, 80);
+                  return;
+                }
+                finish('error', 0, 'MAP_SOURCE_QUERY_FAILED');
+                return;
+              }
+              if (featureCount === 0 && !verification.idleCycleObserved) {
+                if (elapsed < LAYER_RENDER_VERIFICATION_TIMEOUT_MS) {
+                  verification.timer = setTimeout(verify, 80);
+                  return;
+                }
+                finish('error', 0, 'MAP_VECTOR_SOURCE_UNVERIFIED');
+                return;
+              }
+            }
+            finish(featureCount > 0 ? 'ready' : 'empty', featureCount, null);
+            return;
+          }
+
+          if (elapsed >= LAYER_RENDER_VERIFICATION_TIMEOUT_MS) {
+            finish('error', 0, sourceReady ? 'MAP_LAYER_LOAD_TIMEOUT' : 'MAP_SOURCE_LOAD_TIMEOUT');
+            return;
+          }
+          verification.timer = setTimeout(verify, 80);
+        }
+
+        verification.timer = setTimeout(verify, 0);
+      }
+
       window.onerror = function(message, source, lineno, colno, error) {
         try {
-          sendLog('window error: ' + String(message || 'unknown') + ' @ ' + String(source || 'inline') + ':' + String(lineno || 0) + ':' + String(colno || 0));
-          if (error && error.stack) sendLog('window error stack: ' + String(error.stack));
+          sendLog('[ECS Map] error code=WINDOW_RUNTIME_ERROR');
         } catch (e) {}
         return false;
       };
 
       window.addEventListener('unhandledrejection', function(event) {
         try {
-          var reason = event && event.reason ? event.reason : 'unknown';
-          sendLog('unhandled rejection: ' + String(reason && reason.message ? reason.message : reason));
+          sendLog('[ECS Map] error code=UNHANDLED_REJECTION');
         } catch (e) {}
       });
 
@@ -2933,7 +3322,7 @@ function makeMapHtml(
       try {
         mapboxgl.workerCount = 1;
       } catch (e) {
-        sendLog('mapboxgl worker tuning skipped: ' + String(e && e.message ? e.message : e));
+        sendLog('[ECS Map] warning code=WORKER_TUNING_SKIPPED');
       }
 
       try {
@@ -2941,7 +3330,7 @@ function makeMapHtml(
           sendLog('mapboxgl support check failed; attempting constructor so native WebView can report the concrete error');
         }
       } catch (e) {
-        sendLog('mapboxgl support check threw: ' + String(e && e.message ? e.message : e));
+        sendLog('[ECS Map] warning code=SUPPORT_CHECK_FAILED');
       }
 
       mapboxgl.accessToken = ${escapedToken};
@@ -2952,6 +3341,11 @@ function makeMapHtml(
       var pendingPayload = null;
       var lastRouteLineKey = null;
       var mvumOverlaySourceSignature = null;
+      var routeGeometryOverlayAppliedSignature = null;
+      var mvumOverlayAppliedSignature = null;
+      var routeGeometryRenderVerification = null;
+      var mvumRenderVerification = null;
+      var LAYER_RENDER_VERIFICATION_TIMEOUT_MS = 5000;
       var styleReplayTimer = null;
       var bootstrapReadyTimer = null;
       var resizePumpTimer = null;
@@ -3037,7 +3431,7 @@ function makeMapHtml(
             lastResizeSignature = after;
           }
         } catch (e) {
-          sendLog('map resize failed: ' + String(e && e.message ? e.message : e));
+          sendLog('[ECS Map] warning code=MAP_RESIZE_FAILED');
         }
       }
 
@@ -3258,7 +3652,7 @@ function makeMapHtml(
           map.setStyle(nextStyle);
           return true;
         } catch (e) {
-          sendLog('style fallback setStyle failed: ' + String(e && e.message ? e.message : e));
+          sendLog('[ECS Map] error code=STYLE_FALLBACK_FAILED');
           return false;
         }
       }
@@ -3293,7 +3687,7 @@ function makeMapHtml(
             });
           }
         } catch (e) {
-          sendLog('3d terrain skipped: ' + String(e && e.message ? e.message : e));
+          sendLog('[ECS Map] warning code=TERRAIN_SETUP_SKIPPED');
         }
       }
 
@@ -3681,50 +4075,185 @@ function makeMapHtml(
         }
       }
 
-      function ensureRouteGeometryLayers() {
-        if (!map.getLayer('route-geometry-halo-layer')) {
-          map.addLayer({
-            id: 'route-geometry-halo-layer',
-            type: 'line',
-            source: 'segment-source',
-            filter: [
-              'all',
-              ['==', ['get', 'kind'], 'route_geometry_segment'],
-              ['!=', ['get', 'routeGeometrySelected'], true]
-            ],
-            layout: {
-              'line-cap': 'round',
-              'line-join': 'round'
-            },
-            paint: {
-              'line-color': '#F2C24D',
-              'line-width': 4.25,
-              'line-opacity': 0.9
-            }
-          }, 'segment-layer');
+      function clearRouteGeometryOverlayLayersAndSource() {
+        cancelLayerRenderVerification('navigate_route_geometry');
+        removeMapLayer(ROUTE_GEOMETRY_SELECTED_LAYER_ID);
+        removeMapLayer(ROUTE_GEOMETRY_LAYER_ID);
+        removeMapLayer(ROUTE_GEOMETRY_HALO_LAYER_ID);
+        removeMapSource(ROUTE_GEOMETRY_SOURCE_ID);
+        routeGeometryOverlayAppliedSignature = null;
+      }
+
+      function stableLayerOverlaySignature(value) {
+        try {
+          return JSON.stringify(value || null);
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function buildRouteGeometryFeatureCollection(overlay) {
+        var invalidFeatureCount = Math.max(0, Math.floor(Number(overlay && overlay.invalidFeatureCount) || 0));
+        var features = [];
+        (overlay && Array.isArray(overlay.segments) ? overlay.segments : []).forEach(function(segment) {
+          var normalizedCoordinates = normalizeLngLatLine(segment && segment.coordinates);
+          if (!segment || normalizedCoordinates.length < 2) {
+            invalidFeatureCount += 1;
+            return;
+          }
+          features.push(lineFeature(String(segment.id || ('route-geometry-' + features.length)), normalizedCoordinates, {
+            color: segment.color || '#F2C24D',
+            kind: 'route_geometry_segment',
+            name: segment.name || null,
+            category: segment.category || null,
+            categoryLabel: segment.categoryLabel || null,
+            routeGeometrySourceKind: segment.routeGeometrySourceKind || null,
+            routeGeometryDataState: segment.routeGeometryDataState || null,
+            routeGeometryConfidence: segment.routeGeometryConfidence || null,
+            routeGeometryWarningsJson: segment.routeGeometryWarningsJson || null,
+            routeGeometrySelected:
+              segment.routeGeometrySelected === true ||
+              selectedRouteGeometrySegmentIds[String(segment.id)] === true
+          }));
+        });
+        return {
+          featureCollection: featureCollection(features),
+          featureCount: features.length,
+          invalidFeatureCount: invalidFeatureCount
+        };
+      }
+
+      function ensureRouteGeometryOverlayLayers() {
+        mapSourceRegistry.ensure(ROUTE_GEOMETRY_SOURCE_ID, {
+          type: 'geojson',
+          data: featureCollection([])
+        });
+        var beforeRouteBuilder = mapLayerExists('route-builder-halo-layer')
+          ? 'route-builder-halo-layer'
+          : undefined;
+
+        mapLayerRegistry.ensure(ROUTE_GEOMETRY_HALO_LAYER_ID, {
+          id: ROUTE_GEOMETRY_HALO_LAYER_ID,
+          type: 'line',
+          source: ROUTE_GEOMETRY_SOURCE_ID,
+          filter: ['==', ['get', 'kind'], 'route_geometry_segment'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': 'rgba(5,10,14,0.92)',
+            'line-width': 8,
+            'line-opacity': 0.58
+          }
+        }, beforeRouteBuilder);
+        mapLayerRegistry.ensure(ROUTE_GEOMETRY_LAYER_ID, {
+          id: ROUTE_GEOMETRY_LAYER_ID,
+          type: 'line',
+          source: ROUTE_GEOMETRY_SOURCE_ID,
+          filter: [
+            'all',
+            ['==', ['get', 'kind'], 'route_geometry_segment'],
+            ['!=', ['get', 'routeGeometrySelected'], true]
+          ],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': '#F2C24D',
+            'line-width': 4.25,
+            'line-opacity': 0.9
+          }
+        }, beforeRouteBuilder);
+        mapLayerRegistry.ensure(ROUTE_GEOMETRY_SELECTED_LAYER_ID, {
+          id: ROUTE_GEOMETRY_SELECTED_LAYER_ID,
+          type: 'line',
+          source: ROUTE_GEOMETRY_SOURCE_ID,
+          filter: [
+            'all',
+            ['==', ['get', 'kind'], 'route_geometry_segment'],
+            ['==', ['get', 'routeGeometrySelected'], true]
+          ],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': '#F2C24D',
+            'line-width': 6.25,
+            'line-opacity': 0.98,
+            'line-blur': 0.2
+          }
+        }, beforeRouteBuilder);
+      }
+
+      function updateRouteGeometryOverlay(overlay) {
+        var requestFingerprint = overlay && overlay.requestFingerprint;
+        var appliedSignature = stableLayerOverlaySignature(overlay);
+        var unchangedArtifactsReady = !!(
+          overlay &&
+          overlay.enabled === true &&
+          mapSourceExists(ROUTE_GEOMETRY_SOURCE_ID) &&
+          mapLayerExists(ROUTE_GEOMETRY_HALO_LAYER_ID) &&
+          mapLayerExists(ROUTE_GEOMETRY_LAYER_ID) &&
+          mapLayerExists(ROUTE_GEOMETRY_SELECTED_LAYER_ID)
+        );
+        if (
+          appliedSignature &&
+          appliedSignature === routeGeometryOverlayAppliedSignature &&
+          (unchangedArtifactsReady || (!overlay || overlay.enabled !== true) && !mapSourceExists(ROUTE_GEOMETRY_SOURCE_ID))
+        ) {
+          return;
+        }
+        cancelLayerRenderVerification('navigate_route_geometry');
+        if (!overlay || overlay.enabled !== true) {
+          clearRouteGeometryOverlayLayersAndSource();
+          routeGeometryOverlayAppliedSignature = appliedSignature;
+          sendLayerRenderState('navigate_route_geometry', {
+            requestFingerprint: requestFingerprint,
+            requestGeneration: overlay && overlay.requestGeneration,
+            enabled: false,
+            status: 'disabled',
+            source: 'unavailable',
+            featureCount: 0,
+            invalidFeatureCount: overlay && overlay.invalidFeatureCount
+          });
+          return;
         }
 
-        if (!map.getLayer('route-geometry-selected-layer')) {
-          map.addLayer({
-            id: 'route-geometry-selected-layer',
-            type: 'line',
-            source: 'segment-source',
-            filter: [
-              'all',
-              ['==', ['get', 'kind'], 'route_geometry_segment'],
-              ['==', ['get', 'routeGeometrySelected'], true]
-            ],
-            layout: {
-              'line-cap': 'round',
-              'line-join': 'round'
-            },
-            paint: {
-              'line-color': '#F2C24D',
-              'line-width': 6.25,
-              'line-opacity': 0.98,
-              'line-blur': 0.2
-            }
-          }, 'segment-layer');
+        var normalized = buildRouteGeometryFeatureCollection(overlay);
+        try {
+          ensureRouteGeometryOverlayLayers();
+          var sourceUpdated = setGeoJson(ROUTE_GEOMETRY_SOURCE_ID, normalized.featureCollection);
+          var artifactsReady =
+            mapSourceExists(ROUTE_GEOMETRY_SOURCE_ID) &&
+            mapLayerExists(ROUTE_GEOMETRY_HALO_LAYER_ID) &&
+            mapLayerExists(ROUTE_GEOMETRY_LAYER_ID) &&
+            mapLayerExists(ROUTE_GEOMETRY_SELECTED_LAYER_ID);
+          if (!sourceUpdated || !artifactsReady) {
+            sendLayerRenderState('navigate_route_geometry', {
+              requestFingerprint: requestFingerprint,
+              requestGeneration: overlay && overlay.requestGeneration,
+              enabled: true,
+              status: 'error',
+              source: 'geojson',
+              featureCount: 0,
+              invalidFeatureCount: normalized.invalidFeatureCount,
+              safeErrorCode: sourceUpdated ? 'MAP_LAYER_UNAVAILABLE' : 'MAP_SOURCE_UPDATE_FAILED'
+            });
+            return;
+          }
+          routeGeometryOverlayAppliedSignature = appliedSignature;
+          scheduleLayerRenderVerification('navigate_route_geometry', {
+            requestFingerprint: requestFingerprint,
+            requestGeneration: overlay && overlay.requestGeneration,
+            source: 'geojson',
+            featureCount: normalized.featureCount,
+            invalidFeatureCount: normalized.invalidFeatureCount
+          });
+        } catch (e) {
+          sendLayerRenderState('navigate_route_geometry', {
+            requestFingerprint: requestFingerprint,
+            requestGeneration: overlay && overlay.requestGeneration,
+            enabled: true,
+            status: 'error',
+            source: 'geojson',
+            featureCount: 0,
+            invalidFeatureCount: normalized.invalidFeatureCount,
+            safeErrorCode: 'MAP_RENDER_FAILED'
+          });
         }
       }
 
@@ -3743,12 +4272,14 @@ function makeMapHtml(
       }
 
       function clearMvumOverlayLayersAndSources() {
+        cancelLayerRenderVerification('navigate_mvum_segments');
         removeMapLayer(MVUM_OVERLAY_SELECTED_LAYER_ID);
         removeMapLayer(MVUM_OVERLAY_LAYER_ID);
         removeMapLayer(MVUM_OVERLAY_HALO_LAYER_ID);
         removeMapSource(MVUM_OVERLAY_SELECTED_SOURCE_ID);
         removeMapSource(MVUM_OVERLAY_SOURCE_ID);
         mvumOverlaySourceSignature = null;
+        mvumOverlayAppliedSignature = null;
       }
 
       function ensureMvumOverlayLayers(payload) {
@@ -3789,6 +4320,10 @@ function makeMapHtml(
           return sourceType === 'vector' ? { 'source-layer': vectorSourceLayer } : {};
         }
 
+        var beforeRouteBuilder = mapLayerExists('route-builder-halo-layer')
+          ? 'route-builder-halo-layer'
+          : undefined;
+
         mapLayerRegistry.ensure(MVUM_OVERLAY_HALO_LAYER_ID, Object.assign({
             id: MVUM_OVERLAY_HALO_LAYER_ID,
             type: 'line',
@@ -3803,7 +4338,7 @@ function makeMapHtml(
               'line-width': 6.5,
               'line-opacity': 0.42
             }
-          }, layerSourceLayer()), 'route-builder-layer');
+          }, layerSourceLayer()), beforeRouteBuilder);
 
         mapLayerRegistry.ensure(MVUM_OVERLAY_LAYER_ID, Object.assign({
             id: MVUM_OVERLAY_LAYER_ID,
@@ -3819,7 +4354,7 @@ function makeMapHtml(
               'line-width': 3.6,
               'line-opacity': 0.78
             }
-          }, layerSourceLayer()), MVUM_OVERLAY_HALO_LAYER_ID);
+          }, layerSourceLayer()), beforeRouteBuilder);
 
         mapLayerRegistry.ensure(MVUM_OVERLAY_SELECTED_LAYER_ID, Object.assign({
             id: MVUM_OVERLAY_SELECTED_LAYER_ID,
@@ -3837,23 +4372,109 @@ function makeMapHtml(
               'line-opacity': 0.98,
               'line-blur': 0.2
             }
-          }, layerSourceLayer()));
+          }, layerSourceLayer()), beforeRouteBuilder);
 
         return true;
       }
 
       function updateMvumOverlay(payload) {
-        if (!payload || payload.enabled !== true) {
-          clearMvumOverlayLayersAndSources();
+        var requestFingerprint = payload && payload.requestFingerprint;
+        var appliedSignature = stableLayerOverlaySignature(payload);
+        var unchangedArtifactsReady = !!(
+          payload &&
+          payload.enabled === true &&
+          mapSourceExists(MVUM_OVERLAY_SOURCE_ID) &&
+          mapLayerExists(MVUM_OVERLAY_HALO_LAYER_ID) &&
+          mapLayerExists(MVUM_OVERLAY_LAYER_ID) &&
+          mapLayerExists(MVUM_OVERLAY_SELECTED_LAYER_ID)
+        );
+        if (
+          appliedSignature &&
+          appliedSignature === mvumOverlayAppliedSignature &&
+          (unchangedArtifactsReady || (!payload || payload.enabled !== true) && !mapSourceExists(MVUM_OVERLAY_SOURCE_ID))
+        ) {
           return;
         }
-        ensureMvumOverlayLayers(payload);
-        if (payload.sourceType !== 'vector') {
-          setGeoJson(MVUM_OVERLAY_SOURCE_ID, payload.featureCollection || featureCollection([]));
+        cancelLayerRenderVerification('navigate_mvum_segments');
+        if (!payload || payload.enabled !== true) {
+          clearMvumOverlayLayersAndSources();
+          mvumOverlayAppliedSignature = appliedSignature;
+          sendLayerRenderState('navigate_mvum_segments', {
+            requestFingerprint: requestFingerprint,
+            requestGeneration: payload && payload.requestGeneration,
+            enabled: false,
+            status: 'disabled',
+            source: 'unavailable',
+            featureCount: 0,
+            invalidFeatureCount: payload && payload.invalidFeatureCount
+          });
+          return;
+        }
+        if (payload.sourceType === 'vector' && !payload.vectorTileUrl) {
+          clearMvumOverlayLayersAndSources();
+          sendLayerRenderState('navigate_mvum_segments', {
+            requestFingerprint: requestFingerprint,
+            requestGeneration: payload && payload.requestGeneration,
+            enabled: true,
+            status: 'error',
+            source: 'unavailable',
+            featureCount: 0,
+            invalidFeatureCount: payload.invalidFeatureCount,
+            safeErrorCode: 'PROVIDER_CONFIG_MISSING'
+          });
+          return;
         }
         try {
-          map.setFilter(MVUM_OVERLAY_SELECTED_LAYER_ID, mvumSelectedFilter(payload.selectedSegmentIds || []));
-        } catch (e) {}
+          ensureMvumOverlayLayers(payload);
+          var featureCount = payload.sourceType === 'vector'
+            ? 0
+            : geoJsonFeatureCount(payload.featureCollection);
+          var sourceUpdated = true;
+          if (payload.sourceType !== 'vector') {
+            sourceUpdated = setGeoJson(MVUM_OVERLAY_SOURCE_ID, payload.featureCollection || featureCollection([]));
+          }
+          try {
+            map.setFilter(MVUM_OVERLAY_SELECTED_LAYER_ID, mvumSelectedFilter(payload.selectedSegmentIds || []));
+          } catch (e) {}
+          var artifactsReady =
+            mapSourceExists(MVUM_OVERLAY_SOURCE_ID) &&
+            mapLayerExists(MVUM_OVERLAY_HALO_LAYER_ID) &&
+            mapLayerExists(MVUM_OVERLAY_LAYER_ID) &&
+            mapLayerExists(MVUM_OVERLAY_SELECTED_LAYER_ID);
+          if (!sourceUpdated || !artifactsReady) {
+            sendLayerRenderState('navigate_mvum_segments', {
+              requestFingerprint: requestFingerprint,
+              requestGeneration: payload && payload.requestGeneration,
+              enabled: true,
+              status: 'error',
+              source: payload.sourceType === 'vector' ? 'vector' : 'geojson',
+              featureCount: 0,
+              invalidFeatureCount: payload.invalidFeatureCount,
+              safeErrorCode: sourceUpdated ? 'MAP_LAYER_UNAVAILABLE' : 'MAP_SOURCE_UPDATE_FAILED'
+            });
+            return;
+          }
+          mvumOverlayAppliedSignature = appliedSignature;
+          scheduleLayerRenderVerification('navigate_mvum_segments', {
+            requestFingerprint: requestFingerprint,
+            requestGeneration: payload && payload.requestGeneration,
+            source: payload.sourceType === 'vector' ? 'vector' : 'geojson',
+            featureCount: featureCount,
+            invalidFeatureCount: payload.invalidFeatureCount,
+            vectorSourceLayer: payload.vectorSourceLayer
+          });
+        } catch (e) {
+          sendLayerRenderState('navigate_mvum_segments', {
+            requestFingerprint: requestFingerprint,
+            requestGeneration: payload && payload.requestGeneration,
+            enabled: true,
+            status: 'error',
+            source: payload.sourceType === 'vector' ? 'vector' : 'geojson',
+            featureCount: 0,
+            invalidFeatureCount: payload.invalidFeatureCount,
+            safeErrorCode: 'MAP_RENDER_FAILED'
+          });
+        }
       }
 
       function clearStitchedRoutePreviewLayersAndSources() {
@@ -4058,13 +4679,17 @@ function makeMapHtml(
           EXPLORE_PREVIEW_ROUTE_LAYER_ID,
           STAGED_ROUTE_OPTION_HALO_LAYER_ID,
           STAGED_ROUTE_OPTION_LAYER_ID,
-          ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID,
-          ACTIVE_GUIDANCE_ROUTE_LAYER_ID,
           'segment-layer',
-          'route-geometry-halo-layer',
-          'route-geometry-selected-layer',
+          MVUM_OVERLAY_HALO_LAYER_ID,
+          MVUM_OVERLAY_LAYER_ID,
+          ROUTE_GEOMETRY_HALO_LAYER_ID,
+          ROUTE_GEOMETRY_LAYER_ID,
+          MVUM_OVERLAY_SELECTED_LAYER_ID,
+          ROUTE_GEOMETRY_SELECTED_LAYER_ID,
           'trail-layer',
           'speed-layer',
+          ACTIVE_GUIDANCE_ROUTE_HALO_LAYER_ID,
+          ACTIVE_GUIDANCE_ROUTE_LAYER_ID,
           ACTIVE_GUIDANCE_ROUTE_PROGRESS_GLOW_LAYER_ID,
           ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID,
           'route-builder-halo-layer',
@@ -4247,7 +4872,7 @@ function makeMapHtml(
             }
           }
         } catch (e) {
-          sendLog('established campsite image registration failed: ' + String(e && e.message ? e.message : e));
+          sendLog('[ECS Map] warning code=CAMPSITE_IMAGE_REGISTRATION_FAILED');
         }
       }
 
@@ -4568,10 +5193,10 @@ function makeMapHtml(
 
       function findRouteGeometrySegmentFeatureAtPoint(point) {
         if (!map) return null;
-        if (!map.getLayer('route-geometry-selected-layer') && !map.getLayer('route-geometry-halo-layer')) return null;
+        if (!map.getLayer(ROUTE_GEOMETRY_SELECTED_LAYER_ID) && !map.getLayer(ROUTE_GEOMETRY_LAYER_ID)) return null;
         try {
           var features = map.queryRenderedFeatures(point, {
-            layers: ['route-geometry-selected-layer', 'route-geometry-halo-layer']
+            layers: [ROUTE_GEOMETRY_SELECTED_LAYER_ID, ROUTE_GEOMETRY_LAYER_ID, ROUTE_GEOMETRY_HALO_LAYER_ID]
           }) || [];
           return features.length ? features[0] : null;
         } catch (e) {
@@ -5355,6 +5980,7 @@ function makeMapHtml(
               snapMessage: segment.snapMessage || null,
               sourceSegmentId: segment.sourceSegmentId || null,
               buildSource: segment.buildSource || null,
+              geometryRole: segment.geometryRole || null,
               provisional: !!segment.provisional,
             };
           })
@@ -5419,6 +6045,8 @@ function makeMapHtml(
             .map(function(segment) {
               return lineFeature(segment.id, segment.coordinates, {
                 color: color || routeBuilderColor || '#65F0D4',
+                geometryRole: segment.geometryRole || (segment.snapStatus === 'snapped' ? 'snapped_draft' : 'raw_user_draft'),
+                unverified: segment.geometryRole === 'raw_user_draft' || segment.snapStatus !== 'snapped',
                 provisional: !!segment.provisional
               });
             })
@@ -5589,7 +6217,6 @@ function makeMapHtml(
         mapLayerRegistry.ensure(ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID, routeLineLayerDefinition(ACTIVE_GUIDANCE_ROUTE_PROGRESS_LAYER_ID, ACTIVE_GUIDANCE_ROUTE_PROGRESS_SOURCE_ID, ['get', 'color'], 6, 0.98));
         ensureLineLayer('segment-layer', 'segment-source', ['get', 'color'], 4, 0.92);
         ensureExploreRouteHaloLayer();
-        ensureRouteGeometryLayers();
         ensureCampsiteFinalAccessLayer();
         applySegmentLineStyle();
         ensureLineLayer('trail-layer', 'trail-source', ['get', 'color'], 3.5, 0.9);
@@ -5602,7 +6229,7 @@ function makeMapHtml(
           map.setPaintProperty(
             'route-builder-layer',
             'line-dasharray',
-            ['case', ['get', 'provisional'], [1.2, 1.1], [1, 0]]
+            ['case', ['get', 'provisional'], ['literal', [1.2, 1.1]], ['literal', [1, 0]]]
           );
         } catch (e) {}
         ensureCircleLayer('route-builder-endpoint-halo-layer', 'route-builder-endpoint-source', ['get', 'color'], 9, 0.18, 'rgba(8,14,18,0.92)', 2);
@@ -5720,7 +6347,7 @@ function makeMapHtml(
         });
       }
 
-      function updateRoute(coords, color, mode, routeLineKey) {
+      function updateRoute(coords, color, mode, routeLineKey, geometryRole) {
         applyRouteRenderMode(mode);
         var normalizedRouteLineKey = routeLineKey || null;
         var activeRouteSourceId = routeSourceIdForRenderMode(mode);
@@ -5729,7 +6356,11 @@ function makeMapHtml(
           lastRouteLineKey = normalizedRouteLineKey;
         }
         var fc = featureCollection(
-          coords && coords.length > 1 ? [lineFeature('route', coords, { color: color || '#2ECC71', routeLineKey: normalizedRouteLineKey })] : []
+          coords && coords.length > 1 ? [lineFeature('route', coords, {
+            color: color || '#2ECC71',
+            routeLineKey: normalizedRouteLineKey,
+            geometryRole: geometryRole || null
+          })] : []
         );
         clearRouteSourcesExcept(activeRouteSourceId);
         setGeoJson(activeRouteSourceId, fc);
@@ -5745,7 +6376,9 @@ function makeMapHtml(
       function updateSegments(segments) {
         var fc = featureCollection(
           (segments || [])
-            .filter(function(seg) { return seg.coordinates && seg.coordinates.length > 1; })
+            .filter(function(seg) {
+              return seg.kind !== 'route_geometry_segment' && seg.coordinates && seg.coordinates.length > 1;
+            })
             .map(function(seg) {
               var normalizedCoordinates = normalizeLngLatLine(seg.coordinates);
               return lineFeature(seg.id, normalizedCoordinates, {
@@ -6492,7 +7125,13 @@ function makeMapHtml(
           { label: 'route', segments: pendingPayload ? [{ id: 'route', coordinates: pendingPayload.routeCoords || [] }] : [] },
           { label: 'progress', segments: pendingPayload ? [{ id: 'progress', coordinates: pendingPayload.progressRouteCoords || [] }] : [] },
           { label: 'trail', segments: pendingPayload ? (pendingPayload.trailSegments || []) : [] },
-          { label: 'segment', segments: pendingPayload ? (pendingPayload.segments || []) : [] }
+          { label: 'segment', segments: pendingPayload ? (pendingPayload.segments || []) : [] },
+          {
+            label: 'route_geometry',
+            segments: pendingPayload && pendingPayload.routeGeometryOverlay
+              ? (pendingPayload.routeGeometryOverlay.segments || [])
+              : []
+          }
         ];
 
         groups.forEach(function(group) {
@@ -7403,7 +8042,7 @@ function makeMapHtml(
             }
           }
         } catch (e) {
-          sendLog('camera command failed: ' + String(e && e.message ? e.message : e));
+          sendLog('[ECS Map] warning code=CAMERA_COMMAND_FAILED');
         }
       }
 
@@ -7539,10 +8178,17 @@ function makeMapHtml(
       }
 
       function applyRouteOverlayPayload(payload) {
-        updateRoute(payload.routeCoords || [], payload.routeColor, payload.routeRenderMode, payload.routeLineKey);
+        updateRoute(
+          payload.routeCoords || [],
+          payload.routeColor,
+          payload.routeRenderMode,
+          payload.routeLineKey,
+          payload.routeGeometryRole
+        );
         updateRouteProgress(payload.progressRouteCoords || [], payload.progressColor);
         selectedRouteGeometrySegmentIds = buildDispersedRouteSelectedSet(payload.selectedRouteGeometrySegmentIds || []);
         updateSegments(payload.segments || []);
+        updateRouteGeometryOverlay(payload.routeGeometryOverlay || null);
         updateTrail(payload.trailSegments || []);
         updateSpeedTrail(payload.speedSegments || []);
         updateRemoteOverlay(payload.remoteOverlay || null);
@@ -7552,13 +8198,20 @@ function makeMapHtml(
       }
 
       function applyRouteBuilderPayload(payload) {
+        var routeBuilderPayloadActive = payload.routeBuilderActive === true;
         routeBuilderMode = payload.routeBuilderMode || 'freehand';
         routeBuilderColor = payload.routeBuilderColor || routeBuilderColor || '#65F0D4';
-        routeBuilderAnchors = payload.routeBuilderAnchors || [];
+        routeBuilderAnchors = routeBuilderPayloadActive ? (payload.routeBuilderAnchors || []) : [];
         routeBuilderLastAnchorTapCoordinate = routeBuilderAnchors.length
           ? routeBuilderAnchorCoordinate(routeBuilderAnchors[routeBuilderAnchors.length - 1])
           : null;
-        if (!routeBuilderIsDrawing) {
+        if (!routeBuilderPayloadActive) {
+          routeBuilderRawTraceSegments = [];
+          routeBuilderActiveRawSegmentId = null;
+          routeBuilderTraceSessionId = null;
+          routeBuilderDraftSegments = [];
+          resetRouteBuilderTraceRecovery();
+        } else if (!routeBuilderIsDrawing) {
           routeBuilderRawTraceSegments = [];
           routeBuilderActiveRawSegmentId = null;
           routeBuilderTraceSessionId = null;
@@ -7744,6 +8397,8 @@ function makeMapHtml(
           }
 
           send('mapReady', { ok: true });
+          sendBounds();
+          sendCenter();
           reportRoadClass();
         }, 'map:load');
 
@@ -7761,9 +8416,55 @@ function makeMapHtml(
           var msg = '';
           try {
             msg = e && e.error && e.error.message ? e.error.message : JSON.stringify(e);
-            sendLog('map error: ' + msg);
           } catch (err) {
-            sendLog('map error (unserializable)');
+            msg = '';
+          }
+
+          var failedSourceId = e && (
+            e.sourceId ||
+            (e.source && e.source.id) ||
+            (e.error && e.error.sourceId)
+          );
+          var safeMapErrorCode = failedSourceId === ROUTE_GEOMETRY_SOURCE_ID
+            ? 'ROUTE_GEOMETRY_SOURCE_ERROR'
+            : failedSourceId === MVUM_OVERLAY_SOURCE_ID
+              ? 'MVUM_SOURCE_ERROR'
+              : 'MAP_RUNTIME_ERROR';
+          sendLog('[ECS Map] error code=' + safeMapErrorCode);
+          var routeGeometryOverlay = pendingPayload && pendingPayload.routeGeometryOverlay;
+          var mvumOverlay = pendingPayload && pendingPayload.mvumOverlay;
+          if (
+            failedSourceId === ROUTE_GEOMETRY_SOURCE_ID &&
+            routeGeometryOverlay &&
+            routeGeometryOverlay.enabled === true
+          ) {
+            cancelLayerRenderVerification('navigate_route_geometry');
+            sendLayerRenderState('navigate_route_geometry', {
+              requestFingerprint: routeGeometryOverlay && routeGeometryOverlay.requestFingerprint,
+              requestGeneration: routeGeometryOverlay && routeGeometryOverlay.requestGeneration,
+              enabled: !!(routeGeometryOverlay && routeGeometryOverlay.enabled),
+              status: 'error',
+              source: 'geojson',
+              featureCount: 0,
+              invalidFeatureCount: routeGeometryOverlay && routeGeometryOverlay.invalidFeatureCount,
+              safeErrorCode: 'MAP_SOURCE_ERROR'
+            });
+          } else if (
+            failedSourceId === MVUM_OVERLAY_SOURCE_ID &&
+            mvumOverlay &&
+            mvumOverlay.enabled === true
+          ) {
+            cancelLayerRenderVerification('navigate_mvum_segments');
+            sendLayerRenderState('navigate_mvum_segments', {
+              requestFingerprint: mvumOverlay && mvumOverlay.requestFingerprint,
+              requestGeneration: mvumOverlay && mvumOverlay.requestGeneration,
+              enabled: !!(mvumOverlay && mvumOverlay.enabled),
+              status: 'error',
+              source: mvumOverlay && mvumOverlay.sourceType === 'vector' ? 'vector' : 'geojson',
+              featureCount: 0,
+              invalidFeatureCount: mvumOverlay && mvumOverlay.invalidFeatureCount,
+              safeErrorCode: 'MAP_SOURCE_ERROR'
+            });
           }
 
           var failedStyleUrl = activeStyleUrl || requestedStyleUrl || null;
@@ -8309,6 +9010,8 @@ function makeMapHtml(
       }
 
       window.addEventListener('beforeunload', function() {
+        cancelLayerRenderVerification('navigate_route_geometry');
+        cancelLayerRenderVerification('navigate_mvum_segments');
         if (mapListenerRegistry && mapListenerRegistry.removeAll) {
           mapListenerRegistry.removeAll();
         }
@@ -8465,12 +9168,14 @@ const MapRenderer = React.memo(function MapRenderer({
   onUserLocationTap,
   onRoadClassification,
   onMapLifecycleMetrics,
+  onLayerRenderState,
   vehicleHeading = null,
   motionPriority = 'hot',
   isLoading = false,
   hasToken = true,
   onRetry,
   onReadyStateChange,
+  onBootStateChange,
   campsites = [],
   tiltAlerts = [],
   campsiteMarkers = [],
@@ -8492,6 +9197,10 @@ const MapRenderer = React.memo(function MapRenderer({
   routeBuilderMode = 'freehand',
   routeBuilderSegments = [],
   routeBuilderAnchors = [],
+  selectedRouteGeometrySegmentIds = [],
+  routeGeometryOverlayEnabled,
+  routeGeometryRequestFingerprint = null,
+  routeGeometryInvalidFeatureCount = 0,
   routeBuilderColor = '#65F0D4',
   routeProfileFocus = null,
   onRouteBuilderUpdate,
@@ -8741,7 +9450,6 @@ const MapRenderer = React.memo(function MapRenderer({
     [html],
   );
   const hasHandledInitialCenterTriggerRef = useRef(false);
-  const hasHandledInitialBoundsTriggerRef = useRef(false);
 
   const clearFailSafeTimer = useCallback(() => {
     if (failSafeTimerRef.current) {
@@ -8794,7 +9502,6 @@ const MapRenderer = React.memo(function MapRenderer({
     lastCameraCommandHashRef.current = '';
     lastLegacyFollowHashRef.current = '';
     hasHandledInitialCenterTriggerRef.current = false;
-    hasHandledInitialBoundsTriggerRef.current = false;
     loadStartedInstanceKeyRef.current = null;
     failSafeArmedInstanceKeyRef.current = null;
     bootstrapAcknowledgedInstanceKeyRef.current = null;
@@ -8825,7 +9532,6 @@ const MapRenderer = React.memo(function MapRenderer({
     lastCameraCommandHashRef.current = '';
     lastLegacyFollowHashRef.current = '';
     hasHandledInitialCenterTriggerRef.current = false;
-    hasHandledInitialBoundsTriggerRef.current = false;
     bootstrapAcknowledgedInstanceKeyRef.current = null;
     startupSettledRef.current = false;
     definitiveReadyInstanceKeyRef.current = null;
@@ -8925,6 +9631,10 @@ const MapRenderer = React.memo(function MapRenderer({
         routeBuilderMode,
         routeBuilderSegments,
         routeBuilderAnchors,
+        selectedRouteGeometrySegmentIds,
+        routeGeometryOverlayEnabled,
+        routeGeometryRequestFingerprint,
+        routeGeometryInvalidFeatureCount,
         routeBuilderColor,
         routeProfileFocus,
         remoteOverlay,
@@ -8975,6 +9685,10 @@ const MapRenderer = React.memo(function MapRenderer({
       routeBuilderMode,
       routeBuilderSegments,
       routeBuilderAnchors,
+      selectedRouteGeometrySegmentIds,
+      routeGeometryOverlayEnabled,
+      routeGeometryRequestFingerprint,
+      routeGeometryInvalidFeatureCount,
       routeBuilderColor,
       routeProfileFocus,
       remoteOverlay,
@@ -9037,6 +9751,11 @@ const MapRenderer = React.memo(function MapRenderer({
     clearPendingMapMessages();
   }, [clearPendingMapMessages, motionPriority, standbyMapActive]);
 
+  const routeBuilderFallbackOverlay = useMemo(
+    () => buildRouteBuilderFallbackOverlay(payload),
+    [payload],
+  );
+
   const fallbackMarkers = useMemo(
     () => [
       ...(payload.waypoints || []).map((marker) => ({ ...marker, color: '#F2C24D', type: 'waypoint' })),
@@ -9055,16 +9774,19 @@ const MapRenderer = React.memo(function MapRenderer({
         type: 'dispatchPing',
         mapChar: '!',
       })),
+      ...routeBuilderFallbackOverlay.markers,
     ],
-    [payload.bailouts, payload.campScoutPins, payload.convoyMarkers, payload.dispatchPingMarkers, payload.pins, payload.waypoints],
+    [payload.bailouts, payload.campScoutPins, payload.convoyMarkers, payload.dispatchPingMarkers, payload.pins, payload.waypoints, routeBuilderFallbackOverlay.markers],
   );
   const fallbackSegments = useMemo(
     () => [
       ...(payload.segments || []),
+      ...(payload.routeGeometryOverlay?.segments || []),
       ...(payload.trailSegments || []),
       ...(payload.speedSegments || []),
+      ...routeBuilderFallbackOverlay.segments,
     ],
-    [payload.segments, payload.speedSegments, payload.trailSegments],
+    [payload.routeGeometryOverlay, payload.segments, payload.speedSegments, payload.trailSegments, routeBuilderFallbackOverlay.segments],
   );
   const fallbackOnlyRouteCoords = useMemo(
     () => normalizePointList(fallbackRoutePoints),
@@ -9147,6 +9869,31 @@ const MapRenderer = React.memo(function MapRenderer({
     : routeContinuityFallbackVisible || webBootIssue || webBootTimedOut || webRendererCrashBlocked
       ? 'Map fallback active'
       : null;
+  const bootPresentationState = useMemo<MapRendererBootState>(() => {
+    if (!shouldLoadMap || liveMapDisabled) return 'disabled';
+    if (standbyMapActive || motionPriority === 'cold' || webReady || hasEverReachedReadyRef.current) {
+      return 'ready';
+    }
+    if (shouldRenderFallbackSurface && (webBootTimedOut || webRendererCrashBlocked || !!webBootIssue)) {
+      return 'degraded';
+    }
+    if (webBootTimedOut || webRendererCrashBlocked || !!webBootIssue) return 'error';
+    return 'loading';
+  }, [
+    liveMapDisabled,
+    motionPriority,
+    shouldLoadMap,
+    shouldRenderFallbackSurface,
+    standbyMapActive,
+    webBootIssue,
+    webBootTimedOut,
+    webReady,
+    webRendererCrashBlocked,
+  ]);
+
+  useEffect(() => {
+    onBootStateChange?.(bootPresentationState);
+  }, [bootPresentationState, onBootStateChange]);
   const dispersedCampingEligibilityRef = useRef(dispersedCampingEligibility);
   dispersedCampingEligibilityRef.current = dispersedCampingEligibility;
   const dispersedRouteBuildRef = useRef(dispersedRouteBuild);
@@ -9579,11 +10326,6 @@ const MapRenderer = React.memo(function MapRenderer({
     if (!shouldLoadMap || !webReady) return;
     if (typeof requestBoundsTrigger !== 'number') return;
 
-    if (!hasHandledInitialBoundsTriggerRef.current) {
-      hasHandledInitialBoundsTriggerRef.current = true;
-      return;
-    }
-
     postToMap({ type: 'requestBounds' });
   }, [requestBoundsTrigger, shouldLoadMap, webReady, postToMap]);
 
@@ -9797,6 +10539,15 @@ const MapRenderer = React.memo(function MapRenderer({
         onMapLifecycleMetrics?.(payload);
         return;
 
+      case 'layerRenderState':
+        if (
+          payload?.surfaceId === 'navigate_route_geometry' ||
+          payload?.surfaceId === 'navigate_mvum_segments'
+        ) {
+          onLayerRenderState?.(payload as NavigateMapLayerRenderState);
+        }
+        return;
+
       case 'styleFallbackExhausted':
         debugLog('[MapRenderer] style fallback exhausted', payload);
         return;
@@ -9830,6 +10581,7 @@ const MapRenderer = React.memo(function MapRenderer({
     onRouteBuilderGestureStateChange,
     onRoadClassification,
     onMapLifecycleMetrics,
+    onLayerRenderState,
     scheduleConstructorRetry,
   ]);
 
@@ -9962,7 +10714,13 @@ const MapRenderer = React.memo(function MapRenderer({
               : 'Map is still loading.'}
           </Text>
           {!!onRetry && (
-            <Text style={styles.placeholderHint}>Use your existing retry control to reinitialize the map surface.</Text>
+            <ECSButton
+              label="Retry map"
+              onPress={() => void onRetry()}
+              variant="secondary"
+              size="compact"
+              accessibilityHint="Requests a fresh map token and reinitializes the map surface."
+            />
           )}
         </View>
       ) : null}
@@ -9984,9 +10742,23 @@ const MapRenderer = React.memo(function MapRenderer({
         />
       ) : null}
 
+      {shouldRenderFallbackSurface
+        && bootPresentationState === 'degraded'
+        && onRetry ? (
+          <View pointerEvents="box-none" style={styles.fallbackRetryOverlay}>
+            <ECSButton
+              label="Retry live map"
+              onPress={() => void onRetry()}
+              variant="secondary"
+              size="compact"
+              accessibilityHint="Keeps the fallback visible while requesting a fresh live map."
+            />
+          </View>
+        ) : null}
+
       {showBootOverlay && !shouldRenderFallbackSurface && (
         <View style={styles.loadingOverlay}>
-          {!webBootTimedOut ? (
+          {!webBootTimedOut && !webBootIssue && !webRendererCrashBlocked ? (
             <>
               <ActivityIndicator size="large" color="#FFD700" />
               <Text style={styles.loadingTitle}>Initializing tactical surface…</Text>
@@ -10000,9 +10772,13 @@ const MapRenderer = React.memo(function MapRenderer({
                   : 'Tactical surface is taking longer than expected to boot.'}
               </Text>
               {!!onRetry && (
-                <Text style={styles.loadingHint}>
-                  Use your existing retry control to reinitialize the map surface.
-                </Text>
+                <ECSButton
+                  label="Retry map"
+                  onPress={() => void onRetry()}
+                  variant="secondary"
+                  size="compact"
+                  accessibilityHint="Requests a fresh map token and reinitializes the map surface."
+                />
               )}
             </>
           )}
@@ -10109,5 +10885,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 16,
     opacity: 0.9,
+  },
+  fallbackRetryOverlay: {
+    position: 'absolute',
+    top: 54,
+    right: 12,
+    zIndex: 18,
+    elevation: 18,
   },
 });

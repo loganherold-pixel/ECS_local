@@ -194,7 +194,18 @@ function buildProgressFromActiveGuidance(
     distanceFromRouteMeters: 0,
     distanceRemainingOnCurrentStepMeters: currentStep?.distanceMeters ?? null,
     nearestRoutePoint: null,
+    progressRoutePoint: null,
     nearestStepPoint: null,
+    routeDistanceFromStartMeters: Math.max(
+      0,
+      activeGuidance.distanceMeters - remainingSteps.reduce(
+        (sum, step) => sum + (finiteNumber(step.distanceMeters) ?? 0),
+        0,
+      ),
+    ),
+    projectionStatus: 'degraded',
+    completedRouteGeometry: [],
+    remainingRouteGeometry: activeGuidance.geometry.map((point) => ({ ...point })),
     currentStep: currentStep ?? undefined,
     nextStep: nextStep ?? undefined,
     followingStep: followingStep ?? undefined,

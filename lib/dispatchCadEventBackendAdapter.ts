@@ -24,8 +24,15 @@ export interface DispatchCadEventBackendResult {
 export interface DispatchCadEventFetchResult {
   ok: boolean;
   unavailable?: boolean;
+  cancelled?: boolean;
+  timedOut?: boolean;
   error?: string;
   events: DispatchEvent[];
+}
+
+export interface DispatchCadEventFetchOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 type DispatchCadEventRow = {
@@ -158,6 +165,7 @@ export async function upsertDispatchCadEventToBackend(
 
 export async function fetchDispatchCadEventsFromBackend(
   context: DispatchCadEventBackendContext,
+  options: DispatchCadEventFetchOptions = {},
 ): Promise<DispatchCadEventFetchResult> {
   if (!isSupabaseConfigured) {
     return {
@@ -172,15 +180,57 @@ export async function fetchDispatchCadEventsFromBackend(
     return { ok: false, error: 'Missing team/session context for CAD event fetch.', events: [] };
   }
 
-  const { data, error } = await supabase
-    .from(DISPATCH_CAD_EVENTS_TABLE)
-    .select('*')
-    .eq('team_id', context.teamId)
-    .eq('session_id', context.sessionId)
-    .order('created_at', { ascending: false })
-    .limit(100);
+  if (options.signal?.aborted) {
+    return { ok: false, cancelled: true, error: 'Dispatch CAD fetch cancelled.', events: [] };
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = Math.max(250, options.timeoutMs ?? 10_000);
+  let timedOut = false;
+  const onAbort = () => controller.abort();
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  let data: unknown;
+  let error: { message: string } | null = null;
+  try {
+    const result = await supabase
+      .from(DISPATCH_CAD_EVENTS_TABLE)
+      .select('*')
+      .eq('team_id', context.teamId)
+      .eq('session_id', context.sessionId)
+      .order('created_at', { ascending: false })
+      .limit(100)
+      .abortSignal(controller.signal);
+    data = result.data;
+    error = result.error;
+  } catch (requestError) {
+    if (timedOut) {
+      return { ok: false, timedOut: true, error: 'Dispatch CAD fetch timed out.', events: [] };
+    }
+    if (options.signal?.aborted || controller.signal.aborted) {
+      return { ok: false, cancelled: true, error: 'Dispatch CAD fetch cancelled.', events: [] };
+    }
+    return {
+      ok: false,
+      error: requestError instanceof Error ? requestError.message : 'Dispatch CAD fetch failed.',
+      events: [],
+    };
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener('abort', onAbort);
+  }
 
   if (error) {
+    if (timedOut) {
+      return { ok: false, timedOut: true, error: 'Dispatch CAD fetch timed out.', events: [] };
+    }
+    if (options.signal?.aborted || controller.signal.aborted) {
+      return { ok: false, cancelled: true, error: 'Dispatch CAD fetch cancelled.', events: [] };
+    }
     return { ok: false, error: error.message, events: [] };
   }
 

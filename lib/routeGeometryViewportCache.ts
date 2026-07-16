@@ -2,6 +2,7 @@ import { createPersistedKeyValueCache } from './keyValuePersistence';
 import {
   buildRouteGeometryViewportCacheKey,
   normalizeRouteGeometryViewportBbox,
+  normalizeRouteGeometrySourceProviderPrefix,
   type RouteGeometryViewportBbox,
   type RouteGeometryViewportResult,
 } from './routeGeometryViewport';
@@ -14,6 +15,7 @@ const persistence = createPersistedKeyValueCache(ROUTE_GEOMETRY_VIEWPORT_CACHE_F
 export type RouteGeometryViewportOfflineCacheLookup = {
   bbox: RouteGeometryViewportBbox;
   cacheKey: string;
+  sourceProviderPrefix?: string | null;
 };
 
 export type RouteGeometryViewportOfflineCacheEntry = RouteGeometryViewportOfflineCacheLookup & {
@@ -40,13 +42,18 @@ function parseEntry(raw: string | null, now = Date.now()): RouteGeometryViewport
 export function resolveRouteGeometryViewportOfflineCacheLookup(
   bbox: RouteGeometryViewportBbox | null | undefined,
   zoom: number,
-  options: { includeReferenceGeometry?: boolean; vehicleClass?: string | null } = {},
+  options: {
+    includeReferenceGeometry?: boolean;
+    vehicleClass?: string | null;
+    sourceProviderPrefix?: string | null;
+  } = {},
 ): RouteGeometryViewportOfflineCacheLookup | null {
   const normalized = normalizeRouteGeometryViewportBbox(bbox);
   if (!normalized) return null;
   return {
     bbox: normalized,
     cacheKey: buildRouteGeometryViewportCacheKey(normalized, zoom, options),
+    sourceProviderPrefix: normalizeRouteGeometrySourceProviderPrefix(options.sourceProviderPrefix),
   };
 }
 

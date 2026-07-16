@@ -36,8 +36,8 @@ assertNotIncludes(
   'Consumer option changes must not remove and re-register the same shared consumer id.',
 );
 assertIncludes(
-  'if (previousSignature === nextSignature) {\n    if (previousActiveConsumerCount > 0) {\n      cancelNoConsumerCleanup();\n    }\n    return;\n  }',
-  'Duplicate registrations with the same signature should be ignored.',
+  'if (previousSignature === nextSignature) {\n    if (previousActiveConsumerCount > 0) {\n      cancelNoConsumerCleanup();\n      ensureSharedWeatherAppStateSubscription();\n      void syncSharedOperationalWeather(false);\n    }\n    return;\n  }',
+  'Duplicate registrations should retain foreground refresh handling and resync through the deduped broker.',
 );
 assertIncludes(
   'if (previousActiveConsumerCount !== nextActiveConsumerCount) {',

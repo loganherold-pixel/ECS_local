@@ -45,6 +45,7 @@ import { getTopBannerToneColor, resolveProfileCommandStatus, resolveTopBannerPre
 import type { ECSTopBannerCommandContext } from '../../lib/ui/topBannerTypes';
 import { resolveAccountUx } from '../../lib/auth/accountUXResolver';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
+import { useReducedMotion, useStableAnimatedValue } from '../../lib/ecsAnimations';
 import { bluPowerAuthority, type BluAuthoritySnapshot } from '../../lib/BluPowerAuthority';
 import { useEcsProviders } from '../../lib/useEcsProviders';
 import { ecsLog } from '../../lib/ecsLogger';
@@ -53,7 +54,6 @@ import { VISIBILITY_THEME_CYCLE } from '../../lib/appearanceStore';
 import { resolveShellChromeTheme } from '../../lib/ui/shellChromeTheme';
 import TopBannerBackground from '../TopBannerBackground';
 import { useEcsTopBannerHeight } from '../ECSGlobalBanner';
-import { useStableAnimatedValue } from '../../lib/ecsAnimations';
 import { useEcsBriefTopBannerMessage } from '../../lib/useEcsBriefTopBannerMessage';
 import { openUnifiedBluetoothCommand } from '../../lib/bluetoothCommandNavigation';
 
@@ -103,6 +103,7 @@ export default function DashboardHeader({
   collapsed = false,
   commandContext,
 }: DashboardHeaderProps) {
+  const reducedMotion = useReducedMotion();
   const router = useRouter();
   const {
     syncStatus,
@@ -232,17 +233,17 @@ export default function DashboardHeader({
   useEffect(() => {
     Animated.timing(collapseAnim, {
       toValue: collapsed ? 1 : 0,
-      duration: collapsed ? 220 : 260,
+      duration: reducedMotion ? 0 : collapsed ? 220 : 260,
       useNativeDriver: false,
     }).start();
-  }, [collapseAnim, collapsed]);
+  }, [collapseAnim, collapsed, reducedMotion]);
 
   useEffect(() => {
     if (briefTopBanner) {
       setDisplayBriefBanner(briefTopBanner);
       Animated.timing(briefBannerAnim, {
         toValue: 1,
-        duration: 260,
+        duration: reducedMotion ? 0 : 260,
         useNativeDriver: true,
       }).start();
       return;
@@ -250,14 +251,14 @@ export default function DashboardHeader({
 
     Animated.timing(briefBannerAnim, {
       toValue: 0,
-      duration: 320,
+      duration: reducedMotion ? 0 : 320,
       useNativeDriver: true,
     }).start(({ finished }) => {
       if (finished) {
         setDisplayBriefBanner(null);
       }
     });
-  }, [briefBannerAnim, briefTopBanner]);
+  }, [briefBannerAnim, briefTopBanner, reducedMotion]);
 
   const hasActiveExpeditionContext = useMemo(() => {
     if (expeditionState === 'active' || hasRouteSelected) return true;
@@ -340,7 +341,7 @@ export default function DashboardHeader({
   const titleText = title ?? 'Expedition Command';
 
   useEffect(() => {
-    if (!bannerStatus.processingActive) {
+    if (!bannerStatus.processingActive || reducedMotion) {
       syncSpin.stopAnimation();
       syncSpin.setValue(0);
       return;
@@ -360,7 +361,7 @@ export default function DashboardHeader({
       syncSpin.stopAnimation();
       syncSpin.setValue(0);
     };
-  }, [bannerStatus.processingActive, syncSpin]);
+  }, [bannerStatus.processingActive, reducedMotion, syncSpin]);
 
   const handleEndExpedition = useCallback(() => {
     setProfilePanelVisible(false);

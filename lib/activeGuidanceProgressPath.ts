@@ -1,4 +1,5 @@
 import type { NavigateRouteMapPoint } from './navigateRouteSessionStore';
+import { resolveGuidanceRouteProgress } from './navigation/guidanceRouteProjection';
 
 type CoordinateLike = {
   lat?: number | null;
@@ -18,10 +19,13 @@ export type ActiveGuidanceProgressPathInput = {
   routePoints?: CoordinateLike[] | null;
   progressPoints?: CoordinateLike[] | null;
   currentLocation?: CoordinateLike;
+  snappedLocation?: CoordinateLike;
+  isOffRoute?: boolean | null;
+  accuracyM?: number | null;
+  headingDeg?: number | null;
 };
 
 const DUPLICATE_EPSILON_DEGREES = 0.000001;
-const EARTH_RADIUS_M = 6371000;
 const DEFAULT_ACTIVE_GUIDANCE_SNAP_DISTANCE_M = 42;
 
 function normalizeCoordinate(point: CoordinateLike): NavigateRouteMapPoint | null {
@@ -61,64 +65,16 @@ function sameCoordinate(a: NavigateRouteMapPoint, b: NavigateRouteMapPoint): boo
   );
 }
 
-function distanceMeters(a: NavigateRouteMapPoint, b: NavigateRouteMapPoint): number {
-  const lat1 = (a.lat * Math.PI) / 180;
-  const lat2 = (b.lat * Math.PI) / 180;
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return EARTH_RADIUS_M * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-}
-
-function projectPointToSegmentMeters(
-  point: NavigateRouteMapPoint,
-  start: NavigateRouteMapPoint,
-  end: NavigateRouteMapPoint,
-): { point: NavigateRouteMapPoint; distanceM: number } {
-  const originLatRad = (point.lat * Math.PI) / 180;
-  const metersPerDegreeLat = 111320;
-  const metersPerDegreeLng = Math.max(1, 111320 * Math.cos(originLatRad));
-  const sx = (start.lng - point.lng) * metersPerDegreeLng;
-  const sy = (start.lat - point.lat) * metersPerDegreeLat;
-  const ex = (end.lng - point.lng) * metersPerDegreeLng;
-  const ey = (end.lat - point.lat) * metersPerDegreeLat;
-  const vx = ex - sx;
-  const vy = ey - sy;
-  const lengthSquared = vx * vx + vy * vy;
-  const t = lengthSquared > 0 ? Math.max(0, Math.min(1, -(sx * vx + sy * vy) / lengthSquared)) : 0;
-  const projectedX = sx + vx * t;
-  const projectedY = sy + vy * t;
-  const projected = {
-    lat: point.lat + projectedY / metersPerDegreeLat,
-    lng: point.lng + projectedX / metersPerDegreeLng,
-  };
-  return {
-    point: projected,
-    distanceM: distanceMeters(point, projected),
-  };
-}
-
-function projectPointToRoute(
-  point: NavigateRouteMapPoint,
-  routePoints: NavigateRouteMapPoint[],
-): { point: NavigateRouteMapPoint; distanceM: number } | null {
-  if (routePoints.length < 2) return null;
-  let best: { point: NavigateRouteMapPoint; distanceM: number } | null = null;
-  for (let index = 1; index < routePoints.length; index += 1) {
-    const candidate = projectPointToSegmentMeters(point, routePoints[index - 1], routePoints[index]);
-    if (!best || candidate.distanceM < best.distanceM) best = candidate;
-  }
-  return best;
-}
-
 export function resolveActiveGuidanceDisplayLocation(input: ActiveGuidanceProgressPathInput & {
   maxSnapDistanceM?: number | null;
 }): NavigateRouteMapPoint | null {
   const liveLocation = normalizeCoordinate(input.currentLocation);
   if (!liveLocation) return null;
   if (!input.active) return liveLocation;
+  if (input.isOffRoute === true) return liveLocation;
+
+  const acceptedSnappedLocation = normalizeCoordinate(input.snappedLocation);
+  if (acceptedSnappedLocation) return acceptedSnappedLocation;
 
   const maxSnapDistanceM =
     typeof input.maxSnapDistanceM === 'number' && Number.isFinite(input.maxSnapDistanceM)
@@ -126,16 +82,17 @@ export function resolveActiveGuidanceDisplayLocation(input: ActiveGuidanceProgre
       : DEFAULT_ACTIVE_GUIDANCE_SNAP_DISTANCE_M;
 
   const progressPoints = normalizeCoordinateList(input.progressPoints);
-  const progressProjection = projectPointToRoute(liveLocation, progressPoints);
-  if (progressProjection && progressProjection.distanceM <= maxSnapDistanceM) {
-    return progressProjection.point;
-  }
-
   const routePoints = normalizeCoordinateList(input.routePoints);
-  const projection = projectPointToRoute(liveLocation, routePoints);
-  return projection && projection.distanceM <= maxSnapDistanceM
-    ? projection.point
-    : liveLocation;
+  const projectionGeometry = progressPoints.length > 1 ? progressPoints : routePoints;
+  const projection = resolveGuidanceRouteProgress({
+    rawPosition: liveLocation,
+    routeGeometry: projectionGeometry,
+    context: 'road',
+    accuracyM: input.accuracyM,
+    headingDeg: input.headingDeg,
+    snapToleranceM: maxSnapDistanceM,
+  });
+  return projection.snappedPosition ?? liveLocation;
 }
 
 export function buildActiveGuidanceProgressPath(input: ActiveGuidanceProgressPathInput): NavigateRouteMapPoint[] {

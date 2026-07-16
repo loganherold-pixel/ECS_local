@@ -2,6 +2,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { attachCurrentConditionOverlays } from '../_shared/routeCatalogCurrentConditionOverlay.ts';
+import {
+  buildSafeRouteCatalogDiagnostic,
+  hasRestrictedRouteCatalogSource,
+  normalizeRouteCatalogPagination,
+  partitionRestrictedRouteCatalogRecords,
+  ROUTE_CATALOG_MAX_PAGINATION_WINDOW,
+  type RouteCatalogSafeDiagnosticRecord,
+} from './providerContract.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -33,12 +41,6 @@ function createAdminClient() {
 function readNumber(value: unknown): number | null {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
-}
-
-function cleanLimit(value: unknown): number {
-  const limit = readNumber(value);
-  if (!limit) return 200;
-  return Math.max(1, Math.min(500, Math.round(limit)));
 }
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
@@ -372,7 +374,7 @@ function routeTrailhead(record: Record<string, unknown>): { latitude: number; lo
   );
 }
 
-function geometryLines(record: Record<string, unknown>): Array<Array<{ latitude: number; longitude: number }>> {
+function geometryLines(record: Record<string, unknown>): { latitude: number; longitude: number }[][] {
   const geometry = readRecord(record.route_geometry ?? record.routeGeometry ?? record.geometry);
   if (!geometry) return [];
   const type = cleanText(geometry.type);
@@ -573,10 +575,12 @@ function compareDiscoveryRecords(a: Record<string, unknown>, b: Record<string, u
   if (distanceDelta !== 0) return distanceDelta;
   const confidenceDelta = confidenceScore(b) - confidenceScore(a);
   if (confidenceDelta !== 0) return confidenceDelta;
-  return updatedAtTime(b) - updatedAtTime(a);
+  const updatedAtDelta = updatedAtTime(b) - updatedAtTime(a);
+  if (updatedAtDelta !== 0) return updatedAtDelta;
+  return cleanText(a.id).localeCompare(cleanText(b.id));
 }
 
-async function countRouteCatalogCurationCandidates(
+async function inspectRouteCatalogCurationCandidates(
   admin: ReturnType<typeof createAdminClient>,
   args: {
     latitude: number | null;
@@ -597,17 +601,34 @@ async function countRouteCatalogCurationCandidates(
     difficulty: string;
     vehicleClass: string;
   },
-): Promise<{ curationCandidateCount: number }> {
+): Promise<{
+  curationCandidateCount: number;
+  diagnosticRecords: RouteCatalogSafeDiagnosticRecord[];
+}> {
   const hasRadiusCriteria = args.latitude != null && args.longitude != null && args.radiusMiles != null;
   let query = admin
     .from('verified_routes')
     .select([
       'id',
+      'public_id',
+      'name',
       'center_latitude',
       'center_longitude',
       'distance_miles',
       'estimated_duration_minutes',
       'vehicle_fit',
+      'route_type',
+      'geometry_quality',
+      'verification_status',
+      'official_access_coverage_pct',
+      'unknown_access_coverage_pct',
+      'restricted_access_coverage_pct',
+      'active_closure_count',
+      'seasonal_restriction_count',
+      'vehicle_mismatch',
+      'blocker_reasons',
+      'warning_reasons',
+      'stale_at',
       'recommendation_status',
       'review_status',
       'confidence_score',
@@ -659,9 +680,17 @@ async function countRouteCatalogCurationCandidates(
     longitude: args.longitude,
     radiusMiles: args.radiusMiles,
   });
+  const diagnosticCandidates = await attachSourceRecords(
+    admin,
+    radiusFiltered.records.slice(0, 50),
+  );
+  const diagnosticRecords = diagnosticCandidates
+    .map(buildSafeRouteCatalogDiagnostic)
+    .filter((diagnostic): diagnostic is RouteCatalogSafeDiagnosticRecord => !!diagnostic);
 
   return {
     curationCandidateCount: radiusFiltered.radiusMatchedCount,
+    diagnosticRecords,
   };
 }
 
@@ -707,11 +736,15 @@ function shapeSearchRecords(
   includeGeometry: boolean,
   includePreviewGeometry: boolean,
 ): Record<string, unknown>[] {
+  // Defense in depth: restricted partner rows are partitioned before this
+  // function. If a future caller bypasses that partition, geometry still does
+  // not cross the Edge serialization boundary.
+  const publishableRecords = records.filter((record) => !hasRestrictedRouteCatalogSource(record));
   if (includeGeometry) {
-    return records.map((record) => ({ ...record, route_geometry_mode: 'full' }));
+    return publishableRecords.map((record) => ({ ...record, route_geometry_mode: 'full' }));
   }
 
-  return records.map((record) => {
+  return publishableRecords.map((record) => {
     const shaped = { ...record };
     const previewGeometry = includePreviewGeometry ? simplifyGeometryForPreview(record.route_geometry) : null;
     delete shaped.route_geometry;
@@ -797,9 +830,9 @@ async function inspectKnownRouteDiagnostics(
   admin: ReturnType<typeof createAdminClient>,
   expectedRoutes: string[],
   matchedRecords: Record<string, unknown>[],
-): Promise<Array<Record<string, unknown>>> {
+): Promise<Record<string, unknown>[]> {
   if (expectedRoutes.length === 0) return [];
-  const diagnostics: Array<Record<string, unknown>> = [];
+  const diagnostics: Record<string, unknown>[] = [];
   for (const known of ROUTE_CATALOG_KNOWN_FEATURED_ROUTES) {
     const requested = known.aliases.some((alias) => expectedRoutes.includes(cleanSearchToken(alias)));
     if (!requested) continue;
@@ -883,7 +916,15 @@ serve(async (req) => {
 
   try {
     const params = await requestParams(req);
-    const limit = cleanLimit(params.limit);
+    const pagination = normalizeRouteCatalogPagination(params);
+    if (pagination.windowExceeded) {
+      return jsonResponse({
+        ok: false,
+        error: `Requested route catalog page exceeds the bounded ${ROUTE_CATALOG_MAX_PAGINATION_WINDOW}-record search window.`,
+        safeErrorCode: 'ROUTE_CATALOG_PAGINATION_WINDOW_EXCEEDED',
+      }, 400);
+    }
+    const { page, pageSize, offset, windowEnd } = pagination;
     const includeGeometry = readBoolean(params.includeGeometry ?? params.include_geometry, false);
     const includePreviewGeometry = readBoolean(
       params.includePreviewGeometry ?? params.include_preview_geometry,
@@ -918,7 +959,10 @@ serve(async (req) => {
       ? []
       : expectedKnownRoutes(params.expectedKnownRoutes ?? params.expected_known_routes);
     const hasRadiusCriteria = latitude != null && longitude != null && radiusMiles != null;
-    const queryLimit = candidateLimit(limit, hasRadiusCriteria);
+    // Fetch one record beyond the requested window when the bounded candidate
+    // policy permits it, so `hasMore` is evidence-backed instead of inferred
+    // from a completely filled page.
+    const queryLimit = candidateLimit(windowEnd + 1, hasRadiusCriteria);
 
     const admin = createAdminClient();
     let query = admin
@@ -927,6 +971,7 @@ serve(async (req) => {
       .eq('review_status', 'approved')
       .order('confidence_score', { ascending: false })
       .order('updated_at', { ascending: false })
+      .order('id', { ascending: true })
       .limit(queryLimit);
 
     if (recommendationOnly) query = query.eq('recommendation_status', 'recommendable');
@@ -971,9 +1016,9 @@ serve(async (req) => {
       const sourcedRadiusRecords = await attachSourceRecords(admin, radiusFiltered.records);
       const sourceMatchedRecords = filterRecordsBySourceAdapter(sourcedRadiusRecords, sourceAdapter);
       sourceMatchedCount = sourceMatchedRecords.length;
-      limitedRecords = sourceMatchedRecords.slice(0, limit);
+      limitedRecords = sourceMatchedRecords.slice(offset, windowEnd);
     } else {
-      limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(0, limit));
+      limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(offset, windowEnd));
     }
     const knownRouteDiagnostics = skipCoverageDiagnostics
       ? []
@@ -983,8 +1028,8 @@ serve(async (req) => {
         sourceAdapter ? limitedRecords : radiusFiltered.records,
       );
     const curationCoverage = skipCoverageDiagnostics
-      ? { curationCandidateCount: 0 }
-      : await countRouteCatalogCurationCandidates(admin, {
+      ? { curationCandidateCount: 0, diagnosticRecords: [] as RouteCatalogSafeDiagnosticRecord[] }
+      : await inspectRouteCatalogCurationCandidates(admin, {
         latitude,
         longitude,
         radiusMiles,
@@ -1005,16 +1050,41 @@ serve(async (req) => {
       });
     const anySourceBackedCandidateCount = radiusFiltered.radiusMatchedCount + curationCoverage.curationCandidateCount;
 
-    const records = attachCurrentConditionOverlays(shapeSearchRecords(
-      limitedRecords,
+    const conditionAwareRecords = attachCurrentConditionOverlays(limitedRecords);
+    const restrictedPartition = partitionRestrictedRouteCatalogRecords(conditionAwareRecords);
+    const records = shapeSearchRecords(
+      restrictedPartition.records,
       includeGeometry,
       includePreviewGeometry,
-    ));
+    );
+    const diagnosticRecordsByRouteId = new Map<string, RouteCatalogSafeDiagnosticRecord>();
+    [...restrictedPartition.diagnosticRecords, ...curationCoverage.diagnosticRecords].forEach((diagnostic) => {
+      const existing = diagnosticRecordsByRouteId.get(diagnostic.routeId);
+      diagnosticRecordsByRouteId.set(diagnostic.routeId, existing
+        ? {
+            ...existing,
+            exclusionReasons: Array.from(new Set([
+              ...existing.exclusionReasons,
+              ...diagnostic.exclusionReasons,
+            ])),
+            sourceTypes: Array.from(new Set([...existing.sourceTypes, ...diagnostic.sourceTypes])),
+          }
+        : diagnostic);
+    });
+    const diagnosticRecords = Array.from(diagnosticRecordsByRouteId.values()).slice(0, 50);
+    const diagnosticCandidateCount = curationCoverage.curationCandidateCount
+      + restrictedPartition.diagnosticRecords.length;
+    const matchedCount = sourceAdapter
+      ? sourceMatchedCount ?? 0
+      : radiusFiltered.radiusMatchedCount;
+    const hasMore = matchedCount > windowEnd;
+    const totalMatchedCountBounded = candidates.length >= queryLimit;
     return jsonResponse({
       ok: true,
       records,
+      diagnosticRecords,
       count: records.length,
-      coverageState: coverageState(records, curationCoverage),
+      coverageState: coverageState(records, { curationCandidateCount: diagnosticCandidateCount }),
       meta: {
         source: 'verified_routes',
         recommendationOnly,
@@ -1033,8 +1103,18 @@ serve(async (req) => {
         sourceAdapter: sourceAdapter || null,
         sourceFilterApplied: !!sourceAdapter,
         sourceMatchedCount,
-        curationCandidateCount: curationCoverage.curationCandidateCount,
+        curationCandidateCount: diagnosticCandidateCount,
+        safeDiagnosticCount: diagnosticRecords.length,
         anySourceBackedCandidateCount,
+        page,
+        pageSize,
+        offset,
+        returnedCount: records.length,
+        hasMore,
+        nextPage: hasMore ? page + 1 : null,
+        totalMatchedCount: matchedCount,
+        totalMatchedCountBounded,
+        maxPaginationWindow: ROUTE_CATALOG_MAX_PAGINATION_WINDOW,
         geometryMode: includeGeometry ? 'full' : includePreviewGeometry ? 'preview_simplified' : 'omitted',
         previewMaxPoints: includePreviewGeometry && !includeGeometry ? PREVIEW_MAX_POINTS : null,
         criteria: {

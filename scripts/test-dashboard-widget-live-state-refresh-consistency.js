@@ -1,8 +1,24 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const ts = require('typescript');
 
 const root = path.join(__dirname, '..');
+
+function compileTypescript(module, filename) {
+  const source = fs.readFileSync(filename, 'utf8');
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(output.outputText, filename);
+}
+
+require.extensions['.ts'] = compileTypescript;
 
 function readSource(...segments) {
   return fs.readFileSync(path.join(root, ...segments), 'utf8').replace(/\r\n/g, '\n');
@@ -16,7 +32,10 @@ const sources = {
   elevation: readSource('lib', 'dashboardElevationTerrain.ts'),
   powerWidget: readSource('components', 'dashboard', 'PowerSystemWidget.tsx'),
   powerDetail: readSource('components', 'dashboard', 'PowerSystemDetail.tsx'),
+  registry: readSource('lib', 'widgetRegistry.ts'),
 };
+
+const selectors = require(path.join(root, 'lib', 'dashboard', 'dashboardRuntimeSelectors.ts'));
 
 function includes(source, fragment, message) {
   assert.ok(source.includes(fragment), message);
@@ -26,15 +45,91 @@ function notIncludes(source, fragment, message) {
   assert.ok(!source.includes(fragment), message);
 }
 
+// The default Dashboard mounts Attitude Command, so its render key must follow the
+// GPS and weather inputs consumed by the operational weather hook inside that widget.
+includes(
+  sources.registry,
+  "{ widgetId: 'attitude-command', widgetSize: '2x2' }",
+  'The regression must exercise the widget mounted by the default Dashboard layout.',
+);
+includes(
+  sources.widget,
+  "case 'attitude-command': return <AttitudeCommandWidget data={data} options={options} />;",
+  'The regression must exercise the actual Attitude Command renderer.',
+);
+
+const waitingWeatherData = {
+  weatherSnapshot: {
+    status: { kind: 'loading', updatedAt: null },
+    current: null,
+    hourly: [],
+    daily: [],
+    alerts: [],
+  },
+};
+const noFixOptions = {
+  gpsHasFix: false,
+  gpsLatitude: null,
+  gpsLongitude: null,
+  gpsAccuracyM: null,
+};
+const validGpsOptions = {
+  gpsHasFix: true,
+  gpsLatitude: 34.0522,
+  gpsLongitude: -118.2437,
+  gpsAccuracyM: 8,
+};
+const waitingKey = selectors.selectDashboardWidgetRenderKey(
+  'attitude-command',
+  waitingWeatherData,
+  noFixOptions,
+);
+const validGpsKey = selectors.selectDashboardWidgetRenderKey(
+  'attitude-command',
+  waitingWeatherData,
+  validGpsOptions,
+);
+assert.notStrictEqual(
+  validGpsKey,
+  waitingKey,
+  'Attitude Command must rerender when Dashboard GPS changes from no fix to a valid weather location.',
+);
+assert.notStrictEqual(
+  selectors.selectDashboardWidgetRenderKey(
+    'attitude-command',
+    waitingWeatherData,
+    { ...validGpsOptions, gpsLatitude: 34.1522, gpsLongitude: -118.1437 },
+  ),
+  validGpsKey,
+  'Attitude Command must rerender after a material weather-location change.',
+);
+assert.notStrictEqual(
+  selectors.selectDashboardWidgetRenderKey(
+    'attitude-command',
+    {
+      weatherSnapshot: {
+        status: { kind: 'live', updatedAt: '2026-07-15T12:00:00.000Z' },
+        current: { temperatureF: 78, windSpeedMph: 9 },
+        hourly: [],
+        daily: [],
+        alerts: [],
+      },
+    },
+    validGpsOptions,
+  ),
+  validGpsKey,
+  'Attitude Command must rerender when the shared weather snapshot becomes live.',
+);
+
 // Weather: shared normalized state should be signature-guarded, refreshable, and subscriber based.
 includes(sources.weather, 'function sharedWeatherSignature', 'Weather shared state should use a stable signature.');
 includes(sources.weather, 'const setResultIfChanged', 'Weather hook should skip repeated identical result writes.');
 includes(sources.weather, 'subscribeSharedOperationalWeather', 'Weather consumers should subscribe to shared weather state.');
-includes(sources.weather, 'sharedWeatherRefreshHandler?.();', 'Weather refresh should use the shared refresh handler.');
+includes(sources.weather, 'sharedWeatherRefreshHandler();', 'Weather refresh should use the shared refresh handler.');
 includes(sources.widget, 'function shouldUseOperationalWeatherSnapshot', 'Dashboard weather widgets should choose the fresher live operational snapshot when available.');
-includes(sources.widget, 'enabled: true,\n    gps:', 'Dashboard weather widgets should keep the shared operational weather hook active even when injected snapshot data exists.');
+includes(sources.widget, 'enabled: injectedSnapshot == null,', 'The mounted Dashboard snapshot should prevent a duplicate widget-level weather consumer.');
 includes(sources.widget, 'accuracyM: options?.gpsAccuracyM ?? null,', 'Dashboard weather widgets should pass GPS accuracy into the shared weather resolver.');
-notIncludes(sources.widget, 'enabled: !isECSWeatherSnapshot(data.weatherSnapshot)', 'Dashboard weather widgets should not disable live weather because a hydrated snapshot exists.');
+includes(sources.widget, 'const injectedSnapshot = isECSWeatherSnapshot(data.weatherSnapshot)', 'Dashboard weather widgets should identify the parent-owned canonical snapshot before registering a fallback consumer.');
 
 // Route Progress: imported route fallback should be event-driven, not timer-driven.
 includes(sources.routeStore, 'export type RouteStoreListener = () => void;', 'Route store should expose a listener type.');

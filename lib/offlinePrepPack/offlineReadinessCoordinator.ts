@@ -22,6 +22,31 @@ export interface OfflineReadinessCoordinatorStorage {
   waitForHydration(): Promise<void>;
 }
 
+export type OfflineReadinessCoordinatorHydrationStatus = 'restoring' | 'ready' | 'error';
+export type OfflineReadinessCoordinatorHydrationSource =
+  | 'restoring'
+  | 'empty'
+  | 'cached'
+  | 'live'
+  | 'cached_and_live'
+  | 'error';
+
+export interface OfflineReadinessCoordinatorHydrationState {
+  status: OfflineReadinessCoordinatorHydrationStatus;
+  source: OfflineReadinessCoordinatorHydrationSource;
+  startedAt: string;
+  completedAt: string | null;
+  safeErrorCode: string | null;
+}
+
+export interface OfflineReadinessCoordinatorDiagnostics {
+  hydration: OfflineReadinessCoordinatorHydrationState;
+  subscriberCount: number;
+  manifestCount: number;
+  preHydrationMutationRevision: number;
+  pendingPersistence: boolean;
+}
+
 export interface OfflineTileJobLike {
   regionId: string;
   status: 'pending' | 'running' | 'complete' | 'error' | 'cancelled';
@@ -57,6 +82,8 @@ interface PersistedOfflineReadinessState {
 export interface OfflineReadinessCoordinator {
   subscribe(listener: () => void): () => void;
   waitForHydration(): Promise<void>;
+  getHydrationState(): OfflineReadinessCoordinatorHydrationState;
+  getDiagnostics(): OfflineReadinessCoordinatorDiagnostics;
   flush(): Promise<void>;
   listManifests(): OfflineReadinessManifest[];
   getManifest(manifestId: string): OfflineReadinessManifest | null;
@@ -148,6 +175,29 @@ function mergeManifest(existing: OfflineReadinessManifest | null, incoming: Offl
   };
 }
 
+function mergeHydratedState(
+  restored: PersistedOfflineReadinessState,
+  live: PersistedOfflineReadinessState,
+): PersistedOfflineReadinessState {
+  const manifestsById = new Map(
+    restored.manifests.map((manifest) => [manifest.manifestId, clone(manifest)]),
+  );
+  live.manifests.forEach((manifest) => {
+    manifestsById.set(manifest.manifestId, clone(manifest));
+  });
+  const manifests = Array.from(manifestsById.values())
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, MAX_MANIFESTS);
+  return {
+    schemaVersion: OFFLINE_READINESS_COORDINATOR_SCHEMA_VERSION,
+    manifests,
+    updatedAt: [restored.updatedAt, live.updatedAt, manifests[0]?.updatedAt]
+      .filter((value): value is string => typeof value === 'string')
+      .sort()
+      .at(-1) ?? new Date(0).toISOString(),
+  };
+}
+
 export function createOfflineReadinessCoordinator(input: {
   storage: OfflineReadinessCoordinatorStorage;
   now?: () => string;
@@ -156,6 +206,15 @@ export function createOfflineReadinessCoordinator(input: {
   const listeners = new Set<() => void>();
   let state = normalizeState(input.storage.get(OFFLINE_READINESS_COORDINATOR_STORAGE_KEY));
   let hydrated = false;
+  let preHydrationMutationRevision = 0;
+  let pendingPersistence = false;
+  let hydrationState: OfflineReadinessCoordinatorHydrationState = {
+    status: 'restoring',
+    source: 'restoring',
+    startedAt: nowIso(now),
+    completedAt: null,
+    safeErrorCode: null,
+  };
 
   function persist(notify = true): void {
     state = {
@@ -165,7 +224,12 @@ export function createOfflineReadinessCoordinator(input: {
         .slice(0, MAX_MANIFESTS),
       updatedAt: nowIso(now),
     };
-    input.storage.set(OFFLINE_READINESS_COORDINATOR_STORAGE_KEY, JSON.stringify(state));
+    if (hydrated) {
+      input.storage.set(OFFLINE_READINESS_COORDINATOR_STORAGE_KEY, JSON.stringify(state));
+    } else {
+      preHydrationMutationRevision += 1;
+      pendingPersistence = true;
+    }
     if (notify) listeners.forEach((listener) => listener());
   }
 
@@ -292,36 +356,73 @@ export function createOfflineReadinessCoordinator(input: {
     };
   }
 
-  const hydrationPromise = input.storage.waitForHydration().then(() => {
-    state = normalizeState(input.storage.get(OFFLINE_READINESS_COORDINATOR_STORAGE_KEY));
-    hydrated = true;
-    const interrupted = state.manifests.some((manifest) => (
-      manifest.preparation.status === 'preparing' || manifest.assets.some((asset) => asset.status === 'downloading')
-    ));
-    if (interrupted) {
-      const timestamp = nowIso(now);
-      state.manifests = state.manifests.map((manifest) => {
-        if (manifest.preparation.status !== 'preparing' && !manifest.assets.some((asset) => asset.status === 'downloading')) return manifest;
-        return {
-          ...manifest,
-          state: 'paused',
-          updatedAt: timestamp,
-          assets: manifest.assets.map((asset) => asset.status === 'downloading' ? { ...asset, status: 'queued' as const } : asset),
-          preparation: {
-            ...manifest.preparation,
-            status: 'paused',
-            interruptedAt: timestamp,
+  const hydrationPromise = input.storage.waitForHydration()
+    .then(() => {
+      const restoredState = normalizeState(
+        input.storage.get(OFFLINE_READINESS_COORDINATOR_STORAGE_KEY),
+      );
+      const hadLiveMutations = preHydrationMutationRevision > 0;
+      const hadCachedState = restoredState.manifests.length > 0;
+      state = hadLiveMutations
+        ? mergeHydratedState(restoredState, state)
+        : restoredState;
+      hydrated = true;
+      hydrationState = {
+        ...hydrationState,
+        status: 'ready',
+        source: hadCachedState && hadLiveMutations
+          ? 'cached_and_live'
+          : hadLiveMutations
+            ? 'live'
+            : hadCachedState
+              ? 'cached'
+              : 'empty',
+        completedAt: nowIso(now),
+        safeErrorCode: null,
+      };
+      const shouldPersistMergedState = pendingPersistence;
+      pendingPersistence = false;
+      const interrupted = state.manifests.some((manifest) => (
+        manifest.preparation.status === 'preparing' || manifest.assets.some((asset) => asset.status === 'downloading')
+      ));
+      if (interrupted) {
+        const timestamp = nowIso(now);
+        state.manifests = state.manifests.map((manifest) => {
+          if (manifest.preparation.status !== 'preparing' && !manifest.assets.some((asset) => asset.status === 'downloading')) return manifest;
+          return {
+            ...manifest,
+            state: 'paused',
             updatedAt: timestamp,
-            retryCount: manifest.preparation.retryCount + 1,
-            lastErrorCode: 'app_interrupted',
-          },
-        };
-      });
-      persist();
-    } else {
+            assets: manifest.assets.map((asset) => asset.status === 'downloading' ? { ...asset, status: 'queued' as const } : asset),
+            preparation: {
+              ...manifest.preparation,
+              status: 'paused',
+              interruptedAt: timestamp,
+              updatedAt: timestamp,
+              retryCount: manifest.preparation.retryCount + 1,
+              lastErrorCode: 'app_interrupted',
+            },
+          };
+        });
+      }
+      if (interrupted || shouldPersistMergedState) {
+        persist();
+      } else {
+        listeners.forEach((listener) => listener());
+      }
+    })
+    .catch(() => {
+      hydrated = true;
+      pendingPersistence = false;
+      hydrationState = {
+        ...hydrationState,
+        status: 'error',
+        source: 'error',
+        completedAt: nowIso(now),
+        safeErrorCode: 'OFFLINE_READINESS_HYDRATION_FAILED',
+      };
       listeners.forEach((listener) => listener());
-    }
-  });
+    });
 
   return {
     subscribe(listener) {
@@ -331,8 +432,21 @@ export function createOfflineReadinessCoordinator(input: {
     waitForHydration() {
       return hydrationPromise;
     },
-    flush() {
-      return input.storage.flush();
+    getHydrationState() {
+      return { ...hydrationState };
+    },
+    getDiagnostics() {
+      return {
+        hydration: { ...hydrationState },
+        subscriberCount: listeners.size,
+        manifestCount: state.manifests.length,
+        preHydrationMutationRevision,
+        pendingPersistence,
+      };
+    },
+    async flush() {
+      await hydrationPromise;
+      await input.storage.flush();
     },
     listManifests() {
       return clone(state.manifests);

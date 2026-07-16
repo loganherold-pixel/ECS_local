@@ -92,8 +92,8 @@ assertNotIncludes(
 
 assertIncludes(
   mapRenderer,
-  'routeBuilderAnchors = payload.routeBuilderAnchors || [];',
-  'MapRenderer should sync route-builder anchors from React.',
+  'routeBuilderAnchors = routeBuilderPayloadActive ? (payload.routeBuilderAnchors || []) : [];',
+  'MapRenderer should sync route-builder anchors from React only while drawing is active.',
 );
 assertIncludes(
   mapRenderer,

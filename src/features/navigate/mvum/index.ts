@@ -24,6 +24,7 @@ export const MVUM_OVERLAY_MIN_ZOOM = ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM;
 export const MVUM_OVERLAY_SOURCE_LAYER = 'mvum_segments';
 export const MVUM_OVERLAY_CACHE_NAMESPACE = 'navigate.mvum.viewport';
 export const MVUM_VIEWPORT_CACHE_TTL_MS = 5 * 60 * 1000;
+export const MVUM_SOURCE_PROVIDER_PREFIX = 'usfs_mvum';
 export const NAVIGATE_STITCHED_ROUTE_SOURCE_ID = 'navigate-stitched-route-source';
 export const NAVIGATE_STITCHED_ROUTE_LAYER_ID = 'navigate-stitched-route-layer';
 export const NAVIGATE_STITCHED_ROUTE_HALO_LAYER_ID = 'navigate-stitched-route-halo-layer';
@@ -38,7 +39,7 @@ export type NavigateMvumViewportFetchPlan =
   | { status: 'disabled' }
   | { status: 'vector_tiles'; tileUrl: string; sourceLayer: string }
   | { status: 'zoom_deferred'; minZoom: number }
-  | { status: 'offline' }
+  | { status: 'offline'; bbox: RouteGeometryViewportBbox | null; cacheKey: string | null }
   | { status: 'missing_bbox' }
   | { status: 'fetch_viewport'; bbox: RouteGeometryViewportBbox; cacheKey: string };
 
@@ -49,6 +50,9 @@ export type NavigateMvumViewportCacheEntry = {
 
 export type NavigateMvumMapOverlayPayload = {
   enabled: boolean;
+  requestFingerprint?: string | null;
+  requestGeneration?: number;
+  invalidFeatureCount?: number;
   minZoom: number;
   sourceId: typeof MVUM_OVERLAY_SOURCE_ID;
   sourceType: 'vector' | 'geojson';
@@ -133,6 +137,9 @@ export type MvumRouteFeatureCollection = {
 
 type BuildNavigateMvumMapOverlayInput = {
   enabled: boolean;
+  requestFingerprint?: string | null;
+  requestGeneration?: number;
+  invalidFeatureCount?: number;
   selectedSegmentIds: string[];
   vectorTileUrl?: string | null;
   vectorSourceLayer?: string | null;
@@ -298,6 +305,20 @@ function mvumViewportCacheKey(cacheKey: string): string {
   return `${MVUM_OVERLAY_CACHE_NAMESPACE}:${cacheKey}`;
 }
 
+export function buildNavigateMvumViewportCacheKey(
+  bbox: RouteGeometryViewportBbox,
+  zoom: number,
+  vehicleClass?: string | null,
+): string {
+  return mvumViewportCacheKey(
+    buildRouteGeometryViewportCacheKey(bbox, zoom, {
+      includeReferenceGeometry: true,
+      vehicleClass: vehicleClass ?? null,
+      sourceProviderPrefix: MVUM_SOURCE_PROVIDER_PREFIX,
+    }),
+  );
+}
+
 function normalizeMvumViewportBbox(value: unknown): RouteGeometryViewportBbox | null {
   const record = value != null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -409,6 +430,9 @@ export function planNavigateMvumViewportFetch(args: {
   vectorSourceLayer?: string | null;
 }): NavigateMvumViewportFetchPlan {
   if (!args.enabled) return { status: 'disabled' };
+  if (!isRouteGeometryViewportZoomEligible(args.zoom)) {
+    return { status: 'zoom_deferred', minZoom: MVUM_OVERLAY_MIN_ZOOM };
+  }
   const tileUrl = cleanText(args.vectorTileUrl);
   if (tileUrl) {
     return {
@@ -417,21 +441,21 @@ export function planNavigateMvumViewportFetch(args: {
       sourceLayer: cleanText(args.vectorSourceLayer) ?? MVUM_OVERLAY_SOURCE_LAYER,
     };
   }
-  if (!isRouteGeometryViewportZoomEligible(args.zoom)) {
-    return { status: 'zoom_deferred', minZoom: MVUM_OVERLAY_MIN_ZOOM };
-  }
-  if (args.online === false) return { status: 'offline' };
   const bbox = normalizeMvumViewportBbox(args.bbox);
+  if (args.online === false) {
+    return {
+      status: 'offline',
+      bbox,
+      cacheKey: bbox
+        ? buildNavigateMvumViewportCacheKey(bbox, Number(args.zoom), args.vehicleClass)
+        : null,
+    };
+  }
   if (!bbox) return { status: 'missing_bbox' };
   return {
     status: 'fetch_viewport',
     bbox,
-    cacheKey: mvumViewportCacheKey(
-      buildRouteGeometryViewportCacheKey(bbox, Number(args.zoom), {
-        includeReferenceGeometry: true,
-        vehicleClass: args.vehicleClass ?? null,
-      }),
-    ),
+    cacheKey: buildNavigateMvumViewportCacheKey(bbox, Number(args.zoom), args.vehicleClass),
   };
 }
 
@@ -762,6 +786,9 @@ export function buildNavigateMvumMapOverlay(
   const vectorTileUrl = cleanText(input.vectorTileUrl);
   return {
     enabled: input.enabled,
+    requestFingerprint: cleanText(input.requestFingerprint),
+    requestGeneration: Math.max(0, Math.trunc(input.requestGeneration ?? 0)),
+    invalidFeatureCount: Math.max(0, Math.trunc(input.invalidFeatureCount ?? 0)),
     minZoom: MVUM_OVERLAY_MIN_ZOOM,
     sourceId: MVUM_OVERLAY_SOURCE_ID,
     sourceType: vectorTileUrl ? 'vector' : 'geojson',

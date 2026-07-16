@@ -111,10 +111,10 @@ assertIncludes(
   'const clearRoadDestination = roadNavigation.clearDestination;\n  const previewRoadDestination = roadNavigation.previewDestination;\n  const previewRoadRoute = roadNavigation.previewRoute;',
   'Navigate should bind stable road navigation actions for route lifecycle handoffs.',
 );
-assertIncludes(
-  navigate,
-  "import { normalizeRouteLifecycle } from '../../lib/routeLifecycleState';",
-  'Navigate should consume the centralized route lifecycle normalizer.',
+assert.ok(
+  navigate.includes("from '../../lib/routeLifecycleState';") &&
+    /\bnormalizeRouteLifecycle\s*\(\s*\{/.test(navigate),
+  'Navigate should import and execute the centralized route lifecycle normalizer.',
 );
 assertIncludes(
   navigate,
@@ -152,10 +152,15 @@ assertIncludes(
   'snapshotSignature(currentSnapshot) === snapshotSignature(normalized)',
   'Navigate route session store should suppress duplicate route lifecycle snapshots.',
 );
-assertIncludes(
+const clearSnapshotBlock = blockBetween(
   sessionStore,
-  "return setSnapshot({ ...inactiveSnapshot, updatedAt: new Date().toISOString() });",
-  'Route session clear should go through the centralized deduped snapshot setter.',
+  'clear(): NavigateRouteSessionSnapshot {',
+  'subscribe(listener: NavigateRouteSessionListener)',
+);
+assert.ok(
+  clearSnapshotBlock.includes('return commitSnapshot(') &&
+    clearSnapshotBlock.includes("{ producer: 'clear', persist: true, track: true }"),
+  'Route session clear should go through the centralized deduped commit path with clear producer diagnostics.',
 );
 
 console.log('Route state stabilization checks passed.');

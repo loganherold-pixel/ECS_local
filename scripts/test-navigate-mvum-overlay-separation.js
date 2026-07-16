@@ -192,9 +192,9 @@ assert(
   'Navigate should only report an empty MVUM viewport after a completed empty fetch.',
 );
 assert(
-  navigateSource.includes('!resultForCache.degraded && resultForCache.segments.length > 0') &&
+  navigateSource.includes('if (!resultForCache.degraded)') &&
     navigateSource.includes('navigateMapLayerCoordinatorRef.current.writeCache'),
-  'Navigate should cache only successful non-empty MVUM responses.',
+  'Navigate should cache successful MVUM responses, including valid empty results.',
 );
 
 assert(

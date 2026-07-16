@@ -5,6 +5,8 @@ import { sanitizeLegacyVehicleFrameworkState } from '../fleet/legacyVehicleFrame
 import { createPersistedKeyValueCache } from '../keyValuePersistence';
 import { loadoutStore } from '../loadoutStore';
 import { waitForECSShellRouteStateHydration } from '../navigation/ecsShellRouteState';
+import { offlineReadinessCoordinator } from '../offlinePrepPack/offlineReadinessCoordinator';
+import { offlineTileSyncCoordinator } from '../offlineTileSyncCoordinator';
 import { powerSetupStore } from '../powerSetupStore';
 import { sessionStore } from '../sessionStore';
 import { setupStore } from '../setupStore';
@@ -79,6 +81,18 @@ function optionalStartupTasks(timeoutMs: number): ECSStoreHydrationTask[] {
     {
       id: 'active_expedition',
       hydrate: () => waitForExpeditionStateHydration(),
+      timeoutMs,
+      required: false,
+    },
+    {
+      id: 'offline_readiness_manifest',
+      hydrate: () => offlineReadinessCoordinator.waitForHydration(),
+      timeoutMs,
+      required: false,
+    },
+    {
+      id: 'offline_tile_sync',
+      hydrate: () => offlineTileSyncCoordinator.waitForHydration(),
       timeoutMs,
       required: false,
     },

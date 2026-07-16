@@ -64,7 +64,8 @@ notIncludes(
 );
 
 includes(gridSource, 'gpsTimestampMs?: number | null;', 'Widget grid should accept GPS timestamps.');
-includes(gridSource, 'prev?.gpsTimestampMs === next?.gpsTimestampMs', 'Widget memo checks should include GPS timestamp.');
+includes(rendererSource, '(left?.gpsTimestampMs ?? null) === (right?.gpsTimestampMs ?? null)', 'Mounted Attitude Command memo checks should include GPS timestamp.');
+includes(rendererSource, 'areAttitudeWidgetPropsEqual(prev, next)', 'Mounted Attitude Command should use the GPS-aware memo comparator.');
 includes(gridSource, 'gpsTimestampMs,', 'Widget grid render options should pass GPS timestamp.');
 includes(dashboardSource, 'gpsTimestampMs={gps.position?.timestamp ?? null}', 'Dashboard should pass GPS timestamp into widgets.');
 includes(dashboardSource, 'gpsAccuracyM={gps.position?.accuracyM ?? null}', 'Dashboard should pass GPS accuracy into widgets.');
@@ -74,20 +75,20 @@ notIncludes(
   'setInterval(',
   'Terrain Risk default data should not wake JS on a simulated refresh interval.',
 );
-includes(
+notIncludes(
   terrainRiskSource,
-  'return useMemo(buildDefaultTerrainRiskAssessment, []);',
-  'Terrain Risk compact state should memoize the default fallback assessment.',
+  'buildDefaultTerrainRiskAssessment',
+  'Standalone Terrain Risk must not construct a default operational assessment.',
+);
+notIncludes(
+  terrainRiskSource,
+  'DEFAULT_TERRAIN_PROFILE',
+  'Standalone Terrain Risk must not fabricate a graph from a default profile.',
 );
 includes(
   terrainRiskSource,
-  "'Default profile'",
-  'Terrain Risk compact state should disclose default/fallback terrain data.',
-);
-includes(
-  terrainRiskSource,
-  'Source: default terrain profile, not live sensor data',
-  'Terrain Risk detail should not present simulated terrain as live data.',
+  'No deterministic route terrain assessment has been supplied.',
+  'Standalone Terrain Risk detail should render an explicit unknown state without deterministic data.',
 );
 
 console.log('Dashboard elevation/terrain live-state checks passed.');

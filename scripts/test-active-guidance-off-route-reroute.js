@@ -4,9 +4,11 @@ const path = require('path');
 const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
+const moduleCache = new Map();
 
 function loadTsModule(relativePath) {
   const filename = path.join(root, relativePath);
+  if (moduleCache.has(filename)) return moduleCache.get(filename).exports;
   const source = fs.readFileSync(filename, 'utf8');
   const output = ts.transpileModule(source, {
     compilerOptions: {
@@ -17,6 +19,7 @@ function loadTsModule(relativePath) {
     fileName: filename,
   }).outputText;
   const mod = { exports: {} };
+  moduleCache.set(filename, mod);
   const localRequire = (request) => {
     if (request === './ecsGuidanceModel' || request === './navigation/ecsGuidanceModel') {
       return loadTsModule(path.join('lib', 'navigation', 'ecsGuidanceModel.ts'));
@@ -50,6 +53,16 @@ function loadTsModule(relativePath) {
           return `Continue to ${title || 'destination'}`;
         },
       };
+    }
+    if (request.startsWith('.')) {
+      const resolved = path.resolve(path.dirname(filename), request);
+      for (const candidate of [resolved, `${resolved}.ts`, `${resolved}.tsx`, `${resolved}.js`]) {
+        if (!fs.existsSync(candidate)) continue;
+        if (candidate.endsWith('.ts') || candidate.endsWith('.tsx')) {
+          return loadTsModule(path.relative(root, candidate));
+        }
+        return require(candidate);
+      }
     }
     return require(request);
   };

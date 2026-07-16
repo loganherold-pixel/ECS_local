@@ -26,6 +26,8 @@ type FallbackMarker = {
 type FallbackSegment = {
   coordinates?: LngLat[] | { latitude: number; longitude: number }[];
   color?: string;
+  foreground?: boolean;
+  provisional?: boolean;
 };
 
 export type MapFallbackSurfaceProps = {
@@ -156,6 +158,8 @@ export default function MapFallbackSurface({
         .map((segment) => ({
           color: segment.color || 'rgba(95, 209, 255, 0.82)',
           coordinates: normalizeLine(segment.coordinates as unknown[] | undefined),
+          foreground: segment.foreground === true,
+          provisional: segment.provisional === true,
         }))
         .filter((segment) => segment.coordinates.length > 1),
     [segments],
@@ -192,6 +196,8 @@ export default function MapFallbackSurface({
             key: `segment-${index}`,
             color: segment.color,
             points: lineToSvgPoints(segment.coordinates, project),
+            foreground: segment.foreground,
+            provisional: segment.provisional,
           }))
         : [],
     [project, segmentLines],
@@ -337,7 +343,7 @@ export default function MapFallbackSurface({
             ))}
           </>
         ) : null}
-        {projectedSegmentLines.map((segment) => (
+        {projectedSegmentLines.filter((segment) => !segment.foreground).map((segment) => (
           <Polyline
             key={segment.key}
             points={segment.points}
@@ -345,6 +351,7 @@ export default function MapFallbackSurface({
             stroke={segment.color}
             strokeOpacity="0.42"
             strokeWidth={compact ? 8 : 10}
+            strokeDasharray={segment.provisional ? '6 5' : undefined}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
@@ -379,6 +386,19 @@ export default function MapFallbackSurface({
             strokeLinejoin="round"
           />
         ) : null}
+        {projectedSegmentLines.filter((segment) => segment.foreground).map((segment) => (
+          <Polyline
+            key={`foreground-${segment.key}`}
+            points={segment.points}
+            fill="none"
+            stroke={segment.color}
+            strokeOpacity="0.92"
+            strokeWidth={compact ? 4 : 5}
+            strokeDasharray={segment.provisional ? '6 5' : undefined}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ))}
         {projectedMarkerPoints.map(({ key, marker, x, y }) => {
           return (
             <React.Fragment key={key}>

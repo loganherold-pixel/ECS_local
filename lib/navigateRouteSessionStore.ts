@@ -7,10 +7,14 @@ import {
   validateRouteGeometry,
 } from './routeGeometryLifecycle';
 import { trackExpeditionTripFromGuidanceSnapshot } from './expedition/expeditionTripRecordStore';
+import { buildGeometryFingerprint } from './lifecycle/routeTripExpeditionLifecycle';
 
 export type NavigateRouteLifecycle = 'inactive' | 'preview' | 'active' | 'arrived';
 export type NavigateRouteSessionSource = 'none' | 'road' | 'trail' | 'hybrid' | 'run';
 export type NavigateRouteGuidanceStatus = 'nominal' | 'rerouting' | 'off_route' | 'arrived' | null;
+export type NavigateRouteSessionStateOrigin = 'live' | 'restored';
+export type NavigateRouteSessionFreshness = 'live' | 'cached' | 'stale';
+export type NavigateRouteSessionHydrationStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 export interface NavigateRouteMapPoint {
   lat: number;
@@ -55,12 +59,38 @@ export interface NavigateRouteSessionSnapshot {
   offRouteDistanceM: number | null;
   routeStatusKind: NavigateRouteGuidanceStatus;
   updatedAt: string | null;
+  /** Presentation metadata; restored state is never represented as live. */
+  stateOrigin?: NavigateRouteSessionStateOrigin;
+  freshness?: NavigateRouteSessionFreshness;
+}
+
+export interface NavigateRouteSessionHydrationState {
+  status: NavigateRouteSessionHydrationStatus;
+  generation: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  source: 'none' | NavigateRouteSessionStateOrigin;
+  safeErrorCode: string | null;
+}
+
+export interface NavigateRouteSessionDiagnostics {
+  hydration: NavigateRouteSessionHydrationState;
+  subscriberCount: number;
+  mutationRevision: number;
+  latestProducerEvent: {
+    source: 'live' | 'restored' | 'clear' | 'none';
+    revision: number;
+    lifecycle: NavigateRouteLifecycle;
+    hasRoute: boolean;
+    acceptedAt: string | null;
+  };
 }
 
 type NavigateRouteSessionListener = (snapshot: NavigateRouteSessionSnapshot) => void;
 
 const PREVIEW_RESTORE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const ACTIVE_RESTORE_MAX_AGE_MS = 18 * 60 * 60 * 1000;
+const RECENT_RESTORE_MAX_AGE_MS = 20 * 60 * 1000;
 const NAVIGATE_ROUTE_SESSION_KEY = 'ecs_navigate_route_session_v1';
 const NAVIGATE_ROUTE_SESSION_VERSION = 1;
 const MAX_PERSISTED_ROUTE_POINTS = 1200;
@@ -99,6 +129,23 @@ const inactiveSnapshot: NavigateRouteSessionSnapshot = {
 
 let currentSnapshot = inactiveSnapshot;
 let hydratePromise: Promise<NavigateRouteSessionSnapshot> | null = null;
+let hydrationCompleted = false;
+let mutationRevision = 0;
+let hydrationState: NavigateRouteSessionHydrationState = {
+  status: 'idle',
+  generation: 0,
+  startedAt: null,
+  completedAt: null,
+  source: 'none',
+  safeErrorCode: null,
+};
+let latestProducerEvent: NavigateRouteSessionDiagnostics['latestProducerEvent'] = {
+  source: 'none',
+  revision: 0,
+  lifecycle: 'inactive',
+  hasRoute: false,
+  acceptedAt: null,
+};
 const listeners = new Set<NavigateRouteSessionListener>();
 
 function downsamplePoints(points: NavigateRouteMapPoint[], maxPoints = MAX_PERSISTED_ROUTE_POINTS): NavigateRouteMapPoint[] {
@@ -189,9 +236,19 @@ function isRecentIsoTimestamp(value: string | null | undefined, maxAgeMs: number
 
 function pointSignature(points: NavigateRouteMapPoint[]): string {
   if (points.length === 0) return 'none';
-  const first = points[0];
-  const last = points[points.length - 1];
-  return `${points.length}:${first.lat.toFixed(5)},${first.lng.toFixed(5)}:${last.lat.toFixed(5)},${last.lng.toFixed(5)}`;
+  const geometryFingerprint = buildGeometryFingerprint(points, 'navigate-route-session');
+  if (geometryFingerprint) return geometryFingerprint;
+
+  const point = points[0];
+  const elevationMeters = Number(point.ele ?? point.ele_m);
+  const elevationFeet = point.elevationFeet == null ? NaN : Number(point.elevationFeet);
+  return [
+    'navigate-route-session:1',
+    point.lat.toFixed(6),
+    point.lng.toFixed(6),
+    Number.isFinite(elevationMeters) ? elevationMeters.toFixed(1) : '-',
+    Number.isFinite(elevationFeet) ? elevationFeet.toFixed(1) : '-',
+  ].join(':');
 }
 
 function snapshotSignature(snapshot: NavigateRouteSessionSnapshot): string {
@@ -214,6 +271,8 @@ function snapshotSignature(snapshot: NavigateRouteSessionSnapshot): string {
     snapshot.isOffRoute ? 'off-route' : 'on-route',
     snapshot.offRouteDistanceM == null ? 'none' : Math.round(snapshot.offRouteDistanceM),
     snapshot.routeStatusKind ?? 'none',
+    snapshot.stateOrigin ?? 'live',
+    snapshot.freshness ?? 'live',
     location,
     snapshot.headingDeg == null ? 'none' : Math.round(snapshot.headingDeg),
     snapshot.currentLocation?.altitudeFt == null ? 'none' : Math.round(snapshot.currentLocation.altitudeFt),
@@ -246,16 +305,41 @@ function normalizeSnapshot(snapshot: NavigateRouteSessionSnapshot): NavigateRout
   };
 }
 
-function setSnapshot(next: NavigateRouteSessionSnapshot): NavigateRouteSessionSnapshot {
-  const normalized = normalizeSnapshot(next);
+function commitSnapshot(
+  next: NavigateRouteSessionSnapshot,
+  options: {
+    producer: 'live' | 'restored' | 'clear';
+    persist: boolean;
+    track: boolean;
+  },
+): NavigateRouteSessionSnapshot {
+  const normalized = normalizeSnapshot({
+    ...next,
+    stateOrigin: options.producer === 'restored' ? 'restored' : 'live',
+    freshness: options.producer === 'restored'
+      ? isRecentIsoTimestamp(next.updatedAt, RECENT_RESTORE_MAX_AGE_MS) ? 'cached' : 'stale'
+      : 'live',
+  });
   if (snapshotSignature(currentSnapshot) === snapshotSignature(normalized)) {
     return currentSnapshot;
   }
   currentSnapshot = normalized;
-  persistNavigateRouteSession(currentSnapshot);
-  void trackExpeditionTripFromGuidanceSnapshot(currentSnapshot);
+  if (options.producer !== 'restored') mutationRevision += 1;
+  latestProducerEvent = {
+    source: options.producer,
+    revision: mutationRevision,
+    lifecycle: currentSnapshot.lifecycle,
+    hasRoute: currentSnapshot.lifecycle !== 'inactive' && currentSnapshot.routePoints.length > 1,
+    acceptedAt: new Date().toISOString(),
+  };
+  if (options.persist) persistNavigateRouteSession(currentSnapshot);
+  if (options.track) void trackExpeditionTripFromGuidanceSnapshot(currentSnapshot);
   notify(currentSnapshot);
   return currentSnapshot;
+}
+
+function setSnapshot(next: NavigateRouteSessionSnapshot): NavigateRouteSessionSnapshot {
+  return commitSnapshot(next, { producer: 'live', persist: true, track: true });
 }
 
 function getTrailLifecycle(status: string): NavigateRouteLifecycle {
@@ -407,7 +491,10 @@ export const navigateRouteSessionStore = {
   },
 
   clear(): NavigateRouteSessionSnapshot {
-    return setSnapshot({ ...inactiveSnapshot, updatedAt: new Date().toISOString() });
+    return commitSnapshot(
+      { ...inactiveSnapshot, updatedAt: new Date().toISOString() },
+      { producer: 'clear', persist: true, track: true },
+    );
   },
 
   subscribe(listener: NavigateRouteSessionListener): () => void {
@@ -417,10 +504,67 @@ export const navigateRouteSessionStore = {
     };
   },
 
+  getHydrationState(): NavigateRouteSessionHydrationState {
+    return { ...hydrationState };
+  },
+
+  getDiagnostics(): NavigateRouteSessionDiagnostics {
+    return {
+      hydration: { ...hydrationState },
+      subscriberCount: listeners.size,
+      mutationRevision,
+      latestProducerEvent: { ...latestProducerEvent },
+    };
+  },
+
   hydrateFromPersistence(): Promise<NavigateRouteSessionSnapshot> {
+    if (hydrationCompleted) return Promise.resolve(currentSnapshot);
     if (!hydratePromise) {
+      const generation = hydrationState.generation + 1;
+      const revisionAtStart = mutationRevision;
+      hydrationState = {
+        status: 'loading',
+        generation,
+        startedAt: new Date().toISOString(),
+        completedAt: null,
+        source: hydrationState.source,
+        safeErrorCode: null,
+      };
       hydratePromise = buildSnapshotFromPersistence()
-        .then((snapshot) => setSnapshot(snapshot))
+        .then((snapshot) => {
+          if (generation !== hydrationState.generation || mutationRevision !== revisionAtStart) {
+            hydrationCompleted = true;
+            hydrationState = {
+              ...hydrationState,
+              status: 'ready',
+              completedAt: new Date().toISOString(),
+              source: currentSnapshot.lifecycle === 'inactive' ? 'none' : 'live',
+              safeErrorCode: null,
+            };
+            return currentSnapshot;
+          }
+          const restored = snapshot.lifecycle === 'inactive'
+            ? currentSnapshot
+            : commitSnapshot(snapshot, { producer: 'restored', persist: false, track: true });
+          hydrationCompleted = true;
+          hydrationState = {
+            ...hydrationState,
+            status: 'ready',
+            completedAt: new Date().toISOString(),
+            source: restored.lifecycle === 'inactive' ? 'none' : restored.stateOrigin ?? 'restored',
+            safeErrorCode: null,
+          };
+          return restored;
+        })
+        .catch((error) => {
+          hydrationState = {
+            ...hydrationState,
+            status: 'error',
+            completedAt: new Date().toISOString(),
+            safeErrorCode: 'NAVIGATE_ROUTE_SESSION_HYDRATION_FAILED',
+          };
+          throw error;
+        })
         .finally(() => {
           hydratePromise = null;
         });

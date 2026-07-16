@@ -39,6 +39,7 @@ function loadTsModule(relativePath, mocks = {}) {
 
 const commandStoreSource = read('lib/ecsCommandModuleStore.ts');
 const widgetRenderersSource = read('components/dashboard/WidgetRenderers.tsx');
+const terrainRiskRuntimeSource = read('lib/useTerrainRiskDashboardRuntime.ts');
 const commandModuleSource = read('components/dashboard/TerrainRiskCommandModule.tsx');
 const sideProfileSource = read('components/dashboard/TerrainRiskSideProfile.tsx');
 const terrainRiskWidgetSource = read('components/dashboard/TerrainRiskWidget.tsx');
@@ -69,10 +70,11 @@ assert(!commandStoreSource.includes("label: 'Terrain Risk'"), 'Terrain Risk must
 assert(!widgetRenderersSource.includes("import TerrainRiskCommandModule from './TerrainRiskCommandModule';"));
 assert(!widgetRenderersSource.includes("selectedCommandModule === 'terrainRisk' ? ("));
 assert(!widgetRenderersSource.includes('routeContext={terrainRiskRouteContext}'));
-assert(widgetRenderersSource.includes('routePoints: terrainRiskRoutePoints'), 'Terrain Risk must receive active guidance geometry when saved route segments are unavailable.');
+assert(terrainRiskRuntimeSource.includes('routePoints,'), 'Terrain Risk must receive active guidance geometry when saved route segments are unavailable.');
 assert(
-  widgetRenderersSource.includes('currentElevationFeet: terrainRiskHasGpsAltitude && !terrainRiskSamplingPending ? options.gpsAltitudeFt ?? null : null'),
-  'Terrain Risk must only use live GPS altitude after elevation sampling has had a chance to resolve.',
+  terrainRiskRuntimeSource.includes('currentElevationFeet: null') &&
+    terrainRiskRuntimeSource.includes('currentGpsElevation: {'),
+  'Mounted Terrain Risk must keep current GPS altitude separate from the route-wide elevation profile.',
 );
 assert(commandModuleSource.includes('routePoints: routeContextPoints'), 'Terrain Risk command module must pass active route points into the risk profile builder.');
 assert(commandModuleSource.includes('currentElevationFeet: routeContextCurrentElevationFeet'), 'Terrain Risk command module must pass live GPS altitude into the risk profile builder.');
@@ -93,23 +95,24 @@ assert(
   'Compact Terrain Risk graph must be clipped at every containing viewport.',
 );
 assert(widgetRenderersSource.includes('transparentBackground'), 'Compact Terrain Risk chart must render with a transparent chart background.');
-assert(widgetRenderersSource.includes("headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}"), 'Route Terrain Risk should keep the data-source label in the top-right header lane.');
-assert(widgetRenderersSource.includes("headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}"), 'Route Terrain Risk should keep the score in the top-right header lane.');
+assert(widgetRenderersSource.includes('headerStatusLabel={getTerrainRiskProfileStatusLabel(terrainRiskPresentation)}'), 'Route Terrain Risk should keep truthful source/freshness state in the top-right header lane.');
+assert(widgetRenderersSource.includes('headerStatusValue={terrainRiskHeaderRoute ?'), 'Route Terrain Risk should keep the deterministic score in the top-right header lane.');
 assert(!widgetRenderersSource.includes('terrainRiskCornerReadoutOverlay'), 'Compact Terrain Risk status readout must not overlay the chart.');
 assert(!widgetRenderersSource.includes('terrainRiskBottomReadoutOverlay'), 'Compact Terrain Risk status readout must not sit over the bottom axis lane.');
 assert(!/commandPanelHeaderStatus[\s\S]{0,160}ROUTE TERRAIN RISK/.test(widgetRenderersSource), 'Compact Terrain Risk header readout should not cover the route profile chart.');
-assert(widgetRenderersSource.includes('sampleRouteElevationFromMapboxTerrainContours'), 'Active guidance terrain risk must sample elevation before falling back to GPS altitude.');
-assert(widgetRenderersSource.includes('Mapbox terrain contour estimate'), 'Sampled route terrain must disclose the Mapbox contour estimate source.');
+assert(terrainRiskRuntimeSource.includes('sampleRouteElevationFromMapboxTerrainContours'), 'Active guidance terrain risk must request route elevation when canonical samples are unavailable.');
+assert(terrainRiskRuntimeSource.includes('Mapbox terrain contour estimate'), 'Sampled route terrain must disclose the Mapbox contour estimate source.');
 assert(!terrainRiskWidgetSource.includes('setInterval('), 'Terrain Risk default widget must not wake JS on a simulated interval.');
 assert(
-  widgetRenderersSource.includes('terrainRiskSampleSourcePointsRef') &&
-    widgetRenderersSource.includes('terrainRiskSampleSourcePointsRef.current = rawTerrainRiskRoutePoints') &&
-    widgetRenderersSource.includes('}, [terrainRiskNeedsElevationSampling, terrainRiskSamplingSignature]);'),
+  terrainRiskRuntimeSource.includes('sampleSourcePointsRef') &&
+    terrainRiskRuntimeSource.includes('sampleSourcePointsRef.current = rawRoutePoints') &&
+    terrainRiskRuntimeSource.includes('samplingRetryGeneration') &&
+    terrainRiskRuntimeSource.includes('samplingSignature'),
   'Terrain Risk elevation sampling should key requests by stable route signature instead of route point reference churn.',
 );
 assert(!widgetRenderersSource.includes('NO ACTIVE ROUTE'), 'Terrain Risk widget must not repeat no-active-route copy in the top-right header.');
-assert(widgetRenderersSource.includes("title={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel)} | ${terrainRiskRoute.overallRiskScore}` : 'No active route'}"), 'Route Terrain Risk inline panel must summarize risk score or standby state.');
-assert(widgetRenderersSource.includes("detail={terrainRiskRoute ? terrainRiskRoute.sourceLabel : 'Start guidance to view terrain risk'}"), 'Route Terrain Risk inline panel must keep data source or guidance-start copy visible.');
+assert(widgetRenderersSource.includes('title={terrainRiskHeaderTitle}'), 'Route Terrain Risk inline panel must summarize deterministic risk or an explicit terminal state.');
+assert(widgetRenderersSource.includes('detail={terrainRiskHeaderDetail}'), 'Route Terrain Risk inline panel must keep source truth or a missing-data reason visible.');
 assert(
   /<AttitudeCommandTerrainRiskPreview[\s\S]{0,220}terrainRisk=\{terrainRiskVisual\}[\s\S]{0,220}expanded=\{expanded\}/.test(widgetRenderersSource),
   'Route Terrain Risk expansion must render the shared inline chart preview.',
@@ -124,8 +127,8 @@ assert(
   !/AttitudeCommandPanel[\s\S]{0,240}eyebrow="ROUTE PROGRESS"/.test(widgetRenderersSource),
   'Route Progress must no longer be the bottom command widget label.',
 );
-assert(widgetRenderersSource.includes('terrainRiskRoutePointsHaveElevation'), 'Terrain Risk must detect elevation preserved on active guidance route points.');
-assert(widgetRenderersSource.includes('ele: point.ele ?? point.ele_m ?? null'), 'Terrain Risk must preserve route point elevation instead of flattening active guidance geometry to lat/lng only.');
+assert(terrainRiskRuntimeSource.includes('routePointsHaveElevation'), 'Terrain Risk must detect elevation preserved on active guidance route points.');
+assert(terrainRiskRuntimeSource.includes('ele: point.ele ?? point.ele_m ?? null'), 'Terrain Risk must preserve route point elevation instead of flattening active guidance geometry to lat/lng only.');
 assert(navigateSource.includes("...(Number.isFinite(point.ele_m) ? { ele: point.ele_m, ele_m: point.ele_m } : null)"), 'Navigate route handoff must preserve imported run elevation for live dashboard terrain risk.');
 assert(navigateRunSource.includes("...(Number.isFinite(point.ele_m) ? { ele: point.ele_m, ele_m: point.ele_m } : null)"), 'Run detail navigation must preserve imported run elevation for live dashboard terrain risk.');
 assert(!widgetRenderersSource.includes('attitudeStageTerrainRiskMode'), 'Terrain Risk center-stage mode must be removed.');
@@ -166,7 +169,7 @@ assert(sideProfileSource.includes('chart.highRiskSegments.map'), 'High-risk sect
 assert(sideProfileSource.includes('strokeWidth={segment.strokeWidth}'), 'Risk segment strokes should vary by risk intensity.');
 assert(sideProfileSource.includes('textAnchor={tick.anchor}'), 'Distance labels should avoid edge clipping on small chart widths.');
 assert(sideProfileSource.includes('accessibilityRole="image"'), 'Terrain Risk chart should expose image semantics to assistive tech.');
-assert(sideProfileSource.includes('High risk route sections are highlighted'), 'Terrain Risk chart should describe high-risk emphasis for assistive tech.');
+assert(sideProfileSource.includes('high risk route sections are highlighted'), 'Terrain Risk chart should describe high-risk emphasis for assistive tech.');
 assert(sideProfileSource.includes('transparentBackground = false'), 'Terrain Risk chart should keep opaque detail rendering by default.');
 assert(sideProfileSource.includes('!transparentBackground ?'), 'Terrain Risk chart should be able to suppress the opaque SVG background.');
 assert(sideProfileSource.includes('shellTransparent'), 'Terrain Risk chart needs a transparent shell style for compact route panels.');
@@ -209,7 +212,7 @@ assert(sideProfileSource.includes('function buildElevationProbePoint'), 'Terrain
 assert(sideProfileSource.includes('selectedProbePoint'), 'Terrain Risk side profile should track the selected elevation probe point while dragging.');
 assert(sideProfileSource.includes('testID="terrainRiskElevationProbe"'), 'Terrain Risk side profile should render a testable elevation probe overlay.');
 assert(sideProfileSource.includes('Elevation probe'), 'Terrain Risk side profile should label the elevation probe for assistive tech.');
-assert(widgetRenderersSource.includes('completedDistanceMiles={terrainRisk.completedDistanceMiles}'), 'Expanded Terrain Risk preview should pass active route progress into the side profile.');
+assert(widgetRenderersSource.includes('completedDistanceMiles={presentation.currentProgressDistanceMiles}'), 'Expanded Terrain Risk preview should pass projected active route progress into the side profile.');
 assert(!sideProfileSource.includes('ROUTE SIDE PROFILE'), 'Terrain Risk chart should not spend compact dashboard space on a redundant chart title.');
 assert(!commandModuleSource.includes('<Image'), 'Terrain Risk command module must not be a static image.');
 assert(!sideProfileSource.includes('<Image'), 'Terrain Risk side profile must not be a static image.');

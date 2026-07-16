@@ -53,7 +53,7 @@ const mockPowerConnector = read('src/power/connectors/MockPowerConnector.ts');
 const dispatchInviteDomain = read('lib/dispatchInviteDomain.ts');
 const expeditionInviteLocalAdapter = read('lib/expeditionInviteLocalAdapter.ts');
 const dispatchDemoScenarios = read('lib/dispatchDemoScenarios.ts');
-const dispatchCommandCenter = read('components/dispatch/DispatchCommandCenter.tsx');
+const dispatchCommandCenter = read('components/dispatch/DispatchCadCommandCenter.tsx');
 const vehicleTelemetryStore = read('src/vehicle-telemetry/VehicleTelemetryStore.ts');
 const unifiedTelemetryStore = read('src/telemetry/ECSTelemetryStore.ts');
 const telemetrySourceState = read('lib/telemetrySourceState.ts');
@@ -167,10 +167,10 @@ assertContains(
   'externalCommunication: false',
   'Dispatch demo scenarios must not be external-communication capable.',
 );
-assertContains(
+assertNotContains(
   dispatchCommandCenter,
-  "if (expeditionSource === 'mock') return 'Enabled / dev data suppressed';",
-  'Dispatch command center should suppress dev/mock data from notification adapter status.',
+  'dispatchMockData',
+  'The canonical Dispatch command center must not import runtime mock data.',
 );
 
 assertContains(

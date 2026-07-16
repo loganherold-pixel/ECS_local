@@ -84,6 +84,7 @@ import {
   startECSPerformanceSpan,
   type ECSPerformanceSpanHandle,
 } from '../lib/performance/ecsPerformanceDiagnostics';
+import { useReducedMotion } from '../lib/ecsAnimations';
 
 // ── ECS Dock Palette ─────────────────────────────────────────
 const DOCK = {
@@ -185,6 +186,7 @@ const DockButton = React.memo(function DockButton({
   maxWidth,
   labelMuted,
   labelActive,
+  reducedMotion,
 }: {
   item: DockItem;
   isActive: boolean;
@@ -192,6 +194,7 @@ const DockButton = React.memo(function DockButton({
   maxWidth: number;
   labelMuted: string;
   labelActive: string;
+  reducedMotion: boolean;
 }) {
   const pressScaleAnim = useRef(new Animated.Value(1)).current;
   const colorProgress = useRef(new Animated.Value(isActive ? 1 : 0)).current;
@@ -201,6 +204,14 @@ const DockButton = React.memo(function DockButton({
   useEffect(() => {
     const wasActive = prevActiveRef.current;
     prevActiveRef.current = isActive;
+
+    if (reducedMotion) {
+      colorProgress.stopAnimation();
+      scalePulse.stopAnimation();
+      colorProgress.setValue(isActive ? 1 : 0);
+      scalePulse.setValue(1);
+      return;
+    }
 
     Animated.timing(colorProgress, {
       toValue: isActive ? 1 : 0,
@@ -225,7 +236,7 @@ const DockButton = React.memo(function DockButton({
         }),
       ]).start();
     }
-  }, [isActive, colorProgress, scalePulse]);
+  }, [isActive, colorProgress, reducedMotion, scalePulse]);
 
   const inactiveOpacity = colorProgress.interpolate({
     inputRange: [0, 1],
@@ -246,22 +257,30 @@ const DockButton = React.memo(function DockButton({
   });
 
   const handlePressIn = useCallback(() => {
+    if (reducedMotion) {
+      pressScaleAnim.setValue(1);
+      return;
+    }
     Animated.timing(pressScaleAnim, {
       toValue: PRESS.scaleDown,
       duration: MOTION.tapPress,
       easing: EASING.press,
       useNativeDriver: true,
     }).start();
-  }, [pressScaleAnim]);
+  }, [pressScaleAnim, reducedMotion]);
 
   const handlePressOut = useCallback(() => {
+    if (reducedMotion) {
+      pressScaleAnim.setValue(1);
+      return;
+    }
     Animated.timing(pressScaleAnim, {
       toValue: PRESS.scaleUp,
       duration: MOTION.pressRelease,
       easing: EASING.standard,
       useNativeDriver: true,
     }).start();
-  }, [pressScaleAnim]);
+  }, [pressScaleAnim, reducedMotion]);
 
   const handlePress = useCallback(() => {
     hapticMicro();
@@ -277,6 +296,11 @@ const DockButton = React.memo(function DockButton({
       onPressOut={handlePressOut}
       onPress={handlePress}
       hitSlop={8}
+      accessible
+      accessibilityRole="tab"
+      accessibilityLabel={item.label}
+      accessibilityHint={`Opens the ${item.label} primary surface`}
+      accessibilityState={{ selected: isActive }}
     >
       <Animated.View
         style={[
@@ -307,11 +331,16 @@ const DockButton = React.memo(function DockButton({
             cachePolicy="memory-disk"
             priority="high"
             transition={0}
+            accessible={false}
           />
         </Animated.View>
 
         <View style={[styles.labelContainer, styles.outerLabelContainer]}>
           <Animated.Text
+            accessible={false}
+            importantForAccessibility="no"
+            numberOfLines={2}
+            maxFontSizeMultiplier={1.6}
             style={[
               styles.dockLabel,
               styles.labelBase,
@@ -323,6 +352,10 @@ const DockButton = React.memo(function DockButton({
           </Animated.Text>
 
           <Animated.Text
+            accessible={false}
+            importantForAccessibility="no"
+            numberOfLines={2}
+            maxFontSizeMultiplier={1.6}
             style={[
               styles.dockLabel,
               styles.labelOverlay,
@@ -348,6 +381,7 @@ const ShieldCenterButton = React.memo(function ShieldCenterButton({
   hintScale,
   slotWidth,
   verticalDrop,
+  reducedMotion,
 }: {
   isActive: boolean;
   onTap: () => void;
@@ -356,6 +390,7 @@ const ShieldCenterButton = React.memo(function ShieldCenterButton({
   hintScale?: Animated.Value;
   slotWidth: number;
   verticalDrop: number;
+  reducedMotion: boolean;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -364,27 +399,35 @@ const ShieldCenterButton = React.memo(function ShieldCenterButton({
   const handlePressIn = useCallback(() => {
     longPressTriggered.current = false;
 
-    Animated.timing(scaleAnim, {
-      toValue: PRESS.shieldScaleDown,
-      duration: MOTION.tapPress,
-      easing: EASING.press,
-      useNativeDriver: true,
-    }).start();
+    if (reducedMotion) {
+      scaleAnim.setValue(1);
+    } else {
+      Animated.timing(scaleAnim, {
+        toValue: PRESS.shieldScaleDown,
+        duration: MOTION.tapPress,
+        easing: EASING.press,
+        useNativeDriver: true,
+      }).start();
+    }
 
     pressTimer.current = setTimeout(() => {
       longPressTriggered.current = true;
 
-      Animated.timing(scaleAnim, {
-        toValue: PRESS.scaleUp,
-        duration: MOTION.pressRelease,
-        easing: EASING.standard,
-        useNativeDriver: true,
-      }).start();
+      if (reducedMotion) {
+        scaleAnim.setValue(1);
+      } else {
+        Animated.timing(scaleAnim, {
+          toValue: PRESS.scaleUp,
+          duration: MOTION.pressRelease,
+          easing: EASING.standard,
+          useNativeDriver: true,
+        }).start();
+      }
 
       hapticCommand();
       onLongPress();
     }, MOTION.longPress);
-  }, [scaleAnim, onLongPress]);
+  }, [onLongPress, reducedMotion, scaleAnim]);
 
   const handlePressOut = useCallback(() => {
     if (pressTimer.current) {
@@ -392,13 +435,17 @@ const ShieldCenterButton = React.memo(function ShieldCenterButton({
       pressTimer.current = null;
     }
 
-    Animated.timing(scaleAnim, {
-      toValue: PRESS.scaleUp,
-      duration: MOTION.pressRelease,
-      easing: EASING.standard,
-      useNativeDriver: true,
-    }).start();
-  }, [scaleAnim]);
+    if (reducedMotion) {
+      scaleAnim.setValue(1);
+    } else {
+      Animated.timing(scaleAnim, {
+        toValue: PRESS.scaleUp,
+        duration: MOTION.pressRelease,
+        easing: EASING.standard,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [reducedMotion, scaleAnim]);
 
   const handlePress = useCallback(() => {
     if (!longPressTriggered.current) {
@@ -406,6 +453,11 @@ const ShieldCenterButton = React.memo(function ShieldCenterButton({
       onTap();
     }
   }, [onTap]);
+
+  useEffect(() => () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+  }, []);
 
   return (
     <View style={[styles.shieldSlot, { width: slotWidth, transform: [{ translateY: verticalDrop }] }]}>
@@ -422,7 +474,17 @@ const ShieldCenterButton = React.memo(function ShieldCenterButton({
         />
       ) : null}
 
-      <Pressable onPressIn={handlePressIn} onPressOut={handlePressOut} onPress={handlePress}>
+      <Pressable
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        onPress={handlePress}
+        accessible
+        accessibilityRole="tab"
+        accessibilityLabel="Dashboard"
+        accessibilityHint="Opens Dashboard. Long press opens Field Utilities."
+        accessibilityState={{ selected: isActive }}
+        hitSlop={8}
+      >
         <Animated.View
           style={[
             styles.shieldPressable,
@@ -440,6 +502,7 @@ const ShieldCenterButton = React.memo(function ShieldCenterButton({
               cachePolicy="memory-disk"
               priority="high"
               transition={0}
+              accessible={false}
             />
           </View>
           <View style={styles.shieldLabelSpacer} />
@@ -459,6 +522,7 @@ export default function CommandDock() {
   const { width: windowWidth } = useWindowDimensions();
   const { palette, colors, effectiveTheme } = useTheme();
   const adaptive = useAdaptiveLayout();
+  const reducedMotion = useReducedMotion();
   const [quickActionsVisible, setQuickActionsVisible] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<string | null>(null);
   const pendingRouteRef = useRef<string | null>(null);
@@ -472,6 +536,7 @@ export default function CommandDock() {
   const firstLaunchHintOpacity = useRef(new Animated.Value(0)).current;
   const firstLaunchHintScale = useRef(new Animated.Value(0.96)).current;
   const firstLaunchHintRunningRef = useRef(false);
+  const firstLaunchHintDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dockVisibilityAnim = useRef(
     new Animated.Value(
       pathname.includes('/dashboard') &&
@@ -498,6 +563,7 @@ export default function CommandDock() {
     expandedChromePath &&
     dashboardChrome.expanded &&
     !dashboardChrome.dockRevealed;
+  const dockAccessibilityHidden = hideForDashboardExpanded || quickActionsVisible;
 
   const isItemActive = useCallback(
     (item: DockItem): boolean => {
@@ -629,15 +695,24 @@ export default function CommandDock() {
   }, []);
 
   useEffect(() => {
+    if (reducedMotion) {
+      dockVisibilityAnim.stopAnimation();
+      dockVisibilityAnim.setValue(hideForDashboardExpanded ? 0 : 1);
+      return;
+    }
     Animated.timing(dockVisibilityAnim, {
       toValue: hideForDashboardExpanded ? 0 : 1,
       duration: hideForDashboardExpanded ? 220 : 260,
       easing: EASING.standard,
       useNativeDriver: true,
     }).start();
-  }, [dockVisibilityAnim, hideForDashboardExpanded]);
+  }, [dockVisibilityAnim, hideForDashboardExpanded, reducedMotion]);
 
   const dismissFirstLaunchHint = useCallback(() => {
+    if (firstLaunchHintDismissTimerRef.current) {
+      clearTimeout(firstLaunchHintDismissTimerRef.current);
+      firstLaunchHintDismissTimerRef.current = null;
+    }
     firstLaunchHintRunningRef.current = false;
     firstLaunchHintOpacity.stopAnimation();
     firstLaunchHintScale.stopAnimation();
@@ -677,6 +752,16 @@ export default function CommandDock() {
       setShowFirstLaunchHint(true);
       firstLaunchHintOpacity.setValue(0);
       firstLaunchHintScale.setValue(0.96);
+
+      if (reducedMotion) {
+        firstLaunchHintOpacity.setValue(1);
+        firstLaunchHintScale.setValue(1);
+        firstLaunchHintDismissTimerRef.current = setTimeout(() => {
+          firstLaunchHintDismissTimerRef.current = null;
+          if (!cancelled) dismissFirstLaunchHint();
+        }, 4_000);
+        return;
+      }
 
       const steps: Animated.CompositeAnimation[] = [];
       for (let i = 0; i < FIRST_LAUNCH_HINT_CYCLES; i += 1) {
@@ -752,6 +837,7 @@ export default function CommandDock() {
     firstLaunchHintOpacity,
     firstLaunchHintScale,
     isHidden,
+    reducedMotion,
   ]);
 
   if (isHidden) {
@@ -783,6 +869,8 @@ export default function CommandDock() {
           },
         ]}
         pointerEvents={hideForDashboardExpanded || quickActionsVisible ? 'none' : 'auto'}
+        accessibilityElementsHidden={dockAccessibilityHidden}
+        importantForAccessibility={dockAccessibilityHidden ? 'no-hide-descendants' : 'auto'}
       >
         <ECSGlobalBanner
           source={BOTTOM_BANNER_BG}
@@ -867,6 +955,7 @@ export default function CommandDock() {
                   onLongPress={handleDashboardLongPress}
                   slotWidth={centerSlotWidth}
                   verticalDrop={centerDashboardButtonDrop}
+                  reducedMotion={reducedMotion}
                 />
               ) : (
                 <DockButton
@@ -876,6 +965,7 @@ export default function CommandDock() {
                   maxWidth={outerItemMaxWidth}
                   labelMuted={shellChrome.dockLabelMuted}
                   labelActive={shellChrome.dockLabelActive}
+                  reducedMotion={reducedMotion}
                 />
               )}
             </View>

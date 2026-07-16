@@ -221,6 +221,22 @@ assert.deepStrictEqual(
   'Active guidance route line must not render fallback user-to-destination connector geometry.',
 );
 
+const malformedCanonicalLine = buildActiveGuidanceRouteLineSync({
+  route: route('route-malformed', 2, [
+    oldGeometry[0],
+    { lat: 999, lng: -121.206 },
+    oldGeometry[2],
+  ]),
+  navigationStatus: 'navigation_active',
+});
+assert.strictEqual(malformedCanonicalLine.status, 'degraded');
+assert.strictEqual(malformedCanonicalLine.invalidPointCount, 1);
+assert.deepStrictEqual(
+  malformedCanonicalLine.geometry,
+  [],
+  'Malformed canonical geometry must degrade instead of stitching valid points across an invalid gap.',
+);
+
 const mixedRouteVersionsLine = buildActiveGuidanceRouteLineSync({
   route: route('route-mixed', 3, [
     { lat: 38.781, lng: -121.207, routeVersion: 'old-route' },

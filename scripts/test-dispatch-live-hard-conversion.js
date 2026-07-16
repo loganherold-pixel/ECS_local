@@ -39,7 +39,6 @@ const liveEventsSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchL
 const commandCenterSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchCadCommandCenter.tsx'), 'utf8');
 const convoyPanelSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchConvoyCommandPanel.tsx'), 'utf8');
 const convoyMapSource = fs.readFileSync(path.join(process.cwd(), 'components/convoy/ConvoyCommandMap.tsx'), 'utf8');
-const legacyCommandCenterSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchCommandCenter.tsx'), 'utf8');
 const alertTabSource = fs.readFileSync(path.join(process.cwd(), 'app/(tabs)/alert.tsx'), 'utf8');
 const serviceAdaptersSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchServiceAdapters.ts'), 'utf8');
 const dispatchTypesSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchTypes.ts'), 'utf8');
@@ -461,7 +460,7 @@ teamSnapshot = teamStore.replaceTeam(
 assert.strictEqual(teamSnapshot.members.length, 1, 'Team store should keep only members for the active team.');
 teamStore.clear();
 
-assert.ok(alertTabSource.includes('DispatchCadCommandCenter'), 'Dispatch tab should render the compact CAD command center.');
+assert.ok(alertTabSource.includes('DispatchCommandCenter'), 'Dispatch tab should render the canonical Dispatch entry.');
 assert.ok(commandCenterSource.includes('dispatchEventStore.getSnapshot'), 'Dispatch feed should hydrate from the live DispatchEvent store.');
 assert.ok(commandCenterSource.includes('dispatchEventStore.subscribe'), 'Dispatch feed should subscribe to the live DispatchEvent store.');
 assert.ok(commandCenterSource.includes('dispatchEventStore.appendEvent'), 'Dispatch event creation should write through the live DispatchEvent store.');
@@ -631,7 +630,7 @@ assert.ok(!channelStateSource.includes('Coming soon'), 'Dispatch channels should
 
 assert.ok(!serviceAdaptersSource.includes('dispatchMockData'), 'Legacy adapter seed data must not be imported by runtime services.');
 assert.ok(!serviceAdaptersSource.includes('MOCK_DISPATCH'), 'Legacy adapter seed data must not be referenced by runtime services.');
-assert.ok(legacyCommandCenterSource.includes('allowMockFallback: false'), 'Legacy Dispatch command center should not request seeded roster data.');
+assert.ok(!serviceAdaptersSource.includes('dispatchMockData'), 'Canonical Dispatch adapters must not request seeded roster data.');
 assert.ok(!serviceAdaptersSource.includes('createSoloDispatchMember'), 'Dispatch services should not synthesize a solo team member.');
 assert.ok(teamStoreSource.includes("role: 'owner' | 'admin' | 'member'"), 'Team model should use the required role contract.');
 assert.ok(teamStoreSource.includes('lastKnownLocation'), 'Team member model should include timestamped last-known location support.');

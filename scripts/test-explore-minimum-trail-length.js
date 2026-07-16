@@ -119,13 +119,18 @@ assert.deepStrictEqual(
 );
 
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
+const readyInventorySource = fs.readFileSync(
+  path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'),
+  'utf8',
+);
 assert.ok(
   discoverSource.includes('() => filterByRadius(aiRoutes, activeDistanceRadius) as AIGeneratedRoute[]'),
   'ECS Route Ideas should pass through the shared radius/minimum-length filter.',
 );
 assert.ok(
-  discoverSource.includes('MIN_DISCOVERY_ROUTE_MILES') &&
-    discoverSource.includes('routePassesExploreMapLength') &&
+  discoverSource.includes('const mapInventory = buildExploreGuidanceReadyInventory') &&
+    readyInventorySource.includes('MIN_DISCOVERY_ROUTE_MILES') &&
+    readyInventorySource.includes('distanceMiles < MIN_DISCOVERY_ROUTE_MILES') &&
     !discoverSource.includes('ECS filters out trails under ${MIN_DISCOVERY_ROUTE_MILES} miles'),
   'Explorer should preserve the actual minimum-length filter without showing the removed footer disclaimer.',
 );

@@ -141,6 +141,21 @@ const CONFLICT_LABELS: Record<SourceTruthConflictState, string> = {
   unknown: 'Conflict state unknown',
 };
 
+export function getSourceTruthFreshnessLabel(freshness: SourceTruthFreshness): string {
+  return FRESHNESS_LABELS[freshness];
+}
+
+export function getSourceTruthOriginLabel(origin: SourceTruthOrigin): string {
+  return ORIGIN_LABELS[origin];
+}
+
+export function formatSourceTruthStateLabel(
+  origin: SourceTruthOrigin,
+  freshness: SourceTruthFreshness,
+): string {
+  return `${getSourceTruthOriginLabel(origin)} / ${getSourceTruthFreshnessLabel(freshness)}`;
+}
+
 const WARNING_COPY: Record<string, string> = {
   missing_source_truth: 'No canonical source details are available for this result.',
   missing_timestamp: 'The source did not provide a usable observation or retrieval time.',

@@ -37,7 +37,7 @@ interface TabErrorBoundaryState {
   errorInfo: string | null;
 }
 
-function mapTabToArea(tabName: string | null | undefined) {
+export function mapTabToArea(tabName: string | null | undefined) {
   switch (String(tabName ?? '').toLowerCase()) {
     case 'fleet':
       return 'fleet' as const;
@@ -49,6 +49,7 @@ function mapTabToArea(tabName: string | null | undefined) {
     case 'discover':
       return 'explore' as const;
     case 'alert':
+    case 'dispatch':
       return 'alert' as const;
     default:
       return 'app_shell' as const;

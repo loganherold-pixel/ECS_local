@@ -483,9 +483,7 @@ export default function RouteProgressMiniMap({
   );
   const explicitProgress = clampProgress(progressPercent);
   const resolvedProgress =
-    explicitProgress != null && (explicitProgress > 0 || inferredProgress == null)
-      ? explicitProgress
-      : inferredProgress ?? explicitProgress ?? 0;
+    explicitProgress ?? inferredProgress ?? 0;
   const routeMatchedMarkerLocation = useMemo(
     () => (isGuidanceActive ? getCurrentPointOnRoute(routeFeature, resolvedProgress) : null),
     [isGuidanceActive, resolvedProgress, routeFeature],

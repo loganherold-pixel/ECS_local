@@ -526,14 +526,24 @@ function computeSessionFromRoute(
           : null,
     updatedAt: nowIso,
   });
+  const confirmedBacktracking =
+    previousProgress != null &&
+    activeGuidanceProgress.routeDistanceFromStartMeters <
+      previousProgress.routeDistanceFromStartMeters - 18;
   const progress = resolveRoadNavigationProgress(route, {
     location,
-    previousStepIndex: previous.currentStepIndex,
-    previousRemainingDistanceM: previous.remainingDistanceM,
+    previousStepIndex: previousProgress ? previous.currentStepIndex : null,
+    previousRemainingDistanceM: previousProgress ? previous.remainingDistanceM : null,
     lockForwardProgress:
-      previous.status === 'navigation_active' ||
-      previous.status === 'rerouting' ||
-      previous.status === 'arrived',
+      !!previousProgress &&
+      (previous.status === 'navigation_active' ||
+        previous.status === 'rerouting' ||
+        previous.status === 'arrived'),
+    elapsedMs:
+      previousProgress && Number.isFinite(Date.parse(previousProgress.updatedAt))
+        ? Math.max(0, Date.parse(nowIso) - Date.parse(previousProgress.updatedAt))
+        : null,
+    allowBacktracking: confirmedBacktracking,
   });
   const remainingDistanceM = activeGuidanceProgress.distanceRemainingMeters;
   const remainingDurationS =
@@ -1011,22 +1021,29 @@ export function useRoadNavigation(params: {
   );
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || restoreAttemptedRef.current) return;
 
     let cancelled = false;
+    // Claim the one restore flight before awaiting storage. Location updates must
+    // not restart the read, and a later restore must never replace user work.
+    restoreAttemptedRef.current = true;
     (async () => {
       const restored = await loadRoadNavigationSession();
-      if (cancelled || restoreAttemptedRef.current || !restored) return;
+      if (cancelled || !restored) return;
 
       if (!isRestorableRoadSession(restored)) {
-        restoreAttemptedRef.current = true;
         await clearRoadNavigationSession();
         return;
       }
 
-      restoreAttemptedRef.current = true;
       const restoredRoute = buildCachedRoadRouteFromRestoredSession(restored, currentLocation);
       setSession((prev) => {
+        const liveSessionStarted =
+          prev.sessionId != null ||
+          prev.destination != null ||
+          prev.route != null ||
+          prev.status !== 'idle';
+        if (liveSessionStarted) return prev;
         const restoredStatus = restoredRoute ? restored.status : 'destination_selected';
         const computed = restoredRoute
           ? computeSessionFromRoute(restoredRoute, currentLocation, prev)

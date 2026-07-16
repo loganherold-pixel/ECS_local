@@ -3,6 +3,12 @@ import type {
   NavigationTrailWaypoint,
 } from './navigationHandoffStore';
 import type { RoadNavCoordinate } from './mapboxRoadNavigation';
+import {
+  buildGuidanceRouteDistanceIndex,
+  projectGuidanceRouteAtDistance,
+  resolveGuidanceRouteProgress,
+  type GuidanceRouteProjection,
+} from './navigation/guidanceRouteProjection';
 
 export type TrailNavigationStatus =
   | 'idle'
@@ -34,6 +40,9 @@ export interface TrailProgressProjection {
   distanceFromRouteM: number;
   distanceToDestinationM: number;
   progressCoords: RoadNavCoordinate[];
+  nearestCandidateIndex?: number;
+  nearestCandidateDistanceM?: number;
+  nearestSegmentBearingDeg?: number | null;
 }
 
 export interface TrailPrompt {
@@ -90,7 +99,12 @@ export function buildTrailCumulativeDistances(points: RoadNavCoordinate[]): numb
 export function projectOnTrailGeometry(
   location: TrailGuidanceLocation,
   points: RoadNavCoordinate[],
-  cumulativeDistances: number[],
+  _cumulativeDistances: number[],
+  options?: {
+    previousProjection?: GuidanceRouteProjection | null;
+    allowBacktracking?: boolean;
+    elapsedMs?: number | null;
+  },
 ): TrailProgressProjection {
   if (points.length === 0) {
     return {
@@ -117,51 +131,39 @@ export function projectOnTrailGeometry(
     };
   }
 
-  let bestDistanceM = Infinity;
-  let bestNearestIndex = 0;
-  let bestAlongDistanceM = 0;
-  let bestProjection = points[0];
-
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const start = points[i];
-    const end = points[i + 1];
-    const referenceLat = (start.lat + end.lat + location.lat) / 3;
-
-    const bx = toMetersDeltaLng(end.lng - start.lng, referenceLat);
-    const by = toMetersDeltaLat(end.lat - start.lat);
-    const px = toMetersDeltaLng(location.lng - start.lng, referenceLat);
-    const py = toMetersDeltaLat(location.lat - start.lat);
-    const lengthSquared = bx * bx + by * by;
-    const tRaw = lengthSquared > 0 ? (px * bx + py * by) / lengthSquared : 0;
-    const t = clamp(tRaw, 0, 1);
-    const projectionX = bx * t;
-    const projectionY = by * t;
-    const distanceFromSegmentM = Math.sqrt((px - projectionX) ** 2 + (py - projectionY) ** 2);
-
-    if (distanceFromSegmentM < bestDistanceM) {
-      bestDistanceM = distanceFromSegmentM;
-      bestNearestIndex = i + (t >= 0.5 ? 1 : 0);
-      bestAlongDistanceM =
-        cumulativeDistances[i] + Math.sqrt(projectionX ** 2 + projectionY ** 2);
-      bestProjection = {
-        lat: start.lat + (end.lat - start.lat) * t,
-        lng: start.lng + (end.lng - start.lng) * t,
-      };
-    }
-  }
-
-  const progressCoords = points.slice(0, Math.max(bestNearestIndex, 1));
-  progressCoords.push(bestProjection);
-  const totalDistanceM = cumulativeDistances[cumulativeDistances.length - 1] ?? 0;
+  const resolved = resolveGuidanceRouteProgress({
+    rawPosition: location,
+    routeGeometry: points,
+    context: 'trail',
+    accuracyM: location.accuracyM,
+    headingDeg: location.headingDeg,
+    speedMps:
+      typeof location.speedMph === 'number' && Number.isFinite(location.speedMph)
+        ? location.speedMph * 0.44704
+        : null,
+    elapsedMs: options?.elapsedMs,
+    previousProjection: options?.previousProjection,
+    allowBacktracking: options?.allowBacktracking,
+  });
+  const progressProjection = resolved.progressProjection;
+  const nearestProjection = resolved.nearestProjection;
+  const nearestIndex = progressProjection
+    ? progressProjection.segmentIndex + (progressProjection.segmentFraction >= 0.5 ? 1 : 0)
+    : 0;
 
   return {
-    nearestIndex: bestNearestIndex,
-    projectedPoint: bestProjection,
-    traveledDistanceM: bestAlongDistanceM,
-    remainingDistanceM: Math.max(totalDistanceM - bestAlongDistanceM, 0),
-    distanceFromRouteM: bestDistanceM,
+    nearestIndex,
+    projectedPoint: nearestProjection?.coordinate ?? points[0],
+    traveledDistanceM: resolved.routeDistanceM,
+    remainingDistanceM: resolved.remainingDistanceM,
+    distanceFromRouteM: resolved.offRouteDistanceM,
     distanceToDestinationM: trailDistanceMeters(location, points[points.length - 1]),
-    progressCoords,
+    progressCoords: resolved.completedGeometry,
+    nearestCandidateIndex: nearestProjection
+      ? nearestProjection.segmentIndex + (nearestProjection.segmentFraction >= 0.5 ? 1 : 0)
+      : 0,
+    nearestCandidateDistanceM: nearestProjection?.distanceFromRouteStartM ?? 0,
+    nearestSegmentBearingDeg: nearestProjection?.segmentBearingDeg ?? null,
   };
 }
 
@@ -267,9 +269,22 @@ export function buildTrailGuidanceSnapshot(params: {
   decisionPoints: NavigationTrailDecisionPoint[];
   reachedWaypointIds: string[];
   mode: 'trail' | 'hybrid';
+  previousTraveledDistanceM?: number | null;
+  allowBacktracking?: boolean;
+  elapsedMs?: number | null;
 }): TrailGuidanceSnapshot {
   const cumulativeDistances = buildTrailCumulativeDistances(params.geometry);
-  const progress = projectOnTrailGeometry(params.location, params.geometry, cumulativeDistances);
+  const routeIndex = buildGuidanceRouteDistanceIndex(params.geometry);
+  const previousProjection =
+    typeof params.previousTraveledDistanceM === 'number' &&
+    Number.isFinite(params.previousTraveledDistanceM)
+      ? projectGuidanceRouteAtDistance(routeIndex, params.previousTraveledDistanceM)
+      : null;
+  const progress = projectOnTrailGeometry(params.location, params.geometry, cumulativeDistances, {
+    previousProjection,
+    allowBacktracking: params.allowBacktracking,
+    elapsedMs: params.elapsedMs,
+  });
   const accuracyM = Number.isFinite(Number(params.location.accuracyM))
     ? Number(params.location.accuracyM)
     : 18;

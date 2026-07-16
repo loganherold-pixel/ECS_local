@@ -15,6 +15,8 @@ const DEFAULT_LIMIT = 240;
 const MAX_LIMIT = 500;
 const ROUTE_GEOMETRY_UNAVAILABLE_MESSAGE =
   'ECS trail segments are temporarily unavailable for this map view. Saved and imported route geometry remain available.';
+const ROUTE_GEOMETRY_SOURCE_FILTER_UNAVAILABLE_MESSAGE =
+  'Source-specific trail filtering is temporarily unavailable. Retry after the route catalog update is applied.';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -22,12 +24,14 @@ function jsonResponse(body: JsonRecord, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
 }
 
-function routeGeometryUnavailableResponse(reason: string): Response {
+function routeGeometryUnavailableResponse(reason: string, sourceProviderPrefix: string | null = null): Response {
   return jsonResponse({
     ok: true,
     segments: [],
     meta: {
       source: ROUTE_GEOMETRY_CATALOG_SOURCE,
+      sourceProviderPrefix,
+      sourceFilterApplied: sourceProviderPrefix != null,
       bboxFilterApplied: true,
       degraded: true,
       unavailableReason: reason,
@@ -35,6 +39,7 @@ function routeGeometryUnavailableResponse(reason: string): Response {
       candidateCount: 0,
       cappedCount: 0,
       skippedMissingGeometryCount: 0,
+      invalidFeatureCount: 0,
       skippedClosedCount: 0,
       fetchedAt: new Date().toISOString(),
     },
@@ -81,6 +86,17 @@ function cleanText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const text = value.replace(/\s+/g, ' ').trim();
   return text.length > 0 && text.length < 120 ? text : null;
+}
+
+function cleanSourceProviderPrefix(value: unknown): string | null {
+  const text = cleanText(value);
+  if (!text) return null;
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+  return normalized || null;
 }
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
@@ -140,6 +156,24 @@ function dataStateFromVerifiedAt(value: unknown): 'live' | 'stale' | 'unknown' {
 function sourceRecords(row: JsonRecord): JsonRecord[] {
   const value = row.source_records;
   return Array.isArray(value) ? value.map(readRecord).filter((record): record is JsonRecord => !!record) : [];
+}
+
+function rowMatchesSourceProviderPrefix(row: JsonRecord, sourceProviderPrefix: string | null): boolean {
+  if (!sourceProviderPrefix) return true;
+  return sourceRecords(row).some((source) => {
+    const providerId = cleanSourceProviderPrefix(source.providerId ?? source.provider_id);
+    return providerId?.startsWith(sourceProviderPrefix) === true;
+  });
+}
+
+function isMissingSourceFilteredRpc(error: unknown): boolean {
+  const record = readRecord(error);
+  const code = cleanText(record?.code)?.toUpperCase();
+  const message = cleanText(record?.message)?.toLowerCase() ?? '';
+  return code === 'PGRST202' || (
+    message.includes('search_route_geometry_segments_for_viewport_v2') &&
+    (message.includes('schema cache') || message.includes('could not find the function'))
+  );
 }
 
 function sourceLabel(row: JsonRecord): string {
@@ -213,6 +247,7 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'GET' && req.method !== 'POST') return jsonResponse({ ok: false, error: 'GET or POST required' }, 405);
 
+  let sourceProviderPrefix: string | null = null;
   try {
     const params = await requestParams(req);
     const bbox = cleanBbox(params);
@@ -222,25 +257,31 @@ serve(async (req) => {
     const maxLimit = cleanLimit(params.limit);
     const includeReferenceGeometry = readBoolean(params.includeReferenceGeometry ?? params.include_reference_geometry, true);
     const vehicleClass = cleanText(params.vehicleClass ?? params.vehicle_class);
+    sourceProviderPrefix = cleanSourceProviderPrefix(
+      params.sourceProviderPrefix ?? params.source_provider_prefix,
+    );
     if (zoom < MIN_ZOOM) {
       return jsonResponse({
         ok: true,
         segments: [],
         meta: {
           source: ROUTE_GEOMETRY_CATALOG_SOURCE,
+          sourceProviderPrefix,
+          sourceFilterApplied: sourceProviderPrefix != null,
           bboxFilterApplied: true,
           zoomTooLow: true,
           minZoom: MIN_ZOOM,
           candidateCount: 0,
           cappedCount: 0,
           skippedMissingGeometryCount: 0,
+          invalidFeatureCount: 0,
           skippedClosedCount: 0,
         },
       });
     }
 
     const admin = createAdminClient();
-    const { data, error } = await admin.rpc('search_route_geometry_segments_for_viewport', {
+    const rpcArgs = {
       p_min_lng: bbox.minLng,
       p_min_lat: bbox.minLat,
       p_max_lng: bbox.maxLng,
@@ -249,28 +290,67 @@ serve(async (req) => {
       p_limit: maxLimit,
       p_include_reference_geometry: includeReferenceGeometry,
       p_vehicle_class: vehicleClass,
-    });
+    };
+    let sourceFilterMode: 'none' | 'database' | 'edge_compatibility' = 'none';
+    let rpcResult = sourceProviderPrefix
+      ? await admin.rpc('search_route_geometry_segments_for_viewport_v2', {
+          ...rpcArgs,
+          p_source_provider_prefix: sourceProviderPrefix,
+        })
+      : await admin.rpc('search_route_geometry_segments_for_viewport', rpcArgs);
+
+    if (sourceProviderPrefix && rpcResult.error && isMissingSourceFilteredRpc(rpcResult.error)) {
+      sourceFilterMode = 'edge_compatibility';
+      rpcResult = await admin.rpc('search_route_geometry_segments_for_viewport', {
+        ...rpcArgs,
+        p_limit: MAX_LIMIT,
+      });
+    } else if (sourceProviderPrefix && !rpcResult.error) {
+      sourceFilterMode = 'database';
+    }
+
+    const { data, error } = rpcResult;
     if (error) throw new Error(error.message || 'Unable to search route geometry segments.');
 
     const rawRows = Array.isArray(data) ? data as JsonRecord[] : [];
-    const cappedCount = rawRows.length > maxLimit ? rawRows.length - maxLimit : 0;
+    const sourceMatchedRows = sourceProviderPrefix && sourceFilterMode !== 'database'
+      ? rawRows.filter((row) => rowMatchesSourceProviderPrefix(row, sourceProviderPrefix))
+      : rawRows;
+    const sourceFilterDegraded = sourceFilterMode === 'edge_compatibility';
+    const cappedCount = Math.max(0, sourceMatchedRows.length - maxLimit);
     let skippedMissingGeometryCount = 0;
-    const segments = rawRows.slice(0, maxLimit).map(shapeSegment).filter((segment): segment is JsonRecord => {
-      if (!segment) skippedMissingGeometryCount += 1;
-      return !!segment;
-    });
+    let invalidFeatureCount = 0;
+    const segments = sourceMatchedRows
+      .slice(0, maxLimit)
+      .map(shapeSegment)
+      .filter((segment): segment is JsonRecord => {
+        if (!segment) {
+          skippedMissingGeometryCount += 1;
+          invalidFeatureCount += 1;
+        }
+        return !!segment;
+      });
 
     return jsonResponse({
       ok: true,
       segments,
       meta: {
         source: ROUTE_GEOMETRY_CATALOG_SOURCE,
+        sourceProviderPrefix,
+        sourceFilterApplied: sourceProviderPrefix != null,
+        sourceFilterMode,
+        degraded: sourceFilterDegraded,
+        unavailableReason: sourceFilterDegraded ? 'source_filter_migration_unavailable' : null,
+        userMessage: sourceFilterDegraded ? ROUTE_GEOMETRY_SOURCE_FILTER_UNAVAILABLE_MESSAGE : null,
+        sourceFilteredCount: Math.max(0, rawRows.length - sourceMatchedRows.length),
+        unfilteredCandidateCount: sourceFilterMode === 'database' ? null : rawRows.length,
         bboxFilterApplied: true,
         zoomTooLow: false,
         minZoom: MIN_ZOOM,
-        candidateCount: rawRows.length,
+        candidateCount: sourceMatchedRows.length,
         cappedCount,
         skippedMissingGeometryCount,
+        invalidFeatureCount,
         skippedClosedCount: 0,
         includeReferenceGeometry,
         vehicleClass,
@@ -281,6 +361,6 @@ serve(async (req) => {
     console.error('[route-geometry-segments]', {
       message: error instanceof Error ? error.message : 'Unknown route geometry viewport failure.',
     });
-    return routeGeometryUnavailableResponse('backend_unavailable');
+    return routeGeometryUnavailableResponse('backend_unavailable', sourceProviderPrefix);
   }
 });

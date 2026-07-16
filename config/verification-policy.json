@@ -1578,6 +1578,119 @@
       "executionEnvironment": "static"
     },
     {
+      "id": "runtime-regression-fast",
+      "script": "test:runtime-regression:fast",
+      "capabilities": [
+        "navigate",
+        "dashboard",
+        "weather-fire",
+        "offline-recovery"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "UI/component",
+        "offline"
+      ],
+      "scenarios": [
+        "dashboard_weather_live_and_cached",
+        "terrain_profile_truth",
+        "route_draft_pre_preview",
+        "canonical_guidance_projection",
+        "independent_map_layer_terminals"
+      ],
+      "qualifiedTestIdentities": [
+        "ecs.runtime.fast.dashboard_weather.live_and_cached",
+        "ecs.runtime.fast.terrain_risk.profile_and_missing_elevation",
+        "ecs.runtime.fast.draw_route.pre_preview_draft_lifecycle",
+        "ecs.runtime.fast.guidance_snapping.canonical_projection",
+        "ecs.runtime.fast.navigate_layers.independent_terminals_and_stale_viewport"
+      ],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci",
+      "notes": "Executes deterministic state and presentation behavior for weather, terrain, draft geometry, canonical guidance projection, and independent map-layer terminal states."
+    },
+    {
+      "id": "runtime-regression-integration",
+      "script": "test:runtime-regression:integration",
+      "capabilities": [
+        "fleet",
+        "navigate",
+        "dashboard",
+        "explore",
+        "dispatch"
+      ],
+      "classifications": [
+        "integration",
+        "UI/component"
+      ],
+      "scenarios": [
+        "dispatch_canonical_mount_and_update",
+        "explore_guidance_promotion",
+        "provider_failure_not_empty",
+        "primary_controls_execute"
+      ],
+      "qualifiedTestIdentities": [
+        "runtime.integration.dispatch.canonical-route-store-update",
+        "runtime.integration.explore.guidance-readiness-promotion",
+        "runtime.integration.explore.provider-failure-truth",
+        "runtime.integration.controls.fleet-primary-navigation",
+        "runtime.integration.controls.navigate-primary-navigation",
+        "runtime.integration.controls.dashboard-primary-navigation",
+        "runtime.integration.controls.explore-primary-navigation",
+        "runtime.integration.controls.dispatch-primary-navigation"
+      ],
+      "lanes": [
+        "affected-domain",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci",
+      "notes": "Mounts the registered Dispatch route and CommandDock actions while executing isolated Dispatch-store and Explore-provider/readiness behavior."
+    },
+    {
+      "id": "runtime-regression-lane-system",
+      "script": "test:runtime-regression-lane-system",
+      "capabilities": [
+        "offline-recovery"
+      ],
+      "classifications": [
+        "unit",
+        "integration",
+        "offline"
+      ],
+      "scenarios": [
+        "runtime_result_contract_fail_closed",
+        "runtime_child_timeout_enforced"
+      ],
+      "qualifiedTestIdentities": [
+        "runtime-regression.lane-system.fail-closed-contract-and-worker-timeout"
+      ],
+      "lanes": [
+        "pr-fast",
+        "full-nightly",
+        "release-candidate"
+      ],
+      "confidence": "behavioral",
+      "workspace": "root",
+      "evidenceClass": "behavioral",
+      "evidenceQuality": "authoritative",
+      "executionEnvironment": "deterministic_ci",
+      "notes": "Rejects unsafe or incomplete machine output and proves a synchronously stuck managed-environment worker reaches a bounded terminal timeout."
+    },
+    {
       "id": "state-management-foundation",
       "script": "test:state-management-foundation",
       "capabilities": [

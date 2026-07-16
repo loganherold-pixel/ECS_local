@@ -373,6 +373,8 @@ assert.strictEqual(closestTarget.routeId, 'rubicon-trail');
 assert(closestTarget.distanceMiles < 10);
 assert.strictEqual(closestTarget.policy, 'closest_viable_point_on_ecs_route_geometry');
 
+const originalDevFlag = global.__DEV__;
+global.__DEV__ = true;
 global.__ECS_ROUTE_CATALOG_DEBUG = false;
 assert.strictEqual(isRouteCatalogDebugEnabled(), false, 'Route catalog diagnostics should be off by default.');
 global.__ECS_ROUTE_CATALOG_DEBUG = true;
@@ -393,6 +395,8 @@ assert(
   'Debug-gated logger should emit route catalog diagnostics only when the flag is enabled.',
 );
 delete global.__ECS_ROUTE_CATALOG_DEBUG;
+if (typeof originalDevFlag === 'undefined') delete global.__DEV__;
+else global.__DEV__ = originalDevFlag;
 
 const liveCatalogSource = fs.readFileSync(path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts'), 'utf8');
 const viewportClientSource = fs.readFileSync(path.join(root, 'lib', 'routeCatalogViewportClient.ts'), 'utf8');

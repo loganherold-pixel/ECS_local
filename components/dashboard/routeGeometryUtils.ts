@@ -1,3 +1,10 @@
+import {
+  buildGuidanceRouteDistanceIndex,
+  projectGuidanceRouteAtDistance,
+  resolveGuidanceRouteProgress,
+  splitGuidanceRouteAtProjection,
+} from '../../lib/navigation/guidanceRouteProjection';
+
 export type MiniMapCoordinate = {
   latitude: number;
   longitude: number;
@@ -75,23 +82,6 @@ function getSegmentDistanceM(a: [number, number], b: [number, number]) {
   return 2 * EARTH_RADIUS_M * Math.atan2(Math.sqrt(hav), Math.sqrt(1 - hav));
 }
 
-function interpolateCoordinate(a: [number, number], b: [number, number], ratio: number): [number, number] {
-  const clamped = clamp(ratio, 0, 1);
-  return [
-    a[0] + (b[0] - a[0]) * clamped,
-    a[1] + (b[1] - a[1]) * clamped,
-  ];
-}
-
-function toPlanarMeters(point: MiniMapCoordinate, origin: MiniMapCoordinate) {
-  const latitudeScale = 111320;
-  const longitudeScale = Math.cos(toRadians(origin.latitude)) * 111320;
-  return {
-    x: (point.longitude - origin.longitude) * longitudeScale,
-    y: (point.latitude - origin.latitude) * latitudeScale,
-  };
-}
-
 export function normalizeRouteFeature(routeGeoJson?: MiniMapRouteInput | null): MiniMapLineStringFeature | null {
   const geometry =
     routeGeoJson?.type === 'Feature'
@@ -131,41 +121,13 @@ export function projectLocationToRouteProgress(
 ): number | null {
   const coordinates = route?.geometry.coordinates ?? [];
   if (coordinates.length < 2 || !currentLocation) return null;
-
-  const origin = coordinateToPoint(coordinates[0]);
-  const current = toPlanarMeters(currentLocation, origin);
-  const totalDistance = getRouteDistance(route);
-  if (totalDistance <= 0) return null;
-
-  let bestDistanceSq = Number.POSITIVE_INFINITY;
-  let bestDistanceAlong = 0;
-  let distanceAlong = 0;
-
-  for (let index = 1; index < coordinates.length; index += 1) {
-    const startCoordinate = coordinates[index - 1];
-    const endCoordinate = coordinates[index];
-    const segmentDistance = getSegmentDistanceM(startCoordinate, endCoordinate);
-    const start = toPlanarMeters(coordinateToPoint(startCoordinate), origin);
-    const end = toPlanarMeters(coordinateToPoint(endCoordinate), origin);
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const segmentLengthSq = dx * dx + dy * dy;
-    const projectionRatio = segmentLengthSq > 0
-      ? clamp(((current.x - start.x) * dx + (current.y - start.y) * dy) / segmentLengthSq, 0, 1)
-      : 0;
-    const projected = {
-      x: start.x + dx * projectionRatio,
-      y: start.y + dy * projectionRatio,
-    };
-    const distanceSq = (current.x - projected.x) ** 2 + (current.y - projected.y) ** 2;
-    if (distanceSq < bestDistanceSq) {
-      bestDistanceSq = distanceSq;
-      bestDistanceAlong = distanceAlong + segmentDistance * projectionRatio;
-    }
-    distanceAlong += segmentDistance;
-  }
-
-  return clamp((bestDistanceAlong / totalDistance) * 100, 0, 100);
+  const progress = resolveGuidanceRouteProgress({
+    rawPosition: { lat: currentLocation.latitude, lng: currentLocation.longitude },
+    routeGeometry: coordinates.map(([lng, lat]) => ({ lat, lng })),
+    context: 'road',
+  });
+  if (!progress.snappedPosition || progress.routeLengthM <= 0) return null;
+  return clamp((progress.routeDistanceM / progress.routeLengthM) * 100, 0, 100);
 }
 
 export function splitRouteAtProgress(
@@ -180,41 +142,17 @@ export function splitRouteAtProgress(
     return { completedRouteGeoJson: null, remainingRouteGeoJson: route };
   }
 
-  const totalDistance = getRouteDistance(route);
-  if (totalDistance <= 0) {
+  const routeIndex = buildGuidanceRouteDistanceIndex(
+    coordinates.map(([lng, lat]) => ({ lat, lng })),
+  );
+  if (routeIndex.totalDistanceM <= 0) {
     return { completedRouteGeoJson: null, remainingRouteGeoJson: route };
   }
-
-  const targetDistance = totalDistance * (clamp(progressPercent, 0, 100) / 100);
-  const completed: [number, number][] = [coordinates[0]];
-  const remaining: [number, number][] = [];
-  let distance = 0;
-  let splitCoordinate: [number, number] | null = null;
-
-  for (let index = 1; index < coordinates.length; index += 1) {
-    const start = coordinates[index - 1];
-    const end = coordinates[index];
-    const segmentDistance = getSegmentDistanceM(start, end);
-    const nextDistance = distance + segmentDistance;
-
-    if (!splitCoordinate && targetDistance <= nextDistance) {
-      const ratio = segmentDistance > 0 ? (targetDistance - distance) / segmentDistance : 0;
-      splitCoordinate = interpolateCoordinate(start, end, ratio);
-      completed.push(splitCoordinate);
-      remaining.push(splitCoordinate, end);
-    } else if (splitCoordinate) {
-      remaining.push(end);
-    } else {
-      completed.push(end);
-    }
-
-    distance = nextDistance;
-  }
-
-  if (!splitCoordinate) {
-    splitCoordinate = coordinates[coordinates.length - 1];
-    remaining.push(splitCoordinate);
-  }
+  const targetDistance = routeIndex.totalDistanceM * (clamp(progressPercent, 0, 100) / 100);
+  const projection = projectGuidanceRouteAtDistance(routeIndex, targetDistance);
+  const split = splitGuidanceRouteAtProjection(routeIndex.geometry, projection);
+  const completed = split.completed.map((point): [number, number] => [point.lng, point.lat]);
+  const remaining = split.remaining.map((point): [number, number] => [point.lng, point.lat]);
 
   return {
     completedRouteGeoJson: completed.length > 1

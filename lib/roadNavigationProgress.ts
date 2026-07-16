@@ -1,4 +1,10 @@
 import type { RoadNavCoordinate, RoadNavRoute } from './mapboxRoadNavigation';
+import {
+  buildGuidanceRouteDistanceIndex,
+  projectGuidanceRouteAtDistance,
+  resolveGuidanceRouteProgress,
+  type GuidanceRouteProjection,
+} from './navigation/guidanceRouteProjection';
 
 export const ROAD_GUIDANCE_STEP_SNAP_DISTANCE_M = 35;
 export const ROAD_NAVIGATION_MAX_PROGRESS_GEOMETRY_POINTS = 512;
@@ -13,14 +19,10 @@ type GeometryProgress = {
   distanceToDestinationM: number;
 };
 
-type StepProgressMatch = {
-  stepIndex: number;
-  traveledDistanceM: number;
-  offRouteDistanceM: number;
-};
-
 export type RoadNavigationProgressLocation = RoadNavCoordinate & {
   accuracyM?: number | null;
+  headingDeg?: number | null;
+  speedMph?: number | null;
 };
 
 export type RoadNavigationProgressInput = {
@@ -28,6 +30,8 @@ export type RoadNavigationProgressInput = {
   previousStepIndex?: number | null;
   previousRemainingDistanceM?: number | null;
   lockForwardProgress?: boolean;
+  allowBacktracking?: boolean;
+  elapsedMs?: number | null;
 };
 
 export type RoadNavigationProgressResult = {
@@ -78,9 +82,12 @@ function getRouteDistanceScale(routeDistanceM: number, geometryDistanceM: number
 }
 
 function projectProgressOnPolyline(
-  location: RoadNavCoordinate,
+  location: RoadNavigationProgressLocation,
   points: RoadNavCoordinate[],
-  cumulativeDistances: number[],
+  _cumulativeDistances: number[],
+  previousProjection?: GuidanceRouteProjection | null,
+  allowBacktracking = false,
+  elapsedMs?: number | null,
 ): GeometryProgress {
   if (points.length === 0) {
     return {
@@ -105,54 +112,31 @@ function projectProgressOnPolyline(
     };
   }
 
-  let bestDistanceM = Infinity;
-  let bestNearestIndex = 0;
-  let bestAlongDistanceM = 0;
-  let bestProjection = points[0];
-
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const start = points[i];
-    const end = points[i + 1];
-    const referenceLat = (start.lat + end.lat + location.lat) / 3;
-
-    const bx = toMetersDeltaLng(end.lng - start.lng, referenceLat);
-    const by = toMetersDeltaLat(end.lat - start.lat);
-    const px = toMetersDeltaLng(location.lng - start.lng, referenceLat);
-    const py = toMetersDeltaLat(location.lat - start.lat);
-    const segmentLengthSquared = bx * bx + by * by;
-    const tRaw =
-      segmentLengthSquared > 0 ? (px * bx + py * by) / segmentLengthSquared : 0;
-    const t = clamp(tRaw, 0, 1);
-    const projectionX = bx * t;
-    const projectionY = by * t;
-    const distanceFromSegmentM = Math.sqrt(
-      (px - projectionX) ** 2 + (py - projectionY) ** 2,
-    );
-
-    if (distanceFromSegmentM < bestDistanceM) {
-      bestDistanceM = distanceFromSegmentM;
-      bestNearestIndex = i + (t >= 0.5 ? 1 : 0);
-      bestAlongDistanceM =
-        cumulativeDistances[i] + Math.sqrt(projectionX ** 2 + projectionY ** 2);
-      bestProjection = {
-        lat: start.lat + (end.lat - start.lat) * t,
-        lng: start.lng + (end.lng - start.lng) * t,
-      };
-    }
-  }
-
-  const progressCoords = points.slice(0, Math.max(bestNearestIndex, 1));
-  progressCoords.push(bestProjection);
-
-  const totalDistanceM = cumulativeDistances[cumulativeDistances.length - 1] ?? 0;
-  const remainingDistanceM = Math.max(totalDistanceM - bestAlongDistanceM, 0);
+  const resolved = resolveGuidanceRouteProgress({
+    rawPosition: location,
+    routeGeometry: points,
+    context: 'road',
+    accuracyM: location.accuracyM,
+    headingDeg: location.headingDeg,
+    speedMps:
+      typeof location.speedMph === 'number' && Number.isFinite(location.speedMph)
+        ? location.speedMph * 0.44704
+        : null,
+    elapsedMs,
+    previousProjection,
+    allowBacktracking,
+  });
+  const progressProjection = resolved.progressProjection;
+  const nearestIndex = progressProjection
+    ? progressProjection.segmentIndex + (progressProjection.segmentFraction >= 0.5 ? 1 : 0)
+    : 0;
 
   return {
-    nearestIndex: bestNearestIndex,
-    progressCoords,
-    traveledDistanceM: bestAlongDistanceM,
-    remainingDistanceM,
-    offRouteDistanceM: bestDistanceM,
+    nearestIndex,
+    progressCoords: resolved.completedGeometry,
+    traveledDistanceM: resolved.routeDistanceM,
+    remainingDistanceM: resolved.remainingDistanceM,
+    offRouteDistanceM: resolved.offRouteDistanceM,
     distanceToDestinationM: distanceMeters(location, points[points.length - 1]),
   };
 }
@@ -260,61 +244,6 @@ function getDistanceToGuidanceStep(
   return Math.max(targetDistanceM - traveledDistanceM, 0);
 }
 
-function getAccuracySnapPadMeters(location: RoadNavigationProgressLocation): number {
-  const accuracyM = Number(location.accuracyM);
-  if (!Number.isFinite(accuracyM) || accuracyM <= 0) return 0;
-  return clamp(accuracyM, 0, 40) * 0.35;
-}
-
-function projectStepProgress(
-  location: RoadNavigationProgressLocation,
-  step: RoadNavRoute['steps'][number],
-  stepIndex: number,
-): StepProgressMatch | null {
-  const stepDistanceM = Math.max(step.endDistanceM - step.startDistanceM, 0);
-
-  if (Array.isArray(step.geometry) && step.geometry.length >= 2) {
-    const cumulative = buildCumulativeDistances(step.geometry);
-    const localProgress = projectProgressOnPolyline(location, step.geometry, cumulative);
-    const geometryDistanceM = cumulative[cumulative.length - 1] ?? 0;
-    const localRatio = geometryDistanceM > 0
-      ? clamp(localProgress.traveledDistanceM / geometryDistanceM, 0, 1)
-      : 0;
-    return {
-      stepIndex,
-      traveledDistanceM: step.startDistanceM + stepDistanceM * localRatio,
-      offRouteDistanceM: localProgress.offRouteDistanceM,
-    };
-  }
-
-  if (step.location) {
-    return {
-      stepIndex,
-      traveledDistanceM: step.startDistanceM,
-      offRouteDistanceM: distanceMeters(location, step.location),
-    };
-  }
-
-  return null;
-}
-
-function findNearestStepProgress(
-  route: RoadNavRoute,
-  location: RoadNavigationProgressLocation,
-): StepProgressMatch | null {
-  let best: StepProgressMatch | null = null;
-
-  route.steps.forEach((step, stepIndex) => {
-    const match = projectStepProgress(location, step, stepIndex);
-    if (!match) return;
-    if (!best || match.offRouteDistanceM < best.offRouteDistanceM) {
-      best = match;
-    }
-  });
-
-  return best;
-}
-
 export function resolveRoadNavigationProgress(
   route: RoadNavRoute,
   input: RoadNavigationProgressInput,
@@ -327,8 +256,6 @@ export function resolveRoadNavigationProgress(
       ? route.distanceM
       : routeGeometryDistanceM;
   const routeDistanceScale = getRouteDistanceScale(routeDistanceM, routeGeometryDistanceM);
-  const projected = projectProgressOnPolyline(input.location, routeGeometry, cumulativeDistances);
-  const projectedRouteDistanceM = projected.traveledDistanceM * routeDistanceScale;
   const previousStepIndex =
     typeof input.previousStepIndex === 'number' && Number.isFinite(input.previousStepIndex)
       ? clamp(input.previousStepIndex, 0, Math.max(route.steps.length - 1, 0))
@@ -340,35 +267,33 @@ export function resolveRoadNavigationProgress(
       ? clamp(routeDistanceM - input.previousRemainingDistanceM, 0, routeDistanceM)
       : null;
   const lockForwardProgress = input.lockForwardProgress === true;
-  const snapThresholdM = ROAD_GUIDANCE_STEP_SNAP_DISTANCE_M + getAccuracySnapPadMeters(input.location);
+  const routeIndex = buildGuidanceRouteDistanceIndex(routeGeometry);
+  const previousGeometryDistanceM =
+    lockForwardProgress && previousProgressDistanceM != null && routeDistanceScale > 0
+      ? previousProgressDistanceM / routeDistanceScale
+      : null;
+  const previousProjection = previousGeometryDistanceM == null
+    ? null
+    : projectGuidanceRouteAtDistance(routeIndex, previousGeometryDistanceM);
+  const projected = projectProgressOnPolyline(
+    input.location,
+    routeGeometry,
+    cumulativeDistances,
+    previousProjection,
+    input.allowBacktracking === true,
+    input.elapsedMs,
+  );
+  const projectedRouteDistanceM = projected.traveledDistanceM * routeDistanceScale;
 
   let resolvedTraveledDistanceM = projectedRouteDistanceM;
   let resolvedStepIndex = findStepIndexForDistance(route.steps, resolvedTraveledDistanceM);
-  const nearestStepProgress = findNearestStepProgress(route, input.location);
 
-  if (nearestStepProgress && nearestStepProgress.offRouteDistanceM <= snapThresholdM) {
-    const maxForwardStepIndex =
-      previousStepIndex == null
-        ? resolvedStepIndex + 1
-        : Math.max(previousStepIndex + 1, resolvedStepIndex + 1);
-    const safeForwardMatch =
-      nearestStepProgress.stepIndex >= resolvedStepIndex &&
-      nearestStepProgress.stepIndex <= maxForwardStepIndex;
-    const safePreviousMatch =
-      previousStepIndex != null &&
-      nearestStepProgress.stepIndex >= previousStepIndex &&
-      nearestStepProgress.stepIndex <= previousStepIndex + 1;
-
-    if (safeForwardMatch || safePreviousMatch) {
-      resolvedStepIndex = Math.max(resolvedStepIndex, nearestStepProgress.stepIndex);
-      resolvedTraveledDistanceM = Math.max(
-        resolvedTraveledDistanceM,
-        nearestStepProgress.traveledDistanceM,
-      );
-    }
-  }
-
-  if (lockForwardProgress && previousStepIndex != null && resolvedStepIndex < previousStepIndex) {
+  if (
+    lockForwardProgress &&
+    !input.allowBacktracking &&
+    previousStepIndex != null &&
+    resolvedStepIndex < previousStepIndex
+  ) {
     resolvedStepIndex = previousStepIndex;
     const previousStep = route.steps[previousStepIndex] ?? null;
     if (previousStep) {
@@ -376,7 +301,7 @@ export function resolveRoadNavigationProgress(
     }
   }
 
-  if (lockForwardProgress && previousProgressDistanceM != null) {
+  if (lockForwardProgress && !input.allowBacktracking && previousProgressDistanceM != null) {
     resolvedTraveledDistanceM = Math.max(
       resolvedTraveledDistanceM,
       previousProgressDistanceM - ROAD_GUIDANCE_PROGRESS_REGRESSION_TOLERANCE_M,
@@ -385,7 +310,12 @@ export function resolveRoadNavigationProgress(
 
   resolvedTraveledDistanceM = clamp(resolvedTraveledDistanceM, 0, routeDistanceM);
   resolvedStepIndex = findStepIndexForDistance(route.steps, resolvedTraveledDistanceM);
-  if (lockForwardProgress && previousStepIndex != null && resolvedStepIndex < previousStepIndex) {
+  if (
+    lockForwardProgress &&
+    !input.allowBacktracking &&
+    previousStepIndex != null &&
+    resolvedStepIndex < previousStepIndex
+  ) {
     resolvedStepIndex = previousStepIndex;
   }
 
@@ -403,21 +333,17 @@ export function resolveRoadNavigationProgress(
   const resolvedGeometryDistanceM =
     routeDistanceScale > 0 ? resolvedTraveledDistanceM / routeDistanceScale : projected.traveledDistanceM;
   const progressGeometry =
-    resolvedTraveledDistanceM > projectedRouteDistanceM + 1 ||
-    (lockForwardProgress && previousProgressDistanceM != null)
+    Math.abs(resolvedTraveledDistanceM - projectedRouteDistanceM) > 1
       ? buildProgressCoordsAtDistance(routeGeometry, cumulativeDistances, resolvedGeometryDistanceM)
       : projected.progressCoords;
   const boundedProgressGeometry = boundProgressGeometry(progressGeometry);
-  const offRouteDistanceM = nearestStepProgress
-    ? Math.min(projected.offRouteDistanceM, nearestStepProgress.offRouteDistanceM)
-    : projected.offRouteDistanceM;
 
   return {
     currentStepIndex: resolvedStepIndex,
     nextInstruction: guidanceStepSelection.step?.instruction ?? currentStep?.instruction ?? null,
     nextInstructionDistanceM,
     remainingDistanceM: Math.max(routeDistanceM - resolvedTraveledDistanceM, 0),
-    offRouteDistanceM,
+    offRouteDistanceM: projected.offRouteDistanceM,
     distanceToDestinationM: projected.distanceToDestinationM,
     progressGeometry: boundedProgressGeometry,
   };

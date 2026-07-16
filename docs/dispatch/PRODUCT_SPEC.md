@@ -1,22 +1,20 @@
 # ECS Dispatch Product Specification
 
-Last updated: 2026-04-24
+Last updated: 2026-07-15
 
 ## Status
 
-Dispatch is implemented as the ECS operational coordination tab. It is local-first, adapter-driven, permission-aware, and protected by rollout controls. The current implementation is suitable for staged launch with conservative defaults: Dispatch UI, roster, Team Ping, queue, assist request, emergency coordination, realtime sync, offline replay, smart suggestions, check-ins, and map context integration are enabled by default; notifications, automated escalation, and expedition log integration are disabled by default until policy and persistence paths are fully verified.
+Dispatch is implemented as the ECS operational coordination tab. It is local-first, adapter-driven, permission-aware, and protected by rollout controls. The registered route converges through one canonical entry onto the CAD/Recovery and Mission Command implementation. Mission Command is visible by default in development and test, remains explicitly flag-gated in internal builds, and remains unavailable in production.
 
 Primary implementation references:
 
 - Route shell: `app/(tabs)/alert.tsx`
 - Tab registration: `app/(tabs)/_layout.tsx`
 - Command dock entry: `components/CommandDock.tsx`
-- Main Dispatch screen: `components/dispatch/DispatchCommandCenter.tsx`
-- Team Ping composer: `components/dispatch/DispatchTeamPingComposer.tsx`
-- Assist composer: `components/dispatch/DispatchAssistRequestComposer.tsx`
-- Queue section: `components/dispatch/DispatchQueueSection.tsx`
-- Team roster section: `components/dispatch/DispatchTeamRosterSection.tsx`
-- Timeline section: `components/dispatch/DispatchTimelineSection.tsx`
+- Canonical Dispatch entry: `components/dispatch/DispatchCommandCenter.tsx`
+- Mounted Dispatch implementation: `components/dispatch/DispatchCadCommandCenter.tsx`
+- Mission Command board: `components/dispatch/DispatchMissionCommandBoard.tsx`
+- Older Team Ping, Assist, Queue, roster, and timeline components are compatibility children and are not a second command-center entry.
 - Domain types: `lib/dispatchTypes.ts`
 - Adapters and hardening: `lib/dispatchServiceAdapters.ts`, `lib/dispatchPersistenceAdapter.ts`, `lib/dispatchRealtimeAdapter.ts`, `lib/dispatchOfflineReplayAdapter.ts`, `lib/dispatchIntegrity.ts`, `lib/dispatchPermissionAdapter.ts`, `lib/dispatchNotificationAdapter.ts`
 - Rollout controls: `lib/dispatchRolloutConfig.ts`

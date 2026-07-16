@@ -14,7 +14,7 @@
 //   - Saved routes management
 // ============================================================
 
-import React, { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -34,15 +34,19 @@ import { useIsFocused } from '@react-navigation/native';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { TACTICAL, GOLD_RAIL, ECS, TYPO } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
+import { formatSourceTruthStateLabel } from '../../lib/sourceTruthPresentation';
 import TopoBackground from '../../components/TopoBackground';
 import Header from '../../components/Header';
 import { ECSSegmentedControl } from '../../components/ECSChip';
+import { ECSButton } from '../../components/ECSButton';
+import { ECSStateMessage, type ECSStateVariant } from '../../components/ECSStateMessage';
 import { ECSSection, ECSSectionBadge, ECSSectionHeader } from '../../components/ECSSurface';
 import {
   ECSResultsEmptyState,
 } from '../../components/ECSResults';
 import { ECSSkeletonBlock, ECSLoadingSection, ECSTransientNotice } from '../../components/ECSLoading';
 import TacticalPopupShell from '../../components/TacticalPopupShell';
+import TabErrorBoundary from '../../components/TabErrorBoundary';
 import EnrichedRouteCard from '../../components/discover/EnrichedRouteCard';
 import ExpeditionAnalysisModal from '../../components/discover/ExpeditionAnalysisModal';
 import MissionCommandProposalAction from '../../components/mission-command/MissionCommandProposalAction';
@@ -61,7 +65,6 @@ import {
   DEFAULT_DISTANCE_RADIUS,
   DISTANCE_RADIUS_OPTIONS,
   DEFAULT_USER_LOCATION,
-  MIN_DISCOVERY_ROUTE_MILES,
   type ExpeditionOpportunity,
   type DistanceRadius,
 } from '../../lib/discoverEngine';
@@ -69,6 +72,7 @@ import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { haversineDistanceMiles } from '../../lib/useGPSLocation';
 import { offlineDiscoveryBridge } from '../../lib/offlineDiscoveryBridge';
 import {
+  calculateRigCompatibility,
   type CompatibilityResult,
   type VehicleProfile,
 } from '../../lib/rigCompatibilityEngine';
@@ -151,6 +155,7 @@ import {
   fetchRouteCatalogTrailPackDetail,
   liveTrailPackCatalogStore,
   refreshLiveTrailPackCatalog,
+  setLiveTrailPackCatalogDisabled,
 } from '../../lib/explore/liveTrailPackCatalog';
 import {
   ROUTE_CATALOG_COVERAGE_AREAS,
@@ -180,11 +185,8 @@ import {
 import {
   buildExploreGuidanceReadyInventory,
   defaultExploreReadyRouteEligibility,
+  deriveExploreGuidanceProviderAvailability,
 } from '../../lib/explore/exploreGuidanceReadyInventory';
-import {
-  normalizeExploreDiscoveryItems,
-  routeWithExploreDiscoveryProvenance,
-} from '../../lib/explore/exploreDiscoveryItem';
 import {
   getVisibleExploreFeatures,
   type ExploreFeatureId,
@@ -281,6 +283,7 @@ const EXPLORE_WIZARD_SOURCE_FILTERS: { key: ExploreWizardRouteSourceKind | 'all'
   { key: 'saved_built', label: 'Saved/Built' },
   { key: 'imported_stitched', label: 'Imported/Stitched' },
 ];
+const EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT = 500;
 
 type PopularTrailRouteWithMetadata = CategorizedRoute & {
   sourceMetadata?: ExploreRouteSourceMetadata;
@@ -293,6 +296,16 @@ type PopularTrailEnrichedRoute = EnrichedDiscoveryRoute & {
 };
 
 type ExplorePrimaryTab = Extract<ExploreFeatureId, 'suggested_routes' | 'trip_builder' | 'offline_prep_pack'>;
+
+type ExploreRouteIntentRequest = {
+  requestId: number;
+  controller: AbortController;
+};
+
+type ExploreCatalogPaginationRequest = {
+  generation: number;
+  controller: AbortController;
+};
 
 export const FALLBACK_DISCOVERY_TABS: { id: DiscoveryTabId; label: string; icon: string; accentColor: string; description: string }[] = [
   { id: 'day-trips', label: 'DAY TRIPS', icon: 'sunny-outline', accentColor: '#66BB6A', description: 'Short routes under 6 hours — perfect for a day out' },
@@ -356,20 +369,6 @@ const EMPTY_HIDDEN_GEM_BASELINE_STATE = {
   pipelineDiagnostics: EMPTY_HIDDEN_GEM_PIPELINE_DIAGNOSTICS,
   error: null as string | null,
 };
-const EMPTY_EXPLORE_MAP_PREVIEW_ROUTE_SETS = {
-  hiddenGemRoutes: [] as ExpeditionOpportunity[],
-  trailPackRoutes: [] as ExpeditionOpportunity[],
-  favoriteRoutes: [] as ExpeditionOpportunity[],
-  ecsRouteIdeaRoutes: [] as ExpeditionOpportunity[],
-  counts: {
-    hiddenGems: 0,
-    trailPacks: 0,
-    favorites: 0,
-    ecsIdeas: 0,
-    total: 0,
-  },
-};
-
 const DISCOVER_LOCATION_REFRESH_THRESHOLD_MI = 5;
 const TOKEN_STOP_WORDS = new Set([
   'trail',
@@ -388,10 +387,6 @@ const TOKEN_STOP_WORDS = new Set([
   'valley',
   'basin',
 ]);
-
-function routePassesExploreMapLength(route: ExpeditionOpportunity | null | undefined): route is ExpeditionOpportunity {
-  return Number.isFinite(Number(route?.distanceMiles)) && Number(route?.distanceMiles) >= MIN_DISCOVERY_ROUTE_MILES;
-}
 
 function routeCatalogSummarySource(summary: RouteCatalogSummary): ECSTrailPackSource {
   if (summary.sourceType === 'community') return 'community_reviewed';
@@ -559,12 +554,6 @@ function ExploreWizardRouteListSkeletonFooter({ columns }: { columns: number }) 
       ))}
     </View>
   );
-}
-
-function isExploreGuidanceReadyRoute(
-  route: ExpeditionOpportunity | null | undefined,
-): route is ExpeditionOpportunity {
-  return !!route && defaultExploreReadyRouteEligibility(route).eligible;
 }
 
 type HiddenGemOrchestrationStatus =
@@ -761,35 +750,28 @@ function computeAIRouteAlignment(
 }
 
 
-// ============================================================
-// ERROR BOUNDARY
-// ============================================================
-interface EBProps { children: ReactNode }
-interface EBState { hasError: boolean; error: Error | null }
+type ExplorerStateKind =
+  | 'loading'
+  | 'empty'
+  | 'filtered'
+  | 'provider_error'
+  | 'stale'
+  | 'partial'
+  | 'disabled'
+  | 'permission_required'
+  | 'cancelled';
 
-class DiscoverErrorBoundary extends Component<EBProps, EBState> {
-  state: EBState = { hasError: false, error: null };
-  static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
-  componentDidCatch(error: Error, info: any) { console.error(TAG, 'Error:', error, info?.componentStack); }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <TopoBackground>
-          <View style={s.center}>
-            <Ionicons name="alert-circle-outline" size={48} color={TACTICAL.danger} />
-            <Text style={s.errorTitle}>{ECS_STATE_COPY.recovery.exploreLoadFailure.title}</Text>
-            <Text style={s.errorSub}>{ECS_STATE_COPY.recovery.exploreLoadFailure.message}</Text>
-            <Text style={s.errorSub}>{ECS_STATE_COPY.recovery.exploreLoadFailure.helper}</Text>
-            <TouchableOpacity style={s.retryBtn} onPress={() => this.setState({ hasError: false, error: null })}>
-              <Text style={s.retryBtnText}>{ECS_STATE_COPY.recovery.exploreLoadFailure.ctaLabel.toUpperCase()}</Text>
-            </TouchableOpacity>
-          </View>
-        </TopoBackground>
-      );
-    }
-    return this.props.children;
-  }
-}
+const EXPLORER_STATE_VARIANTS: Record<ExplorerStateKind, ECSStateVariant> = {
+  loading: 'loading',
+  empty: 'empty',
+  filtered: 'selection_required',
+  provider_error: 'recoverable_error',
+  stale: 'stale',
+  partial: 'partial_data',
+  disabled: 'disabled',
+  permission_required: 'permission_required',
+  cancelled: 'stale',
+};
 
 function ExplorerStateCard({
   icon,
@@ -797,20 +779,28 @@ function ExplorerStateCard({
   message,
   accentColor = TACTICAL.textMuted,
   action,
+  stateKind = 'empty',
+  sourceLabel,
 }: {
   icon: string;
   title: string;
   message: string;
   accentColor?: string;
-  action?: ReactNode;
+  action?: React.ReactNode;
+  stateKind?: ExplorerStateKind;
+  sourceLabel?: string;
 }) {
+  const effectiveKind = accentColor === TACTICAL.danger ? 'provider_error' : stateKind;
   return (
     <View style={s.emptyRouteCard}>
-      <ECSResultsEmptyState
+      <ECSStateMessage
         title={title}
         message={message}
         icon={icon as any}
-        variant={accentColor === TACTICAL.danger ? 'warning' : 'compact'}
+        variant={EXPLORER_STATE_VARIANTS[effectiveKind]}
+        busy={effectiveKind === 'loading'}
+        accessibilityLiveRegion={effectiveKind === 'provider_error' ? 'assertive' : 'polite'}
+        sourceLabel={sourceLabel}
       />
       {action}
     </View>
@@ -919,7 +909,8 @@ function favoriteTrailToExpeditionRoute(favorite: FavoriteTrailRecord): Expediti
     routeMetadata: {
       ...(payload.routeMetadata ?? {}),
       identityKey: favorite.sourceTrailId,
-      source: 'favorite',
+      source: payload.routeMetadata?.source ?? 'favorite',
+      savedSource: 'favorite',
     },
   } as unknown) as ExpeditionOpportunity;
 }
@@ -967,7 +958,7 @@ function DiscoverScreenInner() {
     initialExploreFilterStateRef.current.radiusMiles,
   );
   const [exploreRefinement, setExploreRefinement] = useState<ExploreRefinementFilter | null>(null);
-  const [routeCatalogPreviewGeometryRequested, setRouteCatalogPreviewGeometryRequested] = useState(false);
+  const [routeCatalogPreviewGeometryRequested, setRouteCatalogPreviewGeometryRequested] = useState(true);
   const [activeExplorePrimaryTab, setActiveExplorePrimaryTab] = useState<ExplorePrimaryTab>('suggested_routes');
   const [explorePlanningSelectedRouteId, setExplorePlanningSelectedRouteId] = useState<string | null>(null);
   const [exploreWizardSourceFilter, setExploreWizardSourceFilter] = useState<ExploreWizardRouteSourceKind | 'all'>('all');
@@ -980,7 +971,11 @@ function DiscoverScreenInner() {
   const [userLat, setUserLat] = useState<number>(DEFAULT_USER_LOCATION.latitude);
   const [userLng, setUserLng] = useState<number>(DEFAULT_USER_LOCATION.longitude);
   const [hasGPSFix, setHasGPSFix] = useState(false);
-  const routeCatalogSearchAreaKey: RouteCatalogPresetSearchAreaKey | null = null;
+  const [routeCatalogLocationSelection, setRouteCatalogLocationSelection] =
+    useState<'none' | 'gps' | 'preset'>('gps');
+  const [routeCatalogSearchAreaKey, setRouteCatalogSearchAreaKey] =
+    useState<RouteCatalogPresetSearchAreaKey | null>(null);
+  const [routeCatalogSearchAreaPickerVisible, setRouteCatalogSearchAreaPickerVisible] = useState(false);
   const [discoverRouteSourceMode, setDiscoverRouteSourceMode] = useState('seed_catalog_default_location');
   const [discoverSourceHydrated, setDiscoverSourceHydrated] = useState(false);
   const [discoverRouteSourceFailureReason, setDiscoverRouteSourceFailureReason] = useState<string | null>(null);
@@ -1030,12 +1025,37 @@ function DiscoverScreenInner() {
   const [liveTrailPackCatalogSnapshot, setLiveTrailPackCatalogSnapshot] = useState(() =>
     liveTrailPackCatalogStore.getSnapshot(),
   );
+  const routeCatalogSourceStateLabel = formatSourceTruthStateLabel(
+    liveTrailPackCatalogSnapshot.asyncState.source,
+    liveTrailPackCatalogSnapshot.asyncState.freshness,
+  );
+  const [routeCatalogPaginationStatus, setRouteCatalogPaginationStatus] =
+    useState<'idle' | 'loading' | 'error'>('idle');
+  const [routeCatalogPaginationError, setRouteCatalogPaginationError] = useState<string | null>(null);
+  const routeCatalogPaginationFailurePersisted =
+    liveTrailPackCatalogSnapshot.preservedReason === 'pagination_page_unavailable';
+  const routeCatalogPaginationPresentationStatus = routeCatalogPaginationStatus === 'loading'
+    ? 'loading'
+    : routeCatalogPaginationStatus === 'error' || routeCatalogPaginationFailurePersisted
+      ? 'error'
+      : 'idle';
+  const routeCatalogPaginationPresentationError = routeCatalogPaginationError ??
+    (routeCatalogPaginationFailurePersisted
+      ? 'The next route page is unavailable. Existing results remain visible.'
+      : null);
   const [trailPackSubmissionRoute, setTrailPackSubmissionRoute] =
     useState<ECSTrailPackSubmissionRouteInput | null>(null);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [hiddenGemAITimedOut, setHiddenGemAITimedOut] = useState(false);
   const [favoritesSnapshot, setFavoritesSnapshot] = useState(() => getExploreFavoritesSnapshot());
   const [favoritesExpanded, setFavoritesExpanded] = useState(false);
+  const exploreTopLevelFeatures = useMemo(() => getVisibleExploreFeatures(), []);
+  const suggestedRoutesFeatureEnabled = exploreTopLevelFeatures.some(
+    (feature) => feature.id === 'suggested_routes' && feature.enabled,
+  );
+  const tripBuilderFeatureEnabled = exploreTopLevelFeatures.some(
+    (feature) => feature.id === 'trip_builder' && feature.enabled,
+  );
   const [favoritesView, setFavoritesView] = useState<'trails' | 'plans'>('trails');
   const [favoritesPlanMode, setFavoritesPlanMode] = useState(false);
   const [planBuilderVisible, setPlanBuilderVisible] = useState(false);
@@ -1060,9 +1080,7 @@ function DiscoverScreenInner() {
       setDistanceRadius(snapshot.radiusMiles);
       setExploreRefinement(snapshot.refinement);
       setActiveExplorerCategoryPanel(snapshot.activeCategoryPanel);
-      if (snapshot.refinement != null) {
-        setRouteCatalogPreviewGeometryRequested(true);
-      }
+      setRouteCatalogPreviewGeometryRequested(true);
       setExploreFilterHydrated(true);
     });
 
@@ -1077,9 +1095,16 @@ function DiscoverScreenInner() {
   );
 
   const mountedRef = useRef(true);
+  const routeCatalogManualRetryAbortRef = useRef<AbortController | null>(null);
   const trailPackPreviewRequestRef = useRef(0);
+  const trailPackDetailAbortRef = useRef<AbortController | null>(null);
+  const routeCatalogPaginationGenerationRef = useRef(0);
+  const routeCatalogPaginationRequestRef = useRef<ExploreCatalogPaginationRequest | null>(null);
+  const exploreRouteIntentGenerationRef = useRef(0);
+  const exploreRouteIntentRequestRef = useRef<ExploreRouteIntentRequest | null>(null);
   const lastHiddenGemDiagnosticsSignatureRef = useRef<string | null>(null);
   const lastExploreSourceDiagnosticsSignatureRef = useRef<string | null>(null);
+  const lastExploreGuidanceDiagnosticsSignatureRef = useRef<string | null>(null);
   const explorePerformanceFirstVisibleLoggedRef = useRef<string | null>(null);
   const explorePerformanceFullListLoggedRef = useRef<string | null>(null);
   const explorePerformanceImageFetchCacheRef = useRef<{
@@ -1093,7 +1118,44 @@ function DiscoverScreenInner() {
     lastStatus: string | null;
     lastSource: string | null;
   } | null>(null);
-  useEffect(() => { return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      routeCatalogManualRetryAbortRef.current?.abort();
+      routeCatalogManualRetryAbortRef.current = null;
+      trailPackDetailAbortRef.current?.abort();
+      trailPackDetailAbortRef.current = null;
+      routeCatalogPaginationRequestRef.current?.controller.abort('unmount');
+      routeCatalogPaginationRequestRef.current = null;
+      exploreRouteIntentRequestRef.current?.controller.abort('unmount');
+      exploreRouteIntentRequestRef.current = null;
+    };
+  }, []);
+
+  const beginExploreRouteIntentRequest = useCallback((): ExploreRouteIntentRequest => {
+    exploreRouteIntentRequestRef.current?.controller.abort('superseded');
+    const request = {
+      requestId: exploreRouteIntentGenerationRef.current + 1,
+      controller: new AbortController(),
+    };
+    exploreRouteIntentGenerationRef.current = request.requestId;
+    exploreRouteIntentRequestRef.current = request;
+    return request;
+  }, []);
+
+  const isCurrentExploreRouteIntentRequest = useCallback(
+    (request: ExploreRouteIntentRequest): boolean =>
+      mountedRef.current &&
+      !request.controller.signal.aborted &&
+      exploreRouteIntentRequestRef.current?.requestId === request.requestId,
+    [],
+  );
+
+  const finishExploreRouteIntentRequest = useCallback((request: ExploreRouteIntentRequest) => {
+    if (exploreRouteIntentRequestRef.current?.requestId === request.requestId) {
+      exploreRouteIntentRequestRef.current = null;
+    }
+  }, []);
   useEffect(() => {
     activeVehicleIdRef.current = activeVehicleId;
   }, [activeVehicleId]);
@@ -1342,8 +1404,8 @@ function DiscoverScreenInner() {
   );
   const routeCatalogEffectiveSearchArea = useMemo(
     () => {
-      if (routeCatalogSelectedSearchArea) return routeCatalogSelectedSearchArea;
-      if (!hasGPSFix) return null;
+      if (routeCatalogLocationSelection === 'preset') return routeCatalogSelectedSearchArea;
+      if (routeCatalogLocationSelection !== 'gps' || !hasGPSFix) return null;
       return {
         key: 'live_gps' as const,
         label: 'Current GPS location',
@@ -1353,19 +1415,31 @@ function DiscoverScreenInner() {
         source: 'live_gps' as const,
       };
     },
-    [hasGPSFix, routeCatalogSelectedSearchArea, userLat, userLng],
+    [hasGPSFix, routeCatalogLocationSelection, routeCatalogSelectedSearchArea, userLat, userLng],
   );
   const routeCatalogHasSearchArea = !!routeCatalogEffectiveSearchArea;
+  const routeCatalogSearchAreaLabel = routeCatalogEffectiveSearchArea?.label ?? 'No search area selected';
+  const routeCatalogDiagnosticTrailPacks = liveTrailPackCatalogSnapshot.guidanceDiagnosticTrailPacks;
+  const routeCatalogSafeDiagnosticRecords = liveTrailPackCatalogSnapshot.guidanceDiagnosticRecords;
+  const routeCatalogCurationCandidateCount =
+    liveTrailPackCatalogSnapshot.searchMeta?.curationCandidateCount ?? 0;
+  const routeCatalogSourceBackedCandidateCount =
+    liveTrailPackCatalogSnapshot.searchMeta?.anySourceBackedCandidateCount ?? 0;
+  const routeCatalogMaterializedNotReadyCount =
+    routeCatalogDiagnosticTrailPacks.length +
+    Math.max(routeCatalogSafeDiagnosticRecords.length, routeCatalogCurationCandidateCount);
+  const routeCatalogProviderNotReadyCount = Math.max(
+    routeCatalogMaterializedNotReadyCount,
+    Math.max(
+      0,
+      routeCatalogSourceBackedCandidateCount - liveTrailPackCatalogSnapshot.trailPacks.length,
+    ),
+  );
+  const routeCatalogHasNonReadyProviderResults = routeCatalogProviderNotReadyCount > 0;
   const routeCatalogCurationCoverageNotice = useMemo(() => {
-    const curationCount = liveTrailPackCatalogSnapshot.searchMeta?.curationCandidateCount ?? 0;
-    if (liveTrailPackCatalogSnapshot.coverageState.state !== 'lower_confidence_nearby' || curationCount <= 0) {
-      return null;
-    }
-    return `${curationCount} source-backed route record${curationCount === 1 ? '' : 's'} found nearby are under ECS review and not public Suggested Trailheads yet.`;
-  }, [
-    liveTrailPackCatalogSnapshot.coverageState.state,
-    liveTrailPackCatalogSnapshot.searchMeta?.curationCandidateCount,
-  ]);
+    if (routeCatalogProviderNotReadyCount <= 0) return null;
+    return `${routeCatalogProviderNotReadyCount} source-backed route record${routeCatalogProviderNotReadyCount === 1 ? '' : 's'} found nearby do not currently satisfy ECS public guidance requirements. They remain excluded for review, access, source, condition, vehicle, or geometry reasons.`;
+  }, [routeCatalogProviderNotReadyCount]);
   const routeCatalogSearchCoordinate = useMemo(
     () => routeCatalogEffectiveSearchArea
       ? {
@@ -1397,8 +1471,10 @@ function DiscoverScreenInner() {
         : {};
       return {
         ...routeCatalogLocationCriteria,
-        // Keep entry summary-only. The first trip refinement opts into the
-        // server-bounded preview geometry needed to populate route cards.
+        // The existing store stages a 50-route summary request before this
+        // bounded full preview request, so geometry can qualify cards without
+        // waiting for an unrelated refinement selection.
+        limit: EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT,
         includePreviewGeometry: routeCatalogPreviewGeometryRequested,
         vehicleClass: vehicleProfile?.vehicleType ?? null,
         availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
@@ -1424,6 +1500,12 @@ function DiscoverScreenInner() {
     () => createLiveTrailPackCatalogRefreshKey(routeCatalogSearchCriteria),
     [routeCatalogSearchCriteria],
   );
+  useEffect(() => {
+    routeCatalogPaginationRequestRef.current?.controller.abort('superseded');
+    routeCatalogPaginationRequestRef.current = null;
+    setRouteCatalogPaginationStatus('idle');
+    setRouteCatalogPaginationError(null);
+  }, [routeCatalogSearchRefreshKey]);
   const explorePerformanceSearchKey = useMemo(
     () => [
       routeCatalogEffectiveSearchArea?.source ?? 'fallback_location',
@@ -1499,26 +1581,64 @@ function DiscoverScreenInner() {
   }, [explorePerformanceRun.runId]);
 
   useEffect(() => {
-    if (!routeCatalogHasSearchArea) return;
+    if (!suggestedRoutesFeatureEnabled) {
+      setLiveTrailPackCatalogDisabled({
+        reason: 'feature_disabled',
+        safeErrorCode: 'EXPLORE_SUGGESTED_ROUTES_DISABLED',
+        message: 'Suggested routes are disabled for the current ECS rollout.',
+      });
+      return undefined;
+    }
+    if (!routeCatalogHasSearchArea) {
+      setLiveTrailPackCatalogDisabled({
+        reason: gps.permissionDenied ? 'permission_denied' : 'invalid_input',
+        safeErrorCode: gps.permissionDenied
+          ? 'EXPLORE_LOCATION_PERMISSION_DENIED'
+          : 'EXPLORE_SEARCH_AREA_REQUIRED',
+        message: gps.permissionDenied
+          ? 'Location permission is unavailable. Choose an approved search area or review device permissions.'
+          : 'Choose a GPS-backed or approved search area before loading verified routes.',
+      });
+      return undefined;
+    }
+    const controller = new AbortController();
     let routeCatalogRefreshTask: ShellInteractionTask | null = runAfterShellInteractions(() => {
       const routeCatalogPerformanceRun = explorePerformanceRunRef.current;
       const startedAtMs = getExplorePerformanceNow();
-      void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria).then((nextSnapshot) => {
-        const endedAtMs = getExplorePerformanceNow();
-        recordExplorePerformancePhase(routeCatalogPerformanceRun, 'route_catalog_query', {
-          startedAtMs,
-          endedAtMs,
-          metadata: {
-            status: nextSnapshot.status,
-            source: nextSnapshot.source,
-            searchMeta: nextSnapshot.searchMeta,
-            error: nextSnapshot.error,
-          },
+      void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria, {
+        signal: controller.signal,
+        cancellationReason: 'unmount',
+      })
+        .then((nextSnapshot) => {
+          const endedAtMs = getExplorePerformanceNow();
+          recordExplorePerformancePhase(routeCatalogPerformanceRun, 'route_catalog_query', {
+            startedAtMs,
+            endedAtMs,
+            metadata: {
+              status: nextSnapshot.status,
+              source: nextSnapshot.source,
+              searchMeta: nextSnapshot.searchMeta,
+              error: nextSnapshot.error,
+            },
+          });
+          recordExplorePerformanceCount(routeCatalogPerformanceRun, {
+            routesEvaluated: nextSnapshot.searchMeta?.candidateCount ?? nextSnapshot.trailPacks.length,
+          });
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) return;
+          reportRecoverableFailure({
+            severity: 'low',
+            issueTitle: 'Explore route catalog refresh rejected',
+            ecsArea: 'explore',
+            message: 'The route catalog refresh ended unexpectedly.',
+            signature: 'explore_route_catalog_refresh_rejected',
+            metadata: {
+              safeErrorCode: 'EXPLORE_ROUTE_CATALOG_REFRESH_REJECTED',
+              requestStatus: 'rejected',
+            },
+          });
         });
-        recordExplorePerformanceCount(routeCatalogPerformanceRun, {
-          routesEvaluated: nextSnapshot.searchMeta?.candidateCount ?? nextSnapshot.trailPacks.length,
-        });
-      });
     }, {
       delayMs: EXPLORE_ROUTE_DISCOVERY_BATCH_DELAY_MS,
       maxWaitMs: 480,
@@ -1526,8 +1646,143 @@ function DiscoverScreenInner() {
     return () => {
       cancelShellInteractionTask(routeCatalogRefreshTask);
       routeCatalogRefreshTask = null;
+      controller.abort();
     };
-  }, [routeCatalogHasSearchArea, routeCatalogSearchCriteria]);
+  }, [gps.permissionDenied, routeCatalogHasSearchArea, routeCatalogSearchCriteria, suggestedRoutesFeatureEnabled]);
+
+  const handleRetryLiveTrailPackCatalog = useCallback(() => {
+    if (!suggestedRoutesFeatureEnabled || !routeCatalogHasSearchArea) return;
+    routeCatalogPaginationGenerationRef.current += 1;
+    routeCatalogPaginationRequestRef.current?.controller.abort('superseded');
+    routeCatalogPaginationRequestRef.current = null;
+    setRouteCatalogPaginationStatus('idle');
+    setRouteCatalogPaginationError(null);
+    routeCatalogManualRetryAbortRef.current?.abort();
+    const controller = new AbortController();
+    routeCatalogManualRetryAbortRef.current = controller;
+    void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria, {
+      signal: controller.signal,
+      cancellationReason: 'unmount',
+    })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) return;
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Explore route catalog retry rejected',
+          ecsArea: 'explore',
+          message: 'The route catalog retry ended unexpectedly.',
+          signature: 'explore_route_catalog_retry_rejected',
+          metadata: {
+            safeErrorCode: 'EXPLORE_ROUTE_CATALOG_RETRY_REJECTED',
+            requestStatus: 'rejected',
+          },
+        });
+      })
+      .finally(() => {
+        if (routeCatalogManualRetryAbortRef.current === controller) {
+          routeCatalogManualRetryAbortRef.current = null;
+        }
+      });
+  }, [routeCatalogHasSearchArea, routeCatalogSearchCriteria, suggestedRoutesFeatureEnabled]);
+
+  const handleLoadNextRouteCatalogPage = useCallback(() => {
+    const searchMeta = liveTrailPackCatalogSnapshot.searchMeta;
+    const nextPage = searchMeta?.nextPage ?? null;
+    if (
+      !suggestedRoutesFeatureEnabled ||
+      !routeCatalogHasSearchArea ||
+      !searchMeta?.hasMore ||
+      nextPage == null ||
+      routeCatalogPaginationStatus === 'loading' ||
+      liveTrailPackCatalogSnapshot.refreshKey !== routeCatalogSearchRefreshKey
+    ) {
+      return;
+    }
+
+    routeCatalogPaginationRequestRef.current?.controller.abort('superseded');
+    const controller = new AbortController();
+    const generation = routeCatalogPaginationGenerationRef.current + 1;
+    routeCatalogPaginationGenerationRef.current = generation;
+    routeCatalogPaginationRequestRef.current = {
+      generation,
+      controller,
+    };
+    setRouteCatalogPaginationStatus('loading');
+    setRouteCatalogPaginationError(null);
+
+    const pageSize = searchMeta.pageSize || EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT;
+    void refreshLiveTrailPackCatalog({
+      ...routeCatalogSearchCriteria,
+      page: nextPage,
+      pageSize,
+      limit: pageSize,
+    }, {
+      signal: controller.signal,
+      cancellationReason: 'consumer_cancelled',
+    })
+      .then((pageSnapshot) => {
+        const activeRequest = routeCatalogPaginationRequestRef.current;
+        if (
+          !mountedRef.current ||
+          controller.signal.aborted ||
+          activeRequest?.generation !== generation
+        ) {
+          return;
+        }
+        const pageIsAuthoritative =
+          pageSnapshot.source === 'route_catalog' &&
+          pageSnapshot.searchMeta?.page === nextPage &&
+          (
+            pageSnapshot.status === 'ready' ||
+            pageSnapshot.status === 'empty' ||
+            pageSnapshot.status === 'stale' ||
+            pageSnapshot.status === 'degraded'
+          );
+        if (!pageIsAuthoritative) {
+          setLiveTrailPackCatalogSnapshot(pageSnapshot);
+          setRouteCatalogPaginationStatus('error');
+          setRouteCatalogPaginationError(
+            'The next route page is unavailable. Existing results remain visible.',
+          );
+          return;
+        }
+        setLiveTrailPackCatalogSnapshot(pageSnapshot);
+        setRouteCatalogPaginationStatus('idle');
+        setRouteCatalogPaginationError(null);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) return;
+        if (routeCatalogPaginationRequestRef.current?.generation !== generation) return;
+        setLiveTrailPackCatalogSnapshot(liveTrailPackCatalogStore.getSnapshot());
+        setRouteCatalogPaginationStatus('error');
+        setRouteCatalogPaginationError(
+          'The next route page is unavailable. Existing results remain visible.',
+        );
+        reportRecoverableFailure({
+          severity: 'low',
+          issueTitle: 'Explore route catalog pagination unavailable',
+          ecsArea: 'explore',
+          message: 'The next bounded route catalog page could not be loaded.',
+          signature: `explore_route_catalog_page_unavailable:${nextPage}`,
+          metadata: {
+            safeErrorCode: 'EXPLORE_ROUTE_CATALOG_PAGE_UNAVAILABLE',
+            page: nextPage,
+          },
+        });
+      })
+      .finally(() => {
+        if (routeCatalogPaginationRequestRef.current?.generation === generation) {
+          routeCatalogPaginationRequestRef.current = null;
+        }
+      });
+  }, [
+    liveTrailPackCatalogSnapshot,
+    routeCatalogHasSearchArea,
+    routeCatalogPaginationStatus,
+    routeCatalogSearchCriteria,
+    routeCatalogSearchRefreshKey,
+    suggestedRoutesFeatureEnabled,
+  ]);
 
   // ── Unified drivable trail feed ───────────────────────────
   const activeTabRoutes = useMemo<ExpeditionOpportunity[]>(
@@ -1726,8 +1981,10 @@ function DiscoverScreenInner() {
     trailPackFeedbackReviewStates,
   ]);
   const publicDiscoverableTrailPacks = useMemo(
-    () => routeCatalogHasSearchArea ? discoverableTrailPacks.filter(isPublicSuggestedTrailheadTrailPack) : [],
-    [discoverableTrailPacks, routeCatalogHasSearchArea],
+    () => routeCatalogHasSearchArea && suggestedRoutesFeatureEnabled
+      ? discoverableTrailPacks.filter(isPublicSuggestedTrailheadTrailPack)
+      : [],
+    [discoverableTrailPacks, routeCatalogHasSearchArea, suggestedRoutesFeatureEnabled],
   );
   const publicDiscoverableTrailPackRoutes = useMemo(
     () => publicDiscoverableTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack)),
@@ -1903,7 +2160,7 @@ function DiscoverScreenInner() {
   const hydrateRouteCatalogOpportunityForHandoff = useCallback(
     async (
       route: ExpeditionOpportunity,
-      options: { requireFullCatalogDetail?: boolean } = {},
+      options: { requireFullCatalogDetail?: boolean; signal?: AbortSignal } = {},
     ): Promise<ExpeditionOpportunity> => {
       const routeRecord = route as ExpeditionOpportunity & { routeMetadata?: Record<string, unknown> };
       const routeMetadata = routeRecord.routeMetadata ?? {};
@@ -1914,12 +2171,20 @@ function DiscoverScreenInner() {
         routeMetadata.catalogVerification && typeof routeMetadata.catalogVerification === 'object'
           ? routeMetadata.catalogVerification as Record<string, unknown>
           : null;
+      const routeCatalogSourceVersion = typeof routeMetadata.routeCatalogSourceVersion === 'string'
+        ? routeMetadata.routeCatalogSourceVersion
+        : typeof routeMetadata.updatedAt === 'string'
+          ? routeMetadata.updatedAt
+          : null;
 
       if (routeMetadata.source !== 'trail_pack' || !trailPackId) return route;
       if (catalogVerification?.detailFetchedAt && routeRecord.routeGeometry) return route;
 
       try {
-        const detailTrailPack = await fetchRouteCatalogTrailPackDetail(trailPackId);
+        const detailTrailPack = await fetchRouteCatalogTrailPackDetail(trailPackId, {
+          sourceVersion: routeCatalogSourceVersion,
+          signal: options.signal,
+        });
         const hydratedRoute = trailPackToExpeditionOpportunity(detailTrailPack);
         return {
           ...route,
@@ -1957,25 +2222,53 @@ function DiscoverScreenInner() {
     [],
   );
 
-  const guardPublicSuggestedTrailheadHandoff = useCallback(
+  const guardGuidanceReadyRouteHandoff = useCallback(
     (route: ExpeditionOpportunity, intent: string): boolean => {
-      if (isPublicSuggestedTrailheadRoute(route)) return true;
+      const eligibility = defaultExploreReadyRouteEligibility(route);
+      if (eligibility.eligible) return true;
       reportRecoverableFailure({
         severity: 'low',
-        issueTitle: 'Example route blocked from Suggested Trailheads',
+        issueTitle: 'Explore route blocked from guidance handoff',
         ecsArea: 'explore',
-        message: 'Demo or example trails are not available for public Suggested Trailheads.',
-        signature: `suggested_trailhead_fixture_blocked:${String(route.id ?? 'unknown')}:${intent}`,
+        message: eligibility.reason ?? 'This route does not satisfy the current guidance-readiness requirements.',
+        signature: `explore_guidance_handoff_blocked:${String(route.id ?? 'unknown')}:${intent}`,
         metadata: {
           routeId: route.id,
           routeName: route.name,
           intent,
-          routeMetadata: route.routeMetadata ?? null,
+          exclusionCodes: eligibility.exclusionCodes,
         },
       });
       Alert.alert(
-        'Verified route required',
-        'Demo or example trails are not available for public Suggested Trailheads. Use a verified catalog route or import a GPX as a private pending suggestion.',
+        'Route not guidance ready',
+        eligibility.reason ?? 'This route does not satisfy the current geometry, access, source, and safety requirements.',
+      );
+      return false;
+    },
+    [],
+  );
+
+  const guardHydratedGuidanceReadyHandoff = useCallback(
+    (route: ExpeditionOpportunity, intent: string): boolean => {
+      const eligibility = defaultExploreReadyRouteEligibility(route);
+      if (eligibility.eligible) return true;
+
+      reportRecoverableFailure({
+        severity: 'low',
+        issueTitle: 'Explore route no longer guidance ready',
+        ecsArea: 'explore',
+        message: eligibility.reason ?? 'The authoritative route detail is not guidance ready.',
+        signature: `explore_hydrated_route_not_ready:${String(route.id ?? 'unknown')}:${intent}`,
+        metadata: {
+          routeId: route.id,
+          routeName: route.name,
+          intent,
+          exclusionCodes: eligibility.exclusionCodes,
+        },
+      });
+      Alert.alert(
+        'Route not guidance ready',
+        eligibility.reason ?? 'The authoritative route detail is not guidance ready.',
       );
       return false;
     },
@@ -1984,12 +2277,12 @@ function DiscoverScreenInner() {
 
   const handleSelectOpportunity = useCallback((op: ExpeditionOpportunity) => {
     hapticMicro();
-    if (!guardPublicSuggestedTrailheadHandoff(op, 'analysis_preview')) return;
+    if (!guardGuidanceReadyRouteHandoff(op, 'analysis_preview')) return;
     stageExploreReadinessPreview(op);
     stageTripBuilderItineraryHandoff(op);
     setSelectedOpportunity(op);
     setAnalysisVisible(true);
-  }, [guardPublicSuggestedTrailheadHandoff, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff]);
+  }, [guardGuidanceReadyRouteHandoff, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff]);
 
   const handleCloseAnalysis = useCallback(() => {
     setAnalysisVisible(false);
@@ -2010,9 +2303,7 @@ function DiscoverScreenInner() {
 
   const handleExploreRefinementChange = useCallback((refinement: ExploreRefinementFilter | null) => {
     hapticMicro();
-    if (refinement != null) {
-      setRouteCatalogPreviewGeometryRequested(true);
-    }
+    setRouteCatalogPreviewGeometryRequested(true);
     setExploreRefinement(refinement);
     setHiddenGemPageIndex(0);
     setTrailPackPageIndex(0);
@@ -2025,12 +2316,44 @@ function DiscoverScreenInner() {
     hapticMicro();
     setDistanceRadius(DEFAULT_DISTANCE_RADIUS);
     setExploreRefinement(null);
+    setExploreWizardSourceFilter('all');
+    setExploreGuidanceReadyVisibleLimit(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT);
+    setRouteCatalogPreviewGeometryRequested(true);
     setHiddenGemPageIndex(0);
     setTrailPackPageIndex(0);
     setAiRouteIdeaPageIndex(0);
     setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
     aiRouteStore.clearAll();
+  }, []);
+
+  const handleUseGPSRouteCatalogArea = useCallback(() => {
+    if (!hasGPSFix) return;
+    hapticMicro();
+    setRouteCatalogLocationSelection('gps');
+    setRouteCatalogSearchAreaKey(null);
+    setRouteCatalogSearchAreaPickerVisible(false);
+    setRouteCatalogPreviewGeometryRequested(true);
+    setExploreGuidanceReadyVisibleLimit(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT);
+    setTrailPackPageIndex(0);
+  }, [hasGPSFix]);
+
+  const handleSelectRouteCatalogArea = useCallback((areaKey: RouteCatalogPresetSearchAreaKey) => {
+    hapticMicro();
+    setRouteCatalogLocationSelection('preset');
+    setRouteCatalogSearchAreaKey(areaKey);
+    setRouteCatalogSearchAreaPickerVisible(false);
+    setRouteCatalogPreviewGeometryRequested(true);
+    setExploreGuidanceReadyVisibleLimit(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT);
+    setTrailPackPageIndex(0);
+  }, []);
+
+  const handleClearRouteCatalogArea = useCallback(() => {
+    hapticMicro();
+    setRouteCatalogLocationSelection('none');
+    setRouteCatalogSearchAreaKey(null);
+    setRouteCatalogSearchAreaPickerVisible(false);
+    setTrailPackPageIndex(0);
   }, []);
 
 
@@ -2049,12 +2372,12 @@ function DiscoverScreenInner() {
 
   const handleAIPreview = useCallback((route: AIGeneratedRoute) => {
     hapticMicro();
-    if (!guardPublicSuggestedTrailheadHandoff(route, 'ai_preview')) return;
+    if (!guardGuidanceReadyRouteHandoff(route, 'ai_preview')) return;
     stageExploreReadinessPreview(route);
     stageTripBuilderItineraryHandoff(route);
     setAiPreviewRoute(route);
     setAiPreviewVisible(true);
-  }, [guardPublicSuggestedTrailheadHandoff, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff]);
+  }, [guardGuidanceReadyRouteHandoff, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff]);
 
   const confirmRouteHandoffAgainstActiveGuidance = useCallback(
     async (payload: NavigationHandoffPayload): Promise<NavigationHandoffPayload | null> => {
@@ -2118,174 +2441,259 @@ function DiscoverScreenInner() {
       } = {},
     ) => {
       hapticMicro();
-      if (!guardPublicSuggestedTrailheadHandoff(route, 'navigate')) return;
-      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
-      stageExploreReadinessPreview(routeForHandoff);
-      const approachOriginCoordinate = hasGPSFix ? { lat: userLat, lng: userLng } : null;
-      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff, {
-        approachOriginCoordinate,
-      });
-      if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
-        reportRecoverableFailure({
-          severity: 'low',
-          issueTitle: 'Explore route handoff unavailable',
-          ecsArea: 'explore',
-          message: unavailableReason ?? 'Route path unavailable.',
-          signature: `explore_route_handoff_unavailable:${routeForHandoff.id}`,
-          metadata: {
-            routeId: routeForHandoff.id,
-            routeName: routeForHandoff.name,
-            source: 'explore',
+      if (!guardGuidanceReadyRouteHandoff(route, 'navigate')) return;
+      const request = beginExploreRouteIntentRequest();
+      try {
+        const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route, {
+          requireFullCatalogDetail: true,
+          signal: request.controller.signal,
+        });
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        if (!guardHydratedGuidanceReadyHandoff(routeForHandoff, 'navigate')) return;
+        stageExploreReadinessPreview(routeForHandoff);
+        const approachOriginCoordinate = hasGPSFix ? { lat: userLat, lng: userLng } : null;
+        const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff, {
+          approachOriginCoordinate,
+        });
+        if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
+          reportRecoverableFailure({
+            severity: 'low',
+            issueTitle: 'Explore route handoff unavailable',
+            ecsArea: 'explore',
+            message: unavailableReason ?? 'Route path unavailable.',
+            signature: `explore_route_handoff_unavailable:${routeForHandoff.id}`,
+            metadata: {
+              routeId: routeForHandoff.id,
+              routeName: routeForHandoff.name,
+              source: 'explore',
+            },
+          });
+          return;
+        }
+
+        const confirmedPayload = await confirmRouteHandoffAgainstActiveGuidance(payload);
+        if (!confirmedPayload || !isCurrentExploreRouteIntentRequest(request)) return;
+
+        setAnalysisVisible(false);
+        setSelectedOpportunity(null);
+        setAiPreviewVisible(false);
+        setAiPreviewRoute(null);
+        setTrailPackPreview(null);
+        await saveNavigationHandoffPayload(confirmedPayload);
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        await stageNavigationFlow({
+          source: 'explore',
+          target: 'navigate',
+          intent: 'route_preview',
+          label: options.flowLabel ?? (options.autoStartNavigation ? 'Starting Guidance' : 'Route Ready'),
+          message: options.flowMessage ?? (options.autoStartNavigation
+            ? 'Route preview accepted. Starting guidance in Navigate.'
+              : 'Route is staged in Navigate. Review Active Guidance, then start when ready.'),
+          context: {
+            routeId: confirmedPayload.id,
+            tripMode: confirmedPayload.tripMode,
+            autoStartNavigation: options.autoStartNavigation === true,
+            ...options.flowContext,
           },
         });
-        return;
-      }
-
-      const confirmedPayload = await confirmRouteHandoffAgainstActiveGuidance(payload);
-      if (!confirmedPayload) return;
-
-      setAnalysisVisible(false);
-      setSelectedOpportunity(null);
-      setAiPreviewVisible(false);
-      setAiPreviewRoute(null);
-      setTrailPackPreview(null);
-      await saveNavigationHandoffPayload(confirmedPayload);
-      await stageNavigationFlow({
-        source: 'explore',
-        target: 'navigate',
-        intent: 'route_preview',
-        label: options.flowLabel ?? (options.autoStartNavigation ? 'Starting Guidance' : 'Route Ready'),
-        message: options.flowMessage ?? (options.autoStartNavigation
-          ? 'Route preview accepted. Starting guidance in Navigate.'
-            : 'Route is staged in Navigate. Review Active Guidance, then start when ready.'),
-        context: {
-          routeId: confirmedPayload.id,
-          tripMode: confirmedPayload.tripMode,
-          autoStartNavigation: options.autoStartNavigation === true,
-          ...options.flowContext,
-        },
-      });
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
         pushSingleFlight('/navigate');
+      } catch {
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        Alert.alert(
+          'Verified route unavailable',
+          'Verified route detail could not be loaded. Retry when the route provider is available.',
+        );
+      } finally {
+        finishExploreRouteIntentRequest(request);
+      }
     },
-    [confirmRouteHandoffAgainstActiveGuidance, guardPublicSuggestedTrailheadHandoff, hasGPSFix, hydrateRouteCatalogOpportunityForHandoff, pushSingleFlight, stageExploreReadinessPreview, userLat, userLng],
+    [beginExploreRouteIntentRequest, confirmRouteHandoffAgainstActiveGuidance, finishExploreRouteIntentRequest, guardGuidanceReadyRouteHandoff, guardHydratedGuidanceReadyHandoff, hasGPSFix, hydrateRouteCatalogOpportunityForHandoff, isCurrentExploreRouteIntentRequest, pushSingleFlight, stageExploreReadinessPreview, userLat, userLng],
   );
 
   const handleBuildTripFromRoute = useCallback(
-    async (route: ExpeditionOpportunity) => {
+    async (
+      route: ExpeditionOpportunity,
+      options: {
+        request?: ExploreRouteIntentRequest;
+        routeAlreadyHydrated?: boolean;
+      } = {},
+    ) => {
       hapticMicro();
-      if (!guardPublicSuggestedTrailheadHandoff(route, 'trip_builder')) return;
-      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
-      stageExploreReadinessPreview(routeForHandoff);
-      stageTripBuilderItineraryHandoff(routeForHandoff);
-      setAnalysisVisible(false);
-      setSelectedOpportunity(null);
-      setAiPreviewVisible(false);
-      setAiPreviewRoute(null);
-      setTrailPackPreview(null);
-      pushSingleFlight({
-        pathname: '/explore-trip-builder',
-        params: { routeId: routeForHandoff.id, setup: '1' },
-      } as any);
+      if (!guardGuidanceReadyRouteHandoff(route, 'trip_builder')) {
+        if (options.request) finishExploreRouteIntentRequest(options.request);
+        return;
+      }
+      const request = options.request ?? beginExploreRouteIntentRequest();
+      if (!isCurrentExploreRouteIntentRequest(request)) return;
+      try {
+        const routeForHandoff = options.routeAlreadyHydrated
+          ? route
+          : await hydrateRouteCatalogOpportunityForHandoff(route, {
+              requireFullCatalogDetail: true,
+              signal: request.controller.signal,
+            });
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        if (!guardHydratedGuidanceReadyHandoff(routeForHandoff, 'trip_builder')) return;
+        stageExploreReadinessPreview(routeForHandoff);
+        stageTripBuilderItineraryHandoff(routeForHandoff);
+        setAnalysisVisible(false);
+        setSelectedOpportunity(null);
+        setAiPreviewVisible(false);
+        setAiPreviewRoute(null);
+        setTrailPackPreview(null);
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        pushSingleFlight({
+          pathname: '/explore-trip-builder',
+          params: { routeId: routeForHandoff.id, setup: '1' },
+        } as any);
+      } catch {
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        Alert.alert(
+          'Verified route unavailable',
+          'Verified route detail could not be loaded. Retry when the route provider is available.',
+        );
+      } finally {
+        finishExploreRouteIntentRequest(request);
+      }
     },
-    [guardPublicSuggestedTrailheadHandoff, hydrateRouteCatalogOpportunityForHandoff, pushSingleFlight, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
+    [beginExploreRouteIntentRequest, finishExploreRouteIntentRequest, guardGuidanceReadyRouteHandoff, guardHydratedGuidanceReadyHandoff, hydrateRouteCatalogOpportunityForHandoff, isCurrentExploreRouteIntentRequest, pushSingleFlight, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
   );
 
   const handlePrepareOfflineFromRoute = useCallback(
     async (route: ExpeditionOpportunity) => {
       hapticMicro();
-      if (!guardPublicSuggestedTrailheadHandoff(route, 'offline_prep')) return;
-      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
-      stageExploreReadinessPreview(routeForHandoff);
-      saveOfflinePrepPackHandoff({
-        route: routeForHandoff as any,
-        campsiteCandidates: extractExploreRouteCampMarkers(routeForHandoff).map((marker) => ({
-          id: marker.id,
-          name: marker.title,
-          location: { latitude: marker.latitude, longitude: marker.longitude },
-          score: marker.score,
-          legalConfidence: marker.confidence,
-          accessConfidence: marker.confidence,
-          source: marker.source ?? 'explore_route_camp_marker',
-          notes: [marker.subtitle],
-        })),
-      }, 'route_details');
-      setAnalysisVisible(false);
-      setSelectedOpportunity(null);
-      setAiPreviewVisible(false);
-      setAiPreviewRoute(null);
-      setTrailPackPreview(null);
-      pushSingleFlight({
-        pathname: '/explore-offline-prep-pack',
-        params: { routeId: routeForHandoff.id },
-      } as any);
+      if (!guardGuidanceReadyRouteHandoff(route, 'offline_prep')) return;
+      const request = beginExploreRouteIntentRequest();
+      try {
+        const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route, {
+          requireFullCatalogDetail: true,
+          signal: request.controller.signal,
+        });
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        if (!guardHydratedGuidanceReadyHandoff(routeForHandoff, 'offline_prep')) return;
+        stageExploreReadinessPreview(routeForHandoff);
+        saveOfflinePrepPackHandoff({
+          route: routeForHandoff as any,
+          campsiteCandidates: extractExploreRouteCampMarkers(routeForHandoff).map((marker) => ({
+            id: marker.id,
+            name: marker.title,
+            location: { latitude: marker.latitude, longitude: marker.longitude },
+            score: marker.score,
+            legalConfidence: marker.confidence,
+            accessConfidence: marker.confidence,
+            source: marker.source ?? 'explore_route_camp_marker',
+            notes: [marker.subtitle],
+          })),
+        }, 'route_details');
+        setAnalysisVisible(false);
+        setSelectedOpportunity(null);
+        setAiPreviewVisible(false);
+        setAiPreviewRoute(null);
+        setTrailPackPreview(null);
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        pushSingleFlight({
+          pathname: '/explore-offline-prep-pack',
+          params: { routeId: routeForHandoff.id },
+        } as any);
+      } catch {
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        Alert.alert(
+          'Offline route unavailable',
+          'Authoritative route detail could not be loaded. Retry before preparing this route for offline use.',
+        );
+      } finally {
+        finishExploreRouteIntentRequest(request);
+      }
     },
-    [guardPublicSuggestedTrailheadHandoff, hydrateRouteCatalogOpportunityForHandoff, pushSingleFlight, stageExploreReadinessPreview],
+    [beginExploreRouteIntentRequest, finishExploreRouteIntentRequest, guardGuidanceReadyRouteHandoff, guardHydratedGuidanceReadyHandoff, hydrateRouteCatalogOpportunityForHandoff, isCurrentExploreRouteIntentRequest, pushSingleFlight, stageExploreReadinessPreview],
   );
 
   const handleViewRouteCamps = useCallback(
     async (route: ExpeditionOpportunity) => {
       hapticMicro();
-      if (!guardPublicSuggestedTrailheadHandoff(route, 'camp_preview')) return;
-      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
-      const campMarkers = extractExploreRouteCampMarkers(routeForHandoff);
-      if (campMarkers.length === 0) return;
+      if (!guardGuidanceReadyRouteHandoff(route, 'camp_preview')) return;
+      const request = beginExploreRouteIntentRequest();
+      try {
+        const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route, {
+          requireFullCatalogDetail: true,
+          signal: request.controller.signal,
+        });
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        if (!guardHydratedGuidanceReadyHandoff(routeForHandoff, 'camp_preview')) return;
+        const campMarkers = extractExploreRouteCampMarkers(routeForHandoff);
+        if (campMarkers.length === 0) return;
 
-      stageExploreReadinessPreview(routeForHandoff);
-      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff);
-      if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
-        reportRecoverableFailure({
-          severity: 'low',
-          issueTitle: 'Explore route camp handoff unavailable',
-          ecsArea: 'explore',
-          message: unavailableReason ?? 'Route camp pins unavailable.',
-          signature: `explore_route_camp_handoff_unavailable:${routeForHandoff.id}`,
-          metadata: {
-            routeId: routeForHandoff.id,
-            routeName: routeForHandoff.name,
-            source: 'explore',
+        stageExploreReadinessPreview(routeForHandoff);
+        const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff);
+        if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
+          reportRecoverableFailure({
+            severity: 'low',
+            issueTitle: 'Explore route camp handoff unavailable',
+            ecsArea: 'explore',
+            message: unavailableReason ?? 'Route camp pins unavailable.',
+            signature: `explore_route_camp_handoff_unavailable:${routeForHandoff.id}`,
+            metadata: {
+              routeId: routeForHandoff.id,
+              routeName: routeForHandoff.name,
+              source: 'explore',
+            },
+          });
+          return;
+        }
+
+        const campPayload: NavigationHandoffPayload = {
+          ...payload,
+          campMarkers,
+          routeMetadata: {
+            ...(payload.routeMetadata ?? {}),
+            exploreAction: 'view_camps',
+            routeCampMarkerCount: campMarkers.length,
+          },
+        };
+        const confirmedPayload = await confirmRouteHandoffAgainstActiveGuidance(campPayload);
+        if (!confirmedPayload || !isCurrentExploreRouteIntentRequest(request)) return;
+
+        setAnalysisVisible(false);
+        setSelectedOpportunity(null);
+        setAiPreviewVisible(false);
+        setAiPreviewRoute(null);
+        setTrailPackPreview(null);
+        await saveNavigationHandoffPayload(confirmedPayload);
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        await stageNavigationFlow({
+          source: 'explore',
+          target: 'navigate',
+          intent: 'route_preview',
+          label: 'Route Camps',
+          message: 'Route camp pins are staged in Navigate.',
+          context: {
+            routeId: confirmedPayload.id,
+            tripMode: confirmedPayload.tripMode,
+            exploreAction: 'view_camps',
+            routeCampMarkerCount: confirmedPayload.campMarkers?.length ?? campMarkers.length,
           },
         });
-        return;
-      }
-
-      const campPayload: NavigationHandoffPayload = {
-        ...payload,
-        campMarkers,
-        routeMetadata: {
-          ...(payload.routeMetadata ?? {}),
-          exploreAction: 'view_camps',
-          routeCampMarkerCount: campMarkers.length,
-        },
-      };
-      const confirmedPayload = await confirmRouteHandoffAgainstActiveGuidance(campPayload);
-      if (!confirmedPayload) return;
-
-      setAnalysisVisible(false);
-      setSelectedOpportunity(null);
-      setAiPreviewVisible(false);
-      setAiPreviewRoute(null);
-      setTrailPackPreview(null);
-      await saveNavigationHandoffPayload(confirmedPayload);
-      await stageNavigationFlow({
-        source: 'explore',
-        target: 'navigate',
-        intent: 'route_preview',
-        label: 'Route Camps',
-        message: 'Route camp pins are staged in Navigate.',
-        context: {
-          routeId: confirmedPayload.id,
-          tripMode: confirmedPayload.tripMode,
-          exploreAction: 'view_camps',
-          routeCampMarkerCount: confirmedPayload.campMarkers?.length ?? campMarkers.length,
-        },
-      });
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
         pushSingleFlight('/navigate');
+      } catch {
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        Alert.alert(
+          'Verified route unavailable',
+          'Authoritative route detail could not be loaded. Retry before opening route camps.',
+        );
+      } finally {
+        finishExploreRouteIntentRequest(request);
+      }
     },
-    [confirmRouteHandoffAgainstActiveGuidance, guardPublicSuggestedTrailheadHandoff, hydrateRouteCatalogOpportunityForHandoff, pushSingleFlight, stageExploreReadinessPreview],
+    [beginExploreRouteIntentRequest, confirmRouteHandoffAgainstActiveGuidance, finishExploreRouteIntentRequest, guardGuidanceReadyRouteHandoff, guardHydratedGuidanceReadyHandoff, hydrateRouteCatalogOpportunityForHandoff, isCurrentExploreRouteIntentRequest, pushSingleFlight, stageExploreReadinessPreview],
   );
 
   const handlePreviewTrailPack = useCallback((trailPack: ECSTrailPackDiscoveryItem) => {
     hapticMicro();
+    trailPackDetailAbortRef.current?.abort();
+    const controller = new AbortController();
+    trailPackDetailAbortRef.current = controller;
     const requestId = trailPackPreviewRequestRef.current + 1;
     trailPackPreviewRequestRef.current = requestId;
     setTrailPackPreview(trailPack);
@@ -2298,7 +2706,10 @@ function DiscoverScreenInner() {
 
     setTrailPackPreviewDetailStatus('loading');
     setTrailPackPreviewDetailError(null);
-    void fetchRouteCatalogTrailPackDetail(trailPack)
+    void fetchRouteCatalogTrailPackDetail(trailPack, {
+      signal: controller.signal,
+      cancellationReason: 'superseded',
+    })
       .then((detail) => {
         if (!mountedRef.current || trailPackPreviewRequestRef.current !== requestId) return;
         setTrailPackPreview((current) => {
@@ -2320,10 +2731,17 @@ function DiscoverScreenInner() {
         setTrailPackPreviewDetailError(
           error instanceof Error ? error.message : 'Verified route detail unavailable.',
         );
+      })
+      .finally(() => {
+        if (trailPackDetailAbortRef.current === controller) {
+          trailPackDetailAbortRef.current = null;
+        }
       });
   }, []);
 
   const handleCloseTrailPackPreview = useCallback(() => {
+    trailPackDetailAbortRef.current?.abort();
+    trailPackDetailAbortRef.current = null;
     trailPackPreviewRequestRef.current += 1;
     setTrailPackPreviewDetailStatus('idle');
     setTrailPackPreviewDetailError(null);
@@ -2450,10 +2868,20 @@ function DiscoverScreenInner() {
   );
 
   const hydrateExploreWizardCandidateForPlanning = useCallback(
-    async (candidate: ExploreWizardRouteCandidate): Promise<ExploreWizardRouteCandidate> => {
+    async (
+      candidate: ExploreWizardRouteCandidate,
+      options: { signal?: AbortSignal } = {},
+    ): Promise<ExploreWizardRouteCandidate> => {
       const routeForPlanning = await hydrateRouteCatalogOpportunityForHandoff(candidate.route, {
         requireFullCatalogDetail: true,
+        signal: options.signal,
       });
+      const eligibility = defaultExploreReadyRouteEligibility(routeForPlanning);
+      if (!eligibility.eligible) {
+        throw new Error(
+          eligibility.reason ?? 'The authoritative route detail is not guidance ready for planning.',
+        );
+      }
       const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForPlanning);
       if (!payload || unavailableReason) {
         throw new Error(unavailableReason ?? 'Verified route detail is not ready for planning.');
@@ -2507,13 +2935,26 @@ function DiscoverScreenInner() {
 
   const handleBuildTripFromExploreWizardCandidate = useCallback(
     async (candidate: ExploreWizardRouteCandidate) => {
+      if (!guardGuidanceReadyRouteHandoff(candidate.route, 'trip_builder_candidate')) return;
+      const request = beginExploreRouteIntentRequest();
+      let delegatedToBuildHandler = false;
       try {
-        const hydratedCandidate = await hydrateExploreWizardCandidateForPlanning(candidate);
+        const hydratedCandidate = await hydrateExploreWizardCandidateForPlanning(candidate, {
+          signal: request.controller.signal,
+        });
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
+        if (!guardGuidanceReadyRouteHandoff(hydratedCandidate.route, 'trip_builder_candidate_hydrated')) return;
         await saveExploreRouteForPlanning(hydratedCandidate);
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
         setFavoritesSnapshot(getExploreFavoritesSnapshot());
         setLocalRouteAssetRevision((current) => current + 1);
-        await handleBuildTripFromRoute(hydratedCandidate.route);
+        delegatedToBuildHandler = true;
+        await handleBuildTripFromRoute(hydratedCandidate.route, {
+          request,
+          routeAlreadyHydrated: true,
+        });
       } catch (error) {
+        if (!isCurrentExploreRouteIntentRequest(request)) return;
         const message = error instanceof Error ? error.message : 'Explore route could not be saved before TripBuilder.';
         reportRecoverableFailure({
           severity: 'low',
@@ -2528,9 +2969,11 @@ function DiscoverScreenInner() {
           },
         });
         Alert.alert('Build unavailable', message);
+      } finally {
+        if (!delegatedToBuildHandler) finishExploreRouteIntentRequest(request);
       }
     },
-    [handleBuildTripFromRoute, hydrateExploreWizardCandidateForPlanning],
+    [beginExploreRouteIntentRequest, finishExploreRouteIntentRequest, guardGuidanceReadyRouteHandoff, handleBuildTripFromRoute, hydrateExploreWizardCandidateForPlanning, isCurrentExploreRouteIntentRequest],
   );
 
   const handleStartExploreWizardCandidate = useCallback(
@@ -3019,30 +3462,80 @@ function DiscoverScreenInner() {
   );
 
   const exploreMapPreviewRouteSets = useMemo(() => {
-    if (!exploreRefinement) return EMPTY_EXPLORE_MAP_PREVIEW_ROUTE_SETS;
     const startedAtMs = getExplorePerformanceNow();
-    const hiddenGemRoutes = hiddenGemExploreOrchestration.items
-      .map((item) => hiddenGemExploreOrchestration.routeMap.get(item.id) ?? item.route)
-      .filter(routePassesExploreMapLength)
-      .filter(isExploreGuidanceReadyRoute);
-    const trailPackRoutes = publicRefinedTrailPacks
-      .map((pack) => trailPackToExpeditionOpportunity(pack))
-      .filter(routePassesExploreMapLength)
-      .filter(isExploreGuidanceReadyRoute)
-      .filter(isPublicSuggestedTrailheadRoute);
-    const ecsRouteIdeaRoutes = publicRefinedAIRoutes
-      .filter(routePassesExploreMapLength)
-      .filter(isExploreGuidanceReadyRoute);
-    const currentSuggestedRouteIds = new Set(
-      [...hiddenGemRoutes, ...trailPackRoutes, ...ecsRouteIdeaRoutes].map((route) =>
-        String(route.id ?? '').trim(),
+    void localRouteAssetRevision;
+    const linkedRunIds = new Set<string>();
+    const savedBuiltRoutes: ExpeditionOpportunity[] = [];
+    const importedStitchedRoutes: ExpeditionOpportunity[] = [];
+    routeStore.getAll().forEach((route) => {
+      if (route.linked_run_id) linkedRunIds.add(route.linked_run_id);
+      const opportunity = importedRouteToExploreWizardRoute(route);
+      if (!opportunity) return;
+      if (route.source_app === 'ecs_explore_save' || route.source_format === 'custom') {
+        savedBuiltRoutes.push(opportunity);
+      } else {
+        importedStitchedRoutes.push(opportunity);
+      }
+    });
+    runStore.getAll().forEach((run) => {
+      if (linkedRunIds.has(run.id)) return;
+      const opportunity = runToExploreWizardRoute(run);
+      if (opportunity) importedStitchedRoutes.push(opportunity);
+    });
+
+    const contextualize = (routes: ExpeditionOpportunity[]): ExpeditionOpportunity[] => {
+      if (!routeCatalogEffectiveSearchArea) return [];
+      return computeDistancesFromUser(
+        routes,
+        routeCatalogEffectiveSearchArea.latitude,
+        routeCatalogEffectiveSearchArea.longitude,
+        routeCatalogLocationSelection === 'gps' ? 'live_gps' : 'unknown',
+      ).map((route) => ({
+        ...route,
+        routeMetadata: {
+          ...(route.routeMetadata ?? {}),
+          withinRadius:
+            Number.isFinite(route.distanceFromUserMiles) &&
+            Number(route.distanceFromUserMiles) <= activeDistanceRadius,
+          exploreGuidanceReadyEnabled: suggestedRoutesFeatureEnabled,
+        },
+      }));
+    };
+
+    const mapInventory = buildExploreGuidanceReadyInventory({
+      trailPacks: contextualize(
+        publicRefinedTrailPacks.map((pack) => trailPackToExpeditionOpportunity(pack)),
       ),
-    );
-    const favoriteRoutes = favoritesSnapshot.favorites
-      .filter((favorite) => currentSuggestedRouteIds.has(String(favorite.sourceTrailId).trim()))
-      .map((favorite) => favoriteTrailToExpeditionRoute(favorite))
-      .filter(routePassesExploreMapLength)
-      .filter(isExploreGuidanceReadyRoute);
+      hiddenGemRoutes: contextualize(hiddenGemOrchestration.items.map((item) => item.route)),
+      ecsRouteIdeas: contextualize(refinedAIRoutes),
+      favoriteRoutes: contextualize([
+        ...favoritesSnapshot.favorites.map((favorite) => favoriteTrailToExpeditionRoute(favorite)),
+        ...savedBuiltRoutes,
+      ]),
+      savedRouteAssets: contextualize(importedStitchedRoutes),
+      selectedRefinement: exploreRefinement,
+    });
+    const hiddenGemRoutes: ExpeditionOpportunity[] = [];
+    const trailPackRoutes: ExpeditionOpportunity[] = [];
+    const favoriteRoutes: ExpeditionOpportunity[] = [];
+    const ecsRouteIdeaRoutes: ExpeditionOpportunity[] = [];
+    mapInventory.candidateSet.candidates.forEach((candidate) => {
+      switch (candidate.sourceKind) {
+        case 'hidden_gem':
+          hiddenGemRoutes.push(candidate.route);
+          break;
+        case 'trail_pack':
+          trailPackRoutes.push(candidate.route);
+          break;
+        case 'ecs_idea':
+          ecsRouteIdeaRoutes.push(candidate.route);
+          break;
+        case 'saved_built':
+        case 'imported_stitched':
+          favoriteRoutes.push(candidate.route);
+          break;
+      }
+    });
     const total =
       hiddenGemRoutes.length +
       trailPackRoutes.length +
@@ -3074,13 +3567,17 @@ function DiscoverScreenInner() {
       },
     };
   }, [
-    exploreRefinement,
+    activeDistanceRadius,
     explorePerformanceRun,
+    exploreRefinement,
     favoritesSnapshot.favorites,
-    hiddenGemExploreOrchestration.items,
-    hiddenGemExploreOrchestration.routeMap,
+    hiddenGemOrchestration.items,
+    localRouteAssetRevision,
     publicRefinedTrailPacks,
-    publicRefinedAIRoutes,
+    refinedAIRoutes,
+    routeCatalogEffectiveSearchArea,
+    routeCatalogLocationSelection,
+    suggestedRoutesFeatureEnabled,
   ]);
 
   const exploreMapPreviewRouteCounts = exploreMapPreviewRouteSets.counts;
@@ -3090,28 +3587,11 @@ function DiscoverScreenInner() {
       { key: 'trail-packs', label: 'Trail Packs', count: exploreMapPreviewRouteCounts.trailPacks, color: TACTICAL.amber },
       { key: 'ecs-ideas', label: 'ECS Ideas', count: exploreMapPreviewRouteCounts.ecsIdeas, color: TACTICAL.amber },
       ...(exploreMapPreviewRouteCounts.favorites > 0
-        ? [{ key: 'favorites', label: 'Favorites', count: exploreMapPreviewRouteCounts.favorites, color: TACTICAL.amber }]
+        ? [{ key: 'favorites', label: 'Saved / Imported', count: exploreMapPreviewRouteCounts.favorites, color: TACTICAL.amber }]
         : []),
     ],
     [exploreMapPreviewRouteCounts],
   );
-
-  const guidanceReadyRouteOptions = useMemo<ExpeditionOpportunity[]>(() => {
-    return normalizeExploreDiscoveryItems([
-      ...exploreMapPreviewRouteSets.trailPackRoutes.map((route) => ({ route, sourceKind: 'trail_pack' as const })),
-      ...exploreMapPreviewRouteSets.hiddenGemRoutes.map((route) => ({ route, sourceKind: 'hidden_gem' as const })),
-      ...exploreMapPreviewRouteSets.ecsRouteIdeaRoutes.map((route) => ({ route, sourceKind: 'ecs_idea' as const })),
-      ...exploreMapPreviewRouteSets.favoriteRoutes.map((route) => ({ route, sourceKind: 'saved_built' as const })),
-    ])
-      .map(routeWithExploreDiscoveryProvenance)
-      .filter((route) => (
-        routePassesExploreMapLength(route) &&
-        isExploreGuidanceReadyRoute(route) &&
-        isPublicSuggestedTrailheadRoute(route)
-      ));
-  }, [exploreMapPreviewRouteSets]);
-  const exploreSuggestedRouteOptions = guidanceReadyRouteOptions;
-  const publicSuggestedTrailheadRoutes = exploreSuggestedRouteOptions;
 
   const exploreMapHandoffBuild = useMemo(() => {
     const startedAtMs = getExplorePerformanceNow();
@@ -3168,21 +3648,6 @@ function DiscoverScreenInner() {
     exploreMapHandoffBuild.segments.length,
     exploreMapHandoffBuild.skippedMissingGeometryCount,
     exploreRefinement,
-  ]);
-
-  useEffect(() => {
-    if (!exploreFilterHydrated) return;
-    saveExplorePlanningRouteContext({
-      routes: publicSuggestedTrailheadRoutes as any,
-      radiusMiles: activeDistanceRadius,
-      refinementLabel: selectedExploreRefinementLabel,
-      source: 'suggested_routes',
-    });
-  }, [
-    activeDistanceRadius,
-    exploreFilterHydrated,
-    publicSuggestedTrailheadRoutes,
-    selectedExploreRefinementLabel,
   ]);
 
   const handleShowFilteredRoutesOnMap = useCallback(async () => {
@@ -3530,42 +3995,112 @@ function DiscoverScreenInner() {
       importedStitchedRoutes,
     };
   }, [localRouteAssetRevision]);
-  const radiusFilteredExploreWizardSavedBuiltRoutes = useMemo<ExpeditionOpportunity[]>(
-    () =>
-      filterByRadius(
-        computeDistancesFromUser(exploreWizardLocalRouteAssets.savedBuiltRoutes, userLat, userLng),
-        activeDistanceRadius,
-      ),
+  const prepareExploreGuidanceRoutes = useCallback(
+    (routes: ExpeditionOpportunity[]): ExpeditionOpportunity[] => {
+      if (!routeCatalogEffectiveSearchArea) return [];
+      const distanceSource = routeCatalogLocationSelection === 'gps' ? 'live_gps' : 'unknown';
+      return computeDistancesFromUser(
+        routes,
+        routeCatalogEffectiveSearchArea.latitude,
+        routeCatalogEffectiveSearchArea.longitude,
+        distanceSource,
+      ).map((route) => {
+        let compatibility = compatResults.get(String(route.id)) ?? null;
+        if (!compatibility && vehicleProfile) {
+          try {
+            compatibility = calculateRigCompatibility(vehicleProfile, route);
+          } catch {
+            compatibility = null;
+          }
+        }
+        const withinRadius =
+          Number.isFinite(route.distanceFromUserMiles) &&
+          Number(route.distanceFromUserMiles) <= activeDistanceRadius;
+        const routeMetadata = route.routeMetadata && typeof route.routeMetadata === 'object'
+          ? route.routeMetadata as Record<string, unknown>
+          : {};
+        const vehicleFitStatus = compatibility
+          ? compatibility.score < 40
+            ? 'incompatible'
+            : compatibility.score >= 70
+              ? 'compatible'
+              : 'caution'
+          : routeMetadata.vehicleFitStatus;
+        return {
+          ...route,
+          ...(compatibility ? { rigCompatibility: compatibility.score } : {}),
+          routeMetadata: {
+            ...routeMetadata,
+            withinRadius,
+            distanceSearchAreaSource: routeCatalogEffectiveSearchArea.source,
+            distanceSearchAreaKey: routeCatalogEffectiveSearchArea.key,
+            distanceFromUserLabel: routeCatalogLocationSelection === 'preset'
+              ? `Distance from approved search area: ${routeCatalogEffectiveSearchArea.label}.`
+              : routeMetadata.distanceFromUserLabel,
+            exploreGuidanceReadyEnabled: suggestedRoutesFeatureEnabled,
+            ...(compatibility
+              ? {
+                  rigCompatibility: compatibility.score,
+                  vehicleFitStatus,
+                  vehicleCompatibilityVehicleId: activeVehicleId,
+                }
+              : {}),
+          },
+        } as ExpeditionOpportunity;
+      });
+    },
     [
       activeDistanceRadius,
-      exploreWizardLocalRouteAssets.savedBuiltRoutes,
-      userLat,
-      userLng,
+      activeVehicleId,
+      compatResults,
+      routeCatalogEffectiveSearchArea,
+      routeCatalogLocationSelection,
+      suggestedRoutesFeatureEnabled,
+      vehicleProfile,
     ],
   );
-  const radiusFilteredExploreWizardImportedStitchedRoutes = useMemo<ExpeditionOpportunity[]>(
-    () =>
-      filterByRadius(
-        computeDistancesFromUser(exploreWizardLocalRouteAssets.importedStitchedRoutes, userLat, userLng),
-        activeDistanceRadius,
-      ),
-    [
-      activeDistanceRadius,
-      exploreWizardLocalRouteAssets.importedStitchedRoutes,
-      userLat,
-      userLng,
-    ],
+  const exploreWizardSavedBuiltRoutesWithContext = useMemo<ExpeditionOpportunity[]>(
+    () => prepareExploreGuidanceRoutes(exploreWizardLocalRouteAssets.savedBuiltRoutes),
+    [exploreWizardLocalRouteAssets.savedBuiltRoutes, prepareExploreGuidanceRoutes],
+  );
+  const exploreWizardImportedStitchedRoutesWithContext = useMemo<ExpeditionOpportunity[]>(
+    () => prepareExploreGuidanceRoutes(exploreWizardLocalRouteAssets.importedStitchedRoutes),
+    [exploreWizardLocalRouteAssets.importedStitchedRoutes, prepareExploreGuidanceRoutes],
   );
   const exploreWizardTrailPackSourceRoutes = useMemo(
-    () => publicDiscoverableTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack)),
-    [publicDiscoverableTrailPacks],
+    () => prepareExploreGuidanceRoutes(
+      [...trailPackCatalog, ...routeCatalogDiagnosticTrailPacks].map((trailPack) => {
+        const route = trailPackToExpeditionOpportunity(trailPack);
+        return {
+          ...route,
+          routeMetadata: {
+            ...(route.routeMetadata ?? {}),
+            routeCatalogSourceVersion: trailPack.updatedAt ?? null,
+          },
+        } as ExpeditionOpportunity;
+      }),
+    ),
+    [prepareExploreGuidanceRoutes, routeCatalogDiagnosticTrailPacks, trailPackCatalog],
   );
-  const exploreWizardRangeOnlyHiddenGemSourceRoutes = useMemo<ExpeditionOpportunity[]>(
+  const exploreGuidanceContextCatalogRoutes = useMemo(
+    () => prepareExploreGuidanceRoutes(opportunities),
+    [opportunities, prepareExploreGuidanceRoutes],
+  );
+  const exploreGuidanceRadiusFilteredCanonicalRoutes = useMemo(
+    () => dedupeExploreRoutes(
+      exploreGuidanceContextCatalogRoutes.filter((route) => route.routeMetadata?.withinRadius !== false),
+      compatResults,
+      activeDistanceRadius,
+    ),
+    [activeDistanceRadius, compatResults, exploreGuidanceContextCatalogRoutes],
+  );
+  const exploreWizardHiddenGemSourceRoutes = useMemo<ExpeditionOpportunity[]>(
     () => {
-      if (canonicalRadiusFilteredRoutes.length === 0) return [];
+      if (exploreGuidanceContextCatalogRoutes.length === 0) return [];
+      let readyHiddenGemRoutes: ExpeditionOpportunity[] = [];
       try {
-        return getHiddenGemRecommendations(
-          canonicalRadiusFilteredRoutes,
+        readyHiddenGemRoutes = getHiddenGemRecommendations(
+          exploreGuidanceRadiusFilteredCanonicalRoutes,
           compatResults,
           {
             radiusMiles: distanceRadius ?? DISTANCE_RADIUS_OPTIONS[DISTANCE_RADIUS_OPTIONS.length - 1],
@@ -3583,11 +4118,25 @@ function DiscoverScreenInner() {
             error: error instanceof Error ? error.message : String(error),
           });
         }
-        return [];
       }
+      const selectedIds = new Set(readyHiddenGemRoutes.map((route) => String(route.id)));
+      const diagnosticRoutes = exploreGuidanceContextCatalogRoutes
+        .filter((route) => !selectedIds.has(String(route.id)))
+        .map((route) => {
+          if (route.routeMetadata?.withinRadius === false) return route;
+          return {
+            ...route,
+            routeMetadata: {
+              ...(route.routeMetadata ?? {}),
+              filteredByUser: true,
+            },
+          } as ExpeditionOpportunity;
+        });
+      return [...readyHiddenGemRoutes, ...diagnosticRoutes];
     },
     [
-      canonicalRadiusFilteredRoutes,
+      exploreGuidanceContextCatalogRoutes,
+      exploreGuidanceRadiusFilteredCanonicalRoutes,
       compatResults,
       distanceRadius,
       vehicleProfile,
@@ -3597,38 +4146,27 @@ function DiscoverScreenInner() {
     ],
   );
   const exploreWizardEcsIdeaSourceRoutes = useMemo(
-    () => radiusFilteredAIRoutes.filter(isPublicSuggestedTrailheadRoute),
-    [radiusFilteredAIRoutes],
+    () => prepareExploreGuidanceRoutes(aiRoutes),
+    [aiRoutes, prepareExploreGuidanceRoutes],
   );
-  const radiusFilteredExploreWizardFavoriteRoutes = useMemo<ExpeditionOpportunity[]>(
-    () =>
-      filterByRadius(
-        computeDistancesFromUser(
-          favoriteTrails.map((favorite) => favoriteTrailToExpeditionRoute(favorite)),
-          userLat,
-          userLng,
-        ),
-        activeDistanceRadius,
-      ),
-    [
-      activeDistanceRadius,
-      favoriteTrails,
-      userLat,
-      userLng,
-    ],
+  const exploreWizardFavoriteRoutesWithContext = useMemo<ExpeditionOpportunity[]>(
+    () => prepareExploreGuidanceRoutes(
+      favoriteTrails.map((favorite) => favoriteTrailToExpeditionRoute(favorite)),
+    ),
+    [favoriteTrails, prepareExploreGuidanceRoutes],
   );
   const exploreGuidanceReadyInventory = useMemo(
     () => {
       const startedAtMs = getExplorePerformanceNow();
       const inventory = buildExploreGuidanceReadyInventory({
         trailPacks: exploreWizardTrailPackSourceRoutes,
-        hiddenGemRoutes: exploreWizardRangeOnlyHiddenGemSourceRoutes,
+        hiddenGemRoutes: exploreWizardHiddenGemSourceRoutes,
         ecsRouteIdeas: exploreWizardEcsIdeaSourceRoutes,
         favoriteRoutes: [
-          ...radiusFilteredExploreWizardFavoriteRoutes,
-          ...radiusFilteredExploreWizardSavedBuiltRoutes,
+          ...exploreWizardFavoriteRoutesWithContext,
+          ...exploreWizardSavedBuiltRoutesWithContext,
         ],
-        savedRouteAssets: radiusFilteredExploreWizardImportedStitchedRoutes,
+        savedRouteAssets: exploreWizardImportedStitchedRoutesWithContext,
         selectedRefinement: exploreRefinement,
       });
       recordExplorePerformancePhase(explorePerformanceRun, 'geometry_normalization', {
@@ -3645,43 +4183,149 @@ function DiscoverScreenInner() {
     },
     [
       explorePerformanceRun,
-      radiusFilteredExploreWizardFavoriteRoutes,
-      exploreWizardRangeOnlyHiddenGemSourceRoutes,
+      exploreWizardFavoriteRoutesWithContext,
+      exploreWizardHiddenGemSourceRoutes,
       exploreWizardEcsIdeaSourceRoutes,
-      radiusFilteredExploreWizardImportedStitchedRoutes,
-      radiusFilteredExploreWizardSavedBuiltRoutes,
+      exploreWizardImportedStitchedRoutesWithContext,
+      exploreWizardSavedBuiltRoutesWithContext,
       exploreWizardTrailPackSourceRoutes,
       exploreRefinement,
     ],
   );
   const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet;
+  const canonicalExplorePlanningRoutes = useMemo<ExpeditionOpportunity[]>(
+    () => exploreWizardCandidateSet.candidates.map((candidate) => candidate.route),
+    [exploreWizardCandidateSet.candidates],
+  );
+  useEffect(() => {
+    if (!exploreFilterHydrated) return;
+    saveExplorePlanningRouteContext({
+      routes: canonicalExplorePlanningRoutes as any,
+      radiusMiles: activeDistanceRadius,
+      refinementLabel: selectedExploreRefinementLabel,
+      source: 'suggested_routes',
+    });
+  }, [
+    activeDistanceRadius,
+    canonicalExplorePlanningRoutes,
+    exploreFilterHydrated,
+    selectedExploreRefinementLabel,
+  ]);
   const exploreWizardSourceCounts = exploreGuidanceReadyInventory.sourceCounts;
+  const exploreGuidanceReadyCount = exploreGuidanceReadyInventory.totalReadyCount;
+  const unmaterializedProviderNotReadyCount = Math.max(
+    0,
+    routeCatalogProviderNotReadyCount - routeCatalogDiagnosticTrailPacks.length,
+  );
+  const exploreGuidanceNotReadyCount =
+    exploreGuidanceReadyInventory.rangeExclusionTotal + unmaterializedProviderNotReadyCount;
+  const exploreGuidanceEvaluatedCount = exploreGuidanceReadyCount + exploreGuidanceNotReadyCount;
+  useEffect(() => {
+    if (__DEV__ !== true) return;
+    const excludedByReason = exploreGuidanceReadyInventory.rangeExclusions.reduce<Record<string, number>>(
+      (counts, exclusion) => {
+        exclusion.exclusionCodes.forEach((code) => {
+          counts[code] = (counts[code] ?? 0) + 1;
+        });
+        return counts;
+      },
+      {},
+    );
+    routeCatalogSafeDiagnosticRecords.forEach((diagnosticRecord) => {
+      diagnosticRecord.exclusionReasons.forEach((reason) => {
+        excludedByReason[reason] = (excludedByReason[reason] ?? 0) + 1;
+      });
+    });
+    const diagnostic = {
+      surfaceId: 'explore_guidance_ready',
+      requestStatus: liveTrailPackCatalogSnapshot.status,
+      requestFingerprint: liveTrailPackCatalogSnapshot.asyncState.requestFingerprint,
+      provider: liveTrailPackCatalogSnapshot.asyncState.provider,
+      sourceState: liveTrailPackCatalogSnapshot.asyncState.source,
+      elapsedTimeMs:
+        liveTrailPackCatalogSnapshot.asyncState.startedAt != null &&
+        liveTrailPackCatalogSnapshot.asyncState.completedAt != null
+          ? Math.max(
+              0,
+              liveTrailPackCatalogSnapshot.asyncState.completedAt -
+                liveTrailPackCatalogSnapshot.asyncState.startedAt,
+            )
+          : null,
+      resultCount: liveTrailPackCatalogSnapshot.asyncState.resultCount,
+      readyCount: exploreGuidanceReadyCount,
+      notReadyCount: exploreGuidanceNotReadyCount,
+      filteredCount: Math.max(
+        exploreGuidanceReadyCount - exploreGuidanceReadyInventory.candidateSet.candidates.length,
+        0,
+      ),
+      safeErrorCode: liveTrailPackCatalogSnapshot.asyncState.safeErrorCode,
+      cancellationReason: liveTrailPackCatalogSnapshot.asyncState.cancellationReason,
+      lastCompletedTime: liveTrailPackCatalogSnapshot.asyncState.completedAt,
+      excludedByReason,
+    };
+    const signature = JSON.stringify(diagnostic);
+    if (lastExploreGuidanceDiagnosticsSignatureRef.current === signature) return;
+    lastExploreGuidanceDiagnosticsSignatureRef.current = signature;
+    ecsLog.debug('DISCOVERY', '[EXPLORE_GUIDANCE_DIAGNOSTIC]', diagnostic);
+  }, [
+    exploreGuidanceNotReadyCount,
+    exploreGuidanceReadyCount,
+    exploreGuidanceReadyInventory.candidateSet.candidates.length,
+    exploreGuidanceReadyInventory.rangeExclusions,
+    liveTrailPackCatalogSnapshot.asyncState.provider,
+    liveTrailPackCatalogSnapshot.asyncState.cancellationReason,
+    liveTrailPackCatalogSnapshot.asyncState.completedAt,
+    liveTrailPackCatalogSnapshot.asyncState.requestFingerprint,
+    liveTrailPackCatalogSnapshot.asyncState.resultCount,
+    liveTrailPackCatalogSnapshot.asyncState.safeErrorCode,
+    liveTrailPackCatalogSnapshot.asyncState.source,
+    liveTrailPackCatalogSnapshot.asyncState.startedAt,
+    liveTrailPackCatalogSnapshot.status,
+    routeCatalogSafeDiagnosticRecords,
+  ]);
   const hasSelectedExploreRefinement = exploreRefinement != null;
+  const routeCatalogProviderValidEmpty =
+    liveTrailPackCatalogSnapshot.status === 'empty' &&
+    liveTrailPackCatalogSnapshot.refreshKey === routeCatalogSearchRefreshKey &&
+    liveTrailPackCatalogSnapshot.trailPacks.length === 0 &&
+    liveTrailPackCatalogSnapshot.routeCatalogSummaries.length === 0 &&
+    !routeCatalogHasNonReadyProviderResults;
+  const routeCatalogValidEmpty =
+    routeCatalogProviderValidEmpty && exploreGuidanceEvaluatedCount === 0;
   const routeCatalogPreviewGeometryReady =
     routeCatalogPreviewGeometryRequested &&
-    liveTrailPackCatalogSnapshot.status === 'ready' &&
+    (
+      liveTrailPackCatalogSnapshot.status === 'ready' ||
+      liveTrailPackCatalogSnapshot.status === 'stale' ||
+      liveTrailPackCatalogSnapshot.status === 'degraded'
+    ) &&
     liveTrailPackCatalogSnapshot.refreshKey === routeCatalogSearchRefreshKey;
+  const routeCatalogTerminalFailure =
+    liveTrailPackCatalogSnapshot.status === 'error' ||
+    liveTrailPackCatalogSnapshot.status === 'cancelled' ||
+    liveTrailPackCatalogSnapshot.status === 'disabled';
   const showGuidanceReadyGeometryLoading =
-    hasSelectedExploreRefinement &&
     routeCatalogHasSearchArea &&
     routeCatalogPreviewGeometryRequested &&
     !routeCatalogPreviewGeometryReady &&
-    liveTrailPackCatalogSnapshot.status !== 'error';
+    (
+      liveTrailPackCatalogSnapshot.status === 'idle' ||
+      liveTrailPackCatalogSnapshot.status === 'loading'
+    );
   const showRefinementEmptyState =
     hasSelectedExploreRefinement &&
     !showGuidanceReadyGeometryLoading &&
-    exploreGuidanceReadyInventory.totalReadyCount > 0 &&
-    exploreGuidanceReadyInventory.readyCount === 0;
-  const showGuidanceReadyRefinementPrompt =
-    !hasSelectedExploreRefinement && exploreGuidanceReadyInventory.totalReadyCount > 0;
+    exploreGuidanceReadyCount > 0 &&
+    exploreWizardCandidateSet.candidates.length === 0;
   const visibleExploreWizardCandidates = useMemo(
-    () => {
-      if (!hasSelectedExploreRefinement) return [];
-      return exploreWizardSourceFilter === 'all'
+    () => exploreWizardSourceFilter === 'all'
         ? exploreWizardCandidateSet.candidates
-        : exploreWizardCandidateSet.candidates.filter((candidate) => candidate.sourceKind === exploreWizardSourceFilter);
-    },
-    [exploreWizardCandidateSet.candidates, exploreWizardSourceFilter, hasSelectedExploreRefinement],
+        : exploreWizardCandidateSet.candidates.filter((candidate) => candidate.sourceKind === exploreWizardSourceFilter),
+    [exploreWizardCandidateSet.candidates, exploreWizardSourceFilter],
+  );
+  const exploreGuidanceFilteredCount = Math.max(
+    exploreGuidanceReadyCount - visibleExploreWizardCandidates.length,
+    0,
   );
   const visibleExploreWizardCardCandidates = useMemo(
     () => visibleExploreWizardCandidates.slice(0, exploreGuidanceReadyVisibleLimit),
@@ -3750,6 +4394,7 @@ function DiscoverScreenInner() {
     (candidate: ExploreWizardRouteCandidate) => `${candidate.sourceKind}:${candidate.id}`,
     [],
   );
+
   const renderExploreWizardCandidateCard = useCallback(
     ({ item, index }: ListRenderItemInfo<ExploreWizardRouteCandidate>) => (
       <ExploreWizardRouteCardListItem
@@ -3815,6 +4460,9 @@ function DiscoverScreenInner() {
     const summary = routeCatalogSummaryById.get(routeId) ?? null;
     if (!summary) return;
     hapticMicro();
+    trailPackDetailAbortRef.current?.abort();
+    const controller = new AbortController();
+    trailPackDetailAbortRef.current = controller;
     const requestId = trailPackPreviewRequestRef.current + 1;
     trailPackPreviewRequestRef.current = requestId;
     setTrailPackPreview(routeCatalogSummaryToTrailPackPreview(summary));
@@ -3822,7 +4470,11 @@ function DiscoverScreenInner() {
     setTrailPackPreviewDetailError(null);
 
     const detailStartedAtMs = getExplorePerformanceNow();
-    void fetchRouteCatalogTrailPackDetail(routeId)
+    void fetchRouteCatalogTrailPackDetail(routeId, {
+      signal: controller.signal,
+      cancellationReason: 'superseded',
+      sourceVersion: summary.updatedAt,
+    })
       .then((detail) => {
         recordExploreRouteDetailFetch(exploreNavigateSeparationRunRef.current, {
           startedAtMs: detailStartedAtMs,
@@ -3856,6 +4508,11 @@ function DiscoverScreenInner() {
           signature: `route_catalog_summary_detail_unavailable:${routeId}`,
           metadata: { routeId: summary.routeId },
         });
+      })
+      .finally(() => {
+        if (trailPackDetailAbortRef.current === controller) {
+          trailPackDetailAbortRef.current = null;
+        }
       });
   }, [routeCatalogSummaryById]);
 
@@ -3864,17 +4521,22 @@ function DiscoverScreenInner() {
     if (!summary) return;
     hapticMicro();
     try {
-      const detail = await fetchRouteCatalogTrailPackDetail(routeId);
+      const detail = await fetchRouteCatalogTrailPackDetail(routeId, {
+        sourceVersion: summary.updatedAt,
+      });
       await handleStartTrailPackGuidance(detailTrailPackToDiscoveryItem(detail, summary));
     } catch (error) {
+      void error;
+      const message = 'Authoritative route detail could not be loaded. Retry when the route provider is available.';
       reportRecoverableFailure({
         severity: 'low',
         issueTitle: 'Route detail unavailable',
         ecsArea: 'explore',
-        message: error instanceof Error ? error.message : 'Verified route detail unavailable.',
+        message,
         signature: `route_catalog_summary_navigation_unavailable:${routeId}`,
         metadata: { routeId: summary.routeId },
       });
+      Alert.alert('Navigation unavailable', message);
     }
   }, [handleStartTrailPackGuidance, routeCatalogSummaryById]);
 
@@ -3883,27 +4545,55 @@ function DiscoverScreenInner() {
     if (!summary) return;
     hapticMicro();
     try {
-      const detail = await fetchRouteCatalogTrailPackDetail(routeId);
+      const detail = await fetchRouteCatalogTrailPackDetail(routeId, {
+        sourceVersion: summary.updatedAt,
+      });
       const discoveryItem = detailTrailPackToDiscoveryItem(detail, summary);
       addFavoriteTrail(trailPackToExpeditionOpportunity(discoveryItem));
       handleTrailPackFeedback(routeId, 'saved');
     } catch (error) {
+      void error;
+      const message = 'Authoritative route detail could not be loaded, so this route was not saved. Retry when the route provider is available.';
       reportRecoverableFailure({
         severity: 'low',
         issueTitle: 'Route save unavailable',
         ecsArea: 'explore',
-        message: error instanceof Error ? error.message : 'Verified route detail unavailable.',
+        message,
         signature: `route_catalog_summary_save_unavailable:${routeId}`,
         metadata: { routeId: summary.routeId },
       });
+      Alert.alert('Save unavailable', message);
     }
   }, [handleTrailPackFeedback, routeCatalogSummaryById]);
 
   const handleNavigateToFavorite = useCallback(
     async (favorite: FavoriteTrailRecord) => {
       hapticMicro();
+      let routeForHandoff: ExpeditionOpportunity;
+      try {
+        routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(
+          favoriteTrailToExpeditionRoute(favorite),
+          { requireFullCatalogDetail: true },
+        );
+      } catch (error) {
+        void error;
+        Alert.alert(
+          'Saved route unavailable',
+          'The authoritative route detail could not be loaded. Retry when the route provider is available.',
+        );
+        return;
+      }
+      if (!guardHydratedGuidanceReadyHandoff(routeForHandoff, 'favorite_navigate')) return;
+      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForHandoff);
+      if (!payload || unavailableReason || !canStageNavigationHandoffRoute(payload)) {
+        Alert.alert(
+          'Saved route unavailable',
+          unavailableReason ?? 'This saved route does not have a guidance-ready path.',
+        );
+        return;
+      }
       const confirmedPayload = await confirmRouteHandoffAgainstActiveGuidance(
-        favorite.navigationPayload,
+        payload,
       );
       if (!confirmedPayload) return;
 
@@ -3921,7 +4611,12 @@ function DiscoverScreenInner() {
       });
         pushSingleFlight('/navigate');
     },
-    [confirmRouteHandoffAgainstActiveGuidance, pushSingleFlight],
+    [
+      confirmRouteHandoffAgainstActiveGuidance,
+      guardHydratedGuidanceReadyHandoff,
+      hydrateRouteCatalogOpportunityForHandoff,
+      pushSingleFlight,
+    ],
   );
 
   const handleOpenFavorite = useCallback(
@@ -4072,26 +4767,73 @@ function DiscoverScreenInner() {
   const showInitialLoading = isLoading && !hasLoadedExplorer && opportunities.length === 0;
   const showSectionLoading = isLoading && (hasLoadedExplorer || opportunities.length > 0);
   const showTrailPackSectionLoading =
-    showSectionLoading ||
-    (routeCatalogHasSearchArea && (
+    routeCatalogHasSearchArea && (
       liveTrailPackCatalogSnapshot.status === 'idle' ||
       liveTrailPackCatalogSnapshot.status === 'loading'
-    ));
+    );
   const showTrailPackBlockingLoading = showTrailPackSectionLoading && visibleRouteCatalogSummaries.length === 0;
   const hasExploreRangeRouteData =
     radiusFilteredOpportunities.length > 0 ||
     liveTrailPackCatalogSnapshot.trailPacks.length > 0 ||
-    routeCatalogRuntimeContract.summaries.length > 0;
+    routeCatalogRuntimeContract.summaries.length > 0 ||
+    routeCatalogHasNonReadyProviderResults;
+  const hasRouteCatalogRenderableData =
+    liveTrailPackCatalogSnapshot.trailPacks.length > 0 ||
+    liveTrailPackCatalogSnapshot.routeCatalogSummaries.length > 0;
+  const hasRouteCatalogDiagnosticData =
+    routeCatalogDiagnosticTrailPacks.length > 0 || routeCatalogSafeDiagnosticRecords.length > 0;
+  const hasRouteCatalogAnyData = hasRouteCatalogRenderableData || hasRouteCatalogDiagnosticData;
+  const routeCatalogEmptyWithoutGuidance =
+    routeCatalogValidEmpty && exploreGuidanceEvaluatedCount === 0;
+  const routeCatalogLegacyFallbackWithData =
+    hasRouteCatalogRenderableData && liveTrailPackCatalogSnapshot.source === 'trail_packs_fallback';
+  const routeCatalogCancelledWithData =
+    hasRouteCatalogAnyData && liveTrailPackCatalogSnapshot.status === 'cancelled';
+  const routeCatalogCachedWithData =
+    hasRouteCatalogAnyData && liveTrailPackCatalogSnapshot.asyncState.source === 'cached';
+  const routeCatalogProviderAvailability = deriveExploreGuidanceProviderAvailability({
+    providerStatus: liveTrailPackCatalogSnapshot.status,
+    providerHasData: hasRouteCatalogAnyData,
+    evaluatedCount: exploreGuidanceEvaluatedCount,
+    readyCount: exploreGuidanceReadyCount,
+  });
+  const routeCatalogProviderUnavailableWithoutData =
+    routeCatalogProviderAvailability.providerUnavailableWithoutData;
+  const routeCatalogUnavailableWithoutData =
+    routeCatalogProviderAvailability.blockCanonicalInventory;
+  const routeCatalogProviderUnavailableWithLocalInventory =
+    routeCatalogProviderAvailability.providerUnavailableWithLocalInventory;
+  const routeCatalogProviderUnavailableWithLocalReady =
+    routeCatalogProviderAvailability.providerUnavailableWithLocalReady;
+  const routeCatalogStaleWithData =
+    hasRouteCatalogAnyData &&
+    !routeCatalogLegacyFallbackWithData &&
+    !routeCatalogCancelledWithData &&
+    routeCatalogCachedWithData &&
+    (
+      liveTrailPackCatalogSnapshot.status === 'stale' ||
+      liveTrailPackCatalogSnapshot.status === 'degraded'
+    );
+  const routeCatalogDegradedLiveWithData =
+    hasRouteCatalogAnyData &&
+    !routeCatalogLegacyFallbackWithData &&
+    !routeCatalogCancelledWithData &&
+    !routeCatalogCachedWithData &&
+    (
+      liveTrailPackCatalogSnapshot.status === 'stale' ||
+      liveTrailPackCatalogSnapshot.status === 'degraded'
+    );
   const exploreGuidanceReadyBlockedReasons = useMemo(
     () =>
       Array.from(
         new Set(
-          exploreGuidanceReadyInventory.rangeHiddenReasons
+          exploreGuidanceReadyInventory.rangeExclusions
+            .flatMap((entry) => entry.exclusionReasons)
             .map((entry) => String(entry.reason ?? '').trim())
             .filter(Boolean),
         ),
       ).slice(0, 2),
-    [exploreGuidanceReadyInventory.rangeHiddenReasons],
+    [exploreGuidanceReadyInventory.rangeExclusions],
   );
   const exploreGuidanceReadyBlockedReasonText =
     exploreGuidanceReadyBlockedReasons.length > 0
@@ -4102,8 +4844,10 @@ function DiscoverScreenInner() {
     !showSectionLoading &&
     routeCatalogPreviewGeometryRequested &&
     !showGuidanceReadyGeometryLoading &&
+    !routeCatalogTerminalFailure &&
+    !routeCatalogValidEmpty &&
     hasExploreRangeRouteData &&
-    exploreGuidanceReadyInventory.totalReadyCount === 0;
+    exploreGuidanceReadyCount === 0;
 
   useEffect(() => {
     if (__DEV__ !== true) return;
@@ -4114,7 +4858,7 @@ function DiscoverScreenInner() {
     const resultCount = Math.max(
       visibleExploreWizardCandidates.length ||
       0,
-      publicSuggestedTrailheadRoutes.length,
+      canonicalExplorePlanningRoutes.length,
       publicRefinedTrailPacks.length,
       publicRefinedAIRoutes.length,
     );
@@ -4185,7 +4929,7 @@ function DiscoverScreenInner() {
     liveTrailPackCatalogSnapshot.status,
     publicRefinedAIRoutes.length,
     publicRefinedTrailPacks.length,
-    publicSuggestedTrailheadRoutes.length,
+    canonicalExplorePlanningRoutes.length,
     showInitialLoading,
     showSectionLoading,
     showTrailPackSectionLoading,
@@ -4512,17 +5256,16 @@ function DiscoverScreenInner() {
     (category) => category.key === activeExplorerCategoryPanel,
   ) ?? null;
   const activeExplorerPanelItemLabel = activeExplorerCategoryPanel === 'favorites' ? 'ITEM' : 'TRAILHEAD';
-  const exploreTopLevelFeatures = useMemo(() => getVisibleExploreFeatures(), []);
   const exploreFeatureBadges = useMemo<Record<ExploreFeatureId, string | number | null>>(
     () => ({
-      suggested_routes: publicSuggestedTrailheadRoutes.length,
+      suggested_routes: canonicalExplorePlanningRoutes.length,
       route_filters: selectedExploreRefinementLabel ?? `${activeDistanceRadius} mi`,
       trip_builder: 'LIVE',
       offline_prep_pack: 'LIVE',
     }),
     [
       activeDistanceRadius,
-      publicSuggestedTrailheadRoutes.length,
+      canonicalExplorePlanningRoutes.length,
       selectedExploreRefinementLabel,
     ],
   );
@@ -4534,7 +5277,7 @@ function DiscoverScreenInner() {
 
       hapticMicro();
       saveExplorePlanningRouteContext({
-        routes: publicSuggestedTrailheadRoutes as any,
+        routes: canonicalExplorePlanningRoutes as any,
         radiusMiles: activeDistanceRadius,
         refinementLabel: selectedExploreRefinementLabel,
         source: featureId === 'trip_builder' ? 'trip_builder_tab' : featureId === 'offline_prep_pack' ? 'offline_prep_tab' : 'suggested_routes',
@@ -4568,7 +5311,7 @@ function DiscoverScreenInner() {
     },
     [
       activeDistanceRadius,
-      publicSuggestedTrailheadRoutes,
+      canonicalExplorePlanningRoutes,
       exploreTopLevelFeatures,
       pushSingleFlight,
       selectedExploreRefinementLabel,
@@ -4576,54 +5319,63 @@ function DiscoverScreenInner() {
   );
 
   const handleOpenExploreTripBuilderFromHero = useCallback(() => {
-    hapticMicro();
-    saveExplorePlanningRouteContext({
-      routes: publicSuggestedTrailheadRoutes as any,
-      radiusMiles: activeDistanceRadius,
-      refinementLabel: selectedExploreRefinementLabel,
-      source: 'trip_builder_tab',
-    });
-    clearTripBuilderRouteHandoff();
-    pushSingleFlight('/explore-trip-builder');
-  }, [
-    activeDistanceRadius,
-    publicSuggestedTrailheadRoutes,
-    pushSingleFlight,
-    selectedExploreRefinementLabel,
-  ]);
+    handleOpenExploreFeature('trip_builder');
+  }, [handleOpenExploreFeature]);
 
   useEffect(() => {
     if (activeExplorePrimaryTab === 'suggested_routes') return;
-    if (publicSuggestedTrailheadRoutes.length === 0) {
+    if (canonicalExplorePlanningRoutes.length === 0) {
       setExplorePlanningSelectedRouteId(null);
       return;
     }
-    if (!publicSuggestedTrailheadRoutes.some((route) => String(route.id) === explorePlanningSelectedRouteId)) {
-      setExplorePlanningSelectedRouteId(String(publicSuggestedTrailheadRoutes[0].id));
+    if (!canonicalExplorePlanningRoutes.some((route) => String(route.id) === explorePlanningSelectedRouteId)) {
+      setExplorePlanningSelectedRouteId(String(canonicalExplorePlanningRoutes[0].id));
     }
-  }, [activeExplorePrimaryTab, explorePlanningSelectedRouteId, publicSuggestedTrailheadRoutes]);
+  }, [activeExplorePrimaryTab, canonicalExplorePlanningRoutes, explorePlanningSelectedRouteId]);
 
   const selectedExplorePlanningRoute = useMemo(
     () =>
-      publicSuggestedTrailheadRoutes.find((route) => String(route.id) === explorePlanningSelectedRouteId) ??
-      publicSuggestedTrailheadRoutes[0] ??
+      canonicalExplorePlanningRoutes.find((route) => String(route.id) === explorePlanningSelectedRouteId) ??
+      canonicalExplorePlanningRoutes[0] ??
       null,
-    [explorePlanningSelectedRouteId, publicSuggestedTrailheadRoutes],
+    [canonicalExplorePlanningRoutes, explorePlanningSelectedRouteId],
   );
 
-  const handleOpenActivePlanningFlow = useCallback(() => {
+  const handleOpenActivePlanningFlow = useCallback(async () => {
     if (activeExplorePrimaryTab !== 'offline_prep_pack') return;
     hapticMicro();
-    saveExplorePlanningRouteContext({
-      routes: publicSuggestedTrailheadRoutes as any,
-      radiusMiles: activeDistanceRadius,
-      refinementLabel: selectedExploreRefinementLabel,
-      source: 'offline_prep_tab',
-    });
-    if (selectedExplorePlanningRoute) {
+    if (!selectedExplorePlanningRoute) {
+      saveExplorePlanningRouteContext({
+        routes: canonicalExplorePlanningRoutes as any,
+        radiusMiles: activeDistanceRadius,
+        refinementLabel: selectedExploreRefinementLabel,
+        source: 'offline_prep_tab',
+      });
+      pushSingleFlight('/explore-offline-prep-pack');
+      return;
+    }
+    if (!guardGuidanceReadyRouteHandoff(selectedExplorePlanningRoute, 'offline_prep_tab')) return;
+    const request = beginExploreRouteIntentRequest();
+    try {
+      const hydratedRoute = await hydrateRouteCatalogOpportunityForHandoff(
+        selectedExplorePlanningRoute,
+        {
+          requireFullCatalogDetail: true,
+          signal: request.controller.signal,
+        },
+      );
+      if (!isCurrentExploreRouteIntentRequest(request)) return;
+      if (!guardHydratedGuidanceReadyHandoff(hydratedRoute, 'offline_prep_tab')) return;
+      saveExplorePlanningRouteContext({
+        routes: canonicalExplorePlanningRoutes.map((route) =>
+          String(route.id) === String(hydratedRoute.id) ? hydratedRoute : route) as any,
+        radiusMiles: activeDistanceRadius,
+        refinementLabel: selectedExploreRefinementLabel,
+        source: 'offline_prep_tab',
+      });
       saveOfflinePrepPackHandoff({
-        route: selectedExplorePlanningRoute as any,
-        campsiteCandidates: extractExploreRouteCampMarkers(selectedExplorePlanningRoute).map((marker) => ({
+        route: hydratedRoute as any,
+        campsiteCandidates: extractExploreRouteCampMarkers(hydratedRoute).map((marker) => ({
           id: marker.id,
           name: marker.title,
           location: { latitude: marker.latitude, longitude: marker.longitude },
@@ -4634,15 +5386,30 @@ function DiscoverScreenInner() {
           notes: [marker.subtitle],
         })),
       }, 'explore');
-    }
+      if (!isCurrentExploreRouteIntentRequest(request)) return;
       pushSingleFlight({
-      pathname: '/explore-offline-prep-pack',
-      params: selectedExplorePlanningRoute ? { routeId: selectedExplorePlanningRoute.id } : undefined,
-    } as any);
+        pathname: '/explore-offline-prep-pack',
+        params: { routeId: hydratedRoute.id },
+      } as any);
+    } catch {
+      if (!isCurrentExploreRouteIntentRequest(request)) return;
+      Alert.alert(
+        'Offline route unavailable',
+        'Authoritative route detail could not be loaded. Retry before preparing this route for offline use.',
+      );
+    } finally {
+      finishExploreRouteIntentRequest(request);
+    }
   }, [
     activeDistanceRadius,
     activeExplorePrimaryTab,
-    publicSuggestedTrailheadRoutes,
+    beginExploreRouteIntentRequest,
+    canonicalExplorePlanningRoutes,
+    finishExploreRouteIntentRequest,
+    guardGuidanceReadyRouteHandoff,
+    guardHydratedGuidanceReadyHandoff,
+    hydrateRouteCatalogOpportunityForHandoff,
+    isCurrentExploreRouteIntentRequest,
     pushSingleFlight,
     selectedExplorePlanningRoute,
     selectedExploreRefinementLabel,
@@ -4814,6 +5581,7 @@ function DiscoverScreenInner() {
               icon="cloud-offline-outline"
               title={ECS_READINESS_COPY.explore.hiddenGemsLimitedTitle}
               message={ECS_READINESS_COPY.explore.hiddenGemsLimitedMessage}
+              stateKind="provider_error"
             />
           );
         }
@@ -4827,6 +5595,7 @@ function DiscoverScreenInner() {
                   ? `No routes were available to evaluate as Hidden Gems inside ${exploreFilterNarrative}.`
                   : `Routes were evaluated inside ${exploreFilterNarrative}, but none qualified as exploratory off-road candidates after the active filters were applied.`
               }
+              stateKind={hiddenGemDiagnostics.rawCandidateCount === 0 ? 'empty' : 'filtered'}
             />
           );
         }
@@ -4859,7 +5628,10 @@ function DiscoverScreenInner() {
             <ExplorerStateCard
               icon="location-outline"
               title="Search Area Needed"
-              message="Trail Packs need GPS or an internal search area to filter verified routes by radius."
+              message={gps.permissionDenied
+                ? 'Location permission is unavailable. Review device permissions or choose an approved search area before loading verified routes.'
+                : 'Trail Packs need GPS or an approved search area to filter verified routes by radius.'}
+              stateKind="permission_required"
             />
           );
         }
@@ -4869,6 +5641,7 @@ function DiscoverScreenInner() {
               icon="hourglass-outline"
               title="Loading Trail Packs"
               message="Scanning approved ECS Trail Packs within selected radius…"
+              stateKind="loading"
             />
           );
         }
@@ -4878,26 +5651,108 @@ function DiscoverScreenInner() {
               <ExplorerStateCard
                 icon="cloud-offline-outline"
                 title="Live Trail Packs Unavailable"
-                message="Live Trail Packs are not available from reviewed sources yet. No seed or mock Trail Packs are shown here."
+                message={liveTrailPackCatalogSnapshot.error || 'Live Trail Packs are temporarily unavailable. No seed or mock Trail Packs are shown here.'}
+                stateKind="provider_error"
+                sourceLabel={routeCatalogSourceStateLabel}
+                action={(
+                  <ECSButton
+                    label="Retry Live Routes"
+                    onPress={handleRetryLiveTrailPackCatalog}
+                    accessibilityLabel="Retry live Trail Packs"
+                    variant="secondary"
+                    size="compact"
+                  />
+                )}
               />
             );
           }
-          if (broaderTrailPackResults.length > 0) {
+          if (liveTrailPackCatalogSnapshot.status === 'cancelled') {
             return (
               <ExplorerStateCard
-                icon="shield-half-outline"
-                title="Lower Confidence Nearby"
-                message="Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results."
+                icon="pause-circle-outline"
+                title="Trail Pack Update Cancelled"
+                message="The route catalog request stopped before it completed. Existing route data was not replaced."
+                stateKind="cancelled"
+                sourceLabel={routeCatalogSourceStateLabel}
+                action={(
+                  <ECSButton
+                    label="Retry Live Routes"
+                    onPress={handleRetryLiveTrailPackCatalog}
+                    accessibilityLabel="Retry cancelled Trail Pack update"
+                    variant="secondary"
+                    size="compact"
+                  />
+                )}
+              />
+            );
+          }
+          if (liveTrailPackCatalogSnapshot.status === 'disabled') {
+            return (
+              <ExplorerStateCard
+                icon="lock-closed-outline"
+                title="Route Provider Unavailable"
+                message={liveTrailPackCatalogSnapshot.error || 'Verified route loading is disabled for the current provider state.'}
+                stateKind="disabled"
+                sourceLabel={routeCatalogSourceStateLabel}
+              />
+            );
+          }
+          if (
+            liveTrailPackCatalogSnapshot.status === 'stale' ||
+            liveTrailPackCatalogSnapshot.status === 'degraded'
+          ) {
+            return (
+              <ExplorerStateCard
+                icon="cloud-offline-outline"
+                title="Route Catalog Degraded"
+                message={liveTrailPackCatalogSnapshot.error || 'Live route updates are unavailable and no usable cached route summaries remain.'}
+                stateKind={liveTrailPackCatalogSnapshot.status === 'stale' ? 'stale' : 'partial'}
+                sourceLabel={routeCatalogSourceStateLabel}
+                action={(
+                  <ECSButton
+                    label="Retry Live Routes"
+                    onPress={handleRetryLiveTrailPackCatalog}
+                    accessibilityLabel="Retry degraded route catalog"
+                    variant="secondary"
+                    size="compact"
+                  />
+                )}
               />
             );
           }
           if (routeCatalogCurationCoverageNotice) {
             return (
-              <ExplorerStateCard
-                icon="shield-half-outline"
-                title={liveTrailPackCatalogSnapshot.coverageState.title || 'Source-backed routes in curation'}
-                message={routeCatalogCurationCoverageNotice}
-              />
+              <View testID="explore-route-catalog-not-guidance-ready-state">
+                <ExplorerStateCard
+                  icon="shield-half-outline"
+                  title={liveTrailPackCatalogSnapshot.coverageState.title || 'Routes found, none guidance-ready'}
+                  message={routeCatalogCurationCoverageNotice}
+                  stateKind="filtered"
+                />
+              </View>
+            );
+          }
+          if (routeCatalogValidEmpty) {
+            return (
+              <View testID="explore-route-catalog-empty-state">
+                <ExplorerStateCard
+                  icon="albums-outline"
+                  title="No Routes in This Area"
+                  message="The configured route provider returned a valid empty result for this approved search area and radius. This request is complete and is not still loading."
+                  stateKind="empty"
+                  sourceLabel={routeCatalogSourceStateLabel}
+                />
+              </View>
+            );
+          }
+          if (broaderTrailPackResults.length > 0) {
+            return (
+            <ExplorerStateCard
+              icon="shield-half-outline"
+              title="Lower Confidence Nearby"
+              message="Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results."
+              stateKind="filtered"
+            />
             );
           }
           return (
@@ -4905,6 +5760,7 @@ function DiscoverScreenInner() {
               icon="albums-outline"
               title={liveTrailPackCatalogSnapshot.coverageState.title || 'No verified routes yet in this area'}
               message={liveTrailPackCatalogSnapshot.coverageState.message || 'No live reviewed Trail Packs found within this radius. No verified routes yet in this area. Try expanding your radius or import a GPX as a private pending suggestion.'}
+              stateKind="empty"
             />
           );
         }
@@ -4912,9 +5768,15 @@ function DiscoverScreenInner() {
           <View style={s.trailPackPanelStack}>
             {routeCatalogEffectiveSearchArea ? (
               <View style={s.inlineSectionNotice}>
-                <Ionicons name="map-outline" size={12} color={TACTICAL.info} />
+                <Ionicons
+                  name={routeCatalogLegacyFallbackWithData ? 'warning-outline' : 'map-outline'}
+                  size={12}
+                  color={routeCatalogLegacyFallbackWithData ? TACTICAL.amber : TACTICAL.info}
+                />
                 <Text style={s.inlineSectionNoticeText}>
-                  Showing verified routes within {activeDistanceRadius} mi of {routeCatalogEffectiveSearchArea.shortLabel}.
+                  {routeCatalogLegacyFallbackWithData
+                    ? 'Showing degraded legacy fallback summaries locally filtered to this area and radius. They are not authoritative catalog-verified routes.'
+                    : `Showing verified routes within ${activeDistanceRadius} mi of ${routeCatalogEffectiveSearchArea.shortLabel}.`}
                 </Text>
               </View>
             ) : null}
@@ -4924,6 +5786,41 @@ function DiscoverScreenInner() {
                 <Text style={s.inlineSectionNoticeText}>
                   Refreshing nearby Trail Packs. Current results stay visible while ECS updates this list.
                 </Text>
+              </View>
+            ) : null}
+            {routeCatalogCancelledWithData ? (
+              <View style={s.inlineSectionNotice} testID="explore-route-catalog-cancelled-with-data">
+                <Ionicons name="pause-circle-outline" size={12} color={TACTICAL.amber} />
+                <Text style={s.inlineSectionNoticeText}>
+                  Route refresh cancelled. Last-good rows remain visible and are not labeled as a completed live refresh.
+                </Text>
+                <TouchableOpacity
+                  style={s.aiRetryBtn}
+                  onPress={handleRetryLiveTrailPackCatalog}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry cancelled route catalog refresh"
+                >
+                  <Text style={s.aiRetryBtnText}>RETRY</Text>
+                </TouchableOpacity>
+              </View>
+            ) : liveTrailPackCatalogSnapshot.status === 'stale' || liveTrailPackCatalogSnapshot.status === 'degraded' ? (
+              <View style={s.inlineSectionNotice}>
+                <Ionicons name="cloud-offline-outline" size={12} color={TACTICAL.amber} />
+                <Text style={s.inlineSectionNoticeText}>
+                  {routeCatalogLegacyFallbackWithData
+                    ? 'Primary route verification is unavailable. Showing a live degraded legacy fallback locally filtered to the selected area and radius.'
+                    : routeCatalogCachedWithData
+                      ? liveTrailPackCatalogSnapshot.error || 'Showing labeled cached route data while the live provider is unavailable.'
+                      : liveTrailPackCatalogSnapshot.error || 'Showing labeled stale or degraded route data while live verification is unavailable.'}
+                </Text>
+                <TouchableOpacity
+                  style={s.aiRetryBtn}
+                  onPress={handleRetryLiveTrailPackCatalog}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry live route catalog"
+                >
+                  <Text style={s.aiRetryBtnText}>RETRY</Text>
+                </TouchableOpacity>
               </View>
             ) : null}
             {visibleRouteCatalogSummaries.some((summary) => summary.sourceType === 'preview') ? (
@@ -4986,6 +5883,7 @@ function DiscoverScreenInner() {
               icon="navigate-outline"
               title="No ECS Route Ideas Yet"
               message={`ECS route ideas appear automatically when matching suggestions are available inside ${exploreFilterNarrative}.`}
+              stateKind="empty"
             />
           );
         }
@@ -5116,6 +6014,12 @@ function DiscoverScreenInner() {
     <TopoBackground>
       <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
         <Header title="Explore" deferBannerImage={!exploreEntryHeavyChromeReady} />
+        <ECSSegmentedControl
+          options={explorePrimaryTabOptions}
+          value={activeExplorePrimaryTab}
+          onChange={(key) => handleOpenExploreFeature(key as ExplorePrimaryTab)}
+          style={s.explorePrimaryTabs}
+        />
 
         <View style={s.explorerBody}>
         <ScrollView
@@ -5128,38 +6032,154 @@ function DiscoverScreenInner() {
           scrollEventThrottle={32}
         >
 
-          <TouchableOpacity
-            style={s.exploreWizardHero}
-            testID="explore-tripbuilder-wizard-surface"
-            activeOpacity={0.84}
-            onPress={handleOpenExploreTripBuilderFromHero}
-            accessibilityRole="button"
-            accessibilityLabel="Open Explore Trip Builder"
-            accessibilityHint="Open Trip Builder to choose a guidance-ready route."
-          >
-            <View style={s.exploreWizardHeroIcon}>
-              <Ionicons name="trail-sign-outline" size={18} color={TACTICAL.amber} />
+          {tripBuilderFeatureEnabled ? (
+            <TouchableOpacity
+              style={s.exploreWizardHero}
+              testID="explore-tripbuilder-wizard-surface"
+              activeOpacity={0.84}
+              onPress={handleOpenExploreTripBuilderFromHero}
+              accessibilityRole="button"
+              accessibilityLabel="Open Explore Trip Builder"
+              accessibilityHint="Open Trip Builder to choose a guidance-ready route."
+            >
+              <View style={s.exploreWizardHeroIcon}>
+                <Ionicons name="trail-sign-outline" size={18} color={TACTICAL.amber} />
+              </View>
+              <View style={s.exploreWizardHeroCopy}>
+                <Text style={s.exploreWizardEyebrow}>EXPLORE TRIP BUILDER</Text>
+                <Text style={s.exploreWizardTitle}>Pick a guidance-ready route</Text>
+                <Text style={s.exploreWizardText}>
+                  Preview, save, build a trip, or start navigation from verified route geometry only.
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <View testID="explore-tripbuilder-disabled-state">
+              <ExplorerStateCard
+                icon="lock-closed-outline"
+                title="Trip Builder Disabled"
+                message="Trip Builder is unavailable for the current ECS rollout. No planning route was opened."
+                stateKind="disabled"
+              />
             </View>
-            <View style={s.exploreWizardHeroCopy}>
-              <Text style={s.exploreWizardEyebrow}>EXPLORE TRIP BUILDER</Text>
-              <Text style={s.exploreWizardTitle}>Pick a guidance-ready route</Text>
-              <Text style={s.exploreWizardText}>
-                Preview, save, build a trip, or start navigation from verified route geometry only.
-              </Text>
-            </View>
-          </TouchableOpacity>
+          )}
 
-          {activeExplorePrimaryTab === 'suggested_routes' ? (
+          {activeExplorePrimaryTab === 'suggested_routes' && !suggestedRoutesFeatureEnabled ? (
+            <View testID="explore-suggested-routes-disabled">
+              <ExplorerStateCard
+                icon="lock-closed-outline"
+                title="Suggested Routes Disabled"
+                message="Guidance-ready route discovery is disabled for the current ECS rollout. No route provider request was issued."
+                stateKind="disabled"
+              />
+            </View>
+          ) : activeExplorePrimaryTab === 'suggested_routes' ? (
             <>
-          {(!showInitialLoading && (hasExploreRangeRouteData || showSectionLoading || showTrailPackSectionLoading)) && (
+          {((!showInitialLoading || !routeCatalogHasSearchArea) && (
+             hasExploreRangeRouteData ||
+             showSectionLoading ||
+             showTrailPackSectionLoading ||
+             routeCatalogProviderValidEmpty ||
+             exploreGuidanceEvaluatedCount > 0 ||
+             routeCatalogHasNonReadyProviderResults ||
+             routeCatalogTerminalFailure ||
+             !routeCatalogHasSearchArea
+          )) && (
             <View style={s.discoveryControlsWrap}>
+              <View style={s.routeSearchAreaCard} testID="explore-route-search-area-control">
+                <View style={s.routeSearchAreaHeader}>
+                  <View style={s.routeSearchAreaCopy}>
+                    <Text style={s.routeSearchAreaEyebrow}>ROUTE SEARCH AREA</Text>
+                    <Text style={s.routeSearchAreaValue} numberOfLines={1}>{routeCatalogSearchAreaLabel}</Text>
+                    <Text style={s.routeSearchAreaHelper}>
+                      {routeCatalogHasSearchArea
+                        ? `Verified routes will be evaluated inside ${distanceRadiusNarrative}.`
+                        : gps.permissionDenied
+                          ? 'Location permission is unavailable. Choose an approved area or review device permissions.'
+                          : 'Choose GPS or an approved area before ECS requests verified route geometry.'}
+                    </Text>
+                  </View>
+                  {routeCatalogHasSearchArea ? (
+                    <TouchableOpacity
+                      style={s.routeSearchAreaClearButton}
+                      onPress={handleClearRouteCatalogArea}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear Explore route search area"
+                    >
+                      <Text style={s.routeSearchAreaClearText}>CLEAR</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+                <View style={s.routeSearchAreaActions}>
+                  <TouchableOpacity
+                    style={[
+                      s.routeSearchAreaButton,
+                      routeCatalogLocationSelection === 'gps' && routeCatalogHasSearchArea && s.routeSearchAreaButtonActive,
+                      !hasGPSFix && s.routeSearchAreaButtonDisabled,
+                    ]}
+                    onPress={handleUseGPSRouteCatalogArea}
+                    activeOpacity={hasGPSFix ? 0.82 : 1}
+                    disabled={!hasGPSFix}
+                    accessibilityRole="button"
+                    accessibilityLabel="Use current GPS location for Explore routes"
+                    accessibilityState={{ disabled: !hasGPSFix, selected: routeCatalogLocationSelection === 'gps' }}
+                  >
+                    <Ionicons
+                      name="locate-outline"
+                      size={12}
+                      color={hasGPSFix ? TACTICAL.amber : TACTICAL.textMuted}
+                    />
+                    <Text style={[
+                      s.routeSearchAreaButtonText,
+                      routeCatalogLocationSelection === 'gps' && routeCatalogHasSearchArea && s.routeSearchAreaButtonTextActive,
+                    ]}>
+                      {hasGPSFix ? 'USE GPS' : 'GPS UNAVAILABLE'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      s.routeSearchAreaButton,
+                      routeCatalogLocationSelection === 'preset' && routeCatalogHasSearchArea && s.routeSearchAreaButtonActive,
+                    ]}
+                    onPress={() => {
+                      hapticMicro();
+                      setRouteCatalogSearchAreaPickerVisible(true);
+                    }}
+                    activeOpacity={0.82}
+                    accessibilityRole="button"
+                    accessibilityLabel="Choose an approved Explore route search area"
+                  >
+                    <Ionicons name="map-outline" size={12} color={TACTICAL.amber} />
+                    <Text style={[
+                      s.routeSearchAreaButtonText,
+                      routeCatalogLocationSelection === 'preset' && routeCatalogHasSearchArea && s.routeSearchAreaButtonTextActive,
+                    ]}>
+                      CHOOSE AREA
+                    </Text>
+                  </TouchableOpacity>
+                  {(hasDiscoveryOverrides || exploreWizardSourceFilter !== 'all') ? (
+                    <TouchableOpacity
+                      style={s.routeSearchAreaResetButton}
+                      onPress={handleResetDiscoveryFilters}
+                      activeOpacity={0.82}
+                      accessibilityRole="button"
+                      accessibilityLabel="Reset Explore route filters"
+                    >
+                      <Ionicons name="refresh-outline" size={11} color={TACTICAL.textMuted} />
+                      <Text style={s.routeSearchAreaResetText}>RESET FILTERS</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              </View>
+
               <DistanceRadiusFilter
                 selectedRadius={distanceRadius}
                 onChangeRadius={handleRadiusChange}
                 hasGPSFix={hasGPSFix}
-                totalCount={exploreGuidanceReadyInventory.totalReadyCount}
-                filteredCount={exploreGuidanceReadyInventory.totalReadyCount}
-                refinedCount={exploreGuidanceReadyInventory.readyCount}
+                totalCount={exploreGuidanceEvaluatedCount}
+                filteredCount={exploreGuidanceReadyCount}
+                refinedCount={exploreWizardCandidateSet.candidates.length}
                 selectedRefinement={exploreRefinement}
                 refinementCounts={exploreGuidanceReadyInventory.refinementCounts}
                 onChangeRefinement={handleExploreRefinementChange}
@@ -5171,17 +6191,54 @@ function DiscoverScreenInner() {
                 <View style={s.exploreWizardStatusCopy}>
                   <Text style={s.exploreWizardStatusTitle}>Guidance Ready Routes</Text>
                   <Text style={s.exploreWizardStatusText}>
-                    {showGuidanceReadyGeometryLoading
+                     {!routeCatalogHasSearchArea
+                      ? 'Select an explicit search area to load verified route geometry. ECS does not silently use the default map location for live route discovery.'
+                      : routeCatalogEmptyWithoutGuidance
+                      ? 'The configured route provider completed successfully with no routes in this approved search area and radius.'
+                      : routeCatalogValidEmpty
+                      ? 'The configured route provider returned no routes. Local or persisted records remain visible only in NOT READY diagnostics because they do not currently satisfy guidance gates.'
+                      : routeCatalogProviderValidEmpty && exploreGuidanceReadyCount > 0
+                      ? `${visibleExploreWizardCandidates.length} guidance-ready saved or imported route${visibleExploreWizardCandidates.length === 1 ? '' : 's'} remain visible even though the live provider returned a valid empty result.`
+                      : routeCatalogProviderValidEmpty
+                      ? `The live provider returned a valid empty result. ${exploreGuidanceNotReadyCount} local or persisted record${exploreGuidanceNotReadyCount === 1 ? '' : 's'} remain excluded with typed readiness reasons.`
+                      : routeCatalogUnavailableWithoutData
+                      ? `${liveTrailPackCatalogSnapshot.error || 'Verified route geometry is unavailable.'} Retry live routes before treating this lane as empty.`
+                      : routeCatalogProviderUnavailableWithLocalReady
+                      ? `${visibleExploreWizardCandidates.length} guidance-ready saved, imported, or other non-provider route${visibleExploreWizardCandidates.length === 1 ? '' : 's'} remain visible while the live route provider is unavailable. Provider failure is not reported as an empty search.`
+                      : routeCatalogProviderUnavailableWithLocalInventory
+                      ? `The live provider is unavailable. ${exploreGuidanceNotReadyCount} local or persisted route record${exploreGuidanceNotReadyCount === 1 ? '' : 's'} remain excluded with typed readiness reasons.`
+                      : routeCatalogCancelledWithData
+                      ? `${visibleExploreWizardCandidates.length} last-good guidance-ready route${visibleExploreWizardCandidates.length === 1 ? '' : 's'} and ${exploreGuidanceNotReadyCount} excluded record${exploreGuidanceNotReadyCount === 1 ? '' : 's'} remain after the refresh was cancelled. Retry to obtain a current provider result.`
+                      : showGuidanceReadyGeometryLoading
                       ? `Loading bounded route preview geometry for ${exploreFilterNarrative}. Full route detail remains deferred until you preview, save, build, or start a route.`
-                      : hasSelectedExploreRefinement
-                      ? `Guidance Ready Routes are source-backed routes with usable stitched geometry, visible confidence, and data state labels. ${exploreGuidanceReadyInventory.readyCount} routes match ${exploreFilterNarrative} and are available to preview, save, build, or start.`
-                      : `Select a refinement bucket to populate Guidance Ready route cards. The counts above show guidance-ready routes inside ${distanceRadiusNarrative}, without changing the range results when you switch buckets.`}
+                      : routeCatalogLegacyFallbackWithData
+                      ? 'The primary verified catalog is unavailable. Legacy fallback summaries are degraded and locally filtered, but they are not authoritative catalog-verified routes.'
+                      : routeCatalogStaleWithData
+                      ? `${visibleExploreWizardCandidates.length} guidance-ready route${visibleExploreWizardCandidates.length === 1 ? '' : 's'} and ${exploreGuidanceNotReadyCount} excluded record${exploreGuidanceNotReadyCount === 1 ? '' : 's'} are available from cached data. Live refresh is degraded; source and freshness labels remain visible.`
+                      : routeCatalogDegradedLiveWithData
+                      ? `${visibleExploreWizardCandidates.length} last-good route${visibleExploreWizardCandidates.length === 1 ? '' : 's'} and ${exploreGuidanceNotReadyCount} excluded record${exploreGuidanceNotReadyCount === 1 ? '' : 's'} remain in a stale or degraded provider state.`
+                      : routeCatalogHasNonReadyProviderResults
+                      ? visibleExploreWizardCandidates.length === 0
+                        ? `${routeCatalogProviderNotReadyCount} source-backed route record${routeCatalogProviderNotReadyCount === 1 ? '' : 's'} were found, but none currently satisfy all public guidance requirements. Exclusion reasons remain available for diagnostics and no route was promoted.`
+                        : `${visibleExploreWizardCandidates.length} guidance-ready route${visibleExploreWizardCandidates.length === 1 ? '' : 's'} remain visible while ${routeCatalogProviderNotReadyCount} source-backed provider record${routeCatalogProviderNotReadyCount === 1 ? '' : 's'} stay excluded with typed safety and source reasons.`
+                      : `${visibleExploreWizardCandidates.length} source-backed route${visibleExploreWizardCandidates.length === 1 ? '' : 's'} with usable geometry match ${exploreFilterNarrative} and the active source filter.`}
                   </Text>
-                  {showGuidanceReadyRefinementPrompt ? (
-                    <Text style={s.exploreWizardNotice} numberOfLines={2}>
-                      Choose Remoteness, Day Trip, Weekend Trip, or Expedition to load only that route set.
-                    </Text>
-                  ) : null}
+                  <View style={s.exploreGuidanceCountRow} testID="explore-guidance-ready-counts">
+                    {routeCatalogEmptyWithoutGuidance ? (
+                      <Text style={s.exploreGuidanceCountText}>EMPTY</Text>
+                    ) : routeCatalogValidEmpty ? (
+                      <>
+                        <Text style={s.exploreGuidanceCountText}>{exploreGuidanceNotReadyCount} NOT READY</Text>
+                        <Text style={s.exploreGuidanceCountText}>{exploreGuidanceFilteredCount} FILTERED</Text>
+                      </>
+                    ) : (
+                      <>
+                        <Text style={s.exploreGuidanceCountText}>{visibleExploreWizardCandidates.length} READY</Text>
+                        <Text style={s.exploreGuidanceCountText}>{exploreGuidanceNotReadyCount} NOT READY</Text>
+                        <Text style={s.exploreGuidanceCountText}>{exploreGuidanceFilteredCount} FILTERED</Text>
+                      </>
+                    )}
+                  </View>
                   {exploreWizardSaveNotice ? (
                     <Text style={s.exploreWizardNotice} numberOfLines={2}>{exploreWizardSaveNotice}</Text>
                   ) : null}
@@ -5191,14 +6248,162 @@ function DiscoverScreenInner() {
                     <ActivityIndicator size="small" color={TACTICAL.amber} />
                   ) : (
                     <Text style={s.exploreWizardCountValue}>
-                      {hasSelectedExploreRefinement ? exploreGuidanceReadyInventory.readyCount : exploreGuidanceReadyInventory.totalReadyCount}
+                      {!routeCatalogHasSearchArea || routeCatalogUnavailableWithoutData || routeCatalogValidEmpty
+                        ? '—'
+                        : routeCatalogHasNonReadyProviderResults && visibleExploreWizardCandidates.length === 0
+                          ? '0'
+                        : visibleExploreWizardCandidates.length}
                     </Text>
                   )}
                   <Text style={s.exploreWizardCountLabel}>
-                    {showGuidanceReadyGeometryLoading ? 'LOADING' : hasSelectedExploreRefinement ? 'READY' : 'IN RANGE'}
+                    {showGuidanceReadyGeometryLoading
+                      ? 'LOADING'
+                      : !routeCatalogHasSearchArea
+                        ? 'AREA NEEDED'
+                        : routeCatalogEmptyWithoutGuidance
+                          ? 'EMPTY'
+                        : routeCatalogValidEmpty
+                          ? 'NOT READY'
+                        : routeCatalogUnavailableWithoutData
+                        ? 'UNAVAILABLE'
+                        : routeCatalogProviderUnavailableWithLocalReady
+                          ? 'DEGRADED'
+                        : routeCatalogProviderUnavailableWithLocalInventory
+                          ? 'DEGRADED'
+                        : routeCatalogCancelledWithData
+                          ? 'CANCELLED'
+                        : routeCatalogLegacyFallbackWithData
+                          ? 'DEGRADED'
+                        : routeCatalogStaleWithData
+                          ? 'CACHED'
+                        : routeCatalogDegradedLiveWithData
+                          ? 'STALE'
+                        : routeCatalogHasNonReadyProviderResults && visibleExploreWizardCandidates.length === 0
+                          ? 'NOT READY'
+                          : 'READY'}
                   </Text>
                 </View>
               </View>
+
+              {routeCatalogUnavailableWithoutData && routeCatalogHasSearchArea ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-provider-unavailable">
+                  <Ionicons name="cloud-offline-outline" size={15} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    The route request did not return a valid result. ECS has not converted this failure into “no routes.”
+                  </Text>
+                  {liveTrailPackCatalogSnapshot.status !== 'disabled' ? (
+                    <TouchableOpacity
+                      style={s.aiRetryBtn}
+                      onPress={handleRetryLiveTrailPackCatalog}
+                      accessibilityRole="button"
+                      accessibilityLabel="Retry Guidance Ready routes"
+                    >
+                      <Text style={s.aiRetryBtnText}>RETRY</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {routeCatalogProviderUnavailableWithLocalInventory && routeCatalogHasSearchArea ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-provider-unavailable-local-ready">
+                  <Ionicons name="cloud-offline-outline" size={15} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    {exploreGuidanceReadyCount > 0
+                      ? 'The live route provider is unavailable. Guidance-ready saved or imported routes remain visible from local state and retain their source labels.'
+                      : 'The live route provider is unavailable. Local route records remain visible only as typed NOT READY diagnostics and were not promoted into guidance.'}
+                  </Text>
+                  {liveTrailPackCatalogSnapshot.status !== 'disabled' ? (
+                    <TouchableOpacity
+                      style={s.aiRetryBtn}
+                      onPress={handleRetryLiveTrailPackCatalog}
+                      accessibilityRole="button"
+                      accessibilityLabel="Retry live routes while local routes remain visible"
+                    >
+                      <Text style={s.aiRetryBtnText}>RETRY LIVE</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {routeCatalogStaleWithData ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-stale-notice">
+                  <Ionicons name="time-outline" size={15} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    Cached route results remain available while the live catalog refresh is degraded. Review each route source and freshness before handoff.
+                  </Text>
+                  <TouchableOpacity
+                    style={s.aiRetryBtn}
+                    onPress={handleRetryLiveTrailPackCatalog}
+                    accessibilityRole="button"
+                    accessibilityLabel="Refresh cached Explore routes"
+                  >
+                    <Text style={s.aiRetryBtnText}>REFRESH</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {routeCatalogCancelledWithData ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-cancelled-notice">
+                  <Ionicons name="pause-circle-outline" size={15} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    Route refresh cancelled. Last-good rows remain visible, but ECS has not labeled them as a completed live result.
+                  </Text>
+                  <TouchableOpacity
+                    style={s.aiRetryBtn}
+                    onPress={handleRetryLiveTrailPackCatalog}
+                    accessibilityRole="button"
+                    accessibilityLabel="Retry cancelled Guidance Ready route refresh"
+                  >
+                    <Text style={s.aiRetryBtnText}>RETRY</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {routeCatalogProviderValidEmpty && !routeCatalogValidEmpty ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-provider-empty-with-exclusions">
+                  <Ionicons name="albums-outline" size={15} color={TACTICAL.textMuted} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    {exploreGuidanceReadyCount > 0
+                      ? 'The live provider completed with no catalog routes. Eligible saved or imported routes remain visible; excluded local records retain typed NOT READY reasons.'
+                      : 'The live provider completed with no catalog routes. Local or persisted records remain excluded with typed NOT READY reasons and were not promoted into guidance.'}
+                  </Text>
+                </View>
+              ) : null}
+
+              {routeCatalogHasNonReadyProviderResults ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-provider-not-ready">
+                  <Ionicons name="shield-half-outline" size={15} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    {routeCatalogCurationCoverageNotice}
+                  </Text>
+                </View>
+              ) : null}
+
+              {routeCatalogLegacyFallbackWithData ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-legacy-fallback-notice">
+                  <Ionicons name="warning-outline" size={15} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    Legacy fallback data is degraded and locally filtered to the selected area and radius. It is not authoritative catalog-verified and cannot bypass Guidance Ready safety gates.
+                  </Text>
+                  <TouchableOpacity
+                    style={s.aiRetryBtn}
+                    onPress={handleRetryLiveTrailPackCatalog}
+                    accessibilityRole="button"
+                    accessibilityLabel="Retry primary Guidance Ready route provider"
+                  >
+                    <Text style={s.aiRetryBtnText}>RETRY PRIMARY</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {routeCatalogDegradedLiveWithData ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-degraded-notice">
+                  <Ionicons name="cloud-offline-outline" size={15} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    Last-good route rows remain visible in a stale or degraded provider state. Review source and freshness before handoff.
+                  </Text>
+                </View>
+              ) : null}
 
               {showGuidanceReadyBlockedNotice ? (
                 <View style={s.inlineSectionNotice} testID="explore-guidance-ready-blocked-notice">
@@ -5234,7 +6439,34 @@ function DiscoverScreenInner() {
             </>
           )}
 
-          {!showInitialLoading && !showSectionLoading && !showTrailPackSectionLoading && !hasExploreRangeRouteData && (
+          {!showInitialLoading && !showSectionLoading && !showTrailPackSectionLoading && routeCatalogUnavailableWithoutData && routeCatalogHasSearchArea && (
+            <ExplorerStateCard
+              icon="cloud-offline-outline"
+              title={liveTrailPackCatalogSnapshot.status === 'cancelled'
+                ? 'Route Update Cancelled'
+                : liveTrailPackCatalogSnapshot.status === 'disabled'
+                  ? 'Route Provider Unavailable'
+                  : 'Live Route Catalog Unavailable'}
+              message={liveTrailPackCatalogSnapshot.error || 'ECS could not load verified route data. This provider failure is not an empty search result.'}
+              stateKind={liveTrailPackCatalogSnapshot.status === 'disabled'
+                ? 'disabled'
+                : liveTrailPackCatalogSnapshot.status === 'cancelled'
+                  ? 'cancelled'
+                  : 'provider_error'}
+              sourceLabel={routeCatalogSourceStateLabel}
+              action={liveTrailPackCatalogSnapshot.status !== 'disabled' ? (
+                <ECSButton
+                  label="Retry Live Routes"
+                  onPress={handleRetryLiveTrailPackCatalog}
+                  accessibilityLabel="Retry Explore route catalog"
+                  variant="secondary"
+                  size="compact"
+                />
+              ) : undefined}
+            />
+          )}
+
+          {!showInitialLoading && !showSectionLoading && !showTrailPackSectionLoading && !routeCatalogUnavailableWithoutData && !routeCatalogValidEmpty && !hasExploreRangeRouteData && exploreGuidanceEvaluatedCount === 0 && (
             <ECSResultsEmptyState
               style={s.emptyRadius}
               title={ECS_STATE_COPY.explore.noRoutesInRadius.title}
@@ -5407,7 +6639,9 @@ function DiscoverScreenInner() {
             </View>
           )}
 
-          {(!showInitialLoading && hasSelectedExploreRefinement && !showRefinementEmptyState && (hasExploreRangeRouteData || showGuidanceReadyGeometryLoading || showSectionLoading)) && (
+          {(!showInitialLoading && routeCatalogHasSearchArea && !routeCatalogUnavailableWithoutData && !showRefinementEmptyState && (
+            hasExploreRangeRouteData || exploreGuidanceEvaluatedCount > 0 || routeCatalogValidEmpty || showGuidanceReadyGeometryLoading || showSectionLoading
+          )) && (
             <View style={s.exploreWizardRouteSurface}>
               <View style={s.exploreWizardFilterRow}>
                 {EXPLORE_WIZARD_SOURCE_FILTERS.map((filter) => {
@@ -5437,7 +6671,7 @@ function DiscoverScreenInner() {
                 })}
               </View>
 
-              {showGuidanceReadyGeometryLoading ? (
+              {showGuidanceReadyGeometryLoading && visibleExploreWizardCandidates.length === 0 ? (
                 <ECSTransientNotice
                   kind="loading"
                   label="Loading Verified Route Previews..."
@@ -5448,9 +6682,45 @@ function DiscoverScreenInner() {
               ) : visibleExploreWizardCandidates.length === 0 ? (
                 <ECSResultsEmptyState
                   style={s.exploreWizardEmpty}
-                  title="No Guidance-Ready Routes"
-                  message="No routes from the current Explore sources are ready for active guidance inside these filters."
-                  helper="Adjust the radius or source chip, import a verified route file, or try again when route catalog geometry is available."
+                   title={
+                     routeCatalogEmptyWithoutGuidance
+                       ? 'No Routes in This Area'
+                       : exploreWizardSourceFilter !== 'all' && exploreWizardCandidateSet.candidates.length > 0
+                       ? 'Routes Found but Filtered'
+                      : exploreGuidanceEvaluatedCount > 0
+                        ? 'Routes Found, None Guidance Ready'
+                        : 'No Routes in This Area'
+                  }
+                   message={
+                     routeCatalogEmptyWithoutGuidance
+                       ? 'The configured provider completed successfully with a valid empty result for this approved search area and radius.'
+                       : exploreWizardSourceFilter !== 'all' && exploreWizardCandidateSet.candidates.length > 0
+                       ? 'Guidance-ready routes exist in this search, but the active source chip hides them.'
+                      : exploreGuidanceEvaluatedCount > 0
+                        ? 'ECS found route records, but none currently satisfy geometry, access, source, or guidance handoff requirements.'
+                        : 'The configured providers returned a valid empty result for this search area and radius.'
+                  }
+                   helper={
+                     routeCatalogEmptyWithoutGuidance
+                       ? 'Choose another approved area, widen the radius, or retry later. This request is complete and is not still loading.'
+                       : exploreWizardSourceFilter !== 'all' && exploreWizardCandidateSet.candidates.length > 0
+                       ? 'Show all ready sources or reset the Explore filters.'
+                      : 'Adjust the radius, choose another approved area, or retry after verified route geometry becomes available.'
+                  }
+                  actionLabel={
+                    exploreWizardSourceFilter !== 'all' && exploreWizardCandidateSet.candidates.length > 0
+                      ? 'Show All Ready'
+                      : hasDiscoveryOverrides
+                        ? 'Reset Filters'
+                        : undefined
+                  }
+                  onAction={
+                    exploreWizardSourceFilter !== 'all' && exploreWizardCandidateSet.candidates.length > 0
+                      ? () => setExploreWizardSourceFilter('all')
+                      : hasDiscoveryOverrides
+                        ? handleResetDiscoveryFilters
+                        : undefined
+                  }
                   icon="navigate-outline"
                   variant="compact"
                 />
@@ -5496,6 +6766,57 @@ function DiscoverScreenInner() {
                   <Text style={s.hiddenGemPagerText}>SHOW MORE ROUTES</Text>
                 </TouchableOpacity>
               ) : null}
+
+              {liveTrailPackCatalogSnapshot.searchMeta?.hasMore &&
+              liveTrailPackCatalogSnapshot.searchMeta.nextPage != null ? (
+                <TouchableOpacity
+                  style={s.hiddenGemPagerBtn}
+                  activeOpacity={routeCatalogPaginationPresentationStatus === 'loading' ? 1 : 0.82}
+                  onPress={handleLoadNextRouteCatalogPage}
+                  disabled={routeCatalogPaginationPresentationStatus === 'loading'}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    routeCatalogPaginationPresentationStatus === 'error'
+                      ? 'Retry loading more verified Explore routes'
+                      : 'Load more verified Explore routes'
+                  }
+                  accessibilityState={{ disabled: routeCatalogPaginationPresentationStatus === 'loading' }}
+                  testID="explore-guidance-ready-load-next-provider-page"
+                >
+                  {routeCatalogPaginationPresentationStatus === 'loading' ? (
+                    <ActivityIndicator size="small" color={TACTICAL.amber} />
+                  ) : (
+                    <Ionicons
+                      name={routeCatalogPaginationPresentationStatus === 'error' ? 'refresh-outline' : 'cloud-download-outline'}
+                      size={14}
+                      color={TACTICAL.amber}
+                    />
+                  )}
+                  <Text style={s.hiddenGemPagerText}>
+                    {routeCatalogPaginationPresentationStatus === 'loading'
+                      ? 'LOADING MORE VERIFIED ROUTES'
+                      : routeCatalogPaginationPresentationStatus === 'error'
+                        ? 'RETRY MORE VERIFIED ROUTES'
+                        : 'LOAD MORE VERIFIED ROUTES'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+
+              {routeCatalogPaginationPresentationError ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-pagination-error">
+                  <Ionicons name="warning-outline" size={13} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>{routeCatalogPaginationPresentationError}</Text>
+                </View>
+              ) : null}
+
+              {liveTrailPackCatalogSnapshot.searchMeta?.totalMatchedCountBounded ? (
+                <View style={s.inlineSectionNotice} testID="explore-guidance-ready-bounded-catalog-notice">
+                  <Ionicons name="funnel-outline" size={13} color={TACTICAL.amber} />
+                  <Text style={s.inlineSectionNoticeText}>
+                    PROVIDER EVALUATION WINDOW REACHED. ADDITIONAL MATCHES MAY EXIST; NARROW THE AREA OR FILTERS.
+                  </Text>
+                </View>
+              ) : null}
             </View>
           )}
 
@@ -5539,15 +6860,16 @@ function DiscoverScreenInner() {
                     icon="cloud-offline-outline"
                     title={ECS_READINESS_COPY.explore.hiddenGemsLimitedTitle}
                     message={ECS_READINESS_COPY.explore.hiddenGemsLimitedMessage}
+                    stateKind="provider_error"
                     action={(
-                      <TouchableOpacity
-                        style={s.sectionStateAction}
-                        activeOpacity={0.78}
+                      <ECSButton
+                        label="Refresh Explore"
+                        icon="refresh-outline"
                         onPress={refreshRigContext}
-                      >
-                        <Ionicons name="refresh-outline" size={11} color={TACTICAL.amber} />
-                        <Text style={s.sectionStateActionText}>REFRESH EXPLORE</Text>
-                      </TouchableOpacity>
+                        accessibilityLabel="Refresh Explore trail source"
+                        variant="secondary"
+                        size="compact"
+                      />
                     )}
                   />
                 ) : !exploreSourceDiagnostics.routeSourceHydrated ? (
@@ -5555,6 +6877,7 @@ function DiscoverScreenInner() {
                     icon="hourglass-outline"
                     title="Loading Trail Source"
                     message="Explore is still hydrating its route source for this session. Hidden Gems will populate once the trail-source load completes."
+                    stateKind="loading"
                   />
                 ) : exploreSourceDiagnostics.routeCatalogCount === 0 ? (
                   <ExplorerStateCard
@@ -5565,6 +6888,7 @@ function DiscoverScreenInner() {
                         ? 'Explore is offline and no local trail source is available yet.'
                         : 'Explore did not load reviewed trail sources for this session. Refresh Explore once shell state settles.'
                     }
+                    stateKind="provider_error"
                   />
                 ) : visibleHiddenGemRoutes.length === 0 ? (
                   <ExplorerStateCard
@@ -5577,6 +6901,7 @@ function DiscoverScreenInner() {
                         ? `Routes were evaluated inside ${exploreFilterNarrative}, but none qualified as exploratory off-road candidates for your current rig after the active trail filters were applied.`
                         : `Explore is still using the default search location until live GPS becomes available. Routes were evaluated inside ${exploreFilterNarrative}, but none qualified as exploratory off-road candidates after the active trail filters were applied.`
                     }
+                    stateKind={hiddenGemDiagnostics.rawCandidateCount === 0 ? 'empty' : 'filtered'}
                   />
                 ) : (
                   <>
@@ -5966,12 +7291,12 @@ function DiscoverScreenInner() {
                 <View style={s.explorePlanningContextPill}>
                   <Ionicons name="trail-sign-outline" size={10} color={TACTICAL.textMuted} />
                   <Text style={s.explorePlanningContextText}>
-                    {publicSuggestedTrailheadRoutes.length} READY ROUTE{publicSuggestedTrailheadRoutes.length === 1 ? '' : 'S'}
+                    {canonicalExplorePlanningRoutes.length} READY ROUTE{canonicalExplorePlanningRoutes.length === 1 ? '' : 'S'}
                   </Text>
                 </View>
               </View>
 
-              {publicSuggestedTrailheadRoutes.length === 0 ? (
+              {canonicalExplorePlanningRoutes.length === 0 ? (
                 <ECSResultsEmptyState
                   style={s.explorePlanningEmpty}
                   title={liveTrailPackCatalogSnapshot.coverageState.title || 'No verified routes yet in this area'}
@@ -5988,7 +7313,7 @@ function DiscoverScreenInner() {
                       onPress={() => {
                         hapticMicro();
                         saveExplorePlanningRouteContext({
-                          routes: publicSuggestedTrailheadRoutes as any,
+                          routes: canonicalExplorePlanningRoutes as any,
                           radiusMiles: activeDistanceRadius,
                           refinementLabel: selectedExploreRefinementLabel,
                           source: 'offline_prep_tab',
@@ -6015,7 +7340,7 @@ function DiscoverScreenInner() {
                         </Text>
                       </View>
                     </TouchableOpacity>
-                    {publicSuggestedTrailheadRoutes.slice(0, 7).map((route) => {
+                    {canonicalExplorePlanningRoutes.slice(0, 7).map((route) => {
                       const selected = String(route.id) === String(selectedExplorePlanningRoute?.id);
                       return (
                         <TouchableOpacity
@@ -6341,6 +7666,76 @@ function DiscoverScreenInner() {
           onSubmitted={handleTrailPackSubmitted}
         />
 
+        <TacticalPopupShell
+          visible={routeCatalogSearchAreaPickerVisible}
+          onClose={() => setRouteCatalogSearchAreaPickerVisible(false)}
+          title="CHOOSE ROUTE SEARCH AREA"
+          icon="map-outline"
+          eyebrow="EXPLORE ROUTE CATALOG"
+          subtitle="Live GPS is coordinate-first when available. Otherwise choose an approved ECS area; default map coordinates are never queried."
+          overlayClass="editor"
+          maxWidth={720}
+          maxHeightFraction={0.84}
+        >
+          <View style={s.routeSearchAreaPickerList} testID="explore-route-search-area-picker">
+            <TouchableOpacity
+              style={[
+                s.routeSearchAreaPickerRow,
+                routeCatalogLocationSelection === 'gps' && routeCatalogHasSearchArea && s.routeSearchAreaPickerRowActive,
+                !hasGPSFix && s.routeSearchAreaPickerRowDisabled,
+              ]}
+              onPress={handleUseGPSRouteCatalogArea}
+              activeOpacity={hasGPSFix ? 0.82 : 1}
+              disabled={!hasGPSFix}
+              accessibilityRole="button"
+              accessibilityLabel="Use current GPS location"
+              accessibilityState={{ disabled: !hasGPSFix, selected: routeCatalogLocationSelection === 'gps' }}
+            >
+              <View style={s.routeSearchAreaPickerIcon}>
+                <Ionicons name="locate-outline" size={15} color={hasGPSFix ? TACTICAL.amber : TACTICAL.textMuted} />
+              </View>
+              <View style={s.routeSearchAreaPickerCopy}>
+                <Text style={s.routeSearchAreaPickerTitle}>Current GPS Location</Text>
+                <Text style={s.routeSearchAreaPickerMeta}>
+                  {hasGPSFix ? 'Live device location available' : gps.permissionDenied ? 'Location permission denied' : 'Waiting for a GPS fix'}
+                </Text>
+              </View>
+              {routeCatalogLocationSelection === 'gps' && routeCatalogHasSearchArea ? (
+                <Ionicons name="checkmark-circle" size={16} color={TACTICAL.amber} />
+              ) : null}
+            </TouchableOpacity>
+
+            <View style={s.routeSearchAreaPickerDivider}>
+              <Text style={s.routeSearchAreaPickerDividerText}>APPROVED SEARCH AREAS</Text>
+              <Text style={s.routeSearchAreaPickerDividerCount}>{ROUTE_CATALOG_PRESET_SEARCH_AREAS.length}</Text>
+            </View>
+
+            {routeCatalogSearchAreaPickerVisible ? ROUTE_CATALOG_PRESET_SEARCH_AREAS.map((area) => {
+              const selected = routeCatalogLocationSelection === 'preset' && routeCatalogSearchAreaKey === area.key;
+              return (
+                <TouchableOpacity
+                  key={area.key}
+                  style={[s.routeSearchAreaPickerRow, selected && s.routeSearchAreaPickerRowActive]}
+                  onPress={() => handleSelectRouteCatalogArea(area.key)}
+                  activeOpacity={0.82}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Use ${area.label} for Explore routes`}
+                  accessibilityState={{ selected }}
+                >
+                  <View style={s.routeSearchAreaPickerIcon}>
+                    <Ionicons name="location-outline" size={14} color={selected ? TACTICAL.amber : TACTICAL.textMuted} />
+                  </View>
+                  <View style={s.routeSearchAreaPickerCopy}>
+                    <Text style={s.routeSearchAreaPickerTitle} numberOfLines={1}>{area.label}</Text>
+                    <Text style={s.routeSearchAreaPickerMeta} numberOfLines={1}>{area.shortLabel}</Text>
+                  </View>
+                  {selected ? <Ionicons name="checkmark-circle" size={16} color={TACTICAL.amber} /> : null}
+                </TouchableOpacity>
+              );
+            }) : null}
+          </View>
+        </TacticalPopupShell>
+
         {/* ── Phase 18: AI Route Preview Modal with enrichment ── */}
         <TacticalPopupShell
           visible={planBuilderVisible}
@@ -6493,9 +7888,9 @@ function DiscoverScreenInner() {
 // ============================================================
 export default function DiscoverScreen() {
   return (
-    <DiscoverErrorBoundary>
+    <TabErrorBoundary tabName="EXPLORE">
       <DiscoverScreenInner />
-    </DiscoverErrorBoundary>
+    </TabErrorBoundary>
   );
 }
 
@@ -6597,6 +7992,8 @@ const s = StyleSheet.create({
     flexGrow: 1,
   },
   explorePrimaryTabs: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
     marginBottom: 8,
   },
   exploreWizardHero: {
@@ -6680,8 +8077,21 @@ const s = StyleSheet.create({
     letterSpacing: 0.3,
     marginTop: 2,
   },
+  exploreGuidanceCountRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+    marginTop: 4,
+  },
+  exploreGuidanceCountText: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+  },
   exploreWizardCountPlate: {
-    minWidth: 54,
+    minWidth: 68,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.strokeSoft : TACTICAL.amber + '35',
@@ -6880,6 +8290,176 @@ const s = StyleSheet.create({
     marginTop: 3,
     marginBottom: 7,
     gap: 5,
+  },
+  routeSearchAreaCard: {
+    borderRadius: ECS.radius,
+    borderWidth: 1,
+    borderColor: ECS.strokeMuted,
+    backgroundColor: ECS.bgPanel,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 8,
+  },
+  routeSearchAreaHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  routeSearchAreaCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  routeSearchAreaEyebrow: {
+    color: TACTICAL.amber,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  routeSearchAreaValue: {
+    color: TACTICAL.text,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+  },
+  routeSearchAreaHelper: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 12,
+    fontWeight: '700',
+  },
+  routeSearchAreaActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  routeSearchAreaButton: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  routeSearchAreaButtonActive: {
+    borderColor: TACTICAL.amber + '70',
+    backgroundColor: TACTICAL.amber + '12',
+  },
+  routeSearchAreaButtonDisabled: {
+    opacity: 0.48,
+  },
+  routeSearchAreaButtonText: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  routeSearchAreaButtonTextActive: {
+    color: TACTICAL.amber,
+  },
+  routeSearchAreaClearButton: {
+    minHeight: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    paddingHorizontal: 9,
+  },
+  routeSearchAreaClearText: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  routeSearchAreaResetButton: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+  },
+  routeSearchAreaResetText: {
+    color: TACTICAL.textMuted,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+  },
+  routeSearchAreaPickerList: {
+    gap: 6,
+  },
+  routeSearchAreaPickerRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgElev,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  routeSearchAreaPickerRowActive: {
+    borderColor: TACTICAL.amber + '70',
+    backgroundColor: TACTICAL.amber + '12',
+  },
+  routeSearchAreaPickerRowDisabled: {
+    opacity: 0.5,
+  },
+  routeSearchAreaPickerIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TACTICAL.amber + '0C',
+  },
+  routeSearchAreaPickerCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  routeSearchAreaPickerTitle: {
+    color: TACTICAL.text,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '800',
+  },
+  routeSearchAreaPickerMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '700',
+  },
+  routeSearchAreaPickerDivider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingHorizontal: 3,
+    paddingTop: 8,
+    paddingBottom: 2,
+  },
+  routeSearchAreaPickerDividerText: {
+    color: TACTICAL.amber,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  routeSearchAreaPickerDividerCount: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
   },
   discoveryRefreshNotice: {
     marginTop: 2,

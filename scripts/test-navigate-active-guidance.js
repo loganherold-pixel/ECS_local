@@ -335,14 +335,17 @@ assert(
     mapRenderer.includes("const compactActiveRoute = props.surfaceMode === 'compact' && props.routeRenderMode === 'active';") &&
     mapRenderer.includes('const routeRenderPointBudget = compactActiveRoute') &&
     mapRenderer.includes('const progressRenderPointBudget = compactActiveRoute') &&
-    mapRenderer.includes('preserveRouteGeometryForRendering(routeCoordsRaw, routeRenderPointBudget)') &&
-    mapRenderer.includes('preserveRouteGeometryForRendering(progressCoordsRaw, progressRenderPointBudget)') &&
+    mapRenderer.includes('const canonicalGuidanceOverlay = buildCanonicalGuidanceOverlayGeometry({') &&
+    mapRenderer.includes('const renderRouteCoordsRaw = canonicalGuidanceOverlay.remainingRouteCoords;') &&
+    mapRenderer.includes('const renderProgressCoordsRaw = canonicalGuidanceOverlay.completedRouteCoords;') &&
+    mapRenderer.includes('preserveRouteGeometryForRendering(renderRouteCoordsRaw, routeRenderPointBudget)') &&
+    mapRenderer.includes('preserveRouteGeometryForRendering(renderProgressCoordsRaw, progressRenderPointBudget)') &&
     mapRenderer.includes('ROUTE_RENDER_TURN_DELTA_DEGREES') &&
     !mapRenderer.includes('routeCoordsRaw.length > 600') &&
     !mapRenderer.includes('progressCoordsRaw.length > 600') &&
     !mapRenderer.includes('Math.ceil(routeCoordsRaw.length / 600') &&
     !mapRenderer.includes('Math.ceil(progressCoordsRaw.length / 600'),
-  'MapRenderer should preserve turn-aware route geometry while bounding compact active guidance payloads before they cross the WebView bridge.',
+  'MapRenderer should canonical-split guidance geometry, then preserve turns while bounding payloads before they cross the WebView bridge.',
 );
 
 const fallbackSurface = read('components/navigate/MapFallbackSurface.tsx');

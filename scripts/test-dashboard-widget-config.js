@@ -566,8 +566,10 @@ assert.ok(
   'Attitude Command must use the same full-bleed dashboard stage treatment as Attitude Monitor.',
 );
 assert.ok(
-  /case 'attitude-monitor':\s*case 'attitude-command':/.test(widgetGridSource),
-  'Attitude Command compact render key must refresh from the same attitude inputs as Attitude Monitor.',
+  widgetGridSource.includes("case 'attitude-command':") &&
+    widgetGridSource.includes('getDashboardGpsRenderKey(renderOptions),') &&
+    widgetGridSource.includes("data?.weatherSnapshot?.status?.timestampMs"),
+  'Attitude Command compact render key must include attitude, GPS, and weather source updates from its mounted runtime path.',
 );
 assert.ok(
   source.includes('normalizeFixedDashboardWidgetSize') &&

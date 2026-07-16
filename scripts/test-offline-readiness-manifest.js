@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -109,6 +110,32 @@ function memoryStorage(initial = null) {
     set: (key, value) => values.set(key, value),
     flush: async () => undefined,
     waitForHydration: async () => undefined,
+    raw: () => values.get(OFFLINE_READINESS_COORDINATOR_STORAGE_KEY) ?? null,
+  };
+}
+
+function deferredStorage(initial = null) {
+  const values = new Map();
+  if (initial) values.set(OFFLINE_READINESS_COORDINATOR_STORAGE_KEY, initial);
+  let hydrated = false;
+  let setCalls = 0;
+  let releaseHydration;
+  const hydration = new Promise((resolve) => {
+    releaseHydration = resolve;
+  });
+  return {
+    get: (key) => hydrated ? values.get(key) ?? null : null,
+    set: (key, value) => {
+      setCalls += 1;
+      values.set(key, value);
+    },
+    flush: async () => undefined,
+    waitForHydration: () => hydration,
+    resolveHydration: () => {
+      hydrated = true;
+      releaseHydration();
+    },
+    setCalls: () => setCalls,
     raw: () => values.get(OFFLINE_READINESS_COORDINATOR_STORAGE_KEY) ?? null,
   };
 }
@@ -233,6 +260,97 @@ async function main() {
   assert.strictEqual(getOfflineReadinessAsset(completed, 'map_region').integrity.status, 'verified');
   assert.strictEqual(getOfflineReadinessAsset(completed, 'map_region').coverage, 'complete');
   assert.ok(restored.getRegionProtectionReason('tile-region-42', { activeExpeditionId: 'expedition-42' }));
+
+  const cachedOnly = clone(ready);
+  const cachedRaw = JSON.stringify({
+    schemaVersion: 1,
+    manifests: [cachedOnly],
+    updatedAt: cachedOnly.updatedAt,
+  });
+  const delayedStorage = deferredStorage(cachedRaw);
+  const delayedCoordinator = createOfflineReadinessCoordinator({
+    storage: delayedStorage,
+    now: () => '2026-07-13T13:10:00.000Z',
+  });
+  assert.deepStrictEqual(delayedCoordinator.getHydrationState(), {
+    status: 'restoring',
+    source: 'restoring',
+    startedAt: '2026-07-13T13:10:00.000Z',
+    completedAt: null,
+    safeErrorCode: null,
+  });
+  assert.deepStrictEqual(
+    delayedCoordinator.listManifests(),
+    [],
+    'Cold startup must remain explicitly restoring instead of reporting a valid empty manifest list.',
+  );
+
+  let hydrationNotifications = 0;
+  delayedCoordinator.subscribe(() => {
+    hydrationNotifications += 1;
+  });
+  assert.strictEqual(delayedCoordinator.getDiagnostics().subscriberCount, 1);
+  const localBeforeHydration = buildOfflineReadinessManifest({
+    packageId: 'local-package-before-hydration',
+    routeId: 'local-route-before-hydration',
+    generatedAt: '2026-07-13T13:09:00.000Z',
+    items: [
+      readyItem('route_line', true),
+      readyItem('offline_map', true, { cacheKey: 'local-tile-region' }),
+    ],
+  });
+  delayedCoordinator.upsertManifest(localBeforeHydration);
+  assert.strictEqual(
+    delayedStorage.setCalls(),
+    0,
+    'Aggregate manifest state must not overwrite disk before hydration can merge cached and live mutations.',
+  );
+  assert.ok(delayedCoordinator.getManifest(localBeforeHydration.manifestId));
+
+  const firstHydrationWait = delayedCoordinator.waitForHydration();
+  assert.strictEqual(
+    firstHydrationWait,
+    delayedCoordinator.waitForHydration(),
+    'Concurrent readiness consumers must join one hydration flight.',
+  );
+  delayedStorage.resolveHydration();
+  await firstHydrationWait;
+
+  assert.strictEqual(delayedCoordinator.getHydrationState().status, 'ready');
+  assert.strictEqual(delayedCoordinator.getHydrationState().source, 'cached_and_live');
+  assert.ok(delayedCoordinator.getManifest(cachedOnly.manifestId), 'Cached disk manifest must survive hydration.');
+  assert.ok(
+    delayedCoordinator.getManifest(localBeforeHydration.manifestId),
+    'A manifest added before hydration must survive and merge over restored disk state.',
+  );
+  assert.ok(hydrationNotifications >= 2, 'Pre-hydration mutation and late hydration must both notify consumers.');
+  assert.deepStrictEqual(
+    {
+      status: delayedCoordinator.getDiagnostics().hydration.status,
+      manifestCount: delayedCoordinator.getDiagnostics().manifestCount,
+      pendingPersistence: delayedCoordinator.getDiagnostics().pendingPersistence,
+    },
+    { status: 'ready', manifestCount: 2, pendingPersistence: false },
+  );
+
+  const lateConsumerSnapshot = {
+    hydration: delayedCoordinator.getHydrationState(),
+    manifests: delayedCoordinator.listManifests(),
+  };
+  assert.strictEqual(lateConsumerSnapshot.hydration.status, 'ready');
+  assert.strictEqual(lateConsumerSnapshot.manifests.length, 2);
+
+  const emptyDelayedStorage = deferredStorage();
+  const emptyDelayedCoordinator = createOfflineReadinessCoordinator({
+    storage: emptyDelayedStorage,
+    now: () => '2026-07-13T13:15:00.000Z',
+  });
+  assert.strictEqual(emptyDelayedCoordinator.getHydrationState().status, 'restoring');
+  emptyDelayedStorage.resolveHydration();
+  await emptyDelayedCoordinator.waitForHydration();
+  assert.strictEqual(emptyDelayedCoordinator.getHydrationState().status, 'ready');
+  assert.strictEqual(emptyDelayedCoordinator.getHydrationState().source, 'empty');
+  assert.deepStrictEqual(emptyDelayedCoordinator.listManifests(), []);
 
   console.log('Offline readiness manifest tests passed.');
 }

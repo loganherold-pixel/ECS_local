@@ -70,7 +70,6 @@ import {
 } from '../../lib/activeVehicleContext';
 import { consumablesStore, type ConsumableInputSource, type ConsumablesState } from '../../lib/consumablesStore';
 import { routeStore } from '../../lib/routeStore';
-import { getMapboxToken } from '../../lib/mapConfig';
 import { expeditionRiskStore } from '../../lib/expeditionRiskStore';
 import { useApp } from '../../context/AppContext';
 import { missionExpeditionStore } from '../../lib/missionStore';
@@ -194,30 +193,27 @@ import VehicleProfileRollAttitudeStrip from './VehicleProfileRollAttitudeStrip';
 
 // Phase 10: Terrain Risk Prediction Widget
 // Phase 10: Terrain Risk Prediction Widget
-import { TerrainRiskCompact, TerrainRiskCard, TerrainRiskDetailView } from './TerrainRiskWidget';
 import TerrainRiskSideProfile, {
   getTerrainCommandRiskColor,
   getTerrainRiskReferenceAnchor,
   type TerrainRiskReferenceAnchor,
 } from './TerrainRiskSideProfile';
 import {
-  buildTerrainRiskCommandRoute,
   formatDistance,
   formatTerrainRiskLabel,
   type TerrainRiskRoute,
-  type TerrainRiskRouteContext,
 } from '../../lib/terrainRiskCommandProfile';
+import {
+  getTerrainRiskDashboardPresentationDetail,
+  getTerrainRiskDashboardPresentationTitle,
+  type TerrainRiskDashboardPresentation,
+} from '../../lib/terrainRiskDashboardPresentation';
 import {
   buildTerrainRiskReferenceEvents,
   selectUpcomingTerrainRiskBannerEvent,
   type TerrainRiskReferenceEvent,
 } from '../../lib/terrainRiskReferenceEvents';
-import {
-  routeNeedsTerrainElevationSampling,
-  sampleRouteElevationFromMapboxTerrainContours,
-  terrainElevationRouteSignature,
-  type TerrainElevationSampledRoutePoint,
-} from '../../lib/terrainElevationSampling';
+import { useTerrainRiskDashboardRuntime } from '../../lib/useTerrainRiskDashboardRuntime';
 
 // Phase 5: Expedition Risk Engine Widget
 import { ExpeditionRiskCompact, ExpeditionRiskCard, ExpeditionRiskDetailView } from './ExpeditionRiskWidget';
@@ -2416,9 +2412,32 @@ type CommandRouteVisualData = {
 type CommandTerrainRiskVisualData = {
   active: boolean;
   route: TerrainRiskRoute | null;
+  presentation: TerrainRiskDashboardPresentation;
   completedDistanceMiles: number | null;
   weatherSnapshot: ECSWeatherSnapshot | null;
+  onRetryElevation: (() => void) | null;
 };
+
+function getTerrainRiskProfileStatusLabel(presentation: TerrainRiskDashboardPresentation): string | null {
+  if (presentation.profile.length >= 2) {
+    if (presentation.status === 'stale') return 'STALE PROFILE';
+    if (presentation.source.freshness === 'unavailable') return 'FRESHNESS UNAVAILABLE';
+    if (presentation.status === 'degraded') return 'PARTIAL PROFILE';
+    if (presentation.source.origin === 'estimated') return 'ESTIMATED PROFILE';
+    if (presentation.source.origin === 'manual') return 'MANUAL PROFILE';
+    if (presentation.source.origin === 'cached') return 'CACHED PROFILE';
+    return 'ELEVATION PROFILE';
+  }
+  if (presentation.status === 'loading') return 'LOADING';
+  return presentation.missingDataReason === 'no_active_route' ? null : 'UNAVAILABLE';
+}
+
+function formatTerrainRiskObservedAt(value: string | null): string | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  return `${new Date(timestamp).toISOString().slice(0, 16).replace('T', ' ')}Z`;
+}
 
 type TerrainRiskReferenceBriefPlacement = 'top' | 'bottom';
 
@@ -3339,10 +3358,7 @@ function getSunlightBackgroundType(input: unknown): SunlightBackgroundType {
 }
 
 function hasRenderableRouteProgressGeometry(routeProgress: RouteProgressSnapshot | null | undefined): boolean {
-  if (!routeProgress?.isActive) return false;
-  const geometryStatus = routeProgress.geometryStatus.toLowerCase();
-  if (!geometryStatus.trim()) return false;
-  return !geometryStatus.includes('unavailable') && !geometryStatus.includes('limited');
+  return Boolean(routeProgress?.isActive && (routeProgress.routePoints?.length ?? 0) > 1);
 }
 
 function useAppForegroundState(): boolean {
@@ -4528,11 +4544,15 @@ function AttitudeCommandWeatherDetail({
   weatherAvailable,
   weatherForecastRows,
   routeWeather,
+  lastUpdated,
+  onRefreshWeather,
 }: {
   snapshot: ReturnType<typeof useOperationalWeather>['snapshot'];
   weatherAvailable: boolean;
   weatherForecastRows: WeatherForecastRenderRow[];
   routeWeather: RouteCorridorResult;
+  lastUpdated: string;
+  onRefreshWeather: () => void;
 }) {
   const freshness = formatAttitudeCommandWeatherFreshness(snapshot);
   const sourceLabel = getCompactWeatherSourceLabel(snapshot);
@@ -4555,6 +4575,14 @@ function AttitudeCommandWeatherDetail({
     : routeWeather.hasRoute
       ? 'Route-position forecast unavailable from current source'
       : 'Start route guidance to load route-position forecast';
+  const retryAvailable = [
+    'provider_error',
+    'error',
+    'unavailable',
+    'stale',
+    'offline',
+    'network-blocked',
+  ].includes(snapshot.status.kind);
   return (
     <View style={attitudeCommandS.weatherFixedDetailSurface}>
       <ScrollView
@@ -4568,6 +4596,18 @@ function AttitudeCommandWeatherDetail({
       >
         {!weatherAvailable ? (
           <AttitudeCommandUnavailableNotice message={resolveAttitudeWeatherNotice(snapshot, weatherAvailable) ?? 'Weather unavailable.'} />
+        ) : null}
+        {retryAvailable ? (
+          <TouchableOpacity
+            style={attitudeCommandS.weatherRetryButton}
+            onPress={onRefreshWeather}
+            activeOpacity={0.78}
+            accessibilityRole="button"
+            accessibilityLabel="Retry current weather"
+          >
+            <Ionicons name="refresh-outline" size={14} color={TACTICAL.amber} />
+            <Text style={attitudeCommandS.weatherRetryButtonText}>Retry current weather</Text>
+          </TouchableOpacity>
         ) : null}
         <View style={attitudeCommandS.weatherDetailHeader}>
           <View style={attitudeCommandS.weatherDetailHeaderCopy}>
@@ -4648,10 +4688,10 @@ function AttitudeCommandWeatherDetail({
 
       <View style={attitudeCommandS.weatherDetailFooter}>
         <Text style={attitudeCommandS.weatherDetailFooterText} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.72}>
-          Weather source: {sourceLabel}
+          Weather: {snapshot.provider.name} · {sourceLabel}
         </Text>
         <Text style={[attitudeCommandS.weatherDetailFooterText, attitudeCommandS.weatherDetailFooterRight]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.72}>
-          Freshness: {freshness}
+          Updated: {lastUpdated} · {freshness}
         </Text>
       </View>
     </View>
@@ -6402,7 +6442,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     }).start();
   }, [moduleTransitionOpacity, reduceCommandModuleMotion, selectedCommandModule]);
 
-  const snapshot = useCanonicalWidgetWeatherSnapshot(data, options);
+  const { snapshot, refresh: refreshWeather } = useCanonicalWidgetWeatherState(data, options);
   const currentTempF = getCurrentWeatherTemperatureF(snapshot);
   const weatherAvailable = hasMeaningfulWeatherSnapshot(snapshot);
   const compactWeatherCondition = formatCompactWeatherCondition(snapshot.current.condition || formatWeatherHeadline(snapshot));
@@ -6488,196 +6528,6 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     geometryStatus: routeProgress?.geometryStatus ?? 'Route geometry unavailable',
   };
   const activeRouteForEnvironment = routeStore.getActive();
-  const terrainRiskHasLiveGuidance = Boolean(routeProgress?.status === 'navigating' && hasRouteProgressGeometry);
-  const terrainRiskProfileRoute =
-    activeRouteForEnvironment &&
-    routeProgress &&
-    (
-      routeProgress.source === 'imported-route' ||
-      routeProgress.activeRouteId === activeRouteForEnvironment.id ||
-      routeProgress.routeLabel === activeRouteForEnvironment.name ||
-      routeProgress.geometryStatus.toLowerCase().includes('saved active route')
-    )
-      ? activeRouteForEnvironment
-      : null;
-  const rawTerrainRiskRoutePoints = useMemo(
-    () => (routeProgress?.routePoints ?? []).map((point) => ({
-      lat: point.lat,
-      lng: point.lng,
-      ele: point.ele ?? point.ele_m ?? null,
-      ele_m: point.ele_m ?? point.ele ?? null,
-      elevationFeet: point.elevationFeet ?? null,
-    })),
-    [routeProgress?.routePoints],
-  );
-  const [sampledTerrainRiskRoutePoints, setSampledTerrainRiskRoutePoints] = useState<TerrainElevationSampledRoutePoint[] | null>(null);
-  const [sampledTerrainRiskSignature, setSampledTerrainRiskSignature] = useState<string | null>(null);
-  const [terrainRiskSamplingPendingSignature, setTerrainRiskSamplingPendingSignature] = useState<string | null>(null);
-  const [terrainRiskSamplingFallbackSignature, setTerrainRiskSamplingFallbackSignature] = useState<string | null>(null);
-  const terrainRiskSamplingSignature = useMemo(
-    () => terrainElevationRouteSignature(routeProgress?.activeRouteId ?? terrainRiskProfileRoute?.id ?? null, rawTerrainRiskRoutePoints),
-    [rawTerrainRiskRoutePoints, routeProgress?.activeRouteId, terrainRiskProfileRoute?.id],
-  );
-  const terrainRiskSampleSourcePointsRef = useRef(rawTerrainRiskRoutePoints);
-  const terrainRiskNeedsElevationSampling = routeNeedsTerrainElevationSampling(
-    terrainRiskHasLiveGuidance,
-    rawTerrainRiskRoutePoints,
-  );
-  useEffect(() => {
-    terrainRiskSampleSourcePointsRef.current = rawTerrainRiskRoutePoints;
-  }, [rawTerrainRiskRoutePoints, terrainRiskSamplingSignature]);
-  useEffect(() => {
-    if (!terrainRiskNeedsElevationSampling) {
-      setSampledTerrainRiskRoutePoints(null);
-      setSampledTerrainRiskSignature(null);
-      setTerrainRiskSamplingPendingSignature(null);
-      setTerrainRiskSamplingFallbackSignature(null);
-      return;
-    }
-
-    const abortController = new AbortController();
-    const requestSignature = terrainRiskSamplingSignature;
-    const routePointsForSampling = terrainRiskSampleSourcePointsRef.current;
-    setTerrainRiskSamplingPendingSignature(requestSignature);
-    setTerrainRiskSamplingFallbackSignature((current) => (
-      current === requestSignature ? null : current
-    ));
-
-    void (async () => {
-      try {
-        const token = await getMapboxToken();
-        if (!token || abortController.signal.aborted) {
-          if (!abortController.signal.aborted) {
-            setTerrainRiskSamplingPendingSignature(null);
-            setTerrainRiskSamplingFallbackSignature(requestSignature);
-          }
-          return;
-        }
-        const sampledPoints = await sampleRouteElevationFromMapboxTerrainContours({
-          routePoints: routePointsForSampling,
-          accessToken: token,
-          signal: abortController.signal,
-        });
-        if (!abortController.signal.aborted) {
-          if (sampledPoints) {
-            setSampledTerrainRiskRoutePoints(sampledPoints);
-            setSampledTerrainRiskSignature(requestSignature);
-            setTerrainRiskSamplingFallbackSignature(null);
-          } else {
-            setTerrainRiskSamplingFallbackSignature(requestSignature);
-          }
-          setTerrainRiskSamplingPendingSignature(null);
-        }
-      } catch {
-        if (!abortController.signal.aborted) {
-          setTerrainRiskSamplingPendingSignature(null);
-          setTerrainRiskSamplingFallbackSignature(requestSignature);
-        }
-      }
-    })();
-
-    return () => {
-      abortController.abort();
-    };
-  }, [terrainRiskNeedsElevationSampling, terrainRiskSamplingSignature]);
-  const terrainRiskSampledElevationReady = Boolean(
-    sampledTerrainRiskRoutePoints &&
-    sampledTerrainRiskSignature === terrainRiskSamplingSignature,
-  );
-  const terrainRiskSamplingRequestInFlight =
-    terrainRiskSamplingPendingSignature === terrainRiskSamplingSignature;
-  const terrainRiskSamplingPending =
-    terrainRiskNeedsElevationSampling &&
-    !terrainRiskSampledElevationReady &&
-    (
-      terrainRiskSamplingRequestInFlight ||
-      terrainRiskSamplingFallbackSignature !== terrainRiskSamplingSignature
-    );
-  const terrainRiskRoutePoints = useMemo(
-    () => (
-      sampledTerrainRiskRoutePoints &&
-      sampledTerrainRiskSignature === terrainRiskSamplingSignature
-        ? sampledTerrainRiskRoutePoints
-        : rawTerrainRiskRoutePoints
-    ),
-    [
-      rawTerrainRiskRoutePoints,
-      sampledTerrainRiskRoutePoints,
-      sampledTerrainRiskSignature,
-      terrainRiskSamplingSignature,
-    ],
-  );
-  const terrainRiskRoutePointsHaveElevation = useMemo(
-    () => terrainRiskRoutePoints.some((point) => {
-      const elevationValue = point.elevationFeet ?? point.ele_m ?? point.ele;
-      return typeof elevationValue === 'number' && Number.isFinite(elevationValue);
-    }),
-    [terrainRiskRoutePoints],
-  );
-  const terrainRiskHasGpsAltitude =
-    typeof options?.gpsAltitudeFt === 'number' && Number.isFinite(options.gpsAltitudeFt);
-  const terrainRiskRouteContext = useMemo<TerrainRiskRouteContext>(() => ({
-    active: terrainRiskHasLiveGuidance,
-    routeId: routeProgress?.activeRouteId ?? terrainRiskProfileRoute?.id ?? null,
-    routeName: routeProgress?.routeLabel ?? terrainRiskProfileRoute?.name ?? null,
-    totalDistanceMiles: routeProgress?.totalDistance ?? terrainRiskProfileRoute?.total_distance_miles ?? null,
-    completedDistanceMiles: routeProgress?.completedMiles ?? null,
-    sourceLabel: terrainRiskProfileRoute
-      ? 'Live guidance elevation profile'
-      : terrainRiskRoutePointsHaveElevation
-        ? sampledTerrainRiskRoutePoints && sampledTerrainRiskSignature === terrainRiskSamplingSignature
-          ? 'Mapbox terrain contour estimate'
-          : 'Live guidance elevation profile'
-      : terrainRiskSamplingPending
-        ? 'Terrain elevation sampling pending'
-      : terrainRiskHasGpsAltitude
-        ? 'Estimated from active guidance geometry + live GPS altitude'
-        : 'Live guidance route',
-    routeSegments: terrainRiskProfileRoute?.segments ?? null,
-    routePoints: terrainRiskRoutePoints,
-    currentElevationFeet: terrainRiskHasGpsAltitude && !terrainRiskSamplingPending ? options.gpsAltitudeFt ?? null : null,
-  }), [
-    options?.gpsAltitudeFt,
-    terrainRiskHasGpsAltitude,
-    terrainRiskHasLiveGuidance,
-    routeProgress?.activeRouteId,
-    routeProgress?.completedMiles,
-    routeProgress?.routeLabel,
-    routeProgress?.totalDistance,
-    sampledTerrainRiskRoutePoints,
-    sampledTerrainRiskSignature,
-    terrainRiskRoutePoints,
-    terrainRiskRoutePointsHaveElevation,
-    terrainRiskSamplingPending,
-    terrainRiskSamplingSignature,
-    terrainRiskProfileRoute,
-  ]);
-  const hasTerrainRiskLiveProfile = Boolean(
-    terrainRiskRouteContext.active &&
-    (terrainRiskRouteContext.routeSegments?.some((segment) =>
-      (segment.points ?? []).some((point) => {
-        const elevationValue = point.elevationFeet ?? point.ele_m ?? point.ele;
-        return typeof elevationValue === 'number' && Number.isFinite(elevationValue);
-      }),
-    ) ||
-      terrainRiskRoutePointsHaveElevation ||
-      (
-        terrainRiskRouteContext.routePoints != null &&
-        terrainRiskRouteContext.routePoints.length > 1 &&
-        typeof terrainRiskRouteContext.currentElevationFeet === 'number' &&
-        Number.isFinite(terrainRiskRouteContext.currentElevationFeet)
-      )),
-  );
-  const terrainRiskRoute = useMemo(
-    () => buildTerrainRiskCommandRoute(terrainRiskRouteContext),
-    [terrainRiskRouteContext],
-  );
-  const terrainRiskVisual: CommandTerrainRiskVisualData = {
-    active: Boolean(terrainRiskRouteContext.active),
-    route: terrainRiskRoute,
-    completedDistanceMiles: terrainRiskRouteContext.completedDistanceMiles ?? null,
-    weatherSnapshot: snapshot,
-  };
   const environmentalTerrainSnapshot = resolveElevationTerrainSnapshot({
     gpsHasFix: options?.gpsHasFix ?? false,
     gpsAltitudeFt: options?.gpsAltitudeFt ?? null,
@@ -6685,6 +6535,43 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     gpsAccuracyM: options?.gpsAccuracyM ?? null,
     activeRoute: activeRouteForEnvironment,
   });
+  const terrainRiskRuntime = useTerrainRiskDashboardRuntime({
+    routeProgress,
+    activeRoute: activeRouteForEnvironment,
+    hasRenderableGeometry: hasRouteProgressGeometry,
+    currentGpsElevationFeet: environmentalTerrainSnapshot.currentElevationFt,
+    currentGpsElevationFreshness: environmentalTerrainSnapshot.status === 'live'
+      ? 'live'
+      : environmentalTerrainSnapshot.status === 'stale'
+        ? 'stale'
+        : 'unavailable',
+  });
+  const terrainRiskRoute = terrainRiskRuntime.route;
+  const terrainRiskPresentation = terrainRiskRuntime.presentation;
+  const terrainRiskVisual: CommandTerrainRiskVisualData = {
+    ...terrainRiskRuntime,
+    weatherSnapshot: snapshot,
+  };
+  const terrainRiskHeaderRoute = terrainRiskPresentation.profile.length >= 2 ? terrainRiskRoute : null;
+  const terrainRiskHeaderTitle = terrainRiskHeaderRoute
+    ? `${formatTerrainRiskLabel(terrainRiskHeaderRoute.overallRiskLabel)} | ${terrainRiskHeaderRoute.overallRiskScore}`
+    : getTerrainRiskDashboardPresentationTitle(terrainRiskPresentation);
+  const terrainRiskHeaderDetail = terrainRiskHeaderRoute
+    ? terrainRiskPresentation.source.label
+    : getTerrainRiskDashboardPresentationDetail(terrainRiskPresentation);
+  const terrainRiskHeaderTone: WidgetTone = terrainRiskHeaderRoute
+    ? terrainRiskHeaderRoute.overallRiskLabel === 'high'
+      ? 'critical'
+      : terrainRiskHeaderRoute.overallRiskLabel === 'moderate'
+        ? 'attention'
+        : terrainRiskPresentation.status === 'stale' || terrainRiskPresentation.status === 'degraded'
+          ? 'stale'
+          : 'live'
+    : terrainRiskPresentation.status === 'loading'
+      ? 'attention'
+      : terrainRiskPresentation.missingDataReason === 'no_active_route'
+        ? 'neutral'
+        : 'unavailable';
   const environmentalElevationTone = getElevationTerrainTone(environmentalTerrainSnapshot.status);
   const remotenessOutput = remotenessStore.get();
   const remotenessIndex = remotenessStore.getIndex();
@@ -6966,6 +6853,8 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
                 weatherAvailable={weatherAvailable}
                 weatherForecastRows={weatherForecastRows}
                 routeWeather={routeWeather}
+                lastUpdated={weatherLastUpdated}
+                onRefreshWeather={refreshWeather}
               />
             ) : null}
           </AttitudeCommandPanel>
@@ -7048,17 +6937,17 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
         return (
           <AttitudeCommandPanel
             eyebrow="ROUTE TERRAIN RISK"
-            title={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel)} | ${terrainRiskRoute.overallRiskScore}` : 'No active route'}
-            detail={terrainRiskRoute ? terrainRiskRoute.sourceLabel : 'Start guidance to view terrain risk'}
+            title={terrainRiskHeaderTitle}
+            detail={terrainRiskHeaderDetail}
             icon="warning-outline"
-            tone={terrainRiskRoute ? terrainRiskRoute.overallRiskLabel === 'high' ? 'critical' : terrainRiskRoute.overallRiskLabel === 'moderate' ? 'attention' : 'live' : 'neutral'}
+            tone={terrainRiskHeaderTone}
             onPress={expanded ? undefined : () => openFocusPanel('route', 'detail')}
             accessibilityLabel={expanded ? 'Route terrain risk expanded' : 'Expand route terrain risk'}
             expanded={expanded}
             detailMode={mode === 'detail'}
-            headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}
-            headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}
-            headerStatusColor={terrainRiskRoute ? getTerrainCommandRiskColor(terrainRiskRoute.overallRiskLabel) : undefined}
+            headerStatusLabel={getTerrainRiskProfileStatusLabel(terrainRiskPresentation)}
+            headerStatusValue={terrainRiskHeaderRoute ? `${formatTerrainRiskLabel(terrainRiskHeaderRoute.overallRiskLabel).toUpperCase()} ${terrainRiskHeaderRoute.overallRiskScore}` : null}
+            headerStatusColor={terrainRiskHeaderRoute ? getTerrainCommandRiskColor(terrainRiskHeaderRoute.overallRiskLabel) : undefined}
           >
             <AttitudeCommandTerrainRiskPreview
               terrainRisk={terrainRiskVisual}
@@ -7257,7 +7146,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
     </>
   );
 }, (prev, next) => (
-  areAttitudeMonitorWidgetPropsEqual(prev, next) &&
+  areAttitudeWidgetPropsEqual(prev, next) &&
   prev.data.weatherSnapshot === next.data.weatherSnapshot
 ));
 
@@ -9123,6 +9012,56 @@ const attitudeCommandS = StyleSheet.create({
     lineHeight: 10,
     fontWeight: '700',
   },
+  terrainRiskDetailSummary: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(242, 194, 77, 0.20)',
+    backgroundColor: 'rgba(2, 5, 7, 0.96)',
+    paddingHorizontal: 8,
+    paddingTop: 6,
+    paddingBottom: 7,
+    gap: 4,
+  },
+  terrainRiskDetailMetricRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 4,
+  },
+  terrainRiskDetailMetric: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(242, 194, 77, 0.16)',
+    backgroundColor: 'rgba(242, 194, 77, 0.05)',
+    paddingHorizontal: 5,
+    paddingVertical: 4,
+  },
+  terrainRiskDetailMetricLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 6.5,
+    lineHeight: 8,
+    fontWeight: '900',
+    letterSpacing: 0.45,
+  },
+  terrainRiskDetailMetricValue: {
+    marginTop: 2,
+    color: '#F5D27C',
+    fontSize: 7.4,
+    lineHeight: 9,
+    fontWeight: '900',
+  },
+  terrainRiskDetailSource: {
+    color: 'rgba(230, 237, 243, 0.72)',
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '800',
+  },
+  terrainRiskDetailCaveat: {
+    color: 'rgba(230, 237, 243, 0.52)',
+    fontSize: 6.6,
+    lineHeight: 8,
+    fontWeight: '700',
+  },
   terrainRiskEmptyPanel: {
     flex: 1,
     minHeight: 0,
@@ -9163,6 +9102,27 @@ const attitudeCommandS = StyleSheet.create({
   terrainRiskEmptyTextCompact: {
     color: 'rgba(255, 246, 220, 0.78)',
     fontSize: 7.6,
+  },
+  terrainRiskRetryButton: {
+    minHeight: 44,
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 199, 73, 0.34)',
+    backgroundColor: 'rgba(245, 199, 73, 0.08)',
+    paddingHorizontal: 12,
+  },
+  terrainRiskRetryButtonText: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
   },
   routeProgressMiniMap: {
     ...StyleSheet.absoluteFillObject,
@@ -9730,6 +9690,26 @@ const attitudeCommandS = StyleSheet.create({
   },
   weatherDetailFooterRight: {
     textAlign: 'right',
+  },
+  weatherRetryButton: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 199, 73, 0.34)',
+    borderRadius: 8,
+    backgroundColor: 'rgba(245, 199, 73, 0.08)',
+    paddingHorizontal: 12,
+  },
+  weatherRetryButtonText: {
+    color: TACTICAL.amber,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '900',
+    letterSpacing: 0.25,
+    textTransform: 'uppercase',
   },
   weatherAlertLine: {
     color: TACTICAL.amber,
@@ -11153,22 +11133,12 @@ function ProgressWidget({ data: _data, options }: { data: WidgetData; options?: 
     latitude: point.lat,
     longitude: point.lng,
   }));
-  const routeEndpointFallbackPoints = [
-    progressSummary?.originLocation ?? null,
-    progressSummary?.destinationLocation ?? null,
-  ].filter((point): point is { latitude: number; longitude: number } =>
-    !!point &&
-    Number.isFinite(point.latitude) &&
-    Number.isFinite(point.longitude),
-  );
   const miniMapRoutePoints =
     routeProgressPoints.length > 1
       ? routeProgressPoints
       : routeCompletedPoints.length > 1
         ? routeCompletedPoints
-        : routeEndpointFallbackPoints.length > 1
-          ? routeEndpointFallbackPoints
-          : [];
+        : [];
   const miniMapCurrentLocation =
     progressSummary?.currentLocation ??
     routeCompletedPoints[routeCompletedPoints.length - 1] ??
@@ -12226,12 +12196,17 @@ function shouldUseOperationalWeatherSnapshot(
   return !injectedHasData;
 }
 
-function useCanonicalWidgetWeatherSnapshot(
+function useCanonicalWidgetWeatherState(
   data: WidgetData,
   options?: WidgetRenderOptions,
-): ECSWeatherSnapshot {
+) {
+  const injectedSnapshot = isECSWeatherSnapshot(data.weatherSnapshot)
+    ? data.weatherSnapshot
+    : null;
   const operationalWeather = useOperationalWeather({
-    enabled: true,
+    // The mounted Dashboard owns the canonical weather consumer and injects its
+    // snapshot. A widget-level request is only needed in standalone render paths.
+    enabled: injectedSnapshot == null,
     gps: {
       lat: options?.gpsLatitude ?? null,
       lng: options?.gpsLongitude ?? null,
@@ -12239,13 +12214,21 @@ function useCanonicalWidgetWeatherSnapshot(
       accuracyM: options?.gpsAccuracyM ?? null,
     },
   });
-  const injectedSnapshot = isECSWeatherSnapshot(data.weatherSnapshot)
-    ? data.weatherSnapshot
-    : null;
 
-  return shouldUseOperationalWeatherSnapshot(injectedSnapshot, operationalWeather.snapshot)
+  const snapshot = shouldUseOperationalWeatherSnapshot(injectedSnapshot, operationalWeather.snapshot)
     ? operationalWeather.snapshot
     : injectedSnapshot ?? operationalWeather.snapshot;
+  return {
+    snapshot,
+    refresh: operationalWeather.refresh,
+  };
+}
+
+function useCanonicalWidgetWeatherSnapshot(
+  data: WidgetData,
+  options?: WidgetRenderOptions,
+): ECSWeatherSnapshot {
+  return useCanonicalWidgetWeatherState(data, options).snapshot;
 }
 
 function formatCompactWeatherCondition(condition: string | null | undefined): string {
@@ -12615,7 +12598,7 @@ function HwyForwardWeatherWidget({ data, options }: { data: WidgetData; options?
 }
 
 function HwyForwardWeatherDetail({ data, options }: { data: WidgetData; options?: WidgetRenderOptions }) {
-  const snapshot = useCanonicalWidgetWeatherSnapshot(data, options);
+  const { snapshot, refresh } = useCanonicalWidgetWeatherState(data, options);
   const currentTempF = getCurrentWeatherTemperatureF(snapshot);
   const tempF = currentTempF != null ? Math.round(currentTempF) : 0;
   const windMph = snapshot.current.windSpeed != null ? Math.round(snapshot.current.windSpeed) : 0;
@@ -12633,6 +12616,7 @@ function HwyForwardWeatherDetail({ data, options }: { data: WidgetData; options?
       dewPoint={dewPoint}
       windMph={windMph}
       alertLine={alertLine}
+      onRefreshWeather={refresh}
     />
   );
 
@@ -13084,6 +13068,7 @@ function HwyForwardWeatherDetailBlock({
   dewPoint,
   windMph,
   alertLine,
+  onRefreshWeather,
 }: {
   snapshot: ReturnType<typeof useOperationalWeather>['snapshot'];
   tempF: number;
@@ -13092,6 +13077,7 @@ function HwyForwardWeatherDetailBlock({
   dewPoint: number;
   windMph: number;
   alertLine: string;
+  onRefreshWeather: () => void;
 }) {
   const hasMeaningfulData = hasMeaningfulWeatherSnapshot(snapshot);
   const weatherState = resolveWeatherWidgetState(snapshot);
@@ -13129,6 +13115,17 @@ function HwyForwardWeatherDetailBlock({
             `Location ${snapshot.locationName.toUpperCase()}`,
           ]}
         />
+        <WeatherIntelPanel
+          latitude={snapshot.location.lat}
+          longitude={snapshot.location.lng}
+          locationLabel={detailLocationLabel}
+          weatherSnapshot={snapshot}
+          onRefreshWeather={onRefreshWeather}
+          autoFetch={false}
+          compact={false}
+          units={snapshot.provider.units}
+          frameless
+        />
       </View>
     );
   }
@@ -13157,6 +13154,7 @@ function HwyForwardWeatherDetailBlock({
         longitude={snapshot.location.lng}
         locationLabel={detailLocationLabel}
         weatherSnapshot={snapshot}
+        onRefreshWeather={onRefreshWeather}
         autoFetch={false}
         compact={false}
         units={snapshot.provider.units}
@@ -13828,6 +13826,82 @@ function TerrainRiskReferenceConnector({
   );
 }
 
+function StandaloneTerrainRiskRuntimeWidget({
+  data,
+  options,
+  detailMode = false,
+}: {
+  data: WidgetData;
+  options?: WidgetRenderOptions;
+  detailMode?: boolean;
+}) {
+  const routeProgress = useRouteProgressCommandSnapshot(options);
+  const activeRoute = routeStore.getActive();
+  const environmentalTerrainSnapshot = resolveElevationTerrainSnapshot({
+    gpsHasFix: options?.gpsHasFix ?? false,
+    gpsAltitudeFt: options?.gpsAltitudeFt ?? null,
+    gpsTimestampMs: options?.gpsTimestampMs ?? null,
+    gpsAccuracyM: options?.gpsAccuracyM ?? null,
+    activeRoute,
+  });
+  const { snapshot } = useCanonicalWidgetWeatherState(data, options);
+  const terrainRiskRuntime = useTerrainRiskDashboardRuntime({
+    routeProgress,
+    activeRoute,
+    hasRenderableGeometry: hasRenderableRouteProgressGeometry(routeProgress),
+    currentGpsElevationFeet: environmentalTerrainSnapshot.currentElevationFt,
+    currentGpsElevationFreshness: environmentalTerrainSnapshot.status === 'live'
+      ? 'live'
+      : environmentalTerrainSnapshot.status === 'stale'
+        ? 'stale'
+        : 'unavailable',
+  });
+  const terrainRiskVisual: CommandTerrainRiskVisualData = {
+    ...terrainRiskRuntime,
+    weatherSnapshot: snapshot,
+  };
+
+  return (
+    <View
+      testID={detailMode ? 'dashboard-terrain-risk-detail-runtime' : 'dashboard-terrain-risk-widget-runtime'}
+      style={[
+        standaloneTerrainRiskS.container,
+        detailMode
+          ? standaloneTerrainRiskS.detail
+          : options?.compact
+            ? standaloneTerrainRiskS.compact
+            : standaloneTerrainRiskS.card,
+      ]}
+    >
+      <AttitudeCommandTerrainRiskPreview
+        terrainRisk={terrainRiskVisual}
+        expanded={detailMode}
+        detailMode={detailMode}
+        onTerrainRiskReferenceEvent={options?.onTerrainRiskReferenceEvent}
+      />
+    </View>
+  );
+}
+
+const standaloneTerrainRiskS = StyleSheet.create({
+  container: {
+    position: 'relative',
+    flex: 1,
+    alignSelf: 'stretch',
+    minWidth: 0,
+    overflow: 'hidden',
+  },
+  compact: {
+    minHeight: 72,
+  },
+  card: {
+    minHeight: 132,
+  },
+  detail: {
+    minHeight: 360,
+  },
+});
+
 function AttitudeCommandTerrainRiskPreview({
   terrainRisk,
   expanded = false,
@@ -13839,30 +13913,31 @@ function AttitudeCommandTerrainRiskPreview({
   detailMode?: boolean;
   onTerrainRiskReferenceEvent?: (event: TerrainRiskReferenceEvent | null) => void;
 }) {
-  const route = terrainRisk.route;
+  const presentation = terrainRisk.presentation;
+  const route = presentation.profile.length >= 2 ? terrainRisk.route : null;
   const [selectedReferenceEvent, setSelectedReferenceEvent] = useState<TerrainRiskReferenceEvent | null>(null);
   const referenceEvents = useMemo(
     () => route
       ? buildTerrainRiskReferenceEvents({
           profile: route.profile,
           totalDistanceMiles: route.totalDistanceMiles,
-          completedDistanceMiles: terrainRisk.completedDistanceMiles,
+          completedDistanceMiles: presentation.currentProgressDistanceMiles,
           weatherSnapshot: terrainRisk.weatherSnapshot,
         })
       : [],
-    [route, terrainRisk.completedDistanceMiles, terrainRisk.weatherSnapshot],
+    [presentation.currentProgressDistanceMiles, route, terrainRisk.weatherSnapshot],
   );
   const markerReferenceEvents = useMemo(
     () => route
       ? buildTerrainRiskReferenceEvents({
           profile: route.profile,
           totalDistanceMiles: route.totalDistanceMiles,
-          completedDistanceMiles: terrainRisk.completedDistanceMiles,
+          completedDistanceMiles: presentation.currentProgressDistanceMiles,
           weatherSnapshot: terrainRisk.weatherSnapshot,
           includePassed: true,
         })
       : [],
-    [route, terrainRisk.completedDistanceMiles, terrainRisk.weatherSnapshot],
+    [presentation.currentProgressDistanceMiles, route, terrainRisk.weatherSnapshot],
   );
   const upcomingReferenceEvent = useMemo(
     () => selectUpcomingTerrainRiskBannerEvent(referenceEvents, { proximityMiles: 1 }),
@@ -13876,6 +13951,11 @@ function AttitudeCommandTerrainRiskPreview({
   );
   const referenceBriefPlacement = resolveTerrainRiskReferenceBriefPlacement(selectedReferenceAnchor);
   const compact = !expanded;
+  const observedAtLabel = formatTerrainRiskObservedAt(presentation.source.observedAt);
+
+  useEffect(() => {
+    setSelectedReferenceEvent(null);
+  }, [presentation.routeIdentity?.fingerprint, presentation.routeIdentity?.id]);
 
   useEffect(() => {
     onTerrainRiskReferenceEvent?.(upcomingReferenceEvent);
@@ -13897,22 +13977,14 @@ function AttitudeCommandTerrainRiskPreview({
         route && !expanded ? attitudeCommandS.terrainRiskPreviewCompactViewport : null,
       ]}
     >
-      {!route && terrainRisk.active ? (
-        <View style={attitudeCommandS.terrainRiskPreviewHeader}>
-          <Text style={[attitudeCommandS.terrainRiskNoRouteText, compact && attitudeCommandS.terrainRiskNoRouteTextCompact]} numberOfLines={1}>
-            TERRAIN PROFILE PENDING
-          </Text>
-        </View>
-      ) : null}
-
       {route ? (
         <>
           <View style={[attitudeCommandS.terrainRiskChartFrame, attitudeCommandS.terrainRiskChartFrameActive]}>
             <TerrainRiskSideProfile
-              profile={route.profile}
+              profile={presentation.profile}
               totalDistanceMiles={route.totalDistanceMiles}
               unit="mi"
-              completedDistanceMiles={terrainRisk.completedDistanceMiles}
+              completedDistanceMiles={presentation.currentProgressDistanceMiles}
               transparentBackground
               interactive={markersInteractive}
               referenceEvents={markerReferenceEvents}
@@ -13920,6 +13992,56 @@ function AttitudeCommandTerrainRiskPreview({
               onReferencePointPress={handleReferencePointPress}
             />
           </View>
+          {expanded && detailMode ? (
+            <View style={attitudeCommandS.terrainRiskDetailSummary}>
+              <View style={attitudeCommandS.terrainRiskDetailMetricRow}>
+                {[
+                  {
+                    label: 'CURRENT',
+                    value: presentation.currentElevationFeet != null
+                      ? `${presentation.currentElevationFeet.toLocaleString()} ft`
+                      : '--',
+                  },
+                  {
+                    label: 'HIGH POINT',
+                    value: presentation.upcomingHighPoint
+                      ? `${presentation.upcomingHighPoint.elevationFeet.toLocaleString()} ft · ${formatDistance(presentation.upcomingHighPoint.distanceAheadMiles, 'mi')} ahead`
+                      : '--',
+                  },
+                  {
+                    label: 'GAIN LEFT',
+                    value: presentation.elevationGainRemainingFeet != null
+                      ? `${presentation.elevationGainRemainingFeet.toLocaleString()} ft`
+                      : '--',
+                  },
+                  {
+                    label: 'NEXT RISK',
+                    value: presentation.nextMaterialTerrainRiskEvent
+                      ? `${presentation.nextMaterialTerrainRiskEvent.label} · ${formatDistance(presentation.nextMaterialTerrainRiskEvent.distanceMiles, 'mi')}`
+                      : 'None detected',
+                  },
+                ].map((metric) => (
+                  <View key={metric.label} style={attitudeCommandS.terrainRiskDetailMetric}>
+                    <Text style={attitudeCommandS.terrainRiskDetailMetricLabel} numberOfLines={1}>{metric.label}</Text>
+                    <Text style={attitudeCommandS.terrainRiskDetailMetricValue} numberOfLines={2}>{metric.value}</Text>
+                  </View>
+                ))}
+              </View>
+              <Text style={attitudeCommandS.terrainRiskDetailSource} numberOfLines={2}>
+                {[
+                  presentation.source.label,
+                  presentation.source.origin,
+                  presentation.source.freshness,
+                  `${presentation.source.confidence} confidence`,
+                  `${presentation.source.coverage} coverage`,
+                  observedAtLabel ? `updated ${observedAtLabel}` : null,
+                ].filter(Boolean).join(' · ')}
+              </Text>
+              <Text style={attitudeCommandS.terrainRiskDetailCaveat} numberOfLines={2}>
+                {presentation.technicalDifficultyCaveat}
+              </Text>
+            </View>
+          ) : null}
           {expanded && detailMode && selectedReferenceEvent && selectedReferenceAnchor ? (
             <TerrainRiskReferenceConnector
               anchor={selectedReferenceAnchor}
@@ -13967,13 +14089,23 @@ function AttitudeCommandTerrainRiskPreview({
       ) : (
         <View style={[attitudeCommandS.terrainRiskEmptyPanel, compact && attitudeCommandS.terrainRiskEmptyPanelCompact]}>
           <Text style={[attitudeCommandS.terrainRiskEmptyTitle, compact && attitudeCommandS.terrainRiskEmptyTitleCompact]} numberOfLines={1}>
-            {terrainRisk.active ? 'TERRAIN PROFILE PENDING' : 'ROUTE TERRAIN STANDBY'}
+            {getTerrainRiskDashboardPresentationTitle(presentation).toUpperCase()}
           </Text>
           <Text style={[attitudeCommandS.terrainRiskEmptyText, compact && attitudeCommandS.terrainRiskEmptyTextCompact]} numberOfLines={2}>
-            {terrainRisk.active
-              ? 'Elevation or GPS altitude is required before the side profile can be graphed.'
-              : 'Start route guidance to load terrain risk.'}
+            {getTerrainRiskDashboardPresentationDetail(presentation)}
           </Text>
+          {expanded && terrainRisk.onRetryElevation ? (
+            <TouchableOpacity
+              style={attitudeCommandS.terrainRiskRetryButton}
+              onPress={terrainRisk.onRetryElevation}
+              activeOpacity={0.78}
+              accessibilityRole="button"
+              accessibilityLabel="Retry terrain elevation profile"
+            >
+              <Ionicons name="refresh-outline" size={14} color={TACTICAL.amber} />
+              <Text style={attitudeCommandS.terrainRiskRetryButtonText}>Retry elevation profile</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       )}
     </View>
@@ -14941,7 +15073,7 @@ export function renderWidgetContent(
           {options?.compact ? <VehicleTelemetryCompact /> : <VehicleTelemetryCard />}
         </PremiumAwareWidgetContent>
       );
-    case 'terrain-risk': return options?.compact ? <TerrainRiskCompact /> : <TerrainRiskCard />;
+    case 'terrain-risk': return <StandaloneTerrainRiskRuntimeWidget data={data} options={options} />;
     case 'expedition-readiness':
       return (
         <ExpeditionReadinessWidget
@@ -15047,6 +15179,7 @@ export function renderWidgetDetail(
           <VehicleTelemetryDetailView onClose={options?.onCloseDetail} />
         </PremiumAwareWidgetDetail>
       );
+    case 'terrain-risk': return <StandaloneTerrainRiskRuntimeWidget data={data} options={options} detailMode />;
     case 'resource-forecast': return <ResourceForecastDetailView />;
     case 'expedition-readiness':
       return <ExpeditionReadinessWidget compact={false} onOpenBrief={options?.onOpenCommandBrief} />;

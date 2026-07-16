@@ -21,6 +21,7 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 
 import ECSModalShell from '../ECSModalShell';
 import ECSOperationalAnnouncer from '../ECSOperationalAnnouncer';
+import { ECSAsyncStateMessage, ECSStateMessage } from '../ECSStateMessage';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import LandscapeShellControls from '../LandscapeShellControls';
 import { SourceTruthInspectorTrigger } from '../source-truth';
@@ -151,7 +152,6 @@ import {
   buildLiveDispatchEvents,
   createLiveDispatchEventListFingerprint,
 } from '../../lib/dispatchLiveAggregator';
-import { publishSharedWeatherBriefAdvisories } from '../../lib/weatherBriefPublisher';
 import { useOperationalWeather } from '../../lib/useOperationalWeather';
 import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { isECSDevelopmentDiagnosticEnabled } from '../../lib/features/featureVisibilityRegistry';
@@ -181,7 +181,11 @@ import {
 import type { Vehicle } from '../../lib/types';
 import { ECS, GOLD_RAIL, TACTICAL } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
-import { expeditionStateStore, type ExpeditionRecord } from '../../lib/expeditionStateStore';
+import {
+  expeditionStateStore,
+  getExpeditionRuntimeSnapshot,
+  type ExpeditionRecord,
+} from '../../lib/expeditionStateStore';
 import { expeditionStore } from '../../lib/expeditionCommandStore';
 import { expeditionInviteLocalAdapter } from '../../lib/expeditionInviteLocalAdapter';
 import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
@@ -262,7 +266,19 @@ import {
 import {
   dispatchPersistenceAdapter,
   type DispatchPersistenceDefaults,
+  type DispatchPersistenceSnapshot,
 } from '../../lib/dispatchPersistenceAdapter';
+import {
+  isPersistableLocalDispatchEvent,
+  resolveDispatchLocalPersistenceId,
+  subscribeDispatchPersistenceCadEvents,
+} from '../../lib/dispatchPersistenceEventProjection';
+import {
+  beginECSAsyncSurfaceRequest,
+  createECSAsyncSurfaceState,
+  settleECSAsyncSurfaceRequest,
+  type ECSAsyncSurfaceState,
+} from '../../lib/state/asyncSurfaceState';
 import {
   incrementECSPerformanceCounter,
   recordECSPerformanceRender,
@@ -642,7 +658,8 @@ const RECOVERY_GPS_MAX_AGE_MS = 30_000;
 const RECOVERY_CAD_RETRY_COOLDOWN_MS = 10_000;
 const RECOVERY_PING_ALERT_WINDOW_MS = 120_000;
 const RECOVERY_ADVISORY_PULSE_MS = 5_000;
-const LOCAL_DISPATCH_PERSISTENCE_ID = 'local-dispatch-channel';
+const DISPATCH_LOCAL_HYDRATION_TIMEOUT_MS = 4_000;
+const DISPATCH_BACKEND_FETCH_TIMEOUT_MS = 10_000;
 const EMPTY_INCIDENT_ROOM_INCIDENTS: ReturnType<typeof incidentRecoveryWorkflowStore.getSnapshot> = [];
 
 function useDispatchPulse(active: boolean, lowOpacity = 0.38) {
@@ -769,14 +786,6 @@ function isClearableRoutineCadEvent(event: DispatchEvent): boolean {
     event.type === 'resources';
 
   return routineType && routineSeverity && routinePriority;
-}
-
-function isPersistableLocalDispatchEvent(event: DispatchEvent): boolean {
-  if (isRecoveryCriticalEvent(event)) {
-    return true;
-  }
-
-  return event.source === 'user_report' || event.source === 'team_member';
 }
 
 function getRecoveryCriticalDisplayCopy(event: DispatchEvent): string {
@@ -1119,11 +1128,6 @@ function getVehicleRigLabel(vehicle: Vehicle | null): string | null {
   return configuredName ?? (makeModel || null);
 }
 
-function getActiveExpeditionRecord(): ExpeditionRecord | null {
-  const record = expeditionStateStore.getCurrentExpedition();
-  return record && (record.state === 'active' || record.state === 'paused') ? record : null;
-}
-
 function getExpeditionInviteLabel(expedition: ExpeditionRecord | null, teamName: string | null): string {
   if (!expedition) {
     return 'No active expedition selected';
@@ -1251,13 +1255,6 @@ function getRecoveryCadSessionIds(
     expedition?.id,
     convoyContext?.convoyId,
   ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
-}
-
-function getLocalDispatchPersistenceId(
-  expedition: ExpeditionRecord | null,
-  convoyContext?: ConvoyLifecycleControlState | null,
-): string {
-  return expedition?.cloudSessionId ?? expedition?.id ?? convoyContext?.convoyId ?? LOCAL_DISPATCH_PERSISTENCE_ID;
 }
 
 function getRecoveryCadPersistenceDefaults(): DispatchPersistenceDefaults {
@@ -2185,7 +2182,16 @@ export default function DispatchCadCommandCenter() {
     'hydrate_and_realtime_ready',
     { trackOutstanding: true },
   ));
-  const [dispatchLocalHydrated, setDispatchLocalHydrated] = useState(false);
+  const [dispatchLocalSurfaceState, setDispatchLocalSurfaceState] = useState<ECSAsyncSurfaceState<DispatchPersistenceSnapshot>>(
+    () => createECSAsyncSurfaceState({
+      surfaceId: 'dispatch_local_cad_hydration',
+      provider: 'ecs_dispatch_persistence',
+    }),
+  );
+  const dispatchLocalSurfaceStateRef = useRef(dispatchLocalSurfaceState);
+  const [dispatchLocalHydrationRetry, setDispatchLocalHydrationRetry] = useState(0);
+  const dispatchLocalHydrated = ['ready', 'empty', 'stale', 'degraded'].includes(dispatchLocalSurfaceState.status);
+  const dispatchLocalTerminal = dispatchLocalSurfaceState.status !== 'idle' && dispatchLocalSurfaceState.status !== 'loading';
   const router = useRouter();
   const { push: pushSingleFlight, returnTo: returnSingleFlight } = useECSNavigation();
   const routeParams = useLocalSearchParams<{
@@ -2258,7 +2264,7 @@ export default function DispatchCadCommandCenter() {
     dispatchGps.position,
   ]);
   const dispatchWeather = useOperationalWeather({
-    enabled: true,
+    enabled: isDispatchFocused,
     gps: dispatchWeatherGpsInput,
   });
   const [events, setEvents] = useState<DispatchEvent[]>(() => dispatchEventStore.getSnapshot());
@@ -2315,7 +2321,8 @@ export default function DispatchCadCommandCenter() {
   const [dispatchProfileHydrated, setDispatchProfileHydrated] = useState(() => dispatchProfileStore.isHydrated());
   const [profileVisible, setProfileVisible] = useState(false);
   const [inviteVisible, setInviteVisible] = useState(false);
-  const [currentExpedition, setCurrentExpedition] = useState<ExpeditionRecord | null>(() => getActiveExpeditionRecord());
+  const [expeditionRuntime, setExpeditionRuntime] = useState(getExpeditionRuntimeSnapshot);
+  const currentExpedition = expeditionRuntime.activeRecord;
   const [activeExpeditionDispatchId, setActiveExpeditionDispatchId] = useState<string | null>(null);
   const [vehicleRevision, setVehicleRevision] = useState(0);
   const [submittingThreatActionKey, setSubmittingThreatActionKey] = useState<string | null>(null);
@@ -2410,10 +2417,6 @@ export default function DispatchCadCommandCenter() {
   );
 
   useEffect(() => {
-    publishSharedWeatherBriefAdvisories(dispatchWeather.snapshot);
-  }, [dispatchWeather.snapshot]);
-
-  useEffect(() => {
     teamSnapshotRef.current = teamSnapshot;
   }, [teamSnapshot]);
 
@@ -2484,12 +2487,26 @@ export default function DispatchCadCommandCenter() {
     };
   }, []);
 
-  useEffect(() => expeditionStateStore.subscribe((state, record) => {
-    setCurrentExpedition(state === 'active' || state === 'paused' ? record : null);
+  useEffect(() => expeditionStateStore.subscribe(() => {
+    setExpeditionRuntime(getExpeditionRuntimeSnapshot());
   }), []);
 
+  const liveCurrentExpeditionDispatchId = currentExpedition?.cloudSessionId?.trim()
+    || currentExpedition?.id?.trim()
+    || null;
   useEffect(() => {
     let cancelled = false;
+    if (liveCurrentExpeditionDispatchId) {
+      setActiveExpeditionDispatchId(liveCurrentExpeditionDispatchId);
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (expeditionRuntime.hydrationStatus === 'restoring') {
+      return () => {
+        cancelled = true;
+      };
+    }
     if (!user?.id || !isDispatchFocused) {
       if (!user?.id) setActiveExpeditionDispatchId(null);
       return () => {
@@ -2510,7 +2527,7 @@ export default function DispatchCadCommandCenter() {
     return () => {
       cancelled = true;
     };
-  }, [currentExpedition?.id, isDispatchFocused, user?.id]);
+  }, [expeditionRuntime.hydrationStatus, isDispatchFocused, liveCurrentExpeditionDispatchId, user?.id]);
 
   useEffect(() => {
     const bumpVehicleRevision = () => setVehicleRevision((revision) => revision + 1);
@@ -2743,8 +2760,12 @@ export default function DispatchCadCommandCenter() {
     [activeConvoyControl, commandIdentity, currentExpedition, teamSnapshot],
   );
   const localDispatchPersistenceId = useMemo(
-    () => getLocalDispatchPersistenceId(currentExpedition, activeConvoyControl),
-    [activeConvoyControl, currentExpedition],
+    () => resolveDispatchLocalPersistenceId({
+      currentExpedition,
+      activeConvoyId: activeConvoyControl?.convoyId,
+      accountId: user?.id,
+    }),
+    [activeConvoyControl?.convoyId, currentExpedition, user?.id],
   );
   const missionCommandAuthorizedActorIds = useMemo(() => Array.from(new Set([
     commandIdentity.userId,
@@ -3372,34 +3393,101 @@ export default function DispatchCadCommandCenter() {
     persistDispatchCadEventLocally(event);
   }, [persistDispatchCadEventLocally]);
 
-  useEffect(() => {
-    setUiMetaById({});
-    submittedEventActionKeysRef.current.clear();
-    recoveryCadPublishInFlightRef.current.clear();
-    recoveryCadLastRetryAtRef.current = {};
-    dispatchEventStore.replaceEvents(
-      dispatchEventStore.getSnapshot().filter((event) => !isPersistableLocalDispatchEvent(event)),
-    );
+  const retryDispatchLocalHydration = useCallback(() => {
+    setDispatchLocalHydrationRetry((revision) => revision + 1);
+  }, []);
 
-    if (!localDispatchPersistenceId) {
-      setDispatchLocalHydrated(true);
-      return undefined;
+  useEffect(() => {
+    const previous = dispatchLocalSurfaceStateRef.current;
+    const sameContextLastGood = previous.lastGoodData?.expeditionId === localDispatchPersistenceId;
+    const loading = beginECSAsyncSurfaceRequest(previous, {
+      fingerprintInput: {
+        expeditionId: localDispatchPersistenceId,
+        retry: dispatchLocalHydrationRetry,
+      },
+      provider: 'ecs_dispatch_persistence',
+      preserveData: sameContextLastGood,
+      preserveLastGood: sameContextLastGood,
+    });
+    dispatchLocalSurfaceStateRef.current = loading;
+    setDispatchLocalSurfaceState(loading);
+
+    if (!sameContextLastGood) {
+      setUiMetaById({});
+      submittedEventActionKeysRef.current.clear();
+      recoveryCadPublishInFlightRef.current.clear();
+      recoveryCadLastRetryAtRef.current = {};
+      dispatchEventStore.replaceEvents(
+        dispatchEventStore.getSnapshot().filter((event) => !isPersistableLocalDispatchEvent(event)),
+      );
     }
 
-    let cancelled = false;
-    setDispatchLocalHydrated(false);
-    dispatchPersistenceAdapter.waitForHydration().then(() => {
-      if (cancelled) {
+    const controller = new AbortController();
+    let released = false;
+    const identity = {
+      requestId: loading.requestId,
+      generation: loading.generation,
+      requestFingerprint: loading.requestFingerprint,
+    };
+
+    void dispatchPersistenceAdapter.hydrateResult(
+      localDispatchPersistenceId,
+      recoveryCadPersistenceDefaults,
+      { signal: controller.signal, timeoutMs: DISPATCH_LOCAL_HYDRATION_TIMEOUT_MS },
+    ).then((result) => {
+      if (released) return;
+
+      if (!result.snapshot) {
+        const hasLastGood = dispatchLocalSurfaceStateRef.current.lastGoodData?.expeditionId === localDispatchPersistenceId;
+        const terminalStatus = result.status === 'cancelled'
+          ? 'cancelled'
+          : hasLastGood
+            ? 'stale'
+            : 'error';
+        const transition = settleECSAsyncSurfaceRequest(dispatchLocalSurfaceStateRef.current, {
+          ...identity,
+          status: terminalStatus,
+          source: hasLastGood ? 'cached' : 'unavailable',
+          freshness: hasLastGood ? 'stale' : 'unavailable',
+          safeErrorCode: result.safeCode,
+          retryEligible: result.status !== 'cancelled',
+          providerStatus: result.status === 'cancelled' ? 'active' : 'unavailable',
+          cancellationReason: result.status === 'cancelled'
+            ? controller.signal.aborted ? 'superseded' : 'consumer_cancelled'
+            : result.status === 'timed_out' ? 'timeout' : null,
+        });
+        if (!transition.applied) return;
+        incrementECSPerformanceCounter('dispatch_ready', 'local_hydration_failures');
+        dispatchLocalSurfaceStateRef.current = transition.state;
+        setDispatchLocalSurfaceState(transition.state);
+        console.warn('[DISPATCH] local_cad_store_load_failed', { safeCode: result.safeCode });
         return;
       }
 
-      const snapshot = dispatchPersistenceAdapter.load(
-        localDispatchPersistenceId,
-        recoveryCadPersistenceDefaults,
-      );
-      snapshot.cadEvents
-        .filter(isPersistableLocalDispatchEvent)
-        .forEach((event) => dispatchEventStore.upsertEvent(event));
+      const snapshot = result.snapshot;
+      const restoredEvents = snapshot.cadEvents.filter(isPersistableLocalDispatchEvent);
+      const status = result.status === 'recovered'
+        ? 'degraded'
+        : restoredEvents.length === 0
+          ? 'empty'
+          : 'ready';
+      const transition = settleECSAsyncSurfaceRequest(dispatchLocalSurfaceStateRef.current, {
+        ...identity,
+        status,
+        source: 'cached',
+        freshness: result.status === 'recovered' ? 'stale' : 'recent',
+        data: snapshot,
+        lastGoodData: snapshot,
+        safeErrorCode: result.status === 'recovered' ? result.safeCode : null,
+        retryEligible: result.status === 'recovered',
+        resultCount: restoredEvents.length,
+      });
+      if (!transition.applied) return;
+
+      dispatchEventStore.replaceEvents([
+        ...dispatchEventStore.getSnapshot().filter((event) => !isPersistableLocalDispatchEvent(event)),
+        ...restoredEvents,
+      ]);
       const restoredMeta: Record<string, EventUiMeta> = {};
       snapshot.acknowledgments.forEach((acknowledgment) => {
         restoredMeta[acknowledgment.pingId] = {
@@ -3407,6 +3495,7 @@ export default function DispatchCadCommandCenter() {
           notes: [acknowledgment.message ?? `Dispatch response: ${acknowledgment.status}.`],
         };
       });
+      submittedEventActionKeysRef.current.clear();
       snapshot.timelineEvents.forEach((timelineEvent) => {
         if (timelineEvent.idempotencyKey) {
           submittedEventActionKeysRef.current.add(timelineEvent.idempotencyKey);
@@ -3421,19 +3510,52 @@ export default function DispatchCadCommandCenter() {
         };
       });
       setUiMetaById(restoredMeta);
-      setDispatchLocalHydrated(true);
+      dispatchLocalSurfaceStateRef.current = transition.state;
+      setDispatchLocalSurfaceState(transition.state);
     }).catch(() => {
-      if (!cancelled) {
-        incrementECSPerformanceCounter('dispatch_ready', 'local_hydration_failures');
-        setDispatchLocalHydrated(true);
-        console.warn('[DISPATCH] local_cad_store_load_failed');
-      }
+      if (released) return;
+      const transition = settleECSAsyncSurfaceRequest(dispatchLocalSurfaceStateRef.current, {
+        ...identity,
+        status: dispatchLocalSurfaceStateRef.current.lastGoodData ? 'stale' : 'error',
+        source: dispatchLocalSurfaceStateRef.current.lastGoodData ? 'cached' : 'unavailable',
+        freshness: dispatchLocalSurfaceStateRef.current.lastGoodData ? 'stale' : 'unavailable',
+        safeErrorCode: 'dispatch_persistence_hydration_failed',
+        retryEligible: true,
+        providerStatus: 'unavailable',
+      });
+      if (!transition.applied) return;
+      incrementECSPerformanceCounter('dispatch_ready', 'local_hydration_failures');
+      dispatchLocalSurfaceStateRef.current = transition.state;
+      setDispatchLocalSurfaceState(transition.state);
+      console.warn('[DISPATCH] local_cad_store_load_failed', { safeCode: 'dispatch_persistence_hydration_failed' });
     });
 
     return () => {
-      cancelled = true;
+      released = true;
+      controller.abort();
     };
   }, [
+    dispatchLocalHydrationRetry,
+    localDispatchPersistenceId,
+    recoveryCadPersistenceDefaults,
+  ]);
+
+  useEffect(() => {
+    if (
+      !dispatchLocalHydrated
+      || dispatchLocalSurfaceState.data?.expeditionId !== localDispatchPersistenceId
+    ) {
+      return undefined;
+    }
+
+    const lease = subscribeDispatchPersistenceCadEvents({
+      expeditionId: localDispatchPersistenceId,
+      defaults: recoveryCadPersistenceDefaults,
+    });
+    return () => lease.unsubscribe();
+  }, [
+    dispatchLocalHydrated,
+    dispatchLocalSurfaceState.data?.expeditionId,
     localDispatchPersistenceId,
     recoveryCadPersistenceDefaults,
   ]);
@@ -3495,9 +3617,21 @@ export default function DispatchCadCommandCenter() {
     }
 
     let cancelled = false;
+    let inFlight = false;
+    let requestGeneration = 0;
+    let activeController: AbortController | null = null;
     const loadBackendCadEvents = () => {
-      void fetchDispatchCadEventsFromBackend(recoveryCadBackendContext).then((result) => {
-        if (cancelled || !result.ok) {
+      if (inFlight || cancelled) return;
+      inFlight = true;
+      requestGeneration += 1;
+      const generation = requestGeneration;
+      const controller = new AbortController();
+      activeController = controller;
+      void fetchDispatchCadEventsFromBackend(recoveryCadBackendContext, {
+        signal: controller.signal,
+        timeoutMs: DISPATCH_BACKEND_FETCH_TIMEOUT_MS,
+      }).then((result) => {
+        if (cancelled || generation !== requestGeneration || !result.ok) {
           return;
         }
 
@@ -3514,13 +3648,17 @@ export default function DispatchCadCommandCenter() {
               ...event,
               syncState: 'received',
             };
-            dispatchEventStore.upsertEvent(receivedEvent);
-            persistDispatchCadEventLocally(receivedEvent);
+            const acceptedEvent = dispatchEventStore.upsertEvent(receivedEvent);
+            if (acceptedEvent) persistDispatchCadEventLocally(acceptedEvent);
           });
       }).catch(() => {
         if (!cancelled) {
           console.warn('[DISPATCH] recovery_cad_backend_fetch_failed');
         }
+      }).finally(() => {
+        if (generation !== requestGeneration) return;
+        inFlight = false;
+        if (activeController === controller) activeController = null;
       });
     };
 
@@ -3529,6 +3667,9 @@ export default function DispatchCadCommandCenter() {
 
     return () => {
       cancelled = true;
+      requestGeneration += 1;
+      activeController?.abort();
+      activeController = null;
       clearInterval(intervalId);
     };
   }, [
@@ -3680,8 +3821,8 @@ export default function DispatchCadCommandCenter() {
           return;
         }
 
-        dispatchEventStore.upsertEvent(incomingEvent);
-        persistDispatchCadEventLocally(incomingEvent);
+        const acceptedEvent = dispatchEventStore.upsertEvent(incomingEvent);
+        if (acceptedEvent) persistDispatchCadEventLocally(acceptedEvent);
       },
     });
 
@@ -4073,15 +4214,22 @@ export default function DispatchCadCommandCenter() {
       !isOnline ||
       (!teamSnapshot.activeTeam && !activeConvoyControl) ||
       realtimeStatus === 'connected';
-    if (!dispatchLocalHydrated || !realtimeReady) return;
-    dispatchPerformance.end('completed', {
+    if (!dispatchLocalTerminal || !realtimeReady) return;
+    dispatchPerformance.end(
+      dispatchLocalSurfaceState.status === 'error' || dispatchLocalSurfaceState.status === 'cancelled'
+        ? 'failed'
+        : 'completed', {
       realtimeState: realtimeStatus,
       offline: offlineMode || !isOnline,
       sharingEnabled: dispatchRealtimeEnabled,
       eventCount: events.length,
+      localHydrationState: dispatchLocalSurfaceState.status,
+      localHydrationSafeCode: dispatchLocalSurfaceState.safeErrorCode,
     });
   }, [
-    dispatchLocalHydrated,
+    dispatchLocalSurfaceState.safeErrorCode,
+    dispatchLocalSurfaceState.status,
+    dispatchLocalTerminal,
     dispatchPerformance,
     events.length,
     activeConvoyControl,
@@ -6639,9 +6787,71 @@ export default function DispatchCadCommandCenter() {
       testID="dispatch-convoy-command-feed-panel"
     />
   );
+  const dispatchLocalHydrationNotice = (
+    <ECSAsyncStateMessage
+      state={dispatchLocalSurfaceState}
+      subject="local Dispatch state"
+      copy={{
+        loading: {
+          title: 'Restoring local Dispatch state',
+          message: 'ECS is checking saved CAD events before reporting the local feed as ready.',
+        },
+        empty: {
+          title: 'No saved local Dispatch events',
+          message: 'The local store loaded successfully. New manual or verified team events will appear here.',
+        },
+        partial: {
+          title: 'Local Dispatch state recovered',
+          message: 'Some saved records could not be restored. Valid cached records remain visible and are labeled degraded.',
+        },
+        stale: {
+          title: 'Showing last verified local state',
+          message: 'The latest restore did not complete. ECS kept the last-good cached Dispatch records instead of replacing them with an empty result.',
+        },
+        provider_unavailable: {
+          title: 'Local Dispatch state unavailable',
+          message: 'Saved CAD events could not be verified. ECS has stopped loading and has not treated the failure as an empty feed.',
+        },
+        recoverable_error: {
+          title: 'Local Dispatch state unavailable',
+          message: 'Saved CAD events could not be verified. ECS has stopped loading and has not treated the failure as an empty feed.',
+        },
+        nonrecoverable_error: {
+          title: 'Local Dispatch state unavailable',
+          message: 'Saved CAD events could not be verified. ECS has stopped loading and has not treated the failure as an empty feed.',
+        },
+        cancelled: {
+          title: 'Local Dispatch restore cancelled',
+          message: 'The local restore stopped before completion. Existing last-good Dispatch records were not replaced.',
+        },
+      }}
+      retryLabel="Retry Restore"
+      onRetry={retryDispatchLocalHydration}
+      compact
+      testID="dispatch-local-hydration-state"
+    />
+  );
+  const missionCommandDisabledNotice = missionCommandEnabled
+    ? null
+    : (
+        <View
+          testID="dispatch-mission-command-disabled"
+          accessibilityLabel="Mission Command unavailable"
+        >
+          <ECSStateMessage
+            title="Mission Command unavailable"
+            message={`${getDispatchRolloutDisabledCopy('missionCommand')} Local Dispatch CAD and Recovery reporting remain available below.`}
+            icon="pause-circle-outline"
+            variant="disabled"
+          />
+        </View>
+      );
 
   return (
-    <View style={[styles.root, isLandscapeDispatch ? styles.rootLandscape : null]}>
+    <View
+      style={[styles.root, isLandscapeDispatch ? styles.rootLandscape : null]}
+      testID="dispatch-canonical-command-center"
+    >
       <ECSOperationalAnnouncer event={connectionAnnouncement} />
       <ECSOperationalAnnouncer event={queueAnnouncement} announceInitial />
       <ECSOperationalAnnouncer event={criticalAdvisoryAnnouncement} announceInitial />
@@ -6696,6 +6906,10 @@ export default function DispatchCadCommandCenter() {
         </>
       )}
 
+      {dispatchLocalHydrationNotice}
+
+      {missionCommandDisabledNotice}
+
       {missionCommandEnabled ? (
         <MissionCommandDispatchNavigation
           activeView={missionCommandView}
@@ -6714,7 +6928,7 @@ export default function DispatchCadCommandCenter() {
           <DispatchMissionCommandBoard
             expeditionId={localDispatchPersistenceId}
             persistenceDefaults={recoveryCadPersistenceDefaults}
-            hydrated={dispatchLocalHydrated && missionCommandRuntime.hydrated}
+            hydrated={dispatchLocalTerminal}
             hasActiveExpedition={Boolean(currentExpedition)}
             soloMode={missionCommandSoloMode}
             canViewCommands={missionCommandViewPermission.allowed}

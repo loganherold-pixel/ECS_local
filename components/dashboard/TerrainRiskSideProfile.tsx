@@ -20,6 +20,7 @@ import {
   type TerrainProfilePoint,
   type TerrainRiskLevel,
 } from '../../lib/terrainRiskCommandProfile';
+import { buildTerrainRiskChartSeries } from '../../lib/terrainRiskDashboardPresentation';
 import {
   buildTerrainRiskReferenceEventForPoint,
   type TerrainRiskReferenceEvent,
@@ -467,8 +468,9 @@ export default function TerrainRiskSideProfile({
   const chart = useMemo(() => {
     if (profile.length < 2 || totalDistanceMiles <= 0) return null;
 
-    const bounds = buildElevationBounds(profile);
-    const points = profile.map((point, index) => ({
+    const chartSeries = buildTerrainRiskChartSeries(profile);
+    const bounds = buildElevationBounds(chartSeries);
+    const points = chartSeries.map((point, index) => ({
       ...point,
       id: `terrain-reference-${index}-${Math.round(point.distanceMiles * 100)}`,
       x: scaleTerrainDistanceToX(point.distanceMiles, totalDistanceMiles),
@@ -500,6 +502,12 @@ export default function TerrainRiskSideProfile({
     () => chart ? buildCurrentRouteMarkerPoint(chart.points, totalDistanceMiles, completedDistanceMiles) : null,
     [chart, completedDistanceMiles, totalDistanceMiles],
   );
+  const completedProfileLinePath = useMemo(() => {
+    if (!chart || !currentPositionPoint || completedDistanceMiles == null) return null;
+    const completedPoints = chart.points.filter((point) => point.distanceMiles < completedDistanceMiles);
+    completedPoints.push(currentPositionPoint);
+    return completedPoints.length >= 2 ? buildLinePath(completedPoints) : null;
+  }, [chart, completedDistanceMiles, currentPositionPoint]);
 
   const selectedProbePoint = useMemo(
     () => chart
@@ -554,7 +562,7 @@ export default function TerrainRiskSideProfile({
   return (
     <View
       accessible={!interactive}
-      accessibilityLabel={`Terrain side profile chart. Distance labels use ${unit === 'mi' ? 'miles' : 'kilometers'}. Elevation is shown in feet. High risk route sections are highlighted.`}
+      accessibilityLabel={`Terrain side profile chart. Distance labels use ${unit === 'mi' ? 'miles' : 'kilometers'}. Elevation is shown in feet. Completed route is dimmed, remaining route is emphasized, and high risk route sections are highlighted.`}
       accessibilityRole="image"
       style={[styles.shell, transparentBackground ? styles.shellTransparent : null]}
       onLayout={(event) => {
@@ -638,7 +646,7 @@ export default function TerrainRiskSideProfile({
             width={Math.max(1, Math.abs(segment.point.x - segment.previous.x))}
             height={CHART_FRAME.height}
             fill={segment.color}
-            opacity={segment.bandOpacity}
+            opacity={segment.point.distanceMiles <= (completedDistanceMiles ?? -1) ? segment.bandOpacity * 0.36 : segment.bandOpacity}
           />
         ))}
 
@@ -661,7 +669,7 @@ export default function TerrainRiskSideProfile({
             key={`segment-area-${segment.id}`}
             d={buildSegmentAreaPath(segment)}
             fill={segment.color}
-            opacity={segment.areaOpacity}
+            opacity={segment.point.distanceMiles <= (completedDistanceMiles ?? -1) ? segment.areaOpacity * 0.34 : segment.areaOpacity}
           />
         ))}
 
@@ -685,6 +693,7 @@ export default function TerrainRiskSideProfile({
             strokeWidth={segment.strokeWidth}
             strokeLinecap="round"
             strokeLinejoin="round"
+            opacity={segment.point.distanceMiles <= (completedDistanceMiles ?? -1) ? 0.28 : 1}
           />
         ))}
 
@@ -697,6 +706,17 @@ export default function TerrainRiskSideProfile({
           strokeLinejoin="round"
         />
 
+        {completedProfileLinePath ? (
+          <Path
+            d={completedProfileLinePath}
+            fill="none"
+            stroke="rgba(141,151,158,0.78)"
+            strokeWidth={2.4}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : null}
+
         {chart.points.map((point, index) => (
           <Circle
             key={`profile-point-${index}`}
@@ -704,7 +724,9 @@ export default function TerrainRiskSideProfile({
             cy={point.y}
             r={point.riskLevel === 'high' ? 2.2 : 1.55}
             fill={getTerrainCommandRiskColor(point.riskLevel)}
-            opacity={point.riskLevel === 'high' ? 0.95 : 0.66}
+            opacity={point.distanceMiles <= (completedDistanceMiles ?? -1)
+              ? 0.28
+              : point.riskLevel === 'high' ? 0.95 : 0.66}
           />
         ))}
 

@@ -71,20 +71,8 @@ export function prepareImportedTraceGuidanceGeometry(params: {
 
   const cumulativeDistances = buildTrailCumulativeDistances(geometry);
   const projection = projectOnTrailGeometry(origin, geometry, cumulativeDistances);
-  if (projection.distanceFromRouteM > IMPORTED_TRACE_ON_ROUTE_FALLBACK_MAX_M) {
-    return {
-      geometry: normalizeGeometry([origin, ...geometry]),
-      distanceFromTraceM: projection.distanceFromRouteM,
-    };
-  }
-
-  const forwardIndex = Math.max(1, projection.nearestIndex);
   return {
-    geometry: normalizeGeometry([
-      origin,
-      projection.projectedPoint,
-      ...geometry.slice(forwardIndex),
-    ]),
+    geometry,
     distanceFromTraceM: projection.distanceFromRouteM,
   };
 }

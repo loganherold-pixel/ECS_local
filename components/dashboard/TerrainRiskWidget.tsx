@@ -9,71 +9,76 @@
  *   3. TerrainRiskDetailView — expanded scrollable detail with all sub-risks,
  *      vehicle capability, route-ahead forecast, and advisories
  *
- * Data sources:
- *   - terrainRiskPredictionEngine (pure functions)
- *   - terrainProfile (from expedition or default)
- *   - stabilityEngine (CG data)
- *   - vehicleWeightEngine (load bias)
- *   - accelerometer (roll/pitch)
+ * This presentation component does not acquire or invent terrain data. Callers
+ * must provide an assessment produced by an existing deterministic ECS path.
  */
 
-import React, { useMemo } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import { TACTICAL } from '../../lib/theme';
 import { WidgetCompactRow } from './WidgetChrome';
 import {
-  buildVehicleCapabilityProfile,
-  computeTerrainRiskAssessment,
-  classifyTerrainRiskLevel,
   getTerrainRiskColor,
   getTerrainRiskLabel,
   getTerrainRiskIcon,
-  smoothScore,
-  type VehicleCapabilityInput,
-  type TerrainRiskInput,
 } from '../../lib/terrainRiskPredictionEngine';
 import type {
-  TerrainRiskLevel,
   TerrainRiskAssessment,
   SubRiskFactor,
-  VehicleCapabilityProfile,
-  RouteAheadRiskForecast,
   TerrainRiskAdvisory,
 } from '../../lib/terrainRiskTypes';
-import { DEFAULT_TERRAIN_PROFILE } from '../../lib/terrainProfile';
-import type { TerrainProfile } from '../../lib/terrainProfile';
 
 // ═══════════════════════════════════════════════════════════
-// SHARED HOOKS & DATA
+// SHARED PRESENTATION CONTRACT
 // ═══════════════════════════════════════════════════════════
 
-function buildDefaultTerrainRiskAssessment(): TerrainRiskAssessment {
-  const profile = buildVehicleCapabilityProfile({});
-  return computeTerrainRiskAssessment({
-    vehicleProfile: profile,
-    terrainProfile: DEFAULT_TERRAIN_PROFILE,
-    rollDeg: 0,
-    pitchDeg: 0,
-    hasSensorData: false,
-  });
-}
+export type TerrainRiskPresentation = {
+  assessment: TerrainRiskAssessment;
+  /** Truthful ECS source/freshness label, for example "Live guidance elevation profile". */
+  sourceLabel: string;
+};
 
-function useTerrainRiskData(): TerrainRiskAssessment {
-  return useMemo(buildDefaultTerrainRiskAssessment, []);
+export type TerrainRiskWidgetProps = {
+  presentation?: TerrainRiskPresentation | null;
+  unavailableReason?: string;
+};
+
+const DEFAULT_UNAVAILABLE_REASON = 'Start guidance on a route with verified terrain data.';
+
+function getPresentation(
+  presentation?: TerrainRiskPresentation | null,
+): TerrainRiskPresentation | null {
+  if (!presentation?.assessment || !presentation.sourceLabel.trim()) return null;
+  return presentation;
 }
 
 // ═══════════════════════════════════════════════════════════
 // COMPACT MODE (3-cell grid)
 // ═══════════════════════════════════════════════════════════
 
-export function TerrainRiskCompact() {
-  const data = useTerrainRiskData();
-  const color = getTerrainRiskColor(data.riskLevel);
+export function TerrainRiskCompact({
+  presentation,
+  unavailableReason = DEFAULT_UNAVAILABLE_REASON,
+}: TerrainRiskWidgetProps = {}) {
+  const resolved = getPresentation(presentation);
+  if (!resolved) {
+    return (
+      <WidgetCompactRow
+        title="Terrain"
+        summary="Terrain unavailable"
+        tone="unavailable"
+        status={unavailableReason}
+        statusTone="unavailable"
+      />
+    );
+  }
+
+  const data = resolved.assessment;
   const label = getTerrainRiskLabel(data.riskLevel);
   const forecastLabel = data.forecast?.available
     ? `Ahead ${getTerrainRiskLabel(data.forecast.peakRiskLevel)}`
-    : 'Default profile';
+    : resolved.sourceLabel;
   const compactTone =
     data.riskLevel === 'high'
       ? 'critical'
@@ -96,8 +101,16 @@ export function TerrainRiskCompact() {
 // CARD MODE (full widget card)
 // ═══════════════════════════════════════════════════════════
 
-export function TerrainRiskCard() {
-  const data = useTerrainRiskData();
+export function TerrainRiskCard({
+  presentation,
+  unavailableReason = DEFAULT_UNAVAILABLE_REASON,
+}: TerrainRiskWidgetProps = {}) {
+  const resolved = getPresentation(presentation);
+  if (!resolved) {
+    return <TerrainRiskUnavailableState reason={unavailableReason} />;
+  }
+
+  const data = resolved.assessment;
   const color = getTerrainRiskColor(data.riskLevel);
   const label = getTerrainRiskLabel(data.riskLevel);
   const icon = getTerrainRiskIcon(data.riskLevel);
@@ -135,9 +148,22 @@ export function TerrainRiskCard() {
       )}
       {!data.forecast?.available ? (
         <Text style={ws.forecastText} numberOfLines={1}>
-          Default terrain profile; live route data unavailable
+          Route-ahead forecast unavailable from this assessment
         </Text>
       ) : null}
+      <Text style={ws.sourceText} numberOfLines={1}>Source: {resolved.sourceLabel}</Text>
+    </View>
+  );
+}
+
+function TerrainRiskUnavailableState({ reason }: { reason: string }) {
+  return (
+    <View style={ws.unavailableState} accessibilityRole="text">
+      <Ionicons name="trail-sign-outline" size={14} color={TACTICAL.textMuted} />
+      <View style={ws.unavailableCopy}>
+        <Text style={ws.unavailableTitle}>Terrain data unavailable</Text>
+        <Text style={ws.unavailableReason} numberOfLines={2}>{reason}</Text>
+      </View>
     </View>
   );
 }
@@ -169,14 +195,47 @@ const ws = StyleSheet.create({
     marginTop: 2, opacity: 0.8,
   },
   forecastText: { fontSize: 8, fontWeight: '600', color: TACTICAL.textMuted, flex: 1 },
+  sourceText: { fontSize: 8, fontWeight: '600', color: TACTICAL.textMuted, marginTop: 2 },
+  unavailableState: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 6,
+  },
+  unavailableCopy: { flex: 1, gap: 2 },
+  unavailableTitle: { fontSize: 10, fontWeight: '800', color: TACTICAL.text },
+  unavailableReason: { fontSize: 8, fontWeight: '600', color: TACTICAL.textMuted },
 });
 
 // ═══════════════════════════════════════════════════════════
 // DETAIL VIEW (expanded modal)
 // ═══════════════════════════════════════════════════════════
 
-export function TerrainRiskDetailView() {
-  const data = useTerrainRiskData();
+export function TerrainRiskDetailView({
+  presentation,
+  unavailableReason = DEFAULT_UNAVAILABLE_REASON,
+}: TerrainRiskWidgetProps = {}) {
+  const resolved = getPresentation(presentation);
+  if (!resolved) {
+    return (
+      <ScrollView style={ds.container} showsVerticalScrollIndicator={false}>
+        <Text style={ds.section}>TERRAIN RISK ASSESSMENT</Text>
+        <View style={ds.detailUnavailableState}>
+          <Ionicons name="trail-sign-outline" size={22} color={TACTICAL.textMuted} />
+          <Text style={ds.detailUnavailableTitle}>Terrain data unavailable</Text>
+          <Text style={ds.detailUnavailableReason}>{unavailableReason}</Text>
+          <Text style={ds.detailUnavailableSource}>
+            No deterministic route terrain assessment has been supplied.
+          </Text>
+        </View>
+        <View style={ds.disclaimer}>
+          <Text style={ds.disclaimerText}>
+            Unknown terrain remains unknown. ECS does not infer route safety from missing data.
+          </Text>
+        </View>
+      </ScrollView>
+    );
+  }
+
+  const data = resolved.assessment;
   const color = getTerrainRiskColor(data.riskLevel);
   const label = getTerrainRiskLabel(data.riskLevel);
 
@@ -191,7 +250,7 @@ export function TerrainRiskDetailView() {
         <View style={ds.scoreMeta}>
           <Text style={[ds.levelLabel, { color }]}>{label}</Text>
           <Text style={ds.descriptorText}>{data.descriptor}</Text>
-          <Text style={ds.descriptorText}>Source: default terrain profile, not live sensor data</Text>
+          <Text style={ds.descriptorText}>Source: {resolved.sourceLabel}</Text>
         </View>
       </View>
 
@@ -227,6 +286,7 @@ export function TerrainRiskDetailView() {
       <View style={ds.divider} />
       <Text style={ds.section}>RISK FACTORS</Text>
       {data.subRisks
+        .slice()
         .sort((a, b) => b.score - a.score)
         .map((sub, i) => (
           <SubRiskRow key={sub.category} factor={sub} />
@@ -517,6 +577,18 @@ const ds = StyleSheet.create({
   trendText: { fontSize: 9, fontWeight: '700', color: '#E67E22' },
 
   noDataText: { fontSize: 10, fontWeight: '600', color: TACTICAL.textMuted, fontStyle: 'italic' },
+  detailUnavailableState: {
+    alignItems: 'center', gap: 7, paddingHorizontal: 18, paddingVertical: 24,
+    borderWidth: 1, borderColor: TACTICAL.border, borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  detailUnavailableTitle: { fontSize: 13, fontWeight: '900', color: TACTICAL.text },
+  detailUnavailableReason: {
+    fontSize: 10, fontWeight: '600', color: TACTICAL.textMuted, textAlign: 'center',
+  },
+  detailUnavailableSource: {
+    fontSize: 9, fontWeight: '600', color: TACTICAL.textMuted, textAlign: 'center', fontStyle: 'italic',
+  },
 
   // Disclaimer
   disclaimer: {

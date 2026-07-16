@@ -5,6 +5,7 @@ export type ActiveGuidanceRouteLineStatus =
   | 'rerouting'
   | 'reroute_failed'
   | 'reroute_applied'
+  | 'degraded'
   | 'unavailable';
 
 export interface ActiveGuidanceRouteLineSync {
@@ -20,6 +21,7 @@ export interface ActiveGuidanceRouteLineSync {
   distanceMeters: number | null;
   durationSeconds: number | null;
   guidanceMode: EcsGuidanceRoute['guidanceMode'] | null;
+  invalidPointCount: number;
 }
 
 export interface BuildActiveGuidanceRouteLineSyncInput {
@@ -162,6 +164,7 @@ function resolveStatusLabel(status: ActiveGuidanceRouteLineStatus): string | nul
   if (status === 'rerouting') return 'Recalculating route...';
   if (status === 'reroute_failed') return 'Unable to recalculate route';
   if (status === 'reroute_applied') return 'Route updated';
+  if (status === 'degraded') return 'Route geometry unavailable';
   return null;
 }
 
@@ -171,16 +174,21 @@ export function buildActiveGuidanceRouteLineSync(
   const route = input.route ?? null;
   const routeVersion = cleanLabel(input.routeVersion) ?? null;
   const versionMismatchPrevented = !routeVersionMatches(route, routeVersion);
-  const geometry = versionMismatchPrevented
+  const invalidPointCount = Array.isArray(route?.geometry)
+    ? route.geometry.filter((point) => !isValidRouteCoordinate(point)).length
+    : 0;
+  const geometry = versionMismatchPrevented || invalidPointCount > 0
     ? []
     : normalizeGeometry(route?.geometry, routeVersion);
   const hasGeometry = geometry.length > 1;
-  const status = resolveStatus({
-    navigationStatus: input.navigationStatus,
-    routeConfidenceState: input.routeConfidenceState,
-    routeStatusLabel: input.routeStatusLabel,
-    hasGeometry,
-  });
+  const status = invalidPointCount > 0
+    ? 'degraded'
+    : resolveStatus({
+        navigationStatus: input.navigationStatus,
+        routeConfidenceState: input.routeConfidenceState,
+        routeStatusLabel: input.routeStatusLabel,
+        hasGeometry,
+      });
   const routeId = cleanLabel(route?.id) ?? null;
   const rerouteGeneration =
     typeof route?.rerouteGeneration === 'number' && Number.isFinite(route.rerouteGeneration)
@@ -218,5 +226,6 @@ export function buildActiveGuidanceRouteLineSync(
         ? route.durationSeconds
         : null,
     guidanceMode: route?.guidanceMode ?? null,
+    invalidPointCount,
   };
 }

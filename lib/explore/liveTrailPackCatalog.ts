@@ -1,9 +1,12 @@
 import { supabase } from '../supabase';
 import {
+  catalogRouteToTrailPack,
   getRouteCatalogCoverageState,
   normalizeRouteCatalogDetailResponse,
   normalizeRouteCatalogSearchResponse,
+  verifyRouteCatalogRecord,
   type RouteCatalogCoverageState,
+  type RouteCatalogRecord,
   type RouteCatalogSearchMeta,
 } from './routeCatalog';
 import {
@@ -16,6 +19,17 @@ import {
   type RouteCatalogSourceType,
 } from '../routeDataContracts';
 import { createPersistedKeyValueCache } from '../keyValuePersistence';
+import {
+  beginECSAsyncSurfaceRequest,
+  cancelECSAsyncSurfaceRequest,
+  createECSAsyncRequestFingerprint,
+  createECSAsyncSurfaceState,
+  disableECSAsyncSurface,
+  settleECSAsyncSurfaceRequest,
+  type ECSAsyncCancellationReason,
+  type ECSAsyncSurfaceState,
+  type ECSAsyncSurfaceStatus,
+} from '../state/asyncSurfaceState';
 import {
   EXPLORE_CATALOG_SUMMARY_CACHE_KEY,
   EXPLORE_CATALOG_SUMMARY_CACHE_STALE_MS,
@@ -39,7 +53,32 @@ import type {
   ECSTrailPackSource,
 } from './trailPacks';
 
-export type LiveTrailPackCatalogStatus = 'idle' | 'loading' | 'ready' | 'error';
+export type LiveTrailPackCatalogStatus = ECSAsyncSurfaceStatus;
+
+export type LiveTrailPackCatalogSafeDiagnostic = {
+  routeId: string;
+  publicId: string | null;
+  name: string | null;
+  exclusionReasons: string[];
+  sourceTypes: string[];
+  reviewStatus: string | null;
+  recommendationStatus: string | null;
+  updatedAt: string | null;
+};
+
+export type LiveTrailPackCatalogData = {
+  trailPacks: ECSTrailPack[];
+  guidanceDiagnosticTrailPacks: ECSTrailPack[];
+  guidanceDiagnosticRecords: LiveTrailPackCatalogSafeDiagnostic[];
+  routeCatalogSummaries: RouteCatalogSummary[];
+};
+
+export type LiveTrailPackCatalogRefreshOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  cancellationReason?: ECSAsyncCancellationReason;
+  sourceVersion?: string | null;
+};
 
 export type LiveTrailPackCatalogSearchCriteria = {
   latitude?: number | null;
@@ -70,6 +109,8 @@ export type LiveTrailPackCatalogSearchCriteria = {
 
 export type LiveTrailPackCatalogSnapshot = {
   trailPacks: ECSTrailPack[];
+  guidanceDiagnosticTrailPacks: ECSTrailPack[];
+  guidanceDiagnosticRecords: LiveTrailPackCatalogSafeDiagnostic[];
   routeCatalogSummaries: RouteCatalogSummary[];
   status: LiveTrailPackCatalogStatus;
   error: string | null;
@@ -81,19 +122,46 @@ export type LiveTrailPackCatalogSnapshot = {
   refreshKey: string | null;
   preservedFromEmptyRefresh: boolean;
   preservedReason: string | null;
+  asyncState: ECSAsyncSurfaceState<LiveTrailPackCatalogData>;
 };
 
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
 let refreshRequestSequence = 0;
-const pendingRefreshesByKey = new Map<string, Promise<LiveTrailPackCatalogSnapshot>>();
+let sharedRequestSubscriberSequence = 0;
+type SharedRequestSubscriberOwner<T> = {
+  promise: Promise<T>;
+  controller: AbortController;
+  subscribers: Set<number>;
+  cancelWhenUnobserved: (reason: ECSAsyncCancellationReason) => void;
+};
+type PendingCatalogRefresh = SharedRequestSubscriberOwner<LiveTrailPackCatalogSnapshot> & {
+  requestSequence: number;
+};
+const pendingRefreshesByKey = new Map<string, PendingCatalogRefresh>();
+let activeCatalogRefresh: PendingCatalogRefresh & { refreshKey: string } | null = null;
 const ROUTE_CATALOG_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
 const ROUTE_CATALOG_DETAIL_CACHE_MAX_ENTRIES = 24;
-const pendingDetailRequestsByRouteId = new Map<string, Promise<ECSTrailPack>>();
-const routeCatalogDetailCache = new Map<string, { trailPack: ECSTrailPack; storedAtMs: number }>();
+const ROUTE_CATALOG_REQUEST_TIMEOUT_MS = 12_000;
+type PendingDetailRequest = SharedRequestSubscriberOwner<ECSTrailPack> & {
+  routeId: string;
+  generation: number;
+};
+const pendingDetailRequestsByKey = new Map<string, PendingDetailRequest>();
+const routeCatalogDetailCache = new Map<
+  string,
+  { trailPack: ECSTrailPack; routeId: string; sourceVersion: string; storedAtMs: number }
+>();
+const routeCatalogDetailGenerations = new Map<string, number>();
+const initialAsyncState = createECSAsyncSurfaceState<LiveTrailPackCatalogData>({
+  surfaceId: 'explore_guidance_ready_routes',
+  provider: 'route-catalog-search',
+});
 let snapshot: LiveTrailPackCatalogSnapshot = {
   trailPacks: [],
+  guidanceDiagnosticTrailPacks: [],
+  guidanceDiagnosticRecords: [],
   routeCatalogSummaries: [],
   status: 'idle',
   error: null,
@@ -105,6 +173,7 @@ let snapshot: LiveTrailPackCatalogSnapshot = {
   refreshKey: null,
   preservedFromEmptyRefresh: false,
   preservedReason: null,
+  asyncState: initialAsyncState,
 };
 
 const TRAIL_PACK_SELECT = [
@@ -116,7 +185,6 @@ const TRAIL_PACK_SELECT = [
   'route_type',
   'center_latitude',
   'center_longitude',
-  'route_geometry',
   'distance_miles',
   'estimated_duration_minutes',
   'difficulty',
@@ -138,6 +206,607 @@ const ROUTE_CATALOG_SUMMARY_PAGE_SIZE = 50;
 const ROUTE_CATALOG_STAGED_REFRESH_LIMIT = 50;
 const routeCatalogSummaryPersistentCache = createPersistedKeyValueCache(EXPLORE_CATALOG_SUMMARY_CACHE_KEY);
 
+class InvalidRouteCatalogSearchResponseError extends Error {
+  constructor() {
+    super('Verified route catalog returned an invalid response.');
+    this.name = 'InvalidRouteCatalogSearchResponseError';
+  }
+}
+
+type CatalogRequestLifecycle = {
+  controller: AbortController;
+  cleanup: () => void;
+  didTimeout: () => boolean;
+};
+
+function createCatalogRequestLifecycle(
+  options: LiveTrailPackCatalogRefreshOptions = {},
+): CatalogRequestLifecycle {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutMs = Math.max(1, Math.min(60_000, options.timeoutMs ?? ROUTE_CATALOG_REQUEST_TIMEOUT_MS));
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort('timeout');
+  }, timeoutMs);
+  return {
+    controller,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+    },
+    didTimeout: () => timedOut,
+  };
+}
+
+function createCatalogAbortError(message = 'Route catalog request cancelled.'): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfCatalogRequestAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw createCatalogAbortError();
+}
+
+function awaitCatalogRequest<T>(request: PromiseLike<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return Promise.resolve(request);
+  if (signal.aborted) return Promise.reject(createCatalogAbortError());
+  return new Promise<T>((resolve, reject) => {
+    const handleAbort = () => {
+      cleanup();
+      reject(createCatalogAbortError());
+    };
+    const cleanup = () => signal.removeEventListener('abort', handleAbort);
+    signal.addEventListener('abort', handleAbort, { once: true });
+    Promise.resolve(request).then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+function isCatalogAbortError(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true || (error instanceof Error && error.name === 'AbortError');
+}
+
+function subscribeToSharedRequest<T>(
+  owner: SharedRequestSubscriberOwner<T>,
+  options: LiveTrailPackCatalogRefreshOptions,
+  waitForTerminalWhenLastConsumerCancels = false,
+): Promise<T> {
+  const subscriberId = sharedRequestSubscriberSequence + 1;
+  sharedRequestSubscriberSequence = subscriberId;
+  owner.subscribers.add(subscriberId);
+  const signal = options.signal;
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const release = () => {
+      owner.subscribers.delete(subscriberId);
+      signal?.removeEventListener('abort', handleAbort);
+    };
+    const settleFromOwner = () => {
+      owner.promise.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          release();
+          resolve(value);
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          release();
+          reject(error);
+        },
+      );
+    };
+    const handleAbort = () => {
+      if (settled) return;
+      settled = true;
+      release();
+      const reason = options.cancellationReason ?? 'consumer_cancelled';
+      if (owner.subscribers.size === 0) {
+        owner.cancelWhenUnobserved(reason);
+        if (waitForTerminalWhenLastConsumerCancels) {
+          owner.promise.then(resolve, reject);
+          return;
+        }
+      }
+      reject(createCatalogAbortError());
+    };
+
+    if (signal?.aborted) {
+      handleAbort();
+      return;
+    }
+    signal?.addEventListener('abort', handleAbort, { once: true });
+    settleFromOwner();
+  });
+}
+
+function catalogResultCount(data: LiveTrailPackCatalogData): number {
+  return Math.max(data.trailPacks.length, data.routeCatalogSummaries.length)
+    + data.guidanceDiagnosticTrailPacks.length
+    + data.guidanceDiagnosticRecords.length;
+}
+
+function hasUsableCatalogData(data: LiveTrailPackCatalogData | null | undefined): data is LiveTrailPackCatalogData {
+  return Boolean(data && catalogResultCount(data) > 0);
+}
+
+function mergeCatalogItemsById<T>(
+  baseItems: T[],
+  pageItems: T[],
+  getId: (item: T) => string,
+): T[] {
+  const merged = new Map<string, T>();
+  [...baseItems, ...pageItems].forEach((item) => {
+    const id = getId(item).trim();
+    if (id) merged.set(id, item);
+  });
+  return Array.from(merged.values());
+}
+
+function mergeLiveTrailPackCatalogData(
+  baseData: LiveTrailPackCatalogData | null | undefined,
+  pageData: LiveTrailPackCatalogData | null | undefined,
+): LiveTrailPackCatalogData | null {
+  if (!baseData && !pageData) return null;
+  return {
+    trailPacks: mergeCatalogItemsById(
+      baseData?.trailPacks ?? [],
+      pageData?.trailPacks ?? [],
+      (trailPack) => trailPack.id,
+    ),
+    guidanceDiagnosticTrailPacks: mergeCatalogItemsById(
+      baseData?.guidanceDiagnosticTrailPacks ?? [],
+      pageData?.guidanceDiagnosticTrailPacks ?? [],
+      (trailPack) => trailPack.id,
+    ),
+    guidanceDiagnosticRecords: mergeCatalogItemsById(
+      baseData?.guidanceDiagnosticRecords ?? [],
+      pageData?.guidanceDiagnosticRecords ?? [],
+      (diagnostic) => diagnostic.routeId,
+    ),
+    routeCatalogSummaries: mergeCatalogItemsById(
+      baseData?.routeCatalogSummaries ?? [],
+      pageData?.routeCatalogSummaries ?? [],
+      (summary) => summary.routeId,
+    ),
+  };
+}
+
+function routeCatalogRefreshFamilyKey(refreshKey: string | null | undefined): string | null {
+  if (!refreshKey) return null;
+  try {
+    const parsed = readRecord(JSON.parse(refreshKey));
+    if (!parsed) return null;
+    const family = { ...parsed };
+    delete family.page;
+    delete family.offset;
+    return JSON.stringify(stableRecord(family));
+  } catch {
+    return null;
+  }
+}
+
+function maxOptionalNumber(left: number | undefined, right: number | undefined): number | undefined {
+  if (left == null) return right;
+  if (right == null) return left;
+  return Math.max(left, right);
+}
+
+function mergeKnownRouteDiagnostics(
+  base: RouteCatalogSearchMeta['knownRouteDiagnostics'],
+  page: RouteCatalogSearchMeta['knownRouteDiagnostics'],
+): RouteCatalogSearchMeta['knownRouteDiagnostics'] {
+  const merged = new Map<string, Record<string, unknown>>();
+  [...(base ?? []), ...(page ?? [])].forEach((diagnostic) => {
+    merged.set(JSON.stringify(stableRecord(diagnostic)), diagnostic);
+  });
+  return merged.size > 0 ? Array.from(merged.values()) : undefined;
+}
+
+function mergeRouteCatalogSearchMeta(
+  base: RouteCatalogSearchMeta | null,
+  page: RouteCatalogSearchMeta | null,
+): RouteCatalogSearchMeta | null {
+  if (!base) return page ? { ...page } : null;
+  if (!page) return { ...base };
+  return {
+    candidateCount: Math.max(base.candidateCount, page.candidateCount),
+    radiusMatchedCount: Math.max(base.radiusMatchedCount, page.radiusMatchedCount),
+    geometryMatchedCount: maxOptionalNumber(base.geometryMatchedCount, page.geometryMatchedCount),
+    trailheadMatchedCount: maxOptionalNumber(base.trailheadMatchedCount, page.trailheadMatchedCount),
+    centerMatchedCount: maxOptionalNumber(base.centerMatchedCount, page.centerMatchedCount),
+    aliasMatchedCount: maxOptionalNumber(base.aliasMatchedCount, page.aliasMatchedCount),
+    featuredMatchedCount: maxOptionalNumber(base.featuredMatchedCount, page.featuredMatchedCount),
+    curationCandidateCount: Math.max(base.curationCandidateCount, page.curationCandidateCount),
+    anySourceBackedCandidateCount: Math.max(
+      base.anySourceBackedCandidateCount,
+      page.anySourceBackedCandidateCount,
+    ),
+    radiusFilterApplied: base.radiusFilterApplied || page.radiusFilterApplied,
+    page: page.page,
+    pageSize: page.pageSize,
+    offset: page.offset,
+    hasMore: page.hasMore,
+    nextPage: page.nextPage,
+    totalMatchedCount: Math.max(base.totalMatchedCount, page.totalMatchedCount),
+    totalMatchedCountBounded: page.totalMatchedCountBounded,
+    clientInvalidRecordCount:
+      (base.clientInvalidRecordCount ?? 0) + (page.clientInvalidRecordCount ?? 0),
+    knownRouteDiagnostics: mergeKnownRouteDiagnostics(
+      base.knownRouteDiagnostics,
+      page.knownRouteDiagnostics,
+    ),
+  };
+}
+
+function cloneLiveTrailPackCatalogSnapshot(
+  value: LiveTrailPackCatalogSnapshot,
+): LiveTrailPackCatalogSnapshot {
+  const data = value.asyncState.data
+    ? mergeLiveTrailPackCatalogData(null, value.asyncState.data)
+    : null;
+  const lastGoodData = value.asyncState.lastGoodData
+    ? mergeLiveTrailPackCatalogData(null, value.asyncState.lastGoodData)
+    : null;
+  return {
+    ...value,
+    trailPacks: [...value.trailPacks],
+    guidanceDiagnosticTrailPacks: [...value.guidanceDiagnosticTrailPacks],
+    guidanceDiagnosticRecords: [...value.guidanceDiagnosticRecords],
+    routeCatalogSummaries: [...value.routeCatalogSummaries],
+    searchMeta: value.searchMeta ? { ...value.searchMeta } : null,
+    asyncState: {
+      ...value.asyncState,
+      data,
+      lastGoodData,
+    },
+  };
+}
+
+export function mergeLiveTrailPackCatalogPageSnapshots(
+  baseSnapshot: LiveTrailPackCatalogSnapshot,
+  pageSnapshot: LiveTrailPackCatalogSnapshot,
+  baseRefreshKey: string,
+): LiveTrailPackCatalogSnapshot {
+  const expectedFamily = routeCatalogRefreshFamilyKey(baseRefreshKey);
+  const baseFamily = routeCatalogRefreshFamilyKey(baseSnapshot.refreshKey);
+  const pageFamily = routeCatalogRefreshFamilyKey(pageSnapshot.refreshKey);
+  const pageIsTerminal =
+    pageSnapshot.status === 'ready' ||
+    pageSnapshot.status === 'empty' ||
+    pageSnapshot.status === 'stale' ||
+    pageSnapshot.status === 'degraded' ||
+    pageSnapshot.status === 'error';
+  if (!expectedFamily || baseFamily !== expectedFamily || pageFamily !== expectedFamily || !pageIsTerminal) {
+    return cloneLiveTrailPackCatalogSnapshot(baseSnapshot);
+  }
+
+  const mergedData = mergeLiveTrailPackCatalogData(
+    catalogDataFromSnapshot(baseSnapshot),
+    catalogDataFromSnapshot(pageSnapshot),
+  ) ?? {
+    trailPacks: [],
+    guidanceDiagnosticTrailPacks: [],
+    guidanceDiagnosticRecords: [],
+    routeCatalogSummaries: [],
+  };
+  const mergedAsyncData = mergeLiveTrailPackCatalogData(
+    baseSnapshot.asyncState.data,
+    pageSnapshot.asyncState.data,
+  ) ?? mergedData;
+  const mergedLastGoodData = mergeLiveTrailPackCatalogData(
+    baseSnapshot.asyncState.lastGoodData,
+    pageSnapshot.asyncState.lastGoodData,
+  );
+  const hasMergedData = catalogResultCount(mergedData) > 0;
+  const pageFailed = pageSnapshot.status === 'error';
+  const baseHasPersistentIssue =
+    baseSnapshot.preservedReason !== 'pagination_page_unavailable' &&
+    (baseSnapshot.status === 'degraded' || baseSnapshot.status === 'stale');
+  const hasDegradedPage =
+    (baseHasPersistentIssue && baseSnapshot.status === 'degraded') || pageSnapshot.status === 'degraded';
+  const hasStalePage =
+    (baseHasPersistentIssue && baseSnapshot.status === 'stale') || pageSnapshot.status === 'stale';
+  const status: LiveTrailPackCatalogStatus = pageFailed && hasMergedData
+    ? 'degraded'
+    : hasDegradedPage
+      ? 'degraded'
+      : hasStalePage
+        ? 'stale'
+        : pageSnapshot.status === 'empty' && hasMergedData
+          ? 'ready'
+          : pageSnapshot.status;
+  const searchMeta = mergeRouteCatalogSearchMeta(baseSnapshot.searchMeta, pageSnapshot.searchMeta);
+  const retainedBaseIssue = baseHasPersistentIssue;
+  const error = pageFailed || pageSnapshot.status === 'degraded' || pageSnapshot.status === 'stale'
+    ? pageSnapshot.error ?? (retainedBaseIssue ? baseSnapshot.error : null)
+    : retainedBaseIssue
+      ? baseSnapshot.error
+      : null;
+  const safeErrorCode = pageFailed || pageSnapshot.status === 'degraded' || pageSnapshot.status === 'stale'
+    ? pageSnapshot.asyncState.safeErrorCode ?? (retainedBaseIssue ? baseSnapshot.asyncState.safeErrorCode : null)
+    : retainedBaseIssue
+      ? baseSnapshot.asyncState.safeErrorCode
+      : null;
+  const retryEligible =
+    (baseHasPersistentIssue && baseSnapshot.asyncState.retryEligible) ||
+    pageSnapshot.asyncState.retryEligible ||
+    pageFailed;
+  const freshness = pageFailed && hasMergedData
+    ? 'stale'
+    : (baseHasPersistentIssue && baseSnapshot.asyncState.freshness === 'stale') ||
+        pageSnapshot.asyncState.freshness === 'stale'
+      ? 'stale'
+      : (baseHasPersistentIssue && baseSnapshot.asyncState.freshness === 'recent') ||
+          pageSnapshot.asyncState.freshness === 'recent'
+        ? 'recent'
+        : pageSnapshot.asyncState.freshness;
+  const asyncSource = pageFailed && hasMergedData
+    ? baseSnapshot.asyncState.source
+    : pageSnapshot.asyncState.source === 'unavailable' && hasMergedData
+      ? baseSnapshot.asyncState.source
+      : pageSnapshot.asyncState.source;
+  const coverageState = getRouteCatalogCoverageState(mergedData.trailPacks, {
+    userHasCriteria: searchMeta?.radiusFilterApplied ?? true,
+    lowerConfidenceCount:
+      mergedData.guidanceDiagnosticTrailPacks.length + mergedData.guidanceDiagnosticRecords.length,
+  });
+  const effectiveLastGoodData = mergedLastGoodData ?? (hasMergedData ? mergedAsyncData : null);
+
+  return {
+    ...pageSnapshot,
+    trailPacks: mergedData.trailPacks,
+    guidanceDiagnosticTrailPacks: mergedData.guidanceDiagnosticTrailPacks,
+    guidanceDiagnosticRecords: mergedData.guidanceDiagnosticRecords,
+    routeCatalogSummaries: mergedData.routeCatalogSummaries,
+    status,
+    error,
+    lastLoadedAt: pageFailed
+      ? baseSnapshot.lastLoadedAt
+      : pageSnapshot.lastLoadedAt ?? baseSnapshot.lastLoadedAt,
+    coverageState,
+    searchMeta,
+    source: pageSnapshot.source === 'unavailable' ? baseSnapshot.source : pageSnapshot.source,
+    refreshKey: baseRefreshKey,
+    preservedFromEmptyRefresh: pageFailed
+      ? hasMergedData
+      : pageSnapshot.preservedFromEmptyRefresh ||
+        (baseHasPersistentIssue && baseSnapshot.preservedFromEmptyRefresh),
+    preservedReason: pageFailed && hasMergedData
+      ? 'pagination_page_unavailable'
+      : pageSnapshot.preservedReason ?? (baseHasPersistentIssue ? baseSnapshot.preservedReason : null),
+    asyncState: {
+      ...pageSnapshot.asyncState,
+      status,
+      data: mergedAsyncData,
+      lastGoodData: effectiveLastGoodData,
+      source: asyncSource,
+      freshness,
+      safeErrorCode,
+      retryEligible,
+      resultCount: catalogResultCount(mergedAsyncData),
+    },
+  };
+}
+
+type RouteCatalogDetailCollection = 'trailPacks' | 'guidanceDiagnosticTrailPacks';
+
+type RouteCatalogDetailReconciliationTarget = {
+  routeId: string;
+  sourceVersion: string;
+  refreshKey: string;
+  refreshRequestSequence: number;
+  collection: RouteCatalogDetailCollection;
+};
+
+function catalogTrailPackSourceVersion(trailPack: ECSTrailPack): string {
+  return cleanText(trailPack.updatedAt) ?? 'current';
+}
+
+function currentCatalogTrailPack(routeId: string): ECSTrailPack | null {
+  return snapshot.trailPacks.find((trailPack) => trailPack.id === routeId)
+    ?? snapshot.guidanceDiagnosticTrailPacks.find((trailPack) => trailPack.id === routeId)
+    ?? null;
+}
+
+function detailSourceVersion(
+  trailPack: ECSTrailPack | string,
+  options: LiveTrailPackCatalogRefreshOptions,
+): string {
+  const routeId = String(typeof trailPack === 'string' ? trailPack : trailPack.id).trim();
+  return cleanText(options.sourceVersion)
+    ?? (typeof trailPack === 'string' ? undefined : cleanText(trailPack.updatedAt))
+    ?? (routeId ? cleanText(currentCatalogTrailPack(routeId)?.updatedAt) : undefined)
+    ?? 'current';
+}
+
+function captureRouteCatalogDetailReconciliationTarget(
+  routeId: string,
+  sourceVersion: string,
+): RouteCatalogDetailReconciliationTarget | null {
+  if (
+    snapshot.source !== 'route_catalog'
+    || !snapshot.refreshKey
+    || snapshot.status === 'disabled'
+    || snapshot.status === 'cancelled'
+    || snapshot.status === 'error'
+  ) {
+    return null;
+  }
+
+  const primary = snapshot.trailPacks.find((trailPack) => trailPack.id === routeId);
+  const diagnostic = snapshot.guidanceDiagnosticTrailPacks.find((trailPack) => trailPack.id === routeId);
+  const current = primary ?? diagnostic;
+  if (!current || catalogTrailPackSourceVersion(current) !== sourceVersion) return null;
+
+  return {
+    routeId,
+    sourceVersion,
+    refreshKey: snapshot.refreshKey,
+    refreshRequestSequence,
+    collection: primary ? 'trailPacks' : 'guidanceDiagnosticTrailPacks',
+  };
+}
+
+function routeCatalogVersionTimestamp(value: string | undefined): number | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function catalogDetailForSafePresentation(detail: ECSTrailPack): ECSTrailPack {
+  if (detail.source !== 'partner_source') return detail;
+  return {
+    ...detail,
+    routeGeometry: undefined,
+    routeGeometryMode: 'omitted',
+    routeIntelligence: undefined,
+  };
+}
+
+function reconcileRouteCatalogDetailCollections(
+  data: Pick<LiveTrailPackCatalogData, 'trailPacks' | 'guidanceDiagnosticTrailPacks'>,
+  target: RouteCatalogDetailReconciliationTarget,
+  detail: ECSTrailPack,
+  destination: RouteCatalogDetailCollection,
+): Pick<LiveTrailPackCatalogData, 'trailPacks' | 'guidanceDiagnosticTrailPacks'> | null {
+  const matching = [
+    ...data.trailPacks.filter((trailPack) => trailPack.id === target.routeId),
+    ...data.guidanceDiagnosticTrailPacks.filter((trailPack) => trailPack.id === target.routeId),
+  ];
+  if (
+    matching.length === 0
+    || matching.some((trailPack) => catalogTrailPackSourceVersion(trailPack) !== target.sourceVersion)
+  ) {
+    return null;
+  }
+
+  const currentDestination = data[destination].find((trailPack) => trailPack.id === target.routeId);
+  const otherCollection: RouteCatalogDetailCollection = destination === 'trailPacks'
+    ? 'guidanceDiagnosticTrailPacks'
+    : 'trailPacks';
+  if (
+    currentDestination === detail
+    && !data[otherCollection].some((trailPack) => trailPack.id === target.routeId)
+  ) {
+    return null;
+  }
+
+  const replaceOrAppend = (items: ECSTrailPack[]): ECSTrailPack[] => {
+    let replaced = false;
+    const next = items.map((trailPack) => {
+      if (trailPack.id !== target.routeId) return trailPack;
+      replaced = true;
+      return detail;
+    });
+    return replaced ? next : [...next, detail];
+  };
+
+  return {
+    trailPacks: destination === 'trailPacks'
+      ? replaceOrAppend(data.trailPacks)
+      : data.trailPacks.filter((trailPack) => trailPack.id !== target.routeId),
+    guidanceDiagnosticTrailPacks: destination === 'guidanceDiagnosticTrailPacks'
+      ? replaceOrAppend(data.guidanceDiagnosticTrailPacks)
+      : data.guidanceDiagnosticTrailPacks.filter((trailPack) => trailPack.id !== target.routeId),
+  };
+}
+
+function reconcileRouteCatalogDetailData(
+  data: LiveTrailPackCatalogData | null,
+  target: RouteCatalogDetailReconciliationTarget,
+  detail: ECSTrailPack,
+  destination: RouteCatalogDetailCollection,
+): LiveTrailPackCatalogData | null {
+  if (!data) return data;
+  const reconciled = reconcileRouteCatalogDetailCollections(data, target, detail, destination);
+  if (!reconciled) return data;
+  return {
+    ...data,
+    ...reconciled,
+  };
+}
+
+function reconcileRouteCatalogDetail(
+  target: RouteCatalogDetailReconciliationTarget | null,
+  normalizedDetail: ECSTrailPack,
+): boolean {
+  if (
+    !target
+    || normalizedDetail.id !== target.routeId
+    || normalizedDetail.reviewStatus !== 'approved'
+    || !normalizedDetail.catalogVerification
+    || snapshot.source !== 'route_catalog'
+    || snapshot.refreshKey !== target.refreshKey
+    || refreshRequestSequence !== target.refreshRequestSequence
+  ) {
+    return false;
+  }
+
+  const currentCollection = snapshot[target.collection];
+  const current = currentCollection.find((trailPack) => trailPack.id === target.routeId);
+  if (!current || catalogTrailPackSourceVersion(current) !== target.sourceVersion) return false;
+
+  const currentTimestamp = routeCatalogVersionTimestamp(current.updatedAt);
+  const incomingTimestamp = routeCatalogVersionTimestamp(normalizedDetail.updatedAt);
+  if (currentTimestamp != null && incomingTimestamp != null && incomingTimestamp < currentTimestamp) {
+    return false;
+  }
+
+  const detail = catalogDetailForSafePresentation(normalizedDetail);
+  const destination: RouteCatalogDetailCollection =
+    normalizedDetail.source !== 'partner_source'
+    && normalizedDetail.catalogVerification.publicRecommendation
+      ? 'trailPacks'
+      : 'guidanceDiagnosticTrailPacks';
+  const reconciled = reconcileRouteCatalogDetailCollections(snapshot, target, detail, destination);
+  if (!reconciled) return false;
+
+  setSnapshot({
+    ...snapshot,
+    ...reconciled,
+    asyncState: {
+      ...snapshot.asyncState,
+      data: reconcileRouteCatalogDetailData(snapshot.asyncState.data, target, detail, destination),
+      lastGoodData: reconcileRouteCatalogDetailData(
+        snapshot.asyncState.lastGoodData,
+        target,
+        detail,
+        destination,
+      ),
+    },
+  });
+  return true;
+}
+
+function routeCatalogDetailKey(routeId: string, sourceVersion: string): string {
+  return JSON.stringify([routeId, sourceVersion]);
+}
+
+function currentRouteCatalogDetailGeneration(routeId: string): number {
+  return routeCatalogDetailGenerations.get(routeId) ?? 0;
+}
+
+function catalogDataFromSnapshot(value: LiveTrailPackCatalogSnapshot): LiveTrailPackCatalogData {
+  return {
+    trailPacks: [...value.trailPacks],
+    guidanceDiagnosticTrailPacks: [...value.guidanceDiagnosticTrailPacks],
+    guidanceDiagnosticRecords: [...value.guidanceDiagnosticRecords],
+    routeCatalogSummaries: [...value.routeCatalogSummaries],
+  };
+}
+
 function finiteNumber(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
@@ -154,6 +823,12 @@ function routeCatalogSearchLimit(value: unknown): number {
   return Math.max(1, Math.min(ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT, Math.round(limit)));
 }
 
+function routeCatalogSearchPage(value: unknown): number {
+  const page = finiteNumber(value);
+  if (page == null || page < 1) return 1;
+  return Math.max(1, Math.min(10_000, Math.floor(page)));
+}
+
 function hasRouteCatalogRadiusCriteria(criteria: LiveTrailPackCatalogSearchCriteria): boolean {
   return (
     finiteNumber(criteria.latitude) != null &&
@@ -165,13 +840,16 @@ function hasRouteCatalogRadiusCriteria(criteria: LiveTrailPackCatalogSearchCrite
 function stagedRouteCatalogSearchCriteria(
   criteria: LiveTrailPackCatalogSearchCriteria,
 ): LiveTrailPackCatalogSearchCriteria | null {
-  const requestedLimit = finiteNumber(criteria.limit);
+  const requestedLimit = finiteNumber(criteria.pageSize ?? criteria.limit);
   if (requestedLimit == null) return null;
+  if (routeCatalogSearchPage(criteria.page) > 1) return null;
   const limit = routeCatalogSearchLimit(requestedLimit);
   if (!hasRouteCatalogRadiusCriteria(criteria) || limit <= ROUTE_CATALOG_STAGED_REFRESH_LIMIT) return null;
   return {
     ...criteria,
     limit: ROUTE_CATALOG_STAGED_REFRESH_LIMIT,
+    page: 1,
+    pageSize: ROUTE_CATALOG_STAGED_REFRESH_LIMIT,
     expectedKnownRoutes: [],
     includePreviewGeometry: false,
     includeCoverageDiagnostics: false,
@@ -259,6 +937,95 @@ function pointBbox(coordinate: ECSTrailPackCoordinate) {
   };
 }
 
+function distanceMilesBetweenCoordinates(
+  a: ECSTrailPackCoordinate,
+  b: ECSTrailPackCoordinate,
+): number {
+  const toRadians = (value: number) => value * Math.PI / 180;
+  const latitudeDelta = toRadians(b.latitude - a.latitude);
+  const longitudeDelta = toRadians(b.longitude - a.longitude);
+  const latitudeA = toRadians(a.latitude);
+  const latitudeB = toRadians(b.latitude);
+  const haversine = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(latitudeA) * Math.cos(latitudeB) * Math.sin(longitudeDelta / 2) ** 2;
+  return 3958.7613 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(Math.max(0, 1 - haversine)));
+}
+
+function legacyTrailPackMatchesCriteria(
+  pack: ECSTrailPack,
+  criteria: LiveTrailPackCatalogSearchCriteria,
+): boolean {
+  if (pack.source === 'partner_source') return false;
+  const latitude = finiteNumber(criteria.latitude);
+  const longitude = finiteNumber(criteria.longitude);
+  const radiusMiles = positiveNumber(criteria.radiusMiles);
+  if (latitude != null && longitude != null && radiusMiles != null) {
+    const distanceMiles = distanceMilesBetweenCoordinates(
+      { latitude, longitude },
+      pack.centerCoordinate,
+    );
+    if (distanceMiles > radiusMiles) return false;
+  }
+
+  const routeType = cleanText(criteria.routeType)?.toLowerCase();
+  if (routeType && pack.routeType !== routeType) return false;
+  const difficulty = cleanText(criteria.difficulty)?.toLowerCase();
+  if (difficulty && pack.difficulty !== difficulty) return false;
+
+  const minDistanceMiles = finiteNumber(criteria.minDistanceMiles);
+  if (minDistanceMiles != null && (pack.distanceMiles == null || pack.distanceMiles < minDistanceMiles)) return false;
+  const maxDistanceMiles = finiteNumber(criteria.maxDistanceMiles);
+  if (maxDistanceMiles != null && (pack.distanceMiles == null || pack.distanceMiles > maxDistanceMiles)) return false;
+  const minDurationMinutes = finiteNumber(criteria.minDurationMinutes);
+  if (
+    minDurationMinutes != null
+    && (pack.estimatedDurationMinutes == null || pack.estimatedDurationMinutes < minDurationMinutes)
+  ) return false;
+  const maxDurationMinutes = finiteNumber(criteria.maxDurationMinutes);
+  if (
+    maxDurationMinutes != null
+    && (pack.estimatedDurationMinutes == null || pack.estimatedDurationMinutes > maxDurationMinutes)
+  ) return false;
+
+  const minConfidenceScore = finiteNumber(criteria.minConfidenceScore);
+  if (minConfidenceScore != null && pack.confidenceScore < minConfidenceScore) return false;
+  const minRemotenessScore = finiteNumber(criteria.minRemotenessScore);
+  if (minRemotenessScore != null && (pack.remotenessScore == null || pack.remotenessScore < minRemotenessScore)) {
+    return false;
+  }
+  const maxRemotenessScore = finiteNumber(criteria.maxRemotenessScore);
+  if (maxRemotenessScore != null && (pack.remotenessScore == null || pack.remotenessScore > maxRemotenessScore)) {
+    return false;
+  }
+  const minCampabilityScore = finiteNumber(criteria.minCampabilityScore);
+  if (minCampabilityScore != null && (pack.campabilityScore == null || pack.campabilityScore < minCampabilityScore)) {
+    return false;
+  }
+
+  const vehicleClass = resolveRouteCatalogVehicleClass(criteria.vehicleClass);
+  if (vehicleClass && pack.vehicleFit?.length) {
+    const compatible = pack.vehicleFit.some((value) => {
+      const normalized = resolveRouteCatalogVehicleClass(value) ?? cleanText(value)?.toLowerCase();
+      return normalized === vehicleClass || normalized === 'any' || normalized === 'all';
+    });
+    if (!compatible) return false;
+  }
+
+  const fuelRangeMiles = finiteNumber(criteria.availableFuelRangeMiles);
+  if (
+    fuelRangeMiles != null
+    && pack.minimumFuelRangeMiles != null
+    && pack.minimumFuelRangeMiles > fuelRangeMiles
+  ) return false;
+  const waterCapacityGallons = finiteNumber(criteria.availableWaterCapacityGallons);
+  if (
+    waterCapacityGallons != null
+    && pack.minimumWaterCapacityGallons != null
+    && pack.minimumWaterCapacityGallons > waterCapacityGallons
+  ) return false;
+  return true;
+}
+
 function trailPackToRouteCatalogSummary(pack: ECSTrailPack): RouteCatalogSummary | null {
   const positiveFeedbackCount = pack.positiveFeedbackCount ?? 0;
   const negativeFeedbackCount = pack.negativeFeedbackCount ?? 0;
@@ -289,6 +1056,24 @@ function routeCatalogSummariesFromTrailPacks(trailPacks: ECSTrailPack[]): RouteC
   return trailPacks
     .map(trailPackToRouteCatalogSummary)
     .filter((summary): summary is RouteCatalogSummary => !!summary);
+}
+
+function guidanceDiagnosticTrailPacksFromRouteCatalog(records: RouteCatalogRecord[]): ECSTrailPack[] {
+  return records.flatMap((route) => {
+    const verification = verifyRouteCatalogRecord(route);
+    if (verification.publicRecommendation) return [];
+    const trailPack = catalogRouteToTrailPack(route, verification);
+    const hasRestrictedPartnerSource = route.sourceRecords.some(
+      (source) => source.sourceType === 'partner_restricted',
+    );
+    if (!hasRestrictedPartnerSource) return [trailPack];
+    return [{
+      ...trailPack,
+      routeGeometry: undefined,
+      routeGeometryMode: 'omitted',
+      routeIntelligence: undefined,
+    }];
+  });
 }
 
 type RouteCatalogSummaryCachePayload = {
@@ -354,6 +1139,8 @@ async function readCachedRouteCatalogSummarySnapshot(
     if (!cached || cached.refreshKey !== refreshKey) continue;
     return {
       trailPacks: [],
+      guidanceDiagnosticTrailPacks: [],
+      guidanceDiagnosticRecords: [],
       routeCatalogSummaries: cached.summaries,
       status: 'loading',
       error: null,
@@ -365,6 +1152,7 @@ async function readCachedRouteCatalogSummarySnapshot(
       refreshKey,
       preservedFromEmptyRefresh: false,
       preservedReason: 'stale_summary_revalidate',
+      asyncState: snapshot.asyncState,
     };
   }
   return null;
@@ -374,7 +1162,29 @@ function writeRouteCatalogSummaryCache(
   criteria: LiveTrailPackCatalogSearchCriteria,
   nextSnapshot: LiveTrailPackCatalogSnapshot,
 ): void {
-  if (nextSnapshot.routeCatalogSummaries.length === 0) return;
+  if (nextSnapshot.routeCatalogSummaries.length === 0) {
+    if (
+      (nextSnapshot.status === 'empty' || nextSnapshot.status === 'ready') &&
+      nextSnapshot.source === 'route_catalog' &&
+      nextSnapshot.refreshKey
+    ) {
+      let deletedMatchingEntry = false;
+      routeCatalogSummaryCacheKeys(criteria).forEach((key) => {
+        const raw = routeCatalogSummaryPersistentCache.get(key);
+        if (!raw) return;
+        try {
+          const cached = readRecord(JSON.parse(raw));
+          if (cleanText(cached?.refreshKey) !== nextSnapshot.refreshKey) return;
+          routeCatalogSummaryPersistentCache.delete(key);
+          deletedMatchingEntry = true;
+        } catch {
+          // Preserve malformed or unrelated entries; normal cache hydration already ignores them.
+        }
+      });
+      if (deletedMatchingEntry) void routeCatalogSummaryPersistentCache.flush();
+    }
+    return;
+  }
   const payload: RouteCatalogSummaryCachePayload = {
     summaries: nextSnapshot.routeCatalogSummaries,
     cachedAt: nextSnapshot.lastLoadedAt ?? new Date().toISOString(),
@@ -394,27 +1204,6 @@ function setSnapshot(next: LiveTrailPackCatalogSnapshot): LiveTrailPackCatalogSn
   snapshot = next;
   emit();
   return liveTrailPackCatalogStore.getSnapshot();
-}
-
-function preserveSnapshotForEmptyRefresh(args: {
-  refreshKey: string;
-  attemptedAt: string;
-  reason: string;
-  error?: string | null;
-}): LiveTrailPackCatalogSnapshot | null {
-  const current = snapshot;
-  if (current.refreshKey !== args.refreshKey || current.trailPacks.length === 0) {
-    return null;
-  }
-
-  return setSnapshot({
-    ...current,
-    status: 'ready',
-    error: args.error ?? current.error,
-    lastRefreshAttemptAt: args.attemptedAt,
-    preservedFromEmptyRefresh: true,
-    preservedReason: args.reason,
-  });
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -535,7 +1324,10 @@ function normalizeCoordinatePair(value: unknown): number[] | null {
     Math.abs(latitude) <= 90 &&
     Math.abs(longitude) <= 180
   ) {
-    return [longitude, latitude];
+    const elevationMeters = value.length > 2 ? Number(value[2]) : null;
+    return elevationMeters != null && Number.isFinite(elevationMeters)
+      ? [longitude, latitude, elevationMeters]
+      : [longitude, latitude];
   }
   return null;
 }
@@ -692,8 +1484,16 @@ export function buildRouteCatalogSearchBody(
   const difficulty = cleanText(criteria.difficulty);
   const regionId = cleanText(criteria.regionId);
   const includePreviewGeometry = criteria.includePreviewGeometry === true;
+  const pageSize = routeCatalogSearchLimit(
+    criteria.pageSize ?? criteria.limit ?? ROUTE_CATALOG_SUMMARY_PAGE_SIZE,
+  );
+  const page = routeCatalogSearchPage(criteria.page);
+  const offset = (page - 1) * pageSize;
   return {
-    limit: criteria.limit ?? ROUTE_CATALOG_SUMMARY_PAGE_SIZE,
+    limit: pageSize,
+    page,
+    pageSize,
+    offset,
     includeGeometry: false,
     includePreviewGeometry,
     includeAssessment: true,
@@ -739,27 +1539,63 @@ function stableRecord(value: Record<string, unknown>): Record<string, unknown> {
     }, {});
 }
 
+function requireRouteCatalogSearchRecords(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const response = readRecord(value);
+  if (!response) throw new InvalidRouteCatalogSearchResponseError();
+  if (Array.isArray(response.records)) return response.records;
+  if (Array.isArray(response.routes)) return response.routes;
+  throw new InvalidRouteCatalogSearchResponseError();
+}
+
+function normalizeRouteCatalogSafeDiagnostic(value: unknown): LiveTrailPackCatalogSafeDiagnostic | null {
+  const record = readRecord(value);
+  if (!record) return null;
+  const routeId = readString(record, 'routeId', 'route_id');
+  const exclusionReasons = readStringArray(record.exclusionReasons ?? record.exclusion_reasons) ?? [];
+  if (!routeId || exclusionReasons.length === 0) return null;
+  return {
+    routeId,
+    publicId: readString(record, 'publicId', 'public_id') ?? null,
+    name: readString(record, 'name', 'title') ?? null,
+    exclusionReasons,
+    sourceTypes: readStringArray(record.sourceTypes ?? record.source_types) ?? [],
+    reviewStatus: readString(record, 'reviewStatus', 'review_status') ?? null,
+    recommendationStatus: readString(record, 'recommendationStatus', 'recommendation_status') ?? null,
+    updatedAt: readString(record, 'updatedAt', 'updated_at') ?? null,
+  };
+}
+
+function readRouteCatalogSafeDiagnostics(value: unknown): LiveTrailPackCatalogSafeDiagnostic[] {
+  const response = readRecord(value);
+  const rawDiagnostics = response?.diagnosticRecords ?? response?.diagnostic_records;
+  if (rawDiagnostics == null) return [];
+  if (!Array.isArray(rawDiagnostics)) throw new InvalidRouteCatalogSearchResponseError();
+  return rawDiagnostics
+    .map(normalizeRouteCatalogSafeDiagnostic)
+    .filter((diagnostic): diagnostic is LiveTrailPackCatalogSafeDiagnostic => !!diagnostic);
+}
+
 export function createLiveTrailPackCatalogRefreshKey(
   criteria: LiveTrailPackCatalogSearchCriteria = {},
 ): string {
   return JSON.stringify(stableRecord(buildRouteCatalogSearchBody(criteria)));
 }
 
-async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchCriteria = {}): Promise<{
+async function fetchRouteCatalogTrailPacks(
+  criteria: LiveTrailPackCatalogSearchCriteria = {},
+  options: LiveTrailPackCatalogRefreshOptions = {},
+): Promise<{
   trailPacks: ECSTrailPack[];
+  guidanceDiagnosticTrailPacks: ECSTrailPack[];
+  guidanceDiagnosticRecords: LiveTrailPackCatalogSafeDiagnostic[];
   coverageState: RouteCatalogCoverageState;
   searchMeta: RouteCatalogSearchMeta;
 }> {
   const startedAtMs = getExplorePerformanceNow();
   const perfRun = createExplorePerformanceRun({
     flow: 'route_catalog_refresh',
-    searchKey: [
-      criteria.locationSource ?? 'unknown_location',
-      criteria.latitude ?? 'na',
-      criteria.longitude ?? 'na',
-      criteria.radiusMiles ?? 'na',
-      criteria.vehicleClass ?? 'any_vehicle',
-    ].join('|'),
+    searchKey: createECSAsyncRequestFingerprint(buildRouteCatalogSearchBody(criteria)),
     startedAtMs,
     metadata: {
       radiusMiles: criteria.radiusMiles ?? null,
@@ -768,9 +1604,16 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
       limit: criteria.limit ?? ROUTE_CATALOG_SUMMARY_PAGE_SIZE,
     },
   });
-  const { data, error } = await supabase.functions.invoke('route-catalog-search', {
-    body: buildRouteCatalogSearchBody(criteria),
-  });
+  throwIfCatalogRequestAborted(options.signal);
+  const { data, error } = await awaitCatalogRequest(
+    supabase.functions.invoke('route-catalog-search', {
+      body: buildRouteCatalogSearchBody(criteria),
+      signal: options.signal,
+      timeout: options.timeoutMs ?? ROUTE_CATALOG_REQUEST_TIMEOUT_MS,
+    }),
+    options.signal,
+  );
+  throwIfCatalogRequestAborted(options.signal);
   const queryEndedAtMs = getExplorePerformanceNow();
   recordExplorePerformancePhase(perfRun, 'route_catalog_query', {
     startedAtMs,
@@ -788,16 +1631,30 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
     throw new Error(error.message || 'Verified route catalog unavailable.');
   }
 
+  const rawRecords = requireRouteCatalogSearchRecords(data);
+  const guidanceDiagnosticRecords = readRouteCatalogSafeDiagnostics(data);
   const normalizeStartedAtMs = getExplorePerformanceNow();
   const normalized = normalizeRouteCatalogSearchResponse(data);
+  if (rawRecords.length > 0 && normalized.records.length === 0) {
+    throw new InvalidRouteCatalogSearchResponseError();
+  }
+  const clientInvalidRecordCount = Math.max(0, rawRecords.length - normalized.records.length);
+  const searchMeta: RouteCatalogSearchMeta = {
+    ...normalized.searchMeta,
+    clientInvalidRecordCount,
+  };
   const normalizeEndedAtMs = getExplorePerformanceNow();
   recordExplorePerformancePhase(perfRun, 'filter_sort', {
     startedAtMs: normalizeStartedAtMs,
     endedAtMs: normalizeEndedAtMs,
     metadata: {
-      candidateCount: normalized.searchMeta.candidateCount,
+      candidateCount: searchMeta.candidateCount,
       returnedRecords: normalized.records.length,
       returnedTrailPacks: normalized.trailPacks.length,
+      returnedGuidanceDiagnosticTrailPacks:
+        normalized.records.length - normalized.trailPacks.length,
+      returnedSafeDiagnosticRecords: guidanceDiagnosticRecords.length,
+      clientInvalidRecordCount,
     },
   });
   logExplorePerformanceDiagnostic(
@@ -812,277 +1669,711 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
       limit: criteria.limit ?? ROUTE_CATALOG_SUMMARY_PAGE_SIZE,
       expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon'],
     }, {
-      serverMeta: normalized.searchMeta,
+      serverMeta: searchMeta,
     }) as unknown as Record<string, unknown>,
     {
-      fingerprint: JSON.stringify({
-        lat: criteria.latitude ?? null,
-        lng: criteria.longitude ?? null,
-        radius: criteria.radiusMiles ?? null,
+      fingerprint: createECSAsyncRequestFingerprint({
+        request: buildRouteCatalogSearchBody(criteria),
         count: normalized.records.length,
       }),
     },
   );
   return {
     trailPacks: normalized.trailPacks,
+    guidanceDiagnosticTrailPacks: guidanceDiagnosticTrailPacksFromRouteCatalog(normalized.records),
+    guidanceDiagnosticRecords,
     coverageState: normalized.coverageState,
-    searchMeta: normalized.searchMeta,
+    searchMeta,
   };
 }
 
-export async function fetchRouteCatalogTrailPackDetail(trailPack: ECSTrailPack | string): Promise<ECSTrailPack> {
+export async function fetchRouteCatalogTrailPackDetail(
+  trailPack: ECSTrailPack | string,
+  options: LiveTrailPackCatalogRefreshOptions = {},
+): Promise<ECSTrailPack> {
   const routeId = String(typeof trailPack === 'string' ? trailPack : trailPack.id).trim();
   if (!routeId) throw new Error('Verified route detail unavailable.');
+  throwIfCatalogRequestAborted(options.signal);
+  const sourceVersion = detailSourceVersion(trailPack, options);
+  const detailKey = routeCatalogDetailKey(routeId, sourceVersion);
+  const reconciliationTarget = captureRouteCatalogDetailReconciliationTarget(routeId, sourceVersion);
 
   const nowMs = Date.now();
-  const cached = routeCatalogDetailCache.get(routeId);
+  const cached = routeCatalogDetailCache.get(detailKey);
   if (cached && nowMs - cached.storedAtMs <= ROUTE_CATALOG_DETAIL_CACHE_TTL_MS) {
-    routeCatalogDetailCache.delete(routeId);
-    routeCatalogDetailCache.set(routeId, cached);
+    routeCatalogDetailCache.delete(detailKey);
+    routeCatalogDetailCache.set(detailKey, cached);
+    reconcileRouteCatalogDetail(reconciliationTarget, cached.trailPack);
     return cached.trailPack;
   }
-  if (cached) routeCatalogDetailCache.delete(routeId);
+  if (cached) routeCatalogDetailCache.delete(detailKey);
 
-  const pending = pendingDetailRequestsByRouteId.get(routeId);
-  if (pending) return pending;
+  const pending = pendingDetailRequestsByKey.get(detailKey);
+  if (pending && !pending.controller.signal.aborted) {
+    return subscribeToSharedRequest(pending, options);
+  }
+  if (pending) pendingDetailRequestsByKey.delete(detailKey);
+
+  const lifecycle = createCatalogRequestLifecycle({ timeoutMs: options.timeoutMs });
+  const { controller } = lifecycle;
+  const generation = currentRouteCatalogDetailGeneration(routeId);
 
   const request = (async () => {
-    const { data, error } = await supabase.functions.invoke('route-catalog-detail', {
-      body: {
-        id: routeId,
-        publicId: routeId,
-        includeGeometry: true,
-        includeAssessment: true,
-        includeOfflineCache: true,
-      },
-    });
+    try {
+      throwIfCatalogRequestAborted(controller.signal);
+      const { data, error } = await awaitCatalogRequest(
+        supabase.functions.invoke('route-catalog-detail', {
+          body: {
+            id: routeId,
+            publicId: routeId,
+            includeGeometry: true,
+            includeAssessment: true,
+            includeOfflineCache: true,
+          },
+          signal: controller.signal,
+          timeout: options.timeoutMs ?? ROUTE_CATALOG_REQUEST_TIMEOUT_MS,
+        }),
+        controller.signal,
+      );
+      throwIfCatalogRequestAborted(controller.signal);
 
-    if (error) {
-      throw new Error(error.message || 'Verified route detail unavailable.');
-    }
+      if (error) {
+        throw new Error(error.message || 'Verified route detail unavailable.');
+      }
 
-    const normalized = normalizeRouteCatalogDetailResponse(
-      data,
-      typeof trailPack === 'string' ? undefined : trailPack,
-    );
-    if (!normalized) {
-      throw new Error('Verified route detail unavailable.');
-    }
+      const normalized = normalizeRouteCatalogDetailResponse(
+        data,
+        typeof trailPack === 'string' ? undefined : trailPack,
+      );
+      if (!normalized) {
+        throw new Error('Verified route detail unavailable.');
+      }
+      if (normalized.id !== routeId) {
+        throw new Error('Verified route detail identity mismatch.');
+      }
 
-    routeCatalogDetailCache.delete(routeId);
-    routeCatalogDetailCache.set(routeId, { trailPack: normalized, storedAtMs: Date.now() });
-    while (routeCatalogDetailCache.size > ROUTE_CATALOG_DETAIL_CACHE_MAX_ENTRIES) {
-      const oldestRouteId = routeCatalogDetailCache.keys().next().value;
-      if (typeof oldestRouteId !== 'string') break;
-      routeCatalogDetailCache.delete(oldestRouteId);
+      throwIfCatalogRequestAborted(controller.signal);
+      if (generation !== currentRouteCatalogDetailGeneration(routeId)) {
+        throw createCatalogAbortError('Verified route detail was superseded.');
+      }
+      routeCatalogDetailCache.delete(detailKey);
+      routeCatalogDetailCache.set(detailKey, {
+        trailPack: normalized,
+        routeId,
+        sourceVersion,
+        storedAtMs: Date.now(),
+      });
+      while (routeCatalogDetailCache.size > ROUTE_CATALOG_DETAIL_CACHE_MAX_ENTRIES) {
+        const oldestDetailKey = routeCatalogDetailCache.keys().next().value;
+        if (typeof oldestDetailKey !== 'string') break;
+        routeCatalogDetailCache.delete(oldestDetailKey);
+      }
+      reconcileRouteCatalogDetail(reconciliationTarget, normalized);
+      return normalized;
+    } catch (error) {
+      if (lifecycle.didTimeout()) {
+        const timeoutError = new Error('Verified route detail request timed out.');
+        timeoutError.name = 'TimeoutError';
+        throw timeoutError;
+      }
+      if (isCatalogAbortError(error, controller.signal)) throw createCatalogAbortError();
+      throw error;
     }
-    return normalized;
   })().finally(() => {
-    if (pendingDetailRequestsByRouteId.get(routeId) === request) {
-      pendingDetailRequestsByRouteId.delete(routeId);
+    lifecycle.cleanup();
+    if (pendingDetailRequestsByKey.get(detailKey)?.promise === request) {
+      pendingDetailRequestsByKey.delete(detailKey);
     }
   });
 
-  pendingDetailRequestsByRouteId.set(routeId, request);
-  return request;
+  const pendingEntry: PendingDetailRequest = {
+    promise: request,
+    controller,
+    routeId,
+    generation,
+    subscribers: new Set<number>(),
+    cancelWhenUnobserved: (reason) => controller.abort(reason),
+  };
+  pendingDetailRequestsByKey.set(detailKey, pendingEntry);
+  return subscribeToSharedRequest(pendingEntry, options);
 }
 
 export function invalidateRouteCatalogTrailPackDetail(routeId?: string | null): void {
   const normalizedRouteId = String(routeId ?? '').trim();
   if (normalizedRouteId) {
-    routeCatalogDetailCache.delete(normalizedRouteId);
+    routeCatalogDetailGenerations.set(
+      normalizedRouteId,
+      currentRouteCatalogDetailGeneration(normalizedRouteId) + 1,
+    );
+    routeCatalogDetailCache.forEach((entry, detailKey) => {
+      if (entry.routeId === normalizedRouteId) routeCatalogDetailCache.delete(detailKey);
+    });
+    pendingDetailRequestsByKey.forEach((entry, detailKey) => {
+      if (entry.routeId !== normalizedRouteId) return;
+      entry.controller.abort('superseded');
+      pendingDetailRequestsByKey.delete(detailKey);
+    });
     return;
   }
+  const routeIds = new Set<string>([
+    ...Array.from(routeCatalogDetailCache.values(), (entry) => entry.routeId),
+    ...Array.from(pendingDetailRequestsByKey.values(), (entry) => entry.routeId),
+  ]);
+  routeIds.forEach((id) => {
+    routeCatalogDetailGenerations.set(id, currentRouteCatalogDetailGeneration(id) + 1);
+  });
+  pendingDetailRequestsByKey.forEach((entry) => entry.controller.abort('superseded'));
+  pendingDetailRequestsByKey.clear();
   routeCatalogDetailCache.clear();
 }
 
-async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {
-  const { data, error } = await supabase
+async function fetchLegacyTrailPacks(
+  criteria: LiveTrailPackCatalogSearchCriteria,
+  options: LiveTrailPackCatalogRefreshOptions = {},
+): Promise<ECSTrailPack[]> {
+  throwIfCatalogRequestAborted(options.signal);
+  const query = supabase
     .from('trail_packs')
     .select(TRAIL_PACK_SELECT)
     .eq('review_status', 'approved')
+    .neq('source', 'partner_source')
     .order('updated_at', { ascending: false })
     .limit(200);
+  const { data, error } = await awaitCatalogRequest(
+    options.signal ? query.abortSignal(options.signal) : query,
+    options.signal,
+  );
+  throwIfCatalogRequestAborted(options.signal);
 
   if (error) {
     throw new Error(error.message || 'Live Trail Pack catalog unavailable.');
   }
 
-  return normalizeLiveTrailPackRecords(data);
+  return normalizeLiveTrailPackRecords(data)
+    .filter((trailPack) => legacyTrailPackMatchesCriteria(trailPack, criteria))
+    .map((trailPack) => ({
+      ...trailPack,
+      confidenceReasons: [
+        ...trailPack.confidenceReasons,
+        'Guidance readiness is unavailable until ECS route catalog verification succeeds.',
+      ],
+      catalogVerification: {
+        status: 'caution',
+        sourceLabel: 'Legacy Trail Pack fallback',
+        publicRecommendation: false,
+        confidenceScore: Math.min(trailPack.confidenceScore, 74),
+        warnings: ['Primary ECS route catalog verification is unavailable.'],
+        blockers: ['Verified route catalog evidence is unavailable for this fallback record.'],
+        dataUsed: [],
+        lastEvaluatedAt: trailPack.updatedAt,
+      },
+    }));
 }
 
-export async function refreshLiveTrailPackCatalog(
+export function refreshLiveTrailPackCatalog(
   criteria: LiveTrailPackCatalogSearchCriteria = {},
+  options: LiveTrailPackCatalogRefreshOptions = {},
 ): Promise<LiveTrailPackCatalogSnapshot> {
   const refreshKey = createLiveTrailPackCatalogRefreshKey(criteria);
   const pendingRefresh = pendingRefreshesByKey.get(refreshKey);
-  if (pendingRefresh) {
-    if (snapshot.status !== 'loading') {
-      setSnapshot({
-        ...snapshot,
-        status: 'loading',
-        error: null,
-      });
-    }
-    return pendingRefresh;
+  if (pendingRefresh && !pendingRefresh.controller.signal.aborted) {
+    return subscribeToSharedRequest(pendingRefresh, options, true);
   }
+  if (pendingRefresh) pendingRefreshesByKey.delete(refreshKey);
 
-  const requestId = refreshRequestSequence + 1;
-  refreshRequestSequence = requestId;
-  const loadedAt = new Date().toISOString();
-  const cachedSummarySnapshot = await readCachedRouteCatalogSummarySnapshot(criteria, refreshKey);
-  if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-  const preserveReadyDetailsDuringRevalidate =
-    snapshot.refreshKey === refreshKey && snapshot.status === 'ready' && snapshot.trailPacks.length > 0;
-  setSnapshot(
-    cachedSummarySnapshot && !preserveReadyDetailsDuringRevalidate
-      ? cachedSummarySnapshot
-      : {
-          ...snapshot,
-          status: 'loading',
-          error: null,
-          lastRefreshAttemptAt: loadedAt,
-        },
-  );
+  if (activeCatalogRefresh) {
+    const superseded = activeCatalogRefresh;
+    superseded.controller.abort('superseded');
+    if (pendingRefreshesByKey.get(superseded.refreshKey)?.promise === superseded.promise) {
+      pendingRefreshesByKey.delete(superseded.refreshKey);
+    }
+    activeCatalogRefresh = null;
+  }
+  const requestSequence = refreshRequestSequence + 1;
+  refreshRequestSequence = requestSequence;
+  const attemptedAt = new Date().toISOString();
+  const snapshotBeforeRequest = cloneLiveTrailPackCatalogSnapshot(snapshot);
+  const requestedPage = routeCatalogSearchPage(criteria.page);
+  const refreshFamily = routeCatalogRefreshFamilyKey(refreshKey);
+  const currentFamily = routeCatalogRefreshFamilyKey(snapshotBeforeRequest.refreshKey);
+  const paginationBaseSnapshot = requestedPage > 1 &&
+    refreshFamily != null &&
+    currentFamily === refreshFamily &&
+    snapshotBeforeRequest.refreshKey
+    ? snapshotBeforeRequest
+    : null;
+  const sameQuery = snapshotBeforeRequest.refreshKey === refreshKey;
+  const presentationSnapshot = paginationBaseSnapshot ?? (sameQuery ? snapshotBeforeRequest : null);
+  const presentationRefreshKey = paginationBaseSnapshot?.refreshKey ?? refreshKey;
+  const initialData = presentationSnapshot ? catalogDataFromSnapshot(presentationSnapshot) : null;
+  const initialLastGoodData = presentationSnapshot &&
+    hasUsableCatalogData(presentationSnapshot.asyncState.lastGoodData)
+      ? {
+        trailPacks: [...presentationSnapshot.asyncState.lastGoodData.trailPacks],
+        guidanceDiagnosticTrailPacks: [
+          ...presentationSnapshot.asyncState.lastGoodData.guidanceDiagnosticTrailPacks,
+        ],
+        guidanceDiagnosticRecords: [
+          ...presentationSnapshot.asyncState.lastGoodData.guidanceDiagnosticRecords,
+        ],
+        routeCatalogSummaries: [...presentationSnapshot.asyncState.lastGoodData.routeCatalogSummaries],
+      }
+    : hasUsableCatalogData(initialData)
+      ? initialData
+      : null;
+  const stateBeforeRequest: ECSAsyncSurfaceState<LiveTrailPackCatalogData> = {
+    ...(presentationSnapshot?.asyncState ?? snapshotBeforeRequest.asyncState),
+    data: initialData,
+    lastGoodData: initialLastGoodData,
+    source: initialData ? presentationSnapshot?.asyncState.source ?? 'unavailable' : 'unavailable',
+    freshness: initialData ? presentationSnapshot?.asyncState.freshness ?? 'unavailable' : 'unavailable',
+    resultCount: initialData
+      ? catalogResultCount(initialData)
+      : null,
+  };
+  const requestState = beginECSAsyncSurfaceRequest(stateBeforeRequest, {
+    fingerprintInput: buildRouteCatalogSearchBody(criteria),
+    provider: 'route-catalog-search',
+    preserveData: Boolean(presentationSnapshot),
+    preserveLastGood: Boolean(presentationSnapshot),
+  });
+  setSnapshot({
+    ...(presentationSnapshot ?? snapshotBeforeRequest),
+    trailPacks: presentationSnapshot ? presentationSnapshot.trailPacks : [],
+    guidanceDiagnosticTrailPacks: presentationSnapshot
+      ? presentationSnapshot.guidanceDiagnosticTrailPacks
+      : [],
+    guidanceDiagnosticRecords: presentationSnapshot
+      ? presentationSnapshot.guidanceDiagnosticRecords
+      : [],
+    routeCatalogSummaries: presentationSnapshot ? presentationSnapshot.routeCatalogSummaries : [],
+    status: 'loading',
+    error: null,
+    lastRefreshAttemptAt: attemptedAt,
+    refreshKey: presentationRefreshKey,
+    preservedFromEmptyRefresh: false,
+    preservedReason: null,
+    asyncState: requestState,
+  });
 
-  let routeCatalogError: Error | null = null;
+  let allConsumerCancellationReason = options.cancellationReason ?? 'consumer_cancelled';
+  const lifecycle = createCatalogRequestLifecycle({ timeoutMs: options.timeoutMs });
+  const { controller } = lifecycle;
+  const identity = {
+    requestId: requestState.requestId,
+    generation: requestState.generation,
+    requestFingerprint: requestState.requestFingerprint,
+  };
+  const isCurrent = () => requestSequence === refreshRequestSequence;
+  const settleCatalog = (args: {
+    status: 'ready' | 'empty' | 'stale' | 'degraded' | 'cancelled' | 'error';
+    data: LiveTrailPackCatalogData;
+    sourceTruth: 'live' | 'cached' | 'unavailable';
+    freshness: 'live' | 'recent' | 'stale' | 'unavailable';
+    safeErrorCode?: string | null;
+    retryEligible?: boolean;
+    cancellationReason?: ECSAsyncCancellationReason | null;
+    providerStatus?: 'active' | 'unavailable';
+    error?: string | null;
+    coverageState?: RouteCatalogCoverageState;
+    searchMeta?: RouteCatalogSearchMeta | null;
+    catalogSource?: LiveTrailPackCatalogSnapshot['source'];
+    preservedReason?: string | null;
+    loadedAt?: string | null;
+    preserveLastGood?: boolean;
+    lastGoodData?: LiveTrailPackCatalogData | null;
+  }): LiveTrailPackCatalogSnapshot => {
+    if (!isCurrent()) return liveTrailPackCatalogStore.getSnapshot();
+    const transition = settleECSAsyncSurfaceRequest(snapshot.asyncState, {
+      ...identity,
+      status: args.status,
+      data: args.data,
+      source: args.sourceTruth,
+      freshness: args.freshness,
+      safeErrorCode: args.safeErrorCode,
+      retryEligible: args.retryEligible,
+      cancellationReason: args.cancellationReason,
+      providerStatus: args.providerStatus,
+      resultCount: catalogResultCount(args.data),
+      preserveLastGood: args.preserveLastGood,
+      lastGoodData: args.lastGoodData,
+    });
+    if (!transition.applied) return liveTrailPackCatalogStore.getSnapshot();
+    const terminalSnapshot: LiveTrailPackCatalogSnapshot = {
+      trailPacks: [...args.data.trailPacks],
+      guidanceDiagnosticTrailPacks: [...args.data.guidanceDiagnosticTrailPacks],
+      guidanceDiagnosticRecords: [...args.data.guidanceDiagnosticRecords],
+      routeCatalogSummaries: [...args.data.routeCatalogSummaries],
+      status: transition.state.status,
+      error: args.error ?? null,
+      lastLoadedAt: args.loadedAt === undefined ? snapshot.lastLoadedAt : args.loadedAt,
+      lastRefreshAttemptAt: attemptedAt,
+      coverageState: args.coverageState ?? snapshot.coverageState,
+      searchMeta: args.searchMeta === undefined ? snapshot.searchMeta : args.searchMeta,
+      source: args.catalogSource ?? snapshot.source,
+      refreshKey,
+      preservedFromEmptyRefresh: Boolean(args.preservedReason),
+      preservedReason: args.preservedReason ?? null,
+      asyncState: transition.state,
+    };
+    if (paginationBaseSnapshot?.refreshKey) {
+      return setSnapshot(mergeLiveTrailPackCatalogPageSnapshots(
+        paginationBaseSnapshot,
+        terminalSnapshot,
+        paginationBaseSnapshot.refreshKey,
+      ));
+    }
+    return setSnapshot(terminalSnapshot);
+  };
 
   const refreshPromise = (async () => {
-    const stagedCriteria = stagedRouteCatalogSearchCriteria(criteria);
-    if (stagedCriteria) {
-      try {
-        const stagedRouteCatalog = await fetchRouteCatalogTrailPacks(stagedCriteria);
-        if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-        if (stagedRouteCatalog.trailPacks.length > 0) {
-          const nextSnapshot = setSnapshot({
-            trailPacks: stagedRouteCatalog.trailPacks,
-            routeCatalogSummaries: routeCatalogSummariesFromTrailPacks(stagedRouteCatalog.trailPacks),
-            status: 'ready',
-            error: null,
-            lastLoadedAt: loadedAt,
-            lastRefreshAttemptAt: loadedAt,
-            coverageState: stagedRouteCatalog.coverageState,
-            searchMeta: stagedRouteCatalog.searchMeta,
-            source: 'route_catalog',
-            refreshKey,
-            preservedFromEmptyRefresh: false,
-            preservedReason: null,
-          });
-          writeRouteCatalogSummaryCache(stagedCriteria, nextSnapshot);
+    let primaryFailureSafeCode = 'ROUTE_CATALOG_PROVIDER_UNAVAILABLE';
+    try {
+      let cachedSummarySnapshot: LiveTrailPackCatalogSnapshot | null = null;
+      if (!paginationBaseSnapshot) {
+        try {
+          cachedSummarySnapshot = await readCachedRouteCatalogSummarySnapshot(criteria, refreshKey);
+        } catch {
+          cachedSummarySnapshot = null;
         }
-      } catch {
-        if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
       }
-    }
-
-    try {
-      const routeCatalog = await fetchRouteCatalogTrailPacks(criteria);
-      if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-      if (routeCatalog.trailPacks.length === 0) {
-        const preserved = preserveSnapshotForEmptyRefresh({
-          refreshKey,
-          attemptedAt: loadedAt,
-          reason: 'same_query_route_catalog_empty',
-          error:
-            routeCatalog.coverageState.state === 'no_verified_routes'
-              ? routeCatalog.coverageState.message
-              : null,
+      throwIfCatalogRequestAborted(controller.signal);
+      if (!isCurrent()) return liveTrailPackCatalogStore.getSnapshot();
+      if (cachedSummarySnapshot && snapshot.trailPacks.length === 0) {
+        const cachedData: LiveTrailPackCatalogData = {
+          trailPacks: [],
+          guidanceDiagnosticTrailPacks: [],
+          guidanceDiagnosticRecords: [],
+          routeCatalogSummaries: cachedSummarySnapshot.routeCatalogSummaries,
+        };
+        setSnapshot({
+          ...cachedSummarySnapshot,
+          status: 'loading',
+          lastRefreshAttemptAt: attemptedAt,
+          asyncState: {
+            ...snapshot.asyncState,
+            data: cachedData,
+            lastGoodData: cachedData,
+            source: 'cached',
+            freshness: 'stale',
+            resultCount: cachedData.routeCatalogSummaries.length,
+          },
         });
-        if (preserved) return preserved;
       }
-      const nextSnapshot = setSnapshot({
-        trailPacks: routeCatalog.trailPacks,
-        routeCatalogSummaries: routeCatalogSummariesFromTrailPacks(routeCatalog.trailPacks),
-        status: 'ready',
-        error: null,
-        lastLoadedAt: loadedAt,
-        lastRefreshAttemptAt: loadedAt,
-        coverageState: routeCatalog.coverageState,
-        searchMeta: routeCatalog.searchMeta,
-        source: 'route_catalog',
-        refreshKey,
-        preservedFromEmptyRefresh: false,
-        preservedReason: null,
-      });
-      writeRouteCatalogSummaryCache(criteria, nextSnapshot);
-      return nextSnapshot;
-    } catch (error) {
-      if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-      routeCatalogError = error instanceof Error ? error : new Error('Verified route catalog unavailable.');
-      const preserved = preserveSnapshotForEmptyRefresh({
-        refreshKey,
-        attemptedAt: loadedAt,
-        reason: 'same_query_route_catalog_unavailable',
-        error: routeCatalogError.message,
-      });
-      if (preserved) return preserved;
-    }
 
-    try {
-      const legacyTrailPacks = await fetchLegacyTrailPacks();
-      if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-      if (legacyTrailPacks.length === 0) {
-        const preserved = preserveSnapshotForEmptyRefresh({
-          refreshKey,
-          attemptedAt: loadedAt,
-          reason: 'same_query_fallback_empty',
-          error: routeCatalogError.message,
-        });
-        if (preserved) return preserved;
+      const stagedCriteria = paginationBaseSnapshot ? null : stagedRouteCatalogSearchCriteria(criteria);
+      if (stagedCriteria) {
+        try {
+          const staged = await fetchRouteCatalogTrailPacks(stagedCriteria, {
+            signal: controller.signal,
+            timeoutMs: options.timeoutMs,
+          });
+          throwIfCatalogRequestAborted(controller.signal);
+          if (!isCurrent()) return liveTrailPackCatalogStore.getSnapshot();
+          if (
+            staged.trailPacks.length > 0 ||
+            staged.guidanceDiagnosticTrailPacks.length > 0 ||
+            staged.guidanceDiagnosticRecords.length > 0
+          ) {
+            const stagedData: LiveTrailPackCatalogData = {
+              trailPacks: staged.trailPacks,
+              guidanceDiagnosticTrailPacks: staged.guidanceDiagnosticTrailPacks,
+              guidanceDiagnosticRecords: staged.guidanceDiagnosticRecords,
+              routeCatalogSummaries: routeCatalogSummariesFromTrailPacks(staged.trailPacks),
+            };
+            const stagedSnapshot = setSnapshot({
+              trailPacks: stagedData.trailPacks,
+              guidanceDiagnosticTrailPacks: stagedData.guidanceDiagnosticTrailPacks,
+              guidanceDiagnosticRecords: stagedData.guidanceDiagnosticRecords,
+              routeCatalogSummaries: stagedData.routeCatalogSummaries,
+              status: 'loading',
+              error: null,
+              lastLoadedAt: attemptedAt,
+              lastRefreshAttemptAt: attemptedAt,
+              coverageState: staged.coverageState,
+              searchMeta: staged.searchMeta,
+              source: 'route_catalog',
+              refreshKey,
+              preservedFromEmptyRefresh: false,
+              preservedReason: 'staged_result_revalidate',
+              asyncState: {
+                ...snapshot.asyncState,
+                data: stagedData,
+                lastGoodData: stagedData,
+                source: 'live',
+                freshness: 'recent',
+                resultCount: catalogResultCount(stagedData),
+              },
+            });
+            writeRouteCatalogSummaryCache(stagedCriteria, stagedSnapshot);
+          }
+        } catch (error) {
+          if (isCatalogAbortError(error, controller.signal)) throw error;
+          if (!isCurrent()) return liveTrailPackCatalogStore.getSnapshot();
+        }
       }
-      const nextSnapshot = setSnapshot({
-        trailPacks: legacyTrailPacks,
-        routeCatalogSummaries: routeCatalogSummariesFromTrailPacks(legacyTrailPacks),
-        status: 'ready',
-        error: routeCatalogError.message,
-        lastLoadedAt: loadedAt,
-        lastRefreshAttemptAt: loadedAt,
-        coverageState: getRouteCatalogCoverageState(legacyTrailPacks, { userHasCriteria: false }),
-        searchMeta: null,
-        source: 'trail_packs_fallback',
-        refreshKey,
-        preservedFromEmptyRefresh: false,
-        preservedReason: null,
-      });
-      writeRouteCatalogSummaryCache(criteria, nextSnapshot);
-      return nextSnapshot;
-    } catch (error) {
-      if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-      const errorMessage = error instanceof Error ? error.message : routeCatalogError.message;
-      const preserved = preserveSnapshotForEmptyRefresh({
-        refreshKey,
-        attemptedAt: loadedAt,
-        reason: 'same_query_refresh_unavailable',
-        error: errorMessage,
-      });
-      if (preserved) return preserved;
-      return setSnapshot({
-        trailPacks: [],
-        routeCatalogSummaries: [],
+
+      try {
+        const routeCatalog = await fetchRouteCatalogTrailPacks(criteria, {
+          signal: controller.signal,
+          timeoutMs: options.timeoutMs,
+        });
+        throwIfCatalogRequestAborted(controller.signal);
+        if (!isCurrent()) return liveTrailPackCatalogStore.getSnapshot();
+        const liveData: LiveTrailPackCatalogData = {
+          trailPacks: routeCatalog.trailPacks,
+          guidanceDiagnosticTrailPacks: routeCatalog.guidanceDiagnosticTrailPacks,
+          guidanceDiagnosticRecords: routeCatalog.guidanceDiagnosticRecords,
+          routeCatalogSummaries: routeCatalogSummariesFromTrailPacks(routeCatalog.trailPacks),
+        };
+        const hasProviderResults = catalogResultCount(liveData) > 0;
+        const hasInvalidProviderRecords =
+          (routeCatalog.searchMeta.clientInvalidRecordCount ?? 0) > 0;
+        const nextSnapshot = settleCatalog({
+          status: hasProviderResults
+            ? hasInvalidProviderRecords
+              ? 'degraded'
+              : 'ready'
+            : 'empty',
+          data: liveData,
+          sourceTruth: 'live',
+          freshness: hasInvalidProviderRecords ? 'recent' : 'live',
+          safeErrorCode: hasInvalidProviderRecords
+            ? 'ROUTE_CATALOG_PARTIAL_INVALID_RESPONSE'
+            : null,
+          retryEligible: hasInvalidProviderRecords,
+          providerStatus: 'active',
+          error: hasInvalidProviderRecords
+            ? 'Some route records were invalid and excluded. Valid verified routes remain available.'
+            : null,
+          coverageState: routeCatalog.coverageState,
+          searchMeta: routeCatalog.searchMeta,
+          catalogSource: 'route_catalog',
+          loadedAt: attemptedAt,
+          preserveLastGood: hasProviderResults,
+          lastGoodData: hasProviderResults ? liveData : null,
+        });
+        writeRouteCatalogSummaryCache(criteria, nextSnapshot);
+        return nextSnapshot;
+      } catch (routeCatalogError) {
+        if (isCatalogAbortError(routeCatalogError, controller.signal)) throw routeCatalogError;
+        if (routeCatalogError instanceof InvalidRouteCatalogSearchResponseError) {
+          primaryFailureSafeCode = 'ROUTE_CATALOG_INVALID_RESPONSE';
+        }
+      }
+
+      if (routeCatalogSearchPage(criteria.page) > 1) {
+        const paginationFailureData: LiveTrailPackCatalogData = {
+          trailPacks: [],
+          guidanceDiagnosticTrailPacks: [],
+          guidanceDiagnosticRecords: [],
+          routeCatalogSummaries: [],
+        };
+        return settleCatalog({
+          status: 'error',
+          data: paginationFailureData,
+          sourceTruth: 'unavailable',
+          freshness: 'unavailable',
+          safeErrorCode: primaryFailureSafeCode,
+          retryEligible: true,
+          providerStatus: 'unavailable',
+          error: 'The next verified route catalog page is unavailable.',
+          catalogSource: 'unavailable',
+          preserveLastGood: false,
+          lastGoodData: null,
+        });
+      }
+
+      try {
+        const legacyTrailPacks = await fetchLegacyTrailPacks(criteria, { signal: controller.signal });
+        throwIfCatalogRequestAborted(controller.signal);
+        if (!isCurrent()) return liveTrailPackCatalogStore.getSnapshot();
+        if (legacyTrailPacks.length > 0) {
+          const fallbackData: LiveTrailPackCatalogData = {
+            trailPacks: legacyTrailPacks,
+            guidanceDiagnosticTrailPacks: [],
+            guidanceDiagnosticRecords: [],
+            routeCatalogSummaries: routeCatalogSummariesFromTrailPacks(legacyTrailPacks),
+          };
+          const nextSnapshot = settleCatalog({
+            status: 'degraded',
+            data: fallbackData,
+            sourceTruth: 'live',
+            freshness: 'recent',
+            safeErrorCode: primaryFailureSafeCode === 'ROUTE_CATALOG_INVALID_RESPONSE'
+              ? primaryFailureSafeCode
+              : 'ROUTE_CATALOG_PRIMARY_UNAVAILABLE',
+            retryEligible: true,
+            providerStatus: 'unavailable',
+            error: 'Verified routes are temporarily unavailable. Showing the labeled fallback catalog.',
+            coverageState: getRouteCatalogCoverageState(legacyTrailPacks, { userHasCriteria: false }),
+            searchMeta: null,
+            catalogSource: 'trail_packs_fallback',
+            preservedReason: 'primary_provider_unavailable',
+            loadedAt: attemptedAt,
+          });
+          writeRouteCatalogSummaryCache(criteria, nextSnapshot);
+          return nextSnapshot;
+        }
+      } catch (legacyError) {
+        if (isCatalogAbortError(legacyError, controller.signal)) throw legacyError;
+      }
+
+      const lastGoodData = hasUsableCatalogData(snapshot.asyncState.lastGoodData)
+        ? snapshot.asyncState.lastGoodData
+        : null;
+      if (lastGoodData && catalogResultCount(lastGoodData) > 0) {
+        return settleCatalog({
+          status: 'stale',
+          data: lastGoodData,
+          sourceTruth: snapshot.asyncState.source === 'cached' ? 'cached' : 'live',
+          freshness: 'stale',
+          safeErrorCode: primaryFailureSafeCode,
+          retryEligible: true,
+          providerStatus: 'unavailable',
+          error: 'Live route updates are unavailable. Showing the last known catalog.',
+          catalogSource: snapshot.source,
+          preservedReason: 'same_query_refresh_unavailable',
+        });
+      }
+      return settleCatalog({
         status: 'error',
-        error: errorMessage,
-        lastLoadedAt: loadedAt,
-        lastRefreshAttemptAt: loadedAt,
+        data: {
+          trailPacks: [],
+          guidanceDiagnosticTrailPacks: [],
+          guidanceDiagnosticRecords: [],
+          routeCatalogSummaries: [],
+        },
+        sourceTruth: 'unavailable',
+        freshness: 'unavailable',
+        safeErrorCode: primaryFailureSafeCode,
+        retryEligible: true,
+        providerStatus: 'unavailable',
+        error: 'Verified route catalog is temporarily unavailable.',
         coverageState: getRouteCatalogCoverageState([], { unavailable: true }),
         searchMeta: null,
-        source: 'unavailable',
-        refreshKey,
-        preservedFromEmptyRefresh: false,
-        preservedReason: null,
+        catalogSource: 'unavailable',
+      });
+    } catch (error) {
+      if (!isCurrent()) return liveTrailPackCatalogStore.getSnapshot();
+      const lastGoodData = hasUsableCatalogData(snapshot.asyncState.lastGoodData)
+        ? snapshot.asyncState.lastGoodData
+        : null;
+      if (lifecycle.didTimeout()) {
+        return settleCatalog({
+          status: lastGoodData ? 'stale' : 'error',
+          data: lastGoodData ?? {
+            trailPacks: [],
+            guidanceDiagnosticTrailPacks: [],
+            guidanceDiagnosticRecords: [],
+            routeCatalogSummaries: [],
+          },
+          sourceTruth: lastGoodData ? (snapshot.asyncState.source === 'cached' ? 'cached' : 'live') : 'unavailable',
+          freshness: lastGoodData ? 'stale' : 'unavailable',
+          safeErrorCode: 'ROUTE_CATALOG_TIMEOUT',
+          retryEligible: true,
+          providerStatus: 'unavailable',
+          error: lastGoodData
+            ? 'Route catalog refresh timed out. Showing the last known catalog.'
+            : 'Route catalog request timed out.',
+          catalogSource: lastGoodData ? snapshot.source : 'unavailable',
+          preservedReason: lastGoodData ? 'timeout_last_good' : null,
+        });
+      }
+      if (isCatalogAbortError(error, controller.signal)) {
+        const cancellationReason = allConsumerCancellationReason;
+        const transition = cancelECSAsyncSurfaceRequest(snapshot.asyncState, {
+          ...identity,
+          reason: cancellationReason,
+        });
+        if (!transition.applied) return liveTrailPackCatalogStore.getSnapshot();
+        const cancelledData = transition.state.data;
+        const cancelledState = {
+          ...transition.state,
+          resultCount: cancelledData ? catalogResultCount(cancelledData) : 0,
+        };
+        return setSnapshot({
+          ...snapshot,
+          status: 'cancelled',
+          error: 'Route catalog update was cancelled.',
+          lastRefreshAttemptAt: attemptedAt,
+          preservedFromEmptyRefresh: hasUsableCatalogData(cancelledData),
+          preservedReason: cancellationReason,
+          asyncState: cancelledState,
+        });
+      }
+      return settleCatalog({
+        status: 'error',
+        data: {
+          trailPacks: [],
+          guidanceDiagnosticTrailPacks: [],
+          guidanceDiagnosticRecords: [],
+          routeCatalogSummaries: [],
+        },
+        sourceTruth: 'unavailable',
+        freshness: 'unavailable',
+        safeErrorCode: 'ROUTE_CATALOG_UNEXPECTED',
+        retryEligible: true,
+        providerStatus: 'unavailable',
+        error: 'Verified route catalog is temporarily unavailable.',
+        coverageState: getRouteCatalogCoverageState([], { unavailable: true }),
+        searchMeta: null,
+        catalogSource: 'unavailable',
       });
     }
   })().finally(() => {
-    pendingRefreshesByKey.delete(refreshKey);
+    lifecycle.cleanup();
+    if (pendingRefreshesByKey.get(refreshKey)?.promise === refreshPromise) {
+      pendingRefreshesByKey.delete(refreshKey);
+    }
+    if (activeCatalogRefresh?.promise === refreshPromise) activeCatalogRefresh = null;
   });
 
-  pendingRefreshesByKey.set(refreshKey, refreshPromise);
-  return refreshPromise;
+  const pendingEntry: PendingCatalogRefresh = {
+    promise: refreshPromise,
+    controller,
+    requestSequence,
+    subscribers: new Set<number>(),
+    cancelWhenUnobserved: (reason) => {
+      allConsumerCancellationReason = reason;
+      controller.abort(reason);
+    },
+  };
+  pendingRefreshesByKey.set(refreshKey, pendingEntry);
+  activeCatalogRefresh = { ...pendingEntry, refreshKey };
+  return subscribeToSharedRequest(pendingEntry, options, true);
+}
+
+export function setLiveTrailPackCatalogDisabled(args: {
+  reason: 'feature_disabled' | 'permission_denied' | 'provider_disabled' | 'invalid_input';
+  safeErrorCode: string;
+  message: string;
+}): LiveTrailPackCatalogSnapshot {
+  activeCatalogRefresh?.controller.abort(args.reason);
+  activeCatalogRefresh = null;
+  refreshRequestSequence += 1;
+  const asyncState = disableECSAsyncSurface(snapshot.asyncState, {
+    reason: args.reason,
+    safeErrorCode: args.safeErrorCode,
+    providerStatus: args.reason === 'permission_denied' ? 'permission_denied' : 'disabled',
+  });
+  return setSnapshot({
+    ...snapshot,
+    status: 'disabled',
+    error: args.message,
+    lastRefreshAttemptAt: new Date().toISOString(),
+    preservedFromEmptyRefresh: Boolean(asyncState.data),
+    preservedReason: args.reason,
+    asyncState,
+  });
 }
 
 export const liveTrailPackCatalogStore = {
   getSnapshot(): LiveTrailPackCatalogSnapshot {
     return {
       trailPacks: [...snapshot.trailPacks],
+      guidanceDiagnosticTrailPacks: [...snapshot.guidanceDiagnosticTrailPacks],
+      guidanceDiagnosticRecords: [...snapshot.guidanceDiagnosticRecords],
       routeCatalogSummaries: [...snapshot.routeCatalogSummaries],
       status: snapshot.status,
       error: snapshot.error,
@@ -1094,6 +2385,33 @@ export const liveTrailPackCatalogStore = {
       refreshKey: snapshot.refreshKey,
       preservedFromEmptyRefresh: snapshot.preservedFromEmptyRefresh,
       preservedReason: snapshot.preservedReason,
+      asyncState: {
+        ...snapshot.asyncState,
+        data: snapshot.asyncState.data
+          ? {
+              trailPacks: [...snapshot.asyncState.data.trailPacks],
+              guidanceDiagnosticTrailPacks: [
+                ...snapshot.asyncState.data.guidanceDiagnosticTrailPacks,
+              ],
+              guidanceDiagnosticRecords: [
+                ...snapshot.asyncState.data.guidanceDiagnosticRecords,
+              ],
+              routeCatalogSummaries: [...snapshot.asyncState.data.routeCatalogSummaries],
+            }
+          : null,
+        lastGoodData: snapshot.asyncState.lastGoodData
+          ? {
+              trailPacks: [...snapshot.asyncState.lastGoodData.trailPacks],
+              guidanceDiagnosticTrailPacks: [
+                ...snapshot.asyncState.lastGoodData.guidanceDiagnosticTrailPacks,
+              ],
+              guidanceDiagnosticRecords: [
+                ...snapshot.asyncState.lastGoodData.guidanceDiagnosticRecords,
+              ],
+              routeCatalogSummaries: [...snapshot.asyncState.lastGoodData.routeCatalogSummaries],
+            }
+          : null,
+      },
     };
   },
 
@@ -1103,4 +2421,5 @@ export const liveTrailPackCatalogStore = {
   },
 
   refresh: refreshLiveTrailPackCatalog,
+  disable: setLiveTrailPackCatalogDisabled,
 };

@@ -63,6 +63,13 @@ export type AddActiveGuidanceExtensionAnchorInput = AddAnchorToDraftInput & {
   activeRouteEnd?: NavigateRouteCoordinate | null;
 };
 
+export type NavigateRouteGeometryRole =
+  | 'raw_user_draft'
+  | 'snapped_draft'
+  | 'finalized_route'
+  | 'preview_route'
+  | 'active_guidance_route';
+
 export type RouteBuilderSegmentFromDraft = {
   id: string;
   coordinates: [number, number][];
@@ -70,12 +77,19 @@ export type RouteBuilderSegmentFromDraft = {
   snappedSegment: [number, number][];
   snapConfidence: 'high' | 'medium' | 'low' | null;
   snapSource: string | null;
-  snapStatus: 'snapped';
-  snapProvider: 'ecs_route_geometry' | 'rendered_features';
+  snapStatus: 'snapped' | 'blocked';
+  snapProvider: 'ecs_route_geometry' | 'rendered_features' | null;
   snapProfile: null;
   snapMessage: string | null;
   sourceSegmentId: string | null;
-  buildSource: { kind: string; sourceLabel: string | null; confidence: string | null } | null;
+  buildSource: {
+    kind: string;
+    sourceLabel: string;
+    confidence: string;
+    warnings?: string[];
+  } | null;
+  geometryRole: Extract<NavigateRouteGeometryRole, 'raw_user_draft' | 'snapped_draft'>;
+  provisional: boolean;
 };
 
 const EARTH_RADIUS_MI = 3958.8;
@@ -817,52 +831,98 @@ export function clearNavigateRouteDraft(_draft?: NavigateRouteDraft): NavigateRo
   return createNavigateRouteDraft();
 }
 
+function buildSnappedRouteBuilderSegment(
+  draft: NavigateRouteDraft,
+  leg: NavigateRouteLeg,
+): RouteBuilderSegmentFromDraft {
+  const coordinates = leg.coordinates.map((point) => [point.longitude, point.latitude] as [number, number]);
+  const sourceLabel =
+    leg.sourceLabel ??
+    (leg.provider === 'rendered_features' ? 'Visible routeable geometry' : 'ECS route geometry');
+  const snapProvider = leg.provider === 'rendered_features' ? 'rendered_features' : 'ecs_route_geometry';
+  const fromAnchor = draft.anchors.find((anchor) => anchor.id === leg.fromAnchorId) ?? null;
+  const isActiveGuidanceExtension = fromAnchor?.role === 'active_guidance_end';
+  return {
+    id: `route-builder-${leg.id}`,
+    coordinates,
+    rawSegment: coordinates,
+    snappedSegment: coordinates,
+    snapConfidence: leg.confidence === 'unknown' ? 'medium' : leg.confidence,
+    snapSource: leg.provider === 'rendered_features' ? sourceLabel : 'route_geometry_overlay',
+    snapStatus: 'snapped',
+    snapProvider,
+    snapProfile: null,
+    snapMessage:
+      leg.provider === 'rendered_features'
+        ? 'Snapped to visible routeable map geometry. Verify access, closures, and posted rules before travel.'
+        : 'ECS route geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.',
+    sourceSegmentId: leg.sourceSegmentId,
+    buildSource: {
+      kind: isActiveGuidanceExtension
+        ? 'active_guidance_extension'
+        : leg.provider === 'rendered_features'
+          ? 'rendered_routeable_geometry'
+          : 'ecs_route_geometry',
+      sourceLabel: isActiveGuidanceExtension
+        ? `Active guidance extension via ${sourceLabel}`
+        : sourceLabel,
+      confidence: 'planning_geometry',
+      warnings: isActiveGuidanceExtension
+        ? [
+            'Operator-added extension beyond the original active guidance. Verify access, closures, and posted rules.',
+          ]
+        : undefined,
+    },
+    geometryRole: 'snapped_draft',
+    provisional: false,
+  };
+}
+
 export function buildRouteBuilderSegmentsFromDraft(
   draft: NavigateRouteDraft,
 ): RouteBuilderSegmentFromDraft[] {
   return draft.legs
     .filter((leg) => leg.status === 'snapped' && leg.coordinates.length >= 2)
-    .map((leg) => {
-      const coordinates = leg.coordinates.map((point) => [point.longitude, point.latitude] as [number, number]);
-      const sourceLabel =
-        leg.sourceLabel ??
-        (leg.provider === 'rendered_features' ? 'Visible routeable geometry' : 'ECS route geometry');
-      const snapProvider = leg.provider === 'rendered_features' ? 'rendered_features' : 'ecs_route_geometry';
-      const fromAnchor = draft.anchors.find((anchor) => anchor.id === leg.fromAnchorId) ?? null;
-      const isActiveGuidanceExtension = fromAnchor?.role === 'active_guidance_end';
-      return {
-        id: `route-builder-${leg.id}`,
-        coordinates,
-        rawSegment: coordinates,
-        snappedSegment: coordinates,
-        snapConfidence: leg.confidence === 'unknown' ? 'medium' : leg.confidence,
-        snapSource: leg.provider === 'rendered_features' ? sourceLabel : 'route_geometry_overlay',
-        snapStatus: 'snapped',
-        snapProvider,
-        snapProfile: null,
-        snapMessage:
-          leg.provider === 'rendered_features'
-            ? 'Snapped to visible routeable map geometry. Verify access, closures, and posted rules before travel.'
-            : 'ECS route geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.',
-        sourceSegmentId: leg.sourceSegmentId,
-        buildSource: {
-          kind: isActiveGuidanceExtension
-            ? 'active_guidance_extension'
-            : leg.provider === 'rendered_features'
-              ? 'rendered_routeable_geometry'
-              : 'ecs_route_geometry',
-          sourceLabel: isActiveGuidanceExtension
-            ? `Active guidance extension via ${sourceLabel}`
-            : sourceLabel,
-          confidence: 'planning_geometry',
-          warnings: isActiveGuidanceExtension
-            ? [
-                'Operator-added extension beyond the original active guidance. Verify access, closures, and posted rules.',
-              ]
-            : undefined,
-        },
-      };
-    });
+    .map((leg) => buildSnappedRouteBuilderSegment(draft, leg));
+}
+
+export function buildRouteBuilderPresentationSegmentsFromDraft(
+  draft: NavigateRouteDraft,
+): RouteBuilderSegmentFromDraft[] {
+  return draft.legs.flatMap((leg) => {
+    const coordinates = leg.coordinates
+      .map(normalizeCoordinate)
+      .filter((point): point is NavigateRouteCoordinate => !!point)
+      .map((point) => [point.longitude, point.latitude] as [number, number]);
+    if (coordinates.length < 2) return [];
+    if (leg.status === 'snapped') return [buildSnappedRouteBuilderSegment(draft, leg)];
+
+    return [{
+      id: `route-builder-${leg.id}`,
+      coordinates,
+      rawSegment: coordinates,
+      snappedSegment: [],
+      snapConfidence: null,
+      snapSource: 'operator_draft',
+      snapStatus: 'blocked',
+      snapProvider: null,
+      snapProfile: null,
+      snapMessage:
+        leg.unavailableReason ??
+        'Unsnapped operator draft. Link this leg to loaded routeable geometry before saving or starting guidance.',
+      sourceSegmentId: null,
+      buildSource: {
+        kind: 'operator_draft',
+        sourceLabel: 'Operator draft — unverified',
+        confidence: 'unknown',
+        warnings: [
+          'Unsnapped operator draft. This line is not verified, routable, legal, or guidance-ready.',
+        ],
+      },
+      geometryRole: 'raw_user_draft',
+      provisional: true,
+    }];
+  });
 }
 
 export function resolveNearestNavigateRouteAnchor(

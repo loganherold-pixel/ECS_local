@@ -1,12 +1,14 @@
 # ECS Dispatch Post-Launch Monitoring Checklist
 
-Last updated: 2026-04-24
+Last updated: 2026-07-15
 
 ## Purpose
 
 Use this checklist after Dispatch launch to watch reliability, data integrity, offline behavior, realtime consistency, permissions, notification control, safety language, and support impact.
 
 Dispatch emergency and assist behavior is ECS team coordination only. Dispatch does not contact emergency services, SMS, email, or phone services unless a future external communication path is explicitly implemented, verified, and enabled.
+
+Canonical runtime note: `app/(tabs)/alert.tsx` imports `components/dispatch/DispatchCommandCenter.tsx`, which is the stable entry for the single implementation in `DispatchCadCommandCenter.tsx`. Diagnose mounted behavior in the latter; do not restore a second divergent command center.
 
 ## Monitoring Checklist
 

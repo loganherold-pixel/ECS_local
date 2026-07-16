@@ -53,6 +53,7 @@ import { tileCacheStore } from '../lib/tileCacheStore';
 import { expeditionStateStore } from '../lib/expeditionStateStore';
 import { missionExpeditionStore } from '../lib/missionStore';
 import { routeStore } from '../lib/routeStore';
+import { startSharedWeatherBriefPublication } from '../lib/weatherBriefPublicationCoordinator';
 import { automotiveRuntimeCoordinator } from '../lib/automotive/automotiveRuntimeCoordinator';
 import {
   flushQueuedIssueEvents,
@@ -2186,6 +2187,8 @@ export default function RootLayout() {
     ecsLog.debug('SHELL', '[RootLayout] Timeline Intelligence Engine auto-monitor initialized');
     return cleanup;
   }, []);
+
+  useEffect(() => startSharedWeatherBriefPublication(), []);
 
   useEffect(() => {
     void restoreUnifiedDeviceSessions();

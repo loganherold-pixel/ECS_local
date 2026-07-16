@@ -319,6 +319,28 @@ function sanitizeWeatherText(value: string | null): string | null {
     .replace(/\uFFFD/g, '');
 }
 
+function resolveWeatherProviderIdentity(provider: string | null | undefined): {
+  id: string;
+  name: string;
+} {
+  const safeProvider = sanitizeWeatherText(
+    typeof provider === 'string' ? provider.trim() : null,
+  );
+  if (!safeProvider) {
+    return { id: 'ecs_weather', name: 'ECS Weather Pipeline' };
+  }
+  const normalized = safeProvider.toLowerCase();
+  if (normalized.includes('openweather')) {
+    return {
+      id: safeProvider,
+      name: normalized.includes('one_call_3') || normalized.includes('one call 3')
+        ? 'OpenWeather One Call 3.0'
+        : 'OpenWeather',
+    };
+  }
+  return { id: safeProvider, name: safeProvider };
+}
+
 function isMeaningfulCurrent(current: WaypointWeather['current'] | null): boolean {
   if (!current) return false;
   return (
@@ -557,6 +579,7 @@ export function buildECSWeatherSnapshot(params: {
   const fetchedAt = result?.data.fetched_at ?? null;
   const current = raw?.current ?? null;
   const units = result?.data.units === 'metric' ? 'metric' : 'imperial';
+  const providerIdentity = resolveWeatherProviderIdentity(result?.data.provider);
   const currentTemperatureF = normalizeWeatherTemperatureF(current, units);
   const currentFeelsLikeF = normalizeFeelsLikeF(current, units);
   const hasLiveCurrent = isMeaningfulCurrent(current);
@@ -637,8 +660,8 @@ export function buildECSWeatherSnapshot(params: {
     fetchedAt,
     sourceType: effectiveSourceType,
     provider: {
-      id: 'ecs_weather',
-      name: 'ECS Weather Pipeline',
+      id: providerIdentity.id,
+      name: providerIdentity.name,
       source: result?.source ?? null,
       units,
     },

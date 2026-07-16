@@ -55,13 +55,18 @@ assertIncludes(
 );
 assertIncludes(
   useOperationalWeather,
-  "if (!force && cached?.source === 'cache_fresh')",
-  'Shared operational weather should skip live fetches when fresh cache satisfies the request.',
+  'void waitForWeatherCacheHydration()',
+  'Shared operational weather should revisit cache state after native persistence hydration completes.',
 );
 assertIncludes(
   useOperationalWeather,
-  "setSharedWeatherState(cached, cached.source !== 'cache_fresh', target, freshnessWindowMs);",
-  'Shared operational weather consumers should receive cached weather immediately while marking stale cache as loading.',
+  'const shouldForceRefresh = force || !hasFreshLiveResult',
+  'A hydrated cache must not suppress the first eligible live provider refresh.',
+);
+assertIncludes(
+  useOperationalWeather,
+  'setSharedWeatherState(cached, true, target, freshnessWindowMs);',
+  'Shared operational weather should present hydrated cache while its live refresh is loading.',
 );
 assertIncludes(
   useOperationalWeather,

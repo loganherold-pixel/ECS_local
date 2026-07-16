@@ -433,7 +433,7 @@ assert(
 assert(!discover.includes('testID="explore-primary-tab-control"'), 'Explore should not render the legacy primary tab control.');
 assertIncludes(discover, 'ExploreTripBuilderWizardRouteCard', 'Explore should expose Build Trip directly on guidance-ready route cards.');
 assertIncludes(discover, 'handleBuildTripFromExploreWizardCandidate', 'Explore wizard cards should save and route into Trip Builder.');
-assertIncludes(discover, 'exploreSuggestedRouteOptions', 'Trip Builder tab should use current Suggested Routes filter context.');
+assertIncludes(discover, 'canonicalExplorePlanningRoutes', 'Trip Builder should use the canonical Guidance Ready inventory context.');
 assertIncludes(discover, 'saveExplorePlanningRouteContext({', 'Explore should save filtered routes for Trip Builder.');
 assertIncludes(discover, 'handleBuildTripFromRoute(selectedOpportunity)', 'Selected route details entry');
 assertIncludes(discover, 'stageTripBuilderItineraryHandoff(op);', 'Selected route analysis should prepare a Trip Builder itinerary draft');

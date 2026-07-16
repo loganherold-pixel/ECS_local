@@ -51,9 +51,20 @@ const commandCenterSource = fs.readFileSync(
 );
 const liveEventsSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchLiveEvents.ts'), 'utf8');
 const persistenceSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchPersistenceAdapter.ts'), 'utf8');
+const persistenceProjectionSource = fs.readFileSync(
+  path.join(process.cwd(), 'lib/dispatchPersistenceEventProjection.ts'),
+  'utf8',
+);
+const backendSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchCadEventBackendAdapter.ts'), 'utf8');
 
 const { normalizeDispatchEvent } = loadTypeScriptModule('lib/dispatchLiveEvents.ts');
 const { dispatchPersistenceAdapter } = loadTypeScriptModule('lib/dispatchPersistenceAdapter.ts');
+const { dispatchEventStore } = loadTypeScriptModule('lib/dispatchEventStore.ts');
+const {
+  getDispatchPersistenceProjectionDiagnostics,
+  resolveDispatchLocalPersistenceId,
+  subscribeDispatchPersistenceCadEvents,
+} = loadTypeScriptModule('lib/dispatchPersistenceEventProjection.ts');
 
 const defaults = {
   pings: [],
@@ -134,6 +145,26 @@ snapshot = dispatchPersistenceAdapter.load(expeditionId, defaults);
 assert.strictEqual(snapshot.cadEvents.length, 1, 'Stable dedupe key should collapse duplicate local CAD events.');
 assert.strictEqual(snapshot.cadEvents[0].id, duplicateByStableIdentity.id, 'Latest duplicate event should replace the older stored copy.');
 
+const freshnessExpeditionId = `${expeditionId}-freshness`;
+const newestEvent = createLocalCadEvent({
+  id: 'freshness-event',
+  message: 'Newest accepted state.',
+  timestamp: '2026-05-04T19:05:00Z',
+  updatedAt: '2026-05-04T19:05:00Z',
+  dedupeKey: 'freshness-event',
+});
+const staleEvent = createLocalCadEvent({
+  id: 'freshness-event',
+  message: 'Stale response that arrived last.',
+  timestamp: '2026-05-04T19:04:00Z',
+  updatedAt: '2026-05-04T19:04:00Z',
+  dedupeKey: 'freshness-event',
+});
+dispatchPersistenceAdapter.upsertCadEvent(freshnessExpeditionId, defaults, newestEvent);
+dispatchPersistenceAdapter.upsertCadEvent(freshnessExpeditionId, defaults, staleEvent);
+snapshot = dispatchPersistenceAdapter.load(freshnessExpeditionId, defaults);
+assert.strictEqual(snapshot.cadEvents[0].message, 'Newest accepted state.', 'A late stale response must not rewind persisted CAD state.');
+
 const malformedExpeditionId = `${expeditionId}-malformed`;
 localStorage.setItem(`dispatch_state_${malformedExpeditionId}`, '{bad json');
 snapshot = dispatchPersistenceAdapter.load(malformedExpeditionId, defaults);
@@ -150,6 +181,172 @@ for (let index = 0; index < 305; index += 1) {
 snapshot = dispatchPersistenceAdapter.load(boundedExpeditionId, defaults);
 assert.strictEqual(snapshot.cadEvents.length, 300, 'Persisted local CAD events should be bounded for pruning readiness.');
 
+const accountAFallbackId = resolveDispatchLocalPersistenceId({ accountId: 'account-a' });
+const accountBFallbackId = resolveDispatchLocalPersistenceId({ accountId: 'account-b' });
+assert.notStrictEqual(
+  accountAFallbackId,
+  accountBFallbackId,
+  'Fallback Dispatch persistence must be scoped by account.',
+);
+assert.strictEqual(
+  resolveDispatchLocalPersistenceId({
+    currentExpedition: { cloudSessionId: 'live-expedition-cloud', id: 'live-expedition-local' },
+    activeConvoyId: 'secondary-convoy',
+    accountId: 'account-a',
+  }),
+  'live-expedition-cloud',
+  'The live current-expedition identity must win over convoy or account fallback identities.',
+);
+
+const projectionExpeditionId = `${expeditionId}-projection`;
+const retainedLiveEvent = createLocalCadEvent({
+  id: 'live-system-projection-event',
+  timestamp: '2026-05-04T20:00:00Z',
+  updatedAt: '2026-05-04T20:00:00Z',
+  type: 'system',
+  severity: 'info',
+  title: 'Live system state',
+  message: 'This non-persisted event must remain visible.',
+  source: 'sync_state',
+  status: 'active',
+  priority: 'Normal',
+  category: undefined,
+  hazardType: undefined,
+  dedupeKey: 'live-system-projection-event',
+});
+dispatchEventStore.clear();
+dispatchEventStore.replaceEvents([retainedLiveEvent]);
+const projectionLease = subscribeDispatchPersistenceCadEvents({
+  expeditionId: projectionExpeditionId,
+  defaults,
+});
+assert.strictEqual(getDispatchPersistenceProjectionDiagnostics().activeLeaseCount, 1);
+let visibleProjectionUpdates = 0;
+const unsubscribeVisibleProjection = dispatchEventStore.subscribe(() => {
+  visibleProjectionUpdates += 1;
+});
+visibleProjectionUpdates = 0;
+
+const latePersistedEvent = createLocalCadEvent({
+  id: 'late-persisted-projection-event',
+  timestamp: '2026-05-04T20:01:00Z',
+  updatedAt: '2026-05-04T20:01:00Z',
+  dedupeKey: 'late-persisted-projection-event',
+  message: 'A late authoritative persistence update.',
+});
+const projectionRevisionBefore = dispatchPersistenceAdapter.getRevision(projectionExpeditionId);
+dispatchPersistenceAdapter.upsertCadEvent(
+  projectionExpeditionId,
+  defaults,
+  latePersistedEvent,
+);
+assert.strictEqual(
+  dispatchPersistenceAdapter.getRevision(projectionExpeditionId),
+  projectionRevisionBefore + 1,
+  'Projection must not write back into persistence or create a circular revision.',
+);
+assert(
+  dispatchEventStore.getSnapshot().some((event) => event.id === latePersistedEvent.id),
+  'A persistence update after initial hydration must reach the visible Dispatch event store.',
+);
+assert(
+  dispatchEventStore.getSnapshot().some((event) => event.id === retainedLiveEvent.id),
+  'Projecting persisted events must preserve unrelated live events.',
+);
+assert.strictEqual(visibleProjectionUpdates, 1, 'One persistence mutation must produce one visible update.');
+
+dispatchPersistenceAdapter.upsertCadEvent(
+  projectionExpeditionId,
+  defaults,
+  latePersistedEvent,
+);
+assert.strictEqual(
+  visibleProjectionUpdates,
+  1,
+  'An equivalent persisted snapshot must not produce a duplicate visible update.',
+);
+
+const wrongExpeditionEvent = createLocalCadEvent({
+  id: 'wrong-expedition-projection-event',
+  timestamp: '2026-05-04T20:02:00Z',
+  updatedAt: '2026-05-04T20:02:00Z',
+  dedupeKey: 'wrong-expedition-projection-event',
+});
+dispatchPersistenceAdapter.upsertCadEvent(
+  `${projectionExpeditionId}-other`,
+  defaults,
+  wrongExpeditionEvent,
+);
+assert(
+  !dispatchEventStore.getSnapshot().some((event) => event.id === wrongExpeditionEvent.id),
+  'A different expedition persistence update must not contaminate the mounted context.',
+);
+assert.strictEqual(visibleProjectionUpdates, 1);
+
+const duplicateProjectionLease = subscribeDispatchPersistenceCadEvents({
+  expeditionId: projectionExpeditionId,
+  defaults,
+});
+assert.strictEqual(getDispatchPersistenceProjectionDiagnostics().activeLeaseCount, 2);
+visibleProjectionUpdates = 0;
+const updatedLatePersistedEvent = createLocalCadEvent({
+  ...latePersistedEvent,
+  message: 'The authoritative persistence update changed once.',
+  timestamp: '2026-05-04T20:03:00Z',
+  updatedAt: '2026-05-04T20:03:00Z',
+});
+dispatchPersistenceAdapter.upsertCadEvent(
+  projectionExpeditionId,
+  defaults,
+  updatedLatePersistedEvent,
+);
+assert.strictEqual(
+  visibleProjectionUpdates,
+  1,
+  'Duplicate projection consumers must not duplicate a semantic visible update.',
+);
+assert.strictEqual(
+  dispatchEventStore.getSnapshot().find((event) => event.id === latePersistedEvent.id)?.message,
+  'The authoritative persistence update changed once.',
+);
+duplicateProjectionLease.unsubscribe();
+assert.strictEqual(getDispatchPersistenceProjectionDiagnostics().activeLeaseCount, 1);
+
+const accountAEvent = createLocalCadEvent({
+  id: 'account-a-only-dispatch-event',
+  timestamp: '2026-05-04T20:04:00Z',
+  updatedAt: '2026-05-04T20:04:00Z',
+  dedupeKey: 'account-a-only-dispatch-event',
+});
+dispatchPersistenceAdapter.upsertCadEvent(accountAFallbackId, defaults, accountAEvent);
+dispatchEventStore.clear();
+const accountBProjectionLease = subscribeDispatchPersistenceCadEvents({
+  expeditionId: accountBFallbackId,
+  defaults,
+});
+assert(
+  !dispatchEventStore.getSnapshot().some((event) => event.id === accountAEvent.id),
+  'A fallback snapshot from another account must not be projected.',
+);
+accountBProjectionLease.unsubscribe();
+assert.strictEqual(getDispatchPersistenceProjectionDiagnostics().activeLeaseCount, 1);
+
+projectionLease.unsubscribe();
+assert.strictEqual(getDispatchPersistenceProjectionDiagnostics().activeLeaseCount, 0);
+unsubscribeVisibleProjection();
+dispatchEventStore.clear();
+const postCleanupEvent = createLocalCadEvent({
+  id: 'post-cleanup-projection-event',
+  timestamp: '2026-05-04T20:05:00Z',
+  updatedAt: '2026-05-04T20:05:00Z',
+  dedupeKey: 'post-cleanup-projection-event',
+});
+dispatchPersistenceAdapter.upsertCadEvent(projectionExpeditionId, defaults, postCleanupEvent);
+assert(
+  !dispatchEventStore.getSnapshot().some((event) => event.id === postCleanupEvent.id),
+  'Unsubscribed projection leases must stop receiving persistence updates.',
+);
+
 for (const requiredSource of [
   'note?: string',
   'locationStatus?: string',
@@ -158,17 +355,32 @@ for (const requiredSource of [
 }
 
 for (const requiredSource of [
-  'function isPersistableLocalDispatchEvent',
-  "event.source === 'user_report' || event.source === 'team_member'",
-  'getLocalDispatchPersistenceId(currentExpedition)',
-  'dispatchPersistenceAdapter.load',
+  'resolveDispatchLocalPersistenceId',
+  'subscribeDispatchPersistenceCadEvents',
+  'liveCurrentExpeditionDispatchId',
+  'dispatchPersistenceAdapter.hydrateResult',
+  'beginECSAsyncSurfaceRequest',
+  'settleECSAsyncSurfaceRequest',
+  'Retry Restore',
   '.filter(isPersistableLocalDispatchEvent)',
-  'dispatchEventStore.upsertEvent(event)',
+  'const acceptedEvent = dispatchEventStore.upsertEvent',
   'persistDispatchCadEventLocally(storedEvent)',
   'note: noteText',
   'locationStatus',
 ]) {
   assert.ok(commandCenterSource.includes(requiredSource), `Dispatch command center should hydrate/persist local CAD source: ${requiredSource}`);
+}
+
+for (const requiredSource of [
+  'function isPersistableLocalDispatchEvent',
+  "event.source === 'user_report' || event.source === 'team_member'",
+  'changedExpeditionId === expeditionId',
+  'lastProjectedRevision === revision',
+]) {
+  assert.ok(
+    persistenceProjectionSource.includes(requiredSource),
+    `Dispatch persistence projection should include ${requiredSource}`,
+  );
 }
 
 assert.ok(
@@ -177,9 +389,60 @@ assert.ok(
   'Dispatch CAD persistence should keep a bounded local event list.',
 );
 
-if (originalTypeScriptExtension) {
-  Module._extensions['.ts'] = originalTypeScriptExtension;
-}
-Module._load = originalLoad;
+assert.ok(
+  backendSource.includes('.abortSignal(controller.signal)') &&
+    commandCenterSource.includes('let inFlight = false') &&
+    commandCenterSource.includes('generation !== requestGeneration'),
+  'Durable CAD polling should be bounded, single-flight, abortable, and stale-request guarded.',
+);
 
-console.log('Dispatch local CAD persistence checks passed.');
+async function runAsyncHydrationChecks() {
+  const originalGetItem = global.localStorage.getItem;
+  global.localStorage.getItem = () => { throw new Error('storage unavailable'); };
+  const failed = await dispatchPersistenceAdapter.hydrateResult(
+    `${expeditionId}-provider-failed`,
+    defaults,
+    { timeoutMs: 250 },
+  );
+  global.localStorage.getItem = originalGetItem;
+  assert.strictEqual(failed.status, 'error', 'A storage-provider read failure must not become ready-empty.');
+  assert.strictEqual(failed.snapshot, null);
+  assert.strictEqual(failed.safeCode, 'dispatch_persistence_provider_failed');
+
+  let equivalentReadCount = 0;
+  global.localStorage.getItem = (key) => {
+    equivalentReadCount += 1;
+    return originalGetItem.call(global.localStorage, key);
+  };
+  await Promise.all([
+    dispatchPersistenceAdapter.hydrateResult(`${expeditionId}-single-flight`, defaults, { timeoutMs: 250 }),
+    dispatchPersistenceAdapter.hydrateResult(`${expeditionId}-single-flight`, defaults, { timeoutMs: 250 }),
+  ]);
+  global.localStorage.getItem = originalGetItem;
+  assert.strictEqual(equivalentReadCount, 1, 'Equivalent hydration requests must share one provider read.');
+
+  const controller = new AbortController();
+  controller.abort();
+  const cancelled = await dispatchPersistenceAdapter.hydrateResult(
+    `${expeditionId}-cancelled`,
+    defaults,
+    { signal: controller.signal, timeoutMs: 250 },
+  );
+  assert.strictEqual(cancelled.status, 'cancelled');
+  assert.strictEqual(cancelled.snapshot, null);
+}
+
+runAsyncHydrationChecks().then(() => {
+  if (originalTypeScriptExtension) {
+    Module._extensions['.ts'] = originalTypeScriptExtension;
+  }
+  Module._load = originalLoad;
+  console.log('Dispatch local CAD persistence checks passed.');
+}).catch((error) => {
+  if (originalTypeScriptExtension) {
+    Module._extensions['.ts'] = originalTypeScriptExtension;
+  }
+  Module._load = originalLoad;
+  console.error(error);
+  process.exitCode = 1;
+});

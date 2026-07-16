@@ -11,7 +11,7 @@ const {
 
 export const VERIFICATION_ARTIFACT_SCHEMAS = Object.freeze({
   LANE: 'ecs.verification-lane-artifact.v5',
-  INVENTORY: 'ecs.verification-inventory-artifact.v2',
+  INVENTORY: 'ecs.verification-inventory-artifact.v3',
   PROVENANCE: 'ecs.verification-provenance-artifact.v2',
   TIMINGS: 'ecs.verification-timings-artifact.v3',
   RELEASE_EVIDENCE: 'ecs.verification-release-evidence-artifact.v1',
@@ -606,6 +606,9 @@ export function buildVerificationInventoryArtifact(inventory, options = {}) {
       targetExists: entry.target?.exists === true,
       capabilityIds: (entry.capabilities ?? []).map((value) => normalizedIdentifier(value)).sort(),
       classifications: (entry.classifications ?? []).map((value) => normalizedIdentifier(value)).sort(),
+      qualifiedTestIdentities: (entry.qualifiedTestIdentities ?? [])
+        .map((value) => normalizedIdentifier(value))
+        .sort(),
       duration: safeDuration(entry.duration),
       confidence: entry.policyConfidence == null ? null : normalizedIdentifier(entry.policyConfidence),
       evidenceClass: normalizedIdentifier(entry.evidenceClass, 'unknown'),

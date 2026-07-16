@@ -443,6 +443,10 @@ export function validateVerificationPolicy(input) {
       capabilityWildcard,
       classifications,
       scenarios: asStringArray(check.scenarios ?? [], `check ${check.id}.scenarios`),
+      qualifiedTestIdentities: asStringArray(
+        check.qualifiedTestIdentities ?? [],
+        `check ${check.id}.qualifiedTestIdentities`,
+      ),
       lanes: checkLanes,
       confidence,
       evidenceClass,

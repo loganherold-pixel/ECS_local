@@ -55,6 +55,10 @@ export type TerrainRiskRoute = {
   nextHazard: TerrainHazard;
   sourceLabel: string;
   dataState: 'live-route' | 'estimated-route';
+  validPointCount: number;
+  elevationPointCount: number;
+  elevationCoverageRatio: number;
+  elevationCoverage: 'complete' | 'partial';
 };
 
 export type TerrainRiskRoutePoint = {
@@ -297,19 +301,83 @@ function buildEstimatedRouteProfileDraft(
   }));
 }
 
-function sampleProfile(profile: RouteProfileDraftPoint[]): RouteProfileDraftPoint[] {
-  if (profile.length <= MAX_PROFILE_POINTS) return profile;
+type TerrainProfileDownsamplePoint = {
+  elevationFeet: number;
+  riskScore?: number;
+  riskLevel?: string;
+  thermalBand?: string;
+  hazardKinds?: readonly unknown[];
+};
 
-  const sampled: RouteProfileDraftPoint[] = [];
-  const usedIndexes = new Set<number>();
-  for (let index = 0; index < MAX_PROFILE_POINTS; index += 1) {
-    const sourceIndex = Math.round((index / (MAX_PROFILE_POINTS - 1)) * (profile.length - 1));
-    if (!usedIndexes.has(sourceIndex)) {
-      sampled.push(profile[sourceIndex]);
-      usedIndexes.add(sourceIndex);
-    }
+function materialTerrainRiskPriority(point: TerrainProfileDownsamplePoint): number {
+  const riskScore = isFiniteNumber(point.riskScore) ? point.riskScore : 0;
+  const hazardCount = Array.isArray(point.hazardKinds) ? point.hazardKinds.length : 0;
+  const isMaterial = hazardCount > 0 || point.riskLevel === 'high' || point.thermalBand === 'hot' || riskScore >= 67;
+  if (!isMaterial) return 0;
+  return hazardCount * 200 + (point.riskLevel === 'high' ? 100 : 0) + (point.thermalBand === 'hot' ? 50 : 0) + riskScore;
+}
+
+export function downsampleTerrainProfilePreservingExtrema<T extends TerrainProfileDownsamplePoint>(
+  profile: readonly T[],
+  maxPoints = MAX_PROFILE_POINTS,
+): T[] {
+  const limit = Math.max(3, Math.floor(maxPoints));
+  if (profile.length <= limit) return Array.from(profile);
+
+  const selectedIndexes = new Set<number>([0, profile.length - 1]);
+  const addIndex = (index: number) => {
+    if (selectedIndexes.size < limit) selectedIndexes.add(index);
+  };
+  const interiorIndexes = Array.from({ length: profile.length - 2 }, (_, index) => index + 1);
+
+  let globalMinIndex = 0;
+  let globalMaxIndex = 0;
+  for (let index = 1; index < profile.length; index += 1) {
+    if (profile[index].elevationFeet < profile[globalMinIndex].elevationFeet) globalMinIndex = index;
+    if (profile[index].elevationFeet > profile[globalMaxIndex].elevationFeet) globalMaxIndex = index;
   }
-  return sampled;
+  [globalMinIndex, globalMaxIndex].sort((left, right) => left - right).forEach(addIndex);
+
+  interiorIndexes
+    .map((index) => ({ index, priority: materialTerrainRiskPriority(profile[index]) }))
+    .filter((candidate) => candidate.priority > 0)
+    .sort((left, right) => right.priority - left.priority || left.index - right.index)
+    .forEach((candidate) => addIndex(candidate.index));
+
+  const interiorCount = profile.length - 2;
+  const remainingForExtrema = Math.max(0, limit - selectedIndexes.size);
+  const bucketCount = Math.max(1, Math.ceil(remainingForExtrema / 2));
+  const bucketExtrema: number[] = [];
+  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+    const start = 1 + Math.floor((bucket * interiorCount) / bucketCount);
+    const end = 1 + Math.floor(((bucket + 1) * interiorCount) / bucketCount);
+    if (end <= start) continue;
+    let minIndex = start;
+    let maxIndex = start;
+    for (let index = start + 1; index < end; index += 1) {
+      if (profile[index].elevationFeet < profile[minIndex].elevationFeet) minIndex = index;
+      if (profile[index].elevationFeet > profile[maxIndex].elevationFeet) maxIndex = index;
+    }
+    bucketExtrema.push(...Array.from(new Set([minIndex, maxIndex])).sort((left, right) => left - right));
+  }
+  bucketExtrema.forEach(addIndex);
+
+  if (selectedIndexes.size < limit) {
+    const remaining = limit - selectedIndexes.size;
+    const evenlySpaced = Array.from({ length: remaining }, (_, index) => (
+      Math.round(((index + 1) / (remaining + 1)) * (profile.length - 1))
+    ));
+    evenlySpaced.forEach(addIndex);
+  }
+
+  return Array.from(selectedIndexes)
+    .sort((left, right) => left - right)
+    .slice(0, limit)
+    .map((index) => profile[index]);
+}
+
+function sampleProfile(profile: RouteProfileDraftPoint[]): RouteProfileDraftPoint[] {
+  return downsampleTerrainProfilePreservingExtrema(profile, MAX_PROFILE_POINTS);
 }
 
 function scoreProfilePoint(
@@ -516,8 +584,9 @@ export function buildTerrainRiskCommandRoute(
   const profile = buildTerrainProfile(draftProfile);
   if (profile.length < 2) return null;
 
-  const peakRisk = profile.reduce((max, point) => Math.max(max, point.riskScore), 0);
-  const averageRisk = profile.reduce((sum, point) => sum + point.riskScore, 0) / profile.length;
+  const analyzedRiskScores = analysis.segments.map((segment) => segment.riskScore);
+  const peakRisk = analyzedRiskScores.reduce((max, score) => Math.max(max, score), 0);
+  const averageRisk = analyzedRiskScores.reduce((sum, score) => sum + score, 0) / Math.max(1, analyzedRiskScores.length);
   const overallRiskScore = clampRiskScore(peakRisk * 0.58 + averageRisk * 0.42);
   const overallRiskLabel = classifyTerrainCommandRisk(overallRiskScore);
   const totalDistanceMiles = isFinitePositive(context.totalDistanceMiles)
@@ -541,5 +610,9 @@ export function buildTerrainRiskCommandRoute(
     nextHazard: buildNextHazard(profile, context, analysis),
     sourceLabel: analysis.sourceLabel,
     dataState,
+    validPointCount: analysis.validPointCount,
+    elevationPointCount: analysis.elevationPointCount,
+    elevationCoverageRatio: analysis.elevationCoverageRatio,
+    elevationCoverage: analysis.elevationCoverage,
   };
 }

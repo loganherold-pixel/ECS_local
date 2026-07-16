@@ -14,14 +14,15 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
   StyleSheet,
   Animated,
   Platform,
   Linking,
 } from 'react-native';
 import { SafeIcon as Ionicons } from '../SafeIcon';
+import { ECSButton } from '../ECSButton';
 import { TACTICAL, TYPO } from '../../lib/theme';
+import { useReducedMotion } from '../../lib/ecsAnimations';
 import type { GPSLocationOutput } from '../../lib/useGPSLocation';
 
 interface Props {
@@ -57,9 +58,15 @@ export default function GPSStatusOverlay({
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
   const [dismissed, setDismissed] = useState(false);
+  const reducedMotion = useReducedMotion();
 
   // Pulse animation for the locating indicator
   useEffect(() => {
+    if (reducedMotion) {
+      pulseAnim.stopAnimation();
+      pulseAnim.setValue(1);
+      return undefined;
+    }
     if (!hasFix && !permissionDenied) {
       const pulse = Animated.loop(
         Animated.sequence([
@@ -78,13 +85,18 @@ export default function GPSStatusOverlay({
       pulse.start();
       return () => pulse.stop();
     }
-  }, [hasFix, permissionDenied, pulseAnim]);
+  }, [hasFix, permissionDenied, pulseAnim, reducedMotion]);
 
   // Fade out when GPS fix acquired
   useEffect(() => {
     if (hasFix && !dismissed) {
       // Brief delay to let the map center before fading
       const timer = setTimeout(() => {
+        if (reducedMotion) {
+          fadeAnim.setValue(0);
+          setDismissed(true);
+          return;
+        }
         Animated.timing(fadeAnim, {
           toValue: 0,
           duration: 600,
@@ -95,7 +107,13 @@ export default function GPSStatusOverlay({
       }, 800);
       return () => clearTimeout(timer);
     }
-  }, [hasFix, fadeAnim, dismissed]);
+  }, [hasFix, fadeAnim, dismissed, reducedMotion]);
+
+  useEffect(() => {
+    if (hasFix || !dismissed) return;
+    fadeAnim.setValue(1);
+    setDismissed(false);
+  }, [dismissed, fadeAnim, hasFix]);
 
   // Don't render if dismissed or already have fix and animation complete
   if (dismissed) return null;
@@ -106,13 +124,26 @@ export default function GPSStatusOverlay({
   // ── Permission Denied State ──────────────────────────
   if (permissionDenied) {
     return (
-      <View style={styles.deniedContainer}>
-        <View style={styles.deniedCard}>
+      <View
+        style={styles.deniedContainer}
+        accessibilityViewIsModal
+      >
+        <View
+          style={styles.deniedCard}
+        >
           <View style={styles.deniedIconWrap}>
             <Ionicons name="location-outline" size={28} color={TACTICAL.danger} />
             <View style={styles.deniedSlash} />
           </View>
-          <Text style={styles.deniedTitle}>LOCATION NEEDED</Text>
+          <Text
+            style={styles.deniedTitle}
+            accessible
+            accessibilityRole="alert"
+            accessibilityLiveRegion="assertive"
+            accessibilityLabel="Location permission required. ECS Navigate needs location access. Saved context remains available."
+          >
+            LOCATION NEEDED
+          </Text>
           <Text style={styles.deniedBody}>
             ECS Navigate needs location access to center the map, track trails,
             and keep guidance current.
@@ -121,8 +152,13 @@ export default function GPSStatusOverlay({
             Enable location in your device settings to use Navigate.
           </Text>
           <View style={styles.deniedActions}>
-            <TouchableOpacity
-              style={styles.deniedSettingsBtn}
+            <ECSButton
+              label={Platform.OS === 'web' ? 'TRY AGAIN' : 'OPEN SETTINGS'}
+              icon="settings-outline"
+              variant="primary"
+              size="medium"
+              accessibilityLabel={Platform.OS === 'web' ? 'Retry location permission' : 'Open location settings'}
+              accessibilityHint="Location is not requested until this action is activated."
               onPress={() => {
                 if (Platform.OS === 'ios') {
                   Linking.openURL('app-settings:');
@@ -133,20 +169,14 @@ export default function GPSStatusOverlay({
                   onRetry();
                 }
               }}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="settings-outline" size={14} color="#0B0F12" />
-              <Text style={styles.deniedSettingsBtnText}>
-                {Platform.OS === 'web' ? 'TRY AGAIN' : 'OPEN SETTINGS'}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.deniedDismissBtn}
+            />
+            <ECSButton
+              label="CONTINUE WITH SAVED CONTEXT"
+              variant="secondary"
+              size="medium"
               onPress={() => setDismissed(true)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.deniedDismissBtnText}>CONTINUE WITH SAVED CONTEXT</Text>
-            </TouchableOpacity>
+              accessibilityHint="Dismisses this prompt without enabling live location."
+            />
           </View>
         </View>
       </View>
@@ -155,6 +185,10 @@ export default function GPSStatusOverlay({
 
   // ── Acquiring / Retrying State ───────────────────────
   if (!hasFix) {
+    const terminalUnavailable =
+      gpsStatus === 'UNAVAILABLE'
+      || gpsStatus === 'OFFLINE'
+      || (Boolean(error) && gpsStatus !== 'ACQUIRING' && gpsStatus !== 'RETRYING');
     const isRetrying = gpsStatus === 'RETRYING';
     const statusLabel = isRetrying
       ? `REFRESHING LOCATION${retryCount > 0 ? ` (${retryCount})` : ''}`
@@ -163,6 +197,47 @@ export default function GPSStatusOverlay({
       bottomOffset != null
         ? { bottom: bottomOffset, left: horizontalInset, right: horizontalInset }
         : { top: topOffset, left: horizontalInset, right: horizontalInset };
+
+    if (terminalUnavailable) {
+      const unavailableMessage = gpsStatus === 'OFFLINE'
+        ? 'Location tracking stopped. Saved map context remains available.'
+        : gpsStatus === 'UNAVAILABLE'
+          ? 'No location provider is currently available. Saved map context remains available.'
+          : 'ECS could not acquire a current position. Saved map context remains available.';
+
+      return (
+        <View
+          style={[styles.acquiringOverlay, overlayPosition]}
+          pointerEvents="box-none"
+        >
+          <View
+            style={[styles.acquiringBanner, styles.unavailableBanner, { maxWidth }]}
+          >
+            <Ionicons name="location-outline" size={18} color={TACTICAL.danger} />
+            <View style={styles.acquiringContent}>
+              <Text
+                style={[styles.acquiringLabel, styles.unavailableLabel]}
+                accessible
+                accessibilityRole="alert"
+                accessibilityLiveRegion="assertive"
+                accessibilityLabel={`Location unavailable. ${unavailableMessage}`}
+              >
+                LOCATION UNAVAILABLE
+              </Text>
+              <Text style={styles.acquiringHint}>{unavailableMessage}</Text>
+            </View>
+            <ECSButton
+              label="RETRY"
+              variant="secondary"
+              size="compact"
+              onPress={onRetry}
+              accessibilityLabel="Retry current location"
+              accessibilityHint="Requests a fresh location fix."
+            />
+          </View>
+        </View>
+      );
+    }
 
     return (
       <Animated.View
@@ -173,7 +248,15 @@ export default function GPSStatusOverlay({
         ]}
         pointerEvents="box-none"
       >
-        <View style={[styles.acquiringBanner, { maxWidth }]}>
+        <View
+          style={[styles.acquiringBanner, { maxWidth }]}
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLiveRegion="polite"
+          accessibilityState={{ busy: true }}
+          accessibilityValue={{ text: statusLabel }}
+          accessibilityLabel={`${statusLabel}. ${isRetrying ? 'GPS signal is weak. ECS is retrying.' : 'Getting a position fix for Navigate.'}`}
+        >
           {/* Animated pulse ring */}
           <Animated.View
             style={[
@@ -216,7 +299,12 @@ export default function GPSStatusOverlay({
       ]}
       pointerEvents="none"
     >
-      <View style={[styles.acquiringBanner, styles.acquiredBanner, { maxWidth }]}>
+      <View
+        style={[styles.acquiringBanner, styles.acquiredBanner, { maxWidth }]}
+        accessible
+        accessibilityLiveRegion="polite"
+        accessibilityLabel={`Location live. ${fixQuality.toLowerCase()} accuracy fix.`}
+      >
         <View style={styles.acquiredDot} />
         <View style={styles.acquiringContent}>
           <Text style={[styles.acquiringLabel, styles.acquiredLabel]}>
@@ -370,6 +458,9 @@ const styles = StyleSheet.create({
   acquiredBanner: {
     borderColor: 'rgba(62,107,62,0.5)',
   },
+  unavailableBanner: {
+    borderColor: 'rgba(192,57,43,0.55)',
+  },
   acquiringContent: {
     flex: 1,
     gap: 2,
@@ -384,6 +475,9 @@ const styles = StyleSheet.create({
   },
   acquiredLabel: {
     color: TACTICAL.successText,
+  },
+  unavailableLabel: {
+    color: TACTICAL.danger,
   },
   acquiringHint: {
     ...TYPO.B2,

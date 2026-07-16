@@ -131,7 +131,11 @@ assertIncludes(tripBuilder, 'selectedPreparedRoutePoints.length >= 2', 'Trip Bui
 assertIncludes(discover, 'handlePrepareOfflineFromRoute', 'Selected route Offline Prep handler');
 assertIncludes(discover, 'testID="explore-tripbuilder-wizard-surface"', 'Explore should use the route-first TripBuilder wizard as the default surface.');
 assert(!discover.includes('testID="explore-primary-tab-control"'), 'Explore should not render the legacy primary tab control.');
-assertIncludes(discover, 'exploreSuggestedRouteOptions', 'Offline Prep tab should use current Suggested Routes filter context.');
+assertIncludes(discover, 'canonicalExplorePlanningRoutes', 'Offline Prep tab should use the canonical Guidance Ready inventory context.');
+assertIncludes(discover, 'options={explorePrimaryTabOptions}', 'Explore should render the registered planning controls so Offline Prep is reachable.');
+assertIncludes(discover, "handleOpenExploreFeature(key as ExplorePrimaryTab)", 'Explore planning controls should invoke the canonical feature registry handler.');
+assertIncludes(discover, "guardHydratedGuidanceReadyHandoff(hydratedRoute, 'offline_prep_tab')", 'Offline Prep should revalidate authoritative detail before staging a selected route.');
+assertIncludes(discover, 'signal: request.controller.signal', 'Offline Prep detail hydration should be abortable and latest-intent safe.');
 assertIncludes(discover, "}, 'route_details')", 'Selected route Offline Prep handoff source');
 assertIncludes(discover, "pathname: '/explore-offline-prep-pack'", 'Selected route Offline Prep navigation');
 assertIncludes(discover, 'testID="selected-route-prepare-offline-pack"', 'Selected route Offline Prep action');

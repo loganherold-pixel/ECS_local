@@ -269,9 +269,9 @@ assert.strictEqual(
   'Dispatch advisory engine should not auto-send pings or create external emergency actions.',
 );
 assert.strictEqual(
-  dispatchTabSource.includes('DispatchCadCommandCenter') && !dispatchTabSource.includes('DispatchCommandCenter'),
+  dispatchTabSource.includes('DispatchCommandCenter') && !dispatchTabSource.includes('DispatchCadCommandCenter'),
   true,
-  'Dispatch tab should render the CAD-first command center.',
+  'Dispatch tab should render the canonical command-center entry.',
 );
 assert.strictEqual(
   /DispatchTeamRosterSection|DispatchQueueSection|DispatchTeamPingComposer/.test(cadCommandCenterSource),

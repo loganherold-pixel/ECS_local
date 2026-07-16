@@ -6,6 +6,7 @@ import type {
   NavigationTrailWaypoint,
 } from './navigationHandoffStore';
 import {
+  buildTrailCumulativeDistances,
   buildTrailGuidanceSnapshot,
   type TrailGuidanceLocation,
   type TrailNavigationStatus,
@@ -17,6 +18,13 @@ import {
   type TrailNavigationSessionSnapshot,
 } from './trailNavigationStore';
 import type { RoadNavCoordinate } from './mapboxRoadNavigation';
+
+function headingDeltaDegrees(a: number, b: number): number {
+  const left = ((a % 360) + 360) % 360;
+  const right = ((b % 360) + 360) % 360;
+  const delta = Math.abs(left - right);
+  return delta > 180 ? 360 - delta : delta;
+}
 
 function randomSessionId(): string {
   const cryptoRef = typeof crypto !== 'undefined' ? crypto : null;
@@ -224,24 +232,32 @@ export function useTrailNavigation(params: {
   useEffect(() => {
     if (!enabled || restoreAttemptedRef.current) return;
     let cancelled = false;
+    // Mark the restore as claimed before awaiting storage so a remount/toggle or
+    // late result cannot overwrite a route staged during the read.
+    restoreAttemptedRef.current = true;
 
     void (async () => {
       const restored = await loadTrailNavigationSession();
       if (cancelled || !restored) return;
       if (!isRestorableTrailSession(restored)) {
-        restoreAttemptedRef.current = true;
         await clearTrailNavigationSession();
         return;
       }
-      restoreAttemptedRef.current = true;
-      setSession((prev) => ({
-        ...prev,
-        sessionId: restored.sessionId,
-        payload: restored.payload,
-        status: restored.status,
-        reachedWaypointIds: restored.reachedWaypointIds ?? [],
-        currentRouteIndex: restored.lastKnownRouteIndex ?? 0,
-      }));
+      setSession((prev) => {
+        const liveSessionStarted =
+          prev.sessionId != null ||
+          prev.payload != null ||
+          prev.status !== 'idle';
+        if (liveSessionStarted) return prev;
+        return {
+          ...prev,
+          sessionId: restored.sessionId,
+          payload: restored.payload,
+          status: restored.status,
+          reachedWaypointIds: restored.reachedWaypointIds ?? [],
+          currentRouteIndex: restored.lastKnownRouteIndex ?? 0,
+        };
+      });
     })();
 
     return () => {
@@ -358,23 +374,59 @@ export function useTrailNavigation(params: {
 
     setSession((prev) => {
       if (!prev.payload) return prev;
+      const payload = prev.payload;
 
-      const snapshot = buildTrailGuidanceSnapshot({
-        geometry: prev.payload.trailGeometry,
+      const routeDistances = buildTrailCumulativeDistances(payload.trailGeometry);
+      const routeLengthM = routeDistances[routeDistances.length - 1] ?? 0;
+      const previousTraveledDistanceM =
+        prev.remainingDistanceM != null && Number.isFinite(prev.remainingDistanceM)
+          ? Math.max(0, routeLengthM - prev.remainingDistanceM)
+          : null;
+      const elapsedMs =
+        prev.updatedAt && Number.isFinite(Date.parse(prev.updatedAt))
+          ? Math.max(0, Date.now() - Date.parse(prev.updatedAt))
+          : null;
+      const buildSnapshot = (allowBacktracking: boolean) => buildTrailGuidanceSnapshot({
+        geometry: payload.trailGeometry,
         location,
-        waypoints: prev.payload.trailWaypoints ?? [],
-        decisionPoints: prev.payload.trailDecisionPoints ?? [],
+        waypoints: payload.trailWaypoints ?? [],
+        decisionPoints: payload.trailDecisionPoints ?? [],
         reachedWaypointIds: prev.reachedWaypointIds,
-        mode: prev.payload.tripMode === 'hybrid' ? 'hybrid' : 'trail',
+        mode: payload.tripMode === 'hybrid' ? 'hybrid' : 'trail',
+        previousTraveledDistanceM,
+        allowBacktracking,
+        elapsedMs,
       });
+      let snapshot = buildSnapshot(false);
 
       let nextStatus: TrailNavigationStatus = prev.status;
       const previousIndex = prev.currentRouteIndex;
       let nextRouteIndex = snapshot.progress.nearestIndex;
+      let confirmedBacktracking = false;
+      const rawCandidateDistanceM = snapshot.progress.nearestCandidateDistanceM ?? snapshot.progress.traveledDistanceM;
+      const routeBearingDeg = snapshot.progress.nearestSegmentBearingDeg;
+      const headingDeg = location.headingDeg;
+      const reversingHeading =
+        typeof headingDeg === 'number' &&
+        Number.isFinite(headingDeg) &&
+        typeof routeBearingDeg === 'number' &&
+        Number.isFinite(routeBearingDeg) &&
+        headingDeltaDegrees(headingDeg, routeBearingDeg) >= 120;
+      const moving =
+        typeof location.speedMph !== 'number' ||
+        !Number.isFinite(location.speedMph) ||
+        location.speedMph >= 2;
+      const backwardCandidate =
+        previousTraveledDistanceM != null &&
+        rawCandidateDistanceM < previousTraveledDistanceM - 18;
 
-      if (nextRouteIndex + 1 < previousIndex) {
+      if (backwardCandidate && reversingHeading && moving) {
         reverseProgressCountRef.current += 1;
-        if (reverseProgressCountRef.current < 3) {
+        if (reverseProgressCountRef.current >= 3) {
+          snapshot = buildSnapshot(true);
+          nextRouteIndex = snapshot.progress.nearestIndex;
+          confirmedBacktracking = true;
+        } else {
           nextRouteIndex = previousIndex;
         }
       } else {
@@ -443,7 +495,9 @@ export function useTrailNavigation(params: {
         remainingDistanceM: snapshot.progress.remainingDistanceM,
         progressPercent: snapshot.progressPercent,
         routeStatusLabel,
-        currentRouteIndex: Math.max(prev.currentRouteIndex, nextRouteIndex),
+        currentRouteIndex: confirmedBacktracking
+          ? nextRouteIndex
+          : Math.max(prev.currentRouteIndex, nextRouteIndex),
         progressGeometry: snapshot.progress.progressCoords,
         rejoinPoint: snapshot.rejoinPoint,
         rejoinDistanceM: snapshot.rejoinDistanceM,

@@ -19,8 +19,16 @@ const permissionsMigrationPath = path.join(
   'migrations',
   '20260712100348_harden_route_geometry_viewport_rpc_permissions.sql',
 );
+const sourceFilterMigrationPath = path.join(
+  'supabase',
+  'migrations',
+  '20260715134500_filter_route_geometry_viewport_by_source.sql',
+);
 const functionPath = path.join('supabase', 'functions', 'route-geometry-segments', 'index.ts');
+const clientPath = path.join('lib', 'routeGeometryViewportClient.ts');
 const supabasePath = path.join('lib', 'supabase.ts');
+const supabaseConfigPath = path.join('supabase', 'config.toml');
+const deployWorkflowPath = path.join('.github', 'workflows', 'route-catalog-edge-functions-deploy.yml');
 const envExamplePath = '.env.example';
 const easConfigPath = 'eas.json';
 
@@ -33,14 +41,22 @@ assert(
   fs.existsSync(path.join(root, permissionsMigrationPath)),
   'Route geometry viewport RPC permission hardening migration should exist.',
 );
+assert(
+  fs.existsSync(path.join(root, sourceFilterMigrationPath)),
+  'Source-filtered route geometry viewport migration should exist.',
+);
 assert(fs.existsSync(path.join(root, functionPath)), 'route-geometry-segments Edge Function should exist.');
 
 const initialMigration = read(migrationPath);
 const verifiedRoutesFixMigration = read(verifiedRoutesFixMigrationPath);
 const permissionsMigration = read(permissionsMigrationPath);
-const migration = `${initialMigration}\n${verifiedRoutesFixMigration}\n${permissionsMigration}`;
+const sourceFilterMigration = read(sourceFilterMigrationPath);
+const migration = `${initialMigration}\n${verifiedRoutesFixMigration}\n${permissionsMigration}\n${sourceFilterMigration}`;
 const edgeFunction = read(functionPath);
+const viewportClient = read(clientPath);
 const supabaseClient = read(supabasePath);
+const supabaseConfig = read(supabaseConfigPath);
+const deployWorkflow = read(deployWorkflowPath);
 const envExample = read(envExamplePath);
 const easConfig = JSON.parse(read(easConfigPath));
 
@@ -84,6 +100,25 @@ assert(
     !migration.includes('to authenticated'),
   'Viewport RPC should be callable by service_role only.',
 );
+const sourceFilterRankIndex = sourceFilterMigration.indexOf('ranked_candidates as');
+assert(
+  sourceFilterMigration.includes('search_route_geometry_segments_for_viewport_v2') &&
+    sourceFilterMigration.includes('p_source_provider_prefix text default null') &&
+    sourceFilterMigration.includes('from public.route_segment_sources rss') &&
+    sourceFilterMigration.includes('from public.verified_route_sources vrs') &&
+    sourceFilterMigration.includes('left(lower(rs.provider_id), char_length(b.source_provider_prefix))') &&
+    sourceFilterMigration.indexOf('from public.route_segment_sources rss') < sourceFilterRankIndex &&
+    sourceFilterMigration.indexOf('from public.verified_route_sources vrs') < sourceFilterRankIndex,
+  'Source-specific candidates must be filtered in both catalogs before ranking and limiting.',
+);
+assert(
+  sourceFilterMigration.includes('revoke all on function public.search_route_geometry_segments_for_viewport_v2') &&
+    sourceFilterMigration.includes('from public, anon, authenticated') &&
+    sourceFilterMigration.includes('grant execute on function public.search_route_geometry_segments_for_viewport_v2') &&
+    sourceFilterMigration.includes('to service_role') &&
+    sourceFilterMigration.includes("notify pgrst, 'reload schema'"),
+  'The source-filtered RPC must remain service-role only and refresh the PostgREST schema cache.',
+);
 
 for (const required of [
   'ECS_SERVICE_ROLE_KEY',
@@ -94,6 +129,7 @@ for (const required of [
   'unavailableReason',
   'userMessage',
   "rpc('search_route_geometry_segments_for_viewport'",
+  "rpc('search_route_geometry_segments_for_viewport_v2'",
   'cleanBbox',
   'cleanZoom',
   'includeReferenceGeometry',
@@ -101,14 +137,37 @@ for (const required of [
   'cappedCount',
   'skippedMissingGeometryCount',
   'source_records',
+  'sourceProviderPrefix',
+  'rowMatchesSourceProviderPrefix',
+  'invalidFeatureCount',
+  'isMissingSourceFilteredRpc',
+  'sourceFilterMode',
+  'source_filter_migration_unavailable',
 ]) {
   assert(edgeFunction.includes(required), `route-geometry-segments should include ${required}.`);
 }
 assert(
   !edgeFunction.includes('}, 503)') &&
     !edgeFunction.includes('status, 503') &&
-    edgeFunction.includes("return routeGeometryUnavailableResponse('backend_unavailable');"),
+    edgeFunction.includes("return routeGeometryUnavailableResponse('backend_unavailable', sourceProviderPrefix);"),
   'Route geometry viewport function should degrade with a 200 JSON payload instead of surfacing Supabase non-2XX errors.',
+);
+
+assert(
+  viewportClient.includes('getRouteGeometryViewportProviderAvailability') &&
+    viewportClient.includes('filterRouteGeometryViewportResultBySourceProviderPrefix') &&
+    viewportClient.includes('sourceProviderPrefix,'),
+  'Viewport client should preflight provider availability and enforce source filtering after normalization.',
+);
+assert(
+  /\[functions\.route-geometry-segments\][\s\S]*?verify_jwt = false[\s\S]*?entrypoint = "\.\/functions\/route-geometry-segments\/index\.ts"/.test(supabaseConfig),
+  'Public route geometry reads must be explicitly configured in Supabase.',
+);
+assert(
+  deployWorkflow.includes("'supabase/functions/route-geometry-segments/**'") &&
+    deployWorkflow.includes('supabase functions deploy "route-geometry-segments"') &&
+    deployWorkflow.includes('| route-geometry-segments | Public source-filtered viewport geometry |'),
+  'Route catalog deployment must watch, deploy, and summarize route-geometry-segments.',
 );
 assert(
   !edgeFunction.includes('RIDB_API_KEY') &&

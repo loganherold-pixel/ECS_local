@@ -64,10 +64,13 @@ assert(
   'Trail Packs should use the selected Explore radius',
 );
 assert(
-  discover.includes('liveTrailPackCatalogStore') &&
+    discover.includes('liveTrailPackCatalogStore') &&
     discover.includes('liveTrailPackCatalogSnapshot.trailPacks') &&
     discover.includes('routeCatalogSearchCriteria') &&
-    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria)') &&
+    discover.includes('refreshLiveTrailPackCatalog(routeCatalogSearchCriteria, {') &&
+    discover.includes("cancellationReason: 'unmount'") &&
+    discover.includes('limit: EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT') &&
+    discover.includes('includePreviewGeometry: routeCatalogPreviewGeometryRequested') &&
     !discover.includes('routeCatalogRefinementCriteria') &&
     discover.includes('applyExploreRefinementFilter(publicDiscoverableTrailPackRoutes, exploreRefinement)') &&
     discover.includes('availableFuelRangeMiles: vehicleProfile?.fuel_range_miles') &&
@@ -121,6 +124,19 @@ assert(
   'Trail Pack detail/save flows should capture structured feedback without cluttering cards',
 );
 assert(
+  (discover.match(/sourceVersion: summary\.updatedAt/g) ?? []).length >= 3 &&
+    discover.includes('sourceVersion: routeCatalogSourceVersion') &&
+    discover.includes('routeCatalogSourceVersion: trailPack.updatedAt ?? null'),
+  'Explore preview, navigate, save, and hydrated handoff detail reads should use route plus source-version cache identity.',
+);
+assert(
+  discover.includes("Alert.alert('Navigation unavailable', message)") &&
+    discover.includes("Alert.alert('Save unavailable', message)") &&
+    discover.includes('Authoritative route detail could not be loaded. Retry when the route provider is available.') &&
+    discover.includes('Authoritative route detail could not be loaded, so this route was not saved.'),
+  'Summary Navigate and Save provider failures should end in safe, user-visible terminal errors instead of logging a silent no-op.',
+);
+assert(
   previewPanel.includes('TrailPackFeedbackPanel') &&
     previewPanel.includes('MapRenderer') &&
     previewPanel.includes('cameraMode="route_overview"') &&
@@ -130,14 +146,15 @@ assert(
 );
 assert(
   discover.includes('Scanning approved ECS Trail Packs within selected radius…') &&
-    discover.includes('Trail Packs need GPS or an internal search area to filter verified routes by radius.') &&
+    discover.includes('Trail Packs need GPS or an approved search area to filter verified routes by radius.') &&
     discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.') &&
     discover.includes('No live reviewed Trail Packs found within this radius.') &&
-    discover.includes('Live Trail Packs are not available from reviewed sources yet.'),
+    discover.includes('Live Trail Packs are temporarily unavailable. No seed or mock Trail Packs are shown here.'),
   'Trail Packs should render loading, no-location, low-confidence, and empty states',
 );
 assert(
-  discover.includes('under ECS review and not public Suggested Trailheads yet.') &&
+  discover.includes('do not currently satisfy ECS public guidance requirements') &&
+    discover.includes('testID="explore-route-catalog-not-guidance-ready-state"') &&
     discover.includes('trailPackSubmissionStore') &&
     discover.includes('includeOwnDrafts: ownerTrailPackIds.length > 0'),
   'Pending and curation Trail Packs should remain local/review-only with explicit non-public language',

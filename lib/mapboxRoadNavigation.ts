@@ -700,14 +700,7 @@ export function buildRoadRouteFromCachedGeometry(params: {
   guidanceLimitationLabel?: string | null;
 }): RoadNavRoute {
   const validGeometry = params.geometry.filter((point) => toCoordinate(point));
-  const first = validGeometry[0];
-  const startsAtOrigin =
-    first && distanceMeters(params.origin, first) <= 30;
-  const geometry = startsAtOrigin ? validGeometry : [params.origin, ...validGeometry];
-
-  if (geometry.length < 2) {
-    geometry.push(params.destination.coordinate);
-  }
+  const geometry = validGeometry;
 
   const distanceM =
     typeof params.distanceM === 'number' && Number.isFinite(params.distanceM) && params.distanceM > 0
@@ -778,8 +771,8 @@ export function buildRoadRouteFromCachedGeometry(params: {
     geometry: tagRouteGeometry(geometry, routeVersion),
     distanceM,
     durationS,
-    steps: [
-      {
+    steps: geometry.length >= 2
+      ? [{
         id: 'cached-offline-route',
         instruction: buildHighlightedRouteInstruction(params.destination.title),
         distanceM,
@@ -795,10 +788,10 @@ export function buildRoadRouteFromCachedGeometry(params: {
         geometry,
         bannerInstructions: [],
         voiceInstructions: [],
-      },
-    ],
-    legs: [
-      {
+      }]
+      : [],
+    legs: geometry.length >= 2
+      ? [{
         id: 'cached-offline-leg',
         summary: 'Cached route geometry',
         distanceM,
@@ -806,8 +799,8 @@ export function buildRoadRouteFromCachedGeometry(params: {
         stepStartIndex: 0,
         stepEndIndex: 0,
         stepCount: 0,
-      },
-    ],
+      }]
+      : [],
     guidanceMode: guidance.guidanceMode === 'turn_by_turn' ? 'turn_by_turn' : 'summary_only',
     bounds: bounds
       ? {

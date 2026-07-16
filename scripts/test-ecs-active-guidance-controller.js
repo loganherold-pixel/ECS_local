@@ -21,6 +21,13 @@ function loadTsModule(relativePath) {
     if (request === './ecsGuidanceModel') {
       return loadTsModule(path.join('lib', 'navigation', 'ecsGuidanceModel.ts'));
     }
+    if (request.startsWith('.')) {
+      const resolved = path.resolve(path.dirname(filename), request);
+      const candidate = path.extname(resolved) ? resolved : `${resolved}.ts`;
+      if (fs.existsSync(candidate)) {
+        return loadTsModule(path.relative(root, candidate));
+      }
+    }
     return require(request);
   };
   const fn = new Function('exports', 'require', 'module', '__filename', '__dirname', output);
@@ -177,5 +184,149 @@ assert.deepStrictEqual(arrived.upcomingSteps.map((item) => item.id), ['arrive'])
 const offRoute = progressAt(point(120, 80), startProgress);
 assert.strictEqual(offRoute.offRouteCandidate, true);
 assert.strictEqual(offRoute.confidence, 'low');
+
+function singleStepRoute(id, geometry, distanceMeters, routeVersion = `${id}:v1`) {
+  const guidanceStep = {
+    id: `${id}:step`,
+    legIndex: 0,
+    stepIndex: 0,
+    globalStepIndex: 0,
+    instruction: 'Continue on highlighted route',
+    shortInstruction: 'Continue',
+    maneuverType: 'continue',
+    roadName: 'Canonical route',
+    displayRoadName: 'Canonical route',
+    isUnnamedRoad: false,
+    distanceMeters,
+    durationSeconds: Math.max(1, distanceMeters / 10),
+    maneuverLocation: [geometry.at(-1).lng, geometry.at(-1).lat],
+    bearingAfter: 90,
+    geometry,
+  };
+  return {
+    id,
+    routeVersion,
+    source: 'mapbox_directions',
+    geometry,
+    distanceMeters,
+    durationSeconds: Math.max(1, distanceMeters / 10),
+    legs: [{ legIndex: 0, distanceMeters, durationSeconds: distanceMeters / 10, steps: [guidanceStep] }],
+    steps: [guidanceStep],
+    createdAt: '2026-07-15T12:00:00.000Z',
+    rerouteGeneration: 0,
+    guidanceMode: 'turn_by_turn',
+  };
+}
+
+const parallelGeometry = [
+  point(0, 0),
+  point(1000, 0),
+  point(1000, 20),
+  point(0, 20),
+];
+const parallelGuidanceRoute = singleStepRoute('parallel-guidance', parallelGeometry, 2020);
+const parallelStart = resolveEcsActiveGuidanceProgress({
+  currentCoordinate: point(100, 0),
+  currentHeadingDegrees: 90,
+  currentSpeedMetersPerSecond: 12,
+  currentGpsAccuracyMeters: 5,
+  activeRoute: parallelGuidanceRoute,
+  updatedAt: '2026-07-15T12:00:00.000Z',
+});
+const parallelNoise = resolveEcsActiveGuidanceProgress({
+  currentCoordinate: point(120, 13),
+  currentHeadingDegrees: 90,
+  currentSpeedMetersPerSecond: 12,
+  currentGpsAccuracyMeters: 8,
+  activeRoute: parallelGuidanceRoute,
+  previousProgress: parallelStart,
+  updatedAt: '2026-07-15T12:00:01.000Z',
+});
+assert.strictEqual(
+  parallelNoise.progressRoutePoint.segmentIndex,
+  0,
+  'Mounted controller must retain the plausible outbound segment beside a parallel return leg.',
+);
+assert(
+  parallelNoise.routeDistanceFromStartMeters < 200,
+  `Parallel GPS noise must not jump canonical progress forward, got ${parallelNoise.routeDistanceFromStartMeters}m.`,
+);
+assert.deepStrictEqual(
+  parallelNoise.completedRouteGeometry.at(-1),
+  parallelNoise.remainingRouteGeometry[0],
+  'Controller completed and remaining geometry must share one canonical split coordinate.',
+);
+
+const straightGuidanceRoute = singleStepRoute('straight-guidance', [point(0, 0), point(1000, 0)], 1000);
+const forwardProgress = resolveEcsActiveGuidanceProgress({
+  currentCoordinate: point(800, 0),
+  currentHeadingDegrees: 90,
+  currentGpsAccuracyMeters: 5,
+  activeRoute: straightGuidanceRoute,
+  updatedAt: '2026-07-15T12:00:00.000Z',
+});
+const regressedProgress = resolveEcsActiveGuidanceProgress({
+  currentCoordinate: point(200, 0),
+  currentHeadingDegrees: 90,
+  currentGpsAccuracyMeters: 5,
+  activeRoute: straightGuidanceRoute,
+  previousProgress: forwardProgress,
+  updatedAt: '2026-07-15T12:00:01.000Z',
+});
+assert(
+  regressedProgress.routeDistanceFromStartMeters >= forwardProgress.routeDistanceFromStartMeters - 18,
+  'Ordinary GPS regression must not materially move controller progress backward.',
+);
+
+const reverseFixOne = resolveEcsActiveGuidanceProgress({
+  currentCoordinate: point(200, 0),
+  currentHeadingDegrees: 270,
+  currentSpeedMetersPerSecond: 5,
+  currentGpsAccuracyMeters: 5,
+  activeRoute: straightGuidanceRoute,
+  previousProgress: forwardProgress,
+  updatedAt: '2026-07-15T12:00:01.000Z',
+});
+const reverseFixTwo = resolveEcsActiveGuidanceProgress({
+  currentCoordinate: point(190, 0),
+  currentHeadingDegrees: 270,
+  currentSpeedMetersPerSecond: 5,
+  currentGpsAccuracyMeters: 5,
+  activeRoute: straightGuidanceRoute,
+  previousProgress: reverseFixOne,
+  updatedAt: '2026-07-15T12:00:02.000Z',
+});
+const confirmedReverse = resolveEcsActiveGuidanceProgress({
+  currentCoordinate: point(180, 0),
+  currentHeadingDegrees: 270,
+  currentSpeedMetersPerSecond: 5,
+  currentGpsAccuracyMeters: 5,
+  activeRoute: straightGuidanceRoute,
+  previousProgress: reverseFixTwo,
+  updatedAt: '2026-07-15T12:00:03.000Z',
+});
+assert(
+  confirmedReverse.routeDistanceFromStartMeters < 220,
+  'Three moving reverse-heading fixes should confirm deliberate backtracking.',
+);
+
+const replacementRoute = singleStepRoute(
+  'replacement-guidance',
+  [point(0, 100), point(1000, 100)],
+  1000,
+  'replacement-guidance:v2',
+);
+const replacementProgress = resolveEcsActiveGuidanceProgress({
+  currentCoordinate: point(10, 100),
+  currentHeadingDegrees: 90,
+  currentGpsAccuracyMeters: 5,
+  activeRoute: replacementRoute,
+  previousProgress: forwardProgress,
+  updatedAt: '2026-07-15T12:00:02.000Z',
+});
+assert(
+  replacementProgress.routeDistanceFromStartMeters < 20,
+  'Route identity replacement must reset prior projection state.',
+);
 
 console.log('ECS active guidance controller regression passed.');

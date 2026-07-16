@@ -72,8 +72,9 @@ assert(
   'Navigate MVUM overlay must not depend on the route catalog viewport fetch/cache/conversion path.',
 );
 assert(
-  navigate.includes('ECS trail segment geometry needs live coverage or a cached viewport.'),
-  'Navigate should present MVUM/segment availability copy instead of implying Explore catalog loading.',
+  navigate.includes('MVUM segments need live coverage or a cached viewport for this map view.') &&
+    navigate.includes('ECS route geometry needs live coverage or a cached viewport for this map view.'),
+  'Navigate should present independent MVUM and Route Geometry offline availability copy.',
 );
 assert(
   navigate.includes('ECS catalog route service is disabled in this build.') &&

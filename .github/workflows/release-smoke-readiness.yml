@@ -46,6 +46,8 @@ jobs:
             .smoke/verification/inventory.json
             .smoke/verification/pr-fast.json
             .smoke/verification/pr-fast.md
+            .smoke/verification/runtime-regression-fast.json
+            .smoke/verification/runtime-regression-fast.md
             .smoke/verification/timings.json
           if-no-files-found: error
           include-hidden-files: true
@@ -77,6 +79,8 @@ jobs:
           path: |
             .smoke/verification/affected-domain.json
             .smoke/verification/affected-domain.md
+            .smoke/verification/runtime-regression-integration.json
+            .smoke/verification/runtime-regression-integration.md
             .smoke/verification/timings.json
           if-no-files-found: error
           include-hidden-files: true

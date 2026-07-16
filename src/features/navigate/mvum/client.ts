@@ -7,6 +7,7 @@ import type {
   RouteGeometryViewportResult,
 } from '../../../../lib/routeGeometryViewport';
 import {
+  MVUM_SOURCE_PROVIDER_PREFIX,
   normalizeMvumCanonicalSegment,
   type MvumCanonicalSegment,
 } from './index';
@@ -24,6 +25,7 @@ export async function fetchNavigateMvumViewportSegments(args: {
     limit: args.limit,
     vehicleClass: args.vehicleClass ?? null,
     includeReferenceGeometry: true,
+    sourceProviderPrefix: MVUM_SOURCE_PROVIDER_PREFIX,
     signal: args.signal,
   });
 }

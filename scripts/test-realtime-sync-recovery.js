@@ -12,7 +12,7 @@ function assert(condition, message) {
 }
 
 const realtimeSource = read('lib/realtimeSync.ts');
-const dispatchSource = read('components/dispatch/DispatchCommandCenter.tsx');
+const dispatchSource = read('components/dispatch/DispatchCadCommandCenter.tsx');
 
 assert(
   realtimeSource.includes("import { connectivity, type ConnectivityStatus } from './connectivity';"),
@@ -137,10 +137,10 @@ assert(
 );
 
 assert(
-  dispatchSource.includes("activeExpedition.source === 'local'") &&
-    dispatchSource.includes('realtime_paused_no_active_team') &&
-    dispatchSource.includes('activeExpedition.source, applyRealtimeEvent'),
-  'Dispatch realtime should not subscribe to team-only channels for the local no-team fallback.',
+  dispatchSource.includes('!dispatchRealtimeEnabled || !recoveryCadRealtimeExpeditionId') &&
+    dispatchSource.includes('!teamSnapshot.activeTeam && !activeConvoyControl') &&
+    dispatchSource.includes("setRealtimeStatus('disabled')"),
+  'Canonical Dispatch realtime should remain disabled without an authorized expedition/team context.',
 );
 
 console.log('realtime sync recovery checks passed');

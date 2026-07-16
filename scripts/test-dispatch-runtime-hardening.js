@@ -391,10 +391,6 @@ async function main() {
     path.join(process.cwd(), 'components/dispatch/DispatchCadCommandCenter.tsx'),
     'utf8',
   );
-  const commandCenterSource = fs.readFileSync(
-    path.join(process.cwd(), 'components/dispatch/DispatchCommandCenter.tsx'),
-    'utf8',
-  );
   const permissionIndex = cadSource.indexOf('const permission = dispatchPermissionSnapshot.can(getEventActionPermission(actionId));');
   const mutationIndex = cadSource.indexOf('submittedEventActionKeysRef.current.add(actionKey);', permissionIndex);
   assert.ok(permissionIndex >= 0 && mutationIndex > permissionIndex, 'CAD actions must authorize before mutating dedupe or UI state.');
@@ -404,9 +400,8 @@ async function main() {
     cadSource.includes('if (isMissionCommandRealtimeEnvelope(envelope))'),
     'The Dispatch realtime handler must forward every typed Mission Command envelope, including playbooks.',
   );
-  assert.ok(commandCenterSource.includes("activeExpedition.source === 'local'"));
-  assert.ok(commandCenterSource.includes("? 'local'"));
-  assert.ok(!/const reportDenied[\s\S]{0,500}dispatchPersistenceAdapter\./.test(commandCenterSource));
+  assert.ok(cadSource.includes('!dispatchRealtimeEnabled || !recoveryCadRealtimeExpeditionId'));
+  assert.ok(cadSource.includes("setRealtimeStatus('disabled')"));
 
   const result = {
     schemaVersion: 1,

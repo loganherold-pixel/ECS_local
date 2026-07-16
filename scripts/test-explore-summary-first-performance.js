@@ -120,9 +120,10 @@ assert(
   'Explore route cards should not render from full Trail Pack detail records.',
 );
 assert(
-  discover.includes('fetchRouteCatalogTrailPackDetail(routeId)') &&
+  discover.includes('fetchRouteCatalogTrailPackDetail(routeId, {') &&
+    discover.includes('sourceVersion: summary.updatedAt') &&
     discover.includes('routeId: summary.routeId'),
-  'Preview/Navigate actions should pass routeId to the detail loader instead of passing hydrated route geometry.',
+  'Preview/Navigate actions should pass routeId plus source version to the detail loader instead of passing hydrated route geometry.',
 );
 assert(
   !discover.includes('routeGeometryViewportOverlayEnabled') &&
@@ -130,17 +131,17 @@ assert(
   'Explore must not mount Navigate MVUM overlay logic or initialize MVUM sources.',
 );
 assert(
-  discover.includes('const [routeCatalogPreviewGeometryRequested, setRouteCatalogPreviewGeometryRequested] = useState(false)') &&
+  discover.includes('const [routeCatalogPreviewGeometryRequested, setRouteCatalogPreviewGeometryRequested] = useState(true)') &&
+    discover.includes('const EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT = 500') &&
     discover.includes('includePreviewGeometry: routeCatalogPreviewGeometryRequested') &&
-    discover.includes('if (refinement != null)') &&
     discover.includes('setRouteCatalogPreviewGeometryRequested(true)'),
-  'Explore should preserve summary-first entry and request bounded preview geometry only after trip refinement begins.',
+  'Explore should preserve summary-card rendering while deliberately requesting bounded preview geometry needed for readiness.',
 );
 assert(
   discover.includes('showGuidanceReadyGeometryLoading') &&
     discover.includes('Loading Verified Route Previews...') &&
     discover.includes('Full route detail remains deferred until you preview, save, build, or start a route.'),
-  'Explore should expose the lazy preview refresh without treating the in-flight summary records as missing geometry.',
+  'Explore should expose the staged preview refresh without treating in-flight summary records as missing geometry.',
 );
 
 const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));

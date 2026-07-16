@@ -10,6 +10,7 @@ import { startECSPerformanceSpan } from './performance/ecsPerformanceDiagnostics
 
 export interface PersistedKeyValueCache {
   get: (key: string) => string | null;
+  readResult: (key: string) => PersistedKeyValueReadResult;
   set: (key: string, value: string) => void;
   delete: (key: string) => void;
   clear: () => void;
@@ -17,6 +18,13 @@ export interface PersistedKeyValueCache {
   waitForHydration: () => Promise<void>;
   isHydrated: () => boolean;
 }
+
+export type PersistedKeyValueReadResult = {
+  ok: boolean;
+  value: string | null;
+  hydrationStatus: PersistedKeyValueDiagnostic['hydrationStatus'];
+  error: string | null;
+};
 
 export type PersistedKeyValueDiagnostic = {
   namespace: string;
@@ -50,6 +58,11 @@ const STARTUP_HYDRATION_RETRY_COUNT = 8;
 const STARTUP_HYDRATION_RETRY_DELAY_MS = 150;
 const IS_DEV_ENV = typeof __DEV__ !== 'undefined' && __DEV__;
 
+type NativePreHydrationMutation =
+  | { type: 'set'; key: string; value: string }
+  | { type: 'delete'; key: string }
+  | { type: 'clear' };
+
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
@@ -75,6 +88,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
   const isWeb = Platform.OS === 'web';
   let cache: Record<string, string> = {};
   const knownKeys = new Set<string>();
+  const preHydrationMutations: NativePreHydrationMutation[] = [];
   let hydrated = isWeb;
   let pendingWrite: ReturnType<typeof setTimeout> | null = null;
   let writePromise: Promise<void> = createResolvedPromise();
@@ -208,6 +222,24 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
     }
   }
 
+  function replayPreHydrationMutations(
+    restored: Record<string, string>,
+  ): Record<string, string> {
+    const next = { ...restored };
+    preHydrationMutations.forEach((mutation) => {
+      if (mutation.type === 'clear') {
+        Object.keys(next).forEach((key) => delete next[key]);
+        return;
+      }
+      if (mutation.type === 'delete') {
+        delete next[mutation.key];
+        return;
+      }
+      next[mutation.key] = mutation.value;
+    });
+    return next;
+  }
+
   async function hydrateNative() {
     const hydrationPerformance = startECSPerformanceSpan(
       'cold_startup_shell',
@@ -215,6 +247,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
       { trackOutstanding: true, metadata: { store: fileKey, startupCritical: isStartupCriticalKey } },
     );
     let hydrationFailed = false;
+    let restoredCache: Record<string, string> = {};
     try {
       const candidates = await getNativePathCandidates();
       debugLog('hydration candidates resolved', { candidates });
@@ -240,20 +273,23 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
 
         const parsed = raw ? JSON.parse(raw) : {};
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          cache = Object.fromEntries(
+          restoredCache = Object.fromEntries(
             Object.entries(parsed).filter((entry): entry is [string, string] => {
               return typeof entry[0] === 'string' && typeof entry[1] === 'string';
             }),
           );
-          Object.keys(cache).forEach((key) => knownKeys.add(key));
           resolvedNativePath = path;
           debugLog('hydrated snapshot accepted', {
             path,
-            keys: Object.keys(cache),
+            keys: Object.keys(restoredCache),
           });
           break;
         }
       }
+
+      cache = replayPreHydrationMutations(restoredCache);
+      knownKeys.clear();
+      Object.keys(cache).forEach((key) => knownKeys.add(key));
     } catch (error) {
       hydrationFailed = true;
       diagnostic.hydrationStatus = 'failed';
@@ -268,6 +304,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
         diagnostic.hydrationStatus = 'ready';
         diagnostic.lastError = null;
       }
+      preHydrationMutations.length = 0;
       updateDiagnostic();
       if (resolveHydration) {
         resolveHydration();
@@ -280,6 +317,13 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
     hydrateNative().catch(() => {});
   }
 
+  function enqueueNativeWrite() {
+    writePromise = writePromise.catch(() => undefined).then(async () => {
+      await hydrationPromise;
+      await writeNativeSnapshot({ ...cache });
+    });
+  }
+
   function scheduleNativeWrite() {
     if (isWeb) return;
     diagnostic.scheduledWrites += 1;
@@ -289,31 +333,63 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
     }
     pendingWrite = setTimeout(() => {
       pendingWrite = null;
-      const snapshot = { ...cache };
       updateDiagnostic();
-      writePromise = writePromise.catch(() => undefined).then(() => writeNativeSnapshot(snapshot));
+      enqueueNativeWrite();
     }, 60);
     updateDiagnostic();
   }
 
   const instance: PersistedKeyValueCache = {
-    get(key: string): string | null {
+    readResult(key: string): PersistedKeyValueReadResult {
       if (isWeb) {
         try {
           if (typeof localStorage !== 'undefined') {
             knownKeys.add(key);
             const value = localStorage.getItem(key);
             updateDiagnostic();
-            return value;
+            return {
+              ok: true,
+              value,
+              hydrationStatus: diagnostic.hydrationStatus,
+              error: null,
+            };
           }
         } catch (error) {
           recordPersistenceError(error);
+          return {
+            ok: false,
+            value: null,
+            hydrationStatus: diagnostic.hydrationStatus,
+            error: safePersistenceError(error),
+          };
         }
-        return null;
+        return {
+          ok: true,
+          value: null,
+          hydrationStatus: diagnostic.hydrationStatus,
+          error: null,
+        };
       }
 
       knownKeys.add(key);
-      return Object.prototype.hasOwnProperty.call(cache, key) ? cache[key] : null;
+      if (diagnostic.hydrationStatus === 'failed') {
+        return {
+          ok: false,
+          value: null,
+          hydrationStatus: diagnostic.hydrationStatus,
+          error: diagnostic.lastError,
+        };
+      }
+      return {
+        ok: hydrated,
+        value: Object.prototype.hasOwnProperty.call(cache, key) ? cache[key] : null,
+        hydrationStatus: diagnostic.hydrationStatus,
+        error: hydrated ? null : 'Persistence hydration is still pending.',
+      };
+    },
+
+    get(key: string): string | null {
+      return instance.readResult(key).value;
     },
 
     set(key: string, value: string) {
@@ -333,6 +409,9 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
         return;
       }
 
+      if (!hydrated) {
+        preHydrationMutations.push({ type: 'set', key, value });
+      }
       knownKeys.add(key);
       cache[key] = value;
       debugLog('set key', { key });
@@ -356,7 +435,14 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
         return;
       }
 
-      if (Object.prototype.hasOwnProperty.call(cache, key)) {
+      const hasCachedKey = Object.prototype.hasOwnProperty.call(cache, key);
+      if (!hydrated) {
+        preHydrationMutations.push({ type: 'delete', key });
+        knownKeys.delete(key);
+        if (hasCachedKey) delete cache[key];
+        debugLog('delete key', { key });
+        scheduleNativeWrite();
+      } else if (hasCachedKey) {
         knownKeys.delete(key);
         delete cache[key];
         debugLog('delete key', { key });
@@ -381,7 +467,13 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
         return;
       }
 
-      if (Object.keys(cache).length > 0) {
+      if (!hydrated) {
+        preHydrationMutations.push({ type: 'clear' });
+        cache = {};
+        knownKeys.clear();
+        debugLog('cleared cache');
+        scheduleNativeWrite();
+      } else if (Object.keys(cache).length > 0) {
         cache = {};
         knownKeys.clear();
         debugLog('cleared cache');
@@ -395,11 +487,11 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
       if (pendingWrite) {
         clearTimeout(pendingWrite);
         pendingWrite = null;
-        const snapshot = { ...cache };
         updateDiagnostic();
-        writePromise = writePromise.catch(() => undefined).then(() => writeNativeSnapshot(snapshot));
+        enqueueNativeWrite();
       }
 
+      await hydrationPromise;
       await writePromise;
     },
 

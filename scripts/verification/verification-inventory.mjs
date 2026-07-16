@@ -324,6 +324,7 @@ export function buildVerificationInventory(options = {}) {
         : 'none',
       capabilities,
       classifications,
+      qualifiedTestIdentities: policyCheck?.qualifiedTestIdentities ?? [],
       duration,
       ciWorkflows: workflows
         .filter((workflow) => workflow.source.includes(`npm run ${packageScript.name}`))

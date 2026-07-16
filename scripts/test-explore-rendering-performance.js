@@ -235,7 +235,8 @@ assert(firstVisibleWork.estimatedInitialCardRenderCount <= 12);
   "delayMs: EXPLORE_ROUTE_DISCOVERY_BATCH_DELAY_MS",
   'cancelShellInteractionTask(opportunityLoadTask);',
   'let routeCatalogRefreshTask: ShellInteractionTask | null = runAfterShellInteractions(() => {',
-  'void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria).then((nextSnapshot) => {',
+  'void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria, {',
+  "cancellationReason: 'unmount'",
   'cancelShellInteractionTask(routeCatalogRefreshTask);',
   "ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android'",
   "backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel",
@@ -254,7 +255,6 @@ assert(firstVisibleWork.estimatedInitialCardRenderCount <= 12);
   'ListFooterComponent={exploreWizardRouteListFooter}',
   'const EMPTY_HIDDEN_GEM_BASELINE_STATE',
   'const EMPTY_POPULAR_TRAILS_STATE',
-  'const EMPTY_EXPLORE_MAP_PREVIEW_ROUTE_SETS',
   'const EXPLORE_ENTRY_CHROME_DELAY_MS',
   'const EXPLORE_ENTRY_HEAVY_CHROME_DELAY_MS',
   'const [exploreEntryChromeReady, setExploreEntryChromeReady] = useState(false);',
@@ -277,7 +277,7 @@ assert(firstVisibleWork.estimatedInitialCardRenderCount <= 12);
   'if (!exploreRefinement) return [] as EnrichedDiscoveryRoute[];',
   'if (!exploreRefinement) return EMPTY_POPULAR_TRAILS_STATE;',
   'if (!exploreRefinement) {\n        return EMPTY_HIDDEN_GEM_BASELINE_STATE;\n      }',
-  'if (!exploreRefinement) return EMPTY_EXPLORE_MAP_PREVIEW_ROUTE_SETS;',
+  'const exploreWizardCandidateSet = exploreGuidanceReadyInventory.candidateSet;',
 ].forEach((needle) => {
   assert(discoverSource.includes(needle), `Explore route list should use virtualized rendering wiring: ${needle}.`);
 });
@@ -290,17 +290,17 @@ assert(
   'Explore should not synchronously validate and distance-enrich seed opportunities in the initial render path.',
 );
 assert(
-  distanceRadiusFilterSource.includes("ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android'") &&
-    distanceRadiusFilterSource.includes('deferControls?: boolean;') &&
+  distanceRadiusFilterSource.includes('deferControls?: boolean;') &&
     distanceRadiusFilterSource.includes('deferControls = false,') &&
     distanceRadiusFilterSource.includes('deferControls ? (') &&
     distanceRadiusFilterSource.includes('s.deferredControlPlaceholder') &&
-    distanceRadiusFilterSource.includes('backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgPanel') &&
-    distanceRadiusFilterSource.includes('backgroundColor: ANDROID_DRAW_OPTIMIZED_SURFACE ? ECS.bgElev') &&
+    distanceRadiusFilterSource.includes('backgroundColor: ECS.bgPanel') &&
+    distanceRadiusFilterSource.includes('backgroundColor: ECS.bgElev') &&
+    !distanceRadiusFilterSource.includes('ANDROID_DRAW_OPTIMIZED_SURFACE') &&
     distanceRadiusFilterSource.includes('refinementChipDisabled: {') &&
     !distanceRadiusFilterSource.includes('refinementChipDisabled: {\n    opacity') &&
     !distanceRadiusFilterSource.includes('refinementChipDisabled: {\r\n    opacity'),
-  'Explore mobile filter surfaces should avoid opacity-based disabled chips and translucent first-viewport Android panels.',
+  'Explore mobile filter surfaces should avoid opacity-based disabled chips and use the shared opaque ECS surfaces on every platform.',
 );
 
 [

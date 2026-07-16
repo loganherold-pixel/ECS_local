@@ -22,7 +22,9 @@ Dispatch is the operational coordination layer for Expedition Command System. It
 
 Primary UI lives in:
 
-- `components/dispatch/DispatchCommandCenter.tsx`
+- `components/dispatch/DispatchCommandCenter.tsx` (canonical entry/re-export)
+- `components/dispatch/DispatchCadCommandCenter.tsx` (single mounted implementation)
+- `components/dispatch/DispatchMissionCommandBoard.tsx` (current Mission Command child)
 - `components/dispatch/DispatchTeamPingComposer.tsx`
 - `components/dispatch/DispatchAssistRequestComposer.tsx`
 - `components/dispatch/DispatchQueueSection.tsx`
@@ -30,7 +32,7 @@ Primary UI lives in:
 - `components/dispatch/DispatchTimelineSection.tsx`
 - `components/dispatch/DispatchAdvisorySurface.tsx`
 
-The Dispatch route/tab should continue to import the command center rather than reimplementing Dispatch logic in route files.
+The Dispatch route/tab must import `DispatchCommandCenter`. Compatibility imports also converge there; route files must not import the implementation directly or reimplement Dispatch logic.
 
 Domain and service code lives in `lib/`:
 
@@ -100,7 +102,7 @@ When adding or changing a domain value, update all helpers that format, sort, fi
 
 ## Hooks And State
 
-There is not a separate Dispatch hook layer yet. The main orchestration currently lives in `DispatchCommandCenter.tsx` using React state, memoized derived values, refs for current lists, and adapter calls.
+There is not a separate Dispatch hook layer yet. The main orchestration currently lives in `DispatchCadCommandCenter.tsx` using React state, external-store subscriptions, memoized derived values, refs, and adapter calls. `DispatchCommandCenter.tsx` intentionally contains no independent orchestration.
 
 Important local state:
 
@@ -397,7 +399,7 @@ Developer diagnostics are dev-only in the UI and should not expose member locati
 ## Add A New Ping Type
 
 1. Add the value to `DispatchPingType` in `lib/dispatchTypes.ts`.
-2. Add display copy in `getPingTypeLabel` inside `DispatchCommandCenter.tsx`.
+2. Add display copy in the canonical CAD/Mission presentation helper used by `DispatchCadCommandCenter.tsx`.
 3. Add queue title mapping in `getQueueTitleForPing`.
 4. Add timeline mapping in `getTimelineTypeForPing` if it needs a specific timeline event.
 5. Update `DispatchTeamPingComposer.tsx` options/templates.
@@ -420,7 +422,7 @@ Developer diagnostics are dev-only in the UI and should not expose member locati
 
 1. Add the value to `DispatchLinkedContextType`.
 2. Add label/action support in `dispatchContextAdapter.ts`.
-3. Add icon support in `getContextIcon` inside `DispatchCommandCenter.tsx`.
+3. Add icon support in the canonical context presentation used by `DispatchCadCommandCenter.tsx`.
 4. Update composer context selector display if needed.
 5. Update privacy rules if the new context can expose location/contact/sensitive data.
 6. Update mock/demo contexts.

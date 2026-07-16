@@ -74,6 +74,7 @@ const liveSnapshot = buildECSWeatherSnapshot({
     data: {
       fetched_at: '2026-04-25T12:00:00.000Z',
       units: 'imperial',
+      provider: 'openweather_one_call_3_0',
       results: [
         {
           lat: 39,
@@ -134,6 +135,8 @@ const liveSnapshot = buildECSWeatherSnapshot({
 });
 
 assert.strictEqual(liveSnapshot.normalized.source, 'live');
+assert.strictEqual(liveSnapshot.provider.name, 'OpenWeather One Call 3.0');
+assert.strictEqual(liveSnapshot.fetchedAt, '2026-04-25T12:00:00.000Z');
 assert.strictEqual(liveSnapshot.normalized.current.temperatureF, 72);
 assert.strictEqual(liveSnapshot.normalized.current.tempF, 72);
 assert.strictEqual(liveSnapshot.normalized.current.temperature, 72);

@@ -7,6 +7,7 @@ const overlayPath = path.join(repoRoot, 'lib', 'navigateExploreRoutesOverlay.ts'
 const handoffPath = path.join(repoRoot, 'lib', 'exploreRoutesMapHandoff.ts');
 const filterStatePath = path.join(repoRoot, 'lib', 'exploreFilterStateStore.ts');
 const discoverPath = path.join(repoRoot, 'app', '(tabs)', 'discover.tsx');
+const readyInventoryPath = path.join(repoRoot, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts');
 const mapRendererPath = path.join(repoRoot, 'components', 'navigate', 'MapRenderer.tsx');
 
 const navigate = fs.readFileSync(navigatePath, 'utf8');
@@ -14,6 +15,7 @@ const overlay = fs.readFileSync(overlayPath, 'utf8');
 const handoff = fs.readFileSync(handoffPath, 'utf8');
 const filterState = fs.readFileSync(filterStatePath, 'utf8');
 const discover = fs.readFileSync(discoverPath, 'utf8');
+const readyInventory = fs.readFileSync(readyInventoryPath, 'utf8');
 const mapRenderer = fs.readFileSync(mapRendererPath, 'utf8');
 
 function assert(condition, message) {
@@ -140,26 +142,29 @@ assert(
 );
 assert(
   discover.includes('Guidance Ready Routes') &&
-    discover.includes('guidanceReadyRouteOptions') &&
-    discover.includes('isExploreGuidanceReadyRoute') &&
+    discover.includes('canonicalExplorePlanningRoutes') &&
+    discover.includes('const mapInventory = buildExploreGuidanceReadyInventory') &&
+    discover.includes('mapInventory.candidateSet.candidates') &&
     discover.includes('exploreMapPreviewRouteCounts') &&
     discover.includes('Hidden Gems') &&
     discover.includes('Trail Packs') &&
     discover.includes('ECS Ideas') &&
-    discover.includes('source-backed routes with usable stitched geometry') &&
+    discover.includes('source-backed route') &&
+    discover.includes('with usable geometry match') &&
     discover.includes('confidence') &&
-    discover.includes('data state') &&
+    discover.includes('source and freshness labels remain visible') &&
     !discover.includes("label: 'Popular Trails'") &&
     !discover.includes('popularTrailRoutes: exploreMapPreviewRouteSets.popularTrailRoutes'),
   'Explorer guidance-ready route set should summarize source-backed Hidden Gems, Trail Packs, Favorites, and ECS Ideas without the Popular Trails container.',
 );
 assert(
-  discover.includes('exploreSuggestedRouteOptions') &&
+  discover.includes('exploreMapPreviewRouteSets') &&
     discover.includes('trailPackRoutes') &&
     discover.includes('favoriteRoutes') &&
     discover.includes('favoritesSnapshot.favorites') &&
+    discover.includes('importedStitchedRoutes') &&
     discover.includes('compatibilityResults: compatResults'),
-  'Explorer Display on Map should use the current filtered Suggested Trailheads universe, including Trail Packs and Favorites.',
+  'Explorer Display on Map should use the current canonical READY universe, including Trail Packs, saved routes, and imported routes.',
 );
 assert(
   discover.includes('saveExploreRoutesMapHandoff') &&
@@ -176,9 +181,9 @@ assert(
   'Explorer route map preview should include every filtered route in normal sets instead of capping below the filtered total.',
 );
 assert(
-  discover.includes('routePassesExploreMapLength') &&
-    discover.includes('MIN_DISCOVERY_ROUTE_MILES'),
-  'Explorer Display on Map must preserve the minimum five-mile route filter.',
+  discover.includes('buildExploreGuidanceReadyInventory({') &&
+    readyInventory.includes('MIN_DISCOVERY_ROUTE_MILES'),
+  'Explorer Display on Map must preserve the shared minimum five-mile route filter.',
 );
 assert(
   navigate.includes('consumeExploreRoutesMapHandoff') &&

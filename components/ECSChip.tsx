@@ -1,5 +1,7 @@
 import React from 'react';
 import {
+  type AccessibilityRole,
+  type AccessibilityState,
   StyleProp,
   StyleSheet,
   Text,
@@ -27,12 +29,21 @@ export interface ECSChipProps {
   textStyle?: StyleProp<TextStyle>;
   children?: React.ReactNode;
   compact?: boolean;
+  accessibilityRole?: AccessibilityRole;
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
+  accessibilityState?: AccessibilityState;
+}
+
+function resolveHitSlop(height: number) {
+  const inset = Math.max(0, Math.ceil((44 - height) / 2));
+  return inset > 0 ? { top: inset, bottom: inset, left: inset, right: inset } : undefined;
 }
 
 export function ECSChip({
   label,
   icon,
-  selected = false,
+  selected,
   disabled = false,
   onPress,
   grow = false,
@@ -41,10 +52,15 @@ export function ECSChip({
   textStyle,
   children,
   compact = false,
+  accessibilityRole,
+  accessibilityLabel,
+  accessibilityHint,
+  accessibilityState,
 }: ECSChipProps) {
+  const isSelected = selected === true;
   const palette = disabled
     ? ECS_BUTTON_COLORS.disabled
-    : selected
+    : isSelected
       ? ECS_BUTTON_COLORS.chipSelected
       : ECS_BUTTON_COLORS.chipDefault;
 
@@ -53,7 +69,15 @@ export function ECSChip({
       onPress={onPress}
       activeOpacity={0.8}
       disabled={disabled}
-      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityRole={accessibilityRole ?? (onPress ? 'button' : undefined)}
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{
+        ...accessibilityState,
+        disabled,
+        selected: selected ?? accessibilityState?.selected,
+      }}
+      hitSlop={resolveHitSlop(compact ? 32 : ECS_INTERACTION.height.chip)}
       style={[
         styles.chip,
         compact && styles.chipCompact,
@@ -72,13 +96,17 @@ export function ECSChip({
         <>
           {icon ? <ECSIcon name={icon} tier={compact ? 'compact' : 'action'} color={palette.text} /> : null}
           {label ? (
-            <Text numberOfLines={2} style={[styles.label, compact && styles.labelCompact, { color: palette.text }, textStyle]}>
+            <Text
+              numberOfLines={2}
+              maxFontSizeMultiplier={1.6}
+              style={[styles.label, compact && styles.labelCompact, { color: palette.text }, textStyle]}
+            >
               {label}
             </Text>
           ) : null}
           {badge != null ? (
             <View style={[styles.badge, { borderColor: `${palette.text}22`, backgroundColor: `${palette.text}12` }]}>
-              <Text style={[styles.badgeText, { color: palette.text }]}>{badge}</Text>
+              <Text maxFontSizeMultiplier={1.6} style={[styles.badgeText, { color: palette.text }]}>{badge}</Text>
             </View>
           ) : null}
         </>
@@ -92,6 +120,7 @@ interface SegmentOption {
   label: string;
   icon?: IconName;
   badge?: string | number | null;
+  disabled?: boolean;
 }
 
 interface ECSSegmentedControlProps {
@@ -108,7 +137,11 @@ export function ECSSegmentedControl({
   style,
 }: ECSSegmentedControlProps) {
   return (
-    <View style={[styles.segmented, style]}>
+    <View
+      accessible={false}
+      accessibilityRole={'tablist' as AccessibilityRole}
+      style={[styles.segmented, style]}
+    >
       {options.map((option) => {
         const selected = option.key === value;
         return (
@@ -118,8 +151,12 @@ export function ECSSegmentedControl({
             icon={option.icon}
             badge={option.badge}
             selected={selected}
+            disabled={option.disabled}
+            accessibilityRole="tab"
+            accessibilityLabel={option.label}
+            accessibilityState={{ selected, disabled: option.disabled }}
             onPress={() => {
-              if (!selected) onChange(option.key);
+              if (!selected && !option.disabled) onChange(option.key);
             }}
             grow
             compact

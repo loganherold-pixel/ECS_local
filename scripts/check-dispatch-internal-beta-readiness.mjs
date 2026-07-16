@@ -39,6 +39,7 @@ function pathsFor(root) {
       tabLayout: path.join(root, 'app', '(tabs)', '_layout.tsx'),
       dispatchTab: path.join(root, 'app', '(tabs)', 'alert.tsx'),
       commandDock: path.join(root, 'components', 'CommandDock.tsx'),
+      commandCenterEntry: path.join(root, 'components', 'dispatch', 'DispatchCommandCenter.tsx'),
       commandCenter: path.join(root, 'components', 'dispatch', 'DispatchCadCommandCenter.tsx'),
       modalShell: path.join(root, 'components', 'ECSModalShell.tsx'),
       rolloutConfig: path.join(root, 'lib', 'dispatchRolloutConfig.ts'),
@@ -325,6 +326,8 @@ function checkRouteGate(root, paths) {
   const layoutSource = readIfExists(paths.source.tabLayout);
   const commandDockSource = readIfExists(paths.source.commandDock);
   const commandCenterExists = fs.existsSync(paths.source.commandCenter);
+  const commandCenterEntryExists = fs.existsSync(paths.source.commandCenterEntry);
+  const commandCenterEntrySource = readIfExists(paths.source.commandCenterEntry);
   let routeManifest = null;
   try {
     routeManifest = loadTypeScriptModule(root, path.join('lib', 'routeManifest.ts'));
@@ -350,12 +353,18 @@ function checkRouteGate(root, paths) {
     ),
     boolCheck(
       'dispatch_tab_imports_command_center',
-      'Dispatch tab imports and renders DispatchCadCommandCenter.',
+      'Dispatch tab imports the canonical entry that resolves to DispatchCadCommandCenter.',
       commandCenterExists &&
-        /DispatchCadCommandCenter/.test(tabSource) &&
-        /<DispatchCadCommandCenter\s*\/>/.test(tabSource),
-      [rel(root, paths.source.dispatchTab), rel(root, paths.source.commandCenter)],
-      ['Wire the primary Dispatch tab to DispatchCadCommandCenter before enabling beta users.'],
+        commandCenterEntryExists &&
+        /DispatchCommandCenter/.test(tabSource) &&
+        /<DispatchCommandCenter\s*\/>/.test(tabSource) &&
+        /from '\.\/DispatchCadCommandCenter'/.test(commandCenterEntrySource),
+      [
+        rel(root, paths.source.dispatchTab),
+        rel(root, paths.source.commandCenterEntry),
+        rel(root, paths.source.commandCenter),
+      ],
+      ['Wire the primary Dispatch tab through the canonical DispatchCommandCenter entry.'],
     ),
     boolCheck(
       'dispatch_tab_registered_as_dispatch',

@@ -67,6 +67,10 @@ jobs:
           path: |
             .smoke/verification/release-candidate.json
             .smoke/verification/release-candidate.md
+            .smoke/verification/runtime-regression-fast.json
+            .smoke/verification/runtime-regression-fast.md
+            .smoke/verification/runtime-regression-integration.json
+            .smoke/verification/runtime-regression-integration.md
             .smoke/verification/release-evidence-report.json
             .smoke/verification/timings.json
             .smoke/verification/pgtap-coverage-result.json

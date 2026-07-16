@@ -143,7 +143,7 @@ includes(mapRenderer, "if (!routeBuilderActive || routeBuilderMode === 'anchor_t
 includes(mapRenderer, "if (routeBuilderMode === 'anchor_trace')", 'Anchor-trace mode should alter click handling.');
 includes(mapRenderer, 'route-profile-focus-source', 'MapRenderer should render the profile focus point.');
 includes(mapRenderer, "provisional: isRouteBuilderSegmentProvisional(segment)", 'MapRenderer should flag unverified route-builder extension segments as provisional.');
-includes(mapRenderer, "['case', ['get', 'provisional'], [1.2, 1.1], [1, 0]]", 'Route-builder provisional segments should render dashed until ECS/Mapbox verification is solid.');
+includes(mapRenderer, "['case', ['get', 'provisional'], ['literal', [1.2, 1.1]], ['literal', [1, 0]]]", 'Route-builder provisional segments should render dashed with a valid Mapbox expression until ECS/Mapbox verification is solid.');
 includes(mapRenderer, 'anchor.hidden', 'MapRenderer should skip hidden active-route-end seed anchors.');
 
 console.log('Navigate long-press UI contract checks passed.');

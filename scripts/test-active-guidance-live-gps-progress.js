@@ -139,6 +139,34 @@ assertCoord(
   'Materially off-route GPS should display at the raw GPS coordinate',
 );
 
+const authoritativeProjection = resolveActiveGuidanceDisplayLocation({
+  active: true,
+  routePoints: [routeStart, routeMid, routeEnd],
+  progressPoints: [routeStart, routeMid],
+  currentLocation: { lat: 38.7862, lng: -121.2137 },
+  snappedLocation: routeMid,
+  isOffRoute: false,
+});
+assertCoord(
+  authoritativeProjection,
+  routeMid,
+  'Mounted display should use the controller-accepted canonical progress point.',
+);
+
+const authoritativeOffRoute = resolveActiveGuidanceDisplayLocation({
+  active: true,
+  routePoints: [routeStart, routeMid, routeEnd],
+  progressPoints: [routeStart, routeMid],
+  currentLocation: { lat: 38.81, lng: -121.18 },
+  snappedLocation: routeMid,
+  isOffRoute: true,
+});
+assertCoord(
+  authoritativeOffRoute,
+  { lat: 38.81, lng: -121.18 },
+  'Confirmed off-route display should preserve raw GPS instead of forcing a snap.',
+);
+
 const inactiveDisplayLocation = resolveActiveGuidanceDisplayLocation({
   active: false,
   routePoints: [straightRoadStart, straightRoadMid, straightRoadEnd],

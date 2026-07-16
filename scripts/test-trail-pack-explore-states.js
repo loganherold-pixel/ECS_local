@@ -134,8 +134,8 @@ const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 const previewModal = read(path.join('components', 'trailPacks', 'TrailPackPreviewModal.tsx'));
 assert(discover.includes('Scanning approved ECS Trail Packs within selected radius…'));
 assert(discover.includes('No live reviewed Trail Packs found within this radius.'));
-assert(discover.includes('Live Trail Packs are not available from reviewed sources yet.'));
-assert(discover.includes('Trail Packs need GPS or an internal search area to filter verified routes by radius.'));
+assert(discover.includes('Live Trail Packs are temporarily unavailable. No seed or mock Trail Packs are shown here.'));
+assert(discover.includes('Trail Packs need GPS or an approved search area to filter verified routes by radius.'));
 assert(discover.includes('Only lower-confidence Trail Packs were found nearby. Expand your radius or enable broader results.'));
 assert(
   previewModal.includes('This is your pending route recommendation.') &&

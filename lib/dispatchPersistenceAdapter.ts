@@ -56,6 +56,7 @@ const DISPATCH_CAD_EVENT_PERSISTENCE_LIMIT = 300;
 const persistence = createPersistedKeyValueCache(STORAGE_FILE);
 const persistenceListeners = new Set<(expeditionId: string) => void>();
 const persistenceRevisions = new Map<string, number>();
+const hydrationFlights = new Map<string, Promise<DispatchPersistenceHydrationResult>>();
 
 // This remains the authoritative local store. The guarded canonical backend
 // coordinator mirrors its durable outbox only when the default-off rollout is
@@ -98,6 +99,22 @@ export interface DispatchPersistenceLoadResult {
   snapshot: DispatchPersistenceSnapshot;
   status: 'ready' | 'recovered';
   safeCode: 'dispatch_persistence_ready' | 'dispatch_persistence_corrupt' | 'dispatch_persistence_partial';
+}
+
+export interface DispatchPersistenceHydrationResult {
+  snapshot: DispatchPersistenceSnapshot | null;
+  status: 'ready' | 'recovered' | 'error' | 'timed_out' | 'cancelled';
+  safeCode:
+    | DispatchPersistenceLoadResult['safeCode']
+    | 'dispatch_persistence_provider_failed'
+    | 'dispatch_persistence_hydration_failed'
+    | 'dispatch_persistence_hydration_timeout'
+    | 'dispatch_persistence_hydration_cancelled';
+}
+
+export interface DispatchPersistenceHydrationOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 function getStorageKey(expeditionId: string): string {
@@ -194,12 +211,12 @@ function normalizeSnapshot(
   });
 }
 
-function loadSnapshotResult(
+function loadSnapshotResultFromRaw(
   expeditionId: string,
   defaults: DispatchPersistenceDefaults,
+  raw: string | null,
 ): DispatchPersistenceLoadResult {
   try {
-    const raw = persistence.get(getStorageKey(expeditionId));
     if (!raw) {
       return {
         snapshot: createSnapshot(expeditionId, defaults),
@@ -248,6 +265,86 @@ function loadSnapshotResult(
       safeCode: 'dispatch_persistence_corrupt',
     };
   }
+}
+
+function loadSnapshotResult(
+  expeditionId: string,
+  defaults: DispatchPersistenceDefaults,
+): DispatchPersistenceLoadResult {
+  return loadSnapshotResultFromRaw(
+    expeditionId,
+    defaults,
+    persistence.get(getStorageKey(expeditionId)),
+  );
+}
+
+function createHydrationFlight(
+  expeditionId: string,
+  defaults: DispatchPersistenceDefaults,
+): Promise<DispatchPersistenceHydrationResult> {
+  const key = getStorageKey(expeditionId);
+  const existing = hydrationFlights.get(key);
+  if (existing) return existing;
+
+  const flight = persistence.waitForHydration()
+    .then<DispatchPersistenceHydrationResult>(() => {
+      const read = persistence.readResult(key);
+      if (!read.ok) {
+        return {
+          snapshot: null,
+          status: 'error',
+          safeCode: 'dispatch_persistence_provider_failed',
+        };
+      }
+      return loadSnapshotResultFromRaw(expeditionId, defaults, read.value);
+    })
+    .catch<DispatchPersistenceHydrationResult>(() => ({
+      snapshot: null,
+      status: 'error',
+      safeCode: 'dispatch_persistence_hydration_failed',
+    }))
+    .finally(() => {
+      if (hydrationFlights.get(key) === flight) hydrationFlights.delete(key);
+    });
+  hydrationFlights.set(key, flight);
+  return flight;
+}
+
+function awaitBoundedHydration(
+  flight: Promise<DispatchPersistenceHydrationResult>,
+  options: DispatchPersistenceHydrationOptions,
+): Promise<DispatchPersistenceHydrationResult> {
+  const timeoutMs = Math.max(100, options.timeoutMs ?? 4_000);
+  if (options.signal?.aborted) {
+    return Promise.resolve({
+      snapshot: null,
+      status: 'cancelled',
+      safeCode: 'dispatch_persistence_hydration_cancelled',
+    });
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: DispatchPersistenceHydrationResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      options.signal?.removeEventListener('abort', onAbort);
+      resolve(result);
+    };
+    const onAbort = () => finish({
+      snapshot: null,
+      status: 'cancelled',
+      safeCode: 'dispatch_persistence_hydration_cancelled',
+    });
+    const timeout = setTimeout(() => finish({
+      snapshot: null,
+      status: 'timed_out',
+      safeCode: 'dispatch_persistence_hydration_timeout',
+    }), timeoutMs);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    void flight.then(finish);
+  });
 }
 
 function loadSnapshot(
@@ -652,8 +749,24 @@ function mergeDispatchCadEvents(events: unknown[]): DispatchEvent[] {
     const event = normalizeDispatchEvent(rawEvent);
     if (!event) continue;
 
+    const eventTime = Date.parse(event.updatedAt ?? event.createdAt);
+    const existingById = byId.get(event.id);
+    if (existingById) {
+      const existingTime = Date.parse(existingById.updatedAt ?? existingById.createdAt);
+      if (Number.isFinite(eventTime) && Number.isFinite(existingTime) && eventTime < existingTime) {
+        continue;
+      }
+    }
+
     const existingIdForDedupe = event.dedupeKey ? byDedupeKey.get(event.dedupeKey) : undefined;
     if (existingIdForDedupe && existingIdForDedupe !== event.id) {
+      const existingForDedupe = byId.get(existingIdForDedupe);
+      const existingTime = existingForDedupe
+        ? Date.parse(existingForDedupe.updatedAt ?? existingForDedupe.createdAt)
+        : Number.NaN;
+      if (Number.isFinite(eventTime) && Number.isFinite(existingTime) && eventTime < existingTime) {
+        continue;
+      }
       byId.delete(existingIdForDedupe);
     }
 
@@ -669,6 +782,21 @@ function mergeDispatchCadEvents(events: unknown[]): DispatchEvent[] {
 export const dispatchPersistenceAdapter = {
   waitForHydration(): Promise<void> {
     return persistence.waitForHydration();
+  },
+
+  hydrateResult(
+    expeditionId: string,
+    defaults: DispatchPersistenceDefaults,
+    options: DispatchPersistenceHydrationOptions = {},
+  ): Promise<DispatchPersistenceHydrationResult> {
+    if (options.signal?.aborted) {
+      return Promise.resolve({
+        snapshot: null,
+        status: 'cancelled',
+        safeCode: 'dispatch_persistence_hydration_cancelled',
+      });
+    }
+    return awaitBoundedHydration(createHydrationFlight(expeditionId, defaults), options);
   },
 
   flush(): Promise<void> {

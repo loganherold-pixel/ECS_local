@@ -60,7 +60,6 @@ export interface SharedWeatherFetchResult {
 }
 
 const DEFAULT_WEATHER_LABEL = 'Current Position';
-let lastResolvedWeatherLocation: ResolvedWeatherLocation | null = null;
 const lastValidSnapshotCache = new Map<string, { snapshot: ECSWeatherSnapshot; cachedAt: number }>();
 
 function isValidLatitude(value: unknown): value is number {
@@ -203,11 +202,10 @@ export function resolveECSWeatherTarget(input: ECSWeatherTargetInput): ResolvedE
         }
       : null,
     manualFallback: toManualCandidate(input.manualFallback),
-    previousLocation: input.previousLocation ?? lastResolvedWeatherLocation,
+    previousLocation: input.previousLocation,
   });
 
   if (location.coordinate) {
-    lastResolvedWeatherLocation = location;
     return {
       coordinate: {
         lat: location.coordinate.lat,
@@ -333,7 +331,6 @@ function buildLocationResolutionForCoordinate(
           cachedAt: coordinate.timestamp ?? Date.now(),
         }
       : null,
-    previousLocation: lastResolvedWeatherLocation,
   });
 }
 

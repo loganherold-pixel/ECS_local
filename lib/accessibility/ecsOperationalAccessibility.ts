@@ -2,6 +2,7 @@ export type ECSOperationalAnnouncementKind =
   | 'error'
   | 'connection_changed'
   | 'route_activated'
+  | 'status_changed'
   | 'stale_data'
   | 'critical_advisory'
   | 'offline_action_queued';
@@ -54,6 +55,9 @@ export function buildECSOperationalAnnouncement(
       break;
     case 'route_activated':
       message = joinAnnouncement(`Route activated: ${subject}.`, event.detail);
+      break;
+    case 'status_changed':
+      message = joinAnnouncement(`${subject}.`, event.detail);
       break;
     case 'stale_data':
       message = joinAnnouncement(`${subject} data is stale.`, event.detail);

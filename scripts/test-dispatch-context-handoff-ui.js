@@ -6,7 +6,6 @@ const root = path.join(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
 const queue = read('components/dispatch/DispatchQueueSection.tsx');
-const legacyDispatch = read('components/dispatch/DispatchCommandCenter.tsx');
 const cadDispatch = read('components/dispatch/DispatchCadCommandCenter.tsx');
 const timeline = read('components/dispatch/DispatchTimelineSection.tsx');
 const navigate = read('app/(tabs)/navigate.tsx');
@@ -16,9 +15,6 @@ const adapter = read('lib/dispatchNavigateContextHandoff.ts');
 assert.match(queue, /label="View Context"/);
 assert.ok(!queue.includes('Context placeholder:'), 'Queue View Context placeholder copy should be removed.');
 assert.match(queue, /permissions\.canViewMemberLocation/);
-assert.match(legacyDispatch, /dispatchNavigateContextAdapter\.open/);
-assert.match(legacyDispatch, /dispatchQueueItemId/);
-assert.match(legacyDispatch, /dispatchPingId/);
 assert.match(timeline, /View Context/);
 
 assert.match(cadDispatch, /dispatchLinkedContextFromLiveEvent/);
@@ -26,6 +22,7 @@ assert.match(cadDispatch, /onViewContext/);
 assert.match(cadDispatch, />View Context</);
 assert.match(cadDispatch, /mapContextIntegration/);
 assert.match(cadDispatch, /dispatchEventId=/);
+assert.match(cadDispatch, /dispatchNavigateContextAdapter\.open/);
 
 const restoreStart = navigate.indexOf('const payload = await loadNavigationHandoffPayload();');
 const contextBranch = navigate.indexOf('isDispatchContextNavigationPayload(payload)', restoreStart);

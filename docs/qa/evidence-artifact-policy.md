@@ -20,7 +20,7 @@ Tracked evidence currently includes 118 PNG screenshots, 124 UI XML dumps, 97 TX
 Verification uploads are schema-versioned, structured metadata only. The approved schemas are:
 
 - `ecs.verification-lane-artifact.v5`: lane identity/outcome, executed scenario coverage, production-approval state, bounded check diagnostics, typed process-failure class, blocker IDs, duration, allowlisted timing comparisons, approved-baseline state, safe provenance, and allowlisted commit/migration-bound pgTAP evidence metadata. Raw TAP output is omitted.
-- `ecs.verification-inventory-artifact.v2`: package/check identities, planned declaration coverage, conservative execution classification, and counts. Raw package commands and target paths are omitted.
+- `ecs.verification-inventory-artifact.v3`: package/check identities, qualified behavioral test identities, planned declaration coverage, conservative execution classification, and counts. Raw package commands and target paths are omitted.
 - `ecs.verification-provenance-artifact.v2`: stable command, workspace, and artifact identities plus file count, byte count, SHA-256, and safe CI identity. Raw command text and artifact paths are omitted.
 - `ecs.verification-timings-artifact.v3`: stable package-qualified timing identities and at most 20 successful duration samples. This job-local file is diagnostic only.
 - `ecs-verification-timing-baseline-v1`: reviewed per-check statistics and comparable runtime identity. The checked-in approved baseline is authoritative; scheduled candidates are review-only and cannot update it automatically.

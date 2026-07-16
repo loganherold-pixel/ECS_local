@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const Module = require('module');
@@ -12,6 +13,14 @@ const activeContextPath = path.join(root, 'lib', 'activeVehicleContext.ts');
 
 process.env.EXPO_PUBLIC_SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://example.supabase.co';
 process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'test-anon-key';
+
+const memoryStorage = new Map();
+global.__DEV__ = false;
+global.localStorage = {
+  getItem(key) { return memoryStorage.has(key) ? memoryStorage.get(key) : null; },
+  setItem(key, value) { memoryStorage.set(key, String(value)); },
+  removeItem(key) { memoryStorage.delete(key); },
+};
 
 const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
@@ -38,6 +47,20 @@ const activeVehicleState = require(activeVehicleStatePath);
 const buildLoadout = require(buildLoadoutPath);
 const selectors = require(selectorPath);
 const activeContext = require(activeContextPath);
+const { vehicleSetupStore } = require(path.join(root, 'lib', 'vehicleSetupStore.ts'));
+const { vehicleSpecStore } = require(path.join(root, 'lib', 'vehicleSpecStore.ts'));
+const { tiresLiftStore } = require(path.join(root, 'lib', 'tiresLiftStore.ts'));
+const {
+  buildProfileFromSpecs,
+  calculateRigCompatibility,
+} = require(path.join(root, 'lib', 'rigCompatibilityEngine.ts'));
+const {
+  buildRouteCampsiteLocatorInput,
+  buildRouteCampsiteLocatorSignature,
+} = require(path.join(root, 'lib', 'campsites', 'routeCampsiteLocatorAdapter.ts'));
+const {
+  selectDashboardWidgetRenderKey,
+} = require(path.join(root, 'lib', 'dashboard', 'dashboardRuntimeSelectors.ts'));
 
 function vehicle(id, overrides = {}) {
   return {
@@ -234,5 +257,155 @@ assert.strictEqual(bridged.capabilitySnapshot.hasVehicle, false);
 assert.strictEqual(typeof activeContext.getActiveVehicleState, 'function');
 assert.strictEqual(typeof activeContext.getVehicleWeightSnapshot, 'function');
 assert.strictEqual(typeof activeContext.getVehicleCapabilitySnapshot, 'function');
+
+vehicleSetupStore.clearActiveVehicleId('cleared');
+assert.strictEqual(
+  activeContext.getActiveVehicleContextWithFallback('route-build-vehicle').activeVehicleId,
+  'route-build-vehicle',
+  'Route/build vehicle identity should remain an explicit fallback when Fleet has no active rig.',
+);
+vehicleSetupStore.setActiveVehicleId('current-active-vehicle', 'user_selection');
+assert.strictEqual(
+  activeContext.getActiveVehicleContextWithFallback('route-build-vehicle').activeVehicleId,
+  'current-active-vehicle',
+  'The current Fleet selection must supersede historical route/build vehicle metadata.',
+);
+vehicleSetupStore.clearActiveVehicleId('cleared');
+
+const switchVehicleA = vehicle('vehicle-switch-a', {
+  name: 'Configured Trail Rig',
+  type: 'truck',
+  avg_mpg: 18,
+  battery_usable_wh: 1200,
+});
+const switchVehicleB = vehicle('vehicle-switch-b', {
+  name: 'Unconfigured Crossover',
+  type: 'car_crossover',
+  make: 'Subaru',
+  model: 'Crosstrek',
+  avg_mpg: null,
+  battery_usable_wh: null,
+});
+memoryStorage.set('ecs_local_vehicles', JSON.stringify([switchVehicleA, switchVehicleB]));
+vehicleSpecStore.set('vehicle-switch-a', spec({
+  base_weight_lb: 4800,
+  gvwr_lb: 6800,
+  fuel_tank_capacity_gal: 30,
+  fuel_type: 'gas',
+}));
+vehicleSpecStore.set('vehicle-switch-b', spec({
+  base_weight_lb: 0,
+  gvwr_lb: 0,
+  fuel_tank_capacity_gal: 0,
+  fuel_type: 'gas',
+}));
+tiresLiftStore.set('vehicle-switch-a', {
+  tireSizeInches: 35,
+  suspensionLiftInches: 3,
+  isLeveled: false,
+  frontLevelInches: 0,
+  updatedAt: '2026-05-05T00:00:00.000Z',
+});
+
+const compatibilityRoute = {
+  id: 'switch-route',
+  name: 'Switch Propagation Route',
+  distanceMiles: 180,
+  terrainType: 'mountain',
+  remotenessScore: 7,
+  estimatedFuelRequired: 14,
+  elevationGainFt: 5200,
+  recommendedTireSize: 35,
+  recommendedLift: 3,
+  terrainDifficulty: 7,
+};
+const campsiteRoute = {
+  routeId: 'switch-route',
+  routeName: 'Switch Propagation Route',
+  sourceType: 'explore',
+  routeCoordinates: [
+    { latitude: 39, longitude: -121 },
+    { latitude: 39.1, longitude: -120.9 },
+  ],
+};
+
+function captureVehicleConsumerProjection() {
+  const context = activeContext.getActiveVehicleContext();
+  const exploreProfile = buildProfileFromSpecs();
+  const compatibility = exploreProfile
+    ? calculateRigCompatibility(exploreProfile, compatibilityRoute)
+    : null;
+  const campContext = {
+    ...campsiteRoute,
+    vehicleProfile: context,
+    vehicleProfileSignature: context.profileSignature,
+  };
+  return {
+    activeVehicleId: context.activeVehicleId,
+    exploreVehicleId: exploreProfile?.vehicleId ?? null,
+    compatibilityScore: compatibility?.score ?? null,
+    campVehicleId:
+      buildRouteCampsiteLocatorInput(campContext)?.vehicleProfile?.activeVehicleId ?? null,
+    campSignature: buildRouteCampsiteLocatorSignature(campContext),
+    dashboardRenderKey: selectDashboardWidgetRenderKey('vehicle-systems', {
+      activeVehicleContext: context,
+    }),
+  };
+}
+
+vehicleSetupStore.setActiveVehicleId('vehicle-switch-a', 'user_selection');
+const vehicleAProjection = captureVehicleConsumerProjection();
+const propagatedSelections = [];
+const stopVehiclePropagation = activeContext.subscribeActiveVehicleState((event) => {
+  propagatedSelections.push({ event, projection: captureVehicleConsumerProjection() });
+});
+
+assert.strictEqual(
+  vehicleSetupStore.setActiveVehicleId('vehicle-switch-b', 'user_selection'),
+  true,
+  'A new Fleet selection should produce one authoritative transition.',
+);
+assert.strictEqual(propagatedSelections.length, 1, 'One active-vehicle switch must produce one consumer invalidation.');
+const vehicleBProjection = propagatedSelections[0].projection;
+assert.deepStrictEqual(propagatedSelections[0].event.sources, ['selection']);
+assert.strictEqual(vehicleBProjection.activeVehicleId, 'vehicle-switch-b');
+assert.strictEqual(
+  vehicleBProjection.exploreVehicleId,
+  'vehicle-switch-b',
+  'Explore compatibility must rebuild from the newly active Fleet vehicle.',
+);
+assert.strictEqual(
+  vehicleBProjection.campVehicleId,
+  'vehicle-switch-b',
+  'CampOps route input must consume the same newly active Fleet vehicle.',
+);
+assert.notStrictEqual(
+  vehicleAProjection.campSignature,
+  vehicleBProjection.campSignature,
+  'CampOps request identity must change when the active vehicle changes.',
+);
+assert.ok(
+  vehicleAProjection.compatibilityScore > vehicleBProjection.compatibilityScore,
+  'Explore compatibility output must reflect materially different active-rig capability.',
+);
+assert.notStrictEqual(
+  vehicleAProjection.dashboardRenderKey,
+  vehicleBProjection.dashboardRenderKey,
+  'The mounted Dashboard render selector must invalidate vehicle surfaces for the newly active rig.',
+);
+assert.strictEqual(
+  vehicleSetupStore.setActiveVehicleId('vehicle-switch-b', 'user_selection'),
+  false,
+  'An equivalent Fleet selection should be deduplicated.',
+);
+assert.strictEqual(propagatedSelections.length, 1);
+stopVehiclePropagation();
+vehicleSetupStore.setActiveVehicleId('vehicle-switch-a', 'user_selection');
+assert.strictEqual(
+  propagatedSelections.length,
+  1,
+  'Unsubscribed Explore, CampOps, and Dashboard consumers must stop receiving Fleet selection updates.',
+);
+vehicleSetupStore.clearActiveVehicleId('cleared');
 
 console.log('Fleet active vehicle state checks passed.');

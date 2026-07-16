@@ -43,12 +43,12 @@ assertIncludes(
   'AttitudeCommandWidget should build weatherForecastRows before rendering the weather panel.',
 );
 assertIncludes(
-  'weatherForecastRows.map((row) =>',
-  'AttitudeCommandWidget should render forecast rows through weatherForecastRows.map.',
+  'currentForecastRows.map((row) =>',
+  'AttitudeCommandWidget should render the bounded current-position forecast rows.',
 );
 assertIncludes(
-  'key={row.key}',
-  'weatherForecastRows.map should use the stable normalized row key.',
+  'key={row.rowKey}',
+  'Current forecast rows should use the stable presentation row key.',
 );
 assertNotIncludes(
   'key={row.label}',

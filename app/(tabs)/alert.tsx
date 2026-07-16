@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import DispatchCadCommandCenter from '../../components/dispatch/DispatchCadCommandCenter';
+import DispatchCommandCenter from '../../components/dispatch/DispatchCommandCenter';
 import Header from '../../components/Header';
 import TabErrorBoundary from '../../components/TabErrorBoundary';
 import TopoBackground from '../../components/TopoBackground';
@@ -31,11 +31,11 @@ function DispatchScreenShell() {
               showsVerticalScrollIndicator={false}
             >
               <View style={[styles.scrollInner, scrollInnerStyle]}>
-                <DispatchCadCommandCenter />
+                <DispatchCommandCenter />
               </View>
             </ScrollView>
           ) : (
-            <DispatchCadCommandCenter />
+            <DispatchCommandCenter />
           )}
         </View>
       </TopoBackground>

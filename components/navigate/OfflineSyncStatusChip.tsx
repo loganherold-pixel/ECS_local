@@ -171,6 +171,7 @@ export default function OfflineSyncStatusChip({
     snapshot.activeJobs,
     snapshot.latestJob,
   ]);
+  const isRestoringSyncState = snapshot.hydrationStatus === 'restoring';
 
   const dismissDisplayJob = () => {
     if (!displayJob || !isTerminalJob(displayJob)) return;
@@ -196,6 +197,34 @@ export default function OfflineSyncStatusChip({
     if (toast) showToast(toast);
   }, [dismissalsHydrated, dismissedSyncKeys, runtimeTerminalKeys, showToast, snapshot.latestJob]);
 
+  if (!displayJob && !isRestoringSyncState) return null;
+
+  if (!displayJob && isRestoringSyncState) {
+    if (placement === 'banner') {
+      return (
+        <View pointerEvents="box-none" style={styles.bannerWrap}>
+          <View style={styles.bannerChip} accessibilityRole="text">
+            <Text style={styles.bannerTitle} numberOfLines={1}>OFFLINE SYNC</Text>
+            <Text style={styles.bannerPercent}>RESTORING</Text>
+          </View>
+        </View>
+      );
+    }
+    return (
+      <View
+        pointerEvents="box-none"
+        style={[styles.wrap, { left: horizontalInset, right: horizontalInset, bottom: bottomOffset }]}
+      >
+        <View style={styles.chip} accessibilityRole="text">
+          <Ionicons name="cloud-download-outline" size={14} color={TACTICAL.amber} />
+          <View style={styles.copy}>
+            <Text style={styles.title}>Restoring offline sync state</Text>
+            <Text style={styles.detail}>Checking cached map and route downloads</Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
   if (!displayJob) return null;
 
   const percent = getJobPercent(displayJob);

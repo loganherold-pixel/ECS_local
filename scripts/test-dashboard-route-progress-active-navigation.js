@@ -1,6 +1,10 @@
+/* global __dirname */
+
 const assert = require('assert');
 const fs = require('fs');
+const Module = require('module');
 const path = require('path');
+const ts = require('typescript');
 
 const root = path.join(__dirname, '..');
 const widgetSource = fs.readFileSync(path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'), 'utf8');
@@ -22,6 +26,28 @@ function includes(source, fragment, message) {
 
 function notIncludes(source, fragment, message) {
   assert.ok(!source.includes(fragment), message);
+}
+
+function loadTsModule(relativePath, mocks = {}) {
+  const filename = path.join(root, relativePath);
+  const source = fs.readFileSync(filename, 'utf8');
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  const loadedModule = new Module(filename, module);
+  loadedModule.filename = filename;
+  loadedModule.paths = Module._nodeModulePaths(path.dirname(filename));
+  const originalRequire = loadedModule.require.bind(loadedModule);
+  loadedModule.require = (request) => (
+    Object.prototype.hasOwnProperty.call(mocks, request) ? mocks[request] : originalRequire(request)
+  );
+  loadedModule._compile(outputText, filename);
+  return loadedModule.exports;
 }
 
 includes(
@@ -88,7 +114,7 @@ includes(
 );
 includes(
   progressSource,
-  'withRouteGeometryFallback(navigateProgressSummary, importedProgressSummary)',
+  'navigateRouteGeometryFallbackIdentity(params.navigateSession)',
   'Active Navigate progress should reuse saved active-route geometry when the live guidance session has no drawable route line.',
 );
 includes(
@@ -101,20 +127,20 @@ includes(
   'rawProgressPercent',
   'Route Progress should prefer live progress percent from the existing Navigate map session.',
 );
-includes(
+notIncludes(
   progressSource,
   'projectLiveLocationToNavigateRoute',
-  'Route Progress should project dashboard GPS onto the active Navigate route when mirroring guidance.',
+  'Route Progress must not independently re-project dashboard GPS away from authoritative Navigate progress.',
 );
-includes(
+notIncludes(
   progressSource,
   'Progress calculated from dashboard GPS projected onto Navigate route',
-  'Route Progress should disclose when dashboard GPS is driving live route progress.',
+  'Route Progress must not claim dashboard GPS is a second progress source.',
 );
-includes(
+notIncludes(
   progressSource,
   'getNavigateSessionProgressSnapshot(params.navigateSession, gpsSpeed, liveGpsLocation)',
-  'Dashboard Route Progress should pass live GPS into the Navigate-session progress adapter.',
+  'Dashboard Route Progress should consume the route-versioned Navigate session without re-projecting live GPS.',
 );
 includes(
   progressSource,
@@ -332,5 +358,262 @@ notIncludes(
   'Guidance standby',
   'No-active-route state should rely on the topo placeholder, not standby copy.',
 );
+
+const inactiveNavigateSession = {
+  sessionId: null,
+  lifecycle: 'inactive',
+  source: 'none',
+  routeId: null,
+  routeTitle: null,
+  routeSubtitle: null,
+  statusLabel: 'No active route',
+  instruction: null,
+  routePoints: [],
+  progressPoints: [],
+  currentLocation: null,
+  headingDeg: null,
+  remainingDistanceM: null,
+  remainingDurationS: null,
+  etaIso: null,
+  progressPercent: null,
+  nextInstructionDistanceM: null,
+  isRerouting: false,
+  isOffRoute: false,
+  offRouteDistanceM: null,
+  routeStatusKind: null,
+  updatedAt: null,
+};
+
+const inactiveRoadSession = {
+  sessionId: null,
+  status: 'idle',
+  destination: null,
+  route: null,
+};
+
+const inactiveTrailSession = {
+  sessionId: null,
+  status: 'idle',
+  payload: null,
+};
+
+const progressRuntime = loadTsModule('lib/activeRouteProgress.ts', {
+  react: {
+    useEffect: () => undefined,
+    useMemo: (factory) => factory(),
+    useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => undefined],
+  },
+  './routeStore': {
+    routeStore: { getActive: () => null, subscribe: () => () => undefined },
+  },
+  './waypointProgressStore': {
+    waypointProgressStore: { getIndex: () => 0, isRouteComplete: () => false },
+  },
+  './navigateRouteSessionStore': {
+    navigateRouteSessionStore: {
+      getSnapshot: () => inactiveNavigateSession,
+      subscribe: () => () => undefined,
+      hydrateFromPersistence: async () => inactiveNavigateSession,
+    },
+  },
+  './useRoadNavigation': {
+    getActiveRoadNavigationSession: () => inactiveRoadSession,
+    subscribeActiveRoadNavigationSession: () => () => undefined,
+  },
+  './useTrailNavigation': {
+    getActiveTrailNavigationSession: () => inactiveTrailSession,
+    subscribeActiveTrailNavigationSession: () => () => undefined,
+  },
+  './vehicleDisplayStore': {
+    vehicleDisplayStore: { getNavigationData: () => ({ currentLat: null, currentLon: null }), subscribe: () => () => undefined },
+  },
+  './routeGuidanceCopy': {
+    buildProceedRouteInstruction: (destination) => `Proceed to ${destination}`,
+  },
+  './navigation/guidanceRouteProjection': {
+    buildGuidanceRouteDistanceIndex: (geometry) => ({ geometry, totalDistanceM: geometry.length > 1 ? 1000 : 0 }),
+    projectGuidanceRouteAtDistance: (index) => (
+      index.geometry.length > 1 ? { coordinate: index.geometry[0] } : null
+    ),
+    resolveGuidanceRouteProgress: ({ routeGeometry }) => ({ completedGeometry: routeGeometry.slice(0, 1) }),
+  },
+});
+
+function savedRoute(overrides = {}) {
+  return {
+    id: 'saved-route-b',
+    name: 'Saved Route B',
+    description: null,
+    linked_run_id: null,
+    source_fingerprint: 'source-fingerprint-b',
+    total_distance_miles: 2,
+    elevation_gain_ft: 300,
+    waypoint_count: 2,
+    segment_count: 1,
+    waypoints: [
+      { lat: 39, lon: -120, name: 'Start', waypointType: null },
+      { lat: 39.02, lon: -120.02, name: 'Finish', waypointType: null },
+    ],
+    segments: [{ points: [{ lat: 39, lon: -120 }, { lat: 39.02, lon: -120.02 }] }],
+    updated_at: '2026-07-15T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function activeNavigateSession(routeId, source = 'road') {
+  return {
+    ...inactiveNavigateSession,
+    sessionId: 'navigate-session-a',
+    lifecycle: 'active',
+    source,
+    routeId,
+    routeTitle: 'Live Route A',
+    statusLabel: 'Route active',
+    remainingDistanceM: 1200,
+    progressPercent: 20,
+    updatedAt: '2026-07-15T12:05:00.000Z',
+  };
+}
+
+function activeRoadSession(routeId) {
+  return {
+    ...inactiveRoadSession,
+    sessionId: 'road-session-a',
+    status: 'navigation_active',
+    destination: {
+      id: routeId,
+      title: 'Road Route A',
+      subtitle: null,
+      coordinate: { lat: 40, lng: -121 },
+      sourceType: 'manual_selection',
+      raw: null,
+    },
+    currentStepIndex: 0,
+    nextInstruction: null,
+    nextInstructionDistanceM: null,
+    remainingDistanceM: 1200,
+    remainingDurationS: 600,
+    routeStatusLabel: 'Route active',
+    routeConfidenceState: 'on_route',
+    offRouteDistanceM: null,
+    error: null,
+    isOffRoute: false,
+    progressGeometry: [],
+    updatedAt: '2026-07-15T12:05:00.000Z',
+  };
+}
+
+function activeTrailSession(routeId, routeMetadata = null) {
+  return {
+    ...inactiveTrailSession,
+    sessionId: 'trail-session-a',
+    status: 'navigation_active_trail',
+    payload: {
+      id: routeId,
+      title: 'Trail Route A',
+      subtitle: null,
+      trailGeometry: [],
+      trailWaypoints: [],
+      trailDecisionPoints: [],
+      tripMode: 'trail',
+      routeMetadata,
+      raw: null,
+    },
+    promptTitle: 'Trail guidance active',
+    promptDetail: null,
+    nextInstructionDistanceM: null,
+    remainingDistanceM: 1200,
+    progressPercent: 20,
+    routeStatusLabel: 'Trail active',
+    progressGeometry: [],
+    updatedAt: '2026-07-15T12:05:00.000Z',
+  };
+}
+
+function getProgressSnapshot({
+  activeRoute = savedRoute(),
+  navigateSession = inactiveNavigateSession,
+  roadSession = inactiveRoadSession,
+  trailSession = inactiveTrailSession,
+  options,
+}) {
+  return progressRuntime.getActiveRouteProgressSnapshot({
+    activeRoute,
+    navigationData: { currentLat: null, currentLon: null },
+    navigateSession,
+    roadSession,
+    trailSession,
+    options,
+  });
+}
+
+[
+  {
+    label: 'Navigate',
+    sessions: { navigateSession: activeNavigateSession('live-route-a') },
+  },
+  {
+    label: 'road',
+    sessions: { roadSession: activeRoadSession('live-route-a') },
+  },
+  {
+    label: 'trail',
+    sessions: { trailSession: activeTrailSession('live-route-a') },
+  },
+].forEach(({ label, sessions }) => {
+  const snapshot = getProgressSnapshot(sessions);
+  assert.strictEqual(
+    snapshot.routePoints.length,
+    0,
+    `${label} route A must not inherit saved route B geometry.`,
+  );
+  assert.ok(
+    !snapshot.geometryStatus.includes('route geometry from saved active route'),
+    `${label} mismatch must remain explicitly geometry-unavailable.`,
+  );
+});
+
+const exactRouteSnapshot = getProgressSnapshot({ roadSession: activeRoadSession('saved-route-b') });
+assert.strictEqual(exactRouteSnapshot.routePoints.length, 2, 'An exact route identity may reuse saved route geometry.');
+
+const linkedRunSnapshot = getProgressSnapshot({
+  activeRoute: savedRoute({ linked_run_id: 'linked-run-a' }),
+  navigateSession: activeNavigateSession('linked-run-a', 'run'),
+});
+assert.strictEqual(linkedRunSnapshot.routePoints.length, 2, 'An explicitly linked run may reuse its saved route geometry.');
+
+const fingerprintSnapshot = getProgressSnapshot({
+  trailSession: activeTrailSession('live-route-a', { source_fingerprint: 'source-fingerprint-b' }),
+});
+assert.strictEqual(
+  fingerprintSnapshot.routePoints.length,
+  2,
+  'An exact explicit source fingerprint may associate otherwise distinct route IDs.',
+);
+
+const staleGpsSnapshot = getProgressSnapshot({
+  options: {
+    gpsLatitude: 39.005,
+    gpsLongitude: -120.995,
+    gpsHasFix: true,
+    gpsTimestampMs: Date.now() - 10 * 60 * 1000,
+  },
+});
+assert.strictEqual(
+  staleGpsSnapshot.stateLabel,
+  'STAGED',
+  'A warm but stale GPS coordinate must not be treated as live imported-route progress.',
+);
+assert.match(staleGpsSnapshot.confidenceLine, /stale/i);
+
+const freshGpsSnapshot = getProgressSnapshot({
+  options: {
+    gpsLatitude: 39.005,
+    gpsLongitude: -120.995,
+    gpsHasFix: true,
+    gpsTimestampMs: Date.now(),
+  },
+});
+assert.strictEqual(freshGpsSnapshot.stateLabel, 'ACTIVE');
 
 console.log('Dashboard Route Progress active navigation checks passed.');

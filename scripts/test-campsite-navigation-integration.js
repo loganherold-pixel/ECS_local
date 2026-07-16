@@ -72,6 +72,17 @@ const routeB = {
   ],
 };
 
+const vehicleProfileA = {
+  profileSignature: 'vehicle-profile-a',
+  vehicle: { id: 'vehicle-a' },
+  capability: { tireSizeInches: 33 },
+};
+const vehicleProfileB = {
+  profileSignature: 'vehicle-profile-b',
+  vehicle: { id: 'vehicle-b' },
+  capability: { tireSizeInches: 37 },
+};
+
 const validInput = buildRouteCampsiteLocatorInput(routeA);
 assert.ok(validInput, 'Route overview with valid route geometry must build locator input.');
 assert.strictEqual(validInput.routeId, 'route-a', 'Route locator input should preserve route identity.');
@@ -79,6 +90,29 @@ assert.strictEqual(validInput.routeSourceType, 'custom', 'Route locator input sh
 assert.ok(
   Array.isArray(validInput.routeCoordinates) && validInput.routeCoordinates.length >= 2,
   'Route locator input should include normalized route geometry.',
+);
+const vehicleAwareInput = buildRouteCampsiteLocatorInput({
+  ...routeA,
+  vehicleProfile: vehicleProfileA,
+  vehicleProfileSignature: vehicleProfileA.profileSignature,
+});
+assert.strictEqual(
+  vehicleAwareInput.vehicleProfile,
+  vehicleProfileA,
+  'Route CampOps input must carry the authoritative active-vehicle context.',
+);
+assert.notStrictEqual(
+  buildRouteCampsiteLocatorSignature({
+    ...routeA,
+    vehicleProfile: vehicleProfileA,
+    vehicleProfileSignature: vehicleProfileA.profileSignature,
+  }),
+  buildRouteCampsiteLocatorSignature({
+    ...routeA,
+    vehicleProfile: vehicleProfileB,
+    vehicleProfileSignature: vehicleProfileB.profileSignature,
+  }),
+  'Switching the active vehicle must invalidate the route CampOps request signature.',
 );
 assert.notStrictEqual(
   buildRouteCampsiteLocatorSignature(routeA),

@@ -91,7 +91,10 @@ import {
   type ExpeditionPreflightRoutePacket,
 } from '../../lib/expeditionPreflightRoutePacket';
 import { expeditionLaunchHandoffStore } from '../../lib/expeditionLaunchHandoffStore';
-import { expeditionStateStore } from '../../lib/expeditionStateStore';
+import {
+  expeditionStateStore,
+  getExpeditionRuntimeSnapshot,
+} from '../../lib/expeditionStateStore';
 import { recordBriefCadEntry } from '../../lib/briefCadLogStore';
 import {
   convoyMembershipService,
@@ -176,6 +179,21 @@ import { expandCampLayerFetchBbox } from '../../lib/map/campLayerFetchScheduler'
 import {
   NavigateMapLayerCoordinator,
 } from '../../lib/map/navigateMapLayerCoordinator';
+import {
+  createNavigateAsyncLayerDiagnostic,
+  logNavigateAsyncLayerDiagnostic,
+  type NavigateAsyncLayerEligibility,
+} from '../../lib/map/navigateAsyncLayerDiagnostic';
+import {
+  beginECSAsyncSurfaceRequest,
+  createECSAsyncSurfaceState,
+  disableECSAsyncSurface,
+  settleECSAsyncSurfaceRequest,
+  type ECSAsyncCancellationReason,
+  type ECSAsyncProviderStatus,
+  type ECSAsyncSurfaceState,
+  type ECSAsyncTerminalStatus,
+} from '../../lib/state/asyncSurfaceState';
 import {
   getCampLayerZoomPrompt,
   isCampLayerZoomEligible,
@@ -294,6 +312,7 @@ import {
 import {
   addActiveGuidanceExtensionAnchor,
   addAnchorToDraft,
+  buildRouteBuilderPresentationSegmentsFromDraft,
   buildRouteBuilderSegmentsFromDraft,
   buildRouteFromNearestAnchor,
   clearNavigateRouteDraft,
@@ -324,8 +343,14 @@ import {
 } from '../../lib/routeGeometryViewport';
 import {
   fetchRouteGeometryViewportSegments,
+  getRouteGeometryViewportProviderAvailability,
   isRouteGeometryViewportOverlayFeatureEnabled,
+  RouteGeometryViewportProviderUnavailableError,
 } from '../../lib/routeGeometryViewportClient';
+import {
+  readRouteGeometryViewportOfflineCache,
+  writeRouteGeometryViewportOfflineCache,
+} from '../../lib/routeGeometryViewportCache';
 import {
   type RouteCatalogViewportFeature,
   type RouteCatalogViewportFeatureCollection,
@@ -350,6 +375,7 @@ import {
   resolveNavigateMvumVectorTileUrl,
   toggleMvumSelectedSegmentId,
   MVUM_OVERLAY_MIN_ZOOM,
+  MVUM_SOURCE_PROVIDER_PREFIX,
   type MvumCanonicalSegment,
 } from '../../src/features/navigate/mvum';
 import {
@@ -422,7 +448,6 @@ import {
 
 import { pinStore } from '../../lib/pinStore';
 import { parseGpxPinWaypoints } from '../../lib/pinGpxImport';
-import { missionExpeditionStore } from '../../lib/missionStore';
 import {
   trailStore,
   type TrailRecordingStatus,
@@ -449,6 +474,8 @@ import type {
   TrailSegmentData,
   SpeedSegmentData,
   UserLocationTapPayload,
+  NavigateMapLayerRenderState,
+  MapRendererBootState,
 } from '../../components/navigate/MapRenderer';
 
 // -- Remoteness Store import for campsite scoring (Phase 2) --
@@ -544,8 +571,7 @@ import {
 } from '../../lib/resourceForecastEngine';
 
 import {
-  getActiveVehicleContext,
-  getVehicleContext,
+  getActiveVehicleContextWithFallback,
   subscribeActiveVehicleState,
 } from '../../lib/activeVehicleContext';
 import { consumablesStore } from '../../lib/consumablesStore';
@@ -984,22 +1010,25 @@ function formatCampLayerErrorDiagnostic(diagnostic?: CampLayerUiState['diagnosti
   return `${diagnostic.layer} - ${status} - ${code} - ${diagnostic.endpoint}`;
 }
 
-type RouteGeometryViewportUiStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'zoom' | 'offline';
-
-type RouteGeometryViewportUiState = {
+type RouteGeometryViewportUiState = ECSAsyncSurfaceState<RouteGeometryViewportResult> & {
   enabled: boolean;
-  status: RouteGeometryViewportUiStatus;
   errorMessage: string | null;
   featureCount: number;
   cappedCount: number;
   skippedMissingGeometryCount: number;
+  invalidFeatureCount: number;
   skippedClosedCount: number;
-  dataState: 'live' | 'cached' | 'stale' | 'unknown';
+  cacheHit: boolean;
+  dataState: 'live' | 'cached' | 'stale' | 'degraded' | 'unknown';
   lastAttemptedBbox: RouteGeometryViewportBbox | null;
   lastAttemptedCacheKey: string | null;
   lastSuccessfulBbox: RouteGeometryViewportBbox | null;
   lastSuccessfulCacheKey: string | null;
 };
+
+const NAVIGATE_VIEWPORT_BOUNDS_TIMEOUT_MS = 5_000;
+const NAVIGATE_ROUTE_GEOMETRY_PROVIDER = 'route-geometry-segments:all';
+const NAVIGATE_MVUM_PROVIDER = `route-geometry-segments:${MVUM_SOURCE_PROVIDER_PREFIX}`;
 
 type NavigateRouteRuntimeContract = {
   mvumSegments: MvumSegmentSummary[];
@@ -1007,20 +1036,173 @@ type NavigateRouteRuntimeContract = {
   stitchedDraft: StitchedRouteDraft | null;
 };
 
-function createRouteGeometryViewportUiState(enabled = false): RouteGeometryViewportUiState {
+function createRouteGeometryViewportUiState(
+  enabled = false,
+  surfaceId = 'navigate_route_geometry',
+  provider = NAVIGATE_ROUTE_GEOMETRY_PROVIDER,
+): RouteGeometryViewportUiState {
+  const lifecycle = createECSAsyncSurfaceState<RouteGeometryViewportResult>({
+    surfaceId,
+    featureEnabled: enabled,
+    provider,
+  });
   return {
+    ...lifecycle,
     enabled,
-    status: enabled ? 'loading' : 'idle',
     errorMessage: null,
     featureCount: 0,
     cappedCount: 0,
     skippedMissingGeometryCount: 0,
+    invalidFeatureCount: 0,
     skippedClosedCount: 0,
+    cacheHit: false,
     dataState: 'unknown',
     lastAttemptedBbox: null,
     lastAttemptedCacheKey: null,
     lastSuccessfulBbox: null,
     lastSuccessfulCacheKey: null,
+  };
+}
+
+function beginRouteGeometryViewportUiRequest(
+  current: RouteGeometryViewportUiState,
+  options: {
+    requestFingerprint: unknown;
+    bbox?: RouteGeometryViewportBbox | null;
+    cacheKey?: string | null;
+    preserveData?: boolean;
+  },
+): RouteGeometryViewportUiState {
+  const preserveVisibleMetrics =
+    options.preserveData !== false &&
+    options.cacheKey != null &&
+    options.cacheKey === current.lastSuccessfulCacheKey;
+  const lifecycle = beginECSAsyncSurfaceRequest(current, {
+    requestFingerprint: options.requestFingerprint,
+    provider: current.provider ?? NAVIGATE_ROUTE_GEOMETRY_PROVIDER,
+    preserveData: options.preserveData !== false,
+    preserveLastGood: true,
+  });
+  return {
+    ...current,
+    ...lifecycle,
+    enabled: true,
+    errorMessage: null,
+    featureCount: preserveVisibleMetrics ? current.featureCount : 0,
+    cappedCount: preserveVisibleMetrics ? current.cappedCount : 0,
+    skippedMissingGeometryCount: preserveVisibleMetrics ? current.skippedMissingGeometryCount : 0,
+    invalidFeatureCount: preserveVisibleMetrics ? current.invalidFeatureCount : 0,
+    skippedClosedCount: preserveVisibleMetrics ? current.skippedClosedCount : 0,
+    cacheHit: false,
+    lastAttemptedBbox: options.bbox ?? current.lastAttemptedBbox,
+    lastAttemptedCacheKey: options.cacheKey ?? current.lastAttemptedCacheKey,
+  };
+}
+
+function settleRouteGeometryViewportUiRequest(
+  current: RouteGeometryViewportUiState,
+  options: {
+    status: ECSAsyncTerminalStatus;
+    result?: RouteGeometryViewportResult | null;
+    errorMessage?: string | null;
+    safeErrorCode?: string | null;
+    dataState: RouteGeometryViewportUiState['dataState'];
+    bbox?: RouteGeometryViewportBbox | null;
+    cacheKey?: string | null;
+    source?: 'live' | 'cached' | 'unavailable';
+    freshness?: 'live' | 'recent' | 'stale' | 'expired' | 'unavailable';
+    retryEligible?: boolean;
+    providerStatus?: ECSAsyncProviderStatus;
+    cancellationReason?: ECSAsyncCancellationReason | null;
+    cacheHit?: boolean;
+  },
+): RouteGeometryViewportUiState {
+  const loading = current.status === 'loading'
+    ? current
+    : beginRouteGeometryViewportUiRequest(current, {
+        requestFingerprint: options.cacheKey ?? options.bbox ?? options.status,
+        bbox: options.bbox,
+        cacheKey: options.cacheKey,
+      });
+  const result = options.result;
+  const activeResult =
+    result === undefined &&
+    options.dataState === 'unknown' &&
+    (options.status === 'error' || options.status === 'cancelled' || options.status === 'disabled')
+      ? null
+      : result;
+  const transition = settleECSAsyncSurfaceRequest(loading, {
+    requestId: loading.requestId,
+    generation: loading.generation,
+    requestFingerprint: loading.requestFingerprint,
+    status: options.status,
+    data: activeResult,
+    lastGoodData:
+      options.status === 'ready' && result != null
+        ? result
+        : undefined,
+    source: options.source ?? (options.dataState === 'live' ? 'live' : options.dataState === 'unknown' ? 'unavailable' : 'cached'),
+    freshness: options.freshness ?? (options.dataState === 'live' ? 'live' : options.dataState === 'stale' ? 'stale' : options.dataState === 'cached' ? 'recent' : 'unavailable'),
+    safeErrorCode: options.safeErrorCode,
+    retryEligible: options.retryEligible,
+    providerStatus: options.providerStatus,
+    cancellationReason: options.cancellationReason,
+    resultCount: result?.segments.length ?? (options.status === 'empty' ? 0 : undefined),
+  });
+  if (!transition.applied) return current;
+  const resetResultMetrics =
+    result == null &&
+    (options.status === 'error' || options.status === 'cancelled' || options.status === 'disabled');
+  return {
+    ...current,
+    ...transition.state,
+    enabled: options.status !== 'disabled',
+    errorMessage: options.errorMessage ?? null,
+    featureCount: result?.segments.length ?? (resetResultMetrics ? 0 : current.featureCount),
+    cappedCount: result?.cappedCount ?? (resetResultMetrics ? 0 : current.cappedCount),
+    skippedMissingGeometryCount:
+      result?.skippedMissingGeometryCount ?? (resetResultMetrics ? 0 : current.skippedMissingGeometryCount),
+    invalidFeatureCount:
+      result?.invalidFeatureCount ??
+      result?.skippedMissingGeometryCount ??
+      (resetResultMetrics ? 0 : current.invalidFeatureCount),
+    skippedClosedCount:
+      result?.skippedClosedCount ?? (resetResultMetrics ? 0 : current.skippedClosedCount),
+    cacheHit: options.cacheHit ?? options.source === 'cached',
+    dataState: options.dataState,
+    lastAttemptedBbox: options.bbox ?? current.lastAttemptedBbox,
+    lastAttemptedCacheKey: options.cacheKey ?? current.lastAttemptedCacheKey,
+    lastSuccessfulBbox:
+      options.status === 'ready' || options.status === 'empty' || options.status === 'stale' || options.status === 'degraded'
+        ? options.bbox ?? current.lastSuccessfulBbox
+        : current.lastSuccessfulBbox,
+    lastSuccessfulCacheKey:
+      options.status === 'ready' || options.status === 'empty' || options.status === 'stale' || options.status === 'degraded'
+        ? options.cacheKey ?? current.lastSuccessfulCacheKey
+        : current.lastSuccessfulCacheKey,
+  };
+}
+
+function disableRouteGeometryViewportUiState(
+  current: RouteGeometryViewportUiState,
+): RouteGeometryViewportUiState {
+  const lifecycle = disableECSAsyncSurface(current, {
+    reason: 'feature_disabled',
+    safeErrorCode: 'FEATURE_DISABLED',
+    preserveLastGood: false,
+  });
+  return {
+    ...current,
+    ...lifecycle,
+    enabled: false,
+    errorMessage: null,
+    featureCount: 0,
+    cappedCount: 0,
+    skippedMissingGeometryCount: 0,
+    invalidFeatureCount: 0,
+    skippedClosedCount: 0,
+    cacheHit: false,
+    dataState: 'unknown',
   };
 }
 
@@ -2451,7 +2633,7 @@ function buildOfflineCachedRoadPreviewRoute(
   const geometry = (route.routeGeometry ?? [])
     .map((point) => ({ lat: Number(point.latitude), lng: Number(point.longitude) }))
     .filter(isRoadNavCoordinate);
-  if (geometry.length < 1) return null;
+  if (geometry.length < 2) return null;
 
   return buildRoadRouteFromCachedGeometry({
     id: `offline-sync-preview:${route.id}:${Date.now().toString(36)}`,
@@ -3049,6 +3231,8 @@ function sameRouteBuilderSegments(
     if (
       left.id !== right.id ||
       left.sourceSegmentId !== right.sourceSegmentId ||
+      left.geometryRole !== right.geometryRole ||
+      left.provisional !== right.provisional ||
       JSON.stringify(left.buildSource ?? null) !== JSON.stringify(right.buildSource ?? null) ||
       !sameCoordinateList(left.coordinates, right.coordinates) ||
       !sameCoordinateList(left.rawSegment, right.rawSegment) ||
@@ -3493,10 +3677,7 @@ const [dispatchEvents, setDispatchEvents] = useState<DispatchEvent[]>(() => disp
 const [dispatchContextHandoffTarget, setDispatchContextHandoffTarget] = useState<DispatchNavigateContextTarget | null>(null);
 const [selectedConvoyMemberId, setSelectedConvoyMemberId] = useState<string | null>(null);
 const [selectedDispatchPingEventId, setSelectedDispatchPingEventId] = useState<string | null>(null);
-const [expeditionRuntime, setExpeditionRuntime] = useState(() => ({
-  state: expeditionStateStore.getState(),
-  record: expeditionStateStore.getCurrentExpedition(),
-}));
+const [expeditionRuntime, setExpeditionRuntime] = useState(getExpeditionRuntimeSnapshot);
 
 // -- ECS UI State -----------------------------
 const [mapStyleMode, setMapStyleMode] = useState<NavigateMapStyleMode>(() => cachedMapStyleModePreference ?? 'day');
@@ -4020,9 +4201,9 @@ function buildRouteConfidenceInputFromPreview(args: {
     }
   }, []);
 
-  useEffect(() => expeditionStateStore.subscribe((state, record) => {
+  useEffect(() => expeditionStateStore.subscribe(() => {
     setExpeditionSessionRevision((revision) => revision + 1);
-    setExpeditionRuntime({ state, record });
+    setExpeditionRuntime(getExpeditionRuntimeSnapshot());
   }), []);
 
   useEffect(() => dispatchEventStore.subscribe((events) => {
@@ -4126,6 +4307,7 @@ const [mapToken, setMapToken] = useState<string | null>(initialMapTokenRef.curre
 const [mapLoading, setMapLoading] = useState(initialMapTokenRef.current.length === 0);
 const [mapSurfaceReady, setMapSurfaceReady] = useState(false);
 const [mapOverlayStartupReady, setMapOverlayStartupReady] = useState(false);
+const [mapBootState, setMapBootState] = useState<MapRendererBootState>('loading');
 const [mapSurfaceRevision, setMapSurfaceRevision] = useState(0);
 const [keyboardHeight, setKeyboardHeight] = useState(0);
 
@@ -4163,7 +4345,11 @@ useEffect(() => {
 }, []);
 
 useEffect(() => {
-  if (!hasToken || mapLoading || !mapSurfaceReady) {
+  const terminalBootState =
+    mapBootState === 'degraded'
+    || mapBootState === 'disabled'
+    || mapBootState === 'error';
+  if (mapLoading || (!mapSurfaceReady && !terminalBootState)) {
     setMapOverlayStartupReady(false);
     return undefined;
   }
@@ -4174,7 +4360,7 @@ useEffect(() => {
   }, isFocused ? 120 : 0);
 
   return () => clearTimeout(timer);
-}, [hasToken, isFocused, mapLoading, mapSurfaceReady]);
+}, [isFocused, mapBootState, mapLoading, mapSurfaceReady]);
 
 useEffect(() => {
   const handleKeyboardShow = (event: { endCoordinates?: { height?: number } }) => {
@@ -4378,6 +4564,8 @@ useEffect(() => {
 
 
   const handleMapRetry = useCallback(async () => {
+    setMapBootState('loading');
+    setMapOverlayStartupReady(false);
     setMapLoading(true);
     setMapSurfaceReady(false);
     tokenResolvedRef.current = false;
@@ -4528,10 +4716,18 @@ const queueMapCameraCommand = useCallback((
   const [navigateConnectivity, setNavigateConnectivity] = useState<ConnectivityDetailedState>(
     () => connectivity.getDetailedState(),
   );
-  const [roadNavLocationMeta, setRoadNavLocationMeta] = useState<{
+  const roadNavLocationMeta = useMemo<{
     accuracyM: number | null;
     speedMph: number | null;
-  }>({ accuracyM: null, speedMph: null });
+    headingDeg: number | null;
+  }>(() => {
+    const position = gps.rawGPS.position ?? gps.position;
+    return {
+      accuracyM: position?.accuracyM ?? null,
+      speedMph: position?.speedMph ?? null,
+      headingDeg: position?.headingDeg ?? null,
+    };
+  }, [gps.position, gps.rawGPS.position]);
   const [navigateTileCacheSnapshot, setNavigateTileCacheSnapshot] = useState(() => ({
     regions: tileCacheStore.getRegions(),
     stats: tileCacheStore.getStats(),
@@ -4661,9 +4857,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     navigateConnectivity.status,
   );
 
-  const activeExpedition = useMemo(() => missionExpeditionStore.getActive(), []);
-  const activeExpeditionId = activeExpedition?.id || null;
-  const activeExpeditionName = activeExpedition?.name || null;
+  const activeExpeditionRecord = expeditionRuntime.activeRecord;
+  const activeExpeditionId = activeExpeditionRecord?.id ?? null;
+  const activeExpeditionName =
+    activeExpeditionRecord?.expeditionName ?? activeExpeditionRecord?.vehicleName ?? null;
 
   const [exportPins, setExportPins] = useState<ECSPin[]>([]);
   const [exportModalVisible, setExportModalVisible] = useState(false);
@@ -4752,6 +4949,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     () => isRouteGeometryViewportOverlayFeatureEnabled(),
     [],
   );
+  const routeGeometryViewportProviderAvailability = useMemo(
+    () => getRouteGeometryViewportProviderAvailability(),
+    [],
+  );
   const navigateMvumVectorTileUrl = useMemo(() => resolveNavigateMvumVectorTileUrl(), []);
   const navigateMvumVectorSourceLayer = useMemo(() => resolveNavigateMvumVectorSourceLayer(), []);
   const [routeCatalogViewportResult, setRouteCatalogViewportResult] = useState<RouteCatalogViewportResult | null>(null);
@@ -4765,14 +4966,35 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const routeGeometryViewportSelectionTimestampsRef = useRef(new Map<string, string>());
   const [selectedRouteCatalogViewportFeatureId, setSelectedRouteCatalogViewportFeatureId] = useState<string | null>(null);
   const [routeGeometryViewportUiState, setRouteGeometryViewportUiState] = useState<RouteGeometryViewportUiState>(
-    () => createRouteGeometryViewportUiState(false),
+    () => createRouteGeometryViewportUiState(false, 'navigate_route_geometry'),
   );
   const [mvumViewportUiState, setMvumViewportUiState] = useState<RouteGeometryViewportUiState>(
-    () => createRouteGeometryViewportUiState(false),
+    () => createRouteGeometryViewportUiState(false, 'navigate_mvum_segments', NAVIGATE_MVUM_PROVIDER),
   );
+  const routeGeometryViewportUiStateRef = useRef(routeGeometryViewportUiState);
+  const mvumViewportUiStateRef = useRef(mvumViewportUiState);
+  const [routeGeometryLayerRenderState, setRouteGeometryLayerRenderState] =
+    useState<NavigateMapLayerRenderState | null>(null);
+  const [mvumLayerRenderState, setMvumLayerRenderState] =
+    useState<NavigateMapLayerRenderState | null>(null);
+  const [mvumViewportRetryTrigger, setMvumViewportRetryTrigger] = useState(0);
+  const [routeGeometryViewportRetryTrigger, setRouteGeometryViewportRetryTrigger] = useState(0);
   const mvumViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigateMapLayerCoordinatorRef = useRef(new NavigateMapLayerCoordinator());
   const routeGeometryViewportFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigateViewportBoundsDeadlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    routeGeometryViewportUiStateRef.current = routeGeometryViewportUiState;
+  }, [routeGeometryViewportUiState]);
+  useEffect(() => {
+    mvumViewportUiStateRef.current = mvumViewportUiState;
+  }, [mvumViewportUiState]);
+  useEffect(() => {
+    setRouteGeometryLayerRenderState(null);
+  }, [routeGeometryViewportUiState.generation]);
+  useEffect(() => {
+    setMvumLayerRenderState(null);
+  }, [mvumViewportUiState.generation]);
   useEffect(() => () => {
     activeRouteImportAbortRef.current?.abort();
     activeRouteImportAbortRef.current = null;
@@ -4834,21 +5056,58 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   );
 
   const roadNavigationCurrentLocation = useMemo(
-    () =>
-      userLocation
+    () => {
+      const position = gps.rawGPS.position ?? gps.position;
+      const hasFix = gps.rawGPS.hasFix || gps.hasFix;
+      if (hasFix && position) {
+        return {
+          lat: position.latitude,
+          lng: position.longitude,
+          accuracyM: position.accuracyM ?? null,
+          speedMph: position.speedMph ?? null,
+          headingDeg: position.headingDeg ?? null,
+        };
+      }
+      return userLocation
         ? {
             lat: userLocation.lat,
             lng: userLocation.lng,
             accuracyM: roadNavLocationMeta.accuracyM,
             speedMph: roadNavLocationMeta.speedMph,
+            headingDeg: roadNavLocationMeta.headingDeg,
           }
-        : null,
-    [roadNavLocationMeta.accuracyM, roadNavLocationMeta.speedMph, userLocation],
+        : null;
+    },
+    [
+      gps.hasFix,
+      gps.position,
+      gps.rawGPS.hasFix,
+      gps.rawGPS.position,
+      roadNavLocationMeta.accuracyM,
+      roadNavLocationMeta.headingDeg,
+      roadNavLocationMeta.speedMph,
+      userLocation,
+    ],
   );
   const liveNavigateServicesEnabled =
     !!mapToken &&
     (!navigateConnectivity.initialized ||
       (navigateConnectivity.status === 'online' && navigateConnectivity.isInternetReachable));
+  const [navigateRouteHydrationSettled, setNavigateRouteHydrationSettled] = useState(() => {
+    const status = navigateRouteSessionStore.getHydrationState().status;
+    return status === 'ready' || status === 'error';
+  });
+  useEffect(() => {
+    let mounted = true;
+    void navigateRouteSessionStore.hydrateFromPersistence()
+      .catch(() => navigateRouteSessionStore.getSnapshot())
+      .finally(() => {
+        if (mounted) setNavigateRouteHydrationSettled(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const roadNavigation = useRoadNavigation({
     accessToken: mapToken || null,
@@ -5413,29 +5672,94 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       clearTimeout(routeGeometryViewportFetchTimerRef.current);
       routeGeometryViewportFetchTimerRef.current = null;
     }
+    if (navigateViewportBoundsDeadlineTimerRef.current) {
+      clearTimeout(navigateViewportBoundsDeadlineTimerRef.current);
+      navigateViewportBoundsDeadlineTimerRef.current = null;
+    }
     navigateMapLayerCoordinatorRef.current.dispose();
   }, []);
 
   useEffect(() => {
-    if (
-      !routeGeometryOverlayEnabled ||
-      !routeGeometryViewportOverlayEnabled ||
-      !routeGeometryViewportZoomReady
-    ) {
+    const routeGeometryNeedsBounds =
+      routeGeometryOverlayEnabled &&
+      routeGeometryViewportOverlayEnabled &&
+      routeGeometryViewportZoomReady;
+    const mvumNeedsBounds =
+      mvumOverlayEnabled &&
+      mvumViewportZoomReady &&
+      !navigateMvumVectorTileUrl;
+    if (mapBounds || (!routeGeometryNeedsBounds && !mvumNeedsBounds)) {
+      if (navigateViewportBoundsDeadlineTimerRef.current) {
+        clearTimeout(navigateViewportBoundsDeadlineTimerRef.current);
+        navigateViewportBoundsDeadlineTimerRef.current = null;
+      }
       return;
     }
-    if (!mapBounds) {
-      setRouteGeometryViewportUiState((current) => ({
-        ...current,
-        enabled: true,
-        status: 'loading',
-        errorMessage: null,
-      }));
-      setRequestBoundsTrigger((prev) => prev + 1);
+    if (routeGeometryNeedsBounds) {
+      setRouteGeometryViewportUiState((current) =>
+        beginRouteGeometryViewportUiRequest(current, {
+          requestFingerprint: 'route_geometry:viewport_bounds',
+        }),
+      );
     }
+    if (mvumNeedsBounds) {
+      setMvumViewportUiState((current) =>
+        beginRouteGeometryViewportUiRequest(current, {
+          requestFingerprint: 'mvum:viewport_bounds',
+        }),
+      );
+    }
+    setRequestBoundsTrigger((prev) => prev + 1);
+    if (navigateViewportBoundsDeadlineTimerRef.current) {
+      clearTimeout(navigateViewportBoundsDeadlineTimerRef.current);
+    }
+    navigateViewportBoundsDeadlineTimerRef.current = setTimeout(() => {
+      navigateViewportBoundsDeadlineTimerRef.current = null;
+      if (routeGeometryNeedsBounds) {
+        setRouteGeometryViewportUiState((current) =>
+          current.status === 'loading'
+            ? settleRouteGeometryViewportUiRequest(current, {
+                status: 'error',
+                errorMessage: 'Map viewport bounds did not become available. Retry after the map finishes loading.',
+                safeErrorCode: 'MAP_BOUNDS_TIMEOUT',
+                dataState: 'unknown',
+                source: 'unavailable',
+                freshness: 'unavailable',
+                retryEligible: true,
+              })
+            : current,
+        );
+      }
+      if (mvumNeedsBounds) {
+        setMvumViewportUiState((current) =>
+          current.status === 'loading'
+            ? settleRouteGeometryViewportUiRequest(current, {
+                status: 'error',
+                errorMessage: 'Map viewport bounds did not become available. Retry after the map finishes loading.',
+                safeErrorCode: 'MAP_BOUNDS_TIMEOUT',
+                dataState: 'unknown',
+                source: 'unavailable',
+                freshness: 'unavailable',
+                retryEligible: true,
+              })
+            : current,
+        );
+      }
+    }, NAVIGATE_VIEWPORT_BOUNDS_TIMEOUT_MS);
+    return () => {
+      if (navigateViewportBoundsDeadlineTimerRef.current) {
+        clearTimeout(navigateViewportBoundsDeadlineTimerRef.current);
+        navigateViewportBoundsDeadlineTimerRef.current = null;
+      }
+    };
   }, [
     mapBounds,
+    mvumOverlayEnabled,
+    mvumViewportRetryTrigger,
+    mvumViewportZoomReady,
+    navigateMvumVectorTileUrl,
     routeGeometryOverlayEnabled,
+    routeGeometryViewportRetryTrigger,
     routeGeometryViewportOverlayEnabled,
     routeGeometryViewportZoomReady,
   ]);
@@ -5480,9 +5804,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         layer: 'mvum', enabled: false, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
       });
       setMvumViewportResult(null);
-      setMvumViewportUiState((current) =>
-        current.enabled ? createRouteGeometryViewportUiState(false) : current,
-      );
+      setMvumViewportUiState(disableRouteGeometryViewportUiState);
       return;
     }
 
@@ -5498,20 +5820,20 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       clearMvumFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('mvum', 'vector_tiles');
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
-        layer: 'mvum', enabled: true, itemCount: 0, sourceState: 'live', renderPriority: 'high',
+        layer: 'mvum', enabled: true, itemCount: 0, sourceState: 'unknown', renderPriority: 'high',
       });
       setMvumViewportResult(null);
-      setMvumViewportUiState((current) => ({
-        ...current,
-        enabled: true,
-        status: 'ready',
-        errorMessage: null,
-        featureCount: 0,
-        cappedCount: 0,
-        skippedMissingGeometryCount: 0,
-        skippedClosedCount: 0,
-        dataState: 'live',
-      }));
+      setMvumViewportUiState((current) =>
+        settleRouteGeometryViewportUiRequest(current, {
+          status: 'degraded',
+          errorMessage: 'MVUM vector source configured. Tile visibility is verified by the live map surface.',
+          safeErrorCode: 'MVUM_VECTOR_READINESS_UNVERIFIED',
+          dataState: 'degraded',
+          source: 'unavailable',
+          freshness: 'unavailable',
+          retryEligible: false,
+        }),
+      );
       return;
     }
 
@@ -5530,17 +5852,17 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         layer: 'mvum', enabled: true, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
       });
       setMvumViewportResult(null);
-      setMvumViewportUiState((current) => ({
-        ...current,
-        enabled: true,
-        status: 'zoom',
-        errorMessage: null,
-        featureCount: 0,
-        cappedCount: 0,
-        skippedMissingGeometryCount: 0,
-        skippedClosedCount: 0,
-        dataState: 'unknown',
-      }));
+      setMvumViewportUiState((current) =>
+        settleRouteGeometryViewportUiRequest(current, {
+          status: 'cancelled',
+          safeErrorCode: 'ZOOM_INELIGIBLE',
+          cancellationReason: 'invalid_input',
+          dataState: 'unknown',
+          source: 'unavailable',
+          freshness: 'unavailable',
+          retryEligible: false,
+        }),
+      );
       return;
     }
 
@@ -5555,32 +5877,199 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       });
       clearMvumFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('mvum', 'offline');
+      const cached = plan.cacheKey
+        ? navigateMapLayerCoordinatorRef.current.readCache<RouteGeometryViewportResult>(
+            'mvum',
+            plan.cacheKey,
+            { allowStale: true },
+          )
+        : null;
+      if (cached) {
+        navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+          layer: 'mvum',
+          enabled: true,
+          itemCount: cached.value.segments.length,
+          sourceState: 'stale',
+          renderPriority: 'high',
+        });
+        setMvumViewportResult(cached.value);
+        setMvumViewportUiState((current) =>
+          settleRouteGeometryViewportUiRequest(current, {
+            status: cached.value.degraded ? 'degraded' : 'stale',
+            result: cached.value,
+            errorMessage: cached.value.degraded
+              ? cached.value.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
+              : 'Offline. Showing cached MVUM segments for this map view.',
+            safeErrorCode: cached.value.degraded ? 'PROVIDER_DEGRADED' : 'OFFLINE_STALE_CACHE',
+            dataState: cached.value.degraded ? 'degraded' : 'stale',
+            bbox: plan.bbox,
+            cacheKey: plan.cacheKey,
+            source: 'cached',
+            freshness: 'stale',
+            retryEligible: true,
+            cacheHit: true,
+          }),
+        );
+        return;
+      }
+
+      if (!plan.cacheKey) {
+        navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+          layer: 'mvum',
+          enabled: true,
+          itemCount: 0,
+          sourceState: 'offline',
+          renderPriority: 'high',
+        });
+        setMvumViewportResult(null);
+        setMvumViewportUiState((current) =>
+          settleRouteGeometryViewportUiRequest(current, {
+            status: 'error',
+            errorMessage: 'MVUM segments need a valid map viewport before an offline cache can be loaded.',
+            safeErrorCode: 'OFFLINE_CACHE_KEY_UNAVAILABLE',
+            dataState: 'unknown',
+            bbox: plan.bbox,
+            source: 'unavailable',
+            freshness: 'unavailable',
+            retryEligible: true,
+          }),
+        );
+        return;
+      }
+      const offlineCacheKey = plan.cacheKey;
+
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
-        layer: 'mvum', enabled: true, itemCount: 0, sourceState: 'offline', renderPriority: 'high',
+        layer: 'mvum',
+        enabled: true,
+        itemCount: 0,
+        sourceState: 'offline',
+        renderPriority: 'high',
       });
       setMvumViewportResult(null);
-      setMvumViewportUiState((current) => ({
-        ...current,
+      setMvumViewportUiState((current) =>
+        beginRouteGeometryViewportUiRequest(current, {
+          requestFingerprint: offlineCacheKey,
+          bbox: plan.bbox,
+          cacheKey: offlineCacheKey,
+          preserveData: false,
+        }),
+      );
+      let cancelled = false;
+      void readRouteGeometryViewportOfflineCache(offlineCacheKey)
+        .then((entry) => {
+          if (cancelled) return;
+          if (!entry) {
+            setMvumViewportUiState((current) =>
+              settleRouteGeometryViewportUiRequest(current, {
+                status: 'error',
+                errorMessage: 'MVUM segments need live coverage or a cached viewport for this map view.',
+                safeErrorCode: 'OFFLINE_NO_CACHE',
+                dataState: 'unknown',
+                bbox: plan.bbox,
+                cacheKey: offlineCacheKey,
+                source: 'unavailable',
+                freshness: 'unavailable',
+                retryEligible: true,
+                providerStatus: routeGeometryViewportProviderAvailability.available
+                  ? 'active'
+                  : 'unavailable',
+              }),
+            );
+            return;
+          }
+          navigateMapLayerCoordinatorRef.current.writeCache({
+            layer: 'mvum',
+            key: offlineCacheKey,
+            value: entry.result,
+            ttlMs: 5 * 60 * 1000,
+            sourceState: 'cached',
+          });
+          navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+            layer: 'mvum',
+            enabled: true,
+            itemCount: entry.result.segments.length,
+            sourceState: 'offline',
+            renderPriority: 'high',
+          });
+          setMvumViewportResult(entry.result);
+          setMvumViewportUiState((current) =>
+            settleRouteGeometryViewportUiRequest(current, {
+              status: entry.result.degraded ? 'degraded' : 'stale',
+              result: entry.result,
+              errorMessage: entry.result.degraded
+                ? entry.result.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
+                : 'Offline. Showing cached MVUM segments for this map view.',
+              safeErrorCode: entry.result.degraded ? 'PROVIDER_DEGRADED' : 'OFFLINE_STALE_CACHE',
+              dataState: entry.result.degraded ? 'degraded' : 'stale',
+              bbox: plan.bbox,
+              cacheKey: offlineCacheKey,
+              source: 'cached',
+              freshness: 'stale',
+              retryEligible: true,
+              cacheHit: true,
+              providerStatus: routeGeometryViewportProviderAvailability.available
+                ? 'active'
+                : 'unavailable',
+            }),
+          );
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setMvumViewportUiState((current) =>
+            settleRouteGeometryViewportUiRequest(current, {
+              status: 'error',
+              errorMessage: 'The cached MVUM viewport could not be read on this device.',
+              safeErrorCode: 'OFFLINE_CACHE_READ_FAILED',
+              dataState: 'unknown',
+              bbox: plan.bbox,
+              cacheKey: offlineCacheKey,
+              source: 'unavailable',
+              freshness: 'unavailable',
+              retryEligible: true,
+            }),
+          );
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!routeGeometryViewportProviderAvailability.available) {
+      clearMvumFetchTimer();
+      navigateMapLayerCoordinatorRef.current.cancel('mvum', 'provider_unavailable');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'mvum',
         enabled: true,
-        status: 'offline',
-        errorMessage: 'MVUM segments need live coverage or cached vector tiles for this map view.',
-        featureCount: 0,
-        cappedCount: 0,
-        skippedMissingGeometryCount: 0,
-        skippedClosedCount: 0,
-        dataState: 'unknown',
-      }));
+        itemCount: 0,
+        sourceState: 'unavailable',
+        renderPriority: 'high',
+      });
+      setMvumViewportResult(null);
+      setMvumViewportUiState((current) =>
+        settleRouteGeometryViewportUiRequest(current, {
+          status: 'error',
+          errorMessage: 'MVUM segments are unavailable because the route catalog provider is not configured in this build.',
+          safeErrorCode:
+            routeGeometryViewportProviderAvailability.safeErrorCode ?? 'PROVIDER_CONFIGURATION_UNAVAILABLE',
+          dataState: 'unknown',
+          source: 'unavailable',
+          freshness: 'unavailable',
+          providerStatus: 'unavailable',
+          retryEligible: false,
+        }),
+      );
       return;
     }
 
     if (plan.status === 'missing_bbox') {
       clearMvumFetchTimer();
-      setMvumViewportUiState((current) => ({
-        ...current,
-        enabled: true,
-        status: 'loading',
-        errorMessage: null,
-      }));
+      setMvumViewportUiState((current) =>
+        current.status === 'loading'
+          ? current
+          : beginRouteGeometryViewportUiRequest(current, {
+              requestFingerprint: 'mvum:viewport_bounds',
+            }),
+      );
       setRequestBoundsTrigger((prev) => prev + 1);
       return;
     }
@@ -5591,6 +6080,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     );
     if (cached) {
       clearMvumFetchTimer();
+      navigateMapLayerCoordinatorRef.current.cancel('mvum', 'cache_hit');
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
         layer: 'mvum',
         enabled: true,
@@ -5599,21 +6089,19 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         renderPriority: 'high',
       });
       setMvumViewportResult(cached.value);
-      setMvumViewportUiState((current) => ({
-        ...current,
-        enabled: true,
-        status: 'ready',
-        errorMessage: null,
-        featureCount: cached.value.segments.length,
-        cappedCount: cached.value.cappedCount,
-        skippedMissingGeometryCount: cached.value.skippedMissingGeometryCount,
-        skippedClosedCount: cached.value.skippedClosedCount,
-        dataState: 'cached',
-        lastAttemptedBbox: plan.bbox,
-        lastAttemptedCacheKey: plan.cacheKey,
-        lastSuccessfulBbox: plan.bbox,
-        lastSuccessfulCacheKey: plan.cacheKey,
-      }));
+      setMvumViewportUiState((current) =>
+        settleRouteGeometryViewportUiRequest(current, {
+          status: cached.value.segments.length > 0 ? 'ready' : 'empty',
+          result: cached.value,
+          dataState: 'cached',
+          bbox: plan.bbox,
+          cacheKey: plan.cacheKey,
+          source: 'cached',
+          freshness: 'recent',
+          retryEligible: false,
+          cacheHit: true,
+        }),
+      );
       return;
     }
 
@@ -5642,19 +6130,36 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       sourceId: 'navigate-mvum-source',
       layerIds: ['navigate-mvum-line-layer', 'navigate-mvum-selected-layer'],
     });
-    setMvumViewportUiState((current) => ({
-      ...current,
-      enabled: true,
-      status: 'loading',
-      errorMessage: null,
-      lastAttemptedBbox: plan.bbox,
-      lastAttemptedCacheKey: plan.cacheKey,
-    }));
+    setMvumViewportResult(null);
+    setMvumViewportUiState((current) =>
+      beginRouteGeometryViewportUiRequest(current, {
+        requestFingerprint: plan.cacheKey,
+        bbox: plan.bbox,
+        cacheKey: plan.cacheKey,
+        preserveData: false,
+      }),
+    );
 
     mvumViewportFetchTimerRef.current = setTimeout(() => {
       mvumViewportFetchTimerRef.current = null;
       const request = navigateMapLayerCoordinatorRef.current.consumeDue('mvum', Date.now());
-      if (!request) return;
+      if (!request) {
+        navigateMapLayerCoordinatorRef.current.cancel('mvum', 'scheduled_request_missing');
+        setMvumViewportUiState((current) =>
+          settleRouteGeometryViewportUiRequest(current, {
+            status: 'error',
+            errorMessage: 'MVUM segment request could not start. Retry the layer.',
+            safeErrorCode: 'REQUEST_START_FAILED',
+            dataState: 'unknown',
+            bbox: plan.bbox,
+            cacheKey: plan.cacheKey,
+            source: 'unavailable',
+            freshness: 'unavailable',
+            retryEligible: true,
+          }),
+        );
+        return;
+      }
       incrementECSPerformanceCounter('navigate_map_viewport_interaction', 'layer_requests_started');
       const requestBbox: RouteGeometryViewportBbox = {
         minLng: request.bounds.west,
@@ -5679,106 +6184,153 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             itemCount: resultForCache.segments.length,
             sourceState: resultForCache.degraded ? 'unavailable' : 'live',
           })) return;
-          if (!resultForCache.degraded && resultForCache.segments.length > 0) {
+          if (!resultForCache.degraded) {
             navigateMapLayerCoordinatorRef.current.writeCache({
               layer: 'mvum',
               key: request.viewportFingerprint,
               value: resultForCache,
               ttlMs: 5 * 60 * 1000,
             });
+            writeRouteGeometryViewportOfflineCache({
+              lookup: {
+                bbox: requestBbox,
+                cacheKey: request.viewportFingerprint,
+                sourceProviderPrefix: MVUM_SOURCE_PROVIDER_PREFIX,
+              },
+              result: resultForCache,
+            });
           }
           setMvumViewportResult(resultForCache);
-          setMvumViewportUiState((current) => ({
-            ...current,
-            enabled: true,
-            status:
-              resultForCache.degraded && resultForCache.segments.length === 0
-                ? 'error'
+          setMvumViewportUiState((current) =>
+            settleRouteGeometryViewportUiRequest(current, {
+              status: resultForCache.degraded
+                ? 'degraded'
                 : resultForCache.segments.length > 0
                   ? 'ready'
                   : 'empty',
-            errorMessage:
-              resultForCache.degraded && resultForCache.segments.length === 0
+              result: resultForCache,
+              errorMessage: resultForCache.degraded
                 ? resultForCache.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
                 : null,
-            featureCount: resultForCache.segments.length,
-            cappedCount: resultForCache.cappedCount,
-            skippedMissingGeometryCount: resultForCache.skippedMissingGeometryCount,
-            skippedClosedCount: resultForCache.skippedClosedCount,
-            dataState: resultForCache.degraded ? 'unknown' : 'live',
-            lastAttemptedBbox: requestBbox,
-            lastAttemptedCacheKey: request.viewportFingerprint,
-            lastSuccessfulBbox: requestBbox,
-            lastSuccessfulCacheKey: request.viewportFingerprint,
-          }));
+              safeErrorCode: resultForCache.degraded ? 'PROVIDER_DEGRADED' : null,
+              dataState: resultForCache.degraded ? 'degraded' : 'live',
+              bbox: requestBbox,
+              cacheKey: request.viewportFingerprint,
+              source: resultForCache.degraded ? 'unavailable' : 'live',
+              freshness: resultForCache.degraded ? 'unavailable' : 'live',
+              retryEligible: resultForCache.degraded,
+            }),
+          );
         })
         .catch((error) => {
           if (request.signal.aborted) return;
           if (!navigateMapLayerCoordinatorRef.current.fail(request, error)) return;
+          const providerUnavailable = error instanceof RouteGeometryViewportProviderUnavailableError;
+          const requestTimedOut = error instanceof Error && error.name === 'RouteGeometryViewportTimeoutError';
           setMvumViewportResult(null);
-          setMvumViewportUiState((current) => ({
-            ...current,
-            enabled: true,
-            status: 'error',
-            errorMessage: error instanceof Error ? error.message : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
-            dataState: 'unknown',
-            lastAttemptedBbox: requestBbox,
-            lastAttemptedCacheKey: request.viewportFingerprint,
-          }));
+          setMvumViewportUiState((current) =>
+            settleRouteGeometryViewportUiRequest(current, {
+              status: 'error',
+              errorMessage: error instanceof Error ? error.message : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
+              safeErrorCode: providerUnavailable
+                ? error.safeErrorCode
+                : requestTimedOut
+                  ? 'REQUEST_TIMEOUT'
+                  : 'PROVIDER_UNAVAILABLE',
+              dataState: 'unknown',
+              bbox: requestBbox,
+              cacheKey: request.viewportFingerprint,
+              source: 'unavailable',
+              freshness: 'unavailable',
+              providerStatus: requestTimedOut ? 'active' : 'unavailable',
+              retryEligible: !providerUnavailable,
+            }),
+          );
         });
     }, Math.max(0, coordinatorPlan.dueAt - Date.now()));
   }, [
     mapBounds,
     mapZoom,
     mvumOverlayEnabled,
+    mvumViewportRetryTrigger,
     mvumViewportFetchOnline,
     navigateMvumVectorSourceLayer,
     navigateMvumVectorTileUrl,
+    routeGeometryViewportProviderAvailability,
   ]);
 
   useEffect(() => {
+    const clearRouteGeometryFetchTimer = () => {
+      if (routeGeometryViewportFetchTimerRef.current) {
+        clearTimeout(routeGeometryViewportFetchTimerRef.current);
+        routeGeometryViewportFetchTimerRef.current = null;
+      }
+    };
     const layerAvailable = routeGeometryOverlayEnabled && routeGeometryViewportOverlayEnabled;
     if (!layerAvailable) {
+      clearRouteGeometryFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'disabled');
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
         layer: 'route_geometry', enabled: false, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
       });
-      if (routeGeometryViewportFetchTimerRef.current) {
-        clearTimeout(routeGeometryViewportFetchTimerRef.current);
-        routeGeometryViewportFetchTimerRef.current = null;
-      }
       setRouteCatalogViewportResult(null);
       setRouteGeometryViewportResult(null);
       setSelectedRouteCatalogViewportFeatureId(null);
-      setRouteGeometryViewportUiState((current) =>
-        current.enabled ? createRouteGeometryViewportUiState(false) : current,
-      );
+      setRouteGeometryViewportUiState(disableRouteGeometryViewportUiState);
       return;
     }
-
     if (!routeGeometryViewportZoomReady) {
+      clearRouteGeometryFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'zoom_deferred');
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
         layer: 'route_geometry', enabled: true, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
       });
-      if (routeGeometryViewportFetchTimerRef.current) {
-        clearTimeout(routeGeometryViewportFetchTimerRef.current);
-        routeGeometryViewportFetchTimerRef.current = null;
-      }
       setRouteCatalogViewportResult(null);
       setRouteGeometryViewportResult(null);
       setSelectedRouteCatalogViewportFeatureId(null);
-      setRouteGeometryViewportUiState((current) => ({
-        ...current,
+      setRouteGeometryViewportUiState((current) =>
+        settleRouteGeometryViewportUiRequest(current, {
+          status: 'cancelled',
+          safeErrorCode: 'ZOOM_INELIGIBLE',
+          cancellationReason: 'invalid_input',
+          dataState: 'unknown',
+          source: 'unavailable',
+          freshness: 'unavailable',
+          retryEligible: false,
+        }),
+      );
+      return;
+    }
+
+    if (
+      routeGeometryViewportFetchOnline &&
+      !routeGeometryViewportProviderAvailability.available
+    ) {
+      clearRouteGeometryFetchTimer();
+      navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'provider_unavailable');
+      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+        layer: 'route_geometry',
         enabled: true,
-        status: 'zoom',
-        errorMessage: null,
-        featureCount: 0,
-        cappedCount: 0,
-        skippedMissingGeometryCount: 0,
-        skippedClosedCount: 0,
-        dataState: 'unknown',
-      }));
+        itemCount: 0,
+        sourceState: 'unavailable',
+        renderPriority: 'high',
+      });
+      setRouteCatalogViewportResult(null);
+      setRouteGeometryViewportResult(null);
+      setSelectedRouteCatalogViewportFeatureId(null);
+      setRouteGeometryViewportUiState((current) =>
+        settleRouteGeometryViewportUiRequest(current, {
+          status: 'error',
+          errorMessage: 'ECS route geometry is unavailable because the route catalog provider is not configured in this build.',
+          safeErrorCode:
+            routeGeometryViewportProviderAvailability.safeErrorCode ?? 'PROVIDER_CONFIGURATION_UNAVAILABLE',
+          dataState: 'unknown',
+          source: 'unavailable',
+          freshness: 'unavailable',
+          providerStatus: 'unavailable',
+          retryEligible: false,
+        }),
+      );
       return;
     }
 
@@ -5792,13 +6344,25 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       : null;
     const normalizedBbox = normalizeRouteGeometryViewportBbox(rawBbox);
     if (!normalizedBbox) {
+      clearRouteGeometryFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'missing_or_invalid_bbox');
-      setRouteGeometryViewportUiState((current) => ({
-        ...current,
-        enabled: true,
-        status: mapBounds ? 'empty' : 'loading',
-        errorMessage: null,
-      }));
+      setRouteGeometryViewportUiState((current) =>
+        mapBounds
+          ? settleRouteGeometryViewportUiRequest(current, {
+              status: 'error',
+              errorMessage: 'The map returned invalid viewport bounds. Retry after moving or reloading the map.',
+              safeErrorCode: 'MAP_BOUNDS_INVALID',
+              dataState: 'unknown',
+              source: 'unavailable',
+              freshness: 'unavailable',
+              retryEligible: true,
+            })
+          : current.status === 'loading'
+            ? current
+            : beginRouteGeometryViewportUiRequest(current, {
+                requestFingerprint: 'route_geometry:viewport_bounds',
+              }),
+      );
       if (!mapBounds) setRequestBoundsTrigger((prev) => prev + 1);
       return;
     }
@@ -5809,74 +6373,183 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     const cached = navigateMapLayerCoordinatorRef.current.readCache<RouteGeometryViewportResult>(
       'route_geometry',
       cacheKey,
-      { allowStale: !routeGeometryViewportFetchOnline },
+      { allowStale: true },
     );
-    if (cached && !routeGeometryViewportFetchOnline) {
-      navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'offline_cache');
-      navigateMapLayerCoordinatorRef.current.syncLocalLayer({
-        layer: 'route_geometry', enabled: true, itemCount: cached.value.segments.length, sourceState: 'offline', renderPriority: 'high',
-      });
-          setRouteCatalogViewportResult(null);
-          setRouteGeometryViewportResult(cached.value);
-          setRouteGeometryViewportUiState((current) => ({
-            ...current,
-            enabled: true,
-            status: cached.value.segments.length > 0 ? 'ready' : 'empty',
-            errorMessage: null,
-            featureCount: cached.value.segments.length,
-            cappedCount: cached.value.cappedCount,
-            skippedMissingGeometryCount: cached.value.skippedMissingGeometryCount,
-            skippedClosedCount: cached.value.skippedClosedCount,
-            dataState: 'cached',
-            lastAttemptedBbox: normalizedBbox,
-            lastAttemptedCacheKey: cacheKey,
-            lastSuccessfulBbox: normalizedBbox,
-            lastSuccessfulCacheKey: cacheKey,
-          }));
-      return;
-    }
     if (!routeGeometryViewportFetchOnline) {
+      clearRouteGeometryFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'offline');
+      if (cached) {
+        navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+          layer: 'route_geometry',
+          enabled: true,
+          itemCount: cached.value.segments.length,
+          sourceState: 'offline',
+          renderPriority: 'high',
+        });
+        setRouteCatalogViewportResult(null);
+        setRouteGeometryViewportResult(cached.value);
+        setRouteGeometryViewportUiState((current) =>
+          settleRouteGeometryViewportUiRequest(current, {
+            status: cached.value.degraded ? 'degraded' : 'stale',
+            result: cached.value,
+            errorMessage: cached.value.degraded
+              ? cached.value.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
+              : 'Offline. Showing cached ECS route geometry for this map view.',
+            safeErrorCode: cached.value.degraded ? 'PROVIDER_DEGRADED' : 'OFFLINE_STALE_CACHE',
+            dataState: cached.value.degraded ? 'degraded' : 'stale',
+            bbox: normalizedBbox,
+            cacheKey,
+            source: 'cached',
+            freshness: 'stale',
+            retryEligible: true,
+            cacheHit: true,
+            providerStatus: routeGeometryViewportProviderAvailability.available
+              ? 'active'
+              : 'unavailable',
+          }),
+        );
+        return;
+      }
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
         layer: 'route_geometry', enabled: true, itemCount: 0, sourceState: 'offline', renderPriority: 'high',
       });
       setRouteCatalogViewportResult(null);
       setRouteGeometryViewportResult(null);
-      setRouteGeometryViewportUiState((current) => ({
-        ...current,
-        enabled: true,
-        status: 'offline',
-        errorMessage: 'ECS trail segment geometry needs live coverage or a cached viewport.',
-        featureCount: 0,
-        cappedCount: 0,
-        skippedMissingGeometryCount: 0,
-        skippedClosedCount: 0,
-        dataState: 'unknown',
-      }));
-      return;
+      setRouteGeometryViewportUiState((current) =>
+        beginRouteGeometryViewportUiRequest(current, {
+          requestFingerprint: cacheKey,
+          bbox: normalizedBbox,
+          cacheKey,
+          preserveData: false,
+        }),
+      );
+      let cancelled = false;
+      void readRouteGeometryViewportOfflineCache(cacheKey)
+        .then((entry) => {
+          if (cancelled) return;
+          if (!entry) {
+            setRouteGeometryViewportUiState((current) =>
+              settleRouteGeometryViewportUiRequest(current, {
+                status: 'error',
+                errorMessage: 'ECS route geometry needs live coverage or a cached viewport for this map view.',
+                safeErrorCode: 'OFFLINE_NO_CACHE',
+                dataState: 'unknown',
+                bbox: normalizedBbox,
+                cacheKey,
+                source: 'unavailable',
+                freshness: 'unavailable',
+                retryEligible: true,
+                providerStatus: routeGeometryViewportProviderAvailability.available
+                  ? 'active'
+                  : 'unavailable',
+              }),
+            );
+            return;
+          }
+          navigateMapLayerCoordinatorRef.current.writeCache({
+            layer: 'route_geometry',
+            key: cacheKey,
+            value: entry.result,
+            ttlMs: 5 * 60 * 1000,
+            sourceState: 'cached',
+          });
+          navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+            layer: 'route_geometry',
+            enabled: true,
+            itemCount: entry.result.segments.length,
+            sourceState: 'offline',
+            renderPriority: 'high',
+          });
+          setRouteGeometryViewportResult(entry.result);
+          setRouteGeometryViewportUiState((current) =>
+            settleRouteGeometryViewportUiRequest(current, {
+              status: entry.result.degraded ? 'degraded' : 'stale',
+              result: entry.result,
+              errorMessage: entry.result.degraded
+                ? entry.result.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
+                : 'Offline. Showing cached ECS route geometry for this map view.',
+              safeErrorCode: entry.result.degraded ? 'PROVIDER_DEGRADED' : 'OFFLINE_STALE_CACHE',
+              dataState: entry.result.degraded ? 'degraded' : 'stale',
+              bbox: normalizedBbox,
+              cacheKey,
+              source: 'cached',
+              freshness: 'stale',
+              retryEligible: true,
+              cacheHit: true,
+              providerStatus: routeGeometryViewportProviderAvailability.available
+                ? 'active'
+                : 'unavailable',
+            }),
+          );
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setRouteGeometryViewportUiState((current) =>
+            settleRouteGeometryViewportUiRequest(current, {
+              status: 'error',
+              errorMessage: 'The cached ECS route geometry viewport could not be read on this device.',
+              safeErrorCode: 'OFFLINE_CACHE_READ_FAILED',
+              dataState: 'unknown',
+              bbox: normalizedBbox,
+              cacheKey,
+              source: 'unavailable',
+              freshness: 'unavailable',
+              retryEligible: true,
+            }),
+          );
+        });
+      return () => {
+        cancelled = true;
+      };
     }
-    if (cached) {
+
+    if (cached && !cached.stale) {
+      clearRouteGeometryFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'cache_hit');
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
         layer: 'route_geometry', enabled: true, itemCount: cached.value.segments.length, sourceState: cached.sourceState, renderPriority: 'high',
       });
       setRouteGeometryViewportResult(cached.value);
-      setRouteGeometryViewportUiState((current) => ({
-        ...current,
-        enabled: true,
-        status: cached.value.segments.length > 0 ? 'ready' : 'empty',
-        errorMessage: null,
-        featureCount: cached.value.segments.length,
-        cappedCount: cached.value.cappedCount,
-        skippedMissingGeometryCount: cached.value.skippedMissingGeometryCount,
-        skippedClosedCount: cached.value.skippedClosedCount,
-        dataState: 'cached',
-        lastAttemptedBbox: normalizedBbox,
-        lastAttemptedCacheKey: cacheKey,
-        lastSuccessfulBbox: normalizedBbox,
-        lastSuccessfulCacheKey: cacheKey,
-      }));
+      setRouteGeometryViewportUiState((current) =>
+        settleRouteGeometryViewportUiRequest(current, {
+          status: cached.value.degraded
+            ? 'degraded'
+            : cached.value.segments.length > 0
+              ? 'ready'
+              : 'empty',
+          result: cached.value,
+          errorMessage: cached.value.degraded
+            ? cached.value.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
+            : null,
+          safeErrorCode: cached.value.degraded ? 'PROVIDER_DEGRADED' : null,
+          dataState: cached.value.degraded ? 'degraded' : 'cached',
+          bbox: normalizedBbox,
+          cacheKey,
+          source: 'cached',
+          freshness: 'recent',
+          retryEligible: cached.value.degraded,
+          cacheHit: true,
+        }),
+      );
       return;
+    }
+    if (cached?.stale) {
+      setRouteGeometryViewportResult(cached.value);
+      setRouteGeometryViewportUiState((current) =>
+        settleRouteGeometryViewportUiRequest(current, {
+          status: 'stale',
+          result: cached.value,
+          errorMessage: 'Refreshing stale ECS route geometry for this map view.',
+          safeErrorCode: 'STALE_CACHE_REFRESH',
+          dataState: 'stale',
+          bbox: normalizedBbox,
+          cacheKey,
+          source: 'cached',
+          freshness: 'stale',
+          retryEligible: true,
+          cacheHit: true,
+        }),
+      );
     }
     const plan = navigateMapLayerCoordinatorRef.current.plan({
       layer: 'route_geometry',
@@ -5895,25 +6568,41 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     });
     if (plan.kind === 'skip') return;
 
-    if (routeGeometryViewportFetchTimerRef.current) {
-      clearTimeout(routeGeometryViewportFetchTimerRef.current);
-      routeGeometryViewportFetchTimerRef.current = null;
-    }
+    clearRouteGeometryFetchTimer();
 
     const now = Date.now();
-    setRouteGeometryViewportUiState((current) => ({
-      ...current,
-      enabled: true,
-      status: 'loading',
-      errorMessage: null,
-      lastAttemptedBbox: normalizedBbox,
-      lastAttemptedCacheKey: cacheKey,
-    }));
+    if (!cached?.stale) {
+      setRouteGeometryViewportResult(null);
+    }
+    setRouteGeometryViewportUiState((current) =>
+      beginRouteGeometryViewportUiRequest(current, {
+        requestFingerprint: cacheKey,
+        bbox: normalizedBbox,
+        cacheKey,
+        preserveData: Boolean(cached?.stale),
+      }),
+    );
 
     routeGeometryViewportFetchTimerRef.current = setTimeout(() => {
       routeGeometryViewportFetchTimerRef.current = null;
       const request = navigateMapLayerCoordinatorRef.current.consumeDue('route_geometry', Date.now());
-      if (!request) return;
+      if (!request) {
+        navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'scheduled_request_missing');
+        setRouteGeometryViewportUiState((current) =>
+          settleRouteGeometryViewportUiRequest(current, {
+            status: 'error',
+            errorMessage: 'ECS route geometry request could not start. Retry the layer.',
+            safeErrorCode: 'REQUEST_START_FAILED',
+            dataState: 'unknown',
+            bbox: normalizedBbox,
+            cacheKey,
+            source: 'unavailable',
+            freshness: 'unavailable',
+            retryEligible: true,
+          }),
+        );
+        return;
+      }
       incrementECSPerformanceCounter('navigate_map_viewport_interaction', 'layer_requests_started');
       const requestBbox: RouteGeometryViewportBbox = {
         minLng: request.bounds.west,
@@ -5938,60 +6627,86 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             itemCount: resultForCache.segments.length,
             sourceState: resultForCache.degraded ? 'unavailable' : 'live',
           })) return;
-          navigateMapLayerCoordinatorRef.current.writeCache({
-            layer: 'route_geometry',
-            key: request.viewportFingerprint,
-            value: resultForCache,
-            ttlMs: 5 * 60 * 1000,
-          });
+          if (!resultForCache.degraded) {
+            navigateMapLayerCoordinatorRef.current.writeCache({
+              layer: 'route_geometry',
+              key: request.viewportFingerprint,
+              value: resultForCache,
+              ttlMs: 5 * 60 * 1000,
+            });
+            writeRouteGeometryViewportOfflineCache({
+              lookup: {
+                bbox: requestBbox,
+                cacheKey: request.viewportFingerprint,
+                sourceProviderPrefix: null,
+              },
+              result: resultForCache,
+            });
+          }
           setRouteCatalogViewportResult(null);
           setRouteGeometryViewportResult(resultForCache);
-          setRouteGeometryViewportUiState((current) => ({
-            ...current,
-            enabled: true,
-            status:
-              resultForCache.degraded && resultForCache.segments.length === 0
-                ? 'error'
+          setRouteGeometryViewportUiState((current) =>
+            settleRouteGeometryViewportUiRequest(current, {
+              status: resultForCache.degraded
+                ? 'degraded'
                 : resultForCache.segments.length > 0
                   ? 'ready'
                   : 'empty',
-            errorMessage:
-              resultForCache.degraded && resultForCache.segments.length === 0
+              result: resultForCache,
+              errorMessage: resultForCache.degraded
                 ? resultForCache.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
                 : null,
-            featureCount: resultForCache.segments.length,
-            cappedCount: resultForCache.cappedCount,
-            skippedMissingGeometryCount: resultForCache.skippedMissingGeometryCount,
-            skippedClosedCount: resultForCache.skippedClosedCount,
-            dataState: 'live',
-            lastAttemptedBbox: requestBbox,
-            lastAttemptedCacheKey: request.viewportFingerprint,
-            lastSuccessfulBbox: requestBbox,
-            lastSuccessfulCacheKey: request.viewportFingerprint,
-          }));
+              safeErrorCode: resultForCache.degraded ? 'PROVIDER_DEGRADED' : null,
+              dataState: resultForCache.degraded ? 'degraded' : 'live',
+              bbox: requestBbox,
+              cacheKey: request.viewportFingerprint,
+              source: resultForCache.degraded ? 'unavailable' : 'live',
+              freshness: resultForCache.degraded ? 'unavailable' : 'live',
+              retryEligible: resultForCache.degraded,
+            }),
+          );
         })
         .catch((error) => {
           if (request.signal.aborted) return;
           if (!navigateMapLayerCoordinatorRef.current.fail(request, error)) return;
+          const providerUnavailable = error instanceof RouteGeometryViewportProviderUnavailableError;
+          const requestTimedOut = error instanceof Error && error.name === 'RouteGeometryViewportTimeoutError';
           setRouteCatalogViewportResult(null);
-          setRouteGeometryViewportResult(null);
-          setRouteGeometryViewportUiState((current) => ({
-            ...current,
-            enabled: true,
-            status: 'error',
-            errorMessage: error instanceof Error ? error.message : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
-            dataState: 'unknown',
-            lastAttemptedBbox: requestBbox,
-            lastAttemptedCacheKey: request.viewportFingerprint,
-          }));
+          setRouteGeometryViewportResult(cached?.stale ? cached.value : null);
+          setRouteGeometryViewportUiState((current) =>
+            settleRouteGeometryViewportUiRequest(current, {
+              status: cached?.stale ? 'stale' : 'error',
+              result: cached?.stale ? cached.value : undefined,
+              errorMessage: cached?.stale
+                ? 'Live refresh failed. Showing stale ECS route geometry for this map view.'
+                : error instanceof Error
+                  ? error.message
+                  : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
+              safeErrorCode: providerUnavailable
+                ? error.safeErrorCode
+                : requestTimedOut
+                  ? 'REQUEST_TIMEOUT'
+                  : 'PROVIDER_UNAVAILABLE',
+              dataState: cached?.stale ? 'stale' : 'unknown',
+              bbox: requestBbox,
+              cacheKey: request.viewportFingerprint,
+              source: cached?.stale ? 'cached' : 'unavailable',
+              freshness: cached?.stale ? 'stale' : 'unavailable',
+              providerStatus: requestTimedOut ? 'active' : 'unavailable',
+              retryEligible: !providerUnavailable,
+              cacheHit: Boolean(cached?.stale),
+            }),
+          );
         });
     }, Math.max(0, plan.dueAt - now));
   }, [
     mapBounds,
     mapZoom,
     routeGeometryOverlayEnabled,
+    routeGeometryViewportRetryTrigger,
     routeGeometryViewportFetchOnline,
     routeGeometryViewportOverlayEnabled,
+    routeGeometryViewportProviderAvailability,
     routeGeometryViewportZoomReady,
   ]);
 
@@ -8185,13 +8900,9 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   );
   const navigateVehicleContext = useMemo(
     () => {
-      const snapshotVehicleId = activeRun?.build_snapshot?.vehicle_id;
-      if (snapshotVehicleId) {
-        return getVehicleContext(snapshotVehicleId);
-      }
-
       void activeVehicleRevision;
-      return getActiveVehicleContext();
+      const snapshotVehicleId = activeRun?.build_snapshot?.vehicle_id;
+      return getActiveVehicleContextWithFallback(snapshotVehicleId);
     },
     [activeRun?.build_snapshot?.vehicle_id, activeVehicleRevision],
   );
@@ -11720,6 +12431,20 @@ const handleCreateRun = useCallback(() => {
       })),
     [activeRoadRouteLineSync.geometry],
   );
+  const roadGuidanceGeometryDegraded = activeRoadRouteLineSync.status === 'degraded';
+  useEffect(() => {
+    if (!roadGuidanceGeometryDegraded) return;
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.debug('[ECS Guidance] canonical route geometry degraded', {
+        routeId: activeRoadRouteLineSync.routeId,
+        invalidPointCount: activeRoadRouteLineSync.invalidPointCount,
+      });
+    }
+  }, [
+    activeRoadRouteLineSync.invalidPointCount,
+    activeRoadRouteLineSync.routeId,
+    roadGuidanceGeometryDegraded,
+  ]);
   const previewRoadRouteLinePoints = useMemo(
     () => simplifyNavigateRoadPreviewPoints(activeRoadRouteLinePoints),
     [activeRoadRouteLinePoints],
@@ -11729,7 +12454,7 @@ const handleCreateRun = useCallback(() => {
     roadNavigation.session.status === 'rerouting' ||
     roadNavigation.session.status === 'arrived';
   const roadNavigationStoredRouteFallbackPoints = useMemo<RoadNavCoordinate[]>(() => {
-    if (!roadNavigationRouteLineRequired) return [];
+    if (!roadNavigationRouteLineRequired || roadGuidanceGeometryDegraded) return [];
     const activeGuidanceGeometry = safeArray(roadNavigation.session.activeGuidance?.geometry)
       .filter((point): point is RoadNavCoordinate => isRoadNavCoordinate(point));
     if (activeGuidanceGeometry.length > 1) return activeGuidanceGeometry;
@@ -11740,11 +12465,12 @@ const handleCreateRun = useCallback(() => {
     roadNavigation.session.activeGuidance?.geometry,
     roadNavigation.session.route?.geometry,
     roadNavigationRouteLineRequired,
+    roadGuidanceGeometryDegraded,
   ]);
   const lastActiveRoadRouteLinePointsRef = useRef<RoadNavCoordinate[]>([]);
   if (activeRoadRouteLinePoints.length > 1) {
     lastActiveRoadRouteLinePointsRef.current = activeRoadRouteLinePoints;
-  } else if (!roadNavigationRouteLineRequired) {
+  } else if (!roadNavigationRouteLineRequired || roadGuidanceGeometryDegraded) {
     lastActiveRoadRouteLinePointsRef.current = [];
   }
 
@@ -12561,7 +13287,8 @@ const handleCreateRun = useCallback(() => {
     if (
       (trailNavigationActive || pendingHybridTrailTransition) &&
       trailNavigation.session.payload?.trailGeometry &&
-      trailNavigation.session.payload.trailGeometry.length > 1
+      trailNavigation.session.payload.trailGeometry.length > 1 &&
+      trailNavigation.session.payload.trailGeometry.every(isRoadNavCoordinate)
     ) {
       return trailNavigation.session.payload.trailGeometry;
     }
@@ -12595,6 +13322,7 @@ const handleCreateRun = useCallback(() => {
 
   const fallbackRoutePointsForMap = useMemo(() => {
     if (displayedRoutePoints.length > 1) return activeFallbackRouteLinePoints;
+    if (roadGuidanceGeometryDegraded) return [];
     if (routeLifecycleState.phase === 'navigating' && lastActiveRoadRouteLinePointsRef.current.length > 1) {
       return simplifyNavigateFallbackRoutePoints(lastActiveRoadRouteLinePointsRef.current);
     }
@@ -12609,6 +13337,7 @@ const handleCreateRun = useCallback(() => {
     activeFallbackRouteLinePoints,
     displayedRoutePoints,
     roadNavigationStoredRouteFallbackPoints,
+    roadGuidanceGeometryDegraded,
     routeLifecycleState.phase,
     validatedRunPoints,
   ]);
@@ -12862,18 +13591,42 @@ const handleCreateRun = useCallback(() => {
   ]);
 
   const mapDisplayUserLocation = useMemo(
-    () =>
+    () => {
+      const trailGuidanceOwnsProgress =
+        pendingHybridTrailTransition ||
+        trailNavigation.uiMode === 'active' ||
+        trailNavigation.uiMode === 'arrived';
+      const acceptedProgressPoint = displayedRouteProgressPoints.at(-1) ?? null;
+      const guidanceGpsSample = gps.rawGPS.position ?? gps.position;
+      return (
       resolveActiveGuidanceDisplayLocation({
         active: routeLifecycleState.phase === 'navigating',
         routePoints: displayedRoutePoints,
         progressPoints: displayedRouteProgressPoints,
         currentLocation: stableGpsMapLocation,
-      }),
+        snappedLocation: acceptedProgressPoint,
+        isOffRoute: trailGuidanceOwnsProgress
+          ? trailNavigation.session.status === 'off_trail'
+          : roadNavigation.session.isOffRoute,
+        accuracyM: guidanceGpsSample?.accuracyM ?? null,
+        headingDeg: guidanceGpsSample?.headingDeg ?? null,
+        maxSnapDistanceM:
+          roadNavigation.session.activeGuidanceProgress?.offRouteThresholdMeters ?? null,
+      })
+      );
+    },
     [
       displayedRoutePoints,
       displayedRouteProgressPoints,
+      gps.position,
+      gps.rawGPS.position,
+      pendingHybridTrailTransition,
+      roadNavigation.session.activeGuidanceProgress?.offRouteThresholdMeters,
+      roadNavigation.session.isOffRoute,
       routeLifecycleState.phase,
       stableGpsMapLocation,
+      trailNavigation.session.status,
+      trailNavigation.uiMode,
     ],
   );
   const routeOperationState = useMemo(
@@ -13271,6 +14024,8 @@ const handleCreateRun = useCallback(() => {
         terrainIntelligence,
         remotenessSnapshot,
         routeMetadata: payload?.routeMetadata ?? null,
+        vehicleProfile: navigateVehicleContext,
+        vehicleProfileSignature: navigateVehicleContext.profileSignature,
       };
     }
 
@@ -13286,6 +14041,8 @@ const handleCreateRun = useCallback(() => {
           terrainIntelligence,
           remotenessSnapshot,
           routeMetadata: exploreNavigationPayload.routeMetadata ?? null,
+          vehicleProfile: navigateVehicleContext,
+          vehicleProfileSignature: navigateVehicleContext.profileSignature,
         };
       }
     }
@@ -13304,6 +14061,8 @@ const handleCreateRun = useCallback(() => {
         terrainIntelligence,
         remotenessSnapshot,
         routeMetadata: exploreNavigationPayload.routeMetadata ?? null,
+        vehicleProfile: navigateVehicleContext,
+        vehicleProfileSignature: navigateVehicleContext.profileSignature,
       };
     }
 
@@ -13329,6 +14088,8 @@ const handleCreateRun = useCallback(() => {
         terrainIntelligence,
         remotenessSnapshot,
         routeMetadata: exploreNavigationPayload?.routeMetadata ?? null,
+        vehicleProfile: navigateVehicleContext,
+        vehicleProfileSignature: navigateVehicleContext.profileSignature,
       };
     }
 
@@ -13347,6 +14108,8 @@ const handleCreateRun = useCallback(() => {
         routeIntelligence,
         terrainIntelligence,
         remotenessSnapshot,
+        vehicleProfile: navigateVehicleContext,
+        vehicleProfileSignature: navigateVehicleContext.profileSignature,
       };
     }
 
@@ -13356,6 +14119,7 @@ const handleCreateRun = useCallback(() => {
     exploreNavigationPayload,
     explorePreviewMode,
     navigationOverlayMode,
+    navigateVehicleContext,
     pendingHybridTrailTransition,
     routeOverviewRemotenessSnapshot,
     roadNavigation.session.destination?.id,
@@ -13758,6 +14522,9 @@ const handleCreateRun = useCallback(() => {
     () =>
       buildNavigateMvumMapOverlay({
         enabled: mvumOverlayEnabled,
+        requestFingerprint: mvumViewportUiState.requestFingerprint,
+        requestGeneration: mvumViewportUiState.generation,
+        invalidFeatureCount: mvumViewportUiState.invalidFeatureCount,
         selectedSegmentIds: selectedMvumSegmentIds,
         vectorTileUrl: navigateMvumVectorTileUrl,
         vectorSourceLayer: navigateMvumVectorSourceLayer,
@@ -13765,12 +14532,111 @@ const handleCreateRun = useCallback(() => {
       }),
     [
       mvumOverlayEnabled,
+      mvumViewportUiState.invalidFeatureCount,
+      mvumViewportUiState.generation,
+      mvumViewportUiState.requestFingerprint,
       mvumViewportResult?.segments,
       navigateMvumVectorSourceLayer,
       navigateMvumVectorTileUrl,
       selectedMvumSegmentIds,
     ],
   );
+  const routeGeometryLayerEligibility = useMemo<NavigateAsyncLayerEligibility>(() => {
+    if (!routeGeometryOverlayEnabled || !routeGeometryViewportOverlayEnabled) return 'disabled';
+    if (!routeGeometryViewportZoomReady) return 'zoom_deferred';
+    if (!mapBounds) return 'viewport_pending';
+    if (!routeGeometryViewportFetchOnline) {
+      return routeGeometryViewportUiState.cacheHit ? 'offline_cache' : 'offline_unavailable';
+    }
+    if (!routeGeometryViewportProviderAvailability.available) return 'provider_unavailable';
+    return 'eligible';
+  }, [
+    mapBounds,
+    routeGeometryOverlayEnabled,
+    routeGeometryViewportFetchOnline,
+    routeGeometryViewportOverlayEnabled,
+    routeGeometryViewportProviderAvailability.available,
+    routeGeometryViewportUiState.cacheHit,
+    routeGeometryViewportZoomReady,
+  ]);
+  const mvumLayerEligibility = useMemo<NavigateAsyncLayerEligibility>(() => {
+    if (!mvumOverlayEnabled) return 'disabled';
+    if (!mvumViewportZoomReady) return 'zoom_deferred';
+    if (navigateMvumVectorTileUrl) return 'vector_tiles';
+    if (!mvumViewportFetchOnline) {
+      return mvumViewportUiState.cacheHit ? 'offline_cache' : 'offline_unavailable';
+    }
+    if (!routeGeometryViewportProviderAvailability.available) return 'provider_unavailable';
+    if (!mapBounds) return 'viewport_pending';
+    return 'eligible';
+  }, [
+    mapBounds,
+    mvumOverlayEnabled,
+    mvumViewportFetchOnline,
+    mvumViewportUiState.cacheHit,
+    mvumViewportZoomReady,
+    navigateMvumVectorTileUrl,
+    routeGeometryViewportProviderAvailability.available,
+  ]);
+  const routeGeometryLayerDiagnostic = useMemo(
+    () => createNavigateAsyncLayerDiagnostic({
+      state: routeGeometryViewportUiState,
+      enabled: routeGeometryOverlayEnabled && routeGeometryViewportOverlayEnabled,
+      eligibility: routeGeometryLayerEligibility,
+      zoom: mapZoom,
+      featureCount: routeGeometryViewportUiState.featureCount,
+      invalidFeatureCount: routeGeometryViewportUiState.invalidFeatureCount,
+      cacheHit: routeGeometryViewportUiState.cacheHit,
+      render: routeGeometryLayerRenderState,
+    }),
+    [
+      mapZoom,
+      routeGeometryLayerEligibility,
+      routeGeometryLayerRenderState,
+      routeGeometryOverlayEnabled,
+      routeGeometryViewportOverlayEnabled,
+      routeGeometryViewportUiState,
+    ],
+  );
+  const mvumLayerDiagnostic = useMemo(
+    () => createNavigateAsyncLayerDiagnostic({
+      state: mvumViewportUiState,
+      enabled: mvumOverlayEnabled,
+      eligibility: mvumLayerEligibility,
+      zoom: mapZoom,
+      featureCount: mvumViewportUiState.featureCount,
+      invalidFeatureCount: mvumViewportUiState.invalidFeatureCount,
+      cacheHit: mvumViewportUiState.cacheHit,
+      render: mvumLayerRenderState,
+    }),
+    [
+      mapZoom,
+      mvumLayerEligibility,
+      mvumLayerRenderState,
+      mvumOverlayEnabled,
+      mvumViewportUiState,
+    ],
+  );
+  useEffect(() => {
+    logNavigateAsyncLayerDiagnostic(routeGeometryLayerDiagnostic);
+    logNavigateAsyncLayerDiagnostic(mvumLayerDiagnostic);
+    if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+    const developmentGlobal = globalThis as typeof globalThis & {
+      __ECS_NAVIGATE_LAYER_DIAGNOSTICS__?: unknown;
+    };
+    developmentGlobal.__ECS_NAVIGATE_LAYER_DIAGNOSTICS__ = {
+      routeGeometry: routeGeometryLayerDiagnostic,
+      mvum: mvumLayerDiagnostic,
+      coordinator: navigateMapLayerCoordinatorRef.current.getDiagnostics(),
+    };
+  }, [mvumLayerDiagnostic, routeGeometryLayerDiagnostic]);
+  useEffect(() => () => {
+    if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+    const developmentGlobal = globalThis as typeof globalThis & {
+      __ECS_NAVIGATE_LAYER_DIAGNOSTICS__?: unknown;
+    };
+    delete developmentGlobal.__ECS_NAVIGATE_LAYER_DIAGNOSTICS__;
+  }, []);
   const navigateMvumStitchedRoutePreview = useMemo(
     () => buildNavigateMvumStitchedRoutePreview(mvumStitchedRouteDraft),
     [mvumStitchedRouteDraft],
@@ -13796,14 +14662,40 @@ const handleCreateRun = useCallback(() => {
     if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
       return 'Zoom to 10+ to show ECS catalog routes.';
     }
+    if (
+      !routeGeometryViewportProviderAvailability.available &&
+      !routeGeometryViewportUiState.cacheHit
+    ) {
+      return 'ECS catalog route provider is unavailable in this build.';
+    }
+    if (
+      routeGeometryViewportOverlayEnabled &&
+      routeGeometryViewportUiState.status === 'loading' &&
+      routeGeometryViewportUiState.dataState === 'stale' &&
+      routeGeometryOverlayBuild.segments.length > 0
+    ) {
+      return 'Refreshing ECS catalog routes. Showing stale cached route geometry until live data completes.';
+    }
     if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'loading') {
       return 'Loading ECS catalog routes for this map view.';
     }
-    if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'offline') {
-      return routeGeometryViewportUiState.errorMessage ?? 'Offline. Cached ECS catalog routes only.';
+    if (routeGeometryLayerDiagnostic.renderStatus === 'error') {
+      return 'ECS catalog routes loaded, but the map source could not render them. Retry the layer.';
+    }
+    if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'stale') {
+      return routeGeometryViewportUiState.errorMessage ?? 'Showing stale ECS catalog routes. Retry when online.';
+    }
+    if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'degraded') {
+      return routeGeometryViewportUiState.errorMessage ?? 'ECS catalog routes are partially available.';
     }
     if (routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.status === 'error') {
       return routeGeometryViewportUiState.errorMessage ?? 'ECS catalog routes unavailable.';
+    }
+    if (routeGeometryViewportUiState.status === 'cancelled') {
+      return routeGeometryViewportUiState.errorMessage ?? 'ECS catalog route request was cancelled.';
+    }
+    if (routeGeometryViewportUiState.status === 'disabled') {
+      return 'ECS catalog route layer is disabled.';
     }
     if (routeGeometryViewportUiState.status === 'idle') {
       return 'Preparing ECS catalog routes for this map view.';
@@ -13815,12 +14707,16 @@ const handleCreateRun = useCallback(() => {
       return 'No ECS catalog routes in this map view. Pan or zoom to inspect nearby trails.';
     }
     if (routeGeometryOverlayBuild.segments.length === 0) {
-      return 'Loading ECS catalog routes for this map view.';
+      return 'ECS catalog request completed with no drawable route geometry in this map view.';
     }
     const dataStateCopy =
       routeGeometryViewportOverlayEnabled && routeGeometryViewportUiState.dataState === 'cached'
         ? ' Cached viewport data.'
-        : '';
+        : routeGeometryViewportUiState.dataState === 'stale'
+          ? ' Stale cached viewport data.'
+          : routeGeometryViewportUiState.dataState === 'degraded'
+            ? ' Provider data is degraded.'
+            : '';
     const segmentCount = routeGeometryOverlayBuild.segments.length;
     const markerCount = routeCatalogViewportPointMarkers.length;
     const routeLabel = segmentCount === 1 ? 'route geometry line' : 'route geometry lines';
@@ -13828,8 +14724,11 @@ const handleCreateRun = useCallback(() => {
     return `${segmentCount} ECS catalog ${routeLabel} shown in this map view.${markerCopy}${dataStateCopy}`;
   }, [
     routeGeometryOverlayBuild.segments.length,
+    routeGeometryLayerDiagnostic.renderStatus,
     routeCatalogViewportPointMarkers.length,
     routeGeometryViewportOverlayEnabled,
+    routeGeometryViewportProviderAvailability.available,
+    routeGeometryViewportUiState.cacheHit,
     routeGeometryViewportUiState.dataState,
     routeGeometryViewportUiState.errorMessage,
     routeGeometryViewportUiState.status,
@@ -13837,13 +14736,15 @@ const handleCreateRun = useCallback(() => {
   ]);
   const mvumViewportLegendMessage = useMemo(() => {
     if (!mvumOverlayEnabled) return null;
-    if (navigateMvumVectorTileUrl) {
-      return selectedMvumSegmentIds.length > 0
-        ? `${selectedMvumSegmentIds.length} MVUM segment${selectedMvumSegmentIds.length === 1 ? '' : 's'} selected.`
-        : 'MVUM trail segments visible at useful zoom. Tap segments to select.';
-    }
     if (!mvumViewportZoomReady) {
       return `Zoom to ${MVUM_OVERLAY_MIN_ZOOM}+ to show MVUM trail segments.`;
+    }
+    if (
+      !navigateMvumVectorTileUrl &&
+      !routeGeometryViewportProviderAvailability.available &&
+      !mvumViewportUiState.cacheHit
+    ) {
+      return 'MVUM segment provider is unavailable in this build.';
     }
     if (mvumViewportUiState.status === 'idle') {
       return 'Preparing MVUM trail segments for this map view.';
@@ -13851,11 +14752,28 @@ const handleCreateRun = useCallback(() => {
     if (mvumViewportUiState.status === 'loading') {
       return 'Loading MVUM trail segments for this map view.';
     }
-    if (mvumViewportUiState.status === 'offline') {
-      return mvumViewportUiState.errorMessage ?? 'MVUM segments need live coverage or cached tiles.';
+    if (mvumLayerDiagnostic.renderStatus === 'error') {
+      return 'MVUM segments loaded, but the map source could not render them. Retry the layer.';
+    }
+    if (mvumViewportUiState.status === 'stale') {
+      return mvumViewportUiState.errorMessage ?? 'Showing stale cached MVUM segments.';
+    }
+    if (mvumViewportUiState.status === 'degraded') {
+      return mvumViewportUiState.errorMessage ?? 'MVUM segments are partially available.';
     }
     if (mvumViewportUiState.status === 'error') {
       return mvumViewportUiState.errorMessage ?? 'MVUM trail segments unavailable.';
+    }
+    if (mvumViewportUiState.status === 'cancelled') {
+      return mvumViewportUiState.errorMessage ?? 'MVUM segment request was cancelled.';
+    }
+    if (mvumViewportUiState.status === 'disabled') {
+      return 'MVUM segment layer is disabled.';
+    }
+    if (navigateMvumVectorTileUrl) {
+      return selectedMvumSegmentIds.length > 0
+        ? `${selectedMvumSegmentIds.length} MVUM segment${selectedMvumSegmentIds.length === 1 ? '' : 's'} selected.`
+        : 'MVUM vector source is configured. Verify visible tiles before selecting segments.';
     }
     if (mvumViewportResult?.segments.length) {
       return `${mvumViewportResult.segments.length} MVUM trail segment${mvumViewportResult.segments.length === 1 ? '' : 's'} visible.`;
@@ -13866,11 +14784,14 @@ const handleCreateRun = useCallback(() => {
     return 'Preparing MVUM trail segments for this map view.';
   }, [
     mvumOverlayEnabled,
+    mvumLayerDiagnostic.renderStatus,
     mvumViewportResult?.segments.length,
+    mvumViewportUiState.cacheHit,
     mvumViewportUiState.errorMessage,
     mvumViewportUiState.status,
     mvumViewportZoomReady,
     navigateMvumVectorTileUrl,
+    routeGeometryViewportProviderAvailability.available,
     selectedMvumSegmentIds.length,
   ]);
   const mvumStitchActionDisabled =
@@ -16100,6 +17021,9 @@ const handleTopToolboxLayout = useCallback(
             : 'inactive';
 
     if (lifecycle === 'inactive') {
+      // The initially empty road/trail hooks are not authoritative until the
+      // normalized session store has finished its one restore flight.
+      if (!navigateRouteHydrationSettled) return;
       const currentRouteSnapshot = navigateRouteSessionStore.getSnapshot();
       if (
         currentRouteSnapshot.lifecycle === 'active' &&
@@ -16114,6 +17038,7 @@ const handleTopToolboxLayout = useCallback(
 
     const context = lifecycle === 'preview' ? navigationPreviewContext : navigationActiveContext;
     if (!context) {
+      if (!navigateRouteHydrationSettled) return;
       navigateRouteSessionStore.clear();
       return;
     }
@@ -16244,6 +17169,7 @@ const handleTopToolboxLayout = useCallback(
     roadNavigation.session.sessionId,
     roadNavigation.session.status,
     roadNavigation.session.updatedAt,
+    navigateRouteHydrationSettled,
     trailNavigation.session.nextInstructionDistanceM,
     trailNavigation.session.payload?.id,
     trailNavigation.session.progressPercent,
@@ -17632,11 +18558,22 @@ const intelHeroBody =
 const handleMapBoundsReply = useCallback((reply: any) => {
   if (!reply) return;
 
+  const south = Number(reply.south);
+  const north = Number(reply.north);
+  const west = Number(reply.west);
+  const east = Number(reply.east);
+  if (
+    ![south, north, west, east].every(Number.isFinite) ||
+    south >= north ||
+    west >= east
+  ) {
+    return;
+  }
   const nextBounds: TileBounds = {
-    minLat: Number(reply.south ?? 0),
-    maxLat: Number(reply.north ?? 0),
-    minLng: Number(reply.west ?? 0),
-    maxLng: Number(reply.east ?? 0),
+    minLat: south,
+    maxLat: north,
+    minLng: west,
+    maxLng: east,
   };
 
   const nextZoom = Number(reply.zoom ?? mapZoom);
@@ -17927,6 +18864,23 @@ const toggleCampLayerMenu = useCallback(() => {
   raiseNavigateLayer('campLayers');
 }, [campLayerMenuOpen, raiseNavigateLayer, removeNavigateLayer]);
 
+const routeBuilderDraftPresentationSegments = useMemo(
+  () =>
+    buildRouteBuilderPresentationSegmentsFromDraft(routeBuilderDraft) as unknown as RouteBuilderSegmentData[],
+  [routeBuilderDraft],
+);
+
+const routeBuilderMapSegments = useMemo(() => {
+  const stateSegmentsById = new Map(routeBuilderSegments.map((segment) => [segment.id, segment]));
+  const draftSegmentIds = new Set(routeBuilderDraftPresentationSegments.map((segment) => segment.id));
+  return [
+    ...routeBuilderDraftPresentationSegments.map(
+      (segment) => stateSegmentsById.get(segment.id) ?? segment,
+    ),
+    ...routeBuilderSegments.filter((segment) => !draftSegmentIds.has(segment.id)),
+  ];
+}, [routeBuilderDraftPresentationSegments, routeBuilderSegments]);
+
 const routeBuilderPointCount = useMemo(
   () =>
     routeBuilderSegments.reduce(
@@ -17951,9 +18905,13 @@ const routeBuilderSavableSegments = useMemo(
 const routeBuilderHasPendingSnap = routeBuilderSavableSegments.some(
   (segment) => segment.snapStatus === 'network_pending',
 );
-const routeBuilderHasBlockedSnap = routeBuilderSavableSegments.some((segment) =>
-  ['blocked', 'failed', 'ambiguous', 'raw_smoothed', 'too_short'].includes(String(segment.snapStatus ?? '')),
-);
+const routeBuilderHasBlockedSnap =
+  routeBuilderSavableSegments.some((segment) =>
+    ['blocked', 'failed', 'ambiguous', 'raw_smoothed', 'too_short'].includes(String(segment.snapStatus ?? '')),
+  ) ||
+  routeBuilderDraftPresentationSegments.some(
+    (segment) => segment.geometryRole === 'raw_user_draft' || segment.snapStatus === 'blocked',
+  );
 const routeBuilderCanSave =
   !routeBuilderDrawing &&
   routeBuilderSavableSegments.length > 0 &&
@@ -18314,29 +19272,47 @@ const scanCampsiteDrawing = useCallback(() => {
   showToast,
 ]);
 
+const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boolean; keepActive?: boolean }) => {
+  if (!options?.keepActive) {
+    setRouteBuilderActive(false);
+    setDispersedRouteBuildActive(false);
+    setDispersedRouteBuildStatus(null);
+  }
+  setRouteBuilderDrawing(false);
+  setRouteBuilderSnapSource(null);
+  setRouteBuilderSnapStatus(null);
+  setRouteBuilderSnapMessage(null);
+  setRouteBuilderSegments([]);
+  const emptyDraft = createNavigateRouteDraft();
+  routeBuilderDraftRef.current = emptyDraft;
+  routeBuilderDraftHistoryRef.current = createNavigateRouteDraftHistory(emptyDraft);
+  setRouteBuilderDraft(emptyDraft);
+  setRouteBuilderActiveExtensionMode(false);
+  setRouteBuilderSaveVisible(false);
+  setRouteBuilderSaveName('');
+  setRouteBuilderSaveNote('');
+  routeBuilderFinalSnapGenerationRef.current += 1;
+  for (const controller of routeBuilderFinalSnapInFlightRef.current.values()) controller.abort();
+  routeBuilderFinalSnapInFlightRef.current.clear();
+  setSelectedDispersedRouteLegIds([]);
+  setSelectedRouteGeometrySegmentIds([]);
+  routeGeometryViewportSelectedSegmentsRef.current = [];
+  setRouteGeometryViewportSelectedSegments([]);
+  setDispersedRouteBuildRenderKey((key) => key + 1);
+  if (options?.clearDesignContext) {
+    setRouteDesignContext(null);
+  }
+  setCustomRouteRefreshKey((key) => key + 1);
+}, []);
+
 const startCampScoutDrawing = useCallback(() => {
   hapticCommand();
-  if (routeBuilderActive) {
-    setRouteBuilderActive(false);
-    setRouteBuilderDrawing(false);
-    setRouteBuilderSnapSource(null);
-    setRouteBuilderSegments([]);
-    routeBuilderFinalSnapInFlightRef.current.clear();
-    setRouteBuilderSnapStatus(null);
-    setRouteBuilderSnapMessage(null);
-    setDispersedRouteBuildActive(false);
-    setSelectedDispersedRouteLegIds([]);
-    setSelectedRouteGeometrySegmentIds([]);
-    setDispersedRouteBuildStatus(null);
-    setDispersedRouteBuildRenderKey((key) => key + 1);
-    setCustomRouteRefreshKey((key) => key + 1);
-  }
+  resetBuildRouteDraft({ clearDesignContext: true });
   setPinDropMode(false);
   setShowCrosshair(false);
   setCampsiteDrawingClosed(false);
   setCampsiteDrawingPoints([]);
   setSelectedCampScoutCandidateId(null);
-  setRouteDesignContext(null);
   campsitePolygonLocateRequestRef.current = null;
   setCampsitePolygonLocateState('idle');
   setCampsitePolygonLocateMessage(null);
@@ -18354,7 +19330,7 @@ const startCampScoutDrawing = useCallback(() => {
   clearOwnedCampsiteCandidates,
   closeNavigateDetailSurfaces,
   resetDrawAreaKnownCampsiteSources,
-  routeBuilderActive,
+  resetBuildRouteDraft,
   showToast,
 ]);
 
@@ -18511,39 +19487,6 @@ const toggleCampsiteDrawMode = useCallback(() => {
   showToast,
   startCampScoutDrawing,
 ]);
-
-const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boolean; keepActive?: boolean }) => {
-  if (!options?.keepActive) {
-    setRouteBuilderActive(false);
-    setDispersedRouteBuildActive(false);
-    setDispersedRouteBuildStatus(null);
-  }
-  setRouteBuilderDrawing(false);
-  setRouteBuilderSnapSource(null);
-  setRouteBuilderSnapStatus(null);
-  setRouteBuilderSnapMessage(null);
-  setRouteBuilderSegments([]);
-  const emptyDraft = createNavigateRouteDraft();
-  routeBuilderDraftRef.current = emptyDraft;
-  routeBuilderDraftHistoryRef.current = createNavigateRouteDraftHistory(emptyDraft);
-  setRouteBuilderDraft(emptyDraft);
-  setRouteBuilderActiveExtensionMode(false);
-  setRouteBuilderSaveVisible(false);
-  setRouteBuilderSaveName('');
-  setRouteBuilderSaveNote('');
-  routeBuilderFinalSnapGenerationRef.current += 1;
-  for (const controller of routeBuilderFinalSnapInFlightRef.current.values()) controller.abort();
-  routeBuilderFinalSnapInFlightRef.current.clear();
-  setSelectedDispersedRouteLegIds([]);
-  setSelectedRouteGeometrySegmentIds([]);
-  routeGeometryViewportSelectedSegmentsRef.current = [];
-  setRouteGeometryViewportSelectedSegments([]);
-  setDispersedRouteBuildRenderKey((key) => key + 1);
-  if (options?.clearDesignContext) {
-    setRouteDesignContext(null);
-  }
-  setCustomRouteRefreshKey((key) => key + 1);
-}, []);
 
 const startDispersedRouteSegmentBuild = useCallback(() => {
   hapticCommand();
@@ -19727,35 +20670,17 @@ useEffect(() => {
   if (!routeBuilderActive) return;
   if (routeBuilderActiveExtensionMode) return;
   if (!roadNavigationActive && !trailNavigationActive && !pendingHybridTrailTransition) return;
-  setRouteBuilderActive(false);
-  setRouteBuilderDrawing(false);
-  setRouteBuilderSnapSource(null);
-  setRouteBuilderSegments([]);
-  setRouteBuilderActiveExtensionMode(false);
-  setDispersedRouteBuildActive(false);
-  setSelectedDispersedRouteLegIds([]);
-  setSelectedRouteGeometrySegmentIds([]);
-  setDispersedRouteBuildStatus(null);
-  setDispersedRouteBuildRenderKey((key) => key + 1);
-}, [pendingHybridTrailTransition, roadNavigationActive, routeBuilderActive, routeBuilderActiveExtensionMode, trailNavigationActive]);
+  resetBuildRouteDraft();
+}, [pendingHybridTrailTransition, resetBuildRouteDraft, roadNavigationActive, routeBuilderActive, routeBuilderActiveExtensionMode, trailNavigationActive]);
 
 useFocusEffect(
   useCallback(() => {
     return () => {
       setSelectedDispersedCampingRegion(null);
       setSelectedEstablishedCampsite(null);
-      setRouteBuilderActive(false);
-      setRouteBuilderDrawing(false);
-      setRouteBuilderSnapSource(null);
-      setRouteBuilderSegments([]);
-      setRouteBuilderActiveExtensionMode(false);
-      setDispersedRouteBuildActive(false);
-      setSelectedDispersedRouteLegIds([]);
-      setSelectedRouteGeometrySegmentIds([]);
-      setDispersedRouteBuildStatus(null);
-      setDispersedRouteBuildRenderKey((key) => key + 1);
+      resetBuildRouteDraft();
     };
-  }, []),
+  }, [resetBuildRouteDraft]),
 );
 
 const runToolsAction = useCallback((action: () => void) => {
@@ -19839,6 +20764,14 @@ const toggleRemotenessOverlay = useCallback(() => {
       showToast(`ZOOM TO ${ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM}+ TO SHOW ECS CATALOG ROUTES`);
       return;
     }
+    if (!routeGeometryViewportFetchOnline) {
+      showToast('CHECKING OFFLINE ECS ROUTE GEOMETRY CACHE');
+      return;
+    }
+    if (!routeGeometryViewportProviderAvailability.available) {
+      showToast('ECS CATALOG ROUTE PROVIDER UNAVAILABLE');
+      return;
+    }
 
     if (routeGeometryOverlayBuild.segments.length > 0 || routeCatalogViewportPointMarkers.length > 0) {
       return;
@@ -19853,7 +20786,9 @@ const toggleRemotenessOverlay = useCallback(() => {
     routeGeometryOverlayBuild.segments.length,
     routeCatalogViewportPointMarkers.length,
     routeGeometryOverlayEnabled,
+    routeGeometryViewportFetchOnline,
     routeGeometryViewportOverlayEnabled,
+    routeGeometryViewportProviderAvailability.available,
     routeGeometryViewportZoomReady,
     showToast,
   ]);
@@ -19874,13 +20809,53 @@ const toggleRemotenessOverlay = useCallback(() => {
       showToast(`ZOOM TO ${MVUM_OVERLAY_MIN_ZOOM}+ TO SHOW MVUM SEGMENTS`);
       return;
     }
+    if (!mvumViewportFetchOnline) {
+      showToast('CHECKING OFFLINE MVUM CACHE');
+      return;
+    }
+    if (!routeGeometryViewportProviderAvailability.available) {
+      showToast('MVUM SEGMENT PROVIDER UNAVAILABLE');
+      return;
+    }
     showToast('MVUM TRAIL SEGMENTS LOADING FOR THIS MAP VIEW');
   }, [
     mvumOverlayEnabled,
+    mvumViewportFetchOnline,
     mvumViewportZoomReady,
     navigateMvumVectorTileUrl,
+    routeGeometryViewportProviderAvailability.available,
     showToast,
   ]);
+
+  const retryMvumViewport = useCallback(() => {
+    navigateMapLayerCoordinatorRef.current.cancel('mvum', 'manual_retry');
+    navigateMapLayerCoordinatorRef.current.invalidateCache(
+      'mvum',
+      mvumViewportUiState.lastAttemptedCacheKey ?? undefined,
+    );
+    if (mvumViewportFetchTimerRef.current) {
+      clearTimeout(mvumViewportFetchTimerRef.current);
+      mvumViewportFetchTimerRef.current = null;
+    }
+    setRequestBoundsTrigger((prev) => prev + 1);
+    setMvumViewportRetryTrigger((prev) => prev + 1);
+    showToast('RETRYING MVUM SEGMENTS');
+  }, [mvumViewportUiState.lastAttemptedCacheKey, showToast]);
+
+  const retryRouteGeometryViewport = useCallback(() => {
+    navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'manual_retry');
+    navigateMapLayerCoordinatorRef.current.invalidateCache(
+      'route_geometry',
+      routeGeometryViewportUiState.lastAttemptedCacheKey ?? undefined,
+    );
+    if (routeGeometryViewportFetchTimerRef.current) {
+      clearTimeout(routeGeometryViewportFetchTimerRef.current);
+      routeGeometryViewportFetchTimerRef.current = null;
+    }
+    setRequestBoundsTrigger((prev) => prev + 1);
+    setRouteGeometryViewportRetryTrigger((prev) => prev + 1);
+    showToast('RETRYING ECS ROUTE GEOMETRY');
+  }, [routeGeometryViewportUiState.lastAttemptedCacheKey, showToast]);
 
   const toggleExploreRoutesOverlay = useCallback(() => {
     hapticMicro();
@@ -21473,6 +22448,39 @@ const handleMapLifecycleMetrics = useCallback((payload: {
   previousMapLifecycleSnapshotRef.current = after;
 }, []);
 
+const handleNavigateLayerRenderState = useCallback((payload: NavigateMapLayerRenderState) => {
+  const current = payload.surfaceId === 'navigate_route_geometry'
+    ? routeGeometryViewportUiStateRef.current
+    : mvumViewportUiStateRef.current;
+  if (payload.enabled !== current.enabled) return;
+  if (
+    payload.requestFingerprint != null &&
+    payload.requestFingerprint !== current.requestFingerprint
+  ) {
+    return;
+  }
+  if (
+    payload.requestGeneration != null &&
+    payload.requestGeneration !== current.generation
+  ) {
+    return;
+  }
+  if (
+    payload.enabled &&
+    current.requestFingerprint != null &&
+    payload.requestFingerprint == null
+  ) {
+    return;
+  }
+  if (payload.enabled && payload.requestGeneration == null) return;
+
+  if (payload.surfaceId === 'navigate_route_geometry') {
+    setRouteGeometryLayerRenderState(payload);
+  } else {
+    setMvumLayerRenderState(payload);
+  }
+}, []);
+
 const mapTiltAlertMarkers = useMemo<React.ComponentProps<typeof MapRenderer>['tiltAlertMarkers']>(
   () => (showTiltAlertZones
     ? (safeArray(tiltAlertMarkers as any) as NonNullable<React.ComponentProps<typeof MapRenderer>['tiltAlertMarkers']>)
@@ -21945,6 +22953,7 @@ const mapRendererElement = useMemo(() => (
     isLoading={mapLoading}
     hasToken={hasToken}
     onReadyStateChange={setMapSurfaceReady}
+    onBootStateChange={setMapBootState}
     onRetry={handleMapRetry}
     campIntelMarkers={combinedCampMarkers}
     campEndpointMarkers={sharedCampPinMapMarkers}
@@ -21958,14 +22967,21 @@ const mapRendererElement = useMemo(() => (
     cameraCommandTrigger={mapRendererCameraCommandTrigger}
     routeBuilderActive={routeBuilderActive}
     routeBuilderMode="anchor_trace"
-    routeBuilderSegments={routeBuilderSegments}
+    routeBuilderSegments={routeBuilderMapSegments}
     routeBuilderAnchors={routeBuilderDraft.anchors}
     routeBuilderColor={routeBuilderActiveExtensionMode ? ACTIVE_GUIDANCE_EXTENSION_COLOR : ROUTE_BUILDER_DEFAULT_COLOR}
     routeProfileFocus={routeProfileFocusPayload}
     selectedRouteGeometrySegmentIds={selectedRouteGeometrySegmentIds}
+    routeGeometryOverlayEnabled={
+      routeGeometryOverlayEnabled && routeGeometryViewportOverlayEnabled
+    }
+    routeGeometryRequestFingerprint={routeGeometryViewportUiState.requestFingerprint}
+    routeGeometryRequestGeneration={routeGeometryViewportUiState.generation}
+    routeGeometryInvalidFeatureCount={routeGeometryViewportUiState.invalidFeatureCount}
     onRouteBuilderUpdate={handleRouteBuilderUpdate}
     onRouteBuilderGestureStateChange={handleRouteBuilderGestureStateChange}
     onMapLifecycleMetrics={handleMapLifecycleMetrics}
+    onLayerRenderState={handleNavigateLayerRenderState}
     remoteOverlay={remotenessMapOverlay}
     mvumOverlay={navigateMvumMapOverlay}
     stitchedRoutePreview={navigateMvumStitchedRoutePreview}
@@ -22011,6 +23027,7 @@ const mapRendererElement = useMemo(() => (
   handleMapSegmentTap,
   handleNavigateConvoyMemberTap,
   handleNavigateDispatchPingTap,
+  handleNavigateLayerRenderState,
   handleNavigateUserLocationTap,
   handlePinTap,
   handleRoadClassification,
@@ -22047,7 +23064,12 @@ const mapRendererElement = useMemo(() => (
   routeBuilderActive,
   routeBuilderActiveExtensionMode,
   routeBuilderDraft.anchors,
-  routeBuilderSegments,
+  routeBuilderMapSegments,
+  routeGeometryOverlayEnabled,
+  routeGeometryViewportOverlayEnabled,
+  routeGeometryViewportUiState.invalidFeatureCount,
+  routeGeometryViewportUiState.generation,
+  routeGeometryViewportUiState.requestFingerprint,
   routeProfileFocusPayload,
   selectedRouteGeometrySegmentIds,
   sharedCampPinMapMarkers,
@@ -22874,26 +23896,6 @@ const stableMapSurface = useMemo(() => {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
-                  styles.routeBuilderStatusAction,
-                  !routeBuilderCanRedo && styles.routeBuilderStatusActionDisabled,
-                ]}
-                onPress={redoLastRouteBuilderSegment}
-                disabled={!routeBuilderCanRedo}
-                activeOpacity={0.82}
-                accessibilityRole="button"
-                accessibilityLabel="Redo last Build Route point"
-              >
-                <Text
-                  style={[
-                    styles.routeBuilderStatusActionText,
-                    !routeBuilderCanRedo && styles.routeBuilderStatusActionTextDisabled,
-                  ]}
-                >
-                  REDO
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
                   styles.routeCatalogSelectionAction,
                   (!selectedRouteCatalogViewportFeature.properties.guidanceReady ||
                     !!selectedRouteCatalogViewportBuildUnavailableReason) &&
@@ -23347,6 +24349,26 @@ const stableMapSurface = useMemo(() => {
                   ]}
                 >
                   UNDO
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.routeBuilderStatusAction,
+                  !routeBuilderCanRedo && styles.routeBuilderStatusActionDisabled,
+                ]}
+                onPress={redoLastRouteBuilderSegment}
+                disabled={!routeBuilderCanRedo}
+                activeOpacity={0.82}
+                accessibilityRole="button"
+                accessibilityLabel="Redo last Build Route point"
+              >
+                <Text
+                  style={[
+                    styles.routeBuilderStatusActionText,
+                    !routeBuilderCanRedo && styles.routeBuilderStatusActionTextDisabled,
+                  ]}
+                >
+                  REDO
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -24227,7 +25249,7 @@ const stableMapSurface = useMemo(() => {
             <ECSTransientNotice
               kind="loading"
               label="Preparing Navigate"
-              message="Anchoring the map, saved route context, and field controls."
+              message="Anchoring the map and saved route context. ECS will expose fallback or retry if live initialization does not complete."
               compact
             />
           </View>
@@ -24609,7 +25631,7 @@ const stableMapSurface = useMemo(() => {
 
   {routeGeometryOverlayEnabled && isMapUIReady ? (
     <View
-      pointerEvents="none"
+      pointerEvents="auto"
       style={[
         styles.routeGeometryOverlayLegend,
         {
@@ -24627,6 +25649,9 @@ const stableMapSurface = useMemo(() => {
         {routeGeometryOverlayBuild.skippedMissingGeometryCount > 0
           ? ` ${routeGeometryOverlayBuild.skippedMissingGeometryCount} skipped.`
           : ''}
+        {routeGeometryViewportUiState.invalidFeatureCount > 0
+          ? ` ${routeGeometryViewportUiState.invalidFeatureCount} invalid geometries excluded.`
+          : ''}
         {routeGeometryViewportUiState.skippedClosedCount > 0
           ? ` ${routeGeometryViewportUiState.skippedClosedCount} closed/prohibited hidden.`
           : ''}
@@ -24637,6 +25662,20 @@ const stableMapSurface = useMemo(() => {
       <Text style={styles.routeGeometryOverlayLegendWarning} numberOfLines={2}>
         ECS geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.
       </Text>
+      {routeGeometryViewportUiState.retryEligible || routeGeometryLayerDiagnostic.renderStatus === 'error' ? (
+        <View style={styles.routeBuilderStatusActions}>
+          <TouchableOpacity
+            style={styles.routeBuilderStatusAction}
+            onPress={retryRouteGeometryViewport}
+            activeOpacity={0.84}
+            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry ECS route geometry"
+          >
+            <Text style={styles.routeBuilderStatusActionText}>RETRY</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </View>
   ) : null}
 
@@ -24659,6 +25698,9 @@ const stableMapSurface = useMemo(() => {
       </View>
       <Text style={styles.routeGeometryOverlayLegendText} numberOfLines={2}>
         {mvumViewportLegendMessage}
+        {mvumViewportUiState.invalidFeatureCount > 0
+          ? ` ${mvumViewportUiState.invalidFeatureCount} invalid geometries excluded.`
+          : ''}
       </Text>
       <Text style={styles.routeGeometryOverlayLegendText} numberOfLines={3}>
         {mvumStitchLegendMessage}
@@ -24666,6 +25708,20 @@ const stableMapSurface = useMemo(() => {
       <Text style={styles.routeGeometryOverlayLegendWarning} numberOfLines={2}>
         MVUM geometry is planning/reference data. Verify current posted rules, seasonal closures, and vehicle legality.
       </Text>
+      {mvumViewportUiState.retryEligible || mvumLayerDiagnostic.renderStatus === 'error' ? (
+        <View style={styles.routeBuilderStatusActions}>
+          <TouchableOpacity
+            style={styles.routeBuilderStatusAction}
+            onPress={retryMvumViewport}
+            activeOpacity={0.84}
+            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry MVUM segments"
+          >
+            <Text style={styles.routeBuilderStatusActionText}>RETRY</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <View style={styles.routeBuilderStatusActions}>
         <TouchableOpacity
           style={[
@@ -24675,8 +25731,10 @@ const stableMapSurface = useMemo(() => {
           onPress={handleBuildMvumStitchedRoute}
           disabled={mvumStitchActionDisabled}
           activeOpacity={0.84}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
           accessibilityRole="button"
           accessibilityLabel="Build Route from selected MVUM segments"
+          accessibilityState={{ disabled: mvumStitchActionDisabled, busy: mvumStitchStatus === 'loading' }}
         >
           <Text
             style={[
@@ -24695,8 +25753,10 @@ const stableMapSurface = useMemo(() => {
           onPress={handleStartMvumStitchedGuidance}
           disabled={mvumStartStitchedGuidanceDisabled}
           activeOpacity={0.84}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
           accessibilityRole="button"
           accessibilityLabel="Start stitched MVUM guidance"
+          accessibilityState={{ disabled: mvumStartStitchedGuidanceDisabled }}
         >
           <Text
             style={[

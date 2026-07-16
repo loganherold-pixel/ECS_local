@@ -151,7 +151,15 @@ export type RouteCatalogSearchMeta = {
   curationCandidateCount: number;
   anySourceBackedCandidateCount: number;
   radiusFilterApplied: boolean;
-  knownRouteDiagnostics?: Array<Record<string, unknown>>;
+  page: number;
+  pageSize: number;
+  offset: number;
+  hasMore: boolean;
+  nextPage: number | null;
+  totalMatchedCount: number;
+  totalMatchedCountBounded: boolean;
+  clientInvalidRecordCount?: number;
+  knownRouteDiagnostics?: Record<string, unknown>[];
 };
 
 export type RouteCatalogSearchResult = {
@@ -347,13 +355,18 @@ function normalizeCoordinatePair(value: unknown): number[] | null {
   if (!Array.isArray(value) || value.length < 2) return null;
   const longitude = Number(value[0]);
   const latitude = Number(value[1]);
+  const rawElevation = value[2];
+  const elevation =
+    rawElevation != null && !(typeof rawElevation === 'string' && rawElevation.trim().length === 0)
+      ? Number(rawElevation)
+      : null;
   if (
     Number.isFinite(latitude) &&
     Number.isFinite(longitude) &&
     Math.abs(latitude) <= 90 &&
     Math.abs(longitude) <= 180
   ) {
-    return [longitude, latitude];
+    return Number.isFinite(elevation) ? [longitude, latitude, elevation as number] : [longitude, latitude];
   }
   return null;
 }
@@ -1290,6 +1303,10 @@ function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta
   const record = readRecord(value);
   const radiusMatchedCount = record ? readNumber(record, 'radiusMatchedCount', 'radius_matched_count') ?? 0 : 0;
   const curationCandidateCount = record ? readNumber(record, 'curationCandidateCount', 'curation_candidate_count') ?? 0 : 0;
+  const page = record ? readNumber(record, 'page') ?? 1 : 1;
+  const pageSize = record ? readNumber(record, 'pageSize', 'page_size') ?? 0 : 0;
+  const offset = record ? readNumber(record, 'offset') ?? Math.max(0, (page - 1) * pageSize) : 0;
+  const nextPageValue = record ? readNumber(record, 'nextPage', 'next_page') : undefined;
   return {
     candidateCount: record ? readNumber(record, 'candidateCount', 'candidate_count') ?? 0 : 0,
     radiusMatchedCount,
@@ -1304,8 +1321,19 @@ function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta
         radiusMatchedCount + curationCandidateCount
       : 0,
     radiusFilterApplied: record ? readBoolean(record, 'radiusFilterApplied', 'radius_filter_applied') ?? false : false,
+    page: Math.max(1, Math.floor(page)),
+    pageSize: Math.max(0, Math.floor(pageSize)),
+    offset: Math.max(0, Math.floor(offset)),
+    hasMore: record ? readBoolean(record, 'hasMore', 'has_more') ?? false : false,
+    nextPage: nextPageValue != null && nextPageValue >= 1 ? Math.floor(nextPageValue) : null,
+    totalMatchedCount: record
+      ? readNumber(record, 'totalMatchedCount', 'total_matched_count') ?? radiusMatchedCount
+      : 0,
+    totalMatchedCountBounded: record
+      ? readBoolean(record, 'totalMatchedCountBounded', 'total_matched_count_bounded') ?? false
+      : false,
     knownRouteDiagnostics: Array.isArray(record?.knownRouteDiagnostics ?? record?.known_route_diagnostics)
-      ? (record?.knownRouteDiagnostics ?? record?.known_route_diagnostics) as Array<Record<string, unknown>>
+      ? (record?.knownRouteDiagnostics ?? record?.known_route_diagnostics) as Record<string, unknown>[]
       : undefined,
   };
 }

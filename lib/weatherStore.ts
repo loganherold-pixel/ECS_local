@@ -253,8 +253,7 @@ export function hasUsableWeatherResponse(data: WeatherResponse | null | undefine
     hasUsableCurrent(result.current) ||
     Boolean(result.hourly?.length) ||
     Boolean(result.forecast?.length) ||
-    Boolean(result.alerts?.length) ||
-    Boolean(result.trail_conditions?.factors?.length),
+    Boolean(result.alerts?.length),
   );
 }
 
@@ -866,17 +865,21 @@ async function invokeWeatherEdgeFunction(
     requestKey?: string | null;
   },
 ): Promise<{ data: any; error: any }> {
-  return await Promise.race([
-    invokeOpenWeatherOneCallEdgeFunction(body, context),
-    new Promise<{ data: null; error: { message: string } }>(resolve => {
-      setTimeout(() => {
-        resolve({
-          data: null,
-          error: { message: 'Weather request timed out' },
-        });
-      }, EDGE_FUNCTION_TIMEOUT_MS);
-    }),
-  ]);
+  try {
+    return await invokeOpenWeatherOneCallEdgeFunction(body, {
+      ...context,
+      timeoutMs: EDGE_FUNCTION_TIMEOUT_MS,
+    });
+  } catch (error) {
+    return {
+      data: null,
+      error: {
+        message: error instanceof Error && error.name === 'AbortError'
+          ? 'Weather request timed out'
+          : 'Weather provider request failed',
+      },
+    };
+  }
 }
 
 function normalizeWeatherResponse(
@@ -1019,7 +1022,14 @@ async function callWeatherEdgeFunction(
         continue;
       }
 
-      return normalizeWeatherResponse(data, coordinates, units);
+      const normalized = normalizeWeatherResponse(data, coordinates, units);
+      if (!hasUsableWeatherResponse(normalized)) {
+        const providerMessage = typeof data.error === 'string' ? data.error : '';
+        if (isNonRetryableError(providerMessage)) throw new Error(providerMessage);
+        lastError = new Error('Weather provider returned no usable forecast data');
+        continue;
+      }
+      return normalized;
     } catch (err: any) {
       lastError = err instanceof Error ? err : new Error(err?.message || 'Unknown error');
       if (isNonRetryableError(lastError.message)) throw lastError;
@@ -1082,7 +1092,14 @@ async function callSimpleWeatherEdgeFunction(
         continue;
       }
 
-      return normalizeWeatherResponse(data, [{ lat, lng: lon, label: undefined }], units);
+      const normalized = normalizeWeatherResponse(data, [{ lat, lng: lon, label: undefined }], units);
+      if (!hasUsableWeatherResponse(normalized)) {
+        const providerMessage = typeof data.error === 'string' ? data.error : '';
+        if (isNonRetryableError(providerMessage)) throw new Error(providerMessage);
+        lastError = new Error('Weather provider returned no usable forecast data');
+        continue;
+      }
+      return normalized;
     } catch (err: any) {
       lastError = err instanceof Error ? err : new Error(err?.message || 'Unknown error');
       if (isNonRetryableError(lastError.message)) throw lastError;

@@ -8,7 +8,7 @@ import {
 } from './trailGuidanceEngine';
 
 export type FullRouteGuidancePhase = 'approach' | 'trail' | 'transition' | 'arrived';
-export type FullRouteGuidanceStatus = 'ready' | 'blocked_gap' | 'unavailable';
+export type FullRouteGuidanceStatus = 'ready' | 'blocked_gap' | 'degraded' | 'unavailable';
 export type FullRouteGuidanceStartSource = 'road_approach' | 'gps_on_trail' | 'trail_guidance' | 'unknown';
 
 export interface FullRouteGuidanceInput {
@@ -65,6 +65,7 @@ function isValidCoordinate(value: RoadNavCoordinate | null | undefined): value i
 
 function normalizePoints(points: RoadNavCoordinate[] | null | undefined): RoadNavCoordinate[] {
   if (!Array.isArray(points)) return [];
+  if (points.some((point) => !isValidCoordinate(point))) return [];
   const normalized: RoadNavCoordinate[] = [];
   points.forEach((point) => {
     if (!isValidCoordinate(point)) return;
@@ -125,6 +126,9 @@ function resolveAlreadyOnTrail(
 }
 
 export function buildFullRouteGuidanceModel(input: FullRouteGuidanceInput): FullRouteGuidanceModel {
+  const hasInvalidCanonicalGeometry =
+    (Array.isArray(input.trailGeometry) && input.trailGeometry.some((point) => !isValidCoordinate(point))) ||
+    (Array.isArray(input.roadRoutePoints) && input.roadRoutePoints.some((point) => !isValidCoordinate(point)));
   const trailGeometry = normalizePoints(input.trailGeometry);
   const roadRoutePoints = normalizePoints(input.roadRoutePoints);
   const roadProgressPoints = normalizePoints(input.roadProgressPoints);
@@ -143,6 +147,23 @@ export function buildFullRouteGuidanceModel(input: FullRouteGuidanceInput): Full
     0,
     finitePositive(input.trailStartDedupeMeters) ?? DEFAULT_TRAIL_START_DEDUPE_METERS,
   );
+
+  if (hasInvalidCanonicalGeometry) {
+    return {
+      status: 'degraded',
+      phase: input.phase,
+      startSource: 'unknown',
+      routePoints: [],
+      progressPoints: [],
+      remainingDistanceM: null,
+      progressPercent: null,
+      transitionRouteIndex: null,
+      trailStartIndex: 0,
+      finalEndpoint: null,
+      roadTrailJoinDistanceM: null,
+      blockedReason: 'Full route guidance is degraded because canonical geometry is malformed.',
+    };
+  }
 
   if (trailGeometry.length < 2) {
     return {
@@ -221,7 +242,10 @@ export function buildFullRouteGuidanceModel(input: FullRouteGuidanceInput): Full
   const roadEnd = roadRoutePoints[roadRoutePoints.length - 1];
   const trailStart = trailGeometry[0];
   const roadTrailJoinDistanceM = trailDistanceMeters(roadEnd, trailStart);
-  if (roadTrailJoinDistanceM > trailStartJoinMaxMeters) {
+  if (
+    roadTrailJoinDistanceM > trailStartJoinMaxMeters ||
+    roadTrailJoinDistanceM > trailStartDedupeMeters
+  ) {
     return {
       status: 'blocked_gap',
       phase: input.phase,
@@ -234,7 +258,8 @@ export function buildFullRouteGuidanceModel(input: FullRouteGuidanceInput): Full
       trailStartIndex: 0,
       finalEndpoint: trailGeometry[trailGeometry.length - 1],
       roadTrailJoinDistanceM,
-      blockedReason: 'Full route guidance is blocked because the approach route does not meet the trail start.',
+      blockedReason:
+        'Full route guidance is blocked because the approach route does not meet the trail start on a canonical connector.',
     };
   }
 

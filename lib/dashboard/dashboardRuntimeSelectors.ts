@@ -179,14 +179,23 @@ function powerSignature(data: DashboardWidgetData): string {
 
 function weatherSignature(data: DashboardWidgetData): string {
   const weather = data?.weatherSnapshot;
+  const hourly = Array.isArray(weather?.hourly) ? weather.hourly : [];
+  const daily = Array.isArray(weather?.daily) ? weather.daily : [];
+  const forecastSignature = (values: any[]) => values.slice(0, 3).map((value) => [
+    value?.date ?? value?.time ?? value?.dt ?? '',
+    bucket(value?.temp ?? value?.temperature ?? value?.temp_day ?? value?.temp_max, 1),
+    value?.weather_main ?? value?.condition ?? value?.weather_description ?? '',
+  ].join(':')).join(',');
   return [
     weather?.status?.kind ?? '',
-    weather?.status?.updatedAt ?? weather?.updatedAt ?? '',
+    weather?.status?.timestampMs ?? weather?.status?.cachedAt ?? weather?.fetchedAt ?? weather?.updatedAt ?? '',
+    weather?.status?.source ?? weather?.provider?.source ?? '',
+    weather?.provider?.id ?? weather?.provider?.name ?? '',
     bucket(weather?.current?.temp ?? weather?.current?.temperatureF, 1),
     bucket(weather?.current?.windSpeedMph, 2),
     arraySignature(weather?.alerts, 4),
-    arraySignature(weather?.hourly, 3),
-    arraySignature(weather?.daily, 3),
+    `${hourly.length}:${forecastSignature(hourly)}`,
+    `${daily.length}:${forecastSignature(daily)}`,
   ].join('|');
 }
 
@@ -245,6 +254,7 @@ export function selectDashboardWidgetRenderKey(
         vehicle,
         telemetry,
         power,
+        gps,
         weather,
       ].join('|');
     case 'vehicle-systems':

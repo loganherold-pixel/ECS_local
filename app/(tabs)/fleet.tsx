@@ -181,12 +181,24 @@ function logFleetDev(...args: unknown[]) {
   }
 }
 
-type LoadoutSummarySyncStatus = 'SYNCED' | 'PENDING' | 'SYNCING' | 'FAILED' | 'NOT STAGED';
+type LoadoutSummarySyncStatus =
+  | 'SYNCED'
+  | 'PENDING'
+  | 'SYNCING'
+  | 'FAILED'
+  | 'NOT STAGED'
+  | 'LOADING'
+  | 'STALE'
+  | 'UNAVAILABLE';
 
 type LoadoutSummaryState = {
-  itemCount: number;
-  totalWeight: number;
+  itemCount: number | null;
+  totalWeight: number | null;
   syncStatus: LoadoutSummarySyncStatus;
+};
+
+type FleetLoadFailure = {
+  safeCode: 'FLEET_DATA_LOAD_FAILED';
 };
 
 type FleetDetailPanelKey =
@@ -658,7 +670,7 @@ function FleetCommandSurface({ state }: { state: FleetCommandState }) {
           s.commandPanel,
           {
             borderColor: `${accent}2E`,
-            backgroundColor: `${accent}12`,
+            backgroundColor: ECS_SURFACE.background.primary,
           },
         ]}
       >
@@ -1504,9 +1516,9 @@ function LoadoutSummaryMetrics({
 }) {
   const mountedRef = useRef(true);
   const [summary, setSummary] = useState<LoadoutSummaryState>({
-    itemCount: 0,
-    totalWeight: 0,
-    syncStatus: 'NOT STAGED',
+    itemCount: null,
+    totalWeight: null,
+    syncStatus: 'LOADING',
   });
   const [trackedLoadoutId, setTrackedLoadoutId] = useState<string | null>(null);
 
@@ -1558,8 +1570,9 @@ function LoadoutSummaryMetrics({
       }
     } catch {
       if (mountedRef.current) {
-        setSummary({ itemCount: 0, totalWeight: 0, syncStatus: 'NOT STAGED' });
-        setTrackedLoadoutId(null);
+        setSummary((current) => current.itemCount != null && current.totalWeight != null
+          ? { ...current, syncStatus: 'STALE' }
+          : { itemCount: null, totalWeight: null, syncStatus: 'UNAVAILABLE' });
       }
     }
   }, [containerZones, userId, vehicle]);
@@ -1579,11 +1592,13 @@ function LoadoutSummaryMetrics({
     <>
       <View style={metricStyle}>
         <Text style={labelStyle}>Loadout Items</Text>
-        <Text style={valueStyle} numberOfLines={1}>{summary.itemCount}</Text>
+        <Text style={valueStyle} numberOfLines={1}>{summary.itemCount ?? '--'}</Text>
       </View>
       <View style={metricStyle}>
         <Text style={labelStyle}>Loadout Wt</Text>
-        <Text style={valueStyle} numberOfLines={1}>{formatLoadoutWeight(summary.totalWeight)}</Text>
+        <Text style={valueStyle} numberOfLines={1}>
+          {summary.totalWeight == null ? '--' : formatLoadoutWeight(summary.totalWeight)}
+        </Text>
       </View>
       <View style={metricStyle}>
         <Text style={labelStyle}>Loadout Sync</Text>
@@ -1648,6 +1663,7 @@ function FleetScreenInner() {
   // ── State ─────────────────────────────────────────────
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fleetLoadFailure, setFleetLoadFailure] = useState<FleetLoadFailure | null>(null);
   const [activeVehicleId, setActiveVehicleId] = useState<string | null>(
     vehicleSetupStore.getActiveVehicleId()
   );
@@ -1705,8 +1721,6 @@ function FleetScreenInner() {
   const lastFocusRefreshRevisionRef = useRef<number | null>(null);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
 
-
-
   // ── Fetch vehicles ────────────────────────────────────
   const fetchVehicles = useCallback((): Promise<void> => {
     if (fetchInFlightRef.current) return fetchInFlightRef.current;
@@ -1723,6 +1737,7 @@ function FleetScreenInner() {
         ]);
         const result = await vehicleStore.getAll(user?.id || null);
         if (mountedRef.current) {
+          setFleetLoadFailure(null);
           const storedActiveVehicleId = vehicleSetupStore.getActiveVehicleId();
           const reconciledActiveVehicleId = vehicleSetupStore.reconcileActiveVehicle(
             result.vehicles.map((vehicle) => vehicle.id),
@@ -1744,7 +1759,13 @@ function FleetScreenInner() {
         }
       } catch (err: any) {
         lastFocusRefreshRevisionRef.current = null;
-        console.error(TAG, 'fetch error:', err);
+        if (mountedRef.current) {
+          setFleetLoadFailure({ safeCode: 'FLEET_DATA_LOAD_FAILED' });
+        }
+        console.error(TAG, 'fetch error', {
+          safeCode: 'FLEET_DATA_LOAD_FAILED',
+          errorName: typeof err?.name === 'string' ? err.name : 'Error',
+        });
       } finally {
         if (mountedRef.current) setLoading(false);
         fetchInFlightRef.current = null;
@@ -2617,7 +2638,7 @@ function FleetScreenInner() {
   );
 
   useEffect(() => {
-    if (loading || authLoading) return;
+    if (loading || authLoading || fleetLoadFailure) return;
     if (activeVehicleId && !activeVehicle) {
       logFleetDev(TAG, 'Clearing stale active vehicle context after fleet load', {
         activeVehicleId,
@@ -2625,10 +2646,10 @@ function FleetScreenInner() {
       });
       vehicleSetupStore.clearActiveVehicleId();
     }
-  }, [activeVehicle, activeVehicleId, authLoading, loading, vehicles.length]);
+  }, [activeVehicle, activeVehicleId, authLoading, fleetLoadFailure, loading, vehicles.length]);
 
   useEffect(() => {
-    if (loading || authLoading || vehicles.length > 0) return;
+    if (loading || authLoading || fleetLoadFailure || vehicles.length > 0) return;
 
     setVisibleFleetVehicleId((currentId) => (currentId == null ? currentId : null));
 
@@ -2668,6 +2689,7 @@ function FleetScreenInner() {
     authLoading,
     buildLoadoutModalVehicle,
     buildLoadoutModalVisible,
+    fleetLoadFailure,
     loading,
     loadoutModalVehicle,
     loadoutModalVisible,
@@ -2680,7 +2702,7 @@ function FleetScreenInner() {
   ]);
 
   useEffect(() => {
-    if (!isFleetFocused || loading || authLoading || vehicles.length > 0 || profileModalVisible) {
+    if (!isFleetFocused || loading || authLoading || fleetLoadFailure || vehicles.length > 0 || profileModalVisible) {
       clearZeroVehicleVccSetupAutoOpenTimer();
       return;
     }
@@ -2712,6 +2734,7 @@ function FleetScreenInner() {
     authLoading,
     clearZeroVehicleVccSetupAutoOpenTimer,
     closeFleetDetailFlows,
+    fleetLoadFailure,
     isFleetFocused,
     loading,
     profileModalVisible,
@@ -2735,7 +2758,7 @@ function FleetScreenInner() {
   }, [activeVehicleId, vehicles]);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || fleetLoadFailure) return;
     const vehicleExists = (vehicle: Vehicle | null) =>
       !vehicle || vehicles.some((candidate) => candidate.id === vehicle.id);
 
@@ -2757,6 +2780,7 @@ function FleetScreenInner() {
   }, [
     buildLoadoutModalVehicle,
     closeFleetDetailFlows,
+    fleetLoadFailure,
     loadoutModalVehicle,
     loading,
     profileModalVehicle,
@@ -2983,7 +3007,7 @@ function FleetScreenInner() {
   }
 
   // ── Loading ───────────────────────────────────────────
-  if (loading) {
+  if (loading && vehicles.length === 0) {
     return (
       <TopoBackground>
         <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
@@ -3020,6 +3044,27 @@ function FleetScreenInner() {
     );
   }
 
+  if (fleetLoadFailure && vehicles.length === 0) {
+    return (
+      <TopoBackground>
+        <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
+          <Header title="Fleet Center" commandContext={fleetHeaderCommandContext} />
+          <View style={[s.emptyStateShell, fleetFrameStyle]}>
+            <ECSStateMessage
+              title="Fleet data unavailable"
+              message="ECS could not load the saved vehicle catalog."
+              helper={`Saved vehicles were not replaced with an empty fleet. Safe code: ${fleetLoadFailure.safeCode}`}
+              icon="warning-outline"
+              variant="warning"
+              actionLabel="Retry Fleet"
+              onAction={() => { void fetchVehicles(); }}
+            />
+          </View>
+        </View>
+      </TopoBackground>
+    );
+  }
+
   // ============================================================
   // NO VEHICLES → Keep the current Fleet structure visible:
   // Readiness Command, Vehicle Command Center, and the current empty card area.
@@ -3036,6 +3081,24 @@ function FleetScreenInner() {
           keyboardShouldPersistTaps="handled"
           nestedScrollEnabled
         >
+          {loading && vehicles.length > 0 ? (
+            <ECSTransientNotice
+              kind="syncing"
+              label="Refreshing Fleet Data..."
+              message="Last saved vehicle data remains visible while ECS checks for updates."
+            />
+          ) : fleetLoadFailure ? (
+            <ECSStateMessage
+              title="Using last saved Fleet data"
+              message="The latest Fleet refresh failed, so ECS is preserving the last successfully loaded vehicle catalog."
+              helper={`Some details may be stale. Safe code: ${fleetLoadFailure.safeCode}`}
+              icon="cloud-offline-outline"
+              variant="partial_data"
+              align="left"
+              actionLabel="Retry Fleet"
+              onAction={() => { void fetchVehicles(); }}
+            />
+          ) : null}
           <FleetCommandSurface state={fleetCommandState} />
           <FleetOverviewHeader
             onAddVehicle={handleAddVehicle}

@@ -1,9 +1,8 @@
 import React from 'react';
-import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { TACTICAL } from '../../lib/theme';
 import { ECSWidgetFallback } from '../ECSStateMessage';
-import { ECSWidgetSkeleton } from '../ECSLoading';
 import { ECSCardTitle, ECSHelperText, ECSSectionTitle, ECSStatLabel, ECSStatValue } from '../ECSText';
 import { ECS_TEXT_SPACING } from '../../lib/ecsTypographyTokens';
 import { ECSBadge } from '../ECSStatus';
@@ -234,6 +233,7 @@ export function ECSInstrumentPanel({
         style,
       ]}
     >
+      <View pointerEvents="none" style={styles.instrumentContrastLayer} />
       {background ? <View pointerEvents="none" style={styles.instrumentBackground}>{background}</View> : null}
       {innerTexture ? (
         <View pointerEvents="none" style={styles.instrumentTopoLayer}>
@@ -419,10 +419,41 @@ export function WidgetEmptyState({ primary, secondary }: WidgetEmptyStateProps) 
 }
 
 export function WidgetStateMessage({ state }: { state: WidgetStateDescriptor }) {
+  const accessibilityLabel = [state.badgeLabel, state.primary, state.secondary]
+    .filter(Boolean)
+    .join('. ');
+
   if (state.kind === 'loading') {
-    return <ECSWidgetSkeleton />;
+    return (
+      <View
+        accessible
+        accessibilityRole="progressbar"
+        accessibilityState={{ busy: true }}
+        accessibilityLiveRegion="polite"
+        accessibilityLabel={accessibilityLabel}
+        style={styles.widgetStateMessage}
+      >
+        <ActivityIndicator size="small" color={TACTICAL.amber} />
+        <ECSCardTitle style={styles.widgetStateTitle}>{state.primary}</ECSCardTitle>
+        {state.secondary ? (
+          <ECSHelperText style={styles.widgetStateDetail}>{state.secondary}</ECSHelperText>
+        ) : null}
+      </View>
+    );
   }
-  return <WidgetEmptyState primary={state.primary} secondary={state.secondary} />;
+
+  const urgent = state.kind === 'critical' || state.kind === 'unavailable';
+  return (
+    <View
+      accessible
+      accessibilityRole={urgent ? 'alert' : undefined}
+      accessibilityLiveRegion={urgent ? 'assertive' : 'polite'}
+      accessibilityLabel={accessibilityLabel}
+      style={styles.widgetStateMessage}
+    >
+      <WidgetEmptyState primary={state.primary} secondary={state.secondary} />
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -443,6 +474,10 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 0 },
     elevation: 4,
+  },
+  instrumentContrastLayer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(8,12,15,0.90)',
   },
   instrumentPanelCommand: {
     borderRadius: 14,
@@ -809,5 +844,18 @@ const styles = StyleSheet.create({
     opacity: 0.8,
     textAlign: 'center',
     lineHeight: 12,
+  },
+  widgetStateMessage: {
+    flex: 1,
+    minHeight: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  widgetStateTitle: {
+    textAlign: 'center',
+  },
+  widgetStateDetail: {
+    textAlign: 'center',
   },
 });

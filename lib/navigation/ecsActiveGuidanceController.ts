@@ -3,6 +3,14 @@ import type {
   EcsGuidanceRoute,
   EcsGuidanceStep,
 } from './ecsGuidanceModel';
+import {
+  buildGuidanceRouteDistanceIndex,
+  findNearestPlausibleRouteProjection,
+  resolveGuidanceRouteProgress,
+  type GuidanceRouteProjection,
+  type GuidanceRouteProjectionStatus,
+  type ResolveGuidanceRouteProgressInput,
+} from './guidanceRouteProjection';
 
 export type EcsActiveGuidanceConfidence = 'high' | 'medium' | 'low';
 export type EcsActiveGuidanceOffRouteStatus =
@@ -36,13 +44,20 @@ export interface EcsActiveGuidanceProgress {
   distanceFromRouteMeters: number;
   distanceRemainingOnCurrentStepMeters: number | null;
   nearestRoutePoint: EcsProjectedGuidancePoint | null;
+  progressRoutePoint: EcsProjectedGuidancePoint | null;
   nearestStepPoint: EcsProjectedGuidancePoint | null;
+  routeDistanceFromStartMeters: number;
+  projectionStatus: GuidanceRouteProjectionStatus;
+  completedRouteGeometry: EcsGuidanceCoordinate[];
+  remainingRouteGeometry: EcsGuidanceCoordinate[];
   currentStep?: EcsGuidanceStep;
   nextStep?: EcsGuidanceStep;
   followingStep?: EcsGuidanceStep;
   upcomingSteps: EcsGuidanceStep[];
   pendingStepJumpIndex?: number;
   pendingStepJumpCount?: number;
+  pendingBacktrackCount?: number;
+  pendingBacktrackDistanceMeters?: number;
 }
 
 export interface ResolveEcsActiveGuidanceProgressInput {
@@ -58,6 +73,7 @@ export interface ResolveEcsActiveGuidanceProgressInput {
   > | null;
   updatedAt?: string;
   thresholds?: Partial<EcsActiveGuidanceThresholds>;
+  allowBacktracking?: boolean;
 }
 
 export interface EcsActiveGuidanceThresholds {
@@ -76,6 +92,8 @@ export interface EcsProjectedGuidancePoint {
   distanceFromUserMeters: number;
   distanceFromRouteStartMeters: number;
   segmentIndex: number;
+  segmentFraction?: number;
+  continuityScore?: number;
 }
 
 type StepMetrics = {
@@ -144,50 +162,40 @@ function projectOnPolyline(
   location: EcsGuidanceCoordinate,
   points: EcsGuidanceCoordinate[],
 ): EcsProjectedGuidancePoint | null {
-  const validPoints = points.filter(isFiniteCoordinate);
-  if (validPoints.length === 0) return null;
-  if (validPoints.length === 1) {
-    return {
-      coordinate: validPoints[0],
-      distanceFromUserMeters: distanceMeters(location, validPoints[0]),
-      distanceFromRouteStartMeters: 0,
-      segmentIndex: 0,
-    };
-  }
+  const projection = findNearestPlausibleRouteProjection({
+    position: location,
+    routeIndex: buildGuidanceRouteDistanceIndex(points),
+  });
+  return toEcsProjectedGuidancePoint(projection);
+}
 
-  const cumulativeDistances = buildCumulativeDistances(validPoints);
-  let best: EcsProjectedGuidancePoint | null = null;
+function toEcsProjectedGuidancePoint(
+  projection: GuidanceRouteProjection | null | undefined,
+): EcsProjectedGuidancePoint | null {
+  if (!projection) return null;
+  return {
+    coordinate: projection.coordinate,
+    distanceFromUserMeters: projection.distanceFromPositionM,
+    distanceFromRouteStartMeters: projection.distanceFromRouteStartM,
+    segmentIndex: projection.segmentIndex,
+    segmentFraction: projection.segmentFraction,
+    continuityScore: projection.continuityScore,
+  };
+}
 
-  for (let index = 0; index < validPoints.length - 1; index += 1) {
-    const start = validPoints[index];
-    const end = validPoints[index + 1];
-    const referenceLat = (start.lat + end.lat + location.lat) / 3;
-    const bx = toMetersDeltaLng(end.lng - start.lng, referenceLat);
-    const by = toMetersDeltaLat(end.lat - start.lat);
-    const px = toMetersDeltaLng(location.lng - start.lng, referenceLat);
-    const py = toMetersDeltaLat(location.lat - start.lat);
-    const segmentLengthSquared = bx * bx + by * by;
-    const rawT = segmentLengthSquared > 0 ? (px * bx + py * by) / segmentLengthSquared : 0;
-    const t = Math.max(0, Math.min(1, rawT));
-    const projectionX = bx * t;
-    const projectionY = by * t;
-    const distanceFromUserMeters = Math.sqrt((px - projectionX) ** 2 + (py - projectionY) ** 2);
-    const candidate: EcsProjectedGuidancePoint = {
-      coordinate: {
-        lat: start.lat + (end.lat - start.lat) * t,
-        lng: start.lng + (end.lng - start.lng) * t,
-      },
-      distanceFromUserMeters,
-      distanceFromRouteStartMeters:
-        (cumulativeDistances[index] ?? 0) + Math.sqrt(projectionX ** 2 + projectionY ** 2),
-      segmentIndex: index,
-    };
-    if (!best || candidate.distanceFromUserMeters < best.distanceFromUserMeters) {
-      best = candidate;
-    }
-  }
-
-  return best;
+function toGuidanceRouteProjection(
+  projection: EcsProjectedGuidancePoint | null | undefined,
+): GuidanceRouteProjection | null {
+  if (!projection) return null;
+  return {
+    coordinate: projection.coordinate,
+    distanceFromPositionM: projection.distanceFromUserMeters,
+    distanceFromRouteStartM: projection.distanceFromRouteStartMeters,
+    segmentIndex: projection.segmentIndex,
+    segmentFraction: projection.segmentFraction ?? 0,
+    segmentBearingDeg: null,
+    continuityScore: projection.continuityScore ?? 0,
+  };
 }
 
 function buildStepMetrics(route: EcsGuidanceRoute): StepMetrics[] {
@@ -318,6 +326,7 @@ function resolveCandidateStepIndex(input: {
   location: EcsGuidanceCoordinate;
   headingDegrees?: number | null;
   thresholds: EcsActiveGuidanceThresholds;
+  allowBacktracking?: boolean;
 }): number {
   const { route, metrics, routeProjection, previousProgress, location, headingDegrees, thresholds } = input;
   if (metrics.length === 0) return 0;
@@ -327,7 +336,9 @@ function resolveCandidateStepIndex(input: {
     Math.min(metrics.length - 1, previousProgress?.currentStepIndex ?? 0),
   );
   const routeIndex = stepIndexForDistance(metrics, routeProjection?.distanceFromRouteStartMeters ?? 0);
-  let candidateIndex = Math.max(previousIndex, routeIndex);
+  let candidateIndex = input.allowBacktracking
+    ? routeIndex
+    : Math.max(previousIndex, routeIndex);
   const currentMetric = metrics[previousIndex];
   const currentStep = currentMetric?.step;
   const nextStep = metrics[previousIndex + 1]?.step;
@@ -547,28 +558,6 @@ export function resolveEcsActiveGuidanceProgress(
     ? input.previousProgress
     : null;
   const metrics = buildStepMetrics(route);
-  const routeProjection = projectOnPolyline(location, route.geometry);
-  const currentStepIndex = resolveCandidateStepIndex({
-    route,
-    metrics,
-    routeProjection,
-    previousProgress,
-    location,
-    headingDegrees: input.currentHeadingDegrees,
-    thresholds,
-  });
-  const currentMetric = metrics[currentStepIndex] ?? null;
-  const currentStep = currentMetric?.step;
-  const nextStep = metrics[currentStepIndex + 1]?.step;
-  const followingStep = metrics[currentStepIndex + 2]?.step;
-  const traveledMeters = Math.max(
-    currentMetric?.startMeters ?? 0,
-    routeProjection?.distanceFromRouteStartMeters ?? 0,
-  );
-  const routeDistanceMeters =
-    route.distanceMeters > 0 ? route.distanceMeters : totalStepDistance(metrics);
-  const distanceRemainingMeters = Math.max(0, routeDistanceMeters - traveledMeters);
-  const distanceFromRouteMeters = routeProjection?.distanceFromUserMeters ?? Infinity;
   const gpsAccuracyMeters = finiteNumber(input.currentGpsAccuracyMeters);
   const speedMetersPerSecond = finiteNumber(input.currentSpeedMetersPerSecond);
   const offRouteThresholdMeters = resolveOffRouteThresholdMeters({
@@ -577,6 +566,96 @@ export function resolveEcsActiveGuidanceProgress(
     gpsAccuracyMeters,
     speedMetersPerSecond,
   });
+  const updatedAt = input.updatedAt ?? new Date().toISOString();
+  const currentUpdatedAtMs = Date.parse(updatedAt);
+  const previousUpdatedAtMs = previousProgress ? Date.parse(previousProgress.updatedAt) : NaN;
+  const projectionInput: ResolveGuidanceRouteProgressInput = {
+    rawPosition: location,
+    routeGeometry: route.geometry,
+    context: routeUsesTrailThreshold(route) ? 'trail' : 'road',
+    accuracyM: gpsAccuracyMeters,
+    headingDeg: input.currentHeadingDegrees,
+    speedMps: speedMetersPerSecond,
+    elapsedMs:
+      Number.isFinite(currentUpdatedAtMs) && Number.isFinite(previousUpdatedAtMs)
+        ? Math.max(0, currentUpdatedAtMs - previousUpdatedAtMs)
+        : null,
+    previousProjection: toGuidanceRouteProjection(
+      previousProgress?.progressRoutePoint ?? previousProgress?.nearestRoutePoint,
+    ),
+    allowBacktracking: input.allowBacktracking === true,
+    snapToleranceM: offRouteThresholdMeters,
+  };
+  let allowBacktracking = input.allowBacktracking === true;
+  let routeProgress = resolveGuidanceRouteProgress(projectionInput);
+  let pendingBacktrackCount = 0;
+  let pendingBacktrackDistanceMeters: number | undefined;
+  const previousAcceptedDistanceM =
+    previousProgress?.progressRoutePoint?.distanceFromRouteStartMeters ??
+    previousProgress?.routeDistanceFromStartMeters ??
+    null;
+  const nearestCandidate = routeProgress.nearestProjection;
+  const currentHeading = finiteNumber(input.currentHeadingDegrees);
+  const reverseHeading =
+    currentHeading != null &&
+    nearestCandidate?.segmentBearingDeg != null &&
+    headingDeltaDegrees(currentHeading, nearestCandidate.segmentBearingDeg) >= 120;
+  const reverseCandidate =
+    !allowBacktracking &&
+    previousAcceptedDistanceM != null &&
+    nearestCandidate != null &&
+    nearestCandidate.distanceFromPositionM <= offRouteThresholdMeters &&
+    nearestCandidate.distanceFromRouteStartM < previousAcceptedDistanceM - 18 &&
+    reverseHeading &&
+    speedMetersPerSecond != null &&
+    speedMetersPerSecond >= 1.2;
+
+  if (reverseCandidate && nearestCandidate) {
+    pendingBacktrackCount = (previousProgress?.pendingBacktrackCount ?? 0) + 1;
+    pendingBacktrackDistanceMeters = nearestCandidate.distanceFromRouteStartM;
+    if (pendingBacktrackCount >= 3) {
+      allowBacktracking = true;
+      routeProgress = resolveGuidanceRouteProgress({
+        ...projectionInput,
+        allowBacktracking: true,
+      });
+      pendingBacktrackCount = 0;
+      pendingBacktrackDistanceMeters = undefined;
+    }
+  }
+  const routeProjection = toEcsProjectedGuidancePoint(routeProgress.nearestProjection);
+  const progressRoutePoint = toEcsProjectedGuidancePoint(routeProgress.progressProjection);
+  const currentStepIndex = resolveCandidateStepIndex({
+    route,
+    metrics,
+    routeProjection: progressRoutePoint,
+    previousProgress,
+    location,
+    headingDegrees: input.currentHeadingDegrees,
+    thresholds,
+    allowBacktracking,
+  });
+  const currentMetric = metrics[currentStepIndex] ?? null;
+  const currentStep = currentMetric?.step;
+  const nextStep = metrics[currentStepIndex + 1]?.step;
+  const followingStep = metrics[currentStepIndex + 2]?.step;
+  const routeDistanceMeters =
+    route.distanceMeters > 0
+      ? route.distanceMeters
+      : totalStepDistance(metrics) > 0
+        ? totalStepDistance(metrics)
+        : routeProgress.routeLengthM;
+  const routeGeometryDistanceScale =
+    routeProgress.routeLengthM > 0 && routeDistanceMeters > 0
+      ? routeDistanceMeters / routeProgress.routeLengthM
+      : 1;
+  const projectedTraveledMeters = routeProgress.routeDistanceM * routeGeometryDistanceScale;
+  const traveledMeters = Math.max(
+    currentMetric?.startMeters ?? 0,
+    projectedTraveledMeters,
+  );
+  const distanceRemainingMeters = Math.max(0, routeDistanceMeters - traveledMeters);
+  const distanceFromRouteMeters = routeProgress.offRouteDistanceM;
   const headingDivergenceDegrees = resolveHeadingDivergenceDegrees({
     route,
     routeProjection,
@@ -624,16 +703,23 @@ export function resolveEcsActiveGuidanceProgress(
     gpsAccuracyMeters,
     headingDivergenceDegrees,
     confidence,
-    updatedAt: input.updatedAt ?? new Date().toISOString(),
+    updatedAt,
     distanceFromRouteMeters,
     distanceRemainingOnCurrentStepMeters: resolveRemainingOnCurrentStep(metrics, currentStepIndex, traveledMeters),
     nearestRoutePoint: routeProjection,
+    progressRoutePoint,
     nearestStepPoint: projectOnStepGeometry(location, currentStep),
+    routeDistanceFromStartMeters: projectedTraveledMeters,
+    projectionStatus: routeProgress.status,
+    completedRouteGeometry: routeProgress.completedGeometry,
+    remainingRouteGeometry: routeProgress.remainingGeometry,
     ...(currentStep ? { currentStep } : null),
     ...(nextStep ? { nextStep } : null),
     ...(followingStep ? { followingStep } : null),
     upcomingSteps,
     ...(pendingStepJumpIndex != null ? { pendingStepJumpIndex } : null),
     ...(pendingStepJumpCount != null ? { pendingStepJumpCount } : null),
+    ...(pendingBacktrackCount > 0 ? { pendingBacktrackCount } : null),
+    ...(pendingBacktrackDistanceMeters != null ? { pendingBacktrackDistanceMeters } : null),
   };
 }

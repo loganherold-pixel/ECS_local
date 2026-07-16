@@ -53,6 +53,10 @@ jobs:
           path: |
             .smoke/verification/full-nightly.json
             .smoke/verification/full-nightly.md
+            .smoke/verification/runtime-regression-fast.json
+            .smoke/verification/runtime-regression-fast.md
+            .smoke/verification/runtime-regression-integration.json
+            .smoke/verification/runtime-regression-integration.md
             .smoke/verification/timings.json
             .smoke/verification/timing-baseline-candidate.json
             .smoke/verification/web-export-provenance.json

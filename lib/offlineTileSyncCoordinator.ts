@@ -14,6 +14,8 @@ export type OfflineTileSyncJobStatus =
 
 export type OfflineTileSyncSource = 'current-view' | 'route-corridor' | 'manual-region';
 export type OfflineTileSyncType = 'route' | 'map-view' | 'manual';
+export type OfflineTileSyncHydrationStatus = 'restoring' | 'ready' | 'error';
+export type OfflineTileSyncSourceState = 'restoring' | 'empty' | 'cached' | 'live' | 'error';
 
 export interface OfflineTileSyncJob {
   jobId: string;
@@ -39,6 +41,21 @@ export interface OfflineTileSyncSnapshot {
   latestCompletedJob: OfflineTileSyncJob | null;
   backgroundSupport: 'app-process';
   resumeSupport: 'app-restart';
+  hydrationStatus: OfflineTileSyncHydrationStatus;
+  sourceState: OfflineTileSyncSourceState;
+  hydratedAt: string | null;
+  hydrationErrorCode: string | null;
+}
+
+export interface OfflineTileSyncDiagnostics {
+  hydrationStatus: OfflineTileSyncHydrationStatus;
+  sourceState: OfflineTileSyncSourceState;
+  subscriberCount: number;
+  jobCount: number;
+  activeJobCount: number;
+  runningExecutionCount: number;
+  hydratedAt: string | null;
+  safeErrorCode: string | null;
 }
 
 type Listener = () => void;
@@ -50,6 +67,11 @@ const runningPromises = new Map<string, Promise<OfflineTileSyncJob>>();
 let jobs: OfflineTileSyncJob[] = [];
 let loaded = false;
 let hydrated = false;
+let lastLoadSucceeded = true;
+let hydrationStatus: OfflineTileSyncHydrationStatus = 'restoring';
+let sourceState: OfflineTileSyncSourceState = 'restoring';
+let hydratedAt: string | null = null;
+let hydrationErrorCode: string | null = null;
 
 function nowISO(): string {
   return new Date().toISOString();
@@ -114,31 +136,48 @@ function normalizeStoredJob(value: any): OfflineTileSyncJob | null {
   };
 }
 
-function loadJobs(): void {
-  if (loaded) return;
+function loadJobs(): boolean {
+  if (loaded) return lastLoadSucceeded;
   loaded = true;
+  lastLoadSucceeded = true;
   try {
     const raw = persistence.get(STORAGE_KEY);
     if (!raw) {
       jobs = [];
-      return;
+      return true;
     }
     const parsed = JSON.parse(raw);
     jobs = Array.isArray(parsed)
       ? parsed.map(normalizeStoredJob).filter((job): job is OfflineTileSyncJob => !!job)
       : [];
     persistJobs();
+    return true;
   } catch {
     jobs = [];
+    lastLoadSucceeded = false;
+    return false;
   }
 }
 
-const hydrationPromise = persistence.waitForHydration().then(() => {
-  loaded = false;
-  loadJobs();
-  hydrated = true;
-  listeners.forEach((listener) => listener());
-});
+const hydrationPromise = persistence.waitForHydration()
+  .then(() => {
+    loaded = false;
+    const restored = loadJobs();
+    hydrated = true;
+    hydrationStatus = restored ? 'ready' : 'error';
+    sourceState = restored ? jobs.length > 0 ? 'cached' : 'empty' : 'error';
+    hydratedAt = nowISO();
+    hydrationErrorCode = restored ? null : 'OFFLINE_TILE_SYNC_RESTORE_FAILED';
+    listeners.forEach((listener) => listener());
+  })
+  .catch(() => {
+    hydrated = true;
+    hydrationStatus = 'error';
+    sourceState = 'error';
+    hydratedAt = nowISO();
+    hydrationErrorCode = 'OFFLINE_TILE_SYNC_HYDRATION_FAILED';
+    listeners.forEach((listener) => listener());
+  });
 
 function persistJobs(): void {
   try {
@@ -152,6 +191,7 @@ function persistJobs(): void {
 
 function notify(): void {
   persistJobs();
+  if (hydrated && jobs.length > 0) sourceState = 'live';
   listeners.forEach((listener) => listener());
 }
 
@@ -224,6 +264,10 @@ function buildSnapshot(): OfflineTileSyncSnapshot {
     latestCompletedJob: sorted.find((job) => job.status === 'complete') ?? null,
     backgroundSupport: 'app-process',
     resumeSupport: 'app-restart',
+    hydrationStatus,
+    sourceState,
+    hydratedAt,
+    hydrationErrorCode,
   };
 }
 
@@ -372,7 +416,20 @@ export const offlineTileSyncCoordinator = {
     await persistence.flush();
   },
 
-  async waitForHydration(): Promise<void> {
-    await hydrationPromise;
+  getDiagnostics(): OfflineTileSyncDiagnostics {
+    return {
+      hydrationStatus,
+      sourceState,
+      subscriberCount: listeners.size,
+      jobCount: jobs.length,
+      activeJobCount: jobs.filter((job) => isActiveStatus(job.status)).length,
+      runningExecutionCount: runningPromises.size,
+      hydratedAt,
+      safeErrorCode: hydrationErrorCode,
+    };
+  },
+
+  waitForHydration(): Promise<void> {
+    return hydrationPromise;
   },
 };

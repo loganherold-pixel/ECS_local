@@ -169,6 +169,13 @@ export type ActiveVehicleSubscriptionDiagnostics = {
   sourceSubscriptionCount: number;
   publishedRevision: number;
   pending: boolean;
+  latestProducerEvent: {
+    revision: number;
+    sources: ActiveVehicleStateChangeSource[];
+    affectedVehicleCount: number;
+    hasActiveVehicle: boolean;
+    publishedAt: string | null;
+  };
 };
 
 const RISK_RANK: Record<FleetRiskLevel, number> = {
@@ -567,6 +574,13 @@ let pendingVehicleIds = new Set<string>();
 let pendingNotification = false;
 let pendingGeneration = 0;
 let nextConsumerId = 1;
+let latestActiveVehicleProducerEvent: ActiveVehicleSubscriptionDiagnostics['latestProducerEvent'] = {
+  revision: 0,
+  sources: [],
+  affectedVehicleCount: 0,
+  hasActiveVehicle: false,
+  publishedAt: null,
+};
 
 function publishActiveVehicleStateChange(
   sources: Iterable<ActiveVehicleStateChangeSource>,
@@ -579,6 +593,13 @@ function publishActiveVehicleStateChange(
     activeVehicleId: vehicleSetupStore.getActiveVehicleId(),
     sources: Array.from(new Set(sources)),
     affectedVehicleIds: Array.from(new Set(affectedVehicleIds)),
+  };
+  latestActiveVehicleProducerEvent = {
+    revision: event.revision,
+    sources: [...event.sources],
+    affectedVehicleCount: event.affectedVehicleIds.length,
+    hasActiveVehicle: event.activeVehicleId != null,
+    publishedAt: new Date().toISOString(),
   };
   activeVehicleStateListeners.forEach((listener) => {
     try {
@@ -656,6 +677,10 @@ export function getActiveVehicleSubscriptionDiagnostics(): ActiveVehicleSubscrip
     sourceSubscriptionCount: sourceUnsubscribers?.length ?? 0,
     publishedRevision,
     pending: pendingNotification,
+    latestProducerEvent: {
+      ...latestActiveVehicleProducerEvent,
+      sources: [...latestActiveVehicleProducerEvent.sources],
+    },
   };
 }
 

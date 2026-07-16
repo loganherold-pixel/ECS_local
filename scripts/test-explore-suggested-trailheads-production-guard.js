@@ -23,19 +23,21 @@ assert(
 assert(
   discover.includes('isPublicSuggestedTrailheadTrailPack') &&
     discover.includes('isPublicSuggestedTrailheadRoute') &&
-    discover.includes('guardPublicSuggestedTrailheadHandoff') &&
-    discover.includes('Demo or example trails are not available for public Suggested Trailheads.') &&
+    discover.includes('guardGuidanceReadyRouteHandoff') &&
+    discover.includes('defaultExploreReadyRouteEligibility(route)') &&
+    !discover.includes('guardPublicSuggestedTrailheadHandoff') &&
     discover.includes('.filter(isPublicSuggestedTrailheadTrailPack)') &&
     discover.includes('.filter(isPublicSuggestedTrailheadRoute)'),
-  'Explore should apply the production guard before rendering public Suggested Trailhead routes or staging handoffs.',
+  'Explore should keep the Trail-Pack-only public discovery guard while all canonical READY source lanes use the shared safety/readiness handoff guard.',
 );
 
 assert(
-  discover.includes('const publicRefinedAIRoutes') &&
-    discover.includes('const publicSuggestedTrailheadRoutes') &&
-    discover.includes('suggested_routes: publicSuggestedTrailheadRoutes.length') &&
+    discover.includes('const publicRefinedAIRoutes') &&
+    discover.includes('const canonicalExplorePlanningRoutes') &&
+    discover.includes('const mapInventory = buildExploreGuidanceReadyInventory') &&
+    discover.includes('suggested_routes: canonicalExplorePlanningRoutes.length') &&
     discover.includes('saveExplorePlanningRouteContext({') &&
-    discover.includes('routes: publicSuggestedTrailheadRoutes as any'),
+    discover.includes('routes: canonicalExplorePlanningRoutes as any'),
   'Suggested Trailheads planning context and badges should count only production-safe source-backed routes.',
 );
 

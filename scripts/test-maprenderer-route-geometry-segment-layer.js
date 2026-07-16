@@ -27,9 +27,10 @@ assert(
 
 assert(
   source.includes("['==', ['get', 'kind'], 'route_geometry_segment']") &&
+    source.includes("NAVIGATE_ROUTE_GEOMETRY_SOURCE_ID = 'navigate-route-geometry-source'") &&
     source.includes('route-geometry-halo-layer') &&
     source.includes('route-geometry-selected-layer'),
-  'MapRenderer should style route geometry segments through dedicated line/halo treatment.',
+  'MapRenderer should style route geometry segments through a dedicated source and line/halo treatment.',
 );
 assert(
   source.includes("'line-color': '#F2C24D'") &&
@@ -44,9 +45,9 @@ assert(
   'Route builder pointer start should not begin freehand drawing when pressing selectable route geometry.',
 );
 
-const clickStart = source.indexOf("map.on('click', function(e)");
-assert(clickStart >= 0, 'MapRenderer click handler should exist.');
-const clickSource = source.slice(clickStart, clickStart + 2800);
+const clickStart = source.indexOf("mapListenerRegistry.attach('click', null, function(e)");
+assert(clickStart >= 0, 'MapRenderer registered click handler should exist.');
+const clickSource = source.slice(clickStart, clickStart + 4600);
 assert(
   clickSource.includes("routeGeometryProps.kind === 'route_geometry_segment'") &&
     clickSource.indexOf("routeGeometryProps.kind === 'route_geometry_segment'") <
